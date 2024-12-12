@@ -1,0 +1,7 @@
+source "${ZEPHYR_BASE}/share/sysbuild/Kconfig"
+
+config NRF_DEFAULT_ANT_ONLY
+    bool "Enable ANT-only operation"
+    default y
+    help
+      Set this to y to enable ANT-only mode on the device.

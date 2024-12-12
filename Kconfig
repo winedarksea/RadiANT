@@ -1,0 +1,61 @@
+source "Kconfig.zephyr"
+
+menuconfig BROADCAST_RX
+	bool "ANT Broadcast RX sample"
+	select ANT
+	select ANT_CHANNEL_CONFIG
+	select ANT_STATE_INDICATOR
+	select DK_LIBRARY
+	default y
+
+menu "Channel configuration"
+
+config BROADCAST_RX_CHANNEL_NUM
+	int "Channel number"
+	default 0
+
+config BROADCAST_RX_NETWORK_NUM
+	int "Network number"
+	default 0
+
+config BROADCAST_RX_CHAN_ID_DEV_NUM
+	int "Channel ID: Device number"
+	default 2
+	range 0 65535
+
+config BROADCAST_RX_CHAN_ID_DEV_TYPE
+	int "Channel ID: Device type"
+	default 2
+	range 0 127
+
+config BROADCAST_RX_CHAN_ID_TRANS_TYPE
+	int "Channel ID: Transmission type"
+	default 1
+	range 0 255
+
+config BROADCAST_RX_CHAN_PERIOD
+	int "Channel Period"
+	default 8192
+	range 0 65535
+
+config BROADCAST_RX_RF_FREQ
+	int "Radio Frequency"
+	default 66
+
+config ANT
+    bool "Enable ANT stack"
+    default y
+
+config ANT_EVALUATION_KEY
+    bool "Use ANT evaluation key"
+    default y
+
+config USB
+    bool "Enable USB stack"
+    default y
+
+config USB_DEVICE_STACK
+    bool "Enable USB device stack"
+    default y
+
+endmenu
