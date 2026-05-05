@@ -51,7 +51,13 @@ export GIT_TEMPLATE_DIR=/opt/nordic/ncs/toolchains/185bb0e3b6/Cellar/git/2.37.3/
 export NRFUTIL_HOME=/opt/nordic/ncs/toolchains/185bb0e3b6/nrfutil/home
 export ZEPHYR_TOOLCHAIN_VARIANT=zephyr
 export ZEPHYR_SDK_INSTALL_DIR=/opt/nordic/ncs/toolchains/185bb0e3b6/opt/zephyr-sdk
-west -z /opt/nordic/ncs/v3.2.4/zephyr build -b adafruit_feather_nrf52840/nrf52840/uf2 -p always
+west -z /opt/nordic/ncs/v3.2.4/zephyr build -b adafruit_feather_nrf52840/nrf52840/uf2 -d build/ant_dongle -p always
+```
+
+For an incremental rebuild of the same output directory:
+
+```sh
+west -z /opt/nordic/ncs/v3.2.4/zephyr build -b adafruit_feather_nrf52840/nrf52840/uf2 -d build/ant_dongle
 ```
 
 ## Flash

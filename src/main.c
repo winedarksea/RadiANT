@@ -31,19 +31,21 @@ int main(void)
 {
 	int ret;
 
+	/* Wait 1 second to ensure Mac OS detects the UF2 bootloader disconnect 
+	 * before we bring up the Zephyr USB stack. */
+	k_sleep(K_MSEC(1000));
+
 	LOG_INF("ANT+ USB Dongle starting");
 
-	/* Fully initialise ANT (and its MPSL radio timeslot scheduler) BEFORE
-	 * enabling USB.  USB requests HFXO from MPSL; if MPSL isn't yet
-	 * configured for ANT timeslots, the HFXO request can be mishandled and
-	 * the USB peripheral never powers up. */
+	/* ANT/MPSL must own clock startup before USB asks for the HFXO.
+	 * If usb_enable() runs first on this target, USB can hang or fail to
+	 * enumerate because the clock path is not fully initialized yet. */
 	ret = ant_init();
 	if (ret) {
 		LOG_ERR("ant_init failed: %d", ret);
 		return ret;
 	}
 
-	/* Initialise ring buffer, then bring up USB. */
 	usb_ant_class_init();
 
 	/* The bridge owns ANT event forwarding and callback registration. */
