@@ -1,0 +1,17 @@
+/ {
+	chosen {
+		/delete-property/ zephyr,console;
+		/delete-property/ zephyr,shell-uart;
+		/delete-property/ zephyr,uart-mcumgr;
+		/delete-property/ zephyr,bt-mon-uart;
+		/delete-property/ zephyr,bt-c2h-uart;
+	};
+};
+
+&board_cdc_acm_uart {
+	status = "disabled";
+};
+
+&uart0 {
+	status = "disabled";
+};
