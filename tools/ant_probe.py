@@ -122,6 +122,13 @@ def expect(reader: FrameReader, msg_id: int, timeout_s: float):
             print(f"  . unsolicited 0x{got_id:02X} {payload.hex()}")
 
 
+def _serial_of(dev):
+    try:
+        return usb.util.get_string(dev, dev.iSerialNumber)
+    except (usb.core.USBError, ValueError):
+        return None
+
+
 def _backend():
     """Find a libusb backend, falling back to the one pip can supply.
 
@@ -153,7 +160,7 @@ def _backend():
     return usb.backend.libusb1.get_backend(find_library=lambda _: dll)
 
 
-def open_device(verbose: bool, wait_s: float = 0.0):
+def open_device(verbose: bool, wait_s: float = 0.0, serial: str | None = None):
     backend = _backend()
     if backend is None:
         sys.exit(
@@ -168,7 +175,19 @@ def open_device(verbose: bool, wait_s: float = 0.0):
     # winusb.sys, which is comfortably slower than the device itself reboots.
     deadline = time.monotonic() + wait_s
     while True:
-        dev = usb.core.find(idVendor=VID, idProduct=PID, backend=backend)
+        found = list(usb.core.find(idVendor=VID, idProduct=PID, find_all=True,
+                                   backend=backend))
+        if serial is not None:
+            found = [d for d in found
+                     if _serial_of(d) and _serial_of(d).endswith(serial)]
+        dev = found[0] if found else None
+
+        if len(found) > 1:
+            sys.exit(
+                f"{len(found)} ANT devices are attached. Pick one with "
+                "--serial:\n  " +
+                "\n  ".join(str(_serial_of(d)) for d in found)
+            )
         if dev is not None or time.monotonic() >= deadline:
             break
         time.sleep(0.25)
@@ -217,11 +236,16 @@ def main() -> int:
         "--timeout", type=float, default=3.0,
         help="seconds to wait for each reply (default: 3)",
     )
+    parser.add_argument(
+        "--serial",
+        help="match a device whose serial ends with this, for when more "
+             "than one dongle is attached",
+    )
     parser.add_argument("-q", "--quiet", action="store_true")
     args = parser.parse_args()
     verbose = not args.quiet
 
-    dev = open_device(verbose)
+    dev = open_device(verbose, serial=args.serial)
     reader = FrameReader(dev, timeout_ms=250)
 
     failures = []
