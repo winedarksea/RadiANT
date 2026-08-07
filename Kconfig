@@ -23,6 +23,50 @@ config ANT_DONGLE_BCD_DEVICE
 	  bring-up a fresh bcdDevice is the cheapest way to make Windows look
 	  again. Leave at 0x0000 to keep Zephyr's default.
 
+config ANT_DONGLE_FLASH_LOG
+	bool "Capture the log to flash, readable back over UF2"
+	depends on LOG && FLASH
+	select LOG_OUTPUT
+	help
+	  RTT is unreadable without a J-Link, which leaves bring-up on this
+	  board blind. This registers a log backend that buffers the log in RAM
+	  and periodically commits it to a reserved flash region; double-tapping
+	  RESET then exposes it inside FTHR840BOOT's CURRENT.UF2, where
+	  scripts/read_flash_log.ps1 can extract it. Diagnostic only - it costs
+	  a few KB of RAM and erase cycles, so leave it off in releases.
+
+if ANT_DONGLE_FLASH_LOG
+
+config ANT_DONGLE_FLASH_LOG_PAGES
+	int "Flash pages reserved for the diagnostic log"
+	default 4
+	range 1 16
+	help
+	  4 KB each, and the same amount is allocated in RAM to buffer it.
+	  Four pages is enough for a boot sequence logged at DBG level.
+
+config ANT_DONGLE_FLASH_LOG_OFFSET
+	hex "Primary diagnostic log offset"
+	default 0xe6000
+	help
+	  Offset from the start of flash. Two constraints pin this down: it must
+	  be past the end of the image, and it must be inside the window the
+	  bootloader exposes as CURRENT.UF2 - measured at 0x1000-0xea000 with
+	  UF2 bootloader 0.8.0, which stops short of the 0xec000 end of the code
+	  partition. The default is the last four pages of that window. A slot
+	  that would overlap the image is skipped at runtime rather than
+	  corrupting it.
+
+config ANT_DONGLE_FLASH_LOG_OFFSET_ALT
+	hex "Alternate diagnostic log offset (0 to disable)"
+	default 0x40000
+	help
+	  A second copy, just above a typical image, in case a different
+	  bootloader version exposes a narrower readback window than 0.8.0.
+	  Set to 0 to write only the primary slot.
+
+endif # ANT_DONGLE_FLASH_LOG
+
 endmenu
 
 source "Kconfig.zephyr"

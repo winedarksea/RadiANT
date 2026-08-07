@@ -171,10 +171,19 @@ USBD_CLASS_DESCR_DEFINE(primary, 0) struct usb_ant_descriptor ant_desc = {
 		.bInterfaceProtocol = 0x00,
 		.iInterface       = 0,
 	},
+	/* AUTO_EP_*, not the literal 0x01/0x81 the ANTUSB-2 uses. The stack
+	 * pairs each endpoint descriptor with its usb_ep_cfg_data entry by
+	 * matching bEndpointAddress against ep_addr, then rewrites both with a
+	 * real address; a descriptor that already carries the final address
+	 * matches nothing, so usb_fix_descriptor() fails and usb_enable()
+	 * returns -1 without ever touching the bus. Allocation starts at
+	 * endpoint 1 in each direction, so this still lands on 0x01 and 0x81 -
+	 * ant_ep_data[] carries the assigned addresses for the transfers.
+	 */
 	.ep_out = {
 		.bLength          = sizeof(struct usb_ep_descriptor),
 		.bDescriptorType  = USB_DESC_ENDPOINT,
-		.bEndpointAddress = 0x01,
+		.bEndpointAddress = AUTO_EP_OUT,
 		.bmAttributes     = USB_DC_EP_BULK,
 		.wMaxPacketSize   = sys_cpu_to_le16(ANT_EP_MPS),
 		.bInterval        = 0,
@@ -182,7 +191,7 @@ USBD_CLASS_DESCR_DEFINE(primary, 0) struct usb_ant_descriptor ant_desc = {
 	.ep_in = {
 		.bLength          = sizeof(struct usb_ep_descriptor),
 		.bDescriptorType  = USB_DESC_ENDPOINT,
-		.bEndpointAddress = 0x81,
+		.bEndpointAddress = AUTO_EP_IN,
 		.bmAttributes     = USB_DC_EP_BULK,
 		.wMaxPacketSize   = sys_cpu_to_le16(ANT_EP_MPS),
 		.bInterval        = 0,

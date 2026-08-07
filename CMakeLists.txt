@@ -28,6 +28,10 @@ target_sources(app PRIVATE
   src/ant_serial_bridge.c
 )
 
+if(CONFIG_ANT_DONGLE_FLASH_LOG)
+  target_sources(app PRIVATE src/diag_flash_log.c)
+endif()
+
 if(CONFIG_ANT_DONGLE_RADIO_STUB)
   # With CONFIG_ANT=n the module's own CMakeLists adds neither its include
   # directories nor libant.a. The bridge still compiles against the real ANT

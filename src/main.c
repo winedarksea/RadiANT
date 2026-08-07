@@ -23,6 +23,8 @@ static const struct gpio_dt_spec led =
 static bool led_ok;
 #endif
 
+#include "diag_flash_log.h"
+
 #include "ant_interface.h"
 /* nRF5340 cpuapp builds use the network-processor host header; every
  * single-core target (including the nRF52840 here) uses ant_init.h.
@@ -56,17 +58,22 @@ int main(void)
 	ret = ant_init();
 	if (ret) {
 		LOG_ERR("ant_init failed: %d", ret);
+		(void)diag_flash_log_flush();
 		return ret;
 	}
+	LOG_INF("ant_init ok");
 
 	usb_ant_class_init();
+	LOG_INF("usb_ant_class_init ok");
 
 	/* The bridge owns ANT event forwarding and callback registration. */
 	ret = ant_serial_bridge_init();
 	if (ret) {
 		LOG_ERR("ant_serial_bridge_init failed: %d", ret);
+		(void)diag_flash_log_flush();
 		return ret;
 	}
+	LOG_INF("ant_serial_bridge_init ok");
 
 #if CONFIG_ANT_DONGLE_BCD_DEVICE != 0
 	/* Bring-up knob. Zephyr pins bcdDevice to USB_BCD_DRN, derived from the
@@ -85,13 +92,16 @@ int main(void)
 	}
 #endif
 
+	LOG_INF("calling usb_enable");
 	ret = usb_enable(NULL);
 	if (ret) {
 		LOG_ERR("usb_enable failed: %d", ret);
+		(void)diag_flash_log_flush();
 		return ret;
 	}
 
 	LOG_INF("USB enabled — VID 0x0FCF PID 0x1008");
+	(void)diag_flash_log_flush();
 
 #if DT_NODE_HAS_STATUS(DT_ALIAS(led0), okay)
 	led_ok = (gpio_is_ready_dt(&led) == true) &&
