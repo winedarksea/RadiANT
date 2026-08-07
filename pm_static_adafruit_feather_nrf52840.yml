@@ -1,0 +1,38 @@
+# Static partition map for the Adafruit Feather nRF52840 (UF2 bootloader).
+#
+# sdk-ant is an nRF Connect SDK module, so sysbuild turns on Partition Manager,
+# and Partition Manager then decides where the application is linked - ignoring
+# zephyr,code-partition entirely. Left alone it hands the whole 1 MB to `app`
+# at 0x0, while CONFIG_FLASH_LOAD_OFFSET (still 0x26000, from the devicetree)
+# is what the UF2 converter stamps into the output file. The result is an image
+# linked for 0x0 and flashed to 0x26000: it boots into whatever the vector
+# table happens to point at, never enumerates, and looks exactly like a USB
+# problem.
+#
+# The addresses below are the ones in the board's own
+# nrf52840_partition_uf2_sdv6.dtsi, restated in the only form Partition Manager
+# reads.
+
+reserved_softdevice:
+  address: 0x0
+  size: 0x26000
+  end_address: 0x26000
+  region: flash_primary
+
+app:
+  address: 0x26000
+  size: 0xc6000
+  end_address: 0xec000
+  region: flash_primary
+
+settings_storage:
+  address: 0xec000
+  size: 0x8000
+  end_address: 0xf4000
+  region: flash_primary
+
+uf2_bootloader:
+  address: 0xf4000
+  size: 0xc000
+  end_address: 0x100000
+  region: flash_primary
