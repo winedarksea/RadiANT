@@ -1,0 +1,21 @@
+# ANT+ USB dongle - non-root access.
+#
+# The firmware presents a vendor-specific interface (bInterfaceClass 0xFF), so
+# no kernel driver claims it and libusb can open it directly. What Linux does
+# not grant by default is write permission on the device node, so without this
+# rule openant/pyusb fail with "Access denied (insufficient permissions)" for
+# everyone but root.
+#
+# TAG+="uaccess" hands ownership to whoever is logged in at the seat, which is
+# what modern desktops expect. It is preferred over a blanket MODE="0666"
+# because access follows the active session instead of being world-writable.
+#
+# Install:
+#   sudo cp 99-ant-usb.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+# then unplug and replug the dongle.
+#
+# 0fcf:1008 is the Dynastream ANTUSB2 identity this firmware presents.
+# Genuine ANT sticks that share the same rule: 1004 (ANTUSB), 1009 (ANTUSB-m).
+
+SUBSYSTEM=="usb", ATTR{idVendor}=="0fcf", ATTR{idProduct}=="1008", TAG+="uaccess"

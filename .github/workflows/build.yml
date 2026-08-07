@@ -1,0 +1,131 @@
+name: Build UF2
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  BOARD: adafruit_feather_nrf52840/nrf52840/uf2
+  SDK_ANT_REVISION: v2.1.0
+
+jobs:
+  build:
+    name: ant_dongle.uf2
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      # sdk-ant is a private repository, so the build can only run where the
+      # checkout credentials are configured. On forks and unconfigured clones
+      # this reports a skip instead of failing red.
+      - name: Check sdk-ant credentials
+        id: ant-ready
+        env:
+          SDK_ANT_REPO_URL: ${{ vars.SDK_ANT_REPO_URL }}
+          SDK_ANT_CHECKOUT_TOKEN: ${{ secrets.SDK_ANT_CHECKOUT_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${SDK_ANT_REPO_URL}" && -n "${SDK_ANT_CHECKOUT_TOKEN}" ]]; then
+            echo "enabled=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "enabled=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Checkout application
+        if: steps.ant-ready.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      # sdk-ant's manifest declares `self: path: ant`, so the checkout must sit
+      # at <topdir>/ant. Its west.yml imports sdk-nrf v3.2.4, which in turn
+      # pulls Zephyr - so this one clone determines the whole SDK version set.
+      - name: Checkout sdk-ant
+        if: steps.ant-ready.outputs.enabled == 'true'
+        env:
+          SDK_ANT_REPO_URL: ${{ vars.SDK_ANT_REPO_URL }}
+          SDK_ANT_CHECKOUT_TOKEN: ${{ secrets.SDK_ANT_CHECKOUT_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "${SDK_ANT_REVISION}" \
+            "https://x-access-token:${SDK_ANT_CHECKOUT_TOKEN}@${SDK_ANT_REPO_URL#https://}" \
+            ant
+
+      - name: Set up Python
+        if: steps.ant-ready.outputs.enabled == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # app-path points at sdk-ant, not at this repo: the action runs
+      # `west init -l` on it, and sdk-ant is the manifest repository.
+      # sdk-version is left unset so the action uses the Zephyr SDK version
+      # that the fetched Zephyr tree asks for.
+      - name: Set up Zephyr workspace and toolchain
+        if: steps.ant-ready.outputs.enabled == 'true'
+        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: ant
+          toolchains: arm-zephyr-eabi
+
+      - name: Build
+        if: steps.ant-ready.outputs.enabled == 'true'
+        run: |
+          set -euxo pipefail
+          west build app \
+            -b "${BOARD}" \
+            -d build \
+            -p always \
+            -- \
+            -DANT_MODULE_DIR="${GITHUB_WORKSPACE}/ant"
+
+      - name: Collect artifact
+        if: steps.ant-ready.outputs.enabled == 'true'
+        run: |
+          set -euxo pipefail
+          # sysbuild nests the image under <build>/ant_dongle/zephyr/; a plain
+          # application build puts it at <build>/zephyr/. Accept either.
+          uf2="$(find build -name zephyr.uf2 -print -quit)"
+          test -n "${uf2}"
+          mkdir -p dist
+          cp "${uf2}" dist/ant_dongle.uf2
+          ls -l dist/
+
+      - name: Upload artifact
+        if: steps.ant-ready.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ant_dongle-uf2
+          if-no-files-found: error
+          path: dist/ant_dongle.uf2
+
+      - name: Attach to release
+        if: steps.ant-ready.outputs.enabled == 'true' && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ant_dongle.uf2
+
+      - name: Note skipped build
+        if: steps.ant-ready.outputs.enabled != 'true'
+        run: |
+          {
+            echo "### ANT build skipped"
+            echo
+            echo "sdk-ant is a private repository. To enable this workflow set:"
+            echo
+            echo "- repository **variable** \`SDK_ANT_REPO_URL\` (e.g. \`https://github.com/ant-nrfconnect/sdk-ant\`)"
+            echo "- repository **secret** \`SDK_ANT_CHECKOUT_TOKEN\` with read access to it"
+            echo
+            echo "No ANT network key secret is needed - a dongle receives its network key from the host."
+          } >> "${GITHUB_STEP_SUMMARY}"

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android USB host (OTG) device filter for the ANT+ dongle.
+
+    Drop this in res/xml/ of the consuming app and reference it from the
+    activity that should be offered when the dongle is plugged in:
+
+        <activity ...>
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/device_filter" />
+        </activity>
+
+    Android's usb-device filter attributes are decimal, not hex:
+        vendor-id  4047 = 0x0FCF (Dynastream)
+        product-id 4104 = 0x1008 (ANTUSB2)
+
+    No firmware change is needed for Android - the MS OS descriptors the
+    firmware carries are simply ignored outside Windows.
+-->
+<resources>
+    <usb-device vendor-id="4047" product-id="4104" />
+</resources>

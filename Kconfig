@@ -1,0 +1,28 @@
+# ANT+ USB Dongle — application configuration
+
+menu "ANT+ USB Dongle"
+
+config ANT_DONGLE_RADIO_STUB
+	bool "Stub out the ANT radio layer"
+	help
+	  Compile src/ant_stub.c in place of the real ANT stack (libant.a from
+	  sdk-ant). Every ant_*() entry point becomes a no-op returning success,
+	  so the USB half of the dongle — enumeration, WinUSB auto-binding and the
+	  0xA4 serial bridge — can be brought up without a working ANT build.
+	  Set CONFIG_ANT=n alongside this; stub.conf does both.
+
+config ANT_DONGLE_BCD_DEVICE
+	hex "Override bcdDevice in the USB device descriptor"
+	default 0x0000
+	range 0x0000 0xffff
+	help
+	  Zephyr derives bcdDevice from the kernel version, so it never changes
+	  between rebuilds. Windows caches the result of its first MS OS descriptor
+	  query under HKLM\SYSTEM\CurrentControlSet\Control\usbflags\<vid><pid><bcd>
+	  and never re-queries a device it has already given up on — so during
+	  bring-up a fresh bcdDevice is the cheapest way to make Windows look
+	  again. Leave at 0x0000 to keep Zephyr's default.
+
+endmenu
+
+source "Kconfig.zephyr"

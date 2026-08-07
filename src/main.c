@@ -8,7 +8,13 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/usb/usb_device.h>
+#include <zephyr/usb/usb_ch9.h>
 #include <zephyr/logging/log.h>
+
+#if CONFIG_ANT_DONGLE_BCD_DEVICE != 0
+#include <zephyr/sys/byteorder.h>
+#include <usb_descriptor.h>
+#endif
 
 #if DT_NODE_HAS_STATUS(DT_ALIAS(led0), okay)
 #include <zephyr/drivers/gpio.h>
@@ -18,7 +24,14 @@ static bool led_ok;
 #endif
 
 #include "ant_interface.h"
+/* nRF5340 cpuapp builds use the network-processor host header; every
+ * single-core target (including the nRF52840 here) uses ant_init.h.
+ */
+#if defined(CONFIG_ANT_NP_HOST)
 #include "ant_host_init.h"
+#else
+#include "ant_init.h"
+#endif
 
 LOG_MODULE_REGISTER(ant_dongle, LOG_LEVEL_INF);
 
@@ -54,6 +67,23 @@ int main(void)
 		LOG_ERR("ant_serial_bridge_init failed: %d", ret);
 		return ret;
 	}
+
+#if CONFIG_ANT_DONGLE_BCD_DEVICE != 0
+	/* Bring-up knob. Zephyr pins bcdDevice to USB_BCD_DRN, derived from the
+	 * kernel version, so it is identical across rebuilds — and Windows keys
+	 * its cached MS OS descriptor verdict on VID+PID+bcdDevice. Bumping this
+	 * between iterations gives Windows a device it has no cached verdict for.
+	 * Must run before usb_enable(), which is what publishes the descriptor.
+	 */
+	{
+		struct usb_device_descriptor *dev_desc =
+			(struct usb_device_descriptor *)usb_get_device_descriptor();
+
+		dev_desc->bcdDevice = sys_cpu_to_le16(CONFIG_ANT_DONGLE_BCD_DEVICE);
+		LOG_INF("bcdDevice overridden to 0x%04X",
+			(unsigned int)CONFIG_ANT_DONGLE_BCD_DEVICE);
+	}
+#endif
 
 	ret = usb_enable(NULL);
 	if (ret) {

@@ -1,18 +1,25 @@
 {
     "configurations": [
         {
-            "name": "Mac",
+            "name": "Windows",
             "includePath": [
-                "${workspaceFolder}/**"
+                "${workspaceFolder}/src/**",
+                "C:/Users/Colin/sdk-ant/include",
+                "C:/Users/Colin/sdk-ant/init",
+                "C:/ncs/v3.4.0/zephyr/include",
+                "C:/ncs/v3.4.0/zephyr/subsys/usb/device",
+                "C:/ncs/v3.4.0/zephyr/soc/nordic/nrf52/**",
+                "C:/ncs/v3.4.0/modules/hal/nordic/nrfx/**",
+                "${workspaceFolder}/build/stage1/zephyr/include/generated"
             ],
             "defines": [],
-            "macFrameworkPath": [
-                "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks"
+            "forcedInclude": [
+                "${workspaceFolder}/build/stage1/zephyr/include/generated/zephyr/autoconf.h"
             ],
-            "compilerPath": "/usr/bin/clang",
-            "cStandard": "c17",
+            "compilerPath": "C:/ncs/toolchains/dcbdc366a1/opt/zephyr-sdk/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gcc.exe",
+            "cStandard": "c11",
             "cppStandard": "c++17",
-            "intelliSenseMode": "macos-clang-arm64"
+            "intelliSenseMode": "windows-gcc-arm"
         }
     ],
     "version": 4

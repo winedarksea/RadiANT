@@ -24,7 +24,16 @@
 
 #include "ant_interface.h"
 #include "ant_parameters.h"
+/* ant_host_init.h is the nRF5340 dual-core cpuapp header (CONFIG_ANT_NP_HOST,
+ * which depends on SOC_NRF5340_CPUAPP). Single-core targets such as the
+ * nRF52840 use ant_init.h. Both declare ant_init()/ant_cb_register(), so
+ * picking the wrong one compiles and then misbehaves.
+ */
+#if defined(CONFIG_ANT_NP_HOST)
 #include "ant_host_init.h"
+#else
+#include "ant_init.h"
+#endif
 
 LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
 
