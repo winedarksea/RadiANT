@@ -100,7 +100,7 @@ int main(void)
 		return ret;
 	}
 
-	LOG_INF("USB enabled — VID 0x0FCF PID 0x1008");
+	LOG_INF("USB enabled — VID 0x0FCF PID 0x1009");
 	(void)diag_flash_log_flush();
 
 #if DT_NODE_HAS_STATUS(DT_ALIAS(led0), okay)

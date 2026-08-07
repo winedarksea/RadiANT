@@ -28,7 +28,7 @@
     Vendor ID, hex, no prefix. 0FCF = Dynastream.
 
 .PARAMETER ProductId
-    Product ID, hex, no prefix. 1008 = ANTUSB2.
+    Product ID, hex, no prefix. 1009 = ANT USB-m, 1008 = ANTUSB2.
 
 .EXAMPLE
     .\scripts\reset_usb_cache.ps1 -WhatIf
@@ -37,7 +37,7 @@
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
     [string]$Vid = '0FCF',
-    [string]$ProductId = '1008'
+    [string]$ProductId = '1009'
 )
 
 $ErrorActionPreference = 'Stop'

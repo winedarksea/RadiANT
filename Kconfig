@@ -11,6 +11,28 @@ config ANT_DONGLE_RADIO_STUB
 	  0xA4 serial bridge — can be brought up without a working ANT build.
 	  Set CONFIG_ANT=n alongside this; stub.conf does both.
 
+config ANT_DONGLE_MSOS_DESCRIPTORS
+	bool "Advertise WinUSB through MS OS descriptors"
+	help
+	  Emit the MS OS 1.0 and 2.0 descriptors that ask Windows to bind
+	  winusb.sys automatically, so the device works with pyusb and the tools
+	  in tools/ without installing anything.
+
+	  Off by default, because it is the one thing that stops this behaving
+	  like the stick it impersonates. A retail ANT+ stick ships no MS OS
+	  descriptors: it arrives with no driver, and Windows therefore looks up
+	  USB\VID_0FCF&PID_1009 and offers the ANT driver from Windows Update.
+	  Announcing a WinUSB compatible ID short-circuits that - Windows matches
+	  USB\MS_COMP_WINUSB, considers the device driven, and never asks. Zwift
+	  then cannot see it at all: its ANT_DLL.dll reaches USB only through
+	  libusb0.dll, DSI_SiUSBXp_3_1.DLL and DSI_CP210xManufacturing_3_1.dll,
+	  and has no WinUSB path.
+
+	  Turning this on is still useful for USB bring-up on a machine with no
+	  ANT driver, which is why stub.conf sets it. Note that a properly
+	  installed ANT driver wins either way: it matches on the hardware ID,
+	  which outranks a compatible ID match.
+
 config ANT_DONGLE_BCD_DEVICE
 	hex "Override bcdDevice in the USB device descriptor"
 	default 0x0000

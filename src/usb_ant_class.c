@@ -1,6 +1,6 @@
 /*
- * USB ANT vendor class — bulk-only interface enumerating as VID 0x0FCF / PID 0x1008
- * (ANTUSB-2 Stick).  Zwift and openant find the dongle by scanning for these IDs.
+ * USB ANT vendor class — bulk-only interface enumerating as VID 0x0FCF / PID 0x1009
+ * (ANT USB-m Stick).  Zwift and openant find the dongle by scanning for these IDs.
  *
  * Architecture:
  *   EP_OUT (0x01)  host → device: Zephyr USB stack calls ep_out_cb, data goes into
@@ -51,7 +51,12 @@ static K_MUTEX_DEFINE(tx_mutex);
 static struct usb_ep_cfg_data ant_ep_data[];
 static bool tx_thread_started;
 
-/* Windows uses these descriptors to auto-bind WinUSB for the ANT interface. */
+#if defined(CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS)
+
+/* Windows uses these descriptors to auto-bind WinUSB for the ANT interface.
+ * A retail ANT+ stick has none of this - see the Kconfig help for why that
+ * matters, and why this is off by default.
+ */
 #define ANT_MSOSV2_VENDOR_CODE 0x20
 #define ANT_MSOSV1_VENDOR_CODE 0x03
 #define ANT_MSOS_COMPAT_ID_WINUSB \
@@ -151,6 +156,8 @@ USB_DEVICE_BOS_DESC_DEFINE_CAP struct usb_bos_ant_msosv2_desc {
 	},
 };
 
+#endif /* CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS */
+
 /* ── USB descriptor ────────────────────────────────────────────────────────── */
 
 struct usb_ant_descriptor {
@@ -202,6 +209,8 @@ USBD_CLASS_DESCR_DEFINE(primary, 0) struct usb_ant_descriptor ant_desc = {
 
 static void ep_out_cb(uint8_t ep, int tsize, void *priv);
 
+#if defined(CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS)
+
 static int ant_custom_handle_req(struct usb_setup_packet *setup,
 				       int32_t *len,
 				       uint8_t **data)
@@ -244,6 +253,19 @@ static int ant_vendor_handle_req(struct usb_setup_packet *setup,
 
 	return -ENOTSUP;
 }
+
+#define ANT_CUSTOM_HANDLER ant_custom_handle_req
+#define ANT_VENDOR_HANDLER ant_vendor_handle_req
+
+#else
+
+/* No 0xEE string descriptor and no vendor requests: a retail stick answers
+ * neither, and answering them is what makes Windows bind WinUSB.
+ */
+#define ANT_CUSTOM_HANDLER NULL
+#define ANT_VENDOR_HANDLER NULL
+
+#endif /* CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS */
 
 static int usb_ant_write(const uint8_t *buf, size_t len)
 {
@@ -361,7 +383,10 @@ static void ant_iface_config(struct usb_desc_header *head, uint8_t bInterfaceNum
 {
 	ARG_UNUSED(head);
 	ant_desc.if0.bInterfaceNumber = bInterfaceNumber;
+#if defined(CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS)
+	/* The MS OS 1.0 compatible ID section names the interface it applies to. */
 	ant_msos1_compatid_descriptor[16] = bInterfaceNumber;
+#endif
 }
 
 /* ── Endpoint table ────────────────────────────────────────────────────────── */
@@ -380,8 +405,8 @@ USBD_DEFINE_CFG_DATA(ant_usb_cfg) = {
 	.cb_usb_status          = ant_status_cb,
 	.interface = {
 		.class_handler  = NULL,
-		.vendor_handler = ant_vendor_handle_req,
-		.custom_handler = ant_custom_handle_req,
+		.vendor_handler = ANT_VENDOR_HANDLER,
+		.custom_handler = ANT_CUSTOM_HANDLER,
 	},
 	.num_endpoints = ARRAY_SIZE(ant_ep_data),
 	.endpoint      = ant_ep_data,
@@ -394,7 +419,9 @@ void usb_ant_class_init(void)
 	ring_buf_init(&ant_rx_ring_buf, ANT_RX_BUF_BYTES, rx_buf_backing);
 	rx_armed = false;
 	rx_backpressured = false;
+#if defined(CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS)
 	usb_bos_register_cap((void *)&bos_cap_ant_msosv2);
+#endif
 
 	if (!tx_thread_started) {
 		k_thread_create(&ant_tx_thread_data, ant_tx_stack,

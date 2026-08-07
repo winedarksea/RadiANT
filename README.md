@@ -2,12 +2,15 @@
 
 Turns an **Adafruit Feather nRF52840 Express** into an ANT+ USB stick. Copy one
 file onto the board and Zwift, TrainerRoad, Garmin Express, openant and anything
-else that looks for an ANT stick will find it — no drivers, no Zadig, no
-soldering.
+else that looks for an ANT stick will find it — no soldering.
 
-The firmware enumerates as `VID 0x0FCF / PID 0x1008`, the identity of a
-Dynastream ANTUSB2, and speaks the standard ANT serial protocol over a bulk
+The firmware enumerates as `VID 0x0FCF / PID 0x1009`, the identity of a
+Dynastream ANT USB-m, and speaks the standard ANT serial protocol over a bulk
 vendor interface.
+
+On Windows it needs the same libusb-win32 driver a retail ANT stick needs —
+see [Windows drivers](#windows-drivers), which is worth reading before
+anything else if an app cannot see the dongle.
 
 ---
 
@@ -37,7 +40,7 @@ The drive ejects itself and the board reboots as an ANT+ dongle. That's it.
 
 | Platform | What you need to do |
 |---|---|
-| **Windows** | Nothing. Windows binds WinUSB automatically via the MS OS 2.0 descriptors in the firmware. It appears under *Universal Serial Bus devices* in Device Manager. |
+| **Windows** | Install a libusb-win32 driver — see [Windows drivers](#windows-drivers). Same requirement as a genuine ANT stick. |
 | **macOS** | Nothing. It is a vendor-class device, so libusb claims it directly. |
 | **Linux** | Install the udev rule so you don't need root: `sudo cp host/linux/99-ant-usb.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger`, then replug. |
 | **Android** | Needs USB host/OTG. Apps should include [`host/android/device_filter.xml`](host/android/device_filter.xml) so the dongle is recognised on attach. |
@@ -54,6 +57,79 @@ Expected: `PASS: reset -> startup -> capabilities -> version`.
 If the version string comes back starting with `STUB`, you have flashed a
 Stage-1 stub build — it enumerates correctly but has no radio. Flash a release
 image instead.
+
+### Windows drivers
+
+A retail ANT+ stick does not work on Windows out of the box either, and this
+one is deliberately no different. The release build ships **no MS OS
+descriptors**, so Windows does not bind `winusb.sys` and the device arrives
+with no driver, showing problem code 28 — exactly like a genuine stick.
+
+That is on purpose. Zwift's `ANT_DLL.dll` reaches USB only through
+`libusb0.dll`, `DSI_SiUSBXp_3_1.DLL` and `DSI_CP210xManufacturing_3_1.dll`.
+There is no WinUSB path in it at all, so a WinUSB-bound device is invisible to
+Zwift no matter how correct the ANT protocol behaviour is. Worse, advertising a
+WinUSB compatible ID makes Windows match `USB\MS_COMP_WINUSB`, consider the
+device driven, and stop looking for anything better.
+
+So bind libusb-win32, by whichever route you prefer:
+
+- **Windows Update.** Dynastream still publishes WHQL drivers for both PIDs —
+  they appear as *ANT USB-m* and *ANT USB Stick 2* under **Settings → Windows
+  Update → Advanced options → Optional updates → Driver updates**. This is the
+  easiest route and needs nothing downloaded.
+- **Garmin's ANT+ driver package**, which matches on the hardware ID:
+  `pnputil /add-driver ANT_LibUsb.inf /install` from an elevated shell.
+- **Zadig** (https://zadig.akeo.ie): *Options → List All Devices*, select the
+  ANT stick, choose **libusb-win32** — not WinUSB, not libusbK, because
+  `ANT_DLL` calls the libusb0 API specifically.
+
+**Windows will not offer the driver on its own, and Device Manager will not
+find it.** That is expected and says nothing about the device. The driver is an
+*optional* update (`AutoSelectOnWebSites = False`), so it is never installed
+automatically; and Device Manager's *Update driver* wizard on Windows 11 does
+not query Windows Update at all, searching only the local driver store. It logs
+this to `%windir%\INF\setupapi.dev.log` as
+
+```
+!    ndv:      Searching Windows Update has been disabled for the Update Wizard.
+!    ndv:      Policy has been set to prevent searching Windows Update for drivers.
+!    dvi:      Error 0xe0000228: There are no compatible drivers for this device.
+```
+
+despite no such policy being set. Use the Settings path above instead.
+
+**If Optional updates says "There are no optional updates available at this
+time", check whether Windows Update is paused.** A pause empties that page
+completely — every pending driver, not just this one — so it looks identical to
+the driver not existing. Settings → Windows Update shows a *Resume updates*
+button when paused; the underlying dates are at
+`HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings` in `PauseUpdatesStartTime`
+/ `PauseUpdatesExpiryTime`. To see what is really on offer regardless of the
+pause, ask the update agent directly:
+
+```powershell
+$s = New-Object -ComObject Microsoft.Update.Session
+($s.CreateUpdateSearcher().Search("IsInstalled=0 and Type='Driver'")).Updates |
+  ForEach-Object { $_.Title }
+```
+
+After installing, replug the dongle. A device node that already failed a driver
+search carries `ConfigFlags = 64` (`CONFIGFLAG_FAILEDINSTALL`) and will reuse
+that cached verdict; check with
+`Get-PnpDeviceProperty -InstanceId <id> -KeyName DEVPKEY_Device_ConfigFlags`.
+
+Zwift also bundles the same package at
+`C:\Program Files (x86)\Zwift\Windows ANT Dongle Driver\`. Its 2012 catalog is
+signed by *Microsoft Windows Hardware Compatibility Publisher* and still
+verifies as `Valid` on Windows 11 — it is inside the pre-2015-07-29 grandfather
+window for driver signing, so `pnputil` accepts it. Zwift's own *installer*
+(`DriverPackagePreinstallW`) is a separate matter and can fail with
+`0xE000024B`; check `%windir%\DPINST.LOG` if in doubt, and fall back to
+`pnputil` or Windows Update.
+
+If you would rather have WinUSB and only use the Python tools in `tools/`,
+build with `CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS=y`. Zwift will not see it.
 
 ---
 
@@ -144,7 +220,7 @@ Then flash:
   scripts here are deliberately ASCII-only. A stray em-dash is a parse error.
 - **Windows caches USB descriptor verdicts, permanently.** The result of its
   first MS OS descriptor query is stored under
-  `HKLM\SYSTEM\CurrentControlSet\Control\usbflags\0fcf1008<bcdDevice>`, and per
+  `HKLM\SYSTEM\CurrentControlSet\Control\usbflags\0fcf1009<bcdDevice>`, and per
   Microsoft's documentation a failed first query is *never retried* — so one bad
   build poisons the VID/PID and every later correct build looks equally broken.
   Between iterations either bump `CONFIG_ANT_DONGLE_BCD_DEVICE` (no elevation
@@ -256,7 +332,7 @@ python tools/ant_scan.py --seconds 30
 ```
 
 With two dongles attached (the usual case while bringing this up: development
-board and target, both `0FCF:1008`) pass `--serial` to choose; both tools
+board and target, both `0FCF:1009`) pass `--serial` to choose; both tools
 refuse to guess and list the serials instead.
 
 Sensors are only audible while transmitting — a strap has to be worn, cranks
@@ -293,8 +369,8 @@ opens with a system reset; and a close is asynchronous, so unassigning before
 |---|---|
 | Builds clean | `west build` exits 0 for both stub and real-ANT configs |
 | UF2 loads | Copies to `FTHR840BOOT`; drive auto-ejects, board re-enumerates |
-| Correct identity | `Get-PnpDevice` shows `USB\VID_0FCF&PID_1008` |
-| WinUSB auto-binds | Device Manager → *Universal Serial Bus devices*, `winusb.sys`, no Zadig, no yellow bang |
+| Correct identity | `Get-PnpDevice` shows `USB\VID_0FCF&PID_1009`, and the compatible IDs contain no `MS_COMP_WINUSB` |
+| Driver binds | After installing libusb-win32, `DEVPKEY_Device_Service` reads `libusb0` and problem code is 0 |
 | Protocol handshake | `tools/ant_probe.py` — reset → startup → capabilities → version |
 | Radio live | `tools/ant_scan.py` hears broadcasts from a real ANT+ sensor |
 | Full session | `tools/ant_session.py` — eight channels at once, ack and burst paths reach the radio |

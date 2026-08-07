@@ -16,11 +16,13 @@
 
     Android's usb-device filter attributes are decimal, not hex:
         vendor-id  4047 = 0x0FCF (Dynastream)
-        product-id 4104 = 0x1008 (ANTUSB2)
+        product-id 4105 = 0x1009 (ANT USB-m, what this firmware presents)
+        product-id 4104 = 0x1008 (ANTUSB2, a genuine stick)
 
-    No firmware change is needed for Android - the MS OS descriptors the
-    firmware carries are simply ignored outside Windows.
+    Nothing Windows-specific applies here: the release build ships no MS OS
+    descriptors at all, and Android would ignore them regardless.
 -->
 <resources>
+    <usb-device vendor-id="4047" product-id="4105" />
     <usb-device vendor-id="4047" product-id="4104" />
 </resources>

@@ -1,5 +1,5 @@
 sample:
-  description: ANT+ USB Dongle (Zwift-compatible, VID 0x0FCF / PID 0x1008)
+  description: ANT+ USB Dongle (Zwift-compatible, VID 0x0FCF / PID 0x1009)
   name: ANT+ USB Dongle
 tests:
   sample.ant_dongle.feather_uf2:

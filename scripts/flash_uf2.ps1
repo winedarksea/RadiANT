@@ -97,5 +97,5 @@ try {
     Write-Host "Volume ejected during write - that is the bootloader rebooting."
 }
 
-Write-Host "Flashed. The board should re-enumerate as VID_0FCF&PID_1008 within a few seconds."
+Write-Host "Flashed. The board should re-enumerate as VID_0FCF&PID_1009 within a few seconds."
 Write-Host "Check with: Get-PnpDevice | Where-Object InstanceId -match 'VID_0FCF'"

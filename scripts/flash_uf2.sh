@@ -54,5 +54,5 @@ echo "Copying $UF2_PATH to $BOOT_VOLUME/"
 dd if="$UF2_PATH" of="$BOOT_VOLUME/$(basename "$UF2_PATH")" bs=4k 2>/dev/null || true
 sync 2>/dev/null || true
 
-echo "Flashed. The board should re-enumerate as 0fcf:1008 within a few seconds."
+echo "Flashed. The board should re-enumerate as 0fcf:1009 within a few seconds."
 echo "Verify with: python tools/ant_probe.py"

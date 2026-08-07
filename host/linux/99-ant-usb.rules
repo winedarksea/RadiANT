@@ -15,7 +15,10 @@
 #   sudo udevadm control --reload-rules && sudo udevadm trigger
 # then unplug and replug the dongle.
 #
-# 0fcf:1008 is the Dynastream ANTUSB2 identity this firmware presents.
-# Genuine ANT sticks that share the same rule: 1004 (ANTUSB), 1009 (ANTUSB-m).
+# 0fcf:1009 is the Dynastream ANT USB-m identity this firmware presents. The
+# other two are the genuine sticks that share this rule: 1004 (ANTUSB) and
+# 1008 (ANTUSB2).
 
+SUBSYSTEM=="usb", ATTR{idVendor}=="0fcf", ATTR{idProduct}=="1009", TAG+="uaccess"
 SUBSYSTEM=="usb", ATTR{idVendor}=="0fcf", ATTR{idProduct}=="1008", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0fcf", ATTR{idProduct}=="1004", TAG+="uaccess"

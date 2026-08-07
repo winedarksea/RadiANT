@@ -26,7 +26,11 @@ except ImportError:  # pragma: no cover - user-facing guidance
     sys.exit("pyusb is not installed. Run: pip install pyusb")
 
 VID = 0x0FCF
-PID = 0x1008
+# Every ANT stick Dynastream shipped, newest first. This firmware presents as
+# an ANT USB-m; the others are here so the tools keep working against a real
+# stick, and across a rebuild that changes which one is impersonated.
+PIDS = (0x1009, 0x1008, 0x1004)
+PID = PIDS[0]
 EP_OUT = 0x01
 EP_IN = 0x81
 
@@ -192,8 +196,9 @@ def open_device(verbose: bool, wait_s: float = 0.0, serial: str | None = None):
     # winusb.sys, which is comfortably slower than the device itself reboots.
     deadline = time.monotonic() + wait_s
     while True:
-        found = list(usb.core.find(idVendor=VID, idProduct=PID, find_all=True,
-                                   backend=backend))
+        found = [d for pid in PIDS
+                 for d in usb.core.find(idVendor=VID, idProduct=pid,
+                                        find_all=True, backend=backend)]
         if serial is not None:
             found = [d for d in found
                      if _serial_of(d) and _serial_of(d).endswith(serial)]
@@ -211,7 +216,8 @@ def open_device(verbose: bool, wait_s: float = 0.0, serial: str | None = None):
 
     if dev is None:
         sys.exit(
-            f"No USB device {VID:04X}:{PID:04X} found.\n"
+            f"No ANT device found ({VID:04X}:"
+            + "/".join(f"{p:04X}" for p in PIDS) + ").\n"
             "  Windows: check Device Manager shows it under 'Universal Serial "
             "Bus devices' bound to winusb.sys.\n"
             "  Linux:   install 99-ant-usb.rules (see host/linux/) and replug.\n"
@@ -219,7 +225,8 @@ def open_device(verbose: bool, wait_s: float = 0.0, serial: str | None = None):
         )
 
     if verbose:
-        print(f"Found {VID:04X}:{PID:04X}  bcdDevice=0x{dev.bcdDevice:04X}")
+        print(f"Found {dev.idVendor:04X}:{dev.idProduct:04X}  "
+              f"bcdDevice=0x{dev.bcdDevice:04X}")
         try:
             print(f"  manufacturer: {usb.util.get_string(dev, dev.iManufacturer)}")
             print(f"  product:      {usb.util.get_string(dev, dev.iProduct)}")
