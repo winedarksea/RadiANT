@@ -16,3 +16,20 @@ tests:
     tags: ant usb dongle
     build_only: true
     extra_args: CONFIG_ANT_EVALUATION_KEY=y
+  sample.ant_dongle.promicro_uf2:
+    platform_allow: promicro_nrf52840/nrf52840/uf2
+    integration_platforms:
+      - promicro_nrf52840/nrf52840/uf2
+    tags: ant usb dongle
+    build_only: true
+    extra_args: CONFIG_ANT_EVALUATION_KEY=y
+  # Fallback image for boards with no 32.768 kHz crystal; see synth.conf.
+  sample.ant_dongle.promicro_uf2_synth:
+    platform_allow: promicro_nrf52840/nrf52840/uf2
+    integration_platforms:
+      - promicro_nrf52840/nrf52840/uf2
+    tags: ant usb dongle
+    build_only: true
+    extra_args:
+      - CONFIG_ANT_EVALUATION_KEY=y
+      - EXTRA_CONF_FILE=synth.conf

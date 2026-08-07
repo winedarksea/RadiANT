@@ -20,7 +20,7 @@ fitness app can run heart rate, power, cadence and trainer control at once.
 ### 1. Get the right board
 
 **[Adafruit Feather nRF52840 Express](https://www.adafruit.com/product/4062)**
-(product 4062, about $25).
+(product 4062, about $25, or the ItsyBitsy version, product 4481).
 
 > **Not the Feather Sense (4516).** The Sense has no 32.768 kHz crystal and
 > falls back to an internal RC oscillator at ±500 ppm. ANT requires ±50 ppm —
@@ -76,6 +76,23 @@ takes the Nordic DFU package `ant_dongle_nrf52840dongle.zip`:
    slowly: that is the bootloader waiting.
 2. [nRF Connect for Desktop](https://www.nordicsemi.com/Products/Development-tools/nrf-connect-for-desktop)
    → **Programmer** → select the device → **Add file** → **Write**.
+
+The **Pro Micro nRF52840** footprint — nice!nano and the unbranded "SuperMini"
+clones, a few dollars on AliExpress — works too, and takes
+`ant_dongle_promicro.uf2` by the same double-tap-and-drag as the Feather. Its
+bootloader uses the same `0x26000` layout.
+
+The catch is that these are not one board. What they have in common is a
+schematic; what they leave off varies by seller, and the **32.768 kHz crystal
+is the part most likely to be missing** — it is exactly the component a $2 board
+saves money on. ANT needs that clock inside ±50 ppm.
+
+If the board never enumerates at all — no ANT+ device, no COM port, nothing —
+that is the missing crystal, not a bad cable. `ant_init()` gates `usb_enable()`
+in [main.c](src/main.c#L96), so a low-frequency clock that never starts stops
+the firmware before USB comes up. Flash `ant_dongle_promicro_synth.uf2`
+instead: it synthesizes the 32.768 kHz clock from the 32 MHz crystal, which
+every nRF52840 must have for its radio to work at all.
 
 Everything after that is identical; the firmware is the same. Any other
 nRF52840 board needs a partition map of its own — see
@@ -187,7 +204,7 @@ pre-2015-07-29 grandfather window for driver signing, so `pnputil` accepts it.
 
 | Symptom | Likely cause |
 |---|---|
-| Board never appears at all | Charge-only USB cable, or the UF2 was never copied. Double-tap RESET — if `FTHR840BOOT` appears, the board is fine. |
+| Board never appears at all | Charge-only USB cable, or the UF2 was never copied. Double-tap RESET — if the bootloader drive appears, the board is fine. On a Pro Micro clone that flashes but never enumerates, suspect a missing 32.768 kHz crystal and flash the `_synth` build — `ant_init()` gates `usb_enable()`, so a clock that never starts stops the firmware before USB. |
 | Enumerates, but the app can't see it | On Windows, no libusb-win32 driver bound. See [Windows drivers](#windows-drivers). |
 | `ant_probe.py` reports a version starting with `STUB` | You flashed a radio-stub build. It enumerates correctly but has no radio — flash a release image. |
 | Two dongles attached, tools refuse to run | Both are `0FCF:1009`. Pass `--serial` to pick one; the tools list the serials they found. |
@@ -276,6 +293,33 @@ happily into a zip that installs cleanly and then does nothing.
 settles the two differences: no UF2 output, and `CONFIG_USE_DT_CODE_PARTITION`
 left *off* so the offset comes out `0x1000` rather than the `slot0_partition`
 the board's devicetree names for MCUboot, which we do not use.
+
+#### Pro Micro nRF52840 build
+
+The board's own `/uf2` variant already sets `CONFIG_BUILD_OUTPUT_UF2` and takes
+its offset from `nrf52840_partition_uf2_sdv6.dtsi`, the same `0x26000` layout
+the Feather uses — so it shares
+[`pm_static_nrf52840_uf2_sdv6.yml`](pm_static_nrf52840_uf2_sdv6.yml) and needs
+no map of its own. Build two images:
+
+```powershell
+west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
+  -d C:\Users\Colin\ant_dongle\build\promicro `
+  -b promicro_nrf52840/nrf52840/uf2 -p always
+
+west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
+  -d C:\Users\Colin\ant_dongle\build\promicro_synth `
+  -b promicro_nrf52840/nrf52840/uf2 -p always -- "-DEXTRA_CONF_FILE=synth.conf"
+```
+
+The default uses the 32.768 kHz crystal. `synth.conf` derives that clock from
+the 32 MHz crystal instead, for boards that do not have one — see the file for
+what it costs and why it is not the default.
+
+Two images rather than one because there is no way to detect this at build
+time and no good way to fail at run time: without the crystal the LFXO simply
+never starts, `ant_init()` never returns, and USB never comes up. The board
+looks dead. Shipping both makes that a one-file retry instead of a diagnosis.
 
 #### Stub build
 
@@ -510,9 +554,15 @@ board" from "our class is broken".
 
 ### CI
 
-[`.github/workflows/build.yml`](.github/workflows/build.yml) builds both boards
-as a matrix and attaches `ant_dongle.uf2` and
-`ant_dongle_nrf52840dongle.zip` to `v*` tag releases.
+[`.github/workflows/build.yml`](.github/workflows/build.yml) builds a matrix and
+attaches four artifacts to `v*` tag releases:
+
+| Artifact | Board |
+|---|---|
+| `ant_dongle.uf2` | Adafruit Feather nRF52840 Express |
+| `ant_dongle_nrf52840dongle.zip` | Nordic nRF52840 Dongle (DFU package) |
+| `ant_dongle_promicro.uf2` | Pro Micro nRF52840, with a 32.768 kHz crystal |
+| `ant_dongle_promicro_synth.uf2` | Pro Micro nRF52840, clock synthesized for boards without one |
 
 Each entry asserts that `CONFIG_FLASH_LOAD_OFFSET` and Partition Manager's
 `app` address agree before packaging. That disagreement is silent at build time

@@ -28,9 +28,10 @@ jobs:
       run:
         shell: bash
 
-    # Same firmware, two boards. They differ only in where the image is linked
-    # and how it is delivered: the Feather takes a UF2 onto a mass-storage
-    # bootloader, the dongle takes a Nordic DFU zip over USB.
+    # Same firmware, several boards. They differ in where the image is linked,
+    # how it is delivered, and - for the Pro Micro - which low-frequency clock
+    # source it is built for, since the 32.768 kHz crystal is present on some of
+    # those boards and absent on others sold under the same name.
     strategy:
       fail-fast: false
       matrix:
@@ -41,6 +42,13 @@ jobs:
           - board: nrf52840dongle/nrf52840
             artifact: ant_dongle_nrf52840dongle.zip
             package: dfu
+          - board: promicro_nrf52840/nrf52840/uf2
+            artifact: ant_dongle_promicro.uf2
+            package: uf2
+          - board: promicro_nrf52840/nrf52840/uf2
+            artifact: ant_dongle_promicro_synth.uf2
+            package: uf2
+            extra_conf: synth.conf
 
     steps:
       # sdk-ant is a private repository, so the build can only run where a token
@@ -100,14 +108,20 @@ jobs:
         if: steps.ant-ready.outputs.enabled == 'true'
         env:
           BOARD: ${{ matrix.board }}
+          EXTRA_CONF: ${{ matrix.extra_conf }}
         run: |
           set -euxo pipefail
+          extra=()
+          if [[ -n "${EXTRA_CONF}" ]]; then
+            extra+=("-DEXTRA_CONF_FILE=${EXTRA_CONF}")
+          fi
           west build app \
             -b "${BOARD}" \
             -d build \
             -p always \
             -- \
-            -DANT_MODULE_DIR="${GITHUB_WORKSPACE}/ant"
+            -DANT_MODULE_DIR="${GITHUB_WORKSPACE}/ant" \
+            "${extra[@]}"
 
       # Partition Manager decides where the application links, and it does not
       # fail loudly when that disagrees with the offset the output file carries
@@ -180,7 +194,7 @@ jobs:
       # Emitted once, not once per board - the cause and the fix are the same
       # for every entry in the matrix.
       - name: Note skipped build
-        if: steps.ant-ready.outputs.enabled != 'true' && matrix.package == 'uf2'
+        if: steps.ant-ready.outputs.enabled != 'true' && matrix.artifact == 'ant_dongle.uf2'
         run: |
           {
             echo "### ANT build skipped"

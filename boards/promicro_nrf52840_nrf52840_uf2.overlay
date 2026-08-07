@@ -1,0 +1,26 @@
+/*
+ * Same story as the other boards: the devicetree pulls in
+ * boards/common/usb/cdc_acm_serial.dtsi, which points every console-ish chosen
+ * node at a CDC ACM instance on the one USB device we need for the ANT vendor
+ * class. Detach them and disable the node, or the USB stack comes up with two
+ * classes and neither behaves. Logging goes over RTT (see prj.conf).
+ *
+ * uart0 is enabled in the board's dts on pins we do not use.
+ */
+/ {
+	chosen {
+		/delete-property/ zephyr,console;
+		/delete-property/ zephyr,shell-uart;
+		/delete-property/ zephyr,uart-mcumgr;
+		/delete-property/ zephyr,bt-mon-uart;
+		/delete-property/ zephyr,bt-c2h-uart;
+	};
+};
+
+&board_cdc_acm_uart {
+	status = "disabled";
+};
+
+&uart0 {
+	status = "disabled";
+};

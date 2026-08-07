@@ -1,4 +1,16 @@
-# Static partition map for the Adafruit Feather nRF52840 (UF2 bootloader).
+# Static partition map for nRF52840 boards running an Adafruit UF2 bootloader
+# built against SoftDevice S140 6.x. Shared by the Feather and the Pro Micro,
+# and correct for any other board on the same bootloader.
+#
+# This is a property of the bootloader, not of the board - which is why the file
+# is named for the layout rather than for one board. Zephyr factors it the same
+# way, in nrf52840_partition_uf2_sdv6.dtsi, and the addresses below are that
+# file restated in the only form Partition Manager reads.
+#
+# Do not use it for an S140 7.x bootloader. Those move the application 4 KB up
+# to 0x27000 (Zephyr calls that layout sdv7, and the XIAO nRF52840 is one), so
+# this map would link an image into the top of the SoftDevice. Check the
+# `SoftDevice:` line in INFO_UF2.TXT on the bootloader drive if unsure.
 #
 # sdk-ant is an nRF Connect SDK module, so sysbuild turns on Partition Manager,
 # and Partition Manager then decides where the application is linked - ignoring
@@ -8,10 +20,6 @@
 # linked for 0x0 and flashed to 0x26000: it boots into whatever the vector
 # table happens to point at, never enumerates, and looks exactly like a USB
 # problem.
-#
-# The addresses below are the ones in the board's own
-# nrf52840_partition_uf2_sdv6.dtsi, restated in the only form Partition Manager
-# reads.
 
 reserved_softdevice:
   address: 0x0

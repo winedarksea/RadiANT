@@ -18,8 +18,11 @@ if(NOT DEFINED PM_STATIC_YML_FILE)
   # on the command line, so match against both.
   set(_board_spec "${BOARD}${BOARD_QUALIFIERS}")
 
-  if(_board_spec MATCHES "adafruit_feather_nrf52840")
-    set(_pm_static pm_static_adafruit_feather_nrf52840.yml)
+  # Boards on an Adafruit S140 6.x UF2 bootloader all share one layout. Add new
+  # ones here only after checking INFO_UF2.TXT reports SoftDevice S140 6.x - an
+  # S140 7.x bootloader wants 0x27000 and needs a map of its own.
+  if(_board_spec MATCHES "adafruit_feather_nrf52840|promicro_nrf52840")
+    set(_pm_static pm_static_nrf52840_uf2_sdv6.yml)
   elseif(_board_spec MATCHES "nrf52840dongle" AND NOT _board_spec MATCHES "bare")
     # The /bare variant has no bootloader and wants the whole flash from 0x0,
     # which is what PM does unprompted - so leave it alone.
