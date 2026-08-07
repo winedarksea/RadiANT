@@ -69,8 +69,13 @@ class FrameReader:
     def _fill(self) -> bool:
         try:
             data = self.dev.read(EP_IN, 64, timeout=self.timeout_ms)
+        except usb.core.USBTimeoutError:
+            # Expected whenever the dongle has nothing to say. Matching on the
+            # message text instead would work on Linux and not on Windows,
+            # where it reads "Operation timed out".
+            return False
         except usb.core.USBError as exc:
-            if "timeout" in str(exc).lower() or getattr(exc, "errno", None) == 110:
+            if getattr(exc, "errno", None) == 110:
                 return False
             raise
         self.buf.extend(bytes(data))

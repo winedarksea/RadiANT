@@ -284,3 +284,98 @@ ant_err_t ant_acknowledge_message_tx(uint8_t ucChannel, uint8_t ucSize, uint8_t 
 	ARG_UNUSED(aucMesg);
 	return NRF_ANT_SUCCESS;
 }
+
+ant_err_t ant_lib_config_set(uint8_t ucANTLibConfig)
+{
+	ARG_UNUSED(ucANTLibConfig);
+	return NRF_ANT_SUCCESS;
+}
+
+ant_err_t ant_lib_config_clear(uint8_t ucANTLibConfig)
+{
+	ARG_UNUSED(ucANTLibConfig);
+	return NRF_ANT_SUCCESS;
+}
+
+ant_err_t ant_search_waveform_set(uint8_t ucChannel, uint16_t usWaveform)
+{
+	ARG_UNUSED(ucChannel);
+	ARG_UNUSED(usWaveform);
+	return NRF_ANT_SUCCESS;
+}
+
+ant_err_t ant_prox_search_set(uint8_t ucChannel, uint8_t ucProxThreshold,
+			      uint8_t ucCustomProxThreshold)
+{
+	ARG_UNUSED(ucChannel);
+	ARG_UNUSED(ucProxThreshold);
+	ARG_UNUSED(ucCustomProxThreshold);
+	return NRF_ANT_SUCCESS;
+}
+
+ant_err_t ant_search_channel_priority_set(uint8_t ucChannel, uint8_t ucSearchPriority)
+{
+	ARG_UNUSED(ucChannel);
+	ARG_UNUSED(ucSearchPriority);
+	return NRF_ANT_SUCCESS;
+}
+
+ant_err_t ant_active_search_sharing_cycles_set(uint8_t ucChannel, uint8_t ucCycles)
+{
+	ARG_UNUSED(ucChannel);
+	ARG_UNUSED(ucCycles);
+	return NRF_ANT_SUCCESS;
+}
+
+ant_err_t ant_auto_freq_hop_table_set(uint8_t ucChannel, uint8_t ucFreq0,
+				      uint8_t ucFreq1, uint8_t ucFreq2)
+{
+	ARG_UNUSED(ucChannel);
+	ARG_UNUSED(ucFreq0);
+	ARG_UNUSED(ucFreq1);
+	ARG_UNUSED(ucFreq2);
+	return NRF_ANT_SUCCESS;
+}
+
+ant_err_t ant_channel_radio_crc_mode_set(uint8_t ucChannel, uint8_t ucCRCMode)
+{
+	ARG_UNUSED(ucChannel);
+	ARG_UNUSED(ucCRCMode);
+	return NRF_ANT_SUCCESS;
+}
+
+ant_err_t ant_id_list_add(uint8_t ucChannel, uint8_t *aucDevId, uint8_t ucListIndex)
+{
+	ARG_UNUSED(ucChannel);
+	ARG_UNUSED(aucDevId);
+	ARG_UNUSED(ucListIndex);
+	return NRF_ANT_SUCCESS;
+}
+
+ant_err_t ant_id_list_config(uint8_t ucChannel, uint8_t ucIDListSize,
+			     uint8_t ucIncExcFlag)
+{
+	ARG_UNUSED(ucChannel);
+	ARG_UNUSED(ucIDListSize);
+	ARG_UNUSED(ucIncExcFlag);
+	return NRF_ANT_SUCCESS;
+}
+
+ant_err_t ant_event_filtering_set(uint16_t usFilter)
+{
+	ARG_UNUSED(usFilter);
+	return NRF_ANT_SUCCESS;
+}
+
+ant_err_t ant_enhanced_channel_spacing_enable(uint8_t ucEnable)
+{
+	ARG_UNUSED(ucEnable);
+	return NRF_ANT_SUCCESS;
+}
+
+ant_err_t ant_pending_transmit_clear(uint8_t ucChannel, uint8_t *pucSuccess)
+{
+	ARG_UNUSED(ucChannel);
+	*pucSuccess = 1;
+	return NRF_ANT_SUCCESS;
+}

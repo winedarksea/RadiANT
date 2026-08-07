@@ -424,6 +424,121 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
+	case MESG_ANTLIB_CONFIG_ID:
+		/* body: [filler, config_bits]. Zero means "clear everything",
+		 * which is how hosts drop the extended-message flags between
+		 * sessions; there is no separate clear message on the wire.
+		 */
+		if (len >= 2) {
+			err = body[1] ?
+			      ant_lib_config_set(body[1]) :
+			      ant_lib_config_clear(ANT_LIB_CONFIG_MASK_ALL);
+		}
+		break;
+
+	case MESG_RX_EXT_MESGS_ENABLE_ID:
+		/* body: [filler, enable]. The older, narrower way of asking for
+		 * the channel id on every received message. Hosts still send it
+		 * instead of MESG_ANTLIB_CONFIG, and without it every broadcast
+		 * arrives anonymous and no sensor can be identified.
+		 */
+		if (len >= 2) {
+			err = body[1] ?
+			      ant_lib_config_set(
+				      ANT_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID) :
+			      ant_lib_config_clear(
+				      ANT_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID);
+		}
+		break;
+
+	case MESG_SEARCH_WAVEFORM_ID:
+		/* body: [ch, waveform_lsb, waveform_msb] */
+		if (len >= 3) {
+			uint16_t waveform = (uint16_t)body[1] |
+					    ((uint16_t)body[2] << 8);
+			err = ant_search_waveform_set(body[0], waveform);
+		}
+		break;
+
+	case MESG_PROX_SEARCH_CONFIG_ID:
+		/* body: [ch, threshold, (custom threshold optional)] */
+		if (len >= 2) {
+			uint8_t custom = (len >= 3) ? body[2] : 0;
+
+			err = ant_prox_search_set(body[0], body[1], custom);
+		}
+		break;
+
+	case MESG_SET_SEARCH_CH_PRIORITY_ID:
+		/* body: [ch, priority] */
+		if (len >= 2) {
+			err = ant_search_channel_priority_set(body[0], body[1]);
+		}
+		break;
+
+	case MESG_ACTIVE_SEARCH_SHARING_ID:
+		/* body: [ch, cycles] */
+		if (len >= 2) {
+			err = ant_active_search_sharing_cycles_set(body[0],
+								   body[1]);
+		}
+		break;
+
+	case MESG_AUTO_FREQ_CONFIG_ID:
+		/* body: [ch, freq0, freq1, freq2] */
+		if (len >= 4) {
+			err = ant_auto_freq_hop_table_set(body[0], body[1],
+							  body[2], body[3]);
+		}
+		break;
+
+	case MESG_CHANNEL_CRC_MODE_ID:
+		/* body: [filler, mode] */
+		if (len >= 2) {
+			err = ant_channel_radio_crc_mode_set(body[0], body[1]);
+		}
+		break;
+
+	case MESG_ID_LIST_ADD_ID:
+		/* body: [ch, dev_lsb, dev_msb, dev_type, trans_type, index] */
+		if (len >= 6) {
+			err = ant_id_list_add(body[0], (uint8_t *)&body[1],
+					      body[5]);
+		}
+		break;
+
+	case MESG_ID_LIST_CONFIG_ID:
+		/* body: [ch, list_size, exclude_flag] */
+		if (len >= 3) {
+			err = ant_id_list_config(body[0], body[1], body[2]);
+		}
+		break;
+
+	case MESG_EVENT_FILTER_CONFIG_ID:
+		/* body: [filter_lsb, filter_msb] */
+		if (len >= 2) {
+			uint16_t filter = (uint16_t)body[0] |
+					  ((uint16_t)body[1] << 8);
+			err = ant_event_filtering_set(filter);
+		}
+		break;
+
+	case MESG_ECS_ENABLE_ID:
+		/* body: [filler, enable] */
+		if (len >= 2) {
+			err = ant_enhanced_channel_spacing_enable(body[1]);
+		}
+		break;
+
+	case MESG_PENDING_TRANSMIT_CLEAR_ID:
+		/* body: [ch] */
+		if (len >= 1) {
+			uint8_t cleared;
+
+			err = ant_pending_transmit_clear(body[0], &cleared);
+		}
+		break;
+
 	case MESG_REQUEST_ID:
 		handle_request(body, len);
 		return; /* handle_request sends its own response */
