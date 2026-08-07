@@ -122,8 +122,57 @@ def expect(reader: FrameReader, msg_id: int, timeout_s: float):
             print(f"  . unsolicited 0x{got_id:02X} {payload.hex()}")
 
 
-def open_device(verbose: bool):
-    dev = usb.core.find(idVendor=VID, idProduct=PID)
+def _backend():
+    """Find a libusb backend, falling back to the one pip can supply.
+
+    Linux and macOS ship libusb where pyusb already looks. Windows does not, so
+    `pip install libusb` is the least painful way to get one - but that package
+    only unpacks the DLL, it does not put it anywhere pyusb searches. Handing
+    the path over explicitly is what makes `pip install pyusb libusb` enough to
+    run this on Windows.
+    """
+    import usb.backend.libusb1
+
+    backend = usb.backend.libusb1.get_backend()
+    if backend is not None:
+        return backend
+
+    try:
+        import libusb
+    except ImportError:
+        return None
+
+    import os
+
+    root = os.path.join(os.path.dirname(libusb.__file__), "_platform", "_windows")
+    arch = "x64" if sys.maxsize > 2**32 else "x86"
+    dll = os.path.join(root, arch, "libusb-1.0.dll")
+    if not os.path.exists(dll):
+        return None
+
+    return usb.backend.libusb1.get_backend(find_library=lambda _: dll)
+
+
+def open_device(verbose: bool, wait_s: float = 0.0):
+    backend = _backend()
+    if backend is None:
+        sys.exit(
+            "No libusb backend available.\n"
+            "  Windows: pip install libusb\n"
+            "  Linux:   apt install libusb-1.0-0 (or your distro's equivalent)\n"
+            "  macOS:   brew install libusb"
+        )
+
+    # Poll rather than sleep-then-look. How long a re-enumeration takes is the
+    # host's business, not ours: Windows has to rediscover the device and rebind
+    # winusb.sys, which is comfortably slower than the device itself reboots.
+    deadline = time.monotonic() + wait_s
+    while True:
+        dev = usb.core.find(idVendor=VID, idProduct=PID, backend=backend)
+        if dev is not None or time.monotonic() >= deadline:
+            break
+        time.sleep(0.25)
+
     if dev is None:
         sys.exit(
             f"No USB device {VID:04X}:{PID:04X} found.\n"
@@ -181,7 +230,6 @@ def main() -> int:
     dev.write(EP_OUT, frame(MESG_SYSTEM_RESET_ID, b"\x00"))
     payload = expect(reader, MESG_STARTUP_ID, args.timeout)
     if payload is None:
-        # A reset makes the firmware reboot, so the handle is stale either way.
         print("  FAIL: no startup message (0x6F)")
         failures.append("startup")
     else:
@@ -189,11 +237,9 @@ def main() -> int:
         print(f"  OK: startup, reason 0x{reason:02X} "
               f"({STARTUP_REASONS.get(reason, 'unknown')})")
 
-    # The device reboots on reset, so re-open before continuing.
-    usb.util.dispose_resources(dev)
-    time.sleep(1.5)
-    dev = open_device(False)
-    reader = FrameReader(dev, timeout_ms=250)
+    # A reset resets the ANT stack, not the device: the handle stays valid, the
+    # same way it does for a real stick. If this ever needs a re-open, the
+    # firmware is rebooting when it should not be.
 
     print("\n[2/3] request capabilities")
     dev.write(EP_OUT, frame(MESG_REQUEST_ID, bytes([0x00, MESG_CAPABILITIES_ID])))

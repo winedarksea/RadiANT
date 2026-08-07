@@ -51,6 +51,15 @@ ant_err_t ant_cb_register(ant_evt_callback_t evt_handler)
 	return NRF_ANT_SUCCESS;
 }
 
+ant_err_t ant_stack_reset(void)
+{
+	/* There is no state to discard: the stub accepts configuration and
+	 * throws it away. It still has to exist, because the bridge calls it
+	 * for MESG_SYSTEM_RESET.
+	 */
+	return NRF_ANT_SUCCESS;
+}
+
 /* ── Getters (ant_interface.h) ─────────────────────────────────────────────── */
 
 ant_err_t ant_capabilities_get(uint8_t *aucCapabilities)

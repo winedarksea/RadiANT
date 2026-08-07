@@ -18,7 +18,7 @@
 
 #include <string.h>
 #include <zephyr/kernel.h>
-#include <zephyr/sys/reboot.h>
+#include <zephyr/sys/atomic.h>
 #include <zephyr/sys/ring_buffer.h>
 #include <zephyr/logging/log.h>
 
@@ -52,6 +52,12 @@ void usb_ant_resume_rx(void);
 
 K_THREAD_STACK_DEFINE(bridge_stack, BRIDGE_STACK_SIZE);
 static struct k_thread bridge_thread_data;
+
+/* Set while a system reset is tearing channels down, so the resulting
+ * EVENT_CHANNEL_CLOSED storm is not forwarded to the host. A real stick emits
+ * nothing between the reset command and the startup message.
+ */
+static atomic_t reset_in_progress;
 
 /* ── Frame helpers ─────────────────────────────────────────────────────────── */
 
@@ -296,6 +302,30 @@ static void handle_request(const uint8_t *body, uint8_t len)
 	}
 }
 
+/* ── System reset ──────────────────────────────────────────────────────────── */
+
+/*
+ * MESG_SYSTEM_RESET resets the ANT protocol stack, not the MCU.
+ *
+ * Every host library (openant, Zwift, Golden Cheetah) opens the device, sends
+ * a reset, and then keeps using the same USB handle. Rebooting here drops the
+ * device off the bus, and the host's next transfer fails on a stale pipe -
+ * which is exactly what a session start looks like, so nothing works.
+ */
+static void handle_system_reset(void)
+{
+	atomic_set(&reset_in_progress, 1);
+
+	(void)ant_stack_reset();
+
+	/* Let the resulting channel-closed events land and be discarded before
+	 * the host is told the stack is up again. Real sticks are unresponsive
+	 * for rather longer than this.
+	 */
+	k_sleep(K_MSEC(50));
+	atomic_set(&reset_in_progress, 0);
+}
+
 /* ── Inbound dispatcher ─────────────────────────────────────────────────────── */
 
 static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
@@ -307,9 +337,8 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	switch (msg_id) {
 
 	case MESG_SYSTEM_RESET_ID:
+		handle_system_reset();
 		send_startup();
-		k_sleep(K_MSEC(20));
-		sys_reboot(SYS_REBOOT_WARM);
 		return; /* no RESPONSE_EVENT for reset */
 
 	case MESG_NETWORK_KEY_ID:
@@ -529,6 +558,10 @@ void ant_evt_handler(ant_evt_t *p_ant_evt)
 	uint8_t msg_len = p_ant_evt->message.ANT_MESSAGE_ucSize;
 	uint8_t msg_id  = p_ant_evt->message.ANT_MESSAGE_ucMesgID;
 	const uint8_t *msg_data = p_ant_evt->message.ANT_MESSAGE_aucMesgData;
+
+	if (atomic_get(&reset_in_progress)) {
+		return;
+	}
 
 	/* Guard against oversized messages */
 	if (msg_len > MESG_MAX_SIZE_VALUE) {
