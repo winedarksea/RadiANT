@@ -55,12 +55,18 @@ STARTUP_REASONS = {
 
 
 def frame(msg_id: int, payload: bytes = b"") -> bytes:
-    """Wrap a message in the ANT serial frame: SYNC LEN ID payload XOR."""
-    body = bytes([len(payload), msg_id]) + payload
+    """Wrap a message in the ANT serial frame: SYNC LEN ID payload XOR.
+
+    The checksum covers the SYNC byte too. Omitting it produces a value 0x A4
+    off, which a real ANT host rejects - and which this file and the firmware
+    once got wrong in the same direction, so they agreed with each other and
+    with nothing else.
+    """
+    out = bytes([SYNC, len(payload), msg_id]) + payload
     checksum = 0
-    for byte in body:
+    for byte in out:
         checksum ^= byte
-    return bytes([SYNC]) + body + bytes([checksum])
+    return out + bytes([checksum])
 
 
 class FrameReader:
@@ -107,7 +113,7 @@ class FrameReader:
                     del self.buf[:total]
 
                     checksum = 0
-                    for byte in candidate[1:-1]:
+                    for byte in candidate[:-1]:   # SYNC included - see frame()
                         checksum ^= byte
                     if checksum != candidate[-1]:
                         print(f"  ! checksum mismatch on {candidate.hex()}, dropping")

@@ -13,7 +13,14 @@
  *   pushes it to usb_ant_send().
  *
  * Wire frame format (ANT Serial Protocol):
- *   [SYNC=0xA4] [LEN] [ID] [payload: LEN bytes] [XOR checksum of LEN..last]
+ *   [SYNC=0xA4] [LEN] [ID] [payload: LEN bytes] [XOR checksum]
+ *
+ * The checksum is the XOR of every preceding byte *including the SYNC byte*.
+ * Leaving SYNC out yields a value that differs by exactly 0xA4, so every frame
+ * a real host sends fails validation and is dropped without a word, and every
+ * frame we send is rejected the same way at the other end. Two implementations
+ * that both omit it agree with each other perfectly and with nobody else -
+ * which is how this survived a passing test suite.
  */
 
 #include <string.h>
@@ -71,7 +78,7 @@ static void send_response(uint8_t ch, uint8_t msg_id, uint8_t code)
 	buf[3] = ch;
 	buf[4] = msg_id;
 	buf[5] = code;
-	buf[6] = buf[1] ^ buf[2] ^ buf[3] ^ buf[4] ^ buf[5];
+	buf[6] = buf[0] ^ buf[1] ^ buf[2] ^ buf[3] ^ buf[4] ^ buf[5];
 	usb_ant_send(buf, sizeof(buf));
 }
 
@@ -83,14 +90,14 @@ static void send_startup(void)
 	buf[1] = MESG_STARTUP_MESG_SIZE;  /* 1 */
 	buf[2] = MESG_STARTUP_MESG_ID;    /* 0x6F */
 	buf[3] = 0x00;                     /* reset by command */
-	buf[4] = buf[1] ^ buf[2] ^ buf[3];
+	buf[4] = buf[0] ^ buf[1] ^ buf[2] ^ buf[3];
 	usb_ant_send(buf, sizeof(buf));
 }
 
 static void send_message(uint8_t msg_id, const uint8_t *payload, uint8_t len)
 {
 	uint8_t buf[MESG_MAX_SIZE_VALUE + 4];
-	uint8_t xor = len ^ msg_id;
+	uint8_t xor = MESG_TX_SYNC ^ len ^ msg_id;
 
 	buf[0] = MESG_TX_SYNC;
 	buf[1] = len;
@@ -684,7 +691,8 @@ static void process_byte(uint8_t b)
 	switch (state) {
 	case S_SYNC:
 		if (b == MESG_TX_SYNC) {
-			running_xor = 0;
+			/* Seed with SYNC, not 0: it is part of the checksum. */
+			running_xor = b;
 			state = S_LEN;
 		}
 		break;
@@ -808,7 +816,7 @@ void ant_evt_handler(ant_evt_t *p_ant_evt)
 	 * buffer, from the ANT work-queue thread.
 	 */
 	uint8_t buf[MESG_MAX_SIZE_VALUE + 4];
-	uint8_t xor = 0;
+	uint8_t xor = MESG_TX_SYNC;
 
 	buf[0] = MESG_TX_SYNC;
 	buf[1] = msg_len;   xor ^= msg_len;

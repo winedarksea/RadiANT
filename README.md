@@ -176,7 +176,7 @@ pre-2015-07-29 grandfather window for driver signing, so `pnputil` accepts it.
 | Two dongles attached, tools refuse to run | Both are `0FCF:1009`. Pass `--serial` to pick one; the tools list the serials they found. |
 | `ant_scan.py` hears nothing | Sensors are only audible while transmitting. A strap has to be worn, cranks have to turn. |
 | Channels won't open after a crashed session | The stack keeps its channel state. Every host should open with a system reset; `ant_probe.py` does. |
-| App sees the dongle but lists no ANT+ sensors, only Bluetooth ones | A config message the app sends is going unanswered, so its search never starts. Check the app's log for a stuck retry loop (Zwift: `Stopping ANT search` repeating in `%LOCALAPPDATA%\Zwift\Logs\Log.txt`), then confirm against the firmware — every message the app uses should answer `0`, not `0x28`. |
+| App sees the dongle but lists no ANT+ sensors, only Bluetooth ones | Something the app sends is going unanswered, so its search never starts. Check the app's log for a stuck retry loop (Zwift: `Stopping ANT search` repeating in `%LOCALAPPDATA%\Zwift\Logs\Log.txt`). If *nothing* the app sends is answered, suspect framing before logic — the checksum must include the `0xA4` SYNC byte. If only some messages are, every one the app uses should answer `0`, not `0x28`. |
 
 ---
 
@@ -307,14 +307,29 @@ from the outside.
   the exact point every session begins.
 - **UF2 cannot chip-erase.** It only rewrites `0x26000`–`0xEC000`, so anything
   outside that window survives a reflash.
+- **The frame checksum covers the `0xA4` SYNC byte, and a test suite cannot tell
+  you otherwise.** The parser seeded `running_xor = 0` instead of the SYNC byte
+  it had just consumed, so every checksum it computed was off by exactly `0xA4`
+  and every frame a real host sent was dropped without a word. Nothing else
+  looked wrong: the dongle enumerated, bound its driver, and Zwift listed it as
+  present - it simply never executed a single command, so it never replied,
+  Zwift timed out after five seconds and fell into its stop path, writing 70,000
+  identical `Stopping ANT search` lines and showing no ANT+ sensors at all. It
+  hid for as long as it did because `ant_probe.py` made the *same* mistake in
+  `frame()`. Firmware and tools agreed perfectly with each other and with
+  nothing else in the world, so the whole suite passed - probe, scan, all eight
+  channels, real sensors, ack and burst. Every green test was two wrong
+  implementations shaking hands. If you change the framing on one side, change
+  it on the other in the same commit, and check the result against an
+  implementation neither of you wrote: `ANT_DLL.dll` exports
+  `ANT_SetDebugLogDirectory`, and the `Device0.txt` it writes gives you Garmin's
+  own `Tx`/`Rx` bytes to XOR by hand.
 - **A host gives up on one unanswered message, and says nothing useful about
   which.** Zwift calls `ANT_SetTransmitPower`, the device-wide `0x47`, while
   setting a search up. The bridge implemented only the per-channel `0x60` and
-  answered `0x47` with `INVALID_MESSAGE`, so the search never started; Zwift
-  then retried its stop path every frame, writing 70,000 identical
-  `Stopping ANT search` lines and showing no ANT+ sensors at all. Nothing else
-  looked wrong - the dongle enumerated, bound its driver, passed `ant_probe.py`
-  and held a full eight-channel session under `ant_session.py`. What the host
+  answered `0x47` with `INVALID_MESSAGE`. That was masked by the checksum bug
+  above - the message never reached `dispatch()` to be rejected - but it would
+  have stalled the search on its own once framing was fixed. What the host
   actually calls is discoverable without guessing: `ANT_DLL.dll` is loaded by
   name, so the ANT functions Zwift resolves are plain strings in `ZwiftApp.exe`
   (`ANT_SetTransmitPower`, `ANT_OpenRxScanMode`, `ANT_EnableLED`, ...).
