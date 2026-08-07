@@ -285,6 +285,22 @@ ant_err_t ant_acknowledge_message_tx(uint8_t ucChannel, uint8_t ucSize, uint8_t 
 	return NRF_ANT_SUCCESS;
 }
 
+ant_err_t ant_burst_handler_request(uint8_t ucChannel, uint16_t usSize,
+				    uint8_t *aucData, uint8_t ucBurstSegment)
+{
+	ARG_UNUSED(ucChannel);
+	ARG_UNUSED(usSize);
+	ARG_UNUSED(aucData);
+	ARG_UNUSED(ucBurstSegment);
+	/* The real handler releases the caller's buffer by raising
+	 * EVENT_TRANSFER_NEXT_DATA_BLOCK. Nothing here raises events, so the
+	 * bridge never learns the block is free and every burst packet after
+	 * the first is answered with TRANSFER_IN_PROGRESS. Accepted: this stub
+	 * exists to bring up USB without the radio, and burst needs the radio.
+	 */
+	return NRF_ANT_SUCCESS;
+}
+
 ant_err_t ant_lib_config_set(uint8_t ucANTLibConfig)
 {
 	ARG_UNUSED(ucANTLibConfig);

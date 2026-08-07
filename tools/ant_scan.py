@@ -33,6 +33,7 @@ from ant_probe import (  # noqa: E402
     MESG_RESPONSE_EVENT_ID,
     frame,
     open_device,
+    reset_stack,
 )
 
 MESG_ANTLIB_CONFIG_ID = 0x6E
@@ -100,6 +101,12 @@ def main() -> int:
     reader = FrameReader(dev, timeout_ms=250)
 
     print("\nOpening a wildcard ANT+ receive channel")
+    # Start from a known state, or a channel another tool left assigned makes
+    # the assign below fail with CHANNEL_IN_WRONG_STATE.
+    if not reset_stack(dev, reader):
+        print("  FAIL: no startup message after reset")
+        return 1
+
     # Without ENABLE_CHANNEL_ID every broadcast arrives anonymous, so sensors
     # can be heard but not named. Worth having, not worth aborting over.
     command(dev, reader, MESG_ANTLIB_CONFIG_ID, bytes([0x00, 0x80]),

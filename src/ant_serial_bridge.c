@@ -326,6 +326,69 @@ static void handle_system_reset(void)
 	atomic_set(&reset_in_progress, 0);
 }
 
+/* ── Burst transmit ─────────────────────────────────────────────────────────── */
+
+/*
+ * The serial protocol streams a burst as a run of packets, but
+ * ant_burst_handler_request() takes ownership of the buffer it is handed and
+ * keeps it until the radio has sent it. `body` points into the parser's frame
+ * buffer, which the very next packet overwrites, so each block has to be
+ * copied somewhere that outlives the call - and then held there.
+ *
+ * Advanced burst carries up to 24 bytes per packet; plain burst carries 8.
+ */
+#define BURST_BLOCK_MAX 24
+
+static uint8_t burst_block[BURST_BLOCK_MAX];
+static K_SEM_DEFINE(burst_block_free, 1, 1);
+
+static void handle_burst(uint8_t msg_id, const uint8_t *body, uint8_t len)
+{
+	/* body: [seq << 5 | channel, data[8|16|24]], bit 7 marks the last
+	 * packet of the transfer.
+	 */
+	uint8_t size = (len >= 1) ? (uint8_t)(len - 1) : 0;
+
+	if (size < 8 || size > BURST_BLOCK_MAX || (size % 8) != 0) {
+		send_response(0, msg_id, INVALID_MESSAGE);
+		return;
+	}
+
+	uint8_t ch      = body[0] & 0x1F;
+	uint8_t seq     = (body[0] >> 5) & 0x03;
+	uint8_t segment = BURST_SEGMENT_CONTINUE;
+
+	if (seq == 0) {
+		segment |= BURST_SEGMENT_START;
+	}
+	if (body[0] & 0x80) {
+		segment |= BURST_SEGMENT_END;
+	}
+
+	/* Waiting for the stack to release the previous block, rather than
+	 * queueing, is what applies back-pressure to the host. The timeout only
+	 * exists so a transfer that dies mid-flight cannot wedge this thread.
+	 */
+	if (k_sem_take(&burst_block_free, K_MSEC(1000)) != 0) {
+		send_response(ch, msg_id, TRANSFER_IN_PROGRESS);
+		return;
+	}
+
+	memcpy(burst_block, &body[1], size);
+
+	ant_err_t err = ant_burst_handler_request(ch, size, burst_block, segment);
+
+	if (err) {
+		k_sem_give(&burst_block_free);
+		send_response(ch, msg_id, (uint8_t)err);
+	}
+
+	/* No per-packet acknowledgement on success: like a real stick, the host
+	 * learns the outcome from EVENT_TRANSFER_TX_COMPLETED or _TX_FAILED
+	 * once the whole transfer has finished.
+	 */
+}
+
 /* ── Inbound dispatcher ─────────────────────────────────────────────────────── */
 
 static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
@@ -559,6 +622,11 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
+	case MESG_BURST_DATA_ID:
+	case MESG_ADV_BURST_DATA_ID:
+		handle_burst(msg_id, body, len);
+		return; /* handle_burst answers only on failure */
+
 	default:
 		LOG_WRN("Unknown msg_id 0x%02X len=%d", msg_id, len);
 		send_response(ch, msg_id, INVALID_MESSAGE);
@@ -676,6 +744,29 @@ void ant_evt_handler(ant_evt_t *p_ant_evt)
 
 	if (atomic_get(&reset_in_progress)) {
 		return;
+	}
+
+	/* A channel event arrives as [channel, MESG_EVENT_ID, code]. Three of
+	 * them mean the burst handler has finished with the block it was given,
+	 * so the next packet from the host may overwrite it.
+	 */
+	if (msg_id == MESG_RESPONSE_EVENT_ID && msg_len >= 3 &&
+	    msg_data[1] == MESG_EVENT_ID) {
+		switch (msg_data[2]) {
+		case EVENT_TRANSFER_NEXT_DATA_BLOCK:
+			k_sem_give(&burst_block_free);
+			/* Internal flow control for the buffer handover above.
+			 * A real stick frames bursts itself and never puts this
+			 * on the wire, so neither do we.
+			 */
+			return;
+		case EVENT_TRANSFER_TX_COMPLETED:
+		case EVENT_TRANSFER_TX_FAILED:
+			k_sem_give(&burst_block_free);
+			break;
+		default:
+			break;
+		}
 	}
 
 	/* Guard against oversized messages */

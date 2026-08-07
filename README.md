@@ -70,6 +70,7 @@ image instead.
 | `scripts/` | Windows helpers: environment, flashing, USB cache reset |
 | `tools/ant_probe.py` | Cross-platform protocol smoke test |
 | `tools/ant_scan.py` | Opens a wildcard ANT+ channel and reports the sensors it hears |
+| `tools/ant_session.py` | Runs the eight-channel session a fitness app runs, including the ack and burst paths |
 | `pm_static_*.yml`, `sysbuild.cmake` | Pin the Feather application to `0x26000`; see the gotcha below |
 | `host/` | Linux udev rule, Android device filter |
 
@@ -261,6 +262,31 @@ refuse to guess and list the serials instead.
 Sensors are only audible while transmitting — a strap has to be worn, cranks
 have to turn.
 
+`ant_scan.py` still only uses one channel, which is not what a fitness app
+does. Zwift opens a channel per sensor it cares about and runs them
+simultaneously for the length of a ride, so anything that only ever gets
+exercised on channel 0 stays untested. `tools/ant_session.py` runs that
+session instead — all eight channels at their real profile message rates —
+and additionally checks the two host-to-sensor paths:
+
+```sh
+python tools/ant_session.py --seconds 30
+```
+
+- **Acknowledged data** is how Zwift sets trainer resistance. Sent at a paired
+  channel, `TRANSFER_TX_COMPLETED` means a real sensor acknowledged it.
+- **Burst** is probed at a closed channel on purpose. A dispatcher that does
+  not implement the message answers `INVALID_MESSAGE`; one that does gets
+  `CHANNEL_IN_WRONG_STATE` back from the stack. Both are errors, but only the
+  second proves it reached the radio — and nothing goes on the air, which
+  matters when the sensor in range is someone's trainer.
+
+Two failures this found were in the test, not the firmware, and both are worth
+knowing before writing another tool: assigning a channel a previous run left
+assigned is refused with `CHANNEL_IN_WRONG_STATE`, which is why every host
+opens with a system reset; and a close is asynchronous, so unassigning before
+`EVENT_CHANNEL_CLOSED` arrives is refused for the same reason.
+
 ### Verification checklist
 
 | Check | How |
@@ -271,6 +297,7 @@ have to turn.
 | WinUSB auto-binds | Device Manager → *Universal Serial Bus devices*, `winusb.sys`, no Zadig, no yellow bang |
 | Protocol handshake | `tools/ant_probe.py` — reset → startup → capabilities → version |
 | Radio live | `tools/ant_scan.py` hears broadcasts from a real ANT+ sensor |
+| Full session | `tools/ant_session.py` — eight channels at once, ack and burst paths reach the radio |
 | Consumer app | Zwift or TrainerRoad detects the dongle and pairs a sensor |
 
 ### CI

@@ -127,6 +127,18 @@ def expect(reader: FrameReader, msg_id: int, timeout_s: float):
             print(f"  . unsolicited 0x{got_id:02X} {payload.hex()}")
 
 
+def reset_stack(dev, reader: FrameReader, timeout_s: float = 3.0) -> bool:
+    """Reset the ANT stack and wait for the startup message.
+
+    Every host application opens a session with this, and channels left behind
+    by the previous one are why: assigning a channel that is still assigned is
+    refused with CHANNEL_IN_WRONG_STATE, so a tool that skips the reset
+    inherits whatever the last tool forgot to clean up.
+    """
+    dev.write(EP_OUT, frame(MESG_SYSTEM_RESET_ID, b"\x00"))
+    return expect(reader, MESG_STARTUP_ID, timeout_s) is not None
+
+
 def _serial_of(dev):
     try:
         return usb.util.get_string(dev, dev.iSerialNumber)
