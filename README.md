@@ -1,32 +1,33 @@
 # ANT+ USB Dongle
 
 Turns an **Adafruit Feather nRF52840 Express** into an ANT+ USB stick. Copy one
-file onto the board and Zwift, TrainerRoad, Garmin Express, openant and anything
-else that looks for an ANT stick will find it — no soldering.
+file onto the board and Zwift, TrainerRoad, Garmin Express, openant — anything
+that looks for an ANT stick — will find it. No soldering, no wiring.
 
 The firmware enumerates as `VID 0x0FCF / PID 0x1009`, the identity of a
 Dynastream ANT USB-m, and speaks the standard ANT serial protocol over a bulk
-vendor interface.
+vendor interface. Eight channels, acknowledged data and burst all work, so a
+fitness app can run heart rate, power, cadence and trainer control at once.
 
-On Windows it needs the same libusb-win32 driver a retail ANT stick needs —
-see [Windows drivers](#windows-drivers), which is worth reading before
-anything else if an app cannot see the dongle.
+> **Windows users:** this needs the same libusb-win32 driver a retail ANT stick
+> needs, and Windows will not offer it on its own. Read
+> [Windows drivers](#windows-drivers) before anything else.
 
 ---
 
-## For users
+## Getting started
 
-### 1. Buy the right board
+### 1. Get the right board
 
-**[Adafruit Feather nRF52840 Express](https://www.adafruit.com/product/4062)
-(product 4062, ~$25).**
+**[Adafruit Feather nRF52840 Express](https://www.adafruit.com/product/4062)**
+(product 4062, about $25).
 
 > **Not the Feather Sense (4516).** The Sense has no 32.768 kHz crystal and
 > falls back to an internal RC oscillator at ±500 ppm. ANT requires ±50 ppm —
-> the Sense is 10× outside tolerance and will not keep a channel synchronised.
+> the Sense is 10× outside tolerance and cannot hold a channel synchronised.
 
-Also check your cable: plenty of USB-C cables are charge-only and the board will
-never appear.
+Check your cable too. Plenty of USB cables are charge-only, and with one of
+those the board never appears at all.
 
 ### 2. Flash it
 
@@ -34,9 +35,14 @@ never appear.
 2. **Double-tap the RESET button.** A USB drive named `FTHR840BOOT` appears.
 3. Drag `ant_dongle.uf2` onto that drive.
 
-The drive ejects itself and the board reboots as an ANT+ dongle. That's it.
+The drive ejects itself and the board reboots as an ANT+ dongle. That's the
+whole install — the firmware lives on the board, and there is nothing to
+configure.
 
-### 3. Per-platform notes
+Grab `ant_dongle.uf2` from the
+[latest release](../../releases/latest), or [build it yourself](#building-from-source).
+
+### 3. Set up your platform
 
 | Platform | What you need to do |
 |---|---|
@@ -52,41 +58,57 @@ pip install pyusb
 python tools/ant_probe.py
 ```
 
-Expected: `PASS: reset -> startup -> capabilities -> version`.
+Expected output: `PASS: reset -> startup -> capabilities -> version`.
 
-If the version string comes back starting with `STUB`, you have flashed a
-Stage-1 stub build — it enumerates correctly but has no radio. Flash a release
-image instead.
+Then open your app of choice and pair a sensor as you would with any ANT+
+stick. To confirm the radio itself is hearing sensors, see
+[Testing the radio](#testing-the-radio).
 
-### Windows drivers
+---
+
+## Windows drivers
 
 A retail ANT+ stick does not work on Windows out of the box either, and this
 one is deliberately no different. The release build ships **no MS OS
 descriptors**, so Windows does not bind `winusb.sys` and the device arrives
 with no driver, showing problem code 28 — exactly like a genuine stick.
 
-That is on purpose. Zwift's `ANT_DLL.dll` reaches USB only through
-`libusb0.dll`, `DSI_SiUSBXp_3_1.DLL` and `DSI_CP210xManufacturing_3_1.dll`.
-There is no WinUSB path in it at all, so a WinUSB-bound device is invisible to
-Zwift no matter how correct the ANT protocol behaviour is. Worse, advertising a
-WinUSB compatible ID makes Windows match `USB\MS_COMP_WINUSB`, consider the
-device driven, and stop looking for anything better.
+Bind libusb-win32 by whichever route suits you:
 
-So bind libusb-win32, by whichever route you prefer:
-
-- **Windows Update.** Dynastream still publishes WHQL drivers for both PIDs —
-  they appear as *ANT USB-m* and *ANT USB Stick 2* under **Settings → Windows
-  Update → Advanced options → Optional updates → Driver updates**. This is the
-  easiest route and needs nothing downloaded.
+- **Windows Update** *(easiest, nothing to download)*. Dynastream still
+  publishes WHQL drivers for both PIDs; they appear as *ANT USB-m* and
+  *ANT USB Stick 2* under **Settings → Windows Update → Advanced options →
+  Optional updates → Driver updates**.
 - **Garmin's ANT+ driver package**, which matches on the hardware ID:
-  `pnputil /add-driver ANT_LibUsb.inf /install` from an elevated shell.
-- **Zadig** (https://zadig.akeo.ie): *Options → List All Devices*, select the
+  `pnputil /add-driver ANT_LibUsb.inf /install` from an elevated shell. Zwift
+  bundles the same package at
+  `C:\Program Files (x86)\Zwift\Windows ANT Dongle Driver\`.
+- **[Zadig](https://zadig.akeo.ie)**: *Options → List All Devices*, select the
   ANT stick, choose **libusb-win32** — not WinUSB, not libusbK, because
   `ANT_DLL` calls the libusb0 API specifically.
 
-**Windows will not offer the driver on its own, and Device Manager will not
-find it.** That is expected and says nothing about the device. The driver is an
-*optional* update (`AutoSelectOnWebSites = False`), so it is never installed
+After installing, **replug the dongle**.
+
+<details>
+<summary><b>Why not WinUSB?</b></summary>
+
+Zwift's `ANT_DLL.dll` reaches USB only through `libusb0.dll`,
+`DSI_SiUSBXp_3_1.DLL` and `DSI_CP210xManufacturing_3_1.dll`. There is no WinUSB
+path in it at all, so a WinUSB-bound device is invisible to Zwift no matter how
+correct the ANT protocol behaviour is. Worse, advertising a WinUSB compatible ID
+makes Windows match `USB\MS_COMP_WINUSB`, consider the device driven, and stop
+looking for anything better.
+
+If you would rather have WinUSB and only use the Python tools in `tools/`,
+build with `CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS=y`. Zwift will not see it.
+
+</details>
+
+<details>
+<summary><b>Windows won't offer the driver, and Device Manager can't find it</b></summary>
+
+That is expected and says nothing about the device. The driver is an *optional*
+update (`AutoSelectOnWebSites = False`), so it is never installed
 automatically; and Device Manager's *Update driver* wizard on Windows 11 does
 not query Windows Update at all, searching only the local driver store. It logs
 this to `%windir%\INF\setupapi.dev.log` as
@@ -97,16 +119,23 @@ this to `%windir%\INF\setupapi.dev.log` as
 !    dvi:      Error 0xe0000228: There are no compatible drivers for this device.
 ```
 
-despite no such policy being set. Use the Settings path above instead.
+despite no such policy being set. Use the Settings → Optional updates path
+above instead.
 
-**If Optional updates says "There are no optional updates available at this
-time", check whether Windows Update is paused.** A pause empties that page
-completely — every pending driver, not just this one — so it looks identical to
-the driver not existing. Settings → Windows Update shows a *Resume updates*
-button when paused; the underlying dates are at
+</details>
+
+<details>
+<summary><b>"There are no optional updates available at this time"</b></summary>
+
+Check whether Windows Update is paused. A pause empties that page completely —
+every pending driver, not just this one — so it looks identical to the driver
+not existing. Settings → Windows Update shows a *Resume updates* button when
+paused; the underlying dates are at
 `HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings` in `PauseUpdatesStartTime`
-/ `PauseUpdatesExpiryTime`. To see what is really on offer regardless of the
-pause, ask the update agent directly:
+/ `PauseUpdatesExpiryTime`.
+
+To see what is really on offer regardless of the pause, ask the update agent
+directly:
 
 ```powershell
 $s = New-Object -ComObject Microsoft.Update.Session
@@ -114,22 +143,40 @@ $s = New-Object -ComObject Microsoft.Update.Session
   ForEach-Object { $_.Title }
 ```
 
-After installing, replug the dongle. A device node that already failed a driver
-search carries `ConfigFlags = 64` (`CONFIGFLAG_FAILEDINSTALL`) and will reuse
-that cached verdict; check with
-`Get-PnpDeviceProperty -InstanceId <id> -KeyName DEVPKEY_Device_ConfigFlags`.
+</details>
 
-Zwift also bundles the same package at
-`C:\Program Files (x86)\Zwift\Windows ANT Dongle Driver\`. Its 2012 catalog is
-signed by *Microsoft Windows Hardware Compatibility Publisher* and still
-verifies as `Valid` on Windows 11 — it is inside the pre-2015-07-29 grandfather
-window for driver signing, so `pnputil` accepts it. Zwift's own *installer*
-(`DriverPackagePreinstallW`) is a separate matter and can fail with
-`0xE000024B`; check `%windir%\DPINST.LOG` if in doubt, and fall back to
-`pnputil` or Windows Update.
+<details>
+<summary><b>Driver installed, still not working</b></summary>
 
-If you would rather have WinUSB and only use the Python tools in `tools/`,
-build with `CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS=y`. Zwift will not see it.
+A device node that already failed a driver search carries `ConfigFlags = 64`
+(`CONFIGFLAG_FAILEDINSTALL`) and reuses that cached verdict. Check with:
+
+```powershell
+Get-PnpDeviceProperty -InstanceId <id> -KeyName DEVPKEY_Device_ConfigFlags
+```
+
+Replugging usually clears it. Note also that Zwift's own installer
+(`DriverPackagePreinstallW`) can fail with `0xE000024B` — check
+`%windir%\DPINST.LOG`, and fall back to `pnputil` or Windows Update. The
+package's 2012 catalog is signed by *Microsoft Windows Hardware Compatibility
+Publisher* and still verifies as `Valid` on Windows 11, inside the
+pre-2015-07-29 grandfather window for driver signing, so `pnputil` accepts it.
+
+</details>
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| Board never appears at all | Charge-only USB cable, or the UF2 was never copied. Double-tap RESET — if `FTHR840BOOT` appears, the board is fine. |
+| Enumerates, but the app can't see it | On Windows, no libusb-win32 driver bound. See [Windows drivers](#windows-drivers). |
+| `ant_probe.py` reports a version starting with `STUB` | You flashed a radio-stub build. It enumerates correctly but has no radio — flash a release image. |
+| Two dongles attached, tools refuse to run | Both are `0FCF:1009`. Pass `--serial` to pick one; the tools list the serials they found. |
+| `ant_scan.py` hears nothing | Sensors are only audible while transmitting. A strap has to be worn, cranks have to turn. |
+| Channels won't open after a crashed session | The stack keeps its channel state. Every host should open with a system reset; `ant_probe.py` does. |
+| App sees the dongle but lists no ANT+ sensors, only Bluetooth ones | A config message the app sends is going unanswered, so its search never starts. Check the app's log for a stuck retry loop (Zwift: `Stopping ANT search` repeating in `%LOCALAPPDATA%\Zwift\Logs\Log.txt`), then confirm against the firmware — every message the app uses should answer `0`, not `0x28`. |
 
 ---
 
@@ -139,66 +186,37 @@ build with `CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS=y`. Zwift will not see it.
 
 | Path | Purpose |
 |---|---|
-| `src/usb_ant_class.c` | Bulk vendor USB class; MS OS 1.0 + 2.0 descriptors for WinUSB auto-binding |
+| `src/main.c` | Init ordering: `ant_init()` before `usb_enable()` so ANT/MPSL owns HFXO startup |
+| `src/usb_ant_class.c` | Bulk vendor USB class, plus the optional MS OS 1.0/2.0 descriptors |
 | `src/ant_serial_bridge.c` | ANT serial protocol (`0xA4` framing) ↔ sdk-ant API |
 | `src/ant_stub.c` | No-op radio, compiled only when `CONFIG_ANT_DONGLE_RADIO_STUB=y` |
-| `src/main.c` | Init ordering: `ant_init()` before `usb_enable()` so ANT/MPSL owns HFXO startup |
+| `src/diag_flash_log.c` | Log backend that commits to flash, readable back over UF2 |
+| `pm_static_*.yml`, `sysbuild.cmake` | Pin the Feather application to `0x26000` — see the gotchas |
 | `scripts/` | Windows helpers: environment, flashing, USB cache reset |
-| `tools/ant_probe.py` | Cross-platform protocol smoke test |
-| `tools/ant_scan.py` | Opens a wildcard ANT+ channel and reports the sensors it hears |
-| `tools/ant_session.py` | Runs the eight-channel session a fitness app runs, including the ack and burst paths |
-| `pm_static_*.yml`, `sysbuild.cmake` | Pin the Feather application to `0x26000`; see the gotcha below |
+| `tools/ant_probe.py` | Protocol smoke test |
+| `tools/ant_scan.py` | Wildcard ANT+ channel; reports the sensors it hears |
+| `tools/ant_session.py` | The eight-channel session a fitness app runs, including ack and burst |
 | `host/` | Linux udev rule, Android device filter |
 
-### SDK versions
+### Building from source
 
 sdk-ant **v2.1.0** pairs with sdk-nrf **v3.2.4** — both its `west.yml` and
 `doc/compatibility.rst` say so, and that is the pairing to build releases with.
 Its prebuilt `libant.a` is compiled for that ABI, so mixing toolchains tends to
 produce silently wrong radio behaviour rather than a clean link failure.
 
-The pairing is not merely advisory. Building sdk-ant v2.1.0 against NCS v3.4.0
-fails outright: its `Kconfig` selects the library directory with
-`default "nrf52" if SOC_SERIES_NRF52X`, but v3.4.0's Zephyr renamed that symbol
-to `SOC_SERIES_NRF52`. `CONFIG_ANT_LIB_DIR` comes out empty and the link goes
-looking for `lib/soft-float/libant.a` instead of `lib/nrf52/soft-float/libant.a`.
-Use v3.2.4; the Stage-1 stub build is the way to work on the USB half in the
-meantime.
-
-### Two-stage bring-up
-
-**Stage 1 — USB only.** Proves enumeration and WinUSB binding with the radio
-stubbed out, so it builds against whatever NCS you already have installed:
-
-```powershell
-. .\scripts\env.ps1 -NcsVersion v3.4.0
-Push-Location C:\ncs\v3.4.0
-west -z C:\ncs\v3.4.0\zephyr build -s C:\Users\Colin\ant_dongle `
-  -d C:\Users\Colin\ant_dongle\build\stage1 `
-  -b adafruit_feather_nrf52840/nrf52840/uf2 -p always -- "-DEXTRA_CONF_FILE=stub.conf"
-Pop-Location
-```
-
-**Stage 2 — real radio.** Drop the stub overlay and build against NCS v3.2.4.
-If you installed it the usual way (nRF Connect extension or
+If you installed NCS the usual way (nRF Connect extension or
 `nrfutil toolchain-manager install --ncs-version v3.2.4`) it is already a
-complete west workspace, and sdk-ant is consumed as an extra module exactly as
-in Stage 1 — no relocation of the clone needed:
+complete west workspace, and sdk-ant is consumed as an extra module:
 
 ```powershell
 . .\scripts\env.ps1 -NcsVersion v3.2.4
 Push-Location C:\ncs\v3.2.4
 west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
-  -d C:\Users\Colin\ant_dongle\build\stage2 `
+  -d C:\Users\Colin\ant_dongle\build\release `
   -b adafruit_feather_nrf52840/nrf52840/uf2 -p always
 Pop-Location
 ```
-
-*Alternative*, if you would rather let sdk-ant's own manifest pull the SDK:
-its `west.yml` declares `self: path: ant`, so the checkout must sit at
-`<topdir>/ant`. Move the clone to `C:\ant-ws\ant`, then `west init -l
-C:\ant-ws\ant; west update` — that fetches sdk-nrf v3.2.4 and Zephyr beneath
-it. Build with `-DANT_MODULE_DIR=C:/ant-ws/ant`. This is what CI does.
 
 Then flash:
 
@@ -206,7 +224,39 @@ Then flash:
 .\scripts\flash_uf2.ps1 -TimeoutSeconds 30   # double-tap RESET when prompted
 ```
 
+*Alternative*, if you would rather let sdk-ant's own manifest pull the SDK: its
+`west.yml` declares `self: path: ant`, so the checkout must sit at
+`<topdir>/ant`. Put the clone at `C:\ant-ws\ant`, then `west init -l
+C:\ant-ws\ant; west update` — that fetches sdk-nrf v3.2.4 and Zephyr beneath
+it. Build with `-DANT_MODULE_DIR=C:/ant-ws/ant`. This is what CI does.
+
+**Don't build against NCS v3.4.0.** sdk-ant v2.1.0 fails outright there: its
+`Kconfig` selects the library directory with
+`default "nrf52" if SOC_SERIES_NRF52X`, but v3.4.0's Zephyr renamed that symbol
+to `SOC_SERIES_NRF52`. `CONFIG_ANT_LIB_DIR` comes out empty and the link goes
+looking for `lib/soft-float/libant.a` instead of `lib/nrf52/soft-float/libant.a`.
+
+#### Stub build
+
+`stub.conf` compiles `src/ant_stub.c` in place of the radio and turns on the MS
+OS descriptors, so the USB half builds and enumerates against whatever NCS you
+have installed. Useful for working on the USB class, or for USB debugging on a
+board sdk-ant does not target:
+
+```powershell
+. .\scripts\env.ps1 -NcsVersion v3.4.0
+Push-Location C:\ncs\v3.4.0
+west -z C:\ncs\v3.4.0\zephyr build -s C:\Users\Colin\ant_dongle `
+  -d C:\Users\Colin\ant_dongle\build\stub `
+  -b adafruit_feather_nrf52840/nrf52840/uf2 -p always -- "-DEXTRA_CONF_FILE=stub.conf"
+Pop-Location
+```
+
 ### Gotchas worth knowing
+
+These are the non-obvious constraints the code is shaped around. Each one cost
+real time to find, and several look like a generic "USB doesn't work" failure
+from the outside.
 
 - **`west build` needs its cwd inside the workspace.** It is an extension
   command discovered through the workspace manifest, so `-s`/`-d`/`-z` pointing
@@ -225,9 +275,6 @@ Then flash:
   build poisons the VID/PID and every later correct build looks equally broken.
   Between iterations either bump `CONFIG_ANT_DONGLE_BCD_DEVICE` (no elevation
   needed) or run `scripts/reset_usb_cache.ps1` from an elevated shell.
-- **No J-Link on the dev machine**, so `CONFIG_USE_SEGGER_RTT=y` logs are
-  unreadable. Use the flash log below instead. UF2 also cannot chip-erase — it
-  only rewrites `0x26000`–`0xEC000`.
 - **Endpoint descriptors must say `AUTO_EP_IN`/`AUTO_EP_OUT`, not `0x81`/`0x01`.**
   `usb_fix_descriptor()` pairs each endpoint descriptor with its
   `usb_ep_cfg_data` entry by matching `bEndpointAddress` against `ep_addr`, and
@@ -250,21 +297,78 @@ Then flash:
   `:10000000`.
 - **The USB driver's work queue needs more than its 1 KB default.** The nrfx
   driver dispatches `SET_CONFIGURATION` on its own work queue, and the
-  `ant_status_cb()` → `arm_rx()` → `usb_transfer()` chain runs there. It
-  overflows the moment the host configures the device; the fatal error halts
-  everything at once, so the board goes dark on the bus, the LED stops and
-  nothing more is logged. See the stack sizes in `prj.conf`.
+  `ant_status_cb()` → `arm_rx()` → `usb_transfer()` chain runs there. At the
+  default it overflows the moment the host configures the device; the fatal
+  error halts everything at once, so the board goes dark on the bus, the LED
+  stops and nothing more is logged. See the stack sizes in `prj.conf`.
 - **`MESG_SYSTEM_RESET` resets the ANT stack, not the MCU.** Every host library
   opens the device, resets it, then keeps using the same handle. Rebooting
   makes that handle stale and the next transfer fails with a pipe error — at
   the exact point every session begins.
+- **UF2 cannot chip-erase.** It only rewrites `0x26000`–`0xEC000`, so anything
+  outside that window survives a reflash.
+- **A host gives up on one unanswered message, and says nothing useful about
+  which.** Zwift calls `ANT_SetTransmitPower`, the device-wide `0x47`, while
+  setting a search up. The bridge implemented only the per-channel `0x60` and
+  answered `0x47` with `INVALID_MESSAGE`, so the search never started; Zwift
+  then retried its stop path every frame, writing 70,000 identical
+  `Stopping ANT search` lines and showing no ANT+ sensors at all. Nothing else
+  looked wrong - the dongle enumerated, bound its driver, passed `ant_probe.py`
+  and held a full eight-channel session under `ant_session.py`. What the host
+  actually calls is discoverable without guessing: `ANT_DLL.dll` is loaded by
+  name, so the ANT functions Zwift resolves are plain strings in `ZwiftApp.exe`
+  (`ANT_SetTransmitPower`, `ANT_OpenRxScanMode`, `ANT_EnableLED`, ...).
+- **Capabilities are the stack's, coverage is the bridge's, and nothing checks
+  they agree.** `ant_capabilities_get()` reports what the ANT stack can do,
+  which is a superset of the serial messages `dispatch()` implements - the
+  advertisement is what tells a host the feature is safe to use. Two bits
+  already carry their weight: scan mode and LED are both reported off, which is
+  why Zwift never sends `0x5B`/`0x68` even though it has the calls. Anything
+  advertised *and* unimplemented is a trap of the kind above.
+
+### Testing the radio
+
+`ant_probe.py` only proves the dongle answers questions about itself. To
+exercise the radio, `tools/ant_scan.py` runs the sequence a fitness app opens
+with — ANT+ network key, wildcard slave channel, open, listen — and reports
+what it hears:
+
+```sh
+python tools/ant_scan.py --seconds 30
+```
+
+But one channel is not what a fitness app does. Zwift opens a channel per
+sensor it cares about and runs them simultaneously for the length of a ride, so
+anything that only ever gets exercised on channel 0 stays untested.
+`tools/ant_session.py` runs that session instead — all eight channels at their
+real profile message rates — and additionally checks the two host-to-sensor
+paths:
+
+```sh
+python tools/ant_session.py --seconds 30
+```
+
+- **Acknowledged data** is how Zwift sets trainer resistance. Sent at a paired
+  channel, `TRANSFER_TX_COMPLETED` means a real sensor acknowledged it.
+- **Burst** is probed at a closed channel on purpose. A dispatcher that does
+  not implement the message answers `INVALID_MESSAGE`; one that does gets
+  `CHANNEL_IN_WRONG_STATE` back from the stack. Both are errors, but only the
+  second proves it reached the radio — and nothing goes on the air, which
+  matters when the sensor in range is someone's trainer.
+
+Two lessons for anyone writing another tool, both of which first showed up as
+apparent firmware bugs: assigning a channel that a previous run left assigned
+is refused with `CHANNEL_IN_WRONG_STATE`, which is why every host opens with a
+system reset; and a close is asynchronous, so unassigning before
+`EVENT_CHANNEL_CLOSED` arrives is refused for the same reason.
 
 ### Reading logs without a debugger
 
-`diag.conf` swaps RTT for a log backend that buffers to RAM and periodically
-commits to a reserved flash region. The Adafruit bootloader exposes that region
-inside `CURRENT.UF2`, so the log can be read back over the same USB drive used
-for flashing:
+The Feather has no debugger, so `CONFIG_USE_SEGGER_RTT=y` logs are unreadable
+on it. `diag.conf` swaps RTT for a log backend that buffers to RAM and
+periodically commits to a reserved flash region. The Adafruit bootloader
+exposes that region inside `CURRENT.UF2`, so the log can be read back over the
+same USB drive used for flashing:
 
 ```powershell
 west ... -d build\diagstub -- "-DEXTRA_CONF_FILE=stub.conf;diag.conf"
@@ -285,20 +389,15 @@ partition — so a slot at `0xEB000` is written correctly and is simply invisibl
 in the readback. A second copy is written at `0x40000` in case another
 bootloader version exposes a narrower window.
 
-When a build is worth bisecting, note that Zephyr's own
-`samples/subsys/usb/legacy/cdc_acm` is the reference: it enumerates on this
-board under NCS v3.2.4 as two COM ports, which separates "USB is broken on this
-board" from "our class is broken".
-
 ### Debugging on an nRF5340 DK instead
 
-The Feather has no debugger, so a fault inside `usb_enable()` is invisible on
-it and the flash log cannot capture what never got scheduled. An nRF5340 DK
-has an onboard J-Link *and* a separate "nRF USB" connector wired to the SoC's
-own device peripheral, so the same class code can be enumerated by a real host
-while its own account of events comes out the VCOM port. Both cables at once,
-no conflict. Both root causes above were found this way in minutes after days
-of guessing from the outside.
+A fault inside `usb_enable()` is invisible on the Feather, and the flash log
+cannot capture what never got scheduled. An nRF5340 DK has an onboard J-Link
+*and* a separate "nRF USB" connector wired to the SoC's own device peripheral,
+so the same class code can be enumerated by a real host while its own account
+of events comes out the VCOM port. Both cables at once, no conflict. Two of the
+gotchas above were found this way in minutes after days of guessing from the
+outside.
 
 ```powershell
 west -z C:\ncs\v3.2.4\zephyr build -s . -d build\dk5340 `
@@ -311,8 +410,8 @@ exposes), not RTT — RTT would need SEGGER's `JLinkARM` DLL installed, whereas
 the VCOM is just a COM port carried by the cable that already programs the
 board. [`boards/nrf5340dk_nrf5340_cpuapp.conf`](boards/nrf5340dk_nrf5340_cpuapp.conf)
 sets that up along with `CONFIG_LOG_MODE_IMMEDIATE=y`, so the last line before
-a hang has already been emitted rather than sitting in a queue that is about
-to be discarded.
+a hang has already been emitted rather than sitting in a queue that is about to
+be discarded.
 
 Build the DK with `stub.conf`. sdk-ant on an nRF5340 is the dual-core `ANT_NP`
 path, which is not what the Feather runs; the DK is here for the USB half.
@@ -320,50 +419,12 @@ path, which is not what the Feather runs; the DK is here for the USB half.
 An nRF54L15 DK cannot substitute: no chip in the nRF54L05/L10/L15 family has a
 USB device peripheral at all.
 
-### Testing the radio
+When a build is worth bisecting, Zephyr's own
+`samples/subsys/usb/legacy/cdc_acm` is the reference: it enumerates on this
+board under NCS v3.2.4 as two COM ports, which separates "USB is broken on this
+board" from "our class is broken".
 
-`ant_probe.py` only proves the dongle answers questions about itself. To
-exercise the radio, `tools/ant_scan.py` runs the sequence a fitness app opens
-with — ANT+ network key, wildcard slave channel, open, listen — and reports
-what it hears:
-
-```sh
-python tools/ant_scan.py --seconds 30
-```
-
-With two dongles attached (the usual case while bringing this up: development
-board and target, both `0FCF:1009`) pass `--serial` to choose; both tools
-refuse to guess and list the serials instead.
-
-Sensors are only audible while transmitting — a strap has to be worn, cranks
-have to turn.
-
-`ant_scan.py` still only uses one channel, which is not what a fitness app
-does. Zwift opens a channel per sensor it cares about and runs them
-simultaneously for the length of a ride, so anything that only ever gets
-exercised on channel 0 stays untested. `tools/ant_session.py` runs that
-session instead — all eight channels at their real profile message rates —
-and additionally checks the two host-to-sensor paths:
-
-```sh
-python tools/ant_session.py --seconds 30
-```
-
-- **Acknowledged data** is how Zwift sets trainer resistance. Sent at a paired
-  channel, `TRANSFER_TX_COMPLETED` means a real sensor acknowledged it.
-- **Burst** is probed at a closed channel on purpose. A dispatcher that does
-  not implement the message answers `INVALID_MESSAGE`; one that does gets
-  `CHANNEL_IN_WRONG_STATE` back from the stack. Both are errors, but only the
-  second proves it reached the radio — and nothing goes on the air, which
-  matters when the sensor in range is someone's trainer.
-
-Two failures this found were in the test, not the firmware, and both are worth
-knowing before writing another tool: assigning a channel a previous run left
-assigned is refused with `CHANNEL_IN_WRONG_STATE`, which is why every host
-opens with a system reset; and a close is asynchronous, so unassigning before
-`EVENT_CHANNEL_CLOSED` arrives is refused for the same reason.
-
-### Verification checklist
+### Release checklist
 
 | Check | How |
 |---|---|
@@ -379,17 +440,34 @@ opens with a system reset; and a close is asynchronous, so unassigning before
 ### CI
 
 [`.github/workflows/build.yml`](.github/workflows/build.yml) produces
-`ant_dongle.uf2` and attaches it to `v*` tag releases. sdk-ant is private, so it
-needs repository variable `SDK_ANT_REPO_URL` and secret
-`SDK_ANT_CHECKOUT_TOKEN`; without them the job reports a skip rather than
-failing. No network-key secret is required — a dongle receives its ANT+ network
-key from the host over `MESG_NETWORK_KEY_ID`.
+`ant_dongle.uf2` and attaches it to `v*` tag releases.
+
+sdk-ant is private, so the build needs one repository **secret**:
+`SDK_ANT_CHECKOUT_TOKEN`, a classic PAT with `repo` scope from an account that
+has been granted access to `ant-nrfconnect/sdk-ant`. Without it the job reports
+a skip rather than failing red.
+
+The automatic `GITHUB_TOKEN` **cannot** be used for this. It is an installation
+token scoped to this repository alone and carries no access to any other repo,
+so an account's own access has to be delegated explicitly via a PAT. The
+alternatives — a GitHub App installation token, or a deploy key — both require
+admin rights on `ant-nrfconnect/sdk-ant`, which adopters don't have. A
+fine-grained PAT only works if that organisation has opted into them, so a
+classic PAT is the reliable choice. If the organisation enforces SAML SSO, the
+PAT also has to be authorised for it — otherwise the checkout fails as though
+the repository does not exist.
+
+To build against a fork of sdk-ant, set repository variable `SDK_ANT_REPO` to
+`owner/name`; it defaults to `ant-nrfconnect/sdk-ant`.
+
+No network-key secret is required — a dongle receives its ANT+ network key from
+the host over `MESG_NETWORK_KEY_ID`.
 
 ---
 
-## Before distributing this publicly
+## Licensing and identity
 
-Two unresolved constraints, flagged rather than answered:
+Two constraints to settle before distributing builds of this publicly:
 
 1. **`CONFIG_ANT_EVALUATION_KEY` is a non-commercial development key.**
    sdk-ant's `init/Kconfig` is explicit that a commercial licence is required
@@ -397,5 +475,5 @@ Two unresolved constraints, flagged rather than answered:
 2. **`VID 0x0FCF` belongs to Garmin/Dynastream.** Presenting their vendor ID to
    third parties is a different question from using it privately.
 
-Also cosmetic but real: `CONFIG_USB_DEVICE_SN` is fixed at `"ANT0001"`, so two
+Cosmetic but real: `CONFIG_USB_DEVICE_SN` is fixed at `"ANT0001"`, so two
 dongles on one host share a serial number. A UICR-derived serial would fix it.

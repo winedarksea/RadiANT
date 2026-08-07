@@ -393,7 +393,12 @@ static void handle_burst(uint8_t msg_id, const uint8_t *body, uint8_t len)
 
 static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 {
-	ant_err_t err = 0;
+	/* Starts as a failure so a command whose body is too short falls through
+	 * every `if (len >= N)` below and is reported as INVALID_MESSAGE. Starting
+	 * at 0 instead acknowledges a truncated command with RESPONSE_NO_ERROR
+	 * without ever having run it, and the host has no way to tell.
+	 */
+	ant_err_t err = INVALID_MESSAGE;
 	/* body[0] is channel number (or network number for NETWORK_KEY) */
 	uint8_t ch = (len > 0) ? body[0] : 0;
 
@@ -463,6 +468,26 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		/* body: [ch, tx_power] */
 		if (len >= 2) {
 			err = ant_channel_radio_tx_power_set(body[0], body[1], 0);
+		}
+		break;
+
+	case MESG_RADIO_TX_POWER_ID:
+		/* body: [filler, tx_power]. The device-wide form, which every ANT
+		 * stick answers and which is what ANT_SetTransmitPower() sends;
+		 * 0x60 above is the per-channel one. sdk-ant exposes only the
+		 * per-channel setter, so fan it out.
+		 *
+		 * Per-channel failures are deliberately not propagated: a host
+		 * sets the default power before assigning any channel, and
+		 * refusing the message because channel 7 is unassigned would fail
+		 * a command a real stick accepts.
+		 */
+		if (len >= 2) {
+			for (uint8_t i = 0; i < CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED;
+			     i++) {
+				(void)ant_channel_radio_tx_power_set(i, body[1], 0);
+			}
+			err = 0;
 		}
 		break;
 
@@ -775,7 +800,14 @@ void ant_evt_handler(ant_evt_t *p_ant_evt)
 		return;
 	}
 
-	uint8_t buf[MESG_MAX_SIZE];
+	/* Sized like send_message(), not MESG_MAX_SIZE. MESG_MAX_SIZE counts a
+	 * frame around MESG_MAX_DATA_SIZE, but the size byte is allowed to reach
+	 * MESG_MAX_SIZE_VALUE, which is one larger - it also counts the channel
+	 * byte. A full extended-data message therefore writes the checksum one
+	 * past the end and hands usb_ant_send_async() a length one over the
+	 * buffer, from the ANT work-queue thread.
+	 */
+	uint8_t buf[MESG_MAX_SIZE_VALUE + 4];
 	uint8_t xor = 0;
 
 	buf[0] = MESG_TX_SYNC;

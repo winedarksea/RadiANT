@@ -23,7 +23,17 @@ LOG_MODULE_REGISTER(usb_ant, LOG_LEVEL_INF);
 #define ANT_EP_OUT_IDX  0
 #define ANT_EP_IN_IDX   1
 #define ANT_EP_MPS  64
-#define ANT_TX_FRAME_MAX 260
+/* The largest ANT serial frame is 42 bytes (sync + size + id + a size byte's
+ * worth of body at its MESG_MAX_SIZE_VALUE maximum of 38 + checksum). 64 keeps
+ * it to one bulk packet with room to spare.
+ *
+ * This is not just a buffer bound: usb_ant_send_async() puts a whole
+ * struct ant_tx_frame on the stack, and its caller ant_evt_handler() runs on
+ * sdk-ant's work queue, whose stack is CONFIG_ANT_WORK_STACK_SIZE (1 KB) and
+ * is not ours to spend. At 260 that single local was ~262 bytes of someone
+ * else's stack, with CONFIG_HW_STACK_PROTECTION off to catch it.
+ */
+#define ANT_TX_FRAME_MAX 64
 #define ANT_TX_QUEUE_DEPTH 32
 #define ANT_TX_STACK_SIZE 2048
 #define ANT_TX_PRIORITY 5

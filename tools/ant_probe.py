@@ -2,9 +2,10 @@
 """Probe an ANT+ USB dongle over its raw bulk endpoints.
 
 Speaks the ANT serial protocol directly with pyusb, so it works identically on
-Windows (WinUSB), Linux (libusb + the shipped udev rule) and macOS. It is the
-primary bring-up tool for this firmware: there is no J-Link on the development
-machine, so RTT logs are unreadable and this is how the board reports for duty.
+Windows (libusb-win32, the driver the README tells you to install), Linux
+(libusb + the shipped udev rule) and macOS. It is the primary bring-up tool for
+this firmware: there is no J-Link on the development machine, so RTT logs are
+unreadable and this is how the board reports for duty.
 
     pip install pyusb
     python tools/ant_probe.py
@@ -81,6 +82,12 @@ class FrameReader:
         except usb.core.USBError as exc:
             if getattr(exc, "errno", None) == 110:
                 return False
+            # libusb0 (libusb-win32) does not raise USBTimeoutError and leaves
+            # errno as None, so a plain idle read looks like a hard failure and
+            # takes the tool down mid-listen. Its message is the only thing
+            # left to go on: "[_usb_reap_async] timeout error".
+            if "timeout" in str(exc).lower():
+                return False
             raise
         self.buf.extend(bytes(data))
         return True
@@ -150,8 +157,8 @@ def _serial_of(dev):
         return None
 
 
-def _backend():
-    """Find a libusb backend, falling back to the one pip can supply.
+def _pip_libusb1():
+    """The libusb-1.0 DLL from `pip install libusb`, if that package is here.
 
     Linux and macOS ship libusb where pyusb already looks. Windows does not, so
     `pip install libusb` is the least painful way to get one - but that package
@@ -159,18 +166,14 @@ def _backend():
     the path over explicitly is what makes `pip install pyusb libusb` enough to
     run this on Windows.
     """
-    import usb.backend.libusb1
+    import os
 
-    backend = usb.backend.libusb1.get_backend()
-    if backend is not None:
-        return backend
+    import usb.backend.libusb1
 
     try:
         import libusb
     except ImportError:
         return None
-
-    import os
 
     root = os.path.join(os.path.dirname(libusb.__file__), "_platform", "_windows")
     arch = "x64" if sys.maxsize > 2**32 else "x86"
@@ -181,24 +184,50 @@ def _backend():
     return usb.backend.libusb1.get_backend(find_library=lambda _: dll)
 
 
+def _backends():
+    """Every libusb backend that loads here, best first.
+
+    libusb0 matters as much as libusb1 on Windows: the driver this project
+    tells you to install is libusb-win32, because that is the one Zwift's
+    ANT_DLL can talk to (see the README). A device bound to it is invisible to
+    the libusb-1.0 backend, so trying only libusb1 makes the tools report "no
+    libusb backend" on precisely the setup they are meant to test. Both are
+    tried, and open_device() searches all of them before giving up.
+    """
+    import usb.backend.libusb0
+    import usb.backend.libusb1
+
+    candidates = [usb.backend.libusb1.get_backend(),
+                  usb.backend.libusb0.get_backend(),
+                  _pip_libusb1()]
+    return [b for b in candidates if b is not None]
+
+
 def open_device(verbose: bool, wait_s: float = 0.0, serial: str | None = None):
-    backend = _backend()
-    if backend is None:
+    backends = _backends()
+    if not backends:
         sys.exit(
             "No libusb backend available.\n"
-            "  Windows: pip install libusb\n"
+            "  Windows: install libusb-win32 (see the README), or pip install libusb\n"
             "  Linux:   apt install libusb-1.0-0 (or your distro's equivalent)\n"
             "  macOS:   brew install libusb"
         )
 
     # Poll rather than sleep-then-look. How long a re-enumeration takes is the
     # host's business, not ours: Windows has to rediscover the device and rebind
-    # winusb.sys, which is comfortably slower than the device itself reboots.
+    # its driver, which is comfortably slower than the device itself reboots.
     deadline = time.monotonic() + wait_s
     while True:
-        found = [d for pid in PIDS
-                 for d in usb.core.find(idVendor=VID, idProduct=pid,
-                                        find_all=True, backend=backend)]
+        # First backend that sees anything wins. Concatenating them instead
+        # would list one dongle twice if two backends can both reach it, which
+        # reads as "two dongles attached" and stops the tool.
+        found = []
+        for backend in backends:
+            found = [d for pid in PIDS
+                     for d in usb.core.find(idVendor=VID, idProduct=pid,
+                                            find_all=True, backend=backend)]
+            if found:
+                break
         if serial is not None:
             found = [d for d in found
                      if _serial_of(d) and _serial_of(d).endswith(serial)]
@@ -218,8 +247,8 @@ def open_device(verbose: bool, wait_s: float = 0.0, serial: str | None = None):
         sys.exit(
             f"No ANT device found ({VID:04X}:"
             + "/".join(f"{p:04X}" for p in PIDS) + ").\n"
-            "  Windows: check Device Manager shows it under 'Universal Serial "
-            "Bus devices' bound to winusb.sys.\n"
+            "  Windows: check Device Manager shows it under 'libusb-win32 "
+            "devices' bound to libusb0 (see the README).\n"
             "  Linux:   install 99-ant-usb.rules (see host/linux/) and replug.\n"
             "  macOS:   nothing extra needed; try a different cable."
         )

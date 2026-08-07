@@ -16,6 +16,10 @@ permissions:
 env:
   BOARD: adafruit_feather_nrf52840/nrf52840/uf2
   SDK_ANT_REVISION: v2.1.0
+  # Upstream sdk-ant. Override with repository variable SDK_ANT_REPO to build
+  # against a fork. Access is granted per GitHub account by ANT+ adopter
+  # agreement, which is why the token below is needed at all.
+  SDK_ANT_REPO: ant-nrfconnect/sdk-ant
 
 jobs:
   build:
@@ -26,17 +30,19 @@ jobs:
         shell: bash
 
     steps:
-      # sdk-ant is a private repository, so the build can only run where the
-      # checkout credentials are configured. On forks and unconfigured clones
-      # this reports a skip instead of failing red.
+      # sdk-ant is a private repository, so the build can only run where a token
+      # with access to it is configured. The automatic GITHUB_TOKEN cannot be
+      # used: it is scoped to this repository alone and carries no access to
+      # any other, so a PAT is the only way to delegate an account's access.
+      # On forks and unconfigured clones this reports a skip instead of
+      # failing red.
       - name: Check sdk-ant credentials
         id: ant-ready
         env:
-          SDK_ANT_REPO_URL: ${{ vars.SDK_ANT_REPO_URL }}
           SDK_ANT_CHECKOUT_TOKEN: ${{ secrets.SDK_ANT_CHECKOUT_TOKEN }}
         run: |
           set -euo pipefail
-          if [[ -n "${SDK_ANT_REPO_URL}" && -n "${SDK_ANT_CHECKOUT_TOKEN}" ]]; then
+          if [[ -n "${SDK_ANT_CHECKOUT_TOKEN}" ]]; then
             echo "enabled=true" >> "${GITHUB_OUTPUT}"
           else
             echo "enabled=false" >> "${GITHUB_OUTPUT}"
@@ -53,14 +59,12 @@ jobs:
       # pulls Zephyr - so this one clone determines the whole SDK version set.
       - name: Checkout sdk-ant
         if: steps.ant-ready.outputs.enabled == 'true'
-        env:
-          SDK_ANT_REPO_URL: ${{ vars.SDK_ANT_REPO_URL }}
-          SDK_ANT_CHECKOUT_TOKEN: ${{ secrets.SDK_ANT_CHECKOUT_TOKEN }}
-        run: |
-          set -euo pipefail
-          git clone --depth 1 --branch "${SDK_ANT_REVISION}" \
-            "https://x-access-token:${SDK_ANT_CHECKOUT_TOKEN}@${SDK_ANT_REPO_URL#https://}" \
-            ant
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SDK_ANT_REPO || env.SDK_ANT_REPO }}
+          ref: ${{ env.SDK_ANT_REVISION }}
+          token: ${{ secrets.SDK_ANT_CHECKOUT_TOKEN }}
+          path: ant
 
       - name: Set up Python
         if: steps.ant-ready.outputs.enabled == 'true'
@@ -122,10 +126,15 @@ jobs:
           {
             echo "### ANT build skipped"
             echo
-            echo "sdk-ant is a private repository. To enable this workflow set:"
+            echo "sdk-ant is a private repository. To enable this workflow, add one"
+            echo "repository **secret**:"
             echo
-            echo "- repository **variable** \`SDK_ANT_REPO_URL\` (e.g. \`https://github.com/ant-nrfconnect/sdk-ant\`)"
-            echo "- repository **secret** \`SDK_ANT_CHECKOUT_TOKEN\` with read access to it"
+            echo "- \`SDK_ANT_CHECKOUT_TOKEN\` - a classic PAT with \`repo\` scope, from an"
+            echo "  account that has been granted access to \`${SDK_ANT_REPO}\`."
+            echo
+            echo "The automatic \`GITHUB_TOKEN\` cannot be used: it is scoped to this"
+            echo "repository only. To build against a fork instead, set repository"
+            echo "variable \`SDK_ANT_REPO\` to \`owner/name\`."
             echo
             echo "No ANT network key secret is needed - a dongle receives its network key from the host."
           } >> "${GITHUB_STEP_SUMMARY}"
