@@ -1,0 +1,43 @@
+# Static partition map for the nRF52840 Dongle (PCA10059).
+#
+# Same trap as the Feather, different numbers. sdk-ant drags Partition Manager
+# in, and PM decides where the application links regardless of what
+# CONFIG_FLASH_LOAD_OFFSET says. Left alone it hands the whole 1 MB to `app` at
+# 0x0, which on this board means overwriting the factory-programmed Nordic MBR
+# at 0x0 - except the UF2/hex output still carries offset 0x1000, so the image
+# is linked for 0x0 and written at 0x1000 and jumps into nothing. It never
+# enumerates and looks exactly like a dead board.
+#
+# The layout below is the one the onboard USB bootloader expects, restated in
+# the form Partition Manager reads. It comes from the board's own
+# nrf52840dongle_nrf52840.dts - specifically the comment there recording that
+# the bootloader lives at <0xe0000 0x1c000> and that the last two flash pages
+# hold bootloader and MBR settings. Those pages are why nrf5_bootloader below
+# runs to the end of flash rather than stopping at 0xfc000.
+#
+# Note this is the *non-bare* variant. nrf52840dongle/nrf52840/bare has no
+# bootloader and wants the whole flash from 0x0, so sysbuild.cmake deliberately
+# does not apply this file to it.
+#
+# Deliberately absent: a partition covering the MBR at 0x0-0x1000. NCS already
+# defines one - nrf5_mbr, in nrf/subsys/partition_manager/pm.yml.nrf5_mbr,
+# added automatically whenever CONFIG_BOARD_HAS_NRF5_BOOTLOADER is set, which
+# this board sets by default. Declaring a second reservation over the same
+# bytes does not conflict loudly; it wins the address, PM slides its own
+# nrf5_mbr to 0x1000 to sit after it, and `app` is pushed to 0x2000 while
+# CONFIG_FLASH_LOAD_OFFSET stays 0x1000. That is the same linked-here /
+# written-there failure this file exists to prevent, arrived at from the
+# opposite direction. Let PM place its own MBR partition and start `app`
+# directly after it.
+
+app:
+  address: 0x1000
+  size: 0xdf000
+  end_address: 0xe0000
+  region: flash_primary
+
+nrf5_bootloader:
+  address: 0xe0000
+  size: 0x20000
+  end_address: 0x100000
+  region: flash_primary

@@ -1,4 +1,4 @@
-name: Build UF2
+name: Build firmware
 
 on:
   pull_request:
@@ -14,7 +14,6 @@ permissions:
   contents: write
 
 env:
-  BOARD: adafruit_feather_nrf52840/nrf52840/uf2
   SDK_ANT_REVISION: v2.1.0
   # Upstream sdk-ant. Override with repository variable SDK_ANT_REPO to build
   # against a fork. Access is granted per GitHub account by ANT+ adopter
@@ -23,11 +22,25 @@ env:
 
 jobs:
   build:
-    name: ant_dongle.uf2
+    name: ${{ matrix.artifact }}
     runs-on: ubuntu-24.04
     defaults:
       run:
         shell: bash
+
+    # Same firmware, two boards. They differ only in where the image is linked
+    # and how it is delivered: the Feather takes a UF2 onto a mass-storage
+    # bootloader, the dongle takes a Nordic DFU zip over USB.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board: adafruit_feather_nrf52840/nrf52840/uf2
+            artifact: ant_dongle.uf2
+            package: uf2
+          - board: nrf52840dongle/nrf52840
+            artifact: ant_dongle_nrf52840dongle.zip
+            package: dfu
 
     steps:
       # sdk-ant is a private repository, so the build can only run where a token
@@ -85,6 +98,8 @@ jobs:
 
       - name: Build
         if: steps.ant-ready.outputs.enabled == 'true'
+        env:
+          BOARD: ${{ matrix.board }}
         run: |
           set -euxo pipefail
           west build app \
@@ -94,8 +109,26 @@ jobs:
             -- \
             -DANT_MODULE_DIR="${GITHUB_WORKSPACE}/ant"
 
-      - name: Collect artifact
+      # Partition Manager decides where the application links, and it does not
+      # fail loudly when that disagrees with the offset the output file carries
+      # - the image just boots into nothing. Assert the two agree rather than
+      # shipping a package that installs cleanly and does nothing.
+      - name: Verify link address
         if: steps.ant-ready.outputs.enabled == 'true'
+        env:
+          EXPECTED: ${{ matrix.package == 'dfu' && '0x1000' || '0x26000' }}
+        run: |
+          set -euo pipefail
+          offset="$(grep -h '^CONFIG_FLASH_LOAD_OFFSET=' \
+            "$(find build -name .config -path '*ant_dongle*' -print -quit)" | cut -d= -f2)"
+          pm_app="$(python3 -c \
+            "import yaml,sys; print(hex(yaml.safe_load(open('build/partitions.yml'))['app']['address']))")"
+          echo "load offset: ${offset}   partition manager app: ${pm_app}   expected: ${EXPECTED}"
+          test "$((offset))" -eq "$((EXPECTED))"
+          test "$((pm_app))" -eq "$((EXPECTED))"
+
+      - name: Collect UF2
+        if: steps.ant-ready.outputs.enabled == 'true' && matrix.package == 'uf2'
         run: |
           set -euxo pipefail
           # sysbuild nests the image under <build>/ant_dongle/zephyr/; a plain
@@ -103,25 +136,51 @@ jobs:
           uf2="$(find build -name zephyr.uf2 -print -quit)"
           test -n "${uf2}"
           mkdir -p dist
-          cp "${uf2}" dist/ant_dongle.uf2
+          cp "${uf2}" "dist/${{ matrix.artifact }}"
+          ls -l dist/
+
+      # The dongle has no mass-storage bootloader; its onboard USB bootloader
+      # takes a Nordic DFU package. `pkg` lives in nrfutil's nrf5sdk-tools
+      # command, which is a separate install on top of the nrfutil binary.
+      - name: Collect DFU package
+        if: steps.ant-ready.outputs.enabled == 'true' && matrix.package == 'dfu'
+        run: |
+          set -euxo pipefail
+          curl -fsSL -o nrfutil \
+            https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/executables/x86_64-unknown-linux-gnu/nrfutil
+          chmod +x nrfutil
+          ./nrfutil install nrf5sdk-tools
+          hex="$(find build -name zephyr.hex -path '*ant_dongle*' -print -quit)"
+          test -n "${hex}"
+          mkdir -p dist
+          # --sd-req 0x00: the application needs no SoftDevice present, which is
+          # true - the ANT stack links into the image.
+          ./nrfutil nrf5sdk-tools pkg generate \
+            --hw-version 52 \
+            --sd-req 0x00 \
+            --application "${hex}" \
+            --application-version 1 \
+            "dist/${{ matrix.artifact }}"
           ls -l dist/
 
       - name: Upload artifact
         if: steps.ant-ready.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ant_dongle-uf2
+          name: ${{ matrix.artifact }}
           if-no-files-found: error
-          path: dist/ant_dongle.uf2
+          path: dist/${{ matrix.artifact }}
 
       - name: Attach to release
         if: steps.ant-ready.outputs.enabled == 'true' && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/ant_dongle.uf2
+          files: dist/${{ matrix.artifact }}
 
+      # Emitted once, not once per board - the cause and the fix are the same
+      # for every entry in the matrix.
       - name: Note skipped build
-        if: steps.ant-ready.outputs.enabled != 'true'
+        if: steps.ant-ready.outputs.enabled != 'true' && matrix.package == 'uf2'
         run: |
           {
             echo "### ANT build skipped"

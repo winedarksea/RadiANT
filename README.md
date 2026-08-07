@@ -64,6 +64,23 @@ Then open your app of choice and pair a sensor as you would with any ANT+
 stick. To confirm the radio itself is hearing sensors, see
 [Testing the radio](#testing-the-radio).
 
+### Other boards
+
+The **[Nordic nRF52840 Dongle](https://www.nordicsemi.com/Products/Development-hardware/nRF52840-Dongle)**
+(PCA10059, about $10) also works, and is already a USB stick if you would rather
+not have a Feather hanging off the port. It has the 32.768 kHz crystal ANT
+needs. Flashing is less convenient — there is no drag-and-drop drive, so it
+takes the Nordic DFU package `ant_dongle_nrf52840dongle.zip`:
+
+1. Insert the dongle and press the small side RESET button. The red LED pulses
+   slowly: that is the bootloader waiting.
+2. [nRF Connect for Desktop](https://www.nordicsemi.com/Products/Development-tools/nrf-connect-for-desktop)
+   → **Programmer** → select the device → **Add file** → **Write**.
+
+Everything after that is identical; the firmware is the same. Any other
+nRF52840 board needs a partition map of its own — see
+[Building from source](#building-from-source).
+
 ---
 
 ## Windows drivers
@@ -191,8 +208,9 @@ pre-2015-07-29 grandfather window for driver signing, so `pnputil` accepts it.
 | `src/ant_serial_bridge.c` | ANT serial protocol (`0xA4` framing) ↔ sdk-ant API |
 | `src/ant_stub.c` | No-op radio, compiled only when `CONFIG_ANT_DONGLE_RADIO_STUB=y` |
 | `src/diag_flash_log.c` | Log backend that commits to flash, readable back over UF2 |
-| `pm_static_*.yml`, `sysbuild.cmake` | Pin the Feather application to `0x26000` — see the gotchas |
-| `scripts/` | Windows helpers: environment, flashing, USB cache reset |
+| `pm_static_*.yml`, `sysbuild.cmake` | Pin the application where each board's bootloader expects it — `0x26000` on the Feather, `0x1000` on the dongle. See the gotchas |
+| `boards/` | Per-board `.conf`/`.overlay`: output format, code partition, and prising the console off the USB device we need |
+| `scripts/` | Windows helpers: environment, flashing, DFU packaging, USB cache reset |
 | `tools/ant_probe.py` | Protocol smoke test |
 | `tools/ant_scan.py` | Wildcard ANT+ channel; reports the sensors it hears |
 | `tools/ant_session.py` | The eight-channel session a fitness app runs, including ack and burst |
@@ -235,6 +253,29 @@ it. Build with `-DANT_MODULE_DIR=C:/ant-ws/ant`. This is what CI does.
 `default "nrf52" if SOC_SERIES_NRF52X`, but v3.4.0's Zephyr renamed that symbol
 to `SOC_SERIES_NRF52`. `CONFIG_ANT_LIB_DIR` comes out empty and the link goes
 looking for `lib/soft-float/libant.a` instead of `lib/nrf52/soft-float/libant.a`.
+
+#### nRF52840 Dongle build
+
+Same source, different board target, and a DFU package instead of a UF2:
+
+```powershell
+west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
+  -d C:\Users\Colin\ant_dongle\build\dongle `
+  -b nrf52840dongle/nrf52840 -p always
+
+.\scripts\package_dfu.ps1     # -> dist\ant_dongle_nrf52840dongle.zip
+```
+
+The package is unsigned, which is correct here: the dongle ships a
+signature-less bootloader, and that is why it takes firmware with no debugger
+and no cable. `package_dfu.ps1` refuses an image that does not start at
+`0x1000` — a Feather build starts at `0x26000` and would otherwise package
+happily into a zip that installs cleanly and then does nothing.
+
+[`boards/nrf52840dongle_nrf52840.conf`](boards/nrf52840dongle_nrf52840.conf)
+settles the two differences: no UF2 output, and `CONFIG_USE_DT_CODE_PARTITION`
+left *off* so the offset comes out `0x1000` rather than the `slot0_partition`
+the board's devicetree names for MCUboot, which we do not use.
 
 #### Stub build
 
@@ -295,6 +336,19 @@ from the outside.
   by board. Check `build/<d>/partitions.yml` says `app: address: 0x26000`, or
   that `zephyr.hex` opens with an extended-address record rather than
   `:10000000`.
+- **Reserving a region Partition Manager already knows about moves your app
+  instead of protecting it.** Adding a new board means writing a static map, and
+  the obvious first draft reserves the regions the bootloader owns. But PM may
+  already define one of them — on the nRF52840 Dongle, `nrf5_mbr`
+  (`nrf/subsys/partition_manager/pm.yml.nrf5_mbr`), added whenever
+  `CONFIG_BOARD_HAS_NRF5_BOOTLOADER` is set and placed `{after: [start]}`. A
+  static entry covering the same bytes wins the address, PM slides its own copy
+  along to sit after it, and `app` gets pushed a page further than
+  `CONFIG_FLASH_LOAD_OFFSET` says. There is no warning; a static partition being
+  honoured is exactly what you asked for. `app` cannot be pinned against this,
+  since it is the one that absorbs whatever space the others leave. The fix is
+  to delete a partition, not add one. Check `build/<d>/partitions.yml` and
+  `.config` agree on the app address.
 - **The USB driver's work queue needs more than its 1 KB default.** The nrfx
   driver dispatches `SET_CONFIGURATION` on its own work queue, and the
   `ant_status_cb()` → `arm_rx()` → `usb_transfer()` chain runs there. At the
@@ -443,8 +497,10 @@ board" from "our class is broken".
 
 | Check | How |
 |---|---|
-| Builds clean | `west build` exits 0 for both stub and real-ANT configs |
+| Builds clean | `west build` exits 0 for both stub and real-ANT configs, on both boards |
+| Linked where it is written | `build/<d>/partitions.yml` and `.config` agree on the app address: `0x26000` Feather, `0x1000` dongle |
 | UF2 loads | Copies to `FTHR840BOOT`; drive auto-ejects, board re-enumerates |
+| DFU package loads | `scripts\package_dfu.ps1` exits 0; Programmer writes the zip and the dongle re-enumerates |
 | Correct identity | `Get-PnpDevice` shows `USB\VID_0FCF&PID_1009`, and the compatible IDs contain no `MS_COMP_WINUSB` |
 | Driver binds | After installing libusb-win32, `DEVPKEY_Device_Service` reads `libusb0` and problem code is 0 |
 | Protocol handshake | `tools/ant_probe.py` — reset → startup → capabilities → version |
@@ -454,8 +510,14 @@ board" from "our class is broken".
 
 ### CI
 
-[`.github/workflows/build.yml`](.github/workflows/build.yml) produces
-`ant_dongle.uf2` and attaches it to `v*` tag releases.
+[`.github/workflows/build.yml`](.github/workflows/build.yml) builds both boards
+as a matrix and attaches `ant_dongle.uf2` and
+`ant_dongle_nrf52840dongle.zip` to `v*` tag releases.
+
+Each entry asserts that `CONFIG_FLASH_LOAD_OFFSET` and Partition Manager's
+`app` address agree before packaging. That disagreement is silent at build time
+and produces an image that installs cleanly and then boots into nothing, which
+is not something to discover from a release artifact.
 
 sdk-ant is private, so the build needs one repository **secret**:
 `SDK_ANT_CHECKOUT_TOKEN`, a classic PAT with `repo` scope from an account that
