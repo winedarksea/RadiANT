@@ -147,8 +147,47 @@ Then flash:
   Between iterations either bump `CONFIG_ANT_DONGLE_BCD_DEVICE` (no elevation
   needed) or run `scripts/reset_usb_cache.ps1` from an elevated shell.
 - **No J-Link on the dev machine**, so `CONFIG_USE_SEGGER_RTT=y` logs are
-  unreadable. Bring-up relies on `tools/ant_probe.py` and the `led0` heartbeat.
-  UF2 also cannot chip-erase — it only rewrites `0x26000`–`0xEC000`.
+  unreadable. Use the flash log below instead. UF2 also cannot chip-erase — it
+  only rewrites `0x26000`–`0xEC000`.
+- **Endpoint descriptors must say `AUTO_EP_IN`/`AUTO_EP_OUT`, not `0x81`/`0x01`.**
+  `usb_fix_descriptor()` pairs each endpoint descriptor with its
+  `usb_ep_cfg_data` entry by matching `bEndpointAddress` against `ep_addr`, and
+  only then rewrites both with the address it allocates. Writing the final
+  ANTUSB-2 addresses straight into the descriptor matches nothing, so
+  `usb_get_device_descriptor()` returns NULL and `usb_enable()` fails with -1
+  before anything reaches the bus. Allocation starts at endpoint 1 in each
+  direction, so `AUTO_EP_*` still yields 0x01 and 0x81.
+
+### Reading logs without a debugger
+
+`diag.conf` swaps RTT for a log backend that buffers to RAM and periodically
+commits to a reserved flash region. The Adafruit bootloader exposes that region
+inside `CURRENT.UF2`, so the log can be read back over the same USB drive used
+for flashing:
+
+```powershell
+west ... -d build\diagstub -- "-DEXTRA_CONF_FILE=stub.conf;diag.conf"
+.\scripts\flash_uf2.ps1 -Uf2Path build\diagstub\ant_dongle\zephyr\zephyr.uf2
+# let it run a few seconds, then double-tap RESET
+.\scripts\read_flash_log.ps1
+```
+
+It also overrides `k_sys_fatal_error_handler`, so an early fault is captured
+with its PC/LR rather than silently halting the CPU — from the outside a halt
+is indistinguishable from a hang, since it kills USB, the LED heartbeat and the
+periodic flush all at once.
+
+Two things pin down `CONFIG_ANT_DONGLE_FLASH_LOG_OFFSET`: it must sit above the
+image, and inside the window the bootloader actually dumps. Bootloader 0.8.0
+dumps `0x1000`–`0xEA000`, which stops short of the `0xEC000` end of the code
+partition — so a slot at `0xEB000` is written correctly and is simply invisible
+in the readback. A second copy is written at `0x40000` in case another
+bootloader version exposes a narrower window.
+
+When a build is worth bisecting, note that Zephyr's own
+`samples/subsys/usb/legacy/cdc_acm` is the reference: it enumerates on this
+board under NCS v3.2.4 as two COM ports, which separates "USB is broken on this
+board" from "our class is broken".
 
 ### Verification checklist
 
