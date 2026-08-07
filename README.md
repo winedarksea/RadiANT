@@ -69,6 +69,8 @@ image instead.
 | `src/main.c` | Init ordering: `ant_init()` before `usb_enable()` so ANT/MPSL owns HFXO startup |
 | `scripts/` | Windows helpers: environment, flashing, USB cache reset |
 | `tools/ant_probe.py` | Cross-platform protocol smoke test |
+| `tools/ant_scan.py` | Opens a wildcard ANT+ channel and reports the sensors it hears |
+| `pm_static_*.yml`, `sysbuild.cmake` | Pin the Feather application to `0x26000`; see the gotcha below |
 | `host/` | Linux udev rule, Android device filter |
 
 ### SDK versions
@@ -157,6 +159,28 @@ Then flash:
   `usb_get_device_descriptor()` returns NULL and `usb_enable()` fails with -1
   before anything reaches the bus. Allocation starts at endpoint 1 in each
   direction, so `AUTO_EP_*` still yields 0x01 and 0x81.
+- **Partition Manager decides the link address, not `zephyr,code-partition`.**
+  sdk-ant is an NCS module, so sysbuild turns Partition Manager on, and left
+  alone it hands the whole 1 MB to `app` at `0x0`. `CONFIG_FLASH_LOAD_OFFSET`
+  stays at `0x26000` from the devicetree, and that is what the UF2 converter
+  stamps into the file — so the image is linked for `0x0`, written to
+  `0x26000`, and boots into whatever the vector table happens to point at. It
+  never enumerates and looks exactly like a USB fault.
+  [`pm_static_adafruit_feather_nrf52840.yml`](pm_static_adafruit_feather_nrf52840.yml)
+  restates the board's layout in the form PM reads; `sysbuild.cmake` selects it
+  by board. Check `build/<d>/partitions.yml` says `app: address: 0x26000`, or
+  that `zephyr.hex` opens with an extended-address record rather than
+  `:10000000`.
+- **The USB driver's work queue needs more than its 1 KB default.** The nrfx
+  driver dispatches `SET_CONFIGURATION` on its own work queue, and the
+  `ant_status_cb()` → `arm_rx()` → `usb_transfer()` chain runs there. It
+  overflows the moment the host configures the device; the fatal error halts
+  everything at once, so the board goes dark on the bus, the LED stops and
+  nothing more is logged. See the stack sizes in `prj.conf`.
+- **`MESG_SYSTEM_RESET` resets the ANT stack, not the MCU.** Every host library
+  opens the device, resets it, then keeps using the same handle. Rebooting
+  makes that handle stale and the next transfer fails with a pipe error — at
+  the exact point every session begins.
 
 ### Reading logs without a debugger
 
@@ -189,6 +213,54 @@ When a build is worth bisecting, note that Zephyr's own
 board under NCS v3.2.4 as two COM ports, which separates "USB is broken on this
 board" from "our class is broken".
 
+### Debugging on an nRF5340 DK instead
+
+The Feather has no debugger, so a fault inside `usb_enable()` is invisible on
+it and the flash log cannot capture what never got scheduled. An nRF5340 DK
+has an onboard J-Link *and* a separate "nRF USB" connector wired to the SoC's
+own device peripheral, so the same class code can be enumerated by a real host
+while its own account of events comes out the VCOM port. Both cables at once,
+no conflict. Both root causes above were found this way in minutes after days
+of guessing from the outside.
+
+```powershell
+west -z C:\ncs\v3.2.4\zephyr build -s . -d build\dk5340 `
+  -b nrf5340dk/nrf5340/cpuapp -- "-DEXTRA_CONF_FILE=stub.conf"
+Copy-Item build\dk5340\merged.hex D:\     # the JLINK drive
+```
+
+Logs go to the VCOM COM port at 115200 (the *second* of the two the J-Link
+exposes), not RTT — RTT would need SEGGER's `JLinkARM` DLL installed, whereas
+the VCOM is just a COM port carried by the cable that already programs the
+board. [`boards/nrf5340dk_nrf5340_cpuapp.conf`](boards/nrf5340dk_nrf5340_cpuapp.conf)
+sets that up along with `CONFIG_LOG_MODE_IMMEDIATE=y`, so the last line before
+a hang has already been emitted rather than sitting in a queue that is about
+to be discarded.
+
+Build the DK with `stub.conf`. sdk-ant on an nRF5340 is the dual-core `ANT_NP`
+path, which is not what the Feather runs; the DK is here for the USB half.
+
+An nRF54L15 DK cannot substitute: no chip in the nRF54L05/L10/L15 family has a
+USB device peripheral at all.
+
+### Testing the radio
+
+`ant_probe.py` only proves the dongle answers questions about itself. To
+exercise the radio, `tools/ant_scan.py` runs the sequence a fitness app opens
+with — ANT+ network key, wildcard slave channel, open, listen — and reports
+what it hears:
+
+```sh
+python tools/ant_scan.py --seconds 30
+```
+
+With two dongles attached (the usual case while bringing this up: development
+board and target, both `0FCF:1008`) pass `--serial` to choose; both tools
+refuse to guess and list the serials instead.
+
+Sensors are only audible while transmitting — a strap has to be worn, cranks
+have to turn.
+
 ### Verification checklist
 
 | Check | How |
@@ -198,7 +270,7 @@ board" from "our class is broken".
 | Correct identity | `Get-PnpDevice` shows `USB\VID_0FCF&PID_1008` |
 | WinUSB auto-binds | Device Manager → *Universal Serial Bus devices*, `winusb.sys`, no Zadig, no yellow bang |
 | Protocol handshake | `tools/ant_probe.py` — reset → startup → capabilities → version |
-| Radio live | openant receives broadcast data from a real ANT+ sensor |
+| Radio live | `tools/ant_scan.py` hears broadcasts from a real ANT+ sensor |
 | Consumer app | Zwift or TrainerRoad detects the dongle and pairs a sensor |
 
 ### CI
