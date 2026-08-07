@@ -602,5 +602,12 @@ Two constraints to settle before distributing builds of this publicly:
 2. **`VID 0x0FCF` belongs to Garmin/Dynastream.** Presenting their vendor ID to
    third parties is a different question from using it privately.
 
-Cosmetic but real: `CONFIG_USB_DEVICE_SN` is fixed at `"ANT0001"`, so two
-dongles on one host share a serial number. A UICR-derived serial would fix it.
+`CONFIG_USB_DEVICE_SN` is not the serial a host sees, despite looking like it.
+Zephyr's `usb_update_sn_string_descriptor()` replaces it at runtime with the
+HWINFO device ID — the nRF52840's 8-byte FICR DEVICEID — so every dongle has
+always had a per-unit serial. What the literal controls is how much of it
+survives: Zephyr keeps the low `sizeof(SN)/2` bytes and then copies only
+`strlen(SN)` characters of the hex. At the old 7-character `"ANT0001"` that
+truncated a 16-character ID to `183A618`, and logged a length-mismatch warning
+on every boot. It is now a 16-character placeholder, which is the width that
+matches DEVICEID exactly.

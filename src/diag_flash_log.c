@@ -38,6 +38,7 @@
 #include <zephyr/logging/log_core.h>
 #include <zephyr/logging/log_output.h>
 #include <zephyr/sys/byteorder.h>
+#include <zephyr/sys/reboot.h>
 #include <zephyr/sys/util.h>
 #include <string.h>
 
@@ -244,6 +245,13 @@ int diag_flash_log_flush(void)
  * indistinguishable from a hang from the outside - no USB, no LED, and no
  * periodic flush either - so committing the log here is what makes an early
  * fault visible at all.
+ *
+ * Overriding it also takes CONFIG_RESET_ON_FATAL_ERROR out of the picture,
+ * since that option only changes what the *default* handler does. Honour it
+ * explicitly instead, after the flush, so a diag build behaves the same way a
+ * release build does rather than quietly still going dark. The log survives the
+ * reboot - it is already in flash by this point, and read back through the
+ * bootloader's CURRENT.UF2, which does not care how the CPU got there.
  */
 void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf)
 {
@@ -255,7 +263,11 @@ void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf)
 
 	(void)diag_flush(false);
 
+#if defined(CONFIG_RESET_ON_FATAL_ERROR)
+	sys_reboot(SYS_REBOOT_COLD);
+#else
 	k_fatal_halt(reason);
+#endif
 }
 
 /* ── Periodic flush ────────────────────────────────────────────────────────── */

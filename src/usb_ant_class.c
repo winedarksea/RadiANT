@@ -54,6 +54,7 @@ K_THREAD_STACK_DEFINE(ant_tx_stack, ANT_TX_STACK_SIZE);
 static struct k_thread ant_tx_thread_data;
 
 static volatile bool configured;
+static volatile bool was_configured;
 static volatile bool rx_armed;
 static volatile bool rx_backpressured;
 static uint8_t ep_out_buf[ANT_EP_MPS];
@@ -370,17 +371,50 @@ static void ant_status_cb(struct usb_cfg_data *cfg,
 	switch (status) {
 	case USB_DC_CONFIGURED:
 		configured = true;
+		was_configured = true;
 		rx_armed = false;
 		rx_backpressured = false;
 		arm_rx();
 		LOG_INF("USB configured");
 		break;
+	case USB_DC_RESUME:
+		/* A host does not repeat SET_CONFIGURATION after a bus resume -
+		 * the device stays configured across a suspend from its point of
+		 * view, so USB_DC_CONFIGURED never comes again. Without this the
+		 * suspend below is one-way: usb_ant_write() answers every command
+		 * with -ENODEV and arm_rx() never re-arms EP_OUT, so the dongle
+		 * enumerates, binds its driver and then replies to nothing until
+		 * it is physically replugged. The trigger is a laptop sleep/wake.
+		 */
+		if (was_configured) {
+			configured = true;
+			rx_armed = false;
+			rx_backpressured = false;
+			arm_rx();
+			LOG_INF("USB resumed");
+		}
+		break;
 	case USB_DC_DISCONNECTED:
+		was_configured = false;
+		/* usb_device.c cancels in-flight transfers itself on DISCONNECTED
+		 * and RESET, but not on SUSPEND - hence the explicit call there.
+		 */
+		configured = false;
+		rx_armed = false;
+		rx_backpressured = false;
+		k_msgq_purge(&ant_tx_msgq);
+		break;
 	case USB_DC_SUSPEND:
 		configured = false;
 		rx_armed = false;
 		rx_backpressured = false;
 		k_msgq_purge(&ant_tx_msgq);
+		/* usb_ant_write() holds tx_mutex across a usb_transfer_sync() that
+		 * waits K_FOREVER. A suspend landing mid-transfer would otherwise
+		 * park the bridge thread - and the TX thread behind it - for the
+		 * whole duration of the host's sleep, with the mutex held.
+		 */
+		usb_cancel_transfers();
 		break;
 	default:
 		break;
