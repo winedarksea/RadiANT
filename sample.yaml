@@ -33,3 +33,34 @@ tests:
     extra_args:
       - CONFIG_ANT_EVALUATION_KEY=y
       - EXTRA_CONF_FILE=synth.conf
+  # The new USB device stack on a board that can actually be tested against a
+  # host. The nRF54 targets have no legacy stack available, so this is what
+  # keeps src/usb_ant_class_next.c honest on hardware that exists.
+  sample.ant_dongle.feather_uf2_usbd:
+    platform_allow: adafruit_feather_nrf52840/nrf52840/uf2
+    integration_platforms:
+      - adafruit_feather_nrf52840/nrf52840/uf2
+    tags: ant usb dongle usbd
+    build_only: true
+    extra_args:
+      - CONFIG_ANT_EVALUATION_KEY=y
+      - EXTRA_CONF_FILE=next.conf
+  # nRF54L15 has no USB device peripheral at all, so this build carries the ANT
+  # serial protocol over a UART. It is the only target that exercises
+  # lib/nrf54l/libant.a on real nRF54L silicon.
+  sample.ant_dongle.nrf54l15dk:
+    platform_allow: nrf54l15dk/nrf54l15/cpuapp
+    integration_platforms:
+      - nrf54l15dk/nrf54l15/cpuapp
+    tags: ant uart nrf54
+    build_only: true
+    extra_args: CONFIG_ANT_EVALUATION_KEY=y
+  # nRF54LM20A: the one nRF54L part with a USB controller, and it is a DWC2,
+  # so this is the new stack by necessity rather than by preference.
+  sample.ant_dongle.nrf54lm20dk:
+    platform_allow: nrf54lm20dk/nrf54lm20a/cpuapp
+    integration_platforms:
+      - nrf54lm20dk/nrf54lm20a/cpuapp
+    tags: ant usb dongle nrf54 usbd
+    build_only: true
+    extra_args: CONFIG_ANT_EVALUATION_KEY=y

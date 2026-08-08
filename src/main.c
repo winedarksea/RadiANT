@@ -7,14 +7,9 @@
  */
 
 #include <zephyr/kernel.h>
-#include <zephyr/usb/usb_device.h>
-#include <zephyr/usb/usb_ch9.h>
 #include <zephyr/logging/log.h>
 
-#if CONFIG_ANT_DONGLE_BCD_DEVICE != 0
-#include <zephyr/sys/byteorder.h>
-#include <usb_descriptor.h>
-#endif
+#include "ant_transport.h"
 
 #if DT_NODE_HAS_STATUS(DT_ALIAS(led0), okay)
 #include <zephyr/drivers/gpio.h>
@@ -37,10 +32,8 @@ static bool led_ok;
 
 LOG_MODULE_REGISTER(ant_dongle, LOG_LEVEL_INF);
 
-/* Forward declarations — defined in ant_serial_bridge.c */
+/* Forward declaration — defined in ant_serial_bridge.c */
 extern int ant_serial_bridge_init(void);
-/* Forward declaration — defined in usb_ant_class.c */
-extern void usb_ant_class_init(void);
 
 int main(void)
 {
@@ -75,32 +68,21 @@ int main(void)
 	}
 	LOG_INF("ant_serial_bridge_init ok");
 
-#if CONFIG_ANT_DONGLE_BCD_DEVICE != 0
-	/* Bring-up knob. Zephyr pins bcdDevice to USB_BCD_DRN, derived from the
-	 * kernel version, so it is identical across rebuilds — and Windows keys
-	 * its cached MS OS descriptor verdict on VID+PID+bcdDevice. Bumping this
-	 * between iterations gives Windows a device it has no cached verdict for.
-	 * Must run before usb_enable(), which is what publishes the descriptor.
+	/* Whichever of the three transports was compiled in. On a USB build
+	 * this enumerates; on a UART build it opens the port. Anything
+	 * stack-specific that has to happen first — the bcdDevice override, the
+	 * USBD descriptor and configuration registration — belongs to the
+	 * transport and is done in there.
 	 */
-	{
-		struct usb_device_descriptor *dev_desc =
-			(struct usb_device_descriptor *)usb_get_device_descriptor();
-
-		dev_desc->bcdDevice = sys_cpu_to_le16(CONFIG_ANT_DONGLE_BCD_DEVICE);
-		LOG_INF("bcdDevice overridden to 0x%04X",
-			(unsigned int)CONFIG_ANT_DONGLE_BCD_DEVICE);
-	}
-#endif
-
-	LOG_INF("calling usb_enable");
-	ret = usb_enable(NULL);
+	LOG_INF("enabling transport");
+	ret = ant_transport_enable();
 	if (ret) {
-		LOG_ERR("usb_enable failed: %d", ret);
+		LOG_ERR("ant_transport_enable failed: %d", ret);
 		(void)diag_flash_log_flush();
 		return ret;
 	}
 
-	LOG_INF("USB enabled — VID 0x0FCF PID 0x1009");
+	LOG_INF("transport up");
 	(void)diag_flash_log_flush();
 
 #if DT_NODE_HAS_STATUS(DT_ALIAS(led0), okay)

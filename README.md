@@ -220,8 +220,11 @@ pre-2015-07-29 grandfather window for driver signing, so `pnputil` accepts it.
 
 | Path | Purpose |
 |---|---|
-| `src/main.c` | Init ordering: `ant_init()` before `usb_enable()` so ANT/MPSL owns HFXO startup |
-| `src/usb_ant_class.c` | Bulk vendor USB class, plus the optional MS OS 1.0/2.0 descriptors |
+| `src/main.c` | Init ordering: `ant_init()` before the transport comes up, so ANT/MPSL owns HFXO startup |
+| `src/ant_transport.h` | The three-function contract the bridge talks to. One of the three files below implements it |
+| `src/usb_ant_class.c` | Bulk vendor USB class on the **legacy** stack, plus the optional MS OS 1.0/2.0 descriptors. The proven one |
+| `src/usb_ant_class_next.c` | The same class on the **new** USBD/UDC stack. Required on nRF54; see [Transports](#transports) |
+| `src/ant_uart_transport.c` | ANT serial over a plain UART, for parts with no USB peripheral |
 | `src/ant_serial_bridge.c` | ANT serial protocol (`0xA4` framing) ↔ sdk-ant API |
 | `src/ant_stub.c` | No-op radio, compiled only when `CONFIG_ANT_DONGLE_RADIO_STUB=y` |
 | `src/diag_flash_log.c` | Log backend that commits to flash, readable back over UF2 |
@@ -231,7 +234,94 @@ pre-2015-07-29 grandfather window for driver signing, so `pnputil` accepts it.
 | `tools/ant_probe.py` | Protocol smoke test |
 | `tools/ant_scan.py` | Wildcard ANT+ channel; reports the sensors it hears |
 | `tools/ant_session.py` | The eight-channel session a fitness app runs, including ack and burst |
+| `tools/ant_bench.py` | Round-trip latency and throughput, for comparing one USB stack against the other |
 | `host/` | Linux udev rule, Android device filter |
+
+### Transports
+
+The bridge does not know what carries its bytes. It needs a byte sink, a byte
+source, and a way to signal that it has drained its input —
+[ant_transport.h](src/ant_transport.h) — and exactly one of three
+implementations is compiled in, chosen by `CONFIG_ANT_DONGLE_TRANSPORT_*`.
+
+| Transport | Where it applies | Status |
+|---|---|---|
+| `USB_LEGACY` | nRF52/nRF53 — anything with a Nordic USBD peripheral | The shipping build. Verified against Zwift |
+| `USB_NEXT` | Same, plus every nRF54 part that has USB at all | Verified on a Feather against a real host; DWC2 itself untested |
+| `UART` | Parts with no USB device peripheral, e.g. nRF54L15 | Builds and links; not yet run on hardware |
+
+The default follows the devicetree rather than the board name: a
+`nordic,nrf-usbd` node selects the legacy stack, an `snps,dwc2` node selects the
+new one, and neither means the part has no USB device peripheral and the ANT
+serial protocol goes out a UART instead. CI asserts the resulting choice per
+board, because a defaulted-from-hardware decision fails silently — a renamed
+node would just quietly build something else.
+
+**The new stack is not an upgrade, it is a requirement.** Every nRF54 part with
+USB carries a DesignWare DWC2 controller, and Zephyr's only DWC2 driver is
+[udc_dwc2.c](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/usb/udc/udc_dwc2.c),
+which belongs to the new stack. There is no `usb_dc_dwc2.c`. So on those parts
+the legacy stack is not older-but-available, it is absent.
+
+That is also why nRF52840 has not been moved over. The legacy build is the one
+with hours on it against Zwift, and the new stack buys nothing there — the same
+controller, the same descriptors, the same endpoints. What it buys is that
+`usb_ant_class_next.c` can be tested on hardware that exists, ahead of hardware
+that does not, and that the two can be measured against each other:
+
+```powershell
+west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
+  -d C:\Users\Colin\ant_dongle\build\feather_next `
+  -b adafruit_feather_nrf52840/nrf52840/uf2 -p always -- "-DEXTRA_CONF_FILE=next.conf"
+```
+
+That build enumerates as the same `0FCF:1009` with the same 16-character serial
+and passes `ant_probe.py` and `ant_scan.py` identically to the legacy one. One
+Kconfig warning is expected and harmless — `USB_NRFX_ATTACHED_EVENT_DELAY` lives
+inside `if USB_DEVICE_DRIVER` and so does not exist in a new-stack build;
+[next.conf](next.conf) explains why it needs no replacement.
+
+One respect in which the impersonation stops being exact: DWC2 is a high-speed
+controller, so an nRF54LM20A dongle enumerates at 480 Mbit/s with 512-byte bulk
+endpoints where a retail stick is full speed with 64. The frames are identical
+and libusb hides the packet size, but it is a visible difference.
+
+#### Which stack is faster
+
+[`tools/ant_bench.py`](tools/ant_bench.py) times `request capabilities` round
+trips — the cheapest message with a guaranteed reply and no side effects, so
+what it measures is the USB path and the bridge, not the radio. Four runs of
+500 requests each, same Feather, same host, same session:
+
+| | Legacy | New (USBD) |
+|---|---|---|
+| Latency mean | **0.381 ms** | 0.436 ms |
+| Latency p50 | **0.361 ms** | 0.417 ms |
+| Latency p90 | **0.449 ms** | 0.479 ms |
+| Latency p99 | 0.796 ms | **0.787 ms** |
+| Worst case seen | 2.137 ms | **1.274 ms** |
+| Throughput, depth 8 | **3334 msg/s** | 2423 msg/s |
+| Timeouts | 0 | 0 |
+| Flash | **115 960 B** | 125 720 B |
+| RAM | 42 880 B | **41 280 B** |
+
+Run-to-run spread was under 2% on the legacy build and under 6% on the new one,
+so the gaps in the central figures are real: the new stack is about 15% slower
+per round trip and about 27% lower in sustained throughput, and costs ~9.8 KB
+more flash while saving ~1.6 KB of RAM. Its only repeatable advantage is a
+tighter worst case; p99 is a tie.
+
+**None of this matters for the workload.** Eight ANT+ channels at 4 Hz is
+32 messages a second, and the slower of the two stacks does 2400 — a margin of
+75×. Both are latency-irrelevant against ANT's 250 ms message period. So the
+numbers are not an argument for switching, and not much of an argument against
+one either; they exist so the choice is not made on a guess.
+
+What would eventually force the move is that the legacy stack is deprecated —
+every build of it prints `Deprecated symbol USB_DEVICE_STACK is enabled` — and
+one Zephyr release will remove it. Until then, shipping images stay on the
+stack with hours on it against a real application, because being 27% faster at
+something with 75× headroom is worth less than being known-good.
 
 ### Building from source
 
@@ -320,6 +410,41 @@ Two images rather than one because there is no way to detect this at build
 time and no good way to fail at run time: without the crystal the LFXO simply
 never starts, `ant_init()` never returns, and USB never comes up. The board
 looks dead. Shipping both makes that a one-file retry instead of a diagnosis.
+
+#### nRF54 builds
+
+Two nRF54 targets exist. Neither is a product yet — cheap nRF54 dongles are not
+on sale — but both build against the real `lib/nrf54l/libant.a`, which is
+shipped in sdk-ant and does apply here: `SOC_NRF54LM20A` and `SOC_NRF54L15`
+both select `SOC_SERIES_NRF54LX`, and that is what `ANT_LIB_DIR` keys on.
+
+```powershell
+west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
+  -d C:\Users\Colin\ant_dongle\build\l15 -b nrf54l15dk/nrf54l15/cpuapp -p always
+
+west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
+  -d C:\Users\Colin\ant_dongle\build\lm20 -b nrf54lm20dk/nrf54lm20a/cpuapp -p always
+```
+
+**nRF54L15 has no USB device peripheral at all.** This is not a DK leaving a
+connector unpopulated — there is no `usbd` node and no `usbhs` node in
+`nrf54l_05_10_15.dtsi`, because there is nothing on the die. The L05 and L10 are
+the same. So that target cannot be a dongle, and it is built with the UART
+transport instead: `uart30` is the DK's second VCOM, so the ANT byte stream and
+the log leave the board as two separate COM ports over the one debugger cable.
+What it proves is the half the nRF52840 boards cannot — that ANT, MPSL and the
+clock work on nRF54L silicon.
+
+**nRF54LM20A is the one nRF54L part that does have USB**, as `usbhs@5a000`,
+`compatible = "nordic,nrf-usbhs-nrf54l", "snps,dwc2"`, wired up by the DK as
+`zephyr_udc0`. That target is a real dongle build and uses the new USB stack
+because DWC2 leaves no alternative. Build-only so far — no hardware here.
+
+Flashing either DK needs SEGGER J-Link installed. `nrfutil device list` will
+find the board over its board-controller interface without it, and the `JLINK`
+mass-storage volume will accept a copied hex and then reject it with
+`FAIL.TXT: The currently active SWD interface does not support MSD drag and
+drop`, which reads like a broken image rather than a missing tool.
 
 #### Stub build
 
@@ -554,8 +679,8 @@ board" from "our class is broken".
 
 ### CI
 
-[`.github/workflows/build.yml`](.github/workflows/build.yml) builds a matrix and
-attaches four artifacts to `v*` tag releases:
+[`.github/workflows/build.yml`](.github/workflows/build.yml) builds a matrix of
+seven. The first four are attached to `v*` tag releases:
 
 | Artifact | Board |
 |---|---|
@@ -564,10 +689,23 @@ attaches four artifacts to `v*` tag releases:
 | `ant_dongle_promicro.uf2` | Pro Micro nRF52840, with a 32.768 kHz crystal |
 | `ant_dongle_promicro_synth.uf2` | Pro Micro nRF52840, clock synthesized for boards without one |
 
-Each entry asserts that `CONFIG_FLASH_LOAD_OFFSET` and Partition Manager's
-`app` address agree before packaging. That disagreement is silent at build time
-and produces an image that installs cleanly and then boots into nothing, which
-is not something to discover from a release artifact.
+The other three are built to keep them compiling and are downloadable from the
+run, but are not released — none of them is an image to hand anyone:
+
+| Artifact | Board | Why |
+|---|---|---|
+| `ant_dongle_feather_usbd.uf2` | Adafruit Feather nRF52840 Express | The new USB stack on hardware that can be tested against a host |
+| `ant_dongle_nrf54l15dk.hex` | nRF54L15 DK | ANT on nRF54L silicon, over a UART — the part has no USB |
+| `ant_dongle_nrf54lm20dk.hex` | nRF54LM20A DK | The first nRF54 target that can be a dongle |
+
+Each entry asserts two things before packaging. First, that
+`CONFIG_FLASH_LOAD_OFFSET` and Partition Manager's `app` address agree — that
+disagreement is silent at build time and produces an image that installs
+cleanly and then boots into nothing, which is not something to discover from a
+release artifact. Second, that the transport that got compiled is the one that
+entry expects, since the choice is defaulted from devicetree and a moved or
+renamed USB node would otherwise fall through to a different one and still
+build green.
 
 sdk-ant is private, so the build needs one repository **secret**:
 `SDK_ANT_CHECKOUT_TOKEN`, a classic PAT with `repo` scope from an account that

@@ -24,9 +24,20 @@ project(ant_dongle)
 
 target_sources(app PRIVATE
   src/main.c
-  src/usb_ant_class.c
   src/ant_serial_bridge.c
 )
+
+# Exactly one transport, chosen by Kconfig. All three implement
+# src/ant_transport.h, so the bridge and main() do not know which is present.
+if(CONFIG_ANT_DONGLE_TRANSPORT_USB_LEGACY)
+  target_sources(app PRIVATE src/usb_ant_class.c)
+elseif(CONFIG_ANT_DONGLE_TRANSPORT_USB_NEXT)
+  target_sources(app PRIVATE src/usb_ant_class_next.c)
+elseif(CONFIG_ANT_DONGLE_TRANSPORT_UART)
+  target_sources(app PRIVATE src/ant_uart_transport.c)
+else()
+  message(FATAL_ERROR "ant_dongle: no transport selected")
+endif()
 
 if(CONFIG_ANT_DONGLE_FLASH_LOG)
   target_sources(app PRIVATE src/diag_flash_log.c)

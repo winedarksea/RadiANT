@@ -29,6 +29,8 @@
 #include <zephyr/sys/ring_buffer.h>
 #include <zephyr/logging/log.h>
 
+#include "ant_transport.h"
+
 #include "ant_interface.h"
 #include "ant_parameters.h"
 /* ant_host_init.h is the nRF5340 dual-core cpuapp header (CONFIG_ANT_NP_HOST,
@@ -44,13 +46,9 @@
 
 LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
 
-/* ── External symbols from usb_ant_class.c ─────────────────────────────────── */
-
-extern struct ring_buf ant_rx_ring_buf;
-extern struct k_sem    ant_rx_sem;
-int usb_ant_send(const uint8_t *buf, size_t len);
-int usb_ant_send_async(const uint8_t *buf, size_t len);
-void usb_ant_resume_rx(void);
+/* The transport - USB on either stack, or a bare UART - is declared in
+ * ant_transport.h and selected at build time. Nothing below depends on which.
+ */
 
 /* ── Bridge thread ─────────────────────────────────────────────────────────── */
 

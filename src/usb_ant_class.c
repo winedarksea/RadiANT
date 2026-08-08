@@ -17,6 +17,8 @@
 #include <zephyr/sys/ring_buffer.h>
 #include <zephyr/logging/log.h>
 
+#include "ant_transport.h"
+
 LOG_MODULE_REGISTER(usb_ant, LOG_LEVEL_INF);
 
 /* Endpoint addresses */
@@ -475,6 +477,31 @@ void usb_ant_class_init(void)
 		k_thread_name_set(&ant_tx_thread_data, "ant_usb_tx");
 		tx_thread_started = true;
 	}
+}
+
+int ant_transport_enable(void)
+{
+#if CONFIG_ANT_DONGLE_BCD_DEVICE != 0
+	/* Bring-up knob, moved here from main() when the transport gained
+	 * alternatives: usb_get_device_descriptor() is a legacy-stack API, and
+	 * the new stack sets the same field through usbd_device_set_bcd_device().
+	 * Keeping each in its own file is what lets main() stay stack-agnostic.
+	 *
+	 * Zephyr pins bcdDevice to USB_BCD_DRN, derived from the kernel version,
+	 * so it is identical across rebuilds - and Windows keys its cached MS OS
+	 * descriptor verdict on VID+PID+bcdDevice. Bumping this between
+	 * iterations gives Windows a device it has no cached verdict for. Must
+	 * run before usb_enable(), which is what publishes the descriptor.
+	 */
+	struct usb_device_descriptor *dev_desc =
+		(struct usb_device_descriptor *)usb_get_device_descriptor();
+
+	dev_desc->bcdDevice = sys_cpu_to_le16(CONFIG_ANT_DONGLE_BCD_DEVICE);
+	LOG_INF("bcdDevice overridden to 0x%04X",
+		(unsigned int)CONFIG_ANT_DONGLE_BCD_DEVICE);
+#endif
+
+	return usb_enable(NULL);
 }
 
 int usb_ant_send(const uint8_t *buf, size_t len)

@@ -2,6 +2,221 @@
 
 menu "ANT+ USB Dongle"
 
+choice ANT_DONGLE_TRANSPORT
+	prompt "Transport carrying the ANT serial protocol"
+	default ANT_DONGLE_TRANSPORT_USB_LEGACY if DT_HAS_NORDIC_NRF_USBD_ENABLED
+	default ANT_DONGLE_TRANSPORT_USB_NEXT if DT_HAS_SNPS_DWC2_ENABLED
+	default ANT_DONGLE_TRANSPORT_UART
+	help
+	  Which of src/usb_ant_class.c, src/usb_ant_class_next.c and
+	  src/ant_uart_transport.c is compiled. They present the same interface
+	  to the serial bridge; see src/ant_transport.h.
+
+	  The defaults follow the hardware: a Nordic USBD peripheral in the
+	  devicetree means the proven legacy build is available and is chosen; a
+	  DWC2 controller means only the new stack can drive it; neither means
+	  there is no USB device peripheral on the part at all, and the ANT
+	  serial protocol goes out a UART instead.
+
+	  Note that these are the *driver-presence* symbols, not the stack
+	  symbols. Depending on USB_DEVICE_DRIVER or UDC_DRIVER here would be
+	  circular - the stacks select those, so they are consequences of the
+	  choice rather than preconditions for it.
+
+	  For the same reason the options below turn their stack on with a
+	  `default`, further down, rather than with `select`. Selecting
+	  USB_DEVICE_STACK from inside a choice closes a loop through
+	  subsys/usb/device/class/netusb: USB_DEVICE_NETWORK_ECM selects
+	  NET_L2_ETHERNET, whose reverse dependencies reach SERIAL, which a
+	  sibling option in this same choice was depending on. Kconfig rejects
+	  the whole file rather than any one line of it, and the reported loop
+	  runs through Ethernet drivers that have nothing to do with this.
+
+config ANT_DONGLE_TRANSPORT_USB_LEGACY
+	bool "USB, legacy device stack"
+	depends on DT_HAS_NORDIC_NRF_USBD_ENABLED
+	help
+	  The proven path: this is the build verified against Zwift on the
+	  Feather, and the default anywhere it is available. Available means
+	  the SoC has a Nordic USBD peripheral, which in practice means nRF52
+	  and nRF53 - drivers/usb/device/usb_dc_nrfx.c covers those and nothing
+	  newer.
+
+config ANT_DONGLE_TRANSPORT_USB_NEXT
+	bool "USB, new device stack (USBD/UDC)"
+	depends on DT_HAS_NORDIC_NRF_USBD_ENABLED || DT_HAS_SNPS_DWC2_ENABLED
+	help
+	  Same device on the wire, different plumbing. Mandatory on nRF54: those
+	  parts carry a DesignWare DWC2 controller whose only Zephyr driver is
+	  drivers/usb/udc/udc_dwc2.c, and there is no legacy equivalent, so the
+	  legacy option above is not merely older there - it does not exist.
+
+	  Also selectable on nRF52840, which is the only way to test this stack
+	  against a host that has previously accepted the legacy build.
+
+config ANT_DONGLE_TRANSPORT_UART
+	bool "Plain UART"
+	help
+	  For parts with no USB device peripheral at all - the nRF54L05, L10 and
+	  L15 among them. ANT's serial protocol is a UART protocol to begin
+	  with, so this is the same byte stream a USB build puts in its bulk
+	  endpoints, on a COM port instead. Needs an `ant-uart` devicetree alias
+	  naming a UART that is not the console.
+
+endchoice
+
+# Turn on whichever stack the choice above landed on. These are `default`
+# rather than `select` on purpose - see the note in the choice's help.
+
+config USB_DEVICE_STACK
+	default y if ANT_DONGLE_TRANSPORT_USB_LEGACY
+
+config USB_DEVICE_STACK_NEXT
+	default y if ANT_DONGLE_TRANSPORT_USB_NEXT
+
+config UART_INTERRUPT_DRIVEN
+	default y if ANT_DONGLE_TRANSPORT_UART
+
+if !ANT_DONGLE_TRANSPORT_UART
+
+comment "USB device identity"
+
+config ANT_DONGLE_USB_VID
+	hex "USB Vendor ID"
+	default 0x0FCF
+	help
+	  Dynastream/Garmin. Paired with the PID below this is what a host
+	  matches an ANT driver against.
+
+config ANT_DONGLE_USB_PID
+	hex "USB Product ID"
+	default 0x1009
+	help
+	  Identify as an ANT USB-m, the current stick and the one an ANT driver
+	  is most likely to be published for. Dynastream's own INF (shipped
+	  inside Zwift as Windows ANT Dongle Driver\ANT_LibUsb.inf) and the
+	  usb.ids registry agree on the mapping, and it is the one Windows
+	  matches against:
+
+	    0FCF:1008  ANTUSB2 Stick
+	    0FCF:1009  ANT USB-m Stick
+
+	  Some Garmin support pages state this the other way round. The INF
+	  wins, because the INF is what driver matching actually reads. Both
+	  PIDs are listed in that one package, so this choice does not change
+	  which driver applies.
+
+config ANT_DONGLE_USB_MANUFACTURER
+	string "USB manufacturer string"
+	default "Dynastream Innovations"
+
+config ANT_DONGLE_USB_PRODUCT
+	string "USB product string"
+	default "ANT USB-m Stick"
+
+config ANT_DONGLE_USB_SN
+	string "USB serial number string"
+	default "0123456789ABCDEF"
+	help
+	  Per-unit serial number. This literal is never what a host sees: both
+	  stacks overwrite it at runtime with the HWINFO device ID, which on
+	  nRF52840 is the 8-byte FICR DEVICEID, hex-expanded to 16 characters.
+
+	  What the literal does control is how much of it survives. Zephyr sizes
+	  the window from this string - it keeps the low sizeof(SN)/2 bytes of
+	  the device ID, as those carry more entropy, then copies only
+	  strlen(SN) characters of the result. At the previous "ANT0001" that
+	  meant 7 characters of a truncated tail, plus a LOG_WRN on every boot
+	  about the length mismatch. 16 characters is the width that matches the
+	  DEVICEID exactly, so nothing is cut and the warning goes away.
+
+	  The value is therefore a placeholder whose *length* is the setting.
+
+endif # !ANT_DONGLE_TRANSPORT_UART
+
+# ── Legacy stack plumbing ───────────────────────────────────────────────────
+#
+# These symbols only exist when USB_DEVICE_STACK is on, so they cannot be
+# stated in prj.conf: a UART or new-stack build would be assigning to symbols
+# that are not defined. Setting them as defaults here keeps them scoped to the
+# builds where they mean something.
+
+if ANT_DONGLE_TRANSPORT_USB_LEGACY
+
+config USB_DEVICE_VID
+	default ANT_DONGLE_USB_VID
+
+config USB_DEVICE_PID
+	default ANT_DONGLE_USB_PID
+
+config USB_DEVICE_MANUFACTURER
+	default ANT_DONGLE_USB_MANUFACTURER
+
+config USB_DEVICE_PRODUCT
+	default ANT_DONGLE_USB_PRODUCT
+
+config USB_DEVICE_SN
+	default ANT_DONGLE_USB_SN
+
+# No BOS. Its only occupant was the MS OS 2.0 platform capability, which is
+# off by default (see ANT_DONGLE_MSOS_DESCRIPTORS), and disabling it also drops
+# bcdUSB from 0x0210 back to 0x0200 - a plain USB 2.0 device, like the stick
+# this impersonates.
+config USB_DEVICE_BOS
+	default n
+
+# We call usb_enable() ourselves, from ant_transport_enable(), after ANT is up.
+config USB_DEVICE_INITIALIZE_AT_BOOT
+	default n
+
+config USB_REQUEST_BUFFER_SIZE
+	default 2048
+
+config USB_CDC_ACM
+	default n
+
+# The nrfx driver dispatches SET_CONFIGURATION on its own work queue, and that
+# is the thread our ant_status_cb() -> arm_rx() -> usb_transfer() chain runs on.
+# At the 1 KB default it overflows the moment the host configures the device -
+# a fatal error, so the board goes dark on the bus, the LED heartbeat stops and
+# nothing more is logged. It reads exactly like "USB never came up".
+config USB_NRFX_WORK_QUEUE_STACK_SIZE
+	default 2048
+
+# Give usb_transfer() its own work queue rather than sharing the system one,
+# which is what the in-tree USB classes do. The transfer callbacks then cannot
+# overflow whatever else happens to be using the system work queue.
+config USB_WORKQUEUE
+	default y
+
+config USB_WORKQUEUE_STACK_SIZE
+	default 2048
+
+endif # ANT_DONGLE_TRANSPORT_USB_LEGACY
+
+
+# ── New stack plumbing ──────────────────────────────────────────────────────
+
+if ANT_DONGLE_TRANSPORT_USB_NEXT
+
+# Unlike the legacy stack, transfer buffers come from one shared UDC pool
+# rather than per-class static arrays, so it has to be sized for what we
+# actually enqueue: one 64-byte bulk OUT standing permanently armed, plus
+# transient bulk IN frames, plus the stack's own control transfers. The
+# defaults (16 buffers / 1024 bytes) are tight enough that a burst of ANT
+# events can starve the RX re-arm, which shows up as the dongle going quiet
+# under load rather than as an error.
+config UDC_BUF_COUNT
+	default 32
+
+config UDC_BUF_POOL_SIZE
+	default 4096
+
+config USBD_CDC_ACM_CLASS
+	default n
+
+endif # ANT_DONGLE_TRANSPORT_USB_NEXT
+
 config ANT_DONGLE_RADIO_STUB
 	bool "Stub out the ANT radio layer"
 	help

@@ -1,4 +1,4 @@
-name: Build firmware
+﻿name: Build firmware
 
 on:
   pull_request:
@@ -29,9 +29,16 @@ jobs:
         shell: bash
 
     # Same firmware, several boards. They differ in where the image is linked,
-    # how it is delivered, and - for the Pro Micro - which low-frequency clock
-    # source it is built for, since the 32.768 kHz crystal is present on some of
-    # those boards and absent on others sold under the same name.
+    # how it is delivered, which transport carries the ANT serial protocol, and
+    # - for the Pro Micro - which low-frequency clock source it is built for,
+    # since the 32.768 kHz crystal is present on some of those boards and
+    # absent on others sold under the same name.
+    #
+    # offset is where the application is expected to link, and transport is
+    # which of the three src/ transports should end up compiled. Both are
+    # asserted after the build: the transport is defaulted from devicetree, so
+    # a board whose USB node moved or was renamed would silently fall through
+    # to a different one and still build green.
     strategy:
       fail-fast: false
       matrix:
@@ -39,16 +46,49 @@ jobs:
           - board: adafruit_feather_nrf52840/nrf52840/uf2
             artifact: ant_dongle.uf2
             package: uf2
+            offset: "0x26000"
+            transport: USB_LEGACY
+            release: true
           - board: nrf52840dongle/nrf52840
             artifact: ant_dongle_nrf52840dongle.zip
             package: dfu
+            offset: "0x1000"
+            transport: USB_LEGACY
+            release: true
           - board: promicro_nrf52840/nrf52840/uf2
             artifact: ant_dongle_promicro.uf2
             package: uf2
+            offset: "0x26000"
+            transport: USB_LEGACY
+            release: true
           - board: promicro_nrf52840/nrf52840/uf2
             artifact: ant_dongle_promicro_synth.uf2
             package: uf2
             extra_conf: synth.conf
+            offset: "0x26000"
+            transport: USB_LEGACY
+            release: true
+          # Not a shipping image. The nRF54 targets can only use the new USB
+          # device stack, and this is the one board that stack can be tested
+          # against a real host on, so it is built here to keep it compiling.
+          - board: adafruit_feather_nrf52840/nrf52840/uf2
+            artifact: ant_dongle_feather_usbd.uf2
+            package: uf2
+            extra_conf: next.conf
+            offset: "0x26000"
+            transport: USB_NEXT
+          # nRF54L15: no USB peripheral in silicon, ANT serial goes out a UART.
+          - board: nrf54l15dk/nrf54l15/cpuapp
+            artifact: ant_dongle_nrf54l15dk.hex
+            package: hex
+            offset: "0x0"
+            transport: UART
+          # nRF54LM20A: DWC2 USB controller, new stack by necessity.
+          - board: nrf54lm20dk/nrf54lm20a/cpuapp
+            artifact: ant_dongle_nrf54lm20dk.hex
+            package: hex
+            offset: "0x0"
+            transport: USB_NEXT
 
     steps:
       # sdk-ant is a private repository, so the build can only run where a token
@@ -130,7 +170,7 @@ jobs:
       - name: Verify link address
         if: steps.ant-ready.outputs.enabled == 'true'
         env:
-          EXPECTED: ${{ matrix.package == 'dfu' && '0x1000' || '0x26000' }}
+          EXPECTED: ${{ matrix.offset }}
         run: |
           set -euo pipefail
           offset="$(grep -h '^CONFIG_FLASH_LOAD_OFFSET=' \
@@ -140,6 +180,20 @@ jobs:
           echo "load offset: ${offset}   partition manager app: ${pm_app}   expected: ${EXPECTED}"
           test "$((offset))" -eq "$((EXPECTED))"
           test "$((pm_app))" -eq "$((EXPECTED))"
+
+      # Assert each target compiled the transport it is supposed to. The choice
+      # is defaulted from devicetree, so a board whose USB node moved or was
+      # renamed would silently fall through to a different one and still build.
+      - name: Verify transport
+        if: steps.ant-ready.outputs.enabled == 'true'
+        env:
+          EXPECTED: ${{ matrix.transport }}
+        run: |
+          set -euo pipefail
+          cfg="$(find build -name .config -path '*ant_dongle*' -print -quit)"
+          got="$(grep -oP '^CONFIG_ANT_DONGLE_TRANSPORT_\K\w+(?==y)' "${cfg}")"
+          echo "transport: ${got}   expected: ${EXPECTED}"
+          test "${got}" = "${EXPECTED}"
 
       - name: Collect UF2
         if: steps.ant-ready.outputs.enabled == 'true' && matrix.package == 'uf2'
@@ -151,6 +205,19 @@ jobs:
           test -n "${uf2}"
           mkdir -p dist
           cp "${uf2}" "dist/${{ matrix.artifact }}"
+          ls -l dist/
+
+      # The nRF54 DKs have neither a mass-storage bootloader nor a DFU one -
+      # they are flashed at 0 through the onboard debugger - so the artifact is
+      # just the image.
+      - name: Collect hex
+        if: steps.ant-ready.outputs.enabled == 'true' && matrix.package == 'hex'
+        run: |
+          set -euxo pipefail
+          hex="$(find build -name zephyr.hex -path '*ant_dongle*' -print -quit)"
+          test -n "${hex}"
+          mkdir -p dist
+          cp "${hex}" "dist/${{ matrix.artifact }}"
           ls -l dist/
 
       # The dongle has no mass-storage bootloader; its onboard USB bootloader
@@ -185,8 +252,11 @@ jobs:
           if-no-files-found: error
           path: dist/${{ matrix.artifact }}
 
+      # Only the four shipping images. The Feather new-stack build and the two
+      # nRF54 DK images are built to keep them compiling and to be downloadable
+      # from the run, not to be handed to anyone as a release.
       - name: Attach to release
-        if: steps.ant-ready.outputs.enabled == 'true' && startsWith(github.ref, 'refs/tags/v')
+        if: steps.ant-ready.outputs.enabled == 'true' && matrix.release && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/${{ matrix.artifact }}

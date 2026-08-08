@@ -1,0 +1,25 @@
+/*
+ * nRF54L15 DK - ANT serial on the second VCOM.
+ *
+ * uart20 is the console (VCOM0). uart30 is wired to the debugger's second
+ * virtual COM port (VCOM1) and is disabled by default on cpuapp, so it is free
+ * and it is already pinned. Taking it means logs and the ANT byte stream leave
+ * the board as two separate COM ports over the one debugger cable, rather than
+ * interleaving into one unparseable stream.
+ *
+ * uart30's pinctrl also routes RTS/CTS. Hardware flow control is deliberately
+ * not enabled: it would give this transport the backpressure that USB bulk
+ * NAKs provide for free, but only if the host end asserts CTS, and a host that
+ * does not would wedge every transmit. Add hw-flow-control here if the far end
+ * is known to support it.
+ */
+
+/ {
+	aliases {
+		ant-uart = &uart30;
+	};
+};
+
+&uart30 {
+	status = "okay";
+};
