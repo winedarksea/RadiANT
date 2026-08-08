@@ -1,0 +1,175 @@
+#
+# ANT+ sensor simulator.
+#
+# One prefix for the whole application, ANT_SIM_*, the same way the dongle uses
+# ANT_DONGLE_*. The two never build together, but a shared prefix would make a
+# grep for "which application does this symbol belong to" ambiguous, and the
+# answer to that question is how the sysbuild and CI assertions stay honest.
+#
+
+source "Kconfig.zephyr"
+
+menuconfig ANT_SIM
+	bool "ANT+ sensor simulator"
+	select ANT
+	select ANT_KEY_MANAGER
+	select ANT_CHANNEL_CONFIG
+	select ANT_STATE_INDICATOR
+	select DK_LIBRARY
+	default y
+	help
+	  Transmits as a realistic ANT+ sensor so a dongle can be tested
+	  without owning one. Not a dongle build: this application has no USB
+	  and no serial bridge.
+
+if ANT_SIM
+
+choice ANT_SIM_PROFILE
+	prompt "Sensor profile to transmit"
+	default ANT_SIM_PROFILE_BPWR_STANDARD
+
+config ANT_SIM_PROFILE_BPWR_STANDARD
+	bool "Bicycle power, standard power page 0x10"
+	select ANT_BPWR
+	help
+	  The page every power meter emits. Instantaneous power, accumulated
+	  power and cadence, one power event per message.
+
+config ANT_SIM_PROFILE_BPWR_CRANK_TORQUE
+	bool "Bicycle power, crank torque page 0x12"
+	select ANT_BPWR
+	help
+	  Power carried as accumulated torque and accumulated crank period,
+	  with one event per crank revolution rather than one per message. At
+	  80 rpm that is roughly one message in three, which is the case a
+	  receiver's delta arithmetic has to survive.
+
+config ANT_SIM_PROFILE_BPWR_WHEEL_TORQUE
+	bool "Bicycle power, wheel torque page 0x11"
+	select ANT_BPWR
+	help
+	  The same arithmetic against wheel revolutions at road speed. Torque
+	  is lower for the same power, so a receiver that confuses this page
+	  with 0x12 is wrong by the gear ratio rather than obviously wrong.
+
+config ANT_SIM_PROFILE_BSC_COMBINED
+	bool "Combined speed and cadence, device type 0x79"
+	select ANT_BSC
+	help
+	  Cadence event time and crank revolutions alongside speed event time
+	  and wheel revolutions, in a page that carries no page number at all.
+
+endchoice
+
+menu "Signal"
+
+config ANT_SIM_TARGET_WATTS
+	int "Target power, watts"
+	default 100
+	range 0 2000
+	help
+	  Held, not swept. A receiver cannot be shown to be right about a value
+	  that never settles, which is what the stock sdk-ant simulators
+	  produce.
+
+config ANT_SIM_TARGET_RPM
+	int "Target cadence, rpm"
+	default 80
+	range 0 254
+	help
+	  254 is the maximum: 255 is the profile's "cadence not reported"
+	  sentinel, and a target that reached it would turn cadence off rather
+	  than report a very fast rider.
+
+config ANT_SIM_WHEEL_RPM
+	int "Wheel speed, rpm"
+	default 238
+	range 0 1000
+	help
+	  Used by the wheel torque page and by the speed half of the combined
+	  page. 238 rpm is 30 km/h on a 2.105 m wheel.
+
+config ANT_SIM_NOISE
+	int "Noise band, plus or minus, on both signals"
+	default 3
+	help
+	  Zero makes every delta identical, which hides an accumulator that is
+	  recomputed from the target instead of accumulated.
+
+config ANT_SIM_SEED
+	int "Seed for the noise generator"
+	default 1
+	help
+	  A run that cannot be replayed is not a measurement. Zero is accepted
+	  and replaced internally, because xorshift is dead at zero.
+
+endmenu
+
+menu "Channel"
+
+config ANT_SIM_CHANNEL_NUM
+	int "ANT channel number"
+	default 0
+
+config ANT_SIM_NETWORK_NUM
+	int "ANT+ network number"
+	default 0
+
+config ANT_SIM_DEVICE_NUMBER
+	int "Channel ID: device number"
+	default 14871
+	range 1 65535
+	help
+	  Matches tools/ant_sim.py's default (0x3A17), so a capture from either
+	  transmitter carries the same identity and the two are directly
+	  comparable. Zero is excluded: on a channel ID it is the wildcard.
+
+config ANT_SIM_TRANS_TYPE
+	int "Channel ID: transmission type"
+	default 5
+	range 1 255
+	help
+	  5 throughout this project - tools/ant_sim.py, this application, and
+	  the master path in zephyr_aerosense. The profile permits others; what
+	  matters is that everything here picks the same one.
+
+endmenu
+
+menu "Product information"
+
+config ANT_SIM_HW_VERSION
+	int "Hardware revision"
+	default 1
+	range 0 255
+
+config ANT_SIM_MFG_ID
+	int "Manufacturer ID"
+	default 255
+	range 0 65535
+	help
+	  255 is the development manufacturer id. Borrowing a real one would
+	  make this sensor claim to be somebody's product.
+
+config ANT_SIM_MODEL_NUM
+	int "Model number"
+	default 1
+	range 0 65535
+
+config ANT_SIM_SW_VERSION
+	int "Software version"
+	default 1
+	range 0 255
+
+config ANT_SIM_SERIAL_NUM
+	int "Serial number"
+	default 5526867
+	range 0 2147483647
+
+config ANT_SIM_CALIBRATION_DATA
+	int "Calibration data returned to a display that asks"
+	default 21930
+	range 0 65535
+
+endmenu
+
+endif # ANT_SIM

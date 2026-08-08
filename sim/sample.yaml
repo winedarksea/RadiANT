@@ -1,0 +1,48 @@
+sample:
+  description: >
+    ANT+ sensor simulator - transmits as a realistic power meter or
+    speed-and-cadence sensor so an ANT+ dongle can be tested without one.
+  name: ANT+ sensor simulator
+tests:
+  # Every profile is built, not just the default. The four differ only by a
+  # Kconfig choice, so three of them would otherwise never be compiled - and
+  # the one that is hardest to get right, the combined page, is not the
+  # default.
+  sample.ant_sim.bpwr_standard:
+    sysbuild: true
+    platform_allow:
+      - nrf52840dk/nrf52840
+      - nrf54l15dk/nrf54l15/cpuapp
+      - nrf54lm20dk/nrf54lm20a/cpuapp
+    integration_platforms:
+      - nrf54l15dk/nrf54l15/cpuapp
+    tags: ant
+    build_only: true
+    extra_args: CONFIG_ANT_SIM_PROFILE_BPWR_STANDARD=y
+  sample.ant_sim.bpwr_crank_torque:
+    sysbuild: true
+    platform_allow:
+      - nrf54l15dk/nrf54l15/cpuapp
+    integration_platforms:
+      - nrf54l15dk/nrf54l15/cpuapp
+    tags: ant
+    build_only: true
+    extra_args: CONFIG_ANT_SIM_PROFILE_BPWR_CRANK_TORQUE=y
+  sample.ant_sim.bpwr_wheel_torque:
+    sysbuild: true
+    platform_allow:
+      - nrf54l15dk/nrf54l15/cpuapp
+    integration_platforms:
+      - nrf54l15dk/nrf54l15/cpuapp
+    tags: ant
+    build_only: true
+    extra_args: CONFIG_ANT_SIM_PROFILE_BPWR_WHEEL_TORQUE=y
+  sample.ant_sim.bsc_combined:
+    sysbuild: true
+    platform_allow:
+      - nrf54l15dk/nrf54l15/cpuapp
+    integration_platforms:
+      - nrf54l15dk/nrf54l15/cpuapp
+    tags: ant
+    build_only: true
+    extra_args: CONFIG_ANT_SIM_PROFILE_BSC_COMBINED=y

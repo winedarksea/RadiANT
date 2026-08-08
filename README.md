@@ -246,6 +246,11 @@ pre-2015-07-29 grandfather window for driver signing, so `pnputil` accepts it.
 | `tools/ant_session.py` | The eight-channel session a fitness app runs, including ack and burst |
 | `tools/ant_bench.py` | Round-trip latency and throughput, for comparing one USB stack against the other |
 | `tools/ant_features.py` | The optional features: advertised bits vs bridged messages, and every set/get round trip |
+| `tools/ant_pages.py` | ANT+ page encode/decode, pure functions. No hardware, host-testable, shared by the two tools below |
+| `tools/ant_sim.py` | Drives a spare board as an ANT+ sensor, so the radio can be tested without owning one |
+| `tools/ant_verify.py` | Measures a sensor: loss, jitter, decoded accuracy, accumulator continuity. `--replay` needs no board |
+| `tools/test_*.py` | The only tests in here that run in CI — everything else needs a board |
+| `sim/` | Standalone ANT+ sensor firmware for the nRF54L15 DK. Not a dongle build; see [Simulator firmware](#simulator-firmware-on-an-nrf54l15-dk) |
 | `host/` | Linux udev rule, Android device filter |
 
 ### Transports
@@ -752,6 +757,132 @@ apparent firmware bugs: assigning a channel that a previous run left assigned
 is refused with `CHANNEL_IN_WRONG_STATE`, which is why every host opens with a
 system reset; and a close is asynchronous, so unassigning before
 `EVENT_CHANNEL_CLOSED` arrives is refused for the same reason.
+
+### Testing the radio without owning a sensor
+
+`ant_scan.py` and `ant_session.py` can only report what happens to be on the
+air. If you have a Nordic DK and no power meter, that is nothing at all, and
+the radio half of this firmware stays untested.
+
+It does not have to. The dongle is a transparent bridge, so it forwards
+`CHANNEL_TYPE_MASTER` to `ant_channel_assign` and `MESG_BROADCAST_DATA_ID` to
+`ant_broadcast_message_tx` like any other message — which means a board running
+**this firmware, unmodified**, will happily impersonate an ANT+ sensor if a
+host asks it to. `tools/ant_sim.py` is that host:
+
+```sh
+# board A: pretend to be a 100 W, 80 rpm power meter
+python tools/ant_sim.py --profile power --watts 100 --cadence 80 --seed 1 --serial <A>
+
+# board B: the dongle under test, listening and measuring
+python tools/ant_verify.py --expect-watts 100 --expect-rpm 80 --seconds 60 --serial <B>
+```
+
+**Two boards are needed.** One transmits and one receives; a board cannot hear
+itself. Disambiguate them with `--serial` over USB, or `--port COM8` for a UART
+build.
+
+`--profile` takes `power` (page 0x10), `power-torque` (pages 0x11 and 0x12),
+`power-torque-freq` (page 0x20) or `csc` (combined speed and cadence, device
+type 0x79), and repeats — each profile gets its own channel, so several
+sensors can be on the air at once from a single board.
+
+Pacing comes from `EVENT_TX`, not from a host timer. The stack raises that
+event when it has put a payload on the air, which is exactly when the next one
+should be loaded, so the script makes no assumption about how fast the host or
+the USB path is. There is a wall-clock fallback for the case where the event
+never arrives, and it prints loudly and fails the run — a silent fallback would
+hide the one failure worth knowing about.
+
+`ant_verify.py` is the measuring instrument, and it is deliberately told
+nothing about the transmitter: the packet count to expect comes from the
+channel period, the power to expect comes from the accumulators, and the page
+rotation to expect comes from the page numbers. It reports loss, jitter, mean
+absolute error against `--expect-watts`/`--expect-rpm`, accumulator continuity,
+common-page spacing, and whether the sensor is actually alive rather than
+repeating one good packet. `--json` gives machine-readable output in
+`ant_bench.py`'s style.
+
+Three things are worth knowing before reading a result:
+
+- **A short run does not test the wraps.** The 16-bit accumulators are meant to
+  roll over, and a receiver that widens before subtracting is correct until
+  they do. `ant_verify.py` prints which ones wrapped during the run and says so
+  when none did. Ten minutes covers all of them; a minute covers none of the
+  slow ones.
+- **`--seed` is not optional in spirit.** The noise is pseudorandom, and a
+  measurement that cannot be replayed is not a measurement.
+- **`--record FILE` saves what was heard.** Those captures replay through
+  `ant_verify.py --replay` with no hardware, and they are what
+  `zephyr_aerosense`'s ANT decoder tests are built from.
+
+Nothing here needs a board at all if you only want to check the host side.
+`tools/ant_pages.py` is pure encode/decode, and `ant_sim.py --dry-run` builds
+the same payload stream without a radio:
+
+```sh
+python -m unittest discover -s tools -p "test_*.py"
+
+python tools/ant_sim.py --dry-run --record run.antcap \
+  --profile power --profile csc --seconds 900 --seed 1
+python tools/ant_verify.py --replay run.antcap --expect-watts 100 --expect-rpm 80
+```
+
+Those tests are the only ones in `tools/` that run in CI, and they are there
+because a byte-order mistake found on the host costs nothing while the same
+mistake found on the bench costs two boards and a flash cycle.
+
+### Simulator firmware on an nRF54L15 DK
+
+`ant_sim.py` needs a host attached to the transmitting board. [`sim/`](sim/)
+does not: it is a standalone application that makes a DK *be* an ANT+ sensor,
+untethered, from power-on.
+
+The nRF54L15 DK is the natural host for it, and for a reason that is otherwise
+an annoyance — it has no USB device controller in silicon, so it can never be a
+dongle. That keeps the nRF5340 DK free as the debug board while the nRF54L15
+sits on the bench transmitting.
+
+```powershell
+. .\scripts\env.ps1 -NcsVersion v3.2.4
+Push-Location C:\ncs\v3.2.4
+west -z C:\ncs\v3.2.4\zephyr build -s <repo>\sim -d <repo>\build\sim_l15 `
+     -b nrf54l15dk/nrf54l15/cpuapp --sysbuild -p always
+Pop-Location
+.\scripts\flash_sim_jlink.ps1
+```
+
+Then run the *same* `ant_verify.py` invocation against the dongle under test.
+The verifier is deliberately transmitter-agnostic, so an identical pass against
+`ant_sim.py` and against this firmware is the evidence that the two agree.
+
+`CONFIG_ANT_SIM_PROFILE_*` picks what it transmits — standard power page 0x10,
+crank torque 0x12, wheel torque 0x11, or the combined speed-and-cadence page —
+and `CONFIG_ANT_SIM_TARGET_WATTS` / `_TARGET_RPM` / `_NOISE` / `_SEED` set the
+signal. Buttons 1 and 2 nudge the target while it runs; the DK LEDs show
+channel state, which answers "did the channel even come up" without a serial
+cable.
+
+Three things about this build are worth knowing:
+
+- **The page encoding is sdk-ant's, not ours.** `ant_bpwr` and `ant_bsc`
+  already build every page correctly. What `sim/src/sim_signal.c` replaces is
+  the stock *simulator*, which sweeps a ramp from 0 to 2000 W — a receiver
+  cannot be shown to be right about a value that never settles.
+- **One profile per build.** sdk-ant's BPWR sensor sends page 0x11 or 0x12, not
+  both, so the interleaved-torque-page case stays an `ant_sim.py --profile
+  power-torque` scenario. That is the case that catches a receiver keeping one
+  accumulator baseline for two pages.
+- **`CONFIG_ANT_EVALUATION_KEY` is the ANT stack's licence key.** It is not the
+  ANT+ network key, which `ant_plus_key_set()` supplies at runtime. Confusing
+  the two produces a build that runs happily and is never heard.
+
+`scripts/flash_sim_jlink.ps1` wraps the J-Link sequence, and its first line is
+load-bearing: `exec DisableAutoUpdateFW`. J-Link V9.66 carries newer onboard
+debugger firmware than these DKs ship with and tries to upgrade it on every
+connect. That upgrade fails at `Communication timeout. Emulator did not
+re-enumerate` every time and leaves the probe in its bootloader until it is
+physically replugged.
 
 ### Reading logs without a debugger
 

@@ -1,0 +1,17 @@
+#
+# Mirrors sdk-ant's own ANT+ samples: on an ANT-only application there is no
+# Bluetooth companion image to build, and sysbuild otherwise goes looking for
+# the ones the default nRF configuration expects.
+#
+source "${ZEPHYR_BASE}/share/sysbuild/Kconfig"
+
+# Upstream writes this without a type, which relies on sdk-nrf defining the
+# symbol first. Neither NCS v3.2.4 nor v3.4.0 does - the symbol appears in
+# whichever sdk-nrf sdk-ant's own manifest pins - and an untyped definition of
+# an unknown symbol is a Kconfig warning, which sysbuild promotes to a fatal
+# error. Declaring the type here builds against both: where sdk-nrf already
+# defines it the two definitions merge, and where it does not this stands
+# alone and harmless.
+config NRF_DEFAULT_ANT_ONLY
+	bool
+	default y

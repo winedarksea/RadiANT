@@ -21,6 +21,27 @@ env:
   SDK_ANT_REPO: ant-nrfconnect/sdk-ant
 
 jobs:
+  # The only job that runs without SDK_ANT_CHECKOUT_TOKEN, so it is the only
+  # one that runs on a fork. tools/ant_pages.py, the sensor models in
+  # ant_sim.py and the analysis in ant_verify.py are all plain Python with no
+  # radio in them, and a byte-order or accumulator-wrap mistake in any of them
+  # otherwise costs two boards and a flash cycle to find.
+  host-tests:
+    name: host tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # pyusb is pure Python and imports fine with no libusb present; nothing
+      # in these tests opens a device.
+      - run: pip install pyusb
+
+      - run: python -m unittest discover -s tools -p "test_*.py" -v
+
   build:
     name: ${{ matrix.artifact }}
     runs-on: ubuntu-24.04
@@ -260,6 +281,30 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/${{ matrix.artifact }}
+
+      # sim/ is a second application in this repository, not a dongle image, so
+      # it is built here rather than added to the matrix above: none of that
+      # job's link-address or transport assertions mean anything for it. All
+      # four profiles are built because they differ only by a Kconfig choice,
+      # and three of them would otherwise never be compiled - including the
+      # combined speed-and-cadence page, which is the hardest to get right and
+      # is not the default.
+      - name: Build ANT+ sensor simulator
+        if: steps.ant-ready.outputs.enabled == 'true' && matrix.artifact == 'ant_dongle.uf2'
+        run: |
+          set -euxo pipefail
+          for profile in BPWR_STANDARD BPWR_CRANK_TORQUE BPWR_WHEEL_TORQUE BSC_COMBINED; do
+            west build app/sim \
+              -b nrf54l15dk/nrf54l15/cpuapp \
+              -d "build-sim-${profile}" \
+              -p always \
+              --sysbuild \
+              -- \
+              -DANT_MODULE_DIR="${GITHUB_WORKSPACE}/ant" \
+              "-Dsim_CONFIG_ANT_SIM_PROFILE_${profile}=y"
+            grep -q "^CONFIG_ANT_SIM_PROFILE_${profile}=y$" \
+              "build-sim-${profile}/sim/zephyr/.config"
+          done
 
       # Emitted once, not once per board - the cause and the fix are the same
       # for every entry in the matrix.
