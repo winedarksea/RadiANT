@@ -1,6 +1,6 @@
 # ANT+ USB Dongle
 
-Turns an **Adafruit Feather nRF52840 Express** into an ANT+ USB stick. Copy one
+Turns an **Adafruit Feather nRF52840 Express** (and other Nordic boards) into an ANT+ USB stick. Copy one
 file onto the board and Zwift, TrainerRoad, Garmin Express, openant — anything
 that looks for an ANT stick — will find it. No soldering, no wiring.
 
@@ -12,6 +12,15 @@ fitness app can run heart rate, power, cadence and trainer control at once.
 > **Windows users:** this needs the same libusb-win32 driver a retail ANT stick
 > needs, and Windows will not offer it on its own. Read
 > [Windows drivers](#windows-drivers) before anything else.
+
+### Why?
+Before this project, the 'latest' ANT+ dongles on the market are from 2012. They use old, weak nRF24AP2 (circa 2010) or the nRF51422 (circa 2012) chips. Switching to the NRF52840 (which is widely available and cheap) can lead to a 10 db improvement in sensitivity. That 10 dB improvement in sensitivity means the new nRF52840 chip can pick up a signal that is *ten times weaker* than what the old 2012 chips could detect. Big difference. While ANT+ is mostly your computer listening, in ERG mode there is a transmit element, and the the +8 dBm signal strength vs the older chips means more range (more than double) and reliability there too.
+
+This uses Zephyr as the base. Zephyr provides a modern, Linux Foundation-backed RTOS. That is heavily vetted, actively maintained USB stacks, superior power management, advanced radio libraries, and true concurrency. Combined with the newer chips that have EasyDMA direct memory access and built-in USB peripherals, this can lead to a 90% reduction in latency and packet loss.
+
+In addition to these features, the tiny old ANT+ USB dongles have terrible antennas, sacrificing ground plane and antenna quality for tiny size. That's not a worthwhile tradeoff for most fixed indoor ride setups. Even a switch to the not-that-much-bigger official NRF52840 USB dongle can yield a major boost in antenna quality with its MIFA PCB Antenna.
+
+The result is a rock-solid, latency-free connection for your longest endurance rides.
 
 ---
 
@@ -236,6 +245,7 @@ pre-2015-07-29 grandfather window for driver signing, so `pnputil` accepts it.
 | `tools/ant_scan.py` | Wildcard ANT+ channel; reports the sensors it hears |
 | `tools/ant_session.py` | The eight-channel session a fitness app runs, including ack and burst |
 | `tools/ant_bench.py` | Round-trip latency and throughput, for comparing one USB stack against the other |
+| `tools/ant_features.py` | The optional features: advertised bits vs bridged messages, and every set/get round trip |
 | `host/` | Linux udev rule, Android device filter |
 
 ### Transports
@@ -487,49 +497,6 @@ The practical consequence is a purchasing criterion: **an nRF54 board without a
 a missing crystal at least announces itself, because the board never enumerates
 at all. On nRF54L it would enumerate, pass `ant_probe.py`, and hear nothing.
 
-#### Can a build be made now for a future cheap nRF54 board?
-
-Not a drag-and-drop one, and the blockers are not ours to remove.
-
-A UF2 file is only meaningful to a bootloader that recognises it, and that
-recognition is a **family ID** baked into every 512-byte block. Zephyr's list of
-family IDs (`CONFIG_BUILD_OUTPUT_UF2_FAMILY_ID` in `Kconfig.zephyr`) covers
-nRF52840 as `0xADA52840`, nRF52833, ESP32, RP2040, SAMD, a dozen STM32
-families — and **no nRF54 part at all**. There is no UF2 identity for this
-silicon yet because there is no UF2 bootloader for it yet. Inventing one would
-produce a file that whatever bootloader eventually ships would reject.
-
-The second blocker follows from the first: the application's link address is
-whatever the bootloader leaves free. The Feather's `0x26000` is a fact about
-Adafruit's S140 6.x layout, not about the nRF52840. Until an nRF54 bootloader
-exists, there is no offset to link against, and an image linked at the wrong
-one installs cleanly and boots into nothing — the failure this project already
-has a [gotcha](#gotchas-worth-knowing) about.
-
-What *is* done is the part that would otherwise be the long pole. The firmware
-already builds for nRF54L, links the real `lib/nrf54l/libant.a`, runs ANT on
-that silicon, and has a working USB class for the DWC2 controller those parts
-use. When a board appears, what it needs is small and mechanical:
-
-1. A Zephyr board definition — usually upstream, or a few files.
-2. A partition map, once its bootloader's layout is known.
-3. A family ID, once its bootloader has one.
-
-Two things are worth knowing before buying such a board, both established
-above rather than assumed:
-
-- **It has to be an nRF54LM20A** (or an nRF54H20, which is unlikely to be
-  cheap). No other nRF54L part has a USB device controller in silicon, so no
-  amount of firmware turns an L15 into a dongle.
-- **It has to have a 32.768 kHz crystal.** See the section above: the software
-  fallback that rescues a crystal-less nRF52840 produces a silently deaf dongle
-  on nRF54L.
-
-Until then the honest position is that the nRF54 targets here are proven for
-what they can be proven for — ANT on nRF54L is verified on hardware, the DWC2
-USB path is not — and no pre-built dongle image can be offered for a board that
-does not exist.
-
 #### Stub build
 
 `stub.conf` compiles `src/ant_stub.c` in place of the radio and turns on the MS
@@ -647,6 +614,108 @@ from the outside.
   already carry their weight: scan mode and LED are both reported off, which is
   why Zwift never sends `0x5B`/`0x68` even though it has the calls. Anything
   advertised *and* unimplemented is a trap of the kind above.
+
+### Optional features
+
+Past the messages a fitness app sends, ANT carries a set of optional features —
+the ones Dynastream's [nRF51 and ANTUSB-m tech
+bulletin](https://www.thisisant.com/developer/resources/tech-bulletin/new-nrf51-and-antusb-m-features)
+introduced. Which are worth bridging is decided by what a host can actually
+call, and that is answerable rather than arguable: on Windows every ANT
+application reaches the stick through `ANT_DLL.dll`, so its export table bounds
+what any of them can ask for, and the subset Zwift resolves is plain strings in
+`ZwiftApp.exe`.
+
+| Feature | Message | In `ANT_DLL` | In sdk-ant | Bridged |
+|---|---|---|---|---|
+| Advanced burst | `0x78` config, `0x72` data | `ANT_ConfigureAdvancedBurst` | yes | **yes** |
+| Selective data updates | `0x7A`, `0x7B` | `ANT_ConfigSelectiveDataUpdate` | yes | **yes** |
+| Event filter | `0x79` | `ANT_ConfigEventFilter` | yes | **yes** |
+| Fast channel initiation | ext assign `0x10` | `ANT_AssignChannelExt` | yes | **yes**, passed through |
+| Async transmission channel | ext assign `0x20` | `ANT_AssignChannelExt` | yes | **yes**, passed through |
+| Single channel encryption | `0x7D`–`0x7F` | **nothing** | yes | reads always; writes behind a Kconfig |
+| Event buffer | `0x74` | `ANT_ConfigEventBuffer` | **nothing** | no — and not advertised |
+| High duty search | `0x77` | `ANT_ConfigHighDutySearch` | **nothing** | no |
+| NVM user space | `ANT_NVM_*` | `ANT_ConfigUserNVM` | **nothing** | no |
+
+**Zwift calls none of them.** Of the ~40 ANT functions it resolves, not one is
+on this list, so nothing here is on the path that matters for the shipping use
+case. What decided the three that are implemented is that a host *could* reach
+them and the stack can do them — advanced burst in particular, because ANT-FS
+file transfers use it, and because `MESG_ADV_BURST_DATA_ID` was already accepted
+while the message that switches advanced burst on was not, which is a dongle
+that takes 24-byte packets and can never send one.
+
+Encryption is the case that needed a switch. `ant_crypto_channel_enable()` and
+friends exist in sdk-ant, so the three writes are perfectly implementable — and
+they are implemented, behind `CONFIG_ANT_DONGLE_ENCRYPTION`, off by default:
+
+```powershell
+west ... -- "-DEXTRA_CONF_FILE=encryption.conf"
+```
+
+Off, because `ANT_DLL.dll` exports no encryption call at all, so no host on this
+platform can send `0x7D`–`0x7F`. That makes the cost one-sided. The messages
+cannot help any application that exists, and what they *can* do is put a channel
+into AES-CTR mode, which changes what the radio does per message on the path a
+fitness app depends on — note that `ant_crypto_channel_enable()`'s own
+documentation requires advanced burst to be on first, so entering that mode
+changes the burst configuration too. A shipping image should not carry the
+ability to be put somewhere nothing asked for; a build that wants to experiment
+can have it for one flag and 1.6 KB of flash.
+
+The read side is unconditional. Those are getters and cannot change what the
+radio does. One thing they *can* do is mislead: they were misframed until
+`tools/ant_features.py` compared a reply against what had been written.
+
+**Compiling the writes in is not enough to make encryption work, and that is the
+real argument for the default.** sdk-ant's `CONFIG_ANT_ENCRYPTED_CHANNELS`
+defaults to `0`, so `ant_init()` passes `ucNumberOfEncryptedChannels = 0` to
+`ant_stack_config()` and — see the `#if CONFIG_ANT_ENCRYPTED_CHANNELS > 0` in
+`init/ant_init.c` — never registers the `fpRANDGet` and `fpECBEncrypt`
+callbacks at all. With the writes bridged and that left at zero, measured on the
+Feather: setting the crypto ID and the custom user data both succeed, and
+`MESG_SET_ENCRYPT_KEY` fails with `INVALID_PARAMETER_PROVIDED` (51), because the
+valid key index range is `[0, num encrypted channels - 1]` and that range is
+empty.
+
+So on-by-default would ship a feature that answers two of its messages and
+refuses the one that matters — the advertised-but-partial trap from the gotchas,
+moved one layer in. Raising `CONFIG_ANT_ENCRYPTED_CHANNELS` is what would make
+it real, and that is not a free switch either: encrypted channel state is
+allocated from the same `m_ant_stack_buffer` the eight ordinary channels live
+in (`ANT_ENABLE_GET_REQUIRED_SPACE`), and an encrypted channel is larger than a
+plain one. It relays out the memory of the stack a fitness app is using, to
+enable something no application on this platform can ask for.
+
+`ENCRYPTION_INFO_SET_RNG_SEED` is refused even with the writes compiled in.
+sdk-ant calls it "platform specific" and defines no size for it anywhere, and
+the stack does not take its randomness from the host in any case —
+`ant_stack_funcs_register()` hands it an `fpRANDGet` callback at init. Refusing
+beats handing the library a pointer of a length nobody documents.
+
+The last three cannot be done here at any price: sdk-ant's `ant_interface.h`
+exposes no API for event buffering, high duty search or user NVM. `ant_np.c`
+handles `0x77` only in the nRF5340 network-processor passthrough, and its
+implementation is commented out even there.
+
+**The capability bits are left alone.** High duty search and encryption are
+advertised in `ant_capabilities_get()`'s advanced options 3 byte and are not
+bridged, which is a mismatch — but clearing those bits would make this dongle
+report something a real ANT USB-m does not, and hosts do read those bytes to
+decide what they are talking to. Reporting an ANTUSB-m's capabilities and
+declining the message is closer to the device being impersonated than reporting
+capabilities no ANTUSB-m has ever reported. `tools/ant_features.py` knows which
+mismatches are deliberate and fails on any that are not:
+
+```sh
+python tools/ant_features.py
+```
+
+It walks every optional bit, probes the message behind it with an "off"
+configuration, and round-trips each set/get pair — which is the only check that
+catches a payload offset wrong by one, the failure the encryption and SDU
+replies had.
 
 ### Testing the radio
 

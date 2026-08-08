@@ -46,6 +46,15 @@
 
 LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
 
+/* sdk-ant's Kconfig hangs this symbol off CONFIG_ANT, so on a radio-stub build
+ * (CONFIG_ANT=n) it does not exist at all and the device-wide transmit power
+ * fan-out below fails to compile. It only bounds a loop, and the stub reports
+ * the same eight channels the real build allocates.
+ */
+#ifndef CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED
+#define CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED 8
+#endif
+
 /* The transport - USB on either stack, or a bare UART - is declared in
  * ant_transport.h and selected at build time. Nothing below depends on which.
  */
@@ -260,7 +269,15 @@ static void handle_request(const uint8_t *body, uint8_t len)
 	}
 
 	case MESG_SDU_SET_MASK_ID: {
-		err = ant_sdu_mask_get(ch, payload);
+		/* [mask_index, mask[8]]. The 8 mask bytes start one in: the reply is
+		 * the same shape as the command that set them, and the size constant
+		 * is MESG_ANT_MAX_PAYLOAD_SIZE *plus* MESG_CHANNEL_NUM_SIZE precisely
+		 * because of that leading index byte. Writing the mask at payload[0]
+		 * instead fills the index slot with mask[0], shifts every byte down
+		 * one, and pads the end with a zero the host reads as mask[7].
+		 */
+		payload[0] = ch;
+		err = ant_sdu_mask_get(ch, &payload[1]);
 		if (!err) {
 			send_message(MESG_SDU_SET_MASK_ID, payload,
 				     MESG_ANT_MAX_PAYLOAD_SIZE +
@@ -270,7 +287,13 @@ static void handle_request(const uint8_t *body, uint8_t len)
 	}
 
 	case MESG_ENCRYPT_ENABLE_ID: {
-		err = ant_crypto_info_get(ch, payload);
+		/* Same leading byte, same reason: the info type is echoed at
+		 * payload[0] and the requested data follows it. Each reply size below
+		 * counts that byte - 2 = type + 1 mode byte, 5 = type + a 4-byte
+		 * crypto ID, 20 = type + 19 bytes of custom user data.
+		 */
+		payload[0] = ch;
+		err = ant_crypto_info_get(ch, &payload[1]);
 		if (!err) {
 			uint8_t reply_len = 0;
 
@@ -615,6 +638,99 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 			err = ant_event_filtering_set(filter);
 		}
 		break;
+
+	case MESG_CONFIG_ADV_BURST_ID:
+		/* body: [filler, config[8..11]]. The filler byte occupies the channel
+		 * slot every message has and is not part of the configuration, so the
+		 * buffer ant_adv_burst_config_set() documents starts at body[1]:
+		 * [enable, rf payload size, required modes, 0, 0, optional modes, 0, 0]
+		 * with an optional [stall lsb, stall msb, retry extension].
+		 *
+		 * Without this, MESG_ADV_BURST_DATA_ID is accepted but advanced burst
+		 * is never on, so nothing ever leaves at more than 8 bytes a packet.
+		 */
+		if (len >= 9 && len <= 12) {
+			err = ant_adv_burst_config_set((uint8_t *)&body[1],
+						       (uint8_t)(len - 1));
+		}
+		break;
+
+	case MESG_SDU_CONFIG_ID:
+		/* body: [ch, mask_config]. Binds one of the masks below to a channel;
+		 * INVALID_SDU_MASK (0xFF) turns selective updates back off.
+		 */
+		if (len >= 2) {
+			err = ant_sdu_mask_config(body[0], body[1]);
+		}
+		break;
+
+	case MESG_SDU_SET_MASK_ID:
+		/* body: [mask_index, mask[8]]. body[0] is a mask number, not a channel
+		 * - masks are defined here and attached to channels by MESG_SDU_CONFIG.
+		 */
+		if (len >= 9) {
+			err = ant_sdu_mask_set(body[0], (uint8_t *)&body[1]);
+		}
+		break;
+
+#ifdef CONFIG_ANT_DONGLE_ENCRYPTION
+	/* The three writes that can put a channel into AES-CTR mode. Compiled out
+	 * by default: no host on this platform can send them, and a mode nothing
+	 * asks for should not be reachable on the path Zwift runs. See the Kconfig.
+	 * The matching reads live in handle_request() and are always present.
+	 */
+	case MESG_ENCRYPT_ENABLE_ID:
+		/* body: [ch, mode, key_num, decimation_rate] */
+		if (len >= 4) {
+			err = ant_crypto_channel_enable(body[0], body[1], body[2],
+							body[3]);
+		}
+		break;
+
+	case MESG_SET_ENCRYPT_KEY_ID:
+		/* body: [key_num, key[16]]. sdk-ant names no constant for the key
+		 * length; that it is 128 bits is stated only in the prose of
+		 * ant_crypto_key_set(), which takes a bare pointer.
+		 */
+		if (len >= 1 + 16) {
+			err = ant_crypto_key_set(body[0], (uint8_t *)&body[1]);
+		}
+		break;
+
+	case MESG_SET_ENCRYPT_INFO_ID:
+		/* body: [info_type, data]. How much data depends on the type, and the
+		 * length has to be checked against it here: ant_crypto_info_set() reads
+		 * a fixed count per type with no size to bound it, so a truncated
+		 * command would otherwise hand the stack whatever follows in the
+		 * parser's frame buffer.
+		 */
+		if (len >= 2) {
+			uint8_t want = 0;
+
+			switch (body[0]) {
+			case ENCRYPTION_INFO_SET_CRYPTO_ID:
+				want = MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE;
+				break;
+			case ENCRYPTION_INFO_SET_CUSTOM_USER_DATA:
+				want = MESG_CONFIG_ENCRYPT_REQ_CONFIG_USER_DATA_SIZE;
+				break;
+			/* ENCRYPTION_INFO_SET_RNG_SEED is deliberately absent. sdk-ant
+			 * documents it as "platform specific" and defines no size for
+			 * it anywhere, and the stack does not take its randomness from
+			 * the host regardless - ant_stack_funcs_register() hands it an
+			 * fpRANDGet callback at init. Refusing beats guessing a length.
+			 */
+			default:
+				break;
+			}
+
+			if (want && len >= want) {
+				err = ant_crypto_info_set(body[0],
+							  (uint8_t *)&body[1]);
+			}
+		}
+		break;
+#endif /* CONFIG_ANT_DONGLE_ENCRYPTION */
 
 	case MESG_ECS_ENABLE_ID:
 		/* body: [filler, enable] */

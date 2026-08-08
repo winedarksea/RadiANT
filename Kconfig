@@ -248,6 +248,29 @@ config ANT_DONGLE_MSOS_DESCRIPTORS
 	  installed ANT driver wins either way: it matches on the hardware ID,
 	  which outranks a compatible ID match.
 
+config ANT_DONGLE_ENCRYPTION
+	bool "Bridge the single channel encryption configuration messages"
+	help
+	  Implement MESG_ENCRYPT_ENABLE (0x7D), MESG_SET_ENCRYPT_KEY (0x7E) and
+	  MESG_SET_ENCRYPT_INFO (0x7F), so a host can key an encrypted channel
+	  and switch AES-CTR encryption on.
+
+	  Off by default, and the reason is not code size. Nothing on Windows can
+	  send these: ANT_DLL.dll is the only route any ANT application has to a
+	  stick, and it exports no encryption call at all - not
+	  ANT_EncryptedChannelEnable, not ANT_SetCryptoKey, none of them. Zwift
+	  resolves none of them either.
+
+	  What turning this on adds is a way for something else to put a channel
+	  into an encrypted mode, which changes what the radio does per message
+	  on exactly the path a fitness app depends on. A feature no host can
+	  reach can only cost on that path, so the shipping image does not carry
+	  the ability to enter it at all.
+
+	  The read side - requesting the supported mode, the crypto ID or the
+	  custom user data - is always bridged. Those are getters and cannot
+	  change what the radio does.
+
 config ANT_DONGLE_BCD_DEVICE
 	hex "Override bcdDevice in the USB device descriptor"
 	default 0x0000
