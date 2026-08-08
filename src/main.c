@@ -11,6 +11,25 @@
 
 #include "ant_transport.h"
 
+/* Measured on an nRF54L15 DK, alternating builds against a live power meter in
+ * one sitting: XTAL heard 14 broadcasts, SYNTH heard none, XTAL heard 14 again.
+ *
+ * Nothing announces the failure. The LFSYNT source exists in the nRF54L
+ * register map, the clock starts, ant_init() returns 0, channels open and
+ * acknowledge every command - and the radio receives nothing, ever. A dongle
+ * built this way looks completely healthy to a host and is deaf.
+ *
+ * That is worth refusing to build rather than warning about, because the
+ * warning would be read once and the silence would be debugged forever. The
+ * exact mechanism is not established; on nRF52840 this configuration works and
+ * is a supported fallback, which is why synth.conf still exists.
+ */
+BUILD_ASSERT(!(IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_K32SRC_SYNTH) &&
+	       IS_ENABLED(CONFIG_SOC_SERIES_NRF54LX)),
+	     "A synthesized low-frequency clock does not keep ANT's timing on "
+	     "nRF54L. The build boots and hears nothing. This part needs a real "
+	     "32.768 kHz crystal; see synth.conf.");
+
 #if DT_NODE_HAS_STATUS(DT_ALIAS(led0), okay)
 #include <zephyr/drivers/gpio.h>
 static const struct gpio_dt_spec led =

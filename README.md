@@ -231,7 +231,7 @@ pre-2015-07-29 grandfather window for driver signing, so `pnputil` accepts it.
 | `pm_static_*.yml`, `sysbuild.cmake` | Pin the application where each board's bootloader expects it — `0x26000` on the Feather, `0x1000` on the dongle. See the gotchas |
 | `boards/` | Per-board `.conf`/`.overlay`: output format, code partition, and prising the console off the USB device we need |
 | `scripts/` | Windows helpers: environment, flashing, DFU packaging, USB cache reset |
-| `tools/ant_probe.py` | Protocol smoke test |
+| `tools/ant_probe.py` | Protocol smoke test. `--port COM8` talks to a UART build instead of USB; every tool below accepts it too |
 | `tools/ant_scan.py` | Wildcard ANT+ channel; reports the sensors it hears |
 | `tools/ant_session.py` | The eight-channel session a fitness app runs, including ack and burst |
 | `tools/ant_bench.py` | Round-trip latency and throughput, for comparing one USB stack against the other |
@@ -430,21 +430,104 @@ west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
 connector unpopulated — there is no `usbd` node and no `usbhs` node in
 `nrf54l_05_10_15.dtsi`, because there is nothing on the die. The L05 and L10 are
 the same. So that target cannot be a dongle, and it is built with the UART
-transport instead: `uart30` is the DK's second VCOM, so the ANT byte stream and
+transport instead: `uart30` is the DK's other VCOM, so the ANT byte stream and
 the log leave the board as two separate COM ports over the one debugger cable.
-What it proves is the half the nRF52840 boards cannot — that ANT, MPSL and the
-clock work on nRF54L silicon.
+Point the tools at it with `--port`:
+
+```powershell
+python tools\ant_probe.py --port COM8
+python tools\ant_scan.py  --port COM8 --seconds 30
+```
+
+That target is hardware-verified: reset returns the startup message,
+capabilities reports the same `080800b23200fd8d0f` the USB builds do, and a
+wildcard channel hears real ANT+ sensors. It proves the half the nRF52840
+boards cannot — that ANT, MPSL and the clock work on nRF54L silicon.
 
 **nRF54LM20A is the one nRF54L part that does have USB**, as `usbhs@5a000`,
 `compatible = "nordic,nrf-usbhs-nrf54l", "snps,dwc2"`, wired up by the DK as
 `zephyr_udc0`. That target is a real dongle build and uses the new USB stack
 because DWC2 leaves no alternative. Build-only so far — no hardware here.
 
-Flashing either DK needs SEGGER J-Link installed. `nrfutil device list` will
-find the board over its board-controller interface without it, and the `JLINK`
-mass-storage volume will accept a copied hex and then reject it with
+Flashing either DK needs SEGGER J-Link installed. Without it `nrfutil device
+list` still finds the board over its board-controller interface, and the
+`JLINK` mass-storage volume will accept a copied hex and then reject it with
 `FAIL.TXT: The currently active SWD interface does not support MSD drag and
-drop`, which reads like a broken image rather than a missing tool.
+drop` — which reads like a broken image rather than a missing tool.
+
+#### nRF54L needs a real 32.768 kHz crystal
+
+On nRF52840, a board that omits the crystal can still be a dongle: build with
+[synth.conf](synth.conf) and the low-frequency clock is derived from the 32 MHz
+crystal the radio already requires. **That fallback does not work on nRF54L,
+and the way it fails is the problem.**
+
+Measured on an nRF54L15 DK against a live power meter, alternating builds in
+one sitting:
+
+| Build | Broadcasts heard in 30 s |
+|---|---|
+| XTAL | 14 |
+| SYNTH | **0** |
+| XTAL | 14 |
+
+Nothing reports a fault. `LFSYNT` is a real value in the nRF54L register map,
+the clock starts, `ant_init()` returns 0, and every channel command is
+acknowledged — the radio simply never receives anything. A dongle built this
+way looks perfectly healthy to a host and is deaf.
+
+The mechanism is not established, and on nRF52840 the same configuration works
+and stays supported. But because the failure is silent, `src/main.c` carries a
+`BUILD_ASSERT` that refuses the nRF54L + SYNTH combination outright rather than
+warning about it.
+
+The practical consequence is a purchasing criterion: **an nRF54 board without a
+32.768 kHz crystal cannot be made into an ANT dongle in software.** On nRF52840
+a missing crystal at least announces itself, because the board never enumerates
+at all. On nRF54L it would enumerate, pass `ant_probe.py`, and hear nothing.
+
+#### Can a build be made now for a future cheap nRF54 board?
+
+Not a drag-and-drop one, and the blockers are not ours to remove.
+
+A UF2 file is only meaningful to a bootloader that recognises it, and that
+recognition is a **family ID** baked into every 512-byte block. Zephyr's list of
+family IDs (`CONFIG_BUILD_OUTPUT_UF2_FAMILY_ID` in `Kconfig.zephyr`) covers
+nRF52840 as `0xADA52840`, nRF52833, ESP32, RP2040, SAMD, a dozen STM32
+families — and **no nRF54 part at all**. There is no UF2 identity for this
+silicon yet because there is no UF2 bootloader for it yet. Inventing one would
+produce a file that whatever bootloader eventually ships would reject.
+
+The second blocker follows from the first: the application's link address is
+whatever the bootloader leaves free. The Feather's `0x26000` is a fact about
+Adafruit's S140 6.x layout, not about the nRF52840. Until an nRF54 bootloader
+exists, there is no offset to link against, and an image linked at the wrong
+one installs cleanly and boots into nothing — the failure this project already
+has a [gotcha](#gotchas-worth-knowing) about.
+
+What *is* done is the part that would otherwise be the long pole. The firmware
+already builds for nRF54L, links the real `lib/nrf54l/libant.a`, runs ANT on
+that silicon, and has a working USB class for the DWC2 controller those parts
+use. When a board appears, what it needs is small and mechanical:
+
+1. A Zephyr board definition — usually upstream, or a few files.
+2. A partition map, once its bootloader's layout is known.
+3. A family ID, once its bootloader has one.
+
+Two things are worth knowing before buying such a board, both established
+above rather than assumed:
+
+- **It has to be an nRF54LM20A** (or an nRF54H20, which is unlikely to be
+  cheap). No other nRF54L part has a USB device controller in silicon, so no
+  amount of firmware turns an L15 into a dongle.
+- **It has to have a 32.768 kHz crystal.** See the section above: the software
+  fallback that rescues a crystal-less nRF52840 produces a silently deaf dongle
+  on nRF54L.
+
+Until then the honest position is that the nRF54 targets here are proven for
+what they can be proven for — ANT on nRF54L is verified on hardware, the DWC2
+USB path is not — and no pre-built dongle image can be offered for a board that
+does not exist.
 
 #### Stub build
 

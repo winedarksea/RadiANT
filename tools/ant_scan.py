@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Listen for ANT+ sensors, the way a fitness app would.
 
 ant_probe.py proves the dongle answers for itself. This proves the radio
@@ -32,6 +32,7 @@ from ant_probe import (  # noqa: E402
     FrameReader,
     MESG_RESPONSE_EVENT_ID,
     frame,
+    close_device,
     open_device,
     reset_stack,
 )
@@ -95,9 +96,16 @@ def main() -> int:
                         help="how long to listen (default: 30)")
     parser.add_argument("--serial",
                         help="match a device whose serial ends with this")
+    parser.add_argument(
+        "--port",
+        help="talk to a UART build over this serial port (e.g. COM8, "
+             "/dev/ttyACM1) instead of over USB",
+    )
+    parser.add_argument("--baud", type=int, default=115200)
     args = parser.parse_args()
 
-    dev = open_device(True, serial=args.serial)
+    dev = open_device(True, serial=args.serial, port=args.port,
+                      baud=args.baud)
     reader = FrameReader(dev, timeout_ms=250)
 
     print("\nOpening a wildcard ANT+ receive channel")
@@ -162,7 +170,7 @@ def main() -> int:
     print(f"\nClosing")
     command(dev, reader, MESG_CLOSE_CHANNEL_ID, bytes([CHANNEL]),
             "close channel")
-    usb.util.dispose_resources(dev)
+    close_device(dev)
 
     print()
     if packets == 0:

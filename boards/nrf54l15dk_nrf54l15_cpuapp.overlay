@@ -1,11 +1,17 @@
 /*
  * nRF54L15 DK - ANT serial on the second VCOM.
  *
- * uart20 is the console (VCOM0). uart30 is wired to the debugger's second
- * virtual COM port (VCOM1) and is disabled by default on cpuapp, so it is free
- * and it is already pinned. Taking it means logs and the ANT byte stream leave
- * the board as two separate COM ports over the one debugger cable, rather than
- * interleaving into one unparseable stream.
+ * uart20 is the console. uart30 is wired to the debugger's other virtual COM
+ * port and is disabled by default on cpuapp, so it is free and already pinned.
+ * Taking it means logs and the ANT byte stream leave the board as two separate
+ * COM ports over the one debugger cable, rather than interleaving into one
+ * unparseable stream.
+ *
+ * Which host COM port is which is worth checking rather than assuming: on the
+ * bench here, `nrfutil device list` reported COM8 as "vcom: 0" and COM7 as
+ * "vcom: 1", but the console (uart20) came out on COM7 and ANT (uart30) on
+ * COM8 - the opposite way round to what those labels suggest. Open both and
+ * see which one prints the boot banner.
  *
  * uart30's pinctrl also routes RTS/CTS. Hardware flow control is deliberately
  * not enabled: it would give this transport the backpressure that USB bulk

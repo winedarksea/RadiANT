@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Benchmark the dongle's USB path, to compare one USB stack against another.
 
 The firmware can be built on either of Zephyr's two USB device stacks (see
@@ -44,6 +44,7 @@ from ant_probe import (  # noqa: E402
     MESG_REQUEST_ID,
     FrameReader,
     frame,
+    close_device,
     open_device,
     reset_stack,
 )
@@ -215,6 +216,12 @@ def main() -> int:
     parser.add_argument("--json", help="write results here")
     parser.add_argument("--compare", nargs="+", metavar="JSON",
                         help="report on saved runs instead of measuring")
+    parser.add_argument(
+        "--port",
+        help="talk to a UART build over this serial port (e.g. COM8, "
+             "/dev/ttyACM1) instead of over USB",
+    )
+    parser.add_argument("--baud", type=int, default=115200)
     args = parser.parse_args()
 
     if args.compare:
@@ -224,7 +231,8 @@ def main() -> int:
         sys.exit("--depth above 16 exceeds what the firmware queues; "
                  "this measures overflow, not speed.")
 
-    dev = open_device(True, serial=args.serial)
+    dev = open_device(True, serial=args.serial, port=args.port,
+                      baud=args.baud)
     reader = FrameReader(dev, timeout_ms=250)
 
     if not reset_stack(dev, reader):
@@ -244,7 +252,7 @@ def main() -> int:
         dev, reader, args.count, args.depth, args.timeout)
     _drain(dev)
 
-    usb.util.dispose_resources(dev)
+    close_device(dev)
 
     result = summarise(args.label, samples, timeouts, delivered,
                        thr_timeouts, elapsed, args.count, args.depth)

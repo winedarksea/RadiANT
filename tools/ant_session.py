@@ -37,6 +37,7 @@ from ant_probe import (  # noqa: E402
     FrameReader,
     MESG_RESPONSE_EVENT_ID,
     frame,
+    close_device,
     open_device,
     reset_stack,
 )
@@ -206,9 +207,16 @@ def main() -> int:
                         help="how long to hold the session open (default: 30)")
     parser.add_argument("--serial",
                         help="match a device whose serial ends with this")
+    parser.add_argument(
+        "--port",
+        help="talk to a UART build over this serial port (e.g. COM8, "
+             "/dev/ttyACM1) instead of over USB",
+    )
+    parser.add_argument("--baud", type=int, default=115200)
     args = parser.parse_args()
 
-    dev = open_device(True, serial=args.serial)
+    dev = open_device(True, serial=args.serial, port=args.port,
+                      baud=args.baud)
     reader = FrameReader(dev, timeout_ms=250)
 
     failures = []
@@ -330,7 +338,7 @@ def main() -> int:
     else:
         print(f"  OK: reached the stack ({verdict})")
 
-    usb.util.dispose_resources(dev)
+    close_device(dev)
 
     print()
     print(f"{len(opened)}/{len(PROFILES)} channels ran simultaneously, "

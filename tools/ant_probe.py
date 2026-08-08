@@ -156,6 +156,64 @@ def reset_stack(dev, reader: FrameReader, timeout_s: float = 3.0) -> bool:
     return expect(reader, MESG_STARTUP_ID, timeout_s) is not None
 
 
+class SerialDevice:
+    """A serial port wearing just enough of the pyusb device API.
+
+    Builds for parts with no USB peripheral put the ANT serial protocol on a
+    UART instead (CONFIG_ANT_DONGLE_TRANSPORT_UART) - the nRF54L15 has no USB
+    device controller in silicon, so that is the only way to talk to one. The
+    bytes are identical either way, which is the whole point: a USB ANT stick
+    is a UART bridge with the UART hidden inside.
+
+    Rather than fork every tool, this presents the four calls they make of a
+    pyusb device - read, write, set_configuration, and the string lookups - so
+    `--port COM8` works everywhere `--serial` does.
+    """
+
+    def __init__(self, port: str, baud: int):
+        try:
+            import serial
+        except ImportError:  # pragma: no cover - user-facing guidance
+            sys.exit("pyserial is not installed. Run: pip install pyserial")
+
+        self._port = serial.Serial(port, baud, timeout=0)
+        self.name = port
+        # The tools print these; a UART carries no descriptors, so report the
+        # identity the firmware would have presented over USB.
+        self.idVendor = VID
+        self.idProduct = PID
+        self.bcdDevice = 0
+        self.iManufacturer = 0
+        self.iProduct = 0
+        self.iSerialNumber = 0
+
+    def write(self, endpoint, data, timeout=None):
+        return self._port.write(bytes(data))
+
+    def read(self, endpoint, size, timeout=None):
+        self._port.timeout = (timeout or 0) / 1000.0
+        data = self._port.read(size)
+        if not data:
+            # FrameReader treats this as "nothing to say yet", the same as an
+            # idle bulk-IN endpoint. Returning empty would spin instead.
+            raise usb.core.USBTimeoutError("timeout", None, None)
+        return data
+
+    def set_configuration(self):
+        pass
+
+    def close(self):
+        self._port.close()
+
+
+def close_device(dev) -> None:
+    """Release whichever kind of device open_device() handed back."""
+    if isinstance(dev, SerialDevice):
+        dev.close()
+    else:
+        usb.util.dispose_resources(dev)
+
+
 def _serial_of(dev):
     try:
         return usb.util.get_string(dev, dev.iSerialNumber)
@@ -209,7 +267,14 @@ def _backends():
     return [b for b in candidates if b is not None]
 
 
-def open_device(verbose: bool, wait_s: float = 0.0, serial: str | None = None):
+def open_device(verbose: bool, wait_s: float = 0.0, serial: str | None = None,
+                port: str | None = None, baud: int = 115200):
+    if port is not None:
+        dev = SerialDevice(port, baud)
+        if verbose:
+            print(f"Using {port} at {baud} baud (UART transport)")
+        return dev
+
     backends = _backends()
     if not backends:
         sys.exit(
@@ -300,11 +365,18 @@ def main() -> int:
         help="match a device whose serial ends with this, for when more "
              "than one dongle is attached",
     )
+    parser.add_argument(
+        "--port",
+        help="talk to a UART build over this serial port (e.g. COM8, "
+             "/dev/ttyACM1) instead of over USB",
+    )
+    parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("-q", "--quiet", action="store_true")
     args = parser.parse_args()
     verbose = not args.quiet
 
-    dev = open_device(verbose, serial=args.serial)
+    dev = open_device(verbose, serial=args.serial, port=args.port,
+                      baud=args.baud)
     reader = FrameReader(dev, timeout_ms=250)
 
     failures = []
@@ -346,7 +418,7 @@ def main() -> int:
         if text.startswith("STUB"):
             print("      (this is a stub build — the ANT radio is not present)")
 
-    usb.util.dispose_resources(dev)
+    close_device(dev)
 
     print()
     if failures:
