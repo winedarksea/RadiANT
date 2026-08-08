@@ -72,18 +72,31 @@ if (-not $NrfutilPath) {
 
 # `pkg` lives in the nrf5sdk-tools command, which is a separate install.
 #
-# Join the output before matching. `-notmatch` against a string array is a
-# filter, not a test: it returns every line that does not match, so a
-# non-empty array is truthy and the check fires even when the command is
-# already installed.
-$installed = (& $NrfutilPath list) -join "`n"
-if ($installed -notmatch 'nrf5sdk-tools') {
-    Write-Host "Installing the nrf5sdk-tools nrfutil command (provides 'pkg')..."
-    & $NrfutilPath install nrf5sdk-tools
+# Do not inherit NRFUTIL_HOME from the build environment. scripts\env.ps1
+# applies the toolchain bundle's environment.json, which points NRFUTIL_HOME at
+# <bundle>\nrfutil\home - a home that carries the commands west needs, does not
+# carry nrf5sdk-tools, and is deliberately locked against installing anything.
+# Packaging a DFU zip has nothing to do with the Zephyr toolchain, so clear the
+# variable and let nrfutil use the user's own home, where nrf5sdk-tools lives.
+# Inheriting it made this script try to install into a locked directory and
+# fail, on a machine that already had the command.
+$savedHome = $env:NRFUTIL_HOME
+$env:NRFUTIL_HOME = $null
+
+try {
+    # Probe by invoking the subcommand, not by parsing `nrfutil list`. What
+    # `list` reports depends on which home is in effect and does not reliably
+    # answer "can I run this"; the exit code does.
+    & $NrfutilPath nrf5sdk-tools --help | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        throw "nrfutil install nrf5sdk-tools failed with exit code $LASTEXITCODE."
+        Write-Host "Installing the nrf5sdk-tools nrfutil command (provides 'pkg')..."
+        & $NrfutilPath install nrf5sdk-tools
+        if ($LASTEXITCODE -ne 0) {
+            throw ("nrfutil install nrf5sdk-tools failed with exit code $LASTEXITCODE. " +
+                   "If it reports a locked home directory, that is the toolchain " +
+                   "bundle's home rather than yours - check NRFUTIL_HOME.")
+        }
     }
-}
 
 # Walk the Intel hex far enough to learn the first data address. Type 00 is
 # data, and the first one is where the image begins; the two record types
@@ -146,3 +159,8 @@ Write-Host "     Add file -> $($zip.Name) -> Write."
 Write-Host ""
 Write-Host "  Or from the command line, with the dongle in bootloader mode:"
 Write-Host "    $NrfutilPath nrf5sdk-tools dfu usb-serial -pkg $OutPath -p <COMx>"
+
+} finally {
+    # Put the caller's environment back. build_all.ps1 runs west after this.
+    $env:NRFUTIL_HOME = $savedHome
+}

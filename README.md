@@ -230,6 +230,7 @@ pre-2015-07-29 grandfather window for driver signing, so `pnputil` accepts it.
 | `src/diag_flash_log.c` | Log backend that commits to flash, readable back over UF2 |
 | `pm_static_*.yml`, `sysbuild.cmake` | Pin the application where each board's bootloader expects it — `0x26000` on the Feather, `0x1000` on the dongle. See the gotchas |
 | `boards/` | Per-board `.conf`/`.overlay`: output format, code partition, and prising the console off the USB device we need |
+| `scripts/build_all.ps1` | Builds every target, asserts link address and transport, fills `dist/` |
 | `scripts/` | Windows helpers: environment, flashing, DFU packaging, USB cache reset |
 | `tools/ant_probe.py` | Protocol smoke test. `--port COM8` talks to a UART build instead of USB; every tool below accepts it too |
 | `tools/ant_scan.py` | Wildcard ANT+ channel; reports the sensors it hears |
@@ -747,10 +748,25 @@ board" from "our class is broken".
 
 ### Release checklist
 
+Everything up to "UF2 loads" is done in one step by
+[`scripts/build_all.ps1`](scripts/build_all.ps1), which walks the same matrix
+as CI, makes the same two assertions after each build, and leaves the artifacts
+in `dist\`:
+
+```powershell
+. .\scripts\env.ps1 -NcsVersion v3.2.4
+.\scripts\build_all.ps1
+```
+
+`dist\` is gitignored — it is a build output, not a tracked one. Rebuild it
+rather than trusting whatever is sitting there, since nothing warns when an
+artifact is older than the source it was built from.
+
 | Check | How |
 |---|---|
-| Builds clean | `west build` exits 0 for both stub and real-ANT configs, on both boards |
-| Linked where it is written | `build/<d>/partitions.yml` and `.config` agree on the app address: `0x26000` Feather, `0x1000` dongle |
+| Builds clean | `scripts\build_all.ps1` exits 0 — seven targets, all three transports |
+| Linked where it is written | Asserted per target by `build_all.ps1`: `0x26000` Feather and Pro Micro, `0x1000` dongle, `0x0` nRF54 DKs |
+| Right transport compiled | Asserted per target by `build_all.ps1`; the choice is defaulted from devicetree, so it can drift silently |
 | UF2 loads | Copies to `FTHR840BOOT`; drive auto-ejects, board re-enumerates |
 | DFU package loads | `scripts\package_dfu.ps1` exits 0; Programmer writes the zip and the dongle re-enumerates |
 | Correct identity | `Get-PnpDevice` shows `USB\VID_0FCF&PID_1009`, and the compatible IDs contain no `MS_COMP_WINUSB` |
