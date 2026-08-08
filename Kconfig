@@ -271,6 +271,67 @@ config ANT_DONGLE_ENCRYPTION
 	  custom user data - is always bridged. Those are getters and cannot
 	  change what the radio does.
 
+config ANT_DONGLE_UF2_SETTLE_MS
+	int "Settling delay after a soft reset, before USB comes up (ms)"
+	default 1000
+	range 0 5000
+	help
+	  How long to wait before enabling the USB stack on any boot that did
+	  not begin with a power-on reset. It gives macOS time to finish
+	  processing the UF2 bootloader's mass-storage drive disappearing;
+	  enumerating into that gap leaves the dongle unusable until it is
+	  physically replugged.
+
+	  A power-on reset is the only cause that proves no such drive was
+	  mounted - it is a fresh plug, so the host has nothing to detach - and
+	  it is the only one skipped. Both ways out of the bootloader wait: its
+	  own jump after writing an image, which is a software reset, and the
+	  RESET button pressed to leave it with the drive still mounted, which
+	  is a pin reset.
+
+	  So plugging a dongle in never pays this, and that is the only thing
+	  most users ever do. What pays it is a developer flashing or pressing
+	  RESET. That is why the default is the full second: on the boots where
+	  the race is real it costs nothing worth saving, and it is not on the
+	  path anybody else is on.
+
+	  Set to 0 to disable it. Builds without HWINFO, and parts whose reset
+	  cause cannot be read, fall back to waiting unconditionally.
+
+config ANT_DONGLE_TX_POWER_BOOST
+	bool "Transmit at the radio's maximum power by default"
+	default y
+	help
+	  Default every channel to RADIO_TX_POWER_LVL_5 (+8 dBm) instead of the
+	  stack's LVL_3 (0 dBm), and raise a host's request for LVL_3 or LVL_4
+	  to the same.
+
+	  Without this the +8 dBm the nRF52840 is chosen for is unreachable. The
+	  stack defaults to 0 dBm, and no host will ever ask for more, because
+	  LVL_5 exists only on the nRF52820, nRF52833 and nRF52840 - the stick
+	  being impersonated is an nRF51422, whose ceiling is LVL_4 at +4 dBm.
+	  So a host asking for LVL_4 is asking for everything the hardware has
+	  and should get 8 dBm, and a host sending LVL_3 is sending the
+	  documented default because it has no opinion. Both are raised.
+
+	  Levels 0 to 2 (-20, -12 and -4 dBm) are passed through untouched.
+	  Nothing sends those by accident, so they are a deliberate request to
+	  be quiet - a bike shop, or a race paddock with forty trainers in one
+	  room - and overriding one by up to 28 dB would be antisocial. A value
+	  with RADIO_TX_POWER_LVL_CUSTOM (0x80) set names a raw register value
+	  rather than a level and is likewise left alone.
+
+	  This only affects transmission: reading a power meter is unaffected,
+	  since that is the sensor's transmit path. What it improves is the
+	  host-to-sensor direction, which is ERG mode - Zwift setting trainer
+	  resistance - along with channel establishment and acknowledged data.
+
+	  It is a deviation from the stick being impersonated, but an invisible
+	  one. ANT has no message that reads transmit power back, so no host can
+	  observe the difference except as better range.
+
+	  On parts without LVL_5 this settles at LVL_4 instead.
+
 config ANT_DONGLE_BCD_DEVICE
 	hex "Override bcdDevice in the USB device descriptor"
 	default 0x0000

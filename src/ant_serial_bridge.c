@@ -119,6 +119,81 @@ static void send_message(uint8_t msg_id, const uint8_t *payload, uint8_t len)
 	usb_ant_send(buf, len + 4U);
 }
 
+/* ── Transmit power ────────────────────────────────────────────────────────── */
+
+/* RADIO_TX_POWER_LVL_5 (+8 dBm) exists only on the nRF52820, nRF52833 and
+ * nRF52840; every other part this builds for tops out at LVL_4 (+4 dBm).
+ * ant_parameters.h states that restriction in a doc comment rather than
+ * exposing a symbol for it, so it is restated here.
+ */
+#if defined(CONFIG_ANT_DONGLE_TX_POWER_BOOST)
+#if defined(CONFIG_SOC_NRF52840) || defined(CONFIG_SOC_NRF52833) || \
+	defined(CONFIG_SOC_NRF52820)
+#define ANT_DONGLE_TX_POWER_DEFAULT RADIO_TX_POWER_LVL_5
+#else
+#define ANT_DONGLE_TX_POWER_DEFAULT RADIO_TX_POWER_LVL_4
+#endif
+#else
+#define ANT_DONGLE_TX_POWER_DEFAULT RADIO_TX_POWER_LVL_3
+#endif
+
+/* What each channel should transmit at, whether or not it is currently
+ * assigned. ant_channel_radio_tx_power_set() only takes on an assigned channel
+ * - which is why the 0x47 fan-out below swallows its errors - and every host
+ * sets power before assigning anything, so applying it at the moment the host
+ * asks would drop the request on the floor for every channel that does not
+ * exist yet. Holding it here and reapplying after each successful assign is
+ * what makes the setting survive that ordering.
+ */
+static uint8_t tx_power[CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED];
+
+static void tx_power_reset(void)
+{
+	for (uint8_t i = 0; i < ARRAY_SIZE(tx_power); i++) {
+		tx_power[i] = ANT_DONGLE_TX_POWER_DEFAULT;
+	}
+}
+
+/*
+ * Map a host's requested power level onto what this radio can actually do.
+ *
+ * Levels 0-2 are -20, -12 and -4 dBm. Nobody sends those by accident, so they
+ * are a deliberate request to be quiet - a bike shop, or a race paddock with
+ * forty trainers in one room - and are honoured exactly.
+ *
+ * Level 3 is 0 dBm. It is the ANT default and what a host sends when it has no
+ * opinion, which is the common case. Level 4 is +4 dBm, the ceiling on the
+ * nRF51422 inside the stick being impersonated: a host asking for it is asking
+ * for everything the hardware has, and on an nRF52840 that is +8 dBm rather
+ * than +4. Both are raised, which is the only way the extra 8 dB is ever
+ * reachable - no host will ever request LVL_5 by name, because no retail stick
+ * has ever had it.
+ *
+ * RADIO_TX_POWER_LVL_CUSTOM (0x80) names a raw register value rather than a
+ * level, so it is passed through untouched.
+ */
+static uint8_t tx_power_resolve(uint8_t requested)
+{
+#if defined(CONFIG_ANT_DONGLE_TX_POWER_BOOST)
+	if (requested & RADIO_TX_POWER_LVL_CUSTOM) {
+		return requested;
+	}
+
+	if (requested == RADIO_TX_POWER_LVL_3 ||
+	    requested == RADIO_TX_POWER_LVL_4) {
+		return ANT_DONGLE_TX_POWER_DEFAULT;
+	}
+#endif
+	return requested;
+}
+
+static void tx_power_apply(uint8_t ch)
+{
+	if (ch < ARRAY_SIZE(tx_power)) {
+		(void)ant_channel_radio_tx_power_set(ch, tx_power[ch], 0);
+	}
+}
+
 /* ── Request sub-handler (opcode 0x4D) ─────────────────────────────────────── */
 
 static void handle_request(const uint8_t *body, uint8_t len)
@@ -346,6 +421,13 @@ static void handle_system_reset(void)
 
 	(void)ant_stack_reset();
 
+	/* The stack is back to its defaults and every channel is unassigned, so
+	 * anything a previous session asked for is gone. Forget it here too,
+	 * or a deliberately quiet setting would outlive the reset that a real
+	 * stick clears it with.
+	 */
+	tx_power_reset();
+
 	/* Let the resulting channel-closed events land and be discarded before
 	 * the host is told the stack is up again. Real sticks are unresponsive
 	 * for rather longer than this.
@@ -449,6 +531,13 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		if (len >= 3) {
 			uint8_t ext = (len >= 4) ? body[3] : 0x00;
 			err = ant_channel_assign(body[0], body[1], body[2], ext);
+			if (!err) {
+				/* The channel exists now, so the power the host
+				 * asked for earlier - or our boosted default,
+				 * if it never asked - can finally be applied.
+				 */
+				tx_power_apply(body[0]);
+			}
 		}
 		break;
 
@@ -495,7 +584,15 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	case MESG_CHANNEL_RADIO_TX_POWER_ID:
 		/* body: [ch, tx_power] */
 		if (len >= 2) {
-			err = ant_channel_radio_tx_power_set(body[0], body[1], 0);
+			uint8_t level = tx_power_resolve(body[1]);
+
+			if (body[0] < ARRAY_SIZE(tx_power)) {
+				tx_power[body[0]] = level;
+			}
+			/* Still call through for an out-of-range channel, so
+			 * the stack returns the error a real stick would.
+			 */
+			err = ant_channel_radio_tx_power_set(body[0], level, 0);
 		}
 		break;
 
@@ -511,9 +608,12 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		 * a command a real stick accepts.
 		 */
 		if (len >= 2) {
+			uint8_t level = tx_power_resolve(body[1]);
+
 			for (uint8_t i = 0; i < CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED;
 			     i++) {
-				(void)ant_channel_radio_tx_power_set(i, body[1], 0);
+				tx_power[i] = level;
+				(void)ant_channel_radio_tx_power_set(i, level, 0);
 			}
 			err = 0;
 		}
@@ -953,6 +1053,8 @@ void ant_evt_handler(ant_evt_t *p_ant_evt)
 
 int ant_serial_bridge_init(void)
 {
+	tx_power_reset();
+
 	ant_err_t err = ant_cb_register(ant_evt_handler);
 
 	if (err) {

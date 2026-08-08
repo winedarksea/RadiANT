@@ -7,6 +7,7 @@
  */
 
 #include <zephyr/kernel.h>
+#include <zephyr/drivers/hwinfo.h>
 #include <zephyr/logging/log.h>
 
 #include "ant_transport.h"
@@ -54,13 +55,68 @@ LOG_MODULE_REGISTER(ant_dongle, LOG_LEVEL_INF);
 /* Forward declaration — defined in ant_serial_bridge.c */
 extern int ant_serial_bridge_init(void);
 
+/*
+ * The UF2 bootloader ejects its mass-storage drive and soft-resets into this
+ * image. macOS needs a moment to finish processing that detach; enumerating
+ * into the gap leaves the dongle unusable until it is physically replugged.
+ *
+ * That race exists only on the boot immediately following a flash. A cold plug
+ * - what a user does every day, and the only thing most users ever do - has no
+ * mass-storage device to detach from, so the wait there buys nothing and just
+ * delays the dongle appearing on the bus. RESETREAS separates the two cases:
+ * the bootloader's jump into the application is a software reset, a plug is
+ * power-on, and the RESET button is a pin reset.
+ *
+ * RESETREAS latches its bits until they are cleared, so this clears them after
+ * reading. Without that, the software-reset bit set by one flash would still
+ * be set on every boot afterwards and the wait would never be skipped.
+ */
+static void settle_after_uf2_bootloader(void)
+{
+	if (CONFIG_ANT_DONGLE_UF2_SETTLE_MS == 0) {
+		return;
+	}
+
+#if defined(CONFIG_HWINFO)
+	uint32_t cause = 0;
+
+	/* Zephyr's weak z_impl_hwinfo_get_reset_cause() answers -ENOSYS on a
+	 * part with no driver, and the whole file is only compiled when
+	 * CONFIG_HWINFO is set - hence the #if rather than IS_ENABLED(), which
+	 * would leave an unresolved symbol at link time.
+	 */
+	if (hwinfo_get_reset_cause(&cause) == 0) {
+		(void)hwinfo_clear_reset_cause();
+
+		/* A power-on reset leaves RESETREAS empty, and it is the only
+		 * cause that guarantees no mass-storage device preceded us -
+		 * nothing was mounted, so the host has nothing to detach. Every
+		 * other cause can race: the bootloader's own jump after writing
+		 * an image, and equally the RESET button pressed to leave the
+		 * bootloader while its drive is still mounted, which is a pin
+		 * reset rather than a software one. Both wait.
+		 */
+		if (cause == 0) {
+			return;
+		}
+
+		LOG_INF("reset cause 0x%08x: settling %d ms for the bootloader",
+			cause, CONFIG_ANT_DONGLE_UF2_SETTLE_MS);
+	}
+#endif
+
+	/* Either this boot followed a software reset, or the reset cause could
+	 * not be established - in which case wait unconditionally rather than
+	 * assume a cold boot and risk the race.
+	 */
+	k_sleep(K_MSEC(CONFIG_ANT_DONGLE_UF2_SETTLE_MS));
+}
+
 int main(void)
 {
 	int ret;
 
-	/* Wait 1 second to ensure Mac OS detects the UF2 bootloader disconnect 
-	 * before we bring up the Zephyr USB stack. */
-	k_sleep(K_MSEC(1000));
+	settle_after_uf2_bootloader();
 
 	LOG_INF("ANT+ USB Dongle starting");
 
