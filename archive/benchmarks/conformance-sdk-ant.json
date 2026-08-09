@@ -1,0 +1,1476 @@
+{
+  "tool": "ant_conformance.py",
+  "format": "antser-v1",
+  "antser_path": "archive\\captures\\serial\\conformance-sdk-ant.antser",
+  "sha256": "a18bce8b1a8b4011ac13f3376558aa156723946e13077ba86bcc8e94592fe35f",
+  "cases": 284,
+  "records": 1277,
+  "replies": 617,
+  "messages_exercised": 48,
+  "silent_cases": [],
+  "unexpected_replies": [],
+  "skipped": [
+    {
+      "what": "MESG_RADIO_CW_MODE_ID",
+      "why": "keys the transmitter; a backend that bridges it would leave a carrier on the band for the rest of the run"
+    },
+    {
+      "what": "MESG_RADIO_CW_INIT_ID",
+      "why": "enters continuous-wave test mode - same reason"
+    },
+    {
+      "what": "MESG_OPEN_RX_SCAN_MODE_ID",
+      "why": "ant_core implements background scan mode, so this would fill the transcript with whatever sensors happen to be in the room"
+    },
+    {
+      "what": "MESG_RSSI_SEARCH_THRESHOLD_ID",
+      "why": "numeric id unresolved without sdk-ant: Proximity search threshold expressed in RSSI rather than in the proximity bins MESG_PROX_SEARCH_CONFIG (0x71) uses. Implied by the ANT_DLL export ANT_RSSI_SetSearchThreshold. Believed to sit in the 0xC0 block of AP2-era extension messages, but no value in that block is corroborated by anything in this repository - the whole host-callable API in archive/host-api/ant_dll_exports.json tops out at 0x7B - so no number is recorded here. The Wave 2 shim looked and came back empty as well: sdk-ant v2.1.0 defines no such id anywhere in its headers or sources, so this stays unresolved rather than merely unverified."
+    },
+    {
+      "what": "MESG_SLEEP_ID",
+      "why": "numeric id unresolved without sdk-ant: Put the device into its low-power sleep state. Implied by the ANT_DLL export ANT_SleepMessage, which Zwift resolves. Same 0xC0 block and the same lack of corroboration as MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. The Wave 2 shim found the name referenced in sdk-ant but never defined - the only occurrence is inside a commented-out dispatch arm - so there is no value to recover there either."
+    },
+    {
+      "what": "MESG_RADIANT_EPOCH_ID",
+      "why": "a RadiANT extension message. Nothing implements these yet, so a case for one would record INVALID_MESSAGE today and mean something else in Phase 7 - which is the one thing a transcript diffed across firmware revisions must not do. Add them when the extensions land."
+    },
+    {
+      "what": "MESG_RADIANT_PAIRING_ID",
+      "why": "a RadiANT extension message. Nothing implements these yet, so a case for one would record INVALID_MESSAGE today and mean something else in Phase 7 - which is the one thing a transcript diffed across firmware revisions must not do. Add them when the extensions land."
+    },
+    {
+      "what": "MESG_RADIANT_SEC_CONFIG_ID",
+      "why": "a RadiANT extension message. Nothing implements these yet, so a case for one would record INVALID_MESSAGE today and mean something else in Phase 7 - which is the one thing a transcript diffed across firmware revisions must not do. Add them when the extensions land."
+    },
+    {
+      "what": "MESG_RADIANT_SEC_STATUS_ID",
+      "why": "a RadiANT extension message. Nothing implements these yet, so a case for one would record INVALID_MESSAGE today and mean something else in Phase 7 - which is the one thing a transcript diffed across firmware revisions must not do. Add them when the extensions land."
+    },
+    {
+      "what": "MESG_RADIANT_SET_KEY_ID",
+      "why": "a RadiANT extension message. Nothing implements these yet, so a case for one would record INVALID_MESSAGE today and mean something else in Phase 7 - which is the one thing a transcript diffed across firmware revisions must not do. Add them when the extensions land."
+    }
+  ],
+  "case_index": [
+    {
+      "name": "41-unassign-channel/valid",
+      "records": 4,
+      "sha256": "dd423f78deb7e0be41dfc4bb1d125adaf4623fad3449c506214a33c7fb92d5e5"
+    },
+    {
+      "name": "41-unassign-channel/malformed-short",
+      "records": 4,
+      "sha256": "fe2290df03d67de192ace8b58872310e33a6f3bbe9bac76fbf887e38cf379b46"
+    },
+    {
+      "name": "41-unassign-channel/malformed-long",
+      "records": 4,
+      "sha256": "1fc8317caf3446f421ab782026416a46cf5333c54b56bde91e0c0f5a53e935f8"
+    },
+    {
+      "name": "41-unassign-channel/malformed-oob-index",
+      "records": 4,
+      "sha256": "2dddc239e1d8dce400e7a9c95110a7ccc4ebd05c9084a0fe11976102f4f0ea4e"
+    },
+    {
+      "name": "41-unassign-channel/malformed-checksum",
+      "records": 3,
+      "sha256": "db603375b8f3f0e4a7dc68bb1553c6b87f0b06eb4e8a0af23fa693a8a2a2fc36"
+    },
+    {
+      "name": "42-assign-channel/valid",
+      "records": 4,
+      "sha256": "737ad25ba85e58b8c8361198899fdde3b54db85626f27c41da25b7c6a8917ca5"
+    },
+    {
+      "name": "42-assign-channel/malformed-short",
+      "records": 4,
+      "sha256": "7611b91d65fcf1d35f0710c64144fd42d6dfc3bd27d32e88ef417630c82f33c1"
+    },
+    {
+      "name": "42-assign-channel/malformed-long",
+      "records": 4,
+      "sha256": "4c1dbf5bdb9a3c1e8f078f4edc5227bdd98e1b3406dfcaa78bb643f03b237f65"
+    },
+    {
+      "name": "42-assign-channel/malformed-oob-index",
+      "records": 4,
+      "sha256": "83081e0a0d1685992ceb1913f819867d7e3989df7faa573892973bda651e22a1"
+    },
+    {
+      "name": "42-assign-channel/malformed-param-ff",
+      "records": 4,
+      "sha256": "d0a07eaa9296b09cb8c52e114ecf692b34c3b224dd8fb63e21a17adb815e1e7d"
+    },
+    {
+      "name": "42-assign-channel/malformed-checksum",
+      "records": 3,
+      "sha256": "828d29f1c89a2e0ae595bec488bd9438aa617065b5f291f48f60be706a30d3a8"
+    },
+    {
+      "name": "43-channel-mesg-period/valid",
+      "records": 6,
+      "sha256": "288922f99f0499b33e6a7e750b5a6b28973a33368c92fcb99b96a167b7806f98"
+    },
+    {
+      "name": "43-channel-mesg-period/malformed-short",
+      "records": 6,
+      "sha256": "396e80aece3fbd2233f9ee8631abb377b5fe7f35cc557421707001f2b6309280"
+    },
+    {
+      "name": "43-channel-mesg-period/malformed-long",
+      "records": 6,
+      "sha256": "d69609f75d2dd0f7405ecf4a09f686f23b88e6ebda9886865c4764eb147eb23d"
+    },
+    {
+      "name": "43-channel-mesg-period/malformed-oob-index",
+      "records": 6,
+      "sha256": "5d394c6500405b383545bafbb6054bc22ce98c87711f90f4a022049479006f29"
+    },
+    {
+      "name": "43-channel-mesg-period/malformed-param-ff",
+      "records": 6,
+      "sha256": "01d6285c60baa6a4b853b0f309241b2728803970bf922d2880e10c11ef05e238"
+    },
+    {
+      "name": "43-channel-mesg-period/malformed-checksum",
+      "records": 3,
+      "sha256": "19a3491d96eeb64ac1732b82d9cb770e4f241ccce56609c41cbe2fca30f14320"
+    },
+    {
+      "name": "44-channel-search-timeout/valid",
+      "records": 6,
+      "sha256": "65d3e02a6f482b3addaac6b5c7db66b6a771c7d655dc65a0350df57ac8099773"
+    },
+    {
+      "name": "44-channel-search-timeout/malformed-short",
+      "records": 6,
+      "sha256": "f1f6435581110bd18f646ca016e542f93197153de31009564ab5ed15fa68eaad"
+    },
+    {
+      "name": "44-channel-search-timeout/malformed-long",
+      "records": 6,
+      "sha256": "6ec4646bbdf6f553f3514843f0a5e0fe5ab0af0e070a1886c052289acf98bc6d"
+    },
+    {
+      "name": "44-channel-search-timeout/malformed-oob-index",
+      "records": 6,
+      "sha256": "588b0c780347fc0c4618c7672f8958a60efb6316da254c818bddafb2837d1b6d"
+    },
+    {
+      "name": "44-channel-search-timeout/malformed-checksum",
+      "records": 3,
+      "sha256": "3cc4c95f1f3224dbe9f310f042f797b89ed40a69a63a9c3f7743724034904a3f"
+    },
+    {
+      "name": "45-channel-radio-freq/valid",
+      "records": 6,
+      "sha256": "c019700e922a59ddf6edef4f42d8bb8398e948635a86037e78b2087bf70cb40c"
+    },
+    {
+      "name": "45-channel-radio-freq/malformed-short",
+      "records": 6,
+      "sha256": "2e126cfca45884d7edfd425e18a68421b92afa41edf1e9c902b3cba83885a410"
+    },
+    {
+      "name": "45-channel-radio-freq/malformed-long",
+      "records": 6,
+      "sha256": "002938a27e38bcd85ea2e3783873ee671dff0eb699b61bddafa8b2ee6919f437"
+    },
+    {
+      "name": "45-channel-radio-freq/malformed-oob-index",
+      "records": 6,
+      "sha256": "197735c16bb17545ab0a69163610c0edac0f849df8bb5f60f90d659d40a93275"
+    },
+    {
+      "name": "45-channel-radio-freq/malformed-param-ff",
+      "records": 6,
+      "sha256": "390db8a03e3d030a6847802d2a12caf6e5368656003387ec80dd20ae0e1ae304"
+    },
+    {
+      "name": "45-channel-radio-freq/malformed-checksum",
+      "records": 3,
+      "sha256": "90a1a466d670854c0b03c2ab6d732d62bd0cae90f7ed74da1fb9659f539bd60d"
+    },
+    {
+      "name": "46-network-key/valid",
+      "records": 4,
+      "sha256": "80fd820cb6b7b32cca0b1b5b7b06b0437ac95996c90ebe7da83ab231a9629d09"
+    },
+    {
+      "name": "46-network-key/malformed-short",
+      "records": 4,
+      "sha256": "47f1afeb60e51d325ea234a083c61b3cd0c0a2e07d588feef0742a0853fc14c2"
+    },
+    {
+      "name": "46-network-key/malformed-long",
+      "records": 4,
+      "sha256": "b4e21e01c5d3e7d2065c88f5289c187ad044b01dd459f2cc680d56760971383a"
+    },
+    {
+      "name": "46-network-key/malformed-oob-index",
+      "records": 4,
+      "sha256": "c2a6ac49b476488003ff08dc3158f40c380d2036d50886b8505aaeb2e6d3bfc8"
+    },
+    {
+      "name": "46-network-key/malformed-param-ff",
+      "records": 4,
+      "sha256": "3f0eda98a9c834905495bd611ee0c0535290303e2a5cb4a2d592b99486f53483"
+    },
+    {
+      "name": "46-network-key/malformed-checksum",
+      "records": 3,
+      "sha256": "355e77845ce670857cf2b3039441fdcbd036f49c0554b32b21d1a9627ef5c446"
+    },
+    {
+      "name": "47-radio-tx-power/valid",
+      "records": 4,
+      "sha256": "6f0fca43a8ffa8c7e2b4da874e39cab34243479ece39c2b0910c7a0aeab5848e"
+    },
+    {
+      "name": "47-radio-tx-power/malformed-short",
+      "records": 4,
+      "sha256": "aac4fa29b8c54f643213fe8cb40f7c34abe79237fa470dde43588e6dfaf3ec63"
+    },
+    {
+      "name": "47-radio-tx-power/malformed-long",
+      "records": 4,
+      "sha256": "eb2b5e30144671f2e38d57dcbdd7d9c3c05e6df8324725557b6a805d388fe664"
+    },
+    {
+      "name": "47-radio-tx-power/malformed-oob-index",
+      "records": 4,
+      "sha256": "d1bb9681acfa2c2513cdd81eaaea35a6bd71cf6ce33eebd6db24776f53a515dd"
+    },
+    {
+      "name": "47-radio-tx-power/malformed-param-ff",
+      "records": 4,
+      "sha256": "7d1078f410ac34ccc659974356f197462f5d7cb5e6bb9f57b15233fbb0667475"
+    },
+    {
+      "name": "47-radio-tx-power/malformed-checksum",
+      "records": 3,
+      "sha256": "2c5a5c63fe3045ea70916955e7054e10be7ab8a3771237588dc2c56d8bded5b1"
+    },
+    {
+      "name": "49-search-waveform/valid",
+      "records": 6,
+      "sha256": "fe991eeddccc4bdbebd67072cada0f0bf8f6a0b0c7ec8cb8df15f6bf1517fb79"
+    },
+    {
+      "name": "49-search-waveform/malformed-short",
+      "records": 6,
+      "sha256": "b4b88119786654472f2c2215be5622353db36b4797844375f6c217d9252210f9"
+    },
+    {
+      "name": "49-search-waveform/malformed-long",
+      "records": 6,
+      "sha256": "2cb142d33ecb89b076c396d1ddc755269d20bcf2b0a66179cdc37e56270bbe8d"
+    },
+    {
+      "name": "49-search-waveform/malformed-oob-index",
+      "records": 6,
+      "sha256": "5ab3160d97c41a797ac82e8c6f7cd802c278c1cc3aa3c04fe0f56e448a003ec4"
+    },
+    {
+      "name": "49-search-waveform/malformed-param-ff",
+      "records": 6,
+      "sha256": "eaf45965e4fc6edfe7c1bd544db269fbd56917c7248235ed98105a8b1be8ea78"
+    },
+    {
+      "name": "49-search-waveform/malformed-checksum",
+      "records": 3,
+      "sha256": "e2a146c8edbe626ea4bdfb571e54a57ae4d35c6ab0da39328174a7f87d99c97b"
+    },
+    {
+      "name": "4a-system-reset/valid",
+      "records": 4,
+      "sha256": "7e4538157b792d882d3cda34f4002b18657e5c53a9723ae937eb062340d0c4d7"
+    },
+    {
+      "name": "4a-system-reset/malformed-short",
+      "records": 4,
+      "sha256": "e5929ea4ef5e78baf9c042a90da74fe2cce991a5c8b9431eec8582c5379e36e0"
+    },
+    {
+      "name": "4a-system-reset/malformed-long",
+      "records": 4,
+      "sha256": "e56392526f230a9967e36e924e37a94cbd5e0cc9f07f79046cd89205b85b7b75"
+    },
+    {
+      "name": "4a-system-reset/malformed-oob-index",
+      "records": 4,
+      "sha256": "0ba4c8ce80f5bf2b8e3e51373af13b2b0564c87ba5fab2577874ccaf4eae7063"
+    },
+    {
+      "name": "4a-system-reset/malformed-checksum",
+      "records": 3,
+      "sha256": "f8a852bd34f4b20a5a1934e20b5ef2d502e277b5767ea443610689a900759af5"
+    },
+    {
+      "name": "4b-open-channel/valid",
+      "records": 6,
+      "sha256": "80e60f9835156a5a65cec4d02c7e44a468fb4597a51f521bcdae0314302e9a00"
+    },
+    {
+      "name": "4b-open-channel/malformed-short",
+      "records": 6,
+      "sha256": "6114947348aaa58a8e2ea41fb34e11103471c16797f26eff81f9ce12383d5e4a"
+    },
+    {
+      "name": "4b-open-channel/malformed-long",
+      "records": 6,
+      "sha256": "d1a5e9cd9367d076b864d906f97b6b857a5a9fa68bb503957671d31607912d23"
+    },
+    {
+      "name": "4b-open-channel/malformed-oob-index",
+      "records": 6,
+      "sha256": "24f31ed9d4f4f60a01701a50aa6e3c67dbf0f035f3f8458664cffe5cd72e7d89"
+    },
+    {
+      "name": "4b-open-channel/malformed-checksum",
+      "records": 3,
+      "sha256": "609c313f031dfe20718b9a0b71b6a87c5ed8c5eb254942ad34e49574235a4dcf"
+    },
+    {
+      "name": "4c-close-channel/valid",
+      "records": 6,
+      "sha256": "11c8b4b680d4eeffc71f5ff861aa29a4a5d472e0969823668e80b832dc962043"
+    },
+    {
+      "name": "4c-close-channel/malformed-short",
+      "records": 6,
+      "sha256": "1003eff5bef5241b64c3a6eaaa9c53976774fb38dc92cbc303a9c20fd5d95376"
+    },
+    {
+      "name": "4c-close-channel/malformed-long",
+      "records": 6,
+      "sha256": "6f77a1784714e20534ad7eb9b2ff7aaf1ac812b95f410471f5120cecd3a23d03"
+    },
+    {
+      "name": "4c-close-channel/malformed-oob-index",
+      "records": 6,
+      "sha256": "94ab745f28309df1cbf2e55791664cae1278f3db256335c244178f624605d07e"
+    },
+    {
+      "name": "4c-close-channel/malformed-checksum",
+      "records": 3,
+      "sha256": "83d9e5f01c53d0afcb819382d481a5cf83ce0d338535ad6c26a05bcc00e7d467"
+    },
+    {
+      "name": "4e-broadcast-data/valid",
+      "records": 6,
+      "sha256": "9c53b478e8a6d6bfde459af1ad8a3505a05098054dbd0e734e4ee3cfdae553e9"
+    },
+    {
+      "name": "4e-broadcast-data/malformed-short",
+      "records": 6,
+      "sha256": "4e35e5b8c7537cee9d9fc5eff1229812b6fef620aab04d7d263527e4daa93285"
+    },
+    {
+      "name": "4e-broadcast-data/malformed-long",
+      "records": 6,
+      "sha256": "8939832f5cc56cf32b052ddbc62e540bfac873559d982a14cdfa21a58f7ea94a"
+    },
+    {
+      "name": "4e-broadcast-data/malformed-oob-index",
+      "records": 6,
+      "sha256": "370c858ff3e1cbaf17963e836fc3386871237eb2de5d294df3ad3a48f722c654"
+    },
+    {
+      "name": "4e-broadcast-data/malformed-param-ff",
+      "records": 6,
+      "sha256": "2f250f405d45e754ebeba763eaee41bebf995145b3df20afd1082a0a84821671"
+    },
+    {
+      "name": "4e-broadcast-data/malformed-checksum",
+      "records": 3,
+      "sha256": "814ddb401fe2e357fa40a715ea34997e20bea03679180c877eaf7c6af430c08f"
+    },
+    {
+      "name": "4f-acknowledged-data/valid",
+      "records": 6,
+      "sha256": "3be1926f8f231c7c0abf13216447251adb7e5827ffc24487b6f3ba83a9634e1b"
+    },
+    {
+      "name": "4f-acknowledged-data/malformed-short",
+      "records": 6,
+      "sha256": "51bcc0134f22bf224c186d80fc6669fc9adcc85abc520d2a4d890cea3af637b7"
+    },
+    {
+      "name": "4f-acknowledged-data/malformed-long",
+      "records": 6,
+      "sha256": "f62a093c5ede91a54dff21897a3e80c12f122f30527b65b8473a9918d1a59d5c"
+    },
+    {
+      "name": "4f-acknowledged-data/malformed-oob-index",
+      "records": 6,
+      "sha256": "36cb1faabd72f4c6f0e580f64fe797dd6f8265d8645292d213e97d40ee60e678"
+    },
+    {
+      "name": "4f-acknowledged-data/malformed-param-ff",
+      "records": 6,
+      "sha256": "e70df2f8b155012b9bb160a7ce6f0c1ca12faaa06e9d5c35708ca7c6d9e5461a"
+    },
+    {
+      "name": "4f-acknowledged-data/malformed-checksum",
+      "records": 3,
+      "sha256": "f8415d72995094f87b372873c1851b7431c59ef447ba45e93687be565e866e25"
+    },
+    {
+      "name": "50-burst-data/valid",
+      "records": 4,
+      "sha256": "d4bdfaf0bdf6e2f1080176ab90566731d3e80c609b1f566839a0390db652150d"
+    },
+    {
+      "name": "50-burst-data/malformed-short",
+      "records": 4,
+      "sha256": "13b5815cf51f74a93f07e47ac2d1a55ac92ca8bba62c7b294ab398993cae9a21"
+    },
+    {
+      "name": "50-burst-data/malformed-long",
+      "records": 4,
+      "sha256": "946489f4f36ffd537e73a0dac5267485308fbd23fd51bc599dcfd418b4f5d446"
+    },
+    {
+      "name": "50-burst-data/malformed-oob-index",
+      "records": 4,
+      "sha256": "16e9bddbb6482eaad2cb2ca39f444356f5eec0da9fc6f530b6d1878fb7038ba5"
+    },
+    {
+      "name": "50-burst-data/malformed-param-ff",
+      "records": 4,
+      "sha256": "c090fce39938472f6d5d616c99cf65a4950c8ecb3db5867e91cc8f37a847aef5"
+    },
+    {
+      "name": "50-burst-data/malformed-checksum",
+      "records": 3,
+      "sha256": "2a34557ffc6d9c16a15acf139f5e4e94c2f6171f7d15c996d0df33ffd72b0394"
+    },
+    {
+      "name": "51-channel-id/valid",
+      "records": 6,
+      "sha256": "b8718479f22417692b18592d449f1e3352259d556d3f5bad46eaef6e8db0887b"
+    },
+    {
+      "name": "51-channel-id/malformed-short",
+      "records": 6,
+      "sha256": "133596f85bbe0f00bb54fd916f969f8ec33673b9723997070e6bfed7c8560f0e"
+    },
+    {
+      "name": "51-channel-id/malformed-long",
+      "records": 6,
+      "sha256": "4f9947e32fe7b69f2c9aab9f4e54d031fb7691ca5f63734cd07245e53c17f2a6"
+    },
+    {
+      "name": "51-channel-id/malformed-oob-index",
+      "records": 6,
+      "sha256": "a7438d94c1b079d45a65cd661509841f5c746a564f042c5db31180c613bc1ff4"
+    },
+    {
+      "name": "51-channel-id/malformed-param-ff",
+      "records": 6,
+      "sha256": "b651d009beba0d8c0a472039238031da6ae51784babde4e2adbe781d874acb4e"
+    },
+    {
+      "name": "51-channel-id/malformed-checksum",
+      "records": 3,
+      "sha256": "6aa0d0f363a0447cf29527f1453af2fb972694a2059d01d4b40e76c065658f13"
+    },
+    {
+      "name": "58-channel-crc-mode/valid",
+      "records": 4,
+      "sha256": "96c5044b013cc20ccb2c0e873fc384c65d52032188a55ac21e8bfd6bad1409c4"
+    },
+    {
+      "name": "58-channel-crc-mode/malformed-short",
+      "records": 4,
+      "sha256": "fc41f48d2a8f73e8cf61e8cd5e932bf0a46955b04e2eb45698645e7c362fd6c7"
+    },
+    {
+      "name": "58-channel-crc-mode/malformed-long",
+      "records": 4,
+      "sha256": "4ef683492acfa089089e4b46b32c4ce1399f7f129f209500eee34a9b35f58faf"
+    },
+    {
+      "name": "58-channel-crc-mode/malformed-oob-index",
+      "records": 4,
+      "sha256": "a252a14f74a8842bd777837dc66107f55e3b03f88747776a9715ddd4d2c82caf"
+    },
+    {
+      "name": "58-channel-crc-mode/malformed-param-ff",
+      "records": 4,
+      "sha256": "5b2faaf70865403f3a0f789941c43a7d6cb5f77d7d14c56063a51eb63babaddd"
+    },
+    {
+      "name": "58-channel-crc-mode/malformed-checksum",
+      "records": 3,
+      "sha256": "f0035291099f09116032339fad33447a6882bab3cfcb35035b2531ea308c8057"
+    },
+    {
+      "name": "59-id-list-add/valid",
+      "records": 6,
+      "sha256": "75f63f195fd24ec7433af7b448b90237e922fcbbdd98a9c0f5ce2c630f19b6a7"
+    },
+    {
+      "name": "59-id-list-add/malformed-short",
+      "records": 6,
+      "sha256": "7949e2bb61c75fcff06809b191d993cb1ab2c816b6a9e84100897b7163185e0f"
+    },
+    {
+      "name": "59-id-list-add/malformed-long",
+      "records": 6,
+      "sha256": "ac01e2d75b7476d0e8580e7f876642efde3c09582bf8a2fc6e5ea25f2a8551ac"
+    },
+    {
+      "name": "59-id-list-add/malformed-oob-index",
+      "records": 6,
+      "sha256": "d2da208ba5ed9bc90911beb5b964047241dbc87ea4e0cbb8f5c4b98008fbdd02"
+    },
+    {
+      "name": "59-id-list-add/malformed-param-ff",
+      "records": 6,
+      "sha256": "70e393713baf0d3f5386dc20b14c55877e4b7a13a108b5310854f63f4d27eb9d"
+    },
+    {
+      "name": "59-id-list-add/malformed-checksum",
+      "records": 3,
+      "sha256": "958c4d03a96cee1cd6dbd1ef5a1af33d8ac97e7f00f37de803fa2e67ffb7a83c"
+    },
+    {
+      "name": "5a-id-list-config/valid",
+      "records": 6,
+      "sha256": "c614aa60c48212f73f34a69d5be7498b1e71631a930be3c2cb84a85ea80e2b34"
+    },
+    {
+      "name": "5a-id-list-config/malformed-short",
+      "records": 6,
+      "sha256": "7687fcd88b0587ef1d7cd72f40d775868e5d282e5f04e0ac5e061dac7cb63df5"
+    },
+    {
+      "name": "5a-id-list-config/malformed-long",
+      "records": 6,
+      "sha256": "abf788772bb54ad7367d584693f35a57c7eeb5897736ae874fc9a79b67b499a7"
+    },
+    {
+      "name": "5a-id-list-config/malformed-oob-index",
+      "records": 6,
+      "sha256": "b8f21307f1ac0207b1fad2dad53d8a63bb63876e7b2b6e64cd83861627c29ddb"
+    },
+    {
+      "name": "5a-id-list-config/malformed-param-ff",
+      "records": 6,
+      "sha256": "e8da215ca70666b22832e56d9c1e5d67b824b8641d1360e444a0eec7664f6a78"
+    },
+    {
+      "name": "5a-id-list-config/malformed-checksum",
+      "records": 3,
+      "sha256": "0b532814321b87882bc714324bdd4abf1c964711640a7730f9c51a9f995b67c8"
+    },
+    {
+      "name": "5e-ext-acknowledged-data/valid",
+      "records": 4,
+      "sha256": "1331f55df20ba326ebd73944e93ff8c882b917357777164e438ec728459aac1a"
+    },
+    {
+      "name": "5e-ext-acknowledged-data/malformed-short",
+      "records": 4,
+      "sha256": "6b1e884253c879f5012dde5108ce3b3039c832e4c3a438e72a91d46d75c5ee43"
+    },
+    {
+      "name": "5e-ext-acknowledged-data/malformed-long",
+      "records": 4,
+      "sha256": "476288485ddda06911e4b1c82e12632249a8b041a475aa063e337a2ad68a3c0f"
+    },
+    {
+      "name": "5e-ext-acknowledged-data/malformed-oob-index",
+      "records": 4,
+      "sha256": "29699f4c9c05b80fc813f1cb36dc40d4fbeddfce86ff8c86a8ff668f83dc46c3"
+    },
+    {
+      "name": "5e-ext-acknowledged-data/malformed-param-ff",
+      "records": 4,
+      "sha256": "adf909f5fee364f6a178293dc488c64bef0c8e46fb1ceaaf01e8ebd820d22707"
+    },
+    {
+      "name": "5e-ext-acknowledged-data/malformed-checksum",
+      "records": 3,
+      "sha256": "72253327640a4b4b3d6aeaa276b02bd43149505328132155694007c16fcbfd94"
+    },
+    {
+      "name": "5f-ext-burst-data/valid",
+      "records": 4,
+      "sha256": "fef39ccf0b2e1a2785c46e0a1c330b7ab9f2cce9f35fcf2149845c387940faf3"
+    },
+    {
+      "name": "5f-ext-burst-data/malformed-short",
+      "records": 4,
+      "sha256": "768b7807b234b72197432332a8182b71390aecfe95b816a12144229745dc23b6"
+    },
+    {
+      "name": "5f-ext-burst-data/malformed-long",
+      "records": 4,
+      "sha256": "83761d3f8194599ddc670ac9aff56426208350b6763869a1028e1284e56593bc"
+    },
+    {
+      "name": "5f-ext-burst-data/malformed-oob-index",
+      "records": 4,
+      "sha256": "c3c709e8880b1c2e0bceb3dc5fd2a865d6631b80733a048dfa5d6372b1c965c4"
+    },
+    {
+      "name": "5f-ext-burst-data/malformed-param-ff",
+      "records": 4,
+      "sha256": "bf94ffe265d79f39fee506df25abec4fc912a5da3354cdb704e0d012ddad4568"
+    },
+    {
+      "name": "5f-ext-burst-data/malformed-checksum",
+      "records": 3,
+      "sha256": "93c09909f9a7e34f834570a003ca80ba2711dd8cfc37001bc10f7f4cf89b77d9"
+    },
+    {
+      "name": "60-channel-radio-tx-power/valid",
+      "records": 6,
+      "sha256": "a1b104db8bb7c01562ab0b232195475ad587188b11c99eb5f85fb3e619bc13f0"
+    },
+    {
+      "name": "60-channel-radio-tx-power/malformed-short",
+      "records": 6,
+      "sha256": "fb3fc094141bb7060be36e9b9682d64bdc025f3a47eb6462a1bda9797242968f"
+    },
+    {
+      "name": "60-channel-radio-tx-power/malformed-long",
+      "records": 6,
+      "sha256": "1655d0d998996d270a7b7295c676311631ac07c17d0dfdc21b9e1f43ff8fffb6"
+    },
+    {
+      "name": "60-channel-radio-tx-power/malformed-oob-index",
+      "records": 6,
+      "sha256": "fa6055364133be697a9af0f171fe5733bb0ed09db685bb2b16154b4a940b2bc2"
+    },
+    {
+      "name": "60-channel-radio-tx-power/malformed-param-ff",
+      "records": 6,
+      "sha256": "00c966cdb586d2f1b7fcedca296c72cc9df1e8d763a2b773377f895d96b27470"
+    },
+    {
+      "name": "60-channel-radio-tx-power/malformed-checksum",
+      "records": 3,
+      "sha256": "5127e3ecf1a57d3b4ed74265cacf39548396d3cf67458b41927597948b18908a"
+    },
+    {
+      "name": "61-get-serial-num/valid",
+      "records": 4,
+      "sha256": "817d21518d77d3c1192779e27525da56d59d19aac5e9b637adabd8748c884ef0"
+    },
+    {
+      "name": "61-get-serial-num/malformed-long",
+      "records": 4,
+      "sha256": "f06dbbdd565b305f39889079ac142acadb569ec7ce3ea7fe85b87735a32889e9"
+    },
+    {
+      "name": "61-get-serial-num/malformed-checksum",
+      "records": 3,
+      "sha256": "84154c5099468f712b2afd1b826d79300d506cad4b37c4f2ab92e00a50fba745"
+    },
+    {
+      "name": "63-set-lp-search-timeout/valid",
+      "records": 6,
+      "sha256": "1146a11e73303a1afdbb143e9eee795e080d67b7890a49248e3fba3350ff2932"
+    },
+    {
+      "name": "63-set-lp-search-timeout/malformed-short",
+      "records": 6,
+      "sha256": "7129f4493806bc69ded106ef1ef3878f9177435dc0cb3ad8c2aa20f40b3375f5"
+    },
+    {
+      "name": "63-set-lp-search-timeout/malformed-long",
+      "records": 6,
+      "sha256": "1033d4223d3bf963726262d6f2a0a06dc5139f2c60cb661d031f9b9127c12ca3"
+    },
+    {
+      "name": "63-set-lp-search-timeout/malformed-oob-index",
+      "records": 6,
+      "sha256": "d6b52af0378836a31fc087e88b1f6125f7f347598a306d2fc0669d0cf86b06b7"
+    },
+    {
+      "name": "63-set-lp-search-timeout/malformed-param-ff",
+      "records": 6,
+      "sha256": "4163f31d6fc2d87aca6ecf5d01781996bfeae59203dc995aa57c979fd98b83d8"
+    },
+    {
+      "name": "63-set-lp-search-timeout/malformed-checksum",
+      "records": 3,
+      "sha256": "4193c65ff51cba808dd22ab95b33f0094e412a20bca2282210a5bc04c9b4ef19"
+    },
+    {
+      "name": "65-serial-num-set-channel-id/valid",
+      "records": 4,
+      "sha256": "f0a5e492035d4fc6c9bf089daecaeaedf4685bfd90d804332a8762d69f80c6a0"
+    },
+    {
+      "name": "65-serial-num-set-channel-id/malformed-short",
+      "records": 4,
+      "sha256": "e0496ba3f531165c116037d52bb8d1892fa52ebb123c90019838f5868dccaf35"
+    },
+    {
+      "name": "65-serial-num-set-channel-id/malformed-long",
+      "records": 4,
+      "sha256": "47b7c5c4d1f529c7a83eaacfca05888d1a70ebf80612cc17266be154d898785c"
+    },
+    {
+      "name": "65-serial-num-set-channel-id/malformed-oob-index",
+      "records": 4,
+      "sha256": "4d5ed493b2e6fa2c4daf1c9c1b1664ed023932e552cfc7f0f90216d9230c07ad"
+    },
+    {
+      "name": "65-serial-num-set-channel-id/malformed-param-ff",
+      "records": 4,
+      "sha256": "8b22271393ffbd82cc306ff218cf86497379db5137119ccb13d4f19f212caa0b"
+    },
+    {
+      "name": "65-serial-num-set-channel-id/malformed-checksum",
+      "records": 3,
+      "sha256": "cc4847188f3683748712acac53642f80f51a6bdb0c8530aba1dfb6239d6cac48"
+    },
+    {
+      "name": "66-rx-ext-mesgs-enable/valid",
+      "records": 4,
+      "sha256": "ed214c0b3818c218b7c7d6adf1fe6ccef2cbb91eff9f9b8423d03b9585e10268"
+    },
+    {
+      "name": "66-rx-ext-mesgs-enable/malformed-short",
+      "records": 4,
+      "sha256": "9c8cdd7f6a94ef8410403020a6dbc6640a06b8880ec22815f9d31ce28acf6011"
+    },
+    {
+      "name": "66-rx-ext-mesgs-enable/malformed-long",
+      "records": 4,
+      "sha256": "50b100265841ef139f979019daa6f9aeb13dbf0e41ada76b856828ee3cdfb571"
+    },
+    {
+      "name": "66-rx-ext-mesgs-enable/malformed-oob-index",
+      "records": 4,
+      "sha256": "7b998f883c01f4d32b60dd5211acaa289baedb161bd29896092a2da3adfb9a42"
+    },
+    {
+      "name": "66-rx-ext-mesgs-enable/malformed-param-ff",
+      "records": 4,
+      "sha256": "25d5b2e67e6e01729f3642fcec7f0efa5fa9545b3323bc3e08545e69dcf53b0c"
+    },
+    {
+      "name": "66-rx-ext-mesgs-enable/malformed-checksum",
+      "records": 3,
+      "sha256": "5a5333266a395074ca1917361244be36465f708d1ec168199975fde35891bdda"
+    },
+    {
+      "name": "68-enable-led-flash/valid",
+      "records": 4,
+      "sha256": "53ccf9722ee37b86fb1615d964de3ca461eaa07a0bbe8b293843e85474685ead"
+    },
+    {
+      "name": "68-enable-led-flash/malformed-short",
+      "records": 4,
+      "sha256": "a34ed425f2832509431364b9e49a08111d224def320847a597eb204596577922"
+    },
+    {
+      "name": "68-enable-led-flash/malformed-long",
+      "records": 4,
+      "sha256": "db3f19aec03fc5efd2bffa53125c6449220240a2dfb51e9a5d50cc1c485e56ca"
+    },
+    {
+      "name": "68-enable-led-flash/malformed-oob-index",
+      "records": 4,
+      "sha256": "344968a7c8af7a582b61cbf2c6291d1d89071015685a58e4cb5546e52da31256"
+    },
+    {
+      "name": "68-enable-led-flash/malformed-param-ff",
+      "records": 4,
+      "sha256": "519598cc4ab7b9e90954582a5a4ccbb3def7cef88d23fb7b8b85599013d9de3a"
+    },
+    {
+      "name": "68-enable-led-flash/malformed-checksum",
+      "records": 3,
+      "sha256": "8fad8e2aef133073586d8a98861e16603e3dc4ba9b7d62520a9e75ce26a77e21"
+    },
+    {
+      "name": "6d-xtal-enable/valid",
+      "records": 4,
+      "sha256": "49f61654546ea9e993a4d878b3a008a7732930832893f40427ae749e822ccec7"
+    },
+    {
+      "name": "6d-xtal-enable/malformed-short",
+      "records": 4,
+      "sha256": "b875aec1d7c69c5af3e22475d794057b76253023ba4d34679e8d1597c9930db4"
+    },
+    {
+      "name": "6d-xtal-enable/malformed-long",
+      "records": 4,
+      "sha256": "0e363fa3e7ed4cf6a218244f9d31348912e83b75e6a68f13fe3750e70232b490"
+    },
+    {
+      "name": "6d-xtal-enable/malformed-oob-index",
+      "records": 4,
+      "sha256": "7d598b2f4e21663daaa64b8cc6c5d3e1fa2e716dbc63b743a784fb7e067c39bd"
+    },
+    {
+      "name": "6d-xtal-enable/malformed-checksum",
+      "records": 3,
+      "sha256": "c1603d0fa6199f2981b3ac153fad74e95673a7cf63681eb2b179f0b7bd4afafd"
+    },
+    {
+      "name": "6e-antlib-config/valid",
+      "records": 4,
+      "sha256": "c21a14d9df60e2c30491c6b0dd67946f4ecfdcc5e6f95d93b92baf566e56b633"
+    },
+    {
+      "name": "6e-antlib-config/malformed-short",
+      "records": 4,
+      "sha256": "15edd9d4166533789f2f4a6b88c98830ccf74b80400606a5ff23895e9ceb1728"
+    },
+    {
+      "name": "6e-antlib-config/malformed-long",
+      "records": 4,
+      "sha256": "d9c668adafd25b1c17c4a2511ba6565019a5ab940000a1dbcb24638da576795d"
+    },
+    {
+      "name": "6e-antlib-config/malformed-oob-index",
+      "records": 4,
+      "sha256": "3436e45060c257ab56fd14431b5c52ee7bf407bdd58b0c55f8966c9763be6b29"
+    },
+    {
+      "name": "6e-antlib-config/malformed-param-ff",
+      "records": 4,
+      "sha256": "884f280cce86f7f1cc7139902c41a5efe19d78b1fce1f8194d85759ffc7ccbb2"
+    },
+    {
+      "name": "6e-antlib-config/malformed-checksum",
+      "records": 3,
+      "sha256": "9124cc53356485a10c5678ee527dabda20178b6566acfe735fd309a2b09ad8b9"
+    },
+    {
+      "name": "70-auto-freq-config/valid",
+      "records": 6,
+      "sha256": "7295f76753b9bf6b86ba38e9635d59070c2b7481784ba22e2f57e27d92f30741"
+    },
+    {
+      "name": "70-auto-freq-config/malformed-short",
+      "records": 6,
+      "sha256": "37c96b4a735bb28a6bb4356bc70ec0e961152e3d1daff3af8abde9857c179e0d"
+    },
+    {
+      "name": "70-auto-freq-config/malformed-long",
+      "records": 6,
+      "sha256": "c9c25f738a67384b45c4ef5713729458fd27b9b20a52a17e6f969875ac9c2a82"
+    },
+    {
+      "name": "70-auto-freq-config/malformed-oob-index",
+      "records": 6,
+      "sha256": "2aa5ff826a131513c33bccf0441b25b2d38c40624bddbbc0134ecc690db97b7f"
+    },
+    {
+      "name": "70-auto-freq-config/malformed-param-ff",
+      "records": 6,
+      "sha256": "aa140c6bf5b1b93c93a265d41825b734d56bef99e558e6abdcfc396d9db1a8ad"
+    },
+    {
+      "name": "70-auto-freq-config/malformed-checksum",
+      "records": 3,
+      "sha256": "98aab98412f521474bb6aa03f0c2b9dadaf2ab306bc8528468dfa4848bea2b45"
+    },
+    {
+      "name": "71-prox-search-config/valid",
+      "records": 6,
+      "sha256": "a93dbf71979f2d6cd5e1d8dfe46e0d0a35a70f6d4820024589e12674a6ef9acb"
+    },
+    {
+      "name": "71-prox-search-config/malformed-short",
+      "records": 6,
+      "sha256": "a52e50c886694c0bf7470eb7f79ad2240946d946b8ac4efc469ac8310305e7fb"
+    },
+    {
+      "name": "71-prox-search-config/malformed-long",
+      "records": 6,
+      "sha256": "d6cf9303ae6ea341c0cf373cedaed4dc075c768429b83a5c57718406635e57c6"
+    },
+    {
+      "name": "71-prox-search-config/malformed-oob-index",
+      "records": 6,
+      "sha256": "cb2c6e0c67d1c42621377923ff1a317a424b7f047c8b36247c51b74a9ea3f9c8"
+    },
+    {
+      "name": "71-prox-search-config/malformed-param-ff",
+      "records": 6,
+      "sha256": "0faa9324a4e1e3b04556fc3841d204b01236267f900d48bec2b95aff1d3d26bb"
+    },
+    {
+      "name": "71-prox-search-config/malformed-checksum",
+      "records": 3,
+      "sha256": "0832637d559efeed5670c62a978443e28be19da4d7dbd6ec863d0c827bdbe560"
+    },
+    {
+      "name": "72-adv-burst-data/valid",
+      "records": 4,
+      "sha256": "b823feb1f52d0ef11f6287ab448d2349caa6612ab53cf36638b55c893aec5bbc"
+    },
+    {
+      "name": "72-adv-burst-data/malformed-short",
+      "records": 4,
+      "sha256": "3850ec36919b84a94edd1939631251c3559d732596a9b2272366e9bed3a9b6b1"
+    },
+    {
+      "name": "72-adv-burst-data/malformed-long",
+      "records": 4,
+      "sha256": "d830cc140b8994196c73a24d4dd4270635fdd16cec0e51874f2afd5f250b6f8d"
+    },
+    {
+      "name": "72-adv-burst-data/malformed-oob-index",
+      "records": 4,
+      "sha256": "88e19435441663a1490b1637bc5dd4bb8142ebb6f0a1baeec914cd749945d7c7"
+    },
+    {
+      "name": "72-adv-burst-data/malformed-param-ff",
+      "records": 4,
+      "sha256": "865c4350ddf4e027042653472f2ed75a790cacd88f2aac86424f35e9bda34f70"
+    },
+    {
+      "name": "72-adv-burst-data/malformed-checksum",
+      "records": 3,
+      "sha256": "711c59ef7b80e9e77790f72d617c02b8f6209a194bedc078c8229eeb66fabc2f"
+    },
+    {
+      "name": "74-event-buffering-config/valid",
+      "records": 4,
+      "sha256": "ab17eea5bbe88bce0a6d8dd798395f4be106f4166d141ba607ce1e809d97aab0"
+    },
+    {
+      "name": "74-event-buffering-config/malformed-short",
+      "records": 4,
+      "sha256": "b7f9673df8cd02f86fcb10a33a639acfa298bd8cd627d8ddb67cdf3c7cabb73b"
+    },
+    {
+      "name": "74-event-buffering-config/malformed-long",
+      "records": 4,
+      "sha256": "89f487ba1098ec126a7873204221e6d6206a11dd3501c87c8b99cf434a3c59b7"
+    },
+    {
+      "name": "74-event-buffering-config/malformed-oob-index",
+      "records": 4,
+      "sha256": "803fbe7d531a284796ecbbc8e356de543e28b80083d07b5995698f07e7d98317"
+    },
+    {
+      "name": "74-event-buffering-config/malformed-param-ff",
+      "records": 4,
+      "sha256": "a7cb43c21c5acacff3c35e1f27e2affff63dbb1ca96b05b015be77136630c483"
+    },
+    {
+      "name": "74-event-buffering-config/malformed-checksum",
+      "records": 3,
+      "sha256": "0abe3bbb34e900a6064504a52016740d3109f6f687693035e7f894e990fdb16c"
+    },
+    {
+      "name": "75-set-search-ch-priority/valid",
+      "records": 6,
+      "sha256": "89a17c5fc7fd1516324f756b14c578b87ce33156bc3bdd96e44c819b25413ed5"
+    },
+    {
+      "name": "75-set-search-ch-priority/malformed-short",
+      "records": 6,
+      "sha256": "6b0e8663df0f1544510c0b3e121eb3185d40fd03a3c3c8141bf33847d66a32f5"
+    },
+    {
+      "name": "75-set-search-ch-priority/malformed-long",
+      "records": 6,
+      "sha256": "28ca5a4758d42a2d1fcc6c253b488367513ed62dbcc9916970962ef50691d0d0"
+    },
+    {
+      "name": "75-set-search-ch-priority/malformed-oob-index",
+      "records": 6,
+      "sha256": "18fedd046e980ddfdcd3322a7655c1233651bc5cc9e6ff34971a0ebabdc959ca"
+    },
+    {
+      "name": "75-set-search-ch-priority/malformed-param-ff",
+      "records": 6,
+      "sha256": "96fccc2dde8f220ea8b04b2c20f8600f841aa87bf9c228c456e71644d5e4d8bc"
+    },
+    {
+      "name": "75-set-search-ch-priority/malformed-checksum",
+      "records": 3,
+      "sha256": "4e9df0faa12545a0815661e704fa5da6539523d5244fc7cbab3896cce47761f4"
+    },
+    {
+      "name": "77-high-duty-search-mode/valid",
+      "records": 4,
+      "sha256": "ef7c66744dc29afed367cf567f4cffb6b946248cd06150eca9820265dd1dfa75"
+    },
+    {
+      "name": "77-high-duty-search-mode/malformed-short",
+      "records": 4,
+      "sha256": "6625dc23a76d34526acc112cc4aa4b7babefb7f96aa121075de17b97f4adf904"
+    },
+    {
+      "name": "77-high-duty-search-mode/malformed-long",
+      "records": 4,
+      "sha256": "14bac26911ab541001c18569c5a3d1bcc51d068c9918bd03135b6692a34b5f7d"
+    },
+    {
+      "name": "77-high-duty-search-mode/malformed-oob-index",
+      "records": 4,
+      "sha256": "57682ebefef04bf9cac655f7b42622597369bc502622cbbe4019dfc065bb6e4c"
+    },
+    {
+      "name": "77-high-duty-search-mode/malformed-param-ff",
+      "records": 4,
+      "sha256": "b79879c5d697634b356a97c79b1f4df02a71797d79f848fdb8d33ddc22d65e77"
+    },
+    {
+      "name": "77-high-duty-search-mode/malformed-checksum",
+      "records": 3,
+      "sha256": "ab7eecd00d0e4ff28391cc0842aa3f620789de57cb74857da23e1d604c8f6759"
+    },
+    {
+      "name": "78-config-adv-burst/valid",
+      "records": 4,
+      "sha256": "fbf1f7c066e3df50baf317cc29338885ccd17d71a70ec1adfc6f0a3bd4724a50"
+    },
+    {
+      "name": "78-config-adv-burst/malformed-short",
+      "records": 4,
+      "sha256": "81078275c237e260beba29457004fd780d6c8653b5598982111501cb7dd741d3"
+    },
+    {
+      "name": "78-config-adv-burst/malformed-long",
+      "records": 4,
+      "sha256": "cadf3e21f881c65964d1e65d4add4e2670b885506d765e5bd4d60627924c5e3d"
+    },
+    {
+      "name": "78-config-adv-burst/malformed-oob-index",
+      "records": 4,
+      "sha256": "d5a5b77ccbab9649e8d2fb17bba4fd79545a7e9e205348157fdd273c9d57cff1"
+    },
+    {
+      "name": "78-config-adv-burst/malformed-param-ff",
+      "records": 4,
+      "sha256": "efa8fd1cc48f9ddf2161335c3b26b2b28cf2855fb1e468c2f3e1245d752409eb"
+    },
+    {
+      "name": "78-config-adv-burst/malformed-checksum",
+      "records": 3,
+      "sha256": "7384423f9fedb6ef43565375597e22ce92599ae32a8d948fa15fcfc25988b2dc"
+    },
+    {
+      "name": "79-event-filter-config/valid",
+      "records": 4,
+      "sha256": "9c5015c993f86183e5bcb904cc650bcee39d714ecc5a7f845a1c5fdfab1afc2d"
+    },
+    {
+      "name": "79-event-filter-config/malformed-short",
+      "records": 4,
+      "sha256": "ad64882adee40d5f519b9e972dd47b9a3e931434bdddff9d924ef4cf2f332398"
+    },
+    {
+      "name": "79-event-filter-config/malformed-long",
+      "records": 4,
+      "sha256": "a3420e0122295407ba414e07b653d8916abf4eb3b9a1945e278a8f11b8ea93bc"
+    },
+    {
+      "name": "79-event-filter-config/malformed-oob-index",
+      "records": 4,
+      "sha256": "a3309a6dbdd5ba7bcb58d504b736cc8e6f475fe9b116df54c2e2884e07a18439"
+    },
+    {
+      "name": "79-event-filter-config/malformed-param-ff",
+      "records": 4,
+      "sha256": "7b8fd978e52a0f533ae2adeea906a90f449695fd1cce10e0ec7f22a12c0c60be"
+    },
+    {
+      "name": "79-event-filter-config/malformed-checksum",
+      "records": 3,
+      "sha256": "0f9fe29c6b93af9d6c6370d3c23b3b490404547afde0a75502e1f9579d8130c4"
+    },
+    {
+      "name": "7a-sdu-config/valid",
+      "records": 6,
+      "sha256": "138b1d25aea419af6be4752d59a1267b831b3472a6901db40e98c605f95e1b45"
+    },
+    {
+      "name": "7a-sdu-config/malformed-short",
+      "records": 6,
+      "sha256": "4bf0fc191bb10e0102be3d01cadb7e25066a302d2d7ec00d4a9d2f6572578a8d"
+    },
+    {
+      "name": "7a-sdu-config/malformed-long",
+      "records": 6,
+      "sha256": "1b011e08796b960ab4ba89c4addb5e850ba197738933d4a9638ae2204f64dad2"
+    },
+    {
+      "name": "7a-sdu-config/malformed-oob-index",
+      "records": 6,
+      "sha256": "7e8d5f8b925c3600f9ab3ba2b47256ddfff10657f1ae32d6ad8ac76e072afacf"
+    },
+    {
+      "name": "7a-sdu-config/malformed-checksum",
+      "records": 3,
+      "sha256": "dbcf151490e132f6cec756a23a96f2166e1ec9a893c56fdada4d243175db433d"
+    },
+    {
+      "name": "7b-sdu-set-mask/valid",
+      "records": 4,
+      "sha256": "984d09bb2b85f99dc1d85f9b66d8256aee39630929ca387a6ece432eb5b02a59"
+    },
+    {
+      "name": "7b-sdu-set-mask/malformed-short",
+      "records": 4,
+      "sha256": "6adfc6ae4814662e94536928031a569abf53286d4eecad73f0dea2123b749256"
+    },
+    {
+      "name": "7b-sdu-set-mask/malformed-long",
+      "records": 4,
+      "sha256": "f257f0e6390729cfdfdfeb13e014f8493fc04090ae482ab3d73072b2bf647f7d"
+    },
+    {
+      "name": "7b-sdu-set-mask/malformed-oob-index",
+      "records": 4,
+      "sha256": "de01233cc4732ed7782ecd994dc9be14dada257b86fabc1de429cf64f69ef7b3"
+    },
+    {
+      "name": "7b-sdu-set-mask/malformed-checksum",
+      "records": 3,
+      "sha256": "6edd37ccb297317dac5e6a4df2773a6567432b69676d7d5324a99e77dc252ce8"
+    },
+    {
+      "name": "7c-user-config-page/valid",
+      "records": 4,
+      "sha256": "c5c81f4bfaf5bc4c08233c94c9d6b2aede4f57e7e3292e5667e4d846b6f97aaf"
+    },
+    {
+      "name": "7c-user-config-page/malformed-oob-index",
+      "records": 4,
+      "sha256": "c18836e26e31bed7102e846a2b85c35123400f5ff368353b0e6bfda6c740f059"
+    },
+    {
+      "name": "7c-user-config-page/malformed-param-ff",
+      "records": 4,
+      "sha256": "6592ac72a923ac403efb743775df20a698cce449b963977435ea86b7ea3c8038"
+    },
+    {
+      "name": "7c-user-config-page/malformed-checksum",
+      "records": 3,
+      "sha256": "d37f2873e6d2396e3126ee35a0d3f702844dbcdd762ea55e4d8f13448800ec18"
+    },
+    {
+      "name": "7d-encrypt-enable/valid",
+      "records": 6,
+      "sha256": "0a157bfca9fa6545b78643fa70c5b591e7be66deda17ddf222523658e5d1dc96"
+    },
+    {
+      "name": "7d-encrypt-enable/malformed-short",
+      "records": 6,
+      "sha256": "92378e5cb09262b0ad5c62b48386e1fbe54df7b6b5eff3f42a1d54f5e86ff42e"
+    },
+    {
+      "name": "7d-encrypt-enable/malformed-long",
+      "records": 6,
+      "sha256": "0fbb805159503eae294ff04dda1ba55ce52768dec8be3845e287ac5fe19982aa"
+    },
+    {
+      "name": "7d-encrypt-enable/malformed-oob-index",
+      "records": 6,
+      "sha256": "b061a837a8e8beddf0b73fc9bf4c7cf23380dbf117c80587ec43d03e35776e08"
+    },
+    {
+      "name": "7d-encrypt-enable/malformed-param-ff",
+      "records": 6,
+      "sha256": "b8476f1ac2298f7917e841435e0a173a6c5bc817afd81a13c2a98b7fc3fcaa02"
+    },
+    {
+      "name": "7d-encrypt-enable/malformed-checksum",
+      "records": 3,
+      "sha256": "8ad28bb9194ff18bb74e5d7f2ef5ef824100fecfc6f660f8b8d20ee1f707173b"
+    },
+    {
+      "name": "7e-set-encrypt-key/valid",
+      "records": 4,
+      "sha256": "6a0e0deddd8015f9d66f06e2bb2655c015e72abf6ba58ee12347adaa7e1e4549"
+    },
+    {
+      "name": "7e-set-encrypt-key/malformed-short",
+      "records": 4,
+      "sha256": "1838cd23054bc35fa707e0cb499eade801964f393fa236dd76b17eff25c2c6d7"
+    },
+    {
+      "name": "7e-set-encrypt-key/malformed-long",
+      "records": 4,
+      "sha256": "0df93069fd5a2c77a102593329ffe8d2194c559a9ee506f44a21a74bc279730c"
+    },
+    {
+      "name": "7e-set-encrypt-key/malformed-oob-index",
+      "records": 4,
+      "sha256": "00870a7389f7ca22c396d56f63808aae61b732b411f8b153e468a07bf1290987"
+    },
+    {
+      "name": "7e-set-encrypt-key/malformed-param-ff",
+      "records": 4,
+      "sha256": "9889cd1e13f52d260c62e2d33d0fa7f9e085801344bf8bed1d6dfbd5efbd6995"
+    },
+    {
+      "name": "7e-set-encrypt-key/malformed-checksum",
+      "records": 3,
+      "sha256": "f92bdfcc17100ead63d7664c3509824f3b295f704db0178ac1fe95500d477fa7"
+    },
+    {
+      "name": "7f-set-encrypt-info/valid",
+      "records": 4,
+      "sha256": "493371511bc2bc81469ff0ff7c6f9f8f297263e4c83f9b0ae97ab380ba5b4528"
+    },
+    {
+      "name": "7f-set-encrypt-info/malformed-short",
+      "records": 4,
+      "sha256": "1d9ed6d0aa6d9f28a68f586795122e86df1217a288e4040e08965337c090e84e"
+    },
+    {
+      "name": "7f-set-encrypt-info/malformed-long",
+      "records": 4,
+      "sha256": "c8ba81f37150125c8750a97d7cae6570c2f45ad140251cfd73ff9fc0d4ce3034"
+    },
+    {
+      "name": "7f-set-encrypt-info/malformed-oob-index",
+      "records": 4,
+      "sha256": "3b4b8edd20aeb13058e7c02ab9d85919b01357a001d6742f28b7c006d81ef24b"
+    },
+    {
+      "name": "7f-set-encrypt-info/malformed-param-ff",
+      "records": 4,
+      "sha256": "2ef7b0b0040886cddc86711e0385fd6e7f56e2d43bddca35dd6b1ce84452b431"
+    },
+    {
+      "name": "7f-set-encrypt-info/malformed-checksum",
+      "records": 3,
+      "sha256": "31cde4303c699dab31a8a6d055aabc7f83045af42c9d17de42fad76e15356d51"
+    },
+    {
+      "name": "81-active-search-sharing/valid",
+      "records": 6,
+      "sha256": "3d5b1982340df3ac1845425b96c308321db257559f9c466cf955d6fbf9e79244"
+    },
+    {
+      "name": "81-active-search-sharing/malformed-short",
+      "records": 6,
+      "sha256": "70a01497146e25ec05fcc039ddf6a4719ea04f92fd4b5b10a59f1f25f2ff77f2"
+    },
+    {
+      "name": "81-active-search-sharing/malformed-long",
+      "records": 6,
+      "sha256": "468716a813150f3362188cf03619a691c0f25d4ac234e424d60e689277fdf08c"
+    },
+    {
+      "name": "81-active-search-sharing/malformed-oob-index",
+      "records": 6,
+      "sha256": "a1d3937c0e61bfcb8697685467f5170d4805ddc6aa5a4e915e0bfd1d967e5b34"
+    },
+    {
+      "name": "81-active-search-sharing/malformed-param-ff",
+      "records": 6,
+      "sha256": "09a6f57e25cc5389674dc31be8836216274a66c845bbc07caf58bec070e616ba"
+    },
+    {
+      "name": "81-active-search-sharing/malformed-checksum",
+      "records": 3,
+      "sha256": "622018b1484dcfb47ccf5e68aa35d9ae28079173b410dd15116192d47fca3517"
+    },
+    {
+      "name": "89-ecs-enable/valid",
+      "records": 4,
+      "sha256": "cb86029355e8c2c616c51aa24bdc99594a34dba884146ccbeb90163e42f6b8a8"
+    },
+    {
+      "name": "89-ecs-enable/malformed-short",
+      "records": 4,
+      "sha256": "0d93b883166c2ca8cea3b0a4acf366b6b58946c2783c0f919709bb4036d909de"
+    },
+    {
+      "name": "89-ecs-enable/malformed-long",
+      "records": 4,
+      "sha256": "b79a1af8cd59ef155dcea274876d00477595f5f6cc9311619d427bf9b2a069e5"
+    },
+    {
+      "name": "89-ecs-enable/malformed-oob-index",
+      "records": 4,
+      "sha256": "04df02bc83d9f4b0c0b90c1f6f86ae7901b86847349a0ec2def286e78ab0622c"
+    },
+    {
+      "name": "89-ecs-enable/malformed-param-ff",
+      "records": 4,
+      "sha256": "1fc662823855c9a6bc9373f7ce642c3f02d911354f2d49d23f491a3514b54680"
+    },
+    {
+      "name": "89-ecs-enable/malformed-checksum",
+      "records": 3,
+      "sha256": "30d0b151e4a331266df0e453d103be920abf2c1f94f1ada6629254a1a0249dcf"
+    },
+    {
+      "name": "8c-pending-transmit-clear/valid",
+      "records": 5,
+      "sha256": "4b633b73644b9e8f9f4d5aac28c303a812c791a4fe44fac9c58a5c801b33f5ba"
+    },
+    {
+      "name": "8c-pending-transmit-clear/malformed-short",
+      "records": 5,
+      "sha256": "e15c156f701778ffab1a9260d0627c658b863164b3eafbf6ab6f05e37b6ad290"
+    },
+    {
+      "name": "8c-pending-transmit-clear/malformed-long",
+      "records": 5,
+      "sha256": "1901ee40dc985c8747b72592bbb48d35b37aac6b6877410f0a8621bef4131ac9"
+    },
+    {
+      "name": "8c-pending-transmit-clear/malformed-oob-index",
+      "records": 4,
+      "sha256": "99d44101110c94c684c6ded58a71a59c899fc66719aa962a32ae4b2c90139c83"
+    },
+    {
+      "name": "8c-pending-transmit-clear/malformed-param-ff",
+      "records": 5,
+      "sha256": "51f69c00ad63f6f0c07faa34da780205fffff9a4951fd2cae2b3ed4d8f8ca36e"
+    },
+    {
+      "name": "8c-pending-transmit-clear/malformed-checksum",
+      "records": 3,
+      "sha256": "09a8a36dde14b1817d3c554fe8ad14d4f3b69ac5efb7e3eaa05bc62d284ff547"
+    },
+    {
+      "name": "4d-request-capabilities-0/valid",
+      "records": 4,
+      "sha256": "47084e031ffb2240b641d6e196f794bab35f19435cbdfc34b7de792971c3ff5d"
+    },
+    {
+      "name": "4d-request-version-0/valid",
+      "records": 4,
+      "sha256": "537456c64ca7edb02e8a0b0f7981351ca8071646d82e51c0f8112e6d2d91927b"
+    },
+    {
+      "name": "4d-request-channel-status-0/valid",
+      "records": 4,
+      "sha256": "49a2245d5c306bf6a0840116bc77e58472c74516275f7637b74bd535022ca26e"
+    },
+    {
+      "name": "4d-request-channel-id-0/valid",
+      "records": 4,
+      "sha256": "e725380ff9d16038a25b64d9dbbbc5b82abfa60f6554f30f6bcac55fd69c258e"
+    },
+    {
+      "name": "4d-request-channel-mesg-period-0/valid",
+      "records": 4,
+      "sha256": "5ab5b907789c5d2ad5fc6c2300474dd70046034a1cb162ca7d82a17911c3e882"
+    },
+    {
+      "name": "4d-request-channel-radio-freq-0/valid",
+      "records": 4,
+      "sha256": "72c3b082582aee3615bcd1b77c4542467aa2b89dfd6049a450dd7eb58e49fc56"
+    },
+    {
+      "name": "4d-request-channel-crc-mode-0/valid",
+      "records": 4,
+      "sha256": "94c6e514d22424edc57bc072abe124b6f0d7131140346913f71eed9698a4181b"
+    },
+    {
+      "name": "4d-request-antlib-config-0/valid",
+      "records": 4,
+      "sha256": "d1b36b01177f8e15a6d07fceb9efda229df0f1818d3985c30c724adc64738912"
+    },
+    {
+      "name": "4d-request-active-search-sharing-0/valid",
+      "records": 4,
+      "sha256": "bf31a493db0d9d9bd06d7d3dbde786481ccfa4f329d00569559b28b5dbfa7f1f"
+    },
+    {
+      "name": "4d-request-event-filter-config-0/valid",
+      "records": 4,
+      "sha256": "07a8c5e6c6e19e3a7aea6d8a8ab9370a0101e659bfe98df9dcb6496fe95dca25"
+    },
+    {
+      "name": "4d-request-set-search-ch-priority-0/valid",
+      "records": 4,
+      "sha256": "c4c5070abc93bda2147ea8c391ea485e1eff7e79c4a33021775e11ab4c76978c"
+    },
+    {
+      "name": "4d-request-pending-transmit-clear-0/valid",
+      "records": 4,
+      "sha256": "e29cc54cdbba8e0c8906bb9176fe224a76cae3cff7ead7fdd05efcdae9d38fb2"
+    },
+    {
+      "name": "4d-request-config-adv-burst-0/valid",
+      "records": 4,
+      "sha256": "5ba6345a067f2ba28e8474d46ddf63b6d2a32249782a9807086f388aec99ae71"
+    },
+    {
+      "name": "4d-request-config-adv-burst-1/valid",
+      "records": 4,
+      "sha256": "c6b2742cc6f636e30538127eaa984196ae90b26af1427bb45cc1d5d2b682f807"
+    },
+    {
+      "name": "4d-request-sdu-set-mask-0/valid",
+      "records": 4,
+      "sha256": "887993c7ad4e11124ad21d33e7338da444980979da1e2a428abcc3dfbfddefb6"
+    },
+    {
+      "name": "4d-request-encrypt-enable-0/valid",
+      "records": 4,
+      "sha256": "ffc490796a29a44f328078968430f8121be1da05afefba71e251c535528384f2"
+    },
+    {
+      "name": "4d-request-encrypt-enable-1/valid",
+      "records": 4,
+      "sha256": "287839b6669ca74208a8c2cd93d42ea01f0457c1b10b77f8564a1cb773acd38e"
+    },
+    {
+      "name": "4d-request-encrypt-enable-2/valid",
+      "records": 4,
+      "sha256": "712cd79d12efb656f08d88c5050d2adf7e0e19925bbaf897a4e5ee7735563fd8"
+    },
+    {
+      "name": "4d-request-encrypt-enable-3/valid",
+      "records": 4,
+      "sha256": "27154b7213f87d1e31ab84c6610a8085ad1f0d5101ca5f82991a594413a4adb4"
+    },
+    {
+      "name": "4d-request-invalid-0/valid",
+      "records": 4,
+      "sha256": "f177b8e689e31f6d021e4870c0859e9277daf50f7d01e66a191626643a6bf4e4"
+    },
+    {
+      "name": "frame/malformed-unknown-id-low",
+      "records": 4,
+      "sha256": "557bedbac911109f9e5d9cda609c67137e79cc000d786557a33ea3e63ec5c9d1"
+    },
+    {
+      "name": "frame/malformed-unknown-id-high",
+      "records": 4,
+      "sha256": "0a093c3e0e6e65b772264a3a11d0ff0496442b33daf0ed90c4499e038c27d802"
+    },
+    {
+      "name": "frame/malformed-zero-length",
+      "records": 4,
+      "sha256": "f2160561e23a7bf1feef8ff4ead92b5b521f74c3cd655f09cd84346887863ca7"
+    },
+    {
+      "name": "frame/malformed-oversize",
+      "records": 4,
+      "sha256": "11beee214bde21ba61373363922c60998a3c3b3a20a91be6f70b0cab99989c0b"
+    },
+    {
+      "name": "frame/malformed-sync",
+      "records": 3,
+      "sha256": "0e373bc10ff1472853aeeb12726d568c42f92e809bb8422d53b64a7d4888b72b"
+    },
+    {
+      "name": "frame/sync-in-payload",
+      "records": 4,
+      "sha256": "741e360f95fd39a19aff1659d161d6b9c893f819311a51e5578e64a24ec14588"
+    },
+    {
+      "name": "frame/malformed-partial-then-valid",
+      "records": 5,
+      "sha256": "034d938af589fe0fbf3f7ca114e91d33d36cf972d835b8df58ab762edc67c4b1"
+    }
+  ]
+}

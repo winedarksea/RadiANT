@@ -1,0 +1,392 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "recorded": "2026-08-09",
+    "operator": "baselines agent (Claude), unattended bench session",
+    "backend": "sdk_ant",
+    "git_describe": "ed9abe3-dirty",
+    "board": "adafruit_feather_nrf52840/nrf52840/uf2",
+    "serial_suffix": "755972D7183A6183",
+    "sdk_ant_revision": "v2.1.0",
+    "ncs_version": "v3.2.4",
+    "toolchain_bundle": "fd21892d0f",
+    "extra_conf": []
+  },
+  "rig": {
+    "transmitter": {
+      "kind": "sim_firmware",
+      "board": "nrf54l15dk/nrf54l15/cpuapp",
+      "profile": "power",
+      "seed": 1,
+      "tx_power_level": 3,
+      "description": "sim/ built from this tree at ed9abe3 and flashed over J-Link immediately before the runs. CONFIG_ANT_SIM defaults throughout: profile BPWR_STANDARD (page 0x10), device 14871, transmission type 5, 100 W, 80 rpm, noise +/-3, seed 1, RF 57, TX power level 3 (0 dBm)."
+    },
+    "receiver": {
+      "board": "adafruit_feather_nrf52840/nrf52840/uf2",
+      "antenna": "onboard MIFA PCB antenna, board lying flat on the desk"
+    },
+    "link": {
+      "kind": "fixed_open_air",
+      "attenuator_model": null,
+      "attenuation_db": null,
+      "distance_m": null,
+      "rf_channel": 57,
+      "interference": "Wi-Fi channel 11 present, which is the characterised source of the residual floor at 2457 MHz. Mean RSSI -21 dBm across both runs against a tracking threshold near -90, so roughly 70 dB of margin: this is a short bench path, not a sensitivity measurement."
+    }
+  },
+  "radio_runs": [
+    {
+      "profile": "power",
+      "seconds": 300,
+      "channels": 1,
+      "verify": {
+        "channels": [
+          {
+            "profile": "power",
+            "device_type": 11,
+            "period_ticks": 8182,
+            "packets": 1196,
+            "elapsed_s": 299.125,
+            "expected_packets": 1198.9623563920802,
+            "loss_pct": 0.24707668062194932,
+            "jitter": {
+              "n": 1195,
+              "mean_s": 0.25031380753138077,
+              "stdev_s": 0.01290711335050352,
+              "max_s": 0.5,
+              "period_s": 0.24969482421875,
+              "radio_n": 1195,
+              "offgrid_host_s": 0.003112960553238265,
+              "offgrid_radio_s": 1.1400984265560991e-05
+            },
+            "signal": {
+              "n": 1196,
+              "mean_dbm": -21.035117056856187,
+              "min_dbm": -22,
+              "max_dbm": -21
+            },
+            "pages": {
+              "0x01": 10,
+              "0x10": 1167,
+              "0x50": 9,
+              "0x51": 10
+            },
+            "common_page_gaps": {
+              "count": 18,
+              "max": 119
+            },
+            "power": {
+              "n": 1167,
+              "mean": 100.05998286203942,
+              "min": 97.0,
+              "max": 103.0,
+              "expected": 100.0,
+              "mean_abs_error": 1.667523564695801,
+              "mean_error": 0.05998286203941916
+            },
+            "cadence": {
+              "n": 1167,
+              "mean": 80.06341045415596,
+              "min": 77.0,
+              "max": 83.0,
+              "expected": 80.0,
+              "mean_abs_error": 1.7275064267352185,
+              "mean_error": 0.06341045415595659
+            },
+            "speed_mps": null,
+            "accumulator_wraps": {
+              "event_count": 5,
+              "acc_power": 1
+            },
+            "event_advances": 1166,
+            "event_comparisons": 1166,
+            "exact_loss": {
+              "scope": "page 0x10",
+              "missed": 3,
+              "sent": 1169,
+              "loss_pct": 0.2566295979469632
+            },
+            "violations": {
+              "count": 0,
+              "first": []
+            },
+            "checks": [
+              {
+                "name": "packets",
+                "pass": true,
+                "detail": "1196 received, 1199 expected over 299.1 s"
+              },
+              {
+                "name": "loss",
+                "pass": true,
+                "detail": "0.25 % (limit 1.50 %, one packet = 0.08 %)"
+              },
+              {
+                "name": "jitter",
+                "pass": true,
+                "detail": "stddev 12.9 ms, max 500.0 ms (limit 124.8 ms, period 249.7 ms)"
+              },
+              {
+                "name": "accumulator continuity",
+                "pass": true,
+                "detail": "0 violation(s)"
+              },
+              {
+                "name": "loss (exact)",
+                "pass": true,
+                "detail": "0.26 % - 3 of 1169 page 0x10 message(s) missing, counted from the transmitter's own event counter rather than a clock"
+              },
+              {
+                "name": "sensor liveness",
+                "pass": true,
+                "detail": "the event counter advanced on 1166 of 1166 packet pairs"
+              },
+              {
+                "name": "power accuracy",
+                "pass": true,
+                "detail": "mean abs error 1.67 against 100 (limit 10.00)"
+              },
+              {
+                "name": "cadence accuracy",
+                "pass": true,
+                "detail": "mean abs error 1.73 against 80 (limit 8.00)"
+              },
+              {
+                "name": "common pages",
+                "pass": true,
+                "detail": "80 x9, 81 x10, worst gap 119 (limit 121)"
+              }
+            ],
+            "pass": true
+          }
+        ],
+        "events": {
+          "EVENT_RX_FAIL": 3
+        },
+        "identities": {
+          "0": {
+            "device_number": 14871,
+            "device_type": 11
+          }
+        },
+        "accounting": {
+          "missing": 3,
+          "radio_fails": 3,
+          "unaccounted": 0,
+          "allowed_unaccounted": 2,
+          "verdict": "all of it reported by the radio as RX_FAIL, so it happened on the air",
+          "pass": true
+        },
+        "pass": true
+      },
+      "capture": "archive/captures/radio/2026-08-09-sdk-ant-power-300s.antcap",
+      "derived": {
+        "loss_pct": 0.24707668062194932,
+        "loss_exact_pct": 0.2566295979469632,
+        "unexplained_loss": 0,
+        "accumulator_violations": 0,
+        "timing_offgrid_host_ms": 3.112960553238265,
+        "timing_offgrid_radio_ms": 0.011400984265560991,
+        "time_to_first_packet_s": null,
+        "reacquire_s": null,
+        "rssi_dbm_mean": -21.035117056856187
+      }
+    },
+    {
+      "profile": "power",
+      "seconds": 300,
+      "channels": 1,
+      "verify": {
+        "channels": [
+          {
+            "profile": "power",
+            "device_type": 11,
+            "period_ticks": 8182,
+            "packets": 1199,
+            "elapsed_s": 299.875,
+            "expected_packets": 1201.9660229772671,
+            "loss_pct": 0.24676429454472126,
+            "jitter": {
+              "n": 1198,
+              "mean_s": 0.2503130217028381,
+              "stdev_s": 0.012826556369430248,
+              "max_s": 0.5,
+              "period_s": 0.24969482421875,
+              "radio_n": 1198,
+              "offgrid_host_s": 0.0028302664088489375,
+              "offgrid_radio_s": 1.5392988772280826e-05
+            },
+            "signal": {
+              "n": 1199,
+              "mean_dbm": -21.03586321934946,
+              "min_dbm": -22,
+              "max_dbm": -21
+            },
+            "pages": {
+              "0x01": 10,
+              "0x10": 1169,
+              "0x50": 10,
+              "0x51": 10
+            },
+            "common_page_gaps": {
+              "count": 19,
+              "max": 119
+            },
+            "power": {
+              "n": 1169,
+              "mean": 99.93840889649273,
+              "min": 97.0,
+              "max": 103.0,
+              "expected": 100.0,
+              "mean_abs_error": 1.7450812660393498,
+              "mean_error": -0.061591103507268485
+            },
+            "cadence": {
+              "n": 1169,
+              "mean": 79.95637296834902,
+              "min": 77.0,
+              "max": 83.0,
+              "expected": 80.0,
+              "mean_abs_error": 1.7065868263473054,
+              "mean_error": -0.043627031650984804
+            },
+            "speed_mps": null,
+            "accumulator_wraps": {
+              "event_count": 5,
+              "acc_power": 2
+            },
+            "event_advances": 1168,
+            "event_comparisons": 1168,
+            "exact_loss": {
+              "scope": "page 0x10",
+              "missed": 3,
+              "sent": 1171,
+              "loss_pct": 0.2561912894961571
+            },
+            "violations": {
+              "count": 0,
+              "first": []
+            },
+            "checks": [
+              {
+                "name": "packets",
+                "pass": true,
+                "detail": "1199 received, 1202 expected over 299.9 s"
+              },
+              {
+                "name": "loss",
+                "pass": true,
+                "detail": "0.25 % (limit 1.50 %, one packet = 0.08 %)"
+              },
+              {
+                "name": "jitter",
+                "pass": true,
+                "detail": "stddev 12.8 ms, max 500.0 ms (limit 124.8 ms, period 249.7 ms)"
+              },
+              {
+                "name": "accumulator continuity",
+                "pass": true,
+                "detail": "0 violation(s)"
+              },
+              {
+                "name": "loss (exact)",
+                "pass": true,
+                "detail": "0.26 % - 3 of 1171 page 0x10 message(s) missing, counted from the transmitter's own event counter rather than a clock"
+              },
+              {
+                "name": "sensor liveness",
+                "pass": true,
+                "detail": "the event counter advanced on 1168 of 1168 packet pairs"
+              },
+              {
+                "name": "power accuracy",
+                "pass": true,
+                "detail": "mean abs error 1.75 against 100 (limit 10.00)"
+              },
+              {
+                "name": "cadence accuracy",
+                "pass": true,
+                "detail": "mean abs error 1.71 against 80 (limit 8.00)"
+              },
+              {
+                "name": "common pages",
+                "pass": true,
+                "detail": "80 x10, 81 x10, worst gap 119 (limit 121)"
+              }
+            ],
+            "pass": true
+          }
+        ],
+        "events": {
+          "EVENT_RX_FAIL": 3
+        },
+        "identities": {
+          "0": {
+            "device_number": 14871,
+            "device_type": 11
+          }
+        },
+        "accounting": {
+          "missing": 3,
+          "radio_fails": 3,
+          "unaccounted": 0,
+          "allowed_unaccounted": 2,
+          "verdict": "all of it reported by the radio as RX_FAIL, so it happened on the air",
+          "pass": true
+        },
+        "pass": true
+      },
+      "capture": "archive/captures/radio/2026-08-09-sdk-ant-power-300s-run2.antcap",
+      "derived": {
+        "loss_pct": 0.24676429454472126,
+        "loss_exact_pct": 0.2561912894961571,
+        "unexplained_loss": 0,
+        "accumulator_violations": 0,
+        "timing_offgrid_host_ms": 2.8302664088489373,
+        "timing_offgrid_radio_ms": 0.015392988772280826,
+        "time_to_first_packet_s": null,
+        "reacquire_s": null,
+        "rssi_dbm_mean": -21.03586321934946
+      }
+    }
+  ],
+  "usb_runs": [
+    {
+      "label": "legacy",
+      "bench": {
+        "label": "legacy",
+        "count": 500,
+        "depth": 8,
+        "latency_ms": {
+          "n": 500,
+          "timeouts": 0,
+          "mean": 0.36170519987354055,
+          "p50": 0.3449000068940222,
+          "p90": 0.418099996750243,
+          "p99": 0.5984000017633662,
+          "max": 2.333800002816133
+        },
+        "throughput": {
+          "delivered": 500,
+          "timeouts": 0,
+          "elapsed_s": 0.1611203999927966,
+          "msgs_per_s": 3103.269356471025
+        }
+      },
+      "derived": {
+        "latency_p50_ms": 0.3449000068940222,
+        "latency_p90_ms": 0.418099996750243,
+        "latency_p99_ms": 0.5984000017633662,
+        "msgs_per_s": 3103.269356471025,
+        "timeouts": 0
+      }
+    }
+  ],
+  "conformance": {
+    "antser_path": "archive/captures/serial/conformance-sdk-ant.antser",
+    "sha256": "a18bce8b1a8b4011ac13f3376558aa156723946e13077ba86bcc8e94592fe35f",
+    "byte_identical_to": null,
+    "messages_exercised": 284
+  },
+  "notes": "First bench sitting after Waves 0-2 of the RadiANT refactor (the ANTW_*/antr_* seam). The image under test is the refactored sdk_ant backend, not the pre-refactor dist/ant_dongle.uf2: CONFIG_ANT_DONGLE_RADIO_SDK_ANT=y, CONFIG_ANT_DONGLE_TRANSPORT_USB_LEGACY=y, CONFIG_ANT_DONGLE_ENCRYPTION=n. FLASH 117356 B / RAM 42888 B.\n\nThere is no B leg in this sitting. ant_core does not exist yet, so both radio runs are A. They are recorded as a pair on purpose: two consecutive 300 s runs on an unmoved rig both read loss (exact) 0.26 %, which is the bottom of the 0.26-0.60 % characterised floor and fixes the run-to-run spread for this sitting at essentially zero. That is what a future A/B/A has to be read against.\n\nUnexplained loss is 0 in both runs: 3 missing packets, 3 EVENT_RX_FAIL, in each. Note the event name - ant_verify.py now emits EVENT_-prefixed names from the generated table, and loss_accounting() accepts both spellings.\n\ngit_describe is -dirty because the working tree carries the artifacts this sitting produced (this file, the two .antcap captures and the .antser transcript). No source file was modified for the measurement.\n\nDeliberately absent, not zero-filled: `sensitivity` (needs an inline attenuator or a human to move the boards through a distance sweep - neither was available unattended, and re-running the transmit-power sweep instead is explicitly closed); `scale` (libant.a allocates 8 channels, so there is nothing to measure at 32); `ack_data` (ant_session.py's acknowledged-data probe was accepted and queued by the stack but the channel stopped tracking before it went out, so no success rate can be claimed - measuring one needs a held master/slave pair, which sim/ does not provide)."
+}
