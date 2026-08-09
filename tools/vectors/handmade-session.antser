@@ -74,9 +74,40 @@
 #   A4^09=AD  ^4E=E3  ^01=E2  ^(A4 eight times)=E2
 - < a4094e01a4a4a4a4a4a4a4a4e2
 
+# The three cases below declare nonconformance, which tools/test_ant_golden.py
+# reads from the token 'malformed' in the case name: a problem with a record is
+# a failure unless its case declares it, in which case it is recorded and
+# waived. They cover the three shapes the waiver has to serve, and between them
+# they are what keeps both branches of that rule exercised in CI.
+
 # case malformed/sync-omitted-checksum
-# The historical bug, on the wire. MESG_REQUEST with the checksum computed from
-# LEN onwards instead of from SYNC: 0x02 ^ 0x4D ^ 0x00 ^ 0x54 = 0x1B, where the
-# correct value is 0xBF. Note 0xBF ^ 0x1B = 0xA4 - the error is always exactly
-# the SYNC byte. A reader must throw this away.
+# FRAMING-LEVEL. The historical bug, on the wire. MESG_REQUEST with the
+# checksum computed from LEN onwards instead of from SYNC:
+# 0x02 ^ 0x4D ^ 0x00 ^ 0x54 = 0x1B, where the correct value is 0xBF. Note
+# 0xBF ^ 0x1B = 0xA4 - the error is always exactly the SYNC byte. unframe()
+# must throw this away.
 - > a4024d00541b
+
+# case malformed/short-payload
+# SEMANTIC. MESG_ASSIGN_CHANNEL declares 3..4 payload bytes; this carries 1.
+# The frame itself is impeccable - SYNC, LEN and checksum all agree - and that
+# is exactly what makes it worth sending: it tests the bridge's error mapping,
+# not its framer. This is the shape ant_conformance.py calls malformed-short,
+# and the shape the first draft of the harness wrongly demanded be rejected.
+#   A4 ^ 01 = A5   A5 ^ 42 = E7   E7 ^ 01 = E6
+- > a4014201e6
+# The refusal: MESG_RESPONSE_EVENT [channel 1, 0x42, INVALID_MESSAGE 0x28].
+# Fully conformant, and it sits inside a malformed case on purpose - a waiver
+# is only spent on a record that actually has a problem, so this one is still
+# checked like any other.
+#   A4^03=A7  ^40=E7  ^01=E6  ^42=A4  ^28=8C
+- < a403400142288c
+
+# case malformed/unknown-id
+# UNKNOWN ID. Message id 0xFE is in no table. In a capture from a real host
+# that is a hard failure and information to absorb into
+# protocol/ant_wire.yaml; here the case name says it is deliberate. A
+# Device0.txt capture carries no case names at all, which is what keeps the two
+# apart with no extra vocabulary.
+#   A4 ^ 01 = A5   A5 ^ FE = 5B   5B ^ 00 = 5B
+- > a401fe005b

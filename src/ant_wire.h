@@ -271,6 +271,15 @@
 #define ANTW_MESG_CAPABILITIES_ID                            0x54
 
 /*
+ * [filler, mode] on the way in, [channel, mode] on the way back. Dispatched
+ * at src/ant_serial_bridge.c and requested in handle_request(). A Nordic
+ * extension: not in Rev 5.1, and no witness inside this repository - the id
+ * was recovered by the Wave 2 shim and is BUILD_ASSERTed in
+ * src/ant_radio_sdk_ant.c. [sdk-ant-shim + verify:sdk-ant-shim]
+ */
+#define ANTW_MESG_CHANNEL_CRC_MODE_ID                        0x58
+
+/*
  * [channel, device number lo, device number hi, device type, transmission
  * type, list index]. [bridge]
  */
@@ -408,14 +417,33 @@
  * [filler, enable, rf payload size, required modes, 0, 0, optional modes, 0,
  * 0, (stall lo, stall hi, retry extension)]. Requesting it with index 0
  * returns capabilities, with index 1 the current configuration - and the
- * reply drops the enable byte the command carried. [bridge, tools]
+ * reply drops the enable byte the command carried. REQUEST REPLY, a different
+ * shape from the command above: 0x00 -> 4 bytes
+ * (ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE); 0x01 -> 10 bytes
+ * (ANTW_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE), selected by byte 0 of the
+ * MESG_REQUEST that asked, which the reply does not repeat.
+ * src/ant_serial_bridge.c picks the reply length from byte 0 of the
+ * MESG_REQUEST - `ch ? ..._REQ_CONFIG_SIZE : ..._REQ_CAPABILITIES_SIZE` - and
+ * neither reply repeats that byte, so nothing in the reply says which of the
+ * two it is. Pairing it with the request that drew it is the only way to
+ * know, and that is a fact about this message rather than a limitation of any
+ * reader. [bridge, tools]
  */
 #define ANTW_MESG_CONFIG_ADV_BURST_ID                        0x78
 
 /*
  * Command is [filter lo, filter hi] with no channel byte; the reply is
  * [filler, filter lo, filter hi]. That asymmetry is real and is what the
- * round-trip check in ant_features.py exists to catch. [bridge, tools]
+ * round-trip check in ant_features.py exists to catch. REQUEST REPLY, a
+ * different shape from the command above: 3 bytes
+ * (ANTW_MESG_EVENT_FILTER_CONFIG_REQ_SIZE), selected by nothing - there is
+ * only one shape. One shape, one byte longer than the command. The `2..3` on
+ * payload_len above is the union of the two and predates this field; it is
+ * left as it stands because tools/ant_conformance.py derives its malformed-
+ * short and malformed-long cases from those bounds, so narrowing it would
+ * change the generated case set and the committed Tier 1 reference transcript
+ * would stop being reproducible. The reply side is exact here regardless,
+ * which is where the asymmetry actually shows. [bridge, tools]
  */
 #define ANTW_MESG_EVENT_FILTER_CONFIG_ID                     0x79
 
@@ -445,7 +473,18 @@
  * Write [channel, mode, key number, decimation rate] - compiled out unless
  * CONFIG_ANT_DONGLE_ENCRYPTION. The read side is always bridged: requesting
  * it with an ENCRYPTION_INFO_GET_* index returns [info type, data...], the
- * info type echoed at byte 0. [bridge, tools]
+ * info type echoed at byte 0. REQUEST REPLY, a different shape from the
+ * command above: 0x00 -> 2 bytes
+ * (ANTW_MESG_CONFIG_ENCRYPT_REQ_CAPABILITIES_SIZE); 0x01 -> 5 bytes
+ * (ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE); 0x02 -> 20 bytes
+ * (ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_USER_DATA_SIZE), selected by the info
+ * type the reply echoes at byte 0. Three reply shapes behind one id, and the
+ * reply says which it is: the ENCRYPTION_INFO_GET_* type is echoed at byte 0,
+ * so a reader with no memory of the request can still check the length
+ * exactly. An index that is not one of these three is refused with a
+ * RESPONSE_EVENT naming 0x4D rather than answered with a 0x7D - the reply-
+ * size switch has no default that could send a zero-length frame, which is
+ * what case 4d-request-encrypt-enable-3 pins. [bridge, tools]
  */
 #define ANTW_MESG_ENCRYPT_ENABLE_ID                          0x7D
 
@@ -467,6 +506,24 @@
 #define ANTW_MESG_ACTIVE_SEARCH_SHARING_ID                   0x81
 
 /*
+ * [filler, enable]. Enhanced channel spacing. A Nordic extension: not in Rev
+ * 5.1, and no witness inside this repository - the id was recovered by the
+ * Wave 2 shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c. [sdk-ant-shim
+ * + verify:sdk-ant-shim]
+ */
+#define ANTW_MESG_ECS_ENABLE_ID                              0x89
+
+/*
+ * [channel] to clear, [channel, pending] on request. A Nordic extension: not
+ * in Rev 5.1, and no witness inside this repository - the id was recovered by
+ * the Wave 2 shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c. Note that
+ * the *request* form of this id replies with MESG_PENDING_TRANSMIT_GET_SIZE
+ * bytes, which is a separate constant from MESG_PENDING_TRANSMIT_CLEAR's own
+ * 1-byte command payload. [sdk-ant-shim + verify:sdk-ant-shim]
+ */
+#define ANTW_MESG_PENDING_TRANSMIT_CLEAR_ID                  0x8C
+
+/*
  * Serial-layer error: bad checksum, bad length, or a frame that arrived too
  * slowly. This firmware drops malformed frames silently instead - recorded so
  * a host-side parser can name the byte. [rev5.1 sec 7.4 + verify:sdk-ant-
@@ -482,48 +539,31 @@
  * extension messages, but no value in that block is corroborated by anything
  * in this repository - the whole host-callable API in archive/host-
  * api/ant_dll_exports.json tops out at 0x7B - so no number is recorded here.
- * Recover it in src/ant_radio_sdk_ant.c and BUILD_ASSERT it there; see the
- * unresolved table in docs/ant-serial-protocol.md. [host-api + verify:sdk-
- * ant-shim]
+ * The Wave 2 shim looked and came back empty as well: sdk-ant v2.1.0 defines
+ * no such id anywhere in its headers or sources, so this stays unresolved
+ * rather than merely unverified. Recover it in src/ant_radio_sdk_ant.c and
+ * BUILD_ASSERT it there; see the unresolved table in docs/ant-serial-
+ * protocol.md. [host-api + verify:sdk-ant-shim]
  */
 
 /*
  * ANTW_MESG_SLEEP_ID is UNRESOLVED. Put the device into its low-power sleep
  * state. Implied by the ANT_DLL export ANT_SleepMessage, which Zwift
  * resolves. Same 0xC0 block and the same lack of corroboration as
- * MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. Recover it in
- * src/ant_radio_sdk_ant.c and BUILD_ASSERT it there; see the unresolved table
- * in docs/ant-serial-protocol.md. [host-api + verify:sdk-ant-shim]
- */
-
-/*
- * ANTW_MESG_CHANNEL_CRC_MODE_ID is UNRESOLVED. [filler, mode] on the way in,
- * [channel, mode] on the way back. Dispatched at src/ant_serial_bridge.c and
- * requested in handle_request(). The numeric id is a Nordic extension that
- * appears nowhere in this repository and is not in Rev 5.1. Recover it in
- * src/ant_radio_sdk_ant.c and BUILD_ASSERT it there; see the unresolved table
- * in docs/ant-serial-protocol.md. [bridge + verify:sdk-ant-shim]
- */
-
-/*
- * ANTW_MESG_PENDING_TRANSMIT_CLEAR_ID is UNRESOLVED. [channel] to clear,
- * [channel, pending] on request. Dispatched by the bridge; the numeric id is
- * a Nordic extension not present in this repository or in Rev 5.1. Recover it
- * in src/ant_radio_sdk_ant.c and BUILD_ASSERT it there; see the unresolved
- * table in docs/ant-serial-protocol.md. [bridge + verify:sdk-ant-shim]
- */
-
-/*
- * ANTW_MESG_ECS_ENABLE_ID is UNRESOLVED. [filler, enable]. Enhanced channel
- * spacing. Dispatched by the bridge; the numeric id is a Nordic extension not
- * present in this repository or in Rev 5.1. Recover it in
- * src/ant_radio_sdk_ant.c and BUILD_ASSERT it there; see the unresolved table
- * in docs/ant-serial-protocol.md. [bridge + verify:sdk-ant-shim]
+ * MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. The Wave 2 shim found
+ * the name referenced in sdk-ant but never defined - the only occurrence is
+ * inside a commented-out dispatch arm - so there is no value to recover there
+ * either. Recover it in src/ant_radio_sdk_ant.c and BUILD_ASSERT it there;
+ * see the unresolved table in docs/ant-serial-protocol.md. [host-api +
+ * verify:sdk-ant-shim]
  */
 
 /* ------------------------------------------------------------------------
  * Reply sizes
- * The LEN byte the bridge puts on each reply it composes itself.
+ * The LEN byte the bridge puts on each reply it composes itself. Where a
+ * request reply is a different shape from the command sharing its id, the
+ * message's reply_len block in protocol/ant_wire.yaml points at the
+ * constant here rather than restating the number.
  * ------------------------------------------------------------------------ */
 
 /* [channel, message id, code]. [bridge] */
@@ -536,9 +576,9 @@
 #define ANTW_MESG_CAPABILITIES_SIZE                          9
 
 /*
- * Null-padded version string. src/ant_stub.c calls it a 20-byte payload;
- * nothing in this repository shows the reply on the wire. [stub + verify:sdk-
- * ant-shim]
+ * Null-padded version string. src/ant_radio_stub.c calls it a 20-byte
+ * payload; nothing in this repository shows the reply on the wire. [stub +
+ * verify:sdk-ant-shim]
  */
 #define ANTW_MESG_VERSION_SIZE                               20
 
@@ -583,16 +623,19 @@
 #define ANTW_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE           10
 
 /*
- * ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE is UNRESOLVED. The
- * advanced-burst capabilities reply: byte 0 is a maximum packet size code,
- * byte 1 is a supported-modes bitfield. Its declared length is not visible in
- * this repository - ant_features.py reads only the first two bytes and prints
- * the rest as hex, and no captured reply is committed. This one is on the
- * wire, so it cannot be substituted with a local value: it is the LEN byte
- * the bridge puts on the reply. Recover it in src/ant_radio_sdk_ant.c and
- * BUILD_ASSERT it there; see the unresolved table in docs/ant-serial-
- * protocol.md. [tools + verify:sdk-ant-shim]
+ * The advanced-burst capabilities reply: byte 0 is a maximum packet size
+ * code, byte 1 is a supported-modes bitfield, bytes 2 and 3 are reserved and
+ * zero. Not visible in this repository - ant_features.py reads only the first
+ * two bytes and prints the rest as hex, and no captured reply is committed -
+ * so it was recovered by the Wave 2 shim and is BUILD_ASSERTed in
+ * src/ant_radio_sdk_ant.c. It had to be: this one is the LEN byte on a reply
+ * the bridge composes, so no local substitute is legitimate, and while it was
+ * unresolved the capabilities form of the request declined. Used at
+ * src/ant_radio_stub.c:254, where it bounds the memset; the #ifdef on this
+ * name that stood in for it there now resolves, so the fallback has been
+ * removed. [sdk-ant-shim + verify:sdk-ant-shim]
  */
+#define ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE     4
 
 /* [info type, supported mode]. [bridge] */
 #define ANTW_MESG_CONFIG_ENCRYPT_REQ_CAPABILITIES_SIZE       2
@@ -1075,15 +1118,18 @@
 #define ANTW_INVALID_SDU_MASK                                0xFF
 
 /*
- * ANTW_SDU_MASK_ACK_CONFIG_BIT is UNRESOLVED. Set alongside a mask number to
- * apply the mask to acknowledged data as well as broadcast.
- * src/ant_stub.c:529 masks it off before range-checking the mask number; the
- * bit's value appears nowhere in this repository. Never on the wire in a
- * direction this dongle originates - the host sets it - so the stub does not
- * need the real value to behave correctly. Recover it in
- * src/ant_radio_sdk_ant.c and BUILD_ASSERT it there; see the unresolved table
- * in docs/ant-serial-protocol.md. [stub + verify:sdk-ant-shim]
+ * Set alongside a mask number to apply the mask to acknowledged data as well
+ * as broadcast. The radio backend masks it off before range-checking the mask
+ * number. The bit's value appears nowhere in this repository, so it was
+ * recovered by the Wave 2 shim and is BUILD_ASSERTed in
+ * src/ant_radio_sdk_ant.c. Note that it shares its value with
+ * INVALID_SDU_MASK's top bit, which is why the mask number must be range-
+ * checked after the bit is cleared and not before. Used at
+ * src/ant_radio_stub.c:587; the local placeholder that stood in for it there
+ * guessed the value correctly and has been retired. [sdk-ant-shim +
+ * verify:sdk-ant-shim]
  */
+#define ANTW_SDU_MASK_ACK_CONFIG_BIT                         0x80
 
 /* ------------------------------------------------------------------------
  * Encryption
@@ -1132,25 +1178,40 @@
 #define ANTW_ENCRYPTION_KEY_SIZE                             16
 
 /*
- * ANTW_MAX_SUPPORTED_ENCRYPTION_MODE is UNRESOLVED. The value src/ant_stub.c
- * answers an ENCRYPTION_INFO_GET_SUPPORTED_MODE request with, and the upper
- * bound it range-checks a channel-enable against. Not visible in this
- * repository. It does reach the wire, but only out of the stub, whose replies
- * are already declared synthetic. Recover it in src/ant_radio_sdk_ant.c and
- * BUILD_ASSERT it there; see the unresolved table in docs/ant-serial-
- * protocol.md. [stub + verify:sdk-ant-shim]
+ * The value a backend answers an ENCRYPTION_INFO_GET_SUPPORTED_MODE request
+ * with, and the upper bound it range-checks a channel-enable against. It is
+ * the highest of the encryption modes above - user-data request - rather than
+ * an independent number. Not visible in this repository, so it was recovered
+ * by the Wave 2 shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c. Used
+ * at src/ant_radio_stub.c:278 and :541; the local placeholder that stood in
+ * for it there guessed 1 and was wrong, which is why a stub build's answer to
+ * ENCRYPTION_INFO_GET_SUPPORTED_MODE changed when it retired. [sdk-ant-shim +
+ * verify:sdk-ant-shim]
  */
+#define ANTW_MAX_SUPPORTED_ENCRYPTION_MODE                   0x02
 
 /* ------------------------------------------------------------------------
  * Burst header byte
- * Byte 0 of MESG_BURST_DATA / MESG_ADV_BURST_DATA. Not a channel number on
- * its own.
+ * Byte 0 of MESG_BURST_DATA / MESG_ADV_BURST_DATA / the legacy
+ * MESG_EXT_BURST_DATA. Not a channel number on its own: it is three fields
+ * packed into one byte, and the five-bit channel field is the ONLY place
+ * in the serial protocol where a channel number is squeezed below eight
+ * bits. Every other channel byte on the wire - including byte 0 of a
+ * RESPONSE_EVENT, which echoes whatever the command carried - is a plain
+ * uint8. Applying the five-bit ceiling to those is a category error: case
+ * frame/sync-in-payload deliberately sends channel 0xA4 in an antlib-
+ * config command so that a SYNC byte lands inside the payload, and the
+ * dongle correctly echoes 0xA4 back in a 0x40.
  * ------------------------------------------------------------------------ */
 
 /*
  * Channel number. Five bits - which is why 32 channels is the serial
  * protocol's natural ceiling, and why ant_core is sized for 32 from the first
- * line. [bridge]
+ * line. Because the field is five bits wide, a header on the wire cannot
+ * express a channel above 31 at all; what a burst header CAN address that the
+ * device does not have is a channel above the count in byte 0 of the
+ * capabilities reply, and that is the bound worth checking on a transcript.
+ * [bridge]
  */
 #define ANTW_BURST_HEADER_CHANNEL_MASK                       0x1F
 
@@ -1307,27 +1368,97 @@
 
 /*
  * byte 7 - advanced_options_4. Observed as 0x8D on this firmware. The bit
- * names are NOT recoverable from this repository, and guessing them would put
- * fiction in a file whose whole purpose is to be authoritative. The byte is
- * recorded; the bits are not named.
+ * names are not recoverable from this repository - K1 left them blank rather
+ * than guess - so they were recovered by the Wave 2 shim and are
+ * BUILD_ASSERTed in src/ant_radio_sdk_ant.c. Seven of the eight are named
+ * below; bit 0x80 is set in the observed reply and has no name in the source
+ * the shim could check, so it is left unnamed for the same reason the whole
+ * byte used to be.
  */
 #define ANTW_CAPABILITIES_OFFSET_ADVANCED_OPTIONS_4          7
 
 /*
- * byte 8 - advanced_options_5. Observed as 0x0F. Bit names not recoverable
- * here - see byte 7.
+ * RF-active notification: an event when the time to the next synchronous RF
+ * activity exceeds a configured threshold. Set in the observed reply. [sdk-
+ * ant-shim + verify:sdk-ant-shim]
+ */
+#define ANTW_CAPABILITIES_RFACTIVE_NOTIFICATION_ENABLED      0x01
+
+/*
+ * Data filtering. Clear in the observed reply. [sdk-ant-shim + verify:sdk-
+ * ant-shim]
+ */
+#define ANTW_CAPABILITIES_DATA_FILTERING_ENABLED             0x02
+
+/*
+ * Search uplink. Set in the observed reply. [sdk-ant-shim + verify:sdk-ant-
+ * shim]
+ */
+#define ANTW_CAPABILITIES_SEARCH_UPLINK_ENABLED              0x04
+
+/*
+ * Group transmitter initiation - the master-side meaning of the channel
+ * search timeout. Set in the observed reply. [sdk-ant-shim + verify:sdk-ant-
+ * shim]
+ */
+#define ANTW_CAPABILITIES_GROUP_TRANSMITTER_INITIATION_ENABLED 0x08
+
+/*
+ * Extended time base: a 4-byte RTC timestamp instead of the 2-byte ANT one.
+ * Clear in the observed reply. [sdk-ant-shim + verify:sdk-ant-shim]
+ */
+#define ANTW_CAPABILITIES_TIME_BASE_ENABLED                  0x10
+
+/*
+ * Time sync. Clear in the observed reply. [sdk-ant-shim + verify:sdk-ant-
+ * shim]
+ */
+#define ANTW_CAPABILITIES_TIME_SYNC_ENABLED                  0x20
+
+/*
+ * External PA/LNA GPIO control during radio events. Clear in the observed
+ * reply. [sdk-ant-shim + verify:sdk-ant-shim]
+ */
+#define ANTW_CAPABILITIES_PA_LNA_SUPPORT_ENABLED             0x40
+
+/*
+ * byte 8 - advanced_options_5. Observed as 0x0F. Three of the four set bits
+ * are named below, recovered the same way as byte 7; bit 0x08 is set in the
+ * observed reply and has no name in the source the shim could check.
  */
 #define ANTW_CAPABILITIES_OFFSET_ADVANCED_OPTIONS_5          8
+
+/*
+ * Channel start offset - the second parameter of
+ * antr_channel_open_with_offset(). Set in the observed reply, which is the
+ * capability behind the offset form existing at all. [sdk-ant-shim +
+ * verify:sdk-ant-shim]
+ */
+#define ANTW_CAPABILITIES_CHANNEL_START_OFFSET_ENABLED       0x01
+
+/*
+ * Background searching channel uplink. Set in the observed reply. [sdk-ant-
+ * shim + verify:sdk-ant-shim]
+ */
+#define ANTW_CAPABILITIES_SEARCHING_CHANNEL_UPLINK_ENABLED   0x02
+
+/*
+ * ID-match fix for a shared-channel RX burst transfer. Set in the observed
+ * reply. [sdk-ant-shim + verify:sdk-ant-shim]
+ */
+#define ANTW_CAPABILITIES_ID_MATCH_FIX_ON_SHARED_CHANNEL_RXBURST 0x04
 
 /* ------------------------------------------------------------------------
  * RadiANT extension messages - NOT ANT protocol
  * Ours, not Garmin's: not in Rev 5.1, not answered by any ANT device.
- * 0xE5-0xEF is reserved for the rest of the family. Semantics live in
+ * 0xF6-0xFA is reserved for the rest of the family. Semantics live in
  * docs/radiant-security.md; only the numbering is decided in the YAML.
- * Beware: 0xE0 here is a message ID. Lib config 0xE0
- * (ANTW_LIB_CONFIG_ALL_EXT_FIELDS) is an unrelated namespace that happens
- * to share the byte - one is a frame's ID field, the other a payload byte
- * of message 0x6E.
+ * These were first proposed at 0xE0-0xE4 and moved: sdk-ant defines
+ * MESG_EXT_ID_0 .. MESG_EXT_ID_4 as exactly 0xE0-0xE4, an extended-
+ * message-id block selected by MSG_EXT_ID_MASK. Do not re-propose that
+ * range. Lib config 0xE0 (ANTW_LIB_CONFIG_ALL_EXT_FIELDS) is a third,
+ * unrelated namespace and has not moved - one is a frame's ID field, the
+ * other a payload byte of message 0x6E.
  * ------------------------------------------------------------------------ */
 
 /*
@@ -1335,23 +1466,23 @@
  * switches are independent, not a ladder. [K4 (docs/radiant-security.md sec
  * 9)]
  */
-#define ANTW_MESG_RADIANT_SEC_CONFIG_ID                      0xE0
+#define ANTW_MESG_RADIANT_SEC_CONFIG_ID                      0xF1
 
 /* Install key material for a channel. [K4 (docs/radiant-security.md sec 9)] */
-#define ANTW_MESG_RADIANT_SET_KEY_ID                         0xE1
+#define ANTW_MESG_RADIANT_SET_KEY_ID                         0xF2
 
 /*
  * Read or set the current 128 s epoch counter that X_PRIV's device number
  * rotation is derived from. [K4 (docs/radiant-security.md sec 9)]
  */
-#define ANTW_MESG_RADIANT_EPOCH_ID                           0xE2
+#define ANTW_MESG_RADIANT_EPOCH_ID                           0xF3
 
 /*
  * Per-channel security state: which switches are active, replay counter high-
  * water mark, spread-MAC verification result. [K4 (docs/radiant-security.md
  * sec 9)]
  */
-#define ANTW_MESG_RADIANT_SEC_STATUS_ID                      0xE3
+#define ANTW_MESG_RADIANT_SEC_STATUS_ID                      0xF4
 
 /*
  * Drive the in-the-clear pairing exchange. An X_PRIV node pairs with rotation
@@ -1359,6 +1490,6 @@
  * clear is structural, not an oversight. [K4 (docs/radiant-security.md sec
  * 9)]
  */
-#define ANTW_MESG_RADIANT_PAIRING_ID                         0xE4
+#define ANTW_MESG_RADIANT_PAIRING_ID                         0xF5
 
 #endif /* ANT_WIRE_H_ */

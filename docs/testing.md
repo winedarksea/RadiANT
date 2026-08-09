@@ -64,6 +64,33 @@ no host C compiler, no QEMU — so `west twister` cannot run locally and every
 ztest in `ant_core/tests/` executes only in CI on Linux. Local C verification
 is compile-check plus these Python tools.
 
+### The one secret, and why it cannot be avoided
+
+`build-sdk-ant` is the only job needing a repository secret:
+`SDK_ANT_CHECKOUT_TOKEN`, a **classic** PAT with `repo` scope, from an account
+that has been granted access to `ant-nrfconnect/sdk-ant`. Without it the job
+reports a skip rather than failing red.
+
+Every cheaper option has been tried and none of them work, which is worth
+recording so nobody re-litigates it:
+
+- The automatic `GITHUB_TOKEN` is scoped to this repository alone, so it can
+  never reach another organisation's private repo. An adopter's *personal*
+  access has to be delegated explicitly; that is the whole problem.
+- A GitHub App token or a deploy key both need admin rights on
+  `ant-nrfconnect/sdk-ant`, which adopters do not have.
+- A fine-grained PAT works only if that organisation has opted into them.
+- Under SAML SSO the PAT must additionally be authorised for the org, or the
+  checkout fails **as though the repository does not exist** — a misleading
+  error that reads like a bad revision rather than a permissions problem.
+
+Set repository variable `SDK_ANT_REPO` to build against a fork; it defaults to
+`ant-nrfconnect/sdk-ant`.
+
+No network-key secret is required: a dongle receives its ANT+ network key from
+the host over `MESG_NETWORK_KEY_ID`. `host-tests`, `ztest` and `build-core`
+need no secret at all, which is what makes the build green on a fork.
+
 ---
 
 ## The four verification tiers

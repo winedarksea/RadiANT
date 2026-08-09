@@ -262,7 +262,7 @@ files in `boards/` are one `.conf` and one `.overlay` each.
 | `src/usb_ant_class_next.c` | The same class on the **new** USBD/UDC stack. Required on nRF54; see [Transports](docs/backends.md#transports) |
 | `src/ant_uart_transport.c` | ANT serial over a plain UART, for parts with no USB peripheral |
 | `src/ant_serial_bridge.c` | ANT serial protocol (`0xA4` framing) ↔ the radio backend |
-| `src/ant_stub.c` | No-op radio, compiled only when the stub backend is selected |
+| `src/ant_radio_stub.c` | No-op radio, compiled only when the stub backend is selected |
 | `src/diag_flash_log.c` | Log backend that commits to flash, readable back over UF2 |
 | `src/ant_radio.h`, `src/ant_wire.h` | Our ~50-function radio contract and our protocol constants — the seam that lets the bridge speak to any backend. See [Backends](docs/backends.md) |
 
@@ -384,22 +384,11 @@ compiled is the one that entry expects, since the choice is defaulted from
 devicetree and a moved or renamed USB node would otherwise fall through to a
 different one and still build green.
 
-sdk-ant is private, so the build needs one repository **secret**:
-`SDK_ANT_CHECKOUT_TOKEN`, a classic PAT with `repo` scope from an account that
-has been granted access to `ant-nrfconnect/sdk-ant`. Without it the job reports
-a skip rather than failing red. The automatic `GITHUB_TOKEN` **cannot** be used
-— it is scoped to this repository alone, so an account's own access has to be
-delegated explicitly. A GitHub App token or a deploy key both need admin rights
-on `ant-nrfconnect/sdk-ant`, which adopters don't have, and a fine-grained PAT
-only works if that organisation has opted into them. If the organisation
-enforces SAML SSO the PAT must also be authorised for it, or the checkout fails
-as though the repository does not exist. To build against a fork, set
-repository variable `SDK_ANT_REPO`; it defaults to `ant-nrfconnect/sdk-ant`.
-
-No network-key secret is required — a dongle receives its ANT+ network key from
-the host over `MESG_NETWORK_KEY_ID`. The `build-core` job, once the clean-room
-backend lands, needs no secret at all, which is what finally makes this green
-on a fork.
+sdk-ant is private, so `build-sdk-ant` needs one repository secret,
+`SDK_ANT_CHECKOUT_TOKEN`, and skips rather than failing red without it.
+`host-tests`, `ztest` and `build-core` need no secret at all, which is what
+makes the build green on a fork. Why it has to be a classic PAT, and why every
+cheaper option fails, is in [`docs/testing.md`](docs/testing.md#host-tests-in-ci).
 
 ---
 

@@ -13,16 +13,80 @@ under test.
 
 ## Why hand-assembled fixtures exist at all
 
-`archive/captures/serial/` is where real captures go, and it is empty: a real
-one needs a Windows host, `ANT_DLL.dll`, an application driving a session, and
-a human. Until one exists, a replay harness pointed only at that directory
-would skip on every run — and a test that never executes is indistinguishable
-from a test that passes.
+`archive/captures/serial/` is where real captures go, and for a long time it
+was empty: a real one needs a Windows host, `ANT_DLL.dll` or a bench sitting,
+an application driving a session, and a human. A replay harness pointed only at
+that directory would have skipped on every run — and a test that never executes
+is indistinguishable from a test that passes.
 
-So the harness is exercised from day one against these, and a real capture
-later *adds* coverage rather than switching the test on. That ordering matters:
-if the harness itself is broken, the first real capture must not be the thing
-that discovers it.
+So the harness was exercised from day one against these, and the first real
+capture *added* coverage rather than switching the test on. That ordering
+mattered, and it is worth recording how: `conformance-sdk-ant.antser` landed and
+turned the suite red in five places, **every one of them a rule this harness had
+stated too broadly** — never a defect in the firmware, whose bytes reproduced
+identically across two runs. Had the harness been switched on by that same file,
+there would have been no way to tell which side was wrong.
+
+## Two conventions the transcript corrected
+
+Both are the same mistake in different clothes: a rule true of one thing,
+applied to everything shaped vaguely like it.
+
+**A message id is not a message.** `MESG_REQUEST` (`0x4D`) names an id and the
+frame that comes back carries that id with a payload no host ever sends. So
+`protocol/ant_wire.yaml` now records `payload_len` (the command, `h2d`) and
+`reply_len` (the request reply, `d2h`) separately, and
+[`../test_ant_golden.py`](../test_ant_golden.py) picks between them by the
+record's direction column. `0x78` takes a 9..12-byte command and answers a
+request with 4 bytes; `0x7D` takes a 4-byte command and answers with 2, 5 or 20
+by info type. Each reply shape *names* a constant in `message_sizes` instead of
+restating a length, so the number checked here is the number the bridge writes.
+
+The route deliberately not taken: widening `payload_len` to the union of both.
+It goes green in one edit and permanently admits a 4-byte `0x78` command. **The
+harness's failure mode is permissiveness**, so anything loosened has to be
+pinned by a test that goes red if it is loosened further —
+`TestTheDirectionDependentLengthModel` is that pin, in the shape
+`TestTheMalformedConvention` established.
+
+**The five-bit channel ceiling belongs to the burst header and to nothing
+else.** Byte 0 of `MESG_BURST_DATA` (and `_ADV_BURST_DATA`, and the legacy
+`_EXT_BURST_DATA`) is `[last | seq(2) | channel(5)]`. Byte 0 of a `0x40`
+response is a plain uint8 echoing whatever the command carried — often not a
+channel at all. Case `frame/sync-in-payload` sends channel `0xA4` on purpose, so
+that a SYNC byte lands inside a payload and resynchronisation is put under test;
+the echo is conformant and the harness now says so. `TestTheBurstChannelCeiling`
+pins both halves: the echo passes, and an out-of-range channel in a burst header
+still fails.
+
+**Renaming that case to carry the `malformed` token was the other offered fix,
+and it is the wrong one.** The waiver is for records that are not conformant.
+Spending it on one that is records a true fact — this frame is unusual — as a
+false one, and deletes the only evidence in the tree that a `0xA4` channel byte
+is legal. Scope the check; never launder a correct record through the waiver.
+
+## The third leg: a transcript is evidence, and it is hashed
+
+`ant_conformance.py` writes a summary JSON beside every transcript it records —
+the sha256 of the whole file and a sha256 per case — and those summaries are
+committed in `archive/benchmarks/`. **`test_ant_golden.py` now reads them back**
+and fails if a committed transcript no longer hashes to what was recorded with
+it. That is the third clause of the contract between the two tools, and it needs
+saying here because neither owns the other: a transcript recorded by
+`ant_conformance.py` must keep arriving with a summary, or the check silently
+covers nothing (`TestRealCaptures` asserts that at least one transcript is
+covered, so "silently" is the one thing it cannot do).
+
+It exists because the replay rules structurally cannot cover it. They check that
+a record is well *formed*; they have no opinion about what a dongle should have
+answered, and cannot have one, because the answer is the measurement. Flip one
+data byte in a reply and every framing rule still passes — correctly, and
+uselessly, since the Tier 1 acceptance criterion is a byte diff.
+
+The real reason is blunter. When a transcript turns this suite red, the cheapest
+way to green is to edit the transcript, and that falsifies the reference every
+future A/B is measured against. It should be the one repair that cannot be made
+quietly.
 
 ## What they may and may not be used for
 
@@ -37,18 +101,74 @@ Nothing here should ever be cited as an observation.
 
 | File | Timestamp column | What it covers |
 |---|---|---|
-| `handmade-session.antser` | `-` | A plausible session opening: reset, capabilities, network key, assign, lib config, open, one broadcast — plus one deliberately malformed frame |
+| `handmade-session.antser` | `-` | A plausible session opening: reset, capabilities, network key, assign, lib config, open, one broadcast — plus the three shapes of deliberate defect described below |
 | `handmade-timed.antser` | real | The same opening with a real timestamp column, so the harness exercises both forms. It is `archive/captures/serial/README.md`'s own worked example with its two checksum typos corrected |
 
 ## The `malformed` case convention
 
-A `# case` name containing the word `malformed` declares that the records under
-it are **expected to be rejected**. `tools/test_ant_golden.py` asserts the
-opposite of its usual checks for them, which is what lets a transcript carry a
-deliberately bad frame without either failing the suite or being waved through
-unexamined.
+This is the contract between `tools/test_ant_golden.py` (which enforces it) and
+`tools/ant_conformance.py` (which writes transcripts against it). It is stated
+here because the two are owned by different agents and neither owns the other.
 
-This convention is introduced here because `.antser` needed one and had none.
-`tools/ant_conformance.py` writes the case names for conformance transcripts,
-so if it settles on a different word, this file and
-`tools/test_ant_golden.py` are what should change to match.
+**A `# case` name containing the token `malformed` declares that the records
+under it need not conform. A problem with a record is a failure, unless its
+case name declares nonconformance, in which case it is recorded and waived.**
+
+`ant_conformance.py` exports the token as its `MALFORMED` constant and builds
+names like `42-assign-channel/malformed-short`. `test_ant_golden.py` spells the
+string out rather than importing it: a checker that imports its subject's idea
+of the convention is checking that the tool agrees with itself.
+
+Four properties of that rule, each chosen against a concrete failure:
+
+1. **A conformant record inside a `malformed` case is not waived — it has
+   nothing to waive.** The waiver is spent per record and only on a record that
+   actually has a problem. This is what makes the reset/startup preamble
+   `ant_conformance.py` emits before *every* case, malformed or not, a
+   non-event. The first draft of the rule read `malformed` as "`unframe()` must
+   reject this" and produced 718 false failures on a generated transcript, 409
+   of them from exactly that preamble.
+2. **A well-formed frame can be malformed.** `malformed-short`, `-long`,
+   `-oob-index` and `-param-ff` are impeccable frames carrying a payload the
+   message id does not admit — which is what makes them worth sending, since
+   they test the bridge's error mapping rather than its framer. Only
+   `malformed-checksum`, `-sync`, `-oversize` and `-partial-then-valid` are
+   defects visible at the framing level.
+3. **An unmodelled message id is still a hard failure in a real capture.** The
+   waiver can only be claimed through a case marker, and a `Device0.txt`
+   capture has none — Garmin's log does not name our test cases. So
+   `frame/malformed-unknown-id-high` is waived in a conformance transcript
+   while the same id in a capture from a real host fails and has to be absorbed
+   into `protocol/ant_wire.yaml`. The absence of case names is the
+   discriminator, and it costs no new vocabulary.
+4. **There is no requirement that a declared case produce a visible problem —
+   except for the fixtures here.** `malformed-oob-index` sends channel `0xFF`
+   in a frame that is correct by every rule the harness knows; only the
+   firmware's handler can see it is wrong. Demanding a visible problem would
+   fail on a correct transcript. The fixtures in this directory *are* held to
+   it, because their cases were written here and their defects were chosen to
+   be visible at this level.
+
+**Known hole**, stated rather than discovered later: because the waiver is
+per record, a *preamble* frame that went bad inside a `malformed` case would be
+waived along with the record the case is about. It is narrow — the preamble is
+the same bytes in every case, so the same corruption is caught in every `valid`
+case — and closing it means `ant_conformance.py` emitting its preamble under
+its own non-malformed case name. That is filed as a change request, not assumed
+here. `TestTheMalformedConvention.test_the_known_hole_in_the_convention` pins
+the current behaviour so that closing it is a deliberate edit.
+
+If `ant_conformance.py` needs different wording, this file and
+`tools/test_ant_golden.py` are what change.
+
+## The three defects the fixtures carry
+
+`handmade-session.antser` ends with one case of each shape, so that every
+branch of the rule above is exercised in CI rather than waiting for the first
+real transcript:
+
+| Case | Shape | Why it is here |
+|---|---|---|
+| `malformed/sync-omitted-checksum` | framing | The historical bug on the wire: `unframe()` must reject it |
+| `malformed/short-payload` | semantic | An impeccable frame whose payload its id does not admit, plus the `INVALID_MESSAGE` refusal it should draw — and that refusal is fully conformant, sitting inside a malformed case, which is what proves property 1 above |
+| `malformed/unknown-id` | unknown id | Id `0xFE`, in no table. Waived here because the case says so; fatal in an uncased capture |

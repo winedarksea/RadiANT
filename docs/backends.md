@@ -28,8 +28,8 @@ src/ant_serial_bridge.c        unchanged logic; speaks only ANTW_*/antr_*
    +----+-----------------+----------------------+
    |                      |                      |
 ant_radio_sdk_ant.c   ant_radio_stub.c    ant_core/   (clean-room stack)
-(thin forwarders +    (rename of                |
- BUILD_ASSERTs)        ant_stub.c)      ant_radio_hal.h
+(thin forwarders +    (the no-op radio)         |
+ BUILD_ASSERTs)                        ant_radio_hal.h
                                                 |
                                       +---------+---------+
                                    nRF52/54L            EFR32 (later)
@@ -39,7 +39,7 @@ ant_radio_sdk_ant.c   ant_radio_stub.c    ant_core/   (clean-room stack)
 |---|---|---|
 | `sdk_ant` | ~50 one-line forwarders onto `libant.a`, plus a `BUILD_ASSERT` block comparing every `ANTW_*` constant against its `MESG_*` counterpart | The reference half of every A/B, and the shipping radio until Tier 3 passes. See [`sdk-ant-contract.md`](sdk-ant-contract.md) |
 | `core` | The clean-room rebuild in `ant_core/` | The point of the exercise: builds with zero sdk-ant present, and is a superset — 32 channels, background scan, the RadiANT extensions |
-| `stub` | A no-op radio, the rename of `src/ant_stub.c` | The cheapest proof the seam holds. Builds in seconds, and is the only configuration today that runs with no sdk-ant at all |
+| `stub` | A no-op radio, [`src/ant_radio_stub.c`](../src/ant_radio_stub.c) — the rename of the old `src/ant_stub.c` | The cheapest proof the seam holds. Builds in seconds, and is the only configuration today that runs with no sdk-ant at all |
 
 **The prefixes are load-bearing, not cosmetic.** sdk-ant's error macros are
 computed expressions (`NRF_ANT_ERROR_OFFSET + INVALID_MESSAGE`), not literals,
@@ -71,6 +71,27 @@ Kconfig gets sourced. The choice has to be made one level up:
 Independence is then proved rather than asserted: `build_all.ps1` builds the
 `core` and `stub` targets with `-DANT_MODULE_DIR=` pointing at a path that does
 not exist. Success is the proof, and it costs nothing.
+
+#### Under sysbuild, neither spelling of `-DANT_MODULE_DIR=` reaches the image
+
+This one is not obvious and it silently destroys the proof above, so it is
+written down rather than rediscovered. With sysbuild in the picture, **both
+`-DANT_MODULE_DIR=` and `-Dant_dongle_ANT_MODULE_DIR=` land in the *sysbuild*
+cache and neither arrives as a cache variable in the image build.** Sysbuild
+exports its cache to `<build>/<image>_sysbuild_cache.txt`, and the image loads
+that file onto a `sysbuild_cache` target whose properties only `zephyr_get()`
+reads. `zephyr_get()` does not exist until `find_package(Zephyr)` — which is
+*after* the module decision has to be made, because
+`list(APPEND ZEPHYR_EXTRA_MODULES ...)` runs before it. So the one mechanism
+that would deliver the value is unavailable at the only moment it matters.
+
+`CMakeLists.txt` therefore parses `<image>_sysbuild_cache.txt` directly, ahead
+of `find_package(Zephyr)`, applying `zephyr_get()`'s own precedence rules so
+the answer is the same one Zephyr would have given later. Without that, a build
+told to look at a nonexistent `ANT_MODULE_DIR` would quietly fall back to the
+real sdk-ant checkout, link `libant.a`, **pass**, and prove nothing at all —
+the worst kind of green, because the assertion it defeats is the one the whole
+seam exists to make.
 
 ---
 
@@ -580,7 +601,7 @@ at all. On nRF54L it would enumerate, pass `ant_probe.py`, and hear nothing.
 
 ### Stub build
 
-`stub.conf` compiles `src/ant_stub.c` in place of the radio and turns on the MS
+`stub.conf` compiles `src/ant_radio_stub.c` in place of the radio and turns on the MS
 OS descriptors, so the USB half builds and enumerates against whatever NCS you
 have installed. Useful for working on the USB class, or for USB debugging on a
 board sdk-ant does not target:
@@ -615,7 +636,7 @@ expensive than starting at 32.
 
 | | ANT+ / `libant.a` | `ant_core` |
 |---|---|---|
-| Simultaneous channels | 8 (`CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED`) | **32** |
+| Simultaneous channels | 8 configured (`CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED`), **15 maximum** (`MAX_ANT_CHANNELS`) | **32** |
 | Background scan mode | advertised **off**, not implemented | **on** |
 
 32 is the serial protocol's natural ceiling — the burst header uses the low
@@ -623,6 +644,16 @@ expensive than starting at 32.
 radio duty and 32 is ~19 %, still comfortable, and merging the RX windows of
 channels that share RF 57 means 32 tracked sensors do not cost 32 windows.
 RAM cost is ~32 × 72 B = 2.3 KB, still under `libant.a`'s footprint.
+
+**sdk-ant's ceiling is 15, not 8** — 8 is what this build configures,
+`MAX_ANT_CHANNELS` is what the stack allows. That matters for how the 32-channel
+target is *tested*: `libant.a` cannot be raised to 32 by any configuration, so
+there is no sdk-ant reference run to diff against. The 32-channel and
+background-scan gates in [`testing.md`](testing.md) are therefore **absolute,
+not relative** — a threshold the rebuild has to meet on its own terms rather
+than "no worse than sdk-ant". Same for background scan, which sdk-ant
+advertises off and does not implement. Everything else in the A/B is relative,
+which is why these two are called out.
 
 The optional features below are the other axis: what exists past the messages a
 fitness app sends. The answer is a backend property too — sdk-ant can do

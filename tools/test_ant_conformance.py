@@ -337,8 +337,14 @@ class Summary(unittest.TestCase):
         self.assertEqual(len(summary["sha256"]), 64)
         self.assertGreater(summary["messages_exercised"], 30)
         skipped = {entry["what"] for entry in summary["skipped"]}
+        # One skip from each of the two reasons a message can be left out: a
+        # deliberate exclusion, and an id nobody has recovered yet. The second
+        # was MESG_CHANNEL_CRC_MODE_ID until the sdk-ant shim resolved it to
+        # 0x58, at which point it started being exercised rather than skipped.
+        # MESG_RSSI_SEARCH_THRESHOLD_ID is genuinely still unresolved - it
+        # appears nowhere in sdk-ant either - so it is the durable example.
         self.assertIn("MESG_RADIO_CW_MODE_ID", skipped)
-        self.assertIn("MESG_CHANNEL_CRC_MODE_ID", skipped)
+        self.assertIn("MESG_RSSI_SEARCH_THRESHOLD_ID", skipped)
         for entry in summary["skipped"]:
             self.assertTrue(entry["why"], entry["what"])
 

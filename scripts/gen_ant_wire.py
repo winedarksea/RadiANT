@@ -158,6 +158,132 @@ def provenance(entry: dict) -> str:
     return src
 
 
+# ---------------------------------------------------------------------------
+# reply_len - request/response pairs that share a message id
+# ---------------------------------------------------------------------------
+#
+# A message id is not a message. MESG_REQUEST (0x4D) names an id and what comes
+# back is a frame carrying that same id with a payload no host ever sends, so a
+# single payload_len per id describes the command and silently mis-describes
+# the reply. `reply_len` is the second half; see the schema note in the YAML.
+#
+# The lengths are named, not written: every one of them already exists in
+# `message_sizes` as the LEN byte the bridge composes, with the prose that
+# explains it. Resolving the name here keeps one number in one place, and turns
+# those constants from things nothing machine-checks into things a transcript
+# replay checks on every run.
+
+REPLY_SELECTORS = {
+    "reply_byte_0": "the info type the reply echoes at byte 0",
+    "request_index": "byte 0 of the MESG_REQUEST that asked, which the reply "
+                     "does not repeat",
+    "none": "nothing - there is only one shape",
+}
+
+
+def size_table(spec: dict) -> dict:
+    return {e["name"]: e.get("value") for e in spec["message_sizes"]["values"]}
+
+
+def resolve_reply_len(spec: dict, message: dict):
+    """The reply shapes of one message, with every `size:` name resolved.
+
+    Returns None for the overwhelming majority of messages, whose reply - if
+    they have one at all - is the same shape as their command. Raises rather
+    than warns on a malformed block: a reply shape that silently vanished would
+    turn a length check back into no check, which is the failure mode this
+    field exists to fix.
+    """
+    block = message.get("reply_len")
+    if block is None:
+        return None
+
+    where = "%s reply_len" % message["name"]
+    selector = block.get("selector")
+    if selector not in REPLY_SELECTORS:
+        raise SystemExit(
+            "%s: selector %r is not one of %s"
+            % (where, selector, ", ".join(sorted(REPLY_SELECTORS)))
+        )
+
+    sizes = size_table(spec)
+    shapes: list[dict] = []
+    seen: set = set()
+    for shape in block.get("shapes") or []:
+        name = shape.get("size")
+        if name not in sizes:
+            raise SystemExit(
+                "%s: size %r names no entry in message_sizes" % (where, name)
+            )
+        if sizes[name] is None:
+            raise SystemExit(
+                "%s: size %r is unresolved, so no reply length can be checked "
+                "against it" % (where, name)
+            )
+        when = shape.get("when")
+        if selector == "none":
+            if when is not None:
+                raise SystemExit(
+                    "%s: selector 'none' but shape %r carries a `when`"
+                    % (where, name)
+                )
+        else:
+            if when is None:
+                raise SystemExit(
+                    "%s: selector %r but shape %r has no `when`"
+                    % (where, selector, name)
+                )
+            if when in seen:
+                raise SystemExit(
+                    "%s: two shapes both claim `when: %s`" % (where, when)
+                )
+            seen.add(when)
+        shapes.append({
+            "when": when,
+            "len": sizes[name],
+            "size": name,
+            "desc": one_line(shape.get("desc")),
+        })
+
+    if not shapes:
+        raise SystemExit("%s: no shapes" % where)
+    if selector == "none" and len(shapes) != 1:
+        raise SystemExit(
+            "%s: selector 'none' but %d shapes" % (where, len(shapes))
+        )
+    return {
+        "selector": selector,
+        "desc": one_line(block.get("desc")),
+        "shapes": shapes,
+    }
+
+
+def reply_len_note(reply: dict, prefix: str = "") -> str:
+    """One sentence naming every reply shape and what picks it."""
+    parts = []
+    for shape in reply["shapes"]:
+        macro = prefix + shape["size"]
+        if shape["when"] is None:
+            parts.append("%d bytes (%s)" % (shape["len"], macro))
+        else:
+            parts.append("0x%02X -> %d bytes (%s)"
+                         % (shape["when"], shape["len"], macro))
+    return (
+        "REQUEST REPLY, a different shape from the command above: %s, selected "
+        "by %s. %s" % ("; ".join(parts), REPLY_SELECTORS[reply["selector"]],
+                       reply["desc"])
+    )
+
+
+def message_desc(spec: dict, message: dict, prefix: str = "") -> str:
+    """A message's prose, with its reply shapes appended when it has any."""
+    desc = one_line(message.get("desc"))
+    reply = resolve_reply_len(spec, message)
+    if reply is None:
+        return desc
+    return "%s %s" % (desc, reply_len_note(reply, prefix))
+
+
 def group_entries(group: dict) -> list[dict]:
     fmt = group.get("format", "hex")
     out = []
@@ -297,12 +423,16 @@ def render_header(spec: dict) -> str:
         item = dict(message)
         item["value"] = message.get("id")
         item["format"] = "hex"
+        item["desc"] = message_desc(spec, message, prefix)
         emit(item)
 
     sizes = spec["message_sizes"]
     section(
         "Reply sizes",
-        "The LEN byte the bridge puts on each reply it composes itself.",
+        "The LEN byte the bridge puts on each reply it composes itself. Where "
+        "a request reply is a different shape from the command sharing its id, "
+        "the message's reply_len block in protocol/ant_wire.yaml points at the "
+        "constant here rather than restating the number.",
     )
     for entry in sizes["values"]:
         item = dict(entry)
@@ -355,10 +485,13 @@ def render_header(spec: dict) -> str:
         "Ours, not Garmin's: not in Rev 5.1, not answered by any ANT device. "
         "%s is reserved for the rest of the family. Semantics live in "
         "docs/radiant-security.md; only the numbering is decided in the YAML. "
-        "Beware: 0xE0 here is a message ID. Lib config 0xE0 "
-        "(ANTW_LIB_CONFIG_ALL_EXT_FIELDS) is an unrelated namespace that "
-        "happens to share the byte - one is a frame's ID field, the other a "
-        "payload byte of message 0x6E." % radiant["reserved_range"],
+        "These were first proposed at 0xE0-0xE4 and moved: sdk-ant defines "
+        "MESG_EXT_ID_0 .. MESG_EXT_ID_4 as exactly 0xE0-0xE4, an "
+        "extended-message-id block selected by MSG_EXT_ID_MASK. Do not "
+        "re-propose that range. Lib config 0xE0 "
+        "(ANTW_LIB_CONFIG_ALL_EXT_FIELDS) is a third, unrelated namespace and "
+        "has not moved - one is a frame's ID field, the other a payload byte "
+        "of message 0x6E." % radiant["reserved_range"],
     )
     for message in radiant["values"]:
         item = dict(message)
@@ -480,6 +613,7 @@ def render_python(spec: dict) -> str:
         item = dict(message)
         item["value"] = message.get("id")
         item["format"] = "hex"
+        item["desc"] = message_desc(spec, message)
         emit(item)
 
     sizes = spec["message_sizes"]
@@ -518,9 +652,10 @@ def render_python(spec: dict) -> str:
         "Ours, not Garmin's: not in Rev 5.1, not answered by any ANT device. "
         "%s is reserved for the rest of the family. Kept out of MESSAGES on "
         "purpose, so a tool that walks the ANT protocol never sees them. "
-        "Beware: 0xE0 here is a message ID; lib config 0xE0 "
-        "(LIB_CONFIG_ALL_EXT_FIELDS) is an unrelated namespace that happens to "
-        "share the byte." % radiant["reserved_range"],
+        "These were first proposed at 0xE0-0xE4 and moved, because sdk-ant's "
+        "MESG_EXT_ID_0 .. MESG_EXT_ID_4 occupy exactly that range. Lib config "
+        "0xE0 (LIB_CONFIG_ALL_EXT_FIELDS) is a third, unrelated namespace and "
+        "has not moved." % radiant["reserved_range"],
     )
     for message in radiant["values"]:
         item = dict(message)
@@ -536,6 +671,13 @@ def render_python(spec: dict) -> str:
     )
 
     add("# Every message the protocol defines, keyed by id.")
+    add("#")
+    out.extend(py_comment(
+        "`payload_len` is the command - the h2d direction. `reply_len` is "
+        "present only where a request's reply is a different shape from the "
+        "command sharing its id, and a reader that has a record's direction in "
+        "hand must consult it rather than payload_len for a d2h record. Absent "
+        "means the reply, if there is one, has the command's shape."))
     add("MESSAGES = {")
     for message in spec["messages"]:
         if message.get("id") is None:
@@ -545,6 +687,20 @@ def render_python(spec: dict) -> str:
         add('        "direction": %r,' % message["direction"])
         add('        "payload_len": %r,' % message["payload_len"])
         add('        "bridged": %r,' % bool(message.get("bridged")))
+        reply_len = resolve_reply_len(spec, message)
+        if reply_len:
+            add('        "reply_len": {')
+            add('            "selector": %r,' % reply_len["selector"])
+            add('            "desc": %r,' % reply_len["desc"])
+            add('            "shapes": (')
+            for shape in reply_len["shapes"]:
+                add('                {"when": %s, "len": %d, "size": %r,'
+                    % ("None" if shape["when"] is None
+                       else "0x%02X" % shape["when"],
+                       shape["len"], shape["size"]))
+                add('                 "desc": %r},' % shape["desc"])
+            add('            ),')
+            add('        },')
         reply = message.get("reply")
         if reply:
             add('        "reply": %r,' % reply)
@@ -692,10 +848,72 @@ def render_doc_region(spec: dict) -> str:
                 md_cell(message["payload_len"]),
                 "yes" if message.get("bridged") else "no",
                 "`%s`" % message["reply"] if message.get("reply") else "-",
-                md_cell(message.get("desc")),
+                md_cell(message_desc(spec, message, "ANTW_")),
                 md_cell(provenance(message)),
             )
         )
+    add("")
+
+    # ---- request/response pairs --------------------------------------------
+    paired = [(m, resolve_reply_len(spec, m)) for m in spec["messages"]
+              if m.get("reply_len")]
+    add("## Request and response share an id")
+    add("")
+    add(
+        "**A message id is not a message.** `MESG_REQUEST` (`0x4D`) names an "
+        "id, and what comes back is a frame carrying that same id with a "
+        "payload no host ever sends. For most messages the two shapes happen "
+        "to coincide and one `len` describes both. For the messages below they "
+        "do not, and reading the `len` column as if it covered the reply is "
+        "how a perfectly conformant transcript comes to look inconsistent — "
+        "`0x78` takes a 9..12-byte command and answers a request with 4 bytes; "
+        "`0x7D` takes a 4-byte command and answers with 2, 5 or 20."
+    )
+    add("")
+    add(
+        "The `selector` column is the part worth reading twice, because it is "
+        "the difference between a reply a reader can check on its own and one "
+        "it can only check in context:"
+    )
+    add("")
+    add(
+        "- `reply_byte_0` — the reply echoes the info type it is answering at "
+        "byte 0, so it is self-describing."
+    )
+    add(
+        "- `request_index` — byte 0 of the `MESG_REQUEST` picked the shape and "
+        "the reply does not repeat it. The shape can only be pinned by pairing "
+        "the reply with the request that drew it, which is a fact about the "
+        "message and not a limitation of any particular reader."
+    )
+    add("- `none` — one shape; the reply simply differs from the command.")
+    add("")
+    add("| ID | Name | Command | Selector | Reply | Length | Size constant |")
+    add("|---|---|---|---|---|---|---|")
+    for message, reply in paired:
+        for index, shape in enumerate(reply["shapes"]):
+            add(
+                "| %s | %s | %s | %s | %s | %d | `ANTW_%s` |"
+                % (
+                    "`0x%02X`" % message["id"] if index == 0 else "",
+                    "`ANTW_%s`" % message["name"] if index == 0 else "",
+                    md_cell(message["payload_len"]) if index == 0 else "",
+                    "`%s`" % reply["selector"] if index == 0 else "",
+                    "-" if shape["when"] is None else "`0x%02X`" % shape["when"],
+                    shape["len"],
+                    shape["size"],
+                )
+            )
+    add("")
+    add(
+        "Every length above is *named*, not written: it resolves to an entry "
+        "in **Reply sizes** below, which is where the bridge's own LEN byte is "
+        "recorded together with the prose explaining it. One number, one place. "
+        "The side effect is worth stating — those constants used to be "
+        "witnessed only by the firmware that emits them, and are now checked "
+        "against real bytes every time `tools/test_ant_golden.py` replays a "
+        "transcript."
+    )
     add("")
 
     add("## Reply sizes")
@@ -830,11 +1048,19 @@ def render_doc_region(spec: dict) -> str:
     )
     add("")
     add(
-        "**`0xE0` here is a message ID. Lib config `0xE0` "
-        "(`ANTW_LIB_CONFIG_ALL_EXT_FIELDS` — channel id + RSSI + RX timestamp) "
-        "is a completely different namespace that happens to share the byte.** "
-        "One is the ID field of a frame; the other is a payload byte of message "
-        "`0x6E`. Nothing relates them."
+        "**These ids were first proposed at `0xE0`–`0xE4` and moved.** sdk-ant "
+        "defines `MESG_EXT_ID_0` … `MESG_EXT_ID_4` as exactly `0xE0`–`0xE4` — "
+        "an extended-message-id block selected by `MSG_EXT_ID_MASK` (`0xE0`) "
+        "and reserved for ANT response and request messages that use extended "
+        "message ids. Do not re-propose that range."
+    )
+    add("")
+    add(
+        "**Lib config `0xE0` (`ANTW_LIB_CONFIG_ALL_EXT_FIELDS` — channel id + "
+        "RSSI + RX timestamp) is a third, unrelated namespace, and it has not "
+        "moved.** One is the ID field of a frame; the other is a payload byte "
+        "of message `0x6E`. Nothing relates them, and nothing ever did — the "
+        "byte they used to share was a coincidence, not a connection."
     )
     add("")
     add("| ID | Name | dir | len | Meaning |")
@@ -858,9 +1084,17 @@ def render_doc_region(spec: dict) -> str:
     add("### Non-collision, checked")
     add("")
     add(
-        "Every witness available in this repository was checked before these "
-        "ids were reserved:"
+        "The first allocation reasoned that nothing at or above `0xC0` appears "
+        "in the bridge's dispatch, in any `tools/` definition, or in the "
+        "capabilities reply. Every one of those checks was correct, and the "
+        "conclusion was still wrong: **this repository is not the whole "
+        "protocol.** A message id is a claim about ANT, and the witnesses "
+        "below only enumerate what this repo happens to know. That is the "
+        "generalisable lesson, and it applies to every future allocation — "
+        "the list is necessary, never sufficient."
     )
+    add("")
+    add("Every witness available was checked:")
     add("")
     bridged_max = max(
         m["id"] for m in spec["messages"] if m.get("id") is not None and m.get("bridged")
@@ -870,7 +1104,10 @@ def render_doc_region(spec: dict) -> str:
         "- `src/ant_serial_bridge.c` `dispatch()` and `handle_request()` — "
         "highest id `0x%02X`." % bridged_max
     )
-    add("- Every `MESG_*` definition in `tools/` — highest `0x7F`.")
+    add(
+        "- Every `MESG_*` definition in `tools/ant_wire.py` — highest "
+        "`0x%02X`." % known_max
+    )
     add(
         "- `archive/host-api/ant_dll_exports.json`, taken from the real PE "
         "export directory of `ANT_DLL.dll` — 36 distinct message ids, highest "
@@ -887,17 +1124,25 @@ def render_doc_region(spec: dict) -> str:
         "messages, and an AP2-era extension block around `0xC0`–`0xC7` (RSSI "
         "search threshold, sleep, Garmin ESN, USB info)." % known_max
     )
+    add(
+        "- **sdk-ant itself**, read by the one agent permitted to open it — "
+        "the extended-id block `MESG_EXT_ID_0` … `MESG_EXT_ID_4` at "
+        "`0xE0`–`0xE4`, and `MESG_DEBUG_ID` at `0xF0`. Nothing else at or "
+        "above `0xC8`, and nothing at all in `0xF1`–`0xFA`. This is the "
+        "witness the first allocation could not consult, and it is the one "
+        "that moved these ids."
+    )
     add("")
     add(
-        "**Nothing is known to occupy `0xE0`–`0xEF`, so the reservation "
-        "holds.** The honest limit is on the last bullet: it is recall of the "
-        "public message table rather than a citation, which is exactly why the "
-        "`0xC0` block is stated as a *range* and why "
-        "`MESG_RSSI_SEARCH_THRESHOLD_ID` and `MESG_SLEEP_ID` carry no value in "
-        "this file. `0xE0` sits `0x19` clear of the top of that block, so the "
-        "reservation survives a misremembered member of it. `0xE0` is also not "
-        "confusable with SYNC (`0xA4`/`0xA5`) by a resynchronising parser — "
-        "which an id of `0xA4` genuinely would be."
+        "**`0xF1`–`0xF5` is therefore the allocation**, one clear of sdk-ant's "
+        "`0xF0`, `0x11` clear of the top of the extended-id block and `0x2A` "
+        "clear of the top of the AP2-era block. The honest limit is on the "
+        "Rev 5.1 bullet: it is recall of the public message table rather than "
+        "a citation, which is exactly why the `0xC0` block is stated as a "
+        "*range* and why `MESG_RSSI_SEARCH_THRESHOLD_ID` and `MESG_SLEEP_ID` "
+        "carry no value in this file. `0xF1`–`0xF5` is also not confusable "
+        "with SYNC (`0xA4`/`0xA5`) by a resynchronising parser — which an id "
+        "of `0xA4` genuinely would be."
     )
     add("")
 

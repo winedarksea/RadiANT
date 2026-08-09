@@ -65,8 +65,8 @@ src/ant_serial_bridge.c        unchanged logic; speaks only ANTW_*/antr_*
    +----+-----------------+----------------------+
    |                      |                      |
 ant_radio_sdk_ant.c   ant_radio_stub.c      ant_core/
-(thin forwarders +    (rename of            (clean-room stack)
- BUILD_ASSERTs)        ant_stub.c)               |
+(thin forwarders +    (the no-op radio)     (clean-room stack)
+ BUILD_ASSERTs)                                  |
                                           ant_radio_hal.h
                                                  |
                                        +---------+---------+
@@ -177,7 +177,8 @@ this project's documentation rules exist to prevent.
 - Three backends is three things to keep compiling. CI builds all of them, so
   the cost is compute, not attention.
 - A mechanical rename of 47 call sites and about 45 constant references in
-  `src/ant_serial_bridge.c`, plus `src/ant_stub.c`. Zero behavioural risk, and
+  `src/ant_serial_bridge.c`, plus the stub (renamed in the same wave from
+  `src/ant_stub.c` to `src/ant_radio_stub.c`). Zero behavioural risk, and
   verifiable before and after with `ant_probe.py`, `ant_features.py`,
   `ant_session.py` and `ant_bench.py` — which is why it is worth doing all at
   once rather than incrementally.

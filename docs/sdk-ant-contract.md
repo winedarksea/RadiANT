@@ -75,7 +75,7 @@ here rather than left to be discovered:
 
 - **Bad channel number is `ANTW_INVALID_MESSAGE`; bad parameter is
   `ANTW_INVALID_PARAMETER_PROVIDED`.** `antr_sdu_mask_config()` returns both, one per argument
-  (`src/ant_stub.c:522-536` is the existing reference behaviour).
+  (`src/ant_radio_stub.c:578-592` is the existing reference behaviour).
 - **`ANTW_CHANNEL_IN_WRONG_STATE` is for a channel that exists in the wrong state;
   `ANTW_CHANNEL_NOT_OPENED` is for a data-transfer call on a channel that is not on air.** They
   are not interchangeable.
@@ -85,9 +85,9 @@ here rather than left to be discovered:
 Everything that takes a buffer the callee reads takes `const uint8_t *` and **copies before
 returning**. sdk-ant's equivalents take non-`const` pointers, which forces seven `(uint8_t *)`
 casts in the bridge today; those casts disappear in Wave 1 and reappear as one cast per forwarder
-in the shim — eight there, because `ant_network_address_set()` is the one sdk-ant function that
-already takes a `const` pointer and so needs no cast in the bridge. The shim is the right place
-for all of them.
+in the shim — **seven there too, not eight.** Eight contract functions take a `const uint8_t *`,
+but `ant_network_address_set()` is the one sdk-ant function that already takes a `const` pointer,
+so its forwarder needs no cast either. The shim is the right place for all of them.
 
 `antr_burst_tx()` is the single exception in both respects: its buffer is non-`const` (a backend
 may transform a block in place) and ownership transfers. See the burst contract below.
@@ -110,7 +110,34 @@ defines exactly three constants of its own — the `ANTR_BURST_SEGMENT_*` flags 
 one thing here with no wire counterpart at all: the serial protocol carries a burst *sequence*
 number in the top bits of the channel byte and the bridge derives the segment from it, so the
 values never appear on air. The shim `BUILD_ASSERT`s them against sdk-ant's `BURST_SEGMENT_*`
-anyway.
+anyway, and that is not a formality: `ANTR_BURST_SEGMENT_END` was `0x04` on an assumption about
+the bit pattern the bridge assembles, sdk-ant's is `0x02`, and forwarding the wrong one marks the
+last block of every burst as a middle block — no `TRANSFER_TX_COMPLETED`, and a 1000 ms semaphore
+timeout per transfer. It is `0x02` now and the shim forwards the byte untouched.
+
+### 5a. The three constants the stub had to guess, and what they turned out to be
+
+Three values the stub needs are Nordic extensions whose numbers appear nowhere in this
+repository, so `protocol/ant_wire.yaml` recorded them as unresolved and
+[`src/ant_radio_stub.c`](../src/ant_radio_stub.c) carried local placeholders. The rule behind the
+placeholders is K1's and it is worth keeping: **an unresolved constant may never appear, even
+conditionally, in a file that has to build with no sdk-ant present** — a `#define` reaching into
+sdk-ant from the stub would reintroduce exactly the dependency the stub exists to disprove, and it
+would do it invisibly. The shim recovered all three; they are generated into `src/ant_wire.h` now
+and the placeholders are gone.
+
+| Constant | Placeholder | Real value | Consequence of the guess |
+|---|---|---|---|
+| `ANTW_SDU_MASK_ACK_CONFIG_BIT` | `0x80` | `0x80` | none — guessed correctly |
+| `ANTW_MAX_SUPPORTED_ENCRYPTION_MODE` | `1` | `2` | a stub build under-reported the supported encryption mode and refused `antr_crypto_channel_enable(.., 2, ..)` |
+| `ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE` | `2`, behind an `#ifdef` on the generated name | `4` | none in practice — the `#ifdef` tracked the generated constant the moment it landed, and the LEN byte on that reply is the bridge's, not the stub's |
+
+The third one is the one earlier revisions of this document missed: it was never listed alongside
+the other two, even though the stub guarded it the same way — at what was
+`src/ant_radio_stub.c:88-93` until the placeholders retired — and used it to bound a `memset`.
+Two of three guesses were right,
+which is the argument for the rule rather than against it — the one that was wrong was wrong
+silently, and only the shim could tell.
 
 **Two size constants in `src/ant_wire.h` are wrong today and must not be used to size a buffer
 until they are fixed.** `ANTW_MAX_SIZE_VALUE` is generated as 20, derived from the longest
@@ -152,7 +179,7 @@ the bytes.
 **There is no registration call.** `antr_on_message()` is resolved at link time and exactly one
 translation unit in the image defines it — `src/ant_serial_bridge.c` in firmware, a test double in
 `ant_core/tests/`. `ant_cb_register()` therefore has no counterpart and is the one symbol from
-`src/ant_stub.c` with no `antr_*` equivalent.
+the stub with no `antr_*` equivalent.
 
 Constraints on a backend calling it, restated from the header because they are ordering facts:
 
@@ -225,7 +252,7 @@ the wire.
 ## `antr_channel_open()` is a convenience; the offset form is the real one
 
 sdk-ant makes `ant_channel_open()` a macro forwarding to `ant_channel_open_with_offset()`, which
-is why `src/ant_stub.c:318` defines only the latter. The split is reproduced:
+is why `src/ant_radio_stub.c:365` defines only the latter. The split is reproduced:
 
 ```c
 antr_err_t antr_channel_open_with_offset(uint8_t channel, uint16_t offset);
@@ -326,21 +353,29 @@ What replaces it is a separate, optional design; see `docs/radiant-security.md`.
 
 ---
 
-## Coverage — every symbol in `src/ant_stub.c`, and where it went
+## Coverage — every symbol in the stub, and where it went
 
-`src/ant_stub.c` is the ground truth for coverage: it has to define every entry point `libant.a`
-would otherwise supply, or the stub build does not link. It defines **51** functions. Fifty map to
-an `antr_*` declaration; one (`ant_cb_register`) is deleted by the event inversion.
+The stub is the ground truth for coverage: it has to define every entry point `libant.a` would
+otherwise supply, or the stub build does not link. It defines **51** functions. Fifty map to an
+`antr_*` declaration; one (`ant_cb_register`) is deleted by the event inversion.
 
-Columns: the symbol, its definition line in `src/ant_stub.c`, the `antr_*` counterpart, and the
-call site. **The call-site column is the critical-path marker**: a bare `:NNN` is a line in
+Columns: the symbol, its definition line, the `antr_*` counterpart, and the call site. **The
+call-site column is the critical-path marker**: a bare `:NNN` is a line in
 `src/ant_serial_bridge.c` that a host message reaches today. Only one row is not directly called
 (`antr_channel_open_with_offset`, reached through its wrapper), and only three are conditional
 (the encryption writes, behind `CONFIG_ANT_DONGLE_ENCRYPTION`, which is off by default).
 
+**The line-number column is `src/ant_stub.c` — the file as it stood *before* the Wave 2 rename to
+[`src/ant_radio_stub.c`](../src/ant_radio_stub.c).** It is deliberately not renumbered against the
+current file. These numbers are the audit trail for how the table was built: they say which
+definition each row was read off, in the file that was read, and renumbering them against a file
+that has since been edited would quietly turn evidence into decoration. The symbol names are what
+to search by; the link check in the *Checked by* line above is what keeps the coverage claim
+honest, not the line numbers.
+
 ### Init and lifecycle
 
-| `src/ant_stub.c` | line | `antr_*` | called from |
+| symbol | line in `src/ant_stub.c` (pre-rename) | `antr_*` | called from |
 |---|---|---|---|
 | `ant_init` | 70 | `antr_init` | `src/main.c:128` |
 | `ant_cb_register` | 76 | **dropped** — replaced by `antr_on_message()` | was `ant_serial_bridge.c:1060` |
@@ -348,7 +383,7 @@ call site. **The call-site column is the critical-path marker**: a bare `:NNN` i
 
 ### Channel lifecycle
 
-| `src/ant_stub.c` | line | `antr_*` | called from |
+| symbol | line in `src/ant_stub.c` (pre-rename) | `antr_*` | called from |
 |---|---|---|---|
 | `ant_channel_assign` | 259 | `antr_channel_assign` | `:535` |
 | `ant_channel_unassign` | 332 | `antr_channel_unassign` | `:641` |
@@ -358,7 +393,7 @@ call site. **The call-site column is the critical-path marker**: a bare `:NNN` i
 
 ### Channel configuration
 
-| `src/ant_stub.c` | line | `antr_*` | called from |
+| symbol | line in `src/ant_stub.c` (pre-rename) | `antr_*` | called from |
 |---|---|---|---|
 | `ant_channel_id_set` | 270 | `antr_channel_id_set` | `:551` |
 | `ant_channel_period_set` | 287 | `antr_channel_period_set` | `:567` |
@@ -372,7 +407,7 @@ call site. **The call-site column is the critical-path marker**: a bare `:NNN` i
 
 ### Data transfer
 
-| `src/ant_stub.c` | line | `antr_*` | called from |
+| symbol | line in `src/ant_stub.c` (pre-rename) | `antr_*` | called from |
 |---|---|---|---|
 | `ant_broadcast_message_tx` | 338 | `antr_broadcast_message_tx` | `:860` |
 | `ant_acknowledge_message_tx` | 346 | `antr_acknowledge_message_tx` | `:868` |
@@ -382,7 +417,7 @@ call site. **The call-site column is the critical-path marker**: a bare `:NNN` i
 
 ### Search
 
-| `src/ant_stub.c` | line | `antr_*` | called from |
+| symbol | line in `src/ant_stub.c` (pre-rename) | `antr_*` | called from |
 |---|---|---|---|
 | `ant_search_waveform_set` | 382 | `antr_search_waveform_set` | `:677` |
 | `ant_prox_search_set` | 389 | `antr_prox_search_set` | `:686` |
@@ -395,13 +430,13 @@ call site. **The call-site column is the critical-path marker**: a bare `:NNN` i
 
 ### Network and key
 
-| `src/ant_stub.c` | line | `antr_*` | called from |
+| symbol | line in `src/ant_stub.c` (pre-rename) | `antr_*` | called from |
 |---|---|---|---|
 | `ant_network_address_set` | 252 | `antr_network_address_set` | `:527` |
 
 ### Library configuration
 
-| `src/ant_stub.c` | line | `antr_*` | called from |
+| symbol | line in `src/ant_stub.c` (pre-rename) | `antr_*` | called from |
 |---|---|---|---|
 | `ant_lib_config_set` | 370 | `antr_lib_config_set` | `:652`, `:665` |
 | `ant_lib_config_clear` | 376 | `antr_lib_config_clear` | `:653`, `:667` |
@@ -416,7 +451,7 @@ call site. **The call-site column is the critical-path marker**: a bare `:NNN` i
 
 ### Status and queries
 
-| `src/ant_stub.c` | line | `antr_*` | called from |
+| symbol | line in `src/ant_stub.c` (pre-rename) | `antr_*` | called from |
 |---|---|---|---|
 | `ant_capabilities_get` | 93 | `antr_capabilities_get` | `:216` |
 | `ant_version_get` | 122 | `antr_version_get` | `:225` |
@@ -431,7 +466,7 @@ call site. **The call-site column is the critical-path marker**: a bare `:NNN` i
 All four exist unconditionally. The three **writes** are called only under
 `CONFIG_ANT_DONGLE_ENCRYPTION`, which is off by default; the read is always compiled in.
 
-| `src/ant_stub.c` | line | `antr_*` | called from |
+| symbol | line in `src/ant_stub.c` (pre-rename) | `antr_*` | called from |
 |---|---|---|---|
 | `ant_crypto_channel_enable` | 479 | `antr_crypto_channel_enable` | `:787` (`CONFIG_ANT_DONGLE_ENCRYPTION`) |
 | `ant_crypto_key_set` | 492 | `antr_crypto_key_set` | `:798` (`CONFIG_ANT_DONGLE_ENCRYPTION`) |
@@ -442,7 +477,7 @@ All four exist unconditionally. The three **writes** are called only under
 
 | | count |
 |---|---|
-| functions defined in `src/ant_stub.c` | 51 |
+| functions defined in the stub (`src/ant_stub.c`, pre-rename) | 51 |
 | mapped to an `antr_*` declaration | 50 |
 | deliberately dropped (`ant_cb_register`) | 1 |
 | `antr_*` backend functions declared | 50 |
@@ -485,7 +520,8 @@ sdk-ant, which is what makes the boundary a scope rule rather than a promise.
   1. **The error narrowing** — `return (antr_err_t)(sdk_err & 0xFFu);` per forwarder. Do it here,
      not in the bridge.
   2. **The `const` casts** — our contract is `const uint8_t *`, sdk-ant's is `uint8_t *`. One cast
-     per forwarder; eight in total.
+     per forwarder; **seven** in total. Eight contract functions take a `const uint8_t *`, but
+     `ant_network_address_set()`'s sdk-ant counterpart is already `const`.
   3. **`antr_channel_open_with_offset()`** forwards to sdk-ant's `..._with_offset` function, not to
      its `ant_channel_open` macro.
   4. **The event normaliser** — register a callback with `ant_cb_register()` at init that fills a
@@ -515,7 +551,7 @@ sdk-ant, which is what makes the boundary a scope rule rather than a promise.
   `ANTW_INVALID_MESSAGE`. The offset is gone, not renamed — see the error convention above.
 - **Do not move the prose header comment** at the top of the file. It is read at the moment
   someone edits the file, and it explains what the stub is for; docs link to it.
-- The existing note at `src/ant_stub.c:361-366` — that the stub never raises
+- The existing note at `src/ant_radio_stub.c:410-421` — that the stub never raises
   `EVENT_TRANSFER_NEXT_DATA_BLOCK`, so every burst packet after the first is answered with
   `TRANSFER_IN_PROGRESS` — is now a **documented, deliberate violation of B3** rather than an
   incidental gap. Keep the comment and say which obligation it declines, so the stub reads as an

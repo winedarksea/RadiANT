@@ -1,10 +1,42 @@
 # `archive/captures/radio/` — `.antcap` ANT+ packet captures
 
-Checked by: nothing yet — the directory holds no captures. Once it does, the
-replay tests in `tools/test_*.py` and in `zephyr_aerosense`'s host tests are
-what fail when a decoder drifts.
+Checked by: nothing yet for the `.antcap` replay path. Once the shopping list
+below is filled, the replay tests in `tools/test_*.py` and in
+`zephyr_aerosense`'s host tests are what fail when a decoder drifts. The two
+`.log` files are checked by nothing and are not meant to be — they are raw
+bench recordings, and `docs/spike-a-results.md` is what reads them.
 
-**Status: empty. This needs a bench session — see *What to record* below.**
+**Status: partially filled.**
+
+| File | What it is |
+|---|---|
+| `2026-08-09-sdk-ant-power-300s.antcap`, `...-run2.antcap` | The two 300 s power runs behind the Phase 4 sdk-ant baselines in `archive/benchmarks/2026-08-09-sdk-ant.json`. Not part of the shopping list below — that set is 900 s per profile and is still outstanding |
+| `2026-08-09-nrf54l15-run1.log`, `...-run2.log` | Spike A's raw serial logs — see *Spike A's bench logs* below |
+
+**The four-profile `.antcap` set still needs a bench session — see *What to
+record* below.**
+
+## Spike A's bench logs
+
+`2026-08-09-nrf54l15-run1.log` and `2026-08-09-nrf54l15-run2.log` are the COM7
+serial output of `ant_core/spike/rx_raw` running on an nRF54L15 DK on
+2026-08-09, with a Feather driven as an ANT+ master by `tools/ant_sim.py`. They
+are the evidence behind `docs/spike-a-results.md` and behind every `[measured]`
+tag in `docs/ant-radio-link.md`. **If those documents and these logs disagree,
+the logs are right.**
+
+They are not `.antcap` and nothing replays them: the format is Zephyr log lines,
+one `[cfg]` line per configuration tried and one `[res]` line per result, with
+per-packet `PKT` / `raw18` detail. Each file opens with a provenance header
+saying which firmware revision produced it — run 1's phase C and E sweeps varied
+the wrong axis, which is why run 2 exists, and both are kept because that
+failure is part of the record.
+
+They live here rather than beside the spike for the reason this directory
+exists: they are our own recordings of our own hardware, the safest and
+highest-value artifact class in `archive/` (`docs/preservation.md`), and the
+spike itself is a throwaway application that a later cleanup may well delete.
+Together they are about 53 KB.
 
 ## The format
 

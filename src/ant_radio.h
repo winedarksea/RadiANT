@@ -250,15 +250,22 @@ void antr_on_message(const struct antr_msg *msg);
  * These are API values, not wire values - the serial protocol carries a burst
  * *sequence* number in the top bits of the channel byte and the bridge derives
  * the segment from it, so nothing here appears on the wire and the values are
- * ours to choose. They are chosen to match the bit pattern
- * src/ant_serial_bridge.c already assembles, so ant_radio_sdk_ant.c can forward
- * the byte untouched. That is an assumption, not a fact: the shim must
- * BUILD_ASSERT each of the three against its sdk-ant BURST_SEGMENT_*
- * counterpart, and add an explicit three-line mapping if any of them differs.
+ * ours to choose. They are chosen to match sdk-ant's BURST_SEGMENT_CONTINUE /
+ * _START / _END, which the Wave 2 shim checked against sdk-ant directly. That
+ * is what lets src/ant_radio_sdk_ant.c forward the byte untouched rather than
+ * remap it, and the shim BUILD_ASSERTs all three so the agreement stays a
+ * checked fact rather than a remembered one.
+ *
+ * END was 0x04 here until that check ran. 0x04 was an assumption about the bit
+ * pattern src/ant_serial_bridge.c assembles, and it was wrong; forwarding it
+ * would have marked the last block of every burst as a middle block, so
+ * TRANSFER_TX_COMPLETED never arrives and the bridge's burst semaphore times
+ * out at 1000 ms per transfer - the same silent stall obligations B3 and B4
+ * above exist to prevent, reached from the backend side.
  */
 #define ANTR_BURST_SEGMENT_CONTINUE  0x00  /* a middle block */
 #define ANTR_BURST_SEGMENT_START     0x01  /* first block of the transfer */
-#define ANTR_BURST_SEGMENT_END       0x04  /* last block of the transfer */
+#define ANTR_BURST_SEGMENT_END       0x02  /* last block of the transfer */
 
 /* The largest block antr_burst_tx() will ever be handed is
  * ANTW_ADV_BURST_BLOCK_MAX, from src/ant_wire.h. Advanced burst carries 8, 16
@@ -971,7 +978,7 @@ antr_err_t antr_sdu_mask_get(uint8_t mask_index, uint8_t *mask);
  *                     ANTW_INVALID_SDU_MASK (0xFF) turns selective updates
  *                     back off for the channel. A backend must mask that bit
  *                     off before range-checking the index, which is what
- *                     src/ant_stub.c:530-531 does.
+ *                     src/ant_radio_stub.c:586-587 does.
  *
  * Note the two different error codes: an out-of-range channel is
  * ANTW_INVALID_MESSAGE and an out-of-range mask is

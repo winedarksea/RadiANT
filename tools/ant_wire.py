@@ -186,6 +186,13 @@ MESG_RADIO_CW_INIT_ID = 0x53
 # bit layout, and for the exact reply this firmware gives. [bridge, observed]
 MESG_CAPABILITIES_ID = 0x54
 
+# [filler, mode] on the way in, [channel, mode] on the way back. Dispatched at
+# src/ant_serial_bridge.c and requested in handle_request(). A Nordic
+# extension: not in Rev 5.1, and no witness inside this repository - the id was
+# recovered by the Wave 2 shim and is BUILD_ASSERTed in
+# src/ant_radio_sdk_ant.c. [sdk-ant-shim + verify:sdk-ant-shim]
+MESG_CHANNEL_CRC_MODE_ID = 0x58
+
 # [channel, device number lo, device number hi, device type, transmission type,
 # list index]. [bridge]
 MESG_ID_LIST_ADD_ID = 0x59
@@ -286,12 +293,30 @@ MESG_HIGH_DUTY_SEARCH_MODE_ID = 0x77
 # [filler, enable, rf payload size, required modes, 0, 0, optional modes, 0, 0,
 # (stall lo, stall hi, retry extension)]. Requesting it with index 0 returns
 # capabilities, with index 1 the current configuration - and the reply drops
-# the enable byte the command carried. [bridge, tools]
+# the enable byte the command carried. REQUEST REPLY, a different shape from
+# the command above: 0x00 -> 4 bytes
+# (MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE); 0x01 -> 10 bytes
+# (MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE), selected by byte 0 of the
+# MESG_REQUEST that asked, which the reply does not repeat.
+# src/ant_serial_bridge.c picks the reply length from byte 0 of the
+# MESG_REQUEST - `ch ? ..._REQ_CONFIG_SIZE : ..._REQ_CAPABILITIES_SIZE` - and
+# neither reply repeats that byte, so nothing in the reply says which of the
+# two it is. Pairing it with the request that drew it is the only way to know,
+# and that is a fact about this message rather than a limitation of any reader.
+# [bridge, tools]
 MESG_CONFIG_ADV_BURST_ID = 0x78
 
 # Command is [filter lo, filter hi] with no channel byte; the reply is [filler,
 # filter lo, filter hi]. That asymmetry is real and is what the round-trip
-# check in ant_features.py exists to catch. [bridge, tools]
+# check in ant_features.py exists to catch. REQUEST REPLY, a different shape
+# from the command above: 3 bytes (MESG_EVENT_FILTER_CONFIG_REQ_SIZE), selected
+# by nothing - there is only one shape. One shape, one byte longer than the
+# command. The `2..3` on payload_len above is the union of the two and predates
+# this field; it is left as it stands because tools/ant_conformance.py derives
+# its malformed-short and malformed-long cases from those bounds, so narrowing
+# it would change the generated case set and the committed Tier 1 reference
+# transcript would stop being reproducible. The reply side is exact here
+# regardless, which is where the asymmetry actually shows. [bridge, tools]
 MESG_EVENT_FILTER_CONFIG_ID = 0x79
 
 # [channel, mask config]. Binds one of the masks to a channel; INVALID_SDU_MASK
@@ -313,7 +338,17 @@ MESG_USER_CONFIG_PAGE_ID = 0x7C
 # Write [channel, mode, key number, decimation rate] - compiled out unless
 # CONFIG_ANT_DONGLE_ENCRYPTION. The read side is always bridged: requesting it
 # with an ENCRYPTION_INFO_GET_* index returns [info type, data...], the info
-# type echoed at byte 0. [bridge, tools]
+# type echoed at byte 0. REQUEST REPLY, a different shape from the command
+# above: 0x00 -> 2 bytes (MESG_CONFIG_ENCRYPT_REQ_CAPABILITIES_SIZE); 0x01 -> 5
+# bytes (MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE); 0x02 -> 20 bytes
+# (MESG_CONFIG_ENCRYPT_REQ_CONFIG_USER_DATA_SIZE), selected by the info type
+# the reply echoes at byte 0. Three reply shapes behind one id, and the reply
+# says which it is: the ENCRYPTION_INFO_GET_* type is echoed at byte 0, so a
+# reader with no memory of the request can still check the length exactly. An
+# index that is not one of these three is refused with a RESPONSE_EVENT naming
+# 0x4D rather than answered with a 0x7D - the reply-size switch has no default
+# that could send a zero-length frame, which is what case 4d-request-encrypt-
+# enable-3 pins. [bridge, tools]
 MESG_ENCRYPT_ENABLE_ID = 0x7D
 
 # [key number, key[16]]. That the key is 128 bits is stated in prose only; no
@@ -329,6 +364,20 @@ MESG_SET_ENCRYPT_INFO_ID = 0x7F
 # [channel, cycles]. [bridge, rev5.1 sec 9.5 + verify:sdk-ant-shim]
 MESG_ACTIVE_SEARCH_SHARING_ID = 0x81
 
+# [filler, enable]. Enhanced channel spacing. A Nordic extension: not in Rev
+# 5.1, and no witness inside this repository - the id was recovered by the Wave
+# 2 shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c. [sdk-ant-shim +
+# verify:sdk-ant-shim]
+MESG_ECS_ENABLE_ID = 0x89
+
+# [channel] to clear, [channel, pending] on request. A Nordic extension: not in
+# Rev 5.1, and no witness inside this repository - the id was recovered by the
+# Wave 2 shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c. Note that the
+# *request* form of this id replies with MESG_PENDING_TRANSMIT_GET_SIZE bytes,
+# which is a separate constant from MESG_PENDING_TRANSMIT_CLEAR's own 1-byte
+# command payload. [sdk-ant-shim + verify:sdk-ant-shim]
+MESG_PENDING_TRANSMIT_CLEAR_ID = 0x8C
+
 # Serial-layer error: bad checksum, bad length, or a frame that arrived too
 # slowly. This firmware drops malformed frames silently instead - recorded so a
 # host-side parser can name the byte. [rev5.1 sec 7.4 + verify:sdk-ant-shim]
@@ -340,27 +389,18 @@ MESG_SERIAL_ERROR_ID = 0xAE
 # Believed to sit in the 0xC0 block of AP2-era extension messages, but no value
 # in that block is corroborated by anything in this repository - the whole
 # host-callable API in archive/host-api/ant_dll_exports.json tops out at 0x7B -
-# so no number is recorded here. [host-api + verify:sdk-ant-shim]
+# so no number is recorded here. The Wave 2 shim looked and came back empty as
+# well: sdk-ant v2.1.0 defines no such id anywhere in its headers or sources,
+# so this stays unresolved rather than merely unverified. [host-api +
+# verify:sdk-ant-shim]
 
 # MESG_SLEEP_ID: UNRESOLVED. Put the device into its low-power sleep state.
 # Implied by the ANT_DLL export ANT_SleepMessage, which Zwift resolves. Same
 # 0xC0 block and the same lack of corroboration as
-# MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. [host-api + verify:sdk-
-# ant-shim]
-
-# MESG_CHANNEL_CRC_MODE_ID: UNRESOLVED. [filler, mode] on the way in, [channel,
-# mode] on the way back. Dispatched at src/ant_serial_bridge.c and requested in
-# handle_request(). The numeric id is a Nordic extension that appears nowhere
-# in this repository and is not in Rev 5.1. [bridge + verify:sdk-ant-shim]
-
-# MESG_PENDING_TRANSMIT_CLEAR_ID: UNRESOLVED. [channel] to clear, [channel,
-# pending] on request. Dispatched by the bridge; the numeric id is a Nordic
-# extension not present in this repository or in Rev 5.1. [bridge + verify:sdk-
-# ant-shim]
-
-# MESG_ECS_ENABLE_ID: UNRESOLVED. [filler, enable]. Enhanced channel spacing.
-# Dispatched by the bridge; the numeric id is a Nordic extension not present in
-# this repository or in Rev 5.1. [bridge + verify:sdk-ant-shim]
+# MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. The Wave 2 shim found
+# the name referenced in sdk-ant but never defined - the only occurrence is
+# inside a commented-out dispatch arm - so there is no value to recover there
+# either. [host-api + verify:sdk-ant-shim]
 
 # ---------------------------------------------------------------------------
 # Reply sizes
@@ -375,7 +415,7 @@ MESG_STARTUP_MESG_SIZE = 1
 # Nine bytes, confirmed by the observed reply 080800b23200fd8d0f. [observed]
 MESG_CAPABILITIES_SIZE = 9
 
-# Null-padded version string. src/ant_stub.c calls it a 20-byte payload;
+# Null-padded version string. src/ant_radio_stub.c calls it a 20-byte payload;
 # nothing in this repository shows the reply on the wire. [stub + verify:sdk-
 # ant-shim]
 MESG_VERSION_SIZE = 20
@@ -416,13 +456,18 @@ MESG_EVENT_FILTER_CONFIG_REQ_SIZE = 3
 # tools]
 MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE = 10
 
-# MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE: UNRESOLVED. The advanced-burst
-# capabilities reply: byte 0 is a maximum packet size code, byte 1 is a
-# supported-modes bitfield. Its declared length is not visible in this
-# repository - ant_features.py reads only the first two bytes and prints the
-# rest as hex, and no captured reply is committed. This one is on the wire, so
-# it cannot be substituted with a local value: it is the LEN byte the bridge
-# puts on the reply. [tools + verify:sdk-ant-shim]
+# The advanced-burst capabilities reply: byte 0 is a maximum packet size code,
+# byte 1 is a supported-modes bitfield, bytes 2 and 3 are reserved and zero.
+# Not visible in this repository - ant_features.py reads only the first two
+# bytes and prints the rest as hex, and no captured reply is committed - so it
+# was recovered by the Wave 2 shim and is BUILD_ASSERTed in
+# src/ant_radio_sdk_ant.c. It had to be: this one is the LEN byte on a reply
+# the bridge composes, so no local substitute is legitimate, and while it was
+# unresolved the capabilities form of the request declined. Used at
+# src/ant_radio_stub.c:254, where it bounds the memset; the #ifdef on this name
+# that stood in for it there now resolves, so the fallback has been removed.
+# [sdk-ant-shim + verify:sdk-ant-shim]
+MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE = 4
 
 # [info type, supported mode]. [bridge]
 MESG_CONFIG_ENCRYPT_REQ_CAPABILITIES_SIZE = 2
@@ -801,12 +846,17 @@ ADV_BURST_MODES_FREQ_HOP = 0x01
 # off. [stub, tools]
 INVALID_SDU_MASK = 0xFF
 
-# SDU_MASK_ACK_CONFIG_BIT: UNRESOLVED. Set alongside a mask number to apply the
-# mask to acknowledged data as well as broadcast. src/ant_stub.c:529 masks it
-# off before range-checking the mask number; the bit's value appears nowhere in
-# this repository. Never on the wire in a direction this dongle originates -
-# the host sets it - so the stub does not need the real value to behave
-# correctly. [stub + verify:sdk-ant-shim]
+# Set alongside a mask number to apply the mask to acknowledged data as well as
+# broadcast. The radio backend masks it off before range-checking the mask
+# number. The bit's value appears nowhere in this repository, so it was
+# recovered by the Wave 2 shim and is BUILD_ASSERTed in
+# src/ant_radio_sdk_ant.c. Note that it shares its value with
+# INVALID_SDU_MASK's top bit, which is why the mask number must be range-
+# checked after the bit is cleared and not before. Used at
+# src/ant_radio_stub.c:587; the local placeholder that stood in for it there
+# guessed the value correctly and has been retired. [sdk-ant-shim + verify:sdk-
+# ant-shim]
+SDU_MASK_ACK_CONFIG_BIT = 0x80
 
 # ---------------------------------------------------------------------------
 # Encryption
@@ -848,21 +898,36 @@ ENCRYPTION_USER_DATA_SIZE = 19
 # of ant_crypto_key_set(), which takes a bare pointer. [bridge, stub]
 ENCRYPTION_KEY_SIZE = 16
 
-# MAX_SUPPORTED_ENCRYPTION_MODE: UNRESOLVED. The value src/ant_stub.c answers
-# an ENCRYPTION_INFO_GET_SUPPORTED_MODE request with, and the upper bound it
-# range-checks a channel-enable against. Not visible in this repository. It
-# does reach the wire, but only out of the stub, whose replies are already
-# declared synthetic. [stub + verify:sdk-ant-shim]
+# The value a backend answers an ENCRYPTION_INFO_GET_SUPPORTED_MODE request
+# with, and the upper bound it range-checks a channel-enable against. It is the
+# highest of the encryption modes above - user-data request - rather than an
+# independent number. Not visible in this repository, so it was recovered by
+# the Wave 2 shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c. Used at
+# src/ant_radio_stub.c:278 and :541; the local placeholder that stood in for it
+# there guessed 1 and was wrong, which is why a stub build's answer to
+# ENCRYPTION_INFO_GET_SUPPORTED_MODE changed when it retired. [sdk-ant-shim +
+# verify:sdk-ant-shim]
+MAX_SUPPORTED_ENCRYPTION_MODE = 0x02
 
 # ---------------------------------------------------------------------------
 # Burst header byte
-# Byte 0 of MESG_BURST_DATA / MESG_ADV_BURST_DATA. Not a channel number on its
-# own.
+# Byte 0 of MESG_BURST_DATA / MESG_ADV_BURST_DATA / the legacy
+# MESG_EXT_BURST_DATA. Not a channel number on its own: it is three fields
+# packed into one byte, and the five-bit channel field is the ONLY place in the
+# serial protocol where a channel number is squeezed below eight bits. Every
+# other channel byte on the wire - including byte 0 of a RESPONSE_EVENT, which
+# echoes whatever the command carried - is a plain uint8. Applying the five-bit
+# ceiling to those is a category error: case frame/sync-in-payload deliberately
+# sends channel 0xA4 in an antlib-config command so that a SYNC byte lands
+# inside the payload, and the dongle correctly echoes 0xA4 back in a 0x40.
 # ---------------------------------------------------------------------------
 
 # Channel number. Five bits - which is why 32 channels is the serial protocol's
 # natural ceiling, and why ant_core is sized for 32 from the first line.
-# [bridge]
+# Because the field is five bits wide, a header on the wire cannot express a
+# channel above 31 at all; what a burst header CAN address that the device does
+# not have is a channel above the count in byte 0 of the capabilities reply,
+# and that is the bound worth checking on a transcript. [bridge]
 BURST_HEADER_CHANNEL_MASK = 0x1F
 
 # Sequence number occupies bits 5-6. [bridge]
@@ -978,35 +1043,78 @@ CAPABILITIES_SELECTIVE_DATA_UPDATE_ENABLED = 0x40
 # the bridge chose to expose. [stub, tools]
 CAPABILITIES_ENCRYPTED_CHANNEL_ENABLED = 0x80
 
+# RF-active notification: an event when the time to the next synchronous RF
+# activity exceeds a configured threshold. Set in the observed reply. [sdk-ant-
+# shim + verify:sdk-ant-shim]
+CAPABILITIES_RFACTIVE_NOTIFICATION_ENABLED = 0x01
+
+# Data filtering. Clear in the observed reply. [sdk-ant-shim + verify:sdk-ant-
+# shim]
+CAPABILITIES_DATA_FILTERING_ENABLED = 0x02
+
+# Search uplink. Set in the observed reply. [sdk-ant-shim + verify:sdk-ant-
+# shim]
+CAPABILITIES_SEARCH_UPLINK_ENABLED = 0x04
+
+# Group transmitter initiation - the master-side meaning of the channel search
+# timeout. Set in the observed reply. [sdk-ant-shim + verify:sdk-ant-shim]
+CAPABILITIES_GROUP_TRANSMITTER_INITIATION_ENABLED = 0x08
+
+# Extended time base: a 4-byte RTC timestamp instead of the 2-byte ANT one.
+# Clear in the observed reply. [sdk-ant-shim + verify:sdk-ant-shim]
+CAPABILITIES_TIME_BASE_ENABLED = 0x10
+
+# Time sync. Clear in the observed reply. [sdk-ant-shim + verify:sdk-ant-shim]
+CAPABILITIES_TIME_SYNC_ENABLED = 0x20
+
+# External PA/LNA GPIO control during radio events. Clear in the observed
+# reply. [sdk-ant-shim + verify:sdk-ant-shim]
+CAPABILITIES_PA_LNA_SUPPORT_ENABLED = 0x40
+
+# Channel start offset - the second parameter of
+# antr_channel_open_with_offset(). Set in the observed reply, which is the
+# capability behind the offset form existing at all. [sdk-ant-shim +
+# verify:sdk-ant-shim]
+CAPABILITIES_CHANNEL_START_OFFSET_ENABLED = 0x01
+
+# Background searching channel uplink. Set in the observed reply. [sdk-ant-shim
+# + verify:sdk-ant-shim]
+CAPABILITIES_SEARCHING_CHANNEL_UPLINK_ENABLED = 0x02
+
+# ID-match fix for a shared-channel RX burst transfer. Set in the observed
+# reply. [sdk-ant-shim + verify:sdk-ant-shim]
+CAPABILITIES_ID_MATCH_FIX_ON_SHARED_CHANNEL_RXBURST = 0x04
+
 # ---------------------------------------------------------------------------
 # RadiANT extension messages - NOT ANT protocol
-# Ours, not Garmin's: not in Rev 5.1, not answered by any ANT device. 0xE5-0xEF
+# Ours, not Garmin's: not in Rev 5.1, not answered by any ANT device. 0xF6-0xFA
 # is reserved for the rest of the family. Kept out of MESSAGES on purpose, so a
-# tool that walks the ANT protocol never sees them. Beware: 0xE0 here is a
-# message ID; lib config 0xE0 (LIB_CONFIG_ALL_EXT_FIELDS) is an unrelated
-# namespace that happens to share the byte.
+# tool that walks the ANT protocol never sees them. These were first proposed
+# at 0xE0-0xE4 and moved, because sdk-ant's MESG_EXT_ID_0 .. MESG_EXT_ID_4
+# occupy exactly that range. Lib config 0xE0 (LIB_CONFIG_ALL_EXT_FIELDS) is a
+# third, unrelated namespace and has not moved.
 # ---------------------------------------------------------------------------
 
 # Select which of X_PRIV, X_CONF and X_AUTH are on for a channel. The three
 # switches are independent, not a ladder. [K4 (docs/radiant-security.md sec 9)]
-MESG_RADIANT_SEC_CONFIG_ID = 0xE0
+MESG_RADIANT_SEC_CONFIG_ID = 0xF1
 
 # Install key material for a channel. [K4 (docs/radiant-security.md sec 9)]
-MESG_RADIANT_SET_KEY_ID = 0xE1
+MESG_RADIANT_SET_KEY_ID = 0xF2
 
 # Read or set the current 128 s epoch counter that X_PRIV's device number
 # rotation is derived from. [K4 (docs/radiant-security.md sec 9)]
-MESG_RADIANT_EPOCH_ID = 0xE2
+MESG_RADIANT_EPOCH_ID = 0xF3
 
 # Per-channel security state: which switches are active, replay counter high-
 # water mark, spread-MAC verification result. [K4 (docs/radiant-security.md sec
 # 9)]
-MESG_RADIANT_SEC_STATUS_ID = 0xE3
+MESG_RADIANT_SEC_STATUS_ID = 0xF4
 
 # Drive the in-the-clear pairing exchange. An X_PRIV node pairs with rotation
 # off and the pairing bit set, then switches to rotating - pairing in the clear
 # is structural, not an oversight. [K4 (docs/radiant-security.md sec 9)]
-MESG_RADIANT_PAIRING_ID = 0xE4
+MESG_RADIANT_PAIRING_ID = 0xF5
 
 # ---------------------------------------------------------------------------
 # Lookup tables
@@ -1015,6 +1123,12 @@ MESG_RADIANT_PAIRING_ID = 0xE4
 # ---------------------------------------------------------------------------
 
 # Every message the protocol defines, keyed by id.
+#
+# `payload_len` is the command - the h2d direction. `reply_len` is present only
+# where a request's reply is a different shape from the command sharing its id,
+# and a reader that has a record's direction in hand must consult it rather
+# than payload_len for a d2h record. Absent means the reply, if there is one,
+# has the command's shape.
 MESSAGES = {
     0x00: {
         "name": 'MESG_INVALID_ID',
@@ -1195,6 +1309,14 @@ MESSAGES = {
         "bridged": True,
         "desc": 'What the ANT *stack* can do - a superset of what the bridge implements. Requested with MESG_REQUEST. See the capabilities section for the byte and bit layout, and for the exact reply this firmware gives.',
     },
+    0x58: {
+        "name": 'MESG_CHANNEL_CRC_MODE_ID',
+        "direction": 'both',
+        "payload_len": 2,
+        "bridged": True,
+        "reply": 'MESG_RESPONSE_EVENT_ID',
+        "desc": '[filler, mode] on the way in, [channel, mode] on the way back. Dispatched at src/ant_serial_bridge.c and requested in handle_request(). A Nordic extension: not in Rev 5.1, and no witness inside this repository - the id was recovered by the Wave 2 shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c.',
+    },
     0x59: {
         "name": 'MESG_ID_LIST_ADD_ID',
         "direction": 'h2d',
@@ -1359,6 +1481,16 @@ MESSAGES = {
         "direction": 'both',
         "payload_len": '9..12',
         "bridged": True,
+        "reply_len": {
+            "selector": 'request_index',
+            "desc": 'src/ant_serial_bridge.c picks the reply length from byte 0 of the MESG_REQUEST - `ch ? ..._REQ_CONFIG_SIZE : ..._REQ_CAPABILITIES_SIZE` - and neither reply repeats that byte, so nothing in the reply says which of the two it is. Pairing it with the request that drew it is the only way to know, and that is a fact about this message rather than a limitation of any reader.',
+            "shapes": (
+                {"when": 0x00, "len": 4, "size": 'MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE',
+                 "desc": 'Capabilities: [max packet size code, supported modes, 0, 0]. Observed a4047803030000d8 - 24-byte packets, frequency hopping.'},
+                {"when": 0x01, "len": 10, "size": 'MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE',
+                 "desc": 'Configuration: the 11-byte command minus the enable byte.'},
+            ),
+        },
         "desc": '[filler, enable, rf payload size, required modes, 0, 0, optional modes, 0, 0, (stall lo, stall hi, retry extension)]. Requesting it with index 0 returns capabilities, with index 1 the current configuration - and the reply drops the enable byte the command carried.',
     },
     0x79: {
@@ -1366,6 +1498,14 @@ MESSAGES = {
         "direction": 'both',
         "payload_len": '2..3',
         "bridged": True,
+        "reply_len": {
+            "selector": 'none',
+            "desc": 'One shape, one byte longer than the command. The `2..3` on payload_len above is the union of the two and predates this field; it is left as it stands because tools/ant_conformance.py derives its malformed-short and malformed-long cases from those bounds, so narrowing it would change the generated case set and the committed Tier 1 reference transcript would stop being reproducible. The reply side is exact here regardless, which is where the asymmetry actually shows.',
+            "shapes": (
+                {"when": None, "len": 3, "size": 'MESG_EVENT_FILTER_CONFIG_REQ_SIZE',
+                 "desc": '[filler, filter lo, filter hi].'},
+            ),
+        },
         "desc": 'Command is [filter lo, filter hi] with no channel byte; the reply is [filler, filter lo, filter hi]. That asymmetry is real and is what the round-trip check in ant_features.py exists to catch.',
     },
     0x7A: {
@@ -1396,6 +1536,18 @@ MESSAGES = {
         "direction": 'both',
         "payload_len": 4,
         "bridged": True,
+        "reply_len": {
+            "selector": 'reply_byte_0',
+            "desc": 'Three reply shapes behind one id, and the reply says which it is: the ENCRYPTION_INFO_GET_* type is echoed at byte 0, so a reader with no memory of the request can still check the length exactly. An index that is not one of these three is refused with a RESPONSE_EVENT naming 0x4D rather than answered with a 0x7D - the reply-size switch has no default that could send a zero-length frame, which is what case 4d-request-encrypt-enable-3 pins.',
+            "shapes": (
+                {"when": 0x00, "len": 2, "size": 'MESG_CONFIG_ENCRYPT_REQ_CAPABILITIES_SIZE',
+                 "desc": '[info type, supported mode].'},
+                {"when": 0x01, "len": 5, "size": 'MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE',
+                 "desc": '[info type, crypto id[4]].'},
+                {"when": 0x02, "len": 20, "size": 'MESG_CONFIG_ENCRYPT_REQ_CONFIG_USER_DATA_SIZE',
+                 "desc": '[info type, custom user data[19]] - the longest frame body the parser ever sees.'},
+            ),
+        },
         "desc": 'Write [channel, mode, key number, decimation rate] - compiled out unless CONFIG_ANT_DONGLE_ENCRYPTION. The read side is always bridged: requesting it with an ENCRYPTION_INFO_GET_* index returns [info type, data...], the info type echoed at byte 0.',
     },
     0x7E: {
@@ -1421,6 +1573,22 @@ MESSAGES = {
         "bridged": True,
         "desc": '[channel, cycles].',
     },
+    0x89: {
+        "name": 'MESG_ECS_ENABLE_ID',
+        "direction": 'h2d',
+        "payload_len": 2,
+        "bridged": True,
+        "reply": 'MESG_RESPONSE_EVENT_ID',
+        "desc": '[filler, enable]. Enhanced channel spacing. A Nordic extension: not in Rev 5.1, and no witness inside this repository - the id was recovered by the Wave 2 shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c.',
+    },
+    0x8C: {
+        "name": 'MESG_PENDING_TRANSMIT_CLEAR_ID',
+        "direction": 'both',
+        "payload_len": 2,
+        "bridged": True,
+        "reply": 'MESG_RESPONSE_EVENT_ID',
+        "desc": "[channel] to clear, [channel, pending] on request. A Nordic extension: not in Rev 5.1, and no witness inside this repository - the id was recovered by the Wave 2 shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c. Note that the *request* form of this id replies with MESG_PENDING_TRANSMIT_GET_SIZE bytes, which is a separate constant from MESG_PENDING_TRANSMIT_CLEAR's own 1-byte command payload.",
+    },
     0xAE: {
         "name": 'MESG_SERIAL_ERROR_ID',
         "direction": 'd2h',
@@ -1432,38 +1600,38 @@ MESSAGES = {
 
 # RadiANT extensions, kept out of MESSAGES on purpose.
 RADIANT_MESSAGES = {
-    0xE0: {
+    0xF1: {
         "name": 'MESG_RADIANT_SEC_CONFIG_ID',
         "direction": 'h2d',
         "payload_len": 'var',
         "desc": 'Select which of X_PRIV, X_CONF and X_AUTH are on for a channel. The three switches are independent, not a ladder.',
     },
-    0xE1: {
+    0xF2: {
         "name": 'MESG_RADIANT_SET_KEY_ID',
         "direction": 'h2d',
         "payload_len": 'var',
         "desc": 'Install key material for a channel.',
     },
-    0xE2: {
+    0xF3: {
         "name": 'MESG_RADIANT_EPOCH_ID',
         "direction": 'both',
         "payload_len": 'var',
         "desc": "Read or set the current 128 s epoch counter that X_PRIV's device number rotation is derived from.",
     },
-    0xE3: {
+    0xF4: {
         "name": 'MESG_RADIANT_SEC_STATUS_ID',
         "direction": 'd2h',
         "payload_len": 'var',
         "desc": 'Per-channel security state: which switches are active, replay counter high-water mark, spread-MAC verification result.',
     },
-    0xE4: {
+    0xF5: {
         "name": 'MESG_RADIANT_PAIRING_ID',
         "direction": 'both',
         "payload_len": 'var',
         "desc": 'Drive the in-the-clear pairing exchange. An X_PRIV node pairs with rotation off and the pairing bit set, then switches to rotating - pairing in the clear is structural, not an oversight.',
     },
 }
-RADIANT_RESERVED_RANGE = '0xE5-0xEF'
+RADIANT_RESERVED_RANGE = '0xF6-0xFA'
 
 MESSAGE_NAMES = {mid: info["name"] for mid, info in MESSAGES.items()}
 MESSAGE_IDS = {info["name"]: mid for mid, info in MESSAGES.items()}
@@ -1596,6 +1764,7 @@ ADV_BURST = {
 
 SDU = {
     'INVALID_SDU_MASK': 0xFF,
+    'SDU_MASK_ACK_CONFIG_BIT': 0x80,
 }
 SDU_BY_VALUE = {value: name for name, value in SDU.items()}
 
@@ -1609,6 +1778,7 @@ ENCRYPTION = {
     'ENCRYPTION_INFO_GET_CUSTOM_USER_DATA': 0x02,
     'ENCRYPTION_USER_DATA_SIZE': 19,
     'ENCRYPTION_KEY_SIZE': 16,
+    'MAX_SUPPORTED_ENCRYPTION_MODE': 0x02,
 }
 # No ENCRYPTION_BY_VALUE: two names in this group share a value on purpose, and
 # a reverse lookup would silently pick one.
@@ -1665,8 +1835,18 @@ CAPABILITY_BYTES = {
         (0x80, 'CAPABILITIES_ENCRYPTED_CHANNEL_ENABLED', 'Single-channel encryption (0x7D-0x7F). Advertised whether or not the write side was compiled in: the bit describes what the radio layer can do, not what the bridge chose to expose.'),
     )),
     7: ('advanced_options_4', (
+        (0x01, 'CAPABILITIES_RFACTIVE_NOTIFICATION_ENABLED', 'RF-active notification: an event when the time to the next synchronous RF activity exceeds a configured threshold. Set in the observed reply.'),
+        (0x02, 'CAPABILITIES_DATA_FILTERING_ENABLED', 'Data filtering. Clear in the observed reply.'),
+        (0x04, 'CAPABILITIES_SEARCH_UPLINK_ENABLED', 'Search uplink. Set in the observed reply.'),
+        (0x08, 'CAPABILITIES_GROUP_TRANSMITTER_INITIATION_ENABLED', 'Group transmitter initiation - the master-side meaning of the channel search timeout. Set in the observed reply.'),
+        (0x10, 'CAPABILITIES_TIME_BASE_ENABLED', 'Extended time base: a 4-byte RTC timestamp instead of the 2-byte ANT one. Clear in the observed reply.'),
+        (0x20, 'CAPABILITIES_TIME_SYNC_ENABLED', 'Time sync. Clear in the observed reply.'),
+        (0x40, 'CAPABILITIES_PA_LNA_SUPPORT_ENABLED', 'External PA/LNA GPIO control during radio events. Clear in the observed reply.'),
     )),
     8: ('advanced_options_5', (
+        (0x01, 'CAPABILITIES_CHANNEL_START_OFFSET_ENABLED', 'Channel start offset - the second parameter of antr_channel_open_with_offset(). Set in the observed reply, which is the capability behind the offset form existing at all.'),
+        (0x02, 'CAPABILITIES_SEARCHING_CHANNEL_UPLINK_ENABLED', 'Background searching channel uplink. Set in the observed reply.'),
+        (0x04, 'CAPABILITIES_ID_MATCH_FIX_ON_SHARED_CHANNEL_RXBURST', 'ID-match fix for a shared-channel RX burst transfer. Set in the observed reply.'),
     )),
 }
 
@@ -1675,32 +1855,26 @@ OBSERVED_CAPABILITIES = bytes.fromhex('080800b23200fd8d0f')
 
 # Constants whose value is not recoverable without sdk-ant. Name -> why.
 UNRESOLVED = {
-    'MESG_RSSI_SEARCH_THRESHOLD_ID': 'Proximity search threshold expressed in RSSI rather than in the proximity bins MESG_PROX_SEARCH_CONFIG (0x71) uses. Implied by the ANT_DLL export ANT_RSSI_SetSearchThreshold. Believed to sit in the 0xC0 block of AP2-era extension messages, but no value in that block is corroborated by anything in this repository - the whole host-callable API in archive/host-api/ant_dll_exports.json tops out at 0x7B - so no number is recorded here.',
-    'MESG_SLEEP_ID': 'Put the device into its low-power sleep state. Implied by the ANT_DLL export ANT_SleepMessage, which Zwift resolves. Same 0xC0 block and the same lack of corroboration as MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded.',
-    'MESG_CHANNEL_CRC_MODE_ID': '[filler, mode] on the way in, [channel, mode] on the way back. Dispatched at src/ant_serial_bridge.c and requested in handle_request(). The numeric id is a Nordic extension that appears nowhere in this repository and is not in Rev 5.1.',
-    'MESG_PENDING_TRANSMIT_CLEAR_ID': '[channel] to clear, [channel, pending] on request. Dispatched by the bridge; the numeric id is a Nordic extension not present in this repository or in Rev 5.1.',
-    'MESG_ECS_ENABLE_ID': '[filler, enable]. Enhanced channel spacing. Dispatched by the bridge; the numeric id is a Nordic extension not present in this repository or in Rev 5.1.',
-    'MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE': 'The advanced-burst capabilities reply: byte 0 is a maximum packet size code, byte 1 is a supported-modes bitfield. Its declared length is not visible in this repository - ant_features.py reads only the first two bytes and prints the rest as hex, and no captured reply is committed. This one is on the wire, so it cannot be substituted with a local value: it is the LEN byte the bridge puts on the reply.',
-    'SDU_MASK_ACK_CONFIG_BIT': "Set alongside a mask number to apply the mask to acknowledged data as well as broadcast. src/ant_stub.c:529 masks it off before range-checking the mask number; the bit's value appears nowhere in this repository. Never on the wire in a direction this dongle originates - the host sets it - so the stub does not need the real value to behave correctly.",
-    'MAX_SUPPORTED_ENCRYPTION_MODE': 'The value src/ant_stub.c answers an ENCRYPTION_INFO_GET_SUPPORTED_MODE request with, and the upper bound it range-checks a channel-enable against. Not visible in this repository. It does reach the wire, but only out of the stub, whose replies are already declared synthetic.',
+    'MESG_RSSI_SEARCH_THRESHOLD_ID': 'Proximity search threshold expressed in RSSI rather than in the proximity bins MESG_PROX_SEARCH_CONFIG (0x71) uses. Implied by the ANT_DLL export ANT_RSSI_SetSearchThreshold. Believed to sit in the 0xC0 block of AP2-era extension messages, but no value in that block is corroborated by anything in this repository - the whole host-callable API in archive/host-api/ant_dll_exports.json tops out at 0x7B - so no number is recorded here. The Wave 2 shim looked and came back empty as well: sdk-ant v2.1.0 defines no such id anywhere in its headers or sources, so this stays unresolved rather than merely unverified.',
+    'MESG_SLEEP_ID': 'Put the device into its low-power sleep state. Implied by the ANT_DLL export ANT_SleepMessage, which Zwift resolves. Same 0xC0 block and the same lack of corroboration as MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. The Wave 2 shim found the name referenced in sdk-ant but never defined - the only occurrence is inside a commented-out dispatch arm - so there is no value to recover there either.',
 }
 
 # Constants with no witness in this repository. The Wave 2 shim asserts them.
 VERIFY_IN_SHIM = (
     'SYNC_RX',
     'MESG_INVALID_ID',
+    'MESG_CHANNEL_CRC_MODE_ID',
     'MESG_GET_SERIAL_NUM_ID',
     'MESG_SERIAL_NUM_SET_CHANNEL_ID_ID',
     'MESG_XTAL_ENABLE_ID',
     'MESG_SET_SEARCH_CH_PRIORITY_ID',
     'MESG_USER_CONFIG_PAGE_ID',
     'MESG_ACTIVE_SEARCH_SHARING_ID',
+    'MESG_ECS_ENABLE_ID',
+    'MESG_PENDING_TRANSMIT_CLEAR_ID',
     'MESG_SERIAL_ERROR_ID',
     'MESG_RSSI_SEARCH_THRESHOLD_ID',
     'MESG_SLEEP_ID',
-    'MESG_CHANNEL_CRC_MODE_ID',
-    'MESG_PENDING_TRANSMIT_CLEAR_ID',
-    'MESG_ECS_ENABLE_ID',
     'MESG_VERSION_SIZE',
     'MESG_CHANNEL_STATUS_SIZE',
     'MESG_CHANNEL_CRC_MODE_SIZE',
@@ -1751,6 +1925,16 @@ VERIFY_IN_SHIM = (
     'CAPABILITIES_PROX_SEARCH_ENABLED',
     'CAPABILITIES_FS_ANTFS_ENABLED',
     'CAPABILITIES_FIT1_ENABLED',
+    'CAPABILITIES_RFACTIVE_NOTIFICATION_ENABLED',
+    'CAPABILITIES_DATA_FILTERING_ENABLED',
+    'CAPABILITIES_SEARCH_UPLINK_ENABLED',
+    'CAPABILITIES_GROUP_TRANSMITTER_INITIATION_ENABLED',
+    'CAPABILITIES_TIME_BASE_ENABLED',
+    'CAPABILITIES_TIME_SYNC_ENABLED',
+    'CAPABILITIES_PA_LNA_SUPPORT_ENABLED',
+    'CAPABILITIES_CHANNEL_START_OFFSET_ENABLED',
+    'CAPABILITIES_SEARCHING_CHANNEL_UPLINK_ENABLED',
+    'CAPABILITIES_ID_MATCH_FIX_ON_SHARED_CHANNEL_RXBURST',
 )
 
 # ---------------------------------------------------------------------------

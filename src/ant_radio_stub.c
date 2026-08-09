@@ -50,47 +50,35 @@ LOG_MODULE_REGISTER(ant_radio_stub, LOG_LEVEL_INF);
  */
 static const char stub_version[] = "STUB0.01B00";
 
-/* ── Substituted constants ─────────────────────────────────────────────────
+/* ── The three substituted constants, and why they are gone ────────────────
  *
- * Three values this file used to take from sdk-ant are recorded as UNRESOLVED
- * in protocol/ant_wire.yaml - their real values appear nowhere in this
- * repository and recovering them needs sdk-ant, which src/ant_radio_sdk_ant.c
- * does and this file may not. Each is substituted with a local value rather
- * than pulled in behind a conditional include, because a #define reaching into
- * sdk-ant here would reintroduce exactly the dependency this file exists to
- * disprove, and it would do it invisibly.
+ * Three values this file needs were recorded as UNRESOLVED in
+ * protocol/ant_wire.yaml: their numbers appeared nowhere in this repository
+ * and recovering them needed sdk-ant, which src/ant_radio_sdk_ant.c may read
+ * and this file may not. Each was substituted with a local STUB_* placeholder
+ * rather than pulled in behind a conditional include, because a #define
+ * reaching into sdk-ant here would reintroduce exactly the dependency this
+ * file exists to disprove, and it would do it invisibly.
  *
- * Substituting is safe for all three because none of them reaches the wire in
- * a direction this build originates: the acknowledged-data mask bit is set by
- * the host and only masked off again here, the supported-encryption mode is
- * answered only by a stub whose replies are already declared synthetic, and
- * the advanced-burst capabilities length is a memset bound - the LEN byte on
- * that reply is the bridge's, and the bridge refuses the request outright
- * until the real value lands (src/ant_serial_bridge.c:376-401).
+ * The Wave 2 shim recovered all three. They are generated into src/ant_wire.h
+ * from the YAML and BUILD_ASSERTed against sdk-ant in the shim, so the
+ * placeholders have retired and the real names are used directly:
+ *
+ *   ANTW_SDU_MASK_ACK_CONFIG_BIT                      0x80 (placeholder 0x80)
+ *   ANTW_MAX_SUPPORTED_ENCRYPTION_MODE                   2 (placeholder 1)
+ *   ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE     4 (placeholder 2)
+ *
+ * Two guesses were right and one was not, which is the whole argument for the
+ * rule that produced them. The stub used to answer
+ * ENCRYPTION_INFO_GET_SUPPORTED_MODE with 1 and to refuse
+ * antr_crypto_channel_enable(.., 2, ..); it now answers 2 and accepts it. That
+ * is a deliberate change in what a stub build reports, and it is a change
+ * towards what a real stack says rather than away from it.
+ *
+ * The include set is unchanged by any of this: ANTW_* comes from
+ * src/ant_wire.h, which is generated from protocol/ant_wire.yaml and reaches
+ * for no sdk-ant name.
  */
-
-/* Set alongside a mask number to apply the mask to acknowledged data as well
- * as broadcast. Masked off before the mask number is range-checked, so any
- * bit above the mask index range behaves identically here.
- */
-#define STUB_SDU_MASK_ACK_CONFIG_BIT  0x80
-
-/* Answer to ENCRYPTION_INFO_GET_SUPPORTED_MODE, and the upper bound a
- * channel-enable is checked against. One mode above "disabled".
- */
-#define STUB_MAX_SUPPORTED_ENCRYPTION_MODE  1
-
-/* Bytes of the advanced-burst capabilities block. Tracks the generated
- * constant the moment protocol/ant_wire.yaml gains it, exactly as
- * src/ant_serial_bridge.c:376 does; until then it is the two bytes this file
- * actually fills.
- */
-#ifdef ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE
-#define STUB_ADV_BURST_CAPABILITIES_SIZE \
-	ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE
-#else
-#define STUB_ADV_BURST_CAPABILITIES_SIZE  2
-#endif
 
 /* ── Configuration state ───────────────────────────────────────────────────── */
 
@@ -262,7 +250,8 @@ antr_err_t antr_adv_burst_config_get(uint8_t request_type, uint8_t *config)
 		memcpy(config, &stub_adv_burst_cfg[1],
 		       sizeof(stub_adv_burst_cfg) - 1);
 	} else {
-		memset(config, 0, STUB_ADV_BURST_CAPABILITIES_SIZE);
+		memset(config, 0,
+		       ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE);
 		config[0] = ANTW_ADV_BURST_MODES_SIZE_24_BYTES;
 		config[1] = ANTW_ADV_BURST_MODES_FREQ_HOP;
 	}
@@ -286,7 +275,7 @@ antr_err_t antr_crypto_info_get(uint8_t type, uint8_t *info)
 {
 	switch (type) {
 	case ANTW_ENCRYPTION_INFO_GET_SUPPORTED_MODE:
-		info[0] = STUB_MAX_SUPPORTED_ENCRYPTION_MODE;
+		info[0] = ANTW_MAX_SUPPORTED_ENCRYPTION_MODE;
 		break;
 	case ANTW_ENCRYPTION_INFO_GET_CRYPTO_ID:
 		memcpy(info, stub_crypto_id, sizeof(stub_crypto_id));
@@ -549,7 +538,7 @@ antr_err_t antr_crypto_channel_enable(uint8_t channel, uint8_t enable,
 	ARG_UNUSED(decimation);
 
 	if (channel >= STUB_MAX_CHANNELS || key_num >= STUB_CRYPTO_KEYS ||
-	    enable > STUB_MAX_SUPPORTED_ENCRYPTION_MODE) {
+	    enable > ANTW_MAX_SUPPORTED_ENCRYPTION_MODE) {
 		return ANTW_INVALID_PARAMETER_PROVIDED;
 	}
 	stub_crypto_channel_mode[channel] = enable;
@@ -595,7 +584,7 @@ antr_err_t antr_sdu_mask_config(uint8_t channel, uint8_t mask_config)
 	 * other value has to name a mask that exists.
 	 */
 	if (mask_config != ANTW_INVALID_SDU_MASK &&
-	    (mask_config & ~STUB_SDU_MASK_ACK_CONFIG_BIT) >= STUB_SDU_MASKS) {
+	    (mask_config & ~ANTW_SDU_MASK_ACK_CONFIG_BIT) >= STUB_SDU_MASKS) {
 		return ANTW_INVALID_PARAMETER_PROVIDED;
 	}
 	stub_sdu_channel_cfg[channel] = mask_config;

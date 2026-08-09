@@ -216,7 +216,7 @@ rather than as a promise. Every constant in `protocol/ant_wire.yaml` carries a
 | Tag | Means |
 |---|---|
 | `bridge` | a visible use site in `src/ant_serial_bridge.c`, usually with the value stated in its own prose comment |
-| `stub` | `src/ant_stub.c` |
+| `stub` | [`src/ant_radio_stub.c`](../src/ant_radio_stub.c) — `src/ant_stub.c` before the Wave 2 rename |
 | `tools` | one of the five Python tools, which hand-duplicated these values independently of the firmware |
 | `readme` | `README.md`, including its decoded examples |
 | `observed` | read off a real reply from real hardware |
@@ -310,6 +310,7 @@ constant.
 | `0x52` | `ANTW_MESG_CHANNEL_STATUS_ID` | d2h | 2 | yes | - | [channel, status]. Requested with MESG_REQUEST. | bridge, tools |
 | `0x53` | `ANTW_MESG_RADIO_CW_INIT_ID` | h2d |  | no | - | Enter continuous-wave test mode. Not bridged. | rev5.1 sec 9.5, host-api |
 | `0x54` | `ANTW_MESG_CAPABILITIES_ID` | d2h | 9 | yes | - | What the ANT *stack* can do - a superset of what the bridge implements. Requested with MESG_REQUEST. See the capabilities section for the byte and bit layout, and for the exact reply this firmware gives. | bridge, observed |
+| `0x58` | `ANTW_MESG_CHANNEL_CRC_MODE_ID` | both | 2 | yes | `MESG_RESPONSE_EVENT_ID` | [filler, mode] on the way in, [channel, mode] on the way back. Dispatched at src/ant_serial_bridge.c and requested in handle_request(). A Nordic extension: not in Rev 5.1, and no witness inside this repository - the id was recovered by the Wave 2 shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c. | sdk-ant-shim + verify:sdk-ant-shim |
 | `0x59` | `ANTW_MESG_ID_LIST_ADD_ID` | h2d | 6 | yes | `MESG_RESPONSE_EVENT_ID` | [channel, device number lo, device number hi, device type, transmission type, list index]. | bridge |
 | `0x5A` | `ANTW_MESG_ID_LIST_CONFIG_ID` | h2d | 3 | yes | `MESG_RESPONSE_EVENT_ID` | [channel, list size, include/exclude flag]. | bridge |
 | `0x5B` | `ANTW_MESG_OPEN_RX_SCAN_MODE_ID` | h2d | 1..2 | no | - | Background scanning. Not bridged, and scan mode is reported OFF in the capabilities reply - which is why a host that has the call (ANT_OpenRxScanMode) never sends it. | readme |
@@ -331,21 +332,41 @@ constant.
 | `0x74` | `ANTW_MESG_EVENT_BUFFERING_CONFIG_ID` | h2d | 6 | no | - | Not bridged - sdk-ant exposes no API for it - and correspondingly NOT advertised in the capabilities reply. The one advanced-options-3 bit that is honestly zero. | tools, readme |
 | `0x75` | `ANTW_MESG_SET_SEARCH_CH_PRIORITY_ID` | both | 2 | yes | - | [channel, priority]. | bridge, rev5.1 sec 9.5 + verify:sdk-ant-shim |
 | `0x77` | `ANTW_MESG_HIGH_DUTY_SEARCH_MODE_ID` | h2d | 2 | no | - | Advertised in the capabilities reply and deliberately not bridged: sdk-ant has no single-chip API for it. Clearing the bit instead would make this dongle report something no ANTUSB-m reports. | tools, readme |
-| `0x78` | `ANTW_MESG_CONFIG_ADV_BURST_ID` | both | 9..12 | yes | - | [filler, enable, rf payload size, required modes, 0, 0, optional modes, 0, 0, (stall lo, stall hi, retry extension)]. Requesting it with index 0 returns capabilities, with index 1 the current configuration - and the reply drops the enable byte the command carried. | bridge, tools |
-| `0x79` | `ANTW_MESG_EVENT_FILTER_CONFIG_ID` | both | 2..3 | yes | - | Command is [filter lo, filter hi] with no channel byte; the reply is [filler, filter lo, filter hi]. That asymmetry is real and is what the round-trip check in ant_features.py exists to catch. | bridge, tools |
+| `0x78` | `ANTW_MESG_CONFIG_ADV_BURST_ID` | both | 9..12 | yes | - | [filler, enable, rf payload size, required modes, 0, 0, optional modes, 0, 0, (stall lo, stall hi, retry extension)]. Requesting it with index 0 returns capabilities, with index 1 the current configuration - and the reply drops the enable byte the command carried. REQUEST REPLY, a different shape from the command above: 0x00 -> 4 bytes (ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE); 0x01 -> 10 bytes (ANTW_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE), selected by byte 0 of the MESG_REQUEST that asked, which the reply does not repeat. src/ant_serial_bridge.c picks the reply length from byte 0 of the MESG_REQUEST - `ch ? ..._REQ_CONFIG_SIZE : ..._REQ_CAPABILITIES_SIZE` - and neither reply repeats that byte, so nothing in the reply says which of the two it is. Pairing it with the request that drew it is the only way to know, and that is a fact about this message rather than a limitation of any reader. | bridge, tools |
+| `0x79` | `ANTW_MESG_EVENT_FILTER_CONFIG_ID` | both | 2..3 | yes | - | Command is [filter lo, filter hi] with no channel byte; the reply is [filler, filter lo, filter hi]. That asymmetry is real and is what the round-trip check in ant_features.py exists to catch. REQUEST REPLY, a different shape from the command above: 3 bytes (ANTW_MESG_EVENT_FILTER_CONFIG_REQ_SIZE), selected by nothing - there is only one shape. One shape, one byte longer than the command. The `2..3` on payload_len above is the union of the two and predates this field; it is left as it stands because tools/ant_conformance.py derives its malformed-short and malformed-long cases from those bounds, so narrowing it would change the generated case set and the committed Tier 1 reference transcript would stop being reproducible. The reply side is exact here regardless, which is where the asymmetry actually shows. | bridge, tools |
 | `0x7A` | `ANTW_MESG_SDU_CONFIG_ID` | h2d | 2 | yes | `MESG_RESPONSE_EVENT_ID` | [channel, mask config]. Binds one of the masks to a channel; INVALID_SDU_MASK (0xFF) turns selective updates back off. | bridge, tools |
 | `0x7B` | `ANTW_MESG_SDU_SET_MASK_ID` | both | 9 | yes | - | [mask index, mask[8]]. byte 0 is a mask number, not a channel. The reply has the same shape, which is why its size is ANT_MAX_PAYLOAD_SIZE + CHANNEL_NUM_SIZE. | bridge, tools |
 | `0x7C` | `ANTW_MESG_USER_CONFIG_PAGE_ID` | h2d | var | no | - | User NVM configuration page. No sdk-ant API; not bridged. Implied by the ANT_DLL export ANT_ConfigUserNVM, which the archive's export table left unmapped. Both neighbours are confirmed by that table (0x7B ANT_SetSelectiveDataUpdateMask, 0x7D-0x7F encryption), which is the corroboration this value rests on. | rev5.1 sec 9.5 + verify:sdk-ant-shim |
-| `0x7D` | `ANTW_MESG_ENCRYPT_ENABLE_ID` | both | 4 | yes | - | Write [channel, mode, key number, decimation rate] - compiled out unless CONFIG_ANT_DONGLE_ENCRYPTION. The read side is always bridged: requesting it with an ENCRYPTION_INFO_GET_* index returns [info type, data...], the info type echoed at byte 0. | bridge, tools |
+| `0x7D` | `ANTW_MESG_ENCRYPT_ENABLE_ID` | both | 4 | yes | - | Write [channel, mode, key number, decimation rate] - compiled out unless CONFIG_ANT_DONGLE_ENCRYPTION. The read side is always bridged: requesting it with an ENCRYPTION_INFO_GET_* index returns [info type, data...], the info type echoed at byte 0. REQUEST REPLY, a different shape from the command above: 0x00 -> 2 bytes (ANTW_MESG_CONFIG_ENCRYPT_REQ_CAPABILITIES_SIZE); 0x01 -> 5 bytes (ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE); 0x02 -> 20 bytes (ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_USER_DATA_SIZE), selected by the info type the reply echoes at byte 0. Three reply shapes behind one id, and the reply says which it is: the ENCRYPTION_INFO_GET_* type is echoed at byte 0, so a reader with no memory of the request can still check the length exactly. An index that is not one of these three is refused with a RESPONSE_EVENT naming 0x4D rather than answered with a 0x7D - the reply-size switch has no default that could send a zero-length frame, which is what case 4d-request-encrypt-enable-3 pins. | bridge, tools |
 | `0x7E` | `ANTW_MESG_SET_ENCRYPT_KEY_ID` | h2d | 17 | yes | `MESG_RESPONSE_EVENT_ID` | [key number, key[16]]. That the key is 128 bits is stated in prose only; no size constant names it. | bridge, tools |
 | `0x7F` | `ANTW_MESG_SET_ENCRYPT_INFO_ID` | h2d | 2..20 | yes | `MESG_RESPONSE_EVENT_ID` | [info type, data...]. How much data depends on the type, and the length must be checked against it here - the stack reads a fixed count per type with nothing to bound it. RNG seed is refused on purpose: no size for it is documented anywhere. | bridge, tools |
 | `0x81` | `ANTW_MESG_ACTIVE_SEARCH_SHARING_ID` | both | 2 | yes | - | [channel, cycles]. | bridge, rev5.1 sec 9.5 + verify:sdk-ant-shim |
+| `0x89` | `ANTW_MESG_ECS_ENABLE_ID` | h2d | 2 | yes | `MESG_RESPONSE_EVENT_ID` | [filler, enable]. Enhanced channel spacing. A Nordic extension: not in Rev 5.1, and no witness inside this repository - the id was recovered by the Wave 2 shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c. | sdk-ant-shim + verify:sdk-ant-shim |
+| `0x8C` | `ANTW_MESG_PENDING_TRANSMIT_CLEAR_ID` | both | 2 | yes | `MESG_RESPONSE_EVENT_ID` | [channel] to clear, [channel, pending] on request. A Nordic extension: not in Rev 5.1, and no witness inside this repository - the id was recovered by the Wave 2 shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c. Note that the *request* form of this id replies with MESG_PENDING_TRANSMIT_GET_SIZE bytes, which is a separate constant from MESG_PENDING_TRANSMIT_CLEAR's own 1-byte command payload. | sdk-ant-shim + verify:sdk-ant-shim |
 | `0xAE` | `ANTW_MESG_SERIAL_ERROR_ID` | d2h | 1 | no | - | Serial-layer error: bad checksum, bad length, or a frame that arrived too slowly. This firmware drops malformed frames silently instead - recorded so a host-side parser can name the byte. | rev5.1 sec 7.4 + verify:sdk-ant-shim |
-| **unresolved** | `ANTW_MESG_RSSI_SEARCH_THRESHOLD_ID` | h2d | 2 | no | - | Proximity search threshold expressed in RSSI rather than in the proximity bins MESG_PROX_SEARCH_CONFIG (0x71) uses. Implied by the ANT_DLL export ANT_RSSI_SetSearchThreshold. Believed to sit in the 0xC0 block of AP2-era extension messages, but no value in that block is corroborated by anything in this repository - the whole host-callable API in archive/host-api/ant_dll_exports.json tops out at 0x7B - so no number is recorded here. | host-api + verify:sdk-ant-shim |
-| **unresolved** | `ANTW_MESG_SLEEP_ID` | h2d | 1 | no | - | Put the device into its low-power sleep state. Implied by the ANT_DLL export ANT_SleepMessage, which Zwift resolves. Same 0xC0 block and the same lack of corroboration as MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. | host-api + verify:sdk-ant-shim |
-| **unresolved** | `ANTW_MESG_CHANNEL_CRC_MODE_ID` | both | 2 | yes | - | [filler, mode] on the way in, [channel, mode] on the way back. Dispatched at src/ant_serial_bridge.c and requested in handle_request(). The numeric id is a Nordic extension that appears nowhere in this repository and is not in Rev 5.1. | bridge + verify:sdk-ant-shim |
-| **unresolved** | `ANTW_MESG_PENDING_TRANSMIT_CLEAR_ID` | both | 2 | yes | - | [channel] to clear, [channel, pending] on request. Dispatched by the bridge; the numeric id is a Nordic extension not present in this repository or in Rev 5.1. | bridge + verify:sdk-ant-shim |
-| **unresolved** | `ANTW_MESG_ECS_ENABLE_ID` | h2d | 2 | yes | - | [filler, enable]. Enhanced channel spacing. Dispatched by the bridge; the numeric id is a Nordic extension not present in this repository or in Rev 5.1. | bridge + verify:sdk-ant-shim |
+| **unresolved** | `ANTW_MESG_RSSI_SEARCH_THRESHOLD_ID` | h2d | 2 | no | - | Proximity search threshold expressed in RSSI rather than in the proximity bins MESG_PROX_SEARCH_CONFIG (0x71) uses. Implied by the ANT_DLL export ANT_RSSI_SetSearchThreshold. Believed to sit in the 0xC0 block of AP2-era extension messages, but no value in that block is corroborated by anything in this repository - the whole host-callable API in archive/host-api/ant_dll_exports.json tops out at 0x7B - so no number is recorded here. The Wave 2 shim looked and came back empty as well: sdk-ant v2.1.0 defines no such id anywhere in its headers or sources, so this stays unresolved rather than merely unverified. | host-api + verify:sdk-ant-shim |
+| **unresolved** | `ANTW_MESG_SLEEP_ID` | h2d | 1 | no | - | Put the device into its low-power sleep state. Implied by the ANT_DLL export ANT_SleepMessage, which Zwift resolves. Same 0xC0 block and the same lack of corroboration as MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. The Wave 2 shim found the name referenced in sdk-ant but never defined - the only occurrence is inside a commented-out dispatch arm - so there is no value to recover there either. | host-api + verify:sdk-ant-shim |
+
+## Request and response share an id
+
+**A message id is not a message.** `MESG_REQUEST` (`0x4D`) names an id, and what comes back is a frame carrying that same id with a payload no host ever sends. For most messages the two shapes happen to coincide and one `len` describes both. For the messages below they do not, and reading the `len` column as if it covered the reply is how a perfectly conformant transcript comes to look inconsistent — `0x78` takes a 9..12-byte command and answers a request with 4 bytes; `0x7D` takes a 4-byte command and answers with 2, 5 or 20.
+
+The `selector` column is the part worth reading twice, because it is the difference between a reply a reader can check on its own and one it can only check in context:
+
+- `reply_byte_0` — the reply echoes the info type it is answering at byte 0, so it is self-describing.
+- `request_index` — byte 0 of the `MESG_REQUEST` picked the shape and the reply does not repeat it. The shape can only be pinned by pairing the reply with the request that drew it, which is a fact about the message and not a limitation of any particular reader.
+- `none` — one shape; the reply simply differs from the command.
+
+| ID | Name | Command | Selector | Reply | Length | Size constant |
+|---|---|---|---|---|---|---|
+| `0x78` | `ANTW_MESG_CONFIG_ADV_BURST_ID` | 9..12 | `request_index` | `0x00` | 4 | `ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE` |
+|  |  |  |  | `0x01` | 10 | `ANTW_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE` |
+| `0x79` | `ANTW_MESG_EVENT_FILTER_CONFIG_ID` | 2..3 | `none` | - | 3 | `ANTW_MESG_EVENT_FILTER_CONFIG_REQ_SIZE` |
+| `0x7D` | `ANTW_MESG_ENCRYPT_ENABLE_ID` | 4 | `reply_byte_0` | `0x00` | 2 | `ANTW_MESG_CONFIG_ENCRYPT_REQ_CAPABILITIES_SIZE` |
+|  |  |  |  | `0x01` | 5 | `ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE` |
+|  |  |  |  | `0x02` | 20 | `ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_USER_DATA_SIZE` |
+
+Every length above is *named*, not written: it resolves to an entry in **Reply sizes** below, which is where the bridge's own LEN byte is recorded together with the prose explaining it. One number, one place. The side effect is worth stating — those constants used to be witnessed only by the firmware that emits them, and are now checked against real bytes every time `tools/test_ant_golden.py` replays a transcript.
 
 ## Reply sizes
 
@@ -354,7 +375,7 @@ constant.
 | `ANTW_MESG_RESPONSE_EVENT_SIZE` | 3 | [channel, message id, code]. | bridge |
 | `ANTW_MESG_STARTUP_MESG_SIZE` | 1 | [reason]. | bridge |
 | `ANTW_MESG_CAPABILITIES_SIZE` | 9 | Nine bytes, confirmed by the observed reply 080800b23200fd8d0f. | observed |
-| `ANTW_MESG_VERSION_SIZE` | 20 | Null-padded version string. src/ant_stub.c calls it a 20-byte payload; nothing in this repository shows the reply on the wire. | stub + verify:sdk-ant-shim |
+| `ANTW_MESG_VERSION_SIZE` | 20 | Null-padded version string. src/ant_radio_stub.c calls it a 20-byte payload; nothing in this repository shows the reply on the wire. | stub + verify:sdk-ant-shim |
 | `ANTW_MESG_CHANNEL_STATUS_SIZE` | 2 | [channel, status]. | inferred + verify:sdk-ant-shim |
 | `ANTW_MESG_CHANNEL_ID_SIZE` | 5 | [channel, number lo, number hi, device type, transmission type]. | bridge |
 | `ANTW_MESG_CHANNEL_MESG_PERIOD_SIZE` | 3 | [channel, period lo, period hi]. | bridge |
@@ -366,7 +387,7 @@ constant.
 | `ANTW_MESG_ACTIVE_SEARCH_SHARING_REQ_SIZE` | 2 | [channel, cycles]. | inferred + verify:sdk-ant-shim |
 | `ANTW_MESG_EVENT_FILTER_CONFIG_REQ_SIZE` | 3 | [filler, filter lo, filter hi] - one byte longer than the command that set it. | bridge, tools |
 | `ANTW_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE` | 10 | [size, required, 0, 0, optional, 0, 0, stall lo, stall hi, retry]. The 11-byte configuration minus the enable byte the command carried. | stub, tools |
-| `ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE` | (unresolved) | The advanced-burst capabilities reply: byte 0 is a maximum packet size code, byte 1 is a supported-modes bitfield. Its declared length is not visible in this repository - ant_features.py reads only the first two bytes and prints the rest as hex, and no captured reply is committed. This one is on the wire, so it cannot be substituted with a local value: it is the LEN byte the bridge puts on the reply. | tools + verify:sdk-ant-shim |
+| `ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE` | 4 | The advanced-burst capabilities reply: byte 0 is a maximum packet size code, byte 1 is a supported-modes bitfield, bytes 2 and 3 are reserved and zero. Not visible in this repository - ant_features.py reads only the first two bytes and prints the rest as hex, and no captured reply is committed - so it was recovered by the Wave 2 shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c. It had to be: this one is the LEN byte on a reply the bridge composes, so no local substitute is legitimate, and while it was unresolved the capabilities form of the request declined. Used at src/ant_radio_stub.c:254, where it bounds the memset; the #ifdef on this name that stood in for it there now resolves, so the fallback has been removed. | sdk-ant-shim + verify:sdk-ant-shim |
 | `ANTW_MESG_CONFIG_ENCRYPT_REQ_CAPABILITIES_SIZE` | 2 | [info type, supported mode]. | bridge |
 | `ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE` | 5 | [info type, crypto id[4]]. | bridge |
 | `ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_USER_DATA_SIZE` | 20 | [info type, custom user data[19]]. The longest frame body the parser ever sees. | bridge, tools |
@@ -529,7 +550,7 @@ Values of the mask-config byte of MESG_SDU_CONFIG.
 | Constant | Value | Meaning | Provenance |
 |---|---|---|---|
 | `ANTW_INVALID_SDU_MASK` | `0xFF` | Detaches a channel from every mask - the way to turn selective updates back off. | stub, tools |
-| `ANTW_SDU_MASK_ACK_CONFIG_BIT` | `(unresolved)` | Set alongside a mask number to apply the mask to acknowledged data as well as broadcast. src/ant_stub.c:529 masks it off before range-checking the mask number; the bit's value appears nowhere in this repository. Never on the wire in a direction this dongle originates - the host sets it - so the stub does not need the real value to behave correctly. | stub + verify:sdk-ant-shim |
+| `ANTW_SDU_MASK_ACK_CONFIG_BIT` | `0x80` | Set alongside a mask number to apply the mask to acknowledged data as well as broadcast. The radio backend masks it off before range-checking the mask number. The bit's value appears nowhere in this repository, so it was recovered by the Wave 2 shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c. Note that it shares its value with INVALID_SDU_MASK's top bit, which is why the mask number must be range-checked after the bit is cleared and not before. Used at src/ant_radio_stub.c:587; the local placeholder that stood in for it there guessed the value correctly and has been retired. | sdk-ant-shim + verify:sdk-ant-shim |
 
 ## Encryption
 
@@ -546,15 +567,15 @@ Info types and modes for MESG_ENCRYPT_ENABLE / MESG_SET_ENCRYPT_INFO. The set an
 | `ANTW_ENCRYPTION_INFO_GET_CUSTOM_USER_DATA` | `0x02` | Read: the 19 bytes of custom user data. | tools (ant_features) |
 | `ANTW_ENCRYPTION_USER_DATA_SIZE` | `19` | Bytes of custom user data. One info-type byte plus these fills MAX_SIZE_VALUE exactly. | stub, tools |
 | `ANTW_ENCRYPTION_KEY_SIZE` | `16` | 128-bit key. No sdk-ant constant names this; it is stated only in the prose of ant_crypto_key_set(), which takes a bare pointer. | bridge, stub |
-| `ANTW_MAX_SUPPORTED_ENCRYPTION_MODE` | `(unresolved)` | The value src/ant_stub.c answers an ENCRYPTION_INFO_GET_SUPPORTED_MODE request with, and the upper bound it range-checks a channel-enable against. Not visible in this repository. It does reach the wire, but only out of the stub, whose replies are already declared synthetic. | stub + verify:sdk-ant-shim |
+| `ANTW_MAX_SUPPORTED_ENCRYPTION_MODE` | `0x02` | The value a backend answers an ENCRYPTION_INFO_GET_SUPPORTED_MODE request with, and the upper bound it range-checks a channel-enable against. It is the highest of the encryption modes above - user-data request - rather than an independent number. Not visible in this repository, so it was recovered by the Wave 2 shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c. Used at src/ant_radio_stub.c:278 and :541; the local placeholder that stood in for it there guessed 1 and was wrong, which is why a stub build's answer to ENCRYPTION_INFO_GET_SUPPORTED_MODE changed when it retired. | sdk-ant-shim + verify:sdk-ant-shim |
 
 ## Burst header byte
 
-Byte 0 of MESG_BURST_DATA / MESG_ADV_BURST_DATA. Not a channel number on its own.
+Byte 0 of MESG_BURST_DATA / MESG_ADV_BURST_DATA / the legacy MESG_EXT_BURST_DATA. Not a channel number on its own: it is three fields packed into one byte, and the five-bit channel field is the ONLY place in the serial protocol where a channel number is squeezed below eight bits. Every other channel byte on the wire - including byte 0 of a RESPONSE_EVENT, which echoes whatever the command carried - is a plain uint8. Applying the five-bit ceiling to those is a category error: case frame/sync-in-payload deliberately sends channel 0xA4 in an antlib-config command so that a SYNC byte lands inside the payload, and the dongle correctly echoes 0xA4 back in a 0x40.
 
 | Constant | Value | Meaning | Provenance |
 |---|---|---|---|
-| `ANTW_BURST_HEADER_CHANNEL_MASK` | `0x1F` | Channel number. Five bits - which is why 32 channels is the serial protocol's natural ceiling, and why ant_core is sized for 32 from the first line. | bridge |
+| `ANTW_BURST_HEADER_CHANNEL_MASK` | `0x1F` | Channel number. Five bits - which is why 32 channels is the serial protocol's natural ceiling, and why ant_core is sized for 32 from the first line. Because the field is five bits wide, a header on the wire cannot express a channel above 31 at all; what a burst header CAN address that the device does not have is a channel above the count in byte 0 of the capabilities reply, and that is the bound worth checking on a transcript. | bridge |
 | `ANTW_BURST_HEADER_SEQ_SHIFT` | `5` | Sequence number occupies bits 5-6. | bridge |
 | `ANTW_BURST_HEADER_SEQ_MASK` | `0x03` | Sequence number after shifting: 0-3, wrapping. | bridge |
 | `ANTW_BURST_HEADER_LAST` | `0x80` | Bit 7: this is the last packet of the transfer. | bridge, tools |
@@ -581,8 +602,8 @@ A4 09 54 08 08 00 B2 32 00 FD 8D 0F 06
 | 4 | `0x32` | `advanced_options_2` | - |
 | 5 | `0x00` | `max_sensrcore_channels` | SensRcore scripting channels. Zero everywhere here. |
 | 6 | `0xFD` | `advanced_options_3` | The tech-bulletin features. This is the byte ant_features.py walks. |
-| 7 | `0x8D` | `advanced_options_4` | Observed as 0x8D on this firmware. The bit names are NOT recoverable from this repository, and guessing them would put fiction in a file whose whole purpose is to be authoritative. The byte is recorded; the bits are not named. |
-| 8 | `0x0F` | `advanced_options_5` | Observed as 0x0F. Bit names not recoverable here - see byte 7. |
+| 7 | `0x8D` | `advanced_options_4` | Observed as 0x8D on this firmware. The bit names are not recoverable from this repository - K1 left them blank rather than guess - so they were recovered by the Wave 2 shim and are BUILD_ASSERTed in src/ant_radio_sdk_ant.c. Seven of the eight are named below; bit 0x80 is set in the observed reply and has no name in the source the shim could check, so it is left unnamed for the same reason the whole byte used to be. |
+| 8 | `0x0F` | `advanced_options_5` | Observed as 0x0F. Three of the four set bits are named below, recovered the same way as byte 7; bit 0x08 is set in the observed reply and has no name in the source the shim could check. |
 
 Bit by bit, for every byte that is a bitfield:
 
@@ -647,38 +668,57 @@ Not a bitfield: the value is 0.
 
 **Byte 7, `advanced_options_4` = `0x8D` (`0b10001101`)**
 
-Observed as 0x8D on this firmware. The bit names are NOT recoverable from this repository, and guessing them would put fiction in a file whose whole purpose is to be authoritative. The byte is recorded; the bits are not named.
+| Bit | Mask | Name | Set? | Meaning |
+|---|---|---|---|---|
+| 0 | `0x01` | `ANTW_CAPABILITIES_RFACTIVE_NOTIFICATION_ENABLED` | **yes** | RF-active notification: an event when the time to the next synchronous RF activity exceeds a configured threshold. Set in the observed reply. |
+| 1 | `0x02` | `ANTW_CAPABILITIES_DATA_FILTERING_ENABLED` | no | Data filtering. Clear in the observed reply. |
+| 2 | `0x04` | `ANTW_CAPABILITIES_SEARCH_UPLINK_ENABLED` | **yes** | Search uplink. Set in the observed reply. |
+| 3 | `0x08` | `ANTW_CAPABILITIES_GROUP_TRANSMITTER_INITIATION_ENABLED` | **yes** | Group transmitter initiation - the master-side meaning of the channel search timeout. Set in the observed reply. |
+| 4 | `0x10` | `ANTW_CAPABILITIES_TIME_BASE_ENABLED` | no | Extended time base: a 4-byte RTC timestamp instead of the 2-byte ANT one. Clear in the observed reply. |
+| 5 | `0x20` | `ANTW_CAPABILITIES_TIME_SYNC_ENABLED` | no | Time sync. Clear in the observed reply. |
+| 6 | `0x40` | `ANTW_CAPABILITIES_PA_LNA_SUPPORT_ENABLED` | no | External PA/LNA GPIO control during radio events. Clear in the observed reply. |
+| - | `0x80` | *(unnamed)* | **yes** | Set in the observed reply and not named by any constant in this file. |
 
 **Byte 8, `advanced_options_5` = `0x0F` (`0b00001111`)**
 
-Observed as 0x0F. Bit names not recoverable here - see byte 7.
+| Bit | Mask | Name | Set? | Meaning |
+|---|---|---|---|---|
+| 0 | `0x01` | `ANTW_CAPABILITIES_CHANNEL_START_OFFSET_ENABLED` | **yes** | Channel start offset - the second parameter of antr_channel_open_with_offset(). Set in the observed reply, which is the capability behind the offset form existing at all. |
+| 1 | `0x02` | `ANTW_CAPABILITIES_SEARCHING_CHANNEL_UPLINK_ENABLED` | **yes** | Background searching channel uplink. Set in the observed reply. |
+| 2 | `0x04` | `ANTW_CAPABILITIES_ID_MATCH_FIX_ON_SHARED_CHANNEL_RXBURST` | **yes** | ID-match fix for a shared-channel RX burst transfer. Set in the observed reply. |
+| - | `0x08` | *(unnamed)* | **yes** | Set in the observed reply and not named by any constant in this file. |
 
 ## RadiANT extension messages
 
 **These are ours, not Garmin's.** They are not in Rev 5.1, no ANT device answers them and no ANT host sends them. They are recorded before anything implements them so the id space is reserved rather than argued about later, and they are kept in their own table so that "an ANT message" and "a RadiANT message" cannot be confused. `tools/ant_wire.py` exposes them as `RADIANT_MESSAGES`, deliberately not in `MESSAGES`. Semantics belong to `docs/radiant-security.md`; only the numbering is decided here.
 
-**`0xE0` here is a message ID. Lib config `0xE0` (`ANTW_LIB_CONFIG_ALL_EXT_FIELDS` — channel id + RSSI + RX timestamp) is a completely different namespace that happens to share the byte.** One is the ID field of a frame; the other is a payload byte of message `0x6E`. Nothing relates them.
+**These ids were first proposed at `0xE0`–`0xE4` and moved.** sdk-ant defines `MESG_EXT_ID_0` … `MESG_EXT_ID_4` as exactly `0xE0`–`0xE4` — an extended-message-id block selected by `MSG_EXT_ID_MASK` (`0xE0`) and reserved for ANT response and request messages that use extended message ids. Do not re-propose that range.
+
+**Lib config `0xE0` (`ANTW_LIB_CONFIG_ALL_EXT_FIELDS` — channel id + RSSI + RX timestamp) is a third, unrelated namespace, and it has not moved.** One is the ID field of a frame; the other is a payload byte of message `0x6E`. Nothing relates them, and nothing ever did — the byte they used to share was a coincidence, not a connection.
 
 | ID | Name | dir | len | Meaning |
 |---|---|---|---|---|
-| `0xE0` | `ANTW_MESG_RADIANT_SEC_CONFIG_ID` | h2d | var | Select which of X_PRIV, X_CONF and X_AUTH are on for a channel. The three switches are independent, not a ladder. |
-| `0xE1` | `ANTW_MESG_RADIANT_SET_KEY_ID` | h2d | var | Install key material for a channel. |
-| `0xE2` | `ANTW_MESG_RADIANT_EPOCH_ID` | both | var | Read or set the current 128 s epoch counter that X_PRIV's device number rotation is derived from. |
-| `0xE3` | `ANTW_MESG_RADIANT_SEC_STATUS_ID` | d2h | var | Per-channel security state: which switches are active, replay counter high-water mark, spread-MAC verification result. |
-| `0xE4` | `ANTW_MESG_RADIANT_PAIRING_ID` | both | var | Drive the in-the-clear pairing exchange. An X_PRIV node pairs with rotation off and the pairing bit set, then switches to rotating - pairing in the clear is structural, not an oversight. |
-| `0xE5-0xEF` | *(reserved)* | - | - | Held for the rest of the RadiANT family. Claim by PR against docs/profile-registry.md, same process as a device type. |
+| `0xF1` | `ANTW_MESG_RADIANT_SEC_CONFIG_ID` | h2d | var | Select which of X_PRIV, X_CONF and X_AUTH are on for a channel. The three switches are independent, not a ladder. |
+| `0xF2` | `ANTW_MESG_RADIANT_SET_KEY_ID` | h2d | var | Install key material for a channel. |
+| `0xF3` | `ANTW_MESG_RADIANT_EPOCH_ID` | both | var | Read or set the current 128 s epoch counter that X_PRIV's device number rotation is derived from. |
+| `0xF4` | `ANTW_MESG_RADIANT_SEC_STATUS_ID` | d2h | var | Per-channel security state: which switches are active, replay counter high-water mark, spread-MAC verification result. |
+| `0xF5` | `ANTW_MESG_RADIANT_PAIRING_ID` | both | var | Drive the in-the-clear pairing exchange. An X_PRIV node pairs with rotation off and the pairing bit set, then switches to rotating - pairing in the clear is structural, not an oversight. |
+| `0xF6-0xFA` | *(reserved)* | - | - | Held for the rest of the RadiANT family. Claim by PR against docs/profile-registry.md, same process as a device type. |
 
 ### Non-collision, checked
 
-Every witness available in this repository was checked before these ids were reserved:
+The first allocation reasoned that nothing at or above `0xC0` appears in the bridge's dispatch, in any `tools/` definition, or in the capabilities reply. Every one of those checks was correct, and the conclusion was still wrong: **this repository is not the whole protocol.** A message id is a claim about ANT, and the witnesses below only enumerate what this repo happens to know. That is the generalisable lesson, and it applies to every future allocation — the list is necessary, never sufficient.
 
-- `src/ant_serial_bridge.c` `dispatch()` and `handle_request()` — highest id `0x81`.
-- Every `MESG_*` definition in `tools/` — highest `0x7F`.
+Every witness available was checked:
+
+- `src/ant_serial_bridge.c` `dispatch()` and `handle_request()` — highest id `0x8C`.
+- Every `MESG_*` definition in `tools/ant_wire.py` — highest `0xAE`.
 - `archive/host-api/ant_dll_exports.json`, taken from the real PE export directory of `ANT_DLL.dll` — 36 distinct message ids, highest `0x7B`. The entire host-callable ANT API tops out there.
 - The capabilities reply — carries no id space at all, so nothing in it can collide.
 - Rev 5.1's message table — highest ids known are the encryption block `0x7D`–`0x7F`, active search sharing `0x81`, NVM crypto key ops around `0x83`, the serial-layer `0xAE`–`0xAF` and port-IO `0xB4`–`0xB5` messages, and an AP2-era extension block around `0xC0`–`0xC7` (RSSI search threshold, sleep, Garmin ESN, USB info).
+- **sdk-ant itself**, read by the one agent permitted to open it — the extended-id block `MESG_EXT_ID_0` … `MESG_EXT_ID_4` at `0xE0`–`0xE4`, and `MESG_DEBUG_ID` at `0xF0`. Nothing else at or above `0xC8`, and nothing at all in `0xF1`–`0xFA`. This is the witness the first allocation could not consult, and it is the one that moved these ids.
 
-**Nothing is known to occupy `0xE0`–`0xEF`, so the reservation holds.** The honest limit is on the last bullet: it is recall of the public message table rather than a citation, which is exactly why the `0xC0` block is stated as a *range* and why `MESG_RSSI_SEARCH_THRESHOLD_ID` and `MESG_SLEEP_ID` carry no value in this file. `0xE0` sits `0x19` clear of the top of that block, so the reservation survives a misremembered member of it. `0xE0` is also not confusable with SYNC (`0xA4`/`0xA5`) by a resynchronising parser — which an id of `0xA4` genuinely would be.
+**`0xF1`–`0xF5` is therefore the allocation**, one clear of sdk-ant's `0xF0`, `0x11` clear of the top of the extended-id block and `0x2A` clear of the top of the AP2-era block. The honest limit is on the Rev 5.1 bullet: it is recall of the public message table rather than a citation, which is exactly why the `0xC0` block is stated as a *range* and why `MESG_RSSI_SEARCH_THRESHOLD_ID` and `MESG_SLEEP_ID` carry no value in this file. `0xF1`–`0xF5` is also not confusable with SYNC (`0xA4`/`0xA5`) by a resynchronising parser — which an id of `0xA4` genuinely would be.
 
 ## `ANT_DLL` exports with no message id
 
@@ -701,23 +741,17 @@ These are used at a visible site in this repository but their numeric value is n
 
 | Constant | Section | Blocks | Why it is unresolved | Provenance |
 |---|---|---|---|---|
-| `MESG_RSSI_SEARCH_THRESHOLD_ID` | messages | nothing - not bridged | Proximity search threshold expressed in RSSI rather than in the proximity bins MESG_PROX_SEARCH_CONFIG (0x71) uses. Implied by the ANT_DLL export ANT_RSSI_SetSearchThreshold. Believed to sit in the 0xC0 block of AP2-era extension messages, but no value in that block is corroborated by anything in this repository - the whole host-callable API in archive/host-api/ant_dll_exports.json tops out at 0x7B - so no number is recorded here. | host-api + verify:sdk-ant-shim |
-| `MESG_SLEEP_ID` | messages | nothing - not bridged | Put the device into its low-power sleep state. Implied by the ANT_DLL export ANT_SleepMessage, which Zwift resolves. Same 0xC0 block and the same lack of corroboration as MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. | host-api + verify:sdk-ant-shim |
-| `MESG_CHANNEL_CRC_MODE_ID` | messages | src/ant_serial_bridge.c dispatch() and handle_request() | [filler, mode] on the way in, [channel, mode] on the way back. Dispatched at src/ant_serial_bridge.c and requested in handle_request(). The numeric id is a Nordic extension that appears nowhere in this repository and is not in Rev 5.1. | bridge + verify:sdk-ant-shim |
-| `MESG_PENDING_TRANSMIT_CLEAR_ID` | messages | src/ant_serial_bridge.c dispatch() and handle_request() | [channel] to clear, [channel, pending] on request. Dispatched by the bridge; the numeric id is a Nordic extension not present in this repository or in Rev 5.1. | bridge + verify:sdk-ant-shim |
-| `MESG_ECS_ENABLE_ID` | messages | src/ant_serial_bridge.c dispatch() | [filler, enable]. Enhanced channel spacing. Dispatched by the bridge; the numeric id is a Nordic extension not present in this repository or in Rev 5.1. | bridge + verify:sdk-ant-shim |
-| `MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE` | message_sizes | src/ant_serial_bridge.c handle_request(); src/ant_stub.c:209 | The advanced-burst capabilities reply: byte 0 is a maximum packet size code, byte 1 is a supported-modes bitfield. Its declared length is not visible in this repository - ant_features.py reads only the first two bytes and prints the rest as hex, and no captured reply is committed. This one is on the wire, so it cannot be substituted with a local value: it is the LEN byte the bridge puts on the reply. | tools + verify:sdk-ant-shim |
-| `SDU_MASK_ACK_CONFIG_BIT` | sdu | src/ant_stub.c:529 (substitutable - see the unresolved rule) | Set alongside a mask number to apply the mask to acknowledged data as well as broadcast. src/ant_stub.c:529 masks it off before range-checking the mask number; the bit's value appears nowhere in this repository. Never on the wire in a direction this dongle originates - the host sets it - so the stub does not need the real value to behave correctly. | stub + verify:sdk-ant-shim |
-| `MAX_SUPPORTED_ENCRYPTION_MODE` | encryption | src/ant_stub.c:233, :483 (substitutable in a stub) | The value src/ant_stub.c answers an ENCRYPTION_INFO_GET_SUPPORTED_MODE request with, and the upper bound it range-checks a channel-enable against. Not visible in this repository. It does reach the wire, but only out of the stub, whose replies are already declared synthetic. | stub + verify:sdk-ant-shim |
+| `MESG_RSSI_SEARCH_THRESHOLD_ID` | messages | nothing - not bridged | Proximity search threshold expressed in RSSI rather than in the proximity bins MESG_PROX_SEARCH_CONFIG (0x71) uses. Implied by the ANT_DLL export ANT_RSSI_SetSearchThreshold. Believed to sit in the 0xC0 block of AP2-era extension messages, but no value in that block is corroborated by anything in this repository - the whole host-callable API in archive/host-api/ant_dll_exports.json tops out at 0x7B - so no number is recorded here. The Wave 2 shim looked and came back empty as well: sdk-ant v2.1.0 defines no such id anywhere in its headers or sources, so this stays unresolved rather than merely unverified. | host-api + verify:sdk-ant-shim |
+| `MESG_SLEEP_ID` | messages | nothing - not bridged | Put the device into its low-power sleep state. Implied by the ANT_DLL export ANT_SleepMessage, which Zwift resolves. Same 0xC0 block and the same lack of corroboration as MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. The Wave 2 shim found the name referenced in sdk-ant but never defined - the only occurrence is inside a commented-out dispatch arm - so there is no value to recover there either. | host-api + verify:sdk-ant-shim |
 
 ## Provenance summary
 
-211 constants in total. 64 carry a `verify: sdk-ant-shim` flag, meaning no file in this repository witnesses the value and the Wave 2 shim's `BUILD_ASSERT` block is what confirms it. 8 of those are unresolved outright.
+221 constants in total. 74 carry a `verify: sdk-ant-shim` flag, meaning no file in this repository witnesses the value and the Wave 2 shim's `BUILD_ASSERT` block is what confirms it. 2 of those are unresolved outright.
 
 | Source | Constants |
 |---|---|
 | K4 (docs/radiant-security.md sec 9) | 5 |
-| bridge | 35 |
+| bridge | 32 |
 | bridge, observed | 1 |
 | bridge, readme | 3 |
 | bridge, rev5.1 sec 9.5 | 2 |
@@ -740,13 +774,14 @@ These are used at a visible site in this repository but their numeric value is n
 | rev5.1 sec 9.5.6 | 13 |
 | rev5.1 sec 9.5.7.1 | 4 |
 | rev5.1 sec 9.5.7.4 | 11 |
+| sdk-ant-shim | 16 |
 | src/usb_ant_class.c:30 | 1 |
 | src/usb_ant_class.c:30, bridge | 1 |
 | src/usb_ant_class.c:30, src/usb_ant_class_next.c:55 | 1 |
-| stub | 11 |
+| stub | 9 |
 | stub, readme | 1 |
 | stub, tools | 9 |
-| tools | 4 |
+| tools | 3 |
 | tools (ant_features) | 10 |
 | tools (ant_probe) | 6 |
 | tools (ant_session) | 5 |

@@ -55,9 +55,6 @@ like; a message with no entry there still gets a case built from its declared
 in that module are generated, and a copy here would be a fifth place for one
 number to live.
 
-What a difference means
------------------------
-
 What a bench sitting has to run
 -------------------------------
 
@@ -159,12 +156,21 @@ EXCLUDED = {
 # token independently; using the same one is what lets a committed conformance
 # transcript be replayed at all.
 #
-# It is not a perfect fit yet, and the gap is worth knowing about: that suite
-# reads "malformed" as "unframe() must reject this", which is true of
-# `malformed-checksum` and `malformed-sync` and false of `malformed-short`,
-# `malformed-long` and `malformed-oob-index` - those are perfectly well-formed
-# frames carrying a payload the message id does not admit, which is exactly what
-# makes them worth sending. See this agent's change request.
+# The gap that was recorded here as a change request is closed. That suite once
+# read "malformed" as "unframe() must reject this" - true of
+# `malformed-checksum` and `malformed-sync`, false of `malformed-short`,
+# `malformed-long` and `malformed-oob-index`, which are perfectly well-formed
+# frames carrying a payload the message id does not admit, and that is exactly
+# what makes them worth sending. It now reads it as "a problem with this record
+# is recorded and waived rather than failed", which is per record, so a case
+# that happens to be conformant simply has nothing to waive. The written
+# contract between the two files is `tools/vectors/README.md`; neither owns the
+# other, so a change to the convention goes there first.
+#
+# The one thing this tool must never do is claim the waiver for a record that is
+# conformant. `frame/sync-in-payload` deliberately carries channel 0xA4 so a
+# SYNC byte lands inside a payload, and naming it `malformed` to quiet a checker
+# would record a true fact - this frame is unusual - as a false one.
 MALFORMED = "malformed"
 
 # The four-byte prefix of a message name, stripped for case names.
@@ -182,11 +188,25 @@ def short_name(msg_id: int) -> str:
 
 
 def payload_bounds(msg_id: int) -> tuple[int, int] | None:
-    """(min, max) payload length from the YAML, or None when it says `var`.
+    """(min, max) *command* payload length from the YAML, or None for `var`.
 
     `payload_len` is an int for a fixed-size message and a `'a..b'` string for
     one with an optional tail. `var` means the size depends on a field inside
     the payload, and there is nothing generic to derive from it.
+
+    Deliberately the command length and never `reply_len`. Everything built
+    from this goes out in the host column - the canonical case, and the
+    malformed-short and malformed-long siblings derived one byte either side of
+    these bounds - and a reply length has no business setting the size of a
+    frame this tool transmits.
+
+    A second and blunter reason not to touch these numbers: the bounds decide
+    how long the short and long variants are, so narrowing one silently changes
+    the bytes of two cases, and the committed Tier 1 reference transcript stops
+    being reproducible by the tool that produced it. `0x79` is the live example
+    - its command is two bytes and its reply three, and `payload_len` still
+    reads `2..3` for exactly this reason, with the reply side pinned exactly by
+    `reply_len` instead.
     """
     declared = wire.MESSAGES[msg_id]["payload_len"]
     if isinstance(declared, int):
@@ -336,11 +356,20 @@ REQUESTABLE: tuple[tuple[int, int, str], ...] = (
     (wire.MESG_CHANNEL_ID_ID, CHANNEL, "reply leads with the channel"),
     (wire.MESG_CHANNEL_MESG_PERIOD_ID, CHANNEL, ""),
     (wire.MESG_CHANNEL_RADIO_FREQ_ID, CHANNEL, ""),
+    # 0x58 and 0x8C are Nordic extensions whose ids this repository did not
+    # know until the Wave 2 shim recovered them. Both are dispatched and both
+    # are answered by handle_request(), so both belong in the run.
+    (wire.MESG_CHANNEL_CRC_MODE_ID, CHANNEL,
+     "the command's byte 0 is a filler and the request's is a channel - the "
+     "asymmetry is the thing worth pinning"),
     (wire.MESG_ANTLIB_CONFIG_ID, 0, "byte 0 is a filler, not a channel"),
     (wire.MESG_ACTIVE_SEARCH_SHARING_ID, CHANNEL, ""),
     (wire.MESG_EVENT_FILTER_CONFIG_ID, 0,
      "reply carries a filler byte the command did not"),
     (wire.MESG_SET_SEARCH_CH_PRIORITY_ID, CHANNEL, ""),
+    (wire.MESG_PENDING_TRANSMIT_CLEAR_ID, CHANNEL,
+     "the request form replies MESG_PENDING_TRANSMIT_GET_SIZE bytes, a "
+     "different constant from the command's own payload length"),
     (wire.MESG_CONFIG_ADV_BURST_ID, 0, "index 0: capabilities"),
     (wire.MESG_CONFIG_ADV_BURST_ID, 1,
      "index 1: configuration, and the reply drops the enable byte"),
@@ -361,13 +390,24 @@ REQUESTABLE: tuple[tuple[int, int, str], ...] = (
      "no such message: the default arm of handle_request()"),
 )
 
-# Requestable messages whose numeric id this repository does not know. Recorded
-# rather than dropped: `tools/ant_wire.py`'s UNRESOLVED dict is the authority on
-# why, and a reader of the JSON summary should be able to see the hole.
-UNREQUESTABLE_UNRESOLVED = (
-    "MESG_CHANNEL_CRC_MODE_ID",
-    "MESG_PENDING_TRANSMIT_CLEAR_ID",
-)
+# Messages whose numeric id this repository still does not know, so no case can
+# be built for them. Recorded rather than dropped: a reader of the JSON summary
+# should be able to see the hole.
+#
+# **Derived, not listed.** This was a hand-written tuple naming
+# MESG_CHANNEL_CRC_MODE_ID and MESG_PENDING_TRANSMIT_CLEAR_ID, and it stayed
+# that way after the Wave 2 shim resolved them to 0x58 and 0x8C - so two
+# messages the bridge implements were silently absent from every transcript
+# while the summary claimed, with a reason attached, that they could not be
+# sent. Nothing failed: the test on this list only checks that each entry
+# carries a non-empty "why". A transcript that quietly omits a message is
+# exactly the coverage hole this tool exists to close, so the list now comes
+# from `tools/ant_wire.py`'s UNRESOLVED dict, which is generated from the YAML
+# and cannot fall behind it.
+UNREQUESTABLE_UNRESOLVED = tuple(sorted(
+    name for name in wire.UNRESOLVED
+    if name.startswith("MESG_") and name.endswith("_ID")
+))
 
 
 # ---------------------------------------------------------------------------
@@ -765,7 +805,26 @@ def compare(path_a: str, path_b: str, allowed: set[str],
 
 def summarise(cases: list[Case], state: RunState, path: str,
               text: str) -> dict:
-    """The JSON `tools/ant_ab.py` reads, and the record of what was skipped."""
+    """The JSON `tools/ant_ab.py` reads, and the record of what was skipped.
+
+    Also, since the Tier 1 reference landed, the integrity record for the
+    transcript itself. `tools/test_ant_golden.py` reads `sha256`, `records` and
+    `case_index` back out of the committed copy in `archive/benchmarks/` and
+    fails if the bytes on disk no longer hash to them - which is the only check
+    in the tree that can see a flipped byte inside an otherwise well-formed
+    reply, because a framing rule has no opinion about what a dongle should
+    have answered.
+
+    Three consequences for anyone editing this function:
+
+    * `case_index` earns its keep as more than a summary - it is what turns
+      "this file changed" into "this case changed", so keep it per case and
+      keep the hash over the same `<dir><hex>` lines joined with newlines.
+    * A transcript committed to `archive/captures/serial/` needs its summary
+      committed too, or nothing checks it.
+    * Changing how any of these three fields is computed invalidates every
+      committed baseline at once. That is a deliberate act, not a refactor.
+    """
     per_case: dict[str, dict] = {}
     for record in state.records:
         entry = per_case.setdefault(record.case or "?",

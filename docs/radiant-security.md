@@ -382,35 +382,64 @@ section 2: ANT+ encryption failed in practice not because it was weak but
 because no application could call it.
 
 Every new message ID must be allocated from unclaimed ID space and recorded in
-`protocol/ant_wire.yaml`, which the **K1-wire** agent owns, together with a
-note on why it cannot collide. That file is not edited here — the proposal
-below is a change request.
+`protocol/ant_wire.yaml`, which is the authority on the numbering; this section
+records what the IDs are for. The allocation below is the one in the YAML.
 
-### Proposed IDs
+### Allocated IDs
 
-| Proposed ID | Name | Purpose |
+| ID | Name | Purpose |
 |---|---|---|
-| `0xE0` | `ANTW_MESG_RADIANT_SEC_CONFIG_ID` | Per-channel switch bitmask (`X_PRIV`/`X_CONF`/`X_AUTH`) plus the MAC window W |
-| `0xE1` | `ANTW_MESG_RADIANT_SET_KEY_ID` | Install `K_id` / `K_master` for a channel |
-| `0xE2` | `ANTW_MESG_RADIANT_EPOCH_ID` | Set or read the epoch and the host time base |
-| `0xE3` | `ANTW_MESG_RADIANT_SEC_STATUS_ID` | Read back: current `devnum_e`, epoch, highest counter seen, MAC pass/fail counts |
-| `0xE4` | `ANTW_MESG_RADIANT_PAIRING_ID` | Enter/leave pairing mode; carry the X25519 exchange over burst |
-| `0xE5-0xEF` | reserved | The rest of the RadiANT family |
+| `0xF1` | `ANTW_MESG_RADIANT_SEC_CONFIG_ID` | Per-channel switch bitmask (`X_PRIV`/`X_CONF`/`X_AUTH`) plus the MAC window W |
+| `0xF2` | `ANTW_MESG_RADIANT_SET_KEY_ID` | Install `K_id` / `K_master` for a channel |
+| `0xF3` | `ANTW_MESG_RADIANT_EPOCH_ID` | Set or read the epoch and the host time base |
+| `0xF4` | `ANTW_MESG_RADIANT_SEC_STATUS_ID` | Read back: current `devnum_e`, epoch, highest counter seen, MAC pass/fail counts |
+| `0xF5` | `ANTW_MESG_RADIANT_PAIRING_ID` | Enter/leave pairing mode; carry the X25519 exchange over burst |
+| `0xF6-0xFA` | reserved | The rest of the RadiANT family |
 
-Why `0xE0` and up cannot collide, as far as this project can establish:
+### These were `0xE0`-`0xE4`, and the reason they moved is the useful part
 
-- No message ID at or above `0xC0` appears in the dispatch in
-  `src/ant_serial_bridge.c`, in any ID defined in `tools/`, or in the
-  capabilities reply the dongle emits.
-- The highest IDs in use are the encryption block `0x7D`-`0x7F`, and the
-  configuration and control blocks all sit below `0x80`.
-- `0xE0` is not confusable with the SYNC byte `0xA4` or its LSB-first variant
-  `0xA5`.
-- These are requestable: `MESG_REQUEST_ID` (`0x4D`) takes a message id as its
-  argument, so `0xE2` and `0xE3` are readable with no new mechanism.
+The first allocation was `0xE0`-`0xE4`. It was wrong: **sdk-ant defines
+`MESG_EXT_ID_0` … `MESG_EXT_ID_4` as exactly `0xE0`-`0xE4`**, an
+extended-message-id block selected by `MSG_EXT_ID_MASK` (`0xE0`) and reserved
+for ANT response and request messages that carry extended message IDs. That is
+a head-on collision with the protocol this project claims compatibility with.
+Nobody should re-propose that range.
 
-That reasoning is necessary but not sufficient, and K1 must confirm it against
-the full Rev 5.1 message table before the IDs are written down as allocated.
+The argument that produced it was:
+
+> No message ID at or above `0xC0` appears in the dispatch in
+> `src/ant_serial_bridge.c`, in any ID defined in `tools/`, or in the
+> capabilities reply the dongle emits.
+
+**Every one of those checks was correct, and the conclusion was still wrong,
+because this repository is not the whole protocol.** The bridge implements the
+messages a host actually sends; `tools/` defines the ones our own tools use;
+the capabilities reply carries no ID space at all. Three accurate readings of
+three partial witnesses do not add up to a statement about ANT. The lesson
+generalises past this one allocation: an ID reservation is a claim about the
+protocol, so the only witnesses that count are ones that speak for the
+protocol — and the repo is not one of them. The list of in-repo checks is
+necessary and never sufficient.
+
+What settled it was a witness the first allocation could not consult: the one
+agent permitted to read sdk-ant. In the region above `0xC8` sdk-ant uses the
+extended-ID block `0xE0`-`0xE4` and `MESG_DEBUG_ID` at `0xF0`, and nothing in
+`0xF1`-`0xFA`. Hence this allocation, one clear of `0xF0`.
+
+Two properties of the old argument survive the move and are still worth
+stating:
+
+- `0xF1`-`0xF5` is not confusable with the SYNC byte `0xA4` or its
+  bidirectional variant `0xA5` by a resynchronising parser.
+- These are requestable: `MESG_REQUEST_ID` (`0x4D`) takes a message ID as its
+  argument, so `0xF3` and `0xF4` are readable with no new mechanism.
+
+**Lib config `0xE0` is a different namespace and has not moved.** The
+`ANTW_LIB_CONFIG_ALL_EXT_FIELDS` setting — channel ID + RSSI + RX timestamp — is
+a payload byte of message `0x6E`, not a message ID, and it is unaffected by any
+of the above. The RadiANT message IDs no longer share a byte with it, but the
+reason they never conflicted was that the two namespaces are unrelated, not
+that the numbers differ.
 
 ---
 
