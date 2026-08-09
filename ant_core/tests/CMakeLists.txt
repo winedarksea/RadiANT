@@ -47,13 +47,30 @@ target_include_directories(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../include")
 # without this every suite author gets the relative path wrong exactly once.
 target_include_directories(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
-# Core module sources are added here as they are written, one line per module
-# (ant_frame.c, ant_sched.c, ant_channel.c, ant_search.c, ant_event.c,
-# ant_api.c, ant_ack.c, ant_burst.c). They are listed explicitly rather than
-# globbed, because a suite that silently stops linking the module it tests
-# still passes, and an explicit list makes that a merge conflict instead.
+# ../../src for ant_event.c only: its output format is struct antr_msg and
+# antr_on_message() from src/ant_radio.h, which pulls in the generated
+# src/ant_wire.h. Both are plain headers with no application dependency, so
+# this does not drag the dongle build into the test build - the test app still
+# never reads the root CMakeLists.txt, which is what keeps this job secret-free.
+target_include_directories(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../src")
+
+# Core module sources are added here as they are written, one line per module.
+# They are listed explicitly rather than globbed, because a suite that silently
+# stops linking the module it tests still passes, and an explicit list makes
+# that a merge conflict instead.
+#
+# ant_api.c is deliberately absent: it is the integration layer that defines
+# the antr_* entry points, and the module suites test the modules, not the
+# forwarding. Adding it here would drag src/ant_radio.h's whole surface into a
+# build that has no bridge to satisfy it.
 set(ant_core_sources
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/ant_frame.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ant_sched.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ant_channel.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ant_search.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ant_event.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ant_ack.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ant_burst.c"
 )
 if(ant_core_sources)
   target_sources(app PRIVATE ${ant_core_sources})
