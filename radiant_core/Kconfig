@@ -18,6 +18,10 @@ config RADIANT_CORE
 
 if RADIANT_CORE
 
+module = RADIANT_CORE
+module-str = radiant_core
+source "subsys/logging/Kconfig.template.log_config"
+
 choice RADIANT_CORE_BACKEND
 	prompt "radiant_core radio backend"
 	default RADIANT_CORE_BACKEND_NULL
@@ -51,11 +55,50 @@ config RADIANT_CORE_BACKEND_NONE
 	  test image and nowhere near a dongle.
 
 config RADIANT_CORE_BACKEND_NRF
-	bool "nrf - direct nRF RADIO peripheral (Phase 6, not written)"
+	bool "nrf - direct nRF RADIO peripheral (RECEIVE ONLY)"
+	depends on SOC_SERIES_NRF52X || SOC_SERIES_NRF54LX
+	depends on !BT
+	select CLOCK_CONTROL
+	select NRFX_GPPI
 	help
-	  A backend owning the RADIO peripheral outright. Reserved here so the
-	  name is taken; selecting it is a configure-time error naming the
-	  phase, which beats a link error whose cause is three layers away.
+	  src/radiant_radio_nrf.c: the RADIO, one TIMER and three (D)PPI
+	  channels, owned outright.
+
+	  RECEIVE ONLY, AND THAT IS NOT A STAGING DECISION. radiant_radio_tx()
+	  returns RADIANT_RADIO_ENOTSUP because struct radiant_tx_req cannot
+	  express a transmission: it carries no on-air address, and `body` is
+	  the [ttype][ctrl][d0..d7] tracking body with the five address bytes
+	  not in it. The header comment in that file states the gap, why the
+	  mock could not have caught it, and the two-field fix. Choosing this
+	  backend gives an image that hears real sensors and cannot answer one.
+
+	  The address arithmetic and packet configuration are measured on
+	  nRF54L15 (Spike A). The nRF52840 is predicted to behave identically
+	  and has not been confirmed. The t_sync calibration constant is still
+	  zero - see the warning in the file.
+
+config RADIANT_CORE_BACKEND_NRF_TIMER
+	hex "TIMER instance base address for the radio timebase"
+	depends on RADIANT_CORE_BACKEND_NRF
+	default 0x4000A000 if SOC_SERIES_NRF52X   # TIMER2
+	default 0x400F0000 if SOC_SERIES_NRF54LX  # TIMER20
+	help
+	  The backend owns one TIMER outright and runs it at 1 MHz forever: it
+	  is the timebase radiant_radio_now() reads and the one t_sync is
+	  hardware-captured into. It must not be shared with anything else.
+
+	  Expressed as a base address rather than an index so that a board with
+	  a conflicting user can move it without editing the source.
+
+config RADIANT_CORE_BACKEND_NRF_IRQ_PRIO
+	int "RADIO interrupt priority"
+	depends on RADIANT_CORE_BACKEND_NRF
+	default 0
+	help
+	  radiant_radio_hal.h says callbacks run "at the highest priority the
+	  backend uses", because re-arming from inside a completion callback is
+	  the only path that meets a 1.55 ms acknowledged-data turnaround.
+	  Lower this only with a measurement in hand.
 
 config RADIANT_CORE_BACKEND_MPSL
 	bool "mpsl - RADIO through MPSL timeslots (Phase 6b, not written)"

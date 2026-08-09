@@ -74,12 +74,13 @@ zephyr_library_sources_ifdef(CONFIG_RADIANT_CORE_ANTR_API src/radiant_api.c)
 if(CONFIG_RADIANT_CORE_BACKEND_NULL)
   zephyr_library_sources(src/radiant_radio_null.c)
 elseif(CONFIG_RADIANT_CORE_BACKEND_NRF)
-  message(FATAL_ERROR
-    "radiant_core: CONFIG_RADIANT_CORE_BACKEND_NRF is selected but "
-    "src/radiant_radio_nrf.c does not exist - the direct nRF RADIO backend is "
-    "Phase 6 and is the largest single piece of work left in the stack. Select "
-    "RADIANT_CORE_BACKEND_NULL for an image that runs everything above the "
-    "radio, or RADIANT_CORE_BACKEND_NONE to supply the HAL yourself.")
+  zephyr_library_sources(src/radiant_radio_nrf.c)
+  message(WARNING
+    "radiant_core: the nrf backend is RECEIVE ONLY. radiant_radio_tx() returns "
+    "ENOTSUP because struct radiant_tx_req carries no on-air address - see the "
+    "header comment in src/radiant_radio_nrf.c. This image will hear real "
+    "sensors and will not answer one, so acknowledged data, burst and any "
+    "master channel cannot work.")
 elseif(CONFIG_RADIANT_CORE_BACKEND_MPSL)
   message(FATAL_ERROR
     "radiant_core: CONFIG_RADIANT_CORE_BACKEND_MPSL is selected but "

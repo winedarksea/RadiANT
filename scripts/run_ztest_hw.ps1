@@ -85,14 +85,24 @@ if (-not $SkipBuild) {
 
     # `west build` is an extension command discovered through the workspace
     # manifest, so west must run with its cwd inside the workspace.
+    #
+    # Its output goes to a file rather than to the console, and that is not
+    # tidiness: west writes progress to stderr, PowerShell wraps native stderr
+    # in ErrorRecords, and with $ErrorActionPreference = 'Stop' that terminates
+    # this script the moment anyone pipes its output anywhere. The build log is
+    # more useful next to the image than on the terminal anyway.
+    $buildLog = Join-Path $repo 'build\ztest-build.log'
+    New-Item -ItemType Directory -Force (Split-Path $buildLog) | Out-Null
     Push-Location "C:\ncs\$NcsVersion"
     try {
         west -z "C:\ncs\$NcsVersion\zephyr" build `
-            -s (Join-Path $repo 'radiant_core\tests') -b $Board -d $out -p always --no-sysbuild
-        if ($LASTEXITCODE -ne 0) { throw "build failed" }
+            -s (Join-Path $repo 'radiant_core\tests') -b $Board -d $out -p always --no-sysbuild `
+            > $buildLog
+        if ($LASTEXITCODE -ne 0) { throw "build failed; log at $buildLog" }
     } finally {
         Pop-Location
     }
+    Write-Host "built (log: $buildLog)"
 }
 
 if (-not (Test-Path $hex)) { throw "no image at $hex" }
