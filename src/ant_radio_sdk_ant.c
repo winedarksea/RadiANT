@@ -4,7 +4,7 @@
  * src/ant_radio.h implemented on Nordic's prebuilt libant.a, from sdk-ant.
  *
  * Two halves, and the second one is the reason this file is worth keeping
- * rather than deleting once ant_core works.
+ * rather than deleting once radiant_core works.
  *
  * The first half is fifty forwarders. Almost every one is a single call with
  * the name changed; three things are not, and each is documented where it
@@ -26,8 +26,8 @@
  * writing this file is the only role in the project permitted to read sdk-ant,
  * and only its headers. docs/decisions/0002-clean-room-policy.md states that
  * outright, and states the consequence too - this file is glue against a
- * licensed API we are entitled to call, it is not part of ant_core, and it
- * must not be used as a route to inform ant_core. Someone implementing a
+ * licensed API we are entitled to call, it is not part of radiant_core, and it
+ * must not be used as a route to inform radiant_core. Someone implementing a
  * clean-room backend reads src/ant_radio.h and docs/sdk-ant-contract.md, which
  * are ours. libant.a itself was not disassembled, inspected or instrumented by
  * any means; that prohibition is absolute and does not expire.

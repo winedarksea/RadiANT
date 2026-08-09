@@ -61,7 +61,7 @@ cycle to find.
 
 C unit tests are a different story: `native_sim` does not build on Windows —
 no host C compiler, no QEMU — so `west twister` cannot run locally and every
-ztest in `ant_core/tests/` executes only in CI on Linux. Local C verification
+ztest in `radiant_core/tests/` executes only in CI on Linux. Local C verification
 is compile-check plus these Python tools.
 
 ### The one secret, and why it cannot be avoided
@@ -95,7 +95,7 @@ need no secret at all, which is what makes the build green on a fork.
 
 ## The four verification tiers
 
-The tiers exist to answer one question: *is `ant_core` a faithful replacement
+The tiers exist to answer one question: *is `radiant_core` a faithful replacement
 for `libant.a`?* They are ordered by what they cost to run, so a divergence is
 found by the cheapest tier that can see it.
 
@@ -144,7 +144,7 @@ comparison in [`backends.md`](backends.md). Baselines commit to
 
 Per-phase functional gates use the tools above, in this order:
 `ant_probe.py` → `ant_scan.py` → `ant_verify.py` against `sim/` → `ant_sim.py`
-driving `ant_core` as a sensor, received by the sdk-ant dongle →
+driving `radiant_core` as a sensor, received by the sdk-ant dongle →
 `ant_session.py` for ack/burst and eight channels → `ant_features.py` as the
 conformance gate.
 
@@ -156,7 +156,7 @@ measurement and encoded the tool's own bug as the spec.
 
 Zwift pairs a power meter, an HRM and a controllable trainer, and holds a
 30-minute ride with resistance changes taking effect. Not automatable, and it
-is the gate for making `ant_core` the release default. Release artifacts stay
+is the gate for making `radiant_core` the release default. Release artifacts stay
 on the sdk-ant build until it passes, and the switchover is a recorded decision
 in [`decisions/0001-backend-selection-and-release-default.md`](decisions/0001-backend-selection-and-release-default.md),
 not a drift.

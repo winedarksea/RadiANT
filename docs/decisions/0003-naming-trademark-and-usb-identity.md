@@ -39,7 +39,9 @@ but removes none of the marks.
 
 RadiANT is the public name for the whole effort and for the extension family —
 the optional security switches, the generic telemetry profile, the new device
-types. `ant_core` remains the C module name.
+types. ~~`ant_core` remains the C module name.~~ **Amended 2026-08-09 — see
+[Amendment: the C module is `radiant_core`](#amendment-2026-08-09--the-c-module-is-radiant_core)
+below.**
 
 The name contains the mark, so it carries the same posture as the descriptor
 strings: **always described as compatible, never as endorsed.** On first use in
@@ -59,6 +61,51 @@ at all, and Apache-2.0 §6 explicitly declines to grant trademark rights while
 carving out "reasonable and customary use in describing the origin of the
 Work". The qualifier is what keeps the use inside that carve-out. `NOTICE`
 carries the full statement and is the authoritative text.
+
+### Amendment 2026-08-09 — the C module is `radiant_core`
+
+The sentence above originally read "`ant_core` remains the C module name." That
+is no longer true, and the change is recorded here rather than edited into the
+paragraph, because an ADR whose text quietly matches today's tree is a record of
+nothing.
+
+**What changed:** `ant_core` → `radiant_core`. The directory, the Kconfig prefix
+(`RADIANT_CORE_*`), the include path (`#include <radiant_core/radiant_frame.h>`)
+and every C identifier below the backend seam. Landed in the same commit that
+converted the module to Zephyr module shape.
+
+**Why the original decision was wrong.** It treated the C module name as an
+internal detail, on the reasoning that only the public name is user-facing. But
+the directory, the include path and the Kconfig prefix are precisely the surface
+a reviewer — or a lawyer — reads as an identity claim, and they are more durable
+than any prose: a README can be rewritten, an `#include` line is in every file
+that consumes the module and in every downstream fork of it. `ant_core` reads as
+a claim to be ANT. `radiant_core` reads as what it is, and this ADR had already
+committed the project to "always described as compatible, never as endorsed."
+
+**What did not change, and why the rename does not reach it.** The naming rule
+is *the prefix names the author; the suffix may name the target.* So
+`ANT_NET_ADDR_ANT_PLUS_0` became `RADIANT_NET_ADDR_ANT_PLUS_0` — the prefix is
+ours, and `ANT_PLUS` still names the network, accurately. Three things keep
+their names outright:
+
+- `antr_*` and `src/ant_radio.h` — the *application's* contract to a radio
+  backend, which sdk-ant's shim implements too. Renaming it would rename
+  Nordic's seam, not ours.
+- `ANTW_*`, `src/ant_wire.h` and `protocol/ant_wire.yaml` — these name Garmin's
+  serial protocol, and that is the accurate word for it.
+- `tools/ant_*.py`, `docs/ant-*.md`, and prose "ANT"/"ANT+" everywhere. Scrubbing
+  the protocol's own name out of prose that describes the protocol would make
+  the documentation less accurate, not more careful.
+
+**One collision removed as a side effect.** `src/ant_radio_sdk_ant.c` is a
+translation unit holding all four sdk-ant headers at once, and `ANTW_*` exists
+because sdk-ant's error macros are computed expressions — identical macro *names*
+with different token sequences are a hard redefinition error, not a warning. A
+module sitting in the `ANT_*` C and Kconfig namespace carried the same trap,
+waiting for the first translation unit needing both trees (Phase 6's
+`src/profiles/` is the obvious candidate). `RADIANT_*` cannot collide with
+`ANT_*` by construction.
 
 ### `0FCF:1009` and the Dynastream descriptor strings are kept
 

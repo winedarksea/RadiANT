@@ -55,7 +55,7 @@ patents, it is not.
 `LICENSE` carries the full, verbatim Apache-2.0 text. `NOTICE` carries project
 attribution and the trademark statement required by
 [0003](0003-naming-trademark-and-usb-identity.md). Every source file carries
-`SPDX-License-Identifier: Apache-2.0`; every `ant_core/*.c` additionally
+`SPDX-License-Identifier: Apache-2.0`; every `radiant_core/*.c` additionally
 carries a `Provenance:` line, per
 [0002](0002-clean-room-policy.md).
 

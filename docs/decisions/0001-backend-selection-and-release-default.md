@@ -35,7 +35,7 @@ Three things constrain the answer:
    asserted, and nobody has had to think about it in months. A second seam
    should look exactly like it rather than inventing a second idiom.
 2. **A clean-room reimplementation needs something to be measured against.**
-   `ant_core` has to be byte-compatible with a protocol whose specification for
+   `radiant_core` has to be byte-compatible with a protocol whose specification for
    the link layer does not exist in public. The only way to know whether it is
    correct is A/B against an implementation that is known correct — and that
    implementation is `libant.a`. Delete the sdk-ant backend and every A/B gate
@@ -64,10 +64,10 @@ src/ant_serial_bridge.c        unchanged logic; speaks only ANTW_*/antr_*
         |
    +----+-----------------+----------------------+
    |                      |                      |
-ant_radio_sdk_ant.c   ant_radio_stub.c      ant_core/
+ant_radio_sdk_ant.c   ant_radio_stub.c      radiant_core/
 (thin forwarders +    (the no-op radio)     (clean-room stack)
  BUILD_ASSERTs)                                  |
-                                          ant_radio_hal.h
+                                          radiant_radio_hal.h
                                                  |
                                        +---------+---------+
                                      nRF52/54L          EFR32 (later)
@@ -109,7 +109,7 @@ costs one line and converts a claim into a test.
 ### sdk-ant stays a first-class selectable backend
 
 It is not a deprecated path, not a compatibility shim awaiting deletion, and
-not something to be quietly removed once `ant_core` works. It is one of three
+not something to be quietly removed once `radiant_core` works. It is one of three
 supported backends, built in CI whenever a token is present, kept in `west.yml`
 as a group-gated optional project, and pinned at `v2.1.0` so that A/B runs
 months apart compare against the same reference.
@@ -128,7 +128,7 @@ The four reasons, in order of durability:
    pass degenerating into our decoder agreeing with our encoder — the
    two-wrong-implementations handshake that the checksum bug in this project's
    own history is a case study in.
-4. **Fallback.** If `ant_core` develops a field problem, the ability to ship
+4. **Fallback.** If `radiant_core` develops a field problem, the ability to ship
    the known-good stack the same afternoon is worth more than the tidiness of
    having deleted it.
 
@@ -144,7 +144,7 @@ produces what gets attached to a release tag, and until further notice that is
 The condition for switching is the Tier 3 acceptance, stated exactly:
 
 > Zwift pairs a power meter, a heart-rate monitor and a controllable trainer
-> against an `ant_core` build, and holds a 30-minute ride with resistance
+> against an `radiant_core` build, and holds a 30-minute ride with resistance
 > changes taking effect throughout.
 
 It is not automatable and it is not a proxy. Passing every Tier 1 and Tier 2

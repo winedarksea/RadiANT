@@ -16,7 +16,7 @@ That turns "which optional ANT features are worth bridging" from an argument
 into a lookup. It is the evidence behind the optional-feature table in
 `README.md`, behind `CONFIG_ANT_DONGLE_ENCRYPTION` being off by default, and
 behind the plan's decision not to implement ANT+'s own AES-CTR encryption in
-`ant_core` at all.
+`radiant_core` at all.
 
 **Names and ordinals are facts.** An export table is a list of identifiers and
 numbers describing an interface; recording it is the same kind of act as

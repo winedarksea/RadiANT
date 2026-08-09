@@ -41,7 +41,7 @@ transcript checks the *rules*.
 `archive/captures/serial/` is where real captures go. It now holds
 `conformance-sdk-ant.antser`, the Tier 1 reference: a real ANTUSB-m-compatible
 dongle answering 284 conformance cases, reproduced byte-identically across two
-runs, and the file every future `ant_core` build is diffed against. When that
+runs, and the file every future `radiant_core` build is diffed against. When that
 directory is empty - on a clone that has not fetched it, or before one was ever
 recorded - `TestRealCaptures` skips, loudly, naming what is missing. It does
 not pass.
@@ -384,7 +384,7 @@ def integrity_problems(path, summary):
         problems.append(
             f"{name}: sha256 is {digest}, but the summary recorded when it was "
             f"captured says {summary['sha256']}. This file is the Tier 1 "
-            f"reference every future ant_core build is diffed against; if a "
+            f"reference every future radiant_core build is diffed against; if a "
             f"check disagrees with it, the check is what changes.")
 
     records = read_antser(raw.decode("utf-8"), source=name)
@@ -434,7 +434,7 @@ class ReplayContext:
       and the device states that in its own capabilities reply.
 
     Deriving both from the transcript rather than hardcoding them is what keeps
-    the checks honest across backends: a 32-channel `ant_core` advertises 32 and
+    the checks honest across backends: a 32-channel `radiant_core` advertises 32 and
     the ceiling follows it, with nothing here to update. Nothing in here reads a
     clock, a filesystem or an environment variable, so a replay is as
     reproducible as the transcript it is given.
@@ -745,7 +745,7 @@ class ReplayMixin:
           have. The bound for that is the channel count in byte 0 of the
           capabilities reply, and the transcript states it about itself. Read
           it from there rather than hardcoding this firmware's 8: a 32-channel
-          `ant_core` advertises 32 and this check follows it with no edit.
+          `radiant_core` advertises 32 and this check follows it with no edit.
 
         A transcript containing no capabilities reply cannot say how many
         channels the device has, so nothing is claimed. That is a real hole and
@@ -1288,7 +1288,7 @@ class TestTheBurstChannelCeiling(ReplayMixin, unittest.TestCase):
 
     def test_the_ceiling_comes_from_the_transcript_not_from_this_file(self):
         # The same burst that fails against an 8-channel device passes against
-        # a 32-channel one. This is what lets an ant_core transcript be
+        # a 32-channel one. This is what lets an radiant_core transcript be
         # replayed by an unmodified harness.
         last = w.BURST_HEADER["BURST_HEADER_LAST"]
         fatal, _ = self.classify_text(

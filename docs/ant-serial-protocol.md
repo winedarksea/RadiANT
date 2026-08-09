@@ -149,7 +149,7 @@ Two settings matter in practice:
 - **`0x80`** — device id only. What `ant_scan.py` and `ant_session.py` ask for:
   enough to name a sensor, nothing else.
 - **`0xE0`** — channel id **and** RSSI **and** receive timestamp. What
-  `ant_verify.py` asks for, and what `ant_core` must assemble. The timestamp is
+  `ant_verify.py` asks for, and what `radiant_core` must assemble. The timestamp is
   16 bits of the radio's own 32768 Hz counter, so it wraps every two seconds —
   and it is the only clock on this path that is not the host's. It reads
   0.009 ms of timing error where the host clock reads 2.6 ms, which is why the
@@ -169,7 +169,7 @@ bit:  7     6  5     4  3  2  1  0
 ```
 
 Five bits of channel is why **32 channels is the serial protocol's natural
-ceiling**, and why `ant_core` is sized for 32 from the first line rather than
+ceiling**, and why `radiant_core` is sized for 32 from the first line rather than
 retrofitted later.
 
 There is no per-packet acknowledgement on success — like a real stick, the host
@@ -454,7 +454,7 @@ Byte 1 of MESG_ANTLIB_CONFIG. Each bit appends one field to every received data 
 | `ANTW_LIB_CONFIG_MESG_OUT_INC_RSSI` | `0x40` | Append RSSI. The difference between a packet lost to a collision and one lost to a fade. | tools (ant_verify) |
 | `ANTW_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID` | `0x80` | Append the channel id. Without it every broadcast arrives anonymous and no sensor can be named. This is also what MESG_RX_EXT_MESGS_ENABLE maps onto. | bridge, tools |
 | `ANTW_LIB_CONFIG_DEVICE_ID_ONLY` | `0x80` | Alias: the narrow setting ant_scan.py and ant_session.py use - identity, nothing else. | tools |
-| `ANTW_LIB_CONFIG_ALL_EXT_FIELDS` | `0xE0` | Channel id + RSSI + RX timestamp, all three. What ant_verify.py asks for, and what ant_core must assemble: the timestamp is the figure the timing gate is read against. | tools (ant_verify) |
+| `ANTW_LIB_CONFIG_ALL_EXT_FIELDS` | `0xE0` | Channel id + RSSI + RX timestamp, all three. What ant_verify.py asks for, and what radiant_core must assemble: the timestamp is the figure the timing gate is read against. | tools (ant_verify) |
 | `ANTW_LIB_CONFIG_MASK_ALL` | `0xFF` | Passed to the clear path when a host sends 0x6E with a zero config byte. | bridge + verify:sdk-ant-shim |
 
 ## Extended message flag bits
@@ -504,7 +504,7 @@ Byte 2 of a RESPONSE_EVENT whose byte 1 is MESG_EVENT_ID (0x01). These arrive un
 | `ANTW_EVENT_RX_FAIL_GO_TO_SEARCH` | `0x08` | Enough consecutive misses that the channel has dropped back into search. | tools (ant_session) |
 | `ANTW_EVENT_CHANNEL_COLLISION` | `0x09` | Two channels wanted the radio at the same instant. | tools (ant_session) |
 | `ANTW_EVENT_TRANSFER_TX_START` | `0x0A` | Progress, not an outcome - keep waiting. | tools (ant_session) |
-| `ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK` | `0x11` | The stack has finished with the burst block it was handed and the next may overwrite it. The bridge consumes this internally and never puts it on the wire: a real stick frames bursts itself. If ant_core fails to raise it exactly once per accepted block, host bursts stall 1000 ms per packet. | bridge, rev5.1 sec 9.5.6 + verify:sdk-ant-shim |
+| `ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK` | `0x11` | The stack has finished with the burst block it was handed and the next may overwrite it. The bridge consumes this internally and never puts it on the wire: a real stick frames bursts itself. If radiant_core fails to raise it exactly once per accepted block, host bursts stall 1000 ms per packet. | bridge, rev5.1 sec 9.5.6 + verify:sdk-ant-shim |
 
 ## Response codes
 
@@ -575,7 +575,7 @@ Byte 0 of MESG_BURST_DATA / MESG_ADV_BURST_DATA / the legacy MESG_EXT_BURST_DATA
 
 | Constant | Value | Meaning | Provenance |
 |---|---|---|---|
-| `ANTW_BURST_HEADER_CHANNEL_MASK` | `0x1F` | Channel number. Five bits - which is why 32 channels is the serial protocol's natural ceiling, and why ant_core is sized for 32 from the first line. Because the field is five bits wide, a header on the wire cannot express a channel above 31 at all; what a burst header CAN address that the device does not have is a channel above the count in byte 0 of the capabilities reply, and that is the bound worth checking on a transcript. | bridge |
+| `ANTW_BURST_HEADER_CHANNEL_MASK` | `0x1F` | Channel number. Five bits - which is why 32 channels is the serial protocol's natural ceiling, and why radiant_core is sized for 32 from the first line. Because the field is five bits wide, a header on the wire cannot express a channel above 31 at all; what a burst header CAN address that the device does not have is a channel above the count in byte 0 of the capabilities reply, and that is the bound worth checking on a transcript. | bridge |
 | `ANTW_BURST_HEADER_SEQ_SHIFT` | `5` | Sequence number occupies bits 5-6. | bridge |
 | `ANTW_BURST_HEADER_SEQ_MASK` | `0x03` | Sequence number after shifting: 0-3, wrapping. | bridge |
 | `ANTW_BURST_HEADER_LAST` | `0x80` | Bit 7: this is the last packet of the transfer. | bridge, tools |
@@ -643,7 +643,7 @@ Not a bitfield: the value is 8.
 |---|---|---|---|---|
 | 0 | `0x01` | `ANTW_CAPABILITIES_LED_ENABLED` | no | MESG_ENABLE_LED_FLASH. Reported OFF here, which is why a host that has ANT_EnableLED never sends 0x68. |
 | 1 | `0x02` | `ANTW_CAPABILITIES_EXT_MESSAGE_ENABLED` | **yes** | Extended output fields - the whole lib config mechanism. |
-| 2 | `0x04` | `ANTW_CAPABILITIES_SCAN_MODE_ENABLED` | no | MESG_OPEN_RX_SCAN_MODE. Reported OFF here, which is why a host that has ANT_OpenRxScanMode never sends 0x5B. ant_core turns this on. |
+| 2 | `0x04` | `ANTW_CAPABILITIES_SCAN_MODE_ENABLED` | no | MESG_OPEN_RX_SCAN_MODE. Reported OFF here, which is why a host that has ANT_OpenRxScanMode never sends 0x5B. radiant_core turns this on. |
 | 4 | `0x10` | `ANTW_CAPABILITIES_PROX_SEARCH_ENABLED` | **yes** | MESG_PROX_SEARCH_CONFIG. |
 | 5 | `0x20` | `ANTW_CAPABILITIES_EXT_ASSIGN_ENABLED` | **yes** | The optional fourth byte of MESG_ASSIGN_CHANNEL. |
 | 6 | `0x40` | `ANTW_CAPABILITIES_FS_ANTFS_ENABLED` | no | ANT-FS file system. |
@@ -737,7 +737,7 @@ Host-library entry points that must correspond to *some* serial message, where n
 
 These are used at a visible site in this repository but their numeric value is not recoverable from it, and Rev 5.1 does not name them either. No macro is emitted for any of them. `src/ant_radio_sdk_ant.c` is the one translation unit permitted to include both `ant_wire.h` and sdk-ant's `ant_parameters.h`; it recovers each value and `BUILD_ASSERT`s it, and the value comes back here afterwards. Inventing a number would be worse than leaving the hole, because a wrong dispatch id fails silently and a missing macro fails at compile time.
 
-**The rule for consuming these: an unresolved constant may never appear in a file that builds without sdk-ant.** `ant_radio_sdk_ant.c` may `#define` it from sdk-ant, because sdk-ant is present by construction there. `ant_radio_stub.c` and `ant_core/**` may not, because the whole point of those builds is that sdk-ant is absent. Where the value never reaches the wire in a direction we originate, a file-local substitute is correct and the `Blocks` column says so; where it *is* a byte we transmit, there is no substitute and the message stays unimplemented until the shim resolves it.
+**The rule for consuming these: an unresolved constant may never appear in a file that builds without sdk-ant.** `ant_radio_sdk_ant.c` may `#define` it from sdk-ant, because sdk-ant is present by construction there. `ant_radio_stub.c` and `radiant_core/**` may not, because the whole point of those builds is that sdk-ant is absent. Where the value never reaches the wire in a direction we originate, a file-local substitute is correct and the `Blocks` column says so; where it *is* a byte we transmit, there is no substitute and the message stays unimplemented until the shim resolves it.
 
 | Constant | Section | Blocks | Why it is unresolved | Provenance |
 |---|---|---|---|---|

@@ -1184,7 +1184,7 @@ def render_doc_region(spec: dict) -> str:
         "**The rule for consuming these: an unresolved constant may never "
         "appear in a file that builds without sdk-ant.** `ant_radio_sdk_ant.c` "
         "may `#define` it from sdk-ant, because sdk-ant is present by "
-        "construction there. `ant_radio_stub.c` and `ant_core/**` may not, "
+        "construction there. `ant_radio_stub.c` and `radiant_core/**` may not, "
         "because the whole point of those builds is that sdk-ant is absent. "
         "Where the value never reaches the wire in a direction we originate, a "
         "file-local substitute is correct and the `Blocks` column says so; "

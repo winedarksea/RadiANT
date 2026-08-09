@@ -42,7 +42,7 @@ here.
 
 It is emphatically **not** a description of the radio link. There is no on-air
 frame format in it, no channel scheduling, nothing about the link layer
-`ant_core` has to rebuild. That gap is why `docs/ant-radio-link.md` exists and
+`radiant_core` has to rebuild. That gap is why `docs/ant-radio-link.md` exists and
 why every line of it carries a provenance tag.
 
 **The snapshot is not ours and is two years old.** Anonymous Wayback "Save Page
@@ -183,7 +183,7 @@ common pages. They define the 8-byte page layouts that make a sensor
 interoperable, and this project uses them — under the graded policy in
 [`docs/decisions/0002`](../../docs/decisions/0002-clean-room-policy.md) — for
 `src/profiles/`, `tools/ant_pages.py` and the profile documentation, and
-**nowhere in `ant_core/**`**.
+**nowhere in `radiant_core/**`**.
 
 Obtain them the intended way: an adopter login at
 <https://www.thisisant.com/developer/ant-plus/>. It is free and takes minutes.
@@ -198,7 +198,7 @@ none is linked from this file**, for two reasons that compound:
    copyrighted work in a public repository.
 2. **Clean-room contamination.** Worse, and less obvious. Putting
    adopter-gated material *in this tree* undermines the one structural defence
-   `ant_core` has — that the agent or person who wrote the link layer could not
+   `radiant_core` has — that the agent or person who wrote the link layer could not
    have read it. A file in the repository is available to everybody who clones
    it. Doing both in one commit would be the single most damaging thing anyone
    could do to this project's legal position, and it would look like tidiness.

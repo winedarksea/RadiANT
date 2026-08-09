@@ -90,7 +90,7 @@ that what this ADR argued from remains readable.
 
 ## Context
 
-`ant_core` is a superset, not a clone. Beyond byte-exact ANT+ compatibility it
+`radiant_core` is a superset, not a clone. Beyond byte-exact ANT+ compatibility it
 is meant to carry the things Garmin stopped developing: 32 simultaneous
 channels instead of 8, background scan mode, a generic telemetry envelope, new
 device types, and optional per-channel security. All of that needs somewhere to
@@ -187,7 +187,7 @@ renumbers itself:
    on the same band, opted into per device type and marked as such in the
    registry. ANT+ compatibility channels never change PHY, so this axis cannot
    touch a standard device by construction. The HAL accommodates it already —
-   PHY is a backend/caps property, so `ant_radio_caps` grows a supported-PHY
+   PHY is a backend/caps property, so `radiant_radio_caps` grows a supported-PHY
    list rather than needing a redesign.
 5. **Adaptive frequency, per device type.** The descriptor announces the node's
    RF channel; discovery and pairing stay on RF 57 so a searching receiver

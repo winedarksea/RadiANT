@@ -39,7 +39,7 @@ forever, whereas a RadiANT accumulating field recovers a lost packet from the
 The motivating case is **a heart-rate strap driving a smart home** — elevated
 BPM turns on the AC, resting HR dims the lights. In v1 that bridge runs
 host-side (dongle -> daemon -> Matter) and needs no new radio work at all. A
-combo node running `ant_core` + Thread + Matter directly on one chip is what the
+combo node running `radiant_core` + Thread + Matter directly on one chip is what the
 MPSL backend eventually enables, and is the concrete product that justifies
 building it.
 

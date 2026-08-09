@@ -825,7 +825,7 @@
 
 /*
  * Channel id + RSSI + RX timestamp, all three. What ant_verify.py asks for,
- * and what ant_core must assemble: the timestamp is the figure the timing
+ * and what radiant_core must assemble: the timestamp is the figure the timing
  * gate is read against. [tools (ant_verify)]
  */
 #define ANTW_LIB_CONFIG_ALL_EXT_FIELDS                       0xE0
@@ -965,7 +965,7 @@
 /*
  * The stack has finished with the burst block it was handed and the next may
  * overwrite it. The bridge consumes this internally and never puts it on the
- * wire: a real stick frames bursts itself. If ant_core fails to raise it
+ * wire: a real stick frames bursts itself. If radiant_core fails to raise it
  * exactly once per accepted block, host bursts stall 1000 ms per packet.
  * [bridge, rev5.1 sec 9.5.6 + verify:sdk-ant-shim]
  */
@@ -1206,10 +1206,10 @@
 
 /*
  * Channel number. Five bits - which is why 32 channels is the serial
- * protocol's natural ceiling, and why ant_core is sized for 32 from the first
- * line. Because the field is five bits wide, a header on the wire cannot
- * express a channel above 31 at all; what a burst header CAN address that the
- * device does not have is a channel above the count in byte 0 of the
+ * protocol's natural ceiling, and why radiant_core is sized for 32 from the
+ * first line. Because the field is five bits wide, a header on the wire
+ * cannot express a channel above 31 at all; what a burst header CAN address
+ * that the device does not have is a channel above the count in byte 0 of the
  * capabilities reply, and that is the bound worth checking on a transcript.
  * [bridge]
  */
@@ -1301,7 +1301,8 @@
 
 /*
  * MESG_OPEN_RX_SCAN_MODE. Reported OFF here, which is why a host that has
- * ANT_OpenRxScanMode never sends 0x5B. ant_core turns this on. [stub, readme]
+ * ANT_OpenRxScanMode never sends 0x5B. radiant_core turns this on. [stub,
+ * readme]
  */
 #define ANTW_CAPABILITIES_SCAN_MODE_ENABLED                  0x04
 

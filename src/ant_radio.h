@@ -21,8 +21,8 @@
  *                          answers reset / capabilities / version but finds no
  *                          sensors. The cheapest proof this seam holds: it
  *                          builds in seconds with no sdk-ant present at all.
- *   ant_core/              the clean-room rebuild. This file is its
- *                          specification - written so that ant_core can be
+ *   radiant_core/              the clean-room rebuild. This file is its
+ *                          specification - written so that radiant_core can be
  *                          implemented without anyone opening sdk-ant.
  *
  * Everything here is prefixed antr_. The prefix is not cosmetic. sdk-ant's
@@ -164,7 +164,7 @@ struct antr_msg {
  * IMPLEMENTED BY THE BRIDGE, NOT BY THE BACKEND. This is the inversion: there
  * is no registration call, the symbol is resolved at link time, and exactly
  * one translation unit in the image defines it (src/ant_serial_bridge.c in the
- * firmware, a test double in ant_core/tests/).
+ * firmware, a test double in radiant_core/tests/).
  *
  * Contract on the caller - a backend must satisfy all of these:
  *
@@ -235,7 +235,7 @@ void antr_on_message(const struct antr_msg *msg);
  * by inspection and must be unit-tested: drive a multi-block transfer against
  * a mock and assert the release-event count equals the accepted-block count,
  * for the success path, the mid-transfer-failure path and the rejected-block
- * path. ant_core/tests owns that test; it runs on Linux CI, since native_sim
+ * path. radiant_core/tests owns that test; it runs on Linux CI, since native_sim
  * does not build on Windows.
  *
  * ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK is internal flow control and never

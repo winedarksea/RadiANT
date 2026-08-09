@@ -19,7 +19,7 @@ arises, and nothing needs to be argued before committing them.
 
 They are also the only thing that makes the rebuild *verifiable*. Everything
 else in `archive/` preserves the ability to understand ANT. These preserve the
-ability to prove `ant_core` still behaves like the thing it replaces, on a
+ability to prove `radiant_core` still behaves like the thing it replaces, on a
 laptop, in CI, years after the sensor that produced them was returned to a
 drawer.
 

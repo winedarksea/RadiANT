@@ -31,7 +31,7 @@
 .PARAMETER Backend
     Which implementation of src/ant_radio.h to build against: sdk_ant (the
     proven path and the only one release artifacts come from), core (the
-    clean-room ant_core stack) or stub. Passed through as -DANT_RADIO and
+    clean-room radiant_core stack) or stub. Passed through as -DANT_RADIO and
     asserted afterwards against .config.
 
 .PARAMETER SdkAntDir
@@ -188,7 +188,7 @@ try {
 
         # Only the sdk_ant backend produces artifacts anyone is handed. Release
         # images stay on that backend until the Tier 3 Zwift acceptance passes
-        # for ant_core; moving them is a recorded decision in
+        # for radiant_core; moving them is a recorded decision in
         # docs/decisions/0001, not a side effect of running this script with a
         # different flag.
         if ($Backend -ne 'sdk_ant') {

@@ -445,7 +445,7 @@ that the numbers differ.
 
 ## 10. What is deliberately not being built
 
-- **ANT+'s own AES-CTR scheme in `ant_core`.** No Windows host can call it, it
+- **ANT+'s own AES-CTR scheme in `radiant_core`.** No Windows host can call it, it
   is malleable and unauthenticated, and it reserves stack RAM shared with the
   plain channels. `encryption.conf` and the existing sdk-ant-backed writes stay
   exactly as they are; they cost nothing while that backend exists.

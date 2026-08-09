@@ -258,13 +258,20 @@ config ANT_DONGLE_RADIO_SDK_ANT
 	  Needs an sdk-ant checkout; see ANT_MODULE_DIR in CMakeLists.txt.
 
 config ANT_DONGLE_RADIO_CORE
-	bool "ant_core, the clean-room stack"
+	bool "radiant_core, the clean-room stack"
 	help
-	  Compile ant_core/, the open-source clean-room link layer. No sdk-ant
-	  of any kind is present in this configuration: the module is never
-	  appended to ZEPHYR_EXTRA_MODULES, so no ANT header is reachable and
-	  no libant.a is linked. That is what lets the project build on a fork,
-	  with no adopter-gated repository and no secret.
+	  Compile radiant_core/, the open-source clean-room link layer, by
+	  setting CONFIG_RADIANT_CORE=y on the Zephyr module of that name. No
+	  sdk-ant of any kind is present in this configuration: the sdk-ant
+	  module is never appended to ZEPHYR_EXTRA_MODULES, so no ANT header is
+	  reachable and no libant.a is linked. That is what lets the project
+	  build on a fork, with no adopter-gated repository and no secret.
+
+	  This symbol is the *application's* backend selector, chosen by
+	  -DANT_RADIO=core in CMakeLists.txt. CONFIG_RADIANT_CORE is the
+	  module's own switch, and the two are set together by the generated
+	  fragment so that .config records the same decision twice and cannot
+	  record it inconsistently.
 
 config ANT_DONGLE_RADIO_STUB
 	bool "Stub out the ANT radio layer"

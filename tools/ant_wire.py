@@ -617,8 +617,8 @@ LIB_CONFIG_MESG_OUT_INC_DEVICE_ID = 0x80
 LIB_CONFIG_DEVICE_ID_ONLY = 0x80
 
 # Channel id + RSSI + RX timestamp, all three. What ant_verify.py asks for, and
-# what ant_core must assemble: the timestamp is the figure the timing gate is
-# read against. [tools (ant_verify)]
+# what radiant_core must assemble: the timestamp is the figure the timing gate
+# is read against. [tools (ant_verify)]
 LIB_CONFIG_ALL_EXT_FIELDS = 0xE0
 
 # Passed to the clear path when a host sends 0x6E with a zero config byte.
@@ -731,7 +731,7 @@ EVENT_TRANSFER_TX_START = 0x0A
 
 # The stack has finished with the burst block it was handed and the next may
 # overwrite it. The bridge consumes this internally and never puts it on the
-# wire: a real stick frames bursts itself. If ant_core fails to raise it
+# wire: a real stick frames bursts itself. If radiant_core fails to raise it
 # exactly once per accepted block, host bursts stall 1000 ms per packet.
 # [bridge, rev5.1 sec 9.5.6 + verify:sdk-ant-shim]
 EVENT_TRANSFER_NEXT_DATA_BLOCK = 0x11
@@ -923,7 +923,7 @@ MAX_SUPPORTED_ENCRYPTION_MODE = 0x02
 # ---------------------------------------------------------------------------
 
 # Channel number. Five bits - which is why 32 channels is the serial protocol's
-# natural ceiling, and why ant_core is sized for 32 from the first line.
+# natural ceiling, and why radiant_core is sized for 32 from the first line.
 # Because the field is five bits wide, a header on the wire cannot express a
 # channel above 31 at all; what a burst header CAN address that the device does
 # not have is a channel above the count in byte 0 of the capabilities reply,
@@ -999,7 +999,8 @@ CAPABILITIES_LED_ENABLED = 0x01
 CAPABILITIES_EXT_MESSAGE_ENABLED = 0x02
 
 # MESG_OPEN_RX_SCAN_MODE. Reported OFF here, which is why a host that has
-# ANT_OpenRxScanMode never sends 0x5B. ant_core turns this on. [stub, readme]
+# ANT_OpenRxScanMode never sends 0x5B. radiant_core turns this on. [stub,
+# readme]
 CAPABILITIES_SCAN_MODE_ENABLED = 0x04
 
 # MESG_PROX_SEARCH_CONFIG. [rev5.1 sec 9.5.7.4 + verify:sdk-ant-shim]
@@ -1816,7 +1817,7 @@ CAPABILITY_BYTES = {
     4: ('advanced_options_2', (
         (0x01, 'CAPABILITIES_LED_ENABLED', 'MESG_ENABLE_LED_FLASH. Reported OFF here, which is why a host that has ANT_EnableLED never sends 0x68.'),
         (0x02, 'CAPABILITIES_EXT_MESSAGE_ENABLED', 'Extended output fields - the whole lib config mechanism.'),
-        (0x04, 'CAPABILITIES_SCAN_MODE_ENABLED', 'MESG_OPEN_RX_SCAN_MODE. Reported OFF here, which is why a host that has ANT_OpenRxScanMode never sends 0x5B. ant_core turns this on.'),
+        (0x04, 'CAPABILITIES_SCAN_MODE_ENABLED', 'MESG_OPEN_RX_SCAN_MODE. Reported OFF here, which is why a host that has ANT_OpenRxScanMode never sends 0x5B. radiant_core turns this on.'),
         (0x10, 'CAPABILITIES_PROX_SEARCH_ENABLED', 'MESG_PROX_SEARCH_CONFIG.'),
         (0x20, 'CAPABILITIES_EXT_ASSIGN_ENABLED', 'The optional fourth byte of MESG_ASSIGN_CHANNEL.'),
         (0x40, 'CAPABILITIES_FS_ANTFS_ENABLED', 'ANT-FS file system.'),

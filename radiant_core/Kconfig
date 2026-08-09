@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# radiant_core - an independent link layer compatible with the ANT+
+# specifications. Not ANT, not Garmin's, and named so that nothing about the
+# build surface reads as a claim to be either.
+
+config RADIANT_CORE
+	bool "radiant_core ANT-compatible link layer"
+	help
+	  Build radiant_core: the frame codec, the radio schedule, the channel
+	  state machines, the search policy, the event queue and the
+	  acknowledged/burst transfer engine.
+
+	  This is the module the application selects with -DANT_RADIO=core. It
+	  contains no Nordic sdk-ant code and links no libant.a; an sdk_ant
+	  build leaves this symbol at n, and that n is the positive assertion
+	  that the clean-room boundary held.
+
+if RADIANT_CORE
+
+choice RADIANT_CORE_BACKEND
+	prompt "radiant_core radio backend"
+	default RADIANT_CORE_BACKEND_NULL
+	help
+	  radiant_core decides what goes on the air and when; a backend decides
+	  how. include/radiant_core/radiant_radio_hal.h is the whole of that
+	  boundary and its eight entry points are what a backend supplies.
+
+	  A backend REPLACES the others rather than joining them: two
+	  definitions of radiant_radio_now() is a duplicate-symbol link error,
+	  which is the right way for that mistake to be found.
+
+config RADIANT_CORE_BACKEND_NULL
+	bool "null - real lifecycle and clock, refuses every arm"
+	help
+	  src/radiant_radio_null.c. The lifecycle and the clock are real and
+	  every arm call is refused with RADIANT_RADIO_ENOTSUP. The HAL-level
+	  counterpart of src/ant_radio_stub.c: the image enumerates, answers the
+	  host, runs the scheduler, the search policy, the channel state
+	  machines and the event queue, and finds no sensors.
+
+	  This is the honest default while no real backend exists.
+
+config RADIANT_CORE_BACKEND_NONE
+	bool "none - the application supplies the HAL"
+	help
+	  The module compiles no backend at all and the eight HAL entry points
+	  are left undefined for the surrounding application to define. This is
+	  what the unit-test application selects: tests/fake_radio.c is a
+	  complete HAL implementation with a virtual clock, and it belongs in a
+	  test image and nowhere near a dongle.
+
+config RADIANT_CORE_BACKEND_NRF
+	bool "nrf - direct nRF RADIO peripheral (Phase 6, not written)"
+	help
+	  A backend owning the RADIO peripheral outright. Reserved here so the
+	  name is taken; selecting it is a configure-time error naming the
+	  phase, which beats a link error whose cause is three layers away.
+
+config RADIANT_CORE_BACKEND_MPSL
+	bool "mpsl - RADIO through MPSL timeslots (Phase 6b, not written)"
+	help
+	  A backend arbitrating with the BLE controller through MPSL rather than
+	  owning RADIO. Reserved here on the same terms as the nrf one.
+
+endchoice
+
+config RADIANT_CORE_ANTR_API
+	bool "compile the antr_* adapter (src/radiant_api.c)"
+	default y
+	help
+	  src/radiant_api.c is the integration layer: it implements the fifty
+	  antr_* entry points that src/ant_radio.h declares, on top of the
+	  modules below it. It is the only file in the module that reaches out
+	  to an application header, so it is the only one an application-free
+	  build has to be able to leave out.
+
+	  The unit-test application sets this to n. Its suites test the modules,
+	  not the forwarding, and compiling the adapter there would drag
+	  src/ant_radio.h's whole surface into a build that has no bridge to
+	  satisfy it.
+
+endif # RADIANT_CORE

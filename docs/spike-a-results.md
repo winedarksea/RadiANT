@@ -34,7 +34,7 @@
 > table; a broadcast-only receiver is what the first of them describes, and
 > `docs/ant-radio-link.md` keeps it on those terms.
 
-Checked by: `ant_core/spike/rx_raw` and the captures it produced,
+Checked by: `radiant_core/spike/rx_raw` and the captures it produced,
 `archive/captures/radio/2026-08-09-nrf54l15-run1.log` and
 `...-run2.log`. Re-running the spike against a transmitter with a different
 device number requires rebuilding it with a different `SPIKE_DEVNUM`; if this
@@ -211,7 +211,7 @@ Search registers: `PCNF0 = 0x00000000`, `PCNF1 = 0x01020C3C`
 (`MAXLEN=60`, `STATLEN=12`, `BALEN=2`, `ENDIAN=Big`, `WHITEEN=Disabled`),
 `CRCCNF`/`CRCPOLY`/`CRCINIT` unchanged from tracking.
 
-A note for whoever writes `ant_search.c`: with only three matched bytes the
+A note for whoever writes `radiant_search.c`: with only three matched bytes the
 address matcher fires on noise several times a second on this bench. Rank and
 gate on CRC, never on match count. The failing packings above are that effect,
 not weak reception - the RSSI column separates them by ~70 dB.
@@ -375,7 +375,7 @@ Rows marked **confirmed** may have their `[inferred]` tag upgraded to
 | Search needs `PCNF0=0`, `BALEN=2`, `STATLEN=12`, 12-byte buffer | **confirmed** | |
 | Buffer is `[devnum_hi][dtype][ttype][0x0A][d0..d7]` | **confirmed** | read straight out of RAM |
 | CRC coverage is 15 bytes either way | **confirmed** | 3 address + 12 body validates against the same CRC as 5 + 10 |
-| `devnum_lo` recoverable from `RXMATCH` | **untested** | only one filter was programmed, so `RXMATCH` was always 0. The eight-prefix sweep is core policy and belongs in `ant_search.c`'s own test |
+| `devnum_lo` recoverable from `RXMATCH` | **untested** | only one filter was programmed, so `RXMATCH` was always 0. The eight-prefix sweep is core policy and belongs in `radiant_search.c`'s own test |
 | The `BASE0` packing for `BALEN=2` | **refuted as written** | the document does not state it; the naive reading is wrong. See *Search - the correction the document needs* above |
 
 ### Frame layout
@@ -446,7 +446,7 @@ Named so their absence is visibly a decision.
    Every register value above was measured on nRF54L15 silicon. The mapping is
    expected to port unchanged - the field positions are identical and the MDK
    macros are the same names - but "expected" is what this spike exists to stop
-   people saying. Build `ant_core/spike/rx_raw` for
+   people saying. Build `radiant_core/spike/rx_raw` for
    `adafruit_feather_nrf52840/nrf52840/uf2`, or better for the nRF5340 DK, which
    flashes unattended and whose network core is a closer relative of the
    nRF52840 RADIO than the nRF54L15 is.
@@ -460,7 +460,7 @@ Named so their absence is visibly a decision.
    `RXADDRESSES=0xFF`), which the 32-set sweep depends on. Not exercised.
 5. **`t_sync` capture and its calibration constant.** The spike does not
    timestamp anything. The HAL's `t_sync` contract remains entirely unmeasured,
-   and its failure mode is silent - see the paragraph in `ant_radio_hal.h`.
+   and its failure mode is silent - see the paragraph in `radiant_radio_hal.h`.
 6. **Sensitivity.** -17 dBm on a desk says nothing about range. Phase 4's
    baseline curve and Spike C's comparison are where that lives.
 7. **Anything above plain broadcast.** That is Spike B, and it is still the

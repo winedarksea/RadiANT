@@ -61,7 +61,7 @@ clean-room defence, and convert a public repository into a legal problem; the
 *deleted*, not *duplicated*.
 
 **Read scope.** Only the agent or contributor writing
-`src/ant_radio_sdk_ant.c` may open this tree. Everyone writing `ant_core/**`
+`src/ant_radio_sdk_ant.c` may open this tree. Everyone writing `radiant_core/**`
 is barred from it. That split is the clean-room boundary; see
 [`decisions/0002`](decisions/0002-clean-room-policy.md).
 
@@ -102,7 +102,7 @@ proprietary terms.
 
 **Posture.** Upstream dependency, fetched by `west update`, not redistributed.
 Read freely. One nuance worth recording: the planned MPSL timeslot backend
-(`ant_radio_nrf_mpsl.c`) links a closed Nordic binary — but *only under that
+(`radiant_radio_nrf_mpsl.c`) links a closed Nordic binary — but *only under that
 backend*. The default direct-peripheral backend stays free of it, which is one
 of the reasons direct is the default rather than a fallback.
 
@@ -164,7 +164,7 @@ from other work. Garmin retains copyright.
 
 **Posture.** *Permitted, but only in three places.* These documents may be used
 for `src/profiles/`, for `tools/ant_pages.py`, and for the profile
-documentation — and **nowhere in `ant_core/**`**. The link layer stays strictly
+documentation — and **nowhere in `radiant_core/**`**. The link layer stays strictly
 clean-room; page semantics do not need to be, because a page layout is a fact
 about an interoperability target with no program left behind it. Use the
 tables and the semantics; copy no prose. This is the "graded, not absolute"
@@ -212,7 +212,7 @@ with no USB device attached.
 ## Our own licence
 
 RadiANT is Apache-2.0. Every source file carries
-`SPDX-License-Identifier: Apache-2.0`; every `ant_core/*.c` additionally
+`SPDX-License-Identifier: Apache-2.0`; every `radiant_core/*.c` additionally
 carries a `Provenance:` line naming which of the permitted sources above it was
 written from. `tools/ant_pages.py` and the sibling `zephyr_aerosense` project
 are on the same licence, because a header shared between two projects under two

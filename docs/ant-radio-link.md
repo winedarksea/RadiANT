@@ -1,10 +1,10 @@
 # The ANT on-air link — clean-room reference
 
-Checked by: **Spike A** (`ant_core/spike/rx_raw` — hears real ANT+ broadcasts and prints raw bytes,
+Checked by: **Spike A** (`radiant_core/spike/rx_raw` — hears real ANT+ broadcasts and prints raw bytes,
 CRC status, match index and RSSI), which **has run and passed**: `docs/spike-a-results.md`, from the
 logs `archive/captures/radio/2026-08-09-nrf54l15-run1.log` and
 `archive/captures/radio/2026-08-09-nrf54l15-run2.log`. And by **Spike B**
-(`ant_core/spike/promisc` — promiscuous capture that separates broadcast from acknowledged from
+(`radiant_core/spike/promisc` — promiscuous capture that separates broadcast from acknowledged from
 burst), which **has run twice**, and which **refuted this document's reading of byte 3 and then
 refuted the replacement reading as well**:
 
@@ -14,7 +14,7 @@ refuted the replacement reading as well**:
 - **Part 2**, three radios, which **supersedes part 1 wherever they differ**:
   `docs/spike-b-part2-results.md`, from the four logs
   `archive/captures/radio/2026-08-09-spike-b2-run{0-pacing-bug,A-burst-seq,B-burst-seq-advburst,C-master-control}.log`.
-  Those four are checked by `ant_core/spike/promisc/spike_b_analyse.py --strict`, which refuses a
+  Those four are checked by `radiant_core/spike/promisc/spike_b_analyse.py --strict`, which refuses a
   capture it cannot show to be complete.
 
 Nothing else in the repo fails if this file drifts. **If this file and those logs disagree, the logs
@@ -35,7 +35,7 @@ are right.**
 > but the two RADIOs differ in ramp-up, in the `TIMING`/`RXGAIN` block, and in the absence of
 > `MODECNF0`. Treat a first-run failure on the nRF52840 as a porting question, not as a refutation.
 
-This document is what every `ant_core` agent reads **instead of** anything of Garmin's. It is the
+This document is what every `radiant_core` agent reads **instead of** anything of Garmin's. It is the
 whole permitted description of the physical link. If a fact is not here and not in the free
 *ANT Message Protocol and Usage Rev 5.1*, it is not available to the link layer.
 
@@ -130,7 +130,7 @@ not wrong so much as compressed, and both readings are usable:
 
 The second works because CCITT-FALSE has no final XOR and no reflection, so appending a correct CRC
 to a message drives the register to zero `[measured]` — arithmetic, and now verified on traffic
-rather than asserted. Assert both forms in `ant_frame.c`'s tests; they catch different mistakes.
+rather than asserted. Assert both forms in `radiant_frame.c`'s tests; they catch different mistakes.
 
 **Both forms held on every one of the 2,164 CRC-valid frames Spike A recorded** `[measured]`: a
 software CCITT-FALSE over the 15 covered bytes equalled `RADIO->RXCRC` every time, and recomputing
@@ -199,7 +199,7 @@ dongle hears, and `tools/ant_scan.py` against a spike-driven master is the cheap
 
 This was written as a prediction so that Spike A could *fail*. It did not — but Spike B did move one
 row, and it is the row a backend is built from. This is the tracking / transmit configuration on the
-nRF RADIO. It appears here rather than in `ant_core/include/ant_radio_hal.h` on purpose: the HAL
+nRF RADIO. It appears here rather than in `radiant_core/include/radiant_core/radiant_radio_hal.h` on purpose: the HAL
 contains no register semantics at all, and this table is what one backend does to satisfy it.
 
 **The measurement was on an nRF54L15 DK; these values were derived for the nRF52840 and have never
@@ -228,8 +228,8 @@ row is no longer a guess about ANT", not as "this row is proven on your part".
 >
 > The static form is **identical on air** — Spike A measured 40/40 CRC-valid frames both ways, and
 > all 3,104 of Spike B's frames were captured in the static form. It puts byte 3 in RAM where software reads
-> it, and on transmit it lets software *choose* it, which is exactly what `ant_ack.c` and
-> `ant_burst.c` need to do; `LFLEN = 8` on transmit would try to send 170 bytes.
+> it, and on transmit it lets software *choose* it, which is exactly what `radiant_ack.c` and
+> `radiant_burst.c` need to do; `LFLEN = 8` on transmit would try to send 170 bytes.
 >
 > The `LFLEN = 8 / CRCINC = 1` form is a **broadcast-only receiver**. It is kept in the table because
 > it is measured and because it is the shape of a length field on this part, not because it is an
@@ -383,8 +383,8 @@ That also settles what part 1 could not: `ANTW_BURST_HEADER_SEQ_MASK`, the seria
 `[measured]`, byte for byte. `0xAA` is exchange set, acknowledgement clear, **last set**, sequence
 bit 0, slot bit set — which is "sequence 0, last packet" and nothing else. A receiver dispatching on
 this byte cannot distinguish acknowledged data from a one-packet burst, because on air there is
-nothing to distinguish; the difference between them is a serial-layer difference only. `ant_ack.c`
-and `ant_burst.c` should share one encoder.
+nothing to distinguish; the difference between them is a serial-layer difference only. `radiant_ack.c`
+and `radiant_burst.c` should share one encoder.
 
 This retro-explains part 1's puzzle. Four one-block bursts produced `0xAA` and part 1 refused to
 read that as burst-last, on the correct observation that `EVENT_TRANSFER_TX_START` does not fire for
@@ -468,7 +468,7 @@ it did.
 > **Its premise is falsified.** The correction assumed bits 4:0 are a length that counts the CRC,
 > and they are not; they are the slot bit, the sequence bit and `010`. There is nothing left to
 > compute a prediction *from*, so there is no prediction. Neither `0x1A` nor `0x9A` is a candidate
-> encoding, and no constant for either appears in `ant_core` any more.
+> encoding, and no constant for either appears in `radiant_core` any more.
 >
 > Nor is the frame any closer to being seen. Part 2 enabled advanced burst again, the dongle
 > accepted 24-byte blocks, every transfer completed — and **the air still only ever carried
@@ -477,7 +477,7 @@ it did.
 > only one end had it enabled. So **no frame with a payload other than eight bytes has ever been on
 > this bench's air**, across both parts.
 >
-> (`ant_core/spike/promisc` prints a frame that reads its header and then fails CRC as `longframe`,
+> (`radiant_core/spike/promisc` prints a frame that reads its header and then fails CRC as `longframe`,
 > which is what a non-standard length would look like. Runs A, B and C produced 5, 1 and 2 of them
 > and every one is an ordinary bit error, printed with a control byte one or two bits from a value
 > the run was already producing: `0x0C`, `0x0E`, `0x1A` against `0x0A`. In particular **the only
@@ -528,7 +528,7 @@ here does not produce a weak link; it produces silence, which is worth knowing w
 comes up dead.
 
 The invariant that must hold on any radio is the on-air order above; the register arithmetic that
-produces it is a backend's business and belongs nowhere near `ant_core`.
+produces it is a backend's business and belongs nowhere near `radiant_core`.
 
 ## Search needs a different packet configuration
 
@@ -559,9 +559,9 @@ on every frame and the recovery scheme was untried. Spike B armed all eight logi
 **wrote the real `devnum_lo` into slot 5 and seven decoys into the others**, and `RADIO->RXMATCH`
 read **5** on every one of its 750 CRC-valid frames. Slot 5 rather than slot 0 was the point: at slot
 0 a register stuck at zero is indistinguishable from a working one. Indexing the prefix table with
-`RXMATCH` is what `ant_search.c` will do, and it now rests on a measurement that could have failed.
+`RXMATCH` is what `radiant_search.c` will do, and it now rests on a measurement that could have failed.
 
-**The cost of eight filters, so `ant_search.c` can budget it** `[measured]`: with the transmitter
+**The cost of eight filters, so `radiant_search.c` can budget it** `[measured]`: with the transmitter
 off, eight three-byte matchers produced **19, 22 and 27 CRC failures per 15 s window** on this bench
 — of order 1.4 per second, against Spike A's 3 to 5 per *60 s* window with one filter. Every one was
 rejected by the CRC and none ever decoded to a plausible channel ID. Rank and gate on CRC, never on
@@ -569,7 +569,7 @@ match count — Spike A's advice, now with eight times the reason.
 
 **CRC coverage is 15 bytes either way** — tracking is 5 address + 10 body, search is 3 address + 12
 body `[measured]`, confirmed in both configurations on 2,164 frames. That is a genuinely useful
-invariant: assert it in `ant_frame.c`'s unit tests, and a future format that quietly breaks it
+invariant: assert it in `radiant_frame.c`'s unit tests, and a future format that quietly breaks it
 announces itself in CI rather than on the air.
 
 ### The `BASE0` packing rule when `BALEN < 4` — get this wrong and you hear noise
@@ -603,7 +603,7 @@ frames in the window, at −17 dBm. The naive low-bytes packing (`BASE0 = 0x0000
 address matches per window with **zero** CRC-valid frames, at −54 to −101 dBm: that is the matcher
 firing on noise, not weak reception, and the RSSI column separates the two by about 70 dB.
 
-A note for `ant_search.c` from the same measurement: with only three matched bytes the address
+A note for `radiant_search.c` from the same measurement: with only three matched bytes the address
 matcher fires on noise several times a second on a quiet bench. **Rank and gate on CRC, never on
 match count** `[measured]`. Even the correct packing showed 3 to 5 CRC errors per 60 s window
 alongside its 241 good frames — every one of them rejected by the CRC, which is exactly the
@@ -611,8 +611,8 @@ behaviour the HAL contract promises.
 
 **The consequence is a HAL decision, not a bench detail.** Two configurations, both needed
 simultaneously by a dongle that is tracking some channels and searching for others, means radio
-configuration is **per-operation state, not global**. `ant_radio_hal.h` takes a
-`struct ant_pkt_format` with every arm call for this reason and no other.
+configuration is **per-operation state, not global**. `radiant_radio_hal.h` takes a
+`struct radiant_pkt_format` with every arm call for this reason and no other.
 
 ## Wildcard search: a 32-set sweep, shared by every searching channel
 
@@ -626,7 +626,7 @@ number" match is not available. Eight logical addresses (`BASE1 = BASE0`, prefix
 because it needed it** `[measured]`: `RXADDRESSES = 0xFF`, `BASE1 = BASE0`, eight prefixes, 750
 CRC-valid frames across six runs with no degradation against the single-filter figures. The
 eight-addresses-at-once mechanism the sweep is built on is a measurement now, not a prediction. What
-`ant_search.c`'s own bench test still has to establish is the *sweep* — 32 sets, dwell, and the
+`radiant_search.c`'s own bench test still has to establish is the *sweep* — 32 sets, dwell, and the
 recently-seen cache — none of which any spike has run.
 
 **Dwell = one channel period (~260 ms with guards) is provably optimal** `[inferred]`. A shorter
@@ -650,7 +650,7 @@ Three things about the sweep are **not optional**:
    zero, and 32 tracked sensors do not cost 32 windows. This is the highest-value item in the
    scheduler.
 
-None of the three is a HAL feature. `ant_radio_hal.h` exposes `caps.max_filters` and
+None of the three is a HAL feature. `radiant_radio_hal.h` exposes `caps.max_filters` and
 `caps.filter_wildcard_dev`, and all of the above is core policy reading those numbers — which is what
 lets a backend with two sync words instead of eight run the same code with a different sweep length.
 
@@ -718,12 +718,12 @@ sequence lives* was not guessed and could not have been: **there is no burst seq
 
 The full table and its evidence are in *Fact one*.
 
-**What `ant_core` may rely on today**: the whole encoding. **`ant_burst.c` can be written now** —
+**What `radiant_core` may rely on today**: the whole encoding. **`radiant_burst.c` can be written now** —
 bit 7 set, bit 6 clear on data and set on the acknowledgement, bit 5 on the final packet, bit 4
 alternating per on-air packet, bit 3 set only if this frame opens the slot, bits 2:0 `010`. A
 transmitter alternates bit 4 and expects the acknowledgement to carry its complement.
 
-`ant_ack.c` and `ant_burst.c` should **share one encoder**, because acknowledged data and a
+`radiant_ack.c` and `radiant_burst.c` should **share one encoder**, because acknowledged data and a
 one-packet burst are the same bytes. And **the receive path must transmit**: a tracking channel has
 ~1.55 ms to answer a data packet with a full 8-byte frame.
 
@@ -752,10 +752,10 @@ not the master drifting.
 **That jitter figure is an upper bound and is dominated by the measurement, not by the master.**
 Timestamps are captured in software at the top of the interrupt handler, so both ends of every
 interval carry one interrupt entry. The true master jitter is at or below 6 µs rms. Measuring it
-properly needs (D)PPI hardware capture, which `ant_radio_hal.h`'s `t_sync` calibration will need
+properly needs (D)PPI hardware capture, which `radiant_radio_hal.h`'s `t_sync` calibration will need
 anyway.
 
-For `ant_sched.c` the usable number is: **a real ANT master holds its slot to well inside ±25 µs over
+For `radiant_sched.c` the usable number is: **a real ANT master holds its slot to well inside ±25 µs over
 minutes**, so a receive-window guard of tens of microseconds is about drift and clock error, not
 about the master being sloppy.
 
@@ -769,7 +769,7 @@ new payload on the air one slot later with no repeats, which is only consistent 
 raised immediately after each transmission.
 
 **A master does not transmit when you open it. It transmits one channel period later.**
-`ant_channel.c` should reproduce that, and a Zwift-style host that expects data immediately after
+`radiant_channel.c` should reproduce that, and a Zwift-style host that expects data immediately after
 opening a master channel is going to wait a slot.
 
 **Whether that period is a collision probe or simple slot alignment is not observable from the air**,
@@ -790,7 +790,7 @@ populations — sd 8 µs against sd 19–26 µs — and one mean describes neith
 | Data packet → **master's acknowledgement** | n=33, **1567 µs**, sd 21, range 1520–1599 | n=128, **1559 µs**, sd 19, range 1515–1595 |
 | Acknowledgement → **next data packet** | n=26, **1546 µs**, sd 26, range 1485–1592 | n=116, **1550 µs**, sd 21, range 1488–1598 |
 
-Three things the scheduler and `ant_burst.c` both need:
+Three things the scheduler and `radiant_burst.c` both need:
 
 1. **A slave answers its master 2.19 ms after the master's ADDRESS**, which is about 2.08 ms after
    the master's frame ends. This is the reply turnaround part 1 called *not measured*.
@@ -809,7 +809,7 @@ payload, same CRC — twenty more times at 3143 µs**, spanning 66 ms, before ab
 So a receiver in the middle of a burst re-sends its acknowledgement rather than waiting quietly, and
 it does so at **3143 µs** against the **3113 µs** a running burst actually takes per packet — near
 enough that it is plainly the same timer, and far enough apart, at 1 %, to be worth recording as two
-numbers. **21 attempts** is what this stack does before giving up; `ant_burst.c`'s receive path needs
+numbers. **21 attempts** is what this stack does before giving up; `radiant_burst.c`'s receive path needs
 a retry limit and this is a measured value for it, on one stack, twice.
 
 The sender's side of that is **not measured**: no acknowledgement went missing in a completed
@@ -822,7 +822,7 @@ rtl_433 is GPL. **RadiANT is Apache-2.0.** The distinction that matters is not "
 
 - **Facts are fine and they live here.** Centre frequency, modulation, the CRC polynomial and seed,
   the absence of whitening, the preamble rule, the field order. Facts are not copyrightable, and this
-  document is where they are recorded so that no `ant_core` agent needs to open rtl_433 at all.
+  document is where they are recorded so that no `radiant_core` agent needs to open rtl_433 at all.
 - **Expression is not, ever.** No rtl_433 code, no near-verbatim translation of its decoder, no
   transliteration of its structure into C, in any Apache-2.0 file in this repo. There is no cheap way
   to unwind that later, and the whole clean-room defence rests on it.
@@ -832,7 +832,7 @@ rtl_433 is GPL. **RadiANT is Apache-2.0.** The distinction that matters is not "
 
 The same boundary, in the other direction, applies to adopter-gated ANT+ device profile documents:
 usable for `src/profiles/`, `tools/ant_pages.py` and the profile docs, and **never** for
-`ant_core/**` or for this file. See `docs/decisions/0002-clean-room-policy.md`.
+`radiant_core/**` or for this file. See `docs/decisions/0002-clean-room-policy.md`.
 
 ## What this document does not contain
 

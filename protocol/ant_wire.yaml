@@ -2,7 +2,7 @@
 #
 # ant_wire.yaml - the single source of truth for the ANT *serial* protocol
 # (host <-> dongle, 0xA4-framed). Nothing about the on-air link layer lives
-# here; that is docs/ant-radio-link.md and ant_core/.
+# here; that is docs/ant-radio-link.md and radiant_core/.
 #
 # Rendered by scripts/gen_ant_wire.py into three committed outputs:
 #
@@ -1143,7 +1143,7 @@ constant_groups:
          source: "tools", emit_c: false}
       - {name: LIB_CONFIG_ALL_EXT_FIELDS, value: 0xE0,
          desc: "Channel id + RSSI + RX timestamp, all three. What ant_verify.py
-                asks for, and what ant_core must assemble: the timestamp is the
+                asks for, and what radiant_core must assemble: the timestamp is the
                 figure the timing gate is read against.",
          source: "tools (ant_verify)"}
       - {name: LIB_CONFIG_MASK_ALL, value: 0xFF,
@@ -1261,7 +1261,7 @@ constant_groups:
          desc: "The stack has finished with the burst block it was handed and
                 the next may overwrite it. The bridge consumes this internally
                 and never puts it on the wire: a real stick frames bursts
-                itself. If ant_core fails to raise it exactly once per accepted
+                itself. If radiant_core fails to raise it exactly once per accepted
                 block, host bursts stall 1000 ms per packet.",
          source: "bridge, rev5.1 sec 9.5.6", verify: sdk-ant-shim}
 
@@ -1457,7 +1457,7 @@ constant_groups:
     values:
       - {name: BURST_HEADER_CHANNEL_MASK, value: 0x1F,
          desc: "Channel number. Five bits - which is why 32 channels is the
-                serial protocol's natural ceiling, and why ant_core is sized
+                serial protocol's natural ceiling, and why radiant_core is sized
                 for 32 from the first line. Because the field is five bits
                 wide, a header on the wire cannot express a channel above 31 at
                 all; what a burst header CAN address that the device does not
@@ -1551,7 +1551,7 @@ capabilities:
            source: stub}
         - {name: CAPABILITIES_SCAN_MODE_ENABLED, value: 0x04,
            desc: "MESG_OPEN_RX_SCAN_MODE. Reported OFF here, which is why a host
-                  that has ANT_OpenRxScanMode never sends 0x5B. ant_core turns
+                  that has ANT_OpenRxScanMode never sends 0x5B. radiant_core turns
                   this on.",
            source: "stub, readme"}
         - {name: CAPABILITIES_PROX_SEARCH_ENABLED, value: 0x10,

@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The radiant_core unit-test application.
+#
+# This is a standalone Zephyr application, deliberately not a subdirectory of
+# the dongle build: it never includes the top-level CMakeLists.txt, so it has
+# no sdk-ant dependency of any kind and the CI job that runs it needs no
+# secret. That is the whole point - native_sim does not build on Windows (no
+# host C compiler, no QEMU), so every C assertion in this project executes
+# only in CI on Linux, and it has to execute on forks and on every pull
+# request or the parallel core work has no verification at all.
+
+cmake_minimum_required(VERSION 3.20.0)
+
+# radiant_core is consumed here exactly as any third party would consume it:
+# as a Zephyr module, before find_package(Zephyr), with CONFIG_RADIANT_CORE=y
+# in prj.conf doing the selecting. This application therefore contains no
+# application code of its own beyond the suites and the mock radio - which is
+# what earns the module claim. It also means the module owns its source list
+# and this file does not duplicate it; the duplicate that used to live here
+# was one line per core module and a suite that silently stopped linking the
+# module it tests still passes.
+list(APPEND ZEPHYR_EXTRA_MODULES "${CMAKE_CURRENT_SOURCE_DIR}/..")
+
+find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
+project(radiant_core_tests)
+
+# ── Adding a test suite ─────────────────────────────────────────────────────
+#
+# Drop a .c file into src/ that declares its own ZTEST_SUITE(). Nothing else.
+# The glob is CONFIGURE_DEPENDS, and twister configures from scratch on every
+# run anyway, so a new file is picked up without editing this file. This is
+# structured for a fan-out of parallel agents each owning one core module and
+# one suite file: an explicit source list would make this file contested, and
+# a contested file serialises the fan-out it exists to enable.
+file(GLOB suite_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
+target_sources(app PRIVATE ${suite_sources})
+
+# ── The mock radio ──────────────────────────────────────────────────────────
+#
+# radiant_core/tests/fake_radio.c implements
+# radiant_core/include/radiant_core/radiant_radio_hal.h against no hardware,
+# and is what makes six of the seven core agents able to work in parallel
+# without a board. It is the HAL implementation for this image, which is why
+# prj.conf selects CONFIG_RADIANT_CORE_BACKEND_NONE: the module compiles no
+# backend of its own and this file is the one definition of the eight entry
+# points.
+target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fake_radio.c")
+
+# This directory, so a suite writes #include "fake_radio.h" rather than
+# #include "../fake_radio.h". Suites live in src/ and the mock does not, so
+# without this every suite author gets the relative path wrong exactly once.
+#
+# Nothing else is needed: the module's own zephyr_include_directories() puts
+# both radiant_core/include and ../src (for src/ant_radio.h and the generated
+# src/ant_wire.h, which radiant_event.c reads) on the search path for this
+# target too.
+target_include_directories(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

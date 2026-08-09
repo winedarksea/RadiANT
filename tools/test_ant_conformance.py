@@ -186,7 +186,7 @@ class CaseGeneration(unittest.TestCase):
         self.assertEqual(conf.BAD_INDEX, wire.SDU["INVALID_SDU_MASK"])
 
     def test_the_network_key_case_carries_the_published_ant_plus_key(self):
-        # A made-up key would manufacture a divergence: ant_core holds a table
+        # A made-up key would manufacture a divergence: radiant_core holds a table
         # seeded with the ANT+ pair and refuses keys it does not know.
         payload = conf.CANONICAL[wire.MESG_NETWORK_KEY_ID]
         self.assertEqual(payload,

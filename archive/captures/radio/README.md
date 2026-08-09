@@ -7,7 +7,7 @@ thirteen `.log` files are checked by nothing *except* the four Spike B part 2
 ones, which are checked by
 
 ```powershell
-C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe ant_core\spike\promisc\spike_b_analyse.py `
+C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe radiant_core\spike\promisc\spike_b_analyse.py `
     archive\captures\radio\2026-08-09-spike-b2-run0-pacing-bug.log `
     archive\captures\radio\2026-08-09-spike-b2-runA-burst-seq.log `
     archive\captures\radio\2026-08-09-spike-b2-runB-burst-seq-advburst.log `
@@ -18,6 +18,16 @@ which exits non-zero if any of them is incomplete. The rest are raw bench
 recordings and are not meant to be checked — `docs/spike-a-results.md`,
 `docs/spike-b-results.md` and `docs/spike-b-part2-results.md` are what read
 them.
+
+**A note on `ant_core/` in the prose below.** On 2026-08-09 the module was
+renamed `ant_core` → `radiant_core` and moved to Zephyr module shape; the
+capture programs now live at `radiant_core/spike/rx_raw` and
+`radiant_core/spike/promisc`. The provenance sentences further down still name
+`ant_core/spike/...` deliberately, because that is the path that existed when
+these logs were recorded, and the `.log` files' own headers say the same.
+Rewriting a record to match today's tree is how a preservation directory stops
+being evidence. Only the runnable command above was updated, because a command
+that does not run is not a record of anything.
 
 **Status: partially filled.**
 

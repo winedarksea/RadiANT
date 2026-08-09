@@ -24,7 +24,7 @@
 > burst sequence, burst-last, the reply frame, the turnaround, the `(0,1)`
 > combination and the nRF5340 as a capture platform.
 
-Checked by: `ant_core/spike/promisc` and the captures it produced,
+Checked by: `radiant_core/spike/promisc` and the captures it produced,
 `archive/captures/radio/2026-08-09-spike-b-nrf54l15-run{1,2,6}.log`,
 `...-run3-bursts.log`, `...-run4-burst-lengths.log`, `...-run5-timed.log` and
 `...-config.log`. Re-running the spike against a different transmitter requires
@@ -88,7 +88,7 @@ rule: **`PCNF0 = 0` with `STATLEN = 10` is the correct receive and transmit
 configuration, not an alternative to it.** It is identical on air - Spike A
 measured 40/40 CRC-valid frames both ways - it puts byte 3 in RAM where software
 can read it, and on transmit it lets software *choose* that byte, which is
-exactly what `ant_ack.c` and `ant_burst.c` need to do. The `CRCINC` form is a
+exactly what `radiant_ack.c` and `radiant_burst.c` need to do. The `CRCINC` form is a
 broadcast-only receiver and should be described as one.
 
 ### What is still open, and it is half the table
@@ -114,7 +114,7 @@ across two runs; this is three of its rows across six.
 | Role | Board | Why |
 |---|---|---|
 | Capture | nRF54L15 DK, `nrf54l15dk/nrf54l15/cpuapp`, log on COM7 | J-Link, so it reflashes unattended; and Spike A already proved this exact promiscuous configuration works on this silicon, which removes every variable except the one under test |
-| Transmitter | Adafruit Feather nRF52840, already running the shipping dongle firmware (`0FCF:1009`), driven as an ANT+ master by `ant_core/spike/promisc/spike_b_drive.py` | **Zero Feather flashes were used**, as in Spike A |
+| Transmitter | Adafruit Feather nRF52840, already running the shipping dongle firmware (`0FCF:1009`), driven as an ANT+ master by `radiant_core/spike/promisc/spike_b_drive.py` | **Zero Feather flashes were used**, as in Spike A |
 
 Device under test: **#14871 (`0x3A17`), type `0x0B`, transmission type 5, period
 8182** - the same transmitter Spike A characterised, so its channel ID is
@@ -164,7 +164,7 @@ six runs. **18 frames carrying `0xAA` appeared, one per message.** The stack the
 reported `EVENT_TRANSFER_TX_FAILED` for every one, correctly - there was no
 slave to acknowledge them.
 
-Two facts fall out that `ant_ack.c` needs:
+Two facts fall out that `radiant_ack.c` needs:
 
 - **One on-air attempt per acknowledged message.** 18 requests, 18 frames, no
   retransmissions. This stack, as a master with no peer, does not retry an
@@ -219,7 +219,7 @@ So the payload length never moved, and the falsifiable prediction in
 `docs/ant-radio-link.md` - that an advanced-burst frame shows `0x1A` - **remains
 untested.** The capture would have caught it if it had happened: a frame with a
 different payload length reads its header correctly and then fails its CRC,
-which `ant_core/spike/promisc` counts and prints separately as `longframe`.
+which `radiant_core/spike/promisc` counts and prints separately as `longframe`.
 **`longframe` was zero in all six runs**, which is the positive statement that no
 frame of a non-standard length was ever on the air.
 
@@ -263,7 +263,7 @@ A second inference, weaker and named so it is not mistaken for a finding: with
 three of eight possible values of bits 7:5 used, and burst sequence numbers
 needing somewhere to live, the remaining values `001`, `011`, `110`, `111` are
 the plausible home for burst sequence and burst-last. Nothing here tests that.
-Do not build `ant_burst.c` on it.
+Do not build `radiant_burst.c` on it.
 
 > **SUPERSEDED - `docs/spike-b-part2-results.md`.** Both inferences in this
 > section are falsified, and the caution attached to them was right.
@@ -281,10 +281,10 @@ Do not build `ant_burst.c` on it.
 >   A 17-packet and a 51-packet burst were captured end to end with no drops and
 >   bit 4 alternated on every packet.
 >
-> The instruction not to build `ant_burst.c` on the guess was correct, and the
-> guess was wrong. `ant_burst.c` can be written now, from part 2.
+> The instruction not to build `radiant_burst.c` on the guess was correct, and the
+> guess was wrong. `radiant_burst.c` can be written now, from part 2.
 
-**What `ant_core` may rely on today**: `0x0A` broadcast, `0xAA` acknowledged,
+**What `radiant_core` may rely on today**: `0x0A` broadcast, `0xAA` acknowledged,
 `0x8A` for a burst packet that is not the last. Anything about sequence numbers
 or the final packet of a burst is unknown, and a table of three rows is enough to
 implement broadcast and acknowledged data - which is the whole of trainer
@@ -307,7 +307,7 @@ of them can be an ANT endpoint.
 
 So the nRF5340 had to be the sniffer. The plan's objection to the nRF5340 does
 not apply to a bare capture app - it needs no RPC subsystem - and that part was
-right: **`ant_core/spike/promisc` builds and programs cleanly for
+right: **`radiant_core/spike/promisc` builds and programs cleanly for
 `nrf5340dk/nrf5340/cpunet`** (23,216 B flash, 22,800 B RAM), and J-Link
 programmed the network core at 122 KB/s with no complaint. The image is at
 `build/promisc_net/merged.hex`.
@@ -417,9 +417,9 @@ dominated by the measurement, not by the master.** Timestamps are captured in
 software at the top of the interrupt handler, so both ends of an interval carry
 one interrupt entry. The true master jitter is somewhere at or below 6 us rms.
 Measuring it properly needs (D)PPI hardware capture, which this spike does not
-do and which `ant_radio_hal.h`'s `t_sync` calibration will need anyway.
+do and which `radiant_radio_hal.h`'s `t_sync` calibration will need anyway.
 
-For `ant_sched.c` the usable number is: **a real ANT master holds its slot to
+For `radiant_sched.c` the usable number is: **a real ANT master holds its slot to
 well inside +/-25 us over minutes, so a receive window guard of tens of
 microseconds is about drift and clock error, not about the master being
 sloppy.**
@@ -440,7 +440,7 @@ the air one slot later, with no repeats, which is only consistent with
 `EVENT_TX` arriving at +250 ms means the first *transmission* was at +250 ms.
 
 **A master does not transmit when you open it. It transmits one channel period
-later.** `ant_channel.c` should reproduce that, and a Zwift-style host that
+later.** `radiant_channel.c` should reproduce that, and a Zwift-style host that
 expects data immediately after opening a master channel is going to wait a slot.
 
 The ambiguity, and it is not resolvable from outside: **a sniffer cannot see a
@@ -471,9 +471,9 @@ because it needed them anyway.
   real prefix was written into - on **every one of the 750 frames**, and 5 was
   chosen precisely because slot 0 cannot distinguish a working `RXMATCH` from a
   stuck one. `devnum_lo` is recoverable by indexing the prefix table with
-  `RXMATCH`, which is what `ant_search.c` will do.
+  `RXMATCH`, which is what `radiant_search.c` will do.
 
-**The cost of eight filters, so `ant_search.c` can budget it**: with the
+**The cost of eight filters, so `radiant_search.c` can budget it**: with the
 transmitter off, eight three-byte matchers produced **19, 22 and 27 CRC failures
 per 15 s window** on this bench - of order 1.4 per second. Spike A saw 3 to 5 per
 *60 s* window with one filter. Every one was rejected by the CRC and none ever
@@ -482,20 +482,20 @@ Spike A's advice, now with eight times the reason.
 
 ---
 
-## Consequences for `ant_core`
+## Consequences for `radiant_core`
 
 1. **`PCNF0 = 0, STATLEN = 10` is mandatory for tracking, not optional.** The
    `LFLEN = 8 / CRCINC = 1` form is a broadcast-only receiver. This is the
    highest-value line in this document.
-2. **Rename the field everywhere.** It is a control byte. `ant_frame.h`'s
+2. **Rename the field everywhere.** It is a control byte. `radiant_frame.h`'s
    `len_byte` becomes `ctrl_byte`; the cross-check against `payload_len` becomes
    a check on bits 4:0 only.
-3. **`ant_ack.c` can be written now.** Set `0xAA`, transmit in the slot, expect
+3. **`radiant_ack.c` can be written now.** Set `0xAA`, transmit in the slot, expect
    a reply. What the reply looks like is still unknown.
-4. **`ant_burst.c` cannot.** Three of the four things it needs to encode are
+4. **`radiant_burst.c` cannot.** Three of the four things it needs to encode are
    unmeasured. Write the first-packet case, leave the sequence encoding behind a
    clearly marked gap, and get a three-radio rig before finishing it.
-5. **`ant_channel.c`: a master's first transmission is one period after open.**
+5. **`radiant_channel.c`: a master's first transmission is one period after open.**
 6. **The receive path must not assume `0x0A`.** A tracking channel will now see
    at least three values and must dispatch on the byte rather than validate it.
 

@@ -63,7 +63,7 @@ jobs:
   # does not build on the development machine - Windows, no host C compiler,
   # no QEMU - so `west twister` cannot run locally at all and local C
   # verification is compile-check only. That makes this job the entire
-  # verification path for ant_core, which is why it takes no secret: it has to
+  # verification path for radiant_core, which is why it takes no secret: it has to
   # run on forks and on every pull request, or a parallel core rewrite has no
   # way to know whether it works.
   ztest:
@@ -101,7 +101,7 @@ jobs:
 
       # Same action, same shape as the gated build below - app-path is the
       # manifest repository and sdk-version is left unset so the fetched Zephyr
-      # tree chooses. No sdk-ant checkout and no token: ant_core/tests is a
+      # tree chooses. No sdk-ant checkout and no token: radiant_core/tests is a
       # standalone Zephyr application that never includes the dongle's
       # CMakeLists.txt, so nothing on this path can reach an ANT header.
       #
@@ -110,7 +110,7 @@ jobs:
       # file's sdk-nrf revision imports - currently v3.4.0. That is
       # deliberately *not* the same pin the gated build resolves (see the
       # sdk-ant checkout below), and the two must stay decoupled: sdk-ant
-      # v2.1.0 cannot build on v3.4.0, while ant_core has no sdk-ant in it and
+      # v2.1.0 cannot build on v3.4.0, while radiant_core has no sdk-ant in it and
       # should track the current SDK. Pinning both to one version would couple
       # the clean-room half of the project to the licensing constraints of the
       # proprietary half, which is the coupling this whole plan exists to
@@ -155,7 +155,7 @@ jobs:
           # pull request, and twister otherwise leaves the actual assertion
           # text in a file inside twister-out/ that nobody downloads.
           "${zephyr_base}/scripts/twister" \
-            -T app/ant_core/tests \
+            -T app/radiant_core/tests \
             -p native_sim \
             --inline-logs \
             -v
@@ -370,7 +370,7 @@ jobs:
 
       # No artifact upload and no release attachment on purpose. Release
       # images stay on build-sdk-ant until the Tier 3 Zwift acceptance passes
-      # for ant_core; moving them is a recorded decision in
+      # for radiant_core; moving them is a recorded decision in
       # docs/decisions/0001, not something that happens by a job quietly
       # gaining an upload step.
 

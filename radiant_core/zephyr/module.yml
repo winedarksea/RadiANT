@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# radiant_core is a Zephyr module living inside this repository rather than a
+# separate one. Splitting it out later is `git filter-repo` plus a west.yml
+# project entry; nothing in this file or the two it names would change.
+name: radiant_core
+build:
+  cmake: .
+  kconfig: Kconfig

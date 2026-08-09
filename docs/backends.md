@@ -27,9 +27,9 @@ src/ant_serial_bridge.c        unchanged logic; speaks only ANTW_*/antr_*
         |
    +----+-----------------+----------------------+
    |                      |                      |
-ant_radio_sdk_ant.c   ant_radio_stub.c    ant_core/   (clean-room stack)
+ant_radio_sdk_ant.c   ant_radio_stub.c    radiant_core/   (clean-room stack)
 (thin forwarders +    (the no-op radio)         |
- BUILD_ASSERTs)                        ant_radio_hal.h
+ BUILD_ASSERTs)                        radiant_radio_hal.h
                                                 |
                                       +---------+---------+
                                    nRF52/54L            EFR32 (later)
@@ -38,7 +38,7 @@ ant_radio_sdk_ant.c   ant_radio_stub.c    ant_core/   (clean-room stack)
 | Backend | What it is | Why it exists |
 |---|---|---|
 | `sdk_ant` | ~50 one-line forwarders onto `libant.a`, plus a `BUILD_ASSERT` block comparing every `ANTW_*` constant against its `MESG_*` counterpart | The reference half of every A/B, and the shipping radio until Tier 3 passes. See [`sdk-ant-contract.md`](sdk-ant-contract.md) |
-| `core` | The clean-room rebuild in `ant_core/` | The point of the exercise: builds with zero sdk-ant present, and is a superset — 32 channels, background scan, the RadiANT extensions |
+| `core` | The clean-room rebuild in `radiant_core/` | The point of the exercise: builds with zero sdk-ant present, and is a superset — 32 channels, background scan, the RadiANT extensions |
 | `stub` | A no-op radio, [`src/ant_radio_stub.c`](../src/ant_radio_stub.c) — the rename of the old `src/ant_stub.c` | The cheapest proof the seam holds. Builds in seconds, and is the only configuration today that runs with no sdk-ant at all |
 
 **The prefixes are load-bearing, not cosmetic.** sdk-ant's error macros are
@@ -95,17 +95,17 @@ seam exists to make.
 
 ---
 
-## Inside `ant_core`: two radio backends
+## Inside `radiant_core`: two radio backends
 
 **These are not alternatives to choose between — they are two implementations
-of `ant_radio_hal.h`, selected by Kconfig.** That is the whole reason the HAL is
+of `radiant_radio_hal.h`, selected by Kconfig.** That is the whole reason the HAL is
 expressed as "arm at absolute microseconds / call back on completion" rather
 than in register terms.
 
 | Backend | Owns | For |
 |---|---|---|
-| `ant_radio_nrf.c` | RADIO, one TIMER, one RTC/GRTC channel, 4–6 (D)PPI via `nrfx_gppi_channel_alloc()` | **The dongle.** Best determinism, no second binary, ports to EFR32 |
-| `ant_radio_nrf_mpsl.c` | a timeslot session on the public `mpsl_timeslot_*` API | **Combo nodes** — ANT and BLE on one chip |
+| `radiant_radio_nrf.c` | RADIO, one TIMER, one RTC/GRTC channel, 4–6 (D)PPI via `nrfx_gppi_channel_alloc()` | **The dongle.** Best determinism, no second binary, ports to EFR32 |
+| `radiant_radio_nrf_mpsl.c` | a timeslot session on the public `mpsl_timeslot_*` API | **Combo nodes** — ANT and BLE on one chip |
 
 **Direct is the default and lands first**, for a technical reason rather than a
 preference: developing the link layer on timeslots from day one means debugging
@@ -137,7 +137,7 @@ S332/S340 SoftDevices exist for.
 
 Note the asymmetry, because it decides the ordering: **the dongle never needs
 BLE; a sensor does.** Nothing about a USB dongle wants a second radio protocol.
-Anything built on `ant_core` as a *node* — `sim/`, a CdA sensor, a telemetry
+Anything built on `radiant_core` as a *node* — `sim/`, a CdA sensor, a telemetry
 node — is where coexistence is the whole point. That is why the timeslot
 backend is Phase 6b and not Phase 5, and why the dongle is not held up waiting
 for it.
@@ -150,17 +150,17 @@ the whole acceptance test, and it is cheap to run. See
 
 ## HAL contract
 
-The contract is [`ant_core/include/ant_radio_hal.h`](../ant_core/include/ant_radio_hal.h),
+The contract is [`radiant_core/include/radiant_core/radiant_radio_hal.h`](../radiant_core/include/radiant_core/radiant_radio_hal.h),
 and that file is the normative text — where it and this section disagree, the
 header wins. What follows is the part of it you need before choosing a backend
 or writing one.
 
-`ant_core` is a link layer. It decides *what* goes on the air and *when*. A
+`radiant_core` is a link layer. It decides *what* goes on the air and *when*. A
 backend decides *how*: which peripheral, which registers, which DMA, which
 interrupt. The header is the whole of the boundary between them, and it is
 written so that a second backend on a completely different vendor's radio is an
 addition rather than a redesign. Two are planned on nRF (direct-peripheral and
-MPSL-timeslot) and one on EFR32/RAIL; a fourth, `ant_core/tests/fake_radio.c`,
+MPSL-timeslot) and one on EFR32/RAIL; a fourth, `radiant_core/tests/fake_radio.c`,
 is what lets six core modules be developed in parallel with no hardware.
 
 ### Six rules
@@ -191,7 +191,7 @@ has been designed out.
    set at run time; a backend therefore advertises the PHYs it was built with
    and rejects any other. Adding the Phase 7 long-range axis grows that list.
 6. **Radio configuration is per-operation, never global state.** Every arm call
-   carries its own `struct ant_pkt_format`. The reason is concrete rather than
+   carries its own `struct radiant_pkt_format`. The reason is concrete rather than
    aesthetic: tracking/TX and wildcard search need genuinely different packet
    configurations. Search matches a 3-byte on-air address `[A6 C5 devnum_lo]`,
    so its body is four bytes longer and its address two bytes shorter than
@@ -212,7 +212,7 @@ has been designed out.
 
 ### The capability query
 
-`struct ant_radio_caps` is what makes portability structural instead of
+`struct radiant_radio_caps` is what makes portability structural instead of
 conditional. Core policy reads these; core policy never tests for a backend by
 name, and there is no `#ifdef` on a part number anywhere above the HAL.
 
@@ -223,7 +223,7 @@ name, and there is no `#ifdef` on a part number anywhere above the HAL.
 | `addr_len_hw_max` | Longest address the hardware matcher itself handles. Informational — a shorter hardware match is completed in software, at the cost of more spurious wakeups and more receive current | 5 | 4 |
 | `max_body_len` | Largest body (bytes between address and CRC), either direction | — | — |
 | `phys[]`, `n_phys`, `phy_switch_us` | PHYs this build supports, most-preferred first, and what switching between two of them costs the scheduler | switch is free | reloads a generated configuration |
-| `ramp_up_us`, `rx_to_tx_us`, `tx_to_rx_us`, `min_arm_lead_us` | The four timing budgets: transmitter ramp-up, both turnarounds, and the minimum lead an arm call needs before it fails `ANT_RADIO_ETIME` rather than running late | measured, antenna-referenced | measured, antenna-referenced |
+| `ramp_up_us`, `rx_to_tx_us`, `tx_to_rx_us`, `min_arm_lead_us` | The four timing budgets: transmitter ramp-up, both turnarounds, and the minimum lead an arm call needs before it fails `RADIANT_RADIO_ETIME` rather than running late | measured, antenna-referenced | measured, antenna-referenced |
 | `time_resolution_ns` | How much of the last digit of a timestamp to believe | 1000 | 1000 |
 | `has_sync_timestamp` | Is `t_sync` a hardware capture of the address event, or an inference? | true | — |
 | `has_rssi` | Is `rssi_dbm` populated? | true | — |
@@ -231,11 +231,11 @@ name, and there is no `#ifdef` on a part number anywhere above the HAL.
 | `tx_power_min_dbm`, `tx_power_max_dbm` | Inclusive dBm range, for clamping and for the bench sweep's bounds | — | — |
 
 `max_filters` is the one to read twice. There is no wildcard field in
-`struct ant_rx_filter`, because no planned backend can express "any device
+`struct radiant_rx_filter`, because no planned backend can express "any device
 number": the shortest on-air address the nRF RADIO will match is 3 bytes, so
 the third matched byte is unavoidably `devnum_lo`. Wildcard search is therefore
 **core-level policy driven by the capability query** — at `max_filters == 8`,
-`ant_search.c` enumerates eight concrete addresses per window and sweeps
+`radiant_search.c` enumerates eight concrete addresses per window and sweeps
 **32 sets** to cover all 256 values of that byte; at `max_filters == 2` the same
 policy code produces **128 sets**, or picks a different strategy, with no HAL
 change. Keeping the sweep in the core is also what keeps it *shared*: one sweep
@@ -291,7 +291,7 @@ instead of a worse number being reported quietly as if it were the good one.
 
 ### Other conventions worth knowing before you write a backend
 
-- **Time never wraps for the core.** `ant_time_t` is 64-bit absolute
+- **Time never wraps for the core.** `radiant_time_t` is 64-bit absolute
   microseconds — 584,000 years — so the core may subtract two timestamps
   freely. A backend whose counter is narrower must extend it, and this is not
   hypothetical: **`RAIL_Time_t` is 32-bit microseconds and wraps every
@@ -358,7 +358,7 @@ this document. Committing to EFR32 on a sensitivity argument before that is
 exactly the kind of assumption that costs months if the real gain is 6 dB
 rather than 10.
 
-Nothing in `ant_core` waits on it.
+Nothing in `radiant_core` waits on it.
 
 ## Backends that were rejected
 
@@ -639,11 +639,11 @@ there.
 
 Capacity is a backend property, and the two rows below are the reason the
 rebuild is a superset rather than a clone. Both have to be sized into
-`ant_channel.c`, `ant_sched.c` and the event queue from the first line —
+`radiant_channel.c`, `radiant_sched.c` and the event queue from the first line —
 retrofitting a channel-count assumption through a scheduler is far more
 expensive than starting at 32.
 
-| | ANT+ / `libant.a` | `ant_core` |
+| | ANT+ / `libant.a` | `radiant_core` |
 |---|---|---|
 | Simultaneous channels | 8 configured (`CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED`), **15 maximum** (`MAX_ANT_CHANNELS`) | **32** |
 | Background scan mode | advertised **off**, not implemented | **on** |
@@ -666,7 +666,7 @@ which is why these two are called out.
 
 The optional features below are the other axis: what exists past the messages a
 fitness app sends. The answer is a backend property too — sdk-ant can do
-encryption and cannot do event buffering; `ant_core` v1 does neither, which is
+encryption and cannot do event buffering; `radiant_core` v1 does neither, which is
 where its −38 % flash estimate comes from.
 
 ## Optional features

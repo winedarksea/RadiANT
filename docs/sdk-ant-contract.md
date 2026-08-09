@@ -1,4 +1,4 @@
-# The radio contract — what `ant_core` has to implement
+# The radio contract — what `radiant_core` has to implement
 
 **Checked by:** the `BUILD_ASSERT` block in `src/ant_radio_sdk_ant.c` (Wave 2), which stops
 compiling if any signature or constant in `src/ant_radio.h` has drifted from its sdk-ant
@@ -14,7 +14,7 @@ an omission is a link error, not a review miss.
 
 `src/ant_radio.h` is the seam between `src/ant_serial_bridge.c` and whatever implements the ANT
 link layer. This document is the specification a backend must satisfy to sit under it. It exists
-so that an `ant_core` author can implement the whole contract **without ever opening
+so that an `radiant_core` author can implement the whole contract **without ever opening
 `sdk-ant`** — which is not a convenience, it is the clean-room boundary. Reading sdk-ant
 contaminates the rebuild retroactively and there is no way to prove afterwards that it did not
 happen. See `docs/decisions/0002-clean-room-policy.md`.
@@ -36,7 +36,7 @@ src/ant_serial_bridge.c        unchanged logic; speaks only ANTW_* / antr_*
         |
    +----+--------------+---------------------+
    |                   |                     |
-ant_radio_sdk_ant.c  ant_radio_stub.c    ant_core/
+ant_radio_sdk_ant.c  ant_radio_stub.c    radiant_core/
 (forwarders +        (the seam's          (clean-room stack;
  BUILD_ASSERTs)       cheapest proof)      this doc is its spec)
 ```
@@ -178,7 +178,7 @@ the bytes.
 
 **There is no registration call.** `antr_on_message()` is resolved at link time and exactly one
 translation unit in the image defines it — `src/ant_serial_bridge.c` in firmware, a test double in
-`ant_core/tests/`. `ant_cb_register()` therefore has no counterpart and is the one symbol from
+`radiant_core/tests/`. `ant_cb_register()` therefore has no counterpart and is the one symbol from
 the stub with no `antr_*` equivalent.
 
 Constraints on a backend calling it, restated from the header because they are ordering facts:
@@ -239,7 +239,7 @@ accepted-block count, across three paths:
 2. mid-transfer failure — k blocks accepted, k−1 `NEXT_DATA_BLOCK` plus one `TX_FAILED`;
 3. rejected block — `antr_burst_tx()` returns non-zero and **no** event is raised for it.
 
-`ant_core/tests` owns this. It runs on Linux CI: `native_sim` does not build on Windows (no host C
+`radiant_core/tests` owns this. It runs on Linux CI: `native_sim` does not build on Windows (no host C
 compiler, no QEMU), so no C unit test executes locally and local verification is compile-check
 only.
 
@@ -266,7 +266,7 @@ static inline antr_err_t antr_channel_open(uint8_t channel)
 A backend implements exactly one function. `static inline` rather than a macro so the argument is
 type-checked and cannot be double-evaluated. The serial protocol's `MESG_OPEN_CHANNEL` carries no
 offset, so the bridge only ever calls the convenience form; the offset form exists for a master
-phasing its slot away from another channel's, and for `ant_core`'s own scheduler.
+phasing its slot away from another channel's, and for `radiant_core`'s own scheduler.
 
 ---
 
@@ -488,7 +488,7 @@ All four exist unconditionally. The three **writes** are called only under
 
 **Nothing in this contract exists only for completeness.** Every one of the 50 is on a path a host
 message reaches, which is a stronger statement than the plan's estimate and worth knowing when
-scoping `ant_core`: there is no dead weight to defer.
+scoping `radiant_core`: there is no dead weight to defer.
 
 ### What is deliberately *not* here
 

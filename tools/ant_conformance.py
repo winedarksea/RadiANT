@@ -88,7 +88,7 @@ What a difference means
 is the difference between "case 4d-request-version/valid differs" and "the files
 differ at byte 8417". One difference is expected and is a decision rather than a
 bug: the version string. `MESG_VERSION` returns whatever the backend calls
-itself, so sdk-ant and `ant_core` cannot both answer it identically and should
+itself, so sdk-ant and `radiant_core` cannot both answer it identically and should
 not. Use `--allow-differing-case` for it, and record the allowance in
 `tools/ab_gates.toml` where somebody has to review it, rather than dropping the
 message from the run.
@@ -113,7 +113,7 @@ from ant_trace import DONGLE_TO_HOST, HOST_TO_DONGLE, Record  # noqa: E402
 # ant_scan.py because it is a network key, not a protocol constant, and
 # docs/ant-serial-protocol.md says it stays there. It matters here because
 # `ant_network_address_set()` is one of the few calls whose result depends on
-# the *value* handed in - ant_core holds a table seeded with the ANT+ pair and
+# the *value* handed in - radiant_core holds a table seeded with the ANT+ pair and
 # refuses unknown keys - so a made-up key would manufacture a divergence that
 # says nothing about the bridge.
 from ant_scan import ANT_PLUS_KEY  # noqa: E402
@@ -131,7 +131,7 @@ BAD_INDEX = 0xFF
 # Messages that are never sent, whatever the YAML says about them.
 #
 # All three are radio-quiet on today's firmware only because the bridge does not
-# implement them. `ant_core` implements scan mode by design (the capability bit
+# implement them. `radiant_core` implements scan mode by design (the capability bit
 # is turned on in the plan), and a continuous-wave test mode keys the
 # transmitter and leaves it keyed. A conformance run that opened either would
 # stop being reproducible the moment the room changed, and one of them would put
@@ -143,7 +143,7 @@ EXCLUDED = {
     wire.MESG_RADIO_CW_INIT_ID:
         "enters continuous-wave test mode - same reason",
     wire.MESG_OPEN_RX_SCAN_MODE_ID:
-        "ant_core implements background scan mode, so this would fill the "
+        "radiant_core implements background scan mode, so this would fill the "
         "transcript with whatever sensors happen to be in the room",
 }
 

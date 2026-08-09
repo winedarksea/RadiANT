@@ -1,11 +1,11 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Spike B part 2 - the whole control byte
 
-Checked by: `ant_core/spike/promisc/spike_b_analyse.py`, which refuses to report
+Checked by: `radiant_core/spike/promisc/spike_b_analyse.py`, which refuses to report
 a capture it cannot show to be complete. The gate is
 
 ```powershell
-C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe ant_core\spike\promisc\spike_b_analyse.py `
+C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe radiant_core\spike\promisc\spike_b_analyse.py `
     archive\captures\radio\2026-08-09-spike-b2-runA-burst-seq.log `
     archive\captures\radio\2026-08-09-spike-b2-runB-burst-seq-advburst.log `
     archive\captures\radio\2026-08-09-spike-b2-runC-master-control.log --strict
@@ -94,7 +94,7 @@ the only broadcast encoding is `0x0A`.
 |---|---|---|
 | Master | nRF54L15 DK | `sim/`, ANT+ bicycle power, device **14871** / type `0x0B` / transmission type 5, period 8182 |
 | Slave | Adafruit Feather nRF52840 | the shipping dongle firmware, `0FCF:1009`, driven by `spike_b_drive.py --role slave`. **Zero Feather flashes were used**, as in Spike A and part 1 |
-| Sniffer | nRF5340 DK **network core** | `ant_core/spike/promisc`, console on the network core's VCOM |
+| Sniffer | nRF5340 DK **network core** | `radiant_core/spike/promisc`, console on the network core's VCOM |
 
 Part 1 got two of these three working and stopped at the third. What it missed
 is one sentence long.
@@ -106,14 +106,14 @@ core until it writes `PIN_CNF[n].MCUSEL = NetworkMCU`, that the network core's
 `uart0` is P1.00/P1.01, and that therefore the capture had nowhere to print.
 All of that is true. The conclusion drawn from it - that the network core
 "cannot print" - is not: **the application core hands the pins over in two
-register writes**, and `ant_core/spike/promisc/appcore` is those two writes plus
+register writes**, and `radiant_core/spike/promisc/appcore` is those two writes plus
 a heartbeat, 25 KB of flash and about eighty lines.
 
 What actually blocked part 1 was not the silicon, it was that the application
 core was believed to hold an image belonging to another project. It did not -
 the board is a stock DK - and once that was settled the route took twenty
 minutes. The RTT fallback that part 1's successor brief proposed exists
-(`ant_core/spike/promisc/net_rtt.conf`), builds clean - `build/promisc_net_rtt`,
+(`radiant_core/spike/promisc/net_rtt.conf`), builds clean - `build/promisc_net_rtt`,
 22,988 B flash and 31,176 B RAM - and was **never needed and never flashed**. It
 is kept because it is the only diagnostic that separates "the capture program is
 not running" from "the pins were never granted", and those have completely
@@ -324,7 +324,7 @@ part 1's note, which still applies.
 | Slave packet -> master's acknowledgement | n=33, **1567 us**, sd 21, range 1520-1599 | n=128, **1559 us**, sd 19, range 1515-1595 |
 | Master's acknowledgement -> slave's next packet | n=26, **1546 us**, sd 26, range 1485-1592 | n=116, **1550 us**, sd 21, range 1488-1598 |
 
-Three numbers `ant_sched.c` and `ant_burst.c` both need:
+Three numbers `radiant_sched.c` and `radiant_burst.c` both need:
 
 1. **A slave answers its master 2.19 ms after the master's ADDRESS**, which is
    about 2.08 ms after the master's frame ends. That is the number part 1 called
@@ -353,7 +353,7 @@ waiting quietly, and it does so at **3143 us** against the **3113 us** a running
 burst actually takes per packet - near enough that it is plainly the same timer
 and far enough apart, at 1 %, that it is worth recording as two numbers rather
 than one. 21 attempts is what this stack does
-before abandoning the transfer. `ant_burst.c`'s receive path needs a retry limit
+before abandoning the transfer. `radiant_burst.c`'s receive path needs a retry limit
 and this is a measured value for it, on one stack. `[measured, n=2]` - it
 happened twice, in the two 16-block attempts of run 0, with 21 and 21
 retransmissions.
@@ -381,15 +381,15 @@ also tests for.
 
 ---
 
-## Consequences for `ant_core`
+## Consequences for `radiant_core`
 
-1. **`ant_burst.c` can be written now.** The whole encoding is known: bit 7 set,
+1. **`radiant_burst.c` can be written now.** The whole encoding is known: bit 7 set,
    bit 6 clear on data and set on the acknowledgement, bit 5 on the final packet,
    bit 4 alternating per on-air packet, bit 3 set only if this frame opens the
    slot, bits 2:0 `010`. A transmitter alternates bit 4 and expects the
    acknowledgement to carry its complement.
 2. **Acknowledged data is a one-packet burst**, on air and byte for byte.
-   `ant_ack.c` and `ant_burst.c` should share one encoder rather than two, and a
+   `radiant_ack.c` and `radiant_burst.c` should share one encoder rather than two, and a
    receiver that dispatches on the control byte cannot distinguish them - which
    means the serial layer's distinction between them is a serial-layer
    distinction only. That also retro-explains part 1's puzzle: a one-block burst
@@ -400,7 +400,7 @@ also tests for.
    the air, and that acknowledgement is a full 8-byte frame carrying whatever is
    in the broadcast buffer. This is the tightest deadline in the link layer and
    it is what the direct radio backend's timer arming has to hit.
-4. **`ant_frame.h` needs the field, not just the byte.** See the change request
+4. **`radiant_frame.h` needs the field, not just the byte.** See the change request
    below: a `ctrl_byte` that software has to mask by hand is how bit 3 gets
    forgotten.
 5. **Nothing in the frame can carry a burst sequence above 1**, so any design
@@ -445,7 +445,7 @@ with a working controller, which is a stock-like arrangement and functionally
 close to what part 1 recorded finding on it. The capture images
 (`build/promisc_net2`, `build/promisc_appcore2`) are still on disk and the two
 `flash_sim_jlink.ps1` invocations that put them back are in
-`ant_core/spike/promisc/README.md`, so the rig is twenty minutes from being
+`radiant_core/spike/promisc/README.md`, so the rig is twenty minutes from being
 rebuilt, not a day.
 
 The nRF54L15 was halted over SWD before run C to clear the channel. J-Link

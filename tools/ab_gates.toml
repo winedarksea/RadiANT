@@ -86,7 +86,7 @@ require_byte_identical = true
 #
 # The one entry that will legitimately be needed is
 # "4d-request-version-0/valid": MESG_VERSION returns the backend's own name, so
-# sdk-ant and ant_core cannot both answer it identically and should not try.
+# sdk-ant and radiant_core cannot both answer it identically and should not try.
 # Adding it here is better than dropping 0x3E from the conformance run, because
 # the reply's *length and framing* still get checked - only its contents are
 # excused. Add it when the first real A/B runs, not before: an allowance added

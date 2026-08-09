@@ -10,7 +10,7 @@ project.**
 
 ## Why the empty directory is the problem
 
-`ant_core` is measured against `libant.a`. Every gate in
+`radiant_core` is measured against `libant.a`. Every gate in
 [`docs/testing.md`](../../docs/testing.md) — loss, timing, acquisition,
 sensitivity, ack-data success, USB latency — is phrased relative to what
 sdk-ant does *on this rig, with these boards, in this room*. Not to a datasheet
@@ -20,7 +20,7 @@ sdk-ant is a private, adopter-gated repository pinned at `v2.1.0`, reached with
 one person's personal access token. The day that access lapses, every one of
 those numbers becomes unobtainable. Not harder to obtain — unobtainable. And
 the failure is silent: the rebuild proceeds, the gates get quietly restated as
-absolutes, and nobody can tell whether `ant_core` is as good as what it
+absolutes, and nobody can tell whether `radiant_core` is as good as what it
 replaced.
 
 **You cannot A/B against a baseline you never recorded.** That sentence is why
