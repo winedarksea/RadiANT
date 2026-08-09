@@ -90,6 +90,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/drivers/clock_control.h>
 #include <zephyr/drivers/clock_control/nrf_clock_control.h>
 #include <zephyr/irq.h>
@@ -133,8 +134,41 @@ BUILD_ASSERT(!IS_ENABLED(CONFIG_BT),
  * ---------------------------------------------------------------------------
  */
 
-#define TIMER_INST      CONFIG_RADIANT_CORE_BACKEND_NRF_TIMER
-#define TIMER_ADDR      ((NRF_TIMER_Type *)radiant_timer_base())
+/*
+ * The TIMER comes from devicetree, not from a configured address, and the
+ * first attempt at this file got it from a Kconfig hex instead. That was wrong
+ * twice over and the board said so immediately:
+ *
+ *     ***** BUS FAULT *****  Precise data bus error
+ *     BFAR Address: 0x400f0504     r3/a4: 0x400f0000
+ *
+ * - the address was a guess and a wrong one. TIMER20 on nRF54L15 is at
+ *   0x500CA000, inside peripheral@50000000; 0x400F0000 is an nRF53-shaped
+ *   number that means nothing on this part. 0x504 is MODE, so it faulted on
+ *   the very first register write.
+ * - and even the right address would have faulted, because every TIMER node on
+ *   this SoC is `status = "disabled"` by default and an unclocked peripheral
+ *   is not addressable.
+ *
+ * Devicetree fixes both at once and adds a third thing a constant cannot: the
+ * node is a resource the rest of the system can see is taken, so a second user
+ * of the same TIMER is a devicetree conflict rather than two drivers quietly
+ * reprogramming each other's prescaler.
+ */
+#define RADIANT_TIMER_NODE  DT_CHOSEN(radiant_radio_timer)
+
+#if !DT_NODE_EXISTS(RADIANT_TIMER_NODE)
+#error "radiant_radio_nrf needs a timer. Add to the board overlay:\n\
+    / { chosen { radiant,radio-timer = &timer20; }; };\n\
+    &timer20 { status = \"okay\"; };\n\
+It must be a TIMER this backend owns outright - it runs at 1 MHz forever and \
+is what t_sync is hardware-captured into."
+#endif
+#if !DT_NODE_HAS_STATUS(RADIANT_TIMER_NODE, okay)
+#error "radiant,radio-timer names a disabled node. Set status = \"okay\" on it."
+#endif
+
+#define TIMER_ADDR      ((NRF_TIMER_Type *)DT_REG_ADDR(RADIANT_TIMER_NODE))
 
 /* Compare/capture channel assignment. Four of the six, so a part with only four
  * still fits. */
@@ -158,7 +192,6 @@ static struct {
 	uint32_t last;   /* the counter value `base` was folded at */
 } radiant_clock;
 
-static uint32_t radiant_timer_base(void);
 
 static uint32_t timer_capture(uint8_t cc)
 {
@@ -247,6 +280,7 @@ static const enum radiant_phy radiant_nrf_phys[] = { RADIANT_PHY_1M_GFSK };
 /* nRF54L splits RADIO's interrupt over two lines; RADIO_0 carries the packet
  * events (ADDRESS, END, DISABLED) this backend uses. */
 #define RADIANT_RADIO_IRQn     RADIO_0_IRQn
+#define RADIANT_RADIO_IRQn_2   RADIO_1_IRQn
 #elif defined(CONFIG_SOC_SERIES_NRF52X)
 #define RAMP_UP_US             40u   /* fast ramp-up; 140 us on the slow path */
 #define RX_TO_TX_US            40u
@@ -627,12 +661,6 @@ static int apply_filters(const struct radiant_rx_filter *filters, uint8_t n,
 
 static void radio_isr(const void *arg);
 
-static uint32_t radiant_timer_base(void)
-{
-	/* One TIMER, chosen by Kconfig so a board with a conflicting user can
-	 * move it without editing this file. */
-	return (uint32_t)(uintptr_t)TIMER_INST;
-}
 
 int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 {
@@ -727,8 +755,27 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	 * it never needs turning off. */
 	nrfx_gppi_conn_enable(radiant_op.conn_sync);
 
+	/*
+	 * BOTH RADIO interrupt lines on nRF54L, not one.
+	 *
+	 * That part splits RADIO's interrupt over RADIO_0 and RADIO_1, and
+	 * which events land on which line is not something to guess at: connect
+	 * one and the wrong one, and every arm succeeds, nothing faults, no
+	 * error is logged, and the terminal event simply never arrives - the
+	 * channel open hangs waiting for a completion that has nowhere to be
+	 * delivered from. That is precisely the symptom this cost, and it looks
+	 * identical to "the radio hears nothing".
+	 *
+	 * The handler is idempotent across lines: it tests each event flag and
+	 * clears what it consumes, so being entered twice for one event costs a
+	 * few cycles and changes no behaviour.
+	 */
 	IRQ_CONNECT(RADIANT_RADIO_IRQn, CONFIG_RADIANT_CORE_BACKEND_NRF_IRQ_PRIO,
 		    radio_isr, NULL, 0);
+#if defined(RADIANT_RADIO_IRQn_2)
+	IRQ_CONNECT(RADIANT_RADIO_IRQn_2, CONFIG_RADIANT_CORE_BACKEND_NRF_IRQ_PRIO,
+		    radio_isr, NULL, 0);
+#endif
 
 	radiant_op.cbs = cbs;
 	radiant_op.user = user;
@@ -750,6 +797,9 @@ int radiant_radio_enable(void)
 	nrf_radio_int_enable(NRF_RADIO, NRF_RADIO_INT_END_MASK |
 					NRF_RADIO_INT_DISABLED_MASK);
 	irq_enable(RADIANT_RADIO_IRQn);
+#if defined(RADIANT_RADIO_IRQn_2)
+	irq_enable(RADIANT_RADIO_IRQn_2);
+#endif
 	radiant_op.enabled = true;
 	return RADIANT_RADIO_OK_RC;
 }
@@ -765,6 +815,9 @@ int radiant_radio_disable(void)
 
 	(void)radiant_radio_abort();
 	irq_disable(RADIANT_RADIO_IRQn);
+#if defined(RADIANT_RADIO_IRQn_2)
+	irq_disable(RADIANT_RADIO_IRQn_2);
+#endif
 	nrf_radio_int_disable(NRF_RADIO, ~0u);
 	radiant_op.enabled = false;
 	return RADIANT_RADIO_OK_RC;

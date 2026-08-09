@@ -24,8 +24,31 @@
 	aliases {
 		ant-uart = &uart30;
 	};
+
+	chosen {
+		/*
+		 * The TIMER radiant_core's nrf backend owns outright, for
+		 * -DRADIANT_BACKEND=nrf. It runs at 1 MHz forever and is what
+		 * t_sync is hardware-captured into from RADIO's ADDRESS event,
+		 * so it cannot be shared: naming it here rather than in the
+		 * source is what makes a second user a devicetree conflict
+		 * instead of two drivers reprogramming each other's prescaler.
+		 *
+		 * timer20 is free on this board. It is also `status =
+		 * "disabled"` by default, like every TIMER on this SoC, and an
+		 * unclocked peripheral is not addressable - the first version
+		 * of the backend hardcoded an address instead and the board
+		 * answered with a precise bus fault on the very first register
+		 * write.
+		 */
+		radiant,radio-timer = &timer20;
+	};
 };
 
 &uart30 {
+	status = "okay";
+};
+
+&timer20 {
 	status = "okay";
 };

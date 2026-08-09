@@ -77,19 +77,6 @@ config RADIANT_CORE_BACKEND_NRF
 	  and has not been confirmed. The t_sync calibration constant is still
 	  zero - see the warning in the file.
 
-config RADIANT_CORE_BACKEND_NRF_TIMER
-	hex "TIMER instance base address for the radio timebase"
-	depends on RADIANT_CORE_BACKEND_NRF
-	default 0x4000A000 if SOC_SERIES_NRF52X   # TIMER2
-	default 0x400F0000 if SOC_SERIES_NRF54LX  # TIMER20
-	help
-	  The backend owns one TIMER outright and runs it at 1 MHz forever: it
-	  is the timebase radiant_radio_now() reads and the one t_sync is
-	  hardware-captured into. It must not be shared with anything else.
-
-	  Expressed as a base address rather than an index so that a board with
-	  a conflicting user can move it without editing the source.
-
 config RADIANT_CORE_BACKEND_NRF_IRQ_PRIO
 	int "RADIO interrupt priority"
 	depends on RADIANT_CORE_BACKEND_NRF
