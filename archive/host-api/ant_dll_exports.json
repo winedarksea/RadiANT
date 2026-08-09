@@ -1,0 +1,1234 @@
+[
+  {
+    "name": "ANTFS_CloseBeacon",
+    "ordinal": 1,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_ConfigBeacon",
+    "ordinal": 2,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_CryptoAddUserKeyIndex",
+    "ordinal": 3,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_CryptoSetUserKeyIndex",
+    "ordinal": 4,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_CryptoSetUserKeyVal",
+    "ordinal": 5,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_DirectoryGetSize",
+    "ordinal": 6,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_DirectoryReadEntry",
+    "ordinal": 7,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_DirectoryReadLock",
+    "ordinal": 8,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_DirectoryRebuild",
+    "ordinal": 9,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_EnableRemoteFileCreate",
+    "ordinal": 10,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_FileClose",
+    "ordinal": 11,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_FileCreate",
+    "ordinal": 12,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_FileDelete",
+    "ordinal": 13,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_FileGetSize",
+    "ordinal": 14,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_FileGetSizeInMem",
+    "ordinal": 15,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_FileGetSpecificFlags",
+    "ordinal": 16,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_FileGetSystemTime",
+    "ordinal": 17,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_FileOpen",
+    "ordinal": 18,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_FileReadAbsolute",
+    "ordinal": 19,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_FileReadRelative",
+    "ordinal": 20,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_FileWriteAbsolute",
+    "ordinal": 21,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_FileWriteRelative",
+    "ordinal": 22,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_FindFileIndex",
+    "ordinal": 23,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_FitFileIntegrityCheck",
+    "ordinal": 24,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_FormatFSMemory",
+    "ordinal": 25,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_GetCmdPipe",
+    "ordinal": 26,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_GetFreeSpace",
+    "ordinal": 27,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_GetLastError",
+    "ordinal": 28,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_GetUsedSpace",
+    "ordinal": 29,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_InitEEPROMDevice",
+    "ordinal": 30,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_InitFSMemory",
+    "ordinal": 31,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_OpenBeacon",
+    "ordinal": 32,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_PairResponse",
+    "ordinal": 33,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_ReadDirectoryAbsolute",
+    "ordinal": 34,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_SaveDirectory",
+    "ordinal": 35,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_SetBeaconState",
+    "ordinal": 36,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_SetBeaconTimeout",
+    "ordinal": 37,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_SetCmdPipe",
+    "ordinal": 38,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_SetFileSpecificFlags",
+    "ordinal": 39,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_SetFriendlyName",
+    "ordinal": 40,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_SetLinkFrequency",
+    "ordinal": 41,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_SetPairingTimeout",
+    "ordinal": 42,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_SetPasskey",
+    "ordinal": 43,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANTFS_SetSystemTime",
+    "ordinal": 44,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_AddChannelID",
+    "ordinal": 45,
+    "mesg_id": 89,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_AddChannelID_RTO",
+    "ordinal": 46,
+    "mesg_id": 89,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_AssignChannel",
+    "ordinal": 47,
+    "mesg_id": 66,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_AssignChannelEventFunction",
+    "ordinal": 48,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_AssignChannelExt",
+    "ordinal": 49,
+    "mesg_id": 66,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_AssignChannelExt_RTO",
+    "ordinal": 50,
+    "mesg_id": 66,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_AssignChannel_RTO",
+    "ordinal": 51,
+    "mesg_id": 66,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_AssignResponseFunction",
+    "ordinal": 52,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_Close",
+    "ordinal": 53,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_CloseChannel",
+    "ordinal": 54,
+    "mesg_id": 76,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_CloseChannel_RTO",
+    "ordinal": 55,
+    "mesg_id": 76,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_ConfigEventBuffer",
+    "ordinal": 56,
+    "mesg_id": 116,
+    "in_sdk_ant": false,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_ConfigEventBuffer_RTO",
+    "ordinal": 57,
+    "mesg_id": 116,
+    "in_sdk_ant": false,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_ConfigEventFilter",
+    "ordinal": 58,
+    "mesg_id": 121,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_ConfigEventFilter_RTO",
+    "ordinal": 59,
+    "mesg_id": 121,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_ConfigFrequencyAgility",
+    "ordinal": 60,
+    "mesg_id": 112,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_ConfigFrequencyAgility_RTO",
+    "ordinal": 61,
+    "mesg_id": 112,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_ConfigHighDutySearch",
+    "ordinal": 62,
+    "mesg_id": 119,
+    "in_sdk_ant": false,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_ConfigHighDutySearch_RTO",
+    "ordinal": 63,
+    "mesg_id": 119,
+    "in_sdk_ant": false,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_ConfigList",
+    "ordinal": 64,
+    "mesg_id": 90,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_ConfigList_RTO",
+    "ordinal": 65,
+    "mesg_id": 90,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_ConfigSelectiveDataUpdate",
+    "ordinal": 66,
+    "mesg_id": 122,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_ConfigSelectiveDataUpdate_RTO",
+    "ordinal": 67,
+    "mesg_id": 122,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_ConfigUserNVM",
+    "ordinal": 68,
+    "mesg_id": null,
+    "in_sdk_ant": false,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_ConfigUserNVM_RTO",
+    "ordinal": 69,
+    "mesg_id": null,
+    "in_sdk_ant": false,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_ConfigureAdvancedBurst",
+    "ordinal": 70,
+    "mesg_id": 120,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_ConfigureAdvancedBurst_RTO",
+    "ordinal": 71,
+    "mesg_id": 120,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_ConfigureAdvancedBurst_ext",
+    "ordinal": 72,
+    "mesg_id": 120,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_ConfigureAdvancedBurst_ext_RTO",
+    "ordinal": 73,
+    "mesg_id": 120,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_CrystalEnable",
+    "ordinal": 74,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_CrystalEnable_RTO",
+    "ordinal": 75,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_EnableLED",
+    "ordinal": 76,
+    "mesg_id": 104,
+    "in_sdk_ant": null,
+    "bridged": false,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_EnableLED_RTO",
+    "ordinal": 77,
+    "mesg_id": 104,
+    "in_sdk_ant": null,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_GetDeviceUSBInfo",
+    "ordinal": 78,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_GetDeviceUSBPID",
+    "ordinal": 79,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_GetDeviceUSBVID",
+    "ordinal": 80,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_Init",
+    "ordinal": 81,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_InitCWTestMode",
+    "ordinal": 82,
+    "mesg_id": 83,
+    "in_sdk_ant": null,
+    "bridged": false,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_InitCWTestMode_RTO",
+    "ordinal": 83,
+    "mesg_id": 83,
+    "in_sdk_ant": null,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_LibConfigCustom",
+    "ordinal": 84,
+    "mesg_id": 110,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_LibVersion",
+    "ordinal": 85,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_NVM_Clear",
+    "ordinal": 86,
+    "mesg_id": null,
+    "in_sdk_ant": false,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_NVM_Clear_RTO",
+    "ordinal": 87,
+    "mesg_id": null,
+    "in_sdk_ant": false,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_NVM_Dump",
+    "ordinal": 88,
+    "mesg_id": null,
+    "in_sdk_ant": false,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_NVM_Dump_RTO",
+    "ordinal": 89,
+    "mesg_id": null,
+    "in_sdk_ant": false,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_NVM_EndSector",
+    "ordinal": 90,
+    "mesg_id": null,
+    "in_sdk_ant": false,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_NVM_EndSector_RTO",
+    "ordinal": 91,
+    "mesg_id": null,
+    "in_sdk_ant": false,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_NVM_Lock",
+    "ordinal": 92,
+    "mesg_id": null,
+    "in_sdk_ant": false,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_NVM_Lock_RTO",
+    "ordinal": 93,
+    "mesg_id": null,
+    "in_sdk_ant": false,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_NVM_SetDefaultSector",
+    "ordinal": 94,
+    "mesg_id": null,
+    "in_sdk_ant": false,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_NVM_SetDefaultSector_RTO",
+    "ordinal": 95,
+    "mesg_id": null,
+    "in_sdk_ant": false,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_NVM_Write",
+    "ordinal": 96,
+    "mesg_id": null,
+    "in_sdk_ant": false,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_NVM_Write_RTO",
+    "ordinal": 97,
+    "mesg_id": null,
+    "in_sdk_ant": false,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_Nap",
+    "ordinal": 98,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_OpenChannel",
+    "ordinal": 99,
+    "mesg_id": 75,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_OpenChannel_RTO",
+    "ordinal": 100,
+    "mesg_id": 75,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_OpenRxScanMode",
+    "ordinal": 101,
+    "mesg_id": 91,
+    "in_sdk_ant": null,
+    "bridged": false,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_OpenRxScanMode_RTO",
+    "ordinal": 102,
+    "mesg_id": 91,
+    "in_sdk_ant": null,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_RSSI_SetSearchThreshold",
+    "ordinal": 103,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_RSSI_SetSearchThreshold_RTO",
+    "ordinal": 104,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_RequestMessage",
+    "ordinal": 105,
+    "mesg_id": 77,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_ResetSystem",
+    "ordinal": 106,
+    "mesg_id": 74,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_RxExtMesgsEnable",
+    "ordinal": 107,
+    "mesg_id": 102,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_RxExtMesgsEnable_RTO",
+    "ordinal": 108,
+    "mesg_id": 102,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SendAcknowledgedData",
+    "ordinal": 109,
+    "mesg_id": 79,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SendAcknowledgedData_RTO",
+    "ordinal": 110,
+    "mesg_id": 79,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SendBroadcastData",
+    "ordinal": 111,
+    "mesg_id": 78,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SendBurstTransfer",
+    "ordinal": 112,
+    "mesg_id": 80,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SendBurstTransfer_RTO",
+    "ordinal": 113,
+    "mesg_id": 80,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SendExtAcknowledgedData",
+    "ordinal": 114,
+    "mesg_id": 94,
+    "in_sdk_ant": null,
+    "bridged": false,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SendExtAcknowledgedData_RTO",
+    "ordinal": 115,
+    "mesg_id": 94,
+    "in_sdk_ant": null,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SendExtBroadcastData",
+    "ordinal": 116,
+    "mesg_id": 93,
+    "in_sdk_ant": null,
+    "bridged": false,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SendExtBurstTransfer",
+    "ordinal": 117,
+    "mesg_id": 95,
+    "in_sdk_ant": null,
+    "bridged": false,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SendExtBurstTransferPacket",
+    "ordinal": 118,
+    "mesg_id": 95,
+    "in_sdk_ant": null,
+    "bridged": false,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SendExtBurstTransfer_RTO",
+    "ordinal": 119,
+    "mesg_id": 95,
+    "in_sdk_ant": null,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SetCWTestMode",
+    "ordinal": 120,
+    "mesg_id": 72,
+    "in_sdk_ant": null,
+    "bridged": false,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SetCWTestMode_RTO",
+    "ordinal": 121,
+    "mesg_id": 72,
+    "in_sdk_ant": null,
+    "bridged": false,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SetChannelId",
+    "ordinal": 122,
+    "mesg_id": 81,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SetChannelId_RTO",
+    "ordinal": 123,
+    "mesg_id": 81,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SetChannelPeriod",
+    "ordinal": 124,
+    "mesg_id": 67,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SetChannelPeriod_RTO",
+    "ordinal": 125,
+    "mesg_id": 67,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SetChannelRFFreq",
+    "ordinal": 126,
+    "mesg_id": 69,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SetChannelRFFreq_RTO",
+    "ordinal": 127,
+    "mesg_id": 69,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SetChannelSearchTimeout",
+    "ordinal": 128,
+    "mesg_id": 68,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SetChannelSearchTimeout_RTO",
+    "ordinal": 129,
+    "mesg_id": 68,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SetChannelTxPower",
+    "ordinal": 130,
+    "mesg_id": 96,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SetChannelTxPower_RTO",
+    "ordinal": 131,
+    "mesg_id": 96,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SetDebugLogDirectory",
+    "ordinal": 132,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SetLowPriorityChannelSearchTimeout",
+    "ordinal": 133,
+    "mesg_id": 99,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SetLowPriorityChannelSearchTimeout_RTO",
+    "ordinal": 134,
+    "mesg_id": 99,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SetNetworkKey",
+    "ordinal": 135,
+    "mesg_id": 70,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SetNetworkKey_RTO",
+    "ordinal": 136,
+    "mesg_id": 70,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SetProximitySearch",
+    "ordinal": 137,
+    "mesg_id": 113,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SetProximitySearch_RTO",
+    "ordinal": 138,
+    "mesg_id": 113,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SetSelectiveDataUpdateMask",
+    "ordinal": 139,
+    "mesg_id": 123,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SetSelectiveDataUpdateMask_RTO",
+    "ordinal": 140,
+    "mesg_id": 123,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SetSerialNumChannelId",
+    "ordinal": 141,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SetSerialNumChannelId_RTO",
+    "ordinal": 142,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SetTransmitPower",
+    "ordinal": 143,
+    "mesg_id": 71,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SetTransmitPower_RTO",
+    "ordinal": 144,
+    "mesg_id": 71,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_SleepMessage",
+    "ordinal": 145,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_SleepMessage_RTO",
+    "ordinal": 146,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_UnAssignChannel",
+    "ordinal": 147,
+    "mesg_id": 65,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": true
+  },
+  {
+    "name": "ANT_UnAssignChannel_RTO",
+    "ordinal": 148,
+    "mesg_id": 65,
+    "in_sdk_ant": true,
+    "bridged": true,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_UnassignAllResponseFunctions",
+    "ordinal": 149,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "ANT_WriteMessage",
+    "ordinal": 150,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "FIT_AdjustPairingSettings",
+    "ordinal": 151,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "FIT_AdjustPairingSettings_RTO",
+    "ordinal": 152,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "FIT_SetFEState",
+    "ordinal": 153,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  },
+  {
+    "name": "FIT_SetFEState_RTO",
+    "ordinal": 154,
+    "mesg_id": null,
+    "in_sdk_ant": null,
+    "bridged": null,
+    "zwift_uses": false
+  }
+]

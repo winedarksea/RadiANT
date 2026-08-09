@@ -1,4 +1,6 @@
 ﻿#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+
 """Run the ANT+ session a fitness app actually runs, on all eight channels.
 
 ant_scan.py opens one channel and proves the radio works. That is not what
@@ -35,7 +37,6 @@ sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 from ant_probe import (  # noqa: E402
     EP_OUT,
     FrameReader,
-    MESG_RESPONSE_EVENT_ID,
     frame,
     close_device,
     open_device,
@@ -45,6 +46,31 @@ from ant_scan import (  # noqa: E402
     ANT_PLUS_FREQ,
     ANT_PLUS_KEY,
     DEVICE_TYPES,
+    command,
+)
+# Protocol constants come from the generated module, never from a second copy
+# here. See tools/ant_wire.py and protocol/ant_wire.yaml.
+#
+# MESG_EVENT_ID is the value body[1] of a 0x40 message carries when it is a
+# channel event rather than a reply to a command - the same 0x01 this file used
+# to call EVENT_MARKER, and the same one src/ant_wire.h calls
+# ANTW_MESG_EVENT_ID.
+#
+# EVENT_CODES_BY_VALUE names the event codes. The names it gives are the
+# protocol's own (EVENT_RX_FAIL, not RX_FAIL), which is a visible change in
+# what this tool prints; it is the price of there being one table instead of
+# two, and the printed name now matches what the firmware, the header and the
+# spec all call it.
+from ant_wire import (  # noqa: E402,F401
+    BURST_HEADER_CHANNEL_MASK,
+    BURST_HEADER_LAST,
+    EVENT_CHANNEL_CLOSED,
+    EVENT_CODES_BY_VALUE,
+    EVENT_TRANSFER_TX_COMPLETED,
+    EVENT_TRANSFER_TX_FAILED,
+    EXT_FLAG_CHANNEL_ID,
+    INVALID_MESSAGE,
+    LIB_CONFIG_ALL_EXT_FIELDS,
     MESG_ACKNOWLEDGED_DATA_ID,
     MESG_ANTLIB_CONFIG_ID,
     MESG_ASSIGN_CHANNEL_ID,
@@ -54,34 +80,21 @@ from ant_scan import (  # noqa: E402
     MESG_CHANNEL_MESG_PERIOD_ID,
     MESG_CHANNEL_RADIO_FREQ_ID,
     MESG_CHANNEL_SEARCH_TIMEOUT_ID,
+    MESG_CHANNEL_STATUS_ID,
     MESG_CLOSE_CHANNEL_ID,
+    MESG_EVENT_ID,
     MESG_NETWORK_KEY_ID,
     MESG_OPEN_CHANNEL_ID,
-    command,
+    MESG_REQUEST_ID,
+    MESG_RESPONSE_EVENT_ID,
+    MESG_UNASSIGN_CHANNEL_ID,
 )
 
-MESG_UNASSIGN_CHANNEL_ID = 0x41
-MESG_REQUEST_ID = 0x4D
-MESG_CHANNEL_STATUS_ID = 0x52
-
-# body[1] of a 0x40 message is 0x01 when it is a channel event rather than a
-# reply to a command.
-EVENT_MARKER = 0x01
-
-EVENT_NAMES = {
-    1: "RX_SEARCH_TIMEOUT",
-    2: "RX_FAIL",
-    3: "TX",
-    4: "TRANSFER_RX_FAILED",
-    5: "TRANSFER_TX_COMPLETED",
-    6: "TRANSFER_TX_FAILED",
-    7: "CHANNEL_CLOSED",
-    8: "RX_FAIL_GO_TO_SEARCH",
-    9: "CHANNEL_COLLISION",
-    10: "TRANSFER_TX_START",
-}
-
-INVALID_MESSAGE = 40
+# tools/ant_sim.py imports this name from here and belongs to another agent, so
+# it cannot be updated in the same wave. It is a plain alias for the generated
+# constant, not a second definition - there is still exactly one value. Delete
+# it once ant_sim.py imports MESG_EVENT_ID directly.
+EVENT_MARKER = MESG_EVENT_ID
 
 # The profiles Zwift pairs against, with the message period each one
 # broadcasts at, in 1/32768 s counts. A slave still hears a sensor whose
@@ -131,7 +144,7 @@ def burst_probe(dev, reader, ch: int) -> str:
     the air, which matters when the nearby sensor is somebody's trainer.
     """
     # Sequence 0 with the last-packet bit set: a complete one-packet burst.
-    header = (ch & 0x1F) | 0x80
+    header = (ch & BURST_HEADER_CHANNEL_MASK) | BURST_HEADER_LAST
     dev.write(EP_OUT, frame(MESG_BURST_DATA_ID, bytes([header]) + bytes(8)))
 
     deadline = time.monotonic() + 3.0
@@ -156,8 +169,8 @@ def wait_for_close(reader, ch: int, timeout_s: float = 3.0) -> bool:
             return False
         msg_id, body = result
         if (msg_id == MESG_RESPONSE_EVENT_ID and len(body) >= 3
-                and body[0] == ch and body[1] == EVENT_MARKER
-                and body[2] == 7):
+                and body[0] == ch and body[1] == MESG_EVENT_ID
+                and body[2] == EVENT_CHANNEL_CLOSED):
             return True
 
 
@@ -197,8 +210,10 @@ def ack_probe(dev, reader, ch: int, timeout_s: float = 15.0) -> str:
             accepted = True
             continue
         # TRANSFER_TX_START is progress, not an outcome; keep waiting.
-        if body[1] == EVENT_MARKER and body[2] in (5, 6):
-            return EVENT_NAMES[body[2]]
+        if (body[1] == MESG_EVENT_ID
+                and body[2] in (EVENT_TRANSFER_TX_COMPLETED,
+                                EVENT_TRANSFER_TX_FAILED)):
+            return EVENT_CODES_BY_VALUE[body[2]]
 
 
 def main() -> int:
@@ -217,7 +232,7 @@ def main() -> int:
 
     dev = open_device(True, serial=args.serial, port=args.port,
                       baud=args.baud)
-    reader = FrameReader(dev, timeout_ms=250)
+    reader = FrameReader(dev)
 
     failures = []
 
@@ -227,7 +242,12 @@ def main() -> int:
     else:
         print("  FAIL: no startup message after reset")
         failures.append("reset")
-    if not command(dev, reader, MESG_ANTLIB_CONFIG_ID, bytes([0x00, 0x80]),
+    # 0xE0, not 0x80: the channel id names the sensor, and RSSI and the receive
+    # timestamp cost nothing to ask for and are what the other tools measure
+    # against. One lib config across every tool means one extended-message
+    # layout to get right.
+    if not command(dev, reader, MESG_ANTLIB_CONFIG_ID,
+                   bytes([0x00, LIB_CONFIG_ALL_EXT_FIELDS]),
                    "extended messages"):
         failures.append("extended messages")
     if not command(dev, reader, MESG_NETWORK_KEY_ID,
@@ -262,7 +282,7 @@ def main() -> int:
         if msg_id == MESG_BROADCAST_DATA_ID and body:
             packets += 1
             per_channel[body[0]] = per_channel.get(body[0], 0) + 1
-            if len(body) >= 13 and body[9] & 0x80:
+            if len(body) >= 13 and body[9] & EXT_FLAG_CHANNEL_ID:
                 number = body[10] | (body[11] << 8)
                 dtype = body[12] & 0x7F
                 key = (number, dtype)
@@ -271,7 +291,7 @@ def main() -> int:
                     print(f"  found: #{number} - {label} (on channel {body[0]})")
                 seen[key] = seen.get(key, 0) + 1
         elif msg_id == MESG_RESPONSE_EVENT_ID and len(body) >= 3:
-            if body[1] == EVENT_MARKER:
+            if body[1] == MESG_EVENT_ID:
                 events[body[2]] = events.get(body[2], 0) + 1
 
     for ch in opened:
@@ -280,7 +300,7 @@ def main() -> int:
             print(f"  channel {ch}: {got} broadcasts")
     if events:
         print("  events: " + ", ".join(
-            f"{EVENT_NAMES.get(code, code)} x{count}"
+            f"{EVENT_CODES_BY_VALUE.get(code, code)} x{count}"
             for code, count in sorted(events.items())))
 
     print("\n[4/5] acknowledged data (the trainer-control path)")
@@ -306,9 +326,9 @@ def main() -> int:
         elif verdict == "silent":
             print("  FAIL: the dongle did not answer at all")
             failures.append("acknowledged data")
-        elif verdict == "TRANSFER_TX_COMPLETED":
+        elif verdict == EVENT_CODES_BY_VALUE[EVENT_TRANSFER_TX_COMPLETED]:
             print("  OK: the sensor acknowledged it - trainer control works")
-        elif verdict == "TRANSFER_TX_FAILED":
+        elif verdict == EVENT_CODES_BY_VALUE[EVENT_TRANSFER_TX_FAILED]:
             print("  OK: transmitted, nothing acknowledged it")
         elif verdict == "queued":
             print("  OK: accepted and queued by the stack")

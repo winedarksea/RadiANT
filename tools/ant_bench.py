@@ -1,4 +1,6 @@
 ﻿#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmark the dongle's USB path, to compare one USB stack against another.
 
 The firmware can be built on either of Zephyr's two USB device stacks (see
@@ -233,7 +235,7 @@ def main() -> int:
 
     dev = open_device(True, serial=args.serial, port=args.port,
                       baud=args.baud)
-    reader = FrameReader(dev, timeout_ms=250)
+    reader = FrameReader(dev)
 
     if not reset_stack(dev, reader):
         sys.exit("No startup message after reset - is this the ANT firmware?")

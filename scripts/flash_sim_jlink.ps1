@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 <#
 .SYNOPSIS
     Flash the ANT+ sensor simulator onto an nRF54L15 DK through J-Link.

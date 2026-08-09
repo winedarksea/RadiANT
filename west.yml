@@ -1,0 +1,106 @@
+# West manifest for RadiANT / ant_dongle.
+#
+# This repository is a freestanding nRF Connect SDK application: it is not part
+# of the NCS tree and does not need to be. This manifest exists so that
+#
+#   west init -m https://github.com/<owner>/ant_dongle --mr master radiant-ws
+#   cd radiant-ws && west update
+#
+# produces a complete, buildable workspace from nothing, and so that the SDK
+# version this application is developed and tested against is recorded in the
+# repository rather than in someone's shell history.
+#
+# Note what this manifest is *not*: it is not how CI builds today. The workflow
+# in .github/workflows/build.yml checks out sdk-ant separately and runs
+# `west init -l` against *sdk-ant's* manifest, because sdk-ant declares
+# `self: path: ant` and is itself a manifest repository - so in that layout
+# sdk-ant, not this file, chooses the SDK version. That arrangement is
+# deliberate (it is the only way a private repository's own pinning stays
+# authoritative for the gated build) and this manifest does not replace it.
+# The two are alternative entry points into the same source tree:
+#
+#   this manifest      -> public workspace, no sdk-ant, builds the open backends
+#   sdk-ant's manifest -> adopter workspace, sdk-ant present, builds everything
+#
+# If the two ever disagree about the SDK version, sdk-ant's pin wins for the
+# gated build and this one wins for the public build; the difference is
+# visible in .config and is exactly what the CI assertions exist to catch.
+
+manifest:
+  version: "0.13"
+
+  remotes:
+    - name: nrfconnect
+      url-base: https://github.com/nrfconnect
+    # sdk-ant lives in its own GitHub organisation, separate from nrfconnect,
+    # and access is granted per account under an ANT+ adopter agreement.
+    - name: ant-nrfconnect
+      url-base: https://github.com/ant-nrfconnect
+
+  # The `ant` group is disabled by default, and this is the single most
+  # important line in the file.
+  #
+  # sdk-ant is a private, adopter-gated repository. If it were an ordinary
+  # project entry, `west update` on a fresh public clone would attempt to clone
+  # it, fail authentication, and abort the whole update - so nobody without
+  # adopter access could set up a workspace at all, which is precisely the
+  # failure mode this project exists to remove. Putting it in a disabled group
+  # means the default path clones nothing private, succeeds, and yields a tree
+  # that builds the open backends.
+  #
+  # An adopter opts in explicitly, per workspace:
+  #
+  #   west config manifest.group-filter +ant
+  #   west update
+  #
+  # which places the checkout at <topdir>/sdk-ant - the same sibling location
+  # the root CMakeLists.txt guesses when SDK_ANT_DIR is unset, so no further
+  # configuration is needed after opting in.
+  group-filter: [-ant]
+
+  projects:
+    # The nRF Connect SDK, imported wholesale. Importing sdk-nrf rather than
+    # listing Zephyr separately is deliberate: NCS pins its own fork of Zephyr
+    # (the `ncs-vX.Y.Z` tags on nrfconnect/sdk-zephyr) along with every HAL,
+    # nrfxlib and MCUboot revision it was tested with, and hand-pinning Zephyr
+    # here would let this file drift out of step with that set. One pin, one
+    # source of truth: change the revision below and the whole SDK moves.
+    #
+    # v3.4.0 is the version this application is developed and released against.
+    # Locally it corresponds to the C:\ncs\v3.4.0 install and toolchain bundle
+    # dcbdc366a1 (Zephyr SDK 1.0.1); sdk-nrf v3.4.0 imports Zephyr ncs-v3.4.0.
+    - name: nrf
+      remote: nrfconnect
+      repo-path: sdk-nrf
+      revision: v3.4.0
+      path: nrf
+      import: true
+
+    # The proprietary ANT stack: Nordic's ANT Zephyr module and the prebuilt
+    # libant.a. Optional by construction - see the group-filter note above.
+    #
+    # This is the `sdk_ant` backend of the three described in
+    # docs/decisions/0001-backend-selection-and-release-default.md. It remains
+    # a first-class selectable backend, not a legacy path: it is the reference
+    # the clean-room stack is measured against, and the only build that can
+    # BUILD_ASSERT our protocol constants against Garmin's own headers.
+    #
+    # Pinned at v2.1.0, matching SDK_ANT_REVISION in .github/workflows/build.yml.
+    # Do not float this to a branch: the whole point of the pin is that an A/B
+    # comparison run months apart is against the same reference.
+    #
+    # Not imported. sdk-ant's own west.yml declares `self: path: ant` and
+    # imports sdk-nrf itself; importing it here would produce two conflicting
+    # opinions about where the SDK lives and which revision it is.
+    - name: sdk-ant
+      remote: ant-nrfconnect
+      repo-path: sdk-ant
+      revision: v2.1.0
+      path: sdk-ant
+      groups:
+        - ant
+
+  self:
+    # Placed as a sibling of sdk-ant so that <app>/../sdk-ant resolves, which
+    # is the CMake default when SDK_ANT_DIR is not set.
+    path: ant_dongle

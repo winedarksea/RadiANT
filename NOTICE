@@ -1,0 +1,86 @@
+RadiANT
+Copyright 2024-2026 Colin Catlin and the RadiANT contributors
+
+This product includes software developed as part of the RadiANT project.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this file except in compliance with the License. You may obtain a copy of
+the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations under
+the License.
+
+
+What this project is
+--------------------
+
+RadiANT is an open-source, clean-room implementation compatible with the ANT+
+specifications. It is developed independently, from publicly available
+documentation and from observation of radio traffic produced by hardware the
+project owns.
+
+
+Trademarks
+----------
+
+ANT, ANT+, and the ANT+ logo are trademarks of Garmin Canada Inc. (formerly
+Dynastream Innovations Inc.) and/or its affiliates. Any other trademarks named
+here are the property of their respective owners.
+
+This project is not endorsed by, sponsored by, certified by, or affiliated
+with Garmin, Dynastream, or any successor to the ANT+ Alliance. No claim of
+ANT+ certification is made. References to ANT and ANT+ are nominative: they
+identify the specifications this software is designed to interoperate with,
+which is the only way to describe an interoperable implementation at all.
+
+The name "RadiANT" contains the ANT mark. It is used descriptively and must
+always be qualified on first use in any user-facing text as "RadiANT, an
+open-source, clean-room implementation compatible with the ANT+
+specifications" - never as an endorsed, certified or official product. The
+rationale, and the residual risk this leaves open, are recorded in
+docs/decisions/0003-naming-trademark-and-usb-identity.md.
+
+
+USB identity and descriptor strings
+-----------------------------------
+
+Firmware built from this repository enumerates with USB vendor ID 0x0FCF and
+product ID 0x1009, and reports descriptor strings originating from Dynastream
+Innovations Inc. These identifiers are present for host driver-matching
+compatibility and for no other reason: on Windows the libusb-win32 driver
+binds by VID/PID, and every existing host application - Zwift, openant, the
+Garmin utilities - locates an ANT USB stick by scanning for exactly those
+identifiers. A device that declined to present them would not be found by any
+of them, and would not function as the thing it is compatible with.
+
+This is a compatibility measure, not a claim of origin, and it is recorded as
+an open risk rather than a resolved question. See
+docs/decisions/0003-naming-trademark-and-usb-identity.md.
+
+
+Why Apache-2.0
+--------------
+
+Apache-2.0 was chosen over MIT or BSD specifically for Section 3, which is an
+express grant of patent rights from every contributor with a termination
+clause that triggers on patent litigation - a protection that permissive
+licences without a patent clause do not provide, and which matters here
+because ANT is a patented radio protocol whose patent position has never been
+formally cleared. See docs/decisions/0004-license-apache-2-0.md.
+
+
+Third-party components
+----------------------
+
+RadiANT builds against, and optionally links, software owned by others -
+including Zephyr and the nRF Connect SDK (Apache-2.0) and, when the sdk-ant
+backend is selected, Nordic Semiconductor's proprietary ANT module and the
+prebuilt libant.a binary, which carry their own licence terms and a per-unit
+royalty. None of that software is redistributed by this repository. The full
+inventory, each component's licence, and this project's posture toward it are
+in docs/third-party.md.

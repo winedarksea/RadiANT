@@ -1,0 +1,34 @@
+# ant serial capture v1: <seconds|-> <dir> <framed message, hex>
+# HAND-ASSEMBLED, NOT A CAPTURE. See tools/vectors/README.md.
+#
+# This exists so the harness exercises the real-timestamp form of the column as
+# well as the '-' form; tools/ant_trace.py writes real timestamps and
+# tools/ant_conformance.py writes '-'.
+#
+# It is archive/captures/serial/README.md's own worked example, corrected. That
+# transcript prints three lines and two of them do not check out:
+#
+#   0.014200 < a4016f20fa    A4 ^ 01 ^ 6F ^ 20 = EA, not FA
+#   0.014850 > a4024d005400bf   LEN = 2 puts the checksum at index 5, which is
+#                               0x00, where the XOR through index 4 is 0xBF
+#
+# Both are typos in an illustrative example rather than anything that was ever
+# on a wire, but they are the reason this directory exists: bytes typed by hand
+# into prose drift, and only something that replays them notices. The bad forms
+# are kept as rejection cases in tools/test_ant_wire.py.
+#
+# The timings are plausible spacing, not measurements. Nothing may be inferred
+# from them.
+
+# case reset
+#   A4 ^ 01 = A5   A5 ^ 4A = EF   EF ^ 00 = EF
+0.000000 > a4014a00ef
+#   A4 ^ 01 = A5   A5 ^ 6F = CA   CA ^ 20 = EA
+0.014200 < a4016f20ea
+
+# case capabilities
+#   A4 ^ 02 = A6   A6 ^ 4D = EB   EB ^ 00 = EB   EB ^ 54 = BF
+0.014850 > a4024d0054bf
+#   A4^09=AD  ^54=F9  ^08=F1  ^08=F9  ^00=F9  ^B2=4B
+#   ^32=79    ^00=79  ^FD=84  ^8D=09  ^0F=06
+0.016100 < a40954080800b23200fd8d0f06

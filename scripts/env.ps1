@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 <#
 .SYNOPSIS
     Put an nRF Connect SDK toolchain on PATH for the current PowerShell session.

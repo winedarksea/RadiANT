@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
 /*
  * USB ANT vendor class on the *new* USB device stack (USBD/UDC).
  *

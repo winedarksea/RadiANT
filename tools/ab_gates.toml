@@ -1,0 +1,232 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Tier 2 A/B gates - the thresholds `tools/ant_ab.py` applies.
+#
+# This file exists separately from `archive/benchmarks/` for one reason: a
+# baseline records what was measured, and a gate records what is required.
+# Keeping them in two files is what makes it obvious when somebody moves a
+# threshold to meet a result instead of the other way round. Every number below
+# is therefore a reviewable line in a diff, with the reason it has the value it
+# has written next to it.
+#
+# The thresholds themselves come from `docs/testing.md`, which is the authority.
+# If the two ever disagree, the document is right and this file is stale.
+#
+# Two rules that are not thresholds, and that have both already gone wrong here
+# once:
+#
+#   * Read `loss (exact)`, never the wall-clock line. The wall-clock figure
+#     divides elapsed time by the nominal period and assumes the transmitter's
+#     crystal is exact; `loss (exact)` counts what is missing from the
+#     transmitter's own event counter, with no clock involved.
+#   * Gate on `timing`, never on `jitter`. `jitter` is a standard deviation over
+#     raw gaps, so one lost packet turns a 250 ms gap into a 500 ms one and six
+#     losses in 1,200 packets produce its entire figure. It has always moved
+#     with the loss number and adds nothing to it. `timing` is the same packets
+#     with the whole periods subtracted out: the error without the count.
+#
+# `tools/ant_ab.py` enforces both by reading `derived.loss_exact_pct` and
+# `derived.timing_offgrid_host_ms` and by having no code path that reads either
+# of the other two. This comment is here so that stays deliberate.
+#
+# And before fitting any threshold here to a bench number: check the number can
+# be accounted for. The previous 1.0 -> 2.5 % retune was fitted to a broken
+# measurement and encoded the tool's own bug as the spec.
+
+schema_version = 1
+
+
+# ---------------------------------------------------------------------------
+# The sitting
+#
+# Not a gate on the firmware - a gate on whether the two numbers are comparable
+# at all. The run-to-run spread on this bench is comparable to the effect being
+# measured, so a number recorded today against a number recorded last week
+# measures the room, the neighbours' Wi-Fi and the position of the boards on the
+# desk. `docs/testing.md` states A/B/A in one sitting as a hard rule; this is
+# where the rule is enforced rather than remembered.
+# ---------------------------------------------------------------------------
+[sitting]
+
+# Both baselines must carry the same `meta.recorded` date. A date-time is
+# compared by its date part: one sitting can straddle an hour, not a night.
+require_same_recorded_date = true
+
+# `rig` must match object-for-object. Two results are only comparable if their
+# rigs are - same transmitter, same receiver board, same link, same RF channel,
+# same attenuation. A changed cable is a changed measurement.
+require_same_rig = true
+
+# A/B/A: pass three baselines and the first and last must be the same backend
+# and must agree to within this many percentage points of exact loss. If they do
+# not, the sitting is void and the B number means nothing - the repeated A is
+# the only thing that separates a backend difference from an afternoon.
+#
+# 0.35 pp is the characterised spread of this bench: four identical 300 s runs
+# landed between 0.26 % and 0.60 %, and 0.60 - 0.26 = 0.34. Rounded up rather
+# than padded, because a wider allowance would let the check pass on a sitting
+# that was genuinely unstable.
+repeat_a_max_delta_pp = 0.35
+
+
+# ---------------------------------------------------------------------------
+# Tier 1 - frame conformance
+# ---------------------------------------------------------------------------
+[gates.conformance]
+enabled = true
+required = true
+
+# Byte-identical is the pass. `tools/ant_conformance.py` suppresses timestamps
+# precisely so this is reachable.
+require_byte_identical = true
+
+# Cases allowed to differ, each of which is a decision somebody has to make and
+# defend in review. Empty by default, and it should stay empty for as long as
+# possible.
+#
+# The one entry that will legitimately be needed is
+# "4d-request-version-0/valid": MESG_VERSION returns the backend's own name, so
+# sdk-ant and ant_core cannot both answer it identically and should not try.
+# Adding it here is better than dropping 0x3E from the conformance run, because
+# the reply's *length and framing* still get checked - only its contents are
+# excused. Add it when the first real A/B runs, not before: an allowance added
+# speculatively excuses a difference nobody has looked at.
+allowed_differing_cases = []
+
+
+# ---------------------------------------------------------------------------
+# Tier 2 - radio behaviour
+# ---------------------------------------------------------------------------
+
+[gates.loss_exact]
+enabled = true
+required = true
+
+# <= sdk-ant + 0.2 pp. Percentage points, not a ratio: at a floor of 0.4 % a
+# ratio gate would either permit doubling or forbid ordinary noise.
+max_delta_pp = 0.2
+
+# Only runs at least this long count. Shorter runs do not wrap the slow
+# accumulators and their loss resolution is coarse.
+min_seconds = 300
+
+# The acceptance ceiling, applied to the candidate on its own. A backend can be
+# within 0.2 pp of an sdk-ant run that was itself having a bad afternoon.
+absolute_ceiling_pct = 1.5
+
+# Informational only, and deliberately not a failure. The characterised floor of
+# this bench is 0.26-0.60 %; a figure below 0.26 % is suspicious rather than
+# excellent, and the last time a number looked too good it was the measuring
+# tool that was broken. `ant_ab.py` prints a warning and does not fail.
+suspicious_below_pct = 0.26
+
+[gates.unexplained_loss]
+enabled = true
+required = true
+
+# A hole with no RX_FAIL to account for it. The radio raises an RX_FAIL for a
+# packet lost on the air and says nothing at all about one lost after the radio
+# already had it, so a nonzero value here is a bug on the host or in the dongle
+# and not a property of the link. This is the check that caught the 250 ms
+# libusb read timeout racing a 249.7 ms channel period - about 0.4 pp of
+# entirely imaginary loss that looked exactly like the real kind.
+#
+# Zero, and it invalidates the sitting rather than failing one gate.
+max = 0
+
+[gates.accumulator_violations]
+enabled = true
+required = true
+
+# ANT+ profiles survive packet loss because values are cumulative sums rather
+# than instantaneous readings, so a lost packet is recovered by the next one. A
+# continuity violation means that property broke, which is a decoding or a
+# wrap-handling bug rather than a link problem.
+max = 0
+
+[gates.timing]
+enabled = true
+required = true
+
+# <= sdk-ant x 1.25, read off the `timing` line and not the `jitter` one. See
+# the header. Expect ~2.6 ms on the host clock; the radio's own clock reads
+# ~0.009 ms, which is what says the host clock is the instrument and the link is
+# fine.
+max_ratio = 1.25
+
+# A ratio against a number that is already tiny goes unstable, so a small
+# absolute allowance underwrites it: anything within this many milliseconds
+# passes regardless of the ratio.
+floor_ms = 0.5
+
+[gates.acquisition]
+enabled = true
+required = true
+
+# Time to first packet and time to re-acquire after a deliberate dropout.
+# <= sdk-ant x 1.5 AND <= 5 s absolute - both, not either. The absolute limit is
+# what a rider notices; the ratio is what stops a slow baseline excusing a
+# slower rebuild.
+max_ratio = 1.5
+max_absolute_s = 5.0
+
+[gates.sensitivity]
+enabled = true
+required = true
+
+# Attenuation (or distance, if there is no inline attenuator) at 5 % exact loss,
+# within 1 dB-equivalent of sdk-ant on the same rig. Same transmitter, same
+# link, receivers swapped - an open-air path is only comparable within one
+# sitting, which is why the sitting checks above are not optional here.
+#
+# Required, and required on purpose: sensitivity is a stated core value of this
+# project - the nRF52840's ~10 dB over an nRF24AP2 is in the first paragraph of
+# README.md - and it is the figure the EFR32 question turns on. It is also the
+# slot most likely to be skipped because it takes the longest, and the one with
+# the least chance of being recoverable after sdk-ant access lapses.
+max_delta_db = 1.0
+
+[gates.scale]
+enabled = true
+
+# Not required, and this is the one place where that is not a loophole:
+# `libant.a` allocates 8 channels and advertises scan mode off without
+# implementing it, so there is no sdk-ant baseline to compare against and none
+# should be invented. An sdk-ant sitting legitimately has no `scale` block at
+# all. `ant_ab.py` reports the absence as SKIP, loudly and in its own column,
+# and never as a pass.
+required = false
+
+# Absolute, not relative: worst per-channel exact loss no worse than the
+# single-channel figure from the same rig plus this many percentage points.
+max_delta_pp = 0.5
+
+# The channel count the gate is about. 32 is the serial protocol's natural
+# ceiling - the burst header uses the low 5 bits for the channel number.
+expect_channels = 32
+
+[gates.ack_data]
+enabled = true
+
+# Not required for the same reason as `scale`: it needs a responding sensor or
+# `sim/` acting as one, which not every sitting has. Absent reads as SKIP.
+required = false
+
+# >= 99 % AND >= sdk-ant - 1 pp. Acknowledged data is ERG mode - it is how Zwift
+# sets trainer resistance - so this is the gate closest to the Tier 3 ride.
+min_success_pct = 99.0
+max_delta_pp = 1.0
+
+[gates.usb_latency]
+enabled = true
+required = true
+
+# <= sdk-ant x 1.1, and equality is the expectation rather than a stretch: the
+# radio is not on this path at all. A regression here is a USB-stack or bridge
+# change that arrived with the backend swap, which is worth knowing precisely
+# because it has nothing to do with the radio.
+max_ratio = 1.1
+
+# The same floor argument as `timing`: p50 is a few hundred microseconds, and a
+# 10 % gate on 0.36 ms is 36 us of host scheduler noise.
+floor_ms = 0.1

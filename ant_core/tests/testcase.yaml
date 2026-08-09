@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# One twister test application covering all of ant_core. The suites inside it
+# are separate ZTEST_SUITE()s in src/*.c rather than separate applications:
+# they share fake_radio.c and one prj.conf, and a per-module application would
+# multiply build time by the number of core agents for no isolation gain -
+# ztest already isolates suites from each other. Adding a suite therefore
+# means adding a file to src/, and this file does not change.
+
+tests:
+  ant_core.unit:
+    tags:
+      - ant_core
+    # native_sim only, and 32-bit on purpose. These tests contain no hardware
+    # access at all, so a real board would prove nothing extra, while the
+    # 32-bit host build shares pointer and long widths with the nRF52/nRF54
+    # target and therefore catches the struct-packing and size assumptions
+    # that a 64-bit host would quietly hide.
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim

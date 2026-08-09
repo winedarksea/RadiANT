@@ -217,14 +217,74 @@ config USBD_CDC_ACM_CLASS
 
 endif # ANT_DONGLE_TRANSPORT_USB_NEXT
 
+choice ANT_DONGLE_RADIO
+	prompt "ANT radio backend"
+	default ANT_DONGLE_RADIO_SDK_ANT
+	help
+	  Which implementation of src/ant_radio.h is compiled. All three
+	  present the same antr_* contract, so the serial bridge and main() do
+	  not know which is present - the same shape as the transport choice
+	  above, and for the same reason.
+
+	  Do not expect to set this here. Unlike the transport, this choice is
+	  not actually decided by Kconfig: `list(APPEND ZEPHYR_EXTRA_MODULES)`
+	  in CMakeLists.txt runs before find_package(Zephyr), therefore before
+	  Kconfig exists, so a Kconfig symbol cannot decide whether sdk-ant's
+	  Kconfig gets sourced. CMake decides from the ANT_RADIO cache variable
+	  (-DANT_RADIO=sdk_ant|core|stub) and writes the answer back out as a
+	  generated fragment which Zephyr merges last. This choice exists so
+	  that .config records the decision - so a build can be asked which
+	  backend it contains, which is what CI and scripts/build_all.ps1
+	  assert on.
+
+	  The default below is therefore almost never the value that is used.
+	  It is sdk_ant because that is what a menuconfig-only reader should
+	  see as the shipping configuration, not because it is a real fallback.
+
+config ANT_DONGLE_RADIO_SDK_ANT
+	bool "Nordic's prebuilt ANT stack (sdk-ant)"
+	help
+	  Compile src/ant_radio_sdk_ant.c, ~50 one-line forwarders from the
+	  antr_* contract onto libant.a's antlib_* entry points, plus a
+	  BUILD_ASSERT block comparing every ANTW_* constant against its
+	  sdk-ant counterpart.
+
+	  The proven path: this is the build Zwift has been verified against
+	  and the one release artifacts are cut from. It is also the only
+	  configuration in which those asserts can run at all, which is why
+	  keeping this backend is worth more than a fallback - it is the thing
+	  that notices when a constant or a signature drifts.
+
+	  Needs an sdk-ant checkout; see ANT_MODULE_DIR in CMakeLists.txt.
+
+config ANT_DONGLE_RADIO_CORE
+	bool "ant_core, the clean-room stack"
+	help
+	  Compile ant_core/, the open-source clean-room link layer. No sdk-ant
+	  of any kind is present in this configuration: the module is never
+	  appended to ZEPHYR_EXTRA_MODULES, so no ANT header is reachable and
+	  no libant.a is linked. That is what lets the project build on a fork,
+	  with no adopter-gated repository and no secret.
+
 config ANT_DONGLE_RADIO_STUB
 	bool "Stub out the ANT radio layer"
 	help
-	  Compile src/ant_stub.c in place of the real ANT stack (libant.a from
-	  sdk-ant). Every ant_*() entry point becomes a no-op returning success,
-	  so the USB half of the dongle — enumeration, WinUSB auto-binding and the
-	  0xA4 serial bridge — can be brought up without a working ANT build.
-	  Set CONFIG_ANT=n alongside this; stub.conf does both.
+	  Compile src/ant_radio_stub.c in place of a real ANT stack. Every
+	  antr_*() entry point becomes a no-op returning success, so the USB
+	  half of the dongle — enumeration, WinUSB auto-binding and the 0xA4
+	  serial bridge — can be brought up without a working ANT build.
+
+	  No sdk-ant either, and nothing to turn off to get there: with
+	  -DANT_RADIO=stub the module is never added, so CONFIG_ANT never comes
+	  into existence. Setting it to n would now be an assignment to an
+	  undefined symbol, which Zephyr treats as fatal; stub.conf used to do
+	  exactly that and no longer does.
+
+	  This is the cheapest proof the backend seam holds - it builds in
+	  seconds and is the one configuration that exercises the seam without
+	  exercising any radio.
+
+endchoice
 
 config ANT_DONGLE_MSOS_DESCRIPTORS
 	bool "Advertise WinUSB through MS OS descriptors"

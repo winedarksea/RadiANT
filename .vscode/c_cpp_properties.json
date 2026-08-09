@@ -4,8 +4,8 @@
             "name": "Windows",
             "includePath": [
                 "${workspaceFolder}/src/**",
-                "C:/Users/Colin/sdk-ant/include",
-                "C:/Users/Colin/sdk-ant/init",
+                "${env:SDK_ANT_DIR}/include",
+                "${env:SDK_ANT_DIR}/init",
                 "C:/ncs/v3.4.0/zephyr/include",
                 "C:/ncs/v3.4.0/zephyr/subsys/usb/device",
                 "C:/ncs/v3.4.0/zephyr/soc/nordic/nrf52/**",

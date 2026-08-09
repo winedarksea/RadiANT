@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
 /*
  * Transport contract between the ANT serial bridge and whatever carries its
  * bytes to a host.

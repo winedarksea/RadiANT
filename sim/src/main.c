@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
 /*
  * An ANT+ sensor that does not exist, on a board that does.
  *
@@ -70,6 +72,43 @@ static struct sim_revs wheel_revs;
 /* Buttons move these; the signal generators are re-seeded around them. */
 static int32_t target_watts = CONFIG_ANT_SIM_TARGET_WATTS;
 static int32_t target_rpm = CONFIG_ANT_SIM_TARGET_RPM;
+
+/* sdk-ant writes the ANT+ frequency straight into its channel config macro and
+ * makes the result const, so moving off 2457 MHz means copying the config and
+ * patching the copy. One instance is enough: a build transmits exactly one
+ * profile, so only one channel is ever opened.
+ *
+ * At the default this is a no-op and the sensor is a valid ANT+ device. See
+ * CONFIG_ANT_SIM_RF_FREQ for why anything else is a bench measurement rather
+ * than a configuration.
+ */
+static const ant_channel_config_t *sim_channel_config(
+	const ant_channel_config_t *base)
+{
+	static ant_channel_config_t patched;
+
+	patched = *base;
+	patched.rf_freq = CONFIG_ANT_SIM_RF_FREQ;
+	return &patched;
+}
+
+/* Transmit power is not part of the channel config, so it is set separately
+ * once the channel exists. Logged rather than returned: a sensor that is
+ * transmitting at the default power is still a working sensor, and taking the
+ * whole application down over it would cost a bench session to diagnose.
+ */
+static void sim_tx_power_set(uint8_t channel)
+{
+	int err = ant_channel_radio_tx_power_set(
+		channel, CONFIG_ANT_SIM_TX_POWER, 0);
+
+	if (err) {
+		LOG_WRN("tx power level %d refused (%d) - staying at the "
+			"default 0 dBm", CONFIG_ANT_SIM_TX_POWER, err);
+	} else {
+		LOG_INF("tx power level %d", CONFIG_ANT_SIM_TX_POWER);
+	}
+}
 
 static void signals_init(void)
 {
@@ -166,7 +205,8 @@ static void ant_evt_handler(ant_evt_t *p_ant_evt)
 
 static int profile_setup(void)
 {
-	int err = ant_bsc_sens_init(&bsc, BSC_SENS_CHANNEL_CONFIG(bsc),
+	int err = ant_bsc_sens_init(&bsc,
+				    sim_channel_config(BSC_SENS_CHANNEL_CONFIG(bsc)),
 				    BSC_SENS_PROFILE_CONFIG(bsc));
 
 	if (err) {
@@ -179,6 +219,8 @@ static int profile_setup(void)
 	bsc.BSC_PROFILE_hw_version = CONFIG_ANT_SIM_HW_VERSION;
 	bsc.BSC_PROFILE_sw_version = CONFIG_ANT_SIM_SW_VERSION;
 	bsc.BSC_PROFILE_model_num = CONFIG_ANT_SIM_MODEL_NUM;
+
+	sim_tx_power_set(bsc.channel_number);
 
 	err = ant_bsc_sens_open(&bsc);
 	if (err) {
@@ -335,7 +377,8 @@ static void ant_evt_handler(ant_evt_t *p_ant_evt)
 
 static int profile_setup(void)
 {
-	int err = ant_bpwr_sens_init(&bpwr, BPWR_SENS_CHANNEL_CONFIG(bpwr),
+	int err = ant_bpwr_sens_init(&bpwr,
+				     sim_channel_config(BPWR_SENS_CHANNEL_CONFIG(bpwr)),
 				     BPWR_SENS_PROFILE_CONFIG(bpwr));
 
 	if (err) {
@@ -354,6 +397,8 @@ static int profile_setup(void)
 	 * balance would be a second signal to be wrong about for no gain.
 	 */
 	bpwr.BPWR_PROFILE_pedal_power.differentiation = 0x00;
+
+	sim_tx_power_set(bpwr.channel_number);
 
 	err = ant_bpwr_sens_open(&bpwr);
 	if (err) {

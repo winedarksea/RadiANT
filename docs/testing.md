@@ -1,0 +1,580 @@
+# Testing
+
+Checked by: `python -m unittest discover -s tools -p "test_*.py"`, which is the
+`host-tests` job in [`.github/workflows/build.yml`](../.github/workflows/build.yml)
+and covers the host-side claims below. Everything from Tier 2 down needs
+hardware and is run by hand; once `tools/ant_ab.py` and `tools/ab_gates.toml`
+exist, the Tier 2 thresholds live in that TOML and this table becomes its
+mirror rather than its source.
+
+Nothing in this document should be believed about the radio without a bench
+run. The one thing it does assert without hardware is *how to read a result*,
+and that part is not opinion — it was arrived at by finding that half of the
+old loss figure was the measuring tool.
+
+---
+
+## The tools
+
+Everything is a host-side Python script over the dongle's own serial protocol.
+The interpreter is `C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe` — there is
+no system Python on this machine. Note that this is *not* the bundle that builds
+the firmware: an sdk-ant build needs **NCS v3.2.4 with toolchain bundle
+`fd21892d0f`** (what `build/release`'s `CMakeCache.txt` records for the shipping
+images), because sdk-ant v2.1.0 fails to link against v3.4.0's renamed
+`CONFIG_SOC_SERIES_NRF52X` — see [`backends.md`](backends.md#stub-build). The
+`dcbdc366a1` interpreter above is for the Python tools only.
+
+Two USB boards enumerate as the same
+`0FCF:1009`, so every invocation that touches hardware needs `--serial`; a UART
+build takes `--port COM8` instead, and every tool accepts it.
+
+| Tool | What it proves | Board(s) |
+|---|---|---|
+| [`tools/ant_probe.py`](../tools/ant_probe.py) | The dongle answers questions about itself: reset → startup → capabilities → version. The smoke test everything else assumes | 1 |
+| [`tools/ant_scan.py`](../tools/ant_scan.py) | The radio hears real ANT+ sensors. A wildcard slave channel, opened the way a fitness app opens one. Must print device number *and* type — that proves the extended-message path and `RXMATCH` reconstruction, not just that a packet arrived | 1 + a real sensor |
+| [`tools/ant_session.py`](../tools/ant_session.py) | The session a fitness app actually runs: eight channels at their real profile rates, plus the acknowledged-data and burst paths | 1 + sensors |
+| [`tools/ant_features.py`](../tools/ant_features.py) | Advertised capability bits vs bridged messages, and every set/get round trip. The only check that catches a payload offset wrong by one | 1 |
+| [`tools/ant_bench.py`](../tools/ant_bench.py) | USB round-trip latency and throughput. `request capabilities` — cheapest message with a guaranteed reply and no side effects — so it measures the USB path and the bridge, never the radio | 1 |
+| [`tools/ant_sim.py`](../tools/ant_sim.py) | Drives a spare board as an ANT+ sensor, so the radio can be tested without owning one. `--dry-run` needs no board at all | 1 (transmitter) |
+| [`tools/ant_verify.py`](../tools/ant_verify.py) | The measuring instrument: loss, timing, decoded accuracy, accumulator continuity, liveness, loss accounting. `--replay` needs no board | 1 (receiver) |
+| [`tools/ant_pages.py`](../tools/ant_pages.py) | Pure ANT+ page encode/decode. No hardware, host-testable, shared with `zephyr_aerosense` | none |
+| [`tools/test_*.py`](../tools/) | The only tests here that run in CI | none |
+
+Three more arrive with the rebuild and are named here so nothing invents a
+second one: `tools/ant_conformance.py` (Tier 1), `tools/ant_ab.py` +
+`tools/ab_gates.toml` (the Tier 2 gate runner), and `tools/ant_trace.py`
+(normalises `ANT_DLL`'s `Device0.txt` into byte-level `.antser` captures).
+
+## Host tests in CI
+
+```sh
+python -m unittest discover -s tools -p "test_*.py"
+```
+
+That job runs on `ubuntu-24.04` with nothing but `pip install pyusb`, and it is
+the only job in the workflow that runs on a fork. It exists because
+`ant_pages.py`, the sensor models in `ant_sim.py` and the analysis in
+`ant_verify.py` are plain Python with no radio in them, and a byte-order or
+accumulator-wrap mistake in any of them otherwise costs two boards and a flash
+cycle to find.
+
+C unit tests are a different story: `native_sim` does not build on Windows —
+no host C compiler, no QEMU — so `west twister` cannot run locally and every
+ztest in `ant_core/tests/` executes only in CI on Linux. Local C verification
+is compile-check plus these Python tools.
+
+---
+
+## The four verification tiers
+
+The tiers exist to answer one question: *is `ant_core` a faithful replacement
+for `libant.a`?* They are ordered by what they cost to run, so a divergence is
+found by the cheapest tier that can see it.
+
+### Tier 1 — frame conformance (one board, no radio, CI-able)
+
+`tools/ant_conformance.py` drives every message `dispatch()` implements, valid
+and malformed, and records the replies to a `.antser` file. **The A/B is a byte
+diff of two files; byte-identical is the pass.** That catches most of the
+divergence there is to catch — response codes, reply framing and sizes, error
+mapping, the leading-index-byte shapes in `src/ant_serial_bridge.c` — with no
+sensors and no statistics anywhere near it.
+
+### Tier 2 — radio behaviour (two boards)
+
+Board A is the transmitter and is **always sdk-ant** (`sim/` on the nRF54L15
+DK). Board B is the receiver, alternating backends.
+
+> **Hard rule: a Tier 2 A/B run goes A/B/A in one sitting, never across
+> sessions.** This is the same protocol as the `synth.conf` experiment (XTAL /
+> SYNTH / XTAL, alternating builds, one sitting), and it is not ceremony. The
+> run-to-run spread on this bench is comparable to the effect being measured —
+> 0.26 to 0.60 % across four identical 300 s runs — so a number recorded today
+> against a number recorded last week measures the room, the neighbours' Wi-Fi
+> and the position of the boards on the desk, not the backend. The repeated A
+> is what makes the difference readable: if the two A runs do not agree, the
+> sitting is void and the B number means nothing.
+
+`tools/ant_ab.py` consumes JSON from `ant_verify.py` / `ant_bench.py` /
+`ant_conformance.py`, applies the gates below from a reviewable
+`tools/ab_gates.toml`, and prints a table in the shape of the USB-stack
+comparison in [`backends.md`](backends.md). Baselines commit to
+`archive/benchmarks/`.
+
+| Gate | Threshold |
+|---|---|
+| Tier-1 conformance diff | **byte-identical** |
+| `loss (exact)`, 300 s runs | ≤ sdk-ant + 0.2 pp. The bench floor is **characterised at 0.26–0.60 %**, ceiling 1.5 % — read the exact line, not the wall-clock one |
+| **Unexplained loss** (a hole with no `RX_FAIL`) | **0.** `loss_accounting()` already enforces it; this is the check that caught the reader bug |
+| Accumulator continuity violations | 0 |
+| **`timing` line** (intervals minus whole periods) | ≤ sdk-ant × 1.25. **Not the `jitter` line** |
+| Time to first packet / re-acquisition | ≤ sdk-ant × 1.5, and ≤ 5 s absolute |
+| **Sensitivity** (attenuated link if an inline attenuator is available, else a fixed worst-case open-air path) | attenuation/distance at 5 % loss within 1 dB-equivalent of sdk-ant on the same rig; baseline recorded in Phase 4 |
+| 32-channel per-channel loss | ≤ single-channel + 0.5 pp — **absolute, not relative**: `libant.a` cannot reach 32 |
+| **Ack-data success** (ERG mode) | ≥ 99 %, and ≥ sdk-ant − 1 pp |
+| USB round-trip latency | ≤ sdk-ant × 1.1 (expect equality — the radio is not on that path) |
+
+Per-phase functional gates use the tools above, in this order:
+`ant_probe.py` → `ant_scan.py` → `ant_verify.py` against `sim/` → `ant_sim.py`
+driving `ant_core` as a sensor, received by the sdk-ant dongle →
+`ant_session.py` for ack/burst and eight channels → `ant_features.py` as the
+conformance gate.
+
+**Before fitting any threshold to a bench number, check the number can be
+accounted for.** The previous 1.0 → 2.5 % retune was fitted to a broken
+measurement and encoded the tool's own bug as the spec.
+
+### Tier 3 — acceptance
+
+Zwift pairs a power meter, an HRM and a controllable trainer, and holds a
+30-minute ride with resistance changes taking effect. Not automatable, and it
+is the gate for making `ant_core` the release default. Release artifacts stay
+on the sdk-ant build until it passes, and the switchover is a recorded decision
+in [`decisions/0001-backend-selection-and-release-default.md`](decisions/0001-backend-selection-and-release-default.md),
+not a drift.
+
+### Tier 4 — extension interop (Phase 7)
+
+The RadiANT extensions must be provably invisible to everything that does not
+want them. With a telemetry node transmitting alongside real ANT+ sensors: **a
+shipping sdk-ant dongle and a Garmin head unit both continue to find and hold
+every standard sensor, and neither reports an error or a phantom device.**
+Capture it as an `.antcap` and add it to the replay fixtures, so the claim is
+regression-tested rather than remembered. Repeat with a longer-than-8-byte
+frame on air — that is the case most likely to upset a stock receiver's
+`MAXLEN` handling, and the one worth having evidence for.
+
+Two scale checks, neither of which has a sdk-ant baseline to compare against
+because `libant.a` cannot do either, so both are absolute: **32 channels
+tracked simultaneously** with per-channel loss no worse than single-channel
++ 0.5 pp, and **background scan mode** hearing every sensor `ant_scan.py` finds
+via a wildcard channel.
+
+---
+
+## Reading a bench result
+
+Three numbers decide whether a run is good, and for each one there is a
+neighbouring number that looks like it and is wrong.
+
+- **Loss: read `loss (exact)`, never the wall-clock line.** The headline figure
+  divides by elapsed time over the nominal period, which assumes the
+  transmitter's crystal is exact and rounds. `loss (exact)` counts what is
+  missing from the transmitter's own update event counter, with no clock
+  involved. The floor on this bench is **characterised at 0.26–0.60 %** across
+  300 s runs; the acceptance ceiling is **1.5 %**. A figure below 0.26 % is
+  suspicious, not excellent.
+- **Timing: read the `timing` line, not `jitter`.** `jitter` is a stddev over
+  the raw gaps between packets, and one lost packet turns a 250 ms gap into a
+  500 ms one — six losses in 1200 packets produce its entire figure on their
+  own, so it has always moved with the loss number and added nothing to it.
+  `timing` is the same packets with the whole periods subtracted out: the error
+  without the count. It reads **~2.6 ms on the host clock and 0.009 ms on the
+  radio's** — under one tick of the 32 kHz clock. The link's timing was never
+  the thing `jitter` was measuring.
+- **Unexplained loss must be zero.** The radio raises an `RX_FAIL` for a packet
+  lost on the air and says nothing at all about one lost after the radio
+  already had it. A hole with no `RX_FAIL` is a bug on the host or in the
+  dongle, and it is exactly the signature that exposed the `FrameReader`
+  timeout bug described below.
+
+The rest of this document is the material that established those three rules,
+moved out of `README.md` unchanged.
+
+---
+
+## Testing the radio
+
+`ant_probe.py` only proves the dongle answers questions about itself. To
+exercise the radio, `tools/ant_scan.py` runs the sequence a fitness app opens
+with — ANT+ network key, wildcard slave channel, open, listen — and reports
+what it hears:
+
+```sh
+python tools/ant_scan.py --seconds 30
+```
+
+But one channel is not what a fitness app does. Zwift opens a channel per
+sensor it cares about and runs them simultaneously for the length of a ride, so
+anything that only ever gets exercised on channel 0 stays untested.
+`tools/ant_session.py` runs that session instead — all eight channels at their
+real profile message rates — and additionally checks the two host-to-sensor
+paths:
+
+```sh
+python tools/ant_session.py --seconds 30
+```
+
+- **Acknowledged data** is how Zwift sets trainer resistance. Sent at a paired
+  channel, `TRANSFER_TX_COMPLETED` means a real sensor acknowledged it.
+- **Burst** is probed at a closed channel on purpose. A dispatcher that does
+  not implement the message answers `INVALID_MESSAGE`; one that does gets
+  `CHANNEL_IN_WRONG_STATE` back from the stack. Both are errors, but only the
+  second proves it reached the radio — and nothing goes on the air, which
+  matters when the sensor in range is someone's trainer.
+
+Two lessons for anyone writing another tool, both of which first showed up as
+apparent firmware bugs: assigning a channel that a previous run left assigned
+is refused with `CHANNEL_IN_WRONG_STATE`, which is why every host opens with a
+system reset; and a close is asynchronous, so unassigning before
+`EVENT_CHANNEL_CLOSED` arrives is refused for the same reason.
+
+## Testing the radio without owning a sensor
+
+`ant_scan.py` and `ant_session.py` can only report what happens to be on the
+air. If you have a Nordic DK and no power meter, that is nothing at all, and
+the radio half of this firmware stays untested.
+
+It does not have to. The dongle is a transparent bridge, so it forwards
+`CHANNEL_TYPE_MASTER` to `ant_channel_assign` and `MESG_BROADCAST_DATA_ID` to
+`ant_broadcast_message_tx` like any other message — which means a board running
+**this firmware, unmodified**, will happily impersonate an ANT+ sensor if a
+host asks it to. `tools/ant_sim.py` is that host:
+
+```sh
+# board A: pretend to be a 100 W, 80 rpm power meter
+python tools/ant_sim.py --profile power --watts 100 --cadence 80 --seed 1 --serial <A>
+
+# board B: the dongle under test, listening and measuring
+python tools/ant_verify.py --expect-watts 100 --expect-rpm 80 --seconds 60 --serial <B>
+```
+
+**Two boards are needed.** One transmits and one receives; a board cannot hear
+itself. Disambiguate them with `--serial` over USB, or `--port COM8` for a UART
+build.
+
+`--profile` takes `power` (page 0x10), `power-torque` (pages 0x11 and 0x12),
+`power-torque-freq` (page 0x20) or `csc` (combined speed and cadence, device
+type 0x79), and repeats — each profile gets its own channel, so several
+sensors can be on the air at once from a single board.
+
+Pacing comes from `EVENT_TX`, not from a host timer. The stack raises that
+event when it has put a payload on the air, which is exactly when the next one
+should be loaded, so the script makes no assumption about how fast the host or
+the USB path is. There is a wall-clock fallback for the case where the event
+never arrives, and it prints loudly and fails the run — a silent fallback would
+hide the one failure worth knowing about.
+
+`ant_verify.py` is the measuring instrument, and it is deliberately told
+nothing about the transmitter: the packet count to expect comes from the
+channel period, the power to expect comes from the accumulators, and the page
+rotation to expect comes from the page numbers. It reports loss, jitter, mean
+absolute error against `--expect-watts`/`--expect-rpm`, accumulator continuity,
+common-page spacing, and whether the sensor is actually alive rather than
+repeating one good packet. `--json` gives machine-readable output in
+`ant_bench.py`'s style.
+
+**Pin the device number.** `ant_verify.py` opens a wildcard channel by default,
+exactly as a fitness app does — so it pairs with whichever ANT+ sensor of that
+type it hears first. If there is a real power meter anywhere nearby it will
+find that instead, and the run reads as 25 % loss and 0 W because it is
+measuring somebody's idle trainer through a wall. `ant_sim.py` and `sim/` both
+default to device **14871**:
+
+```sh
+python tools/ant_verify.py --device-number 14871 --trans-type 5 ...
+```
+
+A good run against the `sim/` firmware, measured on the bench:
+
+```
+OK   loss                   0.33 % (limit 1.50 %, one packet = 0.08 %)
+OK   jitter                 stddev 14.7 ms, max 500.0 ms (limit 124.8 ms, period 249.7 ms)
+OK   accumulator continuity 0 violation(s)
+OK   loss (exact)           0.34 % - 4 of 1163 page 0x10 message(s) missing
+OK   sensor liveness        the event counter advanced on 1159 of 1159 packet pairs
+OK   power accuracy         mean abs error 1.69 against 100 (limit 10.00)
+OK   common pages           80 x10, 81 x10, worst gap 119 (limit 121)
+  timing: 2.58 ms off the 249.7 ms slot grid by the host clock, 0.009 ms by the radio's
+  signal: mean -28.5 dBm (min -34, max -22, n=1190) - ANT tracks to about -90
+
+channel events: RX_FAIL x4
+4 packet(s) missing, all of it reported by the radio as RX_FAIL, so it
+happened on the air.
+```
+
+Three of those lines exist because the graded checks above them turned out not
+to measure what their names claim. `jitter` is a stddev over the gaps between
+packets, and one lost packet turns a 250 ms gap into a 500 ms one: six losses
+in 1200 packets produce a 17 ms stddev on their own, so that check has always
+moved with the loss figure and added nothing to it. The `timing` line is the
+same packets with the slot count subtracted out — the error, without the count
+— which is why it reads 2.58 ms where the check above says 14.7. Measured on
+the radio's own 32 kHz clock rather than on Windows, it is 0.009 ms, under one
+tick. The link's timing was never the thing being measured.
+
+**Half of what this used to call the floor was the tool measuring itself.**
+The bench sat at "about 1 %" for a long time, and the number was wrong.
+`FrameReader` read from USB with a 250 ms timeout while an ANT+ power meter
+transmits every 249.7 ms, so essentially every read was racing the packet it
+was waiting for. libusb-win32 cancels the pending transfer when a read times
+out, and a cancel landing on top of the dongle's answer loses it — the host
+never sees the frame and the dongle, whose USB stack reported success, never
+knows. It cost about 0.4 percentage points of invented loss and several ms of
+invented jitter.
+
+It hid for so long because a fabricated loss looks exactly like a real one in
+every figure the report prints. The one thing that gave it away is that the
+radio raises an `RX_FAIL` for a packet lost on the air and says nothing at all
+about a packet lost after the radio already had it. Runs were losing about
+twice what the radio would admit to. That comparison is now a check of its own
+and fails on its own, so this cannot come back quietly.
+
+With the timeout raised clear of the channel period, the same two boards on the
+same desk measure **0.26, 0.43, 0.51 and 0.60 %** across 300 s runs, and every
+missing packet is one the radio reported. What is left really is the air:
+
+| Change | Loss |
+| --- | --- |
+| ANT+ frequency, 0 dBm | 0.74 / 0.94 / 1.37 % |
+| 2450 MHz | 2.40 % |
+| 2478 MHz | 1.81 % |
+| −12 dBm | 0.85 % |
+| +4 dBm | 1.11 % |
+
+Those were all recorded through the broken reader, so every one of them is
+inflated by roughly the same amount. They are kept because a common-mode error
+cancels in a comparison even when it ruins the absolute values, and the
+comparison is the point: no frequency was cleaner than the ANT+ one — the band
+is busy everywhere, and 2478 sits beside the BLE advertising channel at 2480 —
+and a 16 dB spread of transmit power stayed inside the run-to-run spread of
+0 dBm alone. Loss that survives 16 dB is not a link-budget problem. A 4 Hz ANT
+channel is a ~150 µs burst every 250 ms, and an occupied slot is occupied at
+any power.
+
+Clock drift is not it either — both ends run 50 ppm crystals, which is
+nanoseconds across a 250 ms period. Unplugging the co-channel ANT+ trainer that
+`tools/ant_scan.py` found on 2457 MHz moved the figure by about 0.1 points,
+which is inside the run-to-run spread: it was a real neighbour and not the
+explanation.
+
+**What is left has no pattern in it, and that is the finding.** Putting every
+packet from seven 300 s runs back on the transmitter's slot grid and looking at
+the holes:
+
+- **Every hole is one slot. Never two in a row**, across 57 of them. For
+  independent per-slot loss at the observed rate, the arithmetic predicts 17.8
+  isolated holes and 0.09 adjacent pairs in the post-fix runs; there were 18
+  and 0. Interference that lasted even two slots would not do that.
+- **They do not cluster in time.** Against 4000 random shuffles, pairs of holes
+  falling within 5, 15, 30 or 60 s of each other are no more common than
+  chance (p ≥ 0.08 everywhere). No episodes, no bad minutes.
+- **They have no preferred phase** against the 102.4 ms Wi-Fi beacon interval,
+  against one second, or against the sensor's own background-page rotation.
+- **They are not the link running out of signal.** With `ENABLE_RSSI` the
+  dongle reports about −28 dBm against a tracking threshold near −90: some
+  60 dB in hand. Within one run the signal wandered between −27 and −37 dBm as
+  the room changed, and the losses went the wrong way — five in the −27 dBm
+  stretch and none in the −36 dBm one. This is what the earlier transmit-power
+  sweep was groping at: you would have to throw away 60 dB before power became
+  the limit, and the knob only spans 16.
+- **Both ends can account for every one.** The receiver raised an `RX_FAIL`, so
+  it was awake, tuned and heard nothing valid in a slot it was listening to.
+  The transmitter's event counter advances by two across each hole, so the
+  sensor did produce and send a message for that slot. Neither end skipped it.
+
+That is a memoryless per-slot corruption process, which is the signature of
+unrelated traffic landing on top of a ~150 µs burst — and 2457 MHz, which ANT+
+mandates, sits inside Wi-Fi channel 11. About one slot in two hundred collects
+somebody else's packet. Getting nearer zero than this means a quieter room, not
+a better setting, and there is nothing in the dongle left to fix: the radio was
+listening with 60 dB to spare and the message never arrived intact.
+
+**Nor is there much ANT could do about it.** Frequency agility, where both ends
+hop between three frequencies under interference, is exactly the right feature
+and is not available here — ANT+ device profiles mandate 2457 MHz, so using it
+would mean the dongle no longer talks to real sensors. Continuous scanning mode
+would keep the receiver on permanently, but the `RX_FAIL`s already say the
+window was open at the right moment, so there is nothing for it to catch. ANT
+broadcast has no retransmission by design.
+
+**Which is fine, because the profile was built for exactly this.** A lost 0x10
+costs no data at all: accumulated power and the event counter are cumulative,
+so the next packet carries what the missing one would have said. That is what
+the `accumulator continuity` check is watching, and five minutes of this still
+decodes power to within 1.7 W of the target with zero violations. The right
+response to 0.4 % isolated single-slot loss on an ANT+ link is to decode it
+correctly, which this does.
+
+The last line of the report is the one to read when a run does lose packets.
+Losses the stack reported as `RX_FAIL` happened on the air and are the room's
+business; losses it never reported happened after the radio, on the host or in
+the dongle, and are somebody's bug. That is the difference between moving the
+boards apart and looking for the thing above.
+
+**Give it a few minutes.** A minute at ~4 Hz is only 240 packets, so one
+dropped packet is 0.4 % — the report prints that resolution next to the number
+for exactly this reason. `--seconds 300` also gets the 16-bit accumulators
+through a wrap, which a one-minute run does not.
+
+Three things are worth knowing before reading a result:
+
+- **A short run does not test the wraps.** The 16-bit accumulators are meant to
+  roll over, and a receiver that widens before subtracting is correct until
+  they do. `ant_verify.py` prints which ones wrapped during the run and says so
+  when none did. Ten minutes covers all of them; a minute covers none of the
+  slow ones.
+- **`--seed` is not optional in spirit.** The noise is pseudorandom, and a
+  measurement that cannot be replayed is not a measurement.
+- **Loss is measured twice, and the exact one is worth more.** The headline
+  figure divides by elapsed time over the nominal period, which assumes the
+  transmitter's crystal is exact and rounds. Where the transmitter steps its
+  update event counter once per message — sdk-ant's does, so `sim/` does too —
+  that counter is a serial number, and `loss (exact)` reports what is missing
+  from it with no clock involved. A real crank power meter steps it per
+  revolution and stops when the rider coasts, so the check reports nothing
+  rather than guessing.
+- **`--record FILE` saves what was heard.** Those captures replay through
+  `ant_verify.py --replay` with no hardware, and they are what
+  `zephyr_aerosense`'s ANT decoder tests are built from. Three of that
+  project's five test fixtures were recorded from this bench.
+- **Common pages come every 121 messages, not 65.** The generic ANT+
+  common-page guidance says 65 and this tool used to enforce it, which failed
+  the first certified transmitter it was ever pointed at. sdk-ant's own
+  bicycle power profile settles it: `COMMON_PAGE_80_INTERVAL 119`,
+  `COMMON_PAGE_81_INTERVAL 120`, commented *"Minimum: Interleave every 121
+  messages"*.
+
+Nothing here needs a board at all if you only want to check the host side.
+`tools/ant_pages.py` is pure encode/decode, and `ant_sim.py --dry-run` builds
+the same payload stream without a radio:
+
+```sh
+python -m unittest discover -s tools -p "test_*.py"
+
+python tools/ant_sim.py --dry-run --record run.antcap \
+  --profile power --profile csc --seconds 900 --seed 1
+python tools/ant_verify.py --replay run.antcap --expect-watts 100 --expect-rpm 80
+```
+
+Those tests are the only ones in `tools/` that run in CI, and they are there
+because a byte-order mistake found on the host costs nothing while the same
+mistake found on the bench costs two boards and a flash cycle.
+
+## Simulator firmware on an nRF54L15 DK
+
+`ant_sim.py` needs a host attached to the transmitting board. [`sim/`](../sim/)
+does not: it is a standalone application that makes a DK *be* an ANT+ sensor,
+untethered, from power-on.
+
+The nRF54L15 DK is the natural host for it, and for a reason that is otherwise
+an annoyance — it has no USB device controller in silicon, so it can never be a
+dongle. That keeps the nRF5340 DK free as the debug board while the nRF54L15
+sits on the bench transmitting.
+
+```powershell
+. .\scripts\env.ps1 -NcsVersion v3.2.4
+Push-Location C:\ncs\v3.2.4
+west -z C:\ncs\v3.2.4\zephyr build -s <repo>\sim -d <repo>\build\sim_l15 `
+     -b nrf54l15dk/nrf54l15/cpuapp --sysbuild -p always
+Pop-Location
+.\scripts\flash_sim_jlink.ps1
+```
+
+Then run the *same* `ant_verify.py` invocation against the dongle under test.
+The verifier is deliberately transmitter-agnostic, so an identical pass against
+`ant_sim.py` and against this firmware is the evidence that the two agree.
+
+`CONFIG_ANT_SIM_PROFILE_*` picks what it transmits — standard power page 0x10,
+crank torque 0x12, wheel torque 0x11, or the combined speed-and-cadence page —
+and `CONFIG_ANT_SIM_TARGET_WATTS` / `_TARGET_RPM` / `_NOISE` / `_SEED` set the
+signal. Buttons 1 and 2 nudge the target while it runs; the DK LEDs show
+channel state, which answers "did the channel even come up" without a serial
+cable.
+
+Three things about this build are worth knowing:
+
+- **The page encoding is sdk-ant's, not ours.** `ant_bpwr` and `ant_bsc`
+  already build every page correctly. What `sim/src/sim_signal.c` replaces is
+  the stock *simulator*, which sweeps a ramp from 0 to 2000 W — a receiver
+  cannot be shown to be right about a value that never settles.
+- **One profile per build.** sdk-ant's BPWR sensor sends page 0x11 or 0x12, not
+  both, so the interleaved-torque-page case stays an `ant_sim.py --profile
+  power-torque` scenario. That is the case that catches a receiver keeping one
+  accumulator baseline for two pages.
+- **`CONFIG_ANT_EVALUATION_KEY` is the ANT stack's licence key.** It is not the
+  ANT+ network key, which `ant_plus_key_set()` supplies at runtime. Confusing
+  the two produces a build that runs happily and is never heard.
+
+`CONFIG_ANT_SIM_RF_FREQ` and `CONFIG_ANT_SIM_TX_POWER` exist to measure the
+bench rather than to configure the sensor. At their defaults — 57, meaning
+2457 MHz, and level 3, meaning 0 dBm — this is a valid ANT+ device transmitting
+at the power a real power meter uses, which is the only setting that tests what
+a dongle will meet in the field. Moving either one answers the question "is
+this loss the room or the boards", and on the bench here the answer was the
+room in both directions: no frequency was cleaner than the ANT+ one and more
+power did not help. Those runs predate the reader fix above, so their absolute
+figures are all inflated together — which leaves the comparison between them
+intact and is the only thing they were for.
+`ant_verify.py --rf-freq` has to be given the same number,
+or the two sit on different channels and nothing is heard at all.
+
+`scripts/flash_sim_jlink.ps1` wraps the J-Link sequence, and its first line is
+load-bearing: `exec DisableAutoUpdateFW`. J-Link V9.66 carries newer onboard
+debugger firmware than these DKs ship with and tries to upgrade it on every
+connect. That upgrade fails at `Communication timeout. Emulator did not
+re-enumerate` every time and leaves the probe in its bootloader until it is
+physically replugged.
+
+## Reading logs without a debugger
+
+The Feather has no debugger, so `CONFIG_USE_SEGGER_RTT=y` logs are unreadable
+on it. `diag.conf` swaps RTT for a log backend that buffers to RAM and
+periodically commits to a reserved flash region. The Adafruit bootloader
+exposes that region inside `CURRENT.UF2`, so the log can be read back over the
+same USB drive used for flashing:
+
+```powershell
+west ... -d build\diagstub -- "-DEXTRA_CONF_FILE=stub.conf;diag.conf"
+.\scripts\flash_uf2.ps1 -Uf2Path build\diagstub\ant_dongle\zephyr\zephyr.uf2
+# let it run a few seconds, then double-tap RESET
+.\scripts\read_flash_log.ps1
+```
+
+It also overrides `k_sys_fatal_error_handler`, so an early fault is captured
+with its PC/LR rather than silently halting the CPU — from the outside a halt
+is indistinguishable from a hang, since it kills USB, the LED heartbeat and the
+periodic flush all at once.
+
+Two things pin down `CONFIG_ANT_DONGLE_FLASH_LOG_OFFSET`: it must sit above the
+image, and inside the window the bootloader actually dumps. Bootloader 0.8.0
+dumps `0x1000`–`0xEA000`, which stops short of the `0xEC000` end of the code
+partition — so a slot at `0xEB000` is written correctly and is simply invisible
+in the readback. A second copy is written at `0x40000` in case another
+bootloader version exposes a narrower window.
+
+## Debugging on an nRF5340 DK instead
+
+A fault inside `usb_enable()` is invisible on the Feather, and the flash log
+cannot capture what never got scheduled. An nRF5340 DK has an onboard J-Link
+*and* a separate "nRF USB" connector wired to the SoC's own device peripheral,
+so the same class code can be enumerated by a real host while its own account
+of events comes out the VCOM port. Both cables at once, no conflict. Two of the
+gotchas above were found this way in minutes after days of guessing from the
+outside.
+
+```powershell
+west -z C:\ncs\v3.2.4\zephyr build -s . -d build\dk5340 `
+  -b nrf5340dk/nrf5340/cpuapp -- "-DEXTRA_CONF_FILE=stub.conf"
+Copy-Item build\dk5340\merged.hex D:\     # the JLINK drive
+```
+
+Logs go to the VCOM COM port at 115200 (the *second* of the two the J-Link
+exposes), not RTT — RTT would need SEGGER's `JLinkARM` DLL installed, whereas
+the VCOM is just a COM port carried by the cable that already programs the
+board. [`boards/nrf5340dk_nrf5340_cpuapp.conf`](../boards/nrf5340dk_nrf5340_cpuapp.conf)
+sets that up along with `CONFIG_LOG_MODE_IMMEDIATE=y`, so the last line before
+a hang has already been emitted rather than sitting in a queue that is about to
+be discarded.
+
+Build the DK with `stub.conf`. sdk-ant on an nRF5340 is the dual-core `ANT_NP`
+path, which is not what the Feather runs; the DK is here for the USB half.
+
+An nRF54L15 DK cannot substitute: no chip in the nRF54L05/L10/L15 family has a
+USB device peripheral at all.
+
+When a build is worth bisecting, Zephyr's own
+`samples/subsys/usb/legacy/cdc_acm` is the reference: it enumerates on this
+board under NCS v3.2.4 as two COM ports, which separates "USB is broken on this
+board" from "our class is broken".

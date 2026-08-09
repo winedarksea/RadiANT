@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+
 """Turn a board running this firmware into a realistic ANT+ sensor.
 
 The dongle is a transparent bridge, so it has no profile logic of its own - but
@@ -609,7 +611,7 @@ def main() -> int:
 
     dev = open_device(verbose, serial=args.serial, port=args.port,
                       baud=args.baud)
-    reader = FrameReader(dev, timeout_ms=250)
+    reader = FrameReader(dev)
 
     print("\nOpening ANT+ master channels")
     # Same reason every other tool in here opens with a reset: a channel left

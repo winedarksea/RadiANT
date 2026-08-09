@@ -1,0 +1,348 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/ant_dongle/archive/benchmarks/baseline.schema.json",
+  "title": "RadiANT A/B baseline",
+  "description": "One bench sitting, one backend, one rig. Phase 4 records these against sdk-ant; Phase 5 onward records them against ant_core and tools/ant_ab.py diffs the two. Units are in the field names. See README.md in this directory before filling one in.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "meta", "rig"],
+  "properties": {
+    "schema_version": {
+      "description": "Bump only for a breaking change. A reader that does not recognise the value must refuse rather than guess.",
+      "type": "integer",
+      "const": 1
+    },
+    "meta": { "$ref": "#/$defs/meta" },
+    "rig": { "$ref": "#/$defs/rig" },
+    "radio_runs": {
+      "description": "tools/ant_verify.py results. The Tier 2 loss, timing, accumulator and acquisition gates all read from here.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/radio_run" }
+    },
+    "usb_runs": {
+      "description": "tools/ant_bench.py results. USB round-trip latency and throughput; the radio is not on this path, so equality with sdk-ant is the expectation rather than a stretch.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/usb_run" }
+    },
+    "conformance": { "$ref": "#/$defs/conformance" },
+    "sensitivity": { "$ref": "#/$defs/sensitivity" },
+    "scale": { "$ref": "#/$defs/scale" },
+    "ack_data": { "$ref": "#/$defs/ack_data" },
+    "notes": {
+      "description": "Anything the numbers do not say. Interference seen, a run discarded and why, a cable changed mid-sitting. Prose here is worth more than a rerun later.",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recorded", "backend", "git_describe", "board"],
+      "properties": {
+        "recorded": {
+          "description": "ISO 8601 date or date-time the sitting took place. Not the date the file was committed.",
+          "type": "string"
+        },
+        "operator": {
+          "description": "Who ran it. A bench result with no operator cannot be asked a follow-up question.",
+          "type": "string"
+        },
+        "backend": {
+          "description": "Which radio backend was under test. Must match CONFIG_ANT_DONGLE_RADIO_* in the built .config.",
+          "enum": ["sdk_ant", "core", "stub"]
+        },
+        "git_describe": {
+          "description": "Output of `git describe --always --dirty` for this repository at build time. A `-dirty` suffix is allowed and is itself information.",
+          "type": "string"
+        },
+        "board": {
+          "description": "Zephyr board target of the device under test, e.g. adafruit_feather_nrf52840/nrf52840/uf2.",
+          "type": "string"
+        },
+        "serial_suffix": {
+          "description": "The --serial suffix that selected this board. Two boards here enumerate as the same 0FCF:1009, so a result with no serial cannot be attributed.",
+          "type": "string"
+        },
+        "sdk_ant_revision": {
+          "description": "sdk-ant revision linked into the image, e.g. v2.1.0. Null for a core or stub build.",
+          "type": ["string", "null"]
+        },
+        "ncs_version": {
+          "description": "nRF Connect SDK version, e.g. v3.2.4.",
+          "type": "string"
+        },
+        "toolchain_bundle": {
+          "description": "NCS toolchain bundle id, e.g. dcbdc366a1. The bundles are not interchangeable.",
+          "type": "string"
+        },
+        "extra_conf": {
+          "description": "EXTRA_CONF_FILE fragments applied to the build, in order.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "rig": {
+      "description": "The physical arrangement. Two results are only comparable if their rigs are, which is why this is required and why A/B/A must run in one sitting.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transmitter", "receiver", "link"],
+      "properties": {
+        "transmitter": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "description": "sim_firmware is sim/ on the nRF54L15 DK running Garmin's certified profile code, and is the reference transmitter. real_sensor is a commercial ANT+ device. ant_sim_py is host-driven and is NOT acceptable as a baseline transmitter - see archive/captures/README.md.",
+              "enum": ["sim_firmware", "real_sensor", "ant_sim_py"]
+            },
+            "board": { "type": "string" },
+            "profile": { "type": "string" },
+            "seed": {
+              "description": "Noise seed. A measurement that cannot be replayed is not a measurement.",
+              "type": ["integer", "null"]
+            },
+            "tx_power_level": {
+              "description": "ANT radio TX power level 0-5, or null if not set explicitly.",
+              "type": ["integer", "null"],
+              "minimum": 0,
+              "maximum": 5
+            },
+            "description": { "type": "string" }
+          }
+        },
+        "receiver": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["board"],
+          "properties": {
+            "board": { "type": "string" },
+            "antenna": {
+              "description": "Chip, MIFA PCB, external whip. The Feather's ground plane is one of the reasons this project exists; record it.",
+              "type": "string"
+            }
+          }
+        },
+        "link": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "description": "inline_attenuator is preferred and repeatable. fixed_open_air is the fallback, and only comparable within one sitting.",
+              "enum": ["inline_attenuator", "fixed_open_air"]
+            },
+            "attenuator_model": { "type": ["string", "null"] },
+            "attenuation_db": {
+              "description": "Fixed attenuation for the non-sensitivity runs, if any.",
+              "type": ["number", "null"]
+            },
+            "distance_m": { "type": ["number", "null"] },
+            "rf_channel": {
+              "description": "ANT RF channel index; 57 is the ANT+ default (2457 MHz).",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 124
+            },
+            "interference": {
+              "description": "What else was on the band. The characterised ~0.4% loss floor is memoryless collision with Wi-Fi channel 11 over 2457 MHz, so 'Wi-Fi ch 11 present' is a load-bearing observation, not colour.",
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "radio_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "seconds", "verify", "derived"],
+      "properties": {
+        "profile": {
+          "description": "Profile name as tools/ant_pages.py PROFILES keys it: power, power-torque, power-torque-freq, csc.",
+          "type": "string"
+        },
+        "seconds": {
+          "description": "Run length. 300 is the gate length; shorter runs do not wrap the slow accumulators and their loss resolution is coarse.",
+          "type": "number",
+          "minimum": 1
+        },
+        "channels": {
+          "description": "How many channels were open. 1 unless this is the 32-channel scale run.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "verify": {
+          "description": "Verbatim `tools/ant_verify.py --json` output for this run, embedded whole. Do not hand-edit and do not trim: the fields nobody thinks to keep are the ones a future question needs.",
+          "type": "object"
+        },
+        "capture": {
+          "description": "Path, relative to the repository root, of the .antcap recorded alongside - normally under archive/captures/radio/. A run with a capture can be re-analysed after a decoder fix; one without cannot.",
+          "type": ["string", "null"]
+        },
+        "derived": {
+          "description": "The handful of numbers the gates in tools/ab_gates.toml read. All are also present inside `verify`; they are lifted out so a gate runner does not have to know that object's shape.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["loss_exact_pct", "unexplained_loss", "accumulator_violations"],
+          "properties": {
+            "loss_pct": {
+              "description": "The wall-clock loss figure. Recorded, but not the one to gate on.",
+              "type": ["number", "null"]
+            },
+            "loss_exact_pct": {
+              "description": "Loss counted from the transmitter's own event counter, with no clock involved. THIS is the gate. The bench floor is characterised at 0.26-0.60%.",
+              "type": "number",
+              "minimum": 0
+            },
+            "unexplained_loss": {
+              "description": "Holes with no RX_FAIL to account for them. Must be 0. This is the check that caught the reader bug; a nonzero value invalidates the whole sitting rather than failing one gate.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "accumulator_violations": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "timing_offgrid_host_ms": {
+              "description": "The `timing` line: intervals minus whole periods, on the host clock. Expect ~2.6 ms. NOT the `jitter` line, which is a stddev over raw gaps and turns one lost packet into 500 ms.",
+              "type": ["number", "null"]
+            },
+            "timing_offgrid_radio_ms": {
+              "description": "The same measured on the radio's clock via lib config 0xE0's RX timestamp. Expect ~0.009 ms. This is the number that shows the host clock is the instrument, not the link.",
+              "type": ["number", "null"]
+            },
+            "time_to_first_packet_s": { "type": ["number", "null"] },
+            "reacquire_s": {
+              "description": "Time to re-acquire after a deliberate dropout. Gate is <= sdk-ant x 1.5 and <= 5 s absolute.",
+              "type": ["number", "null"]
+            },
+            "rssi_dbm_mean": { "type": ["number", "null"] }
+          }
+        }
+      }
+    },
+    "usb_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "bench", "derived"],
+      "properties": {
+        "label": {
+          "description": "tools/ant_bench.py --label, e.g. legacy or usbd.",
+          "type": "string"
+        },
+        "bench": {
+          "description": "Verbatim `tools/ant_bench.py --json` output.",
+          "type": "object"
+        },
+        "derived": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["latency_p50_ms", "msgs_per_s"],
+          "properties": {
+            "latency_p50_ms": { "type": "number" },
+            "latency_p90_ms": { "type": ["number", "null"] },
+            "latency_p99_ms": { "type": ["number", "null"] },
+            "msgs_per_s": { "type": "number" },
+            "timeouts": { "type": ["integer", "null"] }
+          }
+        }
+      }
+    },
+    "conformance": {
+      "description": "Tier 1. The acceptance criterion is a byte diff of two .antser files, so what is recorded here is a path and a hash, not a score.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["antser_path", "sha256"],
+      "properties": {
+        "antser_path": {
+          "description": "Path relative to the repository root, normally under archive/captures/serial/.",
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "byte_identical_to": {
+          "description": "sha256 of the reference transcript this one was diffed against, or null when this IS the reference.",
+          "type": ["string", "null"]
+        },
+        "messages_exercised": { "type": ["integer", "null"] }
+      }
+    },
+    "sensitivity": {
+      "description": "The attenuated-link curve. This is the slot that must not be left empty: sensitivity is a stated core value of the project, it is the figure the EFR32 question turns on, and it cannot be recovered after sdk-ant access lapses.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "steps"],
+      "properties": {
+        "method": {
+          "description": "Same transmitter, same rig, receivers swapped. An open-air path is only comparable within one sitting.",
+          "enum": ["inline_attenuator", "fixed_open_air"]
+        },
+        "seconds_per_step": {
+          "type": "number",
+          "minimum": 1
+        },
+        "steps": {
+          "description": "One entry per attenuation setting or distance, monotonically increasing.",
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["loss_exact_pct"],
+            "properties": {
+              "attenuation_db": { "type": ["number", "null"] },
+              "distance_m": { "type": ["number", "null"] },
+              "loss_exact_pct": { "type": "number", "minimum": 0 },
+              "packets": { "type": ["integer", "null"] },
+              "rx_fail": { "type": ["integer", "null"] },
+              "rssi_dbm_mean": { "type": ["number", "null"] }
+            }
+          }
+        },
+        "loss5pct_attenuation_db": {
+          "description": "Interpolated attenuation at 5% exact loss. This single number is what the gate compares, to within 1 dB-equivalent on the same rig.",
+          "type": ["number", "null"]
+        },
+        "loss5pct_distance_m": { "type": ["number", "null"] }
+      }
+    },
+    "scale": {
+      "description": "The 32-channel run. An absolute gate, not a relative one: libant.a cannot reach 32 channels, so there is no sdk-ant baseline to compare against and none should be invented.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channels_tracked", "per_channel_loss_pct", "single_channel_loss_pct"],
+      "properties": {
+        "channels_tracked": { "type": "integer", "minimum": 1 },
+        "per_channel_loss_pct": {
+          "description": "Worst per-channel exact loss across the tracked set.",
+          "type": "number",
+          "minimum": 0
+        },
+        "single_channel_loss_pct": {
+          "description": "The same rig with one channel, for the +0.5 pp comparison.",
+          "type": "number",
+          "minimum": 0
+        },
+        "background_scan": {
+          "description": "Did a wildcard scan-mode channel hear every sensor ant_scan.py finds? Also absolute - libant.a advertises scan mode off and does not implement it.",
+          "type": ["boolean", "null"]
+        }
+      }
+    },
+    "ack_data": {
+      "description": "Acknowledged-data success, which is ERG mode: Zwift setting trainer resistance. Gate is >= 99% and >= sdk-ant - 1 pp.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempts", "successes"],
+      "properties": {
+        "attempts": { "type": "integer", "minimum": 1 },
+        "successes": { "type": "integer", "minimum": 0 },
+        "success_pct": { "type": ["number", "null"] },
+        "retries": { "type": ["integer", "null"] }
+      }
+    }
+  }
+}

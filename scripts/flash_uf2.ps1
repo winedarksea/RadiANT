@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 <#
 .SYNOPSIS
     Copy the built UF2 image onto the Feather's bootloader volume.

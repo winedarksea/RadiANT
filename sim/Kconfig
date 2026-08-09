@@ -133,6 +133,61 @@ config ANT_SIM_TRANS_TYPE
 	  the master path in zephyr_aerosense. The profile permits others; what
 	  matters is that everything here picks the same one.
 
+config ANT_SIM_RF_FREQ
+	int "RF frequency, MHz above 2400"
+	default 57
+	range 0 124
+	help
+	  57 is 2457 MHz, the ANT+ public network frequency, and is the only
+	  value at which this simulator is a valid ANT+ sensor. Leave it there
+	  for any test of what a dongle will do in the field.
+
+	  Change it only to answer one question: whether packet loss on the
+	  bench is the radio environment or the boards. 2457 MHz is inside
+	  Wi-Fi channel 11 and shared with every other ANT+ device in range,
+	  so a run there measures the room as much as the dongle. Repeating a
+	  run somewhere quiet - 2 or 78, either end of the band and clear of
+	  Wi-Fi 1, 6 and 11 - separates the two. Loss that vanishes was the
+	  room; loss that follows is worth chasing.
+
+	  tools/ant_verify.py --rf-freq has to be given the same number, or
+	  the two are not on the same channel and nothing is heard at all.
+
+config ANT_SIM_TX_POWER
+	int "Transmit power level"
+	default 3
+	range 0 5
+	help
+	  sdk-ant's levels: 0 is -20 dBm, 1 is -12, 2 is -4, 3 is 0 dBm and
+	  the ANT default, 4 is +4 dBm. Level 5 (+8 dBm) exists only on the
+	  nRF52820, nRF52833 and nRF52840 and is refused elsewhere.
+
+	  Changing this does not measurably change packet loss, which was
+	  worth finding out rather than assuming. Across 300 s runs at -12, 0
+	  and +4 dBm - a 16 dB spread - loss stayed between 0.85 and 1.37 %,
+	  which is the run-to-run spread of the 0 dBm setting on its own. Loss
+	  that survives 16 dB is not a link-budget problem: it is other
+	  traffic landing on top of a 150 us slot, and a slot that is occupied
+	  is occupied at any power.
+
+	  Those figures were taken before a host-side USB read timeout was
+	  found to be inventing about 0.4 points of loss on every run, so they
+	  are all too high by roughly the same amount - see the README. The
+	  error is common to all three, so the comparison they were made for
+	  survives it. The real floor on that bench is nearer 0.4 %.
+
+	  There is now a number behind the reasoning rather than an argument.
+	  ant_verify.py asks for RSSI and reports it: the two boards on a desk
+	  sit near -28 dBm against a tracking threshold around -90, so there
+	  is some 60 dB of margin and this knob spans 16. Loss measured within
+	  one run went the wrong way against signal strength as the room
+	  changed - more of it in the strongest stretch, none in the weakest -
+	  which is not what running out of signal looks like.
+
+	  So this is here to rule that out, not to tune it. A real power meter
+	  runs at 0 dBm and a dongle has to work with one, which is what level
+	  3 leaves you testing.
+
 endmenu
 
 menu "Product information"

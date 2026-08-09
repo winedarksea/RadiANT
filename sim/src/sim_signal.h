@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
 /*
  * Signal generation for the ANT+ sensor simulator.
  *

@@ -1,0 +1,127 @@
+name: Link check
+
+# Weekly, and on demand. Deliberately NOT on push or pull_request.
+#
+# The failure this catches is not a mistake somebody made in a commit - it is
+# somebody else's web server changing under a URL that was correct when it was
+# written. That happens on the internet's schedule, not ours, and archive/ is
+# full of pointers to an organisation that shut its programme down on
+# 30 June 2025. Running per-push would fail pull requests for reasons their
+# authors did not cause and cannot fix, which is the fastest way to teach
+# everyone to ignore a red check.
+#
+# So it runs weekly and, when something has rotted, opens an issue. A failing
+# scheduled workflow on a quiet week is invisible; an issue is not.
+
+on:
+  schedule:
+    # Mondays, 06:17 UTC. Off the hour on purpose - GitHub's scheduler queues
+    # the top of every hour heavily and drops jobs it cannot start.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  links:
+    name: external URLs in archive/ and docs/
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # fail: false because a dead link must become an issue, not a red X
+      # nobody is subscribed to. The exit code is inspected below instead.
+      #
+      # --accept covers the codes that mean "the page is there and the server
+      # dislikes robots": SourceForge, GitHub and archive.org all answer 403 or
+      # 429 to an unattended checker often enough that treating those as rot
+      # would make this job cry wolf within a month. 200 and 206 are success;
+      # 301/302/307/308 are a move, which is worth following but not worth an
+      # issue, since the redirect still gets a reader to the content.
+      - name: Check links
+        id: lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: >-
+            --no-progress
+            --verbose
+            --max-retries 3
+            --timeout 30
+            --max-concurrency 4
+            --accept 200,206,301,302,307,308,403,429
+            --exclude-path build
+            --exclude-path dist
+            --
+            'archive/**/*.md'
+            'archive/**/*.txt'
+            'docs/**/*.md'
+            'README.md'
+          output: ./lychee/out.md
+          fail: false
+          jobSummary: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Reuse one issue rather than opening a new one every Monday. An
+      # unattended job that files a fresh issue weekly stops being read after
+      # the third one.
+      - name: Find an open link-rot issue
+        id: existing
+        if: steps.lychee.outputs.exit_code != 0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          number="$(gh issue list --state open --label link-rot \
+            --json number --jq '.[0].number // empty')"
+          echo "number=${number}" >> "${GITHUB_OUTPUT}"
+          echo "existing open link-rot issue: ${number:-none}"
+
+      - name: Open or update the link-rot issue
+        if: steps.lychee.outputs.exit_code != 0
+        uses: peter-evans/create-issue-from-file@v5
+        with:
+          title: "Link rot in archive/ or docs/"
+          content-filepath: ./lychee/out.md
+          issue-number: ${{ steps.existing.outputs.number }}
+          labels: |
+            link-rot
+            documentation
+
+      # The links job never fails. The issue is the output.
+      - name: Report
+        run: |
+          if [[ "${{ steps.lychee.outputs.exit_code }}" != "0" ]]; then
+            echo "Dead links found; issue opened or updated." >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "All links resolved." >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+  budget:
+    name: archive/ stays under 10 MB
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # git stores every version of every binary forever, so a clone costs the
+      # sum of everything the tree has ever been. The budget and the reasoning
+      # are in docs/preservation.md; this step is what stops it drifting.
+      # Anything larger belongs in a GitHub release asset, which is not in the
+      # object database and is not cloned.
+      - name: Measure
+        run: |
+          set -euo pipefail
+          limit=10485760
+          bytes="$(du -sb archive | cut -f1)"
+          echo "archive/ is ${bytes} B, limit ${limit} B"
+          {
+            echo "### \`archive/\` budget"
+            echo
+            echo "\`${bytes}\` of \`${limit}\` bytes used."
+          } >> "${GITHUB_STEP_SUMMARY}"
+          if [[ "${bytes}" -gt "${limit}" ]]; then
+            echo "::error::archive/ is over the 10 MB budget in docs/preservation.md. Move the largest item to a GitHub release asset and reference it by SHA-256."
+            exit 1
+          fi

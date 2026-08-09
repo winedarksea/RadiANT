@@ -1,13 +1,18 @@
-# ANT+ USB Dongle
+# ANT+ Compatible USB Dongle
 
-Turns an **Adafruit Feather nRF52840 Express** (and other Nordic boards) into an ANT+ USB stick. Copy one
-file onto the board and Zwift, TrainerRoad, Garmin Express, openant — anything
-that looks for an ANT stick — will find it. No soldering, no wiring.
+Turns an **Adafruit Feather nRF52840 Express** (and other Nordic boards) into an
+ANT+ compatible USB stick. Copy one file onto the board and Zwift, TrainerRoad,
+Garmin Express, openant — anything that looks for an ANT stick — will find it.
+No soldering, no wiring.
 
 The firmware enumerates as `VID 0x0FCF / PID 0x1009`, the identity of a
-Dynastream ANT USB-m, and speaks the standard ANT serial protocol over a bulk
+Dynastream ANT USB-m, and speaks the ANT serial protocol over a bulk
 vendor interface. Eight channels, acknowledged data and burst all work, so a
 fitness app can run heart rate, power, cadence and trainer control at once.
+
+This is an independent implementation. It is ANT+ *compatible*, not ANT+
+certified, and is not licensed by, endorsed by or affiliated with Garmin or
+Dynastream. See [Licensing and identity](#licensing-and-identity).
 
 > **Windows users:** this needs the same libusb-win32 driver a retail ANT stick
 > needs, and Windows will not offer it on its own. Read
@@ -16,7 +21,7 @@ fitness app can run heart rate, power, cadence and trainer control at once.
 ### Why?
 Before this project, the 'latest' ANT+ dongles on the market are from 2012. They use old, weak nRF24AP2 (circa 2010) or the nRF51422 (circa 2012) chips. Switching to the NRF52840 (which is widely available and cheap) can lead to a 10 db improvement in sensitivity. That 10 dB improvement in sensitivity means the new nRF52840 chip can pick up a signal that is *ten times weaker* than what the old 2012 chips could detect. Big difference. While ANT+ is mostly your computer listening, in ERG mode there is a transmit element, and the the +8 dBm signal strength vs the older chips means more range (more than double) and reliability there too.
 
-This uses Zephyr as the base. Zephyr provides a modern, Linux Foundation-backed RTOS. That is heavily vetted, actively maintained USB stacks, superior power management, advanced radio libraries, and true concurrency. Combined with the newer chips that have EasyDMA direct memory access and built-in USB peripherals, this can lead to a 90% reduction in latency and packet loss.
+This uses Zephyr as the base. Zephyr provides a modern, Linux Foundation-backed RTOS. That is heavily vetted, actively maintained USB stacks, superior power management, advanced radio libraries, and true concurrency. Combined with the newer chips that have EasyDMA direct memory access and built-in USB peripherals, this can lead to up to a 90% reduction in latency and packet loss.
 
 In addition to these features, the tiny old ANT+ USB dongles have terrible antennas, sacrificing ground plane and antenna quality for tiny size. That's not a worthwhile tradeoff for most fixed indoor ride setups. Even a switch to the not-that-much-bigger official NRF52840 USB dongle can yield a major boost in antenna quality with its MIFA PCB Antenna.
 
@@ -44,7 +49,7 @@ those the board never appears at all.
 2. **Double-tap the RESET button.** A USB drive named `FTHR840BOOT` appears.
 3. Drag `ant_dongle.uf2` onto that drive.
 
-The drive ejects itself and the board reboots as an ANT+ dongle. That's the
+The drive ejects itself and the board reboots as an ANT+ compatible dongle. That's the
 whole install — the firmware lives on the board, and there is nothing to
 configure.
 
@@ -55,7 +60,7 @@ Grab `ant_dongle.uf2` from the
 
 | Platform | What you need to do |
 |---|---|
-| **Windows** | Install a libusb-win32 driver — see [Windows drivers](#windows-drivers). Same requirement as a genuine ANT stick. |
+| **Windows** | Install a libusb-win32 driver — see [Windows drivers](#windows-drivers). Same requirement as a retail ANT stick. |
 | **macOS** | Nothing. It is a vendor-class device, so libusb claims it directly. |
 | **Linux** | Install the udev rule so you don't need root: `sudo cp host/linux/99-ant-usb.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger`, then replug. |
 | **Android** | Needs USB host/OTG. Apps should include [`host/android/device_filter.xml`](host/android/device_filter.xml) so the dongle is recognised on attach. |
@@ -71,7 +76,7 @@ Expected output: `PASS: reset -> startup -> capabilities -> version`.
 
 Then open your app of choice and pair a sensor as you would with any ANT+
 stick. To confirm the radio itself is hearing sensors, see
-[Testing the radio](#testing-the-radio).
+[Testing the radio](docs/testing.md).
 
 ### Other boards
 
@@ -114,7 +119,7 @@ nRF52840 board needs a partition map of its own — see
 A retail ANT+ stick does not work on Windows out of the box either, and this
 one is deliberately no different. The release build ships **no MS OS
 descriptors**, so Windows does not bind `winusb.sys` and the device arrives
-with no driver, showing problem code 28 — exactly like a genuine stick.
+with no driver, showing problem code 28 — exactly like a retail stick.
 
 Bind libusb-win32 by whichever route suits you:
 
@@ -227,117 +232,39 @@ pre-2015-07-29 grandfather window for driver signing, so `pnputil` accepts it.
 
 ### Layout
 
+One row per top-level directory and per file worth knowing about. The tools in
+`tools/` get a table of their own in [Testing](docs/testing.md); the per-board
+files in `boards/` are one `.conf` and one `.overlay` each.
+
 | Path | Purpose |
 |---|---|
-| `src/main.c` | Init ordering: `ant_init()` before the transport comes up, so ANT/MPSL owns HFXO startup |
-| `src/ant_transport.h` | The three-function contract the bridge talks to. One of the three files below implements it |
-| `src/usb_ant_class.c` | Bulk vendor USB class on the **legacy** stack, plus the optional MS OS 1.0/2.0 descriptors. The proven one |
-| `src/usb_ant_class_next.c` | The same class on the **new** USBD/UDC stack. Required on nRF54; see [Transports](#transports) |
-| `src/ant_uart_transport.c` | ANT serial over a plain UART, for parts with no USB peripheral |
-| `src/ant_serial_bridge.c` | ANT serial protocol (`0xA4` framing) ↔ sdk-ant API |
-| `src/ant_stub.c` | No-op radio, compiled only when `CONFIG_ANT_DONGLE_RADIO_STUB=y` |
-| `src/diag_flash_log.c` | Log backend that commits to flash, readable back over UF2 |
-| `pm_static_*.yml`, `sysbuild.cmake` | Pin the application where each board's bootloader expects it — `0x26000` on the Feather, `0x1000` on the dongle. See the gotchas |
+| `src/` | The dongle firmware — the bridge, the transports, the USB class |
+| `ant_core/` | The clean-room ANT link layer, and its `tests/` running under ztest in CI. Empty until Phase 5; the backend contract `include/ant_radio_hal.h` lands first |
+| `protocol/` | `ant_wire.yaml`, the single source of truth for protocol constants. `scripts/gen_ant_wire.py` generates `src/ant_wire.h`, `tools/ant_wire.py` and a marked region of the protocol doc from it |
+| `tools/` | Host-side Python: probe, scan, session, bench, features, sim, verify, and the `test_*.py` that run in CI |
+| `sim/` | Standalone ANT+ sensor firmware for the nRF54L15 DK. Not a dongle build — it is the reference transmitter every bench measurement is made against |
 | `boards/` | Per-board `.conf`/`.overlay`: output format, code partition, and prising the console off the USB device we need |
-| `scripts/build_all.ps1` | Builds every target, asserts link address and transport, fills `dist/` |
-| `scripts/` | Windows helpers: environment, flashing, DFU packaging, USB cache reset |
-| `tools/ant_probe.py` | Protocol smoke test. `--port COM8` talks to a UART build instead of USB; every tool below accepts it too |
-| `tools/ant_scan.py` | Wildcard ANT+ channel; reports the sensors it hears |
-| `tools/ant_session.py` | The eight-channel session a fitness app runs, including ack and burst |
-| `tools/ant_bench.py` | Round-trip latency and throughput, for comparing one USB stack against the other |
-| `tools/ant_features.py` | The optional features: advertised bits vs bridged messages, and every set/get round trip |
-| `tools/ant_pages.py` | ANT+ page encode/decode, pure functions. No hardware, host-testable, shared by the two tools below |
-| `tools/ant_sim.py` | Drives a spare board as an ANT+ sensor, so the radio can be tested without owning one |
-| `tools/ant_verify.py` | Measures a sensor: loss, jitter, decoded accuracy, accumulator continuity. `--replay` needs no board |
-| `tools/test_*.py` | The only tests in here that run in CI — everything else needs a board |
-| `sim/` | Standalone ANT+ sensor firmware for the nRF54L15 DK. Not a dongle build; see [Simulator firmware](#simulator-firmware-on-an-nrf54l15-dk) |
+| `scripts/` | Windows helpers: environment, flashing, DFU packaging, USB cache reset, and `build_all.ps1` |
 | `host/` | Linux udev rule, Android device filter |
-
-### Transports
-
-The bridge does not know what carries its bytes. It needs a byte sink, a byte
-source, and a way to signal that it has drained its input —
-[ant_transport.h](src/ant_transport.h) — and exactly one of three
-implementations is compiled in, chosen by `CONFIG_ANT_DONGLE_TRANSPORT_*`.
-
-| Transport | Where it applies | Status |
-|---|---|---|
-| `USB_LEGACY` | nRF52/nRF53 — anything with a Nordic USBD peripheral | The shipping build. Verified against Zwift |
-| `USB_NEXT` | Same, plus every nRF54 part that has USB at all | Verified on a Feather against a real host; DWC2 itself untested |
-| `UART` | Parts with no USB device peripheral, e.g. nRF54L15 | Builds and links; not yet run on hardware |
-
-The default follows the devicetree rather than the board name: a
-`nordic,nrf-usbd` node selects the legacy stack, an `snps,dwc2` node selects the
-new one, and neither means the part has no USB device peripheral and the ANT
-serial protocol goes out a UART instead. CI asserts the resulting choice per
-board, because a defaulted-from-hardware decision fails silently — a renamed
-node would just quietly build something else.
-
-**The new stack is not an upgrade, it is a requirement.** Every nRF54 part with
-USB carries a DesignWare DWC2 controller, and Zephyr's only DWC2 driver is
-[udc_dwc2.c](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/usb/udc/udc_dwc2.c),
-which belongs to the new stack. There is no `usb_dc_dwc2.c`. So on those parts
-the legacy stack is not older-but-available, it is absent.
-
-That is also why nRF52840 has not been moved over. The legacy build is the one
-with hours on it against Zwift, and the new stack buys nothing there — the same
-controller, the same descriptors, the same endpoints. What it buys is that
-`usb_ant_class_next.c` can be tested on hardware that exists, ahead of hardware
-that does not, and that the two can be measured against each other:
-
-```powershell
-west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
-  -d C:\Users\Colin\ant_dongle\build\feather_next `
-  -b adafruit_feather_nrf52840/nrf52840/uf2 -p always -- "-DEXTRA_CONF_FILE=next.conf"
-```
-
-That build enumerates as the same `0FCF:1009` with the same 16-character serial
-and passes `ant_probe.py` and `ant_scan.py` identically to the legacy one. One
-Kconfig warning is expected and harmless — `USB_NRFX_ATTACHED_EVENT_DELAY` lives
-inside `if USB_DEVICE_DRIVER` and so does not exist in a new-stack build;
-[next.conf](next.conf) explains why it needs no replacement.
-
-One respect in which the impersonation stops being exact: DWC2 is a high-speed
-controller, so an nRF54LM20A dongle enumerates at 480 Mbit/s with 512-byte bulk
-endpoints where a retail stick is full speed with 64. The frames are identical
-and libusb hides the packet size, but it is a visible difference.
-
-#### Which stack is faster
-
-[`tools/ant_bench.py`](tools/ant_bench.py) times `request capabilities` round
-trips — the cheapest message with a guaranteed reply and no side effects, so
-what it measures is the USB path and the bridge, not the radio. Four runs of
-500 requests each, same Feather, same host, same session:
-
-| | Legacy | New (USBD) |
-|---|---|---|
-| Latency mean | **0.381 ms** | 0.436 ms |
-| Latency p50 | **0.361 ms** | 0.417 ms |
-| Latency p90 | **0.449 ms** | 0.479 ms |
-| Latency p99 | 0.796 ms | **0.787 ms** |
-| Worst case seen | 2.137 ms | **1.274 ms** |
-| Throughput, depth 8 | **3334 msg/s** | 2423 msg/s |
-| Timeouts | 0 | 0 |
-| Flash | **115 960 B** | 125 720 B |
-| RAM | 42 880 B | **41 280 B** |
-
-Run-to-run spread was under 2% on the legacy build and under 6% on the new one,
-so the gaps in the central figures are real: the new stack is about 15% slower
-per round trip and about 27% lower in sustained throughput, and costs ~9.8 KB
-more flash while saving ~1.6 KB of RAM. Its only repeatable advantage is a
-tighter worst case; p99 is a tie.
-
-**None of this matters for the workload.** Eight ANT+ channels at 4 Hz is
-32 messages a second, and the slower of the two stacks does 2400 — a margin of
-75×. Both are latency-irrelevant against ANT's 250 ms message period. So the
-numbers are not an argument for switching, and not much of an argument against
-one either; they exist so the choice is not made on a guess.
-
-What would eventually force the move is that the legacy stack is deprecated —
-every build of it prints `Deprecated symbol USB_DEVICE_STACK is enabled` — and
-one Zephyr release will remove it. Until then, shipping images stay on the
-stack with hours on it against a real application, because being 27% faster at
-something with 75× headroom is worth less than being known-good.
+| `docs/` | Everything this file links to. Start at [`docs/README.md`](docs/README.md) |
+| `archive/` | Preserved artefacts, because they are perishable and the facts are what you need: driver provenance and our own `.inf`, spec pointers with hashes, the `ANT_DLL` export tables, golden wire captures, benchmark baselines, and the two bootloader `.uf2` readbacks in `archive/firmware/`. 10 MB budget, stated in [`docs/preservation.md`](docs/preservation.md) |
+| `dist/` | Build outputs. Gitignored — rebuild rather than trusting what is sitting there |
+| `.github/workflows/` | CI: the build matrix, the host tests, and the weekly link check |
+| `CMakeLists.txt` | Module wiring and the `ANT_RADIO` backend choice (`sdk_ant` \| `core` \| `stub`) |
+| `Kconfig` | `CONFIG_ANT_DONGLE_*` — transport choice, descriptors, optional features |
+| `prj.conf` | Base configuration. The USB work-queue stack sizes here are load-bearing; the header comment says why |
+| `next.conf`, `stub.conf`, `synth.conf`, `diag.conf`, `encryption.conf` | Extra conf fragments: new USB stack, no radio, synthesized 32.768 kHz clock, flash-backed logging, encryption writes. Each explains itself at the top of the file |
+| `sysbuild.cmake`, `pm_static_*.yml` | Pin the application where each board's bootloader expects it — `0x26000` on the Feather and Pro Micro, `0x1000` on the dongle. See [the gotchas](docs/gotchas.md) |
+| `sample.yaml` | Twister metadata |
+| `src/main.c` | Init ordering: `ant_init()` before the transport comes up, so ANT/MPSL owns HFXO startup |
+| `src/ant_transport.h` | The three-function contract the bridge talks to. One of the three transports below implements it |
+| `src/usb_ant_class.c` | Bulk vendor USB class on the **legacy** stack, plus the optional MS OS 1.0/2.0 descriptors. The proven one |
+| `src/usb_ant_class_next.c` | The same class on the **new** USBD/UDC stack. Required on nRF54; see [Transports](docs/backends.md#transports) |
+| `src/ant_uart_transport.c` | ANT serial over a plain UART, for parts with no USB peripheral |
+| `src/ant_serial_bridge.c` | ANT serial protocol (`0xA4` framing) ↔ the radio backend |
+| `src/ant_stub.c` | No-op radio, compiled only when the stub backend is selected |
+| `src/diag_flash_log.c` | Log backend that commits to flash, readable back over UF2 |
+| `src/ant_radio.h`, `src/ant_wire.h` | Our ~50-function radio contract and our protocol constants — the seam that lets the bridge speak to any backend. See [Backends](docs/backends.md) |
 
 ### Building from source
 
@@ -345,6 +272,12 @@ sdk-ant **v2.1.0** pairs with sdk-nrf **v3.2.4** — both its `west.yml` and
 `doc/compatibility.rst` say so, and that is the pairing to build releases with.
 Its prebuilt `libant.a` is compiled for that ABI, so mixing toolchains tends to
 produce silently wrong radio behaviour rather than a clean link failure.
+
+**Tell the build where sdk-ant is.** There is no hardcoded path: set
+`SDK_ANT_DIR` once in your shell profile and every build in the tree picks it
+up (including `sim/`), or clone sdk-ant as a **sibling of this repo** — the
+default is `../sdk-ant` — or pass `-DANT_MODULE_DIR=<path>` for a single build.
+Each must point at the directory holding `zephyr/module.yml`.
 
 If you installed NCS the usual way (nRF Connect extension or
 `nrfutil toolchain-manager install --ncs-version v3.2.4`) it is already a
@@ -377,574 +310,21 @@ it. Build with `-DANT_MODULE_DIR=C:/ant-ws/ant`. This is what CI does.
 to `SOC_SERIES_NRF52`. `CONFIG_ANT_LIB_DIR` comes out empty and the link goes
 looking for `lib/soft-float/libant.a` instead of `lib/nrf52/soft-float/libant.a`.
 
-#### nRF52840 Dongle build
-
-Same source, different board target, and a DFU package instead of a UF2:
-
-```powershell
-west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
-  -d C:\Users\Colin\ant_dongle\build\dongle `
-  -b nrf52840dongle/nrf52840 -p always
-
-.\scripts\package_dfu.ps1     # -> dist\ant_dongle_nrf52840dongle.zip
-```
-
-The package is unsigned, which is correct here: the dongle ships a
-signature-less bootloader, and that is why it takes firmware with no debugger
-and no cable. `package_dfu.ps1` refuses an image that does not start at
-`0x1000` — a Feather build starts at `0x26000` and would otherwise package
-happily into a zip that installs cleanly and then does nothing.
-
-[`boards/nrf52840dongle_nrf52840.conf`](boards/nrf52840dongle_nrf52840.conf)
-settles the two differences: no UF2 output, and `CONFIG_USE_DT_CODE_PARTITION`
-left *off* so the offset comes out `0x1000` rather than the `slot0_partition`
-the board's devicetree names for MCUboot, which we do not use.
-
-#### Pro Micro nRF52840 build
-
-The board's own `/uf2` variant already sets `CONFIG_BUILD_OUTPUT_UF2` and takes
-its offset from `nrf52840_partition_uf2_sdv6.dtsi`, the same `0x26000` layout
-the Feather uses — so it shares
-[`pm_static_nrf52840_uf2_sdv6.yml`](pm_static_nrf52840_uf2_sdv6.yml) and needs
-no map of its own. Build two images:
-
-```powershell
-west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
-  -d C:\Users\Colin\ant_dongle\build\promicro `
-  -b promicro_nrf52840/nrf52840/uf2 -p always
-
-west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
-  -d C:\Users\Colin\ant_dongle\build\promicro_synth `
-  -b promicro_nrf52840/nrf52840/uf2 -p always -- "-DEXTRA_CONF_FILE=synth.conf"
-```
-
-The default uses the 32.768 kHz crystal. `synth.conf` derives that clock from
-the 32 MHz crystal instead, for boards that do not have one — see the file for
-what it costs and why it is not the default.
-
-Two images rather than one because there is no way to detect this at build
-time and no good way to fail at run time: without the crystal the LFXO simply
-never starts, `ant_init()` never returns, and USB never comes up. The board
-looks dead. Shipping both makes that a one-file retry instead of a diagnosis.
-
-#### nRF54 builds
-
-Two nRF54 targets exist. Neither is a product yet — cheap nRF54 dongles are not
-on sale — but both build against the real `lib/nrf54l/libant.a`, which is
-shipped in sdk-ant and does apply here: `SOC_NRF54LM20A` and `SOC_NRF54L15`
-both select `SOC_SERIES_NRF54LX`, and that is what `ANT_LIB_DIR` keys on.
-
-```powershell
-west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
-  -d C:\Users\Colin\ant_dongle\build\l15 -b nrf54l15dk/nrf54l15/cpuapp -p always
-
-west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
-  -d C:\Users\Colin\ant_dongle\build\lm20 -b nrf54lm20dk/nrf54lm20a/cpuapp -p always
-```
-
-**nRF54L15 has no USB device peripheral at all.** This is not a DK leaving a
-connector unpopulated — there is no `usbd` node and no `usbhs` node in
-`nrf54l_05_10_15.dtsi`, because there is nothing on the die. The L05 and L10 are
-the same. So that target cannot be a dongle, and it is built with the UART
-transport instead: `uart30` is the DK's other VCOM, so the ANT byte stream and
-the log leave the board as two separate COM ports over the one debugger cable.
-Point the tools at it with `--port`:
-
-```powershell
-python tools\ant_probe.py --port COM8
-python tools\ant_scan.py  --port COM8 --seconds 30
-```
-
-That target is hardware-verified: reset returns the startup message,
-capabilities reports the same `080800b23200fd8d0f` the USB builds do, and a
-wildcard channel hears real ANT+ sensors. It proves the half the nRF52840
-boards cannot — that ANT, MPSL and the clock work on nRF54L silicon.
-
-**nRF54LM20A is the one nRF54L part that does have USB**, as `usbhs@5a000`,
-`compatible = "nordic,nrf-usbhs-nrf54l", "snps,dwc2"`, wired up by the DK as
-`zephyr_udc0`. That target is a real dongle build and uses the new USB stack
-because DWC2 leaves no alternative. Build-only so far — no hardware here.
-
-Flashing either DK needs SEGGER J-Link installed. Without it `nrfutil device
-list` still finds the board over its board-controller interface, and the
-`JLINK` mass-storage volume will accept a copied hex and then reject it with
-`FAIL.TXT: The currently active SWD interface does not support MSD drag and
-drop` — which reads like a broken image rather than a missing tool.
-
-#### nRF54L needs a real 32.768 kHz crystal
-
-On nRF52840, a board that omits the crystal can still be a dongle: build with
-[synth.conf](synth.conf) and the low-frequency clock is derived from the 32 MHz
-crystal the radio already requires. **That fallback does not work on nRF54L,
-and the way it fails is the problem.**
-
-Measured on an nRF54L15 DK against a live power meter, alternating builds in
-one sitting:
-
-| Build | Broadcasts heard in 30 s |
-|---|---|
-| XTAL | 14 |
-| SYNTH | **0** |
-| XTAL | 14 |
-
-Nothing reports a fault. `LFSYNT` is a real value in the nRF54L register map,
-the clock starts, `ant_init()` returns 0, and every channel command is
-acknowledged — the radio simply never receives anything. A dongle built this
-way looks perfectly healthy to a host and is deaf.
-
-The mechanism is not established, and on nRF52840 the same configuration works
-and stays supported. But because the failure is silent, `src/main.c` carries a
-`BUILD_ASSERT` that refuses the nRF54L + SYNTH combination outright rather than
-warning about it.
-
-The practical consequence is a purchasing criterion: **an nRF54 board without a
-32.768 kHz crystal cannot be made into an ANT dongle in software.** On nRF52840
-a missing crystal at least announces itself, because the board never enumerates
-at all. On nRF54L it would enumerate, pass `ant_probe.py`, and hear nothing.
-
-#### Stub build
-
-`stub.conf` compiles `src/ant_stub.c` in place of the radio and turns on the MS
-OS descriptors, so the USB half builds and enumerates against whatever NCS you
-have installed. Useful for working on the USB class, or for USB debugging on a
-board sdk-ant does not target:
-
-```powershell
-. .\scripts\env.ps1 -NcsVersion v3.4.0
-Push-Location C:\ncs\v3.4.0
-west -z C:\ncs\v3.4.0\zephyr build -s C:\Users\Colin\ant_dongle `
-  -d C:\Users\Colin\ant_dongle\build\stub `
-  -b adafruit_feather_nrf52840/nrf52840/uf2 -p always -- "-DEXTRA_CONF_FILE=stub.conf"
-Pop-Location
-```
-
-### Gotchas worth knowing
-
-These are the non-obvious constraints the code is shaped around. Each one cost
-real time to find, and several look like a generic "USB doesn't work" failure
-from the outside.
-
-- **`west build` needs its cwd inside the workspace.** It is an extension
-  command discovered through the workspace manifest, so `-s`/`-d`/`-z` pointing
-  elsewhere is not enough — `Push-Location` into the NCS topdir first.
-- **Quote `-D` arguments.** PowerShell splits `-DEXTRA_CONF_FILE=stub.conf` at
-  the dot and CMake receives two mangled arguments. Always
-  `"-DEXTRA_CONF_FILE=stub.conf"`.
-- **Don't use `west flash`.** The `uf2` runner fails with
-  `ValueError: uf2 doesn't support --dev-id option`. Use `scripts/flash_uf2.ps1`.
-- **PowerShell 5.1 reads `.ps1` as ANSI** unless the file has a BOM, so the
-  scripts here are deliberately ASCII-only. A stray em-dash is a parse error.
-- **Windows caches USB descriptor verdicts, permanently.** The result of its
-  first MS OS descriptor query is stored under
-  `HKLM\SYSTEM\CurrentControlSet\Control\usbflags\0fcf1009<bcdDevice>`, and per
-  Microsoft's documentation a failed first query is *never retried* — so one bad
-  build poisons the VID/PID and every later correct build looks equally broken.
-  Between iterations either bump `CONFIG_ANT_DONGLE_BCD_DEVICE` (no elevation
-  needed) or run `scripts/reset_usb_cache.ps1` from an elevated shell.
-- **Endpoint descriptors must say `AUTO_EP_IN`/`AUTO_EP_OUT`, not `0x81`/`0x01`.**
-  `usb_fix_descriptor()` pairs each endpoint descriptor with its
-  `usb_ep_cfg_data` entry by matching `bEndpointAddress` against `ep_addr`, and
-  only then rewrites both with the address it allocates. Writing the final
-  ANTUSB-2 addresses straight into the descriptor matches nothing, so
-  `usb_get_device_descriptor()` returns NULL and `usb_enable()` fails with -1
-  before anything reaches the bus. Allocation starts at endpoint 1 in each
-  direction, so `AUTO_EP_*` still yields 0x01 and 0x81.
-- **Partition Manager decides the link address, not `zephyr,code-partition`.**
-  sdk-ant is an NCS module, so sysbuild turns Partition Manager on, and left
-  alone it hands the whole 1 MB to `app` at `0x0`. `CONFIG_FLASH_LOAD_OFFSET`
-  stays at `0x26000` from the devicetree, and that is what the UF2 converter
-  stamps into the file — so the image is linked for `0x0`, written to
-  `0x26000`, and boots into whatever the vector table happens to point at. It
-  never enumerates and looks exactly like a USB fault.
-  [`pm_static_adafruit_feather_nrf52840.yml`](pm_static_adafruit_feather_nrf52840.yml)
-  restates the board's layout in the form PM reads; `sysbuild.cmake` selects it
-  by board. Check `build/<d>/partitions.yml` says `app: address: 0x26000`, or
-  that `zephyr.hex` opens with an extended-address record rather than
-  `:10000000`.
-- **Reserving a region Partition Manager already knows about moves your app
-  instead of protecting it.** Adding a new board means writing a static map, and
-  the obvious first draft reserves the regions the bootloader owns. But PM may
-  already define one of them — on the nRF52840 Dongle, `nrf5_mbr`
-  (`nrf/subsys/partition_manager/pm.yml.nrf5_mbr`), added whenever
-  `CONFIG_BOARD_HAS_NRF5_BOOTLOADER` is set and placed `{after: [start]}`. A
-  static entry covering the same bytes wins the address, PM slides its own copy
-  along to sit after it, and `app` gets pushed a page further than
-  `CONFIG_FLASH_LOAD_OFFSET` says. There is no warning; a static partition being
-  honoured is exactly what you asked for. `app` cannot be pinned against this,
-  since it is the one that absorbs whatever space the others leave. The fix is
-  to delete a partition, not add one. Check `build/<d>/partitions.yml` and
-  `.config` agree on the app address.
-- **The USB driver's work queue needs more than its 1 KB default.** The nrfx
-  driver dispatches `SET_CONFIGURATION` on its own work queue, and the
-  `ant_status_cb()` → `arm_rx()` → `usb_transfer()` chain runs there. At the
-  default it overflows the moment the host configures the device; the fatal
-  error halts everything at once, so the board goes dark on the bus, the LED
-  stops and nothing more is logged. See the stack sizes in `prj.conf`.
-- **`MESG_SYSTEM_RESET` resets the ANT stack, not the MCU.** Every host library
-  opens the device, resets it, then keeps using the same handle. Rebooting
-  makes that handle stale and the next transfer fails with a pipe error — at
-  the exact point every session begins.
-- **UF2 cannot chip-erase.** It only rewrites `0x26000`–`0xEC000`, so anything
-  outside that window survives a reflash.
-- **The frame checksum covers the `0xA4` SYNC byte, and a test suite cannot tell
-  you otherwise.** The parser seeded `running_xor = 0` instead of the SYNC byte
-  it had just consumed, so every checksum it computed was off by exactly `0xA4`
-  and every frame a real host sent was dropped without a word. Nothing else
-  looked wrong: the dongle enumerated, bound its driver, and Zwift listed it as
-  present - it simply never executed a single command, so it never replied,
-  Zwift timed out after five seconds and fell into its stop path, writing 70,000
-  identical `Stopping ANT search` lines and showing no ANT+ sensors at all. It
-  hid for as long as it did because `ant_probe.py` made the *same* mistake in
-  `frame()`. Firmware and tools agreed perfectly with each other and with
-  nothing else in the world, so the whole suite passed - probe, scan, all eight
-  channels, real sensors, ack and burst. Every green test was two wrong
-  implementations shaking hands. If you change the framing on one side, change
-  it on the other in the same commit, and check the result against an
-  implementation neither of you wrote: `ANT_DLL.dll` exports
-  `ANT_SetDebugLogDirectory`, and the `Device0.txt` it writes gives you Garmin's
-  own `Tx`/`Rx` bytes to XOR by hand.
-- **A host gives up on one unanswered message, and says nothing useful about
-  which.** Zwift calls `ANT_SetTransmitPower`, the device-wide `0x47`, while
-  setting a search up. The bridge implemented only the per-channel `0x60` and
-  answered `0x47` with `INVALID_MESSAGE`. That was masked by the checksum bug
-  above - the message never reached `dispatch()` to be rejected - but it would
-  have stalled the search on its own once framing was fixed. What the host
-  actually calls is discoverable without guessing: `ANT_DLL.dll` is loaded by
-  name, so the ANT functions Zwift resolves are plain strings in `ZwiftApp.exe`
-  (`ANT_SetTransmitPower`, `ANT_OpenRxScanMode`, `ANT_EnableLED`, ...).
-- **Capabilities are the stack's, coverage is the bridge's, and nothing checks
-  they agree.** `ant_capabilities_get()` reports what the ANT stack can do,
-  which is a superset of the serial messages `dispatch()` implements - the
-  advertisement is what tells a host the feature is safe to use. Two bits
-  already carry their weight: scan mode and LED are both reported off, which is
-  why Zwift never sends `0x5B`/`0x68` even though it has the calls. Anything
-  advertised *and* unimplemented is a trap of the kind above.
-
-### Optional features
-
-Past the messages a fitness app sends, ANT carries a set of optional features —
-the ones Dynastream's [nRF51 and ANTUSB-m tech
-bulletin](https://www.thisisant.com/developer/resources/tech-bulletin/new-nrf51-and-antusb-m-features)
-introduced. Which are worth bridging is decided by what a host can actually
-call, and that is answerable rather than arguable: on Windows every ANT
-application reaches the stick through `ANT_DLL.dll`, so its export table bounds
-what any of them can ask for, and the subset Zwift resolves is plain strings in
-`ZwiftApp.exe`.
-
-| Feature | Message | In `ANT_DLL` | In sdk-ant | Bridged |
-|---|---|---|---|---|
-| Advanced burst | `0x78` config, `0x72` data | `ANT_ConfigureAdvancedBurst` | yes | **yes** |
-| Selective data updates | `0x7A`, `0x7B` | `ANT_ConfigSelectiveDataUpdate` | yes | **yes** |
-| Event filter | `0x79` | `ANT_ConfigEventFilter` | yes | **yes** |
-| Fast channel initiation | ext assign `0x10` | `ANT_AssignChannelExt` | yes | **yes**, passed through |
-| Async transmission channel | ext assign `0x20` | `ANT_AssignChannelExt` | yes | **yes**, passed through |
-| Single channel encryption | `0x7D`–`0x7F` | **nothing** | yes | reads always; writes behind a Kconfig |
-| Event buffer | `0x74` | `ANT_ConfigEventBuffer` | **nothing** | no — and not advertised |
-| High duty search | `0x77` | `ANT_ConfigHighDutySearch` | **nothing** | no |
-| NVM user space | `ANT_NVM_*` | `ANT_ConfigUserNVM` | **nothing** | no |
-
-**Zwift calls none of them.** Of the ~40 ANT functions it resolves, not one is
-on this list, so nothing here is on the path that matters for the shipping use
-case. What decided the three that are implemented is that a host *could* reach
-them and the stack can do them — advanced burst in particular, because ANT-FS
-file transfers use it, and because `MESG_ADV_BURST_DATA_ID` was already accepted
-while the message that switches advanced burst on was not, which is a dongle
-that takes 24-byte packets and can never send one.
-
-Encryption is the case that needed a switch. `ant_crypto_channel_enable()` and
-friends exist in sdk-ant, so the three writes are perfectly implementable — and
-they are implemented, behind `CONFIG_ANT_DONGLE_ENCRYPTION`, off by default:
-
-```powershell
-west ... -- "-DEXTRA_CONF_FILE=encryption.conf"
-```
-
-Off, because `ANT_DLL.dll` exports no encryption call at all, so no host on this
-platform can send `0x7D`–`0x7F`. That makes the cost one-sided. The messages
-cannot help any application that exists, and what they *can* do is put a channel
-into AES-CTR mode, which changes what the radio does per message on the path a
-fitness app depends on — note that `ant_crypto_channel_enable()`'s own
-documentation requires advanced burst to be on first, so entering that mode
-changes the burst configuration too. A shipping image should not carry the
-ability to be put somewhere nothing asked for; a build that wants to experiment
-can have it for one flag and 1.6 KB of flash.
-
-The read side is unconditional. Those are getters and cannot change what the
-radio does. One thing they *can* do is mislead: they were misframed until
-`tools/ant_features.py` compared a reply against what had been written.
-
-**Compiling the writes in is not enough to make encryption work, and that is the
-real argument for the default.** sdk-ant's `CONFIG_ANT_ENCRYPTED_CHANNELS`
-defaults to `0`, so `ant_init()` passes `ucNumberOfEncryptedChannels = 0` to
-`ant_stack_config()` and — see the `#if CONFIG_ANT_ENCRYPTED_CHANNELS > 0` in
-`init/ant_init.c` — never registers the `fpRANDGet` and `fpECBEncrypt`
-callbacks at all. With the writes bridged and that left at zero, measured on the
-Feather: setting the crypto ID and the custom user data both succeed, and
-`MESG_SET_ENCRYPT_KEY` fails with `INVALID_PARAMETER_PROVIDED` (51), because the
-valid key index range is `[0, num encrypted channels - 1]` and that range is
-empty.
-
-So on-by-default would ship a feature that answers two of its messages and
-refuses the one that matters — the advertised-but-partial trap from the gotchas,
-moved one layer in. Raising `CONFIG_ANT_ENCRYPTED_CHANNELS` is what would make
-it real, and that is not a free switch either: encrypted channel state is
-allocated from the same `m_ant_stack_buffer` the eight ordinary channels live
-in (`ANT_ENABLE_GET_REQUIRED_SPACE`), and an encrypted channel is larger than a
-plain one. It relays out the memory of the stack a fitness app is using, to
-enable something no application on this platform can ask for.
-
-`ENCRYPTION_INFO_SET_RNG_SEED` is refused even with the writes compiled in.
-sdk-ant calls it "platform specific" and defines no size for it anywhere, and
-the stack does not take its randomness from the host in any case —
-`ant_stack_funcs_register()` hands it an `fpRANDGet` callback at init. Refusing
-beats handing the library a pointer of a length nobody documents.
-
-The last three cannot be done here at any price: sdk-ant's `ant_interface.h`
-exposes no API for event buffering, high duty search or user NVM. `ant_np.c`
-handles `0x77` only in the nRF5340 network-processor passthrough, and its
-implementation is commented out even there.
-
-**The capability bits are left alone.** High duty search and encryption are
-advertised in `ant_capabilities_get()`'s advanced options 3 byte and are not
-bridged, which is a mismatch — but clearing those bits would make this dongle
-report something a real ANT USB-m does not, and hosts do read those bytes to
-decide what they are talking to. Reporting an ANTUSB-m's capabilities and
-declining the message is closer to the device being impersonated than reporting
-capabilities no ANTUSB-m has ever reported. `tools/ant_features.py` knows which
-mismatches are deliberate and fails on any that are not:
-
-```sh
-python tools/ant_features.py
-```
-
-It walks every optional bit, probes the message behind it with an "off"
-configuration, and round-trips each set/get pair — which is the only check that
-catches a payload offset wrong by one, the failure the encryption and SDU
-replies had.
-
-### Testing the radio
-
-`ant_probe.py` only proves the dongle answers questions about itself. To
-exercise the radio, `tools/ant_scan.py` runs the sequence a fitness app opens
-with — ANT+ network key, wildcard slave channel, open, listen — and reports
-what it hears:
-
-```sh
-python tools/ant_scan.py --seconds 30
-```
-
-But one channel is not what a fitness app does. Zwift opens a channel per
-sensor it cares about and runs them simultaneously for the length of a ride, so
-anything that only ever gets exercised on channel 0 stays untested.
-`tools/ant_session.py` runs that session instead — all eight channels at their
-real profile message rates — and additionally checks the two host-to-sensor
-paths:
-
-```sh
-python tools/ant_session.py --seconds 30
-```
-
-- **Acknowledged data** is how Zwift sets trainer resistance. Sent at a paired
-  channel, `TRANSFER_TX_COMPLETED` means a real sensor acknowledged it.
-- **Burst** is probed at a closed channel on purpose. A dispatcher that does
-  not implement the message answers `INVALID_MESSAGE`; one that does gets
-  `CHANNEL_IN_WRONG_STATE` back from the stack. Both are errors, but only the
-  second proves it reached the radio — and nothing goes on the air, which
-  matters when the sensor in range is someone's trainer.
-
-Two lessons for anyone writing another tool, both of which first showed up as
-apparent firmware bugs: assigning a channel that a previous run left assigned
-is refused with `CHANNEL_IN_WRONG_STATE`, which is why every host opens with a
-system reset; and a close is asynchronous, so unassigning before
-`EVENT_CHANNEL_CLOSED` arrives is refused for the same reason.
-
-### Testing the radio without owning a sensor
-
-`ant_scan.py` and `ant_session.py` can only report what happens to be on the
-air. If you have a Nordic DK and no power meter, that is nothing at all, and
-the radio half of this firmware stays untested.
-
-It does not have to. The dongle is a transparent bridge, so it forwards
-`CHANNEL_TYPE_MASTER` to `ant_channel_assign` and `MESG_BROADCAST_DATA_ID` to
-`ant_broadcast_message_tx` like any other message — which means a board running
-**this firmware, unmodified**, will happily impersonate an ANT+ sensor if a
-host asks it to. `tools/ant_sim.py` is that host:
-
-```sh
-# board A: pretend to be a 100 W, 80 rpm power meter
-python tools/ant_sim.py --profile power --watts 100 --cadence 80 --seed 1 --serial <A>
-
-# board B: the dongle under test, listening and measuring
-python tools/ant_verify.py --expect-watts 100 --expect-rpm 80 --seconds 60 --serial <B>
-```
-
-**Two boards are needed.** One transmits and one receives; a board cannot hear
-itself. Disambiguate them with `--serial` over USB, or `--port COM8` for a UART
-build.
-
-`--profile` takes `power` (page 0x10), `power-torque` (pages 0x11 and 0x12),
-`power-torque-freq` (page 0x20) or `csc` (combined speed and cadence, device
-type 0x79), and repeats — each profile gets its own channel, so several
-sensors can be on the air at once from a single board.
-
-Pacing comes from `EVENT_TX`, not from a host timer. The stack raises that
-event when it has put a payload on the air, which is exactly when the next one
-should be loaded, so the script makes no assumption about how fast the host or
-the USB path is. There is a wall-clock fallback for the case where the event
-never arrives, and it prints loudly and fails the run — a silent fallback would
-hide the one failure worth knowing about.
-
-`ant_verify.py` is the measuring instrument, and it is deliberately told
-nothing about the transmitter: the packet count to expect comes from the
-channel period, the power to expect comes from the accumulators, and the page
-rotation to expect comes from the page numbers. It reports loss, jitter, mean
-absolute error against `--expect-watts`/`--expect-rpm`, accumulator continuity,
-common-page spacing, and whether the sensor is actually alive rather than
-repeating one good packet. `--json` gives machine-readable output in
-`ant_bench.py`'s style.
-
-Three things are worth knowing before reading a result:
-
-- **A short run does not test the wraps.** The 16-bit accumulators are meant to
-  roll over, and a receiver that widens before subtracting is correct until
-  they do. `ant_verify.py` prints which ones wrapped during the run and says so
-  when none did. Ten minutes covers all of them; a minute covers none of the
-  slow ones.
-- **`--seed` is not optional in spirit.** The noise is pseudorandom, and a
-  measurement that cannot be replayed is not a measurement.
-- **`--record FILE` saves what was heard.** Those captures replay through
-  `ant_verify.py --replay` with no hardware, and they are what
-  `zephyr_aerosense`'s ANT decoder tests are built from.
-
-Nothing here needs a board at all if you only want to check the host side.
-`tools/ant_pages.py` is pure encode/decode, and `ant_sim.py --dry-run` builds
-the same payload stream without a radio:
-
-```sh
-python -m unittest discover -s tools -p "test_*.py"
-
-python tools/ant_sim.py --dry-run --record run.antcap \
-  --profile power --profile csc --seconds 900 --seed 1
-python tools/ant_verify.py --replay run.antcap --expect-watts 100 --expect-rpm 80
-```
-
-Those tests are the only ones in `tools/` that run in CI, and they are there
-because a byte-order mistake found on the host costs nothing while the same
-mistake found on the bench costs two boards and a flash cycle.
-
-### Simulator firmware on an nRF54L15 DK
-
-`ant_sim.py` needs a host attached to the transmitting board. [`sim/`](sim/)
-does not: it is a standalone application that makes a DK *be* an ANT+ sensor,
-untethered, from power-on.
-
-The nRF54L15 DK is the natural host for it, and for a reason that is otherwise
-an annoyance — it has no USB device controller in silicon, so it can never be a
-dongle. That keeps the nRF5340 DK free as the debug board while the nRF54L15
-sits on the bench transmitting.
-
-```powershell
-. .\scripts\env.ps1 -NcsVersion v3.2.4
-Push-Location C:\ncs\v3.2.4
-west -z C:\ncs\v3.2.4\zephyr build -s <repo>\sim -d <repo>\build\sim_l15 `
-     -b nrf54l15dk/nrf54l15/cpuapp --sysbuild -p always
-Pop-Location
-.\scripts\flash_sim_jlink.ps1
-```
-
-Then run the *same* `ant_verify.py` invocation against the dongle under test.
-The verifier is deliberately transmitter-agnostic, so an identical pass against
-`ant_sim.py` and against this firmware is the evidence that the two agree.
-
-`CONFIG_ANT_SIM_PROFILE_*` picks what it transmits — standard power page 0x10,
-crank torque 0x12, wheel torque 0x11, or the combined speed-and-cadence page —
-and `CONFIG_ANT_SIM_TARGET_WATTS` / `_TARGET_RPM` / `_NOISE` / `_SEED` set the
-signal. Buttons 1 and 2 nudge the target while it runs; the DK LEDs show
-channel state, which answers "did the channel even come up" without a serial
-cable.
-
-Three things about this build are worth knowing:
-
-- **The page encoding is sdk-ant's, not ours.** `ant_bpwr` and `ant_bsc`
-  already build every page correctly. What `sim/src/sim_signal.c` replaces is
-  the stock *simulator*, which sweeps a ramp from 0 to 2000 W — a receiver
-  cannot be shown to be right about a value that never settles.
-- **One profile per build.** sdk-ant's BPWR sensor sends page 0x11 or 0x12, not
-  both, so the interleaved-torque-page case stays an `ant_sim.py --profile
-  power-torque` scenario. That is the case that catches a receiver keeping one
-  accumulator baseline for two pages.
-- **`CONFIG_ANT_EVALUATION_KEY` is the ANT stack's licence key.** It is not the
-  ANT+ network key, which `ant_plus_key_set()` supplies at runtime. Confusing
-  the two produces a build that runs happily and is never heard.
-
-`scripts/flash_sim_jlink.ps1` wraps the J-Link sequence, and its first line is
-load-bearing: `exec DisableAutoUpdateFW`. J-Link V9.66 carries newer onboard
-debugger firmware than these DKs ship with and tries to upgrade it on every
-connect. That upgrade fails at `Communication timeout. Emulator did not
-re-enumerate` every time and leaves the probe in its bootloader until it is
-physically replugged.
-
-### Reading logs without a debugger
-
-The Feather has no debugger, so `CONFIG_USE_SEGGER_RTT=y` logs are unreadable
-on it. `diag.conf` swaps RTT for a log backend that buffers to RAM and
-periodically commits to a reserved flash region. The Adafruit bootloader
-exposes that region inside `CURRENT.UF2`, so the log can be read back over the
-same USB drive used for flashing:
-
-```powershell
-west ... -d build\diagstub -- "-DEXTRA_CONF_FILE=stub.conf;diag.conf"
-.\scripts\flash_uf2.ps1 -Uf2Path build\diagstub\ant_dongle\zephyr\zephyr.uf2
-# let it run a few seconds, then double-tap RESET
-.\scripts\read_flash_log.ps1
-```
-
-It also overrides `k_sys_fatal_error_handler`, so an early fault is captured
-with its PC/LR rather than silently halting the CPU — from the outside a halt
-is indistinguishable from a hang, since it kills USB, the LED heartbeat and the
-periodic flush all at once.
-
-Two things pin down `CONFIG_ANT_DONGLE_FLASH_LOG_OFFSET`: it must sit above the
-image, and inside the window the bootloader actually dumps. Bootloader 0.8.0
-dumps `0x1000`–`0xEA000`, which stops short of the `0xEC000` end of the code
-partition — so a slot at `0xEB000` is written correctly and is simply invisible
-in the readback. A second copy is written at `0x40000` in case another
-bootloader version exposes a narrower window.
-
-### Debugging on an nRF5340 DK instead
-
-A fault inside `usb_enable()` is invisible on the Feather, and the flash log
-cannot capture what never got scheduled. An nRF5340 DK has an onboard J-Link
-*and* a separate "nRF USB" connector wired to the SoC's own device peripheral,
-so the same class code can be enumerated by a real host while its own account
-of events comes out the VCOM port. Both cables at once, no conflict. Two of the
-gotchas above were found this way in minutes after days of guessing from the
-outside.
-
-```powershell
-west -z C:\ncs\v3.2.4\zephyr build -s . -d build\dk5340 `
-  -b nrf5340dk/nrf5340/cpuapp -- "-DEXTRA_CONF_FILE=stub.conf"
-Copy-Item build\dk5340\merged.hex D:\     # the JLINK drive
-```
-
-Logs go to the VCOM COM port at 115200 (the *second* of the two the J-Link
-exposes), not RTT — RTT would need SEGGER's `JLinkARM` DLL installed, whereas
-the VCOM is just a COM port carried by the cable that already programs the
-board. [`boards/nrf5340dk_nrf5340_cpuapp.conf`](boards/nrf5340dk_nrf5340_cpuapp.conf)
-sets that up along with `CONFIG_LOG_MODE_IMMEDIATE=y`, so the last line before
-a hang has already been emitted rather than sitting in a queue that is about to
-be discarded.
-
-Build the DK with `stub.conf`. sdk-ant on an nRF5340 is the dual-core `ANT_NP`
-path, which is not what the Feather runs; the DK is here for the USB half.
-
-An nRF54L15 DK cannot substitute: no chip in the nRF54L05/L10/L15 family has a
-USB device peripheral at all.
-
-When a build is worth bisecting, Zephyr's own
-`samples/subsys/usb/legacy/cdc_acm` is the reference: it enumerates on this
-board under NCS v3.2.4 as two COM ports, which separates "USB is broken on this
-board" from "our class is broken".
+Every other target differs only in the board argument and an extra conf file.
+The commands, and the board-specific reasoning worth more than the commands,
+are in [Build targets](docs/backends.md#build-targets):
+
+| Target | Board argument | Extra conf |
+|---|---|---|
+| Feather, Pro Micro | `adafruit_feather_nrf52840/nrf52840/uf2`, `promicro_nrf52840/nrf52840/uf2` | — |
+| Pro Micro with no 32.768 kHz crystal | `promicro_nrf52840/nrf52840/uf2` | `synth.conf` |
+| nRF52840 Dongle (DFU package) | `nrf52840dongle/nrf52840` | then `scripts\package_dfu.ps1` |
+| New USB stack, on a Feather | `adafruit_feather_nrf52840/nrf52840/uf2` | `next.conf` |
+| nRF54L15 DK — UART transport, no USB in silicon | `nrf54l15dk/nrf54l15/cpuapp` | — |
+| nRF54LM20A DK | `nrf54lm20dk/nrf54lm20a/cpuapp` | — |
+| No radio, USB half only | any | `stub.conf` |
+| Flash-backed logging with no debugger | any | `diag.conf` |
+| Encryption writes compiled in | any | `encryption.conf` |
 
 ### Release checklist
 
@@ -978,8 +358,9 @@ artifact is older than the source it was built from.
 
 ### CI
 
-[`.github/workflows/build.yml`](.github/workflows/build.yml) builds a matrix of
-seven. The first four are attached to `v*` tag releases:
+[`.github/workflows/build.yml`](.github/workflows/build.yml) runs the host
+tests — `tools/test_*.py` on `ubuntu-24.04`, the only job that runs on a fork —
+and a build matrix of seven. The first four are attached to `v*` tag releases:
 
 | Artifact | Board |
 |---|---|
@@ -989,62 +370,81 @@ seven. The first four are attached to `v*` tag releases:
 | `ant_dongle_promicro_synth.uf2` | Pro Micro nRF52840, clock synthesized for boards without one |
 
 The other three are built to keep them compiling and are downloadable from the
-run, but are not released — none of them is an image to hand anyone:
-
-| Artifact | Board | Why |
-|---|---|---|
-| `ant_dongle_feather_usbd.uf2` | Adafruit Feather nRF52840 Express | The new USB stack on hardware that can be tested against a host |
-| `ant_dongle_nrf54l15dk.hex` | nRF54L15 DK | ANT on nRF54L silicon, over a UART — the part has no USB |
-| `ant_dongle_nrf54lm20dk.hex` | nRF54LM20A DK | The first nRF54 target that can be a dongle |
+run, but not released — none of them is an image to hand anyone:
+`ant_dongle_feather_usbd.uf2` (the new USB stack, on hardware that can be
+tested against a real host), `ant_dongle_nrf54l15dk.hex` (ANT on nRF54L
+silicon, over a UART — the part has no USB) and `ant_dongle_nrf54lm20dk.hex`
+(the first nRF54 target that can be a dongle).
 
 Each entry asserts two things before packaging. First, that
 `CONFIG_FLASH_LOAD_OFFSET` and Partition Manager's `app` address agree — that
 disagreement is silent at build time and produces an image that installs
-cleanly and then boots into nothing, which is not something to discover from a
-release artifact. Second, that the transport that got compiled is the one that
-entry expects, since the choice is defaulted from devicetree and a moved or
-renamed USB node would otherwise fall through to a different one and still
-build green.
+cleanly and then boots into nothing. Second, that the transport that got
+compiled is the one that entry expects, since the choice is defaulted from
+devicetree and a moved or renamed USB node would otherwise fall through to a
+different one and still build green.
 
 sdk-ant is private, so the build needs one repository **secret**:
 `SDK_ANT_CHECKOUT_TOKEN`, a classic PAT with `repo` scope from an account that
 has been granted access to `ant-nrfconnect/sdk-ant`. Without it the job reports
-a skip rather than failing red.
-
-The automatic `GITHUB_TOKEN` **cannot** be used for this. It is an installation
-token scoped to this repository alone and carries no access to any other repo,
-so an account's own access has to be delegated explicitly via a PAT. The
-alternatives — a GitHub App installation token, or a deploy key — both require
-admin rights on `ant-nrfconnect/sdk-ant`, which adopters don't have. A
-fine-grained PAT only works if that organisation has opted into them, so a
-classic PAT is the reliable choice. If the organisation enforces SAML SSO, the
-PAT also has to be authorised for it — otherwise the checkout fails as though
-the repository does not exist.
-
-To build against a fork of sdk-ant, set repository variable `SDK_ANT_REPO` to
-`owner/name`; it defaults to `ant-nrfconnect/sdk-ant`.
+a skip rather than failing red. The automatic `GITHUB_TOKEN` **cannot** be used
+— it is scoped to this repository alone, so an account's own access has to be
+delegated explicitly. A GitHub App token or a deploy key both need admin rights
+on `ant-nrfconnect/sdk-ant`, which adopters don't have, and a fine-grained PAT
+only works if that organisation has opted into them. If the organisation
+enforces SAML SSO the PAT must also be authorised for it, or the checkout fails
+as though the repository does not exist. To build against a fork, set
+repository variable `SDK_ANT_REPO`; it defaults to `ant-nrfconnect/sdk-ant`.
 
 No network-key secret is required — a dongle receives its ANT+ network key from
-the host over `MESG_NETWORK_KEY_ID`.
+the host over `MESG_NETWORK_KEY_ID`. The `build-core` job, once the clean-room
+backend lands, needs no secret at all, which is what finally makes this green
+on a fork.
+
+---
+
+## Documentation
+
+The reasoning, the measurements and the decisions live in [`docs/`](docs/).
+This file links; `docs/` owns; CI keeps this file under 450 lines so it stays
+that way.
+
+| Document | What it covers |
+|---|---|
+| [Gotchas](docs/gotchas.md) | The non-obvious constraints the code is shaped around. Read it before debugging anything |
+| [Testing](docs/testing.md) | Every tool, the four verification tiers, and how to read a bench result without measuring the instrument |
+| [Backends, transports and build targets](docs/backends.md) | The radio seam, the USB/UART transports, the per-board builds, the optional ANT features |
+| [sdk-ant contract](docs/sdk-ant-contract.md) | The ~50 functions the bridge calls — the specification the rebuild must satisfy |
+| [ANT serial protocol](docs/ant-serial-protocol.md) | Framing, the SYNC-in-checksum rule, the message tables, the capabilities reply decoded |
+| [ANT radio link](docs/ant-radio-link.md) | The clean-room on-air reference, every fact carrying its provenance |
+| [ANT+ profiles](docs/ant-plus-profiles.md) | Page layouts, accumulators, common pages, transmission rates |
+| [Profile registry](docs/profile-registry.md) | Device types and pages claimed, and how a third party claims one |
+| [RadiANT telemetry](docs/radiant-telemetry.md) | The generic telemetry envelope and its MQTT mapping |
+| [RadiANT security](docs/radiant-security.md) | Threat model, the three independent switches, and the honest limits |
+| [Preservation](docs/preservation.md) | What `archive/` holds, and why each item is or is not redistributable |
+| [Third-party dependencies](docs/third-party.md) | What this project uses that it does not own, and the licence position of each |
+| [Decisions](docs/decisions/) | The ADRs: release default, clean-room policy, naming and identity, licence, extension placement |
+
+The full index, and the four rules that keep those files from rotting, are in
+[`docs/README.md`](docs/README.md).
 
 ---
 
 ## Licensing and identity
 
-Two constraints to settle before distributing builds of this publicly:
+Two constraints to settle before distributing builds of this publicly, both
+recorded in [`docs/decisions/`](docs/decisions/):
 
 1. **`CONFIG_ANT_EVALUATION_KEY` is a non-commercial development key.**
    sdk-ant's `init/Kconfig` is explicit that a commercial licence is required
-   before shipping a product.
+   before shipping a product. Removing `libant.a` also removes the $0.08/unit
+   royalty that comes with it.
 2. **`VID 0x0FCF` belongs to Garmin/Dynastream.** Presenting their vendor ID to
-   third parties is a different question from using it privately.
+   third parties is a different question from using it privately — and the
+   impersonation is exactly why Windows driver matching works at all, so it is
+   an open risk rather than a solved one.
 
-`CONFIG_USB_DEVICE_SN` is not the serial a host sees, despite looking like it.
-Zephyr's `usb_update_sn_string_descriptor()` replaces it at runtime with the
-HWINFO device ID — the nRF52840's 8-byte FICR DEVICEID — so every dongle has
-always had a per-unit serial. What the literal controls is how much of it
-survives: Zephyr keeps the low `sizeof(SN)/2` bytes and then copies only
-`strlen(SN)` characters of the hex. At the old 7-character `"ANT0001"` that
-truncated a 16-character ID to `183A618`, and logged a length-mismatch warning
-on every boot. It is now a 16-character placeholder, which is the width that
-matches DEVICEID exactly.
+RadiANT is an open-source, clean-room implementation compatible with the
+published ANT+ specifications. It is not an ANT+ certified product, and is not
+licensed by, endorsed by or affiliated with Garmin or Dynastream. "ANT" and
+"ANT+" are trademarks of Garmin, used here only to describe compatibility.

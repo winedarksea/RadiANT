@@ -40,9 +40,350 @@ jobs:
       # in these tests opens a device.
       - run: pip install pyusb
 
+      # The pattern already covers what is coming: tools/test_ant_wire.py
+      # (golden frame vectors from Garmin's own Device0.txt) and
+      # tools/test_ant_golden.py (the .antser capture replays) match test_*.py,
+      # so both land in this job without touching this line. Those two are the
+      # third implementation that catches rule-level drift - the kind of bug a
+      # constant-for-constant cross-check would have passed straight through.
       - run: python -m unittest discover -s tools -p "test_*.py" -v
 
-  build:
+      # docs/profile-registry.md is a coordination point - the place third
+      # parties claim a device type by PR - and an unvalidated coordination
+      # point decays into a list of near-misses that all still pass CRC on the
+      # air. This catches a duplicate or out-of-range device type, overlapping
+      # page ranges, a gap in the RadiANT page partition, a dropped 0x20-0x2F
+      # security reservation, and a period that has drifted from
+      # tools/ant_pages.py. Standard library only and sub-second, so it lands
+      # in the job that already runs without a secret rather than earning one
+      # of its own.
+      - run: python scripts/check_profile_registry.py
+
+  # Every C unit test in this project runs here and nowhere else. native_sim
+  # does not build on the development machine - Windows, no host C compiler,
+  # no QEMU - so `west twister` cannot run locally at all and local C
+  # verification is compile-check only. That makes this job the entire
+  # verification path for ant_core, which is why it takes no secret: it has to
+  # run on forks and on every pull request, or a parallel core rewrite has no
+  # way to know whether it works.
+  ztest:
+    name: ztest (native_sim)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      # Checked out to app/ rather than to the workspace root for the same
+      # reason sdk-ant is below: `west init -l` needs the manifest repository
+      # to sit in a subdirectory of the topdir. Here the manifest repository is
+      # this one, since with no sdk-ant in the picture west.yml here is what
+      # selects Zephyr.
+      - name: Checkout application
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # native_sim is a 32-bit build and links against the host libc, so the
+      # multilib runtime is required even though nothing is cross-compiled.
+      # Staying 32-bit is deliberate: the firmware target is 32-bit ARM, and a
+      # 64-bit host build hides exactly the pointer-size and struct-layout
+      # assumptions these tests exist to catch.
+      - name: Install 32-bit host runtime
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib g++-multilib
+
+      # Same action, same shape as the gated build below - app-path is the
+      # manifest repository and sdk-version is left unset so the fetched Zephyr
+      # tree chooses. No sdk-ant checkout and no token: ant_core/tests is a
+      # standalone Zephyr application that never includes the dongle's
+      # CMakeLists.txt, so nothing on this path can reach an ANT header.
+      #
+      # The SDK version is not pinned here. app-path: app makes this
+      # repository's own west.yml the manifest, so the version is whatever that
+      # file's sdk-nrf revision imports - currently v3.4.0. That is
+      # deliberately *not* the same pin the gated build resolves (see the
+      # sdk-ant checkout below), and the two must stay decoupled: sdk-ant
+      # v2.1.0 cannot build on v3.4.0, while ant_core has no sdk-ant in it and
+      # should track the current SDK. Pinning both to one version would couple
+      # the clean-room half of the project to the licensing constraints of the
+      # proprietary half, which is the coupling this whole plan exists to
+      # remove.
+      - name: Set up Zephyr workspace and toolchain
+        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: app
+          toolchains: arm-zephyr-eabi
+
+      # The Zephyr SDK is already cached by action-zephyr-setup itself and the
+      # west clone is network-bound rather than disk-bound, so compilation is
+      # the only thing left worth caching. Zephyr picks ccache up from PATH on
+      # its own and the runner image ships it, so this needs no build flag.
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-ztest-${{ github.sha }}
+          restore-keys: |
+            ccache-ztest-
+
+      - name: Run twister
+        env:
+          # native_sim builds with the host compiler, not with a Zephyr SDK
+          # cross toolchain. The setup action exports ZEPHYR_SDK_INSTALL_DIR,
+          # which would otherwise make `zephyr` the default variant, so say
+          # what is meant rather than relying on the board override.
+          ZEPHYR_TOOLCHAIN_VARIANT: host
+        run: |
+          set -euxo pipefail
+          # `west twister` is not a west command in every SDK version, so
+          # resolve the script through the manifest rather than assuming it.
+          zephyr_base="$(west list -f '{abspath}' zephyr)"
+          # twister's own dependencies are not in every version's base
+          # requirements set; installing them is cheap and removes a failure
+          # mode that depends on which Zephyr the manifest happened to pull.
+          if [[ -f "${zephyr_base}/scripts/requirements-run-test.txt" ]]; then
+            pip install -r "${zephyr_base}/scripts/requirements-run-test.txt"
+          fi
+          # --inline-logs because a failure here is read by whoever opened the
+          # pull request, and twister otherwise leaves the actual assertion
+          # text in a file inside twister-out/ that nobody downloads.
+          "${zephyr_base}/scripts/twister" \
+            -T app/ant_core/tests \
+            -p native_sim \
+            --inline-logs \
+            -v
+
+  # src/ant_wire.h and tools/ant_wire.py are generated from
+  # protocol/ant_wire.yaml and committed, so that a clone builds without
+  # running the generator and the Python tools stay standalone-copyable.
+  # Committed generated files rot silently the first time someone edits the
+  # output instead of the input; --check regenerates and diffs, which is the
+  # only thing that makes "generated" true rather than aspirational.
+  generated-drift:
+    name: generated files up to date
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install pyyaml
+
+      - run: python scripts/gen_ant_wire.py --check
+
+  # Crude on purpose, and the crudeness is the feature. README.md reached 1168
+  # lines with its highest-value prose - the Gotchas - buried at line 521,
+  # because nothing but discipline was holding it back, and discipline is
+  # exactly what produced 1168 lines. A hard cap sends the next 200-line
+  # addition to docs/ by construction. The number is not sacred; raising it is
+  # then a deliberate, reviewable edit to this file rather than a drift nobody
+  # notices.
+  readme-cap:
+    name: README line cap
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check README.md is under the line cap
+        run: |
+          set -euo pipefail
+          lines="$(wc -l < README.md)"
+          echo "README.md: ${lines} lines (cap 450)"
+          test "${lines}" -lt 450
+
+  # The job that finally makes CI green on a fork: no secret of any kind, and
+  # no sdk-ant checkout. With -DANT_RADIO=core or =stub the module is never
+  # appended to ZEPHYR_EXTRA_MODULES, CONFIG_ANT never exists, and nothing in
+  # the tree includes an sdk-ant header - so there is nothing for a token to
+  # unlock.
+  #
+  # The ANT_RADIO cache variable and the CONFIG_ANT_DONGLE_RADIO_* choice this
+  # job asserts on are part of the CMake/Kconfig backend seam and are not in
+  # the tree yet. Until that lands this job is expected to fail at the
+  # top-level FATAL_ERROR in CMakeLists.txt, which is the seam not existing,
+  # not a fault in this workflow.
+  build-core:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+
+    # The same boards as the gated matrix below, because "the whole project
+    # builds with zero sdk-ant present" is a claim about all of them, not about
+    # a representative one. transport is asserted here for the same reason it
+    # is there: the choice is defaulted from devicetree, so a board whose USB
+    # node moved would silently compile a different transport and still build
+    # green. The link-address assertion deliberately stays on the gated job -
+    # it protects release artifacts, and those do not move here until the Tier
+    # 3 Zwift acceptance passes.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: "core: feather"
+            board: adafruit_feather_nrf52840/nrf52840/uf2
+            radio: core
+            transport: USB_LEGACY
+          - name: "core: nrf52840dongle"
+            board: nrf52840dongle/nrf52840
+            radio: core
+            transport: USB_LEGACY
+          - name: "core: promicro"
+            board: promicro_nrf52840/nrf52840/uf2
+            radio: core
+            transport: USB_LEGACY
+          - name: "core: promicro, synth clock"
+            board: promicro_nrf52840/nrf52840/uf2
+            radio: core
+            extra_conf: synth.conf
+            transport: USB_LEGACY
+          - name: "core: feather, new USB stack"
+            board: adafruit_feather_nrf52840/nrf52840/uf2
+            radio: core
+            extra_conf: next.conf
+            transport: USB_NEXT
+          - name: "core: nrf54l15dk"
+            board: nrf54l15dk/nrf54l15/cpuapp
+            radio: core
+            transport: UART
+          - name: "core: nrf54lm20dk"
+            board: nrf54lm20dk/nrf54lm20a/cpuapp
+            radio: core
+            transport: USB_NEXT
+          # The stub is the cheapest proof the backend seam holds - it builds
+          # in seconds and is the one configuration that exercises the seam
+          # without exercising any radio.
+          - name: "stub: feather"
+            board: adafruit_feather_nrf52840/nrf52840/uf2
+            radio: stub
+            transport: USB_LEGACY
+          # The build-independence proof. Pointing ANT_MODULE_DIR at a path
+          # that cannot exist means a successful build *proves* the tree is
+          # free of sdk-ant rather than asserting it: any surviving reference
+          # to an ANT header, module or library resolves through that
+          # directory and the build stops. An assertion in a comment decays;
+          # this one cannot.
+          - name: "stub: feather, no sdk-ant on disk"
+            board: adafruit_feather_nrf52840/nrf52840/uf2
+            radio: stub
+            module_dir: /nonexistent
+            transport: USB_LEGACY
+
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # As in the ztest job: app-path: app means this repository's west.yml is
+      # the manifest, so the SDK version is that file's sdk-nrf revision
+      # (currently v3.4.0) and nothing here pins it. This is a different
+      # version from the one the gated sdk-ant build resolves, on purpose - the
+      # backends this job builds contain no sdk-ant, so they are not held back
+      # by sdk-ant v2.1.0's inability to build on v3.4.0. If a core build ever
+      # fails in a way the gated build does not, check this difference first:
+      # it is the one axis on which the two jobs are not comparable.
+      - name: Set up Zephyr workspace and toolchain
+        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: app
+          toolchains: arm-zephyr-eabi
+
+      # Keyed on the matrix index rather than on the board, because four
+      # entries share the Feather and a shared key makes three of them warn
+      # that the cache is already reserved. Reordering the matrix rebinds an
+      # index to a different configuration, which is harmless: ccache is
+      # content-addressed, so a mismatched cache misses rather than lies.
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-core-${{ strategy.job-index }}-${{ github.sha }}
+          restore-keys: |
+            ccache-core-${{ strategy.job-index }}-
+
+      - name: Build
+        env:
+          BOARD: ${{ matrix.board }}
+          RADIO: ${{ matrix.radio }}
+          EXTRA_CONF: ${{ matrix.extra_conf }}
+          MODULE_DIR: ${{ matrix.module_dir }}
+        run: |
+          set -euxo pipefail
+          extra=()
+          if [[ -n "${EXTRA_CONF}" ]]; then
+            extra+=("-DEXTRA_CONF_FILE=${EXTRA_CONF}")
+          fi
+          # Left unset for the ordinary core and stub entries so the build
+          # exercises the default resolution path - no SDK_ANT_DIR in the
+          # environment, no sibling checkout - which is what a fresh clone on
+          # a fork actually sees.
+          if [[ -n "${MODULE_DIR}" ]]; then
+            extra+=("-DANT_MODULE_DIR=${MODULE_DIR}")
+          fi
+          west build app \
+            -b "${BOARD}" \
+            -d build \
+            -p always \
+            -- \
+            "-DANT_RADIO=${RADIO}" \
+            "${extra[@]}"
+
+      # ANT_RADIO is a CMake cache variable, so it is chosen before Kconfig
+      # runs and nothing in .config would otherwise record which backend was
+      # compiled. CMake writes the matching CONFIG_ANT_DONGLE_RADIO_* symbol
+      # precisely so this assertion is possible: without it a -DANT_RADIO
+      # typo falls back to a default and ships the wrong backend green.
+      - name: Verify backend
+        env:
+          RADIO: ${{ matrix.radio }}
+        run: |
+          set -euo pipefail
+          cfg="$(find build -name .config -path '*ant_dongle*' -print -quit)"
+          want="CONFIG_ANT_DONGLE_RADIO_${RADIO^^}=y"
+          echo "expecting ${want} in ${cfg}"
+          grep -q "^${want}\$" "${cfg}"
+
+      - name: Verify transport
+        env:
+          EXPECTED: ${{ matrix.transport }}
+        run: |
+          set -euo pipefail
+          cfg="$(find build -name .config -path '*ant_dongle*' -print -quit)"
+          got="$(grep -oP '^CONFIG_ANT_DONGLE_TRANSPORT_\K\w+(?==y)' "${cfg}")"
+          echo "transport: ${got}   expected: ${EXPECTED}"
+          test "${got}" = "${EXPECTED}"
+
+      # No artifact upload and no release attachment on purpose. Release
+      # images stay on build-sdk-ant until the Tier 3 Zwift acceptance passes
+      # for ant_core; moving them is a recorded decision in
+      # docs/decisions/0001, not something that happens by a job quietly
+      # gaining an upload step.
+
+  # The sdk-ant half of the split. Unchanged apart from its name: it is still
+  # gated on SDK_ANT_CHECKOUT_TOKEN and still skips cleanly rather than failing
+  # when the secret is absent, and it is still the only job that publishes
+  # release artifacts.
+  #
+  # It deliberately does not yet pass -DANT_RADIO=sdk_ant or assert
+  # CONFIG_ANT_DONGLE_RADIO_SDK_ANT=y. Those are part of the backend seam that
+  # does not exist yet, and this job is green today; adding the assertion
+  # belongs with the change that makes the symbol real.
+  build-sdk-ant:
     name: ${{ matrix.artifact }}
     runs-on: ubuntu-24.04
     defaults:
@@ -139,6 +480,17 @@ jobs:
       # sdk-ant's manifest declares `self: path: ant`, so the checkout must sit
       # at <topdir>/ant. Its west.yml imports sdk-nrf v3.2.4, which in turn
       # pulls Zephyr - so this one clone determines the whole SDK version set.
+      #
+      # v3.2.4 is a hard constraint of sdk-ant v2.1.0, not a stale pin, and it
+      # is why nothing in this job passes a version to the setup action: the
+      # pin has to come from sdk-ant's own manifest and stay there. sdk-ant
+      # v2.1.0's Kconfig defaults ANT_LIB_DIR from CONFIG_SOC_SERIES_NRF52X,
+      # and the Zephyr in v3.4.0 renamed that symbol to CONFIG_SOC_SERIES_NRF52
+      # - so on v3.4.0 CONFIG_ANT_LIB_DIR comes out empty, libant.a is never
+      # located, and the link fails with "missing and no known rule to make
+      # it". Moving this job to a newer SDK means patching sdk-ant, which is
+      # not ours to patch. The no-secret jobs above deliberately do not share
+      # this pin.
       - name: Checkout sdk-ant
         if: steps.ant-ready.outputs.enabled == 'true'
         uses: actions/checkout@v4
@@ -325,4 +677,8 @@ jobs:
             echo "variable \`SDK_ANT_REPO\` to \`owner/name\`."
             echo
             echo "No ANT network key secret is needed - a dongle receives its network key from the host."
+            echo
+            echo "Only these images are skipped. The \`build-core\` job builds the same"
+            echo "boards against the clean-room backend and the \`ztest\` job runs the C"
+            echo "unit tests, both without any secret, so a fork still gets real coverage."
           } >> "${GITHUB_STEP_SUMMARY}"

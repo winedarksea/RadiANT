@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+
 """Round-trip every ANT+ page encoder through its decoder, on the host.
 
 Everything else in tools/ needs a board, a driver and usually a second board,

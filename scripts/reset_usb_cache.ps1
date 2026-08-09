@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 <#
 .SYNOPSIS
     Clear Windows' cached USB descriptor verdicts for the ANT dongle.

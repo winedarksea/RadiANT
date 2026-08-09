@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
 /*
  * Persistent diagnostic log — see src/diag_flash_log.c.
  */

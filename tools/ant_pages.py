@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+
 """Encode and decode the ANT+ data pages this project cares about.
 
 Pure functions over 8-byte payloads: no USB, no serial port, no hardware. That
@@ -54,7 +56,12 @@ BSC_COMBINED_PERIOD = 0x1F96   # 8086, ~4.05 Hz
 PAGE_COMMON_MANUFACTURER = 0x50   # page 80
 PAGE_COMMON_PRODUCT = 0x51        # page 81
 PAGE_COMMON_BATTERY = 0x52        # page 82
-COMMON_PAGE_INTERVAL = 64         # data pages between common-page pairs
+# Data pages between common-page pairs. 120 rather than the 64 this used to
+# use, because 64 is not what a real sensor does: sdk-ant's certified bicycle
+# power profile interleaves page 80 at 119 and page 81 at 120, commented
+# "Minimum: Interleave every 121 messages". A simulator that sends them twice
+# as often as the profile requires is not simulating anything.
+COMMON_PAGE_INTERVAL = 120
 
 # Marker for "this field is not being reported". The profiles spell it 0xFF in
 # a byte and 0xFFFF in a word, and a receiver that treats it as a number reads

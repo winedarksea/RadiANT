@@ -1,0 +1,54 @@
+# The 44 of ANT_DLL.dll's 154 exports that ZwiftApp.exe resolves.
+# ANT_DLL.dll is loaded by name and its entry points looked up at
+# runtime, so the names the loader asks for sit in ZwiftApp.exe as
+# plain null-terminated ASCII. Found by whole-string match: the
+# preceding byte must not be an identifier character and the
+# following byte must be NUL, so ANT_AssignChannel does not match
+# inside ANT_AssignChannelExt.
+# Retrieved 2026-08-08. ZwiftApp.exe is not committed; see README.md.
+#
+# ordinal  name
+     45  ANT_AddChannelID
+     47  ANT_AssignChannel
+     48  ANT_AssignChannelEventFunction
+     49  ANT_AssignChannelExt
+     52  ANT_AssignResponseFunction
+     53  ANT_Close
+     54  ANT_CloseChannel
+     60  ANT_ConfigFrequencyAgility
+     64  ANT_ConfigList
+     74  ANT_CrystalEnable
+     76  ANT_EnableLED
+     78  ANT_GetDeviceUSBInfo
+     79  ANT_GetDeviceUSBPID
+     80  ANT_GetDeviceUSBVID
+     81  ANT_Init
+     82  ANT_InitCWTestMode
+     84  ANT_LibConfigCustom
+     85  ANT_LibVersion
+     98  ANT_Nap
+     99  ANT_OpenChannel
+    101  ANT_OpenRxScanMode
+    105  ANT_RequestMessage
+    106  ANT_ResetSystem
+    107  ANT_RxExtMesgsEnable
+    109  ANT_SendAcknowledgedData
+    111  ANT_SendBroadcastData
+    112  ANT_SendBurstTransfer
+    114  ANT_SendExtAcknowledgedData
+    116  ANT_SendExtBroadcastData
+    117  ANT_SendExtBurstTransfer
+    118  ANT_SendExtBurstTransferPacket
+    120  ANT_SetCWTestMode
+    122  ANT_SetChannelId
+    124  ANT_SetChannelPeriod
+    126  ANT_SetChannelRFFreq
+    128  ANT_SetChannelSearchTimeout
+    130  ANT_SetChannelTxPower
+    133  ANT_SetLowPriorityChannelSearchTimeout
+    135  ANT_SetNetworkKey
+    137  ANT_SetProximitySearch
+    141  ANT_SetSerialNumChannelId
+    143  ANT_SetTransmitPower
+    145  ANT_SleepMessage
+    147  ANT_UnAssignChannel

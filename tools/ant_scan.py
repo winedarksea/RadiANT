@@ -1,4 +1,6 @@
 ﻿#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+
 """Listen for ANT+ sensors, the way a fitness app would.
 
 ant_probe.py proves the dongle answers for itself. This proves the radio
@@ -30,25 +32,30 @@ sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 from ant_probe import (  # noqa: E402
     EP_OUT,
     FrameReader,
-    MESG_RESPONSE_EVENT_ID,
     frame,
     close_device,
     open_device,
     reset_stack,
 )
-
-MESG_ANTLIB_CONFIG_ID = 0x6E
-MESG_NETWORK_KEY_ID = 0x46
-MESG_ASSIGN_CHANNEL_ID = 0x42
-MESG_CHANNEL_ID_ID = 0x51
-MESG_CHANNEL_RADIO_FREQ_ID = 0x45
-MESG_CHANNEL_MESG_PERIOD_ID = 0x43
-MESG_CHANNEL_SEARCH_TIMEOUT_ID = 0x44
-MESG_OPEN_CHANNEL_ID = 0x4B
-MESG_CLOSE_CHANNEL_ID = 0x4C
-MESG_BROADCAST_DATA_ID = 0x4E
-MESG_ACKNOWLEDGED_DATA_ID = 0x4F
-MESG_BURST_DATA_ID = 0x50
+# Protocol constants come from the generated module, never from a second copy
+# here. See tools/ant_wire.py and protocol/ant_wire.yaml.
+from ant_wire import (  # noqa: E402
+    EXT_FLAG_CHANNEL_ID,
+    LIB_CONFIG_ALL_EXT_FIELDS,
+    MESG_ACKNOWLEDGED_DATA_ID,
+    MESG_ANTLIB_CONFIG_ID,
+    MESG_ASSIGN_CHANNEL_ID,
+    MESG_BROADCAST_DATA_ID,
+    MESG_BURST_DATA_ID,
+    MESG_CHANNEL_ID_ID,
+    MESG_CHANNEL_MESG_PERIOD_ID,
+    MESG_CHANNEL_RADIO_FREQ_ID,
+    MESG_CHANNEL_SEARCH_TIMEOUT_ID,
+    MESG_CLOSE_CHANNEL_ID,
+    MESG_NETWORK_KEY_ID,
+    MESG_OPEN_CHANNEL_ID,
+    MESG_RESPONSE_EVENT_ID,
+)
 
 # The public ANT+ network key. Every ANT+ sensor uses it; it is published in
 # the ANT+ device profiles and hardcoded in every open-source ANT+ library.
@@ -106,7 +113,7 @@ def main() -> int:
 
     dev = open_device(True, serial=args.serial, port=args.port,
                       baud=args.baud)
-    reader = FrameReader(dev, timeout_ms=250)
+    reader = FrameReader(dev)
 
     print("\nOpening a wildcard ANT+ receive channel")
     # Start from a known state, or a channel another tool left assigned makes
@@ -115,10 +122,15 @@ def main() -> int:
         print("  FAIL: no startup message after reset")
         return 1
 
-    # Without ENABLE_CHANNEL_ID every broadcast arrives anonymous, so sensors
-    # can be heard but not named. Worth having, not worth aborting over.
-    command(dev, reader, MESG_ANTLIB_CONFIG_ID, bytes([0x00, 0x80]),
-            "extended messages")
+    # 0xE0 is all three extended fields: channel id, RSSI, receive timestamp.
+    # Without the channel id every broadcast arrives anonymous, so sensors can
+    # be heard but not named, and that is what this tool is for. The other two
+    # are free for the asking - the radio is already measuring both - and
+    # asking for them here keeps every tool on one lib config, which is what
+    # ant_verify.py's timing and signal figures are read against. Worth having,
+    # not worth aborting over.
+    command(dev, reader, MESG_ANTLIB_CONFIG_ID,
+            bytes([0x00, LIB_CONFIG_ALL_EXT_FIELDS]), "extended messages")
 
     steps = [
         (MESG_NETWORK_KEY_ID, bytes([0]) + ANT_PLUS_KEY, "network key"),
@@ -155,10 +167,17 @@ def main() -> int:
         if msg_id in (MESG_BROADCAST_DATA_ID, MESG_ACKNOWLEDGED_DATA_ID,
                       MESG_BURST_DATA_ID):
             packets += 1
-            # Flagged extended messages append the channel id: device number
-            # (2 bytes), device type, transmission type. Without the flag we
-            # only know something transmitted.
-            if len(body) >= 13 and body[9] & 0x80:
+            # Flagged extended messages append the channel id first: device
+            # number (2 bytes), device type, transmission type. Without the
+            # flag we only know something transmitted.
+            #
+            # RSSI and the receive timestamp follow it, in that order, and this
+            # tool ignores both - ant_verify.py's extended_fields() is the one
+            # that decodes all three. The offsets below stay right whether or
+            # not those two are present precisely because the channel id comes
+            # first; reading a later field at a fixed offset is what does not
+            # survive a change of lib config.
+            if len(body) >= 13 and body[9] & EXT_FLAG_CHANNEL_ID:
                 number = body[10] | (body[11] << 8)
                 dtype = body[12] & 0x7F
                 key = (number, dtype)

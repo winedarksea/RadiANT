@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
 #include "sim_signal.h"
 
 /* 2048 ticks a second, 60 seconds a minute: ticks per revolution at r rpm is

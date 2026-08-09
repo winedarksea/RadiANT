@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
 /*
  * Persistent diagnostic log for a board with no debugger attached.
  *

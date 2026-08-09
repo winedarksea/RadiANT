@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+
 """Probe an ANT+ USB dongle over its raw bulk endpoints.
 
 Speaks the ANT serial protocol directly with pyusb, so it works identically on
@@ -26,6 +28,36 @@ try:
 except ImportError:  # pragma: no cover - user-facing guidance
     sys.exit("pyusb is not installed. Run: pip install pyusb")
 
+sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
+
+# Every protocol constant, and the framing rule itself, comes from the
+# generated module. It is produced from protocol/ant_wire.yaml alongside
+# src/ant_wire.h, so the firmware and the tools cannot disagree about a value
+# without the generator's --check failing first.
+#
+# The framing rule matters more than the constants. This file used to carry its
+# own frame(), and the firmware carried a second one, and both left the SYNC
+# byte out of the checksum - so they agreed with each other, disagreed with
+# every real ANT host, and cost a week. There is now exactly one implementation
+# of that rule in Python and one in C, generated from the same description.
+#
+# The names are the bare sdk-ant spellings. The ANTW_ prefix in the C header
+# exists only to dodge a preprocessor collision with sdk-ant's own macros;
+# Python has module namespaces and needs no such thing.
+from ant_wire import (  # noqa: E402
+    MESG_CAPABILITIES_ID,
+    MESG_REQUEST_ID,
+    MESG_RESPONSE_EVENT_ID,
+    MESG_STARTUP_MESG_ID,
+    MESG_SYSTEM_RESET_ID,
+    MESG_VERSION_ID,
+    MSG_OVERHEAD,
+    STARTUP_REASONS_BY_VALUE,
+    SYNC_TX,
+    frame,
+    unframe,
+)
+
 VID = 0x0FCF
 # Every ANT stick Dynastream shipped, newest first. This firmware presents as
 # an ANT USB-m; the others are here so the tools keep working against a real
@@ -35,44 +67,31 @@ PID = PIDS[0]
 EP_OUT = 0x01
 EP_IN = 0x81
 
-SYNC = 0xA4
-
-MESG_SYSTEM_RESET_ID = 0x4A
-MESG_REQUEST_ID = 0x4D
-MESG_STARTUP_ID = 0x6F
-MESG_CAPABILITIES_ID = 0x54
-MESG_VERSION_ID = 0x3E
-MESG_RESPONSE_EVENT_ID = 0x40
-
-STARTUP_REASONS = {
-    0x00: "power-on / command reset",
-    0x01: "hardware reset line",
-    0x02: "watchdog reset",
-    0x20: "command reset",
-    0x40: "synchronous reset",
-    0x80: "suspend reset",
-}
-
-
-def frame(msg_id: int, payload: bytes = b"") -> bytes:
-    """Wrap a message in the ANT serial frame: SYNC LEN ID payload XOR.
-
-    The checksum covers the SYNC byte too. Omitting it produces a value 0x A4
-    off, which a real ANT host rejects - and which this file and the firmware
-    once got wrong in the same direction, so they agreed with each other and
-    with nothing else.
-    """
-    out = bytes([SYNC, len(payload), msg_id]) + payload
-    checksum = 0
-    for byte in out:
-        checksum ^= byte
-    return out + bytes([checksum])
+# How long a bulk-IN read waits before giving up, and why it is not 250 ms.
+#
+# libusb-win32 cancels the pending transfer when a read times out, and a cancel
+# landing at the same moment the dongle is answering loses that answer: the host
+# never sees the frame, and the dongle - which handed it to a USB stack that
+# reported success - has no idea anything went missing.
+#
+# Every tool here used 250 ms against an ANT+ channel period of 249.7 ms, so
+# essentially every read was racing the packet it was waiting for. It cost about
+# 0.4 percentage points of apparent packet loss and several ms of apparent
+# jitter, none of it real, and it was invisible because the invented losses look
+# exactly like on-air ones. What gives it away is that the radio reports a
+# RX_FAIL for a packet lost on the air and nothing at all for one lost here, so
+# a run that loses more than it can account for is losing it locally.
+#
+# The value only has to be comfortably clear of the slowest period a tool waits
+# on; nothing wants it short. It bounds how long a tool waits on a device that
+# is not going to answer, and no more.
+READ_TIMEOUT_MS = 1000
 
 
 class FrameReader:
     """Reassembles ANT frames from bulk-IN packets."""
 
-    def __init__(self, dev, timeout_ms: int):
+    def __init__(self, dev, timeout_ms: int = READ_TIMEOUT_MS):
         self.dev = dev
         self.timeout_ms = timeout_ms
         self.buf = bytearray()
@@ -101,24 +120,26 @@ class FrameReader:
     def next_frame(self, deadline: float):
         """Return (msg_id, payload) or None once `deadline` passes."""
         while True:
-            # Resynchronise on SYNC.
-            while self.buf and self.buf[0] != SYNC:
+            # Resynchronise on SYNC. unframe() validates the byte again rather
+            # than trusting it, but it does not resynchronise - finding the
+            # start of a frame in a stream is this buffer's job and not its.
+            while self.buf and self.buf[0] != SYNC_TX:
                 del self.buf[0]
 
             if len(self.buf) >= 2:
                 length = self.buf[1]
-                total = length + 4
+                total = length + MSG_OVERHEAD
                 if len(self.buf) >= total:
                     candidate = bytes(self.buf[:total])
                     del self.buf[:total]
 
-                    checksum = 0
-                    for byte in candidate[:-1]:   # SYNC included - see frame()
-                        checksum ^= byte
-                    if checksum != candidate[-1]:
+                    # The checksum rule - SYNC included in the XOR - lives in
+                    # ant_wire.unframe() and nowhere else here.
+                    parsed = unframe(candidate)
+                    if parsed is None:
                         print(f"  ! checksum mismatch on {candidate.hex()}, dropping")
                         continue
-                    return candidate[2], candidate[3:-1]
+                    return parsed
 
             if time.monotonic() > deadline:
                 return None
@@ -153,7 +174,7 @@ def reset_stack(dev, reader: FrameReader, timeout_s: float = 3.0) -> bool:
     inherits whatever the last tool forgot to clean up.
     """
     dev.write(EP_OUT, frame(MESG_SYSTEM_RESET_ID, b"\x00"))
-    return expect(reader, MESG_STARTUP_ID, timeout_s) is not None
+    return expect(reader, MESG_STARTUP_MESG_ID, timeout_s) is not None
 
 
 class SerialDevice:
@@ -377,20 +398,25 @@ def main() -> int:
 
     dev = open_device(verbose, serial=args.serial, port=args.port,
                       baud=args.baud)
-    reader = FrameReader(dev, timeout_ms=250)
+    reader = FrameReader(dev)
 
     failures = []
 
     print("\n[1/3] reset")
     dev.write(EP_OUT, frame(MESG_SYSTEM_RESET_ID, b"\x00"))
-    payload = expect(reader, MESG_STARTUP_ID, args.timeout)
+    payload = expect(reader, MESG_STARTUP_MESG_ID, args.timeout)
     if payload is None:
         print("  FAIL: no startup message (0x6F)")
         failures.append("startup")
     else:
         reason = payload[0] if payload else 0
+        # The generated name rather than a prose gloss. The table this used to
+        # carry described 0x00 as "power-on / command reset" and 0x20 as
+        # "command reset", which is two names for one thing and one name for
+        # two; STARTUP_POWER_ON_RESET and STARTUP_COMMAND_RESET are what the
+        # protocol calls them and what src/ant_wire.h says as well.
         print(f"  OK: startup, reason 0x{reason:02X} "
-              f"({STARTUP_REASONS.get(reason, 'unknown')})")
+              f"({STARTUP_REASONS_BY_VALUE.get(reason, 'unknown')})")
 
     # A reset resets the ANT stack, not the device: the handle stays valid, the
     # same way it does for a real stick. If this ever needs a re-open, the

@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
 /*
  * USB ANT vendor class — bulk-only interface enumerating as VID 0x0FCF / PID 0x1009
  * (ANT USB-m Stick).  Zwift and openant find the dongle by scanning for these IDs.

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 <#
 .SYNOPSIS
     Package a built image as a Nordic DFU zip for the nRF52840 Dongle.

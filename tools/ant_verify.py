@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+
 """Measure an ANT+ sensor: loss, jitter, decoded accuracy, accumulator sanity.
 
 ant_scan.py answers "did anything arrive". This answers "was it right", which
@@ -47,7 +49,6 @@ sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 import ant_pages as ap  # noqa: E402
 from ant_probe import (  # noqa: E402
     FrameReader,
-    MESG_RESPONSE_EVENT_ID,
     close_device,
     open_device,
     reset_stack,
@@ -55,6 +56,26 @@ from ant_probe import (  # noqa: E402
 from ant_scan import (  # noqa: E402
     ANT_PLUS_KEY,
     ANT_PLUS_FREQ,
+    command,
+)
+from ant_session import wait_for_close  # noqa: E402
+# Protocol constants come from the generated module, never from a second copy
+# here. See tools/ant_wire.py and protocol/ant_wire.yaml.
+#
+# The extended-field flags used to be bare 0x80/0x40/0x20 literals inside
+# extended_fields(), which is the one function here where an unnamed bit is
+# genuinely dangerous: the fields are positional, so mistaking one flag for
+# another does not fail, it silently reports a device number as a signal
+# strength.
+from ant_wire import (  # noqa: E402
+    CHANNEL_TYPE_SLAVE,
+    EVENT_CODES_BY_VALUE,
+    EVENT_RX_FAIL,
+    EVENT_RX_FAIL_GO_TO_SEARCH,
+    EXT_FLAG_CHANNEL_ID,
+    EXT_FLAG_RSSI,
+    EXT_FLAG_RX_TIMESTAMP,
+    LIB_CONFIG_ALL_EXT_FIELDS,
     MESG_ACKNOWLEDGED_DATA_ID,
     MESG_ANTLIB_CONFIG_ID,
     MESG_ASSIGN_CHANNEL_ID,
@@ -64,28 +85,56 @@ from ant_scan import (  # noqa: E402
     MESG_CHANNEL_RADIO_FREQ_ID,
     MESG_CHANNEL_SEARCH_TIMEOUT_ID,
     MESG_CLOSE_CHANNEL_ID,
+    MESG_EVENT_ID,
     MESG_NETWORK_KEY_ID,
     MESG_OPEN_CHANNEL_ID,
-    command,
-)
-from ant_session import (  # noqa: E402
-    EVENT_MARKER,
-    EVENT_NAMES,
+    MESG_RESPONSE_EVENT_ID,
     MESG_UNASSIGN_CHANNEL_ID,
-    wait_for_close,
+    RSSI_MEASUREMENT_TYPE_DBM,
 )
 
-CHANNEL_TYPE_SLAVE = 0x00
 ANT_TICKS_PER_S = 32768.0
+TICK_WRAP_S = 65536 / ANT_TICKS_PER_S   # the receive timestamp is 16 bits
 
-# The profile requires a common page at least once per 65 messages. Sixty-five
-# is the limit, not the target, so it is checked as an inequality.
-COMMON_PAGE_LIMIT = 65
+# How many messages a sensor may go between common pages.
+#
+# 121, not 65. The generic ANT+ common-page guidance says 65, and that is what
+# this check used to enforce - so it failed the first certified transmitter it
+# was ever pointed at. sdk-ant's own bicycle power profile settles the
+# question: lib/ant_profiles/ant_bpwr/ant_bpwr.c has
+#
+#     #define COMMON_PAGE_80_INTERVAL 119 // Minimum: Interleave every 121 messages
+#     #define COMMON_PAGE_81_INTERVAL 120 // Minimum: Interleave every 121 messages
+#
+# and that is Garmin's own certified implementation of the profile. Measured
+# against it, this check reported a worst gap of 118 as a failure.
+COMMON_PAGE_LIMIT = 121
 
 # Default acceptance thresholds. They are arguments, not constants, because the
 # right numbers depend on the transmitter's noise band - but a default that
 # passes a good link and fails an obviously bad one is worth having.
-DEFAULT_MAX_LOSS_PCT = 1.0
+#
+# This number was wrong twice, in both directions, and how it moved is worth
+# more than where it landed.
+#
+# 1.0 was the first guess and it failed a healthy link about half the time, so
+# it was raised to 2.5 to fit six 300 s runs that measured 0.74 to 1.37 % on a
+# quiet desk. Both numbers were fitted to a measurement that was itself broken:
+# FrameReader read with a 250 ms timeout against a 249.7 ms channel period, and
+# every cancelled transfer took the packet it was waiting for with it. About
+# 0.4 percentage points of that "floor" was the tool measuring itself.
+#
+# With that fixed, the same bench over four 300 s runs measures 0.26 to 0.60 %,
+# and every missing packet is one the radio raised an RX_FAIL for - so what is
+# left really is the air. 1.5 sits about three times the worst of those, which
+# is room for a busier day without being room for a fault: pairing with the
+# wrong sensor still reads about 25 %, and the worst genuine anomaly seen here
+# was 5.24 %.
+#
+# The lesson is in loss_accounting(): a threshold fitted to a number nobody can
+# take apart just encodes whatever was broken at the time. Loss the radio never
+# reported is not the link's loss, and that check now fails on its own.
+DEFAULT_MAX_LOSS_PCT = 1.5
 DEFAULT_JITTER_FACTOR = 0.5      # of one channel period, on the stddev
 
 
@@ -113,6 +162,13 @@ class ChannelAnalyzer:
         self.last_t: float | None = None
         self.intervals: list[float] = []
 
+        # The same two quantities as measured by the radio rather than by the
+        # host, when the dongle is willing to report them. Empty on --replay
+        # and on any dongle that refuses ENABLE_RSSI / ENABLE_RX_TIMESTAMP.
+        self.rssi_samples: list[int] = []
+        self.radio_intervals: list[float] = []
+        self._last_rx_ticks: int | None = None
+
         self.pages = Counter()
         self.messages_since_common: int | None = None
         self.common_gaps: list[int] = []
@@ -129,6 +185,38 @@ class ChannelAnalyzer:
         # moves is the only thing that notices.
         self.event_comparisons = 0
         self.event_advances = 0
+
+        # Loss measured against the transmitter's own counter instead of a
+        # wall clock. The headline loss figure divides by elapsed/period, and
+        # that denominator is an estimate: it assumes the transmitter's crystal
+        # runs at exactly the nominal rate, and it rounds. On a 0.7 % reading
+        # over 1200 packets the whole result is 9 packets, which is inside the
+        # noise of the estimate.
+        #
+        # Some transmitters step the update event counter once per message
+        # instead of once per pedal stroke. Where that holds the counter is a
+        # serial number, and what is missing from the sequence is exactly what
+        # was lost - no clock and no rounding anywhere. It does not hold for a
+        # real crank power meter, whose counter steps per revolution and stops
+        # entirely when the rider coasts, so summary() reports this only once
+        # the stream has proved the counter never stood still.
+        #
+        # Two transmitters that both step per message still disagree about
+        # what "a message" means. sdk-ant raises its page event with the page
+        # it is actually putting on the air, so a firmware sensor steps the
+        # counter on page 0x10 and leaves it alone for an interleaved common
+        # page; ant_sim.py advances every sensor once per transmission
+        # whatever page comes out. So the counter spans either the page 0x10
+        # messages alone or all of them, and which one has to be worked out
+        # from the stream rather than assumed - counting the common pages that
+        # land between two page 0x10 packets is what separates them.
+        self.std_event_pairs = 0
+        self.std_event_span = 0
+        self.std_event_still = 0
+        self.std_votes_per_page = 0
+        self.std_votes_per_message = 0
+        self.std_common_seen = 0
+        self._common_since_std = 0
 
         self.power_samples: list[float] = []
         self.cadence_samples: list[float] = []
@@ -161,7 +249,55 @@ class ChannelAnalyzer:
 
     # -- ingestion -------------------------------------------------------
 
-    def feed(self, t: float, payload: bytes) -> None:
+    def _offgrid(self, intervals: list[float]) -> float | None:
+        """How far packets land from the slot grid, ignoring how many slots.
+
+        The plain stddev of the intervals is not a timing measurement, because
+        one lost packet turns a 250 ms interval into a 500 ms one and that
+        single outlier dwarfs everything the clock is actually doing: six
+        losses in 1200 packets put the stddev at 17 ms all by themselves, which
+        is why the jitter figure has always moved in lockstep with the loss
+        figure and told nobody anything the loss figure had not.
+
+        Subtracting the nearest whole number of periods removes the count and
+        leaves the error. The point of measuring it on both clocks is that the
+        difference between them is entirely this host: the radio's own answer
+        here is under a tick.
+        """
+        if len(intervals) < 2 or self.period_s <= 0:
+            return None
+        return statistics.pstdev(
+            d - round(d / self.period_s) * self.period_s for d in intervals)
+
+    def _feed_radio(self, radio: dict | None) -> None:
+        """Record what the radio said about a packet, if it said anything.
+
+        The receive timestamp is 16 bits of a 32768 Hz counter, so it rolls
+        every two seconds. Nothing here reconstructs the high bits: a masked
+        subtraction is right whenever the real gap is under two seconds, and
+        the host clock - crude as it is - is easily good enough to say when it
+        is not. A gap that long is eight consecutive lost slots, which belongs
+        in the loss figure and not in a jitter sample taken across a counter
+        that wrapped an unknown number of times.
+        """
+        if not radio:
+            self._last_rx_ticks = None
+            return
+
+        if "rssi_dbm" in radio:
+            self.rssi_samples.append(radio["rssi_dbm"])
+
+        ticks = radio.get("rx_ticks")
+        if ticks is None:
+            self._last_rx_ticks = None
+            return
+        if (self._last_rx_ticks is not None and self.intervals
+                and self.intervals[-1] < 0.95 * TICK_WRAP_S):
+            self.radio_intervals.append(
+                ((ticks - self._last_rx_ticks) & 0xFFFF) / ANT_TICKS_PER_S)
+        self._last_rx_ticks = ticks
+
+    def feed(self, t: float, payload: bytes, radio: dict | None = None) -> None:
         if len(payload) < 8:
             self._violation(f"payload of {len(payload)} bytes, expected 8")
             return
@@ -174,6 +310,8 @@ class ChannelAnalyzer:
             self.intervals.append(t - self.last_t)
         self.last_t = t
 
+        self._feed_radio(radio)
+
         if self.device_type == ap.BSC_COMBINED_DEVICE_TYPE:
             # No page number in this page at all, so there is nothing to
             # histogram and no common pages to expect.
@@ -185,6 +323,7 @@ class ChannelAnalyzer:
 
         if page in (ap.PAGE_COMMON_MANUFACTURER, ap.PAGE_COMMON_PRODUCT):
             self.common_pages_seen[page] += 1
+            self._common_since_std += 1
             if self.messages_since_common is not None:
                 self.common_gaps.append(self.messages_since_common)
             self.messages_since_common = 0
@@ -215,6 +354,9 @@ class ChannelAnalyzer:
         before = self.std_baseline
         self.std_baseline = got
         if before is None:
+            # Common pages that arrived before the first page 0x10 sit outside
+            # every pair, so they are not evidence about the counter.
+            self._common_since_std = 0
             return
 
         d_event = ap.delta_u8(got["event_count"], before["event_count"])
@@ -223,6 +365,33 @@ class ChannelAnalyzer:
                         before["event_count"])
         self._note_wrap("acc_power", got["acc_power"], before["acc_power"])
         self._note_event(d_event != 0)
+
+        # Which convention the transmitter follows is decided one pair at a
+        # time, on the pairs that carry evidence. A pair with c common pages
+        # between its two page 0x10 packets and nothing lost shows d_event ==
+        # 1 if the counter ignores common pages, or 1 + c if it counts every
+        # message; a pair that lost something shows neither and abstains.
+        # Loss is rare, so the vote is decided by the clean majority.
+        #
+        # Comparing the run totals instead would be simpler and wrong: the
+        # excess of the counter over the page 0x10 packets received is then
+        # the common pages under one reading and the lost packets under the
+        # other, and at a few hundred packets those two are the same size. A
+        # 300 s run measured here flipped its own verdict between two
+        # otherwise identical captures because loss crossed 20 packets.
+        c = self._common_since_std
+        if c > 0:
+            if d_event == 1:
+                self.std_votes_per_page += 1
+            elif d_event == 1 + c:
+                self.std_votes_per_message += 1
+
+        self.std_event_pairs += 1
+        self.std_event_span += d_event
+        self.std_common_seen += c
+        self._common_since_std = 0
+        if d_event == 0:
+            self.std_event_still += 1
 
         if d_event == 0:
             if d_acc != 0:
@@ -383,7 +552,16 @@ class ChannelAnalyzer:
                         if len(self.intervals) > 1 else None),
             "max_s": max(self.intervals) if self.intervals else None,
             "period_s": self.period_s,
+            "radio_n": len(self.radio_intervals),
+            "offgrid_host_s": self._offgrid(self.intervals),
+            "offgrid_radio_s": self._offgrid(self.radio_intervals),
         }
+
+        signal = ({"n": len(self.rssi_samples),
+                   "mean_dbm": statistics.fmean(self.rssi_samples),
+                   "min_dbm": min(self.rssi_samples),
+                   "max_dbm": max(self.rssi_samples)}
+                  if self.rssi_samples else None)
 
         def accuracy(samples, expected_value):
             if not samples:
@@ -415,9 +593,22 @@ class ChannelAnalyzer:
               f"{self.packets} received, {expected:.0f} expected over "
               f"{elapsed:.1f} s")
         if self.packets and expected > 0:
-            check("loss", loss_pct <= max_loss_pct,
-                  f"{loss_pct:.2f} % (limit {max_loss_pct:.2f} %)")
+            # The resolution matters more than the number on a short run. At
+            # ~4 Hz a minute is only 240 packets, so a single dropped one is
+            # 0.4 % and two put an otherwise perfect link over a 1 % limit.
+            # Reporting it stops a short run from being read as a regression.
+            # Judged on the rounded figure, which is the one printed. Deciding
+            # on more precision than is shown produces a line that reads
+            # "2.50 % (limit 2.50 %)" next to the word FAIL, and a report that
+            # appears to contradict itself gets treated as a broken tool.
+            check("loss", round(loss_pct, 2) <= max_loss_pct,
+                  f"{loss_pct:.2f} % (limit {max_loss_pct:.2f} %, "
+                  f"one packet = {100.0 / expected:.2f} %)")
         if jitter["stdev_s"] is not None and self.period_s > 0:
+            # Left exactly as it was, on the host clock, because the USB path
+            # is part of what a dongle is and this check has always covered it.
+            # What it is not is a measurement of the link's timing - see
+            # _offgrid, and the "timing" line the report prints underneath.
             limit = jitter_factor * self.period_s
             check("jitter", jitter["stdev_s"] <= limit,
                   f"stddev {jitter['stdev_s'] * 1000:.1f} ms, max "
@@ -427,6 +618,33 @@ class ChannelAnalyzer:
 
         check("accumulator continuity", self.violation_count == 0,
               f"{self.violation_count} violation(s)")
+
+        # Exact loss, where the transmitter's counter allows it. Requiring the
+        # counter to have never once stood still is what proves it is stepped
+        # per message rather than per pedal stroke; a real power meter fails
+        # that on its first coast and is reported on the wall clock alone.
+        exact = None
+        if self.std_event_pairs >= 30 and self.std_event_still == 0:
+            # The counter stepped std_event_span times over the run, and every
+            # step that did not arrive as a packet was lost. What "a packet"
+            # means is the vote above; with no votes either way there were no
+            # common pages to judge by, and the two readings coincide.
+            per_message = self.std_votes_per_message > self.std_votes_per_page
+            received = (self.std_event_pairs + self.std_common_seen
+                        if per_message else self.std_event_pairs)
+            missed = max(0, self.std_event_span - received)
+            sent = self.std_event_span
+            scope = "message" if per_message else "page 0x10"
+            exact = {
+                "scope": scope,
+                "missed": missed,
+                "sent": sent,
+                "loss_pct": 100.0 * missed / sent if sent else 0.0,
+            }
+            check("loss (exact)", round(exact["loss_pct"], 2) <= max_loss_pct,
+                  f"{exact['loss_pct']:.2f} % - {missed} of {sent} "
+                  f"{scope} message(s) missing, counted from the "
+                  f"transmitter's own event counter rather than a clock")
 
         if self.event_comparisons:
             # Not a rate threshold: a real sensor at a very low cadence can go
@@ -469,6 +687,7 @@ class ChannelAnalyzer:
             "expected_packets": expected,
             "loss_pct": loss_pct,
             "jitter": jitter,
+            "signal": signal,
             "pages": {f"0x{page:02X}": count
                       for page, count in sorted(self.pages.items())},
             "common_page_gaps": {
@@ -481,6 +700,7 @@ class ChannelAnalyzer:
             "accumulator_wraps": dict(self.wraps),
             "event_advances": self.event_advances,
             "event_comparisons": self.event_comparisons,
+            "exact_loss": exact,
             "violations": {
                 "count": self.violation_count,
                 "first": self.violations,
@@ -521,7 +741,8 @@ def period_for(device_type: int, profile: str) -> int:
 
 
 def open_slave(dev, reader, channel: int, device_type: int, period: int,
-               device_number: int, trans_type: int) -> bool:
+               device_number: int, trans_type: int,
+               rf_freq: int = ANT_PLUS_FREQ) -> bool:
     """Assign, configure and open one slave channel on the ANT+ network."""
     steps = [
         (MESG_ASSIGN_CHANNEL_ID,
@@ -530,7 +751,7 @@ def open_slave(dev, reader, channel: int, device_type: int, period: int,
         (MESG_CHANNEL_ID_ID,
          bytes([channel, device_number & 0xFF, (device_number >> 8) & 0xFF,
                 device_type, trans_type]), "channel id"),
-        (MESG_CHANNEL_RADIO_FREQ_ID, bytes([channel, ANT_PLUS_FREQ]),
+        (MESG_CHANNEL_RADIO_FREQ_ID, bytes([channel, rf_freq]),
          "radio frequency"),
         (MESG_CHANNEL_MESG_PERIOD_ID,
          bytes([channel, period & 0xFF, period >> 8]), "message period"),
@@ -546,13 +767,60 @@ def open_slave(dev, reader, channel: int, device_type: int, period: int,
     return True
 
 
+def extended_fields(body: bytes) -> dict:
+    """Decode whatever the flag byte says was appended to a broadcast.
+
+    The fields come in a fixed order - channel id, RSSI, receive timestamp -
+    but each is present only if its flag bit is set, so an offset is only
+    correct relative to which of the earlier ones turned up. Reading RSSI at a
+    fixed offset works right up until a run is made without the channel id and
+    then quietly reports the device number as a signal strength.
+    """
+    fields: dict = {}
+    if len(body) < 10:
+        return fields
+    flags = body[9]
+    at = 10
+
+    if flags & EXT_FLAG_CHANNEL_ID:
+        if len(body) < at + 4:
+            return fields
+        fields["device_number"] = body[at] | (body[at + 1] << 8)
+        fields["device_type"] = body[at + 2] & 0x7F
+        at += 4
+
+    if flags & EXT_FLAG_RSSI:
+        if len(body) < at + 3:
+            return fields
+        # The one RSSI measurement type that carries dBm. Anything else is a
+        # proprietary scale, and a number on an unknown scale is worse than no
+        # number.
+        if body[at] == RSSI_MEASUREMENT_TYPE_DBM:
+            fields["rssi_dbm"] = body[at + 1] - 256 if body[at + 1] > 127 \
+                else body[at + 1]
+        at += 3
+
+    if flags & EXT_FLAG_RX_TIMESTAMP:
+        if len(body) < at + 2:
+            return fields
+        fields["rx_ticks"] = body[at] | (body[at + 1] << 8)
+
+    return fields
+
+
 def listen(dev, reader, analyzers: dict, seconds: float, verbose: bool,
            records: list) -> dict:
     """Collect broadcasts for `seconds`, timestamping each on arrival.
 
     Arrival time is the host's, not the sensor's, so the jitter figure includes
     the USB path - which is the honest thing to report, since that path is part
-    of what is being validated.
+    of what is being validated. It is not, however, the only thing worth
+    reporting: with ENABLE_RX_TIMESTAMP the radio stamps each packet on its own
+    32 kHz clock, and the difference between the two is stark. On this bench
+    the host clock puts consecutive-slot jitter at 3.3 ms and the radio clock
+    at 0.01 ms, so essentially all of the number this tool used to print was
+    Windows deciding when to return from a USB read. Both are now measured: one
+    says what the USB path did, the other says what the link did.
     """
     events = Counter()
     identities = {}
@@ -575,7 +843,8 @@ def listen(dev, reader, analyzers: dict, seconds: float, verbose: bool,
             if analyzer is None:
                 continue
             payload = body[1:9]
-            analyzer.feed(now, payload)
+            fields = extended_fields(body)
+            analyzer.feed(now, payload, fields)
             # The device number is filled in afterwards from the identity the
             # extended messages carry - it is not known when the first packets
             # arrive, and a capture with the sensor left anonymous cannot be
@@ -584,11 +853,11 @@ def listen(dev, reader, analyzers: dict, seconds: float, verbose: bool,
             # Extended messages carry the channel id after the payload, which
             # is the only way to know which sensor was actually heard rather
             # than which one was asked for.
-            if len(body) >= 13 and body[9] & 0x80:
-                identities[channel] = (body[10] | (body[11] << 8),
-                                       body[12] & 0x7F)
+            if "device_number" in fields:
+                identities[channel] = (fields["device_number"],
+                                       fields["device_type"])
         elif msg_id == MESG_RESPONSE_EVENT_ID and len(body) >= 3:
-            if body[1] == EVENT_MARKER:
+            if body[1] == MESG_EVENT_ID:
                 events[body[2]] += 1
 
         if verbose and time.monotonic() - last_report >= 5.0:
@@ -596,11 +865,87 @@ def listen(dev, reader, analyzers: dict, seconds: float, verbose: bool,
             print("  " + ", ".join(
                 f"ch{ch} {a.packets} pkts" for ch, a in analyzers.items()))
 
-    return {"events": {EVENT_NAMES.get(code, str(code)): count
+    return {"events": {EVENT_CODES_BY_VALUE.get(code, str(code)): count
                        for code, count in sorted(events.items())},
             "identities": {str(ch): {"device_number": ident[0],
                                      "device_type": ident[1]}
                            for ch, ident in identities.items()}}
+
+
+# The two events by which the radio owns up to an empty slot, in both spellings
+# this tool has ever written into a result document. The names now come from
+# tools/ant_wire.py and carry the protocol's EVENT_ prefix; results recorded
+# before that - the baselines in archive/benchmarks/ that ant_ab.py diffs
+# against - carry the bare form. Reading an old document and concluding the
+# radio reported nothing would blame the host for loss the air ate, which is
+# exactly the misdiagnosis this function exists to prevent.
+RADIO_FAIL_EVENTS = frozenset((
+    EVENT_CODES_BY_VALUE[EVENT_RX_FAIL],
+    EVENT_CODES_BY_VALUE[EVENT_RX_FAIL_GO_TO_SEARCH],
+    "RX_FAIL",
+    "RX_FAIL_GO_TO_SEARCH",
+))
+
+
+def loss_accounting(result: dict) -> dict | None:
+    """Decide whether the radio can account for the packets that went missing.
+
+    Loss on its own does not say whose fault it is. RX_FAIL is the stack
+    reporting that a message was expected in a timeslot and did not arrive
+    intact, so loss it accounts for happened on the air and is the room's
+    business. Loss it does not account for happened *after* the radio had the
+    packet - on the USB path, in the bridge, or in this tool - and is somebody's
+    bug. That is the difference between "move the boards apart" and "we are
+    dropping packets we already received".
+
+    It is worth failing on rather than only printing, because that is exactly
+    how a 250 ms libusb read timeout against a 249.7 ms channel period hid here
+    for as long as it did: it invented packet loss that looked identical to the
+    on-air kind, and the only thing that gave it away was the radio's silence
+    about it.
+
+    Returns None on --replay: a capture file records payloads, not channel
+    events, so there are no RX_FAILs to find and this would blame the host for
+    every packet the radio itself dropped.
+    """
+    events = result.get("events")
+    if events is None:
+        return None
+
+    radio_fails = sum(count for name, count in events.items()
+                      if name in RADIO_FAIL_EVENTS)
+    missing = sum(max(0, round(c["expected_packets"]) - c["packets"])
+                  for c in result["channels"])
+    if missing <= 0:
+        return None
+
+    unaccounted = max(0, missing - radio_fails)
+
+    # Not zero tolerance. `missing` is the wall-clock estimate, so it carries a
+    # packet of rounding either way, and an event landing after the listening
+    # window closes is counted in one column and not the other. A quarter of the
+    # loss, or two packets, is slack for that and nothing like the half that the
+    # read-timeout bug produced.
+    allowed = max(2, round(0.25 * missing))
+
+    if unaccounted == 0:
+        verdict = ("all of it reported by the radio as RX_FAIL, so it "
+                   "happened on the air")
+    elif radio_fails > 0:
+        verdict = (f"{radio_fails} of it reported as RX_FAIL; the other "
+                   f"{unaccounted} went missing without the radio noticing")
+    else:
+        verdict = ("none of it reported as RX_FAIL - the radio thinks it "
+                   "delivered everything, so look at the USB path")
+
+    return {
+        "missing": missing,
+        "radio_fails": radio_fails,
+        "unaccounted": unaccounted,
+        "allowed_unaccounted": allowed,
+        "verdict": verdict,
+        "pass": unaccounted <= allowed,
+    }
 
 
 def report(result: dict) -> None:
@@ -615,6 +960,29 @@ def report(result: dict) -> None:
         if channel["pages"]:
             print("  pages: " + ", ".join(
                 f"{page} x{count}" for page, count in channel["pages"].items()))
+        jitter = channel["jitter"]
+        if jitter.get("offgrid_host_s") is not None:
+            # The jitter check above is dominated by the gap each lost packet
+            # leaves. This is the same packets with the slot count taken out,
+            # so it moves when the timing moves and not when the loss does.
+            line = (f"  timing: {jitter['offgrid_host_s'] * 1000:.2f} ms off "
+                    f"the {jitter['period_s'] * 1000:.1f} ms slot grid by the "
+                    f"host clock")
+            if jitter.get("offgrid_radio_s") is not None:
+                line += (f", {jitter['offgrid_radio_s'] * 1000:.3f} ms by the "
+                         f"radio's")
+            print(line)
+
+        signal = channel.get("signal")
+        if signal:
+            # Printed rather than judged. It answers a question no threshold
+            # can: an ANT slave tracks down to about -90 dBm, so a desk pair
+            # sitting near -30 has some 60 dB in hand, and loss at 60 dB of
+            # margin is not the link running out of signal. What a limit here
+            # would actually encode is how far apart the boards happen to be.
+            print(f"  signal: mean {signal['mean_dbm']:.1f} dBm "
+                  f"(min {signal['min_dbm']}, max {signal['max_dbm']}, "
+                  f"n={signal['n']}) - ANT tracks to about -90")
         if channel["accumulator_wraps"]:
             # A run that never wrapped has not tested the wrap. Say so, rather
             # than letting a clean pass imply coverage it does not have.
@@ -645,6 +1013,15 @@ def report(result: dict) -> None:
     if result.get("events"):
         print("\nchannel events: " + ", ".join(
             f"{name} x{count}" for name, count in result["events"].items()))
+
+    accounting = result.get("accounting")
+    if accounting:
+        print(f"{accounting['missing']} packet(s) missing, "
+              f"{accounting['verdict']}.")
+        if not accounting["pass"]:
+            print("  FAIL loss accounting - loss the radio never reported is "
+                  "loss that happened after the radio, on this host or in the "
+                  "dongle, and it is not a property of the link")
     for channel, ident in result.get("identities", {}).items():
         print(f"heard on channel {channel}: device #{ident['device_number']}, "
               f"type 0x{ident['device_type']:02X}")
@@ -685,6 +1062,16 @@ def main() -> int:
                              "(default: 0)")
     parser.add_argument("--channel", type=int, default=0,
                         help="first ANT channel to use (default: 0)")
+    parser.add_argument("--rf-freq", type=int, default=ANT_PLUS_FREQ,
+                        metavar="N",
+                        help="RF frequency as MHz above 2400; 57 is the ANT+ "
+                             "public network and the only value a real sensor "
+                             "uses. Set it, and CONFIG_ANT_SIM_RF_FREQ to "
+                             "match, only to find out whether bench loss is "
+                             "the room rather than the dongle: 2457 MHz sits "
+                             "inside Wi-Fi channel 11 and carries every other "
+                             "ANT+ device in range, and somewhere quiet like "
+                             "2 or 78 does not (default: 57)")
     parser.add_argument("--record", metavar="FILE",
                         help="write every payload heard to a capture file, "
                              "for --replay and for the replay tests in "
@@ -753,18 +1140,26 @@ def main() -> int:
     else:
         dev = open_device(verbose, serial=args.serial, port=args.port,
                           baud=args.baud)
-        reader = FrameReader(dev, timeout_ms=250)
+        reader = FrameReader(dev)
 
         print("\nOpening ANT+ receive channels")
         if not reset_stack(dev, reader):
             print("  FAIL: no startup message after reset")
             return 1
 
-        # Without ENABLE_CHANNEL_ID the broadcasts arrive anonymous, so a run
-        # cannot say which sensor it measured. Worth having, not worth aborting
-        # over - the measurements do not depend on it.
-        command(dev, reader, MESG_ANTLIB_CONFIG_ID, bytes([0x00, 0x80]),
-                "extended messages")
+        # 0x80 ENABLE_CHANNEL_ID, 0x40 ENABLE_RSSI, 0x20 ENABLE_RX_TIMESTAMP.
+        #
+        # Without the channel id the broadcasts arrive anonymous, so a run
+        # cannot say which sensor it measured. The other two were free for the
+        # asking and were not being asked for, which cost this project a lot:
+        # RSSI is the difference between a packet lost to a collision and one
+        # lost to a fade, and the receive timestamp is the radio's own 32 kHz
+        # clock, which is the only clock here that is not Windows.
+        #
+        # Worth having, not worth aborting over - every measurement that
+        # existed before these has a host-clock fallback.
+        command(dev, reader, MESG_ANTLIB_CONFIG_ID,
+                bytes([0x00, LIB_CONFIG_ALL_EXT_FIELDS]), "extended messages")
         if not command(dev, reader, MESG_NETWORK_KEY_ID,
                        bytes([ap.ANT_PLUS_NETWORK_NUM]) + ANT_PLUS_KEY,
                        "ANT+ network key"):
@@ -778,7 +1173,7 @@ def main() -> int:
                               spec["period"],
                               args.device_number + index if args.device_number
                               else 0,
-                              args.trans_type):
+                              args.trans_type, args.rf_freq):
                 print(f"  FAIL: channel {channel} ({name}) did not open")
                 return 1
             print(f"  OK: channel {channel} - {spec['label']}")
@@ -817,7 +1212,11 @@ def main() -> int:
                                args.max_error) for a in ordered],
     }
     result.update(extra)
-    result["pass"] = all(c["pass"] for c in result["channels"])
+    accounting = loss_accounting(result)
+    if accounting is not None:
+        result["accounting"] = accounting
+    result["pass"] = (all(c["pass"] for c in result["channels"])
+                      and (accounting is None or accounting["pass"]))
 
     stack.close()
 

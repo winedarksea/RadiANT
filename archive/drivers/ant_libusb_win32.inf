@@ -1,0 +1,157 @@
+; ant_libusb_win32.inf - bind libusb0.sys to ANT USB sticks and to this dongle.
+;
+; SPDX-License-Identifier: Apache-2.0
+; Copyright (c) 2026 The RadiANT contributors.
+;
+; This file is OUR OWN WORK. It is not derived from, and was written without
+; reading, Garmin's ANT_LibUsb.inf. An INF is a table of identifiers bolted to
+; a service install; there is no expression in it worth copying, and writing it
+; from scratch is both cheaper and cleaner than arguing about a vendor package
+; we have already decided not to redistribute. See ../../docs/preservation.md.
+;
+; It is also more useful than the vendor package for this project, by
+; construction: it covers PID 1004 as well as 1008 and 1009, and it is a file
+; we can extend the moment a new PID matters.
+;
+; ASCII only, CRLF-tolerant. Read install-notes.md before using this - in
+; particular the CatalogFile note below, and the usbflags cache.
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = "libusb-win32 devices"
+ClassGuid   = {EB781AAF-9C70-4523-A5DF-642A87ECA567}
+Provider    = %ProviderName%
+DriverVer   = 08/08/2026, 1.2.6.0
+CatalogFile = ant_libusb_win32.cat
+
+; DriverVer is a ranking key, not decoration. When two packages match the same
+; hardware ID with the same signature rank, Windows takes the newer DriverVer.
+; Garmin's package is dated 2012, so any date after that wins on rank alone -
+; which is exactly what you do NOT want if the WHQL package is already working.
+; Keep the version field aligned with the libusb0.sys actually placed beside
+; this file; claiming 1.2.6.0 while shipping 1.2.4.0 misreports the binary.
+;
+; CatalogFile names a catalog that is NOT in this directory and that we cannot
+; supply: signing a kernel-mode driver package for 64-bit Windows needs a
+; certificate we do not hold. Generate and sign it yourself (inf2cat +
+; signtool, or let Zadig do it) - install-notes.md has the commands. Without a
+; valid catalog, 64-bit Windows will refuse this package unless test signing is
+; on. That is a property of Windows driver signing, not a defect here.
+
+[ClassInstall32]
+AddReg = class_add_reg
+
+[class_add_reg]
+HKR,,,0,"libusb-win32 devices"
+HKR,,Icon,,"-20"
+
+; ---------------------------------------------------------------------------
+; The identifiers. This is the whole point of the file.
+;
+;   0FCF = Dynastream Innovations, the vendor ID every ANT USB stick uses and
+;          the one this firmware enumerates with (CONFIG_ANT_DONGLE_USB_VID).
+;   1004 = ANT USB stick, the original.
+;   1008 = ANTUSB2 Stick / "ANT USB Stick 2".
+;   1009 = ANT USB-m, and therefore this dongle. Keeping that PID is a
+;          deliberate decision recorded in docs/decisions/0003 - Windows driver
+;          matching is the reason the impersonation exists at all.
+; ---------------------------------------------------------------------------
+
+[Manufacturer]
+%ManufacturerName% = Devices, NTx86, NTamd64
+
+[Devices.NTx86]
+%Device_1009% = LibUsbDevice, USB\VID_0FCF&PID_1009
+%Device_1008% = LibUsbDevice, USB\VID_0FCF&PID_1008
+%Device_1004% = LibUsbDevice, USB\VID_0FCF&PID_1004
+
+[Devices.NTamd64]
+%Device_1009% = LibUsbDevice, USB\VID_0FCF&PID_1009
+%Device_1008% = LibUsbDevice, USB\VID_0FCF&PID_1008
+%Device_1004% = LibUsbDevice, USB\VID_0FCF&PID_1004
+
+; ---------------------------------------------------------------------------
+; Install
+; ---------------------------------------------------------------------------
+
+[LibUsbDevice.NTx86]
+CopyFiles = libusb_sys, libusb_dll_x86
+
+[LibUsbDevice.NTamd64]
+CopyFiles = libusb_sys, libusb_dll, libusb_dll_wow64
+
+[LibUsbDevice.NTx86.Services]
+AddService = libusb0, 0x00000002, libusb_service
+
+[LibUsbDevice.NTamd64.Services]
+AddService = libusb0, 0x00000002, libusb_service
+
+; 0x00000002 is SPSVCINST_ASSOCSERVICE: this service is the function driver
+; for the device, not merely another service to install.
+
+[libusb_service]
+DisplayName   = %ServiceDisplayName%
+ServiceType   = 1                        ; SERVICE_KERNEL_DRIVER
+StartType     = 3                        ; SERVICE_DEMAND_START
+ErrorControl  = 0                        ; SERVICE_ERROR_IGNORE
+ServiceBinary = %12%\libusb0.sys
+
+[LibUsbDevice.NTx86.HW]
+AddReg = device_add_reg
+
+[LibUsbDevice.NTamd64.HW]
+AddReg = device_add_reg
+
+[device_add_reg]
+; A USB stick gets unplugged without warning. Saying so up front stops Windows
+; complaining about unsafe removal every time.
+HKR,,SurpriseRemovalOK,0x00010001,1
+
+; ---------------------------------------------------------------------------
+; Files
+; ---------------------------------------------------------------------------
+
+[SourceDisksNames]
+1 = %DiskName%
+
+[SourceDisksFiles.x86]
+libusb0.sys     = 1,x86
+libusb0_x86.dll = 1,x86
+
+[SourceDisksFiles.amd64]
+libusb0.sys     = 1,amd64
+libusb0.dll     = 1,amd64
+libusb0_x86.dll = 1,x86
+
+[DestinationDirs]
+libusb_sys       = 10,system32\drivers
+libusb_dll       = 10,system32
+libusb_dll_x86   = 10,system32
+libusb_dll_wow64 = 10,syswow64
+
+[libusb_sys]
+libusb0.sys
+
+[libusb_dll]
+libusb0.dll
+
+; On 32-bit Windows the 32-bit DLL is the only one, and it is installed under
+; the plain name. On 64-bit Windows the same 32-bit binary goes to SysWOW64,
+; also under the plain name, so 32-bit callers - which includes every shipping
+; ANT application, ANT_DLL.dll among them - find it.
+[libusb_dll_x86]
+libusb0.dll,libusb0_x86.dll
+
+[libusb_dll_wow64]
+libusb0.dll,libusb0_x86.dll
+
+; ---------------------------------------------------------------------------
+
+[Strings]
+ProviderName       = "RadiANT (open source, clean-room; not affiliated with Garmin or Dynastream)"
+ManufacturerName   = "Dynastream Innovations Inc. (VID 0FCF)"
+DiskName           = "libusb-win32 driver files"
+ServiceDisplayName = "libusb-win32 driver (libusb0.sys)"
+Device_1009        = "ANT USB-m (0FCF:1009)"
+Device_1008        = "ANT USB Stick 2 (0FCF:1008)"
+Device_1004        = "ANT USB Stick (0FCF:1004)"

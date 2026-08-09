@@ -1,0 +1,82 @@
+# ant serial capture v1: <seconds|-> <dir> <framed message, hex>
+# HAND-ASSEMBLED, NOT A CAPTURE. Nothing here came off a wire. Every frame was
+# built from the message tables in docs/ant-serial-protocol.md and the XOR was
+# worked term by term in the comment above it. Do not cite as an observation.
+# See tools/vectors/README.md. Replayed by tools/test_ant_golden.py.
+#
+# The timestamp column is '-' throughout, the same form tools/ant_conformance.py
+# writes, because nothing here is a statement about timing.
+
+# case reset
+# MESG_SYSTEM_RESET, [channel 0]. Every host library opens with this.
+#   A4 ^ 01 = A5   A5 ^ 4A = EF   EF ^ 00 = EF
+- > a4014a00ef
+# MESG_STARTUP_MESG, [STARTUP_COMMAND_RESET 0x20]. 0x4A is answered by 0x6F and
+# by no 0x40 at all - the one exception to command/response.
+#   A4 ^ 01 = A5   A5 ^ 6F = CA   CA ^ 20 = EA
+- < a4016f20ea
+
+# case capabilities
+# MESG_REQUEST, [index 0, wanted id MESG_CAPABILITIES 0x54].
+#   A4 ^ 02 = A6   A6 ^ 4D = EB   EB ^ 00 = EB   EB ^ 54 = BF
+- > a4024d0054bf
+# MESG_CAPABILITIES, nine bytes. This payload is the one thing in this file
+# that is real: it is what the firmware answers, recorded in
+# docs/ant-serial-protocol.md and as ant_wire.OBSERVED_CAPABILITIES.
+#   A4^09=AD  ^54=F9  ^08=F1  ^08=F9  ^00=F9  ^B2=4B
+#   ^32=79    ^00=79  ^FD=84  ^8D=09  ^0F=06
+- < a40954080800b23200fd8d0f06
+
+# case network-key
+# MESG_NETWORK_KEY, [network 0, B9 A5 21 FB BD 72 C3 45]. The ANT+ key is
+# public and is already in tools/ant_scan.py; it is a network key, not a
+# protocol constant, which is why it stays out of the generator.
+#   A4^09=AD  ^46=EB  ^00=EB  ^B9=52  ^A5=F7  ^21=D6
+#   ^FB=2D    ^BD=90  ^72=E2  ^C3=21  ^45=64
+- > a4094600b9a521fbbd72c34564
+# MESG_RESPONSE_EVENT, [channel 0, 0x46, RESPONSE_NO_ERROR].
+#   A4^03=A7  ^40=E7  ^00=E7  ^46=A1  ^00=A1
+- < a40340004600a1
+
+# case assign-channel
+# MESG_ASSIGN_CHANNEL, [channel 1, CHANNEL_TYPE_SLAVE_RX_ONLY 0x40, network 0].
+# Chosen because its checksum comes out 0xA4: the frame ends in a byte that
+# looks like the start of the next one. Leave SYNC out of the sum and you get
+# 0x00 instead, which looks entirely unremarkable.
+#   A4^03=A7  ^42=E5  ^01=E4  ^40=A4  ^00=A4
+- > a40342014000a4
+# MESG_RESPONSE_EVENT, [channel 1, 0x42, RESPONSE_NO_ERROR]. Its checksum is
+# 0xA4 as well, so this pair puts two false SYNC bytes back to back.
+#   A4^03=A7  ^40=E7  ^01=E6  ^42=A4  ^00=A4
+- < a40340014200a4
+
+# case lib-config
+# MESG_ANTLIB_CONFIG, [filler 0, LIB_CONFIG_ALL_EXT_FIELDS 0xE0] - channel id
+# and RSSI and RX timestamp, which is what ant_verify.py asks for.
+#   A4^02=A6  ^6E=C8  ^00=C8  ^E0=28
+- > a4026e00e028
+# MESG_RESPONSE_EVENT, [channel 0, 0x6E, RESPONSE_NO_ERROR].
+#   A4^03=A7  ^40=E7  ^00=E7  ^6E=89  ^00=89
+- < a40340006e0089
+
+# case open-channel
+# MESG_OPEN_CHANNEL, [channel 1].
+#   A4 ^ 01 = A5   A5 ^ 4B = EE   EE ^ 01 = EF
+- > a4014b01ef
+# MESG_RESPONSE_EVENT, [channel 1, 0x4B, RESPONSE_NO_ERROR].
+#   A4^03=A7  ^40=E7  ^01=E6  ^4B=AD  ^00=AD
+- < a40340014b00ad
+
+# case broadcast
+# MESG_BROADCAST_DATA, [channel 1, eight 0xA4 data bytes]. There is no escaping
+# in this protocol, so a payload byte equal to SYNC is legal and a reader must
+# be driven by LEN. Eight identical bytes XOR to zero, so the sum is short:
+#   A4^09=AD  ^4E=E3  ^01=E2  ^(A4 eight times)=E2
+- < a4094e01a4a4a4a4a4a4a4a4e2
+
+# case malformed/sync-omitted-checksum
+# The historical bug, on the wire. MESG_REQUEST with the checksum computed from
+# LEN onwards instead of from SYNC: 0x02 ^ 0x4D ^ 0x00 ^ 0x54 = 0x1B, where the
+# correct value is 0xBF. Note 0xBF ^ 0x1B = 0xA4 - the error is always exactly
+# the SYNC byte. A reader must throw this away.
+- > a4024d00541b

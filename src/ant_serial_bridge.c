@@ -1,16 +1,21 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
 /*
  * ANT Serial Bridge — translates the ANT USB serial protocol (0xA4-framed
- * messages) to/from the on-chip ANT stack API (ant_interface.h).
+ * messages) to/from the radio contract in ant_radio.h.
  *
  * Inbound (host → chip):
  *   Parser thread drains ant_rx_ring_buf byte by byte through a state machine,
- *   validates the XOR checksum, and calls the matching ant_interface.h function.
- *   Each command gets a MESG_RESPONSE_EVENT_ID (0x40) acknowledgement.
+ *   validates the XOR checksum, and calls the matching antr_* function.
+ *   Each command gets an ANTW_MESG_RESPONSE_EVENT_ID (0x40) acknowledgement.
  *
  * Outbound (chip → host):
- *   ant_serial_bridge_init() registers ant_evt_handler() and starts the parser
- *   thread. The handler wraps every ANT stack event in a serial frame and
- *   pushes it to usb_ant_send().
+ *   The radio backend calls antr_on_message() - which this file implements -
+ *   for every message the host should see. The handler wraps it in a serial
+ *   frame and pushes it to usb_ant_send(). There is no registration step: the
+ *   symbol is resolved at link time and exactly one translation unit in the
+ *   image defines it. ant_serial_bridge_init() therefore only starts the
+ *   parser thread.
  *
  * Wire frame format (ANT Serial Protocol):
  *   [SYNC=0xA4] [LEN] [ID] [payload: LEN bytes] [XOR checksum]
@@ -21,6 +26,12 @@
  * frame we send is rejected the same way at the other end. Two implementations
  * that both omit it agree with each other perfectly and with nobody else -
  * which is how this survived a passing test suite.
+ *
+ * Nothing here names a symbol from sdk-ant. Protocol constants come from
+ * src/ant_wire.h (ANTW_*, generated from protocol/ant_wire.yaml) and every
+ * call into the radio goes through src/ant_radio.h (antr_*). That is what lets
+ * this file build with no sdk-ant present at all, and it is the boundary the
+ * clean-room rebuild is defended on.
  */
 
 #include <string.h>
@@ -31,18 +42,8 @@
 
 #include "ant_transport.h"
 
-#include "ant_interface.h"
-#include "ant_parameters.h"
-/* ant_host_init.h is the nRF5340 dual-core cpuapp header (CONFIG_ANT_NP_HOST,
- * which depends on SOC_NRF5340_CPUAPP). Single-core targets such as the
- * nRF52840 use ant_init.h. Both declare ant_init()/ant_cb_register(), so
- * picking the wrong one compiles and then misbehaves.
- */
-#if defined(CONFIG_ANT_NP_HOST)
-#include "ant_host_init.h"
-#else
-#include "ant_init.h"
-#endif
+#include "ant_radio.h"
+#include "ant_wire.h"
 
 LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
 
@@ -75,13 +76,13 @@ static atomic_t reset_in_progress;
 
 /* ── Frame helpers ─────────────────────────────────────────────────────────── */
 
-/* Build and transmit a MESG_RESPONSE_EVENT_ID (0x40) reply. */
+/* Build and transmit an ANTW_MESG_RESPONSE_EVENT_ID (0x40) reply. */
 static void send_response(uint8_t ch, uint8_t msg_id, uint8_t code)
 {
 	uint8_t buf[7];
-	buf[0] = MESG_TX_SYNC;          /* 0xA4 */
-	buf[1] = MESG_RESPONSE_EVENT_SIZE; /* 3 */
-	buf[2] = MESG_RESPONSE_EVENT_ID;   /* 0x40 */
+	buf[0] = ANTW_SYNC_TX;                  /* 0xA4 */
+	buf[1] = ANTW_MESG_RESPONSE_EVENT_SIZE; /* 3 */
+	buf[2] = ANTW_MESG_RESPONSE_EVENT_ID;   /* 0x40 */
 	buf[3] = ch;
 	buf[4] = msg_id;
 	buf[5] = code;
@@ -89,24 +90,30 @@ static void send_response(uint8_t ch, uint8_t msg_id, uint8_t code)
 	usb_ant_send(buf, sizeof(buf));
 }
 
-/* Startup message sent after ant_stack_reset(). */
+/* Startup message sent after antr_stack_reset(). */
 static void send_startup(void)
 {
 	uint8_t buf[5];
-	buf[0] = MESG_TX_SYNC;
-	buf[1] = MESG_STARTUP_MESG_SIZE;  /* 1 */
-	buf[2] = MESG_STARTUP_MESG_ID;    /* 0x6F */
-	buf[3] = 0x00;                     /* reset by command */
+	buf[0] = ANTW_SYNC_TX;
+	buf[1] = ANTW_MESG_STARTUP_MESG_SIZE;  /* 1 */
+	buf[2] = ANTW_MESG_STARTUP_MESG_ID;    /* 0x6F */
+	buf[3] = 0x00;                          /* reset by command */
 	buf[4] = buf[0] ^ buf[1] ^ buf[2] ^ buf[3];
 	usb_ant_send(buf, sizeof(buf));
 }
 
 static void send_message(uint8_t msg_id, const uint8_t *payload, uint8_t len)
 {
-	uint8_t buf[MESG_MAX_SIZE_VALUE + 4];
-	uint8_t xor = MESG_TX_SYNC ^ len ^ msg_id;
+	/* ANTW_MAX_FRAME_SIZE is ANTW_MAX_SIZE_VALUE + ANTW_MSG_OVERHEAD, the
+	 * largest frame that can legally exist. Never ANTW_MESG_MAX_SIZE: that
+	 * is built from ANTW_MAX_DATA_SIZE, which does not count the leading
+	 * channel byte the LEN byte does, so it is one short and a full-length
+	 * message would write its checksum past the end.
+	 */
+	uint8_t buf[ANTW_MAX_FRAME_SIZE];
+	uint8_t xor = ANTW_SYNC_TX ^ len ^ msg_id;
 
-	buf[0] = MESG_TX_SYNC;
+	buf[0] = ANTW_SYNC_TX;
 	buf[1] = len;
 	buf[2] = msg_id;
 
@@ -121,24 +128,24 @@ static void send_message(uint8_t msg_id, const uint8_t *payload, uint8_t len)
 
 /* ── Transmit power ────────────────────────────────────────────────────────── */
 
-/* RADIO_TX_POWER_LVL_5 (+8 dBm) exists only on the nRF52820, nRF52833 and
+/* ANTW_RADIO_TX_POWER_LVL_5 (+8 dBm) exists only on the nRF52820, nRF52833 and
  * nRF52840; every other part this builds for tops out at LVL_4 (+4 dBm).
- * ant_parameters.h states that restriction in a doc comment rather than
- * exposing a symbol for it, so it is restated here.
+ * src/ant_wire.h states that restriction in the constant's doc comment rather
+ * than exposing a symbol for it, so it is restated here.
  */
 #if defined(CONFIG_ANT_DONGLE_TX_POWER_BOOST)
 #if defined(CONFIG_SOC_NRF52840) || defined(CONFIG_SOC_NRF52833) || \
 	defined(CONFIG_SOC_NRF52820)
-#define ANT_DONGLE_TX_POWER_DEFAULT RADIO_TX_POWER_LVL_5
+#define ANT_DONGLE_TX_POWER_DEFAULT ANTW_RADIO_TX_POWER_LVL_5
 #else
-#define ANT_DONGLE_TX_POWER_DEFAULT RADIO_TX_POWER_LVL_4
+#define ANT_DONGLE_TX_POWER_DEFAULT ANTW_RADIO_TX_POWER_LVL_4
 #endif
 #else
-#define ANT_DONGLE_TX_POWER_DEFAULT RADIO_TX_POWER_LVL_3
+#define ANT_DONGLE_TX_POWER_DEFAULT ANTW_RADIO_TX_POWER_LVL_3
 #endif
 
 /* What each channel should transmit at, whether or not it is currently
- * assigned. ant_channel_radio_tx_power_set() only takes on an assigned channel
+ * assigned. antr_channel_radio_tx_power_set() only takes on an assigned channel
  * - which is why the 0x47 fan-out below swallows its errors - and every host
  * sets power before assigning anything, so applying it at the moment the host
  * asks would drop the request on the floor for every channel that does not
@@ -169,18 +176,18 @@ static void tx_power_reset(void)
  * reachable - no host will ever request LVL_5 by name, because no retail stick
  * has ever had it.
  *
- * RADIO_TX_POWER_LVL_CUSTOM (0x80) names a raw register value rather than a
- * level, so it is passed through untouched.
+ * ANTW_RADIO_TX_POWER_LVL_CUSTOM (0x80) names a raw register value rather than
+ * a level, so it is passed through untouched.
  */
 static uint8_t tx_power_resolve(uint8_t requested)
 {
 #if defined(CONFIG_ANT_DONGLE_TX_POWER_BOOST)
-	if (requested & RADIO_TX_POWER_LVL_CUSTOM) {
+	if (requested & ANTW_RADIO_TX_POWER_LVL_CUSTOM) {
 		return requested;
 	}
 
-	if (requested == RADIO_TX_POWER_LVL_3 ||
-	    requested == RADIO_TX_POWER_LVL_4) {
+	if (requested == ANTW_RADIO_TX_POWER_LVL_3 ||
+	    requested == ANTW_RADIO_TX_POWER_LVL_4) {
 		return ANT_DONGLE_TX_POWER_DEFAULT;
 	}
 #endif
@@ -190,7 +197,7 @@ static uint8_t tx_power_resolve(uint8_t requested)
 static void tx_power_apply(uint8_t ch)
 {
 	if (ch < ARRAY_SIZE(tx_power)) {
-		(void)ant_channel_radio_tx_power_set(ch, tx_power[ch], 0);
+		(void)antr_channel_radio_tx_power_set(ch, tx_power[ch], 0);
 	}
 }
 
@@ -198,217 +205,276 @@ static void tx_power_apply(uint8_t ch)
 
 static void handle_request(const uint8_t *body, uint8_t len)
 {
-	ant_err_t err = 0;
-	uint8_t payload[MESG_MAX_SIZE_VALUE] = {0};
+	antr_err_t err = 0;
+	uint8_t payload[ANTW_MAX_SIZE_VALUE] = {0};
 	uint16_t value16;
 
 	if (len < 2) {
-		send_response(0, MESG_REQUEST_ID, INVALID_MESSAGE);
+		send_response(0, ANTW_MESG_REQUEST_ID, ANTW_INVALID_MESSAGE);
 		return;
 	}
 	uint8_t ch     = body[0];
 	uint8_t req_id = body[1];
 
 	switch (req_id) {
-	case MESG_CAPABILITIES_ID: {
-		err = ant_capabilities_get(payload);
+	case ANTW_MESG_CAPABILITIES_ID: {
+		err = antr_capabilities_get(payload);
 		if (!err) {
-			send_message(MESG_CAPABILITIES_ID, payload,
-				     MESG_CAPABILITIES_SIZE);
+			send_message(ANTW_MESG_CAPABILITIES_ID, payload,
+				     ANTW_MESG_CAPABILITIES_SIZE);
 		}
 		break;
 	}
 
-	case MESG_VERSION_ID: {
-		err = ant_version_get(payload);
+	case ANTW_MESG_VERSION_ID: {
+		err = antr_version_get(payload);
 		if (!err) {
-			send_message(MESG_VERSION_ID, payload, MESG_VERSION_SIZE);
+			send_message(ANTW_MESG_VERSION_ID, payload,
+				     ANTW_MESG_VERSION_SIZE);
 		}
 		break;
 	}
 
-	case MESG_CHANNEL_STATUS_ID: {
+	case ANTW_MESG_CHANNEL_STATUS_ID: {
 		payload[0] = ch;
-		err = ant_channel_status_get(ch, &payload[1]);
+		err = antr_channel_status_get(ch, &payload[1]);
 		if (!err) {
-			send_message(MESG_CHANNEL_STATUS_ID, payload,
-				     MESG_CHANNEL_STATUS_SIZE);
+			send_message(ANTW_MESG_CHANNEL_STATUS_ID, payload,
+				     ANTW_MESG_CHANNEL_STATUS_SIZE);
 		}
 		break;
 	}
 
-	case MESG_CHANNEL_ID_ID: {
+	case ANTW_MESG_CHANNEL_ID_ID: {
 		payload[0] = ch;
-		err = ant_channel_id_get(ch, &value16, &payload[3], &payload[4]);
+		err = antr_channel_id_get(ch, &value16, &payload[3], &payload[4]);
 		if (!err) {
 			payload[1] = (uint8_t)value16;
 			payload[2] = (uint8_t)(value16 >> 8);
-			send_message(MESG_CHANNEL_ID_ID, payload,
-				     MESG_CHANNEL_ID_SIZE);
+			send_message(ANTW_MESG_CHANNEL_ID_ID, payload,
+				     ANTW_MESG_CHANNEL_ID_SIZE);
 		}
 		break;
 	}
 
-	case MESG_CHANNEL_MESG_PERIOD_ID: {
+	case ANTW_MESG_CHANNEL_MESG_PERIOD_ID: {
 		payload[0] = ch;
-		err = ant_channel_period_get(ch, &value16);
+		err = antr_channel_period_get(ch, &value16);
 		if (!err) {
 			payload[1] = (uint8_t)value16;
 			payload[2] = (uint8_t)(value16 >> 8);
-			send_message(MESG_CHANNEL_MESG_PERIOD_ID, payload,
-				     MESG_CHANNEL_MESG_PERIOD_SIZE);
+			send_message(ANTW_MESG_CHANNEL_MESG_PERIOD_ID, payload,
+				     ANTW_MESG_CHANNEL_MESG_PERIOD_SIZE);
 		}
 		break;
 	}
 
-	case MESG_CHANNEL_RADIO_FREQ_ID: {
+	case ANTW_MESG_CHANNEL_RADIO_FREQ_ID: {
 		payload[0] = ch;
-		err = ant_channel_radio_freq_get(ch, &payload[1]);
+		err = antr_channel_radio_freq_get(ch, &payload[1]);
 		if (!err) {
-			send_message(MESG_CHANNEL_RADIO_FREQ_ID, payload,
-				     MESG_CHANNEL_RADIO_FREQ_SIZE);
+			send_message(ANTW_MESG_CHANNEL_RADIO_FREQ_ID, payload,
+				     ANTW_MESG_CHANNEL_RADIO_FREQ_SIZE);
 		}
 		break;
 	}
 
-	case MESG_CHANNEL_CRC_MODE_ID: {
+#ifdef ANTW_MESG_CHANNEL_CRC_MODE_ID
+	case ANTW_MESG_CHANNEL_CRC_MODE_ID: {
 		payload[0] = ch;
-		err = ant_channel_radio_crc_mode_get(ch, &payload[1]);
+		err = antr_channel_radio_crc_mode_get(ch, &payload[1]);
 		if (!err) {
-			send_message(MESG_CHANNEL_CRC_MODE_ID, payload,
-				     MESG_CHANNEL_CRC_MODE_SIZE);
+			send_message(ANTW_MESG_CHANNEL_CRC_MODE_ID, payload,
+				     ANTW_MESG_CHANNEL_CRC_MODE_SIZE);
 		}
 		break;
 	}
+#else
+	/*
+	 * K1: unresolved, see protocol/ant_wire.yaml.
+	 *
+	 * The message id of MESG_CHANNEL_CRC_MODE is a Nordic extension that
+	 * appears nowhere in this repository and is not in Rev 5.1, so there is
+	 * no ANTW_ constant to dispatch on and the read is left unimplemented:
+	 * a request for it falls through to the default arm and is answered
+	 * ANTW_INVALID_MESSAGE. antr_channel_radio_crc_mode_get() is unchanged
+	 * and still declared - only the wire id is missing. When
+	 * src/ant_radio_sdk_ant.c recovers the value and it lands in
+	 * protocol/ant_wire.yaml, this arm compiles back in with no edit.
+	 */
+#endif
 
-	case MESG_SET_SEARCH_CH_PRIORITY_ID: {
+	case ANTW_MESG_SET_SEARCH_CH_PRIORITY_ID: {
 		payload[0] = ch;
-		err = ant_search_channel_priority_get(ch, &payload[1]);
+		err = antr_search_channel_priority_get(ch, &payload[1]);
 		if (!err) {
-			send_message(MESG_SET_SEARCH_CH_PRIORITY_ID, payload,
-				     MESG_SET_SEARCH_CH_PRIORITY_SIZE);
+			send_message(ANTW_MESG_SET_SEARCH_CH_PRIORITY_ID, payload,
+				     ANTW_MESG_SET_SEARCH_CH_PRIORITY_SIZE);
 		}
 		break;
 	}
 
-	case MESG_PENDING_TRANSMIT_CLEAR_ID: {
+#ifdef ANTW_MESG_PENDING_TRANSMIT_CLEAR_ID
+	case ANTW_MESG_PENDING_TRANSMIT_CLEAR_ID: {
 		payload[0] = ch;
-		err = ant_pending_transmit(ch, &payload[1]);
+		err = antr_pending_transmit_get(ch, &payload[1]);
 		if (!err) {
-			send_message(MESG_PENDING_TRANSMIT_CLEAR_ID, payload,
-				     MESG_PENDING_TRANSMIT_GET_SIZE);
+			send_message(ANTW_MESG_PENDING_TRANSMIT_CLEAR_ID, payload,
+				     ANTW_MESG_PENDING_TRANSMIT_GET_SIZE);
 		}
 		break;
 	}
+#else
+	/*
+	 * K1: unresolved, see protocol/ant_wire.yaml.
+	 *
+	 * Same situation as the CRC mode above - the reply size
+	 * (ANTW_MESG_PENDING_TRANSMIT_GET_SIZE) is known, the message id is
+	 * not, and there is nothing legitimate to dispatch on. The read is left
+	 * unimplemented rather than guessed; antr_pending_transmit_get() is
+	 * still declared and gains its caller back the moment the id resolves.
+	 */
+#endif
 
-	case MESG_ANTLIB_CONFIG_ID: {
+	case ANTW_MESG_ANTLIB_CONFIG_ID: {
 		payload[0] = ch;
-		err = ant_lib_config_get(&payload[1]);
+		err = antr_lib_config_get(&payload[1]);
 		if (!err) {
-			send_message(MESG_ANTLIB_CONFIG_ID, payload,
-				     MESG_ANTLIB_CONFIG_SIZE);
+			send_message(ANTW_MESG_ANTLIB_CONFIG_ID, payload,
+				     ANTW_MESG_ANTLIB_CONFIG_SIZE);
 		}
 		break;
 	}
 
-	case MESG_ACTIVE_SEARCH_SHARING_ID: {
+	case ANTW_MESG_ACTIVE_SEARCH_SHARING_ID: {
 		payload[0] = ch;
-		err = ant_active_search_sharing_cycles_get(ch, &payload[1]);
+		err = antr_active_search_sharing_cycles_get(ch, &payload[1]);
 		if (!err) {
-			send_message(MESG_ACTIVE_SEARCH_SHARING_ID, payload,
-				     MESG_ACTIVE_SEARCH_SHARING_REQ_SIZE);
+			send_message(ANTW_MESG_ACTIVE_SEARCH_SHARING_ID, payload,
+				     ANTW_MESG_ACTIVE_SEARCH_SHARING_REQ_SIZE);
 		}
 		break;
 	}
 
-	case MESG_EVENT_FILTER_CONFIG_ID: {
+	case ANTW_MESG_EVENT_FILTER_CONFIG_ID: {
 		payload[0] = ch;
-		err = ant_event_filtering_get(&value16);
+		err = antr_event_filtering_get(&value16);
 		if (!err) {
 			payload[1] = (uint8_t)value16;
 			payload[2] = (uint8_t)(value16 >> 8);
-			send_message(MESG_EVENT_FILTER_CONFIG_ID, payload,
-				     MESG_EVENT_FILTER_CONFIG_REQ_SIZE);
+			send_message(ANTW_MESG_EVENT_FILTER_CONFIG_ID, payload,
+				     ANTW_MESG_EVENT_FILTER_CONFIG_REQ_SIZE);
 		}
 		break;
 	}
 
-	case MESG_CONFIG_ADV_BURST_ID: {
-		err = ant_adv_burst_config_get(ch, payload);
+	case ANTW_MESG_CONFIG_ADV_BURST_ID: {
+		/* body[0] is 0 for "what can you do" and 1 for "what are you
+		 * set to", not a channel, and the two replies are different
+		 * lengths.
+		 */
+#ifdef ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE
+		uint8_t reply_len =
+			ch ? ANTW_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE :
+			     ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE;
+#else
+		/*
+		 * K1: unresolved, see protocol/ant_wire.yaml.
+		 *
+		 * The advanced-burst *capabilities* reply's LEN byte has no
+		 * recorded value, and unlike the ids above it has no
+		 * legitimate substitute either: it goes on the wire in a
+		 * direction this dongle originates, so a guessed length is a
+		 * wrong length in front of a host rather than a message we
+		 * decline. The configuration form (index 1) is unaffected and
+		 * still answers; the capabilities form is refused with
+		 * ANTW_INVALID_MESSAGE until src/ant_radio_sdk_ant.c recovers
+		 * the value.
+		 */
+		uint8_t reply_len =
+			ch ? ANTW_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE : 0;
+#endif
+
+		if (reply_len == 0) {
+			err = ANTW_INVALID_MESSAGE;
+			break;
+		}
+
+		err = antr_adv_burst_config_get(ch, payload);
 		if (!err) {
-			send_message(MESG_CONFIG_ADV_BURST_ID, payload,
-				     ch ? MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE :
-				     MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE);
+			send_message(ANTW_MESG_CONFIG_ADV_BURST_ID, payload,
+				     reply_len);
 		}
 		break;
 	}
 
-	case MESG_SDU_SET_MASK_ID: {
+	case ANTW_MESG_SDU_SET_MASK_ID: {
 		/* [mask_index, mask[8]]. The 8 mask bytes start one in: the reply is
 		 * the same shape as the command that set them, and the size constant
-		 * is MESG_ANT_MAX_PAYLOAD_SIZE *plus* MESG_CHANNEL_NUM_SIZE precisely
+		 * is ANTW_ANT_MAX_PAYLOAD_SIZE *plus* ANTW_CHANNEL_NUM_SIZE precisely
 		 * because of that leading index byte. Writing the mask at payload[0]
 		 * instead fills the index slot with mask[0], shifts every byte down
 		 * one, and pads the end with a zero the host reads as mask[7].
 		 */
 		payload[0] = ch;
-		err = ant_sdu_mask_get(ch, &payload[1]);
+		err = antr_sdu_mask_get(ch, &payload[1]);
 		if (!err) {
-			send_message(MESG_SDU_SET_MASK_ID, payload,
-				     MESG_ANT_MAX_PAYLOAD_SIZE +
-				     MESG_CHANNEL_NUM_SIZE);
+			send_message(ANTW_MESG_SDU_SET_MASK_ID, payload,
+				     ANTW_ANT_MAX_PAYLOAD_SIZE +
+				     ANTW_CHANNEL_NUM_SIZE);
 		}
 		break;
 	}
 
-	case MESG_ENCRYPT_ENABLE_ID: {
+	case ANTW_MESG_ENCRYPT_ENABLE_ID: {
 		/* Same leading byte, same reason: the info type is echoed at
 		 * payload[0] and the requested data follows it. Each reply size below
 		 * counts that byte - 2 = type + 1 mode byte, 5 = type + a 4-byte
 		 * crypto ID, 20 = type + 19 bytes of custom user data.
 		 */
 		payload[0] = ch;
-		err = ant_crypto_info_get(ch, &payload[1]);
+		err = antr_crypto_info_get(ch, &payload[1]);
 		if (!err) {
 			uint8_t reply_len = 0;
 
 			switch (ch) {
-			case ENCRYPTION_INFO_GET_SUPPORTED_MODE:
-				reply_len = MESG_CONFIG_ENCRYPT_REQ_CAPABILITIES_SIZE;
+			case ANTW_ENCRYPTION_INFO_GET_SUPPORTED_MODE:
+				reply_len = ANTW_MESG_CONFIG_ENCRYPT_REQ_CAPABILITIES_SIZE;
 				break;
-			case ENCRYPTION_INFO_GET_CRYPTO_ID:
-				reply_len = MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE;
+			case ANTW_ENCRYPTION_INFO_GET_CRYPTO_ID:
+				reply_len = ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE;
 				break;
-			case ENCRYPTION_INFO_GET_CUSTOM_USER_DATA:
-				reply_len = MESG_CONFIG_ENCRYPT_REQ_CONFIG_USER_DATA_SIZE;
+			case ANTW_ENCRYPTION_INFO_GET_CUSTOM_USER_DATA:
+				reply_len = ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_USER_DATA_SIZE;
 				break;
 			default:
-				err = INVALID_MESSAGE;
+				err = ANTW_INVALID_MESSAGE;
 				break;
 			}
 
 			if (!err) {
-				send_message(MESG_ENCRYPT_ENABLE_ID, payload, reply_len);
+				send_message(ANTW_MESG_ENCRYPT_ENABLE_ID, payload,
+					     reply_len);
 			}
 		}
 		break;
 	}
 
 	default:
-		send_response(ch, MESG_REQUEST_ID, INVALID_MESSAGE);
+		send_response(ch, ANTW_MESG_REQUEST_ID, ANTW_INVALID_MESSAGE);
 		return;
 	}
 
 	if (err) {
 		LOG_WRN("Request 0x%02X failed: %d", req_id, err);
-		send_response(ch, MESG_REQUEST_ID, (uint8_t)err);
+		send_response(ch, ANTW_MESG_REQUEST_ID, err);
 	}
 }
 
 /* ── System reset ──────────────────────────────────────────────────────────── */
 
 /*
- * MESG_SYSTEM_RESET resets the ANT protocol stack, not the MCU.
+ * ANTW_MESG_SYSTEM_RESET_ID resets the ANT protocol stack, not the MCU.
  *
  * Every host library (openant, Zwift, Golden Cheetah) opens the device, sends
  * a reset, and then keeps using the same USB handle. Rebooting here drops the
@@ -419,7 +485,7 @@ static void handle_system_reset(void)
 {
 	atomic_set(&reset_in_progress, 1);
 
-	(void)ant_stack_reset();
+	(void)antr_stack_reset();
 
 	/* The stack is back to its defaults and every channel is unassigned, so
 	 * anything a previous session asked for is gone. Forget it here too,
@@ -439,17 +505,19 @@ static void handle_system_reset(void)
 /* ── Burst transmit ─────────────────────────────────────────────────────────── */
 
 /*
- * The serial protocol streams a burst as a run of packets, but
- * ant_burst_handler_request() takes ownership of the buffer it is handed and
- * keeps it until the radio has sent it. `body` points into the parser's frame
- * buffer, which the very next packet overwrites, so each block has to be
- * copied somewhere that outlives the call - and then held there.
+ * The serial protocol streams a burst as a run of packets, but antr_burst_tx()
+ * takes ownership of the buffer it is handed and keeps it until the radio has
+ * sent it. `body` points into the parser's frame buffer, which the very next
+ * packet overwrites, so each block has to be copied somewhere that outlives the
+ * call - and then held there.
  *
- * Advanced burst carries up to 24 bytes per packet; plain burst carries 8.
+ * Advanced burst carries up to ANTW_ADV_BURST_BLOCK_MAX (24) bytes per packet;
+ * plain burst carries 8. That constant is generated from
+ * protocol/ant_wire.yaml and is deliberately not re-spelled locally: two
+ * constants for one buffer length is how a block gets truncated.
  */
-#define BURST_BLOCK_MAX 24
 
-static uint8_t burst_block[BURST_BLOCK_MAX];
+static uint8_t burst_block[ANTW_ADV_BURST_BLOCK_MAX];
 static K_SEM_DEFINE(burst_block_free, 1, 1);
 
 static void handle_burst(uint8_t msg_id, const uint8_t *body, uint8_t len)
@@ -459,20 +527,21 @@ static void handle_burst(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	 */
 	uint8_t size = (len >= 1) ? (uint8_t)(len - 1) : 0;
 
-	if (size < 8 || size > BURST_BLOCK_MAX || (size % 8) != 0) {
-		send_response(0, msg_id, INVALID_MESSAGE);
+	if (size < 8 || size > ANTW_ADV_BURST_BLOCK_MAX || (size % 8) != 0) {
+		send_response(0, msg_id, ANTW_INVALID_MESSAGE);
 		return;
 	}
 
-	uint8_t ch      = body[0] & 0x1F;
-	uint8_t seq     = (body[0] >> 5) & 0x03;
-	uint8_t segment = BURST_SEGMENT_CONTINUE;
+	uint8_t ch      = body[0] & ANTW_BURST_HEADER_CHANNEL_MASK;
+	uint8_t seq     = (body[0] >> ANTW_BURST_HEADER_SEQ_SHIFT) &
+			  ANTW_BURST_HEADER_SEQ_MASK;
+	uint8_t segment = ANTR_BURST_SEGMENT_CONTINUE;
 
 	if (seq == 0) {
-		segment |= BURST_SEGMENT_START;
+		segment |= ANTR_BURST_SEGMENT_START;
 	}
-	if (body[0] & 0x80) {
-		segment |= BURST_SEGMENT_END;
+	if (body[0] & ANTW_BURST_HEADER_LAST) {
+		segment |= ANTR_BURST_SEGMENT_END;
 	}
 
 	/* Waiting for the stack to release the previous block, rather than
@@ -480,17 +549,17 @@ static void handle_burst(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	 * exists so a transfer that dies mid-flight cannot wedge this thread.
 	 */
 	if (k_sem_take(&burst_block_free, K_MSEC(1000)) != 0) {
-		send_response(ch, msg_id, TRANSFER_IN_PROGRESS);
+		send_response(ch, msg_id, ANTW_TRANSFER_IN_PROGRESS);
 		return;
 	}
 
 	memcpy(burst_block, &body[1], size);
 
-	ant_err_t err = ant_burst_handler_request(ch, size, burst_block, segment);
+	antr_err_t err = antr_burst_tx(ch, size, burst_block, segment);
 
 	if (err) {
 		k_sem_give(&burst_block_free);
-		send_response(ch, msg_id, (uint8_t)err);
+		send_response(ch, msg_id, err);
 	}
 
 	/* No per-packet acknowledgement on success: like a real stick, the host
@@ -504,33 +573,34 @@ static void handle_burst(uint8_t msg_id, const uint8_t *body, uint8_t len)
 static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 {
 	/* Starts as a failure so a command whose body is too short falls through
-	 * every `if (len >= N)` below and is reported as INVALID_MESSAGE. Starting
-	 * at 0 instead acknowledges a truncated command with RESPONSE_NO_ERROR
-	 * without ever having run it, and the host has no way to tell.
+	 * every `if (len >= N)` below and is reported as ANTW_INVALID_MESSAGE.
+	 * Starting at 0 instead acknowledges a truncated command with
+	 * RESPONSE_NO_ERROR without ever having run it, and the host has no way
+	 * to tell.
 	 */
-	ant_err_t err = INVALID_MESSAGE;
+	antr_err_t err = ANTW_INVALID_MESSAGE;
 	/* body[0] is channel number (or network number for NETWORK_KEY) */
 	uint8_t ch = (len > 0) ? body[0] : 0;
 
 	switch (msg_id) {
 
-	case MESG_SYSTEM_RESET_ID:
+	case ANTW_MESG_SYSTEM_RESET_ID:
 		handle_system_reset();
 		send_startup();
 		return; /* no RESPONSE_EVENT for reset */
 
-	case MESG_NETWORK_KEY_ID:
+	case ANTW_MESG_NETWORK_KEY_ID:
 		/* body: [net_num, key[8]] */
 		if (len >= 9) {
-			err = ant_network_address_set(body[0], &body[1]);
+			err = antr_network_address_set(body[0], &body[1]);
 		}
 		break;
 
-	case MESG_ASSIGN_CHANNEL_ID:
+	case ANTW_MESG_ASSIGN_CHANNEL_ID:
 		/* body: [ch, type, net, (ext_assign optional)] */
 		if (len >= 3) {
 			uint8_t ext = (len >= 4) ? body[3] : 0x00;
-			err = ant_channel_assign(body[0], body[1], body[2], ext);
+			err = antr_channel_assign(body[0], body[1], body[2], ext);
 			if (!err) {
 				/* The channel exists now, so the power the host
 				 * asked for earlier - or our boosted default,
@@ -541,47 +611,47 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
-	case MESG_CHANNEL_ID_ID:
+	case ANTW_MESG_CHANNEL_ID_ID:
 		/* body: [ch, dev_lsb, dev_msb, dev_type, trans_type] */
 		if (len >= 5) {
 			uint16_t dev = (uint16_t)body[1] |
 				       ((uint16_t)body[2] << 8);
-			err = ant_channel_id_set(body[0], dev, body[3], body[4]);
+			err = antr_channel_id_set(body[0], dev, body[3], body[4]);
 		}
 		break;
 
-	case MESG_CHANNEL_RADIO_FREQ_ID:
+	case ANTW_MESG_CHANNEL_RADIO_FREQ_ID:
 		/* body: [ch, freq_offset_from_2400MHz] */
 		if (len >= 2) {
-			err = ant_channel_radio_freq_set(body[0], body[1]);
+			err = antr_channel_radio_freq_set(body[0], body[1]);
 		}
 		break;
 
-	case MESG_CHANNEL_MESG_PERIOD_ID:
+	case ANTW_MESG_CHANNEL_MESG_PERIOD_ID:
 		/* body: [ch, period_lsb, period_msb] (32 kHz counts) */
 		if (len >= 3) {
 			uint16_t period = (uint16_t)body[1] |
 					  ((uint16_t)body[2] << 8);
-			err = ant_channel_period_set(body[0], period);
+			err = antr_channel_period_set(body[0], period);
 		}
 		break;
 
-	case MESG_CHANNEL_SEARCH_TIMEOUT_ID:
+	case ANTW_MESG_CHANNEL_SEARCH_TIMEOUT_ID:
 		/* body: [ch, timeout] (2.5 s increments) */
 		if (len >= 2) {
-			err = ant_channel_search_timeout_set(body[0], body[1]);
+			err = antr_channel_search_timeout_set(body[0], body[1]);
 		}
 		break;
 
-	case MESG_SET_LP_SEARCH_TIMEOUT_ID:
+	case ANTW_MESG_SET_LP_SEARCH_TIMEOUT_ID:
 		/* body: [ch, timeout] */
 		if (len >= 2) {
-			err = ant_channel_low_priority_rx_search_timeout_set(
+			err = antr_channel_low_priority_rx_search_timeout_set(
 				body[0], body[1]);
 		}
 		break;
 
-	case MESG_CHANNEL_RADIO_TX_POWER_ID:
+	case ANTW_MESG_CHANNEL_RADIO_TX_POWER_ID:
 		/* body: [ch, tx_power] */
 		if (len >= 2) {
 			uint8_t level = tx_power_resolve(body[1]);
@@ -592,15 +662,15 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 			/* Still call through for an out-of-range channel, so
 			 * the stack returns the error a real stick would.
 			 */
-			err = ant_channel_radio_tx_power_set(body[0], level, 0);
+			err = antr_channel_radio_tx_power_set(body[0], level, 0);
 		}
 		break;
 
-	case MESG_RADIO_TX_POWER_ID:
+	case ANTW_MESG_RADIO_TX_POWER_ID:
 		/* body: [filler, tx_power]. The device-wide form, which every ANT
 		 * stick answers and which is what ANT_SetTransmitPower() sends;
-		 * 0x60 above is the per-channel one. sdk-ant exposes only the
-		 * per-channel setter, so fan it out.
+		 * 0x60 above is the per-channel one. The radio contract exposes
+		 * only the per-channel setter, so fan it out.
 		 *
 		 * Per-channel failures are deliberately not propagated: a host
 		 * sets the default power before assigning any channel, and
@@ -613,46 +683,46 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 			for (uint8_t i = 0; i < CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED;
 			     i++) {
 				tx_power[i] = level;
-				(void)ant_channel_radio_tx_power_set(i, level, 0);
+				(void)antr_channel_radio_tx_power_set(i, level, 0);
 			}
 			err = 0;
 		}
 		break;
 
-	case MESG_OPEN_CHANNEL_ID:
+	case ANTW_MESG_OPEN_CHANNEL_ID:
 		/* body: [ch] */
 		if (len >= 1) {
-			err = ant_channel_open(body[0]);
+			err = antr_channel_open(body[0]);
 		}
 		break;
 
-	case MESG_CLOSE_CHANNEL_ID:
+	case ANTW_MESG_CLOSE_CHANNEL_ID:
 		/* body: [ch] */
 		if (len >= 1) {
-			err = ant_channel_close(body[0]);
+			err = antr_channel_close(body[0]);
 		}
 		break;
 
-	case MESG_UNASSIGN_CHANNEL_ID:
+	case ANTW_MESG_UNASSIGN_CHANNEL_ID:
 		/* body: [ch] */
 		if (len >= 1) {
-			err = ant_channel_unassign(body[0]);
+			err = antr_channel_unassign(body[0]);
 		}
 		break;
 
-	case MESG_ANTLIB_CONFIG_ID:
+	case ANTW_MESG_ANTLIB_CONFIG_ID:
 		/* body: [filler, config_bits]. Zero means "clear everything",
 		 * which is how hosts drop the extended-message flags between
 		 * sessions; there is no separate clear message on the wire.
 		 */
 		if (len >= 2) {
 			err = body[1] ?
-			      ant_lib_config_set(body[1]) :
-			      ant_lib_config_clear(ANT_LIB_CONFIG_MASK_ALL);
+			      antr_lib_config_set(body[1]) :
+			      antr_lib_config_clear(ANTW_LIB_CONFIG_MASK_ALL);
 		}
 		break;
 
-	case MESG_RX_EXT_MESGS_ENABLE_ID:
+	case ANTW_MESG_RX_EXT_MESGS_ENABLE_ID:
 		/* body: [filler, enable]. The older, narrower way of asking for
 		 * the channel id on every received message. Hosts still send it
 		 * instead of MESG_ANTLIB_CONFIG, and without it every broadcast
@@ -660,116 +730,125 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		 */
 		if (len >= 2) {
 			err = body[1] ?
-			      ant_lib_config_set(
-				      ANT_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID) :
-			      ant_lib_config_clear(
-				      ANT_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID);
+			      antr_lib_config_set(
+				      ANTW_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID) :
+			      antr_lib_config_clear(
+				      ANTW_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID);
 		}
 		break;
 
-	case MESG_SEARCH_WAVEFORM_ID:
+	case ANTW_MESG_SEARCH_WAVEFORM_ID:
 		/* body: [ch, waveform_lsb, waveform_msb] */
 		if (len >= 3) {
 			uint16_t waveform = (uint16_t)body[1] |
 					    ((uint16_t)body[2] << 8);
-			err = ant_search_waveform_set(body[0], waveform);
+			err = antr_search_waveform_set(body[0], waveform);
 		}
 		break;
 
-	case MESG_PROX_SEARCH_CONFIG_ID:
+	case ANTW_MESG_PROX_SEARCH_CONFIG_ID:
 		/* body: [ch, threshold, (custom threshold optional)] */
 		if (len >= 2) {
 			uint8_t custom = (len >= 3) ? body[2] : 0;
 
-			err = ant_prox_search_set(body[0], body[1], custom);
+			err = antr_prox_search_set(body[0], body[1], custom);
 		}
 		break;
 
-	case MESG_SET_SEARCH_CH_PRIORITY_ID:
+	case ANTW_MESG_SET_SEARCH_CH_PRIORITY_ID:
 		/* body: [ch, priority] */
 		if (len >= 2) {
-			err = ant_search_channel_priority_set(body[0], body[1]);
+			err = antr_search_channel_priority_set(body[0], body[1]);
 		}
 		break;
 
-	case MESG_ACTIVE_SEARCH_SHARING_ID:
+	case ANTW_MESG_ACTIVE_SEARCH_SHARING_ID:
 		/* body: [ch, cycles] */
 		if (len >= 2) {
-			err = ant_active_search_sharing_cycles_set(body[0],
-								   body[1]);
+			err = antr_active_search_sharing_cycles_set(body[0],
+								    body[1]);
 		}
 		break;
 
-	case MESG_AUTO_FREQ_CONFIG_ID:
+	case ANTW_MESG_AUTO_FREQ_CONFIG_ID:
 		/* body: [ch, freq0, freq1, freq2] */
 		if (len >= 4) {
-			err = ant_auto_freq_hop_table_set(body[0], body[1],
-							  body[2], body[3]);
+			err = antr_auto_freq_hop_table_set(body[0], body[1],
+							   body[2], body[3]);
 		}
 		break;
 
-	case MESG_CHANNEL_CRC_MODE_ID:
+#ifdef ANTW_MESG_CHANNEL_CRC_MODE_ID
+	case ANTW_MESG_CHANNEL_CRC_MODE_ID:
 		/* body: [filler, mode] */
 		if (len >= 2) {
-			err = ant_channel_radio_crc_mode_set(body[0], body[1]);
+			err = antr_channel_radio_crc_mode_set(body[0], body[1]);
 		}
 		break;
+#else
+	/*
+	 * K1: unresolved, see protocol/ant_wire.yaml. See the matching note in
+	 * handle_request() - the id is a Nordic extension with no recorded
+	 * value, so the write is left unimplemented and the message is answered
+	 * ANTW_INVALID_MESSAGE by the default arm below.
+	 */
+#endif
 
-	case MESG_ID_LIST_ADD_ID:
+	case ANTW_MESG_ID_LIST_ADD_ID:
 		/* body: [ch, dev_lsb, dev_msb, dev_type, trans_type, index] */
 		if (len >= 6) {
-			err = ant_id_list_add(body[0], (uint8_t *)&body[1],
-					      body[5]);
+			err = antr_id_list_add(body[0], &body[1], body[5]);
 		}
 		break;
 
-	case MESG_ID_LIST_CONFIG_ID:
+	case ANTW_MESG_ID_LIST_CONFIG_ID:
 		/* body: [ch, list_size, exclude_flag] */
 		if (len >= 3) {
-			err = ant_id_list_config(body[0], body[1], body[2]);
+			err = antr_id_list_config(body[0], body[1], body[2]);
 		}
 		break;
 
-	case MESG_EVENT_FILTER_CONFIG_ID:
+	case ANTW_MESG_EVENT_FILTER_CONFIG_ID:
 		/* body: [filter_lsb, filter_msb] */
 		if (len >= 2) {
 			uint16_t filter = (uint16_t)body[0] |
 					  ((uint16_t)body[1] << 8);
-			err = ant_event_filtering_set(filter);
+			err = antr_event_filtering_set(filter);
 		}
 		break;
 
-	case MESG_CONFIG_ADV_BURST_ID:
+	case ANTW_MESG_CONFIG_ADV_BURST_ID:
 		/* body: [filler, config[8..11]]. The filler byte occupies the channel
 		 * slot every message has and is not part of the configuration, so the
-		 * buffer ant_adv_burst_config_set() documents starts at body[1]:
+		 * buffer antr_adv_burst_config_set() documents starts at body[1]:
 		 * [enable, rf payload size, required modes, 0, 0, optional modes, 0, 0]
 		 * with an optional [stall lsb, stall msb, retry extension].
 		 *
-		 * Without this, MESG_ADV_BURST_DATA_ID is accepted but advanced burst
-		 * is never on, so nothing ever leaves at more than 8 bytes a packet.
+		 * Without this, ANTW_MESG_ADV_BURST_DATA_ID is accepted but advanced
+		 * burst is never on, so nothing ever leaves at more than 8 bytes a
+		 * packet.
 		 */
 		if (len >= 9 && len <= 12) {
-			err = ant_adv_burst_config_set((uint8_t *)&body[1],
-						       (uint8_t)(len - 1));
+			err = antr_adv_burst_config_set(&body[1],
+							(uint8_t)(len - 1));
 		}
 		break;
 
-	case MESG_SDU_CONFIG_ID:
+	case ANTW_MESG_SDU_CONFIG_ID:
 		/* body: [ch, mask_config]. Binds one of the masks below to a channel;
-		 * INVALID_SDU_MASK (0xFF) turns selective updates back off.
+		 * ANTW_INVALID_SDU_MASK (0xFF) turns selective updates back off.
 		 */
 		if (len >= 2) {
-			err = ant_sdu_mask_config(body[0], body[1]);
+			err = antr_sdu_mask_config(body[0], body[1]);
 		}
 		break;
 
-	case MESG_SDU_SET_MASK_ID:
+	case ANTW_MESG_SDU_SET_MASK_ID:
 		/* body: [mask_index, mask[8]]. body[0] is a mask number, not a channel
 		 * - masks are defined here and attached to channels by MESG_SDU_CONFIG.
 		 */
 		if (len >= 9) {
-			err = ant_sdu_mask_set(body[0], (uint8_t *)&body[1]);
+			err = antr_sdu_mask_set(body[0], &body[1]);
 		}
 		break;
 
@@ -779,108 +858,121 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	 * asks for should not be reachable on the path Zwift runs. See the Kconfig.
 	 * The matching reads live in handle_request() and are always present.
 	 */
-	case MESG_ENCRYPT_ENABLE_ID:
+	case ANTW_MESG_ENCRYPT_ENABLE_ID:
 		/* body: [ch, mode, key_num, decimation_rate] */
 		if (len >= 4) {
-			err = ant_crypto_channel_enable(body[0], body[1], body[2],
-							body[3]);
+			err = antr_crypto_channel_enable(body[0], body[1], body[2],
+							 body[3]);
 		}
 		break;
 
-	case MESG_SET_ENCRYPT_KEY_ID:
-		/* body: [key_num, key[16]]. sdk-ant names no constant for the key
-		 * length; that it is 128 bits is stated only in the prose of
-		 * ant_crypto_key_set(), which takes a bare pointer.
+	case ANTW_MESG_SET_ENCRYPT_KEY_ID:
+		/* body: [key_num, key[16]]. No wire constant names the key length;
+		 * that it is 128 bits is stated only in the prose of
+		 * antr_crypto_key_set(), which takes a bare pointer.
 		 */
-		if (len >= 1 + 16) {
-			err = ant_crypto_key_set(body[0], (uint8_t *)&body[1]);
+		if (len >= 1 + ANTW_ENCRYPTION_KEY_SIZE) {
+			err = antr_crypto_key_set(body[0], &body[1]);
 		}
 		break;
 
-	case MESG_SET_ENCRYPT_INFO_ID:
+	case ANTW_MESG_SET_ENCRYPT_INFO_ID:
 		/* body: [info_type, data]. How much data depends on the type, and the
-		 * length has to be checked against it here: ant_crypto_info_set() reads
-		 * a fixed count per type with no size to bound it, so a truncated
-		 * command would otherwise hand the stack whatever follows in the
-		 * parser's frame buffer.
+		 * length has to be checked against it here: antr_crypto_info_set()
+		 * reads a fixed count per type with no size to bound it, so a
+		 * truncated command would otherwise hand the radio whatever follows
+		 * in the parser's frame buffer.
 		 */
 		if (len >= 2) {
 			uint8_t want = 0;
 
 			switch (body[0]) {
-			case ENCRYPTION_INFO_SET_CRYPTO_ID:
-				want = MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE;
+			case ANTW_ENCRYPTION_INFO_SET_CRYPTO_ID:
+				want = ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE;
 				break;
-			case ENCRYPTION_INFO_SET_CUSTOM_USER_DATA:
-				want = MESG_CONFIG_ENCRYPT_REQ_CONFIG_USER_DATA_SIZE;
+			case ANTW_ENCRYPTION_INFO_SET_CUSTOM_USER_DATA:
+				want = ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_USER_DATA_SIZE;
 				break;
-			/* ENCRYPTION_INFO_SET_RNG_SEED is deliberately absent. sdk-ant
-			 * documents it as "platform specific" and defines no size for
-			 * it anywhere, and the stack does not take its randomness from
-			 * the host regardless - ant_stack_funcs_register() hands it an
-			 * fpRANDGet callback at init. Refusing beats guessing a length.
+			/* ANTW_ENCRYPTION_INFO_SET_RNG_SEED is deliberately absent.
+			 * It is documented as platform specific with no size defined
+			 * for it anywhere, and the radio does not take its randomness
+			 * from the host regardless - a backend seeds itself at init.
+			 * Refusing beats guessing a length.
 			 */
 			default:
 				break;
 			}
 
 			if (want && len >= want) {
-				err = ant_crypto_info_set(body[0],
-							  (uint8_t *)&body[1]);
+				err = antr_crypto_info_set(body[0], &body[1]);
 			}
 		}
 		break;
 #endif /* CONFIG_ANT_DONGLE_ENCRYPTION */
 
-	case MESG_ECS_ENABLE_ID:
+#ifdef ANTW_MESG_ECS_ENABLE_ID
+	case ANTW_MESG_ECS_ENABLE_ID:
 		/* body: [filler, enable] */
 		if (len >= 2) {
-			err = ant_enhanced_channel_spacing_enable(body[1]);
+			err = antr_enhanced_channel_spacing_enable(body[1]);
 		}
 		break;
+#else
+	/*
+	 * K1: unresolved, see protocol/ant_wire.yaml. Enhanced channel spacing
+	 * is a Nordic extension whose message id appears nowhere in this
+	 * repository and is not in Rev 5.1, so there is nothing to dispatch on.
+	 * antr_enhanced_channel_spacing_enable() stays in the contract and
+	 * regains its caller when src/ant_radio_sdk_ant.c recovers the id.
+	 */
+#endif
 
-	case MESG_PENDING_TRANSMIT_CLEAR_ID:
+#ifdef ANTW_MESG_PENDING_TRANSMIT_CLEAR_ID
+	case ANTW_MESG_PENDING_TRANSMIT_CLEAR_ID:
 		/* body: [ch] */
 		if (len >= 1) {
 			uint8_t cleared;
 
-			err = ant_pending_transmit_clear(body[0], &cleared);
+			err = antr_pending_transmit_clear(body[0], &cleared);
 		}
 		break;
+#else
+	/*
+	 * K1: unresolved, see protocol/ant_wire.yaml. Same id as the read arm
+	 * in handle_request(); neither is dispatchable until it resolves.
+	 */
+#endif
 
-	case MESG_REQUEST_ID:
+	case ANTW_MESG_REQUEST_ID:
 		handle_request(body, len);
 		return; /* handle_request sends its own response */
 
-	case MESG_BROADCAST_DATA_ID:
+	case ANTW_MESG_BROADCAST_DATA_ID:
 		/* body: [ch, data[8]] */
 		if (len >= 9) {
-			err = ant_broadcast_message_tx(body[0], 8,
-						       (uint8_t *)&body[1]);
+			err = antr_broadcast_message_tx(body[0], 8, &body[1]);
 		}
 		break;
 
-	case MESG_ACKNOWLEDGED_DATA_ID:
+	case ANTW_MESG_ACKNOWLEDGED_DATA_ID:
 		/* body: [ch, data[8]] */
 		if (len >= 9) {
-			err = ant_acknowledge_message_tx(body[0], 8,
-							 (uint8_t *)&body[1]);
+			err = antr_acknowledge_message_tx(body[0], 8, &body[1]);
 		}
 		break;
 
-	case MESG_BURST_DATA_ID:
-	case MESG_ADV_BURST_DATA_ID:
+	case ANTW_MESG_BURST_DATA_ID:
+	case ANTW_MESG_ADV_BURST_DATA_ID:
 		handle_burst(msg_id, body, len);
 		return; /* handle_burst answers only on failure */
 
 	default:
 		LOG_WRN("Unknown msg_id 0x%02X len=%d", msg_id, len);
-		send_response(ch, msg_id, INVALID_MESSAGE);
+		send_response(ch, msg_id, ANTW_INVALID_MESSAGE);
 		return;
 	}
 
-	send_response(ch, msg_id,
-		      err ? (uint8_t)err : RESPONSE_NO_ERROR);
+	send_response(ch, msg_id, err ? err : ANTW_RESPONSE_NO_ERROR);
 }
 
 /* ── Frame parser state machine ─────────────────────────────────────────────── */
@@ -898,13 +990,19 @@ static void process_byte(uint8_t b)
 	static enum parser_state state = S_SYNC;
 	static uint8_t  msg_len;
 	static uint8_t  msg_id;
-	static uint8_t  msg_body[MESG_MAX_SIZE_VALUE]; /* channel + payload */
+	/* Sized from the largest value the LEN byte may carry, which counts the
+	 * leading channel byte as well as the payload. An advanced-burst data
+	 * message alone reaches 25, so a buffer sized from the longest message
+	 * a *host* sends would fail handle_burst()'s size % 8 check and reject
+	 * every 24-byte burst packet without a word.
+	 */
+	static uint8_t  msg_body[ANTW_MAX_SIZE_VALUE]; /* channel + payload */
 	static uint8_t  body_idx;
 	static uint8_t  running_xor;
 
 	switch (state) {
 	case S_SYNC:
-		if (b == MESG_TX_SYNC) {
+		if (b == ANTW_SYNC_TX) {
 			/* Seed with SYNC, not 0: it is part of the checksum. */
 			running_xor = b;
 			state = S_LEN;
@@ -972,22 +1070,30 @@ static void bridge_thread_fn(void *p1, void *p2, void *p3)
 	}
 }
 
-/* ── ANT event handler (outbound path, chip → host) ─────────────────────────── */
+/* ── Radio event handler (outbound path, chip → host) ───────────────────────── */
 
-void ant_evt_handler(ant_evt_t *p_ant_evt)
+/*
+ * The one definition of antr_on_message() in the image. The backend calls it;
+ * nothing registers it, and there is no callback pointer to get wrong. The
+ * struct it takes is wire-shaped on purpose - three fields, no unions - because
+ * everything this function does is wrap those bytes in a frame, so a field that
+ * added meaning beyond them would be a field that could disagree with them.
+ *
+ * Runs on the backend's own thread, work queue or callback context, never
+ * re-entrantly, and never before antr_init() has returned. It touches only
+ * statically-initialised state (an atomic_t, a K_SEM_DEFINE and a queueing
+ * send), so it does not depend on the bridge thread existing - keep it that
+ * way: antr_init() runs before ant_serial_bridge_init().
+ */
+void antr_on_message(const struct antr_msg *msg)
 {
 	/*
-	 * p_ant_evt->message layout:
-	 *   ANT_MESSAGE_ucSize       = len of (channel byte + payload)
-	 *   ANT_MESSAGE_ucMesgID     = message ID
-	 *   ANT_MESSAGE_aucMesgData  = [channel, payload...]
-	 *
 	 * Wire format: [0xA4][LEN][ID][channel+payload...][XOR checksum]
 	 * Total size  = LEN + 4 bytes.
 	 */
-	uint8_t msg_len = p_ant_evt->message.ANT_MESSAGE_ucSize;
-	uint8_t msg_id  = p_ant_evt->message.ANT_MESSAGE_ucMesgID;
-	const uint8_t *msg_data = p_ant_evt->message.ANT_MESSAGE_aucMesgData;
+	uint8_t msg_len = msg->len;
+	uint8_t msg_id  = msg->id;
+	const uint8_t *msg_data = msg->data;
 
 	if (atomic_get(&reset_in_progress)) {
 		return;
@@ -997,18 +1103,18 @@ void ant_evt_handler(ant_evt_t *p_ant_evt)
 	 * them mean the burst handler has finished with the block it was given,
 	 * so the next packet from the host may overwrite it.
 	 */
-	if (msg_id == MESG_RESPONSE_EVENT_ID && msg_len >= 3 &&
-	    msg_data[1] == MESG_EVENT_ID) {
+	if (msg_id == ANTW_MESG_RESPONSE_EVENT_ID && msg_len >= 3 &&
+	    msg_data[1] == ANTW_MESG_EVENT_ID) {
 		switch (msg_data[2]) {
-		case EVENT_TRANSFER_NEXT_DATA_BLOCK:
+		case ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK:
 			k_sem_give(&burst_block_free);
 			/* Internal flow control for the buffer handover above.
 			 * A real stick frames bursts itself and never puts this
 			 * on the wire, so neither do we.
 			 */
 			return;
-		case EVENT_TRANSFER_TX_COMPLETED:
-		case EVENT_TRANSFER_TX_FAILED:
+		case ANTW_EVENT_TRANSFER_TX_COMPLETED:
+		case ANTW_EVENT_TRANSFER_TX_FAILED:
 			k_sem_give(&burst_block_free);
 			break;
 		default:
@@ -1017,22 +1123,22 @@ void ant_evt_handler(ant_evt_t *p_ant_evt)
 	}
 
 	/* Guard against oversized messages */
-	if (msg_len > MESG_MAX_SIZE_VALUE) {
+	if (msg_len > ANTW_MAX_SIZE_VALUE) {
 		LOG_WRN("Oversized ANT event: id=0x%02X len=%d", msg_id, msg_len);
 		return;
 	}
 
-	/* Sized like send_message(), not MESG_MAX_SIZE. MESG_MAX_SIZE counts a
-	 * frame around MESG_MAX_DATA_SIZE, but the size byte is allowed to reach
-	 * MESG_MAX_SIZE_VALUE, which is one larger - it also counts the channel
-	 * byte. A full extended-data message therefore writes the checksum one
-	 * past the end and hands usb_ant_send_async() a length one over the
-	 * buffer, from the ANT work-queue thread.
+	/* Sized like send_message(), from ANTW_MAX_FRAME_SIZE and never from
+	 * ANTW_MESG_MAX_SIZE. The latter frames ANTW_MAX_DATA_SIZE, but the size
+	 * byte is allowed to reach ANTW_MAX_SIZE_VALUE, which is one larger - it
+	 * also counts the channel byte. A full extended-data message therefore
+	 * writes the checksum one past the end and hands usb_ant_send_async() a
+	 * length one over the buffer, from the backend's own thread.
 	 */
-	uint8_t buf[MESG_MAX_SIZE_VALUE + 4];
-	uint8_t xor = MESG_TX_SYNC;
+	uint8_t buf[ANTW_MAX_FRAME_SIZE];
+	uint8_t xor = ANTW_SYNC_TX;
 
-	buf[0] = MESG_TX_SYNC;
+	buf[0] = ANTW_SYNC_TX;
 	buf[1] = msg_len;   xor ^= msg_len;
 	buf[2] = msg_id;    xor ^= msg_id;
 
@@ -1055,12 +1161,9 @@ int ant_serial_bridge_init(void)
 {
 	tx_power_reset();
 
-	ant_err_t err = ant_cb_register(ant_evt_handler);
-
-	if (err) {
-		return err;
-	}
-
+	/* No callback registration: antr_on_message() above is resolved at link
+	 * time, so there is nothing here that can fail and nothing to report.
+	 */
 	k_thread_create(&bridge_thread_data, bridge_stack,
 			K_THREAD_STACK_SIZEOF(bridge_stack),
 			bridge_thread_fn, NULL, NULL, NULL,

@@ -1,9 +1,11 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
 /*
  * ANT+ USB Dongle — main entry point.
  *
  * All protocol work happens in the ANT bridge thread (ant_serial_bridge.c)
- * and the ANT event callback (ant_evt_handler).  Main just initialises the
- * subsystems in order, then sleeps forever.
+ * and in antr_on_message(), which the bridge implements and the radio backend
+ * calls.  Main just initialises the subsystems in order, then sleeps forever.
  */
 
 #include <zephyr/kernel.h>
@@ -16,7 +18,7 @@
  * one sitting: XTAL heard 14 broadcasts, SYNTH heard none, XTAL heard 14 again.
  *
  * Nothing announces the failure. The LFSYNT source exists in the nRF54L
- * register map, the clock starts, ant_init() returns 0, channels open and
+ * register map, the clock starts, antr_init() returns 0, channels open and
  * acknowledge every command - and the radio receives nothing, ever. A dongle
  * built this way looks completely healthy to a host and is deaf.
  *
@@ -40,15 +42,10 @@ static bool led_ok;
 
 #include "diag_flash_log.h"
 
-#include "ant_interface.h"
-/* nRF5340 cpuapp builds use the network-processor host header; every
- * single-core target (including the nRF52840 here) uses ant_init.h.
+/* The radio contract - whichever backend is compiled in behind it. Bringing
+ * the stack up is the only thing main() needs from it.
  */
-#if defined(CONFIG_ANT_NP_HOST)
-#include "ant_host_init.h"
-#else
-#include "ant_init.h"
-#endif
+#include "ant_radio.h"
 
 LOG_MODULE_REGISTER(ant_dongle, LOG_LEVEL_INF);
 
@@ -123,18 +120,20 @@ int main(void)
 	/* ANT/MPSL must own clock startup before USB asks for the HFXO.
 	 * If usb_enable() runs first on this target, USB can hang or fail to
 	 * enumerate because the clock path is not fully initialized yet. */
-	ret = ant_init();
+	ret = antr_init();
 	if (ret) {
-		LOG_ERR("ant_init failed: %d", ret);
+		LOG_ERR("antr_init failed: %d", ret);
 		(void)diag_flash_log_flush();
 		return ret;
 	}
-	LOG_INF("ant_init ok");
+	LOG_INF("antr_init ok");
 
 	usb_ant_class_init();
 	LOG_INF("usb_ant_class_init ok");
 
-	/* The bridge owns ANT event forwarding and callback registration. */
+	/* The bridge owns ANT event forwarding: it defines antr_on_message(),
+	 * which the radio backend calls. Nothing is registered.
+	 */
 	ret = ant_serial_bridge_init();
 	if (ret) {
 		LOG_ERR("ant_serial_bridge_init failed: %d", ret);
