@@ -880,12 +880,44 @@ static void api_search_begin(uint8_t ch, radiant_time_t now)
  * ---------------------------------------------------------------------------
  */
 
+/*
+ * True while a radiant_sched_*() call that may invoke done() SYNCHRONOUSLY is
+ * in progress.
+ *
+ * The scheduler completes a request from inside the arm call when the arm is
+ * refused, and radiant_radio_hal.h is explicit that posting the next request
+ * from a completion is the intended low-jitter path. Both are correct.
+ * Together, against a backend that refuses EVERY arm, they are unbounded
+ * mutual re-entry: post -> arm -> refused -> done() -> post -> ...
+ *
+ * api_search_slot was meant to be the one-sweep-at-a-time guard and cannot do
+ * this job, because api_sched_done() CLEARS it - so the synchronous completion
+ * destroys the very interlock that would have excluded it.
+ *
+ * Found on the bench, not by inspection: opening one wildcard channel wedged
+ * the firmware completely, with both the nrf backend (every arm ETIME) and the
+ * null backend (every arm ENOTSUP), and a halted CPU showed the stack walked
+ * down to within 648 bytes of PSPLIM through api_post_search_window ->
+ * radiant_search_window -> arm_rx_window -> clear_armed -> api_sched_done.
+ *
+ * A refused arm must leave the next attempt to the next pump, which is the
+ * thing that has a rate limit.
+ */
+static bool api_arming;
 static void api_post_search_window(radiant_time_t now)
 {
 	const struct radiant_radio_caps *caps = radiant_radio_caps_get();
 	struct radiant_search_window     w;
 	struct radiant_sched_rx          req;
 	uint8_t                      ch;
+
+	/*
+	 * Not from inside an arm. See api_arming - this is the guard that stops
+	 * a backend refusing every arm from recursing until the stack runs out.
+	 */
+	if (api_arming) {
+		return;
+	}
 
 	/* One sweep at a time - radiant_search.c holds exactly one window in
 	 * flight, which is what makes its filters[] pointer safe to hand
@@ -1122,8 +1154,11 @@ static void api_pump_locked(void)
 
 	api_post_search_window(now);
 
-	/* THE one commit. */
+	/* THE one commit. See api_arming: an arm refused in here completes
+	 * synchronously, and nothing it calls may post again. */
+	api_arming = true;
 	(void)radiant_sched_tick();
+	api_arming = false;
 	api_stats.pumps++;
 }
 

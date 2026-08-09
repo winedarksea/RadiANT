@@ -305,7 +305,28 @@ with the bench measurement that produced them, or select a different backend."
  * number that is too large here fails acknowledged data at configuration time
  * rather than on the air. That is the right direction to be wrong in.
  */
-#define ARM_LEAD_US            80u
+#define ARM_SETUP_US           80u
+
+/*
+ * min_arm_lead_us MUST cover everything the backend needs before a frame's
+ * t_sync, and an earlier revision of this file deliberately excluded ramp-up
+ * and preamble/address airtime from it - "accounted separately in arm_rx()".
+ * That was wrong, and wrong in the way that wedges a board.
+ *
+ * The core has exactly one number to lead by. radiant_api.c posts its search
+ * window at `now + caps->min_arm_lead_us`; if arm_rx() then demands more than
+ * it advertised, EVERY arm is refused RADIANT_RADIO_ETIME. A refused arm
+ * completes synchronously, the completion drives another post, and the board
+ * wedges - which is exactly what it did: nothing on the air, no error the host
+ * could see, and the stack walked down to within 408 bytes of PSPLIM.
+ *
+ * So the advertised lead is the real one: software setup, plus ramp-up, plus
+ * the preamble and the LONGEST address this backend will be asked to receive.
+ * Advertising the worst case costs a few tens of microseconds of scheduling
+ * slack and cannot produce a refusal the core could not have predicted.
+ */
+#define ARM_LEAD_US            (ARM_SETUP_US + RAMP_UP_US + \
+				(PREAMBLE_BYTES + RADIANT_RADIO_ADDR_MAX) * US_PER_BYTE)
 
 static const struct radiant_radio_caps radiant_nrf_caps = {
 	.name                = CAPS_NAME,
@@ -980,8 +1001,26 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 		goto fail;
 	}
 
+	/*
+	 * ADVERTISE THE WORST CASE, REFUSE ONLY THE IMPOSSIBLE.
+	 *
+	 * caps.min_arm_lead_us is the worst case over every address length, and
+	 * the core plans with it: radiant_api.c posts its window at exactly
+	 * `now + min_arm_lead_us`. But that `now` is sampled in the core, and
+	 * this one is sampled here, microseconds later after a mutex, a pump
+	 * loop and a scheduler pass. Testing the advertised figure against the
+	 * later sample therefore fails by however long that took - ALWAYS, on
+	 * every arm, however much lead the core actually left.
+	 *
+	 * That is not a hypothetical: it is what kept every window refused after
+	 * the lead itself was corrected, and a refused arm is what wedges the
+	 * board. So the test is against what the HARDWARE genuinely needs for
+	 * this address length - ramp-up plus preamble and address airtime - and
+	 * the advertised figure keeps its safety margin for the core's planning.
+	 * A window that really cannot be made still gets a loud ETIME.
+	 */
 	now = radiant_radio_now();
-	if (req->t_open < now + ARM_LEAD_US + rx_lead_us(req->fmt->addr_len)) {
+	if (req->t_open < now + rx_lead_us(req->fmt->addr_len)) {
 		/* Never silently late. A window opened after the frame it was
 		 * meant to catch is indistinguishable from a sensor that went
 		 * quiet, and that is the report nobody can act on. */
@@ -1043,7 +1082,7 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	return RADIANT_RADIO_OK_RC;
 
 fail:
-	LOG_WRN("rx refused: %d (n=%u addr_len=%u)", rc, req->n_filters,
+	LOG_DBG("rx refused: %d (n=%u addr_len=%u)", rc, req->n_filters,
 		req->fmt->addr_len);
 	radiant_op.kind = OP_NONE;
 	return rc;
