@@ -398,11 +398,45 @@ struct radiant_rx_filter {
  * body must remain valid and unmodified from the arm call until the completion
  * callback - backends DMA straight out of it - and must live in memory the
  * radio's DMA can reach (RAM, not flash, on every planned part).
+ *
+ * addr is NOT part of body and never has been. body is the bytes between the
+ * address and the CRC, in both directions, and the receive side has always said
+ * so explicitly through struct radiant_rx_filter. This request said nothing,
+ * and the first version of this structure genuinely had no address field at
+ * all - see the note under "Symmetry" below, which is kept because the reason
+ * it survived review is more useful than the fix.
  */
 struct radiant_tx_req {
 	const struct radiant_pkt_format *fmt;
 	uint8_t                      rf_index;
 	struct radiant_tx_power          power;
+	/*
+	 * The on-air address, first byte on the air first - the same statement
+	 * struct radiant_rx_filter makes, on the same terms: no bit- or
+	 * byte-reversal, no register layout, the backend does whatever its
+	 * hardware needs to produce these bytes in this order.
+	 *
+	 * SYMMETRY. An RX request names the address it will match. A TX request
+	 * must name the address it will emit, because there is nowhere else for
+	 * a backend to get one. That reads as obvious and it was still missing
+	 * for the whole of the mock-only period, for a reason worth recording:
+	 * radiant_core/tests/fake_radio.c records a transmit request and replays
+	 * it, so a missing field is simply a field that is neither written nor
+	 * read, and every test above the HAL asserts on body bytes. It took the
+	 * first real backend to make it a question, because on the nRF RADIO the
+	 * transmit address is TXADDRESS - an index into BASE/PREFIX registers
+	 * that the PREVIOUS operation left loaded. A transmit with no address in
+	 * its request does not fail; it inherits the last receive's device
+	 * number and puts a well-formed frame addressed to the wrong sensor on
+	 * the air. That is worse than a dropped frame, because another device
+	 * may accept it.
+	 *
+	 * Inline rather than a pointer, unlike body: five bytes go into
+	 * registers rather than into DMA, so there is no reason to make the
+	 * caller guarantee a lifetime it could get wrong.
+	 */
+	uint8_t                      addr[RADIANT_RADIO_ADDR_MAX];
+	uint8_t                      addr_len;   /* must equal fmt->addr_len */
 	const uint8_t               *body;
 	uint8_t                      body_len;
 	/* Requested t_sync of the frame. Must be at least caps.min_arm_lead_us

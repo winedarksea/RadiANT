@@ -42,16 +42,28 @@
  *      there, and until that is done the A/B `timing` gate is the only thing
  *      that would notice.
  *
- *   2. TRANSMIT HAS NEVER BEEN EXERCISED BY ANYTHING. Both spikes were
- *      receive-only. The ramp-up and turnaround constants below are datasheet
- *      figures, not antenna-referenced measurements, and arm_tx() computes a
- *      start instant from them. A wrong constant here does not fail loudly: it
- *      puts the frame on the air early or late by that amount.
+ *   2. THE RAMP-UP AND TURNAROUND CONSTANTS ARE DATASHEET FIGURES. Transmit is
+ *      implemented and works, but nothing has yet measured what this part
+ *      actually does antenna-referenced, and radiant_radio_tx() computes its
+ *      start instant from those figures. A wrong constant here does not fail
+ *      loudly: it puts the frame on the air early or late by that amount, and
+ *      a receiver whose window is wide enough will still hear it - which is
+ *      exactly why "it transmits" is not evidence that the number is right.
  *
  *   3. EVERY REGISTER FACT IS FROM nRF54L15. The nRF52840 is the shipping part
  *      and the mapping is predicted to hold on it - the two RADIOs differ in
  *      ramp-up and in the TIMING/RXGAIN block, not in the packet engine - but
  *      predicted is not measured.
+ *
+ *   4. THE RSSI TEMPERATURE CORRECTION TABLE IS VENDOR-SOURCED, NOT BENCH-
+ *      MEASURED. The seven thresholds and the eighth beyond-erratum branch in
+ *      "RSSI temperature correction" below are copied from Nordic's own
+ *      open-source 802.15.4 driver, not derived from anything on this bench -
+ *      this project has not independently confirmed the dB figures against a
+ *      calibrated reference at any temperature. It is re-sourced rather than
+ *      re-derived because errata 153 is a documented Nordic hardware fact
+ *      about the die, not a fact about this bench's antenna or environment,
+ *      the same reasoning that already applies to nrf52_erratas.h.
  *
  * ---------------------------------------------------------------------------
  * The one hardware limit the core cannot see, and what this file does about it
@@ -86,6 +98,7 @@
  * window; what it must not do is believe eight arbitrary addresses were armed.
  */
 
+#include <stdlib.h>
 #include <string.h>
 
 #include <zephyr/kernel.h>
@@ -98,6 +111,7 @@
 
 #include <nrfx.h>
 #include <hal/nrf_radio.h>
+#include <hal/nrf_temp.h>
 #include <hal/nrf_timer.h>
 #include <helpers/nrfx_gppi.h>
 
@@ -106,6 +120,7 @@
 #endif
 
 #include <radiant_core/radiant_radio_hal.h>
+#include <radiant_core/radiant_radio_nrf_diag.h>
 
 LOG_MODULE_REGISTER(radiant_radio_nrf, CONFIG_RADIANT_CORE_LOG_LEVEL);
 
@@ -170,12 +185,34 @@ is what t_sync is hardware-captured into."
 
 #define TIMER_ADDR      ((NRF_TIMER_Type *)DT_REG_ADDR(RADIANT_TIMER_NODE))
 
-/* Compare/capture channel assignment. Four of the six, so a part with only four
- * still fits. */
+/*
+ * Compare/capture channel assignment.
+ *
+ * FIVE, AND THE FIFTH IS NOT AN INDULGENCE. Receive-start and transmit-start
+ * have their own compares because they cannot share one on a DPPI part: an
+ * event may PUBLISH to exactly one channel, so a second connection from the same
+ * compare event is refused outright - nrfx_gppi_conn_alloc() returns -EINVAL
+ * when either endpoint is already attached. On the older PPI parts two channels
+ * may share an event and one compare would have done; writing it the way that
+ * works on both is what keeps this file one backend rather than two.
+ *
+ * The alternative - detaching and reattaching the event endpoint at every arm -
+ * was rejected because the arm path runs in interrupt context inside an 80 us
+ * budget, and because an endpoint left attached to the wrong connection is a
+ * silent failure of exactly the kind this file keeps paying for.
+ */
 #define CC_SYNC     0u   /* captured from RADIO EVENTS_ADDRESS by (D)PPI */
-#define CC_START    1u   /* fires TASKS_TXEN or TASKS_RXEN */
+#define CC_START    1u   /* fires TASKS_RXEN at the start of an RX window */
 #define CC_CLOSE    2u   /* fires TASKS_DISABLE at the end of an RX window */
 #define CC_NOW      3u   /* software captures here to read the counter */
+#define CC_TXSTART  4u   /* fires TASKS_TXEN */
+
+#if DT_PROP_OR(RADIANT_TIMER_NODE, cc_num, 0) < 5
+#error "radiant,radio-timer names a TIMER with fewer than 5 CC channels (or a \
+binding with no cc-num). This backend needs five: t_sync capture, RX start, \
+window close, software now-capture, and TX start. On nRF52 that means TIMER3 or \
+TIMER4; every nRF54L TIMER has at least six."
+#endif
 
 /*
  * Extending a 32-bit microsecond counter to the HAL's 64 bits.
@@ -385,6 +422,20 @@ const struct radiant_radio_caps *radiant_radio_caps_get(void)
  */
 #define T_SYNC_CAL_US   0
 
+/*
+ * The same thing for transmit, and it is a SEPARATE constant on purpose.
+ *
+ * On receive the error is demodulator group delay and filter latency. On
+ * transmit it is modulator and PA delay, in the other direction, through
+ * entirely different silicon. They are not the same number and there is no
+ * reason to expect them to be close; sharing one constant between the two would
+ * bake that assumption in at the exact point where nothing would ever check it.
+ *
+ * Both are zero today, so this distinction currently costs nothing and changes
+ * nothing - which is the only moment at which it can be made for free.
+ */
+#define T_SYNC_CAL_TX_US   0
+
 /* ---------------------------------------------------------------------------
  * Address arithmetic - the measured part
  * ---------------------------------------------------------------------------
@@ -472,7 +523,8 @@ static struct {
 	 * edges cannot be wired to the wrong task by an index slip.
 	 */
 	nrfx_gppi_handle_t conn_sync;
-	nrfx_gppi_handle_t conn_start;
+	nrfx_gppi_handle_t conn_start;    /* CC_START -> TASKS_RXEN */
+	nrfx_gppi_handle_t conn_start_tx; /* CC_START -> TASKS_TXEN */
 	nrfx_gppi_handle_t conn_close;
 	bool               conn_ok;
 } radiant_op;
@@ -488,6 +540,21 @@ static volatile uint32_t radiant_dbg_ok;
  * as rx_event.body for the duration of one callback only, which is exactly what
  * radiant_radio_hal.h says about it. */
 static uint8_t radiant_rx_buf[RADIANT_RADIO_BODY_MAX + 4] __aligned(4);
+
+/*
+ * The transmit buffer, and why the body is copied into it rather than DMA'd
+ * from where the core put it.
+ *
+ * radiant_radio_hal.h permits either: it requires the caller's body to stay
+ * valid until the completion callback precisely so that a backend MAY point
+ * EasyDMA at it. Copying ten bytes costs nothing against this backend's 80 us
+ * setup budget, and it buys the one guarantee the contract does not make - that
+ * the buffer is somewhere this RADIO's EasyDMA can actually reach, correctly
+ * aligned, and not in flash. The core's transmit bodies live in per-channel
+ * structures today and that is fine; it is not a property the HAL states, so it
+ * is not one this file should depend on.
+ */
+static uint8_t radiant_tx_buf[RADIANT_RADIO_BODY_MAX + 4] __aligned(4);
 
 /* ---------------------------------------------------------------------------
  * Register programming
@@ -563,8 +630,78 @@ static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index)
 	NRF_RADIO->CRCPOLY = 0x11021u;
 	NRF_RADIO->CRCINIT = fmt->crc.init;
 
-	NRF_RADIO->PACKETPTR = (uint32_t)(uintptr_t)radiant_rx_buf;
+	/* PACKETPTR is deliberately NOT set here. It is the one register in this
+	 * function whose value depends on the direction rather than on the
+	 * format, and leaving it to the two arm paths is what stops a transmit
+	 * from DMA-ing out of the receive buffer. */
 	return RADIANT_RADIO_OK_RC;
+}
+
+/*
+ * Transmit power.
+ *
+ * THE REGISTER FIELD IS NOT dBm, AND ON ONE OF THESE TWO PARTS IT LOOKS AS IF
+ * IT IS. nRF52840 encodes +8 dBm as 0x08 and 0 dBm as 0x00 - signed dBm, near
+ * enough that `TXPOWER = (int8_t)dbm` passes a code review. nRF54L15 encodes
+ * +8 dBm as 0x3F and 0 dBm as 0x18. The same expression on that part transmits
+ * at some unrelated power with no error anywhere, and a transmit-power bug is
+ * invisible on a bench two feet across.
+ *
+ * So the mapping goes through the part's own MDK symbols and never through the
+ * number. Every entry below is defined by both nRF52840 and nRF54L15, which is
+ * why the table needs no per-series #if - and a part that does not define one of
+ * them fails to compile here rather than transmitting at a guess.
+ */
+struct radiant_txp {
+	int8_t              dbm;
+	nrf_radio_txpower_t reg;
+};
+
+static const struct radiant_txp radiant_txp_table[] = {
+	{   8, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Pos8dBm  },
+	{   7, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Pos7dBm  },
+	{   6, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Pos6dBm  },
+	{   5, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Pos5dBm  },
+	{   4, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Pos4dBm  },
+	{   3, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Pos3dBm  },
+	{   2, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Pos2dBm  },
+	{   0, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_0dBm     },
+	{  -4, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Neg4dBm  },
+	{  -8, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Neg8dBm  },
+	{ -12, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Neg12dBm },
+	{ -16, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Neg16dBm },
+	{ -20, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Neg20dBm },
+	{ -40, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Neg40dBm },
+};
+
+/*
+ * radiant_radio_hal.h: "A backend rounds to the nearest setting it has and does
+ * not fail for an unreachable value - the link budget does not care about half a
+ * dB, and failing here would make a shared scheduler brittle." So this never
+ * returns an error. use_raw goes straight to the register, which is what makes a
+ * bench power sweep possible without a HAL change; it is by definition not
+ * portable and nothing in the core may set it.
+ */
+static void apply_power(const struct radiant_tx_power *p)
+{
+	size_t best = 0;
+	int    best_err;
+
+	if (p->use_raw) {
+		NRF_RADIO->TXPOWER = p->raw;
+		return;
+	}
+
+	best_err = abs((int)p->dbm - (int)radiant_txp_table[0].dbm);
+	for (size_t i = 1; i < ARRAY_SIZE(radiant_txp_table); i++) {
+		int err = abs((int)p->dbm - (int)radiant_txp_table[i].dbm);
+
+		if (err < best_err) {
+			best_err = err;
+			best = i;
+		}
+	}
+	nrf_radio_txpower_set(NRF_RADIO, radiant_txp_table[best].reg);
 }
 
 /*
@@ -699,6 +836,157 @@ static int apply_filters(const struct radiant_rx_filter *filters, uint8_t n,
 	return RADIANT_RADIO_OK_RC;
 }
 
+/*
+ * Programme the one address a transmit emits.
+ *
+ * TXADDRESS names a LOGICAL address, not an address: it is an index into the
+ * same BASE/PREFIX registers apply_filters() writes, so a transmit that named no
+ * address of its own would emit whatever the previous operation happened to
+ * leave loaded there. That is the whole reason struct radiant_tx_req grew an
+ * addr field, and it is why this function writes BASE0 and PREFIX0.AP0
+ * unconditionally rather than looking for a slot that already matches.
+ *
+ * Logical 0 rather than one of 1..7 because it is the only one with a base of
+ * its own; logical 1..7 all share BASE1, and reusing one of those would make the
+ * transmitted address depend on the last receive window's majority base.
+ */
+static void apply_tx_address(const uint8_t *addr, uint8_t addr_len)
+{
+	uint32_t base;
+	uint8_t  prefix;
+
+	pack_address(addr, addr_len, &base, &prefix);
+
+	NRF_RADIO->BASE0 = base;
+	NRF_RADIO->PREFIX0 = (NRF_RADIO->PREFIX0 & ~0xFFu) | (uint32_t)prefix;
+	nrf_radio_txaddress_set(NRF_RADIO, 0u);
+}
+
+/*
+ * How much air there is between switching the radio on and t_sync.
+ *
+ * t_sync is the end of the address, so a receiver has to have been listening,
+ * and a transmitter has to have started transmitting, for the ramp-up plus the
+ * whole preamble and address before that instant. Both directions want the same
+ * number and neither wants a tuned constant: deriving it from the definition is
+ * what stops the window edge - or the transmit start - from silently carrying
+ * one backend's ramp-up, which is the class of error the t_sync contract in
+ * radiant_radio_hal.h exists to prevent.
+ */
+static uint32_t air_lead_us(uint8_t addr_len)
+{
+	return RAMP_UP_US +
+	       (uint32_t)(PREAMBLE_BYTES + addr_len) * US_PER_BYTE;
+}
+
+/* ---------------------------------------------------------------------------
+ * RSSI temperature correction - errata 153 (nRF52840) / 225 (nRF52833)
+ *
+ * Re-sourced, not re-derived. This is NOT sdk-ant: it is Nordic's own
+ * open-source 802.15.4 driver, BSD-3-Clause, shipped inside NCS and already a
+ * dependency the same way nrf52_erratas.h is -
+ * modules/hal/nordic/drivers/nrf_802154/driver/src/nrf_802154_rssi.c,
+ * nrf_802154_rssi_sample_temp_corr_value_get(), whose own comment names the
+ * erratum: "Implementation based on Errata 153 for nRF52840 SoC and Errata
+ * 225 for nRF52833 SoCs." The seven thresholds and the eighth,
+ * beyond-the-erratum branch below are copied from that function's table
+ * verbatim; nothing here is this project's own measurement, and that is
+ * stated because every other correction constant in this file is measured or
+ * is explicitly flagged as a datasheet figure - see this file's header. The
+ * one thing re-derived rather than copied is the sign: that function corrects
+ * a positive register MAGNITUDE (`sample + corr`), this file works in
+ * negated dBm, and RSSISAMPLE's magnitude convention is the same either way,
+ * so `corrected_dbm = raw_dbm - corr`. Nordic's own accessors apply the
+ * opposite sign to a THRESHOLD (`cca_ed - corr`, note the same minus) -
+ * correcting a measured sample and a threshold it is compared against in the
+ * same direction double-counts the correction, which is the mistake this
+ * comment exists to head off in any code that later compares evt.rssi_dbm
+ * against a configured threshold (radiant_search.c's cfg.min_rssi_dbm is not
+ * itself temperature-corrected, so no such double-counting exists today).
+ *
+ * NOT PRESENT ON nRF54L. nrf_802154_rssi.c implements NRF52_SERIES (this
+ * table) and NRF53_SERIES (errata 87, an unrelated cubic polynomial) and
+ * returns a flat 0 for every other part, including nRF54L. This bench's own
+ * part is nRF54L15 (see this file's header), so the correction below compiles
+ * in for nRF52840/nRF52833 only and this bench's RSSI stays uncorrected,
+ * matching Nordic's own choice rather than inventing a number for a part
+ * nobody has characterised it on.
+ *
+ * radiant_radio_nrf_die_temp_c() is declared in radiant_radio_nrf_diag.h,
+ * included at the top of this file, and defined further down: the handler
+ * below only needs its prototype, and the definition needs nothing from here.
+ */
+#if defined(CONFIG_SOC_NRF52840) || defined(CONFIG_SOC_NRF52833)
+#define RSSI_TEMP_CORR_PRESENT 1
+#else
+#define RSSI_TEMP_CORR_PRESENT 0
+#endif
+
+#if RSSI_TEMP_CORR_PRESENT
+
+static int8_t rssi_temp_corr_get(int8_t temp_c)
+{
+	if (temp_c <= -30) {
+		return 3;
+	}
+	if (temp_c <= -10) {
+		return 2;
+	}
+	if (temp_c <= 10) {
+		return 1;
+	}
+	if (temp_c <= 30) {
+		return 0;
+	}
+	if (temp_c <= 50) {
+		return -1;
+	}
+	if (temp_c <= 70) {
+		return -2;
+	}
+	if (temp_c <= 85) {
+		return -3;
+	}
+	/* Beyond the erratum's own table. Nordic's comment: "nRF52840 cannot
+	 * work for a temperature above 85 degrees Celsius, so this part won't
+	 * affect its operation, even if it isn't present in its errata." */
+	return -4;
+}
+
+/*
+ * Cached, not sampled per packet - see radiant_radio_nrf_die_temp_c()'s own
+ * header on why a TEMP conversion cannot run in the radio ISR. 20 degC is not
+ * a guess: it is nrf_802154_temperature_zephyr.c's own DEFAULT_TEMPERATURE,
+ * the value that function reports before its first real reading, and it is
+ * also the centre of this table's zero-correction band, so an unrefreshed
+ * cache costs nothing rather than costing an unknown amount.
+ */
+static int8_t rssi_temp_cache_c = 20;
+
+/* 60 s, matching CONFIG_NRF_802154_TEMPERATURE_UPDATE_PERIOD's own default
+ * for the identical job. Die temperature does not move fast enough for this
+ * table - a full band is 20 degC wide - to need a shorter one. */
+#define RSSI_TEMP_UPDATE_PERIOD_MS 60000u
+
+static struct k_work_delayable rssi_temp_work;
+
+static void rssi_temp_work_handler(struct k_work *work)
+{
+	int16_t centi_c;
+
+	ARG_UNUSED(work);
+
+	if (radiant_radio_nrf_die_temp_c(&centi_c) == RADIANT_RADIO_OK_RC) {
+		rssi_temp_cache_c = (int8_t)(centi_c / 100);
+	}
+	/* A failed read leaves the cache at its last good value rather than
+	 * resetting to 20 degC, which would be a silent step change in every
+	 * RSSI report that followed it. */
+	k_work_reschedule(&rssi_temp_work, K_MSEC(RSSI_TEMP_UPDATE_PERIOD_MS));
+}
+
+#endif /* RSSI_TEMP_CORR_PRESENT */
+
 /* ---------------------------------------------------------------------------
  * Lifecycle
  * ---------------------------------------------------------------------------
@@ -787,6 +1075,11 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 		    &radiant_op.conn_start) < 0 ||
 	    nrfx_gppi_conn_alloc(
 		    nrf_timer_event_address_get(TIMER_ADDR,
+						nrf_timer_compare_event_get(CC_TXSTART)),
+		    nrf_radio_task_address_get(NRF_RADIO, NRF_RADIO_TASK_TXEN),
+		    &radiant_op.conn_start_tx) < 0 ||
+	    nrfx_gppi_conn_alloc(
+		    nrf_timer_event_address_get(TIMER_ADDR,
 						nrf_timer_compare_event_get(CC_CLOSE)),
 		    nrf_radio_task_address_get(NRF_RADIO, NRF_RADIO_TASK_DISABLE),
 		    &radiant_op.conn_close) < 0) {
@@ -855,6 +1148,33 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 			return RADIANT_RADIO_EIO;
 		}
 	}
+
+	/*
+	 * One die-temperature reading, at the one point in this file's
+	 * lifecycle guaranteed to be thread context and guaranteed to run on
+	 * every boot: the confound made visible on the log every bench
+	 * capture already records (see radiant_radio_nrf_diag.h), and on
+	 * nRF52840/nRF52833 also the seed for the errata-153/225 RSSI
+	 * correction cache below - real from the first packet rather than
+	 * from the first RSSI_TEMP_UPDATE_PERIOD_MS refresh.
+	 */
+	{
+		int16_t centi_c;
+
+		if (radiant_radio_nrf_die_temp_c(&centi_c) == RADIANT_RADIO_OK_RC) {
+			LOG_INF("die temperature at init: %d.%02u degC",
+				centi_c / 100, (unsigned)abs(centi_c % 100));
+#if RSSI_TEMP_CORR_PRESENT
+			rssi_temp_cache_c = (int8_t)(centi_c / 100);
+#endif
+		}
+	}
+
+#if RSSI_TEMP_CORR_PRESENT
+	k_work_init_delayable(&rssi_temp_work, rssi_temp_work_handler);
+	k_work_schedule(&rssi_temp_work, K_MSEC(RSSI_TEMP_UPDATE_PERIOD_MS));
+#endif
+
 	return RADIANT_RADIO_OK_RC;
 }
 
@@ -897,84 +1217,186 @@ int radiant_radio_disable(void)
 }
 
 /* ---------------------------------------------------------------------------
- * Transmit - BLOCKED, and not by this file
+ * Transmit
  * ---------------------------------------------------------------------------
  *
- * struct radiant_tx_req cannot express a transmission. It carries fmt,
- * rf_index, power, body, body_len and t_sync_at, and THERE IS NO ADDRESS IN IT.
- * `body` is the tracking-geometry body [ttype][ctrl][d0..d7] that
- * radiant_transfer_build_body() produces; the five on-air address bytes
- * [A6 C5 devnum_lo devnum_hi device_type] are not part of it, and nothing else
- * in the request names them.
+ * This entry point returned RADIANT_RADIO_ENOTSUP for as long as struct
+ * radiant_tx_req had no address in it, and the refusal was the right answer at
+ * the time. The request carried fmt, rf_index, power, body, body_len and
+ * t_sync_at; `body` is the tracking-geometry body [ttype][ctrl][d0..d7] that
+ * radiant_transfer_build_body() produces, and the five on-air address bytes
+ * [A6 C5 devnum_lo devnum_hi device_type] were nowhere in the request at all.
  *
- * The contract is asymmetric and that is the whole of the problem: an RX
+ * The contract was asymmetric and that was the whole of the problem: an RX
  * request carries struct radiant_rx_filter with an explicit on-air address,
- * because the receiver has to match one. The TX request carries no counterpart,
+ * because the receiver has to match one. The TX request carried no counterpart,
  * because - it looks like - the address was implicitly assumed to be "whatever
  * the receiver was last configured for". On this backend that assumption has a
  * name: TXADDRESS selects a logical address whose BASE/PREFIX must already be
- * programmed, so a transmit that follows a receive on a different channel would
- * put the PREVIOUS channel's device number on the air. A frame addressed to the
- * wrong sensor is not a dropped frame; it is a frame another device may accept.
+ * programmed, so a transmit that followed a receive on a different channel would
+ * have put the PREVIOUS channel's device number on the air. A frame addressed to
+ * the wrong sensor is not a dropped frame; it is a frame another device may
+ * accept.
  *
- * This was not findable before now, and that is the point of having written
- * the backend rather than estimated it. Both spikes were receive-only, the mock
- * in radiant_core/tests/fake_radio.c records a TX request without an address
- * and so cannot notice one is missing, and every test above the HAL asserts on
- * body bytes rather than on address bytes.
- *
- * THE FIX IS SMALL AND IT IS NOT MINE TO MAKE HERE. struct radiant_tx_req needs
- * the same two fields struct radiant_rx_filter already has:
- *
- *     const uint8_t *addr;
- *     uint8_t        addr_len;      / * must equal fmt->addr_len * /
- *
- * and the callers already hold the answer - radiant_transfer_cfg carries
- * net_addr[] and struct radiant_channel_id, which is exactly the five bytes.
- * The change touches radiant_radio_hal.h, struct radiant_sched_tx, the two
- * places in radiant_burst.c that fill it, fake_radio.c, and one assertion per
- * transmit test. It is a contract change to a frozen header, so it is a
- * decision rather than a patch, and it belongs in a commit of its own with the
- * tests that would have caught it.
- *
- * Until then this entry point refuses rather than inventing an address. A
- * backend that transmitted to a stale address would pass every test in the tree
- * and be wrong on the air, which is the failure mode this project keeps finding
- * and keeps writing down.
+ * It was not findable before the first real backend, and that is the point of
+ * having written one rather than estimated it. Both spikes were receive-only,
+ * the mock in radiant_core/tests/fake_radio.c recorded a TX request without an
+ * address and so could not notice one was missing, and every test above the HAL
+ * asserted on body bytes rather than on address bytes. The fix added addr and
+ * addr_len to struct radiant_tx_req and to struct radiant_sched_tx, and made
+ * both the mock and radiant_sched_request_tx() refuse a transmit whose addr_len
+ * disagrees with its format - so the requirement is now stated in three places
+ * that a build has to satisfy, rather than assumed in none.
  */
 int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 {
-	ARG_UNUSED(req);
+	unsigned int   key;
+	radiant_time_t now;
+	radiant_time_t t_start;
+	uint32_t       lead;
+	int            rc;
 
-	if (op != NULL) {
-		*op = 0u;
+	if (op == NULL) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	*op = 0u;
+
+	if (req == NULL || req->fmt == NULL || req->body == NULL) {
+		return RADIANT_RADIO_EINVAL;
 	}
 	if (!radiant_op.inited || !radiant_op.enabled) {
 		return RADIANT_RADIO_ESTATE;
 	}
-	return RADIANT_RADIO_ENOTSUP;
+	/* No address, no transmit - never an inherited one. See the note above. */
+	if (req->addr_len != req->fmt->addr_len ||
+	    req->addr_len < 2u || req->addr_len > RADIANT_RADIO_ADDR_MAX) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	if (req->body_len == 0u || req->body_len > RADIANT_RADIO_BODY_MAX) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	if (req->t_sync_at == RADIANT_TIME_NEVER) {
+		return RADIANT_RADIO_EINVAL;
+	}
+
+	/* One operation in flight, resolved the same way arm_rx does. */
+	key = irq_lock();
+	if (radiant_op.kind != OP_NONE) {
+		irq_unlock(key);
+		return RADIANT_RADIO_EBUSY;
+	}
+	radiant_op.kind = OP_TX;
+	irq_unlock(key);
+
+	rc = apply_format(req->fmt, req->rf_index);
+	if (rc != RADIANT_RADIO_OK_RC) {
+		goto fail;
+	}
+	/* apply_format has already refused anything but RADIANT_LEN_FIXED, so
+	 * the format's own length is the only length this frame may have. A
+	 * backend cannot fix a disagreement up: it DMAs the bytes it is given
+	 * and STATLEN decides how many leave the antenna. */
+	if (req->body_len != req->fmt->body_len) {
+		rc = RADIANT_RADIO_EINVAL;
+		goto fail;
+	}
+
+	apply_tx_address(req->addr, req->addr_len);
+	apply_power(&req->power);
+
+	memcpy(radiant_tx_buf, req->body, req->body_len);
+	NRF_RADIO->PACKETPTR = (uint32_t)(uintptr_t)radiant_tx_buf;
+
+	/*
+	 * Working backwards from t_sync, which is the whole reason the HAL
+	 * defines TX in those terms: the caller names the instant the last
+	 * address bit must be at the antenna, and the backend - not the core -
+	 * subtracts its own ramp-up and preamble. A master's period is then
+	 * exact by construction and carries none of this part's constants.
+	 */
+	lead = air_lead_us(req->addr_len);
+	t_start = req->t_sync_at - (radiant_time_t)lead;
+
+	now = radiant_radio_now();
+	if (req->t_sync_at < now + lead) {
+		/* Never silently late. A late master frame lands in the next
+		 * slot and is worse than no frame at all. */
+		rc = RADIANT_RADIO_ETIME;
+		goto fail;
+	}
+
+	radiant_op.addr_len        = req->addr_len;
+	radiant_op.body_len        = req->body_len;
+	radiant_op.stop_on_first   = false;
+	radiant_op.report_crc_fail = false;
+	radiant_op.terminal_sent   = false;
+
+	/*
+	 * READY_START begins the transmission the instant ramp-up completes, so
+	 * nothing between the compare and the antenna is software - which is the
+	 * whole point of scheduling the start from a timer compare.
+	 *
+	 * There is deliberately NO end-of-packet short. The obvious one is
+	 * END_DISABLE, and it does not exist on nRF54L15: that part renamed the
+	 * end-of-packet shortcut to PHYEND_DISABLE and defines no END_DISABLE at
+	 * all, while nRF52840 defines END_DISABLE and not PHYEND_DISABLE. Either
+	 * choice would need a per-series #if for no gain, because the
+	 * transmitter is already finished by the time END fires - the disable
+	 * costs interrupt latency and nothing on the air. The ISR triggers it
+	 * explicitly instead.
+	 */
+	nrf_radio_shorts_set(NRF_RADIO, NRF_RADIO_SHORT_READY_START_MASK);
+
+	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_END);
+	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS);
+	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_DISABLED);
+
+	nrf_timer_cc_set(TIMER_ADDR, CC_TXSTART, clock_counter_at(t_start));
+	nrfx_gppi_conn_enable(radiant_op.conn_start_tx);
+
+	/*
+	 * RE-CHECK AFTER PROGRAMMING, because the failure this catches has no
+	 * other symptom.
+	 *
+	 * Everything above costs time - a format, an address, a power table
+	 * scan and a body copy - and ARM_SETUP_US is a budget rather than a
+	 * guarantee. If the counter has already passed the compare by the time
+	 * it is written, the compare simply never fires: TASKS_TXEN is never
+	 * triggered, no END arrives, no DISABLED arrives, and the operation
+	 * hangs holding the one slot the whole scheduler shares. The receive
+	 * path at least closes its own window; this one would wait for ever.
+	 *
+	 * So the arm is confirmed against the clock one last time and unwound
+	 * into a loud ETIME if it lost the race. The cost is one timer capture.
+	 */
+	now = radiant_radio_now();
+	if (t_start <= now) {
+		nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
+		nrf_radio_shorts_set(NRF_RADIO, 0);
+		rc = RADIANT_RADIO_ETIME;
+		goto fail;
+	}
+
+	radiant_op.id = radiant_op.next_id++;
+	if (radiant_op.next_id == 0u) {
+		radiant_op.next_id = 1u;   /* ids are non-zero by contract */
+	}
+	*op = radiant_op.id;
+	LOG_DBG("tx op=%u alen=%u blen=%u start=+%d",
+		(unsigned)radiant_op.id, (unsigned)req->addr_len,
+		(unsigned)req->body_len, (int)(int64_t)(t_start - now));
+	return RADIANT_RADIO_OK_RC;
+
+fail:
+	LOG_DBG("tx refused: %d (addr_len=%u)", rc, (unsigned)req->addr_len);
+	radiant_op.kind = OP_NONE;
+	return rc;
 }
 
 /* ---------------------------------------------------------------------------
  * Receive
  * ---------------------------------------------------------------------------
  */
-
-/*
- * How early the receiver must be listening for a frame whose t_sync lands
- * exactly at t_open.
- *
- * t_sync is the end of the address, so the receiver has to have been on for the
- * ramp-up plus the whole preamble and address before that instant. Getting this
- * from the definition rather than from a tuned constant is what stops the
- * window edge from silently carrying one backend's ramp-up - the same class of
- * error the t_sync contract exists to prevent, in the other direction.
- */
-static uint32_t rx_lead_us(uint8_t addr_len)
-{
-	return RAMP_UP_US +
-	       (uint32_t)(PREAMBLE_BYTES + addr_len) * US_PER_BYTE;
-}
 
 int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 {
@@ -1018,6 +1440,7 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	if (rc != RADIANT_RADIO_OK_RC) {
 		goto fail;
 	}
+	NRF_RADIO->PACKETPTR = (uint32_t)(uintptr_t)radiant_rx_buf;
 
 	/*
 	 * ADVERTISE THE WORST CASE, REFUSE ONLY THE IMPOSSIBLE.
@@ -1038,7 +1461,7 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	 * A window that really cannot be made still gets a loud ETIME.
 	 */
 	now = radiant_radio_now();
-	if (req->t_open < now + rx_lead_us(req->fmt->addr_len)) {
+	if (req->t_open < now + air_lead_us(req->fmt->addr_len)) {
 		/* Never silently late. A window opened after the frame it was
 		 * meant to catch is indistinguishable from a sensor that went
 		 * quiet, and that is the report nobody can act on. */
@@ -1075,7 +1498,7 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	 * arriving - body plus CRC - rather than being cut off mid-packet.
 	 */
 	start_cc = clock_counter_at(req->t_open -
-				    (radiant_time_t)rx_lead_us(req->fmt->addr_len));
+				    (radiant_time_t)air_lead_us(req->fmt->addr_len));
 	close_cc = clock_counter_at(req->t_close +
 				    (radiant_time_t)((req->fmt->body_len + 2u) *
 						     US_PER_BYTE));
@@ -1126,9 +1549,12 @@ int radiant_radio_abort(void)
 		return RADIANT_RADIO_OK_RC;
 	}
 
-	/* Take the window's hardware edges away first, or the close compare can
-	 * re-fire against an operation that has already been retired. */
+	/* Take the operation's hardware edges away first, or a compare can
+	 * re-fire against an operation that has already been retired. All three
+	 * unconditionally: which are live depends on the kind, and disabling a
+	 * channel that was not enabled costs a register write. */
 	nrfx_gppi_conn_disable(radiant_op.conn_start);
+	nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
 	nrfx_gppi_conn_disable(radiant_op.conn_close);
 	nrf_radio_shorts_set(NRF_RADIO, 0);
 	nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_STOP);
@@ -1147,32 +1573,85 @@ int radiant_radio_abort(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * Bench diagnostic: die temperature
+ *
+ * See radiant_radio_nrf_diag.h for why this exists and why it is not part of
+ * the HAL contract. Thread context only - see that header.
+ * ---------------------------------------------------------------------------
+ */
+
+int radiant_radio_nrf_die_temp_c(int16_t *out)
+{
+	int32_t raw;
+
+	if (out == NULL) {
+		return RADIANT_RADIO_EINVAL;
+	}
+
+	nrf_temp_task_trigger(NRF_TEMP, NRF_TEMP_TASK_START);
+	while (!nrf_temp_event_check(NRF_TEMP, NRF_TEMP_EVENT_DATARDY)) {
+		/* Datasheet-quoted conversion time is tens of microseconds;
+		 * see the header for why this may only be called from thread
+		 * context. */
+	}
+	nrf_temp_event_clear(NRF_TEMP, NRF_TEMP_EVENT_DATARDY);
+
+	/* TEMP is 2's-complement, 0.25 degC steps (hal/nrf_temp.h). *25 turns
+	 * quarter-degrees into centi-degrees without an intermediate float. */
+	raw = nrf_temp_result_get(NRF_TEMP);
+	*out = (int16_t)(raw * 25 / 10);
+
+	nrf_temp_task_trigger(NRF_TEMP, NRF_TEMP_TASK_STOP);
+	return RADIANT_RADIO_OK_RC;
+}
+
+/* ---------------------------------------------------------------------------
  * The interrupt
  * ---------------------------------------------------------------------------
  */
 
+/* Every operation ends here, and it ends down exactly one of the two callbacks.
+ * The kind has to be read BEFORE the slot is released, which is why it is
+ * latched into a local rather than tested around the call. */
 static void deliver_terminal(enum radiant_radio_status st)
 {
-	struct radiant_rx_event evt;
+	enum op_kind kind = radiant_op.kind;
 
-	if (radiant_op.terminal_sent) {
+	if (radiant_op.terminal_sent || kind == OP_NONE) {
 		return;
 	}
 	radiant_op.terminal_sent = true;
 	radiant_dbg_term++;
 
 	nrfx_gppi_conn_disable(radiant_op.conn_start);
+	nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
 	nrfx_gppi_conn_disable(radiant_op.conn_close);
 	nrf_radio_shorts_set(NRF_RADIO, 0);
 
-	memset(&evt, 0, sizeof(evt));
-	evt.op = radiant_op.id;
-	evt.status = st;
-	evt.t_sync = radiant_radio_now();
-	evt.t_sync_exact = false;
-
 	radiant_op.kind = OP_NONE;
-	radiant_op.cbs->rx(&evt, radiant_op.user);
+
+	if (kind == OP_TX) {
+		struct radiant_tx_event evt;
+
+		memset(&evt, 0, sizeof(evt));
+		evt.op = radiant_op.id;
+		evt.status = st;
+		/* Nothing went out, so there is no captured address instant to
+		 * report and CC_SYNC still holds some earlier operation's. Say
+		 * so rather than reporting a stale capture as exact. */
+		evt.t_sync = radiant_radio_now();
+		evt.t_sync_exact = false;
+		radiant_op.cbs->tx(&evt, radiant_op.user);
+	} else {
+		struct radiant_rx_event evt;
+
+		memset(&evt, 0, sizeof(evt));
+		evt.op = radiant_op.id;
+		evt.status = st;
+		evt.t_sync = radiant_radio_now();
+		evt.t_sync_exact = false;
+		radiant_op.cbs->rx(&evt, radiant_op.user);
+	}
 }
 
 static void radio_isr(const void *arg)
@@ -1182,6 +1661,45 @@ static void radio_isr(const void *arg)
 
 	if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_END)) {
 		nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_END);
+
+		if (radiant_op.kind == OP_TX && !radiant_op.terminal_sent) {
+			struct radiant_tx_event evt;
+
+			/*
+			 * The frame is out. This event is the terminal one, and
+			 * it is delivered from END rather than from the
+			 * DISABLED that follows - because the slot has to be
+			 * free before the callback runs, so that the callback
+			 * can arm the next operation. Releasing it here also
+			 * makes the DISABLED branch below a no-op for this
+			 * operation rather than a second delivery.
+			 */
+			radiant_op.terminal_sent = true;
+			radiant_dbg_term++;
+			nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
+			nrf_radio_shorts_set(NRF_RADIO, 0);
+			/* In place of the end-of-packet short this part may or
+			 * may not spell the same way. See radiant_radio_tx(). */
+			nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_DISABLE);
+
+			memset(&evt, 0, sizeof(evt));
+			evt.op = radiant_op.id;
+			evt.status = RADIANT_RADIO_STATUS_OK;
+			/*
+			 * A hardware capture, exactly as on receive: EVENTS_ADDRESS
+			 * fires when the address has been SENT, and the same
+			 * always-live (D)PPI connection captures it. So a master
+			 * closes its slot phase against what actually went out
+			 * rather than against what it asked for.
+			 */
+			evt.t_sync = clock_absolute(
+				nrf_timer_cc_get(TIMER_ADDR, CC_SYNC)) +
+				(radiant_time_t)T_SYNC_CAL_TX_US;
+			evt.t_sync_exact = true;
+
+			radiant_op.kind = OP_NONE;
+			radiant_op.cbs->tx(&evt, radiant_op.user);
+		}
 
 		if (radiant_op.kind == OP_RX && !radiant_op.terminal_sent) {
 			struct radiant_rx_event evt;
@@ -1212,8 +1730,20 @@ static void radio_isr(const void *arg)
 				evt.body = radiant_rx_buf;
 				evt.body_len = radiant_op.body_len;
 				evt.has_rssi = true;
-				evt.rssi_dbm = (int8_t)(-(int32_t)
-					(NRF_RADIO->RSSISAMPLE & 0x7Fu));
+				{
+					int8_t raw_dbm = (int8_t)(-(int32_t)
+						(NRF_RADIO->RSSISAMPLE & 0x7Fu));
+
+#if RSSI_TEMP_CORR_PRESENT
+					/* raw_dbm - corr, not + corr: see
+					 * "RSSI temperature correction" above
+					 * for the sign derivation. */
+					evt.rssi_dbm = (int8_t)(raw_dbm -
+						rssi_temp_corr_get(rssi_temp_cache_c));
+#else
+					evt.rssi_dbm = raw_dbm;
+#endif
+				}
 
 				if (radiant_op.stop_on_first) {
 					/* This event IS the terminal one. */
@@ -1238,6 +1768,15 @@ static void radio_isr(const void *arg)
 			 * disabled it. Both are terminal; TIMEOUT is what a
 			 * window that simply ended reports. */
 			deliver_terminal(RADIANT_RADIO_STATUS_TIMEOUT);
+		} else if (radiant_op.kind == OP_TX) {
+			/*
+			 * A transmit that reaches DISABLED without having
+			 * reached END never went out - the END branch above
+			 * releases the slot for one that did. So this is the
+			 * abort path and nothing else, and ABORTED is the only
+			 * honest status for it.
+			 */
+			deliver_terminal(RADIANT_RADIO_STATUS_ABORTED);
 		}
 	}
 }

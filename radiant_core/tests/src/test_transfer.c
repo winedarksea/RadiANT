@@ -1104,6 +1104,134 @@ ZTEST(transfer, test_a_burst_aborted_midflight_and_its_late_terminal_event)
 }
 
 /* ---------------------------------------------------------------------------
+ * Defensive invariants, cross-checked against sdk-ant's own burst handler
+ *
+ * sdk-ant's burst handling is unremarkable in a good way: every unexpected
+ * state resets the handler rather than continuing
+ * (docs/sdk-ant-comparison.md item 5 lists five). None of the three below
+ * copies sdk-ant's code or its wire behaviour - the source is D00000652's
+ * sequencing rules, restated as a property of this engine - but the shape of
+ * the fault is the same fault, and the engine's answer to each is written out
+ * so a future change to radiant_burst.c or radiant_ack.c has something to
+ * break loudly against.
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * Out-of-order sequencing, this engine's version: a SEG_START where a
+ * CONTINUE was expected - a host restarting a transfer without finishing the
+ * one already in flight. sdk-ant resets and answers
+ * TRANSFER_SEQUENCE_NUMBER_ERROR; this engine does not need to reset
+ * anything, because radiant_transfer_submit() refuses the bad request before
+ * it touches any state - the block already in flight is untouched and
+ * un-released.
+ */
+ZTEST(transfer, test_a_restart_mid_block_wait_is_a_sequence_error)
+{
+	reset_blocks();
+	queue_block(0u, 8u, RADIANT_TRANSFER_SEG_START, 0xA0u);
+
+	zassert_true(feed_next_block());
+	run_one_packet_exchange();
+	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_BLOCK, radiant_transfer_state(&xfer),
+		      "one packet in an 8-byte block must finish the block");
+
+	zassert_equal(RADIANT_TRANSFER_ESEQ,
+		      radiant_transfer_burst_block(&xfer, blocks[1], 8u,
+						RADIANT_TRANSFER_SEG_START,
+						RADIANT_TIME_NEVER),
+		      "a SEG_START while WAIT_BLOCK must be refused as ESEQ");
+	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_BLOCK, radiant_transfer_state(&xfer),
+		      "a refused restart must not disturb the block already in flight");
+	zassert_equal(0u, n_ev, "the refusal itself raises no event");
+	zassert_equal(1u, radiant_transfer_stats(&xfer)->blocks_accepted);
+
+	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_abort(&xfer));
+	end_of_test();
+}
+
+/*
+ * An unrecognised message arriving mid-transfer, this engine's version: a
+ * frame that decodes cleanly but is not the acknowledgement this packet is
+ * waiting for - the control byte the peer would have sent if it mistook the
+ * reply window for its own transmit slot, rather than the ACK byte
+ * radiant_transfer_ack_matches() requires. sdk-ant resets; this engine fails
+ * the transfer once (B1: the block in hand still comes back) and returns to
+ * IDLE rather than waiting out a reply that was never coming.
+ */
+ZTEST(transfer, test_a_reply_that_is_not_an_acknowledgement_fails_like_sdk_ants_reset)
+{
+	const struct fake_radio_arm *tx;
+	const struct fake_radio_arm *rx;
+	uint8_t frame[AIR_LEN];
+
+	reset_blocks();
+	queue_block(0u, 8u, RADIANT_TRANSFER_SEG_START | RADIANT_TRANSFER_SEG_END, 0xB0u);
+	zassert_true(feed_next_block());
+	zassert_true(fake_radio_step(), "no packet was armed");
+	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_ACK, radiant_transfer_state(&xfer));
+
+	tx = last_arm_of(FAKE_RADIO_ARM_TX);
+	rx = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(tx, "no accepted transmit to reply to");
+	zassert_not_null(rx, "no reply window was opened");
+
+	/* The peer's own DATA control byte, echoed back instead of the ACK
+	 * byte this window is waiting for - decodable, and wrong. */
+	(void)build_peer_frame(frame, tx->body[BODY_CTRL], peer_payload);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(rx->t_open +
+					   (radiant_time_t)RADIANT_TRANSFER_ACK_GUARD_US,
+					   frame, AIR_LEN));
+	zassert_true(fake_radio_step(), "the mismatched frame never arrived");
+
+	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer),
+		      "a mismatched reply must fail the transfer, not leave it armed");
+	zassert_equal(1u, n_ev);
+	zassert_equal(RADIANT_TRANSFER_EV_TX_FAILED, evlog[0].ev);
+	zassert_equal(RADIANT_TRANSFER_FAIL_BAD_ACK, evlog[0].fail);
+	zassert_equal_ptr(blocks[0], evlog[0].block,
+			  "the block in hand must still come back (B1)");
+
+	end_of_test();
+}
+
+/*
+ * A stack event arriving in HANDLER_IDLE, this engine's version. sdk-ant
+ * resets harmlessly, with a comment noting it legitimately happens after an
+ * input-error re-init. This engine's IDLE has the same property by
+ * construction rather than by a special case: reset_transfer() clears t->op
+ * to 0, and both event entry points check t->op != 0 before acting on
+ * anything, so an event that turns up with nothing armed - here, on an
+ * engine that was never armed at all rather than one recovering from an
+ * error - is counted as late and dropped, not acted on.
+ */
+ZTEST(transfer, test_an_event_with_nothing_armed_is_counted_and_dropped)
+{
+	struct radiant_rx_event rx_ev;
+	struct radiant_tx_event tx_ev;
+
+	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
+	zassert_equal(0u, radiant_transfer_op(&xfer));
+
+	memset(&rx_ev, 0, sizeof(rx_ev));
+	rx_ev.op = 12345u;
+	rx_ev.status = RADIANT_RADIO_STATUS_OK;
+	radiant_transfer_on_rx_event(&xfer, &rx_ev);
+
+	memset(&tx_ev, 0, sizeof(tx_ev));
+	tx_ev.op = 12345u;
+	tx_ev.status = RADIANT_RADIO_STATUS_OK;
+	radiant_transfer_on_tx_event(&xfer, &tx_ev);
+
+	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
+	zassert_equal(0u, n_ev, "an event with nothing armed must not raise anything");
+	zassert_equal(2u, radiant_transfer_stats(&xfer)->late_events);
+
+	end_of_test();
+}
+
+/* ---------------------------------------------------------------------------
  * The receive path - the tightest deadline in the link layer
  * ---------------------------------------------------------------------------
  */

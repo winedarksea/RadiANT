@@ -1539,6 +1539,10 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	if (req->fmt != NULL) {
 		rec->fmt = *req->fmt;
 	}
+	rec->addr_len = req->addr_len;
+	if (req->addr_len <= RADIANT_RADIO_ADDR_MAX) {
+		memcpy(rec->addr, req->addr, req->addr_len);
+	}
 	rec->body_len = req->body_len;
 	if (req->body != NULL && req->body_len > 0u &&
 	    req->body_len <= RADIANT_RADIO_BODY_MAX) {
@@ -1551,6 +1555,18 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	}
 	if (rc == RADIANT_RADIO_OK_RC && req->rf_index > RADIANT_RF_INDEX_MAX) {
 		rc = RADIANT_RADIO_EINVAL;
+	}
+	if (rc == RADIANT_RADIO_OK_RC) {
+		/*
+		 * No address, no transmit. The mock has no hardware to inherit a
+		 * stale one from, so this rejection exists purely to make the
+		 * mock as strict as the nRF backend has to be - which is the
+		 * only reason the mock is worth anything as a contract test.
+		 */
+		if (req->addr_len != req->fmt->addr_len ||
+		    req->addr_len > RADIANT_RADIO_ADDR_MAX) {
+			rc = RADIANT_RADIO_EINVAL;
+		}
 	}
 	if (rc == RADIANT_RADIO_OK_RC) {
 		if (req->body == NULL || req->body_len == 0u ||

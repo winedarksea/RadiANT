@@ -504,6 +504,7 @@ Byte 2 of a RESPONSE_EVENT whose byte 1 is MESG_EVENT_ID (0x01). These arrive un
 | `ANTW_EVENT_RX_FAIL_GO_TO_SEARCH` | `0x08` | Enough consecutive misses that the channel has dropped back into search. | tools (ant_session) |
 | `ANTW_EVENT_CHANNEL_COLLISION` | `0x09` | Two channels wanted the radio at the same instant. | tools (ant_session) |
 | `ANTW_EVENT_TRANSFER_TX_START` | `0x0A` | Progress, not an outcome - keep waiting. | tools (ant_session) |
+| `ANTW_EVENT_RX_DATA_OVERFLOW` | `0x0B` | Data was blocked because the application is servicing events too slowly to keep up, distinct from EVENT_QUE_OVERFLOW (0x35): this is a host that stopped draining, that is a queue sized too small. We do not raise this today - see the sdk-ant comparison report - but the wire byte belongs in the table regardless of whether anything emits it, so a host that ever does see it decodes something other than an unknown event code. | rev5.1 sec 9.5.6 |
 | `ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK` | `0x11` | The stack has finished with the burst block it was handed and the next may overwrite it. The bridge consumes this internally and never puts it on the wire: a real stick frames bursts itself. If radiant_core fails to raise it exactly once per accepted block, host bursts stall 1000 ms per packet. | bridge, rev5.1 sec 9.5.6 + verify:sdk-ant-shim |
 
 ## Response codes
@@ -746,7 +747,7 @@ These are used at a visible site in this repository but their numeric value is n
 
 ## Provenance summary
 
-221 constants in total. 74 carry a `verify: sdk-ant-shim` flag, meaning no file in this repository witnesses the value and the Wave 2 shim's `BUILD_ASSERT` block is what confirms it. 2 of those are unresolved outright.
+222 constants in total. 74 carry a `verify: sdk-ant-shim` flag, meaning no file in this repository witnesses the value and the Wave 2 shim's `BUILD_ASSERT` block is what confirms it. 2 of those are unresolved outright.
 
 | Source | Constants |
 |---|---|
@@ -771,7 +772,7 @@ These are used at a visible site in this repository but their numeric value is n
 | rev5.1 sec 9.5 | 4 |
 | rev5.1 sec 9.5, host-api | 5 |
 | rev5.1 sec 9.5.2.9 | 1 |
-| rev5.1 sec 9.5.6 | 13 |
+| rev5.1 sec 9.5.6 | 14 |
 | rev5.1 sec 9.5.7.1 | 4 |
 | rev5.1 sec 9.5.7.4 | 11 |
 | sdk-ant-shim | 16 |

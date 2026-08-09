@@ -249,6 +249,20 @@ struct fake_radio_arm {
 
 	/* TX */
 	radiant_time_t t_sync_at;
+	/*
+	 * The on-air address the transmit asked for.
+	 *
+	 * Recorded because for a long time it could not be: struct
+	 * radiant_tx_req had no address field, and a mock that only replays what
+	 * it was handed cannot notice a field that was never there. That is the
+	 * shape of the gap - not an oversight in one function, but a mock and a
+	 * contract agreeing with each other and both being wrong about the air.
+	 * fake_radio now rejects a transmit whose addr_len disagrees with
+	 * fmt->addr_len, so the mock states the requirement rather than merely
+	 * carrying it.
+	 */
+	uint8_t    addr[RADIANT_RADIO_ADDR_MAX];
+	uint8_t    addr_len;
 	uint8_t    body[RADIANT_RADIO_BODY_MAX];
 	uint8_t    body_len;
 

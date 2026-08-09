@@ -372,6 +372,36 @@ project exists to keep. It is also, unavoidably, why limits 7.2 and 7.3 are
 true: the same absence of per-receiver state is what makes revocation
 impossible.
 
+### 8.1 One invariant to carry into Phase 7, if negotiation ever needs exclusivity
+
+Not a limit of this design - a note for whoever implements the X25519 exchange
+above, recorded now for the same reason section 7.4's pairing-mode timeout is
+recorded now rather than found during Phase 7 integration.
+
+sdk-ant's own AES-CTR negotiation (declined for `radiant_core`; see section 10)
+serialises key exchange across the whole device with a single global "only one
+channel negotiates at a time" flag - a reasonable design if a negotiation needs
+a scarce shared resource (a work queue, an ECB/crypto peripheral slot) that
+cannot simply be duplicated per channel. **If the X25519 exchange in this
+section ever grows the same kind of exclusivity flag, the part worth
+remembering is not the flag - it is that the flag must be released on loss of
+tracking, not only on completion or failure.** A channel that starts pairing,
+then loses its peer mid-exchange - the sensor walked out of range, or a rider's
+body blocked the link - has no completion event and no failure event to free
+the flag with. Forget the release-on-loss-of-tracking path and that channel
+deadlocks negotiation for every other channel on the device, permanently, with
+no event anywhere to say so: `radiant_channel_on_slot_missed()` already raises
+`RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH` after
+`RADIANT_CHANNEL_RX_FAIL_TO_SEARCH` consecutive misses (see
+`radiant_channel.h`), and that transition - not just an explicit "negotiation
+cancelled" message - is what a negotiation-exclusivity flag would have to hook
+to stay safe.
+
+This does not apply to the design as specified above: the X25519 exchange runs
+over one channel's own acknowledged/burst path with no cross-channel resource
+today, so there is nothing to serialise and nothing to leak. It applies only if
+a future revision adds one. See `docs/sdk-ant-comparison.md` item 7.
+
 ---
 
 ## 9. Host side: new `MESG_*` IDs, which ANT+ never had

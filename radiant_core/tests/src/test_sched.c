@@ -139,6 +139,30 @@ static void rx_req_init(struct radiant_sched_rx *r, const struct radiant_pkt_for
 	r->t_close = t_close;
 }
 
+/*
+ * A well-formed transmit request for a channel.
+ *
+ * THE ADDRESS COMES FROM track_filter[ch], and that is the assertion rather
+ * than a convenience: a channel transmits on the address it listens on, so
+ * building the request from the same bytes the receive filter uses is what makes
+ * "the scheduler passed the right address to the backend" checkable at all.
+ * struct radiant_sched_tx had no address field until the first real backend
+ * needed one, and every transmit test in this file was written without one - so
+ * the helper exists partly to make sure the next one cannot be.
+ */
+static void tx_req_init(struct radiant_sched_tx *t, uint8_t ch, radiant_time_t t_sync_at)
+{
+	memset(t, 0, sizeof(*t));
+	t->fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
+	t->rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	t->power.dbm = 0;
+	memcpy(t->addr, track_filter[ch].addr, sizeof(t->addr));
+	t->addr_len = track_filter[ch].addr_len;
+	t->body = test_tx_body;
+	t->body_len = (uint8_t)sizeof(test_tx_body);
+	t->t_sync_at = t_sync_at;
+}
+
 static void post_track(uint8_t ch, radiant_time_t t_open, radiant_time_t t_close)
 {
 	struct radiant_sched_rx r;
@@ -164,13 +188,8 @@ static void on_rx(uint8_t ch, uint8_t filter_index,
 	if (log.reply_after_us != 0u && evt->status == RADIANT_RADIO_STATUS_OK) {
 		struct radiant_sched_tx t;
 
-		memset(&t, 0, sizeof(t));
-		t.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
-		t.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
-		t.power.dbm = 0;
-		t.body = test_tx_body;
-		t.body_len = (uint8_t)sizeof(test_tx_body);
-		t.t_sync_at = evt->t_sync + (radiant_time_t)log.reply_after_us;
+		tx_req_init(&t, log.reply_ch,
+			    evt->t_sync + (radiant_time_t)log.reply_after_us);
 		(void)radiant_sched_request_tx(log.reply_ch, &t);
 		log.reply_after_us = 0u; /* one reply per test */
 	}
@@ -886,14 +905,8 @@ ZTEST(radiant_sched, test_an_unreachable_deadline_is_refused_rather_than_run_lat
 	zassert_equal(1u, log.missed_count[0]);
 	zassert_false(radiant_sched_pending(0u));
 
-	memset(&t, 0, sizeof(t));
-	t.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
-	t.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
-	t.body = test_tx_body;
-	t.body_len = (uint8_t)sizeof(test_tx_body);
-
 	/* One microsecond inside the arming lead: not transmitted at all. */
-	t.t_sync_at = t0 + (radiant_time_t)lead - 1u;
+	tx_req_init(&t, 1u, t0 + (radiant_time_t)lead - 1u);
 	zassert_ok(radiant_sched_request_tx(1u, &t));
 	zassert_ok(radiant_sched_tick());
 	zassert_equal(0u, fake_radio_arm_count(),
@@ -901,13 +914,29 @@ ZTEST(radiant_sched, test_an_unreachable_deadline_is_refused_rather_than_run_lat
 	zassert_equal(1u, log.missed_count[1]);
 
 	/* Exactly on the boundary: transmitted, and at the instant asked for. */
-	t.t_sync_at = t0 + (radiant_time_t)lead;
+	tx_req_init(&t, 2u, t0 + (radiant_time_t)lead);
 	zassert_ok(radiant_sched_request_tx(2u, &t));
 	zassert_ok(radiant_sched_tick());
 	zassert_equal(1u, fake_radio_arm_count());
 	zassert_equal(FAKE_RADIO_ARM_TX, fake_radio_arm(0u)->kind);
 	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_arm(0u)->rc);
 	zassert_equal(t.t_sync_at, fake_radio_arm(0u)->t_sync_at);
+
+	/*
+	 * AND IT WENT OUT ADDRESSED TO CHANNEL 2, not to channel 1 whose
+	 * transmit was refused a few lines above.
+	 *
+	 * This is the assertion the whole file lacked. On the nRF backend the
+	 * transmit address is TXADDRESS - an index into BASE/PREFIX registers
+	 * that some earlier operation loaded - so a scheduler that forwarded no
+	 * address would not fail here; it would emit a well-formed frame
+	 * carrying the previous channel's device number. Nothing above the HAL
+	 * would see it, and another device might accept it.
+	 */
+	zassert_equal(5u, fake_radio_arm(0u)->addr_len,
+		      "the transmit carried no on-air address");
+	zassert_mem_equal(fake_radio_arm(0u)->addr, track_filter[2].addr, 5u,
+			  "the transmit did not carry channel 2's address");
 
 	fake_radio_advance_to(t.t_sync_at + 10u);
 	zassert_equal(1u, log.n_tx);
@@ -944,12 +973,7 @@ ZTEST(radiant_sched, test_a_window_is_truncated_to_clear_a_transmit_deadline)
 	/* A window that wants to stay open well past the transmit. */
 	post_track(0u, open, open + 50000u);
 
-	memset(&t, 0, sizeof(t));
-	t.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
-	t.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
-	t.body = test_tx_body;
-	t.body_len = (uint8_t)sizeof(test_tx_body);
-	t.t_sync_at = tx_at;
+	tx_req_init(&t, 1u, tx_at);
 	zassert_ok(radiant_sched_request_tx(1u, &t));
 
 	zassert_ok(radiant_sched_tick());
@@ -1071,12 +1095,7 @@ ZTEST(radiant_sched, test_a_transmit_deadline_displaces_an_armed_window)
 	fake_radio_advance_to(open + 1000u);
 	zassert_equal(1u, fake_radio_arm_count());
 
-	memset(&t, 0, sizeof(t));
-	t.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
-	t.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
-	t.body = test_tx_body;
-	t.body_len = (uint8_t)sizeof(test_tx_body);
-	t.t_sync_at = open + 20000u; /* inside the armed window */
+	tx_req_init(&t, 2u, open + 20000u); /* inside the armed window */
 	zassert_ok(radiant_sched_request_tx(2u, &t));
 	zassert_ok(radiant_sched_tick());
 
@@ -1504,9 +1523,26 @@ ZTEST(radiant_sched, test_malformed_requests_are_rejected_at_the_door)
 	t.t_sync_at = t0 + 100000u;
 	zassert_equal(RADIANT_RADIO_EINVAL, radiant_sched_request_tx(0u, &t),
 		      "a transmit with no body was accepted");
-	t.body = test_tx_body;
-	t.body_len = (uint8_t)sizeof(test_tx_body);
-	t.t_sync_at = RADIANT_TIME_NEVER;
+
+	/*
+	 * A TRANSMIT WITH NO ADDRESS IS MALFORMED, and it is refused here rather
+	 * than passed down, because a backend handed one has no honest move
+	 * left. On nRF the address is a register index the previous operation
+	 * loaded, so the frame goes out addressed to whichever device was last
+	 * listened for - well-formed, on the air, and wrong.
+	 */
+	tx_req_init(&t, 0u, t0 + 100000u);
+	t.addr_len = 0u;
+	zassert_equal(RADIANT_RADIO_EINVAL, radiant_sched_request_tx(0u, &t),
+		      "a transmit with no on-air address was accepted");
+
+	/* And one whose length disagrees with its format: the search geometry's
+	 * 3-byte address posted against the 5-byte tracking format. */
+	t.addr_len = 3u;
+	zassert_equal(RADIANT_RADIO_EINVAL, radiant_sched_request_tx(0u, &t),
+		      "an address that disagreed with the format was accepted");
+
+	tx_req_init(&t, 0u, RADIANT_TIME_NEVER);
 	zassert_equal(RADIANT_RADIO_EINVAL, radiant_sched_request_tx(0u, &t),
 		      "RADIANT_TIME_NEVER was accepted as a transmit instant");
 

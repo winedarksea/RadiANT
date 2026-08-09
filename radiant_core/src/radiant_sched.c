@@ -100,6 +100,11 @@ struct sched_slot {
 	uint8_t rf_index;
 	uint8_t n_filters;
 	uint8_t body_len;
+	/* Transmit only: the on-air address, copied at the post. Six bytes of
+	 * the per-channel budget buy the backend the one thing it cannot infer
+	 * - see struct radiant_tx_req. */
+	uint8_t addr_len;
+	uint8_t addr[RADIANT_RADIO_ADDR_MAX];
 
 	const struct radiant_pkt_format *fmt;
 	const struct radiant_rx_filter  *filters; /* receive; caller-owned */
@@ -659,6 +664,8 @@ static enum step arm_tx_op(uint8_t ch)
 	req.fmt = sl->fmt;
 	req.rf_index = sl->rf_index;
 	req.power = sl->power;
+	memcpy(req.addr, sl->addr, sizeof(req.addr));
+	req.addr_len = sl->addr_len;
 	req.body = sl->body;
 	req.body_len = sl->body_len;
 	req.t_sync_at = sl->t_start;
@@ -1236,6 +1243,19 @@ int radiant_sched_request_tx(uint8_t ch, const struct radiant_sched_tx *req)
 	if (req->t_sync_at == RADIANT_TIME_NEVER) {
 		return RADIANT_RADIO_EINVAL;
 	}
+	/*
+	 * Refused here rather than passed down, because a backend that is handed
+	 * a zero-length address has no honest move left: nRF's TXADDRESS would
+	 * simply select whatever BASE/PREFIX the last operation loaded and emit
+	 * a well-formed frame addressed to the wrong device. Checking against
+	 * fmt->addr_len rather than merely against zero also catches the
+	 * search-format address (3 bytes) being posted against the tracking
+	 * format (5), which is a transmit nothing should ever make.
+	 */
+	if (req->addr_len != req->fmt->addr_len ||
+	    req->addr_len > RADIANT_RADIO_ADDR_MAX) {
+		return RADIANT_RADIO_EINVAL;
+	}
 
 	drop_slot(ch);
 
@@ -1243,6 +1263,8 @@ int radiant_sched_request_tx(uint8_t ch, const struct radiant_sched_tx *req)
 	sl->kind = (uint8_t)SLOT_TX;
 	sl->rf_index = req->rf_index;
 	sl->fmt = req->fmt;
+	memcpy(sl->addr, req->addr, sizeof(sl->addr));
+	sl->addr_len = req->addr_len;
 	sl->body = req->body;
 	sl->body_len = req->body_len;
 	sl->power = req->power;

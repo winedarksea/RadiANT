@@ -729,6 +729,14 @@ EVENT_CHANNEL_COLLISION = 0x09
 # Progress, not an outcome - keep waiting. [tools (ant_session)]
 EVENT_TRANSFER_TX_START = 0x0A
 
+# Data was blocked because the application is servicing events too slowly to
+# keep up, distinct from EVENT_QUE_OVERFLOW (0x35): this is a host that stopped
+# draining, that is a queue sized too small. We do not raise this today - see
+# the sdk-ant comparison report - but the wire byte belongs in the table
+# regardless of whether anything emits it, so a host that ever does see it
+# decodes something other than an unknown event code. [rev5.1 sec 9.5.6]
+EVENT_RX_DATA_OVERFLOW = 0x0B
+
 # The stack has finished with the burst block it was handed and the next may
 # overwrite it. The bridge consumes this internally and never puts it on the
 # wire: a real stick frames bursts itself. If radiant_core fails to raise it
@@ -1727,6 +1735,7 @@ EVENT_CODES = {
     'EVENT_RX_FAIL_GO_TO_SEARCH': 0x08,
     'EVENT_CHANNEL_COLLISION': 0x09,
     'EVENT_TRANSFER_TX_START': 0x0A,
+    'EVENT_RX_DATA_OVERFLOW': 0x0B,
     'EVENT_TRANSFER_NEXT_DATA_BLOCK': 0x11,
 }
 EVENT_CODES_BY_VALUE = {value: name for name, value in EVENT_CODES.items()}

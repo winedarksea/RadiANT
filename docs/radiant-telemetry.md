@@ -427,6 +427,20 @@ rule 3.
 | `0x25` | battery state of charge | % | Power Source / BatPercentRemaining (0.5%) | — |
 | `0x26` | heart rate | **bpm** (non-SI, exception) | *(no cluster; see below)* | — |
 
+**Diagnostic use of `0x10`, beyond a sensor node.** `radiant_radio_nrf.c` samples
+RSSI raw - nRF52840 errata 153 says the reading has a temperature-dependent
+error, which `radiant_radio_nrf.c` now corrects on nRF52840/nRF52833 using
+Nordic's own open-source 802.15.4 driver rather than an invented curve. This
+bench's own nRF54L15 has no equivalent correction anywhere in Nordic's tree,
+so the confound is still live there. `radiant_radio_nrf_die_temp_c()`
+(`radiant_core/include/radiant_core/radiant_radio_nrf_diag.h`) exists so a
+bench capture can publish die temperature as an ordinary `0x10` field
+alongside the RSSI it is already recording, deconfounding the Phase 4
+sensitivity baseline and the Tier 2 A/B gate ([`testing.md`](testing.md)) on
+whichever part is under test. This is a diagnostic use of the vocabulary, not
+a new device type: the envelope already says what `0x10` means, and a bench
+rig is exactly the "arbitrary node" section 1 describes.
+
 ### Class 0x30-0x3F — accumulating quantities
 
 Everything in this class **must** carry the `accumulate` bit. That is what the

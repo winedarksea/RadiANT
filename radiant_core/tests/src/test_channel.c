@@ -795,11 +795,34 @@ ZTEST(radiant_channel, test_bad_parameter_values_and_bad_network)
 	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
 		      radiant_channel_freq_hop_table_set(0u, 125u, 57u, 1u), NULL);
 
-	/* Proximity: 0 disables, 1..10 are thresholds. */
+	/*
+	 * Search waveform: PERMANENT LIMITATION, same shape as CRC mode above.
+	 * Nothing in radiant_search.c switches duty cycle, so only the two
+	 * values sdk-ant names - 316 default, 97 fast - are accepted; anything
+	 * else, including the "do not use" custom range, is refused rather
+	 * than stored and ignored.
+	 */
 	zassert_equal(RADIANT_CH_OK,
+		      radiant_channel_search_waveform_set(
+			      0u, RADIANT_CH_SEARCH_WAVEFORM_FAST),
+		      NULL);
+	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
+		      radiant_channel_search_waveform_set(0u, 200u),
+		      "a custom waveform must be refused: nothing switches duty cycle");
+
+	/*
+	 * Proximity: PERMANENT LIMITATION. Nothing reads prox_threshold back
+	 * into a filter and the capability bit is not advertised, so only 0
+	 * (off) is accepted; every non-zero threshold is refused rather than
+	 * stored and silently never enforced.
+	 */
+	zassert_equal(RADIANT_CH_OK,
+		      radiant_channel_prox_search_set(0u, 0u, 0u),
+		      NULL);
+	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
 		      radiant_channel_prox_search_set(
 			      0u, RADIANT_CH_PROX_THRESHOLD_MAX, 0u),
-		      NULL);
+		      "a non-zero threshold must be refused: nothing enforces it");
 	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
 		      radiant_channel_prox_search_set(
 			      0u, RADIANT_CH_PROX_THRESHOLD_MAX + 1u, 0u),
@@ -812,6 +835,64 @@ ZTEST(radiant_channel, test_bad_parameter_values_and_bad_network)
 	zassert_equal(RADIANT_CH_OK, radiant_channel_tx_power_set(0u, 0x80u, 0x42u),
 		      "the custom bit means `custom` is the value, so there is "
 		      "no level to range-check");
+
+	radio_clean();
+}
+
+/*
+ * A master's missed slot advances its clock, counts nothing, and never sends it
+ * to search.
+ *
+ * THE ADVANCE IS WHAT STOPS A DONGLE WEDGING, and it went missing for as long as
+ * no backend could transmit. A master's t_next only moves on a completed
+ * transmit. A slot lost to contention therefore left it in the past; the
+ * adapter re-posts a pending master on every scheduling pass, the scheduler
+ * refuses an unreachable instant without ever calling the backend, the refusal
+ * completes synchronously, and the completion signals the pass that posts it
+ * again. That is a hot loop with no fault, no log line and no host response -
+ * the dongle stops answering while looking perfectly alive - and one missed
+ * transmit was enough to enter it. It was found on hardware, by halting the CPU
+ * and sampling the program counter, because there was nothing else to see.
+ *
+ * The rest of this function is a slave's: eight silent windows means the sensor
+ * is gone and search is the right answer. A master has no peer to lose, so it
+ * must advance and stop there.
+ */
+ZTEST(radiant_channel, test_a_masters_missed_slot_advances_the_clock_and_nothing_else)
+{
+	radiant_time_t t0;
+	radiant_time_t expected;
+	uint32_t   i;
+
+	up();
+	t0 = radiant_radio_now();
+
+	assign_and_id(0u, TYPE_MASTER);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 0u, t0), NULL);
+
+	/* Measured: the first slot is one period out, not zero. */
+	expected = t0 + RADIANT_ANT_PLUS_PERIOD_US;
+	zassert_equal(expected, radiant_channel_next_slot(0u), NULL);
+
+	/* Well past the threshold that would send a slave to search. */
+	for (i = 0u; i < (uint32_t)RADIANT_CHANNEL_RX_FAIL_TO_SEARCH + 4u; i++) {
+		zassert_false(radiant_channel_on_slot_missed(0u, t0 + 999999u),
+			      "a master was sent to search after %u missed "
+			      "transmits", i + 1u);
+
+		expected += RADIANT_ANT_PLUS_PERIOD_US;
+		zassert_equal(expected, radiant_channel_next_slot(0u),
+			      "a master's clock did not advance on missed "
+			      "transmit %u - the instant re-posted for ever is "
+			      "how the board wedges", i + 1u);
+
+		zassert_equal(RADIANT_CH_STATE_TRACKING,
+			      radiant_channel_state_get(0u),
+			      "a master left TRACKING after a missed transmit");
+	}
+
+	zassert_equal(0u, evt_count_of(0u, RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH),
+		      "a master raised a slave's search-fallback event");
 
 	radio_clean();
 }
@@ -859,6 +940,16 @@ ZTEST(radiant_channel, test_master_first_transmission_is_one_period_not_zero)
 	req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
 	req.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
 	req.power.dbm = 0;
+	/*
+	 * A master transmits on its OWN channel ID, which for a tracking frame
+	 * is exactly the five bytes a slave would filter on - the same address
+	 * track_filter carries. Stating it here rather than leaving the field
+	 * zero is the point: struct radiant_tx_req had no address at all until
+	 * the first real backend needed one, and on nRF a transmit without one
+	 * silently inherits whichever device the last receive window matched.
+	 */
+	memcpy(req.addr, track_filter.addr, sizeof(req.addr));
+	req.addr_len = track_filter.addr_len;
 	req.body = body;
 	req.body_len = (uint8_t)sizeof(body);
 	req.t_sync_at = radiant_channel_next_slot(0u);
@@ -869,6 +960,8 @@ ZTEST(radiant_channel, test_master_first_transmission_is_one_period_not_zero)
 	zassert_equal(FAKE_RADIO_ARM_TX, arm->kind, NULL);
 	zassert_equal(want, arm->t_sync_at,
 		      "the arm asked for the wrong instant");
+	zassert_mem_equal(arm->addr, track_filter.addr, RADIANT_FRAME_ADDR_LEN_TRACKING,
+			  "the master's frame did not carry its own channel ID");
 
 	fake_radio_advance_to(want + 1000u);
 
@@ -1367,21 +1460,27 @@ ZTEST(radiant_channel, test_configuration_round_trips_and_defaults)
 	zassert_equal(RADIANT_CH_SDU_MASK_OFF, a, NULL);
 
 	/* Round-trips. tools/ant_features.py checks that the advisory ones
-	 * come back even where a backend merges windows and ignores them. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_search_waveform_set(0u, 200u),
+	 * come back even where a backend merges windows and ignores them. Only
+	 * the two waveform values sdk-ant names round-trip - see the header. */
+	zassert_equal(RADIANT_CH_OK,
+		      radiant_channel_search_waveform_set(
+			      0u, RADIANT_CH_SEARCH_WAVEFORM_FAST),
 		      NULL);
 	zassert_equal(RADIANT_CH_OK, radiant_channel_search_waveform_get(0u, &u16),
 		      NULL);
-	zassert_equal(200u, u16, NULL);
+	zassert_equal(RADIANT_CH_SEARCH_WAVEFORM_FAST, u16, NULL);
 
 	zassert_equal(RADIANT_CH_OK, radiant_channel_sharing_cycles_set(0u, 7u), NULL);
 	zassert_equal(RADIANT_CH_OK, radiant_channel_sharing_cycles_get(0u, &a), NULL);
 	zassert_equal(7u, a, NULL);
 
-	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_set(0u, 4u, 0x9Bu),
+	/* Proximity only round-trips at threshold 0 - see the header. `custom`
+	 * still carries through unconditionally, which is what proves the
+	 * refusal above is about the threshold and not the whole call. */
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_set(0u, 0u, 0x9Bu),
 		      NULL);
 	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_get(0u, &a, &b), NULL);
-	zassert_equal(4u, a, NULL);
+	zassert_equal(0u, a, NULL);
 	zassert_equal(0x9Bu, b, NULL);
 
 	/* Any non-zero priority normalises to 1: the contract documents 0 and

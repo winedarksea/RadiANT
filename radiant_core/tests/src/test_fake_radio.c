@@ -722,6 +722,8 @@ ZTEST(fake_radio, test_transmit_reports_the_t_sync_it_achieved)
 	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
 	req.power.dbm = 4;
+	memcpy(req.addr, filt_track.addr, sizeof(req.addr));
+	req.addr_len = filt_track.addr_len;
 	req.body = body;
 	req.body_len = sizeof(body);
 	req.t_sync_at = want;
@@ -787,6 +789,8 @@ ZTEST(fake_radio, test_arming_too_late_is_etime)
 	memset(&tx, 0, sizeof(tx));
 	tx.fmt = &fmt_hal_len_from_body;
 	tx.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	memcpy(tx.addr, filt_track.addr, sizeof(tx.addr));
+	tx.addr_len = filt_track.addr_len;
 	tx.body = body;
 	tx.body_len = sizeof(body);
 	tx.t_sync_at = radiant_radio_now() + lead - 1u;
@@ -1463,6 +1467,8 @@ ZTEST(fake_radio, test_transmit_body_must_match_the_length_rule)
 	memset(&req, 0, sizeof(req));
 	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	memcpy(req.addr, filt_track.addr, sizeof(req.addr));
+	req.addr_len = filt_track.addr_len;
 	req.body = body;
 	req.body_len = sizeof(body);
 	req.t_sync_at = radiant_radio_now() + 20000u;
@@ -1483,6 +1489,66 @@ ZTEST(fake_radio, test_transmit_body_must_match_the_length_rule)
 	req.t_sync_at = radiant_radio_now() + 20000u;
 	zassert_equal(RADIANT_RADIO_EINVAL, radiant_radio_tx(&req, &op),
 		      "a body whose declared length disagrees was accepted");
+	expect_clean();
+}
+
+/*
+ * A transmit must name the address it emits, and the mock must say so.
+ *
+ * THE MOCK IS WHY THIS WAS MISSED FOR SO LONG, which is the reason the test
+ * lives here rather than only in a scheduler suite. struct radiant_tx_req had no
+ * address field at all; fake_radio recorded a request and replayed it, so a
+ * field that was never written was also never read, and every suite above the
+ * HAL asserted on body bytes. A mock that only echoes cannot notice that the air
+ * needs something the contract never mentioned.
+ *
+ * On real hardware the omission is not a refusal. nRF's TXADDRESS is an index
+ * into BASE/PREFIX registers that the previous operation loaded, so a transmit
+ * with no address of its own inherits the last receive window's device number
+ * and emits a well-formed frame addressed to the wrong sensor - which another
+ * device may accept. So the mock is now strict where the hardware is silent.
+ */
+ZTEST(fake_radio, test_a_transmit_must_carry_its_own_on_air_address)
+{
+	struct radiant_tx_req req;
+	uint32_t op = 0u;
+	static const uint8_t body[10] = {
+		TEST_TRANSTYPE, 0x0Au, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u
+	};
+
+	up();
+	memset(&req, 0, sizeof(req));
+	req.fmt = &fmt_hal_len_from_body;
+	req.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	req.body = body;
+	req.body_len = sizeof(body);
+	req.t_sync_at = radiant_radio_now() + 20000u;
+
+	/* addr_len still zero: the request as it could have been written before
+	 * the field existed. */
+	zassert_equal(RADIANT_RADIO_EINVAL, radiant_radio_tx(&req, &op),
+		      "a transmit with no on-air address was accepted");
+
+	/* An address of the wrong length for the format - search's three bytes
+	 * against a five-byte format - is equally unusable. */
+	memcpy(req.addr, filt_track.addr, sizeof(req.addr));
+	req.addr_len = 3u;
+	req.t_sync_at = radiant_radio_now() + 20000u;
+	zassert_equal(RADIANT_RADIO_EINVAL, radiant_radio_tx(&req, &op),
+		      "an address that disagreed with fmt->addr_len was accepted");
+
+	/* And the well-formed one is recorded byte for byte, so a scheduler test
+	 * can assert on which device a frame was addressed to. */
+	req.addr_len = filt_track.addr_len;
+	req.t_sync_at = radiant_radio_now() + 20000u;
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_tx(&req, &op),
+		      "a well-formed transmit was refused");
+	zassert_equal(5u, fake_radio_arm(fake_radio_arm_count() - 1u)->addr_len);
+	zassert_mem_equal(fake_radio_arm(fake_radio_arm_count() - 1u)->addr,
+			  filt_track.addr, 5u,
+			  "the recorded address is not the one requested");
+
+	(void)radiant_radio_abort();
 	expect_clean();
 }
 
@@ -1551,6 +1617,8 @@ ZTEST(fake_radio, test_transmit_power_is_clamped_not_refused)
 	memset(&req, 0, sizeof(req));
 	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
+	memcpy(req.addr, filt_track.addr, sizeof(req.addr));
+	req.addr_len = filt_track.addr_len;
 	req.body = body;
 	req.body_len = sizeof(body);
 	req.t_sync_at = radiant_radio_now() + 20000u;

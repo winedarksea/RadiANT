@@ -180,12 +180,25 @@ extern "C" {
  * if something bounds it. This is the bound, and the number comes from the
  * bench: a master's broadcast is answered by its slave 2186-2191 us later
  * (docs/spike-b-part2-results.md), and that reply is the tightest deadline in
- * the link layer. A merged window that could outlive that interval could block
- * a reply the link layer owes, which is a worse failure than declining to merge
- * one more channel. Windows are hundreds of microseconds wide - a real master
+ * the link layer. Windows are hundreds of microseconds wide - a real master
  * holds its slot to well inside +/-25 us over minutes, so the guards are about
  * our own drift and clock error - so this cap is generous in practice and is
  * only ever reached by a caller asking for something unusual.
+ *
+ * WHAT THIS CAP DOES NOT DO, stated because it is easy to over-read: it bounds
+ * one merged window's OCCUPANCY, not the reply's LATENCY, and those are not the
+ * same guarantee. sdk-ant's own published per-slot airtime budget for a
+ * bidirectional acknowledged exchange is 378 ticks (~11.5 ms) - 5.75x this cap
+ * - which would be alarming if this cap were what stood between a merged
+ * window and a blocked reply. It is not. want_preempt() in radiant_sched.c is:
+ * an armed merged window is torn down the instant a channel's own transmit (an
+ * acknowledgement, or a master's slot) falls due, "A TRANSMIT INSIDE, OR JUST
+ * AFTER, THE ARMED WINDOW" in that function's comment. So the reply deadline is
+ * protected by preemption, which fires regardless of how wide the merged
+ * window is; this cap's job is only to keep a merge from growing without
+ * bound while nothing yet needs to preempt it. See
+ * docs/sdk-ant-comparison.md item 4, which is where this paragraph's
+ * confirmation was asked for and answered.
  */
 #define RADIANT_SCHED_MERGE_SPAN_MAX_US 2000u
 
@@ -273,6 +286,11 @@ struct radiant_sched_tx {
 	const struct radiant_pkt_format *fmt;
 	uint8_t                      rf_index;
 	struct radiant_tx_power          power;
+	/* The on-air address to emit, first byte first. Copied into the slot at
+	 * the post rather than held by pointer, so it does not join body in the
+	 * "must stay valid until done()" contract - see struct radiant_tx_req. */
+	uint8_t                      addr[RADIANT_RADIO_ADDR_MAX];
+	uint8_t                      addr_len;
 	const uint8_t               *body;
 	uint8_t                      body_len;
 	radiant_time_t                   t_sync_at;

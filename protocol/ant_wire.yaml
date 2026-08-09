@@ -1257,6 +1257,16 @@ constant_groups:
       - {name: EVENT_TRANSFER_TX_START, value: 0x0A,
          desc: "Progress, not an outcome - keep waiting.",
          source: "tools (ant_session)"}
+      - {name: EVENT_RX_DATA_OVERFLOW, value: 0x0B,
+         desc: "Data was blocked because the application is servicing events
+                too slowly to keep up, distinct from EVENT_QUE_OVERFLOW
+                (0x35): this is a host that stopped draining, that is a queue
+                sized too small. We do not raise this today - see the
+                sdk-ant comparison report - but the wire byte belongs in the
+                table regardless of whether anything emits it, so a host that
+                ever does see it decodes something other than an unknown
+                event code.",
+         source: "rev5.1 sec 9.5.6"}
       - {name: EVENT_TRANSFER_NEXT_DATA_BLOCK, value: 0x11,
          desc: "The stack has finished with the burst block it was handed and
                 the next may overwrite it. The bridge consumes this internally

@@ -55,27 +55,26 @@ config RADIANT_CORE_BACKEND_NONE
 	  test image and nowhere near a dongle.
 
 config RADIANT_CORE_BACKEND_NRF
-	bool "nrf - direct nRF RADIO peripheral (RECEIVE ONLY)"
+	bool "nrf - direct nRF RADIO peripheral"
 	depends on SOC_SERIES_NRF52X || SOC_SERIES_NRF54LX
 	depends on !BT
 	select CLOCK_CONTROL
 	select NRFX_GPPI
 	help
-	  src/radiant_radio_nrf.c: the RADIO, one TIMER and three (D)PPI
-	  channels, owned outright.
+	  src/radiant_radio_nrf.c: the RADIO, one TIMER and four (D)PPI
+	  channels, owned outright. Receive and transmit.
 
-	  RECEIVE ONLY, AND THAT IS NOT A STAGING DECISION. radiant_radio_tx()
-	  returns RADIANT_RADIO_ENOTSUP because struct radiant_tx_req cannot
-	  express a transmission: it carries no on-air address, and `body` is
-	  the [ttype][ctrl][d0..d7] tracking body with the five address bytes
-	  not in it. The header comment in that file states the gap, why the
-	  mock could not have caught it, and the two-field fix. Choosing this
-	  backend gives an image that hears real sensors and cannot answer one.
+	  The TIMER named by the radiant,radio-timer chosen node must have at
+	  least five CC channels - t_sync capture, RX start, window close,
+	  software now-capture and TX start. Receive-start and transmit-start
+	  cannot share a compare, because a DPPI event may publish to only one
+	  channel. On nRF52 that means TIMER3 or TIMER4.
 
 	  The address arithmetic and packet configuration are measured on
 	  nRF54L15 (Spike A). The nRF52840 is predicted to behave identically
-	  and has not been confirmed. The t_sync calibration constant is still
-	  zero - see the warning in the file.
+	  and has not been confirmed. The ramp-up and turnaround figures are
+	  from the datasheet and the two t_sync calibration constants are both
+	  still zero - see the warnings at the top of the file.
 
 config RADIANT_CORE_BACKEND_NRF_IRQ_PRIO
 	int "RADIO interrupt priority"

@@ -877,6 +877,18 @@ radiant_channel_err_t radiant_channel_search_waveform_set(uint8_t channel,
 		return err;
 	}
 
+	/*
+	 * The value is stored and never acted on - see the header. Refusing
+	 * anything but the two values sdk-ant names is what keeps ignoring it
+	 * an honest contract rather than a silent one: a host that set a
+	 * "custom" waveform sdk-ant itself says not to use would otherwise
+	 * believe it took effect.
+	 */
+	if (waveform != (uint16_t)RADIANT_CH_SEARCH_WAVEFORM_DEFAULT &&
+	    waveform != (uint16_t)RADIANT_CH_SEARCH_WAVEFORM_FAST) {
+		return RADIANT_CH_ERR_INVALID_PARAM;
+	}
+
 	c->waveform = waveform;
 	return RADIANT_CH_OK;
 }
@@ -908,6 +920,15 @@ radiant_channel_err_t radiant_channel_prox_search_set(uint8_t channel,
 		return err;
 	}
 	if (threshold > RADIANT_CH_PROX_THRESHOLD_MAX) {
+		return RADIANT_CH_ERR_INVALID_PARAM;
+	}
+	/*
+	 * PERMANENT LIMITATION - see the header. Nothing reads prox_threshold
+	 * back, so storing a non-zero value and reporting success would
+	 * advertise a filter that never runs. 0 is accepted because it asks
+	 * for exactly the behaviour this stack already has (no RSSI gate).
+	 */
+	if (threshold != 0u) {
 		return RADIANT_CH_ERR_INVALID_PARAM;
 	}
 
@@ -1312,6 +1333,30 @@ bool radiant_channel_on_slot_missed(uint8_t channel, radiant_time_t now)
 
 	if (c->t_next != RADIANT_TIME_NEVER) {
 		c->t_next += period_us(c);
+	}
+
+	/*
+	 * A MASTER ADVANCES ITS SLOT AND NOTHING ELSE.
+	 *
+	 * The miss accounting below is a slave's: eight windows in a row that
+	 * heard nothing means the sensor is gone, and going back to search is
+	 * the right answer. A master has nothing to hear and nowhere to go
+	 * back to - its transmit was preempted or armed too late, which is
+	 * contention, not loss of a peer.
+	 *
+	 * The advance itself is not optional, and its absence is what wedged a
+	 * board. A master's t_next only moves on a completed transmit
+	 * (radiant_channel_on_slot); a missed one used to leave it where it
+	 * was, in the past, for ever. radiant_api.c re-posts a pending master
+	 * every pass, the scheduler refuses an unreachable instant without
+	 * calling the backend, the refusal completes synchronously, the
+	 * completion signals the event thread, and the event thread posts the
+	 * same dead instant again - a hot loop that answers no host message and
+	 * puts nothing on the air. There is no fault and no log line; the
+	 * dongle simply stops. One missed transmit was enough to trigger it.
+	 */
+	if ((c->type & RADIANT_CH_TYPE_MASTER_BIT) != 0u) {
+		return false;
 	}
 
 	if (c->state != RADIANT_CH_STATE_TRACKING) {

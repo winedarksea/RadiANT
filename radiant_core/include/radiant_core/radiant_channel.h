@@ -568,16 +568,39 @@ radiant_channel_err_t radiant_channel_freq_hop_table_get(uint8_t channel,
  * ---------------------------------------------------------------------------
  */
 
-/* antr_search_waveform_set(). 316 is the ANT default window width.
- * Returns OK, INVALID_MESSAGE or WRONG_STATE (unassigned). */
+/*
+ * antr_search_waveform_set(). Stored and never read - radiant_search.c has no
+ * duty-cycle switch, and this backend runs one search geometry. Nothing here
+ * refuses the setting outright, because sdk-ant names exactly two legal
+ * values for it - 316, the default window width, and 97, the fast one - and
+ * says "Do not use custom values." A two-value enum is a cheap contract to
+ * keep even while ignoring what it selects: accept the two real values,
+ * refuse everything else, rather than storing an arbitrary uint16_t that
+ * could never have meant anything. See docs/sdk-ant-comparison.md item 2.
+ * Returns OK, INVALID_MESSAGE, WRONG_STATE (unassigned) or INVALID_PARAM
+ * (neither DEFAULT nor FAST).
+ */
 #define RADIANT_CH_SEARCH_WAVEFORM_DEFAULT 316u
+#define RADIANT_CH_SEARCH_WAVEFORM_FAST     97u
 radiant_channel_err_t radiant_channel_search_waveform_set(uint8_t channel,
 						  uint16_t waveform);
 radiant_channel_err_t radiant_channel_search_waveform_get(uint8_t channel,
 						  uint16_t *out);
 
-/* antr_prox_search_set(). 0 disables; 1..10 are increasing RSSI thresholds.
- * Returns OK, INVALID_MESSAGE, WRONG_STATE or INVALID_PARAM (threshold > 10). */
+/*
+ * antr_prox_search_set(). PERMANENT LIMITATION, not a gap: nothing reads
+ * prox_threshold back - radiant_search.c's own RSSI gate is cfg.min_rssi_dbm,
+ * and nothing wires a channel's threshold to it - and the capability bit
+ * ANTW_CAPABILITIES_PROX_SEARCH_ENABLED is not advertised by
+ * antr_capabilities_get(). Storing a non-zero threshold that nothing enforces
+ * is the trap docs/gotchas.md warns against: a host that asked for proximity
+ * pairing would believe distant sensors are being filtered when none are. So
+ * only 0 (off) is accepted - it asks for nothing this stack does not already
+ * do - and any non-zero threshold is refused rather than silently dropped.
+ * See docs/sdk-ant-comparison.md item 2.
+ * Returns OK, INVALID_MESSAGE, WRONG_STATE or INVALID_PARAM (threshold > 10,
+ * or any non-zero threshold).
+ */
 #define RADIANT_CH_PROX_THRESHOLD_MAX 10u
 radiant_channel_err_t radiant_channel_prox_search_set(uint8_t channel,
 					      uint8_t threshold,
@@ -666,8 +689,26 @@ uint8_t radiant_channel_network_get(uint8_t channel);
  * radiant_sched.c adds its own guard either side and subtracts caps.ramp_up_us and
  * caps.min_arm_lead_us; those are backend properties and none of them belong
  * here. The guard is about drift and clock error rather than about the master
- * being sloppy - a real ANT master holds its slot to well inside +/-25 us over
- * minutes (docs/ant-radio-link.md).
+ * being sloppy: this bench's own master holds its slot to well inside +/-25 us
+ * over minutes (docs/ant-radio-link.md), but that bench figure is not the
+ * number to size a guard from.
+ *
+ * THE SPEC NUMBER IS THE SAME +/-25 US, AND IT IS A BUDGET, NOT HEADROOM.
+ * ANT's LF clock tolerance is +/-50 ppm at each end (sdk-ant's
+ * compatibility.rst, and not proprietary to it - any ANT datasheet states
+ * the same figure); +/-100 ppm relative over one RADIANT_CHANNEL_PERIOD_ANT_PLUS
+ * period (~249.7 ms) is +/-25 us of clock disagreement THAT PERIOD ALONE could
+ * add, worst case, with no accumulated drift from a previous miss. A master
+ * built to the tolerance limit sits exactly on this bench's own measurement,
+ * with no margin between "typical" and "worst case."
+ *
+ * Consecutive misses compound it: radiant_channel_on_slot_missed() extrapolates
+ * t_next by one more period per miss without a fresh sync, so N consecutive
+ * misses carry up to N * 25 us of additional worst-case disagreement by the
+ * time a receive window is next armed against this t_sync. See the
+ * RADIANT_CHANNEL_RX_FAIL_TO_SEARCH * 25 us BUILD_ASSERT against
+ * API_SLOT_GUARD_US in radiant_api.c, which is what turns this paragraph into
+ * a checked invariant instead of a claim.
  */
 radiant_time_t radiant_channel_next_slot(uint8_t channel);
 

@@ -167,7 +167,7 @@ comparison in [`backends.md`](backends.md). Baselines commit to
 | Accumulator continuity violations | 0 |
 | **`timing` line** (intervals minus whole periods) | ≤ sdk-ant × 1.25. **Not the `jitter` line** |
 | Time to first packet / re-acquisition | ≤ sdk-ant × 1.5, and ≤ 5 s absolute |
-| **Sensitivity** (attenuated link if an inline attenuator is available, else a fixed worst-case open-air path) | attenuation/distance at 5 % loss within 1 dB-equivalent of sdk-ant on the same rig; baseline recorded in Phase 4 |
+| **Sensitivity** (attenuated link if an inline attenuator is available, else a fixed worst-case open-air path) | attenuation/distance at 5 % loss within 1 dB-equivalent of sdk-ant on the same rig; baseline recorded in Phase 4, **alongside die temperature** (see below) |
 | 32-channel per-channel loss | ≤ single-channel + 0.5 pp — **absolute, not relative**: `libant.a` cannot reach 32 |
 | **Ack-data success** (ERG mode) | ≥ 99 %, and ≥ sdk-ant − 1 pp |
 | USB round-trip latency | ≤ sdk-ant × 1.1 (expect equality — the radio is not on that path) |
@@ -181,6 +181,23 @@ conformance gate.
 **Before fitting any threshold to a bench number, check the number can be
 accounted for.** The previous 1.0 → 2.5 % retune was fitted to a broken
 measurement and encoded the tool's own bug as the spec.
+
+**The sensitivity baseline is read against a temperature-dependent
+instrument.** nRF52840 errata 153 says RSSI has a temperature-dependent error;
+`radiant_radio_nrf.c` now corrects it on nRF52840/nRF52833, sourced from
+Nordic's own open-source 802.15.4 driver rather than derived on this bench -
+see "RSSI temperature correction" in that file. **This bench's own part is
+nRF54L15, which has no equivalent correction anywhere in Nordic's tree**, so a
+run on this hardware is still uncorrected and a warm run still reads
+differently from a cold one on exactly the terms `gotchas.md` describes for
+the loss-floor measurement: the instrument, not the thing measured. Call
+`radiant_radio_nrf_die_temp_c()` (`radiant_radio_nrf_diag.h`) alongside every
+RSSI capture in a Phase 4 baseline or Tier 2 sensitivity run regardless of
+which part it runs on - a diagnostic node can publish it as field type `0x10`
+of [`radiant-telemetry.md`](radiant-telemetry.md)'s envelope, or a bench
+script can just log it next to the RSSI it already records - and treat any
+nRF54L15 sensitivity number as read against an uncorrected instrument until
+this part gets the same fix nRF52840 did.
 
 ### Tier 3 — acceptance
 

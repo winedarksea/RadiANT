@@ -186,17 +186,47 @@ BUILD_ASSERT(RADIANT_CHANNEL_COUNT == (ANTW_BURST_HEADER_CHANNEL_MASK + 1),
 #define API_ID_LIST_BYTES 4u /* [devnum_lo][devnum_hi][dtype][ttype] */
 
 /*
+ * ANT's LF clock tolerance, worst case, restated from radiant_channel.h so the
+ * BUILD_ASSERT below has a named number to check against rather than a bare
+ * 25u a future edit could change without noticing what it was guarding.
+ * +/-50 ppm at each end is +/-100 ppm relative; over one
+ * RADIANT_CHANNEL_PERIOD_ANT_PLUS period (~249.7 ms) that is +/-25 us - a BUDGET,
+ * not headroom: this bench's own master sits exactly on it, with nothing
+ * spare between "typical" and "worst case" (docs/ant-radio-link.md,
+ * docs/sdk-ant-comparison.md item 3).
+ */
+#define API_SLOT_DRIFT_WORST_US 25u
+
+/*
  * Half-width of a tracked channel's receive window, in microseconds.
  *
  * This is a guard against OUR OWN drift and clock error, not against a sloppy
- * master: a real ANT master holds its slot to well inside +/-25 us over minutes
- * (docs/ant-radio-link.md). 400 us either side is generous at that figure and
- * comfortably inside RADIANT_SCHED_MERGE_SPAN_MAX_US, so two tracked channels
- * asking for nearby instants can still merge into one hardware window - which
- * is the whole return on the scheduler. radiant_sched.c subtracts caps.ramp_up_us
- * and caps.min_arm_lead_us itself; nothing backend-specific belongs here.
+ * master - but "our own drift and clock error" is bounded by the same spec
+ * figure, and it COMPOUNDS across consecutive missed slots:
+ * radiant_channel_on_slot_missed() extrapolates one more period per miss with
+ * no fresh sync, so by the time a window is armed after N consecutive misses
+ * it must cover up to N * API_SLOT_DRIFT_WORST_US of additional worst-case
+ * disagreement. The BUILD_ASSERT below is that check, made permanent: 400 us
+ * covers RADIANT_CHANNEL_RX_FAIL_TO_SEARCH (8) consecutive misses at this
+ * spec's worst case with margin to spare, and stays comfortably inside
+ * RADIANT_SCHED_MERGE_SPAN_MAX_US, so two tracked channels asking for nearby
+ * instants can still merge into one hardware window - which is the whole
+ * return on the scheduler. radiant_sched.c subtracts caps.ramp_up_us and
+ * caps.min_arm_lead_us itself; nothing backend-specific belongs here.
  */
 #define API_SLOT_GUARD_US 400u
+
+/*
+ * The invariant the two comments above describe, checked rather than merely
+ * claimed. If RADIANT_CHANNEL_RX_FAIL_TO_SEARCH grows, or the guard shrinks,
+ * this is what catches a channel that could lose its window on the last
+ * miss before falling back to search - silently, since a lost window at that
+ * point looks identical to the master having gone quiet.
+ */
+BUILD_ASSERT(API_SLOT_GUARD_US >=
+	     (uint32_t)RADIANT_CHANNEL_RX_FAIL_TO_SEARCH * API_SLOT_DRIFT_WORST_US,
+	     "the tracked-channel guard no longer covers worst-case LF clock "
+	     "drift across every consecutive miss up to RX_FAIL_TO_SEARCH");
 
 /*
  * Extended assignment bit that puts a channel into background scanning mode.
@@ -1039,12 +1069,43 @@ static void api_post_master_tx(uint8_t ch)
 	struct radiant_sched_tx    req;
 	radiant_time_t             t = radiant_channel_next_slot(ch);
 
-	if (t == RADIANT_TIME_NEVER || !api_ch[ch].bcast_valid) {
+	if (t == RADIANT_TIME_NEVER) {
 		return;
 	}
 	if (radiant_channel_id_get(ch, &id) != RADIANT_CH_OK) {
 		return;
 	}
+
+	/*
+	 * A MASTER TRANSMITS FROM ITS FIRST SLOT, WITH OR WITHOUT HOST DATA.
+	 *
+	 * This used to return here unless bcast_valid, and that is a deadlock
+	 * with every host library there is. The ANT pattern is that the host
+	 * paces its writes off EVENT_TX: it opens the channel, waits to be told
+	 * a slot went out, and writes the next payload in response. A master
+	 * that refuses to transmit until the host has written raises no
+	 * EVENT_TX, so the host waits for a slot that is waiting for the host.
+	 * tools/ant_sim.py is the local statement of that contract - it reports
+	 * "no EVENT_TX within two message periods" and falls back to guessing
+	 * the pacing from the wall clock, which is exactly what it did here.
+	 *
+	 * So an unwritten buffer transmits as zeros. api_ch[].bcast is zeroed
+	 * at init and by antr_channel_unassign(), so this needs no code of its
+	 * own; what it needs is to be a stated decision rather than an
+	 * accident, because the two OTHER users of that buffer must NOT do the
+	 * same thing. api_xfer_broadcast() still refuses to acknowledge without
+	 * a valid payload, and that refusal has a measurement behind it: every
+	 * acknowledgement ever captured carried the acknowledger's own
+	 * broadcast buffer, and nothing has ever been observed carrying zeros.
+	 * A broadcast slot has no such constraint - it is unacknowledged, it is
+	 * one page among four per second, and a receiver discards a page it
+	 * does not recognise.
+	 *
+	 * NOT MEASURED on this bench: what a real ANT master puts on the air
+	 * before its host writes anything. Zeros are what an unwritten buffer
+	 * contains and what the ANT documentation's ordering implies; nothing
+	 * here has captured one.
+	 */
 
 	/*
 	 * 0x0A: not an exchange, not an acknowledgement, not last, sequence 0,
@@ -1077,6 +1138,16 @@ static void api_post_master_tx(uint8_t ch)
 	req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
 	req.rf_index = api_rf_of(ch);
 	req.power = api_power_of(ch);
+	/*
+	 * The address radiant_frame_encode() just derived, not a second
+	 * derivation of it. w.addr and w.body are the two halves of one frame
+	 * and only one of them used to leave this function.
+	 */
+	if (w.addr_len > sizeof(req.addr)) {
+		return;
+	}
+	memcpy(req.addr, w.addr, w.addr_len);
+	req.addr_len = w.addr_len;
 	req.body = api_ch[ch].tx_body;
 	req.body_len = api_ch[ch].tx_body_len;
 	req.t_sync_at = t;
@@ -1402,6 +1473,28 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		 * the slot holds and this completion belongs to the old one.
 		 */
 		api_feed_xfer_terminal(ch, st);
+	} else if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_MASTER_TX &&
+		   !api_ch[ch].slot_heard) {
+		/*
+		 * A master's slot that did not go out. THE CLOCK MUST MOVE.
+		 *
+		 * t_next only advances on a completed transmit, so a slot lost
+		 * to contention or armed too late leaves it in the past. This
+		 * function then signals the event thread, the event thread's
+		 * pump re-posts that same dead instant, the scheduler refuses
+		 * it without ever reaching the backend, and the refusal
+		 * completes synchronously back into here. The result is a hot
+		 * loop with no fault, no log line and no host response - the
+		 * dongle stops answering while looking perfectly alive. One
+		 * missed transmit was enough.
+		 *
+		 * radiant_channel_on_slot_missed() advances by exactly one
+		 * period from the slot that was missed rather than from now,
+		 * which is what keeps a master's phase its own; it counts no
+		 * misses and never sends a master to search.
+		 */
+		api_stats.slots_missed++;
+		(void)radiant_channel_on_slot_missed(ch, now);
 	} else if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_TRACK_RX &&
 		   !api_ch[ch].slot_heard) {
 		/*
@@ -1691,10 +1784,8 @@ antr_err_t antr_channel_open_with_offset(uint8_t channel, uint16_t offset)
 {
 	antr_err_t rc;
 
-	LOG_DBG("open ch %u enter", (unsigned int)channel);
 	k_mutex_lock(&api_lock, K_FOREVER);
 	rc = radiant_channel_open(channel, offset, radiant_radio_now());
-	LOG_DBG("open ch %u: radiant_channel_open -> %d", (unsigned int)channel, rc);
 	if (rc == RADIANT_CH_OK) {
 		int trc = api_xfer_setup(channel);
 
@@ -1716,7 +1807,6 @@ antr_err_t antr_channel_open_with_offset(uint8_t channel, uint16_t offset)
 	}
 	k_mutex_unlock(&api_lock);
 
-	LOG_DBG("open ch %u exit rc=%d", (unsigned int)channel, rc);
 	return rc;
 }
 

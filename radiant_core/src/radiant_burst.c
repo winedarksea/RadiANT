@@ -195,6 +195,17 @@ int radiant_transfer_arm_tx(struct radiant_transfer *t, uint8_t ctrl,
 	req.fmt = t->fmt;
 	req.rf_index = t->cfg.rf_index;
 	req.power = t->cfg.power;
+	/*
+	 * The same five bytes the reply window filters on, and not a second
+	 * derivation of them. radiant_transfer_init() already resolved the
+	 * channel ID into t->filter because "the peer answers on the channel's
+	 * own address" - which is the same statement as "this is the address the
+	 * channel transmits with", read in the other direction. Calling
+	 * radiant_frame_addr() again here would be a second copy of that fact,
+	 * free to drift from the first.
+	 */
+	memcpy(req.addr, t->filter.addr, sizeof(req.addr));
+	req.addr_len = t->filter.addr_len;
 	/* t->tx_body, not a local: the HAL says the body must stay valid and
 	 * unmodified until the completion callback because backends DMA out of
 	 * it. The mock deep-copies at the arm call and would not catch a stack

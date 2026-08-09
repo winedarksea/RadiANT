@@ -76,11 +76,12 @@ if(CONFIG_RADIANT_CORE_BACKEND_NULL)
 elseif(CONFIG_RADIANT_CORE_BACKEND_NRF)
   zephyr_library_sources(src/radiant_radio_nrf.c)
   message(WARNING
-    "radiant_core: the nrf backend is RECEIVE ONLY. radiant_radio_tx() returns "
-    "ENOTSUP because struct radiant_tx_req carries no on-air address - see the "
-    "header comment in src/radiant_radio_nrf.c. This image will hear real "
-    "sensors and will not answer one, so acknowledged data, burst and any "
-    "master channel cannot work.")
+    "radiant_core: the nrf backend transmits and receives, but its ramp-up and "
+    "turnaround figures are from the datasheet and both t_sync calibration "
+    "constants are still zero. Every register fact is measured on nRF54L15 "
+    "only. Expect timing to be uncalibrated rather than absent - see the "
+    "'what is measured and what is not' header in src/radiant_radio_nrf.c "
+    "before reading any A/B timing result off this build.")
 elseif(CONFIG_RADIANT_CORE_BACKEND_MPSL)
   message(FATAL_ERROR
     "radiant_core: CONFIG_RADIANT_CORE_BACKEND_MPSL is selected but "
