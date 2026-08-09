@@ -1,0 +1,21 @@
+# Spike B promisc - the configuration banner, 2026-08-09, nRF54L15 DK.
+#
+# Recorded from the boot that produced run 6, and kept separately because it is
+# what says which register words were programmed. The prefix line is the part
+# worth reading twice: eight logical addresses are armed, the real devnum_lo
+# (0x17) sits at slot 5, and the other seven are decoys. RXMATCH read 5 on every
+# CRC-valid frame of every run.
+#
+
+============================================================
+Spike B - promisc. Where does ANT signal the packet type?
+Board: nrf54l15dk/nrf54l15/cpuapp   RF index 57 (2457 MHz)   time: k_cycle_get_32() @ 1 MHz
+Listening for device #14871 (0x3A17), type 0x0B, trans 5
+Body in RAM: [devnum_hi][dtype][ttype][BYTE 3][d0..d7]  - byte 3 is the field under test
+P lines: t/dt/air in us, dt against the previous frame of this device
+============================================================
+
+[cfg] BALEN=2 BASE0=BASE1=0xA3650000 PREFIX0=0x22CC4488 PREFIX1=0x11EEE8AA
+[cfg] RXADDRESSES=0xFF PCNF0=0x00000000 PCNF1=0x01020C1C CRCCNF=0x00000002
+[cfg] on-air prefixes (slot:byte): 0:11 1:22 2:33 3:44 4:55 5:17* 6:77 7:88   (* = devnum_lo of the device under test)
+[run] receiver armed

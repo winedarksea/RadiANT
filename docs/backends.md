@@ -194,12 +194,21 @@ has been designed out.
    carries its own `struct ant_pkt_format`. The reason is concrete rather than
    aesthetic: tracking/TX and wildcard search need genuinely different packet
    configurations. Search matches a 3-byte on-air address `[A6 C5 devnum_lo]`,
-   which leaves three bytes ahead of the length field — and the nRF RADIO's
-   fixed `S0|LENGTH|S1` layout cannot place a length field there at all, so
-   search must run with a static-length packet and recover the matched address
-   byte from the match index instead. **A HAL with one global configuration
-   would have been wrong from its first line, and it would have been discovered
-   on the bench rather than here.**
+   so its body is four bytes longer and its address two bytes shorter than
+   tracking's. **A HAL with one global configuration would have been wrong from
+   its first line, and it would have been discovered on the bench rather than
+   here.**
+
+   This used to be argued from a length field: three bytes ahead of byte 3, and
+   the nRF's fixed `S0|LENGTH|S1` layout cannot place a length field there. That
+   is true of the nRF and it is not the reason, because **there is no length
+   field**. Byte 3 is a control byte of six independent flags whose low bits
+   read 10 on a broadcast and 2 on an in-slot frame, both carrying eight payload
+   bytes (`docs/spike-b-part2-results.md`). Both ANT configurations are
+   static-length; they differ in address length and body length, and that is the
+   whole of it. A backend that derives its length handling from the
+   `LFLEN=8 / CRCINC=1` form inherits a **broadcast-only receiver** — see the
+   required-form box in `docs/ant-radio-link.md`.
 
 ### The capability query
 

@@ -62,18 +62,36 @@
 	}
 
 /*
- * The two formats Spike A measured, expressed in HAL terms.
+ * Two formats in ANT's tracking and search GEOMETRIES, expressed in HAL terms.
  *
- * Tracking: a 5-byte on-air address, so the body is [ttype][0x0A][d0..d7] and
- * its length is carried at body[1]. The length byte counts 8 payload plus 2
- * CRC while the body counts 2 header bytes plus 8 payload, so the two agree
- * and len_bias is 0 - which also holds for an advanced-burst frame at 0x1A.
+ * ============================================================================
+ * READ THIS BEFORE COPYING fmt_hal_len_from_body INTO A BACKEND. IT IS NOT
+ * ANT's TRACKING FORMAT. THE REAL ONE IS ant_frame_format(), AND IT IS
+ * ANT_LEN_FIXED.
+ * ============================================================================
  *
- * Search: a 3-byte on-air address, so three bytes that the tracking matcher
+ * This fixture exists to exercise the mock's ANT_LEN_FROM_BODY path, which is a
+ * legitimate HAL mode that some other packet format will one day need - the
+ * enum is not going away, and an untested branch of the mock is worse than a
+ * mislabelled one. It borrows ANT's five-byte address and ten-byte body only
+ * because those are convenient numbers, and it declares a length at body[1]
+ * that ANT does not have.
+ *
+ * Byte 3 of an ANT body is a CONTROL byte, six independent fields wide
+ * (docs/spike-b-part2-results.md). A backend that mapped tracking onto
+ * ANT_LEN_FROM_BODY, i.e. onto nRF PCNF0.LFLEN=8, would read an acknowledged
+ * frame's 0xAA as LENGTH=170, overrun MAXLEN and discard it - a receiver that
+ * hears every broadcast perfectly and silently drops everything else. Part 2
+ * closed even the theoretical escape: 0x0A's low five bits read 10 and 0xA2's
+ * read 2 for the same eight-byte payload, so no length field can parse this
+ * byte at all.
+ *
+ * fmt_search: a 3-byte on-air address, so three bytes that the tracking matcher
  * consumed land in the body instead and there is no length field ahead of the
- * body at all. Static 12-byte body, exactly the STATLEN=12 the spike ran.
+ * body at all. Static 12-byte body, exactly the STATLEN=12 both spikes ran, and
+ * this one IS ANT's search format.
  */
-static const struct ant_pkt_format fmt_track = {
+static const struct ant_pkt_format fmt_hal_len_from_body = {
 	.phy = ANT_PHY_1M_GFSK,
 	.addr_len = 5u,
 	.len_mode = ANT_LEN_FROM_BODY,
@@ -259,7 +277,7 @@ ZTEST(fake_radio, test_clock_moves_only_when_told)
 	/* Neither a caps query nor an arm call is allowed to move it. */
 	(void)ant_radio_caps_get();
 	memset(&req, 0, sizeof(req));
-	req.fmt = &fmt_track;
+	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	req.filters = &filt_track;
 	req.n_filters = 1u;
@@ -323,7 +341,7 @@ ZTEST(fake_radio, test_op_ids_are_nonzero_unique_and_monotonic)
 		ant_time_t now = ant_radio_now();
 
 		memset(&req, 0, sizeof(req));
-		req.fmt = &fmt_track;
+		req.fmt = &fmt_hal_len_from_body;
 		req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 		req.filters = &filt_track;
 		req.n_filters = 1u;
@@ -465,7 +483,8 @@ ZTEST(fake_radio, test_queued_frame_arrives_at_its_t_sync_with_filter_index)
 	zassert_equal(TEST_DEVTYPE, rxr[0].body[1], "body[1] is not device type");
 	zassert_equal(TEST_TRANSTYPE, rxr[0].body[2],
 		      "body[2] is not transmission type");
-	zassert_equal(0x0Au, rxr[0].body[3], "body[3] is not the length byte");
+	zassert_equal(0x0Au, rxr[0].body[3],
+		      "body[3] is not the control byte");
 	zassert_mem_equal(&rxr[0].body[4], test_payload, 8u, "payload differs");
 
 	zassert_true(rxr[0].has_rssi, "rssi not reported");
@@ -495,7 +514,7 @@ ZTEST(fake_radio, test_same_frame_through_the_tracking_format)
 		      "queue failed");
 
 	memset(&req, 0, sizeof(req));
-	req.fmt = &fmt_track;
+	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	req.filters = &filt_track;
 	req.n_filters = 1u;
@@ -513,7 +532,8 @@ ZTEST(fake_radio, test_same_frame_through_the_tracking_format)
 	zassert_equal(0u, rxr[0].filter_index, "wrong filter");
 	zassert_equal(10u, rxr[0].body_len, "tracking body is not 10 bytes");
 	zassert_equal(TEST_TRANSTYPE, rxr[0].body[0], "body[0] is not ttype");
-	zassert_equal(0x0Au, rxr[0].body[1], "body[1] is not the length byte");
+	zassert_equal(0x0Au, rxr[0].body[1],
+		      "body[1] is not the control byte");
 	zassert_mem_equal(&rxr[0].body[2], test_payload, 8u, "payload differs");
 	zassert_equal(0u, fake_radio_stats()->ev_timeout,
 		      "STOP_ON_FIRST still produced a TIMEOUT");
@@ -656,7 +676,7 @@ ZTEST(fake_radio, test_a_stream_of_master_frames_is_all_heard)
 	zassert_equal(10u, queued, "master stream not queued");
 
 	memset(&req, 0, sizeof(req));
-	req.fmt = &fmt_track;
+	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	req.filters = &filt_track;
 	req.n_filters = 1u;
@@ -699,7 +719,7 @@ ZTEST(fake_radio, test_transmit_reports_the_t_sync_it_achieved)
 
 	up();
 	memset(&req, 0, sizeof(req));
-	req.fmt = &fmt_track;
+	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	req.power.dbm = 4;
 	req.body = body;
@@ -749,7 +769,7 @@ ZTEST(fake_radio, test_arming_too_late_is_etime)
 	zassert_true(lead > 0u, "a zero arm lead cannot be tested against");
 
 	memset(&rx, 0, sizeof(rx));
-	rx.fmt = &fmt_track;
+	rx.fmt = &fmt_hal_len_from_body;
 	rx.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	rx.filters = &filt_track;
 	rx.n_filters = 1u;
@@ -765,7 +785,7 @@ ZTEST(fake_radio, test_arming_too_late_is_etime)
 	n_rxr = 0u;
 
 	memset(&tx, 0, sizeof(tx));
-	tx.fmt = &fmt_track;
+	tx.fmt = &fmt_hal_len_from_body;
 	tx.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	tx.body = body;
 	tx.body_len = sizeof(body);
@@ -785,7 +805,7 @@ ZTEST(fake_radio, test_abort_delivers_the_terminal_event)
 
 	up();
 	memset(&req, 0, sizeof(req));
-	req.fmt = &fmt_track;
+	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	req.filters = &filt_track;
 	req.n_filters = 1u;
@@ -819,7 +839,7 @@ ZTEST(fake_radio, test_exactly_one_terminal_event_per_operation)
 
 	up();
 	memset(&req, 0, sizeof(req));
-	req.fmt = &fmt_track;
+	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	req.filters = &filt_track;
 	req.n_filters = 1u;
@@ -866,7 +886,7 @@ ZTEST(fake_radio, test_forced_failure_and_forced_ebusy)
 
 	up();
 	memset(&req, 0, sizeof(req));
-	req.fmt = &fmt_track;
+	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	req.filters = &filt_track;
 	req.n_filters = 1u;
@@ -898,7 +918,7 @@ ZTEST(fake_radio, test_second_arm_while_busy_is_ebusy)
 
 	up();
 	memset(&req, 0, sizeof(req));
-	req.fmt = &fmt_track;
+	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	req.filters = &filt_track;
 	req.n_filters = 1u;
@@ -1001,7 +1021,7 @@ ZTEST(fake_radio, test_lifecycle_calls_from_a_callback_are_refused)
 	now = ant_radio_now();
 
 	memset(&req, 0, sizeof(req));
-	req.fmt = &fmt_track;
+	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	req.filters = &filt_track;
 	req.n_filters = 1u;
@@ -1052,7 +1072,7 @@ ZTEST(fake_radio, test_the_harness_cannot_be_driven_from_a_callback)
 	now = ant_radio_now();
 
 	memset(&req, 0, sizeof(req));
-	req.fmt = &fmt_track;
+	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	req.filters = &filt_track;
 	req.n_filters = 1u;
@@ -1093,7 +1113,7 @@ ZTEST(fake_radio, test_a_callback_that_does_work_is_flagged)
 	now = ant_radio_now();
 
 	memset(&req, 0, sizeof(req));
-	req.fmt = &fmt_track;
+	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	req.filters = &filt_track;
 	req.n_filters = 1u;
@@ -1145,7 +1165,7 @@ ZTEST(fake_radio, test_the_event_body_is_poisoned_after_the_callback)
 		      fake_radio_air_frame(now + 3000u, test_frame,
 					   test_frame_len), "queue failed");
 	memset(&req, 0, sizeof(req));
-	req.fmt = &fmt_track;
+	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	req.filters = &filt_track;
 	req.n_filters = 1u;
@@ -1205,7 +1225,7 @@ ZTEST(fake_radio, test_rearming_from_the_completion_callback_works)
 	now = ant_radio_now();
 
 	memset(&chain_req, 0, sizeof(chain_req));
-	chain_req.fmt = &fmt_track;
+	chain_req.fmt = &fmt_hal_len_from_body;
 	chain_req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	chain_req.filters = &filt_track;
 	chain_req.n_filters = 1u;
@@ -1238,7 +1258,7 @@ static void midflight_cb(const struct ant_rx_event *e, void *user)
 		return;
 	}
 	memset(&req, 0, sizeof(req));
-	req.fmt = &fmt_track;
+	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	req.filters = &filt_track;
 	req.n_filters = 1u;
@@ -1266,7 +1286,7 @@ ZTEST(fake_radio, test_arming_from_a_nonterminal_event_is_ebusy)
 		      fake_radio_air_frame(now + 3000u, test_frame,
 					   test_frame_len), "queue failed");
 	memset(&req, 0, sizeof(req));
-	req.fmt = &fmt_track;
+	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	req.filters = &filt_track;
 	req.n_filters = 1u;
@@ -1316,7 +1336,7 @@ ZTEST(fake_radio, test_abort_from_a_callback_defers_its_terminal_event)
 		      fake_radio_air_frame(now + 3000u, test_frame,
 					   test_frame_len), "queue failed");
 	memset(&req, 0, sizeof(req));
-	req.fmt = &fmt_track;
+	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	req.filters = &filt_track;
 	req.n_filters = 1u;
@@ -1369,13 +1389,13 @@ ZTEST(fake_radio, test_an_unset_configuration_is_refused)
 		      "a zeroed format was accepted");
 
 	/* A PHY this build does not have. */
-	fmt = fmt_track;
+	fmt = fmt_hal_len_from_body;
 	fmt.phy = ANT_PHY_LR_GFSK;
 	zassert_equal(ANT_RADIO_ENOTSUP, ant_radio_rx(&req, &op),
 		      "an unsupported PHY was approximated rather than refused");
 
 	/* A filter whose address length disagrees with the format's. */
-	fmt = fmt_track;
+	fmt = fmt_hal_len_from_body;
 	req.filters = sweep; /* addr_len 3 against a 5-byte format */
 	zassert_equal(ANT_RADIO_EINVAL, ant_radio_rx(&req, &op),
 		      "a filter of the wrong length was accepted");
@@ -1441,7 +1461,7 @@ ZTEST(fake_radio, test_transmit_body_must_match_the_length_rule)
 
 	up();
 	memset(&req, 0, sizeof(req));
-	req.fmt = &fmt_track;
+	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	req.body = body;
 	req.body_len = sizeof(body);
@@ -1451,13 +1471,18 @@ ZTEST(fake_radio, test_transmit_body_must_match_the_length_rule)
 		      "a well-formed body was refused");
 	(void)ant_radio_abort();
 
-	/* A length byte that does not describe the body. A backend DMAs the
-	 * bytes it is given and cannot fix this up, so it has to be refused
-	 * here or it goes on the air wrong. */
+	/* A declared length that does not describe the body. A backend DMAs
+	 * the bytes it is given and cannot fix this up, so it has to be
+	 * refused here or it goes on the air wrong.
+	 *
+	 * NOTE this is the ANT_LEN_FROM_BODY fixture, not ANT's tracking
+	 * format. ANT frames have no length byte; byte 3 is a control byte and
+	 * a 0x0C there is a bits-2:0 violation, not a length mismatch. See
+	 * ant_core/tests/src/test_frame.c. */
 	body[1] = 0x0Cu;
 	req.t_sync_at = ant_radio_now() + 20000u;
 	zassert_equal(ANT_RADIO_EINVAL, ant_radio_tx(&req, &op),
-		      "a body whose length byte disagrees was accepted");
+		      "a body whose declared length disagrees was accepted");
 	expect_clean();
 }
 
@@ -1524,7 +1549,7 @@ ZTEST(fake_radio, test_transmit_power_is_clamped_not_refused)
 
 	up();
 	memset(&req, 0, sizeof(req));
-	req.fmt = &fmt_track;
+	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	req.body = body;
 	req.body_len = sizeof(body);
@@ -1555,7 +1580,7 @@ ZTEST(fake_radio, test_arming_outside_the_enabled_state_is_estate)
 	ant_time_t now = ant_radio_now();
 
 	memset(&req, 0, sizeof(req));
-	req.fmt = &fmt_track;
+	req.fmt = &fmt_hal_len_from_body;
 	req.rf_index = ANT_RF_INDEX_ANT_PLUS;
 	req.filters = &filt_track;
 	req.n_filters = 1u;

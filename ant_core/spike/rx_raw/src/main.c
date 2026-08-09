@@ -45,6 +45,12 @@
  *      reason CRCINC could. If L0 works, CRCINC behaves and the mapping stands
  *      as written.
  *
+ *      HISTORY, and the answer is in: byte 3 is a CONTROL byte of six
+ *      independent fields, not a length. L0 works only because everything this
+ *      spike heard was a broadcast; it is a broadcast-only receiver and L1 is
+ *      the required form for receive and transmit alike. See
+ *      docs/spike-b-results.md and docs/spike-b-part2-results.md.
+ *
  *   C  Search configuration. A 3-byte on-air address [A6 C5 devnum_lo] and a
  *      12-byte static body, which puts devnum_hi, device type and transmission
  *      type in RAM where they can be *read* rather than merely matched. This is
@@ -526,7 +532,8 @@ static void run_cfg(const struct rx_cfg *c, uint32_t ms, struct rx_stats *st,
  */
 
 /* Tracking: 5-byte on-air address A6 C5 devnum_lo devnum_hi device_type, body
- * [trans_type][0x0A][d0..d7]. Nothing but the trans type, the length byte and
+ * [trans_type][0x0A][d0..d7]. Nothing but the trans type, byte 3 (called the
+ * length byte here; it is the control byte - see the phase B note above) and
  * the payload reaches RAM, so the identity check here is the address match. */
 static struct rx_cfg tracking_cfg(const char *name, bool bitrev,
 				  bool base_reverse, bool prefix_first,

@@ -4,10 +4,13 @@
  *
  * Provenance: clean-room. Written from docs/ant-radio-link.md (the frame
  * layout, the CRC parameters, the two packet configurations and the two
- * address-packing rules) and docs/spike-a-results.md (the measurements those
- * rest on, 2026-08-09, nRF54L15 DK), with public nRF52840/nRF54L15 product
- * specifications behind the reasoning about *why* the two configurations
- * differ. Nothing here derives from sdk-ant, from libant.a, from disassembly
+ * address-packing rules), docs/spike-a-results.md, docs/spike-b-results.md and
+ * docs/spike-b-part2-results.md - which supersedes part 1 on the control byte
+ * and is where the six-field model below comes from -
+ * (the measurements those rest on, 2026-08-09, nRF54L15 DK), with public
+ * nRF52840/nRF54L15 product specifications behind the reasoning about *why*
+ * the two configurations differ. Nothing here derives from sdk-ant, from
+ * libant.a, from disassembly
  * of any binary, or from any adopter-gated ANT+ device profile document; no
  * expression from rtl_433 was read or transliterated - only the facts already
  * recorded in docs/ant-radio-link.md. See docs/decisions/0002-clean-room-policy.md.
@@ -22,15 +25,23 @@
  * module written and the only one that is fully testable in CI with no board.
  *
  * The frame, every byte of it measured (docs/ant-radio-link.md, confirmed by
- * Spike A on 2,164 real frames):
+ * Spike A on 2,164 real frames, by Spike B part 1 on 750 more and by part 2 on
+ * 2,354 more):
  *
  *       1        2         2        1       1       1        8         2
  *  +--------+---------+---------+-------+-------+--------+---------+--------+
- *  |preamble| net addr| dev num | dtype | ttype | length | payload |  CRC   |
- *  |  0x55  |  A6 C5  | lo  hi  |       |       |  0x0A  | d0..d7  |        |
+ *  |preamble| net addr| dev num | dtype | ttype |  ctrl  | payload |  CRC   |
+ *  |  0x55  |  A6 C5  | lo  hi  |       |       |6 fields| d0..d7  |        |
  *  +--------+---------+---------+-------+-------+--------+---------+--------+
  *           |<----------------- 15 bytes CRC coverage ------------>|
  *           |<------------------------ 17 bytes ------------------------->|
+ *
+ * Byte 3 of the body is a CONTROL byte, not a length. Spike B part 1 settled
+ * that: an ANT master re-broadcasts its last payload, so the same eight payload
+ * bytes appear one slot apart with this byte changing 0xAA -> 0x0A. A length
+ * field cannot do that. Part 2 then decomposed the byte into six independent
+ * fields and killed the last of the length reading outright - see the control
+ * byte section below.
  *
  * The preamble is not this module's business: it is a PHY property, and on the
  * parts in view the radio derives it from the first address bit with no
@@ -42,10 +53,10 @@
  * The same 15 covered bytes are divided differently depending on how many of
  * them the receiver matched in hardware:
  *
- *   tracking/TX   address A6 C5 dnlo dnhi dtype     body [ttype][len][d0..d7]
+ *   tracking/TX   address A6 C5 dnlo dnhi dtype     body [ttype][ctrl][d0..d7]
  *                 5 bytes                           10 bytes
  *   search        address A6 C5 dnlo                body [dnhi][dtype][ttype]
- *                 3 bytes                                [len][d0..d7]
+ *                 3 bytes                                [ctrl][d0..d7]
  *                                                   12 bytes
  *
  * Concatenated, those are byte-for-byte the same 15 bytes and therefore the
@@ -57,6 +68,20 @@
  * S0|LENGTH|S1 layout has no slot for a length field with three bytes ahead of
  * it, so search runs static-length; that is a backend fact, but it is the
  * reason this module has to express both layouts and convert between them.
+ *
+ * BOTH formats are static-length now, and that is a Spike B consequence rather
+ * than a tidy-up. Parsing byte 3 as a hardware length field (nRF
+ * PCNF0.LFLEN=8) reads an acknowledged frame's 0xAA as LENGTH=170, overruns
+ * MAXLEN and discards it as a CRC error - a receiver that hears every
+ * broadcast perfectly and silently drops every acknowledged and burst frame.
+ * On transmit the same field would try to send 170 bytes. So both
+ * ant_pkt_formats below are ANT_LEN_FIXED, which is the nRF's PCNF0=0 /
+ * STATLEN form, and byte 3 is a body byte that software writes and reads.
+ *
+ * Part 2 strengthened that call rather than weakening it. 0x0A's low five bits
+ * read 10 and 0xA2's read 2, and both frames carry eight payload bytes: no
+ * hardware length field can parse a byte that says 10 and 2 for the same
+ * payload, in any configuration, on any part.
  *
  * The one byte of a search frame that is in neither place is devnum_lo: it is
  * consumed by the matcher, and the core recovers it from which filter matched
@@ -99,8 +124,13 @@ extern "C" {
 #define ANT_FRAME_OK        0
 #define ANT_FRAME_EINVAL  (-1)  /* null pointer, unknown configuration, or a
 				 * length no configuration can express */
-#define ANT_FRAME_ELEN    (-2)  /* the on-air length byte disagrees with the
-				 * number of payload bytes actually present */
+#define ANT_FRAME_ECTRL   (-2)  /* bits 2:0 of the on-air control byte are not
+				 * 010. That is the whole invariant the byte
+				 * has: it held on all 750 frames of Spike B
+				 * part 1 and all 2,354 of part 2, and no other
+				 * bit of the byte is ever an error - the five
+				 * flags above it are dispatch, not validation.
+				 * See ant_frame_msg_type() */
 #define ANT_FRAME_ECRC    (-3)  /* the CRC did not verify. Reported, never
 				 * repaired; the output is left untouched */
 #define ANT_FRAME_ETRUNC  (-4)  /* the buffer is shorter than the frame it
@@ -265,14 +295,24 @@ enum ant_frame_cfg {
 #define ANT_FRAME_ADDR_LEN_SEARCH   3u
 #define ANT_FRAME_ADDR_MAX          5u
 
-/* Body bytes ahead of the payload: [ttype][len] in tracking,
- * [dnhi][dtype][ttype][len] in search. */
+/* Body bytes ahead of the payload: [ttype][ctrl] in tracking,
+ * [dnhi][dtype][ttype][ctrl] in search. */
 #define ANT_FRAME_HDR_LEN_TRACKING  2u
 #define ANT_FRAME_HDR_LEN_SEARCH    4u
 
-/* Payload bytes. 8 is every frame anyone has ever measured; 24 is the
- * advanced-burst frame this module is sized for but which has never been seen
- * on air (see the length byte, below). */
+/*
+ * Payload bytes. 8 is every frame anyone has ever measured - Spike A's 2,164,
+ * Spike B part 1's 750 and part 2's 2,354 alike. Part 2 enabled advanced burst
+ * a second time, sent 24-byte blocks, and watched the stack fragment them into
+ * three 8-byte on-air packets; the sequence bit alternated per on-air packet,
+ * not per host block. No frame with a payload other than eight bytes has ever
+ * been on this bench's air.
+ *
+ * 24 is therefore a buffer ceiling and nothing more. It is NOT a prediction
+ * about an advanced-burst frame's control byte: that prediction rested on the
+ * low bits being a length, and part 2 falsified the premise, so there is no
+ * encoding here to predict with.
+ */
 #define ANT_FRAME_PAYLOAD_STD 8u
 #define ANT_FRAME_PAYLOAD_MAX 24u
 
@@ -282,36 +322,228 @@ enum ant_frame_cfg {
 
 #define ANT_FRAME_CRC_BYTES 2u
 
-/* The whole reason the length byte reads 10 rather than 8. */
-#define ANT_FRAME_LEN_BROADCAST 0x0Au
-
-/*
- * The prediction, and it is written here so that it is falsifiable rather than
- * merely believed: an advanced-burst frame carrying 24 payload bytes should
- * show 0x1A. That has never been observed on air. Spike B is what settles it,
- * and it may instead show that this byte is ANT's control byte - encoding
- * broadcast against acknowledged against burst sequence - which would look
- * identical in every frame anyone has captured, because a passive ANT+ sniffer
- * sees nothing but sensor broadcasts. If that is the answer, this macro and
- * ant_frame_len_byte() are where it lands.
- */
-#define ANT_FRAME_LEN_ADV_BURST 0x1Au
-
-/*
- * The on-air length byte for a given payload: ShockBurst semantics, in which
- * the length counts the two CRC bytes. Ten, not eight.
+/* ---------------------------------------------------------------------------
+ * The control byte - byte 3 of the body, and what Spike B is about
  *
- * A pleasant consequence worth naming, because it makes one backend simpler:
- * in the tracking configuration the two header bytes ahead of the payload and
- * the two CRC bytes cancel exactly, so body_len == len_byte for every payload
- * length. A radio that derives body length from a field in the body needs a
- * bias of zero. In search they do not cancel - four header bytes against two
- * CRC bytes - which is one more reason search runs static-length.
+ * SIX INDEPENDENT FIELDS, not a type field and a length. Measured across four
+ * runs and 2,354 CRC-valid frames on 2026-08-09 with three radios on the air at
+ * once (docs/spike-b-part2-results.md,
+ * archive/captures/radio/2026-08-09-spike-b2-*.log), and consistent with all
+ * 750 frames of part 1:
+ *
+ *      bit    7      6      5      4      3     2 1 0
+ *           +------+------+------+------+------+-------+
+ *           | xchg | ack  | last | seq  | slot | 0 1 0 |
+ *           +------+------+------+------+------+-------+
+ *
+ *   b7 exchange   0 = plain broadcast, 1 = part of an acknowledged exchange
+ *                 (acknowledged data or burst, either direction)
+ *   b6 ack        0 = this is the data packet, 1 = this is the ACKNOWLEDGEMENT
+ *   b5 last       1 = last packet of the transfer; echoed by its ack
+ *   b4 seq        a ONE-BIT alternating sequence number
+ *   b3 slot       1 = this frame opens the channel slot `[inferred]`
+ *   b2:0          always 010. Meaning unknown; it is not a length
+ *
+ * THE BURST SEQUENCE IS ONE BIT AND SEQUENCES 2..7 DO NOT EXIST. That is a
+ * positive statement, not an absence: a 17-packet and a 51-packet burst were
+ * captured end to end with the sniffer's ring-drop counter at zero throughout,
+ * and bit 4 alternated 0,1,0,1,... across every on-air packet while bits 7:5
+ * held still. Nineteen bursts of 1, 2, 3, 6, 9, 17, 27 and 51 packets, zero
+ * frames where the sequence bit disagreed with the packet index. There is no
+ * field left in the frame that could hold a number larger than one.
+ *
+ * THE LOW BITS ARE NOT A LENGTH, and that is now measured rather than argued.
+ * 0x0A has bits 4:0 = 01010 = 10 and 0xA2 has 00010 = 2, and both carry eight
+ * payload bytes. No length field reads 10 and 2 for the same length. The two
+ * bits that moved are the slot bit and the sequence bit, both accounted for
+ * above. Part 1's inference - that bits 4:0 remain a ShockBurst length and that
+ * bits 7:5 are a three-bit type-and-sequence field - is withdrawn, not
+ * requalified.
+ *
+ * The eleven values that have been on the air, and nothing else has:
+ * ---------------------------------------------------------------------------
  */
-static inline uint8_t ant_frame_len_byte(uint8_t payload_len)
+
+/* Field masks. Use these; do not hand-mask this byte anywhere in the tree,
+ * because hand-masking is how bit 3 gets forgotten. */
+#define ANT_CTRL_EXCHANGE  0x80u
+#define ANT_CTRL_ACK       0x40u
+#define ANT_CTRL_LAST      0x20u
+#define ANT_CTRL_SEQ       0x10u
+#define ANT_CTRL_SLOT      0x08u
+#define ANT_CTRL_LOW_MASK  0x07u
+#define ANT_CTRL_LOW_VALUE 0x02u
+
+/*
+ * Slot openers - part 1's three values, and the only three a master was ever
+ * seen to send. Run C is the control that names the difference: the same
+ * Feather, the same stack, the same driver script and the same payload bytes,
+ * with only the channel role changed, moved 0x82 -> 0x8A and 0xA2 -> 0xAA.
+ */
+#define ANT_CTRL_BROADCAST         0x0Au /* the ONLY encoding with b7 = 0 */
+#define ANT_CTRL_BURST_OPEN_SEQ0   0x8Au /* burst packet, seq 0, not last */
+#define ANT_CTRL_ACK_DATA_OPEN     0xAAu /* acknowledged data == a one-packet
+					  * burst: seq 0, LAST. Part 1 saw this
+					  * and refused to call it burst-last;
+					  * it is burst-last */
+
+/* In-slot data packets, from the acknowledged exchange's originator. */
+#define ANT_CTRL_BURST_SEQ0        0x82u
+#define ANT_CTRL_BURST_SEQ1        0x92u
+#define ANT_CTRL_BURST_LAST_SEQ0   0xA2u /* also: in-slot acknowledged data */
+#define ANT_CTRL_BURST_LAST_SEQ1   0xB2u
+
+/* In-slot acknowledgements, from the receiver of the exchange. */
+#define ANT_CTRL_ACK_SEQ0          0xC2u /* acks a non-final packet */
+#define ANT_CTRL_ACK_SEQ1          0xD2u
+#define ANT_CTRL_ACK_LAST_SEQ0     0xE2u /* acks the final packet - transfer
+					  * complete */
+#define ANT_CTRL_ACK_LAST_SEQ1     0xF2u
+
+/*
+ * ---------------------------------------------------------------------------
+ * THE REMAINING GAPS, stated so that nothing is built over them by accident
+ * ---------------------------------------------------------------------------
+ * A field model can express 256 values. Eleven were measured. Every function
+ * below encodes from the fields and then checks the result against the
+ * measured eleven, because the difference between "the model permits it" and
+ * "the air has carried it" is the whole value of two spikes.
+ *
+ * `[inferred]`, and named so it is not mistaken for a finding:
+ *
+ *   - BIT 3 AS "SLOT OPENER". What is measured is only that it is not
+ *     master-versus-slave: the master's own broadcast carries it set and the
+ *     master's acknowledgement 1.6 ms later in the same slot carries it clear.
+ *     Falsify it by getting a MASTER to send a multi-packet burst to a real
+ *     slave - under this reading packet 0 carries bit 3 and packets 1..N do
+ *     not. That needs a scriptable ANT master, which sim/ is not.
+ *   - THE READING OF BIT 4 IN AN ACKNOWLEDGEMENT as "the sequence bit I expect
+ *     next". The arithmetic is measured on 168 pairs; the reading is not.
+ *
+ * NEVER OBSERVED, so nothing here encodes it:
+ *
+ *   - any payload other than 8 bytes, so bits 2:0 = 010 has no measured
+ *     meaning, only a disproved one;
+ *   - bit 5 set on a broadcast, and indeed any b7 = 0 value except 0x0A: bits
+ *     7:5 never took 001, 010 or 011;
+ *   - an acknowledgement of a slot-opening data packet, which is why
+ *     ant_ctrl_reply_for() below refuses to invent one;
+ *   - what the DATA SENDER does when an acknowledgement goes missing. The
+ *     receiver's behaviour is measured - it retransmits its acknowledgement 21
+ *     times at 3143 us and gives up - but no acknowledgement went missing in a
+ *     completed transfer.
+ *
+ * ANT_FRAME_LEN_ADV_BURST used to live here, predicting 0x1A for a 24-byte
+ * advanced-burst frame, and a later pass restated it as 0x9A. Both are gone,
+ * not requalified: the restatement assumed bits 4:0 were a length, and that
+ * premise is falsified. The only 0x1A ever seen on this bench appeared twice
+ * as a CRC-FAILED frame - one bit away from 0x0A - which is a bit error, not
+ * an advanced burst. A wrong constant left in a header with a comment
+ * explaining it is wrong is how it gets used.
+ */
+
+/*
+ * The five flags, unpacked. This is what callers work with; the byte itself is
+ * only for the air and for a log line.
+ */
+struct ant_ctrl_fields {
+	bool exchange;    /* bit 7 */
+	bool ack;         /* bit 6 */
+	bool last;        /* bit 5 */
+	bool seq;         /* bit 4 - one bit, and there is no second one */
+	bool slot_opener; /* bit 3 */
+};
+
+/*
+ * Which message a control byte describes, decoded FROM THE FIELDS rather than
+ * matched against a list of literals.
+ *
+ * ANT_MSG_ACKNOWLEDGED does not appear, and its absence is the finding: on air,
+ * acknowledged data is byte-for-byte a one-packet burst - "sequence 0, last" -
+ * so a receiver dispatching on this byte cannot tell them apart and must not
+ * pretend to. The distinction between them is a serial-layer distinction only.
+ * ant_ack.c and ant_burst.c should therefore share one encoder.
+ */
+enum ant_msg_type {
+	/* b2:0 != 010, or a flag combination never measured: b7 = 0 with any
+	 * of b6/b5 set. Never an error here - the frame layer reports it and
+	 * the layer above decides. */
+	ANT_MSG_UNKNOWN = 0,
+	ANT_MSG_BROADCAST,     /* b7=0                     */
+	ANT_MSG_BURST_DATA,    /* b7=1 b6=0 b5=0           */
+	ANT_MSG_BURST_LAST,    /* b7=1 b6=0 b5=1 - also what acknowledged data
+				* is on the air */
+	ANT_MSG_BURST_ACK,     /* b7=1 b6=1 b5=0           */
+	ANT_MSG_TRANSFER_ACK,  /* b7=1 b6=1 b5=1 - the transfer is complete */
+};
+
+/* --- Field accessors. Named so that every read of this byte is greppable. -- */
+
+/* The one invariant the byte has. Everything else is dispatch. */
+static inline bool ant_ctrl_low_ok(uint8_t ctrl)
 {
-	return (uint8_t)(payload_len + ANT_FRAME_CRC_BYTES);
+	return (uint8_t)(ctrl & ANT_CTRL_LOW_MASK) == ANT_CTRL_LOW_VALUE;
 }
+
+static inline bool ant_ctrl_is_exchange(uint8_t ctrl)
+{
+	return (ctrl & ANT_CTRL_EXCHANGE) != 0u;
+}
+
+static inline bool ant_ctrl_is_ack(uint8_t ctrl)
+{
+	return (ctrl & ANT_CTRL_ACK) != 0u;
+}
+
+static inline bool ant_ctrl_is_last(uint8_t ctrl)
+{
+	return (ctrl & ANT_CTRL_LAST) != 0u;
+}
+
+/* The sequence bit, as 0 or 1. It is one bit; there is no wider form. */
+static inline uint8_t ant_ctrl_seq(uint8_t ctrl)
+{
+	return (uint8_t)((ctrl & ANT_CTRL_SEQ) != 0u);
+}
+
+static inline bool ant_ctrl_is_slot_opener(uint8_t ctrl)
+{
+	return (ctrl & ANT_CTRL_SLOT) != 0u;
+}
+
+/* Pack the five flags into the on-air byte, with 010 in bits 2:0. This always
+ * produces a syntactically legal control byte; whether it is one that has ever
+ * been transmitted is ant_ctrl_observed()'s question. */
+uint8_t ant_ctrl_encode(const struct ant_ctrl_fields *f);
+
+/* Unpack. ANT_FRAME_ECTRL, and out untouched, if bits 2:0 are not 010. */
+int ant_ctrl_decode(uint8_t ctrl, struct ant_ctrl_fields *out);
+
+/*
+ * True only for the eleven values measured on air. This is the guard that keeps
+ * the field model from quietly inventing the other 245: ant_frame_make()
+ * refuses anything it rejects, while ant_frame_encode() still carries any
+ * low-bits-legal byte a caller sets by hand, so a bench experiment can put a
+ * candidate encoding on the air without editing this module.
+ */
+bool ant_ctrl_observed(uint8_t ctrl);
+
+/*
+ * The acknowledgement a receiver puts on the air for a data packet: bit 6 set,
+ * bit 5 echoed, bit 4 complemented, everything else unchanged. Measured on 168
+ * adjacent CRC-valid data/acknowledgement pairs across runs 0, A and B with no
+ * exceptions - 82 -> D2, 92 -> C2, A2 -> F2, B2 -> E2.
+ *
+ * Returns 0 - never a legal control byte, since bits 2:0 must be 010 - for
+ * anything else, INCLUDING the slot openers 0x8A and 0xAA. No acknowledgement
+ * of a slot-opening data packet has ever been captured, so there is no measured
+ * answer for what its bit 3 would be, and this function does not guess one.
+ */
+uint8_t ant_ctrl_reply_for(uint8_t data_ctrl);
+
+/* Which message a control byte says this is. Dispatch, never validation: an
+ * unmeasured combination is ANT_MSG_UNKNOWN and the frame still decodes. */
+enum ant_msg_type ant_frame_msg_type(uint8_t ctrl_byte);
 
 /* Geometry queries. Each returns a length, or ANT_FRAME_EINVAL for an unknown
  * configuration or a payload no configuration can express. */
@@ -334,11 +566,21 @@ int ant_frame_covered_len(enum ant_frame_cfg cfg, uint8_t payload_len);
  * precompile the set of formats it can express (RAIL derives frame-length
  * handling from a generated configuration).
  *
- * Tracking is length-from-body and therefore accepts any payload up to the
- * maximum; search is fixed at 12 body bytes, which is what the hardware does
- * and is an honest limitation rather than an oversight - a longer frame is not
- * receivable in search and would need its own format. Returns NULL for an
- * unknown configuration.
+ * Both are ANT_LEN_FIXED - tracking at 10 body bytes, search at 12 - and that
+ * is the Spike B consequence, not a simplification. A length-from-body format
+ * maps onto nRF PCNF0.LFLEN=8, which reads an acknowledged frame's 0xAA as a
+ * 170-byte length and discards it; the same field on transmit would try to
+ * send 170 bytes. Part 2 closed the argument for good: 0x0A's low five bits
+ * read 10 and 0xA2's read 2 for the same 8-byte payload, so there is no length
+ * field to parse in any configuration. Fixed length is the PCNF0=0 / STATLEN
+ * form, it was measured byte-identical on air to the CRCINC form, and it puts
+ * byte 3 where software can both read it and choose it - which is exactly what
+ * ant_ack.c and ant_burst.c need.
+ *
+ * The cost is honest and is the same one search already carried: a payload
+ * other than 8 bytes is not receivable under either format and would need one
+ * of its own. Nothing has ever put such a frame on the air. Returns NULL for
+ * an unknown configuration.
  */
 const struct ant_pkt_format *ant_frame_format(enum ant_frame_cfg cfg);
 
@@ -351,15 +593,19 @@ const struct ant_pkt_format *ant_frame_format(enum ant_frame_cfg cfg);
 struct ant_frame {
 	struct ant_channel_id id;
 	/*
-	 * The length byte exactly as it appears on air, stated separately from
-	 * payload_len rather than derived from it, and cross-checked on every
-	 * call. That is deliberate: it is the field Spike B may reveal to be a
-	 * control byte rather than a length, and keeping it explicit means the
-	 * day that happens, callers that assumed otherwise fail loudly here
-	 * instead of putting a plausible wrong byte on the air. Use
-	 * ant_frame_make() and the question does not arise.
+	 * Byte 3 exactly as it appears on air.
+	 *
+	 * It is a stated field, not derived from payload_len, and the two
+	 * writebacks that followed Spike B are the return on that. Part 1
+	 * renamed it from len_byte and broke every caller in one edit; part 2
+	 * then showed that NONE of its bits depend on the payload length, so
+	 * there was never anything here to derive.
+	 *
+	 * The only cross-check is bits 2:0 == 010. Use the ant_ctrl_* accessors
+	 * to read the five flags above it; this module carries them and names
+	 * them, and interprets none of them.
 	 */
-	uint8_t len_byte;
+	uint8_t ctrl_byte;
 	uint8_t payload_len;
 	uint8_t payload[ANT_FRAME_PAYLOAD_MAX];
 };
@@ -381,10 +627,23 @@ struct ant_frame_wire {
 	uint16_t crc;
 };
 
-/* Fill in a frame with a consistent length byte. Returns ANT_FRAME_OK, or
- * ANT_FRAME_EINVAL for a null argument or an over-long payload. */
+/*
+ * Fill in a frame from the five control-byte fields. Returns ANT_FRAME_OK, or
+ * ANT_FRAME_EINVAL for a null argument, an over-long payload, or a field
+ * combination that has never been on the air (ant_ctrl_observed()).
+ *
+ * The fields are an argument rather than a default because there is no safe
+ * default: a caller that meant "acknowledged data" and got a broadcast would
+ * set no trainer resistance and report no error, and a caller that forgot the
+ * slot bit would put an in-slot byte in a slot-opening frame.
+ *
+ * Refusing an unmeasured combination here, while ant_frame_encode() carries
+ * one set by hand, is deliberate. A field model can name 256 bytes; eleven have
+ * been transmitted. This is where the difference is enforced.
+ */
 int ant_frame_make(struct ant_frame *f, const struct ant_channel_id *id,
-		   const uint8_t *payload, uint8_t payload_len);
+		   const struct ant_ctrl_fields *ctrl, const uint8_t *payload,
+		   uint8_t payload_len);
 
 /*
  * The on-air address for a channel ID in the given configuration, first byte
@@ -401,8 +660,9 @@ int ant_frame_addr(enum ant_frame_cfg cfg, const uint8_t net_addr[ANT_NET_ADDR_L
  * Encode. Fills out->addr, out->body and out->crc; out is fully overwritten on
  * success and untouched on failure.
  *
- * ANT_FRAME_ELEN if in->len_byte does not match in->payload_len - see the
- * comment on struct ant_frame.
+ * ANT_FRAME_ECTRL if bits 2:0 of in->ctrl_byte are not 010. The five flags
+ * above them are copied to the air untouched, including combinations nothing
+ * has ever measured - see the comment on struct ant_frame.
  */
 int ant_frame_encode(enum ant_frame_cfg cfg, const uint8_t net_addr[ANT_NET_ADDR_LEN],
 		     const struct ant_frame *in, struct ant_frame_wire *out);
@@ -437,6 +697,19 @@ bool ant_frame_crc_ok(const struct ant_frame_wire *w);
  * A CRC failure is ANT_FRAME_ECRC and nothing else: this module never repairs,
  * never guesses, and never reports a corrupt frame as good with a flag the
  * caller has to remember to read.
+ *
+ * Decode DISPATCHES on the control byte rather than validating it against
+ * 0x0A. A tracking channel sees eleven values today and may one day see more;
+ * a receiver that rejected everything but broadcast would drop exactly the
+ * acknowledged frames trainer control is made of. out->ctrl_byte holds
+ * whatever was on the air and ant_frame_msg_type() names it, or does not.
+ *
+ * The one thing that IS validated is bits 2:0 == 010, which is ANT_FRAME_ECTRL.
+ * The version of this module written against part 1 cross-checked bits 4:0
+ * against the payload length instead, and that rejected every valid slave
+ * frame: 0xA2's low five bits are 00010 = 2, and no length check expecting 10
+ * accepts it. Bits 4:0 are the slot bit, the sequence bit and 010 - three
+ * things, none of them a length.
  */
 int ant_frame_decode(enum ant_frame_cfg cfg, const struct ant_frame_wire *in,
 		     uint32_t flags, struct ant_frame *out);
@@ -459,10 +732,22 @@ int ant_frame_to_bytes(const struct ant_frame_wire *w, uint8_t *out,
 		       size_t out_len);
 
 /*
- * Parse those bytes back. The frame length is taken from the on-air length
- * byte, so a buffer that is too short for what the length byte claims is
- * ANT_FRAME_ETRUNC rather than a silently short frame. Trailing bytes beyond
- * the frame are ignored; the number consumed is the return value.
+ * Parse those bytes back.
+ *
+ * THE FRAME LENGTH COMES FROM cfg, NOT FROM THE CONTROL BYTE. There is no
+ * length anywhere in an ANT frame: both configurations are static, at the
+ * standard 8-byte payload, which is the only payload any ANT frame on this
+ * bench has ever carried across three spikes and 5,268 CRC-valid frames. So a
+ * frame is 17 bytes and a buffer shorter than that is ANT_FRAME_ETRUNC.
+ *
+ * Earlier versions of this function took the length from bits 4:0 of the
+ * control byte. That is the software half of the PCNF0.LFLEN=8 mistake wearing
+ * a mask: for a broadcast the five bits happen to read 10 and it works, and for
+ * a slave's 0xA2 they read 2 and every valid frame is rejected. Bits 2:0 are
+ * checked, and only bits 2:0; ANT_FRAME_ECTRL if they are not 010.
+ *
+ * Trailing bytes beyond the frame are ignored; the number consumed is the
+ * return value.
  *
  * This does not verify the CRC - it only puts the received value in w->crc.
  * Pass the result to ant_frame_decode() without ANT_FRAME_TRUSTED_CRC to check

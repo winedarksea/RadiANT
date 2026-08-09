@@ -19,11 +19,11 @@ Dynastream. See [Licensing and identity](#licensing-and-identity).
 > [Windows drivers](#windows-drivers) before anything else.
 
 ### Why?
-Before this project, the 'latest' ANT+ dongles on the market are from 2012. They use old, weak nRF24AP2 (circa 2010) or the nRF51422 (circa 2012) chips. Switching to the NRF52840 (which is widely available and cheap) can lead to a 10 db improvement in sensitivity. That 10 dB improvement in sensitivity means the new nRF52840 chip can pick up a signal that is *ten times weaker* than what the old 2012 chips could detect. Big difference. While ANT+ is mostly your computer listening, in ERG mode there is a transmit element, and the the +8 dBm signal strength vs the older chips means more range (more than double) and reliability there too.
+Before this project, the 'latest' ANT+ dongles on the market are from 2012. They use old, weak nRF24AP2 (circa 2010) or the nRF51422 (circa 2012) chips. Switching to the NRF52840 (which is widely available and cheap) can lead to a 10 db improvement in sensitivity. That 10 dB improvement in sensitivity means the new nRF52840 chip can pick up a signal that is *ten times weaker* than what the old 2012 chips could detect. Big difference. While ANT+ is mostly your computer listening, in ERG mode there is a transmit element, and the +8 dBm signal strength vs the older chips means more range (more than double) and reliability there too.
 
 This uses Zephyr as the base. Zephyr provides a modern, Linux Foundation-backed RTOS. That is heavily vetted, actively maintained USB stacks, superior power management, advanced radio libraries, and true concurrency. Combined with the newer chips that have EasyDMA direct memory access and built-in USB peripherals, this can lead to up to a 90% reduction in latency and packet loss.
 
-In addition to these features, the tiny old ANT+ USB dongles have terrible antennas, sacrificing ground plane and antenna quality for tiny size. That's not a worthwhile tradeoff for most fixed indoor ride setups. Even a switch to the not-that-much-bigger official NRF52840 USB dongle can yield a major boost in antenna quality with its MIFA PCB Antenna.
+In addition to these features, the tiny old ANT+ USB dongles have terrible antennas, sacrificing ground plane and antenna quality for tiny size. That's not a worthwhile tradeoff for most fixed indoor ride setups. Even a switch to the not-that-much-bigger official NRF52840 USB dongle can yield a major boost in antenna quality with its MIFA PCB antenna.
 
 The result is a rock-solid, latency-free connection for your longest endurance rides.
 

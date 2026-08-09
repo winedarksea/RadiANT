@@ -2,8 +2,11 @@
 /*
  * ant_frame.c - the ANT on-air frame: CRC, address packing, encode, decode.
  *
- * Provenance: clean-room. Written from docs/ant-radio-link.md and
- * docs/spike-a-results.md, from ant_core/include/ant_radio_hal.h, and from
+ * Provenance: clean-room. Written from docs/ant-radio-link.md,
+ * docs/spike-a-results.md, docs/spike-b-results.md and
+ * docs/spike-b-part2-results.md (the control byte, its eleven measured values
+ * and the six-field structure behind them; part 2 supersedes part 1 wherever
+ * they differ), from ant_core/include/ant_radio_hal.h, and from
  * public nRF52840/nRF54L15 product specifications for the reasoning about the
  * two packet configurations. The CRC is a textbook bitwise CRC-16/CCITT-FALSE
  * with the parameters recorded in docs/ant-radio-link.md; the only other
@@ -95,6 +98,180 @@ uint16_t ant_crc16(uint16_t seed, const uint8_t *data, size_t len)
 	}
 
 	return crc;
+}
+
+/* ---------------------------------------------------------------------------
+ * The control byte
+ *
+ * Encoded and decoded as six fields, because that is what it is. But the field
+ * model can express 256 bytes and only eleven have ever been transmitted, so
+ * the model is paired with a table of the measured eleven and every place that
+ * chooses a byte for the air is checked against it. Encoding by shift-and-mask
+ * with nothing behind it is how the other 245 get invented; a table with no
+ * arithmetic is how bit 4 stayed invisible through six runs of part 1. Both
+ * halves are needed.
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * The eleven values measured on air, in ascending order.
+ * archive/captures/radio/2026-08-09-spike-b2-run{0,A,B,C}.log; the first three
+ * also appear in all six runs of part 1. Nothing may be added here that has not
+ * been captured.
+ */
+static const uint8_t ctrl_observed[] = {
+	ANT_CTRL_BROADCAST,       /* 0x0A */
+	ANT_CTRL_BURST_SEQ0,      /* 0x82 */
+	ANT_CTRL_BURST_OPEN_SEQ0, /* 0x8A */
+	ANT_CTRL_BURST_SEQ1,      /* 0x92 */
+	ANT_CTRL_BURST_LAST_SEQ0, /* 0xA2 */
+	ANT_CTRL_ACK_DATA_OPEN,   /* 0xAA */
+	ANT_CTRL_BURST_LAST_SEQ1, /* 0xB2 */
+	ANT_CTRL_ACK_SEQ0,        /* 0xC2 */
+	ANT_CTRL_ACK_SEQ1,        /* 0xD2 */
+	ANT_CTRL_ACK_LAST_SEQ0,   /* 0xE2 */
+	ANT_CTRL_ACK_LAST_SEQ1,   /* 0xF2 */
+};
+
+/*
+ * Every measured value has 010 in bits 2:0 - 0 exceptions in 2,354 CRC-valid
+ * frames in part 2 and 750 in part 1. If a row is ever added that does not,
+ * the invariant the whole decode path rests on has changed and the build should
+ * stop rather than the air find out.
+ */
+_Static_assert((ANT_CTRL_BROADCAST & ANT_CTRL_LOW_MASK) == ANT_CTRL_LOW_VALUE &&
+		       (ANT_CTRL_BURST_SEQ0 & ANT_CTRL_LOW_MASK) == ANT_CTRL_LOW_VALUE &&
+		       (ANT_CTRL_BURST_OPEN_SEQ0 & ANT_CTRL_LOW_MASK) == ANT_CTRL_LOW_VALUE &&
+		       (ANT_CTRL_BURST_SEQ1 & ANT_CTRL_LOW_MASK) == ANT_CTRL_LOW_VALUE &&
+		       (ANT_CTRL_BURST_LAST_SEQ0 & ANT_CTRL_LOW_MASK) == ANT_CTRL_LOW_VALUE &&
+		       (ANT_CTRL_ACK_DATA_OPEN & ANT_CTRL_LOW_MASK) == ANT_CTRL_LOW_VALUE &&
+		       (ANT_CTRL_BURST_LAST_SEQ1 & ANT_CTRL_LOW_MASK) == ANT_CTRL_LOW_VALUE &&
+		       (ANT_CTRL_ACK_SEQ0 & ANT_CTRL_LOW_MASK) == ANT_CTRL_LOW_VALUE &&
+		       (ANT_CTRL_ACK_SEQ1 & ANT_CTRL_LOW_MASK) == ANT_CTRL_LOW_VALUE &&
+		       (ANT_CTRL_ACK_LAST_SEQ0 & ANT_CTRL_LOW_MASK) == ANT_CTRL_LOW_VALUE &&
+		       (ANT_CTRL_ACK_LAST_SEQ1 & ANT_CTRL_LOW_MASK) == ANT_CTRL_LOW_VALUE,
+	       "a control byte in the observed table does not carry 010 in bits 2:0");
+
+/*
+ * The four measured data -> acknowledgement pairs, and no fifth. Every one of
+ * the 168 adjacent CRC-valid pairs in runs 0, A and B is one of these: bit 6
+ * set, bit 5 echoed, bit 4 complemented, bits 7 and 3 unchanged.
+ *
+ * A slot opener is deliberately absent. All four measured pairs are in-slot
+ * frames answered by in-slot frames, so what bit 3 of an acknowledgement to
+ * 0x8A or 0xAA would be is not measured, and this table does not invent it.
+ */
+static const struct {
+	uint8_t data;
+	uint8_t reply;
+} ctrl_replies[] = {
+	{ ANT_CTRL_BURST_SEQ0,      ANT_CTRL_ACK_SEQ1 },      /* 82 -> D2 */
+	{ ANT_CTRL_BURST_SEQ1,      ANT_CTRL_ACK_SEQ0 },      /* 92 -> C2 */
+	{ ANT_CTRL_BURST_LAST_SEQ0, ANT_CTRL_ACK_LAST_SEQ1 }, /* A2 -> F2 */
+	{ ANT_CTRL_BURST_LAST_SEQ1, ANT_CTRL_ACK_LAST_SEQ0 }, /* B2 -> E2 */
+};
+
+uint8_t ant_ctrl_encode(const struct ant_ctrl_fields *f)
+{
+	uint8_t ctrl = ANT_CTRL_LOW_VALUE;
+
+	if (f == NULL) {
+		return 0;
+	}
+
+	if (f->exchange) {
+		ctrl |= ANT_CTRL_EXCHANGE;
+	}
+	if (f->ack) {
+		ctrl |= ANT_CTRL_ACK;
+	}
+	if (f->last) {
+		ctrl |= ANT_CTRL_LAST;
+	}
+	if (f->seq) {
+		ctrl |= ANT_CTRL_SEQ;
+	}
+	if (f->slot_opener) {
+		ctrl |= ANT_CTRL_SLOT;
+	}
+
+	return ctrl;
+}
+
+int ant_ctrl_decode(uint8_t ctrl, struct ant_ctrl_fields *out)
+{
+	struct ant_ctrl_fields f;
+
+	if (out == NULL) {
+		return ANT_FRAME_EINVAL;
+	}
+	if (!ant_ctrl_low_ok(ctrl)) {
+		return ANT_FRAME_ECTRL;
+	}
+
+	f.exchange = ant_ctrl_is_exchange(ctrl);
+	f.ack = ant_ctrl_is_ack(ctrl);
+	f.last = ant_ctrl_is_last(ctrl);
+	f.seq = (ant_ctrl_seq(ctrl) != 0u);
+	f.slot_opener = ant_ctrl_is_slot_opener(ctrl);
+
+	*out = f;
+	return ANT_FRAME_OK;
+}
+
+bool ant_ctrl_observed(uint8_t ctrl)
+{
+	for (size_t i = 0; i < sizeof(ctrl_observed) / sizeof(ctrl_observed[0]); i++) {
+		if (ctrl_observed[i] == ctrl) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+uint8_t ant_ctrl_reply_for(uint8_t data_ctrl)
+{
+	for (size_t i = 0; i < sizeof(ctrl_replies) / sizeof(ctrl_replies[0]); i++) {
+		if (ctrl_replies[i].data == data_ctrl) {
+			return ctrl_replies[i].reply;
+		}
+	}
+
+	/* Not a data packet this bench has ever seen acknowledged. 0 is not a
+	 * legal control byte, so a caller that ignores it puts a frame on the
+	 * air no receiver accepts rather than a plausible wrong one. */
+	return 0;
+}
+
+enum ant_msg_type ant_frame_msg_type(uint8_t ctrl_byte)
+{
+	if (!ant_ctrl_low_ok(ctrl_byte)) {
+		return ANT_MSG_UNKNOWN;
+	}
+
+	if (!ant_ctrl_is_exchange(ctrl_byte)) {
+		/*
+		 * b7 = 0 occurred only ever with b6 = b5 = 0, across all 3,104
+		 * CRC-valid frames of both parts: bits 7:5 never took 001, 010
+		 * or 011. So the only broadcast encoding is 0x0A, and anything
+		 * else with b7 clear is a combination nothing has transmitted.
+		 */
+		if (ant_ctrl_is_ack(ctrl_byte) || ant_ctrl_is_last(ctrl_byte)) {
+			return ANT_MSG_UNKNOWN;
+		}
+		return ANT_MSG_BROADCAST;
+	}
+
+	if (ant_ctrl_is_ack(ctrl_byte)) {
+		return ant_ctrl_is_last(ctrl_byte) ? ANT_MSG_TRANSFER_ACK
+						   : ANT_MSG_BURST_ACK;
+	}
+
+	/* b6 = 0: a data packet. "Last" is what acknowledged data and a
+	 * one-packet burst both are, and they are the same bytes on air. */
+	return ant_ctrl_is_last(ctrl_byte) ? ANT_MSG_BURST_LAST
+					   : ANT_MSG_BURST_DATA;
 }
 
 /* ---------------------------------------------------------------------------
@@ -214,26 +391,48 @@ int ant_frame_covered_len(enum ant_frame_cfg cfg, uint8_t payload_len)
 }
 
 /*
- * The two formats a HAL arm call takes.
+ * The two formats a HAL arm call takes. BOTH are static-length, and tracking
+ * is static-length because of Spike B rather than because of the hardware.
  *
- * Tracking is length-from-body with a bias of zero, and that zero is not a
- * coincidence: the two header bytes ahead of the payload and the two CRC bytes
- * the length counts cancel exactly, so the on-air length byte *is* the body
- * length for every payload size. Search cannot use the same trick - four
- * header bytes against two CRC bytes do not cancel - and in any case the
- * hardware has no length-field slot with three bytes ahead of it, so it is
- * fixed at the standard 12. A longer search frame is therefore not receivable
- * and would need a format of its own; saying so here is cheaper than
- * discovering it when the first extension frame goes out.
+ * Tracking used to be ANT_LEN_FROM_BODY with a bias of zero, on the reading
+ * that byte 3 was a length that happened to count the CRC bytes. It is a
+ * control byte. A backend that maps ANT_LEN_FROM_BODY onto the obvious
+ * register - nRF PCNF0.LFLEN=8 - reads an acknowledged frame's 0xAA as
+ * LENGTH=170, overruns MAXLEN and discards it as a CRC error, so it receives
+ * every broadcast perfectly and drops every acknowledged and burst frame
+ * without a symptom. On transmit the same field would try to send 170 bytes.
+ * Acknowledged data is how a trainer's resistance gets set, so that bug
+ * surfaces as "ERG mode does not work" months downstream of the line that
+ * caused it. It is not worth one register bit.
+ *
+ * Spike B part 2 makes that permanent rather than merely well-evidenced. Byte 3
+ * reads 0x0A on a broadcast - low five bits 01010 = 10 - and 0xA2 on the same
+ * bench's slave frames - low five bits 00010 = 2 - and BOTH carry exactly eight
+ * payload bytes. A hardware length field cannot parse a byte that says 10 and 2
+ * for the same payload. There is nothing left to configure a length field
+ * with, on this part or any other.
+ *
+ * Fixed length is the PCNF0=0 / STATLEN form, measured byte-identical on air
+ * to the CRCINC form (40/40 CRC-valid both ways in Spike A; 750 frames of
+ * part 1 and 2,354 of part 2 captured in exactly this configuration). It puts
+ * byte 3 in RAM where software reads it, and on transmit lets software choose
+ * it.
+ *
+ * The cost, and it is the same one search already carried: a payload other
+ * than 8 bytes is not receivable under either format and would need one of its
+ * own. Nothing has ever put such a frame on the air - both parts of Spike B
+ * enabled advanced burst, sent 24-byte blocks, and watched the stack fragment
+ * them into 8-byte on-air packets, with the sequence bit alternating per packet
+ * rather than per block.
  */
 static const struct ant_pkt_format fmt_tracking = {
 	.phy = ANT_PHY_1M_GFSK,
 	.addr_len = (uint8_t)ANT_FRAME_ADDR_LEN_TRACKING,
-	.len_mode = ANT_LEN_FROM_BODY,
-	.body_len = 0,
-	.len_offset = (uint8_t)(ANT_FRAME_HDR_LEN_TRACKING - 1u),
+	.len_mode = ANT_LEN_FIXED,
+	.body_len = (uint8_t)(ANT_FRAME_HDR_LEN_TRACKING + ANT_FRAME_PAYLOAD_STD),
+	.len_offset = 0,
 	.len_bias = 0,
-	.max_body_len = (uint8_t)(ANT_FRAME_HDR_LEN_TRACKING + ANT_FRAME_PAYLOAD_MAX),
+	.max_body_len = (uint8_t)(ANT_FRAME_HDR_LEN_TRACKING + ANT_FRAME_PAYLOAD_STD),
 	.crc = {
 		.width_bits = 16,
 		.poly = ANT_CRC_POLY,
@@ -282,9 +481,12 @@ const struct ant_pkt_format *ant_frame_format(enum ant_frame_cfg cfg)
  */
 
 int ant_frame_make(struct ant_frame *f, const struct ant_channel_id *id,
+		   const struct ant_ctrl_fields *ctrl_fields,
 		   const uint8_t *payload, uint8_t payload_len)
 {
-	if (f == NULL || id == NULL) {
+	uint8_t ctrl;
+
+	if (f == NULL || id == NULL || ctrl_fields == NULL) {
 		return ANT_FRAME_EINVAL;
 	}
 	if (payload_len > ANT_FRAME_PAYLOAD_MAX) {
@@ -294,10 +496,22 @@ int ant_frame_make(struct ant_frame *f, const struct ant_channel_id *id,
 		return ANT_FRAME_EINVAL;
 	}
 
+	/*
+	 * The field model would happily pack any of 32 flag combinations.
+	 * Eleven have been on the air. This is the one place that difference is
+	 * enforced, and it is enforced here rather than in ant_frame_encode()
+	 * so that a bench experiment can still put a candidate encoding on the
+	 * air by setting ctrl_byte directly.
+	 */
+	ctrl = ant_ctrl_encode(ctrl_fields);
+	if (!ant_ctrl_observed(ctrl)) {
+		return ANT_FRAME_EINVAL;
+	}
+
 	memset(f, 0, sizeof(*f));
 	f->id = *id;
 	f->payload_len = payload_len;
-	f->len_byte = ant_frame_len_byte(payload_len);
+	f->ctrl_byte = ctrl;
 	if (payload_len > 0u) {
 		memcpy(f->payload, payload, payload_len);
 	}
@@ -358,10 +572,10 @@ static int body_write(enum ant_frame_cfg cfg, const struct ant_frame *in,
 		body[0] = (uint8_t)((in->id.device_number >> 8) & 0xFFu);
 		body[1] = in->id.device_type;
 		body[2] = in->id.trans_type;
-		body[3] = in->len_byte;
+		body[3] = in->ctrl_byte;
 	} else {
 		body[0] = in->id.trans_type;
-		body[1] = in->len_byte;
+		body[1] = in->ctrl_byte;
 	}
 
 	if (in->payload_len > 0u) {
@@ -384,9 +598,23 @@ int ant_frame_encode(enum ant_frame_cfg cfg, const uint8_t net_addr[ANT_NET_ADDR
 	if (in->payload_len > ANT_FRAME_PAYLOAD_MAX) {
 		return ANT_FRAME_EINVAL;
 	}
-	/* Cross-check rather than derive - see struct ant_frame. */
-	if (in->len_byte != ant_frame_len_byte(in->payload_len)) {
-		return ANT_FRAME_ELEN;
+	/*
+	 * Bits 2:0, and nothing else. This used to cross-check bits 4:0 against
+	 * payload_len + 2, which rejects every valid in-slot frame: 0xA2's low
+	 * five bits are 00010 = 2 and no check expecting 10 accepts it. Bits 4
+	 * and 3 are the sequence and slot flags and have nothing to do with the
+	 * payload.
+	 *
+	 * The five flags go out untouched, including combinations nothing has
+	 * measured: this module refuses to fabricate a control byte in
+	 * ant_frame_make(), but a caller who has evidence for one and sets
+	 * ctrl_byte directly is not second-guessed here. Validating the flags
+	 * on the transmit path would only mean that the module has to be edited
+	 * before a bench experiment can put a candidate encoding on the air,
+	 * which is backwards.
+	 */
+	if (!ant_ctrl_low_ok(in->ctrl_byte)) {
+		return ANT_FRAME_ECTRL;
 	}
 
 	memset(&w, 0, sizeof(w));
@@ -410,8 +638,7 @@ int ant_frame_encode(enum ant_frame_cfg cfg, const uint8_t net_addr[ANT_NET_ADDR
 }
 
 /* Well formed enough that its bytes can be walked at all. Says nothing about
- * whether the length byte agrees - that is decode's job, and it is a different
- * error. */
+ * the control byte - that is decode's job, and it is a different error. */
 static bool wire_shape_ok(const struct ant_frame_wire *w)
 {
 	return w != NULL && addr_len_ok(w->addr_len) &&
@@ -448,7 +675,7 @@ int ant_frame_decode(enum ant_frame_cfg cfg, const struct ant_frame_wire *in,
 	int addr_len;
 	int hdr;
 	uint8_t payload_len;
-	uint8_t len_byte;
+	uint8_t ctrl_byte;
 
 	if (in == NULL || out == NULL) {
 		return ANT_FRAME_EINVAL;
@@ -474,9 +701,22 @@ int ant_frame_decode(enum ant_frame_cfg cfg, const struct ant_frame_wire *in,
 		return ANT_FRAME_EINVAL;
 	}
 
-	len_byte = in->body[hdr - 1];
-	if (len_byte != ant_frame_len_byte(payload_len)) {
-		return ANT_FRAME_ELEN;
+	/*
+	 * Dispatch, not validation. A tracking channel sees eleven values and
+	 * one day may see more; the byte is carried out to the caller and
+	 * ant_frame_msg_type() names it or returns ANT_MSG_UNKNOWN.
+	 *
+	 * Bits 2:0 are the only thing checked, because they are the only thing
+	 * that is invariant - 010 on every one of the 3,104 CRC-valid frames of
+	 * both parts of Spike B. The version of this line written against
+	 * part 1 cross-checked bits 4:0 against payload_len + 2 and therefore
+	 * rejected EVERY valid slave frame, which is a broadcast-only receiver
+	 * reintroduced in software one layer above the register that used to
+	 * hold it.
+	 */
+	ctrl_byte = in->body[hdr - 1];
+	if (!ant_ctrl_low_ok(ctrl_byte)) {
+		return ANT_FRAME_ECTRL;
 	}
 
 	/* Last, and never optional unless the caller says something else
@@ -499,7 +739,7 @@ int ant_frame_decode(enum ant_frame_cfg cfg, const struct ant_frame_wire *in,
 		f.id.device_type = in->body[1];
 		f.id.trans_type = in->body[2];
 	}
-	f.len_byte = len_byte;
+	f.ctrl_byte = ctrl_byte;
 	f.payload_len = payload_len;
 	if (payload_len > 0u) {
 		memcpy(f.payload, &in->body[hdr], payload_len);
@@ -542,10 +782,8 @@ int ant_frame_from_bytes(enum ant_frame_cfg cfg, const uint8_t *buf, size_t len,
 	struct ant_frame_wire w;
 	int addr_len = ant_frame_addr_len(cfg);
 	int hdr = ant_frame_hdr_len(cfg);
-	size_t min_len;
 	size_t total;
-	uint8_t len_byte;
-	uint8_t payload_len;
+	uint8_t ctrl_byte;
 
 	if (buf == NULL || out == NULL) {
 		return ANT_FRAME_EINVAL;
@@ -554,32 +792,33 @@ int ant_frame_from_bytes(enum ant_frame_cfg cfg, const uint8_t *buf, size_t len,
 		return ANT_FRAME_EINVAL;
 	}
 
-	/* Enough to reach the length byte, plus the CRC a zero-payload frame
-	 * would still carry. Anything shorter cannot even be interrogated. */
-	min_len = (size_t)addr_len + (size_t)hdr + ANT_FRAME_CRC_BYTES;
-	if (len < min_len) {
-		return ANT_FRAME_ETRUNC;
-	}
-
-	len_byte = buf[(size_t)addr_len + (size_t)hdr - 1u];
-	if (len_byte < ANT_FRAME_CRC_BYTES) {
-		return ANT_FRAME_ELEN;
-	}
-	payload_len = (uint8_t)(len_byte - ANT_FRAME_CRC_BYTES);
-	if (payload_len > ANT_FRAME_PAYLOAD_MAX) {
-		return ANT_FRAME_ELEN;
-	}
-
-	total = (size_t)addr_len + (size_t)hdr + (size_t)payload_len +
+	/*
+	 * The geometry comes from cfg. It has to: there is no length anywhere
+	 * in an ANT frame, and the byte that used to supply one here reads 10
+	 * on a broadcast and 2 on a slave's in-slot frame for the same eight
+	 * payload bytes. Taking the length from bits 4:0 parsed broadcasts
+	 * correctly and rejected everything else - the PCNF0.LFLEN=8 defect,
+	 * moved into software.
+	 *
+	 * Both configurations are static at the standard payload, so a frame is
+	 * 17 bytes: 5 + 2 + 8 + 2 tracking, 3 + 4 + 8 + 2 search.
+	 */
+	total = (size_t)addr_len + (size_t)hdr + ANT_FRAME_PAYLOAD_STD +
 		ANT_FRAME_CRC_BYTES;
 	if (len < total) {
 		return ANT_FRAME_ETRUNC;
 	}
 
+	/* The one thing the byte itself has to satisfy. */
+	ctrl_byte = buf[(size_t)addr_len + (size_t)hdr - 1u];
+	if (!ant_ctrl_low_ok(ctrl_byte)) {
+		return ANT_FRAME_ECTRL;
+	}
+
 	memset(&w, 0, sizeof(w));
 	w.addr_len = (uint8_t)addr_len;
 	memcpy(w.addr, buf, w.addr_len);
-	w.body_len = (uint8_t)((size_t)hdr + (size_t)payload_len);
+	w.body_len = (uint8_t)((size_t)hdr + ANT_FRAME_PAYLOAD_STD);
 	memcpy(w.body, &buf[w.addr_len], w.body_len);
 	w.crc = (uint16_t)(((uint16_t)buf[total - 2u] << 8) | buf[total - 1u]);
 

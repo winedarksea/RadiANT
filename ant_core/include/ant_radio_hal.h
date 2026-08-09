@@ -208,7 +208,12 @@ struct ant_crc_cfg {
 /*
  * Advisory ceiling for statically sized body buffers in the core. The real
  * limit is caps.max_body_len. Sized for the largest frame currently foreseen:
- * an advanced-burst body (control byte + length byte + 24 payload = 26).
+ * an advanced-burst body in ANT's tracking geometry, which is transmission
+ * type + control byte + 24 payload = 26. There is NO length byte anywhere in
+ * an ANT frame - byte 3 is six independent flag fields
+ * (docs/spike-b-part2-results.md) - and an earlier version of this line said
+ * otherwise. No frame with a payload other than 8 bytes has ever been captured
+ * on this bench, so 26 is a ceiling rather than a measurement.
  */
 #define ANT_RADIO_BODY_MAX 32
 
@@ -218,10 +223,26 @@ enum ant_len_mode {
 	/*
 	 * The body carries its own length at body[len_offset]:
 	 *     body_len = body[len_offset] + len_bias
-	 * len_bias exists because the ANT length byte counts the CRC bytes and
-	 * the header bytes ahead of the payload differently from the way a radio
-	 * counts them. Expressing the relation as an offset and a bias keeps the
-	 * arithmetic in one place instead of once per backend.
+	 * len_bias exists because a format's declared length and a radio's idea
+	 * of body length may count the CRC bytes and the header bytes ahead of
+	 * the payload differently. Expressing the relation as an offset and a
+	 * bias keeps the arithmetic in one place instead of once per backend.
+	 *
+	 * NO ANT FORMAT USES THIS MODE, and none ever can. The rationale here
+	 * used to read "the ANT length byte counts the CRC bytes", which was
+	 * `[inferred]` from broadcasts alone and is now falsified: byte 3 is a
+	 * control byte whose low five bits read 10 on a broadcast and 2 on an
+	 * in-slot frame, both carrying eight payload bytes
+	 * (docs/spike-b-part2-results.md). ant_frame_format() returns
+	 * ANT_LEN_FIXED for both ANT configurations, and a backend that maps
+	 * ANT tracking onto this mode - i.e. onto nRF PCNF0.LFLEN=8 - is a
+	 * broadcast-only receiver that silently drops every acknowledged and
+	 * burst frame.
+	 *
+	 * The mode stays because it is a real capability of real radios and
+	 * some future format may want it. It is exercised by
+	 * fmt_hal_len_from_body in ant_core/tests/src/test_fake_radio.c, which
+	 * is labelled at length for exactly this reason.
 	 */
 	ANT_LEN_FROM_BODY = 1
 };

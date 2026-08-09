@@ -2,9 +2,13 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Provenance: original work. Every expected value in this file comes from
- * docs/ant-radio-link.md or from docs/spike-a-results.md and the capture logs
- * it cites (archive/captures/radio/2026-08-09-nrf54l15-run*.log) - not from
- * running ant_frame.c and writing down what it did. Nothing here derives from
+ * docs/ant-radio-link.md, from docs/spike-a-results.md, from
+ * docs/spike-b-results.md or from docs/spike-b-part2-results.md, and from the
+ * capture logs those cite
+ * (archive/captures/radio/2026-08-09-nrf54l15-run*.log,
+ * archive/captures/radio/2026-08-09-spike-b-*.log and
+ * archive/captures/radio/2026-08-09-spike-b2-*.log) - not from running
+ * ant_frame.c and writing down what it did. Nothing here derives from
  * sdk-ant, from libant.a, from disassembly of any binary, or from any
  * adopter-gated ANT+ device profile document.
  *
@@ -22,7 +26,9 @@
  *
  *   - *Capable of going red*. Several tests here name the specific wrong
  *     answer they exist to exclude - the naive short-address truncation, a
- *     silently repaired CRC, a length byte that disagrees with the payload -
+ *     silently repaired CRC, a control byte whose bits 2:0 are not 010, a
+ *     cross-check on bits 4:0 that rejects every valid slave frame, a
+ *     length-from-body format that would drop every acknowledged frame -
  *     rather than merely asserting that the right one comes out. Those were
  *     real documented errors or real design hazards, and an assertion that
  *     cannot distinguish the two answers is not a test of anything.
@@ -80,6 +86,84 @@ static const struct ant_channel_id spike_id = {
 
 static const uint8_t spike_payload[8] = {
 	0x10, 0xBD, 0xFF, 0x50, 0xDE, 0x11, 0x64, 0x00,
+};
+
+/*
+ * The pair of frames from docs/spike-b-results.md that refuted the length
+ * reading, transcribed from the capture rather than reconstructed:
+ *
+ *   B3=AA pl=A0005AA500112233   acknowledged
+ *   B3=0A pl=A0005AA500112233   the same eight bytes, one slot later
+ *
+ * An ANT master leaves its last payload in the broadcast buffer, so the two
+ * frames differ in exactly byte 3 and in nothing else. A length field cannot
+ * do that. That pair recurs 22 times across the six runs.
+ */
+static const uint8_t spike_b_payload[8] = {
+	0xA0, 0x00, 0x5A, 0xA5, 0x00, 0x11, 0x22, 0x33,
+};
+
+/* ---------------------------------------------------------------------------
+ * The eleven control bytes, from docs/spike-b-part2-results.md's table and
+ * from the analyser's own decode of
+ * archive/captures/radio/2026-08-09-spike-b2-run{0,A,B,C}.log.
+ *
+ * Written out as fields AND as the hex byte the capture shows, deliberately.
+ * The two columns were derived independently - the fields from the part 2 bit
+ * table, the hex from the logs' B3= column - so the table asserts that the
+ * six-field model reproduces the air rather than that the encoder is
+ * self-consistent.
+ * ---------------------------------------------------------------------------
+ */
+struct ctrl_case {
+	uint8_t                on_air;
+	struct ant_ctrl_fields f;
+	enum ant_msg_type      type;
+	const char            *what;
+};
+
+static const struct ctrl_case ctrl_cases[] = {
+	/* Slot openers - part 1's three values, and run C's control. */
+	{ 0x0Au, { false, false, false, false, true },
+	  ANT_MSG_BROADCAST,    "broadcast" },
+	{ 0x8Au, { true, false, false, false, true },
+	  ANT_MSG_BURST_DATA,   "slot-opening burst packet, seq 0" },
+	{ 0xAAu, { true, false, true, false, true },
+	  ANT_MSG_BURST_LAST,   "slot-opening acknowledged data == one-packet burst" },
+	/* In-slot data packets. */
+	{ 0x82u, { true, false, false, false, false },
+	  ANT_MSG_BURST_DATA,   "burst packet, seq 0" },
+	{ 0x92u, { true, false, false, true, false },
+	  ANT_MSG_BURST_DATA,   "burst packet, seq 1" },
+	{ 0xA2u, { true, false, true, false, false },
+	  ANT_MSG_BURST_LAST,   "burst last packet, seq 0" },
+	{ 0xB2u, { true, false, true, true, false },
+	  ANT_MSG_BURST_LAST,   "burst last packet, seq 1" },
+	/* In-slot acknowledgements. */
+	{ 0xC2u, { true, true, false, false, false },
+	  ANT_MSG_BURST_ACK,    "ack of a non-final packet, next seq 0" },
+	{ 0xD2u, { true, true, false, true, false },
+	  ANT_MSG_BURST_ACK,    "ack of a non-final packet, next seq 1" },
+	{ 0xE2u, { true, true, true, false, false },
+	  ANT_MSG_TRANSFER_ACK, "ack of the final packet, seq 0" },
+	{ 0xF2u, { true, true, true, true, false },
+	  ANT_MSG_TRANSFER_ACK, "ack of the final packet, seq 1" },
+};
+
+/* The field sets the rest of this file builds frames with. A master's three. */
+static const struct ant_ctrl_fields ctrl_broadcast = {
+	.slot_opener = true,
+};
+static const struct ant_ctrl_fields ctrl_ack_data_open = {
+	.exchange = true, .last = true, .slot_opener = true,
+};
+static const struct ant_ctrl_fields ctrl_burst_open_seq0 = {
+	.exchange = true, .slot_opener = true,
+};
+/* And a slave's, so the tests exercise a frame with bit 3 clear - the exact
+ * case the bits-4:0 cross-check used to reject. */
+static const struct ant_ctrl_fields ctrl_burst_last_seq0 = {
+	.exchange = true, .last = true,
 };
 
 /* ---------------------------------------------------------------------------
@@ -317,11 +401,17 @@ ZTEST(ant_frame, test_crc_coverage_is_15_in_both_configs)
 }
 
 /*
- * The two HAL packet formats. The interesting assertion is the last one: in
- * tracking, len_bias is exactly zero because the two header bytes ahead of the
- * payload and the two CRC bytes the length counts cancel. A backend that
- * derives body length from a field in the body therefore needs no correction,
- * and if that ever stops being true this is where it surfaces.
+ * The two HAL packet formats. The interesting assertion is now the first pair:
+ * BOTH are ANT_LEN_FIXED, and tracking is fixed because of Spike B rather than
+ * because of the hardware.
+ *
+ * ANT_LEN_FROM_BODY is what a backend maps onto nRF PCNF0.LFLEN=8, and that
+ * register reads byte 3 as a length. Byte 3 is a control byte: an acknowledged
+ * frame carries 0xAA there, which parses as LENGTH=170, overruns MAXLEN and is
+ * discarded as a CRC error. Such a receiver hears every broadcast perfectly
+ * and drops every acknowledged and burst frame in silence - which is "ERG mode
+ * does not work", found months later. This assertion is the regression test
+ * for that, and it is worth more than anything else in this file.
  */
 ZTEST(ant_frame, test_pkt_formats)
 {
@@ -337,15 +427,21 @@ ZTEST(ant_frame, test_pkt_formats)
 	zassert_equal(s->phy, ANT_PHY_1M_GFSK, NULL);
 
 	zassert_equal(t->addr_len, 5, NULL);
-	zassert_equal(t->len_mode, ANT_LEN_FROM_BODY, NULL);
-	zassert_equal(t->len_offset, 1, "the length byte follows the trans type");
-	zassert_equal(t->len_bias, 0,
-		      "two header bytes against two CRC bytes must cancel");
+	zassert_equal(t->len_mode, ANT_LEN_FIXED,
+		      "tracking must be static-length: a length-from-body "
+		      "format becomes PCNF0.LFLEN=8, which reads an "
+		      "acknowledged frame's 0xAA as a 170-byte length and "
+		      "silently drops every frame above broadcast");
+	zassert_equal(t->body_len, 10, "trans type, control byte, 8 payload");
+	zassert_equal(t->max_body_len, 10,
+		      "a longer frame is not receivable and must not be "
+		      "advertised as if it were");
 
 	zassert_equal(s->addr_len, 3, NULL);
 	zassert_equal(s->len_mode, ANT_LEN_FIXED,
-		      "search has three bytes ahead of the length field, so no "
-		      "S0|LENGTH|S1 layout can place it - it must be static");
+		      "search has three bytes ahead of the control byte, so no "
+		      "S0|LENGTH|S1 layout can place a length field there "
+		      "either - it must be static");
 	zassert_equal(s->body_len, 12, NULL);
 
 	/* Both describe the same CRC, which is the other half of the coverage
@@ -385,10 +481,11 @@ ZTEST(ant_frame, test_encode_tracking_bytes)
 	uint8_t flat[32];
 	int n;
 
-	zassert_equal(ant_frame_make(&f, &spike_id, spike_payload,
-				     sizeof(spike_payload)), ANT_FRAME_OK, NULL);
-	zassert_equal(f.len_byte, ANT_FRAME_LEN_BROADCAST,
-		      "8 payload + 2 CRC is 10, not 8");
+	zassert_equal(ant_frame_make(&f, &spike_id, &ctrl_broadcast,
+				     spike_payload, sizeof(spike_payload)),
+		      ANT_FRAME_OK, NULL);
+	zassert_equal(f.ctrl_byte, ANT_CTRL_BROADCAST,
+		      "a broadcast of 8 payload bytes is 0x0A on air");
 
 	zassert_equal(ant_frame_encode(ANT_FRAME_CFG_TRACKING,
 				       ant_net_addr_ant_plus, &f, &w),
@@ -401,7 +498,7 @@ ZTEST(ant_frame, test_encode_tracking_bytes)
 	zassert_equal(w.addr[3], 0x3Au, NULL);
 	zassert_equal(w.addr[4], SPIKE_DTYPE, NULL);
 	zassert_equal(w.body[0], SPIKE_TTYPE, NULL);
-	zassert_equal(w.body[1], ANT_FRAME_LEN_BROADCAST, NULL);
+	zassert_equal(w.body[1], ANT_CTRL_BROADCAST, NULL);
 	zassert_equal(w.crc, SPIKE_CRC, NULL);
 
 	n = ant_frame_to_bytes(&w, flat, sizeof(flat));
@@ -412,10 +509,11 @@ ZTEST(ant_frame, test_encode_tracking_bytes)
 	zassert_equal(flat[15], 0x19u, "CRC goes out most significant byte first");
 	zassert_equal(flat[16], 0x9Au, NULL);
 
-	/* The length-from-body relation a backend will actually evaluate. */
-	zassert_equal(w.body[ant_frame_format(ANT_FRAME_CFG_TRACKING)->len_offset] +
-			      ant_frame_format(ANT_FRAME_CFG_TRACKING)->len_bias,
-		      w.body_len, NULL);
+	/* The fixed-length relation a backend will actually program. */
+	zassert_equal(ant_frame_format(ANT_FRAME_CFG_TRACKING)->body_len,
+		      w.body_len,
+		      "a STATLEN-programmed receiver must expect exactly the "
+		      "body this encoder produces");
 }
 
 ZTEST(ant_frame, test_encode_search_bytes)
@@ -424,20 +522,22 @@ ZTEST(ant_frame, test_encode_search_bytes)
 	struct ant_frame_wire w;
 	uint8_t flat[32];
 
-	zassert_equal(ant_frame_make(&f, &spike_id, spike_payload,
-				     sizeof(spike_payload)), ANT_FRAME_OK, NULL);
+	zassert_equal(ant_frame_make(&f, &spike_id, &ctrl_broadcast,
+				     spike_payload, sizeof(spike_payload)),
+		      ANT_FRAME_OK, NULL);
 	zassert_equal(ant_frame_encode(ANT_FRAME_CFG_SEARCH,
 				       ant_net_addr_ant_plus, &f, &w),
 		      ANT_FRAME_OK, NULL);
 
 	zassert_equal(w.addr_len, 3, NULL);
 	zassert_equal(w.body_len, 12, NULL);
-	/* Exactly the buffer Spike A read out of RAM:
-	 * [devnum_hi][dtype][ttype][0x0A][d0..d7]. */
+	/* Exactly the buffer both spikes read out of RAM, and the banner
+	 * Spike B printed at boot:
+	 * [devnum_hi][dtype][ttype][control byte][d0..d7]. */
 	zassert_equal(w.body[0], 0x3Au, NULL);
 	zassert_equal(w.body[1], SPIKE_DTYPE, NULL);
 	zassert_equal(w.body[2], SPIKE_TTYPE, NULL);
-	zassert_equal(w.body[3], ANT_FRAME_LEN_BROADCAST, NULL);
+	zassert_equal(w.body[3], ANT_CTRL_BROADCAST, NULL);
 	zassert_mem_equal(&w.body[4], spike_payload, sizeof(spike_payload), NULL);
 
 	zassert_equal(ant_frame_to_bytes(&w, flat, sizeof(flat)), 17, NULL);
@@ -462,7 +562,8 @@ ZTEST(ant_frame, test_both_configs_put_the_same_bytes_on_air)
 		.trans_type = 0x01u,
 	};
 
-	zassert_equal(ant_frame_make(&f, &id, payload, sizeof(payload)),
+	zassert_equal(ant_frame_make(&f, &id, &ctrl_broadcast, payload,
+				     sizeof(payload)),
 		      ANT_FRAME_OK, NULL);
 
 	zassert_equal(ant_frame_encode(ANT_FRAME_CFG_TRACKING,
@@ -489,12 +590,13 @@ ZTEST(ant_frame, test_both_configs_put_the_same_bytes_on_air)
 }
 
 static void roundtrip(enum ant_frame_cfg cfg, const struct ant_channel_id *id,
-		      const uint8_t *payload, uint8_t payload_len)
+		      const struct ant_ctrl_fields *ctrl, const uint8_t *payload,
+		      uint8_t payload_len)
 {
 	struct ant_frame in, out;
 	struct ant_frame_wire w;
 
-	zassert_equal(ant_frame_make(&in, id, payload, payload_len),
+	zassert_equal(ant_frame_make(&in, id, ctrl, payload, payload_len),
 		      ANT_FRAME_OK, NULL);
 	zassert_equal(ant_frame_encode(cfg, ant_net_addr_ant_plus, &in, &w),
 		      ANT_FRAME_OK, NULL);
@@ -504,7 +606,16 @@ static void roundtrip(enum ant_frame_cfg cfg, const struct ant_channel_id *id,
 	zassert_equal(out.id.device_number, id->device_number, NULL);
 	zassert_equal(out.id.device_type, id->device_type, NULL);
 	zassert_equal(out.id.trans_type, id->trans_type, NULL);
-	zassert_equal(out.len_byte, in.len_byte, NULL);
+	zassert_equal(out.ctrl_byte, in.ctrl_byte, NULL);
+	/* Every field must survive the round trip, or the control byte is being
+	 * carried without being understood. */
+	zassert_equal(ant_ctrl_is_exchange(out.ctrl_byte), ctrl->exchange, NULL);
+	zassert_equal(ant_ctrl_is_ack(out.ctrl_byte), ctrl->ack, NULL);
+	zassert_equal(ant_ctrl_is_last(out.ctrl_byte), ctrl->last, NULL);
+	zassert_equal(ant_ctrl_seq(out.ctrl_byte) != 0u, ctrl->seq, NULL);
+	zassert_equal(ant_ctrl_is_slot_opener(out.ctrl_byte), ctrl->slot_opener,
+		      NULL);
+	zassert_true(ant_ctrl_low_ok(out.ctrl_byte), NULL);
 	zassert_equal(out.payload_len, payload_len, NULL);
 	zassert_mem_equal(out.payload, payload, payload_len, NULL);
 }
@@ -530,11 +641,16 @@ ZTEST(ant_frame, test_roundtrip_both_configs)
 		0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0xFF, 0x55, 0xAA,
 	};
 
+	/* ALL ELEVEN measured control bytes, through both configurations. Part 1
+	 * could reach three of these; the eight with bit 3 clear are the ones
+	 * the bits-4:0 cross-check used to reject outright. */
 	for (size_t i = 0; i < ARRAY_SIZE(ids); i++) {
-		roundtrip(ANT_FRAME_CFG_TRACKING, &ids[i], payload,
-			  sizeof(payload));
-		roundtrip(ANT_FRAME_CFG_SEARCH, &ids[i], payload,
-			  sizeof(payload));
+		for (size_t c = 0; c < ARRAY_SIZE(ctrl_cases); c++) {
+			roundtrip(ANT_FRAME_CFG_TRACKING, &ids[i],
+				  &ctrl_cases[c].f, payload, sizeof(payload));
+			roundtrip(ANT_FRAME_CFG_SEARCH, &ids[i],
+				  &ctrl_cases[c].f, payload, sizeof(payload));
+		}
 	}
 }
 
@@ -548,7 +664,7 @@ ZTEST(ant_frame, test_pairing_bit_is_carried_not_interpreted)
 		.trans_type = SPIKE_TTYPE,
 	};
 
-	zassert_equal(ant_frame_make(&f, &id, spike_payload,
+	zassert_equal(ant_frame_make(&f, &id, &ctrl_broadcast, spike_payload,
 				     sizeof(spike_payload)), ANT_FRAME_OK, NULL);
 	zassert_equal(ant_frame_encode(ANT_FRAME_CFG_TRACKING,
 				       ant_net_addr_ant_plus, &f, &w),
@@ -594,7 +710,9 @@ ZTEST(ant_frame, test_decode_captured_frame)
 			      "truth tools/ant_scan.py reported");
 		zassert_equal(f.id.device_type, SPIKE_DTYPE, NULL);
 		zassert_equal(f.id.trans_type, SPIKE_TTYPE, NULL);
-		zassert_equal(f.len_byte, ANT_FRAME_LEN_BROADCAST, NULL);
+		zassert_equal(f.ctrl_byte, ANT_CTRL_BROADCAST, NULL);
+		zassert_equal(ant_frame_msg_type(f.ctrl_byte), ANT_MSG_BROADCAST,
+			      NULL);
 		zassert_equal(f.payload_len, 8, NULL);
 		zassert_mem_equal(f.payload, spike_payload, sizeof(spike_payload),
 				  NULL);
@@ -607,40 +725,134 @@ ZTEST(ant_frame, test_decode_captured_frame)
  */
 
 /*
- * The length byte is stated separately from the payload length and
- * cross-checked, rather than derived, because Spike B may yet show it is a
- * control byte. Until then the two must agree, in both directions.
+ * BITS 2:0 == 010 is the whole invariant, on encode and on decode. Nothing else
+ * about the byte is ever an error.
+ *
+ * The wrong answer this test exists to exclude is named, because it shipped:
+ * the version of ant_frame.c written against Spike B part 1 cross-checked bits
+ * 4:0 against payload_len + 2, which rejects EVERY valid in-slot frame. 0xA2 is
+ * an eight-byte slave packet whose low five bits read 2, and part 1's check
+ * wanted 10. That is the PCNF0.LFLEN=8 defect reintroduced in software.
  */
-ZTEST(ant_frame, test_wrong_length_byte_is_rejected)
+ZTEST(ant_frame, test_control_byte_low_bits_are_the_only_invariant)
 {
 	struct ant_frame f, out;
 	struct ant_frame_wire w;
 
-	zassert_equal(ant_frame_make(&f, &spike_id, spike_payload,
-				     sizeof(spike_payload)), ANT_FRAME_OK, NULL);
+	zassert_equal(ant_frame_make(&f, &spike_id, &ctrl_broadcast,
+				     spike_payload, sizeof(spike_payload)),
+		      ANT_FRAME_OK, NULL);
 
-	/* 8 would be the natural mistake: a payload length rather than a
-	 * ShockBurst length that counts the CRC bytes. */
-	f.len_byte = 8u;
-	zassert_equal(ant_frame_encode(ANT_FRAME_CFG_TRACKING,
-				       ant_net_addr_ant_plus, &f, &w),
-		      ANT_FRAME_ELEN,
-		      "encode accepted a length byte of 8 for an 8-byte payload");
+	/* Every measured control byte must ENCODE against an eight-byte
+	 * payload, including all eight whose low five bits are not 10. */
+	for (size_t c = 0; c < ARRAY_SIZE(ctrl_cases); c++) {
+		f.ctrl_byte = ctrl_cases[c].on_air;
+		zassert_equal(ant_frame_encode(ANT_FRAME_CFG_TRACKING,
+					       ant_net_addr_ant_plus, &f, &w),
+			      ANT_FRAME_OK,
+			      "encode rejected the measured control byte 0x%02X "
+			      "(%s); a check on bits 4:0 rejects eight of the "
+			      "eleven",
+			      ctrl_cases[c].on_air, ctrl_cases[c].what);
+		zassert_equal(w.body[1], ctrl_cases[c].on_air, NULL);
 
-	f.len_byte = ANT_FRAME_LEN_BROADCAST;
+		/* And DECODE, off the air, unchanged. */
+		zassert_equal(ant_frame_decode(ANT_FRAME_CFG_TRACKING, &w, 0,
+					       &out),
+			      ANT_FRAME_OK,
+			      "decode rejected the measured control byte 0x%02X",
+			      ctrl_cases[c].on_air);
+		zassert_equal(out.ctrl_byte, ctrl_cases[c].on_air, NULL);
+		zassert_equal(out.payload_len, 8u, NULL);
+	}
+
+	/* Now the rejections. Bits 2:0 other than 010, under several different
+	 * flag combinations, because a parser that masked the wrong way round
+	 * would pass one and fail another. */
+	static const uint8_t bad_low[] = {
+		0x00u, 0x01u, 0x03u, 0x04u, 0x05u, 0x06u, 0x07u,
+		0x08u, 0x0Bu, 0x0Cu, 0x0Du, 0x0Eu, 0x0Fu,
+		0xA8u, 0xAFu, 0xF0u, 0x81u,
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(bad_low); i++) {
+		f.ctrl_byte = bad_low[i];
+		zassert_equal(ant_frame_encode(ANT_FRAME_CFG_TRACKING,
+					       ant_net_addr_ant_plus, &f, &w),
+			      ANT_FRAME_ECTRL,
+			      "encode accepted 0x%02X, whose bits 2:0 are not "
+			      "010", bad_low[i]);
+	}
+
+	/* On the receive side the byte comes off the air, so this is a
+	 * malformed frame rather than a caller bug. The CRC is recomputed first
+	 * so the test fails on the control check and not incidentally on the
+	 * CRC. */
+	f.ctrl_byte = ANT_CTRL_BROADCAST;
 	zassert_equal(ant_frame_encode(ANT_FRAME_CFG_TRACKING,
 				       ant_net_addr_ant_plus, &f, &w),
 		      ANT_FRAME_OK, NULL);
-
-	/* On the receive side the length byte comes off the air, so a frame
-	 * whose body does not match it is malformed rather than a caller bug.
-	 * The CRC is repaired first, so that this test fails on the length
-	 * check and not incidentally on the CRC. */
 	w.body[1] = 0x0Cu;
 	w.crc = ant_frame_crc(&w);
 	zassert_equal(ant_frame_decode(ANT_FRAME_CFG_TRACKING, &w, 0, &out),
-		      ANT_FRAME_ELEN,
-		      "decode accepted a length byte disagreeing with the body");
+		      ANT_FRAME_ECTRL,
+		      "decode accepted a control byte whose bits 2:0 are 100");
+	zassert_equal(ant_frame_msg_type(0x0Cu), ANT_MSG_UNKNOWN,
+		      "bits 2:0 != 010 cannot be named");
+}
+
+/*
+ * The other direction, and the one both parts of Spike B bought: a control byte
+ * whose FLAGS this module has never measured must still ENCODE and DECODE,
+ * because refusing it is how the next unmeasured thing becomes unmeasurable.
+ * The eleven measured values are a table, not a whitelist; only
+ * ant_frame_make() refuses to invent one.
+ */
+ZTEST(ant_frame, test_unmeasured_flags_are_carried_not_rejected)
+{
+	struct ant_frame f, out;
+	struct ant_frame_wire w;
+	struct ant_ctrl_fields bad = { .ack = true, .last = true };
+
+	zassert_equal(ant_frame_make(&f, &spike_id, &ctrl_broadcast,
+				     spike_payload, sizeof(spike_payload)),
+		      ANT_FRAME_OK, NULL);
+
+	/* 0b011 in bits 7:5 - b7 clear with b6 and b5 set. Bits 7:5 never took
+	 * 001, 010 or 011 in either part of Spike B, so this is a combination
+	 * nothing has ever transmitted, with legal bits 2:0. */
+	f.ctrl_byte = (uint8_t)(0x60u | ANT_CTRL_SLOT | ANT_CTRL_LOW_VALUE);
+	zassert_equal(f.ctrl_byte, 0x6Au, NULL);
+	zassert_false(ant_ctrl_observed(f.ctrl_byte),
+		      "0x6A has never been on the air and the table must say so");
+
+	zassert_equal(ant_frame_encode(ANT_FRAME_CFG_TRACKING,
+				       ant_net_addr_ant_plus, &f, &w),
+		      ANT_FRAME_OK,
+		      "a bench experiment must be able to put a candidate "
+		      "encoding on the air without editing ant_frame.c");
+	zassert_equal(w.body[1], 0x6Au, "the flags must reach the air exactly "
+					"as the caller set them");
+
+	zassert_equal(ant_frame_decode(ANT_FRAME_CFG_TRACKING, &w, 0, &out),
+		      ANT_FRAME_OK,
+		      "decode dispatches on the control byte; it must not "
+		      "validate it against the eleven known values");
+	zassert_equal(out.ctrl_byte, 0x6Au, NULL);
+	zassert_equal(ant_frame_msg_type(out.ctrl_byte), ANT_MSG_UNKNOWN,
+		      "an unmeasured encoding must be named unknown, not "
+		      "guessed at");
+	zassert_equal(out.payload_len, 8, NULL);
+	zassert_mem_equal(out.payload, spike_payload, sizeof(spike_payload),
+			  NULL);
+
+	/* But ant_frame_make() must refuse to originate it. That is the line
+	 * between "the model can express it" and "the air has carried it". */
+	zassert_equal(ant_frame_make(&f, &spike_id, &bad, spike_payload,
+				     sizeof(spike_payload)),
+		      ANT_FRAME_EINVAL,
+		      "ant_frame_make invented a control byte nothing has "
+		      "transmitted");
 }
 
 ZTEST(ant_frame, test_truncated_input_is_rejected)
@@ -655,7 +867,7 @@ ZTEST(ant_frame, test_truncated_input_is_rejected)
 	buf[16] = (uint8_t)(SPIKE_CRC & 0xFFu);
 
 	/* Every length short of the full frame, including the ones that stop
-	 * before the length byte itself. */
+	 * before the control byte itself. */
 	for (size_t n = 0; n < 17u; n++) {
 		zassert_equal(ant_frame_from_bytes(ANT_FRAME_CFG_TRACKING, buf,
 						   n, &w),
@@ -697,8 +909,9 @@ ZTEST(ant_frame, test_crc_failure_is_reported_and_never_repaired)
 	struct ant_frame f, out, sentinel;
 	struct ant_frame_wire w;
 
-	zassert_equal(ant_frame_make(&f, &spike_id, spike_payload,
-				     sizeof(spike_payload)), ANT_FRAME_OK, NULL);
+	zassert_equal(ant_frame_make(&f, &spike_id, &ctrl_broadcast,
+				     spike_payload, sizeof(spike_payload)),
+		      ANT_FRAME_OK, NULL);
 	zassert_equal(ant_frame_encode(ANT_FRAME_CFG_TRACKING,
 				       ant_net_addr_ant_plus, &f, &w),
 		      ANT_FRAME_OK, NULL);
@@ -740,8 +953,9 @@ ZTEST(ant_frame, test_trusted_crc_is_opt_out)
 	struct ant_frame f, out;
 	struct ant_frame_wire w;
 
-	zassert_equal(ant_frame_make(&f, &spike_id, spike_payload,
-				     sizeof(spike_payload)), ANT_FRAME_OK, NULL);
+	zassert_equal(ant_frame_make(&f, &spike_id, &ctrl_broadcast,
+				     spike_payload, sizeof(spike_payload)),
+		      ANT_FRAME_OK, NULL);
 	zassert_equal(ant_frame_encode(ANT_FRAME_CFG_SEARCH,
 				       ant_net_addr_ant_plus, &f, &w),
 		      ANT_FRAME_OK, NULL);
@@ -765,17 +979,28 @@ ZTEST(ant_frame, test_null_and_unknown_configuration_are_rejected)
 	struct ant_frame_wire w;
 	uint8_t buf[32];
 
-	zassert_equal(ant_frame_make(NULL, &spike_id, spike_payload, 8),
+	zassert_equal(ant_frame_make(NULL, &spike_id, &ctrl_broadcast,
+				     spike_payload, 8),
 		      ANT_FRAME_EINVAL, NULL);
-	zassert_equal(ant_frame_make(&f, NULL, spike_payload, 8),
+	zassert_equal(ant_frame_make(&f, NULL, &ctrl_broadcast,
+				     spike_payload, 8),
 		      ANT_FRAME_EINVAL, NULL);
-	zassert_equal(ant_frame_make(&f, &spike_id, NULL, 8),
+	zassert_equal(ant_frame_make(&f, &spike_id, &ctrl_broadcast, NULL, 8),
 		      ANT_FRAME_EINVAL, NULL);
-	zassert_equal(ant_frame_make(&f, &spike_id, spike_payload,
+	zassert_equal(ant_frame_make(&f, &spike_id, &ctrl_broadcast,
+				     spike_payload,
 				     (uint8_t)(ANT_FRAME_PAYLOAD_MAX + 1u)),
 		      ANT_FRAME_EINVAL, "an over-long payload must be refused");
 
-	zassert_equal(ant_frame_make(&f, &spike_id, spike_payload, 8),
+	/* No field set, and no safe default to fall back on: a caller who meant
+	 * acknowledged data and silently got a broadcast would set no trainer
+	 * resistance and report no error. */
+	zassert_equal(ant_frame_make(&f, &spike_id, NULL, spike_payload, 8),
+		      ANT_FRAME_EINVAL,
+		      "ant_frame_make must refuse to invent a control byte");
+
+	zassert_equal(ant_frame_make(&f, &spike_id, &ctrl_broadcast,
+				     spike_payload, 8),
 		      ANT_FRAME_OK, NULL);
 	zassert_equal(ant_frame_encode((enum ant_frame_cfg)99,
 				       ant_net_addr_ant_plus, &f, &w),
@@ -810,56 +1035,440 @@ ZTEST(ant_frame, test_null_and_unknown_configuration_are_rejected)
 }
 
 /*
- * A length byte a frame cannot possibly have. Below 2 it does not even cover
- * its own CRC bytes; above 26 it exceeds anything this module can hold. Both
- * must be an explicit rejection rather than an underflowed payload length -
- * the second is how a parser turns a corrupt byte into a buffer overrun.
+ * The flat parser takes the frame geometry from the configuration and the
+ * control byte's bits 2:0 from the air, and nothing else. Every combination of
+ * the five flags above legal bits 2:0 must parse as a 17-byte frame; every
+ * value with bits 2:0 != 010 must be ANT_FRAME_ECTRL.
+ *
+ * The wrong answer this excludes by name: taking the length from bits 4:0. It
+ * gives the right answer for 0x0A - 8 + 2 = 10 - and the wrong one for all
+ * eight in-slot values, which is why part 1's reading survived 750 frames.
  */
-ZTEST(ant_frame, test_impossible_length_byte_is_rejected)
+ZTEST(ant_frame, test_flat_parse_ignores_everything_but_bits_2_0)
 {
 	uint8_t buf[64];
 	struct ant_frame_wire w;
+	struct ant_frame f;
 
-	memcpy(buf, spike15, sizeof(spike15));
-	memset(&buf[15], 0, sizeof(buf) - 15u);
+	/* All 32 flag combinations over legal low bits. */
+	for (unsigned int flags = 0; flags < 32u; flags++) {
+		uint16_t crc;
 
-	for (unsigned int lenb = 0; lenb < 2u; lenb++) {
-		buf[6] = (uint8_t)lenb;
+		memcpy(buf, spike15, sizeof(spike15));
+		memset(&buf[15], 0, sizeof(buf) - 15u);
+		buf[6] = (uint8_t)((flags << 3) | ANT_CTRL_LOW_VALUE);
+		crc = ant_crc16(ANT_CRC_INIT, buf, 15u);
+		buf[15] = (uint8_t)(crc >> 8);
+		buf[16] = (uint8_t)(crc & 0xFFu);
+
 		zassert_equal(ant_frame_from_bytes(ANT_FRAME_CFG_TRACKING, buf,
 						   sizeof(buf), &w),
-			      ANT_FRAME_ELEN,
-			      "length byte %u does not even cover the CRC", lenb);
+			      17,
+			      "control byte 0x%02X was not parsed as a 17-byte "
+			      "frame; reading bits 4:0 as a length gets this "
+			      "right only for 0x0A", buf[6]);
+		zassert_equal(w.body_len, 10u, NULL);
+		zassert_equal(ant_frame_decode(ANT_FRAME_CFG_TRACKING, &w, 0, &f),
+			      ANT_FRAME_OK, NULL);
+		zassert_equal(f.payload_len, 8u, NULL);
+		zassert_equal(f.ctrl_byte, buf[6], NULL);
+		zassert_mem_equal(f.payload, spike_payload, sizeof(spike_payload),
+				  NULL);
 	}
 
-	buf[6] = (uint8_t)(ANT_FRAME_PAYLOAD_MAX + ANT_FRAME_CRC_BYTES + 1u);
-	zassert_equal(ant_frame_from_bytes(ANT_FRAME_CFG_TRACKING, buf,
-					   sizeof(buf), &w),
-		      ANT_FRAME_ELEN, "an over-long length byte was accepted");
+	/* And the seven illegal low-bit values, under three different flag
+	 * sets, because a parser that masked the wrong way round would pass one
+	 * and fail another. */
+	static const uint8_t flag_sets[] = { 0x00u, 0xA0u, 0x80u };
+
+	for (size_t t = 0; t < ARRAY_SIZE(flag_sets); t++) {
+		for (unsigned int low = 0; low < 8u; low++) {
+			if (low == ANT_CTRL_LOW_VALUE) {
+				continue;
+			}
+			memcpy(buf, spike15, sizeof(spike15));
+			memset(&buf[15], 0, sizeof(buf) - 15u);
+			buf[6] = (uint8_t)(flag_sets[t] | low);
+			zassert_equal(ant_frame_from_bytes(ANT_FRAME_CFG_TRACKING,
+							   buf, sizeof(buf), &w),
+				      ANT_FRAME_ECTRL,
+				      "control byte 0x%02X has bits 2:0 != 010 "
+				      "and was accepted", buf[6]);
+		}
+	}
 }
 
 /* ---------------------------------------------------------------------------
- * Boundary: the advanced-burst prediction
+ * The control byte - Spike B parts 1 and 2
  * ---------------------------------------------------------------------------
  */
 
 /*
- * UNTESTED ON AIR. docs/ant-radio-link.md predicts that an advanced-burst
- * frame carrying 24 payload bytes shows 0x1A in the length byte, on the
- * reading that the byte counts payload plus the two CRC bytes. No such frame
- * has ever been captured - Spike A heard only sensor broadcasts, where the
- * byte is constant at 0x0A, and Spike B has not run. If Spike B shows
- * something else, that byte is ANT's control byte rather than a length, and
- * this test is the one that should change: it is written so that the
- * prediction is falsifiable in code rather than only in prose.
+ * THE table test. All eleven values that have been on the air, against the
+ * six-field decode.
  *
- * What it does test today, and this part is not speculative: the module's
- * arithmetic holds at the top of its range, tracking's zero length-bias
- * survives a payload three times the standard size, and the coverage
- * invariant still binds the two configurations together at 31 bytes.
+ * The two columns of ctrl_cases[] were derived independently - the hex from the
+ * logs' B3= column, the fields from part 2's bit table - so this asserts that
+ * the field model reproduces the air, not that the encoder agrees with itself.
  */
-ZTEST(ant_frame, test_advanced_burst_length_prediction)
+ZTEST(ant_frame, test_eleven_measured_control_bytes)
 {
-	struct ant_frame f;
+	zassert_equal(ARRAY_SIZE(ctrl_cases), 11u,
+		      "eleven values were measured; a twelfth needs a capture "
+		      "behind it");
+
+	for (size_t i = 0; i < ARRAY_SIZE(ctrl_cases); i++) {
+		const struct ctrl_case *c = &ctrl_cases[i];
+		struct ant_ctrl_fields got;
+
+		/* Fields -> byte. */
+		zassert_equal(ant_ctrl_encode(&c->f), c->on_air,
+			      "the field model does not produce 0x%02X (%s)",
+			      c->on_air, c->what);
+
+		/* Byte -> fields, and it must be a genuine inverse rather than
+		 * a second table that happens to agree today. */
+		zassert_equal(ant_ctrl_decode(c->on_air, &got), ANT_FRAME_OK,
+			      NULL);
+		zassert_equal(got.exchange, c->f.exchange, "b7 of 0x%02X",
+			      c->on_air);
+		zassert_equal(got.ack, c->f.ack, "b6 of 0x%02X", c->on_air);
+		zassert_equal(got.last, c->f.last, "b5 of 0x%02X", c->on_air);
+		zassert_equal(got.seq, c->f.seq, "b4 of 0x%02X", c->on_air);
+		zassert_equal(got.slot_opener, c->f.slot_opener, "b3 of 0x%02X",
+			      c->on_air);
+
+		zassert_equal(ant_frame_msg_type(c->on_air), c->type,
+			      "0x%02X (%s) decoded as the wrong message",
+			      c->on_air, c->what);
+		zassert_true(ant_ctrl_observed(c->on_air), NULL);
+
+		/* Measured on all 3,104 CRC-valid frames of both parts. */
+		zassert_true(ant_ctrl_low_ok(c->on_air),
+			     "0x%02X does not carry 010 in bits 2:0", c->on_air);
+	}
+
+	/* Measured: bits 7:5 never took 001, 010 or 011, so b7 = 0 occurred
+	 * only ever as 0x0A. There is one broadcast encoding. */
+	zassert_equal(ant_frame_msg_type(0x2Au), ANT_MSG_UNKNOWN, NULL);
+	zassert_equal(ant_frame_msg_type(0x4Au), ANT_MSG_UNKNOWN, NULL);
+	zassert_equal(ant_frame_msg_type(0x6Au), ANT_MSG_UNKNOWN, NULL);
+	zassert_false(ant_ctrl_observed(0x2Au), NULL);
+	zassert_false(ant_ctrl_observed(0x4Au), NULL);
+	zassert_false(ant_ctrl_observed(0x6Au), NULL);
+
+	/* And the twelve slot-opener variants of the in-slot values, which the
+	 * field model can express and nothing has transmitted. 0x8A and 0xAA
+	 * are the two that HAVE been, so they are excluded. */
+	zassert_false(ant_ctrl_observed(0xC2u | ANT_CTRL_SLOT), NULL); /* 0xCA */
+	zassert_false(ant_ctrl_observed(0xD2u | ANT_CTRL_SLOT), NULL); /* 0xDA */
+	zassert_false(ant_ctrl_observed(0xE2u | ANT_CTRL_SLOT), NULL); /* 0xEA */
+	zassert_false(ant_ctrl_observed(0xF2u | ANT_CTRL_SLOT), NULL); /* 0xFA */
+	zassert_false(ant_ctrl_observed(0x92u | ANT_CTRL_SLOT), NULL); /* 0x9A */
+	zassert_false(ant_ctrl_observed(0xB2u | ANT_CTRL_SLOT), NULL); /* 0xBA */
+}
+
+/*
+ * 0xAA and 0xA2 are the same frame apart from the slot bit, and that is the
+ * single most load-bearing sentence in part 2.
+ *
+ * Part 1 saw 0xAA four times from a one-block burst and wrote down "do not read
+ * that as burst-last". Part 2's run C is the control that settles it: the same
+ * Feather, the same stack, the same driver script, the same payload bytes, with
+ * only the channel role changed from slave to master - 0xA2 became 0xAA and
+ * 0x82 became 0x8A. One bit moved. Acknowledged data IS a one-packet burst, on
+ * air and byte for byte, which is why ant_ack.c and ant_burst.c share one
+ * encoder and why a receiver dispatching on this byte cannot tell them apart.
+ */
+ZTEST(ant_frame, test_ack_data_is_a_one_packet_burst)
+{
+	struct ant_ctrl_fields open, in_slot;
+
+	zassert_equal(ant_ctrl_decode(0xAAu, &open), ANT_FRAME_OK, NULL);
+	zassert_equal(ant_ctrl_decode(0xA2u, &in_slot), ANT_FRAME_OK, NULL);
+
+	zassert_equal(open.exchange, in_slot.exchange, NULL);
+	zassert_equal(open.ack, in_slot.ack, NULL);
+	zassert_equal(open.last, in_slot.last, NULL);
+	zassert_equal(open.seq, in_slot.seq, NULL);
+	zassert_not_equal(open.slot_opener, in_slot.slot_opener,
+			  "the slot bit is the ONLY thing separating 0xAA from "
+			  "0xA2; if it is not, run C's control proved nothing");
+
+	/* Same message either way, and it is burst-last rather than a type of
+	 * its own. */
+	zassert_equal(ant_frame_msg_type(0xAAu), ANT_MSG_BURST_LAST, NULL);
+	zassert_equal(ant_frame_msg_type(0xA2u), ANT_MSG_BURST_LAST, NULL);
+	zassert_equal(ant_frame_msg_type(0xAAu), ant_frame_msg_type(0xA2u), NULL);
+
+	/* And the same one bit apart for the burst-packet-0 pair. */
+	zassert_equal((uint8_t)(0x82u | ANT_CTRL_SLOT), 0x8Au, NULL);
+	zassert_equal(ant_frame_msg_type(0x8Au), ANT_MSG_BURST_DATA, NULL);
+	zassert_equal(ant_frame_msg_type(0x82u), ANT_MSG_BURST_DATA, NULL);
+
+	/* There is no ANT_MSG_ACKNOWLEDGED, and that absence is the finding. */
+	zassert_not_equal(ant_frame_msg_type(0xA2u), ANT_MSG_BURST_ACK,
+			  "acknowledged DATA is not an acknowledgeMENT; b6 is "
+			  "what separates them");
+}
+
+/*
+ * The reply frame - the row part 1 listed as never observed.
+ *
+ * Bit 6 set, bit 5 echoed, bit 4 complemented: 82 -> D2, 92 -> C2, A2 -> F2,
+ * B2 -> E2, on every one of the 168 adjacent CRC-valid data/acknowledgement
+ * pairs in runs 0, A and B. Read as "the sequence bit I expect next" that is
+ * exactly right, and read as "an echo of what I just received" it is exactly
+ * wrong - which is why the complement is asserted rather than the echo.
+ */
+ZTEST(ant_frame, test_reply_frame_relationship)
+{
+	static const struct {
+		uint8_t data;
+		uint8_t reply;
+	} pairs[] = {
+		{ 0x82u, 0xD2u },
+		{ 0x92u, 0xC2u },
+		{ 0xA2u, 0xF2u },
+		{ 0xB2u, 0xE2u },
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(pairs); i++) {
+		uint8_t d = pairs[i].data;
+		uint8_t r = ant_ctrl_reply_for(d);
+
+		zassert_equal(r, pairs[i].reply,
+			      "0x%02X must be acknowledged with 0x%02X", d,
+			      pairs[i].reply);
+
+		/* Stated as the three field relations as well as the byte, so a
+		 * table typo cannot pass both. */
+		zassert_true(ant_ctrl_is_ack(r), "bit 6 must be set");
+		zassert_false(ant_ctrl_is_ack(d), "a data packet has bit 6 clear");
+		zassert_equal(ant_ctrl_is_last(r), ant_ctrl_is_last(d),
+			      "bit 5 is echoed, not complemented");
+		zassert_not_equal(ant_ctrl_seq(r), ant_ctrl_seq(d),
+				  "bit 4 is complemented, not echoed - an ack "
+				  "carries the sequence bit it expects NEXT");
+		zassert_equal(ant_ctrl_is_exchange(r), ant_ctrl_is_exchange(d),
+			      NULL);
+		zassert_equal(ant_ctrl_is_slot_opener(r),
+			      ant_ctrl_is_slot_opener(d), NULL);
+		zassert_true(ant_ctrl_observed(r), NULL);
+	}
+
+	/*
+	 * And what was NOT measured. Every one of the 168 pairs is an in-slot
+	 * frame answered by an in-slot frame; no acknowledgement of a
+	 * slot-opening data packet was ever captured, so there is no measured
+	 * answer for what bit 3 of one would be. Returning 0 - never a legal
+	 * control byte - is how that stays visible.
+	 */
+	zassert_equal(ant_ctrl_reply_for(0x8Au), 0u,
+		      "there is no measured acknowledgement of a slot-opening "
+		      "burst packet, and inventing one is how bit 3 gets fixed "
+		      "by guess");
+	zassert_equal(ant_ctrl_reply_for(0xAAu), 0u, NULL);
+	zassert_equal(ant_ctrl_reply_for(ANT_CTRL_BROADCAST), 0u,
+		      "a broadcast is not acknowledged");
+	zassert_equal(ant_ctrl_reply_for(0xC2u), 0u,
+		      "an acknowledgement is not itself acknowledged");
+}
+
+/*
+ * THE test. Byte 3 is not a length, and the evidence is a pair of frames one
+ * slot apart carrying the same eight payload bytes with byte 3 changing
+ * 0xAA -> 0x0A. Encoding that pair and getting two frames that differ in
+ * exactly one byte is what a length field cannot do, so this test fails on any
+ * implementation that derives byte 3 from payload_len.
+ */
+ZTEST(ant_frame, test_same_payload_two_control_bytes)
+{
+	struct ant_frame ack, bcast, out;
+	struct ant_frame_wire w_ack, w_bcast;
+	uint8_t flat_ack[32], flat_bcast[32];
+	unsigned int differing = 0;
+
+	zassert_equal(ant_frame_make(&ack, &spike_id, &ctrl_ack_data_open,
+				     spike_b_payload, sizeof(spike_b_payload)),
+		      ANT_FRAME_OK, NULL);
+	zassert_equal(ant_frame_make(&bcast, &spike_id, &ctrl_broadcast,
+				     spike_b_payload, sizeof(spike_b_payload)),
+		      ANT_FRAME_OK, NULL);
+
+	zassert_equal(ack.payload_len, bcast.payload_len,
+		      "the two frames must carry the same number of payload "
+		      "bytes or this test proves nothing");
+	zassert_equal(ack.ctrl_byte, 0xAAu, NULL);
+	zassert_equal(bcast.ctrl_byte, 0x0Au, NULL);
+
+	zassert_equal(ant_frame_encode(ANT_FRAME_CFG_TRACKING,
+				       ant_net_addr_ant_plus, &ack, &w_ack),
+		      ANT_FRAME_OK, NULL);
+	zassert_equal(ant_frame_encode(ANT_FRAME_CFG_TRACKING,
+				       ant_net_addr_ant_plus, &bcast, &w_bcast),
+		      ANT_FRAME_OK, NULL);
+
+	zassert_equal(w_ack.body_len, w_bcast.body_len, NULL);
+	zassert_equal(ant_frame_to_bytes(&w_ack, flat_ack, sizeof(flat_ack)),
+		      17, NULL);
+	zassert_equal(ant_frame_to_bytes(&w_bcast, flat_bcast,
+					 sizeof(flat_bcast)), 17, NULL);
+
+	/* Byte 6 of the flat frame is byte 3 of the body: 5 address bytes then
+	 * the transmission type. The CRC differs too, of course. */
+	for (size_t i = 0; i < 15u; i++) {
+		if (flat_ack[i] != flat_bcast[i]) {
+			differing++;
+			zassert_equal(i, 6u,
+				      "the two frames differ at byte %zu, but "
+				      "the capture shows them differing only "
+				      "in the control byte", i);
+		}
+	}
+	zassert_equal(differing, 1u,
+		      "an acknowledged frame and a broadcast of the same "
+		      "payload must differ in exactly one covered byte");
+	zassert_not_equal(w_ack.crc, w_bcast.crc, NULL);
+
+	/* And the receive side sorts them apart, which is the whole point:
+	 * both decode, both yield the same payload, and the message type is
+	 * what distinguishes them. */
+	zassert_equal(ant_frame_decode(ANT_FRAME_CFG_TRACKING, &w_ack, 0, &out),
+		      ANT_FRAME_OK,
+		      "an acknowledged frame must decode - a receiver that "
+		      "drops these cannot set trainer resistance");
+	zassert_equal(ant_frame_msg_type(out.ctrl_byte), ANT_MSG_BURST_LAST,
+		      "acknowledged data is burst-last on air; part 1 refused "
+		      "to say so and part 2's run C settled it");
+	zassert_mem_equal(out.payload, spike_b_payload,
+			  sizeof(spike_b_payload), NULL);
+
+	zassert_equal(ant_frame_decode(ANT_FRAME_CFG_TRACKING, &w_bcast, 0,
+				       &out), ANT_FRAME_OK, NULL);
+	zassert_equal(ant_frame_msg_type(out.ctrl_byte), ANT_MSG_BROADCAST,
+		      NULL);
+	zassert_mem_equal(out.payload, spike_b_payload,
+			  sizeof(spike_b_payload), NULL);
+}
+
+/*
+ * THE REGRESSION TEST FOR THE LIVE BUG.
+ *
+ * A slave's in-slot frame - bit 3 clear - must make, encode, transmit-shape and
+ * decode. The version of ant_frame.c written against Spike B part 1 rejected
+ * every one of these with ANT_FRAME_ELEN, because 0xA2's low five bits are
+ * 00010 = 2 and the check wanted payload_len + 2 = 10. Nothing on the receive
+ * side would have got through: every frame a slave sends has bit 3 clear.
+ */
+ZTEST(ant_frame, test_a_slave_frame_is_not_rejected)
+{
+	struct ant_frame f, out;
+	struct ant_frame_wire w;
+	uint8_t flat[32];
+
+	zassert_equal(ant_frame_make(&f, &spike_id, &ctrl_burst_last_seq0,
+				     spike_b_payload, sizeof(spike_b_payload)),
+		      ANT_FRAME_OK,
+		      "an in-slot acknowledged-data frame was refused");
+	zassert_equal(f.ctrl_byte, 0xA2u, NULL);
+	zassert_false(ant_ctrl_is_slot_opener(f.ctrl_byte), NULL);
+	zassert_equal((uint8_t)(f.ctrl_byte & 0x1Fu), 2u,
+		      "0xA2's low five bits read 2, and that is the number a "
+		      "length check would have wanted to be 10");
+
+	zassert_equal(ant_frame_encode(ANT_FRAME_CFG_TRACKING,
+				       ant_net_addr_ant_plus, &f, &w),
+		      ANT_FRAME_OK, "encode rejected a valid slave frame");
+	zassert_equal(w.body[1], 0xA2u, NULL);
+	zassert_equal(ant_frame_to_bytes(&w, flat, sizeof(flat)), 17, NULL);
+
+	zassert_equal(ant_frame_from_bytes(ANT_FRAME_CFG_TRACKING, flat,
+					   sizeof(flat), &w),
+		      17, "the flat parser rejected a valid slave frame");
+	zassert_equal(ant_frame_decode(ANT_FRAME_CFG_TRACKING, &w, 0, &out),
+		      ANT_FRAME_OK, "decode rejected a valid slave frame");
+	zassert_equal(out.ctrl_byte, 0xA2u, NULL);
+	zassert_equal(out.payload_len, 8u, NULL);
+	zassert_mem_equal(out.payload, spike_b_payload, sizeof(spike_b_payload),
+			  NULL);
+
+	/* And the acknowledgement the master answers it with, which is a full
+	 * eight-byte frame of the acknowledger's own broadcast buffer. */
+	zassert_equal(ant_ctrl_reply_for(out.ctrl_byte), 0xF2u, NULL);
+}
+
+/*
+ * Every measured control byte must parse out of flat bytes as a 17-byte frame -
+ * all eleven, not the three part 1 knew. The eight with bit 3 clear are exactly
+ * the ones a length reading of bits 4:0 rejects, and they are also every frame
+ * a slave sends. This test names the wrong answer so it cannot pass by
+ * accident.
+ */
+ZTEST(ant_frame, test_flat_parse_accepts_every_measured_control_byte)
+{
+	uint8_t buf[64];
+
+	for (size_t i = 0; i < ARRAY_SIZE(ctrl_cases); i++) {
+		struct ant_frame_wire w;
+		struct ant_frame f;
+		uint16_t crc;
+
+		memcpy(buf, spike15, sizeof(spike15));
+		buf[6] = ctrl_cases[i].on_air;
+		crc = ant_crc16(ANT_CRC_INIT, buf, 15u);
+		buf[15] = (uint8_t)(crc >> 8);
+		buf[16] = (uint8_t)(crc & 0xFFu);
+
+		zassert_equal(ant_frame_from_bytes(ANT_FRAME_CFG_TRACKING, buf,
+						   sizeof(buf), &w),
+			      17,
+			      "control byte 0x%02X (%s) was not parsed as a "
+			      "17-byte frame; its low five bits read %u, and a "
+			      "parser expecting 10 drops it",
+			      ctrl_cases[i].on_air, ctrl_cases[i].what,
+			      (unsigned int)(ctrl_cases[i].on_air & 0x1Fu));
+		zassert_equal(w.body_len, 10u, NULL);
+		zassert_equal(ant_frame_decode(ANT_FRAME_CFG_TRACKING, &w, 0,
+					       &f), ANT_FRAME_OK, NULL);
+		zassert_equal(f.payload_len, 8u, NULL);
+		zassert_equal(f.ctrl_byte, ctrl_cases[i].on_air, NULL);
+		zassert_mem_equal(f.payload, spike_payload,
+				  sizeof(spike_payload), NULL);
+	}
+}
+
+/* ---------------------------------------------------------------------------
+ * Boundary: a 24-byte payload, and the prediction that is withdrawn
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * THE ADVANCED-BURST CONTROL-BYTE PREDICTION IS WITHDRAWN, NOT RESTATED.
+ *
+ * docs/ant-radio-link.md once predicted 0x1A for a 24-byte advanced-burst
+ * frame. A later pass corrected that to 0x9A, on the reading that bits 4:0
+ * carry payload + 2 with the burst type bits above them. Spike B part 2
+ * falsified the premise: 0x0A's low five bits read 10 and 0xA2's read 2, both
+ * with an eight-byte payload, so bits 4:0 are not a length and there is nothing
+ * to compute a prediction from. Neither 0x1A nor 0x9A is asserted as a control
+ * byte anywhere in this module or this file, and the test that pinned 0x9A was
+ * deleted rather than adjusted - a test asserting a withdrawn prediction is
+ * worse than no test, because it makes the prediction look checked.
+ *
+ * (For the record: the only 0x1A this bench has ever seen appeared twice, in
+ * runs B and C, as a CRC-FAILED frame one bit away from 0x0A. It is a bit
+ * error.)
+ *
+ * What this test asserts is only what is not speculative: the control byte does
+ * not move when the payload length does - which is the positive form of "there
+ * is no length in it" - the module's arithmetic holds at the top of its range,
+ * the coverage invariant still binds the two configurations at 31 bytes, and
+ * NEITHER hardware format claims it can carry the frame.
+ */
+ZTEST(ant_frame, test_long_payload_arithmetic_and_the_format_limit)
+{
+	struct ant_frame f, f8;
 	struct ant_frame_wire wt, ws;
 	uint8_t payload[ANT_FRAME_PAYLOAD_MAX];
 	uint8_t flat_t[64], flat_s[64];
@@ -868,23 +1477,31 @@ ZTEST(ant_frame, test_advanced_burst_length_prediction)
 		payload[i] = (uint8_t)(0x20u + i);
 	}
 
-	zassert_equal(ant_frame_make(&f, &spike_id, payload, sizeof(payload)),
+	zassert_equal(ant_frame_make(&f, &spike_id, &ctrl_burst_open_seq0,
+				     payload, sizeof(payload)),
 		      ANT_FRAME_OK, NULL);
-	zassert_equal(f.len_byte, ANT_FRAME_LEN_ADV_BURST,
-		      "24 payload + 2 CRC should read 0x1A on air");
+	zassert_equal(ant_frame_make(&f8, &spike_id, &ctrl_burst_open_seq0,
+				     payload, 8u),
+		      ANT_FRAME_OK, NULL);
+
+	/*
+	 * THE assertion. Tripling the payload changes nothing in the control
+	 * byte, because no bit of it depends on the payload length. Any
+	 * implementation that still derives a length here fails on this line.
+	 */
+	zassert_equal(f.ctrl_byte, f8.ctrl_byte,
+		      "the control byte moved when the payload length did; "
+		      "bits 4:0 are the slot bit, the sequence bit and 010, not "
+		      "a length");
+	zassert_equal(f.ctrl_byte, 0x8Au,
+		      "a slot-opening burst packet is 0x8A whatever it carries");
+	zassert_equal(ant_frame_msg_type(f.ctrl_byte), ANT_MSG_BURST_DATA, NULL);
 
 	zassert_equal(ant_frame_encode(ANT_FRAME_CFG_TRACKING,
 				       ant_net_addr_ant_plus, &f, &wt),
 		      ANT_FRAME_OK, NULL);
 	zassert_equal(wt.body_len, 26, NULL);
-	zassert_equal(wt.body[1], ANT_FRAME_LEN_ADV_BURST, NULL);
-	/* The bias is still zero: body_len equals the length byte. */
-	zassert_equal(wt.body[1], wt.body_len,
-		      "tracking's length-from-body bias only cancels by "
-		      "accident if it stops holding at 24 payload bytes");
-	zassert_true(wt.body_len <=
-			     ant_frame_format(ANT_FRAME_CFG_TRACKING)->max_body_len,
-		     "the tracking format cannot express the frame it predicts");
+	zassert_equal(wt.body[1], 0x8Au, NULL);
 
 	zassert_equal(ant_frame_encode(ANT_FRAME_CFG_SEARCH,
 				       ant_net_addr_ant_plus, &f, &ws),
@@ -898,12 +1515,25 @@ ZTEST(ant_frame, test_advanced_burst_length_prediction)
 	zassert_equal(ant_frame_to_bytes(&ws, flat_s, sizeof(flat_s)), 33, NULL);
 	zassert_mem_equal(flat_t, flat_s, 33, NULL);
 
-	/* Round-trips in the configuration that can actually carry it. Search
-	 * is fixed at 12 body bytes in hardware, so a long frame is encodable
-	 * for a software consumer but is not receivable in a search window -
-	 * which is what the search format's ANT_LEN_FIXED says. */
-	roundtrip(ANT_FRAME_CFG_TRACKING, &spike_id, payload, sizeof(payload));
+	/* Round-trips as software, in both configurations - the frame layer is
+	 * arithmetic and has no opinion about what a radio can do. */
+	roundtrip(ANT_FRAME_CFG_TRACKING, &spike_id, &ctrl_burst_open_seq0,
+		  payload, sizeof(payload));
+	roundtrip(ANT_FRAME_CFG_SEARCH, &spike_id, &ctrl_burst_open_seq0,
+		  payload, sizeof(payload));
+
+	/* But neither hardware format may claim to carry it. Both are
+	 * static-length at the only payload size ever measured, and a format
+	 * that advertised more would have a backend arming a window for a
+	 * frame nothing transmits. */
+	zassert_equal(ant_frame_format(ANT_FRAME_CFG_TRACKING)->max_body_len, 10,
+		      "tracking is STATLEN=10; a longer frame needs its own "
+		      "format and a measurement to justify it");
 	zassert_equal(ant_frame_format(ANT_FRAME_CFG_SEARCH)->max_body_len, 12,
 		      "search cannot receive a longer-than-standard frame, and "
 		      "the format must keep saying so");
+	zassert_true(wt.body_len >
+			     ant_frame_format(ANT_FRAME_CFG_TRACKING)->max_body_len,
+		     "this test only means something while the encoder can "
+		     "produce a body the hardware format refuses");
 }

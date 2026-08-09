@@ -89,6 +89,15 @@ independent of whether the length byte is a length byte at all, so exactly one
 unknown is resolved at a time. Phase B then re-tests the winner with the real
 length field.
 
+> **"The length byte" above is history, and the answer is in.** Byte 3 is a
+> control byte of six independent fields, and its low bits are not a length:
+> `0x0A` reads 10 there and `0xA2` reads 2, both with an eight-byte payload. See
+> `docs/spike-b-part2-results.md`. Phase B's `CRCINC=1, LFLEN=8` configuration
+> works and is kept in the record because it did — but it is a **broadcast-only
+> receiver**, and `PCNF0 = 0, STATLEN = 10` is the required form for receive and
+> transmit alike. Read this file as the question Spike A asked, not as the
+> answer.
+
 Phase C is what makes the pass criterion non-circular. A 5-byte address match
 proves the device number and device type were on the air, but it cannot *print*
 them - those bytes are consumed by the hardware matcher and never reach RAM.

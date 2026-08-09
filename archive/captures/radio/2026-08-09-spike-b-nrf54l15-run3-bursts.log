@@ -1,0 +1,166 @@
+# Spike B promisc - run 3, burst variants, 2026-08-09, nRF54L15 DK (COM7, 115200) running
+# ant_core/spike/promisc built for nrf54l15dk/nrf54l15/cpuapp.
+#
+# Rig: two boards. The capture board hears; the Adafruit Feather nRF52840
+# already flashed with the shipping dongle firmware (0FCF:1009, serial
+# ...6183) is driven as an ANT+ master by
+# ant_core/spike/promisc/spike_b_drive.py --role master. Zero Feather flashes.
+# Device under test: #14871 (0x3A17), device type 0x0B, transmission type 5,
+# channel period 8182 (4.005 Hz) - the same transmitter Spike A used.
+#
+# Radio: promiscuous, PCNF0=0, BALEN=2 (on-air address A6 C5 17), STATLEN=12,
+# BASE0=BASE1=0xA3650000, eight logical addresses armed (RXADDRESSES=0xFF) with
+# the real devnum_lo at slot 5 and seven decoys.
+#
+# Line format:
+#   P t=<us> dt=<us since this device's previous frame> OK|ER m=<RXMATCH>
+#     rssi=<dBm> dn=<device number> ty=<device type> tt=<transmission type>
+#     B3=<the byte under investigation> pl=<8 payload bytes> crc=<RADIO->RXCRC>
+#     air=<us from the ADDRESS interrupt to the END interrupt>
+#   S <running counters and a histogram of B3 over CRC-valid frames>
+# Payload byte 0 marks what the host asked for: B0 broadcast, A0 acknowledged,
+# C0 burst; byte 1 is that message's sequence number in the host script.
+# Counters in S lines are cumulative since the board booted, so they span every
+# run made without a reflash, not just this one.
+#
+# Only CRC-valid frames from this device are printed, plus CRC-failing frames
+# whose channel ID still reads correctly (there were none). Frames rejected by
+# the CRC are noise through a 3-byte matcher and are counted, not printed.
+#
+# Host sequence: 8 s broadcast, 2 acknowledged messages, then four
+# bursts - 1 block x 8 B, 12 blocks x 8 B, then advanced burst enabled
+# (MESG_CONFIG_ADV_BURST, 24-byte packets) and 1 block x 24 B,
+# 12 blocks x 24 B - then 8 s broadcast.
+# The advanced-burst blocks did NOT reach the air as 24-byte packets:
+# with no peer to negotiate with, the stack fragmented them into 8-byte
+# packets, which is why those frames are CRC-valid at STATLEN=12.
+#
+S t=1558574061 ours=463 foreign=0 longframe=0 crc_ok=463 crc_err=6445 addr=6908 end=6908 dropped=0  B3: 0A=444 8A=3 AA=16
+S t=1573573294 ours=463 foreign=0 longframe=0 crc_ok=463 crc_err=6455 addr=6918 end=6918 dropped=0  B3: 0A=444 8A=3 AA=16
+S t=1588574598 ours=463 foreign=0 longframe=0 crc_ok=463 crc_err=6456 addr=6919 end=6919 dropped=0  B3: 0A=444 8A=3 AA=16
+P t=1593104061 dt=-2088502507 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B0005AA500112233 crc=9226 air=96
+P t=1593353758 dt= +249697 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B0015AA500112233 crc=2A47 air=97
+P t=1593603454 dt= +249696 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B0025AA500112233 crc=F2C5 air=97
+P t=1593853150 dt= +249696 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B0035AA500112233 crc=4AA4 air=97
+P t=1594102863 dt= +249713 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B0045AA500112233 crc=53E0 air=81
+P t=1594352557 dt= +249694 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B0055AA500112233 crc=EB81 air=83
+P t=1594602252 dt= +249695 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B0065AA500112233 crc=3303 air=84
+P t=1594851947 dt= +249695 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B0075AA500112233 crc=8B62 air=85
+P t=1595101642 dt= +249695 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B0085AA500112233 crc=018B air=88
+P t=1595351337 dt= +249695 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B0095AA500112233 crc=B9EA air=87
+P t=1595601031 dt= +249694 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B00A5AA500112233 crc=6168 air=91
+P t=1595850726 dt= +249695 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B00B5AA500112233 crc=D909 air=93
+P t=1596100421 dt= +249695 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B00C5AA500112233 crc=C04D air=94
+P t=1596350116 dt= +249695 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B00D5AA500112233 crc=782C air=96
+P t=1596599811 dt= +249695 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B00E5AA500112233 crc=A0AE air=97
+P t=1596849506 dt= +249695 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B00F5AA500112233 crc=18CF air=112
+P t=1597099204 dt= +249698 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B0105AA500112233 crc=A55D air=97
+P t=1597348900 dt= +249696 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B0115AA500112233 crc=1D3C air=97
+P t=1597598596 dt= +249696 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B0125AA500112233 crc=C5BE air=97
+P t=1597848293 dt= +249697 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B0135AA500112233 crc=7DDF air=97
+P t=1598097990 dt= +249697 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B0145AA500112233 crc=649B air=97
+P t=1598347686 dt= +249696 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B0155AA500112233 crc=DCFA air=97
+P t=1598597382 dt= +249696 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B0165AA500112233 crc=0478 air=97
+P t=1598847078 dt= +249696 OK m=5 rssi=-25 dn=14871 ty=0B tt=5 B3=0A pl=B0175AA500112233 crc=BC19 air=97
+P t=1599096790 dt= +249712 OK m=5 rssi=-28 dn=14871 ty=0B tt=5 B3=0A pl=B0185AA500112233 crc=36F0 air=82
+P t=1599346484 dt= +249694 OK m=5 rssi=-28 dn=14871 ty=0B tt=5 B3=0A pl=B0195AA500112233 crc=8E91 air=84
+P t=1599596179 dt= +249695 OK m=5 rssi=-28 dn=14871 ty=0B tt=5 B3=0A pl=B01A5AA500112233 crc=5613 air=85
+P t=1599845874 dt= +249695 OK m=5 rssi=-28 dn=14871 ty=0B tt=5 B3=0A pl=B01B5AA500112233 crc=EE72 air=87
+P t=1600095569 dt= +249695 OK m=5 rssi=-28 dn=14871 ty=0B tt=5 B3=0A pl=B01C5AA500112233 crc=F736 air=88
+P t=1600345264 dt= +249695 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B01D5AA500112233 crc=4F57 air=90
+P t=1600594958 dt= +249694 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=B01E5AA500112233 crc=97D5 air=92
+P t=1600844653 dt= +249695 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B01F5AA500112233 crc=2FB4 air=94
+P t=1601094345 dt= +249692 OK m=5 rssi=-28 dn=14871 ty=0B tt=5 B3=AA pl=A0005AA500112233 crc=B7DC air=112
+P t=1601344043 dt= +249698 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=A0005AA500112233 crc=AF92 air=97
+P t=1601593739 dt= +249696 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=A0005AA500112233 crc=AF92 air=97
+P t=1601843436 dt= +249697 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=A0005AA500112233 crc=AF92 air=97
+P t=1602093132 dt= +249696 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=A0005AA500112233 crc=AF92 air=97
+P t=1602342829 dt= +249697 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=A0005AA500112233 crc=AF92 air=97
+P t=1602592525 dt= +249696 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=A0005AA500112233 crc=AF92 air=97
+P t=1602842221 dt= +249696 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=A0005AA500112233 crc=AF92 air=97
+P t=1603091918 dt= +249697 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=A0005AA500112233 crc=AF92 air=97
+P t=1603341615 dt= +249697 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=A0005AA500112233 crc=AF92 air=97
+S t=1603573415 ours=505 foreign=0 longframe=0 crc_ok=505 crc_err=6466 addr=6971 end=6971 dropped=0  B3: 0A=485 8A=3 AA=17
+P t=1603591311 dt= +249696 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=AA pl=A0015AA500112233 crc=0FBD air=96
+P t=1603841022 dt= +249711 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=A0015AA500112233 crc=17F3 air=81
+P t=1604090704 dt= +249682 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=A0015AA500112233 crc=17F3 air=97
+P t=1604340411 dt= +249707 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=A0015AA500112233 crc=17F3 air=86
+P t=1604590106 dt= +249695 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=A0015AA500112233 crc=17F3 air=87
+P t=1604839801 dt= +249695 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=A0015AA500112233 crc=17F3 air=89
+P t=1605089496 dt= +249695 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=A0015AA500112233 crc=17F3 air=90
+P t=1605339190 dt= +249694 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=A0015AA500112233 crc=17F3 air=91
+P t=1605588885 dt= +249695 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=A0015AA500112233 crc=17F3 air=94
+P t=1605838580 dt= +249695 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=A0015AA500112233 crc=17F3 air=96
+P t=1606088275 dt= +249695 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=AA pl=C0005AA500112233 crc=3A64 air=97
+P t=1606337971 dt= +249696 OK m=5 rssi=-28 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=107
+P t=1606587668 dt= +249697 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=97
+P t=1606837365 dt= +249697 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=96
+P t=1607087061 dt= +249696 OK m=5 rssi=-28 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=97
+P t=1607336757 dt= +249696 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=112
+P t=1607586454 dt= +249697 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=96
+P t=1607836150 dt= +249696 OK m=5 rssi=-29 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=97
+P t=1608085846 dt= +249696 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=96
+P t=1608335543 dt= +249697 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=8A pl=C0005AA500112233 crc=9D98 air=112
+P t=1608585254 dt= +249711 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=82
+P t=1608834949 dt= +249695 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=84
+P t=1609084643 dt= +249694 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=86
+P t=1609334328 dt= +249685 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=97
+P t=1609584033 dt= +249705 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=88
+P t=1609833728 dt= +249695 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=90
+P t=1610083423 dt= +249695 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=92
+P t=1610333118 dt= +249695 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=93
+P t=1610582813 dt= +249695 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=8A pl=C0005AA500112233 crc=9D98 air=95
+P t=1610832507 dt= +249694 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=97
+P t=1611082204 dt= +249697 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=96
+P t=1611331900 dt= +249696 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=97
+P t=1611581597 dt= +249697 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=96
+P t=1611831293 dt= +249696 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=96
+P t=1612080990 dt= +249697 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=97
+P t=1612330686 dt= +249696 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=97
+P t=1612580383 dt= +249697 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=112
+P t=1612830079 dt= +249696 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=8A pl=C0005AA500112233 crc=9D98 air=97
+P t=1613079791 dt= +249712 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=81
+P t=1613329486 dt= +249695 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=83
+P t=1613579168 dt= +249682 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=96
+P t=1613828876 dt= +249708 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=84
+P t=1614078570 dt= +249694 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=88
+P t=1614328265 dt= +249695 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=89
+P t=1614577953 dt= +249688 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=97
+P t=1614827655 dt= +249702 OK m=5 rssi=-28 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=93
+P t=1615077350 dt= +249695 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=C0005AA500112233 crc=222A air=93
+P t=1615327045 dt= +249695 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=B0215AA500112233 crc=44B1 air=94
+P t=1615576739 dt= +249694 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=B0225AA500112233 crc=9C33 air=97
+P t=1615826436 dt= +249697 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=B0235AA500112233 crc=2452 air=97
+P t=1616076132 dt= +249696 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=B0245AA500112233 crc=3D16 air=97
+P t=1616325829 dt= +249697 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=B0255AA500112233 crc=8577 air=97
+P t=1616575525 dt= +249696 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=B0265AA500112233 crc=5DF5 air=97
+P t=1616825222 dt= +249697 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=B0275AA500112233 crc=E594 air=112
+P t=1617074918 dt= +249696 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=B0285AA500112233 crc=6F7D air=97
+P t=1617324615 dt= +249697 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=B0295AA500112233 crc=D71C air=97
+P t=1617574311 dt= +249696 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=B02A5AA500112233 crc=0F9E air=97
+P t=1617823992 dt= +249681 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=B02B5AA500112233 crc=B7FF air=127
+P t=1618073718 dt= +249726 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=B02C5AA500112233 crc=AEBB air=81
+P t=1618323413 dt= +249695 OK m=5 rssi=-26 dn=14871 ty=0B tt=5 B3=0A pl=B02D5AA500112233 crc=16DA air=84
+P t=1618573108 dt= +249695 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=B02E5AA500112233 crc=CE58 air=85
+S t=1618583756 ours=566 foreign=0 longframe=0 crc_ok=566 crc_err=6475 addr=7041 end=7041 dropped=0  B3: 0A=541 8A=6 AA=19
+P t=1618822803 dt= +249695 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=B02F5AA500112233 crc=7639 air=87
+P t=1619072498 dt= +249695 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=B0305AA500112233 crc=CBAB air=89
+P t=1619322192 dt= +249694 OK m=5 rssi=-27 dn=14871 ty=0B tt=5 B3=0A pl=B0315AA500112233 crc=73CA air=91
+P t=1619571887 dt= +249695 OK m=5 rssi=-28 dn=14871 ty=0B tt=5 B3=0A pl=B0325AA500112233 crc=AB48 air=92
+P t=1619821579 dt= +249692 OK m=5 rssi=-30 dn=14871 ty=0B tt=5 B3=0A pl=B0335AA500112233 crc=1329 air=112
+P t=1620071277 dt= +249698 OK m=5 rssi=-31 dn=14871 ty=0B tt=5 B3=0A pl=B0345AA500112233 crc=0A6D air=95
+P t=1620320972 dt= +249695 OK m=5 rssi=-32 dn=14871 ty=0B tt=5 B3=0A pl=B0355AA500112233 crc=B20C air=97
+P t=1620570668 dt= +249696 OK m=5 rssi=-31 dn=14871 ty=0B tt=5 B3=0A pl=B0365AA500112233 crc=6A8E air=97
+P t=1620820365 dt= +249697 OK m=5 rssi=-31 dn=14871 ty=0B tt=5 B3=0A pl=B0375AA500112233 crc=D2EF air=112
+P t=1621070061 dt= +249696 OK m=5 rssi=-31 dn=14871 ty=0B tt=5 B3=0A pl=B0385AA500112233 crc=5806 air=96
+P t=1621319757 dt= +249696 OK m=5 rssi=-32 dn=14871 ty=0B tt=5 B3=0A pl=B0395AA500112233 crc=E067 air=97
+P t=1621569454 dt= +249697 OK m=5 rssi=-31 dn=14871 ty=0B tt=5 B3=0A pl=B03A5AA500112233 crc=38E5 air=96
+P t=1621819150 dt= +249696 OK m=5 rssi=-31 dn=14871 ty=0B tt=5 B3=0A pl=B03B5AA500112233 crc=8084 air=97
+P t=1622068847 dt= +249697 OK m=5 rssi=-31 dn=14871 ty=0B tt=5 B3=0A pl=B03C5AA500112233 crc=99C0 air=97
+P t=1622318543 dt= +249696 OK m=5 rssi=-31 dn=14871 ty=0B tt=5 B3=0A pl=B03D5AA500112233 crc=21A1 air=96
+P t=1622568256 dt= +249713 OK m=5 rssi=-31 dn=14871 ty=0B tt=5 B3=0A pl=B03E5AA500112233 crc=F923 air=81
+P t=1622817936 dt= +249680 OK m=5 rssi=-31 dn=14871 ty=0B tt=5 B3=0A pl=B03F5AA500112233 crc=4142 air=97
+P t=1623067645 dt= +249709 OK m=5 rssi=-31 dn=14871 ty=0B tt=5 B3=0A pl=B0405AA500112233 crc=4FCA air=85
+S t=1633575142 ours=584 foreign=0 longframe=0 crc_ok=584 crc_err=6483 addr=7067 end=7067 dropped=0  B3: 0A=559 8A=6 AA=19
+S t=1648574371 ours=584 foreign=0 longframe=0 crc_ok=584 crc_err=6489 addr=7073 end=7073 dropped=0  B3: 0A=559 8A=6 AA=19
+S t=1663573601 ours=584 foreign=0 longframe=0 crc_ok=584 crc_err=6496 addr=7080 end=7080 dropped=0  B3: 0A=559 8A=6 AA=19

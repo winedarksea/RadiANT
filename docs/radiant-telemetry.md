@@ -378,6 +378,17 @@ exceptions, both noted in the table, both because every other system in the
 chain (ANT+, BLE, Matter) already uses the non-SI unit and converting twice
 would only create rounding.
 
+**SI is the contract; Matter is an alignment.** A field type owes the vocabulary
+a canonical unit and a scale — that is what makes it a field type. Where a
+quantity also has an obvious Matter cluster and attribute the table names it, and
+`f_type` is the conversion between them; where it does not the column reads `—`,
+the type is a first-class member of the vocabulary regardless, and a bridge drops
+the field rather than inventing a mapping. Matter has no heart-rate quantity, and
+the motivating case in section 1 is a heart-rate strap: a vocabulary admitting
+only bridgeable quantities would have excluded its own headline example. The
+bridge itself runs host-side either way and is still future work — section 2,
+rule 3.
+
 ### Class 0x00-0x0F — boolean and state
 
 | Type | Quantity | Canonical unit | Matter cluster / attribute | ZCL |
