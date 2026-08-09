@@ -42,12 +42,19 @@ target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fake_radio.c")
 # and means the K3 header is on the search path the moment it lands.
 target_include_directories(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../include")
 
+# This directory too, so a suite writes #include "fake_radio.h" rather than
+# #include "../fake_radio.h". Suites live in src/ and the mock does not, so
+# without this every suite author gets the relative path wrong exactly once.
+target_include_directories(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+
 # Core module sources are added here as they are written, one line per module
 # (ant_frame.c, ant_sched.c, ant_channel.c, ant_search.c, ant_event.c,
 # ant_api.c, ant_ack.c, ant_burst.c). They are listed explicitly rather than
 # globbed, because a suite that silently stops linking the module it tests
 # still passes, and an explicit list makes that a merge conflict instead.
-set(ant_core_sources)
+set(ant_core_sources
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/ant_frame.c"
+)
 if(ant_core_sources)
   target_sources(app PRIVATE ${ant_core_sources})
 endif()
