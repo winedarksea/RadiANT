@@ -1,0 +1,280 @@
+# Spike A rx_raw - run 1, 2026-08-09, nRF54L15 DK (COM7), transmitter = Feather
+# running tools/ant_sim.py --profile power (device #14871, type 0x0B, trans 5).
+# Firmware: first revision. Its phase C/E variants swept prefix position rather
+# than the base-truncation axis, which is why both phases fail here; the axis
+# that matters only exists once BALEN < 4. Kept because the failure is the
+# reason run 2 exists. Phase A, B and D-tracking results are unaffected.
+#
+[00:55:42.487,862] [0m<inf> ant_bpwr: B-PWR tx page:                              16[0m
+[00:55:42.487,876] [0m<inf> ant_bpwr[res] P1 rev,msb-first,pfx-last  end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] P2 raw,lsb-first,pfx-last  addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x3A17C5A6 PREFIX0=0x0B PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P2 raw,lsb-first,pfx-last  end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] P3 raw,msb-first,pfx-last  addr=A6 C5 17 3A 0B BALEN=4 BASE0=0xA6C5173A PREFIX0=0x0B PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P3 raw,msb-first,pfx-last  end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] P4 rev,lsb-first,pfx-1st   addr=A6 C5 17 3A 0B BALEN=4 BASE0=0xD05CE8A3 PREFIX0=0x65 PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P4 rev,lsb-first,pfx-1st   end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] P5 rev,msb-first,pfx-1st   addr=A6 C5 17 3A 0B BALEN=4 BASE0=0xA3E85CD0 PREFIX0=0x65 PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P5 rev,msb-first,pfx-1st   end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] P6 raw,lsb-first,pfx-1st   addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x0B3A17C5 PREFIX0=0xA6 PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P6 raw,lsb-first,pfx-1st   end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] P7 raw,msb-first,pfx-1st   addr=A6 C5 17 3A 0B BALEN=4 BASE0=0xC5173A0B PREFIX0=0xA6 PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P7 raw,msb-first,pfx-1st   end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+phase A winner: P0 rev,lsb-first,pfx-last (24 CRC-valid in 6000 ms)
+--- phase B: length-field configuration ---
+[cfg] L0 CRCINC=1 LFLEN=8        addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x5CE8A365 PREFIX0=0xD0 PCNF0=0x04000108 PCNF1=0x0104003C
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 E7 FF 4F 46 5A 62 00 65 46
+      rxcrc=0x6546 sw_crc=0x6546 match  recompute_over_17=0x0000 zero
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 E8 FF 51 A8 5A 62 00 02 ED
+      rxcrc=0x02ED sw_crc=0x02ED match  recompute_over_17=0x0000 zero
+[res] L0 CRCINC=1 LFLEN=8        end=40 crc_ok=40 crc_err=0 id_ok=40 sw_crc_ok=40 zero_ok=40 rssi_avg=-17dBm
+phase B: CRCINC path WORKS - the mapping stands as written
+[cfg] L1 PCNF0=0 STATLEN=10      addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x5CE8A365 PREFIX0=0xD0 PCNF0=0x00000000 PCNF1=0x01040A3C
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 0F FF 51 E9 69 64 00 2D 31
+      rxcrc=0x2D31 sw_crc=0x2D31 match  recompute_over_17=0x0000 zero
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 10 FF 51 4E 6A 65 00 41 99
+      rxcrc=0x4199 sw_crc=0x4199 match  recompute_over_17=0x0000 zero
+[res] L1 PCNF0=0 STATLEN=10      end=40 crc_ok=40 crc_err=0 id_ok=40 sw_crc_ok=40 zero_ok=40 rssi_avg=-17dBm
+--- phase C: search configuration (3-byte address, STATLEN=12) ---
+[cfg] S0 msb-first,pfx-last      addr=A6 C5 17 BALEN=2 BASE0=0x65A30000 PREFIX0=0xE8 PCNF0=0x00000000 PCNF1=0x01020C3C
+[res] S0 msb-first,pfx-last      end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] S1 lsb-first,pfx-last      addr=A6 C5 17 BALEN=2 BASE0=0x0000A365 PREFIX0=0xE8 PCNF0=0x00000000 PCNF1=0x01020C3C
+  PKT crc=ERR rxmatch=0 rssi=-85dBm len=0x19 dev=61463 type=0xEF trans=44
+      raw18 55 A6 C5 17 F0 EF 2C 19 A9 D6 62 F9 60 EF 2C 90 0D D0
+      rxcrc=0x0DD0 sw_crc=0x9358 MISMATCH  recompute_over_17=0x2B64 NONZERO
+  PKT crc=ERR rxmatch=0 rssi=-88dBm len=0x5B dev=64023 type=0xF7 trans=182
+      raw18 55 A6 C5 17 FA F7 B6 5B CD 6E 6B AD 7F AE BD 99 53 53
+      rxcrc=0x5353 sw_crc=0x6C89 MISMATCH  recompute_over_17=0x7F9C NONZERO
+[res] S1 lsb-first,pfx-last      end=20 crc_ok=0 crc_err=20 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] S2 msb-first,pfx-1st       addr=A6 C5 17 BALEN=2 BASE0=0xA3E80000 PREFIX0=0x65 PCNF0=0x00000000 PCNF1=0x01020C3C
+  PKT crc=ERR rxmatch=0 rssi=-90dBm len=0x7C dev=44823 type=0x6F trans=52
+      raw18 55 A6 C5 17 AF 6F 34 7C 64 69 59 2F 2F DA B6 79 DB 59
+      rxcrc=0xDB59 sw_crc=0x8ED4 MISMATCH  recompute_over_17=0xB16F NONZERO
+[res] S2 msb-first,pfx-1st       end=1 crc_ok=0 crc_err=1 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] S3 lsb-first,pfx-1st       addr=A6 C5 17 BALEN=2 BASE0=0x0000E8A3 PREFIX0=0x65 PCNF0=0x00000000 PCNF1=0x01020C3C
+  PKT crc=ERR rxmatch=0 rssi=-17dBm len=0x0B dev=50455 type=0x17 trans=58
+      raw18 55 A6 C5 17 C5 17 3A 0B 05 0A 10 84 FF 50 A3 97 63 00
+      rxcrc=0x6300 sw_crc=0xEB8A MISMATCH  recompute_over_17=0xA2F3 NONZERO
+  PKT crc=ERR rxmatch=0 rssi=-17dBm len=0x0B dev=50455 type=0x17 trans=58
+      raw18 55 A6 C5 17 C5 17 3A 0B 05 0A 10 86 FF 4F 69 98 65 00
+      rxcrc=0x6500 sw_crc=0xC82B MISMATCH  recompute_over_17=0xFE2B NONZERO
+[res] S3 lsb-first,pfx-1st       end=4 crc_ok=0 crc_err=4 id_ok=0 sw_crc_ok=0 zero_ok=0
+--- phase D: 60 s measurement ---
+[cfg] D-tracking                 addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x5CE8A365 PREFIX0=0xD0 PCNF0=0x04000108 PCNF1=0x0104003C
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 97 FF 50 13 9F 67 00 7B 08
+      rxcrc=0x7B08 sw_crc=0x7B08 match  recompute_over_17=0x0000 zero
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 98 FF 4E 75 9F 62 00 BB AD
+      rxcrc=0xBBAD sw_crc=0xBBAD match  recompute_over_17=0x0000 zero
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 99 FF 50 DA 9F 65 00 6F 31
+      rxcrc=0x6F31 sw_crc=0x6F31 match  recompute_over_17=0x0000 zero
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 9A FF 4E 40 A0 66 00 6E B2
+      rxcrc=0x6EB2 sw_crc=0x6EB2 match  recompute_over_17=0x0000 zero
+[res] D-tracking                 end=241 crc_ok=241 crc_err=0 id_ok=241 sw_crc_ok=241 zero_ok=241 rssi_avg=-17dBm
+phase D tracking: 241 CRC-valid frames in 60 s (pass needs >= 50)
+phase D search: skipped, no search variant heard anything
+--- phase E: preamble-as-address (BALEN=2, [55 A6 C5], CRCINIT=0x233E) ---
+[cfg] E-preamble-as-address      addr=55 A6 C5 BALEN=2 BASE0=0xAA650000 PREFIX0=0xA3 PCNF0=0x00000000 PCNF1=0x01020D3C
+  PKT crc=ERR rxmatch=0 rssi=-87dBm len=0xFE dev=54971 type=0x4F trans=154
+      raw18 55 A6 C5 BB D6 4F 9A FE AD 73 DD EE AE D0 AD FD BA C7
+      rxcrc=0xBAC7 sw_crc=0x0C29 MISMATCH  recompute_over_17=0xA84B NONZERO
+  PKT crc=ERR rxmatch=0 rssi=-98dBm len=0x12 dev=18868 type=0xE1 trans=195
+      raw18 55 A6 C5 B4 49 E1 C3 12 A1 22 EA 8F 77 56 B5 69 A7 10
+      rxcrc=0xA710 sw_crc=0x8EAE MISMATCH  recompute_over_17=0xFA6B NONZERO
+  PKT crc=ERR rxmatch=0 rssi=-101dBm len=0x47 dev=53578 type=0x4B trans=144
+      raw18 55 A6 C5 4A D1 4B 90 47 35 2A 2E 65 84 DC 6C 11 32 14
+      rxcrc=0x3214 sw_crc=0x64C3 MISMATCH  recompute_over_17=0x1F83 NONZERO
+[res] E-preamble-as-address      end=3 crc_ok=0 crc_err=3 id_ok=0 sw_crc_ok=0 zero_ok=0
+phase E: 0 CRC-valid frames in 60 s, 0 with a matching channel ID
+########## cycle 2 ##########
+--- phase A: address bit/byte order sweep (5-byte address, static 10-byte body, 6000 ms each) ---
+[cfg] P0 rev,lsb-first,pfx-last  addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x5CE8A365 PREFIX0=0xD0 PCNF0=0x00000000 PCNF1=0x01040A3C
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 78 FF 50 DD 5A 62 00 CA 0E
+      rxcrc=0xCA0E sw_crc=0xCA0E match  recompute_over_17=0x0000 zero
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 79 FF 4E 42 5B 65 00 05 4B
+      rxcrc=0x054B sw_crc=0x054B match  recompute_over_17=0x0000 zero
+[res] P0 rev,lsb-first,pfx-last  end=24 crc_ok=24 crc_err=0 id_ok=24 sw_crc_ok=24 zero_ok=24 rssi_avg=-17dBm
+[cfg] P1 rev,msb-first,pfx-last  addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x65A3E85C PREFIX0=0xD0 PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P1 rev,msb-first,pfx-last  end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] P2 raw,lsb-first,pfx-last  addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x3A17C5A6 PREFIX0=0x0B PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P2 raw,lsb-first,pfx-last  end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] P3 raw,msb-first,pfx-last  addr=A6 C5 17 3A 0B BALEN=4 BASE0=0xA6C5173A PREFIX0=0x0B PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P3 raw,msb-first,pfx-last  end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] P4 rev,lsb-first,pfx-1st   addr=A6 C5 17 3A 0B BALEN=4 BASE0=0xD05CE8A3 PREFIX0=0x65 PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P4 rev,lsb-first,pfx-1st   end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] P5 rev,msb-first,pfx-1st   addr=A6 C5 17 3A 0B BALEN=4 BASE0=0xA3E85CD0 PREFIX0=0x65 PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P5 rev,msb-first,pfx-1st   end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] P6 raw,lsb-first,pfx-1st   addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x0B3A17C5 PREFIX0=0xA6 PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P6 raw,lsb-first,pfx-1st   end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] P7 raw,msb-first,pfx-1st   addr=A6 C5 17 3A 0B BALEN=4 BASE0=0xC5173A0B PREFIX0=0xA6 PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P7 raw,msb-first,pfx-1st   end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+phase A winner: P0 rev,lsb-first,pfx-last (24 CRC-valid in 6000 ms)
+--- phase B: length-field configuration ---
+[cfg] L0 CRCINC=1 LFLEN=8        addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x5CE8A365 PREFIX0=0xD0 PCNF0=0x04000108 PCNF1=0x0104003C
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 39 FF 52 46 A6 66 00 69 77
+      rxcrc=0x6977 sw_crc=0x6977 match  recompute_over_17=0x0000 zero
+  PKT crc=OK  rxmatch=0 rssi=-18dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 3A FF 4E AC A6 66 00 D2 C5
+      rxcrc=0xD2C5 sw_crc=0xD2C5 match  recompute_over_17=0x0000 zero
+[res] L0 CRCINC=1 LFLEN=8        end=40 crc_ok=40 crc_err=0 id_ok=40 sw_crc_ok=40 zero_ok=40 rssi_avg=-17dBm
+phase B: CRCINC path WORKS - the mapping stands as written
+[cfg] L1 PCNF0=0 STATLEN=10      addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x5CE8A365 PREFIX0=0xD0 PCNF0=0x00000000 PCNF1=0x01040A3C
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 61 FF 51 E3 B5 62 00 7E 5B
+      rxcrc=0x7E5B sw_crc=0x7E5B match  recompute_over_17=0x0000 zero
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 62 FF 50 45 B6 62 00 98 37
+      rxcrc=0x9837 sw_crc=0x9837 match  recompute_over_17=0x0000 zero
+[res] L1 PCNF0=0 STATLEN=10      end=40 crc_ok=40 crc_err=0 id_ok=40 sw_crc_ok=40 zero_ok=40 rssi_avg=-17dBm
+--- phase C: search configuration (3-byte address, STATLEN=12) ---
+[cfg] S0 msb-first,pfx-last      addr=A6 C5 17 BALEN=2 BASE0=0x65A30000 PREFIX0=0xE8 PCNF0=0x00000000 PCNF1=0x01020C3C
+[res] S0 msb-first,pfx-last      end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] S1 lsb-first,pfx-last      addr=A6 C5 17 BALEN=2 BASE0=0x0000A365 PREFIX0=0xE8 PCNF0=0x00000000 PCNF1=0x01020C3C
+  PKT crc=ERR rxmatch=0 rssi=-86dBm len=0x83 dev=49687 type=0xA7 trans=61
+      raw18 55 A6 C5 17 C2 A7 3D 83 B8 6B 82 2A B3 D7 30 0C C4 44
+      rxcrc=0xC444 sw_crc=0xB9FF MISMATCH  recompute_over_17=0x68B5 NONZERO
+  PKT crc=ERR rxmatch=0 rssi=-76dBm len=0xF8 dev=61463 type=0xEF trans=17
+      raw18 55 A6 C5 17 F0 EF 11 F8 DC 7F 06 37 50 A3 69 20 D0 04
+      rxcrc=0xD004 sw_crc=0xB853 MISMATCH  recompute_over_17=0xA891 NONZERO
+[res] S1 lsb-first,pfx-last      end=18 crc_ok=0 crc_err=18 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] S2 msb-first,pfx-1st       addr=A6 C5 17 BALEN=2 BASE0=0xA3E80000 PREFIX0=0x65 PCNF0=0x00000000 PCNF1=0x01020C3C
+[res] S2 msb-first,pfx-1st       end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] S3 lsb-first,pfx-1st       addr=A6 C5 17 BALEN=2 BASE0=0x0000E8A3 PREFIX0=0x65 PCNF0=0x00000000 PCNF1=0x01020C3C
+  PKT crc=ERR rxmatch=0 rssi=-17dBm len=0x0B dev=50455 type=0x17 trans=58
+      raw18 55 A6 C5 17 C5 17 3A 0B 05 0A 10 D2 FF 4F 10 E2 65 00
+      rxcrc=0x6500 sw_crc=0x3903 MISMATCH  recompute_over_17=0x7BB1 NONZERO
+  PKT crc=ERR rxmatch=0 rssi=-101dBm len=0x15 dev=30743 type=0x8A trans=253
+      raw18 55 A6 C5 17 78 8A FD 15 75 A6 08 E2 D7 AF AA 49 ED 6C
+      rxcrc=0xED6C sw_crc=0x59AA MISMATCH  recompute_over_17=0x6B43 NONZERO
+[res] S3 lsb-first,pfx-1st       end=9 crc_ok=0 crc_err=9 id_ok=0 sw_crc_ok=0 zero_ok=0
+--- phase D: 60 s measurement ---
+[cfg] D-tracking                 addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x5CE8A365 PREFIX0=0xD0 PCNF0=0x04000108 PCNF1=0x0104003C
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 EA FF 4F 65 EB 63 00 D9 20
+      rxcrc=0xD920 sw_crc=0xD920 match  recompute_over_17=0x0000 zero
+  PKT crc=OK  rxmatch=0 rssi=-18dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 EB FF 4D C8 EB 63 00 F6 32
+      rxcrc=0xF632 sw_crc=0xF632 match  recompute_over_17=0x0000 zero
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 EC FF 52 29 EC 61 00 9F 79
+      rxcrc=0x9F79 sw_crc=0x9F79 match  recompute_over_17=0x0000 zero
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 ED FF 4D 90 EC 67 00 EE BB
+      rxcrc=0xEEBB sw_crc=0xEEBB match  recompute_over_17=0x0000 zero
+[res] D-tracking                 end=240 crc_ok=240 crc_err=0 id_ok=240 sw_crc_ok=240 zero_ok=240 rssi_avg=-17dBm
+phase D tracking: 240 CRC-valid frames in 60 s (pass needs >= 50)
+phase D search: skipped, no search variant heard anything
+--- phase E: preamble-as-address (BALEN=2, [55 A6 C5], CRCINIT=0x233E) ---
+[cfg] E-preamble-as-address      addr=55 A6 C5 BALEN=2 BASE0=0xAA650000 PREFIX0=0xA3 PCNF0=0x00000000 PCNF1=0x01020D3C
+  PKT crc=ERR rxmatch=0 rssi=-87dBm len=0x81 dev=28651 type=0x20 trans=234
+      raw18 55 A6 C5 EB 6F 20 EA 81 6D DD 11 BA 51 E6 0B EA C6 52
+      rxcrc=0xC652 sw_crc=0x1ECA MISMATCH  recompute_over_17=0x9E3F NONZERO
+  PKT crc=ERR rxmatch=0 rssi=-67dBm len=0xDD dev=7460 type=0x62 trans=0
+      raw18 55 A6 C5 24 1D 62 00 DD D2 09 DB 82 98 77 4A 1A ED 3F
+      rxcrc=0xED3F sw_crc=0xDEFF MISMATCH  recompute_over_17=0x898A NONZERO
+  PKT crc=ERR rxmatch=0 rssi=-103dBm len=0x69 dev=60251 type=0xEF trans=254
+      raw18 55 A6 C5 5B EB EF FE 69 6D 51 EF 72 66 EA 6C D6 B5 F4
+      rxcrc=0xB5F4 sw_crc=0x929B MISMATCH  recompute_over_17=0x0238 NONZERO
+[res] E-preamble-as-address      end=3 crc_ok=0 crc_err=3 id_ok=0 sw_crc_ok=0 zero_ok=0
+phase E: 0 CRC-valid frames in 60 s, 0 with a matching channel ID
+########## cycle 3 ##########
+--- phase A: address bit/byte order sweep (5-byte address, static 10-byte body, 6000 ms each) ---
+[cfg] P0 rev,lsb-first,pfx-last  addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x5CE8A365 PREFIX0=0xD0 PCNF0=0x00000000 PCNF1=0x01040A3C
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 CB FF 50 75 A7 66 00 E2 8A
+      rxcrc=0xE28A sw_crc=0xE28A match  recompute_over_17=0x0000 zero
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 CC FF 53 DB A7 66 00 5D 30
+      rxcrc=0x5D30 sw_crc=0x5D30 match  recompute_over_17=0x0000 zero
+[res] P0 rev,lsb-first,pfx-last  end=24 crc_ok=24 crc_err=0 id_ok=24 sw_crc_ok=24 zero_ok=24 rssi_avg=-17dBm
+[cfg] P1 rev,msb-first,pfx-last  addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x65A3E85C PREFIX0=0xD0 PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P1 rev,msb-first,pfx-last  end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] P2 raw,lsb-first,pfx-last  addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x3A17C5A6 PREFIX0=0x0B PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P2 raw,lsb-first,pfx-last  end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] P3 raw,msb-first,pfx-last  addr=A6 C5 17 3A 0B BALEN=4 BASE0=0xA6C5173A PREFIX0=0x0B PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P3 raw,msb-first,pfx-last  end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] P4 rev,lsb-first,pfx-1st   addr=A6 C5 17 3A 0B BALEN=4 BASE0=0xD05CE8A3 PREFIX0=0x65 PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P4 rev,lsb-first,pfx-1st   end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] P5 rev,msb-first,pfx-1st   addr=A6 C5 17 3A 0B BALEN=4 BASE0=0xA3E85CD0 PREFIX0=0x65 PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P5 rev,msb-first,pfx-1st   end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] P6 raw,lsb-first,pfx-1st   addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x0B3A17C5 PREFIX0=0xA6 PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P6 raw,lsb-first,pfx-1st   end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] P7 raw,msb-first,pfx-1st   addr=A6 C5 17 3A 0B BALEN=4 BASE0=0xC5173A0B PREFIX0=0xA6 PCNF0=0x00000000 PCNF1=0x01040A3C
+[res] P7 raw,msb-first,pfx-1st   end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+phase A winner: P0 rev,lsb-first,pfx-last (24 CRC-valid in 6000 ms)
+--- phase B: length-field configuration ---
+[cfg] L0 CRCINC=1 LFLEN=8        addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x5CE8A365 PREFIX0=0xD0 PCNF0=0x04000108 PCNF1=0x0104003C
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 8B FF 4D 81 F2 65 00 AF 97
+      rxcrc=0xAF97 sw_crc=0xAF97 match  recompute_over_17=0x0000 zero
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 8C FF 52 E5 F2 64 00 77 62
+      rxcrc=0x7762 sw_crc=0x7762 match  recompute_over_17=0x0000 zero
+[res] L0 CRCINC=1 LFLEN=8        end=40 crc_ok=40 crc_err=0 id_ok=40 sw_crc_ok=40 zero_ok=40 rssi_avg=-17dBm
+phase B: CRCINC path WORKS - the mapping stands as written
+[cfg] L1 PCNF0=0 STATLEN=10      addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x5CE8A365 PREFIX0=0xD0 PCNF0=0x00000000 PCNF1=0x01040A3C
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 B4 FF 4E 85 02 65 00 BB 82
+      rxcrc=0xBB82 sw_crc=0xBB82 match  recompute_over_17=0x0000 zero
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 B5 FF 51 E6 02 61 00 6C 8A
+      rxcrc=0x6C8A sw_crc=0x6C8A match  recompute_over_17=0x0000 zero
+[res] L1 PCNF0=0 STATLEN=10      end=40 crc_ok=40 crc_err=0 id_ok=40 sw_crc_ok=40 zero_ok=40 rssi_avg=-17dBm
+--- phase C: search configuration (3-byte address, STATLEN=12) ---
+[cfg] S0 msb-first,pfx-last      addr=A6 C5 17 BALEN=2 BASE0=0x65A30000 PREFIX0=0xE8 PCNF0=0x00000000 PCNF1=0x01020C3C
+[res] S0 msb-first,pfx-last      end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] S1 lsb-first,pfx-last      addr=A6 C5 17 BALEN=2 BASE0=0x0000A365 PREFIX0=0xE8 PCNF0=0x00000000 PCNF1=0x01020C3C
+  PKT crc=ERR rxmatch=0 rssi=-90dBm len=0x99 dev=53783 type=0x9B trans=99
+      raw18 55 A6 C5 17 D2 9B 63 99 46 F3 A7 45 3E 61 9A 9F BF C3
+      rxcrc=0xBFC3 sw_crc=0xDE2E MISMATCH  recompute_over_17=0x1498 NONZERO
+  PKT crc=ERR rxmatch=0 rssi=-89dBm len=0x6D dev=32535 type=0xB1 trans=182
+      raw18 55 A6 C5 17 7F B1 B6 6D 7E 55 FD A5 6A DC BC BF FB 6E
+      rxcrc=0xFB6E sw_crc=0x95DF MISMATCH  recompute_over_17=0x9FDF NONZERO
+[res] S1 lsb-first,pfx-last      end=11 crc_ok=0 crc_err=11 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] S2 msb-first,pfx-1st       addr=A6 C5 17 BALEN=2 BASE0=0xA3E80000 PREFIX0=0x65 PCNF0=0x00000000 PCNF1=0x01020C3C
+[res] S2 msb-first,pfx-1st       end=0 crc_ok=0 crc_err=0 id_ok=0 sw_crc_ok=0 zero_ok=0
+[cfg] S3 lsb-first,pfx-1st       addr=A6 C5 17 BALEN=2 BASE0=0x0000E8A3 PREFIX0=0x65 PCNF0=0x00000000 PCNF1=0x01020C3C
+  PKT crc=ERR rxmatch=0 rssi=-17dBm len=0x0B dev=50455 type=0x17 trans=58
+      raw18 55 A6 C5 17 C5 17 3A 0B 05 0A 10 24 FF 52 75 2E 65 00
+      rxcrc=0x6500 sw_crc=0x26FD MISMATCH  recompute_over_17=0x662D NONZERO
+  PKT crc=ERR rxmatch=0 rssi=-17dBm len=0x0B dev=50455 type=0x17 trans=58
+      raw18 55 A6 C5 17 C5 17 3A 0B 05 0A 10 25 FF 50 D8 2E 63 00
+      rxcrc=0x6300 sw_crc=0x89EE MISMATCH  recompute_over_17=0xE399 NONZERO
+[res] S3 lsb-first,pfx-1st       end=8 crc_ok=0 crc_err=8 id_ok=0 sw_crc_ok=0 zero_ok=0
+--- phase D: 60 s measurement ---
+[cfg] D-tracking                 addr=A6 C5 17 3A 0B BALEN=4 BASE0=0x5CE8A365 PREFIX0=0xD0 PCNF0=0x04000108 PCNF1=0x0104003C
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 3C FF 50 DA 37 66 00 92 F7
+      rxcrc=0x92F7 sw_crc=0x92F7 match  recompute_over_17=0x0000 zero
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 3D FF 4F 3B 38 61 00 0C CD
+      rxcrc=0x0CCD sw_crc=0x0CCD match  recompute_over_17=0x0000 zero
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 3E FF 50 A0 38 65 00 A1 A8
+      rxcrc=0xA1A8 sw_crc=0xA1A8 match  recompute_over_17=0x0000 zero
+  PKT crc=OK  rxmatch=0 rssi=-17dBm len=0x0A dev=14871 type=0x0B trans=5
+      raw18 55 A6 C5 17 3A 0B 05 0A 10 3F FF 4F 01 39 61 00 1F 5C
+      rxcrc=0x1F5C sw_crc=0x1F5C match  recompute_over_17=0x0000 zero
+[res] D-tracking                 end=240 crc_ok=240 crc_err=0 id_ok=240 sw_crc_ok=240 zero_ok=240 rssi_avg=-17dBm
+phase D tracking: 240 CRC-valid frames in 60 s (pass needs >= 50)
+phase D search: skipped, no search variant heard anything
+--- phase E: preamble-as-address (BALEN=2, [55 A6 C5], CRCINIT=0x233E) ---
+[cfg] E-preamble-as-address      addr=55 A6 C5 BALEN=2 BASE0=0xAA650000 PREFIX0=0xA3 PCNF0=0x00000000 PCNF1=0x01020D3C
+  PKT crc=ERR rxmatch=0 rssi=-101dBm len=0x0D dev=41564 type=0x48 trans=98
+      raw18 55 A6 C5 5C A2 48 62 0D 45 A8 94 85 63 C9 A9 52 B5 D9
+      rxcrc=0xB5D9 sw_crc=0x8051 MISMATCH  recompute_over_17=0xEAE0 NONZERO
+  PKT crc=ERR rxmatch=0 rssi=-90dBm len=0xAF dev=38520 type=0xB9 trans=213
+      raw18 55 A6 C5 78 96 B9 D5 AF E7 F6 76 CE 9F 53 C4 35 DF FD
+      rxcrc=0xDFFD sw_crc=0xBFB2 MISMATCH  recompute_over_17=0xB201 NONZERO
+  PKT crc=ERR rxmatch=0 rssi=-100dBm len=0xBC dev=18688 type=0x55 trans=98
+      raw18 55 A6 C5 00 49 55 62 BC C6 09 28 75 11 21 62 40 A1 04
+      rxcrc=0xA104 sw_crc=0xC249 MISMATCH  recompute_over_17=0xC710 NONZERO
