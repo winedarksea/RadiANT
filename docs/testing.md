@@ -59,10 +59,40 @@ the only job in the workflow that runs on a fork. It exists because
 accumulator-wrap mistake in any of them otherwise costs two boards and a flash
 cycle to find.
 
-C unit tests are a different story: `native_sim` does not build on Windows —
-no host C compiler, no QEMU — so `west twister` cannot run locally and every
-ztest in `radiant_core/tests/` executes only in CI on Linux. Local C verification
-is compile-check plus these Python tools.
+C unit tests used to be a different story: `native_sim` does not build on
+Windows — no host C compiler, no QEMU — so `west twister` cannot run locally,
+and that was taken to mean the ztests in `radiant_core/tests/` execute only in
+CI on Linux.
+
+**That inference was wrong, and it cost the suite its first run.** The suites
+touch no hardware at all: they drive the module against `tests/fake_radio.c`, a
+mock HAL with a virtual clock. The board is not the thing under test — it is
+merely a C runtime with a UART, and an attached DK is one that is available now.
+
+```powershell
+. .\scripts\env.ps1 -NcsVersion v3.2.4
+.\scripts\run_ztest_hw.ps1
+```
+
+builds the test application for the nRF5340 DK, flashes it over J-Link, and
+parses ztest's console output. A full run is about 40 seconds end to end, most
+of it flash erase.
+
+This does not replace the CI job and is not meant to. `twister` runs
+`native_sim` at **32 bits**, which is the width that catches the struct-packing
+and size assumptions a 64-bit host would hide; the DK runs at the real target
+width instead. Two different checks — and this is the one you can have before
+you push.
+
+What it found the first time it ran, which is the argument for it: seven suites
+green, and `transfer` at 6 of 16. Ten of those failures were one cause — the
+suite registered its own radio callbacks, but the transfer engine had been
+redirected to post to `radiant_sched.c`, so nothing was ever armed. The
+eleventh was real and in the test rather than the module: an assertion named
+`RADIANT_CTRL_ACK_LAST_SEQ0` (`0xE2`) while its own comment said `0xF2`, and
+`0xF2` — the complemented sequence bit, the third of the three silent failure
+modes that file exists to catch — is what the engine had correctly emitted all
+along.
 
 ### The one secret, and why it cannot be avoided
 

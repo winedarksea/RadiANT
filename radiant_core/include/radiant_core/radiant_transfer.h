@@ -807,11 +807,23 @@ int radiant_transfer_reply_retransmit(struct radiant_transfer *t, radiant_time_t
 /* ---------------------------------------------------------------------------
  * Radio events
  *
- * The HAL has one global callback pair for the whole image, so radiant_channel.c
- * owns the real callbacks and routes each event to the engine whose op id it
- * carries. Both functions ignore an event whose op is not theirs and count it
- * in stats.late_events, so routing that is merely conservative - hand every
- * event to every engine - is correct, if wasteful.
+ * The HAL has one global callback pair for the whole image. radiant_sched.c
+ * owns it, and routes each event to the CHANNEL that posted the request; the
+ * caller of these two functions is whoever sits under radiant_sched_cbs and
+ * knows which engine that channel is.
+ *
+ * ROUTING MUST BE EXACT. An earlier revision of this comment said a
+ * conservative fan-out - hand every event to every engine - was correct if
+ * wasteful, because each engine compared the event's op id against its own.
+ * That stopped being true when the arming authority moved: an arm through the
+ * scheduler has no HAL operation id to report, so the engine stores
+ * RADIANT_TRANSFER_OP_EXTERNAL and deliberately stops filtering. Handing engine
+ * B's completion to engine A now makes engine A act on it.
+ *
+ * Both functions still ignore an event whose op is a real id that is not
+ * theirs, and count it in stats.late_events. That path is what catches an event
+ * arriving for an operation this engine has already retired - after an abort,
+ * t->op is 0 and everything is late by definition.
  *
  * Both run in radio interrupt context and both may re-arm the radio before
  * returning. That is the supported low-jitter path and, at 1.55 ms, the only

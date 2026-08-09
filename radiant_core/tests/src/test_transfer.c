@@ -161,39 +161,158 @@ static const struct radiant_transfer_ops ops = {
 };
 
 /* ---------------------------------------------------------------------------
- * Routing radio events, exactly as radiant_channel.c will
+ * Routing radio events, exactly as radiant_api.c does
  *
- * The HAL has one global callback pair for the whole image, so somebody has to
- * fan out. Deliberately the CONSERVATIVE fan-out the header says is correct -
- * every event to every engine - rather than a lookup by op id: an engine that
- * ignored an event it should have handled would still pass a test that only
- * ever handed it its own, and this way the op-id filter inside the module is
- * the thing being exercised.
+ * The engine no longer touches the radio. It posts to radiant_sched.c, which is
+ * "the only place in radiant_core that calls radiant_radio_tx() or
+ * radiant_radio_rx()" - so the scheduler owns the HAL's one global callback
+ * pair, and this harness owns the scheduler's.
+ *
+ * This suite used to register its own radio callbacks and fan every event out
+ * to every engine, on the reasoning that a conservative fan-out is wasteful but
+ * correct and exercises the engine's own op-id filter. Both halves of that are
+ * now wrong, and the same change is why:
+ *
+ *   - Nothing was ever armed. radiant_sched_request_tx() against an
+ *     uninitialised scheduler fails, so ten of the sixteen tests here failed at
+ *     the first "no packet was armed". That is the whole of the CI-red.
+ *   - The fan-out would be a bug rather than waste. An arm that goes through
+ *     the scheduler has no HAL operation id to report, so the engine stores
+ *     RADIANT_TRANSFER_OP_EXTERNAL and STOPS filtering - it trusts its caller's
+ *     routing, correctly, because the caller is the thing that did the routing.
+ *     Handing engine B's completion to engine A would now make engine A act on
+ *     it.
+ *
+ * So the routing here is exact and per channel, which is what the scheduler
+ * hands us anyway: each callback carries the channel the request was posted
+ * against.
  * ---------------------------------------------------------------------------
  */
+
+#define CH_XFER  0u   /* &xfer, the slave under test */
+#define CH_B     1u   /* engine_b, for the two tests that need a second one */
 
 /* A second engine, for the tests that need one. Only &xfer exists by default. */
 static struct radiant_transfer *engine_b;
 
-static void rx_cb(const struct radiant_rx_event *e, void *user)
+static struct radiant_transfer *engine_for(uint8_t ch)
 {
+	if (ch == CH_XFER) {
+		return &xfer;
+	}
+	if (ch == CH_B) {
+		return engine_b;
+	}
+	return NULL;
+}
+
+static void sched_rx(uint8_t ch, uint8_t filter_index,
+		     const struct radiant_rx_event *e, void *user)
+{
+	struct radiant_transfer *t = engine_for(ch);
+
+	ARG_UNUSED(filter_index);
 	ARG_UNUSED(user);
-	radiant_transfer_on_rx_event(&xfer, e);
-	if (engine_b != NULL) {
-		radiant_transfer_on_rx_event(engine_b, e);
+	if (t != NULL) {
+		radiant_transfer_on_rx_event(t, e);
 	}
 }
 
-static void tx_cb(const struct radiant_tx_event *e, void *user)
+static void sched_tx(uint8_t ch, const struct radiant_tx_event *e, void *user)
 {
+	struct radiant_transfer *t = engine_for(ch);
+
 	ARG_UNUSED(user);
-	radiant_transfer_on_tx_event(&xfer, e);
-	if (engine_b != NULL) {
-		radiant_transfer_on_tx_event(engine_b, e);
+	if (t != NULL) {
+		radiant_transfer_on_tx_event(t, e);
 	}
 }
 
-static const struct radiant_radio_cbs radio_cbs = { .rx = rx_cb, .tx = tx_cb };
+/*
+ * The scheduler consumed a request and swallowed the HAL's terminal event, so
+ * the engine has to be handed the one it is waiting for. This is
+ * api_feed_xfer_terminal() from radiant_api.c, reduced to the two states this
+ * suite can be in - and it exists for the same reason there: without it a reply
+ * window that closed empty never tells the engine, and
+ * test_a_missing_acknowledgement_fails_once_and_releases_the_block waits
+ * forever for a NO_ACK that nothing raises.
+ */
+static void sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
+{
+	struct radiant_transfer *t = engine_for(ch);
+	enum radiant_radio_status st;
+
+	ARG_UNUSED(user);
+	if (t == NULL || radiant_sched_pending(ch)) {
+		/* Re-posted from inside the transmit callback, which is the
+		 * normal path: the new request is what the slot holds and this
+		 * completion belongs to the old one. */
+		return;
+	}
+
+	/*
+	 * api_done_to_status() from radiant_api.c, and the first line is the one
+	 * that matters: a window that RAN and closed with nothing in it is
+	 * RADIANT_RADIO_STATUS_TIMEOUT, not _OK. The engine reads TIMEOUT as
+	 * RADIANT_TRANSFER_FAIL_NO_ACK; mapping DONE_OK to STATUS_OK instead
+	 * hands it a success event with no frame attached, which is not a case
+	 * the engine has or should have.
+	 */
+	switch (why) {
+	case RADIANT_SCHED_DONE_OK:      st = RADIANT_RADIO_STATUS_TIMEOUT; break;
+	case RADIANT_SCHED_DONE_ABORTED: st = RADIANT_RADIO_STATUS_ABORTED; break;
+	case RADIANT_SCHED_DONE_MISSED:
+	default:                         st = RADIANT_RADIO_STATUS_FAILED;  break;
+	}
+
+	switch (radiant_transfer_state(t)) {
+	case RADIANT_TRANSFER_STATE_WAIT_ACK: {
+		struct radiant_rx_event e;
+
+		memset(&e, 0, sizeof(e));
+		e.op = RADIANT_TRANSFER_OP_EXTERNAL;
+		e.status = st;
+		e.t_sync = radiant_radio_now();
+		radiant_transfer_on_rx_event(t, &e);
+		break;
+	}
+	case RADIANT_TRANSFER_STATE_TX_DATA:
+	case RADIANT_TRANSFER_STATE_TX_REPLY:
+	case RADIANT_TRANSFER_STATE_ABORTING: {
+		struct radiant_tx_event e;
+
+		memset(&e, 0, sizeof(e));
+		e.op = RADIANT_TRANSFER_OP_EXTERNAL;
+		e.status = st;
+		e.t_sync = radiant_radio_now();
+		e.t_sync_exact = false;
+		radiant_transfer_on_tx_event(t, &e);
+		break;
+	}
+	default:
+		break;
+	}
+}
+
+static const struct radiant_sched_cbs sched_cbs = {
+	.rx = sched_rx,
+	.tx = sched_tx,
+	.done = sched_done,
+};
+
+/*
+ * "From thread context the caller owes one radiant_sched_tick()" -
+ * radiant_transfer.h on radiant_transfer_arm_tx(), and radiant_api.c does it at
+ * the end of the antr_* call that provoked the submit. Every arm this suite
+ * makes from a ZTEST body rather than from inside a radio callback is a thread-
+ * context arm, so this is that caller. Posting is not committing, and a test
+ * that inspected fake_radio's arm log without ticking first would see nothing
+ * and blame the engine.
+ */
+static void commit(void)
+{
+	(void)radiant_sched_tick();
+}
 
 /* ---------------------------------------------------------------------------
  * Fixture
@@ -202,7 +321,7 @@ static const struct radiant_radio_cbs radio_cbs = { .rx = rx_cb, .tx = tx_cb };
 
 static struct radiant_transfer_cfg cfg_slave;
 
-static void make_cfg(struct radiant_transfer_cfg *c, bool slot_opener)
+static void make_cfg(struct radiant_transfer_cfg *c, bool slot_opener, uint8_t ch)
 {
 	memset(c, 0, sizeof(*c));
 	c->id.device_number = DEVNUM;
@@ -212,6 +331,7 @@ static void make_cfg(struct radiant_transfer_cfg *c, bool slot_opener)
 	c->net_addr[1] = RADIANT_NET_ADDR_ANT_PLUS_1;
 	c->rf_index = RADIANT_RF_INDEX_ANT_PLUS;
 	c->power.dbm = 0;
+	c->channel = ch;
 	c->slot_opener = slot_opener;
 	c->ops = &ops;
 	c->ctx = NULL;
@@ -222,7 +342,12 @@ static void before(void *f)
 	ARG_UNUSED(f);
 
 	fake_radio_reset();
-	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_init(&radio_cbs, NULL));
+	/* Scheduler first, then the radio pointed at the scheduler's callbacks -
+	 * the order radiant_core/tests/src/test_sched.c uses and radiant_api.c's
+	 * bring-up follows. */
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_sched_init(&sched_cbs, NULL));
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      radiant_radio_init(radiant_sched_radio_cbs(), NULL));
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_enable());
 
 	memset(evlog, 0, sizeof(evlog));
@@ -233,7 +358,7 @@ static void before(void *f)
 	bcast_available = true;
 	engine_b = NULL;
 
-	make_cfg(&cfg_slave, false);
+	make_cfg(&cfg_slave, false, CH_XFER);
 	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_init(&xfer, &cfg_slave));
 }
 
@@ -398,6 +523,7 @@ static bool feed_next_block(void)
 	if (rc != RADIANT_TRANSFER_OK) {
 		return false;
 	}
+	commit();
 	next_block++;
 	return true;
 }
@@ -424,7 +550,7 @@ static void run_one_packet_exchange(void)
  */
 static void drive(void)
 {
-	uint32_t acked_op = 0u;
+	uint32_t acked_tx = 0u;
 	uint32_t guard;
 
 	for (guard = 0u; guard < 400u; guard++) {
@@ -443,9 +569,20 @@ static void drive(void)
 			}
 			continue;
 		}
+		/*
+		 * One acknowledgement per data packet, and the count of accepted
+		 * transmits is what says a new one went out.
+		 *
+		 * This used to key off radiant_transfer_op(). It cannot any
+		 * more: every arm now goes through the scheduler, which has no
+		 * HAL operation id to report, so the engine holds the constant
+		 * RADIANT_TRANSFER_OP_EXTERNAL and the "did the op change"
+		 * question has no answer. arms_tx does, it is monotonic, and it
+		 * counts the thing the peer would actually have heard.
+		 */
 		if (st == RADIANT_TRANSFER_STATE_WAIT_ACK &&
-		    radiant_transfer_op(&xfer) != acked_op) {
-			acked_op = radiant_transfer_op(&xfer);
+		    fake_radio_stats()->arms_tx != acked_tx) {
+			acked_tx = fake_radio_stats()->arms_tx;
 			if (acks_to_air > 0u) {
 				acks_to_air--;
 				air_the_ack();
@@ -920,23 +1057,42 @@ ZTEST(transfer, test_a_burst_aborted_midflight_and_its_late_terminal_event)
 	zassert_equal(1u, st->blocks_released);
 
 	/*
-	 * Now the event that was already in the radio's pipeline when the abort
-	 * ran. It carries an op id the engine has retired, so it must be counted
-	 * and dropped - not turned into a second release, which would hand the
-	 * bridge back a semaphore it no longer holds.
+	 * Now the events that were already in the pipeline when the abort ran.
+	 *
+	 * These are handed to the engine directly rather than injected into
+	 * fake_radio with fake_radio_inject_late_tx()/_rx(), and the reason is
+	 * the arming authority. The HAL's guarantee that a cancelled operation's
+	 * terminal event still arrives is now radiant_sched.c's to absorb - it
+	 * owns the operation ids and counts what it does not recognise in
+	 * stats.stale_events - so an injected late event would be dropped one
+	 * layer below the thing under test and this would assert nothing.
+	 *
+	 * What is under test here is the engine's own last line of defence: it
+	 * has retired its operation, t->op is 0, and an event arriving anyway
+	 * must be counted and dropped rather than turned into a second release -
+	 * which would hand the bridge back a semaphore it no longer holds.
 	 */
-	zassert_equal(RADIANT_RADIO_OK_RC,
-		      fake_radio_inject_late_tx(dead_op, RADIANT_RADIO_STATUS_ABORTED));
 	{
-		struct fake_radio_air f;
+		struct radiant_tx_event late_tx;
+		struct radiant_rx_event late_rx;
 		uint8_t frame[AIR_LEN];
 
-		fake_radio_air_init(&f);
-		f.t_sync = radiant_radio_now();
-		f.len = build_peer_frame(frame, RADIANT_CTRL_ACK_SEQ1, peer_payload);
-		memcpy(f.bytes, frame, f.len);
-		zassert_equal(RADIANT_RADIO_OK_RC,
-			      fake_radio_inject_late_rx(dead_op, &f, 0u));
+		memset(&late_tx, 0, sizeof(late_tx));
+		late_tx.op = dead_op;
+		late_tx.status = RADIANT_RADIO_STATUS_ABORTED;
+		late_tx.t_sync = radiant_radio_now();
+		radiant_transfer_on_tx_event(&xfer, &late_tx);
+
+		memset(&late_rx, 0, sizeof(late_rx));
+		late_rx.op = dead_op;
+		late_rx.status = RADIANT_RADIO_STATUS_OK;
+		late_rx.t_sync = radiant_radio_now();
+		/* The HAL hands a backend's body, which is the frame with its
+		 * address bytes already consumed by the matcher. */
+		(void)build_peer_frame(frame, RADIANT_CTRL_ACK_SEQ1, peer_payload);
+		late_rx.body = &frame[RADIANT_NET_ADDR_LEN];
+		late_rx.body_len = (uint8_t)(AIR_LEN - RADIANT_NET_ADDR_LEN);
+		radiant_transfer_on_rx_event(&xfer, &late_rx);
 	}
 
 	zassert_equal(1u, n_ev, "a late event produced a second transfer event");
@@ -981,6 +1137,7 @@ ZTEST(transfer, test_the_receive_path_meets_the_turnaround_deadline)
 
 	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_on_data(&xfer, &in, t_sync));
 	zassert_equal(RADIANT_TRANSFER_STATE_TX_REPLY, radiant_transfer_state(&xfer));
+	commit();
 
 	arm = last_arm_of(FAKE_RADIO_ARM_TX);
 	zassert_not_null(arm, "the acknowledgement was never armed");
@@ -1033,11 +1190,24 @@ ZTEST(transfer, test_received_acknowledged_data_is_answered_with_transfer_ack)
 
 	zassert_equal(RADIANT_TRANSFER_OK,
 		      radiant_transfer_on_data(&xfer, &in, radiant_radio_now() + 10000u));
+	commit();
 
 	arm = last_arm_of(FAKE_RADIO_ARM_TX);
 	zassert_not_null(arm);
-	zassert_equal(RADIANT_CTRL_ACK_LAST_SEQ0, arm->body[BODY_CTRL],
-		      "0xA2 is acknowledged by 0xF2 - bit 5 echoed, bit 4 flipped");
+	/*
+	 * 0xA2 -> 0xF2, which is RADIANT_CTRL_ACK_LAST_SEQ1 and not _SEQ0.
+	 *
+	 * This assertion named _SEQ0 (0xE2) while its own comment said 0xF2,
+	 * and it had never executed - native_sim does not build on Windows, so
+	 * the first run of this suite was on an nRF5340 DK. The engine was
+	 * right: bit 4 is the sequence bit and the reply COMPLEMENTS it, which
+	 * is the third of the three silent failure modes this file exists to
+	 * catch, so the constant that acknowledges a sequence-0 final packet is
+	 * necessarily the sequence-1 one. 0xE2 is what acknowledges 0xB2.
+	 */
+	zassert_equal(RADIANT_CTRL_ACK_LAST_SEQ1, arm->body[BODY_CTRL],
+		      "0xA2 is acknowledged by 0xF2 - bit 5 echoed, bit 4 "
+		      "flipped - got 0x%02X", arm->body[BODY_CTRL]);
 	zassert_true(rx_last, "bit 5 is what tells the layer above the transfer "
 			      "is complete");
 
@@ -1070,6 +1240,10 @@ ZTEST(transfer, test_a_slot_opening_packet_has_no_measured_acknowledgement)
 		      radiant_transfer_on_data(&xfer, &in, radiant_radio_now() + 10000u));
 	zassert_equal(1u, radiant_transfer_stats(&xfer)->unackable_openers);
 	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
+	/* Tick first: posting is not committing, so asserting arms_tx == 0
+	 * without giving the scheduler a chance to arm would pass even if the
+	 * engine HAD posted a reply. */
+	commit();
 	zassert_equal(0u, fake_radio_stats()->arms_tx,
 		      "nothing may go on the air for an unmeasured reply");
 
@@ -1106,6 +1280,7 @@ ZTEST(transfer, test_a_channel_with_no_broadcast_buffer_is_not_answered)
 	zassert_equal(RADIANT_TRANSFER_ESTATE,
 		      radiant_transfer_on_data(&xfer, &in, radiant_radio_now() + 10000u));
 	zassert_equal(1u, radiant_transfer_stats(&xfer)->no_broadcast);
+	commit();
 	zassert_equal(0u, fake_radio_stats()->arms_tx);
 
 	end_of_test();
@@ -1133,6 +1308,7 @@ ZTEST(transfer, test_the_acknowledgement_retransmission_limit)
 				     RADIANT_TRANSFER_PKT_BYTES));
 	zassert_equal(RADIANT_TRANSFER_OK,
 		      radiant_transfer_on_data(&xfer, &in, radiant_radio_now() + 10000u));
+	commit();
 
 	arm = last_arm_of(FAKE_RADIO_ARM_TX);
 	zassert_not_null(arm);
@@ -1146,6 +1322,7 @@ ZTEST(transfer, test_the_acknowledgement_retransmission_limit)
 		zassert_equal(RADIANT_TRANSFER_OK,
 			      radiant_transfer_reply_retransmit(&xfer, at),
 			      "repeat %u was refused", (unsigned)i);
+		commit();
 		arm = last_arm_of(FAKE_RADIO_ARM_TX);
 		zassert_not_null(arm);
 		zassert_equal(RADIANT_CTRL_ACK_SEQ1, arm->body[BODY_CTRL],
@@ -1187,6 +1364,7 @@ ZTEST(transfer, test_the_first_packet_lands_where_the_scheduler_asked)
 					    RADIANT_TRANSFER_PKT_BYTES,
 					    master_t_sync +
 					    (radiant_time_t)RADIANT_TRANSFER_SLOT_REPLY_US));
+	commit();
 
 	arm = last_arm_of(FAKE_RADIO_ARM_TX);
 	zassert_not_null(arm);
@@ -1226,7 +1404,7 @@ ZTEST(transfer, test_a_backend_that_cannot_turn_a_frame_round_is_refused)
 	struct radiant_transfer slow;
 	struct radiant_transfer_cfg cfg;
 
-	make_cfg(&cfg, false);
+	make_cfg(&cfg, false, CH_B);
 
 	/* The RAIL preset - 400 us of arm lead, 200 us of turnaround - still
 	 * meets it, which is the point of checking rather than assuming. */
@@ -1258,7 +1436,7 @@ ZTEST(transfer, test_a_master_opens_the_slot_on_the_first_packet_only)
 	const struct fake_radio_arm *arm;
 	uint8_t payload[RADIANT_TRANSFER_PKT_BYTES];
 
-	make_cfg(&cfg, true);
+	make_cfg(&cfg, true, CH_B);
 	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_init(&master, &cfg));
 	engine_b = &master;
 
@@ -1267,6 +1445,7 @@ ZTEST(transfer, test_a_master_opens_the_slot_on_the_first_packet_only)
 		      radiant_transfer_ack_data(&master, payload,
 					    RADIANT_TRANSFER_PKT_BYTES,
 					    RADIANT_TIME_NEVER));
+	commit();
 
 	arm = last_arm_of(FAKE_RADIO_ARM_TX);
 	zassert_not_null(arm);
@@ -1275,9 +1454,36 @@ ZTEST(transfer, test_a_master_opens_the_slot_on_the_first_packet_only)
 
 	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_abort(&master));
 	zassert_true(radiant_transfer_is_idle(&master));
-	/* The other engine saw the same event and correctly disowned it. */
-	zassert_true(radiant_transfer_stats(&xfer)->late_events >= 1u);
+	/*
+	 * And the engine on the other channel was not disturbed by any of it.
+	 *
+	 * This used to assert xfer->late_events >= 1: the harness handed every
+	 * event to every engine and the op-id filter was what made the second
+	 * one disown it. Since the arming authority moved to radiant_sched.c
+	 * there IS no op id to compare - the engine holds
+	 * RADIANT_TRANSFER_OP_EXTERNAL and trusts its caller's routing - so
+	 * "disowned it" is no longer a thing the engine can do or a thing worth
+	 * asking it to do. The scheduler routes by channel and the property that
+	 * matters is unchanged and asserted directly: channel 0's engine neither
+	 * acted on channel 1's transfer nor released a block it never held.
+	 */
+	zassert_true(radiant_transfer_is_idle(&xfer),
+		     "channel 0's engine acted on channel 1's transfer");
 	zassert_equal(0u, radiant_transfer_stats(&xfer)->blocks_released);
+	zassert_equal(0u, radiant_transfer_stats(&xfer)->packets_sent,
+		      "channel 0's engine transmitted for channel 1's transfer");
+	/*
+	 * Exactly one event, and it is the master's own abort. Both engines
+	 * share `ops`, so n_ev counts the pair - which is why this asserts what
+	 * the event WAS rather than that there were none. Acknowledged data
+	 * carries no block, so nothing comes back through it.
+	 */
+	zassert_equal(1u, n_ev, "expected the master's abort alone, got %u events",
+		      (unsigned)n_ev);
+	zassert_equal(RADIANT_TRANSFER_EV_TX_FAILED, evlog[0].ev);
+	zassert_equal(RADIANT_TRANSFER_FAIL_ABORTED, evlog[0].fail);
+	zassert_is_null(evlog[0].block,
+			"acknowledged data transfers no buffer ownership");
 
 	engine_b = NULL;
 	end_of_test();
