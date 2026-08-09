@@ -456,6 +456,12 @@ static struct {
 	bool               conn_ok;
 } radiant_op;
 
+/* Bring-up counters. Logging from the RADIO interrupt is not safe at this
+ * priority, so the interrupt counts and thread context reports. */
+static volatile uint32_t radiant_dbg_isr;
+static volatile uint32_t radiant_dbg_rx_ev;
+static volatile uint32_t radiant_dbg_term;
+
 /* The DMA buffer the RADIO reads and writes. Backend-owned, handed to the core
  * as rx_event.body for the duration of one callback only, which is exactly what
  * radiant_radio_hal.h says about it. */
@@ -782,6 +788,34 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	radiant_op.next_id = 1u;
 	radiant_op.kind = OP_NONE;
 	radiant_op.inited = true;
+
+	/*
+	 * Prove the clock is running before anything depends on it.
+	 *
+	 * A stopped timer is the quietest possible failure in this backend: every
+	 * arm succeeds, every compare is programmed against a counter that never
+	 * reaches it, no interrupt ever fires, no terminal event is ever
+	 * delivered, and the layer above waits forever with nothing logged. It
+	 * is indistinguishable from "the radio hears nothing", and it costs a
+	 * board iteration to tell apart. Two microsecond readings 1000 us apart
+	 * cost nothing at init and make it a startup line instead.
+	 */
+	{
+		radiant_time_t t0 = radiant_radio_now();
+		radiant_time_t t1;
+
+		k_busy_wait(1000);
+		t1 = radiant_radio_now();
+
+		LOG_INF("timer @%p, %u us elapsed over a 1000 us wait",
+			(void *)TIMER_ADDR, (unsigned)(uint32_t)(t1 - t0));
+		if (t1 == t0) {
+			LOG_ERR("the radio timebase is not counting - every arm "
+				"would be scheduled against a compare the "
+				"counter never reaches");
+			return RADIANT_RADIO_EIO;
+		}
+	}
 	return RADIANT_RADIO_OK_RC;
 }
 
@@ -1001,9 +1035,16 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 		radiant_op.next_id = 1u;   /* ids are non-zero by contract */
 	}
 	*op = radiant_op.id;
+	LOG_DBG("rx op=%u n=%u open=+%d close=+%d isr=%u ev=%u term=%u",
+		(unsigned)radiant_op.id, req->n_filters,
+		(int)(int64_t)(req->t_open - now), (int)(int64_t)(req->t_close - now),
+		(unsigned)radiant_dbg_isr, (unsigned)radiant_dbg_rx_ev,
+		(unsigned)radiant_dbg_term);
 	return RADIANT_RADIO_OK_RC;
 
 fail:
+	LOG_WRN("rx refused: %d (n=%u addr_len=%u)", rc, req->n_filters,
+		req->fmt->addr_len);
 	radiant_op.kind = OP_NONE;
 	return rc;
 }
@@ -1060,6 +1101,7 @@ static void deliver_terminal(enum radiant_radio_status st)
 		return;
 	}
 	radiant_op.terminal_sent = true;
+	radiant_dbg_term++;
 
 	nrfx_gppi_conn_disable(radiant_op.conn_start);
 	nrfx_gppi_conn_disable(radiant_op.conn_close);
@@ -1078,6 +1120,7 @@ static void deliver_terminal(enum radiant_radio_status st)
 static void radio_isr(const void *arg)
 {
 	ARG_UNUSED(arg);
+	radiant_dbg_isr++;
 
 	if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_END)) {
 		nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_END);
@@ -1088,6 +1131,7 @@ static void radio_isr(const void *arg)
 			uint8_t logical = (uint8_t)(NRF_RADIO->RXMATCH &
 						    RADIO_RXMATCH_RXMATCH_Msk);
 
+			radiant_dbg_rx_ev++;
 			if (crc_ok || radiant_op.report_crc_fail) {
 				memset(&evt, 0, sizeof(evt));
 				evt.op = radiant_op.id;

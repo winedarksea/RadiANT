@@ -115,7 +115,10 @@
 #include <radiant_core/radiant_search.h>
 #include <radiant_core/radiant_transfer.h>
 
-LOG_MODULE_REGISTER(radiant_api, LOG_LEVEL_INF);
+/* CONFIG_RADIANT_CORE_LOG_LEVEL, not a hardcoded LOG_LEVEL_INF. A module that
+ * ignores its own Kconfig log level cannot be turned up when it is the one
+ * misbehaving, and every LOG_DBG in it is dead code that reads as live. */
+LOG_MODULE_REGISTER(radiant_api, CONFIG_RADIANT_CORE_LOG_LEVEL);
 
 /* ---------------------------------------------------------------------------
  * The agreement between src/ant_radio.h and radiant_transfer.h
@@ -1653,8 +1656,10 @@ antr_err_t antr_channel_open_with_offset(uint8_t channel, uint16_t offset)
 {
 	antr_err_t rc;
 
+	LOG_DBG("open ch %u enter", (unsigned int)channel);
 	k_mutex_lock(&api_lock, K_FOREVER);
 	rc = radiant_channel_open(channel, offset, radiant_radio_now());
+	LOG_DBG("open ch %u: radiant_channel_open -> %d", (unsigned int)channel, rc);
 	if (rc == RADIANT_CH_OK) {
 		int trc = api_xfer_setup(channel);
 
@@ -1676,6 +1681,7 @@ antr_err_t antr_channel_open_with_offset(uint8_t channel, uint16_t offset)
 	}
 	k_mutex_unlock(&api_lock);
 
+	LOG_DBG("open ch %u exit rc=%d", (unsigned int)channel, rc);
 	return rc;
 }
 
