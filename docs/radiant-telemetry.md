@@ -633,9 +633,14 @@ the attacker must guess a tag for a sequence number inside the accept window,
 which the idempotency rule caps. The node must therefore rate-limit accepted
 commands and log rejections, at which point a forging attacker is a detectable
 flood rather than a quiet success. A node that needs a full-strength inline tag
-uses the length-byte extension (payloads longer than 8 bytes, extension axis 3)
-and pays for it in every merged RX window — the trade is stated here so it is
-chosen rather than discovered.
+would need payloads longer than 8 bytes, and **there is no longer a mechanism
+for those**: this used to name "the length-byte extension (extension axis 3)",
+and byte 3 is not a length — see the amendment in
+`docs/decisions/0005-extension-inside-ant-plus.md` and section 11 below. Two
+bytes is therefore not a trade-off a node can decline; **it is the limit**,
+until some measured way of putting a longer frame on the air exists. Rate
+limiting and logged rejections are the whole mitigation, and a deployment that
+cannot accept 2^-16 per attempt has no answer inside this envelope today.
 
 The command page is also why a spread MAC is not enough on its own: a spread
 MAC lets an attacker inject up to one window of forged data before detection,
@@ -666,10 +671,28 @@ that project gets a second consumer for free.
   it ships first. A device type is worth claiming only once its fields have
   settled, and claiming one early is how a registry fills with entries nobody
   implements.
-- **Payloads longer than 8 bytes.** The length byte already expresses them and
-  the registry has a column for a type that uses them, but this envelope stays
-  at 8 in v1 because a longer frame lengthens the RX window for every merged
-  channel, not just the node that asked for it.
+- **Payloads longer than 8 bytes.** This bullet used to say the on-air length
+  byte already expresses them. **There is no length byte** — Spike B part 2
+  measured byte 3 as a control byte whose low bits are not a length either
+  (`0x0A` reads 10 there and `0xA2` reads 2, both carrying eight payload bytes),
+  across 3,104 CRC-valid frames. See `docs/spike-b-part2-results.md` and
+  `docs/ant-radio-link.md`.
+
+  So the honest position is: **how a longer payload would be expressed on air is
+  unknown, and no measured mechanism achieves it.** No frame with a payload other
+  than eight bytes has ever been on this bench's air — advanced burst was
+  enabled, the dongle accepted 24-byte blocks, and every one fragmented into
+  three 8-byte packets. Bits 2:0 = `010` therefore has a *disproved* meaning
+  rather than a measured one. Settling it needs a frame with a non-eight-byte
+  payload actually on the air — two ends that both negotiate advanced burst, or a
+  RadiANT transmitter emitting one deliberately and a receiver that can decode
+  it — and until one exists, no replacement mechanism should be invented here.
+
+  None of that moves the envelope, which stays at 8 in v1 for a reason that never
+  depended on the length reading: a longer frame lengthens the RX window for
+  every channel merged into it, not just the node that asked for it. What changes
+  is that "longer payloads later" is now an **open question**, not a reserved
+  capability the registry can hand out.
 - **Any security switch turned on.** Every reservation in this document is
   populated with zeros in v1. Phase 7 turns them on; Phase 4 makes sure there
   is somewhere for them to go.

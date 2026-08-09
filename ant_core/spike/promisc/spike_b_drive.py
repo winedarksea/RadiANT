@@ -158,11 +158,18 @@ def wait_event(reader: FrameReader, wanted: set, timeout_s: float,
 def enable_adv_burst(dev, reader, size_code: int = ADV_BURST_MODES_SIZE_24_BYTES) -> bool:
     """Turn on advanced burst so a single packet can carry 24 payload bytes.
 
-    This exists for one reason: docs/ant-radio-link.md makes a falsifiable
-    prediction that an advanced-burst frame shows 0x1A in the byte under test,
-    because 0x1A = 24 payload + 2 CRC. A 24-byte packet is the only way to move
-    the payload length without moving anything else, so it is the only way to
-    separate "that byte encodes a length" from "that byte encodes a type".
+    This exists for one reason: a 24-byte packet is the only way to move the
+    payload length without moving anything else, and putting a payload other
+    than eight bytes on the air is still the only way to give bits 2:0 of the
+    control byte a measured meaning rather than a disproved one.
+
+    It originally existed to test a prediction that such a frame would show
+    0x1A (= 24 payload + 2 CRC) in that byte. That prediction, and its later
+    restatement as 0x9A, are both withdrawn along with the length reading -
+    byte 3 is a control byte, and 0x0A reads 10 in its low bits while 0xA2
+    reads 2, both carrying eight payload bytes. See
+    docs/spike-b-part2-results.md. The function is still worth running; only
+    its stated reason changed.
 
     Body layout is [filler, enable, rf payload size, required modes, 0, 0,
     optional modes, 0, 0] - see protocol/ant_wire.yaml, MESG_CONFIG_ADV_BURST.

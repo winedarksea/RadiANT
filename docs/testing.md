@@ -168,9 +168,19 @@ want them. With a telemetry node transmitting alongside real ANT+ sensors: **a
 shipping sdk-ant dongle and a Garmin head unit both continue to find and hold
 every standard sensor, and neither reports an error or a phantom device.**
 Capture it as an `.antcap` and add it to the replay fixtures, so the claim is
-regression-tested rather than remembered. Repeat with a longer-than-8-byte
-frame on air — that is the case most likely to upset a stock receiver's
-`MAXLEN` handling, and the one worth having evidence for.
+regression-tested rather than remembered.
+
+**The longer-than-8-byte sub-case is blocked, not skipped.** It used to read
+"repeat with a longer-than-8-byte frame on air", on the grounds that such a
+frame is the case most likely to upset a stock receiver's `MAXLEN` handling.
+Nothing in this project can emit one. Spike B enabled advanced burst and sent
+24-byte blocks; every one fragmented into three 8-byte packets, and no frame
+with a payload other than eight bytes has ever been seen on air. The mechanism
+that was supposed to carry them — a length byte — does not exist, so
+`docs/decisions/0005`'s extension axis 3 is withdrawn. Reinstate this check
+when a non-eight-byte frame is actually captured with its control byte
+decoded; until then there is nothing to test and no `MAXLEN` exposure to
+measure.
 
 Two scale checks, neither of which has a sdk-ant baseline to compare against
 because `libant.a` cannot do either, so both are absolute: **32 channels

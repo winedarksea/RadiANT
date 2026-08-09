@@ -406,11 +406,15 @@ page10/0A  t=0096927139 +245915  <- the same 8 bytes again, as the next broadcas
 ```
 
 The relation is **bit 6 set, bit 5 echoed, bit 4 complemented**, everything else unchanged:
-`82 → D2`, `92 → C2`, `A2 → F2`, `B2 → E2`, on every one of **168 adjacent CRC-valid
-data/acknowledgement pairs** across runs 0, A and B, with no counterexample. (Three further data
-packets were followed by the next data packet because the intervening acknowledgement failed CRC at
-the sniffer — visible as a doubled ~3.08 ms gap where ~1.55 ms is expected. `docs/spike-b-part2-results.md`
-states 165 pairs; the logs give 168 adjacencies. Either way, zero exceptions.)
+`82 → D2`, `92 → C2`, `A2 → F2`, `B2 → E2`, on every one of **165 adjacent CRC-valid
+data/acknowledgement pairs** across runs 0, A and B, with no counterexample. Runs 0, A and B carry
+171 data packets in total: 165 immediately followed by a CRC-valid acknowledgement, three followed
+by an acknowledgement that **failed CRC at the sniffer** (excluded, because a CRC-rejected frame is
+not evidence of anything), and three followed by the next data packet at a doubled ~3.08 ms gap
+where ~1.55 ms is expected. 165 + 3 + 3 = 171, and zero counterexamples under every adjacency
+definition tried — within-exchange, whole-file, CRC-valid-only, and all-frames. (An earlier revision
+of this file said 168, which was 165 plus the three CRC-failed acknowledgements. Recounted directly
+from the logs; the logs are right.)
 
 Read as "the sequence bit I expect next" — which is what a stop-and-wait protocol acknowledges with
 — the complement is exactly right; read as "an echo of what I just received" it is exactly wrong.

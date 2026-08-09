@@ -546,8 +546,12 @@ static void print_rec(const struct rec *r)
 		 * fixed at 12 that is what a frame with a *different payload
 		 * length* looks like: the right header, then the wrong number
 		 * of bytes taken off the air. Worth printing loudly - it is
-		 * the only evidence this configuration can offer about the
-		 * advanced-burst 0x9A prediction. */
+		 * the only evidence this configuration can offer about a
+		 * non-standard payload length. (It used to name a predicted
+		 * 0x9A advanced-burst encoding; that prediction was withdrawn
+		 * with the length reading of byte 3 - see
+		 * docs/spike-b-part2-results.md. Every longframe either part
+		 * of Spike B printed has been an ordinary bit error.) */
 		n_longframe++;
 	}
 

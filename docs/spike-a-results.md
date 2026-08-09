@@ -1,6 +1,39 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Spike A results - the premise holds
 
+> ## Superseded in part by `docs/spike-b-part2-results.md`
+>
+> **This is a primary record and is not rewritten. Everything it observed is
+> confirmed.** What is superseded is one *inference* Spike A could not have
+> scoped correctly, and the distinction is the reusable lesson here.
+>
+> **Byte 3 is a control byte, and there is no length field in an ANT frame.**
+> Its low bits are not a length either: `0x0A` reads 10 there and `0xA2` reads
+> 2, and both carry an eight-byte payload. Measured across 3,104 CRC-valid
+> frames in ten Spike B runs. See `docs/spike-b-part2-results.md`, and
+> `docs/ant-radio-link.md` for the whole six-field structure.
+>
+> Spike A did not get this wrong so much as get it *narrowly right*. On a bench
+> carrying nothing but broadcasts, `PCNF0.LFLEN = 8` with `CRCINC = 1` genuinely
+> parses `0x0A` and genuinely receives every frame - the 40/40 and 2,164-frame
+> figures below all stand. **Spike A never saw an acknowledged or a burst frame**,
+> because there was no second radio to provoke one, and every frame it did see
+> was a slot-opening broadcast from a master, in which byte 3 is constant for
+> reasons that have nothing to do with length. The observation was sound; the
+> inference generalised from a sample that could not contain a counterexample.
+>
+> The lesson, which is about spike scope rather than about this byte: **a
+> configuration that receives 100 % of the traffic on the bench is evidence
+> about the bench's traffic.** A tag is only upgraded by a run that could have
+> failed. Spike A's own run could not have falsified the length reading, so that
+> row should never have been graded **confirmed** - and the two rows where it
+> was are annotated in place below rather than edited away.
+>
+> Nothing else in this file has moved. The three rows affected are
+> `PCNF0.LFLEN = 8`, *Fact one*, and *Length byte `0x0A`* in the frame-layout
+> table; a broadcast-only receiver is what the first of them describes, and
+> `docs/ant-radio-link.md` keeps it on those terms.
+
 Checked by: `ant_core/spike/rx_raw` and the captures it produced,
 `archive/captures/radio/2026-08-09-nrf54l15-run1.log` and
 `...-run2.log`. Re-running the spike against a transmitter with a different
@@ -248,6 +281,11 @@ Every field of `docs/ant-radio-link.md`'s frame diagram is where the document
 says it is. The payload decodes as ANT+ page `0x10` at ~100 W, which is what
 `ant_sim.py` was asked to transmit.
 
+The bytes above are the record and are not touched. **One label in it is a
+reading, not an observation**: the byte annotated `length 0x0A` is byte 3, and
+Spike B part 2 measured it as a **control byte** with no length field in it -
+`0x0A` is the broadcast encoding. See the box at the top of this file.
+
 ### CRC
 
 Three things, all confirmed:
@@ -278,7 +316,7 @@ Rows marked **confirmed** may have their `[inferred]` tag upgraded to
 | Claim | Verdict | Note |
 |---|---|---|
 | `PCNF0.S0LEN = 1` (transmission type in S0) | **confirmed** | trans type 5 read correctly out of the S0 slot |
-| `PCNF0.LFLEN = 8` | **confirmed** | length byte `0x0A` parsed as a length |
+| `PCNF0.LFLEN = 8` | **confirmed**, **SUPERSEDED** | `0x0A` was parsed as a length and every frame was received. On broadcasts only - see the note under this table |
 | `PCNF0.S1LEN = 0` | **confirmed** | works with S1 absent; the S1 trap was not walked into |
 | `PCNF0.CRCINC = 1` | **confirmed** | 40/40 CRC-valid in phase B, every cycle. `CRCINC` behaves; **the fallback was not needed** |
 | `PCNF0.PLEN = 8bit` | **confirmed** | one-byte preamble is enough for the receiver to lock |
@@ -289,16 +327,46 @@ Rows marked **confirmed** may have their `[inferred]` tag upgraded to
 | `CRCPOLY = 0x11021`, `CRCINIT = 0xFFFF` | **confirmed** | |
 | Packet buffer `[trans_type][0x0A][d0..d7]` | **confirmed** | exactly the 10 bytes that appear in RAM |
 
+> **SUPERSEDED - `docs/spike-b-part2-results.md`, the `PCNF0.LFLEN = 8` row.**
+> The observation is exactly right and is not withdrawn: the radio was told to
+> read byte 3 as a length, it did, and 100 % of the transmitter's frames were
+> received. What does not follow is that byte 3 *is* a length. **Every frame in
+> this run was a broadcast** - one master, no peer, so nothing on the air could
+> carry any other value - and on a broadcast byte 3 is always `0x0A`. Point the
+> same configuration at an acknowledged frame and it reads `LENGTH = 0xAA = 170`,
+> overruns `MAXLEN` and drops the packet as a CRC error. This row therefore
+> grades a **broadcast-only receiver**, which is how `docs/ant-radio-link.md`
+> now labels it; the required form is `PCNF0 = 0` with `STATLEN = 10`, which the
+> *Fallback* row two tables down measured as identical on air.
+
 ### The two facts
 
 | Claim | Verdict | Note |
 |---|---|---|
-| **Fact one** - length byte 10 = 8 payload + 2 CRC, ShockBurst semantics, `CRCINC` is the right mechanism | **confirmed** | |
+| **Fact one** - length byte 10 = 8 payload + 2 CRC, ShockBurst semantics, `CRCINC` is the right mechanism | **confirmed**, **SUPERSEDED** | the `CRCINC` half stands as measured; the length half does not - see below |
 | Fallback `PCNF0=0, STATLEN=10` is identical on air | **confirmed** | 40/40 as well; the two are interchangeable, so the fallback is real and costs one line |
 | Do not use `S1LEN=8` | **untested** | not attempted. The reasoning is sound and there is no reason to spend a window proving a known-bad configuration |
 | **Fact two** - address bits go out LSBit-first regardless of `ENDIAN`; bit-reverse every address byte | **confirmed** | the four non-reversed permutations heard nothing whatsoever |
 | On-air order is lowest used base byte first, prefix last | **confirmed** | all four prefix-first permutations heard nothing |
 | `BASE0 = (rev8(dh)<<24)\|(rev8(dl)<<16)\|0x0000A365`, `PREFIX0 = rev8(dtype)` | **confirmed** | `0x5CE8A365` / `0xD0` |
+
+> **SUPERSEDED - `docs/spike-b-part2-results.md`, the *Fact one* row.** Read the
+> row as three claims, because they did not survive together.
+>
+> - *`CRCINC` is the right mechanism* - **stands** for a broadcast-only
+>   receiver, and 40/40 CRC-valid is the measurement that says so.
+> - *10 = 8 payload + 2 CRC, ShockBurst semantics* - **withdrawn.** Byte 3 is a
+>   control byte of six independent fields. The ten is `0b01010`: the slot bit,
+>   the sequence bit and `010`, and its arithmetic agreement with 8 + 2 is a
+>   coincidence, which is exactly what made it so convincing. `0xA2` reads **2**
+>   in the same five bits with the same eight-byte payload, and no length field
+>   reads 10 and 2 for one length.
+> - The **ancestry** argument this row supported - that ANT's frame descends
+>   from Enhanced ShockBurst - does not depend on it. `docs/ant-radio-link.md`
+>   withdraws this tell and keeps the other two.
+>
+> Spike A could not have found this. It saw 2,164 frames and every one was a
+> master's broadcast; a value other than `0x0A` was not available to be seen.
 
 ### Search configuration
 
@@ -317,7 +385,7 @@ Rows marked **confirmed** may have their `[inferred]` tag upgraded to
 | Network address is `A6 C5`, 2 bytes | **confirmed** |
 | Device number 2 bytes, low byte first on air | **confirmed** |
 | Device type 1 byte, then transmission type 1 byte | **confirmed** |
-| Length byte `0x0A` for a standard 8-byte data message | **confirmed** |
+| Length byte `0x0A` for a standard 8-byte data message | **confirmed** as a byte value, **SUPERSEDED** as a name - byte 3 is the control byte, and `0x0A` is its broadcast encoding |
 | CRC is CRC-16/CCITT-FALSE, init `0xFFFF`, over 15 bytes | **confirmed** |
 | Appending a correct CRC drives the register to zero | **confirmed** on 2,164 real frames |
 | CRC chains: state after `A6 C5` is `0x233E` | **confirmed** arithmetically |

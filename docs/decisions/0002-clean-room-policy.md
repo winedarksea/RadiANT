@@ -39,7 +39,9 @@ genuinely public:
   serial protocol the bridge already implements.
 - **rtl_433's ANT+ decoder** and expired patent **US8855246B2** together give
   the complete on-air frame: preamble, the `A6 C5` ANT+ network address, device
-  number, device type, transmission type, length byte, 8-byte payload, and
+  number, device type, transmission type, a control byte (rtl_433 calls it a
+  length; Spike B part 2 measured that it is not — see
+  `docs/spike-b-part2-results.md`), 8-byte payload, and
   CRC-16/CCITT-FALSE (`0x1021`, init `0xFFFF`) over the 17 bytes after the
   preamble, with no whitening.
 - **Our own hardware transmits.** Anything observable off the air from a device

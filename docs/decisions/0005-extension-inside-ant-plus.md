@@ -7,10 +7,86 @@ the `ant_verify.py --replay` fixtures so the claim is regression-tested rather
 than remembered. The adaptive-frequency clause is checked by its own bench
 gate: a node moved to a quiet RF channel holds `loss (exact)` ≈ 0 over 300 s.
 
-- **Status:** Accepted
+- **Status:** Accepted. **Amended 2026-08-09 — extension axis 3 is withdrawn.**
+  The decision itself stands; see *Amendment* immediately below.
 - **Date:** 2026-08-08
+- **Amended:** 2026-08-09
 - **Related:** [0001 backend selection](0001-backend-selection-and-release-default.md),
-  `../radiant-telemetry.md`, `../profile-registry.md`, `../radiant-security.md`
+  `../radiant-telemetry.md`, `../profile-registry.md`, `../radiant-security.md`,
+  `../spike-b-part2-results.md`
+
+## Amendment, 2026-08-09 — axis 3 is withdrawn
+
+**Status of the amendment:** Accepted. **What changed:** extension axis 3,
+*longer frames via the length byte*, has no mechanism behind it and is
+withdrawn. **What did not change:** the decision this ADR records — that RadiANT
+extensions live on ANT+ network `A6 C5`, RF channel 57, rather than on a network
+of their own.
+
+**Why.** This ADR was written on the reading that byte 3 of an ANT frame is a
+length: `0x0A` = 8 payload + 2 CRC. `docs/spike-b-part2-results.md` measured
+that reading false. **Byte 3 is a control byte of six independent fields, and
+its low bits are not a length either** — `0x0A` reads 10 in bits 4:0 and `0xA2`
+reads 2, and both carry an eight-byte payload, across 3,104 CRC-valid frames.
+**There is no length field in an ANT frame.** The two bits that move are the
+slot-opening bit and a one-bit sequence number; bits 2:0 are `010` on every
+frame ever captured and their meaning is unknown.
+
+This ADR also staked its own falsifiable prediction on that reading — that an
+advanced-burst frame would show `0x1A` in byte 3. **That prediction has been
+tested and has failed.** Advanced burst was enabled, the dongle accepted 24-byte
+blocks, every transfer completed, and each block was fragmented into three
+8-byte packets. No frame with a payload other than eight bytes has ever been on
+this bench's air. The only `0x1A` ever seen failed its CRC and was an ordinary
+bit error.
+
+**The size of the damage, stated in both directions so it is neither inflated
+nor minimised.**
+
+- **Axis 3 is gone, not merely unproven.** It is not "an extension path that
+  needs testing"; it is an extension path with nothing underneath it. A stated
+  path that cannot work is worse than no path, because a profile will be
+  designed against it. Anything that cited axis 3 as an available capability was
+  citing a mechanism that does not exist — `../radiant-telemetry.md` did, in two
+  places, and both are corrected.
+- **The other four axes are untouched.** New pages, new device types, a
+  per-type long-range PHY and per-type adaptive frequency never depended on the
+  length reading. Axis 5 in particular, which is what actually removes the last
+  argument for a second network, rests on the descriptor and the scheduler's
+  per-operation radio state.
+- **The load-bearing argument for the decision is untouched.** A second network
+  splits the radio schedule, permanently and structurally, and the merged RX
+  window is what makes 32 tracked channels affordable. That reasoning never
+  mentioned byte 3.
+- **One argument for a second network is genuinely restored, and it is new.**
+  The rejected-alternatives section below claimed a second network buys *exactly
+  one* thing — escape from 2457 MHz — partly because longer payloads were
+  already available in place. They are not available anywhere now. If a longer
+  payload ever becomes necessary it will need a **new framing**, and a fresh
+  network address is a cheaper place to introduce new framing than a network
+  stock receivers are listening on. That is a real argument and it is recorded
+  here rather than argued away. It does not currently change the decision,
+  because the mechanism it would need is not merely unbuilt but **unknown** —
+  nobody has put a non-eight-byte ANT frame on the air — and because nothing in
+  v1 needs one. Revisit this ADR if that changes, not before.
+
+**Where longer payloads stand now: unknown.** Not "later", not "reserved" —
+unknown, and not currently achievable by any measured mechanism. Bits 2:0 =
+`010` have a *disproved* meaning rather than a measured one. What would settle
+it is a frame with a payload other than eight bytes actually on the air, decoded
+with its control byte read: two ends that both negotiate advanced burst would do
+it, or a RadiANT transmitter emitting one deliberately with a receiver that can
+decode it. Until such a frame exists, **do not invent a replacement mechanism
+and do not write a profile that assumes one.**
+
+One consequence for the test plan: the Tier 4 interop capture's
+longer-than-8-byte sub-case has nothing to emit. `../testing.md` still asks for
+it. The rest of Tier 4 — a stock dongle and a head unit holding every standard
+sensor while a RadiANT node transmits — is unaffected and remains this ADR's
+check.
+
+The specific claims below are annotated in place rather than edited away, so
+that what this ADR argued from remains readable.
 
 ## Context
 
@@ -30,14 +106,22 @@ Some facts that constrain the choice:
 - **The ANT+ network is address `A6 C5` on RF channel 57 (2457 MHz).** Every
   ANT+ device is there. Discovery, pairing and all standard traffic happen
   there.
-- **The on-air length byte already expresses payload size.** `0x0A` = 8 payload
+- ~~**The on-air length byte already expresses payload size.** `0x0A` = 8 payload
   + 2 CRC. It is a field, not a constant, and the nRF radio's `PCNF0.CRCINC`
   exists for exactly this ShockBurst-style arrangement. A frame with a longer
   payload is expressible today with no new framing and no new network — and a
   falsifiable prediction of that reading is that an advanced-burst frame should
-  carry `0x1A`.
-- **A stock ANT receiver's `MAXLEN` rejects an over-long frame harmlessly.** It
-  does not confuse the receiver; it fails length validation and is dropped.
+  carry `0x1A`.~~
+  **FALSIFIED, 2026-08-09** — `../spike-b-part2-results.md`. Byte 3 is a control
+  byte; its low bits read 10 on `0x0A` and 2 on `0xA2` with the same eight-byte
+  payload. It is a constant, not a field, and the prediction it offered was
+  tested and failed. See *Amendment*.
+- ~~**A stock ANT receiver's `MAXLEN` rejects an over-long frame harmlessly.** It
+  does not confuse the receiver; it fails length validation and is dropped.~~
+  **MOOT, 2026-08-09.** This constrained the choice only because an over-long
+  frame was thought to be emittable. None can be emitted, so nothing reaches a
+  stock receiver's `MAXLEN` to be rejected, and the claim itself was never
+  measured against a real one.
 - **A receiver never opens a channel for a device type it does not recognise.**
   Device type is 7 bits (the MSB is the pairing bit), so 1–127, with a
   substantial unallocated range. New device types are invisible by
@@ -64,7 +148,10 @@ a second network could simply not be there.
 channel 57 — and is expressed through the existing extension axes rather than
 through a new network.**
 
-The five axes, in increasing order of compatibility risk:
+The axes, in increasing order of compatibility risk. **Five were stated; four
+survive.** Axis 3 is withdrawn and is kept in place, struck through, so that
+later numbering still means what it meant and so that nothing quietly
+renumbers itself:
 
 1. **New pages within existing device types.** Zero risk; invisible to
    receivers that skip unknown page numbers.
@@ -76,10 +163,26 @@ The five axes, in increasing order of compatibility risk:
    needs a successor, and a file plus a PR queue is the cheapest legitimate
    one. The collision risk is stated honestly there — Garmin has stopped
    allocating, but "stopped" is not "guaranteed never".
-3. **Longer frames via the length byte.** No new network, no new framing.
+3. ~~**Longer frames via the length byte.** No new network, no new framing.
    Reserved for profiles that genuinely cannot fit 8 bytes, because it is not
    free: a longer frame lengthens the RX window for every channel merged into
-   it.
+   it.~~
+
+   **WITHDRAWN, 2026-08-09 — this axis has no mechanism.** There is no length
+   byte. Byte 3 is a control byte of six independent fields and none of them is
+   a length; `0x0A` reads 10 in bits 4:0 and `0xA2` reads 2, both with an
+   eight-byte payload, over 3,104 CRC-valid frames
+   (`../spike-b-part2-results.md`). **Do not design a profile against this
+   axis.** How a longer ANT payload would be expressed on air is **unknown**,
+   and no measured mechanism produces one: advanced burst was enabled twice and
+   fragmented both times, so no frame with a payload other than eight bytes has
+   ever been on this bench's air. Bits 2:0 = `010` therefore have a *disproved*
+   meaning, not a measured one. What would settle it is such a frame on the air
+   with its control byte decoded — two ends that both negotiate advanced burst,
+   or a deliberate RadiANT transmitter and a receiver that can decode it. The
+   RX-window cost noted above was the only part of this axis that was ever
+   about scheduling rather than framing, and it still applies to whatever
+   mechanism eventually replaces it. Nothing replaces it today.
 4. **A long-range PHY, per device type, not in v1.** A lower-rate GFSK variant
    on the same band, opted into per device type and marked as such in the
    registry. ANT+ compatibility channels never change PHY, so this axis cannot
@@ -98,15 +201,32 @@ The five axes, in increasing order of compatibility risk:
 **Because it buys exactly one thing, and axis 5 already provides that thing
 without the cost.**
 
+> **Amended 2026-08-09.** "Exactly one" was true while axis 3 existed. With axis
+> 3 withdrawn the honest count is **one thing now and a second thing
+> conditionally**: a fresh address is a cheaper place to introduce a *new
+> framing*, which is what a longer payload would require. The condition is that
+> nobody knows what a longer ANT frame looks like, so there is no framing to
+> introduce. The scheduling argument below is unchanged and is what carries the
+> decision. See *Amendment*.
+
 Enumerate what a second network would actually deliver over extending in place:
 
-- *Longer payloads?* No — the length byte already carries them (axis 3).
+- ~~*Longer payloads?* No — the length byte already carries them (axis 3).~~
+  **Amended 2026-08-09.** *Longer payloads?* **Not from either option, today.**
+  There is no length byte, axis 3 is withdrawn, and no measured mechanism puts a
+  payload other than eight bytes on the air on any network. What a second
+  network would offer is not the payload but the *freedom to define new framing
+  for it* without a stock receiver listening — a real advantage, currently over
+  a capability that does not exist. It is recorded in *Amendment* as the one
+  argument this falsification restored.
 - *New device types and pages?* No — the existing type and page space has room,
   and unknown types are ignored by construction (axes 1 and 2).
 - *Isolation from stock receivers?* No, and this is the one people expect to be
-  yes. Unknown device types are already invisible; over-long frames are already
-  rejected on `MAXLEN`. There is nothing left for a separate address to protect
-  against.
+  yes. Unknown device types are already invisible; ~~over-long frames are already
+  rejected on `MAXLEN`~~ — and there are no over-long frames, so there is nothing
+  for `MAXLEN` to reject (*Amendment*, 2026-08-09). The conclusion is unchanged
+  and is now reached with one clause rather than two: there is nothing left for
+  a separate address to protect against.
 - *A different PHY?* No — that is a per-type property (axis 4) and does not
   need a network address to express.
 - *Escape from 2457 MHz?* **Yes.** This is the entire remaining benefit.
@@ -150,6 +270,14 @@ frequency beat the ANT+ default, and the residual loss is accounted for
 per-packet with an `RX_FAIL` for every hole. Do not re-run the frequency or
 transmit-power sweep on the strength of this ADR.
 
+**A second trigger, added 2026-08-09.** Also revisit if a frame with a payload
+other than eight bytes is ever put on the air and decoded, because that is the
+mechanism axis 3 turned out not to have, and because a *new framing* is the one
+thing a separate network address would deliver more cheaply than extending in
+place. Neither half of that is true today. Do **not** revisit on the strength of
+axis 3's withdrawal alone: the scheduling cost of a second network is unchanged
+and is what decided this ADR.
+
 ## Consequences
 
 **Good.**
@@ -171,9 +299,16 @@ transmit-power sweep on the strength of this ADR.
 - Type and page collisions with any future third-party allocation are possible.
   Mitigated by a public registry with a process, not eliminated. Written into
   `docs/profile-registry.md` honestly.
-- Over-long frames must be verified against real stock receivers rather than
+- ~~Over-long frames must be verified against real stock receivers rather than
   reasoned about — `MAXLEN` handling is the case most likely to upset one, and
-  it is the specific case the Tier 4 capture repeats.
+  it is the specific case the Tier 4 capture repeats.~~
+  **Amended 2026-08-09: this cost is not currently payable, and that is worse
+  than paying it.** With axis 3 withdrawn there is no over-long frame to emit,
+  so the Tier 4 sub-case has nothing to transmit and the `MAXLEN` question stays
+  open indefinitely rather than being answered. If a longer-payload mechanism is
+  ever found, this cost returns unchanged and unverified, and it must be paid
+  before any profile ships against it. `../testing.md`'s Tier 4 still asks for
+  the longer-than-8-byte capture; the rest of Tier 4 is unaffected.
 - An adaptive-frequency node costs its own RX window, the same as a
   second-network channel would. The saving is that only nodes that opted in pay
   it.

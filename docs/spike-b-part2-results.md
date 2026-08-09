@@ -32,7 +32,9 @@ sequence number in it.** The burst sequence is **one bit**, alternating - which
 is why part 1, which could only ever see the first packet of a burst, could not
 have found it and was right to refuse to guess.
 
-Nine values were observed across four runs, and every one of them decomposes:
+**Eleven** values were observed across the four runs, and every one of them
+decomposes. Nine is the runs-A-and-B figure - run C, the master control, is what
+adds `0x8A` and `0xAA`:
 
 ```
    bit    7      6      5      4      3     2 1 0
@@ -62,17 +64,17 @@ says otherwise.
 
 | On air | Direction | Meaning | Runs |
 |---|---|---|---|
-| `0x0A` | slot opener | **broadcast** | A, B, C, and all 6 of part 1 |
+| `0x0A` | slot opener | **broadcast** | 0, A, B, C, and all 6 of part 1 |
 | `0xAA` | slot opener | **acknowledged data**, and identically a **one-packet burst** | C, and all 6 of part 1 |
 | `0x8A` | slot opener | burst packet, sequence bit 0, not the last | C, and all 6 of part 1 |
-| `0x82` | in-slot | burst packet, sequence bit **0**, not the last | A, B |
+| `0x82` | in-slot | burst packet, sequence bit **0**, not the last | 0, A, B |
 | `0x92` | in-slot | burst packet, sequence bit **1**, not the last | A, B |
-| `0xA2` | in-slot | **acknowledged data**, and identically a one-packet burst; also burst-**last** with sequence bit 0 | A, B |
+| `0xA2` | in-slot | **acknowledged data**, and identically a one-packet burst; also burst-**last** with sequence bit 0 | 0, A, B |
 | `0xB2` | in-slot | burst **last** packet, sequence bit 1 | A, B |
 | `0xC2` | in-slot | **acknowledgement** of a non-final packet, next sequence bit 0 | A, B |
-| `0xD2` | in-slot | **acknowledgement** of a non-final packet, next sequence bit 1 | A, B |
+| `0xD2` | in-slot | **acknowledgement** of a non-final packet, next sequence bit 1 | 0, A, B |
 | `0xE2` | in-slot | **acknowledgement of the final packet** - the transfer is complete - sequence bit 0 | A, B |
-| `0xF2` | in-slot | acknowledgement of the final packet, sequence bit 1 | A, B |
+| `0xF2` | in-slot | acknowledgement of the final packet, sequence bit 1 | 0, A, B |
 
 **Burst sequence 2 through 7 do not exist.** That is a positive statement, not an
 absence: a seventeen-packet burst and a fifty-one-packet burst were both captured
@@ -214,12 +216,23 @@ directions of the exchange. `0xC2`/`0xD2` acknowledge a non-final packet and
 acknowledgement.
 
 The acknowledgement's bit 4 is the **complement** of the packet it answers, and
-its bit 5 is an echo, in **all 165** data/acknowledgement pairs across the four
-runs, with no exceptions: `82 -> D2`, `92 -> C2`, `A2 -> F2`, `B2 -> E2`. Read as
+its bit 5 is an echo, in **all 165** data/acknowledgement pairs across runs 0, A
+and B, with no exceptions: `82 -> D2`, `92 -> C2`, `A2 -> F2`, `B2 -> E2`. Read as
 "the sequence bit I expect next", which is what a
 stop-and-wait protocol acknowledges with, that is exactly right; read as "an echo
 of what I just received" it is exactly wrong. `[inferred]` - the arithmetic is
 measured, the reading of it is not.
+
+**Where 165 comes from, since a nearby number is easy to reach for.** Runs 0, A
+and B carry **171** data packets between them. 165 are immediately followed by a
+CRC-valid acknowledgement, and those 165 are the pairs the relation is asserted
+on. Three more are followed by an acknowledgement that **failed CRC at the
+sniffer** - visible in the analyser's `(ER)` column - and a frame the CRC
+rejected is not evidence of anything, so those three are excluded rather than
+counted; 165 + 3 = 168 is the number to *avoid* quoting as measured pairs. The
+last three are followed by the next data packet, where the acknowledgement was
+missed entirely, visible as a doubled ~3.08 ms gap where ~1.55 ms is expected.
+165 + 3 + 3 = 171, and there is no counterexample anywhere in the 171.
 
 ### Bit 3, the slot-opening flag - and the control that pins it
 
