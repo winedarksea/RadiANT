@@ -1,0 +1,32 @@
+# Capture files are compared byte for byte, so git must not touch their bytes.
+#
+# tools/ant_conformance.py hashes the raw bytes of the .antser it writes, and
+# Tier 1's entire pass criterion is that two such files are byte-identical
+# (docs/testing.md). With core.autocrlf=true - the Windows default, and what is
+# set on this machine - git would check a committed LF file out as CRLF, so a
+# fresh clone would hash the reference transcript differently from the machine
+# that recorded it and every one of its 1277 records would report as changed.
+# The recorded sha256 in archive/benchmarks/ would then be unreproducible
+# anywhere but the recording machine, which defeats the point of committing it.
+#
+# Measured, not assumed: the committed conformance-sdk-ant.antser hashes
+# a18bce8b1a8b4011ac13f3376558aa156723946e13077ba86bcc8e94592fe35f as LF and
+# 71c01de5515f2dbf57d793780512e7aa35e065879d01fd35ead574fca08ee0e4 as CRLF.
+*.antser -text
+*.antcap -text
+
+# Bench logs are our own recordings of our own hardware, which docs/preservation.md
+# treats as artifacts to keep byte-exact. Nothing hashes them, so no test breaks
+# either way - but with core.autocrlf=true they commit as LF and check out as LF
+# on Linux, so a Linux clone would hold 280 bytes fewer than the run recorded on
+# this bench. Measured on archive/captures/radio/2026-08-09-nrf54l15-run1.log.
+archive/captures/radio/*.log -text
+
+# The firmware readbacks in archive/firmware/ are images, not text. Git was
+# treating them as text (diff --numstat reported line counts rather than '-').
+*.uf2 binary
+*.hex -text
+
+# PowerShell 5.1 reads .ps1 as ANSI unless the file carries a BOM, which is why
+# those files are ASCII-only by convention; keep git from introducing anything.
+*.ps1 text eol=crlf
