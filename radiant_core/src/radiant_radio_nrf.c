@@ -482,6 +482,7 @@ static struct {
 static volatile uint32_t radiant_dbg_isr;
 static volatile uint32_t radiant_dbg_rx_ev;
 static volatile uint32_t radiant_dbg_term;
+static volatile uint32_t radiant_dbg_ok;
 
 /* The DMA buffer the RADIO reads and writes. Backend-owned, handed to the core
  * as rx_event.body for the duration of one callback only, which is exactly what
@@ -616,13 +617,30 @@ static int apply_filters(const struct radiant_rx_filter *filters, uint8_t n,
 
 		if (b == base1) {
 			if (n_base1 >= 7u) {
-				/* Eight sharing a base is one more than BASE1's
-				 * seven prefixes; the eighth could only go to
-				 * logical 0, which needs its own base. */
+				/*
+				 * Eight sharing a base is one more than BASE1's
+				 * seven prefixes, so the eighth goes to logical
+				 * 0 - which carries its own base as well as its
+				 * own prefix.
+				 *
+				 * prefixes[0] is set HERE and forgetting it was
+				 * a real bug with a very specific signature: the
+				 * eighth filter of every full set silently
+				 * matched prefix 0x00 instead of the address
+				 * asked for. A wildcard sweep enumerates
+				 * devnum_lo in blocks of eight, so it was
+				 * exactly one device number in every eight that
+				 * could never be found - and the bench sensor,
+				 * #14871, has devnum_lo 0x17, the eighth of its
+				 * block. The sweep looked perfect in the log,
+				 * the window opened, and the one address that
+				 * mattered was not on the air.
+				 */
 				if (lone >= 0) {
 					return RADIANT_RADIO_ENOTSUP;
 				}
 				base0 = b;
+				prefixes[0] = p;
 				slot_of[i] = 0u;
 				lone = (int8_t)i;
 				continue;
@@ -1074,10 +1092,11 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 		radiant_op.next_id = 1u;   /* ids are non-zero by contract */
 	}
 	*op = radiant_op.id;
-	LOG_DBG("rx op=%u n=%u open=+%d close=+%d isr=%u ev=%u term=%u",
+	LOG_DBG("rx op=%u n=%u alen=%u cov=%u open=+%d close=+%d isr=%u ev=%u ok=%u term=%u",
 		(unsigned)radiant_op.id, req->n_filters,
+		(unsigned)req->fmt->addr_len, (unsigned)req->fmt->crc.cover_addr,
 		(int)(int64_t)(req->t_open - now), (int)(int64_t)(req->t_close - now),
-		(unsigned)radiant_dbg_isr, (unsigned)radiant_dbg_rx_ev,
+		(unsigned)radiant_dbg_isr, (unsigned)radiant_dbg_rx_ev, (unsigned)radiant_dbg_ok,
 		(unsigned)radiant_dbg_term);
 	return RADIANT_RADIO_OK_RC;
 
@@ -1171,6 +1190,9 @@ static void radio_isr(const void *arg)
 						    RADIO_RXMATCH_RXMATCH_Msk);
 
 			radiant_dbg_rx_ev++;
+			if (crc_ok) {
+				radiant_dbg_ok++;
+			}
 			if (crc_ok || radiant_op.report_crc_fail) {
 				memset(&evt, 0, sizeof(evt));
 				evt.op = radiant_op.id;
