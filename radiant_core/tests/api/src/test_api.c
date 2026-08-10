@@ -945,6 +945,217 @@ ZTEST(api, test_a_background_scan_reports_every_device_not_only_the_first)
 	end_of_test();
 }
 
+/* Broadcasts delivered on one channel, whatever device they came from. */
+static uint32_t count_bcast_on(uint8_t ch)
+{
+	uint32_t n = 0u;
+	uint32_t i;
+
+	for (i = 0u; i < n_msg && i < MSGLOG_MAX; i++) {
+		if (msglog[i].id == (uint8_t)ANTW_MESG_BROADCAST_DATA_ID &&
+		    msglog[i].len >= 1u && msglog[i].data[0] == ch) {
+			n++;
+		}
+	}
+	return n;
+}
+
+/*
+ * Run virtual time forward while letting the event thread keep up.
+ *
+ * Both halves are needed and neither is optional. fake_radio fires its events
+ * on the calling thread, so a single long advance runs a whole second of radio
+ * with no pump in between - the sweep would look starved for a reason that is
+ * purely an artefact of the harness. The event thread is where api_housekeep()
+ * re-posts the next chunk, and it only runs when this thread blocks.
+ *
+ * So: step to the next due event (never more than 20 ms at a time), deliver,
+ * then yield. This is the one place in this file that sleeps with operations
+ * armed, and it is deliberate - the subject of the test IS the interaction
+ * between the event thread's pump and a radio that is busy with something else,
+ * which is unreachable any other way. The assertions it feeds are lower bounds
+ * over a long window rather than exact orderings, which is what makes that
+ * safe.
+ */
+static void run_virtual_us(uint64_t total_us)
+{
+	uint64_t elapsed = 0u;
+
+	while (elapsed < total_us) {
+		radiant_time_t due = fake_radio_next_due();
+		radiant_time_t now = radiant_radio_now();
+		uint32_t       step = 20000u;
+
+		if (due != RADIANT_TIME_NEVER) {
+			uint32_t d = (uint32_t)(due - now); /* wrap-safe */
+
+			if (d < step) {
+				step = d + 1u;
+			}
+		}
+		fake_radio_advance(step);
+		elapsed += step;
+		drain();
+		k_sleep(K_MSEC(1));
+	}
+}
+
+/* One sensor's frames for the whole run, on its own period. */
+static void air_repeating(uint16_t number, uint8_t dev_type, radiant_time_t t_first,
+			  uint32_t count)
+{
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t len = fake_radio_build_ant_frame(frame, number, dev_type, 5u,
+						 peer_payload);
+
+	(void)fake_radio_air_master(t_first, PERIOD_US, count, frame, len);
+}
+
+/*
+ * THE SECOND BUG, AND THE ONE THAT MADE PAIRING FEEL BROKEN EVEN AFTER THE
+ * SCAN-MODE FIX.
+ *
+ * Zwift keeps its wildcard scan channel open ALONGSIDE the channels it has
+ * already paired, and expects to go on discovering while they track - that is
+ * how a pairing screen adds a second sensor without dropping the first. A
+ * USBPcap capture of a real session showed that stopping dead: with one channel
+ * receiving at 4 Hz, the scan channel reported ZERO devices for 25 s and then
+ * 35 s, across six full scan cycles, including a trainer it had already found
+ * twice. The first report after the tracked channel closed arrived 1 ms later,
+ * so nothing was slow - the sweep was getting no radio at all.
+ *
+ * api_post_search_window() posts the sweep as radiant_sched.c's CONTINUOUS form
+ * precisely so the scheduler can fit chunks into the gaps between tracked
+ * slots, and its comment claims "the sweep gets every microsecond the tracked
+ * channels are not using". A tracked channel at 4 Hz uses about 2 ms in 250 ms.
+ * This test states that claim as an assertion.
+ *
+ * Twelve seconds is one and a half full sweeps (32 sets x 260 ms = 8.32 s), so
+ * a healthy sweep must reach every set - including whichever one device B sits
+ * in - regardless of the phase it happened to be at when tracking started.
+ */
+ZTEST(api, test_the_scan_keeps_finding_devices_while_another_channel_tracks)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev_a;
+	const uint16_t               dev_b = 0x04A5u;
+	radiant_time_t               t_acq;
+	uint32_t                     scan_before;
+
+	open_background_scan_channel();
+
+	/* A second channel, ordinary wildcard slave - this is what Zwift opens
+	 * for a sensor it has just paired. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(1u,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(1u, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(1u, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(1u, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(1u));
+
+	/*
+	 * Device A alone in the first window, so channel 1 acquires A and
+	 * nothing else - B is not on the air yet, which makes which channel
+	 * takes which sensor a fact rather than a race.
+	 */
+	w = armed_search_window();
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
+	t_acq = w->t_open + 1000u;
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u),
+		      "channel 1 did not acquire the only device on the air");
+
+	/* From here A keeps its slot and B is simply present, all run long. */
+	air_repeating(dev_a, 0x0Bu, t_acq + PERIOD_US, 48u);
+	air_repeating(dev_b, 0x78u, t_acq + (PERIOD_US / 3u), 48u);
+
+	scan_before = count_bcast_on(0u);
+	run_virtual_us(12000000u);
+
+	zassert_true(count_bcast_on(1u) > 0u,
+		     "channel 1 stopped tracking, so this test is not measuring "
+		     "what it claims to measure");
+	zassert_true(count_bcast_from(dev_b) >= 1u,
+		     "device %u was on the air for 12 s - one and a half full "
+		     "sweeps - and the scan channel never reported it while "
+		     "channel 1 was tracking. scan reports: %u before, %u after; "
+		     "tracked packets: %u",
+		     (unsigned int)dev_b, scan_before, count_bcast_on(0u),
+		     count_bcast_on(1u));
+
+	(void)antr_channel_close(1u);
+	(void)antr_channel_close(CH);
+	fake_radio_advance(1000u);
+	drain();
+
+	/*
+	 * end_of_test()'s ending, minus the one violation this test is
+	 * guaranteed to provoke. Twelve seconds of a tracked channel plus a
+	 * sweep is a few hundred arm calls and the mock records 64, so
+	 * FAKE_RADIO_VIOL_LOG_FULL here is the harness running out of room to
+	 * write in - not the firmware breaking a contract. Every other code
+	 * still fails the test, which is the part that matters.
+	 */
+	zassert_true(fake_radio_is_idle(), "radio not idle: %s",
+		     fake_radio_busy_reason());
+	for (uint32_t i = 0u; i < fake_radio_viol_count() &&
+			      i < (uint32_t)FAKE_RADIO_VIOL_MAX; i++) {
+		enum fake_radio_viol code = fake_radio_viol(i)->code;
+
+		/* NONE is a slot the violation log itself overflowed past. */
+		zassert_true(code == FAKE_RADIO_VIOL_LOG_FULL ||
+				     code == FAKE_RADIO_VIOL_NONE,
+			     "contract violation: %s",
+			     fake_radio_viol_name(code));
+	}
+}
+
+/*
+ * A background scan must still be searching long after an ordinary channel
+ * would have given up. This went red before the fix in search_deadline().
+ *
+ * Found on the bench, not by inspection. With the search counters logged once a
+ * second on a DK, a scan channel opened with the DEFAULT timeouts - which is
+ * what a host gets when it never sends MESG_SEARCH_TIMEOUT - reported devices
+ * happily and then stopped, permanently, at exactly 25 s:
+ * radiant_search_n_searching() read 0 from that moment on. The channel had hit
+ * the ordinary search deadline, raised RX_SEARCH_TIMEOUT and closed itself,
+ * leaving the host holding a discovery channel that could never discover
+ * anything again. From the outside that is "the dongle stops finding sensors
+ * after a while", which is a symptom nobody would attribute to a timeout the
+ * host never asked for.
+ *
+ * Forty seconds of virtual time is well past the 25 s default, and the
+ * assertion is the channel STATE rather than a device report, so a quiet bench
+ * cannot make it pass by accident.
+ */
+ZTEST(api, test_a_background_scan_never_times_out)
+{
+	open_background_scan_channel();
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH));
+
+	run_virtual_us(40000000u);
+
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH),
+		      "a channel assigned ALWAYS_SEARCH stopped searching after "
+		      "40 s - state %d. \"Always search\" is the entire meaning "
+		      "of the extended assignment bit",
+		      (int)radiant_channel_state_get(CH));
+
+	(void)antr_channel_close(CH);
+	fake_radio_advance(1000u);
+	drain();
+	zassert_true(fake_radio_is_idle(), "radio not idle: %s",
+		     fake_radio_busy_reason());
+}
+
 /*
  * The other side of the same coin, and the reason the fix is a mode check
  * rather than "never acquire from a search callback".
@@ -1000,6 +1211,96 @@ ZTEST(api, test_a_plain_wildcard_slave_still_acquires_and_tracks)
 			      "the channel tracked something other than what it "
 			      "acquired");
 	}
+
+	end_of_test();
+}
+
+/*
+ * A TRACKED CHANNEL OWES ITS NEXT WINDOW IMMEDIATELY, NOT ONE PUMP LATER.
+ *
+ * This is the invariant a background scan lives or dies on, and it is worth
+ * stating as a mechanism rather than as an outcome because the outcome is not
+ * reproducible here at all.
+ *
+ * radiant_sched.c ends a scan chunk at t_back(committed, lead), so a sweep and a
+ * tracked channel interleave exactly - but only against work it can already
+ * see. If a tracked slave's next window waits for api_pump_locked() on the
+ * event thread, then in the instant after its previous window completes there
+ * is no committed work, the scan is armed with NO end, and the pump's later
+ * post preempts it. On the bench that costs everything: 109 scan chunks armed
+ * unbounded against 6 bounded, one preemption per chunk, and frames_ok frozen
+ * at 15 for fourteen seconds while the sweep ran flat out and decoded nothing.
+ * The dongle stops finding sensors the moment one is paired.
+ *
+ * Why this test asserts the POST and not the discovery: the mock's completions
+ * are synchronous, so the pump follows the callback closely enough that
+ * test_the_scan_keeps_finding_devices_while_another_channel_tracks passes with
+ * or without the fix. It cannot see the gap. The gap is real on hardware, where
+ * arm_next() runs inside the completion callback and the event thread has not
+ * been scheduled yet. So this pins the thing that differs - that the slot is
+ * refilled by the completion itself - which is checkable here and is precisely
+ * what supplies the scheduler the fact it was missing.
+ */
+ZTEST(api, test_a_tracked_channel_reposts_its_next_window_without_a_pump)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev_a;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_lib_config_set((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(CH,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(CH));
+
+	/* Acquire, so the channel is TRACKING and its slots are predicted. */
+	w = armed_search_window();
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "setup: the channel did not acquire");
+
+	/*
+	 * One pump, so the FIRST tracked window is posted and armed - that one
+	 * legitimately comes from the pump, because nothing has completed yet.
+	 * The question this test asks is about its successor.
+	 */
+	run_housekeeping();
+
+	/*
+	 * Now run that window to completion and stop. drain() delivers queued
+	 * host messages; it deliberately does NOT sleep, so the event thread's
+	 * housekeeping pump has not run again. Anything pending on this channel
+	 * now was put there by the completion itself.
+	 */
+	{
+		const struct fake_radio_arm *tw = last_arm_of(FAKE_RADIO_ARM_RX);
+
+		zassert_not_null(tw, "no tracked window was armed after acquiring");
+		zassert_false(tw->terminated,
+			      "setup: the tracked window had already ended");
+		fake_radio_advance_to(tw->t_close + 1u);
+		drain();
+	}
+
+	zassert_true(radiant_sched_pending(CH),
+		     "a tracked channel finished its window and left its slot "
+		     "EMPTY, to be refilled by the next housekeeping pump. On "
+		     "hardware the scheduler picks the next operation inside "
+		     "that same completion, finds nothing committed, and arms "
+		     "the background scan with no end - which the pump's later "
+		     "post then preempts. That is how a paired sensor stops a "
+		     "dongle discovering any others");
 
 	end_of_test();
 }

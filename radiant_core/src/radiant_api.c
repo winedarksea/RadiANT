@@ -380,6 +380,15 @@ struct api_chan {
 	 * scheduler has fully retired the transmit before its slot is reused.
 	 */
 	bool           turn_pending;
+
+	/*
+	 * A tracked receive window is armed, so this channel owes the scheduler
+	 * its NEXT one the moment this completes. Set at arm, cleared before the
+	 * post, for exactly the reason turn_pending is: it bounds the re-post to
+	 * depth one against a backend that refuses every arm. See the block in
+	 * api_sched_done() for why the re-post cannot wait for the pump.
+	 */
+	bool           track_repost;
 	radiant_time_t turn_t_sync;
 
 	/*
@@ -1773,7 +1782,20 @@ static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_
 			void *user)
 {
 	(void)user;
-	if (!api_ch_valid(ch) || api_search_slot != ch ||
+	if (!api_ch_valid(ch)) {
+		return;
+	}
+	/*
+	 * A tracked window that really got armed owes its successor. Recording
+	 * it HERE rather than at post time is what bounds the re-post in
+	 * api_sched_done(): an arm the backend refuses never reaches this
+	 * callback, so the refusal's synchronous completion finds the flag
+	 * false and posts nothing.
+	 */
+	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_TRACK_RX) {
+		api_ch[ch].track_repost = true;
+	}
+	if (api_search_slot != ch ||
 	    api_ch[ch].slot_kind != (uint8_t)API_SLOT_SEARCH) {
 		return;
 	}
@@ -1942,6 +1964,54 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		api_ch[ch].turn_pending = false;
 		if (radiant_channel_state_get(ch) == RADIANT_CH_STATE_TRACKING) {
 			api_post_master_rx(ch, t_sync);
+		}
+	}
+
+	/*
+	 * THE SECOND EXCEPTION, AND IT IS WHAT KEEPS A BACKGROUND SCAN ALIVE
+	 * WHILE ANYTHING IS TRACKED.
+	 *
+	 * arm_next() ends a scan chunk at t_back(committed, lead), so a tracked
+	 * channel and a sweep interleave perfectly - but only for work the
+	 * scheduler can already SEE. Left to the pump, a tracked slave's next
+	 * window is posted from the event thread, while the scheduler picks the
+	 * next operation inside this very callback, having just freed that
+	 * channel's slot. In that gap there is no committed work at all, so the
+	 * scan is armed with no end; the pump then posts the tracked window and
+	 * want_preempt() tears the scan straight back down.
+	 *
+	 * Measured on the nRF54L15 with one channel tracking a power meter at
+	 * 3 Hz and the sweep counters logged once a second: 109 scan chunks
+	 * armed unbounded against 6 bounded, one preemption per chunk,
+	 * sets_advanced down from ~4/s to 0.4/s, and frames_ok FROZEN at 15 for
+	 * fourteen seconds. The sweep was running flat out and decoding nothing,
+	 * because no chunk ever stayed armed long enough to hear a 4 Hz master.
+	 * From the host it looks like a dongle that stops finding sensors the
+	 * moment one is paired - which is exactly what a Zwift capture shows:
+	 * ch0 silent for forty seconds, then discovering a new power meter 1.2 s
+	 * after the tracked channel closed.
+	 *
+	 * WHAT MUST NOT BE DONE INSTEAD: capping chunk_us in
+	 * api_post_search_window() against the soonest tracked slot. It looks
+	 * equivalent and is not - it shortens the dwell even when the scheduler
+	 * already had the tracked window and had bounded the chunk correctly,
+	 * and test_the_scan_keeps_finding_devices_while_another_channel_tracks
+	 * fails on it: a device on the air for twelve seconds went unreported.
+	 * The defect is a missing FACT, not a chunk that is too long, so the fix
+	 * is to supply the fact.
+	 *
+	 * Bounded exactly as turn_pending above: the flag is set only by
+	 * api_sched_armed(), on a window that really was armed, and cleared
+	 * before the post. A refused arm completes back into here with the flag
+	 * already false and posts nothing. Depth one, always.
+	 */
+	if (api_ch[ch].track_repost) {
+		api_ch[ch].track_repost = false;
+		if (radiant_channel_state_get(ch) == RADIANT_CH_STATE_TRACKING &&
+		    !radiant_channel_is_master(ch) &&
+		    !radiant_sched_pending(ch) &&
+		    radiant_transfer_is_idle(&api_xfer[ch])) {
+			api_post_track_rx(ch);
 		}
 	}
 

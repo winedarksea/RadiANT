@@ -42,6 +42,19 @@
     in the build log and in a failure message, instead of being whatever the
     machine happened to have configured.
 
+.PARAMETER RadiantBackend
+    Which radiant_core radio HAL to compile, for -Backend core: nrf (the real
+    radio) or null (an inert stub that transmits and receives nothing).
+
+    It defaults to nrf here even though CMakeLists.txt defaults it to null,
+    and the difference is deliberate. CMake's default is right for a compile
+    check; it is wrong for a script whose whole job is producing images
+    somebody flashes. A null-radio image enumerates, answers every host
+    command with OK and finds no sensors - indistinguishable from a dead
+    antenna - and it cost a Feather flash and a whole Zwift session to
+    identify once already, because none of the three checks below looked at
+    it. Now one does.
+
 .PARAMETER Only
     Build just the targets whose artifact name matches this wildcard.
 
@@ -58,6 +71,8 @@ param(
     [string]$NcsVersion = 'v3.2.4',
     [ValidateSet('sdk_ant', 'core', 'stub')]
     [string]$Backend = 'sdk_ant',
+    [ValidateSet('null', 'nrf')]
+    [string]$RadiantBackend = 'nrf',
     [string]$SdkAntDir = '',
     [string]$Only = '*',
     [switch]$SkipDfu
@@ -73,6 +88,10 @@ $dist = Join-Path $repo 'dist'
 # the backend name upper-cased, which is not a coincidence - CMakeLists.txt
 # generates the symbol from ANT_RADIO the same way.
 $backendSymbol = "CONFIG_ANT_DONGLE_RADIO_$($Backend.ToUpper())=y"
+
+# Same trick one level down, for radiant_core's own HAL choice. Only the core
+# backend has one; sdk_ant and stub never look at RADIANT_BACKEND.
+$radiantSymbol = "CONFIG_RADIANT_CORE_BACKEND_$($RadiantBackend.ToUpper())=y"
 
 # Same fields as the CI matrix. 'offset' is where the application must link and
 # 'transport' is which of the three src/ transports must end up compiled; both
@@ -130,6 +149,7 @@ try {
         Write-Host "`n=== $($t.artifact)  [$($t.board)]  [$Backend]" -ForegroundColor Cyan
 
         $extra = @('--', "-DANT_RADIO=$Backend")
+        if ($Backend -eq 'core') { $extra += "-DRADIANT_BACKEND=$RadiantBackend" }
         if ($antModuleDir) { $extra += "-DANT_MODULE_DIR=$antModuleDir" }
         if ($t.conf) { $extra += "-DEXTRA_CONF_FILE=$($t.conf)" }
 
@@ -184,7 +204,23 @@ try {
             throw "$($t.artifact): expected $backendSymbol in .config, found '$gotRadio'"
         }
 
-        Write-Host ("  ok: links at 0x{0:x}, {1} transport, {2} radio" -f $offset, $got, $Backend)
+        # 4. radiant_core's radio HAL. RADIANT_BACKEND defaults to null in
+        # CMakeLists.txt, so a -Backend core build that simply never mentions
+        # it compiles a radio that transmits and receives nothing - and checks
+        # 1 to 3 all pass, because the link address, the transport and the
+        # ANT_DONGLE_RADIO choice are all still exactly right. The resulting
+        # image enumerates and answers every host command with OK. The only
+        # symptom is that no sensor is ever found, which reads as a hardware
+        # fault and is why this check is worth its lines.
+        if ($Backend -eq 'core') {
+            if (-not ($cfg | Where-Object { $_ -eq $radiantSymbol })) {
+                $gotHal = ($cfg | Where-Object { $_ -match '^CONFIG_RADIANT_CORE_BACKEND_\w+=y' })
+                throw "$($t.artifact): expected $radiantSymbol in .config, found '$gotHal'"
+            }
+        }
+
+        $halNote = if ($Backend -eq 'core') { ", $RadiantBackend HAL" } else { '' }
+        Write-Host ("  ok: links at 0x{0:x}, {1} transport, {2} radio{3}" -f $offset, $got, $Backend, $halNote)
 
         # Only the sdk_ant backend produces artifacts anyone is handed. Release
         # images stay on that backend until the Tier 3 Zwift acceptance passes
@@ -239,8 +275,9 @@ try {
         Write-Host "`n=== build independence  [$board]  [$Backend, ANT_MODULE_DIR=$ghost]" -ForegroundColor Cyan
 
         $log = Join-Path $env:TEMP 'build_independence.log'
-        west -z $zephyr build -s $repo -d $out -b $board -p always -- `
-            "-DANT_RADIO=$Backend" "-DANT_MODULE_DIR=$ghost" > $log
+        $indep = @("-DANT_RADIO=$Backend", "-DANT_MODULE_DIR=$ghost")
+        if ($Backend -eq 'core') { $indep += "-DRADIANT_BACKEND=$RadiantBackend" }
+        west -z $zephyr build -s $repo -d $out -b $board -p always -- @indep > $log
         if ($LASTEXITCODE -ne 0) {
             Get-Content $log -Tail 30
             throw "the $Backend backend does not build without sdk-ant present; full log at $log"

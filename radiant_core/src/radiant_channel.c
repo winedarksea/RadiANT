@@ -279,6 +279,15 @@ static void chan_begin_close(uint8_t channel, struct chan *c)
  * which is the honest reading of "0 disables high-priority search" combined
  * with a low-priority search that is also disabled, and is better than a
  * channel that sits in SEARCHING forever with both timeouts off. */
+/*
+ * MESG_ASSIGN_CHANNEL's extended-assignment "always search" bit, named in
+ * protocol/ant_wire.yaml as ANTW_EXT_PARAM_ALWAYS_SEARCH. This file is below
+ * the wire layer and does not include ant_wire.h, so the value is restated here
+ * the same way radiant_api.c restates it as API_EXT_ASSIGN_BACKGROUND_SCAN -
+ * the byte reaches both of them through radiant_channel_assign() unchanged.
+ */
+#define CH_EXT_ASSIGN_BACKGROUND_SCAN 0x01u
+
 static radiant_time_t search_deadline(const struct chan *c)
 {
 	radiant_time_t budget;
@@ -286,6 +295,33 @@ static radiant_time_t search_deadline(const struct chan *c)
 	if (c->t_search_start == RADIANT_TIME_NEVER) {
 		return RADIANT_TIME_NEVER;
 	}
+
+	/*
+	 * A BACKGROUND SCAN HAS NO DEADLINE, WHATEVER THE TIMEOUT BYTES SAY.
+	 *
+	 * ANTW_EXT_PARAM_ALWAYS_SEARCH is not a hint - "always search" is the
+	 * entire meaning of the extended assignment bit, and a channel carrying
+	 * it is a discovery channel the host intends to leave open for as long
+	 * as it wants to keep finding sensors. Nothing ever acquires on it (see
+	 * api_search_acquired()'s scan-mode branch), so the search-timeout
+	 * machinery below cannot mean for it what it means everywhere else: a
+	 * deadline that exists to stop a channel hunting forever for one device
+	 * that is not there.
+	 *
+	 * Found on the bench, with the search counters logged once a second: a
+	 * scan channel opened with the DEFAULT timeouts - which is what a host
+	 * gets if it does not send MESG_SEARCH_TIMEOUT at all - reported
+	 * devices normally and then stopped dead, permanently, at exactly 25 s.
+	 * radiant_search_n_searching() read 0 from that moment on: the channel
+	 * had timed out, raised RX_SEARCH_TIMEOUT and closed, and the host was
+	 * left holding a discovery channel that would never discover anything
+	 * again. It looks exactly like a dongle that "stops finding sensors
+	 * after a while".
+	 */
+	if ((c->ext_assign & CH_EXT_ASSIGN_BACKGROUND_SCAN) != 0u) {
+		return RADIANT_TIME_NEVER;
+	}
+
 	if (c->search_timeout == RADIANT_CHANNEL_SEARCH_INFINITE ||
 	    c->lp_search_timeout == RADIANT_CHANNEL_SEARCH_INFINITE) {
 		return RADIANT_TIME_NEVER;
