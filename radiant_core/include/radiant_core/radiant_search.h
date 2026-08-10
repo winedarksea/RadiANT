@@ -191,6 +191,35 @@ extern "C" {
  * nothing while losing the within-one-sweep guarantee. */
 #define RADIANT_SEARCH_DWELL_DEFAULT_US 260000u
 
+/*
+ * THE DWELL IS A BUDGET, NOT A SINGLE WINDOW, AND THAT DISTINCTION IS LOAD-
+ * BEARING. It is why radiant_search_on_done() credits time rather than counting
+ * windows, and getting it wrong cost this project a working dongle.
+ *
+ * A tracked slave demands the radio every 249.7 ms, so a 260 ms search window
+ * can never reach its close: the scheduler preempts it and reports
+ * RADIANT_SCHED_DONE_ABORTED. Until 2026-08-10 an abort credited NOTHING, so
+ * set_dwell_us never filled, radiant_search_window() never reached
+ * select_next_set(), and THE SWEEP FROZE on whichever set it was on. Every
+ * device outside that one set was undiscoverable for as long as anything was
+ * tracking - which is every real session, and no bench session this project
+ * ever ran.
+ *
+ * MEASURED, not reasoned: on 2026-08-10, with one channel tracking, a
+ * transmitter at -25 dBm whose devnum_lo put it in set 2 was invisible to a 60 s
+ * wildcard scan, while a device in set 1 was found every time. Zwift saw one
+ * sensor and no others. The fix is to credit the time actually listened to.
+ *
+ * CHUNKING THE DWELL WAS TRIED AND REJECTED, and the reason belongs here so it
+ * is not tried again. Capping a window at some fraction of the dwell makes more
+ * windows complete, which also unfreezes the sweep - but a 50 ms window catches
+ * a 4 Hz sensor only when it happens to align with a transmission, which is
+ * exactly the failure the full-period dwell exists to prevent. It converts
+ * "certain within one sweep" into "likely", silently, for no gain over
+ * crediting honestly. Seven tests in test_search.c encode that guarantee and all
+ * seven fail if the cap is reintroduced; they are the guard, and they are right.
+ */
+
 /* ANT's default search timeout: 10 counts of 2.5 s [rev5.1]. */
 #define RADIANT_SEARCH_TIMEOUT_DEFAULT_US 25000000u
 
@@ -636,13 +665,35 @@ void radiant_search_on_rx_indexed(struct radiant_search *s, const struct radiant
 			      uint8_t filter_index);
 
 /*
- * The window in flight has finished. ran_to_close credits the dwell; anything
- * else - aborted, failed, taken back by the scheduler - credits nothing, so the
- * same set is listened to again. Called for you by radiant_search_on_rx() on a
- * terminal event; called directly by a scheduler whose completion notification
- * is not a HAL event.
+ * The window in flight has finished. Credits the time actually spent listening
+ * on the current set, which is what the dwell is accounted in.
+ *
+ * There are exactly three outcomes and they are not interchangeable:
+ *
+ *   ran_to_close        the window reached its close. Credit the whole span.
+ *   opened, cut short   it listened from t_open until ended_at and the radio
+ *                       was then taken away. Credit up to ended_at.
+ *   never opened        credit NOTHING. A request that was never armed, or was
+ *                       refused, listened for no time at all, and crediting a
+ *                       window that never existed would skip a set silently.
+ *
+ * THE MIDDLE CASE IS THE ONE THAT MATTERS AND IT USED TO CREDIT ZERO. Under a
+ * tracked channel every search window is cut short, so zero credit meant the
+ * dwell never filled and the sweep never advanced past its current set - see
+ * the dwell-is-a-budget comment above for the measurement that found it. Crediting
+ * what was really listened to is what makes this module's own claim - "accounted
+ * as accumulated listening time on the current set", in the header comment -
+ * true under fragmentation rather than merely intended.
+ *
+ * ended_at is ignored unless the window opened and was cut short. It is clamped
+ * to [t_open, t_close], so a caller that passes a clock reading taken slightly
+ * after the abort cannot over-credit.
+ *
+ * Called for you by radiant_search_on_rx() on a terminal event; called directly
+ * by a scheduler whose completion notification is not a HAL event.
  */
-void radiant_search_on_done(struct radiant_search *s, bool ran_to_close);
+void radiant_search_on_done(struct radiant_search *s, bool ran_to_close,
+			bool opened, radiant_time_t ended_at);
 
 /*
  * Expire seen entries and fire the timeout callback for any channel past its

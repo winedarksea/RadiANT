@@ -639,13 +639,22 @@ static void on_event(struct radiant_search *s, const struct radiant_rx_event *ev
 
 	case RADIANT_RADIO_STATUS_TIMEOUT:
 		/* The window closed on schedule: credit the dwell. */
-		radiant_search_on_done(s, true);
+		radiant_search_on_done(s, true, true, evt->t_sync);
 		break;
 
 	case RADIANT_RADIO_STATUS_ABORTED:
 	case RADIANT_RADIO_STATUS_FAILED:
 	default:
-		radiant_search_on_done(s, false);
+		/*
+		 * Credit nothing, deliberately, and unlike the scheduler path.
+		 * This is the direct-HAL search - the module owns the radio
+		 * outright - so nothing is competing for it and a window is not
+		 * being cut short every period. There is no trustworthy end
+		 * instant in an aborted event here, and the starvation that
+		 * makes partial credit necessary cannot arise without a
+		 * scheduler taking the radio away.
+		 */
+		radiant_search_on_done(s, false, false, 0u);
 		break;
 	}
 }
@@ -678,25 +687,44 @@ void radiant_search_on_rx_indexed(struct radiant_search *s, const struct radiant
 	on_event(s, evt, filter_index);
 }
 
-void radiant_search_on_done(struct radiant_search *s, bool ran_to_close)
+void radiant_search_on_done(struct radiant_search *s, bool ran_to_close,
+			bool opened, radiant_time_t ended_at)
 {
+	radiant_time_t end;
+
 	if (!inst_ok(s) || s->op == 0u) {
 		return;
 	}
 
 	/*
-	 * Credit the time actually spent listening on this set - what was
-	 * armed, not what we asked for. An abort credits NOTHING: we do not
-	 * know when it stopped and this module makes no HAL calls to find out,
-	 * and crediting nothing costs a repeated dwell where crediting a full
-	 * window would silently lose coverage of a set.
+	 * Credit the time actually spent listening on this set.
+	 *
+	 * A window that never opened credits nothing - it listened for no time,
+	 * and crediting it would skip a set. A window that opened and was cut
+	 * short credits what it really listened to, clamped into the window it
+	 * was given so that a clock read a moment after the abort, or a caller
+	 * that reports the wrong instant, cannot over-credit and skip coverage.
+	 *
+	 * Crediting the cut-short case is what keeps the sweep moving while a
+	 * tracked channel owns most of the radio; see the contract in the header.
 	 */
-	if (ran_to_close && s->t_close > s->t_open) {
-		uint64_t listened = (uint64_t)(s->t_close - s->t_open);
-		uint64_t total = (uint64_t)s->set_dwell_us + listened;
+	if (s->t_close > s->t_open) {
+		if (ran_to_close) {
+			end = s->t_close;
+		} else if (opened) {
+			end = (ended_at > s->t_close) ? s->t_close : ended_at;
+		} else {
+			end = s->t_open;
+		}
 
-		s->set_dwell_us = (total > (uint64_t)UINT32_MAX) ? UINT32_MAX
-								 : (uint32_t)total;
+		if (end > s->t_open) {
+			uint64_t listened = (uint64_t)(end - s->t_open);
+			uint64_t total = (uint64_t)s->set_dwell_us + listened;
+
+			s->set_dwell_us = (total > (uint64_t)UINT32_MAX)
+						  ? UINT32_MAX
+						  : (uint32_t)total;
+		}
 	}
 
 	s->op = 0u;

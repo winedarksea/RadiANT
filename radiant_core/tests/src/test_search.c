@@ -613,7 +613,105 @@ ZTEST(radiant_search, test_merged_window_uses_the_supplied_filter_index)
 	zassert_equal(0u, radiant_search_get_stats(&g_s)->late_events,
 		      "the EXTERNAL sentinel means the caller owns the routing");
 
-	radiant_search_on_done(&g_s, true);
+	radiant_search_on_done(&g_s, true, true, w.t_close);
+	end_of_test();
+}
+
+/*
+ * THE SWEEP MUST STILL ADVANCE WHEN EVERY WINDOW IS CUT SHORT.
+ *
+ * This is the regression test for the bug that made a real bench fail where
+ * this project's own bench passed. A tracked slave takes the radio every
+ * 249.7 ms, so with anything tracking, EVERY search window is preempted and
+ * ends RADIANT_SCHED_DONE_ABORTED. While an abort credited nothing, set_dwell_us
+ * never reached dwell_us, radiant_search_window() never called select_next_set(),
+ * and the sweep sat on one set for ever - so a sensor anywhere else was
+ * undiscoverable for as long as any channel was tracking. Measured on air
+ * 2026-08-10: a transmitter at -25 dBm in set 2 was invisible to a 60 s scan.
+ *
+ * Driven through the EXTERNAL sentinel because that is exactly how radiant_api.c
+ * drives it, and because it needs no HAL: the whole mechanism is window ->
+ * armed -> cut short, and none of it requires a radio to be present.
+ */
+ZTEST(radiant_search, test_a_sweep_advances_even_when_every_window_is_cut_short)
+{
+	struct radiant_search_window w;
+	radiant_time_t earliest;
+	uint16_t first_set;
+	int i;
+
+	bring_up(false);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+
+	earliest = radiant_radio_now() + radiant_radio_caps_get()->min_arm_lead_us + 100u;
+	zassert_ok(radiant_search_window(&g_s, earliest, &w));
+	first_set = w.set_index;
+
+	/*
+	 * Each pass listens for a slice and is then cut short, which is what a
+	 * tracked channel does to a search window. Bounded so a stuck sweep
+	 * fails the test instead of hanging it: one dwell is 260 ms and each
+	 * pass credits 20 ms, so 13 passes is the honest figure and 100 leaves
+	 * room without letting a genuinely frozen sweep spin for ever.
+	 */
+	for (i = 0; i < 100 && w.set_index == first_set; i++) {
+		radiant_time_t cut = w.t_open + 20000u;
+
+		if (cut > w.t_close) {
+			cut = w.t_close;
+		}
+		radiant_search_armed(&g_s, RADIANT_SEARCH_OP_EXTERNAL, w.t_open,
+				 w.t_close);
+		radiant_search_on_done(&g_s, false, true, cut);
+
+		earliest = cut + radiant_radio_caps_get()->min_arm_lead_us + 100u;
+		zassert_ok(radiant_search_window(&g_s, earliest, &w));
+	}
+
+	zassert_not_equal(first_set, w.set_index,
+			  "the sweep never left set %u: a window that is cut "
+			  "short credits no dwell, so with a tracked channel "
+			  "taking the radio every period the sweep freezes and "
+			  "every device outside this set is undiscoverable",
+			  first_set);
+	end_of_test();
+}
+
+/*
+ * The other half of the contract: a window that never opened must credit
+ * nothing. Without this, "credit what was listened to" would drift into
+ * "credit anything that was asked for", and a sweep that skipped a set on every
+ * refused arm would lose coverage silently - which is the failure the original
+ * credit-nothing rule was protecting against and which must survive the fix.
+ */
+ZTEST(radiant_search, test_a_window_that_never_opened_credits_nothing)
+{
+	struct radiant_search_window w;
+	radiant_time_t earliest;
+	uint16_t first_set;
+	int i;
+
+	bring_up(false);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+
+	earliest = radiant_radio_now() + radiant_radio_caps_get()->min_arm_lead_us + 100u;
+	zassert_ok(radiant_search_window(&g_s, earliest, &w));
+	first_set = w.set_index;
+
+	for (i = 0; i < 20; i++) {
+		radiant_search_armed(&g_s, RADIANT_SEARCH_OP_EXTERNAL, w.t_open,
+				 w.t_close);
+		/* Never armed: MISSED or FAILED, and ended_at is meaningless. */
+		radiant_search_on_done(&g_s, false, false, w.t_close);
+
+		zassert_ok(radiant_search_window(&g_s, earliest, &w));
+		zassert_equal(first_set, w.set_index,
+			      "a request that never reached the air credited "
+			      "dwell and skipped set %u",
+			      first_set);
+	}
 	end_of_test();
 }
 

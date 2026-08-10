@@ -1064,6 +1064,49 @@ static void api_post_search_window(radiant_time_t now)
 		return;
 	}
 
+	/*
+	 * THE SWEEP EATS TRACKED SLOTS, AND THIS IS NOT WHERE TO FIX IT.
+	 *
+	 * A sweep window is a BOUNDED receive that wants to start immediately,
+	 * and radiant_sched.c's arm_next() runs "whatever starts first". A tracked
+	 * slave's window opens up to a full period later, so the sweep wins the
+	 * choice every time and is then armed for its whole remaining dwell with
+	 * no limit - arm_next() truncates a bounded receive only to make room for
+	 * a TRANSMIT, never for another receive. The tracked window falls inside
+	 * the armed sweep, is never armed, and expires RADIANT_SCHED_DONE_MISSED.
+	 * want_preempt() cannot rescue it: its "tracked work outranks searching"
+	 * rule is gated on the armed operation being CONTINUOUS, and
+	 * could_join_armed() refuses the merge because a tracking window's fmt is
+	 * CFG_TRACKING against the sweep's CFG_SEARCH.
+	 *
+	 * MEASURED 2026-08-10, against a master at -25 dBm so signal level cannot
+	 * be the explanation: 0.02 % loss with one channel tracking and nothing
+	 * searching, 5.96 % with one channel also searching, RX_FAIL x693 in a
+	 * 60 s eight-channel session.
+	 *
+	 * BOUNDING THE REQUEST HERE WAS TRIED AND REVERTED. Ending the window
+	 * before the earliest TRACKING channel's next slot fixes the loss
+	 * handsomely - RX_FAIL 590 -> 115 and RX_FAIL_GO_TO_SEARCH 68 -> 2 on the
+	 * same board and sensors - and starves the sweep, because the earliest
+	 * tracked slot is nearly always imminent, so almost every post is refused
+	 * as too short and the sweep stops advancing. Two controlled runs, with
+	 * masters at -25 dBm confirmed transmitting 81/81 and 26/26 when pinned:
+	 * neither a set-9 nor a set-30 device was discovered in 90 s, where the
+	 * unbounded sweep finds a set-9 device in 60 s. Trading discovery for
+	 * loss is not a fix; a dongle that cannot see a sensor is worse than one
+	 * that sees it unsteadily.
+	 *
+	 * The real fix is to post the sweep as a CONTINUOUS request
+	 * (t_close = RADIANT_TIME_NEVER plus chunk_us). radiant_sched.c already
+	 * implements exactly the semantics wanted and nothing else does: a
+	 * continuous RX is skipped by abort_armed() so it pauses instead of
+	 * losing its dwell, want_preempt() lets any bounded request displace it,
+	 * and arm_next() gives it s_limit = t_back(committed, lead) so it fills
+	 * the gap ahead of committed work rather than guessing at one. It needs
+	 * slot-lifecycle work here, because the sweep must change filters every
+	 * set while a continuous slot is designed to stay armed until cancelled.
+	 */
+
 	memset(&req, 0, sizeof(req));
 	req.fmt = w.fmt;
 	req.rf_index = w.rf_index;
@@ -1697,10 +1740,17 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 	}
 
 	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_SEARCH) {
-		/* ran_to_close credits the dwell; anything else credits nothing
-		 * and the same set is listened to again, which is what keeps
-		 * "certain within one sweep" true under fragmentation. */
-		radiant_search_on_done(&api_search, why == RADIANT_SCHED_DONE_OK);
+		/*
+		 * DONE_OK credits the whole window. DONE_ABORTED means a nearer
+		 * deadline - a tracked channel - took the radio partway through,
+		 * so credit what was actually listened to up to now: that is the
+		 * normal case whenever anything is tracking, and crediting it
+		 * zero is what froze the sweep on one set and made every device
+		 * outside that set undiscoverable. MISSED and FAILED never
+		 * opened a window and credit nothing.
+		 */
+		radiant_search_on_done(&api_search, why == RADIANT_SCHED_DONE_OK,
+				   why == RADIANT_SCHED_DONE_ABORTED, now);
 		if (api_search_slot == ch) {
 			api_search_slot = RADIANT_SCHED_CH_NONE;
 		}
@@ -2199,12 +2249,14 @@ antr_err_t antr_channel_close(uint8_t channel)
 			 * This channel was carrying the sweep and its request
 			 * is about to be cancelled silently, so nothing else
 			 * will tell radiant_search.c that its window is over.
-			 * false: nothing was credited, so the same set is
-			 * listened to again on the next pass rather than the
-			 * sweep skipping a set every time a host closes a
-			 * channel.
+			 * Nothing is credited, so the same set is listened to
+			 * again on the next pass rather than the sweep skipping
+			 * a set every time a host closes a channel. The window
+			 * is being cancelled rather than cut short by a nearer
+			 * deadline, and this path has no end instant to credit
+			 * against.
 			 */
-			radiant_search_on_done(&api_search, false);
+			radiant_search_on_done(&api_search, false, false, 0u);
 			api_search_slot = RADIANT_SCHED_CH_NONE;
 		}
 
