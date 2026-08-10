@@ -723,6 +723,287 @@ ZTEST(api, test_a_constant_transmit_offset_moves_the_period_by_exactly_that)
 	end_of_test();
 }
 
+/* ---------------------------------------------------------------------------
+ * The slave side: a background scan
+ *
+ * Everything above drives a master. This half exists because the bug that cost
+ * a whole session lived here and nothing in this suite could see it - the
+ * module suites test radiant_search.c's own decisions, and radiant_search.c was
+ * right; what was wrong was what radiant_api.c did with the answer.
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * A host's broadcast, as it reaches antr_on_message() with lib config asking
+ * for the extended tail:
+ *
+ *     [channel][d0..d7][flag][devnum lo][devnum hi][device type][trans type]
+ *
+ * The device number is the whole point of a scan - it is how the host tells one
+ * sensor from another - so counting messages per device number is the honest
+ * question to ask of a discovery mechanism. See radiant_event.h's layout
+ * comment; index 9 is the flag byte because the payload is always 8.
+ */
+#define EXT_FLAG   9u
+#define EXT_NUM_LO 10u
+#define EXT_NUM_HI 11u
+#define EXT_DTYPE  12u
+
+static uint32_t count_bcast_from(uint16_t device_number)
+{
+	uint32_t n = 0u;
+	uint32_t i;
+
+	for (i = 0u; i < n_msg && i < MSGLOG_MAX; i++) {
+		const struct msg_rec *m = &msglog[i];
+		uint16_t              num;
+
+		if (m->id != (uint8_t)ANTW_MESG_BROADCAST_DATA_ID ||
+		    m->len < (EXT_DTYPE + 1u)) {
+			continue;
+		}
+		if ((m->data[EXT_FLAG] & (uint8_t)ANTW_EXT_FLAG_CHANNEL_ID) == 0u) {
+			continue;
+		}
+		num = (uint16_t)((uint16_t)m->data[EXT_NUM_LO] |
+				 ((uint16_t)m->data[EXT_NUM_HI] << 8));
+		if (num == device_number) {
+			n++;
+		}
+	}
+	return n;
+}
+
+/*
+ * Zwift's actual discovery channel, byte for byte from a USBPcap capture of a
+ * real pairing session: ASSIGN_CHANNEL 00 40 00 01 - channel 0, SLAVE_RX_ONLY,
+ * network 0, extended assignment ALWAYS_SEARCH - then a wildcard channel ID and
+ * an open. This is NOT MESG_OPEN_RX_SCAN_MODE; the capture shows Zwift never
+ * sends 0x5B. Writing the assignment out here rather than reusing
+ * open_channel() is deliberate: the four bytes ARE the scenario.
+ */
+static void open_background_scan_channel(void)
+{
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_lib_config_set((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(CH,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY, 0u,
+					  (uint8_t)ANTW_EXT_PARAM_ALWAYS_SEARCH));
+	/* Wildcard in all three fields: find anything. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(CH));
+}
+
+/*
+ * The armed search window, with its filters - which is where the device numbers
+ * below come from.
+ *
+ * A sweep set only matches eight device-number low bytes at a time, so a test
+ * that hardcoded a device number would be asserting about the sweep's phase
+ * rather than about discovery, and would break the first time the sweep order
+ * or the seen-cache steering changed. Reading the low byte out of the window
+ * that is actually armed makes the frame match by construction.
+ */
+static const struct fake_radio_arm *armed_search_window(void)
+{
+	const struct fake_radio_arm *w = last_arm_of(FAKE_RADIO_ARM_RX);
+
+	zassert_not_null(w, "no search window was armed at all");
+	zassert_false(w->terminated,
+		      "the window found had already run - the sweep stopped");
+	zassert_true(w->n_filters >= 2u,
+		     "the nRF caps preset gives eight filters per window; got %u",
+		     w->n_filters);
+	return w;
+}
+
+/*
+ * Let the event thread post the next window of the sweep.
+ *
+ * A SEARCHING channel has nothing host-side to pump it. A master's next slot is
+ * posted when the host writes the next payload - that is what every test above
+ * relies on - but a sweep's next window comes from api_housekeep() and from
+ * nowhere else, so without this the sweep stops dead after one window and the
+ * suite would be measuring its own pacing rather than the firmware's.
+ *
+ * This is the second of the two deliberate sleeps in this file (see constraint 1
+ * at the top). It is legitimate for the same reason the housekeeping watchdog's
+ * is: the window has just run out, so nothing is armed, and the assertion below
+ * states that rather than trusting it.
+ */
+static void run_housekeeping(void)
+{
+	zassert_true(fake_radio_is_idle(),
+		     "sleeping with an operation armed gives the ordering away "
+		     "to the event thread: %s",
+		     fake_radio_busy_reason());
+	k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
+}
+
+static void air_device(const struct fake_radio_arm *w, uint8_t filter_index,
+		       uint16_t number_hi, uint8_t dev_type, uint32_t at_offset_us,
+		       uint16_t *out_number)
+{
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t len;
+	uint16_t number = (uint16_t)(number_hi | w->filters[filter_index].addr[2]);
+
+	len = fake_radio_build_ant_frame(frame, number, dev_type, 5u, peer_payload);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(w->t_open + at_offset_us, frame, len),
+		      "could not put device %u on the air", (unsigned int)number);
+	*out_number = number;
+}
+
+/*
+ * THE ONE THE SLAVE HALF OF THIS SUITE EXISTS FOR, and it goes red before the
+ * fix in api_search_acquired().
+ *
+ * A background scan is defined by never leaving: the host opens ONE wildcard
+ * channel and expects to be told about every device on the air, indefinitely.
+ * api_search_acquired() used to call radiant_channel_on_acquired() for every
+ * match regardless of the search mode, and that function knows nothing about
+ * modes - it unconditionally sets RADIANT_CH_STATE_TRACKING. The state check at
+ * the end of the callback then ended the search. So the very first sensor to
+ * answer converted the scan into an ordinary tracked channel locked to that one
+ * device, and every other sensor in the room became invisible.
+ *
+ * The symptom on a real host was exactly this and nothing more: Zwift's pairing
+ * screen showed ONE sensor, a different one each run, whichever happened to
+ * transmit first.
+ *
+ * Two devices in the SAME window is the sharp half of the assertion - it needs
+ * no second window and no timing argument, because if the channel left the
+ * search on the first frame the second one has nowhere to be delivered. The
+ * third device in a LATER window then proves the sweep itself kept running,
+ * which is the other thing the conversion destroyed.
+ */
+ZTEST(api, test_a_background_scan_reports_every_device_not_only_the_first)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev_a;
+	uint16_t                     dev_b;
+	uint16_t                     dev_c;
+	uint32_t                     op_first;
+
+	open_background_scan_channel();
+
+	w = armed_search_window();
+	op_first = w->op;
+
+	/* A power meter and a heart rate monitor, both inside one dwell. */
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
+	air_device(w, 1u, 0x0600u, 0x78u, 5000u, &dev_b);
+
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+
+	zassert_true(count_bcast_from(dev_a) >= 1u,
+		     "the first device to answer was never reported at all - "
+		     "this is not the scan bug, the scan is not working");
+	zassert_true(count_bcast_from(dev_b) >= 1u,
+		     "device %u answered the same window as device %u and the "
+		     "host was never told: the scan converted itself to a "
+		     "tracked channel on the first match",
+		     (unsigned int)dev_b, (unsigned int)dev_a);
+
+	/*
+	 * And the channel is still searching. This is the mechanism rather than
+	 * the symptom, and it is what makes the failure above unambiguous: a
+	 * scan channel that reads TRACKING has been acquired, and an acquired
+	 * channel is one radiant_search_end() away from discovering nothing
+	 * else, for the rest of the session.
+	 */
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH),
+		      "a background scan must never leave the search - state %d",
+		      (int)radiant_channel_state_get(CH));
+
+	/* A third device, in whatever window the sweep moved on to. */
+	run_housekeeping();
+	w = armed_search_window();
+	zassert_not_equal(op_first, w->op,
+			  "the sweep did not move on to a second window");
+
+	air_device(w, 0u, 0x0700u, 0x11u, 1000u, &dev_c);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+
+	zassert_true(count_bcast_from(dev_c) >= 1u,
+		     "device %u was found by a later window and not reported - "
+		     "the sweep stopped serving the scan channel",
+		     (unsigned int)dev_c);
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH));
+
+	end_of_test();
+}
+
+/*
+ * The other side of the same coin, and the reason the fix is a mode check
+ * rather than "never acquire from a search callback".
+ *
+ * An ordinary wildcard slave - no extended assignment - is ACQUIRE mode, and it
+ * MUST leave the search and start tracking the first device it matches. That is
+ * how every normal pairing works. A fix that made the scan case work by
+ * removing the acquire path would break this, silently, and the dongle would
+ * pair with nothing at all.
+ */
+ZTEST(api, test_a_plain_wildcard_slave_still_acquires_and_tracks)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev_a;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_lib_config_set((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
+	/* Same channel, same wildcard ID - the ONLY difference from the test
+	 * above is the extended assignment byte. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(CH,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(CH));
+
+	w = armed_search_window();
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+
+	zassert_true(count_bcast_from(dev_a) >= 1u,
+		     "the acquiring frame is delivered to the host, not dropped");
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "an ACQUIRE-mode wildcard slave must take the first device "
+		      "it matches - state %d",
+		      (int)radiant_channel_state_get(CH));
+
+	/* And it took the device's identity with it, which is what makes the
+	 * next period a tracked slot rather than more searching. */
+	{
+		struct radiant_channel_id id;
+
+		zassert_equal(RADIANT_CH_OK, radiant_channel_id_get(CH, &id));
+		zassert_equal(dev_a, id.device_number,
+			      "the channel tracked something other than what it "
+			      "acquired");
+	}
+
+	end_of_test();
+}
+
 /*
  * MASTER_TX_ONLY does not listen, and that is the one master shape ANT
  * documents as not doing so. Bit 4 of the channel type is the master bit and
