@@ -48,6 +48,7 @@
 #include <radiant_core/radiant_event.h>
 #include <radiant_core/radiant_frame.h>
 #include <radiant_core/radiant_sched.h>
+#include <radiant_core/radiant_search.h>
 #include <radiant_core/radiant_transfer.h>
 
 #include "ant_radio.h"
@@ -1115,6 +1116,226 @@ ZTEST(api, test_the_scan_keeps_finding_devices_while_another_channel_tracks)
 			     "contract violation: %s",
 			     fake_radio_viol_name(code));
 	}
+}
+
+/*
+ * ZWIFT'S AUTO-PAIR: A CHANNEL THAT NAMES ITS DEVICE MUST NOT WAIT FOR THE
+ * ROUND ROBIN.
+ *
+ * A channel opened with a device number in its ID can only ever be caught by
+ * ONE sweep set - devnum_lo picks it outright - so radiant_search_begin() pushes
+ * that set to the front of the queue and the acquisition should cost one dwell,
+ * not one sweep. That steer is the entire reason re-pairing a known sensor is
+ * supposed to be instant.
+ *
+ * Measured against the real thing on 2026-08-10, one channel already tracking:
+ *
+ *   ch1 (HR    dev 8265)  opened 33.92s -> first rx 34.16s =  0.24s
+ *   ch2 (power dev 20329) opened 36.81s -> first rx 55.54s = 18.72s
+ *
+ * The only difference between them is that ch1 opened with nothing tracking and
+ * ch2 opened with ch1 already tracking. 18.72 s is about two full sweeps, so the
+ * steer was not being honoured at all AND the sweep was running at about half
+ * wall-clock speed. The scan heard device 20329 at 36.81 s - the very instant
+ * ch2 opened, at -62.9 dBm - and then not again until 55.54 s, which is the
+ * instant ch2 finally acquired. The device was on the air throughout; the sweep
+ * simply never looked at its set.
+ *
+ * Device B is placed half the address space from wherever the sweep is when
+ * channel 2 opens - sixteen sets, ~4.2 s of round robin - so passing inside the
+ * 2 s budget cannot be the cursor happening to arrive. Only the steer gets there
+ * in time.
+ */
+ZTEST(api, test_a_named_device_is_steered_to_rather_than_waited_for)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev_a;
+	uint16_t                     dev_b;
+	uint8_t                      lo_now;
+	radiant_time_t               t_acq;
+
+	open_background_scan_channel();
+
+	/* Channel 1: an ordinary wildcard slave. It acquires device A and then
+	 * holds the radio to a 4 Hz tracked slot for the rest of the run, which
+	 * is the condition the bug needs. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(1u,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(1u, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(1u, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(1u, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(1u));
+
+	w = armed_search_window();
+	lo_now = w->filters[0].addr[2];
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
+	t_acq = w->t_open + 1000u;
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u),
+		      "setup: channel 1 did not acquire the only device on air");
+
+	air_repeating(dev_a, 0x0Bu, t_acq + PERIOD_US, 64u);
+
+	dev_b = (uint16_t)(0x0700u | (uint16_t)(uint8_t)(lo_now + 128u));
+	air_repeating(dev_b, 0x78u, t_acq + (PERIOD_US / 3u), 64u);
+
+	/* Channel 2 NAMES device B - this is Zwift re-pairing the sensor it
+	 * used last session, and it is the channel that took 18.72 s. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(2u,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(2u, dev_b, 0x78u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(2u, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(2u, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(2u));
+
+	run_virtual_us(2000000u);
+
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(2u),
+		      "channel 2 named device %u and did not acquire it in 2 s, "
+		      "while channel 1 tracked. Its set is sixteen sets from "
+		      "where the sweep was, so the round robin alone needs "
+		      "~4.2 s: the steer radiant_search_begin() pushed was not "
+		      "honoured. On the bench this is an 18.7 s pairing delay "
+		      "for a sensor the scan could already hear. tracked "
+		      "packets on ch1: %u, reports of device %u: %u",
+		      (unsigned int)dev_b, count_bcast_on(1u),
+		      (unsigned int)dev_b, count_bcast_from(dev_b));
+
+	(void)antr_channel_close(2u);
+	(void)antr_channel_close(1u);
+	(void)antr_channel_close(CH);
+	fake_radio_advance(1000u);
+	drain();
+
+	/* Same ending as the sibling test above, and for the same reason: a
+	 * multi-second run with a tracked channel plus a sweep overflows the
+	 * mock's 64-entry arm log, which is the harness running out of room to
+	 * write in rather than the firmware breaking a contract. */
+	zassert_true(fake_radio_is_idle(), "radio not idle: %s",
+		     fake_radio_busy_reason());
+	for (uint32_t i = 0u; i < fake_radio_viol_count() &&
+			      i < (uint32_t)FAKE_RADIO_VIOL_MAX; i++) {
+		enum fake_radio_viol code = fake_radio_viol(i)->code;
+
+		zassert_true(code == FAKE_RADIO_VIOL_LOG_FULL ||
+				     code == FAKE_RADIO_VIOL_NONE,
+			     "contract violation: %s",
+			     fake_radio_viol_name(code));
+	}
+}
+
+/*
+ * A SCAN CHUNK THAT ENDS PART-WAY THROUGH ITS SET MUST KEEP THE SLOT.
+ *
+ * The sweep's dwell is a budget spent a chunk at a time, and a tracked channel
+ * ends a chunk four times a second per channel. api_sched_done() used to cancel
+ * the request on every one of those and wait for the event thread to hand back
+ * a request the scheduler already had. The filters still described the same
+ * address set - there was nothing to decide - so the round trip bought nothing
+ * and cost the sweep the gap.
+ *
+ * Measured on the nRF54L15, one channel tracking at 4 Hz, before the fix:
+ *
+ *   housekeeping passes   38.5/s      search windows posted     7.6/s
+ *   sets advanced          2.5/s      nominal                   3.85/s
+ *   full sweep            12.8 s      nominal                   8.3 s
+ *   preempt=0  missed=0  ebusy=0  rejected=0
+ *
+ * Nothing was competing for the radio and nothing was failing; the sweep was
+ * idle waiting to be told to use time it already had. Worst-case time to
+ * discover a device IS that number, which is why pairing a second sensor while
+ * one is tracked feels slow.
+ *
+ * The chunk is asserted to be SHORT first. A chunk that ran the full dwell
+ * finishes the set legitimately and must drop the slot, so without that check a
+ * pass would prove nothing.
+ */
+ZTEST(api, test_a_scan_chunk_that_ends_mid_set_keeps_its_slot)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev_a;
+	radiant_time_t               t_acq;
+	uint32_t                     len;
+
+	open_background_scan_channel();
+
+	/* An ordinary wildcard slave. Once it acquires it demands the radio
+	 * every 249.7 ms, and that is what cuts the scan's chunks short. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(1u,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(1u, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(1u, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(1u, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(1u));
+
+	w = armed_search_window();
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
+	t_acq = w->t_open + 1000u;
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u),
+		      "setup: channel 1 did not acquire");
+
+	air_repeating(dev_a, 0x0Bu, t_acq + PERIOD_US, 32u);
+
+	/* One pump, so the tracked channel's slot is posted and the scheduler
+	 * can see it - a scan chunk armed now ends before it. */
+	run_housekeeping();
+
+	w = armed_search_window();
+	len = (uint32_t)(w->t_close - w->t_open);
+	zassert_true(len < (uint32_t)RADIANT_SEARCH_DWELL_DEFAULT_US,
+		     "setup: the chunk got %u us of a %u us dwell, so it "
+		     "finished the set and dropping the slot would be correct - "
+		     "this test cannot tell the two apart",
+		     (unsigned int)len,
+		     (unsigned int)RADIANT_SEARCH_DWELL_DEFAULT_US);
+
+	/*
+	 * Run that chunk out and stop. drain() delivers queued host messages and
+	 * deliberately does NOT sleep, so the event thread's pump has not run.
+	 * Anything in this channel's slot now was left there by the completion.
+	 */
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+
+	zassert_true(radiant_sched_pending(CH),
+		     "a scan chunk ended %u us into a %u us dwell and the sweep "
+		     "gave its slot back, to be re-posted by the next "
+		     "housekeeping pump. The filters describe the same address "
+		     "set either way - there was nothing to decide - so the "
+		     "round trip is pure dead air, four times a second per "
+		     "tracked channel. On hardware it costs a third of the "
+		     "sweep's throughput and half the worst-case time to find a "
+		     "sensor",
+		     (unsigned int)len,
+		     (unsigned int)RADIANT_SEARCH_DWELL_DEFAULT_US);
+
+	(void)antr_channel_close(1u);
+	(void)antr_channel_close(CH);
+	fake_radio_advance(1000u);
+	drain();
+
+	zassert_true(fake_radio_is_idle(), "radio not idle: %s",
+		     fake_radio_busy_reason());
 }
 
 /*

@@ -1431,6 +1431,32 @@ bool radiant_sched_pending(uint8_t ch)
 	return s.ch[ch].kind != (uint8_t)SLOT_IDLE;
 }
 
+int radiant_sched_rechunk(uint8_t ch, uint32_t chunk_us)
+{
+	unsigned int key;
+
+	if (!s.inited) {
+		return RADIANT_RADIO_ESTATE;
+	}
+	if (ch >= RADIANT_SCHED_MAX_CHANNELS) {
+		return RADIANT_RADIO_EINVAL;
+	}
+
+	key = radiant_event_crit_enter();
+	/*
+	 * Only a continuous request has a chunk, and only shorter is allowed -
+	 * see the header. An in-flight chunk keeps the length it was armed with;
+	 * this bounds the NEXT one, which is the one the caller still has a say
+	 * over.
+	 */
+	if (s.ch[ch].kind == (uint8_t)SLOT_RX && s.ch[ch].continuous &&
+	    (s.ch[ch].chunk_us == 0u || chunk_us < s.ch[ch].chunk_us)) {
+		s.ch[ch].chunk_us = chunk_us;
+	}
+	radiant_event_crit_exit(key);
+	return RADIANT_RADIO_OK_RC;
+}
+
 int radiant_sched_tick(void)
 {
 	if (!s.inited) {

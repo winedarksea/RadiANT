@@ -504,6 +504,28 @@ int radiant_sched_cancel(uint8_t ch);
 bool radiant_sched_pending(uint8_t ch);
 
 /*
+ * Shorten the chunk ceiling of a continuous request already in the slot.
+ *
+ * A continuous request outlives its chunks, and chunk_us is a CEILING ON ONE
+ * CHUNK rather than a total. A caller that spends a budget across several
+ * chunks - which is what a sweep dwell is - therefore has to lower the ceiling
+ * as the budget runs down, or the last chunk of a set overshoots it.
+ *
+ * Measured on the nRF54L15, one channel tracking at 4 Hz, when this did not
+ * exist and the request was left at its original ceiling: 145.7 ms armed per
+ * chunk, 2.6 chunks per set, so 379 ms spent on a 260 ms dwell - every chunk
+ * ending DONE_OK and crediting in full, the sweep advancing 46 % slower than
+ * its own budget says it should, and worst-case time-to-discover 46 % longer
+ * for no reason a counter anywhere would show.
+ *
+ * Only shortens: a request may not grow its ceiling behind the planner's back,
+ * and a bounded (non-continuous) request has no chunk to shorten. Both are
+ * quietly ignored. Safe from a completion callback - it writes one slot field
+ * with interrupts off, like every other write to the table.
+ */
+int radiant_sched_rechunk(uint8_t ch, uint32_t chunk_us);
+
+/*
  * Commit: look at the plan and the clock, and arm.
  *
  * This is the thread-context counterpart of the pass the scheduler runs at the

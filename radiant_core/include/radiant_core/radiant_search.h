@@ -541,6 +541,38 @@ uint16_t radiant_search_sets(const struct radiant_search *s);
  * RAIL backend has to answer for rather than a bug in this module. */
 uint64_t radiant_search_sweep_us(const struct radiant_search *s);
 
+/*
+ * Has the selected set had its whole dwell?
+ *
+ * Pure read, safe from a radio callback, and that is the point of it. The
+ * arming authority hands the sweep the radio a chunk at a time and gets a
+ * completion for each chunk; the question it has to answer there is whether the
+ * request in its slot is still the right thing to listen to. It is, for as long
+ * as this returns false - the filters describe ONE address set and the set is
+ * not finished with. Only when it returns true does the next window have to
+ * come from radiant_search_window(), which is the only function that may choose
+ * a new set and the only one that must run in thread context.
+ *
+ * Answering it any other way costs a round trip through the caller's own pump
+ * per chunk. Measured on the nRF54L15 with one channel tracking at 4 Hz: 7.6
+ * windows a second against 38.5 housekeeping passes, sets advancing at 2.5/s
+ * against a nominal 3.85/s, and a full sweep taking 12.8 s instead of 8.3 s -
+ * with no preemption and nothing missed. The radio was free; the sweep was
+ * waiting to be told to use it.
+ */
+bool radiant_search_set_complete(const struct radiant_search *s);
+
+/*
+ * Dwell still owed to the selected set, in microseconds. 0 when it is finished.
+ *
+ * The companion to radiant_search_set_complete(): having decided to keep a
+ * continuous request armed, the arming authority must also tell the scheduler
+ * how much of it is left, or the next chunk is bounded by a ceiling that was
+ * computed when the set was fresh and the set overshoots its budget. Pure read,
+ * safe from a radio callback.
+ */
+uint32_t radiant_search_dwell_remaining(const struct radiant_search *s);
+
 /* ---------------------------------------------------------------------------
  * Channels joining and leaving the search
  * ---------------------------------------------------------------------------

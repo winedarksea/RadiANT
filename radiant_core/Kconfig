@@ -127,4 +127,24 @@ config RADIANT_CORE_ANTR_API
 	  src/ant_radio.h's whole surface into a build that has no bridge to
 	  satisfy it.
 
+config RADIANT_CORE_SWEEP_DEBUG
+	bool "log the search sweep's position once a second"
+	default n
+	help
+	  Bench instrumentation for the discovery path. Once a second, from
+	  api_housekeep(): the selected set, the steer queue depth, the dwell
+	  credited so far, the sweep and scheduler counters, the pump and
+	  housekeeping rates, armed length by slot kind, and how scan chunks
+	  ended.
+
+	  It exists because the sweep's RATE is invisible from the host. A sweep
+	  running at half speed and a healthy one look identical over the wire -
+	  same messages, same responses, no errors - until a device the dongle
+	  could hear takes twenty seconds to appear. Two defects were found with
+	  exactly these counters and neither showed up in any existing statistic:
+	  a chunk-per-set round trip through the event thread, and a set
+	  overspending its dwell because the chunk ceiling never came down.
+
+	  Off by default. -DCONFIG_RADIANT_CORE_SWEEP_DEBUG=y on a debug build.
+
 endif # RADIANT_CORE

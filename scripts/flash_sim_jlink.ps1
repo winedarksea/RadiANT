@@ -39,9 +39,17 @@
 .PARAMETER Speed
     SWD clock in kHz.
 
+.PARAMETER Serial
+    Probe serial number, for when more than one J-Link is attached. With two
+    DKs on the bench J-Link cannot choose and fails every command with
+    "Cannot connect to the probe/programmer" - which reads like a dead probe
+    and is not one. Get-PnpDevice shows the serials as the tail of the
+    VID_1366 composite-device InstanceIds.
+
 .EXAMPLE
     .\scripts\flash_sim_jlink.ps1
     .\scripts\flash_sim_jlink.ps1 -HexPath build\sim_l15\merged.hex
+    .\scripts\flash_sim_jlink.ps1 -HexPath build\l15dbg\merged.hex -Serial 001057737173
 
 .NOTES
     Afterwards the simulator logs on the DK's first VCOM (COM7 here) and
@@ -53,7 +61,8 @@ param(
     [string]$HexPath,
     [string]$JLinkExe = 'C:\Program Files\SEGGER\JLink_V966\JLink.exe',
     [string]$Device = 'nRF54L15_M33',
-    [int]$Speed = 4000
+    [int]$Speed = 4000,
+    [string]$Serial
 )
 
 $ErrorActionPreference = 'Stop'
@@ -100,8 +109,15 @@ $script = Join-Path ([System.IO.Path]::GetTempPath()) 'ant_sim_flash.jlink'
 
 # exec DisableAutoUpdateFW must be first: see the note above. The rest is
 # reset, halt, program, reset, run, quit.
-$lines = @(
-    'exec DisableAutoUpdateFW',
+$lines = @('exec DisableAutoUpdateFW')
+
+# After the guard, never before it: selecting an emulator connects to it, and a
+# connect without the guard is the thing that drops the probe into bootloader.
+if ($Serial) {
+    $lines += "SelectEmuBySN $Serial"
+}
+
+$lines += @(
     'si SWD',
     "speed $Speed",
     "device $Device",

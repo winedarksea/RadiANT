@@ -297,6 +297,29 @@ uint64_t radiant_search_sweep_us(const struct radiant_search *s)
 	return (uint64_t)s->n_sets * (uint64_t)s->cfg.dwell_us;
 }
 
+bool radiant_search_set_complete(const struct radiant_search *s)
+{
+	if (!inst_ok(s)) {
+		return true;
+	}
+	/* No set selected yet is "finished" for this purpose: there is nothing
+	 * worth keeping armed, and radiant_search_window() has to run to choose
+	 * one. It is the same condition that function tests before it advances. */
+	if (!s->set_valid) {
+		return true;
+	}
+	return s->set_dwell_us >= s->cfg.dwell_us;
+}
+
+uint32_t radiant_search_dwell_remaining(const struct radiant_search *s)
+{
+	if (!inst_ok(s) || !s->set_valid ||
+	    s->set_dwell_us >= s->cfg.dwell_us) {
+		return 0u;
+	}
+	return s->cfg.dwell_us - s->set_dwell_us;
+}
+
 uint16_t radiant_search_set_for_devnum(const struct radiant_search *s, uint16_t devnum)
 {
 	if (!inst_ok(s)) {

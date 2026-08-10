@@ -1778,6 +1778,15 @@ static void api_feed_xfer_terminal(uint8_t ch, enum radiant_radio_status st)
  * over 260 ms of wall clock turns "certain within one sweep" into "likely"
  * without saying so.
  */
+#ifdef CONFIG_RADIANT_CORE_SWEEP_DEBUG
+/* Where the radio's second actually goes: armed length by slot kind. This is
+ * the pair that showed tracked windows cost 640 us each - 2.6 ms of a second -
+ * so a starved sweep was never them taking the radio. */
+static uint32_t dbg_scan_us, dbg_scan_n, dbg_track_us, dbg_track_n;
+/* How scan chunks END, which is what decides how much dwell they credit. */
+static uint32_t dbg_end_ok, dbg_end_abort, dbg_end_missed, dbg_end_failed;
+#endif
+
 static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_close,
 			void *user)
 {
@@ -1785,6 +1794,19 @@ static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_
 	if (!api_ch_valid(ch)) {
 		return;
 	}
+#ifdef CONFIG_RADIANT_CORE_SWEEP_DEBUG
+	if (t_close != RADIANT_TIME_NEVER && t_close > t_open) {
+		uint32_t len = (uint32_t)(t_close - t_open);
+
+		if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_SEARCH) {
+			dbg_scan_us += len;
+			dbg_scan_n++;
+		} else if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_TRACK_RX) {
+			dbg_track_us += len;
+			dbg_track_n++;
+		}
+	}
+#endif
 	/*
 	 * A tracked window that really got armed owes its successor. Recording
 	 * it HERE rather than at post time is what bounds the re-post in
@@ -1814,6 +1836,7 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 	enum radiant_radio_status st;
 	radiant_time_t            now;
 	uint32_t              op;
+	bool                  keep_search = false;
 
 	(void)user;
 	if (!api_ch_valid(ch)) {
@@ -1843,24 +1866,93 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		 */
 		radiant_search_on_done(&api_search, why == RADIANT_SCHED_DONE_OK,
 				   why == RADIANT_SCHED_DONE_ABORTED, now);
+#ifdef CONFIG_RADIANT_CORE_SWEEP_DEBUG
+		switch (why) {
+		case RADIANT_SCHED_DONE_OK:
+			dbg_end_ok++;
+			break;
+		case RADIANT_SCHED_DONE_ABORTED:
+			dbg_end_abort++;
+			break;
+		case RADIANT_SCHED_DONE_MISSED:
+			dbg_end_missed++;
+			break;
+		default:
+			dbg_end_failed++;
+			break;
+		}
+#endif
+
+		/*
+		 * A continuous request outlives its chunks - that is what lets a
+		 * displaced scan resume - so the slot is still here. WHETHER TO
+		 * KEEP IT IS THE WHOLE OF THE SWEEP'S THROUGHPUT.
+		 *
+		 * It has to be dropped when the SET is finished: the filters it
+		 * points at describe ONE address set, and only
+		 * radiant_search_window() may choose the next one. Left alone
+		 * past that point a scan would sweep the same eight addresses
+		 * for ever, because the slot the next pass needs is pending.
+		 *
+		 * It must NOT be dropped merely because a chunk ended. That is
+		 * what this used to do, and it cost a round trip through the
+		 * event thread for every chunk - which is most of them, because
+		 * a tracked channel ends a chunk four times a second per
+		 * channel. Measured on the nRF54L15, one channel tracking at
+		 * 4 Hz: 38.5 housekeeping passes a second but only 7.6 search
+		 * windows, sets advancing at 2.5/s against a nominal 3.85/s,
+		 * and a full sweep 12.8 s instead of 8.3 s - with preempt=0 and
+		 * missed=0 throughout. Nothing was competing for the radio. The
+		 * sweep was idle waiting for a thread to hand back a request the
+		 * scheduler already had, and worst-case time-to-discover is
+		 * exactly that number: it is why pairing a second sensor while
+		 * one is tracked feels slow.
+		 *
+		 * Kept only when the chunk REALLY RAN. That is the same bound
+		 * turn_pending and track_repost use and it is load-bearing for
+		 * the same reason: see api_arming above, where a backend
+		 * refusing every arm drove post -> arm -> refused -> done() ->
+		 * post until the stack was 648 bytes from PSPLIM. MISSED and
+		 * FAILED never opened the radio, so they drop the slot and let
+		 * the pump - which has a rate limit - decide what happens next.
+		 */
 		if (api_search_slot == ch) {
-			/*
-			 * A continuous request outlives its chunks - that is
-			 * what lets a displaced scan resume - so the slot is
-			 * still there, and it is dropped rather than left to
-			 * re-arm itself. It has to be: the filters it points at
-			 * belong to ONE address set, and only the next
-			 * radiant_search_window() knows whether that set is
-			 * finished. Left alone, a scan whose set had just
-			 * completed would keep sweeping the same eight
-			 * addresses for ever with no pass able to replace it,
-			 * because the slot it needs is pending. Cancel is
-			 * silent for this channel, so no second done() arrives;
-			 * the pump re-posts, in a few microseconds, whatever
-			 * the sweep should be listening to next.
-			 */
-			(void)radiant_sched_cancel(ch);
-			api_search_slot = RADIANT_SCHED_CH_NONE;
+			bool ran = (why == RADIANT_SCHED_DONE_OK) ||
+				   (why == RADIANT_SCHED_DONE_ABORTED);
+
+			if (ran && !radiant_search_set_complete(&api_search) &&
+			    radiant_search_is_searching(&api_search, ch)) {
+				/*
+				 * Re-bound below, after the unconditional
+				 * clear: without a slot_kind of SEARCH the next
+				 * chunk's armed() would not reach
+				 * radiant_search_armed(), the dwell would be
+				 * credited nothing, and the sweep would stop
+				 * advancing entirely.
+				 */
+				keep_search = true;
+
+				/*
+				 * And the ceiling comes down with the budget.
+				 * chunk_us was the whole dwell when this
+				 * request was posted; leaving it there lets the
+				 * last chunk of a set run past the dwell it is
+				 * spending. Measured: 379 ms of listening on a
+				 * 260 ms budget, which is a 46 % slower sweep
+				 * and shows up in no counter, because every
+				 * chunk ends DONE_OK and credits honestly - the
+				 * set simply costs more than it was given.
+				 */
+				(void)radiant_sched_rechunk(
+					ch,
+					radiant_search_dwell_remaining(&api_search));
+			} else {
+				/* Cancel is silent for this channel, so no
+				 * second done() arrives; the pump posts
+				 * whatever the sweep should hear next. */
+				(void)radiant_sched_cancel(ch);
+				api_search_slot = RADIANT_SCHED_CH_NONE;
+			}
 		}
 	} else if (!radiant_transfer_is_idle(&api_xfer[ch]) &&
 		   !radiant_sched_pending(ch)) {
@@ -1938,6 +2030,21 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 	 * raises ANTW_EVENT_CHANNEL_CLOSED.
 	 */
 	(void)radiant_channel_on_terminal(op, st, now);
+
+	/*
+	 * The sweep's request is still in the scheduler's slot and its set is not
+	 * finished, so re-bind the binding this function just cleared. The
+	 * scheduler will arm the next chunk of it on the way out of this very
+	 * callback - no pump, no thread, no wait - and that next arm has to find
+	 * a slot_kind of SEARCH or it will not credit the dwell.
+	 *
+	 * A fresh op id rather than the old one, deliberately: each chunk IS a
+	 * separate operation to radiant_channel.c, and the terminal above has
+	 * already retired the previous one.
+	 */
+	if (keep_search) {
+		api_bind_accepted(ch, API_SLOT_SEARCH);
+	}
 
 	/*
 	 * THE ONE EXCEPTION to the rule below, and it is bounded by construction.
@@ -2145,6 +2252,55 @@ static void api_housekeep(void)
 
 	api_pump_locked();
 	api_stats.housekeeps++;
+
+#ifdef CONFIG_RADIANT_CORE_SWEEP_DEBUG
+	/* See RADIANT_CORE_SWEEP_DEBUG: the sweep's rate is invisible from the
+	 * host, and both discovery defects fixed here were found with these. */
+	{
+		static radiant_time_t dbg_last;
+
+		if ((radiant_time_t)(now - dbg_last) > 1000000u) {
+			const struct radiant_search_stats *ss =
+				radiant_search_get_stats(&api_search);
+			const struct radiant_sched_stats *ds =
+				radiant_sched_stats_get();
+
+			dbg_last = now;
+			LOG_INF("SWEEP set=%u steer=%u dwell=%u/%u adv=%u sweeps=%u "
+				"win=%u ok=%u searching=%u carrier=%d | chunks=%u "
+				"preempt=%u missed=%u ebusy=%u rej=%u | pumps=%u "
+				"hk=%u | scan_us=%u/%u track_us=%u/%u | "
+				"end ok=%u abrt=%u miss=%u fail=%u replan=%u",
+				(unsigned int)api_search.cur_set,
+				(unsigned int)api_search.n_steer,
+				(unsigned int)api_search.set_dwell_us,
+				(unsigned int)api_search.cfg.dwell_us,
+				(unsigned int)ss->sets_advanced,
+				(unsigned int)ss->sweeps,
+				(unsigned int)ss->windows,
+				(unsigned int)ss->frames_ok,
+				(unsigned int)radiant_search_n_searching(&api_search),
+				(int)api_search_slot,
+				(unsigned int)ds->scan_chunks,
+				(unsigned int)ds->preempted,
+				(unsigned int)ds->missed,
+				(unsigned int)ds->arm_ebusy,
+				(unsigned int)ds->arm_rejected,
+				(unsigned int)api_stats.pumps,
+				(unsigned int)api_stats.housekeeps,
+				(unsigned int)dbg_scan_us,
+				(unsigned int)dbg_scan_n,
+				(unsigned int)dbg_track_us,
+				(unsigned int)dbg_track_n,
+				(unsigned int)dbg_end_ok,
+				(unsigned int)dbg_end_abort,
+				(unsigned int)dbg_end_missed,
+				(unsigned int)dbg_end_failed,
+				(unsigned int)ds->replans);
+		}
+	}
+#endif
+
 	k_mutex_unlock(&api_lock);
 }
 
