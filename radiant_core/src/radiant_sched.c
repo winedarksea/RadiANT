@@ -316,6 +316,16 @@ static void notify_done(uint8_t ch, enum radiant_sched_done why)
 	}
 }
 
+/* Tell one member of a window that has just been armed what it actually got.
+ * See struct radiant_sched_cbs::armed - the shape is the arm's, not the
+ * request's. */
+static void notify_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_close)
+{
+	if (s.cbs.armed != NULL) {
+		s.cbs.armed(ch, t_open, t_close, s.user);
+	}
+}
+
 static void clear_armed(void)
 {
 	s.armed_op = 0u;
@@ -422,6 +432,13 @@ static bool abort_armed(uint8_t skip_ch)
 			continue;
 		}
 		if (sl->continuous && sl->kind == (uint8_t)SLOT_RX) {
+			/* Paused, not ended - the request survives untouched.
+			 * It is still told, because the chunk that was running
+			 * really did stop early and an owner accounting in
+			 * listening time has to know where it stopped. */
+			if (c != skip_ch) {
+				notify_done(c, RADIANT_SCHED_DONE_ABORTED);
+			}
 			continue;
 		}
 		slot_clear(c);
@@ -702,6 +719,12 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 
 	s.cursor = (uint8_t)(((uint32_t)s.members[s.n_members - 1u] + 1u) %
 			     RADIANT_SCHED_MAX_CHANNELS);
+
+	/* Last, with every member's state already settled: a callback that
+	 * looked at this module while it was half-armed would see a lie. */
+	for (i = 0u; i < s.n_members; i++) {
+		notify_armed(s.members[i], open, close);
+	}
 	return STEP_DONE;
 }
 

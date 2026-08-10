@@ -311,9 +311,21 @@ enum radiant_sched_done {
 	 * went out. For a continuous request this fires at every chunk boundary
 	 * and the request stays live. */
 	RADIANT_SCHED_DONE_OK = 0,
-	/* It ended early - preempted by a nearer deadline, or the radio was
+	/*
+	 * It ended early - preempted by a nearer deadline, or the radio was
 	 * disabled underneath it. The owner should re-predict and re-post
-	 * rather than assume the window ran. */
+	 * rather than assume the window ran.
+	 *
+	 * A continuous request gets this too, when a chunk that had already
+	 * opened was displaced, and for it the request STAYS LIVE exactly as it
+	 * does for DONE_OK - the scan pauses and resumes in the next gap. It is
+	 * reported rather than swallowed because the chunk really did stop
+	 * early, and an owner accounting in listening time that never heard
+	 * about it would credit the displaced remainder as though it had been
+	 * spent on the air. That is not hypothetical: crediting a cut-short
+	 * search window as if it had never run is what once froze the wildcard
+	 * sweep on a single address set.
+	 */
 	RADIANT_SCHED_DONE_ABORTED,
 	/*
 	 * It was never armed, because its deadline passed while the radio was
@@ -357,6 +369,25 @@ struct radiant_sched_cbs {
 	/* The transmit completed. evt->t_sync is what actually went out, which
 	 * is what a master closes its slot-phase loop on. */
 	void (*tx)(uint8_t ch, const struct radiant_tx_event *evt, void *user);
+
+	/*
+	 * A receive window carrying this channel has been armed, with the shape
+	 * it ACTUALLY got - which is routinely not the shape that was asked
+	 * for. Merging widens a window, a nearer deadline truncates one, and a
+	 * continuous request is armed one gap-sized chunk at a time.
+	 *
+	 * Optional, and a tracked channel has no use for it: a window either
+	 * catches its slot or it does not. The caller that needs it is a
+	 * wildcard sweep, whose dwell is accounted in listening time rather
+	 * than in operations, and which therefore cannot credit anything
+	 * against bounds it merely proposed. Fires once per member per arm, so
+	 * a continuous request sees one of these per chunk.
+	 *
+	 * Runs in the arming path, which is usually the radio interrupt. Do not
+	 * post from it: the pass that armed this window is still running.
+	 */
+	void (*armed)(uint8_t ch, radiant_time_t t_open, radiant_time_t t_close,
+		      void *user);
 
 	/* The request is finished with. See enum radiant_sched_done. */
 	void (*done)(uint8_t ch, enum radiant_sched_done why, void *user);

@@ -110,6 +110,13 @@ static struct {
 		enum radiant_sched_done why;
 	} done[TEST_LOG_MAX];
 
+	uint32_t n_armed;
+	struct {
+		uint8_t    ch;
+		radiant_time_t t_open;
+		radiant_time_t t_close;
+	} armed[TEST_LOG_MAX];
+
 	uint32_t ok_count[RADIANT_SCHED_MAX_CHANNELS];
 	uint32_t missed_count[RADIANT_SCHED_MAX_CHANNELS];
 	uint32_t aborted_count[RADIANT_SCHED_MAX_CHANNELS];
@@ -237,9 +244,23 @@ static void on_done(uint8_t ch, enum radiant_sched_done why, void *user)
 	}
 }
 
+static void on_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_close,
+		     void *user)
+{
+	ARG_UNUSED(user);
+
+	if (log.n_armed < TEST_LOG_MAX) {
+		log.armed[log.n_armed].ch = ch;
+		log.armed[log.n_armed].t_open = t_open;
+		log.armed[log.n_armed].t_close = t_close;
+	}
+	log.n_armed++;
+}
+
 static const struct radiant_sched_cbs test_cbs = {
 	.rx = on_rx,
 	.tx = on_tx,
+	.armed = on_armed,
 	.done = on_done,
 };
 
@@ -1254,6 +1275,106 @@ ZTEST(radiant_sched, test_a_continuous_request_becomes_a_chain_of_bounded_window
 	zassert_equal(1u, log.ok_count[0], "the tracked window lost to the scan");
 	zassert_true(radiant_sched_stats_get()->scan_chunks > chunks_before,
 		     "the scan stopped filling the gap");
+
+	assert_every_window_bounded();
+	finish();
+}
+
+/*
+ * A scan chunk is reported with the bounds it ACTUALLY got, not the ones its
+ * request asked for.
+ *
+ * This is the whole reason armed() exists. A wildcard sweep accounts its dwell
+ * in listening time, and the gap a chunk is cut to is computed here, from
+ * pending work the sweep's own layer cannot see. Told only what it proposed, it
+ * would credit a 60 ms chunk as the 250 ms it asked for, and "certain within one
+ * sweep" would quietly become "certain within four".
+ */
+ZTEST(radiant_sched, test_a_scan_chunk_is_reported_with_the_bounds_it_got)
+{
+	struct radiant_sched_rx r;
+	radiant_time_t          t0;
+	radiant_time_t          tracked_at;
+	uint16_t            lead;
+
+	bring_up();
+	t0 = radiant_radio_now();
+	lead = radiant_radio_caps_get()->min_arm_lead_us;
+
+	/* The tracked window first, so the gap ahead of it is known before the
+	 * scan is ever armed. */
+	tracked_at = t0 + 60000u;
+	post_track(0u, tracked_at, tracked_at + TEST_WINDOW_US);
+
+	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_SEARCH), search_filter,
+		    8u, t0, RADIANT_TIME_NEVER);
+	r.chunk_us = 250000u;
+	zassert_ok(radiant_sched_request_rx(31u, &r));
+	zassert_ok(radiant_sched_tick());
+
+	zassert_equal(1u, log.n_armed, "%u arms reported", log.n_armed);
+	zassert_equal(31u, log.armed[0].ch);
+	zassert_equal(t0 + (radiant_time_t)lead, log.armed[0].t_open);
+	zassert_equal(tracked_at - (radiant_time_t)lead, log.armed[0].t_close,
+		      "the scan was told it had the whole chunk it asked for");
+
+	/* A bounded window is reported too, on the same terms. */
+	fake_radio_advance_to(tracked_at + TEST_WINDOW_US + 1u);
+	zassert_true(log.n_armed >= 2u);
+	zassert_equal(0u, log.armed[1].ch);
+	zassert_equal(tracked_at, log.armed[1].t_open);
+	zassert_equal(tracked_at + (radiant_time_t)TEST_WINDOW_US,
+		      log.armed[1].t_close);
+
+	assert_every_window_bounded();
+	finish();
+}
+
+/*
+ * A scan chunk displaced by a tracked window that turned up after it was armed
+ * is REPORTED, and the request survives it.
+ *
+ * Both halves matter and they pull in opposite directions. The request has to
+ * survive, or a background scan would be consumed by the first tracked channel
+ * to want the radio. But the chunk that was running really did stop early, and
+ * an owner told nothing at all would go on believing it was listening - which
+ * for a sweep crediting its dwell in listening time is how a set gets credited
+ * time the radio spent somewhere else.
+ */
+ZTEST(radiant_sched, test_a_displaced_scan_chunk_is_reported_and_stays_live)
+{
+	struct radiant_sched_rx r;
+	radiant_time_t          t0;
+	radiant_time_t          tracked_at;
+
+	bring_up();
+	t0 = radiant_radio_now();
+
+	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_SEARCH), search_filter,
+		    8u, t0, RADIANT_TIME_NEVER);
+	r.chunk_us = 250000u;
+	zassert_ok(radiant_sched_request_rx(31u, &r));
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(1u, fake_radio_arm_count());
+
+	/* Open and listening, with nothing else pending: the chunk got the
+	 * whole 250 ms it asked for. */
+	fake_radio_advance(20000u);
+	zassert_equal(0u, log.n_done);
+
+	/* Now a tracked window turns up inside it. */
+	tracked_at = radiant_radio_now() + 30000u;
+	post_track(0u, tracked_at, tracked_at + TEST_WINDOW_US);
+	zassert_ok(radiant_sched_tick());
+
+	zassert_equal(1u, log.aborted_count[31],
+		      "a displaced scan chunk was not reported at all");
+	zassert_true(radiant_sched_pending(31u),
+		     "being displaced consumed the scan");
+
+	fake_radio_advance_to(tracked_at + TEST_WINDOW_US + 1u);
+	zassert_equal(1u, log.ok_count[0], "the tracked window lost to the scan");
+	zassert_true(radiant_sched_pending(31u), "the scan did not resume");
 
 	assert_every_window_bounded();
 	finish();
