@@ -313,7 +313,7 @@ constant.
 | `0x58` | `ANTW_MESG_CHANNEL_CRC_MODE_ID` | both | 2 | yes | `MESG_RESPONSE_EVENT_ID` | [filler, mode] on the way in, [channel, mode] on the way back. Dispatched at src/ant_serial_bridge.c and requested in handle_request(). A Nordic extension: not in Rev 5.1, and no witness inside this repository - the id was recovered by the Wave 2 shim and is BUILD_ASSERTed in src/ant_radio_sdk_ant.c. | sdk-ant-shim + verify:sdk-ant-shim |
 | `0x59` | `ANTW_MESG_ID_LIST_ADD_ID` | h2d | 6 | yes | `MESG_RESPONSE_EVENT_ID` | [channel, device number lo, device number hi, device type, transmission type, list index]. | bridge |
 | `0x5A` | `ANTW_MESG_ID_LIST_CONFIG_ID` | h2d | 3 | yes | `MESG_RESPONSE_EVENT_ID` | [channel, list size, include/exclude flag]. | bridge |
-| `0x5B` | `ANTW_MESG_OPEN_RX_SCAN_MODE_ID` | h2d | 1..2 | no | - | Background scanning. Not bridged, and scan mode is reported OFF in the capabilities reply - which is why a host that has the call (ANT_OpenRxScanMode) never sends it. | readme |
+| `0x5B` | `ANTW_MESG_OPEN_RX_SCAN_MODE_ID` | h2d | 1..2 | yes | `MESG_RESPONSE_EVENT_ID` | Background scanning. Bridged as of 2026-08-10: refuses with ANTW_CLOSE_ALL_CHANNELS unless every channel is closed, then takes over channel 0 as a wildcard background-scan slave - the same mechanism MESG_ASSIGN_CHANNEL's extended byte already reaches, one message at a time. The optional synchronous-channel-packets-only byte is accepted and ignored; reporting everything is a superset of the restricted subset. radiant_core backend only - the capabilities reply advertises this on radiant_core and OFF elsewhere, which is why a host with the call (ANT_OpenRxScanMode) sends it only there. | bridge |
 | `0x5D` | `ANTW_MESG_EXT_BROADCAST_DATA_ID` | d2h | 13 | no | - | Legacy extended broadcast: channel id inline instead of behind a flag byte. Superseded by MESG_ANTLIB_CONFIG's flag mechanism; this dongle never emits it. | rev5.1 sec 9.5, host-api |
 | `0x5E` | `ANTW_MESG_EXT_ACKNOWLEDGED_DATA_ID` | both | 13 | no | - | Legacy extended acknowledged data. See MESG_EXT_BROADCAST_DATA_ID. | rev5.1 sec 9.5, host-api |
 | `0x5F` | `ANTW_MESG_EXT_BURST_DATA_ID` | both | 13 | no | - | Legacy extended burst data. See MESG_EXT_BROADCAST_DATA_ID. | rev5.1 sec 9.5, host-api |
@@ -644,7 +644,7 @@ Not a bitfield: the value is 8.
 |---|---|---|---|---|
 | 0 | `0x01` | `ANTW_CAPABILITIES_LED_ENABLED` | no | MESG_ENABLE_LED_FLASH. Reported OFF here, which is why a host that has ANT_EnableLED never sends 0x68. |
 | 1 | `0x02` | `ANTW_CAPABILITIES_EXT_MESSAGE_ENABLED` | **yes** | Extended output fields - the whole lib config mechanism. |
-| 2 | `0x04` | `ANTW_CAPABILITIES_SCAN_MODE_ENABLED` | no | MESG_OPEN_RX_SCAN_MODE. Reported OFF here, which is why a host that has ANT_OpenRxScanMode never sends 0x5B. radiant_core turns this on. |
+| 2 | `0x04` | `ANTW_CAPABILITIES_SCAN_MODE_ENABLED` | no | MESG_OPEN_RX_SCAN_MODE. Reported OFF in this generated reply, which is why a host that has ANT_OpenRxScanMode never sends 0x5B on this build. radiant_core reports the bit on instead, and as of 2026-08-10 0x5B is bridged there to match - see the 0x5B message row and docs/backends.md. |
 | 4 | `0x10` | `ANTW_CAPABILITIES_PROX_SEARCH_ENABLED` | **yes** | MESG_PROX_SEARCH_CONFIG. |
 | 5 | `0x20` | `ANTW_CAPABILITIES_EXT_ASSIGN_ENABLED` | **yes** | The optional fourth byte of MESG_ASSIGN_CHANNEL. |
 | 6 | `0x40` | `ANTW_CAPABILITIES_FS_ANTFS_ENABLED` | no | ANT-FS file system. |
@@ -752,7 +752,7 @@ These are used at a visible site in this repository but their numeric value is n
 | Source | Constants |
 |---|---|
 | K4 (docs/radiant-security.md sec 9) | 5 |
-| bridge | 32 |
+| bridge | 33 |
 | bridge, observed | 1 |
 | bridge, readme | 3 |
 | bridge, rev5.1 sec 9.5 | 2 |
@@ -763,7 +763,7 @@ These are used at a visible site in this repository but their numeric value is n
 | host-api | 2 |
 | inferred | 7 |
 | observed | 1 |
-| readme | 5 |
+| readme | 4 |
 | readme, tools | 1 |
 | rev5.1 sec 5.2.1 | 7 |
 | rev5.1 sec 7.1 | 1 |

@@ -289,9 +289,15 @@
 #define ANTW_MESG_ID_LIST_CONFIG_ID                          0x5A
 
 /*
- * Background scanning. Not bridged, and scan mode is reported OFF in the
- * capabilities reply - which is why a host that has the call
- * (ANT_OpenRxScanMode) never sends it. [readme]
+ * Background scanning. Bridged as of 2026-08-10: refuses with
+ * ANTW_CLOSE_ALL_CHANNELS unless every channel is closed, then takes over
+ * channel 0 as a wildcard background-scan slave - the same mechanism
+ * MESG_ASSIGN_CHANNEL's extended byte already reaches, one message at a time.
+ * The optional synchronous-channel-packets-only byte is accepted and ignored;
+ * reporting everything is a superset of the restricted subset. radiant_core
+ * backend only - the capabilities reply advertises this on radiant_core and
+ * OFF elsewhere, which is why a host with the call (ANT_OpenRxScanMode) sends
+ * it only there. [bridge]
  */
 #define ANTW_MESG_OPEN_RX_SCAN_MODE_ID                       0x5B
 
@@ -1311,9 +1317,11 @@
 #define ANTW_CAPABILITIES_EXT_MESSAGE_ENABLED                0x02
 
 /*
- * MESG_OPEN_RX_SCAN_MODE. Reported OFF here, which is why a host that has
- * ANT_OpenRxScanMode never sends 0x5B. radiant_core turns this on. [stub,
- * readme]
+ * MESG_OPEN_RX_SCAN_MODE. Reported OFF in this generated reply, which is why
+ * a host that has ANT_OpenRxScanMode never sends 0x5B on this build.
+ * radiant_core reports the bit on instead, and as of 2026-08-10 0x5B is
+ * bridged there to match - see the 0x5B message row and docs/backends.md.
+ * [stub, readme]
  */
 #define ANTW_CAPABILITIES_SCAN_MODE_ENABLED                  0x04
 

@@ -804,7 +804,7 @@
     "ordinal": 101,
     "mesg_id": 91,
     "in_sdk_ant": null,
-    "bridged": false,
+    "bridged": true,
     "zwift_uses": true
   },
   {
@@ -812,7 +812,7 @@
     "ordinal": 102,
     "mesg_id": 91,
     "in_sdk_ant": null,
-    "bridged": false,
+    "bridged": true,
     "zwift_uses": false
   },
   {

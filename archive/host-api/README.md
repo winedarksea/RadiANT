@@ -166,12 +166,16 @@ It is the source for `tools/test_ant_wire.py` and for the `.antser` captures in
 [`../captures/serial/`](../captures/serial/).
 
 **Zwift resolves `ANT_OpenRxScanMode` and `ANT_EnableLED`** (ordinals 101 and
-76) but never sends `0x5B` or `0x68`, because this dongle reports both
-capabilities as off. That is the capability bits doing real work, and it is why
-`README.md` argues against clearing bits to match what is bridged: a host reads
-the advertisement and decides. Both are `bridged: false` in the JSON, which is
-consistent rather than contradictory — the message is not implemented *and* not
-advertised.
+76). `ANT_EnableLED` still never sends `0x68`, because this dongle reports that
+capability as off everywhere. `ANT_OpenRxScanMode` is different since
+2026-08-10: the `radiant_core` backend's capabilities reply advertises scan
+mode on (`sdk_ant` and `stub` still report it off), and `0x5B` is now bridged
+to back that claim up — see `src/ant_serial_bridge.c`. That is the capability
+bits doing real work either way: on the backends that report the bit off,
+`bridged: false` in the JSON is consistent rather than contradictory, the
+message is not implemented *and* not advertised; on `radiant_core`, `bridged`
+is `true` for the same reason, an advertised-and-unimplemented capability being
+the trap this project checks for at all.
 
 ## What is not here
 

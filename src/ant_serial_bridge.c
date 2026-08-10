@@ -719,6 +719,59 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		}
 		break;
 
+	case ANTW_MESG_OPEN_RX_SCAN_MODE_ID: {
+		/*
+		 * body: [(synchronous channel packets only, optional)]. That flag
+		 * restricts reporting to already-tracked channel periods; this
+		 * bridge has no notion of the restriction to honour, so it is
+		 * accepted and ignored - reporting everything is a superset of
+		 * the synchronous-only subset, never a smaller set than a host
+		 * that asked for the restriction expects. Nothing here depends on
+		 * the body's length or content, so len is not checked.
+		 *
+		 * Real scan mode takes over the whole radio and requires every
+		 * other channel closed first (ANTW_CLOSE_ALL_CHANNELS otherwise).
+		 * Channel 0 is then the one taken over - assigned as a wildcard
+		 * background-scan slave, the same mechanism a host can already
+		 * reach one message at a time through MESG_ASSIGN_CHANNEL's
+		 * extended byte (ANTW_EXT_PARAM_ALWAYS_SEARCH), reached here
+		 * through the single call ZwiftApp.exe actually resolves - see
+		 * archive/host-api/ant_dll_exports.json.
+		 */
+		uint8_t status;
+		uint8_t i;
+
+		for (i = 0; i < CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED; i++) {
+			if (antr_channel_status_get(i, &status) ==
+				    (antr_err_t)ANTW_RESPONSE_NO_ERROR &&
+			    (status & 0x03u) >= ANTW_STATUS_SEARCHING_CHANNEL) {
+				break;
+			}
+		}
+		if (i < CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED) {
+			send_response(0, msg_id, ANTW_CLOSE_ALL_CHANNELS);
+			return;
+		}
+
+		err = (antr_channel_status_get(0, &status) ==
+			       (antr_err_t)ANTW_RESPONSE_NO_ERROR &&
+		       (status & 0x03u) == ANTW_STATUS_ASSIGNED_CHANNEL)
+			      ? antr_channel_unassign(0)
+			      : (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+		if (!err) {
+			err = antr_channel_assign(0, ANTW_CHANNEL_TYPE_SLAVE, 0,
+						  ANTW_EXT_PARAM_ALWAYS_SEARCH);
+		}
+		if (!err) {
+			err = antr_channel_id_set(0, 0, 0, 0);
+		}
+		if (!err) {
+			err = antr_channel_open(0);
+		}
+		send_response(0, msg_id, err ? err : ANTW_RESPONSE_NO_ERROR);
+		return;
+	}
+
 	case ANTW_MESG_ANTLIB_CONFIG_ID:
 		/* body: [filler, config_bits]. Zero means "clear everything",
 		 * which is how hosts drop the extended-message flags between

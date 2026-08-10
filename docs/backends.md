@@ -664,17 +664,31 @@ than "no worse than sdk-ant". Same for background scan, which sdk-ant
 advertises off and does not implement. Everything else in the A/B is relative,
 which is why these two are called out.
 
-**Reachable, but not by the message named after it.** `radiant_core` implements
-background scan and `MESG_OPEN_RX_SCAN_MODE` (`0x5B`) has **no handler in
-`src/ant_serial_bridge.c`**, so the conformance transcript records that message
-as skipped. The capability is reached through ext-assign instead — the
+**Reachable two ways, as of 2026-08-10.** `radiant_core` implements background
+scan at the module level through `RADIANT_SEARCH_MODE_SCAN`, and there are two
+routes in from the wire. The first is ext-assign — the
 `API_EXT_ASSIGN_BACKGROUND_SCAN` bit on `antr_channel_assign()`, which is what
 `radiant_api.c` reads to choose `RADIANT_SEARCH_MODE_SCAN` over
-`RADIANT_SEARCH_MODE_ACQUIRE`. Both are true at once and the table above states
-only the first, so it is stated here: the capability claim and the bridge do not
-currently agree about the route. Not a Zwift blocker — no fitness app opens a
-scanning channel — and it is a bridge gap rather than a `radiant_core` one, so
-adding the handler is a small piece of work in `src/`, not in the module.
+`RADIANT_SEARCH_MODE_ACQUIRE` for one channel at a time. The second is
+`MESG_OPEN_RX_SCAN_MODE` (`0x5B`) itself, now handled in
+`src/ant_serial_bridge.c`: it refuses with `ANTW_CLOSE_ALL_CHANNELS` unless
+every channel is closed, then takes channel 0 through the same ext-assign path
+in one call instead of three.
+
+This was a real gap until it was closed, not a hypothetical one:
+`archive/host-api/ant_dll_exports.json` records `ANT_OpenRxScanMode` as
+`"zwift_uses": true` — `ZwiftApp.exe` resolves it — and the capabilities reply
+`radiant_core` sends advertises the bit *on*, unlike `sdk_ant`/`stub`, which
+report it off. A host that reads that advertisement and calls
+`ANT_OpenRxScanMode` on this backend would have gotten `INVALID_MESSAGE` for a
+capability it was just told existed — the exact trap
+[`docs/gotchas.md`](gotchas.md) warns about, just not caught by
+`tools/ant_features.py`, whose coverage check only walks
+`ADVANCED_OPTIONS_3`; this bit lives in `ADVANCED_OPTIONS_2`. The conformance
+transcript still records `MESG_OPEN_RX_SCAN_MODE` as excluded, deliberately —
+see `tools/ant_conformance.py`'s `EXCLUDED` list — because opening a real
+scanning channel puts the radio on air and breaks the transcript's
+determinism, independent of whether the message is implemented.
 
 The optional features below are the other axis: what exists past the messages a
 fitness app sends. The answer is a backend property too — sdk-ant can do
