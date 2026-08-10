@@ -241,13 +241,50 @@ BUILD_ASSERT(API_SLOT_GUARD_US >=
  */
 #define API_EXT_ASSIGN_BACKGROUND_SCAN 0x01u
 
-/* The event thread. 1280 bytes covers radiant_event_drain()'s frame - one queued
+/*
+ * The event thread. 1280 bytes covers radiant_event_drain()'s frame - one queued
  * slot plus the ten-byte extended tail - and the scheduling pass pump() runs
  * afterwards, which is arithmetic over the slot table and nothing deeper.
- * Priority 4 is one above the bridge's parser thread (5), so a drained message
- * reaches the writer before the parser takes the next host frame. */
+ *
+ * PRIORITY 6 IS BELOW THE BRIDGE'S PARSER THREAD (5), AND THE INEQUALITY IS THE
+ * WHOLE POINT. It used to be 4 - above it - on the reasoning that a drained
+ * message should reach the writer before the parser takes the next host frame.
+ * That reasoning is about two host frames; the ordering that actually matters is
+ * between ONE host frame and its own reply, and above the parser it is wrong:
+ *
+ *   host --> MESG_CLOSE_CHANNEL (0x4C)
+ *   dongle <-- EVENT_CHANNEL_CLOSED        <- unsolicited, and FIRST
+ *   dongle <-- RESPONSE to 0x4C, code 0    <- the reply to the command
+ *
+ * That is a real capture from the bench, not a hypothetical. antr_channel_close()
+ * runs on the parser thread and completes the close inline, so
+ * radiant_channel_event_out() queues CHANNEL_CLOSED and radiant_event_wakeup()
+ * makes this thread runnable - which, at priority 4, preempted the parser before
+ * it had sent send_response(). Every host library sends a command and then reads
+ * until it finds that command's response, discarding what it passes; ANT's own
+ * documented close sequence is response first, event second. So the event was
+ * eaten by the very loop waiting for the reply, the host never learned the
+ * channel had closed, and the next antr_channel_unassign() was refused
+ * CHANNEL_IN_WRONG_STATE - which is how one lost event ends a session.
+ *
+ * Below the parser, the ordering is structural rather than lucky: on one core a
+ * lower-priority thread cannot run until the parser blocks, and the parser
+ * blocks only at k_sem_take(&ant_rx_sem) once it has dispatched a frame AND
+ * written its response. Everything that waits inside dispatch - handle_burst()'s
+ * block semaphore, handle_reset()'s k_sleep() - yields properly, so nothing here
+ * is starved by the change; it is merely no longer able to interpose itself
+ * between a command and its reply.
+ *
+ * KEEP THIS NUMBER GREATER THAN BRIDGE_PRIORITY in src/ant_serial_bridge.c.
+ * BUILD_ASSERT below is that requirement made permanent rather than remembered.
+ */
 #define API_EVENT_STACK_SIZE 1280
-#define API_EVENT_PRIORITY   4
+#define API_EVENT_PRIORITY   6
+
+BUILD_ASSERT(API_EVENT_PRIORITY > ANTR_HOST_THREAD_PRIORITY,
+	     "the radiant_core event thread must be LOWER priority than the "
+	     "thread the bridge makes antr_* calls on, or an event raised "
+	     "inside a command is delivered before that command's response");
 
 /* ---------------------------------------------------------------------------
  * The key -> address table
@@ -270,6 +307,7 @@ enum api_slot_kind {
 	API_SLOT_NONE = 0,
 	API_SLOT_TRACK_RX,  /* a tracked channel's predicted receive window */
 	API_SLOT_MASTER_TX, /* a master's own slot */
+	API_SLOT_MASTER_RX, /* the turnaround a master listens in after its slot */
 	API_SLOT_SEARCH     /* the shared wildcard sweep, carried on this slot */
 };
 
@@ -1060,6 +1098,93 @@ static void api_post_track_rx(uint8_t ch)
 	api_bind_accepted(ch, API_SLOT_TRACK_RX);
 }
 
+/*
+ * A MASTER HAS TO LISTEN, AND UNTIL THIS EXISTED IT NEVER DID.
+ *
+ * api_pump_locked() gives a TRACKING master api_post_master_tx() and nothing
+ * else, so the only radio operation a master ever owned was its own
+ * transmission. That is a uni-directional master - ANT's MASTER_TX_ONLY - and it
+ * is not what CHANNEL_TYPE_MASTER means. Everything a slave can send its master
+ * arrives in the turnaround right after the master's own frame, so with no
+ * window there the whole reverse direction is unreachable: acknowledged data
+ * from a slave is never heard, no acknowledgement is ever returned, and a
+ * slave-originated burst cannot start. The slave's stack reports it as a
+ * transfer that stayed queued or failed, which reads as a link problem and is
+ * not one - the master was not listening.
+ *
+ * It was invisible from the master's own side, because a master with nothing to
+ * hear and a master that cannot hear look identical from the host: EVENT_TX four
+ * times a second, exactly as they should be, in both cases.
+ *
+ * WHEN. RADIANT_TRANSFER_SLOT_REPLY_US - 2190 us from the master's broadcast
+ * t_sync to a slave's reply t_sync - is measured, and radiant_transfer.h exports
+ * it saying this is what needs it. The guard is that module's own
+ * RADIANT_TRANSFER_ACK_GUARD_US, sized on the observed range rather than a
+ * standard deviation, so the two edges of this window and the two edges of the
+ * acknowledgement window the transfer engine opens are sized by one constant.
+ *
+ * WHAT. The same on-air address the master transmits: an ANT channel's address
+ * is derived from the channel ID either way round, so a slave answering this
+ * master sends to the address this master sends from, and the hardware match is
+ * the identity check. Never STOP_ON_FIRST - see the note in api_sched_rx() on
+ * what a merged window does to it - and here it would be wrong anyway on a
+ * shared channel, where more than one slave may answer.
+ *
+ * COST. About 500 us of receive per 249.7 ms period, which is 0.2 % duty and
+ * why it is unconditional rather than opened only when something is outstanding:
+ * a slave may begin an exchange in any slot, and a master that listened only
+ * when it expected to be spoken to could never hear the first packet.
+ */
+static void api_post_master_rx(uint8_t ch, radiant_time_t t_sync)
+{
+	struct radiant_channel_id id;
+	struct radiant_sched_rx   req;
+	int                       n;
+
+	if (radiant_channel_id_get(ch, &id) != RADIANT_CH_OK) {
+		return;
+	}
+
+	n = radiant_frame_addr(RADIANT_FRAME_CFG_TRACKING, api_net_addr_for(ch), &id,
+			   api_ch[ch].filter.addr,
+			   sizeof(api_ch[ch].filter.addr));
+	if (n < 0) {
+		return;
+	}
+	api_ch[ch].filter.addr_len = (uint8_t)n;
+
+	memset(&req, 0, sizeof(req));
+	req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
+	req.rf_index = api_rf_of(ch);
+	req.filters = &api_ch[ch].filter;
+	req.n_filters = 1u;
+	req.t_open = t_sync + (radiant_time_t)RADIANT_TRANSFER_SLOT_REPLY_US -
+		     (radiant_time_t)RADIANT_TRANSFER_ACK_GUARD_US;
+	req.t_close = t_sync + (radiant_time_t)RADIANT_TRANSFER_SLOT_REPLY_US +
+		      (radiant_time_t)RADIANT_TRANSFER_ACK_GUARD_US;
+	req.stop_on_first = false;
+
+	if (radiant_sched_request_rx(ch, &req) != RADIANT_RADIO_OK_RC) {
+		api_bind_rejected(ch);
+		return;
+	}
+	api_bind_accepted(ch, API_SLOT_MASTER_RX);
+}
+
+/*
+ * Bit 4 of the channel type is the master bit, and 0x50 is MASTER_TX_ONLY - the
+ * one master that is documented not to listen. Asking the type rather than
+ * asking radiant_channel_is_master() is the whole difference between the two
+ * master shapes ANT defines, and it is the only place in this file that cares.
+ */
+static bool api_master_listens(uint8_t ch)
+{
+	uint8_t type = radiant_channel_type_get(ch);
+
+	return ((type & RADIANT_CH_TYPE_MASTER_BIT) != 0u) &&
+	       (type != (uint8_t)ANTW_CHANNEL_TYPE_MASTER_TX_ONLY);
+}
+
 static void api_post_master_tx(uint8_t ch)
 {
 	struct radiant_ctrl_fields fields;
@@ -1246,6 +1371,7 @@ static void api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt)
 	struct radiant_frame      f;
 	enum radiant_msg_type     mt;
 	int                   n;
+	int                   rc;
 
 	if (radiant_channel_id_get(ch, &id) != RADIANT_CH_OK) {
 		return;
@@ -1278,13 +1404,30 @@ static void api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt)
 		return;
 	}
 
-	/* The slot clock is re-anchored on the frame that was actually on the
+	/*
+	 * The slot clock is re-anchored on the frame that was actually on the
 	 * air, which is what keeps the window centred on the master we hear
-	 * rather than on the moment the host opened the channel. */
-	radiant_channel_on_slot(ch, evt->t_sync);
-	radiant_search_seen_note(&api_search, &id, evt->t_sync);
+	 * rather than on the moment the host opened the channel.
+	 *
+	 * A MASTER MUST NOT DO EITHER OF THESE. It owns the slot grid rather than
+	 * following one, and the frame it is hearing is a slave's reply 2.19 ms
+	 * INTO its own period - so re-anchoring here would drag the master's
+	 * phase forward by that much on every exchange and hand its own slaves a
+	 * moving target. The seen cache is likewise about masters this device
+	 * searched for and found, and a slave answering us is neither.
+	 */
+	if (!radiant_channel_is_master(ch)) {
+		radiant_channel_on_slot(ch, evt->t_sync);
+		radiant_search_seen_note(&api_search, &id, evt->t_sync);
+	}
 
 	mt = radiant_frame_msg_type(f.ctrl_byte);
+	LOG_DBG("frame ch=%u kind=%u ctrl=0x%02X mt=%d xfer=%d reply=0x%02X bc=%u",
+		(unsigned)ch, (unsigned)api_ch[ch].slot_kind,
+		(unsigned)f.ctrl_byte, (int)mt,
+		(int)radiant_transfer_state(&api_xfer[ch]),
+		(unsigned)radiant_transfer_reply_ctrl(f.ctrl_byte),
+		(unsigned)api_ch[ch].bcast_valid);
 	switch (mt) {
 	case RADIANT_MSG_BROADCAST:
 		api_post_rx(ch, (uint8_t)ANTW_MESG_BROADCAST_DATA_ID, &id, evt,
@@ -1299,7 +1442,12 @@ static void api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt)
 		 * before it hands the payload up - which is why the host-facing
 		 * message is posted from api_xfer_rx_data() rather than here.
 		 */
-		(void)radiant_transfer_on_data(&api_xfer[ch], &f, evt->t_sync);
+		/* Not inside the LOG_DBG argument list. LOG_DBG compiles to
+		 * nothing below its module's level, and an expression that only
+		 * runs when logging is on is a release build with no
+		 * acknowledged data in it. */
+		rc = radiant_transfer_on_data(&api_xfer[ch], &f, evt->t_sync);
+		LOG_DBG("on_data rc=%d", rc);
 		break;
 	case RADIANT_MSG_BURST_ACK:
 	case RADIANT_MSG_TRANSFER_ACK:
@@ -1388,6 +1536,24 @@ static void api_sched_tx(uint8_t ch, const struct radiant_tx_event *evt, void *u
 	api_ch[ch].bcast_pending = false;
 	radiant_channel_on_slot(ch, evt->t_sync);
 	(void)radiant_event_post_channel_event(ch, (uint8_t)ANTW_EVENT_TX);
+
+	/*
+	 * The turnaround, posted from HERE rather than from the pump, and the
+	 * reason is the one number it needs: the window is placed against the
+	 * t_sync the transmit actually achieved - a hardware capture of RADIO's
+	 * own ADDRESS event - and not against the t_sync that was requested. A
+	 * pump running in thread context a few milliseconds later has neither the
+	 * instant nor the deadline; the reply is already 2.19 ms away when this
+	 * callback runs.
+	 *
+	 * This is the arm-from-inside-a-completion path radiant_radio_hal.h
+	 * exists to permit, and radiant_sched.c commits it on the way out of the
+	 * callback, so nothing here calls tick.
+	 */
+	if (api_master_listens(ch) &&
+	    radiant_channel_state_get(ch) == RADIANT_CH_STATE_TRACKING) {
+		api_post_master_rx(ch, evt->t_sync);
+	}
 }
 
 /*
@@ -1473,6 +1639,20 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		 * the slot holds and this completion belongs to the old one.
 		 */
 		api_feed_xfer_terminal(ch, st);
+	} else if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_MASTER_RX) {
+		/*
+		 * A master's turnaround window closing, and there is deliberately
+		 * NOTHING to do about it - which is why it needs its own arm of
+		 * this chain rather than falling through to one of the two below.
+		 *
+		 * It must not touch the slot clock: the master's phase was
+		 * anchored by its own completed transmit a moment ago, and both
+		 * radiant_channel_on_slot_missed() and _on_slot() would move it.
+		 * It must not raise ANTW_EVENT_RX_FAIL either: an empty
+		 * turnaround is what four slots a second look like when no slave
+		 * has anything to say, and reporting each one would flood a host
+		 * with an error for the normal case.
+		 */
 	} else if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_MASTER_TX &&
 		   !api_ch[ch].slot_heard) {
 		/*

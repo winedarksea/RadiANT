@@ -513,6 +513,20 @@ static struct {
 	bool         terminal_sent;
 
 	/*
+	 * The t_sync a transmit ASKED for, kept so the interrupt can compare it
+	 * against the t_sync the hardware actually captured.
+	 *
+	 * That difference is the whole of this backend's transmit timing error -
+	 * ramp-up plus T_SYNC_CAL_TX_US - measured on the part rather than taken
+	 * from the datasheet, and it costs one word and one subtraction. It is
+	 * worth having because a transmit that is late by a fixed amount is
+	 * invisible on broadcast, where the receiver's window is +/-400 us wide
+	 * and re-anchors on every frame, and fatal on an acknowledged exchange,
+	 * where the peer opens a narrow window 1560 us after the packet it sent.
+	 */
+	radiant_time_t t_sync_req;
+
+	/*
 	 * (D)PPI connections, allocated once at init.
 	 *
 	 * This nrfx exposes connections rather than bare channels, and that is
@@ -535,6 +549,8 @@ static volatile uint32_t radiant_dbg_isr;
 static volatile uint32_t radiant_dbg_rx_ev;
 static volatile uint32_t radiant_dbg_term;
 static volatile uint32_t radiant_dbg_ok;
+/* Achieved t_sync minus requested t_sync on the last transmit, microseconds. */
+static volatile int32_t  radiant_dbg_tx_err;
 
 /* The DMA buffer the RADIO reads and writes. Backend-owned, handed to the core
  * as rx_event.body for the duration of one callback only, which is exactly what
@@ -993,6 +1009,12 @@ static void rssi_temp_work_handler(struct k_work *work)
  */
 
 static void radio_isr(const void *arg);
+/* Both are defined with the interrupt handler, because that is where the
+ * reasoning about EVENTS_DISABLED lives; radiant_radio_abort() needs them
+ * earlier. See radio_disable_now() for why an abort may not simply leave the
+ * event in flight. */
+static void radio_disable_now(void);
+static void deliver_terminal(enum radiant_radio_status st);
 
 
 int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
@@ -1330,6 +1352,7 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	radiant_op.stop_on_first   = false;
 	radiant_op.report_crc_fail = false;
 	radiant_op.terminal_sent   = false;
+	radiant_op.t_sync_req      = req->t_sync_at;
 
 	/*
 	 * READY_START begins the transmission the instant ramp-up completes, so
@@ -1382,9 +1405,10 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 		radiant_op.next_id = 1u;   /* ids are non-zero by contract */
 	}
 	*op = radiant_op.id;
-	LOG_DBG("tx op=%u alen=%u blen=%u start=+%d",
+	LOG_DBG("tx op=%u alen=%u blen=%u start=+%d last_err=%d",
 		(unsigned)radiant_op.id, (unsigned)req->addr_len,
-		(unsigned)req->body_len, (int)(int64_t)(t_start - now));
+		(unsigned)req->body_len, (int)(int64_t)(t_start - now),
+		(int)radiant_dbg_tx_err);
 	return RADIANT_RADIO_OK_RC;
 
 fail:
@@ -1558,17 +1582,48 @@ int radiant_radio_abort(void)
 	nrfx_gppi_conn_disable(radiant_op.conn_close);
 	nrf_radio_shorts_set(NRF_RADIO, 0);
 	nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_STOP);
-	nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_DISABLE);
 	irq_unlock(key);
 
 	/*
-	 * The terminal event is NOT delivered from here. It is delivered from
-	 * EVENTS_DISABLED in the interrupt handler, with status ABORTED,
-	 * because radiant_radio_hal.h guarantees a cancelled operation's
-	 * terminal event still arrives and delivering it twice - once here and
-	 * once from the ISR that is already on its way - is worse than not
-	 * delivering it at all.
+	 * THE OPERATION SLOT IS RELEASED HERE, SYNCHRONOUSLY, AND IT HAS TO BE.
+	 *
+	 * This used to trigger TASKS_DISABLE and return, leaving radiant_op.kind
+	 * set until EVENTS_DISABLED reached the interrupt handler - which is
+	 * correct-looking and breaks the one caller that matters most.
+	 *
+	 * radiant_transfer.c answers acknowledged data by arming its reply FROM
+	 * INSIDE the receive callback, because 1560 us is the tightest deadline
+	 * in the link layer. That arm reaches radiant_sched.c, which drops the
+	 * channel's live request and calls this function - and we are already
+	 * inside the RADIO interrupt, so the DISABLED this provokes cannot be
+	 * serviced until the handler returns. The re-arm therefore found
+	 * radiant_op.kind still OP_RX and was refused RADIANT_RADIO_EBUSY. The
+	 * scheduler treats EBUSY as transient and consumes nothing, so the reply
+	 * sat pending until the housekeeping pump ran up to 50 ms later, by which
+	 * time its t_sync was long past and it was dropped as a missed window.
+	 *
+	 * Nothing reports any of that. On the bench it read as an acknowledged
+	 * exchange that completed about one time in three, which looks exactly
+	 * like a marginal link and is not one: the frame was never transmitted.
+	 *
+	 * So the disable is completed and its event consumed before returning
+	 * (radio_disable_now()), and the terminal event is delivered from here.
+	 * Delivering it is safe rather than a double delivery: deliver_terminal()
+	 * is idempotent on radiant_op.terminal_sent, and radio_disable_now() has
+	 * taken the DISABLED away from the handler, so the branch that would have
+	 * delivered it later now sees OP_NONE and drops through. It also keeps
+	 * radiant_radio_hal.h's promise that an aborted operation still produces
+	 * exactly one terminal event, rather than quietly dropping it.
+	 *
+	 * Every caller retires its own bookkeeping BEFORE calling this - that is
+	 * radiant_sched.c's documented order - so the callback this ends up
+	 * making finds an operation nobody owns and returns immediately. The
+	 * delivery is a contract obligation being met, not a code path anyone
+	 * depends on for behaviour.
 	 */
+	radio_disable_now();
+	deliver_terminal(RADIANT_RADIO_STATUS_ABORTED);
+
 	return RADIANT_RADIO_OK_RC;
 }
 
@@ -1609,6 +1664,57 @@ int radiant_radio_nrf_die_temp_c(int16_t *out)
  * The interrupt
  * ---------------------------------------------------------------------------
  */
+
+/*
+ * Take the radio down AND consume the EVENTS_DISABLED it raises, before this
+ * interrupt runs any completion callback.
+ *
+ * THE BUG THIS EXISTS TO PREVENT HAS NO SYMPTOM EXCEPT SILENCE. Both branches
+ * that retire an operation from EVENTS_END - a finished transmit, and a receive
+ * that ends on RADIANT_RX_STOP_ON_FIRST - used to trigger TASKS_DISABLE and then
+ * call the completion callback with the DISABLED still in flight. The HAL
+ * invites that callback to arm the next operation immediately, and
+ * radiant_transfer.c takes the invitation: it arms the acknowledgement's receive
+ * window from inside the transmit callback, because at a 1.55 ms turnaround
+ * nothing slower meets the deadline. Control then returned here, to the
+ * EVENTS_DISABLED test at the bottom of radio_isr() - which by now was set, by
+ * the disable belonging to the operation that had already ended. It read as the
+ * terminal event of the window armed microseconds earlier and tore it down.
+ *
+ * So the reply window was armed and destroyed inside one interrupt, the peer's
+ * acknowledgement arrived at a disabled radio, and the transfer reported
+ * RADIANT_TRANSFER_FAIL_NO_ACK - a plausible on-air failure, with the radio
+ * never having listened. Nothing logs, nothing faults, and the acknowledged-data
+ * path is exactly the one a trainer uses for resistance.
+ *
+ * Waiting is what makes it unambiguous: ramp-down from TXIDLE or RXIDLE is a
+ * few microseconds, so the event is consumed here rather than left to be
+ * misattributed later. The bound is a backstop against a state the datasheet
+ * does not promise DISABLED from, not a timeout anyone expects to reach, and it
+ * is spun against this backend's own 1 MHz TIMER so it stays a real duration
+ * whatever the core clock is.
+ */
+#define RADIO_DISABLE_MAX_US 100u
+
+static void radio_disable_now(void)
+{
+	uint32_t deadline;
+
+	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_DISABLED);
+	nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_DISABLE);
+
+	deadline = timer_capture(CC_NOW) + RADIO_DISABLE_MAX_US;
+	while (!nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_DISABLED)) {
+		if ((int32_t)(timer_capture(CC_NOW) - deadline) >= 0) {
+			/* Leave the event alone: if it arrives late the branch
+			 * at the bottom of radio_isr() sees it with kind ==
+			 * OP_NONE and drops it, which is the same outcome by a
+			 * slower road. */
+			return;
+		}
+	}
+	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_DISABLED);
+}
 
 /* Every operation ends here, and it ends down exactly one of the two callbacks.
  * The kind has to be read BEFORE the slot is released, which is why it is
@@ -1679,8 +1785,12 @@ static void radio_isr(const void *arg)
 			nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
 			nrf_radio_shorts_set(NRF_RADIO, 0);
 			/* In place of the end-of-packet short this part may or
-			 * may not spell the same way. See radiant_radio_tx(). */
-			nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_DISABLE);
+			 * may not spell the same way. See radiant_radio_tx().
+			 * Consumed here, not left in flight: see
+			 * radio_disable_now() for what a DISABLED outliving its
+			 * own operation does to the window the callback below
+			 * is about to arm. */
+			radio_disable_now();
 
 			memset(&evt, 0, sizeof(evt));
 			evt.op = radiant_op.id;
@@ -1696,6 +1806,13 @@ static void radio_isr(const void *arg)
 				nrf_timer_cc_get(TIMER_ADDR, CC_SYNC)) +
 				(radiant_time_t)T_SYNC_CAL_TX_US;
 			evt.t_sync_exact = true;
+
+			/* Achieved minus requested: this backend's transmit
+			 * timing error, in microseconds, measured every frame.
+			 * See t_sync_req. Zero is the target. */
+			radiant_dbg_tx_err =
+				(int32_t)(int64_t)(evt.t_sync -
+						   radiant_op.t_sync_req);
 
 			radiant_op.kind = OP_NONE;
 			radiant_op.cbs->tx(&evt, radiant_op.user);
@@ -1751,8 +1868,11 @@ static void radio_isr(const void *arg)
 					nrfx_gppi_conn_disable(radiant_op.conn_start);
 					nrfx_gppi_conn_disable(radiant_op.conn_close);
 					nrf_radio_shorts_set(NRF_RADIO, 0);
-					nrf_radio_task_trigger(NRF_RADIO,
-							       NRF_RADIO_TASK_DISABLE);
+					/* Same reason as the transmit branch
+					 * above: this callback may arm the next
+					 * operation, and a DISABLED left in
+					 * flight would end that one instead. */
+					radio_disable_now();
 					radiant_op.kind = OP_NONE;
 				}
 				radiant_op.cbs->rx(&evt, radiant_op.user);

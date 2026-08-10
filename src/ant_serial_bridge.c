@@ -63,7 +63,16 @@ LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
 /* ── Bridge thread ─────────────────────────────────────────────────────────── */
 
 #define BRIDGE_STACK_SIZE  2048
-#define BRIDGE_PRIORITY    5
+
+/*
+ * Taken from src/ant_radio.h rather than spelled again here, because a backend's
+ * event-delivery thread has to sit BELOW it and the two numbers only stay
+ * consistent if there is one of them. See ANTR_HOST_THREAD_PRIORITY: a backend
+ * thread that can preempt this one delivers an event caused by a command ahead
+ * of that command's own response, and the host discards it while looking for the
+ * response.
+ */
+#define BRIDGE_PRIORITY    ANTR_HOST_THREAD_PRIORITY
 
 K_THREAD_STACK_DEFINE(bridge_stack, BRIDGE_STACK_SIZE);
 static struct k_thread bridge_thread_data;

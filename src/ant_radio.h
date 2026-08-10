@@ -181,8 +181,35 @@ struct antr_msg {
  *   5. Three ANTW_EVENT_* codes carry buffer-ownership meaning as well as
  *      status. See the burst contract below - getting that wrong is the single
  *      most expensive mistake a backend can make here.
+ *   6. An event raised as a side effect of an antr_* call must not reach the
+ *      host BEFORE that call's own response. See ANTR_HOST_THREAD_PRIORITY.
  */
 void antr_on_message(const struct antr_msg *msg);
+
+/*
+ * The Zephyr thread priority the bridge makes antr_* calls on, and the number a
+ * backend's own event-delivery thread has to sit below.
+ *
+ * It is stated here rather than left inside ant_serial_bridge.c because it is
+ * half of a two-sided requirement and the other half lives in the backend.
+ * Rule 6 above is not a style note: the bridge sends a command's
+ * ANTW_MESG_RESPONSE_EVENT_ID reply after the antr_* call returns, so any
+ * backend thread that can preempt this one will put an event the command
+ * *caused* onto the wire ahead of the reply to the command itself. A host
+ * library reads until it finds its own response and discards what it passes, so
+ * the event is not merely early - it is gone.
+ *
+ * Measured on the bench with radiant_core, whose event thread was one priority
+ * above this one: closing a master channel produced EVENT_CHANNEL_CLOSED, then
+ * the response to MESG_CLOSE_CHANNEL, in that order. The host saw only the
+ * response, never learned the channel had closed, and the unassign that follows
+ * a close was refused CHANNEL_IN_WRONG_STATE.
+ *
+ * A backend that delivers events from an ISR or a work queue instead of a
+ * thread has the same obligation and must meet it its own way; this constant is
+ * for the ones that use a thread, which is all of them today.
+ */
+#define ANTR_HOST_THREAD_PRIORITY 5
 
 /* ── Burst buffer ownership: the contract that costs a second per packet ───── */
 

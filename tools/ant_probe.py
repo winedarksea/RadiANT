@@ -212,12 +212,37 @@ class SerialDevice:
         return self._port.write(bytes(data))
 
     def read(self, endpoint, size, timeout=None):
+        """Return as soon as ANY bytes have arrived, never after `size` of them.
+
+        A bulk-IN read hands back one packet the moment the endpoint has one,
+        and `size` is the caller's buffer bound rather than an amount to wait
+        for. `serial.Serial.read(size)` is the opposite: it blocks until it has
+        collected exactly `size` bytes or the timeout expires.
+
+        That difference is not cosmetic, and it invented a firmware bug. An
+        EVENT_TX frame is 7 bytes and a master raises one every 249.7 ms, so a
+        read for 64 bytes could never be satisfied by the traffic it was
+        watching - every read ran the full 1000 ms and then delivered four
+        events at once. `ant_sim.py` paces from EVENT_TX and falls back to the
+        wall clock after two silent message periods, so it reported ~1 fallback
+        a second and blamed the dongle's event filter, while the radio log
+        showed every slot armed and transmitted on time. Same shape as the
+        FrameReader timeout bug in docs/testing.md: the instrument, not the
+        thing measured.
+
+        So: block for the first byte, then take whatever else has already
+        arrived and return. That is the bulk-IN semantics the tools were
+        written against.
+        """
         self._port.timeout = (timeout or 0) / 1000.0
-        data = self._port.read(size)
+        data = self._port.read(1)
         if not data:
             # FrameReader treats this as "nothing to say yet", the same as an
             # idle bulk-IN endpoint. Returning empty would spin instead.
             raise usb.core.USBTimeoutError("timeout", None, None)
+        pending = min(size - 1, self._port.in_waiting)
+        if pending > 0:
+            data += self._port.read(pending)
         return data
 
     def set_configuration(self):
