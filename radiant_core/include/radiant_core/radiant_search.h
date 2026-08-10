@@ -581,6 +581,18 @@ int radiant_search_end(struct radiant_search *s, uint8_t channel);
 bool    radiant_search_is_searching(const struct radiant_search *s, uint8_t channel);
 uint8_t radiant_search_n_searching(const struct radiant_search *s);
 
+/*
+ * Which mode an active channel is searching in. The caller needs this to
+ * decide whether a match should convert the channel to tracking (ACQUIRE) or
+ * leave it alone (SCAN, which never leaves) - see the acquired callback's
+ * contract above. RADIANT_SEARCH_MODE_ACQUIRE if the channel is not active;
+ * a caller asking this outside its own acquired callback for that channel is
+ * asking about a channel that may already have left, and ACQUIRE is the mode
+ * that does not keep searching, which is the safe default to fail toward.
+ */
+enum radiant_search_mode radiant_search_chan_mode(const struct radiant_search *s,
+						 uint8_t channel);
+
 /* ---------------------------------------------------------------------------
  * The pump - what the scheduler calls
  * ---------------------------------------------------------------------------

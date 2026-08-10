@@ -1171,6 +1171,37 @@ ZTEST(radiant_search, test_scan_mode_reports_every_frame_and_never_leaves)
 	end_of_test();
 }
 
+/*
+ * radiant_search_chan_mode() is what a caller has to check before deciding
+ * whether a match should convert a channel to tracking - api_search_acquired()
+ * in radiant_api.c used to skip that check and called
+ * radiant_channel_on_acquired() unconditionally, which silently turned a
+ * background scan into a one-shot acquire the moment anything answered it.
+ * This is the query that fix depends on; radiant_api.c has no slave-side test
+ * scaffolding to exercise the fix itself (see the API composition suite's
+ * README), so this is the coverage there is.
+ */
+ZTEST(radiant_search, test_chan_mode_reports_which_kind_of_search)
+{
+	bring_up(false);
+
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_ok(radiant_search_begin(&g_s, 1u, RADIANT_SEARCH_MODE_SCAN, &want_any,
+				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+
+	zassert_equal(RADIANT_SEARCH_MODE_ACQUIRE, radiant_search_chan_mode(&g_s, 0u));
+	zassert_equal(RADIANT_SEARCH_MODE_SCAN, radiant_search_chan_mode(&g_s, 1u));
+	/* Not searching at all: the safe default is the mode that does not
+	 * keep searching, so a caller that got this wrong fails toward ending
+	 * a search rather than toward leaving one running forever. */
+	zassert_equal(RADIANT_SEARCH_MODE_ACQUIRE, radiant_search_chan_mode(&g_s, 2u));
+
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	zassert_ok(radiant_search_end(&g_s, 1u));
+	end_of_test();
+}
+
 /* ---------------------------------------------------------------------------
  * 6. A truncated window does not skip a set
  * ---------------------------------------------------------------------------

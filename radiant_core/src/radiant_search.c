@@ -404,6 +404,16 @@ uint8_t radiant_search_n_searching(const struct radiant_search *s)
 	return n;
 }
 
+enum radiant_search_mode radiant_search_chan_mode(const struct radiant_search *s,
+						 uint8_t channel)
+{
+	if (!inst_ok(s) || channel >= (uint8_t)RADIANT_SEARCH_MAX_CHANNELS ||
+	    !s->chans[channel].active) {
+		return RADIANT_SEARCH_MODE_ACQUIRE;
+	}
+	return s->chans[channel].mode;
+}
+
 /* ---------------------------------------------------------------------------
  * The pump
  * ---------------------------------------------------------------------------

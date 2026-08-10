@@ -896,6 +896,7 @@ static void api_search_acquired(uint8_t channel,
 				const struct radiant_search_result *r, void *user)
 {
 	struct radiant_rx_event hal;
+	bool                 is_scan;
 
 	(void)user;
 	if (!api_ch_valid(channel) || r == NULL) {
@@ -907,8 +908,26 @@ static void api_search_acquired(uint8_t channel,
 		return;
 	}
 
-	radiant_channel_on_acquired(channel, &r->id, r->t_sync);
-	api_stats.acquired++;
+	/*
+	 * SCAN mode never leaves - that is the whole point of a background
+	 * scan, and radiant_search.c already reports every match on it rather
+	 * than only the first (see the loop in handle_ok()). Converting the
+	 * channel to tracking here anyway, as this function used to do for
+	 * both modes alike, undid that: radiant_channel_on_acquired() knows
+	 * nothing about search modes and unconditionally moves the channel to
+	 * RADIANT_CH_STATE_TRACKING, and the state check below then ended the
+	 * search the moment the FIRST device answered - a wildcard background
+	 * scan that finds one sensor and stops, which looks exactly like "only
+	 * one sensor" to a host that opened it to discover all of them. Query
+	 * the mode before anything below can change it.
+	 */
+	is_scan = radiant_search_chan_mode(&api_search, channel) ==
+		  RADIANT_SEARCH_MODE_SCAN;
+
+	if (!is_scan) {
+		radiant_channel_on_acquired(channel, &r->id, r->t_sync);
+		api_stats.acquired++;
+	}
 
 	/*
 	 * ANT delivers the first broadcast along with the channel ID on
@@ -933,7 +952,9 @@ static void api_search_acquired(uint8_t channel,
 	/*
 	 * RADIANT_SEARCH_MODE_ACQUIRE says the channel leaves the search with an ID
 	 * and belongs to the scheduler's tracked set from here on. Scan mode
-	 * never leaves, and the state machine says which this is.
+	 * never leaves - is_scan skipped the state change above, so this reads
+	 * SEARCHING rather than TRACKING for it and radiant_search_end() is not
+	 * called.
 	 */
 	if (radiant_channel_state_get(channel) == RADIANT_CH_STATE_TRACKING) {
 		(void)radiant_search_end(&api_search, channel);
