@@ -57,7 +57,8 @@ int radiant_transfer_ctrl_fields(uint32_t index, bool last, bool slot_opener,
 	 * b4. ONE BIT. There is no wider form and there is nowhere in the frame
 	 * for one: a 17-packet and a 51-packet burst were captured end to end
 	 * with the sniffer's ring-drop counter at zero and this bit alternated
-	 * across every on-air packet while bits 7:5 held still.
+	 * across every on-air packet while bits 7:6 held still. (7:6, not 7:5 -
+	 * bit 5 goes to 1 on the final packet of every burst, which is b5 "last".)
 	 */
 	out->seq = ((index & 1u) != 0u);
 	/*
@@ -343,6 +344,23 @@ int radiant_transfer_reply_retransmit(struct radiant_transfer *t, radiant_time_t
 	 * literal: it is the number to change when a second stack is measured.
 	 */
 	if (t->reply_attempts >= (uint8_t)RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX) {
+		return RADIANT_TRANSFER_ESTATE;
+	}
+	/*
+	 * AND it must not be ancient. Nothing clears the saved reply when an
+	 * exchange ends - TX_REPLY returns to IDLE without going through
+	 * finish() - so the attempt counter on its own would authorise repeating
+	 * an acknowledgement from minutes ago as readily as one from 3 ms ago.
+	 * See RADIANT_TRANSFER_REPLY_VALID_US. Refusing is not enough on its own
+	 * either: the saved reply is dropped here, so this cannot be the answer
+	 * to a bug that keeps asking.
+	 */
+	if (t_sync_at < t->reply_t_sync ||
+	    (t_sync_at - t->reply_t_sync) >
+		    (radiant_time_t)RADIANT_TRANSFER_REPLY_VALID_US) {
+		t->reply_ctrl = 0u;
+		t->reply_attempts = 0u;
+		t->stats.stale_replies++;
 		return RADIANT_TRANSFER_ESTATE;
 	}
 

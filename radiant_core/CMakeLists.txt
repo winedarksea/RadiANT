@@ -76,12 +76,15 @@ if(CONFIG_RADIANT_CORE_BACKEND_NULL)
 elseif(CONFIG_RADIANT_CORE_BACKEND_NRF)
   zephyr_library_sources(src/radiant_radio_nrf.c)
   message(WARNING
-    "radiant_core: the nrf backend transmits and receives, but its ramp-up and "
-    "turnaround figures are from the datasheet and both t_sync calibration "
-    "constants are still zero. Every register fact is measured on nRF54L15 "
-    "only. Expect timing to be uncalibrated rather than absent - see the "
-    "'what is measured and what is not' header in src/radiant_radio_nrf.c "
-    "before reading any A/B timing result off this build.")
+    "radiant_core: the nrf backend transmits and receives. Its ramp-up and "
+    "turnaround figures are datasheet values, and the two t_sync calibration "
+    "constants are SEEDED from Zephyr's per-SoC BLE chain delays rather than "
+    "measured on this bench - a defensible prior at a different deviation, not "
+    "the wired two-board trigger the HAL contract asks for. Every register "
+    "fact is measured on nRF54L15 only. Expect timing to be approximately "
+    "calibrated rather than exact - see the 'what is measured and what is not' "
+    "header in src/radiant_radio_nrf.c before reading any A/B timing result "
+    "off this build.")
 elseif(CONFIG_RADIANT_CORE_BACKEND_MPSL)
   message(FATAL_ERROR
     "radiant_core: CONFIG_RADIANT_CORE_BACKEND_MPSL is selected but "

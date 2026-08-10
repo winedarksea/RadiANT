@@ -664,6 +664,18 @@ than "no worse than sdk-ant". Same for background scan, which sdk-ant
 advertises off and does not implement. Everything else in the A/B is relative,
 which is why these two are called out.
 
+**Reachable, but not by the message named after it.** `radiant_core` implements
+background scan and `MESG_OPEN_RX_SCAN_MODE` (`0x5B`) has **no handler in
+`src/ant_serial_bridge.c`**, so the conformance transcript records that message
+as skipped. The capability is reached through ext-assign instead — the
+`API_EXT_ASSIGN_BACKGROUND_SCAN` bit on `antr_channel_assign()`, which is what
+`radiant_api.c` reads to choose `RADIANT_SEARCH_MODE_SCAN` over
+`RADIANT_SEARCH_MODE_ACQUIRE`. Both are true at once and the table above states
+only the first, so it is stated here: the capability claim and the bridge do not
+currently agree about the route. Not a Zwift blocker — no fitness app opens a
+scanning channel — and it is a bridge gap rather than a `radiant_core` one, so
+adding the handler is a small piece of work in `src/`, not in the module.
+
 The optional features below are the other axis: what exists past the messages a
 fitness app sends. The answer is a backend property too — sdk-ant can do
 encryption and cannot do event buffering; `radiant_core` v1 does neither, which is

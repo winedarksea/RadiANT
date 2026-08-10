@@ -32,15 +32,18 @@
  *
  * NOT MEASURED, and each is called out again at its definition:
  *
- *   1. THE t_sync CALIBRATION CONSTANT IS ZERO AND THAT IS A PLACEHOLDER.
- *      radiant_radio_hal.h spends a page on why: a CONSTANT t_sync error
- *      cancels out of the period estimate, so the drift PLL still locks and
- *      nothing looks wrong, while every receive window shifts by that amount
- *      and yield falls by a few tenths of a percent - the same order as this
- *      bench's characterised ~0.4 % collision floor. There is no error code and
- *      no log line. Measuring it needs the wired two-board trigger described
- *      there, and until that is done the A/B `timing` gate is the only thing
- *      that would notice.
+ *   1. THE t_sync CALIBRATION CONSTANTS ARE SEEDED, NOT MEASURED. They were
+ *      zero; they are now Zephyr's own per-SoC 1 Mbit chain delays, which its
+ *      header calls "based on empirical measurements and sniffer logs" and
+ *      which are byte-identical for nRF52840 and nRF54L15. That is a defensible
+ *      prior and not the wired two-board trigger radiant_radio_hal.h specifies:
+ *      the figures are BLE-1M, at 250 kHz deviation, and ANT-1M is ~170 kHz, so
+ *      the receive number in particular carries a different filter bandwidth.
+ *      Read the failure mode before assuming it does not matter - a CONSTANT
+ *      t_sync error cancels out of the period estimate, so the drift PLL still
+ *      locks and nothing looks wrong while every receive window shifts and
+ *      yield falls a few tenths of a percent. No error code, no log line. See
+ *      T_SYNC_CAL_US.
  *
  *   2. THE RAMP-UP AND TURNAROUND CONSTANTS ARE DATASHEET FIGURES. Transmit is
  *      implemented and works, but nothing has yet measured what this part
@@ -49,11 +52,23 @@
  *      loudly: it puts the frame on the air early or late by that amount, and
  *      a receiver whose window is wide enough will still hear it - which is
  *      exactly why "it transmits" is not evidence that the number is right.
+ *      Ramp-up itself is now at least SELF-CONSISTENT rather than assumed:
+ *      radiant_radio_init() enables fast ramp-up and verifies the register took
+ *      it, which is what makes RAMP_UP_US = 40 true on nRF52840 instead of
+ *      about 140. See RAMP_UP_US.
  *
  *   3. EVERY REGISTER FACT IS FROM nRF54L15. The nRF52840 is the shipping part
  *      and the mapping is predicted to hold on it - the two RADIOs differ in
  *      ramp-up and in the TIMING/RXGAIN block, not in the packet engine - but
- *      predicted is not measured.
+ *      predicted is not measured. What has been closed by inspection rather
+ *      than by a run: fast ramp-up is not the nRF52 reset default and is now
+ *      written (item 2); ARM_SETUP_US is per series, because the same arm code
+ *      runs at half the clock; the TIMER prescaler solves to exactly 1 MHz from
+ *      a 16 MHz PCLK and __ASSERTs if it ever does not; the five-CC requirement
+ *      is a compile-time #error, which is what caught the product board having
+ *      no radiant,radio-timer chosen node at all. What still needs the part:
+ *      the PPI-vs-DPPI routing through the four nrfx_gppi_conn_alloc() calls,
+ *      and the errata-153 RSSI table.
  *
  *   4. THE RSSI TEMPERATURE CORRECTION TABLE IS VENDOR-SOURCED, NOT BENCH-
  *      MEASURED. The seven thresholds and the eighth beyond-erratum branch in
@@ -302,26 +317,80 @@ static const enum radiant_phy radiant_nrf_phys[] = { RADIANT_PHY_1M_GFSK };
 /*
  * Ramp-up and turnaround.
  *
- * DATASHEET FIGURES, NOT MEASUREMENTS - see note 2 in this file's header. They
- * are antenna-referenced in the datasheet's own terms, which is the right
- * definition, but nothing on this bench has confirmed them and nothing has
- * exercised transmit at all. The two-board trigger that calibrates t_sync is
- * the same rig that would measure these, so they are expected to be corrected
- * together and in one sitting.
+ * DATASHEET FIGURES, NOT BENCH MEASUREMENTS - see note 2 in this file's header.
+ * They are antenna-referenced in the datasheet's own terms, which is the right
+ * definition, but nothing on this bench has confirmed them. The two-board
+ * trigger that calibrates t_sync is the same rig that would measure these, so
+ * they are expected to be corrected together and in one sitting.
+ *
+ * FAST RAMP-UP IS NOT THE RESET DEFAULT ON nRF52, AND 40 us ASSUMES IT.
+ *
+ * RADIO->MODECNF0.RU resets to Default, which is the ~140 us path. Nothing in
+ * this file used to write it, so on nRF52840 every transmit put its address on
+ * the air about 100 us after the t_sync the scheduler asked for, and every
+ * receive window entered receive 100 us later than t_open - air_lead_us()
+ * intended. The nRF54L15 runs the same code correctly because that part ramps
+ * fast unconditionally - which is exactly why a bench that only ever ran on
+ * nRF54L15 could not see it.
+ *
+ * radiant_radio_init() now calls nrf_radio_fast_ramp_up_enable_set(), so 40 us
+ * is a fact rather than an aspiration. Corroborated by Zephyr's own BLE
+ * controller, whose per-SoC tables give 1 Mbit ramp-up as 40.9 us TX / 40.3 us
+ * RX fast and 140.9 / 140.3 default, BYTE-IDENTICAL for nRF52840 and nRF54L15
+ * (zephyr/subsys/bluetooth/controller/ll_sw/nordic/hal/nrf5/radio/).
  */
-#if defined(CONFIG_SOC_SERIES_NRF54LX)
+/*
+ * CONFIG_SOC_COMPATIBLE_*, NOT CONFIG_SOC_SERIES_* - see the same note on
+ * RADIANT_CORE_BACKEND_NRF's `depends on` in radiant_core/Kconfig. Zephyr 4.4
+ * (NCS v3.4.0) renamed SOC_SERIES_NRF52X to SOC_SERIES_NRF52 and
+ * SOC_SERIES_NRF54LX to SOC_SERIES_NRF54L. Here the failure would at least have
+ * been loud - the #else below is an #error - but only if this file were reached
+ * at all, and the Kconfig dependency using the same stale names meant it was
+ * not. The SOC_COMPATIBLE_ pair is set in both NCS v3.2.4 and v3.4.0.
+ */
+#if defined(CONFIG_SOC_COMPATIBLE_NRF54LX)
 #define RAMP_UP_US             40u
 #define RX_TO_TX_US            40u
 #define TX_TO_RX_US            40u
+/*
+ * The software setup cost of an arm call. MEASURED-ADJACENT, NOT MEASURED: this
+ * value has run on this part since the backend existed and no arm has been
+ * refused RADIANT_RADIO_ETIME on it, which bounds it from below and says
+ * nothing about the margin. Nordic's own 802.15.4 driver budgets 185 us TX /
+ * 150 us RX for the same job on this series
+ * (modules/hal/nordic/drivers/nrf_802154/.../nrf_802154_delayed_trx.c), for a
+ * heavier arm path than this one.
+ */
+#define ARM_SETUP_US           80u
 #define CAPS_NAME              "nrf54l RADIO (direct)"
 /* nRF54L splits RADIO's interrupt over two lines; RADIO_0 carries the packet
  * events (ADDRESS, END, DISABLED) this backend uses. */
 #define RADIANT_RADIO_IRQn     RADIO_0_IRQn
 #define RADIANT_RADIO_IRQn_2   RADIO_1_IRQn
-#elif defined(CONFIG_SOC_SERIES_NRF52X)
-#define RAMP_UP_US             40u   /* fast ramp-up; 140 us on the slow path */
+#elif defined(CONFIG_SOC_COMPATIBLE_NRF52X)
+#define RAMP_UP_US             40u   /* fast ramp-up, enabled at init */
 #define RX_TO_TX_US            40u
 #define TX_TO_RX_US            40u
+/*
+ * THE SAME ARM CODE AT HALF THE CLOCK. The nRF52840 is a 64 MHz Cortex-M4; the
+ * nRF54L15 is a 128 MHz Cortex-M33. One number for both was the nRF54L15's
+ * number silently applied to a part that needs about twice as long, and too
+ * small here does not degrade - it refuses every arm with RADIANT_RADIO_ETIME,
+ * which is the shape of wedge this file's history already records once.
+ *
+ * 240 us is bracketed rather than guessed: above 2 x the figure that has run on
+ * nRF54L15 (160 us), below Nordic's own 270 us for both directions on
+ * NRF52_SERIES in nrf_802154_delayed_trx.c. It is an UPPER BOUND to be
+ * tightened by measurement, not a measurement - the instrumentation is the DBG
+ * per-window line carrying op, filter count, window edges and the
+ * isr/event/ok/terminal counters, and the number to watch is ETIME refusals at
+ * zero with margin to spare.
+ *
+ * Erring large costs 80 us of scheduling slack per window against a 249.7 ms
+ * period and cannot produce a refusal the core could not have predicted; erring
+ * small costs the board.
+ */
+#define ARM_SETUP_US           240u
 #define CAPS_NAME              "nrf52 RADIO (direct)"
 #define RADIANT_RADIO_IRQn     RADIO_IRQn
 #else
@@ -330,19 +399,20 @@ with the bench measurement that produced them, or select a different backend."
 #endif
 
 /*
- * The software setup cost of an arm call, which is what min_arm_lead_us
- * actually bounds: register programming, (D)PPI wiring, and the compare having
- * to be programmed before the counter reaches it. Ramp-up and preamble airtime
- * are NOT in this number - they are accounted separately in arm_tx(), because
- * the HAL defines t_sync at the end of the address rather than at the start of
- * transmission and mixing the two is how one backend's ramp-up ends up baked
- * into a core constant.
+ * ARM_SETUP_US is what min_arm_lead_us actually bounds: register programming,
+ * (D)PPI wiring, and the compare having to be programmed before the counter
+ * reaches it. It is defined PER SERIES above, because it is a CPU-time cost and
+ * the two parts do not share a clock. Ramp-up and preamble airtime are NOT in
+ * it - they are accounted separately in arm_tx(), because the HAL defines
+ * t_sync at the end of the address rather than at the start of transmission and
+ * mixing the two is how one backend's ramp-up ends up baked into a core
+ * constant.
  *
  * radiant_transfer.h checks its 1310 us reply-window lead against this, so a
  * number that is too large here fails acknowledged data at configuration time
- * rather than on the air. That is the right direction to be wrong in.
+ * rather than on the air. That is the right direction to be wrong in, and the
+ * worst case below - 240 + 40 + 48 = 328 us - has a factor of four of room.
  */
-#define ARM_SETUP_US           80u
 
 /*
  * min_arm_lead_us MUST cover everything the backend needs before a frame's
@@ -388,7 +458,8 @@ static const struct radiant_radio_caps radiant_nrf_caps = {
 
 	/* True: t_sync is a (D)PPI capture of RADIO's own ADDRESS event, with no
 	 * software in the path. Note carefully what this does NOT claim - see
-	 * T_SYNC_CAL_US, whose value is still zero. */
+	 * T_SYNC_CAL_US, which is now seeded from Zephyr's per-SoC chain delays
+	 * rather than zero, and is still a prior rather than a measurement. */
 	.has_sync_timestamp  = true,
 	.has_rssi            = true,
 	.crc_in_hw           = true,
@@ -413,14 +484,41 @@ const struct radiant_radio_caps *radiant_radio_caps_get(void)
  * address-sent event, the other captures that pulse on this same TIMER, and the
  * difference minus the known cable and air delay is this number.
  *
- * ZERO IS A PLACEHOLDER AND IT IS THE WRONG ANSWER. It is written as a named
- * constant with this comment rather than left out so that the gap is visible in
- * the code that depends on it. Read radiant_radio_hal.h's "THE FAILURE MODE,
- * WHICH IS SILENT" before assuming it does not matter: a constant error here
- * cancels out of the period estimate, so nothing looks broken while every
- * window sits off-centre and yield drops into the noise floor.
+ * SEEDED FROM ZEPHYR'S BLE CONTROLLER, WHICH IS A DEFENSIBLE PRIOR AND NOT A
+ * MEASUREMENT. It was zero, and zero was worse: read radiant_radio_hal.h's "THE
+ * FAILURE MODE, WHICH IS SILENT" before assuming a wrong constant announces
+ * itself. A constant error cancels out of the period estimate, so the drift PLL
+ * still locks and nothing looks broken while every window sits off-centre and
+ * yield drops by a few tenths of a percent - the same order as this bench's
+ * characterised ~0.4 % collision floor.
+ *
+ * Provenance, so the number can be argued with rather than merely trusted.
+ * Nordic ships per-SoC chain delays their own header calls "based on empirical
+ * measurements and sniffer logs", in
+ * zephyr/subsys/bluetooth/controller/ll_sw/nordic/hal/nrf5/radio/. For 1 Mbit -
+ * the only PHY this project uses - nRF52840 and nRF54L15 carry BYTE-IDENTICAL
+ * values:
+ *
+ *     RX chain delay, 1M: 9400 ns  (the capture is LATE  vs the antenna)
+ *     TX chain delay, 1M:  600 ns  (the event  is EARLY  vs the antenna)
+ *
+ * Zephyr applies them with exactly the sign convention these constants want -
+ * see lll_adv_aux.c, where chain delay converts an event-referenced timer value
+ * to an antenna-referenced one.
+ *
+ * THE CAVEAT, WRITTEN DOWN RATHER THAN SKIPPED: these are BLE-1M figures -
+ * 250 kHz deviation, measured for the BLE packet engine - and ANT-1M is about
+ * 170 kHz. A different RX filter bandwidth means a different group delay, so
+ * the receive number in particular is a prior and not a substitute for the
+ * wired two-board trigger the HAL contract specifies. It is landed as a seed
+ * carrying its provenance; the bench measurement remains the confirmation.
+ *
+ * The transmit half is nearly free to confirm and should be confirmed first:
+ * radiant_dbg_tx_err reads achieved minus requested t_sync every frame, it read
+ * -2 us on nRF54L15 with both constants at zero, and a correct
+ * T_SYNC_CAL_TX_US is exactly where that residual lives.
  */
-#define T_SYNC_CAL_US   0
+#define T_SYNC_CAL_US   (-9)   /* -9.4 us, rounded toward zero */
 
 /*
  * The same thing for transmit, and it is a SEPARATE constant on purpose.
@@ -428,13 +526,41 @@ const struct radiant_radio_caps *radiant_radio_caps_get(void)
  * On receive the error is demodulator group delay and filter latency. On
  * transmit it is modulator and PA delay, in the other direction, through
  * entirely different silicon. They are not the same number and there is no
- * reason to expect them to be close; sharing one constant between the two would
- * bake that assumption in at the exact point where nothing would ever check it.
- *
- * Both are zero today, so this distinction currently costs nothing and changes
- * nothing - which is the only moment at which it can be made for free.
+ * reason to expect them to be close - 9.4 us against 0.6 us, a factor of
+ * fifteen - so sharing one constant between them would bake an assumption in at
+ * the exact point where nothing would ever check it.
  */
-#define T_SYNC_CAL_TX_US   0
+#define T_SYNC_CAL_TX_US   (1)   /* +0.6 us, rounded away from zero */
+
+/*
+ * radiant_radio_tx() folds this into an unsigned lead, so a negative value
+ * would wrap to about 4295 seconds and refuse every transmit with ETIME. It is
+ * positive on both parts and there is no physical reason for a transmit chain
+ * delay to be negative - the antenna cannot emit before the modulator - but the
+ * failure if one were ever written here is spectacular and silent at the point
+ * of edit, so it is caught at compile time instead.
+ */
+BUILD_ASSERT(T_SYNC_CAL_TX_US >= 0,
+	     "T_SYNC_CAL_TX_US is folded into an unsigned lead in "
+	     "radiant_radio_tx(); a negative value wraps");
+
+/*
+ * Apply a calibration to a captured instant, in signed microseconds.
+ *
+ * radiant_time_t is unsigned and these constants are negative, so the addition
+ * is spelled out rather than left to a cast: `captured + (radiant_time_t)(-9)`
+ * happens to produce the right answer by modular arithmetic and reads like a
+ * bug at every future review.
+ */
+static radiant_time_t t_sync_cal(radiant_time_t captured, int32_t cal_us)
+{
+	if (cal_us >= 0) {
+		return captured + (radiant_time_t)cal_us;
+	}
+	return (captured > (radiant_time_t)(-cal_us))
+		       ? (captured - (radiant_time_t)(-cal_us))
+		       : 0u;
+}
 
 /* ---------------------------------------------------------------------------
  * Address arithmetic - the measured part
@@ -1049,6 +1175,37 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	}
 #endif
 
+	/*
+	 * FAST RAMP-UP. See RAMP_UP_US - without this, every timing constant in
+	 * this file is 100 us wrong on nRF52840 and exactly right on nRF54L15,
+	 * which is the worst possible distribution of a bug across a bench and a
+	 * product board.
+	 *
+	 * GUARDED, not unconditional, and the guard is the nrfx symbol rather
+	 * than CONFIG_SOC_SERIES_*. nrfx only DECLARES this helper under
+	 * `RADIO_MODECNF0_RU_Msk || RADIO_TIMING_RU_Msk`, and no header in
+	 * NCS v3.2.4 or v3.4.0 defines RADIO_TIMING_RU_Msk for any part - so an
+	 * unconditional call is a compile error on nRF54L15 today, and becomes
+	 * correct there by itself if a future SDK adds the register. Testing for
+	 * the symbol tracks that exactly; testing for the SoC series would not.
+	 *
+	 * Safe on this part: Zephyr's BLE controller writes RADIO_MODECNF0_RU_Fast
+	 * on nRF52 under CONFIG_BT_CTLR_RADIO_ENABLE_FAST with no errata guard of
+	 * any kind (radio.c, radio_phy_set()), and skips MODECNF0 entirely on
+	 * nRF54LX. No nRF52840 erratum touches MODECNF0.RU.
+	 */
+#if defined(RADIO_MODECNF0_RU_Msk) || defined(RADIO_TIMING_RU_Msk)
+	nrf_radio_fast_ramp_up_enable_set(NRF_RADIO, true);
+	if (!nrf_radio_fast_ramp_up_check(NRF_RADIO)) {
+		/* Loud, because the alternative is a link that works and is
+		 * 100 us out of phase on every frame with nothing to show
+		 * for it. */
+		LOG_ERR("fast ramp-up did not take; every timing constant in "
+			"this backend is now ~100 us optimistic");
+		return RADIANT_RADIO_EIO;
+	}
+#endif
+
 	/* 1 MHz, 32-bit, free-running from here until reset. */
 	nrf_timer_mode_set(TIMER_ADDR, NRF_TIMER_MODE_TIMER);
 	nrf_timer_bit_width_set(TIMER_ADDR, NRF_TIMER_BIT_WIDTH_32);
@@ -1336,7 +1493,22 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	 * subtracts its own ramp-up and preamble. A master's period is then
 	 * exact by construction and carries none of this part's constants.
 	 */
-	lead = air_lead_us(req->addr_len);
+	/*
+	 * THE CALIBRATION IS ON BOTH SIDES, and it has to be.
+	 *
+	 * Until both constants were zero, calibration was applied only to the
+	 * REPORTED t_sync, in the RADIO ISR, and not here. That is invisible at
+	 * zero and wrong the moment it is not: the caller asks for an
+	 * antenna-referenced instant, this path would place an event-referenced
+	 * one, and the reported value would then differ from the scheduled one
+	 * by exactly the calibration - a self-consistent stack that is
+	 * uniformly off the air.
+	 *
+	 * TASKS_TXEN therefore fires one T_SYNC_CAL_TX_US earlier than the
+	 * event-referenced arithmetic alone would put it, so that the ADDRESS
+	 * event lands at t_sync_at - cal and the ANTENNA lands at t_sync_at.
+	 */
+	lead = air_lead_us(req->addr_len) + (uint32_t)T_SYNC_CAL_TX_US;
 	t_start = req->t_sync_at - (radiant_time_t)lead;
 
 	now = radiant_radio_now();
@@ -1520,10 +1692,29 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	 * TASKS_RXEN; the close is a compare firing TASKS_DISABLE, held open
 	 * long enough for a frame whose t_sync is exactly t_close to finish
 	 * arriving - body plus CRC - rather than being cut off mid-packet.
+	 *
+	 * THE TWO EDGES DO NOT TAKE THE CALIBRATION THE SAME WAY, and writing
+	 * that out is the point of this comment rather than applying the term
+	 * symmetrically because symmetry looks tidier.
+	 *
+	 * The OPEN takes none. Both edges are antenna-referenced, and the
+	 * receive chain delay is latency AFTER the antenna: for a frame whose
+	 * address ends at the antenna at t_open, the radio has to be receiving
+	 * from t_open - air_lead whatever the demodulator does with it
+	 * afterwards. Subtracting the chain delay here would open the window
+	 * 9 us early for no reason and buy nothing.
+	 *
+	 * The CLOSE takes it, negated. That same frame does not raise
+	 * EVENTS_ADDRESS until t_close - T_SYNC_CAL_US (the constant is
+	 * negative, so this is later), and TASKS_DISABLE must not have fired
+	 * before then plus the rest of the packet. The body slack below already
+	 * swamps 9 us, so this changes nothing today - which is exactly when it
+	 * is free to write, and it stops the next person who shortens that slack
+	 * from also having to rediscover the chain delay.
 	 */
 	start_cc = clock_counter_at(req->t_open -
 				    (radiant_time_t)air_lead_us(req->fmt->addr_len));
-	close_cc = clock_counter_at(req->t_close +
+	close_cc = clock_counter_at(t_sync_cal(req->t_close, -T_SYNC_CAL_US) +
 				    (radiant_time_t)((req->fmt->body_len + 2u) *
 						     US_PER_BYTE));
 
@@ -1802,9 +1993,10 @@ static void radio_isr(const void *arg)
 			 * closes its slot phase against what actually went out
 			 * rather than against what it asked for.
 			 */
-			evt.t_sync = clock_absolute(
-				nrf_timer_cc_get(TIMER_ADDR, CC_SYNC)) +
-				(radiant_time_t)T_SYNC_CAL_TX_US;
+			evt.t_sync = t_sync_cal(
+				clock_absolute(
+					nrf_timer_cc_get(TIMER_ADDR, CC_SYNC)),
+				T_SYNC_CAL_TX_US);
 			evt.t_sync_exact = true;
 
 			/* Achieved minus requested: this backend's transmit
@@ -1834,11 +2026,12 @@ static void radio_isr(const void *arg)
 				evt.status = crc_ok ? RADIANT_RADIO_STATUS_OK
 						    : RADIANT_RADIO_STATUS_CRC_FAIL;
 
-				/* The hardware capture, corrected by the
-				 * constant that is still zero. */
-				evt.t_sync = clock_absolute(
-					nrf_timer_cc_get(TIMER_ADDR, CC_SYNC)) +
-					(radiant_time_t)T_SYNC_CAL_US;
+				/* The hardware capture, moved from
+				 * event-referenced to antenna-referenced. */
+				evt.t_sync = t_sync_cal(
+					clock_absolute(nrf_timer_cc_get(
+						TIMER_ADDR, CC_SYNC)),
+					T_SYNC_CAL_US);
 				evt.t_sync_exact = true;
 
 				evt.filter_index =

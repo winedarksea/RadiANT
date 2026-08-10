@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# A second twister application under radiant_core/tests, for the one module the
+# first one cannot link: radiant_api.c. See CMakeLists.txt here for why.
+#
+# CI already runs `twister -T app/radiant_core/tests`, which walks
+# subdirectories, so this file is picked up with no workflow edit.
+
+tests:
+  radiant_core.api:
+    tags:
+      - radiant_core
+      - radiant_api
+    # Same reasoning as the parent application: no hardware access at all, and
+    # the 32-bit host build shares pointer and long widths with the nRF52/nRF54
+    # target, so it catches the size assumptions a 64-bit host would hide.
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim

@@ -62,6 +62,40 @@
  * open, and the radio is left listening for addresses nobody is routing any
  * more. This happens on every preemption, with no fault injection at all, so
  * s.stats.stale_events is a normal non-zero number and not an error count.
+ *
+ * ---------------------------------------------------------------------------
+ * Thread against interrupt
+ * ---------------------------------------------------------------------------
+ * There are exactly two writers of `s`: thread context, through the three
+ * request entry points and radiant_sched_tick(); and the radio ISR, through
+ * hal_rx()/hal_tx(). Until a backend existed that actually raised callbacks,
+ * the only thing between them was `in_pass`, a plain bool that was set on the
+ * way into a callback and UNCONDITIONALLY CLEARED on the way out - so an ISR
+ * landing on top of a thread-context pass() told the thread, on its way back,
+ * that no pass was running. radiant_api.c predicted this in its own words at
+ * the mutex that cannot cover it.
+ *
+ * It is not a rare interleaving either. It is scheduled by the protocol: a
+ * master's EVENT_TX tells the host to write, the host's write pumps a pass in
+ * thread context, and the slave's reply lands 2.19 ms later - inside that
+ * window, on every exchange.
+ *
+ * Two things fix it, and both are needed:
+ *
+ *   - in_pass is SAVED AND RESTORED in hal_rx()/hal_tx(), so a nested entry
+ *     leaves the flag as it found it and defers the commit to the pass that
+ *     owns it;
+ *   - every write to the slot table, and the whole of pass(), runs with
+ *     interrupts off, via the port's radiant_event_crit_enter()/_exit(). That
+ *     is the same primitive radiant_event.c uses for its ring, chosen over
+ *     anything of this module's own precisely because the ISR side must not
+ *     block. A pass is bounded arithmetic plus at most one arm call - the
+ *     budget above - so the section cannot grow with the channel count.
+ *
+ * What this deliberately does NOT do is take a lock the HAL would have to know
+ * about. Backends call these callbacks from their own interrupt; the contract
+ * stays "call us, we return quickly", and the exclusion is entirely on this
+ * side of it.
  */
 
 #include <stdbool.h>
@@ -71,6 +105,12 @@
 
 #include <radiant_core/radiant_radio_hal.h>
 #include <radiant_core/radiant_sched.h>
+/*
+ * For radiant_event_crit_enter()/_exit() ONLY - the port's irq_lock() under a
+ * neutral name, and the one primitive this module needs that the HAL does not
+ * supply. Nothing here queues an event. See "Thread against interrupt" below.
+ */
+#include <radiant_core/radiant_event.h>
 
 /* ---------------------------------------------------------------------------
  * State
@@ -128,9 +168,21 @@ _Static_assert(sizeof(struct sched_slot) <= 72u,
 
 static struct {
 	bool inited;
-	/* A pass, or a callback that may lead to one, is running. Requests
+	/*
+	 * A pass, or a callback that may lead to one, is running. Requests
 	 * posted underneath it are recorded and considered on the way out
-	 * rather than arming re-entrantly. */
+	 * rather than arming re-entrantly.
+	 *
+	 * SAVED AND RESTORED, NEVER UNCONDITIONALLY CLEARED, and the difference
+	 * is not hypothetical against a real backend. hal_rx()/hal_tx() run in
+	 * the radio ISR and can land on top of a thread-context pass() that is
+	 * already inside its own; clearing the flag on the way out of the ISR
+	 * would hand the suspended thread a false "no pass is running", and the
+	 * very next thing it does is arm. The collision is scheduled rather than
+	 * rare: EVENT_TX tells the host to write, the host's write pumps a pass
+	 * in thread context, and the slave's reply lands 2.19 ms later - inside
+	 * that window, every exchange.
+	 */
 	bool in_pass;
 	/* Something in the table changed. Lets a non-terminal receive event
 	 * cost nothing at all unless a callback actually posted something. */
@@ -1002,11 +1054,28 @@ static void pass(void)
 {
 	radiant_time_t now;
 	uint32_t   guard;
+	unsigned int key;
 
+	/*
+	 * INTERRUPTS OFF FOR THE WHOLE PASS. See "Thread against interrupt" in
+	 * the header comment.
+	 *
+	 * The check-and-set of in_pass has to be atomic or it is not a guard at
+	 * all, and the table this reads has to stop moving while it is read: a
+	 * radio ISR landing between "choose the leader" and "arm it" runs
+	 * end_armed() and clear_armed() underneath a decision already made
+	 * against the old armed state. A pass costs one radiant_radio_now() and
+	 * at most one arm call whatever the table looks like - that budget is
+	 * stated at the top of this file and enforced by fake_radio.c - so this
+	 * is bounded arithmetic plus one register write, not a section that can
+	 * grow. Nested entry from a callback's own request is free: the port
+	 * maps these onto irq_lock()/irq_unlock(), which nest by key.
+	 */
+	key = radiant_event_crit_enter();
 	if (!s.inited || s.in_pass) {
+		radiant_event_crit_exit(key);
 		return;
 	}
-
 	s.in_pass = true;
 	now = radiant_radio_now();
 
@@ -1026,6 +1095,7 @@ static void pass(void)
 	}
 	s.dirty = false;
 	s.in_pass = false;
+	radiant_event_crit_exit(key);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1053,6 +1123,7 @@ static void route_rx(const struct radiant_rx_event *evt)
 static void hal_rx(const struct radiant_rx_event *evt, void *user)
 {
 	bool terminal = false;
+	bool was_in_pass;
 
 	(void)user;
 
@@ -1067,6 +1138,7 @@ static void hal_rx(const struct radiant_rx_event *evt, void *user)
 		return;
 	}
 
+	was_in_pass = s.in_pass;
 	s.in_pass = true;
 
 	switch (evt->status) {
@@ -1098,8 +1170,14 @@ static void hal_rx(const struct radiant_rx_event *evt, void *user)
 		break;
 	}
 
-	s.in_pass = false;
-	if (terminal || s.dirty) {
+	s.in_pass = was_in_pass;
+	/*
+	 * Nested inside a thread-context pass: leave the commit to the pass that
+	 * owns it. s.dirty is set by anything a callback posted and that pass's
+	 * loop re-checks it, so nothing is lost - and calling pass() here would
+	 * only be refused by its own guard anyway.
+	 */
+	if (!was_in_pass && (terminal || s.dirty)) {
 		pass();
 	}
 }
@@ -1107,6 +1185,7 @@ static void hal_rx(const struct radiant_rx_event *evt, void *user)
 static void hal_tx(const struct radiant_tx_event *evt, void *user)
 {
 	uint8_t ch;
+	bool    was_in_pass;
 
 	(void)user;
 
@@ -1121,6 +1200,7 @@ static void hal_tx(const struct radiant_tx_event *evt, void *user)
 
 	ch = (s.n_members > 0u) ? s.members[0] : RADIANT_SCHED_CH_NONE;
 
+	was_in_pass = s.in_pass;
 	s.in_pass = true;
 	if (evt->status == RADIANT_RADIO_STATUS_OK && ch != RADIANT_SCHED_CH_NONE &&
 	    s.cbs.tx != NULL) {
@@ -1137,8 +1217,10 @@ static void hal_tx(const struct radiant_tx_event *evt, void *user)
 		end_armed(RADIANT_SCHED_DONE_FAILED);
 		break;
 	}
-	s.in_pass = false;
-	pass();
+	s.in_pass = was_in_pass;
+	if (!was_in_pass) {
+		pass();
+	}
 }
 
 static const struct radiant_radio_cbs sched_radio_cbs = {
@@ -1174,6 +1256,8 @@ int radiant_sched_init(const struct radiant_sched_cbs *cbs, void *user)
 
 void radiant_sched_reset(void)
 {
+	unsigned int key = radiant_event_crit_enter();
+
 	if (s.armed_kind != (uint8_t)SLOT_IDLE) {
 		clear_armed();
 		(void)radiant_radio_abort();
@@ -1182,11 +1266,13 @@ void radiant_sched_reset(void)
 	s.cursor = 0u;
 	s.dirty = false;
 	s.replan = false;
+	radiant_event_crit_exit(key);
 }
 
 int radiant_sched_request_rx(uint8_t ch, const struct radiant_sched_rx *req)
 {
 	struct sched_slot *sl;
+	unsigned int       key;
 
 	if (!s.inited) {
 		return RADIANT_RADIO_ESTATE;
@@ -1207,6 +1293,15 @@ int radiant_sched_request_rx(uint8_t ch, const struct radiant_sched_rx *req)
 		return RADIANT_RADIO_EINVAL;
 	}
 
+	/*
+	 * The mutation window, closed against the radio ISR. Everything from
+	 * here down rewrites one slot, and drop_slot() may retire the live
+	 * operation on the way; an ISR landing in the middle would see a slot
+	 * that is half the old request and half the new one. See "Thread
+	 * against interrupt" in the header comment.
+	 */
+	key = radiant_event_crit_enter();
+
 	drop_slot(ch);
 
 	sl = &s.ch[ch];
@@ -1224,12 +1319,14 @@ int radiant_sched_request_rx(uint8_t ch, const struct radiant_sched_rx *req)
 
 	s.dirty = true;
 	s.replan = true;
+	radiant_event_crit_exit(key);
 	return RADIANT_RADIO_OK_RC;
 }
 
 int radiant_sched_request_tx(uint8_t ch, const struct radiant_sched_tx *req)
 {
 	struct sched_slot *sl;
+	unsigned int       key;
 
 	if (!s.inited) {
 		return RADIANT_RADIO_ESTATE;
@@ -1257,6 +1354,9 @@ int radiant_sched_request_tx(uint8_t ch, const struct radiant_sched_tx *req)
 		return RADIANT_RADIO_EINVAL;
 	}
 
+	/* The mutation window. See radiant_sched_request_rx(). */
+	key = radiant_event_crit_enter();
+
 	drop_slot(ch);
 
 	sl = &s.ch[ch];
@@ -1272,11 +1372,14 @@ int radiant_sched_request_tx(uint8_t ch, const struct radiant_sched_tx *req)
 
 	s.dirty = true;
 	s.replan = true;
+	radiant_event_crit_exit(key);
 	return RADIANT_RADIO_OK_RC;
 }
 
 int radiant_sched_cancel(uint8_t ch)
 {
+	unsigned int key;
+
 	if (!s.inited) {
 		return RADIANT_RADIO_ESTATE;
 	}
@@ -1290,8 +1393,10 @@ int radiant_sched_cancel(uint8_t ch)
 	 * commit's job - except inside a callback, where the dispatch tail runs
 	 * a pass anyway and the radio is never left idle.
 	 */
+	key = radiant_event_crit_enter();
 	drop_slot(ch);
 	s.dirty = true;
+	radiant_event_crit_exit(key);
 	return RADIANT_RADIO_OK_RC;
 }
 

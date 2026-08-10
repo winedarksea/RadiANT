@@ -32,7 +32,8 @@
  *   2. THE SEQUENCE BIT. It is ONE bit and it alternates per ON-AIR PACKET.
  *      Part 1 of the spike could only see the first packet of a burst and
  *      inferred a three-bit sequence field in bits 7:5; part 2 captured 17- and
- *      51-packet bursts and found bit 4 alternating while bits 7:5 held still.
+ *      51-packet bursts and found bit 4 alternating while bits 7:6 held still
+ *      (7:6 - bit 5 moves once, on the final packet, which is b5 "last").
  *      The assertion that catches the old reading is that packet 2 and packet 0
  *      carry the SAME byte.
  *
@@ -1128,6 +1129,8 @@ ZTEST(transfer, test_a_burst_aborted_midflight_and_its_late_terminal_event)
  */
 ZTEST(transfer, test_a_restart_mid_block_wait_is_a_sequence_error)
 {
+	uint32_t ev_before;
+
 	reset_blocks();
 	queue_block(0u, 8u, RADIANT_TRANSFER_SEG_START, 0xA0u);
 
@@ -1136,6 +1139,17 @@ ZTEST(transfer, test_a_restart_mid_block_wait_is_a_sequence_error)
 	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_BLOCK, radiant_transfer_state(&xfer),
 		      "one packet in an 8-byte block must finish the block");
 
+	/*
+	 * SNAPSHOT, not zero. Reaching WAIT_BLOCK is itself an event - the
+	 * acknowledgement of the block's last packet releases it with
+	 * RADIANT_TRANSFER_EV_NEXT_BLOCK, which is the whole of B1-B5 - so
+	 * n_ev is 1 here and always was. The claim this test makes is about the
+	 * REFUSAL, which is what the message says; asserting zero asserted
+	 * something else, disagreed with the setup two lines above it, and was
+	 * red at HEAD.
+	 */
+	ev_before = n_ev;
+
 	zassert_equal(RADIANT_TRANSFER_ESEQ,
 		      radiant_transfer_burst_block(&xfer, blocks[1], 8u,
 						RADIANT_TRANSFER_SEG_START,
@@ -1143,7 +1157,7 @@ ZTEST(transfer, test_a_restart_mid_block_wait_is_a_sequence_error)
 		      "a SEG_START while WAIT_BLOCK must be refused as ESEQ");
 	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_BLOCK, radiant_transfer_state(&xfer),
 		      "a refused restart must not disturb the block already in flight");
-	zassert_equal(0u, n_ev, "the refusal itself raises no event");
+	zassert_equal(ev_before, n_ev, "the refusal itself raises no event");
 	zassert_equal(1u, radiant_transfer_stats(&xfer)->blocks_accepted);
 
 	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_abort(&xfer));
@@ -1464,6 +1478,69 @@ ZTEST(transfer, test_the_acknowledgement_retransmission_limit)
 		      "the 22nd attempt must be refused; 21 is what was measured");
 	zassert_equal(RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX - 1u,
 		      radiant_transfer_stats(&xfer)->ack_retransmits);
+
+	end_of_test();
+}
+
+/*
+ * A saved acknowledgement goes stale, and the attempt counter alone cannot say
+ * so.
+ *
+ * Nothing clears reply_ctrl when an exchange ends: TX_REPLY returns to IDLE
+ * without going through finish(), so reset_transfer() never runs for a reply
+ * and the saved frame stays loaded for the life of the channel. With only the
+ * attempt limit to consult, radiant_transfer_reply_retransmit() would authorise
+ * repeating an acknowledgement an hour after the packet it answers just as
+ * readily as 3 ms after - and the frame it put on the air would be correctly
+ * formed, which is exactly what makes it dangerous. The engine has no
+ * production caller yet; this is what the first one will be standing on.
+ */
+ZTEST(transfer, test_an_ancient_acknowledgement_is_not_retransmitted)
+{
+	struct radiant_frame in;
+	struct radiant_ctrl_fields fields;
+	const struct fake_radio_arm *arm;
+
+	zassert_equal(RADIANT_TRANSFER_OK,
+		      radiant_transfer_ctrl_fields(0u, false, false, &fields));
+	zassert_equal(RADIANT_FRAME_OK,
+		      radiant_frame_make(&in, &cfg_slave.id, &fields, peer_payload,
+				     RADIANT_TRANSFER_PKT_BYTES));
+	zassert_equal(RADIANT_TRANSFER_OK,
+		      radiant_transfer_on_data(&xfer, &in, radiant_radio_now() + 10000u));
+	commit();
+
+	arm = last_arm_of(FAKE_RADIO_ARM_TX);
+	zassert_not_null(arm);
+	fake_radio_advance_to(arm->t_sync_at + 1u);
+
+	/* One retry interval later is the measured cadence and must be allowed,
+	 * so the staleness check cannot be mistaken for a stricter limit. */
+	zassert_equal(RADIANT_TRANSFER_OK,
+		      radiant_transfer_reply_retransmit(
+			      &xfer, radiant_radio_now() +
+					     (radiant_time_t)RADIANT_TRANSFER_REPLY_RETRY_US));
+	commit();
+	arm = last_arm_of(FAKE_RADIO_ARM_TX);
+	zassert_not_null(arm);
+	fake_radio_advance_to(arm->t_sync_at + 1u);
+
+	zassert_equal(RADIANT_TRANSFER_ESTATE,
+		      radiant_transfer_reply_retransmit(
+			      &xfer, radiant_radio_now() +
+					     (radiant_time_t)RADIANT_TRANSFER_REPLY_VALID_US + 1u),
+		      "a repeat a whole validity window late must be refused");
+	zassert_equal(1u, radiant_transfer_stats(&xfer)->stale_replies);
+
+	/* Dropped, not merely refused. A refusal that left the frame loaded
+	 * would be answered by the next caller that happened to ask in time. */
+	zassert_equal(RADIANT_TRANSFER_ESTATE,
+		      radiant_transfer_reply_retransmit(
+			      &xfer, radiant_radio_now() +
+					     (radiant_time_t)RADIANT_TRANSFER_REPLY_RETRY_US),
+		      "the saved acknowledgement must be gone, not merely late");
+	zassert_equal(1u, radiant_transfer_stats(&xfer)->stale_replies,
+		      "the second refusal is 'nothing saved', not a second stale reply");
 
 	end_of_test();
 }

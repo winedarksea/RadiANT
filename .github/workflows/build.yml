@@ -207,10 +207,10 @@ jobs:
   # unlock.
   #
   # The ANT_RADIO cache variable and the CONFIG_ANT_DONGLE_RADIO_* choice this
-  # job asserts on are part of the CMake/Kconfig backend seam and are not in
-  # the tree yet. Until that lands this job is expected to fail at the
-  # top-level FATAL_ERROR in CMakeLists.txt, which is the seam not existing,
-  # not a fault in this workflow.
+  # job asserts on are the CMake/Kconfig backend seam, and it IS in the tree -
+  # see CMakeLists.txt, which turns -DANT_RADIO into a Kconfig fragment merged
+  # last so that the backend compiled and the backend recorded cannot disagree.
+  # This job is therefore expected to pass; a FATAL_ERROR here is a real fault.
   build-core:
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
@@ -379,10 +379,10 @@ jobs:
   # when the secret is absent, and it is still the only job that publishes
   # release artifacts.
   #
-  # It deliberately does not yet pass -DANT_RADIO=sdk_ant or assert
-  # CONFIG_ANT_DONGLE_RADIO_SDK_ANT=y. Those are part of the backend seam that
-  # does not exist yet, and this job is green today; adding the assertion
-  # belongs with the change that makes the symbol real.
+  # It now passes -DANT_RADIO=sdk_ant explicitly and asserts
+  # CONFIG_ANT_DONGLE_RADIO_SDK_ANT=y, rather than relying on the default. The
+  # seam exists; leaning on a default is how the job that publishes the release
+  # artifacts ends up publishing a different backend than it says it does.
   build-sdk-ant:
     name: ${{ matrix.artifact }}
     runs-on: ubuntu-24.04
@@ -533,8 +533,23 @@ jobs:
             -d build \
             -p always \
             -- \
+            -DANT_RADIO=sdk_ant \
             -DANT_MODULE_DIR="${GITHUB_WORKSPACE}/ant" \
             "${extra[@]}"
+
+      # The same assertion build-core makes, for the same reason: ANT_RADIO is
+      # a CMake cache variable chosen before Kconfig runs, so a typo would fall
+      # back to a default and build green with the wrong backend. This job
+      # publishes the release artifacts, which makes it the one where that
+      # matters most.
+      - name: Verify radio backend
+        if: steps.ant-ready.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          cfg="$(find build -name .config -path '*ant_dongle*' -print -quit)"
+          got="$(grep -oP '^CONFIG_ANT_DONGLE_RADIO_\K\w+(?==y)' "${cfg}")"
+          echo "radio: ${got}   expected: SDK_ANT"
+          test "${got}" = "SDK_ANT"
 
       # Partition Manager decides where the application links, and it does not
       # fail loudly when that disagrees with the offset the output file carries

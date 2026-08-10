@@ -347,10 +347,17 @@ enum radiant_frame_cfg {
  * THE BURST SEQUENCE IS ONE BIT AND SEQUENCES 2..7 DO NOT EXIST. That is a
  * positive statement, not an absence: a 17-packet and a 51-packet burst were
  * captured end to end with the sniffer's ring-drop counter at zero throughout,
- * and bit 4 alternated 0,1,0,1,... across every on-air packet while bits 7:5
+ * and bit 4 alternated 0,1,0,1,... across every on-air packet while bits 7:6
  * held still. Nineteen bursts of 1, 2, 3, 6, 9, 17, 27 and 51 packets, zero
  * frames where the sequence bit disagreed with the packet index. There is no
  * field left in the frame that could hold a number larger than one.
+ *
+ * 7:6, NOT 7:5. Bit 5 moves, once, on the final packet of every burst - which
+ * is b5 "last" doing exactly what it says above. The 17-packet burst in
+ * archive/captures/radio/2026-08-09-spike-b2-runA-burst-seq.log runs 82 92 82
+ * 92 ... for packets 0..15 and A2 on packet 16. Earlier text here said "7:5
+ * held still"; that was wrong, and it is worth stating because "bit 5 never
+ * moved" would make burst-last unmeasured, which it is not.
  *
  * THE LOW BITS ARE NOT A LENGTH, and that is now measured rather than argued.
  * 0x0A has bits 4:0 = 01010 = 10 and 0xA2 has 00010 = 2, and both carry eight
@@ -418,7 +425,7 @@ enum radiant_frame_cfg {
  *     slave - under this reading packet 0 carries bit 3 and packets 1..N do
  *     not. That needs a scriptable ANT master, which sim/ is not.
  *   - THE READING OF BIT 4 IN AN ACKNOWLEDGEMENT as "the sequence bit I expect
- *     next". The arithmetic is measured on 168 pairs; the reading is not.
+ *     next". The arithmetic is measured on 165 pairs; the reading is not.
  *
  * NEVER OBSERVED, so nothing here encodes it:
  *
@@ -530,9 +537,15 @@ bool radiant_ctrl_observed(uint8_t ctrl);
 
 /*
  * The acknowledgement a receiver puts on the air for a data packet: bit 6 set,
- * bit 5 echoed, bit 4 complemented, everything else unchanged. Measured on 168
+ * bit 5 echoed, bit 4 complemented, everything else unchanged. Measured on 165
  * adjacent CRC-valid data/acknowledgement pairs across runs 0, A and B with no
  * exceptions - 82 -> D2, 92 -> C2, A2 -> F2, B2 -> E2.
+ *
+ * 165, NOT 168. This file and test_frame.c said 168 while radiant_transfer.h
+ * and test_transfer.c said 165, and the difference is three pairs whose
+ * acknowledgement failed CRC - which makes them adjacent pairs but not
+ * CRC-VALID ones, and the claim is about the CRC-valid set. 165 is the count
+ * that matches the sentence.
  *
  * Returns 0 - never a legal control byte, since bits 2:0 must be 010 - for
  * anything else, INCLUDING the slot openers 0x8A and 0xAA. No acknowledgement

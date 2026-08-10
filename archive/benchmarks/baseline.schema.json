@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/ant_dongle/archive/benchmarks/baseline.schema.json",
+  "$id": "https://raw.githubusercontent.com/winedarksea/RadiANT/master/archive/benchmarks/baseline.schema.json",
   "title": "RadiANT A/B baseline",
   "description": "One bench sitting, one backend, one rig. Phase 4 records these against sdk-ant; Phase 5 onward records them against radiant_core and tools/ant_ab.py diffs the two. Units are in the field names. See README.md in this directory before filling one in.",
   "type": "object",

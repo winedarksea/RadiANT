@@ -23,6 +23,19 @@
     ASCII only, deliberately: Windows PowerShell 5.1 reads .ps1 files as ANSI
     unless they carry a BOM, so non-ASCII characters here become parse errors.
 
+.PARAMETER App
+    Which ztest application to build, relative to the repository root. There is
+    more than one: radiant_core\tests is the 187-test suite over the module's
+    lower half, and radiant_core\tests\api is a separate application because
+    CONFIG_RADIANT_CORE_ANTR_API=y cannot be flipped in the first one - both it
+    and test_event.c/test_channel.c define radiant_event_crit_enter(),
+    radiant_event_crit_exit(), radiant_event_wakeup() and
+    radiant_channel_event_out(), so the two would collide at link, and
+    radiant_api.c's versions would change what those suites assert.
+
+    BuildDir follows App unless it is given explicitly, so running both back to
+    back does not make each one a full rebuild of the other.
+
 .PARAMETER Board
     Zephyr board target. Defaults to the nRF5340 DK's application core.
 
@@ -47,6 +60,7 @@
 .EXAMPLE
     . .\scripts\env.ps1 -NcsVersion v3.2.4
     .\scripts\run_ztest_hw.ps1
+    .\scripts\run_ztest_hw.ps1 -App radiant_core\tests\api
 
 .NOTES
     Finding the port and the probe serial:
@@ -61,12 +75,13 @@
 #>
 [CmdletBinding()]
 param(
+    [string]$App        = 'radiant_core\tests',
     [string]$Board      = 'nrf5340dk/nrf5340/cpuapp',
     [string]$Port       = 'COM9',
     [string]$Serial     = '1050006310',
     [string]$Device     = 'nRF5340_xxAA_APP',
     [string]$NcsVersion = 'v3.2.4',
-    [string]$BuildDir   = 'build\ztest_hw',
+    [string]$BuildDir   = '',
     [int]$Seconds       = 60,
     [switch]$SkipBuild
 )
@@ -74,6 +89,21 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repo = Split-Path $PSScriptRoot -Parent
+
+$appPath = Join-Path $repo $App
+if (-not (Test-Path (Join-Path $appPath 'CMakeLists.txt'))) {
+    throw "no ztest application at $appPath (App is relative to the repo root)"
+}
+
+# One build directory per application. Sharing one would make every alternation
+# between the two suites a full -p always rebuild of the other, which is exactly
+# the round trip this script exists to remove.
+if (-not $BuildDir) {
+    $leaf = Split-Path $App -Leaf
+    $BuildDir = if ($leaf -eq 'tests') { 'build\ztest_hw' }
+                else { "build\ztest_hw_$leaf" }
+}
+
 $out  = Join-Path $repo $BuildDir
 $hex  = Join-Path $out 'zephyr\zephyr.hex'
 
@@ -91,12 +121,12 @@ if (-not $SkipBuild) {
     # in ErrorRecords, and with $ErrorActionPreference = 'Stop' that terminates
     # this script the moment anyone pipes its output anywhere. The build log is
     # more useful next to the image than on the terminal anyway.
-    $buildLog = Join-Path $repo 'build\ztest-build.log'
+    $buildLog = Join-Path $repo "$BuildDir-build.log"
     New-Item -ItemType Directory -Force (Split-Path $buildLog) | Out-Null
     Push-Location "C:\ncs\$NcsVersion"
     try {
         west -z "C:\ncs\$NcsVersion\zephyr" build `
-            -s (Join-Path $repo 'radiant_core\tests') -b $Board -d $out -p always --no-sysbuild `
+            -s $appPath -b $Board -d $out -p always --no-sysbuild `
             > $buildLog
         if ($LASTEXITCODE -ne 0) { throw "build failed; log at $buildLog" }
     } finally {

@@ -1216,7 +1216,7 @@ ZTEST(radiant_frame, test_ack_data_is_a_one_packet_burst)
  * The reply frame - the row part 1 listed as never observed.
  *
  * Bit 6 set, bit 5 echoed, bit 4 complemented: 82 -> D2, 92 -> C2, A2 -> F2,
- * B2 -> E2, on every one of the 168 adjacent CRC-valid data/acknowledgement
+ * B2 -> E2, on every one of the 165 adjacent CRC-valid data/acknowledgement
  * pairs in runs 0, A and B. Read as "the sequence bit I expect next" that is
  * exactly right, and read as "an echo of what I just received" it is exactly
  * wrong - which is why the complement is asserted rather than the echo.
@@ -1258,7 +1258,7 @@ ZTEST(radiant_frame, test_reply_frame_relationship)
 	}
 
 	/*
-	 * And what was NOT measured. Every one of the 168 pairs is an in-slot
+	 * And what was NOT measured. Every one of the 165 pairs is an in-slot
 	 * frame answered by an in-slot frame; no acknowledgement of a
 	 * slot-opening data packet was ever captured, so there is no measured
 	 * answer for what bit 3 of one would be. Returning 0 - never a legal

@@ -5,7 +5,34 @@
 		/delete-property/ zephyr,uart-mcumgr;
 		/delete-property/ zephyr,bt-mon-uart;
 		/delete-property/ zephyr,bt-c2h-uart;
+
+		/*
+		 * The TIMER radiant_core's nrf backend owns outright, for
+		 * -DRADIANT_BACKEND=nrf. It runs at 1 MHz forever and is what
+		 * t_sync is hardware-captured into from RADIO's ADDRESS event,
+		 * so it cannot be shared: naming it here rather than in the
+		 * source is what makes a second user a devicetree conflict
+		 * instead of two drivers reprogramming each other's prescaler.
+		 *
+		 * TIMER4, and the choice is constrained from both ends. The
+		 * backend needs FIVE compare/capture channels - t_sync capture,
+		 * RX start, window close, software now-capture, TX start - and
+		 * on nRF52 only TIMER3 and TIMER4 have more than four, which is
+		 * a compile-time #error in radiant_radio_nrf.c rather than
+		 * something to discover on the air. TIMER4 is the one of the
+		 * two that nothing else on this board claims.
+		 *
+		 * Without this property the nrf backend does not COMPILE for
+		 * this board - which is how it went unnoticed that the product
+		 * board had never had one: every core build for the Feather so
+		 * far used the null backend, where no TIMER is wanted.
+		 */
+		radiant,radio-timer = &timer4;
 	};
+};
+
+&timer4 {
+	status = "okay";
 };
 
 &board_cdc_acm_uart {

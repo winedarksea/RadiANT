@@ -229,7 +229,7 @@ elseif(ANT_RADIO STREQUAL "core")
         "radiant_core HAL backend: null or nrf" FORCE)
   else()
     set(RADIANT_BACKEND "null" CACHE STRING
-        "radiant_core HAL backend: null (refuses every arm) or nrf (receive only)")
+        "radiant_core HAL backend: null (refuses every arm) or nrf (the RADIO)")
   endif()
   set_property(CACHE RADIANT_BACKEND PROPERTY STRINGS null nrf)
 
@@ -241,7 +241,8 @@ elseif(ANT_RADIO STREQUAL "core")
     message(FATAL_ERROR
       "ant_dongle: RADIANT_BACKEND='${RADIANT_BACKEND}' is not a backend.\n"
       "  null  the lifecycle and the clock are real; every arm is refused.\n"
-      "  nrf   the RADIO, owned outright. RECEIVE ONLY - see\n"
+      "  nrf   the RADIO, one TIMER and four (D)PPI channels, owned\n"
+      "        outright. Receives AND transmits - see\n"
       "        radiant_core/src/radiant_radio_nrf.c.\n"
       "Pass one with -DRADIANT_BACKEND=<value>.")
   endif()
@@ -276,6 +277,33 @@ endif()
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(ant_dongle)
+
+# ── The backend actually compiled is the backend that was asked for ──────────
+#
+# ANT_RADIO_CONF above writes CONFIG_RADIANT_CORE_BACKEND_NRF=y into a fragment
+# merged last, so it cannot lose to another fragment. It CAN still lose to
+# Kconfig itself: the symbol has dependencies, and an unmet one makes the
+# assignment a no-op that falls back to the choice default. Zephyr prints a
+# warning about that among a hundred others and carries on.
+#
+# It is not hypothetical and it is not cheap. RADIANT_CORE_BACKEND_NRF used to
+# depend on SOC_SERIES_NRF52X || SOC_SERIES_NRF54LX; Zephyr 4.4 renamed both, so
+# every -DRADIANT_BACKEND=nrf build on NCS v3.4.0 silently compiled the null
+# backend - an image that enumerates, answers the host, runs every state machine
+# and finds no sensors, which looks exactly like a radio that is not working.
+# The dependency is fixed; this is what makes the next one loud on the first
+# build rather than after a bench session.
+if(ANT_RADIO STREQUAL "core" AND RADIANT_BACKEND STREQUAL "nrf"
+   AND NOT CONFIG_RADIANT_CORE_BACKEND_NRF)
+  message(FATAL_ERROR
+    "ant_dongle: -DRADIANT_BACKEND=nrf was asked for and Kconfig did not "
+    "select it.\n"
+    "  CONFIG_RADIANT_CORE_BACKEND_NRF is unset, so the NULL backend was "
+    "compiled instead and nothing would go on the air.\n"
+    "  Almost always an unmet `depends on` in radiant_core/Kconfig for this "
+    "board or this SDK - check SOC_COMPATIBLE_NRF52X / SOC_COMPATIBLE_NRF54LX "
+    "and !BT in this build's .config.")
+endif()
 
 target_sources(app PRIVATE
   src/main.c

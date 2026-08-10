@@ -5,10 +5,17 @@ Once baselines exist, `tools/ant_ab.py` validates each one against
 [`baseline.schema.json`](baseline.schema.json) and applies the thresholds from
 `tools/ab_gates.toml`, and that is what fails when a file here drifts.
 
-**Status: no baselines recorded. This is the single most perishable item in the
-project.**
+**Status: one sitting recorded — [`2026-08-09-sdk-ant.json`](2026-08-09-sdk-ant.json),
+two 300 s radio runs and a USB latency run against `sim/` on an nRF54L15 DK.**
+Still the most perishable item in the project, because what it does *not* cover
+is named in that file's own `notes` and each gap is a separate bench sitting:
+`sensitivity` (needs an attenuator or a distance sweep), `scale` (`libant.a`
+allocates 8 channels, so there is nothing to measure at 32), and **`ack_data`
+(no A leg — `[gates.ack_data]` in `tools/ab_gates.toml` is therefore still
+`required = false`, and it is the one Zwift actually needs)**. Measuring
+`ack_data` needs a held master/slave pair, which `sim/` does not provide.
 
-## Why the empty directory is the problem
+## Why the empty directory was the problem
 
 `radiant_core` is measured against `libant.a`. Every gate in
 [`docs/testing.md`](../../docs/testing.md) — loss, timing, acquisition,

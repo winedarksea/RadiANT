@@ -371,9 +371,16 @@ Bits 7:5 took `000`, `100`, `101`, `110`, `111` and **never** `001`, `010` or `0
 `[measured]`, and it is a positive statement rather than an absence. Nineteen bursts of 1, 2, 3, 6,
 9, 17, 27 and 51 on-air packets were captured **end to end**, with the sniffer's ring-drop counter
 `dr = 0` on every line proving no frame was lost, and bit 4 alternated `0,1,0,1,…` across every
-packet of every one of them while bits 7:5 held still. Block 2 of a nine-packet burst is `0x82`,
+packet of every one of them while bits **7:6** held still. Block 2 of a nine-packet burst is `0x82`,
 the same byte as block 0; if bits 7:5 were a sequence field it could not be. There is no field left
 in the frame that could hold a number larger than one.
+
+Bit 5 is **not** part of that still set, and saying "7:5" here was wrong. Re-tabulated from
+`archive/captures/radio/2026-08-09-spike-b2-runA-burst-seq.log`: the 17-packet burst at
+`t=0427271085` runs `82 92 82 92 …` for packets 0–15 and `A2` on packet 16, so bit 5 is 0
+throughout and goes to 1 **exactly once, on the final packet** — the same shape in the 2-, 3- and
+9-packet bursts. That is bit 5 doing precisely what the table above says it does, and it is why
+"last" is `[measured]` rather than inferred. What holds still across a burst is bits 7:6.
 
 That also settles what part 1 could not: `ANTW_BURST_HEADER_SEQ_MASK`, the serial protocol's own
 2-bit sequence, is a **serial-side concept that must be translated, not forwarded**.

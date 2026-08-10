@@ -358,6 +358,44 @@ struct api_chan {
 	 * byte a one-packet burst. One packet ending with LAST is the former;
 	 * anything longer is the latter. */
 	uint8_t in_pkts;
+
+	/*
+	 * The master turnaround, deferred from api_sched_tx() to api_sched_done().
+	 *
+	 * It used to be posted straight out of the transmit callback, and that
+	 * destroyed its own transmit's completion: radiant_sched_request_rx()
+	 * calls drop_slot() -> abort_armed() on a slot that is still in flight,
+	 * clear_armed() then makes hal_tx()'s end_armed() a no-op, and no done()
+	 * is ever delivered for a listening master's own slot. Consequences were
+	 * a CLOSING channel that never finished closing if the close raced a
+	 * master slot (radiant_channel_on_terminal() is the only route to
+	 * chan_finish_close()), and radiant_radio_abort() called on the real
+	 * RADIO from inside a completed transmit's own ISR four times a second.
+	 *
+	 * Deferring by one callback costs nothing that matters. Both callbacks
+	 * are the same radio interrupt, the achieved t_sync - a hardware capture
+	 * of RADIO's own ADDRESS event, not the requested instant - is carried
+	 * here rather than recomputed, and radiant_sched.c still commits the
+	 * post on the way out of the same dispatch. What it buys is that the
+	 * scheduler has fully retired the transmit before its slot is reused.
+	 */
+	bool           turn_pending;
+	radiant_time_t turn_t_sync;
+
+	/*
+	 * The watchdogs. See RADIANT_API_XFER_WATCHDOG_MS and api_housekeep().
+	 *
+	 * xfer_stuck_since is when this channel's transfer engine was first seen
+	 * non-idle with nothing armed; in_last is when its last inbound packet
+	 * arrived. Both carry a separate validity flag rather than using zero as
+	 * a sentinel, because zero is a legal radiant_radio_now() reading and a
+	 * test that starts the clock there would otherwise arm a watchdog against
+	 * a transfer that had not started.
+	 */
+	bool           xfer_stuck_valid;
+	radiant_time_t xfer_stuck_since;
+	bool           in_last_valid;
+	radiant_time_t in_last;
 };
 
 static struct api_chan     api_ch[API_CHANNELS];
@@ -393,11 +431,15 @@ static struct radiant_api_stats api_stats;
  *
  * WHAT IT DOES NOT COVER, said plainly rather than left to be found: a radio
  * callback runs a scheduling pass of its own, in interrupt context, and cannot
- * take a mutex. radiant_sched.c's `in_pass` flag is what stands between the two,
- * and it is a plain bool rather than anything atomic. Nothing can exercise that
- * race today - the null backend never raises a callback - but it is the first
- * thing a real backend has to answer for, and it belongs in that wave rather
- * than in a lock here that would have to be an irq_lock() around real work.
+ * take a mutex. This mutex therefore serialises the two THREADS that post here
+ * and nothing else.
+ *
+ * The thread-against-interrupt half is answered where the shared state actually
+ * lives - see "Thread against interrupt" in radiant_sched.c, which now saves
+ * and restores `in_pass` rather than clearing it, and runs every write to the
+ * slot table with interrupts off. That was the right place for it: an irq_lock()
+ * here would have had to wrap real work in this file to cover state that is not
+ * this file's.
  */
 K_MUTEX_DEFINE(api_lock);
 
@@ -744,6 +786,11 @@ static void api_xfer_rx_data(void *ctx, const uint8_t *payload, uint8_t len,
 	}
 
 	api_ch[ch].in_pkts = last ? 0u : (uint8_t)(api_ch[ch].in_pkts + 1u);
+	/* The abandoned-burst watchdog's clock. LAST is the normal way in_pkts
+	 * returns to zero; this is what covers the burst whose LAST never
+	 * arrives. See api_watchdogs_locked(). */
+	api_ch[ch].in_last = radiant_radio_now();
+	api_ch[ch].in_last_valid = true;
 
 	/*
 	 * radiant_event_post_rx() needs the HAL event, because the CRC gate and the
@@ -1503,12 +1550,30 @@ static void api_sched_rx(uint8_t ch, uint8_t filter_index,
 	 * assumed for the same reason the original was.
 	 */
 	if (radiant_channel_op_owner(api_ch[ch].op) != (int)ch) {
+		/*
+		 * One of the two ways a frame reaches this file and produces no
+		 * "frame ch=..." line at all. Without this, a channel that hears
+		 * its peer perfectly and drops it here is indistinguishable from
+		 * a window that was never armed, which is the difference between
+		 * a scheduler bug and an ownership bug.
+		 */
+		LOG_DBG("rx drop ch=%u not-owner op=%d owner=%d", (unsigned)ch,
+			(int)api_ch[ch].op,
+			radiant_channel_op_owner(api_ch[ch].op));
 		return;
 	}
 
 	api_ch[ch].slot_heard = true;
 
 	if (!radiant_transfer_is_idle(&api_xfer[ch])) {
+		/*
+		 * The other way. A frame routed into a non-idle transfer never
+		 * reaches api_tracked_frame(), so a wedged engine looks exactly
+		 * like silence from up here - which is the whole of the "no line
+		 * at all" row in the discriminator table.
+		 */
+		LOG_DBG("rx to xfer ch=%u xfer=%d", (unsigned)ch,
+			(int)radiant_transfer_state(&api_xfer[ch]));
 		radiant_transfer_on_rx_event(&api_xfer[ch], evt);
 		return;
 	}
@@ -1538,21 +1603,30 @@ static void api_sched_tx(uint8_t ch, const struct radiant_tx_event *evt, void *u
 	(void)radiant_event_post_channel_event(ch, (uint8_t)ANTW_EVENT_TX);
 
 	/*
-	 * The turnaround, posted from HERE rather than from the pump, and the
-	 * reason is the one number it needs: the window is placed against the
-	 * t_sync the transmit actually achieved - a hardware capture of RADIO's
-	 * own ADDRESS event - and not against the t_sync that was requested. A
-	 * pump running in thread context a few milliseconds later has neither the
-	 * instant nor the deadline; the reply is already 2.19 ms away when this
-	 * callback runs.
+	 * The turnaround is REQUESTED here and POSTED from api_sched_done(), and
+	 * the split is the whole of the H3 fix - see api_chan::turn_pending.
 	 *
-	 * This is the arm-from-inside-a-completion path radiant_radio_hal.h
-	 * exists to permit, and radiant_sched.c commits it on the way out of the
-	 * callback, so nothing here calls tick.
+	 * Requested here because of the one number it needs: the window is placed
+	 * against the t_sync the transmit actually achieved - a hardware capture
+	 * of RADIO's own ADDRESS event - and not against the t_sync that was
+	 * requested. A pump running in thread context a few milliseconds later
+	 * has neither the instant nor the deadline; the reply is already 2.19 ms
+	 * away when this callback runs.
+	 *
+	 * Posted from the completion because posting from HERE reuses a slot the
+	 * scheduler still holds in flight, and that is what silently ate this
+	 * transmit's own done(). The completion is the same interrupt, one
+	 * callback later, and radiant_sched.c commits it on the way out of the
+	 * same dispatch - so nothing here calls tick and no jitter is added.
+	 *
+	 * api_master_listens() is asked here rather than there only because it is
+	 * the same question either way; the TRACKING check moves to the post,
+	 * where it is asked AFTER radiant_channel_on_terminal() has had its say
+	 * and is therefore the accurate one.
 	 */
-	if (api_master_listens(ch) &&
-	    radiant_channel_state_get(ch) == RADIANT_CH_STATE_TRACKING) {
-		api_post_master_rx(ch, evt->t_sync);
+	if (api_master_listens(ch)) {
+		api_ch[ch].turn_pending = true;
+		api_ch[ch].turn_t_sync = evt->t_sync;
 	}
 }
 
@@ -1615,6 +1689,7 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 	now = radiant_radio_now();
 	st = api_done_to_status(why);
 
+	api_stats.sched_dones++;
 	if (why == RADIANT_SCHED_DONE_MISSED) {
 		api_stats.sched_missed++;
 	} else if (why == RADIANT_SCHED_DONE_FAILED) {
@@ -1707,7 +1782,35 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 	(void)radiant_channel_on_terminal(op, st, now);
 
 	/*
-	 * Do NOT post the next request from here. This runs in a radio callback
+	 * THE ONE EXCEPTION to the rule below, and it is bounded by construction.
+	 *
+	 * A listening master's turnaround has to be placed against the t_sync its
+	 * own transmit achieved, which is a number only api_sched_tx() ever sees;
+	 * it also has a 2.19 ms deadline, so it cannot wait for a pump. It is
+	 * posted HERE rather than there because doing it there reuses a slot the
+	 * scheduler still holds in flight and swallows this very completion - see
+	 * api_chan::turn_pending.
+	 *
+	 * Why this is not the unbounded loop api_arming exists to stop: the flag
+	 * is cleared BEFORE the post, and only api_sched_tx() ever sets it, on a
+	 * transmit that actually went out. A refused arm re-enters this function
+	 * with the flag already false and posts nothing. Depth one, always.
+	 *
+	 * The TRACKING check is here rather than in api_sched_tx() on purpose: it
+	 * is asked after radiant_channel_on_terminal(), so a channel that just
+	 * finished closing does not get a turnaround armed behind it.
+	 */
+	if (api_ch[ch].turn_pending) {
+		radiant_time_t t_sync = api_ch[ch].turn_t_sync;
+
+		api_ch[ch].turn_pending = false;
+		if (radiant_channel_state_get(ch) == RADIANT_CH_STATE_TRACKING) {
+			api_post_master_rx(ch, t_sync);
+		}
+	}
+
+	/*
+	 * Do NOT post anything else from here. This runs in a radio callback
 	 * and the scheduler commits on the way out, so posting would be the
 	 * intended low-jitter path - but against a backend that refuses every
 	 * arm it is also an unbounded loop, and the transfer engine already
@@ -1728,6 +1831,91 @@ static const struct radiant_sched_cbs api_sched_cbs = {
  * ---------------------------------------------------------------------------
  */
 
+/*
+ * Is this transfer state one the RADIO is supposed to finish?
+ *
+ * WAIT_BLOCK is not: it is waiting for the host to hand over the next 24-byte
+ * block, and the host's own stall timeout is a second per packet. Terminating
+ * it here would fail live bursts and would release a block the bridge still
+ * owns, which is exactly what B1-B5 forbid. IDLE is not, trivially.
+ */
+static bool api_xfer_awaits_radio(uint8_t ch)
+{
+	switch (radiant_transfer_state(&api_xfer[ch])) {
+	case RADIANT_TRANSFER_STATE_TX_DATA:
+	case RADIANT_TRANSFER_STATE_TX_REPLY:
+	case RADIANT_TRANSFER_STATE_WAIT_ACK:
+	case RADIANT_TRANSFER_STATE_ABORTING:
+		return true;
+	case RADIANT_TRANSFER_STATE_IDLE:
+	case RADIANT_TRANSFER_STATE_WAIT_BLOCK:
+	default:
+		return false;
+	}
+}
+
+/*
+ * The two recovery watchdogs. Callers hold api_lock.
+ *
+ * Neither is a scheduling mechanism and neither should ever fire on a healthy
+ * link - api_stats.xfer_watchdogs staying at zero across a bench run is part of
+ * what "healthy" means. They exist because both failures they cover are
+ * PERMANENT and SILENT: a transfer engine with no completion coming never
+ * leaves its state, and radiant_ack.c then refuses every subsequent inbound
+ * packet on that channel while api_pump_locked() stops posting its broadcast
+ * slot - so the channel simply goes quiet with no event, no error and no log
+ * line, for the life of the process.
+ */
+static void api_watchdogs_locked(radiant_time_t now)
+{
+	const radiant_time_t limit =
+		(radiant_time_t)RADIANT_API_XFER_WATCHDOG_MS * 1000u;
+	uint8_t ch;
+
+	for (ch = 0u; ch < API_CHANNELS; ch++) {
+		struct api_chan *c = &api_ch[ch];
+
+		/*
+		 * H2. Non-idle with nothing armed means no done() is coming,
+		 * because api_feed_xfer_terminal() is only reachable from
+		 * api_sched_done() and only a completion calls that.
+		 */
+		if (api_xfer_awaits_radio(ch) && !radiant_sched_pending(ch)) {
+			if (!c->xfer_stuck_valid) {
+				c->xfer_stuck_valid = true;
+				c->xfer_stuck_since = now;
+			} else if (now - c->xfer_stuck_since >= limit) {
+				LOG_WRN("ch=%u transfer wedged in state %d, "
+					"terminating", (unsigned)ch,
+					(int)radiant_transfer_state(&api_xfer[ch]));
+				api_stats.xfer_watchdogs++;
+				c->xfer_stuck_valid = false;
+				api_feed_xfer_terminal(
+					ch, RADIANT_RADIO_STATUS_FAILED);
+			}
+		} else {
+			c->xfer_stuck_valid = false;
+		}
+
+		/*
+		 * in_pkts only ever cleared on a packet carrying LAST, so a
+		 * multi-packet inbound burst whose final packet is missed left
+		 * it non-zero for ever - and every later acknowledged message on
+		 * that channel was then reported to the host as MESG_BURST_DATA
+		 * with a sequence number counted from a burst that ended
+		 * minutes ago. Nothing different goes on the air; it is a
+		 * host-facing lie, which is worse rather than better.
+		 */
+		if (c->in_pkts != 0u && c->in_last_valid &&
+		    (now - c->in_last) >= limit) {
+			LOG_DBG("ch=%u inbound transfer abandoned after %u pkts",
+				(unsigned)ch, (unsigned)c->in_pkts);
+			c->in_pkts = 0u;
+			c->in_last_valid = false;
+		}
+	}
+}
+
 static void api_housekeep(void)
 {
 	radiant_time_t now;
@@ -1742,6 +1930,11 @@ static void api_housekeep(void)
 	/* Seen-cache expiry. The timeout half cannot fire - radiant_channel.c owns
 	 * the deadline; see api_search_timeout(). */
 	radiant_search_tick(&api_search, now);
+
+	/* Before the pump, so a transfer this releases gets its channel's
+	 * broadcast slot posted again on the same pass rather than one
+	 * housekeeping interval later. */
+	api_watchdogs_locked(now);
 
 	api_pump_locked();
 	api_stats.housekeeps++;
@@ -2026,6 +2219,14 @@ antr_err_t antr_channel_close(uint8_t channel)
 		(void)radiant_sched_cancel(channel);
 		api_ch[channel].op = 0u;
 		api_ch[channel].slot_kind = (uint8_t)API_SLOT_NONE;
+		/* Per-channel state that outlives a slot but must not outlive a
+		 * channel: a turnaround requested by the last transmit before
+		 * the close, a half-received inbound burst, and both watchdog
+		 * clocks. Reopening must not inherit any of them. */
+		api_ch[channel].turn_pending = false;
+		api_ch[channel].in_pkts = 0u;
+		api_ch[channel].in_last_valid = false;
+		api_ch[channel].xfer_stuck_valid = false;
 		(void)radiant_channel_on_terminal(op, RADIANT_RADIO_STATUS_ABORTED,
 					      radiant_radio_now());
 

@@ -3,7 +3,7 @@
 # This repository is a freestanding nRF Connect SDK application: it is not part
 # of the NCS tree and does not need to be. This manifest exists so that
 #
-#   west init -m https://github.com/<owner>/ant_dongle --mr master radiant-ws
+#   west init -m https://github.com/<owner>/RadiANT --mr master radiant-ws
 #   cd radiant-ws && west update
 #
 # produces a complete, buildable workspace from nothing, and so that the SDK

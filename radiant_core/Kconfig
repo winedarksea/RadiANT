@@ -56,7 +56,24 @@ config RADIANT_CORE_BACKEND_NONE
 
 config RADIANT_CORE_BACKEND_NRF
 	bool "nrf - direct nRF RADIO peripheral"
-	depends on SOC_SERIES_NRF52X || SOC_SERIES_NRF54LX
+	#
+	# SOC_COMPATIBLE_*, NOT SOC_SERIES_*, and the difference is a whole
+	# session. NCS v3.4.0 ships Zephyr 4.4, which renamed SOC_SERIES_NRF52X
+	# to SOC_SERIES_NRF52 and SOC_SERIES_NRF54LX to SOC_SERIES_NRF54L. The
+	# old names still EXIST as symbols in that tree, so nothing errors -
+	# they are simply never set, this dependency is silently unmet, and
+	# Kconfig falls back to the choice default. The result is a build that
+	# accepted -DRADIANT_BACKEND=nrf, printed no error, and compiled the
+	# null backend: an image that enumerates, answers the host, runs every
+	# state machine and finds no sensors, which is indistinguishable from a
+	# radio problem.
+	#
+	# The SOC_COMPATIBLE_ symbols are set in BOTH v3.2.4 and v3.4.0 and are
+	# the ones meant for exactly this - "this part behaves like that family"
+	# - rather than "this part is in that Kconfig directory". The C file
+	# tests the same pair.
+	#
+	depends on SOC_COMPATIBLE_NRF52X || SOC_COMPATIBLE_NRF54LX
 	depends on !BT
 	select CLOCK_CONTROL
 	select NRFX_GPPI
@@ -73,8 +90,9 @@ config RADIANT_CORE_BACKEND_NRF
 	  The address arithmetic and packet configuration are measured on
 	  nRF54L15 (Spike A). The nRF52840 is predicted to behave identically
 	  and has not been confirmed. The ramp-up and turnaround figures are
-	  from the datasheet and the two t_sync calibration constants are both
-	  still zero - see the warnings at the top of the file.
+	  from the datasheet, and the two t_sync calibration constants are
+	  seeded from Zephyr's per-SoC BLE chain delays rather than measured on
+	  this bench - see the warnings at the top of the file.
 
 config RADIANT_CORE_BACKEND_NRF_IRQ_PRIO
 	int "RADIO interrupt priority"

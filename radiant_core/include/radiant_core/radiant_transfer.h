@@ -331,14 +331,50 @@ extern "C" {
  * as two numbers rather than one.
  *
  * This module implements the retransmission as radiant_transfer_reply_retransmit()
- * and enforces the limit, but does NOT own the timer: deciding when a channel
- * is idle enough to spend a slot on a repeat is radiant_sched.c's call, and a timer
- * in here would be a second scheduler.
+ * and enforces the limit, but does NOT own the timer, and a timer in here would
+ * be a second scheduler.
+ *
+ * WHERE THE TIMER GOES WHEN IT IS WIRED - not radiant_sched.c, which is what an
+ * earlier version of this paragraph said. That module owns no timer of any
+ * kind: it arms for absolute instants and lets the backend hold them, which is
+ * exactly why radiant_api.c has to drive recovery off a housekeeping wake. The
+ * retransmission belongs in api_sched_done(), the same low-jitter re-arm path
+ * api_post_master_rx() already uses.
+ *
+ * AND IT IS NOT WIRED YET, deliberately. There is no production caller. Our
+ * only receive window closes about 2.9 ms before a peer retry can arrive
+ * (radiant_api.c arms the turnaround at broadcast t_sync + 2190 +/- 250; the
+ * measured peer retry cadence puts the next data packet at t_sync + 5333), so
+ * an acknowledger-side retransmission would put repeated replies on the air
+ * into a link where the peer's own retries are already unhearable. What run 0
+ * measured was a master repeating a NON-FINAL 0xD2 after a burst stopped, never
+ * a final acknowledgement. Wiring it correctly needs a WAIT_NEXT state and a
+ * window at ack t_sync + 1550 +/- 250, which is inbound-burst work.
  */
 #define RADIANT_TRANSFER_REPLY_RETRY_US  3143u
 /* ATTEMPTS, not retransmissions: the measured 21 is one original plus twenty
  * repeats, and counting it the other way is how a limit ends up one off. */
 #define RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX 21u
+
+/*
+ * How long after the original acknowledgement a retransmission of it may still
+ * be armed, and it is a SECOND limit rather than a restatement of the first.
+ *
+ * The attempt counter alone is not enough, because nothing clears the saved
+ * reply when an exchange ends: TX_REPLY returns to IDLE without going through
+ * finish(), so reset_transfer() never runs for a reply and reply_ctrl stays
+ * loaded for the life of the channel. An attempt counter that has not reached
+ * 21 therefore says "you may repeat this" just as readily an hour later as
+ * 3 ms later, and the frame it would put on the air is a correctly-formed
+ * acknowledgement of a packet nobody remembers sending.
+ *
+ * 21 x 3143 us. The last attempt the measurement permits is the 21st, at
+ * 20 x 3143 = 62.9 ms, so this is that plus exactly one retry interval of
+ * slack - derived from the same two measured numbers rather than picked.
+ */
+#define RADIANT_TRANSFER_REPLY_VALID_US \
+	((uint32_t)RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX * \
+	 (uint32_t)RADIANT_TRANSFER_REPLY_RETRY_US)
 
 /* Added to caps.min_arm_lead_us when a caller says "as soon as possible"
  * (RADIANT_TIME_NEVER). Small, because the point of the arm-lead figure is that it
@@ -603,6 +639,10 @@ struct radiant_transfer_stats {
 	/* Inbound data packets refused because the channel had no broadcast
 	 * payload to answer with. Gap 3. */
 	uint32_t no_broadcast;
+	/* Retransmissions refused because the saved acknowledgement was older
+	 * than RADIANT_TRANSFER_REPLY_VALID_US. Non-zero means somebody is
+	 * driving the retransmission off a timer that is not the measured one. */
+	uint32_t stale_replies;
 };
 
 /*
@@ -645,6 +685,10 @@ struct radiant_transfer {
 	uint8_t reply_ctrl;
 	uint8_t reply_payload[RADIANT_TRANSFER_PKT_BYTES];
 	uint8_t reply_attempts;   /* including the original; see _ATTEMPTS_MAX */
+	/* When the last acknowledgement of this exchange left, so that a
+	 * retransmission can be refused for being ancient rather than merely
+	 * over the attempt limit. See RADIANT_TRANSFER_REPLY_VALID_US. */
+	radiant_time_t reply_t_sync;
 
 	/* The frame currently on the air. The HAL DMAs out of this, so it must
 	 * outlive the arm call and must not be a stack buffer. */

@@ -678,11 +678,33 @@ void radiant_transfer_on_tx_event(struct radiant_transfer *t,
 	}
 
 	if (t->state == RADIANT_TRANSFER_STATE_TX_REPLY) {
-		/* Our acknowledgement of somebody else's data packet. Nothing
-		 * follows it: the peer either sends the next packet or does
-		 * not, and radiant_sched.c owns the retransmission timer. */
+		/*
+		 * Our acknowledgement of somebody else's data packet. Nothing
+		 * follows it: the peer either sends the next packet or does not.
+		 *
+		 * The retransmission timer, when one is wired, belongs in
+		 * api_sched_done() - the same low-jitter re-arm path
+		 * api_post_master_rx() already uses. It is NOT radiant_sched.c's:
+		 * that module owns no timer at all, it arms for absolute instants
+		 * and lets the backend hold them, and radiant_api.c says so in as
+		 * many words. See gap 1 in radiant_transfer.h.
+		 *
+		 * reply_ctrl, reply_payload and reply_attempts DELIBERATELY
+		 * SURVIVE this transition, because the retransmission is defined
+		 * on an engine that is back in IDLE - which is also how they
+		 * became a trap. Nothing clears them: this is the only path out
+		 * of an acknowledgement and it does not go through finish(), so
+		 * reset_transfer() never runs for a reply, and the first caller
+		 * of radiant_transfer_reply_retransmit() would have put an
+		 * ancient acknowledgement on the air in the first idle window it
+		 * found - a correctly-formed frame answering a packet from
+		 * minutes ago. What closes that is the staleness check in
+		 * radiant_transfer_reply_retransmit(), against the t_sync stamped
+		 * here.
+		 */
 		t->op = 0u;
 		t->state = RADIANT_TRANSFER_STATE_IDLE;
+		t->reply_t_sync = e->t_sync;
 		if (e->status == RADIANT_RADIO_STATUS_OK) {
 			t->stats.acks_sent++;
 		}
