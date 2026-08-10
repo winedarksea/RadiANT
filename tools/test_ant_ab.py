@@ -447,6 +447,133 @@ class Gates(unittest.TestCase):
             self.name(self.evaluate(mutate), "sensitivity").verdict,
             ant_ab.FAIL)
 
+    # -- the transmit-power ladder, where the sign is the other way round ----
+
+    def ladder(self, a_dbm: float, b_dbm: float, spread: float | None = 0.3):
+        """A tx_ladder sitting: the master's power stepped down to the knee.
+
+        Both baselines get the ladder, because a comparison across two methods
+        is refused before any number is read.
+        """
+        def block(dbm):
+            got = {
+                "method": "tx_ladder",
+                "seconds_per_step": 60,
+                "steps": [{"tx_power_dbm": -12, "loss_exact_pct": 0.4,
+                           "loss_basis": "event_counter"},
+                          {"tx_power_dbm": -20, "loss_exact_pct": 12.0,
+                           "loss_basis": "event_counter"}],
+                "loss5pct_tx_power_dbm": dbm,
+            }
+            if spread is not None:
+                got["repeat_spread_db"] = spread
+            return got
+
+        a, b = pair(lambda data: data.update({"sensitivity": block(b_dbm)}))
+        a.data["sensitivity"] = block(a_dbm)
+        return ant_ab.evaluate(gates(), a, b)
+
+    def test_a_quieter_transmitter_at_the_knee_is_better_hearing(self):
+        """The sign that is silent when it is wrong.
+
+        More attenuation at the 5 % point means a better receiver, and so does
+        LESS transmit power. B needing the master 3 dB quieter than A did is B
+        hearing 3 dB further, and it must read as a pass with B in bold - not
+        as a 3 dB regression, which is what a single lower-is-better rule
+        applied to every sensitivity field would report.
+        """
+        result = self.name(self.ladder(-14.0, -17.0), "sensitivity")
+        self.assertEqual(result.verdict, ant_ab.PASS)
+        self.assertEqual(result.better, "b")
+
+    def test_a_ladder_that_needs_a_louder_transmitter_fails(self):
+        result = self.name(self.ladder(-17.0, -14.0), "sensitivity")
+        self.assertEqual(result.verdict, ant_ab.FAIL)
+        self.assertEqual(result.better, "a")
+
+    def test_a_ladder_within_one_db_passes(self):
+        self.assertEqual(
+            self.name(self.ladder(-17.0, -16.2), "sensitivity").verdict,
+            ant_ab.PASS)
+
+    def test_a_ladder_that_cannot_repeat_cannot_grade_the_gate(self):
+        """Phase 0's own gate, applied at the point the number gets used.
+
+        A ladder whose two passes disagreed by 2 dB has not measured a 1 dB
+        difference; it has measured its own noise. The comparison is refused
+        even though the two numbers are within the threshold, because the
+        threshold is narrower than the instrument that read them.
+        """
+        result = self.name(self.ladder(-14.0, -14.2, spread=2.0),
+                           "sensitivity")
+        self.assertEqual(result.verdict, ant_ab.FAIL)
+        self.assertIn("instrument cannot read this comparison", result.detail)
+
+    def test_a_single_ladder_warns_that_its_repeat_is_unknown(self):
+        result = self.name(self.ladder(-14.0, -14.2, spread=None),
+                           "sensitivity")
+        self.assertEqual(result.verdict, ant_ab.PASS)
+        self.assertTrue(any("--repeat 2" in w for w in result.warnings))
+
+    def test_a_ladder_against_an_attenuator_is_refused(self):
+        # The whole point of recording the method: the two carry different
+        # systematic offsets and neither converts into the other.
+        def mutate(data):
+            data["sensitivity"] = {
+                "method": "tx_ladder",
+                "steps": [{"tx_power_dbm": -12, "loss_exact_pct": 0.4},
+                          {"tx_power_dbm": -20, "loss_exact_pct": 12.0}],
+                "loss5pct_tx_power_dbm": -14.0,
+            }
+        result = self.name(self.evaluate(mutate), "sensitivity")
+        self.assertEqual(result.verdict, ant_ab.FAIL)
+        self.assertIn("not comparable", result.detail)
+
+    def test_the_rig_refuses_a_ladder_against_a_distance_run_before_any_gate(self):
+        """Why the method is recorded in the RIG and not only in the result.
+
+        gate_sensitivity() already refuses two different methods, but it does so
+        one gate deep, in a detail line, after nine other gates have printed
+        verdicts about a sitting that should never have been compared at all.
+        The rig is what `check_sitting()` reads, and a refusal there stops the
+        whole comparison with the reason at the top.
+        """
+        a, b = pair(lambda data:
+                    data["rig"]["link"].update({"sensitivity_method":
+                                                "tx_ladder"}))
+        a.data["rig"]["link"]["sensitivity_method"] = "fixed_open_air"
+
+        problems = ant_ab.check_sitting(gates()["sitting"], [a, b])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("different rigs", problems[0])
+
+    def test_two_ladders_on_one_rig_are_compared_normally(self):
+        # The other half: recording the method must not make every sitting
+        # refuse itself.
+        a, b = pair(lambda data:
+                    data["rig"]["link"].update({"sensitivity_method":
+                                                "tx_ladder"}))
+        a.data["rig"]["link"]["sensitivity_method"] = "tx_ladder"
+        self.assertEqual(ant_ab.check_sitting(gates()["sitting"], [a, b]), [])
+
+    def test_a_recorded_method_validates_against_the_schema(self):
+        data = baseline()
+        data["rig"]["link"]["sensitivity_method"] = "tx_ladder"
+        self.assertEqual(ant_ab.validate(data, SCHEMA), [])
+
+        data["rig"]["link"]["sensitivity_method"] = "guesswork"
+        errors = ant_ab.validate(data, SCHEMA)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("must be one of", errors[0])
+
+    def test_a_ladder_that_never_reached_the_knee_is_not_a_pass(self):
+        # ant_sens.py writes null rather than extrapolating past its last rung.
+        # That is a refusal to invent an answer, and it must not read as an
+        # absent optional field.
+        result = self.name(self.ladder(-14.0, None), "sensitivity")
+        self.assertEqual(result.verdict, ant_ab.FAIL)
+        self.assertIn("refusing to extrapolate", result.detail)
+
     # -- scale, which is absolute -------------------------------------------
 
     def test_a_missing_scale_block_skips_and_never_passes(self):

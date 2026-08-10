@@ -103,6 +103,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <radiant_core/radiant_noise.h>
 #include <radiant_core/radiant_radio_hal.h>
 #include <radiant_core/radiant_sched.h>
 /*
@@ -1179,6 +1180,25 @@ static void hal_rx(const struct radiant_rx_event *evt, void *user)
 		}
 		break;
 	case RADIANT_RADIO_STATUS_TIMEOUT:
+		/*
+		 * The noise floor, taken here because this is the one place
+		 * that knows both that the window ended empty and which
+		 * frequency it was on.
+		 *
+		 * Before end_armed(), which clears s.armed_rf. A sample
+		 * attributed to rf_index 0 instead of the one it was measured
+		 * on is worse than no sample: the whole use of this figure is
+		 * comparing one frequency against another.
+		 *
+		 * The backend has already decided whether the window is
+		 * eligible - it sets has_noise only on a terminal timeout that
+		 * received nothing - so there is no second test of that here,
+		 * and deliberately: two places deciding the same condition is
+		 * how they come to disagree.
+		 */
+		if (evt->has_noise) {
+			radiant_noise_note(s.armed_rf, evt->noise_dbm);
+		}
 		end_armed(RADIANT_SCHED_DONE_OK);
 		terminal = true;
 		break;
@@ -1264,6 +1284,11 @@ const struct radiant_radio_cbs *radiant_sched_radio_cbs(void)
 int radiant_sched_init(const struct radiant_sched_cbs *cbs, void *user)
 {
 	memset(&s, 0, sizeof(s));
+
+	/* The histogram belongs to the samples this module feeds it, so it is
+	 * reset with this module and not separately. A stale distribution from
+	 * before a reset would be reported as if it were this session's. */
+	radiant_noise_reset();
 
 	s.caps = radiant_radio_caps_get();
 	if (s.caps == NULL) {

@@ -471,6 +471,22 @@ def gate_acquisition(cfg: dict, a: Baseline, b: Baseline) -> list[GateResult]:
     return results
 
 
+# The three fields a sensitivity ladder can report its 5 % point in, and which
+# direction is better hearing in each.
+#
+# The sign is per field and not per gate, and getting it wrong is silent. More
+# attenuation and more distance at the 5 % point mean a receiver that hears
+# further. *Less* transmit power at the 5 % point means the same thing: the
+# quieter the master can go before the link breaks, the better the receiver. A
+# single `lower_is_better` for the whole gate would report the winner of every
+# tx_ladder comparison backwards, and the table would look entirely normal.
+SENSITIVITY_KEYS = (
+    ("loss5pct_attenuation_db", "dB", False),
+    ("loss5pct_distance_m", "m", False),
+    ("loss5pct_tx_power_dbm", "dBm", True),
+)
+
+
 def gate_sensitivity(cfg: dict, a: Baseline, b: Baseline) -> GateResult:
     threshold = f"within {cfg['max_delta_db']} dB-equivalent"
     try:
@@ -481,32 +497,74 @@ def gate_sensitivity(cfg: dict, a: Baseline, b: Baseline) -> GateResult:
                           FAIL if cfg.get("required", True) else SKIP,
                           str(exc))
 
-    key = "loss5pct_attenuation_db"
-    value_a, value_b = block_a.get(key), block_b.get(key)
-    if value_a is None or value_b is None:
-        # Distance is the documented fallback when there is no inline
-        # attenuator, and it is only comparable within one sitting - which the
-        # sitting checks have already enforced by this point.
-        key = "loss5pct_distance_m"
-        value_a, value_b = block_a.get(key), block_b.get(key)
-        if value_a is None or value_b is None:
-            return GateResult(
-                "sensitivity (5 % loss point)", "-", "-", threshold, FAIL,
-                "neither sensitivity.loss5pct_attenuation_db nor "
-                "loss5pct_distance_m is present in both baselines")
-    if block_a.get("method") != block_b.get("method"):
-        return GateResult("sensitivity (5 % loss point)", str(value_a),
-                          str(value_b), threshold, FAIL,
-                          f"different methods ({block_a.get('method')} vs "
-                          f"{block_b.get('method')}) are not comparable")
+    # The method is checked before any number is looked for, and that ordering
+    # is deliberate. Two different methods usually also report in two different
+    # fields, so a key search that ran first would report "no field in both
+    # baselines" - which is true, and is not the problem.
+    method_a, method_b = block_a.get("method"), block_b.get("method")
+    if method_a != method_b:
+        return GateResult("sensitivity (5 % loss point)", str(method_a),
+                          str(method_b), threshold, FAIL,
+                          f"different methods ({method_a} vs {method_b}) are "
+                          f"not comparable - each carries its own systematic "
+                          f"offset and none of them converts into another")
+    allowed = cfg.get("methods")
+    if allowed is not None and method_a not in allowed:
+        return GateResult("sensitivity (5 % loss point)", str(method_a),
+                          str(method_b), threshold, FAIL,
+                          f"method {method_a!r} is not one of {allowed}")
 
-    unit = "dB" if key.endswith("_db") else "m"
-    # More attenuation (or more distance) at the 5 % point is better hearing.
-    ok = value_a - value_b <= cfg["max_delta_db"]
+    # Distance is the documented fallback when there is no inline attenuator,
+    # and the transmit-power ladder is the fallback when there is neither. All
+    # three are only comparable within one sitting - which the sitting checks
+    # have already enforced by this point.
+    for key, unit, lower_is_better in SENSITIVITY_KEYS:
+        value_a, value_b = block_a.get(key), block_b.get(key)
+        if value_a is not None and value_b is not None:
+            break
+    else:
+        return GateResult(
+            "sensitivity (5 % loss point)", "-", "-", threshold, FAIL,
+            "none of " + ", ".join(f"sensitivity.{k}"
+                                   for k, _, _ in SENSITIVITY_KEYS)
+            + " is present in both baselines. A null 5 % point is ant_sens.py "
+              "refusing to extrapolate past the end of its ladder, not a "
+              "missing field: the ladder needs to reach the knee")
+
+    # Cast to a common scale: how much the link was degraded before the
+    # receiver lost 5 %. More is better hearing, whichever field it came from.
+    margin_a = -value_a if lower_is_better else value_a
+    margin_b = -value_b if lower_is_better else value_b
+    ok = margin_a - margin_b <= cfg["max_delta_db"]
+
+    detail = f"method {method_a}"
+    warnings = []
+
+    # The instrument's own repeat, which Phase 0 exists to establish. A gate
+    # cannot be tighter than the instrument that reads it, so a sitting whose
+    # ladder could not repeat to the gate's own tolerance has not measured a
+    # difference at this size - it has measured its own noise.
+    limit = cfg.get("repeat_max_delta_db")
+    if limit is not None:
+        for base, block in ((a, block_a), (b, block_b)):
+            spread = block.get("repeat_spread_db")
+            if spread is None:
+                warnings.append(
+                    f"{base.path}: sensitivity.repeat_spread_db is absent, so "
+                    f"this ladder was run once and its own repeatability is "
+                    f"unknown. Run tools/ant_sens.py --repeat 2")
+            elif spread > limit:
+                ok = False
+                detail += (f"; {base.path}'s ladder repeats to only "
+                           f"{spread:.2f} dB (limit {limit:.2f}), which is "
+                           f"wider than the difference being gated - the "
+                           f"instrument cannot read this comparison")
+
     return GateResult("sensitivity (5 % loss point)", f"{value_a:.1f} {unit}",
                       f"{value_b:.1f} {unit}", threshold,
-                      PASS if ok else FAIL, f"method {block_a.get('method')}",
-                      _cmp_better(value_a, value_b, lower_is_better=False))
+                      PASS if ok else FAIL, detail,
+                      _cmp_better(margin_a, margin_b, lower_is_better=False),
+                      warnings)
 
 
 def gate_scale(cfg: dict, a: Baseline, b: Baseline) -> GateResult:

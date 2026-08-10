@@ -131,6 +131,19 @@ struct fake_state {
 	int32_t  tx_offset_us;
 	int8_t   default_rssi;
 
+	/*
+	 * The noise floor this mock reports on a window that heard nothing.
+	 *
+	 * Not in g.cur, and the reason is a trap rather than a preference:
+	 * end_op() calls clear_cur() BEFORE delivering the terminal event, so
+	 * anything kept there is already gone by the time the event that needs
+	 * it is built. `rx_any` lives here for the same reason and is reset by
+	 * the rx arm rather than by the window's end.
+	 */
+	bool     noise_set;
+	int8_t   noise_dbm;
+	bool     rx_any;
+
 	/* A forced terminal status waiting for the next operation to be armed. */
 	bool                  pending_force_set;
 	enum radiant_radio_status pending_force;
@@ -332,6 +345,8 @@ void fake_radio_caps_preset_nrf(void)
 	c->has_sync_timestamp = true;
 	c->has_rssi = true;
 	c->crc_in_hw = true;
+	/* RXCRC holds the received CRC, not just a pass/fail bit. */
+	c->has_rx_crc = true;
 	c->tx_power_min_dbm = -40;
 	c->tx_power_max_dbm = 8;
 }
@@ -360,6 +375,15 @@ void fake_radio_caps_preset_rail(void)
 	c->has_sync_timestamp = true;
 	c->has_rssi = true;
 	c->crc_in_hw = false;
+	/*
+	 * False, and it is the more useful of the two settings to have in a
+	 * preset: the core's single-bit repair has to be provably inert on a
+	 * backend that reports only a pass/fail bit, and a test needs a
+	 * capability block that says so to prove it. Whether RAIL itself could
+	 * surface a received CRC is not the point - this preset's job here is
+	 * to be the backend that does not.
+	 */
+	c->has_rx_crc = false;
 	c->tx_power_min_dbm = -26;
 	c->tx_power_max_dbm = 20;
 }
@@ -576,7 +600,7 @@ static bool has_frame_fields(enum radiant_radio_status st)
 static void deliver_rx(uint32_t op, enum radiant_radio_status status, bool terminal,
 		       radiant_time_t t_sync, uint8_t filter_index,
 		       const uint8_t *body, uint8_t body_len, int8_t rssi_dbm,
-		       bool late)
+		       bool crc_rx_set, uint32_t crc_rx, bool late)
 {
 	struct radiant_rx_event evt;
 	struct fake_radio_event *rec;
@@ -609,6 +633,37 @@ static void deliver_rx(uint32_t op, enum radiant_radio_status status, bool termi
 	evt.has_rssi = frame && g.caps.has_rssi;
 	evt.rssi_dbm = evt.has_rssi ? rssi_dbm : 0;
 
+	/*
+	 * The received CRC, on CRC_FAIL only and only if the backend claims to
+	 * keep one. All three conditions are enforced here rather than left to
+	 * the caller, because that is what the HAL promises the core: a core
+	 * that reads crc_rx on an OK event, or on a backend without the
+	 * capability, must find it absent in the mock exactly as it would on
+	 * hardware. A mock that was more generous than the contract is a mock
+	 * that lets a contract violation pass CI.
+	 */
+	evt.has_crc_rx = (status == RADIANT_RADIO_STATUS_CRC_FAIL) &&
+			 g.caps.has_rx_crc && crc_rx_set;
+	evt.crc_rx = evt.has_crc_rx ? crc_rx : 0u;
+
+	/*
+	 * The noise floor, on the same terms the HAL states and the nRF backend
+	 * implements: a terminal TIMEOUT for a window that delivered nothing.
+	 *
+	 * The mock enforces the "delivered nothing" half itself rather than
+	 * trusting the test to set it up, because that is the condition a core
+	 * module could get wrong in a way no assertion would catch - it would
+	 * simply be measuring transmitters and calling them noise.
+	 */
+	if (status == RADIANT_RADIO_STATUS_TIMEOUT && terminal &&
+	    g.noise_set && !g.rx_any) {
+		evt.has_noise = true;
+		evt.noise_dbm = g.noise_dbm;
+	}
+	if (frame) {
+		g.rx_any = true;
+	}
+
 	rec = new_event_record();
 	if (rec != NULL) {
 		rec->op = op;
@@ -625,6 +680,8 @@ static void deliver_rx(uint32_t op, enum radiant_radio_status status, bool termi
 		}
 		rec->has_rssi = evt.has_rssi;
 		rec->rssi_dbm = evt.rssi_dbm;
+		rec->has_crc_rx = evt.has_crc_rx;
+		rec->crc_rx = evt.crc_rx;
 		rec->late = late;
 	}
 	count_status(status, false);
@@ -742,7 +799,8 @@ static void end_op(enum radiant_radio_status status, radiant_time_t t_sync)
 	if (kind == FAKE_RADIO_ARM_TX) {
 		deliver_tx(op, status, t_sync, false);
 	} else {
-		deliver_rx(op, status, true, 0u, 0u, NULL, 0u, 0, false);
+		deliver_rx(op, status, true, 0u, 0u, NULL, 0u, 0, false, 0u,
+			   false);
 	}
 }
 
@@ -762,7 +820,7 @@ static void run_deferred(void)
 			deliver_tx(op, RADIANT_RADIO_STATUS_ABORTED, 0u, false);
 		} else {
 			deliver_rx(op, RADIANT_RADIO_STATUS_ABORTED, true, 0u, 0u,
-				   NULL, 0u, 0, false);
+				   NULL, 0u, 0, false, 0u, false);
 		}
 	}
 	g.draining = false;
@@ -917,6 +975,18 @@ uint32_t fake_radio_air_pending(void)
 void fake_radio_set_default_rssi(int8_t dbm)
 {
 	g.default_rssi = dbm;
+}
+
+void fake_radio_set_noise(int8_t dbm)
+{
+	g.noise_set = true;
+	g.noise_dbm = dbm;
+}
+
+void fake_radio_clear_noise(void)
+{
+	g.noise_set = false;
+	g.noise_dbm = 0;
 }
 
 uint8_t fake_radio_build_ant_frame(uint8_t *out, uint16_t devnum,
@@ -1190,7 +1260,7 @@ static void dispatch_air(int32_t idx)
 		}
 	}
 	deliver_rx(op, status, terminal, s->f.t_sync, fidx, body, body_len,
-		   rssi, false);
+		   rssi, s->f.crc_rx_set, s->f.crc_rx, false);
 }
 
 static void dispatch(enum due_kind kind, int32_t air_idx)
@@ -1751,6 +1821,10 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	g.cur.flags = req->flags;
 	g.cur.t_open = req->t_open;
 	g.cur.t_close = req->t_close;
+	/* One window, one answer to "did this hear anything". Reset at the arm
+	 * rather than at the terminal event, because the terminal event is
+	 * where it is read. */
+	g.rx_any = false;
 
 	take_pending_force();
 
@@ -1860,7 +1934,8 @@ int fake_radio_inject_late_rx(uint32_t op, const struct fake_radio_air *f,
 	deliver_rx(op,
 		   f->crc_bad ? RADIANT_RADIO_STATUS_CRC_FAIL : RADIANT_RADIO_STATUS_OK,
 		   false, f->t_sync, filter_index, body, body_len,
-		   f->rssi_set ? f->rssi_dbm : g.default_rssi, true);
+		   f->rssi_set ? f->rssi_dbm : g.default_rssi,
+		   f->crc_rx_set, f->crc_rx, true);
 	return RADIANT_RADIO_OK_RC;
 }
 

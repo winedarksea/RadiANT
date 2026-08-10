@@ -167,7 +167,7 @@ comparison in [`backends.md`](backends.md). Baselines commit to
 | Accumulator continuity violations | 0 |
 | **`timing` line** (intervals minus whole periods) | ≤ sdk-ant × 1.25. **Not the `jitter` line** |
 | Time to first packet / re-acquisition | ≤ sdk-ant × 1.5, and ≤ 5 s absolute |
-| **Sensitivity** (attenuated link if an inline attenuator is available, else a fixed worst-case open-air path) | attenuation/distance at 5 % loss within 1 dB-equivalent of sdk-ant on the same rig; baseline recorded in Phase 4, **alongside die temperature** (see below) |
+| **Sensitivity** (inline attenuator, else a fixed open-air path, else the transmit-power ladder below) | attenuation/distance/transmit power at 5 % loss within 1 dB-equivalent of sdk-ant on the same rig; baseline recorded in Phase 4, **alongside die temperature** (see below) |
 | 32-channel per-channel loss | ≤ single-channel + 0.5 pp — **absolute, not relative**: `libant.a` cannot reach 32 |
 | **Ack-data success** (ERG mode) | ≥ 99 %, and ≥ sdk-ant − 1 pp |
 | USB round-trip latency | ≤ sdk-ant × 1.1 (expect equality — the radio is not on that path) |
@@ -181,6 +181,71 @@ conformance gate.
 **Before fitting any threshold to a bench number, check the number can be
 accounted for.** The previous 1.0 → 2.5 % retune was fitted to a broken
 measurement and encoded the tool's own bug as the spec.
+
+#### The transmit-power ladder, when there is no attenuator
+
+The sensitivity gate names an inline attenuator or a repeatable distance, and
+this bench has neither — both are hardware. `tools/ant_sens.py` is the software
+substitute: it opens one board as an ANT+ master, steps that master's transmit
+power down until the receiver under test starts missing packets, and reports the
+interpolated power at 5 % exact loss. That is the same attenuation, applied at
+the other end of the link, and it needs nothing that is not already on the desk.
+
+**It is not the transmit-power sweep that is closed.** The closed one swept the
+*dongle's own* transmit power against loss at high SNR, looking for something
+that was never there. This one steps the *master's* power to walk the *receiver*
+through its knee. The two differ in which end of the link moves and which end is
+being measured, which is the whole difference between an instrument and a
+distraction. `ant_sens.py`'s header says so at length, for the next person who
+reads the memory note and reaches for the stop button.
+
+Three things about it are load-bearing:
+
+- **Loss is not recounted.** Each rung's stream goes to
+  `ant_verify.py`'s `ChannelAnalyzer`, and the figure read out is
+  `loss (exact)` — the transmitter's own event counter, no clock. Past the knee
+  too little of the stream survives for that counter to be readable, and the
+  step records `loss_basis: master_sent` rather than pretending otherwise.
+- **The dial is checked, not trusted.** Every rung records mean RSSI, and across
+  the ladder that must fall about 1 dB per commanded dB with no rung far off the
+  line. `CONFIG_ANT_DONGLE_TX_POWER_BOOST` on the transmitter folds levels 3 and
+  4 onto the same power; a fine ladder against the wrong part writes raw
+  register values that mean something else; firmware without the custom byte of
+  `MESG_CHANNEL_RADIO_TX_POWER` transmits at 0 dBm for every fine rung. All
+  three produce a normal-looking curve and a fabricated dB figure, and only the
+  RSSI axis notices.
+- **It refuses to extrapolate.** The six ANT power levels span 28 dB and the
+  nRF52840 register table spans 48; a desk pair sits further above the knee than
+  either. If the bottom rung still shows no loss, the answer is null and the
+  boards need moving apart — a number extrapolated past the end of the ladder is
+  worse than no number.
+
+**The Phase 0 acceptance run is `--repeat 2`.** Two ladders on an unchanged rig
+must agree to within 1 dB, which is `gates.sensitivity.repeat_max_delta_db`, and
+it is the same 1 dB as the gate itself because a gate cannot be tighter than the
+instrument that reads it. If the repeat is wider, every downstream claim
+measured in dB has no gate at all, and that is a reason to fix the instrument
+rather than to widen the threshold.
+
+#### The noise floor, and the check that is not a gate
+
+A `core` build logs a `noise rf=... floor=... busy=...` line once a minute,
+built from receive windows that ended having heard nothing — which is exactly
+the population whose level is the noise floor. Nothing in the core reads those
+numbers; they exist so that a bench result nobody can currently explain has one
+more thing to look at.
+
+There is no gate on them, and there should not be: the feature measures rather
+than changes, so there is nothing to regress. The sanity check is a comparison
+rather than a threshold — **move the dongle from a USB 2.0 port to a USB 3.0
+one and the reported `floor` should rise visibly**, because USB 3.0 broadband
+noise routinely desenses a 2.4 GHz receiver by 10–20 dB. That delta appearing is
+itself the evidence the measurement works; see the entry in
+[`gotchas.md`](gotchas.md).
+
+Read `floor` (the 10th percentile) for how deaf the receiver is and `busy` (the
+90th) for how bursty the band is. They are different questions and a single mean
+answers neither.
 
 **The sensitivity baseline is read against a temperature-dependent
 instrument.** nRF52840 errata 153 says RSSI has a temperature-dependent error;

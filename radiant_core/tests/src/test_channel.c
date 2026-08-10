@@ -1352,6 +1352,398 @@ ZTEST(radiant_channel, test_op_zero_never_owns_a_channel)
 }
 
 /* ---------------------------------------------------------------------------
+ * The adaptive window guard
+ *
+ * radiant_channel_guard_us() decides how wide a slave opens its receive window,
+ * and the whole point of it is to open a narrower one than the spec's worst
+ * case when the master has earned it. Every test here is about the direction
+ * that must never happen by accident: narrowing on no evidence, or narrowing
+ * past the floor. The failure mode of a window that is too narrow is the silent
+ * one radiant_radio_hal.h documents - yield falls at the same order as the
+ * bench's own collision floor, with no error code raised anywhere - so a bug
+ * here would look exactly like a bad afternoon on the bench.
+ *
+ * fake_radio's virtual clock makes all of it deterministic: t_sync is whatever
+ * these tests say it is, to the microsecond.
+ * ---------------------------------------------------------------------------
+ */
+
+/* Drive `n` clean consecutive slots whose t_sync lands `err` microseconds LATE
+ * against the channel's own prediction, and return the last t_sync used. */
+static radiant_time_t clean_slots(uint8_t ch, uint32_t n, int32_t err)
+{
+	radiant_time_t t_sync = 0u;
+	uint32_t i;
+
+	for (i = 0u; i < n; i++) {
+		radiant_time_t predicted = radiant_channel_next_slot(ch);
+
+		zassert_not_equal(RADIANT_TIME_NEVER, predicted,
+				  "channel left the air on slot %u", i);
+		t_sync = (err >= 0) ? (predicted + (radiant_time_t)err)
+				    : (predicted - (radiant_time_t)(-err));
+		radiant_channel_on_slot(ch, t_sync);
+	}
+	return t_sync;
+}
+
+static void acquire_slave(uint8_t ch, radiant_time_t t0)
+{
+	struct radiant_channel_id acquired = { TEST_DEVNUM, TEST_DEVTYPE,
+					   TEST_TRANSTYPE };
+
+	assign_and_id(ch, TYPE_SLAVE);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(ch, 0u, t0), NULL);
+	radiant_channel_on_acquired(ch, &acquired, t0);
+}
+
+ZTEST(radiant_channel, test_guard_converges_toward_the_floor_on_a_clean_master)
+{
+	radiant_time_t t0;
+
+	up();
+	t0 = radiant_radio_now();
+	acquire_slave(1u, t0);
+
+	/* An exactly periodic master: zero residual, for ever. The guard still
+	 * cannot go below the floor, and the floor is deliberately eleven times
+	 * the residual this bench actually measures. */
+	(void)clean_slots(1u, 64u, 0);
+
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u),
+		      "a perfect master should reach the floor and stop there");
+	zassert_equal(0u, radiant_channel_residual_us(1u), NULL);
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
+		      NULL);
+	radio_clean();
+}
+
+ZTEST(radiant_channel, test_guard_is_the_ceiling_until_the_estimator_has_locked)
+{
+	radiant_time_t t0;
+	uint32_t i;
+
+	up();
+	t0 = radiant_radio_now();
+	acquire_slave(1u, t0);
+
+	/*
+	 * The case that matters most. One clean slot is one sample, and a
+	 * window sized from one sample is a window sized from luck - so every
+	 * slot up to the lock threshold must still get the old wide window,
+	 * even though the estimator by then has a perfectly good-looking
+	 * average sitting in it.
+	 */
+	for (i = 0u; i < RADIANT_CHANNEL_GUARD_LOCK_SLOTS; i++) {
+		zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US,
+			      radiant_channel_guard_us(1u),
+			      "narrowed after only %u clean slot(s)", i);
+		zassert_equal(0u, radiant_channel_residual_us(1u),
+			      "reported a residual it is not yet entitled to");
+		(void)clean_slots(1u, 1u, 4);
+	}
+
+	zassert_true(radiant_channel_guard_us(1u) < RADIANT_CHANNEL_GUARD_MAX_US,
+		     "never narrowed at all");
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
+		      NULL);
+	radio_clean();
+}
+
+ZTEST(radiant_channel, test_guard_is_the_ceiling_immediately_after_acquisition)
+{
+	struct radiant_channel_id acquired = { TEST_DEVNUM, TEST_DEVTYPE,
+					   TEST_TRANSTYPE };
+	radiant_time_t t0;
+
+	up();
+	t0 = radiant_radio_now();
+	acquire_slave(1u, t0);
+	(void)clean_slots(1u, 64u, 0);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u),
+		      NULL);
+
+	/*
+	 * A channel sent back to search and re-acquired is looking at whatever
+	 * turned up next. It may be a different sensor entirely - the
+	 * configured ID can be a wildcard - and what the previous master's
+	 * clock was doing is not evidence about this one. The first window
+	 * after an acquisition is also the one least able to afford a guess.
+	 */
+	while (!radiant_channel_on_slot_missed(1u, radiant_radio_now())) {
+		/* until RX_FAIL_GO_TO_SEARCH */
+	}
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(1u),
+		      NULL);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(1u),
+		      "a searching channel is not entitled to a narrow window");
+
+	radiant_channel_on_acquired(1u, &acquired, t0 + 9000000u);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(1u),
+		      "the estimator survived a re-acquisition");
+	zassert_equal(0u, radiant_channel_residual_us(1u), NULL);
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
+		      NULL);
+	radio_clean();
+}
+
+ZTEST(radiant_channel, test_guard_widens_by_one_drift_quantum_per_miss)
+{
+	radiant_time_t t0;
+	uint32_t narrow;
+	uint8_t i;
+
+	up();
+	t0 = radiant_radio_now();
+	acquire_slave(1u, t0);
+	(void)clean_slots(1u, 64u, 0);
+
+	narrow = radiant_channel_guard_us(1u);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, narrow, NULL);
+
+	/*
+	 * Each miss extrapolates the prediction one more period with no fresh
+	 * sync, so each one is charged at the spec's worst case. This is what
+	 * makes the mechanism safe without a separate escape hatch: a link
+	 * that starts failing reopens the wide window on its own, one period at
+	 * a time, and is back at the ceiling before it gives up entirely.
+	 */
+	for (i = 1u; i < RADIANT_CHANNEL_RX_FAIL_TO_SEARCH; i++) {
+		zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()),
+			      NULL);
+		zassert_equal(narrow + (uint32_t)i * RADIANT_CHANNEL_DRIFT_WORST_US,
+			      radiant_channel_guard_us(1u),
+			      "guard after %u miss(es)", i);
+	}
+
+	/* And a slot heard again clears the miss count, so the guard comes
+	 * straight back down rather than staying wide until something resets
+	 * it. */
+	(void)clean_slots(1u, 1u, 0);
+	zassert_equal(narrow, radiant_channel_guard_us(1u), NULL);
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
+		      NULL);
+	radio_clean();
+}
+
+ZTEST(radiant_channel, test_a_master_at_the_full_tolerance_limit_is_still_caught)
+{
+	radiant_time_t t0;
+	uint32_t guard;
+
+	up();
+	t0 = radiant_radio_now();
+	acquire_slave(1u, t0);
+
+	/*
+	 * +/-50 ppm at each end is +/-25 us per ANT+ period. A master built to
+	 * the tolerance limit therefore lands 25 us off every single slot, and
+	 * the window has to still contain it - which is the whole claim the
+	 * narrow guard is making.
+	 */
+	(void)clean_slots(1u, 64u, (int32_t)RADIANT_CHANNEL_DRIFT_WORST_US);
+
+	guard = radiant_channel_guard_us(1u);
+	zassert_true(guard > RADIANT_CHANNEL_DRIFT_WORST_US,
+		     "guard %u would not contain a spec-limit master", guard);
+	zassert_true(guard <= RADIANT_CHANNEL_GUARD_MAX_US, NULL);
+	zassert_within(RADIANT_CHANNEL_DRIFT_WORST_US,
+		       radiant_channel_residual_us(1u), 2u,
+		       "the estimator did not converge on the residual it was fed");
+
+	/* The same master running early rather than late is the same error. */
+	(void)clean_slots(1u, 64u, -(int32_t)RADIANT_CHANNEL_DRIFT_WORST_US);
+	zassert_within(RADIANT_CHANNEL_DRIFT_WORST_US,
+		       radiant_channel_residual_us(1u), 2u,
+		       "a master running early was measured as a smaller error");
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
+		      NULL);
+	radio_clean();
+}
+
+ZTEST(radiant_channel, test_guard_never_goes_below_the_floor_for_any_residual)
+{
+	static const int32_t adversarial[] = {
+		0, 1, -1, 25, -25, 400, -400, 3, 100000, -3, 0, 0, 7, -60000,
+		2, 2, 2, 40000, 0, -2, 12, 12, 12, 5, 5, 5, 5, 5,
+	};
+	radiant_time_t t0;
+	uint32_t i;
+	uint32_t j;
+
+	up();
+	t0 = radiant_radio_now();
+	acquire_slave(1u, t0);
+
+	/*
+	 * An instrument that only ever sees well-behaved input has not been
+	 * tested. This walks the estimator through residuals from zero to most
+	 * of a channel period, in both directions, and the invariant is checked
+	 * after every single one: never below the floor, never above the
+	 * ceiling. Those two bounds are the entire safety argument for the
+	 * feature, and neither may depend on the sequence.
+	 */
+	for (j = 0u; j < 4u; j++) {
+		for (i = 0u; i < ARRAY_SIZE(adversarial); i++) {
+			uint32_t guard;
+
+			(void)clean_slots(1u, 1u, adversarial[i]);
+			guard = radiant_channel_guard_us(1u);
+			zassert_true(guard >= RADIANT_CHANNEL_GUARD_MIN_US,
+				     "guard %u below the floor after residual %d",
+				     guard, adversarial[i]);
+			zassert_true(guard <= RADIANT_CHANNEL_GUARD_MAX_US,
+				     "guard %u above the ceiling after residual %d",
+				     guard, adversarial[i]);
+		}
+	}
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
+		      NULL);
+	radio_clean();
+}
+
+ZTEST(radiant_channel, test_a_slot_after_a_miss_is_not_fed_to_the_estimator)
+{
+	radiant_time_t t0;
+	radiant_time_t predicted;
+
+	up();
+	t0 = radiant_radio_now();
+	acquire_slave(1u, t0);
+	(void)clean_slots(1u, 64u, 0);
+	zassert_equal(0u, radiant_channel_residual_us(1u), NULL);
+
+	/*
+	 * Miss four slots, then hear one 90 us off. Those 90 us are four
+	 * periods of drift, not one, and averaging them in would size the
+	 * window from how lossy the link is rather than from how good the
+	 * master's clock is - on a link that loses 0.4 % of slots, permanently.
+	 * The miss term has already covered those periods at the spec bound.
+	 */
+	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()), NULL);
+	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()), NULL);
+	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()), NULL);
+	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()), NULL);
+
+	predicted = radiant_channel_next_slot(1u);
+	radiant_channel_on_slot(1u, predicted + 90u);
+
+	zassert_equal(0u, radiant_channel_residual_us(1u),
+		      "the estimator swallowed a multi-period residual");
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u),
+		      NULL);
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
+		      NULL);
+	radio_clean();
+}
+
+ZTEST(radiant_channel, test_the_guard_floor_can_be_raised_but_never_lowered)
+{
+	radiant_time_t t0;
+
+	up();
+	t0 = radiant_radio_now();
+	acquire_slave(1u, t0);
+	(void)clean_slots(1u, 64u, 0);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u),
+		      NULL);
+
+	radiant_channel_guard_floor_set(RADIANT_CHANNEL_GUARD_MIN_US + 60u);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US + 60u,
+		      radiant_channel_guard_us(1u), NULL);
+
+	/* A caller may not talk the core into a narrower window than its own
+	 * minimum, however politely it asks. */
+	radiant_channel_guard_floor_set(1u);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US + 60u,
+		      radiant_channel_guard_us(1u), NULL);
+	radiant_channel_guard_floor_set(0u);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US + 60u,
+		      radiant_channel_guard_us(1u), NULL);
+
+	/*
+	 * Pinning the floor at the ceiling switches the whole mechanism off,
+	 * which is what a backend whose t_sync is inferred rather than captured
+	 * gets. No flag, no branch anywhere else.
+	 */
+	radiant_channel_guard_floor_set(RADIANT_CHANNEL_GUARD_MAX_US);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(1u),
+		      NULL);
+	radiant_channel_guard_floor_set(0xFFFFu);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(1u),
+		      "the ceiling is a ceiling");
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
+		      NULL);
+	radio_clean();
+}
+
+ZTEST(radiant_channel, test_guard_is_the_ceiling_for_channels_with_no_estimator)
+{
+	radiant_time_t t0;
+
+	up();
+	t0 = radiant_radio_now();
+
+	/* Out of range, unassigned, assigned-but-closed and searching. None of
+	 * them has heard a master, so none of them gets a narrow window. */
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US,
+		      radiant_channel_guard_us(RADIANT_CHANNEL_COUNT), NULL);
+	zassert_equal(0u, radiant_channel_residual_us(RADIANT_CHANNEL_COUNT), NULL);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(5u),
+		      NULL);
+
+	assign_and_id(5u, TYPE_SLAVE);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(5u),
+		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(5u, 0u, t0), NULL);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(5u),
+		      NULL);
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(5u, radiant_radio_now()),
+		      NULL);
+	radio_clean();
+}
+
+ZTEST(radiant_channel, test_each_channel_estimates_its_own_master)
+{
+	radiant_time_t t0;
+
+	up();
+	t0 = radiant_radio_now();
+
+	acquire_slave(1u, t0);
+	acquire_slave(2u, t0);
+
+	/* Channel 1 hears a well-behaved master; channel 2 hears one at the
+	 * tolerance limit. The estimator is per channel because the masters
+	 * are, and a shared one would size both windows from whichever sensor
+	 * happened to be worse. */
+	(void)clean_slots(1u, 64u, 0);
+	(void)clean_slots(2u, 64u, 200);
+
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u),
+		      NULL);
+	zassert_true(radiant_channel_guard_us(2u) > radiant_channel_guard_us(1u),
+		     "the sloppy master's channel did not get a wider window");
+	zassert_within(200u, radiant_channel_residual_us(2u), 8u, NULL);
+	zassert_equal(0u, radiant_channel_residual_us(1u), NULL);
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
+		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(2u, radiant_radio_now()),
+		      NULL);
+	radio_clean();
+}
+
+/* ---------------------------------------------------------------------------
  * Stack reset
  * ---------------------------------------------------------------------------
  */

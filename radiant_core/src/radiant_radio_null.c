@@ -120,6 +120,12 @@ static const struct radiant_radio_caps null_caps = {
 	 * which is the property that decides this on a given part. */
 	.crc_in_hw = true,
 
+	/* False, on the same terms as has_rssi above: this backend receives
+	 * nothing, so it reports no received CRC and the core's single-bit
+	 * repair never runs on it. Flattering this flag would put a repair path
+	 * into a build whose whole purpose is to have no radio in it. */
+	.has_rx_crc = false,
+
 	.tx_power_min_dbm = -20,
 	.tx_power_max_dbm = 8,
 };

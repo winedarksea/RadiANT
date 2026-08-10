@@ -163,10 +163,24 @@ static void send_message(uint8_t msg_id, const uint8_t *payload, uint8_t len)
  */
 static uint8_t tx_power[CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED];
 
+/* The raw register value that goes with ANTW_RADIO_TX_POWER_LVL_CUSTOM, held
+ * per channel for the same reason the level is: it has to survive being set
+ * before the channel is assigned, and be reapplied afterwards.
+ *
+ * Meaningless unless the matching tx_power[] entry has the custom bit set, and
+ * it is by definition not portable - the same byte is +8 dBm on an nRF52840 and
+ * something else entirely on an nRF54L15, which radiant_core's radio backend
+ * documents at length. Nothing in the firmware ever sets one; only a host that
+ * asked for it by name does, and the only thing that asks is
+ * tools/ant_sens.py's fine power ladder.
+ */
+static uint8_t tx_power_custom[CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED];
+
 static void tx_power_reset(void)
 {
 	for (uint8_t i = 0; i < ARRAY_SIZE(tx_power); i++) {
 		tx_power[i] = ANT_DONGLE_TX_POWER_DEFAULT;
+		tx_power_custom[i] = 0U;
 	}
 }
 
@@ -206,7 +220,8 @@ static uint8_t tx_power_resolve(uint8_t requested)
 static void tx_power_apply(uint8_t ch)
 {
 	if (ch < ARRAY_SIZE(tx_power)) {
-		(void)antr_channel_radio_tx_power_set(ch, tx_power[ch], 0);
+		(void)antr_channel_radio_tx_power_set(ch, tx_power[ch],
+						      tx_power_custom[ch]);
 	}
 }
 
@@ -661,17 +676,38 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		break;
 
 	case ANTW_MESG_CHANNEL_RADIO_TX_POWER_ID:
-		/* body: [ch, tx_power] */
+		/* body: [ch, tx_power] or [ch, tx_power, custom]
+		 *
+		 * A real stick's message is two bytes and every host sends two.
+		 * The third is an extension, and it is additive rather than a
+		 * protocol change: a two-byte message means exactly what it
+		 * always did, and the byte is only read at all when the level
+		 * carries ANTW_RADIO_TX_POWER_LVL_CUSTOM, which no host sends
+		 * by accident.
+		 *
+		 * Without it the custom level is unreachable from the wire.
+		 * ANTW_RADIO_TX_POWER_LVL_CUSTOM names a raw register value,
+		 * the radio contract has carried the parameter for it since it
+		 * was written, and this arm used to pass a hardcoded 0 - so a
+		 * host asking for a custom power silently got register 0, which
+		 * on an nRF52840 is 0 dBm. That is the failure mode a
+		 * transmit-power ladder cannot see from the far end of the
+		 * link, and it is why tools/ant_sens.py checks its dial against
+		 * measured RSSI rather than trusting it.
+		 */
 		if (len >= 2) {
 			uint8_t level = tx_power_resolve(body[1]);
+			uint8_t custom = (len >= 3) ? body[2] : 0U;
 
 			if (body[0] < ARRAY_SIZE(tx_power)) {
 				tx_power[body[0]] = level;
+				tx_power_custom[body[0]] = custom;
 			}
 			/* Still call through for an out-of-range channel, so
 			 * the stack returns the error a real stick would.
 			 */
-			err = antr_channel_radio_tx_power_set(body[0], level, 0);
+			err = antr_channel_radio_tx_power_set(body[0], level,
+							      custom);
 		}
 		break;
 
@@ -688,11 +724,14 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		 */
 		if (len >= 2) {
 			uint8_t level = tx_power_resolve(body[1]);
+			uint8_t custom = (len >= 3) ? body[2] : 0U;
 
 			for (uint8_t i = 0; i < CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED;
 			     i++) {
 				tx_power[i] = level;
-				(void)antr_channel_radio_tx_power_set(i, level, 0);
+				tx_power_custom[i] = custom;
+				(void)antr_channel_radio_tx_power_set(i, level,
+								      custom);
 			}
 			err = 0;
 		}

@@ -127,6 +127,92 @@ config RADIANT_CORE_ANTR_API
 	  src/ant_radio.h's whole surface into a build that has no bridge to
 	  satisfy it.
 
+config RADIANT_CORE_CRC_REPAIR
+	bool "repair single-bit CRC errors on tracked windows"
+	default n
+	help
+	  src/radiant_crc_repair.c. On a tracked window that failed its CRC,
+	  form the error syndrome from the received CRC and the computed one,
+	  look it up in a table of every single-bit error, and flip the bit
+	  back. At the sensitivity knee essentially every CRC failure is one
+	  flipped bit - around 136 exposed bits at a 1e-4 bit error rate puts
+	  two-bit failures two orders down - so this recovers nearly all of
+	  them, for a table and no change on the air. Worth roughly 1-3 dB of
+	  effective sensitivity.
+
+	  THE ARITHMETIC THAT DECIDES WHETHER THIS IS SAFE. A frame with more
+	  bit errors than one can have its syndrome land on a valid single-bit
+	  entry by chance, and is then "repaired" into a frame that is still
+	  wrong and now claims to be right.
+
+	  TWO-BIT ERRORS CANNOT. The polynomial x^16 + x^12 + x^5 + 1 is
+	  divisible by (x + 1), so a syndrome's popcount carries the parity of
+	  the error's weight: odd-weight errors have odd-popcount syndromes and
+	  even-weight errors have even-popcount ones, and the two sets are
+	  disjoint. Since two-bit errors are by far the commonest multi-bit case
+	  at the knee, that removes most of the exposure outright - and
+	  test_crc_repair.c enumerates all 3160 of them to keep it true.
+
+	  What is left is odd-weight errors of three bits and up, which collide
+	  at roughly 1 in 341 and are themselves another order of magnitude
+	  rarer than two-bit ones. That figure is 96 REACHABLE entries against
+	  32768 odd-popcount syndromes: a standard tracked frame has 80 body
+	  bits and 16 CRC bits, and the rest of the table names positions that
+	  would lie inside the address, which are refused because a flipped
+	  address bit never matches the filter in the first place. The same
+	  suite measures the rate rather than asserting it.
+
+	  On a tracked window that is acceptable: the hardware matched a full
+	  5-byte address, so the frame is already known to be from the right
+	  sensor, and one bad payload is something every ANT+ profile survives
+	  because its values are cumulative. On a SEARCH window it would not be,
+	  which is why the module refuses that configuration outright rather
+	  than trusting the call site - a search window's CRC failures are the
+	  19-27 noise-triggered address matches per 15 seconds that
+	  radiant_search.c counts and discards, and one in 585 of those would
+	  become a device number manufactured out of thermal noise.
+
+	  Requires a backend whose caps.has_rx_crc is true; the repair path is
+	  inert without one, because the received CRC is not in the body and a
+	  syndrome cannot be formed without it.
+
+	  Default n. Repaired frames are counted separately in
+	  radiant_api_stats.crc_repaired, so an A/B can see how many there were
+	  and never confuses one for a clean receive.
+
+config RADIANT_CORE_PROFILE_SANITY
+	bool "drop a repaired frame whose payload is not physically possible"
+	depends on RADIANT_CORE_CRC_REPAIR
+	default n
+	help
+	  src/radiant_profile_sanity.c. A third refutation for a repaired
+	  frame, alongside the control-byte and transmission-type checks
+	  radiant_crc_repair.h documents: for a bicycle power meter
+	  (device type 0x0B), reject an instantaneous power reading above
+	  3000 W; for a heart rate monitor (device type 0x78), reject a
+	  computed heart rate above 240 bpm. Both figures are comfortably
+	  above real human extremes - see radiant_profile_sanity.h for why
+	  the originally proposed 1000 W / 200 bpm would have misclassified
+	  genuine efforts - so a payload this module rejects is far more
+	  likely a mis-repair than a real reading.
+
+	  APPLIED TO REPAIRED FRAMES ONLY, exactly like the two checks in
+	  radiant_crc_repair.h: the call site in src/radiant_api.c makes this
+	  the caller's rule to keep, not this module's, because the same
+	  range check against a CLEAN frame would silently delete the most
+	  interesting moments of a ride - a track sprint, a hard effort -
+	  and look like a receiver fault.
+
+	  This is profile knowledge (what a payload byte MEANS), which is
+	  deliberately not part of radiant_crc_repair.c or any other
+	  frame-layer module - see radiant_profile_sanity.h for why it has
+	  its own file and its own symbol instead.
+
+	  Rejections are counted in radiant_api_stats.crc_repair_implausible,
+	  separately from crc_repair_refuted, so an A/B can tell a structural
+	  refutation (wrong control byte or transmission type) from a
+	  physical-plausibility one.
+
 config RADIANT_CORE_SWEEP_DEBUG
 	bool "log the search sweep's position once a second"
 	default n

@@ -321,9 +321,15 @@
 #define ANTW_MESG_EXT_BURST_DATA_ID                          0x5F
 
 /*
- * [channel, level]. Per-channel transmit power. Only takes on an assigned
- * channel, so the bridge holds the requested level and reapplies it after
- * each successful assign. [bridge, readme]
+ * [channel, level] or [channel, level, custom]. Per-channel transmit power.
+ * Only takes on an assigned channel, so the bridge holds the requested level
+ * and reapplies it after each successful assign. The third byte is an
+ * extension of this firmware's and is read only when the level carries
+ * RADIO_TX_POWER_LVL_CUSTOM: that level names a raw radio register value and
+ * there is nowhere else on the wire to put one, so without it the custom
+ * level silently means register 0. No retail stick sends three bytes and none
+ * needs to - a two-byte message means exactly what it always did. [bridge,
+ * readme]
  */
 #define ANTW_MESG_CHANNEL_RADIO_TX_POWER_ID                  0x60
 

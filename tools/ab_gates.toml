@@ -186,6 +186,37 @@ required = true
 # the least chance of being recoverable after sdk-ant access lapses.
 max_delta_db = 1.0
 
+# How the dB was applied. Every method here measures the same knee; none of them
+# is comparable to another, because each carries its own systematic offset - an
+# inline attenuator adds connector loss, a distance measurement carries whatever
+# the room reflects, and a transmit-power ladder carries the part's own power
+# accuracy. `ant_ab.py` refuses a comparison across two methods rather than
+# converting between them, and `rig.link.sensitivity_method` is recorded so that
+# `require_same_rig` refuses the whole sitting before any gate is reached.
+#
+# `tx_ladder` is `tools/ant_sens.py`: the master's transmit power is stepped
+# down until the receiver misses 5 %, which is the same attenuation applied at
+# the other end of the link. It exists because the other two are hardware this
+# bench does not have, and it is not the closed sweep of the dongle's own
+# transmit power against loss at high SNR - that one measured the transmitter,
+# this one measures the receiver. The tool's header says so at length for the
+# next person who reads the memory and reaches for the stop button.
+methods = ["inline_attenuator", "fixed_open_air", "tx_ladder"]
+
+# Phase 0's gate on the instrument rather than on the firmware.
+#
+# `tools/ant_sens.py --repeat 2` runs the whole ladder twice without touching
+# the rig, and the two 5 %-loss points must land within this many dB. They are
+# the same measurement of the same thing, so any disagreement is the
+# instrument's own noise - and an instrument whose repeat is worse than the
+# 1 dB above cannot grade a 1 dB claim at all. When this fails, the phases that
+# rest on a dB figure have no gate; that is a reason to fix the instrument, not
+# a reason to widen this number.
+#
+# Same value as max_delta_db and not a coincidence: a gate cannot be tighter
+# than the instrument that reads it.
+repeat_max_delta_db = 1.0
+
 [gates.scale]
 enabled = true
 

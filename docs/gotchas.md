@@ -112,3 +112,22 @@ from the outside.
   already carry their weight: scan mode and LED are both reported off, which is
   why Zwift never sends `0x5B`/`0x68` even though it has the calls. Anything
   advertised *and* unimplemented is a trap of the kind above.
+- **A USB 3.0 port can deafen the dongle by 10-20 dB, and it looks exactly like
+  a flat sensor battery.** USB 3.0 SuperSpeed signalling puts broadband noise
+  right across 2.4 GHz, and a dongle plugged directly into such a port - or into
+  a hub sitting next to one - sits in it. The receiver is not broken and the
+  sensor is not broken; the noise floor has come up under both, and every
+  symptom is "it stopped pairing". A USB 2.0 port, or six inches of extension
+  cable, is often the entire fix.
+
+  This was invisible until Phase 3 of the RF work, and it is now measurable
+  without any equipment. A `core` build logs a `noise rf=... floor=... busy=...`
+  line once a minute, sampled from receive windows that heard nothing, which is
+  exactly the population whose level IS the noise floor. **The number to compare
+  is `floor`**, the 10th percentile; `busy` is the 90th and says how bursty the
+  band is rather than how deaf the receiver is. Read it over the log VCOM -
+  **which needs DTR asserted** - or with `scripts/read_flash_log.ps1`.
+
+  The comparison is the measurement, not the absolute value: note the floor in
+  one port, move the dongle, wait a minute, note it again. A quiet bench sits
+  near the part's stated floor; a bad port moves it visibly and immediately.

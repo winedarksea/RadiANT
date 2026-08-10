@@ -463,6 +463,10 @@ static const struct radiant_radio_caps radiant_nrf_caps = {
 	.has_sync_timestamp  = true,
 	.has_rssi            = true,
 	.crc_in_hw           = true,
+	/* RXCRC holds the CRC as received, not merely CRCSTATUS's pass/fail
+	 * bit, so the core can form an error syndrome and repair a single
+	 * flipped bit. The register is documented on both nRF52 and nRF54L. */
+	.has_rx_crc          = true,
 
 	.tx_power_min_dbm    = -40,
 	.tx_power_max_dbm    = 8,
@@ -639,6 +643,19 @@ static struct {
 	bool         terminal_sent;
 
 	/*
+	 * Whether this receive window has delivered a frame - of either status.
+	 *
+	 * It exists for the noise floor and for nothing else. A window that
+	 * heard nothing is a measurement of what the band sounds like when
+	 * nobody is transmitting; a window that heard something is a
+	 * measurement of whoever transmitted, and RSSISAMPLE by then holds the
+	 * packet's own level rather than the band's. One bool separates the two
+	 * populations, and without it every noise sample from a busy channel
+	 * would be a transmitter's signal strength wearing the wrong name.
+	 */
+	bool         rx_any;
+
+	/*
 	 * The t_sync a transmit ASKED for, kept so the interrupt can compare it
 	 * against the t_sync the hardware actually captured.
 	 *
@@ -666,6 +683,23 @@ static struct {
 	nrfx_gppi_handle_t conn_start;    /* CC_START -> TASKS_RXEN */
 	nrfx_gppi_handle_t conn_start_tx; /* CC_START -> TASKS_TXEN */
 	nrfx_gppi_handle_t conn_close;
+	/*
+	 * RXREADY -> TASKS_RSSISTART: one RSSI sample the instant the receiver
+	 * is live, before anything can have transmitted into the window.
+	 *
+	 * The existing ADDRESS -> RSSISTART short samples when a packet arrives,
+	 * which means a window that hears nothing never samples at all - and a
+	 * window that hears nothing is precisely the one whose level is the
+	 * noise floor. RXREADY rather than the start compare because the sample
+	 * has to be taken after ramp-up: at the compare the receiver is not on
+	 * yet and the number would be meaningless.
+	 *
+	 * There is no contention with the per-packet value. RSSISTART takes one
+	 * shot, so a window that goes on to receive something overwrites this
+	 * sample with the packet's own on ADDRESS - and that window is not one
+	 * the noise floor wants a sample from anyway.
+	 */
+	nrfx_gppi_handle_t conn_rssi;
 	bool               conn_ok;
 } radiant_op;
 
@@ -1238,9 +1272,10 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	radiant_clock.last = 0;
 
 	/*
-	 * Three connections, allocated once and kept: ADDRESS -> capture (the
-	 * t_sync path, always live), and the two window edges, which are
-	 * enabled and disabled per operation rather than reallocated.
+	 * Five connections, allocated once and kept: ADDRESS -> capture (the
+	 * t_sync path, always live), the three window edges, which are enabled
+	 * and disabled per operation rather than reallocated, and
+	 * RXREADY -> RSSISTART for the noise floor.
 	 */
 	if (nrfx_gppi_conn_alloc(
 		    nrf_radio_event_address_get(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS),
@@ -1261,7 +1296,12 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 		    nrf_timer_event_address_get(TIMER_ADDR,
 						nrf_timer_compare_event_get(CC_CLOSE)),
 		    nrf_radio_task_address_get(NRF_RADIO, NRF_RADIO_TASK_DISABLE),
-		    &radiant_op.conn_close) < 0) {
+		    &radiant_op.conn_close) < 0 ||
+	    nrfx_gppi_conn_alloc(
+		    nrf_radio_event_address_get(NRF_RADIO, NRF_RADIO_EVENT_RXREADY),
+		    nrf_radio_task_address_get(NRF_RADIO,
+					       NRF_RADIO_TASK_RSSISTART),
+		    &radiant_op.conn_rssi) < 0) {
 		LOG_ERR("no free (D)PPI connections");
 		return RADIANT_RADIO_EIO;
 	}
@@ -1671,6 +1711,7 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	radiant_op.stop_on_first   = (req->flags & RADIANT_RX_STOP_ON_FIRST) != 0u;
 	radiant_op.report_crc_fail = (req->flags & RADIANT_RX_REPORT_CRC_FAIL) != 0u;
 	radiant_op.terminal_sent   = false;
+	radiant_op.rx_any          = false;
 
 	/*
 	 * SHORTS keeps the receiver armed across packets with no software in
@@ -1686,6 +1727,11 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_END);
 	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS);
 	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_DISABLED);
+	/* Cleared here as well as the three above, because a (D)PPI connection
+	 * fires on the event flag rather than on an edge: a stale RXREADY left
+	 * over from a previous window would trigger RSSISTART before this one's
+	 * receiver is live, and the sample would be of nothing. */
+	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_RXREADY);
 
 	/*
 	 * Both edges of the window in hardware. The open is a compare firing
@@ -1724,6 +1770,11 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	/* The endpoints were wired at init; only the enable is per operation. */
 	nrfx_gppi_conn_enable(radiant_op.conn_start);
 	nrfx_gppi_conn_enable(radiant_op.conn_close);
+	/* Receive only. A transmit ramps up through TXREADY and never raises
+	 * RXREADY, so leaving this on would cost nothing - but it is enabled
+	 * and disabled with the other two so that "which connections are live"
+	 * has one answer rather than an exception. */
+	nrfx_gppi_conn_enable(radiant_op.conn_rssi);
 
 	radiant_op.id = radiant_op.next_id++;
 	if (radiant_op.next_id == 0u) {
@@ -1765,12 +1816,13 @@ int radiant_radio_abort(void)
 	}
 
 	/* Take the operation's hardware edges away first, or a compare can
-	 * re-fire against an operation that has already been retired. All three
+	 * re-fire against an operation that has already been retired. All four
 	 * unconditionally: which are live depends on the kind, and disabling a
 	 * channel that was not enabled costs a register write. */
 	nrfx_gppi_conn_disable(radiant_op.conn_start);
 	nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
 	nrfx_gppi_conn_disable(radiant_op.conn_close);
+	nrfx_gppi_conn_disable(radiant_op.conn_rssi);
 	nrf_radio_shorts_set(NRF_RADIO, 0);
 	nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_STOP);
 	irq_unlock(key);
@@ -1923,6 +1975,7 @@ static void deliver_terminal(enum radiant_radio_status st)
 	nrfx_gppi_conn_disable(radiant_op.conn_start);
 	nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
 	nrfx_gppi_conn_disable(radiant_op.conn_close);
+	nrfx_gppi_conn_disable(radiant_op.conn_rssi);
 	nrf_radio_shorts_set(NRF_RADIO, 0);
 
 	radiant_op.kind = OP_NONE;
@@ -1947,6 +2000,44 @@ static void deliver_terminal(enum radiant_radio_status st)
 		evt.status = st;
 		evt.t_sync = radiant_radio_now();
 		evt.t_sync_exact = false;
+
+		/*
+		 * The noise floor: RSSI measured inside this window with no
+		 * packet present.
+		 *
+		 * Three conditions, and each one is doing work.
+		 *
+		 * TIMEOUT, not ABORTED. A window that ran to its own close
+		 * definitely ramped up, so RXREADY fired and the (D)PPI took a
+		 * sample from THIS window. One aborted before its start compare
+		 * never ramped up at all, and RSSISAMPLE would still hold a
+		 * previous window's value - the register has no "invalid", so
+		 * the only defence is not reading it when it cannot be fresh.
+		 *
+		 * Nothing received. A window that heard something has had
+		 * RSSISAMPLE overwritten by the ADDRESS short with the packet's
+		 * own level, which is the transmitter's strength and the
+		 * opposite of what this field means.
+		 *
+		 * The same errata and temperature correction as rssi_dbm, so
+		 * the two are on one scale and can be subtracted to get a
+		 * margin. Correcting one and not the other would produce a
+		 * margin that is wrong by exactly the correction and looks
+		 * entirely reasonable.
+		 */
+		if (st == RADIANT_RADIO_STATUS_TIMEOUT && !radiant_op.rx_any) {
+			int8_t raw_dbm = (int8_t)(-(int32_t)
+				(NRF_RADIO->RSSISAMPLE & 0x7Fu));
+
+#if RSSI_TEMP_CORR_PRESENT
+			evt.noise_dbm = (int8_t)(raw_dbm -
+				rssi_temp_corr_get(rssi_temp_cache_c));
+#else
+			evt.noise_dbm = raw_dbm;
+#endif
+			evt.has_noise = true;
+		}
+
 		radiant_op.cbs->rx(&evt, radiant_op.user);
 	}
 }
@@ -2020,6 +2111,12 @@ static void radio_isr(const void *arg)
 			if (crc_ok) {
 				radiant_dbg_ok++;
 			}
+			/* Before the report_crc_fail gate, deliberately. A
+			 * window whose CRC failures are suppressed still HEARD
+			 * something, and its RSSISAMPLE is that something's
+			 * level rather than the band's - so it must not
+			 * contribute a noise sample either way. */
+			radiant_op.rx_any = true;
 			if (crc_ok || radiant_op.report_crc_fail) {
 				memset(&evt, 0, sizeof(evt));
 				evt.op = radiant_op.id;
@@ -2040,6 +2137,30 @@ static void radio_isr(const void *arg)
 				evt.body = radiant_rx_buf;
 				evt.body_len = radiant_op.body_len;
 				evt.has_rssi = true;
+
+				/*
+				 * The CRC as it arrived, on failures only.
+				 *
+				 * RXCRC latches what the engine computed over
+				 * the received bytes... which is the same thing
+				 * as what arrived, because on a mismatch the
+				 * hardware keeps the RECEIVED value here rather
+				 * than the computed one - that is what the
+				 * register is for. The core needs it to form
+				 * crc_rx ^ crc_computed, which is the error
+				 * syndrome; without it a CRC failure carries no
+				 * information beyond "failed".
+				 *
+				 * Not populated on OK, and deliberately so: a
+				 * frame that passed has a CRC the core can
+				 * recompute, and a field that is sometimes the
+				 * received value and sometimes the computed one
+				 * is a field nobody can reason about.
+				 */
+				if (!crc_ok) {
+					evt.has_crc_rx = true;
+					evt.crc_rx = NRF_RADIO->RXCRC;
+				}
 				{
 					int8_t raw_dbm = (int8_t)(-(int32_t)
 						(NRF_RADIO->RSSISAMPLE & 0x7Fu));

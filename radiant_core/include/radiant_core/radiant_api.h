@@ -130,6 +130,52 @@ struct radiant_api_stats {
 	 * than merely logged.
 	 */
 	uint32_t xfer_watchdogs;
+	/*
+	 * Frames that failed their CRC on a tracked window and were recovered
+	 * by flipping one bit back (CONFIG_RADIANT_CORE_CRC_REPAIR).
+	 *
+	 * COUNTED SEPARATELY AND NEVER FOLDED INTO A CLEAN RECEIVE, which is
+	 * the point of having it. A repaired frame is a frame that arrived
+	 * damaged, and roughly one in 585 unrepairable frames will have hit a
+	 * valid syndrome by chance and been "repaired" into something still
+	 * wrong. At full signal this must be zero; if it is not, the link is
+	 * marginal and any A/B reading loss alone would show an improvement
+	 * that is really a different measurement.
+	 */
+	uint32_t crc_repaired;
+	/*
+	 * Tracked-window CRC failures that no single flipped bit explains. The
+	 * pair is what says whether the feature is earning anything: repaired
+	 * against unrepairable is the shape of the error distribution at
+	 * whatever signal level the bench is running at.
+	 */
+	uint32_t crc_unrepairable;
+	/*
+	 * Repairs that produced a syndrome-valid frame which the receiver then
+	 * refuted on evidence outside the CRC: a control byte that has never
+	 * been on the air, or a transmission type that is not this channel's.
+	 *
+	 * These are caught mis-repairs, so a non-zero value here is the feature
+	 * working rather than failing - and the ratio against crc_repaired is
+	 * the only direct measurement anyone gets of how often a repair lands
+	 * on the wrong bit. Whatever fraction slips past both checks lands in
+	 * the payload, where nothing at this layer can judge it.
+	 */
+	uint32_t crc_repair_refuted;
+	/*
+	 * Repairs refuted by radiant_profile_sanity.c
+	 * (CONFIG_RADIANT_CORE_PROFILE_SANITY): a syndrome-valid,
+	 * control-byte-valid, transmission-type-valid repair whose payload
+	 * is still a physically impossible reading - 4000 W, a 300 bpm
+	 * heart rate.
+	 *
+	 * Counted apart from crc_repair_refuted, not folded into it, because
+	 * the two checks catch mis-repairs by different evidence (frame
+	 * structure the receiver already knew, versus what the payload
+	 * bytes mean) and an A/B distinguishing them tells you which
+	 * refutation is actually earning its keep.
+	 */
+	uint32_t crc_repair_implausible;
 };
 
 const struct radiant_api_stats *radiant_api_stats_get(void);

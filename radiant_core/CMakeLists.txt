@@ -60,7 +60,24 @@ zephyr_library_sources(
   src/radiant_event.c
   src/radiant_ack.c
   src/radiant_burst.c
+  src/radiant_noise.c
 )
+
+# Single-bit CRC repair. Compiled unconditionally rather than behind its own
+# Kconfig symbol, and the ~1 KB it costs is worth what it buys: the unit-test
+# application can exercise the arithmetic whether or not a given build turns
+# the feature on, so the syndrome table's duplicate check runs in CI on every
+# build instead of only on the ones that opted in. CONFIG_RADIANT_CORE_CRC_REPAIR
+# gates the CALL SITE in src/radiant_api.c, which is where the false-accept
+# trade-off is actually taken.
+zephyr_library_sources(src/radiant_crc_repair.c)
+
+# The third refutation for a repaired frame: is the payload a physically
+# possible reading, for the handful of device types where that is decidable
+# from one frame. Compiled unconditionally for the same reason as
+# radiant_crc_repair.c above; CONFIG_RADIANT_CORE_PROFILE_SANITY gates the
+# call site in src/radiant_api.c.
+zephyr_library_sources(src/radiant_profile_sanity.c)
 
 # The antr_* adapter. Kconfig-gated because it is the one file here that
 # includes an application header; see RADIANT_CORE_ANTR_API.

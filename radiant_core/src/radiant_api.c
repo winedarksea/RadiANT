@@ -108,8 +108,11 @@
 
 #include <radiant_core/radiant_api.h>
 #include <radiant_core/radiant_channel.h>
+#include <radiant_core/radiant_crc_repair.h>
 #include <radiant_core/radiant_event.h>
 #include <radiant_core/radiant_frame.h>
+#include <radiant_core/radiant_noise.h>
+#include <radiant_core/radiant_profile_sanity.h>
 #include <radiant_core/radiant_radio_hal.h>
 #include <radiant_core/radiant_sched.h>
 #include <radiant_core/radiant_search.h>
@@ -186,47 +189,47 @@ BUILD_ASSERT(RADIANT_CHANNEL_COUNT == (ANTW_BURST_HEADER_CHANNEL_MASK + 1),
 #define API_ID_LIST_BYTES 4u /* [devnum_lo][devnum_hi][dtype][ttype] */
 
 /*
- * ANT's LF clock tolerance, worst case, restated from radiant_channel.h so the
- * BUILD_ASSERT below has a named number to check against rather than a bare
- * 25u a future edit could change without noticing what it was guarding.
- * +/-50 ppm at each end is +/-100 ppm relative; over one
- * RADIANT_CHANNEL_PERIOD_ANT_PLUS period (~249.7 ms) that is +/-25 us - a BUDGET,
- * not headroom: this bench's own master sits exactly on it, with nothing
- * spare between "typical" and "worst case" (docs/ant-radio-link.md,
- * docs/sdk-ant-comparison.md item 3).
- */
-#define API_SLOT_DRIFT_WORST_US 25u
-
-/*
  * Half-width of a tracked channel's receive window, in microseconds.
  *
- * This is a guard against OUR OWN drift and clock error, not against a sloppy
- * master - but "our own drift and clock error" is bounded by the same spec
- * figure, and it COMPOUNDS across consecutive missed slots:
- * radiant_channel_on_slot_missed() extrapolates one more period per miss with
- * no fresh sync, so by the time a window is armed after N consecutive misses
- * it must cover up to N * API_SLOT_DRIFT_WORST_US of additional worst-case
- * disagreement. The BUILD_ASSERT below is that check, made permanent: 400 us
- * covers RADIANT_CHANNEL_RX_FAIL_TO_SEARCH (8) consecutive misses at this
- * spec's worst case with margin to spare, and stays comfortably inside
- * RADIANT_SCHED_MERGE_SPAN_MAX_US, so two tracked channels asking for nearby
- * instants can still merge into one hardware window - which is the whole
- * return on the scheduler. radiant_sched.c subtracts caps.ramp_up_us and
- * caps.min_arm_lead_us itself; nothing backend-specific belongs here.
+ * THIS IS NO LONGER THE NUMBER USED. radiant_channel_guard_us() is, and the
+ * reasoning for it is on that function's declaration: the guard below is the
+ * spec's worst case compounded over eight misses, and the residual this bench
+ * measures is 9 us, so every tracked slot was buying 800 us of receive to cover
+ * about nine microseconds of real error.
+ *
+ * The constant survives as the ceiling and as the answer whenever the estimator
+ * has nothing to say - a channel that is not tracking, one that has just
+ * acquired, one that has just been sent back to search. It lives in
+ * radiant_channel.h now, because the module that estimates the residual is the
+ * module that has to be able to clamp against it.
  */
-#define API_SLOT_GUARD_US 400u
+#define API_SLOT_GUARD_US RADIANT_CHANNEL_GUARD_MAX_US
 
 /*
- * The invariant the two comments above describe, checked rather than merely
- * claimed. If RADIANT_CHANNEL_RX_FAIL_TO_SEARCH grows, or the guard shrinks,
- * this is what catches a channel that could lose its window on the last
- * miss before falling back to search - silently, since a lost window at that
- * point looks identical to the master having gone quiet.
+ * The two invariants the guard rests on, checked rather than merely claimed.
+ *
+ * The first is the original one: if RADIANT_CHANNEL_RX_FAIL_TO_SEARCH grows, or
+ * the ceiling shrinks, a channel could lose its window on the last miss before
+ * falling back to search - silently, since a lost window at that point looks
+ * identical to the master having gone quiet.
+ *
+ * The second is what the adaptive guard added. The narrow path pays for
+ * extrapolated periods one at a time (miss_count * DRIFT_WORST) on top of the
+ * floor, which only adds up to the ceiling's coverage if the floor itself
+ * covers the one period that is never charged - the one being received. A floor
+ * below the per-period worst case would make the narrow guard's arithmetic
+ * quietly weaker than the wide one's, which is precisely the mistake that has
+ * no error code.
  */
-BUILD_ASSERT(API_SLOT_GUARD_US >=
-	     (uint32_t)RADIANT_CHANNEL_RX_FAIL_TO_SEARCH * API_SLOT_DRIFT_WORST_US,
-	     "the tracked-channel guard no longer covers worst-case LF clock "
-	     "drift across every consecutive miss up to RX_FAIL_TO_SEARCH");
+BUILD_ASSERT(RADIANT_CHANNEL_GUARD_MAX_US >=
+	     (uint32_t)RADIANT_CHANNEL_RX_FAIL_TO_SEARCH *
+		     RADIANT_CHANNEL_DRIFT_WORST_US,
+	     "the tracked-channel guard ceiling no longer covers worst-case LF "
+	     "clock drift across every consecutive miss up to RX_FAIL_TO_SEARCH");
+BUILD_ASSERT(RADIANT_CHANNEL_GUARD_MIN_US >= RADIANT_CHANNEL_DRIFT_WORST_US,
+	     "the adaptive guard's floor no longer covers one period of "
+	     "worst-case LF clock drift, so a narrowed window is weaker than "
+	     "the wide one it replaced");
 
 /*
  * Extended assignment bit that puts a channel into background scanning mode.
@@ -240,6 +243,16 @@ BUILD_ASSERT(API_SLOT_GUARD_US >=
  * request against protocol/ant_wire.yaml is in this wave's report.
  */
 #define API_EXT_ASSIGN_BACKGROUND_SCAN 0x01u
+
+/*
+ * How often the noise floor is logged, in microseconds.
+ *
+ * Sixty seconds. Long enough that a searching dongle has put a few hundred
+ * empty windows through the histogram, which is what a 10th percentile needs to
+ * mean anything; short enough that moving the dongle to another USB port and
+ * waiting produces an answer while somebody is still standing there.
+ */
+#define API_NOISE_REPORT_US 60000000u
 
 /*
  * The event thread. 1280 bytes covers radiant_event_drain()'s frame - one queued
@@ -426,6 +439,33 @@ static uint8_t api_crypto_key[API_CRYPTO_KEYS][ANTW_ENCRYPTION_KEY_SIZE];
 static uint32_t api_op_next = 1u;
 static uint8_t  api_search_slot = RADIANT_SCHED_CH_NONE;
 static bool     api_inited;
+
+/*
+ * Whether this build repairs single-bit CRC errors, and whether the backend
+ * under it can supply what that needs.
+ *
+ * Resolved once by api_crc_repair_setup() at antr_init() rather than tested per
+ * frame, because all three conditions - the Kconfig symbol, the syndrome table
+ * having built cleanly, and the backend keeping the CRC it received - are fixed
+ * for the life of the image, and a per-frame test of a constant reads as if one
+ * of them might change.
+ *
+ * It is read in two places and they must agree: api_post_track_rx() asks the
+ * backend to deliver CRC failures at all, and api_sched_rx() acts on them. One
+ * without the other is either a repair path with nothing to repair or a stream
+ * of events nobody consumes.
+ */
+static bool api_crc_repair_on;
+
+/*
+ * Whether a repaired frame is additionally checked against
+ * radiant_profile_sanity.c before delivery. Resolved once alongside
+ * api_crc_repair_on, for the same reason, and it can only ever be true when
+ * that one is: Kconfig makes RADIANT_CORE_PROFILE_SANITY depend on
+ * RADIANT_CORE_CRC_REPAIR, and api_tracked_frame() only ever reaches the
+ * check inside `if (crc_failed)`.
+ */
+static bool api_profile_sanity_on;
 
 static struct radiant_api_stats api_stats;
 
@@ -1191,6 +1231,7 @@ static void api_post_track_rx(uint8_t ch)
 	struct radiant_channel_id id;
 	struct radiant_sched_rx   req;
 	radiant_time_t            t = radiant_channel_next_slot(ch);
+	radiant_time_t            guard;
 	int                   n;
 
 	if (t == RADIANT_TIME_NEVER) {
@@ -1215,10 +1256,29 @@ static void api_post_track_rx(uint8_t ch)
 	req.rf_index = api_rf_of(ch);
 	req.filters = &api_ch[ch].filter;
 	req.n_filters = 1u;
-	req.t_open = (t > (radiant_time_t)API_SLOT_GUARD_US)
-			     ? (t - (radiant_time_t)API_SLOT_GUARD_US)
-			     : 0u;
-	req.t_close = t + (radiant_time_t)API_SLOT_GUARD_US;
+	/*
+	 * Per channel and per slot, not the old constant. A channel whose master
+	 * has been measured gets a window sized from that measurement; one that
+	 * has just acquired, or has started missing slots, gets the wide one
+	 * back automatically. Never zero and never above the old constant, so
+	 * nothing downstream - including the scheduler's merge span - sees a
+	 * span it did not see before.
+	 */
+	guard = (radiant_time_t)radiant_channel_guard_us(ch);
+	req.t_open = (t > guard) ? (t - guard) : 0u;
+	req.t_close = t + guard;
+	/*
+	 * Ask for CRC failures only when something is going to do work with
+	 * them. The flag is per-window in the HAL, so a merged window inherits
+	 * it from whichever channel asked - which is harmless here, because
+	 * every channel sharing a tracked window is tracked and the scheduler
+	 * routes each event to the one channel whose filter matched.
+	 *
+	 * Off by default it stays exactly what it was: the backend suppresses
+	 * these events, and a quiet room's ~1.4 noise triggers a second never
+	 * cross the HAL boundary at all.
+	 */
+	req.report_crc_fail = api_crc_repair_on;
 	/*
 	 * A request, not a guarantee: the HAL forbids STOP_ON_FIRST on a merged
 	 * window and the scheduler drops it when this window turns out to carry
@@ -1502,7 +1562,43 @@ static void api_pump_locked(void)
  */
 
 /* Decode a frame that arrived on a tracked window and do whatever it is. */
-static void api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt)
+static void api_crc_repair_setup(void)
+{
+	const struct radiant_radio_caps *caps = radiant_radio_caps_get();
+
+	api_crc_repair_on = false;
+
+#if defined(CONFIG_RADIANT_CORE_CRC_REPAIR)
+	if (caps == NULL || !caps->has_rx_crc) {
+		LOG_WRN("CRC repair is enabled but this backend reports no "
+			"received CRC; the feature is inert");
+		return;
+	}
+	if (!radiant_crc_repair_init()) {
+		/* Two single-bit errors sharing a syndrome, which CRC-16/CCITT
+		 * over a frame this short cannot produce. So this means the
+		 * polynomial or the frame geometry changed and the table is no
+		 * longer a bijection - refusing to repair beats repairing to a
+		 * coin toss. */
+		LOG_ERR("CRC repair table is not a bijection; repair disabled");
+		return;
+	}
+	api_crc_repair_on = true;
+	LOG_INF("CRC repair: on, tracked windows only");
+
+#if defined(CONFIG_RADIANT_CORE_PROFILE_SANITY)
+	api_profile_sanity_on = true;
+	LOG_INF("CRC repair: profile sanity on (bpwr>%uW, hr>%ubpm dropped)",
+		(unsigned)RADIANT_PROFILE_SANITY_BPWR_MAX_WATTS,
+		(unsigned)RADIANT_PROFILE_SANITY_HR_MAX_BPM);
+#endif
+#else
+	(void)caps;
+#endif
+}
+
+static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
+			      bool crc_failed)
 {
 	struct radiant_channel_id id;
 	struct radiant_frame_wire w;
@@ -1512,11 +1608,11 @@ static void api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt)
 	int                   rc;
 
 	if (radiant_channel_id_get(ch, &id) != RADIANT_CH_OK) {
-		return;
+		return false;
 	}
 	if (evt->body == NULL || evt->body_len == 0u ||
 	    (size_t)evt->body_len > sizeof(w.body)) {
-		return;
+		return false;
 	}
 
 	/*
@@ -1531,15 +1627,111 @@ static void api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt)
 	n = radiant_frame_addr(RADIANT_FRAME_CFG_TRACKING, api_net_addr_for(ch), &id,
 			   w.addr, sizeof(w.addr));
 	if (n < 0) {
-		return;
+		return false;
 	}
 	w.addr_len = (uint8_t)n;
 	memcpy(w.body, evt->body, evt->body_len);
 	w.body_len = evt->body_len;
 
+	/*
+	 * The repair, here rather than at the call site, because here is where
+	 * the address and the body exist side by side - and the CRC covers
+	 * both, so a syndrome cannot be formed anywhere else without rebuilding
+	 * the address a second time.
+	 *
+	 * Only ever reached for a frame the caller has already established is
+	 * on a tracked window with the feature on and the backend reporting a
+	 * received CRC. radiant_crc_repair() checks the configuration again for
+	 * itself; see its header for why that duplication is deliberate.
+	 */
+	if (crc_failed) {
+		rc = radiant_crc_repair(RADIANT_FRAME_CFG_TRACKING, w.addr,
+					w.addr_len, w.body, w.body_len,
+					evt->crc_rx);
+		if (rc != RADIANT_CRC_REPAIR_BODY &&
+		    rc != RADIANT_CRC_REPAIR_IN_CRC) {
+			api_stats.crc_unrepairable++;
+			LOG_DBG("crc repair ch=%u rc=%d", (unsigned)ch, rc);
+			return false;
+		}
+	}
+
 	if (radiant_frame_decode(RADIANT_FRAME_CFG_TRACKING, &w, RADIANT_FRAME_TRUSTED_CRC,
 			     &f) != RADIANT_FRAME_OK) {
-		return;
+		if (crc_failed) {
+			/*
+			 * A repair that produced a frame the codec refuses.
+			 *
+			 * This is free refutation and it is worth counting
+			 * separately. A mis-repair lands on a uniformly random
+			 * one of the reachable bit positions, and 8 of the 80
+			 * body bits are the control byte - of whose 256 values
+			 * exactly 11 have ever been on the air. So a mis-repair
+			 * into that byte is rejected here about 96 % of the
+			 * time, by a check that already existed for other
+			 * reasons.
+			 */
+			api_stats.crc_repair_refuted++;
+		}
+		return false;
+	}
+
+	/*
+	 * The second free refutation, and the one the codec cannot make:
+	 * transmission type.
+	 *
+	 * Byte 0 of a tracked body is the transmission type, and this channel
+	 * knows which one it is looking for whenever that is not a wildcard -
+	 * the address match cannot prove it, because trans_type is in the body
+	 * rather than in the matched address. A repaired frame whose trans_type
+	 * disagrees with the channel's is a repair that landed on the wrong
+	 * bit, refuted by information the receiver already had.
+	 *
+	 * APPLIED TO REPAIRED FRAMES ONLY. A clean frame that disagrees here is
+	 * a fact about the air - a shared channel, or a sensor whose
+	 * transmission type this host guessed - and dropping it would be a new
+	 * and much worse behaviour than the one being defended against.
+	 */
+	if (crc_failed && id.trans_type != 0u &&
+	    f.payload_len > 0u && w.body[0] != id.trans_type) {
+		api_stats.crc_repair_refuted++;
+		LOG_DBG("crc repair ch=%u refuted: ttype %u != %u", (unsigned)ch,
+			(unsigned)w.body[0], (unsigned)id.trans_type);
+		return false;
+	}
+
+	/*
+	 * The third refutation, and the only one that reads the payload
+	 * itself. radiant_profile_sanity.c knows nothing about frames or
+	 * transmission types - only that an instantaneous power above
+	 * 3000 W or a heart rate above 240 bpm describes no rider or heart
+	 * that exists, for the two device types where that is decidable
+	 * from a single frame. See radiant_profile_sanity.h for why that
+	 * knowledge lives outside the frame codec, and why this call is
+	 * reached only when crc_failed - the same guard as the two checks
+	 * above, and load-bearing for the same reason: a clean frame this
+	 * implausible is a fact about the sensor, not evidence of a
+	 * mis-repair, and must never be dropped.
+	 */
+	if (crc_failed && api_profile_sanity_on &&
+	    radiant_profile_sanity_implausible(id.device_type, f.payload,
+						f.payload_len)) {
+		api_stats.crc_repair_implausible++;
+		LOG_DBG("crc repair ch=%u refuted: implausible payload for "
+			"device type %u", (unsigned)ch,
+			(unsigned)(id.device_type & RADIANT_DEVICE_TYPE_MASK));
+		return false;
+	}
+
+	if (crc_failed) {
+		/*
+		 * Counted here and not at the repair, so the number means
+		 * "repaired AND delivered". Counting at the repair would fold
+		 * in every frame the three refutations above then threw away, and
+		 * the statistic exists precisely so that a repaired frame is
+		 * never confused with a clean one.
+		 */
+		api_stats.crc_repaired++;
 	}
 
 	/*
@@ -1596,6 +1788,8 @@ static void api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt)
 		 * it and declines to interpret it, and so does this. */
 		break;
 	}
+
+	return true;
 }
 
 static void api_sched_rx(uint8_t ch, uint8_t filter_index,
@@ -1623,9 +1817,47 @@ static void api_sched_rx(uint8_t ch, uint8_t filter_index,
 	}
 
 	if (evt->status != RADIANT_RADIO_STATUS_OK) {
-		/* CRC_FAIL. With eight filters armed the bench sees about 1.4 a
+		/*
+		 * CRC_FAIL. With eight filters armed the bench sees about 1.4 a
 		 * second on a quiet room; it is the noise floor and never
-		 * evidence of anything. */
+		 * evidence of anything.
+		 *
+		 * Except on a tracked window with repair on, where it is the
+		 * opposite: a full 5-byte address matched, so this IS a frame
+		 * from the sensor this channel is tracking, and at the
+		 * sensitivity knee it is almost certainly one flipped bit away
+		 * from being a good one. The three tests below are the same
+		 * ones the repair module would apply, done here so that a
+		 * disabled build has no repair path at all rather than a
+		 * function call that always declines.
+		 */
+		if (!api_crc_repair_on || !evt->has_crc_rx) {
+			return;
+		}
+		if (radiant_channel_op_owner(api_ch[ch].op) != (int)ch) {
+			return;
+		}
+		if (!radiant_transfer_is_idle(&api_xfer[ch])) {
+			/*
+			 * A transfer in flight is not offered repaired frames,
+			 * and that is a scope decision rather than an
+			 * impossibility. radiant_transfer.c is arming an
+			 * acknowledgement inside a 1.55 ms turnaround off the
+			 * back of this event; handing it a frame that had to be
+			 * corrected first widens that path for the least
+			 * valuable case - a burst already retries. Broadcast is
+			 * where the sensitivity lives.
+			 */
+			return;
+		}
+		if (api_tracked_frame(ch, evt, true)) {
+			/* The slot WAS heard: the master transmitted, the
+			 * address matched, and the frame has been recovered.
+			 * Counting it as a miss would send a working channel
+			 * back to search on a link this feature exists to
+			 * rescue. */
+			api_ch[ch].slot_heard = true;
+		}
 		return;
 	}
 
@@ -1669,7 +1901,7 @@ static void api_sched_rx(uint8_t ch, uint8_t filter_index,
 		return;
 	}
 
-	api_tracked_frame(ch, evt);
+	(void)api_tracked_frame(ch, evt, false);
 }
 
 static void api_sched_tx(uint8_t ch, const struct radiant_tx_event *evt, void *user)
@@ -2253,6 +2485,50 @@ static void api_housekeep(void)
 	api_pump_locked();
 	api_stats.housekeeps++;
 
+	/*
+	 * The noise floor, once per interval, per frequency.
+	 *
+	 * Nothing reads these numbers but a human. The single most common real
+	 * 2.4 GHz dongle failure that is not in docs/gotchas.md is USB 3.0
+	 * broadband noise desensing the receiver by 10-20 dB, and today that is
+	 * indistinguishable from a flat sensor battery. One line a minute makes
+	 * it a measurement: move the dongle from a USB 2.0 port to a USB 3.0
+	 * one and watch the floor rise.
+	 *
+	 * Reported at INF rather than DBG because the whole value is being
+	 * readable on an ordinary bench log - through the log VCOM, which needs
+	 * DTR asserted, or through scripts/read_flash_log.ps1.
+	 *
+	 * Cleared after reporting, so each line describes its own interval. A
+	 * histogram that accumulates for ever converges and stops responding,
+	 * and responding is the point.
+	 */
+	{
+		static radiant_time_t noise_last;
+		uint8_t slot;
+
+		if ((radiant_time_t)(now - noise_last) >= API_NOISE_REPORT_US) {
+			noise_last = now;
+			for (slot = 0u; slot < RADIANT_NOISE_SLOTS; slot++) {
+				struct radiant_noise_report r;
+
+				if (!radiant_noise_get(slot, &r)) {
+					continue;
+				}
+				LOG_INF("noise rf=%u n=%u floor=%d busy=%d "
+					"min=%d max=%d clip=%u/%u lost=%u",
+					(unsigned int)r.rf_index,
+					(unsigned int)r.samples, (int)r.floor_dbm,
+					(int)r.busy_dbm, (int)r.min_dbm,
+					(int)r.max_dbm,
+					(unsigned int)r.below_range,
+					(unsigned int)r.above_range,
+					(unsigned int)radiant_noise_unslotted());
+				radiant_noise_clear(slot);
+			}
+		}
+	}
+
 #ifdef CONFIG_RADIANT_CORE_SWEEP_DEBUG
 	/* See RADIANT_CORE_SWEEP_DEBUG: the sweep's rate is invisible from the
 	 * host, and both discovery defects fixed here were found with these. */
@@ -2399,6 +2675,38 @@ antr_err_t antr_init(void)
 		LOG_ERR("radiant_radio_enable: %d", rc);
 		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
 	}
+
+	/*
+	 * The adaptive window guard is only as good as the t_sync it is
+	 * estimated from, and the HAL says outright when that is an inference
+	 * rather than a hardware capture. On such a backend the residual being
+	 * averaged is the backend's own guesswork, not the master's clock, so
+	 * the floor is pinned at the ceiling and the mechanism switches itself
+	 * off - no flag, no branch anywhere else, and no narrowed window sized
+	 * from a number that does not mean what it says.
+	 *
+	 * Otherwise the floor is the core's minimum, raised by the backend's
+	 * timebase granularity: a residual cannot be measured finer than the
+	 * clock it is measured on, and two ticks of slop is the cheapest way to
+	 * say so.
+	 */
+	{
+		const struct radiant_radio_caps *caps = radiant_radio_caps_get();
+		uint32_t floor_us = RADIANT_CHANNEL_GUARD_MIN_US;
+
+		if (caps == NULL || !caps->has_sync_timestamp) {
+			floor_us = RADIANT_CHANNEL_GUARD_MAX_US;
+		} else {
+			floor_us += 2u * (((uint32_t)caps->time_resolution_ns +
+					   999u) / 1000u);
+		}
+		radiant_channel_guard_floor_set((uint16_t)floor_us);
+		LOG_DBG("tracked-window guard: floor %u us, ceiling %u us",
+			(unsigned int)floor_us,
+			(unsigned int)RADIANT_CHANNEL_GUARD_MAX_US);
+	}
+
+	api_crc_repair_setup();
 
 	api_search_cfg_build(&scfg);
 	rc = radiant_search_init(&api_search, &scfg, &api_search_cbs, NULL);

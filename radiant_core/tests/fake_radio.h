@@ -212,6 +212,24 @@ struct fake_radio_air {
 	bool   rssi_set;
 	int8_t rssi_dbm;
 
+	/*
+	 * The CRC as it "arrived", for driving single-bit repair.
+	 *
+	 * Only reaches the event when the frame is delivered as CRC_FAIL and
+	 * caps.has_rx_crc is true - the mock enforces both, because a mock more
+	 * generous than the HAL contract is a mock that lets a contract
+	 * violation pass CI. A test that wants a repairable frame sets
+	 * crc_bad, flips one bit in `bytes`, and puts the ORIGINAL frame's CRC
+	 * here: that is exactly what the air does when a bit flips in flight.
+	 *
+	 * Off by default, so an existing test that produces a CRC failure
+	 * produces one carrying no CRC - which is the honest picture of a
+	 * backend that cannot report one, and keeps every such test testing
+	 * what it always did.
+	 */
+	bool     crc_rx_set;
+	uint32_t crc_rx;
+
 	enum fake_radio_match match;
 	uint8_t               filter_index; /* MATCH_INDEX / MATCH_NOISE only */
 };
@@ -293,8 +311,26 @@ struct fake_radio_event {
 	uint8_t                  body_len;
 	bool                     has_rssi;
 	int8_t                   rssi_dbm;
+	bool                     has_crc_rx;
+	uint32_t                 crc_rx;
 	bool                     late;   /* injected for an operation that ended */
 };
+
+/*
+ * What a window that hears nothing reports as the band's level.
+ *
+ * Off until set: an unset noise floor means every terminal event carries
+ * has_noise false, which is what a backend that cannot measure one does and is
+ * what every test written before this existed expects.
+ *
+ * The mock decides for itself whether a given window is eligible - terminal
+ * TIMEOUT, and nothing received inside it - rather than letting a test declare
+ * it. That condition is exactly the one a core module could get wrong in a way
+ * no assertion catches: it would simply be measuring transmitters and calling
+ * the result a noise floor.
+ */
+void fake_radio_set_noise(int8_t dbm);
+void fake_radio_clear_noise(void);
 
 struct fake_radio_stats {
 	uint32_t arms_tx;

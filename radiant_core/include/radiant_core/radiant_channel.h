@@ -270,6 +270,72 @@ typedef uint8_t radiant_channel_err_t;
 #define RADIANT_CHANNEL_RX_FAIL_TO_SEARCH 8u
 
 /* ---------------------------------------------------------------------------
+ * The tracked-window guard
+ *
+ * How wide a slave opens its receive window either side of the t_sync it
+ * predicts. It used to be one constant, sized from the spec's worst case, and
+ * these constants plus radiant_channel_guard_us() are what replaced it. The
+ * reasoning is in the doc comment on that function; the numbers are here so a
+ * build can see them and the _Static_asserts in radiant_api.c can check them.
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * ANT's LF clock tolerance, worst case, as one period's worth of microseconds.
+ *
+ * +/-50 ppm at each end (sdk-ant's compatibility.rst, and not proprietary to
+ * it - any ANT datasheet states the same figure) is +/-100 ppm relative; over
+ * one RADIANT_CHANNEL_PERIOD_ANT_PLUS period (~249.7 ms) that is +/-25 us THAT
+ * PERIOD ALONE could add, with no accumulated drift from a previous miss.
+ *
+ * A BUDGET, NOT HEADROOM. A master built to the tolerance limit sits exactly on
+ * this figure. It is the per-miss term of the guard below for that reason: an
+ * extrapolated period is one whose real error is unmeasured, so it is charged
+ * at the spec bound rather than at what this master has been doing.
+ */
+#define RADIANT_CHANNEL_DRIFT_WORST_US 25u
+
+/*
+ * The widest the guard ever gets, and the value it takes whenever the estimator
+ * has nothing to say: RADIANT_CHANNEL_RX_FAIL_TO_SEARCH * the figure above, with
+ * margin. This was the whole guard before the estimator existed.
+ */
+#define RADIANT_CHANNEL_GUARD_MAX_US 400u
+
+/*
+ * The narrowest the guard ever gets, before radiant_channel_guard_floor_set()
+ * raises it for a backend that needs more.
+ *
+ * DELIBERATELY FAR ABOVE WHAT THE MEASUREMENT JUSTIFIES. The measured residual
+ * on this bench is 0.009 ms - nine microseconds - so eleven times that is not a
+ * tight fit, it is a refusal to fit tightly. The failure mode of a guard that
+ * is too narrow is the silent one radiant_radio_hal.h documents at length: yield
+ * falls at the same order as the collision floor and no error code is raised
+ * anywhere. There is no measurement on this bench that would tell the two
+ * apart, so the floor is set where it does not need one.
+ *
+ * Lower it only against a Phase 0 sensitivity ladder that shows what it costs.
+ */
+#define RADIANT_CHANNEL_GUARD_MIN_US 100u
+
+/*
+ * How many measured residuals the guard is sized at. Four, so an ordinary
+ * excursion to several times the running average is still comfortably inside
+ * the window before the floor is even reached.
+ */
+#define RADIANT_CHANNEL_GUARD_K 4u
+
+/*
+ * Consecutive clean slots before the estimator is allowed to narrow anything.
+ *
+ * An unlocked estimator must never narrow a window: at acquisition the residual
+ * has been measured zero times, and a guard sized from no evidence is a guard
+ * sized from luck. Eight is one EWMA time constant at the 1/8 weight used
+ * below, so by the time it is trusted the average is genuinely an average.
+ */
+#define RADIANT_CHANNEL_GUARD_LOCK_SLOTS 8u
+
+/* ---------------------------------------------------------------------------
  * State
  * ---------------------------------------------------------------------------
  */
@@ -686,31 +752,135 @@ uint8_t radiant_channel_network_get(uint8_t channel);
  * master, the opening edge of its next receive window for a slave.
  * RADIANT_TIME_NEVER when the channel is not on air.
  *
- * radiant_sched.c adds its own guard either side and subtracts caps.ramp_up_us and
- * caps.min_arm_lead_us; those are backend properties and none of them belong
- * here. The guard is about drift and clock error rather than about the master
- * being sloppy: this bench's own master holds its slot to well inside +/-25 us
- * over minutes (docs/ant-radio-link.md), but that bench figure is not the
- * number to size a guard from.
+ * radiant_sched.c subtracts caps.ramp_up_us and caps.min_arm_lead_us; those are
+ * backend properties and none of them belong here. How far either side of this
+ * instant the window reaches is radiant_channel_guard_us() below, and the
+ * argument for that number - including why it is no longer the constant this
+ * paragraph used to describe - is on its declaration.
  *
- * THE SPEC NUMBER IS THE SAME +/-25 US, AND IT IS A BUDGET, NOT HEADROOM.
- * ANT's LF clock tolerance is +/-50 ppm at each end (sdk-ant's
- * compatibility.rst, and not proprietary to it - any ANT datasheet states
- * the same figure); +/-100 ppm relative over one RADIANT_CHANNEL_PERIOD_ANT_PLUS
- * period (~249.7 ms) is +/-25 us of clock disagreement THAT PERIOD ALONE could
- * add, worst case, with no accumulated drift from a previous miss. A master
- * built to the tolerance limit sits exactly on this bench's own measurement,
- * with no margin between "typical" and "worst case."
- *
- * Consecutive misses compound it: radiant_channel_on_slot_missed() extrapolates
- * t_next by one more period per miss without a fresh sync, so N consecutive
- * misses carry up to N * 25 us of additional worst-case disagreement by the
- * time a receive window is next armed against this t_sync. See the
- * RADIANT_CHANNEL_RX_FAIL_TO_SEARCH * 25 us BUILD_ASSERT against
- * API_SLOT_GUARD_US in radiant_api.c, which is what turns this paragraph into
- * a checked invariant instead of a claim.
+ * THE SPEC NUMBER IS +/-25 US, AND IT IS A BUDGET, NOT HEADROOM.
+ * RADIANT_CHANNEL_DRIFT_WORST_US carries it; consecutive misses compound it,
+ * because radiant_channel_on_slot_missed() extrapolates t_next by one more
+ * period per miss without a fresh sync, so N consecutive misses carry up to
+ * N * 25 us of additional worst-case disagreement by the time a receive window
+ * is next armed against this t_sync. The two BUILD_ASSERTs in radiant_api.c
+ * turn that into a checked invariant instead of a claim - one for the ceiling
+ * the estimator falls back to, one for the floor it may narrow to.
  */
 radiant_time_t radiant_channel_next_slot(uint8_t channel);
+
+/*
+ * How far either side of that instant this channel's receive window should
+ * reach, in microseconds. Never zero; never above RADIANT_CHANNEL_GUARD_MAX_US.
+ *
+ * WHY THIS IS NOT A CONSTANT ANY MORE. The paragraph above sizes the guard from
+ * the spec's worst case, compounded over eight misses, and arrives at 400 us.
+ * The residual this bench actually measures - t_sync minus the predicted
+ * instant, on the radio's own clock - is 9 us. Every tracked slot was therefore
+ * buying 800 us of receive to cover about nine microseconds of real error.
+ *
+ * That is not free. Window occupancy is what turns into contention between
+ * tracked channels, into aborted scan chunks, and into receive current for
+ * anything running this core on a battery; a window forty times wider than it
+ * needs to be also arms the address matcher against forty times as much noise.
+ *
+ * So: measure the master rather than assume the spec bound. The channel keeps
+ * an exponential average of |t_sync - predicted| across clean consecutive
+ * slots, and the guard is
+ *
+ *     clamp(floor,
+ *           K * average + miss_count * DRIFT_WORST,
+ *           GUARD_MAX)
+ *
+ * Two terms, for two different things. The first is what this master has been
+ * measured doing, times a safety factor. The second is what an extrapolated
+ * period could be doing and has not been measured doing - after a miss the
+ * clock has run one more period with no fresh sync, so that period is charged
+ * at the spec bound. Together they mean a well-behaved link runs on a narrow
+ * window and reopens the old wide one automatically as it starts to lose slots.
+ *
+ * RADIANT_CHANNEL_GUARD_MAX_US, unconditionally, whenever the estimator has
+ * nothing to say: on a channel that is not TRACKING, immediately after
+ * acquisition, and after RX_FAIL_GO_TO_SEARCH. Narrowing on no evidence is the
+ * one thing this must never do, because the failure mode has no error code.
+ *
+ * ONE ESTIMATOR, NOT TWO, AND THE SECOND ONE'S ABSENCE IS A DECISION.
+ *
+ * The obvious companion to this is an estimate of the master's PERIOD - a
+ * fixed-point ppm correction, averaged the same way - so that t_next could be
+ * extrapolated at the master's real rate instead of the nominal one. It is not
+ * here, and it was left out rather than forgotten:
+ *
+ *   - It has no consumer. radiant_channel_on_slot() re-anchors on every frame
+ *     that arrives, so a period correction changes nothing at all except across
+ *     MISSED slots - and the guard already charges every extrapolated period at
+ *     the spec's worst case, which is strictly safer than charging it at an
+ *     estimate.
+ *   - Where it would act, it would act on the slot clock rather than on the
+ *     window width. That is a behaviour change with exactly the silent failure
+ *     mode this whole feature is written around: a period estimate that is
+ *     slightly wrong walks the window off the master over minutes, with no
+ *     error code anywhere, and the only instrument that could grade it is the
+ *     Phase 0 sensitivity ladder, which has not been run yet.
+ *   - struct chan is under a checked 72-byte budget at 32 copies. Carrying a
+ *     second estimator that nothing reads spends that budget on nothing.
+ *
+ * If the residual EWMA ever stops converging on a real master - if
+ * radiant_channel_residual_us() reads tens of microseconds on a link that is
+ * not losing slots - that is the signal that this decision needs revisiting,
+ * because a large steady residual is a period error by another name.
+ *
+ * WHY AN EWMA AND NOT A KALMAN FILTER. A Kalman filter is the right tool when
+ * you want the optimal estimate of a state with known dynamics, and it would
+ * genuinely be better here in one respect: it carries a variance, so the guard
+ * could be sized as mean + k*sigma rather than as k*mean, which is what a
+ * window that must cover nearly every residual actually wants.
+ *
+ * It buys nothing today, and that is measurable rather than an opinion. The
+ * measured residual is 9 us; k*avg is 36 us; the floor is 100 us. THE CLAMP
+ * DECIDES THE ANSWER, so a better estimate of the 36 produces exactly the same
+ * window. Against that, a filter needs multiplies and a division in the radio
+ * event path, in a module with no float and a checked 72-byte-per-channel
+ * budget at 32 copies.
+ *
+ * The condition that changes the answer is concrete: if a Phase 0 sensitivity
+ * ladder ever justifies dropping RADIANT_CHANNEL_GUARD_MIN_US to the same order
+ * as k*avg, the estimator stops being masked and its quality starts to matter.
+ * At that point the cheap step is not a Kalman filter but a decaying MAXIMUM
+ * rather than a mean - the guard needs the worst residual, not the typical one,
+ * and a decaying max estimates that directly at the same cost as this. A
+ * two-state (phase, period) filter is the step after that, and it is the same
+ * behaviour change - and the same silent failure mode - as the period estimator
+ * described above.
+ */
+uint32_t radiant_channel_guard_us(uint8_t channel);
+
+/*
+ * Raise the floor of the above, in microseconds. Values below
+ * RADIANT_CHANNEL_GUARD_MIN_US are ignored; the floor is a floor, and a caller
+ * is not allowed to talk the core into a narrower window than its own minimum.
+ *
+ * Called once at init by whoever holds the backend capabilities, in the same
+ * shape and for the same reason as radiant_channel_period_floor_set(): a
+ * backend whose t_sync is inferred rather than captured
+ * (caps.has_sync_timestamp == false) is not reporting the master's clock at all,
+ * it is reporting its own inference, and an estimator fed with that must not be
+ * allowed to narrow anything. Passing RADIANT_CHANNEL_GUARD_MAX_US pins the
+ * guard wide and switches the whole mechanism off, which is the correct
+ * behaviour for such a backend and needs no separate flag.
+ */
+void radiant_channel_guard_floor_set(uint16_t us);
+
+/*
+ * The running average above, in microseconds, or 0 on a channel whose estimator
+ * has not locked. Diagnostic only - nothing in the core branches on it.
+ *
+ * It exists because the Phase 1 A/B needs the win to be visible as something
+ * other than "loss did not get worse": this is the number that says how much of
+ * the old 400 us was ever justified, and it is the first thing to read if a
+ * narrowed window is ever suspected of costing packets.
+ */
+uint16_t radiant_channel_residual_us(uint8_t channel);
 
 /* The absolute instant this channel's search gives up, or RADIANT_TIME_NEVER for
  * an infinite timeout or a channel that is not searching. */

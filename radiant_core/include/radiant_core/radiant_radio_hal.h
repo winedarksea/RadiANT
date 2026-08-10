@@ -527,6 +527,57 @@ struct radiant_rx_event {
 	uint8_t               body_len;
 	bool                  has_rssi;   /* mirrors caps.has_rssi */
 	int8_t                rssi_dbm;
+
+	/*
+	 * The CRC as it arrived on the air, NOT as recomputed over `body`.
+	 *
+	 * Valid only on RADIANT_RADIO_STATUS_CRC_FAIL, and only on a backend
+	 * whose caps.has_rx_crc is true. Meaningless - and left zero, with
+	 * has_crc_rx false - on every other event, including OK: a frame that
+	 * passed already has a CRC the core can recompute for itself.
+	 *
+	 * WHY IT IS HERE AT ALL. `body` carries the bytes between address and
+	 * CRC and the CRC bytes are not among them, so a core that wants to know
+	 * HOW a frame failed cannot find out: the difference between the CRC
+	 * received and the CRC computed is the error syndrome, and without the
+	 * first half there is no syndrome. That difference is what
+	 * radiant_crc_repair.c turns a single flipped bit into a good packet
+	 * with, which is worth 1-3 dB of effective sensitivity for a table and
+	 * nothing on the air.
+	 *
+	 * uint32_t rather than uint16_t because it is the CRC register's value:
+	 * the nRF RADIO's RXCRC field is 24 bits wide and a backend should not
+	 * have to narrow it on the way out. Only as many low bits as the
+	 * configured struct radiant_crc_cfg produces are meaningful.
+	 */
+	bool                  has_crc_rx;
+	uint32_t              crc_rx;
+
+	/*
+	 * RSSI measured INSIDE THIS WINDOW WITH NO PACKET PRESENT.
+	 *
+	 * Valid only on a terminal RADIANT_RADIO_STATUS_TIMEOUT event for a
+	 * window that delivered no frame at all, which is exactly the
+	 * population that is the noise floor: the radio listening to a
+	 * frequency at a moment when, by observation, nothing was transmitting
+	 * on it. A backend that cannot take such a sample leaves has_noise
+	 * false, and that is not a degraded mode - it is a backend that has
+	 * nothing to say.
+	 *
+	 * NOT rssi_dbm under another name, and the difference is the whole
+	 * point. rssi_dbm is the level of a packet that arrived, so it measures
+	 * a transmitter; this measures the absence of one. A window that
+	 * received something must never report both, because the frame's own
+	 * energy is in the number.
+	 *
+	 * On the same scale as rssi_dbm - same corrections, same reference - so
+	 * the two can be subtracted to get a margin. A backend that applied a
+	 * temperature or errata correction to one and not the other would
+	 * produce a margin figure that is wrong by the correction and looks
+	 * entirely plausible.
+	 */
+	bool                  has_noise;
+	int8_t                noise_dbm;
 };
 
 struct radiant_tx_event {
@@ -647,6 +698,20 @@ struct radiant_radio_caps {
 
 	/* True if rx_event.rssi_dbm is populated. */
 	bool has_rssi;
+
+	/*
+	 * True if rx_event.crc_rx is populated on a CRC_FAIL event - that is,
+	 * if the hardware keeps the CRC it received rather than only a
+	 * pass/fail bit.
+	 *
+	 * A backend that verifies in software has it trivially; one whose
+	 * engine exposes a received-CRC register has it; one that reports only
+	 * a status bit does not, and says so. The core's single-bit repair is
+	 * arithmetic on a syndrome and simply does not run without this - it
+	 * cannot be approximated, and a backend that left this true while
+	 * reporting a zero would manufacture repairs out of nothing.
+	 */
+	bool has_rx_crc;
 
 	/* True if the CRC in struct radiant_crc_cfg is computed by hardware. False
 	 * means the backend verifies in software after reception: identical

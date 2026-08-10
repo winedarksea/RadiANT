@@ -133,6 +133,11 @@
               "description": "inline_attenuator is preferred and repeatable. fixed_open_air is the fallback, and only comparable within one sitting.",
               "enum": ["inline_attenuator", "fixed_open_air"]
             },
+            "sensitivity_method": {
+              "description": "How the sensitivity ladder applied its dB, mirroring sensitivity.method. It lives in the rig as well as in the measurement because rig equality is what tools/ant_ab.py checks BEFORE any gate runs: a tx_ladder result and a distance result describe different experiments, and the refusal belongs at the sitting rather than inside one gate's detail line. Null on a sitting with no sensitivity ladder.",
+              "type": ["string", "null"],
+              "enum": ["inline_attenuator", "fixed_open_air", "tx_ladder", null]
+            },
             "attenuator_model": { "type": ["string", "null"] },
             "attenuation_db": {
               "description": "Fixed attenuation for the non-sensitivity runs, if any.",
@@ -277,15 +282,15 @@
       "required": ["method", "steps"],
       "properties": {
         "method": {
-          "description": "Same transmitter, same rig, receivers swapped. An open-air path is only comparable within one sitting.",
-          "enum": ["inline_attenuator", "fixed_open_air"]
+          "description": "Same transmitter, same rig, receivers swapped. An open-air path is only comparable within one sitting. tx_ladder is tools/ant_sens.py: the master's transmit power stepped down to the receiver's knee, which is the same attenuation applied at the far end of the link and the only one of the three that needs no hardware this bench does not have. The three carry different systematic offsets and are never converted between; tools/ant_ab.py refuses a comparison across two methods.",
+          "enum": ["inline_attenuator", "fixed_open_air", "tx_ladder"]
         },
         "seconds_per_step": {
           "type": "number",
           "minimum": 1
         },
         "steps": {
-          "description": "One entry per attenuation setting or distance, monotonically increasing.",
+          "description": "One entry per attenuation setting, distance or transmit power, monotonically increasing in attenuation - so decreasing in tx_power_dbm.",
           "type": "array",
           "minItems": 2,
           "items": {
@@ -295,7 +300,16 @@
             "properties": {
               "attenuation_db": { "type": ["number", "null"] },
               "distance_m": { "type": ["number", "null"] },
+              "tx_power_dbm": {
+                "description": "Commanded transmit power for a tx_ladder step. Commanded, not measured - which is why tools/ant_sens.py fits measured RSSI against it and refuses the ladder if the two disagree.",
+                "type": ["number", "null"]
+              },
               "loss_exact_pct": { "type": "number", "minimum": 0 },
+              "loss_basis": {
+                "description": "Which counter the loss figure came from. event_counter is the transmitter's own, via ant_verify.py, and is the one the name promises. master_sent is the host's count of what it handed the transmitter, used only past the knee where too little of the stream survives to read the counter out of it at all.",
+                "type": ["string", "null"],
+                "enum": ["event_counter", "master_sent", "none", null]
+              },
               "packets": { "type": ["integer", "null"] },
               "rx_fail": { "type": ["integer", "null"] },
               "rssi_dbm_mean": { "type": ["number", "null"] }
@@ -306,7 +320,19 @@
           "description": "Interpolated attenuation at 5% exact loss. This single number is what the gate compares, to within 1 dB-equivalent on the same rig.",
           "type": ["number", "null"]
         },
-        "loss5pct_distance_m": { "type": ["number", "null"] }
+        "loss5pct_distance_m": { "type": ["number", "null"] },
+        "loss5pct_tx_power_dbm": {
+          "description": "The tx_ladder equivalent: interpolated transmit power at 5% exact loss. LOWER IS BETTER here, the opposite of attenuation and distance - a receiver that still works with a quieter transmitter hears better. tools/ant_ab.py carries that sign per key rather than per gate. Null when the ladder did not contain the crossing, which is a refusal to extrapolate and not a missing measurement.",
+          "type": ["number", "null"]
+        },
+        "loss5pct_rssi_dbm": {
+          "description": "The same knee expressed as power at the receiver rather than at the transmitter, which is the figure that means something off this bench. Derived from a reference rung well above the knee minus the dB walked down from it - never read off the knee rung's own RSSI, whose survivors are biased high by exactly the thing being measured.",
+          "type": ["number", "null"]
+        },
+        "repeat_spread_db": {
+          "description": "Spread of the 5% point across repeated ladders on an unchanged rig. This is the instrument's own noise, and gates.sensitivity.repeat_max_delta_db is the Phase 0 acceptance test: an instrument that cannot repeat to 1 dB cannot grade a 1 dB claim.",
+          "type": ["number", "null"]
+        }
       }
     },
     "scale": {

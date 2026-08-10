@@ -113,6 +113,18 @@ struct chan {
 	uint16_t device_number;     /* as configured; 0 is the slave wildcard */
 	uint16_t acq_device_number; /* as acquired, wildcards resolved */
 
+	/*
+	 * Exponential average of |t_sync - predicted| over clean consecutive
+	 * slots, in SIXTEENTHS of a microsecond. See radiant_channel_guard_us().
+	 *
+	 * Sixteenths rather than microseconds because the quantity being
+	 * averaged is about nine of them: at whole-microsecond resolution a
+	 * 1/8-weight EWMA cannot represent the difference between 9 and 10, and
+	 * every update would round away the thing being measured. 16 x 4095 us
+	 * is the range, which is ten times the widest guard there is.
+	 */
+	uint16_t resid_q4_us;
+
 	uint8_t state;              /* enum radiant_channel_state */
 	uint8_t type;
 	uint8_t network;
@@ -134,6 +146,13 @@ struct chan {
 	uint8_t hop[3];
 	uint8_t sdu_mask_config;
 	uint8_t miss_count;
+	/*
+	 * Clean consecutive slots the estimator above has seen since it was last
+	 * reset. Saturates; only the comparison against
+	 * RADIANT_CHANNEL_GUARD_LOCK_SLOTS matters. Zero means "no evidence",
+	 * and no evidence means the widest guard there is.
+	 */
+	uint8_t lock_slots;
 	uint8_t flags;
 };
 
@@ -146,6 +165,10 @@ static struct chan channels[RADIANT_CHANNEL_COUNT];
 /* Raised by radiant_sched.c at init from caps.min_arm_lead_us. The protocol floor
  * is the default and is also the minimum a caller can set. */
 static uint16_t period_floor = RADIANT_CHANNEL_PERIOD_MIN_COUNTS;
+
+/* The same shape, for the tracked-window guard: raised at init by whoever holds
+ * the backend capabilities, never lowered below the core's own minimum. */
+static uint16_t guard_floor = RADIANT_CHANNEL_GUARD_MIN_US;
 
 static uint32_t stale_ops;
 static uint32_t search_timeouts;
@@ -180,6 +203,70 @@ static bool state_assigned(uint8_t state)
 static radiant_time_t period_us(const struct chan *c)
 {
 	return radiant_channel_counts_to_us(c->period);
+}
+
+/* ---------------------------------------------------------------------------
+ * The window-guard estimator
+ *
+ * Integer only, and that is a constraint rather than a preference: there is no
+ * float anywhere in this module, this code runs inside the radio event path,
+ * and a soft-float multiply there would cost more than the window it is trying
+ * to save.
+ * ---------------------------------------------------------------------------
+ */
+
+/* Weight of a new sample in the running average, as a right shift. 1/8, so the
+ * average has a memory of roughly eight slots - two seconds at the ANT+ period,
+ * long enough to be an average and short enough to follow a master whose clock
+ * moves with temperature. */
+#define GUARD_EWMA_SHIFT 3u
+
+/* Ceiling on one sample, in sixteenths. Above the widest guard there is, so a
+ * clamp never hides a residual that matters; below the field's range, so the
+ * EWMA cannot overflow whatever arrives. */
+#define GUARD_RESID_MAX_Q4 ((uint16_t)(RADIANT_CHANNEL_GUARD_MAX_US * 16u))
+
+static void guard_reset(struct chan *c)
+{
+	c->resid_q4_us = 0u;
+	c->lock_slots = 0u;
+}
+
+/*
+ * Fold one measured residual into the average.
+ *
+ * `err_us` is |t_sync - predicted| for a slot whose PREVIOUS slot was also
+ * heard. Slots after a miss are deliberately not offered here: their residual
+ * covers two or more periods of drift, so feeding them in would measure the
+ * miss rather than the master's clock, and the guard already charges an
+ * extrapolated period at the spec bound instead.
+ *
+ * The first sample is taken whole rather than averaged in from zero. Ramping up
+ * from zero would UNDERESTIMATE for the first several slots, and an
+ * underestimate is the direction that loses packets; the lock counter then
+ * withholds the result until there are enough samples for it to mean anything.
+ */
+static void guard_observe(struct chan *c, radiant_time_t err_us)
+{
+	uint32_t sample = (err_us > (radiant_time_t)RADIANT_CHANNEL_GUARD_MAX_US)
+				  ? (uint32_t)GUARD_RESID_MAX_Q4
+				  : (uint32_t)(err_us * 16u);
+
+	if (c->lock_slots == 0u) {
+		c->resid_q4_us = (uint16_t)sample;
+	} else {
+		uint32_t avg = c->resid_q4_us;
+
+		avg -= (avg >> GUARD_EWMA_SHIFT);
+		avg += (sample >> GUARD_EWMA_SHIFT);
+		c->resid_q4_us = (uint16_t)((avg > GUARD_RESID_MAX_Q4)
+						    ? GUARD_RESID_MAX_Q4
+						    : avg);
+	}
+
+	if (c->lock_slots < 255u) {
+		c->lock_slots++;
+	}
 }
 
 /*
@@ -347,6 +434,11 @@ void radiant_channel_init(void)
 	}
 
 	period_floor = RADIANT_CHANNEL_PERIOD_MIN_COUNTS;
+	/* Back to the core's own minimum, not to whatever the last backend
+	 * raised it to. antr_init() calls this before the radio is enabled and
+	 * sets the floor from caps afterwards, so a stale value here would be a
+	 * previous backend's opinion applied to this one. */
+	guard_floor = RADIANT_CHANNEL_GUARD_MIN_US;
 	stale_ops = 0u;
 	search_timeouts = 0u;
 }
@@ -1221,6 +1313,88 @@ radiant_time_t radiant_channel_next_slot(uint8_t channel)
 	return c->t_next;
 }
 
+uint32_t radiant_channel_guard_us(uint8_t channel)
+{
+	const struct chan *c;
+	uint32_t guard;
+
+	/*
+	 * Every early return here is RADIANT_CHANNEL_GUARD_MAX_US and not the
+	 * floor, because every one of them means "no evidence". An out-of-range
+	 * channel, one that is not tracking, and one whose estimator has not
+	 * locked are all cases where the honest answer is the window this core
+	 * opened before any of this existed.
+	 */
+	if (!ch_valid(channel)) {
+		return RADIANT_CHANNEL_GUARD_MAX_US;
+	}
+
+	c = &channels[channel];
+	if (c->state != RADIANT_CH_STATE_TRACKING ||
+	    c->lock_slots < RADIANT_CHANNEL_GUARD_LOCK_SLOTS) {
+		return RADIANT_CHANNEL_GUARD_MAX_US;
+	}
+
+	/* Sixteenths back to microseconds. The multiply is done first so the
+	 * safety factor is applied at the estimator's resolution rather than to
+	 * an already-rounded number. */
+	guard = ((uint32_t)c->resid_q4_us * RADIANT_CHANNEL_GUARD_K) / 16u;
+
+	/*
+	 * THE FLOOR IS APPLIED BEFORE THE MISS TERM, NOT AFTER, AND THE
+	 * ORDERING IS THE SAFETY ARGUMENT.
+	 *
+	 * The guard must cover the period being received plus every period
+	 * extrapolated since the last fresh sync: N misses means N+1 periods of
+	 * possible disagreement, up to N = RX_FAIL_TO_SEARCH - 1 before the
+	 * channel gives up. Adding after the clamp charges each extrapolated
+	 * period on top of a floor that already covers the received one, which
+	 * is the arithmetic that holds.
+	 *
+	 * Clamping afterwards instead - max(floor, k*avg + N*drift) - reads
+	 * almost identically and is quietly weaker: with a well-behaved master
+	 * the whole miss term disappears inside a floor that was sized for one
+	 * period, and by seven misses the window covers 175 us of a 200 us
+	 * worst case. The shortfall would appear only on a link that was
+	 * already losing slots, as slightly worse recovery, with no error code
+	 * anywhere.
+	 */
+	if (guard < (uint32_t)guard_floor) {
+		guard = guard_floor;
+	}
+	guard += (uint32_t)c->miss_count * RADIANT_CHANNEL_DRIFT_WORST_US;
+
+	if (guard > RADIANT_CHANNEL_GUARD_MAX_US) {
+		guard = RADIANT_CHANNEL_GUARD_MAX_US;
+	}
+	return guard;
+}
+
+void radiant_channel_guard_floor_set(uint16_t us)
+{
+	if (us < RADIANT_CHANNEL_GUARD_MIN_US) {
+		return;
+	}
+	guard_floor = (us > RADIANT_CHANNEL_GUARD_MAX_US)
+			      ? (uint16_t)RADIANT_CHANNEL_GUARD_MAX_US
+			      : us;
+}
+
+uint16_t radiant_channel_residual_us(uint8_t channel)
+{
+	const struct chan *c;
+
+	if (!ch_valid(channel)) {
+		return 0u;
+	}
+
+	c = &channels[channel];
+	if (c->lock_slots < RADIANT_CHANNEL_GUARD_LOCK_SLOTS) {
+		return 0u;
+	}
+	return (uint16_t)(c->resid_q4_us / 16u);
+}
+
 radiant_time_t radiant_channel_search_deadline(uint8_t channel)
 {
 	const struct chan *c;
@@ -1307,6 +1481,24 @@ void radiant_channel_on_slot(uint8_t channel, radiant_time_t t_sync)
 	}
 
 	/*
+	 * The residual, measured before the re-anchor throws away the
+	 * prediction it is measured against. This is the only place in the core
+	 * where a fresh sync and the instant that was predicted for it both
+	 * exist, which is why the estimator lives here rather than anywhere it
+	 * would read better.
+	 *
+	 * Only on a slot whose predecessor was heard (miss_count == 0). After a
+	 * miss the prediction has been extrapolated one or more extra periods,
+	 * so the difference is the drift over all of them; averaging that in
+	 * would size a window from how lossy the link is rather than from how
+	 * good the master's clock is.
+	 */
+	if (c->miss_count == 0u && c->t_next != RADIANT_TIME_NEVER) {
+		guard_observe(c, (t_sync > c->t_next) ? (t_sync - c->t_next)
+						     : (c->t_next - t_sync));
+	}
+
+	/*
 	 * Re-anchor on the frame that was actually on the air, not on the time
 	 * the channel predicted. That is what keeps a slave's window centred
 	 * on the master it hears: a constant prediction error would otherwise
@@ -1346,6 +1538,11 @@ void radiant_channel_on_acquired(uint8_t channel, const struct radiant_channel_i
 	c->t_search_start = RADIANT_TIME_NEVER;
 	c->t_next = t_sync + period_us(c);
 	c->miss_count = 0u;
+	/* A newly acquired master is a master nothing has been measured about.
+	 * Whatever the previous one's clock was doing is not evidence about this
+	 * one, and the first window after acquisition is the one least able to
+	 * afford a guess. */
+	guard_reset(c);
 }
 
 bool radiant_channel_on_slot_missed(uint8_t channel, radiant_time_t now)
@@ -1420,6 +1617,10 @@ bool radiant_channel_on_slot_missed(uint8_t channel, radiant_time_t now)
 	c->flags &= (uint8_t)~CHF_ACQUIRED;
 	c->miss_count = 0u;
 	c->t_search_start = c->t_next;
+	/* Eight consecutive misses is the channel admitting it does not know
+	 * where the master is. An average built while it did know is not
+	 * evidence about wherever it turns up next. */
+	guard_reset(c);
 
 	radiant_channel_event_out(channel, RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH);
 
