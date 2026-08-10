@@ -497,6 +497,7 @@ static void handle_ok(struct radiant_search *s, const struct radiant_rx_event *e
 	struct radiant_channel_id lo_id;
 	struct radiant_search_result r;
 	int rc;
+	bool acquire_claimed = false;
 
 	/*
 	 * FACT ONE. filter_index indexes the filter array WE supplied, so
@@ -571,12 +572,27 @@ static void handle_ok(struct radiant_search *s, const struct radiant_rx_event *e
 	 * in software to all of them. This loop is the whole of that mechanism,
 	 * and it is why eight simultaneous searches take one sweep rather than
 	 * eight.
+	 *
+	 * Offering to every match is right for SCAN, which never leaves and
+	 * wants to hear everything, but wrong for ACQUIRE: several wildcard
+	 * ACQUIRE channels (want all zero, or otherwise all matching the same
+	 * frame) would otherwise all claim the SAME device off one frame, each
+	 * one leaving the search satisfied and none of them left listening for
+	 * anything else. One frame therefore claims at most one ACQUIRE
+	 * channel - the first match in channel order, which is deterministic -
+	 * and every SCAN channel that matches, same as before.
 	 */
 	for (uint8_t c = 0; c < (uint8_t)RADIANT_SEARCH_MAX_CHANNELS; c++) {
 		struct radiant_search_chan *ch = &s->chans[c];
 
 		if (!ch->active || !id_match(&ch->want, &f.id)) {
 			continue;
+		}
+		if (ch->mode == RADIANT_SEARCH_MODE_ACQUIRE) {
+			if (acquire_claimed) {
+				continue;
+			}
+			acquire_claimed = true;
 		}
 		if (s->cbs.acquired != NULL) {
 			s->cbs.acquired(c, &r, s->user);

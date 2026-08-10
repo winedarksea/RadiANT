@@ -1045,16 +1045,25 @@ static void api_post_search_window(radiant_time_t now)
 	 * ONE SWEEP SERVES EVERY SEARCHING CHANNEL - that is the point of
 	 * radiant_search.c and the difference between eight simultaneous searches
 	 * taking ~8 s and taking ~64 s. The scheduler's slots are per channel,
-	 * so the sweep is carried on the lowest-numbered searching channel's
-	 * slot and every channel in the search is served by it. The choice of
-	 * carrier is arbitrary; that there is only one is not.
+	 * so the sweep is carried on a searching channel's slot and every
+	 * channel in the search is served by it. The choice of carrier is
+	 * arbitrary; that there is only one is not.
+	 *
+	 * It must be a searching channel whose slot is actually free. Stopping
+	 * at the FIRST searching channel and giving up when that one's slot was
+	 * pending - as this used to do - stalls the whole sweep on it: any
+	 * searching channel can have its slot pending for reasons that have
+	 * nothing to do with the sweep, and while it does, every later pump
+	 * bails out here without ever looking at the other searching channels,
+	 * whose slots may be free. Skip a busy searching channel and keep
+	 * looking instead of giving up on the first one.
 	 */
 	for (ch = 0u; ch < API_CHANNELS; ch++) {
-		if (radiant_search_is_searching(&api_search, ch)) {
+		if (radiant_search_is_searching(&api_search, ch) && !radiant_sched_pending(ch)) {
 			break;
 		}
 	}
-	if (ch >= API_CHANNELS || radiant_sched_pending(ch)) {
+	if (ch >= API_CHANNELS) {
 		return;
 	}
 

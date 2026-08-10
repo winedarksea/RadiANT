@@ -912,6 +912,48 @@ ZTEST(radiant_search, test_a_channel_only_gets_what_it_asked_for)
 	end_of_test();
 }
 
+/*
+ * Two wildcard ACQUIRE channels both match the same frame - which is exactly
+ * what several simultaneous "find any device" channels look like to this
+ * module, and is how a host commonly starts a multi-sensor pairing session.
+ * The frame must claim only one of them; the other must still be searching
+ * afterwards, ready for the NEXT device. Before the fix, both channels
+ * matched id_match() (all-zero want matches anything) and the loop in
+ * handle_ok() offered the acquisition to each in turn, so a single frame
+ * emptied every wildcard ACQUIRE channel at once and nothing was left
+ * listening for a second sensor.
+ */
+ZTEST(radiant_search, test_a_frame_claims_only_one_wildcard_acquire_channel)
+{
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t len;
+
+	bring_up(false);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_ok(radiant_search_begin(&g_s, 1u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_equal(2u, radiant_search_n_searching(&g_s));
+
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	len = fake_radio_build_ant_frame(frame, 0x0703u, 0x78u, 1u, payload8);
+	zassert_ok(fake_radio_air_frame(g_w.t_open + 1000u, frame, len));
+	win_run();
+
+	zassert_equal(1u, g_cap.n_acquired,
+		      "one frame must claim exactly one wildcard ACQUIRE channel");
+	zassert_equal(0u, g_cap.chan[0], "the first matching channel in order claims it");
+	zassert_equal(0x0703u, g_cap.res[0].id.device_number);
+
+	zassert_equal(1u, radiant_search_n_searching(&g_s),
+		      "the second wildcard channel must still be searching");
+	zassert_false(radiant_search_is_searching(&g_s, 0u));
+	zassert_true(radiant_search_is_searching(&g_s, 1u));
+
+	zassert_ok(radiant_search_end(&g_s, 1u));
+	end_of_test();
+}
+
 /* The pairing bit rides on the on-air device type, and a search must match
  * through it while still reporting it. */
 ZTEST(radiant_search, test_pairing_bit_matches_and_survives)
