@@ -118,6 +118,186 @@ class TestSimulatorPassesVerification(unittest.TestCase):
 
 
 @unittest.skipIf(ant_sim is None, "pyusb is not installed")
+class TestTelemetryEnvelope(unittest.TestCase):
+    """Device type 0x60, end to end on the host with no radio.
+
+    THIS IS THE PYTHON HALF OF PHASE E'S GATE. The C half
+    (radiant_core/tests/src/test_profiles.c) puts frames across a mock radio
+    and decodes a schema from them; this half drives a real page rotation for
+    a simulated quarter of an hour and requires ant_verify.py's accumulator
+    continuity check to pass over the whole of it.
+
+    What makes it a gate rather than a round trip is that ant_verify.py is
+    told nothing about ant_sim.py. It does not know this node's fields, their
+    widths, their offsets or which pages carry them. It assembles the
+    descriptor set off the stream, decodes against what it assembled, looks up
+    the accumulating field's instantaneous partner in the section 7
+    vocabulary, and checks one against the other. Every one of those steps is
+    a step a receiver in the field takes.
+    """
+
+    def _run(self, profile: str, seconds: float = RUN_SECONDS):
+        sensor = build(profile)
+        records = ant_sim.dry_run([sensor], seconds)
+        return sensor, records, analyse(sensor, records)
+
+    def test_the_telemetry_node_passes_every_check(self):
+        sensor, records, summary = self._run("telemetry")
+        failed = [c for c in summary["checks"] if not c["pass"]]
+        self.assertEqual(
+            failed, [],
+            "; ".join(f"{c['name']}: {c['detail']}" for c in failed))
+        self.assertEqual(summary["violations"]["count"], 0,
+                         summary["violations"]["first"])
+
+    def test_the_schema_is_recovered_from_the_descriptor_alone(self):
+        sensor, records, summary = self._run("telemetry")
+        heard = summary["telemetry"]
+        self.assertIsNotNone(heard, "no descriptor set was ever assembled")
+        self.assertEqual(heard["schema_id"], ant_sim.TelemetrySensor.SCHEMA_ID)
+        self.assertEqual(heard["period_ticks"], ap.RADIANT_TLM_PERIOD_DEFAULT)
+        self.assertEqual(heard["rf_index"], 57)
+        self.assertFalse(heard["sparse"])
+        self.assertEqual(heard["schema_changes"], 0)
+
+        # The vocabulary lookup is the part that makes a bridge mechanical
+        # rather than bespoke: the receiver got a quantity and a unit for each
+        # field without a line of per-node code.
+        by_id = {f["id"]: f for f in heard["fields"]}
+        self.assertEqual(by_id[1]["quantity"], "heart rate")
+        self.assertEqual(by_id[1]["unit"], "bpm")
+        self.assertEqual(by_id[2]["quantity"], "temperature")
+        self.assertEqual(by_id[2]["unit"], "K")
+        self.assertEqual(by_id[2]["exponent"], -2)
+        self.assertEqual(by_id[3]["quantity"], "energy")
+        self.assertTrue(by_id[3]["accumulate"])
+        self.assertEqual(by_id[4]["quantity"], "active power")
+        self.assertTrue(by_id[4]["signed"])
+        self.assertEqual(by_id[4]["bit_offset"], 32)
+
+        # And it decoded most of the stream against it. Everything before the
+        # first complete set is counted rather than guessed at.
+        self.assertGreater(heard["data_pages_decoded"], 3000)
+        self.assertLessEqual(heard["data_pages_before_schema"], 6)
+
+    def test_the_interleave_survives_the_round_trip(self):
+        sensor, records, summary = self._run("telemetry")
+        pages = summary["pages"]
+        self.assertEqual(set(pages), {"0x00", "0x01", "0x02", "0x50", "0x51"})
+        # Six descriptor frames, two common pages and 113 data pages per cycle
+        # of 121 - and the descriptor set is CONSECUTIVE, so a receiver joining
+        # mid-stream waits one cycle rather than six.
+        cycles = len(records) / ap.RADIANT_TLM_CYCLE
+        self.assertAlmostEqual(pages["0x00"] / cycles, 6.0, delta=0.2)
+        self.assertAlmostEqual(pages["0x50"] / cycles, 1.0, delta=0.1)
+        self.assertAlmostEqual(pages["0x51"] / cycles, 1.0, delta=0.1)
+
+    def test_the_event_counter_wraps_and_is_still_continuous(self):
+        sensor, records, summary = self._run("telemetry")
+        # 3600 messages at 4 Hz, so the 8-bit counter goes round many times.
+        # A run that never reached the wrap has not tested the delta.
+        for page in ("0x01", "0x02"):
+            self.assertGreater(
+                summary["accumulator_wraps"].get(f"counter({page})", 0), 5,
+                f"the counter on page {page} never wrapped")
+        self.assertEqual(summary["violations"]["count"], 0)
+
+    def test_a_corrupted_accumulator_is_caught(self):
+        # The instrument has to fail things. Jump the energy accumulator on one
+        # page-2 packet and the integral check must notice it disagreeing with
+        # the instantaneous power beside it.
+        sensor = build("telemetry")
+        records = ant_sim.dry_run([sensor], 120.0)
+        page2 = [i for i, r in enumerate(records) if r[3][0] == 0x02]
+        index = page2[len(page2) // 2]
+        t, dt_, dn, payload = records[index]
+        broken = bytearray(payload)
+        broken[2] = (broken[2] + 0x40) & 0xFF     # +2^30 J out of nowhere
+        records[index] = (t, dt_, dn, bytes(broken))
+
+        summary = analyse(sensor, records)
+        continuity = [c for c in summary["checks"]
+                      if c["name"] == "accumulator continuity"][0]
+        self.assertFalse(continuity["pass"], continuity["detail"])
+        self.assertGreater(summary["violations"]["count"], 0)
+
+    def test_a_corrupted_descriptor_frame_is_refused_not_decoded(self):
+        # A receiver that guesses a layout reports confident nonsense, so a
+        # descriptor frame that cannot be parsed must leave the schema unknown
+        # rather than half-applied.
+        sensor = build("telemetry")
+        records = ant_sim.dry_run([sensor], 60.0)
+        broken = []
+        for t, dt_, dn, payload in records:
+            if payload[0] == ap.PAGE_TLM_DESCRIPTOR and payload[1] >> 4 == 0:
+                payload = bytes([payload[0], payload[1], 0x24]) + payload[3:]
+            broken.append((t, dt_, dn, payload))
+
+        summary = analyse(sensor, broken)
+        self.assertIsNone(summary["telemetry"],
+                          "a version-2 descriptor must be rejected, not "
+                          "decoded under v1 rules")
+        decoded = [c for c in summary["checks"]
+                   if c["name"] == "descriptor decoded"][0]
+        self.assertFalse(decoded["pass"])
+
+
+@unittest.skipIf(ant_sim is None, "pyusb is not installed")
+class TestSparseAssetTag(unittest.TestCase):
+    """The envelope with everything turned off.
+
+    Free to run - there is nothing to encode - and the cheapest exercise of the
+    sparse path there is.
+    """
+
+    def _run(self, privacy_pages: bool, seconds: float = RUN_SECONDS):
+        sensor = build("asset-tag")
+        if privacy_pages:
+            sensor.serial_number = None
+        records = ant_sim.dry_run([sensor], seconds)
+        return sensor, records, analyse(sensor, records)
+
+    def test_a_tag_with_a_privacy_posture_emits_nothing_but_a_heartbeat(self):
+        sensor, records, summary = self._run(privacy_pages=True)
+        # 900 s, a 30 s heartbeat, two frames per set. Nothing else at all:
+        # page 82's operating-time counter is monotone, so it survives an
+        # identity change and fingerprints a battery swap - which for a node
+        # whose whole payload IS an identity is the leak that matters.
+        self.assertEqual(set(summary["pages"]), {"0x00"})
+        self.assertEqual(summary["pages"]["0x00"], 60)
+        self.assertEqual(summary["violations"]["count"], 0)
+
+        heard = summary["telemetry"]
+        self.assertIsNotNone(heard)
+        self.assertTrue(heard["sparse"])
+        self.assertEqual(heard["heartbeat_s"], 30)
+        self.assertEqual(heard["fields"], [])
+
+    def test_page_82_appears_only_without_the_privacy_posture(self):
+        _, _, summary = self._run(privacy_pages=False)
+        self.assertEqual(set(summary["pages"]), {"0x00", "0x52"})
+        self.assertEqual(summary["pages"]["0x52"], 30, "one per heartbeat")
+
+    def test_a_sparse_node_is_not_judged_against_a_period_it_never_claimed(self):
+        # Section 8's failure mode, and the reason the flag is in the
+        # descriptor: a receiver that measured this node's 60 transmissions
+        # against a 4 Hz period would report 98 % loss and enormous jitter for
+        # a node that is working exactly as specified, "as terrible link
+        # quality rather than as a configuration mismatch."
+        _, _, summary = self._run(privacy_pages=True)
+        names = {c["name"] for c in summary["checks"]}
+        self.assertIn("sparse cadence", names)
+        self.assertNotIn("loss", names)
+        self.assertNotIn("jitter", names)
+        self.assertNotIn("common pages", names)
+
+        failed = [c for c in summary["checks"] if not c["pass"]]
+        self.assertEqual(
+            failed, [],
+            "; ".join(f"{c['name']}: {c['detail']}" for c in failed))
+
+
+@unittest.skipIf(ant_sim is None, "pyusb is not installed")
 class TestVerifierCatchesFaults(unittest.TestCase):
     """The instrument has to fail things, or a pass means nothing."""
 

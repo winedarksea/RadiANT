@@ -2,10 +2,21 @@
 
 Checked by: `scripts/check_profile_registry.py` — it cross-checks the page map
 below against `docs/profile-registry.md` and the common-page cadence against
-`tools/ant_pages.py`. Nothing yet checks the byte layouts; the encoders in
-`src/profiles/` and their mirror in `tools/ant_pages.py` are what will, through
-`tools/test_ant_pages.py`, and until they exist treat every layout table here
-as a specification rather than as a description.
+`tools/ant_pages.py`.
+
+**The byte layouts are now checked too.** The encoders in `src/profiles/` and
+their mirror in `tools/ant_pages.py` implement sections 5–9 of this document,
+and three suites hold them to it: `tools/test_ant_pages.py` (round trips, the
+descriptor frames pinned as hex, and the MSB-first packer's vectors),
+`radiant_core/tests/src/test_profiles.c` (**the same packer vectors, byte for
+byte**, plus a `0x60` node discovered and decoded across the mock radio), and
+`tools/test_ant_sim.py` (a simulated node driven through `tools/ant_verify.py`,
+which learns the schema from the descriptor and checks the accumulators against
+it). Sections 5–9 are therefore a description as well as a specification; the
+parts that are still specification only are named where they occur — the
+security transforms and the descriptor authentication frame of section 6, the
+schedule block in frame 1's reserved bits, and the idempotency rule of
+section 9, of which only the page layouts exist.
 
 RadiANT is an open-source, clean-room implementation compatible with the ANT+
 specifications. This document specifies **one new device type** and the pages
@@ -799,6 +810,31 @@ Python encoders and decoders check each other in `tools/test_ant_pages.py`, and
 the same vectors feed the C decoders. Given that `native_sim` does not build on
 Windows and every C unit test runs only in CI on Linux, the Python mirror is
 the only layer a developer can iterate against locally.
+
+As built, that is:
+
+| File | What it is |
+|---|---|
+| `src/profiles/profile_bits.c` | The MSB-first packer, and nothing else. Its own file because its vectors are the shared contract |
+| `src/profiles/profile_telemetry.c` | The descriptor codec, receiver-side frame assembly, the data pages, the command-page layouts |
+| `src/profiles/profile_sched.c` | Which page goes in the next message slot: the 119/120/121 interleave, the consecutive descriptor set, the sparse cadence, and the client seam |
+| `tools/ant_pages.py` | All three, mirrored, plus the section 7 vocabulary as a table a host can look a quantity up in |
+
+`src/profiles/` is deliberately outside `radiant_core/`: `docs/decisions/0002-clean-room-policy.md`
+draws its read-scope line at that path, strict on one side and pragmatic on the
+other. Nothing here links into the link layer. (Nothing in it was written from
+a gated document either — this envelope is the project's own specification —
+but the separation is structural so that the next profile author inherits it.)
+
+**The scheduler is shared, and this device type is not its only client.** The
+ANT+ compatibility work needs the same interleave for `0x78` and `0x0B` with
+its own pages inserted into the rotation, and two implementations of one
+cadence rule is one implementation and one drift. So a client profile family
+registers a claim callback and gets first refusal on the slots the rotation
+would have filled with a data page. It is never offered message 119, message
+120 or a descriptor frame — those three *are* the cadence rule. A client with
+no descriptor of its own configures none and gets the interleave with the
+descriptor slots simply absent.
 
 `tools/ant_pages.py` is also the shared contract with the sibling
 `zephyr_aerosense` project, so the envelope's encoders arriving there is how

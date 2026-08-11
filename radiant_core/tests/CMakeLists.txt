@@ -47,6 +47,30 @@ target_sources(app PRIVATE ${suite_sources})
 # points.
 target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fake_radio.c")
 
+# ── src/profiles ────────────────────────────────────────────────────────────
+#
+# The RadiANT telemetry envelope (device type 0x60): docs/radiant-telemetry.md
+# in code. Compiled into THIS APPLICATION rather than into the radiant_core
+# module, and the directory boundary is the reason, not convenience:
+# docs/decisions/0002-clean-room-policy.md draws its read-scope line at a path.
+# radiant_core/** is strict clean-room; src/profiles/ is the pragmatic side,
+# where an implementer may read a page-layout table. A profile encoder that
+# linked into the link layer would erase that boundary, so it does not.
+#
+# (Phase E itself read no gated document at all - it is derived entirely from
+# docs/radiant-telemetry.md, which is this project's own specification. The
+# separation is structural, so that the next profile author inherits it.)
+#
+# Listed explicitly rather than globbed: unlike src/ above, this is a library
+# and not a suite drop box, and a new file here is a deliberate act.
+target_sources(app PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_bits.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_telemetry.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_sched.c"
+)
+target_include_directories(app PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles")
+
 # This directory, so a suite writes #include "fake_radio.h" rather than
 # #include "../fake_radio.h". Suites live in src/ and the mock does not, so
 # without this every suite author gets the relative path wrong exactly once.

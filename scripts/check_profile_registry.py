@@ -472,6 +472,13 @@ def load_ant_pages(problems):
         return None
     spec = importlib.util.spec_from_file_location("ant_pages", ANT_PAGES)
     module = importlib.util.module_from_spec(spec)
+    # Registered BEFORE exec_module, which is the documented recipe and not
+    # tidiness. A module executed outside sys.modules cannot use anything that
+    # looks itself up by __module__ during class creation - @dataclass is the
+    # one that bites, since it resolves its own module's globals and gets None.
+    # The symptom is "'NoneType' object has no attribute '__dict__'" reported
+    # against ant_pages.py, which points at the wrong file entirely.
+    sys.modules[spec.name] = module
     try:
         spec.loader.exec_module(module)
     except Exception as error:               # noqa: BLE001 - report, don't crash

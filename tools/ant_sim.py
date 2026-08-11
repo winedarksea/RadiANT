@@ -434,11 +434,193 @@ class CombinedSpeedCadenceSensor(Sensor):
                                       self.wheel.revs % ap.U16_WRAP)
 
 
+# ---------------------------------------------------------------------------
+# The RadiANT telemetry envelope, device type 0x60
+# ---------------------------------------------------------------------------
+
+
+class TelemetrySensor(Sensor):
+    """A RadiANT generic telemetry node, device type 0x60.
+
+    Four fields over two data pages, and the point of it is that
+    tools/ant_verify.py is told NOTHING about this class: it recovers the
+    schema from the descriptor the node broadcasts, and decodes the data pages
+    against what it recovered. That is the envelope's whole claim, exercised
+    end to end on the host with no board.
+
+    The field set is not arbitrary. Section 5: "anything integrable is
+    published as an accumulating field" - power has an integral in the
+    accumulating block of the vocabulary, so the node publishes cumulative
+    energy and offers instantaneous power alongside as a convenience. That is
+    precisely the shape of ANT+ page 0x10, and it is what gives a receiver an
+    accumulator to check the instantaneous value against.
+    """
+
+    device_type = ap.RADIANT_TLM_DEVICE_TYPE
+    period = ap.RADIANT_TLM_PERIOD_DEFAULT
+    label = "RadiANT generic telemetry (0x60)"
+
+    SCHEMA_ID = 0x2B
+    FIELD_HEART_RATE = 1
+    FIELD_TEMPERATURE = 2
+    FIELD_ENERGY = 3
+    FIELD_POWER = 4
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.descriptor = ap.TlmDescriptor(
+            schema_id=self.SCHEMA_ID,
+            period=self.period,
+            fields=[
+                ap.TlmField(id=self.FIELD_HEART_RATE, type=0x26, page=1,
+                            bit_offset=0, width_code=4),
+                ap.TlmField(id=self.FIELD_TEMPERATURE, type=0x10, page=1,
+                            bit_offset=8, width_code=7, exponent=-2),
+                ap.TlmField(id=self.FIELD_ENERGY, type=0x30, page=2,
+                            bit_offset=0, width_code=10, accumulate=True),
+                ap.TlmField(id=self.FIELD_POWER, type=0x1C, page=2,
+                            bit_offset=32, width_code=6, signed=True),
+            ],
+        )
+        self.energy_j = 0.0
+        self.inst_power = 0
+        self.heart_rate = 0
+        self.temperature_ck = 29315   # 293.15 K at exp -2
+        self._sched = None
+
+    # The scheduler is built lazily because --privacy-pages is applied to the
+    # instance after construction, and it changes what the common-page
+    # builders emit.
+    @property
+    def sched(self) -> ap.TlmPageScheduler:
+        if self._sched is None:
+            self._sched = ap.TlmPageScheduler(self.descriptor, {
+                "data_page": self._data_page,
+                "common_80": self._common_80,
+                "common_81": self._common_81,
+            })
+        return self._sched
+
+    def _data_page(self, page: int, counter: int) -> bytes:
+        return ap.encode_tlm_data(self.descriptor, page, counter, {
+            self.FIELD_HEART_RATE: self.heart_rate,
+            self.FIELD_TEMPERATURE: self.temperature_ck,
+            self.FIELD_ENERGY: int(self.energy_j) % (1 << 32),
+            self.FIELD_POWER: self.inst_power,
+        })
+
+    def _common_80(self) -> bytes:
+        return ap.encode_common_80(HW_REVISION, MANUFACTURER_ID, MODEL_NUMBER)
+
+    def _common_81(self) -> bytes:
+        return ap.encode_common_81(SW_REVISION, self.serial_number)
+
+    def advance(self, dt: float) -> None:
+        watts = self.watts.at(self.t)
+        self.inst_power = int(round(watts))
+        self.heart_rate = min(255, int(round(self.rpm.at(self.t))))
+        # Energy is the integral of power, accumulated in joules and emitted
+        # in 32 bits, where it is MEANT to wrap.
+        self.energy_j += watts * dt
+        # A slow thermal drift, so the temperature field is not a constant -
+        # a constant hides an encoder that recomputes rather than accumulates.
+        self.temperature_ck = 29315 + int(round(50.0 * math.sin(self.t / 120.0)))
+
+    def next_payload(self):
+        self.t += self.period_s
+        self.messages += 1
+        self.advance(self.period_s)
+        kind, body = self.sched.next()
+        return body
+
+
+class AssetTagSensor(Sensor):
+    """The envelope with everything turned off: a sparse node with no fields.
+
+    It is free - there is nothing to encode - and it is the cheapest exercise
+    of the sparse path there is: a heartbeat carrying the whole descriptor set,
+    silence in between, and page 82 configured and then suppressed.
+
+    THE PRIVACY RULE IS THE POINT, and the arithmetic rather than the judgement
+    is why. A stable 16-bit device number plus page 81's 32-bit serial every
+    30 s IS a tracking beacon, and page 82's operating-time counter is monotone:
+    it survives an identity change and fingerprints a battery swap. For a tag,
+    whose entire payload is an identity, that matters far more than it does for
+    a strap. So the mitigation within a session is serial 0xFFFFFFFF and a
+    suppressed page 82 - which for a node with no page 81 at all leaves nothing
+    on the air but the heartbeat.
+
+    Page 82 is emitted only when --privacy-pages is off, so a capture can show
+    both sides of the rule.
+    """
+
+    device_type = ap.RADIANT_TLM_DEVICE_TYPE
+    period = ap.RADIANT_TLM_PERIOD_DEFAULT
+    label = "RadiANT sparse asset tag (0x60, no fields)"
+
+    HEARTBEAT_S = 30
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.descriptor = ap.TlmDescriptor(
+            schema_id=0x01,
+            period=self.period,
+            fields=[],
+            flags=ap.TLM_FLAG_SPARSE,
+            heartbeat_s=self.HEARTBEAT_S,
+            k_code=ap.TLM_K_CODE_3,
+        )
+        self.operating_time_16s = 0
+        self._sched = None
+
+    @property
+    def suppress_page_82(self) -> bool:
+        # serial_number is None exactly when --privacy-pages is on, and the
+        # two halves of the section 6 rule travel together by construction
+        # rather than by a second flag somebody can forget.
+        return self.serial_number is None
+
+    @property
+    def sched(self) -> ap.TlmPageScheduler:
+        if self._sched is None:
+            builders = {}
+            if not self.suppress_page_82:
+                builders["common_82"] = self._common_82
+            self._sched = ap.TlmPageScheduler(self.descriptor, builders)
+        return self._sched
+
+    def _common_82(self) -> bytes:
+        return ap.encode_common_82(fractional_voltage=0x80, coarse_voltage=3,
+                                   status=3,
+                                   operating_time=self.operating_time_16s,
+                                   time_resolution_16s=True)
+
+    def advance(self, dt: float) -> None:
+        self.operating_time_16s = int(self.t / 16.0)
+
+    def next_payload(self):
+        """Returns None for a slot the node declines to transmit in.
+
+        That is sparse mode, and it is not a simulator shortcut: "the node
+        keeps a channel period configured and simply declines to transmit in
+        most of its slots". Callers must handle None - see dry_run() and
+        send() below, and the note there about what a stock ANT master does
+        with a slot nobody loaded.
+        """
+        self.t += self.period_s
+        self.messages += 1
+        self.advance(self.period_s)
+        kind, body = self.sched.next()
+        return body
+
+
 SENSORS = {
     "power": StandardPowerSensor,
     "power-torque": TorquePowerSensor,
     "power-torque-freq": TorqueFrequencySensor,
     "csc": CombinedSpeedCadenceSensor,
+    "telemetry": TelemetrySensor,
+    "asset-tag": AssetTagSensor,
 }
 
 
@@ -450,7 +632,8 @@ def run(dev, reader, sensors: list[Sensor], seconds: float,
     a loop per sensor would need a thread per sensor and a lock on the device;
     the events already carry the channel number, so they do not.
     """
-    stats = {s.channel: dict(sent=0, events=0, fallback=0) for s in sensors}
+    stats = {s.channel: dict(sent=0, events=0, fallback=0, skipped=0)
+             for s in sensors}
     # Fall back two periods after the last event, not one: one period is the
     # nominal spacing, so a fallback armed at exactly that fires on ordinary
     # jitter and doubles the message rate on a channel that is working.
@@ -463,10 +646,20 @@ def run(dev, reader, sensors: list[Sensor], seconds: float,
     last_report = time.monotonic()
 
     def send(sensor: Sensor) -> None:
-        dev.write(EP_OUT, frame(MESG_BROADCAST_DATA_ID,
-                                bytes([sensor.channel]) + sensor.next_payload()))
-        stats[sensor.channel]["sent"] += 1
+        payload = sensor.next_payload()
         deadlines[sensor.channel] = time.monotonic() + 2.0 * sensor.period_s
+        if payload is None:
+            # A sparse node declining this slot. Nothing is written, so the
+            # stack retransmits whatever is already in its buffer - which is
+            # what a sparse node running on a stock ANT master ACTUALLY does,
+            # and is worth knowing rather than papering over: skipping a slot
+            # for real needs a master that can be told not to transmit.
+            # --dry-run has no such constraint and is exact.
+            stats[sensor.channel]["skipped"] += 1
+            return
+        dev.write(EP_OUT, frame(MESG_BROADCAST_DATA_ID,
+                                bytes([sensor.channel]) + payload))
+        stats[sensor.channel]["sent"] += 1
 
     while time.monotonic() < end:
         result = reader.next_frame(min(end, time.monotonic() + 0.25))
@@ -521,6 +714,11 @@ def dry_run(sensors: list[Sensor], seconds: float) -> list:
             # the timestamp is the moment the payload went out rather than the
             # moment before.
             payload = sensor.next_payload()
+            if payload is None:
+                # A sparse node declining this slot. The slot still happened -
+                # the timer ran, the counter advanced - and nothing went on
+                # the air, which is exactly what the capture should show.
+                continue
             records.append((sensor.t, sensor.device_type,
                             sensor.device_number, payload))
     records.sort(key=lambda record: record[0])

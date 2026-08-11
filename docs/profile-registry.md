@@ -149,7 +149,7 @@ columns knows the type is on the merged RF 57 window and costs nothing extra.
 |---|---|---|---|---|---|---|---|---|
 | `0x0B` | Bicycle Power | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8182 | no | no | Implemented in `tools/ant_pages.py`; byte-exact to Garmin's profile |
 | `0x11` | Fitness Equipment (FE-C) | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | — | no | no | Compatibility target; not yet implemented in `tools/ant_pages.py`, so no period is recorded rather than a guessed one |
-| `0x60` | RadiANT Generic Telemetry | radiant | RadiANT project | 2026-08-08 | per-node | no | per-node | The envelope in `docs/radiant-telemetry.md`; period is announced in descriptor frame 0 |
+| `0x60` | RadiANT Generic Telemetry | radiant | RadiANT project | 2026-08-08 | per-node | no | per-node | The envelope in `docs/radiant-telemetry.md`; period is announced in descriptor frame 0. Implemented in `src/profiles/` and mirrored in `tools/ant_pages.py` |
 | `0x78` | Heart Rate | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | — | no | no | Compatibility target; not yet implemented in `tools/ant_pages.py` |
 | `0x79` | Bike Speed and Cadence, combined | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8086 | no | no | Implemented in `tools/ant_pages.py`. **No page-number byte** |
 | `0x7A` | Bike Cadence | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8102 | no | no | Period defined in `tools/ant_pages.py`; pages not implemented there |
@@ -183,10 +183,10 @@ the unclaimed one is the one two implementations both reach for.
 | `0x0B` | `0x51` | Common page 81, product | `ant_pages.encode_common_81` | Interleaved at message 120 of 121 |
 | `0x0B` | `0x52` | Common page 82, battery | `ant_pages.encode_common_82` | Optional |
 | `0x79` | none | Combined speed and cadence | `ant_pages.encode_bsc_combined` | This device type has **no page-number byte**; byte 0 is the low half of the cadence event time |
-| `0x60` | `0x00` | Descriptor | `docs/radiant-telemetry.md` section 6 | Frame set; the retained message |
-| `0x60` | `0x01-0x0F` | Data | `docs/radiant-telemetry.md` section 6 | Field area packed MSB-first against the descriptor |
-| `0x60` | `0x10` | Reliable command | `docs/radiant-telemetry.md` section 9 | Sequence + inline 16-bit tag, idempotent |
-| `0x60` | `0x11` | Command acknowledge | `docs/radiant-telemetry.md` section 9 | Result code + inline 16-bit tag |
+| `0x60` | `0x00` | Descriptor | `ant_pages.encode_tlm_descriptor` | Frame set; the retained message. C: `profile_desc_encode` |
+| `0x60` | `0x01-0x0F` | Data | `ant_pages.encode_tlm_data` | Field area packed MSB-first against the descriptor. C: `profile_data_encode` |
+| `0x60` | `0x10` | Reliable command | `ant_pages.encode_tlm_command` | Sequence + inline 16-bit tag, idempotent. **Layout only** - the idempotency rule and the tag need a key, and land with the command path |
+| `0x60` | `0x11` | Command acknowledge | `ant_pages.encode_tlm_command_ack` | Result code + inline 16-bit tag. Layout only, as above |
 | `0x60` | `0x12-0x1F` | Reserved | — | Unassigned; a receiver ignores these |
 | `0x60` | `0x20-0x2F` | Reserved for the security envelope | `docs/radiant-security.md` | Epoch and key-generation announcement, v2 TESLA key disclosure |
 | `0x60` | `0x30-0x4F` | Reserved | — | Unassigned |

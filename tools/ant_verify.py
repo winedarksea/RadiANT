@@ -231,6 +231,26 @@ class ChannelAnalyzer:
         self.tq_freq_baseline: dict | None = None
         self.csc_baseline: dict | None = None
 
+        # Device type 0x60, the RadiANT telemetry envelope.
+        #
+        # This is the one profile here whose SCHEMA IS NOT KNOWN IN ADVANCE.
+        # Everything above decodes a layout compiled into ant_pages.py; this
+        # one has to learn the layout from the node's own page 0x00 before it
+        # can decode a single field, which is the envelope's whole claim and
+        # therefore the thing worth verifying rather than assuming. Until the
+        # descriptor set completes, data pages are counted and not decoded -
+        # deliberately, because guessing a layout is how a receiver reports
+        # confident nonsense.
+        self.tlm_rx = ap.TlmDescriptorRx()
+        self.tlm_desc: ap.TlmDescriptor | None = None
+        self.tlm_schema_changes = 0
+        self.tlm_data_before_schema = 0
+        self.tlm_data_decoded = 0
+        # One baseline per data page, for the same reason torque_baseline is:
+        # two data pages of one schema are two independent series and
+        # differencing one against the other produces plausible garbage.
+        self.tlm_baseline: dict[int, dict] = {}
+
     # -- helpers ---------------------------------------------------------
 
     def _violation(self, message: str) -> None:
@@ -337,12 +357,163 @@ class ChannelAnalyzer:
             # first one does show up.
             self.messages_since_common = 0
 
-        if page == ap.PAGE_POWER_STANDARD:
+        if self.device_type == ap.RADIANT_TLM_DEVICE_TYPE:
+            self._feed_telemetry(t, payload)
+        elif page == ap.PAGE_POWER_STANDARD:
             self._feed_power_std(payload)
         elif page in (ap.PAGE_POWER_WHEEL_TORQUE, ap.PAGE_POWER_CRANK_TORQUE):
             self._feed_power_torque(payload)
         elif page == ap.PAGE_POWER_TORQUE_FREQ:
             self._feed_power_torque_freq(payload)
+
+    # -- the RadiANT telemetry envelope, device type 0x60 -----------------
+
+    def _feed_telemetry(self, t: float, payload: bytes) -> None:
+        """Learn the schema from the node, then check its accumulators.
+
+        Nothing about this node is known in advance - not its fields, not its
+        widths, not which pages it uses. Everything below is decoded against a
+        descriptor that arrived on the air, which is why the first thing this
+        does is assemble one and the second is decline to decode until it has.
+        """
+        page = payload[0]
+
+        if page == ap.PAGE_TLM_DESCRIPTOR:
+            try:
+                complete = self.tlm_rx.feed(payload)
+            except ValueError as error:
+                self._violation(f"descriptor frame: {error}")
+                return
+            if not complete:
+                return
+            try:
+                schema = self.tlm_rx.take()
+            except ValueError as error:
+                self._violation(f"descriptor set: {error}")
+                return
+            if (self.tlm_desc is not None
+                    and schema.schema_id != self.tlm_desc.schema_id):
+                # A new schema renumbers every field offset, so every baseline
+                # held against the old one is now a comparison between two
+                # different layouts. Dropping them is the only correct move.
+                self.tlm_schema_changes += 1
+                self.tlm_baseline = {}
+            self.tlm_desc = schema
+            return
+
+        if not ap.PAGE_TLM_DATA_FIRST <= page <= ap.PAGE_TLM_DATA_LAST:
+            # A command page, a reserved page, or a vendor-private one. A
+            # receiver ignores what it does not recognise; it does not guess.
+            return
+
+        if self.tlm_desc is None:
+            # Counted rather than decoded. A receiver that joined mid-stream
+            # is entitled to see data before it sees a schema, and inventing
+            # one is the failure this whole envelope exists to prevent.
+            self.tlm_data_before_schema += 1
+            return
+
+        if not self.tlm_desc.may_decode_data:
+            # Fail closed: a transform bit this build does not implement.
+            self._violation("the node announced a transform this receiver "
+                            "does not implement; its data pages are not "
+                            "decodable and must not be decoded")
+            return
+
+        try:
+            got = ap.decode_tlm_data(self.tlm_desc, payload)
+        except ValueError as error:
+            self._violation(f"data page 0x{page:02X}: {error}")
+            return
+        self.tlm_data_decoded += 1
+
+        before = self.tlm_baseline.get(page)
+        self.tlm_baseline[page] = {"t": t, "counter": got["counter"],
+                                   "values": got["values"]}
+        if before is None:
+            return
+
+        d_counter = ap.delta_u8(got["counter"], before["counter"])
+        self._note_wrap(f"counter(0x{page:02X})", got["counter"],
+                        before["counter"])
+        self._note_event(d_counter != 0)
+
+        if d_counter == 0:
+            # The event counter counts TRANSMISSIONS, so two packets carrying
+            # the same counter are the same transmission - a sparse node's
+            # repeat, which the counter exists to let a receiver deduplicate.
+            # The bodies must therefore be identical.
+            if got["values"] != before["values"]:
+                self._violation(
+                    f"page 0x{page:02X}: two packets share counter "
+                    f"{got['counter']} and carry different values")
+            return
+
+        for field in self.tlm_desc.fields:
+            if field.page != page or not field.accumulate:
+                continue
+            name = f"field {field.id} (0x{field.type:02X})"
+            now = got["values"][field.id]
+            was = before["values"][field.id]
+            span = 1 << field.width
+            delta = (now - was) % span
+            self._note_wrap(name, now, was)
+
+            # An accumulator differenced IN ITS OWN WIDTH can never be
+            # negative, so the only thing a single delta can be wrong about is
+            # its size - and a delta past half the field's range is what a
+            # reset, a restart, or a subtraction done after widening to int
+            # looks like. That last one is the failure section 5 warns about:
+            # correct for hours, then one absurd sample per wrap, easy to
+            # dismiss as radio noise.
+            if delta > span // 2:
+                self._violation(
+                    f"page 0x{page:02X} {name}: accumulator advanced by "
+                    f"{delta} in {field.width} bits over {d_counter} event(s), "
+                    "which is more than half its range")
+
+        self._check_tlm_integral(t, page, got, before, d_counter)
+
+    def _check_tlm_integral(self, t: float, page: int, got: dict, before: dict,
+                            d_counter: int) -> None:
+        """Check an accumulator against its instantaneous partner.
+
+        Section 5's rule - "anything integrable is published as an accumulating
+        field ... the accumulator is authoritative" - is what makes this
+        possible without knowing anything about the node: section 7 fixes which
+        accumulating type is which instantaneous type's integral, so a receiver
+        can look the pair up in the vocabulary and check one against the other.
+        That is the generic form of what _feed_power_std does for ANT+ page
+        0x10's acc_power against inst_power.
+
+        Only pairs on the SAME page are checked, because only those share a
+        timestamp; and only the pairs where the accumulator is literally the
+        time integral in canonical SI units, because the rest need a constant
+        this receiver would have to invent.
+        """
+        dt = t - before["t"]
+        if dt <= 0.0:
+            return
+
+        for inst in self.tlm_desc.fields:
+            partner_type = ap.TLM_TIME_INTEGRAL_PARTNER.get(inst.type)
+            if partner_type is None or inst.page != page or inst.accumulate:
+                continue
+            for acc in self.tlm_desc.fields:
+                if (acc.page != page or acc.type != partner_type
+                        or not acc.accumulate):
+                    continue
+                span = 1 << acc.width
+                delta = (got["values"][acc.id] - before["values"][acc.id]) % span
+                implied = (delta * (10.0 ** acc.exponent)) / dt
+                actual = ap.tlm_value_si(inst, got["values"][inst.id])
+                tolerance = max(15.0, 0.35 * abs(actual))
+                if abs(implied - actual) > tolerance:
+                    self._violation(
+                        f"page 0x{page:02X}: field {acc.id} accumulated "
+                        f"{implied:.1f} per second over {dt:.3f} s, while "
+                        f"field {inst.id} reports {actual:.1f} - the "
+                        "accumulator and its instantaneous partner disagree")
 
     def _feed_power_std(self, payload: bytes) -> None:
         got = ap.decode_power_std(payload)
@@ -589,10 +760,28 @@ class ChannelAnalyzer:
         def check(name: str, ok: bool, detail: str) -> None:
             checks.append({"name": name, "pass": bool(ok), "detail": detail})
 
+        # A SPARSE NODE HAS NO PACKET RATE, and measuring one against a period
+        # is the exact mistake docs/radiant-telemetry.md section 8 warns about:
+        # "the receiver will report it as terrible link quality rather than as
+        # a configuration mismatch". A node that transmits forty messages a day
+        # while keeping a 4 Hz period configured scores 99.9 % loss and
+        # enormous jitter while working perfectly. The flag is in the
+        # descriptor precisely so this is a decision made from data, and this
+        # is the receiver making it.
+        sparse_node = (self.tlm_desc is not None
+                       and bool(self.tlm_desc.flags & ap.TLM_FLAG_SPARSE))
+
         check("packets", self.packets > 0,
               f"{self.packets} received, {expected:.0f} expected over "
               f"{elapsed:.1f} s")
-        if self.packets and expected > 0:
+        if sparse_node:
+            check("sparse cadence", True,
+                  f"{self.packets} transmission(s) in {elapsed:.1f} s from a "
+                  f"node announcing sparse mode with a "
+                  f"{self.tlm_desc.heartbeat_s} s heartbeat - loss and jitter "
+                  "are not measured against a period this node never claimed "
+                  "to fill")
+        elif self.packets and expected > 0:
             # The resolution matters more than the number on a short run. At
             # ~4 Hz a minute is only 240 packets, so a single dropped one is
             # 0.4 % and two put an otherwise perfect link over a 1 % limit.
@@ -604,7 +793,7 @@ class ChannelAnalyzer:
             check("loss", round(loss_pct, 2) <= max_loss_pct,
                   f"{loss_pct:.2f} % (limit {max_loss_pct:.2f} %, "
                   f"one packet = {100.0 / expected:.2f} %)")
-        if jitter["stdev_s"] is not None and self.period_s > 0:
+        if jitter["stdev_s"] is not None and self.period_s > 0 and not sparse_node:
             # Left exactly as it was, on the host clock, because the USB path
             # is part of what a dongle is and this check has always covered it.
             # What it is not is a measurement of the link's timing - see
@@ -666,7 +855,23 @@ class ChannelAnalyzer:
                   f"mean abs error {result['mean_abs_error']:.2f} against "
                   f"{expected_value:.0f} (limit {limit:.2f})")
 
-        if self.device_type != ap.BSC_COMBINED_DEVICE_TYPE:
+        if self.device_type == ap.RADIANT_TLM_DEVICE_TYPE:
+            # The envelope's own check, and the one that says whether this
+            # node is decodable at all: a receiver that never assembled a
+            # descriptor set has learned nothing, however clean the stream.
+            check("descriptor decoded", self.tlm_desc is not None,
+                  "no descriptor set assembled" if self.tlm_desc is None else
+                  f"schema 0x{self.tlm_desc.schema_id:02X}, "
+                  f"{len(self.tlm_desc.fields)} field(s), period "
+                  f"{self.tlm_desc.period}, "
+                  f"{self.tlm_data_decoded} data page(s) decoded against it "
+                  f"({self.tlm_data_before_schema} seen before it arrived)")
+
+        # A sparse node has no 121-message cycle to hang a common page on
+        # (section 8 replaces the interleave outright), so the common-page
+        # cadence is checked only where the profile actually requires it. 0x79
+        # has no common pages defined for it either.
+        if self.device_type != ap.BSC_COMBINED_DEVICE_TYPE and not sparse_node:
             worst_gap = max(self.common_gaps) if self.common_gaps else None
             saw_both = (self.common_pages_seen[ap.PAGE_COMMON_MANUFACTURER] > 0
                         and self.common_pages_seen[ap.PAGE_COMMON_PRODUCT] > 0)
@@ -698,6 +903,35 @@ class ChannelAnalyzer:
             "cadence": cadence,
             "speed_mps": speed,
             "accumulator_wraps": dict(self.wraps),
+            # What was learned from the node's own descriptor, and nothing
+            # else. None for every device type but 0x60.
+            "telemetry": None if self.tlm_desc is None else {
+                "schema_id": self.tlm_desc.schema_id,
+                "period_ticks": self.tlm_desc.period,
+                "rf_index": self.tlm_desc.rf_index,
+                "flags": self.tlm_desc.flags,
+                "sparse": bool(self.tlm_desc.flags & ap.TLM_FLAG_SPARSE),
+                "heartbeat_s": self.tlm_desc.heartbeat_s,
+                "descriptor_frames_heard": self.tlm_rx.frames_fed,
+                "schema_changes": self.tlm_schema_changes,
+                "data_pages_decoded": self.tlm_data_decoded,
+                "data_pages_before_schema": self.tlm_data_before_schema,
+                "fields": [
+                    {
+                        "id": f.id,
+                        "type": f"0x{f.type:02X}",
+                        "quantity": ap.TLM_TYPES.get(f.type, ("unknown", "?"))[0],
+                        "unit": ap.TLM_TYPES.get(f.type, ("unknown", "?"))[1],
+                        "bits": f.width,
+                        "exponent": f.exponent,
+                        "accumulate": f.accumulate,
+                        "signed": f.signed,
+                        "page": f"0x{f.page:02X}",
+                        "bit_offset": f.bit_offset,
+                    }
+                    for f in self.tlm_desc.fields
+                ],
+            },
             "event_advances": self.event_advances,
             "event_comparisons": self.event_comparisons,
             "exact_loss": exact,
@@ -721,6 +955,16 @@ def profile_for(device_type: int, pages: Counter) -> str:
     """
     if device_type == ap.BSC_COMBINED_DEVICE_TYPE:
         return "csc"
+    if device_type == ap.RADIANT_TLM_DEVICE_TYPE:
+        # Both 0x60 profiles are the same envelope with the same decoder, and
+        # the difference between them is announced in the descriptor rather
+        # than guessable from the page histogram - a telemetry node in a short
+        # capture and an asset tag in a long one look alike from outside. A
+        # node with data pages is publishing something; one with nothing but
+        # page 0x00 is a tag.
+        data = sum(count for page, count in pages.items()
+                   if ap.PAGE_TLM_DATA_FIRST <= page <= ap.PAGE_TLM_DATA_LAST)
+        return "telemetry" if data else "asset-tag"
     if pages[ap.PAGE_POWER_TORQUE_FREQ]:
         return "power-torque-freq"
     if pages[ap.PAGE_POWER_WHEEL_TORQUE] or pages[ap.PAGE_POWER_CRANK_TORQUE]:

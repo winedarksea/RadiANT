@@ -280,6 +280,475 @@ class TestDispatch(unittest.TestCase):
         self.assertEqual(ap.PROFILES["power-torque"]["pages"], (0x11, 0x12))
 
 
+def sample_descriptor(**kwargs) -> "ap.TlmDescriptor":
+    """The node the C suite uses too, field for field.
+
+    Four fields over two data pages, chosen so every packing case the envelope
+    allows appears at least once: byte-aligned and not, signed and unsigned,
+    accumulating and instantaneous. Field 4 is the interesting one - 12 bits
+    starting at bit 32 - because a receiver that packed little-endian gets a
+    plausible wrong number out of it rather than an error.
+    """
+    fields = [
+        ap.TlmField(id=1, type=0x26, page=1, bit_offset=0, width_code=4),
+        ap.TlmField(id=2, type=0x10, page=1, bit_offset=8, width_code=7,
+                    exponent=-2),
+        ap.TlmField(id=3, type=0x30, page=2, bit_offset=0, width_code=10,
+                    accumulate=True),
+        ap.TlmField(id=4, type=0x1C, page=2, bit_offset=32, width_code=6,
+                    signed=True),
+    ]
+    kwargs.setdefault("schema_id", 0x2B)
+    kwargs.setdefault("period", 8182)
+    kwargs.setdefault("fields", fields)
+    return ap.TlmDescriptor(**kwargs)
+
+
+class TestTelemetryBitPacker(unittest.TestCase):
+    """The MSB-first field area of device type 0x60.
+
+    THESE VECTORS ARE SHARED, BYTE FOR BYTE, WITH
+    radiant_core/tests/src/test_profiles.c. That is the whole reason they are
+    written as a table of literals rather than as round trips: two
+    implementations checked only against each other are not checked at all, and
+    docs/radiant-telemetry.md section 6 says MSB-first bit order exists
+    precisely because little-endian bit order is "a reliable source of two
+    implementations that each work alone."
+    """
+
+    VECTORS = [
+        # (bit offset, width, value, six expected bytes)
+        (0, 1, 0x1, "800000000000"),
+        (47, 1, 0x1, "000000000001"),
+        (8, 8, 0xA5, "00a50000000000"[:12]),
+        (4, 12, 0xABC, "0abc0000000000"[:12]),
+        (32, 12, 0xFFF, "00000000fff0"),
+        (7, 6, 0x2B, "015800000000"),
+        (0, 48, 0x0123456789AB, "0123456789ab"),
+        (0, 32, 0xDEADBEEF, "deadbeef0000"),
+        (3, 10, 0x155, "0aa800000000"),
+    ]
+
+    def test_vectors(self):
+        for off, width, value, expect in self.VECTORS:
+            with self.subTest(off=off, width=width):
+                area = bytearray(6)
+                ap.pack_bits(area, 48, off, width, value)
+                self.assertEqual(bytes(area).hex(), expect)
+                self.assertEqual(
+                    ap.unpack_bits(bytes(area), 48, off, width), value)
+
+    def test_offset_zero_is_the_most_significant_bit(self):
+        # The single fact the whole convention rests on. Stated as its own
+        # test so that a change to it fails with the right name.
+        area = bytearray(6)
+        ap.pack_bits(area, 48, 0, 1, 1)
+        self.assertEqual(area[0], 0x80)
+
+    def test_a_field_that_does_not_fit_is_an_error(self):
+        area = bytearray(6)
+        with self.assertRaises(ValueError):
+            ap.pack_bits(area, 48, 41, 8, 0)
+        # X_AUTH shrinks the field area to 40 bits, so the same field is legal
+        # at one offset and illegal one bit later.
+        ap.pack_bits(area, 40, 32, 8, 0)
+        with self.assertRaises(ValueError):
+            ap.pack_bits(area, 40, 33, 8, 0)
+
+    def test_the_width_table_is_the_documented_one(self):
+        self.assertEqual(ap.TLM_WIDTHS,
+                         (1, 2, 4, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48))
+        for code, bits in enumerate(ap.TLM_WIDTHS):
+            self.assertEqual(ap.tlm_width_for_code(code), bits)
+            self.assertEqual(ap.tlm_code_for_width(bits), code)
+        # 13..15 are reserved and are rejected rather than clamped: a receiver
+        # that guesses a width decodes every field after it at a wrong offset.
+        with self.assertRaises(ValueError):
+            ap.tlm_width_for_code(13)
+
+    def test_sign_extension_is_in_the_fields_own_width(self):
+        self.assertEqual(ap.tlm_sign_extend(0xFFF, 12), -1)
+        self.assertEqual(ap.tlm_sign_extend(0x800, 12), -2048)
+        self.assertEqual(ap.tlm_sign_extend(0x7FF, 12), 2047)
+        self.assertEqual(ap.tlm_sign_extend(0xFF, 8), -1)
+        self.assertEqual(ap.tlm_sign_extend(1, 1), -1)
+
+
+class TestTelemetryDescriptor(unittest.TestCase):
+    # The exact frames the C encoder produces for sample_descriptor(). Pinned
+    # as hex rather than recomputed, so a change on either side of the mirror
+    # shows up here as a diff rather than as agreement between two things that
+    # moved together.
+    GOLDEN = [
+        "0005142bf61f3900",
+        "0015000000000000",
+        "0025012610000100",
+        "003502101cfe0108",
+        "00450330a8000200",
+        "0055041c58000220",
+    ]
+
+    def test_the_frames_are_byte_for_byte_what_the_c_encoder_emits(self):
+        frames = ap.encode_tlm_descriptor(sample_descriptor())
+        self.assertEqual([f.hex() for f in frames], self.GOLDEN)
+
+    def test_frame_index_byte_and_page_number(self):
+        frames = ap.encode_tlm_descriptor(sample_descriptor())
+        for index, frame in enumerate(frames):
+            self.assertEqual(frame[0], ap.PAGE_TLM_DESCRIPTOR)
+            # (index << 4) | (count - 1). A frame INDEX, not a counter - one
+            # of the two documented exceptions to the counter invariant.
+            self.assertEqual(frame[1], (index << 4) | (len(frames) - 1))
+
+    def test_round_trip(self):
+        d = sample_descriptor()
+        back = ap.decode_tlm_descriptor(ap.encode_tlm_descriptor(d))
+        self.assertEqual(back.schema_id, d.schema_id)
+        self.assertEqual(back.period, d.period)
+        self.assertEqual(back.rf_index, d.rf_index)
+        self.assertEqual(back.flags, 0)
+        self.assertEqual(back.epoch, 0)
+        self.assertEqual(back.fields, d.fields)
+        self.assertEqual(back.data_pages, [1, 2])
+
+    def test_every_reserved_field_is_zero(self):
+        # docs/radiant-telemetry.md section 11: "Every reservation in this
+        # document is populated with zeros in v1." Asserted rather than
+        # trusted, because a reserved bit that quietly carries something is a
+        # format break the day the phase that owns it arrives.
+        frames = ap.encode_tlm_descriptor(sample_descriptor())
+        self.assertEqual(frames[0][7] & ap.TLM_FLAG_TRANSFORM_MASK, 0)
+        self.assertEqual(frames[0][7] & ap.TLM_FLAG_RSVD_3, 0)
+        self.assertEqual(frames[1][2], 0)          # heartbeat, off sparse
+        self.assertEqual(frames[1][3], 0)          # W, k, and bits 3..0
+        self.assertEqual(bytes(frames[1][4:8]), b"\x00\x00\x00\x00")  # epoch
+        for frame in frames[2:]:
+            self.assertEqual(frame[4] & 0x03, 0)   # encoding bits 1..0
+
+    def test_a_malformed_schema_is_refused(self):
+        cases = {
+            "class 0x30 without the accumulate bit":
+                dict(index=2, attr="accumulate", value=False),
+            "two fields overlapping in one page":
+                dict(index=1, attr="bit_offset", value=4),
+            "a field past the end of the field area":
+                dict(index=2, attr="bit_offset", value=20),
+            "two fields sharing an id":
+                dict(index=1, attr="id", value=1),
+        }
+        for name, change in cases.items():
+            with self.subTest(name):
+                d = sample_descriptor()
+                setattr(d.fields[change["index"]], change["attr"],
+                        change["value"])
+                with self.assertRaises(ValueError):
+                    ap.encode_tlm_descriptor(d)
+
+    def test_the_node_may_not_disagree_with_itself_about_its_frequency(self):
+        d = sample_descriptor(rf_index=80)
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_descriptor(d)
+        d.flags |= ap.TLM_FLAG_OFF_RF57
+        self.assertEqual(len(ap.encode_tlm_descriptor(d)), 6)
+
+    def test_a_sparse_node_without_a_heartbeat_is_refused(self):
+        # Without a heartbeat a receiver cannot tell a quiet node from a dead
+        # one, and "no data" is the one reading a telemetry system must never
+        # produce silently.
+        d = sample_descriptor(flags=ap.TLM_FLAG_SPARSE, heartbeat_s=0)
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_descriptor(d)
+
+    def test_info_bit_3_stays_reserved(self):
+        # ADR 0006 keeps the withdrawn X_PRIV bit reserved rather than
+        # reclaiming it: revisiting rotation stays a format-compatible change,
+        # and announcing a privacy posture in the clear is itself a leak.
+        d = sample_descriptor(flags=ap.TLM_FLAG_RSVD_3)
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_descriptor(d)
+
+    def test_v1_refuses_to_announce_a_transform(self):
+        # There is no descriptor authentication frame to go with it, and a
+        # transform announced without one gets an attacker wrong readings out
+        # of correctly authenticated packets.
+        for flag in (ap.TLM_FLAG_X_AUTH, ap.TLM_FLAG_X_CONF):
+            with self.subTest(flag=flag):
+                d = sample_descriptor(flags=flag, w_code=ap.TLM_W_CODE_4)
+                with self.assertRaises(ValueError):
+                    ap.encode_tlm_descriptor(d)
+
+    def test_a_receiver_fails_closed_on_a_transform_it_cannot_do(self):
+        d = sample_descriptor()
+        self.assertTrue(d.may_decode_data)
+        d.flags = ap.TLM_FLAG_X_CONF
+        self.assertFalse(d.may_decode_data)
+        with self.assertRaises(ValueError):
+            ap.decode_tlm_data(d, bytes([1, 0, 0, 0, 0, 0, 0, 0]))
+
+    def test_an_unimplemented_version_is_rejected_not_guessed_at(self):
+        frames = ap.encode_tlm_descriptor(sample_descriptor())
+        broken = list(frames)
+        broken[0] = bytes([frames[0][0], frames[0][1], 0x24]) + frames[0][3:]
+        with self.assertRaises(ValueError):
+            ap.decode_tlm_descriptor(broken)
+        # Field count 15 names an extended descriptor - a different frame set,
+        # not fifteen fields.
+        broken[0] = bytes([frames[0][0], frames[0][1], 0x1F]) + frames[0][3:]
+        with self.assertRaises(ValueError):
+            ap.decode_tlm_descriptor(broken)
+
+
+class TestTelemetryDescriptorAssembly(unittest.TestCase):
+    def test_the_set_assembles_backwards_and_through_holes(self):
+        frames = ap.encode_tlm_descriptor(sample_descriptor())
+        rx = ap.TlmDescriptorRx()
+        for index in reversed(range(len(frames))):
+            done = rx.feed(frames[index])
+            self.assertEqual(done, index == 0,
+                             "the set completes when the last hole fills")
+        self.assertEqual(rx.take().schema_id, 0x2B)
+
+    def test_other_pages_do_not_disturb_an_assembly(self):
+        frames = ap.encode_tlm_descriptor(sample_descriptor())
+        rx = ap.TlmDescriptorRx()
+        rx.feed(frames[0])
+        rx.feed(ap.encode_common_80(1, 0xFF, 1))
+        rx.feed(bytes([0x01, 0x07, 0, 0, 0, 0, 0, 0]))
+        self.assertFalse(rx.complete)
+
+    def test_a_new_schema_id_abandons_the_partial_set(self):
+        # What the schema id is for: a receiver notices a change after reading
+        # a SINGLE frame instead of the whole set. Anything already assembled
+        # describes the previous schema, and decoding this node's pages against
+        # it would put every field at the wrong offset.
+        old = ap.encode_tlm_descriptor(sample_descriptor())
+        changed = sample_descriptor(schema_id=0x2C)
+        changed.fields[0].bit_offset = 16
+        changed.fields[1].bit_offset = 24
+        new = ap.encode_tlm_descriptor(changed)
+
+        rx = ap.TlmDescriptorRx()
+        for frame in old[:-1]:
+            rx.feed(frame)
+        rx.feed(new[0])
+        self.assertFalse(rx.complete)
+        self.assertEqual(rx.resets, 1)
+        for frame in new[1:]:
+            rx.feed(frame)
+        self.assertEqual(rx.take().fields[0].bit_offset, 16)
+
+
+class TestTelemetryDataPages(unittest.TestCase):
+    def test_round_trip_including_the_unaligned_signed_field(self):
+        d = sample_descriptor()
+        body = ap.encode_tlm_data(d, 2, 0x12,
+                                  {3: 0xFFFFFFF0, 4: -250})
+        self.assertEqual(body.hex(), "0212fffffff0f060")
+        got = ap.decode_tlm_data(d, body)
+        self.assertEqual(got["page"], 2)
+        self.assertEqual(got["counter"], 0x12)
+        self.assertEqual(got["values"][3], 0xFFFFFFF0)
+        self.assertEqual(got["values"][4], -250)
+        # Bits the schema does not claim are zero: page 2 uses 0..43, so the
+        # low nibble of byte [7] is untouched and stays zero, because a later
+        # schema may claim it and a receiver mid-change would read a stale
+        # value as a number.
+        self.assertEqual(body[7] & 0x0F, 0)
+
+    def test_byte_1_is_the_event_counter_and_wraps(self):
+        d = sample_descriptor()
+        self.assertEqual(ap.encode_tlm_data(d, 1, 300, {})[1], 44)
+
+    def test_an_accumulating_field_wraps_rather_than_saturating(self):
+        # Section 5: the transmitted value is a running total in the field's
+        # declared width and it is MEANT to wrap.
+        d = sample_descriptor()
+        body = ap.encode_tlm_data(d, 2, 0, {3: (1 << 32) + 255})
+        self.assertEqual(ap.decode_tlm_data(d, body)["values"][3], 255)
+
+    def test_the_scale_exponent_produces_the_worked_example(self):
+        # docs/radiant-telemetry.md section 7: raw 29315 at exp -2 is 293.15 K.
+        d = sample_descriptor()
+        self.assertAlmostEqual(ap.tlm_value_si(d.fields[1], 29315), 293.15,
+                               places=6)
+
+
+class TestTelemetryPageScheduler(unittest.TestCase):
+    def builders(self, d):
+        return {
+            "data_page": lambda page, counter: ap.encode_tlm_data(
+                d, page, counter, {}),
+            "common_80": lambda: ap.encode_common_80(1, 0x00FF, 1),
+            # serial = 0xFFFFFFFF, the not-supplied sentinel and the whole of
+            # the page 81 privacy rule.
+            "common_81": lambda: ap.encode_common_81(1, None),
+        }
+
+    def test_the_interleave_is_119_120_over_121(self):
+        d = sample_descriptor()
+        sched = ap.TlmPageScheduler(d, self.builders(d))
+        for _ in range(ap.RADIANT_TLM_CYCLE):    # burn the power-up burst
+            sched.next()
+
+        data = 0
+        for cycle in range(3):
+            for slot in range(ap.RADIANT_TLM_CYCLE):
+                kind, body = sched.next()
+                if slot <= 5:
+                    self.assertEqual(kind, ap.SLOT_DESCRIPTOR,
+                                     f"cycle {cycle} slot {slot}")
+                    self.assertEqual(body[0], ap.PAGE_TLM_DESCRIPTOR)
+                    self.assertEqual(body[1], (slot << 4) | 5)
+                elif slot == ap.RADIANT_TLM_SLOT_PAGE_80:
+                    self.assertEqual(kind, ap.SLOT_COMMON_80)
+                elif slot == ap.RADIANT_TLM_SLOT_PAGE_81:
+                    self.assertEqual(kind, ap.SLOT_COMMON_81)
+                else:
+                    self.assertEqual(kind, ap.SLOT_DATA)
+                    data += 1
+        # 121 - 6 descriptor - 2 common. The descriptor set is CONSECUTIVE:
+        # spreading six frames one per cycle would make a mid-stream join take
+        # six cycles instead of one.
+        self.assertEqual(data, 3 * 113)
+
+    def test_the_rotation_alternates_and_the_counter_counts_only_data(self):
+        d = sample_descriptor()
+        sched = ap.TlmPageScheduler(d, self.builders(d))
+        expect_page, expect_counter, seen = 1, 0, 0
+        for _ in range(3 * ap.RADIANT_TLM_CYCLE):
+            kind, body = sched.next()
+            if kind != ap.SLOT_DATA:
+                continue
+            self.assertEqual(body[0], expect_page)
+            self.assertEqual(body[1], expect_counter)
+            expect_page = 2 if expect_page == 1 else 1
+            expect_counter = (expect_counter + 1) % 256
+            seen += 1
+        self.assertEqual(seen, 3 * 113)
+        self.assertGreater(seen, 256, "the run must cross the counter's wrap")
+
+    def test_the_client_seam_takes_slots_but_never_the_cadence(self):
+        d = sample_descriptor()
+        offers = []
+
+        def claim(m):
+            offers.append(m)
+            if m % 3:
+                return None
+            return bytes([0xF0, m & 0xFF, 0, 0, 0, 0, 0, 0])
+
+        sched = ap.TlmPageScheduler(d, self.builders(d), client=claim)
+        claimed = 0
+        for slot in range(ap.RADIANT_TLM_CYCLE):
+            kind, body = sched.next()
+            if slot <= 5:
+                self.assertEqual(kind, ap.SLOT_DESCRIPTOR)
+            elif slot in (ap.RADIANT_TLM_SLOT_PAGE_80,
+                          ap.RADIANT_TLM_SLOT_PAGE_81):
+                self.assertIn(kind, (ap.SLOT_COMMON_80, ap.SLOT_COMMON_81))
+            elif kind == ap.SLOT_CLIENT:
+                self.assertEqual(body[0], 0xF0)
+                claimed += 1
+            else:
+                self.assertEqual(kind, ap.SLOT_DATA)
+
+        # Offered exactly the 113 data slots and no others: a client that could
+        # displace a common page or half a descriptor set would be forking the
+        # rotation with extra steps.
+        self.assertEqual(len(offers), 113)
+        self.assertNotIn(0, offers)
+        self.assertNotIn(119, offers)
+        self.assertNotIn(120, offers)
+        self.assertGreater(claimed, 30)
+
+    def test_a_client_with_no_descriptor_still_gets_the_interleave(self):
+        # An ANT+ compatibility device type is the actual first caller, and it
+        # has no schema of its own. The interleave has to hold with the
+        # descriptor slots simply absent, or that plan has to fork this one.
+        offers = []
+
+        def claim(m):
+            offers.append(m)
+            return bytes([0x10, m & 0xFF, 0, 0, 0, 0, 0, 0])
+
+        sched = ap.TlmPageScheduler(None, {
+            "common_80": lambda: ap.encode_common_80(1, 0x00FF, 1),
+            "common_81": lambda: ap.encode_common_81(1, None),
+        }, client=claim)
+
+        kinds = [sched.next()[0] for _ in range(ap.RADIANT_TLM_CYCLE)]
+        self.assertEqual(kinds[119], ap.SLOT_COMMON_80)
+        self.assertEqual(kinds[120], ap.SLOT_COMMON_81)
+        self.assertEqual(len(offers), 119)
+        self.assertTrue(all(k == ap.SLOT_CLIENT
+                            for i, k in enumerate(kinds) if i < 119))
+
+    def test_a_sparse_node_is_silent_between_heartbeats(self):
+        d = sample_descriptor(flags=ap.TLM_FLAG_SPARSE, heartbeat_s=30,
+                              k_code=ap.TLM_K_CODE_3)
+        sched = ap.TlmPageScheduler(d, {"data_page": self.builders(d)["data_page"]})
+        self.assertEqual(sched.hb_slots, 120)
+
+        kinds = [sched.next()[0] for _ in range(3 * 120)]
+        self.assertEqual(kinds.count(ap.SLOT_DESCRIPTOR), 3 * 6,
+                         "the whole set rides every heartbeat")
+        self.assertEqual(kinds.count(ap.SLOT_IDLE), 3 * 120 - 18,
+                         "and the node says nothing at all in between")
+
+    def test_a_sparse_event_is_repeated_k_times_with_distinct_counters(self):
+        d = sample_descriptor(flags=ap.TLM_FLAG_SPARSE, heartbeat_s=60,
+                              k_code=ap.TLM_K_CODE_3)
+        sched = ap.TlmPageScheduler(d, {"data_page": self.builders(d)["data_page"]})
+        for _ in range(16):          # clear the power-up heartbeat
+            sched.next()
+
+        sched.post_event(1)
+        counters = [body[1] for kind, body in
+                    (sched.next() for _ in range(10))
+                    if kind == ap.SLOT_DATA]
+        # k = 3, one per slot, spaced by roughly one channel period - there is
+        # no retransmission and a scanning receiver may be mid-dwell elsewhere.
+        # The counter is what lets it deduplicate the repeats.
+        self.assertEqual(counters, [0, 1, 2])
+
+        # Command 0x06: how a receiver that just joined gets a schema without
+        # waiting for the next heartbeat.
+        sched.request_descriptor()
+        self.assertEqual([sched.next()[0] for _ in range(6)],
+                         [ap.SLOT_DESCRIPTOR] * 6)
+        self.assertEqual(sched.next()[0], ap.SLOT_IDLE)
+
+
+class TestTelemetryCommandPages(unittest.TestCase):
+    """Layout only. The idempotency rule, the accept window, the tag
+    derivation and the backoff on failed verifications all need a key and a
+    state machine, and both belong to the phase that turns the command path
+    on."""
+
+    def test_command_round_trip(self):
+        raw = ap.encode_tlm_command(seq=7, cmd=ap.TLM_CMD_SET_LEVEL,
+                                    target=4, arg=0x1234, tag=0xBEEF)
+        self.assertEqual(raw[0], ap.PAGE_TLM_COMMAND)
+        self.assertEqual(raw[1], 7)          # the counter invariant
+        self.assertEqual(raw[6:8], b"\xef\xbe")   # trailing bytes are tag space
+        got = ap.decode_tlm_command(raw)
+        self.assertEqual(got["cmd"], ap.TLM_CMD_SET_LEVEL)
+        self.assertEqual(got["target"], 4)
+        self.assertEqual(got["arg"], 0x1234)
+        self.assertEqual(got["tag"], 0xBEEF)
+
+    def test_ack_round_trip(self):
+        raw = ap.encode_tlm_command_ack(seq=7, result=ap.TLM_RESULT_ALREADY,
+                                        cmd=ap.TLM_CMD_SET_BOOL, value=1,
+                                        tag=0x0102)
+        got = ap.decode_tlm_command_ack(raw)
+        self.assertEqual(got["page"], ap.PAGE_TLM_COMMAND_ACK)
+        self.assertEqual(got["seq"], 7)
+        # "accepted; already executed" is what makes a retried "AC on" safe.
+        self.assertEqual(got["result"], ap.TLM_RESULT_ALREADY)
+        self.assertEqual(got["value"], 1)
+
+
 class TestAgainstTheAerosenseDecoders(unittest.TestCase):
     """Reference results the C code in zephyr_aerosense/src/ant must match.
 
