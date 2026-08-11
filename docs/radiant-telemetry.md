@@ -150,7 +150,8 @@ paragraph applies again in full.
 | `0x10` | Reliable command | Command + sequence + inline tag, receiver -> node |
 | `0x11` | Command acknowledge | Result + sequence + inline tag, node -> receiver |
 | `0x12` | Sync handoff | One receiver tells another where and when a node it already tracks transmits |
-| `0x13-0x1F` | Reserved | Unassigned; a receiver ignores these |
+| `0x13` | Frequency move | One-frame set; target RF index and a countdown in units of eight transmitted messages. See `docs/decisions/0012-adaptive-frequency.md` |
+| `0x14-0x1F` | Reserved | Unassigned; a receiver ignores these |
 | `0x20-0x2F` | Reserved for the security envelope | Epoch and key-generation announcement, v2 TESLA key disclosure |
 | `0x30-0x4F` | Reserved | Unassigned |
 | `0x50` | Common page 80 | Manufacturer information, byte-exact ANT+ |

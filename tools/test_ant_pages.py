@@ -1547,6 +1547,157 @@ class TestTelemetrySyncHandoff(unittest.TestCase):
         self.assertEqual(ap.tlm_handoff_next_slot(got, 1_000_000), 1_005_000)
 
 
+class TestFrequencyMove(unittest.TestCase):
+    """Page 0x13, adaptive frequency (RF-7).
+
+    CANON_HEX is shared BYTE FOR BYTE with radiant_core/tests/src/test_freq.c.
+    Two implementations checked only against each other are not checked at all,
+    and this page in particular tells a receiver where to point its radio.
+    """
+
+    CANON_HEX = "13001a08000000 00".replace(" ", "")
+
+    def test_the_announcement_matches_the_c_suites_canon_bytes(self):
+        body = ap.encode_tlm_freq_move(ap.TLM_FREQ_RF_MID, 8)
+        self.assertEqual(body.hex(), self.CANON_HEX)
+
+    def test_round_trip(self):
+        got = ap.decode_tlm_freq_move(bytes.fromhex(self.CANON_HEX))
+        self.assertEqual(got["target"], ap.TLM_FREQ_RF_MID)
+        self.assertEqual(got["countdown"], 8)
+        # Eight units is K = 64 messages, and the two constants have to keep
+        # agreeing or a receiver retunes eight times too early.
+        self.assertEqual(got["messages"], ap.TLM_FREQ_K_DEFAULT)
+
+    def test_the_candidate_set_is_bles_advertising_placement(self):
+        # The megahertz rather than the indices: 2/26/80 is only meaningful as
+        # 2402, 2426 and 2480 MHz, which is where they sit relative to the three
+        # non-overlapping Wi-Fi channels. An index typo would still be three
+        # plausible small numbers.
+        self.assertEqual([2400 + rf for rf in ap.TLM_FREQ_DEFAULTS],
+                         [2402, 2426, 2480])
+        # And 2457 MHz is what the phase exists to leave.
+        self.assertEqual(2400 + ap.TLM_FREQ_RF_HOME, 2457)
+        self.assertNotIn(ap.TLM_FREQ_RF_HOME, ap.TLM_FREQ_DEFAULTS)
+
+    def test_a_reserved_byte_that_is_not_zero_is_refused(self):
+        # Fail CLOSED, unlike a descriptor information flag: an unknown field
+        # here is not something to ignore.
+        for i in range(4, 8):
+            body = bytearray(bytes.fromhex(self.CANON_HEX))
+            body[i] = 1
+            with self.assertRaises(ValueError):
+                ap.decode_tlm_freq_move(bytes(body))
+
+    def test_a_countdown_of_zero_and_an_index_out_of_range_are_refused(self):
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_freq_move(ap.TLM_FREQ_RF_MID, 0)
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_freq_move(ap.RADIANT_TLM_RF_INDEX_MAX + 1, 8)
+
+        body = bytearray(bytes.fromhex(self.CANON_HEX))
+        body[3] = 0
+        with self.assertRaises(ValueError):
+            ap.decode_tlm_freq_move(bytes(body))
+        body = bytearray(bytes.fromhex(self.CANON_HEX))
+        body[2] = ap.RADIANT_TLM_RF_INDEX_MAX + 1
+        with self.assertRaises(ValueError):
+            ap.decode_tlm_freq_move(bytes(body))
+
+    def test_the_countdown_terminates_rather_than_walking_away(self):
+        """The regression the C suite pins, in the mirror.
+
+        The re-anchor moves the target to whatever was just said. Applied one
+        announcement too many it moves the target past the move itself, and then
+        again - the node announces forever and never leaves, which reads on a
+        bench as "adaptive frequency does not work" with nothing in any log.
+        """
+        move_at = ap.TLM_FREQ_K_DEFAULT
+        msgs = 0
+        moved_at = None
+        while msgs < 4 * ap.TLM_FREQ_K_DEFAULT:
+            after = msgs + 1
+            # The last slot before the move is not announced - see
+            # profile_freq.c's claim().
+            if msgs % ap.TLM_FREQ_ANNOUNCE_EVERY == 0 and move_at > after:
+                _, move_at = ap.tlm_freq_countdown(move_at, after)
+            msgs = after
+            if msgs >= move_at:
+                moved_at = msgs
+                break
+
+        self.assertIsNotNone(moved_at, "the node never moved")
+        self.assertGreaterEqual(moved_at, ap.TLM_FREQ_K_DEFAULT)
+        self.assertLessEqual(moved_at,
+                             ap.TLM_FREQ_K_DEFAULT + ap.TLM_FREQ_UNIT)
+
+    def test_a_receiver_holding_an_older_copy_retunes_early_never_late(self):
+        # Early costs the tail of the old channel; late costs the head of the
+        # new one, and the head is where the descriptor is.
+        move_at = ap.TLM_FREQ_K_DEFAULT
+        heard = []
+        msgs = 0
+        while msgs < ap.TLM_FREQ_K_DEFAULT:
+            after = msgs + 1
+            if msgs % ap.TLM_FREQ_ANNOUNCE_EVERY == 0 and move_at > after:
+                c, move_at = ap.tlm_freq_countdown(move_at, after)
+                heard.append(after + c * ap.TLM_FREQ_UNIT)
+            msgs = after
+
+        for computed in heard:
+            self.assertLessEqual(computed, move_at)
+            self.assertGreaterEqual(computed,
+                                    move_at - (ap.TLM_FREQ_UNIT - 1))
+
+    def test_selection_needs_evidence_for_where_we_already_are(self):
+        # A quiet candidate is not evidence that here is loud.
+        self.assertIsNone(ap.tlm_freq_select(
+            ap.TLM_FREQ_RF_HOME, {ap.TLM_FREQ_RF_MID: (-100, -104)}))
+
+    def test_selection_picks_the_quietest_candidate_past_the_margin(self):
+        ev = {
+            ap.TLM_FREQ_RF_HOME: (-70, -100),
+            ap.TLM_FREQ_RF_LOW: (-84, -102),
+            ap.TLM_FREQ_RF_MID: (-96, -104),
+            ap.TLM_FREQ_RF_HIGH: (-88, -103),
+        }
+        self.assertEqual(ap.tlm_freq_select(ap.TLM_FREQ_RF_HOME, ev),
+                         ap.TLM_FREQ_RF_MID)
+
+    def test_a_candidate_inside_the_margin_is_not_worth_moving_to(self):
+        ev = {ap.TLM_FREQ_RF_HOME: (-90, -100), ap.TLM_FREQ_RF_MID: (-95, -104)}
+        self.assertIsNone(ap.tlm_freq_select(ap.TLM_FREQ_RF_HOME, ev))
+        # Exactly the margin qualifies: the rule is "at least this much
+        # quieter", and a boundary meaning one thing in the comment and another
+        # in the code is why this is a test rather than an inspection.
+        ev[ap.TLM_FREQ_RF_MID] = (-90 - ap.TLM_FREQ_MARGIN_DB, -104)
+        self.assertEqual(ap.tlm_freq_select(ap.TLM_FREQ_RF_HOME, ev),
+                         ap.TLM_FREQ_RF_MID)
+
+    def test_selection_is_deterministic_under_a_tie(self):
+        # Two receivers with the same evidence must recommend the same index or
+        # a node takes whichever asked last.
+        ev = {
+            ap.TLM_FREQ_RF_HOME: (-70, -100),
+            ap.TLM_FREQ_RF_HIGH: (-96, -104),
+            ap.TLM_FREQ_RF_MID: (-96, -104),
+        }
+        self.assertEqual(ap.tlm_freq_select(ap.TLM_FREQ_RF_HOME, ev),
+                         ap.TLM_FREQ_RF_MID)
+
+    def test_the_retry_list_is_bounded_and_ends_at_home(self):
+        plain = ap.tlm_freq_reacquire_order()
+        self.assertEqual(plain[-1], ap.TLM_FREQ_RF_HOME)
+        self.assertEqual(len(plain), len(ap.TLM_FREQ_DEFAULTS) + 1)
+
+        told = ap.tlm_freq_reacquire_order(ap.TLM_FREQ_RF_MID)
+        self.assertEqual(told[0], ap.TLM_FREQ_RF_MID)
+        self.assertEqual(told[-1], ap.TLM_FREQ_RF_HOME)
+        # Deduplicated: an entry listed twice is a window spent twice.
+        self.assertEqual(len(told), len(set(told)))
+        self.assertLessEqual(len(told), len(ap.TLM_FREQ_DEFAULTS) + 2)
+
+
 class TestAgainstTheAerosenseDecoders(unittest.TestCase):
     """Reference results the C code in zephyr_aerosense/src/ant must match.
 

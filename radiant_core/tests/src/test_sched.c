@@ -587,6 +587,93 @@ ZTEST(radiant_sched, test_disjoint_windows_are_not_merged)
 }
 
 /*
+ * ADAPTIVE FREQUENCY'S HALF OF THE MERGE RULE (RF-7), AND IT IS THE PRICE RATHER
+ * THAN THE FEATURE.
+ *
+ * ADR 0005 axis 5 buys frequency escape by accepting that a channel which leaves
+ * RF 57 leaves the merged window with it: "an adaptive-frequency node costs its
+ * own RX window, the same as a second-network channel would. The saving is that
+ * only nodes that opted in pay it." That cost is only actually paid if the
+ * scheduler REFUSES to merge across frequencies - and a scheduler that merged
+ * anyway would arm one window on one of the two frequencies and silently drop
+ * every packet from the other, which on a bench is a sensor that stops working
+ * when an unrelated node moves.
+ *
+ * Three channels whose windows all overlap: two on RF 57 and one on RF 26, the
+ * middle of the phase's candidate set. The two on 57 still merge - the property
+ * axis 5 promises to leave alone for everybody who did not opt in - and the
+ * third gets a window of its own.
+ */
+ZTEST(radiant_sched, test_an_off_57_window_never_joins_the_merged_one)
+{
+	const struct fake_radio_arm  *a;
+	struct radiant_sched_rx       r;
+	radiant_time_t                t0;
+	radiant_time_t                open;
+	radiant_time_t                close;
+
+	bring_up();
+	t0 = radiant_radio_now();
+	open = t0 + 100000u;
+	close = open + TEST_WINDOW_US;
+
+	post_track(0u, open, close);
+	post_track(1u, open + 40u, close + 40u);
+
+	/*
+	 * The same overlap, on 2426 MHz - and deliberately much LONGER, for two
+	 * reasons. It overlaps the pair above, so a scheduler that ignored
+	 * frequency would fold it in; and it outlives them, so that after the
+	 * merged window closes there is still a window left to arm, which is how
+	 * "costs its own RX window" is observed rather than asserted. A short
+	 * one would simply be reported missed, which proves nothing about
+	 * frequency.
+	 */
+	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_TRACKING),
+		    &track_filter[2], 1u, open + 80u, close + 40000u);
+	r.rf_index = 26u;
+	zassert_ok(radiant_sched_request_rx(2u, &r));
+
+	zassert_ok(radiant_sched_tick());
+
+	zassert_equal(1u, fake_radio_arm_count(),
+		      "the first commit armed %u windows",
+		      fake_radio_arm_count());
+
+	a = fake_radio_arm(0u);
+	zassert_not_null(a);
+	zassert_equal(RADIANT_RF_INDEX_ANT_PLUS, a->rf_index);
+	zassert_equal(2u, a->n_filters,
+		      "the RF 26 channel was merged into the RF 57 window: it "
+		      "carried %u filters", a->n_filters);
+	zassert_equal(close + 40u, a->t_close,
+		      "the window was widened to cover a channel on another "
+		      "frequency");
+	zassert_equal(1u, radiant_sched_stats_get()->windows_merged);
+
+	/* And the off-57 channel is not lost - it is served next, on its own
+	 * frequency, which is exactly what "costs its own RX window" means. */
+	fake_radio_advance_to(close + 40000u + 1u);
+	zassert_true(fake_radio_arm_count() >= 2u,
+		     "the off-57 channel was never armed");
+	a = fake_radio_arm(1u);
+	zassert_not_null(a);
+	zassert_equal(26u, a->rf_index,
+		      "the second window was armed on RF %u", a->rf_index);
+	zassert_equal(1u, a->n_filters);
+	zassert_equal(1u, log.ok_count[2],
+		      "the off-57 channel was never given its own window");
+
+	/* Two hardware windows for three channels: the two that share a
+	 * frequency cost one between them and the third costs one on its own.
+	 * That is the whole of axis 5's price, in one number. */
+	zassert_equal(2u, radiant_sched_stats_get()->windows_armed);
+
+	assert_every_window_bounded();
+	finish();
+}
+
+/*
  * THE MERGE IS BOUNDED BY caps.max_addr_groups, NOT BY caps.max_filters, ON THE
  * TRACKING FORMAT - and confusing the two is the defect this test was rewritten
  * to pin.

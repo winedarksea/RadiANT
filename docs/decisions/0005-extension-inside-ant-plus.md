@@ -11,6 +11,9 @@ gate: a node moved to a quiet RF channel holds `loss (exact)` ≈ 0 over 300 s.
   **Amended 2026-08-11 by [ADR 0007](0007-long-range-phy.md) — axis 4 is built
   and is LE Coded rather than lower-rate GFSK; axis 3 is partially unblocked for
   that PHY only, and its withdrawal otherwise stands.**
+  **Amended 2026-08-11 by [ADR 0012](0012-adaptive-frequency.md) — axis 5 is
+  built, and one clause of it ("so a searching receiver still finds every node")
+  is corrected in place.**
   The decision itself stands; see *Amendment* immediately below.
 - **Date:** 2026-08-08
 - **Amended:** 2026-08-09
@@ -248,6 +251,33 @@ renumbers itself:
    in-band announcement ("next epoch on RF N") lets a deployed pair move away
    from fresh interference. Standard channels never move and only RadiANT
    receivers follow.
+
+   > **Amended 2026-08-11 by [ADR 0012](0012-adaptive-frequency.md), which
+   > builds this axis — and corrects one clause of it.**
+   >
+   > Everything above is delivered: the candidate set is BLE's advertising
+   > channels (RF 2/26/80, defaults rather than a restriction), selection is
+   > driven by the channel-quality map, the announcement is page `0x13` with a
+   > countdown that every receiver acts on at expiry rather than on receipt, and
+   > moves are rate-limited to minutes-scale. "Next epoch on RF N" turned out to
+   > be figurative: the boundary is a **message count**, not the security epoch,
+   > which for a hostless node is a boot counter and must not be spent on this.
+   >
+   > **"So a searching receiver still finds every node" claims more than the
+   > mechanism delivers.** A node that has moved is not transmitting on RF 57 at
+   > all, so a wildcard sweep does not find it. What is true and permanent is
+   > the first half: **the sweep is 1 M on RF 57 forever and no frequency axis
+   > multiplies it.** A moved node is re-acquired from the descriptor a receiver
+   > already holds, from the sync handoff of page `0x12`, or from a bounded retry
+   > list of at most five named indices — which is not a sweep and does not touch
+   > "certain within one sweep". ADR 0012 records why the alternative reading
+   > (descriptor on 57, data elsewhere) was rejected: it doubles the receiver's
+   > windows where this ADR costed one, and it breaks the countdown's clock.
+   >
+   > The rest of this ADR is unaffected. The window-splitting cost below is
+   > exactly right, is now asserted by a scheduler test rather than inherited,
+   > and remains scoped to the types that opted in — which is still what removes
+   > the last argument for a second network.
 
 ### Why not a second network
 

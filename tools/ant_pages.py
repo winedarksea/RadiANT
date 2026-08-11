@@ -2501,6 +2501,166 @@ def tlm_handoff_next_slot(h: TlmHandoff, t_carrier_counts: int) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Adaptive frequency, page 0x13 - the mirror of src/profiles/profile_freq.c
+#
+# The characterised ~0.4% loss floor on this bench is collision with Wi-Fi
+# channel 11 over 2457 MHz. A node leaves, once, to a quiet index, and stays;
+# it announces the move on a countdown first so that every receiver retunes on
+# the same message rather than at N independent moments.
+#
+# THE CANDIDATE SET IS BLE'S ADVERTISING CHANNELS - 2402, 2426 and 2480 MHz,
+# which sit in the gaps between the three non-overlapping Wi-Fi channels. A node
+# is not restricted to them (descriptor frame 0 byte [6] carries a full 0..124
+# index and this encoder will announce any of them); they are what a selector
+# considers by default and what a receiver that lost an off-57 node tries first.
+#
+# DISCOVERY NEVER MOVES. The search sweep stays 1 M on RF 57 forever, which is
+# why the move is announced in a page a receiver already hears rather than
+# discovered by tuning around. See docs/decisions/0012-adaptive-frequency.md.
+# ---------------------------------------------------------------------------
+
+PAGE_TLM_FREQ_MOVE = 0x13
+
+TLM_FREQ_RF_HOME = RADIANT_TLM_RF_INDEX_DEFAULT
+TLM_FREQ_RF_LOW = 2             # 2402 MHz
+TLM_FREQ_RF_MID = 26            # 2426 MHz
+TLM_FREQ_RF_HIGH = 80           # 2480 MHz
+TLM_FREQ_DEFAULTS = (TLM_FREQ_RF_LOW, TLM_FREQ_RF_MID, TLM_FREQ_RF_HIGH)
+
+# One unit of the countdown field, in transmitted messages, and the interval
+# between announcements. One constant and not two: a countdown quantised more
+# finely than the announcements carrying it would name instants no announcement
+# can land on.
+TLM_FREQ_UNIT = 8
+TLM_FREQ_ANNOUNCE_EVERY = TLM_FREQ_UNIT
+TLM_FREQ_COUNTDOWN_MAX = 0xFF
+
+# K, in transmitted messages: ~16 s at 4 Hz and eight announcements.
+TLM_FREQ_K_DEFAULT = 64
+TLM_FREQ_K_MAX = TLM_FREQ_COUNTDOWN_MAX * TLM_FREQ_UNIT
+
+# How much quieter a candidate must be before a move is worth announcing. A
+# margin rather than "better", because two indices within a decibel of each
+# other trade places as the room changes and a node that re-announced every time
+# would be hopping slowly rather than adapting.
+TLM_FREQ_MARGIN_DB = 6
+
+# Minutes-scale, as a structural refusal rather than as advice: rechoosing
+# faster than a receiver can follow is fast per-event hopping arrived at by
+# accident, which is declined with arithmetic elsewhere.
+TLM_FREQ_MIN_MOVE_S = 300
+
+
+def encode_tlm_freq_move(target: int, countdown: int) -> bytes:
+    """The announcement, as a one-frame set.
+
+        [0]    0x13
+        [1]    0x00 = (0 << 4) | (1 - 1)
+        [2]    target RF index, 0..124
+        [3]    countdown, in units of TLM_FREQ_UNIT transmitted messages, 1..255
+        [4..7] reserved, must be zero
+    """
+    if not 0 <= target <= RADIANT_TLM_RF_INDEX_MAX:
+        raise ValueError(f"rf index {target} is outside 0..{RADIANT_TLM_RF_INDEX_MAX}")
+    if not 1 <= countdown <= TLM_FREQ_COUNTDOWN_MAX:
+        raise ValueError("a countdown of zero names no message at all")
+    return bytes([PAGE_TLM_FREQ_MOVE, 0x00, target, countdown, 0, 0, 0, 0])
+
+
+def decode_tlm_freq_move(payload: bytes) -> dict:
+    """The inverse.
+
+    FAILS CLOSED on a reserved byte, which is the opposite of what a descriptor
+    information flag does and is right here: these bytes tell a receiver where
+    to point its radio, so a field this build does not understand is not
+    something to ignore.
+    """
+    if len(payload) != 8:
+        raise ValueError("a frequency-move page is eight bytes")
+    if payload[0] != PAGE_TLM_FREQ_MOVE:
+        raise ValueError(f"page 0x{payload[0]:02X} is not the frequency-move page")
+    if payload[1] != 0x00:
+        raise ValueError("the frequency-move page is a one-frame set")
+    if payload[2] > RADIANT_TLM_RF_INDEX_MAX:
+        raise ValueError(f"rf index {payload[2]} is out of range")
+    if payload[3] == 0:
+        raise ValueError("a countdown of zero names no message at all")
+    if any(payload[4:]):
+        raise ValueError("reserved bytes [4..7] must be zero")
+    return {
+        "page": PAGE_TLM_FREQ_MOVE,
+        "target": payload[2],
+        "countdown": payload[3],
+        "messages": payload[3] * TLM_FREQ_UNIT,
+    }
+
+
+def tlm_freq_countdown(move_at: int, msgs_after_this: int) -> tuple:
+    """One announcement's countdown, and the target it re-anchors to.
+
+    The node MOVES ITS OWN TARGET TO WHAT IT JUST SAID, every time it says
+    anything, so every receiver that heard the latest copy computes the
+    identical message and one holding an older copy is at most TLM_FREQ_UNIT - 1
+    messages early - losing the tail of the old channel rather than the head of
+    the new one. Rounded up for that reason and because rounding down would
+    shorten the countdown a little on every announcement.
+
+    Returns (countdown, move_at). Mirrors countdown_now() in profile_freq.c.
+    """
+    remaining = max(0, move_at - msgs_after_this)
+    c = max(1, -(-remaining // TLM_FREQ_UNIT))
+    c = min(c, TLM_FREQ_COUNTDOWN_MAX)
+    return c, msgs_after_this + c * TLM_FREQ_UNIT
+
+
+def tlm_freq_select(incumbent: int, evidence: dict) -> int | None:
+    """Rank candidates from channel-quality evidence.
+
+    `evidence` maps rf_index -> (busy_dbm, floor_dbm), where busy_dbm is the
+    map's maximum over per-dwell MEANS - a whole dwell that averaged loud is a
+    transmitter that lives there, where one loud sample is a burst a 250 ms
+    period usually steps around. An index absent from the dict is NOT MEASURED,
+    which is a different fact from measured and loud.
+
+    Returns the chosen index, or None for "stay where you are" - which includes
+    having no measurement of the incumbent, because a quiet candidate is not
+    evidence that here is loud.
+
+    The tie-breaks are part of the contract, not an implementation detail: two
+    receivers given the same evidence must recommend the same index or a node
+    takes whichever asked last.
+    """
+    here = evidence.get(incumbent)
+    if here is None:
+        return None
+    best = None
+    for rf, (busy, floor) in sorted(evidence.items()):
+        if rf == incumbent:
+            continue
+        if busy + TLM_FREQ_MARGIN_DB > here[0]:
+            continue
+        if best is None or (busy, floor, rf) < best[1]:
+            best = (rf, (busy, floor, rf))
+    return None if best is None else best[0]
+
+
+def tlm_freq_reacquire_order(last_target: int | None = None) -> list:
+    """Where a receiver that lost an off-57 node should look, in order.
+
+    The last announced target, then the defaults, then RF 57 - deduplicated, at
+    most five entries. THIS IS NOT A SWEEP AND MUST NOT BECOME ONE: it is a
+    bounded retry over named indices and it does not touch the search sweep's
+    "certain within one sweep" guarantee, which is a statement about RF 57.
+    """
+    order = []
+    for rf in ((last_target,) if last_target is not None else ()) + \
+            TLM_FREQ_DEFAULTS + (TLM_FREQ_RF_HOME,):
+        if rf not in order:
+            order.append(rf)
+    return order
+
+
+# ---------------------------------------------------------------------------
 # The page scheduler - the mirror of src/profiles/profile_sched.c
 #
 # Which page goes in the next message slot, and nothing else. It knows no

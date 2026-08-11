@@ -113,6 +113,14 @@ target_sources(app PRIVATE
   # the root key does. It names no page number of its own: the announcement is
   # two frames of the beacon page's set, which profile_compat.h already owns.
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_private.c"
+  # Adaptive frequency (RF-7): choosing a quieter RF index from the
+  # channel-quality map, and announcing the move on page 0x13 before it happens.
+  # The SIXTH file here that includes a radiant_core header and the fourth that
+  # has to - it reads radiant_chanmap.h, which is the map ADR 0012 selects from,
+  # and radiant_radio_hal.h for the index range. It reaches no scheduler and no
+  # search header on purpose: "discovery never moves" is a property of the
+  # include graph here, not a rule somebody remembers.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_freq.c"
 )
 target_include_directories(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles")

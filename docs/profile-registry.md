@@ -132,9 +132,21 @@ to know before it opens a channel, and neither is visible from the frame:
   merged RF 57 RX window, so every one of them splits the receiver's radio
   schedule the way a separate network would have. This is why it is a per-type
   opt-in and not a mode. See [ADR 0007](decisions/0007-long-range-phy.md).
-- **Adaptive freq** — the type's nodes may operate off RF 57. Discovery and
-  pairing stay on RF 57 so a searching receiver still finds every node, but
-  data lives wherever the node's descriptor says. Same window-splitting cost.
+- **Adaptive freq** — the type's nodes may operate off RF 57, moving to a
+  quieter index on a countdown announced in page `0x13`. Same window-splitting
+  cost: an off-57 channel cannot join the merged RF 57 window.
+
+  **Corrected 2026-08-11 by [ADR 0012](decisions/0012-adaptive-frequency.md).**
+  This bullet previously read "Discovery and pairing stay on RF 57 so a
+  searching receiver still finds every node, but data lives wherever the node's
+  descriptor says", copied from ADR 0005 axis 5. The first half is true and
+  permanent — **the search sweep is 1 M on RF 57 forever** and no frequency axis
+  multiplies it. The second half claims more than the mechanism delivers: a node
+  that has moved is not transmitting on RF 57 at all, so a *wildcard* sweep does
+  not find it. It is re-acquired from the descriptor a receiver already holds,
+  from the sync handoff of page `0x12`, or from the bounded retry list ADR 0012
+  publishes — at most five named indices, which is not a sweep and does not
+  touch the sweep's "certain within one sweep" guarantee.
 
 **`Adaptive freq`** is `no`, `yes`, or `per-node` (the node announces it in a
 descriptor, so a consumer must be prepared for either).
@@ -175,7 +187,7 @@ window and costs nothing extra.
 |---|---|---|---|---|---|---|---|---|
 | `0x0B` | Bicycle Power | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8182 | no | no | Implemented in `tools/ant_pages.py`; byte-exact to Garmin's profile |
 | `0x11` | Fitness Equipment (FE-C) | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | — | no | no | Compatibility target; not yet implemented in `tools/ant_pages.py`, so no period is recorded rather than a guessed one |
-| `0x60` | RadiANT Generic Telemetry | radiant | RadiANT project | 2026-08-08 | per-node | per-node | per-node | The envelope in `docs/radiant-telemetry.md`; period is announced in descriptor frame 0. Implemented in `src/profiles/` and mirrored in `tools/ant_pages.py`. `LR PHY` is `per-node` from ADR 0007: a `0x60` node may run LE Coded S=8, and announces the rate in its schedule block. A node that switched to private mode is exactly this type |
+| `0x60` | RadiANT Generic Telemetry | radiant | RadiANT project | 2026-08-08 | per-node | per-node | per-node | The envelope in `docs/radiant-telemetry.md`; period is announced in descriptor frame 0. Implemented in `src/profiles/` and mirrored in `tools/ant_pages.py`. `LR PHY` is `per-node` from ADR 0007: a `0x60` node may run LE Coded S=8, and announces the rate in its schedule block. `Adaptive freq` is `per-node` from ADR 0012: a `0x60` node may move to a quieter RF index, announcing it in page `0x13` first. A node that switched to private mode is exactly this type |
 | `0x78` | Heart Rate | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8070 | no | no | Implemented in `tools/ant_pages.py`; pages `0x00`-`0x04`. Half and quarter rates below. **Byte 0 bit 7 is a page-change toggle, so page numbers here are 7-bit** |
 | `0x79` | Bike Speed and Cadence, combined | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8086 | no | no | Implemented in `tools/ant_pages.py`. **No page-number byte** |
 | `0x7A` | Bike Cadence | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8102 | no | no | Period defined in `tools/ant_pages.py`; pages not implemented there |
@@ -313,7 +325,8 @@ rule this registry already states for device types.
 | `0x60` | `0x10` | Reliable command | `ant_pages.encode_tlm_command` | Sequence + inline 16-bit tag, idempotent. **Layout only** - the idempotency rule and the tag need a key, and land with the command path |
 | `0x60` | `0x11` | Command acknowledge | `ant_pages.encode_tlm_command_ack` | Result code + inline 16-bit tag. Layout only, as above |
 | `0x60` | `0x12` | Sync handoff | `ant_pages.encode_tlm_handoff` | Two frames under one page number. C: `profile_handoff_encode`. Carries **no epoch**, and that is a constraint rather than an omission |
-| `0x60` | `0x13-0x1F` | Reserved | — | Unassigned; a receiver ignores these |
+| `0x60` | `0x13` | Frequency move | `ant_pages.encode_tlm_freq_move` | One-frame set; target RF index and a countdown in units of eight transmitted messages. C: `profile_freq_encode`. Receivers act on countdown EXPIRY, not on receipt, so every one of them retunes on the same message |
+| `0x60` | `0x14-0x1F` | Reserved | — | Unassigned; a receiver ignores these |
 | `0x60` | `0x20-0x2F` | Reserved for the security envelope | `docs/radiant-security.md` | Epoch and key-generation announcement, v2 TESLA key disclosure |
 | `0x60` | `0x30-0x4F` | Reserved | — | Unassigned |
 | `0x60` | `0x50` | Common page 80 | `ant_pages.encode_common_80` | Byte-exact ANT+ |
