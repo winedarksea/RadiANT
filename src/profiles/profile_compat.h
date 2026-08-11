@@ -124,6 +124,33 @@ extern "C" {
 #define PROFILE_COMPAT_FRAME_BEACON_1  1u
 #define PROFILE_COMPAT_BEACON_FRAMES   2u
 
+/*
+ * How large the beacon page's set may grow. Byte [1] is
+ * (index << 4) | (count - 1), so the count is a nibble and sixteen is not a
+ * budget - it is the format.
+ */
+#define PROFILE_COMPAT_SET_FRAMES_MAX  16u
+
+/*
+ * The promoted beacon cadence: one frame every eight transmitted messages
+ * while a client is contributing frames, against one per 121-message cycle in
+ * the steady state.
+ *
+ * This is the same number Layer C promotes to for a countdown
+ * (docs/radiant-security.md section 11.5, "the beacon promoted to 1 in 8 for
+ * the duration"), and it is arithmetic rather than symmetry. An enrolment
+ * window is 60 s and its frame set is eight frames; at the steady cadence one
+ * frame per cycle is one frame per 30 s at 4 Hz, so the set would need four
+ * minutes to go out once and the window would close having transmitted a
+ * quarter of a public key. At 1 in 8 the eight frames take 64 messages, 16 s,
+ * and the set goes out twice inside the window with room for loss.
+ *
+ * The cost is 12.4% of slots and it is paid only while a human is holding a
+ * button. Messages 119 and 120 are never offered to this client at all, so the
+ * promotion cannot displace a common page.
+ */
+#define PROFILE_COMPAT_BEACON_PROMOTED_EVERY 8u
+
 #define PROFILE_COMPAT_FRAME_LEN       8u
 #define PROFILE_COMPAT_HINT_BYTES      3u
 
@@ -227,6 +254,52 @@ struct profile_compat_cfg {
 	void    *user;
 };
 
+/*
+ * ---------------------------------------------------------------------------
+ * The beacon page's own client seam
+ * ---------------------------------------------------------------------------
+ * The same shape as profile_sched.h's seam, one layer down, and for the same
+ * reason: there is a second thing that wants to put frames in this page's set
+ * and forking the set is forking the framing convention.
+ *
+ * Layer D's enrolment window is six frames of a public key
+ * (src/profiles/profile_enrol.c). They are not a new page number - ADR 0008
+ * allocates exactly two and the argument is the 7-bit namespace - so they are
+ * additional frames in the set this page already sends, exactly as Layer C's
+ * SWITCH and RETURN are.
+ *
+ * THE DIVISION OF LABOUR IS THE POINT. This file owns byte [0] (the page
+ * number and heart rate's toggle) and byte [1] (the
+ * (index << 4) | (count - 1) convention, including the rule that a set which
+ * grows to eight says eight in EVERY frame of it, frames 0 and 1 included).
+ * The client owns bytes [2..7] of its own frames and nothing else, so a client
+ * never learns a page number and there is exactly one place where the framing
+ * convention is written.
+ *
+ * `frames` is asked afresh on every claimed slot and may answer 0. A client
+ * whose count changes mid-set tears that set, and the receiver's accumulator
+ * restarts on the count change - which is the behaviour the convention is
+ * built for and is why a torn set costs a repeat rather than a wrong key.
+ *
+ * `now_us` is handed in rather than read from a clock, so a client can expire
+ * a bounded window without owning a timer and a whole 60-second window is
+ * testable in a millisecond.
+ *
+ * THE ONE INTERLOCK, recorded here because C8 is the file that will trip over
+ * it: Layer C's SWITCH/RETURN frames are pinned at indices 2 and 3, which is
+ * where the first client's block also starts. A countdown and an enrolment
+ * window must not run at once, and whichever of the two arrives second is the
+ * one that is refused. C8 owns that arbitration; today there is one client.
+ */
+struct profile_compat_client {
+	/* Frames this client contributes right now: 0 when it is idle. */
+	uint8_t (*frames)(void *user, uint64_t now_us);
+	/* Fill bytes [2..7] of the client's frame `i`, 0-based within the
+	 * client's own block. Return false to abandon the slot. */
+	bool    (*frame)(void *user, uint8_t i, uint8_t *payload);
+	void     *user;
+};
+
 struct profile_compat {
 	struct profile_compat_cfg cfg;
 
@@ -236,6 +309,13 @@ struct profile_compat {
 	uint8_t frames[PROFILE_COMPAT_BEACON_FRAMES][PROFILE_COMPAT_FRAME_LEN];
 	uint8_t n_frames;
 	uint8_t frame_cursor;
+
+	/* The key-group hint, kept so that flipping a capability bit re-encodes
+	 * frame 0 without asking the layer that holds the key for it again. */
+	uint8_t hint[PROFILE_COMPAT_HINT_BYTES];
+
+	struct profile_compat_client client;
+	bool                        have_client;
 
 	/* A beacon frame whose slot was taken by an attestation page. It rides
 	 * the next slot this client is offered rather than the next cycle - see
@@ -250,6 +330,11 @@ struct profile_compat {
 	bool armed;
 
 	uint32_t beacons_sent;
+	/* Frames the page's client put on the air. Kept apart from
+	 * beacons_sent because the 0.8%-of-slots claim is about the steady
+	 * state and a bounded burst inside it would make that number
+	 * unreadable. */
+	uint32_t client_sent;
 	uint32_t tier1_sent;
 	uint32_t tier2_sent;
 };
@@ -271,6 +356,25 @@ int profile_compat_init(struct profile_compat *pc,
  * registers, so a build with no attestation attaches nothing and the rotation
  * never learns a client existed. */
 int profile_compat_attach(struct profile_compat *pc, struct profile_sched *ps);
+
+/* Install or replace this page's own client. NULL removes it. */
+int profile_compat_set_client(struct profile_compat *pc,
+			      const struct profile_compat_client *client);
+
+/*
+ * Flip the pairing-open capability bit and re-encode frame 0.
+ *
+ * This is how an enrolment window reaches the receivers that already exist,
+ * and section 11.7 makes it a requirement rather than a nicety: an enrolment
+ * the owner did not perform is the whole attack, so a window that opened
+ * silently would be the mistake.
+ *
+ * Answers 0 and does nothing on an `advertise = off` node: there is no beacon
+ * to carry the bit. Such a node's window is still visible - the six pubkey
+ * frames are on the air either way - it simply has no capability field to
+ * announce it in.
+ */
+int profile_compat_set_pairing_open(struct profile_compat *pc, bool open);
 
 /*
  * One slot, driven end to end: decide the page, and tell the attestation layer

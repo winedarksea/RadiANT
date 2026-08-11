@@ -772,6 +772,46 @@ PSA/CRACEN entropy backend behind a `caps` bit for parts that already link
 `nrf_security`. The same counter is the hostless node's epoch source, which is
 the other half of the same hole. Read ADR 0009 before re-arguing either.
 
+**Amended 2026-08-11 — and the amendment above creates a limit rather than
+removing one, which section 11.7's over-air enrolment now makes concrete.** A
+hostless node can pair. It still has **no screen**, and the first bullet above
+assumed one on both ends: "the usual short-fingerprint comparison" is a human
+reading six digits off *two* displays and checking they match, and an attacker
+in the middle holds two different shared secrets and cannot make both match.
+
+**A strap gives one side of that comparison and nothing on the other.** The
+receiver can show its six digits; there is nothing at the sensor for the user to
+compare them against. That is not a gap to be closed later by a cleverer
+protocol — the number has to be displayed somewhere a person can read it, and
+the device has no somewhere. What remains is a set of mitigations, and they are
+named as mitigations:
+
+- the window is **bounded** — `RADIANT_SEC_PAIR_TIMEOUT_DEFAULT_S`, 60 s;
+- **one pairing per window**, so the window closes on the first answer rather
+  than staying open for a better one;
+- a **physical trigger** at the node, so the window exists because a person
+  decided it should;
+- optionally **reduced transmit power** for the duration, so an attacker has to
+  be in the room rather than in the car park. This is the node's to set and
+  `src/profiles/profile_enrol.c` does not touch the radio; it is named so its
+  absence from the module is a decision.
+
+**And the recommendation is unchanged.** The pairing section of
+`radiant_core/include/radiant_core/radiant_sec.h` — the block headed "PAIRING
+HAPPENS IN THE CLEAR", immediately above `radiant_sec_pair_enter()` — already
+says out-of-band pairing "remains the recommended path for anything that
+matters: no protocol, no attack surface during pairing at all, and no
+dependence on the user actually looking". `enrol = closed` is that posture as a
+setting, a printed key or a QR code genuinely defeats the attack rather than
+mitigating it, and **none of this is weakened by the fact that over-air
+enrolment now exists.** It exists because a sealed strap otherwise has no path
+at all, which is a different claim.
+
+*(That block used to be cited by line number, `radiant_sec.h:230-236`. It has
+moved — line 230 is now `RADIANT_SEC_X25519_BYTES` — so it is cited by its
+heading here. A line-number citation into a file that grows is a citation with a
+shelf life.)*
+
 ### 7.5 What a spread MAC costs, in numbers
 
 Both of these are properties of the construction, not of the implementation, and
@@ -1586,9 +1626,88 @@ Four rules:
 - **The screen-free fingerprint limit of section 7.4 applies unchanged and is
   not solved here.** A strap with no display gives a one-sided fingerprint; the
   mitigations are the bounded window, one pairing per window, a physical
-  trigger, and optionally reduced TX power.
+  trigger, and optionally reduced TX power. `closed` remains the recommendation
+  for anything that matters. Section 7.4's amendment of 2026-08-11 is the long
+  form and is not restated here so that there is one copy of it.
 
 Removal is not the mirror of addition — section 7.3.
+
+#### 11.7.1 The bytes: a six-frame set, in the beacon page's own set
+
+Enrolment gets **no page number of its own**, for the reason 11.8 gives about
+the 7-bit namespace and for the reason SWITCH and RETURN get none: the public
+key rides the beacon page's existing frame set as six additional frames, and
+the set grows from two to eight for the duration of the window.
+
+```
+frames 0, 1   the ordinary beacon (11.2), with the pairing-open bit set and
+              byte [1] restating the new count: 0x07 and 0x17, not 0x01/0x11
+frames 2..7   [1] = ((2 + k) << 4) | 0x07,  k = 0..5
+              [2..7]  bytes 6k .. 6k+5 of the 36-byte enrolment set
+```
+
+The 36-byte set is **32 bytes of X25519 public key followed by a 4-byte set
+check**, `trunc32( CMAC(all-zero key, pubkey) )`. Six frames of six payload
+bytes is exactly 36, so there is no spare byte and nothing whose meaning is
+undecided.
+
+**The set check is integrity, not authentication**, and the distinction is what
+it is for. There is no shared secret during pairing, so an attacker who rewrites
+the key rewrites the check with it — that attack is the man in the middle and
+the fingerprint is what answers it. What the check catches is the failure the
+framing convention cannot: byte `[1]` says *which frame* this is and never
+*which key it belongs to*, so a receiver that joined as one window closed and
+another opened would otherwise splice two halves into a key neither end holds,
+derive a shared secret that is simply wrong, and see no error anywhere. Four
+bytes make that a rejected set instead of a silent one.
+
+**The beacon rate is promoted to 1 in 8 for the duration**, the same rate
+11.5's countdown uses, and here it is arithmetic rather than symmetry: at the
+steady one-frame-per-121-message cadence an eight-frame set needs four minutes
+at 4 Hz, and a 60-second window would close having transmitted a quarter of a
+public key. At 1 in 8 the set goes out in 16 s and repeats three times inside
+the window. The cost is 12.4% of slots, bounded by the window, and paid only
+while a user is holding a button. Messages 119 and 120 are never displaced, so
+the common-page interleave is untouched.
+
+**A node with `advertise = off` has no beacon frames, so its set is the six
+enrolment frames alone** — count 6, indices 0..5 — and it carries no
+pairing-open bit because it has no capability field to carry one in. The window
+is still visible: the frames themselves are.
+
+**The peer answers over ANT acknowledged data**, six eight-byte payloads
+carrying **its own** six-frame set — count is always 6 and the indices are 0..5,
+because the receiver has no beacon set to extend. Acknowledged rather than
+broadcast so the peer learns each frame arrived; six independent exchanges
+rather than a burst because a burst fails whole and these frames are
+individually indexed and idempotent, so a lost frame costs a retransmission
+rather than a key. Nothing new is built for this: `radiant_transfer_on_data()`
+already acknowledges an inbound packet inside the measured 1.55 ms turnaround
+and hands the payload up through `radiant_transfer_ops::rx_data`.
+
+**The interlock, recorded before it bites.** Layer C's SWITCH and RETURN frames
+are pinned at indices 2 and 3 (11.5), which is where the enrolment block also
+starts. A countdown and an enrolment window must not run at once, and whichever
+arrives second is refused. There is one client of that frame set today; the
+arbitration belongs to the phase that adds the second.
+
+#### 11.7.2 The counter, and where a host can read it
+
+A completed enrolment increments `enrolments` in `struct radiant_sec_stats`,
+bumped inside `radiant_sec_pair_peer()` after the root key is installed — so it
+counts pairings that took rather than pairings that were attempted, and a
+refused small-order peer key leaves it alone. It counts the `0xF5` host exchange
+and the over-air window alike, because from the group's point of view they are
+one event.
+
+**It is not in the `0xF4` report yet, and that is a deferral rather than an
+oversight.** `0xF4`'s payload is a *fixed* 23 bytes and every one of them is
+spoken for through `[22]`, so surfacing the counter there is a protocol
+extension: `protocol/ant_wire.yaml` and everything `scripts/gen_ant_wire.py`
+generates from it, `tools/ant_sec.py`'s `STATUS_LEN`, and every host that reads
+the message. That is a host-surface change and it belongs with one, not with the
+phase that created the counter. A keyholder on the same device reads it through
+`radiant_sec_get_stats()` today.
 
 ### 11.8 The page allocation, and the conventions the checker enforces
 

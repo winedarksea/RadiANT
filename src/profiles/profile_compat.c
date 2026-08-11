@@ -169,6 +169,7 @@ int profile_compat_init(struct profile_compat *pc,
 
 	memset(pc, 0, sizeof(*pc));
 	pc->cfg = *cfg;
+	/* A client survives nothing here: init is init. */
 
 	/*
 	 * The hint is the one thing this layer needs a key for, and it asks the
@@ -182,6 +183,8 @@ int profile_compat_init(struct profile_compat *pc,
 		return -ENOTSUP;
 	}
 
+	memcpy(pc->hint, hint, sizeof(pc->hint));
+
 	if (cfg->advertise) {
 		rc = encode_beacon(pc, hint);
 		if (rc != 0) {
@@ -191,6 +194,72 @@ int profile_compat_init(struct profile_compat *pc,
 
 	pc->armed = true;
 	return 0;
+}
+
+int profile_compat_set_client(struct profile_compat *pc,
+			      const struct profile_compat_client *client)
+{
+	if (pc == NULL) {
+		return -EINVAL;
+	}
+	if (client == NULL) {
+		memset(&pc->client, 0, sizeof(pc->client));
+		pc->have_client = false;
+		pc->frame_cursor = 0u;
+		return 0;
+	}
+	if (client->frames == NULL || client->frame == NULL) {
+		return -EINVAL;
+	}
+	pc->client = *client;
+	pc->have_client = true;
+	/* A set whose size is about to change starts again from frame 0 rather
+	 * than from wherever the two-frame rotation had reached. */
+	pc->frame_cursor = 0u;
+	return 0;
+}
+
+int profile_compat_set_pairing_open(struct profile_compat *pc, bool open)
+{
+	if (pc == NULL) {
+		return -EINVAL;
+	}
+	if (pc->cfg.pairing_open != open) {
+		/*
+		 * The set is about to change size and frame 0 is the frame that
+		 * says so - it carries both the capability bit and, through
+		 * byte [1], the new count. Restarting the rotation there gets
+		 * the changed frame out first instead of up to seven frames
+		 * later, which is the difference between a receiver learning
+		 * about a window at its start and learning about it at its end.
+		 */
+		pc->frame_cursor = 0u;
+	}
+	pc->cfg.pairing_open = open;
+	if (pc->n_frames == 0u) {
+		/* advertise = off: no beacon, so no capability field. Not an
+		 * error - see the header. */
+		return 0;
+	}
+	return encode_beacon(pc, pc->hint);
+}
+
+/* Frames the client wants in this set, clamped so that byte [1]'s count nibble
+ * can express the total. A client asking for more than the format holds is a
+ * bug in the client, and taking none of its frames makes it a visible one. */
+static uint8_t client_frames(struct profile_compat *pc, uint64_t now_us)
+{
+	uint8_t n;
+
+	if (!pc->have_client) {
+		return 0u;
+	}
+	n = pc->client.frames(pc->client.user, now_us);
+	if ((uint16_t)n + (uint16_t)pc->n_frames >
+	    (uint16_t)PROFILE_COMPAT_SET_FRAMES_MAX) {
+		return 0u;
+	}
+	return n;
 }
 
 /*
@@ -216,11 +285,23 @@ int profile_compat_init(struct profile_compat *pc,
 static bool compat_claim(uint32_t m, uint8_t *body, void *user)
 {
 	struct profile_compat *pc = (struct profile_compat *)user;
+	uint8_t                n_client;
+	uint8_t                total;
+	uint8_t                idx;
 	int                    sub;
 
 	if (pc == NULL || !pc->armed) {
 		return false;
 	}
+
+	/*
+	 * Asked on every offered slot, not only on the beacon's, because this is
+	 * also where a client with a bounded window discovers that the window
+	 * has closed. A client that owns no timer and is asked only when its
+	 * frames are wanted would stay open until the next time it was wanted.
+	 */
+	n_client = client_frames(pc, pc->now_us);
+	total = (uint8_t)(pc->n_frames + n_client);
 
 	/*
 	 * The beacon's slot comes DUE here and is not necessarily SERVED here.
@@ -231,9 +312,23 @@ static bool compat_claim(uint32_t m, uint8_t *body, void *user)
 	 * slot would then miss a whole cycle every time that happened. Owing
 	 * the frame instead costs one slot of delay and keeps the cadence at
 	 * one frame per cycle, which is the number the 0.8% claim is made of.
+	 *
+	 * WITH A CLIENT ACTIVE THE CADENCE IS PROMOTED to one frame every eight
+	 * messages, and PROFILE_COMPAT_BEACON_PROMOTED_EVERY carries the
+	 * arithmetic: at the steady rate an eight-frame set needs four minutes
+	 * and a 60-second enrolment window would close having transmitted a
+	 * quarter of a public key. Message 0 satisfies both rules, so the
+	 * steady-state cadence is a special case of the promoted one rather
+	 * than a second rule.
 	 */
-	if (pc->n_frames != 0u && m == PROFILE_COMPAT_BEACON_SLOT) {
-		pc->beacon_due = true;
+	if (total != 0u) {
+		if (n_client != 0u) {
+			if ((m % PROFILE_COMPAT_BEACON_PROMOTED_EVERY) == 0u) {
+				pc->beacon_due = true;
+			}
+		} else if (m == PROFILE_COMPAT_BEACON_SLOT) {
+			pc->beacon_due = true;
+		}
 	}
 
 	/* Bytes [1..7]; byte [0] is the page number, which is the one byte the
@@ -253,20 +348,57 @@ static bool compat_claim(uint32_t m, uint8_t *body, void *user)
 		return true;
 	}
 
-	if (pc->beacon_due) {
-		pc->beacon_due = false;
-		memcpy(body, pc->frames[pc->frame_cursor],
-		       PROFILE_COMPAT_FRAME_LEN);
-		if (toggle_now(pc)) {
-			body[0] |= PROFILE_COMPAT_PAGE_TOGGLE;
-		}
-		pc->frame_cursor = (uint8_t)((pc->frame_cursor + 1u) %
-					     pc->n_frames);
-		pc->beacons_sent++;
-		return true;
+	if (!pc->beacon_due || total == 0u) {
+		return false;
 	}
 
-	return false;
+	/* The set changed size under the rotation - a window opened or closed.
+	 * Start it again rather than emitting an index the count cannot hold. */
+	if (pc->frame_cursor >= total) {
+		pc->frame_cursor = 0u;
+	}
+	idx = pc->frame_cursor;
+
+	if (idx < pc->n_frames) {
+		memcpy(body, pc->frames[idx], PROFILE_COMPAT_FRAME_LEN);
+	} else {
+		memset(body, 0, PROFILE_COMPAT_FRAME_LEN);
+		body[0] = PROFILE_COMPAT_PAGE_BEACON;
+		if (!pc->client.frame(pc->client.user,
+				      (uint8_t)(idx - pc->n_frames), &body[2])) {
+			/* The client changed its mind between being counted and
+			 * being asked. Decline the slot; the rotation has it
+			 * back at no cost and the cursor has not moved. */
+			return false;
+		}
+	}
+
+	/*
+	 * BYTE [1] IS WRITTEN HERE AND NOWHERE ELSE, including over the value
+	 * encode_beacon() baked into frames 0 and 1. The count is the size of
+	 * the set the frame belongs to, so a set that grows to eight says eight
+	 * in EVERY frame of it - leaving frames 0 and 1 saying "two in this set"
+	 * would tell a receiver that heard only those two that no window was
+	 * open. docs/radiant-security.md section 11.5 names this as the obvious
+	 * thing to get wrong.
+	 */
+	body[1] = (uint8_t)((idx << 4) | (uint8_t)(total - 1u));
+
+	if (toggle_now(pc)) {
+		body[0] |= PROFILE_COMPAT_PAGE_TOGGLE;
+	}
+
+	pc->beacon_due = false;
+	pc->frame_cursor = (uint8_t)((idx + 1u) % total);
+	/* Two counters because they answer two questions: the 0.8%-of-slots
+	 * claim is about the steady-state beacon, and a client's frames are a
+	 * bounded burst that would make that number unreadable. */
+	if (idx < pc->n_frames) {
+		pc->beacons_sent++;
+	} else {
+		pc->client_sent++;
+	}
+	return true;
 }
 
 int profile_compat_attach(struct profile_compat *pc, struct profile_sched *ps)

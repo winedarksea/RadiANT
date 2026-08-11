@@ -429,6 +429,17 @@ int radiant_sec_pair_peer(uint8_t ch, const uint8_t *peer_pub,
 	}
 	(void)radiant_sec_set_devnum(ch, id.device_number);
 
+	/*
+	 * The group gained a keyholder, and every existing one is entitled to
+	 * know. Counted HERE rather than in the caller because this is the one
+	 * place where a pairing has actually taken - a refused small-order key
+	 * and an abandoned window both leave by other doors - so the "exactly
+	 * once per completed enrolment" property is structural rather than a
+	 * rule each of the two callers has to remember. See the field's comment
+	 * in radiant_sec.h for why silence would be the mistake.
+	 */
+	radiant_sec_stat_enrolment(ch);
+
 	if (fingerprint != NULL) {
 		*fingerprint = c->fingerprint;
 	}

@@ -669,9 +669,46 @@ struct radiant_sec_stats {
 	uint32_t dropped_replay;
 	uint32_t dropped_policy;
 	uint32_t epoch_advances;
+	/*
+	 * COMPLETED PAIRINGS ON THIS CHANNEL - the enrolment counter of
+	 * docs/radiant-security.md section 11.7, and it is a security signal
+	 * rather than a diagnostic.
+	 *
+	 * Adding a receiver to an existing group is additive and disturbs
+	 * nothing: no epoch change, no re-keying, no interruption, and every
+	 * existing keyholder observes nothing. That is exactly why it can be a
+	 * supported operation - and exactly why it must not be SILENT. An
+	 * enrolment the owner did not perform is the whole attack, so a
+	 * keyholder that reads this counter climbing can surface "a new receiver
+	 * joined this sensor" with no other machinery.
+	 *
+	 * Bumped by radiant_sec_pair_peer() after the root key is installed, so
+	 * it counts pairings that took rather than pairings that were attempted;
+	 * a refused small-order peer key leaves it alone. It counts BOTH ways in
+	 * - the 0xF5 host exchange and src/profiles/profile_enrol.c's over-air
+	 * window - because from the group's point of view they are one event.
+	 */
+	uint32_t enrolments;
 };
 
 void radiant_sec_get_stats(uint8_t ch, struct radiant_sec_stats *out);
+
+/*
+ * INTERNAL. radiant_sec_pair.c's hook into the counter above.
+ *
+ * The stats live in radiant_sec.c's per-channel context and pairing lives in
+ * radiant_sec_pair.c, which is a second translation unit with no view of that
+ * struct. Declared here rather than in a private header for the reason
+ * radiant_transfer.h gives for radiant_transfer_arm_tx(): there are exactly two
+ * translation units and one function, and a third file whose only job is to let
+ * them see one prototype costs more than it explains.
+ *
+ * A no-op for a channel with no security context. That cannot happen on the
+ * path that calls it - radiant_sec_pair_peer() installs the key first, and
+ * installing the key is what allocates the context - and it is written to
+ * survive being wrong about that rather than to assert it.
+ */
+void radiant_sec_stat_enrolment(uint8_t ch);
 
 /*
  * The non-counter half of what 0xF4 reports: configuration and clock, as they

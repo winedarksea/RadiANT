@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The ANT+ compatibility profiles' policy settings.
+# docs/radiant-security.md section 11.6 is the table these mirror.
+
+menu "RadiANT profile policy"
+
+choice
+	prompt "enrol: how a new receiver gets this node's key"
+	default RADIANT_ENROL_PHYSICAL
+	help
+	  Adding a receiver to an existing encrypted network. A user buys a
+	  second head unit in March and has to be able to add it to a strap they
+	  set up in January, without re-provisioning the first head unit and
+	  without taking the strap apart.
+
+	  Read this before choosing, because it is the whole trade: PAIRING
+	  HAPPENS IN THE CLEAR. An active attacker present during the window can
+	  be the man in the middle. The mitigation is a six-digit fingerprint a
+	  human compares ACROSS TWO SCREENS - and a strap has no screen, so over
+	  the air that comparison is one-sided. Out-of-band provisioning, a
+	  printed key or a QR code, genuinely defeats the attack rather than
+	  mitigating it, and it stays the recommended path for anything that
+	  matters.
+
+	  And the asymmetry nobody expects: RadiANT v1 can ADD a receiver in
+	  sixty seconds and can REMOVE one only by re-provisioning the whole
+	  network, because every keyholder holds the same root key. Per-receiver
+	  revocation is out of scope. Read that sentence before choosing
+	  open-window.
+
+config RADIANT_ENROL_CLOSED
+	bool "closed - no over-air enrolment, ever"
+	help
+	  Keys arrive only out of band: the host message set on a host-attached
+	  node, or the manufacturer's provisioning path. There is no over-air
+	  pairing window and no way to open one.
+
+	  THIS IS THE RECOMMENDED SETTING FOR ANYTHING THAT MATTERS. No
+	  protocol, no attack surface during pairing at all, and no dependence
+	  on the user actually looking at a number. It is not the default only
+	  because a sealed strap with no port has no path at all under it.
+
+config RADIANT_ENROL_PHYSICAL
+	bool "physical - a bounded window opened by a physical action (default)"
+	help
+	  A 60-second pairing window opened by a button, a magnet or a strap
+	  re-seat at the node. One pairing per window, and a second press does
+	  not extend the first.
+
+	  The window opens on whichever channel the node is currently on - the
+	  frames are additional pages, not a channel change - so every receiver
+	  that is already listening keeps its stream throughout, and a node in
+	  private mode does not have to leave it to gain a receiver.
+
+	  The mitigations are the bounded window, one pairing per window, the
+	  physical trigger, and optionally reduced transmit power so the
+	  attacker has to be in the room. They are mitigations, not a fix: the
+	  fingerprint is still one-sided on a device with no display.
+
+config RADIANT_ENROL_OPEN_WINDOW
+	bool "open-window - a keyholder may open a window with a command"
+	help
+	  A window a CURRENT KEYHOLDER opens with an authenticated command, for
+	  a node with no button and no host. Rate-limited to one window every
+	  five minutes and bounded to sixty seconds.
+
+	  THIS IS THE WEAKEST OF THE THREE and it exists because a sealed strap
+	  otherwise has no path at all. The authentication of the command is the
+	  command layer's, not this module's: a node that opens a window on an
+	  unverified command has built "anybody may enrol against me".
+
+	  Combined with the paragraph above about removal - add in sixty
+	  seconds, remove only by re-provisioning - this is the setting that
+	  most deserves a second reading before a product ships with it.
+
+endchoice
+
+endmenu

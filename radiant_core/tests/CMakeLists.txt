@@ -102,6 +102,11 @@ target_sources(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_compat.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_hr.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_power.c"
+  # Layer D (compat-C7): the over-air enrolment window. The FOURTH file here
+  # that includes a radiant_core header, and the second that has to - adding a
+  # keyholder is a key operation. It names no page number and no frame index,
+  # so the boundary profile_compat.c draws is not widened by it.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_enrol.c"
 )
 target_include_directories(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles")

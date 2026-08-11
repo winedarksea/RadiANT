@@ -493,4 +493,11 @@ endmenu
 # See docs/decisions/0009-hostless-node-identity.md.
 rsource "src/node/Kconfig"
 
+# The compatibility profiles' policy settings (compat-C7): today the `enrol`
+# choice of docs/radiant-security.md section 11.6. Its own file and its own
+# menu for the same reason: these describe a sensor's posture, not a dongle's,
+# and the person choosing one is reading menuconfig rather than the docs, which
+# is why the help text carries the argument in full.
+rsource "src/profiles/Kconfig"
+
 source "Kconfig.zephyr"

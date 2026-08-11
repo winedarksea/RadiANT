@@ -601,6 +601,22 @@ enum radiant_sec_verdict radiant_sec_last_verdict(uint8_t ch)
 	return (c == NULL) ? RADIANT_SEC_VERDICT_CLEAR : c->last_verdict;
 }
 
+void radiant_sec_stat_enrolment(uint8_t ch)
+{
+	struct sec_ctx *c = ctx_of(ch);
+
+	/*
+	 * Silent for a channel with no context. radiant_sec_pair_peer() installs
+	 * the root key before it calls this and installing a key is what
+	 * allocates the context, so the NULL branch is unreachable from the one
+	 * caller - but a counter that faulted on an unkeyed channel would be a
+	 * worse failure than a counter that missed a tick.
+	 */
+	if (c != NULL) {
+		stat_bump(&c->stats.enrolments);
+	}
+}
+
 void radiant_sec_get_stats(uint8_t ch, struct radiant_sec_stats *out)
 {
 	const struct sec_ctx *c = ctx_of(ch);
