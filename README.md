@@ -1,3 +1,10 @@
+# RadiANT: ANT+ Spec Compatible RF Protocol Library
+The goal of this project is to implement an open source radio library that is compatible with the subset of the ANT+ spec that is commonly used (ie by Zwift-compatible smart trainer setups). It also aims to provide a small superset of new items such as improved encryption support.
+
+The main advantages of an ANT+ compatible spec are: simplicity (compare against the 3000+ page bluetooth specs), low battery usage, minimal airtime usage in congested environements, reliable "one to many" broadcasts, and standardized protocols for common fitness devices. While fitness devices are the main focus, other uses include sensor networks, asset tracking, and beacons.
+
+Note that the primary ANT+ patents have expired and Garmin has made public many of the ANT+ spec documents in the middle of 2025. This library is in no way officially linked to ANT+, this is simply "ANT+ compatible".
+
 # ANT+ Compatible USB Dongle
 
 Turns an **Adafruit Feather nRF52840 Express** (and other Nordic boards) into an
