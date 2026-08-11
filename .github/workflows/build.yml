@@ -413,10 +413,12 @@ jobs:
   # depends on build reproducibility: section sizes and symbol names are stable
   # under a rebuild in a way that a binary hash is not.
   #
-  # Four assertions on the disabled build, and the fourth is the one people
+  # Five assertions on the disabled build, and the fourth is the one people
   # forget. Without it the job goes green on a build where the symbol does not
   # exist at all, which is precisely the state of the tree on the day somebody
-  # renames it.
+  # renames it. The fifth is the same check for the compat layer, phrased
+  # differently because that symbol lives inside `if RADIANT_SEC` and therefore
+  # is absent rather than commented out when the parent is off.
   #
   # The on-air half of the claim is NOT here. It is a ztest assertion against
   # the recorded fake_radio TX bodies and RX filter addresses in
@@ -482,7 +484,7 @@ jobs:
               -- "-DANT_RADIO=core"
           done
 
-      - name: The four assertions
+      - name: The five assertions
         run: |
           set -euo pipefail
 
@@ -548,6 +550,19 @@ jobs:
           #    state the day somebody renames it.
           grep -qx '# CONFIG_RADIANT_SEC is not set' "${head_cfg}"
 
+          # 5. And the compat layer is not in the disabled build either.
+          #    Phrased as "not =y" rather than as "is not set": the symbol
+          #    lives inside `if RADIANT_SEC`, so with RADIANT_SEC off it is
+          #    invisible and Kconfig omits the line entirely rather than
+          #    writing the commented form. Assertion 3 above already covers
+          #    its symbols - radiant_sec_compat_* matches `radiant_sec` - and
+          #    the positive check that the name still exists is in the
+          #    enabled build below, where the symbol is visible.
+          if grep -q '^CONFIG_RADIANT_SEC_COMPAT=y' "${head_cfg}"; then
+            echo "::error::the compat layer reached the disabled build"
+            exit 1
+          fi
+
       # The seam, as a grep. radiant_sec.h says policy calls modes and modes
       # call blocks, so that a mode-level accelerator - CRACEN on nRF54L is
       # reachable no other way - can be attached without touching policy. The
@@ -586,6 +601,38 @@ jobs:
           done
           if [[ "${found}" == "0" ]]; then
             echo "no policy files exist yet - nothing to check"
+          fi
+
+      # The other design property that is only true until somebody adds one
+      # convenient special case. docs/decisions/0008 and the plan's
+      # architecture section both say it in the same words:
+      # radiant_sec_compat.c CONTAINS NO PAGE NUMBER AND NO FIELD NAME. It
+      # authenticates bytes. That is what makes it testable against synthetic
+      # payloads with no profile in the loop, and usable unchanged by a profile
+      # nobody has written yet.
+      #
+      # The grep is the .c only, not the header. The header's comments explain
+      # why the rule exists and therefore name the things the rule excludes,
+      # and a grep fixed by deleting the explanation is worse than no grep -
+      # the same reasoning as the seam check above.
+      - name: The compat attestation names no page and no field
+        run: |
+          set -euo pipefail
+          f=app/radiant_core/src/radiant_sec_compat.c
+          if [[ ! -f "${f}" ]]; then
+            echo "radiant_sec_compat.c does not exist yet - nothing to check"
+            exit 0
+          fi
+          if grep -inE 'heart|cadence|torque|watt|\brpm\b|\bbpm\b|power|speed|calorie' "${f}"; then
+            echo "::error::${f} names a profile field. It authenticates bytes;"
+            echo "::error::what those bytes MEAN is src/profiles/'s business,"
+            echo "::error::and a tag module with an opinion about one profile"
+            echo "::error::is a tag module the next profile works around"
+            exit 1
+          fi
+          if grep -nE '^[[:space:]]*#include.*(profiles?/|ant_pages)' "${f}"; then
+            echo "::error::${f} includes a profile header"
+            exit 1
           fi
 
       # The other end of the budget. A budget that is asserted stays a budget;
@@ -643,6 +690,12 @@ jobs:
             -p always \
             -- "-DANT_RADIO=core" "-DEXTRA_CONF_FILE=security.conf" \
                "-DCONFIG_RADIANT_SEC_PAIRING_X25519=y"
+          west build app \
+            -b adafruit_feather_nrf52840/nrf52840/uf2 \
+            -d build-compat \
+            -p always \
+            -- "-DANT_RADIO=core" "-DEXTRA_CONF_FILE=security.conf" \
+               "-DCONFIG_RADIANT_SEC_COMPAT=y"
 
           size="${ZEPHYR_SDK_INSTALL_DIR}/arm-zephyr-eabi/bin/arm-zephyr-eabi-size"
           if [[ ! -x "${size}" ]]; then
@@ -660,6 +713,8 @@ jobs:
           off_elf="$(find build-app -name zephyr.elf -print -quit)"
           on_elf="$(find build-enabled -name zephyr.elf -print -quit)"
           pair_elf="$(find build-pairing -name zephyr.elf -print -quit)"
+          compat_elf="$(find build-compat -name zephyr.elf -print -quit)"
+          compat_cfg="$(find build-compat -name .config -path '*ant_dongle*' -print -quit)"
 
           fail=0
           check() {   # name measured ceiling
@@ -690,6 +745,58 @@ jobs:
           # hiding inside a bigger one. Measured 2812 B of text, which is a
           # field arithmetic implementation and a Montgomery ladder.
           check "pairing text" "$(( pair_text - on_text ))" 3584
+
+          # ── The compat attestation layer ─────────────────────────────────
+          #
+          # Its own symbol and its own budget, from the day the symbol first
+          # existed rather than from the day the feature is finished - which is
+          # the correction the 4096-to-6144 story above bought. C4 to C8 build
+          # under this gate instead of meeting it at the end.
+          #
+          # TWO NUMBERS, BECAUSE ONE OF THEM IS ZERO TODAY AND WILL LIE. At C2
+          # nothing calls these primitives, so the linker never pulls the
+          # archive member in and the LINKED delta is 0 B - a ceiling on that
+          # alone would be a gate that cannot fail until somebody writes a
+          # caller. So the compiled object is measured too, and that is the
+          # number that bites now:
+          #
+          #     radiant_sec_compat_tier2_tag        132
+          #     radiant_sec_compat_tier1_tag         66
+          #     radiant_sec_compat_nonce_block       30
+          #     ------------------------------------------
+          #     total .text in the object           228   (measured, Cortex-M4)
+          #
+          # 288 B is that measurement plus about a quarter, NOT a round number
+          # somebody liked: three pure functions over the existing CMAC seam is
+          # all this file is at C2. When C4 adds the emit and verify entry
+          # points the ceiling moves - and it moves the way the security text
+          # ceiling did, with the symbol-by-symbol breakdown written down here
+          # and a measurement behind the new figure, or it does not move.
+          compat_text="$(sect_of text "${compat_elf}")"
+          test -n "${compat_text}"
+          check "compat text (linked)" "$(( compat_text - on_text ))" 288
+
+          compat_obj="$(find build-compat \
+                          \( -name 'radiant_sec_compat.c.obj' \
+                             -o -name 'radiant_sec_compat.c.o' \) \
+                          -print -quit)"
+          if [[ -z "${compat_obj}" ]]; then
+            echo "::error::CONFIG_RADIANT_SEC_COMPAT=y built no object"
+            fail=1
+          else
+            obj_text="$("${size}" -A "${compat_obj}" |
+                          awk '$1 ~ /^\.text/ { total += $2 } END { print total+0 }')"
+            check "compat object text" "${obj_text}" 288
+          fi
+
+          # The check people forget, in the direction that catches a rename:
+          # every assertion above is satisfied by a symbol that no longer
+          # exists, because a build that ignored the -D would pass all of them.
+          if ! grep -qx 'CONFIG_RADIANT_SEC_COMPAT=y' "${compat_cfg}"; then
+            echo "::error::CONFIG_RADIANT_SEC_COMPAT did not take effect;"
+            echo "::error::every size check above is vacuous on this build"
+            fail=1
+          fi
 
           exit "${fail}"
 

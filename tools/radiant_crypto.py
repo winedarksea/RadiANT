@@ -208,6 +208,22 @@ DOM_CTR = 0x01
 DOM_SPREAD_MAC = 0x02
 DOM_DESC_MAC = 0x03
 
+#: docs/decisions/0008 section "What is pinned", and docs/radiant-security.md
+#: section 11.4. A compat channel is an ANT+ channel, so its attestation shares
+#: nothing with the spread tag but the key hierarchy - and without a domain byte
+#: of its own a compat tag and a spread tag over the same counter can coincide.
+COMPAT_DOM = 0x04
+
+#: The subtype, which lives INSIDE the MAC'd nonce at position 9 and not only in
+#: the page. Both tiers ride one page number, so a subtype an attacker can
+#: rewrite in the page would leave a Tier I and a Tier II tag over the same
+#: counter value separated by nothing at all. 0x03 is the SWITCH/RETURN
+#: announcement's, pinned here so the value cannot be re-used before the layer
+#: that emits it exists.
+COMPAT_SUBTYPE_TIER_I = 0x01
+COMPAT_SUBTYPE_TIER_II = 0x02
+COMPAT_SUBTYPE_ANNOUNCE = 0x03
+
 LABEL_ENC = "enc"
 LABEL_AUTH = "auth"
 LABEL_ID = "id"
@@ -222,6 +238,21 @@ DEFAULT_W = 2
 #: pages (0x50/0x51/0x52) stay in the clear mechanically rather than by memory.
 PAGE_LO_MIN = 0x01
 PAGE_HI_MAX = 0x1F
+
+#: Tier I is 40 bits and Tier II is 48, and the difference is not a security
+#: judgement about the two tiers: Tier I carries a two-byte counter in the page
+#: because no window index is implied, and 8 - 1 - 2 = 5 bytes are what is left.
+#: 2^-40 per attempt against a mechanism rate-limited to one attempt per T by
+#: construction is not the weak link.
+COMPAT_TIER_I_TAG_BITS = 40
+COMPAT_TIER_II_TAG_BITS = 48
+
+#: Tier II's legal window sizes, and the switch countdown's legal lengths. Both
+#: enumerated rather than ranged: N is simultaneously the airtime cost, the
+#: verification latency and the DoS amplification factor.
+COMPAT_WINDOW_SIZES = (4, 8, 16, 32)
+COMPAT_COUNTDOWN_LENGTHS = (16, 32, 64, 128)
+COMPAT_DEFAULT_WINDOW = 8
 
 
 def nonce_block(epoch: int, devnum: int, counter: int, dom: int) -> bytes:
@@ -310,6 +341,97 @@ def spread_tag(k_auth: bytes, epoch: int, devnum: int, window_start: int,
             raise ValueError("a RadiANT page is 8 bytes, got %d" % len(packet))
         message += bytes(packet[0:7])
     return cmac(k_auth, message)[:window]
+
+
+# ── Compat attestation: two tiers over one domain byte ──────────────────────
+#
+# The mirror of radiant_core/src/radiant_sec_compat.c. docs/radiant-security.md
+# section 11.4 is normative and docs/decisions/0008 pins the bytes.
+#
+# LIKE THE C, NOTHING HERE KNOWS A PAGE NUMBER OR A FIELD NAME. These take
+# bytes and return bytes; which page carries them, and what the other bytes of
+# that page mean, is tools/ant_pages.py's problem and not this module's. That is
+# what makes the same two functions serve heart rate, power and a profile nobody
+# has written yet.
+
+
+def compat_nonce_block(epoch: int, devnum: int, counter: int,
+                       sub: int) -> bytes:
+    """epoch[4 LE] || devnum[2 LE] || counter[2 LE] || 0x04 || sub || 0x00 x6.
+
+    Section 3.3's block extended at position 9 rather than duplicated - the
+    domain byte stays where every other block has it, positions 10..15 stay
+    zero, and the subtype is inside the MAC'd block rather than only in the page
+    byte that announces it.
+
+    `counter` is the attestation counter for Tier I and the window index for
+    Tier II. Both are 16-bit here and both are carried truncated in the page,
+    which is what lets a receiver reconstruct the high bits from time exactly as
+    resolve_counter() already does for the data counter.
+    """
+    if not 1 <= sub <= 0x0F:
+        raise ValueError("the subtype is a nibble in 1..15, got %r" % (sub,))
+    return nonce_block(epoch, devnum, counter, COMPAT_DOM)[:9] \
+        + bytes([sub]) + bytes(6)
+
+
+def compat_tier1_tag(k_auth: bytes, epoch: int, devnum: int,
+                     att_counter: int) -> bytes:
+    """Tier I, the identity attestation: trunc40( CMAC(K_auth, nonce_block) ).
+
+    IT COVERS NO PAYLOAD, AND THAT IS THE POINT. The tag proves "this stream
+    comes from the holder of K_auth, now, and is not a replay" and nothing else,
+    so it is verifiable on receipt and a packet lost anywhere else costs
+    nothing - verification rate equals page delivery rate, independently of how
+    often the page is sent. A window CMAC cannot have that property at any
+    length, which is the whole reason this tier exists and is the one that is on
+    by default.
+
+    Replay is closed by `att_counter`, which is monotone and derivable from
+    elapsed time; a receiver rejects a counter it has already seen.
+    """
+    block = compat_nonce_block(epoch, devnum, att_counter,
+                               COMPAT_SUBTYPE_TIER_I)
+    return cmac(k_auth, block)[:COMPAT_TIER_I_TAG_BITS // 8]
+
+
+def compat_tier2_tag(k_auth: bytes, epoch: int, devnum: int,
+                     window_index: int, messages) -> bytes:
+    """Tier II, the data attestation:
+
+        trunc48( CMAC(K_auth, nonce_block || p_1 || p_2 || ... || p_{N-1}) )
+
+    `messages` is the N-1 preceding TRANSMITTED messages - not N-1 data
+    messages, so the common pages, the beacon and any Tier I page in the window
+    are covered too - in transmission order, each the full 8 payload bytes with
+    the page number included. Leaving the page number out would let an attacker
+    who flips it reinterpret the same authenticated bits against a different
+    schema, and including it is also what keeps this function ignorant of what
+    any of those bytes mean.
+
+    Contrast spread_tag(), which takes bytes [0..6] because byte [7] is where
+    its own tag rides. Nothing rides in a compat page's byte [7]: the tag has a
+    page of its own, so all eight bytes are covered.
+
+    The honest regression, and the reason this tier is off by default: a window
+    CMAC is not self-synchronising under loss, so one lost packet in the window
+    makes the whole window unverifiable.
+    """
+    window = len(messages) + 1
+    if window not in COMPAT_WINDOW_SIZES:
+        raise ValueError("N must be one of %s, so `messages` is N-1 = %s "
+                         "messages, got %d"
+                         % (COMPAT_WINDOW_SIZES,
+                            tuple(n - 1 for n in COMPAT_WINDOW_SIZES),
+                            len(messages)))
+    block = compat_nonce_block(epoch, devnum, window_index,
+                               COMPAT_SUBTYPE_TIER_II)
+    for message in messages:
+        if len(message) != 8:
+            raise ValueError("a transmitted message is 8 bytes, got %d"
+                             % len(message))
+        block += bytes(message)
+    return cmac(k_auth, block)[:COMPAT_TIER_II_TAG_BITS // 8]
 
 
 def tag_byte_index(counter: int, window: int) -> int:

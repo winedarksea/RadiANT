@@ -305,6 +305,36 @@ config RADIANT_SEC_PAIRING_X25519
 	  psa_rng/CRACEN, and reaching it drags nrf_security into every build.
 	  The honest consequence is that a host-less node cannot pair this way.
 
+config RADIANT_SEC_COMPAT
+	bool "compat-mode attestation primitives (ANT+ device types)"
+	default n
+	help
+	  src/radiant_sec_compat.c: the two attestation tags a RadiANT node
+	  puts on an ANT+ device type. Tier I is an identity tag over the
+	  nonce alone - trunc40( CMAC(K_auth, nonce_block) ) - and Tier II is
+	  a window MAC over N consecutive transmitted messages, trunc48.
+	  docs/radiant-security.md section 11.4 is normative and
+	  docs/decisions/0008-antplus-additive-pages-and-compat-security.md
+	  pins the bytes.
+
+	  THIS IS THE OPPOSITE OF CONFIG_RADIANT_SEC'S CHANNELS, WHICH IS THE
+	  point of it. A secured RadiANT channel rewrites payload bytes and
+	  reads as noise to a head unit. A compat channel is a byte-exact ANT+
+	  sensor to every legacy receiver and adds an authenticated page beside
+	  its data, so a receiver holding K_auth can tell a stranger's
+	  colliding sensor from yours cryptographically while Zwift keeps
+	  reading it normally.
+
+	  Primitives only at this symbol: pure functions, no state, no init,
+	  and nothing calls them yet. Turning it on today therefore costs a
+	  build nothing but the code, and the code is garbage-collected while
+	  nothing references it.
+
+	  Off by default and dependent on RADIANT_SEC, and the zero-cost
+	  discipline is inherited unchanged: no ops struct, no structs in
+	  hot-path signatures, no-op static inlines when off, and the
+	  `zero-cost` CI job asserting it rather than a comment claiming it.
+
 config RADIANT_SEC_BACKEND_MODES
 	bool "the backend implements the mode level itself (test scaffold)"
 	default n

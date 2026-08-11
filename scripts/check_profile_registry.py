@@ -63,7 +63,11 @@ TELEMETRY = REPO / "docs" / "radiant-telemetry.md"
 ANT_PLUS = REPO / "docs" / "ant-plus-profiles.md"
 SECURITY = REPO / "docs" / "radiant-security.md"
 ANT_PAGES = REPO / "tools" / "ant_pages.py"
+RADIANT_CRYPTO = REPO / "tools" / "radiant_crypto.py"
 SEC_HEADER = REPO / "radiant_core" / "include" / "radiant_core" / "radiant_sec.h"
+SEC_COMPAT_HEADER = (REPO / "radiant_core" / "include" / "radiant_core" /
+                     "radiant_sec_compat.h")
+COMPAT_SOURCE = REPO / "radiant_core" / "src" / "radiant_sec_compat.c"
 
 MARKER = re.compile(r"^<!--\s*radiant-registry:\s*([a-z0-9-]+)\s*-->\s*$")
 SEPARATOR = re.compile(r"^[\s:|-]+$")
@@ -472,11 +476,12 @@ def check_ant_plus_doc(types, problems) -> None:
                             registry_row.get("period")))
 
 
-def load_ant_pages(problems):
-    if not ANT_PAGES.exists():
-        problems.add(ANT_PAGES, 0, "file does not exist")
+def load_module(path, problems):
+    """Import a tools/*.py by path, reporting rather than raising."""
+    if not path.exists():
+        problems.add(path, 0, "file does not exist")
         return None
-    spec = importlib.util.spec_from_file_location("ant_pages", ANT_PAGES)
+    spec = importlib.util.spec_from_file_location(path.stem, path)
     module = importlib.util.module_from_spec(spec)
     # Registered BEFORE exec_module, which is the documented recipe and not
     # tidiness. A module executed outside sys.modules cannot use anything that
@@ -488,9 +493,13 @@ def load_ant_pages(problems):
     try:
         spec.loader.exec_module(module)
     except Exception as error:               # noqa: BLE001 - report, don't crash
-        problems.add(ANT_PAGES, 0, "cannot be imported: %s" % error)
+        problems.add(path, 0, "cannot be imported: %s" % error)
         return None
     return module
+
+
+def load_ant_pages(problems):
+    return load_module(ANT_PAGES, problems)
 
 
 def check_against_ant_pages(types, module, problems) -> None:
@@ -679,10 +688,13 @@ def check_reserved_space(problems) -> None:
 # three, it is the same numbers in every compat profile, no compat page is
 # 7-bit-illegal, and none of it ever lands on 0x79.
 #
-# check_compat_constants() is the forward one. C2 and C3 own the constants
-# themselves - this file must not invent them - so each rule is skipped while
-# its constant is absent and enforced the moment it appears. The names are not
-# guesses: ADR 0008 pins them as a naming convention precisely so that this
+# check_compat_constants() was the forward one and is now half live. C2 landed
+# the domain byte, the subtypes, the two tag lengths and the Python mirror, so
+# those are REQUIRED here rather than skipped-while-absent - a check that can
+# pass by not being reached is a check that passes on the day the file is
+# deleted. C3 still owns tools/ant_pages.py's copies, which land with the page
+# codecs, so that module is checked only for what it already has. The names are
+# not guesses: ADR 0008 pins them as a naming convention precisely so that this
 # check has something to look up.
 
 COMPAT_DOM_BYTE = 0x04
@@ -943,19 +955,92 @@ def check_compat_allocation(per_type_rows, problems) -> None:
                          % (NO_ADDITIONAL_PAGE_TYPE, row.get("page")))
 
 
-def check_compat_constants(module, problems) -> None:
-    """Rules the compat constants must satisfy, from the day they exist.
+COMPAT_CONSTANT_RULES = [
+    ("COMPAT_DOM", COMPAT_DOM_BYTE,
+     "the compat domain byte, which must match RADIANT_SEC_DOM_COMPAT_MAC"),
+    ("COMPAT_TIER_I_TAG_BITS", COMPAT_TIER_I_TAG_BITS,
+     "Tier I's tag length. 40 bits, not 48: the counter needs two in-page "
+     "bytes now that no window index is implied"),
+    ("COMPAT_TIER_II_TAG_BITS", COMPAT_TIER_II_TAG_BITS,
+     "Tier II's tag length"),
+    ("COMPAT_WINDOW_SIZES", COMPAT_WINDOW_SIZES,
+     "the legal Tier II window set"),
+    ("COMPAT_COUNTDOWN_LENGTHS", COMPAT_COUNTDOWN_LENGTHS,
+     "the legal switch-countdown set"),
+] + [(name, value,
+      "the attestation subtype that reaches the nonce at position 9")
+     for name, value in sorted(COMPAT_SUBTYPES.items())]
 
-    C2 defines the domain byte and the tags in radiant_sec.h and
-    radiant_sec_compat.c; C3 mirrors them in tools/ant_pages.py. Neither exists
-    yet, so every rule below is skipped while its constant is absent - which is
-    why the domain-byte reservation is checked from the other direction too:
-    nothing else may take 0x04 in the meantime.
+# The C constants, and the one rule that is not a value: the subtype has to be
+# at nonce_block[9] rather than merely defined. A #define agreeing with ADR 0008
+# proves the name and the number; only the line that writes it proves the
+# position, and the position is the whole pin.
+COMPAT_C_DEFINES = {
+    "RADIANT_SEC_COMPAT_SUBTYPE_TIER_I": COMPAT_SUBTYPES["COMPAT_SUBTYPE_TIER_I"],
+    "RADIANT_SEC_COMPAT_SUBTYPE_TIER_II": COMPAT_SUBTYPES["COMPAT_SUBTYPE_TIER_II"],
+    "RADIANT_SEC_COMPAT_SUBTYPE_ANNOUNCE": COMPAT_SUBTYPES["COMPAT_SUBTYPE_ANNOUNCE"],
+    "RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES": COMPAT_TIER_I_TAG_BITS // 8,
+    "RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES": COMPAT_TIER_II_TAG_BITS // 8,
+    "RADIANT_SEC_COMPAT_N_MIN": min(COMPAT_WINDOW_SIZES),
+    "RADIANT_SEC_COMPAT_N_MAX": max(COMPAT_WINDOW_SIZES),
+}
 
-    TODO(C2/C3): when the constants land, turn the absences into problems so
-    this stops being a check that can pass by not being reached.
+
+def check_compat_module_constants(module, path, required, problems) -> None:
+    """The value rules, against whichever module claims to hold them.
+
+    `required` is what separates a phase that owes these constants from one that
+    does not: tools/radiant_crypto.py mirrors the C primitives and must have
+    them, while tools/ant_pages.py gets them with the page codecs in C3 and is
+    checked only for what it has already.
     """
-    if SEC_HEADER.exists():
+    if module is None:
+        return
+    for name, expected, why in COMPAT_CONSTANT_RULES:
+        if not hasattr(module, name):
+            if required:
+                problems.add(path, 0,
+                             "does not define %s - %s; see docs/decisions/0008"
+                             % (name, why))
+            continue
+        actual = getattr(module, name)
+        if isinstance(expected, tuple):
+            actual = tuple(actual)
+        if actual != expected:
+            problems.add(path, 0,
+                         "%s is %r, not %r - %s; see docs/decisions/0008"
+                         % (name, actual, expected, why))
+
+    subtypes = {name: getattr(module, name)
+                for name in COMPAT_SUBTYPES if hasattr(module, name)}
+    if len(set(subtypes.values())) != len(subtypes):
+        problems.add(path, 0,
+                     "the compat subtypes are not distinct (%r); they share "
+                     "dom 0x%02X and nothing else separates them"
+                     % (subtypes, COMPAT_DOM_BYTE))
+    for name, value in sorted(subtypes.items()):
+        if not 1 <= value <= 0x0F:
+            problems.add(path, 0,
+                         "%s is 0x%02X, which is not a nibble in 1..15" % (name, value))
+
+
+def check_compat_constants(module, problems) -> None:
+    """Rules the compat constants must satisfy, in C and in both mirrors.
+
+    C2 defined the domain byte in radiant_sec.h, the subtypes and tag lengths in
+    radiant_sec_compat.h, the tags themselves in radiant_sec_compat.c, and the
+    Python mirror in tools/radiant_crypto.py - so all four are required here
+    rather than skipped. tools/ant_pages.py is C3's and is still checked only
+    for the constants it has already: the page codecs land with the page
+    numbers, and demanding them before that phase would be demanding a guess.
+
+    The domain-byte reservation is also checked from the other direction -
+    nothing but RADIANT_SEC_DOM_COMPAT_MAC may take 0x04 - because a collision
+    there is invisible until two tags coincide on the air.
+    """
+    if not SEC_HEADER.exists():
+        problems.add(SEC_HEADER, 0, "file does not exist")
+    else:
         text = SEC_HEADER.read_text(encoding="utf-8")
         doms = {}
         for name, value in re.findall(
@@ -970,55 +1055,49 @@ def check_compat_constants(module, problems) -> None:
                              "apart, so two names for one value is a collision"
                              % (value, " and ".join(sorted(names))))
         owner = doms.get(COMPAT_DOM_BYTE, [])
-        if owner and owner != ["RADIANT_SEC_DOM_COMPAT_MAC"]:
+        if not owner:
+            problems.add(SEC_HEADER, 0,
+                         "no domain byte is defined as 0x%02X; "
+                         "docs/decisions/0008 reserves it for "
+                         "RADIANT_SEC_DOM_COMPAT_MAC and C2 landed it"
+                         % COMPAT_DOM_BYTE)
+        elif owner != ["RADIANT_SEC_DOM_COMPAT_MAC"]:
             problems.add(SEC_HEADER, 0,
                          "0x%02X is taken by %s; docs/decisions/0008 reserves it "
                          "for RADIANT_SEC_DOM_COMPAT_MAC"
                          % (COMPAT_DOM_BYTE, ", ".join(sorted(owner))))
 
-    if module is None:
-        return
+    if not SEC_COMPAT_HEADER.exists():
+        problems.add(SEC_COMPAT_HEADER, 0, "file does not exist")
+    else:
+        text = SEC_COMPAT_HEADER.read_text(encoding="utf-8")
+        for name, expected in sorted(COMPAT_C_DEFINES.items()):
+            found = re.search(
+                r"^#define\s+%s\s+(0x[0-9A-Fa-f]+|\d+)" % re.escape(name),
+                text, re.M)
+            if found is None:
+                problems.add(SEC_COMPAT_HEADER, 0,
+                             "does not define %s; see docs/decisions/0008" % name)
+            elif int(found.group(1), 0) != expected:
+                problems.add(SEC_COMPAT_HEADER, 0,
+                             "%s is %s, not %d; see docs/decisions/0008"
+                             % (name, found.group(1), expected))
 
-    rules = [
-        ("COMPAT_DOM", COMPAT_DOM_BYTE,
-         "the compat domain byte, which must match RADIANT_SEC_DOM_COMPAT_MAC"),
-        ("COMPAT_TIER_I_TAG_BITS", COMPAT_TIER_I_TAG_BITS,
-         "Tier I's tag length. 40 bits, not 48: the counter needs two in-page "
-         "bytes now that no window index is implied"),
-        ("COMPAT_TIER_II_TAG_BITS", COMPAT_TIER_II_TAG_BITS,
-         "Tier II's tag length"),
-        ("COMPAT_WINDOW_SIZES", COMPAT_WINDOW_SIZES,
-         "the legal Tier II window set"),
-        ("COMPAT_COUNTDOWN_LENGTHS", COMPAT_COUNTDOWN_LENGTHS,
-         "the legal switch-countdown set"),
-    ]
-    for name, value in sorted(COMPAT_SUBTYPES.items()):
-        rules.append((name, value,
-                      "the attestation subtype that reaches the nonce at "
-                      "position 9"))
+    if not COMPAT_SOURCE.exists():
+        problems.add(COMPAT_SOURCE, 0, "file does not exist")
+    else:
+        text = COMPAT_SOURCE.read_text(encoding="utf-8")
+        # The subtype has to REACH the block. Written into a page byte instead,
+        # it is chosen by whoever sends the page and separates nothing.
+        if re.search(r"^\s*out\[9\]\s*=\s*sub\s*;", text, re.M) is None:
+            problems.add(COMPAT_SOURCE, 0,
+                         "nothing writes the subtype to nonce_block[9]; ADR "
+                         "0008 pins the position, not just the value - a "
+                         "subtype only in the page is chosen by the sender")
 
-    for name, expected, why in rules:
-        if not hasattr(module, name):
-            continue                     # C2/C3 own it; see the docstring
-        actual = getattr(module, name)
-        if isinstance(expected, tuple):
-            actual = tuple(actual)
-        if actual != expected:
-            problems.add(ANT_PAGES, 0,
-                         "%s is %r, not %r - %s; see docs/decisions/0008"
-                         % (name, actual, expected, why))
-
-    subtypes = {name: getattr(module, name)
-                for name in COMPAT_SUBTYPES if hasattr(module, name)}
-    if len(set(subtypes.values())) != len(subtypes):
-        problems.add(ANT_PAGES, 0,
-                     "the compat subtypes are not distinct (%r); they share "
-                     "dom 0x%02X and nothing else separates them"
-                     % (subtypes, COMPAT_DOM_BYTE))
-    for name, value in sorted(subtypes.items()):
-        if not 1 <= value <= 0x0F:
-            problems.add(ANT_PAGES, 0,
-                         "%s is 0x%02X, which is not a nibble in 1..15" % (name, value))
+    check_compat_module_constants(load_module(RADIANT_CRYPTO, problems),
+                                  RADIANT_CRYPTO, True, problems)
+    check_compat_module_constants(module, ANT_PAGES, False, problems)
 
 
 def main() -> int:

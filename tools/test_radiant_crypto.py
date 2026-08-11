@@ -287,6 +287,209 @@ class TestWindowArithmetic(unittest.TestCase):
             self.assertEqual(65536 % window, 0)
 
 
+class TestCompatAttestation(unittest.TestCase):
+    """docs/radiant-security.md section 11.4 and ADR 0008, byte for byte.
+
+    Every literal in this class also appears in
+    radiant_core/tests/src/test_sec_compat.c. Neither implementation computes
+    the other's expected value at test time and neither is authoritative:
+    agreeing is the assertion, and pinning both is what stops two
+    implementations that share a mistake from reporting it as a pass.
+
+    There is no page here and no profile. The subtype's separation of the two
+    tiers is asserted by building the nonce inputs directly, because a test that
+    checked only a page byte would pass on an implementation that never put the
+    subtype anywhere near the MAC.
+    """
+
+    K_AUTH = bytes(range(16))
+    EPOCH = 0x11223344
+    DEVNUM = 0xBEEF
+    COUNTER = 0x0501
+
+    #: Seven synthetic transmitted messages - N = 8 means p_1..p_7 - with no
+    #: profile meaning of any kind. Byte [0] differs from the rest of each so
+    #: that an implementation skipping it, as spread_tag() legitimately does,
+    #: is caught.
+    MSGS = [bytes([0x10 + i] + [i] * 7) for i in range(7)]
+
+    def test_nonce_block_is_section_3_3_extended_at_position_9(self):
+        got = rc.compat_nonce_block(self.EPOCH, self.DEVNUM, self.COUNTER,
+                                    rc.COMPAT_SUBTYPE_TIER_I)
+        self.assertEqual(got.hex(), "44332211efbe01050401000000000000")
+        self.assertEqual(got[8], rc.COMPAT_DOM)
+        self.assertEqual(got[9], rc.COMPAT_SUBTYPE_TIER_I)
+        self.assertEqual(got[10:], bytes(6))
+
+        got = rc.compat_nonce_block(self.EPOCH, self.DEVNUM, self.COUNTER,
+                                    rc.COMPAT_SUBTYPE_TIER_II)
+        self.assertEqual(got.hex(), "44332211efbe01050402000000000000")
+
+    def test_the_compat_domain_byte_is_its_own(self):
+        # Without it a compat tag and a spread tag over the same (epoch,
+        # devnum, counter) are the same block.
+        args = (self.EPOCH, self.DEVNUM, self.COUNTER)
+        self.assertEqual(rc.COMPAT_DOM, 0x04)
+        self.assertNotEqual(rc.compat_nonce_block(*args,
+                                                  rc.COMPAT_SUBTYPE_TIER_I),
+                            rc.nonce_block(*args, rc.DOM_SPREAD_MAC))
+
+    def test_the_subtype_reaches_the_mac_and_not_only_the_page(self):
+        # The assertion the whole subtype pin exists for. A subtype written
+        # only into a page byte is chosen by whoever sends the page, so the two
+        # tiers' tags over one counter value would be interchangeable.
+        args = (self.EPOCH, self.DEVNUM, self.COUNTER)
+        one = rc.cmac(self.K_AUTH,
+                      rc.compat_nonce_block(*args, rc.COMPAT_SUBTYPE_TIER_I))
+        two = rc.cmac(self.K_AUTH,
+                      rc.compat_nonce_block(*args, rc.COMPAT_SUBTYPE_TIER_II))
+        self.assertEqual(one.hex(), "86a63d51149983aa9294ad0d7d007ad6")
+        self.assertEqual(two.hex(), "18d0a91fa67558479b5e3415fe72854e")
+        self.assertNotEqual(one, two)
+
+        # The third subtype, which nothing computes yet: pinned now so the
+        # value cannot be spent twice before C8 exists.
+        three = rc.compat_nonce_block(*args, rc.COMPAT_SUBTYPE_ANNOUNCE)
+        self.assertEqual(three[9], 0x03)
+        self.assertEqual(len({rc.COMPAT_SUBTYPE_TIER_I,
+                              rc.COMPAT_SUBTYPE_TIER_II,
+                              rc.COMPAT_SUBTYPE_ANNOUNCE}), 3)
+
+    def test_an_illegal_subtype_is_refused(self):
+        # The subtype is a nibble because it also has to fit in a page byte
+        # beside something else.
+        for sub in (0, 0x10, 0xFF, -1):
+            with self.subTest(sub=sub), self.assertRaises(ValueError):
+                rc.compat_nonce_block(self.EPOCH, self.DEVNUM, self.COUNTER,
+                                      sub)
+
+    def test_tier1_vector_shared_with_the_c_implementation(self):
+        got = rc.compat_tier1_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
+                                  self.COUNTER)
+        self.assertEqual(got.hex(), "86a63d5114")
+        # trunc40 takes the FIRST five bytes; which end a truncation takes is
+        # exactly what two implementations settle differently.
+        self.assertEqual(
+            got,
+            rc.cmac(self.K_AUTH,
+                    rc.compat_nonce_block(self.EPOCH, self.DEVNUM,
+                                          self.COUNTER,
+                                          rc.COMPAT_SUBTYPE_TIER_I))[:5])
+        self.assertEqual(len(got) * 8, rc.COMPAT_TIER_I_TAG_BITS)
+        self.assertEqual(rc.COMPAT_TIER_I_TAG_BITS, 40)
+
+    def test_tier1_covers_the_counter_the_devnum_and_the_epoch(self):
+        # It covers no payload, so these three are the whole of what it says.
+        base = rc.compat_tier1_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
+                                   self.COUNTER)
+        for label, args in (
+                ("counter", (self.EPOCH, self.DEVNUM, self.COUNTER + 1)),
+                ("devnum", (self.EPOCH, self.DEVNUM ^ 1, self.COUNTER)),
+                ("epoch", (self.EPOCH + 1, self.DEVNUM, self.COUNTER))):
+            with self.subTest(field=label):
+                self.assertNotEqual(base,
+                                    rc.compat_tier1_tag(self.K_AUTH, *args))
+
+    def test_tier1_is_key_bound(self):
+        other = bytes.fromhex("ffeeddccbbaa99887766554433221100")
+        self.assertNotEqual(
+            rc.compat_tier1_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
+                                self.COUNTER),
+            rc.compat_tier1_tag(other, self.EPOCH, self.DEVNUM, self.COUNTER))
+
+    def test_tier2_vectors_shared_with_the_c_implementation(self):
+        self.assertEqual(
+            rc.compat_tier2_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
+                                self.COUNTER, self.MSGS).hex(),
+            "b61aa9878f10")
+        # A second window size, because an implementation that hard-coded 8
+        # would pass everything above.
+        self.assertEqual(
+            rc.compat_tier2_tag(self.K_AUTH, self.EPOCH, self.DEVNUM, 0x0007,
+                                self.MSGS[:3]).hex(),
+            "dc941a16d23e")
+        self.assertEqual(rc.COMPAT_TIER_II_TAG_BITS, 48)
+
+    def test_tier2_covers_every_byte_of_every_covered_message(self):
+        flipped = list(self.MSGS)
+        flipped[-1] = bytes([flipped[-1][0], flipped[-1][1] ^ 0x01]) \
+            + flipped[-1][2:]
+        self.assertEqual(
+            rc.compat_tier2_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
+                                self.COUNTER, flipped).hex(),
+            "221f4a94dc76")
+
+        # Byte [0] and byte [7] specifically. The spread tag excludes [7]
+        # because that is where it rides; a compat tag rides on a page of its
+        # own and covers all eight - and leaving [0] out would let an attacker
+        # who flips it reinterpret the same authenticated bits against a
+        # different schema.
+        base = rc.compat_tier2_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
+                                   self.COUNTER, self.MSGS)
+        for index in (0, 7):
+            with self.subTest(byte=index):
+                edited = list(self.MSGS)
+                message = bytearray(edited[3])
+                message[index] ^= 0x80
+                edited[3] = bytes(message)
+                self.assertNotEqual(
+                    base,
+                    rc.compat_tier2_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
+                                        self.COUNTER, edited))
+
+    def test_tier2_message_order_is_transmission_order(self):
+        # A MAC over a set rather than a sequence would let an attacker
+        # reorder a window's history and keep it verifiable.
+        swapped = list(self.MSGS)
+        swapped[0], swapped[-1] = swapped[-1], swapped[0]
+        self.assertNotEqual(
+            rc.compat_tier2_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
+                                self.COUNTER, self.MSGS),
+            rc.compat_tier2_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
+                                self.COUNTER, swapped))
+
+    def test_tier2_window_index_is_inside_the_tag(self):
+        self.assertNotEqual(
+            rc.compat_tier2_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
+                                self.COUNTER, self.MSGS),
+            rc.compat_tier2_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
+                                self.COUNTER + 1, self.MSGS))
+
+    def test_tier2_refuses_an_unenumerated_window(self):
+        # N is simultaneously the airtime cost, the verification latency and
+        # the DoS amplification factor, so an unenumerated N is three
+        # surprises. `messages` is N-1 long, so these counts are the illegal
+        # ones.
+        for count in (0, 1, 2, 4, 5, 6, 8, 11, 23, 30, 32, 63):
+            with self.subTest(messages=count), self.assertRaises(ValueError):
+                rc.compat_tier2_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
+                                    self.COUNTER, [bytes(8)] * count)
+
+        # And every legal one is accepted, so the check above cannot pass by
+        # refusing everything.
+        for window in rc.COMPAT_WINDOW_SIZES:
+            with self.subTest(n=window):
+                tag = rc.compat_tier2_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
+                                          self.COUNTER,
+                                          [bytes(8)] * (window - 1))
+                self.assertEqual(len(tag) * 8, rc.COMPAT_TIER_II_TAG_BITS)
+
+    def test_tier2_refuses_a_message_that_is_not_eight_bytes(self):
+        for bad in (b"", bytes(7), bytes(9)):
+            with self.subTest(length=len(bad)), self.assertRaises(ValueError):
+                rc.compat_tier2_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
+                                    self.COUNTER, [bad] * 7)
+
+    def test_the_enumerated_sets_are_what_adr_0008_pins(self):
+        # scripts/check_profile_registry.py asserts the same values against
+        # this module. Stated here too so a change fails a fast test rather
+        # than only the registry checker.
+        self.assertEqual(rc.COMPAT_WINDOW_SIZES, (4, 8, 16, 32))
+        self.assertEqual(rc.COMPAT_COUNTDOWN_LENGTHS, (16, 32, 64, 128))
+        self.assertEqual(rc.COMPAT_DEFAULT_WINDOW, 8)
+        self.assertIn(rc.COMPAT_DEFAULT_WINDOW, rc.COMPAT_WINDOW_SIZES)
+
+
 class TestCounterReconstruction(unittest.TestCase):
     """D4 and D14: the counter comes from time, and a wrap moves the epoch."""
 

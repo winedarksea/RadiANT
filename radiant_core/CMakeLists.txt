@@ -98,6 +98,14 @@ zephyr_library_sources_ifdef(CONFIG_RADIANT_CORE_ANTR_API src/radiant_api.c)
 zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC src/radiant_sec_aes.c)
 zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC src/radiant_sec.c)
 
+# The compat attestation primitives, under their own symbol and inside
+# CONFIG_RADIANT_SEC's `if` block in Kconfig. A file, not a directory: this
+# lives beside the other radiant_core sources rather than under src/profiles/,
+# because it names no page and no field and therefore has nothing to do with
+# the profile boundary docs/decisions/0002 draws. What a compat page MEANS is
+# src/profiles/'s business; this authenticates bytes.
+zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_COMPAT src/radiant_sec_compat.c)
+
 # The host surface, under its own symbol because it is the one security file
 # that reaches an application header - a node with a key baked in and no serial
 # host has no use for 0xF1-0xF4 and should not link them.

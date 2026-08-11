@@ -365,6 +365,19 @@ int radiant_sec_aes_ecb(const struct radiant_sec_key *k,
 #define RADIANT_SEC_DOM_DESC_MAC   0x03
 
 /*
+ * The compat layer's, from docs/decisions/0008 and docs/radiant-security.md
+ * section 11.4. It lives here rather than in radiant_core/radiant_sec_compat.h
+ * for one reason: this is the list a reader checks a new domain byte against,
+ * and a fourth value defined somewhere else is a collision waiting for the
+ * fifth. Everything else about the compat layer - the subtype at position 9,
+ * the two tag lengths, the window sizes - is in that header, behind
+ * CONFIG_RADIANT_SEC_COMPAT.
+ *
+ * Nothing under CONFIG_RADIANT_SEC uses this byte. It is here to be reserved.
+ */
+#define RADIANT_SEC_DOM_COMPAT_MAC 0x04
+
+/*
  * nonce_block = epoch[4 LE] || devnum[2 LE] || counter[2 LE] || dom || 0x00 x7
  */
 void radiant_sec_nonce_block(uint8_t out[RADIANT_SEC_BLOCK_BYTES],

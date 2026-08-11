@@ -639,6 +639,26 @@ was only ever checked in flash, and this feature turns out to cost more bss than
 text. On a 256 KB part that is affordable; a budget nobody checks is how it
 stops being affordable.
 
+**`CONFIG_RADIANT_SEC_COMPAT` gets its own budget from the day the symbol
+exists**, which is the correction the paragraphs above bought applied to the
+next feature rather than only recorded about the last one. Section 11.4's
+primitives are three pure functions over the same CMAC seam:
+
+| symbol | text |
+|---|---|
+| `radiant_sec_compat_tier2_tag` | 132 B |
+| `radiant_sec_compat_tier1_tag` | 66 B |
+| `radiant_sec_compat_nonce_block` | 30 B |
+| **total** | **228 B**, ceiling 288 |
+
+**The linked delta is 0 B today and the CI job says so out loud**, because
+nothing calls these yet and the linker never pulls the archive member in. A
+ceiling on the linked delta alone would therefore be a gate that cannot fail
+until somebody writes a caller, so the compiled object is measured too and that
+is the number the 288 B applies to. When the emit and verify entry points land
+the ceiling moves — with a per-symbol breakdown and a measurement behind the new
+figure, in this table, or it does not move.
+
 ---
 
 ## 6. Threat model
