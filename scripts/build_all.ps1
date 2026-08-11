@@ -106,6 +106,25 @@ $targets = @(
     @{ dir='lm20';           board='nrf54lm20dk/nrf54lm20a/cpuapp';          artifact='ant_dongle_nrf54lm20dk.hex';       pkg='hex'; offset=0x0;     transport='USB_NEXT';   conf=$null;         release=$false }
 )
 
+# The default-off configuration fragments, which only build under a backend
+# that can reach them.
+#
+# encryption.conf's own comment says it exists "so a default-off path does not
+# quietly stop compiling", and it had never appeared in this list or in either
+# CI matrix - so the thing it was written to prevent was never prevented for
+# it. security.conf gets its entry in the same change that creates it.
+#
+# CONFIG_RADIANT_SEC depends on CONFIG_RADIANT_CORE, so a security build under
+# -Backend sdk_ant would compile nothing and pass, which is worse than not
+# building it: it would look like coverage. Hence the gate on $Backend rather
+# than an unconditional row.
+if ($Backend -eq 'core') {
+    $targets += @{ dir='feather_security'; board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='ant_dongle_feather_security.uf2'; pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='security.conf'; release=$false }
+}
+if ($Backend -eq 'sdk_ant') {
+    $targets += @{ dir='feather_encryption'; board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='ant_dongle_feather_encryption.uf2'; pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='encryption.conf'; release=$false }
+}
+
 if (-not (Get-Command west -ErrorAction SilentlyContinue)) {
     throw "west is not on PATH. Dot-source the environment first:`n" +
           "  . .\scripts\env.ps1 -NcsVersion $NcsVersion"

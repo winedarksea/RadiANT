@@ -1116,25 +1116,63 @@ CAPABILITIES_ID_MATCH_FIX_ON_SHARED_CHANNEL_RXBURST = 0x04
 # third, unrelated namespace and has not moved.
 # ---------------------------------------------------------------------------
 
-# Select which of X_PRIV, X_CONF and X_AUTH are on for a channel. The three
-# switches are independent, not a ladder. [K4 (docs/radiant-security.md sec 9)]
+# Configure the two payload transforms on one channel. [0] channel; [1] switch
+# bitmask - bit 0 X_CONF, bit 1 X_AUTH, bit 2 drop an unverified window instead
+# of delivering it (default 0, deliver), bit 3 encrypt the descriptor set
+# (REFUSED in v1 with ANTW_INVALID_PARAMETER_PROVIDED - the descriptor has no
+# counter and therefore no nonce), bits 7..4 reserved must be 0; [2] MAC window
+# W, the literal 2, 4 or 8 (W=1 is reserved for the reliable-command page); [3]
+# secured page range low and [4] high, both bounded to 0x01..0x1F so the
+# descriptor and the ANT+ common pages stay in the clear mechanically rather
+# than by memory. The two switches are independent, not a ladder: X_AUTH alone
+# is the most useful setting in the table. [K4 (docs/radiant-security.md sec 3
+# and 9)]
 MESG_RADIANT_SEC_CONFIG_ID = 0xF1
 
-# Install key material for a channel. [K4 (docs/radiant-security.md sec 9)]
+# Install the one 16-byte root key for a channel. [0] channel; [1] key length
+# in bits, 128 and nothing else in v1; [2..17] the key. Everything else -
+# K_enc, K_auth, K_id, K_cmd - is derived from it, so a pairing moves exactly
+# sixteen bytes. WRITE ONLY: there is no read arm anywhere, and MESG_REQUEST
+# for 0xF2 answers ANTW_INVALID_MESSAGE rather than a key. [K4 (docs/radiant-
+# security.md sec 3.4 and 9)]
 MESG_RADIANT_SET_KEY_ID = 0xF2
 
-# Read or set the current 128 s epoch counter that X_PRIV's device number
-# rotation is derived from. [K4 (docs/radiant-security.md sec 9)]
+# Set or read the epoch and its time anchor. [0] channel; [1] flags, bit 0 =
+# the epoch is coarse real time (minutes since the RadiANT date) rather than a
+# bare ordinal; [2..5] epoch (u32 LE); [6..13] microseconds into that epoch
+# (u64 LE), which is the phase a receiver derives the packet counter from
+# rather than from arrival history. REFUSES an epoch less than or equal to the
+# current one, and refuses epochs near 0xFFFFFFFF so a counter wrap always has
+# headroom. No transform enables until this has been set after a reset: a
+# reboot that restarts the counter under an unchanged epoch is a two-time pad
+# for X_CONF and a full session replay against X_AUTH. [K4 (docs/radiant-
+# security.md sec 3.5 and 9)]
 MESG_RADIANT_EPOCH_ID = 0xF3
 
-# Per-channel security state: which switches are active, replay counter high-
-# water mark, spread-MAC verification result. [K4 (docs/radiant-security.md sec
-# 9)]
+# Per-channel security state, requested with MESG_REQUEST (0x4D). [0] channel;
+# [1] switches currently active, as in 0xF1; [2] W; [3] page range low; [4]
+# high; [5..8] epoch (u32 LE); [9..10] the expected packet index, low 16 bits
+# (u16 LE); [11..12] windows verified; [13..14] windows unverified; [15..16]
+# non-broadcast frames dropped for carrying a secured-range page; [17..18]
+# frames dropped as replay or time-inconsistent; [19..20] windows dropped by
+# the deliver policy; [21] epoch advances since the key was installed; [22] the
+# most recent verdict - 0 clear, 1 verified, 2 unverified. All counters are u16
+# LE and saturate rather than wrapping. This exists so a host that ignores the
+# per-message verdict flag still has an auditable stream: deliver-as-unverified
+# only means something if unverified cannot be silently treated as verified.
+# [K4 (docs/radiant-security.md sec 3.2 and 9)]
 MESG_RADIANT_SEC_STATUS_ID = 0xF4
 
-# Drive the in-the-clear pairing exchange. An X_PRIV node pairs with rotation
-# off and the pairing bit set, then switches to rotating - pairing in the clear
-# is structural, not an oversight. [K4 (docs/radiant-security.md sec 9)]
+# Drive the in-the-clear pairing exchange. [0] channel; [1] sub-command - 0x00
+# leave pairing mode, 0x01 enter it with a timeout in seconds at [2] (0 means
+# the 60 s default), 0x02 supply the host's 32-byte X25519 scalar at [2..33],
+# 0x03 begin the exchange. The reply echoes the sub-command at [1] and carries
+# the local public key or the comparison fingerprint from [3]. THE SCALAR COMES
+# FROM THE HOST because the only entropy source on nRF54L is psa_rng/CRACEN and
+# reaching it drags nrf_security into every build; the honest consequence is
+# that a host-less node cannot pair this way. Pairing in the clear is
+# structural rather than an oversight - see docs/radiant-security.md section
+# 7.4. [K4 (docs/radiant-security.md sec 7.4, 8 and 9)]
 MESG_RADIANT_PAIRING_ID = 0xF5
 
 # ---------------------------------------------------------------------------
@@ -1625,32 +1663,32 @@ RADIANT_MESSAGES = {
     0xF1: {
         "name": 'MESG_RADIANT_SEC_CONFIG_ID',
         "direction": 'h2d',
-        "payload_len": 'var',
-        "desc": 'Select which of X_PRIV, X_CONF and X_AUTH are on for a channel. The three switches are independent, not a ladder.',
+        "payload_len": 5,
+        "desc": 'Configure the two payload transforms on one channel. [0] channel; [1] switch bitmask - bit 0 X_CONF, bit 1 X_AUTH, bit 2 drop an unverified window instead of delivering it (default 0, deliver), bit 3 encrypt the descriptor set (REFUSED in v1 with ANTW_INVALID_PARAMETER_PROVIDED - the descriptor has no counter and therefore no nonce), bits 7..4 reserved must be 0; [2] MAC window W, the literal 2, 4 or 8 (W=1 is reserved for the reliable-command page); [3] secured page range low and [4] high, both bounded to 0x01..0x1F so the descriptor and the ANT+ common pages stay in the clear mechanically rather than by memory. The two switches are independent, not a ladder: X_AUTH alone is the most useful setting in the table.',
     },
     0xF2: {
         "name": 'MESG_RADIANT_SET_KEY_ID',
         "direction": 'h2d',
-        "payload_len": 'var',
-        "desc": 'Install key material for a channel.',
+        "payload_len": 18,
+        "desc": 'Install the one 16-byte root key for a channel. [0] channel; [1] key length in bits, 128 and nothing else in v1; [2..17] the key. Everything else - K_enc, K_auth, K_id, K_cmd - is derived from it, so a pairing moves exactly sixteen bytes. WRITE ONLY: there is no read arm anywhere, and MESG_REQUEST for 0xF2 answers ANTW_INVALID_MESSAGE rather than a key.',
     },
     0xF3: {
         "name": 'MESG_RADIANT_EPOCH_ID',
         "direction": 'both',
-        "payload_len": 'var',
-        "desc": "Read or set the current 128 s epoch counter that X_PRIV's device number rotation is derived from.",
+        "payload_len": 14,
+        "desc": 'Set or read the epoch and its time anchor. [0] channel; [1] flags, bit 0 = the epoch is coarse real time (minutes since the RadiANT date) rather than a bare ordinal; [2..5] epoch (u32 LE); [6..13] microseconds into that epoch (u64 LE), which is the phase a receiver derives the packet counter from rather than from arrival history. REFUSES an epoch less than or equal to the current one, and refuses epochs near 0xFFFFFFFF so a counter wrap always has headroom. No transform enables until this has been set after a reset: a reboot that restarts the counter under an unchanged epoch is a two-time pad for X_CONF and a full session replay against X_AUTH.',
     },
     0xF4: {
         "name": 'MESG_RADIANT_SEC_STATUS_ID',
         "direction": 'd2h',
-        "payload_len": 'var',
-        "desc": 'Per-channel security state: which switches are active, replay counter high-water mark, spread-MAC verification result.',
+        "payload_len": 23,
+        "desc": 'Per-channel security state, requested with MESG_REQUEST (0x4D). [0] channel; [1] switches currently active, as in 0xF1; [2] W; [3] page range low; [4] high; [5..8] epoch (u32 LE); [9..10] the expected packet index, low 16 bits (u16 LE); [11..12] windows verified; [13..14] windows unverified; [15..16] non-broadcast frames dropped for carrying a secured-range page; [17..18] frames dropped as replay or time-inconsistent; [19..20] windows dropped by the deliver policy; [21] epoch advances since the key was installed; [22] the most recent verdict - 0 clear, 1 verified, 2 unverified. All counters are u16 LE and saturate rather than wrapping. This exists so a host that ignores the per-message verdict flag still has an auditable stream: deliver-as-unverified only means something if unverified cannot be silently treated as verified.',
     },
     0xF5: {
         "name": 'MESG_RADIANT_PAIRING_ID',
         "direction": 'both',
-        "payload_len": 'var',
-        "desc": 'Drive the in-the-clear pairing exchange. An X_PRIV node pairs with rotation off and the pairing bit set, then switches to rotating - pairing in the clear is structural, not an oversight.',
+        "payload_len": '2..34',
+        "desc": "Drive the in-the-clear pairing exchange. [0] channel; [1] sub-command - 0x00 leave pairing mode, 0x01 enter it with a timeout in seconds at [2] (0 means the 60 s default), 0x02 supply the host's 32-byte X25519 scalar at [2..33], 0x03 begin the exchange. The reply echoes the sub-command at [1] and carries the local public key or the comparison fingerprint from [3]. THE SCALAR COMES FROM THE HOST because the only entropy source on nRF54L is psa_rng/CRACEN and reaching it drags nrf_security into every build; the honest consequence is that a host-less node cannot pair this way. Pairing in the clear is structural rather than an oversight - see docs/radiant-security.md section 7.4.",
     },
 }
 RADIANT_RESERVED_RANGE = '0xF6-0xFA'

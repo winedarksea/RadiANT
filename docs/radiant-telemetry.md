@@ -91,8 +91,8 @@ device type alongside, on its own channel.
 | Network | ANT+ public, `A6 C5` | Extensions live inside the ANT+ network by decision; see `docs/decisions/0005-extension-inside-ant-plus.md` |
 | RF channel | 57 (2457 MHz) by default | A node may announce another in the descriptor; see section 8 |
 | Device type | `0x60` | Claimed in `docs/profile-registry.md` |
-| Transmission type | `0x05` | Independent channel, global data pages. Fixed: `X_PRIV` rotates the device *number*, never the type or transmission type |
-| Device number | 1..65535 | Rotates per epoch when `X_PRIV` is on |
+| Transmission type | `0x05` | Independent channel, global data pages. Fixed: a searching receiver matches on it |
+| Device number | 1..65535 | Random at first provisioning and stable thereafter (identity Tier 0); re-rolled only on explicit user action or, opt-in, at power-up. It never changes while a channel is open. See `docs/radiant-security.md` section 4 |
 | Channel period | node's choice, 1..65535 counts of 1/32768 s | Announced in the descriptor |
 | Payload | 8 bytes | The length-byte extension (>8 bytes) is **not** used by this envelope in v1; it costs every merged RX window |
 
@@ -135,6 +135,24 @@ These are the format decisions that cannot be retrofitted, and they hold for
 
 Everything the security switches need follows from those two, which is why they
 are stated here in Phase 4 rather than discovered in Phase 7.
+
+**Two documented exceptions to the counter invariant, and there are no others.**
+They are named here because an earlier draft asserted the invariant without
+them, and an invariant with unadmitted exceptions is worse than one with stated
+ones:
+
+- **The descriptor's byte `[1]` is a frame index**, `(index << 4) | (count - 1)`.
+  It is not a counter and never was.
+- **The ANT+ common pages `0x50`/`0x51`/`0x52` are byte-exact ANT+ layouts** and
+  carry no counter at all. Changing that would break every ANT+ receiver, which
+  is the one thing this envelope must not do.
+
+Neither exception is inside the secured page range, neither is ever encrypted,
+and neither carries a spread tag — which is exactly why
+`docs/radiant-security.md` bounds the secured page range to `0x01..0x1F` rather
+than trusting a host to remember. The counter invariant holds where the security
+switches rely on it, and the two places it does not hold are the two places
+nothing relies on it.
 
 ---
 
@@ -188,7 +206,9 @@ lookup.
 [2..7]                         6 bytes of frame body
 ```
 
-Up to 16 frames: two fixed header frames plus up to 14 field frames.
+Up to 16 frames: two fixed header frames plus up to 14 field frames — or up to
+13 field frames plus the **descriptor authentication frame**, which is mandatory
+whenever any transform bit is set and always occupies the last slot in the set.
 
 ### Frame 0 — identity and timing
 
@@ -214,13 +234,22 @@ Up to 16 frames: two fixed header frames plus up to 14 field frames.
 ```
 bit 7  TRANSFORM  X_CONF        data pages are AES-128-CTR ciphertext
 bit 6  TRANSFORM  X_AUTH        the trailing byte of each data page is a spread-MAC tag
-bit 5  TRANSFORM  descriptor set is itself encrypted (a further opt-in)
+bit 5  TRANSFORM  reserved, must be 0 in v1 (descriptor set encryption; refused,
+                  because the descriptor has no counter and therefore no nonce)
 bit 4  TRANSFORM  reserved, must be 0 in v1 (v2: TESLA delayed key disclosure)
-bit 3  INFO       X_PRIV        the device number rotates per epoch
+bit 3  INFO       reserved, must be 0
 bit 2  INFO       sparse mode
 bit 1  INFO       the node is not on RF 57; byte [6] is authoritative
 bit 0  INFO       long-range PHY in use
 ```
+
+**Bit 3 was `X_PRIV`, "the device number rotates per epoch", and it is now
+reserved-must-be-zero.** Continuous rotation is withdrawn — see
+`docs/radiant-security.md` section 3.7 for the reasons, which are worth reading
+before proposing it again. The bit stays *reserved* rather than being reused,
+for two reasons: announcing a privacy posture in the clear is itself a leak, and
+keeping the bit free makes revisiting rotation a format-compatible change rather
+than a break. The same applies to frame 1's epoch field.
 
 **The forward-compatibility rule, and it is the most important line in this
 document:**
@@ -243,19 +272,44 @@ of frame 1 byte `[3]` — not from this byte, which is full.
 ```
 [2] sparse heartbeat interval in seconds (u8); 0 when the node is not sparse
 [3] transmit control:
-      bits 7..6  MAC window W: 0 = inline (W=1), 1 = W=2, 2 = W=4, 3 = W=8
+      bits 7..6  MAC window W: 0 = reserved (W=1, not in v1), 1 = W=2,
+                 2 = W=4, 3 = W=8
       bits 5..4  sparse repeat count: 0 = 1x, 1 = 2x, 2 = 3x, 3 = 5x
       bits 3..0  reserved, must be 0 -- the informational-flag extension space
-[4..7] epoch (u32 LE) = floor(t / 128 s); zero when neither X_PRIV nor X_CONF
-       is enabled
+[4..7] epoch (u32 LE); zero only on a node that enables no transform AND sends
+       no reliable-command page. A command-only node carries a non-zero epoch
 ```
 
+**The epoch's "zero when unused" rule and section 9's "a command-only node still
+needs the epoch" were, in an earlier draft, a direct contradiction.** Resolved
+in favour of section 9: the command page's inline tag covers the epoch, and that
+coverage is the only thing that stops a command captured yesterday from being
+adopted as a fresh sequence after a reboot. So the epoch is zero only when
+neither a transform nor the command page is in use — which is the ordinary
+telemetry node, and is the case the zero was written for.
+
 **This frame is the reserved space, and it is reserved from v1 even though
-nothing populates it until Phase 7.** The epoch is four bytes wide from the
-first shipped node because a receiver with no real-time clock has to get the
-epoch from somewhere, and the only place it can come from is a page that a
-node already sends. Adding it later means a format break for every deployed
-node — which is the entire reason this document is a Phase 4 deliverable.
+nothing populates it until the security phase.** The epoch is four bytes wide
+from the first shipped node because a receiver with no real-time clock has to
+get the epoch from somewhere, and the only place it can come from is a page that
+a node already sends. Adding it later means a format break for every deployed
+node — which is the entire reason this document was written ahead of the code.
+
+**`W in {2, 4, 8}` in v1**; encoding 0 (W=1, an inline 16-bit tag) is reserved
+for the reliable-command page of section 9 and is refused on a data page. The
+window set is not arbitrary: the spread MAC derives its window boundary and its
+tag-byte index from the counter, `window = [c - (c mod W), +W)` and
+`tag byte = tag[c mod W]`, and that is self-synchronising across packet loss
+**only because W divides both 256 and 65536** — so a byte-counter wrap and a
+16-bit counter wrap both land on a window boundary. A future W of 3, 5 or 6
+would break resynchronisation silently, one lost packet at a time.
+
+**The epoch is no longer `floor(t / 128 s)`.** Nothing rotates continuously, so
+the epoch is a key-rotation clock that advances on reboot, on host command, and
+on a counter wrap. `docs/radiant-security.md` section 3.5 is normative for it;
+the parts that constrain this format are that **a counter wrap advances the
+epoch by 1** on both sides, and that no transform enables until the epoch has
+been advanced after a reset.
 
 ### Frames 2..N — one per field
 
@@ -285,6 +339,31 @@ Width codes:
 | 6 | 12 | | |
 | 7 | 16 | | |
 
+### The last frame — the descriptor authentication frame
+
+Mandatory whenever any transform bit in frame 0 byte `[7]` is set; absent
+otherwise, and its slot is a field frame instead.
+
+```
+[0]    0x00                        page number, like every descriptor frame
+[1]    (index << 4) | (count - 1)  frame index, like every descriptor frame
+[2..7] 48-bit CMAC(K_auth, epoch[4 LE] || devnum[2 LE] || schema_id || bodies)
+       "bodies" is bytes [2..7] of every preceding frame of this set, in frame
+       order. The MAC uses domain byte 0x03; see docs/radiant-security.md 3.3.
+```
+
+**Without it, the MAC on the data pages protects the wrong thing.** The
+descriptor carries the epoch, the window W, the transform flags, and every
+field's offset and scale — so an attacker who forges one descriptor frame gets
+**wrong readings out of correctly authenticated packets**. The tag verifies and
+the numbers are still a lie.
+
+It costs **one slot in 121** and **zero data-page bytes**, which is why it is
+mandatory rather than a further opt-in. It is specified here and implemented
+when `src/profiles/` exists; there is no descriptor encoder to authenticate
+until then, and `docs/radiant-security.md` section 7.6 states the limit that
+leaves open in the meantime.
+
 ### Data pages `0x01..0x0F`
 
 ```
@@ -298,15 +377,29 @@ Width codes:
   `X_CONF` nonce counter. It is mandatory in v1 whether or not any security
   switch is ever enabled, because adding it later would renumber every field
   offset in every deployed schema.
+- **It counts transmissions, not application writes.** A master retransmits its
+  current body every slot whether or not the application supplied a new one, so
+  a counter that advanced per write would repeat across retransmissions — and a
+  repeated counter under one `(epoch, device number)` is keystream reuse. On a
+  secured channel the transform layer owns this byte outright.
+- **It is the packet index within the current epoch and resets to zero when the
+  epoch advances.** A loss detector built on it has to handle that reset; the
+  receiver is told the epoch, so this is cheap. The 16-bit nonce counter's high
+  byte is reconstructed from time rather than from arrival history, and a wrap
+  of it advances the epoch by 1 on both sides.
 - **With `X_AUTH` on**, byte `[7]` is the spread-MAC tag byte and the field
   area is bits 0..39. The descriptor's explicit bit offsets are what make this
   a schema change rather than a format break: the node re-publishes a
   descriptor with a new schema id and every receiver picks it up within one
   interleave cycle.
-- **With `X_CONF` on**, bytes `[2..7]` (or `[2..6]`) are ciphertext. Bytes
-  `[0]` and `[1]` stay in the clear, because a receiver needs the page number
-  to tell a data page from a descriptor and needs the counter to build the
-  nonce. This is what makes `X_CONF` cost zero payload bytes.
+- **With `X_CONF` on**, bytes `[2..7]` (or `[2..6]` when `X_AUTH` is also on)
+  are ciphertext. Bytes `[0]` and `[1]` stay in the clear, because a receiver
+  needs the page number to tell a data page from a descriptor and needs the
+  counter to build the nonce. This is what makes `X_CONF` cost zero payload
+  bytes.
+- **With both on the order is encrypt-then-MAC**, and the tag covers bytes
+  `[0..6]` of every packet in the window — including the page number, so that
+  flipping it cannot reinterpret authenticated bits against a different schema.
 
 **Bit packing is MSB-first**, and the value itself is stored MSB-first within
 its width. This is the opposite of the little-endian byte order every ANT+ page
@@ -351,6 +444,27 @@ whatever cadence it likes. It is not announced in the descriptor; it is a page
 every ANT+ receiver already understands.
 
 **In sparse mode the cadence rule changes**: see section 8.
+
+### The common pages leak more than the device number ever did
+
+Normative, and **independent of every security switch and every identity
+tier** — it applies to a node with all transforms off, and it is the single
+highest-value privacy rule in this envelope because it is also the cheapest:
+
+> A node with a privacy posture emits page 81 with **`serial = 0xFFFFFFFF`**,
+> the sentinel `tools/ant_pages.py` already documents as "not supplied";
+> **page 82 is suppressed**, or emitted with `operating_time` zeroed; and page
+> 80 reports a **generic** manufacturer, model and hardware revision.
+
+The reasoning is arithmetic rather than judgement. Page 81 broadcasts a **32-bit
+globally unique serial number in the clear** every 30 seconds or so — strictly
+more identifying than the 16-bit device number, unaffected by any device-number
+re-roll, and therefore capable of defeating the identity tiers of
+`docs/radiant-security.md` section 4 outright. Page 82's operating-time counter
+is monotone: it survives an identity change *and* fingerprints a battery swap.
+
+A node that re-rolls its device number and keeps broadcasting its serial number
+has not changed identity. It has added a field.
 
 ---
 
@@ -644,9 +758,16 @@ adopted as a fresh sequence. A command-only node still needs the epoch.
 
 Two bytes is what fits. A forgery attempt succeeds with probability 2^-16, and
 the attacker must guess a tag for a sequence number inside the accept window,
-which the idempotency rule caps. The node must therefore rate-limit accepted
-commands and log rejections, at which point a forging attacker is a detectable
-flood rather than a quiet success. A node that needs a full-strength inline tag
+which the idempotency rule caps. The node must therefore **rate-limit *failed*
+tag verifications, with exponential backoff**, and log rejections — at which
+point a forging attacker is a detectable flood rather than a quiet success.
+
+Rate-limiting *accepted* commands, which an earlier draft asked for, does
+nothing: an attacker brute-forcing a 16-bit tag produces 65535 rejections for
+every acceptance, so 99.998% of the traffic being throttled is the traffic the
+accepted-command limiter never sees. Throttle the failures.
+
+A node that needs a full-strength inline tag
 would need payloads longer than 8 bytes, and **there is no longer a mechanism
 for those**: this used to name "the length-byte extension (extension axis 3)",
 and byte 3 is not a length — see the amendment in

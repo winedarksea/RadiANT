@@ -336,7 +336,7 @@ def decode_common_80(payload: bytes) -> dict:
     }
 
 
-def encode_common_81(sw_revision_main: int, serial_number: int,
+def encode_common_81(sw_revision_main: int, serial_number: int | None,
                      sw_revision_supplemental: int | None = None) -> bytes:
     """Page 81, Product Information.
 
@@ -345,10 +345,22 @@ def encode_common_81(sw_revision_main: int, serial_number: int,
         [2]    supplemental software revision, 0xFF when not used
         [3]    main software revision
         [4..7] serial number (LE, 32-bit), 0xFFFFFFFF when not supplied
+
+    `serial_number=None` emits the not-supplied sentinel, and that is the whole
+    of the page 81 privacy rule.
+
+    A 32-bit globally unique serial broadcast in the clear every 30 seconds is
+    STRICTLY MORE IDENTIFYING than the 16-bit device number, it is unaffected
+    by any device-number re-roll, and it therefore defeats identity Tiers 1 and
+    2 outright. A node that re-rolls its device number and keeps broadcasting
+    its serial has not changed identity; it has added a field. See
+    docs/radiant-security.md section 5.4, which makes this normative and
+    independent of every security switch.
     """
     supplemental = (INVALID_U8 if sw_revision_supplemental is None
                     else _u8(sw_revision_supplemental))
-    serial = serial_number & 0xFFFFFFFF
+    serial = (INVALID_U32 if serial_number is None
+              else serial_number & 0xFFFFFFFF)
     return bytes([
         PAGE_COMMON_PRODUCT,
         INVALID_U8,
@@ -362,12 +374,21 @@ def encode_common_81(sw_revision_main: int, serial_number: int,
 
 
 def decode_common_81(payload: bytes) -> dict:
+    """The mirror of encode_common_81.
+
+    `serial_number` is None when the node sent the not-supplied sentinel. The
+    encoder documented that sentinel from the day it was written and the
+    decoder returned 4294967295 for it anyway - so a tool asking "which sensor
+    is this" got an answer that looked like a serial number, sorted like one,
+    and was the same for every privacy-preserving node on the air.
+    """
+    serial = int.from_bytes(payload[4:8], "little")
     return {
         "page": payload[0],
         "sw_revision_supplemental": (None if payload[2] == INVALID_U8
                                      else payload[2]),
         "sw_revision_main": payload[3],
-        "serial_number": int.from_bytes(payload[4:8], "little"),
+        "serial_number": None if serial == INVALID_U32 else serial,
     }
 
 

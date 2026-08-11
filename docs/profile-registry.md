@@ -80,6 +80,48 @@ Withdrawing a claim leaves the row in place with status changed and the date
 kept. A retired type is not recycled; the space is large and confused
 deployments are expensive.
 
+## Device numbers: the provisioning rule
+
+A device type is claimed here. A device **number** is not — it is per-unit, and
+this section is the rule for choosing one. It applies to **every device type in
+this registry, including the ANT+ compatible ones**, which is deliberate: those
+are the types with a real anonymity set, so they are where the rule buys the
+most.
+
+**Tier 0, and it is the default. A RadiANT node derives its 16-bit device number
+randomly at first provisioning and persists it.** `tools/ant_identity.py
+provision` generates one.
+
+This is not a security feature. It is a correction: on an ANT+ sensor the device
+number is typically a **factory serial**, so it ties the node to a purchase
+record, a warranty, and a previous owner, and anyone in range can follow it
+across sessions and locations. Encryption never touched this — the number is
+outside the payload because the receiver's hardware filter has to match on it.
+Sell or gift a Tier 0 sensor and it is genuinely a different device.
+
+**Zero UX change: no receiver ever loses a sensor**, which is the whole reason
+this can be the default. The number is chosen once, at provisioning, and never
+moves while a channel is open.
+
+Two further tiers are **opt-in and off by default** — re-roll on explicit user
+action, and re-roll at every power-up. `docs/radiant-security.md` section 4 is
+normative for them, including the cost Tier 2 imposes on standard receivers.
+`docs/decisions/0006-security-v1-scope-and-x-priv-withdrawal.md` records why
+continuous per-epoch rotation was rejected rather than deferred.
+
+**The 16-bit birthday bound is real and is not new.** Collisions become likely
+around 300 devices in range. ANT+ already lives with that — device type and
+transmission type have to match as well — and a random number is no worse than a
+sequential serial here, only differently distributed.
+
+**And the rule that matters more than any of this:** a node with a privacy
+posture must emit page 81 with `serial = 0xFFFFFFFF`, suppress page 82 or zero
+its operating time, and report a generic manufacturer, model and revision in
+page 80. A 32-bit globally unique serial broadcast in the clear every 30 seconds
+is strictly more identifying than the device number, and it is unaffected by any
+re-roll. A node that re-rolls its device number and keeps broadcasting its
+serial has not changed identity; it has added a field.
+
 ## The two schedule-splitting opt-ins
 
 Two columns exist because they are the things a *consumer* of a device type has

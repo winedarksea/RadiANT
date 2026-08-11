@@ -83,6 +83,20 @@ zephyr_library_sources(src/radiant_profile_sanity.c)
 # includes an application header; see RADIANT_CORE_ANTR_API.
 zephyr_library_sources_ifdef(CONFIG_RADIANT_CORE_ANTR_API src/radiant_api.c)
 
+# ── Security ────────────────────────────────────────────────────────────────
+#
+# Gated, unlike radiant_crc_repair.c above, and the difference is deliberate.
+# CRC repair is compiled unconditionally so CI exercises its arithmetic on
+# every build; security is not, because the governing constraint here is that
+# almost nobody turns it on and it must cost those users LITERALLY ZERO - which
+# the `zero-cost` CI job asserts section by section. A file compiled "so the
+# tests can reach it" would fail that job on the day it landed.
+#
+# The unit-test application reaches the primitives by selecting
+# CONFIG_RADIANT_SEC=y in its own prj.conf, which is the same door a real
+# application uses.
+zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC src/radiant_sec_aes.c)
+
 # ── The radio backend ───────────────────────────────────────────────────────
 #
 # One of these, or none, and never two - see the choice in Kconfig. The two

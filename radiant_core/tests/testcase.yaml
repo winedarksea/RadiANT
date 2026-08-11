@@ -20,3 +20,27 @@ tests:
       - native_sim
     integration_platforms:
       - native_sim
+
+  # The same suites against a MODE-LEVEL crypto backend.
+  #
+  # radiant_sec.h claims a two-level seam - policy calls modes, modes call
+  # blocks - so that CRACEN on nRF54L, which is reachable only as a whole-mode
+  # PSA call, can be attached later without touching radiant_sec.c. A seam
+  # whose only implementation is the portable one is indistinguishable from a
+  # direct implementation with extra prototypes, and stays that way until
+  # somebody tries to attach hardware and finds the path was never live.
+  #
+  # So this scenario suppresses the portable AES-CTR/AES-CMAC layer and lets
+  # src/sec_modes_backend.c supply the modes instead, advertising has_ctr and
+  # has_cmac exactly as a real accelerator would. The same published vectors
+  # run against it.
+  radiant_core.unit.sec_modes:
+    tags:
+      - radiant_core
+      - radiant_sec
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_configs:
+      - CONFIG_RADIANT_SEC_BACKEND_MODES=y

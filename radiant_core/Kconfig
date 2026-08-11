@@ -213,6 +213,118 @@ config RADIANT_CORE_PROFILE_SANITY
 	  refutation (wrong control byte or transmission type) from a
 	  physical-plausibility one.
 
+config RADIANT_SEC
+	bool "per-channel payload security (X_AUTH, X_CONF)"
+	default n
+	help
+	  src/radiant_sec.c and src/radiant_sec_aes.c: two orthogonal
+	  per-channel payload transforms - X_AUTH (a spread AES-CMAC tag in
+	  byte [7]) and X_CONF (AES-128-CTR over bytes [2..6]). Both are off
+	  at runtime until a host configures them, and this symbol is off at
+	  build time so that the overwhelming majority of builds carry none of
+	  it. docs/radiant-security.md is normative.
+
+	  A SECURED CHANNEL IS A RADIANT-ENVELOPE CHANNEL AND DOES NOT
+	  INTEROPERATE WITH ANT+ POWER, HEART RATE OR SPEED-AND-CADENCE. The
+	  transforms rewrite payload bytes that those profiles define, so a
+	  Garmin head unit or Zwift reading a secured channel reads noise. Use
+	  this on RadiANT device types, on a channel of its own.
+
+	  Costs nothing when off, and that is a CI job rather than a claim:
+	  the `zero-cost` workflow builds the same board at HEAD and at the
+	  merge base and asserts the section sizes and the defined-symbol set
+	  are identical, that no radiant_sec symbol exists, and that .config
+	  says this symbol is not set.
+
+if RADIANT_SEC
+
+config RADIANT_SEC_CONF
+	bool "compile X_CONF (confidentiality)"
+	default y
+	help
+	  AES-128-CTR over bytes [2..6] of a data page in the secured range.
+	  Bytes [0] and [1] stay in the clear so a receiver can tell a data
+	  page from a descriptor and can build the nonce, which is what makes
+	  the transform cost zero payload bytes.
+
+	  Turn this off to build an authenticate-only node. That is not a
+	  degraded configuration - "anyone can read my power, nobody can spoof
+	  it" is the most useful setting in the table, and unlike encryption it
+	  has no key distribution problem for readers.
+
+config RADIANT_SEC_AUTH
+	bool "compile X_AUTH (authenticity)"
+	default y
+	help
+	  A spread AES-CMAC tag, one byte per packet in byte [7], covering a
+	  window of W packets. The tag is 8*W bits: 16 at the default W=2, 32
+	  at W=4, 64 at W=8.
+
+	  An unverifiable window is DELIVERED, marked unverified, rather than
+	  discarded - discarding costs W packets for every one lost, against a
+	  measured ~0.4% bench loss floor, and hands an attacker a W-for-1
+	  denial of service.
+
+config RADIANT_SEC_MAX_CHANNELS
+	int "secured channels"
+	default 8
+	range 1 32
+	help
+	  How many channels can hold security state at once. Roughly 120 bytes
+	  each, allocated on the first SET_KEY and freed on unassign and on
+	  reset - and zero when CONFIG_RADIANT_SEC is off, because the table
+	  does not exist. Eight matches the legacy ANT+ channel ceiling.
+
+config RADIANT_SEC_HOST_MESSAGES
+	bool "compile the 0xF1-0xF5 host messages"
+	default y
+	depends on RADIANT_CORE_ANTR_API
+	help
+	  src/radiant_sec_host.c: the antr_sec_* adapter behind message IDs
+	  0xF1 (configure), 0xF2 (set key), 0xF3 (epoch), 0xF4 (status) and
+	  0xF5 (pairing). Mirrors the RADIANT_CORE_ANTR_API gate, because this
+	  is the one security file that reaches an application header.
+
+	  Without it the transforms exist and nothing can turn them on, which
+	  is the right shape for a node application that configures its own
+	  channels in C.
+
+config RADIANT_SEC_PAIRING_X25519
+	bool "X25519 pairing over the acknowledged/burst path"
+	default n
+	help
+	  Vendored public-domain X25519 behind a single radiant_sec_x25519()
+	  entry point, so a PKA backend can displace it without touching the
+	  pairing logic. Its own symbol even when CONFIG_RADIANT_SEC is on,
+	  because most deployments should use the out-of-band path - a QR code
+	  or a typed key - which needs no protocol and has no attack surface
+	  during pairing at all.
+
+	  The 32-byte scalar comes from the host over 0xF5. There is no
+	  entropy driver here and no PSA: on nRF54L the only entropy source is
+	  psa_rng/CRACEN, and reaching it drags nrf_security into every build.
+	  The honest consequence is that a host-less node cannot pair this way.
+
+config RADIANT_SEC_BACKEND_MODES
+	bool "the backend implements the mode level itself (test scaffold)"
+	default n
+	help
+	  Suppresses the portable AES-CTR/AES-CMAC layer in
+	  src/radiant_sec_aes.c so that something else can define the Level 2
+	  entry points and radiant_sec_caps().
+
+	  This exists so the seam is exercised rather than merely asserted.
+	  radiant_core/tests/src/sec_modes_backend.c is an independent
+	  mode-level implementation selected by this symbol, and the same
+	  published vectors run against it - which is what proves the
+	  mode-level path is live and that policy never reaches past it to the
+	  block primitive.
+
+	  A real hardware backend - CRACEN through PSA, CC310 - is what this
+	  symbol is shaped for. None ships in v1.
+
+endif # RADIANT_SEC
+
 config RADIANT_CORE_SWEEP_DEBUG
 	bool "log the search sweep's position once a second"
 	default n

@@ -29,7 +29,7 @@ below is what keeps it.
 | [`ant-plus-profiles.md`](ant-plus-profiles.md) | ANT+ device profiles as an interoperability target: page layouts, accumulators, common pages, and the rates each profile transmits at |
 | [`profile-registry.md`](profile-registry.md) | The public registry of device types and pages claimed — ours or a third party's by PR — with the allocation process and the collision risk stated honestly |
 | [`radiant-telemetry.md`](radiant-telemetry.md) | The generic telemetry envelope: field kinds, the descriptor page, the MQTT mapping, and the accumulate-by-default rule |
-| [`radiant-security.md`](radiant-security.md) | Threat model, the three independent switches, key establishment, and the honest limits — category fingerprinting, group-key forgery, the spread-MAC injection window |
+| [`radiant-security.md`](radiant-security.md) | Threat model, the two payload switches (`X_AUTH`, `X_CONF`), the identity tiers that replace `X_PRIV`, key establishment, and the honest limits — no unlinkability, group-key forgery, the spread-MAC injection window and its forgery bound |
 | [`preservation.md`](preservation.md) | What `archive/` holds, why each item is or is not redistributable, and the 10 MB budget |
 | [`third-party.md`](third-party.md) | Everything this project depends on that it does not own, and the licence position of each |
 | [`decisions/`](decisions/) | Architecture decision records — see below |
@@ -43,6 +43,7 @@ below is what keeps it.
 | [`0003`](decisions/0003-naming-trademark-and-usb-identity.md) | The RadiANT name and its mandatory qualifier, the trademark posture, why `0FCF:1009` and the descriptor strings stay, and the driver-free host-access experiment |
 | [`0004`](decisions/0004-license-apache-2-0.md) | Apache-2.0 over MIT/BSD, for §3's express patent grant with a retaliation clause, plus `NOTICE` |
 | [`0005`](decisions/0005-extension-inside-ant-plus.md) | Why the extensions live inside network `A6 C5` rather than on a separate network |
+| [`0006`](decisions/0006-security-v1-scope-and-x-priv-withdrawal.md) | Security v1 is `X_AUTH` + `X_CONF`; `X_PRIV` is rejected rather than deferred, with the reasons recorded so it is not re-proposed, and the identity tiers that replace it |
 
 ---
 

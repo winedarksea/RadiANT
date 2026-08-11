@@ -260,6 +260,34 @@ jobs:
             board: nrf54lm20dk/nrf54lm20a/cpuapp
             radio: core
             transport: USB_NEXT
+          # The two default-off configuration fragments, each with a build
+          # behind it.
+          #
+          # encryption.conf's own comment says it exists "so a default-off path
+          # does not quietly stop compiling", and until this entry it had never
+          # appeared in either CI matrix or in scripts/build_all.ps1 - so the
+          # thing it was written to prevent was never prevented for it. A
+          # fragment with no build behind it is a comment.
+          #
+          # security.conf gets its entry in the same commit that creates it,
+          # rather than inheriting the same hole. Note that this matrix is
+          # where the ENABLED build is proved to compile; whether it costs
+          # anything when disabled is the separate `zero-cost` job below.
+          - name: "core: feather, security"
+            board: adafruit_feather_nrf52840/nrf52840/uf2
+            radio: core
+            extra_conf: security.conf
+            transport: USB_LEGACY
+          - name: "core: nrf54l15dk, security"
+            board: nrf54l15dk/nrf54l15/cpuapp
+            radio: core
+            extra_conf: security.conf
+            transport: UART
+          - name: "core: feather, ant+ encryption"
+            board: adafruit_feather_nrf52840/nrf52840/uf2
+            radio: core
+            extra_conf: encryption.conf
+            transport: USB_LEGACY
           # The stub is the cheapest proof the backend seam holds - it builds
           # in seconds and is the one configuration that exercises the seam
           # without exercising any radio.
@@ -373,6 +401,226 @@ jobs:
       # for radiant_core; moving them is a recorded decision in
       # docs/decisions/0001, not something that happens by a job quietly
       # gaining an upload step.
+
+  # The governing constraint of the security feature, as a job rather than as a
+  # claim in a comment.
+  #
+  # "A build with the switches off is byte-identical on air to one built
+  # without the code" is too weak to be worth stating alone: it needs two
+  # boards to observe, it says nothing about flash, and it passes a build
+  # carrying 4 KB of dead security code. So this builds THE SAME BOARD TWICE IN
+  # ONE RUN - at HEAD and at the merge base - and compares them. Nothing here
+  # depends on build reproducibility: section sizes and symbol names are stable
+  # under a rebuild in a way that a binary hash is not.
+  #
+  # Four assertions on the disabled build, and the fourth is the one people
+  # forget. Without it the job goes green on a build where the symbol does not
+  # exist at all, which is precisely the state of the tree on the day somebody
+  # renames it.
+  #
+  # The on-air half of the claim is NOT here. It is a ztest assertion against
+  # the recorded fake_radio TX bodies and RX filter addresses in
+  # radiant_core/tests/api, because a shell script cannot see the air and CI
+  # has no radio.
+  zero-cost:
+    name: zero cost when disabled
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+        with:
+          path: app
+          # The merge base is unreachable from a shallow clone, and a job that
+          # silently degrades to "compare HEAD with HEAD" would pass forever.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Zephyr workspace and toolchain
+        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: app
+          toolchains: arm-zephyr-eabi
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-zerocost-${{ github.sha }}
+          restore-keys: |
+            ccache-zerocost-
+
+      # A worktree rather than a checkout in place, so the two trees exist at
+      # once and a failure leaves both of them there to look at.
+      - name: Materialise the merge base
+        run: |
+          set -euxo pipefail
+          cd app
+          git fetch --no-tags origin master
+          base="$(git merge-base HEAD origin/master)"
+          echo "merge base: ${base}"
+          if [[ "${base}" == "$(git rev-parse HEAD)" ]]; then
+            echo "HEAD is the merge base - the comparison is trivially true."
+            echo "That is the expected state on a push to master."
+          fi
+          git worktree add ../base "${base}"
+
+      - name: Build both trees with the feature disabled
+        run: |
+          set -euxo pipefail
+          for tree in app base; do
+            west build "${tree}" \
+              -b adafruit_feather_nrf52840/nrf52840/uf2 \
+              -d "build-${tree}" \
+              -p always \
+              -- "-DANT_RADIO=core"
+          done
+
+      - name: The four assertions
+        run: |
+          set -euo pipefail
+
+          size="${ZEPHYR_SDK_INSTALL_DIR}/arm-zephyr-eabi/bin/arm-zephyr-eabi-size"
+          nm="${ZEPHYR_SDK_INSTALL_DIR}/arm-zephyr-eabi/bin/arm-zephyr-eabi-nm"
+          # Fall back to a search rather than to the host tools: host `size`
+          # would read the ELF and report plausible numbers for the wrong
+          # thing.
+          if [[ ! -x "${size}" ]]; then
+            size="$(find "${ZEPHYR_SDK_INSTALL_DIR}" -name 'arm-zephyr-eabi-size' -type f -print -quit)"
+            nm="$(find "${ZEPHYR_SDK_INSTALL_DIR}" -name 'arm-zephyr-eabi-nm' -type f -print -quit)"
+          fi
+          test -x "${size}" && test -x "${nm}"
+
+          head_elf="$(find build-app -name zephyr.elf -print -quit)"
+          base_elf="$(find build-base -name zephyr.elf -print -quit)"
+          head_cfg="$(find build-app -name .config -path '*ant_dongle*' -print -quit)"
+
+          # 1. Section sizes, section by section.
+          #
+          # ALLOCATED SECTIONS ONLY, and that is not a loosening. .debug_line
+          # and .debug_str carry file names and line numbers, so they differ
+          # the moment a source file is ADDED - even a file this build does not
+          # compile. Comparing them would make the job fail on every commit
+          # that touches the tree, which is a job that gets disabled rather
+          # than a job that catches anything. Allocated sections are what ends
+          # up on the chip, which is what "costs nothing" means.
+          #
+          # The filter is "has a non-zero load address": .debug_*, .comment and
+          # .ARM.attributes all sit at 0, and Zephyr's own sections (text,
+          # rodata, bss, noinit, ...) do not. Note the names have NO leading
+          # dot - Zephyr renames them, and an awk matching ".text" silently
+          # matches nothing and compares two empty files.
+          section_sizes() {
+            "${size}" -A "$1" |
+              awk 'NF == 3 && $3 ~ /^[0-9]+$/ && $3 != "0" && $1 != "Total" { print $1, $2 }' |
+              sort
+          }
+          section_sizes "${head_elf}" > head.size
+          section_sizes "${base_elf}" > base.size
+          test -s head.size   # an empty comparison is a passing comparison
+          if ! diff -u base.size head.size; then
+            echo "::error::a disabled build changed section sizes"
+            exit 1
+          fi
+
+          # 2. The defined-symbol set. Sizes alone would pass a change that
+          #    added code and removed exactly as much.
+          "${nm}" --defined-only "${head_elf}" | awk '{print $NF}' | sort -u > head.syms
+          "${nm}" --defined-only "${base_elf}" | awk '{print $NF}' | sort -u > base.syms
+          if ! diff -u base.syms head.syms; then
+            echo "::error::a disabled build changed the defined-symbol set"
+            exit 1
+          fi
+
+          # 3. No security symbol survives at all.
+          count="$("${nm}" "${head_elf}" | grep -c radiant_sec || true)"
+          echo "radiant_sec symbols in the disabled build: ${count}"
+          test "${count}" -eq 0
+
+          # 4. The check people forget. Without it this job is green on a
+          #    build where the symbol does not exist, which is the tree's
+          #    state the day somebody renames it.
+          grep -qx '# CONFIG_RADIANT_SEC is not set' "${head_cfg}"
+
+      # The seam, as a grep. radiant_sec.h says policy calls modes and modes
+      # call blocks, so that a mode-level accelerator - CRACEN on nRF54L is
+      # reachable no other way - can be attached without touching policy. The
+      # unit tests prove the mode-level path works; only this proves policy
+      # never reaches past it.
+      - name: Policy never calls the block primitive
+        run: |
+          set -euo pipefail
+          if [[ -f app/radiant_core/src/radiant_sec.c ]]; then
+            if grep -n 'radiant_sec_aes_ecb' app/radiant_core/src/radiant_sec.c; then
+              echo "::error::radiant_sec.c calls Level 1 directly; the seam is"
+              echo "::error::decorative if policy can reach past the mode level"
+              exit 1
+            fi
+          else
+            echo "radiant_sec.c does not exist yet - nothing to check"
+          fi
+
+      # The other end of the budget. A budget that is asserted stays a budget;
+      # one that is written down in a design document becomes a historical note
+      # about what somebody once hoped.
+      - name: Enabled build stays inside its .text ceiling
+        run: |
+          set -euo pipefail
+          west build app \
+            -b adafruit_feather_nrf52840/nrf52840/uf2 \
+            -d build-enabled \
+            -p always \
+            -- "-DANT_RADIO=core" "-DEXTRA_CONF_FILE=security.conf"
+
+          size="${ZEPHYR_SDK_INSTALL_DIR}/arm-zephyr-eabi/bin/arm-zephyr-eabi-size"
+          if [[ ! -x "${size}" ]]; then
+            size="$(find "${ZEPHYR_SDK_INSTALL_DIR}" -name 'arm-zephyr-eabi-size' -type f -print -quit)"
+          fi
+
+          # Zephyr's code section is named `text`, WITHOUT a leading dot. An
+          # awk matching ".text" finds nothing, sets delta to an empty string,
+          # and `test "" -le 4096` errors rather than passing - but only
+          # because of the -o pipefail above, which is a thin thread to hang a
+          # budget on. Hence the explicit emptiness check.
+          text_of() {
+            "${size}" -A "$1" | awk '$1 == "text" { print $2 }'
+          }
+          off="$(text_of "$(find build-app -name zephyr.elf -print -quit)")"
+          on="$(text_of "$(find build-enabled -name zephyr.elf -print -quit)")"
+          test -n "${off}" && test -n "${on}"
+          delta=$(( on - off ))
+          echo "text off=${off} on=${on} delta=${delta} ceiling=4096"
+          test "${delta}" -le 4096
+
+          # Note for whoever reads a surprising zero here: until radiant_api.c
+          # calls the transforms, --gc-sections removes every byte of
+          # radiant_sec_aes.c from the enabled image and the delta is exactly
+          # 0. That is correct and it is also why this ceiling is asserted from
+          # the day the symbol exists rather than at the end - the number is
+          # meant to be watched as it grows, not discovered once.
+
+      # CONFIG_RADIANT_SEC depends on CONFIG_RADIANT_CORE, so it can never
+      # reach the sdk-ant build. Asserted rather than assumed, in the job that
+      # already has both trees to hand.
+      - name: The stub build carries none of it
+        run: |
+          set -euo pipefail
+          west build app \
+            -b adafruit_feather_nrf52840/nrf52840/uf2 \
+            -d build-stub \
+            -p always \
+            -- "-DANT_RADIO=stub" "-DEXTRA_CONF_FILE=security.conf"
+          cfg="$(find build-stub -name .config -path '*ant_dongle*' -print -quit)"
+          if grep -qx 'CONFIG_RADIANT_SEC=y' "${cfg}"; then
+            echo "::error::security reached a build with no radiant_core in it"
+            exit 1
+          fi
 
   # The sdk-ant half of the split. Unchanged apart from its name: it is still
   # gated on SDK_ANT_CHECKOUT_TOKEN and still skips cleanly rather than failing

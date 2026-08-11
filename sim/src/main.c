@@ -32,6 +32,9 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#if defined(CONFIG_ANT_SIM_IDENTITY_TIER_2)
+#include <zephyr/random/random.h>
+#endif
 
 #include <ant_key_manager.h>
 #include <ant_parameters.h>
@@ -73,6 +76,41 @@ static struct sim_revs wheel_revs;
 static int32_t target_watts = CONFIG_ANT_SIM_TARGET_WATTS;
 static int32_t target_rpm = CONFIG_ANT_SIM_TARGET_RPM;
 
+/* The device number this boot reports. See sim_identity_init(). */
+static uint16_t sim_devnum = CONFIG_ANT_SIM_DEVICE_NUMBER;
+
+/*
+ * Identity tier, resolved once at start-up.
+ *
+ * Tier 0 - the default - is the provisioned number and never moves, which is
+ * why it costs no user anything: A ROTATION NEVER HAPPENS WHILE A CHANNEL IS
+ * OPEN, and no receiver ever loses this sensor.
+ *
+ * Tier 2 takes a fresh number every power-up. That answers the stalking case -
+ * a worn strap power-cycles between rides, so a receiver planted near your
+ * house sees a different node each time - and it silently costs every standard
+ * receiver a re-pair per session, which is stated in the Kconfig help rather
+ * than discovered on the bench.
+ *
+ * Tier 1 has no expression here: this application has no non-volatile storage,
+ * so "re-roll and keep the new number" cannot survive a reset. Provision a new
+ * one with tools/ant_identity.py and rebuild.
+ */
+static void sim_identity_init(void)
+{
+#if defined(CONFIG_ANT_SIM_IDENTITY_TIER_2)
+	/* 1..65535: zero is the wildcard on a channel ID, so a node that rolled
+	 * it would match every search and belong to nobody. */
+	sim_devnum = (uint16_t)((sys_rand32_get() % 65535u) + 1u);
+	LOG_INF("identity tier 2: device #%u this boot - a STANDARD receiver "
+		"must re-pair; a keyed RadiANT receiver re-acquires by MAC",
+		sim_devnum);
+#else
+	LOG_INF("identity tier 0: device #%u, provisioned and stable",
+		sim_devnum);
+#endif
+}
+
 /* sdk-ant writes the ANT+ frequency straight into its channel config macro and
  * makes the result const, so moving off 2457 MHz means copying the config and
  * patching the copy. One instance is enough: a build transmits exactly one
@@ -89,8 +127,28 @@ static const ant_channel_config_t *sim_channel_config(
 
 	patched = *base;
 	patched.rf_freq = CONFIG_ANT_SIM_RF_FREQ;
+	/* The device number is baked into sdk-ant's config macro at compile
+	 * time, so a tier that chooses one at boot has to patch the copy - the
+	 * same reason the frequency is patched here. */
+	patched.device_number = sim_devnum;
 	return &patched;
 }
+
+/*
+ * What page 81 reports.
+ *
+ * A 32-bit globally unique serial in the clear, every 30 seconds, is strictly
+ * more identifying than the 16-bit device number and is unaffected by any
+ * re-roll - so a Tier 2 node that keeps broadcasting its serial has not
+ * changed identity, it has added a field. 0xFFFFFFFF is the sentinel the ANT+
+ * page already defines as "not supplied", so this costs no format change and
+ * no receiver anything.
+ */
+#if defined(CONFIG_ANT_SIM_PRIVACY_PAGES)
+#define SIM_SERIAL_NUM 0xFFFFFFFFu
+#else
+#define SIM_SERIAL_NUM CONFIG_ANT_SIM_SERIAL_NUM
+#endif
 
 /* Transmit power is not part of the channel config, so it is set separately
  * once the channel exists. Logged rather than returned: a sensor that is
@@ -215,7 +273,7 @@ static int profile_setup(void)
 	}
 
 	bsc.BSC_PROFILE_manuf_id = CONFIG_ANT_SIM_MFG_ID;
-	bsc.BSC_PROFILE_serial_num = CONFIG_ANT_SIM_SERIAL_NUM;
+	bsc.BSC_PROFILE_serial_num = SIM_SERIAL_NUM;
 	bsc.BSC_PROFILE_hw_version = CONFIG_ANT_SIM_HW_VERSION;
 	bsc.BSC_PROFILE_sw_version = CONFIG_ANT_SIM_SW_VERSION;
 	bsc.BSC_PROFILE_model_num = CONFIG_ANT_SIM_MODEL_NUM;
@@ -231,7 +289,7 @@ static int profile_setup(void)
 	ant_state_indicator_channel_opened();
 	LOG_INF("combined speed and cadence (0x79) open: device #%d, "
 		"trans type %d, %d rpm crank, %d rpm wheel",
-		CONFIG_ANT_SIM_DEVICE_NUMBER, CONFIG_ANT_SIM_TRANS_TYPE,
+		sim_devnum, CONFIG_ANT_SIM_TRANS_TYPE,
 		target_rpm, CONFIG_ANT_SIM_WHEEL_RPM);
 	return 0;
 }
@@ -391,7 +449,7 @@ static int profile_setup(void)
 					 CONFIG_ANT_SIM_MODEL_NUM);
 	bpwr.page_81 = ANT_COMMON_page81(CONFIG_ANT_SIM_SW_VERSION,
 					 CONFIG_ANT_SIM_SW_VERSION,
-					 CONFIG_ANT_SIM_SERIAL_NUM);
+					 SIM_SERIAL_NUM);
 	bpwr.BPWR_PROFILE_auto_zero_status = ANT_BPWR_AUTO_ZERO_OFF;
 	/* 0xFF is the profile's "not reported" value. Reporting a made-up
 	 * balance would be a second signal to be wrong about for no gain.
@@ -409,7 +467,7 @@ static int profile_setup(void)
 	ant_state_indicator_channel_opened();
 	LOG_INF("bicycle power (0x0B) open: device #%d, trans type %d, "
 		"torque mode %d, %d W at %d rpm",
-		CONFIG_ANT_SIM_DEVICE_NUMBER, CONFIG_ANT_SIM_TRANS_TYPE,
+		sim_devnum, CONFIG_ANT_SIM_TRANS_TYPE,
 		(int)SIM_TORQUE_USE, target_watts, target_rpm);
 	return 0;
 }
@@ -483,6 +541,10 @@ int main(void)
 	int err;
 
 	LOG_INF("ANT+ sensor simulator starting");
+
+	/* Before profile_setup(), because the device number goes into the
+	 * channel config and a channel config is read once. */
+	sim_identity_init();
 
 	signals_init();
 

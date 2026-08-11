@@ -34,6 +34,7 @@ import math
 import random
 import sys
 import time
+from pathlib import Path
 
 try:
     import usb.core
@@ -43,6 +44,7 @@ except ImportError:  # pragma: no cover - user-facing guidance
 
 sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 
+import ant_identity as ai  # noqa: E402
 import ant_pages as ap  # noqa: E402
 from ant_probe import (  # noqa: E402
     EP_OUT,
@@ -131,6 +133,14 @@ class Sensor:
     period = 0
     label = "sensor"
 
+    # What page 81 reports. None emits the "not supplied" sentinel
+    # (0xFFFFFFFF), which is the whole of the page 81 privacy rule - see
+    # docs/radiant-security.md 5.4. It is an instance attribute so that
+    # --privacy-pages can set it without touching a subclass constructor;
+    # every profile below takes the same five positional arguments and adding
+    # a sixth to all of them for one flag would be a worse trade.
+    serial_number: int | None = SERIAL_NUMBER
+
     def __init__(self, channel: int, device_number: int, trans_type: int,
                  watts: Signal, rpm: Signal):
         self.channel = channel
@@ -200,7 +210,7 @@ class Sensor:
             # inside that even when a data page is dropped.
             self.data_pages_since_common = 0
             self.pending_common = [
-                ap.encode_common_81(SW_REVISION, SERIAL_NUMBER),
+                ap.encode_common_81(SW_REVISION, self.serial_number),
             ]
             return ap.encode_common_80(HW_REVISION, MANUFACTURER_ID,
                                        MODEL_NUMBER)
@@ -546,6 +556,23 @@ def main() -> int:
     parser.add_argument("--device-number", type=int, default=0x3A17,
                         help="ANT device number of the first sensor; further "
                              "profiles take the next numbers up")
+    parser.add_argument("--identity-file", type=Path,
+                        help="provision the device number from this record "
+                             "instead of --device-number, applying the tier's "
+                             "power-up rule. See tools/ant_identity.py; the "
+                             "record is created on first use (Tier 0)")
+    parser.add_argument("--identity-tier", type=int, choices=ai.TIERS,
+                        default=0,
+                        help="; ".join("%d = %s" % (tier, ai.TIER_DESCRIPTIONS[tier])
+                                       for tier in ai.TIERS)
+                             + ". Only used when the record is being created")
+    parser.add_argument("--privacy-pages", action="store_true",
+                        help="emit page 81 with the not-supplied serial "
+                             "sentinel and a generic page 80. A 32-bit serial "
+                             "in the clear is strictly more identifying than "
+                             "the device number and defeats a re-roll "
+                             "outright, so this is what a node with any "
+                             "privacy posture must do")
     parser.add_argument("--trans-type", type=int, default=5,
                         help="transmission type (default: 5, matching the "
                              "aerosense master path and sim/)")
@@ -576,6 +603,30 @@ def main() -> int:
     profiles = args.profile or ["power"]
     verbose = not args.quiet
 
+    # Identity provisioning. Without --identity-file this is exactly what it
+    # always was: a fixed number from the command line, so every existing
+    # invocation and every recorded capture is unchanged.
+    #
+    # With it, the number comes from a provisioning record and the tier's
+    # power-up rule is applied on the way in - which for Tier 2 means a
+    # different number every run, and is the point. Nothing about this is a
+    # protocol feature: a device number is chosen by the host or by the node
+    # application, and the tiers are a rule about how it is chosen.
+    base_device_number = args.device_number
+    serial_number = None if args.privacy_pages else SERIAL_NUMBER
+    if args.identity_file:
+        identity = ai.provision(args.identity_file, tier=args.identity_tier,
+                                privacy_pages=args.privacy_pages)
+        identity.on_boot()
+        ai.save(args.identity_file, identity)
+        base_device_number = identity.device_number
+        if identity.privacy_pages:
+            serial_number = None
+        if verbose:
+            print("identity: device #%d (base #%d), tier %d - %s"
+                  % (identity.device_number, identity.base_device_number,
+                     identity.tier, ai.TIER_DESCRIPTIONS[identity.tier]))
+
     def build_sensors() -> list[Sensor]:
         built = []
         for index, name in enumerate(profiles):
@@ -584,12 +635,14 @@ def main() -> int:
             if name in ("power-torque", "csc"):
                 kwargs = dict(wheel_circ_m=args.wheel_circ,
                               speed_kph=args.speed)
-            built.append(SENSORS[name](
-                args.channel + index, args.device_number + index,
+            sensor = SENSORS[name](
+                args.channel + index, base_device_number + index,
                 args.trans_type,
                 Signal(args.watts, args.noise, rng, args.sway),
                 Signal(args.cadence, args.noise, rng, args.sway),
-                **kwargs))
+                **kwargs)
+            sensor.serial_number = serial_number
+            built.append(sensor)
         return built
 
     if args.dry_run:

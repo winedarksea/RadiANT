@@ -124,6 +124,63 @@ config ANT_SIM_DEVICE_NUMBER
 	  transmitter carries the same identity and the two are directly
 	  comparable. Zero is excluded: on a channel ID it is the wildcard.
 
+	  This is the TIER 0 number: provisioned once and stable thereafter.
+	  Generate one with `tools/ant_identity.py provision` and set it here
+	  rather than shipping the same number on every unit - a device number
+	  that is a factory serial ties the node to a purchase record, a
+	  warranty and a previous owner, and that is what the identity tiers in
+	  docs/radiant-security.md section 4 exist to correct.
+
+config ANT_SIM_IDENTITY_TIER_2
+	bool "Tier 2: re-roll the device number at every power-up"
+	default n
+	select ENTROPY_GENERATOR
+	help
+	  Take a fresh random device number on every boot, instead of using
+	  ANT_SIM_DEVICE_NUMBER. This is identity Tier 2 in
+	  docs/radiant-security.md section 4.
+
+	  IT SILENTLY LOSES STANDARD RECEIVERS. A Garmin head unit or Zwift
+	  pairs by device number, so every session looks like a new sensor and
+	  the user has to re-pair. That is the cost, it is why the tier is
+	  off by default, and it is why the tier is RadiANT-device-types-only
+	  in the specification.
+
+	  A keyed RadiANT receiver does NOT re-pair: it wildcard-searches its
+	  device type and confirms identity by whether X_AUTH verifies under
+	  its key. Resolution happens once at acquisition rather than every 128
+	  seconds, which is the entire reason this is affordable and continuous
+	  rotation was not.
+
+	  Tier 1 - re-roll on explicit user action - has no expression here:
+	  this application has no non-volatile storage, so "re-roll and keep
+	  the new number" cannot be honoured across a reset. Provision a new
+	  number with `tools/ant_identity.py reroll` and rebuild, which is the
+	  same thing at a simulator's granularity.
+
+	  Selects ENTROPY_GENERATOR rather than falling back to a weak source:
+	  a device number an attacker can enumerate is not a re-roll.
+
+config ANT_SIM_PRIVACY_PAGES
+	bool "Emit the privacy common pages"
+	default n
+	help
+	  Page 81 carries the not-supplied serial sentinel (0xFFFFFFFF) instead
+	  of ANT_SIM_SERIAL_NUM.
+
+	  This matters more than the device number does. A 32-bit globally
+	  unique serial broadcast in the clear every 30 seconds is STRICTLY
+	  MORE IDENTIFYING than a 16-bit device number, and it is unaffected by
+	  any re-roll - so a Tier 2 node that keeps broadcasting its serial has
+	  not changed identity, it has added a field. See
+	  docs/radiant-security.md section 5.4, where the rule is normative and
+	  independent of every security switch.
+
+	  Page 82 is not emitted by this application at all, which is the other
+	  half of the rule already satisfied, and ANT_SIM_MFG_ID already
+	  defaults to the generic development id rather than to somebody
+	  else's.
+
 config ANT_SIM_TRANS_TYPE
 	int "Channel ID: transmission type"
 	default 5

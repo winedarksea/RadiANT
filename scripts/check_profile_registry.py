@@ -28,6 +28,12 @@ What it checks:
     registry with the same period, so the registry cannot drift from the code
   * the common-page cadence stated in the docs still matches
     ant_pages.COMMON_PAGE_INTERVAL
+  * the security pins are still stated - the reserved epoch and counter fields,
+    the trailing tag space, the nonce's domain byte, the legal MAC window set,
+    the tag length, the epoch-advance rules, the descriptor authentication
+    frame, and the page 80/81/82 privacy rules. See SPEC_PINS for why each one
+    is the kind of thing that disappears in an edit and breaks nothing until it
+    breaks interoperability
 
 Standard library only, and it imports tools/ant_pages.py by path rather than by
 package, because tools/ is not a package and this script has to run from
@@ -50,6 +56,7 @@ REPO = Path(__file__).resolve().parent.parent
 REGISTRY = REPO / "docs" / "profile-registry.md"
 TELEMETRY = REPO / "docs" / "radiant-telemetry.md"
 ANT_PLUS = REPO / "docs" / "ant-plus-profiles.md"
+SECURITY = REPO / "docs" / "radiant-security.md"
 ANT_PAGES = REPO / "tools" / "ant_pages.py"
 
 MARKER = re.compile(r"^<!--\s*radiant-registry:\s*([a-z0-9-]+)\s*-->\s*$")
@@ -519,22 +526,106 @@ def check_against_ant_pages(types, problems) -> None:
                              "implies")
 
 
+# ── The pins ────────────────────────────────────────────────────────────────
+#
+# Two kinds of thing are checked here, and they fail for the same reason.
+#
+# The RESERVATIONS are fields that cannot be added later without a format break
+# for every deployed node: the descriptor's epoch, the data page's counter, and
+# the trailing tag space. Those were always the point of this check.
+#
+# The PINS are the parts of docs/radiant-security.md that two implementations
+# would otherwise differ on invisibly - the nonce's domain byte, the legal
+# window set, the tag length, the epoch-advance rules - plus the two privacy
+# rules that cost nothing and are therefore the first things to fall out of a
+# document during an edit. A pin that is silently dropped is not a compile
+# error and not a test failure; it is a scheme that still works and no longer
+# interoperates, which is exactly the class of mistake this script exists for.
+#
+# Needles are matched against a whitespace- and markdown-normalised copy of the
+# document, so a needle survives re-wrapping, bolding and block-quoting. Write
+# them as the prose reads.
+
+PIN_SEPARATORS = re.compile(r"[\s>*`_|]+")
+
+
+def normalise_prose(text: str) -> str:
+    """Collapse whitespace and markdown decoration so a needle survives a re-wrap."""
+    return PIN_SEPARATORS.sub(" ", text).lower()
+
+
+SPEC_PINS = [
+    (TELEMETRY, "epoch (u32 LE)",
+     "the descriptor's 4-byte epoch, which docs/radiant-security.md needs as "
+     "its key-rotation clock and for command replay rejection"),
+    (TELEMETRY, "event counter (u8)",
+     "the data page's mandatory counter, which is the X_CONF nonce source and "
+     "the loss detector"),
+    (TELEMETRY, "trailing byte(s) are tag space",
+     "the trailing-tag-space invariant, without which X_AUTH's tag byte "
+     "collides with a field some descriptor already placed there"),
+    (TELEMETRY, "bit 3 INFO reserved, must be 0",
+     "descriptor flag bit 3 as reserved-must-be-zero. It was X_PRIV's "
+     "rotation announcement; X_PRIV is withdrawn and the bit stays reserved, "
+     "because announcing a privacy posture in the clear is itself a leak"),
+    (TELEMETRY, "W in {2, 4, 8}",
+     "the v1 window set. W must divide 256 and 65536 or the spread MAC stops "
+     "resynchronising after a lost packet"),
+    (TELEMETRY, "descriptor authentication frame",
+     "the descriptor authentication frame, without which forging one "
+     "descriptor yields wrong readings from correctly authenticated packets"),
+    (TELEMETRY, "a counter wrap advances the epoch by 1",
+     "the counter-wrap rule, without which a 16-bit counter wraps inside one "
+     "epoch and reuses keystream after about 4.5 hours at 4 Hz"),
+    (TELEMETRY, "serial = 0xFFFFFFFF",
+     "the page 81 rule. A 32-bit serial in the clear is strictly more "
+     "identifying than the device number and defeats every identity tier"),
+    (TELEMETRY, "page 82 is suppressed",
+     "the page 82 rule. A monotone operating-time counter survives an "
+     "identity change and fingerprints a battery swap"),
+
+    (SECURITY, "dom = 0x01 CTR keystream",
+     "the nonce's domain byte, which is the only thing stopping a keystream "
+     "block and a MAC block ever coinciding"),
+    (SECURITY, "trunc_{8*W bits}",
+     "the tag length. It is 8*W bits - 16 at the default W=2 - and not the "
+     "fixed 32 the first draft's prose implied"),
+    (SECURITY, "W in {2, 4, 8}",
+     "the v1 window set, and the reason for it"),
+    (SECURITY, "rejects any epoch <= the current one",
+     "the epoch monotonicity rule. Without it a reboot restarts the counter "
+     "under an unchanged epoch, which is a two-time pad for X_CONF and a full "
+     "session replay against X_AUTH"),
+    (SECURITY, "a counter wrap advances the epoch by 1",
+     "the counter-wrap rule"),
+    (SECURITY, "in the secured range is dropped and counted",
+     "the non-broadcast drop guard. Without it an injector sends a "
+     "secured-range page as acknowledged data and skips the MAC entirely"),
+    (SECURITY, "descriptor authentication frame",
+     "the descriptor authentication frame"),
+    (SECURITY, "serial = 0xFFFFFFFF",
+     "the page 81 rule"),
+    (SECURITY, "page 82 is suppressed",
+     "the page 82 rule"),
+]
+
+
 def check_reserved_space(problems) -> None:
-    """The two fields that cannot be added later without a format break."""
-    if not TELEMETRY.exists():
-        return
-    text = TELEMETRY.read_text(encoding="utf-8")
-    for needle, why in (
-            ("epoch (u32 LE)",
-             "the descriptor's 4-byte epoch, which docs/radiant-security.md "
-             "needs for X_PRIV, X_CONF and command replay rejection"),
-            ("event counter (u8)",
-             "the data page's mandatory counter, which is the X_CONF nonce "
-             "source and the loss detector"),
-    ):
-        if needle not in text:
-            problems.add(TELEMETRY, 0,
-                         "no longer reserves %s (looked for %r)" % (why, needle))
+    """The reservations and pins that cannot be dropped without a silent break."""
+    cache = {}
+    for path, needle, why in SPEC_PINS:
+        if path not in cache:
+            if not path.exists():
+                problems.add(path, 0, "file does not exist")
+                cache[path] = None
+            else:
+                cache[path] = normalise_prose(path.read_text(encoding="utf-8"))
+        text = cache[path]
+        if text is None:
+            continue
+        if normalise_prose(needle).strip() not in text:
+            problems.add(path, 0,
+                         "no longer states %s (looked for %r)" % (why, needle))
 
 
 def main() -> int:
