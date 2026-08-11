@@ -24,25 +24,30 @@
  *                                        union, a monotone event counter and
  *                                        EVERY Tier I window still verifying at
  *                                        the receiver that was already there
- *   IN PRIVATE MODE, BY DERIVING THE     NOT ASSERTED. Private mode and the
- *   LOCATOR                              derived locator are Layer C, which is
- *                                        C8 and has not landed
+ *   IN PRIVATE MODE, BY DERIVING THE     asserted here since compat-C8, in
+ *   LOCATOR                              test_a_private_node_gains_a_receiver_
+ *                                        that_derives_it, against a node that
+ *                                        is genuinely private and genuinely
+ *                                        silent
  *
- * The third clause is deferred rather than faked, and the reason is a boundary
- * rather than effort: the locator is trunc16(CMAC(K_id, "priv" || epoch)) and
- * K_id is reachable only from the layer that holds the root key. Deriving it
- * from a test would mean inventing C8's entry point from the outside and then
- * having C8 either adopt it or contradict it. What this phase owes and pays
- * instead is the property that makes the third clause POSSIBLE: enrolment does
- * not depend on the `announce` setting, does not read or write the beacon's
- * locator fields, and does not need a compat instance at all - so it works on
- * whichever channel the node happens to be on, including one this phase cannot
- * yet build. test_enrolment_needs_no_beacon_at_all is that assertion.
+ * The third clause was deferred by C7 rather than faked, and the reason was a
+ * boundary rather than effort: the locator is trunc16(CMAC(K_id, "priv" ||
+ * epoch)) and K_id is reachable only from the layer that holds the root key.
+ * Deriving it from a test would have meant inventing C8's entry point from the
+ * outside and then having C8 either adopt it or contradict it. What C7 owed and
+ * paid instead was the property that makes the third clause POSSIBLE: enrolment
+ * does not depend on the `announce` setting, does not read or write the
+ * beacon's locator fields, and does not need a compat instance at all - so it
+ * works on whichever channel the node happens to be on, including one that
+ * phase could not yet build. test_enrolment_needs_no_beacon_at_all is that
+ * assertion, and it is what the C8 test at the bottom of this file stands on.
  *
- * The other half of the deferral, recorded so it is a decision: on device type
- * 0x60 the enrolment frames would need a page number in the telemetry
- * envelope's own namespace, and allocating one is an envelope change. That
- * belongs with the phase that creates a reason for a node to be there.
+ * The other half of the deferral stands, recorded so it is a decision: on
+ * device type 0x60 the enrolment frames would need a page number in the
+ * telemetry envelope's own namespace, and allocating one is an envelope change.
+ * That belongs with the phase that creates a reason for a node to be there.
+ * C8's RETURN frames inherit exactly the same deferral, which is why the C8
+ * test picks a page number locally rather than either module naming one.
  */
 
 #include <zephyr/ztest.h>
@@ -59,6 +64,7 @@
 #include "profile_compat.h"
 #include "profile_enrol.h"
 #include "profile_hr.h"
+#include "profile_private.h"
 #include "profile_sched.h"
 
 #if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
@@ -1149,5 +1155,324 @@ ZTEST(profile_enrol, test_init_refuses_a_configuration_that_cannot_work)
 	zassert_equal(-EINVAL, profile_enrol_init(NULL, &cfg));
 	zassert_equal(-EINVAL, profile_enrol_init(&pe, NULL));
 }
+
+/* ═══ compat-C8: the clause C7 deferred ══════════════════════════════════ */
+
+#if defined(CONFIG_RADIANT_SEC_COMPAT)
+
+/*
+ * "A NODE IN PRIVATE MODE GAINS A SECOND RECEIVER, the first receiver's stream
+ * is uninterrupted across the whole window, and the new receiver reaches the
+ * node by deriving the locator rather than by any announcement."
+ *
+ * The first two clauses were asserted when this file was written. The third was
+ * deferred, and the reason was a boundary rather than effort: the locator is
+ * trunc16(CMAC(K_id, "priv" || epoch)) and K_id is reachable only from the layer
+ * that holds the root key, so deriving it from a test would have meant inventing
+ * C8's entry point from the outside and then having C8 either adopt it or
+ * contradict it. C8 has landed, the entry point is
+ * radiant_sec_compat_locator(), and this is the deferral paid.
+ *
+ * The node here is `physical` + `silent`, which makes the third clause
+ * unambiguous rather than merely true: there is no announcement anywhere on the
+ * air to have reached the new receiver, so derivation is the only thing that
+ * can have.
+ */
+
+#define PRIVATE_DEVICE_TYPE 0x60u
+#define PRIVATE_PERIOD      8192u
+#define PRIVATE_SLOTS       242u
+
+static uint32_t g_enter_calls;
+static uint16_t g_private_devnum;
+
+static int private_enter(void *user, uint8_t device_type, uint16_t devnum,
+			 uint16_t period)
+{
+	ARG_UNUSED(user);
+	ARG_UNUSED(device_type);
+	ARG_UNUSED(period);
+	g_enter_calls++;
+	g_private_devnum = devnum;
+	return 0;
+}
+
+static int private_leave(void *user)
+{
+	ARG_UNUSED(user);
+	return 0;
+}
+
+ZTEST(profile_enrol, test_a_private_node_gains_a_receiver_that_derives_it)
+{
+	struct profile_private     pp;
+	struct profile_private_cfg pcfg;
+	struct profile_enrol       pe;
+	struct radiant_sec_stats   sstats;
+	uint8_t  air[PROFILE_ENROL_SET_BYTES];
+	uint8_t  have = 0u;
+	uint8_t  peer_pub[32];
+	uint8_t  frames[PROFILE_ENROL_FRAMES][8];
+	uint8_t  cursor = 0u;
+	uint32_t watcher_msgs = 0u;
+	uint32_t last_counter = 0u;
+	uint32_t data_msgs = 0u;
+	uint32_t i;
+	uint32_t node_fp = 0u;
+	uint32_t peer_fp = 0u;
+	uint16_t derived = 0u;
+	uint8_t  k;
+
+	give_id(NODE_CH, NODE_DEVNUM);
+	give_id(PEER_CH, PEER_DEVNUM);
+	keys_up(PROFILE_HR_PERIOD);
+	g_enter_calls = 0u;
+	g_private_devnum = 0u;
+
+	/* ── The node goes private, silently ────────────────────────────── */
+	memset(&pcfg, 0, sizeof(pcfg));
+	pcfg.ch = NODE_CH;
+	pcfg.epoch = TEST_EPOCH;
+	pcfg.policy = PROFILE_PRIVATE_PHYSICAL;
+	pcfg.announce = PROFILE_PRIVATE_SILENT;
+	pcfg.attest = true;
+	pcfg.private_device_type = PRIVATE_DEVICE_TYPE;
+	pcfg.private_period = PRIVATE_PERIOD;
+	pcfg.compat_device_type = PROFILE_HR_DEVICE_TYPE;
+	pcfg.compat_devnum = NODE_DEVNUM;
+	pcfg.compat_period = PROFILE_HR_PERIOD;
+	pcfg.enter_private = private_enter;
+	pcfg.leave_private = private_leave;
+	zassert_equal(0, profile_private_init(&pp, &pcfg));
+	zassert_equal(0, profile_private_physical_action(&pp, T_ORIGIN));
+	zassert_true(profile_private_is_private(&pp));
+	zassert_equal(1u, g_enter_calls);
+
+	/* ── The owner presses the button again, on a node with no beacon
+	 *    page, no compat channel and nowhere for a pairing frame to ride
+	 *    except the rotation it is already running ─────────────────────── */
+	enrol_up(&pe, PROFILE_ENROL_PHYSICAL, node_scalar);
+	zassert_equal(0, profile_enrol_physical_action(&pe, T_ORIGIN));
+	zassert_true(profile_enrol_is_open(&pe));
+
+	log_reset();
+	for (i = 0u; i < PRIVATE_SLOTS; i++) {
+		uint64_t now = T_ORIGIN + (uint64_t)i * period_us(PROFILE_HR_PERIOD);
+		uint8_t  body[8];
+		bool     is_frame = false;
+
+		memset(body, 0, sizeof(body));
+
+		/*
+		 * A device type 0x60 master's own rotation, driving the two
+		 * client entry points directly - which is exactly what
+		 * profile_enrol.h says a node with no beacon page does. The
+		 * page number for these frames on 0x60 is still deferred; this
+		 * loop picks one so there is a stream to assert about.
+		 */
+		if ((i % 8u) == 0u &&
+		    profile_enrol_frame_count(&pe, now) == PROFILE_ENROL_FRAMES) {
+			body[0] = 0x40u;
+			body[1] = (uint8_t)((cursor << 4) |
+					    (PROFILE_ENROL_FRAMES - 1u));
+			if (profile_enrol_frame(&pe, cursor, &body[2])) {
+				is_frame = true;
+				cursor = (uint8_t)((cursor + 1u) %
+						   PROFILE_ENROL_FRAMES);
+			}
+		}
+		if (!is_frame) {
+			/* An ordinary telemetry data page with a monotone
+			 * counter: this is the FIRST RECEIVER'S STREAM and the
+			 * whole claim is that nothing here stops. */
+			body[0] = 0x01u;
+			body[1] = (uint8_t)(data_msgs & 0xFFu);
+			data_msgs++;
+		}
+
+		log_put(body, PROFILE_SLOT_DATA);
+
+		/* The watcher hears every slot: no channel opened, none closed,
+		 * none retuned, so there is nothing for it to notice. */
+		watcher_msgs++;
+		if (!is_frame) {
+			zassert_true(data_msgs > last_counter,
+				     "the first receiver's data counter went "
+				     "backwards at slot %u", i);
+			last_counter = data_msgs;
+		}
+	}
+
+	zassert_equal(PRIVATE_SLOTS, watcher_msgs,
+		      "the first receiver missed a slot across the window");
+	zassert_true(profile_enrol_is_open(&pe),
+		     "the window closed inside the run");
+	zassert_equal(1u, g_enter_calls,
+		      "the node changed channel during the enrolment; the whole "
+		      "claim is that a pairing window is ADDITIVE - no channel "
+		      "opened, closed or retuned");
+	zassert_true(profile_private_is_private(&pp),
+		     "the node left private mode to gain a receiver, which is "
+		     "the case section 11.7 rule one exists to make impossible");
+
+	/* ── The key went on the air, on the private channel ────────────── */
+	for (i = 0u; i < log_n && i < SLOTS; i++) {
+		const uint8_t *b = log_buf[i].body;
+		uint8_t        idx;
+
+		if (b[0] != 0x40u) {
+			continue;
+		}
+		idx = (uint8_t)(b[1] >> 4);
+		if (idx >= PROFILE_ENROL_FRAMES) {
+			continue;
+		}
+		memcpy(&air[(size_t)idx * PROFILE_ENROL_FRAME_PAYLOAD], &b[2],
+		       PROFILE_ENROL_FRAME_PAYLOAD);
+		have |= (uint8_t)(1u << idx);
+	}
+	zassert_equal((uint8_t)((1u << PROFILE_ENROL_FRAMES) - 1u), have,
+		      "the public key never completed on the private channel");
+
+	/* ── NOTHING ON THE AIR SAYS WHERE THE NODE IS ──────────────────── */
+	for (i = 0u; i < log_n && i < SLOTS; i++) {
+		const uint8_t *b = log_buf[i].body;
+
+		/*
+		 * No beacon page at all, therefore no announcement frame, no
+		 * locator field and no pending-switch bit - there is no beacon
+		 * on device type 0x60 to carry any of them, and a silent node
+		 * would not have set them if there were. The new receiver's
+		 * derivation below is therefore the ONLY thing that can have
+		 * told it where the node is.
+		 */
+		zassert_not_equal(PROFILE_COMPAT_PAGE_BEACON,
+				  (uint8_t)(b[0] & PROFILE_COMPAT_PAGE_MASK),
+				  "a beacon page appeared on a private node");
+	}
+
+	/* ── The enrolment completes ────────────────────────────────────── */
+	peer_up(peer_scalar, peer_pub);
+	peer_set(peer_pub, frames);
+	for (k = 0u; k < PROFILE_ENROL_FRAMES - 1u; k++) {
+		zassert_equal(0, profile_enrol_on_ack_data(&pe, frames[k], 8u));
+	}
+	zassert_equal(1, profile_enrol_on_ack_data(
+				 &pe, frames[PROFILE_ENROL_FRAMES - 1u], 8u));
+	zassert_equal(0, profile_enrol_fingerprint(&pe, &node_fp));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_pair_peer(PEER_CH, air, &peer_fp));
+	zassert_equal(node_fp, peer_fp,
+		      "the two ends derived different shared secrets");
+
+	radiant_sec_get_stats(NODE_CH, &sstats);
+	zassert_equal(1u, sstats.enrolments);
+
+	/* ── ...AND THE NEW RECEIVER FINDS THE NODE BY DERIVING IT ──────── */
+	/*
+	 * A completed enrolment is exactly "this receiver now holds the group
+	 * root", so its compat context is keyed with that root - the same
+	 * operation a host-provisioned receiver performs, and the reason
+	 * enrolment is additive at all.
+	 *
+	 * From there it computes where the node is with no announcement to have
+	 * missed, no beacon to read and nothing on the air above that says
+	 * anything about it. THAT is the clause this test was written to pay.
+	 */
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_set_key(PEER_CH, compat_root, 128,
+						 NODE_DEVNUM));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_compat_locator(PEER_CH, TEST_EPOCH, 0u,
+						 &derived));
+	zassert_equal(g_private_devnum, derived,
+		      "the newly enrolled receiver derived 0x%04X and the node "
+		      "is on 0x%04X", derived, g_private_devnum);
+	zassert_not_equal(0u, derived);
+	zassert_equal(profile_private_locator(&pp), derived);
+}
+
+ZTEST(profile_enrol, test_a_countdown_refuses_a_window_and_is_refused_by_one)
+{
+	struct profile_compat      pc;
+	struct profile_private     pp;
+	struct profile_private_cfg pcfg;
+	struct profile_enrol       pe;
+
+	/*
+	 * THE INTERLOCK, from Layer D's side and against the real Layer C.
+	 * profile_compat.h states the rule - a countdown and an enrolment window
+	 * must not run at once, and whichever arrives second is refused - and
+	 * both halves of it are load-bearing: the frames share indices 2 and 3,
+	 * and a switch closes the channel the window is running on.
+	 */
+	struct profile_compat_cfg ccfg;
+
+	give_id(NODE_CH, NODE_DEVNUM);
+	keys_up(PROFILE_HR_PERIOD);
+	g_enter_calls = 0u;
+
+	/* A beacon whose policy agrees with the node's, because a `never`
+	 * beacon refuses a locator and this test is not about that rule. */
+	memset(&ccfg, 0, sizeof(ccfg));
+	ccfg.ch = NODE_CH;
+	ccfg.epoch = TEST_EPOCH;
+	ccfg.advertise = true;
+	ccfg.attest_available = true;
+	ccfg.pairing_available = true;
+	ccfg.policy = PROFILE_COMPAT_POLICY_PHYSICAL;
+	ccfg.window = TEST_N;
+	ccfg.mode = PROFILE_COMPAT_MODE_FIXED;
+	zassert_equal(0, profile_compat_init(&pc, &ccfg));
+
+	memset(&pcfg, 0, sizeof(pcfg));
+	pcfg.ch = NODE_CH;
+	pcfg.epoch = TEST_EPOCH;
+	pcfg.policy = PROFILE_PRIVATE_PHYSICAL;
+	pcfg.announce = PROFILE_PRIVATE_BROADCAST;
+	pcfg.attest = true;
+	pcfg.private_device_type = PRIVATE_DEVICE_TYPE;
+	pcfg.private_period = PRIVATE_PERIOD;
+	pcfg.compat_device_type = PROFILE_HR_DEVICE_TYPE;
+	pcfg.compat_devnum = NODE_DEVNUM;
+	pcfg.compat_period = PROFILE_HR_PERIOD;
+	pcfg.enter_private = private_enter;
+	pcfg.leave_private = private_leave;
+
+	enrol_up(&pe, PROFILE_ENROL_PHYSICAL, node_scalar);
+
+	zassert_equal(0, profile_private_init(&pp, &pcfg));
+	zassert_equal(0, profile_private_attach(&pp, &pc));
+	zassert_equal(0, profile_enrol_attach(&pe, &pc),
+		      "the beacon page must hold both clients: the exclusion is "
+		      "between two activities, not two registrations");
+
+	/* A window opens; the countdown is second and is refused. */
+	zassert_equal(0, profile_enrol_physical_action(&pe, T_ORIGIN));
+	zassert_true(profile_compat_client_busy(&pc, T_ORIGIN, &pp),
+		     "an open window does not show as busy, so a countdown "
+		     "would start straight into it and tear a public key in "
+		     "half");
+	zassert_equal(-EBUSY, profile_private_physical_action(&pp, T_ORIGIN));
+	zassert_equal(PROFILE_PRIVATE_STATE_COMPAT,
+		      profile_private_state(&pp));
+
+	/* And the other way round: with the window closed and a countdown
+	 * running, the window is the one refused. */
+	profile_enrol_close(&pe);
+	zassert_equal(0, profile_private_physical_action(&pp, T_ORIGIN));
+	zassert_equal(PROFILE_PRIVATE_STATE_ANNOUNCING,
+		      profile_private_state(&pp));
+	zassert_equal(PROFILE_PRIVATE_FRAMES,
+		      profile_private_frame_count(&pp, T_ORIGIN));
+
+	zassert_equal(-EBUSY, profile_enrol_physical_action(&pe, T_ORIGIN),
+		      "a pairing window opened during a countdown; it would "
+		      "have burnt a pair counter, entered pairing mode and "
+		      "transmitted nothing");
+	zassert_false(profile_enrol_is_open(&pe));
+}
+
+#endif /* CONFIG_RADIANT_SEC_COMPAT */
 
 #endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */

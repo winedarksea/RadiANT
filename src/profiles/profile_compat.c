@@ -137,7 +137,9 @@ static int encode_beacon(struct profile_compat *pc,
 			  (cfg->attest_available
 				   ? PROFILE_COMPAT_CAP_ATTEST_AVAILABLE : 0u));
 	f0[3] = (uint8_t)(cfg->policy | ((uint8_t)code << 2) |
-			  (uint8_t)(cfg->mode << 4));
+			  (uint8_t)(cfg->mode << 4) |
+			  (pc->pending_switch ? PROFILE_COMPAT_PENDING_SWITCH
+					      : 0u));
 	f0[4] = hint[0];
 	f0[5] = hint[1];
 	f0[6] = hint[2];
@@ -199,24 +201,122 @@ int profile_compat_init(struct profile_compat *pc,
 int profile_compat_set_client(struct profile_compat *pc,
 			      const struct profile_compat_client *client)
 {
+	uint8_t i;
+
 	if (pc == NULL) {
 		return -EINVAL;
 	}
 	if (client == NULL) {
-		memset(&pc->client, 0, sizeof(pc->client));
-		pc->have_client = false;
+		memset(pc->clients, 0, sizeof(pc->clients));
+		pc->n_clients = 0u;
+		pc->active_client = 0u;
 		pc->frame_cursor = 0u;
 		return 0;
 	}
 	if (client->frames == NULL || client->frame == NULL) {
 		return -EINVAL;
 	}
-	pc->client = *client;
-	pc->have_client = true;
+
+	/* Keyed by `user`, so a module that attaches twice replaces itself
+	 * rather than spending the other module's slot. */
+	for (i = 0u; i < pc->n_clients; i++) {
+		if (pc->clients[i].user == client->user) {
+			pc->clients[i] = *client;
+			return 0;
+		}
+	}
+	if (pc->n_clients >= (uint8_t)PROFILE_COMPAT_CLIENTS_MAX) {
+		return -ENOSPC;
+	}
+	pc->clients[pc->n_clients++] = *client;
 	/* A set whose size is about to change starts again from frame 0 rather
 	 * than from wherever the two-frame rotation had reached. */
 	pc->frame_cursor = 0u;
 	return 0;
+}
+
+bool profile_compat_client_busy(struct profile_compat *pc, uint64_t now_us,
+				const void *except_user)
+{
+	uint8_t i;
+
+	if (pc == NULL) {
+		return false;
+	}
+	for (i = 0u; i < pc->n_clients; i++) {
+		if (pc->clients[i].user == except_user) {
+			continue;
+		}
+		if (pc->clients[i].frames(pc->clients[i].user, now_us) != 0u) {
+			return true;
+		}
+	}
+	return false;
+}
+
+int profile_compat_set_pending_switch(struct profile_compat *pc, bool pending)
+{
+	if (pc == NULL) {
+		return -EINVAL;
+	}
+	if (pc->pending_switch != pending) {
+		/*
+		 * THE ROTATION RESTARTS AT THE ANNOUNCEMENT, not at frame 0.
+		 *
+		 * A countdown is bounded and short - K = 16 is two promoted
+		 * beacon slots - and the four-frame set emits one frame per
+		 * slot, so a rotation that began at frame 0 would reach the
+		 * announcement on its third slot and a short countdown would
+		 * expire having said nothing at all. The frames that must reach
+		 * the air inside a countdown are the client's; frames 0 and 1
+		 * go out every rotation anyway and their only change is the
+		 * count nibble, which every frame of the set restates.
+		 *
+		 * Legal because byte [1] carries the frame's INDEX: the
+		 * convention fixes which frame is which, never the order they
+		 * are sent in, and a receiver reassembles by index precisely so
+		 * that it does not have to care.
+		 *
+		 * Ending a countdown restarts at frame 0, where the bit that
+		 * has just cleared lives.
+		 */
+		pc->frame_cursor = pending ? pc->n_frames : 0u;
+	}
+	pc->pending_switch = pending;
+	if (pc->n_frames == 0u) {
+		return 0;   /* advertise = off: no beacon, no capability field */
+	}
+	return encode_beacon(pc, pc->hint);
+}
+
+int profile_compat_set_locator(struct profile_compat *pc, uint8_t device_type,
+			       uint16_t device_number, uint16_t period)
+{
+	struct profile_compat_cfg was;
+	int                       rc;
+
+	if (pc == NULL) {
+		return -EINVAL;
+	}
+
+	was = pc->cfg;
+	pc->cfg.target_device_type = device_type;
+	pc->cfg.target_device_number = device_number;
+	pc->cfg.target_period = period;
+	if (pc->n_frames == 0u) {
+		return 0;
+	}
+	/* encode_beacon() is the one place that decides whether a locator may
+	 * exist at all, so a `never` node is refused here by the same three
+	 * lines that refuse it at init rather than by a second copy of them.
+	 * A refusal puts the configuration back: a beacon half-way through a
+	 * change is a beacon a receiver has to guess about. */
+	rc = encode_beacon(pc, pc->hint);
+	if (rc != 0) {
+		pc->cfg = was;
+		(void)encode_beacon(pc, pc->hint);
+	}
+	return rc;
 }
 
 int profile_compat_set_pairing_open(struct profile_compat *pc, bool open)
@@ -249,17 +349,36 @@ int profile_compat_set_pairing_open(struct profile_compat *pc, bool open)
  * bug in the client, and taking none of its frames makes it a visible one. */
 static uint8_t client_frames(struct profile_compat *pc, uint64_t now_us)
 {
+	uint8_t i;
 	uint8_t n;
 
-	if (!pc->have_client) {
-		return 0u;
+	pc->active_client = 0u;
+
+	/*
+	 * THE INTERLOCK'S BACKSTOP. The first client contributing frames owns
+	 * the set for this slot and the rest are not asked. The rule that keeps
+	 * this from ever mattering is at the request end - a countdown and an
+	 * enrolment window refuse each other before either starts - and this is
+	 * what happens if that rule is ever broken: one client's block goes out
+	 * and the other waits, rather than a ten-frame set that neither the
+	 * count nibble nor any receiver can hold.
+	 */
+	for (i = 0u; i < pc->n_clients; i++) {
+		n = pc->clients[i].frames(pc->clients[i].user, now_us);
+		if (n == 0u) {
+			continue;
+		}
+		if ((uint16_t)n + (uint16_t)pc->n_frames >
+		    (uint16_t)PROFILE_COMPAT_SET_FRAMES_MAX) {
+			/* A client asking for more than the format holds is a
+			 * bug in the client, and taking none of its frames
+			 * makes it a visible one. */
+			continue;
+		}
+		pc->active_client = (uint8_t)(i + 1u);
+		return n;
 	}
-	n = pc->client.frames(pc->client.user, now_us);
-	if ((uint16_t)n + (uint16_t)pc->n_frames >
-	    (uint16_t)PROFILE_COMPAT_SET_FRAMES_MAX) {
-		return 0u;
-	}
-	return n;
+	return 0u;
 }
 
 /*
@@ -362,10 +481,16 @@ static bool compat_claim(uint32_t m, uint8_t *body, void *user)
 	if (idx < pc->n_frames) {
 		memcpy(body, pc->frames[idx], PROFILE_COMPAT_FRAME_LEN);
 	} else {
+		const struct profile_compat_client *cl;
+
+		if (pc->active_client == 0u) {
+			return false;
+		}
+		cl = &pc->clients[pc->active_client - 1u];
 		memset(body, 0, PROFILE_COMPAT_FRAME_LEN);
 		body[0] = PROFILE_COMPAT_PAGE_BEACON;
-		if (!pc->client.frame(pc->client.user,
-				      (uint8_t)(idx - pc->n_frames), &body[2])) {
+		if (!cl->frame(cl->user, (uint8_t)(idx - pc->n_frames),
+			       &body[2])) {
 			/* The client changed its mind between being counted and
 			 * being asked. Decline the slot; the rotation has it
 			 * back at no cost and the cursor has not moved. */
@@ -426,11 +551,26 @@ void profile_compat_before(struct profile_compat *pc, uint64_t now_us)
 
 void profile_compat_sent(struct profile_compat *pc, const uint8_t *body)
 {
+	uint8_t i;
+
 	if (pc == NULL || body == NULL || !pc->armed) {
 		return;
 	}
 	(void)radiant_sec_compat_tx_sent(pc->cfg.ch, body,
 					 PROFILE_COMPAT_FRAME_LEN);
+
+	/*
+	 * EVERY client, EVERY message, whoever built it - the same rule this
+	 * function already owes the attestation layer one line up. A client
+	 * counting a countdown in transmitted messages and a window covering N
+	 * transmitted messages want the identical fact, so they are told by the
+	 * identical call.
+	 */
+	for (i = 0u; i < pc->n_clients; i++) {
+		if (pc->clients[i].sent != NULL) {
+			pc->clients[i].sent(pc->clients[i].user, body);
+		}
+	}
 }
 
 enum profile_slot_kind profile_compat_next(struct profile_compat *pc,

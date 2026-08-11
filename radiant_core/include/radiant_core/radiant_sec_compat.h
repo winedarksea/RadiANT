@@ -88,6 +88,21 @@ extern "C" {
 #define RADIANT_SEC_COMPAT_SUBTYPE_ANNOUNCE  0x03
 
 /*
+ * 0x04 is the INBOUND command's, and it is the one subtype that is not under
+ * K_auth: a command is verified under K_cmd (RADIANT_SEC_LABEL_CMD), which had
+ * no user anywhere in the tree until Layer C's trigger needed one.
+ *
+ * Two separations rather than one, and both are wanted. The KEY separates a
+ * thing a receiver sends to the node from the three things the node broadcasts,
+ * so a recorded attestation can never be replayed into the command path however
+ * the bytes are rearranged. The SUBTYPE separates it inside the block anyway,
+ * because "it is under a different key" is a property of the deployment - one
+ * root, four derived keys - rather than of the block, and the block is where
+ * this protocol puts its separations.
+ */
+#define RADIANT_SEC_COMPAT_SUBTYPE_COMMAND   0x04
+
+/*
  * 40 bits for Tier I and 48 for Tier II, and the difference is arithmetic
  * rather than a security judgement: Tier I carries a two-byte counter in its
  * page because no window index is implied, and 8 - 1 - 2 = 5 bytes are what is
@@ -96,6 +111,26 @@ extern "C" {
  */
 #define RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES   5
 #define RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES  6
+
+/*
+ * The announcement's tag is 48 bits, in a frame of its own that carries nothing
+ * else: bytes [2..7] of a frame whose [0] and [1] belong to the framing
+ * convention. Tier II's width for the same reason Tier II has it - six bytes
+ * are what is left - and NOT Tier II's function, because that one's subtype
+ * says "this covers the last N-1 transmitted messages", which is a different
+ * claim about different bytes.
+ *
+ * A command's is 40 bits, because a command carries three bytes of its own
+ * before the tag and 8 - 3 = 5 is what is left. The forgery bound that matters
+ * for it is not 2^-40 anyway: an attacker without K_cmd is guessing against a
+ * node that rate-limits accepted commands, and one that HAS K_cmd is a
+ * keyholder, which is the trust boundary rather than a break of it.
+ */
+#define RADIANT_SEC_COMPAT_ANNOUNCE_TAG_BYTES 6
+#define RADIANT_SEC_COMPAT_CMD_TAG_BYTES      5
+
+/* The covered bytes of an inbound command: everything in front of its tag. */
+#define RADIANT_SEC_COMPAT_CMD_BYTES          3
 
 /*
  * The Tier II window: N consecutive TRANSMITTED messages, N in {4, 8, 16, 32}.
@@ -450,6 +485,120 @@ int radiant_sec_compat_hint(uint8_t ch, uint32_t epoch,
 			    uint8_t out[RADIANT_SEC_COMPAT_HINT_BYTES]);
 
 /*
+ * ── The derived locator ────────────────────────────────────────────────────
+ *
+ *   trunc16( CMAC(K_id, "priv" || epoch[4 LE]) ), 0x0000 excluded
+ *   collision: rederive with a 1-byte suffix, 0x00, 0x01, ...
+ *
+ * The same shape as the hint above and for the same reason - K_id is
+ * epoch-less, so one CMAC answers it - and this module computes it because K_id
+ * is here and only here. It is a NUMBER, not a channel and not a page: what the
+ * caller does with sixteen bits is the caller's business, and this file stays
+ * unable to name the thing they identify.
+ *
+ * IT IS WHAT MAKES AN ANNOUNCEMENT OPTIONAL. Any holder of the root computes
+ * where the node went from the epoch it already has, so the announcement saves
+ * a search rather than being the only way to find the node; a receiver enrolled
+ * after the switch finds a node that is already gone, with nothing to have
+ * missed; and an observer without the key cannot predict the number at all,
+ * which is what closes the switch-time linkage down to timing correlation when
+ * nothing is announced.
+ *
+ * `attempt` walks the sequence: 0 is the first candidate, and 1, 2, 3 are what
+ * a searcher tries next before falling back to a wildcard search.
+ * RADIANT_SEC_COMPAT_LOCATOR_TRIES is how many of them a searcher tries, and it
+ * is here rather than in the searcher so that both ends count the same way.
+ *
+ * TWO RULES ARE FOLDED INTO ONE WALK, and the folding is this function's only
+ * judgement call. The excluded 0x0000 and the collision suffix are two
+ * different reasons to move on to the next derivation, so the sequence is
+ * "derivation 0 with no suffix, then suffix 0x00, 0x01, ... , with any
+ * derivation that comes out 0x0000 dropped". A caller therefore never sees the
+ * wildcard, never has to know why a candidate was skipped, and both ends skip
+ * the same one - which is the property that matters, because a node and a
+ * searcher that disagreed about whether a zero counts would disagree about
+ * every candidate after it.
+ *
+ * Returns RADIANT_SEC_OK, RADIANT_SEC_ENOKEY when the channel holds no root, or
+ * RADIANT_SEC_EINVAL for a null `out` or an `attempt` the bounded walk cannot
+ * reach (which needs 256 consecutive zeros and is therefore a bug, not a
+ * collision).
+ */
+#define RADIANT_SEC_COMPAT_LOCATOR_TRIES    4u
+#define RADIANT_SEC_COMPAT_LOCATOR_WILDCARD 0x0000u
+
+/*
+ * "priv", and it is a CMAC MESSAGE PREFIX rather than a fifth
+ * RADIANT_SEC_LABEL_*. The distinction is not pedantry: a KDF block is sixteen
+ * bytes beginning 0x01, and this message is eight or nine beginning 'p', so the
+ * two inputs cannot collide even though both are CMACs under a derived key.
+ * Named here so that the list radiant_sec.h asks a reader to check a new label
+ * against stays the list of KEYS, and this stays a message.
+ */
+#define RADIANT_SEC_COMPAT_LOCATOR_LABEL    "priv"
+
+int radiant_sec_compat_locator(uint8_t ch, uint32_t epoch, uint8_t attempt,
+			       uint16_t *out);
+
+/*
+ * ── The announcement's tag, and the command's ──────────────────────────────
+ *
+ * Both take the covered bytes and answer with a tag, and both take the instant
+ * rather than reading a clock, because the counter in the nonce is Tier I's
+ * interval index and that is a function of time on both sides. There is no
+ * counter field in either message: an announcement carries a locator and a
+ * countdown and has no room for one, and adding a counter a sender chooses
+ * would hand the replay defence to the sender. So the counter is DERIVED, both
+ * ends compute it from the epoch anchor they already share, and a message
+ * replayed into another interval fails the tag rather than being noticed
+ * afterwards.
+ *
+ * The exactness that buys is worth stating, because it is also the cost: a
+ * message whose transmission and reception straddle an interval boundary
+ * verifies on one side of it and not the other. At the default T that is one
+ * boundary every 20 s against an announcement repeated eight times over a
+ * countdown, so it costs at most one copy - and the alternative, accepting a
+ * neighbouring interval, would accept a replay for a whole interval after the
+ * fact. Exact, and repeat.
+ *
+ * `len` is the covered length: 8 for an announcement (the whole transmitted
+ * frame, byte [0] and byte [1] included, so nothing an attacker can rewrite is
+ * outside the tag) and RADIANT_SEC_COMPAT_CMD_BYTES for a command.
+ *
+ * Returns RADIANT_SEC_OK; RADIANT_SEC_EBADMAC from the verify arms when the tag
+ * does not match, which is the answer a caller acts on; RADIANT_SEC_ENOKEY with
+ * no key or no epoch on the channel; RADIANT_SEC_EINVAL for a null argument or
+ * a length that is not the covered length.
+ */
+int radiant_sec_compat_announce_tag(uint8_t ch, uint64_t now_us,
+				    const uint8_t *msg, uint8_t len,
+				    uint8_t out[RADIANT_SEC_COMPAT_ANNOUNCE_TAG_BYTES]);
+
+int radiant_sec_compat_announce_verify(uint8_t ch, uint64_t t_sync,
+				       const uint8_t *msg, uint8_t len,
+				       const uint8_t *tag);
+
+/*
+ * The command arm, under K_cmd. THE NODE IS THE VERIFIER HERE, which is the
+ * opposite direction from everything else in this file, and it is why the key
+ * is different: a receiver that can verify the node's attestation must not
+ * thereby be able to forge a command to it, and a passive observer who records
+ * one must not be able to replay it into a later interval.
+ *
+ * What this does NOT do is decide anything. It answers "did the holder of
+ * K_cmd send these bytes, in this interval". Whether the node then acts is
+ * policy, it lives above this file, and on a `never` node the answer is no
+ * however good the tag is.
+ */
+int radiant_sec_compat_cmd_tag(uint8_t ch, uint64_t now_us, const uint8_t *msg,
+			       uint8_t len,
+			       uint8_t out[RADIANT_SEC_COMPAT_CMD_TAG_BYTES]);
+
+int radiant_sec_compat_cmd_verify(uint8_t ch, uint64_t t_sync,
+				  const uint8_t *msg, uint8_t len,
+				  const uint8_t *tag);
+
+/*
  * PATH ONE, advertise = on: search for the epoch whose hint is the one the
  * beacon carried. One CMAC per candidate.
  *
@@ -638,6 +787,52 @@ static inline int radiant_sec_compat_hint(uint8_t ch, uint32_t epoch,
 					  uint8_t *out)
 {
 	(void)ch; (void)epoch; (void)out;
+	return RADIANT_SEC_ENOTSUP;
+}
+
+static inline int radiant_sec_compat_locator(uint8_t ch, uint32_t epoch,
+					     uint8_t attempt, uint16_t *out)
+{
+	(void)ch; (void)epoch; (void)attempt; (void)out;
+	return RADIANT_SEC_ENOTSUP;
+}
+
+static inline int radiant_sec_compat_announce_tag(uint8_t ch, uint64_t now_us,
+						  const uint8_t *msg, uint8_t len,
+						  uint8_t *out)
+{
+	(void)ch; (void)now_us; (void)msg; (void)len; (void)out;
+	return RADIANT_SEC_ENOTSUP;
+}
+
+static inline int radiant_sec_compat_announce_verify(uint8_t ch, uint64_t t_sync,
+						     const uint8_t *msg,
+						     uint8_t len,
+						     const uint8_t *tag)
+{
+	(void)ch; (void)t_sync; (void)msg; (void)len; (void)tag;
+	return RADIANT_SEC_ENOTSUP;
+}
+
+static inline int radiant_sec_compat_cmd_tag(uint8_t ch, uint64_t now_us,
+					     const uint8_t *msg, uint8_t len,
+					     uint8_t *out)
+{
+	(void)ch; (void)now_us; (void)msg; (void)len; (void)out;
+	return RADIANT_SEC_ENOTSUP;
+}
+
+/*
+ * ENOTSUP and never OK, unlike tx_attest()'s 0 above. "No attestation page is
+ * due" is a true answer on a build with no attestation; "this command is
+ * authentic" is not, and a disabled build that answered it would be a node that
+ * acted on an unverified command precisely when it had no way to verify one.
+ */
+static inline int radiant_sec_compat_cmd_verify(uint8_t ch, uint64_t t_sync,
+						const uint8_t *msg, uint8_t len,
+						const uint8_t *tag)
+{
+	(void)ch; (void)t_sync; (void)msg; (void)len; (void)tag;
 	return RADIANT_SEC_ENOTSUP;
 }
 

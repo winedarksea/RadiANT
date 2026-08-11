@@ -490,6 +490,189 @@ class TestCompatAttestation(unittest.TestCase):
         self.assertIn(rc.COMPAT_DEFAULT_WINDOW, rc.COMPAT_WINDOW_SIZES)
 
 
+class TestCompatLocator(unittest.TestCase):
+    """docs/radiant-security.md section 11.5, the derived locator.
+
+    Every literal here also appears in
+    radiant_core/tests/src/test_profile_private.c, under a channel keyed with
+    the same root and the same provisioning device number, and neither side
+    computes the other's expectation. That agreement is the whole test: a node
+    that derives its private device number one way and a keyholder that derives
+    it another way do not fail loudly, they simply never meet.
+
+    K_ID is the "id" key of the root radiant_core/tests/src/test_profile_*.c
+    pins, under that suite's NODE_DEVNUM. The class asserts the derivation as
+    well as pinning the value, so a change to the KDF cannot quietly leave this
+    file testing a key nothing uses.
+    """
+
+    ROOT = bytes(range(16))
+    BASE_DEVNUM = 0x2C41
+    K_ID = bytes.fromhex("985e1967bb36ff7436d9d2dc71b2cbca")
+
+    #: The four candidates at the suites' epoch, in the order a searching
+    #: keyholder tries them.
+    EPOCH = 7
+    CANDIDATES = (0xBB18, 0xB4B5, 0x8A57, 0x472C)
+
+    #: THE WILDCARD CASE, FOUND RATHER THAN CONSTRUCTED. Under this key the
+    #: unsuffixed derivation at epoch 1315 comes out 0x0000, which is the ANT
+    #: wildcard and cannot be a master's device number. It is the one epoch in
+    #: ~65 000 where the exclusion rule does something, and pinning it is the
+    #: only way to test that rule against a real derivation rather than against
+    #: a mocked one - an untested exclusion is a rule two implementations will
+    #: disagree about exactly once, on a device somebody owns.
+    WILDCARD_EPOCH = 1315
+    WILDCARD_FIRST = 0x50E2   # the suffix-0x00 derivation, promoted to first
+    WILDCARD_SECOND = 0xDEAB  # the suffix-0x01 derivation
+
+    def test_the_key_is_the_one_the_suites_use(self):
+        self.assertEqual(rc.kdf(self.ROOT, rc.LABEL_ID, 0, self.BASE_DEVNUM),
+                         self.K_ID)
+
+    def test_the_candidates_are_pinned(self):
+        for attempt, expected in enumerate(self.CANDIDATES):
+            self.assertEqual(
+                rc.compat_private_locator(self.K_ID, self.EPOCH, attempt),
+                expected,
+                "candidate %d moved" % attempt)
+
+    def test_the_message_is_priv_then_the_epoch(self):
+        # Written out by hand, because "trunc16(CMAC(K_id, "priv" || epoch))"
+        # has three places to differ - the label's terminator, the epoch's byte
+        # order and the truncation's - and a round trip through the module
+        # would agree with itself in all three.
+        message = b"priv" + (7).to_bytes(4, "little")
+        self.assertEqual(rc.compat_private_locator(self.K_ID, 7, 0),
+                         int.from_bytes(rc.cmac(self.K_ID, message)[:2],
+                                        "little"))
+        self.assertEqual(rc.compat_private_locator(self.K_ID, 7, 1),
+                         int.from_bytes(
+                             rc.cmac(self.K_ID, message + b"\x00")[:2],
+                             "little"))
+
+    def test_the_locator_is_read_in_tag_order(self):
+        # A device number goes on the air low byte first, so reading the tag
+        # little-endian means the two bytes ON THE AIR are the first two bytes
+        # of the CMAC, in CMAC order. A capture is then checkable without
+        # reversing anything, which is the reason for the choice.
+        message = b"priv" + (7).to_bytes(4, "little")
+        tag = rc.cmac(self.K_ID, message)
+        devnum = rc.compat_private_locator(self.K_ID, 7, 0)
+        self.assertEqual(bytes([devnum & 0xFF, devnum >> 8]), tag[:2])
+
+    def test_the_wildcard_is_excluded_and_the_suffix_takes_over(self):
+        self.assertEqual(
+            rc.compat_locator_derivation(self.K_ID, self.WILDCARD_EPOCH, 0),
+            rc.COMPAT_LOCATOR_WILDCARD)
+        # ...and the sequence a caller walks never shows it.
+        self.assertEqual(
+            rc.compat_private_locator(self.K_ID, self.WILDCARD_EPOCH, 0),
+            self.WILDCARD_FIRST)
+        self.assertEqual(
+            rc.compat_private_locator(self.K_ID, self.WILDCARD_EPOCH, 1),
+            self.WILDCARD_SECOND)
+        self.assertEqual(
+            rc.compat_locator_derivation(self.K_ID, self.WILDCARD_EPOCH, 1),
+            self.WILDCARD_FIRST)
+
+    def test_no_candidate_is_ever_the_wildcard(self):
+        for epoch in range(0, 400):
+            for attempt in range(rc.COMPAT_LOCATOR_TRIES):
+                self.assertNotEqual(
+                    rc.compat_private_locator(self.K_ID, epoch, attempt),
+                    rc.COMPAT_LOCATOR_WILDCARD)
+
+    def test_the_candidates_of_one_epoch_are_distinct(self):
+        # They are four CMACs of four different messages, so a repeat would
+        # mean the suffix never reached the block - which would make the
+        # collision rule a loop that tries the same number four times.
+        got = {rc.compat_private_locator(self.K_ID, self.EPOCH, attempt)
+               for attempt in range(rc.COMPAT_LOCATOR_TRIES)}
+        self.assertEqual(len(got), rc.COMPAT_LOCATOR_TRIES)
+
+    def test_the_locator_moves_with_the_epoch_and_with_the_key(self):
+        # An observer without the key cannot predict it, and a node that has
+        # rebooted is somewhere else. Both are the point of deriving it.
+        self.assertNotEqual(rc.compat_private_locator(self.K_ID, 7),
+                            rc.compat_private_locator(self.K_ID, 8))
+        self.assertNotEqual(rc.compat_private_locator(self.K_ID, 7),
+                            rc.compat_private_locator(b"\xa5" * 16, 7))
+
+    def test_it_is_not_the_key_group_hint(self):
+        # Both are CMACs under K_id over the epoch, and the "priv" prefix is
+        # the only thing keeping them apart. Without it the beacon would
+        # broadcast the first three bytes of the private device number in every
+        # hint, which is the leak the derivation exists to avoid.
+        hint = rc.compat_key_group_hint(self.K_ID, self.EPOCH)
+        devnum = rc.compat_private_locator(self.K_ID, self.EPOCH, 0)
+        self.assertNotEqual(bytes([devnum & 0xFF, devnum >> 8]), hint[:2])
+
+    def test_the_walk_is_bounded(self):
+        with self.assertRaises(ValueError):
+            rc.compat_locator_derivation(self.K_ID, self.EPOCH,
+                                         rc.COMPAT_LOCATOR_WALK)
+
+
+class TestCompatCommand(unittest.TestCase):
+    """The inbound command's tag - docs/radiant-security.md section 11.6.
+
+    Mirrored by radiant_core/tests/src/test_profile_private.c, which builds a
+    command with these bytes and asserts the node accepts it, and mutates each
+    of them in turn and asserts it does not.
+    """
+
+    ROOT = bytes(range(16))
+    BASE_DEVNUM = 0x2C41
+    EPOCH = 7
+    DEVNUM = 0x2C41
+    COUNTER = 0x0003
+    COMMAND = bytes([0x70, 0x00, 0x01])
+
+    def k_cmd(self) -> bytes:
+        return rc.kdf(self.ROOT, rc.LABEL_CMD, self.EPOCH, self.BASE_DEVNUM)
+
+    def test_the_tag_is_pinned(self):
+        self.assertEqual(
+            rc.compat_command_tag(self.k_cmd(), self.EPOCH, self.DEVNUM,
+                                  self.COUNTER, self.COMMAND).hex(),
+            "c3ff34889a")
+
+    def test_it_is_forty_bits_under_k_cmd_and_subtype_four(self):
+        self.assertEqual(rc.COMPAT_CMD_TAG_BITS, 40)
+        self.assertEqual(rc.COMPAT_SUBTYPE_COMMAND, 0x04)
+        block = rc.compat_nonce_block(self.EPOCH, self.DEVNUM, self.COUNTER,
+                                      rc.COMPAT_SUBTYPE_COMMAND)
+        self.assertEqual(block[9], 0x04)
+        self.assertEqual(
+            rc.compat_command_tag(self.k_cmd(), self.EPOCH, self.DEVNUM,
+                                  self.COUNTER, self.COMMAND),
+            rc.cmac(self.k_cmd(), block + self.COMMAND)[:5])
+
+    def test_a_keyholder_who_can_verify_cannot_forge(self):
+        # K_auth verifies everything the node broadcasts and is held by every
+        # receiver. If it also signed commands, every receiver could mute the
+        # sensor for every other one.
+        k_auth = rc.kdf(self.ROOT, rc.LABEL_AUTH, self.EPOCH, self.BASE_DEVNUM)
+        self.assertNotEqual(
+            rc.compat_command_tag(k_auth, self.EPOCH, self.DEVNUM,
+                                  self.COUNTER, self.COMMAND),
+            rc.compat_command_tag(self.k_cmd(), self.EPOCH, self.DEVNUM,
+                                  self.COUNTER, self.COMMAND))
+
+    def test_a_replay_into_another_interval_fails(self):
+        first = rc.compat_command_tag(self.k_cmd(), self.EPOCH, self.DEVNUM,
+                                      self.COUNTER, self.COMMAND)
+        later = rc.compat_command_tag(self.k_cmd(), self.EPOCH, self.DEVNUM,
+                                      self.COUNTER + 1, self.COMMAND)
+        self.assertNotEqual(first, later)
+
+    def test_the_covered_length_is_fixed(self):
+        with self.assertRaises(ValueError):
+            rc.compat_command_tag(self.k_cmd(), self.EPOCH, self.DEVNUM,
+                                  self.COUNTER, self.COMMAND + b"\x00")
+
+
 class TestCounterReconstruction(unittest.TestCase):
     """D4 and D14: the counter comes from time, and a wrap moves the epoch."""
 

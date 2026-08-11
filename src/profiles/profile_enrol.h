@@ -107,10 +107,14 @@
  *   - THE DERIVED LOCATOR (rule two: a newly enrolled receiver finds an
  *     already-private node without an announcement, because
  *     trunc16(CMAC(K_id, "priv" || epoch)) gives it the private device number
- *     directly). That derivation needs K_id, which only the layer holding the
- *     root key may touch, and Layer C's switch is C8's. Nothing here depends
- *     on the `announce` setting, which is the half of rule two this phase owes
- *     and pays.
+ *     directly). LANDED IN C8, not here: the derivation needs K_id, which only
+ *     the layer holding the root key may touch, and it is
+ *     radiant_sec_compat_locator(). This module still does not know it exists.
+ *     Nothing here depends on the `announce` setting, which is the half of rule
+ *     two this phase owed and paid, and
+ *     radiant_core/tests/src/test_profile_enrol.c's
+ *     test_a_private_node_gains_a_receiver_that_derives_it is the other half
+ *     paid on top of it.
  *   - THE DESCRIPTOR BIT. Section 11.7 says the pairing-open state is "a
  *     beacon bit and a descriptor bit". The beacon bit is here
  *     (PROFILE_COMPAT_CAP_PAIRING_OPEN). The descriptor bit is not: device

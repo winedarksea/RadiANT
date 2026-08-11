@@ -119,7 +119,8 @@ extern "C" {
 #define PROFILE_COMPAT_VERSION         1u
 
 /* Frame indices in the beacon page's set. Two frames in the steady state; the
- * announcement's frames 2 and 3 belong to Layer C and land in C8. */
+ * announcement's frames 2 and 3 are Layer C's (profile_private.h pins them),
+ * and the set is four frames for as long as a countdown runs. */
 #define PROFILE_COMPAT_FRAME_BEACON_0  0u
 #define PROFILE_COMPAT_FRAME_BEACON_1  1u
 #define PROFILE_COMPAT_BEACON_FRAMES   2u
@@ -166,14 +167,28 @@ extern "C" {
  * ANT+ sensor for its whole life, which will refuse an authenticated switch
  * command from a keyholder it trusts and count the refusal.
  *
- * Only `never` is reachable in C5. The state machine behind the other three is
- * profile_private.c's, in C8; the values are pinned here so the beacon's
- * layout does not change when it lands.
+ * The state machine behind the other three is src/profiles/profile_private.c's
+ * (compat-C8), which resolves the policy from NVM or Kconfig and hands the
+ * result here. This file still decides only one thing about it: a `never` node
+ * must advertise private-available = 0 and carry no locator, and the two must
+ * agree or the beacon is malformed.
  */
 #define PROFILE_COMPAT_POLICY_NEVER    0u
 #define PROFILE_COMPAT_POLICY_PHYSICAL 1u
 #define PROFILE_COMPAT_POLICY_COMMAND  2u
 #define PROFILE_COMPAT_POLICY_ALWAYS   3u
+
+/*
+ * Frame 0 byte [3] bit 5: a countdown is running and this node is going
+ * somewhere. Layer C's, set through profile_compat_set_pending_switch().
+ *
+ * It is never set on a node with announce = silent, and that is not this
+ * file's rule to enforce - a silent node simply never calls the setter, along
+ * with never publishing a locator and never emitting an announcement frame.
+ * Three absences, one decision, and it lives in profile_private.c where the
+ * setting is read.
+ */
+#define PROFILE_COMPAT_PENDING_SWITCH  0x20u
 
 /* Attestation mode, frame 0 byte [3] bit 4. Opportunistic substitution is
  * specified so it is a later configuration change rather than a break, and is
@@ -285,18 +300,59 @@ struct profile_compat_cfg {
  * a bounded window without owning a timer and a whole 60-second window is
  * testable in a millisecond.
  *
- * THE ONE INTERLOCK, recorded here because C8 is the file that will trip over
- * it: Layer C's SWITCH/RETURN frames are pinned at indices 2 and 3, which is
- * where the first client's block also starts. A countdown and an enrolment
- * window must not run at once, and whichever of the two arrives second is the
- * one that is refused. C8 owns that arbitration; today there is one client.
+ * THE ONE INTERLOCK, and C8 is the phase that owns it: Layer C's SWITCH/RETURN
+ * frames are pinned at indices 2 and 3, which is where the first client's block
+ * also starts. A countdown and an enrolment window must not run at once, and
+ * whichever of the two arrives second is the one that is refused.
+ *
+ * It is arbitrated in TWO places and they answer two different questions:
+ *
+ *   profile_compat_client_busy()  is the REQUEST-time answer, and it is the one
+ *                                 that matters. A window that opened while a
+ *                                 countdown was running would burn a pairing
+ *                                 counter, enter pairing mode and transmit
+ *                                 nothing; a countdown that started while a
+ *                                 window was open would tear a public key in
+ *                                 half. Both callers ask before they commit,
+ *                                 and both count the refusal.
+ *   the claim path                is the BACKSTOP. If two clients somehow
+ *                                 answer non-zero in one slot, the first one
+ *                                 contributes and the second's frames are not
+ *                                 taken. That keeps the set's size a number
+ *                                 both ends agree about even when the rule
+ *                                 above has been broken, rather than putting a
+ *                                 ten-frame set on the air that nothing can
+ *                                 reassemble.
+ *
+ * Two slots, not one, because both clients are installed for the life of the
+ * node and are idle almost all of it: the exclusion is between two ACTIVITIES,
+ * not between two registrations, and a seam that arbitrated at attach time
+ * would refuse whichever module was wired up second, forever.
  */
+#define PROFILE_COMPAT_CLIENTS_MAX 2u
+
 struct profile_compat_client {
 	/* Frames this client contributes right now: 0 when it is idle. */
 	uint8_t (*frames)(void *user, uint64_t now_us);
 	/* Fill bytes [2..7] of the client's frame `i`, 0-based within the
 	 * client's own block. Return false to abandon the slot. */
 	bool    (*frame)(void *user, uint8_t i, uint8_t *payload);
+	/*
+	 * Optional. Every transmitted message, INCLUDING the ones this client
+	 * did not build and the ones no client built - the same discipline
+	 * profile_compat_sent() already owes the attestation layer, and for a
+	 * related reason: Layer C's countdown is measured in transmitted
+	 * messages, so a client that counted only its own frames would count
+	 * eight of them and call it sixty-four.
+	 *
+	 * It is also the only way a client learns the FINAL bytes of a frame it
+	 * contributed. Byte [0] carries a toggle that changes per message and
+	 * byte [1] carries a count that changes with the set, so a frame's
+	 * transmitted form is not knowable when its payload is built - and an
+	 * announcement whose tag has to cover all eight transmitted bytes has
+	 * to see them.
+	 */
+	void    (*sent)(void *user, const uint8_t *body);
 	void     *user;
 };
 
@@ -314,8 +370,15 @@ struct profile_compat {
 	 * frame 0 without asking the layer that holds the key for it again. */
 	uint8_t hint[PROFILE_COMPAT_HINT_BYTES];
 
-	struct profile_compat_client client;
-	bool                        have_client;
+	struct profile_compat_client clients[PROFILE_COMPAT_CLIENTS_MAX];
+	uint8_t                      n_clients;
+	/* Which client's block this slot is building, 1-based; 0 for none. Set
+	 * when the frame count is taken and read when a frame is asked for, so
+	 * the two cannot disagree inside one slot. */
+	uint8_t                      active_client;
+
+	/* Frame 0 byte [3] bit 5. */
+	bool                        pending_switch;
 
 	/* A beacon frame whose slot was taken by an attestation page. It rides
 	 * the next slot this client is offered rather than the next cycle - see
@@ -357,9 +420,55 @@ int profile_compat_init(struct profile_compat *pc,
  * never learns a client existed. */
 int profile_compat_attach(struct profile_compat *pc, struct profile_sched *ps);
 
-/* Install or replace this page's own client. NULL removes it. */
+/*
+ * Install or replace one of this page's clients, keyed by `user`: a second call
+ * with the same `user` replaces that client rather than taking a second slot.
+ * NULL removes them all.
+ *
+ * Returns 0, -EINVAL for a client with no frames/frame callback, or -ENOSPC
+ * when both slots are held by other users. There are two, and the argument for
+ * two rather than sixteen is the interlock above: only one client may be ACTIVE
+ * at a time, so a third would be a third thing that could not run.
+ */
 int profile_compat_set_client(struct profile_compat *pc,
 			      const struct profile_compat_client *client);
+
+/*
+ * THE INTERLOCK, asked before committing to an activity: is another client
+ * contributing frames right now?
+ *
+ * `except_user` is the asking client's own `user` pointer, so a module never
+ * sees itself as the reason it cannot start. NULL asks about every client.
+ *
+ * It POLLS rather than reading a cached flag, and the side effect is wanted: a
+ * client with a bounded window discovers here that the window has closed, so a
+ * countdown is not refused by an enrolment window that expired thirty seconds
+ * ago and has not been asked since.
+ */
+bool profile_compat_client_busy(struct profile_compat *pc, uint64_t now_us,
+				const void *except_user);
+
+/*
+ * Frame 0 byte [3] bit 5, the pending-switch bit, and frame 1's locator.
+ *
+ * Both are Layer C's (src/profiles/profile_private.c) and neither is set by
+ * this file on its own behalf. The locator is REFUSED on a `never` node with
+ * -EINVAL, exactly as a `never` node carrying one is refused at init: a
+ * receiver that saw private-available = 0 beside a locator would have to decide
+ * which half of the beacon to believe, and the answer is neither.
+ *
+ * A node with announce = silent simply never calls either one. That is the
+ * whole of `silent` on this page: no locator field, no pending-switch bit, and
+ * no announcement frames, so a capture contains nothing to correlate.
+ *
+ * Both answer 0 and do nothing on an advertise = off node, which has no beacon
+ * to carry a bit in - the same non-error profile_compat_set_pairing_open()
+ * returns for the same reason.
+ */
+int profile_compat_set_pending_switch(struct profile_compat *pc, bool pending);
+
+int profile_compat_set_locator(struct profile_compat *pc, uint8_t device_type,
+			       uint16_t device_number, uint16_t period);
 
 /*
  * Flip the pairing-open capability bit and re-encode frame 0.

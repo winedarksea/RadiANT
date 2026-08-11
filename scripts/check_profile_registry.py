@@ -742,11 +742,21 @@ def check_reserved_space(problems) -> None:
 COMPAT_DOM_BYTE = 0x04
 COMPAT_SUBTYPES = {"COMPAT_SUBTYPE_TIER_I": 0x01,
                    "COMPAT_SUBTYPE_TIER_II": 0x02,
-                   "COMPAT_SUBTYPE_ANNOUNCE": 0x03}
+                   "COMPAT_SUBTYPE_ANNOUNCE": 0x03,
+                   # compat-C8's, and the one that is not under K_auth: an
+                   # inbound command is verified under K_cmd. Pinned here for
+                   # the reason 0x03 was pinned before the layer that emits it
+                   # existed - a nibble spent twice is two claims one tag
+                   # cannot tell apart.
+                   "COMPAT_SUBTYPE_COMMAND": 0x04}
 COMPAT_WINDOW_SIZES = (4, 8, 16, 32)
 COMPAT_COUNTDOWN_LENGTHS = (16, 32, 64, 128)
 COMPAT_TIER_I_TAG_BITS = 40
 COMPAT_TIER_II_TAG_BITS = 48
+# An inbound command carries three bytes of its own before its tag, so 8 - 3 = 5
+# is what is left. The announcement's tag is Tier II's width for the same kind
+# of reason: it has a frame to itself and bytes [2..7] are what is left.
+COMPAT_CMD_TAG_BITS = 40
 
 # Two page numbers, not three: SWITCH and RETURN ride the beacon page's frame
 # set. A row claiming a third is the drift this exists to catch.
@@ -1077,6 +1087,8 @@ COMPAT_CONSTANT_RULES = [
      "bytes now that no window index is implied"),
     ("COMPAT_TIER_II_TAG_BITS", COMPAT_TIER_II_TAG_BITS,
      "Tier II's tag length"),
+    ("COMPAT_CMD_TAG_BITS", COMPAT_CMD_TAG_BITS,
+     "the inbound command's tag length"),
     ("COMPAT_WINDOW_SIZES", COMPAT_WINDOW_SIZES,
      "the legal Tier II window set"),
     ("COMPAT_COUNTDOWN_LENGTHS", COMPAT_COUNTDOWN_LENGTHS,
@@ -1093,6 +1105,9 @@ COMPAT_C_DEFINES = {
     "RADIANT_SEC_COMPAT_SUBTYPE_TIER_I": COMPAT_SUBTYPES["COMPAT_SUBTYPE_TIER_I"],
     "RADIANT_SEC_COMPAT_SUBTYPE_TIER_II": COMPAT_SUBTYPES["COMPAT_SUBTYPE_TIER_II"],
     "RADIANT_SEC_COMPAT_SUBTYPE_ANNOUNCE": COMPAT_SUBTYPES["COMPAT_SUBTYPE_ANNOUNCE"],
+    "RADIANT_SEC_COMPAT_SUBTYPE_COMMAND": COMPAT_SUBTYPES["COMPAT_SUBTYPE_COMMAND"],
+    "RADIANT_SEC_COMPAT_ANNOUNCE_TAG_BYTES": COMPAT_TIER_II_TAG_BITS // 8,
+    "RADIANT_SEC_COMPAT_CMD_TAG_BYTES": COMPAT_CMD_TAG_BITS // 8,
     "RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES": COMPAT_TIER_I_TAG_BITS // 8,
     "RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES": COMPAT_TIER_II_TAG_BITS // 8,
     "RADIANT_SEC_COMPAT_N_MIN": min(COMPAT_WINDOW_SIZES),

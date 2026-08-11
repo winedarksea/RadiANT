@@ -107,6 +107,12 @@ target_sources(app PRIVATE
   # keyholder is a key operation. It names no page number and no frame index,
   # so the boundary profile_compat.c draws is not widened by it.
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_enrol.c"
+  # Layer C (compat-C8): the private-mode switch. The FIFTH file here that
+  # includes a radiant_core header and the third that has to - deriving the
+  # locator needs K_id and verifying a command needs K_cmd, and both live where
+  # the root key does. It names no page number of its own: the announcement is
+  # two frames of the beacon page's set, which profile_compat.h already owns.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_private.c"
 )
 target_include_directories(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles")

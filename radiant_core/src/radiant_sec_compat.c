@@ -910,6 +910,270 @@ int radiant_sec_compat_hint(uint8_t ch, uint32_t epoch,
 	return hint_of(&c->k_id, epoch, out);
 }
 
+/* ── The derived locator ────────────────────────────────────────────────────
+ *
+ * trunc16( CMAC(K_id, "priv" || epoch[4 LE]) ), 0x0000 dropped, then the same
+ * with a 1-byte suffix 0x00, 0x01, ... The header carries the argument for
+ * folding the exclusion and the collision rule into one walk; this is the walk.
+ *
+ * READ LITTLE-ENDIAN, which is the same choice the beacon's locator field
+ * already made: a device number goes on the air low byte first, so composing
+ * the first two CMAC bytes low-first means the bytes on the air ARE the first
+ * two bytes of the tag, in tag order, and a capture can be checked against a
+ * CMAC without reversing anything.
+ */
+#define COMPAT_LOCATOR_MSG_MAX 9u   /* "priv" + epoch[4] + one suffix byte */
+#define COMPAT_LOCATOR_WALK    257u /* the unsuffixed derivation plus all 256 */
+
+static int locator_derive(const struct radiant_sec_key *k_id, uint32_t epoch,
+			  uint16_t derivation, uint16_t *out)
+{
+	static const char label[] = RADIANT_SEC_COMPAT_LOCATOR_LABEL;
+	uint8_t msg[COMPAT_LOCATOR_MSG_MAX];
+	uint8_t tag[RADIANT_SEC_BLOCK_BYTES];
+	uint8_t len;
+	int     rc;
+
+	/* sizeof - 1: the terminator is not on the air. Unlike a KDF block,
+	 * where the terminator IS the separator. */
+	memcpy(msg, label, sizeof(label) - 1u);
+	len = (uint8_t)(sizeof(label) - 1u);
+
+	msg[len++] = (uint8_t)(epoch & 0xFFu);
+	msg[len++] = (uint8_t)((epoch >> 8) & 0xFFu);
+	msg[len++] = (uint8_t)((epoch >> 16) & 0xFFu);
+	msg[len++] = (uint8_t)((epoch >> 24) & 0xFFu);
+
+	if (derivation > 0u) {
+		msg[len++] = (uint8_t)((derivation - 1u) & 0xFFu);
+	}
+
+	rc = radiant_sec_cmac(k_id, msg, len, tag);
+	if (rc == RADIANT_SEC_OK) {
+		*out = (uint16_t)((uint16_t)tag[0] | ((uint16_t)tag[1] << 8));
+	}
+	memset(tag, 0, sizeof(tag));
+	return rc;
+}
+
+int radiant_sec_compat_locator(uint8_t ch, uint32_t epoch, uint8_t attempt,
+			       uint16_t *out)
+{
+	const struct compat_ctx *c = ctx_of(ch);
+	uint16_t                 derivation;
+	uint16_t                 devnum = 0u;
+	uint8_t                  found = 0u;
+	int                      rc;
+
+	if (c == NULL || !c->used) {
+		return RADIANT_SEC_ENOKEY;
+	}
+	if (out == NULL) {
+		return RADIANT_SEC_EINVAL;
+	}
+
+	for (derivation = 0u; derivation < COMPAT_LOCATOR_WALK; derivation++) {
+		rc = locator_derive(&c->k_id, epoch, derivation, &devnum);
+		if (rc != RADIANT_SEC_OK) {
+			return rc;
+		}
+		/* The ANT wildcard, which a master cannot own. Dropped rather
+		 * than mapped onto a neighbouring number, because "add one" is
+		 * a second rule that a searcher has to implement identically
+		 * and the suffix walk is already here. */
+		if (devnum == RADIANT_SEC_COMPAT_LOCATOR_WILDCARD) {
+			continue;
+		}
+		if (found == attempt) {
+			*out = devnum;
+			return RADIANT_SEC_OK;
+		}
+		found++;
+	}
+
+	/* 256 consecutive zeros under one key. Bounded rather than believed. */
+	return RADIANT_SEC_EINVAL;
+}
+
+/* ── The announcement's tag, and the command's ──────────────────────────────
+ *
+ * Both are one CMAC over a nonce block and the covered bytes, and both derive
+ * the counter from time on both sides rather than carrying one. The header says
+ * why that is exact rather than tolerant, and what the exactness costs.
+ */
+static int tagged(const struct radiant_sec_key *k, uint32_t epoch,
+		  uint16_t devnum, uint16_t counter, uint8_t sub,
+		  const uint8_t *msg, uint8_t len, uint8_t *out, uint8_t taglen)
+{
+	struct radiant_sec_cmac_ctx ctx;
+	uint8_t block[RADIANT_SEC_BLOCK_BYTES];
+	uint8_t tag[RADIANT_SEC_BLOCK_BYTES];
+	int     rc;
+
+	radiant_sec_compat_nonce_block(block, epoch, devnum, counter, sub);
+
+	rc = radiant_sec_cmac_init(&ctx, k);
+	if (rc == RADIANT_SEC_OK) {
+		rc = radiant_sec_cmac_update(&ctx, block, sizeof(block));
+	}
+	if (rc == RADIANT_SEC_OK) {
+		rc = radiant_sec_cmac_update(&ctx, msg, len);
+	}
+	if (rc == RADIANT_SEC_OK) {
+		rc = radiant_sec_cmac_final(&ctx, tag);
+	}
+	if (rc == RADIANT_SEC_OK) {
+		memcpy(out, tag, taglen);
+	}
+
+	memset(&ctx, 0, sizeof(ctx));
+	memset(tag, 0, sizeof(tag));
+	memset(block, 0, sizeof(block));
+	return rc;
+}
+
+/*
+ * Armed enough to authenticate, which is a WEAKER condition than ctx_armed():
+ * a key and an epoch, and no requirement that either attestation tier is
+ * switched on. `physical` + `silent` is the one policy combination permitted
+ * with both tiers off, and a node in it still has a key - so refusing here on
+ * the tier switches would refuse the exempted configuration for a reason that
+ * has nothing to do with it.
+ */
+static bool ctx_keyed(const struct compat_ctx *c)
+{
+	return c != NULL && c->used && c->epoch_set && c->k_root.bits != 0u;
+}
+
+static int announce_tag(struct compat_ctx *c, uint64_t when_us,
+			const uint8_t *msg, uint8_t len, uint8_t *out)
+{
+	int rc;
+
+	rc = apply_wraps(c, interval_index(c, when_us) >> 16);
+	if (rc != RADIANT_SEC_OK) {
+		return rc;
+	}
+	return tagged(&c->k_auth, c->epoch, c->devnum,
+		      (uint16_t)(interval_index(c, when_us) & 0xFFFFu),
+		      RADIANT_SEC_COMPAT_SUBTYPE_ANNOUNCE, msg, len, out,
+		      RADIANT_SEC_COMPAT_ANNOUNCE_TAG_BYTES);
+}
+
+int radiant_sec_compat_announce_tag(uint8_t ch, uint64_t now_us,
+				    const uint8_t *msg, uint8_t len,
+				    uint8_t out[RADIANT_SEC_COMPAT_ANNOUNCE_TAG_BYTES])
+{
+	struct compat_ctx *c = ctx_of(ch);
+
+	if (!ctx_keyed(c)) {
+		return RADIANT_SEC_ENOKEY;
+	}
+	if (msg == NULL || out == NULL || len != RADIANT_SEC_COMPAT_MSG_BYTES) {
+		return RADIANT_SEC_EINVAL;
+	}
+	return announce_tag(c, now_us, msg, len, out);
+}
+
+int radiant_sec_compat_announce_verify(uint8_t ch, uint64_t t_sync,
+				       const uint8_t *msg, uint8_t len,
+				       const uint8_t *tag)
+{
+	struct compat_ctx *c = ctx_of(ch);
+	uint8_t            want[RADIANT_SEC_COMPAT_ANNOUNCE_TAG_BYTES];
+	int                rc;
+
+	if (!ctx_keyed(c)) {
+		return RADIANT_SEC_ENOKEY;
+	}
+	if (msg == NULL || tag == NULL || len != RADIANT_SEC_COMPAT_MSG_BYTES) {
+		return RADIANT_SEC_EINVAL;
+	}
+
+	rc = announce_tag(c, t_sync, msg, len, want);
+	if (rc != RADIANT_SEC_OK) {
+		return rc;
+	}
+	/* No verdict hook and no counter here. An announcement is not an
+	 * attestation: it says where the stream is going, not that the stream
+	 * is authentic, and folding it into the stream verdict would let a
+	 * refused announcement read as a stream that stopped verifying. */
+	return (memcmp(want, tag, sizeof(want)) == 0) ? RADIANT_SEC_OK
+						      : RADIANT_SEC_EBADMAC;
+}
+
+static int cmd_tag(struct compat_ctx *c, uint64_t when_us, const uint8_t *msg,
+		   uint8_t len, uint8_t *out)
+{
+	struct radiant_sec_key k_cmd;
+	int                    rc;
+
+	/*
+	 * Derived per call and destroyed. A command is a rare event - a node
+	 * takes one when a person asks for privacy - so caching K_cmd would
+	 * spend a key slot in every context for one CMAC a minute, and the
+	 * slot is the scarce thing on a node with no key store.
+	 */
+	memset(&k_cmd, 0, sizeof(k_cmd));
+	rc = radiant_sec_kdf(&c->k_root, RADIANT_SEC_LABEL_CMD, c->epoch,
+			     c->base_devnum, &k_cmd);
+	if (rc != RADIANT_SEC_OK) {
+		return rc;
+	}
+	rc = tagged(&k_cmd, c->epoch, c->devnum,
+		    (uint16_t)(interval_index(c, when_us) & 0xFFFFu),
+		    RADIANT_SEC_COMPAT_SUBTYPE_COMMAND, msg, len, out,
+		    RADIANT_SEC_COMPAT_CMD_TAG_BYTES);
+	radiant_sec_key_destroy(&k_cmd);
+	return rc;
+}
+
+int radiant_sec_compat_cmd_tag(uint8_t ch, uint64_t now_us, const uint8_t *msg,
+			       uint8_t len,
+			       uint8_t out[RADIANT_SEC_COMPAT_CMD_TAG_BYTES])
+{
+	struct compat_ctx *c = ctx_of(ch);
+	int                rc;
+
+	if (!ctx_keyed(c)) {
+		return RADIANT_SEC_ENOKEY;
+	}
+	if (msg == NULL || out == NULL || len != RADIANT_SEC_COMPAT_CMD_BYTES) {
+		return RADIANT_SEC_EINVAL;
+	}
+	rc = apply_wraps(c, interval_index(c, now_us) >> 16);
+	if (rc != RADIANT_SEC_OK) {
+		return rc;
+	}
+	return cmd_tag(c, now_us, msg, len, out);
+}
+
+int radiant_sec_compat_cmd_verify(uint8_t ch, uint64_t t_sync,
+				  const uint8_t *msg, uint8_t len,
+				  const uint8_t *tag)
+{
+	struct compat_ctx *c = ctx_of(ch);
+	uint8_t            want[RADIANT_SEC_COMPAT_CMD_TAG_BYTES];
+	int                rc;
+
+	if (!ctx_keyed(c)) {
+		return RADIANT_SEC_ENOKEY;
+	}
+	if (msg == NULL || tag == NULL || len != RADIANT_SEC_COMPAT_CMD_BYTES) {
+		return RADIANT_SEC_EINVAL;
+	}
+	rc = apply_wraps(c, interval_index(c, t_sync) >> 16);
+	if (rc != RADIANT_SEC_OK) {
+		return rc;
+	}
+	rc = cmd_tag(c, t_sync, msg, len, want);
+	if (rc != RADIANT_SEC_OK) {
+		return rc;
+	}
+	return (memcmp(want, tag, sizeof(want)) == 0) ? RADIANT_SEC_OK
+						      : RADIANT_SEC_EBADMAC;
+}
+
 /*
  * What a candidate epoch is tested against. An internal struct, which the
  * no-structs-in-signatures rule permits and in fact wants: the alternative is

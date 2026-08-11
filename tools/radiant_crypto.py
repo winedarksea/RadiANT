@@ -460,6 +460,41 @@ def compat_announce_tag(k_auth: bytes, epoch: int, devnum: int,
     return cmac(k_auth, block)[:COMPAT_TIER_II_TAG_BITS // 8]
 
 
+#: The inbound command's subtype, and the one that is NOT under K_auth: a
+#: command is verified under K_cmd, which had no user anywhere until Layer C's
+#: trigger needed one. Two separations rather than one - the key stops a
+#: recorded attestation being replayed into the command path however the bytes
+#: are rearranged, and the subtype separates it inside the block anyway, because
+#: "it is under a different key" is a property of the deployment rather than of
+#: the block.
+COMPAT_SUBTYPE_COMMAND = 0x04
+
+#: 40 bits, because a command carries three bytes of its own before the tag and
+#: 8 - 3 = 5 is what is left.
+COMPAT_CMD_TAG_BITS = 40
+COMPAT_CMD_BYTES = 3
+
+
+def compat_command_tag(k_cmd: bytes, epoch: int, devnum: int,
+                       att_counter: int, command) -> bytes:
+    """An inbound command's tag: trunc40( CMAC(K_cmd, nonce_block || cmd) ).
+
+    THE NODE IS THE VERIFIER, which is the opposite direction from every other
+    tag here, and it is why the key is different: a receiver that can verify the
+    node's attestation must not thereby be able to forge a command to it.
+
+    `att_counter` is Tier I's counter again, derived from time on both sides and
+    carried nowhere, so a recorded command replayed into a later interval fails
+    the tag rather than being noticed afterwards.
+    """
+    if len(command) != COMPAT_CMD_BYTES:
+        raise ValueError("a command covers %d bytes before its tag, got %d"
+                         % (COMPAT_CMD_BYTES, len(command)))
+    block = compat_nonce_block(epoch, devnum, att_counter,
+                               COMPAT_SUBTYPE_COMMAND) + bytes(command)
+    return cmac(k_cmd, block)[:COMPAT_CMD_TAG_BITS // 8]
+
+
 #: The beacon's key-group hint is three bytes wide: enough for a receiver
 #: holding a handful of roots to skip the ones that cannot match, and not enough
 #: to be an identifier. The 24 bits are not a security claim - a collision is
@@ -483,6 +518,78 @@ def compat_key_group_hint(k_id: bytes, epoch: int) -> bytes:
     """
     return cmac(k_id, (epoch & 0xFFFFFFFF).to_bytes(4, "little"))[
         :COMPAT_HINT_BITS // 8]
+
+
+#: The derived private-mode locator. "priv" is a CMAC MESSAGE PREFIX and not a
+#: fifth KDF label: a KDF block is sixteen bytes beginning 0x01 and this message
+#: is eight or nine beginning 'p', so the two inputs cannot collide even though
+#: both are CMACs under a derived key.
+#:
+#: 0x0000 is excluded because it is the ANT wildcard and a master cannot own it,
+#: and a collision is answered by rederiving with a 1-byte suffix 0x00, 0x01,
+#: ... - of which a searching keyholder tries COMPAT_LOCATOR_TRIES before
+#: falling back to a wildcard search on the private device type.
+COMPAT_LOCATOR_LABEL = b"priv"
+COMPAT_LOCATOR_WILDCARD = 0x0000
+COMPAT_LOCATOR_TRIES = 4
+COMPAT_LOCATOR_BITS = 16
+
+#: The bound on the walk: the unsuffixed derivation plus every 1-byte suffix.
+#: Reaching it needs 256 consecutive zeros under one key, so it is a bug rather
+#: than a collision - and it is a bound rather than a `while True`.
+COMPAT_LOCATOR_WALK = 257
+
+
+def compat_locator_derivation(k_id: bytes, epoch: int, derivation: int) -> int:
+    """One candidate: trunc16( CMAC(K_id, "priv" || epoch[4 LE] [|| suffix]) ).
+
+    `derivation` 0 is unsuffixed; 1, 2, 3, ... append the suffix bytes 0x00,
+    0x01, 0x02, ... The result is read LITTLE-ENDIAN, which is the same choice
+    the beacon's locator field already made: a device number goes on the air low
+    byte first, so the two bytes on the air ARE the first two bytes of the tag in
+    tag order and a capture can be checked against a CMAC without reversing
+    anything.
+
+    This is the raw candidate INCLUDING the excluded wildcard.
+    compat_private_locator() is the sequence a node and a searcher both walk.
+    """
+    if not 0 <= derivation < COMPAT_LOCATOR_WALK:
+        raise ValueError("derivation %r is outside the bounded walk"
+                         % (derivation,))
+    message = COMPAT_LOCATOR_LABEL + (epoch & 0xFFFFFFFF).to_bytes(4, "little")
+    if derivation > 0:
+        message += bytes([(derivation - 1) & 0xFF])
+    return int.from_bytes(cmac(k_id, message)[:COMPAT_LOCATOR_BITS // 8],
+                          "little")
+
+
+def compat_private_locator(k_id: bytes, epoch: int, attempt: int = 0) -> int:
+    """Where the node goes when it switches, as a device number.
+
+    Any holder of the root computes this from the epoch it already has, which is
+    what makes the SWITCH announcement an OPTIMISATION THAT SAVES A SEARCH
+    rather than the only way to find the node: a receiver enrolled after the
+    switch finds a node that is already private with nothing to have missed, and
+    an observer without the key cannot predict the number at all.
+
+    `attempt` walks the candidates a searcher tries in order. TWO RULES ARE
+    FOLDED INTO ONE WALK: the excluded 0x0000 and the collision suffix are two
+    different reasons to move to the next derivation, so the sequence is
+    "unsuffixed, then suffix 0x00, 0x01, ..., with any derivation that comes out
+    0x0000 dropped". Both ends therefore skip the same candidate - a node and a
+    searcher that disagreed about whether a zero counts would disagree about
+    every candidate after it.
+    """
+    found = 0
+    for derivation in range(COMPAT_LOCATOR_WALK):
+        devnum = compat_locator_derivation(k_id, epoch, derivation)
+        if devnum == COMPAT_LOCATOR_WILDCARD:
+            continue
+        if found == attempt:
+            return devnum
+        found += 1
+    raise ValueError("256 consecutive wildcard derivations under one key; "
+                     "that is a bug in the key, not a collision")
 
 
 def tag_byte_index(counter: int, window: int) -> int:

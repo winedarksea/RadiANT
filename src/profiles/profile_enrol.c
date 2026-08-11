@@ -119,6 +119,25 @@ static int window_open(struct profile_enrol *pe, uint64_t now_us)
 	}
 
 	/*
+	 * THE INTERLOCK, from this side. Layer C's SWITCH/RETURN frames occupy
+	 * the same frame indices this window's six do, and profile_compat.h
+	 * states the rule: a countdown and a window must not run at once, and
+	 * whoever is second is refused.
+	 *
+	 * Asked HERE rather than at the trigger, because this is the last point
+	 * before anything is spent: refusing after open_pairing() would have
+	 * burnt a pairing counter for a window that transmits nothing, and ADR
+	 * 0009 does not roll that counter back. The refusal is counted for the
+	 * same reason every other one is - a node being asked repeatedly is a
+	 * node somebody is working on.
+	 */
+	if (pe->compat != NULL &&
+	    profile_compat_client_busy(pe->compat, now_us, pe)) {
+		pe->windows_refused++;
+		return -EBUSY;
+	}
+
+	/*
 	 * The scalar and the public key come from the node, through the seam,
 	 * and the counter-advance-before-transmission rule is enforced on that
 	 * side. If it refuses, NOTHING here changes state: no window, no
@@ -201,6 +220,11 @@ int profile_enrol_attach(struct profile_enrol *pe, struct profile_compat *pc)
 		return -EINVAL;
 	}
 
+	/* Zeroed rather than field-by-field: the seam grew an optional `sent`
+	 * callback for Layer C's countdown, and a stack struct filled member by
+	 * member is how an added member becomes a call through a garbage
+	 * pointer in a module that never asked for it. */
+	memset(&client, 0, sizeof(client));
 	client.frames = profile_enrol_frame_count;
 	client.frame = profile_enrol_frame;
 	client.user = pe;

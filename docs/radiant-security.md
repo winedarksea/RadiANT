@@ -1541,7 +1541,7 @@ That is not a degraded mode; it is the setting most straps should ship in.
   magnet, strap re-seat). No over-air path exists at all.
 - **`command`** — physical action *or* an authenticated command from a paired
   keyholder, using the existing `RADIANT_SEC_LABEL_CMD` key. A strict superset
-  of `physical`.
+  of `physical`. Its bytes are below.
 - **`always`** — never appears as an ANT+ sensor; boots straight onto `0x60`.
 
 Three rules on top:
@@ -1568,6 +1568,50 @@ Three rules on top:
   trigger to authenticate, so that combination is permitted with both tiers off
   — a button-only, manually-provisioned node whose only on-air security surface
   is the ciphertext itself.
+
+#### The command's bytes, and the key they are under
+
+The trigger is one inbound eight-byte message, arriving as **acknowledged
+data** exactly as an enrolment frame does:
+
+```
+[0]     page number. Not examined by the receiving layer - the caller has
+        already filtered on it - but COVERED BY THE TAG, so nothing an
+        attacker can rewrite sits outside it
+[1]     0x00 = (index 0 << 4) | (count 1 - 1): a ONE-FRAME SET on the framing
+        convention of section 11.5. That is what keeps the command off a page
+        number of its own, and what makes it unmistakable for an enrolment
+        frame, whose count is six
+[2]     the operation: 0x01 go private, 0x02 return to compat. TWO EXIST
+[3..7]  trunc40( CMAC(K_cmd, nonce_block || [0..2]) ), sub = 0x04
+```
+
+- **Under `K_cmd`, not `K_auth`, and that is the whole reason the key hierarchy
+  has a fourth label.** Every receiver holds `K_auth` in order to *verify* the
+  node; if commands were signed with it, every receiver could mute the sensor
+  for every other one. `sub = 0x04` separates it inside the block as well,
+  because "it is under a different key" is a property of the deployment rather
+  than of the block.
+- **The counter is Tier I's, derived from time on both sides and carried
+  nowhere.** A recorded command replayed into a later interval fails the tag.
+  There is no counter field a sender could choose.
+- **There is no policy operation and its absence is deliberate.** An
+  unrecognised operation is counted and dropped rather than reserved for a
+  later meaning, so a well-tagged message shaped like a policy change changes
+  nothing. See the rejected alternatives in ADR 0008.
+- **Accepted commands are rate-limited**, one per minute by default, measured
+  from the last *accepted* one. That is not a defence against an attacker - the
+  tag is that, and a party holding `K_cmd` is a keyholder - it is a bound on
+  what one buggy or captured receiver can do to the other N-1 listeners, each
+  of whom pays a countdown and a retune for every command the node takes.
+
+**The Kconfig symbols**, in `src/profiles/Kconfig` beside the `enrol` choice:
+`RADIANT_PRIVATE_POLICY_NEVER` / `_PHYSICAL` / `_COMMAND` / `_ALWAYS`,
+`RADIANT_PRIVATE_ANNOUNCE_BROADCAST` / `_SILENT`, `RADIANT_ATTEST_ID`,
+`RADIANT_PRIVATE_COUNTDOWN` (K) and `RADIANT_PRIVATE_MAX_S`. The dependency
+above is expressed there as `depends on`, so the refused combinations cannot be
+selected, and again as a `BUILD_ASSERT` in `src/profiles/profile_private.c`, so
+they cannot be reached by a defconfig fragment that bypasses the choice.
 
 **On `devnum`:** `fixed` is the default because a stable device number is a
 feature users rely on — people learn their sensor's number, and seeing it is how
