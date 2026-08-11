@@ -595,6 +595,35 @@ void radiant_sec_get_stats(uint8_t ch, struct radiant_sec_stats *out)
 	*out = c->stats;
 }
 
+void radiant_sec_get_state(uint8_t ch, struct radiant_sec_state *out)
+{
+	const struct sec_ctx *c = ctx_of(ch);
+
+	if (out == NULL) {
+		return;
+	}
+	memset(out, 0, sizeof(*out));
+	if (c == NULL) {
+		out->last_verdict = RADIANT_SEC_VERDICT_CLEAR;
+		return;
+	}
+
+	out->switches = c->switches;
+	out->w = c->w;
+	out->page_lo = c->page_lo;
+	out->page_hi = c->page_hi;
+	out->epoch = c->epoch;
+	out->last_verdict = c->last_verdict;
+	out->secured = ctx_armed(c);
+
+	if (c->epoch_set) {
+		/* Truncated to 16 bits because that is the counter's own width -
+		 * the high bits are the epoch's business, not this field's. */
+		out->expected_index =
+			(uint16_t)expected_index(c, (uint64_t)radiant_radio_now());
+	}
+}
+
 /* ── Transmit ───────────────────────────────────────────────────────────── */
 
 /*

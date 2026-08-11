@@ -65,6 +65,8 @@ from ant_probe import (  # noqa: E402
 # each id is - is now carried by protocol/ant_wire.yaml's own description
 # fields, which is where the generator gets the comments in tools/ant_wire.py
 # and src/ant_wire.h from.
+import ant_sec  # noqa: E402
+
 from ant_wire import (  # noqa: E402,F401
     ADV_BURST_MODE_DISABLE,
     ADV_BURST_MODE_ENABLE,
@@ -79,6 +81,7 @@ from ant_wire import (  # noqa: E402,F401
     ENCRYPTION_INFO_SET_RNG_SEED,
     ENCRYPTION_KEY_SIZE,
     ENCRYPTION_USER_DATA_SIZE,
+    CHANNEL_IN_WRONG_STATE,
     INVALID_MESSAGE,
     INVALID_PARAMETER_PROVIDED,
     INVALID_SDU_MASK,
@@ -567,11 +570,122 @@ def check_encryption(dev, reader) -> list[str]:
     return problems
 
 
+def check_radiant_security(dev, reader) -> list[str]:
+    """Probe the RadiANT security messages, 0xF1-0xF4.
+
+    NOT ANT protocol. A stock ANT stick answers INVALID_MESSAGE to all four and
+    that is the correct answer, so an absent family is a result rather than a
+    failure - exactly like the encryption writes above.
+
+    Structured to leave the device as it was found. 0xF1 with no switches at
+    all is the last thing this does, because a probe that left a channel
+    transforming would make every later test on that channel read as garbage.
+    """
+    print("\n[7/7] RadiANT security (0xF1-0xF4)")
+
+    ch = 0
+
+    # 0xF4 first: it is the read arm, it is harmless, and its reply tells us
+    # whether the family is compiled in without writing anything.
+    got = request(dev, reader, ch, ant_sec.MESG_STATUS)
+    if isinstance(got, (int, type(None))):
+        print(f"  -- not compiled in (CONFIG_RADIANT_SEC_HOST_MESSAGES=n, "
+              f"the shipping default); status request answered {got}")
+        return []
+    if len(got) < ant_sec.STATUS_LEN:
+        print(f"  FAIL: status reply is {len(got)} bytes, want "
+              f"{ant_sec.STATUS_LEN}: {got.hex()}")
+        return ["radiant security: status reply misframed"]
+
+    st = ant_sec.decode_status(got)
+    print(f"  OK: channel {st.channel} switches={ant_sec.switches_str(st.switches)} "
+          f"W={st.w} pages=0x{st.page_lo:02X}..0x{st.page_hi:02X} "
+          f"epoch={st.epoch} verdict={ant_sec.verdict_str(st.verdict)}")
+
+    problems = []
+
+    # A key needs a channel ID, because the provisioning device number is bound
+    # into the KDF and antr_sec_key_set() reads it from the channel rather than
+    # taking it on the wire. Without one the answer is CHANNEL_IN_WRONG_STATE,
+    # which is the honest reply and not a fault - so this reports it and moves
+    # on rather than counting it as a problem.
+    code = command(dev, reader, ant_sec.MESG_SET_KEY,
+                   ant_sec.encode_set_key(ch, bytes(range(16))))
+    if code == RESPONSE_NO_ERROR:
+        print("  OK: 128-bit root key accepted")
+    else:
+        print(f"  -- key refused, code {code} (a channel ID must be set first: "
+              "the provisioning device number is bound into the KDF)")
+
+    # A key that is not 128 bits must be refused. This is the one write whose
+    # rejection is the interesting outcome.
+    code = command(dev, reader, ant_sec.MESG_SET_KEY,
+                   bytes([ch, 192]) + bytes(16))
+    if code in (INVALID_MESSAGE, INVALID_PARAMETER_PROVIDED,
+                CHANNEL_IN_WRONG_STATE):
+        print(f"  OK: a 192-bit key is refused, code {code}")
+    else:
+        print(f"  FAIL: a 192-bit key answered {code}")
+        problems.append("radiant security: an unsupported key length was accepted")
+
+    # Descriptor encryption is refused in v1: the descriptor has no counter and
+    # therefore no nonce. Underspecified rather than merely unbuilt, which is
+    # why it must not quietly succeed.
+    code = command(dev, reader, ant_sec.MESG_CONFIG,
+                   bytes([ch, ant_sec.SW_CONF | ant_sec.SW_DESC_CONF, 2,
+                          0x01, 0x0F]))
+    if code == RESPONSE_NO_ERROR:
+        print("  FAIL: descriptor encryption was accepted; it has no nonce source")
+        problems.append("radiant security: descriptor encryption accepted")
+    else:
+        print(f"  OK: descriptor encryption refused, code {code}")
+
+    # An illegal W must be refused: W has to divide 256 and 65536 or the spread
+    # MAC stops resynchronising after a lost packet.
+    code = command(dev, reader, ant_sec.MESG_CONFIG,
+                   bytes([ch, ant_sec.SW_AUTH, 3, 0x01, 0x0F]))
+    if code == RESPONSE_NO_ERROR:
+        print("  FAIL: W=3 was accepted")
+        problems.append("radiant security: an illegal MAC window was accepted")
+    else:
+        print(f"  OK: W=3 refused, code {code}")
+
+    # Page 0x00 is the descriptor. Securing it would make the node's own
+    # descriptor unreadable and the node undiscoverable, from one host typo.
+    code = command(dev, reader, ant_sec.MESG_CONFIG,
+                   bytes([ch, ant_sec.SW_AUTH, 2, 0x00, 0x0F]))
+    if code == RESPONSE_NO_ERROR:
+        print("  FAIL: a page range starting at the descriptor was accepted")
+        problems.append("radiant security: page range low bound not enforced")
+    else:
+        print(f"  OK: a page range including the descriptor is refused, code {code}")
+
+    # There is no read arm for a key anywhere, and a request for one must be
+    # answered as though the device had never heard of the message.
+    got = request(dev, reader, ch, ant_sec.MESG_SET_KEY)
+    if isinstance(got, (int, type(None))):
+        print(f"  OK: a key read is refused, code {got}")
+    else:
+        print(f"  FAIL: 0xF2 answered a read with {got.hex()}")
+        problems.append("radiant security: a root key was readable")
+
+    # Leave the channel as it was found: no switches, default range.
+    command(dev, reader, ant_sec.MESG_CONFIG,
+            ant_sec.encode_config(ch, 0, 2, 0x01, 0x0F))
+    print("  OK: channel 0 left with no transforms on")
+    return problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serial", help="match a device whose serial ends with this")
     parser.add_argument("--port", help="talk to a UART build over this serial port")
     parser.add_argument("--baud", type=int, default=115200)
+    parser.add_argument("--radiant-security", action="store_true",
+                        help="also probe the RadiANT security messages "
+                             "(0xF1-0xF4). Off by default because a stock ANT "
+                             "stick answers INVALID_MESSAGE to all four and "
+                             "the noise is not informative.")
     parser.add_argument("-q", "--quiet", action="store_true")
     args = parser.parse_args()
 
@@ -599,6 +713,8 @@ def main() -> int:
     problems += check_sdu(dev, reader)
     problems += check_event_filter(dev, reader)
     problems += check_encryption(dev, reader)
+    if args.radiant_security:
+        problems += check_radiant_security(dev, reader)
 
     close_device(dev)
 

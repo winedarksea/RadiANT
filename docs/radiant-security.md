@@ -832,6 +832,64 @@ in v1; see section 5.2. A page range outside `0x01..0x1F` is refused the same
 way; see section 5.5. `0xF3` refuses an epoch less than or equal to the current
 one, and refuses epochs near `0xFFFFFFFF`; see section 3.5.
 
+### The two ordering rules, and why they are refusals rather than defaults
+
+`0xF1`–`0xF4` are implemented by `radiant_core/src/radiant_sec_host.c` behind
+`CONFIG_RADIANT_SEC_HOST_MESSAGES`, and reached from the host through
+`antr_sec_config()`, `antr_sec_key_set()`, `antr_sec_epoch_set()` and
+`antr_sec_status_get()`. Two orderings are mandatory, and both answer
+`ANTW_CHANNEL_IN_WRONG_STATE` rather than guessing:
+
+- **The channel ID must be set before the key.** `base_devnum` is bound into the
+  KDF and `0xF2` does not carry it — a device number the host had to repeat
+  correctly would be a second place for it to be wrong. Keying first would
+  derive every sub-key under device number 0, which fails as a link that
+  verifies nothing rather than as an error.
+- **The channel period must be set before the epoch.** The period is what turns
+  `us_into_epoch` into a packet index. A host-supplied period that disagreed
+  with the channel's would desynchronise the counter in a way that looks exactly
+  like clock drift, so `0xF3` does not carry one either.
+
+`ANTW_CHANNEL_IN_WRONG_STATE` rather than `ANTW_INVALID_PARAMETER_PROVIDED` is
+the useful distinction: the parameter is correct and arrived early, and a host
+that cannot tell those apart retries the wrong thing.
+
+### What the key path promises, and what it cannot
+
+`0xF2` is write-only. There is no read arm anywhere, and `MESG_REQUEST` for it
+is answered `ANTW_INVALID_MESSAGE` — the same answer a device that had never
+heard of `0xF2` would give.
+
+`src/ant_serial_bridge.c` wipes its frame buffer after dispatching one, because
+that buffer is static and long-lived and would otherwise hold the key until some
+later message happened to overwrite it. **That wipe narrows the window and does
+not close it**, and saying so is more useful than implying otherwise: the same
+bytes passed through the USB stack's ring buffer and the transport buffer
+beneath it, neither of which is reachable from that code, and they were in host
+memory before that. A root key that has crossed a USB cable should be treated as
+having been in host memory, because it has.
+
+### `0xF4` is what makes deliver-as-unverified auditable
+
+Section 3.2's deliver-but-mark policy only means anything if unverified cannot
+be silently treated as verified. A host that ignores the per-message verdict
+flag can still read the window counters here, so the failure mode "everything
+looked fine because nothing was checking" is visible from outside the device.
+
+The counters saturate rather than wrapping. A wrapped counter would let a long
+noisy run look quiet, and quiet is precisely the reading these exist to
+disprove — a field at `0xFFFF` means *at least* that many.
+
+An unkeyed channel answers with zeros and a `clear` verdict rather than an
+error. "No security on this channel" is a state a host must be able to read
+without treating an ordinary channel as a fault, and a host that learns to
+ignore one error learns to ignore them all.
+
+`tools/ant_sec.py` is the host-side encoder and decoder for all four, and
+`tools/ant_features.py --radiant-security` probes them against a real device —
+off by default, because a stock ANT stick answers `INVALID_MESSAGE` to all four
+and that noise is not informative.
+
 ### These were `0xE0`-`0xE4`, and the reason they moved is the useful part
 
 The first allocation was `0xE0`-`0xE4`. It was wrong: **sdk-ant defines

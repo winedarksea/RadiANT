@@ -41,3 +41,24 @@ tests:
     extra_configs:
       - CONFIG_RADIANT_SEC=y
       - CONFIG_RADIANT_SEC_HOST_MESSAGES=n
+
+  # The same again with the 0xF1-0xF4 adapter linked in.
+  #
+  # A third scenario rather than folding it into the second, because the two
+  # answer different questions. The second asks "does a compiled-in transform
+  # with every switch off change the air", which is the zero-cost claim and is
+  # sharpest with the smallest possible surface. This one asks "does the host
+  # adapter enforce what it promises" - the ordering rules, the refusals, and
+  # the status readback - and needs the adapter present to ask it at all.
+  radiant_core.api.sec_host:
+    tags:
+      - radiant_core
+      - radiant_api
+      - radiant_sec
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_configs:
+      - CONFIG_RADIANT_SEC=y
+      - CONFIG_RADIANT_SEC_HOST_MESSAGES=y

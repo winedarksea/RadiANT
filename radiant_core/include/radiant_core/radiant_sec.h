@@ -492,6 +492,34 @@ struct radiant_sec_stats {
 
 void radiant_sec_get_stats(uint8_t ch, struct radiant_sec_stats *out);
 
+/*
+ * The non-counter half of what 0xF4 reports: configuration and clock, as they
+ * stand now.
+ *
+ * Kept apart from radiant_sec_stats deliberately. Those are monotone counters a
+ * host subtracts to get a rate; these are levels a host reads to know what the
+ * channel is currently doing. Merging them would make "did this change" and
+ * "how many since last time" the same question, and they are not.
+ *
+ * `expected_index` is the packet index time says we should be at, which is what
+ * makes a stalled or drifting link visible to a host: it advances whether or not
+ * anything is arriving, so an expected index climbing against a flat verified
+ * count is a link that has gone quiet rather than a receiver that has gone
+ * wrong. Zero when no epoch is set.
+ */
+struct radiant_sec_state {
+	uint8_t                  switches;
+	uint8_t                  w;
+	uint8_t                  page_lo;
+	uint8_t                  page_hi;
+	uint32_t                 epoch;
+	uint16_t                 expected_index;
+	enum radiant_sec_verdict last_verdict;
+	bool                     secured;
+};
+
+void radiant_sec_get_state(uint8_t ch, struct radiant_sec_state *out);
+
 #else  /* !CONFIG_RADIANT_SEC */
 
 /*

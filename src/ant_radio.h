@@ -1184,4 +1184,105 @@ antr_err_t antr_crypto_info_set(uint8_t type, const uint8_t *info);
  */
 antr_err_t antr_crypto_info_get(uint8_t type, uint8_t *info);
 
+/* ── RadiANT payload security (X_AUTH, X_CONF) ─────────────────────────────── */
+
+#if defined(CONFIG_RADIANT_SEC_HOST_MESSAGES)
+
+/*
+ * Messages 0xF1-0xF4. NOT ANT protocol - ours, answered by no ANT device, and
+ * described in docs/radiant-security.md.
+ *
+ * Declared inside the #ifdef rather than unconditionally, which is the opposite
+ * of the encryption block above and is deliberate. Those four stand in for
+ * libant.a exports, so every backend owes them a definition whatever the bridge
+ * calls; these four are implemented by exactly one backend and by nothing else,
+ * so declaring them always would oblige the stub and sdk_ant builds to carry
+ * declining stubs for a feature they cannot have. The bridge's dispatch is under
+ * the same symbol, so the two halves appear and disappear together.
+ *
+ * ORDERING. A channel must have its ID before its key: the provisioning device
+ * number is bound into the KDF, and antr_sec_key_set() reads it from the channel
+ * rather than taking it on the wire. It must have its period before its epoch,
+ * for the same reason - the period is what turns a phase into a packet index.
+ * Both are refused with ANTW_CHANNEL_IN_WRONG_STATE rather than guessed.
+ */
+
+/**
+ * Configure the transforms on one channel. Message 0xF1.
+ *
+ * @param switches  Bit 0 X_CONF, bit 1 X_AUTH, bit 2 drop an unverified window
+ *                  instead of delivering it, bit 3 descriptor confidentiality
+ *                  (refused in v1 - the descriptor has no counter and therefore
+ *                  no nonce). Bits 7..4 reserved, must be 0. The two transforms
+ *                  are independent, not a ladder.
+ * @param w         MAC window, the literal 2, 4 or 8.
+ * @param page_lo   Secured page range, both bounded to 0x01..0x1F so the
+ * @param page_hi   descriptor and the ANT+ common pages stay in the clear
+ *                  mechanically rather than by memory.
+ *
+ * Returns 0, ANTW_INVALID_MESSAGE (channel out of range),
+ * ANTW_INVALID_PARAMETER_PROVIDED or ANTW_CHANNEL_IN_WRONG_STATE (no key yet).
+ */
+antr_err_t antr_sec_config(uint8_t channel, uint8_t switches, uint8_t w,
+			   uint8_t page_lo, uint8_t page_hi);
+
+/**
+ * Install the one 16-byte root key for a channel. Message 0xF2.
+ *
+ * @param bits  Key length in bits. 128 and nothing else in v1.
+ * @param key   Copied before this returns.
+ *
+ * WRITE ONLY. There is no read arm anywhere and MESG_REQUEST for 0xF2 answers
+ * ANTW_INVALID_MESSAGE rather than a key. The caller should wipe its own copy of
+ * the message body afterwards; that is worth doing and is not sufficient, since
+ * the bytes also passed through the USB ring and the transport buffer beneath
+ * it, neither of which is reachable from here.
+ *
+ * Returns 0, ANTW_INVALID_MESSAGE, ANTW_INVALID_PARAMETER_PROVIDED (unsupported
+ * key length) or ANTW_CHANNEL_IN_WRONG_STATE (no channel ID, or a wildcard one).
+ */
+antr_err_t antr_sec_key_set(uint8_t channel, uint8_t bits, const uint8_t *key);
+
+/**
+ * Set the epoch and its time anchor. Message 0xF3.
+ *
+ * @param flags          Bit 0: the epoch is coarse real time rather than a bare
+ *                       ordinal. Other bits reserved, must be 0.
+ * @param epoch          Refused if less than or equal to the current one, and
+ *                       refused near 0xFFFFFFFF so a counter wrap has headroom.
+ * @param us_into_epoch  The phase a receiver derives the packet counter from,
+ *                       rather than from arrival history.
+ *
+ * No transform enables until this has been called after a reset: a reboot that
+ * restarted the counter under an unchanged epoch would be a two-time pad for
+ * X_CONF and a full session replay against X_AUTH.
+ *
+ * Returns 0, ANTW_INVALID_MESSAGE, ANTW_INVALID_PARAMETER_PROVIDED or
+ * ANTW_CHANNEL_IN_WRONG_STATE (no key, or no channel period).
+ */
+antr_err_t antr_sec_epoch_set(uint8_t channel, uint8_t flags, uint32_t epoch,
+			      uint64_t us_into_epoch);
+
+/**
+ * Read a channel's security state. Message 0xF4, via MESG_REQUEST.
+ *
+ * @param out      23 bytes, laid out as ANTW_MESG_RADIANT_SEC_STATUS_ID
+ *                 documents. Counters are u16 LE and saturate rather than wrap.
+ * @param out_len  Capacity of `out`; must be at least 23.
+ *
+ * An unkeyed channel answers with zeros and a CLEAR verdict rather than an
+ * error: "no security on this channel" is a state a host must be able to read
+ * without treating an ordinary channel as a fault.
+ *
+ * This is what makes deliver-as-unverified auditable. A host that ignores the
+ * per-message verdict flag can still see that unverified windows happened, and
+ * "deliver but mark" only means something if unverified cannot be silently
+ * treated as verified.
+ *
+ * Returns 0 or ANTW_INVALID_MESSAGE (channel out of range, or buffer too small).
+ */
+antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len);
+
+#endif /* CONFIG_RADIANT_SEC_HOST_MESSAGES */
+
 #endif /* ANT_RADIO_H_ */

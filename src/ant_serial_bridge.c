@@ -360,6 +360,24 @@ static void handle_request(const uint8_t *body, uint8_t len)
 	 */
 #endif
 
+#ifdef CONFIG_RADIANT_SEC_HOST_MESSAGES
+	case ANTW_MESG_RADIANT_SEC_STATUS_ID: {
+		/*
+		 * The only read arm in the family. 0xF2 has none anywhere - a
+		 * root key goes in and never comes out, and a request for it
+		 * falls through to the default below and is answered
+		 * ANTW_INVALID_MESSAGE, which is the same answer a device that
+		 * had never heard of 0xF2 would give.
+		 */
+		err = antr_sec_status_get(ch, payload, (uint8_t)sizeof(payload));
+		if (!err) {
+			send_message(ANTW_MESG_RADIANT_SEC_STATUS_ID, payload,
+				     23);
+		}
+		break;
+	}
+#endif /* CONFIG_RADIANT_SEC_HOST_MESSAGES */
+
 	case ANTW_MESG_ANTLIB_CONFIG_ID: {
 		payload[0] = ch;
 		err = antr_lib_config_get(&payload[1]);
@@ -1011,6 +1029,60 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		break;
 #endif /* CONFIG_ANT_DONGLE_ENCRYPTION */
 
+#ifdef CONFIG_RADIANT_SEC_HOST_MESSAGES
+	/*
+	 * The RadiANT payload transforms: 0xF1 configure, 0xF2 key, 0xF3 epoch.
+	 * 0xF4 is read-only and lives in handle_request(); 0xF5 is pairing and
+	 * arrives with X25519.
+	 *
+	 * Same shape as the encryption block above and for the same reason: a
+	 * message family nothing on this platform sends by default should not be
+	 * reachable on the path Zwift runs. Unlike that block, the declarations
+	 * are under the symbol too - these have exactly one implementation,
+	 * whereas the four crypto calls stand in for libant.a exports every
+	 * backend owes.
+	 */
+	case ANTW_MESG_RADIANT_SEC_CONFIG_ID:
+		/* body: [ch, switches, W, page_lo, page_hi] */
+		if (len >= 5) {
+			err = antr_sec_config(body[0], body[1], body[2],
+					      body[3], body[4]);
+		}
+		break;
+
+	case ANTW_MESG_RADIANT_SET_KEY_ID:
+		/* body: [ch, key_bits, key[16]].
+		 *
+		 * process_byte() wipes its frame buffer after this dispatch
+		 * returns - see the note there, including what that wipe does
+		 * not cover.
+		 */
+		if (len >= 18) {
+			err = antr_sec_key_set(body[0], body[1], &body[2]);
+		}
+		break;
+
+	case ANTW_MESG_RADIANT_EPOCH_ID:
+		/* body: [ch, flags, epoch u32 LE, us_into_epoch u64 LE] */
+		if (len >= 14) {
+			uint32_t epoch;
+			uint64_t us;
+			int      i;
+
+			epoch = (uint32_t)body[2] | ((uint32_t)body[3] << 8) |
+				((uint32_t)body[4] << 16) |
+				((uint32_t)body[5] << 24);
+
+			us = 0u;
+			for (i = 7; i >= 0; i--) {
+				us = (us << 8) | (uint64_t)body[6 + i];
+			}
+
+			err = antr_sec_epoch_set(body[0], body[1], epoch, us);
+		}
+		break;
+#endif /* CONFIG_RADIANT_SEC_HOST_MESSAGES */
+
 #ifdef ANTW_MESG_ECS_ENABLE_ID
 	case ANTW_MESG_ECS_ENABLE_ID:
 		/* body: [filler, enable] */
@@ -1138,6 +1210,35 @@ static void process_byte(uint8_t b)
 		if (b == running_xor) {
 			dispatch(msg_id, msg_body,
 				 MIN(msg_len, (uint8_t)sizeof(msg_body)));
+#ifdef CONFIG_RADIANT_SEC_HOST_MESSAGES
+			if (msg_id == ANTW_MESG_RADIANT_SET_KEY_ID) {
+				/*
+				 * A root key just crossed this buffer, and this
+				 * buffer is static and long-lived - it would
+				 * otherwise hold those sixteen bytes until a
+				 * later message happened to overwrite them,
+				 * which on a quiet link is indefinitely.
+				 *
+				 * WHAT THIS DOES NOT COVER, stated because a
+				 * wipe that implied more than it delivers is
+				 * worse than none. The same bytes passed
+				 * through the USB stack's ring buffer and
+				 * whatever transport buffer sits beneath it,
+				 * neither of which is reachable from here and
+				 * neither of which is wiped. They were also in
+				 * the host's memory before that. A root key
+				 * that has crossed a USB cable should be
+				 * treated as having been in host memory,
+				 * because it has - this narrows the window, it
+				 * does not close it.
+				 *
+				 * Unconditional rather than only on success: a
+				 * key rejected for a bad length was still a
+				 * key.
+				 */
+				memset(msg_body, 0, sizeof(msg_body));
+			}
+#endif
 		} else {
 			LOG_WRN("Checksum err: got 0x%02X exp 0x%02X", b,
 				running_xor);

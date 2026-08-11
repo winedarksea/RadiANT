@@ -98,6 +98,12 @@ zephyr_library_sources_ifdef(CONFIG_RADIANT_CORE_ANTR_API src/radiant_api.c)
 zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC src/radiant_sec_aes.c)
 zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC src/radiant_sec.c)
 
+# The host surface, under its own symbol because it is the one security file
+# that reaches an application header - a node with a key baked in and no serial
+# host has no use for 0xF1-0xF4 and should not link them.
+zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_HOST_MESSAGES
+			     src/radiant_sec_host.c)
+
 # ── The radio backend ───────────────────────────────────────────────────────
 #
 # One of these, or none, and never two - see the choice in Kconfig. The two
