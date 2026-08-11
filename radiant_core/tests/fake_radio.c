@@ -72,7 +72,8 @@ enum due_kind {
 	DUE_NONE = 0,
 	DUE_AIR,      /* a frame is at the antenna */
 	DUE_CLOSE,    /* the receive window's t_close */
-	DUE_TX        /* the transmit's t_sync */
+	DUE_TX,       /* the transmit's t_sync */
+	DUE_ED        /* one energy-detect index's dwell is up */
 };
 
 struct air_slot {
@@ -98,6 +99,28 @@ struct cur_op {
 	/* transmit */
 	radiant_time_t t_sync_req;
 	radiant_time_t t_fire;
+
+	/*
+	 * energy detect
+	 *
+	 * ed_done counts indices already reported, so the next dwell is due at
+	 * t_start + (ed_done + 1) * dwell. Counting rather than holding a
+	 * cursor keeps a preempted sweep honest: the arm record says what was
+	 * asked for and ed_done says how far it actually got, and a test can
+	 * assert on the difference.
+	 *
+	 * Every index takes the WHOLE dwell here, unlike the nRF backend which
+	 * leaves early once its sample burst is done. That is the right
+	 * modelling choice for a mock: the HAL permits finishing early and
+	 * requires never overrunning, so the mock should sit exactly on the
+	 * bound a scheduler sized its gap against. A mock that finished early
+	 * would hide a scheduler that had budgeted too little.
+	 */
+	uint8_t    ed_lo;
+	uint8_t    ed_hi;
+	uint8_t    ed_done;
+	uint32_t   ed_dwell_us;
+	radiant_time_t ed_t_start;
 
 	bool                  force_terminal_set;
 	enum radiant_radio_status force_terminal;
@@ -144,6 +167,14 @@ struct fake_state {
 	int8_t   noise_dbm;
 	bool     rx_any;
 
+	/* What each RF index sounds like to an energy-detect dwell. Per index
+	 * rather than one figure, because the only interesting thing a
+	 * channel-quality map does is tell one index from another. */
+	int8_t   ed_min[RADIANT_RF_INDEX_MAX + 1];
+	int8_t   ed_mean[RADIANT_RF_INDEX_MAX + 1];
+	bool     ed_set[RADIANT_RF_INDEX_MAX + 1];
+	uint16_t ed_samples;
+
 	/* A forced terminal status waiting for the next operation to be armed. */
 	bool                  pending_force_set;
 	enum radiant_radio_status pending_force;
@@ -180,7 +211,7 @@ static struct fake_state g;
  * calls fake_radio_set_phys() with its own static array. */
 static const enum radiant_phy fake_phys_1m[] = { RADIANT_PHY_1M_GFSK };
 
-static const struct radiant_radio_cbs fake_cbs_none = { NULL, NULL };
+static const struct radiant_radio_cbs fake_cbs_none = { NULL, NULL, NULL };
 
 static const struct fake_radio_viol_rec viol_none = {
 	FAKE_RADIO_VIOL_NONE, "none", 0, 0
@@ -364,6 +395,13 @@ void fake_radio_caps_preset_nrf(void)
 	c->crc_in_hw = true;
 	/* RXCRC holds the received CRC, not just a pass/fail bit. */
 	c->has_rx_crc = true;
+	/*
+	 * True here and false in the RAIL preset below, on exactly the same
+	 * terms as has_rx_crc: the two presets have to differ on it, or
+	 * "backends without it return RADIANT_RADIO_ENOTSUP" is a rule no suite
+	 * can exercise. This is the backend that has it.
+	 */
+	c->has_ed_scan = true;
 	c->tx_power_min_dbm = -40;
 	c->tx_power_max_dbm = 8;
 }
@@ -413,6 +451,14 @@ void fake_radio_caps_preset_rail(void)
 	 * to be the backend that does not.
 	 */
 	c->has_rx_crc = false;
+	/*
+	 * False, and it is the useful setting to have in one of the two presets
+	 * rather than a claim about RAIL. The HAL's rule is that a backend
+	 * without energy detect refuses every arm with RADIANT_RADIO_ENOTSUP
+	 * and that core policy reads the capability rather than trying; this
+	 * preset is what makes both halves of that assertable.
+	 */
+	c->has_ed_scan = false;
 	c->tx_power_min_dbm = -26;
 	c->tx_power_max_dbm = 20;
 }
@@ -777,6 +823,68 @@ static void deliver_tx(uint32_t op, enum radiant_radio_status status,
 	run_deferred();
 }
 
+/*
+ * One energy-detect event.
+ *
+ * `terminal` selects which of the two shapes the HAL defines this is: an OK
+ * measurement for one index, or the end of the operation carrying nothing. The
+ * mock enforces the split itself - a terminal event's measurement fields are
+ * left zero here rather than by the caller - for the same reason it enforces
+ * the noise floor's eligibility: it is a condition a core module could get
+ * wrong in a way no assertion would catch, because a stale number reads like a
+ * fresh one.
+ */
+static void deliver_ed(uint32_t op, enum radiant_radio_status status,
+		       bool terminal, uint8_t rf_index, int8_t min_dbm,
+		       int8_t mean_dbm, uint16_t samples)
+{
+	struct radiant_ed_event evt;
+	struct fake_radio_event *rec;
+	bool measured = (status == RADIANT_RADIO_STATUS_OK) && !terminal;
+
+	if (g.in_cb) {
+		record_viol(FAKE_RADIO_VIOL_CB_NESTED, "ed callback would nest");
+		return;
+	}
+
+	memset(&evt, 0, sizeof(evt));
+	evt.op = op;
+	evt.status = status;
+	evt.rf_index = measured ? rf_index : 0u;
+	evt.min_dbm = measured ? min_dbm : 0;
+	evt.mean_dbm = measured ? mean_dbm : 0;
+	evt.samples = measured ? samples : 0u;
+
+	rec = new_event_record();
+	if (rec != NULL) {
+		rec->op = op;
+		rec->kind = FAKE_RADIO_ARM_ED;
+		rec->status = status;
+		rec->terminal = terminal;
+		rec->t = g.now;
+		rec->rf_index = evt.rf_index;
+		rec->ed_min_dbm = evt.min_dbm;
+		rec->ed_mean_dbm = evt.mean_dbm;
+		rec->ed_samples = evt.samples;
+	}
+	if (measured) {
+		g.stats.ev_ed++;
+	} else {
+		count_status(status, false);
+	}
+
+	g.in_cb = true;
+	g.isr_calls = 0u;
+	g.isr_work_flagged = false;
+	g.stats.callbacks++;
+	if (g.cbs.ed != NULL) {
+		g.cbs.ed(&evt, g.user);
+	}
+	g.in_cb = false;
+
+	run_deferred();
+}
+
 /* ---------------------------------------------------------------------------
  * Ending an operation
  * ---------------------------------------------------------------------------
@@ -827,6 +935,8 @@ static void end_op(enum radiant_radio_status status, radiant_time_t t_sync)
 
 	if (kind == FAKE_RADIO_ARM_TX) {
 		deliver_tx(op, status, t_sync, false);
+	} else if (kind == FAKE_RADIO_ARM_ED) {
+		deliver_ed(op, status, true, 0u, 0, 0, 0u);
 	} else {
 		deliver_rx(op, status, true, 0u, 0u, NULL, 0u, 0, false, 0u,
 			   false);
@@ -847,6 +957,9 @@ static void run_deferred(void)
 		g.defer_abort_kind = FAKE_RADIO_ARM_NONE;
 		if (kind == FAKE_RADIO_ARM_TX) {
 			deliver_tx(op, RADIANT_RADIO_STATUS_ABORTED, 0u, false);
+		} else if (kind == FAKE_RADIO_ARM_ED) {
+			deliver_ed(op, RADIANT_RADIO_STATUS_ABORTED, true, 0u, 0,
+				   0, 0u);
 		} else {
 			deliver_rx(op, RADIANT_RADIO_STATUS_ABORTED, true, 0u, 0u,
 				   NULL, 0u, 0, false, 0u, false);
@@ -1010,6 +1123,29 @@ void fake_radio_set_noise(int8_t dbm)
 {
 	g.noise_set = true;
 	g.noise_dbm = dbm;
+}
+
+void fake_radio_set_ed(uint8_t rf_index, int8_t min_dbm, int8_t mean_dbm)
+{
+	if (rf_index > RADIANT_RF_INDEX_MAX) {
+		return;
+	}
+	g.ed_min[rf_index] = min_dbm;
+	g.ed_mean[rf_index] = mean_dbm;
+	g.ed_set[rf_index] = true;
+}
+
+void fake_radio_clear_ed(void)
+{
+	memset(g.ed_min, 0, sizeof(g.ed_min));
+	memset(g.ed_mean, 0, sizeof(g.ed_mean));
+	memset(g.ed_set, 0, sizeof(g.ed_set));
+	g.ed_samples = FAKE_RADIO_ED_SAMPLES;
+}
+
+void fake_radio_set_ed_samples(uint16_t samples)
+{
+	g.ed_samples = samples;
 }
 
 void fake_radio_clear_noise(void)
@@ -1185,6 +1321,24 @@ static bool next_due(radiant_time_t *t_out, enum due_kind *kind_out,
 		*kind_out = DUE_TX;
 		return true;
 	}
+	if (g.cur.kind == FAKE_RADIO_ARM_ED) {
+		/*
+		 * The next index's dwell ends one dwell after the last one did.
+		 * Once every index has reported, the due time stops advancing -
+		 * so the very next dispatch at that same instant is the
+		 * operation's terminal event, with no gap between the last
+		 * measurement and the end of the sweep. A sweep whose terminal
+		 * event arrived a dwell late would let a scheduler that
+		 * overbooked the gap look correct.
+		 */
+		uint32_t n = (uint32_t)(g.cur.ed_hi - g.cur.ed_lo) + 1u;
+		uint32_t k = (g.cur.ed_done < n) ? (g.cur.ed_done + 1u) : n;
+
+		*t_out = g.cur.ed_t_start +
+			 (radiant_time_t)k * (radiant_time_t)g.cur.ed_dwell_us;
+		*kind_out = DUE_ED;
+		return true;
+	}
 	if (g.cur.kind != FAKE_RADIO_ARM_RX) {
 		*kind_out = DUE_NONE;
 		return false;
@@ -1310,6 +1464,50 @@ static void dispatch(enum due_kind kind, int32_t air_idx)
 						   ? g.cur.force_terminal
 						   : RADIANT_RADIO_STATUS_OK;
 		end_op(st, g.cur.t_fire);
+		break;
+	}
+	case DUE_ED: {
+		uint32_t n = (uint32_t)(g.cur.ed_hi - g.cur.ed_lo) + 1u;
+		uint8_t  rf;
+		uint32_t op;
+		int32_t  arm_idx;
+
+		if (g.cur.ed_done >= n) {
+			enum radiant_radio_status st =
+				g.cur.force_terminal_set
+					? g.cur.force_terminal
+					: RADIANT_RADIO_STATUS_TIMEOUT;
+
+			end_op(st, 0u);
+			break;
+		}
+
+		rf = (uint8_t)(g.cur.ed_lo + g.cur.ed_done);
+		op = g.cur.op;
+		arm_idx = g.cur.arm_idx;
+		g.cur.ed_done++;
+
+		/*
+		 * Zero samples means this dwell measured nothing, and the HAL
+		 * forbids an OK event that claims otherwise - so no event is
+		 * delivered for that index at all and the sweep moves on. A
+		 * consumer has to survive a map with holes in it; that is what
+		 * this models.
+		 */
+		if (g.ed_samples == 0u) {
+			break;
+		}
+		{
+			struct fake_radio_arm *a = arm_at(arm_idx);
+
+			if (a != NULL) {
+				a->n_rx_events++;
+			}
+		}
+		deliver_ed(op, RADIANT_RADIO_STATUS_OK, false, rf,
+			   g.ed_set[rf] ? g.ed_min[rf] : FAKE_RADIO_ED_MIN_DBM,
+			   g.ed_set[rf] ? g.ed_mean[rf] : FAKE_RADIO_ED_MEAN_DBM,
+			   g.ed_samples);
 		break;
 	}
 	case DUE_NONE:
@@ -1932,6 +2130,88 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	return RADIANT_RADIO_OK_RC;
 }
 
+int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
+{
+	struct fake_radio_arm *rec;
+	int32_t rec_idx;
+	int rc;
+
+	isr_tick();
+
+	if (op == NULL) {
+		count_rc(RADIANT_RADIO_EINVAL);
+		return RADIANT_RADIO_EINVAL;
+	}
+	*op = 0u;
+	if (req == NULL) {
+		count_rc(RADIANT_RADIO_EINVAL);
+		return RADIANT_RADIO_EINVAL;
+	}
+
+	rec = new_arm_record(FAKE_RADIO_ARM_ED, &rec_idx);
+	rec->rf_index = req->rf_index_lo;
+	rec->rf_index_hi = req->rf_index_hi;
+	rec->ed_dwell_us = req->dwell_us;
+	rec->t_open = req->t_start;
+
+	rc = arm_preflight();
+	if (rc != RADIANT_RADIO_OK_RC) {
+		goto refuse;
+	}
+	/*
+	 * The capability is checked HERE, before the request is validated,
+	 * because that is the order the rule is written in: "backends without
+	 * it return RADIANT_RADIO_ENOTSUP". A mock that validated first would
+	 * answer EINVAL for a malformed request on a backend that could not
+	 * have done a well-formed one either, and a core module testing the
+	 * refusal would be testing the wrong branch.
+	 */
+	if (!g.caps.has_ed_scan) {
+		rc = RADIANT_RADIO_ENOTSUP;
+		goto refuse;
+	}
+	if (g.cbs.ed == NULL) {
+		/* No consumer. Refused rather than armed, on the same terms as
+		 * the real backend: a sweep whose events have nowhere to go
+		 * still occupies the radio. */
+		rc = RADIANT_RADIO_ENOTSUP;
+		goto refuse;
+	}
+	if (req->rf_index_hi < req->rf_index_lo ||
+	    req->rf_index_hi > RADIANT_RF_INDEX_MAX || req->dwell_us == 0u) {
+		rc = RADIANT_RADIO_EINVAL;
+		goto refuse;
+	}
+	if (too_late(req->t_start)) {
+		rc = RADIANT_RADIO_ETIME;
+		goto refuse;
+	}
+
+	clear_cur();
+	g.cur.kind = FAKE_RADIO_ARM_ED;
+	g.cur.op = alloc_op();
+	g.cur.arm_idx = rec_idx;
+	g.cur.ed_lo = req->rf_index_lo;
+	g.cur.ed_hi = req->rf_index_hi;
+	g.cur.ed_done = 0u;
+	g.cur.ed_dwell_us = req->dwell_us;
+	g.cur.ed_t_start = req->t_start;
+	take_pending_force();
+
+	rec->op = g.cur.op;
+	rec->rc = RADIANT_RADIO_OK_RC;
+	*op = g.cur.op;
+	g.stats.arms_ed++;
+	return RADIANT_RADIO_OK_RC;
+
+refuse:
+	rec->rc = rc;
+	/* count_rc() is what increments arms_rejected; doing it here as well
+	 * would double-count every refusal on this one entry point. */
+	count_rc(rc);
+	return rc;
+}
+
 int radiant_radio_abort(void)
 {
 	isr_tick();
@@ -2059,6 +2339,9 @@ const char *fake_radio_busy_reason(void)
 	if (g.cur.kind == FAKE_RADIO_ARM_RX) {
 		return "a receive window is still armed";
 	}
+	if (g.cur.kind == FAKE_RADIO_ARM_ED) {
+		return "an energy-detect sweep is still armed";
+	}
 	if (g.defer_abort_op != 0u) {
 		return "an aborted operation's terminal event is still pending";
 	}
@@ -2089,6 +2372,10 @@ void fake_radio_reset(void)
 	g.next_op = 0u;
 	g.isr_budget = 16u;
 	g.default_rssi = FAKE_RADIO_RSSI_BENCH_DBM;
+	/* Not zero: zero is the "this dwell measured nothing" case, and a
+	 * suite that never mentions energy detect should get dwells that
+	 * measure something. */
+	g.ed_samples = FAKE_RADIO_ED_SAMPLES;
 	clear_cur();
 	fake_radio_caps_preset_nrf();
 }

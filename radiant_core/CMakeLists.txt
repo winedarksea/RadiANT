@@ -83,6 +83,15 @@ zephyr_library_sources(src/radiant_profile_sanity.c)
 # includes an application header; see RADIANT_CORE_ANTR_API.
 zephyr_library_sources_ifdef(CONFIG_RADIANT_CORE_ANTR_API src/radiant_api.c)
 
+# The channel-quality map. Gated rather than compiled unconditionally like
+# radiant_crc_repair.c above, and the difference is the same one the security
+# block below draws: this file is 1000 bytes of RAM, not just text, and a map
+# allocated in every build so that a suite could reach it would be 1000 bytes
+# spent by every user who never turns energy detect on. The unit-test
+# application reaches it by selecting CONFIG_RADIANT_CORE_ED_SCAN=y in its own
+# prj.conf, which is the same door a bench build uses.
+zephyr_library_sources_ifdef(CONFIG_RADIANT_CORE_ED_SCAN src/radiant_chanmap.c)
+
 # ── Security ────────────────────────────────────────────────────────────────
 #
 # Gated, unlike radiant_crc_repair.c above, and the difference is deliberate.

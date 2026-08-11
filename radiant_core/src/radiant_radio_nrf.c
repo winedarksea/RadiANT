@@ -468,6 +468,17 @@ static const struct radiant_radio_caps radiant_nrf_caps = {
 	 * rather than zero, and is still a prior rather than a measurement. */
 	.has_sync_timestamp  = true,
 	.has_rssi            = true,
+	/*
+	 * Energy detect, and it tracks the Kconfig rather than the hardware.
+	 *
+	 * The capability is a compile-time property of the backend BUILD - the
+	 * HAL says so of caps.phys and says the same here - and this build
+	 * compiles no sampling path at all without CONFIG_RADIANT_CORE_ED_SCAN.
+	 * Advertising true and then refusing every arm would be the one thing
+	 * the capability query exists to prevent: core policy testing a
+	 * capability, believing it, and finding out on the air.
+	 */
+	.has_ed_scan         = IS_ENABLED(CONFIG_RADIANT_CORE_ED_SCAN),
 	.crc_in_hw           = true,
 	/* RXCRC holds the CRC as received, not merely CRCSTATUS's pass/fail
 	 * bit, so the core can form an error syndrome and repair a single
@@ -627,7 +638,7 @@ static void pack_address(const uint8_t *addr, uint8_t addr_len,
  * ---------------------------------------------------------------------------
  */
 
-enum op_kind { OP_NONE = 0, OP_TX, OP_RX };
+enum op_kind { OP_NONE = 0, OP_TX, OP_RX, OP_ED };
 
 static struct {
 	const struct radiant_radio_cbs *cbs;
@@ -674,6 +685,35 @@ static struct {
 	 * where the peer opens a narrow window 1560 us after the packet it sent.
 	 */
 	radiant_time_t t_sync_req;
+
+#if defined(CONFIG_RADIANT_CORE_ED_SCAN)
+	/*
+	 * The energy-detect sweep in flight.
+	 *
+	 * ed_deadline_cc is a RAW TIMER COUNTER VALUE rather than a
+	 * radiant_time_t, and deliberately: it is compared inside the sampling
+	 * loop, which runs in the radio interrupt, and clock_absolute() takes
+	 * an interrupt lock and a fold on every call. A 32-bit compare against
+	 * a captured counter is the same arithmetic radio_disable_now() already
+	 * uses for its own bound, and it cannot be wrong for anything inside
+	 * 35 minutes of the last fold.
+	 *
+	 * It advances by one dwell per index rather than being recomputed, so
+	 * the whole sweep is bounded by n * dwell measured from the operation's
+	 * own start. An index that finishes its burst early hands the unused
+	 * remainder to the indices after it and the sweep still cannot exceed
+	 * what the scheduler sized the gap for - which is the promise the gate
+	 * for this phase rests on.
+	 */
+	/* No ed_lo: the sweep never wraps inside one operation - the scheduler
+	 * splits a range that would - so the low end is only ever the value
+	 * ed_cur starts at, and keeping a second copy of it would be state that
+	 * could disagree with itself. */
+	uint8_t  ed_hi;
+	uint8_t  ed_cur;
+	uint32_t ed_dwell_us;
+	uint32_t ed_deadline_cc;
+#endif
 
 	/*
 	 * (D)PPI connections, allocated once at init.
@@ -1168,6 +1208,34 @@ static void rssi_temp_work_handler(struct k_work *work)
 }
 
 #endif /* RSSI_TEMP_CORR_PRESENT */
+
+/*
+ * RSSISAMPLE, in dBm, corrected.
+ *
+ * THE ONLY PLACE THIS REGISTER IS READ, and that is the point of the function
+ * rather than a tidiness argument. radiant_radio_hal.h requires rssi_dbm,
+ * noise_dbm and now the energy-detect min/mean to be on ONE SCALE - same
+ * corrections, same reference - because the whole use of the numbers is
+ * subtracting them from each other: a margin, or "RF 26 is 14 dB quieter than
+ * RF 57". Three copies of a negation and a temperature term is three chances
+ * for one of them to be right and the comparison to be wrong by the difference,
+ * which looks entirely plausible in a log.
+ *
+ * The register holds a POSITIVE MAGNITUDE in its low seven bits and the value
+ * wanted is negative dBm, hence the negation; see the errata block above for
+ * the sign derivation of the correction itself.
+ */
+static int8_t rssi_sample_dbm(void)
+{
+	int8_t raw_dbm = (int8_t)(-(int32_t)(NRF_RADIO->RSSISAMPLE & 0x7Fu));
+
+#if RSSI_TEMP_CORR_PRESENT
+	/* raw_dbm - corr, not + corr. */
+	return (int8_t)(raw_dbm - rssi_temp_corr_get(rssi_temp_cache_c));
+#else
+	return raw_dbm;
+#endif
+}
 
 /* ---------------------------------------------------------------------------
  * Lifecycle
@@ -1803,6 +1871,311 @@ fail:
 }
 
 /* ---------------------------------------------------------------------------
+ * Energy detect
+ * ---------------------------------------------------------------------------
+ *
+ * THIS PART HAS NO ENERGY-DETECT MODE THIS BACKEND CAN USE, and saying so is
+ * the first thing to understand about the code below. The nRF RADIO's EDCNT /
+ * EDSAMPLE hardware averager exists only in IEEE 802.15.4 mode, and this
+ * backend is a 1 Mbit GFSK receiver - switching modes to take a measurement
+ * would reconfigure the peripheral out from under an ANT window's packet
+ * configuration. So the measurement is built out of what IS available in this
+ * mode: RSSISAMPLE, one shot per TASKS_RSSISTART, read by software.
+ *
+ * WHICH MAKES THE SAMPLING BUDGET THE WHOLE DESIGN. Reading RSSI in software
+ * means reading it in the radio interrupt at priority 0, and
+ * radiant_radio_hal.h's callback contract says "do not do work proportional to
+ * anything". A loop that filled a 400 us dwell would be exactly that, and a
+ * loop that filled a 10 ms chunk would be a scheduler-visible stall. So:
+ *
+ *   - ED_SAMPLES_MAX bounds the burst at a CONSTANT, whatever the dwell is.
+ *     Thirty-two samples at ED_SAMPLE_STEP_US apart is ~64 us of spinning,
+ *     which is comparable to what radio_disable_now() already spends waiting
+ *     for a ramp-down and well inside this file's established practice.
+ *   - The dwell bounds it again, from the other side, so a caller that asks
+ *     for less than the burst needs gets a shorter burst rather than an
+ *     overrun.
+ *   - ONE INTERRUPT PER INDEX, not per sample. The index's RXREADY is the only
+ *     event taken; the burst runs inside it and the radio is taken down again
+ *     before the callback. A per-sample compare would have been more faithful
+ *     to the dwell and would have cost 200 interrupts per index.
+ *
+ * WHAT THAT MEANS FOR THE NUMBER, stated plainly because the alternative is a
+ * consumer reading more into it than is there: this backend's min and mean
+ * describe a ~64 us burst near the START of the dwell, not the dwell as a
+ * whole. It sees a Wi-Fi transmission that is in progress; it does not see one
+ * that begins 300 us later. The defence is repetition rather than dwell
+ * length - the scheduler revisits every index continuously, and
+ * radiant_chanmap.c aggregates the minimum and the maximum across dwells, so
+ * a busy index reveals itself over seconds. radiant_ed_event.samples is
+ * reported for exactly this reason: a consumer that could not see how much
+ * evidence one event carries would weigh this the same as a backend with a
+ * hardware averager behind it.
+ *
+ * AN INDEX ENDS AS SOON AS ITS BURST IS DONE. radiant_radio_hal.h defines
+ * dwell_us as an upper bound rather than a duration precisely so that this is
+ * allowed, and it matters twice: the receiver stops drawing current for the
+ * remaining ~330 us of a default dwell, and a whole sweep finishes well inside
+ * the gap the scheduler sized for it, which is the direction an operation
+ * sharing a radio with a tracked channel should be wrong in.
+ *
+ * NOTHING CAN BE RECEIVED DURING AN ED SWEEP, and that is enforced in hardware
+ * rather than by not looking: RXADDRESSES is cleared, so no logical address is
+ * enabled, so the matcher cannot fire, so there is no ADDRESS, no DMA and no
+ * END. A sweep that could deliver a frame would be a frame delivered against
+ * an operation whose filters nobody set.
+ */
+
+#if defined(CONFIG_RADIANT_CORE_ED_SCAN)
+
+/* The burst, bounded at a constant. See above for why the constant and not the
+ * dwell is what bounds the interrupt. */
+#define ED_SAMPLES_MAX    32u
+/*
+ * Spacing between samples, in microseconds of this backend's own 1 MHz TIMER.
+ * The datasheet's RSSI settling time is a quarter of a microsecond on both
+ * parts, so this is not a settling wait - it is the finest spacing a 1 MHz
+ * timer can express with a margin, and taking samples faster than that would
+ * produce thirty-two readings of one instant rather than of a burst.
+ */
+#define ED_SAMPLE_STEP_US 2u
+
+/* The shortest dwell this backend can honour: ramp-up plus a handful of
+ * samples. Below it an index would necessarily overrun its own ceiling, which
+ * the HAL forbids - so it is refused rather than silently exceeded. */
+#define ED_DWELL_MIN_US   (RAMP_UP_US + 4u * ED_SAMPLE_STEP_US)
+
+/* Put the receiver on one index. The frequency is the only thing that changes
+ * between indices; mode, shorts and the empty address set were programmed once
+ * at the arm. */
+static void ed_enter_index(uint8_t rf_index)
+{
+	nrf_radio_frequency_set(NRF_RADIO, (uint16_t)(2400u + rf_index));
+	/* Cleared before the task, not after: RXREADY is the event this
+	 * operation's interrupt is taken on, and a stale one would be taken for
+	 * this index's before the receiver had ramped. */
+	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_RXREADY);
+	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_DISABLED);
+	nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_RXEN);
+}
+
+/*
+ * One index's receiver is live. Take the burst, report it, and move on.
+ *
+ * Runs in the radio interrupt. Everything in it is bounded by ED_SAMPLES_MAX
+ * except radio_disable_now(), which has its own bound.
+ */
+static void ed_dwell(void)
+{
+	struct radiant_ed_event evt;
+	int32_t  sum = 0;
+	int8_t   min_dbm = 0;
+	uint16_t n = 0u;
+	uint8_t  rf = radiant_op.ed_cur;
+	uint32_t i;
+
+	/* The first index started from a compare; every index after it is
+	 * triggered by software. Taking the connection away here means the
+	 * compare cannot fire a second time against an operation that has moved
+	 * on - which it could, 71 minutes later, when the counter comes back
+	 * round to it. */
+	nrfx_gppi_conn_disable(radiant_op.conn_start);
+
+	for (i = 0u; i < ED_SAMPLES_MAX; i++) {
+		uint32_t t0;
+		int8_t   dbm;
+
+		nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_RSSISTART);
+		t0 = timer_capture(CC_NOW);
+		while ((uint32_t)(timer_capture(CC_NOW) - t0) < ED_SAMPLE_STEP_US) {
+			/* One timer tick. See ED_SAMPLE_STEP_US. */
+		}
+
+		dbm = rssi_sample_dbm();
+		if (n == 0u || dbm < min_dbm) {
+			min_dbm = dbm;
+		}
+		sum += (int32_t)dbm;
+		n++;
+
+		/* Tested AFTER the first sample, so an index always produces a
+		 * measurement. An OK event carrying zero samples is the one
+		 * thing radiant_chanmap.c drops outright, and delivering one
+		 * would turn a short dwell into a hole in the map rather than
+		 * into a coarse entry. */
+		if ((int32_t)(timer_capture(CC_NOW) -
+			      radiant_op.ed_deadline_cc) >= 0) {
+			break;
+		}
+	}
+
+	/* The receiver is off before the callback runs, on the same reasoning as
+	 * every other path in this file: the callback may arm the next
+	 * operation, and a DISABLED left in flight would end that one instead. */
+	radio_disable_now();
+
+	memset(&evt, 0, sizeof(evt));
+	evt.op = radiant_op.id;
+	evt.status = RADIANT_RADIO_STATUS_OK;
+	evt.rf_index = rf;
+	evt.min_dbm = min_dbm;
+	/* Integer division truncates toward zero, which on negative dBm is
+	 * toward the LOUD end - so a mean is wrong by at most one dB and wrong
+	 * in the direction that makes an index look busier than it is. That is
+	 * the conservative direction for anything that later picks a quiet
+	 * frequency from this. */
+	evt.mean_dbm = (int8_t)(sum / (int32_t)n);
+	evt.samples = n;
+	radiant_op.cbs->ed(&evt, radiant_op.user);
+
+	/* The callback is entitled to abort or replace this operation, and the
+	 * scheduler does exactly that when a tracked window falls due. */
+	if (radiant_op.kind != OP_ED || radiant_op.terminal_sent) {
+		return;
+	}
+
+	if (rf >= radiant_op.ed_hi) {
+		deliver_terminal(RADIANT_RADIO_STATUS_TIMEOUT);
+		return;
+	}
+
+	radiant_op.ed_cur = (uint8_t)(rf + 1u);
+	radiant_op.ed_deadline_cc += radiant_op.ed_dwell_us;
+	ed_enter_index(radiant_op.ed_cur);
+}
+
+#endif /* CONFIG_RADIANT_CORE_ED_SCAN */
+
+int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
+{
+#if !defined(CONFIG_RADIANT_CORE_ED_SCAN)
+	(void)req;
+	if (op != NULL) {
+		*op = 0u;
+	}
+	/* caps.has_ed_scan is false on this build and the core reads it before
+	 * it ever gets here; this is the backstop, and it is the HAL's existing
+	 * rule for a well-formed request a backend cannot do. */
+	return RADIANT_RADIO_ENOTSUP;
+#else
+	unsigned int   key;
+	radiant_time_t now;
+	uint32_t       start_cc;
+	int            rc;
+
+	if (op == NULL) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	*op = 0u;
+
+	if (req == NULL) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	if (!radiant_op.inited || !radiant_op.enabled) {
+		return RADIANT_RADIO_ESTATE;
+	}
+	if (req->rf_index_hi < req->rf_index_lo ||
+	    req->rf_index_hi > RADIANT_RF_INDEX_MAX || req->dwell_us == 0u) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	if (req->dwell_us < ED_DWELL_MIN_US) {
+		return RADIANT_RADIO_ENOTSUP;
+	}
+	/* No consumer, no operation. A sweep whose events have nowhere to go
+	 * would still occupy the radio. */
+	if (radiant_op.cbs == NULL || radiant_op.cbs->ed == NULL) {
+		return RADIANT_RADIO_ENOTSUP;
+	}
+
+	/* One operation in flight, resolved exactly as the other two arms
+	 * resolve it. */
+	key = irq_lock();
+	if (radiant_op.kind != OP_NONE) {
+		irq_unlock(key);
+		return RADIANT_RADIO_EBUSY;
+	}
+	radiant_op.kind = OP_ED;
+	irq_unlock(key);
+
+	/* Against what the hardware genuinely needs, not against the advertised
+	 * worst case - see the long note in radiant_radio_rx() on why testing
+	 * the advertised figure against a later `now` refuses every arm. There
+	 * is no address to receive here, so the need is ramp-up alone. */
+	now = radiant_radio_now();
+	if (req->t_start < now + (radiant_time_t)RAMP_UP_US) {
+		rc = RADIANT_RADIO_ETIME;
+		goto fail;
+	}
+
+	radiant_op.ed_hi = req->rf_index_hi;
+	radiant_op.ed_cur = req->rf_index_lo;
+	radiant_op.ed_dwell_us = req->dwell_us;
+	radiant_op.terminal_sent = false;
+	radiant_op.rx_any = false;
+
+	nrf_radio_mode_set(NRF_RADIO, NRF_RADIO_MODE_NRF_1MBIT);
+	/*
+	 * NO LOGICAL ADDRESS IS ENABLED, which is what makes this a measurement
+	 * rather than a receive window with the filters left over from the last
+	 * one. The matcher cannot fire, so there is no ADDRESS event, no DMA
+	 * into radiant_rx_buf and no END. PACKETPTR is still pointed somewhere
+	 * legal because a peripheral with a null DMA pointer is a fault waiting
+	 * for a configuration mistake, not because anything will be written.
+	 */
+	NRF_RADIO->RXADDRESSES = 0u;
+	NRF_RADIO->PACKETPTR = (uint32_t)(uintptr_t)radiant_rx_buf;
+	/* READY_START alone: the receiver has to reach the RX state for RSSI to
+	 * mean anything, and no END_START because there is no packet to chain
+	 * to. */
+	nrf_radio_shorts_set(NRF_RADIO, NRF_RADIO_SHORT_READY_START_MASK);
+
+	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_END);
+	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS);
+	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_DISABLED);
+	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_RXREADY);
+	nrf_radio_frequency_set(NRF_RADIO,
+				(uint16_t)(2400u + radiant_op.ed_cur));
+
+	/*
+	 * RXREADY becomes an interrupt for the duration of this operation only,
+	 * and is taken away again in deliver_terminal(). Leaving it enabled
+	 * would put an extra interrupt at the head of every ordinary receive
+	 * window - a few hundred nanoseconds each, on the path this phase's
+	 * gate says must be unchanged. The cheapest way to keep that promise is
+	 * for the receive path to be byte-identical when no ED operation is
+	 * running, which it is.
+	 */
+	nrf_radio_int_enable(NRF_RADIO, NRF_RADIO_INT_RXREADY_MASK);
+
+	start_cc = clock_counter_at(req->t_start - (radiant_time_t)RAMP_UP_US);
+	radiant_op.ed_deadline_cc = start_cc + req->dwell_us;
+	nrf_timer_cc_set(TIMER_ADDR, CC_START, start_cc);
+	nrfx_gppi_conn_enable(radiant_op.conn_start);
+	/* conn_close is deliberately NOT enabled. A window's close is a
+	 * compare because nothing else knows when the window is over; an ED
+	 * index ends when its own burst does, and a compare firing
+	 * TASKS_DISABLE underneath a burst would take the receiver away
+	 * mid-measurement. */
+
+	radiant_op.id = radiant_op.next_id++;
+	if (radiant_op.next_id == 0u) {
+		radiant_op.next_id = 1u;
+	}
+	*op = radiant_op.id;
+	LOG_DBG("ed op=%u rf=%u..%u dwell=%u start=+%d",
+		(unsigned)radiant_op.id, (unsigned)req->rf_index_lo,
+		(unsigned)req->rf_index_hi, (unsigned)req->dwell_us,
+		(int)(int64_t)(req->t_start - now));
+	return RADIANT_RADIO_OK_RC;
+
+fail:
+	LOG_DBG("ed refused: %d", rc);
+	radiant_op.kind = OP_NONE;
+	return rc;
+#endif /* CONFIG_RADIANT_CORE_ED_SCAN */
+}
+
+/* ---------------------------------------------------------------------------
  * Abort
  * ---------------------------------------------------------------------------
  */
@@ -1986,6 +2359,28 @@ static void deliver_terminal(enum radiant_radio_status st)
 
 	radiant_op.kind = OP_NONE;
 
+#if defined(CONFIG_RADIANT_CORE_ED_SCAN)
+	if (kind == OP_ED) {
+		struct radiant_ed_event evt;
+
+		/* RXREADY goes back to not being an interrupt. See the note at
+		 * the enable in radiant_radio_ed(): an ordinary receive window
+		 * must cost exactly what it cost before this operation existed,
+		 * and the way to be sure of that is for it to run against the
+		 * same interrupt mask. */
+		nrf_radio_int_disable(NRF_RADIO, NRF_RADIO_INT_RXREADY_MASK);
+
+		memset(&evt, 0, sizeof(evt));
+		evt.op = radiant_op.id;
+		evt.status = st;
+		/* No measurement on a terminal event, on the same terms as
+		 * radiant_rx_event's frame fields on a TIMEOUT. The indices
+		 * that were measured were reported as they happened. */
+		radiant_op.cbs->ed(&evt, radiant_op.user);
+		return;
+	}
+#endif
+
 	if (kind == OP_TX) {
 		struct radiant_tx_event evt;
 
@@ -2032,15 +2427,7 @@ static void deliver_terminal(enum radiant_radio_status st)
 		 * entirely reasonable.
 		 */
 		if (st == RADIANT_RADIO_STATUS_TIMEOUT && !radiant_op.rx_any) {
-			int8_t raw_dbm = (int8_t)(-(int32_t)
-				(NRF_RADIO->RSSISAMPLE & 0x7Fu));
-
-#if RSSI_TEMP_CORR_PRESENT
-			evt.noise_dbm = (int8_t)(raw_dbm -
-				rssi_temp_corr_get(rssi_temp_cache_c));
-#else
-			evt.noise_dbm = raw_dbm;
-#endif
+			evt.noise_dbm = rssi_sample_dbm();
 			evt.has_noise = true;
 		}
 
@@ -2052,6 +2439,26 @@ static void radio_isr(const void *arg)
 {
 	ARG_UNUSED(arg);
 	radiant_dbg_isr++;
+
+#if defined(CONFIG_RADIANT_CORE_ED_SCAN)
+	/*
+	 * FIRST, AND ONLY WHILE AN ED SWEEP IS RUNNING.
+	 *
+	 * RXREADY is only unmasked for the duration of one, so this test costs
+	 * an event-flag read on every other interrupt and nothing else - which
+	 * is the whole of what this phase adds to the receive path. The kind
+	 * test is not redundant with the mask: an RXREADY raised by the last
+	 * dwell can still be pending in the NVIC when the terminal event has
+	 * already retired the operation, and running a burst against an
+	 * operation nobody owns would sample a receiver that is off.
+	 */
+	if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_RXREADY)) {
+		nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_RXREADY);
+		if (radiant_op.kind == OP_ED && !radiant_op.terminal_sent) {
+			ed_dwell();
+		}
+	}
+#endif
 
 	if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_END)) {
 		nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_END);
@@ -2167,20 +2574,7 @@ static void radio_isr(const void *arg)
 					evt.has_crc_rx = true;
 					evt.crc_rx = NRF_RADIO->RXCRC;
 				}
-				{
-					int8_t raw_dbm = (int8_t)(-(int32_t)
-						(NRF_RADIO->RSSISAMPLE & 0x7Fu));
-
-#if RSSI_TEMP_CORR_PRESENT
-					/* raw_dbm - corr, not + corr: see
-					 * "RSSI temperature correction" above
-					 * for the sign derivation. */
-					evt.rssi_dbm = (int8_t)(raw_dbm -
-						rssi_temp_corr_get(rssi_temp_cache_c));
-#else
-					evt.rssi_dbm = raw_dbm;
-#endif
-				}
+				evt.rssi_dbm = rssi_sample_dbm();
 
 				if (radiant_op.stop_on_first) {
 					/* This event IS the terminal one. */
@@ -2218,5 +2612,20 @@ static void radio_isr(const void *arg)
 			 */
 			deliver_terminal(RADIANT_RADIO_STATUS_ABORTED);
 		}
+#if defined(CONFIG_RADIANT_CORE_ED_SCAN)
+		else if (radiant_op.kind == OP_ED) {
+			/*
+			 * An ED sweep consumes its own DISABLED inside
+			 * radio_disable_now() at the end of every index, so
+			 * reaching this branch means one outlived that bound -
+			 * the backstop radio_disable_now() documents. The sweep
+			 * cannot continue from here (the receiver is down and
+			 * nothing will re-enter it), so it ends, and ABORTED is
+			 * the honest status for a sweep that did not reach its
+			 * last index.
+			 */
+			deliver_terminal(RADIANT_RADIO_STATUS_ABORTED);
+		}
+#endif
 	}
 }

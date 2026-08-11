@@ -213,6 +213,45 @@ config RADIANT_CORE_PROFILE_SANITY
 	  refutation (wrong control byte or transmission type) from a
 	  physical-plausibility one.
 
+config RADIANT_CORE_ED_SCAN
+	bool "energy-detect scan and the channel-quality map"
+	default n
+	help
+	  src/radiant_chanmap.c, the SLOT_ED slot kind in src/radiant_sched.c,
+	  and radiant_radio_ed() in whichever backend is selected. Measures the
+	  band on frequencies the link layer is not using, and aggregates the
+	  result into a per-RF-index map on the same 1 dB scale as the
+	  noise-floor histogram.
+
+	  WHY IT EXISTS. The characterised ~0.4% loss floor on this bench is
+	  memoryless per-slot collision at 2457 MHz, inside Wi-Fi channel 11.
+	  Nothing in the dongle can fix that and moving off 2457 MHz can, but a
+	  move is only as good as the evidence behind it - and today the only
+	  evidence this stack collects is the noise floor of the one frequency
+	  it is already on, which by construction can say nothing about a
+	  candidate. This is the instrument that can.
+
+	  NOTHING READS THE MAP. It is filled and logged, exactly like the noise
+	  histogram, and no decision anywhere in the core consults it. That is
+	  the condition on which building it now was worth it: adaptive
+	  frequency selection is a separate piece of work with its own gate, and
+	  it should arrive to find a measured map rather than build one and a
+	  policy in the same change.
+
+	  WHAT IT COSTS WHEN ON. Radio time, and only radio time nothing else
+	  wanted: an ED chunk is the lowest-priority thing the scheduler can
+	  arm, it never preempts, it merges with nothing, and it is bounded by
+	  the gap ahead of the next committed operation. A dongle that is
+	  searching measures nothing at all, deliberately. Plus 1000 bytes of
+	  RAM for the map, which is 125 RF indices at eight bytes.
+
+	  WHAT IT COSTS WHEN OFF. Nothing: the map compiles to no-op inlines,
+	  the scheduler folds every ED branch away against a compile-time zero,
+	  the backend compiles no sampling path, and caps.has_ed_scan is false
+	  so the request entry point refuses before a slot is ever occupied.
+
+	  Default n. Turn it on for bench work on frequency selection.
+
 config RADIANT_SEC
 	bool "per-channel payload security (X_AUTH, X_CONF)"
 	default n

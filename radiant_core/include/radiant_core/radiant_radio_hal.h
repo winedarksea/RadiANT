@@ -499,6 +499,80 @@ struct radiant_rx_req {
 };
 
 /* ---------------------------------------------------------------------------
+ * Energy detect
+ * ---------------------------------------------------------------------------
+ *
+ * WHAT THIS IS NOT. It is not the noise floor. rx_event.noise_dbm is one RSSI
+ * sample taken inside a window the core was going to open anyway, on whatever
+ * frequency that window happened to use - free, opportunistic, and confined to
+ * the one or two frequencies a running dongle actually visits. This is the
+ * deliberate version: point the receiver at a frequency NOBODY IS USING and
+ * find out what is there. The two answer the same question on the same scale,
+ * and the second one is the only one that can answer it about a frequency the
+ * link layer is not already on.
+ *
+ * WHY IT NEEDS THE HAL AND NOT A BACKEND-PRIVATE ENTRY POINT. It costs radio
+ * time, so it has to be scheduled, so radiant_sched.c has to know about it -
+ * and radiant_sched.c reaches a backend only through this file. A private
+ * entry point would have produced a measurement the scheduler could not fit
+ * into a gap, which is the same as no measurement at all on a dongle at ~19%
+ * duty.
+ *
+ * THE SHAPE IS A RECEIVE WINDOW'S, DELIBERATELY. One arm call names a RANGE of
+ * RF indices and a per-index dwell; the operation walks the range in order,
+ * delivers one RADIANT_RADIO_STATUS_OK event per index carrying that index's
+ * measurement, and ends with exactly one terminal event -
+ * RADIANT_RADIO_STATUS_TIMEOUT when the range completed, ABORTED when it was
+ * cancelled, FAILED when the backend could not finish it. That is the same
+ * "zero or more non-terminal events then exactly one terminal one" contract a
+ * receive window keeps, and it is the same contract for the same reason: the
+ * scheduler already knows how to reason about it, and an operation with a
+ * second shape would need a second set of rules everywhere it is handled.
+ *
+ * (The measurement rides the OK events rather than the terminal one. A single
+ * terminal figure would be a min and a mean over the whole range, which is the
+ * one aggregate a channel-quality map cannot use: the entire point is telling
+ * one frequency from another.)
+ *
+ * MIN AND MEAN, NOT A PERCENTILE. Percentiles need the samples kept, and a
+ * backend cannot keep them - the sampling happens in an interrupt with a fixed
+ * budget. Min is the floor over the dwell and mean is what the dwell averaged
+ * to; the gap between them is how bursty that index was, which is the same
+ * thing radiant_noise.h's floor/busy pair says with a histogram it can afford
+ * to keep because it only ever holds four frequencies.
+ *
+ * SAMPLE COUNT IS REPORTED BECAUSE IT VARIES, and a consumer that could not
+ * see it would weigh one RSSI reading and a hundred equally. A backend takes
+ * what its hardware allows inside the dwell; nothing here requires a rate and
+ * nothing here permits inventing one.
+ */
+
+/*
+ * Measure the band on rf_index_lo .. rf_index_hi, inclusive, in ascending
+ * order.
+ *
+ * dwell_us is an UPPER BOUND on the time spent on one index, not a duration to
+ * be filled. A backend that has taken every sample it can take may leave an
+ * index early, and should - the receiver is on and drawing current for the
+ * whole dwell otherwise. What a backend may never do is exceed it, because the
+ * scheduler sized the gap this operation is filling from
+ * (rf_index_hi - rf_index_lo + 1) * dwell_us and has something committed at
+ * the end of it.
+ *
+ * t_start is honoured exactly as radiant_rx_req.t_open is: at least
+ * caps.min_arm_lead_us in the future, or the call fails RADIANT_RADIO_ETIME.
+ */
+struct radiant_ed_req {
+	uint8_t  rf_index_lo;   /* 0 .. RADIANT_RF_INDEX_MAX */
+	uint8_t  rf_index_hi;   /* >= rf_index_lo, <= RADIANT_RF_INDEX_MAX */
+	uint32_t dwell_us;      /* per index; must be non-zero */
+	radiant_time_t t_start;
+};
+
+/* struct radiant_ed_event is defined with the other event types below, because
+ * it needs enum radiant_radio_status. */
+
+/* ---------------------------------------------------------------------------
  * Events
  * ---------------------------------------------------------------------------
  */
@@ -600,6 +674,32 @@ struct radiant_tx_event {
 	bool                  t_sync_exact;
 };
 
+/* One energy-detect index, or the end of a sweep. See "Energy detect" above. */
+struct radiant_ed_event {
+	uint32_t              op;
+	enum radiant_radio_status status;
+
+	/*
+	 * Everything below is valid ONLY on RADIANT_RADIO_STATUS_OK, which is
+	 * the per-index measurement event. The terminal event carries no
+	 * measurement and leaves them zero - on the same terms, and for the
+	 * same reason, as radiant_rx_event's frame fields on a TIMEOUT.
+	 */
+	uint8_t  rf_index;
+	/* Quietest and average sample over this index's dwell, in dBm, on the
+	 * SAME SCALE as rx_event.rssi_dbm and rx_event.noise_dbm - same
+	 * corrections, same reference. A backend that applied an errata or
+	 * temperature correction to one and not the others would produce a map
+	 * that cannot be compared against the noise histogram, which is the one
+	 * cross-check the map has. */
+	int8_t   min_dbm;
+	int8_t   mean_dbm;
+	/* How many RSSI samples that dwell actually produced. Never zero on an
+	 * OK event: a backend with nothing to report delivers no event for that
+	 * index rather than an event claiming a measurement it did not make. */
+	uint16_t samples;
+};
+
 /*
  * Callback and threading contract.
  *
@@ -612,8 +712,8 @@ struct radiant_tx_event {
  *
  * A callback MAY:
  *   - read the event (only for the duration of the call),
- *   - call radiant_radio_tx(), radiant_radio_rx(), radiant_radio_abort(), radiant_radio_now()
- *     and radiant_radio_caps_get(),
+ *   - call radiant_radio_tx(), radiant_radio_rx(), radiant_radio_ed(),
+ *     radiant_radio_abort(), radiant_radio_now() and radiant_radio_caps_get(),
  *   - signal an ISR-safe synchronisation object to wake a thread.
  *
  * A callback MUST NOT:
@@ -637,6 +737,13 @@ struct radiant_tx_event {
 struct radiant_radio_cbs {
 	void (*rx)(const struct radiant_rx_event *evt, void *user);
 	void (*tx)(const struct radiant_tx_event *evt, void *user);
+	/*
+	 * Energy detect. May be NULL, and is on any core built without
+	 * CONFIG_RADIANT_CORE_ED_SCAN - a backend that finds it NULL must not
+	 * call it, and must still refuse radiant_radio_ed() rather than arm an
+	 * operation whose events have nowhere to go.
+	 */
+	void (*ed)(const struct radiant_ed_event *evt, void *user);
 };
 
 /* ---------------------------------------------------------------------------
@@ -745,6 +852,20 @@ struct radiant_radio_caps {
 	bool has_rssi;
 
 	/*
+	 * True if radiant_radio_ed() is implemented. False is the ordinary
+	 * answer, not a degraded one: every arm call on such a backend returns
+	 * RADIANT_RADIO_ENOTSUP, which is the existing rule for a well-formed
+	 * request this backend cannot do.
+	 *
+	 * Read by radiant_sched.c before it ever posts an ED chunk, so a
+	 * backend without it costs the scheduler one test rather than a stream
+	 * of refusals. It is a COMPILE-TIME property of the backend build, on
+	 * the same terms as caps.phys - a backend may leave it false because
+	 * the hardware cannot, or because the build was not asked for it.
+	 */
+	bool has_ed_scan;
+
+	/*
 	 * True if rx_event.crc_rx is populated on a CRC_FAIL event - that is,
 	 * if the hardware keeps the CRC it received rather than only a
 	 * pass/fail bit.
@@ -817,6 +938,18 @@ radiant_time_t radiant_radio_now(void);
  */
 int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op);
 int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op);
+
+/*
+ * Arm an energy-detect sweep. Occupies the single operation slot exactly as a
+ * transmit or a receive does - there is one radio, and measuring the band is
+ * one of the things it can be doing instead of listening to a sensor.
+ *
+ * RADIANT_RADIO_ENOTSUP where caps.has_ed_scan is false, or where the
+ * installed callback table has no ed entry. RADIANT_RADIO_EINVAL for a range
+ * running backwards, an index above RADIANT_RF_INDEX_MAX, or a zero dwell.
+ * Otherwise EBUSY, ESTATE, ETIME on the same terms as the other two arm calls.
+ */
+int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op);
 
 /*
  * Abort the current operation. Its terminal event is still delivered, with

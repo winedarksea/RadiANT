@@ -65,6 +65,49 @@ extern "C" {
 	((uint8_t)(RADIANT_NOISE_DBM_MAX - RADIANT_NOISE_DBM_MIN + 1))
 
 /*
+ * THE ONE DEFINITION OF THE 1 dB BINNING, and it is inline in the header
+ * rather than private to radiant_noise.c because it acquired a second user.
+ *
+ * radiant_chanmap.c aggregates deliberate energy-detect dwells; this file
+ * aggregates the free samples from windows that heard nothing. The two are
+ * measurements of the same physical quantity taken for different reasons, and
+ * the whole value of having both is that a figure from one can be compared
+ * against a figure from the other - "the map says RF 26 is 14 dB quieter than
+ * 57" is only a statement if both were binned the same way. Two copies of an
+ * edge rule and a clamp is how that quietly stops being true, and the
+ * disagreement would be at most one bin, which is exactly the size of error
+ * nobody notices.
+ *
+ * Clamping rather than rejecting is deliberate and matches what
+ * radiant_noise_note() has always done: a sample outside the range is counted
+ * at the edge AND counted separately by the caller, so a distribution piled
+ * against a wall is visible as such.
+ */
+static inline uint8_t radiant_noise_bin(int8_t dbm)
+{
+	int idx = (int)dbm - RADIANT_NOISE_DBM_MIN;
+
+	if (idx < 0) {
+		return 0u;
+	}
+	if (idx >= (int)RADIANT_NOISE_BINS) {
+		return (uint8_t)(RADIANT_NOISE_BINS - 1u);
+	}
+	return (uint8_t)idx;
+}
+
+/* The dBm a bin index names. The inverse of radiant_noise_bin() for every
+ * value inside the range, and the bottom or top of the range for one that was
+ * clamped into it. */
+static inline int8_t radiant_noise_bin_dbm(uint8_t bin)
+{
+	if (bin >= RADIANT_NOISE_BINS) {
+		return (int8_t)RADIANT_NOISE_DBM_MAX;
+	}
+	return (int8_t)(RADIANT_NOISE_DBM_MIN + (int)bin);
+}
+
+/*
  * How many frequencies are tracked at once.
  *
  * Per rf_index, because the whole point is to tell one frequency from another -

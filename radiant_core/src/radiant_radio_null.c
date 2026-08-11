@@ -121,6 +121,12 @@ static const struct radiant_radio_caps null_caps = {
 	.has_sync_timestamp = false,
 	.has_rssi = false,
 
+	/* False, on the same terms: energy detect IS an RSSI measurement, and a
+	 * backend with no receiver has nothing to measure. radiant_sched.c reads
+	 * this before it posts a chunk, so an ED request against this build is
+	 * refused at radiant_sched_request_ed() and never occupies a slot. */
+	.has_ed_scan = false,
+
 	/* Immaterial while nothing is received, but a real answer costs
 	 * nothing: the nRF CRC engine can be made to cover the address bytes,
 	 * which is the property that decides this on a given part. */
@@ -229,6 +235,18 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 }
 
 int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
+{
+	if (req == NULL || op == NULL) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	if (!null_enabled) {
+		return RADIANT_RADIO_ESTATE;
+	}
+	*op = 0u;
+	return RADIANT_RADIO_ENOTSUP;
+}
+
+int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 {
 	if (req == NULL || op == NULL) {
 		return RADIANT_RADIO_EINVAL;

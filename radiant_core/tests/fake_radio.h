@@ -242,7 +242,8 @@ struct fake_radio_air {
 enum fake_radio_arm_kind {
 	FAKE_RADIO_ARM_NONE = 0,
 	FAKE_RADIO_ARM_TX,
-	FAKE_RADIO_ARM_RX
+	FAKE_RADIO_ARM_RX,
+	FAKE_RADIO_ARM_ED
 };
 
 /*
@@ -291,6 +292,13 @@ struct fake_radio_arm {
 	struct radiant_rx_filter filters[FAKE_RADIO_MAX_FILTERS];
 	uint8_t              n_filters;
 
+	/* ED. rf_index above is the range's low end and t_open is t_start, on
+	 * the same reasoning the mock uses everywhere else: a field that means
+	 * the same thing in two kinds is one field, so a test that asserts "the
+	 * radio was put on RF 57" reads the same member whatever put it there. */
+	uint8_t  rf_index_hi;
+	uint32_t ed_dwell_us;
+
 	/* Outcome, filled in as the operation runs. */
 	bool                  terminated;
 	enum radiant_radio_status terminal_status;
@@ -314,7 +322,38 @@ struct fake_radio_event {
 	bool                     has_crc_rx;
 	uint32_t                 crc_rx;
 	bool                     late;   /* injected for an operation that ended */
+
+	/* ED, on RADIANT_RADIO_STATUS_OK only. rf_index is the index this dwell
+	 * measured; the terminal event of a sweep carries none of these. */
+	uint8_t  rf_index;
+	int8_t   ed_min_dbm;
+	int8_t   ed_mean_dbm;
+	uint16_t ed_samples;
 };
+
+/*
+ * What the mock reports for an energy-detect dwell.
+ *
+ * Per RF index, so a suite can build a band with a loud patch in it and assert
+ * that the map found it - which is the only interesting thing a channel-quality
+ * map does. Unset indices report FAKE_RADIO_ED_MIN_DBM / _MEAN_DBM, five dB
+ * apart so that a test which never sets anything still gets a min and a mean
+ * that can be told apart; a mock reporting the same number for both would let
+ * a core module that used one where it meant the other pass.
+ */
+#define FAKE_RADIO_ED_MIN_DBM  (-95)
+#define FAKE_RADIO_ED_MEAN_DBM (-90)
+/* Samples the mock claims per dwell. Non-zero and not one, so that a consumer
+ * which ignored the field is distinguishable from one that read it. */
+#define FAKE_RADIO_ED_SAMPLES  16u
+
+void fake_radio_set_ed(uint8_t rf_index, int8_t min_dbm, int8_t mean_dbm);
+void fake_radio_clear_ed(void);
+/* Override the reported sample count for every dwell. Zero is permitted and is
+ * the "this dwell measured nothing" case the HAL says a backend must not
+ * deliver an OK event for - so the mock delivers no event for that index at
+ * all, which is the behaviour a consumer has to survive. */
+void fake_radio_set_ed_samples(uint16_t samples);
 
 /*
  * What a window that hears nothing reports as the band's level.
@@ -335,6 +374,7 @@ void fake_radio_clear_noise(void);
 struct fake_radio_stats {
 	uint32_t arms_tx;
 	uint32_t arms_rx;
+	uint32_t arms_ed;
 	uint32_t arms_rejected;
 	uint32_t arms_addr_len_over_hw; /* addr_len > caps.addr_len_hw_max, so a
 					 * real backend finishes the match in
@@ -353,6 +393,7 @@ struct fake_radio_stats {
 	uint32_t ev_aborted;
 	uint32_t ev_failed;
 	uint32_t ev_tx;
+	uint32_t ev_ed;    /* per-index ED measurements delivered (OK only) */
 	uint32_t ev_late;
 
 	uint32_t crc_fail_suppressed;  /* CRC_FAIL frames the window did not ask

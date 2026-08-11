@@ -202,6 +202,39 @@ extern "C" {
  */
 #define RADIANT_SCHED_MERGE_SPAN_MAX_US 2000u
 
+/*
+ * Energy detect: the three numbers that make it background.
+ *
+ * An ED request is modelled on the continuous background scan and not on the
+ * bounded window path - it never ends, it is armed one gap-sized chunk at a
+ * time, and it is re-armed for as long as it is posted. What it does NOT share
+ * with the scan is priority: the scan outranks it, every tracked window
+ * outranks it, and every transmit outranks it. See "SLOT_ED" in
+ * radiant_sched.c.
+ *
+ * RADIANT_SCHED_ED_DWELL_US is one index's ceiling. 400 us is sized from the
+ * nRF backend's own arithmetic - ~40 us of ramp-up plus a bounded burst of RSSI
+ * samples - with room for a backend that can sample across the whole dwell
+ * rather than at the start of it. A dwell is a ceiling and not a duration: a
+ * backend that has taken every sample it can leaves early, which is why a full
+ * 0..124 sweep does not actually cost 125 * 400 us.
+ *
+ * RADIANT_SCHED_ED_CHUNK_US bounds ONE arm call, at 25 indices' worth. It is
+ * deliberately far below the ~245 ms gap a 4 Hz tracked channel leaves: an ED
+ * chunk cannot be merged with anything and cannot be usefully rebuilt once
+ * armed, so a long chunk is a long stretch during which a newly-posted window
+ * can only be served by preempting - and preemption throws away the tail of a
+ * measurement rather than the tail of a window nobody was in.
+ *
+ * RADIANT_SCHED_ED_MIN_US is the shortest gap worth an ED chunk at all, at five
+ * indices. Below it the arm costs more than the measurement is worth, on the
+ * same reasoning as RADIANT_SCHED_SCAN_MIN_US and with a larger number for a
+ * larger fixed cost.
+ */
+#define RADIANT_SCHED_ED_DWELL_US 400u
+#define RADIANT_SCHED_ED_CHUNK_US 10000u
+#define RADIANT_SCHED_ED_MIN_US   2000u
+
 /* ---------------------------------------------------------------------------
  * Requests
  * ---------------------------------------------------------------------------
@@ -296,6 +329,34 @@ struct radiant_sched_tx {
 	radiant_time_t                   t_sync_at;
 };
 
+/*
+ * One energy-detect intent.
+ *
+ * THERE IS NO TIME IN THIS STRUCTURE, and its absence is the whole character of
+ * the slot kind. Every other request names an instant it must happen at, and
+ * the scheduler's job is to honour it or report that it could not. An ED
+ * request names no instant because it wants whatever is left over: it is ready
+ * the moment it is posted, it is ready again the moment a chunk ends, and it is
+ * never late for anything. A t_open would only ever have been a lie the
+ * expiry sweep then had to be taught to ignore.
+ *
+ * The request is CONTINUOUS in the same sense radiant_sched_rx's
+ * RADIANT_TIME_NEVER is: it is not consumed by its terminal event. done() fires
+ * with RADIANT_SCHED_DONE_OK at the end of every chunk and the request stays
+ * live until radiant_sched_cancel(). It sweeps rf_index_lo .. rf_index_hi in
+ * ascending order, wrapping back to lo, and it resumes from the index it
+ * reached rather than from the start of the range - a chunk cut short by a
+ * tracked window loses the indices it had not reached yet, not the ones it had.
+ */
+struct radiant_sched_ed {
+	uint8_t rf_index_lo;
+	uint8_t rf_index_hi;   /* >= rf_index_lo */
+	/* Per-index ceiling. 0 means RADIANT_SCHED_ED_DWELL_US. */
+	uint32_t dwell_us;
+	/* Ceiling on one chunk. 0 means RADIANT_SCHED_ED_CHUNK_US. */
+	uint32_t chunk_us;
+};
+
 /* ---------------------------------------------------------------------------
  * Completion
  * ---------------------------------------------------------------------------
@@ -371,6 +432,19 @@ struct radiant_sched_cbs {
 	void (*tx)(uint8_t ch, const struct radiant_tx_event *evt, void *user);
 
 	/*
+	 * One energy-detect dwell finished, for the channel that posted the ED
+	 * request. Fires only for RADIANT_RADIO_STATUS_OK events - the terminal
+	 * one reaches done() like every other operation's.
+	 *
+	 * OPTIONAL, AND NOTHING IN THE CORE NEEDS IT. The scheduler has already
+	 * fed the measurement to radiant_chanmap.c by the time this runs, which
+	 * is where a consumer should read it from; this exists for a bench
+	 * capture that wants the dwells themselves rather than the aggregate.
+	 * Leave it NULL unless something is being measured.
+	 */
+	void (*ed)(uint8_t ch, const struct radiant_ed_event *evt, void *user);
+
+	/*
 	 * A receive window carrying this channel has been armed, with the shape
 	 * it ACTUALLY got - which is routinely not the shape that was asked
 	 * for. Merging widens a window, a nearer deadline truncates one, and a
@@ -409,6 +483,12 @@ struct radiant_sched_stats {
 	uint32_t filters_armed;     /* summed hardware filters used */
 	uint32_t tx_armed;          /* accepted radiant_radio_tx() calls */
 	uint32_t scan_chunks;       /* continuous-request chunks armed */
+	uint32_t ed_chunks;         /* energy-detect chunks armed */
+	uint32_t ed_dwells;         /* per-index measurements delivered. Against
+				     * ed_chunks this is the sweep rate; against
+				     * windows_armed it is what the map cost,
+				     * which is the number the "loss_exact
+				     * unchanged" claim is made against */
 	uint32_t missed;            /* requests reported RADIANT_SCHED_DONE_MISSED */
 	uint32_t preempted;         /* running operations cut short for a nearer
 				     * deadline; their members lost the rest of
@@ -495,6 +575,21 @@ void radiant_sched_reset(void);
  */
 int radiant_sched_request_rx(uint8_t ch, const struct radiant_sched_rx *req);
 int radiant_sched_request_tx(uint8_t ch, const struct radiant_sched_tx *req);
+
+/*
+ * Post a standing energy-detect request against a channel slot.
+ *
+ * RADIANT_RADIO_ENOTSUP when the core was built without
+ * CONFIG_RADIANT_CORE_ED_SCAN, and when the backend's caps.has_ed_scan is
+ * false. Refused HERE rather than reported through done(), unlike a filter set
+ * the backend cannot match: a request that can never be armed is not
+ * contention, and leaving it in the table would put a permanently unservable
+ * slot in front of the leader search on every pass for the life of the image.
+ *
+ * RADIANT_RADIO_EINVAL for a bad channel, a range running backwards, or an
+ * index above RADIANT_RF_INDEX_MAX.
+ */
+int radiant_sched_request_ed(uint8_t ch, const struct radiant_sched_ed *req);
 
 /*
  * Drop this channel's request, aborting it if it is in flight.

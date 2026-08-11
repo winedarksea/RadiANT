@@ -76,7 +76,8 @@ static struct noise_slot *slot_for(uint8_t rf_index)
 void radiant_noise_note(uint8_t rf_index, int8_t dbm)
 {
 	struct noise_slot *s = slot_for(rf_index);
-	int index;
+	int     raw;
+	uint8_t index;
 
 	if (s == NULL) {
 		noise_unslotted++;
@@ -90,17 +91,24 @@ void radiant_noise_note(uint8_t rf_index, int8_t dbm)
 		s->max_dbm = dbm;
 	}
 
-	index = (int)dbm - RADIANT_NOISE_DBM_MIN;
-	if (index < 0) {
-		/* Counted at the edge as well as separately: a percentile
-		 * computed with the clipped samples missing would be computed
-		 * over a different population than the one `samples` names. */
+	/*
+	 * The out-of-range test is here and the clamp is in radiant_noise_bin().
+	 * They used to be one expression, and splitting them is what lets
+	 * radiant_chanmap.c share the binning without also inheriting these two
+	 * counters, which are this module's own accounting and mean nothing to
+	 * a map that keeps no distribution.
+	 *
+	 * Counted at the edge as well as separately: a percentile computed with
+	 * the clipped samples missing would be computed over a different
+	 * population than the one `samples` names.
+	 */
+	raw = (int)dbm - RADIANT_NOISE_DBM_MIN;
+	if (raw < 0) {
 		s->below_range++;
-		index = 0;
-	} else if (index >= (int)RADIANT_NOISE_BINS) {
+	} else if (raw >= (int)RADIANT_NOISE_BINS) {
 		s->above_range++;
-		index = (int)RADIANT_NOISE_BINS - 1;
 	}
+	index = radiant_noise_bin(dbm);
 
 	if (s->bins[index] < 0xFFFFu) {
 		s->bins[index]++;
@@ -128,7 +136,7 @@ static int8_t percentile(const struct noise_slot *s, uint32_t p)
 	for (i = 0u; i < RADIANT_NOISE_BINS; i++) {
 		seen += s->bins[i];
 		if (seen >= rank) {
-			return (int8_t)(RADIANT_NOISE_DBM_MIN + (int)i);
+			return radiant_noise_bin_dbm(i);
 		}
 	}
 	/* Unreachable while samples equals the sum of the bins, which it does
