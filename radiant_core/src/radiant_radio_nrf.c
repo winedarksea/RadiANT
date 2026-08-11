@@ -439,8 +439,14 @@ static const struct radiant_radio_caps radiant_nrf_caps = {
 	.name                = CAPS_NAME,
 
 	/* Eight logical addresses. See this file's header for the constraint
-	 * that number does not express: at most two distinct BASEs. */
+	 * that number does not express: at most two distinct BASEs - which is
+	 * what max_addr_groups below now expresses, so the scheduler stops
+	 * building sets apply_filters() has to refuse. */
 	.max_filters         = 8,
+	/* Logical 0 is BASE0 + AP0; logical 1..7 are BASE1 + AP1..AP7. Two
+	 * bases, and on the 5-byte tracking format the device number is inside
+	 * the base. */
+	.max_addr_groups     = 2,
 	.filter_wildcard_dev = false,
 	.addr_len_hw_max     = 5,
 	.max_body_len        = RADIANT_RADIO_BODY_MAX,

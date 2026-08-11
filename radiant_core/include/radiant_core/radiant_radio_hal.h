@@ -309,6 +309,16 @@ struct radiant_pkt_format {
  * wildcard the device-number byte it sets filter_wildcard_dev and the policy
  * collapses to one window.
  *
+ * THE PARAGRAPH ABOVE DESCRIBES THE 3-BYTE SEARCH FORMAT AND ONLY IT. It used
+ * to be the whole of what this preamble said about filters, and read as a
+ * general statement it is wrong in a way that costs windows: on the 5-byte
+ * tracking format the device number lives inside the part of the address the
+ * nRF calls the BASE, and a window can carry at most two distinct bases. Eight
+ * filters is eight *addresses*; it is not eight *device numbers*. See
+ * caps.max_addr_groups, which is the number that governs the tracking case, and
+ * ADR 0005's "32 sensors do not cost 32 windows" claim, which is true only when
+ * the scheduler reads that number rather than this one.
+ *
  * Putting the sweep in the core rather than in the HAL is what keeps the sweep
  * *shared*: one sweep serves every channel in SEARCHING at once. A per-backend
  * sweep could not do that, and eight simultaneous searches would take ~64 s
@@ -646,6 +656,41 @@ struct radiant_radio_caps {
 	 * number sets both the wildcard-search sweep length and how many tracked
 	 * channels can share a merged window. */
 	uint8_t max_filters;
+
+	/*
+	 * Distinct values of addr[0 .. addr_len-2] matchable in one window -
+	 * "address groups". THIS IS NOT max_filters, AND ASSUMING IT IS IS A
+	 * REAL BUG WITH A QUIET SIGNATURE.
+	 *
+	 * The nRF matcher has eight logical addresses and they are not eight
+	 * independent ones: logical 0 is BASE0 + AP0 and logical 1..7 are BASE1
+	 * + AP1..AP7. So a window carries at most TWO DISTINCT BASES, and seven
+	 * of the eight filters must share one. max_addr_groups is 2 there.
+	 *
+	 * That falls out exactly right for search and exactly wrong for
+	 * tracking:
+	 *
+	 *   SEARCH, 3-byte [A6 C5 devnum_lo]: the group is [A6 C5], shared by
+	 *   every filter, and the prefix is devnum_lo. Eight filters, one
+	 *   group, no constraint hit.
+	 *
+	 *   TRACKING, 5-byte [A6 C5 dnl dnh dtype]: the group is
+	 *   [A6 C5 dnl dnh] and differs per sensor, because the device number
+	 *   is inside it. Two tracked channels share a window only if they have
+	 *   the same device number, which is to say never - so a merged
+	 *   tracking window holds TWO channels on nRF, not eight.
+	 *
+	 * Where every filter carries a full independent address - RAIL's two
+	 * sync words - this equals max_filters and the constraint never binds.
+	 *
+	 * A backend that leaves this 0 is read as "no group constraint" for
+	 * backward compatibility, and the scheduler treats it as max_filters.
+	 * A backend whose hardware does have the constraint and does not say so
+	 * gets a stream of RADIANT_RADIO_ENOTSUP from arm_rx() instead, which is
+	 * safe and is diagnosable only by reading the backend - hence the
+	 * field.
+	 */
+	uint8_t max_addr_groups;
 
 	/* True only if the backend can match "any value" in the device-number
 	 * bytes with a single filter. False on every planned backend; see

@@ -130,9 +130,21 @@ Some facts that constrain the choice:
   page numbers they do not know.
 - **The scheduler's cost model is windows, not bytes.** All ANT+ traffic being
   on RF 57 is what allows overlapping tracked RX windows to be *merged* into a
-  single hardware window with up to 8 filters. That merge is the highest-value
-  item in the scheduler: it is why 32 tracked sensors do not cost 32 windows,
-  and why slave-side collisions between tracked channels drop to zero.
+  single hardware window. That merge is the highest-value item in the
+  scheduler: it is why 32 tracked sensors do not cost 32 windows, and why
+  slave-side collisions between tracked channels drop to zero.
+
+  **Corrected 2026-08-10 — "up to 8 filters" was true of the search format and
+  false of the tracking one, and the number is 2.** The nRF's eight logical
+  addresses are one `BASE0+AP0` and seven `BASE1+AP1..AP7`, so a window carries
+  two distinct bases; on the 5-byte tracking address the device number is
+  *inside* the base, so two tracked channels share a window only if they are the
+  same sensor. Thirty-two tracked sensors therefore cost **sixteen** windows,
+  not four. The claim survives — sixteen is not thirty-two — but it was
+  measured against `fake_radio.c`, which advertised eight filters and modelled
+  no base at all, so CI could not see that the real backend refused every set
+  the scheduler built. `caps.max_addr_groups` is the repair; see
+  `docs/backends.md`, "the caps table".
 - **The residual loss floor is real and understood.** ~0.4%, characterised at
   0.26–0.60%, is memoryless per-slot collision with Wi-Fi channel 11 over
   2457 MHz, with an `RX_FAIL` for every hole. Frequency agility would fix it;

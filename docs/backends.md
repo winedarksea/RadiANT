@@ -218,7 +218,8 @@ name, and there is no `#ifdef` on a part number anywhere above the HAL.
 
 | Field | What it says | nRF | EFR32 / RAIL |
 |---|---|---|---|
-| `max_filters` | Addresses matchable in one receive window. Sets both the wildcard-sweep length and how many tracked channels can share a merged window | **8** (one base plus eight prefixes) | **2** (two runtime sync words) |
+| `max_filters` | Addresses matchable in one receive window. Sets the wildcard-sweep length | **8** (one base plus eight prefixes) | **2** (two runtime sync words) |
+| `max_addr_groups` | Distinct values of `addr[0 .. addr_len-2]` matchable in one window. Sets how many *tracked* channels can share a merged window | **2** (BASE0 and BASE1) | **2** (two independent sync words) |
 | `filter_wildcard_dev` | Can one filter match *any* device number? | false | false |
 | `addr_len_hw_max` | Longest address the hardware matcher itself handles. Informational — a shorter hardware match is completed in software, at the cost of more spurious wakeups and more receive current | 5 | 4 |
 | `max_body_len` | Largest body (bytes between address and CRC), either direction | — | — |
@@ -241,6 +242,33 @@ policy code produces **128 sets**, or picks a different strategy, with no HAL
 change. Keeping the sweep in the core is also what keeps it *shared*: one sweep
 serves every channel in SEARCHING at once, where a per-backend sweep would make
 eight simultaneous searches take ~64 s instead of ~8 s.
+
+**`max_addr_groups` is the one that was missing, and its absence was a live
+bug.** The nRF's eight logical addresses are not eight independent addresses:
+logical 0 is `BASE0 + AP0` and logical 1..7 are `BASE1 + AP1..AP7`, so a window
+expresses at most **two distinct bases**. That falls out exactly right for
+search and exactly wrong for tracking:
+
+| Format | Address | Group | Prefix | Fits |
+|---|---|---|---|---|
+| Search, 3-byte | `[A6 C5 devnum_lo]` | `[A6 C5]`, shared by every filter | `devnum_lo` | **8** |
+| Tracking, 5-byte | `[A6 C5 dnl dnh dtype]` | `[A6 C5 dnl dnh]` — carries the device number | `dtype` | **2** |
+
+So two tracked channels share a window only if they have the same device
+number, which is to say never. Until this field existed, `radiant_sched.c` read
+`max_filters` for both cases, built merged tracking windows of eight, and the
+backend refused every one with `RADIANT_RADIO_ENOTSUP` — a refusal that was then
+charged to whichever channel happened to be leading the merge. On a bench that
+reads as one healthy sensor failing at random.
+
+`radiant_core/tests/fake_radio.c` models the constraint too, and that is the
+part that keeps it fixed: the preset used to advertise eight filters with no
+base model at all, which is precisely why CI could not see any of this. **A mock
+more capable than the hardware certifies the bug it was written to catch.**
+
+ADR 0005's "32 sensors do not cost 32 windows" survives, with a corrected
+number: sixteen windows rather than four. Merging still halves the cost; it does
+not divide it by eight.
 
 ### `t_sync` — the subtlest thing in the header
 
@@ -651,7 +679,9 @@ expensive than starting at 32.
 32 is the serial protocol's natural ceiling — the burst header uses the low
 5 bits for the channel number. At 4 Hz with ~400 µs windows, 8 channels is 4.8 %
 radio duty and 32 is ~19 %, still comfortable, and merging the RX windows of
-channels that share RF 57 means 32 tracked sensors do not cost 32 windows.
+channels that share RF 57 means 32 tracked sensors cost 16 windows rather than
+32 — two per window on nRF, which is `max_addr_groups` above and not
+`max_filters`.
 RAM cost is ~32 × 72 B = 2.3 KB, still under `libant.a`'s footprint.
 
 **sdk-ant's ceiling is 15, not 8** — 8 is what this build configures,

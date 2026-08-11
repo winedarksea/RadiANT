@@ -654,12 +654,14 @@ Three things about the sweep are **not optional**:
    is the thing a rider actually notices.
 3. **Merge overlapping tracked RX windows** into one multi-filter receive. Since every ANT+ channel
    shares RF 57, merged windows drop slave-side collisions *between our own tracked channels* to
-   zero, and 32 tracked sensors do not cost 32 windows. This is the highest-value item in the
-   scheduler.
+   zero, and 32 tracked sensors do not cost 32 windows — they cost sixteen, because the nRF matches
+   **two device numbers per tracking window** and not eight (`caps.max_addr_groups`; see
+   `docs/backends.md`). This is still the highest-value item in the scheduler.
 
-None of the three is a HAL feature. `radiant_radio_hal.h` exposes `caps.max_filters` and
-`caps.filter_wildcard_dev`, and all of the above is core policy reading those numbers — which is what
-lets a backend with two sync words instead of eight run the same code with a different sweep length.
+None of the three is a HAL feature. `radiant_radio_hal.h` exposes `caps.max_filters`,
+`caps.max_addr_groups` and `caps.filter_wildcard_dev`, and all of the above is core policy reading
+those numbers — which is what lets a backend with two sync words instead of eight run the same code
+with a different sweep length.
 
 ## The preamble-as-address alternative — tested, refuted, keep the sweep
 

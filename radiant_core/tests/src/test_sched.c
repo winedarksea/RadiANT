@@ -449,14 +449,22 @@ ZTEST(radiant_sched, test_a_window_is_armed_at_the_requested_absolute_microsecon
  */
 
 /*
- * THE CENTRAL TEST. Three tracked channels whose windows overlap cost one
- * hardware window carrying three filters, and the frame that arrives is still
+ * THE CENTRAL TEST. Tracked channels whose windows overlap cost ONE hardware
+ * window carrying one filter each, and the frame that arrives is still
  * attributed to the one channel it belongs to.
  *
- * The assertion that matters is fake_radio_arm_count() == 1. An unmerged
+ * The assertion that matters is that the merge happens at all. An unmerged
  * scheduler passes every other assertion in this file and fails only this one -
  * and on the bench it would fail as a fraction of a percent of extra loss,
  * indistinguishable from the collision floor.
+ *
+ * TWO CHANNELS, NOT THREE, AND THAT IS THE HARDWARE TALKING. This test used to
+ * post three and assert a window carrying three filters, which no nRF can arm:
+ * on the 5-byte tracking format the device number lives inside the address
+ * BASE, the part has one BASE0 and one BASE1, and so a tracking window
+ * expresses two device numbers. caps.max_addr_groups is that number, and the
+ * third channel gets its own window immediately afterwards rather than being
+ * lost - which is what the tail of this test now checks.
  */
 ZTEST(radiant_sched, test_overlapping_windows_collapse_into_one_hardware_window)
 {
@@ -472,9 +480,10 @@ ZTEST(radiant_sched, test_overlapping_windows_collapse_into_one_hardware_window)
 	open = t0 + 100000u;
 	close = open + TEST_WINDOW_US;
 
-	/* Deliberately not identical: three masters whose slots have drifted
-	 * apart by a few tens of microseconds, which is what overlap looks like
-	 * in the field. */
+	/* Deliberately not identical: masters whose slots have drifted apart by
+	 * a few tens of microseconds, which is what overlap looks like in the
+	 * field. The third is posted too, so that the group cap is exercised
+	 * rather than merely respected by a test that never reaches it. */
 	post_track(0u, open, close);
 	post_track(1u, open + 40u, close + 40u);
 	post_track(2u, open + 90u, close + 90u);
@@ -482,21 +491,24 @@ ZTEST(radiant_sched, test_overlapping_windows_collapse_into_one_hardware_window)
 	zassert_ok(radiant_sched_tick());
 
 	zassert_equal(1u, fake_radio_arm_count(),
-		      "three overlapping channels cost %u windows, not one",
+		      "two overlapping channels cost %u windows, not one",
 		      fake_radio_arm_count());
 
 	a = fake_radio_arm(0u);
 	zassert_not_null(a);
 	zassert_equal(RADIANT_RADIO_OK_RC, a->rc);
-	zassert_equal(3u, a->n_filters, "the window did not carry three filters");
-	/* The union of the three, not the intersection: truncating to the
-	 * overlap would lose coverage for every member. */
+	zassert_equal(2u, a->n_filters,
+		      "the window carried %u filters; the nRF matches two "
+		      "device numbers per tracking window, not three",
+		      a->n_filters);
+	/* The union of the two, not the intersection: truncating to the overlap
+	 * would lose coverage for every member. */
 	zassert_equal(open, a->t_open);
-	zassert_equal(close + 90u, a->t_close);
+	zassert_equal(close + 40u, a->t_close);
 	/* STOP_ON_FIRST is forbidden on a merged window and nobody asked for
 	 * it here either. */
 	zassert_equal(0u, a->flags & RADIANT_RX_STOP_ON_FIRST);
-	for (ch = 0u; ch < 3u; ch++) {
+	for (ch = 0u; ch < 2u; ch++) {
 		zassert_mem_equal(a->filters[ch].addr, track_filter[ch].addr, 5u,
 				  "filter %u is not channel %u's", ch, ch);
 	}
@@ -512,17 +524,23 @@ ZTEST(radiant_sched, test_overlapping_windows_collapse_into_one_hardware_window)
 	zassert_equal(RADIANT_RADIO_STATUS_OK, log.rx[0].status);
 	zassert_equal(open + 100u, log.rx[0].t_sync);
 
-	/* All three members are told the window ended, exactly once each. */
-	zassert_equal(3u, log.n_done);
-	for (ch = 0u; ch < 3u; ch++) {
+	/* Both members are told the window ended, exactly once each. */
+	for (ch = 0u; ch < 2u; ch++) {
 		zassert_equal(1u, log.ok_count[ch], "channel %u", ch);
 	}
 
 	st = radiant_sched_stats_get();
 	zassert_equal(1u, st->windows_armed);
-	zassert_equal(3u, st->channels_windowed);
+	zassert_equal(2u, st->channels_windowed);
 	zassert_equal(1u, st->windows_merged);
-	zassert_equal(3u, st->filters_armed);
+	zassert_equal(2u, st->filters_armed);
+
+	/* AND THE THIRD CHANNEL IS NOT LOST. It was excluded by the group cap,
+	 * not dropped: it gets a window of its own as soon as the radio is
+	 * free. This is the assertion that separates "the scheduler respects
+	 * the hardware" from "the scheduler quietly serves fewer sensors". */
+	zassert_true(log.ok_count[2] + log.missed_count[2] >= 1u,
+		     "channel 2 was neither served nor told");
 
 	assert_every_window_bounded();
 	finish();
@@ -569,22 +587,38 @@ ZTEST(radiant_sched, test_disjoint_windows_are_not_merged)
 }
 
 /*
- * The merge is bounded by caps.max_filters and by nothing else. Twelve channels
- * want the same window; on the nRF preset eight of them get it.
+ * THE MERGE IS BOUNDED BY caps.max_addr_groups, NOT BY caps.max_filters, ON THE
+ * TRACKING FORMAT - and confusing the two is the defect this test was rewritten
+ * to pin.
  *
- * The four that do not are reported RADIANT_SCHED_DONE_MISSED rather than dropped,
- * and that is the honest answer: twelve sensors whose slots coincide exactly
- * cannot all be heard by a radio with eight matchers, and a scheduler that hid
- * it would turn a capacity limit into unexplained loss.
+ * Twelve tracked channels want the same window. On the nRF preset TWO of them
+ * get it, because the eight logical addresses are one BASE0+AP0 and seven
+ * BASE1+AP1..AP7, and on the 5-byte tracking address the device number is
+ * inside the BASE. Eight filters is eight addresses; it is not eight device
+ * numbers.
+ *
+ * This test previously asserted eight, and passed, because the mock modelled
+ * max_filters and no base at all. The scheduler duly built sets of eight, the
+ * real backend refused every one of them with RADIANT_RADIO_ENOTSUP, and the
+ * refusal was charged to whichever channel happened to be leading - which on a
+ * bench looks like one healthy sensor failing at random.
+ *
+ * The ten that do not fit are reported RADIANT_SCHED_DONE_MISSED rather than
+ * dropped, which is the honest answer: twelve sensors whose slots coincide
+ * exactly cannot all be heard at once by this part, and a scheduler that hid it
+ * would turn a capacity limit into unexplained loss.
  */
-ZTEST(radiant_sched, test_merging_is_bounded_by_max_filters_at_eight)
+ZTEST(radiant_sched, test_merging_is_bounded_by_max_addr_groups_on_tracking)
 {
 	radiant_time_t t0;
 	radiant_time_t open;
 	uint8_t    ch;
 
-	bring_up(); /* fake_radio_reset() leaves the nRF preset: 8 filters */
+	bring_up(); /* fake_radio_reset() leaves the nRF preset */
 	zassert_equal(8u, radiant_radio_caps_get()->max_filters);
+	zassert_equal(2u, radiant_radio_caps_get()->max_addr_groups,
+		      "the nRF preset must model the two-BASE constraint, or "
+		      "this suite certifies a window no part can arm");
 
 	t0 = radiant_radio_now();
 	open = t0 + 100000u;
@@ -594,20 +628,64 @@ ZTEST(radiant_sched, test_merging_is_bounded_by_max_filters_at_eight)
 	zassert_ok(radiant_sched_tick());
 
 	zassert_equal(1u, fake_radio_arm_count());
-	zassert_equal(8u, fake_radio_arm(0u)->n_filters,
-		      "the window carried %u filters, not the eight the part has",
+	zassert_equal(2u, fake_radio_arm(0u)->n_filters,
+		      "the window carried %u filters; a tracking window on this "
+		      "part expresses two device numbers",
 		      fake_radio_arm(0u)->n_filters);
 
 	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
-	for (ch = 0u; ch < 8u; ch++) {
+	for (ch = 0u; ch < 2u; ch++) {
 		zassert_equal(1u, log.ok_count[ch], "channel %u was not heard", ch);
 	}
-	for (ch = 8u; ch < 12u; ch++) {
+	for (ch = 2u; ch < 12u; ch++) {
 		zassert_equal(1u, log.missed_count[ch],
 			      "channel %u was neither served nor told", ch);
 	}
-	zassert_equal(4u, radiant_sched_stats_get()->missed);
+	zassert_equal(10u, radiant_sched_stats_get()->missed);
 
+	assert_every_window_bounded();
+	finish();
+}
+
+/*
+ * THE OTHER HALF OF THE SAME FACT, AND THE REASON THE FIX COSTS NOTHING WHERE
+ * IT MATTERS MOST.
+ *
+ * On the 3-byte SEARCH format the address is [A6 C5 devnum_lo]: the group is
+ * [A6 C5], every filter shares it, and the prefix is the device-number byte. So
+ * eight search filters ride one window with one address group, the sweep
+ * geometry is unchanged, and the group cap never fires.
+ *
+ * Without this test the change above reads as "merging got worse". It did not:
+ * merging got correct on the one format where the hardware constrains it, and
+ * stayed at eight on the one where the sweep's whole rate depends on it.
+ */
+ZTEST(radiant_sched, test_search_filters_share_one_address_group)
+{
+	struct radiant_sched_rx r;
+	radiant_time_t          t0;
+	radiant_time_t          open;
+
+	bring_up();
+	zassert_equal(2u, radiant_radio_caps_get()->max_addr_groups);
+
+	t0 = radiant_radio_now();
+	open = t0 + 100000u;
+
+	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_SEARCH),
+		    search_filter, 8u, open, open + TEST_WINDOW_US);
+	zassert_ok(radiant_sched_request_rx(0u, &r));
+	zassert_ok(radiant_sched_tick());
+
+	zassert_equal(1u, fake_radio_arm_count());
+	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_arm(0u)->rc,
+		      "eight search filters were refused; they share the "
+		      "[A6 C5] group and must all fit");
+	zassert_equal(8u, fake_radio_arm(0u)->n_filters,
+		      "the sweep lost filters to a constraint that does not "
+		      "apply to a 3-byte address");
+
+	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
 	assert_every_window_bounded();
 	finish();
 }
@@ -859,16 +937,32 @@ ZTEST(radiant_sched, test_thirty_two_contending_channels_are_all_served)
 }
 
 /*
- * The same thirty-two channels on the nRF preset, where they fit four to a
- * slot. The point of running it both ways is that the *number* changes and
- * nothing else does.
+ * The same thirty-two channels on the nRF preset - and the number is TWO here
+ * as well, which is the point of running it both ways now.
+ *
+ * The two presets used to differ: RAIL two, nRF eight. That difference was an
+ * artefact of the mock, not of the parts. RAIL fits two because it has two
+ * runtime sync words; the nRF fits two because seven of its eight logical
+ * addresses share a BASE register and a tracked address carries the device
+ * number inside that BASE. Same answer, different reasons, and the reasons are
+ * what caps.max_filters and caps.max_addr_groups now say separately.
+ *
+ * What that costs is real and is stated rather than hidden: thirty-two tracked
+ * sensors need sixteen windows per slot rather than four, so this test needs
+ * the same nineteen cycles the RAIL one does. ADR 0005's "32 sensors do not
+ * cost 32 windows" survives - sixteen is not thirty-two, merging still halves
+ * it - but the claim as written was measured against a mock that modelled a
+ * radio nobody has.
  */
-ZTEST(radiant_sched, test_thirty_two_channels_merge_eight_at_a_time_on_nrf)
+ZTEST(radiant_sched, test_thirty_two_tracked_channels_merge_two_at_a_time_on_nrf)
 {
 	radiant_time_t base;
+	uint32_t   cycles = 19u;
 	uint8_t    ch;
 
 	bring_up();
+	zassert_equal(8u, radiant_radio_caps_get()->max_filters);
+	zassert_equal(2u, radiant_radio_caps_get()->max_addr_groups);
 
 	base = radiant_radio_now() + 100000u;
 	log.repost = true;
@@ -878,15 +972,16 @@ ZTEST(radiant_sched, test_thirty_two_channels_merge_eight_at_a_time_on_nrf)
 	}
 	zassert_ok(radiant_sched_tick());
 
-	fake_radio_advance_to(base + 6u * (radiant_time_t)TEST_PERIOD_US + 1000u);
+	fake_radio_advance_to(base + (radiant_time_t)cycles * TEST_PERIOD_US + 1000u);
 
 	for (ch = 0u; ch < (uint8_t)RADIANT_SCHED_MAX_CHANNELS; ch++) {
-		zassert_true(log.ok_count[ch] >= 1u, "channel %u was never armed",
-			     ch);
+		zassert_true(log.ok_count[ch] >= 1u,
+			     "channel %u was never once armed in %u slots", ch,
+			     cycles);
 	}
-	zassert_equal(8u * radiant_sched_stats_get()->windows_armed,
+	zassert_equal(2u * radiant_sched_stats_get()->windows_armed,
 		      radiant_sched_stats_get()->channels_windowed,
-		      "32 channels did not merge eight to a window");
+		      "some window carried other than two tracked channels");
 
 	assert_every_window_bounded();
 	finish();

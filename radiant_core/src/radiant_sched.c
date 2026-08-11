@@ -276,6 +276,115 @@ static uint8_t max_filters(void)
 	return mf;
 }
 
+/*
+ * How many DISTINCT ADDRESS GROUPS one window may carry, RIGHT NOW.
+ *
+ * The second half of the module's portability, and the half that was missing.
+ * caps.max_filters is how many addresses fit; this is how many distinct values
+ * of addr[0 .. addr_len-2] fit, and on the nRF they are 8 and 2 respectively
+ * because seven of the eight logical addresses share one base register.
+ *
+ * On the 3-byte search format every filter shares the group [A6 C5] and this
+ * never binds. On the 5-byte tracking format the group carries the device
+ * number, so it binds on the second tracked channel - which is why ADR 0005's
+ * "32 sensors do not cost 32 windows" was false on nRF until this existed: the
+ * scheduler merged eight tracked channels into a window the backend then
+ * refused with RADIANT_RADIO_ENOTSUP, and the refusal was charged to whichever
+ * channel happened to be the leader.
+ *
+ * Zero means "the backend has no group constraint", which is the honest reading
+ * of a caps block written before this field existed.
+ */
+static uint8_t max_addr_groups(void)
+{
+	uint8_t mg;
+
+	if (s.caps == NULL) {
+		return 1u;
+	}
+	mg = s.caps->max_addr_groups;
+	if (mg == 0u) {
+		return max_filters();
+	}
+	if (mg > RADIANT_SCHED_MAX_FILTERS) {
+		mg = RADIANT_SCHED_MAX_FILTERS;
+	}
+	return mg;
+}
+
+/*
+ * Is `f` in the same address group as `other`? Groups compare
+ * addr[0 .. addr_len-2]: everything except the last byte, which is the part the
+ * nRF puts in a prefix register and can vary freely inside one group.
+ *
+ * A one-byte address is entirely prefix, so every such filter is in the same
+ * (empty) group. That is the right answer rather than a degenerate one: with
+ * nothing outside the prefix there is nothing to constrain.
+ */
+static bool same_addr_group(const struct radiant_rx_filter *f,
+			    const struct radiant_rx_filter *other)
+{
+	if (f->addr_len != other->addr_len) {
+		return false;
+	}
+	if (f->addr_len <= 1u) {
+		return true;
+	}
+	return memcmp(f->addr, other->addr, (size_t)(f->addr_len - 1u)) == 0;
+}
+
+/*
+ * How many distinct groups the merged set would hold if `add` filters starting
+ * at `from` were included. Counts against s.merged[0 .. s.n_merged), which is
+ * the set built so far.
+ *
+ * Linear in the set size, and the set size is at most eight - a hash would cost
+ * more than it saved and would be a second thing to be wrong about.
+ */
+static uint8_t addr_groups_with(const struct radiant_rx_filter *add,
+				uint8_t n_add)
+{
+	uint8_t groups = 0u;
+	uint8_t i;
+	uint8_t j;
+
+	for (i = 0u; i < s.n_merged; i++) {
+		bool seen = false;
+
+		for (j = 0u; j < i; j++) {
+			if (same_addr_group(&s.merged[i], &s.merged[j])) {
+				seen = true;
+				break;
+			}
+		}
+		if (!seen) {
+			groups++;
+		}
+	}
+
+	for (i = 0u; i < n_add; i++) {
+		bool seen = false;
+
+		for (j = 0u; j < s.n_merged; j++) {
+			if (same_addr_group(&add[i], &s.merged[j])) {
+				seen = true;
+				break;
+			}
+		}
+		for (j = 0u; !seen && j < i; j++) {
+			if (same_addr_group(&add[i], &add[j])) {
+				seen = true;
+				break;
+			}
+		}
+		if (!seen) {
+			groups++;
+		}
+	}
+
+	return groups;
+}
+
 /* The slack budget: an arm call inside this window of now() fails
  * RADIANT_RADIO_ETIME rather than running late, so the scheduler subtracts it
  * itself and never asks for something the backend must refuse. */
@@ -500,6 +609,29 @@ static enum step arm_failed(uint8_t ch, int rc)
 		slot_clear(ch);
 		notify_done(ch, RADIANT_SCHED_DONE_MISSED);
 		return STEP_RETRY;
+	case RADIANT_RADIO_ENOTSUP:
+		/*
+		 * A filter set the backend cannot put on the air.
+		 *
+		 * Now unreachable by construction too, for the same shape of
+		 * reason as ETIME above: arm_rx_window() enforces both
+		 * caps.max_filters and caps.max_addr_groups before it builds a
+		 * set. Reaching it means the core and the backend disagree
+		 * about what the hardware can match, so it gets its own counter
+		 * rather than being folded into arm_rejected - a number that
+		 * should be zero is only useful if it is visible.
+		 *
+		 * MISSED rather than FAILED, and that is the repair. `ch` is
+		 * the leader, which on a merged window is whichever channel
+		 * happened to be scheduled first; charging it a hard failure
+		 * for a constraint imposed by a channel that merged in behind
+		 * it is how a healthy master ends up looking broken. The window
+		 * did not happen, which is exactly what MISSED means.
+		 */
+		s.stats.arm_enotsup++;
+		slot_clear(ch);
+		notify_done(ch, RADIANT_SCHED_DONE_MISSED);
+		return STEP_RETRY;
 	default:
 		s.stats.arm_rejected++;
 		slot_clear(ch);
@@ -519,7 +651,7 @@ static enum step arm_failed(uint8_t ch, int rc)
  * slave-side collisions between our own tracked channels are not reduced, they
  * are zero, and 32 sensors cost a handful of windows rather than 32.
  *
- * Four rules decide membership, and each one is a specific failure designed
+ * Five rules decide membership, and each one is a specific failure designed
  * out:
  *
  *   1. SAME FORMAT AND SAME RF INDEX. Radio configuration is per-operation, so
@@ -538,12 +670,21 @@ static enum step arm_failed(uint8_t ch, int rc)
  *      that could outlive the measured 2.19 ms master-to-slave turnaround could
  *      block a reply the link layer owes. The cap never shrinks the leader's own
  *      request; it only bounds what merging may add to it.
+ *   5. AT MOST caps.max_addr_groups DISTINCT ADDRESS GROUPS. Two on nRF,
+ *      because seven of its eight logical addresses share one base register,
+ *      and on the 5-byte tracking format the device number is inside that base.
+ *      Rule 2 counts addresses; this one counts device numbers, and conflating
+ *      them is what made ADR 0005's "32 sensors do not cost 32 windows" false
+ *      on the one backend that ships: the scheduler built sets of eight, the
+ *      backend refused them with RADIANT_RADIO_ENOTSUP, and the refusal was
+ *      charged to whichever channel happened to be leading.
  */
 static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 			       radiant_time_t limit)
 {
 	struct sched_slot   *lead = &s.ch[leader];
 	const uint8_t        mf = max_filters();
+	const uint8_t        mg = max_addr_groups();
 	struct radiant_rx_req    req;
 	radiant_time_t           open;
 	radiant_time_t           close;
@@ -564,6 +705,17 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 		 * to say so once rather than to arm something smaller that the
 		 * caller did not ask for and cannot tell apart.
 		 */
+		s.stats.arm_rejected++;
+		slot_clear(leader);
+		notify_done(leader, RADIANT_SCHED_DONE_FAILED);
+		return STEP_RETRY;
+	}
+
+	/* Same test against the group cap, and it is a separate one: a leader
+	 * can be inside max_filters and outside max_addr_groups the moment its
+	 * own filters carry two different device numbers. */
+	s.n_merged = 0u;
+	if (addr_groups_with(lead->filters, lead->n_filters) > mg) {
 		s.stats.arm_rejected++;
 		slot_clear(leader);
 		notify_done(leader, RADIANT_SCHED_DONE_FAILED);
@@ -628,6 +780,26 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 		}
 		if (m->n_filters == 0u ||
 		    (uint32_t)s.n_merged + (uint32_t)m->n_filters > (uint32_t)mf) {
+			continue;
+		}
+		/*
+		 * Rule 5: AT MOST caps.max_addr_groups DISTINCT ADDRESS GROUPS.
+		 *
+		 * Two on nRF, because seven of its eight logical addresses share
+		 * one base register. On the 3-byte search format every filter is
+		 * in the group [A6 C5] and this never fires; on the 5-byte
+		 * tracking format the group carries the device number, so it
+		 * fires on the third tracked channel and a merged tracking
+		 * window holds two.
+		 *
+		 * Skipping the member is the right response rather than
+		 * refusing the window: the leader and whatever already merged
+		 * are still perfectly armable, and this channel gets its own
+		 * window on a later pass. Before this test the set went to the
+		 * backend, came back RADIANT_RADIO_ENOTSUP, and cost the leader
+		 * a DONE_FAILED for a constraint it had no part in.
+		 */
+		if (addr_groups_with(m->filters, m->n_filters) > mg) {
 			continue;
 		}
 
@@ -810,6 +982,14 @@ static bool could_join_armed(const struct sched_slot *sl, radiant_time_t earlies
 	if (sl->n_filters == 0u ||
 	    (uint32_t)s.n_merged + (uint32_t)sl->n_filters >
 		    (uint32_t)max_filters()) {
+		return false;
+	}
+	/* Rule 5, mirrored. Without it this function says "yes, it could have
+	 * joined", the rebuild's own group test says no, and the request stays
+	 * pending - which is the one-wasted-rebuild-per-request case s.replan
+	 * bounds, paid on every tracked channel after the second rather than
+	 * never. */
+	if (addr_groups_with(sl->filters, sl->n_filters) > max_addr_groups()) {
 		return false;
 	}
 	o = t_max(sl->t_start, earliest);

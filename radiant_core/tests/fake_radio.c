@@ -331,6 +331,23 @@ void fake_radio_caps_preset_nrf(void)
 	memset(c, 0, sizeof(*c));
 	c->name = "fake:nrf";
 	c->max_filters = 8u;
+	/*
+	 * Two, and this is the fourth documented fact rather than a placeholder.
+	 *
+	 * The nRF's eight logical addresses are one BASE0+AP0 and seven
+	 * BASE1+AP1..AP7, so a window carries at most two distinct bases. On the
+	 * 3-byte search format the base is [A6 C5] and every filter shares it;
+	 * on the 5-byte tracking format the base carries the device number, so
+	 * two tracked channels can share a window only if they are the same
+	 * sensor.
+	 *
+	 * Modelling it here is the point: this preset used to be 8 with no base
+	 * model at all, which is exactly why CI could not see that the scheduler
+	 * merged eight tracked channels into a window the real backend refuses.
+	 * A mock that is more capable than the hardware is a mock that certifies
+	 * bugs.
+	 */
+	c->max_addr_groups = 2u;
 	c->filter_wildcard_dev = false;
 	c->addr_len_hw_max = 5u;
 	c->max_body_len = RADIANT_RADIO_BODY_MAX;
@@ -358,6 +375,18 @@ void fake_radio_caps_preset_rail(void)
 	memset(c, 0, sizeof(*c));
 	c->name = "fake:rail";
 	c->max_filters = 2u;
+	/*
+	 * Two, and equal to max_filters here rather than smaller: RAIL's two
+	 * runtime sync words are two INDEPENDENT full addresses, with no shared
+	 * base register between them, so the group constraint never binds.
+	 *
+	 * That is the more useful setting to have in a preset, for the same
+	 * reason has_rx_crc is false below. The two presets now differ on
+	 * whether max_addr_groups equals max_filters, so a core module that
+	 * conflated the two numbers fails under exactly one of them - which is
+	 * what a portability preset is for.
+	 */
+	c->max_addr_groups = 2u;
 	c->filter_wildcard_dev = false;
 	c->addr_len_hw_max = 4u;
 	c->max_body_len = RADIANT_RADIO_BODY_MAX;
@@ -1715,6 +1744,52 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	return RADIANT_RADIO_OK_RC;
 }
 
+/*
+ * How many distinct address groups a filter set holds. A group is
+ * addr[0 .. addr_len-2] - everything the nRF puts in a BASE register, with the
+ * last byte being the freely-varying prefix.
+ *
+ * Deliberately the same definition the scheduler uses and deliberately a second
+ * implementation of it: if the two ever disagree, the disagreement shows up as
+ * a refused arm in a test rather than as a lost sensor on a bench.
+ */
+static uint8_t count_addr_groups(const struct radiant_rx_filter *filters,
+				 uint8_t n)
+{
+	uint8_t groups = 0u;
+	uint8_t i;
+	uint8_t j;
+
+	for (i = 0u; i < n; i++) {
+		bool seen = false;
+		size_t len = (filters[i].addr_len > 1u)
+				     ? (size_t)(filters[i].addr_len - 1u)
+				     : 0u;
+
+		for (j = 0u; j < i; j++) {
+			if (filters[j].addr_len == filters[i].addr_len &&
+			    (len == 0u ||
+			     memcmp(filters[j].addr, filters[i].addr, len) == 0)) {
+				seen = true;
+				break;
+			}
+		}
+		if (!seen) {
+			groups++;
+		}
+	}
+	return groups;
+}
+
+/* Zero means "no group constraint", matching how the core reads the field, so
+ * a suite that builds a caps block by hand and forgets it gets the permissive
+ * behaviour rather than a mysterious ENOTSUP. */
+static uint8_t effective_addr_groups(void)
+{
+	return (g.caps.max_addr_groups == 0u) ? g.caps.max_filters
+					      : g.caps.max_addr_groups;
+}
+
 int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 {
 	struct fake_radio_arm *rec;
@@ -1769,6 +1844,29 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 				rc = RADIANT_RADIO_EINVAL;
 				break;
 			}
+		}
+	}
+	if (rc == RADIANT_RADIO_OK_RC) {
+		/*
+		 * THE ADDRESS-GROUP GATE, and it is the reason this mock has a
+		 * base model at all now.
+		 *
+		 * The nRF matcher holds one BASE0+AP0 and seven BASE1+AP1..AP7,
+		 * so a window expresses at most two distinct values of
+		 * addr[0 .. addr_len-2]. On the 3-byte search format that never
+		 * binds; on the 5-byte tracking format the device number is
+		 * inside the group, so it binds on the third tracked channel.
+		 *
+		 * The real backend answers RADIANT_RADIO_ENOTSUP - "I will not
+		 * programme something close" - and so does this, with the same
+		 * code, because a mock more capable than the hardware certifies
+		 * exactly the bug it was written to catch. Until this existed,
+		 * CI could not see that the scheduler merged eight tracked
+		 * channels into a window no nRF can arm.
+		 */
+		if (count_addr_groups(req->filters, req->n_filters) >
+		    effective_addr_groups()) {
+			rc = RADIANT_RADIO_ENOTSUP;
 		}
 	}
 	if (rc == RADIANT_RADIO_OK_RC) {

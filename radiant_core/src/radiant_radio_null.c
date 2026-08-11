@@ -78,6 +78,12 @@ static const struct radiant_radio_caps null_caps = {
 	 * of radiant_search.c's sweep geometry and radiant_sched.c's merge width are
 	 * computed from, and getting it wrong here would change both. */
 	.max_filters = 8u,
+	/* Two, matching the nRF backend rather than the arithmetic: this block
+	 * exists so the modules above it compute the geometry they would
+	 * compute on real hardware, and a null backend advertising an
+	 * unconstrained matcher would let a merge bug through here and stop it
+	 * on the bench. */
+	.max_addr_groups = 2u,
 	.filter_wildcard_dev = false,
 	.addr_len_hw_max = 5u,
 	.max_body_len = RADIANT_RADIO_BODY_MAX,

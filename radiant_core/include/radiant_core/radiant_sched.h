@@ -420,6 +420,14 @@ struct radiant_sched_stats {
 	uint32_t stale_events;      /* events for an operation already retired */
 	uint32_t arm_ebusy;         /* arm calls that lost the backend's race */
 	uint32_t arm_rejected;      /* arm calls refused for any other reason */
+	uint32_t arm_enotsup;       /* filter sets the backend could not put on
+				     * the air. SHOULD STAY ZERO: the scheduler
+				     * enforces caps.max_filters and
+				     * caps.max_addr_groups itself, so a non-zero
+				     * count means the core and the backend
+				     * disagree about what the hardware can match
+				     * - which is a bug in one of them and not a
+				     * property of the traffic */
 };
 
 /* ---------------------------------------------------------------------------
