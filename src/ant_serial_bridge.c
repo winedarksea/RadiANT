@@ -1081,6 +1081,36 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 			err = antr_sec_epoch_set(body[0], body[1], epoch, us);
 		}
 		break;
+
+#ifdef CONFIG_RADIANT_SEC_PAIRING_X25519
+	case ANTW_MESG_RADIANT_PAIRING_ID: {
+		/* body: [ch, subcmd, arg...]. The reply is a 0xF5 of its own
+		 * rather than a response code, because three of the four
+		 * sub-commands have something to say. */
+		uint8_t reply[2 + 32];
+		uint8_t reply_len = 0u;
+
+		if (len < 2) {
+			break;
+		}
+		err = antr_sec_pair(body[0], body[1],
+				    (len > 2) ? &body[2] : NULL,
+				    (uint8_t)(len - 2), reply,
+				    (uint8_t)sizeof(reply), &reply_len);
+		if (!err && reply_len > 0u) {
+			send_message(ANTW_MESG_RADIANT_PAIRING_ID, reply,
+				     reply_len);
+		}
+		/*
+		 * The scalar just crossed the frame buffer. process_byte()
+		 * wipes it after this dispatch for the same reason it wipes a
+		 * 0xF2, and with the same honest limit: the USB ring and the
+		 * transport buffer beneath it are not reachable from here.
+		 */
+		memset(reply, 0, sizeof(reply));
+		break;
+	}
+#endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */
 #endif /* CONFIG_RADIANT_SEC_HOST_MESSAGES */
 
 #ifdef ANTW_MESG_ECS_ENABLE_ID
@@ -1211,7 +1241,18 @@ static void process_byte(uint8_t b)
 			dispatch(msg_id, msg_body,
 				 MIN(msg_len, (uint8_t)sizeof(msg_body)));
 #ifdef CONFIG_RADIANT_SEC_HOST_MESSAGES
-			if (msg_id == ANTW_MESG_RADIANT_SET_KEY_ID) {
+			if (msg_id == ANTW_MESG_RADIANT_SET_KEY_ID
+#ifdef CONFIG_RADIANT_SEC_PAIRING_X25519
+			    /* 0xF5 sub-command 0x02 carries the host's private
+			     * X25519 scalar, which is as sensitive as a root
+			     * key and is wiped on the same grounds. Checked by
+			     * message id alone rather than by sub-command: the
+			     * other three carry public values, and a wipe that
+			     * had to parse the body to decide would be one
+			     * parsing bug away from keeping a private key. */
+			    || msg_id == ANTW_MESG_RADIANT_PAIRING_ID
+#endif
+			) {
 				/*
 				 * A root key just crossed this buffer, and this
 				 * buffer is static and long-lived - it would

@@ -1283,6 +1283,39 @@ antr_err_t antr_sec_epoch_set(uint8_t channel, uint8_t flags, uint32_t epoch,
  */
 antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len);
 
+#if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
+
+/**
+ * Drive the pairing exchange. Message 0xF5.
+ *
+ * @param subcmd     ANTW_RADIANT_PAIR_LEAVE / _ENTER / _SCALAR / _EXCHANGE.
+ * @param arg        The sub-command's argument: a timeout byte for _ENTER, 32
+ *                   bytes for _SCALAR and _EXCHANGE, nothing for _LEAVE.
+ * @param reply      Out. Always leads with [channel, subcmd] so a host reading
+ *                   a stream can tell which sub-command answered - a public key
+ *                   and a fingerprint are both "bytes after a channel byte"
+ *                   otherwise. _SCALAR appends the 32-byte local public key;
+ *                   _EXCHANGE appends the six-digit fingerprint as a u24 LE.
+ * @param reply_cap  Capacity of `reply`. 34 covers every sub-command.
+ * @param reply_len  Out: bytes written.
+ *
+ * PAIRING HAPPENS IN THE CLEAR. An active attacker present during the exchange
+ * can be the man in the middle, and the exchange succeeds anyway - that is what
+ * an anonymous key agreement is, not a defect. The fingerprint is the whole
+ * mitigation and it only works if a human compares it against the other end's.
+ * Out-of-band pairing (a QR code, a typed key) is the recommended path for
+ * anything that matters.
+ *
+ * Returns 0, ANTW_INVALID_MESSAGE (channel or lengths), ANTW_INVALID_PARAMETER_
+ * PROVIDED (unknown sub-command, or a small-order peer key) or
+ * ANTW_CHANNEL_IN_WRONG_STATE.
+ */
+antr_err_t antr_sec_pair(uint8_t channel, uint8_t subcmd, const uint8_t *arg,
+			 uint8_t arg_len, uint8_t *reply, uint8_t reply_cap,
+			 uint8_t *reply_len);
+
+#endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */
+
 #endif /* CONFIG_RADIANT_SEC_HOST_MESSAGES */
 
 #endif /* ANT_RADIO_H_ */

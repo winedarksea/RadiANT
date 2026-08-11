@@ -581,6 +581,17 @@ Byte 0 of MESG_BURST_DATA / MESG_ADV_BURST_DATA / the legacy MESG_EXT_BURST_DATA
 | `ANTW_BURST_HEADER_SEQ_MASK` | `0x03` | Sequence number after shifting: 0-3, wrapping. | bridge |
 | `ANTW_BURST_HEADER_LAST` | `0x80` | Bit 7: this is the last packet of the transfer. | bridge, tools |
 
+## RadiANT pairing sub-commands
+
+Byte [1] of MESG_RADIANT_PAIRING (0xF5). NOT ANT protocol - ours. Sub-commands rather than four message ids because they are one conversation with an order: enter, supply a scalar, exchange, leave. Separate ids would let a host skip a step and get a state error it could not localise. The reply echoes the sub-command in the same byte, because a public key and a fingerprint are both 'some bytes after a channel byte' otherwise.
+
+| Constant | Value | Meaning | Provenance |
+|---|---|---|---|
+| `ANTW_RADIANT_PAIR_LEAVE` | `0x00` | Leave pairing mode and wipe the exchange state, including any scalar the host supplied. | K4 (docs/radiant-security.md sec 7.4 and 8) |
+| `ANTW_RADIANT_PAIR_ENTER` | `0x01` | Enter pairing mode, timeout in seconds at [2]. Zero means the 60 s default and NEVER 'forever': a node in pairing mode accepts a key from whoever asks, so one forgotten command must not leave it open indefinitely. | K4 (docs/radiant-security.md sec 7.4 and 8) |
+| `ANTW_RADIANT_PAIR_SCALAR` | `0x02` | Supply the host's 32-byte X25519 private scalar at [2..33]. The reply carries the local public key from [2]. The scalar comes from the host because the only entropy source on nRF54L is psa_rng/CRACEN and reaching it drags nrf_security into every build; the honest consequence is that a host-less node cannot pair this way. | K4 (docs/radiant-security.md sec 7.4 and 8) |
+| `ANTW_RADIANT_PAIR_EXCHANGE` | `0x03` | Complete the exchange against the peer's 32-byte public key at [2..33]. The reply carries the six-digit comparison fingerprint as a u24 LE from [2]. A small-order peer key is refused: the result becomes a root key, so accepting one would let anyone able to inject a packet fix the group key to a value they already know. | K4 (docs/radiant-security.md sec 7.4 and 8) |
+
 ## Capabilities reply, decoded
 
 `MESG_CAPABILITIES` (`0x54`) carries 9 bytes. This firmware on nRF52840 over USB, and byte-identical on nRF54L15 over UART.
@@ -747,7 +758,7 @@ These are used at a visible site in this repository but their numeric value is n
 
 ## Provenance summary
 
-222 constants in total. 74 carry a `verify: sdk-ant-shim` flag, meaning no file in this repository witnesses the value and the Wave 2 shim's `BUILD_ASSERT` block is what confirms it. 2 of those are unresolved outright.
+226 constants in total. 74 carry a `verify: sdk-ant-shim` flag, meaning no file in this repository witnesses the value and the Wave 2 shim's `BUILD_ASSERT` block is what confirms it. 2 of those are unresolved outright.
 
 | Source | Constants |
 |---|---|
@@ -755,6 +766,7 @@ These are used at a visible site in this repository but their numeric value is n
 | K4 (docs/radiant-security.md sec 3.2 and 9) | 1 |
 | K4 (docs/radiant-security.md sec 3.4 and 9) | 1 |
 | K4 (docs/radiant-security.md sec 3.5 and 9) | 1 |
+| K4 (docs/radiant-security.md sec 7.4 and 8) | 4 |
 | K4 (docs/radiant-security.md sec 7.4, 8 and 9) | 1 |
 | bridge | 33 |
 | bridge, observed | 1 |

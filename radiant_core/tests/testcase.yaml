@@ -44,3 +44,24 @@ tests:
       - native_sim
     extra_configs:
       - CONFIG_RADIANT_SEC_BACKEND_MODES=y
+
+  # The same suites with X25519 and the pairing logic linked in.
+  #
+  # A scenario of its own because CONFIG_RADIANT_SEC_PAIRING_X25519 is default n
+  # and most deployments should stay that way - pairing out of band, with a QR
+  # code or a typed key, needs no protocol and has no attack surface during
+  # pairing at all. A default-off path with no build behind it is exactly the
+  # hole encryption.conf sat in for months, so this entry lands with the code.
+  #
+  # It adds the sec_x25519 suite (RFC 7748's own vectors) and sec_pair (the
+  # exchange, including a man in the middle that the fingerprints catch).
+  radiant_core.unit.pairing:
+    tags:
+      - radiant_core
+      - radiant_sec
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_configs:
+      - CONFIG_RADIANT_SEC_PAIRING_X25519=y

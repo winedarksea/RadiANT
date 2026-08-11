@@ -314,7 +314,16 @@ static const struct radiant_sec_caps sw_caps = {
 	.name          = "software",
 	.has_ctr       = false,   /* the portable layer provides it over ECB */
 	.has_cmac      = false,
+	/* Whether the public-key entry point exists at all. It is a separate
+	 * file under a separate symbol - src/ext/radiant_x25519.c - so this
+	 * tracks the symbol rather than this backend: "not built" and "this
+	 * backend cannot" are the same condition to a caller, and only the cap
+	 * expresses both. */
+#if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
+	.has_x25519    = true,
+#else
 	.has_x25519    = false,
+#endif
 	.key_is_opaque = false,
 	.key_bits_mask = RADIANT_SEC_KEY_BITS_128,
 	.block_us      = 12,      /* M4 at 64 MHz, estimated, not measured */

@@ -748,9 +748,28 @@ during pairing at all.
 
 **X25519 over the existing acknowledged/burst path.** At pairing time the two
 ends exchange public keys over an ANT burst — a burst carries 32-byte keys
-comfortably — and derive the shared secret, from which `K_root` is derived. About
-1 KB of code and roughly 4 ms on a Cortex-M4, paid exactly once per pairing. The
+comfortably — and derive the shared secret, from which `K_root` is derived. The
 32-byte scalar comes from the host over `0xF5` (section 7.4).
+
+**Measured cost: 374 ms per scalar multiplication**, on an nRF5340 application
+core at 128 MHz, printed by `radiant_core/tests/src/test_sec_x25519.c`. A
+pairing needs two — one to produce the local public key, one for the shared
+secret — so roughly **0.75 s of computation per pairing**.
+
+This paragraph previously said "roughly 4 ms on a Cortex-M4", which was wrong by
+about two orders of magnitude and is worth leaving a note about rather than
+quietly fixing. 4 ms is what an *optimised* X25519 costs. What is implemented
+here is deliberately not that: 16-bit limbs and schoolbook multiplication,
+chosen because it can be read and checked in an afternoon, in a file whose whole
+purpose is to be displaceable by a hardware PKA the day the cost matters. The
+number was a plausible figure for the algorithm rather than a measurement of the
+code, which is exactly the kind of claim that survives review because it sounds
+right.
+
+It does not matter here, and that is why the simple implementation is the right
+one: a pairing happens once, initiated by a human who is already holding two
+devices. It would matter immediately if anything ever tried to re-key on a
+schedule, and nothing should.
 
 **The sensor holds one key. Every authorized receiver gets a copy.**
 

@@ -104,6 +104,20 @@ zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC src/radiant_sec.c)
 zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_HOST_MESSAGES
 			     src/radiant_sec_host.c)
 
+# X25519, under its own symbol and in src/ext/ because it is a standard
+# algorithm rather than RadiANT protocol logic - the directory is the signal
+# that a PKA backend may replace the whole file. Default n: most deployments
+# should pair out of band (a QR code, a typed key), which needs no protocol and
+# has no attack surface during pairing at all.
+zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_PAIRING_X25519
+			     src/ext/radiant_x25519.c)
+
+# The pairing logic is ours and stays out of src/ext/, which holds only the
+# standard algorithm. The split is the seam: replacing X25519 with a PKA
+# backend replaces one file and leaves this one untouched.
+zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_PAIRING_X25519
+			     src/radiant_sec_pair.c)
+
 # ── The radio backend ───────────────────────────────────────────────────────
 #
 # One of these, or none, and never two - see the choice in Kconfig. The two

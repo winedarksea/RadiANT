@@ -247,3 +247,98 @@ antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len)
 
 	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
 }
+
+#if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
+
+/*
+ * 0xF5, the pairing exchange.
+ *
+ * Sub-commands rather than four message IDs, because they are one conversation
+ * with an order: enter, supply a scalar, exchange, leave. Separate IDs would
+ * have let a host skip a step and get a state error it could not localise.
+ *
+ * The reply echoes the sub-command at [1] so a host reading a stream of them
+ * can tell which one answered - the local public key and the fingerprint are
+ * both "32-ish bytes after a channel byte" otherwise.
+ */
+antr_err_t antr_sec_pair(uint8_t channel, uint8_t subcmd, const uint8_t *arg,
+			 uint8_t arg_len, uint8_t *reply, uint8_t reply_cap,
+			 uint8_t *reply_len)
+{
+	uint32_t fp = 0u;
+	int      rc;
+
+	if (channel >= (uint8_t)RADIANT_CHANNEL_COUNT || reply == NULL ||
+	    reply_len == NULL || reply_cap < 2u) {
+		return (antr_err_t)ANTW_INVALID_MESSAGE;
+	}
+
+	reply[0] = channel;
+	reply[1] = subcmd;
+	*reply_len = 2u;
+
+	switch (subcmd) {
+	case ANTW_RADIANT_PAIR_LEAVE:
+		radiant_sec_pair_leave(channel);
+		return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+
+	case ANTW_RADIANT_PAIR_ENTER:
+		/* arg[0] is the timeout in seconds; 0 means the default, never
+		 * "forever" - a node in pairing mode accepts a key from whoever
+		 * asks, so one forgotten command must not leave it open. */
+		rc = radiant_sec_pair_enter(channel,
+					    (arg != NULL && arg_len >= 1u)
+						    ? arg[0]
+						    : 0u);
+		return sec_err(rc);
+
+	case ANTW_RADIANT_PAIR_SCALAR:
+		if (arg == NULL || arg_len < RADIANT_SEC_X25519_BYTES) {
+			return (antr_err_t)ANTW_INVALID_MESSAGE;
+		}
+		rc = radiant_sec_pair_set_scalar(channel, arg);
+		if (rc != RADIANT_SEC_OK) {
+			return sec_err(rc);
+		}
+		/* Answer with the public key it produced, which is what has to
+		 * go on the air next. */
+		if (reply_cap < 2u + RADIANT_SEC_X25519_BYTES) {
+			return (antr_err_t)ANTW_INVALID_MESSAGE;
+		}
+		rc = radiant_sec_pair_local_pubkey(channel, &reply[2]);
+		if (rc != RADIANT_SEC_OK) {
+			return sec_err(rc);
+		}
+		*reply_len = (uint8_t)(2u + RADIANT_SEC_X25519_BYTES);
+		return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+
+	case ANTW_RADIANT_PAIR_EXCHANGE:
+		if (arg == NULL || arg_len < RADIANT_SEC_X25519_BYTES) {
+			return (antr_err_t)ANTW_INVALID_MESSAGE;
+		}
+		rc = radiant_sec_pair_peer(channel, arg, &fp);
+		if (rc != RADIANT_SEC_OK) {
+			return sec_err(rc);
+		}
+		if (reply_cap < 5u) {
+			return (antr_err_t)ANTW_INVALID_MESSAGE;
+		}
+		/*
+		 * The comparison fingerprint, six digits in a u24 LE. THIS IS
+		 * THE ONLY DEFENCE AGAINST A MAN IN THE MIDDLE and it only
+		 * works if a human actually compares it against the other end's
+		 * - the exchange itself succeeds either way, which is what an
+		 * anonymous key agreement is.
+		 */
+		reply[2] = (uint8_t)(fp & 0xFFu);
+		reply[3] = (uint8_t)((fp >> 8) & 0xFFu);
+		reply[4] = (uint8_t)((fp >> 16) & 0xFFu);
+		*reply_len = 5u;
+		return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+
+	default:
+		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
+	}
+}
+
+#endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */

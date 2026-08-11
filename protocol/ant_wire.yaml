@@ -1497,6 +1497,45 @@ constant_groups:
          desc: "Bit 7: this is the last packet of the transfer.",
          source: "bridge, tools"}
 
+  - name: radiant_pairing
+    title: "RadiANT pairing sub-commands"
+    kind: enum
+    format: hex
+    desc: "Byte [1] of MESG_RADIANT_PAIRING (0xF5). NOT ANT protocol - ours.
+           Sub-commands rather than four message ids because they are one
+           conversation with an order: enter, supply a scalar, exchange,
+           leave. Separate ids would let a host skip a step and get a state
+           error it could not localise. The reply echoes the sub-command in
+           the same byte, because a public key and a fingerprint are both
+           'some bytes after a channel byte' otherwise."
+    values:
+      - {name: RADIANT_PAIR_LEAVE, value: 0x00,
+         desc: "Leave pairing mode and wipe the exchange state, including any
+                scalar the host supplied.",
+         source: "K4 (docs/radiant-security.md sec 7.4 and 8)"}
+      - {name: RADIANT_PAIR_ENTER, value: 0x01,
+         desc: "Enter pairing mode, timeout in seconds at [2]. Zero means the
+                60 s default and NEVER 'forever': a node in pairing mode
+                accepts a key from whoever asks, so one forgotten command
+                must not leave it open indefinitely.",
+         source: "K4 (docs/radiant-security.md sec 7.4 and 8)"}
+      - {name: RADIANT_PAIR_SCALAR, value: 0x02,
+         desc: "Supply the host's 32-byte X25519 private scalar at [2..33].
+                The reply carries the local public key from [2]. The scalar
+                comes from the host because the only entropy source on nRF54L
+                is psa_rng/CRACEN and reaching it drags nrf_security into
+                every build; the honest consequence is that a host-less node
+                cannot pair this way.",
+         source: "K4 (docs/radiant-security.md sec 7.4 and 8)"}
+      - {name: RADIANT_PAIR_EXCHANGE, value: 0x03,
+         desc: "Complete the exchange against the peer's 32-byte public key at
+                [2..33]. The reply carries the six-digit comparison
+                fingerprint as a u24 LE from [2]. A small-order peer key is
+                refused: the result becomes a root key, so accepting one would
+                let anyone able to inject a packet fix the group key to a
+                value they already know.",
+         source: "K4 (docs/radiant-security.md sec 7.4 and 8)"}
+
 # ---------------------------------------------------------------------------
 # Capabilities (MESG_CAPABILITIES, 0x54)
 # ---------------------------------------------------------------------------

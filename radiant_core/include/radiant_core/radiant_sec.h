@@ -173,6 +173,119 @@ struct radiant_sec_caps {
 
 const struct radiant_sec_caps *radiant_sec_caps(void);
 
+/*
+ * ── Public key: X25519 ─────────────────────────────────────────────────────
+ *
+ * One entry point, so a PKA backend (CC310, CRACEN's PKE, the CC2652's PKA)
+ * displaces the software implementation without the pairing logic knowing.
+ * Public-key work is where hardware actually earns its keep - the ladder below
+ * is milliseconds where an AES block is microseconds - so this is the seam most
+ * likely to be taken up.
+ *
+ * Declared whenever CONFIG_RADIANT_SEC is on, defined only when something
+ * provides it: CONFIG_RADIANT_SEC_PAIRING_X25519 selects the software one, and
+ * caps.has_x25519 says whether any exists. A caller must check the cap rather
+ * than assume, because "not built" and "not supported by this backend" are the
+ * same condition from above.
+ */
+#define RADIANT_SEC_X25519_BYTES 32
+
+#if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
+
+/* The u-coordinate 9, RFC 7748's base point. Pass as `point` to turn a private
+ * scalar into the public key that goes on the air. */
+extern const uint8_t radiant_sec_x25519_basepoint[RADIANT_SEC_X25519_BYTES];
+
+/*
+ * out = X25519(scalar, point). All three are 32 bytes.
+ *
+ * `scalar` is clamped on a copy per RFC 7748 section 5, so the caller's key is
+ * not rewritten. Constant time in the scalar; no claim is made about power or
+ * electromagnetic analysis.
+ *
+ * Returns RADIANT_SEC_OK or RADIANT_SEC_EINVAL.
+ */
+int radiant_sec_x25519(uint8_t *out, const uint8_t *scalar,
+		       const uint8_t *point);
+
+/*
+ * True when a shared secret is all zeros, which means the peer sent a
+ * small-order point. Rejecting it is mandatory here rather than optional: the
+ * result is fed to a KDF and installed as a root key, so accepting it would let
+ * anyone who can inject one packet fix the group key to a value they know.
+ */
+bool radiant_sec_x25519_is_degenerate(const uint8_t *shared);
+
+/*
+ * ── Pairing ────────────────────────────────────────────────────────────────
+ *
+ * One exchange, turned into the 16 bytes the rest of this feature already
+ * knows how to use. Driven by message 0xF5; see docs/radiant-security.md
+ * sections 7.4 and 8.
+ *
+ * PAIRING HAPPENS IN THE CLEAR. There is no prior secret and no out-of-band
+ * channel on the air, so an active attacker present during the exchange can be
+ * the man in the middle. That is what an anonymous key agreement is, not an
+ * oversight. The mitigation is the fingerprint below - six digits a human
+ * compares across two screens, which an attacker holding two different shared
+ * secrets cannot make match.
+ *
+ * Out-of-band pairing (a QR code, a typed key) remains the recommended path
+ * for anything that matters: no protocol, no attack surface during pairing at
+ * all, and no dependence on the user actually looking.
+ */
+
+/* A node in pairing mode accepts a key from whoever asks, so the mode is always
+ * bounded. Zero from a host means this, not "forever". */
+#define RADIANT_SEC_PAIR_TIMEOUT_DEFAULT_S 60
+
+int  radiant_sec_pair_enter(uint8_t ch, uint8_t timeout_s);
+void radiant_sec_pair_leave(uint8_t ch);
+
+/*
+ * Loss of tracking, from RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH.
+ *
+ * A channel that starts pairing and then loses its peer - the sensor walked out
+ * of range - has no completion event and no failure event, so this is the ONLY
+ * transition that can release the state. docs/radiant-security.md section 8.1
+ * records why that matters more than it looks: sdk-ant serialises key exchange
+ * device-wide, and the same shape here without this hook would deadlock
+ * negotiation for every channel, permanently, with nothing to say so.
+ */
+void radiant_sec_pair_on_search(uint8_t ch);
+
+/*
+ * The host's 32-byte private scalar, and the local public key it produces.
+ *
+ * THE SCALAR COMES FROM THE HOST because the only entropy source on nRF54L is
+ * psa_rng/CRACEN and reaching it drags nrf_security into every build. Nothing
+ * here can check that what arrived is random: a host that sends a constant has
+ * a node whose private key is public, and neither end can tell.
+ */
+int  radiant_sec_pair_set_scalar(uint8_t ch, const uint8_t *scalar);
+int  radiant_sec_pair_local_pubkey(uint8_t ch, uint8_t *out);
+
+/*
+ * Complete the exchange against the peer's public key: derive K_root, install
+ * it, and produce the comparison fingerprint.
+ *
+ * Refuses a small-order peer key. RFC 7748 leaves that optional for
+ * Diffie-Hellman and it is mandatory here, because the result becomes a root
+ * key - accepting it would let anyone able to inject one packet fix the group
+ * key to a value they already know.
+ */
+int  radiant_sec_pair_peer(uint8_t ch, const uint8_t *peer_pub,
+			   uint32_t *fingerprint);
+
+/* Six digits, 0..999999. Both ends compute the same value without needing to
+ * agree on who initiated. */
+int  radiant_sec_pair_fingerprint(uint8_t ch, uint32_t *out);
+
+bool radiant_sec_pair_is_open(uint8_t ch);
+void radiant_sec_pair_reset(void);
+
+#endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */
+
 /* Key handling. Every backend implements these. */
 int  radiant_sec_key_import(struct radiant_sec_key *k, const uint8_t *raw,
 			    size_t bits);

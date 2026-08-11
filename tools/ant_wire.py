@@ -959,6 +959,40 @@ BURST_HEADER_SEQ_MASK = 0x03
 BURST_HEADER_LAST = 0x80
 
 # ---------------------------------------------------------------------------
+# RadiANT pairing sub-commands
+# Byte [1] of MESG_RADIANT_PAIRING (0xF5). NOT ANT protocol - ours. Sub-
+# commands rather than four message ids because they are one conversation with
+# an order: enter, supply a scalar, exchange, leave. Separate ids would let a
+# host skip a step and get a state error it could not localise. The reply
+# echoes the sub-command in the same byte, because a public key and a
+# fingerprint are both 'some bytes after a channel byte' otherwise.
+# ---------------------------------------------------------------------------
+
+# Leave pairing mode and wipe the exchange state, including any scalar the host
+# supplied. [K4 (docs/radiant-security.md sec 7.4 and 8)]
+RADIANT_PAIR_LEAVE = 0x00
+
+# Enter pairing mode, timeout in seconds at [2]. Zero means the 60 s default
+# and NEVER 'forever': a node in pairing mode accepts a key from whoever asks,
+# so one forgotten command must not leave it open indefinitely. [K4
+# (docs/radiant-security.md sec 7.4 and 8)]
+RADIANT_PAIR_ENTER = 0x01
+
+# Supply the host's 32-byte X25519 private scalar at [2..33]. The reply carries
+# the local public key from [2]. The scalar comes from the host because the
+# only entropy source on nRF54L is psa_rng/CRACEN and reaching it drags
+# nrf_security into every build; the honest consequence is that a host-less
+# node cannot pair this way. [K4 (docs/radiant-security.md sec 7.4 and 8)]
+RADIANT_PAIR_SCALAR = 0x02
+
+# Complete the exchange against the peer's 32-byte public key at [2..33]. The
+# reply carries the six-digit comparison fingerprint as a u24 LE from [2]. A
+# small-order peer key is refused: the result becomes a root key, so accepting
+# one would let anyone able to inject a packet fix the group key to a value
+# they already know. [K4 (docs/radiant-security.md sec 7.4 and 8)]
+RADIANT_PAIR_EXCHANGE = 0x03
+
+# ---------------------------------------------------------------------------
 # Capabilities reply (MESG_CAPABILITIES)
 # 9 bytes. Observed from this firmware: 080800b23200fd8d0f
 # ---------------------------------------------------------------------------
@@ -1851,6 +1885,14 @@ BURST_HEADER = {
     'BURST_HEADER_LAST': 0x80,
 }
 BURST_HEADER_BY_VALUE = {value: name for name, value in BURST_HEADER.items()}
+
+RADIANT_PAIRING = {
+    'RADIANT_PAIR_LEAVE': 0x00,
+    'RADIANT_PAIR_ENTER': 0x01,
+    'RADIANT_PAIR_SCALAR': 0x02,
+    'RADIANT_PAIR_EXCHANGE': 0x03,
+}
+RADIANT_PAIRING_BY_VALUE = {value: name for name, value in RADIANT_PAIRING.items()}
 
 # Capabilities: byte index -> (field name, ((bit, name, description), ...)).
 CAPABILITY_BYTES = {

@@ -602,6 +602,29 @@ void radiant_event_wakeup(void)
  */
 void radiant_channel_event_out(uint8_t channel, uint8_t event_code)
 {
+#if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
+	/*
+	 * THE RELEASE-ON-LOSS-OF-TRACKING PATH, hooked here because this is the
+	 * one funnel every channel event passes through.
+	 *
+	 * A channel that starts pairing and then loses its peer - the sensor
+	 * walked out of range, a rider's body blocked the link - produces no
+	 * completion event and no failure event. RX_FAIL_GO_TO_SEARCH is the
+	 * only transition that fires, so it is the only place a half-finished
+	 * exchange can be freed.
+	 *
+	 * docs/radiant-security.md section 8.1 records why this is worth
+	 * hooking now, while pairing state is merely per-channel: sdk-ant
+	 * serialises its own key exchange device-wide, and the same shape here
+	 * without this hook would deadlock negotiation for every channel on the
+	 * device, permanently, with no event anywhere to say so. The hook being
+	 * live and tested is what makes that trap unreachable rather than
+	 * merely documented.
+	 */
+	if (event_code == (uint8_t)ANTW_EVENT_RX_FAIL_GO_TO_SEARCH) {
+		radiant_sec_pair_on_search(channel);
+	}
+#endif
 	(void)radiant_event_post_channel_event(channel, event_code);
 }
 
@@ -2840,6 +2863,11 @@ static void api_reset_state(void)
 	 * monotonicity rule can only be enforced inside one power cycle and why
 	 * the obligation to never reissue an epoch sits with the host. */
 	radiant_sec_reset();
+#if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
+	/* And every half-finished exchange: a reset with a scalar still in RAM
+	 * would leave a private key behind a state nothing can reach. */
+	radiant_sec_pair_reset();
+#endif
 
 	api_search_slot = RADIANT_SCHED_CH_NONE;
 }

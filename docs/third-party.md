@@ -32,6 +32,7 @@ Where the two disagree, the ADR wins.
 | ANT+ device profile documents | Adopter-gated, Garmin copyright | No | Only for `src/profiles/`, `tools/ant_pages.py`, profile docs |
 | Garmin libusb-win32 driver package | Garmin package wrapping LGPL libusb0 | **No** | N/A |
 | pyusb | BSD-3-Clause | No (pip) | Yes, freely |
+| RFC 7748 (X25519) | IETF standard, free | N/A — clean-room, nothing vendored | Yes, freely |
 
 ---
 
@@ -206,6 +207,43 @@ shipped feature.
 `pip`, not vendored. Pure Python: it imports fine with no libusb present, which
 is why the `host-tests` CI job can run the page and simulator tests on a runner
 with no USB device attached.
+
+## X25519 — the third-party component that is deliberately *not* here
+
+**There isn't one, and that is a decision rather than an omission.**
+
+`radiant_core/src/ext/radiant_x25519.c` sits in an `ext/` directory, which
+normally means vendored code. It is not: it is clean-room, written from
+[RFC 7748](https://www.rfc-editor.org/rfc/rfc7748) and verified against that
+RFC's own published test vectors. The directory name marks it as a *standard
+algorithm rather than RadiANT protocol logic* — the thing a hardware PKA
+backend replaces wholesale — and not as somebody else's source.
+
+Vendoring is normally the better call for a primitive this well studied: fewer
+eyes on new cryptographic code is strictly worse, and a widely-deployed
+public-domain implementation carries thousands of audits this one does not. The
+plan for the phase that added it said "vendored public-domain X25519 with a
+`Provenance:` line", and that was the right instinct.
+
+What made it the wrong outcome here is what a `Provenance:` line is *for*. Its
+whole value is that it is a checkable claim about where bytes came from — that
+is the load-bearing element of [`decisions/0002`](decisions/0002-clean-room-policy.md),
+and the reason the policy is written down before there is code to argue about.
+A file reconstructed from memory and labelled "vendored public-domain" would
+carry a provenance claim nobody could verify, sitting in the same repository as
+claims that must hold up under scrutiny. One unverifiable line devalues every
+other one.
+
+So the file says what it is. If a genuine vendored implementation is wanted
+later, it drops in behind `radiant_sec_x25519()` and nothing above it changes —
+that is what the seam is for, and it is the same seam a CC310 or CRACEN PKE
+backend would use.
+
+**Read-scope note.** RFC 7748 is a free, published IETF standard with no
+adopter gate and no proprietary encumbrance, so it falls under the same
+"interoperability specification" reasoning that permits ANT+ page layouts: a
+public standard describing a mathematical construction, where there is no design
+freedom to infringe.
 
 ---
 

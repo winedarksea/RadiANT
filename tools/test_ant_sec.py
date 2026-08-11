@@ -280,6 +280,75 @@ class TestHumanReadable(unittest.TestCase):
         self.assertIn("unknown", verdict_str(9))
 
 
+class TestPairing(unittest.TestCase):
+    """0xF5. Mirrors radiant_sec_pair.c and antr_sec_pair()."""
+
+    def test_enter_carries_a_timeout(self):
+        body = ant_sec.encode_pair_enter(1, 30)
+        self.assertEqual(bytes([1, 0x01, 30]), body)
+
+    def test_a_zero_timeout_is_the_default_not_forever(self):
+        # A node in pairing mode accepts a key from whoever asks. An interface
+        # where 0 meant no bound would turn one forgotten command into a
+        # permanently open node, so the device reads 0 as 60 seconds.
+        body = ant_sec.encode_pair_enter(0)
+        self.assertEqual(0, body[2])
+        self.assertEqual(60, ant_sec.PAIR_TIMEOUT_DEFAULT_S)
+
+    def test_leave_is_two_bytes(self):
+        self.assertEqual(bytes([2, 0x00]), ant_sec.encode_pair_leave(2))
+
+    def test_a_scalar_must_be_thirty_two_bytes(self):
+        ant_sec.encode_pair_scalar(0, bytes(32))
+        with self.assertRaises(ValueError):
+            ant_sec.encode_pair_scalar(0, bytes(31))
+        with self.assertRaises(ValueError):
+            ant_sec.encode_pair_scalar(0, bytes(33))
+
+    def test_a_scalar_reply_carries_the_public_key(self):
+        pub = bytes(range(32))
+        reply = bytes([3, 0x02]) + pub
+        got = ant_sec.decode_pair_reply(reply)
+        self.assertEqual(3, got["channel"])
+        self.assertEqual(0x02, got["subcmd"])
+        self.assertEqual(pub, got["public_key"])
+
+    def test_an_exchange_reply_carries_a_u24_fingerprint(self):
+        # 999999 = 0x0F423F, little-endian 3F 42 0F.
+        reply = bytes([0, 0x03, 0x3F, 0x42, 0x0F])
+        got = ant_sec.decode_pair_reply(reply)
+        self.assertEqual(999999, got["fingerprint"])
+
+    def test_every_reply_says_which_sub_command_answered(self):
+        # A public key and a fingerprint are both "bytes after a channel byte",
+        # so a host reading a stream needs the echo to tell them apart.
+        for sub in (0x00, 0x01):
+            with self.subTest(sub=sub):
+                got = ant_sec.decode_pair_reply(bytes([1, sub]))
+                self.assertEqual(sub, got["subcmd"])
+                self.assertNotIn("public_key", got)
+                self.assertNotIn("fingerprint", got)
+
+    def test_a_truncated_reply_is_refused(self):
+        with self.assertRaises(ValueError):
+            ant_sec.decode_pair_reply(bytes([0]))
+        with self.assertRaises(ValueError):
+            ant_sec.decode_pair_reply(bytes([0, 0x02]) + bytes(31))
+        with self.assertRaises(ValueError):
+            ant_sec.decode_pair_reply(bytes([0, 0x03, 0x11, 0x22]))
+
+    def test_the_fingerprint_is_zero_padded(self):
+        # "042317" and "42317" are the same number, and a user comparing two
+        # screens is comparing strings. An unpadded fingerprint starting with a
+        # zero would look like a mismatch and teach the user to ignore the
+        # check - which voids the only defence against a man in the middle.
+        self.assertEqual("042317", ant_sec.fingerprint_str(42317))
+        self.assertEqual("000000", ant_sec.fingerprint_str(0))
+        self.assertEqual("999999", ant_sec.fingerprint_str(999999))
+        with self.assertRaises(ValueError):
+            ant_sec.fingerprint_str(1000000)
+
+
 class TestMessageIds(unittest.TestCase):
     def test_the_ids_are_the_generated_ones(self):
         # Imported from tools/ant_wire.py, which is generated from
@@ -289,6 +358,7 @@ class TestMessageIds(unittest.TestCase):
         self.assertEqual(0xF2, ant_sec.MESG_SET_KEY)
         self.assertEqual(0xF3, ant_sec.MESG_EPOCH)
         self.assertEqual(0xF4, ant_sec.MESG_STATUS)
+        self.assertEqual(0xF5, ant_sec.MESG_PAIRING)
 
 
 if __name__ == "__main__":

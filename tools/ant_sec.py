@@ -34,9 +34,14 @@ from dataclasses import dataclass
 
 from ant_wire import (
     MESG_RADIANT_EPOCH_ID,
+    MESG_RADIANT_PAIRING_ID,
     MESG_RADIANT_SEC_CONFIG_ID,
     MESG_RADIANT_SEC_STATUS_ID,
     MESG_RADIANT_SET_KEY_ID,
+    RADIANT_PAIR_ENTER,
+    RADIANT_PAIR_EXCHANGE,
+    RADIANT_PAIR_LEAVE,
+    RADIANT_PAIR_SCALAR,
 )
 
 __all__ = [
@@ -49,6 +54,9 @@ __all__ = [
     "encode_epoch", "decode_epoch",
     "decode_status", "encode_status",
     "switches_str", "verdict_str",
+    "X25519_BYTES", "PAIR_TIMEOUT_DEFAULT_S",
+    "encode_pair_enter", "encode_pair_leave", "encode_pair_scalar",
+    "encode_pair_exchange", "decode_pair_reply", "fingerprint_str",
 ]
 
 # 0xF1's switch bitmask. The same byte the firmware uses - radiant_sec.h's
@@ -323,8 +331,95 @@ def verdict_str(verdict: int) -> str:
     }.get(verdict, f"unknown:{verdict}")
 
 
+# ── 0xF5: pairing ───────────────────────────────────────────────────────────
+
+X25519_BYTES = 32
+PAIR_TIMEOUT_DEFAULT_S = 60
+
+
+def encode_pair_enter(channel: int, timeout_s: int = 0) -> bytes:
+    """Enter pairing mode.
+
+    `timeout_s` of 0 means the 60-second default and NEVER "forever". A node in
+    pairing mode accepts a key from whoever asks, so an interface where 0 meant
+    no bound would turn one forgotten command into a permanently open node.
+    """
+    _check_channel(channel)
+    if not 0 <= timeout_s <= 0xFF:
+        raise ValueError(f"timeout {timeout_s}s does not fit in a byte")
+    return bytes([channel, RADIANT_PAIR_ENTER, timeout_s])
+
+
+def encode_pair_leave(channel: int) -> bytes:
+    _check_channel(channel)
+    return bytes([channel, RADIANT_PAIR_LEAVE])
+
+
+def encode_pair_scalar(channel: int, scalar: bytes) -> bytes:
+    """Supply the host's 32-byte X25519 private scalar.
+
+    THE SCALAR COMES FROM THE HOST because the only entropy source on nRF54L is
+    psa_rng/CRACEN and reaching it drags nrf_security into every build. The
+    honest consequence is that a host-less node cannot pair this way.
+
+    Nothing on the device can check that this is random. A host that sends a
+    constant has a node whose private key is public, and neither end can tell -
+    so generate it with `secrets.token_bytes(32)` and never with `random`.
+    """
+    _check_channel(channel)
+    if len(scalar) != X25519_BYTES:
+        raise ValueError(f"scalar is {len(scalar)} bytes, want {X25519_BYTES}")
+    return bytes([channel, RADIANT_PAIR_SCALAR]) + bytes(scalar)
+
+
+def encode_pair_exchange(channel: int, peer_pub: bytes) -> bytes:
+    _check_channel(channel)
+    if len(peer_pub) != X25519_BYTES:
+        raise ValueError(
+            f"public key is {len(peer_pub)} bytes, want {X25519_BYTES}")
+    return bytes([channel, RADIANT_PAIR_EXCHANGE]) + bytes(peer_pub)
+
+
+def decode_pair_reply(body: bytes) -> dict:
+    """Decode a 0xF5 reply.
+
+    Every reply leads with [channel, sub-command], which is what lets a host
+    reading a stream of them tell which one answered: a public key and a
+    fingerprint are both "some bytes after a channel byte" otherwise.
+    """
+    if len(body) < 2:
+        raise ValueError(f"0xF5 reply is {len(body)} bytes, want at least 2")
+
+    out = {"channel": body[0], "subcmd": body[1]}
+
+    if body[1] == RADIANT_PAIR_SCALAR:
+        if len(body) < 2 + X25519_BYTES:
+            raise ValueError("a scalar reply carries the 32-byte public key")
+        out["public_key"] = bytes(body[2:2 + X25519_BYTES])
+    elif body[1] == RADIANT_PAIR_EXCHANGE:
+        if len(body) < 5:
+            raise ValueError("an exchange reply carries a u24 fingerprint")
+        out["fingerprint"] = (int(body[2]) | (int(body[3]) << 8) |
+                              (int(body[4]) << 16))
+    return out
+
+
+def fingerprint_str(fp: int) -> str:
+    """Six digits, zero-padded.
+
+    Padded because "042317" and "42317" are the same number and a user
+    comparing two screens is comparing strings. An unpadded fingerprint that
+    happened to start with a zero would look like a mismatch and teach the user
+    to ignore the check.
+    """
+    if not 0 <= fp <= 999999:
+        raise ValueError(f"fingerprint {fp} is not six digits")
+    return f"{fp:06d}"
+
+
 # The message IDs, re-exported so a caller needs one import rather than two.
 MESG_CONFIG = MESG_RADIANT_SEC_CONFIG_ID
 MESG_SET_KEY = MESG_RADIANT_SET_KEY_ID
 MESG_EPOCH = MESG_RADIANT_EPOCH_ID
 MESG_STATUS = MESG_RADIANT_SEC_STATUS_ID
+MESG_PAIRING = MESG_RADIANT_PAIRING_ID
