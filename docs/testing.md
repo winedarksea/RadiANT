@@ -316,6 +316,63 @@ survives it:
   `ANT_SIM_IDENTITY_TIER_2` Kconfig help, which says the same thing at the point
   somebody is about to switch it on.
 
+### The security bench run (`X_AUTH` / `X_CONF`)
+
+Everything about the transforms that can be checked without a radio already is:
+RFC-published crypto vectors, the windowing state machine, the counter
+reconstruction, the host surface and the on-air zero-cost claim all run in
+`twister` against `fake_radio`. What is left for the bench is the small set of
+claims a mock cannot make.
+
+**Before believing any result, check the build.** Both flags, and then the
+`.config`:
+
+```
+west build app -b adafruit_feather_nrf52840/nrf52840/uf2 -p always \
+  -- "-DANT_RADIO=core" "-DRADIANT_BACKEND=nrf" "-DEXTRA_CONF_FILE=security.conf"
+grep CONFIG_RADIANT_CORE_BACKEND_NRF= build/zephyr/.config
+```
+
+`-DANT_RADIO=core` alone has silently produced the inert backend before, and a
+security run against a radio that never transmits looks exactly like a run with
+no losses. The grep is the whole guard.
+
+What the bench is for, and nothing else:
+
+1. **The transforms cost no packets.** Run the standard 300 s loss-and-timing
+   capture twice on one link — once with no switches, once with `X_AUTH` and
+   `X_CONF` on — and compare `loss (exact)` against the 0.26–0.60 % floor. The
+   transforms rewrite payload bytes and touch neither the schedule nor the
+   address, so the prediction is *no measurable difference*; anything else means
+   the event-thread crypto is displacing a slot, which is the one failure mode
+   the mock's virtual clock cannot show.
+2. **Detection latency is W+1 to 2W packets, not W.** Corrupt one payload byte
+   in flight and count packets to the `unverified` verdict. The range is not
+   slop — encrypt-then-MAC means a window's tag cannot be known until its last
+   packet is built, so the tag transmitted during window *k* authenticates *k-1*.
+   A measurement of exactly W would mean the lag is missing and the
+   implementation is not what the spec describes.
+3. **A secured channel is invisible to everything that did not ask for it.**
+   With a secured node transmitting alongside real ANT+ sensors, a shipping
+   sdk-ant dongle and a Garmin head unit must both still find and hold every
+   standard sensor and report no error and no phantom device. This is the Tier 4
+   claim above, with one addition: **a standard receiver pointed at the secured
+   channel itself reads noise, and that is correct.** The transforms rewrite the
+   bytes an ANT+ profile defines. Use a RadiANT device type on a channel of its
+   own, and do not log "Zwift shows garbage on the secured channel" as a defect.
+4. **The pairing fingerprint matches, and a wrong pairing does not.** Pair two
+   nodes over `0xF5` and confirm both ends print the same six digits. Then pair
+   against a third node and confirm the digits differ. The exchange succeeds
+   either way — that is what an anonymous key agreement is — so the digits are
+   the only observable that distinguishes a real pairing from a
+   man-in-the-middle, and a bench run that never compares them has not tested
+   the mitigation at all.
+
+**Board cost, declared up front:** one Feather flash for the secured node, plus
+whatever the receiver side needs. Feather flashes are rationed on this bench, so
+this run is a deliberate act rather than something to fold into an unrelated
+session.
+
 Two scale checks, neither of which has a sdk-ant baseline to compare against
 because `libant.a` cannot do either, so both are absolute: **32 channels
 tracked simultaneously** with per-channel loss no worse than single-channel
