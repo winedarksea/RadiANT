@@ -98,6 +98,12 @@ zephyr_library_sources_ifdef(CONFIG_RADIANT_CORE_ANTR_API src/radiant_api.c)
 zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC src/radiant_sec_aes.c)
 zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC src/radiant_sec.c)
 
+# The optional entropy backend (ADR 0009). Its own symbol, default n, and the
+# only file here that includes a PSA header - which is the whole reason it is a
+# file rather than three lines inside radiant_sec_aes.c, whose include list is a
+# deliberately protected property.
+zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_RNG_PSA src/radiant_sec_rng_psa.c)
+
 # The compat attestation primitives, under their own symbol and inside
 # CONFIG_RADIANT_SEC's `if` block in Kconfig. A file, not a directory: this
 # lives beside the other radiant_core sources rather than under src/profiles/,

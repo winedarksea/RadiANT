@@ -520,5 +520,70 @@ class TestCounterReconstruction(unittest.TestCase):
         self.assertEqual(counter, 5000)
 
 
+class TestNodeIdentity(unittest.TestCase):
+    """ADR 0009: what a node with no host derives from K_dev and a counter.
+
+    These are the vectors radiant_core/tests/src/test_node_ident.c asserts, and
+    the two implementations share no code, so agreement here is evidence rather
+    than tautology.
+    """
+
+    K_DEV = bytes(range(16))
+    TIER0_DEVNUM = 51235
+
+    def test_tier0_device_number_is_derived_and_in_range(self):
+        self.assertEqual(rc.node_tier0_devnum(self.K_DEV), self.TIER0_DEVNUM)
+        # 0 is the ANT wildcard and must never come out of this.
+        for byte in range(256):
+            key = bytes([byte]) * 16
+            devnum = rc.node_tier0_devnum(key)
+            self.assertTrue(1 <= devnum <= 0xFFFF)
+
+    def test_pair_scalar_vectors(self):
+        self.assertEqual(
+            rc.node_pair_scalar(self.K_DEV, 1, self.TIER0_DEVNUM).hex(),
+            "7f80f817776ac5264d9f45da009ce2fc"
+            "8165d1dce83147783225e05edca6ef10")
+        self.assertEqual(
+            rc.node_pair_scalar(self.K_DEV, 2, self.TIER0_DEVNUM).hex(),
+            "d4bd67bcfeb0441e4785983d30883619"
+            "364122a1a942477b8f52a90eac9a0642")
+        self.assertEqual(
+            rc.node_pair_scalar(self.K_DEV, 7, self.TIER0_DEVNUM).hex(),
+            "dc7b9e17f334145f4287aa805a4be02b"
+            "49a819493dfa29f1f4085a66d1b5c438")
+
+    def test_the_scalar_is_deterministic_in_the_counter(self):
+        # The whole point: the same counter is the same private key, which is
+        # why the counter may never repeat.
+        first = rc.node_pair_scalar(self.K_DEV, 4, 1)
+        self.assertEqual(first, rc.node_pair_scalar(self.K_DEV, 4, 1))
+        self.assertNotEqual(first, rc.node_pair_scalar(self.K_DEV, 5, 1))
+        self.assertNotEqual(first, rc.node_pair_scalar(b"\xff" * 16, 4, 1))
+
+    def test_the_two_halves_differ(self):
+        # A 32-byte output built by calling a 128-bit KDF twice with an
+        # unchanged block would be the same 16 bytes repeated, which is the
+        # mistake this asserts against.
+        scalar = rc.node_pair_scalar(self.K_DEV, 3, 9)
+        self.assertEqual(len(scalar), rc.NODE_PAIR_SCALAR_BYTES)
+        self.assertNotEqual(scalar[:16], scalar[16:])
+
+    def test_the_length_field_is_bound(self):
+        # [L]_2 = 256 here and 128 in kdf_block(), so the first block of the
+        # pairing derivation is NOT the 128-bit "pair" key. If it were, a caller
+        # that reached for the ordinary KDF would silently get half a scalar
+        # that happened to match.
+        self.assertNotEqual(
+            rc.node_pair_scalar(self.K_DEV, 1, self.TIER0_DEVNUM)[:16],
+            rc.kdf(self.K_DEV, rc.LABEL_PAIR, 1, self.TIER0_DEVNUM))
+
+    def test_the_sp800_108_counter_is_rejected_out_of_range(self):
+        with self.assertRaises(ValueError):
+            rc.node_pair_block(0, 1, 1)
+        with self.assertRaises(ValueError):
+            rc.node_pair_block(3, 1, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

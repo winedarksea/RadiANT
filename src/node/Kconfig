@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The hostless node's identity, epoch and pairing scalar.
+# docs/decisions/0009-hostless-node-identity.md.
+
+menu "RadiANT node identity (hostless)"
+
+config RADIANT_NODE_IDENT
+	bool "hostless node identity, boot counter and node-side epoch"
+	default n
+	depends on RADIANT_SEC
+	help
+	  src/node/node_ident.c: the NVM monotonic boot counter that becomes
+	  this node's epoch, K_dev and the Tier 0 device number derived from
+	  it, and the deterministic pairing scalar
+	  KDF(K_dev, "pair" || pair_counter).
+
+	  FOR A NODE WITH NO HOST. A dongle behind a PC does not want this: its
+	  epoch authority is the PC, over 0xF3, and its pairing scalar arrives
+	  over 0xF5. A battery heart-rate strap has neither, which is the whole
+	  of why this exists.
+
+	  Depends on RADIANT_SEC because everything here derives keys with the
+	  AES-CMAC KDF that symbol compiles, and hands the result to
+	  radiant_sec_set_epoch(). It adds NO entry point to radiant_core - ADR
+	  0009 decision 7 keeps the persistence in the application, and the
+	  module still only ever receives an epoch through its existing API.
+
+	  Selecting this requires a node_nvm.h backend. There is no default and
+	  no RAM fallback: a volatile store here is a boot counter that restarts
+	  at 1 on every power cycle, which is a replayed epoch and a repeated
+	  pairing scalar arriving silently. A build with no backend fails to
+	  link, which is the loudest available way to say so.
+
+config RADIANT_NODE_NVM_SETTINGS
+	bool "store the node's counters in the Zephyr settings subsystem"
+	default y if RADIANT_NODE_IDENT
+	depends on RADIANT_NODE_IDENT
+	select SETTINGS
+	select FLASH
+	select FLASH_MAP
+	select NVS
+	help
+	  src/node/node_nvm_settings.c: three records - two u32 counters and
+	  K_dev - in the "radiant" settings subtree, over NVS in the board's
+	  storage_partition. The standard Zephyr answer, chosen because this
+	  repository had no persistence layer at all before this phase and a
+	  private one for three records would be the worse mistake.
+
+	  Turn it OFF to supply your own node_nvm.h implementation - a secure
+	  element, which is where ADR 0009 says the counters belong on a part
+	  that has one, or a test double. radiant_core/tests/fake_nvm.c is the
+	  second implementation that keeps this a seam rather than a layer with
+	  one caller.
+
+	  REQUIRES A storage_partition IN THE BOARD'S DEVICETREE. NVS has
+	  nowhere to go without one and the failure is at build time.
+
+	  It selects NVS but NOT SETTINGS_NVS, and that is a Kconfig constraint
+	  rather than an omission: the settings storage backend is a CHOICE, and
+	  select has no effect on a choice symbol - Zephyr turns the attempt into
+	  a hard error rather than ignoring it. With NVS enabled and no file
+	  system in the build, SETTINGS_NVS is the choice's default and nothing
+	  more is needed; an application that wants a different one sets it in
+	  its own .conf, which is the only place a choice can be made.
+
+endmenu

@@ -325,6 +325,16 @@ static const struct radiant_sec_caps sw_caps = {
 	.has_x25519    = false,
 #endif
 	.key_is_opaque = false,
+	/* Tracks the entropy backend's symbol for the same reason has_x25519
+	 * tracks X25519's: it is a separate file under a separate symbol, and
+	 * "this build has no RNG" is what a caller needs to know either way.
+	 * A plain #ifdef, because this file includes no Zephyr header and
+	 * IS_ENABLED() lives in one. */
+#if defined(CONFIG_RADIANT_SEC_HAS_RNG)
+	.has_rng       = true,
+#else
+	.has_rng       = false,
+#endif
 	.key_bits_mask = RADIANT_SEC_KEY_BITS_128,
 	.block_us      = 12,      /* M4 at 64 MHz, estimated, not measured */
 };

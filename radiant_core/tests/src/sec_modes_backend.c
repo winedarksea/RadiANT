@@ -45,6 +45,10 @@ static const struct radiant_sec_caps modes_caps = {
 	.has_ctr       = true,
 	.has_cmac      = true,
 	.has_x25519    = false,
+	/* Stated rather than left to the zero-initialiser: a mode-level
+	 * accelerator is exactly the sort of part that also has a TRNG, so the
+	 * next person to copy this struct should see the field. */
+	.has_rng       = false,
 	.key_is_opaque = false,
 	.key_bits_mask = RADIANT_SEC_KEY_BITS_128,
 	.block_us      = 0,

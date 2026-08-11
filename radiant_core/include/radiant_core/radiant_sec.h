@@ -168,6 +168,14 @@ struct radiant_sec_caps {
 	 * load-bearing the day a host asks to. */
 	bool key_is_opaque;
 
+	/* True when radiant_sec_rng() below is real. See ADR 0009: a hostless
+	 * node derives its pairing scalar from K_dev and a counter BECAUSE
+	 * there is usually no entropy source, and where one does exist it
+	 * should be used instead. This bit is the whole of how a caller asks,
+	 * and it is a bit rather than a backend name for the reason every other
+	 * field here is: policy never names a backend. */
+	bool has_rng;
+
 	/* Bit 0 = 128-bit keys, bit 1 = 192, bit 2 = 256. */
 	uint8_t key_bits_mask;
 
@@ -181,6 +189,28 @@ struct radiant_sec_caps {
 #define RADIANT_SEC_KEY_BITS_256 0x04
 
 const struct radiant_sec_caps *radiant_sec_caps(void);
+
+/*
+ * ── Entropy, optional and never assumed ────────────────────────────────────
+ *
+ * `len` cryptographically strong random bytes, or RADIANT_SEC_ENOTSUP when the
+ * build has no entropy source - which is the DEFAULT and not an error path.
+ * docs/radiant-security.md section 7.4 pins why: reaching psa_rng/CRACEN drags
+ * nrf_security into the build, so it is opt-in per part rather than assumed
+ * per project.
+ *
+ * A CALLER MUST CHECK caps.has_rng RATHER THAN CALLING AND HOPING. The weak
+ * definition below returns ENOTSUP without touching `out`, so a caller that
+ * ignores the cap and also ignores the return code gets whatever was already in
+ * its buffer - which is the failure mode a security-critical default must not
+ * have quietly, and is why ADR 0009 makes the deterministic KDF path the
+ * primary one rather than the fallback.
+ *
+ * Nothing in radiant_core calls this. It exists for the node application's
+ * pairing-scalar precedence rule (ADR 0009): host-supplied scalar if present,
+ * else the RNG when caps.has_rng, else KDF(K_dev, "pair" || pair_counter).
+ */
+int radiant_sec_rng(uint8_t *out, size_t len);
 
 /*
  * ── Public key: X25519 ─────────────────────────────────────────────────────
@@ -407,6 +437,22 @@ void radiant_sec_nonce_block(uint8_t out[RADIANT_SEC_BLOCK_BYTES],
 #define RADIANT_SEC_LABEL_AUTH "auth"
 #define RADIANT_SEC_LABEL_ID   "id"
 #define RADIANT_SEC_LABEL_CMD  "cmd"
+
+/*
+ * RESERVED, and used by nothing in radiant_core - the node application's
+ * pairing-scalar derivation (ADR 0009) is the only holder. It is declared here
+ * for the reason RADIANT_SEC_DOM_COMPAT_MAC is: this is the list a reader
+ * checks a new label against, and a fifth label defined somewhere else is a
+ * collision waiting for the sixth.
+ *
+ * NOTE THE TRAP, because it is a real one: an X25519 scalar is 32 bytes and
+ * radiant_sec_kdf() emits 16, so passing this label to radiant_sec_kdf() does
+ * NOT produce a pairing scalar and does not produce half of one either -
+ * [L]_2 is part of the PRF input, so the 256-bit derivation's first block
+ * differs from this label's 128-bit output in every byte. The node's
+ * derivation is src/node/node_ident.c's, and it says so there.
+ */
+#define RADIANT_SEC_LABEL_PAIR "pair"
 
 int radiant_sec_kdf(const struct radiant_sec_key *root, const char *label,
 		    uint32_t epoch, uint16_t base_devnum,

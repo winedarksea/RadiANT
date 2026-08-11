@@ -537,3 +537,77 @@ def resolve_counter(expected: int, counter_low: int) -> tuple:
     if best is None:
         best = counter_low
     return best & 0xFFFF, best >> 16
+
+
+# ── The hostless node's own derivations ────────────────────────────────────
+#
+# docs/decisions/0009-hostless-node-identity.md. K_dev is a per-device secret
+# provisioned at manufacture; it is the Tier 0 device-number source and the
+# pairing-scalar root, and it never goes on the air. These two functions are the
+# mirror of src/node/node_ident.c, and they exist so that the C side asserts
+# vectors an independent implementation produced rather than asserting that it
+# agrees with itself.
+
+#: The pairing label. Four characters, which is exactly what kdf_block() allows,
+#: so the ADR's `KDF(K_dev, "pair" || pair_counter)` is this project's existing
+#: SP 800-108 block with the counter carried in the epoch field - a fifth label
+#: rather than a fifth construction.
+LABEL_PAIR = "pair"
+
+#: An X25519 scalar is 32 bytes and the PRF emits 16, so the pairing derivation
+#: is the only two-iteration KDF in the project. K_dev is 128 bits, so the
+#: scalar carries 128 bits of entropy however many bytes it occupies; that is a
+#: property of the root and not of this expansion, and it is stated rather than
+#: implied because a 32-byte output invites the assumption of 256-bit strength.
+NODE_PAIR_SCALAR_BYTES = 32
+
+
+def node_pair_block(i: int, pair_counter: int, base_devnum: int) -> bytes:
+    """i || "pair" || 0x00 || pair_counter[4 LE] || base_devnum[2 LE] || 0x0100.
+
+    kdf_block()'s layout with two fields changed, and both changes are the
+    reason it is a separate function rather than a call to it: the SP 800-108
+    counter runs 1..2 instead of being pinned at 1, and [L]_2 is 256 rather than
+    128. Deriving 32 bytes by calling a 128-bit KDF twice with the same block
+    would return the same 16 bytes twice, so the counter has to reach the PRF.
+    """
+    if i not in (1, 2):
+        raise ValueError("the SP 800-108 counter runs 1..2 for a 256-bit output")
+    return (
+        bytes([i])
+        + LABEL_PAIR.encode("ascii")
+        + b"\x00"
+        + (pair_counter & 0xFFFFFFFF).to_bytes(4, "little")
+        + (base_devnum & 0xFFFF).to_bytes(2, "little")
+        + b"\x01\x00"
+    )
+
+
+def node_pair_scalar(k_dev: bytes, pair_counter: int,
+                     base_devnum: int = 0) -> bytes:
+    """The deterministic X25519 private scalar for one pairing window.
+
+    Unclamped: RFC 7748 clamping happens inside the X25519 primitive, on a copy,
+    so clamping here would only mean two implementations of one rule.
+    """
+    return b"".join(
+        cmac(k_dev, node_pair_block(i, pair_counter, base_devnum))
+        for i in (1, 2)
+    )
+
+
+def node_tier0_devnum(k_dev: bytes) -> int:
+    """The identity Tier 0 device number, 1..65535.
+
+    Tier 0 is the fixed-number tier, and "fixed" here means derived rather than
+    stored: a node that can recompute its device number from K_dev cannot lose
+    it, and a factory reset that re-rolls K_dev re-rolls the number with it,
+    which is the property ADR 0006 wants and a stored number does not have.
+
+    0 is the ANT wildcard, so the range is 1..65535 - the same range
+    tools/ant_identity.py's random_device_number() draws from, reached by
+    reduction instead of by rejection because a node deriving this at boot
+    cannot afford an unbounded retry.
+    """
+    block = kdf(k_dev, LABEL_ID, 0, 0)
+    return (int.from_bytes(block[:2], "little") % 65535) + 1

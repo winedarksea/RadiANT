@@ -487,4 +487,10 @@ endif # ANT_DONGLE_FLASH_LOG
 
 endmenu
 
+# The hostless node's identity and epoch (compat-C6). Its own file and its own
+# menu, outside the dongle's, because it is the opposite kind of device: a
+# dongle's epoch authority is the PC behind it and a strap has no PC at all.
+# See docs/decisions/0009-hostless-node-identity.md.
+rsource "src/node/Kconfig"
+
 source "Kconfig.zephyr"

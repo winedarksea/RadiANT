@@ -305,6 +305,43 @@ config RADIANT_SEC_PAIRING_X25519
 	  psa_rng/CRACEN, and reaching it drags nrf_security into every build.
 	  The honest consequence is that a host-less node cannot pair this way.
 
+config RADIANT_SEC_HAS_RNG
+	bool
+	help
+	  Hidden. Selected by whichever entropy backend is chosen below, and it
+	  is what radiant_sec_caps().has_rng reports and what suppresses the
+	  refusing radiant_sec_rng() in src/radiant_sec.c.
+
+	  A separate symbol from the backend that selects it, so that policy -
+	  and the node application above it - asks "is there entropy here" and
+	  never "is CRACEN here". That is the same seam discipline the crypto
+	  backends keep, and ADR 0009 pins it for this one specifically.
+
+config RADIANT_SEC_RNG_PSA
+	bool "PSA entropy backend (psa_generate_random, CRACEN on nRF54L)"
+	default n
+	select RADIANT_SEC_HAS_RNG
+	help
+	  src/radiant_sec_rng_psa.c: radiant_sec_rng() over psa_generate_random(),
+	  for builds that already link nrf_security. Off by default, and the
+	  default is the honest one for this project - reaching PSA drags
+	  nrf_security into the build, which is the pinned reason
+	  docs/radiant-security.md section 7.4 gives for the scalar coming from
+	  the host in the first place.
+
+	  ADR 0009 keeps this open rather than requiring it: a hostless node
+	  derives its pairing scalar from K_dev and a counter, and where real
+	  entropy exists it should be used instead. Turning this on changes
+	  which of the three scalar sources wins and changes NOTHING about the
+	  counter - pair_counter still advances before the public key is
+	  transmitted, because its second job is forward secrecy and its first
+	  is not being a fingerprint.
+
+	  NOT BUILT BY ANY GATE IN THIS REPOSITORY. Nothing on the bench links
+	  nrf_security, so this file's first compile will be on the part that
+	  needs it. It is small and it is one PSA call, and that is the reason
+	  the risk is acceptable rather than an argument that there is none.
+
 config RADIANT_SEC_COMPAT
 	bool "compat-mode attestation primitives (ANT+ device types)"
 	default n

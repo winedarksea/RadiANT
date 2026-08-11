@@ -326,6 +326,27 @@ if(CONFIG_ANT_DONGLE_FLASH_LOG)
   target_sources(app PRIVATE src/diag_flash_log.c)
 endif()
 
+# ── The hostless node's identity (compat-C6) ────────────────────────────────
+#
+# docs/decisions/0009-hostless-node-identity.md. Default off and off in every
+# dongle build: a dongle's epoch authority is the PC behind it, over 0xF3, and
+# its pairing scalar arrives over 0xF5 - it wants none of this. The symbol and
+# the wiring live here so that a node application built from this tree has a
+# home for them, and so the storage backend is selected the same way every other
+# backend in this project is.
+#
+# The counters' storage is a seam (src/node/node_nvm.h) with no default
+# implementation, which is why the backend is a separate condition rather than
+# being folded into the one above: a build that selects the identity and no
+# backend must fail at the link, not fall back to RAM.
+if(CONFIG_RADIANT_NODE_IDENT)
+  target_sources(app PRIVATE src/node/node_ident.c)
+  target_include_directories(app PRIVATE src/node)
+endif()
+if(CONFIG_RADIANT_NODE_NVM_SETTINGS)
+  target_sources(app PRIVATE src/node/node_nvm_settings.c)
+endif()
+
 # Exactly one radio backend, chosen by ANT_RADIO above. All three implement
 # src/ant_radio.h, so the bridge and main() do not know which is present -
 # the same shape as the transport choice, deliberately.

@@ -495,6 +495,26 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 	return derive_keys(c);
 }
 
+#if !defined(CONFIG_RADIANT_SEC_HAS_RNG)
+/*
+ * No entropy source in this build, which is the default and not a degraded
+ * mode: ADR 0009 makes the deterministic KDF the primary pairing-scalar path
+ * precisely so that this is a supported configuration rather than a hole.
+ *
+ * `out` is deliberately left untouched. Zeroing it would hand a caller that
+ * ignored both the cap and the return code a scalar that at least looks like
+ * data; leaving it alone means such a caller keeps its own buffer, and the
+ * only safe answer to "give me randomness" from a part that has none is to
+ * refuse in a way the caller cannot mistake for success.
+ */
+int radiant_sec_rng(uint8_t *out, size_t len)
+{
+	(void)out;
+	(void)len;
+	return RADIANT_SEC_ENOTSUP;
+}
+#endif /* !CONFIG_RADIANT_SEC_HAS_RNG */
+
 int radiant_sec_set_devnum(uint8_t ch, uint16_t devnum)
 {
 	struct sec_ctx *c = ctx_of(ch);

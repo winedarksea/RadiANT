@@ -47,6 +47,20 @@ target_sources(app PRIVATE ${suite_sources})
 # points.
 target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fake_radio.c")
 
+# ── The mock NVM ────────────────────────────────────────────────────────────
+#
+# The same arrangement one layer up: fake_nvm.c implements src/node/node_nvm.h
+# against RAM, so src/node/node_ident.c is compiled unmodified and the two
+# things a real backend cannot be asked to do on demand - a power cycle and a
+# write that fails - are callable from a suite.
+#
+# src/node/node_nvm_settings.c is deliberately NOT built here. It is the
+# shipping backend (the settings subsystem over NVS) and it needs a storage
+# partition this test application does not have; linking both would be a
+# duplicate-symbol error, which is the same guard CONFIG_RADIANT_CORE_BACKEND_
+# NONE provides for the radio.
+target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fake_nvm.c")
+
 # ── src/profiles ────────────────────────────────────────────────────────────
 #
 # The RadiANT telemetry envelope (device type 0x60): docs/radiant-telemetry.md
@@ -91,6 +105,25 @@ target_sources(app PRIVATE
 )
 target_include_directories(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles")
+
+# ── src/node ────────────────────────────────────────────────────────────────
+#
+# The hostless node's identity, epoch and pairing scalar (compat-C6):
+# docs/decisions/0009-hostless-node-identity.md in code.
+#
+# Outside radiant_core for the reason the ADR gives in its decision 7, not for
+# convenience: radiant_core is TOLD an epoch and refuses one that has not
+# advanced, and putting the persistence inside it would hand every consumer of
+# the module a flash dependency and a storage backend to serve one class of
+# node. So the dependency runs application -> core here as well, and nothing in
+# radiant_core knows this directory exists. There is no new core entry point for
+# a node-derived epoch: node_ident.c calls radiant_sec_set_epoch(), which is the
+# same function the host adapter calls with a host-supplied value.
+target_sources(app PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/node/node_ident.c"
+)
+target_include_directories(app PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/node")
 
 # This directory, so a suite writes #include "fake_radio.h" rather than
 # #include "../fake_radio.h". Suites live in src/ and the mock does not, so
