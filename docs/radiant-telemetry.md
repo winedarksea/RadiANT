@@ -79,8 +79,33 @@ in the descriptor from v1.
    channel for it and never sees one of these pages.
 2. The ANT+ compatibility profiles — `0x0B` bicycle power, `0x78` heart rate,
    `0x79`/`0x7A`/`0x7B` bike speed and cadence, `0x11` fitness equipment — stay
-   **byte-exact implementations of Garmin's specifications**. Nothing in this
-   document applies to them.
+   **byte-exact implementations of Garmin's specifications**. The envelope in
+   this document — the descriptor, the field area, the data pages, the sync
+   handoff — does not apply to them.
+
+   **Amended 2026-08-11 —
+   `docs/decisions/0008-antplus-additive-pages-and-compat-security.md`.** As
+   originally written this clause said "nothing in this document applies to
+   them", and that sentence blocked more than it meant to: it forbade *adding* a
+   page number to an ANT+ device type as well as changing one. The amended rule
+   separates the two, because they have nothing in common:
+
+   - **Additive pages on ANT+ device types are permitted.** A new page number,
+     never before allocated in that profile, carrying RadiANT content, is legal
+     on an ANT+ compatibility profile. This is extension axis 1 of
+     `docs/decisions/0005-extension-inside-ant-plus.md` — a receiver skips a page
+     number it does not know — and the RadiANT compat security layer
+     (`docs/radiant-security.md` section 11) is the first user of it.
+   - **No existing ANT+ page layout may be modified.** Not one byte, not one
+     reserved bit, not one field's units, on any page any ANT+ profile document
+     defines. That prohibition is unchanged, unweakened, and is the one this
+     clause was written for.
+   - **Device type `0x79` can never carry an additional page.** Combined bike
+     speed and cadence has no page-number byte at all — byte 0 is the low half
+     of the cadence event time — so an inserted page decodes as data and steps
+     four accumulators. The exclusion is permanent and structural rather than a
+     scheduling decision. `0x7A` and `0x7B` are checked individually before any
+     page is added to either.
 3. The Matter/Zigbee bridge runs **on the host or the gateway**, never over the
    air. A Matter attribute never appears in an ANT frame; a RadiANT field ID
    does, and the host translates.
@@ -92,6 +117,11 @@ other page of any ANT+-allocated device type, is the single change that would
 break a Garmin head unit or Zwift, and it is the only one. If a mapping needs a
 value that an ANT+ page does not carry, the node publishes it on a RadiANT
 device type alongside, on its own channel.
+
+Clause 2's additive-page permission does not touch that prohibition and is not a
+route around it: an added page number is a **new** page, and the moment RadiANT
+content lands in a page some ANT+ profile document already defines, this
+paragraph applies again in full.
 
 ---
 

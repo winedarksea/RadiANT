@@ -183,6 +183,19 @@ exactly** — no gaps, no overlaps. That is stricter than it needs to be and it
 is deliberate: an unassigned page number should be a recorded decision, because
 the unclaimed one is the one two implementations both reach for.
 
+**Compat pages carry the token `RadiANT compat` in their Name column**, plus
+`beacon` or `attestation` — for example `RadiANT compat beacon`. That is a
+convention `scripts/check_profile_registry.py` looks for rather than a
+decoration: it is how the checker finds the rows whose arity it has to police.
+The allocation is **two page numbers, not three** — SWITCH and RETURN are frame
+indices inside the beacon page's frame set — it is the same numbers in every
+compat profile, every number is `<= 0x7F` because heart rate's byte 0 carries a
+page-change toggle in bit 7, and **none of it may ever land on `0x79`**, which
+has no page-number byte at all. See
+`docs/decisions/0008-antplus-additive-pages-and-compat-security.md`. No compat
+page is registered yet; the numbers are confirmed against the profile documents
+before they are.
+
 <!-- radiant-registry: pages -->
 
 | Type | Page | Name | Schema | Notes |

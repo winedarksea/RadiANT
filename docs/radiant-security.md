@@ -6,8 +6,12 @@ counter and the trailing tag space stay claimed in `docs/profile-registry.md`
 and `docs/radiant-telemetry.md`, and that the pins in this document (the nonce's
 domain byte, the v1 window set, the tag length, the epoch-advance-on-wrap rule,
 the descriptor authentication frame and the common-page privacy rules) are still
-stated here. Everything else in this document is narrative until the phase that
-implements it lands.
+stated here. It also checks section 11's pins — the compat domain byte and its
+subtypes, the two tag lengths, the legal `N` and `K` sets, the derived-locator
+formula, the policy default and precedence, the two-page allocation and the
+`0x79` exclusion — and the shape of any compat page rows in the registry.
+Everything else in this document is narrative until the phase that implements it
+lands.
 
 This document is written ahead of the code on purpose. The switches below
 constrain the page envelope — room for an epoch, a counter and a MAC byte — and
@@ -20,6 +24,13 @@ touches the address path, the search policy, the RX filters or the scheduler.
 first draft of this document and is **withdrawn**, not deferred; section 3.7
 records why, so that it is not re-proposed. What replaces it is a provisioning
 rule, section 4.
+
+**Sections 1 to 10 secure RadiANT device type `0x60`. Section 11 is the other
+half** — the same primitives on an ANT+ compatibility profile, where the node
+stays byte-exact to a Garmin head unit and is verifiable, and on demand private,
+to a receiver holding its key. It is a separate Kconfig, off by default, and its
+decision record is
+`docs/decisions/0008-antplus-additive-pages-and-compat-security.md`.
 
 ---
 
@@ -706,6 +717,16 @@ whose per-message overhead is logarithmic in the group size and does not fit an
 Fine for a household with three receivers. An operational problem for a team, a
 coaching service, or a gym with staff turnover. **Documented, not solved.**
 
+**Section 11's enrolment path makes this gap more visible rather than less, and
+that is the right way round.** Adding a receiver is cheap precisely because
+every keyholder holds the same root: no epoch change, no re-keying, no
+interruption, and existing receivers observe nothing. The mirror operation is
+not the mirror cost. **RadiANT v1 can add a receiver in sixty seconds and can
+only remove one by re-provisioning the network** — every remaining receiver,
+with a new root. Anyone shipping a product should read that sentence before
+choosing an enrolment posture, and it belongs here rather than in a future
+issue.
+
 ### 7.4 Pairing happens in the clear, and a host-less node cannot pair over the air
 
 Key establishment is section 8. Two limits belong here:
@@ -719,6 +740,17 @@ Key establishment is section 8. Two limits belong here:
   on every build. The host has a real CSPRNG; the node does not need one. The
   honest consequence: **a host-less node cannot pair this way.** Documented,
   deferred, and not worked around with a weak on-node PRNG.
+
+**Amended 2026-08-11 — the deferral above is closed by
+`docs/decisions/0009-hostless-node-identity.md`.** A battery strap has no host,
+so "the host has a real CSPRNG" stops being an answer the moment the node this
+whole compat layer exists to build is the node in question. The replacement is
+not a weak on-node PRNG: it is a **deterministic** scalar
+`KDF(K_dev, "pair" || pair_counter)` over a persisted monotonic counter, with
+the counter advanced **before** the public key is transmitted, and an optional
+PSA/CRACEN entropy backend behind a `caps` bit for parts that already link
+`nrf_security`. The same counter is the hostless node's epoch source, which is
+the other half of the same hole. Read ADR 0009 before re-arguing either.
 
 ### 7.5 What a spread MAC costs, in numbers
 
@@ -771,6 +803,42 @@ epoch via `0xF3`, not on anything it hears. The descriptor that carries the
 epoch is unauthenticated until section 5.3's frame ships, so **a captured old
 epoch replays wholesale to a receiver whose host does not know the current
 one.** Stated here rather than implied.
+
+### 7.7 What compat attestation costs, in numbers
+
+The section 11 layer is measured the same way, and the two tiers land in
+different places on purpose. Slot figures are at a 4 Hz profile with Tier I at
+its default `T` = 20 s; the unverified fraction is against the characterised
+~0.4% loss floor of `docs/spike-b-part2-results.md`.
+
+| Tier | slots left to legacy | unverified | latency at 4 Hz | forgery bound |
+|---|---|---|---|---|
+| **I only (the default), `T` = 20 s** | **98.8%** | **~0.4%** | **~20 s** | **2^-40 per attempt, 1 attempt per `T`** |
+| I + II, N = 4 | 74% | ~1.6% | ~1 s | 2^-48 |
+| I + II, N = 8 | 86.5% | ~3.2% | ~2 s | 2^-48 |
+| I + II, N = 16 | 92.7% | ~6.2% | ~4 s | 2^-48 |
+| I + II, N = 32 | 95.8% | ~12% | ~8 s | 2^-48 |
+
+**Tier I has no amplification factor at all, because it amplifies nothing.** It
+covers no payload, so a delivered Tier I page verifies whatever else was lost:
+**verification rate equals page delivery rate**, independent of the interval.
+That is the property a window CMAC cannot have at any length, and it is the
+whole reason this tier exists.
+
+**Tier II keeps the amplification the spread MAC's W has and multiplies it by
+N.** One injected or suppressed page unverifies `N-1` legitimate ones, N is
+simultaneously the airtime cost, the verification latency and the DoS
+amplification factor, and deliver-as-unverified (section 3.2) is what stops that
+becoming data loss. This is the honest regression against the spread tag, which
+resynchronises after a loss and does not, and it is why Tier II is off by
+default.
+
+**In the default configuration a compat node spends 2.0% of its slots on
+RadiANT** — 0.8% beacon plus 1.2% Tier I — against the **1.65%** ANT+ itself
+already spends on common pages 80 and 81 in the same 121-message cycle. Every
+deployed receiver demonstrably tolerates the larger number. That comparison is
+what the compatibility claim rests on, and section 11 states the measurement
+that has to confirm it.
 
 ---
 
@@ -1023,3 +1091,519 @@ that the numbers differ.
   it is malleable and unauthenticated, and it reserves stack RAM shared with the
   plain channels. `encryption.conf` and the existing sdk-ant-backed writes stay
   exactly as they are; they cost nothing while that backend exists.
+- **Encrypting anything on an ANT+ compatibility channel.** There is no such
+  thing, and section 11.1 says why in one sentence. Confidentiality on a compat
+  profile is section 11.5's switch or it is theatre.
+- **An over-air command that changes a node's compat policy.** Not deferred —
+  *refused*, section 11.6.
+- **Per-receiver switching.** The sensor has one stream and N listeners; "go
+  private for you only" cannot exist.
+- **Opportunistic attestation substitution.** The beacon's format bit and `N`
+  field are specified so it is a later configuration change rather than a break;
+  the implementation and its data-dependent test matrix are not in v1.
+- **Speed and cadence.** `0x79` is excluded permanently — section 11.8.
+  `0x7A`/`0x7B` are out of v1 pending a per-profile check, not by construction.
+
+---
+
+## 11. Compat mode: RadiANT on an ANT+ device type
+
+**Decided in `docs/decisions/0008-antplus-additive-pages-and-compat-security.md`;
+this section is the spec that ADR records.** Everything above secures RadiANT
+device type `0x60`. This section covers the other half: a node that is a
+byte-exact ANT+ heart-rate strap or power meter to every legacy receiver in the
+room, and a verifiable — and on demand, private — RadiANT sensor to a receiver
+holding its key. It is enabled by `CONFIG_RADIANT_SEC_COMPAT` (default n,
+depends on `CONFIG_RADIANT_SEC`) and it is permitted on ANT+ device types by
+`docs/radiant-telemetry.md` section 2 clause 2 as amended.
+
+**A naming rule before anything else, because these two axes have already nearly
+collided: attestation tiers are roman, identity tiers are arabic.** Tier I and
+Tier II are the two attestation mechanisms in section 11.4. Tier 0, Tier 1 and
+Tier 2 are the identity and provisioning tiers of section 4. They are unrelated
+axes — a node can run attestation Tier I with identity Tier 0, or Tier II with
+Tier 2 — and no document may use one numeral system for both.
+
+### 11.1 Advertise, authenticate and encrypt have three different compatibility costs
+
+This is the sentence the whole layer is downstream of:
+
+> **Advertising is free. Authenticating a clear stream is free to legacy
+> receivers and is most of the value. Encrypting is not compatible with
+> anything, ever, because a ciphertext page beside the plaintext page carrying
+> the same value is theatre. So confidentiality is a switch, not an addition.**
+
+There is no "encrypted ANT+ heart-rate page". The value is either in the clear
+where a Garmin head unit can read it — in which case encrypting a second copy of
+it protects nothing — or it is not there at all, which means the node has
+stopped being an ANT+ sensor. Section 11.5 is that stop, done deliberately and
+announced.
+
+One level down, the same cut applies again: **authenticating an identity and
+authenticating a data stream are two different things with two different
+costs.** Fusing them is what made the first draft's attestation expensive enough
+to argue about. Section 11.4 separates them.
+
+### 11.2 Layer A — the capability beacon
+
+One page interleaved into the profile's **existing** 121-message common-page
+rotation: one message in 121, **0.8% of slots**, ~30 s discovery latency at
+4 Hz. It does not invent a cadence; it rides the one pages 80 and 81 already
+established.
+
+Two frames under one page number, on the descriptor's
+`(index << 4) | (count - 1)` framing convention (`docs/radiant-telemetry.md`
+section 6), so byte `[1]` is the frame index and bytes `[2..7]` are payload.
+
+```
+frame 0   [1] = 0x01
+  [2]     bits 7:4 compat envelope version (v1 = 0x1)
+          bit  3   pairing-available     bit 2 pairing-open
+          bit  1   private-available     bit 0 attest-available
+  [3]     bits 1:0 private policy: 0 never, 1 physical, 2 command, 3 always
+          bits 3:2 attestation window N: 0 -> 4, 1 -> 8, 2 -> 16, 3 -> 32
+          bit  4   attestation mode: 0 fixed, 1 opportunistic (not v1)
+          bit  5   pending switch
+          bits 7:6 reserved, must be 0
+  [4..6]  key-group hint, trunc24( CMAC(K_id, epoch) ), CMAC output order
+  [7]     reserved, must be 0
+
+frame 1   [1] = 0x11
+  [2]     private-mode target device type (bits 6:0); bit 7 must be 0
+  [3..4]  private-mode target device number, LE
+  [5..6]  private-mode target channel period, LE, counts of 1/32768 s
+  [7]     reserved, must be 0
+```
+
+- **The beacon carries no epoch.** It is the field a joining receiver would most
+  obviously want and it is refused: for a hostless node the epoch *is* the boot
+  counter (`docs/decisions/0009-hostless-node-identity.md`), and a slowly
+  incrementing 32-bit number broadcast every 30 s is a device fingerprint that
+  survives every other privacy measure here — sitting directly beside a
+  key-group hint that was made epoch-derived precisely to avoid that class of
+  leak. Section 11.3 is how a receiver recovers it instead. The same rule
+  already governs the sync-handoff page (`docs/radiant-telemetry.md` section 4).
+- **The key-group hint is epoch-derived, never static.** A fixed "RadiANT, group
+  ABC" byte string every 30 s is a better tracking identifier than the device
+  number, which is section 3.7's whole lesson and the reason page 81's serial is
+  `0xFFFFFFFF` under a privacy posture. It answers "is this one of mine" without
+  trial-verifying every root, and it is the epoch anchor.
+- **A node whose policy is `never` advertises `private-available = 0` and policy
+  `never`, and the two must agree.** A receiver that sees them disagree treats
+  the beacon as malformed. Frame 1's locator fields are zero on such a node —
+  there is nowhere for it to go.
+- **Frame 1's locator fields are also zero on any node with `announce =
+  silent`**, whatever its policy, and the pending-switch bit is never set there.
+  A keyholder derives the locator (section 11.5); an observer gets nothing.
+- **Accepted leak:** the beacon's existence marks a node as RadiANT. Same class
+  as device type. Noted, not fixed.
+
+### 11.3 Epoch recovery, and its two paths
+
+The requirement the removed field has to keep satisfying is occasional contact,
+1:N: receiver A this week, receiver B next month, each possibly many boots out
+of date and neither able to ask the sensor anything — a garage-door opener.
+
+```
+first contact    the epoch arrives in the pairing exchange, where a two-way channel exists
+later contact    the receiver stores last_seen_epoch per sensor and searches
+                 forward, computing trunc24( CMAC(K_id, e) ) for
+                 e = last_seen, last_seen + 1, ... until it matches the beacon hint
+confirm          the first attestation window that verifies is a 40- or 48-bit
+                 confirmation of the candidate; a 24-bit hint collision cannot survive it
+re-provision     bounded absolute scan from 0, plus a small backward probe. Bounded,
+                 never an unbounded loop
+```
+
+| Receiver is behind by | CMAC ops | Time on a Cortex-M4 with AES hardware |
+|---|---|---|
+| 50 boots (a season) | 50 | well under 1 ms |
+| 1 000 boots | 1 000 | ~3 ms |
+| 65 536 boots (absurd) | 65 536 | ~200 ms, one-off |
+
+Ten sensors' keys multiply that by ten and it is still not a number anyone
+notices. It is cheaper than the beacon field it replaces, and it is a one-off
+cost at re-acquisition rather than a per-message one.
+
+**Two paths, and the second is the one that otherwise gets written and never
+exercised.** With `advertise = on` the receiver does a **forward search against
+the key-group hint**, one CMAC per candidate. With `advertise = off` there is no
+hint, so the receiver must **trial-verify candidate epochs against the
+attestation tag** directly, which costs one block per candidate for Tier I and
+`N` blocks for Tier II. An advertise-off node is therefore slower to re-acquire,
+not undiscoverable to a keyholder. Both paths are asserted, not just the first.
+
+### 11.4 Layer B — attested clear broadcast, in two tiers
+
+The threat model decides which tier is which. A stranger's sensor on an
+overlapping device number is an **identity** question, it is the mainstream
+case, and Tier I answers it. Eavesdropping is a confidentiality question and it
+is section 11.5. **Injection of forged values is in neither** — shipping the
+expensive mechanism that defends against it, on by default, on every strap, was
+answering a question nobody in the threat model asked.
+
+Both tiers share one domain byte and are separated by a subtype:
+
+```
+nonce_block = epoch[4 LE] || devnum[2 LE] || att_counter[2 LE] || dom || sub || 0x00 x6
+                dom = 0x01 CTR keystream | 0x02 spread MAC | 0x03 descriptor MAC
+                    | 0x04 compat MAC
+                sub = 0x01 Tier I | 0x02 Tier II | 0x03 SWITCH/RETURN announcement
+```
+
+**The subtype is inside the nonce and not only in the page.** Without the domain
+byte a compat tag and a spread tag can coincide; without the subtype *in the
+MAC'd block*, a Tier I and a Tier II tag over the same counter value are
+distinguished only by a page byte an attacker chooses. Section 3.3's block is
+extended at position 9 rather than duplicated, and positions 10..15 stay zero.
+
+#### Tier I — identity attestation. Default on.
+
+One self-contained page every `T` seconds, **decoupled from the data rate**:
+
+```
+[0]     attestation page number, subtype nibble = I
+[1..2]  attestation counter, low 16 bits, LE (monotone, derivable from time,
+        carried explicitly)
+[3..7]  trunc40( CMAC(K_auth, nonce_block) )
+```
+
+- **It covers no payload, and that is the point.** The page proves "this stream
+  comes from the holder of `K_auth`, now, and is not a replay" and nothing else.
+  Because nothing outside the page is covered it is **verifiable on receipt**,
+  and a lost packet anywhere else costs nothing. See section 7.7.
+- **`T` default 20 s, manufacturer-configurable.** At 4 Hz that is one page in
+  ~81, **1.2% of slots**. `T` is in *seconds*, so a slower profile spends
+  proportionally less, not more.
+- **Replay is closed by the counter, not by payload coverage.** `att_counter` is
+  monotone and derivable from elapsed time; a receiver rejects a counter it has
+  already seen and re-anchors after a gap. A wrap advances the epoch on both
+  sides, exactly as section 3.5 requires.
+- **40 bits of tag, not 48**, because the counter needs two bytes in-page now
+  that no window index is implied. 2^-40 per attempt against a mechanism
+  rate-limited to one attempt per `T` by construction is not the weak link.
+
+#### Tier II — data attestation. Default off.
+
+The original window CMAC, unchanged and now correctly scoped, for a deployment
+that genuinely fears injected values rather than colliding sensors:
+
+```
+[0]     attestation page number, subtype nibble = II
+[1]     window index, low 8 bits
+[2..7]  trunc48( CMAC(K_auth, nonce_block || p_1 || p_2 || ... || p_{N-1}) )
+```
+
+- **`p_i` is the full 8 transmitted payload bytes**, in transmission order, page
+  number included. That is what keeps the mechanism profile-agnostic:
+  `radiant_sec_compat.c` never learns what a heart-rate page is.
+- **The window is `N` consecutive transmitted messages, not `N` data
+  messages**, so the tag covers the common pages, the beacon and the Tier I page
+  too.
+- **`N in {4, 8, 16, 32}`, default 8 when enabled**, announced in the beacon.
+- **The honest regression:** a window CMAC is not self-synchronising under loss
+  the way section 3.2's spread tag is, so any lost packet in the window makes it
+  unverifiable. Section 7.7 has the numbers.
+
+#### Both tiers ride one page allocation, and downgrade protection is receiver-side
+
+The subtype nibble in byte `[0]` separates them, so the allocation stays at
+**two page numbers, not three** (beacon, attestation) — see section 11.8.
+
+Strip the beacon and a naive receiver falls back to clear. The fix is pinning,
+and the machinery exists: a channel with a key installed and attestation
+expected **reports UNVERIFIED rather than CLEAR** when no attestation arrives.
+`CLEAR` keeps meaning "no key here". **Sensor-side advertising is a discovery aid
+and never a security decision.** A receiver that completes enrolment pins that
+sensor, and unpinning is a deliberate user action.
+
+### 11.5 Layer C — the private-mode switch
+
+Not an extra channel. **The node stops being an ANT+ sensor and becomes a
+RadiANT one.**
+
+```
+COMPAT      type 0x78 / 0x0B, clear + attested                <- steady state
+   |  trigger: physical action, or an authenticated command from a paired keyholder
+   |           (never an unauthenticated over-air request)
+   v
+ANNOUNCING  SWITCH frames in the clear over a K-message countdown, beacon
+   |        promoted to 1 in 8. Skipped entirely when announce = silent
+   v
+PRIVATE     type 0x60, telemetry envelope, X_CONF + X_AUTH    <- existing, unmodified
+   |  revert: authenticated command, physical action, bounded maximum duration,
+   |          power cycle, channel close
+   v
+RETURNING   RETURN frames from the private channel, same countdown shape
+   |        Skipped when announce = silent, and unavailable on a power cycle or crash
+   v
+COMPAT
+```
+
+`private_policy = always` boots straight into PRIVATE and never enters COMPAT —
+that is today's `radiant_sec` node, named as a policy state so the axis is
+complete.
+
+**The switch is announced to everyone, in the clear, or 1:N is broken.** The
+command comes from *one* keyholder; the stream has *N* listeners. A node that
+acts on it and vanishes gives the receiver that asked a clean handover and every
+other keyed receiver a dropout — a feature that works on the bench with one head
+unit and fails in the room.
+
+SWITCH and RETURN are frame indices in the **beacon page's** existing frame set,
+which grows to four frames for the duration of a countdown:
+
+```
+frame 2   [1] = 0x23   SWITCH/RETURN frame A
+  [2]     target device type (bits 6:0); bit 7 must be 0
+  [3..4]  target device number, LE
+  [5..6]  target channel period, LE
+  [7]     bits 7:6 reason: 0 command, 1 physical, 2 timeout-revert, 3 reserved
+          bits 5:0 countdown, in units of one promoted beacon interval
+                   (8 transmitted messages)
+
+frame 3   [1] = 0x33   SWITCH/RETURN frame B
+  [2..7]  trunc48( CMAC(K_auth, nonce_block || frame_A) ), sub = 0x03,
+          att_counter from Tier I
+```
+
+Five rules, each load-bearing:
+
+- **Clear, but self-authenticating — it carries its own tag.** Tier I covers no
+  payload and Tier II is off by default, so the announcement cannot lean on
+  either: frame B tags frame A's full 8 transmitted bytes. It is verifiable on
+  receipt, needs no window to close, survives loss of every other packet, and
+  replays fail on the counter. **A receiver acts on a SWITCH frame only after
+  its tag verifies**; an unverified one is logged, counted and ignored, and the
+  cost of ignoring it is the re-acquisition path, which is already built.
+- **Therefore private mode requires a key.** Without a tag the announcement is an
+  unauthenticated "everybody follow me to channel X" — a one-packet herding
+  attack strictly worse than the mute attack this design already refuses. See
+  the dependency in section 11.6 and its one exemption.
+- **The countdown is long enough to be received, and the beacon rate rises to
+  meet it.** During a countdown **beacon slots are promoted to 1 in 8**, aligned
+  to the attestation window. Default `K = 64` messages (~16 s at 4 Hz) gives ~8
+  copies; `K in {16, 32, 64, 128}`. The airtime cost is real — ~12% of slots —
+  and it is bounded to the countdown and paid only at a switch.
+- **Receivers act on countdown expiry, not on receipt.** A late-joining receiver
+  reads the remaining count out of the frame, so every keyed receiver retunes on
+  the same message. That is what makes a handover look like a handover rather
+  than N independent dropouts.
+- **The return trip is announced the same way.** The revert paths that cannot
+  announce — power cycle, crash — are exactly the ones where the receiver
+  searches anyway, and the compat channel is what it finds.
+
+**The switch lands on 1 M GFSK / RF 57 and moves afterwards through the ordinary
+descriptor mechanism.** One change at a time. A SWITCH frame carrying target PHY
+and RF index would arrive private, coded and off-57 in one step, and a keyholder
+that missed it would have to search PHYs and frequencies as well as device
+numbers — turning a solved re-acquisition problem into an unsolved one.
+
+#### The locator is derived, which is what makes the announcement optional
+
+```
+private devnum = trunc16( CMAC(K_id, "priv" || epoch) ), 0x0000 excluded (ANT wildcard)
+collision:       rederive with a 1-byte suffix, 0x00, 0x01, ... ; a searching
+                 keyholder tries the first four before falling back to a wildcard
+                 search on the private device type
+```
+
+Any holder of the root key computes where the node went from the epoch it
+already has. That does three things: the SWITCH frame becomes an **optimisation
+that saves a search rather than the only way to find the node**; a newly
+enrolled receiver finds a node that is *already* private with no announcement to
+have missed; and an observer without the key cannot predict the locator.
+
+`devnum = per-boot` (section 11.6) derives the compat device number the same
+way, under the distinct label `"boot"` rather than `"priv"`, so that a node's
+compat number and its private number are never equal and never derivable from
+one another.
+
+#### `announce` is a setting, and `silent` is a supported mode
+
+| `announce` | On air | Existing keyholders | Observer without the key |
+|---|---|---|---|
+| **`broadcast`** (default) | SWITCH/RETURN frames, countdown, beacon promoted to 1 in 8 | follow on the same message; gap ≈ retune time | learns X and Y are one node, cheaply |
+| **`silent`** | nothing; the channel simply closes | rederive the locator and re-acquire; gap ≈ search time | timing correlation only |
+
+**`silent` is not "the announcement failed".** No SWITCH frames, no locator
+fields, no pending-switch bit, no beacon promotion. **`silent` buys
+unlinkability and pays in availability; `broadcast` is the reverse. Neither is
+"more secure"**, and the docs quote the measured gap rather than "a short
+search".
+
+**A close, not a mode flip on the same channel.** Keeping device type `0x0B`
+alive while emitting only unknown page numbers leaves a head unit showing a
+connected sensor with no data — a failure mode users report as a bug. Dropping
+the channel looks like walking out of range, which users understand. **While
+private, a Garmin head unit and Zwift see nothing at all.** That is the price of
+confidentiality and there is no version of it that is cheaper — and it is what
+the Kconfig help text says, because the person choosing this is reading
+`menuconfig`.
+
+### 11.6 Policy is configuration, and the default is that none of this happens
+
+A RadiANT strap must be configurable as a plain, permanently-open ANT+ sensor.
+That is not a degraded mode; it is the setting most straps should ship in.
+
+| Setting | Values | Default | What a legacy receiver sees |
+|---|---|---|---|
+| `advertise` | off / on | **on** | one extra unknown page in 121 (0.8%) |
+| `attest_id` (Tier I) | off / on, interval `T` | **on, `T` = 20 s** | one extra unknown page in ~81 at 4 Hz (**1.2%**) |
+| `attest_data` (Tier II) | off / on, `N in {4, 8, 16, 32}` | **off** | when on, one page in `N` — the expensive tier |
+| `private_policy` | `never` / `physical` / `command` / `always` | **`never`** | `never`: a normal sensor, forever |
+| `announce` | `broadcast` / `silent` | **`broadcast`** | nothing either way; SWITCH frames are an unknown page number |
+| `enrol` | `closed` / `physical` / `open-window` | **`physical`** | nothing; pairing frames are an unknown page number |
+| `devnum` | `fixed` / `per-boot` | **`fixed`** | `fixed`: a normal sensor. `per-boot`: re-pairs each session |
+| `period` | the target profile's permitted rates | **the profile's standard rate** | must match, or the receiver cannot track at all |
+
+**`private_policy` defaults to never**, and the four states are:
+
+- **`never`** — a byte-exact ANT+ sensor for its whole life. It refuses an
+  authenticated switch command from a keyholder it trusts, and **counts the
+  refusal**.
+- **`physical`** — switches only on a physical action at the node (button,
+  magnet, strap re-seat). No over-air path exists at all.
+- **`command`** — physical action *or* an authenticated command from a paired
+  keyholder, using the existing `RADIANT_SEC_LABEL_CMD` key. A strict superset
+  of `physical`.
+- **`always`** — never appears as an ANT+ sensor; boots straight onto `0x60`.
+
+Three rules on top:
+
+- **Policy is set out of band, never over the air.** A `never` node that a
+  stranger — or a paired keyholder — can talk into becoming a `command` node has
+  no policy; it has a suggestion. Downgrading `command` -> `never` is likewise
+  not an over-air operation: it would be a mute attack wearing a safety hat.
+- **Three surfaces, one value, one precedence rule: NVM if provisioned, else
+  Kconfig; the host message writes NVM** rather than shadowing it. Kconfig gives
+  the compile-time default (`RADIANT_SEC_COMPAT_POLICY_*`, default `NEVER`); a
+  new host message in the shape of `0xF1`'s switch-bit byte serves a dongle or a
+  bench node; the persisted value of ADR 0009 is the authority for a hostless
+  strap. Three sources with an unstated precedence is a bug report waiting six
+  months.
+- **Attestation is independent of `private_policy` in one direction only.**
+  Attestation with policy `never` is a perfectly good configuration and probably
+  the most useful one here: a strap that is byte-exact ANT+ to every receiver in
+  the room and provably itself to the one holding its key. The reverse is
+  refused — `private_policy != never` requires `K_auth` and Tier I, because a
+  `command` trigger needs an authenticated command and a `broadcast`
+  announcement needs its frame-B tag. **`physical` + `silent` is the one
+  exemption**: with no announcement there is nothing to forge and no over-air
+  trigger to authenticate, so that combination is permitted with both tiers off
+  — a button-only, manually-provisioned node whose only on-air security surface
+  is the ciphertext itself.
+
+**On `devnum`:** `fixed` is the default because a stable device number is a
+feature users rely on — people learn their sensor's number, and seeing it is how
+they know at a glance that the right device is active, which matters most in
+exactly the crowded room where an unfamiliar number would be alarming.
+`per-boot` is **identity Tier 2 of section 4**, already approved and opt-in, and
+is not a reopening of `X_PRIV`: a re-roll at power-up costs nothing at the link
+layer because a rotation never happens while a channel is open. Use section 4's
+vocabulary; do not invent a third name for it.
+
+**On `period`:** within a profile the receiver's channel period must match the
+sensor's or the channel cannot open at all — a harder failure than skipping an
+unknown page. The choice is from the set the target profile's document actually
+permits, including its defined half- and quarter-rate variants, enumerated per
+profile and registered in `docs/profile-registry.md`.
+
+### 11.7 Layer D — adding a receiver to an existing network
+
+A user buys a second head unit in March and must be able to add it to a strap
+set up in January, without re-provisioning the first head unit and without
+taking the strap apart. **Enrolment is additive and disturbs nothing**: the group
+is rooted in one symmetric key, so adding a receiver means giving that receiver
+the root — no epoch change, no re-keying, no interruption, and existing
+receivers observe nothing. A verify-only receiver is the same operation with the
+same key.
+
+Key delivery is **over-air pairing on a physical trigger for anything without a
+port, and host/USB provisioning for anything with one.** A printed key or QR
+code genuinely defeats MITM rather than merely mitigating it and remains the
+recommendation for a product with a manufacturing step; it is not a v1 bench
+answer. The `enrol` setting picks the path:
+
+- **`closed`** — no over-air enrolment ever. This is what
+  `radiant_core/include/radiant_core/radiant_sec.h` already recommends for
+  anything that matters, and that recommendation is not weakened here.
+- **`physical`** (default) — a bounded window opened by a physical action,
+  reusing `RADIANT_SEC_PAIR_TIMEOUT_DEFAULT_S = 60`. One pairing per window.
+- **`open-window`** — a window a *current* keyholder opens with an authenticated
+  command, for a node with no button and no host. Rate-limited, bounded, and the
+  weakest of the three; its Kconfig help says so.
+
+Four rules:
+
+- **Enrolment works while the node is private.** The window opens on whichever
+  channel the node is currently on — the frames are additional pages, not a
+  channel change — so existing listeners keep their stream throughout. A node
+  does not have to leave private mode to gain a receiver.
+- **A newly enrolled receiver finds an already-private node without an
+  announcement**, because the locator is derived. Enrolment therefore does not
+  depend on the `announce` setting at all.
+- **Enrolment is visible to the receivers that already exist.** The pairing-open
+  state is a beacon bit and a descriptor bit, and a completed enrolment
+  increments a counter in `struct radiant_sec_stats` that the `0xF4` report
+  already carries. An enrolment the owner did not perform is the whole attack;
+  making it silent would be the mistake.
+- **The screen-free fingerprint limit of section 7.4 applies unchanged and is
+  not solved here.** A strap with no display gives a one-sided fingerprint; the
+  mitigations are the bounded window, one pairing per window, a physical
+  trigger, and optionally reduced TX power.
+
+Removal is not the mirror of addition — section 7.3.
+
+### 11.8 The page allocation, and the conventions the checker enforces
+
+Page numbers are a **per-profile namespace**, and heart rate is the tight one:
+byte 0's high bit is a page-change toggle, so its page numbers are 7-bit and
+nothing >= `0x80` is expressible. Two numbers are needed and they must be **the
+same numbers in every compat profile**, so a receiver has one rule.
+
+- **The allocation is exactly two page numbers, not three.** SWITCH and RETURN
+  do not get their own number: they are frame indices in the beacon page's
+  existing frame set (section 11.5), displacing ordinary beacon frames for the
+  duration of a countdown. The two attestation subtypes ride one contiguous,
+  nibble-aligned attestation claim rather than two independently verified
+  numbers. A third page number is recorded and rejected on the 7-bit namespace
+  alone; nothing else about the design would change.
+- **`device type 0x79 can never carry an additional page`**, permanently — it
+  has no page-number byte, so an inserted page decodes as speed and cadence and
+  steps four accumulators. `0x7A`/`0x7B` are checked individually before either
+  is included.
+- The numbers themselves are confirmed against each profile document and
+  registered in `docs/profile-registry.md`, where every compat row carries the
+  token **`RadiANT compat`** in its Name column so the allocation cannot
+  silently drift. `scripts/check_profile_registry.py` asserts the arity, the
+  7-bit bound, the cross-profile agreement and the `0x79` exclusion.
+
+Two risks recorded rather than solved: a manufacturer-specific page number is
+only unique per manufacturer id, so collision with a vendor's private page on
+`0x0B` is possible — mitigated by the beacon's version field and by the
+attestation MAC failing closed; and the heart-rate toggle-bit sequence must not
+be disturbed by inserted pages, which is **a bench question against a real head
+unit, not a documentation question**.
+
+### 11.9 What compat mode does not defend against
+
+- **Injected values, unless Tier II is on.** Tier I proves who is speaking, not
+  what they said. That is the threat model's answer, not an oversight.
+- **A watched switch. `Tier 2 unlinkability does not survive a switch that an
+  observer watches`** — a passive observer present at the moment learns that
+  compat device number X and private device number Y are the same node. It would
+  learn the same from the timing of one disappearing as the other appears, so
+  the announcement does not create the linkage; it makes it cheap. `silent`
+  narrows it to timing correlation and does not remove the fact that the node
+  was visibly an ANT+ sensor before the switch.
+- **Confidentiality on someone else's receiver.** The honest sentence, and it
+  belongs in the README rather than buried here: **RadiANT gives integrity
+  everywhere and confidentiality wherever you own the other end.** A rider with
+  their own head unit or their own PC running Zwift through a RadiANT dongle
+  gets full privacy; a rider on a gym's equipment does not, and cannot, because
+  those receivers only understand ANT+.
+- **Jamming and channel flooding.** Attestation lets a receiver ignore a forged
+  sensor; it cannot stop a hostile transmitter occupying the RF channel.
+  Availability against an active attacker is out of scope for any design that
+  lives inside ANT.

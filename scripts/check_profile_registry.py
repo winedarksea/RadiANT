@@ -34,6 +34,11 @@ What it checks:
     frame, and the page 80/81/82 privacy rules. See SPEC_PINS for why each one
     is the kind of thing that disappears in an edit and breaks nothing until it
     breaks interoperability
+  * the compat pins of docs/decisions/0008 - the compat domain byte and its
+    subtypes, the two tag lengths, the legal N and K sets, the derived-locator
+    formula, the policy default and its precedence, the two-page allocation and
+    0x79's permanent exclusion - plus the arity and range rules that any compat
+    page row and any compat constant must satisfy the day C2/C3 create them
 
 Standard library only, and it imports tools/ant_pages.py by path rather than by
 package, because tools/ is not a package and this script has to run from
@@ -58,6 +63,7 @@ TELEMETRY = REPO / "docs" / "radiant-telemetry.md"
 ANT_PLUS = REPO / "docs" / "ant-plus-profiles.md"
 SECURITY = REPO / "docs" / "radiant-security.md"
 ANT_PAGES = REPO / "tools" / "ant_pages.py"
+SEC_HEADER = REPO / "radiant_core" / "include" / "radiant_core" / "radiant_sec.h"
 
 MARKER = re.compile(r"^<!--\s*radiant-registry:\s*([a-z0-9-]+)\s*-->\s*$")
 SEPARATOR = re.compile(r"^[\s:|-]+$")
@@ -487,8 +493,7 @@ def load_ant_pages(problems):
     return module
 
 
-def check_against_ant_pages(types, problems) -> None:
-    module = load_ant_pages(problems)
+def check_against_ant_pages(types, module, problems) -> None:
     if module is None:
         return
 
@@ -636,10 +641,10 @@ SPEC_PINS = [
 ]
 
 
-def check_reserved_space(problems) -> None:
-    """The reservations and pins that cannot be dropped without a silent break."""
+def check_pins(pins, problems) -> None:
+    """Assert every needle still appears in the document that has to state it."""
     cache = {}
-    for path, needle, why in SPEC_PINS:
+    for path, needle, why in pins:
         if path not in cache:
             if not path.exists():
                 problems.add(path, 0, "file does not exist")
@@ -652,6 +657,368 @@ def check_reserved_space(problems) -> None:
         if normalise_prose(needle).strip() not in text:
             problems.add(path, 0,
                          "no longer states %s (looked for %r)" % (why, needle))
+
+
+def check_reserved_space(problems) -> None:
+    """The reservations and pins that cannot be dropped without a silent break."""
+    check_pins(SPEC_PINS, problems)
+
+
+# ── The compat layer ────────────────────────────────────────────────────────
+#
+# docs/decisions/0008 puts RadiANT pages on ANT+ device types and
+# docs/decisions/0009 gives a hostless node an epoch. Three kinds of thing are
+# checked, and the order matters because only the first two bite today.
+#
+# COMPAT_PINS is check_reserved_space()'s mechanism, unchanged: prose that two
+# implementations would otherwise differ on invisibly, in the document that has
+# to keep stating it.
+#
+# check_compat_allocation() is a REGISTRY rule and is exercised now: whatever
+# C3 eventually registers, the allocation is two page numbers rather than
+# three, it is the same numbers in every compat profile, no compat page is
+# 7-bit-illegal, and none of it ever lands on 0x79.
+#
+# check_compat_constants() is the forward one. C2 and C3 own the constants
+# themselves - this file must not invent them - so each rule is skipped while
+# its constant is absent and enforced the moment it appears. The names are not
+# guesses: ADR 0008 pins them as a naming convention precisely so that this
+# check has something to look up.
+
+COMPAT_DOM_BYTE = 0x04
+COMPAT_SUBTYPES = {"COMPAT_SUBTYPE_TIER_I": 0x01,
+                   "COMPAT_SUBTYPE_TIER_II": 0x02,
+                   "COMPAT_SUBTYPE_ANNOUNCE": 0x03}
+COMPAT_WINDOW_SIZES = (4, 8, 16, 32)
+COMPAT_COUNTDOWN_LENGTHS = (16, 32, 64, 128)
+COMPAT_TIER_I_TAG_BITS = 40
+COMPAT_TIER_II_TAG_BITS = 48
+
+# Two page numbers, not three: SWITCH and RETURN ride the beacon page's frame
+# set. A row claiming a third is the drift this exists to catch.
+COMPAT_PAGE_TOKEN = "radiant compat"
+COMPAT_PAGE_ROLES = ("beacon", "attestation")
+COMPAT_MAX_PAGE = 0x7F
+NO_ADDITIONAL_PAGE_TYPE = 0x79
+
+
+def legal_set_needle(name: str, values) -> str:
+    """'N in {4, 8, 16, 32}', spelled the way docs/radiant-security.md spells W.
+
+    Generated from the tuple above rather than typed twice, so the script's
+    idea of the legal set and the document's cannot drift apart.
+    """
+    return "%s in {%s}" % (name, ", ".join(str(value) for value in values))
+
+
+COMPAT_PINS = [
+    (TELEMETRY, "Additive pages on ANT+ device types are permitted",
+     "section 2 clause 2's amendment. Without it the clause reads as the "
+     "original blanket 'nothing in this document applies to them', which "
+     "forbids the whole compat layer"),
+    (TELEMETRY, "No existing ANT+ page layout may be modified",
+     "the half of clause 2 that was always right. The amendment permits ADDING "
+     "a page and must never be read as permitting a change to one"),
+    (TELEMETRY, "Device type 0x79 can never carry an additional page",
+     "0x79's permanent exclusion. It has no page-number byte, so an inserted "
+     "page decodes as speed and cadence and steps four accumulators - a "
+     "structural exclusion, not a scheduling decision"),
+
+    (SECURITY, "0x04 compat MAC",
+     "the compat domain byte. Without it a compat tag and a spread tag can "
+     "coincide, which is the same omission section 3.3 exists to prevent"),
+    (SECURITY, "sub = 0x01 Tier I",
+     "the attestation subtypes. Both tiers share dom 0x04, so the subtype is "
+     "the only thing separating a Tier I tag from a Tier II tag"),
+    (SECURITY, "The subtype is inside the nonce and not only in the page",
+     "the rule that makes the subtype load-bearing. A subtype written only "
+     "into the page byte is chosen by whoever sends the page"),
+    (SECURITY, legal_set_needle("N", COMPAT_WINDOW_SIZES),
+     "the legal Tier II window set. N is simultaneously the airtime cost, the "
+     "verification latency and the DoS amplification factor, so an "
+     "unenumerated N is three surprises"),
+    (SECURITY, legal_set_needle("K", COMPAT_COUNTDOWN_LENGTHS),
+     "the legal switch-countdown set. Every keyed receiver retunes on the same "
+     "message, which needs both ends to agree on how long the countdown can be"),
+    (SECURITY, "trunc40( CMAC(K_auth, nonce_block) )",
+     "Tier I's 40-bit tag and the fact that it covers nothing but its own "
+     "nonce - the property that makes it verifiable on receipt"),
+    (SECURITY, "trunc48( CMAC(K_auth, nonce_block",
+     "Tier II's 48-bit window tag"),
+    (SECURITY, "two page numbers, not three",
+     "the allocation's arity. SWITCH and RETURN are frame indices in the "
+     "beacon page's set; a third page number is refused on the 7-bit "
+     "namespace alone"),
+    (SECURITY, 'trunc16( CMAC(K_id, "priv" || epoch) )',
+     "the derived private-mode locator, which is what makes the SWITCH "
+     "announcement an optimisation rather than the only way to find the node"),
+    (SECURITY, "0x0000 excluded",
+     "the locator's wildcard exclusion. 0x0000 is the ANT wildcard device "
+     "number and a node that derived it would be unaddressable"),
+    (SECURITY, "private_policy defaults to never",
+     "the default policy. A shipped strap is a plain ANT+ sensor unless "
+     "somebody configures it otherwise, out of band"),
+    (SECURITY, "NVM if provisioned, else Kconfig; the host message writes NVM",
+     "the policy precedence rule. Three sources with an unstated precedence is "
+     "a bug report waiting six months"),
+    (SECURITY, "physical + silent is the one exemption",
+     "the key dependency's single exemption. Every other combination needs "
+     "K_auth and Tier I, because a command trigger and a broadcast "
+     "announcement both need something to authenticate with"),
+    (SECURITY, "The beacon carries no epoch",
+     "the no-epoch rule. For a hostless node the epoch IS the boot counter, so "
+     "broadcasting it every 30 s fingerprints the device across sessions and "
+     "defeats per-boot device-number rotation on its own"),
+    (SECURITY, "forward search against the key-group hint",
+     "epoch recovery path 1, which is what the beacon's epoch field was "
+     "removed in favour of"),
+    (SECURITY, "trial-verify candidate epochs against the attestation tag",
+     "epoch recovery path 2, for advertise = off. It is the path that "
+     "otherwise gets written and never exercised"),
+    (SECURITY, "verification rate equals page delivery rate",
+     "Tier I's loss independence, which is the entire reason the tier exists "
+     "and the one claim a bench run can falsify in a single capture"),
+    (SECURITY, "2.0% of its slots",
+     "the default configuration's total airtime cost - 0.8% beacon plus 1.2% "
+     "Tier I - which is the number the compatibility claim rests on"),
+    (SECURITY, "1.65%",
+     "what ANT+ itself spends on common pages 80 and 81. The comparison is the "
+     "argument; the bare 2.0% is just a number"),
+    (SECURITY, "beacon slots are promoted to 1 in 8",
+     "the countdown's beacon promotion. At the steady 1-in-121 cadence a "
+     "countdown would carry one or two copies"),
+    (SECURITY, "reports UNVERIFIED rather than CLEAR",
+     "receiver-side downgrade protection. Strip the beacon and a naive "
+     "receiver falls back to clear, so CLEAR must keep meaning 'no key here'"),
+    (SECURITY, "A receiver acts on a SWITCH frame only after its tag verifies",
+     "the announcement's authentication rule. Without it the SWITCH frame is a "
+     "one-packet herding attack strictly worse than the mute attack this "
+     "design already refuses"),
+    (SECURITY, "attestation tiers are roman",
+     "the numeral convention. ADR 0006's identity tiers are arabic and the two "
+     "axes are unrelated; one numeral system for both is a collision that has "
+     "already nearly happened"),
+    (SECURITY, "Tier 2 unlinkability does not survive a switch that an observer watches",
+     "the switch-time linkage. The announcement does not create it - timing "
+     "would - but it makes it cheap, and it is a cost of ADR 0006's Tier 2 "
+     "rather than of this layer alone"),
+    (SECURITY, "silent buys unlinkability and pays in availability",
+     "the announce trade, stated as a trade. Neither value is 'more secure'"),
+    (SECURITY, "can only remove one by re-provisioning the network",
+     "the add-is-cheap / remove-is-not asymmetry. Enrolment makes the "
+     "revocation gap more visible rather than less"),
+
+    (SECURITY, "0009-hostless-node-identity",
+     "the pointer from section 7.4's host-supplied-scalar limit to the "
+     "decision that closes it. Without it the limit reads as still open"),
+    (SECURITY, 'KDF(K_dev, "pair" || pair_counter)',
+     "the hostless node's deterministic pairing scalar, which is the "
+     "replacement for a host CSPRNG and is deliberately not a weak on-node PRNG"),
+    (SECURITY, "the counter advanced before the public key is transmitted",
+     "the counter-advance rule. Advance-after reuses a scalar on every "
+     "abandoned pairing, which destroys forward secrecy and turns the pairing "
+     "pubkey into a stable cross-session identifier"),
+]
+
+
+def check_compat_pins(problems) -> None:
+    """ADR 0008 and ADR 0009's pins, in the documents that have to state them."""
+    check_pins(COMPAT_PINS, problems)
+
+
+def compat_role(row) -> str:
+    """Which compat page a registry row claims, or '' if it is not one."""
+    name = normalise_prose(row.get("name"))
+    if COMPAT_PAGE_TOKEN not in name:
+        return ""
+    found = [role for role in COMPAT_PAGE_ROLES if role in name]
+    return found[0] if len(found) == 1 else "?"
+
+
+def check_compat_allocation(per_type_rows, problems) -> None:
+    """The allocation rules, whatever numbers C3 eventually confirms.
+
+    Zero compat rows is the state today and passes: the numbers are confirmed
+    against the profile documents in C3. What cannot happen at any point is a
+    third page number, a number a heart-rate receiver cannot express, two
+    profiles disagreeing about which numbers they are, or anything at all on
+    0x79.
+    """
+    per_type_pages = {}
+
+    for device_type, rows in sorted(per_type_rows.items()):
+        claimed = {}
+        for row in rows:
+            role = compat_role(row)
+            if not role:
+                continue
+            if role == "?":
+                problems.add(REGISTRY, row.line,
+                             "compat page row %r must name exactly one of %s; "
+                             "see docs/decisions/0008"
+                             % (row.get("name"), list(COMPAT_PAGE_ROLES)))
+                continue
+            if device_type == NO_ADDITIONAL_PAGE_TYPE:
+                problems.add(REGISTRY, row.line,
+                             "device type 0x%02X can never carry an additional "
+                             "page - it has no page-number byte - so a compat "
+                             "%s page cannot be claimed for it; see "
+                             "docs/decisions/0008"
+                             % (device_type, role))
+                continue
+            if role in claimed:
+                problems.add(REGISTRY, row.line,
+                             "device type 0x%02X claims a second compat %s page; "
+                             "the allocation is two page numbers, not three"
+                             % (device_type, role))
+                continue
+            # Recorded before it is validated, so that one malformed row is one
+            # problem rather than also a spurious "the allocation is both or
+            # neither" against the row above it.
+            claimed[role] = []
+
+            kind, values = parse_page_cell(row.get("page"))
+            if kind in (None, "bad-range", "none") or not values:
+                problems.add(REGISTRY, row.line,
+                             "compat %s page for device type 0x%02X is %r, "
+                             "which is not a page number or a page range"
+                             % (role, device_type, row.get("page")))
+                continue
+            if role == "beacon" and len(values) != 1:
+                problems.add(REGISTRY, row.line,
+                             "the compat beacon is one page number, not %d; "
+                             "SWITCH and RETURN are frame indices inside its "
+                             "frame set" % len(values))
+                continue
+            if role == "attestation" and len(values) > 2:
+                problems.add(REGISTRY, row.line,
+                             "the compat attestation claim covers %d page "
+                             "numbers; both tiers ride one contiguous "
+                             "nibble-aligned claim, so it is one or two"
+                             % len(values))
+                continue
+            for value in values:
+                if value > COMPAT_MAX_PAGE:
+                    problems.add(REGISTRY, row.line,
+                                 "compat page 0x%02X is above 0x%02X; heart "
+                                 "rate's byte 0 carries a page-change toggle in "
+                                 "bit 7, so compat page numbers are 7-bit and "
+                                 "must be the same in every compat profile"
+                                 % (value, COMPAT_MAX_PAGE))
+            claimed[role] = sorted(values)
+
+        if not claimed:
+            continue
+        missing = [role for role in COMPAT_PAGE_ROLES if role not in claimed]
+        if missing:
+            problems.add(REGISTRY, rows[0].line,
+                         "device type 0x%02X claims a compat page but not a "
+                         "compat %s page; the allocation is both or neither"
+                         % (device_type, ", ".join(missing)))
+        per_type_pages[device_type] = claimed
+
+    # One rule for a receiver means the same numbers everywhere.
+    distinct = {}
+    for device_type, claimed in sorted(per_type_pages.items()):
+        key = tuple(sorted((role, tuple(pages))
+                           for role, pages in claimed.items()))
+        distinct.setdefault(key, []).append(device_type)
+    if len(distinct) > 1:
+        spread = "; ".join("0x%02X" % device_type
+                           for group in distinct.values() for device_type in group)
+        problems.add(REGISTRY, 0,
+                     "compat pages are allocated differently across device "
+                     "types (%s); they must be the same numbers in every compat "
+                     "profile so a receiver has one rule" % spread)
+
+    # 0x79 has one row, and that row says 'none'. Checked here rather than
+    # inferred from the absence of a compat row, because the reason it has no
+    # page numbers is the same reason it can never gain one.
+    for row in per_type_rows.get(NO_ADDITIONAL_PAGE_TYPE, []):
+        if row.get("page").lower() != "none":
+            problems.add(REGISTRY, row.line,
+                         "device type 0x%02X claims page %r, but it has no "
+                         "page-number byte at all; see docs/decisions/0008 and "
+                         "docs/ant-plus-profiles.md"
+                         % (NO_ADDITIONAL_PAGE_TYPE, row.get("page")))
+
+
+def check_compat_constants(module, problems) -> None:
+    """Rules the compat constants must satisfy, from the day they exist.
+
+    C2 defines the domain byte and the tags in radiant_sec.h and
+    radiant_sec_compat.c; C3 mirrors them in tools/ant_pages.py. Neither exists
+    yet, so every rule below is skipped while its constant is absent - which is
+    why the domain-byte reservation is checked from the other direction too:
+    nothing else may take 0x04 in the meantime.
+
+    TODO(C2/C3): when the constants land, turn the absences into problems so
+    this stops being a check that can pass by not being reached.
+    """
+    if SEC_HEADER.exists():
+        text = SEC_HEADER.read_text(encoding="utf-8")
+        doms = {}
+        for name, value in re.findall(
+                r"^#define\s+(RADIANT_SEC_DOM_[A-Z0-9_]+)\s+0x([0-9A-Fa-f]{2})",
+                text, re.M):
+            doms.setdefault(int(value, 16), []).append(name)
+        for value, names in sorted(doms.items()):
+            if len(names) > 1:
+                problems.add(SEC_HEADER, 0,
+                             "domain byte 0x%02X is defined by %s; the domain "
+                             "byte is the only thing keeping two MAC blocks "
+                             "apart, so two names for one value is a collision"
+                             % (value, " and ".join(sorted(names))))
+        owner = doms.get(COMPAT_DOM_BYTE, [])
+        if owner and owner != ["RADIANT_SEC_DOM_COMPAT_MAC"]:
+            problems.add(SEC_HEADER, 0,
+                         "0x%02X is taken by %s; docs/decisions/0008 reserves it "
+                         "for RADIANT_SEC_DOM_COMPAT_MAC"
+                         % (COMPAT_DOM_BYTE, ", ".join(sorted(owner))))
+
+    if module is None:
+        return
+
+    rules = [
+        ("COMPAT_DOM", COMPAT_DOM_BYTE,
+         "the compat domain byte, which must match RADIANT_SEC_DOM_COMPAT_MAC"),
+        ("COMPAT_TIER_I_TAG_BITS", COMPAT_TIER_I_TAG_BITS,
+         "Tier I's tag length. 40 bits, not 48: the counter needs two in-page "
+         "bytes now that no window index is implied"),
+        ("COMPAT_TIER_II_TAG_BITS", COMPAT_TIER_II_TAG_BITS,
+         "Tier II's tag length"),
+        ("COMPAT_WINDOW_SIZES", COMPAT_WINDOW_SIZES,
+         "the legal Tier II window set"),
+        ("COMPAT_COUNTDOWN_LENGTHS", COMPAT_COUNTDOWN_LENGTHS,
+         "the legal switch-countdown set"),
+    ]
+    for name, value in sorted(COMPAT_SUBTYPES.items()):
+        rules.append((name, value,
+                      "the attestation subtype that reaches the nonce at "
+                      "position 9"))
+
+    for name, expected, why in rules:
+        if not hasattr(module, name):
+            continue                     # C2/C3 own it; see the docstring
+        actual = getattr(module, name)
+        if isinstance(expected, tuple):
+            actual = tuple(actual)
+        if actual != expected:
+            problems.add(ANT_PAGES, 0,
+                         "%s is %r, not %r - %s; see docs/decisions/0008"
+                         % (name, actual, expected, why))
+
+    subtypes = {name: getattr(module, name)
+                for name in COMPAT_SUBTYPES if hasattr(module, name)}
+    if len(set(subtypes.values())) != len(subtypes):
+        problems.add(ANT_PAGES, 0,
+                     "the compat subtypes are not distinct (%r); they share "
+                     "dom 0x%02X and nothing else separates them"
+                     % (subtypes, COMPAT_DOM_BYTE))
+    for name, value in sorted(subtypes.items()):
+        if not 1 <= value <= 0x0F:
+            problems.add(ANT_PAGES, 0,
+                         "%s is 0x%02X, which is not a nibble in 1..15" % (name, value))
 
 
 def main() -> int:
@@ -674,11 +1041,18 @@ def main() -> int:
         header, rows = tables["pages"]
         per_type_rows = check_pages(REGISTRY, header, rows, types, problems)
 
+    # Loaded once and passed down: two checks need it, and importing it twice
+    # would report an import failure twice.
+    module = load_ant_pages(problems)
+
     if types:
         check_pagemap(types, per_type_rows, problems)
         check_ant_plus_doc(types, problems)
-        check_against_ant_pages(types, problems)
+        check_against_ant_pages(types, module, problems)
     check_reserved_space(problems)
+    check_compat_pins(problems)
+    check_compat_allocation(per_type_rows, problems)
+    check_compat_constants(module, problems)
 
     if problems:
         print("profile registry: %d problem(s)" % len(problems))

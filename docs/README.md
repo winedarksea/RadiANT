@@ -44,6 +44,11 @@ below is what keeps it.
 | [`0004`](decisions/0004-license-apache-2-0.md) | Apache-2.0 over MIT/BSD, for §3's express patent grant with a retaliation clause, plus `NOTICE` |
 | [`0005`](decisions/0005-extension-inside-ant-plus.md) | Why the extensions live inside network `A6 C5` rather than on a separate network |
 | [`0006`](decisions/0006-security-v1-scope-and-x-priv-withdrawal.md) | Security v1 is `X_AUTH` + `X_CONF`; `X_PRIV` is rejected rather than deferred, with the reasons recorded so it is not re-proposed, and the identity tiers that replace it |
+| [`0008`](decisions/0008-antplus-additive-pages-and-compat-security.md) | Additive pages are permitted on ANT+ device types, `0x79` is excluded permanently, and the compat security layer is three layers with a **two-tier** attestation — identity Tier I on by default at 1.2% of slots, data Tier II off |
+| [`0009`](decisions/0009-hostless-node-identity.md) | The hostless node: one monotonic NVM counter is the epoch and the pairing-scalar index, `K_dev` is provisioned at manufacture, and the counter advances **before** the pairing pubkey goes on the air |
+
+`0007` is reserved for the RF plan's long-range-PHY decision and lands with it.
+The gap is deliberate; do not reuse the number.
 
 ---
 
