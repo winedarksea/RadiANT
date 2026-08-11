@@ -735,6 +735,250 @@ class TlmField:
         return tlm_width_for_code(self.width_code)
 
 
+# ---------------------------------------------------------------------------
+# The schedule block - frame 1 byte [3] bits 3..0, plus one frame
+#
+# The mirror of src/profiles/profile_schedule.h, which carries the argument for
+# every field. Three things go in the descriptor because the descriptor is a
+# standing pointer a node already transmits: a clock-accuracy ceiling (a bug
+# fix - an RC-clocked node is outside every window a +/-50 ppm receiver opens),
+# a published downlink window (announced here, opened by the phase that builds
+# response slots), and the coding rate and announced TX power that the
+# long-range PHY phase must not get to name a second time.
+#
+# THE CLOCK LADDER IS THE SYNC-HANDOFF PAGE'S, unchanged - see TLM_CLK_* below,
+# which this block reuses rather than restating. What it adds is the stated
+# bit: a handoff is only ever sent by a receiver that already knows something,
+# so its code 0 can mean 500 ppm, but a descriptor's zeros are what every node
+# built before this block existed transmits, and reading a claim out of those
+# would put one on every node in the field retroactively.
+# ---------------------------------------------------------------------------
+
+TLM_SCHED_CLK_STATED = 0x08      # frame 1 byte [3] bit 3
+TLM_SCHED_CLK_MASK = 0x07        # bits 2..0
+
+TLM_SCHED_AREA_BITS = 48
+TLM_SCHED_DWELL_OFF, TLM_SCHED_DWELL_W = 0, 3
+TLM_SCHED_INTERVAL_OFF, TLM_SCHED_INTERVAL_W = 3, 12
+TLM_SCHED_PHASE_OFF, TLM_SCHED_PHASE_W = 15, 16
+TLM_SCHED_CODING_OFF, TLM_SCHED_CODING_W = 31, 3
+TLM_SCHED_POWER_OFF, TLM_SCHED_POWER_W = 34, 8
+TLM_SCHED_RSVD_OFF, TLM_SCHED_RSVD_W = 42, 6
+
+# The interval is in units of 1/32 s: 12 bits reach 128 s, past the 60 s
+# heartbeat that motivates the field. Not the 1/32768 s counts the period uses,
+# because 16 bits of those stop at 2 s and 2 s is the example duty, not the
+# ceiling. The phase IS in those counts, because a fraction of a 2 s interval
+# quantises at 244 us - half the 500 us dwell it points at, and a pointer whose
+# error is comparable to the thing it points at is not a pointer.
+TLM_TICKS_PER_S = 32768          # the protocol's clock, everywhere
+TLM_SCHED_INTERVAL_HZ = 32
+TLM_SCHED_INTERVAL_COUNTS = TLM_TICKS_PER_S // TLM_SCHED_INTERVAL_HZ
+TLM_SCHED_INTERVAL_MAX = (1 << TLM_SCHED_INTERVAL_W) - 1
+TLM_SCHED_PHASE_MAX = (1 << TLM_SCHED_PHASE_W) - 1
+
+TLM_SCHED_DWELL_US = (250, 500, 1000, 2000, 4000, 8000, 16000, 32000)
+TLM_SCHED_DWELL_CODE_MAX = len(TLM_SCHED_DWELL_US) - 1
+
+# The coding-rate vocabulary the long-range PHY phase inherits. "yes" in the
+# registry's LR PHY column does not let a consumer budget a window - at eight
+# bytes an S=8 frame is ~1.23 ms against ~150 us at 1 M - so the rate is named
+# on the wire from the first block that can carry it. S=2 is DEFINED and NOT
+# IMPLEMENTED on purpose: defining it makes a later second rate a value rather
+# than a format break, and refusing to announce it keeps anything from claiming
+# a rate no code transmits.
+TLM_CODING_NONE = 0
+TLM_CODING_S8 = 1
+TLM_CODING_S2 = 2
+TLM_CODING_KBPS = {TLM_CODING_NONE: 1000, TLM_CODING_S8: 125, TLM_CODING_S2: 500}
+TLM_CODING_IMPLEMENTED = (TLM_CODING_NONE, TLM_CODING_S8)
+
+# Announced TX power, int8 dBm EIRP, biased by 100 on the wire so that the byte
+# 0 can mean "not stated" - 0 dBm is a real power and cannot double as silence,
+# and without the bias an all-defaulted block would announce one.
+TLM_TX_POWER_UNSTATED = -128
+TLM_TX_POWER_MIN = -40
+TLM_TX_POWER_MAX = 20
+TLM_TX_POWER_BIAS = 100
+
+# What the receiver's own end of the clock budget is worth, in ppm. The 25 us
+# per-period drift constant in radiant_channel.h is this figure at each end over
+# one ANT+ period; naming it makes the announced-ceiling arithmetic explicit on
+# both sides of the mirror.
+TLM_CLK_PPM_RECEIVER = 50
+
+
+def tlm_sched_dwell_us(dwell_code: int) -> int:
+    """Microseconds the node listens once it opens the window."""
+    if not 0 <= dwell_code <= TLM_SCHED_DWELL_CODE_MAX:
+        raise ValueError(f"dwell code {dwell_code} is not 0..7")
+    return TLM_SCHED_DWELL_US[dwell_code]
+
+
+def tlm_sched_coding_kbps(coding: int) -> int:
+    """The air rate a consumer budgets a window with, or 0 for a reserved
+    code."""
+    return TLM_CODING_KBPS.get(coding, 0)
+
+
+def tlm_sched_clk_ppm(nibble: int) -> int:
+    """The ppm ceiling frame 1 byte [3]'s low nibble announces, or 0 for a node
+    that announces nothing - which is every node built before this block."""
+    if not nibble & TLM_SCHED_CLK_STATED:
+        return 0
+    return tlm_clock_ppm(nibble & TLM_SCHED_CLK_MASK)
+
+
+def tlm_sched_clk_nibble(code: int, stated: bool) -> int:
+    """Build the nibble. Anything outside the ladder announces nothing, which is
+    silence rather than a wrong claim."""
+    if not stated or code not in TLM_CLK_PPM_CEILING:
+        return 0
+    return TLM_SCHED_CLK_STATED | (code & TLM_SCHED_CLK_MASK)
+
+
+@dataclasses.dataclass
+class TlmSchedule:
+    """The schedule frame's 48 bits.
+
+    Every default is the value that announces nothing, so `TlmSchedule()` is
+    48 zero bits on the wire - which is what makes the idle-cost A/B a
+    statement about bytes rather than about intentions.
+    """
+
+    dl_interval: int = 0        # units of 1/32 s; 0 = no downlink window
+    dl_phase: int = 0           # counts of 1/32768 s from the carrying frame
+    dl_dwell: int = 0           # code 0..7
+    coding: int = TLM_CODING_NONE
+    tx_power_dbm: int = TLM_TX_POWER_UNSTATED
+
+    @property
+    def interval_counts(self) -> int:
+        return self.dl_interval * TLM_SCHED_INTERVAL_COUNTS
+
+    def listen_at(self, t_carrier_us: int, k: int = 0):
+        """The k-th listen window after the frame that announced it, on the
+        RECIPIENT's clock. None when there is no window - the case a caller has
+        to handle before it handles any other."""
+        if not self.dl_interval:
+            return None
+        counts = self.dl_phase + k * self.interval_counts
+        return t_carrier_us + counts * 1000000 // TLM_TICKS_PER_S
+
+
+def _tlm_sched_validate(s: TlmSchedule, lr_phy: bool, clk_ppm: int) -> None:
+    """The same list src/profiles/profile_schedule.c carries. The two must
+    refuse the same blocks or the C node and the Python simulator are not the
+    same node."""
+    if not 0 <= s.dl_interval <= TLM_SCHED_INTERVAL_MAX:
+        raise ValueError("the downlink interval is 12 bits of 1/32 s")
+    if not 0 <= s.dl_phase <= TLM_SCHED_PHASE_MAX:
+        raise ValueError("the downlink phase is 16 bits of 1/32768 s")
+    if not 0 <= s.dl_dwell <= TLM_SCHED_DWELL_CODE_MAX:
+        raise ValueError(f"dwell code {s.dl_dwell} is not 0..7")
+    if not 0 <= s.coding < (1 << TLM_SCHED_CODING_W):
+        raise ValueError("the coding rate is 3 bits")
+    if (s.tx_power_dbm != TLM_TX_POWER_UNSTATED
+            and not TLM_TX_POWER_MIN <= s.tx_power_dbm <= TLM_TX_POWER_MAX):
+        raise ValueError(f"announced TX power {s.tx_power_dbm} dBm is outside "
+                         f"{TLM_TX_POWER_MIN}..{TLM_TX_POWER_MAX}")
+
+    # Frame 0's long-range bit and this field are two statements about one PHY.
+    if lr_phy != (s.coding != TLM_CODING_NONE):
+        raise ValueError("the long-range flag and the coding rate disagree "
+                         "about which PHY this node is using")
+
+    if not s.dl_interval:
+        if s.dl_phase or s.dl_dwell:
+            raise ValueError("a node that opens no downlink window announces "
+                             "no phase and no dwell")
+        return
+
+    if s.dl_phase >= s.interval_counts:
+        raise ValueError("a phase at or past the interval is a window in the "
+                         "next cycle described as one in this one")
+
+    # The dwell must cover the clock error accumulated between the frame that
+    # announces the window and the window itself, in both directions - so twice
+    # the drift. A 500 ppm node pointing 2 s ahead has drifted a millisecond by
+    # the time it opens, and a downlink that silently never works is worse than
+    # one refused at the encoder.
+    if clk_ppm:
+        phase_us = s.dl_phase * 1000000 // TLM_TICKS_PER_S
+        drift_us = phase_us * (clk_ppm + TLM_CLK_PPM_RECEIVER) // 1000000
+        if tlm_sched_dwell_us(s.dl_dwell) < 2 * drift_us:
+            raise ValueError(
+                f"a {tlm_sched_dwell_us(s.dl_dwell)} us dwell cannot cover "
+                f"{drift_us} us of drift at {clk_ppm} ppm - the receiver "
+                "commanding this node would miss the window")
+
+
+def encode_tlm_schedule(s: TlmSchedule, lr_phy: bool = False,
+                        clk_ppm: int = 0) -> bytes:
+    """Bytes [2..7] of the schedule frame."""
+    _tlm_sched_validate(s, lr_phy, clk_ppm)
+    if s.coding not in TLM_CODING_IMPLEMENTED:
+        raise ValueError(f"coding rate {s.coding} is defined and not built: "
+                         "nothing may announce a rate no code transmits")
+
+    body = bytearray(TLM_SCHED_AREA_BITS // 8)
+    pack_bits(body, TLM_SCHED_AREA_BITS, TLM_SCHED_DWELL_OFF,
+              TLM_SCHED_DWELL_W, s.dl_dwell)
+    pack_bits(body, TLM_SCHED_AREA_BITS, TLM_SCHED_INTERVAL_OFF,
+              TLM_SCHED_INTERVAL_W, s.dl_interval)
+    pack_bits(body, TLM_SCHED_AREA_BITS, TLM_SCHED_PHASE_OFF,
+              TLM_SCHED_PHASE_W, s.dl_phase)
+    pack_bits(body, TLM_SCHED_AREA_BITS, TLM_SCHED_CODING_OFF,
+              TLM_SCHED_CODING_W, s.coding)
+    if s.tx_power_dbm != TLM_TX_POWER_UNSTATED:
+        pack_bits(body, TLM_SCHED_AREA_BITS, TLM_SCHED_POWER_OFF,
+                  TLM_SCHED_POWER_W, s.tx_power_dbm + TLM_TX_POWER_BIAS)
+    # The reservation stays zero, per section 11.
+    return bytes(body)
+
+
+def decode_tlm_schedule(body, lr_phy: bool = False,
+                        clk_ppm: int = 0) -> TlmSchedule:
+    """The inverse.
+
+    A coding rate this build cannot use is NOT an error here, and the asymmetry
+    with the encoder is the forward-compatibility rule applied to a vocabulary
+    field: the rate describes the node, not the layout of these bytes, so a
+    receiver decodes it and then declines the channel.
+    """
+    body = bytes(body)
+    if len(body) != TLM_SCHED_AREA_BITS // 8:
+        raise ValueError("the schedule block is 6 bytes")
+    if unpack_bits(body, TLM_SCHED_AREA_BITS, TLM_SCHED_RSVD_OFF,
+                   TLM_SCHED_RSVD_W):
+        raise ValueError("the schedule block's reserved bits are "
+                         "must-be-zero, and have no meaning to ignore")
+
+    power = unpack_bits(body, TLM_SCHED_AREA_BITS, TLM_SCHED_POWER_OFF,
+                        TLM_SCHED_POWER_W)
+    if power:
+        power -= TLM_TX_POWER_BIAS
+        if not TLM_TX_POWER_MIN <= power <= TLM_TX_POWER_MAX:
+            raise ValueError(f"announced TX power {power} dBm is outside the "
+                             "range this block may carry")
+    else:
+        power = TLM_TX_POWER_UNSTATED
+
+    s = TlmSchedule(
+        dl_dwell=unpack_bits(body, TLM_SCHED_AREA_BITS, TLM_SCHED_DWELL_OFF,
+                             TLM_SCHED_DWELL_W),
+        dl_interval=unpack_bits(body, TLM_SCHED_AREA_BITS,
+                                TLM_SCHED_INTERVAL_OFF, TLM_SCHED_INTERVAL_W),
+        dl_phase=unpack_bits(body, TLM_SCHED_AREA_BITS, TLM_SCHED_PHASE_OFF,
+                             TLM_SCHED_PHASE_W),
+        coding=unpack_bits(body, TLM_SCHED_AREA_BITS, TLM_SCHED_CODING_OFF,
+                           TLM_SCHED_CODING_W),
+        tx_power_dbm=power,
+    )
+    _tlm_sched_validate(s, lr_phy, clk_ppm)
+    return s
+
+
 @dataclasses.dataclass
 class TlmDescriptor:
     schema_id: int
@@ -747,6 +991,17 @@ class TlmDescriptor:
     w_code: int = 0
     k_code: int = 0
     epoch: int = 0
+    # The schedule block. Both halves default to silence, and that is the
+    # compatibility argument rather than a convenience: a node that announces
+    # neither encodes to exactly the frames this encoder emitted before the
+    # block existed, so it is not merely compatible with a pre-block node, it
+    # is indistinguishable from one.
+    clock_stated: bool = False
+    # The literal 0 rather than TLM_CLK_UNKNOWN, which the handoff section
+    # below defines: a dataclass default is evaluated at import time, and the
+    # ladder is deliberately declared beside the page that first carried it.
+    clock_accuracy: int = 0
+    schedule: object = None      # a TlmSchedule, or None for no schedule frame
 
     @property
     def field_area_bits(self) -> int:
@@ -767,9 +1022,19 @@ class TlmDescriptor:
 
     @property
     def frame_count(self) -> int:
-        # There is no descriptor authentication frame in v1 because there is no
-        # transform in v1; when there is one it takes the last slot.
-        return 2 + len(self.fields)
+        # Two header frames, the schedule frame if the node sends one, then one
+        # per field. There is no descriptor authentication frame in v1 because
+        # there is no transform in v1; when there is one it takes the last slot,
+        # which is why the schedule frame takes index 2 rather than the end.
+        return 2 + (1 if self.schedule is not None else 0) + len(self.fields)
+
+    @property
+    def clock_ppm(self) -> int:
+        """The ceiling this descriptor announces, or 0 for a node that
+        announces nothing - which is the value that leaves a receiver's window
+        exactly as it was."""
+        return tlm_sched_clk_ppm(tlm_sched_clk_nibble(self.clock_accuracy,
+                                                      self.clock_stated))
 
     @property
     def data_pages(self) -> list:
@@ -835,6 +1100,20 @@ def _tlm_validate(d: TlmDescriptor) -> None:
                              "refused on a data page")
     elif d.w_code:
         raise ValueError("the MAC window is reserved while no transform is on")
+
+    # The schedule block, checked only where it is announced. A descriptor that
+    # sends no schedule frame is not consulted about one.
+    if d.clock_stated:
+        if d.clock_accuracy not in TLM_CLK_PPM_CEILING:
+            raise ValueError(f"clock accuracy code {d.clock_accuracy} is not "
+                             "on the ladder")
+    elif d.clock_accuracy:
+        raise ValueError("a ladder code with nothing stating it goes on the "
+                         "air as three zero bits, so the caller and the wire "
+                         "would disagree about what this node announced")
+    if d.schedule is not None:
+        _tlm_sched_validate(d.schedule, bool(d.flags & TLM_FLAG_LR_PHY),
+                            d.clock_ppm)
 
     seen_ids = set()
     spans = {}
@@ -906,11 +1185,13 @@ def encode_tlm_descriptor(d: TlmDescriptor) -> list:
         # from the first shipped node, because a receiver with no real-time
         # clock has to get it from a page the node already sends, and adding it
         # later is a format break for every deployed node. Bits 3..0 of byte
-        # [3] stay zero: the informational-flag extension space a later phase's
-        # schedule block claims.
+        # [3] are the informational-flag extension space, and the schedule
+        # block's clock-accuracy nibble is what fills them; a node that states
+        # nothing writes the zeros every pre-block node writes.
         head(1) + bytes([
             d.heartbeat_s,
-            (d.w_code << 6) | (d.k_code << 4),
+            (d.w_code << 6) | (d.k_code << 4)
+            | tlm_sched_clk_nibble(d.clock_accuracy, d.clock_stated),
             d.epoch & 0xFF,
             (d.epoch >> 8) & 0xFF,
             (d.epoch >> 16) & 0xFF,
@@ -918,8 +1199,14 @@ def encode_tlm_descriptor(d: TlmDescriptor) -> list:
         ]),
     ]
 
+    base = 2
+    if d.schedule is not None:
+        frames.append(head(2) + encode_tlm_schedule(
+            d.schedule, bool(d.flags & TLM_FLAG_LR_PHY), d.clock_ppm))
+        base = 3
+
     for index, f in enumerate(d.fields):
-        frames.append(head(2 + index) + bytes([
+        frames.append(head(base + index) + bytes([
             f.id,
             f.type,
             # bits 1..0 reserved, must be 0 - and this expression never sets
@@ -966,18 +1253,37 @@ def decode_tlm_descriptor(frames) -> TlmDescriptor:
     if n_fields == 0x0F:
         raise ValueError("field count 15 is reserved for an extended "
                          "descriptor - a different frame set, not 15 fields")
-    if 2 + n_fields != n:
+    # THE SHAPE OF THE SET, DERIVED RATHER THAN ANNOUNCED. Two header frames
+    # plus one per field is the set as it was; one extra frame is the schedule
+    # frame at index 2. No presence bit was spent on this, because the count
+    # byte and the field count already say it - and a bit that could disagree
+    # with the arithmetic would be a way for a node to describe a set it did not
+    # send.
+    if n == 2 + n_fields:
+        base = 2
+    elif n == 3 + n_fields:
+        base = 3
+    else:
         raise ValueError("the field count and the frame count disagree")
 
-    if frames[1][3] & 0x0F:
-        # Reserved, must be 0 in v1. Unlike an unknown informational FLAG,
-        # these bits have no defined meaning at all, so a receiver that ignored
-        # them would be inventing one.
-        raise ValueError("frame 1 byte [3] bits 3..0 are reserved-must-be-zero")
+    # Bits 3..0 of frame 1 byte [3] are the informational-flag extension space,
+    # and the clock-accuracy nibble is what fills them. INFORMATIONAL: they
+    # describe the node, not the layout of these bytes, so a receiver that does
+    # not care about the clock ignores them. A pre-block decoder refused any
+    # nonzero value here, which is exactly the retrofit this space was reserved
+    # to avoid.
+    clock_stated = bool(frames[1][3] & TLM_SCHED_CLK_STATED)
+    clock_accuracy = frames[1][3] & TLM_SCHED_CLK_MASK if clock_stated else 0
+
+    schedule = None
+    if base == 3:
+        schedule = decode_tlm_schedule(
+            frames[2][2:8], bool(frames[0][7] & TLM_FLAG_LR_PHY),
+            tlm_sched_clk_ppm(frames[1][3] & 0x0F))
 
     fields = []
     for index in range(n_fields):
-        f = frames[2 + index]
+        f = frames[base + index]
         if f[4] & 0x03:
             raise ValueError("the encoding byte's bits 1..0 are reserved")
         fields.append(TlmField(
@@ -1002,6 +1308,9 @@ def decode_tlm_descriptor(frames) -> TlmDescriptor:
         w_code=(frames[1][3] >> 6) & 0x03,
         k_code=(frames[1][3] >> 4) & 0x03,
         epoch=int.from_bytes(frames[1][4:8], "little"),
+        clock_stated=clock_stated,
+        clock_accuracy=clock_accuracy,
+        schedule=schedule,
     )
     _tlm_validate(d)
     return d
@@ -1829,3 +2138,4 @@ PROFILES = {
         "label": "RadiANT sparse asset tag, device type 0x60",
     },
 }
+

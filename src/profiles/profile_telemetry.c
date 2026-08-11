@@ -84,6 +84,15 @@ uint16_t profile_desc_field_area_bits(const struct profile_descriptor *d)
 	return 48u;
 }
 
+uint16_t profile_desc_clock_ppm(const struct profile_descriptor *d)
+{
+	if (d == NULL || !d->clock_stated) {
+		return 0u;
+	}
+	/* One ladder, and it is the sync-handoff page's. */
+	return profile_handoff_clk_ppm(d->clock_accuracy);
+}
+
 bool profile_desc_may_decode_data(const struct profile_descriptor *d)
 {
 	if (d == NULL) {
@@ -99,10 +108,20 @@ uint8_t profile_desc_frame_count(const struct profile_descriptor *d)
 	if (d == NULL) {
 		return 0u;
 	}
-	/* Two header frames plus one per field. The descriptor authentication
-	 * frame is mandatory whenever a transform bit is set and absent
-	 * otherwise; v1 sets none, so it never appears and this stays 2 + n. */
-	return (uint8_t)(2u + d->n_fields);
+	/* Two header frames, the schedule frame if the node sends one, then one
+	 * per field. The descriptor authentication frame is mandatory whenever a
+	 * transform bit is set and absent otherwise; v1 sets none, so it never
+	 * appears. A node that announces no schedule is 2 + n exactly as it was
+	 * before the block existed. */
+	return (uint8_t)(2u + (d->has_schedule ? 1u : 0u) + d->n_fields);
+}
+
+int profile_desc_schedule_index(const struct profile_descriptor *d)
+{
+	if (d == NULL || !d->has_schedule) {
+		return -ENOENT;
+	}
+	return 2;
 }
 
 int profile_desc_data_pages(const struct profile_descriptor *d, uint8_t *pages,
@@ -265,6 +284,35 @@ static int check_descriptor(const struct profile_descriptor *d)
 		return -EINVAL;
 	}
 
+	/*
+	 * The schedule block. Both halves are checked only when they are
+	 * announced, and the struct is not consulted at all when it is not -
+	 * every caller in this tree zeroes a descriptor before filling it, and
+	 * a zeroed struct is a legal-looking announcement of 0 dBm rather than
+	 * silence. Refusing on the strength of bytes nobody meant to send would
+	 * break every existing caller to enforce a rule about a frame that is
+	 * not being transmitted.
+	 */
+	if (d->clock_stated) {
+		if (d->clock_accuracy >= PROFILE_HANDOFF_CLK_COUNT) {
+			return -EINVAL;
+		}
+	} else if (d->clock_accuracy != 0u) {
+		/* A ladder code with nothing stating it goes on the air as
+		 * three zero bits, so the caller and the wire would disagree
+		 * about what this node announced. */
+		return -EINVAL;
+	}
+
+	if (d->has_schedule) {
+		rc = profile_sched_check(&d->schedule,
+					 (d->flags & PROFILE_TLM_FLAG_LR_PHY) != 0u,
+					 profile_desc_clock_ppm(d));
+		if (rc != 0) {
+			return rc;
+		}
+	}
+
 	for (i = 0u; i < d->n_fields; i++) {
 		rc = check_field(d, i);
 		if (rc != 0) {
@@ -284,6 +332,7 @@ int profile_desc_encode(const struct profile_descriptor *d, uint8_t *frames,
 			uint8_t cap_frames)
 {
 	uint8_t count;
+	uint8_t base;
 	uint8_t i;
 	uint8_t *f;
 	int rc;
@@ -320,7 +369,10 @@ int profile_desc_encode(const struct profile_descriptor *d, uint8_t *frames,
 	}
 
 	count = profile_desc_frame_count(d);
+	base = (uint8_t)(count - d->n_fields); /* 2, or 3 with a schedule frame */
 	if (count > PROFILE_TLM_MAX_FRAMES) {
+		/* A schedule frame costs a field: 14 fields and a schedule
+		 * frame is 17 frames, and the index is a nibble. */
 		return -EINVAL;
 	}
 	if (cap_frames < count) {
@@ -354,20 +406,39 @@ int profile_desc_encode(const struct profile_descriptor *d, uint8_t *frames,
 	 * break for every deployed node. */
 	f = &frames[PROFILE_TLM_FRAME_LEN];
 	f[2] = d->heartbeat_s;
+	/* Bits 3..0 are the informational-flag extension space, and the
+	 * schedule block's clock-accuracy nibble is what fills them. A node
+	 * that states nothing writes zeros there, which is what every node
+	 * built before the block existed writes. */
 	f[3] = (uint8_t)(((uint32_t)d->w_code << 6) |
-			 ((uint32_t)d->k_code << 4));
-	/* bits 3..0 stay zero: the informational-flag extension space, which
-	 * the schedule block of a later phase fills. */
+			 ((uint32_t)d->k_code << 4) |
+			 profile_sched_clk_nibble(d->clock_accuracy,
+						  d->clock_stated));
 	f[4] = (uint8_t)(d->epoch & 0xFFu);
 	f[5] = (uint8_t)((d->epoch >> 8) & 0xFFu);
 	f[6] = (uint8_t)((d->epoch >> 16) & 0xFFu);
 	f[7] = (uint8_t)((d->epoch >> 24) & 0xFFu);
 
-	/* Frames 2..N - one per field. */
+	/* Frame 2 - the schedule frame, when there is one. */
+	if (d->has_schedule) {
+		f = &frames[2u * PROFILE_TLM_FRAME_LEN];
+		rc = profile_sched_pack(&d->schedule,
+					(d->flags & PROFILE_TLM_FLAG_LR_PHY) != 0u,
+					profile_desc_clock_ppm(d), &f[2]);
+		if (rc != 0) {
+			/* check_descriptor() ran the same validation above, so
+			 * this is unreachable rather than merely unlikely -
+			 * and it is checked anyway, because the alternative is
+			 * emitting whatever the packer left behind. */
+			return rc;
+		}
+	}
+
+	/* The field frames, after the schedule frame if there is one. */
 	for (i = 0u; i < d->n_fields; i++) {
 		const struct profile_field *fd = &d->fields[i];
 
-		f = &frames[(size_t)(2u + i) * PROFILE_TLM_FRAME_LEN];
+		f = &frames[(size_t)(base + i) * PROFILE_TLM_FRAME_LEN];
 		f[2] = fd->id;
 		f[3] = fd->type;
 		f[4] = (uint8_t)((fd->accumulate ? 0x80u : 0u) |
@@ -391,8 +462,10 @@ int profile_desc_encode(const struct profile_descriptor *d, uint8_t *frames,
 int profile_desc_decode(const uint8_t *frames, uint8_t n_frames,
 			struct profile_descriptor *out)
 {
+	const struct profile_schedule quiet = PROFILE_SCHED_INIT_DEFAULT;
 	struct profile_descriptor d;
 	const uint8_t *f;
+	uint8_t base;
 	uint8_t i;
 
 	if (frames == NULL || out == NULL) {
@@ -403,6 +476,9 @@ int profile_desc_decode(const uint8_t *frames, uint8_t n_frames,
 	}
 
 	memset(&d, 0, sizeof(d));
+	/* Not the memset's zeros: a zeroed block announces 0 dBm, and a node
+	 * that sent no block announced nothing. */
+	d.schedule = quiet;
 
 	/* Every frame must claim page 0x00 and must agree about the index and
 	 * the count. A set assembled from two different broadcasts is the one
@@ -439,7 +515,26 @@ int profile_desc_decode(const uint8_t *frames, uint8_t n_frames,
 		 * layout for. Not "no fields" - a different frame set. */
 		return -ENOTSUP;
 	}
-	if ((uint8_t)(2u + d.n_fields) != n_frames) {
+
+	/*
+	 * THE SHAPE OF THE SET, DERIVED RATHER THAN ANNOUNCED.
+	 *
+	 * Two header frames plus one per field is the set as it was; one extra
+	 * frame is the schedule frame at index 2. No presence bit was spent on
+	 * this, because the count byte and the field count already say it - and
+	 * a bit that could disagree with the arithmetic would be a way for a
+	 * node to describe a set it did not send. When the authentication frame
+	 * exists it is the transform bits that tell these two extras apart, and
+	 * this is where that lands.
+	 */
+	base = (uint8_t)(2u + d.n_fields);
+	if (n_frames == base) {
+		d.has_schedule = false;
+		base = 2u;
+	} else if (n_frames == (uint8_t)(base + 1u)) {
+		d.has_schedule = true;
+		base = 3u;
+	} else {
 		return -EPROTO;
 	}
 
@@ -447,21 +542,36 @@ int profile_desc_decode(const uint8_t *frames, uint8_t n_frames,
 	d.heartbeat_s = f[2];
 	d.w_code = (uint8_t)((f[3] >> 6) & 0x03u);
 	d.k_code = (uint8_t)((f[3] >> 4) & 0x03u);
-	if ((f[3] & 0x0Fu) != 0u) {
-		/* Reserved, must be 0 in v1 - and unlike an unknown
-		 * informational FLAG, these bits have no defined meaning at
-		 * all, so a receiver that ignored them would be inventing one.
-		 * The phase that fills them changes the envelope version or
-		 * uses frame 0's informational rule; either way, not this. */
-		return -EPROTO;
-	}
+	/*
+	 * Bits 3..0 are the informational-flag extension space of section 6,
+	 * and the schedule block's clock-accuracy nibble is what fills them.
+	 * They are INFORMATIONAL: they describe the node, not the layout of
+	 * these bytes, so the fail-open half of the forward-compatibility rule
+	 * applies and a receiver that does not care about the clock ignores
+	 * them. A pre-block build refused any nonzero value here, which is
+	 * exactly the retrofit this space was reserved to avoid.
+	 */
+	d.clock_stated = (f[3] & PROFILE_SCHED_CLK_STATED) != 0u;
+	d.clock_accuracy = d.clock_stated
+				   ? (uint8_t)(f[3] & PROFILE_SCHED_CLK_MASK)
+				   : 0u;
 	d.epoch = (uint32_t)f[4] | ((uint32_t)f[5] << 8) |
 		  ((uint32_t)f[6] << 16) | ((uint32_t)f[7] << 24);
+
+	if (d.has_schedule) {
+		f = &frames[2u * PROFILE_TLM_FRAME_LEN];
+		if (profile_sched_unpack(&f[2],
+					 (d.flags & PROFILE_TLM_FLAG_LR_PHY) != 0u,
+					 profile_desc_clock_ppm(&d),
+					 &d.schedule) != 0) {
+			return -EPROTO;
+		}
+	}
 
 	for (i = 0u; i < d.n_fields; i++) {
 		struct profile_field *fd = &d.fields[i];
 
-		f = &frames[(size_t)(2u + i) * PROFILE_TLM_FRAME_LEN];
+		f = &frames[(size_t)(base + i) * PROFILE_TLM_FRAME_LEN];
 		fd->id = f[2];
 		fd->type = f[3];
 		fd->accumulate = (f[4] & 0x80u) != 0u;

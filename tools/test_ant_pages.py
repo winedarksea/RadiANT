@@ -750,6 +750,239 @@ class TestTelemetryCommandPages(unittest.TestCase):
         self.assertEqual(got["value"], 1)
 
 
+class TestTelemetryScheduleBlock(unittest.TestCase):
+    """Frame 1 byte [3] bits 3..0, plus the schedule frame - section 6.
+
+    THESE FRAMES ARE PINNED AS HEX AND ARE SHARED, BYTE FOR BYTE, WITH
+    radiant_core/tests/src/test_schedule.c, for the same reason as every other
+    pin in this file: two implementations checked only against each other are
+    not checked at all. This block earns the treatment twice over, because a
+    receiver acts on it - it sizes a receive window from the clock accuracy,
+    and a decoder that is self-consistently wrong there loses packets with no
+    error anywhere.
+    """
+
+    # 500 us of listening every 2 s - the plan's example duty - announced by a
+    # node with a 32 kHz crystal, at +4 dBm, on the 1 M PHY. The phase is not
+    # round on purpose: a phase that happened to be a whole number of anything
+    # would hide a packer that had quietly dropped its low bits.
+    CANON_SCHED = ap.TlmSchedule(dl_interval=64, dl_phase=12000, dl_dwell=1,
+                                 tx_power_dbm=4)
+    CANON_SCHED_HEX = "20805dc01a00"
+
+    FIELD = ap.TlmField(id=0x01, type=0x10, page=0x01, bit_offset=0,
+                        width_code=7, signed=True, exponent=-2)
+
+    CANON = ap.TlmDescriptor(schema_id=0x2B, period=8182, fields=[FIELD],
+                             clock_stated=True,
+                             clock_accuracy=ap.TLM_CLK_30PPM,
+                             schedule=CANON_SCHED)
+    CANON_HEX = ["0003112bf61f3900", "0013000e00000000",
+                 "002320805dc01a00", "003301105cfe0100"]
+
+    # The same node with nothing to announce: three frames, and byte for byte
+    # what this encoder emitted before the block existed.
+    QUIET = ap.TlmDescriptor(schema_id=0x2B, period=8182, fields=[FIELD])
+    QUIET_HEX = ["0002112bf61f3900", "0012000000000000", "002201105cfe0100"]
+
+    def test_the_block_is_byte_for_byte_what_the_c_encoder_emits(self):
+        body = ap.encode_tlm_schedule(self.CANON_SCHED, False, 30)
+        self.assertEqual(body.hex(), self.CANON_SCHED_HEX)
+
+    def test_the_descriptor_set_is_byte_for_byte_what_the_c_encoder_emits(self):
+        frames = ap.encode_tlm_descriptor(self.CANON)
+        self.assertEqual([f.hex() for f in frames], self.CANON_HEX)
+        # The schedule frame is index 2 - between the headers and the fields,
+        # so the authentication frame keeps the last slot section 6 promises it.
+        self.assertEqual(frames[2][1] >> 4, 2)
+
+    def test_a_node_that_announces_nothing_is_the_node_it_was_before(self):
+        """The idle-cost A/B, on the wire.
+
+        The block is in the encoder either way; the only difference is whether
+        the node fills it. A node that does not must produce the same frames,
+        in the same number, with frame 1's nibble still zero - which is what
+        every node built before this phase transmits, so "compatible" and
+        "identical" are the same claim here.
+        """
+        frames = ap.encode_tlm_descriptor(self.QUIET)
+        self.assertEqual([f.hex() for f in frames], self.QUIET_HEX)
+        self.assertEqual(frames[1][3] & 0x0F, 0)
+        self.assertEqual(self.QUIET.frame_count, 3)
+        self.assertEqual(self.QUIET.clock_ppm, 0)
+
+        # Announcing only a clock accuracy costs a nibble and NOT a frame,
+        # which is why it lives in frame 1: a sparse asset tag on an RC
+        # oscillator announces it without lengthening its descriptor at all.
+        tagged = dataclasses.replace(self.QUIET, clock_stated=True,
+                                     clock_accuracy=ap.TLM_CLK_UNKNOWN)
+        got = ap.encode_tlm_descriptor(tagged)
+        self.assertEqual(len(got), len(frames))
+        self.assertEqual(tagged.clock_ppm, 500)
+        for index, (a, b) in enumerate(zip(got, frames)):
+            if index == 1:
+                a = bytes(a[:3]) + bytes([a[3] & 0xF0]) + bytes(a[4:])
+            self.assertEqual(a, b)
+
+    def test_an_all_defaulted_block_is_forty_eight_zero_bits(self):
+        # Which is what makes the gate a statement about bytes rather than
+        # about intentions - and why the TX power is biased on the wire, since
+        # 0 dBm is a real power and cannot double as silence.
+        body = ap.encode_tlm_schedule(ap.TlmSchedule())
+        self.assertEqual(body, bytes(6))
+        got = ap.decode_tlm_schedule(body)
+        self.assertEqual(got, ap.TlmSchedule())
+        self.assertEqual(got.tx_power_dbm, ap.TLM_TX_POWER_UNSTATED)
+
+    def test_round_trip(self):
+        got = ap.decode_tlm_descriptor(ap.encode_tlm_descriptor(self.CANON))
+        self.assertEqual(got, self.CANON)
+        self.assertEqual(got.clock_ppm, 30)
+        got = ap.decode_tlm_descriptor(ap.encode_tlm_descriptor(self.QUIET))
+        self.assertEqual(got, self.QUIET)
+
+    def test_the_ladder_is_the_handoff_pages_and_not_a_second_one(self):
+        for code, ppm in ap.TLM_CLK_PPM_CEILING.items():
+            with self.subTest(code=code):
+                nibble = ap.tlm_sched_clk_nibble(code, True)
+                self.assertEqual(nibble, ap.TLM_SCHED_CLK_STATED | code)
+                self.assertEqual(ap.tlm_sched_clk_ppm(nibble), ppm)
+                self.assertEqual(ap.tlm_clock_ppm(code), ppm)
+
+        # THE ONE DISTINCTION THIS BLOCK ADDS. The handoff page's code 0 is the
+        # worst case, because only a receiver that already knows something
+        # sends that page. A descriptor's zeros are what every pre-block node
+        # transmits, so with the stated bit clear they are silence.
+        self.assertEqual(ap.tlm_clock_ppm(ap.TLM_CLK_UNKNOWN), 500)
+        self.assertEqual(ap.tlm_sched_clk_ppm(0x00), 0)
+        self.assertEqual(ap.tlm_sched_clk_ppm(ap.TLM_SCHED_CLK_STATED), 500)
+        self.assertEqual(ap.tlm_sched_clk_nibble(ap.TLM_CLK_20PPM, False), 0)
+
+    def test_a_ladder_code_with_nothing_stating_it_is_refused(self):
+        # Otherwise the caller and the wire disagree about what was announced.
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_descriptor(
+                dataclasses.replace(self.QUIET,
+                                    clock_accuracy=ap.TLM_CLK_50PPM))
+
+    def test_the_shape_of_the_set_is_derived_and_not_announced(self):
+        # No presence bit was spent: the count byte and the field count already
+        # say whether the schedule frame is there, and a bit that could
+        # disagree with the arithmetic would let a node describe a set it did
+        # not send.
+        frames = [bytearray(f) for f in ap.encode_tlm_descriptor(self.CANON)]
+        for f in frames:
+            f[1] = (f[1] & 0xF0) | 4      # claim five frames
+        with self.assertRaises(ValueError):
+            ap.decode_tlm_descriptor([bytes(f) for f in frames])
+
+    def test_the_coding_vocabulary_the_long_range_phase_inherits(self):
+        # One rate implemented, one defined and refused, the rest reserved.
+        # The kbps figures are what lets a consumer budget a window, which is
+        # why "yes" alone was never enough in the registry's LR PHY column.
+        self.assertEqual(ap.tlm_sched_coding_kbps(ap.TLM_CODING_NONE), 1000)
+        self.assertEqual(ap.tlm_sched_coding_kbps(ap.TLM_CODING_S8), 125)
+        self.assertEqual(ap.tlm_sched_coding_kbps(ap.TLM_CODING_S2), 500)
+        self.assertEqual(ap.tlm_sched_coding_kbps(7), 0)
+
+        lr = dataclasses.replace(self.CANON_SCHED, coding=ap.TLM_CODING_S8)
+        # The long-range flag and the coding rate are two statements about one
+        # PHY, so they agree or the block is refused, both ways round.
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_schedule(lr, False, 30)
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_schedule(self.CANON_SCHED, True, 30)
+        self.assertEqual(len(ap.encode_tlm_schedule(lr, True, 30)), 6)
+
+        # S=2 is defined so a later second rate is a value and not a format
+        # break, and refused so nothing announces a rate no code transmits.
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_schedule(
+                dataclasses.replace(lr, coding=ap.TLM_CODING_S2), True, 30)
+
+    def test_a_rate_this_build_cannot_use_still_decodes(self):
+        # The forward-compatibility rule applied to a vocabulary field: the
+        # rate describes the node, not the layout of these bytes, so a receiver
+        # decodes it and then declines the channel rather than rejecting the
+        # node.
+        s = dataclasses.replace(self.CANON_SCHED, coding=ap.TLM_CODING_S8)
+        body = bytearray(ap.encode_tlm_schedule(s, True, 30))
+        ap.pack_bits(body, ap.TLM_SCHED_AREA_BITS, ap.TLM_SCHED_CODING_OFF,
+                     ap.TLM_SCHED_CODING_W, ap.TLM_CODING_S2)
+        got = ap.decode_tlm_schedule(bytes(body), True, 30)
+        self.assertEqual(got.coding, ap.TLM_CODING_S2)
+        self.assertNotIn(got.coding, ap.TLM_CODING_IMPLEMENTED)
+
+    def test_the_dwell_must_cover_the_clock_error_it_announces(self):
+        """The two announcements are not independent.
+
+        A 500 ppm node pointing 1.83 s ahead has drifted a millisecond by the
+        time its window opens, so the plan's 500 us dwell is a window only a
+        crystal node can offer - and a downlink that silently never works is
+        worse than one refused at the encoder.
+        """
+        s = dataclasses.replace(self.CANON_SCHED, dl_phase=60000)
+        self.assertEqual(len(ap.encode_tlm_schedule(s, False, 30)), 6)
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_schedule(s, False, 500)
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_schedule(dataclasses.replace(s, dl_dwell=3),
+                                   False, 500)
+        self.assertEqual(
+            len(ap.encode_tlm_schedule(dataclasses.replace(s, dl_dwell=4),
+                                       False, 500)), 6)
+
+    def test_tx_power_is_biased_so_that_zero_can_mean_silence(self):
+        for dbm in (0, -40, 20, ap.TLM_TX_POWER_UNSTATED):
+            with self.subTest(dbm=dbm):
+                s = dataclasses.replace(self.CANON_SCHED, tx_power_dbm=dbm)
+                got = ap.decode_tlm_schedule(
+                    ap.encode_tlm_schedule(s, False, 30), False, 30)
+                self.assertEqual(got.tx_power_dbm, dbm)
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_schedule(
+                dataclasses.replace(self.CANON_SCHED, tx_power_dbm=40),
+                False, 30)
+
+        # Biased byte 228 is 128 once unbiased, which lands on the sentinel if
+        # a receiver narrows before it checks.
+        body = bytearray(ap.encode_tlm_schedule(self.CANON_SCHED, False, 30))
+        ap.pack_bits(body, ap.TLM_SCHED_AREA_BITS, ap.TLM_SCHED_POWER_OFF,
+                     ap.TLM_SCHED_POWER_W, 228)
+        with self.assertRaises(ValueError):
+            ap.decode_tlm_schedule(bytes(body), False, 30)
+
+    def test_the_reservation_is_refused_rather_than_ignored(self):
+        body = bytearray(ap.encode_tlm_schedule(self.CANON_SCHED, False, 30))
+        body[5] |= 0x01
+        with self.assertRaises(ValueError):
+            ap.decode_tlm_schedule(bytes(body), False, 30)
+
+    def test_a_window_the_node_does_not_open_carries_no_phase(self):
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_schedule(ap.TlmSchedule(dl_phase=1))
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_schedule(ap.TlmSchedule(dl_dwell=2))
+        # A phase at or past the interval is a window in the next cycle
+        # described as one in this one.
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_schedule(
+                ap.TlmSchedule(dl_interval=32, dl_phase=32768, dl_dwell=1))
+
+    def test_the_listen_window_is_relative_to_the_frame_that_carried_it(self):
+        # Two receivers share no time base, so nothing absolute may cross the
+        # air. The same rule the sync-handoff page's slot phase follows, and
+        # the same arithmetic profile_sched_listen_at() does in C.
+        s = self.CANON_SCHED
+        for t_carrier in (0, 1000000, 2 ** 31):
+            with self.subTest(t_carrier=t_carrier):
+                self.assertEqual(s.listen_at(t_carrier, 0),
+                                 t_carrier + 366210)
+                self.assertEqual(s.listen_at(t_carrier, 1),
+                                 t_carrier + 366210 + 2000000)
+        self.assertIsNone(ap.TlmSchedule().listen_at(1000))
+
+
 class TestTelemetrySyncHandoff(unittest.TestCase):
     """Page 0x12, section 12. The page a RECEIVER sends about a node.
 

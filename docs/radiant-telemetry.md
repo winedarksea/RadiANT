@@ -35,7 +35,7 @@ The design is easiest to hold in your head as MQTT with the broker deleted:
 
 | MQTT | RadiANT telemetry | Why the analogy holds |
 |---|---|---|
-| topic | **field ID** (a byte in the descriptor) | a stable name for one stream of values, chosen by the publisher |
+| topic | **field   ID** (a byte in the descriptor) | a stable name for one stream of values, chosen by the publisher |
 | retained message | **the descriptor page, interleaved on a timer** | a late subscriber learns the schema without asking; MQTT stores it in the broker, we re-publish it every 121 messages |
 | QoS 0, fire and forget | **ANT broadcast** | no delivery guarantee, no retransmission, no back-channel |
 | broker | *(none)* | this is the whole point: there is no server to hold state, so the state is re-broadcast instead |
@@ -218,9 +218,19 @@ lookup.
 [2..7]                         6 bytes of frame body
 ```
 
-Up to 16 frames: two fixed header frames plus up to 14 field frames — or up to
-13 field frames plus the **descriptor authentication frame**, which is mandatory
-whenever any transform bit is set and always occupies the last slot in the set.
+Up to 16 frames, in this order: two fixed header frames, the **schedule frame**
+if the node sends one, then one frame per field, then the **descriptor
+authentication frame** if any transform bit is set. The authentication frame
+always occupies the last slot in the set; the schedule frame always occupies
+index 2, which is why the two never contend for a position. The field frames are
+whatever is left — 14 of them on a node that announces neither, 12 on one that
+announces both.
+
+**The shape of the set is derived, not announced.** `2 + field count` is a set
+with no schedule frame; one more frame than that is a set with one, and the
+transform bits say whether the extra is the authentication frame instead. No
+presence bit is spent on either, because a bit that could disagree with the
+arithmetic would be a way for a node to describe a set it did not send.
 
 ### Frame 0 — identity and timing
 
@@ -287,7 +297,8 @@ of frame 1 byte `[3]` — not from this byte, which is full.
       bits 7..6  MAC window W: 0 = reserved (W=1, not in v1), 1 = W=2,
                  2 = W=4, 3 = W=8
       bits 5..4  sparse repeat count: 0 = 1x, 1 = 2x, 2 = 3x, 3 = 5x
-      bits 3..0  reserved, must be 0 -- the informational-flag extension space
+      bit 3      clock accuracy stated: the three bits below are a ladder code
+      bits 2..0  clock-accuracy ladder code, when bit 3 is set; zero otherwise
 [4..7] epoch (u32 LE); zero only on a node that enables no transform AND sends
        no reliable-command page. A command-only node carries a non-zero epoch
 ```
@@ -322,6 +333,97 @@ on a counter wrap. `docs/radiant-security.md` section 3.5 is normative for it;
 the parts that constrain this format are that **a counter wrap advances the
 epoch by 1** on both sides, and that no transform enables until the epoch has
 been advanced after a reset.
+
+### The clock-accuracy nibble, and the schedule frame
+
+Together these are **the schedule block**: the descriptor states where, when and
+how well the node transmits. A node already broadcasts a retained descriptor, so
+the descriptor is a standing pointer and extending it costs no transmission.
+
+**The clock-accuracy ladder is section 12's**, unchanged — the same eight codes
+the sync-handoff page carries, and there is exactly one such ladder in this
+project. What the nibble adds is bit 3. A handoff is only ever sent by a receiver
+that already knows something, so *its* code 0 can mean "worst case, 500 ppm"; a
+descriptor is sent by every node, including every node built before this block
+existed, and those transmit these bits as zeros. So:
+
+| bit 3 | bits 2..0 | meaning |
+|---|---|---|
+| 0 | 0 | nothing announced. The receiver uses its own compiled-in bound and behaves exactly as it did before this block existed |
+| 1 | 0..7 | the ladder of section 12; code 0 is an RC oscillator's honest 500 ppm |
+
+A receiver **must round outward** from the code, and **an announcement may only
+widen a receive window, never narrow one** — a claim is not a measurement, and
+only a receiver's own residual estimator may narrow anything.
+
+**Why the clock lives in frame 1 and the rest lives in a frame of its own.**
+Frame 1 is a header every node already sends, so a sparse asset tag on an RC
+oscillator announces its clock without adding a single frame to its descriptor
+set — and that tag is the node the field was written for. The other three fields
+need 42 bits, which frame 1 does not have.
+
+```
+The schedule frame - page 0x00, index 2, bytes [2..7], MSB-first:
+
+bits  0..2   downlink dwell code: 0 = 250 us, 1 = 500 us, 2 = 1 ms, 3 = 2 ms,
+             4 = 4 ms, 5 = 8 ms, 6 = 16 ms, 7 = 32 ms
+bits  3..14  downlink interval, units of 1/32 s; 0 = the node opens no
+             downlink window, and then the phase and dwell are zero too
+bits 15..30  downlink phase, counts of 1/32768 s from the t_sync of the frame
+             that carries it; must be less than the interval
+bits 31..33  coding rate: 0 = uncoded (1 M), 1 = LE Coded S=8, 2 = LE Coded
+             S=2 (defined, not implemented), 3..7 reserved
+bits 34..41  announced TX power, dBm EIRP biased by 100 (60..120 for
+             -40..+20 dBm); 0 means not stated
+bits 42..47  reserved, must be 0
+```
+
+**The downlink window is announced here and opened by a later phase.** Today a
+command reaches a node only near the node's own transmit slot, so actuator
+latency is bounded by the heartbeat — up to 60 s for the air-conditioning case
+of section 1. 500 µs of listening every 2 s is 0.025 % duty and fixes it. This
+document fixes the framing so that the phase which builds the listen slot does
+not also get to choose it.
+
+**The phase is relative to the carrying frame**, exactly as section 12's slot
+phase is, and for the same reason: two clocks share no time base. It is in
+1/32768 s counts rather than a fraction of the interval, because a fraction of a
+2 s interval quantises at 244 µs — half the 500 µs dwell it points at, and a
+pointer whose error is comparable to the thing it points at is not a pointer.
+**One consequence is recorded rather than solved: a node must recompute the
+phase for each transmission of the frame**, so a node whose scheduler encodes
+its descriptor set once and retransmits the bytes must announce interval 0 until
+the response-slot phase fixes it.
+
+**The dwell and the clock accuracy constrain each other**, and an encoder
+refuses a block where they do not: a 500 ppm node pointing 1.83 s ahead has
+drifted a millisecond by the time its window opens, so the commanding receiver —
+aiming at the middle, early or late by the same amount — needs a dwell of at
+least twice the drift. The plan's 500 µs every 2 s is a duty only a
+crystal-referenced node can offer.
+
+**The coding rate is named even though only one rate exists**, because "long
+range: yes" does not let a consumer budget a window — at eight bytes an S=8
+frame is ~1.23 ms against ~150 µs at 1 M — and because a second rate arriving
+later must be a value in this vocabulary rather than a format break. It agrees
+with frame 0's long-range bit or the block is refused, in both directions. A
+receiver that meets a rate it does not implement **decodes the node and declines
+the channel**: the rate describes the node, not the layout of these bytes, so
+this is the fail-open half of the forward-compatibility rule.
+
+**The announced TX power** distinguishes a distant node from a desensed one and
+is the target a future power-control loop would servo against. It is biased on
+the wire so that the byte 0 can mean "not stated" — 0 dBm is a real power and
+cannot double as silence, and without the bias an all-defaulted block would
+announce one. It is also, incidentally, iBeacon's "measured power": announced
+power minus reported RSSI is path loss, which is room-level presence done
+entirely in host arithmetic. Nothing here promises metres.
+
+**A node that announces neither half is byte-for-byte the node it was before
+this block existed** — same frames, same count, frame 1's nibble still zero.
+That identity is the block's whole compatibility claim, and it is asserted
+directly in `radiant_core/tests/src/test_schedule.c` and
+`tools/test_ant_pages.py`.
 
 ### Frames 2..N — one per field
 

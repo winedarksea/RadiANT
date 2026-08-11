@@ -153,9 +153,27 @@ class Sensor:
         self.data_pages_since_common = 0
         self.pending_common: list[bytes] = []
 
+    # A clock that is not the one it advertises, in ppm.
+    #
+    # `period` is what the dongle is configured with and what a 0x60 node's
+    # descriptor announces; this offsets the TRUE spacing of the slots, which
+    # is what an RC-oscillator node without a 32 kHz crystal actually does -
+    # 250 to 500 ppm, against the +/-50 ppm every receive window in this
+    # project was sized from. At a 2 s heartbeat, 300 ppm is 600 us of error
+    # per slot against a 400 us window, which is a node lost with no error code
+    # anywhere unless it announces its accuracy.
+    #
+    # IT ONLY BITES IN --dry-run, and that is a property of the bench rather
+    # than a shortcut: on the live path the dongle's own stack times the slots
+    # and this script only refills the buffer on EVENT_TX, so there is nothing
+    # here that could skew them. The deterministic version of this experiment
+    # is the ztest against the mock radio's virtual clock; the real one needs a
+    # master with a genuinely bad oscillator.
+    period_ppm: int = 0
+
     @property
     def period_s(self) -> float:
-        return self.period / ANT_TICKS_PER_S
+        return self.period * (1.0 + self.period_ppm / 1e6) / ANT_TICKS_PER_S
 
     def bring_up(self, dev, reader) -> bool:
         """Assign, configure and open the channel as a master.
@@ -788,6 +806,21 @@ def main() -> int:
     )
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument(
+        "--period-ppm", type=int, default=0, metavar="PPM",
+        help="offset the master's TRUE slot spacing by this many ppm while it "
+             "keeps advertising the nominal period - an RC-clocked node, which "
+             "is 250-500 ppm against the +/-50 ppm every window here was sized "
+             "from. Takes effect in --dry-run only; see the note on "
+             "Sensor.period_ppm",
+    )
+    parser.add_argument(
+        "--clock-accuracy", type=int, default=None, metavar="CODE",
+        help="announce a clock-accuracy ceiling in a 0x60 node's descriptor: "
+             "0=500ppm (an RC oscillator), 5=50ppm, 6=30ppm (a 32 kHz "
+             "crystal), 7=20ppm. Omit and the node announces nothing, which is "
+             "what every node built before the schedule block does",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="build the payload stream without a board and write it out; "
              "feed the result to ant_verify.py --replay",
@@ -840,6 +873,18 @@ def main() -> int:
                 Signal(args.cadence, args.noise, rng, args.sway),
                 **kwargs)
             sensor.serial_number = serial_number
+            sensor.period_ppm = args.period_ppm
+            # Set on the descriptor rather than passed to a constructor, for
+            # the same reason serial_number is: the `sched` property is lazy
+            # precisely so that post-construction settings reach the encoded
+            # set. A node that announces nothing is left alone entirely.
+            if args.clock_accuracy is not None:
+                descriptor = getattr(sensor, "descriptor", None)
+                if descriptor is None:
+                    sys.exit(f"--clock-accuracy needs a device type with a "
+                             f"descriptor; {name} has none")
+                descriptor.clock_stated = True
+                descriptor.clock_accuracy = args.clock_accuracy
             built.append(sensor)
         return built
 

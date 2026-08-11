@@ -47,9 +47,11 @@
  *     limit are not, because they need a key and they belong to the phase that
  *     turns the command path on. The inline tag is a caller-supplied u16 here
  *     and this file has no opinion about how it was derived.
- *   - NO SCHEDULE BLOCK. Frame 1 byte [3] bits 3..0 stay reserved-must-be-zero;
- *     filling them is a later phase's work and doing it early would put a field
- *     on the air before the code that reads it exists.
+ *   - NO SCHEDULE-BLOCK POLICY. The block itself is here now - frame 1 byte [3]
+ *     bits 3..0 and the schedule frame, both in profile_schedule.h - but this
+ *     file only moves it to and from the wire. What a receiver DOES with a
+ *     downlink window is the response-slot phase's, and this file has no
+ *     opinion about it beyond decoding it correctly.
  */
 
 #ifndef RADIANT_PROFILE_TELEMETRY_H_
@@ -58,6 +60,12 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+/* The schedule block: the clock-accuracy nibble of frame 1 and the schedule
+ * frame's 48 bits. Its own header carries the argument for every field, and it
+ * inherits the clock-accuracy ladder from profile_handoff.h rather than
+ * restating it. */
+#include "profile_schedule.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -260,12 +268,37 @@ struct profile_descriptor {
 	uint8_t  k_code;        /* sparse repeat count */
 	uint32_t epoch;         /* zero only with no transform and no command page */
 
+	/*
+	 * The schedule block - frame 1 byte [3] bits 3..0, plus one frame.
+	 *
+	 * BOTH HALVES DEFAULT TO SILENCE, and that is the compatibility
+	 * argument rather than a convenience: `clock_stated` false and
+	 * `has_schedule` false encode to exactly the bytes this encoder emitted
+	 * before the block existed, frame for frame, so a node that announces
+	 * nothing is not merely compatible with a pre-block node - it is
+	 * indistinguishable from one.
+	 */
+	bool     clock_stated;   /* the field below is a ladder code at all */
+	uint8_t  clock_accuracy; /* enum profile_handoff_clk; the 5b ladder */
+	bool     has_schedule;   /* a schedule frame is in the set, at index 2 */
+	struct profile_schedule schedule;
+
 	uint8_t  n_fields;
 	struct profile_field fields[PROFILE_TLM_MAX_FIELDS];
 };
 
 /* Bits of field area a data page has: 48, or 40 when X_AUTH claims byte [7]. */
 uint16_t profile_desc_field_area_bits(const struct profile_descriptor *d);
+
+/*
+ * The clock-accuracy ceiling this descriptor announces, in ppm, or 0 for a node
+ * that announces nothing - which is every node built before the block existed,
+ * and is the value that leaves radiant_channel_guard_us() exactly as it was.
+ *
+ * This is what a receiver hands to radiant_channel_clock_accuracy_set(), and
+ * profile_sched_apply_clock() is the one-call version that does both.
+ */
+uint16_t profile_desc_clock_ppm(const struct profile_descriptor *d);
 
 /*
  * The forward-compatibility rule, in one function.
@@ -278,11 +311,22 @@ uint16_t profile_desc_field_area_bits(const struct profile_descriptor *d);
 bool profile_desc_may_decode_data(const struct profile_descriptor *d);
 
 /*
- * How many frames the set has: 2 + n_fields. There is no authentication frame
- * in v1 because there is no transform in v1; when there is one, it takes the
- * last slot and this grows by one.
+ * How many frames the set has: 2 + a schedule frame if there is one + n_fields.
+ * There is no authentication frame in v1 because there is no transform in v1;
+ * when there is one, it takes the last slot and this grows by one.
+ *
+ * THE ORDER IS FIXED AND THE SCHEDULE FRAME IS AT INDEX 2, before the fields
+ * rather than after them, so that the authentication frame keeps the last slot
+ * section 6 promises it - and so that a receiver joining mid-rotation has the
+ * node's timing before it has the node's schema, which is the order in which it
+ * needs them.
  */
 uint8_t profile_desc_frame_count(const struct profile_descriptor *d);
+
+/* The index of the schedule frame in the set, or -ENOENT when the node sends
+ * none. A constant today; a function because the authentication frame will
+ * make the set's shape depend on the flags. */
+int profile_desc_schedule_index(const struct profile_descriptor *d);
 
 /*
  * Distinct data pages the schema uses, ascending, deduplicated. This is the

@@ -76,12 +76,14 @@
  *     too. A keyed recipient recovers it by forward search against the
  *     key-group hint; an unkeyed one never needed it. The bit budget above is
  *     the enforcement: every one of the 64 bits is assigned.
- *   - NO GUARD WIDENING. The clock accuracy is carried and exposed and is not
- *     yet consumed. Widening radiant_channel_guard_us() toward an announced
- *     ceiling belongs with the descriptor schedule block that announces it in
- *     the first place; a handoff that widened the guard while a descriptor
- *     could not would make one node behave differently depending on how it was
- *     found.
+ *   - GUARD WIDENING, AS OF THE DESCRIPTOR SCHEDULE BLOCK. This page carried
+ *     the clock accuracy and did not consume it, on the grounds that a handoff
+ *     which widened the guard while a descriptor could not would make one node
+ *     behave differently depending on how it was found. The descriptor can now,
+ *     through the same ladder and the same core call, so profile_handoff_apply()
+ *     consumes it too and the symmetry holds the other way up. It still only
+ *     ever WIDENS: narrowing on somebody else's evidence remains the one thing
+ *     the estimator must not do.
  *   - NO SECURITY. Byte [7] is written as zero and asserted to be zero on the
  *     way back in. A forged handoff costs a receiver one search timeout on a
  *     node that is not there, which is why this page can ship before the key
@@ -96,10 +98,12 @@
 #include <stdint.h>
 
 /* radiant_channel.h brings radiant_time_t and struct radiant_channel_id with
- * it. This is the only file in src/profiles/ that includes anything from
- * radiant_core: the codec below is pure, but profile_handoff_apply() drives a
- * channel, and a handoff that could not do that would be a format with no
- * consumer. The dependency runs application -> core, never the other way. */
+ * it. This was the only file in src/profiles/ that included anything from
+ * radiant_core; profile_schedule.h is the second, and it inherits the include
+ * along with this file's clock-accuracy ladder rather than declaring either
+ * twice. The codec below is pure, but profile_handoff_apply() drives a channel,
+ * and a handoff that could not do that would be a format with no consumer. The
+ * dependency runs application -> core, never the other way. */
 #include <radiant_core/radiant_channel.h>
 
 #ifdef __cplusplus

@@ -488,5 +488,22 @@ radiant_channel_err_t profile_handoff_apply(uint8_t channel,
 	id.trans_type = h->trans_type;
 	radiant_channel_on_acquired(channel, &id, t_next - period);
 
+	/*
+	 * The clock accuracy this page has always carried is now consumed, and
+	 * this is the line that stopped being deferred.
+	 *
+	 * It is applied AFTER on_acquired() because on_acquired() resets the
+	 * estimator and this is not part of the estimate - it is a ceiling the
+	 * estimate is clamped against. The asymmetry is the same one the
+	 * guard's own header argues: an announcement may WIDEN a window and may
+	 * never narrow one, so acting on somebody else's statement about a
+	 * master costs receive current at worst and cannot cost packets. A
+	 * handed-off channel therefore still lands in the same state a swept one
+	 * does, and a node with a bad clock is now equally well served whether
+	 * it was found by sweeping, by its own descriptor, or by this page.
+	 */
+	radiant_channel_clock_accuracy_set(
+		channel, profile_handoff_clk_ppm(h->clock_accuracy));
+
 	return RADIANT_CH_OK;
 }

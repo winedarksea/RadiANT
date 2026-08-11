@@ -125,6 +125,17 @@ struct chan {
 	 */
 	uint16_t resid_q4_us;
 
+	/*
+	 * The master's own announced clock accuracy in ppm, or 0 for a master
+	 * that has announced nothing. See radiant_channel_clock_accuracy_set().
+	 *
+	 * Two bytes rather than the three-bit wire code, because the core must
+	 * not carry a profile's vocabulary: src/profiles/ owns the ladder and
+	 * converts, and this module owns the arithmetic. It fits inside the
+	 * padding the record already had, so the 72 B budget is unmoved.
+	 */
+	uint16_t clk_ppm;
+
 	uint8_t state;              /* enum radiant_channel_state */
 	uint8_t type;
 	uint8_t network;
@@ -221,10 +232,89 @@ static radiant_time_t period_us(const struct chan *c)
  * moves with temperature. */
 #define GUARD_EWMA_SHIFT 3u
 
-/* Ceiling on one sample, in sixteenths. Above the widest guard there is, so a
- * clamp never hides a residual that matters; below the field's range, so the
- * EWMA cannot overflow whatever arrives. */
-#define GUARD_RESID_MAX_Q4 ((uint16_t)(RADIANT_CHANNEL_GUARD_MAX_US * 16u))
+/* The most the sixteenths field can hold, in whole microseconds. The residual
+ * estimator's range is a property of its storage and not of any bound in the
+ * protocol, which is why it is stated separately from the ceiling below. */
+#define GUARD_RESID_FIELD_MAX_US (65535u / 16u)
+
+/*
+ * GUARD_MAX is sixteen worst-case periods, and writing that as arithmetic
+ * rather than as the number 400 is what lets an announced clock re-derive it.
+ * Eight is RADIANT_CHANNEL_RX_FAIL_TO_SEARCH - the misses a channel is allowed
+ * before it gives up - and the other factor of two is the margin the constant
+ * was given when it was a constant.
+ */
+#define GUARD_CEIL_PERIODS \
+	(RADIANT_CHANNEL_GUARD_MAX_US / RADIANT_CHANNEL_DRIFT_WORST_US)
+
+_Static_assert(RADIANT_CHANNEL_GUARD_MAX_US ==
+		       GUARD_CEIL_PERIODS * RADIANT_CHANNEL_DRIFT_WORST_US,
+	       "GUARD_MAX is no longer a whole number of worst-case periods, so "
+	       "an announced clock accuracy can no longer re-derive it");
+_Static_assert(GUARD_CEIL_PERIODS >= 2u * RADIANT_CHANNEL_RX_FAIL_TO_SEARCH,
+	       "the ceiling no longer covers every period a channel may "
+	       "extrapolate before it gives up");
+
+/*
+ * One period's worth of worst-case disagreement between this master's clock and
+ * ours, in microseconds.
+ *
+ * RADIANT_CHANNEL_DRIFT_WORST_US whenever nothing has been announced, which is
+ * every channel in a build that never calls the setter - that identity is what
+ * makes the schedule block free when its fields are defaulted. When a master
+ * HAS announced, the same quantity is recomputed at its ppm over its own
+ * period, and the announcement may only widen: the constant is the floor of
+ * this function, because a claim of 20 ppm is a claim and the 25 us is a
+ * budget.
+ */
+static uint32_t drift_worst_us(const struct chan *c)
+{
+	uint64_t us;
+	uint32_t ppm;
+
+	if (c->clk_ppm == 0u) {
+		return RADIANT_CHANNEL_DRIFT_WORST_US;
+	}
+
+	/* Relative accuracy: theirs plus ours. The receiver's own end of the
+	 * budget does not improve because the master admitted to a bad clock. */
+	ppm = (uint32_t)c->clk_ppm + RADIANT_CHANNEL_CLOCK_PPM_ANT;
+	us = ((uint64_t)period_us(c) * (uint64_t)ppm) / 1000000u;
+
+	if (us <= (uint64_t)RADIANT_CHANNEL_DRIFT_WORST_US) {
+		return RADIANT_CHANNEL_DRIFT_WORST_US;
+	}
+	return (uint32_t)us;
+}
+
+/*
+ * The widest this channel's guard may get: RADIANT_CHANNEL_GUARD_MAX_US, or the
+ * same arithmetic at an announced clock's worse period.
+ *
+ * Bounded by a quarter period as well, because a window that reached into the
+ * neighbouring slot would stop being a window. At every period and every point
+ * of the ladder this bound is orders of magnitude away from binding; it is here
+ * so that a future ladder entry, or a period floor change, cannot quietly turn
+ * a receive window into a continuous scan.
+ */
+static uint32_t guard_ceiling_us(const struct chan *c)
+{
+	uint32_t drift = drift_worst_us(c);
+	uint64_t ceiling;
+
+	if (drift <= RADIANT_CHANNEL_DRIFT_WORST_US) {
+		return RADIANT_CHANNEL_GUARD_MAX_US;
+	}
+
+	ceiling = (uint64_t)drift * GUARD_CEIL_PERIODS;
+	if (ceiling > (period_us(c) / 4u)) {
+		ceiling = period_us(c) / 4u;
+	}
+	if (ceiling < (uint64_t)RADIANT_CHANNEL_GUARD_MAX_US) {
+		ceiling = RADIANT_CHANNEL_GUARD_MAX_US;
+	}
+	return (uint32_t)ceiling;
+}
 
 static void guard_reset(struct chan *c)
 {
@@ -248,9 +338,23 @@ static void guard_reset(struct chan *c)
  */
 static void guard_observe(struct chan *c, radiant_time_t err_us)
 {
-	uint32_t sample = (err_us > (radiant_time_t)RADIANT_CHANNEL_GUARD_MAX_US)
-				  ? (uint32_t)GUARD_RESID_MAX_Q4
-				  : (uint32_t)(err_us * 16u);
+	/*
+	 * The clamp is the channel's own ceiling, not the compiled-in one, and
+	 * that matters as soon as a master announces a bad clock: an RC-clocked
+	 * node at a 2 s heartbeat has a real residual of some hundreds of
+	 * microseconds to a millisecond, and an estimator that recorded 400 us
+	 * for all of them would be measuring its own clamp. With nothing
+	 * announced the ceiling IS RADIANT_CHANNEL_GUARD_MAX_US and this is the
+	 * same clamp it always was, to the microsecond.
+	 */
+	uint32_t cap = guard_ceiling_us(c);
+	uint32_t sample;
+
+	if (cap > GUARD_RESID_FIELD_MAX_US) {
+		cap = GUARD_RESID_FIELD_MAX_US;
+	}
+	sample = (err_us > (radiant_time_t)cap) ? (cap * 16u)
+						: (uint32_t)(err_us * 16u);
 
 	if (c->lock_slots == 0u) {
 		c->resid_q4_us = (uint16_t)sample;
@@ -259,9 +363,8 @@ static void guard_observe(struct chan *c, radiant_time_t err_us)
 
 		avg -= (avg >> GUARD_EWMA_SHIFT);
 		avg += (sample >> GUARD_EWMA_SHIFT);
-		c->resid_q4_us = (uint16_t)((avg > GUARD_RESID_MAX_Q4)
-						    ? GUARD_RESID_MAX_Q4
-						    : avg);
+		c->resid_q4_us = (uint16_t)((avg > (cap * 16u)) ? (cap * 16u)
+								: avg);
 	}
 
 	if (c->lock_slots < 255u) {
@@ -1317,13 +1420,19 @@ uint32_t radiant_channel_guard_us(uint8_t channel)
 {
 	const struct chan *c;
 	uint32_t guard;
+	uint32_t floor_us;
+	uint32_t drift;
 
 	/*
-	 * Every early return here is RADIANT_CHANNEL_GUARD_MAX_US and not the
-	 * floor, because every one of them means "no evidence". An out-of-range
+	 * Every early return here is the channel's CEILING and not the floor,
+	 * because every one of them means "no evidence". An out-of-range
 	 * channel, one that is not tracking, and one whose estimator has not
-	 * locked are all cases where the honest answer is the window this core
-	 * opened before any of this existed.
+	 * locked are all cases where the honest answer is the widest window this
+	 * channel has - which is RADIANT_CHANNEL_GUARD_MAX_US exactly, unless
+	 * the master has announced a clock that needs more. The unlocked case is
+	 * the one that matters: an RC-clocked master is outside the old ceiling
+	 * on its very first extrapolated slot, so a receiver that waited for the
+	 * estimator to lock would wait for a lock that can never happen.
 	 */
 	if (!ch_valid(channel)) {
 		return RADIANT_CHANNEL_GUARD_MAX_US;
@@ -1332,7 +1441,7 @@ uint32_t radiant_channel_guard_us(uint8_t channel)
 	c = &channels[channel];
 	if (c->state != RADIANT_CH_STATE_TRACKING ||
 	    c->lock_slots < RADIANT_CHANNEL_GUARD_LOCK_SLOTS) {
-		return RADIANT_CHANNEL_GUARD_MAX_US;
+		return guard_ceiling_us(c);
 	}
 
 	/* Sixteenths back to microseconds. The multiply is done first so the
@@ -1359,15 +1468,54 @@ uint32_t radiant_channel_guard_us(uint8_t channel)
 	 * already losing slots, as slightly worse recovery, with no error code
 	 * anywhere.
 	 */
-	if (guard < (uint32_t)guard_floor) {
-		guard = guard_floor;
-	}
-	guard += (uint32_t)c->miss_count * RADIANT_CHANNEL_DRIFT_WORST_US;
+	drift = drift_worst_us(c);
 
-	if (guard > RADIANT_CHANNEL_GUARD_MAX_US) {
-		guard = RADIANT_CHANNEL_GUARD_MAX_US;
+	/*
+	 * The floor covers the period being RECEIVED, so an announced clock
+	 * raises it: at 500 ppm and a 2 s heartbeat one period alone is 1.1 ms,
+	 * and a 100 us floor under a 1.1 ms error is not a floor. With nothing
+	 * announced, drift is the 25 us constant, the floor already exceeds it,
+	 * and this line changes nothing - which is the whole compatibility
+	 * claim, in one comparison.
+	 */
+	floor_us = guard_floor;
+	if (floor_us < drift) {
+		floor_us = drift;
+	}
+	if (guard < floor_us) {
+		guard = floor_us;
+	}
+	guard += (uint32_t)c->miss_count * drift;
+
+	if (guard > guard_ceiling_us(c)) {
+		guard = guard_ceiling_us(c);
 	}
 	return guard;
+}
+
+void radiant_channel_clock_accuracy_set(uint8_t channel, uint16_t ppm)
+{
+	if (!ch_valid(channel)) {
+		return;
+	}
+
+	/*
+	 * Clamped, not refused. An announcement worse than the clamp is either a
+	 * typo or hostile, and in both cases the widest window this core will
+	 * build is the safe answer - it costs receive current on a channel that
+	 * announced it needs it, and it cannot cost packets.
+	 */
+	channels[channel].clk_ppm = (ppm > RADIANT_CHANNEL_CLOCK_PPM_MAX)
+					    ? (uint16_t)RADIANT_CHANNEL_CLOCK_PPM_MAX
+					    : ppm;
+}
+
+uint16_t radiant_channel_clock_accuracy_get(uint8_t channel)
+{
+	if (!ch_valid(channel)) {
+		return 0u;
+	}
+	return channels[channel].clk_ppm;
 }
 
 void radiant_channel_guard_floor_set(uint16_t us)

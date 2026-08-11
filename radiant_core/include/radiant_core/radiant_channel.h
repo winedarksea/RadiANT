@@ -335,6 +335,26 @@ typedef uint8_t radiant_channel_err_t;
  */
 #define RADIANT_CHANNEL_GUARD_LOCK_SLOTS 8u
 
+/*
+ * The clock accuracy every constant above silently assumes, in ppm.
+ *
+ * RADIANT_CHANNEL_DRIFT_WORST_US is +/-50 ppm at each end over one ANT+ period.
+ * Naming the 50 makes the assumption arithmetic instead of prose, because
+ * radiant_channel_clock_accuracy_set() below lets a master announce a WORSE
+ * one - and the receiver's own end of the budget does not go away when it does.
+ */
+#define RADIANT_CHANNEL_CLOCK_PPM_ANT 50u
+
+/*
+ * The widest announcement that is taken at face value. A node claiming worse
+ * than 1000 ppm is claiming a clock that cannot hold a channel at all, and a
+ * receiver that sized a window from it would be sizing it from a typo or from
+ * an attacker. Clamped rather than rejected: the announcement is still
+ * evidence that the master is bad, and the widest window this core will build
+ * is a better answer than the narrowest.
+ */
+#define RADIANT_CHANNEL_CLOCK_PPM_MAX 1000u
+
 /* ---------------------------------------------------------------------------
  * State
  * ---------------------------------------------------------------------------
@@ -771,7 +791,10 @@ radiant_time_t radiant_channel_next_slot(uint8_t channel);
 
 /*
  * How far either side of that instant this channel's receive window should
- * reach, in microseconds. Never zero; never above RADIANT_CHANNEL_GUARD_MAX_US.
+ * reach, in microseconds. Never zero; never above RADIANT_CHANNEL_GUARD_MAX_US
+ * unless this channel's master has announced a clock that needs more, which is
+ * the one thing that raises the ceiling and is described at the end of this
+ * comment.
  *
  * WHY THIS IS NOT A CONSTANT ANY MORE. The paragraph above sizes the guard from
  * the spec's worst case, compounded over eight misses, and arrives at 400 us.
@@ -803,6 +826,31 @@ radiant_time_t radiant_channel_next_slot(uint8_t channel);
  * nothing to say: on a channel that is not TRACKING, immediately after
  * acquisition, and after RX_FAIL_GO_TO_SEARCH. Narrowing on no evidence is the
  * one thing this must never do, because the failure mode has no error code.
+ *
+ * THE ANNOUNCED CEILING, AND WHY BOTH TERMS SCALE WITH IT.
+ *
+ * Every number above descends from ANT's +/-50 ppm bound. A coin-cell node
+ * running its RC oscillator with no 32 kHz crystal is at +/-250 to 500 ppm and
+ * is not covered by any of them: at a 2 s heartbeat, 300 ppm is 600 us of
+ * per-period disagreement against a 400 us ceiling, so every slot lands outside
+ * every window and the channel is lost with no error code anywhere - the
+ * estimator never even locks, because it is never given a clean slot to
+ * measure. radiant_channel_clock_accuracy_set() takes that master's own
+ * statement of its clock and re-derives the two terms from it:
+ *
+ *   - the per-miss charge becomes one period at (announced + our own 50) ppm
+ *     instead of the flat RADIANT_CHANNEL_DRIFT_WORST_US, and the floor rises
+ *     to cover one such period, because the guard must cover the period being
+ *     received before it covers any extrapolated one;
+ *   - the ceiling rises in the same proportion, keeping GUARD_MAX's arithmetic
+ *     - sixteen worst-case periods - rather than the number 400.
+ *
+ * AN ANNOUNCEMENT NEVER NARROWS ANYTHING. A node claiming 20 ppm gets exactly
+ * the window a node claiming nothing gets, and the reason is the asymmetry this
+ * whole file is written around: a claim is not a measurement. Only the residual
+ * estimator narrows, because only it has looked. So the guard is monotonic in
+ * the announcement, and a build with no announcement anywhere is byte-for-byte
+ * the guard this core computed before the field existed.
  *
  * ONE ESTIMATOR, NOT TWO, AND THE SECOND ONE'S ABSENCE IS A DECISION.
  *
@@ -870,6 +918,32 @@ uint32_t radiant_channel_guard_us(uint8_t channel);
  * behaviour for such a backend and needs no separate flag.
  */
 void radiant_channel_guard_floor_set(uint16_t us);
+
+/*
+ * The clock accuracy this channel's MASTER has announced, in ppm, or 0 for a
+ * master that has announced nothing.
+ *
+ * Per channel and not global, because it is a fact about one master. Set from
+ * whatever carried the announcement - device type 0x60's descriptor schedule
+ * block, or the sync-handoff page a receiver that already tracks it sent - and
+ * cleared to 0 by assign and unassign, so a channel reassigned to a different
+ * master never inherits the last one's clock.
+ *
+ * 0 IS "NOTHING ANNOUNCED" AND NOT "PERFECT", and the distinction is the whole
+ * compatibility argument: a node that says nothing gets precisely the guard
+ * this core computed before this function existed, so the schedule block costs
+ * nothing at all until somebody fills it in. Values above
+ * RADIANT_CHANNEL_CLOCK_PPM_MAX are clamped; values at or below the receiver's
+ * own RADIANT_CHANNEL_CLOCK_PPM_ANT end of the budget are stored honestly and
+ * simply never widen anything at an ordinary period.
+ *
+ * This is an announcement, so it may only widen the window. See
+ * radiant_channel_guard_us().
+ */
+void radiant_channel_clock_accuracy_set(uint8_t channel, uint16_t ppm);
+
+/* What was announced, or 0. Diagnostic, and the seam a test asserts against. */
+uint16_t radiant_channel_clock_accuracy_get(uint8_t channel);
 
 /*
  * The running average above, in microseconds, or 0 on a channel whose estimator

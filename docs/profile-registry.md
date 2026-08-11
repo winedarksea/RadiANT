@@ -139,6 +139,18 @@ Values are `no`, `yes`, or `per-node` (the node announces it in a descriptor,
 so a consumer must be prepared for either). A consumer reading `no` in both
 columns knows the type is on the merged RF 57 window and costs nothing extra.
 
+**`yes` alone will not be enough for `LR PHY`, and the vocabulary that replaces
+it is already defined.** A consumer cannot budget a receive window from "long
+range" — at eight bytes an S=8 frame is ~1.23 ms against ~150 µs at 1 M — so the
+coding rate is carried in the descriptor's schedule block from now on:
+`0` uncoded (1 M), `1` LE Coded S=8, `2` LE Coded S=2 (defined, deliberately not
+implemented), `3..7` reserved. See `docs/radiant-telemetry.md` section 6, and
+`TLM_CODING_*` in `tools/ant_pages.py` / `enum profile_sched_coding` in
+`src/profiles/profile_schedule.h`, which are the one vocabulary. The phase that
+builds the coded PHY takes this column from `no`/`yes`/`per-node` to a rate
+using those same names; defining them here first is what stops that from being a
+second break for anyone who had already adopted the first.
+
 ---
 
 ## Device types
