@@ -407,6 +407,104 @@ int profile_desc_rx_take(const struct profile_desc_rx *rx,
 			 struct profile_descriptor *out);
 
 /* ---------------------------------------------------------------------------
+ * The descriptor-set collapse - ADR 0007
+ *
+ * THE LARGEST BATTERY ITEM THE LONG-RANGE PHY BUYS, and it is not the PHY: it
+ * is the length extension the PHY permits.
+ *
+ * A descriptor set is one 8-byte frame per header, per schedule block and per
+ * field, and every one of those frames is a separate transmission - which means
+ * a separate high-frequency crystal start and a separate ramp-up. On a coin
+ * cell those dominate: the HFXO start and the ramp are paid whether the frame
+ * that follows is 8 bytes or 40, so N frames cost N wakes and one frame costs
+ * one. It also cuts mid-stream join, because a receiver that hears one long
+ * frame has the whole set instead of one N-th of it.
+ *
+ * NOTHING ABOUT THE 8-BYTE FRAMES CHANGES, AND THAT IS THE DESIGN. Each
+ * descriptor frame already carries its own page number and its own
+ * (index << 4) | (count - 1) byte, so a set of them is SELF-DESCRIBING when
+ * concatenated: a receiver splits a long payload into 8-byte chunks and feeds
+ * each one to profile_desc_rx_feed(), which is the same function, with the same
+ * ordering rules and the same schema-id invalidation, that a receiver on 1 M
+ * has always used. The codec is untouched, the wire format of each frame is
+ * untouched, and a node can emit the same descriptor either way with no second
+ * encoder to keep in step.
+ *
+ * HOW COMPLETE THE COLLAPSE IS, STATED IN ARITHMETIC RATHER THAN IN HOPE. One
+ * long-range payload is at most RADIANT_FRAME_PAYLOAD_LR_MAX = 36 bytes, and
+ * the chunks are whole 8-byte frames, so FOUR frames fit per transmission:
+ *
+ *     asset tag, no fields          2 frames  -> 1 wake   (was 2)
+ *     2 fields                      4 frames  -> 1 wake   (was 4)
+ *     2 fields + schedule block     5 frames  -> 2 wakes  (was 5)
+ *     8 fields                     10 frames  -> 3 wakes  (was 10)
+ *     14 fields + schedule block   17 frames  -> refused, as it always was
+ *
+ * So the collapse is TOTAL up to four frames and PARTIAL beyond it, and the
+ * plan's "a sparse node with eight fields wakes ten times per heartbeat; one
+ * frame is one wake" is right about the mechanism and optimistic about the
+ * count - ten becomes three, not one. Ten becoming one would need a ~76-byte
+ * body, which at S=8 is ~5.4 ms of airtime and fails the 25 % duty bound at any
+ * period under 22 ms. The honest version of the claim is a 70 % cut in wakes for
+ * the eight-field case and a complete one for the sparse node the envelope was
+ * written for, which is the node that needed it most.
+ * ---------------------------------------------------------------------------
+ */
+
+/* Whole 8-byte descriptor frames that fit in one payload of `payload_max`
+ * bytes. Never partial: a split frame would have to be reassembled across
+ * transmissions, which is the accumulator that already exists one level up and
+ * would then exist twice. */
+uint8_t profile_desc_frames_per_body(uint8_t payload_max);
+
+/*
+ * How many long-range transmissions this descriptor set needs, or a negative
+ * errno if the set itself is malformed. 1 is the collapse working completely.
+ */
+int profile_desc_long_count(const struct profile_descriptor *d,
+			    uint8_t payload_max);
+
+/*
+ * Refuse a collapsed set the node cannot afford.
+ *
+ * This is where ADR 0007's duty bound is enforced for the descriptor path: the
+ * longest payload this set will emit, at the rate the schedule block announces,
+ * against the period frame 0 announces. -EINVAL when it does not fit.
+ *
+ * SEPARATE FROM profile_desc_long_payload() SO THAT THE REFUSAL CANNOT BE
+ * SKIPPED BY A CALLER THAT ONLY WANTS ONE FRAME. It is called by the payload
+ * accessor as well; having it public is what lets a caller find out before it
+ * has built anything.
+ */
+int profile_desc_long_check(const struct profile_descriptor *d,
+			    uint8_t payload_max);
+
+/*
+ * Fill in the payload of long-range transmission `index`, given the set as
+ * profile_desc_encode() produced it.
+ *
+ * Returns the number of payload bytes written - always a multiple of 8, and
+ * short only on the last index - or a negative errno.
+ */
+int profile_desc_long_payload(const struct profile_descriptor *d,
+			      const uint8_t *frames, uint8_t n_frames,
+			      uint8_t payload_max, uint8_t index, uint8_t *out,
+			      size_t out_len);
+
+/*
+ * The receiver's half: split one long payload into 8-byte descriptor frames and
+ * feed each to profile_desc_rx_feed().
+ *
+ * Returns 1 when the set is complete, 0 when it is not, or -EPROTO for a
+ * payload that is not a whole number of frames or whose frames do not belong to
+ * one set. A receiver needs no notion of "this node collapsed its descriptor" -
+ * it feeds what it heard and the accumulator behaves identically either way,
+ * which is what makes a node's choice to collapse invisible above this line.
+ */
+int profile_desc_rx_feed_long(struct profile_desc_rx *rx, const uint8_t *payload,
+			      uint8_t payload_len);
+
+/* ---------------------------------------------------------------------------
  * Data pages 0x01..0x0F
  *
  *   [0]    page number

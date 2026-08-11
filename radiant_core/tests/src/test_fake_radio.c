@@ -1392,9 +1392,11 @@ ZTEST(fake_radio, test_an_unset_configuration_is_refused)
 	zassert_equal(RADIANT_RADIO_EINVAL, radiant_radio_rx(&req, &op),
 		      "a zeroed format was accepted");
 
-	/* A PHY this build does not have. */
+	/* A PHY this build does not have. Still ENOTSUP now that the coded PHY
+	 * is a real one: the default presets advertise 1 M alone, and a backend
+	 * must refuse a PHY it was not built with rather than approximate it. */
 	fmt = fmt_hal_len_from_body;
-	fmt.phy = RADIANT_PHY_LR_GFSK;
+	fmt.phy = RADIANT_PHY_LR_CODED;
 	zassert_equal(RADIANT_RADIO_ENOTSUP, radiant_radio_rx(&req, &op),
 		      "an unsupported PHY was approximated rather than refused");
 

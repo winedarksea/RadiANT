@@ -16,6 +16,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <radiant_core/radiant_frame.h>
+
 #include "profile_bits.h"
 #include "profile_schedule.h"
 
@@ -74,6 +76,96 @@ bool profile_sched_coding_implemented(uint8_t coding)
 	 * without a further decision. */
 	return coding == PROFILE_SCHED_CODING_NONE ||
 	       coding == PROFILE_SCHED_CODING_S8;
+}
+
+/* ---------------------------------------------------------------------------
+ * The duty bound
+ * ---------------------------------------------------------------------------
+ */
+
+/* Defined below, next to the ratio it uses. Forward-declared rather than
+ * moved so that this section reads in the order the header introduces it. */
+static uint64_t counts_to_us(uint64_t counts);
+
+/*
+ * Which frame configuration a coding rate describes.
+ *
+ * THE MAPPING IS THE ONE PLACE THE PROFILE LAYER AND THE FRAME LAYER MEET, and
+ * it is a function rather than an assumption spread over two files. Uncoded is
+ * the ANT tracking geometry; S=8 is the long-range one. S=2 has no
+ * configuration because nothing builds it, so it maps to nothing and every
+ * caller below reports it as such rather than quietly budgeting it as S=8 -
+ * which would be the natural bug, since S=8 is the conservative direction for a
+ * duty bound and therefore the one that would never be noticed.
+ */
+static int coding_cfg(uint8_t coding)
+{
+	switch (coding) {
+	case PROFILE_SCHED_CODING_NONE:
+		return (int)RADIANT_FRAME_CFG_TRACKING;
+	case PROFILE_SCHED_CODING_S8:
+		return (int)RADIANT_FRAME_CFG_LR;
+	default:
+		return -1;
+	}
+}
+
+uint32_t profile_sched_frame_us(uint8_t coding, uint8_t body_len)
+{
+	int cfg = coding_cfg(coding);
+	int hdr;
+
+	if (cfg < 0) {
+		return 0u;
+	}
+	hdr = radiant_frame_hdr_len((enum radiant_frame_cfg)cfg);
+	if (hdr < 0 || (int)body_len < hdr) {
+		return 0u;
+	}
+
+	/* radiant_frame_airtime_us() is stated in payload rather than body,
+	 * because that is what a caller choosing a frame actually varies. The
+	 * header is the configuration's, so the conversion is a subtraction and
+	 * belongs here rather than in either caller. */
+	return radiant_frame_airtime_us((enum radiant_frame_cfg)cfg,
+					(uint8_t)((int)body_len - hdr));
+}
+
+int profile_sched_duty_check(uint8_t coding, uint16_t period_counts,
+			     uint8_t body_len)
+{
+	uint32_t frame_us;
+	uint64_t period_us;
+
+	frame_us = profile_sched_frame_us(coding, body_len);
+	if (frame_us == 0u) {
+		/* Either a rate nothing implements or a body the matching
+		 * format cannot carry. Both are a caller describing a frame
+		 * that will never exist, and neither is a duty question. */
+		return -EINVAL;
+	}
+
+	if (period_counts == 0u) {
+		/* Asynchronous. See the header: there is no period to take a
+		 * quarter of. */
+		return 0;
+	}
+
+	period_us = counts_to_us((uint64_t)period_counts);
+
+	/*
+	 * frame * DEN > period * NUM, rather than frame/period > NUM/DEN.
+	 * Integer division would round a frame at 25.4 % down to 25 % and pass
+	 * it, and the whole value of an encoder refusal is that it is exact at
+	 * the boundary. Both sides fit in 64 bits by a wide margin: the largest
+	 * period is 2 s and the longest frame is ~3.2 ms.
+	 */
+	if ((uint64_t)frame_us * PROFILE_SCHED_DUTY_DEN >
+	    period_us * PROFILE_SCHED_DUTY_NUM) {
+		return -EINVAL;
+	}
+
+	return 0;
 }
 
 uint32_t profile_sched_interval_counts(const struct profile_schedule *s)

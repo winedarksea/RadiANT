@@ -8,6 +8,9 @@ than remembered. The adaptive-frequency clause is checked by its own bench
 gate: a node moved to a quiet RF channel holds `loss (exact)` ≈ 0 over 300 s.
 
 - **Status:** Accepted. **Amended 2026-08-09 — extension axis 3 is withdrawn.**
+  **Amended 2026-08-11 by [ADR 0007](0007-long-range-phy.md) — axis 4 is built
+  and is LE Coded rather than lower-rate GFSK; axis 3 is partially unblocked for
+  that PHY only, and its withdrawal otherwise stands.**
   The decision itself stands; see *Amendment* immediately below.
 - **Date:** 2026-08-08
 - **Amended:** 2026-08-09
@@ -49,6 +52,29 @@ nor minimised.**
   designed against it. Anything that cited axis 3 as an available capability was
   citing a mechanism that does not exist — `../radiant-telemetry.md` did, in two
   places, and both are corrected.
+
+  > **Partially unblocked 2026-08-11 by [ADR 0007](0007-long-range-phy.md), for
+  > the long-range PHY only. THIS WITHDRAWAL STANDS.**
+  >
+  > Axis 3 asked whether a length could be *inferred from an ANT frame*, and the
+  > answer is still no and always will be: byte 3 reads 10 on a broadcast and 2
+  > on an in-slot frame for the same eight payload bytes. That is a fact about
+  > ANT and nothing changes it.
+  >
+  > ADR 0007 authors a length field in a *RadiANT-written* format, at an offset
+  > it chose, on a PHY a stock ANT receiver cannot demodulate at all. Nothing is
+  > inferred and no receiver is confused, so the two reasons for this withdrawal
+  > — no mechanism, and the cost to every merged RX window — are both absent:
+  > the mechanism is authored rather than discovered, and a coded channel could
+  > never join the merged 1 M window in the first place.
+  >
+  > The permission is stated narrowly on purpose: **length extension is
+  > permitted exactly where the PHY already makes us invisible.** Not on RadiANT
+  > device types, and not off RF 57 — a device type is a byte anyone can read
+  > and a frequency is a place anyone can tune to, and neither makes a malformed
+  > frame unheard. Whether the same authorship argument extends to a
+  > RadiANT-authored **1 M** format is a *different claim*, is explicitly open
+  > in ADR 0007, and is owed a Tier 4 capture nobody has taken.
 - **The other four axes are untouched.** New pages, new device types, a
   per-type long-range PHY and per-type adaptive frequency never depended on the
   length reading. Axis 5 in particular, which is what actually removes the last
@@ -195,12 +221,27 @@ renumbers itself:
    RX-window cost noted above was the only part of this axis that was ever
    about scheduling rather than framing, and it still applies to whatever
    mechanism eventually replaces it. Nothing replaces it today.
-4. **A long-range PHY, per device type, not in v1.** A lower-rate GFSK variant
-   on the same band, opted into per device type and marked as such in the
+4. **A long-range PHY, per device type, not in v1.** ~~A lower-rate GFSK variant
+   on the same band~~, opted into per device type and marked as such in the
    registry. ANT+ compatibility channels never change PHY, so this axis cannot
    touch a standard device by construction. The HAL accommodates it already —
    PHY is a backend/caps property, so `radiant_radio_caps` grows a supported-PHY
    list rather than needing a redesign.
+
+   > **Amended 2026-08-11 by [ADR 0007](0007-long-range-phy.md), which builds
+   > this axis.** It is **Bluetooth LE Coded at S=8**, not lower-rate GFSK. The
+   > enum reserved for it is now `RADIANT_PHY_LR_CODED` — it was
+   > `RADIANT_PHY_LR_GFSK`, keeping the same numeric value — and the registry's
+   > `LR PHY` column now carries a coding rate rather than a yes.
+   >
+   > The substitution is not a detail. Narrowing the modulation buys ~3 dB per
+   > halving of bandwidth and needs a soft-decision receiver nobody here is
+   > going to write; the coded PHY buys **~8 dB** from FEC that is already in
+   > the silicon on every part in view, for one register write. The rest of this
+   > paragraph is unchanged and turned out to be exactly right: the HAL needed a
+   > table entry and not a redesign, and compatibility channels are untouched by
+   > construction — ADR 0007 hardens that from "cannot" to "permanently
+   > excluded, not deferred".
 5. **Adaptive frequency, per device type.** The descriptor announces the node's
    RF channel; discovery and pairing stay on RF 57 so a searching receiver
    still finds every node; data lives wherever the descriptor says; and an

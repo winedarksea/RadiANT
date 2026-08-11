@@ -304,6 +304,28 @@ static struct {
 	 * high-numbered ones would never be armed at all. */
 	uint8_t cursor;
 
+	/*
+	 * The PHY the radio is currently configured for, and whether that is
+	 * known at all.
+	 *
+	 * `phy_known` is false until the first operation is armed and after
+	 * every radiant_sched_init(), and while it is false EVERY candidate is
+	 * charged the switch cost. That is the conservative direction and it is
+	 * the deliberate one: the alternative is assuming caps.phys[0], which
+	 * is right on a dongle that has only ever been on 1 M and wrong exactly
+	 * once - on the first operation after a reset that left the radio
+	 * configured for something else - which is the single hardest case here
+	 * to reproduce and the one that would produce a late window with no
+	 * counter to explain it. One over-lead on the first arm of a session
+	 * costs nothing measurable.
+	 *
+	 * Updated ONLY on a successful arm. An arm the backend refused left the
+	 * radio in whatever state it was in, and recording the PHY we hoped for
+	 * would under-lead every subsequent operation on the real one.
+	 */
+	uint8_t phy;
+	bool    phy_known;
+
 	struct radiant_sched_stats stats;
 } s;
 
@@ -458,6 +480,81 @@ static uint8_t addr_groups_with(const struct radiant_rx_filter *add,
 static radiant_time_t arm_lead(void)
 {
 	return (s.caps == NULL) ? 0u : (radiant_time_t)s.caps->min_arm_lead_us;
+}
+
+/*
+ * The EXTRA lead this candidate needs because the radio is not already
+ * configured for its PHY. Zero whenever it is, and zero on any backend that
+ * switches for free.
+ *
+ * WHY THIS IS NOT FOLDED INTO arm_lead(). min_arm_lead_us is what EVERY
+ * operation costs; this is what ONE operation costs when it follows a
+ * different one. Folding them would charge every window on a two-PHY build for
+ * a switch that happens twice a period at most, and on a dongle at ~19 % duty
+ * the gap between two tracked windows is the resource the background scan and
+ * the energy-detect map both live in. The nRF backends pay zero here and must
+ * keep paying zero: a constant added unconditionally would be invisible on the
+ * bench that ships and expensive on the one that does not.
+ *
+ * A NULL format is an energy-detect chunk, which has no format and no PHY of
+ * its own. It is charged nothing and leaves s.phy alone - see arm_ed_chunk().
+ */
+static radiant_time_t phy_lead(const struct radiant_pkt_format *fmt)
+{
+	if (s.caps == NULL || fmt == NULL || s.caps->phy_switch_us == 0u) {
+		return 0u;
+	}
+	if (s.phy_known && (uint8_t)fmt->phy == s.phy) {
+		return 0u;
+	}
+	return (radiant_time_t)s.caps->phy_switch_us;
+}
+
+/*
+ * The lead a gap must leave in front of a committed operation, when something
+ * else is going to run in that gap first.
+ *
+ * NOT phy_lead(), AND THE DIFFERENCE IS THE WHOLE BUG THIS FUNCTION EXISTS TO
+ * AVOID. phy_lead() asks "does this differ from what the radio is configured
+ * for NOW", which is the right question when the next thing armed is the
+ * committed operation itself. It is the wrong question when a background scan
+ * or an energy-detect chunk is about to run in between: by the time the
+ * committed operation is armed, the radio will be configured for whatever the
+ * gap filler left behind, not for what it is on today. A tracked long-range
+ * window preceded by a 1 M scan chunk needs the switch even when the radio is
+ * already on the coded PHY at the moment the gap is sized - and it would have
+ * been armed exactly phy_switch_us late, once per period, with nothing but a
+ * dropped frame to show for it.
+ *
+ * `after` NULL means the filler leaves the configuration alone, which is what
+ * an energy-detect chunk does.
+ */
+static radiant_time_t phy_gap(const struct radiant_pkt_format *after,
+			      const struct radiant_pkt_format *next)
+{
+	if (s.caps == NULL || next == NULL || s.caps->phy_switch_us == 0u) {
+		return 0u;
+	}
+	if (after != NULL) {
+		return ((uint8_t)after->phy == (uint8_t)next->phy)
+			       ? 0u
+			       : (radiant_time_t)s.caps->phy_switch_us;
+	}
+	return phy_lead(next);
+}
+
+/* Record what the radio is now configured for. Called only from a successful
+ * arm; see the field's comment. */
+static void phy_armed(const struct radiant_pkt_format *fmt)
+{
+	if (fmt == NULL) {
+		return;
+	}
+	if (!s.phy_known || s.phy != (uint8_t)fmt->phy) {
+		s.stats.phy_switches++;
+	}
+	s.phy = (uint8_t)fmt->phy;
+	s.phy_known = true;
 }
 
 static radiant_time_t t_max(radiant_time_t a, radiant_time_t b)
@@ -799,7 +896,15 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 		return STEP_RETRY;
 	}
 
-	open = t_max(lead->t_start, earliest);
+	/*
+	 * The window cannot open before the radio can be reconfigured for its
+	 * PHY. Applied to the LEADER only, and that is exact rather than
+	 * approximate: membership rule 1 requires pointer-equal formats, so
+	 * every member of a merged window is on the leader's PHY by
+	 * construction and there is no second switch to pay for inside one
+	 * window.
+	 */
+	open = t_max(lead->t_start, earliest + phy_lead(lead->fmt));
 	if (lead->continuous) {
 		uint32_t chunk = (lead->chunk_us != 0u) ? lead->chunk_us
 							: RADIANT_SCHED_SCAN_CHUNK_US;
@@ -952,6 +1057,7 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 	s.armed_rf = lead->rf_index;
 	s.armed_stop_on_first = (flags & RADIANT_RX_STOP_ON_FIRST) != 0u;
 	s.armed_continuous = lead->continuous;
+	phy_armed(lead->fmt);
 	s.replan = false;
 	for (i = 0u; i < s.n_members; i++) {
 		s.ch[s.members[i]].in_flight = true;
@@ -1008,6 +1114,7 @@ static enum step arm_tx_op(uint8_t ch)
 	s.armed_rf = sl->rf_index;
 	s.armed_stop_on_first = false;
 	s.armed_continuous = false;
+	phy_armed(sl->fmt);
 	s.replan = false;
 	s.n_merged = 0u;
 	s.members[0] = ch;
@@ -1261,11 +1368,18 @@ static bool want_preempt(radiant_time_t earliest)
 			continue;
 		}
 		if (sl->kind == (uint8_t)SLOT_TX) {
-			if (sl->t_start < s.armed_end + lead) {
+			/* Plus the reconfiguration it needs, so a transmit on
+			 * the other PHY displaces the live window early enough
+			 * to be armed rather than early enough to be refused.
+			 * s.phy is the armed operation's PHY, which is what the
+			 * radio will be left on when it ends - so this is the
+			 * right comparison and not an approximation of one. */
+			if (sl->t_start < s.armed_end + lead + phy_lead(sl->fmt)) {
 				return true;
 			}
 		} else if (s.armed_continuous && !sl->continuous) {
-			if (sl->t_start < s.armed_end + lead) {
+			if (sl->t_start <
+			    s.armed_end + lead + phy_lead(sl->fmt)) {
 				return true;
 			}
 		}
@@ -1321,6 +1435,7 @@ static enum step arm_next(radiant_time_t earliest)
 	radiant_time_t       scan_at = RADIANT_TIME_NEVER;
 	radiant_time_t       ed_at = RADIANT_TIME_NEVER;
 	radiant_time_t       committed;
+	const struct radiant_pkt_format *committed_fmt;
 	uint32_t         k;
 
 	for (k = 0u; k < RADIANT_SCHED_MAX_CHANNELS; k++) {
@@ -1365,12 +1480,20 @@ static enum step arm_next(radiant_time_t earliest)
 		return STEP_DONE;
 	}
 
+	/*
+	 * WHICH operation is committed, not merely when - because sizing the
+	 * gap in front of it now needs its format. A transmit breaks the tie,
+	 * which is the same rule that governs the arming order below.
+	 */
 	committed = RADIANT_TIME_NEVER;
+	committed_fmt = NULL;
 	if (tx_ch >= 0) {
 		committed = tx_at;
+		committed_fmt = s.ch[tx_ch].fmt;
 	}
-	if (rx_ch >= 0) {
-		committed = t_min(committed, rx_at);
+	if (rx_ch >= 0 && rx_at < committed) {
+		committed = rx_at;
+		committed_fmt = s.ch[rx_ch].fmt;
 	}
 
 	if (scan_ch >= 0) {
@@ -1382,7 +1505,9 @@ static enum step arm_next(radiant_time_t earliest)
 			chunk = RADIANT_SCHED_SCAN_CHUNK_US;
 		}
 		if (committed != RADIANT_TIME_NEVER) {
-			s_limit = t_back(committed, lead);
+			s_limit = t_back(committed,
+					 lead + phy_gap(s.ch[scan_ch].fmt,
+							committed_fmt));
 		}
 		if (s_limit == RADIANT_TIME_NEVER ||
 		    s_limit >= s_open + (radiant_time_t)RADIANT_SCHED_SCAN_MIN_US) {
@@ -1422,7 +1547,11 @@ static enum step arm_next(radiant_time_t earliest)
 			chunk = RADIANT_SCHED_ED_CHUNK_US;
 		}
 		if (committed != RADIANT_TIME_NEVER) {
-			e_limit = t_back(committed, lead);
+			/* NULL: an energy-detect chunk leaves the packet
+			 * configuration alone, so the switch the committed
+			 * operation needs is the one it needs from here. */
+			e_limit = t_back(committed,
+					 lead + phy_gap(NULL, committed_fmt));
 		}
 		/*
 		 * An unbounded gap - nothing committed at all - is still
@@ -1449,7 +1578,14 @@ static enum step arm_next(radiant_time_t earliest)
 		enum step  st;
 
 		if (tx_ch >= 0) {
-			limit = t_back(tx_at, lead);
+			/* The receive window is truncated so the transmit can
+			 * still be armed - and, if the two are on different
+			 * PHYs, so the radio can still be reconfigured between
+			 * them. Truncating costs the tail of a window;
+			 * overrunning costs the frame. */
+			limit = t_back(tx_at,
+				       lead + phy_gap(s.ch[rx_ch].fmt,
+						      s.ch[tx_ch].fmt));
 		}
 		if (limit == RADIANT_TIME_NEVER || limit >= rx_at) {
 			st = arm_rx_window((uint8_t)rx_ch, earliest, limit);
@@ -1520,9 +1656,23 @@ static enum step pass_step(radiant_time_t now)
 			 */
 			expired = false;
 		} else if (sl->kind == (uint8_t)SLOT_TX) {
-			/* t_sync is exact and cannot be moved. A transmit that
-			 * can no longer hit it does not go out at all. */
-			expired = sl->t_start < earliest;
+			/*
+			 * t_sync is exact and cannot be moved. A transmit that
+			 * can no longer hit it does not go out at all.
+			 *
+			 * INCLUDING THE PHY SWITCH, which is the one deadline in
+			 * this module that a receive window can absorb and a
+			 * transmit cannot. A receive window whose open has
+			 * slipped is still worth arming for the rest of its
+			 * span; a transmit that needs 500 us of reconfiguration
+			 * it does not have would be handed to the backend, be
+			 * refused RADIANT_RADIO_ETIME, and be reported through
+			 * arm_failed()'s "a backend is stricter than it
+			 * advertises" path - which would be a true statement
+			 * about the wrong thing. Reported as MISSED here, where
+			 * it is exactly what happened.
+			 */
+			expired = sl->t_start < earliest + phy_lead(sl->fmt);
 		} else {
 			/* A receive window whose open has passed is still worth
 			 * arming for the rest of its span - the window is
@@ -1890,6 +2040,15 @@ void radiant_sched_reset(void)
 	s.cursor = 0u;
 	s.dirty = false;
 	s.replan = false;
+	/*
+	 * The radio's PHY becomes unknown again, on the conservative side.
+	 * A reset is what accompanies a disable/enable pair, and a backend that
+	 * came back up in its reset configuration would leave this module
+	 * under-leading the first operation of the next session by
+	 * phy_switch_us. One over-led arm costs nothing; the other direction
+	 * costs a frame with no counter to explain it.
+	 */
+	s.phy_known = false;
 	radiant_event_crit_exit(key);
 }
 

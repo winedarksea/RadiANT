@@ -43,6 +43,11 @@
 #include <stdint.h>
 #include <string.h>
 
+/* For RADIANT_FRAME_HDR_LEN_LR, the long-range header the duty bound has to
+ * account for. The collapse packs payload bytes; the bound is on the whole
+ * body. */
+#include <radiant_core/radiant_frame.h>
+
 #include "profile_bits.h"
 #include "profile_telemetry.h"
 
@@ -887,4 +892,188 @@ int profile_command_ack_decode(const uint8_t *body, struct profile_command_ack *
 	out->value = (uint16_t)((uint16_t)body[4] | ((uint16_t)body[5] << 8));
 	out->tag = (uint16_t)((uint16_t)body[6] | ((uint16_t)body[7] << 8));
 	return 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * The descriptor-set collapse - ADR 0007
+ *
+ * Everything here is concatenation and division. That is the whole point: the
+ * frames being packed are byte-for-byte the frames a 1 M node emits one at a
+ * time, so there is no second encoding, no second wire format and no second
+ * thing to get wrong. See the header for what the collapse buys and for the
+ * arithmetic of how complete it actually is.
+ * ---------------------------------------------------------------------------
+ */
+
+uint8_t profile_desc_frames_per_body(uint8_t payload_max)
+{
+	return (uint8_t)(payload_max / PROFILE_TLM_FRAME_LEN);
+}
+
+int profile_desc_long_count(const struct profile_descriptor *d,
+			    uint8_t payload_max)
+{
+	uint8_t per;
+	uint8_t count;
+
+	if (d == NULL) {
+		return -EINVAL;
+	}
+	per = profile_desc_frames_per_body(payload_max);
+	if (per == 0u) {
+		/* A payload that cannot hold one whole descriptor frame. There
+		 * is nothing to collapse into and no partial frame is emitted,
+		 * so this is a refusal rather than a fallback to 1 M - a
+		 * silent fallback would make a node's transmission shape depend
+		 * on a number nobody looked at. */
+		return -EINVAL;
+	}
+
+	count = profile_desc_frame_count(d);
+	if (count == 0u || count > PROFILE_TLM_MAX_FRAMES) {
+		return -EINVAL;
+	}
+
+	return (int)(((uint32_t)count + per - 1u) / per);
+}
+
+int profile_desc_long_check(const struct profile_descriptor *d,
+			    uint8_t payload_max)
+{
+	uint8_t per;
+	uint8_t count;
+	uint8_t longest;
+	int     n;
+
+	n = profile_desc_long_count(d, payload_max);
+	if (n < 0) {
+		return n;
+	}
+
+	/*
+	 * A COLLAPSED SET IS ONLY MEANINGFUL ON THE CODED PHY, and the
+	 * descriptor has to say so. The length extension is permitted exactly
+	 * where the PHY makes this node invisible to a stock receiver (ADR
+	 * 0007); a node claiming 1 M and emitting a 32-byte body would be
+	 * putting a frame on RF 57 in the ANT+ network address that no ANT
+	 * receiver can parse and every ANT receiver will try to. That is the
+	 * one thing this whole phase promises not to do, so it is refused here
+	 * rather than left to a caller to remember.
+	 */
+	if ((d->flags & PROFILE_TLM_FLAG_LR_PHY) == 0u) {
+		return -EINVAL;
+	}
+	if (!d->has_schedule) {
+		/* The LR bit and the coding rate must agree, and the rate lives
+		 * in the schedule block - so an LR node without one has
+		 * announced a PHY and no way to say how long its frames take.
+		 * profile_sched_check() enforces the same pairing from the
+		 * other side. */
+		return -EINVAL;
+	}
+
+	per = profile_desc_frames_per_body(payload_max);
+	count = profile_desc_frame_count(d);
+
+	/*
+	 * The LONGEST body this set will emit, which is a full one whenever
+	 * there is more than one transmission and the remainder otherwise.
+	 * Bounding on the longest rather than on the average is the only
+	 * defensible reading of a duty rule: the node has to be able to afford
+	 * every frame it sends, not its mean frame.
+	 */
+	longest = (count >= per) ? per : count;
+	longest = (uint8_t)(longest * PROFILE_TLM_FRAME_LEN);
+
+	return profile_sched_duty_check(d->schedule.coding, d->period,
+					(uint8_t)(longest +
+						  RADIANT_FRAME_HDR_LEN_LR));
+}
+
+int profile_desc_long_payload(const struct profile_descriptor *d,
+			      const uint8_t *frames, uint8_t n_frames,
+			      uint8_t payload_max, uint8_t index, uint8_t *out,
+			      size_t out_len)
+{
+	uint8_t per;
+	uint8_t first;
+	uint8_t n;
+	int     bodies;
+	int     rc;
+
+	if (d == NULL || frames == NULL || out == NULL) {
+		return -EINVAL;
+	}
+	if (n_frames == 0u || n_frames > PROFILE_TLM_MAX_FRAMES) {
+		return -EINVAL;
+	}
+	/* The caller's frame count and the descriptor's must agree, or the
+	 * bytes being packed are not this descriptor's set. */
+	if (n_frames != profile_desc_frame_count(d)) {
+		return -EINVAL;
+	}
+
+	rc = profile_desc_long_check(d, payload_max);
+	if (rc != 0) {
+		return rc;
+	}
+
+	bodies = profile_desc_long_count(d, payload_max);
+	if (bodies < 0) {
+		return bodies;
+	}
+	if ((int)index >= bodies) {
+		return -EINVAL;
+	}
+
+	per = profile_desc_frames_per_body(payload_max);
+	first = (uint8_t)(index * per);
+	n = (uint8_t)(n_frames - first);
+	if (n > per) {
+		n = per;
+	}
+
+	if (out_len < (size_t)n * PROFILE_TLM_FRAME_LEN) {
+		return -ENOSPC;
+	}
+
+	memcpy(out, &frames[(size_t)first * PROFILE_TLM_FRAME_LEN],
+	       (size_t)n * PROFILE_TLM_FRAME_LEN);
+
+	return (int)((uint32_t)n * PROFILE_TLM_FRAME_LEN);
+}
+
+int profile_desc_rx_feed_long(struct profile_desc_rx *rx, const uint8_t *payload,
+			      uint8_t payload_len)
+{
+	uint8_t i;
+	int     rc = 0;
+
+	if (rx == NULL || payload == NULL) {
+		return -EINVAL;
+	}
+	/*
+	 * A WHOLE NUMBER OF FRAMES OR NOTHING. The packer never emits a partial
+	 * frame, so a payload that is not a multiple of eight did not come from
+	 * one - it is a different page, a truncated frame, or a length byte
+	 * that survived the CRC while being wrong. Feeding the first floor(n/8)
+	 * frames and discarding the tail would accept exactly the corrupted
+	 * cases while looking like robustness.
+	 */
+	if (payload_len == 0u ||
+	    (payload_len % PROFILE_TLM_FRAME_LEN) != 0u) {
+		return -EPROTO;
+	}
+
+	for (i = 0u; i < payload_len / PROFILE_TLM_FRAME_LEN; i++) {
+		rc = profile_desc_rx_feed(
+			rx, &payload[(size_t)i * PROFILE_TLM_FRAME_LEN]);
+		if (rc < 0) {
+			return rc;
+		}
+	}
+
+	/* The last chunk's verdict is the set's verdict: feeding is ordered and
+	 * completeness is monotonic within one payload. */
+	return rc;
 }

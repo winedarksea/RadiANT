@@ -189,7 +189,10 @@ has been designed out.
 5. **PHY is a compile-time backend property, selected — not configured — at run
    time.** RAIL's PHY comes out of a generated blob and its parameters cannot be
    set at run time; a backend therefore advertises the PHYs it was built with
-   and rejects any other. Adding the Phase 7 long-range axis grows that list.
+   and rejects any other. Adding the long-range coded axis
+   ([ADR 0007](decisions/0007-long-range-phy.md)) grew that list and nothing
+   else — which is the claim this rule was written to make, now tested rather
+   than predicted.
 6. **Radio configuration is per-operation, never global state.** Every arm call
    carries its own `struct radiant_pkt_format`. The reason is concrete rather than
    aesthetic: tracking/TX and wildcard search need genuinely different packet

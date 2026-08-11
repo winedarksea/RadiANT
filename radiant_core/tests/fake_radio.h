@@ -513,6 +513,21 @@ void fake_radio_caps_preset_rail(void);
 /* phys must have static storage duration: caps holds the pointer. */
 void fake_radio_set_phys(const enum radiant_phy *phys, uint8_t n_phys);
 
+/*
+ * A ready-made two-PHY list, since every suite that wants one wants the same
+ * one: 1 M first, as caps.phys requires of any backend claiming ANT+
+ * compatibility, then the coded PHY.
+ *
+ * BOTH PRESETS STILL DEFAULT TO 1 M ALONE. Combine this with
+ * fake_radio_caps_preset_rail() to get a backend that has two PHYs AND a
+ * non-zero phy_switch_us, which is the configuration radiant_sched.c's PHY
+ * budgeting is actually exercised on - the nRF preset switches for free, so it
+ * cannot tell a scheduler that budgets correctly from one that does not budget
+ * at all.
+ */
+extern const enum radiant_phy fake_phys_1m_lr[];
+extern const uint8_t          fake_phys_1m_lr_count;
+
 /* ---------------------------------------------------------------------------
  * Putting frames on the air
  * ---------------------------------------------------------------------------

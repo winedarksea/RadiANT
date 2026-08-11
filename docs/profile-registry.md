@@ -127,29 +127,43 @@ serial has not changed identity; it has added a field.
 Two columns exist because they are the things a *consumer* of a device type has
 to know before it opens a channel, and neither is visible from the frame:
 
-- **LR PHY** — the type uses the RadiANT long-range GFSK variant. A long-range
-  channel cannot share the merged RF 57 RX window, so every one of them splits
-  the receiver's radio schedule the way a separate network would have. This is
-  why it is a per-type opt-in and not a mode.
+- **LR PHY** — the type uses the RadiANT long-range PHY: **Bluetooth LE Coded**,
+  with the coding rate named in the cell. A long-range channel cannot share the
+  merged RF 57 RX window, so every one of them splits the receiver's radio
+  schedule the way a separate network would have. This is why it is a per-type
+  opt-in and not a mode. See [ADR 0007](decisions/0007-long-range-phy.md).
 - **Adaptive freq** — the type's nodes may operate off RF 57. Discovery and
   pairing stay on RF 57 so a searching receiver still finds every node, but
   data lives wherever the node's descriptor says. Same window-splitting cost.
 
-Values are `no`, `yes`, or `per-node` (the node announces it in a descriptor,
-so a consumer must be prepared for either). A consumer reading `no` in both
-columns knows the type is on the merged RF 57 window and costs nothing extra.
+**`Adaptive freq`** is `no`, `yes`, or `per-node` (the node announces it in a
+descriptor, so a consumer must be prepared for either).
 
-**`yes` alone will not be enough for `LR PHY`, and the vocabulary that replaces
-it is already defined.** A consumer cannot budget a receive window from "long
-range" — at eight bytes an S=8 frame is ~1.23 ms against ~150 µs at 1 M — so the
-coding rate is carried in the descriptor's schedule block from now on:
-`0` uncoded (1 M), `1` LE Coded S=8, `2` LE Coded S=2 (defined, deliberately not
-implemented), `3..7` reserved. See `docs/radiant-telemetry.md` section 6, and
-`TLM_CODING_*` in `tools/ant_pages.py` / `enum profile_sched_coding` in
-`src/profiles/profile_schedule.h`, which are the one vocabulary. The phase that
-builds the coded PHY takes this column from `no`/`yes`/`per-node` to a rate
-using those same names; defining them here first is what stops that from being a
-second break for anyone who had already adopted the first.
+**`LR PHY` carries a coding rate, not a yes.** The previous line of this
+document predicted that `yes` would not be enough and named the vocabulary that
+would replace it; ADR 0007 built the PHY and this is that replacement, using
+those same names rather than a second set:
+
+| Cell | Meaning |
+|---|---|
+| `no` | 1 M GFSK only. Every ANT+ compatibility type, permanently. |
+| `s8` | LE Coded S=8, 125 kbit/s. The one rate this project implements. |
+| `s2` | LE Coded S=2, 500 kbit/s. Defined in the vocabulary, deliberately **not** implemented — no build will transmit it. |
+| `per-node` | The node announces its rate in the descriptor's schedule block; a consumer must read it before budgeting a window. |
+
+The reason the cell is not `yes` is that a consumer cannot size a receive window
+from "long range": at eight bytes an S=8 frame is ~1.3 ms against ~150 µs at
+1 M, which is the difference between a slot that fits and one that does not.
+
+On the wire the same vocabulary is three bits in the schedule block — `0`
+uncoded (1 M), `1` LE Coded S=8, `2` LE Coded S=2, `3..7` reserved — see
+`docs/radiant-telemetry.md` section 6, `TLM_CODING_*` in `tools/ant_pages.py`
+and `enum profile_sched_coding` in `src/profiles/profile_schedule.h`. Those are
+one vocabulary and not three, and `scripts/check_profile_registry.py` enforces
+the column against it.
+
+A consumer reading `no` in both columns knows the type is on the merged RF 57
+window and costs nothing extra.
 
 ---
 
@@ -161,7 +175,7 @@ second break for anyone who had already adopted the first.
 |---|---|---|---|---|---|---|---|---|
 | `0x0B` | Bicycle Power | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8182 | no | no | Implemented in `tools/ant_pages.py`; byte-exact to Garmin's profile |
 | `0x11` | Fitness Equipment (FE-C) | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | — | no | no | Compatibility target; not yet implemented in `tools/ant_pages.py`, so no period is recorded rather than a guessed one |
-| `0x60` | RadiANT Generic Telemetry | radiant | RadiANT project | 2026-08-08 | per-node | no | per-node | The envelope in `docs/radiant-telemetry.md`; period is announced in descriptor frame 0. Implemented in `src/profiles/` and mirrored in `tools/ant_pages.py` |
+| `0x60` | RadiANT Generic Telemetry | radiant | RadiANT project | 2026-08-08 | per-node | per-node | per-node | The envelope in `docs/radiant-telemetry.md`; period is announced in descriptor frame 0. Implemented in `src/profiles/` and mirrored in `tools/ant_pages.py`. `LR PHY` is `per-node` from ADR 0007: a `0x60` node may run LE Coded S=8, and announces the rate in its schedule block. A node that switched to private mode is exactly this type |
 | `0x78` | Heart Rate | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8070 | no | no | Implemented in `tools/ant_pages.py`; pages `0x00`-`0x04`. Half and quarter rates below. **Byte 0 bit 7 is a page-change toggle, so page numbers here are 7-bit** |
 | `0x79` | Bike Speed and Cadence, combined | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8086 | no | no | Implemented in `tools/ant_pages.py`. **No page-number byte** |
 | `0x7A` | Bike Cadence | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8102 | no | no | Period defined in `tools/ant_pages.py`; pages not implemented there |

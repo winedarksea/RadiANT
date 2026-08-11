@@ -88,7 +88,26 @@ PAGEMAP_COLUMNS = ["page", "name", "summary"]
 ANT_PLUS_COLUMNS = ["type", "name", "period", "implemented in tools/ant_pages.py"]
 
 STATUS_VALUES = {"radiant", "third-party", "ant-plus-reserved"}
+
+# `Adaptive freq` keeps the plain three-value opt-in: a type is on RF 57, it is
+# not, or its nodes each say. There is nothing to budget from the answer.
 OPT_IN_VALUES = {"no", "yes", "per-node"}
+
+# `LR PHY` does NOT, and the split is ADR 0007's.
+#
+# A consumer cannot size a receive window from "yes": at eight bytes an S=8
+# frame is ~1.3 ms against ~150 us at 1 M, which is the difference between a
+# slot that fits and one that does not. So the column carries a CODING RATE, in
+# the vocabulary RF-5a defined ahead of time for exactly this moment - the same
+# names as `enum profile_sched_coding` in src/profiles/profile_schedule.h and
+# `TLM_CODING_*` in tools/ant_pages.py, which are one vocabulary and not three.
+#
+# `yes` IS DELIBERATELY GONE rather than accepted as a synonym. It is the value
+# that cannot be budgeted from, so keeping it would preserve exactly the defect
+# the split exists to remove - and no row has ever used it, so nothing breaks.
+# `s2` is listed because the vocabulary defines it; no build implements it, and
+# a row claiming it would be a type nothing can talk to.
+LR_PHY_VALUES = {"no", "s8", "s2", "per-node"}
 
 # The page range docs/radiant-security.md depends on staying free. Reserving it
 # costs nothing today and is a format break for every deployed node later.
@@ -306,10 +325,20 @@ def check_device_types(path, header, rows, problems) -> dict:
                              "period %r is not 1..65535 counts of 1/32768 s, "
                              "'per-node', or unrecorded" % period)
 
-        for column in ("lr phy", "adaptive freq"):
-            if row.get(column).lower() not in OPT_IN_VALUES:
-                problems.add(path, row.line, "column '%s' is %r, not one of %s"
-                             % (column, row.get(column), sorted(OPT_IN_VALUES)))
+        # Two columns, two vocabularies, two checks. They shared one loop while
+        # both were plain opt-ins; ADR 0007 made 'lr phy' carry a coding rate,
+        # and a shared value set would have quietly accepted 's8' for
+        # 'adaptive freq' as well.
+        if row.get("lr phy").lower() not in LR_PHY_VALUES:
+            problems.add(path, row.line,
+                         "column 'lr phy' is %r, not one of %s - it carries a "
+                         "coding rate now, not yes/no (ADR 0007)"
+                         % (row.get("lr phy"), sorted(LR_PHY_VALUES)))
+
+        if row.get("adaptive freq").lower() not in OPT_IN_VALUES:
+            problems.add(path, row.line, "column '%s' is %r, not one of %s"
+                         % ("adaptive freq", row.get("adaptive freq"),
+                            sorted(OPT_IN_VALUES)))
 
     return seen
 

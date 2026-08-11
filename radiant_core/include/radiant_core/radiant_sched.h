@@ -508,6 +508,23 @@ struct radiant_sched_stats {
 				     * disagree about what the hardware can match
 				     * - which is a bug in one of them and not a
 				     * property of the traffic */
+	uint32_t phy_switches;      /* operations armed on a PHY the radio was
+				     * not already configured for, and therefore
+				     * charged caps.phy_switch_us of extra arm
+				     * lead.
+				     *
+				     * WORTH COUNTING BECAUSE THE COST IS PER
+				     * SWITCH AND NOT PER FRAME. A dongle holding
+				     * one long-range channel among thirty-one
+				     * 1 M ones pays this on every long-range
+				     * window AND on the first 1 M window after
+				     * each - twice per period, not once - and
+				     * that is the number that says whether
+				     * mixing PHYs on one radio is affordable
+				     * before anybody reads a loss figure. On a
+				     * backend with phy_switch_us == 0, which is
+				     * both nRF builds, it counts switches that
+				     * cost nothing and stays honest anyway. */
 };
 
 /* ---------------------------------------------------------------------------

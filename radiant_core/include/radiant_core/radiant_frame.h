@@ -288,17 +288,27 @@ enum radiant_frame_cfg {
 	 * three matched bytes is the shortest address the hardware will take
 	 * and the channel ID then has to be readable out of RAM. */
 	RADIANT_FRAME_CFG_SEARCH = 1,
+	/*
+	 * 4-byte address, 4-byte header, LENGTH-FROM-BODY, on the coded PHY.
+	 * The only configuration here that is not ANT and the only one that is
+	 * not eight payload bytes. See "The long-range configuration" below;
+	 * ADR 0007 is the decision.
+	 */
+	RADIANT_FRAME_CFG_LR = 2,
 	RADIANT_FRAME_CFG_COUNT
 };
 
 #define RADIANT_FRAME_ADDR_LEN_TRACKING 5u
 #define RADIANT_FRAME_ADDR_LEN_SEARCH   3u
+#define RADIANT_FRAME_ADDR_LEN_LR       4u
 #define RADIANT_FRAME_ADDR_MAX          5u
 
 /* Body bytes ahead of the payload: [ttype][ctrl] in tracking,
- * [dnhi][dtype][ttype][ctrl] in search. */
+ * [dnhi][dtype][ttype][ctrl] in search, [len][dtype][ttype][ctrl] on
+ * long range. */
 #define RADIANT_FRAME_HDR_LEN_TRACKING  2u
 #define RADIANT_FRAME_HDR_LEN_SEARCH    4u
+#define RADIANT_FRAME_HDR_LEN_LR        4u
 
 /*
  * Payload bytes. 8 is every frame anyone has ever measured - Spike A's 2,164,
@@ -316,11 +326,127 @@ enum radiant_frame_cfg {
 #define RADIANT_FRAME_PAYLOAD_STD 8u
 #define RADIANT_FRAME_PAYLOAD_MAX 24u
 
-/* Longest body either configuration can produce: search header plus the
+/* Longest body either ANT configuration can produce: search header plus the
  * largest payload. Stays inside the HAL's advisory RADIANT_RADIO_BODY_MAX. */
 #define RADIANT_FRAME_BODY_MAX (RADIANT_FRAME_HDR_LEN_SEARCH + RADIANT_FRAME_PAYLOAD_MAX)
 
 #define RADIANT_FRAME_CRC_BYTES 2u
+
+/* ---------------------------------------------------------------------------
+ * The long-range configuration - ADR 0007
+ *
+ * The first format in this project with a real length field, and the first
+ * that is not ANT. Both facts are the same decision.
+ *
+ * WHY A LENGTH IS ALLOWED HERE WHEN ADR 0005 AXIS 3 WITHDREW ONE. Axis 3 asked
+ * whether a length could be INFERRED from an ANT frame, and the answer is no
+ * and always will be: byte 3 is a control byte reading 10 on a broadcast and 2
+ * on an in-slot frame for the same eight payload bytes. That is a fact about
+ * ANT. This length byte is not inferred from anything - it is written by this
+ * project, at an offset this project chose, in a format this project authored,
+ * on a PHY a stock ANT receiver cannot demodulate at all. There is no byte
+ * here being reinterpreted and no receiver being confused.
+ *
+ * The isolation is PHYSICAL and therefore strictly stronger than the fresh
+ * network address ADR 0005's revisit trigger asked for: a stock receiver
+ * listening on A6 C5 at 1 M does not fail to parse a coded frame, it does not
+ * see one. That, and not the length field, is the load-bearing part of the
+ * argument - which is why ADR 0007's rule is stated as "length extension is
+ * permitted exactly where the PHY already makes us invisible" rather than as a
+ * permission to lengthen frames.
+ *
+ *   address 4 bytes  [A6 C5 dnlo dnhi]        - BALEN=3 plus one prefix byte
+ *   body           [len][dtype][ttype][ctrl][payload ...]
+ *
+ * FOUR ADDRESS BYTES, NOT FIVE, AND THE DEVICE TYPE MOVES INTO THE BODY. Four
+ * is what the nRF matcher expresses as BALEN=3 plus a prefix, it is one more
+ * than search's three - so fewer false triggers, and the three-byte matcher's
+ * measured 19-27 noise matches per 15 s window is the reason that matters -
+ * and it is what the coded PHY's fixed 32-bit access address is anyway. The
+ * device type cannot stay in the address at four bytes, so it goes to the
+ * front of the body, exactly as search moves what its shorter address dropped.
+ *
+ * THE LENGTH BYTE COUNTS EVERYTHING AFTER ITSELF, which is the nRF RADIO's own
+ * convention (PCNF0.LFLEN=8 with S0LEN=S1LEN=0: the register's LENGTH is the
+ * number of bytes DMA'd after the length field) and therefore needs no
+ * translation in the backend. The HAL's body is the length byte plus those
+ * bytes, so body_len = body[0] + 1 - which is what len_bias exists for and is
+ * the first use it has ever had.
+ * ---------------------------------------------------------------------------
+ */
+
+/* body[0] is the length; body_len = body[0] + RADIANT_FRAME_LR_LEN_BIAS. */
+#define RADIANT_FRAME_LR_LEN_OFFSET 0u
+#define RADIANT_FRAME_LR_LEN_BIAS   1
+
+/*
+ * The longest payload a long-range frame may carry, and it is a BUFFER bound
+ * rather than a licence to fill it.
+ *
+ * At S=8 every payload byte is 64 us of radio-on time and they compound: a
+ * full 40-byte body is about 3.2 ms, which is 1.3 % duty at 4 Hz and 0.16 % at
+ * 0.5 Hz. What actually stops a node from spending its battery here is the duty
+ * rule - a frame must stay under 25 % of its channel period at its announced
+ * rate - enforced by profile_sched_duty_check() at the encoder rather than by
+ * any constant in this header. That bound binds only a node with BOTH a long
+ * frame and a fast period, which is the correct shape: it costs a 0.5 Hz asset
+ * tag nothing and refuses a 4 Hz node that wants a 40-byte frame.
+ */
+#define RADIANT_FRAME_PAYLOAD_LR_MAX 36u
+
+/*
+ * The long-range format's max_body_len, and the number RADIANT_RADIO_BODY_MAX
+ * was raised from 32 to accommodate.
+ */
+#define RADIANT_FRAME_LR_BODY_MAX \
+	(RADIANT_FRAME_HDR_LEN_LR + RADIANT_FRAME_PAYLOAD_LR_MAX)
+
+/*
+ * Compose a long-range body. Returns the body length written, or
+ * RADIANT_FRAME_EINVAL / RADIANT_FRAME_ETRUNC.
+ *
+ * DELIBERATELY NOT radiant_frame_encode(). struct radiant_frame carries a
+ * 24-byte payload buffer sized for ANT's advanced burst and a control byte
+ * whose eleven measured values are an ANT fact; routing a 36-byte
+ * RadiANT-authored payload through it would have meant widening an ANT
+ * structure, loosening the checks in radiant_frame_make() that keep the other
+ * 245 control bytes off the air, and moving two pinned assertions about ANT
+ * geometry - all so that two formats with nothing in common could share one
+ * function. These take the channel ID and the bytes directly instead.
+ *
+ * The control byte is passed through with only its bits 2:0 checked, on the
+ * same terms radiant_frame_encode() carries one: this is a RadiANT-authored
+ * format and the caller above it decides what the byte means.
+ */
+int radiant_frame_lr_body(const struct radiant_channel_id *id, uint8_t ctrl_byte,
+			  const uint8_t *payload, uint8_t payload_len,
+			  uint8_t *out, size_t out_len);
+
+/*
+ * The inverse, over a body as it came off the air. `payload` is set to point
+ * INTO `body` - no copy - so it is valid exactly as long as body is.
+ *
+ * The length byte is checked against the delivered body_len rather than
+ * trusted: a backend that mis-programmed MAXLEN, or a frame whose length byte
+ * was corrupted inside the CRC's blind spot, must not become a read past the
+ * end of a DMA buffer. RADIANT_FRAME_ETRUNC when they disagree.
+ */
+int radiant_frame_lr_parse(const uint8_t *body, uint8_t body_len,
+			   struct radiant_channel_id *id, uint8_t *ctrl_byte,
+			   const uint8_t **payload, uint8_t *payload_len);
+
+/*
+ * Airtime of one frame in this configuration, in microseconds, for a given
+ * payload length. Exact integer arithmetic; see radiant_frame.c for the
+ * derivation and for the FEC-block table it reproduces.
+ *
+ * It lives here rather than in a backend because it is a property of the
+ * format and the PHY, both of which are stated here, and because the duty
+ * bound and the scheduler both need it without either one being allowed to
+ * know which backend is underneath. Returns 0 for an unknown configuration or
+ * an over-long payload.
+ */
+uint32_t radiant_frame_airtime_us(enum radiant_frame_cfg cfg, uint8_t payload_len);
 
 /* ---------------------------------------------------------------------------
  * The control byte - byte 3 of the body, and what Spike B is about
@@ -591,9 +717,15 @@ int radiant_frame_covered_len(enum radiant_frame_cfg cfg, uint8_t payload_len);
  * radiant_ack.c and radiant_burst.c need.
  *
  * The cost is honest and is the same one search already carried: a payload
- * other than 8 bytes is not receivable under either format and would need one
- * of its own. Nothing has ever put such a frame on the air. Returns NULL for
- * an unknown configuration.
+ * other than 8 bytes is not receivable under either ANT format and needs one
+ * of its own. Nothing has ever put such an ANT frame on the air.
+ *
+ * RADIANT_FRAME_CFG_LR is that format of its own, and it is the exception to
+ * every sentence above: RADIANT_LEN_FROM_BODY, a 4-byte address, a payload
+ * from 0 to RADIANT_FRAME_PAYLOAD_LR_MAX, and RADIANT_PHY_LR_CODED. A backend
+ * built without the coded PHY must refuse it with RADIANT_RADIO_ENOTSUP, which
+ * is the existing rule and needed no new one. Returns NULL for an unknown
+ * configuration.
  */
 const struct radiant_pkt_format *radiant_frame_format(enum radiant_frame_cfg cfg);
 

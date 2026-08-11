@@ -48,7 +48,8 @@
  *      run time. RAIL's PHY comes out of a generated blob and its parameters
  *      cannot be set at run time; a backend therefore advertises the PHYs it
  *      was built with (struct radiant_radio_caps) and rejects any other. Adding the
- *      Phase 7 long-range axis grows that list. It is not a redesign.
+ *      long-range coded axis grew that list and nothing else, which is the
+ *      claim this rule was written to make and the one Phase 6 tested.
  *
  *   6. Radio configuration is per-operation, never global state. Every arm call
  *      carries its own struct radiant_pkt_format. The reason is concrete rather
@@ -156,18 +157,37 @@ struct radiant_tx_power {
  *
  * Compile-time property of the backend build, selected per operation from the
  * set the backend advertises. RADIANT_PHY_1M_GFSK is the only one an ANT+
- * compatibility channel may ever use; the long-range entry is reserved for the
- * Phase 7 per-device-type opt-in and is listed here so that adding it later
- * touches a table rather than an interface.
+ * compatibility channel may ever use; the long-range entry is the
+ * per-device-type opt-in that ADR 0007 defines, and it is listed here so that
+ * adding it touched a table rather than an interface. It did.
  * ---------------------------------------------------------------------------
  */
 enum radiant_phy {
 	/* 1 Mbps GFSK, ANT-compatible deviation. The ANT+ PHY. */
 	RADIANT_PHY_1M_GFSK = 0,
-	/* Reserved: lower-rate GFSK for RadiANT-only device types (Phase 7).
-	 * A backend that was not built with it must reject it, not approximate it.
+	/*
+	 * LE Coded PHY at S=8: 125 kbit/s, convolutional FEC and pattern
+	 * mapping done in hardware. ~8 dB over 1 M, which is the largest
+	 * sensitivity lever available in software.
+	 *
+	 * IT WAS CALLED RADIANT_PHY_LR_GFSK AND THAT NAME WAS WRONG IN BOTH
+	 * HALVES. "GFSK" said plain low-rate FSK, which buys roughly the ~3 dB
+	 * that halving the bandwidth is worth and needs a soft-decision
+	 * receiver nobody is going to write; the coded PHY buys ~8 dB for a
+	 * register write, because the FEC is in the same silicon that already
+	 * ships in every BLE part on this bench. "Phase 7" named the wrong
+	 * phase under an older numbering - ADR 0007 and RF Phase 6 are this.
+	 * The numeric value is unchanged, deliberately: it has never been on
+	 * the air and never been stored, so the rename costs nothing, and
+	 * changing the value as well would have been a gratuitous chance to be
+	 * wrong.
+	 *
+	 * A backend that was not built with it must reject it, not approximate
+	 * it. Approximating this one is not a degraded link - a 1 M receiver
+	 * cannot demodulate a coded frame at all, which is precisely the
+	 * physical invisibility ADR 0007's length extension rests on.
 	 */
-	RADIANT_PHY_LR_GFSK = 1,
+	RADIANT_PHY_LR_CODED = 1,
 	RADIANT_PHY_COUNT
 };
 
@@ -207,15 +227,38 @@ struct radiant_crc_cfg {
 
 /*
  * Advisory ceiling for statically sized body buffers in the core. The real
- * limit is caps.max_body_len. Sized for the largest frame currently foreseen:
- * an advanced-burst body in ANT's tracking geometry, which is transmission
- * type + control byte + 24 payload = 26. There is NO length byte anywhere in
- * an ANT frame - byte 3 is six independent flag fields
- * (docs/spike-b-part2-results.md) - and an earlier version of this line said
- * otherwise. No frame with a payload other than 8 bytes has ever been captured
- * on this bench, so 26 is a ceiling rather than a measurement.
+ * limit is caps.max_body_len.
+ *
+ * It was 32, sized for the largest ANT frame foreseen: an advanced-burst body
+ * in ANT's tracking geometry, transmission type + control byte + 24 payload =
+ * 26. There is NO length byte anywhere in an ANT frame - byte 3 is six
+ * independent flag fields (docs/spike-b-part2-results.md) - and an earlier
+ * version of this line said otherwise. No frame with a payload other than 8
+ * bytes has ever been captured on this bench, so 26 was a ceiling rather than a
+ * measurement, and 32 was the round number above it.
+ *
+ * IT IS NOW 40, AND THE REASON IS RECORDED HERE BECAUSE A RAISED BUFFER
+ * CEILING IS OTHERWISE INDISTINGUISHABLE FROM SLOPPINESS. ADR 0007 authors a
+ * long-range frame format with a real length field, which is the first format
+ * in this project that may carry a payload other than eight bytes. 40 is that
+ * format's max_body_len: a 4-byte header - [length][device type][transmission
+ * type][control] - plus 36 payload bytes.
+ *
+ * NOTHING ANT-SHAPED GOT LONGER. Both 1 M formats are still static-length at
+ * 10 and 12 body bytes, and the ANT+ compatibility channels are excluded from
+ * the long-range PHY permanently rather than temporarily (ADR 0007). This
+ * constant grew because a RadiANT-only format that a stock receiver cannot
+ * demodulate at all was added beside them, not because anything about ANT was
+ * re-read.
+ *
+ * THE COST IS REAL AND IS NOT THE BUFFER. Eight bytes of static RAM in each of
+ * a backend's two DMA buffers is nothing; at S=8 each of those bytes is 64 us
+ * of radio-on time and they compound. What actually bounds a node is the duty
+ * rule in ADR 0007 - a frame must stay under 25 % of its channel period at its
+ * announced rate - which profile_sched_duty_check() enforces at the encoder.
+ * This number is a buffer ceiling and must never be read as a licence.
  */
-#define RADIANT_RADIO_BODY_MAX 32
+#define RADIANT_RADIO_BODY_MAX 40
 
 enum radiant_len_mode {
 	/* Every frame in this format has exactly fmt->body_len body bytes. */
@@ -239,10 +282,20 @@ enum radiant_len_mode {
 	 * broadcast-only receiver that silently drops every acknowledged and
 	 * burst frame.
 	 *
-	 * The mode stays because it is a real capability of real radios and
-	 * some future format may want it. It is exercised by
-	 * fmt_hal_len_from_body in radiant_core/tests/src/test_fake_radio.c, which
-	 * is labelled at length for exactly this reason.
+	 * THE SENTENCE ABOVE IS ABOUT ANT AND STAYS TRUE. What changed is that
+	 * there is now a format here that is not ANT.
+	 *
+	 * The mode used to end "the mode stays because it is a real capability
+	 * of real radios and some future format may want it", exercised only by
+	 * fmt_hal_len_from_body in radiant_core/tests/src/test_fake_radio.c.
+	 * RADIANT_FRAME_CFG_LR is that future format, and the distinction ADR
+	 * 0007 turns on is AUTHORSHIP: axis 3 of ADR 0005 was withdrawn because
+	 * no length can be INFERRED from an ANT frame, which is a fact about
+	 * ANT. This format's length byte is written by this project, at an
+	 * offset this project chose, on a PHY no stock receiver can demodulate -
+	 * so there is nothing to infer and nobody to confuse. The
+	 * PCNF0.LFLEN=8 defect is not available here, because there is no
+	 * pre-existing byte at that offset to misread.
 	 */
 	RADIANT_LEN_FROM_BODY = 1
 };
@@ -816,12 +869,30 @@ struct radiant_radio_caps {
 
 	/* PHYs this build supports, most-preferred first. n_phys is always >= 1
 	 * and phys[0] is RADIANT_PHY_1M_GFSK on any backend claiming ANT+
-	 * compatibility. The Phase 7 long-range axis appends to this list. */
+	 * compatibility. RADIANT_PHY_LR_CODED appends to this list. */
 	const enum radiant_phy *phys;
 	uint8_t             n_phys;
-	/* Cost of switching between two of the above between operations. Zero
+	/*
+	 * Cost of switching between two of the above between operations. Zero
 	 * where a PHY switch is free; non-zero where it means reloading a
-	 * generated configuration, which the scheduler must budget for. */
+	 * generated configuration, which the scheduler must budget for.
+	 *
+	 * IT IS A SCHEDULING COST, NOT AN AIRTIME ONE, and radiant_sched.c
+	 * spends it as extra arm lead on the first operation after a change of
+	 * PHY - never on an operation that stays on the PHY the radio is
+	 * already configured for. That distinction is the whole of why this is
+	 * a separate field from min_arm_lead_us: folding it in would charge
+	 * every window on a two-PHY build for a switch that almost never
+	 * happens, and on a dongle at ~19 % duty that is a real loss of
+	 * schedulable gap for a cost that is paid a handful of times a second
+	 * at most.
+	 *
+	 * It stayed zero and unread from the day it was written until the coded
+	 * PHY existed to switch to, which is exactly the shape of field that
+	 * turns out to be wrong the first time it is used - so the scheduler's
+	 * budgeting of it is asserted directly rather than inferred from a
+	 * window that happened to land.
+	 */
 	uint16_t phy_switch_us;
 
 	/* Transmitter ramp-up, measured antenna-referenced. */

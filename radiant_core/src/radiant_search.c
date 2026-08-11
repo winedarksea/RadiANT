@@ -230,6 +230,33 @@ int radiant_search_init(struct radiant_search *s, const struct radiant_search_cf
 		return RADIANT_SEARCH_EINVAL;
 	}
 
+	/*
+	 * DISCOVERY IS RADIANT_FRAME_CFG_SEARCH AND NOTHING ELSE, PERMANENTLY.
+	 *
+	 * There are three formats now, and this is the one line that decides
+	 * which of them a searching receiver listens on. It stays search - 1 M
+	 * GFSK, three address bytes, RF 57 from cfg.rf_index's default - and
+	 * ADR 0007 makes that a rule rather than a default:
+	 *
+	 *   A long-range node is found by its 1 M descriptor or by the sync
+	 *   handoff, never by sweeping the coded PHY.
+	 *
+	 * The reason is the sweep's guarantee. This module covers all 256
+	 * values of devnum_lo in n_sets windows and is therefore CERTAIN to
+	 * find any transmitting device within one sweep - a property seven
+	 * tests in test_search.c defend by name. A second PHY does not add
+	 * windows to that sweep, it MULTIPLIES it: every set would have to be
+	 * listened to twice, the sweep would take twice as long, and "certain
+	 * within one sweep" would become "certain within one sweep of a sweep
+	 * that is now eight seconds instead of four". Adding a frequency axis
+	 * later would multiply it again.
+	 *
+	 * So the extension axes are announced in a descriptor a searching
+	 * receiver already hears on 1 M, and the receiver moves deliberately.
+	 * That is why ADR 0005's merged RX window survives two extension axes
+	 * without either one touching discovery, and it is why this line is
+	 * commented out of proportion to its length.
+	 */
 	fmt = radiant_frame_format(RADIANT_FRAME_CFG_SEARCH);
 	if (fmt == NULL) {
 		return RADIANT_SEARCH_EINVAL;

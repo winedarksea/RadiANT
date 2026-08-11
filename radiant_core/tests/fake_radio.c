@@ -205,11 +205,30 @@ struct fake_state {
 
 static struct fake_state g;
 
-/* Only the 1 Mbps GFSK PHY is modelled: it is the only one an ANT+
- * compatibility channel may use, and the Phase 7 long-range entry has no
- * defined behaviour to fake yet. A test that needs a backend advertising both
- * calls fake_radio_set_phys() with its own static array. */
+/*
+ * The default presets advertise 1 Mbps GFSK only, and that stays true now that
+ * the coded PHY exists.
+ *
+ * IT IS A DEFAULT, NOT A LIMITATION OF THE MOCK. Every existing suite was
+ * written against a single-PHY backend and asserts window arithmetic that a
+ * non-zero phy_switch_us would move; making both presets dual-PHY would have
+ * changed numbers in test_sched.c and test_search.c that have nothing to do
+ * with this phase, which is how a phase acquires unrelated failures and the
+ * next person learns to re-baseline instead of read.
+ *
+ * A test that wants a two-PHY backend says so, with fake_radio_set_phys() and
+ * one of the arrays below. That is the same shape as fake_radio_caps_preset_*:
+ * the mock can model it, and a suite opts in.
+ */
 static const enum radiant_phy fake_phys_1m[] = { RADIANT_PHY_1M_GFSK };
+const enum radiant_phy fake_phys_1m_lr[] = {
+	RADIANT_PHY_1M_GFSK,
+	RADIANT_PHY_LR_CODED,
+};
+/* sizeof rather than ARRAY_SIZE: this file includes no Zephyr header, which is
+ * what lets the mock be built by anything with a C compiler. */
+const uint8_t fake_phys_1m_lr_count =
+	(uint8_t)(sizeof(fake_phys_1m_lr) / sizeof(fake_phys_1m_lr[0]));
 
 static const struct radiant_radio_cbs fake_cbs_none = { NULL, NULL, NULL };
 

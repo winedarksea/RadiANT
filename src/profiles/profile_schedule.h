@@ -202,6 +202,71 @@ uint16_t profile_sched_coding_kbps(uint8_t coding);
  * channel. */
 bool profile_sched_coding_implemented(uint8_t coding);
 
+/* ---------------------------------------------------------------------------
+ * The duty bound - ADR 0007
+ *
+ * The long-range PHY makes frames longer AND slower at the same time, and the
+ * two multiply. At S=8 every body byte is 64 us; a 40-byte body is about
+ * 3.2 ms of radio-on time against ~150 us for an eight-byte 1 M frame. A node
+ * that announces a 4 Hz period and then emits a full-length coded frame is
+ * spending 1.3 % of its life transmitting, which for a coin cell is the
+ * difference between a year and a season.
+ *
+ * ONE RULE, NO SECOND CONSTANT: a node's frame must stay under 25 % of its
+ * channel period at its announced rate. It is self-enforcing, because both
+ * halves are already on the wire - the period is in descriptor frame 0 and the
+ * rate is in the schedule block - so a receiver can check the claim as easily
+ * as the node can make it, and a node cannot announce a schedule it does not
+ * keep.
+ *
+ * IT BINDS ONLY WHERE BOTH FACTORS ARE PRESENT, which is the point. A 0.5 Hz
+ * asset tag with a 40-byte frame is at 0.16 % and never sees this. An 8-byte
+ * frame at S=8 is 1.3 ms against any real period and never sees it either. What
+ * it refuses is the combination - a fast node with a long frame - which is the
+ * one shape that is expensive and the one a caller reaches by accident rather
+ * than by decision.
+ *
+ * REFUSED AT THE ENCODER, following the dwell-versus-clock-drift rule above.
+ * The alternative - a warning, or a runtime check - is a rule that is enforced
+ * only where somebody remembered to look, on a cost that shows up months later
+ * as a battery complaint with no reproducer.
+ * ---------------------------------------------------------------------------
+ */
+
+/* The 25 %, as a ratio rather than a percentage, so the arithmetic below stays
+ * in integers. */
+#define PROFILE_SCHED_DUTY_NUM 1u
+#define PROFILE_SCHED_DUTY_DEN 4u
+
+/*
+ * Airtime of one frame with `body_len` body bytes at the announced coding rate,
+ * in microseconds. 0 for a rate outside the vocabulary or a body the matching
+ * format cannot carry.
+ *
+ * It delegates to radiant_frame_airtime_us() rather than restating the FEC
+ * arithmetic: one implementation of "how long is this frame" is one more than
+ * the number that can be right, and the profile layer's coding code and the
+ * frame layer's configuration are two names for the same choice.
+ */
+uint32_t profile_sched_frame_us(uint8_t coding, uint8_t body_len);
+
+/*
+ * Refuse a frame that does not fit the duty bound.
+ *
+ * `period_counts` is the descriptor's period, in counts of 1/32768 s. ZERO
+ * MEANS ASYNCHRONOUS - a sparse node with no period at all - and the bound is
+ * skipped rather than treated as an infinitely fast period, on the same terms
+ * profile_sched_check() skips the drift bound when no clock was announced: a
+ * rule about a period cannot be applied to a node that has not got one. The
+ * sparse node's cost is governed by its heartbeat, which is a different
+ * announcement.
+ *
+ * Returns 0, or -EINVAL when the frame exceeds the bound, or when the rate and
+ * the body length do not describe a frame this project can put on the air.
+ */
+int profile_sched_duty_check(uint8_t coding, uint16_t period_counts,
+			     uint8_t body_len);
+
 /*
  * ANNOUNCED TX POWER, int8 dBm EIRP.
  *

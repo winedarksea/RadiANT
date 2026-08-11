@@ -152,10 +152,14 @@ elseif(CONFIG_RADIANT_CORE_BACKEND_NRF)
   zephyr_library_sources(src/radiant_radio_nrf.c)
   message(WARNING
     "radiant_core: the nrf backend transmits and receives. Its ramp-up and "
-    "turnaround figures are datasheet values, and the two t_sync calibration "
-    "constants are SEEDED from Zephyr's per-SoC BLE chain delays rather than "
+    "turnaround figures are datasheet values, and the t_sync calibration "
+    "constants - now three, one per PHY on receive plus one shared on "
+    "transmit - are SEEDED from Zephyr's per-SoC BLE chain delays rather than "
     "measured on this bench - a defensible prior at a different deviation, not "
-    "the wired two-board trigger the HAL contract asks for. Every register "
+    "the wired two-board trigger the HAL contract asks for. The coded PHY's "
+    "receive constant (-30 us) is three times the 1 M one and is no better "
+    "established; ADR 0007 records both as bounded rather than measured. "
+    "Every register "
     "fact is measured on nRF54L15 only. Expect timing to be approximately "
     "calibrated rather than exact - see the 'what is measured and what is not' "
     "header in src/radiant_radio_nrf.c before reading any A/B timing result "

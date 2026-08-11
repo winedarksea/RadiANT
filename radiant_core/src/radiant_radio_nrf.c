@@ -305,7 +305,28 @@ static uint32_t clock_counter_at(radiant_time_t t)
  * ---------------------------------------------------------------------------
  */
 
-static const enum radiant_phy radiant_nrf_phys[] = { RADIANT_PHY_1M_GFSK };
+/*
+ * The PHYs this build advertises, MOST-PREFERRED FIRST - which is why 1 M is
+ * still first and always will be. phys[0] is what the HAL says a backend
+ * claiming ANT+ compatibility must lead with, and every ANT+ compatibility
+ * channel is 1 M on RF 57 for its whole life (ADR 0007).
+ *
+ * THE CODED ENTRY IS GATED ON THE PART DEFINING THE MODE, not on a Kconfig and
+ * not on a series test. Every part this backend compiles for - nRF52840,
+ * nRF5340's network core and nRF54L15 - defines RADIO_MODE_MODE_Ble_LR125Kbit
+ * in its MDK header, so the #if is satisfied on all of them today. It is
+ * written as a capability test anyway because that is the honest shape of the
+ * question: a future part without the coded PHY must produce a backend that
+ * advertises one PHY and refuses the other, which is the existing HAL rule and
+ * needs no new one. A series test would have had to be edited for that part;
+ * this does not.
+ */
+static const enum radiant_phy radiant_nrf_phys[] = {
+	RADIANT_PHY_1M_GFSK,
+#if defined(RADIO_MODE_MODE_Ble_LR125Kbit)
+	RADIANT_PHY_LR_CODED,
+#endif
+};
 
 /*
  * Airtime arithmetic, which several constants below are derived from rather
@@ -313,6 +334,38 @@ static const enum radiant_phy radiant_nrf_phys[] = { RADIANT_PHY_1M_GFSK };
  */
 #define US_PER_BYTE            8u
 #define PREAMBLE_BYTES         1u    /* PCNF0.PLEN = 8bit; confirmed by Spike A */
+
+/*
+ * The same arithmetic for LE Coded at S=8, where none of the constants above
+ * apply. Every one of these is a Bluetooth specification figure for the coded
+ * PHY's FEC block 1, which is ALWAYS coded at S=8 regardless of the selected
+ * data rate - hardware, not a choice - and each is 8 us per coded bit:
+ *
+ *     preamble          80 us   (10 symbols)
+ *     access address   256 us   (32 bits)
+ *     coding indicator  16 us   ( 2 bits)
+ *     TERM1             24 us   ( 3 bits)
+ *     ---------------------------------------
+ *     FEC block 1      376 us
+ *
+ * t_sync IS THE END OF THE ACCESS ADDRESS AND THEREFORE 336 us IN, NOT 376.
+ * The coding indicator and TERM1 come after it. Writing FEC block 1's total
+ * where the address lead belongs would place every transmit 40 us early and
+ * every receive window 40 us wide of centre - which is precisely the silent,
+ * constant, cancels-out-of-the-period-estimate failure the HAL's t_sync
+ * contract is written about, and it would cost a few tenths of a percent of
+ * yield with nothing in any log to say so. The two are separate constants for
+ * that reason and are added together in exactly one place.
+ */
+#define LR_PREAMBLE_US         80u
+#define LR_ACCESS_ADDR_US      256u
+#define LR_CI_US               16u
+#define LR_TERM1_US            24u
+#define LR_FEC1_US             (LR_PREAMBLE_US + LR_ACCESS_ADDR_US + \
+				LR_CI_US + LR_TERM1_US)
+/* The lead from switching on to t_sync, air only - ramp-up is added by
+ * air_lead_us(). */
+#define LR_AIR_LEAD_US         (LR_PREAMBLE_US + LR_ACCESS_ADDR_US)
 
 /*
  * Ramp-up and turnaround.
@@ -432,8 +485,70 @@ with the bench measurement that produced them, or select a different backend."
  * Advertising the worst case costs a few tens of microseconds of scheduling
  * slack and cannot produce a refusal the core could not have predicted.
  */
-#define ARM_LEAD_US            (ARM_SETUP_US + RAMP_UP_US + \
-				(PREAMBLE_BYTES + RADIANT_RADIO_ADDR_MAX) * US_PER_BYTE)
+/*
+ * THE WORST CASE IS NOW THE CODED PHY'S, AND THAT IS THE WHOLE OF WHY THIS
+ * MACRO GREW A CONDITIONAL.
+ *
+ * The core has exactly one number to lead by, and the paragraph above is the
+ * record of what happens when the backend then wants more than it advertised:
+ * every arm is refused RADIANT_RADIO_ETIME, refusals complete synchronously,
+ * each completion drives another post, and the board wedges with nothing on the
+ * air and no error a host can see.
+ *
+ * At 1 M the preamble and the longest address are 48 us. On the coded PHY the
+ * preamble and the access address are 336 us - seven times as much - and that
+ * difference does NOT belong in caps.phy_switch_us, however tempting the
+ * symmetry is. phy_switch_us is spent by the scheduler only when the PHY
+ * CHANGES; this lead is needed on every coded operation including one that
+ * follows another coded operation, which is the common case on a node that has
+ * moved. Putting it there would under-lead exactly the steady state and would
+ * do it in the one direction that wedges the board.
+ *
+ * So the advertised lead covers the worse of the two, which is what this file
+ * already decided to do about address length and for the same reason. A 1 M
+ * window on a build that also has the coded PHY is therefore led by ~328 us
+ * more than it needs. That is scheduling slack, not airtime: it moves when an
+ * arm call happens, not when a window opens or how long it stays open, so it
+ * costs no reception and no current. Against a 249.7 ms channel period it is
+ * 0.13 %.
+ */
+#if defined(RADIO_MODE_MODE_Ble_LR125Kbit)
+#define AIR_LEAD_WORST_US      LR_AIR_LEAD_US
+#else
+#define AIR_LEAD_WORST_US      ((PREAMBLE_BYTES + RADIANT_RADIO_ADDR_MAX) * US_PER_BYTE)
+#endif
+
+#define ARM_LEAD_US            (ARM_SETUP_US + RAMP_UP_US + AIR_LEAD_WORST_US)
+
+/*
+ * What a change of PHY costs this backend between two operations.
+ *
+ * BOUNDED, NOT MEASURED, and stated on exactly the terms ARM_SETUP_US above is.
+ * A mode change here is a handful of register writes - MODE, PCNF0, PCNF1,
+ * CRCCNF - all of which apply_format() already performs on every single arm
+ * whether the PHY changed or not, and all of which are already inside
+ * ARM_SETUP_US. The RADIO must be DISABLED before MODE takes effect, and it
+ * always is: every operation in this file ends in DISABLED before the next is
+ * armed. So the genuine incremental cost of a switch on this part is close to
+ * nothing, and the honest value is small rather than zero.
+ *
+ * It is not zero for one reason worth writing down: zero would mean the
+ * scheduler's PHY budgeting is dead code on the only backend that ships, and a
+ * scheduling path that never executes on hardware is a scheduling path that is
+ * wrong. 20 us is an upper bound on a dozen register writes at 64 MHz with
+ * room to spare, it is smaller than this file's own rounding on every other
+ * constant, and it is the same bench session that measures t_sync which will
+ * replace it.
+ *
+ * Note what it is NOT: it is not the coded PHY's longer ramp-up or air lead.
+ * Those are in ARM_LEAD_US above, unconditionally, because they are owed on
+ * every coded operation and not only on the first one after a change.
+ */
+#if defined(RADIO_MODE_MODE_Ble_LR125Kbit)
+#define PHY_SWITCH_US          20u
+#else
+#define PHY_SWITCH_US          0u
+#endif
 
 static const struct radiant_radio_caps radiant_nrf_caps = {
 	.name                = CAPS_NAME,
@@ -453,7 +568,7 @@ static const struct radiant_radio_caps radiant_nrf_caps = {
 
 	.phys                = radiant_nrf_phys,
 	.n_phys              = (uint8_t)ARRAY_SIZE(radiant_nrf_phys),
-	.phy_switch_us       = 0,   /* one PHY; nothing to switch */
+	.phy_switch_us       = PHY_SWITCH_US,
 
 	.ramp_up_us          = RAMP_UP_US,
 	.rx_to_tx_us         = RX_TO_TX_US,
@@ -540,6 +655,55 @@ const struct radiant_radio_caps *radiant_radio_caps_get(void)
  * T_SYNC_CAL_TX_US is exactly where that residual lives.
  */
 #define T_SYNC_CAL_US   (-9)   /* -9.4 us, rounded toward zero */
+
+/*
+ * THE SAME CONSTANT FOR THE CODED PHY, AND IT IS THREE TIMES AS LARGE.
+ *
+ * The HAL's contract says t_sync is "re-measured for every new part and every
+ * PHY", and this is the phase that added a PHY. It is a different number, not a
+ * rounding of the same one:
+ *
+ *     RX chain delay, 1 M:      9.4 us
+ *     RX chain delay, S=8:     29.6 us
+ *
+ * Same provenance as the 1 M seed above and on exactly the same terms - Nordic's
+ * per-SoC tables in
+ * zephyr/subsys/bluetooth/controller/ll_sw/nordic/hal/nrf5/radio/, whose own
+ * header calls them "based on empirical measurements and sniffer logs". The S=8
+ * figures are BYTE-IDENTICAL across nRF52840, nRF5340 and nRF54LX
+ * (HAL_RADIO_*_RX_CHAIN_DELAY_S8_NS = 29600 in all three), exactly as the 1 M
+ * pair is, so one constant covers both series here for the same reason the
+ * other one does.
+ *
+ * THE TRANSMIT SIDE IS THE SAME ON BOTH PHYS AND THAT IS WHY THERE IS NO SECOND
+ * TX CONSTANT. Nordic gives TX chain delay as 0.6 us for 1 M, S=2 and S=8
+ * alike - modulator and PA delay, which the coding does not touch. A second
+ * constant equal to the first would be a place for the two to drift apart in a
+ * later edit for no reason.
+ *
+ * WHAT WOULD HAVE HAPPENED WITHOUT THIS. Reusing the 1 M constant on the coded
+ * PHY would put every coded receive window 20 us off centre - a constant
+ * offset, which cancels out of the period estimate, so the drift estimator
+ * still locks, no CRC fails, nothing is logged, and yield falls by a fraction
+ * of a percent that is indistinguishable from this bench's ~0.4 % collision
+ * floor. That is the failure mode the t_sync contract has a page of prose
+ * about, and it is the reason this constant was worth finding before the bench
+ * session rather than during it.
+ *
+ * STILL A SEED, STILL NOT A MEASUREMENT. Neither this nor the 1 M value has
+ * been through the wired two-board trigger the HAL specifies, and the same
+ * caveat applies with more force here: these are BLE figures for BLE's own
+ * filter bandwidth. Both numbers are recorded as BOUNDED, NOT MEASURED, and
+ * both are owed the same rig in the same sitting. See ADR 0007.
+ */
+#define T_SYNC_CAL_LR_US   (-30)  /* -29.6 us, rounded away from zero */
+
+/* The receive calibration for a PHY. Transmit uses T_SYNC_CAL_TX_US for both;
+ * see above. */
+static int32_t t_sync_cal_rx_us(enum radiant_phy phy)
+{
+	return (phy == RADIANT_PHY_LR_CODED) ? T_SYNC_CAL_LR_US : T_SYNC_CAL_US;
+}
 
 /*
  * The same thing for transmit, and it is a SEPARATE constant on purpose.
@@ -654,7 +818,26 @@ static struct {
 	/* RX bookkeeping for the window in flight. */
 	uint8_t      n_filters;
 	uint8_t      addr_len;
+	/*
+	 * On a static-length format: the length of every frame in this window.
+	 * On a length-from-body format: the format's CEILING, against which the
+	 * length byte the frame actually carried is clamped. The flag below says
+	 * which, and it is a flag rather than an inference from body_len because
+	 * "body_len is the answer" and "body_len is the bound" are two different
+	 * meanings for one field and the ISR must not have to guess.
+	 */
 	uint8_t      body_len;
+	bool         len_from_body;
+	/*
+	 * The PHY this operation was armed on, kept because the interrupt needs
+	 * it and the request is long gone by then. It decides the t_sync
+	 * calibration, which differs between the two PHYs by 20 us - see
+	 * T_SYNC_CAL_LR_US. Latching it at the arm rather than reading
+	 * RADIO->MODE back in the ISR keeps the ISR free of register reads and
+	 * cannot disagree with what was actually programmed, because the same
+	 * arm call did both.
+	 */
+	enum radiant_phy phy;
 	bool         stop_on_first;
 	bool         report_crc_fail;
 	bool         terminal_sent;
@@ -785,13 +968,33 @@ static uint8_t radiant_tx_buf[RADIANT_RADIO_BODY_MAX + 4] __aligned(4);
 
 static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index)
 {
+	bool lr;
+
 	if (fmt == NULL) {
 		return RADIANT_RADIO_EINVAL;
 	}
-	if (fmt->phy != RADIANT_PHY_1M_GFSK) {
+	if (fmt->phy != RADIANT_PHY_1M_GFSK && fmt->phy != RADIANT_PHY_LR_CODED) {
 		return RADIANT_RADIO_ENOTSUP;
 	}
+	lr = (fmt->phy == RADIANT_PHY_LR_CODED);
+#if !defined(RADIO_MODE_MODE_Ble_LR125Kbit)
+	/* A part whose RADIO has no coded mode. Refused, never approximated:
+	 * "close" here is a 1 M frame nobody is listening for. */
+	if (lr) {
+		return RADIANT_RADIO_ENOTSUP;
+	}
+#endif
 	if (fmt->addr_len < 2u || fmt->addr_len > 5u) {
+		return RADIANT_RADIO_ENOTSUP;
+	}
+	/*
+	 * The coded PHY's access address is a FIXED 32 bits. Four address bytes
+	 * is not a preference here, it is the only length the hardware will
+	 * emit, so anything else is refused rather than padded or truncated -
+	 * either of which would put a frame on the air that no receiver this
+	 * project configures is matching.
+	 */
+	if (lr && fmt->addr_len != 4u) {
 		return RADIANT_RADIO_ENOTSUP;
 	}
 	if (rf_index > RADIANT_RF_INDEX_MAX) {
@@ -799,21 +1002,52 @@ static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index)
 	}
 
 	/*
-	 * Static length only, and that is a measurement rather than a
+	 * Static length on 1 M, and that is a measurement rather than a
 	 * simplification. Spike B established that byte 3 of an ANT frame is a
 	 * control byte carrying six independent fields, not a length; the
 	 * LFLEN=8/CRCINC=1 configuration that Spike A also found working is a
 	 * broadcast-only receiver, because on a broadcast the control byte
 	 * happens to read 0x0A and 0x0A happens to be the right length. A
-	 * length-decoding format is therefore something this backend must
-	 * refuse rather than approximate - it would silently truncate every
-	 * acknowledged and burst frame.
+	 * length-decoding format on an ANT configuration is therefore something
+	 * this backend must refuse rather than approximate - it would silently
+	 * truncate every acknowledged and burst frame.
+	 *
+	 * THE REFUSAL IS NOW TIED TO THE PHY RATHER THAN BEING BLANKET, and the
+	 * pairing is exact rather than convenient. The defect above is entirely
+	 * about ANT: it happens because the byte at the length offset already
+	 * means something else. On the coded PHY there is no ANT frame and no
+	 * pre-existing byte - RADIANT_FRAME_CFG_LR puts a length there because
+	 * this project decided to - so LFLEN=8 decodes exactly what it was
+	 * asked to. Tying the two together in one test is what stops a future
+	 * edit from re-enabling the length field on 1 M by loosening a check
+	 * that had nothing to do with the PHY.
 	 */
-	if (fmt->len_mode != RADIANT_LEN_FIXED) {
-		return RADIANT_RADIO_ENOTSUP;
-	}
-	if (fmt->body_len == 0u || fmt->body_len > RADIANT_RADIO_BODY_MAX) {
-		return RADIANT_RADIO_EINVAL;
+	if (lr) {
+		if (fmt->len_mode != RADIANT_LEN_FROM_BODY) {
+			return RADIANT_RADIO_ENOTSUP;
+		}
+		/*
+		 * The RADIO's LENGTH field counts the bytes after itself, so
+		 * the HAL's body is the length byte plus those. Any other
+		 * offset or bias would need software to rewrite the byte
+		 * between the core and EasyDMA, which is a translation layer
+		 * this backend refuses to grow.
+		 */
+		if (fmt->len_offset != 0u || fmt->len_bias != 1) {
+			return RADIANT_RADIO_ENOTSUP;
+		}
+		if (fmt->max_body_len < 2u ||
+		    fmt->max_body_len > RADIANT_RADIO_BODY_MAX) {
+			return RADIANT_RADIO_EINVAL;
+		}
+	} else {
+		if (fmt->len_mode != RADIANT_LEN_FIXED) {
+			return RADIANT_RADIO_ENOTSUP;
+		}
+		if (fmt->body_len == 0u ||
+		    fmt->body_len > RADIANT_RADIO_BODY_MAX) {
+			return RADIANT_RADIO_EINVAL;
+		}
 	}
 
 	/*
@@ -829,16 +1063,89 @@ static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index)
 		return RADIANT_RADIO_ENOTSUP;
 	}
 
-	nrf_radio_mode_set(NRF_RADIO, NRF_RADIO_MODE_NRF_1MBIT);
+#if defined(RADIO_MODE_MODE_Ble_LR125Kbit)
+	if (lr) {
+		/*
+		 * S=8 ONLY. LR500Kbit is defined by every part here and is
+		 * deliberately not selectable: FEC block 1 is coded at S=8
+		 * whatever the data rate, so S=2 is only about 2.1x cheaper
+		 * than S=8 at these frame sizes rather than 4x - it gives up
+		 * ~3 dB to save ~0.64 ms per frame, a quarter of a percent of
+		 * duty at 4 Hz. One rate is one format, one phy_switch_us and
+		 * one t_sync calibration. See ADR 0007.
+		 *
+		 * Note the receive side is wider than the transmit side by the
+		 * hardware's own definition - LR125Kbit means 125 kbit/s TX and
+		 * 125 OR 500 kbit/s RX - so selecting S=8 costs nothing in
+		 * what this radio can hear.
+		 */
+		nrf_radio_mode_set(NRF_RADIO, NRF_RADIO_MODE_BLE_LR125KBIT);
+	} else
+#endif
+	{
+		nrf_radio_mode_set(NRF_RADIO, NRF_RADIO_MODE_NRF_1MBIT);
+	}
 	nrf_radio_frequency_set(NRF_RADIO, (uint16_t)(2400u + rf_index));
 
-	NRF_RADIO->PCNF0 = 0u;
-	NRF_RADIO->PCNF1 =
-		((uint32_t)sizeof(radiant_rx_buf) << RADIO_PCNF1_MAXLEN_Pos) |
-		((uint32_t)fmt->body_len          << RADIO_PCNF1_STATLEN_Pos) |
-		((uint32_t)(fmt->addr_len - 1u)   << RADIO_PCNF1_BALEN_Pos) |
-		(RADIO_PCNF1_ENDIAN_Big           << RADIO_PCNF1_ENDIAN_Pos) |
-		(RADIO_PCNF1_WHITEEN_Disabled     << RADIO_PCNF1_WHITEEN_Pos);
+	if (lr) {
+		/*
+		 * PCNF0 for the coded PHY, and every field in it is required.
+		 *
+		 *   PLEN = LongRange   the 80 us coded preamble. The 8-bit
+		 *                      preamble the ANT path uses does not
+		 *                      exist on this PHY.
+		 *   CILEN = 2          the coding indicator, in bits. It is
+		 *                      what tells the receiver whether FEC
+		 *                      block 2 is S=8 or S=2, and a zero here
+		 *                      is not "no indicator" - it is a frame no
+		 *                      coded receiver can interpret.
+		 *   TERMLEN = 3        TERM1, the convolutional coder's
+		 *                      terminator. Also required, also silently
+		 *                      fatal at zero.
+		 *   LFLEN = 8          the length field. This is the register
+		 *                      the ANT path must never use and the one
+		 *                      the whole length extension is.
+		 *   S0LEN = 0, S1LEN = 0
+		 *                      nothing ahead of the length byte, so the
+		 *                      first body byte on air IS the length -
+		 *                      which is what makes len_offset 0 and
+		 *                      len_bias 1 the only pair this backend
+		 *                      accepts.
+		 */
+		NRF_RADIO->PCNF0 =
+			((uint32_t)RADIO_PCNF0_PLEN_LongRange
+				<< RADIO_PCNF0_PLEN_Pos) |
+			((uint32_t)2u << RADIO_PCNF0_CILEN_Pos) |
+			((uint32_t)3u << RADIO_PCNF0_TERMLEN_Pos) |
+			((uint32_t)8u << RADIO_PCNF0_LFLEN_Pos);
+		/*
+		 * STATLEN = 0: the length field alone decides how many bytes
+		 * leave the antenna, which is the entire point of this format.
+		 * MAXLEN bounds what the receiver will accept into the buffer
+		 * and is the format's own max_body_len minus the length byte -
+		 * NOT sizeof(radiant_rx_buf), which is what the static path
+		 * uses because there the length is not on the air. A MAXLEN
+		 * larger than the format allows would let a corrupted length
+		 * byte fill the buffer; the CRC would then reject the frame, so
+		 * the failure is a loss rather than an overrun, but the bound
+		 * belongs where the format states it.
+		 */
+		NRF_RADIO->PCNF1 =
+			((uint32_t)(fmt->max_body_len - 1u)
+				<< RADIO_PCNF1_MAXLEN_Pos) |
+			((uint32_t)0u                   << RADIO_PCNF1_STATLEN_Pos) |
+			((uint32_t)(fmt->addr_len - 1u) << RADIO_PCNF1_BALEN_Pos) |
+			(RADIO_PCNF1_ENDIAN_Big         << RADIO_PCNF1_ENDIAN_Pos) |
+			(RADIO_PCNF1_WHITEEN_Disabled   << RADIO_PCNF1_WHITEEN_Pos);
+	} else {
+		NRF_RADIO->PCNF0 = 0u;
+		NRF_RADIO->PCNF1 =
+			((uint32_t)sizeof(radiant_rx_buf) << RADIO_PCNF1_MAXLEN_Pos) |
+			((uint32_t)fmt->body_len          << RADIO_PCNF1_STATLEN_Pos) |
+			((uint32_t)(fmt->addr_len - 1u)   << RADIO_PCNF1_BALEN_Pos) |
+			(RADIO_PCNF1_ENDIAN_Big           << RADIO_PCNF1_ENDIAN_Pos) |
+			(RADIO_PCNF1_WHITEEN_Disabled     << RADIO_PCNF1_WHITEEN_Pos);
+	}
 
 	/* cover_addr is the core's word for it and SKIPADDR is the hardware's,
 	 * with the opposite sense. Getting this inverted is a whole-frame CRC
@@ -1094,9 +1401,21 @@ static void apply_tx_address(const uint8_t *addr, uint8_t addr_len)
  * what stops the window edge - or the transmit start - from silently carrying
  * one backend's ramp-up, which is the class of error the t_sync contract in
  * radiant_radio_hal.h exists to prevent.
+ *
+ * IT IS PER PHY NOW, AND THE TWO ANSWERS DIFFER BY A FACTOR OF SEVEN. That is
+ * the single largest number the coded PHY changes in this file, and getting it
+ * wrong is not a subtle failure in either direction: too small and every
+ * transmit puts its address on the air late by the difference, too large and
+ * every receive window opens early and closes before the frame it was waiting
+ * for. addr_len is ignored on the coded PHY because the access address there
+ * is a fixed 32 bits - the format's four address bytes ARE those 32 bits, which
+ * is why the format has four and not five.
  */
-static uint32_t air_lead_us(uint8_t addr_len)
+static uint32_t air_lead_us(enum radiant_phy phy, uint8_t addr_len)
 {
+	if (phy == RADIANT_PHY_LR_CODED) {
+		return RAMP_UP_US + LR_PREAMBLE_US + LR_ACCESS_ADDR_US;
+	}
 	return RAMP_UP_US +
 	       (uint32_t)(PREAMBLE_BYTES + addr_len) * US_PER_BYTE;
 }
@@ -1585,11 +1904,33 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	if (rc != RADIANT_RADIO_OK_RC) {
 		goto fail;
 	}
-	/* apply_format has already refused anything but RADIANT_LEN_FIXED, so
-	 * the format's own length is the only length this frame may have. A
-	 * backend cannot fix a disagreement up: it DMAs the bytes it is given
-	 * and STATLEN decides how many leave the antenna. */
-	if (req->body_len != req->fmt->body_len) {
+	/*
+	 * On a static-length format the format's own length is the only length
+	 * this frame may have. A backend cannot fix a disagreement up: it DMAs
+	 * the bytes it is given and STATLEN decides how many leave the antenna.
+	 *
+	 * On the length-from-body format the caller chooses the length, so what
+	 * has to agree is the LENGTH BYTE and the body it is supposed to
+	 * describe. STATLEN is 0 there, so the RADIO transmits body[0] bytes
+	 * after the length field and nothing checks that against body_len: a
+	 * body of 12 whose length byte says 30 transmits eighteen bytes of
+	 * whatever follows the buffer, with a valid CRC over them. That is the
+	 * one way this format could put memory on the air, so it is refused
+	 * here rather than trusted to a caller.
+	 */
+	if (req->fmt->len_mode == RADIANT_LEN_FROM_BODY) {
+		if (req->body_len > req->fmt->max_body_len ||
+		    req->body_len < 1u + (uint8_t)req->fmt->len_offset) {
+			rc = RADIANT_RADIO_EINVAL;
+			goto fail;
+		}
+		if ((uint32_t)req->body[req->fmt->len_offset] +
+			    (uint32_t)req->fmt->len_bias !=
+		    (uint32_t)req->body_len) {
+			rc = RADIANT_RADIO_EINVAL;
+			goto fail;
+		}
+	} else if (req->body_len != req->fmt->body_len) {
 		rc = RADIANT_RADIO_EINVAL;
 		goto fail;
 	}
@@ -1622,7 +1963,8 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	 * event-referenced arithmetic alone would put it, so that the ADDRESS
 	 * event lands at t_sync_at - cal and the ANTENNA lands at t_sync_at.
 	 */
-	lead = air_lead_us(req->addr_len) + (uint32_t)T_SYNC_CAL_TX_US;
+	lead = air_lead_us(req->fmt->phy, req->addr_len) +
+	       (uint32_t)T_SYNC_CAL_TX_US;
 	t_start = req->t_sync_at - (radiant_time_t)lead;
 
 	now = radiant_radio_now();
@@ -1635,6 +1977,11 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 
 	radiant_op.addr_len        = req->addr_len;
 	radiant_op.body_len        = req->body_len;
+	/* Transmit only ever reports the length it was given, so this is false
+	 * whatever the format is - the field governs how the RECEIVE path reads
+	 * a length it did not choose. */
+	radiant_op.len_from_body   = false;
+	radiant_op.phy             = req->fmt->phy;
 	radiant_op.stop_on_first   = false;
 	radiant_op.report_crc_fail = false;
 	radiant_op.terminal_sent   = false;
@@ -1771,7 +2118,7 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	 * A window that really cannot be made still gets a loud ETIME.
 	 */
 	now = radiant_radio_now();
-	if (req->t_open < now + air_lead_us(req->fmt->addr_len)) {
+	if (req->t_open < now + air_lead_us(req->fmt->phy, req->fmt->addr_len)) {
 		/* Never silently late. A window opened after the frame it was
 		 * meant to catch is indistinguishable from a sensor that went
 		 * quiet, and that is the report nobody can act on. */
@@ -1781,7 +2128,19 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 
 	radiant_op.n_filters       = req->n_filters;
 	radiant_op.addr_len        = req->fmt->addr_len;
-	radiant_op.body_len        = req->fmt->body_len;
+	/*
+	 * On a static-length format every frame in the window is this long and
+	 * the ISR reports it verbatim. On the length-from-body format it is not
+	 * known until a frame arrives, so this holds the format's CEILING and
+	 * the ISR reads the real length out of the received length byte -
+	 * clamped against this. Leaving it as the format's body_len, which is
+	 * zero there, would report every long-range frame as zero bytes.
+	 */
+	radiant_op.len_from_body   = (req->fmt->len_mode == RADIANT_LEN_FROM_BODY);
+	radiant_op.body_len        = radiant_op.len_from_body
+					     ? req->fmt->max_body_len
+					     : req->fmt->body_len;
+	radiant_op.phy             = req->fmt->phy;
 	radiant_op.stop_on_first   = (req->flags & RADIANT_RX_STOP_ON_FIRST) != 0u;
 	radiant_op.report_crc_fail = (req->flags & RADIANT_RX_REPORT_CRC_FAIL) != 0u;
 	radiant_op.terminal_sent   = false;
@@ -1832,11 +2191,35 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	 * is free to write, and it stops the next person who shortens that slack
 	 * from also having to rediscover the chain delay.
 	 */
-	start_cc = clock_counter_at(req->t_open -
-				    (radiant_time_t)air_lead_us(req->fmt->addr_len));
-	close_cc = clock_counter_at(t_sync_cal(req->t_close, -T_SYNC_CAL_US) +
-				    (radiant_time_t)((req->fmt->body_len + 2u) *
-						     US_PER_BYTE));
+	/*
+	 * The tail is per PHY, and by a large factor. At 1 M the rest of a
+	 * frame after t_sync is (body + CRC) bytes at 8 us; on the coded PHY it
+	 * is the coding indicator and TERM1 that follow the access address,
+	 * then (body + CRC) bytes at 64 us, then TERM2. Sized from the format's
+	 * ceiling rather than from any one frame, because at this point no
+	 * frame has arrived and the window has to hold the longest one it might
+	 * legally receive. Getting this too short truncates exactly the frames
+	 * the length extension exists to carry - the long ones - and the
+	 * symptom would be a descriptor set that assembles at eight bytes and
+	 * fails at forty.
+	 */
+	{
+		uint32_t tail;
+
+		if (req->fmt->phy == RADIANT_PHY_LR_CODED) {
+			tail = LR_CI_US + LR_TERM1_US +
+			       ((uint32_t)radiant_op.body_len + 2u) * 64u + 24u;
+		} else {
+			tail = ((uint32_t)req->fmt->body_len + 2u) * US_PER_BYTE;
+		}
+		start_cc = clock_counter_at(
+			req->t_open - (radiant_time_t)air_lead_us(req->fmt->phy,
+								  req->fmt->addr_len));
+		close_cc = clock_counter_at(
+			t_sync_cal(req->t_close,
+				   -t_sync_cal_rx_us(req->fmt->phy)) +
+			(radiant_time_t)tail);
+	}
 
 	nrf_timer_cc_set(TIMER_ADDR, CC_START, start_cc);
 	nrf_timer_cc_set(TIMER_ADDR, CC_CLOSE, close_cc);
@@ -2537,18 +2920,56 @@ static void radio_isr(const void *arg)
 						    : RADIANT_RADIO_STATUS_CRC_FAIL;
 
 				/* The hardware capture, moved from
-				 * event-referenced to antenna-referenced. */
+				 * event-referenced to antenna-referenced,
+				 * with THIS operation's PHY's calibration -
+				 * the two differ by 20 us and applying the
+				 * 1 M one to a coded frame is the silent
+				 * off-centre-window failure T_SYNC_CAL_LR_US
+				 * is written about. */
 				evt.t_sync = t_sync_cal(
 					clock_absolute(nrf_timer_cc_get(
 						TIMER_ADDR, CC_SYNC)),
-					T_SYNC_CAL_US);
+					t_sync_cal_rx_us(radiant_op.phy));
 				evt.t_sync_exact = true;
 
 				evt.filter_index =
 					(logical < ARRAY_SIZE(radiant_filter_slot))
 						? radiant_filter_slot[logical] : 0u;
 				evt.body = radiant_rx_buf;
-				evt.body_len = radiant_op.body_len;
+				/*
+				 * THE LENGTH COMES OFF THE WIRE, AND IS
+				 * CLAMPED BEFORE IT IS BELIEVED.
+				 *
+				 * On a static-length window every frame is the
+				 * format's length and there is nothing to read.
+				 * On the long-range format the frame carries
+				 * its own, in the first body byte, and the HAL's
+				 * body includes that byte - so the delivered
+				 * length is the byte plus one.
+				 *
+				 * The clamp is not defensive decoration. This
+				 * runs on a CRC FAILURE too, whenever the window
+				 * asked for those, and a CRC failure is by
+				 * definition a frame whose bytes are wrong -
+				 * including, sometimes, this one. MAXLEN stops
+				 * the RADIO writing past the buffer, but nothing
+				 * stops a corrupted byte being REPORTED as a
+				 * length longer than what was received, and the
+				 * core would then read whatever the previous
+				 * frame left behind. The clamp costs one compare
+				 * in an interrupt and closes it.
+				 */
+				if (radiant_op.len_from_body) {
+					uint32_t n =
+						(uint32_t)radiant_rx_buf[0] + 1u;
+
+					if (n > radiant_op.body_len) {
+						n = radiant_op.body_len;
+					}
+					evt.body_len = (uint8_t)n;
+				} else {
+					evt.body_len = radiant_op.body_len;
+				}
 				evt.has_rssi = true;
 
 				/*
