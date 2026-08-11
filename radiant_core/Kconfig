@@ -325,15 +325,32 @@ config RADIANT_SEC_COMPAT
 	  colliding sensor from yours cryptographically while Zwift keeps
 	  reading it normally.
 
-	  Primitives only at this symbol: pure functions, no state, no init,
-	  and nothing calls them yet. Turning it on today therefore costs a
-	  build nothing but the code, and the code is garbage-collected while
-	  nothing references it.
+	  The tags, the emit hooks that put them on the air at their own
+	  cadence, the receive path that judges them, and the epoch recovery a
+	  receiver needs because the beacon deliberately carries no epoch
+	  field. Still no init call and still no page numbers: the layer above
+	  composes byte [0] from the subtype this one returns.
 
 	  Off by default and dependent on RADIANT_SEC, and the zero-cost
 	  discipline is inherited unchanged: no ops struct, no structs in
 	  hot-path signatures, no-op static inlines when off, and the
 	  `zero-cost` CI job asserting it rather than a comment claiming it.
+
+config RADIANT_SEC_COMPAT_MAX_CHANNELS
+	int "compat-attested channels"
+	depends on RADIANT_SEC_COMPAT
+	default 2
+	range 1 8
+	help
+	  How many channels can hold compat attestation state at once.
+
+	  672 bytes each, measured, and the bulk of that is two 248-byte window
+	  buffers - the N-1 transmitted messages a Tier II tag covers, at the
+	  largest legal N of 32, once for the transmit side and once for the
+	  receive side. Two rather than eight because the shape of the feature
+	  is one sensor per channel: a strap masters one compat channel, and a
+	  receiver that tracks more than a couple of attested sensors at once
+	  is the unusual case that should pay for itself here explicitly.
 
 config RADIANT_SEC_BACKEND_MODES
 	bool "the backend implements the mode level itself (test scaffold)"

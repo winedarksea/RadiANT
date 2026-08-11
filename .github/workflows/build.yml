@@ -753,25 +753,49 @@ jobs:
           # the correction the 4096-to-6144 story above bought. C4 to C8 build
           # under this gate instead of meeting it at the end.
           #
-          # TWO NUMBERS, BECAUSE ONE OF THEM IS ZERO TODAY AND WILL LIE. At C2
-          # nothing calls these primitives, so the linker never pulls the
-          # archive member in and the LINKED delta is 0 B - a ceiling on that
-          # alone would be a gate that cannot fail until somebody writes a
-          # caller. So the compiled object is measured too, and that is the
-          # number that bites now:
+          # TWO NUMBERS, BECAUSE ONE OF THEM IS ZERO TODAY AND WILL LIE. Still
+          # nothing in the application calls this layer - src/profiles/ wires it
+          # up at C5 - so the linker never pulls the archive member in and the
+          # LINKED delta is measured at exactly 0 B. A ceiling on that alone
+          # would be a gate that cannot fail until somebody writes a caller, so
+          # the compiled object is measured too, and that is the number that
+          # bites now.
           #
-          #     radiant_sec_compat_tier2_tag        132
-          #     radiant_sec_compat_tier1_tag         66
-          #     radiant_sec_compat_nonce_block       30
+          # ── C2 -> C4, and why the object ceiling moved ────────────────────
+          #
+          # At C2 the file was three pure functions and 228 B, with a 288 B
+          # ceiling. C4 added the emit hooks, the receive path, the verdicts and
+          # the bounded epoch recovery, and it is 2930 B on this board:
+          #
+          #     radiant_sec_compat_rx               576   both tiers' verify
+          #     radiant_sec_compat_tx_attest        238   when a page is due
+          #     recover                             222   the three bounded phases
+          #     radiant_sec_compat_set_key          176
+          #     probe_at                            160   one candidate epoch
+          #     radiant_sec_compat_set_epoch        138
+          #     radiant_sec_compat_tier2_tag        128
+          #     radiant_sec_compat_recover_tier2    102
+          #     radiant_sec_compat_stream_verdict    96   receiver-side pinning
+          #     radiant_sec_compat_tx_sent           92
+          #     radiant_sec_compat_configure         88
+          #     ~730 everything else, none of it over 72 B
           #     ------------------------------------------
-          #     total .text in the object           228   (measured, Cortex-M4)
+          #     total .text in the object          2930   (measured, Cortex-M4)
           #
-          # 288 B is that measurement plus about a quarter, NOT a round number
-          # somebody liked: three pure functions over the existing CMAC seam is
-          # all this file is at C2. When C4 adds the emit and verify entry
-          # points the ceiling moves - and it moves the way the security text
-          # ceiling did, with the symbol-by-symbol breakdown written down here
-          # and a measurement behind the new figure, or it does not move.
+          # 3584 B is that measurement plus about a fifth, in the shape the
+          # security text ceiling moved in: a measurement and a breakdown, or
+          # the number does not move. There is no fat in the list - it is two
+          # emit hooks, two verify paths, a windowing buffer and a search with
+          # three ceilings - and the honest reading is that C2's 288 B was a
+          # ceiling on a third of a feature.
+          #
+          # RAM APPEARS HERE FOR THE FIRST TIME, because until C4 this file had
+          # none: 1344 B of bss, which is CONFIG_RADIANT_SEC_COMPAT_MAX_CHANNELS
+          # (2) contexts of 672 B, and the bulk of each is the two 248-byte
+          # window buffers a Tier II tag at N = 32 has to cover. It is inside
+          # the disabled build's assertions above - the symbol does not exist
+          # there at all - so it needs no ceiling of its own until something
+          # links it.
           compat_text="$(sect_of text "${compat_elf}")"
           test -n "${compat_text}"
           check "compat text (linked)" "$(( compat_text - on_text ))" 288
@@ -786,7 +810,7 @@ jobs:
           else
             obj_text="$("${size}" -A "${compat_obj}" |
                           awk '$1 ~ /^\.text/ { total += $2 } END { print total+0 }')"
-            check "compat object text" "${obj_text}" 288
+            check "compat object text" "${obj_text}" 3584
           fi
 
           # The check people forget, in the direction that catches a rename:

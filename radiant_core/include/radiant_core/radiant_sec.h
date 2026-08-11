@@ -108,6 +108,15 @@ extern "C" {
 #define RADIANT_SEC_ENOTSUP  -2
 #define RADIANT_SEC_ENOKEY   -3
 #define RADIANT_SEC_EBADMAC  -4
+/* A counter this receiver has already accepted. Distinct from EBADMAC because
+ * the two mean opposite things about the sender: a replay is a tag that
+ * verifies perfectly and is worthless, and a caller that could not tell them
+ * apart would count an attacker's recording as a forgery attempt or, worse,
+ * a forgery attempt as a stale packet. Defined here rather than beside its one
+ * user in radiant_sec_compat.h, because this is the list a reader checks a new
+ * code against and a fifth value defined elsewhere is a collision waiting for
+ * the sixth. */
+#define RADIANT_SEC_EREPLAY  -5
 
 /*
  * An opaque key handle. NEVER a `const uint8_t key[16]` at a call site.

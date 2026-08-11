@@ -82,7 +82,20 @@ param(
     [string]$Device     = 'nRF5340_xxAA_APP',
     [string]$NcsVersion = 'v3.2.4',
     [string]$BuildDir   = '',
-    [int]$Seconds       = 60,
+    # How long to listen for the run to finish.
+    #
+    # This was 60 s while every suite in the application was effectively
+    # instant. It is not any more: docs/radiant-security.md section 11.3
+    # publishes an epoch-recovery cost table - 50, 1 000 and 65 536 CMAC
+    # operations for a receiver that many boots out of date - and
+    # radiant_core/tests/src/test_sec_compat_attest.c asserts it by performing
+    # those operations. With the software AES backend that is about 45 s on this
+    # board, so the whole application now takes a little under a minute of
+    # execution on top of the flash.
+    #
+    # The loop below stops on ztest's own completion line, so this is a ceiling
+    # on a hang rather than a delay anybody waits out.
+    [int]$Seconds       = 240,
     [switch]$SkipBuild
 )
 
