@@ -1208,6 +1208,255 @@ def decode_tlm_command_ack(body: bytes) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# The sync-handoff page, section 12 - the mirror of src/profiles/profile_handoff.c
+#
+# The one page in the envelope document that a NODE does not send. A receiver
+# already tracking a node broadcasts it so that a second receiver can configure
+# a channel and go straight to tracking, skipping the wildcard sweep entirely -
+# and so that the same receiver, after a reboot, re-acquires in one channel
+# period instead of one sweep.
+#
+# Two frames under one page number, and the arithmetic that forced it is in
+# section 12: page byte and counter byte are fixed by the section 4 positional
+# invariants, byte [7] is tag space by the second of them, and identity plus
+# period alone is 47 of the 48 bits a single frame would have left - one bit
+# spare and no room for a phase field, which is the entire point of the page.
+#
+# THE PAGE CARRIES NO EPOCH. It is the obvious field to add and it must not be
+# added: for a hostless node the epoch is the boot counter, and a slowly
+# incrementing number broadcast in the clear fingerprints the device across
+# sessions and defeats per-boot device-number rotation on its own. Every one of
+# the 64 bits below is assigned, so there is no space it could quietly occupy.
+# ---------------------------------------------------------------------------
+
+PAGE_TLM_SYNC_HANDOFF = 0x12
+
+TLM_HANDOFF_FRAMES = 2
+TLM_HANDOFF_AREA_BITS = 32       # bytes [3..6]; [7] is tag space
+
+# Slot phase is a FRACTION of the node's own period, in period/8192 units,
+# rather than a count of 1/32768 s. That is self-scaling: round-trip error is at
+# most period/16384 counts - 15 us at the 4 Hz ANT+ period, 122 us at the
+# longest period the field can express - so it is inside the guard window at
+# both ends of the range. A fixed-resolution count would have had to choose
+# between covering a 2 s period and being useful at 4 Hz.
+TLM_HANDOFF_PHASE_DEN = 8192
+TLM_HANDOFF_PHASE_MAX = TLM_HANDOFF_PHASE_DEN - 1
+
+# Clock accuracy: the ceiling on the node's clock error in ppm. BLE's ladder,
+# adopted rather than invented - it already spans exactly the range that
+# matters, from an RC-oscillator coin-cell node at the top to a crystal at the
+# bottom, and a second ladder meaning the same thing differently would be a pure
+# interoperability cost.
+#
+# Code 0 is the worst case AND the value to send when the accuracy is not known,
+# because on no evidence the worst case is the only safe answer.
+TLM_CLK_UNKNOWN = 0
+TLM_CLK_250PPM = 1
+TLM_CLK_150PPM = 2
+TLM_CLK_100PPM = 3
+TLM_CLK_75PPM = 4
+TLM_CLK_50PPM = 5
+TLM_CLK_30PPM = 6
+TLM_CLK_20PPM = 7
+
+TLM_CLK_PPM_CEILING = {
+    TLM_CLK_UNKNOWN: 500,
+    TLM_CLK_250PPM: 250,
+    TLM_CLK_150PPM: 150,
+    TLM_CLK_100PPM: 100,
+    TLM_CLK_75PPM: 75,
+    TLM_CLK_50PPM: 50,
+    TLM_CLK_30PPM: 30,
+    TLM_CLK_20PPM: 20,
+}
+
+
+def tlm_clock_ppm(code: int) -> int:
+    """The ppm ceiling a clock-accuracy code promises. Never narrower than the
+    code says: a receiver sizing a window on this must round outward."""
+    if code not in TLM_CLK_PPM_CEILING:
+        raise ValueError(f"clock accuracy code {code} is not 0..7")
+    return TLM_CLK_PPM_CEILING[code]
+
+
+def tlm_handoff_phase_encode(phase_counts: int, period: int) -> int:
+    """Counts from the carrying frame's t_sync to the node's next slot, as a
+    period/8192 fraction.
+
+    `phase_counts` is reduced modulo the period here rather than refused: it is
+    a phase, and a caller that measured across a slot boundary is not wrong, it
+    is one period out.
+    """
+    if not 1 <= period <= 65535:
+        raise ValueError("a handoff needs a real period; 0 is asynchronous and "
+                         "an asynchronous node has no slot to hand over")
+    if phase_counts < 0:
+        raise ValueError("a slot phase is measured forward from the carrying "
+                         "frame and is never negative")
+    phase_counts %= period
+    code = (phase_counts * TLM_HANDOFF_PHASE_DEN + period // 2) // period
+    return min(code, TLM_HANDOFF_PHASE_MAX)
+
+
+def tlm_handoff_phase_counts(phase_code: int, period: int) -> int:
+    """The inverse: 32768 Hz counts from the carrying frame's t_sync."""
+    if not 0 <= phase_code <= TLM_HANDOFF_PHASE_MAX:
+        raise ValueError(f"phase code {phase_code} is not 0..8191")
+    return ((phase_code * period) + TLM_HANDOFF_PHASE_DEN // 2) \
+        // TLM_HANDOFF_PHASE_DEN
+
+
+@dataclasses.dataclass
+class TlmHandoff:
+    """Everything a second receiver needs to open a tracked channel, and
+    nothing else. The absent field is the epoch; see section 12."""
+
+    device_number: int
+    device_type: int          # 1..127; the pairing bit is not handed over
+    trans_type: int
+    period: int               # counts of 1/32768 s
+    phase: int = 0            # 0..8191, units of period/8192, from frame 1
+    clock_accuracy: int = TLM_CLK_UNKNOWN
+    counter: int = 0          # byte [1], the counter invariant
+
+
+def _tlm_handoff_validate(h: TlmHandoff) -> None:
+    if not 0 <= h.device_number <= 0xFFFF:
+        raise ValueError("device number is a u16")
+    if not 1 <= h.device_type <= 127:
+        raise ValueError("device type is 1..127; the MSB of the device type "
+                         "field is the pairing bit and is not handed over")
+    if not 0 <= h.trans_type <= 0xFF:
+        raise ValueError("transmission type is a u8")
+    if not 1 <= h.period <= 0xFFFF:
+        raise ValueError("a handoff needs a real period; 0 is asynchronous and "
+                         "an asynchronous node has no slot to hand over")
+    if not 0 <= h.phase <= TLM_HANDOFF_PHASE_MAX:
+        raise ValueError("slot phase is 0..8191 units of period/8192")
+    if not 0 <= h.clock_accuracy <= 7:
+        raise ValueError("clock accuracy is a 3-bit code")
+    if not 0 <= h.counter <= 0xFF:
+        raise ValueError("the handoff counter is a u8")
+
+
+def _tlm_handoff_head(index: int, counter: int) -> bytes:
+    return bytes([PAGE_TLM_SYNC_HANDOFF, _u8(counter),
+                  (index << 4) | (TLM_HANDOFF_FRAMES - 1)])
+
+
+def encode_tlm_handoff(h: TlmHandoff) -> list:
+    """The whole handoff set, as a list of 2 eight-byte frames.
+
+        [0] 0x12                        page number
+        [1] handoff counter             the section 4 counter invariant
+        [2] (index << 4) | (count - 1)  frame index; moved to [2] so that [1]
+                                        can stay a counter and this page needs
+                                        no third exception to that invariant
+        [3..6] 32-bit field area, MSB-first, exactly as section 6 packs a
+               descriptor field area
+        [7] tag space; zero when no transform is in use
+
+    Frame 0 is WHO and is timeless. Frame 1 is WHEN and is self-dating: its
+    phase is measured from its own t_sync, so the two frames need not be
+    adjacent and need not arrive in order.
+    """
+    _tlm_handoff_validate(h)
+
+    who = bytearray(TLM_HANDOFF_AREA_BITS // 8)
+    pack_bits(who, TLM_HANDOFF_AREA_BITS, 0, 16, h.device_number)
+    pack_bits(who, TLM_HANDOFF_AREA_BITS, 16, 7, h.device_type)
+    pack_bits(who, TLM_HANDOFF_AREA_BITS, 23, 8, h.trans_type)
+    # bit 31 is reserved, must be 0, and this expression never sets it.
+
+    when = bytearray(TLM_HANDOFF_AREA_BITS // 8)
+    pack_bits(when, TLM_HANDOFF_AREA_BITS, 0, 16, h.period)
+    pack_bits(when, TLM_HANDOFF_AREA_BITS, 16, 13, h.phase)
+    pack_bits(when, TLM_HANDOFF_AREA_BITS, 29, 3, h.clock_accuracy)
+
+    # The trailing zero is byte [7], tag space. Not padding: the second
+    # positional invariant of section 4 says an authentication tag lives at the
+    # end of a RadiANT page and nowhere else, so no field may be placed there.
+    return [_tlm_handoff_head(0, h.counter) + bytes(who) + b"\x00",
+            _tlm_handoff_head(1, h.counter) + bytes(when) + b"\x00"]
+
+
+def tlm_handoff_frame_index(frame: bytes):
+    """(index, count) from byte [2], or None if this is not a handoff frame."""
+    if len(frame) < RADIANT_TLM_FRAME_LEN or frame[0] != PAGE_TLM_SYNC_HANDOFF:
+        return None
+    return (frame[2] >> 4) & 0x0F, (frame[2] & 0x0F) + 1
+
+
+def decode_tlm_handoff(frames) -> TlmHandoff:
+    """Turn a complete handoff set back into the parameters of a channel.
+
+    Order-insensitive on purpose: frame 0 carries no time and frame 1 carries
+    its own, so a receiver that hears them out of order or a rotation apart has
+    lost nothing but the wait.
+    """
+    frames = [bytes(f[:RADIANT_TLM_FRAME_LEN]) for f in frames]
+    by_index = {}
+    for frame in frames:
+        if len(frame) != RADIANT_TLM_FRAME_LEN:
+            raise ValueError("a handoff frame is 8 bytes")
+        head = tlm_handoff_frame_index(frame)
+        if head is None:
+            raise ValueError(f"page 0x{frame[0]:02X} is not the handoff page")
+        index, count = head
+        if count != TLM_HANDOFF_FRAMES:
+            raise ValueError(f"a v1 handoff set is {TLM_HANDOFF_FRAMES} frames, "
+                             f"not {count}")
+        if index >= TLM_HANDOFF_FRAMES:
+            raise ValueError(f"frame index {index} is outside a {count}-frame set")
+        by_index[index] = frame
+
+    missing = [i for i in range(TLM_HANDOFF_FRAMES) if i not in by_index]
+    if missing:
+        raise ValueError(f"handoff set is missing frame(s) {missing}")
+
+    counters = {by_index[i][1] for i in range(TLM_HANDOFF_FRAMES)}
+    if len(counters) != 1:
+        raise ValueError("the two frames carry different counters and are "
+                         "therefore two different handoffs")
+
+    who = by_index[0][3:7]
+    when = by_index[1][3:7]
+
+    reserved = unpack_bits(who, TLM_HANDOFF_AREA_BITS, 31, 1)
+    if reserved:
+        raise ValueError("frame 0 bit 31 is reserved and must be 0")
+    for index in range(TLM_HANDOFF_FRAMES):
+        if by_index[index][7] != 0:
+            raise ValueError(f"frame {index} byte [7] is tag space and no "
+                             f"transform is in use, so it must be 0")
+
+    h = TlmHandoff(
+        device_number=unpack_bits(who, TLM_HANDOFF_AREA_BITS, 0, 16),
+        device_type=unpack_bits(who, TLM_HANDOFF_AREA_BITS, 16, 7),
+        trans_type=unpack_bits(who, TLM_HANDOFF_AREA_BITS, 23, 8),
+        period=unpack_bits(when, TLM_HANDOFF_AREA_BITS, 0, 16),
+        phase=unpack_bits(when, TLM_HANDOFF_AREA_BITS, 16, 13),
+        clock_accuracy=unpack_bits(when, TLM_HANDOFF_AREA_BITS, 29, 3),
+        counter=by_index[0][1],
+    )
+    _tlm_handoff_validate(h)
+    return h
+
+
+def tlm_handoff_next_slot(h: TlmHandoff, t_carrier_counts: int) -> int:
+    """The node's next slot, on the RECIPIENT's clock.
+
+    `t_carrier_counts` is the t_sync at which the recipient heard frame 1, in
+    its own 32768 Hz counts. Nothing absolute crosses the air: the phase is
+    relative to that frame and to nothing else, because two receivers share no
+    time base and an absolute slot instant would be a number from somebody
+    else's clock.
+    """
+    return t_carrier_counts + tlm_handoff_phase_counts(h.phase, h.period)
+
+
+# ---------------------------------------------------------------------------
 # The page scheduler - the mirror of src/profiles/profile_sched.c
 #
 # Which page goes in the next message slot, and nothing else. It knows no

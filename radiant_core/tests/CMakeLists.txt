@@ -63,10 +63,16 @@ target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fake_radio.c")
 #
 # Listed explicitly rather than globbed: unlike src/ above, this is a library
 # and not a suite drop box, and a new file here is a deliberate act.
+# profile_handoff.c is the one file here that includes a radiant_core header:
+# the page 0x12 codec is pure, but applying a handoff means driving a channel,
+# and a format with no consumer would not have been worth specifying. The
+# dependency runs application -> core, which is the direction the module
+# boundary already permits; nothing in radiant_core knows this file exists.
 target_sources(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_bits.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_telemetry.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_sched.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_handoff.c"
 )
 target_include_directories(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles")

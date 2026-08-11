@@ -119,7 +119,8 @@ device type alongside, on its own channel.
 | `0x01-0x0F` | Data | Packed field values against the announced schema |
 | `0x10` | Reliable command | Command + sequence + inline tag, receiver -> node |
 | `0x11` | Command acknowledge | Result + sequence + inline tag, node -> receiver |
-| `0x12-0x1F` | Reserved | Unassigned; a receiver ignores these |
+| `0x12` | Sync handoff | One receiver tells another where and when a node it already tracks transmits |
+| `0x13-0x1F` | Reserved | Unassigned; a receiver ignores these |
 | `0x20-0x2F` | Reserved for the security envelope | Epoch and key-generation announcement, v2 TESLA key disclosure |
 | `0x30-0x4F` | Reserved | Unassigned |
 | `0x50` | Common page 80 | Manufacturer information, byte-exact ANT+ |
@@ -873,3 +874,170 @@ that project gets a second consumer for free.
 - **Any security switch turned on.** Every reservation in this document is
   populated with zeros in v1. Phase 7 turns them on; Phase 4 makes sure there
   is somewhere for them to go.
+
+---
+
+## 12. Sync handoff, page `0x12`
+
+**This is the one page in this document that a node does not send.** Sections 1
+to 11 describe a node's own envelope; page `0x12` is broadcast by a *receiver*,
+about a node it is already tracking, for the benefit of a second receiver. It
+is appended here rather than inserted at section 10 because it sits outside the
+envelope, and because eight places in the code cite these section numbers.
+
+### The problem it solves
+
+A receiver that has never heard a node has to find it by sweeping: the search
+address is derived from the low byte of the device number, so a wildcard search
+walks a set of address filters, one dwell each, and is only *certain* to have
+found every node in range after a full sweep. On this project's nRF backend
+that is 32 windows, and it is the dominant term in discovery latency. The
+deterministic A/B in `radiant_core/tests/src/test_handoff.c` puts a worst-case
+sweep at 32 windows and 8.49 s to the first slot against 0 windows and 0.16 s
+for a handoff, on the mock radio's virtual clock; the live two-receiver
+measurement is a hardware-session job and is not this number.
+
+None of that work is necessary if somebody already knows the answer. A receiver
+that is tracking the node holds every parameter the second receiver needs, and
+one page hands them over. The second receiver configures the channel, opens it,
+and goes straight to tracking. **The sweep is skipped, not shortened** - zero
+windows armed, and the first slot arrives within one channel period.
+
+Persisted across a reboot, the same page is how a receiver re-acquires in one
+channel period instead of one sweep.
+
+### Layout - a two-frame set
+
+Both frames carry page number `0x12`.
+
+```
+[0] 0x12                        page number
+[1] handoff counter (u8)        the counter invariant of section 4
+[2] (index << 4) | (count - 1)  frame index within the set; count is 2 in v1
+[3..6] 32-bit field area, packed MSB-first exactly as section 6 packs a
+       descriptor field area - bit offset 0 is the MSB of byte [3]
+[7] tag space; zero when no transform is in use
+```
+
+**Frame 0 - who:**
+
+```
+bits  0..15  device number (u16)
+bits 16..22  device type, 7 bits; the pairing bit is not handed over
+bits 23..30  transmission type (u8)
+bit      31  reserved, must be 0
+```
+
+**Frame 1 - when:**
+
+```
+bits  0..15  channel period, counts of 1/32768 s (u16); 0 is refused
+bits 16..28  slot phase, 13 bits, in units of period/8192, measured from the
+             t_sync of THIS frame
+bits 29..31  clock accuracy code (below)
+```
+
+### Why two frames, stated as arithmetic
+
+One 8-byte frame cannot hold it, and the margin is not close. Byte `[0]` is the
+page number and byte `[1]` is the counter, both fixed by section 4, which
+leaves six bytes - 48 bits. The parameters a receiver needs before it can open
+a tracked channel are:
+
+| Field | Bits |
+|---|---|
+| device number | 16 |
+| device type | 7 |
+| transmission type | 8 |
+| channel period | 16 |
+| slot phase | 13 |
+| clock accuracy | 3 |
+| **total** | **63** |
+
+Identity and period alone are 47 bits, so a single frame has exactly one bit
+spare and **no room for any phase field at all** - and phase is the entire point
+of the page. Reserving byte `[7]` as tag space, which the second positional
+invariant of section 4 requires of every RadiANT page, takes the usable area to
+32 bits per frame, and 63 bits fit in 64 with one bit to spare.
+
+So the page is a **set of consecutive frames** in exactly the sense section 6
+already defines for the descriptor, for exactly the same reason, with the same
+`(index << 4) | (count - 1)` encoding - moved to byte `[2]` so that byte `[1]`
+can stay a counter and this page needs no third exception to the counter
+invariant.
+
+### Slot phase is relative, never absolute
+
+**The phase is measured from the t_sync of THIS frame - frame 1 - and a
+receiver that stores an absolute instant instead has written down a number from
+somebody else's clock.** There is no shared time base between two receivers, so
+an absolute slot time is not merely imprecise, it is uninterpretable.
+
+Two consequences worth stating, because both are free and neither is obvious:
+
+- The two frames need not be adjacent, and need not arrive in order. Frame 0 is
+  timeless; frame 1 is self-dating. A receiver that loses frame 1 waits for the
+  next one and loses nothing but the wait.
+- The phase is a **fraction of the node's own period**, `period/8192` units,
+  rather than a count of 1/32768 s. That is self-scaling: round-trip error is
+  at most `period/16384` counts, which is 15 us at the 4 Hz ANT+ period and
+  122 us at the longest period the field can express. Both are inside
+  `RADIANT_CHANNEL_GUARD_MAX_US`, so the first window after a handoff is no
+  wider than the first window after a sweep acquisition. A fixed-resolution
+  count would have had to choose between covering a 2 s period and being useful
+  at 4 Hz.
+
+### Clock accuracy
+
+Three bits, the same field and the same vocabulary the descriptor's schedule
+block will carry. It is the ceiling on the node's clock error, in ppm:
+
+| Code | ppm | |
+|---|---|---|
+| 0 | 251..500 | **and the value to send when it is not known.** Worst case is the safe answer |
+| 1 | 151..250 | |
+| 2 | 101..150 | |
+| 3 | 76..100 | |
+| 4 | 51..75 | |
+| 5 | 31..50 | |
+| 6 | 21..30 | a 32 kHz crystal |
+| 7 | 0..20 | |
+
+The ladder is BLE's clock-accuracy encoding, adopted rather than invented: it
+already spans exactly the range that matters here, from a coin-cell node
+running its RC oscillator with no 32 kHz crystal at the top to a
+crystal-referenced sensor at the bottom, and a second ladder that meant the
+same thing differently would be a pure interoperability cost.
+
+**The field is carried but not yet consumed.** Widening
+`radiant_channel_guard_us()` toward an announced ceiling belongs with the
+descriptor schedule block that announces it in the first place; a handoff that
+widened the guard while a descriptor could not would make the same node behave
+differently depending on how it was found. Encoding it now costs nothing and
+means the format does not move when the consumer arrives. Until then a
+handed-off channel gets `RADIANT_CHANNEL_GUARD_MAX_US`, exactly like a swept
+one, because it has measured nothing about this master's clock either.
+
+### The handoff page carries no epoch, and this is deliberate
+
+**The handoff page carries no epoch.** It is the obvious field to add - a
+receiver handing over everything else it knows would naturally include it, and
+it would save a keyed recipient a search - and it must not be added.
+
+For a hostless node the epoch **is** the boot counter. A slowly-incrementing
+number visible on air fingerprints a device across sessions and defeats
+per-boot device-number rotation (identity Tier 2, `docs/radiant-security.md`
+section 4) on its own, which is why the epoch was removed from the
+compatibility beacon. This page is broadcast in the clear, so carrying the
+epoch here would reintroduce exactly that leak through a different page.
+
+A keyed recipient recovers the epoch by forward search against the key-group
+hint - about 3 ms for a thousand boots - and an unkeyed recipient does not need
+it at all. The cost of the rule is one field that would have saved 3 ms. The
+sweep skip, which is the entire value of this page, is untouched.
+
+The bit budget above is the enforcement: every one of the 64 bits is assigned,
+so there is no space a four-byte epoch could quietly occupy, and adding one
+would require a third frame and a visible format change rather than an edit.
+`profile_handoff.c` states that as two `_Static_assert`s, which is where an
+author who reaches for the space finds out it is not there.

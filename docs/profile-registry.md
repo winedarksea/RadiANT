@@ -187,7 +187,8 @@ the unclaimed one is the one two implementations both reach for.
 | `0x60` | `0x01-0x0F` | Data | `ant_pages.encode_tlm_data` | Field area packed MSB-first against the descriptor. C: `profile_data_encode` |
 | `0x60` | `0x10` | Reliable command | `ant_pages.encode_tlm_command` | Sequence + inline 16-bit tag, idempotent. **Layout only** - the idempotency rule and the tag need a key, and land with the command path |
 | `0x60` | `0x11` | Command acknowledge | `ant_pages.encode_tlm_command_ack` | Result code + inline 16-bit tag. Layout only, as above |
-| `0x60` | `0x12-0x1F` | Reserved | — | Unassigned; a receiver ignores these |
+| `0x60` | `0x12` | Sync handoff | `ant_pages.encode_tlm_handoff` | Two frames under one page number. C: `profile_handoff_encode`. Carries **no epoch**, and that is a constraint rather than an omission |
+| `0x60` | `0x13-0x1F` | Reserved | — | Unassigned; a receiver ignores these |
 | `0x60` | `0x20-0x2F` | Reserved for the security envelope | `docs/radiant-security.md` | Epoch and key-generation announcement, v2 TESLA key disclosure |
 | `0x60` | `0x30-0x4F` | Reserved | — | Unassigned |
 | `0x60` | `0x50` | Common page 80 | `ant_pages.encode_common_80` | Byte-exact ANT+ |

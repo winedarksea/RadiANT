@@ -590,6 +590,16 @@ SPEC_PINS = [
     (TELEMETRY, "page 82 is suppressed",
      "the page 82 rule. A monotone operating-time counter survives an "
      "identity change and fingerprints a battery swap"),
+    (TELEMETRY, "The handoff page carries no epoch",
+     "the sync-handoff page's no-epoch rule. It is the obvious field to add - "
+     "a receiver handing over everything else it knows would naturally "
+     "include it - and for a hostless node the epoch IS the boot counter, so a "
+     "page broadcast in the clear that carried it would fingerprint the device "
+     "across sessions and defeat per-boot device-number rotation on its own"),
+    (TELEMETRY, "measured from the t_sync of THIS frame",
+     "the sync-handoff page's relative-phase rule. There is no shared time "
+     "base between two receivers, so an absolute slot instant is not merely "
+     "imprecise, it is uninterpretable on the receiver that consumes it"),
 
     (SECURITY, "dom = 0x01 CTR keystream",
      "the nonce's domain byte, which is the only thing stopping a keystream "

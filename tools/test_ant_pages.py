@@ -16,6 +16,7 @@ is deterministic, rather than waited for on hardware.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import sys
 import unittest
@@ -747,6 +748,170 @@ class TestTelemetryCommandPages(unittest.TestCase):
         # "accepted; already executed" is what makes a retried "AC on" safe.
         self.assertEqual(got["result"], ap.TLM_RESULT_ALREADY)
         self.assertEqual(got["value"], 1)
+
+
+class TestTelemetrySyncHandoff(unittest.TestCase):
+    """Page 0x12, section 12. The page a RECEIVER sends about a node.
+
+    THESE FRAMES ARE PINNED AS HEX AND ARE SHARED, BYTE FOR BYTE, WITH
+    radiant_core/tests/src/test_handoff.c. Same reason as the bit packer above:
+    two implementations checked only against each other are not checked at all,
+    and this page exists so that a receiver can act on parameters it never
+    measured - the one situation where a decoder that is self-consistently wrong
+    costs the most.
+    """
+
+    # Next slot 5000 counts after frame 1's t_sync, at the 4 Hz ANT+ period.
+    CANON = ap.TlmHandoff(device_number=0xB1CE, device_type=0x60,
+                          trans_type=0x05, period=8182, phase=5006,
+                          clock_accuracy=ap.TLM_CLK_30PPM, counter=0x2A)
+    CANON_HEX = ["122a01b1cec00a00", "122a111ff69c7600"]
+
+    def test_the_frames_are_byte_for_byte_what_the_c_encoder_emits(self):
+        frames = ap.encode_tlm_handoff(self.CANON)
+        self.assertEqual([f.hex() for f in frames], self.CANON_HEX)
+
+    def test_page_number_counter_and_frame_index(self):
+        frames = ap.encode_tlm_handoff(self.CANON)
+        for index, frame in enumerate(frames):
+            self.assertEqual(frame[0], ap.PAGE_TLM_SYNC_HANDOFF)
+            # Byte [1] is the counter, NOT the frame index. The index moved to
+            # byte [2] so that this page needs no third exception to the
+            # section 4 counter invariant.
+            self.assertEqual(frame[1], 0x2A)
+            self.assertEqual(ap.tlm_handoff_frame_index(frame), (index, 2))
+
+    def test_round_trip(self):
+        got = ap.decode_tlm_handoff(ap.encode_tlm_handoff(self.CANON))
+        self.assertEqual(got, self.CANON)
+
+    def test_the_two_frames_are_order_insensitive(self):
+        # Frame 0 is timeless and frame 1 is self-dating, so a receiver that
+        # hears them backwards or a rotation apart has lost nothing but time.
+        frames = ap.encode_tlm_handoff(self.CANON)
+        self.assertEqual(ap.decode_tlm_handoff(list(reversed(frames))),
+                         self.CANON)
+
+    def test_two_frames_of_different_handoffs_are_refused(self):
+        a = ap.encode_tlm_handoff(self.CANON)
+        b = ap.encode_tlm_handoff(
+            dataclasses.replace(self.CANON, counter=0x2B, device_number=1))
+        with self.assertRaises(ValueError):
+            ap.decode_tlm_handoff([a[0], b[1]])
+
+    def test_an_incomplete_set_is_refused_rather_than_half_applied(self):
+        frames = ap.encode_tlm_handoff(self.CANON)
+        with self.assertRaises(ValueError):
+            ap.decode_tlm_handoff([frames[0]])
+        with self.assertRaises(ValueError):
+            ap.decode_tlm_handoff([frames[1]])
+
+    def test_every_reserved_field_is_zero(self):
+        for frame in ap.encode_tlm_handoff(self.CANON):
+            # Byte [7] is tag space, not padding: no RadiANT page may put a
+            # field where an authentication tag has to go.
+            self.assertEqual(frame[7], 0)
+        # Frame 0 bit 31.
+        self.assertEqual(
+            ap.unpack_bits(ap.encode_tlm_handoff(self.CANON)[0][3:7],
+                           ap.TLM_HANDOFF_AREA_BITS, 31, 1), 0)
+
+    def test_a_set_reserved_bit_is_refused_not_ignored(self):
+        frames = ap.encode_tlm_handoff(self.CANON)
+        broken = bytearray(frames[0])
+        broken[6] |= 0x01
+        with self.assertRaises(ValueError):
+            ap.decode_tlm_handoff([bytes(broken), frames[1]])
+        tagged = bytearray(frames[1])
+        tagged[7] = 0xFF
+        with self.assertRaises(ValueError):
+            ap.decode_tlm_handoff([frames[0], bytes(tagged)])
+
+    def test_the_page_has_no_room_for_an_epoch(self):
+        """The cross-plan constraint, enforced as arithmetic.
+
+        For a hostless node the epoch IS the boot counter, and a slowly
+        incrementing number broadcast in the clear fingerprints the device
+        across sessions - so this page must never carry one. The defence is
+        that every one of the 64 field bits is already assigned: there is no
+        space an epoch could quietly occupy, and adding one would need a third
+        frame and a visible format change rather than an edit.
+        """
+        assigned = 16 + 7 + 8 + 1 + 16 + 13 + 3   # who, then when
+        self.assertEqual(assigned, 2 * ap.TLM_HANDOFF_AREA_BITS)
+        # And the field area genuinely ends where the tag space begins.
+        with self.assertRaises(ValueError):
+            ap.pack_bits(bytearray(4), ap.TLM_HANDOFF_AREA_BITS, 32, 32, 0)
+        # No decoded handoff has anywhere to put one.
+        got = ap.decode_tlm_handoff(ap.encode_tlm_handoff(self.CANON))
+        self.assertNotIn("epoch",
+                         [f.name for f in dataclasses.fields(got)])
+
+    def test_slot_phase_is_relative_to_the_carrying_frame(self):
+        # The recipient adds the phase to the t_sync of the frame it heard.
+        # Nothing absolute crosses the air, because two receivers share no
+        # clock and an absolute instant would be a number from somebody else's.
+        h = self.CANON
+        for t_carrier in (0, 1, 12345, 2 ** 31):
+            with self.subTest(t_carrier=t_carrier):
+                self.assertEqual(ap.tlm_handoff_next_slot(h, t_carrier),
+                                 t_carrier + 5000)
+
+    def test_phase_resolution_stays_inside_the_guard_window_at_every_period(self):
+        # The whole reason phase is a period/8192 FRACTION rather than a count.
+        # RADIANT_CHANNEL_GUARD_MAX_US is 400; a round trip must not cost more
+        # than that at any period the field can express, or a handed-off
+        # channel would open a window the node's slot has already left.
+        guard_max_us = 400
+        for period in (273, 1024, 8182, 16384, 32768, 65535):
+            for phase_counts in (0, 1, period // 3, period - 1):
+                with self.subTest(period=period, phase=phase_counts):
+                    code = ap.tlm_handoff_phase_encode(phase_counts, period)
+                    back = ap.tlm_handoff_phase_counts(code, period)
+                    error_us = abs(back - phase_counts) * 1e6 / 32768.0
+                    self.assertLess(error_us, guard_max_us)
+
+    def test_a_phase_measured_across_a_slot_boundary_is_reduced_not_refused(self):
+        # It is a phase. A caller one period out is not wrong, it is one period
+        # out, and refusing would push modular arithmetic to every caller.
+        self.assertEqual(ap.tlm_handoff_phase_encode(8182 + 5000, 8182),
+                         ap.tlm_handoff_phase_encode(5000, 8182))
+
+    def test_an_asynchronous_node_has_no_slot_to_hand_over(self):
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_handoff(dataclasses.replace(self.CANON, period=0))
+        with self.assertRaises(ValueError):
+            ap.tlm_handoff_phase_encode(0, 0)
+
+    def test_the_pairing_bit_is_not_handed_over(self):
+        # Device type is 7 bits here because the MSB of the on-air device type
+        # field is the pairing bit, which is a property of a search and not of
+        # the node.
+        with self.assertRaises(ValueError):
+            ap.encode_tlm_handoff(dataclasses.replace(self.CANON,
+                                                      device_type=0xE0))
+
+    def test_the_clock_accuracy_ladder_is_the_documented_one(self):
+        self.assertEqual(
+            [ap.tlm_clock_ppm(code) for code in range(8)],
+            [500, 250, 150, 100, 75, 50, 30, 20])
+        # Code 0 is "not stated", and on no evidence the worst case is the only
+        # safe answer.
+        self.assertEqual(ap.tlm_clock_ppm(ap.TLM_CLK_UNKNOWN), 500)
+        for code in range(8):
+            got = ap.decode_tlm_handoff(ap.encode_tlm_handoff(
+                dataclasses.replace(self.CANON, clock_accuracy=code)))
+            self.assertEqual(got.clock_accuracy, code)
+
+    def test_the_handoff_reproduces_the_parameters_a_sweep_would_have_found(self):
+        """The gate, in Python: what crosses the air is what a search result
+        carries, minus anything a second receiver could not interpret."""
+        got = ap.decode_tlm_handoff(ap.encode_tlm_handoff(self.CANON))
+        self.assertEqual(got.device_number, 0xB1CE)
+        self.assertEqual(got.device_type, ap.RADIANT_TLM_DEVICE_TYPE)
+        self.assertEqual(got.trans_type, ap.RADIANT_TLM_TRANS_TYPE)
+        self.assertEqual(got.period, ap.RADIANT_TLM_PERIOD_DEFAULT)
+        self.assertEqual(ap.tlm_handoff_next_slot(got, 1_000_000), 1_005_000)
 
 
 class TestAgainstTheAerosenseDecoders(unittest.TestCase):
