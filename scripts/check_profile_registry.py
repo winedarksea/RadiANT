@@ -612,6 +612,10 @@ SPEC_PINS = [
      "the page 81 rule"),
     (SECURITY, "page 82 is suppressed",
      "the page 82 rule"),
+    (SECURITY, "must re-pair every session",
+     "identity Tier 2's cost to standard receivers. It is the reason the tier "
+     "is opt-in and off by default, and a spec that dropped the sentence "
+     "would read as though re-rolling every boot were free"),
 ]
 
 

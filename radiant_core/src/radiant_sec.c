@@ -506,6 +506,43 @@ int radiant_sec_set_devnum(uint8_t ch, uint16_t devnum)
 	return RADIANT_SEC_OK;
 }
 
+int radiant_sec_try_devnum(uint8_t ch, uint16_t devnum)
+{
+	struct sec_ctx *c = ctx_of(ch);
+
+	if (c == NULL) {
+		return RADIANT_SEC_ENOKEY;
+	}
+	if (!c->epoch_set) {
+		/* Nothing can verify before the epoch is known, so a trial
+		 * started here would report "not my sensor" about every
+		 * candidate including the right one. */
+		return RADIANT_SEC_EINVAL;
+	}
+
+	c->devnum = devnum;
+
+	/*
+	 * The clean slate. Everything below belonged to the previous candidate:
+	 * a window half filled under one device number and closed under another
+	 * yields an unverified verdict that says nothing about either.
+	 *
+	 * last_verdict goes back to CLEAR rather than UNVERIFIED because CLEAR
+	 * is the honest word for "no window has been judged yet", and the
+	 * caller's whole loop is "is it VERIFIED yet".
+	 */
+	c->rx_win_open = false;
+	c->rx_prev_valid = false;
+	c->rx_prev_seen = false;
+	c->rx_absorbed = 0u;
+	c->rx_tag_have = 0u;
+	c->rx_broken = false;
+	c->n_hold = 0u;
+	c->last_verdict = RADIANT_SEC_VERDICT_CLEAR;
+
+	return RADIANT_SEC_OK;
+}
+
 void radiant_sec_channel_release(uint8_t ch)
 {
 	struct sec_ctx *c = ctx_of(ch);

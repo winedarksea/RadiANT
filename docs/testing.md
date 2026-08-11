@@ -294,6 +294,28 @@ when a non-eight-byte frame is actually captured with its control byte
 decoded; until then there is nothing to test and no `MAXLEN` exposure to
 measure.
 
+**Identity Tier 2 has a bench claim of its own, and it is a UX claim.** (The
+identity tiers of [`radiant-security.md`](radiant-security.md) section 4 are
+unrelated to the verification tiers on this page; the collision is unfortunate
+and the two never appear in the same sentence again.) A Tier 2 node re-rolls its
+on-air device number at every power-up, so the check is a power cycle and what
+survives it:
+
+- **A keyed RadiANT receiver re-acquires with no host intervention.** It
+  wildcard-searches the device type, hears the returning node under its new
+  number, and confirms identity by whether `X_AUTH` verifies — not by the
+  number. `radiant_core/tests/src/test_sec.c` asserts this against the mock, so
+  the bench run is confirming on air what is already regression-tested; and the
+  negative half is asserted there too, because a receiver that verified whatever
+  it heard would "re-acquire" the first stranger to walk past.
+- **An unkeyed receiver must re-pair every session, and that is correct
+  behaviour rather than a defect.** A Garmin head unit or Zwift pairs by device
+  number and the number it stored is gone. Anyone running this check should
+  expect to re-pair and should not log it as a fault. It is the whole reason
+  Tier 2 is opt-in, off by default, and RadiANT-device-types-only — see the
+  `ANT_SIM_IDENTITY_TIER_2` Kconfig help, which says the same thing at the point
+  somebody is about to switch it on.
+
 Two scale checks, neither of which has a sdk-ant baseline to compare against
 because `libant.a` cannot do either, so both are absolute: **32 channels
 tracked simultaneously** with per-channel loss no worse than single-channel

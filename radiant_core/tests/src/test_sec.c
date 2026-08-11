@@ -798,6 +798,147 @@ ZTEST(radiant_sec, test_the_counter_wrap_does_not_repeat_the_keystream)
 		     "the wrap did not advance the epoch");
 }
 
+/* ── Identity Tier 2: re-acquisition by key ─────────────────────────────── */
+
+/*
+ * Tier 2 re-rolls the on-air device number at every power-up. The base device
+ * number does NOT re-roll - it is fixed at provisioning and it is what the KDF
+ * binds - so the sensor's keys are the same after the reboot as before it, and
+ * the only thing that changed is a number in the nonce.
+ *
+ * TEST_DEVNUM is the identity before the power cycle; this is the one it comes
+ * back with. Both are arbitrary except that they must differ.
+ */
+#define TIER2_NEW_DEVNUM 0x91C4u
+
+/* Run one whole window of packets from a sensor whose on-air device number is
+ * `devnum`, at counter indices `from .. from + w - 1`. */
+static void tier2_window(uint16_t devnum, uint32_t from, uint8_t w)
+{
+	uint32_t i;
+
+	zassert_equal(RADIANT_SEC_OK, radiant_sec_set_devnum(TX_CH, devnum));
+	for (i = 0u; i < w; i++) {
+		hop(from + i, false, -1);
+	}
+}
+
+ZTEST(radiant_sec, test_a_keyed_receiver_re_acquires_across_a_power_cycle)
+{
+	const uint8_t w = 4u;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, w);
+	epoch_both(11u);
+
+	/*
+	 * Before the power cycle: both sides on TEST_DEVNUM. Two windows,
+	 * because the tag lags one window - the bytes collected during window k
+	 * authenticate window k-1, so the first window a receiver hears can
+	 * never be the one that verifies.
+	 */
+	tier2_window(TEST_DEVNUM, 0u, w);
+	tier2_window(TEST_DEVNUM, w, w);
+	zassert_true(verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED) > 0u,
+		     "the link did not verify before the power cycle, so what "
+		     "follows would prove nothing");
+
+	/*
+	 * THE POWER CYCLE. The sensor comes back with a new on-air device
+	 * number and the same key, and it re-anchors the same epoch - which the
+	 * monotonicity gate permits only because a reboot cleared epoch_set,
+	 * and which a real node does by persisting the epoch it was issued.
+	 *
+	 * A STANDARD receiver is now lost: it tracks by device number and the
+	 * number it has is gone. That is the documented cost of Tier 2 and the
+	 * reason it is off by default.
+	 */
+	radiant_sec_channel_release(TX_CH);
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_set_key(TX_CH, test_root, 128, TEST_DEVNUM));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_configure(TX_CH, RADIANT_SEC_SW_AUTH, w,
+					    RADIANT_SEC_PAGE_LO_DEFAULT,
+					    RADIANT_SEC_PAGE_HI_DEFAULT));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_set_epoch(TX_CH, 11u, 0u, TEST_PERIOD));
+
+	/*
+	 * The receiver does not re-pair and the host is not consulted. It
+	 * wildcard-searched its device type, heard a candidate, and asks the
+	 * one question that survives a re-roll.
+	 */
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_try_devnum(RX_CH, TIER2_NEW_DEVNUM));
+	zassert_equal(RADIANT_SEC_VERDICT_CLEAR,
+		      radiant_sec_last_verdict(RX_CH),
+		      "a fresh trial must start with no verdict, or the "
+		      "previous identity's answer is read as this one's");
+
+	log_n_verdict = 0u;
+	tier2_window(TIER2_NEW_DEVNUM, 0u, w);
+	tier2_window(TIER2_NEW_DEVNUM, w, w);
+
+	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
+		      radiant_sec_last_verdict(RX_CH),
+		      "a keyed receiver did not re-acquire the sensor across a "
+		      "power cycle; Tier 2 without this is just losing sensors");
+	zassert_true(verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED) > 0u,
+		     "no window verified under the new device number");
+}
+
+ZTEST(radiant_sec, test_a_candidate_that_is_not_ours_never_verifies)
+{
+	static const uint8_t stranger[16] = {
+		0x01, 0x01, 0x02, 0x03, 0x05, 0x08, 0x0d, 0x15,
+		0x22, 0x37, 0x59, 0x90, 0xe9, 0x79, 0x62, 0xdb,
+	};
+	const uint8_t w = 4u;
+
+	/*
+	 * The other half of the claim. Re-acquisition is only identification if
+	 * it also says NO - a receiver that verified anything it heard would
+	 * "re-acquire" the first stranger to walk past, which is worse than
+	 * re-pairing because it is silent.
+	 */
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_set_key(TX_CH, stranger, 128,
+					  TIER2_NEW_DEVNUM));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_set_key(RX_CH, test_root, 128, TEST_DEVNUM));
+	configure_both(RADIANT_SEC_SW_AUTH, w);
+	epoch_both(11u);
+
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_try_devnum(RX_CH, TIER2_NEW_DEVNUM));
+
+	tier2_window(TIER2_NEW_DEVNUM, 0u, w);
+	tier2_window(TIER2_NEW_DEVNUM, w, w);
+
+	zassert_equal(RADIANT_SEC_VERDICT_UNVERIFIED,
+		      radiant_sec_last_verdict(RX_CH),
+		      "a node under a different root verified; the trial is "
+		      "answering 'yes' to everything");
+	zassert_equal(0u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED));
+}
+
+ZTEST(radiant_sec, test_a_trial_before_the_epoch_is_known_is_refused)
+{
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_set_key(RX_CH, test_root, 128, TEST_DEVNUM));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_configure(RX_CH, RADIANT_SEC_SW_AUTH, 4u,
+					    RADIANT_SEC_PAGE_LO_DEFAULT,
+					    RADIANT_SEC_PAGE_HI_DEFAULT));
+
+	/* Refused rather than quietly started: with no epoch nothing can
+	 * verify, so a trial here would report "not my sensor" about every
+	 * candidate including the right one - and the caller would read that as
+	 * the sensor being absent. */
+	zassert_equal(RADIANT_SEC_EINVAL,
+		      radiant_sec_try_devnum(RX_CH, TIER2_NEW_DEVNUM));
+}
+
 /* ── Lifecycle ──────────────────────────────────────────────────────────── */
 
 ZTEST(radiant_sec, test_release_and_reset_wipe_the_keys)

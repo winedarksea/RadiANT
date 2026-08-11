@@ -465,6 +465,21 @@ written down here rather than discovered:
   because resolution happens **once at acquisition** instead of every 128
   seconds.
 
+  The implementation is one entry point, `radiant_sec_try_devnum()`: it sets the
+  candidate's on-air device number and clears the receive window state, because
+  a window half filled under the previous candidate and closed under this one
+  produces an unverified verdict that says nothing about either. It re-derives
+  **no key** — `base_devnum` is fixed at provisioning and does not re-roll — so
+  a trial costs one nonce block per packet. The caller drives the ordinary
+  search, calls it per candidate, and watches for `VERIFIED`.
+
+  **The trial must be able to answer no.** A receiver that verified whatever it
+  heard would "re-acquire" the first stranger to walk past, which is worse than
+  re-pairing because it is silent. Both directions are asserted in
+  `radiant_core/tests/src/test_sec.c`, along with a refusal to start a trial
+  before the epoch is known — with no epoch nothing can verify, so such a trial
+  would report "not my sensor" about every candidate including the right one.
+
 This is the same insight BLE reached with *resolvable* private addresses rather
 than merely random ones — but resolution at power-up granularity is vastly
 cheaper than at epoch granularity, and that price difference is the entire

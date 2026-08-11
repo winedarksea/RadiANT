@@ -431,6 +431,39 @@ int  radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
  * re-rolls at power-up and the second does not. */
 int  radiant_sec_set_devnum(uint8_t ch, uint16_t devnum);
 
+/*
+ * IDENTITY TIER 2, THE RECEIVER HALF: try a candidate on-air device number.
+ *
+ * A Tier 2 node re-rolls its device number at every power-up, which is what
+ * answers the stalking case - a worn strap power-cycles between rides, so a
+ * receiver planted near your house sees a different node each time. The cost is
+ * that a STANDARD receiver must re-pair every session, and that cost is why
+ * Tier 2 is opt-in and off by default.
+ *
+ * A keyed RadiANT receiver does not re-pair, and this is the whole of how. It
+ * wildcard-searches its device type, hears some candidate node, and asks the
+ * only question that survives a re-roll: does X_AUTH verify under my key? The
+ * answer is cryptographic, so "which sensor is this" is decided by the MAC
+ * rather than by a number an attacker can also read.
+ *
+ * Strictly the MAC answers with the KEY GROUP, not the node - two same-type
+ * sensors sharing one household root are indistinguishable this way, which is
+ * why the provisioning rule is one root per sensor.
+ *
+ * Mechanically this is set_devnum plus a clean slate: the RX window state
+ * belonged to the previous candidate, and judging a new one on a window half
+ * filled by the old one produces an unverified verdict that means nothing. The
+ * base device number is untouched - it is fixed at provisioning, it does not
+ * re-roll, and it is what the KDF binds - so no key is re-derived here and the
+ * trial costs one nonce block per packet and nothing else.
+ *
+ * The caller drives the ordinary search path, calls this for each candidate,
+ * and watches radiant_sec_last_verdict(): VERIFIED is the match. There is no
+ * timeout here because there is no state to time out - a candidate that never
+ * verifies is simply abandoned by the caller moving on to the next one.
+ */
+int  radiant_sec_try_devnum(uint8_t ch, uint16_t devnum);
+
 void radiant_sec_channel_release(uint8_t ch);
 void radiant_sec_reset(void);
 
