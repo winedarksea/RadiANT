@@ -556,20 +556,80 @@ jobs:
       - name: Policy never calls the block primitive
         run: |
           set -euo pipefail
-          if [[ -f app/radiant_core/src/radiant_sec.c ]]; then
-            if grep -n 'radiant_sec_aes_ecb' app/radiant_core/src/radiant_sec.c; then
-              echo "::error::radiant_sec.c calls Level 1 directly; the seam is"
+
+          # EVERY policy file, not just the first one. This checked only
+          # radiant_sec.c when that was the whole policy layer; there are now
+          # three, and a seam guarded on one file out of three is guarded on
+          # none. radiant_sec_pair.c is the one that would be tempted - it
+          # derives a key and could reach for a block directly - so it is
+          # exactly the file the original grep would have missed.
+          #
+          # src/ext/ is deliberately NOT in this list: it holds the standard
+          # algorithm implementations, which are below the seam rather than
+          # above it.
+          found=0
+          for f in app/radiant_core/src/radiant_sec.c \
+                   app/radiant_core/src/radiant_sec_pair.c \
+                   app/radiant_core/src/radiant_sec_host.c; do
+            [[ -f "${f}" ]] || continue
+            found=1
+            # Match a CALL, not the word: these files discuss the rule in
+            # their own comments, and a grep that tripped on the sentence
+            # explaining the rule would be worse than no grep - it would be
+            # fixed by deleting the explanation.
+            if grep -nE 'radiant_sec_aes_ecb[[:space:]]*\(' "${f}" |
+                 grep -vE '^\s*[0-9]+:\s*\*'; then
+              echo "::error::${f} calls Level 1 directly; the seam is"
               echo "::error::decorative if policy can reach past the mode level"
               exit 1
             fi
-          else
-            echo "radiant_sec.c does not exist yet - nothing to check"
+          done
+          if [[ "${found}" == "0" ]]; then
+            echo "no policy files exist yet - nothing to check"
           fi
 
       # The other end of the budget. A budget that is asserted stays a budget;
       # one that is written down in a design document becomes a historical note
       # about what somebody once hoped.
-      - name: Enabled build stays inside its .text ceiling
+      #
+      # ── THE CEILINGS ARE MEASURED, AND THEY USED TO BE GUESSED ─────────────
+      #
+      # This step asserted `.text` growth under 4096 B from the day the Kconfig
+      # symbol existed - deliberately, so the number would be watched as it
+      # grew rather than discovered once at the end. It was watched, it grew,
+      # and at the end of the feature it did not fit: X_AUTH, X_CONF and the
+      # host surface together cost 5084 B of text on this board, which is 988 B
+      # over.
+      #
+      # Raising a ceiling because you hit it is normally the exact failure this
+      # job exists to prevent, so the reasoning is recorded rather than the
+      # number quietly edited. 4096 was explicitly a STARTING figure with no
+      # measurement behind it. The 5084 B it turned out to cost is, symbol by
+      # symbol:
+      #
+      #     760  radiant_sec_pump          the RX policy engine
+      #     344  encrypt_block             AES-128, one direction
+      #     308  radiant_sec_tx_transform
+      #     290  rx_close_window
+      #     256  sbox                      the AES table, rodata
+      #     228  radiant_sec_cmac_final
+      #     206  antr_sec_status_get
+      #     ~400 the four antr_sec_* entry points together
+      #     ~2300 everything else, none of it over 200 B
+      #
+      # There is no fat in that list: it is a block cipher, two modes, a KDF,
+      # a windowing state machine and a serial surface. The honest conclusion is
+      # that the guess was low, not that the code is bloated - so the ceiling
+      # moves to a measured figure with about 20% headroom, and the breakdown
+      # above is what the next person compares against when it moves again.
+      #
+      # RAM IS ASSERTED TOO, WHICH IT NEVER WAS. "Costs nothing when disabled"
+      # was only ever checked in flash, and the feature turns out to cost more
+      # bss than text - 5277 B, of which 1536 is the ISR-to-pump queue
+      # (RADIANT_SEC_MAX_CHANNELS x W_MAX entries). On a part with 256 KB that
+      # is affordable and it is not nothing, and a budget nobody checks is how
+      # it stops being affordable.
+      - name: Enabled build stays inside its measured budget
         run: |
           set -euo pipefail
           west build app \
@@ -577,33 +637,61 @@ jobs:
             -d build-enabled \
             -p always \
             -- "-DANT_RADIO=core" "-DEXTRA_CONF_FILE=security.conf"
+          west build app \
+            -b adafruit_feather_nrf52840/nrf52840/uf2 \
+            -d build-pairing \
+            -p always \
+            -- "-DANT_RADIO=core" "-DEXTRA_CONF_FILE=security.conf" \
+               "-DCONFIG_RADIANT_SEC_PAIRING_X25519=y"
 
           size="${ZEPHYR_SDK_INSTALL_DIR}/arm-zephyr-eabi/bin/arm-zephyr-eabi-size"
           if [[ ! -x "${size}" ]]; then
             size="$(find "${ZEPHYR_SDK_INSTALL_DIR}" -name 'arm-zephyr-eabi-size' -type f -print -quit)"
           fi
 
-          # Zephyr's code section is named `text`, WITHOUT a leading dot. An
-          # awk matching ".text" finds nothing, sets delta to an empty string,
-          # and `test "" -le 4096` errors rather than passing - but only
-          # because of the -o pipefail above, which is a thin thread to hang a
-          # budget on. Hence the explicit emptiness check.
-          text_of() {
-            "${size}" -A "$1" | awk '$1 == "text" { print $2 }'
+          # Zephyr's sections are named `text` and `bss`, WITHOUT a leading
+          # dot. An awk matching ".text" finds nothing, sets the delta to an
+          # empty string, and `test "" -le 6144` errors rather than passing -
+          # but only because of the -o pipefail above, which is a thin thread
+          # to hang a budget on. Hence the explicit emptiness checks.
+          sect_of() {
+            "${size}" -A "$2" | awk -v s="$1" '$1 == s { print $2 }'
           }
-          off="$(text_of "$(find build-app -name zephyr.elf -print -quit)")"
-          on="$(text_of "$(find build-enabled -name zephyr.elf -print -quit)")"
-          test -n "${off}" && test -n "${on}"
-          delta=$(( on - off ))
-          echo "text off=${off} on=${on} delta=${delta} ceiling=4096"
-          test "${delta}" -le 4096
+          off_elf="$(find build-app -name zephyr.elf -print -quit)"
+          on_elf="$(find build-enabled -name zephyr.elf -print -quit)"
+          pair_elf="$(find build-pairing -name zephyr.elf -print -quit)"
 
-          # Note for whoever reads a surprising zero here: until radiant_api.c
-          # calls the transforms, --gc-sections removes every byte of
-          # radiant_sec_aes.c from the enabled image and the delta is exactly
-          # 0. That is correct and it is also why this ceiling is asserted from
-          # the day the symbol exists rather than at the end - the number is
-          # meant to be watched as it grows, not discovered once.
+          fail=0
+          check() {   # name measured ceiling
+            echo "$1: ${2} B (ceiling ${3})"
+            if [[ -z "$2" ]]; then
+              echo "::error::$1 could not be measured"
+              fail=1
+            elif (( $2 > $3 )); then
+              echo "::error::$1 is ${2} B, over its ${3} B ceiling"
+              fail=1
+            fi
+          }
+
+          off_text="$(sect_of text "${off_elf}")"
+          on_text="$(sect_of text "${on_elf}")"
+          pair_text="$(sect_of text "${pair_elf}")"
+          off_bss="$(sect_of bss "${off_elf}")"
+          on_bss="$(sect_of bss "${on_elf}")"
+          test -n "${off_text}" && test -n "${on_text}"
+          test -n "${off_bss}" && test -n "${on_bss}"
+
+          # X_AUTH + X_CONF + the 0xF1-0xF4 host surface. Measured 5084 / 5277.
+          check "security text" "$(( on_text - off_text ))" 6144
+          check "security bss"  "$(( on_bss  - off_bss  ))" 6144
+
+          # X25519 and the pairing logic, on top of the above and under their
+          # own Kconfig symbol - so they get their own budget rather than
+          # hiding inside a bigger one. Measured 2812 B of text, which is a
+          # field arithmetic implementation and a Montgomery ladder.
+          check "pairing text" "$(( pair_text - on_text ))" 3584
+
+          exit "${fail}"
 
       # CONFIG_RADIANT_SEC depends on CONFIG_RADIANT_CORE, so it can never
       # reach the sdk-ant build. Asserted rather than assumed, in the job that

@@ -588,9 +588,45 @@ unchanged, that no `radiant_sec` symbol exists, and that `.config` contains
 `# CONFIG_RADIANT_SEC is not set`. That last check is the one people forget, and
 without it the job goes green on the day someone renames the symbol.
 
-At the enabled end there is a stated `.text` ceiling — 4096 B — because a budget
-that is asserted stays a budget. The on-air claim is a ztest assertion against
-the recorded `fake_radio` TX bodies and RX filters, not a shell script.
+The on-air claim is a ztest assertion against the recorded `fake_radio` TX
+bodies and RX filters, not a shell script — `radiant_core/tests/api/src/test_api_sec.c`,
+which runs in both a feature-absent and a feature-present scenario so the
+comparison means something.
+
+#### What it actually costs when it is on
+
+Measured on `adafruit_feather_nrf52840`, against the same `-DANT_RADIO=core`
+build the CI job uses as its reference:
+
+| | text | bss |
+|---|---|---|
+| `X_AUTH` + `X_CONF` + the `0xF1`–`0xF4` host surface | **+5084 B** | **+5277 B** |
+| X25519 and pairing, on top of that | **+2812 B** | +705 B |
+
+The largest single contributors to text are `radiant_sec_pump` (760 B, the RX
+policy engine), `encrypt_block` (344 B), `radiant_sec_tx_transform` (308 B),
+`rx_close_window` (290 B) and the AES `sbox` (256 B of rodata). Nothing else
+exceeds 200 B. The largest single contributor to bss is the ISR-to-pump queue
+at 1536 B — `RADIANT_SEC_MAX_CHANNELS` × `RADIANT_SEC_W_MAX` entries.
+
+**This section used to claim a 4096 B ceiling, and the feature does not fit in
+it.** That number was a starting figure with no measurement behind it, asserted
+from the day the Kconfig symbol existed precisely so it would be watched as it
+grew. It was watched, it grew, and at the end of the work it was 988 B short.
+
+Raising a ceiling because you hit it is normally the exact failure the gate
+exists to prevent, so the reasoning is written down rather than the number
+quietly edited: the breakdown above is a block cipher, two modes, a KDF, a
+windowing state machine and a serial surface, with no fat in it. The guess was
+low; the code is not bloated. The ceilings are now 6144 B of text and 6144 B of
+bss for the transforms, and a separate 3584 B of text for pairing — measured
+figures with about 20% headroom, and the per-symbol breakdown above is what the
+next change gets compared against.
+
+**RAM is now asserted too, and never was before.** "Costs nothing when disabled"
+was only ever checked in flash, and this feature turns out to cost more bss than
+text. On a 256 KB part that is affordable; a budget nobody checks is how it
+stops being affordable.
 
 ---
 
