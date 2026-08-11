@@ -342,31 +342,107 @@ enum radiant_sec_verdict {
 int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len);
 
 /*
- * RX classification, ISR context, ZERO CRYPTO. Answers one question: does this
- * packet belong to the transform path? The event thread does the rest.
+ * RX ingest. ISR CONTEXT, ZERO CRYPTO - it classifies and, when the packet is
+ * ours, copies eight bytes into a queue for the pump.
  *
- * Returns 1 to mark the packet for the pump, 0 to leave it alone, and a
- * negative code when the packet must be dropped outright - which is what
- * happens to a non-broadcast frame carrying a secured-range page.
+ *   RADIANT_SEC_RX_PLAIN  not a secured packet; the caller delivers it as
+ *                         usual, and nothing here has touched it
+ *   RADIANT_SEC_RX_DEFER  taken. THE CALLER MUST NOT DELIVER IT - the pump
+ *                         will, plaintext and in order, from thread context
+ *   RADIANT_SEC_RX_DROP   refused and counted. A non-broadcast frame carrying
+ *                         a secured-range page lands here, which is what stops
+ *                         an injector skipping the MAC by sending acknowledged
+ *                         data instead of a broadcast
  */
-int radiant_sec_rx_classify(uint8_t ch, const uint8_t *pay, uint8_t len,
-			    bool broadcast);
+#define RADIANT_SEC_RX_PLAIN 0
+#define RADIANT_SEC_RX_DEFER 1
+#define RADIANT_SEC_RX_DROP  2
+
+int radiant_sec_rx_ingest(uint8_t ch, const uint8_t *pay, uint8_t len,
+			  bool broadcast, uint64_t t_sync);
 
 /*
- * All RX crypto. Event-thread context, called before the event drain so that
- * plaintext and verdict stay ordered behind the packets they describe. Takes
- * api_lock internally - never hold it across the drain.
+ * All RX crypto. Event-thread context, called BEFORE the event drain so that
+ * plaintext and verdict stay ordered behind the packets they describe.
+ *
+ * This is the whole of the no-crypto-in-ISR rule. Every RX packet already
+ * transits the event thread before a host sees it and the MAC verdicts are
+ * computed there anyway, so moving the CTR XOR here too costs no wakeup and no
+ * host-visible latency - and it deletes the keystream-precompute state, the
+ * miss-defer path, and the "no AES in the ISR, but XOR in the ISR" carve-out.
+ * One unconditional rule instead of a nuanced one.
  */
 void radiant_sec_pump(void);
 
+/*
+ * Where the pump's output goes. A DIRECT CALL, NOT A CALLBACK TABLE: an ops
+ * struct is a .data relocation the linker cannot garbage-collect, and one
+ * surviving relocation defeats the size gate.
+ *
+ * Both are weak and do nothing by default, so a build with no host adapter -
+ * the unit-test application - links, and a suite can define its own to observe
+ * what the pump produced.
+ */
+void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
+			 enum radiant_sec_verdict verdict, uint64_t t_sync);
+
+/*
+ * One window's verdict, emitted exactly once when the window that carries its
+ * tag completes - so W+1 to 2W packets after the window itself, because the
+ * tag lags one window (docs/radiant-security.md 3.2).
+ *
+ * `window_start` is the 16-bit counter of the window's first packet, so a host
+ * can tell which delivered packets the verdict refers to.
+ */
+void radiant_sec_window_verdict(uint8_t ch, uint16_t window_start,
+				enum radiant_sec_verdict verdict);
+
 /* Lifecycle. No init call: the first SET_KEY allocates, unassign and reset
  * free. */
-int  radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits);
+int  radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
+			 uint16_t base_devnum);
 int  radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 			   uint8_t page_lo, uint8_t page_hi);
-int  radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch);
+
+/*
+ * Set the epoch and anchor its phase.
+ *
+ * `us_into_epoch` is how far into the epoch the caller believes it is now, and
+ * it is what lets the receiver derive the packet counter from TIME rather than
+ * from arrival history - the only thing that works for a mid-epoch join, for a
+ * gap longer than 255 packets, and for sparse mode.
+ *
+ * `period_counts` is the channel period in counts of 1/32768 s, passed in
+ * rather than read from radiant_channel so that this module depends on nothing
+ * but the seam and the clock.
+ *
+ * REFUSES an epoch less than or equal to the current one, and refuses epochs
+ * within RADIANT_SEC_EPOCH_HEADROOM of 0xFFFFFFFF so a counter wrap always has
+ * room to advance into. No transform enables until this has been called after a
+ * reset.
+ */
+#define RADIANT_SEC_EPOCH_HEADROOM 0x1000u
+
+int  radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
+			   uint16_t period_counts);
+
+/* The on-air device number, which is in the nonce. Separate from the
+ * provisioning-time base device number in the KDF: on a Tier 2 node the first
+ * re-rolls at power-up and the second does not. */
+int  radiant_sec_set_devnum(uint8_t ch, uint16_t devnum);
+
 void radiant_sec_channel_release(uint8_t ch);
 void radiant_sec_reset(void);
+
+/*
+ * Is this channel transforming right now? The acknowledgement path asks,
+ * because api_xfer_broadcast() memcpys the plaintext host buffer onto the air
+ * and under X_CONF that hands a passive listener the plaintext of the same
+ * page. A secured channel answers with the ciphertext already built for the
+ * current counter instead - same nonce, same plaintext, identical ciphertext,
+ * no reuse and no ISR crypto.
+ */
+bool radiant_sec_channel_is_secured(uint8_t ch);
 
 /* The verdict for the packet the pump most recently produced, and the counters
  * 0xF4 reports. */
@@ -396,11 +472,11 @@ static inline int radiant_sec_tx_transform(uint8_t ch, uint8_t *p, uint8_t l)
 	return RADIANT_SEC_OK;
 }
 
-static inline int radiant_sec_rx_classify(uint8_t ch, const uint8_t *p,
-					  uint8_t l, bool broadcast)
+static inline int radiant_sec_rx_ingest(uint8_t ch, const uint8_t *p, uint8_t l,
+					bool broadcast, uint64_t t_sync)
 {
-	(void)ch; (void)p; (void)l; (void)broadcast;
-	return 0;
+	(void)ch; (void)p; (void)l; (void)broadcast; (void)t_sync;
+	return 0;   /* RADIANT_SEC_RX_PLAIN */
 }
 
 static inline void radiant_sec_pump(void)
@@ -420,6 +496,12 @@ static inline enum radiant_sec_verdict radiant_sec_last_verdict(uint8_t ch)
 {
 	(void)ch;
 	return RADIANT_SEC_VERDICT_CLEAR;
+}
+
+static inline bool radiant_sec_channel_is_secured(uint8_t ch)
+{
+	(void)ch;
+	return false;
 }
 
 #endif /* CONFIG_RADIANT_SEC */

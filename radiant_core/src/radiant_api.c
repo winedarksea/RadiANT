@@ -116,6 +116,7 @@
 #include <radiant_core/radiant_radio_hal.h>
 #include <radiant_core/radiant_sched.h>
 #include <radiant_core/radiant_search.h>
+#include <radiant_core/radiant_sec.h>
 #include <radiant_core/radiant_transfer.h>
 
 /* CONFIG_RADIANT_CORE_LOG_LEVEL, not a hardcoded LOG_LEVEL_INF. A module that
@@ -291,7 +292,23 @@ BUILD_ASSERT(RADIANT_CHANNEL_GUARD_MIN_US >= RADIANT_CHANNEL_DRIFT_WORST_US,
  * KEEP THIS NUMBER GREATER THAN BRIDGE_PRIORITY in src/ant_serial_bridge.c.
  * BUILD_ASSERT below is that requirement made permanent rather than remembered.
  */
+/*
+ * The event thread's stack, plus 256 B when the security transforms are
+ * compiled in - because that is where all their crypto runs.
+ *
+ * radiant_sec_pump() calls into the AES layer, whose deepest frame is a CMAC
+ * final: two 16-byte subkeys, a 16-byte last block and a 16-byte tag as
+ * locals, under a 16-byte nonce block held by its caller. The figure is
+ * deliberately generous rather than measured to the byte - on this platform a
+ * stack overrun surfaces as a wrong answer rather than as a fault, which is the
+ * worst failure mode there is for a path that decides whether a packet is
+ * authentic.
+ */
+#if defined(CONFIG_RADIANT_SEC)
+#define API_EVENT_STACK_SIZE (1280 + 256)
+#else
 #define API_EVENT_STACK_SIZE 1280
+#endif
 #define API_EVENT_PRIORITY   6
 
 BUILD_ASSERT(API_EVENT_PRIORITY > ANTR_HOST_THREAD_PRIORITY,
@@ -358,6 +375,28 @@ struct api_chan {
 	uint8_t bcast[ANTW_ANT_MAX_PAYLOAD_SIZE];
 	bool    bcast_valid;
 	bool    bcast_pending;
+
+#if defined(CONFIG_RADIANT_SEC)
+	/*
+	 * The transformed payload of the slot currently being built, and the
+	 * fix for a plaintext leak that is live on every acknowledged exchange.
+	 *
+	 * api_xfer_broadcast() memcpys `bcast` - the host's plaintext - onto
+	 * the air as an acknowledgement payload. Under X_CONF that hands a
+	 * passive listener the plaintext of the same page whose ciphertext it
+	 * just heard, which is a two-time pad handed over voluntarily.
+	 *
+	 * Returning the ciphertext already built for the current counter fixes
+	 * it with no second nonce and no ISR crypto: same nonce, same
+	 * plaintext, identical ciphertext.
+	 *
+	 * `bcast` itself is NEVER mutated, which is the other half of the rule:
+	 * antr_broadcast_message_tx()'s readback must still return what the
+	 * host wrote.
+	 */
+	uint8_t sec_pay[ANTW_ANT_MAX_PAYLOAD_SIZE];
+	bool    sec_pay_valid;
+#endif
 
 	uint8_t id_list[API_ID_LIST_MAX][API_ID_LIST_BYTES];
 	uint8_t id_list_size;
@@ -761,6 +800,55 @@ static void api_post_rx(uint8_t ch, uint8_t msg_id,
 	}
 }
 
+#if defined(CONFIG_RADIANT_SEC)
+/*
+ * Where radiant_sec_pump() puts a packet once it is plaintext.
+ *
+ * A DIRECT CALL DISPLACING A WEAK DEFINITION, not a registered callback: an ops
+ * struct would be a .data relocation the linker cannot garbage-collect, and one
+ * surviving relocation defeats the `zero-cost` size gate. It is also why
+ * radiant_sec.c can be linked into the unit-test application, which has no
+ * radiant_api.c at all.
+ *
+ * EVENT-THREAD CONTEXT. radiant_event_post_rx() is the same ISR-safe ring the
+ * decode path posts to, so posting from a thread is the easy direction.
+ *
+ * The verdict does not reach the wire here. It is recorded per channel and
+ * reported through 0xF4, which is deliberate: a host that ignores per-message
+ * flags still has an auditable stream, and deliver-as-unverified only means
+ * something if unverified cannot be silently read as verified.
+ */
+void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
+			 enum radiant_sec_verdict verdict, uint64_t t_sync)
+{
+	struct radiant_channel_id id;
+	struct radiant_rx_event   hal;
+
+	ARG_UNUSED(verdict);
+
+	if (!api_ch_valid(ch) || pay == NULL) {
+		return;
+	}
+	if (radiant_channel_id_get(ch, &id) != RADIANT_CH_OK) {
+		return;
+	}
+
+	memset(&hal, 0, sizeof(hal));
+	hal.status = RADIANT_RADIO_STATUS_OK;
+	hal.t_sync = (radiant_time_t)t_sync;
+	/*
+	 * The captured instant, carried through the queue rather than
+	 * re-read - so the RX timestamp a host sees is still the radio's
+	 * capture of the ADDRESS event and not the moment the pump got round
+	 * to it. Marked exact for the same reason: it IS the hardware capture.
+	 */
+	hal.t_sync_exact = true;
+
+	api_post_rx(ch, (uint8_t)ANTW_MESG_BROADCAST_DATA_ID, &id, &hal, pay,
+		    len, 0u, false);
+}
+#endif /* CONFIG_RADIANT_SEC */
+
 /* ---------------------------------------------------------------------------
  * The transfer engine's calls back into us
  *
@@ -874,6 +962,26 @@ static bool api_xfer_broadcast(void *ctx, uint8_t out[RADIANT_TRANSFER_PKT_BYTES
 		 */
 		return false;
 	}
+
+#if defined(CONFIG_RADIANT_SEC)
+	/*
+	 * THE PLAINTEXT LEAK, FIXED IN TWO LINES.
+	 *
+	 * This function used to memcpy the host's plaintext buffer onto the air
+	 * as an acknowledgement payload, and under X_CONF that hands a passive
+	 * listener the plaintext of a page whose ciphertext it has already
+	 * heard. It is live on every acknowledged exchange, and it is not a
+	 * weakening of the cipher - it is the key handed over.
+	 *
+	 * The ciphertext already built for the current counter is the right
+	 * answer and costs nothing: same nonce, same plaintext, identical
+	 * ciphertext, no reuse, and no crypto in what may be interrupt context.
+	 */
+	if (radiant_sec_channel_is_secured(ch) && api_ch[ch].sec_pay_valid) {
+		memcpy(out, api_ch[ch].sec_pay, RADIANT_TRANSFER_PKT_BYTES);
+		return true;
+	}
+#endif
 
 	memcpy(out, api_ch[ch].bcast, RADIANT_TRANSFER_PKT_BYTES);
 	return true;
@@ -1440,10 +1548,41 @@ static void api_post_master_tx(uint8_t ch)
 	memset(&fields, 0, sizeof(fields));
 	fields.slot_opener = true;
 
+#if defined(CONFIG_RADIANT_SEC)
+	/*
+	 * THE TX HOOK. Thread context, under api_lock, and immediately before
+	 * the frame is built - which is the latest possible moment and the only
+	 * correct one: the TX body is DMA'd and armed arbitrarily early, so the
+	 * ciphertext has to be final before radiant_sched_request_tx().
+	 *
+	 * Into a copy, never into api_ch[ch].bcast. The host's buffer is what
+	 * antr_broadcast_message_tx() reads back, and a transform that mutated
+	 * it would make a readback return ciphertext - and, worse, would
+	 * re-encrypt on every retransmission.
+	 */
+	memcpy(api_ch[ch].sec_pay, api_ch[ch].bcast, sizeof(api_ch[ch].sec_pay));
+	api_ch[ch].sec_pay_valid = false;
+	if (radiant_sec_tx_transform(ch, api_ch[ch].sec_pay,
+				     (uint8_t)sizeof(api_ch[ch].sec_pay)) !=
+	    RADIANT_SEC_OK) {
+		/* A channel configured for something the backend cannot do
+		 * transmits nothing rather than transmitting it in the clear.
+		 * Failing open here would be a channel the host believes is
+		 * protected and is not. */
+		return;
+	}
+	api_ch[ch].sec_pay_valid = radiant_sec_channel_is_secured(ch);
+
+	if (radiant_frame_make(&f, &id, &fields, api_ch[ch].sec_pay,
+			   RADIANT_FRAME_PAYLOAD_STD) != RADIANT_FRAME_OK) {
+		return;
+	}
+#else
 	if (radiant_frame_make(&f, &id, &fields, api_ch[ch].bcast,
 			   RADIANT_FRAME_PAYLOAD_STD) != RADIANT_FRAME_OK) {
 		return;
 	}
+#endif
 	if (radiant_frame_encode(RADIANT_FRAME_CFG_TRACKING, api_net_addr_for(ch), &f,
 			     &w) != RADIANT_FRAME_OK) {
 		return;
@@ -1760,11 +1899,55 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 		(unsigned)api_ch[ch].bcast_valid);
 	switch (mt) {
 	case RADIANT_MSG_BROADCAST:
+#if defined(CONFIG_RADIANT_SEC)
+		/*
+		 * THE RX POLICY GUARD. ISR context, CLASSIFICATION ONLY, ZERO
+		 * CRYPTO - it decides whether this packet belongs to the
+		 * transform path and, if so, copies eight bytes into a queue.
+		 * The XOR, the CMAC and the verdict all happen in the event
+		 * thread, in radiant_sec_pump().
+		 *
+		 * A deferred packet is NOT posted here. The pump posts it, as
+		 * plaintext, through radiant_sec_deliver() below, so plaintext
+		 * and verdict stay ordered behind the packets they describe.
+		 */
+		{
+			int sec = radiant_sec_rx_ingest(ch, f.payload,
+							f.payload_len, true,
+							(uint64_t)evt->t_sync);
+
+			if (sec != RADIANT_SEC_RX_PLAIN) {
+				break;
+			}
+		}
+#endif
 		api_post_rx(ch, (uint8_t)ANTW_MESG_BROADCAST_DATA_ID, &id, evt,
 			    f.payload, f.payload_len, 0u, false);
 		break;
 	case RADIANT_MSG_BURST_DATA:
 	case RADIANT_MSG_BURST_LAST:
+#if defined(CONFIG_RADIANT_SEC)
+		/*
+		 * D15. X_AUTH governs what a secured channel INITIATES, and
+		 * this switch happily decodes acknowledged-data and burst arms
+		 * as well - so without this an injector sends a secured-range
+		 * page as acknowledged data, skips the MAC machinery entirely,
+		 * and is delivered as implicitly trusted data.
+		 *
+		 * broadcast = false, so a secured-range page lands on the drop
+		 * arm and is counted. Anything outside the range is
+		 * RADIANT_SEC_RX_PLAIN and proceeds untouched, which is what
+		 * keeps ordinary acknowledged data on a secured channel's
+		 * clear pages working.
+		 */
+		if (radiant_sec_rx_ingest(ch, f.payload, f.payload_len, false,
+					  (uint64_t)evt->t_sync) ==
+		    RADIANT_SEC_RX_DROP) {
+			LOG_DBG("sec ch=%u dropped non-broadcast page 0x%02X",
+				(unsigned)ch, (unsigned)f.payload[0]);
+			break;
+		}
+#endif
 		/*
 		 * The receive path that has to TRANSMIT. About 1.55 ms between
 		 * this packet's t_sync and the instant the peer expects a
@@ -2597,6 +2780,23 @@ static void api_event_thread(void *a, void *b, void *c)
 		(void)k_sem_take(&api_event_sem, K_MSEC(RADIANT_API_HOUSEKEEP_MS));
 
 		/*
+		 * ALL RX CRYPTO, AND IT RUNS BEFORE THE DRAIN.
+		 *
+		 * That order is the whole of the guarantee: the pump turns
+		 * queued ciphertext into posted plaintext, so a packet is in
+		 * the event ring before the drain that would deliver it, and a
+		 * window's verdict is recorded before anything reads it. Run
+		 * after the drain and every secured packet would arrive one
+		 * housekeeping period late.
+		 *
+		 * Outside api_lock, like the drain, for the same reason: this
+		 * calls radiant_sec_deliver(), which posts to the event ring,
+		 * and radiant_event.c protects that with its own critical
+		 * section.
+		 */
+		radiant_sec_pump();
+
+		/*
 		 * THREAD CONTEXT ONLY, and deliberately outside api_lock: the
 		 * drain calls antr_on_message(), which is the bridge's, and
 		 * holding a lock across a call into another subsystem is how a
@@ -2634,6 +2834,12 @@ static void api_reset_state(void)
 	for (i = 0u; i < API_CHANNELS; i++) {
 		memset(&api_xfer[i], 0, sizeof(api_xfer[i]));
 	}
+
+	/* Every key zeroed, every switch cleared, every context freed. Keys are
+	 * write-only and do not survive a reset, which is also why the epoch
+	 * monotonicity rule can only be enforced inside one power cycle and why
+	 * the obligation to never reissue an epoch sits with the host. */
+	radiant_sec_reset();
 
 	api_search_slot = RADIANT_SCHED_CH_NONE;
 }
@@ -2816,6 +3022,11 @@ antr_err_t antr_channel_unassign(uint8_t channel)
 	if (rc == RADIANT_CH_OK) {
 		(void)radiant_search_end(&api_search, channel);
 		(void)radiant_sched_cancel(channel);
+		/* Keys and every derived value go with the channel. A context
+		 * that outlived its channel would be a key still installed on
+		 * a channel number the host is free to reassign to something
+		 * else entirely. */
+		radiant_sec_channel_release(channel);
 		memset(&api_ch[channel], 0, sizeof(api_ch[channel]));
 		memset(&api_xfer[channel], 0, sizeof(api_xfer[channel]));
 	}

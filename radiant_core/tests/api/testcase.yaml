@@ -18,3 +18,26 @@ tests:
       - native_sim
     integration_platforms:
       - native_sim
+
+  # The same application with the security transforms COMPILED IN and every
+  # switch off at runtime.
+  #
+  # This is the on-air half of the zero-cost claim, and it is a ztest rather
+  # than a shell script because a shell script cannot see the air and CI has no
+  # radio. src/test_api_sec.c asserts that the recorded fake_radio TX bodies
+  # and RX filter addresses are what the host wrote and what the channel ID
+  # derives - which is trivially true in the scenario above and is the actual
+  # claim in this one. Running both is what makes the comparison meaningful:
+  # a suite that only ever runs one way has nothing to compare against.
+  radiant_core.api.sec:
+    tags:
+      - radiant_core
+      - radiant_api
+      - radiant_sec
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_configs:
+      - CONFIG_RADIANT_SEC=y
+      - CONFIG_RADIANT_SEC_HOST_MESSAGES=n

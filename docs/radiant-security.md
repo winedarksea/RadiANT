@@ -177,15 +177,35 @@ domain byte `0x02`; see section 3.3.
 fixed 32; a W-byte tag spread one byte per packet over W packets cannot be
 anything else. Section 7.5 states what that buys at each W.
 
+**The tag transmitted in window *k* authenticates window k-1, and this is
+forced rather than chosen.** Encrypt-then-MAC over a window means the tag
+depends on all W packets of that window, so a sender cannot know the tag byte
+belonging in the *first* packet of a window until it has built the *last* one.
+The only alternatives are to delay every packet by up to W periods — which makes
+telemetry stale to save a byte that was never at stake — or to build the whole
+window before transmitting, which a host writing one page at a time cannot do.
+So the tag lags by exactly one window:
+
+```
+window   = [ c - (c mod W), c - (c mod W) + W )
+tag byte = tag_of_previous_window[ c mod W ]    where c is the packet's counter
+```
+
+Consequences, stated rather than left to be discovered:
+
+- **Detection latency is W+1 to 2W packet periods**, not W. Section 7.5's table
+  carries the numbers.
+- **The first window of an epoch is never verified**, because nothing
+  authenticates it, and the last window before a node goes quiet is never
+  verified either. A receiver reports both as `unverified`; neither is evidence
+  of an attack.
+- A window's own tag is still computed at its own boundary, so nothing about
+  the self-synchronising property below changes.
+
 **Tag byte index and window boundary are derived from the counter, not from
 arrival order.** By arrival order, one lost packet — against a measured ~0.4%
 bench loss floor — desynchronises every window after it, permanently, with no
 resynchronisation procedure anywhere in the design.
-
-```
-window   = [ c - (c mod W), c - (c mod W) + W )
-tag byte = tag[ c mod W ]                       where c is the packet's counter
-```
 
 Self-synchronising, with no resync state and no resync message. This works
 because **W divides 256 and divides 65536**, so a byte-counter wrap and a
@@ -660,9 +680,13 @@ window unverifiable:
 
 | W | Tag length | Detection latency at 4 Hz | Unverifiable fraction against a 0.4% loss floor |
 |---|---|---|---|
-| 2 (default) | 16 bits | 0.5 s | ~0.8% |
-| 4 | 32 bits | 1.0 s | ~1.6% |
-| 8 | 64 bits | 2.0 s | ~3.2% |
+| 2 (default) | 16 bits | 0.75–1.0 s | ~0.8% |
+| 4 | 32 bits | 1.25–2.0 s | ~1.6% |
+| 8 | 64 bits | 2.25–4.0 s | ~3.2% |
+
+The latency is a range and not a single number because the tag lags one window
+(section 3.2): a forgery in window *k* is detected when window *k+1* completes,
+which is W+1 packets later for the last packet of *k* and 2W for the first.
 
 The amplification factor is **W**, and it is why the default is W=2 and why an
 unverifiable window is delivered rather than discarded (section 3.2). Discarding

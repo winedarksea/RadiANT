@@ -592,6 +592,11 @@ SPEC_PINS = [
      "fixed 32 the first draft's prose implied"),
     (SECURITY, "W in {2, 4, 8}",
      "the v1 window set, and the reason for it"),
+    (SECURITY, "authenticates window k-1",
+     "the one-window tag lag. Encrypt-then-MAC means a sender cannot know a "
+     "window's tag until its last packet is built, so the tag necessarily "
+     "lags - and an implementation that assumed otherwise would be "
+     "unimplementable rather than merely wrong"),
     (SECURITY, "rejects any epoch <= the current one",
      "the epoch monotonicity rule. Without it a reboot restarts the counter "
      "under an unchanged epoch, which is a two-time pad for X_CONF and a full "

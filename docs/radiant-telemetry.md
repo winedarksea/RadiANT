@@ -392,6 +392,12 @@ leaves open in the meantime.
   a schema change rather than a format break: the node re-publishes a
   descriptor with a new schema id and every receiver picks it up within one
   interleave cycle.
+
+  The byte carries `tag_of_previous_window[counter mod W]`: **the tag lags one
+  window**, because encrypt-then-MAC means a sender cannot know a window's tag
+  until it has built the window's last packet. `docs/radiant-security.md`
+  section 3.2 states the consequences - detection latency is W+1 to 2W periods,
+  and the first window of an epoch is never verified.
 - **With `X_CONF` on**, bytes `[2..7]` (or `[2..6]` when `X_AUTH` is also on)
   are ciphertext. Bytes `[0]` and `[1]` stay in the clear, because a receiver
   needs the page number to tell a data page from a descriptor and needs the

@@ -96,6 +96,7 @@ zephyr_library_sources_ifdef(CONFIG_RADIANT_CORE_ANTR_API src/radiant_api.c)
 # CONFIG_RADIANT_SEC=y in its own prj.conf, which is the same door a real
 # application uses.
 zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC src/radiant_sec_aes.c)
+zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC src/radiant_sec.c)
 
 # ── The radio backend ───────────────────────────────────────────────────────
 #
