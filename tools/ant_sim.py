@@ -46,6 +46,7 @@ sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 
 import ant_identity as ai  # noqa: E402
 import ant_pages as ap  # noqa: E402
+import radiant_crypto as rc  # noqa: E402
 from ant_probe import (  # noqa: E402
     EP_OUT,
     FrameReader,
@@ -91,6 +92,12 @@ SERIAL_NUMBER = 0x00544553      # "TES" - visible in a capture without a decoder
 
 DEFAULT_WHEEL_CIRC_M = 2.105
 DEFAULT_SPEED_KPH = 30.0
+DEFAULT_BPM = 145.0
+
+# The compat layer's demonstration key. NOT A SECRET AND NOT MEANT TO BE: it is
+# the root a --replay fixture and a bench receiver both need in order to check
+# an attestation tag, and every tool that ships one ships this one.
+DEFAULT_COMPAT_ROOT = bytes(range(16))
 
 
 class Signal:
@@ -152,6 +159,12 @@ class Sensor:
         self.messages = 0
         self.data_pages_since_common = 0
         self.pending_common: list[bytes] = []
+        # The RadiANT compat layer, or None for a plain ANT+ sensor - which is
+        # what a shipped strap is by default and what every profile here still
+        # is unless --attest is given. Set after construction for the same
+        # reason serial_number is: every profile takes the same five positional
+        # arguments and this must not become a sixth.
+        self.compat: "CompatAttestation | None" = None
 
     # A clock that is not the one it advertises, in ppm.
     #
@@ -219,6 +232,22 @@ class Sensor:
         self.messages += 1
         self.advance(self.period_s)
 
+        payload = self._choose_payload()
+        if self.compat is not None:
+            self.compat.transmitted(payload)
+        return payload
+
+    def _choose_payload(self) -> bytes:
+        """Which page gets this slot.
+
+        The order is a priority, and the first two entries are the ones that
+        cannot move. Tier II must land on the N-th transmitted message exactly
+        or its window is not the window it claims to be; a queued common page
+        must go out before anything else queues behind it.
+        """
+        if self.compat is not None and self.compat.tier2_due():
+            return self.compat.tier2_page()
+
         if self.pending_common:
             return self.pending_common.pop(0)
 
@@ -226,12 +255,30 @@ class Sensor:
             # The profiles require both common pages at least once per 65
             # messages. Sending 80 and 81 back to back keeps the spacing well
             # inside that even when a data page is dropped.
+            #
+            # The beacon joins the back of that burst rather than getting a
+            # cadence of its own: one frame per cycle, ~0.8 % of slots, the same
+            # rotation every deployed receiver already absorbs for 80 and 81.
             self.data_pages_since_common = 0
             self.pending_common = [
                 ap.encode_common_81(SW_REVISION, self.serial_number),
             ]
+            if self.compat is not None:
+                # Counted as a data page, because it DISPLACES one. Appending it
+                # to the burst without charging it a slot would lengthen the
+                # cycle instead of riding it, and the first thing that notices
+                # is a receiver's common-page gap check - which is the profile
+                # requirement this rotation exists to satisfy.
+                self.pending_common.append(self.compat.beacon_frame())
+                self.data_pages_since_common = 1
             return ap.encode_common_80(HW_REVISION, MANUFACTURER_ID,
                                        MODEL_NUMBER)
+
+        if self.compat is not None and self.compat.tier1_due(self.t):
+            # Same rule: a displaced data page, not an extra transmission the
+            # profile never budgeted for.
+            self.data_pages_since_common += 1
+            return self.compat.tier1_page(self.t)
 
         self.data_pages_since_common += 1
         return self.data_page()
@@ -241,6 +288,114 @@ class Sensor:
 
     def data_page(self) -> bytes:
         raise NotImplementedError
+
+
+class CompatAttestation:
+    """The RadiANT compat layer riding an ordinary ANT+ profile's slots.
+
+    docs/radiant-security.md section 11. Three things go on the air and none of
+    them touch a page any receiver already understands:
+
+      * the capability beacon, one frame per 121-message cycle, riding the
+        rotation pages 80 and 81 already established rather than inventing a
+        cadence of its own;
+      * Tier I, one self-contained page every `interval_s` SECONDS - decoupled
+        from the data rate, which is the whole compatibility argument. At 4 Hz
+        and the 20 s default that is one page in ~81, below the 1.65 % ANT+
+        itself spends on common pages;
+      * Tier II, off unless a window is given, one page in every N transmitted
+        messages, covering the N-1 before it.
+
+    IT KNOWS NO PAGE LAYOUT AND COMPUTES NO TAG. ant_pages.py packs the fields
+    and radiant_crypto.py computes the MACs; this decides which slot gets what,
+    which is the only thing neither of them can do.
+    """
+
+    def __init__(self, root: bytes, epoch: int, devnum: int,
+                 interval_s: float = ap.COMPAT_DEFAULT_TIER_I_INTERVAL_S,
+                 window: int | None = None,
+                 policy: int = ap.COMPAT_POLICY_NEVER,
+                 target_device_number: int = 0,
+                 target_period: int = ap.RADIANT_TLM_PERIOD_DEFAULT):
+        if interval_s <= 0.0:
+            raise ValueError("the Tier I interval is in seconds and positive")
+        if window is not None and window not in ap.COMPAT_WINDOW_SIZES:
+            raise ValueError(f"N must be one of {ap.COMPAT_WINDOW_SIZES}")
+        keys = rc.derive_keys(root, epoch, devnum)
+        self.k_auth = keys[rc.LABEL_AUTH]
+        self.k_id = keys[rc.LABEL_ID]
+        self.epoch = epoch
+        self.devnum = devnum
+        self.interval_s = interval_s
+        self.window = window
+
+        private = policy != ap.COMPAT_POLICY_NEVER
+        self.beacon = ap.CompatBeacon(
+            attest_available=True,
+            private_available=private,
+            policy=policy,
+            window=window if window is not None else ap.COMPAT_DEFAULT_WINDOW,
+            key_group_hint=rc.compat_key_group_hint(self.k_id, epoch),
+            target_device_type=ap.RADIANT_TLM_DEVICE_TYPE if private else 0,
+            target_device_number=target_device_number if private else 0,
+            target_period=target_period if private else 0,
+        )
+        self.beacon_frames = ap.encode_compat_beacon(self.beacon)
+        self.beacon_next = 0
+
+        # The N-1 transmitted messages the next Tier II tag will cover. The
+        # window is N CONSECUTIVE TRANSMITTED MESSAGES, so the common pages, the
+        # beacon and any Tier I page in the window are covered too - which is
+        # what keeps the tag profile-agnostic.
+        self.pending: list[bytes] = []
+        self.window_index = 0
+        self.att_counter = -1
+
+        self.beacons_sent = 0
+        self.tier1_sent = 0
+        self.tier2_sent = 0
+
+    def beacon_frame(self) -> bytes:
+        """The next beacon frame. The two alternate, one per cycle."""
+        frame_bytes = self.beacon_frames[self.beacon_next]
+        self.beacon_next = (self.beacon_next + 1) % len(self.beacon_frames)
+        self.beacons_sent += 1
+        return frame_bytes
+
+    def tier2_due(self) -> bool:
+        return self.window is not None and len(self.pending) == self.window - 1
+
+    def tier2_page(self) -> bytes:
+        tag = rc.compat_tier2_tag(self.k_auth, self.epoch, self.devnum,
+                                  self.window_index, self.pending)
+        page = ap.encode_compat_attest_tier2(self.window_index, tag)
+        self.pending = []
+        self.window_index = (self.window_index + 1) % ap.U16_WRAP
+        self.tier2_sent += 1
+        return page
+
+    def tier1_due(self, t: float) -> bool:
+        return int(t / self.interval_s) > self.att_counter
+
+    def tier1_page(self, t: float) -> bytes:
+        # DERIVED FROM TIME, NOT FROM A SEND COUNT. A receiver reconstructs the
+        # same counter from its own clock, so a gap in the stream costs it
+        # nothing and a replayed page is rejected on a counter already seen.
+        self.att_counter = int(t / self.interval_s)
+        tag = rc.compat_tier1_tag(self.k_auth, self.epoch, self.devnum,
+                                  self.att_counter & 0xFFFF)
+        self.tier1_sent += 1
+        return ap.encode_compat_attest_tier1(self.att_counter & 0xFFFF, tag)
+
+    def transmitted(self, payload: bytes) -> None:
+        """Record one message as covered by the window under construction."""
+        if self.window is None:
+            return
+        if (payload[0] & ap.HR_PAGE_NUMBER_MASK) == ap.COMPAT_PAGE_ATTEST_TIER_II:
+            # The tag page is the N-th message of its own window, not the first
+            # of the next one.
+            return
+        self.pending.append(bytes(payload))
 
 
 class RevolutionCounter:
@@ -406,6 +561,81 @@ class TorqueFrequencySensor(Sensor):
         return ap.encode_power_torque_freq(self.event_count,
                                            self.SLOPE_TENTH_NM_HZ,
                                            self.time_stamp, self.torque_ticks)
+
+
+class HeartRateSensor(Sensor):
+    """Heart rate, device type 0x78. The other compat target.
+
+    Two things here that no other profile in this file has:
+
+      * A PAGE-CHANGE TOGGLE IN BYTE 0's HIGH BIT, flipped every four messages.
+        It is not part of the page number, which is why page numbers on this
+        device type are 7-bit and why the compat pages had to fit under 0x7F.
+      * A MAIN PAGE AND A BACKGROUND ROTATION. Page 0x04 carries the data every
+        message; pages 0x00 to 0x03 take one slot each in turn. Bytes [4..7] are
+        the same on all of them, so the rotation costs a receiver nothing.
+    """
+
+    device_type = ap.HRM_DEVICE_TYPE
+    period = ap.HRM_PERIOD
+    label = "heart rate"
+
+    TOGGLE_INTERVAL = 4
+    BACKGROUND_INTERVAL = 64
+    BACKGROUND_PAGES = (ap.PAGE_HR_DEFAULT, ap.PAGE_HR_CUMULATIVE_TIME,
+                        ap.PAGE_HR_MANUFACTURER, ap.PAGE_HR_PRODUCT)
+
+    def __init__(self, *args, bpm: float = DEFAULT_BPM, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The heart rate reuses the cadence signal's noise and generator so that
+        # --seed still makes the whole run reproducible; a second rng would make
+        # one seeded stream depend on how many others were built first.
+        self.bpm = Signal(bpm, self.rpm.noise, self.rpm.rng,
+                          sway=self.rpm.sway)
+        self.beat = RevolutionCounter()
+        self.beats = 0
+        self.event_time = 0
+        self.previous_event_time = 0
+        self.computed_hr = 0
+        self.background_next = 0
+        self.data_pages = 0
+
+    def advance(self, dt: float) -> None:
+        bpm = max(0.0, self.bpm.at(self.t))
+        for beat_period in self.beat.advance(dt, bpm / 60.0):
+            self.previous_event_time = self.event_time
+            self.event_time = (self.event_time
+                               + int(round(ap.HR_EVENT_TIME_HZ * beat_period))
+                               ) % ap.U16_WRAP
+            self.beats = (self.beats + 1) % ap.U8_WRAP
+        self.computed_hr = int(round(bpm))
+
+    @property
+    def toggle(self) -> bool:
+        return bool((self.messages // self.TOGGLE_INTERVAL) & 1)
+
+    def data_page(self) -> bytes:
+        self.data_pages += 1
+        tail = dict(event_time=self.event_time, beat_count=self.beats,
+                    computed_hr=self.computed_hr or None, toggle=self.toggle)
+
+        if self.data_pages % self.BACKGROUND_INTERVAL:
+            return ap.encode_hr_previous_beat(self.previous_event_time, **tail)
+
+        page = self.BACKGROUND_PAGES[self.background_next]
+        self.background_next = ((self.background_next + 1)
+                                % len(self.BACKGROUND_PAGES))
+        if page == ap.PAGE_HR_DEFAULT:
+            return ap.encode_hr_default(**tail)
+        if page == ap.PAGE_HR_CUMULATIVE_TIME:
+            return ap.encode_hr_cumulative_time(
+                int(self.t / ap.HR_OPERATING_TIME_UNIT_S), **tail)
+        if page == ap.PAGE_HR_MANUFACTURER:
+            return ap.encode_hr_manufacturer(MANUFACTURER_ID & 0xFF,
+                                             (self.serial_number or 0) & 0xFFFF,
+                                             **tail)
+        return ap.encode_hr_product(HW_REVISION, SW_REVISION,
+                                    MODEL_NUMBER & 0xFF, **tail)
 
 
 class CombinedSpeedCadenceSensor(Sensor):
@@ -637,9 +867,18 @@ SENSORS = {
     "power-torque": TorquePowerSensor,
     "power-torque-freq": TorqueFrequencySensor,
     "csc": CombinedSpeedCadenceSensor,
+    "heart-rate": HeartRateSensor,
     "telemetry": TelemetrySensor,
     "asset-tag": AssetTagSensor,
 }
+
+# Which profiles --attest can be applied to. Device type 0x79 is absent
+# permanently and structurally: its page has no page-number byte, so an inserted
+# page decodes as speed and cadence and steps four accumulators. The 0x60
+# profiles are absent because they are already RadiANT natives - X_CONF and
+# X_AUTH secure them, and attestation is the mechanism for the channels that
+# cannot have those.
+ATTESTABLE = ("power", "power-torque", "power-torque-freq", "heart-rate")
 
 
 def run(dev, reader, sensors: list[Sensor], seconds: float,
@@ -789,6 +1028,51 @@ def main() -> int:
                              "the device number and defeats a re-roll "
                              "outright, so this is what a node with any "
                              "privacy posture must do")
+    parser.add_argument("--attest", action="store_true",
+                        help="add the RadiANT compat layer to an ANT+ profile: "
+                             "a capability beacon in the common-page rotation "
+                             "and Tier I identity attestation. The data pages "
+                             "stay byte-exact ANT+ and a legacy receiver skips "
+                             "the two added page numbers, which is the whole "
+                             "mechanism. Off by default, because a shipped "
+                             "strap is a plain ANT+ sensor unless somebody "
+                             "configures it otherwise")
+    parser.add_argument("--attest-interval", type=float, metavar="T",
+                        default=ap.COMPAT_DEFAULT_TIER_I_INTERVAL_S,
+                        help="Tier I interval in SECONDS, decoupled from the "
+                             "data rate - which is what makes the cost 1.2 %% "
+                             "of slots at 4 Hz rather than a fraction of the "
+                             f"stream (default: "
+                             f"{ap.COMPAT_DEFAULT_TIER_I_INTERVAL_S:.0f})")
+    parser.add_argument("--attest-window", type=int, metavar="N",
+                        choices=ap.COMPAT_WINDOW_SIZES, default=None,
+                        help="also emit Tier II data attestation, one page in "
+                             "N transmitted messages. Off by default: N is "
+                             "simultaneously the airtime cost, the verification "
+                             "latency and the DoS amplification factor, and one "
+                             "lost packet unverifies the whole window")
+    parser.add_argument("--private-policy", type=int,
+                        choices=ap.COMPAT_POLICIES,
+                        default=ap.COMPAT_POLICY_NEVER,
+                        help="what the beacon advertises the node WILL do: "
+                             "0 never, 1 physical, 2 command, 3 always "
+                             "(default: 0). The locator fields are zero on a "
+                             "`never` node because there is nowhere for it to "
+                             "go")
+    parser.add_argument("--compat-key", metavar="HEX",
+                        default=DEFAULT_COMPAT_ROOT.hex(),
+                        help="16-byte root key as hex, for the attestation "
+                             "tags. The default is a published demonstration "
+                             "key and is not a secret")
+    parser.add_argument("--epoch", type=int, default=1,
+                        help="epoch the keys and nonces are derived under "
+                             "(default: 1). It is never broadcast: for a "
+                             "hostless node the epoch is the boot counter, and "
+                             "a receiver recovers it by searching forward "
+                             "against the beacon's key-group hint")
+    parser.add_argument("--bpm", type=float, default=DEFAULT_BPM,
+                        help=f"heart rate to simulate, in beats per minute "
+                             f"(default: {DEFAULT_BPM:.0f})")
     parser.add_argument("--trans-type", type=int, default=5,
                         help="transmission type (default: 5, matching the "
                              "aerosense master path and sim/)")
@@ -866,6 +1150,8 @@ def main() -> int:
             if name in ("power-torque", "csc"):
                 kwargs = dict(wheel_circ_m=args.wheel_circ,
                               speed_kph=args.speed)
+            elif name == "heart-rate":
+                kwargs = dict(bpm=args.bpm)
             sensor = SENSORS[name](
                 args.channel + index, base_device_number + index,
                 args.trans_type,
@@ -874,6 +1160,17 @@ def main() -> int:
                 **kwargs)
             sensor.serial_number = serial_number
             sensor.period_ppm = args.period_ppm
+            if args.attest:
+                if name not in ATTESTABLE:
+                    sys.exit(f"--attest is for an ANT+ compat profile; {name} "
+                             f"is not one of {', '.join(ATTESTABLE)}")
+                sensor.compat = CompatAttestation(
+                    bytes.fromhex(args.compat_key), args.epoch,
+                    sensor.device_number,
+                    interval_s=args.attest_interval,
+                    window=args.attest_window,
+                    policy=args.private_policy,
+                    target_device_number=sensor.device_number ^ 0xA5A5)
             # Set on the descriptor rather than passed to a constructor, for
             # the same reason serial_number is: the `sched` property is lazy
             # precisely so that post-construction settings reach the encoded

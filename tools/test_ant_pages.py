@@ -24,6 +24,7 @@ import unittest
 sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 
 import ant_pages as ap  # noqa: E402
+import radiant_crypto as rc  # noqa: E402
 
 
 class TestStandardPower(unittest.TestCase):
@@ -207,6 +208,119 @@ class TestCombinedSpeedCadence(unittest.TestCase):
             places=6)
 
 
+class TestHeartRatePages(unittest.TestCase):
+    """Device type 0x78. The tightest page namespace here, and the one whose
+    byte 0 is not simply a page number."""
+
+    TAIL = dict(event_time=0x1234, beat_count=200, computed_hr=145)
+
+    def test_round_trip_every_page(self):
+        cases = [
+            (ap.encode_hr_default(**self.TAIL), ap.PAGE_HR_DEFAULT, {}),
+            (ap.encode_hr_cumulative_time(0x0A0B0C, **self.TAIL),
+             ap.PAGE_HR_CUMULATIVE_TIME, {"operating_time": 0x0A0B0C}),
+            (ap.encode_hr_manufacturer(0x2B, 0x4455, **self.TAIL),
+             ap.PAGE_HR_MANUFACTURER,
+             {"manufacturer_id": 0x2B, "serial_lsb": 0x4455}),
+            (ap.encode_hr_product(3, 7, 9, **self.TAIL), ap.PAGE_HR_PRODUCT,
+             {"hw_version": 3, "sw_version": 7, "model_number": 9}),
+            (ap.encode_hr_previous_beat(0x1200, **self.TAIL),
+             ap.PAGE_HR_PREVIOUS_BEAT, {"previous_event_time": 0x1200}),
+        ]
+        for raw, page, extra in cases:
+            with self.subTest(page=page):
+                self.assertEqual(len(raw), 8)
+                got = ap.decode(raw, ap.HRM_DEVICE_TYPE)
+                self.assertEqual(got["page"], page)
+                self.assertFalse(got["toggle"])
+                self.assertEqual(got["event_time"], 0x1234)
+                self.assertEqual(got["beat_count"], 200)
+                self.assertEqual(got["computed_hr"], 145)
+                for key, value in extra.items():
+                    self.assertEqual(got[key], value)
+
+    def test_the_shared_tail_is_the_same_four_bytes_on_every_page(self):
+        # A page that moved bytes [4..7] would not be a new page, it would be a
+        # broken sensor. This is the assertion that says so.
+        pages = [
+            ap.encode_hr_default(**self.TAIL),
+            ap.encode_hr_cumulative_time(1, **self.TAIL),
+            ap.encode_hr_manufacturer(1, 2, **self.TAIL),
+            ap.encode_hr_product(1, 2, 3, **self.TAIL),
+            ap.encode_hr_previous_beat(1, **self.TAIL),
+        ]
+        tails = {raw[4:] for raw in pages}
+        self.assertEqual(len(tails), 1, "bytes [4..7] differ between pages")
+
+    def test_the_high_bit_of_byte_zero_is_the_toggle_not_the_page(self):
+        plain = ap.encode_hr_default(**self.TAIL)
+        toggled = ap.encode_hr_default(toggle=True, **self.TAIL)
+        self.assertEqual(plain[0], 0x00)
+        self.assertEqual(toggled[0], 0x80)
+        # Same page, both times. A decoder that read the raw byte would report
+        # page 0x80 for half the stream and find no heart rate in it.
+        for raw in (plain, toggled):
+            self.assertEqual(ap.decode(raw, ap.HRM_DEVICE_TYPE)["page"],
+                             ap.PAGE_HR_DEFAULT)
+        self.assertTrue(ap.decode(toggled, ap.HRM_DEVICE_TYPE)["toggle"])
+        self.assertEqual(plain[1:], toggled[1:])
+
+    def test_a_page_number_that_needs_bit_seven_is_refused(self):
+        with self.assertRaises(ValueError):
+            ap._hr_page(0x80, bytes(3), 0, 0, 0, False)
+
+    def test_a_missing_reading_is_zero_not_the_u8_sentinel(self):
+        raw = ap.encode_hr_default(event_time=0, beat_count=0,
+                                   computed_hr=None)
+        self.assertEqual(raw[7], 0)
+        self.assertIsNone(ap.decode(raw, ap.HRM_DEVICE_TYPE)["computed_hr"])
+        # 0xFF is a real 255 bpm here, not "not reported".
+        self.assertEqual(
+            ap.decode(ap.encode_hr_default(event_time=0, beat_count=0,
+                                           computed_hr=255),
+                      ap.HRM_DEVICE_TYPE)["computed_hr"], 255)
+
+    def test_bpm_from_the_accumulators_matches_the_computed_byte(self):
+        # 145 bpm is one beat every 1024 * 60 / 145 = 423.7 counts.
+        before = ap.encode_hr_default(event_time=1000, beat_count=10,
+                                      computed_hr=145)
+        after = ap.encode_hr_default(event_time=1000 + 4237, beat_count=20,
+                                     computed_hr=145)
+        a = ap.decode(before, ap.HRM_DEVICE_TYPE)
+        b = ap.decode(after, ap.HRM_DEVICE_TYPE)
+        bpm = ap.heart_rate_bpm_from(
+            ap.delta_u8(b["beat_count"], a["beat_count"]),
+            ap.delta_u16(b["event_time"], a["event_time"]))
+        self.assertAlmostEqual(bpm, 145.0, delta=0.1)
+
+    def test_the_event_time_wrap_is_taken_in_sixteen_bits(self):
+        a = ap.decode(ap.encode_hr_default(event_time=65500, beat_count=250,
+                                           computed_hr=60),
+                      ap.HRM_DEVICE_TYPE)
+        b = ap.decode(ap.encode_hr_default(event_time=100, beat_count=2,
+                                           computed_hr=60),
+                      ap.HRM_DEVICE_TYPE)
+        self.assertEqual(ap.delta_u16(b["event_time"], a["event_time"]), 136)
+        self.assertEqual(ap.delta_u8(b["beat_count"], a["beat_count"]), 8)
+
+    def test_a_common_page_on_this_device_type_still_carries_the_toggle(self):
+        raw = bytearray(ap.encode_common_80(1, 2, 3))
+        raw[0] |= ap.HR_PAGE_TOGGLE
+        got = ap.decode(bytes(raw), ap.HRM_DEVICE_TYPE)
+        self.assertEqual(got["page"], ap.PAGE_COMMON_MANUFACTURER)
+        self.assertTrue(got["toggle"])
+        self.assertEqual(got["manufacturer_id"], 2)
+
+    def test_the_permitted_periods_are_a_closed_set(self):
+        # A wrong period is the one setting in this whole layer a receiver
+        # cannot skip past: the channel does not open at all.
+        self.assertEqual(ap.HRM_PERIODS, (8070, 16140, 32280))
+        self.assertEqual(ap.HRM_PERIOD, 8070)
+        self.assertEqual(ap.HRM_PERIOD_HALF, 2 * ap.HRM_PERIOD)
+        self.assertEqual(ap.HRM_PERIOD_QUARTER, 4 * ap.HRM_PERIOD)
+        self.assertEqual(ap.BPWR_PERIODS, (8182,))
+
+
 class TestCommonPages(unittest.TestCase):
     def test_page_80_round_trip(self):
         raw = ap.encode_common_80(hw_revision=1, manufacturer_id=255,
@@ -279,6 +393,292 @@ class TestDispatch(unittest.TestCase):
         self.assertEqual(ap.PROFILES["csc"]["period"], 8086)
         self.assertEqual(ap.PROFILES["csc"]["device_type"], 0x79)
         self.assertEqual(ap.PROFILES["power-torque"]["pages"], (0x11, 0x12))
+        self.assertEqual(ap.PROFILES["heart-rate"]["period"], 8070)
+        self.assertEqual(ap.PROFILES["heart-rate"]["device_type"], 0x78)
+
+
+# ---------------------------------------------------------------------------
+# The compat layer: RadiANT pages added to an ANT+ device type
+# ---------------------------------------------------------------------------
+
+
+class TestCompatAllocation(unittest.TestCase):
+    def test_two_page_numbers_and_the_nibble_that_makes_them_three_bytes(self):
+        # The beacon is one page number. The attestation claim is one
+        # contiguous, nibble-aligned pair, because neither tier's layout has a
+        # spare bit anywhere - Tier I spends [1..2] on the counter and [3..7] on
+        # the tag, Tier II spends [1] on the window index and [2..7] on the tag -
+        # so the only place a subtype can live is byte [0], which is the page
+        # number.
+        self.assertEqual(ap.COMPAT_PAGE_BEACON, 0x70)
+        self.assertEqual(ap.COMPAT_PAGE_ATTEST_TIER_I, 0x71)
+        self.assertEqual(ap.COMPAT_PAGE_ATTEST_TIER_II, 0x72)
+        self.assertEqual(
+            ap.compat_attest_page(ap.COMPAT_SUBTYPE_TIER_I),
+            ap.COMPAT_PAGE_ATTEST_TIER_I)
+        self.assertEqual(
+            ap.compat_attest_page(ap.COMPAT_SUBTYPE_TIER_II),
+            ap.COMPAT_PAGE_ATTEST_TIER_II)
+
+    def test_every_compat_page_is_seven_bit(self):
+        # Not a style rule. Heart rate cannot express 0x80 or above at all, and
+        # the numbers must be the same in every compat profile so a receiver has
+        # one rule.
+        for page in (ap.COMPAT_PAGE_BEACON, ap.COMPAT_PAGE_ATTEST_TIER_I,
+                     ap.COMPAT_PAGE_ATTEST_TIER_II):
+            self.assertLessEqual(page, ap.COMPAT_PAGE_MAX)
+
+    def test_the_announcement_never_takes_a_page_number(self):
+        # Subtype 0x03 would be page 0x73 under the same rule; it rides frames 2
+        # and 3 of the beacon page's set instead. A third page number was
+        # rejected on the 7-bit namespace alone.
+        self.assertNotIn(ap.compat_attest_page(ap.COMPAT_SUBTYPE_ANNOUNCE),
+                         ap._COMPAT_DECODERS)
+
+    def test_speed_and_cadence_is_not_a_compat_device_type(self):
+        self.assertNotIn(ap.BSC_COMBINED_DEVICE_TYPE, ap.COMPAT_DEVICE_TYPES)
+        self.assertEqual(set(ap.COMPAT_DEVICE_TYPES),
+                         {ap.BPWR_DEVICE_TYPE, ap.HRM_DEVICE_TYPE})
+
+    def test_the_constants_mirror_the_crypto_module(self):
+        for name in ("COMPAT_DOM", "COMPAT_SUBTYPE_TIER_I",
+                     "COMPAT_SUBTYPE_TIER_II", "COMPAT_SUBTYPE_ANNOUNCE",
+                     "COMPAT_TIER_I_TAG_BITS", "COMPAT_TIER_II_TAG_BITS",
+                     "COMPAT_WINDOW_SIZES", "COMPAT_COUNTDOWN_LENGTHS"):
+            with self.subTest(constant=name):
+                self.assertEqual(getattr(ap, name), getattr(rc, name))
+
+
+class TestCompatBeacon(unittest.TestCase):
+    def beacon(self, **kwargs) -> "ap.CompatBeacon":
+        kwargs.setdefault("key_group_hint", bytes([0xAA, 0xBB, 0xCC]))
+        return ap.CompatBeacon(**kwargs)
+
+    def test_round_trip_of_a_default_never_node(self):
+        b = self.beacon()
+        frames = ap.encode_compat_beacon(b)
+        self.assertEqual([len(f) for f in frames], [8, 8])
+        self.assertEqual(ap.decode_compat_beacon(frames), b)
+
+    def test_round_trip_of_a_node_that_will_go_private(self):
+        b = self.beacon(policy=ap.COMPAT_POLICY_COMMAND,
+                        private_available=True, pairing_available=True,
+                        pairing_open=True, pending_switch=True, window=32,
+                        target_device_type=ap.RADIANT_TLM_DEVICE_TYPE,
+                        target_device_number=0x9C41, target_period=8182)
+        self.assertEqual(ap.decode_compat_beacon(ap.encode_compat_beacon(b)), b)
+
+    def test_the_frame_head_states_the_whole_set(self):
+        b = self.beacon()
+        steady = ap.encode_compat_beacon(b)
+        self.assertEqual([f[1] for f in steady], [0x01, 0x11])
+        # ADR 0008 writes frames 2 and 3 as 0x23 and 0x33, and the convention it
+        # writes them under is (index << 4) | (count - 1). Both are only true at
+        # once if frames 0 and 1 restate the new count while the set is four
+        # frames long - so they become 0x03 and 0x13 for the duration.
+        announcing = ap.encode_compat_beacon(
+            b, frame_count=ap.COMPAT_BEACON_FRAMES_ANNOUNCING)
+        self.assertEqual([f[1] for f in announcing], [0x03, 0x13])
+        for frame in steady + announcing:
+            self.assertEqual(ap.compat_frame_index(frame)[0] < 2, True)
+
+    def test_there_is_no_epoch_anywhere_in_the_beacon(self):
+        # The field a joining receiver would most obviously want, refused: for a
+        # hostless node the epoch IS the boot counter, so broadcasting it every
+        # 30 s fingerprints the device across sessions.
+        epoch = 0x0A0B0C0D
+        b = self.beacon(key_group_hint=rc.compat_key_group_hint(
+            bytes(range(16)), epoch))
+        blob = b"".join(ap.encode_compat_beacon(b))
+        for order in ("little", "big"):
+            self.assertNotIn(epoch.to_bytes(4, order), blob)
+
+    def test_private_available_and_the_policy_must_agree(self):
+        with self.assertRaises(ValueError):
+            ap.encode_compat_beacon(self.beacon(private_available=True))
+        with self.assertRaises(ValueError):
+            ap.encode_compat_beacon(
+                self.beacon(policy=ap.COMPAT_POLICY_ALWAYS,
+                            private_available=False))
+
+    def test_a_never_node_carries_no_locator(self):
+        with self.assertRaises(ValueError):
+            ap.encode_compat_beacon(self.beacon(target_device_number=0x1234))
+
+    def test_reserved_bits_are_zero_and_a_receiver_says_so(self):
+        frames = ap.encode_compat_beacon(self.beacon())
+        self.assertEqual(frames[0][7], 0)
+        self.assertEqual(frames[1][7], 0)
+        for index, byte, bit in ((0, 3, 0x40), (0, 7, 0x01), (1, 7, 0x01)):
+            with self.subTest(frame=index, byte=byte):
+                broken = [bytearray(f) for f in frames]
+                broken[index][byte] |= bit
+                with self.assertRaises(ValueError):
+                    ap.decode_compat_beacon([bytes(f) for f in broken])
+
+    def test_one_frame_decodes_without_waiting_for_the_other(self):
+        # A frame set arrives one frame per 121 messages, so a receiver that
+        # could only report a complete pair would say nothing for a minute.
+        frames = ap.encode_compat_beacon(
+            self.beacon(policy=ap.COMPAT_POLICY_PHYSICAL,
+                        private_available=True,
+                        target_device_type=0x60, target_device_number=7,
+                        target_period=8182))
+        first = ap.decode(frames[0], ap.HRM_DEVICE_TYPE)
+        self.assertEqual(first["kind"], "beacon")
+        self.assertEqual(first["frame_index"], 0)
+        self.assertEqual(first["policy"], ap.COMPAT_POLICY_PHYSICAL)
+        self.assertEqual(first["key_group_hint"], bytes([0xAA, 0xBB, 0xCC]))
+        second = ap.decode(frames[1], ap.BPWR_DEVICE_TYPE)
+        self.assertEqual(second["target_device_type"], 0x60)
+        self.assertEqual(second["target_period"], 8182)
+
+    def test_the_window_code_is_the_documented_mapping(self):
+        for code, window in enumerate((4, 8, 16, 32)):
+            self.assertEqual(ap.compat_window_for_code(code), window)
+            self.assertEqual(ap.compat_window_code(window), code)
+        with self.assertRaises(ValueError):
+            ap.compat_window_code(6)
+
+    def test_v1_refuses_to_announce_opportunistic_attestation(self):
+        # The field is specified so that turning it on later is a configuration
+        # change rather than a format break. Emitting it now would be a claim
+        # this build cannot honour.
+        with self.assertRaises(ValueError):
+            ap.encode_compat_beacon(
+                self.beacon(mode=ap.COMPAT_MODE_OPPORTUNISTIC))
+
+
+class TestCompatAnnounce(unittest.TestCase):
+    KEY = bytes(range(16))
+
+    def frame_a(self, **kwargs) -> bytes:
+        kwargs.setdefault("target_device_type", ap.RADIANT_TLM_DEVICE_TYPE)
+        kwargs.setdefault("target_device_number", 0x9C41)
+        kwargs.setdefault("target_period", 8182)
+        return ap.encode_compat_announce_a(ap.CompatAnnounce(**kwargs))
+
+    def test_round_trip(self):
+        raw = self.frame_a(reason=ap.COMPAT_REASON_PHYSICAL, countdown=8)
+        self.assertEqual(raw[0], ap.COMPAT_PAGE_BEACON)
+        self.assertEqual(raw[1], 0x23)
+        got = ap.decode(raw, ap.HRM_DEVICE_TYPE)
+        self.assertEqual(got["kind"], "announce")
+        self.assertEqual(got["announce"].target_device_number, 0x9C41)
+        self.assertEqual(got["announce"].reason, ap.COMPAT_REASON_PHYSICAL)
+        self.assertEqual(got["announce"].countdown, 8)
+
+    def test_the_countdown_counts_promoted_intervals_not_messages(self):
+        # Six bits of messages would top out at 63 and the longest legal
+        # countdown is K = 128. Six bits of eight-message intervals reaches 504.
+        raw = self.frame_a(countdown=ap.COMPAT_COUNTDOWN_MAX)
+        got = ap.decode(raw, ap.BPWR_DEVICE_TYPE)
+        self.assertEqual(got["countdown_messages"], 63 * 8)
+        longest = max(ap.COMPAT_COUNTDOWN_LENGTHS)
+        self.assertGreaterEqual(got["countdown_messages"], longest)
+        self.assertEqual(ap.COMPAT_BEACON_PROMOTED_INTERVAL, 8)
+
+    def test_frame_b_tags_frame_a_and_a_replay_fails_on_the_counter(self):
+        frame_a = self.frame_a(countdown=4)
+        tag = rc.compat_announce_tag(self.KEY, 42, 0x3A17, 7, frame_a)
+        frame_b = ap.encode_compat_announce_b(tag)
+        self.assertEqual(frame_b[1], 0x33)
+        self.assertEqual(ap.decode(frame_b, ap.HRM_DEVICE_TYPE)["tag"], tag)
+        # The same frame A under a later attestation counter is a different tag,
+        # which is what makes a captured announcement useless afterwards.
+        self.assertNotEqual(
+            rc.compat_announce_tag(self.KEY, 42, 0x3A17, 8, frame_a), tag)
+        # And a flipped countdown byte does not verify against the old tag.
+        forged = bytearray(frame_a)
+        forged[7] ^= 0x01
+        self.assertNotEqual(
+            rc.compat_announce_tag(self.KEY, 42, 0x3A17, 7, bytes(forged)), tag)
+
+    def test_the_announcement_subtype_is_neither_tier(self):
+        frame_a = self.frame_a()
+        announce = rc.compat_announce_tag(self.KEY, 1, 2, 3, frame_a)
+        tier2 = rc.compat_tier2_tag(self.KEY, 1, 2, 3, [frame_a] * 3)
+        self.assertNotEqual(announce, tier2)
+        self.assertNotEqual(announce[:5],
+                            rc.compat_tier1_tag(self.KEY, 1, 2, 3))
+
+    def test_a_reserved_reason_and_an_eight_bit_device_type_are_refused(self):
+        with self.assertRaises(ValueError):
+            self.frame_a(reason=ap.COMPAT_REASON_RESERVED)
+        with self.assertRaises(ValueError):
+            self.frame_a(target_device_type=0x80)
+        with self.assertRaises(ValueError):
+            self.frame_a(countdown=64)
+
+
+class TestCompatAttestation(unittest.TestCase):
+    KEY = bytes(range(16))
+
+    def test_tier_one_round_trip(self):
+        tag = rc.compat_tier1_tag(self.KEY, 42, 0x3A17, 0x0102)
+        raw = ap.encode_compat_attest_tier1(0x0102, tag)
+        self.assertEqual(len(raw), 8)
+        self.assertEqual(raw[0], ap.COMPAT_PAGE_ATTEST_TIER_I)
+        got = ap.decode(raw, ap.HRM_DEVICE_TYPE)
+        self.assertEqual(got["kind"], "attestation")
+        self.assertEqual(got["subtype"], ap.COMPAT_SUBTYPE_TIER_I)
+        self.assertEqual(got["att_counter"], 0x0102)
+        self.assertEqual(got["tag"], tag)
+
+    def test_tier_two_round_trip(self):
+        window = [bytes([i] * 8) for i in range(7)]
+        tag = rc.compat_tier2_tag(self.KEY, 42, 0x3A17, 5, window)
+        raw = ap.encode_compat_attest_tier2(5, tag)
+        self.assertEqual(raw[0], ap.COMPAT_PAGE_ATTEST_TIER_II)
+        got = ap.decode(raw, ap.BPWR_DEVICE_TYPE)
+        self.assertEqual(got["subtype"], ap.COMPAT_SUBTYPE_TIER_II)
+        self.assertEqual(got["window_index"], 5)
+        self.assertEqual(got["tag"], tag)
+
+    def test_the_page_byte_carries_the_same_nibble_as_the_nonce(self):
+        # The subtype is inside the MAC'd block at position 9; the page byte is
+        # derived from it rather than being a second, independent statement of
+        # it. That is what stops a Tier I and a Tier II tag over the same
+        # counter from being separated only by a byte an attacker chooses.
+        tier1 = ap.encode_compat_attest_tier1(
+            9, rc.compat_tier1_tag(self.KEY, 1, 2, 9))
+        tier2 = ap.encode_compat_attest_tier2(
+            9, rc.compat_tier2_tag(self.KEY, 1, 2, 9, [bytes(8)] * 3))
+        self.assertEqual(tier1[0] & 0x0F, ap.COMPAT_SUBTYPE_TIER_I)
+        self.assertEqual(tier2[0] & 0x0F, ap.COMPAT_SUBTYPE_TIER_II)
+        self.assertEqual(rc.compat_nonce_block(1, 2, 9, tier1[0] & 0x0F)[9],
+                         ap.COMPAT_SUBTYPE_TIER_I)
+        self.assertNotEqual(rc.compat_tier1_tag(self.KEY, 1, 2, 9),
+                            rc.compat_tier2_tag(self.KEY, 1, 2, 9,
+                                                [bytes(8)] * 3)[:5])
+
+    def test_a_tag_of_the_wrong_length_is_refused(self):
+        with self.assertRaises(ValueError):
+            ap.encode_compat_attest_tier1(0, bytes(6))
+        with self.assertRaises(ValueError):
+            ap.encode_compat_attest_tier2(0, bytes(5))
+
+    def test_the_toggle_bit_rides_a_compat_page_too(self):
+        # On heart rate every page carries it, including the ones this project
+        # added. A decoder that forgot would see page 0xF1 and report nothing.
+        tag = rc.compat_tier1_tag(self.KEY, 1, 2, 3)
+        raw = ap.encode_compat_attest_tier1(3, tag, toggle=True)
+        self.assertEqual(raw[0], 0xF1)
+        got = ap.decode(raw, ap.HRM_DEVICE_TYPE)
+        self.assertEqual(got["page"], ap.COMPAT_PAGE_ATTEST_TIER_I)
+        self.assertTrue(got["toggle"])
+        self.assertEqual(got["tag"], tag)
+
+    def test_a_compat_page_number_is_not_claimed_on_other_device_types(self):
+        # 0x70 sits inside device type 0x60's reserved range. Decoding it as a
+        # beacon there would be the "device type is a proof rather than a hint"
+        # mistake the registry warns about.
+        raw = ap.encode_compat_beacon(
+            ap.CompatBeacon(key_group_hint=bytes(3)))[0]
+        got = ap.decode(raw, ap.RADIANT_TLM_DEVICE_TYPE)
+        self.assertEqual(got["page"], ap.COMPAT_PAGE_BEACON)
+        self.assertIn("raw", got)
+        self.assertNotIn("kind", got)
 
 
 def sample_descriptor(**kwargs) -> "ap.TlmDescriptor":

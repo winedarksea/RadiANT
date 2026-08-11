@@ -14,7 +14,7 @@ carry the same values with different names: these pages are the contract
 between the two projects, and a page built here is fed to that project's C
 decoders in its replay tests.
 
-Two traps worth stating up front, because both produce plausible-looking
+Three traps worth stating up front, because all three produce plausible-looking
 garbage rather than an error:
 
 - The combined speed-and-cadence page (device type 0x79) has **no page-number
@@ -23,6 +23,10 @@ garbage rather than an error:
   that byte happens to name.
 - Page 0x20 is big-endian. Every other multi-byte field in every other page
   here is little-endian.
+- On heart rate (device type 0x78) **byte 0's high bit is not part of the page
+  number**. It is the page-change toggle, so every page appears under two byte
+  values and page numbers there are 7-bit. That is also why the RadiANT compat
+  pages below are all <= 0x7F.
 """
 
 from __future__ import annotations
@@ -309,6 +313,231 @@ def speed_mps_from(delta_revs: int, delta_event_time: int,
 
 
 # ---------------------------------------------------------------------------
+# Heart rate, device type 0x78
+#
+# The tightest page namespace in this file, and the reason the compat
+# allocation below looks the way it does. Two structural facts govern
+# everything here:
+#
+#   * BYTE 0's HIGH BIT IS NOT PART OF THE PAGE NUMBER. It is the page-change
+#     toggle, which flips once the sensor has sent every background page it
+#     has, so a receiver knows it has seen the whole set. Page numbers on this
+#     device type are therefore 7-bit - 0x00..0x7F - and nothing at or above
+#     0x80 is expressible at all. That is what makes the manufacturer-private
+#     range every other profile uses (0xF0..0xFF) unreachable here.
+#   * BYTES [4..7] ARE THE SAME ON EVERY PAGE. Heartbeat event time, beat count
+#     and computed heart rate are the data; the page number only says what the
+#     three bytes in between mean. A page that changed those four bytes would
+#     not be a new page, it would be a broken sensor - which is why every
+#     encoder below takes them and none of them can opt out.
+# ---------------------------------------------------------------------------
+
+HRM_DEVICE_TYPE = 0x78
+
+# The three permitted channel periods, in counts of 1/32768 s. Unlike a page
+# number, a period is not something a receiver can skip: it has to match or the
+# channel does not open at all, so a compat node choosing one of these is
+# choosing from a closed set rather than picking a rate.
+#
+#   8070  ~4.06 Hz   the standard rate, and the default
+#   16140 ~2.03 Hz   half rate
+#   32280 ~1.02 Hz   quarter rate
+#
+# Halving the rate halves the airtime an attestation page costs as a fraction
+# of nothing at all: Tier I's interval T is in SECONDS, so a slower profile
+# spends proportionally less of its slots on RadiANT, not more.
+HRM_PERIOD = 8070
+HRM_PERIOD_HALF = 16140
+HRM_PERIOD_QUARTER = 32280
+HRM_PERIODS = (HRM_PERIOD, HRM_PERIOD_HALF, HRM_PERIOD_QUARTER)
+
+# Bicycle power's permitted set, enumerated for the same reason and in the same
+# shape. One rate, so a compat power node has no choice to get wrong - and the
+# tuple exists so that "one" is a recorded fact rather than an omission.
+BPWR_PERIODS = (BPWR_PERIOD,)
+
+PAGE_HR_DEFAULT = 0x00
+PAGE_HR_CUMULATIVE_TIME = 0x01
+PAGE_HR_MANUFACTURER = 0x02
+PAGE_HR_PRODUCT = 0x03
+PAGE_HR_PREVIOUS_BEAT = 0x04
+
+HR_PAGE_TOGGLE = 0x80
+HR_PAGE_NUMBER_MASK = 0x7F
+
+# Event times are 1/1024 s here, not the 1/2048 s of the power torque pages and
+# not the 1/2000 s of page 0x20. Three profiles, three time bases.
+HR_EVENT_TIME_HZ = 1024
+# Cumulative operating time counts two-second units, so the 24-bit field covers
+# about 388 days.
+HR_OPERATING_TIME_UNIT_S = 2
+# Computed heart rate spells "no reading" as 0, not as 0xFF. A receiver that
+# reached for INVALID_U8 here would report a plausible 255 bpm.
+HR_INVALID_BPM = 0
+
+
+def _hr_page(page: int, body: bytes, event_time: int, beat_count: int,
+             computed_hr: int | None, toggle: bool) -> bytes:
+    """Byte 0 and the shared tail, around three page-specific bytes."""
+    if not 0 <= page <= HR_PAGE_NUMBER_MASK:
+        raise ValueError(f"heart-rate page 0x{page:02X} is not 7-bit; byte 0 "
+                         "bit 7 is the page-change toggle")
+    if len(body) != 3:
+        raise ValueError(f"bytes [1..3] are 3 bytes, got {len(body)}")
+    return (bytes([page | (HR_PAGE_TOGGLE if toggle else 0)]) + bytes(body)
+            + _le16(event_time)
+            + bytes([_u8(beat_count),
+                     HR_INVALID_BPM if computed_hr is None
+                     else _u8(computed_hr)]))
+
+
+def decode_hr_common(payload: bytes) -> dict:
+    """The four bytes every heart-rate page carries, plus byte 0's two halves."""
+    return {
+        "page": payload[0] & HR_PAGE_NUMBER_MASK,
+        "toggle": bool(payload[0] & HR_PAGE_TOGGLE),
+        "event_time": _rd_le16(payload, 4),
+        "beat_count": payload[6],
+        "computed_hr": (None if payload[7] == HR_INVALID_BPM else payload[7]),
+    }
+
+
+def encode_hr_default(event_time: int, beat_count: int,
+                      computed_hr: int | None, toggle: bool = False) -> bytes:
+    """Page 0x00, the default page - the one a strap must always be able to send.
+
+        [0]    bits 6:0 page 0x00, bit 7 page-change toggle
+        [1..3] reserved, 0xFF
+        [4..5] heartbeat event time (LE), 1/1024 s, wraps at 65536
+        [6]    heartbeat count, wraps at 256
+        [7]    computed heart rate in bpm, 0 = no reading
+    """
+    return _hr_page(PAGE_HR_DEFAULT, bytes([INVALID_U8] * 3), event_time,
+                    beat_count, computed_hr, toggle)
+
+
+def decode_hr_default(payload: bytes) -> dict:
+    return decode_hr_common(payload)
+
+
+def encode_hr_cumulative_time(operating_time: int, event_time: int,
+                              beat_count: int, computed_hr: int | None,
+                              toggle: bool = False) -> bytes:
+    """Page 0x01, cumulative operating time. A background page.
+
+        [1..3] cumulative operating time (LE u24), 2-second units
+    """
+    return _hr_page(PAGE_HR_CUMULATIVE_TIME,
+                    (operating_time & 0xFFFFFF).to_bytes(3, "little"),
+                    event_time, beat_count, computed_hr, toggle)
+
+
+def decode_hr_cumulative_time(payload: bytes) -> dict:
+    result = decode_hr_common(payload)
+    result["operating_time"] = int.from_bytes(payload[1:4], "little")
+    result["operating_time_s"] = (result["operating_time"]
+                                  * HR_OPERATING_TIME_UNIT_S)
+    return result
+
+
+def encode_hr_manufacturer(manufacturer_id: int, serial_lsb: int,
+                           event_time: int, beat_count: int,
+                           computed_hr: int | None,
+                           toggle: bool = False) -> bytes:
+    """Page 0x02, manufacturer information. A background page.
+
+        [1]    manufacturer id, 8 bits here rather than the 16 of common page 80
+        [2..3] serial number, low 16 bits (LE)
+    """
+    return _hr_page(PAGE_HR_MANUFACTURER,
+                    bytes([_u8(manufacturer_id)]) + _le16(serial_lsb),
+                    event_time, beat_count, computed_hr, toggle)
+
+
+def decode_hr_manufacturer(payload: bytes) -> dict:
+    result = decode_hr_common(payload)
+    result["manufacturer_id"] = payload[1]
+    result["serial_lsb"] = _rd_le16(payload, 2)
+    return result
+
+
+def encode_hr_product(hw_version: int, sw_version: int, model_number: int,
+                      event_time: int, beat_count: int,
+                      computed_hr: int | None, toggle: bool = False) -> bytes:
+    """Page 0x03, product information. A background page.
+
+        [1] hardware version
+        [2] software version
+        [3] model number
+    """
+    return _hr_page(PAGE_HR_PRODUCT,
+                    bytes([_u8(hw_version), _u8(sw_version),
+                           _u8(model_number)]),
+                    event_time, beat_count, computed_hr, toggle)
+
+
+def decode_hr_product(payload: bytes) -> dict:
+    result = decode_hr_common(payload)
+    result["hw_version"] = payload[1]
+    result["sw_version"] = payload[2]
+    result["model_number"] = payload[3]
+    return result
+
+
+def encode_hr_previous_beat(previous_event_time: int, event_time: int,
+                            beat_count: int, computed_hr: int | None,
+                            manufacturer_specific: int | None = None,
+                            toggle: bool = False) -> bytes:
+    """Page 0x04, previous heartbeat time. A main page, not a background one.
+
+        [1]    manufacturer-specific, 0xFF when unused
+        [2..3] previous heartbeat event time (LE), 1/1024 s
+
+    Two consecutive event times on one page is what lets a receiver compute an
+    R-R interval from a single packet instead of differencing two, which is the
+    reason a modern strap sends this as a main page rather than page 0x00.
+    """
+    return _hr_page(PAGE_HR_PREVIOUS_BEAT,
+                    bytes([INVALID_U8 if manufacturer_specific is None
+                           else _u8(manufacturer_specific)])
+                    + _le16(previous_event_time),
+                    event_time, beat_count, computed_hr, toggle)
+
+
+def decode_hr_previous_beat(payload: bytes) -> dict:
+    result = decode_hr_common(payload)
+    result["manufacturer_specific"] = (None if payload[1] == INVALID_U8
+                                       else payload[1])
+    result["previous_event_time"] = _rd_le16(payload, 2)
+    result["rr_interval_ms"] = (
+        delta_u16(result["event_time"], result["previous_event_time"])
+        * 1000.0 / HR_EVENT_TIME_HZ)
+    return result
+
+
+def heart_rate_bpm_from(delta_beats: int, delta_event_time: int) -> float:
+    """Beats per minute between two heart-rate samples.
+
+    The computed-heart-rate byte is the sensor's own answer and is a
+    convenience; this is the accumulator pair, which is what survives a lost
+    packet - the same division of labour as accumulated versus instantaneous
+    power.
+    """
+    if delta_event_time == 0:
+        raise ZeroDivisionError("no elapsed event time")
+    return delta_beats * HR_EVENT_TIME_HZ * 60.0 / delta_event_time
+
+
+_HR_DECODERS = {
+    PAGE_HR_DEFAULT: decode_hr_default,
+    PAGE_HR_CUMULATIVE_TIME: decode_hr_cumulative_time,
+    PAGE_HR_MANUFACTURER: decode_hr_manufacturer,
+    PAGE_HR_PRODUCT: decode_hr_product,
+    PAGE_HR_PREVIOUS_BEAT: decode_hr_previous_beat,
+}
+
+
+# ---------------------------------------------------------------------------
 # Common pages
 # ---------------------------------------------------------------------------
 
@@ -433,6 +662,512 @@ def decode_common_82(payload: bytes) -> dict:
         "time_resolution_16s": not (payload[7] & 0x80),
         "voltage": (payload[7] & 0x0F) + payload[6] / 256.0,
     }
+
+
+# ---------------------------------------------------------------------------
+# RadiANT compat pages, on an ANT+ device type
+#
+# docs/radiant-security.md section 11 is normative and
+# docs/decisions/0008-antplus-additive-pages-and-compat-security.md pins the
+# bytes. These pages are ADDED to an ANT+ profile and nothing existing is
+# touched: a legacy receiver skips a page number it does not know, which is the
+# whole mechanism.
+#
+# THE FRAMING IS HERE AND THE CRYPTOGRAPHY IS NOT. Every function below takes
+# tag bytes and returns tag bytes; tools/radiant_crypto.py computes them, and
+# radiant_core/src/radiant_sec_compat.c is its C mirror. That split is why this
+# module still imports nothing - and it is the same discipline the ADR states
+# from the other side, where the attestation code contains no page number and no
+# field name. Neither half knows what the other one means.
+#
+# Two page numbers are allocated, and 0x79 gets neither, permanently: it has no
+# page-number byte at all, so an inserted page decodes as speed and cadence and
+# steps four accumulators.
+# ---------------------------------------------------------------------------
+
+COMPAT_VERSION = 1
+
+# The allocation, registered in docs/profile-registry.md.
+#
+# 0x70 IS THE BEACON AND ALSO THE NIBBLE BASE OF THE ATTESTATION CLAIM. Byte
+# [0] of an attestation page is `COMPAT_PAGE_BASE | subtype`, which is the same
+# nibble that goes into the MAC'd nonce at position 9 - so the page byte is
+# DERIVED from the subtype rather than being a second, independent statement of
+# it. That is what "the subtype nibble in byte [0]" means in bytes.
+#
+# Subtype 0x03, the SWITCH/RETURN announcement, would be page 0x73 by that rule
+# and deliberately never appears on air: the announcement rides frames 2 and 3
+# of the beacon page's own frame set. Spending a third page number on it was
+# rejected on the 7-bit namespace alone.
+COMPAT_PAGE_BASE = 0x70
+COMPAT_PAGE_BEACON = 0x70
+COMPAT_PAGE_ATTEST_TIER_I = 0x71
+COMPAT_PAGE_ATTEST_TIER_II = 0x72
+COMPAT_PAGE_MAX = 0x7F
+
+# Every page number the compat layer puts on the air. A receiver interleaves
+# them the way it interleaves common pages 80 and 81 - they are not data pages
+# and they displace one, which is a distinction any per-message counter has to
+# be told about.
+COMPAT_PAGES = (COMPAT_PAGE_BEACON, COMPAT_PAGE_ATTEST_TIER_I,
+                COMPAT_PAGE_ATTEST_TIER_II)
+
+# The device types this project puts compat pages on. Speed and cadence is
+# absent by construction rather than by omission.
+COMPAT_DEVICE_TYPES = (BPWR_DEVICE_TYPE, HRM_DEVICE_TYPE)
+
+# Mirrors of tools/radiant_crypto.py, which mirrors radiant_sec_compat.h. The
+# values are checked against all three by scripts/check_profile_registry.py,
+# because a subtype that disagreed between the page and the nonce would produce
+# a tag that verifies nowhere and an error message about nothing.
+COMPAT_DOM = 0x04
+COMPAT_SUBTYPE_TIER_I = 0x01
+COMPAT_SUBTYPE_TIER_II = 0x02
+COMPAT_SUBTYPE_ANNOUNCE = 0x03
+COMPAT_TIER_I_TAG_BITS = 40
+COMPAT_TIER_II_TAG_BITS = 48
+COMPAT_TIER_I_TAG_BYTES = COMPAT_TIER_I_TAG_BITS // 8
+COMPAT_TIER_II_TAG_BYTES = COMPAT_TIER_II_TAG_BITS // 8
+COMPAT_WINDOW_SIZES = (4, 8, 16, 32)
+COMPAT_COUNTDOWN_LENGTHS = (16, 32, 64, 128)
+COMPAT_DEFAULT_WINDOW = 8
+COMPAT_DEFAULT_COUNTDOWN = 64
+
+# Tier I's interval is in SECONDS and decoupled from the data rate. That is the
+# whole compatibility argument: at 4 Hz, 20 s is one page in ~81 - 1.2% of
+# slots, below the 1.65% ANT+ itself spends on common pages 80 and 81.
+COMPAT_DEFAULT_TIER_I_INTERVAL_S = 20.0
+
+# During a countdown the beacon is promoted from its ordinary 1-in-121 slot to
+# 1 in 8, and the countdown field counts those promoted intervals rather than
+# messages - which is what lets six bits reach a 128-message countdown.
+COMPAT_BEACON_PROMOTED_INTERVAL = 8
+COMPAT_COUNTDOWN_MAX = 0x3F
+
+COMPAT_POLICY_NEVER = 0
+COMPAT_POLICY_PHYSICAL = 1
+COMPAT_POLICY_COMMAND = 2
+COMPAT_POLICY_ALWAYS = 3
+COMPAT_POLICIES = (COMPAT_POLICY_NEVER, COMPAT_POLICY_PHYSICAL,
+                   COMPAT_POLICY_COMMAND, COMPAT_POLICY_ALWAYS)
+
+COMPAT_CAP_ATTEST_AVAILABLE = 0x01
+COMPAT_CAP_PRIVATE_AVAILABLE = 0x02
+COMPAT_CAP_PAIRING_OPEN = 0x04
+COMPAT_CAP_PAIRING_AVAILABLE = 0x08
+
+COMPAT_MODE_FIXED = 0
+COMPAT_MODE_OPPORTUNISTIC = 1
+
+COMPAT_REASON_COMMAND = 0
+COMPAT_REASON_PHYSICAL = 1
+COMPAT_REASON_TIMEOUT_REVERT = 2
+COMPAT_REASON_RESERVED = 3
+
+# Frame indices in the beacon page's set. The set is two frames in the steady
+# state and four during a countdown, and byte [1] carries
+# (index << 4) | (count - 1) - so frames 0 and 1 are 0x01/0x11 normally and
+# 0x03/0x13 while the announcement is running. The count is in every frame
+# precisely so a receiver that hears only frame 2 still knows how many to wait
+# for.
+COMPAT_FRAME_BEACON_0 = 0
+COMPAT_FRAME_BEACON_1 = 1
+COMPAT_FRAME_ANNOUNCE_A = 2
+COMPAT_FRAME_ANNOUNCE_B = 3
+COMPAT_BEACON_FRAMES = 2
+COMPAT_BEACON_FRAMES_ANNOUNCING = 4
+
+COMPAT_HINT_BYTES = 3
+
+
+def compat_window_code(window: int) -> int:
+    """The 2-bit code for an attestation window N."""
+    if window not in COMPAT_WINDOW_SIZES:
+        raise ValueError(f"N must be one of {COMPAT_WINDOW_SIZES}, got {window}")
+    return COMPAT_WINDOW_SIZES.index(window)
+
+
+def compat_window_for_code(code: int) -> int:
+    """N, from the 2-bit code the beacon carries."""
+    if not 0 <= code <= 3:
+        raise ValueError(f"the window code is 2 bits, got {code}")
+    return COMPAT_WINDOW_SIZES[code]
+
+
+def compat_attest_page(subtype: int) -> int:
+    """The page byte an attestation subtype rides on.
+
+    One expression, used by the encoder and the decoder both, so the page and
+    the nonce can never disagree about which tier a tag belongs to.
+    """
+    if not 1 <= subtype <= 0x0F:
+        raise ValueError(f"the subtype is a nibble in 1..15, got {subtype}")
+    return COMPAT_PAGE_BASE | subtype
+
+
+def _compat_head(page: int, index: int, count: int, toggle: bool) -> bytes:
+    """Bytes [0] and [1] of a compat frame."""
+    if page > COMPAT_PAGE_MAX:
+        raise ValueError(f"compat page 0x{page:02X} is above 0x7F; heart rate's "
+                         "byte 0 carries a page-change toggle in bit 7")
+    if not 1 <= count <= 16:
+        raise ValueError(f"a frame set is 1..16 frames, got {count}")
+    if not 0 <= index < count:
+        raise ValueError(f"frame index {index} is not inside a {count}-frame set")
+    return bytes([page | (HR_PAGE_TOGGLE if toggle else 0),
+                  (index << 4) | (count - 1)])
+
+
+def compat_frame_index(payload: bytes) -> tuple:
+    """(index, count) out of byte [1]'s two halves."""
+    return (payload[1] >> 4) & 0x0F, (payload[1] & 0x0F) + 1
+
+
+@dataclasses.dataclass
+class CompatBeacon:
+    """Layer A, the capability beacon. Two frames under page 0x70.
+
+    It carries NO EPOCH, and that is a constraint rather than an omission: for a
+    hostless node the epoch is the boot counter, so a slowly incrementing 32-bit
+    number broadcast every 30 s is a device fingerprint that survives every other
+    privacy measure in this design - and it would have sat directly beside a
+    key-group hint made epoch-derived precisely to avoid that class of leak. A
+    receiver recovers the epoch by searching forward against the hint instead.
+    """
+
+    version: int = COMPAT_VERSION
+    attest_available: bool = True
+    private_available: bool = False
+    pairing_open: bool = False
+    pairing_available: bool = False
+    policy: int = COMPAT_POLICY_NEVER
+    window: int = COMPAT_DEFAULT_WINDOW
+    mode: int = COMPAT_MODE_FIXED
+    pending_switch: bool = False
+    key_group_hint: bytes = b"\x00\x00\x00"
+    target_device_type: int = 0
+    target_device_number: int = 0
+    target_period: int = 0
+
+
+def _compat_beacon_validate(b: CompatBeacon) -> None:
+    if b.version != COMPAT_VERSION:
+        raise ValueError(f"compat envelope version {b.version} is not v1")
+    if b.policy not in COMPAT_POLICIES:
+        raise ValueError(f"private policy {b.policy} is not 0..3")
+    if b.mode == COMPAT_MODE_OPPORTUNISTIC:
+        raise ValueError("opportunistic attestation is specified and "
+                         "deliberately not implemented in v1")
+    if len(b.key_group_hint) != COMPAT_HINT_BYTES:
+        raise ValueError(f"the key-group hint is {COMPAT_HINT_BYTES} bytes, "
+                         f"got {len(b.key_group_hint)}")
+    # The two must agree or the beacon is malformed. A node advertising
+    # "private-available" with policy `never` is telling a receiver it will do
+    # something it has already decided never to do, and a receiver cannot tell
+    # which half to believe.
+    if b.private_available != (b.policy != COMPAT_POLICY_NEVER):
+        raise ValueError("private-available and private policy disagree: "
+                         f"available={b.private_available}, policy={b.policy}")
+    if b.target_device_type > HR_PAGE_NUMBER_MASK:
+        raise ValueError("a device type is 7 bits; bit 7 is the pairing bit")
+    # Zero on a `never` node - there is nowhere for it to go - and zero on any
+    # node with announce = silent, whatever its policy.
+    if b.policy == COMPAT_POLICY_NEVER and (b.target_device_type
+                                            or b.target_device_number
+                                            or b.target_period):
+        raise ValueError("a `never` node has no private-mode locator to carry")
+    compat_window_code(b.window)
+
+
+def encode_compat_beacon(b: CompatBeacon,
+                         frame_count: int = COMPAT_BEACON_FRAMES,
+                         toggle: bool = False) -> list:
+    """The beacon's two frames.
+
+        frame 0   [1] = (0 << 4) | (count - 1)
+          [2]     bits 7:4 version, bit 3 pairing-available, bit 2 pairing-open,
+                  bit 1 private-available, bit 0 attest-available
+          [3]     bits 1:0 policy, bits 3:2 window N, bit 4 mode,
+                  bit 5 pending switch, bits 7:6 reserved
+          [4..6]  key-group hint, trunc24( CMAC(K_id, epoch) )
+          [7]     reserved, must be 0
+
+        frame 1   [1] = (1 << 4) | (count - 1)
+          [2]     private-mode target device type (bits 6:0)
+          [3..4]  private-mode target device number, LE
+          [5..6]  private-mode target channel period, LE
+          [7]     reserved, must be 0
+
+    `frame_count` is 2 in the steady state and 4 while a countdown is running,
+    because the announcement frames join THIS set rather than getting a page
+    number of their own.
+    """
+    _compat_beacon_validate(b)
+    return [
+        _compat_head(COMPAT_PAGE_BEACON, COMPAT_FRAME_BEACON_0, frame_count,
+                     toggle) + bytes([
+                         (b.version << 4)
+                         | (COMPAT_CAP_PAIRING_AVAILABLE if b.pairing_available else 0)
+                         | (COMPAT_CAP_PAIRING_OPEN if b.pairing_open else 0)
+                         | (COMPAT_CAP_PRIVATE_AVAILABLE if b.private_available else 0)
+                         | (COMPAT_CAP_ATTEST_AVAILABLE if b.attest_available else 0),
+                         b.policy
+                         | (compat_window_code(b.window) << 2)
+                         | (b.mode << 4)
+                         | (0x20 if b.pending_switch else 0),
+                     ]) + bytes(b.key_group_hint) + bytes(1),
+        _compat_head(COMPAT_PAGE_BEACON, COMPAT_FRAME_BEACON_1, frame_count,
+                     toggle) + bytes([b.target_device_type])
+        + _le16(b.target_device_number) + _le16(b.target_period) + bytes(1),
+    ]
+
+
+def decode_compat_beacon(frames) -> CompatBeacon:
+    """Both frames back into a beacon. Malformed is an error, not a guess."""
+    frames = [bytes(f[:8]) for f in frames]
+    if len(frames) != COMPAT_BEACON_FRAMES:
+        raise ValueError(f"a beacon is {COMPAT_BEACON_FRAMES} frames, got "
+                         f"{len(frames)}")
+    for index, frame in enumerate(frames):
+        if frame[0] & HR_PAGE_NUMBER_MASK != COMPAT_PAGE_BEACON:
+            raise ValueError(f"frame {index} is page "
+                             f"0x{frame[0] & HR_PAGE_NUMBER_MASK:02X}, not the "
+                             f"beacon page 0x{COMPAT_PAGE_BEACON:02X}")
+        if compat_frame_index(frame)[0] != index:
+            raise ValueError(f"frame {index} carries frame index "
+                             f"{compat_frame_index(frame)[0]}")
+        if frame[7] != 0:
+            raise ValueError(f"frame {index} byte [7] is reserved and must be 0")
+    if frames[0][3] & 0xC0:
+        raise ValueError("byte [3] bits 7:6 are reserved and must be 0")
+
+    b = CompatBeacon(
+        version=(frames[0][2] >> 4) & 0x0F,
+        pairing_available=bool(frames[0][2] & COMPAT_CAP_PAIRING_AVAILABLE),
+        pairing_open=bool(frames[0][2] & COMPAT_CAP_PAIRING_OPEN),
+        private_available=bool(frames[0][2] & COMPAT_CAP_PRIVATE_AVAILABLE),
+        attest_available=bool(frames[0][2] & COMPAT_CAP_ATTEST_AVAILABLE),
+        policy=frames[0][3] & 0x03,
+        window=compat_window_for_code((frames[0][3] >> 2) & 0x03),
+        mode=(frames[0][3] >> 4) & 0x01,
+        pending_switch=bool(frames[0][3] & 0x20),
+        key_group_hint=frames[0][4:7],
+        target_device_type=frames[1][2] & HR_PAGE_NUMBER_MASK,
+        target_device_number=_rd_le16(frames[1], 3),
+        target_period=_rd_le16(frames[1], 5),
+    )
+    if frames[1][2] & HR_PAGE_TOGGLE:
+        raise ValueError("the target device type is 7 bits; bit 7 must be 0")
+    _compat_beacon_validate(b)
+    return b
+
+
+def decode_compat_beacon_frame(payload: bytes) -> dict:
+    """One beacon frame, without waiting for the other.
+
+    A frame set arrives one frame per 121 messages, so a receiver that could
+    only report a complete pair would say nothing for a minute. This says what
+    the frame in hand carries and names which one it is.
+    """
+    index, count = compat_frame_index(payload)
+    result = {
+        "page": payload[0] & HR_PAGE_NUMBER_MASK,
+        "toggle": bool(payload[0] & HR_PAGE_TOGGLE),
+        "frame_index": index,
+        "frame_count": count,
+    }
+    if index == COMPAT_FRAME_BEACON_0:
+        result.update({
+            "kind": "beacon",
+            "version": (payload[2] >> 4) & 0x0F,
+            "attest_available": bool(payload[2] & COMPAT_CAP_ATTEST_AVAILABLE),
+            "private_available": bool(payload[2] & COMPAT_CAP_PRIVATE_AVAILABLE),
+            "pairing_open": bool(payload[2] & COMPAT_CAP_PAIRING_OPEN),
+            "pairing_available": bool(payload[2] & COMPAT_CAP_PAIRING_AVAILABLE),
+            "policy": payload[3] & 0x03,
+            "window": compat_window_for_code((payload[3] >> 2) & 0x03),
+            "mode": (payload[3] >> 4) & 0x01,
+            "pending_switch": bool(payload[3] & 0x20),
+            "key_group_hint": bytes(payload[4:7]),
+        })
+    elif index == COMPAT_FRAME_BEACON_1:
+        result.update({
+            "kind": "beacon",
+            "target_device_type": payload[2] & HR_PAGE_NUMBER_MASK,
+            "target_device_number": _rd_le16(payload, 3),
+            "target_period": _rd_le16(payload, 5),
+        })
+    elif index == COMPAT_FRAME_ANNOUNCE_A:
+        result.update(decode_compat_announce_a(payload))
+    elif index == COMPAT_FRAME_ANNOUNCE_B:
+        result.update(decode_compat_announce_b(payload))
+    else:
+        result["kind"] = "unknown"
+        result["raw"] = bytes(payload)
+    return result
+
+
+@dataclasses.dataclass
+class CompatAnnounce:
+    """Layer C's SWITCH/RETURN frame A. Frames 2 and 3 of the beacon page's set.
+
+    RECEIVERS ACT ON COUNTDOWN EXPIRY, NOT ON RECEIPT, which is what makes a
+    handover look like a handover rather than N independent dropouts: a receiver
+    joining halfway through reads the remaining count out of the frame and
+    retunes on the same message as everybody else.
+    """
+
+    target_device_type: int
+    target_device_number: int
+    target_period: int
+    reason: int = COMPAT_REASON_COMMAND
+    countdown: int = 0
+
+
+def encode_compat_announce_a(
+        a: CompatAnnounce,
+        frame_count: int = COMPAT_BEACON_FRAMES_ANNOUNCING,
+        toggle: bool = False) -> bytes:
+    """SWITCH/RETURN frame A: the locator, the reason and the countdown.
+
+        [2]     target device type (bits 6:0); bit 7 must be 0
+        [3..4]  target device number, LE
+        [5..6]  target channel period, LE
+        [7]     bits 7:6 reason, bits 5:0 countdown in promoted beacon intervals
+
+    The countdown counts intervals of COMPAT_BEACON_PROMOTED_INTERVAL
+    transmitted messages rather than messages, which is what lets six bits
+    express the longest legal countdown, K = 128.
+    """
+    if a.target_device_type > HR_PAGE_NUMBER_MASK:
+        raise ValueError("a device type is 7 bits; bit 7 is the pairing bit")
+    if not 0 <= a.reason <= 3:
+        raise ValueError(f"the reason is 2 bits, got {a.reason}")
+    if a.reason == COMPAT_REASON_RESERVED:
+        raise ValueError("reason 3 is reserved")
+    if not 0 <= a.countdown <= COMPAT_COUNTDOWN_MAX:
+        raise ValueError(f"the countdown is 6 bits of promoted beacon "
+                         f"intervals, got {a.countdown}")
+    return (_compat_head(COMPAT_PAGE_BEACON, COMPAT_FRAME_ANNOUNCE_A,
+                         frame_count, toggle)
+            + bytes([a.target_device_type]) + _le16(a.target_device_number)
+            + _le16(a.target_period)
+            + bytes([(a.reason << 6) | a.countdown]))
+
+
+def decode_compat_announce_a(payload: bytes) -> dict:
+    if payload[2] & HR_PAGE_TOGGLE:
+        raise ValueError("the target device type is 7 bits; bit 7 must be 0")
+    return {
+        "kind": "announce",
+        "announce": CompatAnnounce(
+            target_device_type=payload[2] & HR_PAGE_NUMBER_MASK,
+            target_device_number=_rd_le16(payload, 3),
+            target_period=_rd_le16(payload, 5),
+            reason=(payload[7] >> 6) & 0x03,
+            countdown=payload[7] & COMPAT_COUNTDOWN_MAX,
+        ),
+        "countdown_messages": ((payload[7] & COMPAT_COUNTDOWN_MAX)
+                               * COMPAT_BEACON_PROMOTED_INTERVAL),
+    }
+
+
+def encode_compat_announce_b(
+        tag: bytes,
+        frame_count: int = COMPAT_BEACON_FRAMES_ANNOUNCING,
+        toggle: bool = False) -> bytes:
+    """SWITCH/RETURN frame B: the tag over frame A, and nothing else.
+
+        [2..7]  trunc48( CMAC(K_auth, nonce_block || frame_A) ), sub = 0x03
+
+    The announcement carries its own tag rather than leaning on either
+    attestation tier, and that is not belt-and-braces: Tier I covers no payload
+    and Tier II is off by default, so without this frame the announcement would
+    be an unauthenticated "everybody follow me to channel X" - a one-packet
+    herding attack strictly worse than the mute attack this design refuses. A
+    receiver acts on a SWITCH frame only after this tag verifies.
+    """
+    if len(tag) != COMPAT_TIER_II_TAG_BYTES:
+        raise ValueError(f"the announcement tag is {COMPAT_TIER_II_TAG_BYTES} "
+                         f"bytes, got {len(tag)}")
+    return (_compat_head(COMPAT_PAGE_BEACON, COMPAT_FRAME_ANNOUNCE_B,
+                         frame_count, toggle) + bytes(tag))
+
+
+def decode_compat_announce_b(payload: bytes) -> dict:
+    return {"kind": "announce", "tag": bytes(payload[2:8])}
+
+
+def encode_compat_attest_tier1(att_counter: int, tag: bytes,
+                               toggle: bool = False) -> bytes:
+    """Tier I, identity attestation. Page 0x71. Default on.
+
+        [0]    COMPAT_PAGE_BASE | 0x01
+        [1..2] attestation counter, low 16 bits, LE
+        [3..7] trunc40( CMAC(K_auth, nonce_block) )
+
+    IT COVERS NO PAYLOAD, AND THAT IS THE POINT. Because nothing outside this
+    page is in the tag, it is verifiable on receipt and a packet lost anywhere
+    else costs nothing: verification rate equals page delivery rate,
+    independently of how often the page is sent. A window CMAC cannot have that
+    property at any length.
+    """
+    if len(tag) != COMPAT_TIER_I_TAG_BYTES:
+        raise ValueError(f"a Tier I tag is {COMPAT_TIER_I_TAG_BYTES} bytes, "
+                         f"got {len(tag)}")
+    page = compat_attest_page(COMPAT_SUBTYPE_TIER_I)
+    return (bytes([page | (HR_PAGE_TOGGLE if toggle else 0)])
+            + _le16(att_counter) + bytes(tag))
+
+
+def decode_compat_attest_tier1(payload: bytes) -> dict:
+    return {
+        "page": payload[0] & HR_PAGE_NUMBER_MASK,
+        "toggle": bool(payload[0] & HR_PAGE_TOGGLE),
+        "kind": "attestation",
+        "subtype": (payload[0] & HR_PAGE_NUMBER_MASK) & 0x0F,
+        "att_counter": _rd_le16(payload, 1),
+        "tag": bytes(payload[3:8]),
+    }
+
+
+def encode_compat_attest_tier2(window_index: int, tag: bytes,
+                               toggle: bool = False) -> bytes:
+    """Tier II, data attestation. Page 0x72. Default off.
+
+        [0]    COMPAT_PAGE_BASE | 0x02
+        [1]    window index, low 8 bits
+        [2..7] trunc48( CMAC(K_auth, nonce_block || p_1 .. p_{N-1}) )
+
+    The honest regression, and the reason this tier is off by default: a window
+    CMAC is not self-synchronising under loss, so one lost packet in the window
+    makes the whole window unverifiable. N is simultaneously the airtime cost,
+    the verification latency and the DoS amplification factor.
+    """
+    if len(tag) != COMPAT_TIER_II_TAG_BYTES:
+        raise ValueError(f"a Tier II tag is {COMPAT_TIER_II_TAG_BYTES} bytes, "
+                         f"got {len(tag)}")
+    page = compat_attest_page(COMPAT_SUBTYPE_TIER_II)
+    return (bytes([page | (HR_PAGE_TOGGLE if toggle else 0),
+                   _u8(window_index)]) + bytes(tag))
+
+
+def decode_compat_attest_tier2(payload: bytes) -> dict:
+    return {
+        "page": payload[0] & HR_PAGE_NUMBER_MASK,
+        "toggle": bool(payload[0] & HR_PAGE_TOGGLE),
+        "kind": "attestation",
+        "subtype": (payload[0] & HR_PAGE_NUMBER_MASK) & 0x0F,
+        "window_index": payload[1],
+        "tag": bytes(payload[2:8]),
+    }
+
+
+_COMPAT_DECODERS = {
+    COMPAT_PAGE_BEACON: decode_compat_beacon_frame,
+    COMPAT_PAGE_ATTEST_TIER_I: decode_compat_attest_tier1,
+    COMPAT_PAGE_ATTEST_TIER_II: decode_compat_attest_tier2,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -2001,13 +2736,37 @@ _PAGE_DECODERS = {
 }
 
 
+def decode_hr(payload: bytes) -> dict:
+    """One heart-rate payload, with byte 0's toggle bit taken off first.
+
+    Every page on device type 0x78 carries the page-change toggle in bit 7,
+    including the common pages, so a decoder that dispatched on the raw byte
+    would see each page under two different numbers and find neither.
+    """
+    number = payload[0] & HR_PAGE_NUMBER_MASK
+    toggle = bool(payload[0] & HR_PAGE_TOGGLE)
+
+    decoder = _HR_DECODERS.get(number)
+    if decoder is not None:
+        return decoder(payload)
+
+    decoder = _PAGE_DECODERS.get(number)
+    if decoder is not None:
+        result = decoder(bytes([number]) + payload[1:])
+        result["toggle"] = toggle
+        return result
+
+    return {"page": number, "toggle": toggle, "raw": bytes(payload)}
+
+
 def decode(payload: bytes, device_type: int) -> dict:
     """Decode one 8-byte payload heard on a channel of `device_type`.
 
     `device_type` is not decoration. The combined sensor's page has no page
     number, so byte 0 cannot be trusted to name a page unless the channel says
     it is not 0x79 - which is the entire reason this function takes an argument
-    that looks redundant.
+    that looks redundant. Heart rate needs it for the second reason: its byte 0
+    carries a toggle bit that is not part of the page number.
     """
     if len(payload) < 8:
         raise ValueError(f"payload is {len(payload)} bytes, need 8")
@@ -2017,6 +2776,19 @@ def decode(payload: bytes, device_type: int) -> dict:
         result = decode_bsc_combined(payload)
         result["page"] = None
         return result
+
+    # Compat pages are decoded only on a device type this project actually puts
+    # them on. The same numbers mean something else elsewhere - 0x70 is inside
+    # 0x60's reserved range - and a decoder that claimed them everywhere would
+    # be making exactly the "device type is a proof rather than a hint" mistake
+    # docs/profile-registry.md warns about.
+    if device_type in COMPAT_DEVICE_TYPES:
+        decoder = _COMPAT_DECODERS.get(payload[0] & HR_PAGE_NUMBER_MASK)
+        if decoder is not None:
+            return decoder(payload)
+
+    if device_type == HRM_DEVICE_TYPE:
+        return decode_hr(payload)
 
     decoder = _PAGE_DECODERS.get(payload[0])
     if decoder is None:
@@ -2115,6 +2887,18 @@ PROFILES = {
         "period": BSC_COMBINED_PERIOD,
         "pages": (),
         "label": "combined speed and cadence, device type 0x79",
+    },
+    # The other compat target. Its period is the profile's standard rate, and
+    # the half- and quarter-rate variants are HRM_PERIODS - a receiver whose
+    # period does not match the sensor's cannot open the channel at all, which
+    # is a harder failure than any page number can produce.
+    "heart-rate": {
+        "device_type": HRM_DEVICE_TYPE,
+        "period": HRM_PERIOD,
+        "pages": (PAGE_HR_DEFAULT, PAGE_HR_CUMULATIVE_TIME,
+                  PAGE_HR_MANUFACTURER, PAGE_HR_PRODUCT,
+                  PAGE_HR_PREVIOUS_BEAT),
+        "label": "heart rate, device type 0x78",
     },
     # Device type 0x60 is per-node by design - the period is announced in
     # descriptor frame 0, not fixed by the type - so docs/profile-registry.md

@@ -434,6 +434,57 @@ def compat_tier2_tag(k_auth: bytes, epoch: int, devnum: int,
     return cmac(k_auth, block)[:COMPAT_TIER_II_TAG_BITS // 8]
 
 
+def compat_announce_tag(k_auth: bytes, epoch: int, devnum: int,
+                        att_counter: int, frame_a) -> bytes:
+    """The SWITCH/RETURN announcement's tag, over frame A and nothing else:
+
+        trunc48( CMAC(K_auth, nonce_block || frame_A) ), sub = 0x03
+
+    Subtype 0x03 was pinned by C2 without a function to go with it, so that the
+    value could not be re-used before the layer that emits it existed. This is
+    that layer's half. `att_counter` is Tier I's counter, which is what makes a
+    replayed announcement fail: the same frame A in a later counter's nonce
+    produces a different tag, and a receiver that has already seen the counter
+    rejects it before checking anything else.
+
+    It is deliberately NOT compat_tier2_tag() with a window of one. That
+    function's N must be a legal window size and its subtype says "this covers
+    the last N-1 transmitted messages", which is a different claim about
+    different bytes; sharing the code would have meant sharing the subtype, and
+    the subtype is the only thing keeping the three claims apart.
+    """
+    if len(frame_a) != 8:
+        raise ValueError("a transmitted frame is 8 bytes, got %d" % len(frame_a))
+    block = compat_nonce_block(epoch, devnum, att_counter,
+                               COMPAT_SUBTYPE_ANNOUNCE) + bytes(frame_a)
+    return cmac(k_auth, block)[:COMPAT_TIER_II_TAG_BITS // 8]
+
+
+#: The beacon's key-group hint is three bytes wide: enough for a receiver
+#: holding a handful of roots to skip the ones that cannot match, and not enough
+#: to be an identifier. The 24 bits are not a security claim - a collision is
+#: expected every ~16 million epochs and is resolved by the attestation tag,
+#: which is 40 or 48 bits and cannot be survived by a hint collision.
+COMPAT_HINT_BITS = 24
+
+
+def compat_key_group_hint(k_id: bytes, epoch: int) -> bytes:
+    """trunc24( CMAC(K_id, epoch) ) - the beacon's "is this one of mine".
+
+    EPOCH-DERIVED, NEVER STATIC, and that is the whole design of the field. A
+    fixed "RadiANT, group ABC" byte string broadcast every 30 s would be a
+    better tracking identifier than the device number, which is the same lesson
+    that makes page 81's serial 0xFFFFFFFF under a privacy posture.
+
+    It is also the epoch anchor that replaced the epoch field: a receiver whose
+    last_seen_epoch is stale searches forward, one CMAC per candidate, until a
+    hint matches - which is cheaper than the field it replaced and is paid once
+    at re-acquisition rather than on every message.
+    """
+    return cmac(k_id, (epoch & 0xFFFFFFFF).to_bytes(4, "little"))[
+        :COMPAT_HINT_BITS // 8]
+
+
 def tag_byte_index(counter: int, window: int) -> int:
     """Which byte of the window's tag rides in this packet's byte [7].
 

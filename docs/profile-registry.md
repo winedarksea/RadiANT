@@ -162,7 +162,7 @@ second break for anyone who had already adopted the first.
 | `0x0B` | Bicycle Power | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8182 | no | no | Implemented in `tools/ant_pages.py`; byte-exact to Garmin's profile |
 | `0x11` | Fitness Equipment (FE-C) | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | — | no | no | Compatibility target; not yet implemented in `tools/ant_pages.py`, so no period is recorded rather than a guessed one |
 | `0x60` | RadiANT Generic Telemetry | radiant | RadiANT project | 2026-08-08 | per-node | no | per-node | The envelope in `docs/radiant-telemetry.md`; period is announced in descriptor frame 0. Implemented in `src/profiles/` and mirrored in `tools/ant_pages.py` |
-| `0x78` | Heart Rate | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | — | no | no | Compatibility target; not yet implemented in `tools/ant_pages.py` |
+| `0x78` | Heart Rate | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8070 | no | no | Implemented in `tools/ant_pages.py`; pages `0x00`-`0x04`. Half and quarter rates below. **Byte 0 bit 7 is a page-change toggle, so page numbers here are 7-bit** |
 | `0x79` | Bike Speed and Cadence, combined | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8086 | no | no | Implemented in `tools/ant_pages.py`. **No page-number byte** |
 | `0x7A` | Bike Cadence | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8102 | no | no | Period defined in `tools/ant_pages.py`; pages not implemented there |
 | `0x7B` | Bike Speed | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8118 | no | no | Period defined in `tools/ant_pages.py`; pages not implemented there |
@@ -171,6 +171,39 @@ second break for anyone who had already adopted the first.
 does not fix one, and `—` when this project has not implemented the type and
 will not record a number it has not verified. Where a number is present and the
 type appears in `tools/ant_pages.py`, the checker asserts they agree.
+
+### Permitted channel periods, per compat profile
+
+**A period is the one setting in the compat design that a receiver cannot skip
+past.** An unknown page number is ignored; a wrong period means the channel
+never opens at all, with no error anywhere that names the period as the cause.
+`period` is a manufacturer setting under
+`docs/decisions/0008-antplus-additive-pages-and-compat-security.md`, so the
+choice is from a **closed set** rather than a rate somebody picks, and the set
+is enumerated here and in `tools/ant_pages.py` where
+`scripts/check_profile_registry.py` cross-checks the two.
+
+<!-- radiant-registry: compat-periods -->
+
+| Type | Rate | Period | Approx. | Constant in `tools/ant_pages.py` |
+|---|---|---|---|---|
+| `0x78` | standard (default) | 8070 | ~4.06 Hz | `HRM_PERIOD` |
+| `0x78` | half | 16140 | ~2.03 Hz | `HRM_PERIOD_HALF` |
+| `0x78` | quarter | 32280 | ~1.02 Hz | `HRM_PERIOD_QUARTER` |
+| `0x0B` | standard (default) | 8182 | ~4.005 Hz | `BPWR_PERIOD` |
+
+**Bicycle power has one rate and that is a recorded fact, not an omission.** No
+reduced-rate variant is registered for `0x0B` because this project has not
+verified one against its own code, and the registry's rule is that it does not
+write down a number it has not verified. A compat power node uses 8182.
+
+The Period column above records each profile's **default**, which is what the
+device-type table carries; `HRM_PERIODS` and `BPWR_PERIODS` hold the full sets
+and the checker asserts the default is a member of its own set. A node running
+at a reduced rate spends **proportionally less** of its slots on RadiANT, not
+more: Tier I's interval `T` is in seconds and is decoupled from the data rate,
+so halving the message rate halves the number of data pages an attestation page
+displaces.
 
 ## Pages
 
@@ -192,9 +225,51 @@ indices inside the beacon page's frame set — it is the same numbers in every
 compat profile, every number is `<= 0x7F` because heart rate's byte 0 carries a
 page-change toggle in bit 7, and **none of it may ever land on `0x79`**, which
 has no page-number byte at all. See
-`docs/decisions/0008-antplus-additive-pages-and-compat-security.md`. No compat
-page is registered yet; the numbers are confirmed against the profile documents
-before they are.
+`docs/decisions/0008-antplus-additive-pages-and-compat-security.md`.
+
+### The compat allocation, and why these numbers
+
+**Beacon `0x70`. Attestation `0x71`–`0x72`.** The same numbers on `0x0B` and on
+`0x78`, so a receiver has one rule.
+
+- **`0x70` is the beacon and also the nibble base of the attestation claim.**
+  Byte `[0]` of an attestation page is `0x70 | subtype`, and that subtype is the
+  same nibble the MAC'd nonce carries at position 9 — so the page byte is
+  *derived* from the subtype rather than being a second, independent statement
+  of it.
+- **Why the attestation claim is two numbers and the allocation is still two,
+  not three.** ADR 0008 pins the subtype nibble into byte `[0]`, and byte `[0]`
+  is the page number. Neither tier has a spare bit anywhere else: Tier I spends
+  `[1..2]` on the counter and `[3..7]` on a 40-bit tag, Tier II spends `[1]` on
+  the window index and `[2..7]` on a 48-bit tag. So the two tiers **cannot**
+  share one byte-`[0]` value, and the checker's rule is the one that reflects
+  this — the attestation claim is *one contiguous, nibble-aligned claim* of one
+  or two numbers. What ADR 0008 rejected was a **third independent claim**: a
+  Tier II page allocated separately, elsewhere in the namespace, verified on its
+  own terms. That is still rejected. The count that matters to the 7-bit
+  namespace is the nibble block, and this design occupies one.
+- **`0x73` is not used.** It is what subtype `0x03`, the SWITCH/RETURN
+  announcement, would be under the same rule — and the announcement rides frames
+  2 and 3 of the beacon page's own frame set instead, which is exactly how the
+  third page number is avoided.
+- **Why the `0x70` block.** ANT+'s own common pages sit at or below `0x57`
+  within the 7-bit space, and the manufacturer-private range every other profile
+  uses (`0xF0`–`0xFF`) is **unreachable on heart rate**, whose byte 0 cannot
+  express anything `>= 0x80`. `0x70`–`0x72` is the high, sparse end of the space
+  a heart-rate sensor can actually express.
+
+**The residual risk, recorded rather than solved.** A manufacturer-specific page
+number is only unique per manufacturer id, so a vendor's private page on `0x0B`
+or `0x78` may already use `0x70`, `0x71` or `0x72`. This project has **no
+authoritative list of vendors' private page usage and does not claim one**;
+these numbers are unclaimed by ANT+'s own common and background pages and by
+every profile in this registry, and that is the whole of the evidence. What
+bounds the damage is that a collision fails closed rather than quietly: the
+beacon carries a version nibble that a foreign page will not match, and an
+attestation tag computed over a foreign page's bytes does not verify, so the
+receiver reports `unverified` instead of believing it. A receiver that decodes
+on page number alone has no defence, and that is the receiver's bug — the same
+rule this registry already states for device types.
 
 <!-- radiant-registry: pages -->
 
@@ -207,7 +282,18 @@ before they are.
 | `0x0B` | `0x50` | Common page 80, manufacturer | `ant_pages.encode_common_80` | Interleaved at message 119 of 121 |
 | `0x0B` | `0x51` | Common page 81, product | `ant_pages.encode_common_81` | Interleaved at message 120 of 121 |
 | `0x0B` | `0x52` | Common page 82, battery | `ant_pages.encode_common_82` | Optional |
-| `0x79` | none | Combined speed and cadence | `ant_pages.encode_bsc_combined` | This device type has **no page-number byte**; byte 0 is the low half of the cadence event time |
+| `0x0B` | `0x70` | RadiANT compat beacon | `ant_pages.encode_compat_beacon` | Two frames, four during a switch countdown. Carries **no epoch** |
+| `0x0B` | `0x71-0x72` | RadiANT compat attestation | `ant_pages.encode_compat_attest_tier1` | The base `0x70` bitwise-or the subtype nibble: `0x71` Tier I identity, `0x72` Tier II data. One contiguous nibble-aligned claim |
+| `0x78` | `0x00` | Default heart rate | `ant_pages.encode_hr_default` | Bytes `[4..7]` are the same on every page of this type |
+| `0x78` | `0x01` | Cumulative operating time | `ant_pages.encode_hr_cumulative_time` | Background page; u24 LE, 2 s units |
+| `0x78` | `0x02` | Manufacturer information | `ant_pages.encode_hr_manufacturer` | Background page; 8-bit manufacturer id, not common page 80's 16 |
+| `0x78` | `0x03` | Product information | `ant_pages.encode_hr_product` | Background page |
+| `0x78` | `0x04` | Previous heartbeat time | `ant_pages.encode_hr_previous_beat` | Main page; two event times on one page give an R-R interval from one packet |
+| `0x78` | `0x50` | Common page 80, manufacturer | `ant_pages.encode_common_80` | Byte-exact ANT+, and it carries the toggle in bit 7 like every page here |
+| `0x78` | `0x51` | Common page 81, product | `ant_pages.encode_common_81` | Byte-exact ANT+ |
+| `0x78` | `0x70` | RadiANT compat beacon | `ant_pages.encode_compat_beacon` | The same number as on `0x0B`, so a receiver has one rule |
+| `0x78` | `0x71-0x72` | RadiANT compat attestation | `ant_pages.encode_compat_attest_tier1` | The same numbers as on `0x0B` |
+| `0x79` | none | Combined speed and cadence | `ant_pages.encode_bsc_combined` | This device type has **no page-number byte**; byte 0 is the low half of the cadence event time, so it can never carry an additional page and gets no compat row, permanently |
 | `0x60` | `0x00` | Descriptor | `ant_pages.encode_tlm_descriptor` | Frame set; the retained message. C: `profile_desc_encode` |
 | `0x60` | `0x01-0x0F` | Data | `ant_pages.encode_tlm_data` | Field area packed MSB-first against the descriptor. C: `profile_data_encode` |
 | `0x60` | `0x10` | Reliable command | `ant_pages.encode_tlm_command` | Sequence + inline 16-bit tag, idempotent. **Layout only** - the idempotency rule and the tag need a key, and land with the command path |

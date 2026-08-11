@@ -101,6 +101,19 @@ ANT_PAGES_TYPES = [
     ("BSC_SPEED_DEVICE_TYPE", "BSC_SPEED_PERIOD"),
     ("BSC_CADENCE_DEVICE_TYPE", "BSC_CADENCE_PERIOD"),
     ("BSC_COMBINED_DEVICE_TYPE", "BSC_COMBINED_PERIOD"),
+    ("HRM_DEVICE_TYPE", "HRM_PERIOD"),
+]
+
+# Device types whose registry Period column records a DEFAULT out of a permitted
+# set, and the tuple in tools/ant_pages.py that holds the set. `period` is a
+# manufacturer setting under docs/decisions/0008, and it is the one setting in
+# that design a receiver cannot skip past: get it wrong and the channel does not
+# open at all, which is a harder failure than an unknown page number can
+# produce. So the alternates are enumerated in the code and the registry's
+# number has to be one of them.
+ANT_PAGES_PERIOD_SETS = [
+    ("BPWR_DEVICE_TYPE", "BPWR_PERIOD", "BPWR_PERIODS"),
+    ("HRM_DEVICE_TYPE", "HRM_PERIOD", "HRM_PERIODS"),
 ]
 
 
@@ -526,6 +539,35 @@ def check_against_ant_pages(types, module, problems) -> None:
                          "tools/ant_pages.py %s is %d"
                          % (device_type, row.get("period"), period_constant,
                             period))
+
+    # A profile's permitted period set, and the registry's number inside it.
+    # Every value in the set has to be a legal channel period on its own, and
+    # the default has to be one of them - a registry recording a rate the
+    # profile does not permit produces a channel that never opens, with no
+    # error anywhere that names the period.
+    for type_constant, period_constant, set_constant in ANT_PAGES_PERIOD_SETS:
+        if not all(hasattr(module, name) for name in
+                   (type_constant, period_constant, set_constant)):
+            problems.add(ANT_PAGES, 0,
+                         "%s is gone; update ANT_PAGES_PERIOD_SETS in "
+                         "scripts/check_profile_registry.py" % set_constant)
+            continue
+        periods = tuple(getattr(module, set_constant))
+        default = getattr(module, period_constant)
+        if not periods:
+            problems.add(ANT_PAGES, 0,
+                         "%s is empty; a profile with no enumerated period is "
+                         "a profile whose channel may never open" % set_constant)
+            continue
+        if default not in periods:
+            problems.add(ANT_PAGES, 0,
+                         "%s is %d, which is not in %s = %r"
+                         % (period_constant, default, set_constant, periods))
+        for value in periods:
+            if not 1 <= value <= 65535:
+                problems.add(ANT_PAGES, 0,
+                             "%s contains %r, which is not 1..65535 counts of "
+                             "1/32768 s" % (set_constant, value))
 
     # The common-page cadence trap: 119 / 120 / a 121-message cycle, not the 65
     # the generic guidance claims. If the constant moves, the prose that
@@ -955,6 +997,78 @@ def check_compat_allocation(per_type_rows, problems) -> None:
                          % (NO_ADDITIONAL_PAGE_TYPE, row.get("page")))
 
 
+COMPAT_PERIOD_COLUMNS = ["type", "rate", "period",
+                         "constant in tools/ant_pages.py"]
+
+
+def check_compat_periods(tables, module, problems) -> None:
+    """The permitted-period table, against the tuples in tools/ant_pages.py.
+
+    A page number a receiver does not know is skipped. A period it does not
+    share means the channel never opens, and nothing on either side reports the
+    period as the reason - so of everything docs/decisions/0008 makes a
+    manufacturer setting, this is the one whose failure is hardest to diagnose
+    and the one worth pinning from both ends.
+    """
+    if module is None:
+        return
+    if "compat-periods" not in tables:
+        problems.add(REGISTRY, 0,
+                     "no <!-- radiant-registry: compat-periods --> table; "
+                     "docs/decisions/0008 makes `period` a manufacturer "
+                     "setting, so each compat profile's permitted set is "
+                     "registered rather than left to the code alone")
+        return
+
+    header, rows = tables["compat-periods"]
+    if not require_columns(REGISTRY, "compat-periods", header,
+                           COMPAT_PERIOD_COLUMNS, problems):
+        return
+
+    registered = {}
+    for row in rows:
+        require_non_empty(REGISTRY, row, COMPAT_PERIOD_COLUMNS, problems)
+        device_type = parse_device_type(row.get("type"))
+        if device_type is None:
+            problems.add(REGISTRY, row.line,
+                         "device type %r is not 0xNN" % row.get("type"))
+            continue
+        period = row.get("period")
+        if not period.isdigit() or not 1 <= int(period) <= 65535:
+            problems.add(REGISTRY, row.line,
+                         "period %r is not 1..65535 counts of 1/32768 s"
+                         % period)
+            continue
+        name = row.get("constant in tools/ant_pages.py")
+        if not hasattr(module, name):
+            problems.add(REGISTRY, row.line,
+                         "tools/ant_pages.py defines no %s" % name)
+        elif getattr(module, name) != int(period):
+            problems.add(REGISTRY, row.line,
+                         "%s is %r in tools/ant_pages.py and %s here"
+                         % (name, getattr(module, name), period))
+        registered.setdefault(device_type, set()).add(int(period))
+
+    for type_constant, _period, set_constant in ANT_PAGES_PERIOD_SETS:
+        if not all(hasattr(module, name)
+                   for name in (type_constant, set_constant)):
+            continue
+        device_type = getattr(module, type_constant)
+        periods = set(getattr(module, set_constant))
+        missing = sorted(periods - registered.get(device_type, set()))
+        if missing:
+            problems.add(REGISTRY, 0,
+                         "device type 0x%02X permits period(s) %s in "
+                         "tools/ant_pages.py %s that no row registers"
+                         % (device_type, missing, set_constant))
+        extra = sorted(registered.get(device_type, set()) - periods)
+        if extra:
+            problems.add(REGISTRY, 0,
+                         "device type 0x%02X registers period(s) %s that "
+                         "tools/ant_pages.py %s does not permit"
+                         % (device_type, extra, set_constant))
+
+
 COMPAT_CONSTANT_RULES = [
     ("COMPAT_DOM", COMPAT_DOM_BYTE,
      "the compat domain byte, which must match RADIANT_SEC_DOM_COMPAT_MAC"),
@@ -1131,6 +1245,7 @@ def main() -> int:
     check_reserved_space(problems)
     check_compat_pins(problems)
     check_compat_allocation(per_type_rows, problems)
+    check_compat_periods(tables, module, problems)
     check_compat_constants(module, problems)
 
     if problems:

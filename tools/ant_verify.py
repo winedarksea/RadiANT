@@ -47,6 +47,7 @@ except ImportError:  # pragma: no cover - user-facing guidance
 sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 
 import ant_pages as ap  # noqa: E402
+import radiant_crypto as rc  # noqa: E402
 from ant_probe import (  # noqa: E402
     FrameReader,
     close_device,
@@ -138,6 +139,271 @@ DEFAULT_MAX_LOSS_PCT = 1.5
 DEFAULT_JITTER_FACTOR = 0.5      # of one channel period, on the stddev
 
 
+# ── The four things a receiver can say about a compat stream ────────────────
+#
+# docs/radiant-security.md section 11.4. The distinctions here are the whole
+# point of the class below, and three of them are routinely collapsed:
+#
+#   CLEAR       no key here. Not "unprotected" - a receiver that holds no key
+#               has no opinion, and CLEAR must keep meaning exactly that or
+#               downgrade protection has nothing to say.
+#   VERIFIED    a tag arrived and checked out.
+#   UNVERIFIED  something arrived and did NOT check out - a forged tag, a wrong
+#               key, a replayed counter - OR a key is installed, attestation is
+#               expected, and nothing came at all. Strip the beacon from a
+#               stream and a naive receiver falls back to clear; this is the
+#               state that stops it.
+#   LOST        a page that never arrived. NOT the same as UNVERIFIED, and
+#               conflating them is how a 0.4 % loss floor gets reported as an
+#               attack. Tier I sees it as a gap in the attestation counter;
+#               Tier II sees it as a window whose covered messages did not all
+#               turn up.
+ATTEST_CLEAR = "clear"
+ATTEST_VERIFIED = "verified"
+ATTEST_UNVERIFIED = "unverified"
+ATTEST_LOST = "lost"
+
+
+class CompatVerifier:
+    """The receiver half of docs/radiant-security.md section 11.4.
+
+    Holds a key and answers "is this stream from the holder of it, now". It is
+    fed every payload the channel delivers, because Tier II's window is N
+    consecutive TRANSMITTED messages rather than N data ones - the common pages,
+    the beacon and the Tier I page are all inside it.
+
+    Tier I's loss independence is the claim worth reading the counters for:
+    because its tag covers no payload, its verification rate equals its page
+    delivery rate no matter what else is lost. Tier II's does not, and the
+    numbers below are where that shows up.
+    """
+
+    def __init__(self, root: bytes, epoch: int, devnum: int,
+                 window: int | None = None):
+        keys = rc.derive_keys(root, epoch, devnum)
+        self.k_auth = keys[rc.LABEL_AUTH]
+        self.k_id = keys[rc.LABEL_ID]
+        self.epoch = epoch
+        self.devnum = devnum
+        self.window = window
+        self.expected_hint = rc.compat_key_group_hint(self.k_id, epoch)
+
+        self.tier1 = Counter()
+        self.tier2 = Counter()
+        self.beacon_frames = 0
+        self.beacon_malformed = 0
+        self.hint_matches = 0
+        self.announce_verified = 0
+        self.announce_unverified = 0
+
+        self.last_counter: int | None = None
+        self.last_window_index: int | None = None
+        self.windows_seen = 0
+        self.pending: list[bytes] = []
+        self.announce_frame_a: bytes | None = None
+        self.beacon: "ap.CompatBeacon | None" = None
+        self._frames: dict = {}
+
+    # -- ingestion --------------------------------------------------------
+
+    def feed(self, payload: bytes) -> str | None:
+        """One delivered message. Returns its attestation outcome, or None."""
+        page = payload[0] & ap.HR_PAGE_NUMBER_MASK
+
+        if page == ap.COMPAT_PAGE_ATTEST_TIER_II:
+            # The tag page is the N-th message of its own window, not the first
+            # of the next one.
+            return self._feed_tier2(payload)
+
+        # EVERYTHING ELSE IS COVERED BY WHATEVER TIER II WINDOW IS OPEN - the
+        # window is N consecutive transmitted messages and not N data ones, so
+        # the common pages, the beacon and the Tier I page are all inside it.
+        self.pending.append(bytes(payload))
+        if page == ap.COMPAT_PAGE_ATTEST_TIER_I:
+            return self._feed_tier1(payload)
+        if page == ap.COMPAT_PAGE_BEACON:
+            return self._feed_beacon(payload)
+        return None
+
+    def _feed_beacon(self, payload: bytes) -> str | None:
+        self.beacon_frames += 1
+        try:
+            got = ap.decode_compat_beacon_frame(payload)
+        except ValueError:
+            self.beacon_malformed += 1
+            return ATTEST_UNVERIFIED
+
+        index = got["frame_index"]
+        if index == ap.COMPAT_FRAME_ANNOUNCE_A:
+            self.announce_frame_a = bytes(payload)
+            return None
+        if index == ap.COMPAT_FRAME_ANNOUNCE_B:
+            return self._feed_announce_b(got["tag"])
+
+        self._frames[index] = bytes(payload)
+        if index == ap.COMPAT_FRAME_BEACON_0:
+            # The hint is not a security claim - 24 bits, resolved by the 40- or
+            # 48-bit attestation tag - but it is what a receiver with several
+            # roots uses to skip the ones that cannot match, and what a receiver
+            # with a stale epoch searches forward against.
+            if got["key_group_hint"] == self.expected_hint:
+                self.hint_matches += 1
+        if (ap.COMPAT_FRAME_BEACON_0 in self._frames
+                and ap.COMPAT_FRAME_BEACON_1 in self._frames):
+            try:
+                self.beacon = ap.decode_compat_beacon(
+                    [self._frames[ap.COMPAT_FRAME_BEACON_0],
+                     self._frames[ap.COMPAT_FRAME_BEACON_1]])
+            except ValueError:
+                # private-available disagreeing with the policy, a reserved bit
+                # set, a locator on a `never` node: all malformed, and a
+                # receiver says so rather than believing half of it.
+                self.beacon_malformed += 1
+                return ATTEST_UNVERIFIED
+        return None
+
+    def _feed_announce_b(self, tag: bytes) -> str:
+        """A SWITCH/RETURN frame is acted on only after its tag verifies."""
+        if self.announce_frame_a is None or self.last_counter is None:
+            self.announce_unverified += 1
+            return ATTEST_UNVERIFIED
+        expected = rc.compat_announce_tag(self.k_auth, self.epoch, self.devnum,
+                                          self.last_counter,
+                                          self.announce_frame_a)
+        self.announce_frame_a = None
+        if expected == tag:
+            self.announce_verified += 1
+            return ATTEST_VERIFIED
+        self.announce_unverified += 1
+        return ATTEST_UNVERIFIED
+
+    def _feed_tier1(self, payload: bytes) -> str:
+        got = ap.decode_compat_attest_tier1(payload)
+        counter = got["att_counter"]
+
+        if self.last_counter is not None:
+            if counter <= self.last_counter:
+                # Replay. Closed by the counter rather than by payload coverage,
+                # which is what lets the tag cover nothing at all.
+                self.tier1["replay"] += 1
+                self.tier1[ATTEST_UNVERIFIED] += 1
+                return ATTEST_UNVERIFIED
+            missing = ap.delta_u16(counter, self.last_counter) - 1
+            if missing:
+                self.tier1[ATTEST_LOST] += missing
+        self.last_counter = counter
+
+        expected = rc.compat_tier1_tag(self.k_auth, self.epoch, self.devnum,
+                                       counter)
+        if expected == got["tag"]:
+            self.tier1[ATTEST_VERIFIED] += 1
+            return ATTEST_VERIFIED
+        self.tier1[ATTEST_UNVERIFIED] += 1
+        return ATTEST_UNVERIFIED
+
+    def _feed_tier2(self, payload: bytes) -> str:
+        got = ap.decode_compat_attest_tier2(payload)
+        covered, self.pending = self.pending, []
+
+        # The page carries the window index's LOW 8 BITS and the nonce takes 16,
+        # so the high half is reconstructed from the receiver's own count of
+        # windows rather than read off the air. Skip this and the tags agree for
+        # 256 windows - about nine minutes at 4 Hz with N = 8 - and then every
+        # one of them fails, which looks exactly like an attack.
+        index, _ = rc.resolve_counter(self.windows_seen, got["window_index"])
+        if self.last_window_index is not None:
+            missing = index - self.last_window_index - 1
+            if missing > 0:
+                self.tier2[ATTEST_LOST] += missing
+        self.last_window_index = index
+        self.windows_seen = index + 1
+
+        if self.window is None:
+            self.tier2["unconfigured"] += 1
+            return ATTEST_UNVERIFIED
+        if len(covered) != self.window - 1:
+            # NOT a failed tag. The window's own messages did not all arrive, so
+            # there is nothing to check it against - which is the honest
+            # regression a window CMAC has and Tier I does not.
+            self.tier2[ATTEST_LOST] += 1
+            return ATTEST_LOST
+
+        expected = rc.compat_tier2_tag(self.k_auth, self.epoch, self.devnum,
+                                       index, covered)
+        if expected == got["tag"]:
+            self.tier2[ATTEST_VERIFIED] += 1
+            return ATTEST_VERIFIED
+        self.tier2[ATTEST_UNVERIFIED] += 1
+        return ATTEST_UNVERIFIED
+
+    # -- results ----------------------------------------------------------
+
+    def tier_verdict(self, counts: Counter, enabled: bool) -> str:
+        if not enabled:
+            return ATTEST_CLEAR
+        if counts[ATTEST_UNVERIFIED]:
+            return ATTEST_UNVERIFIED
+        if counts[ATTEST_VERIFIED]:
+            return ATTEST_VERIFIED
+        return ATTEST_UNVERIFIED
+
+    def verdict(self) -> str:
+        if (self.tier1[ATTEST_UNVERIFIED] or self.tier2[ATTEST_UNVERIFIED]
+                or self.beacon_malformed or self.announce_unverified):
+            return ATTEST_UNVERIFIED
+        if self.tier1[ATTEST_VERIFIED] or self.tier2[ATTEST_VERIFIED]:
+            return ATTEST_VERIFIED
+        # A key is installed and attestation was expected. Nothing arrived, so
+        # this is a downgrade, not a clear stream.
+        return ATTEST_UNVERIFIED
+
+    def summary(self) -> dict:
+        delivered = self.tier1[ATTEST_VERIFIED] + self.tier1[ATTEST_UNVERIFIED]
+        return {
+            "verdict": self.verdict(),
+            "epoch": self.epoch,
+            "beacon_frames": self.beacon_frames,
+            "beacon_malformed": self.beacon_malformed,
+            "key_group_hint_matches": self.hint_matches,
+            "beacon": None if self.beacon is None else {
+                "version": self.beacon.version,
+                "attest_available": self.beacon.attest_available,
+                "private_available": self.beacon.private_available,
+                "policy": self.beacon.policy,
+                "window": self.beacon.window,
+                "pending_switch": self.beacon.pending_switch,
+                "target_device_type": self.beacon.target_device_type,
+                "target_device_number": self.beacon.target_device_number,
+                "target_period": self.beacon.target_period,
+            },
+            "tier_i": {
+                "verdict": self.tier_verdict(self.tier1, True),
+                "verified": self.tier1[ATTEST_VERIFIED],
+                "unverified": self.tier1[ATTEST_UNVERIFIED],
+                "lost": self.tier1[ATTEST_LOST],
+                "replays": self.tier1["replay"],
+                # The claim the tier exists for, as a number: of the pages that
+                # were DELIVERED, how many verified. Loss belongs in the other
+                # column and must not be allowed to move this one.
+                "verified_of_delivered": (
+                    self.tier1[ATTEST_VERIFIED] / delivered
+                    if delivered else None),
+            },
+            "tier_ii": {
+                "verdict": self.tier_verdict(self.tier2,
+                                             self.window is not None),
+                "window": self.window,
+                "verified": self.tier2[ATTEST_VERIFIED],
+                "unverified": self.tier2[ATTEST_UNVERIFIED],
+                "lost": self.tier2[ATTEST_LOST],
+            },
+            "announce": {
+                "verified": self.announce_verified,
+                "unverified": self.announce_unverified,
+            },
+        }
+
+
 class ChannelAnalyzer:
     """Decodes one channel's stream and accumulates evidence about it.
 
@@ -148,14 +414,28 @@ class ChannelAnalyzer:
 
     def __init__(self, name: str, device_type: int, period: int,
                  expect_watts: float | None, expect_rpm: float | None,
-                 wheel_circ_m: float):
+                 wheel_circ_m: float, compat: "CompatVerifier | None" = None,
+                 expect_bpm: float | None = None):
         self.name = name
         self.device_type = device_type
         self.period = period
         self.period_s = period / ANT_TICKS_PER_S
         self.expect_watts = expect_watts
         self.expect_rpm = expect_rpm
+        self.expect_bpm = expect_bpm
         self.wheel_circ_m = wheel_circ_m
+
+        # None means no key, which is the state that must keep reporting CLEAR.
+        self.compat = compat
+        self.attest_outcomes = Counter()
+
+        # On device type 0x78 byte 0's high bit is the page-change toggle and
+        # not part of the page number, so every page would otherwise be
+        # histogrammed under two numbers and matched under neither.
+        self.page_mask = (ap.HR_PAGE_NUMBER_MASK
+                          if device_type == ap.HRM_DEVICE_TYPE else 0xFF)
+        self.hr_baseline: dict | None = None
+        self.bpm_samples: list[float] = []
 
         self.packets = 0
         self.first_t: float | None = None
@@ -338,8 +618,13 @@ class ChannelAnalyzer:
             self._feed_csc(payload)
             return
 
-        page = payload[0]
+        page = payload[0] & self.page_mask
         self.pages[page] += 1
+
+        if self.compat is not None:
+            outcome = self.compat.feed(payload)
+            if outcome is not None:
+                self.attest_outcomes[outcome] += 1
 
         if page in (ap.PAGE_COMMON_MANUFACTURER, ap.PAGE_COMMON_PRODUCT):
             self.common_pages_seen[page] += 1
@@ -349,6 +634,20 @@ class ChannelAnalyzer:
             self.messages_since_common = 0
             return
 
+        if page in ap.COMPAT_PAGES:
+            # Interleaved rather than data. It lands between two data pages
+            # exactly as a common page does, and the exact-loss heuristic below
+            # has to be told so: a transmitter whose event counter steps once
+            # per MESSAGE steps it here too, and a receiver that did not count
+            # this message would read the step as a lost data page. That is a
+            # 1.2 % phantom loss on an otherwise perfect stream - the compat
+            # layer's own airtime cost, reported as a fault.
+            #
+            # It does not reset the common-page cycle, because it is not a
+            # common page and the profile's 121-message requirement is
+            # unaffected by it.
+            self._common_since_std += 1
+
         if self.messages_since_common is not None:
             self.messages_since_common += 1
         elif self.packets > COMMON_PAGE_LIMIT:
@@ -357,7 +656,9 @@ class ChannelAnalyzer:
             # first one does show up.
             self.messages_since_common = 0
 
-        if self.device_type == ap.RADIANT_TLM_DEVICE_TYPE:
+        if self.device_type == ap.HRM_DEVICE_TYPE:
+            self._feed_hr(payload)
+        elif self.device_type == ap.RADIANT_TLM_DEVICE_TYPE:
             self._feed_telemetry(t, payload)
         elif page == ap.PAGE_POWER_STANDARD:
             self._feed_power_std(payload)
@@ -661,6 +962,44 @@ class ChannelAnalyzer:
         else:
             self._violation(f"page 0x20: {watts:.0f} W is not a bicycle")
 
+    def _feed_hr(self, payload: bytes) -> None:
+        """Heart rate, device type 0x78.
+
+        Bytes [4..7] are the same on every page, so the accumulator pair is
+        checked without caring which page arrived - which is the property that
+        lets a background rotation and an inserted RadiANT page cost a receiver
+        nothing. A page number this decoder does not know is skipped here
+        exactly as a legacy receiver skips one, which is the whole additive-page
+        mechanism observed from the receiving end.
+        """
+        page = payload[0] & ap.HR_PAGE_NUMBER_MASK
+        if page not in ap._HR_DECODERS:
+            return
+        got = ap.decode_hr(payload)
+
+        before = self.hr_baseline
+        self.hr_baseline = got
+        if before is None:
+            return
+
+        d_beats = ap.delta_u8(got["beat_count"], before["beat_count"])
+        d_time = ap.delta_u16(got["event_time"], before["event_time"])
+        self._note_wrap("beat_count", got["beat_count"], before["beat_count"])
+        self._note_wrap("hr_event_time", got["event_time"],
+                        before["event_time"])
+        self._note_event(d_beats != 0)
+
+        if d_beats == 0:
+            if d_time != 0:
+                self._violation(f"0x78: event time advanced by {d_time} with "
+                                "no new heartbeat")
+            return
+        if d_time == 0:
+            self._violation(f"0x78: {d_beats} heartbeat(s) with no elapsed "
+                            "event time")
+            return
+        self.bpm_samples.append(ap.heart_rate_bpm_from(d_beats, d_time))
+
     def _feed_csc(self, payload: bytes) -> None:
         got = ap.decode_bsc_combined(payload)
         before = self.csc_baseline
@@ -754,6 +1093,13 @@ class ChannelAnalyzer:
         power = accuracy(self.power_samples, self.expect_watts)
         cadence = accuracy(self.cadence_samples, self.expect_rpm)
         speed = accuracy(self.speed_samples, None)
+        heart_rate = accuracy(self.bpm_samples, self.expect_bpm)
+
+        # CLEAR means "no key here" and nothing else. A channel with a key
+        # installed never reports it, however clean the stream looks.
+        attestation = ({"verdict": ATTEST_CLEAR} if self.compat is None
+                       else dict(self.compat.summary(),
+                                 outcomes=dict(self.attest_outcomes)))
 
         checks = []
 
@@ -867,6 +1213,19 @@ class ChannelAnalyzer:
                   f"{self.tlm_data_decoded} data page(s) decoded against it "
                   f"({self.tlm_data_before_schema} seen before it arrived)")
 
+        if self.compat is not None:
+            tier1 = attestation["tier_i"]
+            tier2 = attestation["tier_ii"]
+            check("attestation", attestation["verdict"] == ATTEST_VERIFIED,
+                  f"{attestation['verdict']}; Tier I "
+                  f"{tier1['verified']} verified, {tier1['unverified']} "
+                  f"unverified, {tier1['lost']} lost, {tier1['replays']} "
+                  f"replay(s); Tier II ({tier2['verdict']}) "
+                  f"{tier2['verified']} verified, {tier2['unverified']} "
+                  f"unverified, {tier2['lost']} lost; beacon "
+                  f"{attestation['beacon_frames']} frame(s), "
+                  f"{attestation['key_group_hint_matches']} hint match(es)")
+
         # A sparse node has no 121-message cycle to hang a common page on
         # (section 8 replaces the interleave outright), so the common-page
         # cadence is checked only where the profile actually requires it. 0x79
@@ -902,6 +1261,8 @@ class ChannelAnalyzer:
             "power": power,
             "cadence": cadence,
             "speed_mps": speed,
+            "heart_rate_bpm": heart_rate,
+            "attestation": attestation,
             "accumulator_wraps": dict(self.wraps),
             # What was learned from the node's own descriptor, and nothing
             # else. None for every device type but 0x60.
@@ -955,6 +1316,8 @@ def profile_for(device_type: int, pages: Counter) -> str:
     """
     if device_type == ap.BSC_COMBINED_DEVICE_TYPE:
         return "csc"
+    if device_type == ap.HRM_DEVICE_TYPE:
+        return "heart-rate"
     if device_type == ap.RADIANT_TLM_DEVICE_TYPE:
         # Both 0x60 profiles are the same envelope with the same decoder, and
         # the difference between them is announced in the descriptor rather
@@ -1237,7 +1600,29 @@ def report(result: dict) -> None:
             print("  wraps observed: none - this run did not reach a 16-bit "
                   "accumulator wrap")
 
-        for label in ("power", "cadence", "speed_mps"):
+        attestation = channel.get("attestation")
+        if attestation and attestation["verdict"] != ATTEST_CLEAR:
+            tier1 = attestation["tier_i"]
+            rate = tier1["verified_of_delivered"]
+            # Printed as "of delivered" rather than "of expected" on purpose:
+            # Tier I's claim is that its verification rate equals its page
+            # DELIVERY rate, independently of the interval. Mixing loss into
+            # this number would hide exactly the property being asserted.
+            print(f"  attestation: {attestation['verdict']}"
+                  + (f" - Tier I {rate * 100:.1f}% of delivered pages verified"
+                     if rate is not None else " - no Tier I page delivered")
+                  + f", {tier1['lost']} never arrived")
+            if attestation["tier_ii"]["verdict"] != ATTEST_CLEAR:
+                tier2 = attestation["tier_ii"]
+                print(f"  Tier II (N={tier2['window']}): "
+                      f"{tier2['verified']} window(s) verified, "
+                      f"{tier2['unverified']} failed the tag, "
+                      f"{tier2['lost']} unverifiable through loss")
+        elif attestation:
+            print("  attestation: clear - no key here, which is not the same "
+                  "as unprotected")
+
+        for label in ("power", "cadence", "speed_mps", "heart_rate_bpm"):
             stats = channel[label]
             if not stats:
                 continue
@@ -1284,6 +1669,26 @@ def main() -> int:
                         help="power the transmitter was told to produce")
     parser.add_argument("--expect-rpm", type=float,
                         help="cadence the transmitter was told to produce")
+    parser.add_argument("--expect-bpm", type=float,
+                        help="heart rate the transmitter was told to produce")
+    parser.add_argument("--compat-key", metavar="HEX",
+                        help="16-byte root key as hex. WITHOUT IT EVERY CHANNEL "
+                             "REPORTS 'clear', which means 'no key here' and "
+                             "not 'unprotected'. With it, a channel that "
+                             "delivers no attestation at all reports "
+                             "'unverified' rather than falling back to clear - "
+                             "which is the whole of receiver-side downgrade "
+                             "protection")
+    parser.add_argument("--epoch", type=int, default=1,
+                        help="epoch the keys and nonces are derived under "
+                             "(default: 1). It is not on the air; a receiver "
+                             "recovers it by searching forward against the "
+                             "beacon's key-group hint")
+    parser.add_argument("--attest-window", type=int, metavar="N",
+                        choices=ap.COMPAT_WINDOW_SIZES, default=None,
+                        help="expect Tier II data attestation with this "
+                             "window. Announced in the beacon; give it here to "
+                             "check a stream before a beacon has arrived")
     parser.add_argument("--max-error", type=float,
                         help="mean absolute error allowed against those "
                              "expectations (default: 10 %% of the expected "
@@ -1348,11 +1753,29 @@ def main() -> int:
     if json_to_stdout:
         stack.enter_context(contextlib.redirect_stdout(sys.stderr))
 
+    def make_verifier(device_number: int) -> "CompatVerifier | None":
+        """A verifier per stream, or None - which is what CLEAR means.
+
+        The device number is inside the nonce, so a wildcard cannot be used to
+        check a tag: 0 pairs with anything, and a tag is computed against
+        exactly one sensor.
+        """
+        if not args.compat_key:
+            return None
+        if not device_number:
+            print("  note: --compat-key needs a --device-number; a wildcard "
+                  "cannot check a tag, so this channel stays clear")
+            return None
+        return CompatVerifier(bytes.fromhex(args.compat_key), args.epoch,
+                              device_number, window=args.attest_window)
+
     def make_analyzer(name: str) -> ChannelAnalyzer:
         spec = ap.PROFILES[name]
         return ChannelAnalyzer(name, spec["device_type"], spec["period"],
                                args.expect_watts, args.expect_rpm,
-                               args.wheel_circ)
+                               args.wheel_circ,
+                               compat=make_verifier(args.device_number),
+                               expect_bpm=args.expect_bpm)
 
     extra: dict = {}
     records: list = []
@@ -1369,12 +1792,16 @@ def main() -> int:
 
         ordered = []
         for (device_type, device_number), packets in sorted(streams.items()):
-            pages = Counter(payload[0] for _, payload in packets)
+            mask = (ap.HR_PAGE_NUMBER_MASK
+                    if device_type == ap.HRM_DEVICE_TYPE else 0xFF)
+            pages = Counter(payload[0] & mask for _, payload in packets)
             name = profile_for(device_type, pages)
             analyzer = ChannelAnalyzer(
                 f"{name} #{device_number}", device_type,
                 period_for(device_type, name), args.expect_watts,
-                args.expect_rpm, args.wheel_circ)
+                args.expect_rpm, args.wheel_circ,
+                compat=make_verifier(device_number),
+                expect_bpm=args.expect_bpm)
             for t, payload in packets:
                 analyzer.feed(t, payload)
             ordered.append(analyzer)

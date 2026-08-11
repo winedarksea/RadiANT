@@ -24,14 +24,36 @@ from any ANT+ device profile document.
 |---|---|---|---|
 | `0x0B` | Bicycle Power | 8182 | pages `0x10`, `0x11`, `0x12`, `0x20` |
 | `0x11` | Fitness Equipment (FE-C) | — | no |
-| `0x78` | Heart Rate | — | no |
+| `0x78` | Heart Rate | 8070 | pages `0x00`, `0x01`, `0x02`, `0x03`, `0x04` |
 | `0x79` | Bike Speed and Cadence, combined | 8086 | the single page, which has no page number |
 | `0x7A` | Bike Cadence | 8102 | period only |
 | `0x7B` | Bike Speed | 8118 | period only |
 
-Period is in counts of 1/32768 s: 8182 is ~4.0049 Hz, 8086 is ~4.05 Hz. A `—`
-means this project has not implemented the type and does not record a number it
-has not verified against its own code.
+Period is in counts of 1/32768 s: 8182 is ~4.0049 Hz, 8086 is ~4.05 Hz, 8070 is
+~4.06 Hz. A `—` means this project has not implemented the type and does not
+record a number it has not verified against its own code.
+
+### Permitted channel periods
+
+The table above records each type's **default**. Two of them permit more than
+one rate, and the full sets live in `tools/ant_pages.py` as `HRM_PERIODS` and
+`BPWR_PERIODS`, cross-checked against `docs/profile-registry.md` by
+`scripts/check_profile_registry.py`.
+
+| Type | Rate | Period | Approx. |
+|---|---|---|---|
+| `0x78` | standard (default) | 8070 | ~4.06 Hz |
+| `0x78` | half | 16140 | ~2.03 Hz |
+| `0x78` | quarter | 32280 | ~1.02 Hz |
+| `0x0B` | standard (default) | 8182 | ~4.005 Hz |
+
+**The period is not like the other settings.** A receiver skips a page number it
+does not know; a receiver whose period does not match the sensor's cannot open
+the channel at all, and nothing on either side reports the period as the reason.
+That asymmetry is why the permitted sets are enumerated and checked rather than
+left as a number in a constant somewhere. No reduced-rate variant is recorded for
+`0x0B`: this project has not verified one against its own code, and the rule here
+is that a number that has not been verified does not get written down.
 
 RF channel for all of them is `0x39` = 57 = 2457 MHz, network 0, ANT+ public
 network key.
@@ -109,7 +131,7 @@ per channel.
 | 6..7 | torque ticks stamp | u16 **BE** accumulator, wraps at 65536 |
 
 **This page is big-endian. Every other multi-byte field in every other page
-here is little-endian.** That is trap one of two.
+here is little-endian.** That is trap one of three.
 
 ```
 elapsed_s = delta_time / 2000
@@ -125,6 +147,66 @@ needed.
 
 ---
 
+## Heart Rate, device type `0x78`
+
+Two things about this profile shape everything else in this document and the
+compat layer both.
+
+**Byte 0's high bit is not part of the page number.** That is trap three of
+three. It is the page-change
+toggle, flipped every four messages, which tells a receiver the sensor has more
+than one page and it has now seen the set. Page numbers here are therefore
+**7-bit — `0x00` to `0x7F`** — and nothing at or above `0x80` is expressible at
+all. That is why the manufacturer-private range every other profile uses
+(`0xF0`-`0xFF`) is unreachable here, and it is the constraint that decided the
+RadiANT compat allocation in `docs/profile-registry.md`.
+
+**Bytes `[4..7]` are the same on every page.** The page number only says what
+the three bytes in between mean. A page that changed those four bytes would not
+be a new page; it would be a broken sensor.
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | bits 6..0 page number, bit 7 page-change toggle | toggle flips every 4 messages |
+| 1..3 | page-specific | see below |
+| 4..5 | heartbeat event time | u16 LE accumulator, 1/1024 s, wraps at 65536 |
+| 6 | heartbeat count | u8 accumulator, wraps at 256 |
+| 7 | computed heart rate | u8 bpm, **`0` = no reading** |
+
+**`0` and not `0xFF` means "no reading" here**, which is the one place in this
+document where the invalid-value table below does not apply. A decoder that
+reached for `INVALID_U8` reports a plausible 255 bpm, and `0xFF` on this byte is
+a real 255 bpm rather than a sentinel.
+
+Bytes `[1..3]`, per page:
+
+| Page | Kind | `[1]` | `[2]` | `[3]` |
+|---|---|---|---|---|
+| `0x00` | main | `0xFF` | `0xFF` | `0xFF` |
+| `0x01` | background | cumulative operating time, u24 LE, 2 s units | | |
+| `0x02` | background | manufacturer id, u8 | serial number low 16 bits, u16 LE | |
+| `0x03` | background | hardware version, u8 | software version, u8 | model number, u8 |
+| `0x04` | main | manufacturer-specific, `0xFF` when unused | previous heartbeat event time, u16 LE, 1/1024 s | |
+
+Page `0x02`'s manufacturer id is **8 bits**, where common page 80's is 16. They
+are different fields of different widths and a decoder that shares one struct
+between them truncates silently.
+
+Page `0x04` carries two event times on one page, which is what lets a receiver
+compute an R-R interval from a single packet instead of differencing two. That
+is why a modern strap sends it as its main page and `0x00` in the background
+rotation rather than the other way round.
+
+```
+bpm = delta_beats * 1024 * 60 / delta_event_time
+```
+
+The computed-heart-rate byte is the sensor's own answer and is a convenience;
+the accumulator pair is what survives a lost packet. Same division of labour as
+accumulated versus instantaneous power.
+
+---
+
 ## Bike Speed and Cadence combined, device type `0x79`
 
 | Byte | Field | Encoding |
@@ -135,7 +217,7 @@ needed.
 | 6..7 | cumulative wheel revolutions | u16 LE accumulator, wraps at 65536 |
 
 **There is no page-number byte.** Byte 0 is the low half of the cadence event
-time. That is trap two of two, and it is why `ant_pages.decode()` takes a
+time. That is trap two of three, and it is why `ant_pages.decode()` takes a
 `device_type` argument that looks redundant: dispatching on `payload[0]` the way
 every other profile does will decode this page as whatever page that byte
 happens to name. A cadence event time of `0x2010` puts `0x10` in byte 0 and
@@ -186,6 +268,30 @@ speed_mps   = delta_revs * wheel_circumference_m * 1024 / delta_event_time
 | 7 | coarse voltage (bits 3..0), status (bits 6..4), time resolution (bit 7) | bit 7: 0 = 16 s units, 1 = 2 s units |
 
 Voltage is `coarse + fractional/256`.
+
+---
+
+## The pages that are not ANT+: `0x70`-`0x72`
+
+A capture from a RadiANT compat sensor carries three page numbers no ANT+
+document defines: `0x70` the capability beacon, `0x71` Tier I identity
+attestation, `0x72` Tier II data attestation. They are **added** to the profile
+and nothing existing is touched, which is the whole mechanism — a legacy
+receiver skips a page number it does not know, and the data pages above stay
+byte-exact.
+
+They are not specified here. `docs/radiant-security.md` section 11 is normative
+for the bytes, `docs/profile-registry.md` registers the numbers and the residual
+collision risk, and
+`docs/decisions/0008-antplus-additive-pages-and-compat-security.md` records why
+the allocation is what it is. `tools/ant_pages.py` encodes and decodes them and
+`tools/ant_verify.py` reports `verified` / `unverified` / `clear` over them —
+where **`clear` means "no key here" and not "unprotected"**.
+
+The cost, because it is the number the compatibility claim rests on: **2.0 % of
+slots** in the default configuration, 0.8 % beacon plus 1.2 % Tier I, against
+the **1.65 %** ANT+ itself already spends on common pages 80 and 81 in the
+cadence below.
 
 ---
 

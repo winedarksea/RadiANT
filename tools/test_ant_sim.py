@@ -109,12 +109,390 @@ class TestSimulatorPassesVerification(unittest.TestCase):
         self.assertIsNotNone(summary["cadence"])
         self.assertGreater(summary["cadence"]["n"], 0)
 
+    def test_heart_rate(self):
+        summary = self._run("heart-rate")
+        # A main page and a four-page background rotation, plus the common
+        # pages. All five heart-rate encoders are on the air in one run.
+        self.assertEqual(set(summary["pages"]),
+                         {"0x00", "0x01", "0x02", "0x03", "0x04",
+                          "0x50", "0x51"})
+        self.assertGreater(summary["heart_rate_bpm"]["n"], 0)
+        self.assertAlmostEqual(summary["heart_rate_bpm"]["mean"],
+                               ant_sim.DEFAULT_BPM, delta=5.0)
+        # The event time wraps every ~64 s at 1/1024 s, so a 15-minute run that
+        # did not reach it would be hiding the wrap rather than testing it.
+        self.assertGreater(summary["accumulator_wraps"].get("hr_event_time", 0),
+                           0)
+        self.assertGreater(summary["accumulator_wraps"].get("beat_count", 0), 0)
+
+    def test_the_toggle_bit_is_not_part_of_the_heart_rate_page_number(self):
+        sensor = build("heart-rate")
+        records = ant_sim.dry_run([sensor], 60.0)
+        raw = {payload[0] for _, _, _, payload in records}
+        # Both states of the toggle appear on the air...
+        self.assertTrue(any(byte & 0x80 for byte in raw))
+        self.assertTrue(any(not byte & 0x80 for byte in raw))
+        # ...and neither is a page number.
+        summary = analyse(sensor, records)
+        for page in summary["pages"]:
+            self.assertLessEqual(int(page, 16), 0x7F)
+
     def test_a_zero_noise_run_is_exact(self):
         sensor = build("power", noise=0.0)
         records = ant_sim.dry_run([sensor], 120.0)
         summary = analyse(sensor, records)
         self.assertLess(summary["power"]["mean_abs_error"], 0.51)
         self.assertLess(summary["cadence"]["mean_abs_error"], 0.51)
+
+
+ROOT = bytes(range(16))
+EPOCH = 7
+DEVNUM = 0x3A17
+
+
+def build_attested(profile: str, window=None, interval_s: float = 20.0,
+                   policy: int = ap.COMPAT_POLICY_NEVER, seed: int = 7):
+    sensor = build(profile, seed=seed)
+    sensor.compat = ant_sim.CompatAttestation(
+        ROOT, EPOCH, sensor.device_number, interval_s=interval_s,
+        window=window, policy=policy,
+        target_device_number=sensor.device_number ^ 0xA5A5)
+    return sensor
+
+
+def analyse_attested(sensor, records, window=None, key: bytes = ROOT,
+                     epoch: int = EPOCH) -> dict:
+    profile = ant_verify.profile_for(sensor.device_type, __import__(
+        "collections").Counter(payload[0] & (0x7F if sensor.device_type ==
+                                             ap.HRM_DEVICE_TYPE else 0xFF)
+                               for _, _, _, payload in records))
+    verifier = (None if key is None else
+                ant_verify.CompatVerifier(key, epoch, sensor.device_number,
+                                          window=window))
+    analyzer = ant_verify.ChannelAnalyzer(
+        profile, sensor.device_type,
+        ant_verify.period_for(sensor.device_type, profile),
+        WATTS, RPM, 2.105, compat=verifier, expect_bpm=ant_sim.DEFAULT_BPM)
+    for t, _device_type, _device_number, payload in records:
+        analyzer.feed(t, payload)
+    return analyzer.summary(ant_verify.DEFAULT_MAX_LOSS_PCT,
+                            ant_verify.DEFAULT_JITTER_FACTOR, None)
+
+
+@unittest.skipIf(ant_sim is None, "pyusb is not installed")
+class TestAttestedStream(unittest.TestCase):
+    """The compat layer end to end: sim emits, verifier judges, no radio.
+
+    docs/radiant-security.md section 11. The verifier is told the key, the
+    epoch and the device number and nothing else - not the interval, not the
+    schedule, not which slots the sim chose - so a pass here is the two halves
+    agreeing about bytes rather than about intentions.
+    """
+
+    def test_a_default_attested_stream_verifies(self):
+        sensor = build_attested("power")
+        records = ant_sim.dry_run([sensor], RUN_SECONDS)
+        summary = analyse_attested(sensor, records)
+        failed = [c for c in summary["checks"] if not c["pass"]]
+        self.assertEqual(failed, [], "; ".join(
+            f"{c['name']}: {c['detail']}" for c in failed))
+
+        attestation = summary["attestation"]
+        self.assertEqual(attestation["verdict"], ant_verify.ATTEST_VERIFIED)
+        self.assertGreater(attestation["tier_i"]["verified"], 0)
+        self.assertEqual(attestation["tier_i"]["unverified"], 0)
+        self.assertEqual(attestation["tier_i"]["lost"], 0)
+        self.assertEqual(attestation["tier_i"]["verified_of_delivered"], 1.0)
+        # Tier II is off by default and must stay off.
+        self.assertEqual(attestation["tier_ii"]["verdict"],
+                         ant_verify.ATTEST_CLEAR)
+        self.assertEqual(attestation["tier_ii"]["verified"], 0)
+
+    def test_the_stream_is_the_same_ant_plus_profile_plus_two_page_numbers(self):
+        # The whole claim, and the reason it is stated as a page-number set
+        # rather than a byte-for-byte diff against a plain run: the compat pages
+        # DISPLACE data pages, so the two streams carry different samples at the
+        # same instants and always will. What must hold is that nothing existing
+        # changed - the same profile, the same layouts, the same accumulators,
+        # plus exactly two numbers a legacy receiver skips.
+        added = {ap.COMPAT_PAGE_BEACON, ap.COMPAT_PAGE_ATTEST_TIER_I}
+        plain = ant_sim.dry_run([build("power")], 300.0)
+        attested = ant_sim.dry_run([build_attested("power")], 300.0)
+
+        plain_numbers = {p[0] for _, _, _, p in plain}
+        attested_numbers = {p[0] for _, _, _, p in attested}
+        self.assertEqual(attested_numbers, plain_numbers | added)
+        self.assertEqual(plain_numbers & added, set())
+
+        # And a legacy receiver's view: drop what it does not know and every
+        # remaining page decodes as a page of the profile it does.
+        for _, _, _, payload in attested:
+            if payload[0] in added:
+                continue
+            got = ap.decode(payload, ap.BPWR_DEVICE_TYPE)
+            self.assertIn(got["page"], plain_numbers)
+            self.assertNotIn("raw", got)
+
+    def test_the_default_configuration_spends_about_two_percent_of_slots(self):
+        # 0.8 % beacon plus 1.2 % Tier I, against the 1.65 % ANT+ itself spends
+        # on common pages 80 and 81. That comparison is the compatibility
+        # argument; the bare number on its own is just a number.
+        sensor = build_attested("power")
+        records = ant_sim.dry_run([sensor], RUN_SECONDS)
+        pages = __import__("collections").Counter(
+            payload[0] for _, _, _, payload in records)
+        total = sum(pages.values())
+        beacon = pages[ap.COMPAT_PAGE_BEACON] / total
+        tier1 = pages[ap.COMPAT_PAGE_ATTEST_TIER_I] / total
+        self.assertAlmostEqual(beacon, 0.008, delta=0.002)
+        self.assertAlmostEqual(tier1, 0.012, delta=0.003)
+        self.assertLess(beacon + tier1, 0.025)
+        common = (pages[ap.PAGE_COMMON_MANUFACTURER]
+                  + pages[ap.PAGE_COMMON_PRODUCT]) / total
+        self.assertAlmostEqual(common, 0.0165, delta=0.003)
+
+    def test_tier_one_verifies_at_the_delivery_rate_under_heavy_loss(self):
+        # THE CLAIM THE TIER EXISTS FOR, as an assertion rather than a
+        # paragraph: its tag covers no payload, so a packet lost anywhere else
+        # costs it nothing. Twenty percent loss is fifty times the characterised
+        # bench floor and every DELIVERED Tier I page still verifies.
+        sensor = build_attested("power")
+        records = ant_sim.dry_run([sensor], RUN_SECONDS)
+        rng = random.Random(11)
+        lossy = [r for r in records if rng.random() > 0.20]
+        self.assertLess(len(lossy), 0.85 * len(records))
+
+        summary = analyse_attested(sensor, lossy)
+        tier1 = summary["attestation"]["tier_i"]
+        self.assertGreater(tier1["verified"], 0)
+        self.assertEqual(tier1["unverified"], 0)
+        self.assertEqual(tier1["verified_of_delivered"], 1.0)
+        # And loss is reported as loss, in its own column, rather than as a
+        # failed tag. Conflating the two is how a bench floor becomes an attack.
+        self.assertGreater(tier1["lost"], 0)
+
+    def test_a_wrong_key_is_unverified_rather_than_clear(self):
+        sensor = build_attested("power")
+        records = ant_sim.dry_run([sensor], 300.0)
+        summary = analyse_attested(sensor, records, key=bytes(16))
+        attestation = summary["attestation"]
+        self.assertEqual(attestation["verdict"], ant_verify.ATTEST_UNVERIFIED)
+        self.assertGreater(attestation["tier_i"]["unverified"], 0)
+        self.assertEqual(attestation["tier_i"]["verified"], 0)
+        self.assertFalse(summary["pass"])
+
+    def test_no_key_is_clear_and_clear_is_not_a_judgement(self):
+        sensor = build_attested("power")
+        records = ant_sim.dry_run([sensor], 300.0)
+        summary = analyse_attested(sensor, records, key=None)
+        self.assertEqual(summary["attestation"]["verdict"],
+                         ant_verify.ATTEST_CLEAR)
+        # A receiver with no key has no opinion, so the stream still passes.
+        self.assertTrue(summary["pass"])
+
+    def test_stripping_the_attestation_is_unverified_not_clear(self):
+        # Receiver-side downgrade protection. Strip the added pages and a naive
+        # receiver falls back to clear; a pinned one must not.
+        sensor = build_attested("power")
+        records = ant_sim.dry_run([sensor], 300.0)
+        stripped = [r for r in records
+                    if r[3][0] not in (ap.COMPAT_PAGE_BEACON,
+                                       ap.COMPAT_PAGE_ATTEST_TIER_I)]
+        summary = analyse_attested(sensor, stripped)
+        self.assertEqual(summary["attestation"]["verdict"],
+                         ant_verify.ATTEST_UNVERIFIED)
+        self.assertEqual(summary["attestation"]["tier_i"]["verified"], 0)
+        self.assertEqual(summary["attestation"]["beacon_frames"], 0)
+
+    def test_a_replayed_tier_one_page_is_rejected_on_the_counter(self):
+        sensor = build_attested("power")
+        records = ant_sim.dry_run([sensor], 300.0)
+        first = next(r for r in records
+                     if r[3][0] == ap.COMPAT_PAGE_ATTEST_TIER_I)
+        replayed = list(records) + [(records[-1][0] + 0.25, first[1], first[2],
+                                     first[3])]
+        summary = analyse_attested(sensor, replayed)
+        tier1 = summary["attestation"]["tier_i"]
+        self.assertEqual(tier1["replays"], 1)
+        self.assertEqual(tier1["unverified"], 1)
+        self.assertEqual(summary["attestation"]["verdict"],
+                         ant_verify.ATTEST_UNVERIFIED)
+
+    def test_the_beacon_says_what_the_node_will_do(self):
+        sensor = build_attested("power", policy=ap.COMPAT_POLICY_COMMAND)
+        records = ant_sim.dry_run([sensor], RUN_SECONDS)
+        beacon = analyse_attested(sensor, records)["attestation"]["beacon"]
+        self.assertIsNotNone(beacon, "no complete beacon set in 15 minutes")
+        self.assertEqual(beacon["policy"], ap.COMPAT_POLICY_COMMAND)
+        self.assertTrue(beacon["private_available"])
+        self.assertEqual(beacon["target_device_type"],
+                         ap.RADIANT_TLM_DEVICE_TYPE)
+        self.assertEqual(beacon["target_device_number"], DEVNUM ^ 0xA5A5)
+
+    def test_a_never_node_advertises_nowhere_to_go(self):
+        sensor = build_attested("power")
+        records = ant_sim.dry_run([sensor], RUN_SECONDS)
+        summary = analyse_attested(sensor, records)
+        beacon = summary["attestation"]["beacon"]
+        self.assertEqual(beacon["policy"], ap.COMPAT_POLICY_NEVER)
+        self.assertFalse(beacon["private_available"])
+        self.assertEqual(beacon["target_device_number"], 0)
+        self.assertEqual(beacon["target_period"], 0)
+        self.assertEqual(summary["attestation"]["beacon_malformed"], 0)
+        self.assertGreater(summary["attestation"]["key_group_hint_matches"], 0)
+
+    def test_the_key_group_hint_is_epoch_derived(self):
+        sensor = build_attested("power")
+        records = ant_sim.dry_run([sensor], RUN_SECONDS)
+        # The same key one epoch later produces a different hint, which is what
+        # stops the field being a stable tracking identifier.
+        matched = analyse_attested(sensor, records)["attestation"]
+        stale = analyse_attested(sensor, records, epoch=EPOCH + 1)["attestation"]
+        self.assertGreater(matched["key_group_hint_matches"], 0)
+        self.assertEqual(stale["key_group_hint_matches"], 0)
+
+    def test_a_faster_interval_costs_proportionally_more_slots(self):
+        # T is in seconds and decoupled from the data rate, so halving it
+        # doubles the page count and nothing else moves.
+        counts = []
+        for interval in (20.0, 10.0):
+            sensor = build_attested("power", interval_s=interval)
+            records = ant_sim.dry_run([sensor], 600.0)
+            counts.append(sum(1 for _, _, _, p in records
+                              if p[0] == ap.COMPAT_PAGE_ATTEST_TIER_I))
+        self.assertAlmostEqual(counts[0], 600 / 20, delta=2)
+        self.assertAlmostEqual(counts[1], 600 / 10, delta=2)
+
+    def test_heart_rate_carries_the_same_two_page_numbers(self):
+        # The same numbers in every compat profile, so a receiver has one rule.
+        sensor = build_attested("heart-rate")
+        records = ant_sim.dry_run([sensor], RUN_SECONDS)
+        summary = analyse_attested(sensor, records)
+        failed = [c for c in summary["checks"] if not c["pass"]]
+        self.assertEqual(failed, [], "; ".join(
+            f"{c['name']}: {c['detail']}" for c in failed))
+        self.assertEqual(summary["attestation"]["verdict"],
+                         ant_verify.ATTEST_VERIFIED)
+        self.assertIn(f"0x{ap.COMPAT_PAGE_BEACON:02X}", summary["pages"])
+        self.assertIn(f"0x{ap.COMPAT_PAGE_ATTEST_TIER_I:02X}",
+                      summary["pages"])
+        # Every compat page number is 7-bit, so the toggle bit never lifts one
+        # out of the namespace a heart-rate receiver can express.
+        for page in summary["pages"]:
+            self.assertLessEqual(int(page, 16), ap.COMPAT_PAGE_MAX)
+
+    def test_speed_and_cadence_can_never_carry_these_pages(self):
+        self.assertNotIn("csc", ant_sim.ATTESTABLE)
+        self.assertNotIn(ap.BSC_COMBINED_DEVICE_TYPE, ap.COMPAT_DEVICE_TYPES)
+        # And structurally: its profile overrides the rotation outright, so
+        # there is no slot for a compat page even if one were configured.
+        sensor = build("csc")
+        sensor.compat = ant_sim.CompatAttestation(ROOT, EPOCH, DEVNUM)
+        records = ant_sim.dry_run([sensor], 300.0)
+        self.assertEqual(len(records), 300.0 // sensor.period_s)
+        self.assertEqual(sensor.compat.beacons_sent, 0)
+        self.assertEqual(sensor.compat.tier1_sent, 0)
+
+    def test_an_announcement_is_acted_on_only_after_its_tag_verifies(self):
+        # The SWITCH/RETURN path, which is otherwise written in C8 and never
+        # exercised until then. Frame B tags frame A's full eight bytes under
+        # subtype 0x03 and the Tier I counter.
+        verifier = ant_verify.CompatVerifier(ROOT, EPOCH, DEVNUM)
+        tier1 = ap.encode_compat_attest_tier1(
+            5, __import__("radiant_crypto").compat_tier1_tag(
+                verifier.k_auth, EPOCH, DEVNUM, 5))
+        self.assertEqual(verifier.feed(tier1), ant_verify.ATTEST_VERIFIED)
+
+        frame_a = ap.encode_compat_announce_a(ap.CompatAnnounce(
+            target_device_type=ap.RADIANT_TLM_DEVICE_TYPE,
+            target_device_number=0x9C41, target_period=8182,
+            reason=ap.COMPAT_REASON_COMMAND, countdown=8))
+        tag = __import__("radiant_crypto").compat_announce_tag(
+            verifier.k_auth, EPOCH, DEVNUM, 5, frame_a)
+        self.assertEqual(verifier.feed(frame_a), None)
+        self.assertEqual(verifier.feed(ap.encode_compat_announce_b(tag)),
+                         ant_verify.ATTEST_VERIFIED)
+
+        # A forged locator under a captured tag is ignored, and counted.
+        forged = bytearray(frame_a)
+        forged[3] ^= 0xFF
+        self.assertEqual(verifier.feed(bytes(forged)), None)
+        self.assertEqual(verifier.feed(ap.encode_compat_announce_b(tag)),
+                         ant_verify.ATTEST_UNVERIFIED)
+        self.assertEqual(verifier.summary()["announce"],
+                         {"verified": 1, "unverified": 1})
+
+
+@unittest.skipIf(ant_sim is None, "pyusb is not installed")
+class TestTierTwoDataAttestation(unittest.TestCase):
+    """The expensive tier, and the reason it is off by default."""
+
+    WINDOW = 8
+
+    def stream(self, seconds: float = 600.0):
+        sensor = build_attested("power", window=self.WINDOW)
+        return sensor, ant_sim.dry_run([sensor], seconds)
+
+    def test_the_windows_verify(self):
+        sensor, records = self.stream()
+        summary = analyse_attested(sensor, records, window=self.WINDOW)
+        tier2 = summary["attestation"]["tier_ii"]
+        self.assertGreater(tier2["verified"], 100)
+        self.assertEqual(tier2["unverified"], 0)
+        self.assertEqual(tier2["lost"], 0)
+        self.assertEqual(tier2["verdict"], ant_verify.ATTEST_VERIFIED)
+        self.assertEqual(summary["attestation"]["verdict"],
+                         ant_verify.ATTEST_VERIFIED)
+
+    def test_it_costs_one_slot_in_n(self):
+        sensor, records = self.stream()
+        tags = sum(1 for _, _, _, p in records
+                   if p[0] == ap.COMPAT_PAGE_ATTEST_TIER_II)
+        self.assertAlmostEqual(tags / len(records), 1.0 / self.WINDOW,
+                               delta=0.005)
+
+    def test_a_lost_packet_unverifies_a_window_but_not_the_next_one(self):
+        # The honest regression: a window CMAC is not self-synchronising, so a
+        # dropped packet leaves nothing to check the tag against. That is LOST,
+        # not UNVERIFIED - the tag never failed, its evidence never arrived.
+        sensor, records = self.stream(300.0)
+        victim = next(i for i, r in enumerate(records)
+                      if i > 40 and r[3][0] == ap.PAGE_POWER_STANDARD)
+        lossy = records[:victim] + records[victim + 1:]
+        tier2 = analyse_attested(sensor, lossy,
+                                 window=self.WINDOW)["attestation"]["tier_ii"]
+        self.assertEqual(tier2["lost"], 1)
+        self.assertEqual(tier2["unverified"], 0)
+        self.assertGreater(tier2["verified"], 20)
+
+    def test_a_flipped_payload_bit_is_unverified_not_lost(self):
+        # The other half of the same distinction: everything arrived and the
+        # tag says the bytes are not the ones that were sent.
+        sensor, records = self.stream(300.0)
+        victim = next(i for i, r in enumerate(records)
+                      if i > 40 and r[3][0] == ap.PAGE_POWER_STANDARD)
+        t, device_type, device_number, payload = records[victim]
+        corrupt = bytearray(payload)
+        corrupt[6] ^= 0x01
+        tampered = list(records)
+        tampered[victim] = (t, device_type, device_number, bytes(corrupt))
+        tier2 = analyse_attested(sensor, tampered,
+                                 window=self.WINDOW)["attestation"]["tier_ii"]
+        self.assertEqual(tier2["unverified"], 1)
+        self.assertEqual(tier2["lost"], 0)
+
+    def test_tier_one_is_unmoved_by_what_breaks_tier_two(self):
+        # One lost packet unverifies a whole Tier II window and costs Tier I
+        # nothing at all, because Tier I covers no payload. That difference is
+        # the entire reason the two tiers exist separately.
+        sensor, records = self.stream(600.0)
+        rng = random.Random(3)
+        lossy = [r for r in records if rng.random() > 0.10]
+        attestation = analyse_attested(sensor, lossy,
+                                       window=self.WINDOW)["attestation"]
+        self.assertEqual(attestation["tier_i"]["verified_of_delivered"], 1.0)
+        self.assertEqual(attestation["tier_i"]["unverified"], 0)
+        self.assertGreater(attestation["tier_ii"]["lost"], 10)
 
 
 @unittest.skipIf(ant_sim is None, "pyusb is not installed")

@@ -1387,6 +1387,21 @@ frame 3   [1] = 0x33   SWITCH/RETURN frame B
           att_counter from Tier I
 ```
 
+**Frames 0 and 1 restate the new count for the duration**, becoming `0x03` and
+`0x13` rather than the steady state's `0x01` and `0x11`. That is not a second
+convention: byte `[1]` is `(index << 4) | (count - 1)` and the count is the size
+of the set the frame belongs to, so a set that grows to four says four in every
+frame of it. It is written down because it is the obvious thing to get wrong —
+the frame indices that change are the ones a reader looks at, and leaving frames
+0 and 1 saying "two in this set" would tell a receiver that heard only those two
+that no announcement was running.
+
+**The countdown in frame A's byte `[7]` counts promoted beacon intervals, not
+messages.** Six bits of messages would reach 63 and the longest legal countdown
+is `K = 128`; six bits of eight-message intervals reaches 504. Multiply by
+`8` — the promoted beacon rate, which is exactly why the countdown is expressed
+in it — to get messages.
+
 Five rules, each load-bearing:
 
 - **Clear, but self-authenticating — it carries its own tag.** Tier I covers no
@@ -1598,6 +1613,21 @@ same numbers in every compat profile**, so a receiver has one rule.
   token **`RadiANT compat`** in its Name column so the allocation cannot
   silently drift. `scripts/check_profile_registry.py` asserts the arity, the
   7-bit bound, the cross-profile agreement and the `0x79` exclusion.
+
+**The confirmed allocation is `0x70` beacon, `0x71`-`0x72` attestation**, the
+same numbers on `0x0B` and `0x78`. The attestation claim is a **contiguous,
+nibble-aligned pair** rather than a single number, and that follows from the
+pins above rather than relaxing them: byte `[0]` is the page number, the subtype
+nibble lives in byte `[0]`, and neither tier has a spare bit anywhere else —
+Tier I spends `[1..2]` on the counter and `[3..7]` on a 40-bit tag, Tier II
+spends `[1]` on the window index and `[2..7]` on a 48-bit tag. So the page byte
+is `0x70 | sub`, derived from the same nibble the nonce carries at position 9,
+and the two tiers cannot share one byte-`[0]` value. What "two page numbers, not
+three" refuses is a **third independent claim** — a Tier II page allocated
+elsewhere in the namespace and verified on its own terms — and that stays
+refused. `0x73`, which subtype `0x03` would imply, never appears on air at all:
+the announcement rides the beacon page's frames 2 and 3, which is precisely how
+the third number is avoided.
 
 Two risks recorded rather than solved: a manufacturer-specific page number is
 only unique per manufacturer id, so collision with a vendor's private page on
