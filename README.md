@@ -12,7 +12,7 @@ ANT+ compatible USB stick. Copy one file onto the board and Zwift, TrainerRoad,
 Garmin Express, openant — anything that looks for an ANT stick — will find it.
 No soldering, no wiring.
 
-The firmware enumerates as `VID 0x0FCF / PID 0x1009`, the identity of a
+The firmware enumerates as `VID 0x0FCF / PID 0x1009`, the numeric identity of a
 Dynastream ANT USB-m, and speaks the ANT serial protocol over a bulk
 vendor interface. Eight channels, acknowledged data and burst all work, so a
 fitness app can run heart rate, power, cadence and trainer control at once.
@@ -436,9 +436,10 @@ recorded in [`docs/decisions/`](docs/decisions/):
    before shipping a product. Removing `libant.a` also removes the $0.08/unit
    royalty that comes with it.
 2. **`VID 0x0FCF` belongs to Garmin/Dynastream.** Presenting their vendor ID to
-   third parties is a different question from using it privately — and the
-   impersonation is exactly why Windows driver matching works at all, so it is
-   an open risk rather than a solved one.
+   third parties is a different question from using it privately — and it is
+   exactly why Windows driver matching works at all, so it is an open risk
+   rather than a solved one. The descriptor *strings* are the project's own:
+   every host matches on the numbers, so the strings never had to be theirs.
 
 RadiANT is an open-source, clean-room implementation compatible with the
 published ANT+ specifications. It is not an ANT+ certified product, and is not

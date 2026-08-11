@@ -50,17 +50,23 @@ USB identity and descriptor strings
 -----------------------------------
 
 Firmware built from this repository enumerates with USB vendor ID 0x0FCF and
-product ID 0x1009, and reports descriptor strings originating from Dynastream
-Innovations Inc. These identifiers are present for host driver-matching
+product ID 0x1009. These identifiers are present for host driver-matching
 compatibility and for no other reason: on Windows the libusb-win32 driver
 binds by VID/PID, and every existing host application - Zwift, openant, the
 Garmin utilities - locates an ANT USB stick by scanning for exactly those
 identifiers. A device that declined to present them would not be found by any
 of them, and would not function as the thing it is compatible with.
 
-This is a compatibility measure, not a claim of origin, and it is recorded as
-an open risk rather than a resolved question. See
-docs/decisions/0003-naming-trademark-and-usb-identity.md.
+The descriptor *strings* are the project's own - manufacturer "RadiANT
+Project", product "RadiANT ANT+ compatible USB stick". Earlier builds reported
+Dynastream's strings; nothing on any host matches on them, so presenting them
+was never a compatibility measure and they were changed on 2026-08-11. Where a
+host still displays a Dynastream name for this device, it is reading Garmin's
+own driver package rather than anything this firmware asserts.
+
+Presenting the numeric identifiers is a compatibility measure, not a claim of
+origin, and it is recorded as an open risk rather than a resolved question.
+See docs/decisions/0003-naming-trademark-and-usb-identity.md.
 
 
 Why Apache-2.0

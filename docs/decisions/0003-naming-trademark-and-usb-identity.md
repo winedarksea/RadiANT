@@ -3,9 +3,10 @@
 Checked by: nothing — treat as narrative, with one exception. The USB
 identifiers this ADR decides to keep are asserted on the wire by
 `tools/ant_probe.py`, which will not find a device that stopped presenting
-them; and the descriptor strings live in `src/usb_ant_class.c` and
-`src/usb_ant_class_next.c`. The trademark position and the open risk below are
-judgements, and no test can hold them.
+them; and the descriptor strings are the `ANT_DONGLE_USB_MANUFACTURER` /
+`ANT_DONGLE_USB_PRODUCT` defaults in `Kconfig`, consumed by both USB stacks.
+The trademark position and the open risk below are judgements, and no test can
+hold them.
 
 - **Status:** Accepted for the name and the qualifier. **The USB identity is
   accepted as a decision and recorded as an open risk** — accepted is not the
@@ -107,11 +108,15 @@ waiting for the first translation unit needing both trees (Phase 6's
 `src/profiles/` is the obvious candidate). `RADIANT_*` cannot collide with
 `ANT_*` by construction.
 
-### `0FCF:1009` and the Dynastream descriptor strings are kept
+### `0FCF:1009` ~~and the Dynastream descriptor strings are~~ is kept
 
 Firmware from this repository enumerates as USB vendor `0x0FCF`, product
-`0x1009` — the Garmin/Dynastream ANT USB-m stick — and reports Dynastream's
-descriptor strings.
+`0x1009` — the Garmin/Dynastream ANT USB-m stick — ~~and reports Dynastream's
+descriptor strings.~~ **Amended 2026-08-11 — the descriptor strings are no
+longer Dynastream's; see
+[Amendment: the strings are ours, the numbers are not](#amendment-2026-08-11--the-strings-are-ours-the-numbers-are-not)
+below. Everything in this subsection applies to the numeric identifiers, which
+are unchanged.**
 
 **This stays, and the reason is that driver matching is the only thing making
 any of it work.**
@@ -133,6 +138,56 @@ that does not require every application vendor to ship a change. The
 identifiers exist here for host driver-matching compatibility and for no other
 purpose.
 
+### Amendment 2026-08-11 — the strings are ours, the numbers are not
+
+`ANT_DONGLE_USB_MANUFACTURER` changed from `"Dynastream Innovations"` to
+`"RadiANT Project"`, and `ANT_DONGLE_USB_PRODUCT` from `"ANT USB-m Stick"` to
+`"RadiANT ANT+ compatible USB stick"`. Both defaults live in `Kconfig` and feed
+both USB stacks, so this is two lines and reaches every build.
+
+**Why the original decision was wrong.** It bundled two things under one
+justification. "Driver matching is the only thing making any of it work" is
+true of `idVendor` and `idProduct` and false of `iManufacturer` and `iProduct`,
+and the paragraph asserted it of all four. Host matching is numeric everywhere
+it happens:
+
+- Windows composes hardware IDs from the device descriptor's numeric fields
+  (`USB\VID_0FCF&PID_1009&REV_xxxx`, `USB\VID_0FCF&PID_1009`) and compatible
+  IDs from the interface descriptors. An INF matches those. The string
+  descriptors are indices fetched after matching, for display.
+- Linux `udev` matches `ATTRS{idVendor}`/`ATTRS{idProduct}`; kernel drivers
+  match `usb_device_id` tables on the same numbers. `usb.ids` is a display
+  database and has no role in binding.
+- macOS `IOKit` matching dictionaries key on `idVendor`/`idProduct`.
+- libusb callers — `openant`, Zwift's `libusb0` path, everything in `tools/` —
+  compare integers.
+
+So the strings were carrying no compatibility load. They were carrying only the
+claim, which is the half this ADR spends the rest of its length worrying about.
+
+**What this does and does not buy.** It removes the device's own assertion of
+Dynastream's *name*. It does not touch the numeric identifiers, so the open
+risk below is unchanged in kind — it is now confined to the numbers, where a
+functional-interoperability argument actually applies, instead of extending to
+a field where it never did.
+
+**The necessary case, stated so it is not mistaken for a regression.** On
+Windows the name a user sees comes from Garmin's INF once the driver binds —
+`"ANT USB-m (0FCF:1009)"`, the `[Strings]` section of
+`archive/drivers/ant_libusb_win32.inf`. That file is Garmin's, it is preserved
+rather than authored here, and no default in this repository can change what it
+displays. A Dynastream name in Device Manager is therefore not this firmware
+asserting one.
+
+**Verification.** No test in the tree reads either string — `tools/ant_probe.py`
+prints them and nothing asserts on them — so nothing goes red and nothing
+guards this. The bench check is the same one gate 2 below names: Zwift
+enumerates, pairs a sensor and holds it, with only the strings changed.
+`bcdDevice` is deliberately **not** bumped: `CONFIG_ANT_DONGLE_BCD_DEVICE`
+stays 0, because Windows keys its cached descriptor verdict on
+VID/PID/`bcdDevice` and this change alters neither matching nor the MS OS
+descriptor posture that the cache is a verdict about.
+
 ### And that is recorded as an open risk, not a resolved question
 
 The temptation is to treat the naming answer as covering this too. It does not.
@@ -145,9 +200,10 @@ Recording it honestly:
 - **What we rely on:** that presenting these identifiers is a functional
   interoperability measure rather than an attempt to pass the device off as
   Garmin's; that no packaging, marketing, documentation or user-visible text
-  claims Garmin origin; that `NOTICE` states plainly whose marks these are and
-  why the identifiers are present; and that no unit is sold as a Garmin
-  product.
+  claims Garmin origin — including the descriptor strings, which name this
+  project as of the 2026-08-11 amendment above; that `NOTICE` states plainly
+  whose marks these are and why the identifiers are present; and that no unit
+  is sold as a Garmin product.
 - **What is unresolved:** whether that is *sufficient*. Nobody has cleared it,
   no counsel has opined on it, and the ANT+ Alliance that might once have been
   asked is gone. The honest state is "we have a reason, we have written it

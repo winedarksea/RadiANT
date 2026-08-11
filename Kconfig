@@ -108,11 +108,41 @@ config ANT_DONGLE_USB_PID
 
 config ANT_DONGLE_USB_MANUFACTURER
 	string "USB manufacturer string"
-	default "Dynastream Innovations"
+	default "RadiANT Project"
+	help
+	  Ours, deliberately. This is the one part of the USB identity that
+	  does not have to be somebody else's, and until 2026-08-11 it said
+	  "Dynastream Innovations" for no functional reason at all.
+
+	  Nothing matches on it. Windows builds its hardware IDs from the
+	  numbers - USB\VID_0FCF&PID_1009&REV_xxxx, plus the compatible IDs
+	  derived from the interface descriptors - and an INF matches those
+	  strings; iManufacturer is a string descriptor *index* in the device
+	  descriptor, fetched after matching, for display. udev matches
+	  ATTRS{idVendor}/ATTRS{idProduct}, IOKit matches idVendor/idProduct,
+	  and every libusb caller compares integers. Nothing in this repo reads
+	  these two strings except tools/ant_probe.py, which prints them.
+
+	  So the split is: the VID/PID stay Dynastream's because driver
+	  matching requires it, and the strings say who actually built the
+	  firmware because nothing requires otherwise. Changing them costs no
+	  compatibility and removes the only place the device asserted someone
+	  else's name rather than their numbers. See
+	  docs/decisions/0003-naming-trademark-and-usb-identity.md.
 
 config ANT_DONGLE_USB_PRODUCT
 	string "USB product string"
-	default "ANT USB-m Stick"
+	default "RadiANT ANT+ compatible USB stick"
+	help
+	  Same reasoning as the manufacturer string above.
+
+	  Where these strings actually surface is `lsusb -v` and macOS System
+	  Information. On Windows the visible name is *not* this string once a
+	  driver binds: Dynastream's own INF supplies it, and reads
+	  "ANT USB-m (0FCF:1009)" (archive/drivers/ant_libusb_win32.inf, the
+	  [Strings] section). That file is not ours and its text is not this
+	  firmware asserting anything - it is the necessary case, and it is the
+	  boundary of what this default can reach.
 
 config ANT_DONGLE_USB_SN
 	string "USB serial number string"
