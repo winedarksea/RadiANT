@@ -14,6 +14,16 @@ decoders in `tools/ant_pages.py` and the cases in `tools/test_ant_pages.py`,
 which are the implementations this project actually ships. No prose is taken
 from any ANT+ device profile document.
 
+**There is now a firmware implementation of two of these profiles as well**, and
+the two are checked against each other rather than merely coexisting:
+`src/profiles/profile_hr.c` (`0x78`), `src/profiles/profile_power.c` (`0x0B`) and
+`src/profiles/profile_common.c` (pages 80/81/82). A capture of the C stream is
+committed as `tools/vectors/compat-hr.antcap` and
+`tools/vectors/compat-power.antcap`, and `tools/test_compat_capture.py` decodes
+every message with the Python encoders above and re-encodes it, asserting the
+bytes come back identical. A table below that disagreed with either
+implementation would therefore fail a test rather than sit in a document.
+
 ---
 
 ## Device types

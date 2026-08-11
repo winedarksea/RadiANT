@@ -104,6 +104,46 @@ Nothing here should ever be cited as an observation.
 | `handmade-session.antser` | `-` | A plausible session opening: reset, capabilities, network key, assign, lib config, open, one broadcast — plus the three shapes of deliberate defect described below |
 | `handmade-timed.antser` | real | The same opening with a real timestamp column, so the harness exercises both forms. It is `archive/captures/serial/README.md`'s own worked example with its two checksum typos corrected |
 
+## The `.antcap` files are a third kind, and the paragraph above does not apply
+
+Everything above is about `.antser` serial transcripts and about frames typed
+from a table. The two `.antcap` files here are neither hand-assembled nor off a
+wire: they are **the output of C code, frozen**.
+
+`radiant_core/tests/src/test_profile_compat.c` drives `src/profiles/profile_hr.c`
+and `src/profiles/profile_power.c` for three 121-message cycles on a DK and
+prints every transmitted message; the lines are lifted out of the ztest console
+and committed here. `tools/test_compat_capture.py` then decodes each message with
+`tools/ant_pages.py` and **re-encodes it, asserting the bytes come back
+identical** — so the file is the channel through which a C implementation and a
+Python implementation, written in different phases from the same layout tables,
+check each other.
+
+| File | Timestamp column | What it covers |
+|---|---|---|
+| `compat-hr.antcap` | real | Heart rate `0x78` at period 8070, with the RadiANT beacon `0x70` and Tier I attestation `0x71` interleaved. 363 messages |
+| `compat-power.antcap` | real | Bicycle power `0x0B` at period 8182, same two compat pages. 363 messages |
+
+Three rules follow from what they are, and they are different from the rules
+above:
+
+1. **They are reproducible, not observed.** No physics, no noise, no random
+   walk: the heart beats exactly once a second and the power meter reports
+   exactly 200 W. That is what lets them be diffed. They are still **not**
+   evidence about what a real sensor sends — a bench capture against a real head
+   unit is the interop phase's job and belongs in `archive/captures/radio/`.
+2. **Regenerating one is a deliberate act.** The whole point is that the bytes
+   stop changing; a diff here means the C stream changed, and the question is
+   always whether it was supposed to. Regenerate with
+   `scripts\run_ztest_hw.ps1` and lift the `@@ compat-hr` / `@@ compat-power`
+   lines out of `build\ztest_hw\ztest-console.txt`.
+3. **The key is in the header comment, and it is a test key.** Root bytes
+   `0x00..0x0F`, epoch 7, device number `0x2C41` — the same values pinned in the
+   C suite and in `tools/test_compat_capture.py`, because the Python side has to
+   derive the same `K_auth` to check the tags. It is `tools/ant_sim.py`'s
+   `DEFAULT_COMPAT_ROOT`, so a capture from the firmware and one from the
+   simulator are two streams under one key.
+
 ## The `malformed` case convention
 
 This is the contract between `tools/test_ant_golden.py` (which enforces it) and

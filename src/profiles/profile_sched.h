@@ -140,6 +140,28 @@ struct profile_sched_cfg {
 	 * and the rest of the cadence is unchanged. */
 	const struct profile_descriptor *desc;
 
+	/*
+	 * The data-page rotation for a family with NO DESCRIPTOR, copied at
+	 * init. Ignored entirely when `desc` is non-NULL, where the rotation is
+	 * DERIVED from the schema - two places to state which pages exist is
+	 * one place and one drift, and that argument does not change just
+	 * because a second caller arrived.
+	 *
+	 * It exists because an ANT+ compatibility type's page numbers are fixed
+	 * by somebody else's document rather than announced by the node, so
+	 * there is nothing to derive them from. Without it a descriptor-less
+	 * family reaches take_rotation() with no pages and every data slot is
+	 * silent - which is a scheduler that interleaves common pages into
+	 * nothing.
+	 *
+	 * A one-entry rotation is normal and is not a degenerate case: heart
+	 * rate sends its main page in almost every data slot and swaps in a
+	 * background page on its own cadence, which is the profile's rule and
+	 * belongs in the profile rather than here.
+	 */
+	const uint8_t *pages;
+	uint8_t        n_pages;
+
 	/* Build the body of one data page. `counter` is the event counter the
 	 * engine has already chosen for this transmission; put it in byte [1].
 	 * Return 0, or negative to decline (the slot becomes idle). */

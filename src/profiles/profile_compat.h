@@ -1,0 +1,305 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * profile_compat.h - the RadiANT compat pages, inserted through
+ * profile_sched.c's client seam.
+ *
+ * Provenance: docs/radiant-security.md section 11 (normative for the bytes),
+ * docs/decisions/0008-antplus-additive-pages-and-compat-security.md (which
+ * pins the beacon layout, the two attestation subtypes and the two-page
+ * allocation) and docs/profile-registry.md (which registers 0x70-0x72). Its
+ * byte-for-byte mirror is tools/ant_pages.py's encode_compat_beacon(),
+ * encode_compat_attest_tier1() and encode_compat_attest_tier2(). All of those
+ * are this project's own documents and code. No adopter-gated ANT+ device
+ * profile document was read for this file.
+ *
+ * ---------------------------------------------------------------------------
+ * THIS FILE EXISTS SO profile_hr.c AND profile_power.c DO NOT HAVE TO
+ * ---------------------------------------------------------------------------
+ * The plan's boundary is one sentence - "the profile modules themselves never
+ * call radiant_sec" - and the shortest honest reading of it is that something
+ * has to. There are three candidates and two of them are wrong:
+ *
+ *   profile_sched.c   is the RF plan's, owns the 119/120/121 cadence for
+ *                     device type 0x60, and knows no page number belonging to
+ *                     any profile. Putting a key and a CMAC into the shared
+ *                     rotation engine would give the envelope a dependency on
+ *                     the compatibility work, which is the wrong direction and
+ *                     is what "as a CLIENT of it, through a seam, not as a
+ *                     second scheduler" exists to prevent.
+ *   profile_hr.c      would put a key in a file whose whole claim is that it
+ *   profile_power.c   is a byte-exact ANT+ sensor. That is the invariant.
+ *   THIS FILE         is the client. It knows the page numbers and the frame
+ *                     layouts; radiant_sec_compat.c knows the cryptography and
+ *                     no page number; profile_hr.c and profile_power.c know
+ *                     neither and call neither.
+ *
+ * So the call path is
+ *
+ *   profile_hr.c / profile_power.c  ->  profile_compat.c  ->  radiant_sec_compat.c
+ *          (no crypto)                  (no ANT+ page)         (no page at all)
+ *
+ * and the invariant is structural rather than remembered: NOTHING IN THIS
+ * HEADER NAMES A radiant_sec TYPE, so a profile module that includes it does
+ * not even reach a radiant_core header transitively. tools/test_compat_capture.py
+ * greps for that, because an invariant nobody checks is a comment.
+ *
+ * ---------------------------------------------------------------------------
+ * What goes on the air, and what it costs
+ * ---------------------------------------------------------------------------
+ *   0x70  the capability beacon, two frames on the descriptor's
+ *         (index << 4) | (count - 1) convention, one frame per 121-message
+ *         cycle. 0.8% of slots.
+ *   0x71  Tier I identity attestation, one page every T seconds - DECOUPLED
+ *         FROM THE DATA RATE, which is the whole compatibility argument. 1.2%
+ *         of slots at 4 Hz and T = 20 s, and proportionally LESS on a slower
+ *         profile.
+ *   0x72  Tier II data attestation, off by default, one page in N transmitted
+ *         messages.
+ *
+ * 2.0% of slots in the default configuration, against the 1.65% ANT+ itself
+ * already spends on common pages 80 and 81. That is the number the
+ * compatibility claim rests on.
+ *
+ * ---------------------------------------------------------------------------
+ * The one interaction the seam's rule creates, stated rather than discovered
+ * ---------------------------------------------------------------------------
+ * The seam never offers message 119, message 120 or a descriptor frame,
+ * because those three ARE the cadence rule. Tier I does not care: its counter
+ * is derived from elapsed time and a slot of slip is invisible to it, and the
+ * beacon does not care either - a frame whose slot was taken by an attestation
+ * page is OWED rather than lost, and rides the next slot this client is
+ * offered, so the cadence stays at one frame per cycle.
+ *
+ * TIER II DOES CARE, and this is where it shows. Its window closes at the Nth
+ * transmitted message exactly and has no slack at all, so a window whose Nth
+ * message lands on message 119 or 120 closes with no tag: radiant_sec_compat.c
+ * absorbs that (the next window starts clean) and a receiver reports one
+ * unverified window, which is the same cost a lost packet already has in that
+ * tier. With N = 8 and a 121-message cycle that is roughly two windows in
+ * fifteen. It is a real cost of not forking the rotation, it is bounded, it
+ * only exists in the tier that is off by default, and the alternative - a
+ * client that can displace a common page - is forking the rotation with extra
+ * steps.
+ */
+
+#ifndef RADIANT_PROFILE_COMPAT_H_
+#define RADIANT_PROFILE_COMPAT_H_
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#include "profile_sched.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/*
+ * The allocation, registered in docs/profile-registry.md. Two numbers, not
+ * three: the SWITCH/RETURN announcement rides frames 2 and 3 of the beacon
+ * page's own set, and spending a third number on it was rejected on the 7-bit
+ * namespace alone - heart rate's byte 0 carries a page-change toggle in bit 7,
+ * so nothing at or above 0x80 is expressible on that device type at all.
+ *
+ * 0x70 IS THE BEACON AND ALSO THE NIBBLE BASE OF THE ATTESTATION CLAIM. An
+ * attestation page's byte [0] is PROFILE_COMPAT_PAGE_BASE | subtype, and that
+ * subtype is the same nibble radiant_sec_compat.c put into the MAC'd nonce at
+ * position 9 - so the page byte is DERIVED from what went into the tag rather
+ * than being a second, independent statement of the same thing.
+ */
+#define PROFILE_COMPAT_PAGE_BASE       0x70u
+#define PROFILE_COMPAT_PAGE_BEACON     0x70u
+#define PROFILE_COMPAT_PAGE_ATTEST_I   0x71u
+#define PROFILE_COMPAT_PAGE_ATTEST_II  0x72u
+
+/* Byte 0's high bit on device type 0x78. Not part of the page number. */
+#define PROFILE_COMPAT_PAGE_TOGGLE     0x80u
+#define PROFILE_COMPAT_PAGE_MASK       0x7Fu
+
+#define PROFILE_COMPAT_VERSION         1u
+
+/* Frame indices in the beacon page's set. Two frames in the steady state; the
+ * announcement's frames 2 and 3 belong to Layer C and land in C8. */
+#define PROFILE_COMPAT_FRAME_BEACON_0  0u
+#define PROFILE_COMPAT_FRAME_BEACON_1  1u
+#define PROFILE_COMPAT_BEACON_FRAMES   2u
+
+#define PROFILE_COMPAT_FRAME_LEN       8u
+#define PROFILE_COMPAT_HINT_BYTES      3u
+
+/* Frame 0 byte [2] bits 3..0. */
+#define PROFILE_COMPAT_CAP_ATTEST_AVAILABLE  0x01u
+#define PROFILE_COMPAT_CAP_PRIVATE_AVAILABLE 0x02u
+#define PROFILE_COMPAT_CAP_PAIRING_OPEN      0x04u
+#define PROFILE_COMPAT_CAP_PAIRING_AVAILABLE 0x08u
+
+/*
+ * The four policy states, frame 0 byte [3] bits 1..0. `never` is the default
+ * and it is the configuration a shipped strap should ship in: a byte-exact
+ * ANT+ sensor for its whole life, which will refuse an authenticated switch
+ * command from a keyholder it trusts and count the refusal.
+ *
+ * Only `never` is reachable in C5. The state machine behind the other three is
+ * profile_private.c's, in C8; the values are pinned here so the beacon's
+ * layout does not change when it lands.
+ */
+#define PROFILE_COMPAT_POLICY_NEVER    0u
+#define PROFILE_COMPAT_POLICY_PHYSICAL 1u
+#define PROFILE_COMPAT_POLICY_COMMAND  2u
+#define PROFILE_COMPAT_POLICY_ALWAYS   3u
+
+/* Attestation mode, frame 0 byte [3] bit 4. Opportunistic substitution is
+ * specified so it is a later configuration change rather than a break, and is
+ * deliberately not implemented in v1. */
+#define PROFILE_COMPAT_MODE_FIXED         0u
+#define PROFILE_COMPAT_MODE_OPPORTUNISTIC 1u
+
+/*
+ * Which message of the 121-cycle carries a beacon frame.
+ *
+ * Message 0, so the on-air order is ... 80, 81, beacon ... - the beacon joins
+ * the back of the burst a certified sensor already sends rather than inventing
+ * a cadence of its own, which is exactly what tools/ant_sim.py does and what
+ * every deployed receiver already absorbs. It is legal only because a compat
+ * family has no descriptor: on device type 0x60 message 0 restarts the
+ * descriptor set and the seam is not offered it at all.
+ */
+#define PROFILE_COMPAT_BEACON_SLOT 0u
+
+/*
+ * What the node advertises.
+ *
+ * `ch` is the radiant_sec_compat channel index - the node has already called
+ * radiant_sec_compat_set_key(), _set_devnum(), _configure() and _set_epoch()
+ * on it before this init runs, because those take a root key and this layer
+ * must never see one.
+ *
+ * `epoch` is here only to compute the key-group hint. IT IS NOT BROADCAST and
+ * there is no beacon field for it: for a hostless node the epoch is the boot
+ * counter, and a slowly incrementing 32-bit number sent every 30 s is a device
+ * fingerprint that survives every other privacy measure in this design. A
+ * receiver recovers it by searching forward against the hint instead.
+ */
+struct profile_compat_cfg {
+	uint8_t  ch;
+	uint32_t epoch;
+
+	/* advertise = off emits no beacon at all. A keyholder can still
+	 * re-acquire such a node - it trial-verifies candidate epochs against
+	 * the attestation tag directly - so this is slower to find, not
+	 * undiscoverable. */
+	bool     advertise;
+
+	bool     attest_available;
+	bool     pairing_available;
+	bool     pairing_open;
+
+	uint8_t  policy;  /* PROFILE_COMPAT_POLICY_* */
+	uint8_t  window;  /* N announced in the beacon; one of 4, 8, 16, 32 */
+	uint8_t  mode;    /* PROFILE_COMPAT_MODE_* */
+
+	/*
+	 * The private-mode locator. Zero on a `never` node - there is nowhere
+	 * for it to go - and zero on any node with announce = silent, whatever
+	 * its policy. profile_compat_init() REFUSES a `never` node that
+	 * supplies one, the same way tools/ant_pages.py's decoder refuses to
+	 * believe half a malformed beacon.
+	 */
+	uint8_t  target_device_type;
+	uint16_t target_device_number;
+	uint16_t target_period;
+
+	/*
+	 * The page-change toggle, for a device type that has one.
+	 *
+	 * NULL for bicycle power, whose byte [0] is a whole page number. On
+	 * heart rate every page carries the toggle in bit 7 including the
+	 * common pages, so a compat page that did not would be the one page in
+	 * the stream out of step with the sensor's own sequence - and the
+	 * toggle sequence is a bench question against a real head unit
+	 * (docs/decisions/0008, "Costs, accepted"), which is a reason to be
+	 * consistent rather than clever.
+	 *
+	 * The callback rather than a flag because the value changes per
+	 * message and the rule for changing it belongs to the profile.
+	 */
+	bool   (*toggle)(void *user);
+	void    *user;
+};
+
+struct profile_compat {
+	struct profile_compat_cfg cfg;
+
+	/* Encoded once at init: the two beacon frames change only when the
+	 * node's capabilities do, and re-encoding them per slot would be work
+	 * in the hot path for bytes that are identical. */
+	uint8_t frames[PROFILE_COMPAT_BEACON_FRAMES][PROFILE_COMPAT_FRAME_LEN];
+	uint8_t n_frames;
+	uint8_t frame_cursor;
+
+	/* A beacon frame whose slot was taken by an attestation page. It rides
+	 * the next slot this client is offered rather than the next cycle - see
+	 * compat_claim() for why message 0 is where slipped pages land. */
+	bool    beacon_due;
+
+	/* The instant the current slot goes out, handed in per slot rather
+	 * than read from a clock here - radiant_sec_compat.h's rule, inherited:
+	 * a whole day of attestation is then testable in a millisecond. */
+	uint64_t now_us;
+
+	bool armed;
+
+	uint32_t beacons_sent;
+	uint32_t tier1_sent;
+	uint32_t tier2_sent;
+};
+
+/*
+ * Build the beacon frames and read the key-group hint out of the key the node
+ * already installed.
+ *
+ * Returns 0; -EINVAL for a malformed configuration (a `never` node carrying a
+ * locator, a window outside {4, 8, 16, 32}, a device type with bit 7 set); or
+ * -ENOTSUP when this build has no compat attestation at all, which is not an
+ * error a node has to handle - it simply stays a plain ANT+ sensor, which is
+ * what most of them should be.
+ */
+int profile_compat_init(struct profile_compat *pc,
+			const struct profile_compat_cfg *cfg);
+
+/* Register as the scheduler's client. Only an initialised, armed instance
+ * registers, so a build with no attestation attaches nothing and the rotation
+ * never learns a client existed. */
+int profile_compat_attach(struct profile_compat *pc, struct profile_sched *ps);
+
+/*
+ * One slot, driven end to end: decide the page, and tell the attestation layer
+ * what actually went on the air.
+ *
+ * The second half is not optional and is why this wrapper exists at all. Tier
+ * II's window is N consecutive TRANSMITTED messages - the common pages, the
+ * beacon and the Tier I page are inside the tag too - so a caller that
+ * reported only its data pages would build a window neither side agrees about.
+ * Making that a wrapper rather than a rule in a comment is the difference
+ * between an invariant and a hope.
+ */
+enum profile_slot_kind profile_compat_next(struct profile_compat *pc,
+					   struct profile_sched *ps,
+					   uint64_t now_us, uint8_t *body);
+
+/* The halves of the above, for a node that drives profile_sched_next() itself.
+ * profile_compat_before() must be called first and profile_compat_sent() for
+ * EVERY transmitted message, including the ones this client did not build. */
+void profile_compat_before(struct profile_compat *pc, uint64_t now_us);
+void profile_compat_sent(struct profile_compat *pc, const uint8_t *body);
+
+/* True for a page number this layer put on the air - 0x70, 0x71 or 0x72, with
+ * heart rate's toggle bit already discounted. The one place a decoder should
+ * ask "is this page mine", so that a profile never has to name 0x70. */
+bool profile_compat_is_compat_page(uint8_t byte0);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* RADIANT_PROFILE_COMPAT_H_ */

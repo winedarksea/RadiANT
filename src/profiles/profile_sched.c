@@ -83,6 +83,18 @@ int profile_sched_init(struct profile_sched *ps,
 		/* Asynchronous sparse leaves hb_slots at 0: there is no grid,
 		 * so the node's own timer calls profile_sched_post_heartbeat().
 		 */
+	} else if (cfg->pages != NULL && cfg->n_pages != 0u) {
+		/*
+		 * A family with no descriptor states its rotation outright.
+		 * Copied rather than referenced: the rest of this engine reads
+		 * ps->pages, and a caller whose array went out of scope would
+		 * transmit whatever replaced it for as long as the node ran.
+		 */
+		if (cfg->n_pages > (uint8_t)sizeof(ps->pages)) {
+			return -ENOSPC;
+		}
+		memcpy(ps->pages, cfg->pages, cfg->n_pages);
+		ps->n_pages = cfg->n_pages;
 	}
 
 	/*

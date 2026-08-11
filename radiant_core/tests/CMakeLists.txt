@@ -75,6 +75,19 @@ target_sources(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_sched.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_handoff.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_schedule.c"
+  # The ANT+ compatibility profiles (compat-C5): heart rate 0x78 and bicycle
+  # power 0x0B, the common pages they share, and the compat client that inserts
+  # the RadiANT beacon and attestation pages through profile_sched.c's seam.
+  #
+  # profile_compat.c is the THIRD file here that includes a radiant_core header,
+  # and it is the only one of the four that does. That is the boundary the phase
+  # exists to draw: profile_hr.c and profile_power.c reach no radiant_core
+  # header even transitively, so "the profile modules never call radiant_sec" is
+  # a property of the include graph rather than a rule somebody remembers.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_common.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_compat.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_hr.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_power.c"
 )
 target_include_directories(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles")
