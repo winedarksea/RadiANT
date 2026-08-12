@@ -1,6 +1,6 @@
 # 0012 — Adaptive frequency: leaving 2457 MHz, slowly and out loud
 
-- **Status:** accepted, with its bench gate **owed** — see *What is not measured*
+- **Status:** the mechanism stands; **its stated motivation is REFUTED on this bench, 2026-08-11** — the gate was run and failed. See *What was measured*, which replaces the old *What is not measured*. Do not cite this record's Context section as evidence for anything until that section is reconciled.
 - **Date:** 2026-08-11
 - **Builds:** [0005](0005-extension-inside-ant-plus.md) axis 5, and **corrects one sentence of it**
 - **Depends on:** [0002](0002-clean-room-policy.md) (read scope), [0005](0005-extension-inside-ant-plus.md) (the extension axes and the merged RX window), RF-4's channel-quality map (`radiant_core/src/radiant_chanmap.c`), RF-5a's descriptor schedule block
@@ -16,6 +16,13 @@
 ---
 
 ## Context
+
+> **⚠ Superseded in part, 2026-08-11.** The attribution in this section — Wi-Fi
+> channel 11 over 2457 MHz — was measured and **not supported**: the same loss
+> appears at 2402, 2426, 2457 and 2480 MHz. The *magnitude* below is confirmed;
+> the *cause* and the claim that frequency agility fixes it are not. Read
+> *What was measured* before using anything here. This paragraph is left standing
+> rather than rewritten because it is what the decision was actually taken on.
 
 The characterised loss floor on this bench is **~0.4 %**, bounded at
 0.26–0.60 %, and it is fully accounted for: memoryless per-slot collision with
@@ -264,19 +271,98 @@ solved re-acquisition problem into an unsolved one.
 
 ---
 
-## What is not measured
+## What was measured — 2026-08-11, and the gate FAILED
 
-**The bench gate of this phase has not been run, and no number in this record
-stands in for it.**
+The gate was: loss ≈ 0 on the selected quiet channel with a single copy per
+event, against ~0.4 % on RF 57, in one sitting. **It was run and it failed.**
 
-The gate is: loss ≈ 0 on the selected quiet channel with a single copy per event,
-against ~0.4 % on RF 57, in one sitting — with the map's verdict agreeing
-independently with `tools/ant_sens.py` and the noise histogram. It needs the
-Feather that stands in for a stock dongle, which is in its UF2 bootloader and is
-reserved for the combined hardware session that also owes ADR 0007 its ≥6 dB
-sensitivity ladder and its two `t_sync` calibrations. **No dB figure and no loss
-figure appears anywhere in this record, in `profile_freq.c`, or in
-`test_freq.c`.**
+Rig: the nRF54L15 DK as an ANT+ power master over COM8 (`tools/ant_sim.py`,
+paced from `EVENT_TX`, 1301 messages every run) and the Feather in stock ANT
+firmware as the receiver over USB (`tools/ant_verify.py`), device number 4242,
+4 Hz, one sitting. Both ends moved together — `ant_sim.py` gained `--rf-freq`
+for this, the counterpart of the receiver flag that already existed. Every
+figure below is `loss (exact)`, counted from the transmitter's own event
+counter, at the 300 s minimum `tools/ab_gates.toml` requires.
+
+| RF index | MHz | loss (exact) | missing | note |
+|---|---|---|---|---|
+| 2 | 2402 | 0.59 % | 7 / 1196 | ADR candidate |
+| 26 | 2426 | 0.42 % | 5 / 1201 | ADR candidate |
+| 57 | 2457 | 0.58 % | 7 / 1197 | incumbent, A1 |
+| **80** | **2480** | **0.59 %** | **7 / 1193** | **the candidate under test, B** |
+| 57 | 2457 | 0.42 % | 5 / 1202 | incumbent, A2 |
+
+The sitting is valid on this file's own rule: the two RF 57 runs differ by
+**0.16 pp**, inside the 0.35 pp `repeat_a_max_delta_pp` allowance. Every missing
+packet carried an `RX_FAIL`, so unexplained loss was zero throughout and the
+`unexplained_loss` gate never fired.
+
+**The loss is flat across the whole band.** 0.42–0.59 % at 2402, 2426, 2457 and
+2480 MHz — a total spread of 0.17 pp, which is two packets. The candidate index
+is not better than the incumbent; it is indistinguishable from it, and from
+every other index tried.
+
+### What this refutes, and it is this record's own premise
+
+The Context section above states the floor is "memoryless per-slot collision
+with Wi-Fi channel 11 over 2457 MHz" and that "frequency agility is the only
+fix". **A fixed-channel interferer cannot produce identical loss at 2402, 2426,
+2457 and 2480 MHz.** 2480 is above every 2.4 GHz Wi-Fi channel and 2402 is below
+channel 1's centre; both measure exactly what the middle of channel 11 measures.
+So the attribution is not supported by this measurement, and the sentence
+"frequency agility is the only fix" is now positively contradicted: on this
+bench frequency agility fixes nothing at all.
+
+Two findings in the project's earlier characterisation already pointed this way
+and were read as curiosities rather than as evidence against the model: **no
+preferred phase against the Wi-Fi beacon interval**, and loss **anti-correlated
+with signal strength**. Neither is what collision with a fixed Wi-Fi carrier
+produces.
+
+**This does not make the mechanism in this record wrong.** Everything it
+specifies — the announcement page, the countdown, the slot-counting rule, the
+merge refusal, the retry list — is correct as engineering and remains verified
+by its tests. What is wrong is the *reason given for building it*, exactly as
+this record's own closing paragraph anticipated: "if a quiet index does not
+remove the floor, the mechanism is not thereby wrong, but the *reason for it*
+is, and this record should be amended rather than quietly kept." That is what
+this section does.
+
+### A trap this run walked into first, recorded so the next one does not
+
+A 150 s scouting pass immediately before the sitting reported **RF 80 at 0.00 %
+and RF 26 at 3.83 %**, which read as a spectacular confirmation and a clear
+winner. **Neither reproduced at 300 s** — RF 80 came back 0.59 % and RF 26 came
+back 0.42 %, a tenth of its scouted figure. At 150 s one packet is 0.17 pp, so
+"0.00 %" was one lucky window and "3.83 %" was one transient.
+
+`ab_gates.toml` sets `min_seconds = 300` for exactly this reason and the header
+warns against fitting anything to a bench number before checking it can be
+accounted for. The scouting numbers passed the accounting check — every miss had
+its `RX_FAIL` — and were still meaningless. **Accounted-for is not the same as
+reproducible**, and only the repeat established which was which.
+
+### What is still owed
+
+- **The cause of the residual ~0.5 % is now open again.** It is flat across the
+  band, isolated to single slots, always `RX_FAIL`, at 60–70 dB of link margin.
+  A hopping or band-wide emitter would fit; so would something systematic in the
+  link itself, and the flatness (0.42–0.59 % across four indices and five runs)
+  looks more systematic than environmental. An `RZ616` Wi-Fi 6E + Bluetooth
+  combo radio is active on the bench host with no Bluetooth peripherals paired.
+  **The decisive experiment is to disable that radio and repeat one 300 s run**;
+  it is safe here because nothing is paired to it. Until that is done, no
+  attribution should be written into any record — the previous one was held with
+  more confidence than it had earned.
+- The map's verdict agreeing independently with `tools/ant_sens.py` and the noise
+  histogram. Not attempted; `CONFIG_RADIANT_CORE_ED_SCAN` was off in the image
+  used, so `profile_freq_select()` would have returned "no data" and refused to
+  move — which is this record's own designed behaviour and is why nothing was
+  selected automatically for this run. **The indices above were set by hand.**
+- Whether any index anywhere is better. Four were tried out of 125.
+
+**No dB figure appears anywhere in this record, in `profile_freq.c`, or in
+`test_freq.c`, and none should be added on the strength of the above.**
 
 What *is* verified, and what it is worth:
 

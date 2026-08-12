@@ -1,0 +1,51 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Provenance: clean-room. Devicetree only; nothing here derives from sdk-ant.
+ *
+ * ---------------------------------------------------------------------------
+ * The radio timer
+ * ---------------------------------------------------------------------------
+ * TIMER4, and the choice is constrained from both ends - the reasoning is the
+ * repo-root boards/adafruit_feather_nrf52840_nrf52840_uf2.overlay's and is
+ * reproduced here because a standalone spike does not see that directory. The
+ * backend needs FIVE compare/capture channels (t_sync capture, RX start, window
+ * close, software now-capture, TX start) and on nRF52 only TIMER3 and TIMER4
+ * have more than four - which is a compile-time #error in radiant_radio_nrf.c
+ * rather than something to discover on the air. TIMER4 is the one of the two
+ * that nothing else on this board claims.
+ *
+ * Without this chosen property the nrf backend does not COMPILE for this board.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT THIS FILE DELIBERATELY DOES *NOT* DO, which is the difference from the
+ * product overlay
+ * ---------------------------------------------------------------------------
+ * The product's Feather overlay deletes zephyr,console and disables
+ * board_cdc_acm_uart, because the product's USB is a vendor class impersonating
+ * an ANT dongle and its diagnostics go out over RTT. Neither applies here:
+ *
+ *   - this board has no debugger on it, so RTT is not reachable on this bench;
+ *   - this program's console is its INPUT as well as its output - `role`,
+ *     `phy`, `power`, `start`, `stop` all arrive over it - and RTT would make
+ *     every rung of the ladder depend on vendor tooling being attached;
+ *   - and one end of every S=8 link on this bench must be this board, because
+ *     it is the only other radiant-capable radio here. A spike that cannot
+ *     report from the Feather cannot measure the gate at all.
+ *
+ * So the board target's own USB CDC ACM serial backend is left exactly as the
+ * board defines it: adafruit_feather_nrf52840_nrf52840_uf2.dts includes
+ * boards/common/usb/cdc_acm_serial.dtsi, which points zephyr,console at
+ * board_cdc_acm_uart, and Kconfig.defconfig turns on USB_DEVICE_STACK_NEXT and
+ * CDC_ACM_SERIAL_INITIALIZE_AT_BOOT. This file adds a timer and nothing else.
+ */
+
+/ {
+	chosen {
+		radiant,radio-timer = &timer4;
+	};
+};
+
+&timer4 {
+	status = "okay";
+};

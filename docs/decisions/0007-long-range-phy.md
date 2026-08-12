@@ -575,12 +575,42 @@ nRF5340 DK via `scripts/run_ztest_hw.ps1`):
 |---|---|
 | **The gate: ≥ 6 dB improvement in the 5 %-loss point for S=8 vs 1 M** (`tools/ant_sens.py`) | Needs the sensitivity rig and a transmitter-power ladder |
 | **A length-extended frame showing `loss_exact` no worse than an eight-byte frame at the same power** | Same rig |
-| **The 1 M length-extension Tier 4 capture** | Needs the Feather in ANT dongle firmware; rationed flash, reserved |
+| ~~**The 1 M length-extension Tier 4 capture**~~ | **DONE 2026-08-11** — see *Does 1 M also qualify?* above |
 | **`t_sync` measured (both PHYs) via the wired two-board trigger** | Needs two boards and a GPIO trigger rig |
 | **`phy_switch_us` measured on nRF** | Same session |
 
 A green test suite is not a met gate, and this record says so in both places
 rather than letting the two be confused.
+
+### An open shipping-code defect that will bias the gate against S=8
+
+**`apply_format()` in `radiant_radio_nrf.c` does not apply the nRF52840's
+errata 191 workaround**, on either PHY path. Found 2026-08-11 while building the
+ladder instrument (`radiant_core/spike/phy_ladder/`), by comparison with
+Nordic's own open-source Zephyr Bluetooth controller, which writes a documented
+register at `0x40001740` on every mode change into and out of the coded PHY
+(`radio_nrf52840.h`, `hal_radio_phy_mode_get()`). Public erratum, public
+workaround, Apache-2.0 source already a dependency of this project — no
+clean-room concern.
+
+**Why it matters here specifically.** The nRF5340 DK cannot run this backend at
+all (its RADIO is on the network core, and `CONFIG_RADIANT_CORE_BACKEND_NRF`
+depends on `SOC_COMPATIBLE_NRF52X || SOC_COMPATIBLE_NRF54LX`, neither of which
+an nRF5340 sets — it falls back to the **null** backend silently). So the only
+two radiant-capable radios on this bench are the nRF54L15 DK and the **nRF52840**
+Feather, and every S=8 link therefore has an nRF52840 at one end. The erratum
+degrades coded-PHY reception on exactly that part.
+
+**The consequence for the gate, stated before the measurement rather than
+after:** any S=8 improvement measured on this bench is a **lower bound**. If the
+result lands near but below the ≥ 6 dB gate, this is the first suspect and the
+run must not be recorded as a failure of the coded PHY until the workaround is
+applied and the run repeated. The spike deliberately does **not** poke the
+register itself — an instrument that quietly fixes the code under test would
+report a sensitivity the shipping backend does not deliver.
+
+Owed as a shipping-code decision in its own right, independent of this ADR:
+apply the workaround in `apply_format()`, or record why not.
 
 **One thing that will fail loudly rather than silently, which is why it was safe
 to land ahead of the bench:** the CRC configuration. `t_sync` being wrong costs
