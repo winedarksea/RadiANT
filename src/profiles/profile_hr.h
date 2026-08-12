@@ -14,8 +14,10 @@
  *
  * Those facts are already written down in this repository twice, and this file
  * was derived from those rather than re-derived from the document:
- * docs/ant-plus-profiles.md section "Heart Rate, device type 0x78" (lines
- * 150-206), and tools/ant_pages.py's encode_hr_default(),
+ * docs/device-profiles.md section "Heart Rate, device type 0x78" (formerly
+ * docs/ant-plus-profiles.md, which that document absorbed; cited by section
+ * rather than by line number so the reference cannot silently drift), and
+ * tools/ant_pages.py's encode_hr_default(),
  * encode_hr_cumulative_time(), encode_hr_manufacturer(), encode_hr_product()
  * and encode_hr_previous_beat(), which are the byte-for-byte reference this
  * file's output is cross-checked against by tools/test_compat_capture.py.
@@ -133,7 +135,14 @@ struct profile_hr_cfg {
 	 * value into them would do it silently.
 	 */
 	uint8_t  manufacturer_id_8;
-	uint16_t serial_lsb;
+	/* Page 0x02, bytes [2..3]. Per the primary spec's section 5.3.4.3 this is
+	 * the UPPER 16 bits of the 32-bit serial number; the ANT device number
+	 * supplies the lower 16. `serial_number = (serial_upper16 << 16) |
+	 * device_number`, not the other way round - the spec's own byte table
+	 * calls the two wire bytes "Serial Number LSB/MSB" because THEY are
+	 * little-endian, which is a different axis from which half of the 32-bit
+	 * serial this field is. */
+	uint16_t serial_upper16;
 	uint8_t  model_number_8;
 	uint8_t  hw_version;
 	uint8_t  sw_version;

@@ -221,7 +221,7 @@ class TestHeartRatePages(unittest.TestCase):
              ap.PAGE_HR_CUMULATIVE_TIME, {"operating_time": 0x0A0B0C}),
             (ap.encode_hr_manufacturer(0x2B, 0x4455, **self.TAIL),
              ap.PAGE_HR_MANUFACTURER,
-             {"manufacturer_id": 0x2B, "serial_lsb": 0x4455}),
+             {"manufacturer_id": 0x2B, "serial_upper16": 0x4455}),
             (ap.encode_hr_product(3, 7, 9, **self.TAIL), ap.PAGE_HR_PRODUCT,
              {"hw_version": 3, "sw_version": 7, "model_number": 9}),
             (ap.encode_hr_previous_beat(0x1200, **self.TAIL),

@@ -440,24 +440,31 @@ def decode_hr_cumulative_time(payload: bytes) -> dict:
     return result
 
 
-def encode_hr_manufacturer(manufacturer_id: int, serial_lsb: int,
+def encode_hr_manufacturer(manufacturer_id: int, serial_upper16: int,
                            event_time: int, beat_count: int,
                            computed_hr: int | None,
                            toggle: bool = False) -> bytes:
     """Page 0x02, manufacturer information. A background page.
 
         [1]    manufacturer id, 8 bits here rather than the 16 of common page 80
-        [2..3] serial number, low 16 bits (LE)
+        [2..3] serial number, UPPER 16 bits (LE on the wire)
+
+    Per the primary spec's section 5.3.4.3: the ANT device number supplies the
+    LOWER 16 bits of the 32-bit serial. `serial_number = (serial_upper16 << 16)
+    | device_number`, not the other way round - the field here is called
+    "Serial Number LSB/MSB" in the spec's own byte table because its own two
+    bytes are little-endian, which is a different axis from which HALF of the
+    32-bit serial this field is.
     """
     return _hr_page(PAGE_HR_MANUFACTURER,
-                    bytes([_u8(manufacturer_id)]) + _le16(serial_lsb),
+                    bytes([_u8(manufacturer_id)]) + _le16(serial_upper16),
                     event_time, beat_count, computed_hr, toggle)
 
 
 def decode_hr_manufacturer(payload: bytes) -> dict:
     result = decode_hr_common(payload)
     result["manufacturer_id"] = payload[1]
-    result["serial_lsb"] = _rd_le16(payload, 2)
+    result["serial_upper16"] = _rd_le16(payload, 2)
     return result
 
 
@@ -1197,6 +1204,27 @@ RADIANT_TLM_RF_INDEX_MAX = 124
 # registry checker cross-checks no number here.
 RADIANT_TLM_PERIOD_DEFAULT = 8182
 
+# The profile device types: the SAME envelope with a pinned schema, which is why
+# they live beside 0x60 rather than in a section of their own. A profile adds a
+# device type number and a required field set; it adds no codec, no page layout
+# and no parser. See docs/device-profiles.md sections 1 and 5.
+#
+# Unlike 0x60 these DO fix a period, and that is the point - the period is a
+# property of the profile rather than of the node, so a receiver can budget a
+# window from the device type alone. scripts/check_profile_registry.py
+# cross-checks both numbers against docs/profile-registry.md.
+CGM_DEVICE_TYPE = 0x61
+# 65535 counts is the slowest strictly-periodic ANT master there is (~0.5 Hz).
+# A CGM produces a new value every ~5 MINUTES, so anything faster is spent
+# retransmitting a value the receiver already has.
+CGM_PERIOD = 65535
+
+FAN_DEVICE_TYPE = 0x62
+# 8192 counts (4.00 Hz), and the reason is latency rather than data rate: an
+# inbound command reaches a node only near that node's own transmit slot, so on
+# an actuator the channel period IS the command latency. 8192 gives 250 ms.
+FAN_PERIOD = 8192
+
 RADIANT_TLM_MAX_FIELDS = 14
 RADIANT_TLM_MAX_FRAMES = 16      # two header frames plus up to 14 field frames
 RADIANT_TLM_FRAME_LEN = 8
@@ -1290,6 +1318,18 @@ TLM_TYPES = {
     0x24: ("percentage", "%"),
     0x25: ("battery state of charge", "%"),
     0x26: ("heart rate", "bpm"),          # non-SI, one of the two exceptions
+    # An INSTANTANEOUS duration, and the reason it cannot be 0x37: class
+    # 0x30-0x3F requires the accumulate bit, so "duration" can only express a
+    # running total. An RR interval and a CGM's reading age are both a single
+    # measured span, not a total. docs/radiant-telemetry.md section 7 named this
+    # gap and left it open deliberately; two unrelated users closed it.
+    0x27: ("time interval", "s"),
+    # Molar concentration. Blood glucose is the first user, but the type is the
+    # quantity and not the application - naming it "blood glucose" is how a
+    # vocabulary ends up with three concentration types that differ only in what
+    # measured them. 1 mmol/L is EXACTLY 1 mol/m^3, so the canonical SI unit is
+    # already the clinical one and no conversion constant exists to get wrong.
+    0x28: ("substance concentration", "mol/m^3"),
     0x30: ("energy", "J"),
     0x31: ("charge", "C"),
     0x32: ("volume", "m^3"),

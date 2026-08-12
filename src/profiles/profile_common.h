@@ -2,7 +2,8 @@
 /*
  * profile_common.h - ANT+ common pages 80, 81 and 82.
  *
- * Provenance: docs/ant-plus-profiles.md section "Common pages" (the byte
+ * Provenance: docs/device-profiles.md section "Common pages" (formerly
+ * docs/ant-plus-profiles.md, absorbed into it) - the byte
  * tables for pages 0x50, 0x51 and 0x52) and its mirror in tools/ant_pages.py -
  * encode_common_80(), encode_common_81(), encode_common_82(). Both are this
  * project's own prior derivation from the ANT+ common-page definitions, which

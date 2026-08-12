@@ -58,7 +58,8 @@ availability.
 | **`0x60-0x6F`** | **Recommended.** No public evidence of ANT+ allocation. |
 | `0x70-0x76` | Sparse. Claim only after checking. |
 | `0x77-0x7C` | Dense with ANT+ allocations (weight scale, HRM, bike speed and cadence, SDM). Do not claim. |
-| `0x7D-0x7F` | Available, but adjacent to the block above. |
+| `0x7D-0x7E` | Available, but adjacent to the block above. |
+| `0x7F` | **Taken.** ANT+ Core Temperature. Do not claim. |
 
 Device type is **7 bits — the MSB is the pairing bit — so the space is 1..127
 (`0x01..0x7F`)**, and `0x00` is not a device type. That leaves a substantial
@@ -187,11 +188,16 @@ window and costs nothing extra.
 |---|---|---|---|---|---|---|---|---|
 | `0x0B` | Bicycle Power | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8182 | no | no | Implemented in `tools/ant_pages.py`; byte-exact to Garmin's profile |
 | `0x11` | Fitness Equipment (FE-C) | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | — | no | no | Compatibility target; not yet implemented in `tools/ant_pages.py`, so no period is recorded rather than a guessed one |
+| `0x14` | Light Electric Vehicle (LEV) | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | — | no | no | Recorded so a claimant does not repeat the search. Spec D00001390 Rev 1.1 states period 8192 (4.00 Hz); the column stays `—` because this project has not implemented the type. Fields in `docs/device-profiles.md` 3.6. **This is why no e-bike type is claimed** |
+| `0x19` | Environment | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | — | no | no | Temperature only, and it has **no sensor placement field**, which is why physiological temperature is a `0x60` recipe rather than an additive page here. Default period 65535 (0.5 Hz), alternate 8192, from third-party implementations rather than the spec. `docs/device-profiles.md` 3.7 |
 | `0x60` | RadiANT Generic Telemetry | radiant | RadiANT project | 2026-08-08 | per-node | per-node | per-node | The envelope in `docs/radiant-telemetry.md`; period is announced in descriptor frame 0. Implemented in `src/profiles/` and mirrored in `tools/ant_pages.py`. `LR PHY` is `per-node` from ADR 0007: a `0x60` node may run LE Coded S=8, and announces the rate in its schedule block. `Adaptive freq` is `per-node` from ADR 0012: a `0x60` node may move to a quieter RF index, announcing it in page `0x13` first. A node that switched to private mode is exactly this type |
+| `0x61` | RadiANT Continuous Glucose Monitor | radiant | RadiANT project | 2026-08-11 | 65535 | no | no | The `0x60` envelope with a pinned schema; `docs/device-profiles.md` 5.1. **`X_AUTH` is mandatory** — a forged reading has a physiological consequence, so an unverified reading is reported as no reading. Not implemented. **Claimed knowing an ANT+ Glucose profile existed as a 2013 members-only beta whose device type could not be verified** |
+| `0x62` | RadiANT Smart Fan | radiant | RadiANT project | 2026-08-11 | 8192 | no | no | The `0x60` envelope with a pinned schema; `docs/device-profiles.md` 5.2. Period is 4 Hz because commands land near the node's own slot, so the period is the command latency. Not implemented |
 | `0x78` | Heart Rate | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8070 | no | no | Implemented in `tools/ant_pages.py`; pages `0x00`-`0x04`. Half and quarter rates below. **Byte 0 bit 7 is a page-change toggle, so page numbers here are 7-bit** |
 | `0x79` | Bike Speed and Cadence, combined | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8086 | no | no | Implemented in `tools/ant_pages.py`. **No page-number byte** |
 | `0x7A` | Bike Cadence | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8102 | no | no | Period defined in `tools/ant_pages.py`; pages not implemented there |
 | `0x7B` | Bike Speed | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8118 | no | no | Period defined in `tools/ant_pages.py`; pages not implemented there |
+| `0x7F` | Core Temperature | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | — | no | no | Recorded so a claimant does not repeat the search, and because it corroborates `docs/device-profiles.md` 6.3's design decision. Vendor code states period 8192 (4 Hz); the column stays `—` because this project has not implemented the type. Confirmed via two independent vendor/open-source implementations (greenTEG/CoreBodyTemp's own code, `openant`) rather than a primary spec. Fields in `docs/device-profiles.md` 3.8 |
 
 `Period` is the channel period in counts of 1/32768 s, `per-node` when the type
 does not fix one, and `—` when this project has not implemented the type and
@@ -334,6 +340,34 @@ rule this registry already states for device types.
 | `0x60` | `0x52` | Common page 82 | `ant_pages.encode_common_82` | Byte-exact ANT+, optional |
 | `0x60` | `0x53-0xEF` | Reserved | — | Other ANT+ common pages and future RadiANT pages |
 | `0x60` | `0xF0-0xFF` | Vendor-private | — | Never registered, never bridged |
+| `0x61` | `0x00` | Descriptor | `ant_pages.encode_tlm_descriptor` | The `0x60` envelope unchanged. A profile type pins a schema, not a codec |
+| `0x61` | `0x01-0x0F` | Data | `ant_pages.encode_tlm_data` | Schema `0x01` is the four fields of `docs/device-profiles.md` 5.1, all on page `0x01` |
+| `0x61` | `0x10` | Reliable command | `ant_pages.encode_tlm_command` | Layout only, as on `0x60` |
+| `0x61` | `0x11` | Command acknowledge | `ant_pages.encode_tlm_command_ack` | Layout only, as on `0x60` |
+| `0x61` | `0x12` | Sync handoff | `ant_pages.encode_tlm_handoff` | As on `0x60`; carries no epoch |
+| `0x61` | `0x13` | Frequency move | `ant_pages.encode_tlm_freq_move` | Allocated for one rule across every RadiANT type. This profile pins `Adaptive freq` to `no`, so a conforming node never sends it |
+| `0x61` | `0x14-0x1F` | Reserved | — | Unassigned; a receiver ignores these |
+| `0x61` | `0x20-0x2F` | Reserved for the security envelope | `docs/radiant-security.md` | Epoch and key-generation announcement, v2 TESLA key disclosure |
+| `0x61` | `0x30-0x4F` | Reserved | — | Unassigned |
+| `0x61` | `0x50` | Common page 80 | `ant_pages.encode_common_80` | Byte-exact ANT+ |
+| `0x61` | `0x51` | Common page 81 | `ant_pages.encode_common_81` | Byte-exact ANT+ |
+| `0x61` | `0x52` | Common page 82 | `ant_pages.encode_common_82` | Byte-exact ANT+, optional. Carries battery, so the schema spends no field on it |
+| `0x61` | `0x53-0xEF` | Reserved | — | Other ANT+ common pages and future RadiANT pages |
+| `0x61` | `0xF0-0xFF` | Vendor-private | — | Never registered, never bridged |
+| `0x62` | `0x00` | Descriptor | `ant_pages.encode_tlm_descriptor` | The `0x60` envelope unchanged |
+| `0x62` | `0x01-0x0F` | Data | `ant_pages.encode_tlm_data` | Schema `0x01` is the three fields of `docs/device-profiles.md` 5.2, all on page `0x01` |
+| `0x62` | `0x10` | Reliable command | `ant_pages.encode_tlm_command` | The profile's whole control surface: command `0x02` set level and `0x04` set mode. No bespoke command page |
+| `0x62` | `0x11` | Command acknowledge | `ant_pages.encode_tlm_command_ack` | Layout only, as on `0x60` |
+| `0x62` | `0x12` | Sync handoff | `ant_pages.encode_tlm_handoff` | As on `0x60`; carries no epoch |
+| `0x62` | `0x13` | Frequency move | `ant_pages.encode_tlm_freq_move` | Allocated for one rule across every RadiANT type. This profile pins `Adaptive freq` to `no`, so a conforming node never sends it |
+| `0x62` | `0x14-0x1F` | Reserved | — | Unassigned; a receiver ignores these |
+| `0x62` | `0x20-0x2F` | Reserved for the security envelope | `docs/radiant-security.md` | Epoch and key-generation announcement, v2 TESLA key disclosure |
+| `0x62` | `0x30-0x4F` | Reserved | — | Unassigned |
+| `0x62` | `0x50` | Common page 80 | `ant_pages.encode_common_80` | Byte-exact ANT+ |
+| `0x62` | `0x51` | Common page 81 | `ant_pages.encode_common_81` | Byte-exact ANT+ |
+| `0x62` | `0x52` | Common page 82 | `ant_pages.encode_common_82` | Byte-exact ANT+, optional. A mains-powered fan omits it |
+| `0x62` | `0x53-0xEF` | Reserved | — | Other ANT+ common pages and future RadiANT pages |
+| `0x62` | `0xF0-0xFF` | Vendor-private | — | Never registered, never bridged |
 
 The page-map table in `docs/radiant-telemetry.md` and the `0x60` rows here are
 cross-checked against each other, page number and name, so the two cannot

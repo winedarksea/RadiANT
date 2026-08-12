@@ -3,7 +3,9 @@ The goal of this project is to implement an open source radio library that is co
 
 The main advantages of an ANT+ compatible spec are: simplicity (compare against the 3000+ page bluetooth specs), low battery usage, minimal airtime usage in congested environements, reliable "one to many" broadcasts, and standardized protocols for common fitness devices. While fitness devices are the main focus, other uses include sensor networks, asset tracking, and beacons.
 
-Note that the primary ANT+ patents have expired and Garmin has made public many of the ANT+ spec documents in the middle of 2025. This library is in no way officially linked to ANT+, this is simply "ANT+ compatible".
+Note that the primary ANT+ patents have expired and Garmin has made public many of the ANT+ spec documents in the middle of 2025. Some parts are still closed (libant.a for example) but this is a clean room design (we don't even have access to that source code) supported by sniffing and modeling the unencrypted ANT+ packets from real devices. 
+
+This library is in no way officially linked to ANT+, this is simply "ANT+ compatible".
 
 # ANT+ Compatible USB Dongle
 
@@ -413,7 +415,7 @@ that way.
 | [sdk-ant contract](docs/sdk-ant-contract.md) | The ~50 functions the bridge calls — the specification the rebuild must satisfy |
 | [ANT serial protocol](docs/ant-serial-protocol.md) | Framing, the SYNC-in-checksum rule, the message tables, the capabilities reply decoded |
 | [ANT radio link](docs/ant-radio-link.md) | The clean-room on-air reference, every fact carrying its provenance |
-| [ANT+ profiles](docs/ant-plus-profiles.md) | Page layouts, accumulators, common pages, transmission rates |
+| [Device profiles](docs/device-profiles.md) | Every profile in one place: ANT+ page layouts, accumulators, common pages and rates, plus the RadiANT profile device types and `0x60` schema recipes |
 | [Profile registry](docs/profile-registry.md) | Device types and pages claimed, and how a third party claims one |
 | [RadiANT telemetry](docs/radiant-telemetry.md) | The generic telemetry envelope and its MQTT mapping |
 | [RadiANT security](docs/radiant-security.md) | Threat model, the three independent switches, and the honest limits |

@@ -50,9 +50,18 @@ forever, whereas a RadiANT accumulating field recovers a lost packet from the
 The motivating case is **a heart-rate strap driving a smart home** — elevated
 BPM turns on the AC, resting HR dims the lights. In v1 that bridge runs
 host-side (dongle -> daemon -> Matter) and needs no new radio work at all. A
-combo node running `radiant_core` + Thread + Matter directly on one chip is what the
-MPSL backend eventually enables, and is the concrete product that justifies
-building it.
+combo node running `radiant_core` + Thread directly on one chip is what the MPSL
+backend eventually enables, and is the concrete product that justifies building
+it.
+
+**The bridge now has a document and a decision of its own**, because it turned
+out to be about half architecture that is not this envelope's:
+[`radiant-bridge.md`](radiant-bridge.md) and
+[`decisions/0010-bridge-two-planes.md`](decisions/0010-bridge-two-planes.md).
+Two of its findings reach back into this document and are recorded here rather
+than there — the amended rule 3 of section 2, and the resolution of section 7's
+honest gap. A third, that a **sparse node cannot be bridged by a combo
+device**, is in section 8.
 
 The envelope exists so that the *second* such node, and the fiftieth, cost a
 descriptor edit rather than a new profile document, a new device type
@@ -106,9 +115,29 @@ in the descriptor from v1.
      four accumulators. The exclusion is permanent and structural rather than a
      scheduling decision. `0x7A` and `0x7B` are checked individually before any
      page is added to either.
-3. The Matter/Zigbee bridge runs **on the host or the gateway**, never over the
-   air. A Matter attribute never appears in an ANT frame; a RadiANT field ID
-   does, and the host translates.
+3. **A Matter or Zigbee attribute never appears in an ANT frame.** A RadiANT
+   field ID does, and something translates.
+
+   **Amended 2026-08-11 —
+   `docs/decisions/0010-bridge-two-planes.md`.** As originally written this
+   clause read "the Matter/Zigbee bridge runs **on the host or the gateway**,
+   never over the air", and that phrasing conflated two different things badly
+   enough to forbid a product this project intends to build:
+
+   - **"Never over the air" is the invariant, and it is unchanged.** A Matter
+     cluster ID, an attribute ID, a ZCL identifier or an MQTT topic string is
+     never on the air. This is what protects a Garmin head unit, and it is
+     absolute.
+   - **"On the host or the gateway" was never an invariant.** It described
+     where the translation happened to run in v1. A combo node running
+     `radiant_core` and a Thread stack on one die translates at exactly the same
+     place in the *logical* stack — above the profile decoder, below the
+     network — and being the same piece of silicon changes nothing about what
+     is on the air.
+
+   So the bridge may run on the node, on a dongle, on a host or on a gateway.
+   What it may not do is put a byte of any of those protocols into an ANT
+   frame. See [`radiant-bridge.md`](radiant-bridge.md) section 2.
 
 **Prohibited: encoding Matter or Zigbee semantics into an existing ANT+ page.**
 Not "discouraged" — prohibited. Adding a Matter cluster id, an attribute id, or
@@ -650,9 +679,47 @@ quantity also has an obvious Matter cluster and attribute the table names it, an
 the type is a first-class member of the vocabulary regardless, and a bridge drops
 the field rather than inventing a mapping. Matter has no heart-rate quantity, and
 the motivating case in section 1 is a heart-rate strap: a vocabulary admitting
-only bridgeable quantities would have excluded its own headline example. The
-bridge itself runs host-side either way and is still future work — section 2,
-rule 3.
+only bridgeable quantities would have excluded its own headline example. What a
+bridge does with the types Matter cannot express is settled in the honest-gap
+subsection at the end of this section; where the bridge *runs* is now free —
+section 2, rule 3 as amended.
+
+### The vocabulary's second producer: the ANT+ compatibility profiles
+
+The claim above — that the mapping is mechanical rather than bespoke — holds
+today only for RadiANT device types, because only those carry a descriptor that
+names a type and a scale. **The ANT+ compatibility profiles should decode into
+this same vocabulary**, which is what extends the claim to the profiles people
+actually own and is what makes a bridge cost one adapter per profile rather than
+one per profile per output protocol. An ANT+ heart rate page 0 is three records
+in this vocabulary, not one: `0x26` computed heart rate, `0x36` beat count
+(accumulating, u8, wraps), `0x37` beat event time (accumulating, u16).
+
+That third one exposes a trap this document should own, because it is a
+property of *this* vocabulary rather than of any bridge: **the scale here is
+decimal and ANT+ event times are in 1/1024 s**, and no integer `exp` expresses
+1/1024. An adapter must therefore difference in the field's own width first —
+section 5's rule, and what `ant_pages.delta_u16()` already does — accumulate
+exactly, and convert only at the moment of publication. Converting each reading
+and then differencing truncates once per event and drifts without bound;
+converting a bounded accumulator at publication has a total error of one
+millisecond, forever. `radiant-bridge.md` section 3.2 states the construction.
+
+**A gap this vocabulary had, and how it closed.** RR interval — the per-beat
+spacing HRV is computed from — is an *instantaneous* duration, and class
+`0x10-0x2F` had no time-interval type. `0x37` is in the accumulating class,
+where section 5 requires the accumulate bit. This document named `0x27` time
+interval, canonical unit s, as the type that would close it, and deliberately
+did **not** allocate it: the table is mirrored in `tools/ant_pages.py`, and a
+type that exists in one and not the other is exactly the drift the mirror exists
+to prevent. Allocate in both or in neither.
+
+**`0x27` is now allocated, in both.** The second user is what unblocked it — a
+CGM's reading-age field is the same quantity as an RR interval and shares none of
+its context (`docs/device-profiles.md` section 4). One user is an argument for a
+field; two unrelated users are the evidence that it is a *type*. `0x28`
+substance concentration landed in the same edit and for the same reason, and the
+rule that held `0x27` back for a release is unchanged and still worth obeying.
 
 ### Class 0x00-0x0F — boolean and state
 
@@ -691,6 +758,8 @@ rule 3.
 | `0x24` | percentage | % | Level Control / CurrentLevel (0..254) | — |
 | `0x25` | battery state of charge | % | Power Source / BatPercentRemaining (0.5%) | — |
 | `0x26` | heart rate | **bpm** (non-SI, exception) | *(no cluster; see below)* | — |
+| `0x27` | time interval | s | — | — |
+| `0x28` | substance concentration | mol/m^3 | — | — |
 
 **Diagnostic use of `0x10`, beyond a sensor node.** `radiant_radio_nrf.c` samples
 RSSI raw - nRF52840 errata 153 says the reading has a temperature-dependent
@@ -746,15 +815,54 @@ types that are never registered and never bridged.
 | Cumulative energy | `0x30` | 32 bits, exp 0, accumulate | 3600000 | 3.6 MJ | `3600000 / 3600` = 1000 mWh |
 | Door contact | `0x03` | 1 bit, exp 0 | 1 | open | StateValue = true |
 
-### Honest gap: not every type maps
+### Honest gap: not every type maps, and what the bridge does about it
 
 Heart rate is the motivating case for this whole envelope and Matter has **no
-heart-rate cluster**. The vocabulary says so in the table rather than inventing
-a mapping. The bridge therefore exposes `0x26` as a *rule input* — the thing an
-automation triggers on — while the Matter side of the smart-home case is the
-actuator: On/Off for the AC, Level Control for the lights. That asymmetry is
-the real shape of the feature, and pretending otherwise would mean shipping a
-vendor cluster that no Matter controller knows what to do with.
+heart-rate cluster** — no wearable device type, no vitals cluster, no attribute
+whose units are bpm. The vocabulary says so in the table rather than inventing a
+mapping. `0x26` is therefore a *rule input*: the thing an automation triggers
+on, while the Matter side of the smart-home case is the actuator — On/Off for
+the AC, Level Control for the lights. That asymmetry is the real shape of the
+feature.
+
+**The resolution, decided in
+[`decisions/0010-bridge-two-planes.md`](decisions/0010-bridge-two-planes.md).**
+An earlier version of this paragraph ended by rejecting "a vendor cluster that
+no Matter controller knows what to do with", which was right about the cluster
+and wrong to leave the number with nowhere to go. The answer is that the number
+does not travel Matter at all in the normative path:
+
+- The **values** travel MQTT over Thread, where the vocabulary maps cleanly and
+  completely — canonical unit to `unit_of_measurement`, the `accumulate` bit to
+  `state_class: total_increasing`, the sparse heartbeat to `expire_after`. A
+  self-describing envelope becomes a self-describing device, and the consuming
+  home automation platform needs no code written for it. This is the same
+  observation section 1 makes as an analogy, used as an implementation.
+- The **derived semantics** travel Matter as `0x02` occupancy — *heart rate
+  monitor worn*, *bike in use*, *at rest*, *training zone 2 or above* — because
+  those *are* expressible, and they are what an automation actually binds to.
+  Two of the four ask only whether an accumulating field is advancing, which
+  makes them correct without knowing anything about the person; section 5's
+  "the accumulator is authoritative" is what buys that.
+- A manufacturer-extension cluster carrying raw bpm exists for the no-broker
+  case and is explicitly second, for the reason the earlier paragraph gave: it
+  reaches a controller only once that controller's code learns it.
+
+**Which of those a user meets first is the opposite of the order above.** The
+Matter booleans need one QR scan and nothing installed, and the smart-home case
+of section 1 already works inside them; the MQTT values need a broker and a
+provisioning step. So the *fidelity* ranking here and the *friction* ranking a
+user experiences point in opposite directions, and both are correct. This
+document owns the first. `radiant-bridge.md` section 1 owns the second, and it
+is also where the reason lives: **Thread carries no device model at all**, so a
+bridge is invisible to a home automation platform until Matter gives it one.
+
+So the `—` in this table's Matter column is not a dead end. It means "this
+quantity leaves by the data plane", and a bridge that drops such a field is
+following a rule that no longer applies to it. The rule that still applies
+unchanged is `0x50` opaque and `0xF0..0xFF` vendor-private: **those** are
+dropped rather than mapped, on every plane, because they have no declared unit
+for any consumer to trust.
 
 ---
 
@@ -790,6 +898,39 @@ Therefore:
 - A receiver that can scan must not apply a search timeout to a sparse node.
 - The flag is in the descriptor precisely so this is a decision the receiver
   makes from data rather than from configuration.
+
+### The consequence for a combo device, and it is a radio fact
+
+**A receiver that also runs a second radio protocol on the same chip cannot
+scan, and therefore cannot bridge a sparse node.** This is not a scheduling
+preference and no amount of tuning removes it: continuous scan is ~100 % radio
+duty, and a Thread or BLE stack sharing that radio through MPSL timeslots gets
+what is left, which is nothing.
+
+The same arithmetic is what makes the *non*-sparse case workable. A tracked ANT
+channel at the ~4 Hz these profiles run is a window of roughly a millisecond —
+two guards of `RADIANT_CHANNEL_GUARD_MAX_US`, an 8-byte airtime and a ramp-up —
+so eight tracked sensors are about 3 % duty. The distinction that decides
+whether a combo device is possible is **scanning versus tracking**, not ANT
+versus anything else.
+
+**"Workable" and not "comfortable", because duty is only half the number.** Each
+of those windows is a *blackout* at a phase the other protocol cannot predict,
+and an 802.15.4 frame is long enough to be clipped by one: ~4 % duty costs ~18 %
+of full-size Thread frames. That is why a combo device may rebroadcast but may
+never route — its own losses are absorbed by retries, whereas a router's losses
+land on devices that have never heard of ANT.
+[`radiant-bridge.md`](radiant-bridge.md) section 7 does the arithmetic, states
+the acceptance gate, and
+[`decisions/0011-never-a-border-router.md`](decisions/0011-never-a-border-router.md)
+makes the role restriction normative. Nothing in it changes anything in this
+envelope; it constrains what a receiver may also be.
+
+The escape is already specified in this document and not yet built: the **sync
+handoff page `0x12`** of section 12 lets a second, ANT-only receiver hand over
+every parameter, so the combo device never sweeps. That turns sparse-plus-Thread
+from impossible into a two-box deployment, and it is the strongest argument yet
+for building the handoff *sender*.
 
 ### Two sub-modes
 
@@ -884,6 +1025,16 @@ Result codes:
 | `0x07` | report schema id | — |
 | `0x08-0x7F` | reserved | |
 | `0x80-0xFF` | vendor-private | |
+
+**The "Matter counterpart" column is the bridge's reverse path, and it is the
+only one.** A Matter `On/Off` write, an MQTT command topic and a host API call
+all land here, as page `0x10` with the idempotency rule below intact. A bridge
+does not get a command vocabulary of its own — the third column of this table
+*is* the mapping, in the same sense that section 7's Matter column is the
+mapping for values, and a second vocabulary would be a second thing to keep in
+agreement with this one. The consequence is worth stating positively: **the
+inbound half of the bridge was specified before the bridge was**, and adding a
+protocol to it adds rows to no table at all.
 
 ### Idempotency, stated as a rule
 
@@ -1093,6 +1244,11 @@ that project gets a second consumer for free.
 - **Any security switch turned on.** Every reservation in this document is
   populated with zeros in v1. Phase 7 turns them on; Phase 4 makes sure there
   is somewhere for them to go.
+- **`0x27` time interval, or any other addition to the section 7 vocabulary.**
+  Named there because the RR-interval gap is real; unallocated because this
+  table and `tools/ant_pages.py` are one table in two places, and a type in one
+  of them is drift rather than a feature. The bar for allocation is a change
+  that touches both plus their shared vectors.
 
 ---
 
@@ -1260,3 +1416,41 @@ so there is no space a four-byte epoch could quietly occupy, and adding one
 would require a third frame and a visible format change rather than an edit.
 `profile_handoff.c` states that as two `_Static_assert`s, which is where an
 author who reaches for the space finds out it is not there.
+
+---
+
+## 13. Where the bridge is specified, and what it may not do
+
+Like section 12, this section is outside the envelope and appended rather than
+inserted, for the same reason: the section numbers above are cited from the
+code.
+
+**Everything a receiver does after decoding one of these pages is
+[`radiant-bridge.md`](radiant-bridge.md)'s**, and the decision that shapes it is
+[`decisions/0010-bridge-two-planes.md`](decisions/0010-bridge-two-planes.md).
+That split exists because roughly half of a bridge — the sample bus, the sink
+registry, the binding table, the radio coexistence budget, the flash budget — is
+not about this envelope at all, and `docs/README.md` rule 1 says one fact lives
+in one place.
+
+What belongs *here* is the boundary, and it is three rules:
+
+1. **Nothing above the profile decoder may put a byte on the air.** Section 2's
+   amended rule 3. A bridge translates; it does not extend the format. If a
+   mapping needs a value no page carries, the answer is a new RadiANT field on a
+   RadiANT device type — a descriptor edit, which is what section 1 says this
+   envelope exists to make cheap.
+2. **The section 7 vocabulary is the bridge's input type, and its only one.**
+   Every profile decoder — RadiANT `0x60` and the ANT+ compatibility profiles
+   alike — produces `(type, value, exponent, kind)` records against that table.
+   A sink that needs to know which profile a value came from has been handed the
+   wrong interface.
+3. **The section 9 command vocabulary is the bridge's reverse path, and its
+   only one.** Every inbound protocol lands as page `0x10`, and the idempotency
+   rule of section 9 is what makes "turn on the AC" safe to retry across a
+   protocol translation that has no idea it is being retried.
+
+The three findings that came back from writing the bridge document — the amended
+rule 3, the resolution of section 7's honest gap, and the sparse-versus-scan
+consequence in section 8 — are recorded at those places rather than collected
+here, because that is where a reader hits them.

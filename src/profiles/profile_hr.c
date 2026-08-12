@@ -5,8 +5,10 @@
  * Provenance: the ANT+ Heart Rate Monitor device profile, as published in the
  * HRM sample documentation on thisisant.com - publicly retrievable, cited by
  * Colin on 2026-08-11 - by way of this repository's own two prior statements
- * of the same layouts: docs/ant-plus-profiles.md section "Heart Rate, device
- * type 0x78" (lines 150-206) and tools/ant_pages.py's five heart-rate
+ * of the same layouts: docs/device-profiles.md section "Heart Rate, device
+ * type 0x78" (formerly docs/ant-plus-profiles.md, absorbed into it; cited by
+ * section rather than by line number so the citation cannot silently drift)
+ * and tools/ant_pages.py's five heart-rate
  * encoders, which are the byte-for-byte reference this file is checked
  * against. ANT+ device profiles are open spec and implementable anywhere in
  * this library (fact 5 of docs/decisions/0008, amending
@@ -114,8 +116,8 @@ int profile_hr_encode_manufacturer(const struct profile_hr *hr, bool toggle,
 	 * sixteen. Different fields, different widths, one struct member each
 	 * so the truncation cannot happen silently. */
 	body3[0] = hr->cfg.manufacturer_id_8;
-	body3[1] = (uint8_t)(hr->cfg.serial_lsb & 0xFFu);
-	body3[2] = (uint8_t)((hr->cfg.serial_lsb >> 8) & 0xFFu);
+	body3[1] = (uint8_t)(hr->cfg.serial_upper16 & 0xFFu);
+	body3[2] = (uint8_t)((hr->cfg.serial_upper16 >> 8) & 0xFFu);
 	return hr_page(hr, PROFILE_HR_PAGE_MANUFACTURER, body3, toggle, out);
 }
 

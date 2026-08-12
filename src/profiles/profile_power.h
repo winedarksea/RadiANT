@@ -2,8 +2,11 @@
 /*
  * profile_power.h - ANT+ Bicycle Power, device type 0x0B.
  *
- * Provenance: docs/ant-plus-profiles.md lines 53-124 - "Bicycle Power, device
- * type 0x0B", the byte tables for pages 0x10 Standard Power Only, 0x11 Wheel
+ * Provenance: docs/device-profiles.md section "Bicycle Power, device type 0x0B"
+ * (formerly docs/ant-plus-profiles.md, which that document absorbed; the
+ * reference is by SECTION rather than by line number because line numbers in a
+ * living document silently stop pointing at what they cited) - the byte tables
+ * for pages 0x10 Standard Power Only, 0x11 Wheel
  * Torque, 0x12 Crank Torque and 0x20 Crank Torque Frequency, together with the
  * two power formulae. That document is this project's OWN prior clean-room
  * derivation, and its statement of provenance ("Facts and tables only. Every

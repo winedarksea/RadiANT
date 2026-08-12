@@ -230,7 +230,7 @@ meets in two years.
 |---|---|
 | Rev 5.1 | `protocol/ant_wire.yaml`, `docs/ant-serial-protocol.md` |
 | Rev 5.1 + rtl_433 facts + our own measurements | `docs/ant-radio-link.md`, every line provenance-tagged |
-| ANT+ profile documents | `src/profiles/`, `tools/ant_pages.py`, `docs/ant-plus-profiles.md` |
+| ANT+ profile documents | `src/profiles/`, `tools/ant_pages.py`, `docs/device-profiles.md` |
 | The shutdown announcement | The framing in `docs/preservation.md` and `docs/decisions/0002` |
 
 Those are in git. They build, they are tested, and they do not depend on

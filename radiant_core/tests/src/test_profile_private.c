@@ -477,7 +477,7 @@ static void hr_up(void)
 	cfg.id.sw_revision_supplemental = PROFILE_COMMON_INVALID_U8;
 	cfg.id.serial_number = PROFILE_COMMON_INVALID_U32;
 	cfg.manufacturer_id_8 = 0xFFu;
-	cfg.serial_lsb = 0x4553u;
+	cfg.serial_upper16 = 0x4553u;
 	cfg.model_number_8 = 1u;
 	cfg.hw_version = 1u;
 	cfg.sw_version = 1u;

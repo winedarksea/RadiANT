@@ -21,9 +21,13 @@ What it checks:
   * a device type with status `radiant` accounts for all 256 page numbers, and
     keeps 0x20-0x2F reserved for the security envelope - that reservation is
     the part of docs/radiant-security.md that cannot be retrofitted
-  * the page map in docs/radiant-telemetry.md and the registry's page rows for
-    the RadiANT device type agree, number for number and name for name
-  * the device type table in docs/ant-plus-profiles.md agrees with the registry
+  * EVERY device type with status `radiant` has a page map registered in
+    RADIANT_PAGE_MAPS, and that page map agrees with the registry's page rows
+    number for number and name for name - 0x60's in docs/radiant-telemetry.md,
+    each profile type's in docs/device-profiles.md. The relation is checked in
+    both directions, so a claimed type with no page map and a page map with no
+    claim are both errors
+  * the device type table in docs/device-profiles.md agrees with the registry
   * every device type and period that tools/ant_pages.py defines appears in the
     registry with the same period, so the registry cannot drift from the code
   * the common-page cadence stated in the docs still matches
@@ -60,7 +64,11 @@ REPO = Path(__file__).resolve().parent.parent
 
 REGISTRY = REPO / "docs" / "profile-registry.md"
 TELEMETRY = REPO / "docs" / "radiant-telemetry.md"
-ANT_PLUS = REPO / "docs" / "ant-plus-profiles.md"
+PROFILES = REPO / "docs" / "device-profiles.md"
+# Was docs/ant-plus-profiles.md, which docs/device-profiles.md absorbed. The
+# name is kept because it names the ROLE this path plays in the checks below -
+# it is where the ANT+ device type table lives - and that role did not move.
+ANT_PLUS = PROFILES
 SECURITY = REPO / "docs" / "radiant-security.md"
 ANT_PAGES = REPO / "tools" / "ant_pages.py"
 RADIANT_CRYPTO = REPO / "tools" / "radiant_crypto.py"
@@ -121,6 +129,12 @@ ANT_PAGES_TYPES = [
     ("BSC_CADENCE_DEVICE_TYPE", "BSC_CADENCE_PERIOD"),
     ("BSC_COMBINED_DEVICE_TYPE", "BSC_COMBINED_PERIOD"),
     ("HRM_DEVICE_TYPE", "HRM_PERIOD"),
+    # The profile device types. 0x60 is absent from this list on purpose - its
+    # period is per-node and announced in the descriptor, so there is no number
+    # to agree on. A profile type FIXES a period, which is most of what a
+    # profile is for, so both of these do have one and it is checked.
+    ("CGM_DEVICE_TYPE", "CGM_PERIOD"),
+    ("FAN_DEVICE_TYPE", "FAN_PERIOD"),
 ]
 
 # Device types whose registry Period column records a DEFAULT out of a permitted
@@ -420,26 +434,60 @@ def check_pages(path, header, rows, types, problems) -> dict:
     return per_type_rows
 
 
-def check_pagemap(types, per_type_rows, problems) -> None:
-    tables = read_tables(TELEMETRY, problems)
-    if "pagemap" not in tables:
-        problems.add(TELEMETRY, 0, "no <!-- radiant-registry: pagemap --> table")
-        return
-    header, rows = tables["pagemap"]
-    if not require_columns(TELEMETRY, "pagemap", header, PAGEMAP_COLUMNS,
-                           problems):
-        return
+# Every device type with status `radiant` owes a page map, and this says where
+# each one's lives. It used to be an assertion that there was exactly ONE such
+# type, with a message telling the next person to extend this function; the
+# profile device types of docs/device-profiles.md are that moment arriving.
+#
+# The page map is not in one file because the two documents own different
+# things: 0x60 IS the envelope and its map belongs with it, while a profile type
+# is the envelope plus a pinned schema and belongs with the other profiles. A
+# claim with no entry here fails loudly rather than going unchecked, which is
+# the half that matters - an unchecked page map is how a registry and a
+# specification drift apart in the first place.
+RADIANT_PAGE_MAPS = {
+    0x60: (TELEMETRY, "pagemap"),
+    0x61: (PROFILES, "pagemap-0x61"),
+    0x62: (PROFILES, "pagemap-0x62"),
+}
 
-    radiant = [device_type for device_type, row in types.items()
-               if row.get("status").lower() == "radiant"]
-    if len(radiant) != 1:
-        problems.add(REGISTRY, 0,
-                     "expected exactly one device type with status 'radiant', "
-                     "found %d; extend check_pagemap() to say which one the "
-                     "page map in docs/radiant-telemetry.md belongs to"
-                     % len(radiant))
+
+def check_pagemap(types, per_type_rows, problems) -> None:
+    radiant = sorted(device_type for device_type, row in types.items()
+                     if row.get("status").lower() == "radiant")
+    for device_type in radiant:
+        if device_type not in RADIANT_PAGE_MAPS:
+            problems.add(REGISTRY, types[device_type].line,
+                         "device type 0x%02X has status 'radiant' but no page "
+                         "map is registered for it; add it to "
+                         "RADIANT_PAGE_MAPS in "
+                         "scripts/check_profile_registry.py naming the document "
+                         "and marker that hold its page map" % device_type)
+            continue
+        path, marker = RADIANT_PAGE_MAPS[device_type]
+        check_one_pagemap(device_type, path, marker, per_type_rows, problems)
+
+    for device_type in sorted(RADIANT_PAGE_MAPS):
+        if device_type not in radiant:
+            path, marker = RADIANT_PAGE_MAPS[device_type]
+            problems.add(REGISTRY, 0,
+                         "RADIANT_PAGE_MAPS expects a page map for device type "
+                         "0x%02X at marker '%s' in %s, but no device-type row "
+                         "claims 0x%02X with status 'radiant'"
+                         % (device_type, marker,
+                            path.relative_to(REPO), device_type))
+
+
+def check_one_pagemap(device_type, path, marker, per_type_rows, problems) -> None:
+    tables = read_tables(path, problems)
+    if marker not in tables:
+        problems.add(path, 0, "no <!-- radiant-registry: %s --> table, which is "
+                     "where device type 0x%02X's page map belongs"
+                     % (marker, device_type))
         return
-    device_type = radiant[0]
+    header, rows = tables[marker]
+    if not require_columns(path, marker, header, PAGEMAP_COLUMNS, problems):
+        return
 
     registry_map = {}
     for row in per_type_rows.get(device_type, []):
@@ -448,31 +496,31 @@ def check_pagemap(types, per_type_rows, problems) -> None:
 
     doc_map = {}
     for row in rows:
-        require_non_empty(TELEMETRY, row, PAGEMAP_COLUMNS, problems)
+        require_non_empty(path, row, PAGEMAP_COLUMNS, problems)
         key = row.get("page").lower()
         if key in doc_map:
-            problems.add(TELEMETRY, row.line, "page %r appears twice"
+            problems.add(path, row.line, "page %r appears twice"
                          % row.get("page"))
         doc_map[key] = (row.get("page"), row.get("name"), row.line)
 
     for key, (shown, name) in sorted(registry_map.items()):
         if key not in doc_map:
-            problems.add(TELEMETRY, 0,
+            problems.add(path, 0,
                          "page %s is claimed for device type 0x%02X in "
-                         "docs/profile-registry.md but is missing from the page "
-                         "map" % (shown, device_type))
+                         "docs/profile-registry.md but is missing from the "
+                         "'%s' page map" % (shown, device_type, marker))
         elif doc_map[key][1] != name:
-            problems.add(TELEMETRY, doc_map[key][2],
-                         "page %s is named %r here and %r in "
-                         "docs/profile-registry.md"
-                         % (shown, doc_map[key][1], name))
+            problems.add(path, doc_map[key][2],
+                         "page %s of device type 0x%02X is named %r here and "
+                         "%r in docs/profile-registry.md"
+                         % (shown, device_type, doc_map[key][1], name))
 
     for key, (shown, name, line) in sorted(doc_map.items()):
         if key not in registry_map:
-            problems.add(TELEMETRY, line,
-                         "page %s is in the page map but is not claimed for "
-                         "device type 0x%02X in docs/profile-registry.md"
-                         % (shown, device_type))
+            problems.add(path, line,
+                         "page %s is in the '%s' page map but is not claimed "
+                         "for device type 0x%02X in docs/profile-registry.md"
+                         % (shown, marker, device_type))
 
 
 def check_ant_plus_doc(types, problems) -> None:
@@ -1032,7 +1080,7 @@ def check_compat_allocation(per_type_rows, problems) -> None:
             problems.add(REGISTRY, row.line,
                          "device type 0x%02X claims page %r, but it has no "
                          "page-number byte at all; see docs/decisions/0008 and "
-                         "docs/ant-plus-profiles.md"
+                         "docs/device-profiles.md"
                          % (NO_ADDITIONAL_PAGE_TYPE, row.get("page")))
 
 
@@ -1301,8 +1349,9 @@ def main() -> int:
     claimed = sum(1 for row in types.values()
                   if row.get("status").lower() != "ant-plus-reserved")
     print("profile registry: %d device type(s) recorded, %d claimed by RadiANT "
-          "or third parties, page maps agree with docs/radiant-telemetry.md and "
-          "periods agree with tools/ant_pages.py" % (len(types), claimed))
+          "or third parties, %d page map(s) agree with the registry and periods "
+          "agree with tools/ant_pages.py"
+          % (len(types), claimed, len(RADIANT_PAGE_MAPS)))
     return 0
 
 

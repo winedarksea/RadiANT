@@ -2,7 +2,8 @@
 /*
  * profile_common.c - ANT+ common pages 80, 81 and 82.
  *
- * Provenance: docs/ant-plus-profiles.md section "Common pages" and its mirror
+ * Provenance: docs/device-profiles.md section "Common pages" (formerly
+ * docs/ant-plus-profiles.md, absorbed into it) and its mirror
  * in tools/ant_pages.py (encode_common_80/81/82), which are this project's own
  * prior derivation. See the header for the full note and for why the serial
  * number's sentinel is a privacy rule rather than a convenience.

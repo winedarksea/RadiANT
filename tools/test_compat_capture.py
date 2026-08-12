@@ -108,7 +108,7 @@ def reencode_hr(payload: bytes) -> bytes:
         return ap.encode_hr_cumulative_time(got["operating_time"], **tail)
     if page == ap.PAGE_HR_MANUFACTURER:
         return ap.encode_hr_manufacturer(got["manufacturer_id"],
-                                         got["serial_lsb"], **tail)
+                                         got["serial_upper16"], **tail)
     if page == ap.PAGE_HR_PRODUCT:
         return ap.encode_hr_product(got["hw_version"], got["sw_version"],
                                     got["model_number"], **tail)

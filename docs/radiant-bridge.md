@@ -1,0 +1,1147 @@
+# The RadiANT bridge: ANT to Thread, Matter and BLE
+
+Checked by: nothing — treat as narrative. Every byte layout this document
+mentions is owned by [`radiant-telemetry.md`](radiant-telemetry.md) and checked
+there; what is *here* is architecture. The one claim in it a machine can settle
+is the coexistence gate of section 7, and that is a bench measurement which has
+not been taken.
+
+The normative decision this document implements is
+[`decisions/0010-bridge-two-planes.md`](decisions/0010-bridge-two-planes.md).
+Where the two disagree, the ADR wins.
+
+---
+
+## 1. What this is, and the one decision it turns on
+
+[`radiant-telemetry.md`](radiant-telemetry.md) section 1 names the motivating
+case: **a heart-rate strap driving a smart home** — elevated BPM turns on the
+AC, resting HR dims the lights. That document specifies how the number gets on
+the air. This one specifies what happens after it comes off.
+
+The commercial extension of the same shape is workers or event attendants
+wearing ordinary ANT+ straps, with a building responding to the population
+rather than to a person. That is section 10, and it is deferred rather than
+dropped, because two of its constraints have to be in the design from v1 or they
+cannot be added later.
+
+### The decision everything else follows from
+
+Section 7 of the envelope states the gap honestly: **Matter has no heart-rate
+cluster.** There is no wearable device type, no vitals cluster, and no
+attribute whose units are bpm. That is not a gap in our mapping table; it is a
+gap in the Matter Device Library, and it is not ours to close.
+
+The tempting move is to close it anyway with a manufacturer-extension cluster
+and declare the problem solved. That is wrong as a *primary* path, because a
+custom cluster is invisible to every controller until that controller's code
+learns it — which for Home Assistant means a change to `python-matter-server`
+or a custom component. "Your heart rate is in Matter, you just cannot see it"
+is not a feature.
+
+So the bridge is **two planes over one Thread network**:
+
+| Plane | Carries | Transport | Consumer |
+|---|---|---|---|
+| **Data** | the numbers: bpm, beat accumulator, RR interval, RSSI, battery | MQTT over Thread | Home Assistant via MQTT Discovery — no custom code |
+| **Control** | the *derived* semantics: worn, in use, at rest, training zone 2+ — plus the actuator commands | Matter, as occupancy | HA / Apple / Google, or a direct device binding with no hub in the path |
+
+This is not a workaround. Matter is a **device** model: it wants to be told
+"this endpoint is a thermostat". Heart rate is not a device, it is a
+measurement stream, and MQTT is the model that fits a measurement stream. The
+envelope's own opening analogy — *MQTT with the broker deleted* — makes the
+bridge the exact place where the broker gets put back:
+
+| Envelope | MQTT |
+|---|---|
+| field ID | topic suffix |
+| descriptor page, re-broadcast every 121 messages | retained discovery message |
+| accumulating field | a monotone counter with `state_class: total_increasing` |
+| `0x60` node, self-describing | a discovered device, self-describing |
+
+The descriptor **is** the discovery message. Section 9 is mostly a transcription.
+
+### Thread has no device model, and this is the most load-bearing fact here
+
+**Thread is IPv6 over 802.15.4 plus mesh routing. That is the whole of it.** It
+is the peer of Wi-Fi and Ethernet, not of Zigbee. Joining a Thread network
+yields an IPv6 address and a route — no device identity, no capability
+description, no registry, nothing that could "appear" in a controller.
+
+| Layer | Thread | Matter |
+|---|---|---|
+| What it is | network: IPv6, mesh routing, 802.15.4 | application: device types, clusters, attributes, commissioning |
+| What joining gets you | an address | an entry in the controller's device registry |
+| Does Home Assistant list it? | **no** — HA's Thread panel shows border routers and datasets, not nodes | **yes**, and this is the only thing that does |
+
+Two consequences that between them decide the whole product shape:
+
+1. **A Thread node is invisible without Matter.** Home Assistant surfaces only
+   discoveries it has an integration manifest for, so a device advertising a
+   service HA does not recognise is not an "unknown device" a user could choose
+   to ignore — there is no inbox. It is simply absent.
+2. **You cannot join a Thread network unaddressed.** Thread is
+   cryptographically closed: a node needs the operational dataset — network key,
+   channel, PAN ID — before it may transmit at all. There is no "permit join"
+   that admits an unknown node. Thread is closer to Wi-Fi than to Zigbee.
+
+**SRP is the part that genuinely is automatic, and it is findability rather than
+identity.** A Thread 1.2+ node registers its services with the border router's
+SRP server, which republishes them as DNS-SD on the LAN. That is how a Matter
+device announces itself to a commissioner. It makes a node *findable*; only
+Matter makes it *meaningful*.
+
+### So Matter commissioning is mandatory, not an optimisation
+
+Of the three ways onto a Thread network — Matter commissioning, Thread's native
+joiner flow, and out-of-band provisioning — only the first is something a
+household will complete, and Home Assistant exposes no UI for commissioning
+non-Matter devices at all. **A build whose data plane is entirely MQTT still
+needs the Matter stack, because Matter commissioning is how it reaches the
+network its MQTT runs over.**
+
+This used to be written as "Matter earns its flash", which was too weak. It is
+not an argument for keeping Matter; it is the reason Matter is load-bearing
+rather than additive.
+
+**One escape exists and it is deliberate.** Out-of-band provisioning — the
+WebSerial page of section 9.0a writing the Thread operational dataset directly,
+which Home Assistant will export from its Thread panel — produces a **Matterless
+MQTT build**. That build is not household-friendly: it trades a QR scan for a
+technical setup step, and it forfeits tier 1 entirely, since without Matter
+there is nothing for Home Assistant to list. What it buys is a very large amount
+of flash, which is what makes it the nRF52840's escape hatch in section 11.
+Named here so that "Matter is mandatory" is understood as a statement about
+product experience rather than about physics.
+
+### The two tiers, and the first one is the default
+
+The plane split above is about *fidelity*. The tier split is about *friction*,
+and it is what a user actually experiences:
+
+| Tier | User does | What appears | Needs |
+|---|---|---|---|
+| **1 — Matter occupancy** | scan the QR code | four `binary_sensor`s: *heart rate monitor worn*, *bike in use*, *at rest*, *training zone 2 or above* | **nothing further.** Ships with HA |
+| **2 — MQTT values** | tier 1, then install the Mosquitto add-on and provision credentials | `sensor`, bpm, correct units, device registry, history | one first-party add-on |
+
+**Tier 1 is the out-of-box experience and the headline feature works entirely
+inside it.** One QR scan and those four are in Home Assistant with nothing
+installed — enough to drive the fan or the AC, which is the whole motivating
+case of `radiant-telemetry.md` section 1. Tier 2 is the opt-in "I want the
+number in bpm" step.
+
+Two of the four are **correct by construction** — they ask only whether an
+accumulator is advancing, so they need no calibration and cannot be wrong about
+a stranger. The other two use a standard-human prior that personalises itself if
+storage allows. Section 6 is the whole of it, and section 8.1 is the endpoint
+model.
+
+That ordering is a change of emphasis, not of architecture.
+[`decisions/0010-bridge-two-planes.md`](decisions/0010-bridge-two-planes.md)
+makes MQTT normative **for values** and that is unchanged; what this adds is
+that Matter is normative **for first run**, and the two were never in tension.
+Survivability points the same way: the derived booleans reach an automation with
+the broker down, and with the hub down entirely if client binding (section 8.4)
+is in use.
+
+---
+
+## 2. The structural rule this inherits, and how it was amended
+
+[`radiant-telemetry.md`](radiant-telemetry.md) section 2 rule 3 used to read
+"the Matter/Zigbee bridge runs **on the host or the gateway**, never over the
+air." That conflated two separate things, and this document is why the
+distinction now matters:
+
+- **"Never over the air" is the invariant, and it is unchanged.** A Matter
+  cluster ID, an attribute ID, a ZCL identifier or an MQTT topic string never
+  appears in an ANT frame. A RadiANT field ID does, and something translates.
+  This is what protects a Garmin head unit, and it is absolute.
+- **"On the host or the gateway" was never the invariant.** It was a statement
+  about where the translation happened to run in v1. A combo node running
+  `radiant_core` + OpenThread on one chip translates in exactly the same place
+  in the *logical* stack — above the profile decoder, below the network — and
+  the fact that it is the same die changes nothing on the air.
+
+The amended rule 3 separates them. Everything in this document sits strictly
+above the profile decoder, and nothing in it may add a byte to an ANT frame.
+
+---
+
+## 3. The sample bus
+
+**Every radio input decodes into the section 7 vocabulary before anything else
+sees it.** This is the keystone, and it is what makes each new sink cost one
+file instead of one file per profile per sink.
+
+```
+ANT+ 0x78 heart rate ──┐                              ┌── USB / ANT serial
+ANT+ 0x0B, 0x11, ...  ─┤                              ├── MQTT over Thread
+RadiANT 0x60          ─┼──► sample bus ──► rules ──►  ├── Matter
+  (descriptor-driven)  │                     │        ├── BLE
+derived / rule output ─┘◄────────────────────┘        └── local GPIO
+```
+
+The record is what the envelope already defines, made concrete:
+
+```c
+struct radiant_sample {
+	uint32_t source;      /* binding index — NOT a device number; see §5 */
+	uint8_t  field_id;    /* stable within source */
+	uint8_t  field_type;  /* the §7 vocabulary: 0x26 heart rate, 0x36 count */
+	uint8_t  flags;       /* ACCUMULATING | DERIVED | STALE */
+	int8_t   exp;         /* value_SI = raw * 10^exp, in the type's unit */
+	int64_t  raw;
+	uint64_t t_us;        /* the t_sync that produced it, not the queue time */
+};
+```
+
+Three properties are load-bearing.
+
+### 3.1 ANT+ profiles are vocabulary producers too
+
+Section 7's claim that the Matter mapping is "mechanical rather than bespoke"
+currently holds only for RadiANT device types, because only those carry a
+descriptor. Routing the ANT+ compatibility profiles through the same vocabulary
+is the single change that extends the claim to the profiles people actually
+own, and it costs one adapter per profile — not one per profile per sink.
+
+An ANT+ heart rate page 0 becomes three bus records, not one:
+
+| ANT+ field | Vocabulary type | Kind |
+|---|---|---|
+| computed heart rate (byte 7) | `0x26` heart rate, bpm | instantaneous |
+| heart beat count (byte 6) | `0x36` event count | **accumulating**, u8, wraps |
+| heart beat event time (bytes 4–5) | `0x37` duration, s | **accumulating**, u16, 1/1024 s |
+
+That third row is the interesting one, and it exposes a real trap.
+
+### 3.2 The 1/1024 s trap, stated because it will otherwise be found twice
+
+The vocabulary's scale is **decimal** — `value_SI = raw * 10^exp` — and ANT+
+event times are in **1/1024 s**. There is no integer `exp` that expresses
+1/1024. So an adapter cannot simply relabel the ANT+ accumulator and hand it
+over; it has to convert, and converting an accumulator is where the mistake
+lives.
+
+The wrong construction is to convert each reading and then difference:
+`(raw_t * 1000 / 1024) - (raw_prev * 1000 / 1024)` accumulates a truncation
+error per event and drifts without bound.
+
+The right one is to difference in the field's own width first — exactly as
+section 5 of the envelope requires and `ant_pages.delta_u16()` already does —
+accumulate exactly, and convert only at publication:
+
+```
+acc_1024 += delta_u16(t, t_prev);            /* exact, u64, never converted */
+sample.raw = (acc_1024 * 1000) / 1024;       /* computed fresh each time */
+sample.exp = -3;                             /* milliseconds */
+```
+
+The error is then bounded at one millisecond *total*, forever, instead of one
+truncation *per beat*. Any adapter converting a non-decimal ANT+ unit into the
+vocabulary follows this shape, and the ones that need it today are event time
+(1/1024 s), and the 1/2048 s variants some profiles use.
+
+**The vocabulary has no instantaneous time-interval type.** RR interval — the
+per-beat spacing that HRV is computed from — is an instantaneous duration, and
+class `0x10-0x2F` has no entry for it; `0x37` is in the accumulating class and
+section 7 requires the accumulate bit there. A type such as `0x27` time
+interval, canonical unit s, would close it. **It is proposed here, not
+allocated**: the vocabulary table in `radiant-telemetry.md` is mirrored in
+`tools/ant_pages.py`, and a type allocated in one and not the other is exactly
+the drift the mirror exists to prevent. Allocate both together or neither.
+
+### 3.3 The bus is a queue, and it drops rather than blocks
+
+**No sink ever runs in the radio callback.** A Thread retransmission, a TLS
+handshake or a flash write that delays an ANT receive window turns into packet
+loss on a link whose real floor is around 0.4 % — a number this bench has
+characterised precisely enough that a regression would be visible and
+misattributed.
+
+So the decoder writes into a ring buffer and returns. A bridge work queue
+drains it. The buffer **drops oldest and counts the drops**, and the drop
+counter is itself published as a `0x36` event count on a reserved
+diagnostics binding. A sink that cannot keep up must be visible as a number,
+not as a gap.
+
+`t_us` is captured at `t_sync`, not at dequeue, so a sink can still report when
+a sample was *heard* however long it waited.
+
+---
+
+## 4. Sinks
+
+A sink is a registration, not a case in a switch:
+
+```c
+struct radiant_sink {
+	const char *name;
+	bool (*want)(const struct radiant_sample *s);
+	void (*publish)(const struct radiant_sample *s);
+	void (*binding_changed)(uint32_t source, const struct radiant_binding *b);
+};
+
+RADIANT_SINK_DEFINE(mqtt_sink, ...);   /* STRUCT_SECTION_ITERABLE under the hood */
+```
+
+This is the same shape `profile_sched.c` already uses for its client seam — a
+registered callback getting first refusal — and the consistency is deliberate:
+one plugin idiom in the tree, not two.
+
+Consequences worth naming:
+
+- **Adding the BLE sink touches zero lines of ANT code.** That is the test of
+  whether the seam is in the right place.
+- **A build without Thread does not link the MQTT sink.** Kconfig selects the
+  sink set per image, and an image that selects no sink but USB is exactly
+  today's dongle firmware with a bus in the middle — which is why phase 1 of
+  section 12 is a pure refactor with no radio risk.
+- **`binding_changed` exists so a sink can be declarative.** The MQTT sink
+  publishes its retained discovery message from it; the Matter sink adds or
+  removes an endpoint. Neither polls.
+
+---
+
+## 5. Binding and identity
+
+**Nothing downstream may key on an ANT device number.** It is 16 bits, it is
+re-rollable by design (identity Tier 0, `docs/radiant-security.md` section 4),
+and an MQTT topic or a Matter endpoint has to survive a battery change and a
+re-pair. Worse, a device number collision across two straps in the same room is
+a one-in-65535 event that will happen at a trade show.
+
+The binding table is the pivot, and it is persisted:
+
+```
+binding[i] = {
+	devnum, devtype, trans_type,   /* what to track */
+	label,                         /* what a human calls it */
+	uuid,                          /* stable across a re-roll and a re-pair */
+	policy,                        /* thresholds, publish intervals, consent */
+}
+```
+
+- `i` is what the bus carries as `source`. Every topic, endpoint and rule hangs
+  off it, and none of them ever see a device number.
+- `uuid` is generated at first bind and **survives a re-pair of the same
+  physical strap**, which is how a HA entity keeps its history when the user
+  replaces a CR2032 and the strap re-rolls. Matching a re-paired strap back to
+  its `uuid` is a user action, not an inference — the bridge offers the last
+  binding with the same label and lets a human confirm.
+- Table capacity sizes the Matter endpoint count, the ANT tracked-channel count
+  and the coexistence budget of section 7 **together**. Eight for the household
+  SKU. Raising it is a radio decision before it is a memory decision.
+
+### Binding is explicit and opt-in, always
+
+A bridge never ingests a sensor it was not told to. This is stated here as an
+architecture rule rather than a privacy footnote because it is also what makes
+the radio budget hold: promiscuous ingest means continuous scan, and section 7
+shows continuous scan is the one mode that cannot coexist with Thread.
+
+The privacy rule and the radio rule are the same rule, which is a good sign.
+
+---
+
+## 6. The rule evaluator
+
+Ship the raw number *and* a derived boolean, and evaluate the boolean **on the
+dongle**. Three reasons:
+
+1. Matter has no other way to carry the signal at all (section 1).
+2. The automation keeps working when the hub reboots, the broker restarts, or
+   Wi-Fi drops. "The AC did not come on because Home Assistant was updating" is
+   the failure this design is supposed to make impossible.
+3. The commercial case needs aggregation to happen *before* the data leaves the
+   device, which means the aggregating step cannot live in the hub.
+
+**Derived outputs re-enter the bus** as ordinary `struct radiant_sample`
+records with `DERIVED` set, so they reach every sink through the same path and
+no sink needs to know a rule engine exists. All four outputs below are type
+`0x02` occupancy.
+
+### 6.1 Activity: is an accumulator advancing?
+
+The two activity outputs are one rule applied twice, not two rules:
+
+> **A sensor is *active* when its accumulating field is advancing.**
+
+| Output | Accumulator | Active means |
+|---|---|---|
+| heart-rate monitor worn | `0x36` beat count | beats are arriving — worn, and reading a pulse |
+| bike in use | `0x30` energy | work is being done — pedalling |
+
+Cadence (`0x35`) and speed (`0x34`) fall out of the same rule for free and are
+**not** enabled in v1: power and heart rate are the deployment, and an output
+nobody consumes is an endpoint to maintain.
+
+**Use the accumulator, never the instantaneous value.** "Instantaneous power
+> 0" seems equivalent and is not: instantaneous power is zero every time the
+rider coasts, so that boolean drops out at every descent and every traffic
+light. `delta(acc_energy) > 0` over a window does not. This is
+`radiant-telemetry.md` section 5's "the accumulator is authoritative" earning
+itself a third time.
+
+**The dwell is asymmetric**: ~2 s to assert, ~20 s to clear. Many power meters
+and trainers keep transmitting zeros for some time after the rider stops, and a
+symmetric dwell either chatters on the leading edge or lags badly on the
+trailing one.
+
+These two are **correct by construction**. They need no calibration, no prior
+and no knowledge of the person, which is why they are what tier 1 ships
+(section 1) and why they are the defaults rather than any intensity threshold.
+
+Liveness follows the envelope's own rule: a heartbeat interval exists precisely
+so that "no data" is never silent (`radiant-telemetry.md` section 8). A sink
+publishes `STALE` after `3 x` the expected interval, which clears the activity
+output and — because 6.2's zone outputs are gated on it — clears those too.
+
+### 6.2 Zones: a standard-human prior, optionally personalised
+
+The two zone outputs answer "is this person working hard, or clearly resting?"
+
+| Output | Occupied when |
+|---|---|
+| at rest | monitor worn **and** HR below the rest threshold |
+| training, zone 2 or above | monitor worn **and** HR at or above the Z2 threshold |
+
+**Both require the monitor to be worn.** A strap on a table reads no pulse, and
+a bridge that reported "at rest" for it would switch the air conditioning off in
+the middle of a workout. That is the single most likely real-world failure of
+the headline feature and it costs one `&&`.
+
+Thresholds come from Karvonen (heart-rate reserve) rather than percent-of-max,
+because the estimator produces both endpoints anyway and HRR is the less
+sensitive of the two models to differences in resting heart rate:
+
+```
+HRR       = HR_max - HR_rest
+rest      < HR_rest + 0.15 x HRR
+zone 2+   >= HR_rest + 0.60 x HRR
+```
+
+With the population prior for an adult of unknown age and fitness —
+`HR_max ~ N(180, 15^2)`, `HR_rest ~ N(65, 10^2)` — that is **HRR = 115, rest
+below 82 bpm, zone 2 and above at 134 bpm**. Those two numbers are what a
+never-personalised bridge ships with, and they are good enough to separate a
+hard workout from clear rest, which is the whole use case. Nothing here claims
+to be a training tool.
+
+`hysteresis` and `dwell_s` still apply and are not polish: a 4 Hz stream
+crossing a bare threshold produces a boolean that chatters several times a
+second, and a Matter report or an MQTT publish per chatter is how a bridge
+becomes the noisiest device on the network.
+
+**There is no confidence gate.** An earlier draft proposed withholding the
+personalised thresholds until an observation count cleared a floor. It is not
+worth the state or the branch: the prior alone already separates heavy work from
+rest, so a half-converged posterior is never worse than the thing it replaces,
+and the failure mode a gate would prevent — a wrong threshold flipping a
+boolean — is already handled by hysteresis and dwell.
+
+### 6.3 The optional personalisation, and why it is 76 bytes
+
+A per-binding histogram of observed non-zero heart rates, from which the two
+endpoints are estimated:
+
+| Property | Value |
+|---|---|
+| Range | 30–220 bpm |
+| Bin width | 5 bpm → **38 bins** |
+| Counter | `uint16`, saturating |
+| **Cost** | **76 bytes per personalised binding** |
+
+```
+HR_max estimate  = p99(histogram)
+HR_rest estimate = p01(histogram)
+```
+
+each folded into the prior by a conjugate normal update — two scalars per
+parameter, no matrix, no floating point required:
+
+```
+posterior = (prior/prior_var + obs/obs_var) / (1/prior_var + 1/obs_var)
+```
+
+Quantile interpolation within a bin gives sub-5-bpm threshold resolution, so the
+coarse bins do not quantise the answer.
+
+**Forgetting is free.** When any bin reaches its ceiling, halve every bin. That
+is exponential decay with no extra state and one pass over 76 bytes. At ~1 Hz
+decimated sampling a `uint16` saturates after ~18 hours in a single bin, which
+puts the forgetting timescale at weeks-to-months of sessions — about right for
+tracking real fitness change, and slow enough that a single bad session does not
+move anything.
+
+**A histogram rather than a running min/max, and the reason is artifacts.**
+Chest straps produce spurious readings routinely: dry electrodes at the start of
+a session, EMI, and cadence-lock where the reading latches onto pedalling rate.
+One 240 bpm artifact destroys a running maximum permanently; a p99 does not
+notice it. This is a failure that would otherwise be found months after
+shipping.
+
+**Prior-only is `n = 0` of this same path, not a second implementation.** That
+is the whole reason the estimator is shaped this way. It means the output
+semantics never change, no Matter endpoint moves when personalisation is
+enabled, cold start needs no special case, and — see below — running out of
+storage is a graceful degradation rather than an error.
+
+### 6.4 The histogram store is capped, and eviction is not a failure
+
+**A gym may see thousands of heart-rate monitors.** The binding table is capped
+and opt-in (section 5), so thousands of *bound* sensors is not the concern; the
+concern is that any deployment which raises that cap would otherwise raise the
+histogram store with it, at 76 bytes a time, with no ceiling stated anywhere.
+
+So the store is capped independently:
+
+- `CONFIG_RADIANT_BRIDGE_HR_PROFILES` slots, default **8** — 608 bytes.
+- Allocation is **least-recently-active eviction**. A binding that has not been
+  active longest gives up its slot.
+- A binding with no slot uses the prior. It does not fail, does not error and
+  does not change any endpoint's meaning.
+- **Zero slots is a legal configuration**, and it is the default in
+  aggregate-only builds (section 10), where the bridge is deliberately not
+  modelling individuals at all.
+
+That graceful path exists only because 6.3 made prior-only the `n = 0` case. A
+design with two implementations would have had to choose between a hard cap and
+an allocation failure.
+
+### 6.5 Persistence, and what it is keyed to
+
+The histogram is worthless if it does not survive a reboot, so it reaches NVM —
+but **written on session end**, when the activity output of 6.1 clears, not
+continuously. That is a few writes a day rather than thousands, which is what
+keeps it kind to the part.
+
+It keys on `binding_uuid` (section 5) and **never** on the ANT device number, or
+a coin-cell change discards months of convergence. Two people sharing one strap
+corrupt each other's estimate; the answer is a per-binding reset, not an
+inference.
+
+### 6.6 One honest bias, recorded rather than corrected
+
+**A chest strap is worn during exercise, not all day.** The observed
+distribution is therefore truncated, and `p01` is not resting heart rate — it is
+the lowest heart rate seen during a warm-up. It will read high, plausibly by
+10–20 bpm.
+
+This is accepted rather than corrected. Sampling the low quantile only from the
+first 60 s of a session would reduce it and would add session-boundary state to
+do so. What the biased estimate actually produces is "calm, for this person,
+during a session", which is what an automation wants from a boolean called *at
+rest* anyway. The bias is one-directional and known, which makes it a
+documented property rather than an error.
+
+### Publish pacing
+
+Never at the rate the strap transmits. Every sink obeys a
+change-or-heartbeat contract — `publish if (changed by more than deadband) or
+(max_interval elapsed)`, floored by `min_interval`. ~4 Hz into MQTT is 345,000
+messages a day per strap, and Matter's attribute reporting has its own
+minimum-interval negotiation that a 4 Hz writer simply violates.
+
+---
+
+## 7. Radio coexistence — the constraint that decides whether this exists
+
+This section is the go/no-go, and it is independent of everything above it.
+
+### 7.1 The MPSL backend is a hard prerequisite
+
+On nRF, OpenThread's `nrf_802154` driver and `radiant_radio_nrf.c` both want
+RADIO exclusively. That is the same collision [`backends.md`](backends.md)
+already guards for Bluetooth with `BUILD_ASSERT(!IS_ENABLED(CONFIG_BT))`, and
+802.15.4 is not different in kind. **There is no shortcut**: a Thread-capable
+bridge builds on `radiant_radio_nrf_mpsl.c`, which is Phase 6b.
+
+`backends.md` should carry the matching build assert for
+`CONFIG_NET_L2_OPENTHREAD` on the direct backend, for the same reason it
+carries the one for `CONFIG_BT` — two stacks each believing they own RADIO do
+not announce themselves, they just lose packets.
+
+### 7.2 The insight that makes single-chip survivable
+
+The instinct is that an always-on ANT receiver plus an always-on Thread device
+cannot share one radio. The arithmetic says otherwise, and the distinction is
+not between ANT and Thread — it is between **scanning** and **tracking**.
+
+A tracked ANT slot is a narrow window:
+
+```
+window = 2 x guard  +  frame airtime  +  ramp-up
+       = 2 x 400 us +  ~150 us        +  ~40 us    ~=  1.0 ms
+```
+
+`RADIANT_CHANNEL_GUARD_MAX_US` is 400 µs (`radiant_channel.h`), and that is the
+*widest* the guard ever gets — the residual estimator narrows it on a
+well-behaved link. ~150 µs is the 8-byte airtime at 1 M that
+`radiant-telemetry.md` section 6 already uses to budget a coding rate. So, at
+the ~4 Hz ANT+ profiles run (8182 counts, ~250 ms, the one period this project
+records because it is the one it has implemented):
+
+| Mode | Radio duty | Coexists with Thread? |
+|---|---|---|
+| Wildcard **scan**, 32-set sweep | ~100 % | **No.** This is the one that kills it |
+| **Tracking** 8 sensors at ~4 Hz | 8 x 1.0 ms / 250 ms ≈ **3.2 %** | Comfortably |
+| Tracking 16 sensors | ≈ 6.4 % | Comfortably |
+
+The arithmetic above is derived from compiled-in constants, **not measured**.
+Section 7.4 is the measurement.
+
+**Read that table with section 7.3 next to it.** Aggregate duty is the wrong
+metric on its own, and taken alone it makes coexistence look far more
+comfortable than it is.
+
+So the architectural rule is:
+
+> **Scanning is a bounded pairing state, not a running state.** Once a sensor is
+> bound the bridge tracks it, and gives ~95 % of the radio back to Thread.
+
+Enforced, not merely intended: the sink layer refuses to arm a wildcard sweep
+while a Thread session is up, except inside a user-initiated pairing window
+with a hard timeout. That is the same rule as "binding is opt-in" from section
+5, arrived at from the other direction.
+
+### 7.3 Two consequences that have to be said out loud
+
+**Sparse RadiANT nodes cannot be bridged by a combo device.**
+`radiant-telemetry.md` section 8 is explicit that a sparse node *requires* a
+scanning receiver, and section 7.2 above is that a continuous scanner has no
+radio left for Thread. These are both true, so a sparse node and Thread cannot
+share one chip today. A bridge that reads the sparse flag must refuse the node
+and say so — which is section 8's existing rule, reached for a new reason.
+
+The escape is already specified and not yet built: the **sync handoff page
+`0x12`** lets a second, ANT-only receiver hand over every parameter, so the
+bridge never sweeps at all. That turns sparse-plus-Thread from impossible into
+a two-box deployment, and it is the strongest argument yet for building the
+handoff sender.
+
+### 7.3a Duty cycle is the wrong metric: blackout rate against frame duration
+
+An 802.15.4 frame is slow. Max PSDU is 127 bytes at 250 kbps — **~4.25 ms on
+air** with preamble and SFD. An ANT blackout is the ~1.0 ms window of section
+7.2 plus a PHY switch on each edge: ANT is 1 Mbps GFSK and 802.15.4 is 250 kbps
+O-QPSK DSSS, so every slot is a disable, a MODE change and a re-ramp on both
+sides. Call it **~1.3 ms**, which is `phy_switch_us` in the HAL capability
+table earning its place.
+
+A frame of duration `F` is clipped if any blackout of duration `B` begins within
+`F + B` of its start. With `N` blackouts per period `P`:
+
+```
+P(clipped) = N x (F + B) / P
+```
+
+| Tracked sensors | Aggregate duty | Max-size 15.4 frame clipped | ~40-byte frame clipped |
+|---|---|---|---|
+| 8 | ~4 % | **18 %** | 9 % |
+| 16 | ~8 % | **36 %** | 18 % |
+| 32 | ~17 % | **71 %** | 36 % |
+
+Derived, not measured — same status as section 7.2, and section 7.4 is still
+the measurement that settles it.
+
+**4 % duty produces 18 % frame loss**, because the blackouts are frequent and
+short while the frames are long. Worse than uniform suggests, too: the blackout
+phases come from N independent masters' clocks, so clustering is guaranteed
+rather than avoidable.
+
+One asymmetry matters. MPSL knows the ANT schedule ahead of time, so a
+well-behaved 802.15.4 driver **defers its own transmissions** that would not
+finish before the next slot — our TX is protected, at the cost of latency. But
+**RX cannot be deferred**: an inbound frame arrives when it arrives. The
+degradation therefore presents as *other devices cannot reach us*, which is the
+worst way for infrastructure to fail, because every symptom points elsewhere.
+
+### 7.3b The rule that decides a role: blast radius, not duty
+
+A Thread MED and a Thread Router both keep the receiver nominally on, and both
+lose the same fraction of frames to the table above. What separates them is not
+radio time. It is:
+
+> **Does anyone else's radio schedule depend on mine, and who finds out when I
+> miss?**
+
+A leaf's misses are absorbed by MAC retries and by TCP, cost some latency, and
+are invisible outside the device. A router's misses orphan other people's
+children, churn routes and fail SRP registrations for devices that have no idea
+this one exists. Same packet loss, two unrelated blast radii.
+
+| Role | Who picks our RX phases | Who notices a miss | Verdict |
+|---|---|---|---|
+| BLE broadcaster, advertisements only | us — TX only, no listening obligation | nobody | **Safest available** |
+| Thread SSED / CSL child | us — we publish the phase | us only | Safe |
+| Thread SED, fast poll | us | us only | Safe |
+| Thread MED | nobody; always-on by default | us only, MAC retries cover most | Acceptable |
+| BLE peripheral in a connection | the central picked the anchor | our link only | Acceptable |
+| BLE mesh relay / observer | continuous scan | others' traffic | **Refuse** |
+| Thread Router / Leader / Border Router | everyone | children, routes, SRP, the partition | **Refuse** |
+
+**Preference order for the bridge: CSL child, then fast-poll SED, then MED.** A
+sleepy role is *better* for coexistence, not worse, because it hands us our own
+receive phases — which turns "we lose 18 % of frames at random" into "we own the
+schedule and interleave it with the ANT slots deliberately". Thread 1.2 CSL is
+built for exactly this: the child publishes a synchronised receive window and
+the parent transmits into it, so downlink latency is one CSL period at a duty we
+choose. CSL needs a Thread 1.2+ parent, which a household cannot be assumed to
+have, hence the fallbacks.
+
+**An earlier draft of this section said MED, and dismissed SED as "wrong,
+because it polls and sub-second actuation is the feature."** That reasoning does
+not survive the table above, and the latency objection was weak on its own
+terms: a 200 ms poll period is comfortably sub-second.
+
+Rebroadcast is *contained*, not free. A leaf still loses inbound frames during
+ANT blackouts; it just shows up as retries and tail latency rather than as
+someone else's outage. Outbound publishes are nearly unaffected, because we
+choose when to transmit and MPSL defers around ANT slots.
+
+### 7.4 The coexistence gate
+
+Mirrors the BLE gate [`backends.md`](backends.md) already defines, because the
+question is the same and a second acceptance metric would be a second thing to
+argue about:
+
+> A build with `CONFIG_NET_L2_OPENTHREAD=y`, attached in the role section 7.3b
+> selects and carrying continuous traffic, with `tools/ant_verify.py` showing
+> `loss (exact)` no worse than **+0.5 pp** against the same board running ANT
+> alone.
+
+Run it in the **MED** role as well as the intended one, even though MED is the
+last preference. MED is the always-on case, so it is the worst case, and a gate
+measured only in the role that schedules its own windows would be measuring the
+mitigation rather than the problem. Record both numbers.
+
+Read it against the characterised floor rather than against zero — this bench's
+real ANT loss floor is ~0.4 %, and half of an earlier "1 %" turned out to be the
+tool. [`testing.md`](testing.md) is normative for how to read the number; the
+trap it documents is the one this gate would otherwise walk into.
+
+The gate is a Tier 2 A/B and it is cheap. Run it before writing a line of the
+Matter data model.
+
+### 7.5 The bridge is never a border router
+
+Normative, and decided in
+[`decisions/0011-never-a-border-router.md`](decisions/0011-never-a-border-router.md).
+The "2-in-1 dongle" — an ANT receiver that is also the household's Thread border
+router — is the obvious product and it must not be built on one radio.
+
+Three reasons, in ascending order of how completely they settle it:
+
+1. **The role is not tunable.** A border router's Thread interface is a Router
+   and usually the Leader: `rx-on-when-idle` always, because it parents sleepy
+   children, answers their data polls within milliseconds, relays for other
+   routers and runs the SRP server Matter devices register against.
+2. **Section 7.3b puts it in the Refuse row**, and section 7.3a says why the
+   loss is not small: ~18 % of full-size frames at eight tracked sensors, landing
+   on traffic that belongs to devices which have never heard of ANT.
+3. **The purpose collision, which settles it without any radio argument.** A
+   border router is not just a radio — it is routing, discovery proxy, SRP and
+   NAT64, which in a USB-dongle form factor means the dongle is an **RCP** and
+   the border router proper is a daemon on a capable host. But *if a capable
+   host is present, the ANT data should go to it over USB* — faster, lossless,
+   already built, and needing no Thread at all. The Thread data plane of this
+   document exists for the **hostless** case. So the two are mutually exclusive
+   by purpose, not merely by radio: in every deployment where the 2-in-1 could
+   work, half of it is unnecessary.
+
+There is a product-shape argument in the same direction. A USB dongle is mobile
+— that is the point of it — and a border router must be fixed. "I moved the
+dongle to my laptop and the house lost its Thread route" is a support burden
+designed in rather than encountered.
+
+#### The three configurations, and they are mutually exclusive
+
+| Config | Thread role | ANT role | Host | ANT data path |
+|---|---|---|---|---|
+| **A. Dongle** (today) | none | full: scan and track | yes | USB |
+| **B. Bridge** (this document) | CSL child / SED / MED | track only; scan is a bounded pairing state | **no** | MQTT over Thread, plus Matter |
+| **C. Border router RCP** | Router / Leader, via a host daemon | none on this radio | yes | USB, if ANT at all |
+
+A+C and B+C are refused at compile time, in the `BUILD_ASSERT` shape
+[`backends.md`](backends.md) already uses for `CONFIG_BT` on the direct backend.
+
+#### If the 2-in-1 is wanted anyway, it is a BOM decision
+
+Not two roles on one radio — **a second 802.15.4 part on the same board**. One
+design note belongs here rather than being found on a bench: **ANT's RF 57 is
+2457 MHz, which sits between 802.15.4 channels 21 (2455) and 22 (2460)**. Two
+radios that close on one board desense each other whatever the time-sharing
+does. Pin Thread to channel 15 (2425) or 25/26 (2475/2480) and budget antenna
+isolation.
+
+The cheaper answer is two USB devices — a border-router-only dongle and an
+ANT-only dongle, neither compromised — and the sync handoff page `0x12` already
+exists to let two ANT receivers cooperate.
+
+---
+
+## 8. The Matter plane
+
+### 8.1 Endpoint model — four occupancy sensors, and that is the whole of tier 1
+
+**Every derived output is an Occupancy Sensor.** One device type
+(`0x0107`), one cluster (`0x0406` Occupancy Sensing), one attribute
+(`Occupancy`), four endpoints per binding. Nothing else is needed for the
+headline feature to work.
+
+| Endpoint | Name | Occupied when | From |
+|---|---|---|---|
+| 1 | **Heart rate monitor worn** | the beat accumulator is advancing | §6.1 |
+| 2 | **Bike in use** | the energy accumulator is advancing | §6.1 |
+| 3 | **At rest** | worn, and HR below `HR_rest + 0.15 x HRR` | §6.2 |
+| 4 | **Training, zone 2 or above** | worn, and HR at or above `HR_rest + 0.60 x HRR` | §6.2 |
+
+Two optional additions, neither part of tier 1:
+
+| Cluster | Attribute | Carries |
+|---|---|---|
+| `0x0404` Flow Measurement | `MeasuredValue` | raw bpm, the default-off passenger cluster of §8.3b |
+| `0xFFF1_xxxx` (MEI) | `HeartRateMeasurement` | raw bpm, standards-clean, §8.3 |
+| `0x002F` Power Source | `BatPercentRemaining` | from ANT+ common page 82, where the sensor sends it |
+
+A binding for a power meter instantiates endpoints 2 and nothing else; a
+heart-rate binding instantiates 1, 3 and 4. Endpoints are created from
+`binding_changed` (section 4), so a household with one strap and one trainer
+shows four entities in Home Assistant, not sixteen.
+
+### 8.2 Occupancy is a stretch, not a lie, and that is why it was chosen
+
+Matter requires each endpoint to declare a device type from the Device Library,
+and there is no wearable, vitals or heart-rate type. **Occupancy Sensor is the
+closest honest fit, and it is closer than it first looks** — read each endpoint
+as "something is occupying a space":
+
+- *Heart rate monitor worn* — a body is occupying the strap.
+- *Bike in use* — a rider is occupying the trainer.
+- *At rest* / *Training, zone 2 or above* — the person is occupying a
+  heart-rate zone.
+
+That last one is the stretch, and it is a stretch rather than a fabrication: a
+zone genuinely is a region, and being in it genuinely is occupancy. Compare the
+alternative this replaces — **an earlier draft declared Contact Sensor
+(`0x0015`) carrying Boolean State**, which is not a stretch of anything. A heart
+rate is not a door.
+
+Three practical reasons the choice is also the cheap one:
+
+1. **One device type across every output.** No per-endpoint decision, no table
+   of which boolean is which kind of sensor, and a reader of the code never has
+   to ask why endpoint 3 differs from endpoint 1.
+2. **Home Assistant renders it as `binary_sensor` with `device_class:
+   occupancy`**, which is a sensible label for all four, where `contact` would
+   have read as a door or window on every card.
+3. **Apple Home and Google both render occupancy today.** Tier 1 works outside
+   Home Assistant with no extra work.
+
+If the Device Library ever grows a vitals type, moving to it is a
+recommissioning rather than a format break.
+
+### 8.3 The MEI cluster carries the number, and is honestly second
+
+A manufacturer-extension cluster under our own MEI carries raw bpm. It is
+standards-clean and it costs almost nothing to define. It is **not** the
+primary path to Home Assistant, and the doc should not imply it is: a custom
+cluster reaches HA only once `python-matter-server`'s custom-cluster table or a
+custom component learns it, and that is a change in someone else's repository
+on someone else's schedule.
+
+Its actual jobs are the no-broker deployment, and being the thing that already
+exists if a controller ever does add support. Ship it; do not lead with it.
+
+### 8.3b The numeric passenger cluster — off by default, and here is the cost
+
+Tier 1 of section 1 gets a user booleans with zero installation. Some users will
+want the *number* with zero installation too, and there is exactly one way to
+give it to them: publish bpm on a standard numeric cluster that Home Assistant
+already renders, and accept that the label is wrong.
+
+**Flow Measurement (`0x0404`) is the least harmful carrier.** Almost nobody has
+a flow sensor, so the namespace is empty, and — unlike the alternatives — it
+pollutes nothing the user cares about. Temperature would land in climate
+dashboards; Electrical Power would land in the energy dashboard and corrupt
+statistics that HA computes long-term sums from. Illuminance is log-encoded in
+Matter and would need un-mangling. A wrong number in the energy dashboard is a
+support ticket; a wrong number in a flow sensor nobody has is a renamed entity.
+
+**It is off by default**, and the reason is worth stating rather than assumed:
+shipping deliberately mislabelled entities as a default is how a product feels
+untrustworthy, and a user who never enables it is never lied to. A user who
+enables it has opted into a known trade with a documented reason.
+
+Three tiers of honesty, then, and they should be presented to the user in this
+order: booleans (correct and free), MQTT (correct and one add-on), passenger
+cluster (free and mislabelled).
+
+### 8.4 The dongle as a Matter client — the latency floor
+
+For "elevated HR → fan on", the dongle does not need to represent heart rate in
+Matter at all. It needs the **Binding cluster** and client-side `On/Off` and
+`Level Control`, so a commissioner binds it to the fan once and the rule
+thereafter runs entirely on the nRF with no hub in the path. This is the Matter
+light-switch pattern, and it is the lowest-latency and most robust form of the
+headline feature.
+
+Caveat, stated because it decides whether this can be the only path:
+controller-side support for *configuring* bindings is thin in practice. So ship
+8.1 as well and let a hub route when binding is unavailable. Client binding is
+the good path, not the only path.
+
+### 8.5 Commissioning is what pays for the Matter stack
+
+Commissioning provisions the Thread operational dataset over BLE. That is how
+the device joins the network the MQTT plane runs over, and it is why a build
+whose data plane is entirely MQTT still wants a Matter stack. Section 1 states
+the argument; it is repeated here only because it is the thing most likely to
+be optimised away by someone counting flash.
+
+---
+
+## 9. The MQTT plane
+
+### 9.0 Plain MQTT over TCP. Not MQTT-SN, and here is why
+
+**MQTT-SN is rejected.** It is a UDP protocol that requires an **MQTT-SN
+gateway** to translate into real MQTT before any broker will see it, and nothing
+in a Thread network, a border router or Home Assistant performs that
+translation. Adopting it would mean shipping a gateway daemon — which is
+precisely the class of thing section 1's tier table exists to avoid.
+
+The constraint MQTT-SN was designed for does not apply here. It targets networks
+with no TCP — Zigbee, raw 802.15.4. **Thread is IPv6 with a real TCP stack**;
+in Zephyr, OpenThread is an L2 beneath the native IP stack, so `CONFIG_NET_TCP`
+plus `CONFIG_MQTT_LIB` is an ordinary configuration. Plain MQTT to Mosquitto, no
+gateway, no translation layer, nothing to maintain.
+
+Two routing facts make this less fragile than it sounds, and both are worth
+knowing before someone proposes a workaround for a problem that is not there:
+
+- **OTBR provisions its own ULA prefix** and advertises it on the LAN, so a
+  Thread node reaches the Home Assistant host over IPv6 **even where the user's
+  ISP and router have no IPv6 at all**. No NAT64 required. This is the same
+  mechanism that already makes Matter-over-Thread work for everyone.
+- **On the common HA hardware the border router and the broker are the same
+  box.** The path is Thread → border router → localhost. There is very little
+  routing left to go wrong.
+
+### 9.0a Provisioning: address is solvable, credentials are not
+
+Section 1 tier 2 costs a provisioning step. It splits into two halves with
+different answers, and conflating them makes the problem look worse than it is:
+
+- **Address — solvable in principle.** Once on the network the bridge can
+  resolve `homeassistant.local` through OTBR's DNS-SD Discovery Proxy and assume
+  a broker on that host at 1883, which is true of very nearly every HA install.
+  **Two things to verify on real hardware before depending on it:** whether HA's
+  OTBR add-on enables the Discovery Proxy, and the expectation that the
+  Mosquitto add-on does *not* advertise `_mqtt._tcp` — so a clean DNS-SD browse
+  for a broker finds nothing and the `homeassistant.local` heuristic is doing
+  the work.
+- **Credentials — irreducible.** The Mosquitto add-on requires a username and
+  password unless anonymous access is deliberately enabled. No discovery
+  mechanism produces a password. Something must carry it to the device.
+
+So provisioning shrinks to credentials rather than disappearing. The intended
+vehicle is a **browser-based setup page over WebSerial** — the pattern ESPHome
+users already recognise, supported by Chrome and Edge on every desktop platform,
+and installing nothing. The dongle already carries MS OS 2.0 descriptors for
+WinUSB binding, so either WebSerial over a CDC interface or WebUSB against the
+existing vendor interface is reachable.
+
+**It is an optional step for tier 2, not a first-run flow.** Matter
+commissioning already handles the network join (section 1), so a tier 1 user
+never sees this page at all.
+
+### 9.1 Topics
+
+```
+radiant/<bridge_id>/status                        retained, LWT
+radiant/<bridge_id>/<binding_uuid>/status         retained, per-sensor liveness
+radiant/<bridge_id>/<binding_uuid>/<field_id>     the value
+radiant/<bridge_id>/<binding_uuid>/cmd/<field_id> inbound; becomes page 0x10
+```
+
+`binding_uuid`, not a device number — section 5.
+
+### 9.2 Discovery is the descriptor, transcribed
+
+The retained discovery message is generated from `binding_changed`, and every
+field in it comes from somewhere the envelope already defines:
+
+| Discovery key | Source |
+|---|---|
+| `unit_of_measurement` | the vocabulary's canonical unit, converted by `f_type` |
+| `state_class` | `total_increasing` if the `accumulate` bit is set, else `measurement` |
+| `device_class` | the vocabulary type, where one maps; omitted where none does |
+| `suggested_display_precision` | derived from the field's `exp` and width |
+| `expire_after` | the sparse heartbeat interval, or the channel period x 3 |
+| `availability_topic` | the per-binding status topic |
+| `unique_id` | `binding_uuid` + field id |
+
+`expire_after` is the one to get right. It is the MQTT expression of the
+envelope's rule that **"no data" must never be produced silently**
+(`radiant-telemetry.md` section 8), and without it a strap that walks out of
+range leaves its last reading on screen indefinitely — which for a
+heart-rate-driven AC is not a stale number, it is a wrong actuator.
+
+**This is the one contract in the bridge that we do not own.** Home Assistant
+versions its discovery schema, and it will move. Keep the generator in one
+place, keep it table-driven off the vocabulary, and treat a schema change as a
+table edit.
+
+### 9.3 Availability, three levels
+
+Bridge (LWT), sensor (per-binding status), and value (`expire_after`). All
+three are needed and none substitutes for another: the bridge can be up while a
+strap is gone, and a strap can be present while one field has stopped
+advancing.
+
+---
+
+## 10. Privacy, and the commercial cohort case
+
+### 10.1 Normative from v1, even though the cohort sinks are not
+
+Three rules, in the design from the first commit because none can be retrofitted
+onto a bus that was not built for them:
+
+1. **Binding is explicit opt-in.** No promiscuous ingest, ever. Section 5, and
+   it is also the radio rule of section 7.2.
+2. **Bounded, non-reconstructable per-person state only.** The bridge holds current value
+   and rule state. It is not a logger. A device that keeps a history is a device
+   that can be seized, subpoenaed or stolen with the history in it.
+
+   **Amended for section 6.3.** This rule read "**zero** per-person retention",
+   and the heart-rate histogram would have violated it silently — which is
+   exactly the kind of quiet breach the rule exists to catch, so it is amended
+   openly instead. The amended test has three parts, and the histogram passes
+   all three:
+
+   - **Bounded.** Fixed size, known at compile time — 76 bytes, and the store
+     itself is capped at `CONFIG_RADIANT_BRIDGE_HR_PROFILES` slots (§6.4).
+     Nothing grows with time or with session count.
+   - **Non-reconstructable.** A marginal distribution over 38 bins carries no
+     ordering and no timestamps. No workout, no session, no event and no
+     sequence can be recovered from it. It is a shape, not a record.
+   - **Forgetting.** The halve-on-saturation rule of §6.3 means old observations
+     decay out rather than accumulating indefinitely.
+
+   A raw sample log passes none of the three, which is the distinction the rule
+   was written to draw in the first place. The residual risk is that ~76 bytes
+   of coarse distribution is weakly identifying; it is small, it is stated, and
+   rule 3 is what a deployment uses when small is not small enough.
+3. **Aggregate-only is a build-time mode**, not a runtime setting. In that
+   build the per-person sinks are not linked, so "it was configured wrongly" is
+   not a possible incident. **`CONFIG_RADIANT_BRIDGE_HR_PROFILES` defaults to 0
+   in that build**: no histograms, no personalisation, prior-only thresholds
+   everywhere, which §6.3 makes a supported configuration rather than a
+   degraded one.
+
+The honest framing for a product page, and it is defensible: ANT+ heart rate is
+**unencrypted on air already**, so anyone in range has it whether this bridge
+exists or not. This design does not widen that, and it declines several
+opportunities to.
+
+That said — continuously broadcast individual heart rate is biometric data, and
+in some jurisdictions and some employment contexts it is a regulated category.
+That is a legal question this document does not answer and should not pretend
+to; what it does is make the aggregate-only build the one a deployment can
+choose without asking us for a feature.
+
+### 10.2 Deferred to a later version
+
+- **Cohort aggregate sinks** — `count_elevated`, `max_hr_band`, `any_critical`
+  as a small fixed Matter endpoint set, so N people do not become N endpoints.
+  Per-person commissioning, endpoint counts and hub entity explosion all bite
+  well before the interesting deployment sizes.
+- **The broker ACL model** for keeping individual streams separated.
+- **Binding tables above ~8**, which is a radio budget question (section 7.2)
+  before it is a memory one.
+
+---
+
+## 11. Silicon, because this is where the plan meets a wall
+
+**The two columns are not "with and without a feature" — they are two different
+products**, because Matter is what makes tier 1 exist at all (section 1). The
+left column is the Matterless MQTT build reached by out-of-band provisioning;
+it has no QR scan, no Home Assistant device entry, and no booleans.
+
+| Target | Matterless MQTT (out-of-band provisioning) | Full build: Matter + MQTT |
+|---|---|---|
+| nRF52840 (1 MB flash / 256 KB RAM) | Fits | **Very tight.** OpenThread plus a Matter stack already runs near the flash limit before `radiant_core`, MPSL and USB are added. Expect to trade away OTA, or need external flash the dongle form factor does not have |
+| nRF5340 | Comfortable | Comfortable — the network core runs 802.15.4 and MPSL, the application core runs Matter |
+| nRF54L15 (1.5 MB NVM / 256 KB RAM) | Comfortable | Workable, and it is the part already on this bench |
+
+Recommendation: **the full build is the product and it targets nRF54L15 or
+nRF5340; the Matterless build is the nRF52840's escape hatch, not the entry
+SKU.** Shipping the escape hatch as the entry product would mean the cheapest
+dongle is the one that needs the most technical setup and shows the least in
+Home Assistant, which is exactly backwards.
+
+Board configs already exist for all three (`boards/`). Establish the flash
+budget with a linked image before writing the Matter data model, not after —
+this is a wall you hit at 95 % complete.
+
+---
+
+## 12. Phasing
+
+Ordered so that the two risky things — the radio and the flash — are settled
+before anything expensive is built on top of them.
+
+| Phase | What | Risk retired |
+|---|---|---|
+| 1 | Sample bus + sink registry + the ANT+ `0x78` adapter. Sinks = USB only | None. A pure refactor, host-testable, mirrors into `tools/ant_pages.py`, no radio change |
+| 2 | Binding table + rule evaluator §6.1–6.2 (activity outputs, prior-only zones), still USB-only | Fully testable on the mock radio: hysteresis, the asymmetric dwell, and the worn-gates-resting rule |
+| 3 | **MPSL backend + the 802.15.4 coexistence gate (§7.4)** | The go/no-go. Independent of everything above and everything below |
+| 4 | **Matter: commissioning and the four occupancy endpoints (§8.1)** | The flash ceiling of §11, and it delivers tier 1 — the first end-to-end demo is strap → QR scan → four HA `binary_sensor`s, no host and nothing installed |
+| 5 | MQTT-over-Thread sink + discovery generator + the WebSerial provisioning page | Tier 2. Adds the number in bpm |
+| 6 | Personalisation §6.3–6.5: histogram, conjugate update, capped store, NVM on session end | Pure addition. No endpoint moves, because prior-only was already `n = 0` of the same path |
+| 7 | Matter remainder: the MEI cluster, client binding, page `0x10` as the reverse path, and the §8.3b passenger cluster behind its default-off switch | — |
+| 8 | BLE sink | — |
+
+**Phases 4 and 5 used to be the other way round, and that was an ordering
+bug rather than a preference.** MQTT runs over Thread, and Matter commissioning
+is how the device gets onto Thread (section 1) — so the old phase 4 could not
+have been demonstrated without the old phase 5 already existing. The only way to
+have shipped MQTT first would have been to build the out-of-band provisioning
+path first, which is the escape hatch and not the product.
+
+Putting Matter first also front-loads the flash ceiling, which is the second of
+the two risks this ordering exists to retire early, and it means the first
+demo is the zero-install one.
+
+**BLE is deliberately last.** Most heart-rate straps are already ANT+/BLE dual,
+so re-broadcasting HR over BLE is the *least* valuable sink for the headline
+case. Its real value is ANT-only sensors and range aggregation. Note also that
+the BLE Heart Rate Service is connection-oriented and 1:1, so N sensors means N
+advertising identities; broadcast-with-manufacturer-data is the better fit and
+should be specified as such when its turn comes.
+
+---
+
+## 13. Explicitly not in v1
+
+- **A vendor-specific Zigbee path.** Matter and MQTT over Thread cover the same
+  network; a third application protocol on the same PHY earns nothing.
+- **The bridge as a Thread Router, Leader or Border Router, or as a BLE mesh
+  relay.** Not deferred — refused, on one radio, permanently. Section 7.5 and
+  `decisions/0011-never-a-border-router.md`. A second 802.15.4 part on the board
+  is the only route to a 2-in-1, and it is a BOM decision rather than a firmware
+  one.
+- **Sparse-node bridging on a combo device.** Section 7.3, and it is a radio
+  fact rather than a scheduling decision.
+- **`0x27` time interval** or any other vocabulary addition, until the type is
+  allocated in `radiant-telemetry.md` and `tools/ant_pages.py` in the same
+  change. Section 3.2.
+- **Cohort aggregation.** Section 10.2.
+- **Any security switch.** The bridge inherits the envelope's posture and adds
+  nothing; a bridged deployment that needs `X_AUTH` waits for Phase 7 exactly
+  like an unbridged one.

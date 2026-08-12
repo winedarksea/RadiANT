@@ -1,0 +1,1223 @@
+# RadiANT device profiles
+
+Checked by: `scripts/check_profile_registry.py` — run it with
+`C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe scripts\check_profile_registry.py`.
+It cross-checks the device type and period tables below against
+`tools/ant_pages.py` and `docs/profile-registry.md`, and the page maps of the
+RadiANT device types against the registry's page rows. The ANT+ layout tables
+are pinned by `tools/test_ant_pages.py`, which round-trips every encoder through
+its decoder:
+
+```
+C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe -m unittest discover -s tools -p "test_*.py"
+```
+
+This document absorbs the former `docs/ant-plus-profiles.md`. It is the one
+place to look up **what a device profile is on this project**, whether that
+profile is Garmin's, this project's, or a schema published on the generic
+telemetry envelope. `docs/profile-registry.md` still owns *allocation* — who
+claimed which number and when — and `docs/radiant-telemetry.md` still owns the
+`0x60` envelope itself.
+
+Facts and tables only. Every ANT+ layout here is derived from the encoders and
+decoders in `tools/ant_pages.py` and the cases in `tools/test_ant_pages.py`,
+which are the implementations this project actually ships, except where a
+section says otherwise and names its source. No prose is taken from any ANT+
+device profile document.
+
+---
+
+## 1. The three vehicles, and how a profile earns one
+
+A new kind of sensor can reach a receiver three ways on this project. They are
+not equivalent, they cost wildly different amounts, and picking the expensive
+one by default is the mistake this section exists to prevent.
+
+| Vehicle | What it costs | When it is right |
+|---|---|---|
+| **A `0x60` schema recipe** | A section in this document. No allocation, no new codec, no receiver change | The default. Anything whose fields are not yet settled, and anything a receiver does not need to recognise before decoding |
+| **An additive page on an ANT+ device type** | A page number that must be free in that profile, plus the ADR 0008 rules | The sensor is already an ANT+ device type and needs to say something that type has no field for |
+| **A RadiANT device type** | A registry claim, a full 256-page map, the `0x20-0x2F` security reservation, a page-map table here, and a change to `check_pagemap()` | A receiver must be able to **recognise and name the node without decoding it** |
+
+### What a RadiANT device type actually is, and it is not a byte layout
+
+**A RadiANT profile device type is the `0x60` telemetry envelope with a pinned
+mandatory schema.** Same descriptor, same data pages, same counter in byte `[1]`,
+same trailing tag space, same field vocabulary. The only things a profile adds
+are a device type number and a *required field set*.
+
+That is the whole design, and it is worth stating plainly because the obvious
+alternative — invent an 8-byte layout per profile, the way every ANT+ profile
+does — was drafted first and is worse in four ways:
+
+- **Zero new codec.** `src/profiles/profile_telemetry.c` and its mirror in
+  `tools/ant_pages.py` already encode and decode every page a profile needs. A
+  new profile adds a table, not a parser.
+- **The security layer applies for free.** `X_CONF` and `X_AUTH` need byte `[1]`
+  to be a counter and the trailing byte to be tag space. A bespoke layout that
+  put data in either — and every draft layout did — is permanently unprotectable.
+- **A receiver that has never heard of the profile still decodes it**, because
+  the descriptor is self-describing. It gets typed, scaled, unit-bearing values
+  and can bridge them, without a line of profile-specific code.
+- **The profile can grow without a format break**, because field offsets are
+  announced rather than fixed.
+
+So the device type is a **discovery label**: it is what lets a head unit put
+"Glucose monitor" in a pairing list without opening a channel and waiting a full
+descriptor cycle. That is the entire test for whether a profile deserves one.
+
+It buys one thing more, and it is the half that is easy to miss. **A profile can
+pin the two schedule opt-ins that a bare `0x60` node leaves per-node**, so the
+registry's `LR PHY` and `Adaptive freq` columns read `no` instead of `per-node`.
+Both profiles below do. That matters because those columns are exactly what a
+consumer has to know *before* it opens a channel — a long-range or
+frequency-hopping node splits the receiver's merged RF 57 window the way a
+separate network would — and `per-node` means "read the descriptor to find out".
+A profile type is therefore cheaper to budget for than the generic type it is
+built from, which is the same argument as the pairing list made about radio
+scheduling instead of names.
+
+### The rules every RadiANT profile obeys
+
+These are `docs/radiant-telemetry.md`'s, restated because every draft profile in
+this project's history has broken at least one of them:
+
+1. **Byte `[1]` is the event counter.** Never a field.
+2. **The trailing byte is tag space** whenever `X_AUTH` is on. A schema places
+   no field there.
+3. **Anything integrable is published as an accumulating field**, and the
+   accumulator is authoritative. The instantaneous value is a convenience.
+4. **A period is a number, not a rate.** "4 Hz" is not a channel period; 8192
+   counts of 1/32768 s is. A receiver whose period does not match cannot open
+   the channel at all, and nothing reports the period as the reason.
+5. **Every field declares its invalid value**, and it is the sentinel for the
+   field's width — `0xFF`, `0xFFFF`, `0xFFFFFFFF` — unless the section says
+   otherwise and says why.
+6. **A value a receiver can compute is not a field.** Trend arrows, composite
+   indices and derived densities are the receiver's job; the node publishes what
+   it measured.
+
+---
+
+## 2. Where each candidate profile landed
+
+The eight profiles drafted in the former `docs/new_device_profiles.md`, and what
+the evidence did to them. The "considered and not pursued" entries are in
+section 7 with their reasons, because a registry that records only its successes
+invites the same proposal again in a year.
+
+| Candidate | Outcome | Why |
+|---|---|---|
+| E-bike / smart commuter | **Not pursued** → ANT+ LEV `0x14` | LEV already carries battery SoC, assist level, remaining range, motor and battery temperature, lights, errors, gears and a command page |
+| Electronic key / immobilizer | **`0x60` recipe**, redesigned | The lock state is one vocabulary field and the command page already exists. The auto-lock-on-signal-loss premise is refused outright |
+| Physiological temperature | **`0x60` recipe** | ANT+ Environment `0x19` cannot host it, and the reason is structural |
+| Air quality | **`0x60` recipe** | Every field is already in the vocabulary. The composite AQI and VOC index are dropped |
+| Wind / anemometer | **`0x60` recipe** | The registry already ruled this ships on `0x60` first, and the fields are still unsettled |
+| Water sports / paddling | **Not pursued** | Shipping products already solve it on `0x0B` and `0x7A` |
+| Smart fan | **RadiANT device type `0x62`** | A head unit must discover and name an actuator before commanding it |
+| CGM | **RadiANT device type `0x61`** | Same discovery argument, plus a receiver may need to gate on the profile before displaying a reading |
+
+---
+
+## 3. ANT+ profiles this project implements or decodes
+
+<!-- radiant-registry: ant-plus-types -->
+
+| Type | Name | Period | Implemented in `tools/ant_pages.py` |
+|---|---|---|---|
+| `0x0B` | Bicycle Power | 8182 | pages `0x10`, `0x11`, `0x12`, `0x20` |
+| `0x11` | Fitness Equipment (FE-C) | — | no |
+| `0x14` | Light Electric Vehicle (LEV) | — | no |
+| `0x19` | Environment | — | no |
+| `0x78` | Heart Rate | 8070 | pages `0x00`, `0x01`, `0x02`, `0x03`, `0x04` |
+| `0x79` | Bike Speed and Cadence, combined | 8086 | the single page, which has no page number |
+| `0x7A` | Bike Cadence | 8102 | period only |
+| `0x7B` | Bike Speed | 8118 | period only |
+| `0x7F` | Core Temperature | — | no |
+
+Period is in counts of 1/32768 s: 8182 is ~4.0049 Hz, 8086 is ~4.05 Hz, 8070 is
+~4.06 Hz. A `—` means this project has not implemented the type and does not
+record a number it has not verified against its own code.
+
+**`0x14`, `0x19` and `0x7F` carry `—` even though their periods are known**, and
+that is the rule working rather than an oversight. All three numbers come from
+documents, not from this project's code — LEV's is 8192, Environment's default
+is 65535, Core Temperature's is 8192 — and they are stated in sections 3.6, 3.7
+and 3.8 with their sources. The column means "verified here", and widening it to
+mean "read somewhere" would make every other cell in it worth less.
+
+### Permitted channel periods
+
+The table above records each type's **default**. Two of them permit more than
+one rate, and the full sets live in `tools/ant_pages.py` as `HRM_PERIODS` and
+`BPWR_PERIODS`, cross-checked against `docs/profile-registry.md` by
+`scripts/check_profile_registry.py`.
+
+| Type | Rate | Period | Approx. |
+|---|---|---|---|
+| `0x78` | standard (default) | 8070 | ~4.06 Hz |
+| `0x78` | half | 16140 | ~2.03 Hz |
+| `0x78` | quarter | 32280 | ~1.02 Hz |
+| `0x0B` | standard (default) | 8182 | ~4.005 Hz |
+
+**The period is not like the other settings.** A receiver skips a page number it
+does not know; a receiver whose period does not match the sensor's cannot open
+the channel at all, and nothing on either side reports the period as the reason.
+That asymmetry is why the permitted sets are enumerated and checked rather than
+left as a number in a constant somewhere. No reduced-rate variant is recorded for
+`0x0B`: this project has not verified one against its own code, and the rule here
+is that a number that has not been verified does not get written down.
+
+RF channel for all of them is `0x39` = 57 = 2457 MHz, network 0, ANT+ public
+network key.
+
+### Two device-type numbers worth not confusing
+
+- **`0x11` is the Fitness Equipment device type and also the Wheel Torque page
+  number under device type `0x0B`.** Device types and page numbers are separate
+  namespaces that happen to overlap numerically, and a decoder that dispatches
+  on the wrong one produces a valid-looking result.
+- **`0x79`, `0x7A` and `0x7B` are three different sensors**, not three pages of
+  one. The combined sensor is the only one that reports cadence and speed
+  together.
+
+---
+
+### 3.1 Bicycle Power, device type `0x0B`
+
+#### Page `0x10` — Standard Power Only
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | page number | `0x10` |
+| 1 | update event count | u8 accumulator, +1 per power event, wraps at 256 |
+| 2 | pedal power balance | u8, `0xFF` = not reported |
+| 3 | instantaneous cadence | u8 rpm, `0xFF` = not reported |
+| 4..5 | accumulated power | u16 LE accumulator, watts, wraps at 65536 |
+| 6..7 | instantaneous power | u16 LE, watts |
+
+The accumulated/instantaneous pairing on one page is the canonical example of
+ANT+'s loss tolerance: the instantaneous value is a convenience, the
+accumulator is what survives a lost packet.
+
+#### Pages `0x11` and `0x12` — Wheel Torque and Crank Torque
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | page number | `0x11` (wheel) or `0x12` (crank) |
+| 1 | update event count | u8 accumulator, +1 per revolution |
+| 2 | wheel or crank ticks | u8 accumulator, wraps at 256 |
+| 3 | instantaneous cadence | u8 rpm, `0xFF` = not reported |
+| 4..5 | accumulated period | u16 LE accumulator, 1/2048 s, wraps at 65536 |
+| 6..7 | accumulated torque | u16 LE accumulator, 1/32 N.m, wraps at 65536 |
+
+Four accumulators, all wrapping independently.
+
+Average power between two samples:
+
+```
+avg_torque_Nm  = delta_torque / 32 / delta_event
+avg_omega_rads = 2*pi * delta_event * 2048 / delta_period
+power_W        = avg_torque_Nm * avg_omega_rads
+               = delta_torque * 2*pi * 64 / delta_period
+```
+
+`delta_event` cancels. It is still needed, but only to tell "no new event" from
+"a new event with zero torque"; both otherwise present as
+`delta_period == 0`. `ant_pages.power_from_torque()` raises rather than
+returning zero for that case.
+
+**Pages `0x11` and `0x12` are independent accumulator series that share a
+channel.** A sensor emitting both advances two unrelated sets. Differencing one
+against the other produces a plausible number rather than an error, which is
+why `tools/ant_verify.py` keeps one baseline per page number rather than one
+per channel.
+
+#### Page `0x20` — Crank Torque Frequency
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | page number | `0x20` |
+| 1 | update event count | u8 accumulator |
+| 2..3 | slope | u16 **BE**, 1/10 N.m/Hz |
+| 4..5 | time stamp | u16 **BE** accumulator, 1/2000 s, wraps at 65536 |
+| 6..7 | torque ticks stamp | u16 **BE** accumulator, wraps at 65536 |
+
+**This page is big-endian. Every other multi-byte field in every other page
+here is little-endian.** That is trap one of three.
+
+```
+elapsed_s = delta_time / 2000
+torque_Hz = delta_ticks / elapsed_s - offset_Hz
+torque_Nm = torque_Hz / (slope / 10)
+omega     = 2*pi * delta_event / elapsed_s
+power_W   = torque_Nm * omega
+```
+
+Unlike the torque pages, `delta_event` does **not** cancel here: torque comes
+from a tick frequency and angular velocity from the event count, so both are
+needed.
+
+---
+
+### 3.2 Heart Rate, device type `0x78`
+
+Two things about this profile shape everything else in this document and the
+compat layer both.
+
+**Byte 0's high bit is not part of the page number.** That is trap three of
+three. It is the page-change toggle, flipped every four messages, which tells a
+receiver the sensor has more than one page and it has now seen the set. Page
+numbers here are therefore **7-bit — `0x00` to `0x7F`** — and nothing at or above
+`0x80` is expressible at all. That is why the manufacturer-private range every
+other profile uses (`0xF0`-`0xFF`) is unreachable here, and it is the constraint
+that decided the RadiANT compat allocation in `docs/profile-registry.md`.
+
+**Bytes `[4..7]` are the same on every page.** The page number only says what
+the three bytes in between mean. A page that changed those four bytes would not
+be a new page; it would be a broken sensor.
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | bits 6..0 page number, bit 7 page-change toggle | toggle flips every 4 messages |
+| 1..3 | page-specific | see below |
+| 4..5 | heartbeat event time | u16 LE accumulator, 1/1024 s, wraps at 65536 |
+| 6 | heartbeat count | u8 accumulator, wraps at 256 |
+| 7 | computed heart rate | u8 bpm, **`0` = no reading** |
+
+**`0` and not `0xFF` means "no reading" here**, which is the one place in this
+document where the invalid-value table below does not apply. A decoder that
+reached for `INVALID_U8` reports a plausible 255 bpm, and `0xFF` on this byte is
+a real 255 bpm rather than a sentinel.
+
+Bytes `[1..3]`, per page:
+
+| Page | Kind | `[1]` | `[2]` | `[3]` |
+|---|---|---|---|---|
+| `0x00` | main | `0xFF` | `0xFF` | `0xFF` |
+| `0x01` | background, **optional** | cumulative operating time, u24 LE, 2 s units | | |
+| `0x02` | background, **required** | manufacturer id, u8 | serial number, **upper** 16 bits, u16 LE | |
+| `0x03` | background, **required** | hardware version, u8 | software version, u8 | model number, u8 |
+| `0x04` | main | manufacturer-specific, `0xFF` when unused | previous heartbeat event time, u16 LE, 1/1024 s | |
+
+**Pages 2 and 3 are the two pages this profile document makes mandatory**
+("must be implemented by all manufacturers"); page 1 is left to the
+manufacturer's discretion. Nothing else in the profile carries a `shall` this
+strong, which is why it is worth stating as a table property rather than prose
+a reader can skim past.
+
+Page `0x02`'s manufacturer id is **8 bits**, where common page 80's is 16. They
+are different fields of different widths and a decoder that shares one struct
+between them truncates silently.
+
+**Page 2's serial field is the *upper* 16 bits of a 32-bit serial number, and
+the ANT device number supplies the *lower* 16 bits — not the other way
+round.** The primary spec (§5.3.4.3) is explicit about which half is which:
+"The 32-bit serial number [is] comprised of the upper serial number (most
+significant 16 bits) and the device number (least significant 16 bits)." A
+field named or documented as the serial's low half, or code that concatenates
+`(device_number << 16) | page2_field`, produces a serial number that is
+byte-swapped at the 16-bit level — plausible-looking and wrong. The correct
+construction is `(page2_field << 16) | device_number`.
+
+Page `0x04` carries two event times on one page, which is what lets a receiver
+compute an R-R interval from a single packet instead of differencing two. That
+is why a modern strap sends it as its main page and `0x00` in the background
+rotation rather than the other way round.
+
+```
+bpm = delta_beats * 1024 * 60 / delta_event_time
+```
+
+The computed-heart-rate byte is the sensor's own answer and is a convenience;
+the accumulator pair is what survives a lost packet. Same division of labour as
+accumulated versus instantaneous power.
+
+---
+
+### 3.3 Bike Speed and Cadence combined, device type `0x79`
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0..1 | cadence event time | u16 LE accumulator, 1/1024 s, wraps at 65536 |
+| 2..3 | cumulative crank revolutions | u16 LE accumulator, wraps at 65536 |
+| 4..5 | speed event time | u16 LE accumulator, 1/1024 s, wraps at 65536 |
+| 6..7 | cumulative wheel revolutions | u16 LE accumulator, wraps at 65536 |
+
+**There is no page-number byte.** Byte 0 is the low half of the cadence event
+time. That is trap two of three, and it is why `ant_pages.decode()` takes a
+`device_type` argument that looks redundant: dispatching on `payload[0]` the way
+every other profile does will decode this page as whatever page that byte
+happens to name. A cadence event time of `0x2010` puts `0x10` in byte 0 and
+decodes as a Standard Power page.
+
+The second consequence is quieter: bytes `[4..7]` alone are a valid-looking
+speed-only page, so a receiver that reads only those silently drops the cadence
+half and reports no error.
+
+```
+cadence_rpm = delta_revs * 1024 * 60 / delta_event_time
+speed_mps   = delta_revs * wheel_circumference_m * 1024 / delta_event_time
+```
+
+---
+
+### 3.4 Common pages
+
+#### Page `0x50` (80) — Manufacturer's Information
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | page number | `0x50` |
+| 1..2 | reserved | `0xFF` |
+| 3 | hardware revision | u8 |
+| 4..5 | manufacturer id | u16 LE |
+| 6..7 | model number | u16 LE |
+
+#### Page `0x51` (81) — Product Information
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | page number | `0x51` |
+| 1 | reserved | `0xFF` |
+| 2 | supplemental software revision | u8, `0xFF` = not used |
+| 3 | main software revision | u8 |
+| 4..7 | serial number | u32 LE, `0xFFFFFFFF` = not supplied |
+
+#### Page `0x52` (82) — Battery Status
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | page number | `0x52` |
+| 1 | reserved | `0xFF` |
+| 2 | battery identifier | u8, `0x00` when there is only one battery |
+| 3..5 | cumulative operating time | u24 LE |
+| 6 | fractional battery voltage | u8, 1/256 V |
+| 7 | coarse voltage (bits 3..0), status (bits 6..4), time resolution (bit 7) | bit 7: 0 = 16 s units, 1 = 2 s units |
+
+Voltage is `coarse + fractional/256`.
+
+**Page 82 is implemented and every profile in this document gets it for free.**
+`profile_common_82()` in `src/profiles/profile_common.c`, scheduled through
+`common_82_every`, mirrored as `ant_pages.encode_common_82`. **No profile in
+this document spends a payload byte on battery state of charge**, because a page
+every ANT+ receiver already understands carries it.
+
+#### Common page 84 — the one this project does not implement and should know about
+
+ANT+ common page 84 carries **barometric pressure, humidity, wind speed and wind
+direction** as a sub-paged environmental block, and a common page is legal in any
+profile. This project does not implement it and does not specify it here; it is
+recorded because two of the `0x60` recipes below (wind, air quality) publish
+quantities it also carries, and a sensor that wants to be visible to a stock ANT+
+receiver has that option in addition to its RadiANT channel. Evidence is
+third-party — an ANT+ forum thread and one open-source implementation — and no
+number in it has been verified against this project's code, so nothing here
+depends on it.
+
+---
+
+### 3.5 The pages that are not ANT+: `0x70`-`0x72`
+
+A capture from a RadiANT compat sensor carries three page numbers no ANT+
+document defines: `0x70` the capability beacon, `0x71` Tier I identity
+attestation, `0x72` Tier II data attestation. They are **added** to the profile
+and nothing existing is touched, which is the whole mechanism — a legacy
+receiver skips a page number it does not know, and the data pages above stay
+byte-exact.
+
+They are not specified here. `docs/radiant-security.md` section 11 is normative
+for the bytes, `docs/profile-registry.md` registers the numbers and the residual
+collision risk, and
+`docs/decisions/0008-antplus-additive-pages-and-compat-security.md` records why
+the allocation is what it is. `tools/ant_pages.py` encodes and decodes them and
+`tools/ant_verify.py` reports `verified` / `unverified` / `clear` over them —
+where **`clear` means "no key here" and not "unprotected"**.
+
+The cost, because it is the number the compatibility claim rests on: **2.0 % of
+slots** in the default configuration, 0.8 % beacon plus 1.2 % Tier I, against
+the **1.65 %** ANT+ itself already spends on common pages 80 and 81 in the
+cadence below.
+
+---
+
+### 3.6 Light Electric Vehicle, device type `0x14` — reference only
+
+**Not implemented by this project. Recorded because it is the reason the e-bike
+profile of section 7.1 was not pursued**, and because a claimant needs to be
+able to check it without repeating the search.
+
+Source: ANT+ Managed Network Document D00001390 Rev 1.1, "Light Electric Vehicle
+Device Profile", publicly mirrored on the Garmin forums. Channel period **8192**
+(4.00 Hz), RF 57, transmission type 5, device number 1..65535.
+
+| Page | Name | Carries |
+|---|---|---|
+| 1 | Speed and System Info 1 | temperature state, travel mode, system state, gear state, error message, LEV speed |
+| 2 | Speed and Distance | odometer (u24, 0.01 km), remaining range (12-bit, 1 km), LEV speed |
+| 34 | Alt Speed and Distance | as page 2, with fuel consumption (12-bit, 0.1 Wh/km) replacing remaining range |
+| 3 | Speed and System Info 2 | battery SoC (7 bits, 1 %) + empty warning bit, travel mode, system state, gear state, % assist, LEV speed |
+| 4 | Battery Information | charge cycle count, fuel consumption, battery voltage (1/4 V), distance on current charge |
+| 5 | LEV Capabilities | travel modes supported, wheel circumference (12-bit, 1 mm) |
+| 16 | Display Data | **acknowledged, display → LEV.** Wheel circumference, requested travel mode, a 16-bit command bit field, display manufacturer id |
+| 70, 80, 81 | Common pages | request data page, manufacturer, product |
+
+Sub-fields worth knowing before proposing an extension:
+
+- **Motor and battery temperature are a 6-level categorical scale**, not degrees:
+  unknown / cold / cold-warm / warm / warm-hot / hot, each with an alert bit.
+- **Travel mode state** is assist level 0..7 and regenerative level 0..7.
+- **System state** carries lights on/off, high/low beam, and left/right turn
+  signal.
+- **Error message** is a single enumerated code (battery, drive train, end of
+  life, overheating), not a bit field of concurrent faults.
+- **Page 16's command set** is: set wheel circumference, set travel mode, shift
+  front/rear gear, lights, high beam, turn signals.
+
+**What LEV does not carry:** rider power in watts, motor power in watts, and
+walk assist. Those three are the entire gap, and section 7.1 is why the gap does
+not justify a profile.
+
+---
+
+### 3.7 Environment, device type `0x19` — reference only
+
+**Not implemented by this project. Recorded because it is the reason the
+physiological temperature profile of section 6.3 is a `0x60` recipe** rather
+than an additive page here.
+
+Evidence is four independent open-source implementations plus thisisant.com, not
+the profile document — so this section is the one place in this file whose
+layouts are **not** derived from this project's own code or from a primary spec,
+and nothing depends on it. All four (the two originally consulted, plus a Nordic
+SDK ANT+ Environment profile and `openant`'s independent decoder) agree
+byte-for-byte and none of the four has a placement field, which is convergent
+secondary evidence rather than a primary source — the honest position stays "not
+derived from a primary spec," strengthened rather than settled. Device type 25,
+RF 57. The profile permits two channel
+periods, **65535 (0.5 Hz, what the Garmin tempe uses) and 8192 (4 Hz)**; page 0
+declares which is the default.
+
+| Page | Byte | Field |
+|---|---|---|
+| 0 | 1..2 | reserved `0xFF` |
+| 0 | 3 | transmission info: bits 1..0 default rate, bits 3..2 UTC time support, bits 5..4 local time support |
+| 0 | 4..7 | supported pages, u32 LE bitmap |
+| 1 | 1 | reserved `0xFF` |
+| 1 | 2 | event count, u8 accumulator |
+| 1 | 3 + 4 bits 7..4 | 24-hour low, 12-bit signed, 0.1 °C, `0x800` invalid |
+| 1 | 4 bits 3..0 + 5 | 24-hour high, 12-bit signed, 0.1 °C, `0x800` invalid |
+| 1 | 6..7 | current temperature, int16 LE, 0.01 °C, `0x8000` invalid |
+
+**Pages 0 and 1 are the whole profile, and there is no sensor placement, sensor
+location or sensor kind field anywhere in it.** That single fact is what decides
+section 6.3.
+
+---
+
+### 3.8 Core Temperature, device type `0x7F` — reference only
+
+**Not implemented by this project. Recorded because it is direct prior art for
+section 6.3's design** — when ANT+ itself needed to carry physiological
+temperature, it did not extend Environment `0x19`. It minted a separate device
+type, which is the same structural conclusion section 6.3 reaches independently
+(there, a `0x60` recipe rather than a device type, but "not an Environment page"
+either way).
+
+Evidence is vendor code from an ANT+-certified manufacturer rather than a
+primary spec: greenTEG/CoreBodyTemp's own published Connect IQ source
+(`CoreSensor.mc`, `const DEVICE_TYPE = 0x7F`) and an independent `openant`
+decoder agree byte-for-byte. Device type 127 (`0x7F`), period 8192 (4 Hz), RF 57.
+
+| Page | Byte | Field |
+|---|---|---|
+| 0 | 2 | data quality: 0 poor, 1 fair, 2 good, 3 excellent, `0xFF` unused |
+| 1 | 1 | heat strain index, u8, ×0.1 |
+| 1 | 2 | event count, u8 accumulator |
+| 1 | 3 + 4 bits 3..0 | skin temperature, 12-bit signed, ×0.05 °C, `0x800` invalid |
+| 1 | 4 bits 7..4 + 5 | reserved |
+| 1 | 6..7 | core temperature, int16 LE, ×0.01 °C, `0x8000` invalid |
+| `0x50`/`0x51`/`0x52` | — | common pages 80/81/82, standard |
+
+Two things worth noting against this project's own choices rather than just
+recording the layout:
+
+- **Page 0's data-quality field validates section 6.3's measurement-quality
+  field.** ANT+'s own certified solution to "a calculated core temperature is a
+  model output that can be wrong during warm-up" was to add a quality field,
+  independently of this project reaching the same conclusion for the same
+  reason.
+- **It is less flexible than section 6.3's placement enum, not more.** Rather
+  than one temperature field with a placement code, it hard-codes two fixed
+  fields — skin and core — as separate quantities on one page. That works for a
+  device that always has both sensors (the CoreBodyTemp strap does), and does
+  not generalise to a single-sensor device reporting one placement of several.
+  Worth the sentence; not a reason to change section 6.3's design.
+
+---
+
+### 3.9 The common-page cadence trap
+
+Generic ANT+ guidance says common pages must appear at least once per **65**
+messages. That number is not what a certified sensor does, and a simulator
+built on it sends common pages roughly twice as often as the profile requires —
+spending airtime and battery to be less realistic.
+
+The value this project uses comes from sdk-ant's own certified bicycle power
+profile, recorded in `tools/ant_pages.py` at `COMMON_PAGE_INTERVAL`:
+
+| Constant | Value |
+|---|---|
+| `COMMON_PAGE_80_INTERVAL` (sdk-ant) | 119 |
+| `COMMON_PAGE_81_INTERVAL` (sdk-ant) | 120 |
+| stated minimum | interleave every **121 messages** |
+| `ant_pages.COMMON_PAGE_INTERVAL` | 120 |
+
+So the pattern is: 119 data messages, page 80, page 81, repeat — a 121-message
+cycle carrying two common pages. `docs/radiant-telemetry.md` puts the RadiANT
+descriptor set on the same cadence for the same reason.
+
+---
+
+### 3.10 Accumulator semantics
+
+Every field marked "accumulator" above is a running total in a fixed width that
+is **meant** to wrap. The rules, which `tools/test_ant_pages.py` pins:
+
+1. Difference two readings **in the accumulator's own width**:
+   `delta_u8(now, before) = (now - before) mod 256`,
+   `delta_u16(now, before) = (now - before) mod 65536`.
+   A receiver that promotes to a wider signed type before subtracting is
+   correct for hours and then produces one large negative delta per wrap.
+2. `65500 -> 100` in 16 bits is a delta of **136**, not `-65400`.
+3. One baseline per page number per device number. Two power meters share
+   device type `0x0B`; merging their streams produces one analysis of two
+   unrelated series.
+4. An accumulator that advances with no new event is a violation, not a data
+   point. `tools/ant_verify.py` counts those and fails on a non-zero count.
+
+### 3.11 Invalid-value sentinels
+
+| Width | Sentinel | Constant |
+|---|---|---|
+| u8 | `0xFF` | `INVALID_U8` |
+| u16 | `0xFFFF` | `INVALID_U16` |
+| u32 | `0xFFFFFFFF` | `INVALID_U32` |
+
+A receiver that treats these as numbers reports 255 rpm or 65535 W. The
+encoders in `tools/ant_pages.py` take `None` for "not reported" so a caller
+never has to remember which sentinel a given page uses.
+
+### 3.12 Capture file format
+
+`tools/ant_pages.py` also owns the `.antcap` line format, because the captures
+are replayed through the C decoders in the sibling `zephyr_aerosense` project:
+
+```
+# ant capture v1: <seconds> <device_type> <device_number> <8 payload bytes>
+12.345678 0B 3A17 1006ff5039300064
+```
+
+Deliberately not JSON: one `sscanf` on the C side against a parser dependency.
+The device number is not decoration — two sensors can share a device type, and
+merging their streams is the same mistake as rule 3 above, made in the analysis
+tool instead of the firmware.
+
+---
+
+## 4. Two vocabulary types this document allocates
+
+Both recipes and both device types below need quantities the section 7
+vocabulary of `docs/radiant-telemetry.md` does not have. They are allocated
+**here and in `tools/ant_pages.py` together**, which is that document's stated
+rule: a type that exists in one and not the other is exactly the drift the
+mirror exists to prevent.
+
+| Type | Quantity | Canonical unit | Matter cluster | Why |
+|---|---|---|---|---|
+| `0x27` | time interval | s | — | An **instantaneous** duration. Class `0x30-0x3F` requires the accumulate bit, so `0x37` duration cannot express "this reading is 210 seconds old" or an R-R interval |
+| `0x28` | substance concentration | mol/m^3 | — | Blood glucose, and any other molar concentration. **1 mmol/L is exactly 1 mol/m^3**, so the canonical SI unit is the clinical unit and no conversion constant is needed |
+
+**`0x27` is the gap `docs/radiant-telemetry.md` section 7 named and deliberately
+left open**, for the RR interval an ANT+ heart rate page 4 carries. The CGM
+profile's reading-age field needs the same type, so the gap closes here. Its
+first two users are unrelated, which is the evidence that it belongs in the
+vocabulary rather than in a profile.
+
+**`0x28` is deliberately not "blood glucose".** A type is a quantity, not an
+application; naming it for its first user is how a vocabulary ends up with three
+concentration types that differ only in what measured them. `0x21` gas
+concentration (ppm) and `0x22` mass concentration (µg/m³) already exist and are
+different quantities, not different names for this one.
+
+---
+
+## 5. RadiANT device types
+
+Both are the `0x60` envelope with a pinned schema, per section 1. Both partition
+all 256 page numbers, because `scripts/check_profile_registry.py` requires it of
+any type with status `radiant` and because an unassigned page number should be a
+recorded decision.
+
+### 5.1 Continuous glucose monitor, device type `0x61`
+
+| Parameter | Value |
+|---|---|
+| Device type | `0x61` |
+| Channel period | **65535** (0.5 Hz), the slowest strictly-periodic ANT master |
+| RF channel | 57 |
+| Transmission type | `0x05` |
+| Envelope | `0x60`, version 1 |
+| Transforms | **`X_AUTH` mandatory.** See below |
+| Schema id | `0x01` for the field set below |
+
+<!-- radiant-registry: pagemap-0x61 -->
+
+| Page | Name | Summary |
+|---|---|---|
+| `0x00` | Descriptor | The self-describing schema, sent as a set of consecutive frames |
+| `0x01-0x0F` | Data | Packed field values against the announced schema |
+| `0x10` | Reliable command | Command + sequence + inline tag, receiver -> node |
+| `0x11` | Command acknowledge | Result + sequence + inline tag, node -> receiver |
+| `0x12` | Sync handoff | One receiver tells another where and when a node it already tracks transmits |
+| `0x13` | Frequency move | Target RF index and a countdown; receivers act on expiry, not receipt |
+| `0x14-0x1F` | Reserved | Unassigned; a receiver ignores these |
+| `0x20-0x2F` | Reserved for the security envelope | Epoch and key-generation announcement, v2 TESLA key disclosure |
+| `0x30-0x4F` | Reserved | Unassigned |
+| `0x50` | Common page 80 | Manufacturer information, byte-exact ANT+ |
+| `0x51` | Common page 81 | Product information, byte-exact ANT+ |
+| `0x52` | Common page 82 | Battery status, byte-exact ANT+ |
+| `0x53-0xEF` | Reserved | Other ANT+ common pages and future RadiANT pages |
+| `0xF0-0xFF` | Vendor-private | Never registered, never bridged, never assumed to mean anything |
+
+**The mandatory schema.** Field area is bits 0..39 of page `0x01`, because
+`X_AUTH` claims byte `[7]`.
+
+| Field id | Quantity | Type | Acc | Signed | Width | Exp | Page | Bit offset | Invalid |
+|---|---|---|---|---|---|---|---|---|---|
+| `0x01` | glucose concentration | `0x28` | no | no | 12 | -2 | `0x01` | 0 | `0xFFF` |
+| `0x02` | reading age | `0x27` | no | no | 12 | 0 | `0x01` | 12 | `0xFFF` |
+| `0x03` | trend | `0x40` | no | no | 4 | 0 | `0x01` | 24 | `0xF` |
+| `0x04` | sensor status | `0x40` | no | no | 4 | 0 | `0x01` | 28 | `0xF` |
+
+32 of 40 bits used; 8 remain for a profile revision to claim.
+
+- **Glucose is 0.01 mmol/L over 0..40.95 mmol/L.** That is 0.18 mg/dL, which is
+  already finer than any sensor's accuracy, and it is *deliberately* not the
+  drafted 0.1 mg/dL: a CGM's MARD is around 9 %, so a tenth of a mg/dL is three
+  significant figures of false precision. mol/m³ is the canonical unit and is
+  numerically identical to mmol/L; a receiver displaying mg/dL multiplies by
+  18.016.
+- **Reading age is 12 bits of seconds, 0..4094.** The drafted u8 capped at 255 s
+  and **a CGM updates every 5 minutes**, so the field overflowed during normal
+  operation and reported a fresh reading as stale. This is the one drafted field
+  that was outright broken rather than merely arguable.
+- **Trend** is the sensor's own smoothed answer over ~15 minutes and is *not*
+  receiver-derivable from a few 0.5 Hz samples, which is why it survives rule 6
+  of section 1 where the drafted temperature profile's trend field does not.
+
+Trend code space, `0x40` generic enum declared here:
+
+| Code | Meaning |
+|---|---|
+| 0 | falling rapidly, faster than 2 mg/dL/min |
+| 1 | falling, 1 to 2 mg/dL/min |
+| 2 | falling slowly |
+| 3 | stable |
+| 4 | rising slowly |
+| 5 | rising, 1 to 2 mg/dL/min |
+| 6 | rising rapidly, faster than 2 mg/dL/min |
+| 7..14 | reserved |
+| 15 | not available |
+
+Sensor status code space:
+
+| Code | Meaning |
+|---|---|
+| 0 | OK |
+| 1 | warming up |
+| 2 | expired |
+| 3 | error, replace sensor |
+| 4 | calibration required |
+| 5..14 | reserved |
+| 15 | not available |
+
+#### Why `X_AUTH` is mandatory here and nowhere else
+
+Every other profile in this document treats the security transforms as an
+opt-in, because a wrong wind reading costs an aero estimate and a wrong PM2.5
+reading costs a decision about a window. **A forged glucose reading causes
+someone to eat, or not eat.** That is the only profile in this project where an
+injected packet has a direct physiological consequence, and a broadcast on an
+open network with no authentication is trivially injectable by anyone in range.
+
+So, normative:
+
+- A `0x61` node **must** set `X_AUTH` in descriptor frame 0 byte `[7]`.
+- A receiver **must not display a reading it has not verified.** Not as a number
+  with a warning icon, not greyed out — an unverified or unverifiable reading is
+  reported as **no reading**, the same way heart rate's `0` byte is.
+- The same applies to a *stale* reading: a receiver **must** compare the
+  reading-age field against its own tolerance and report no reading past it,
+  rather than displaying an old number as a current one.
+
+The consequence is stated rather than hidden: **this profile cannot ship until
+the security layer does.** `docs/radiant-security.md` owns that layer, the
+descriptor authentication frame is specification-only today, and a `0x61` node
+built before it exists would be one that this document says must not be
+displayed. That is the honest position and it is preferable to a profile that
+ships sooner and is wrong in the field.
+
+**This rule is CGM's because CGM is the profile in this document that needs
+it, not because CGM is special.** Any future `0x60` recipe whose reading has a
+direct physiological consequence — blood pressure (ANT+ device type `0x12`,
+which this project does not implement or decode; no reference section exists
+for it because its page layout was not found anywhere verifiable) is the
+obvious next candidate — inherits this section's reasoning and its rules
+without needing its own restatement. A recipe that meets the "wrong reading,
+physiological consequence" test and skips `X_AUTH` has not made a different
+engineering choice; it has not read this section.
+
+#### The collision risk, recorded rather than solved
+
+**An ANT+ Glucose Device Profile existed as a members-only beta** — ANT+ tech
+bulletin, 5 March 2013, "New revision of CGM Profile 1.0_Beta.009". It never
+reached a public 1.0, it is absent from the public device profile list and from
+the Android ANT+ plugin's `DeviceType` enum, and **its device type number could
+not be verified**.
+
+So `0x61` is claimed knowing that an unpublished 2013 allocation could be
+anywhere in the space, including here. Nothing reduces that risk to zero. What
+bounds it is the registry's standing rule: a receiver treats a device type as a
+hint, the descriptor carries an envelope version and a schema id, and a receiver
+that decodes on device type alone has no defence against a collision — which is
+the receiver's bug. A foreign profile's bytes will not parse as a valid
+descriptor set, and with `X_AUTH` mandatory they will not verify either.
+
+### 5.2 Smart fan, device type `0x62`
+
+| Parameter | Value |
+|---|---|
+| Device type | `0x62` |
+| Channel period | **8192** (4.00 Hz) |
+| RF channel | 57 |
+| Transmission type | `0x05` |
+| Envelope | `0x60`, version 1 |
+| Transforms | Optional. `X_AUTH` recommended wherever an unauthenticated actuator is a nuisance |
+| Schema id | `0x01` for the field set below |
+
+The period is 4 Hz **because commands arrive near the node's own transmit slot**,
+so the period is the command latency: 8192 counts gives 250 ms. A slower fan
+would be cheaper on battery, and a fan is mains-powered.
+
+<!-- radiant-registry: pagemap-0x62 -->
+
+| Page | Name | Summary |
+|---|---|---|
+| `0x00` | Descriptor | The self-describing schema, sent as a set of consecutive frames |
+| `0x01-0x0F` | Data | Packed field values against the announced schema |
+| `0x10` | Reliable command | Command + sequence + inline tag, receiver -> node |
+| `0x11` | Command acknowledge | Result + sequence + inline tag, node -> receiver |
+| `0x12` | Sync handoff | One receiver tells another where and when a node it already tracks transmits |
+| `0x13` | Frequency move | Target RF index and a countdown; receivers act on expiry, not receipt |
+| `0x14-0x1F` | Reserved | Unassigned; a receiver ignores these |
+| `0x20-0x2F` | Reserved for the security envelope | Epoch and key-generation announcement, v2 TESLA key disclosure |
+| `0x30-0x4F` | Reserved | Unassigned |
+| `0x50` | Common page 80 | Manufacturer information, byte-exact ANT+ |
+| `0x51` | Common page 81 | Product information, byte-exact ANT+ |
+| `0x52` | Common page 82 | Battery status, byte-exact ANT+ |
+| `0x53-0xEF` | Reserved | Other ANT+ common pages and future RadiANT pages |
+| `0xF0-0xFF` | Vendor-private | Never registered, never bridged, never assumed to mean anything |
+
+**The mandatory schema**, on page `0x01`:
+
+| Field id | Quantity | Type | Acc | Signed | Width | Exp | Page | Bit offset | Invalid |
+|---|---|---|---|---|---|---|---|---|---|
+| `0x01` | current fan speed | `0x24` | no | no | 8 | 0 | `0x01` | 0 | `0xFF` |
+| `0x02` | target fan speed | `0x24` | no | no | 8 | 0 | `0x01` | 8 | `0xFF` |
+| `0x03` | fan mode | `0x42` | no | no | 4 | 0 | `0x01` | 16 | `0xF` |
+
+Both speeds are 0..100 %. Publishing target alongside current is what lets a UI
+show a fan spooling up rather than reporting a lag as an error.
+
+Commands use pages `0x10` and `0x11` unchanged: **`0x02` set level** with target
+field `0x02`, and **`0x04` set mode / enum** with target field `0x03`. No command
+id is added, and no bespoke command page exists.
+
+#### The auto-mode design hole, and its resolution
+
+The drafted profile had the head unit send the fan an HR threshold — "start at
+120 bpm, full at 170" — and never said where the fan got heart rate from. There
+are only two possibilities and the draft specified neither: the fan opens its own
+ANT channel to an HR strap (and then needs that strap's device number, which was
+in no page), or the head unit runs the loop (and then the thresholds are dead
+bytes).
+
+**Resolved in favour of the head unit owning the control loop.** The fan is a
+0..100 % actuator with a mode. It does not receive heart rate, it does not
+implement a controller, and it has no threshold fields. The head unit already has
+every input — HR, power, speed, and any `0x60` core-temperature node — and is the
+only place all of them exist at once.
+
+That deletes four bytes from the control page and makes the profile
+implementable by a fan vendor with no ANT receiver in the product. The `0x42` fan
+mode field remains because a fan may have modes of its own (off, manual, sleep,
+oscillate) that are not a speed.
+
+---
+
+## 6. `0x60` schema recipes
+
+A recipe is a **published field set on device type `0x60`**: the same envelope,
+no device type of its own, no registry claim, no receiver change. A node
+implements one by putting these fields in its descriptor. A receiver that
+recognises the schema id can name the node; a receiver that does not still
+decodes every value, because the descriptor says what they are.
+
+**Recipes are not normative in the way sections 3 and 5 are.** They are the
+settled-enough form of a field set, published so that two implementers of the
+same sensor produce the same descriptor. Section 7's promotion bar is how one
+becomes a device type.
+
+### 6.1 Apparent wind
+
+The registry already recorded this one under "not claimed, and why" — it ships on
+`0x60` first, and a device type is worth claiming once its fields have settled.
+This recipe is that first ship, not a claim.
+
+| Field id | Quantity | Type | Acc | Signed | Width | Exp | Page | Bit offset |
+|---|---|---|---|---|---|---|---|---|
+| `0x01` | apparent wind speed | `0x16` | no | no | 12 | -2 | `0x01` | 0 |
+| `0x02` | apparent wind yaw angle | `0x18` | no | **yes** | 12 | -3 | `0x01` | 12 |
+| `0x03` | differential (pitot) pressure | `0x12` | no | **yes** | 16 | -1 | `0x01` | 24 |
+| `0x04` | sensor status | `0x40` | no | no | 4 | 0 | `0x01` | 40 |
+| `0x05` | static pressure | `0x12` | no | no | 20 | 0 | `0x02` | 0 |
+| `0x06` | air temperature | `0x10` | no | no | 12 | -1 | `0x02` | 20 |
+| `0x07` | relative humidity | `0x11` | no | no | 8 | 0 | `0x02` | 32 |
+| `0x08` | air distance | `0x34` | **yes** | no | 24 | 0 | `0x03` | 0 |
+
+- **Speed is 0.01 m/s over 0..40.95 m/s**, and the unit is m/s and not "0.01 m/s
+  or kph" — the drafted line offered a choice, and a unit a sender picks is not a
+  unit.
+- **Yaw is 0.001 rad**, about 0.057°, signed over ±4.095 rad. The drafted 1° in an
+  int16 was wrong twice: ±180° needs 9 bits, and CdA work needs far better than a
+  degree.
+- **Air density is deleted.** It is computed from static pressure, temperature and
+  humidity, all three of which are now published. A node that publishes only the
+  density it computed has thrown away the inputs and given the receiver a number
+  it cannot check or recompute — rule 6 of section 1.
+- **Differential pressure is published raw**, signed, 0.1 Pa. Dynamic pressure at
+  15 m/s is about 138 Pa. This is the field that makes field recalibration and
+  zero-offset correction possible, and the drafted profile had no equivalent.
+- **Air distance is the accumulating partner** section 5 of
+  `docs/radiant-telemetry.md` requires: speed `0x16` integrates to distance
+  `0x34`, and the accumulator is what survives a lost packet.
+
+Sensor status: 0 calibrating, 1 ready, 2 blocked or obstructed, 3 fault,
+4..14 reserved, 15 not available.
+
+### 6.2 Air quality
+
+| Field id | Quantity | Type | Acc | Signed | Width | Exp | Page | Bit offset |
+|---|---|---|---|---|---|---|---|---|
+| `0x01` | PM2.5 mass concentration | `0x22` | no | no | 12 | 0 | `0x01` | 0 |
+| `0x02` | PM10 mass concentration | `0x22` | no | no | 12 | 0 | `0x01` | 12 |
+| `0x03` | CO2 concentration | `0x21` | no | no | 16 | 0 | `0x01` | 24 |
+| `0x04` | air temperature | `0x10` | no | no | 12 | -1 | `0x02` | 0 |
+| `0x05` | relative humidity | `0x11` | no | no | 8 | 0 | `0x02` | 12 |
+
+Every one of these is an existing vocabulary type, so this recipe adds nothing to
+any table. Three drafted fields are deliberately gone:
+
+- **The composite AQI score and the AQI standard indicator.** AQI is *derived*
+  from the concentrations, and the breakpoints change — the US EPA revised the
+  PM2.5 breakpoints in 2024. A firmware-computed AQI is a number that goes stale
+  in a deployed sensor and can never be corrected, where a receiver-computed one
+  is fixed by a software update. The node publishes what it measured.
+- **The VOC index.** It is explicitly sensor-vendor-specific and therefore not
+  comparable between two sensors, which is the one property a core interoperable
+  field must have. A node that wants to publish it uses a vendor-private type in
+  `0xF0..0xFF`, which the bridge drops by rule.
+- **Ozone and nitrogen dioxide.** Real sensors for both are rare and expensive.
+  Nothing stops a node adding them as `0x21` fields — the envelope does not need
+  permission — but they are not core.
+
+**Two fields are added, and they matter more than anything dropped.** CO2 is the
+most-wanted indoor air number and the draft omitted it entirely. Relative
+humidity is not a courtesy: PM mass readings from an optical sensor are
+humidity-dependent through hygroscopic particle growth, so **a PM2.5 number
+without an RH number alongside it is not comparable to another sensor's**, and a
+receiver cannot correct what it was not told.
+
+Rate: an air quality node is the archetypal sparse-mode node. The drafted 2 Hz is
+roughly a hundred times what the sensors' own averaging windows support.
+
+### 6.3 Physiological temperature
+
+| Field id | Quantity | Type | Acc | Signed | Width | Exp | Page | Bit offset |
+|---|---|---|---|---|---|---|---|---|
+| `0x01` | body temperature | `0x10` | no | no | 16 | -2 | `0x01` | 0 |
+| `0x02` | sensor placement | `0x40` | no | no | 4 | 0 | `0x01` | 16 |
+| `0x03` | measurement quality | `0x24` | no | no | 8 | 0 | `0x01` | 20 |
+
+Temperature is in kelvin at 0.01 K, the vocabulary's canonical unit — 310.15 K is
+37.00 °C. The drafted encoding was a u16 at 0.01 °C with a -20 °C offset, which
+spans -20 to +635 °C for a quantity whose entire physiological range is 20 to
+45 °C, and which invents a second temperature representation for a vocabulary
+that already has one.
+
+Placement: 0 core, ingestible; 1 core, calculated from a wearable; 2 skin;
+3 tympanic; 4 axillary; 5 oral; 6 generic; 7..14 reserved; 15 not available.
+
+**Measurement quality is the field the draft was missing and the one that
+matters most.** A calculated core temperature — the wearable kind, not the pill —
+is a model output, and during warm-up or under poor skin contact it is wrong by
+degrees while looking entirely plausible. Devices in this class report a
+confidence, users are told to ignore readings below it, and a profile without it
+publishes a number a receiver cannot qualify.
+
+**The drafted trend field is gone.** Unlike the CGM's, it is a receiver-derivable
+smoothing of a 1 Hz signal, and rule 6 of section 1 applies.
+
+#### Why this is not an additive page on ANT+ Environment `0x19`
+
+ADR 0008 permits adding a page number to an ANT+ device type, and `0x19` has a
+page-number byte, so the mechanism is available. It is still refused, for a
+structural reason rather than a preference:
+
+**Environment page 1 *is* the ambient temperature reading, and the profile has no
+placement field of any kind** (section 3.7). So a body-temperature sensor
+claiming device type `0x19` has exactly two options, and both are wrong:
+
+- **Emit page 1 with body temperature.** Every existing tempe receiver in range
+  then displays 37 °C as the air temperature. The additive-page mechanism
+  protects a legacy receiver from pages it does not know; it does nothing about a
+  page it *does* know carrying a different quantity than it expects.
+- **Omit page 1.** The node is then an Environment sensor that never sends the
+  Environment profile's only data page — a broken sensor to every receiver, which
+  will report it as a fault rather than as a different kind of device.
+
+There is no third option, and no additive page fixes either. A quantity that
+needs a placement field cannot live in a profile that has none.
+
+**ANT+'s own Core Temperature profile, device type `0x7F` (section 3.8), is
+prior art for this reasoning rather than a counter-example.** When ANT+ needed
+physiological temperature, it did not add a page to Environment either — it
+minted a separate device type. That is the same structural answer this section
+reaches by a different vehicle (a `0x60` recipe instead of a device type,
+because section 5's promotion bar has not been met by anything here yet). Its
+own page 0 carries a data-quality field, independently arriving at the same
+field this recipe carries for the same reason: a calculated core temperature is
+a model output that can be wrong during warm-up, and a receiver needs to be told
+when to distrust it.
+
+### 6.4 Presence lock
+
+This is the drafted immobilizer profile with its premise and its cryptography
+both removed. What survives is small, and that is the finding.
+
+| Field id | Quantity | Type | Acc | Signed | Width | Exp | Page | Bit offset |
+|---|---|---|---|---|---|---|---|---|
+| `0x01` | lock state | `0x05` | no | no | 2 | 0 | `0x01` | 0 |
+| `0x02` | vehicle speed | `0x16` | no | no | 12 | -2 | `0x01` | 2 |
+
+Lock state: 0 unlocked, 1 locked, 2 alarm triggered, 3 not available. Commands
+use page `0x10` command **`0x04` set mode / enum** against field `0x01`, with the
+existing sequence number, epoch-covered tag, idempotency rule and acknowledge
+page. **No rolling code, no key id, no challenge nonce, no bespoke command page.**
+
+Three normative rules, and they are the whole profile:
+
+1. **A node changes lock state only on an authenticated command.** It **must
+   not** change state on the loss of a receiver, a beacon, or any other presence
+   signal. The drafted design auto-locked when an ANT signal went away, and this
+   project has *measured* its own link rather than assuming it: a **~0.4 % loss
+   floor** characterised in `docs/spike-b-part2-results.md`, plus the drop and
+   re-acquire behaviour of a tracking receiver in `docs/radiant-telemetry.md`
+   section 8. An immobilizer built on "the signal stopped" engages on a normal
+   dropout, and the dropouts are not rare.
+2. **A node must refuse to engage while the vehicle is moving.** Field `0x02`
+   exists for this and is required on any node that can immobilize. The command
+   is rejected with result code `0x06` (busy) while speed is non-zero. A motor
+   cut-off on a moving bicycle is an injury, not a security feature.
+3. **Presence-based unlocking is the receiver's job, not the node's.** A watch or
+   phone that wants to unlock on approach issues a real, authenticated,
+   idempotent command. That keeps the entire trust decision in a place where a
+   user can see it and a log can record it, and it means a dropout unlocks
+   nothing and locks nothing.
+
+**The privacy cost is stated because it is the profile's worst property.** A node
+that broadcasts "I am locked" at 1 Hz on a stable device number lets anyone with
+a receiver scan a bike rack for locked bikes and follow one across sessions. The
+device-number rules of `docs/profile-registry.md` and the page 80/81/82 privacy
+rules apply here with more force than anywhere else in this document, and a
+deployment that cannot accept a discoverable beacon should not run this recipe at
+all.
+
+---
+
+## 7. Considered and not pursued
+
+### 7.1 E-bike / smart commuter
+
+**ANT+ LEV, device type `0x14`, already is this profile.** Section 3.6 has the
+field list from the primary specification. Of the drafted profile's fields, LEV
+carries battery state of charge, assist level in two forms, remaining range,
+motor and battery temperature, light status with high beam, and error codes —
+plus odometer, battery voltage, charge cycles, gear state, throttle, turn signals
+and regen level, none of which the draft had. It has an acknowledged command page.
+
+The gap is three fields: **rider power in watts, motor power in watts, and walk
+assist.** That gap does not justify a profile:
+
+- **Rider power is already a complete ANT+ profile.** An e-bike that wants to
+  publish it broadcasts ANT+ Bicycle Power `0x0B` on a second channel, which
+  every head unit and every training app already decodes, with accumulators this
+  project already implements.
+- **Motor power** is partly served by LEV's % assist, which is
+  `motor / (motor + rider)`. A true watt figure is a real gap.
+- **Walk assist** is absent from LEV entirely, including from its command page.
+
+**If this is revived, it is an additive page on `0x14` and nothing else.** The
+route is open: LEV has a page-number byte, pages 6..15 are reserved for future
+use, and the RadiANT compat allocation `0x70`-`0x72` is unused by LEV, whose only
+high page numbers are 16, 34 and the common pages. The conditions ADR 0008
+imposes are met. What is missing is a builder — the fields would be motor power,
+rider power and a walk-assist command, and this project does not have an e-bike
+to verify them against.
+
+Two drafted encodings are recorded because they were errors rather than choices:
+`int8` cannot represent "-40 °C to +215 °C" (that is a u8 with a -40 offset, and
+the line contradicted itself), and an unsigned u16 for motor power cannot express
+regenerative braking.
+
+### 7.2 Water sports / rowing and paddling
+
+**No ANT+ profile covers on-water rowing or paddling, and shipping products
+already solved it without one.** The Vaaka canoe and kayak sensor reports stroke
+rate as an **ANT+ Bike Cadence `0x7A`** sensor. The PerformanceBlade kayak power
+meter presents as an **ANT+ Bicycle Power `0x0B`** meter. Both work with every
+existing head unit today.
+
+Indoor rowing is covered: **FE-C `0x11`, equipment type 22, page 22**, carrying
+stroke count as a u8 accumulator, cadence, and instantaneous power. **The "22,
+22" is confirmed against Concept2's own engineering documentation for the
+byte layout, but not against a primary ANT+ spec, and it should not be read as
+"page number equals equipment-type code" being a general FE-C rule** — a
+separate cross-check (GoldenCheetah's decoder) shows FE-C's general page 16
+carries the equipment-type code as a data field while equipment-specific pages
+are independently numbered elsewhere (stationary bike at `0x15`, trainer at
+`0x19`), so 22-and-22 here is Concept2's own coincidence rather than a pattern
+to lean on. Confidence: medium, single vendor source, worth a primary-spec
+check before this claim is load-bearing for anything.
+
+So the honest recommendation is the one the market already reached: a paddle
+sensor broadcasts `0x0B`, where a stroke is a crank revolution and the torque
+accumulators are real, and puts anything paddling-specific on a `0x60` channel
+alongside. This project blesses no field set for the latter, because it has no
+paddle sensor to settle one against.
+
+Three drafted fields are recorded as *not* recommended to anyone who does build
+one. **Distance per stroke** is not measurable by a paddle-mounted sensor, which
+has no distance reference at all. **Stroke rate** is derivable from the
+accumulating stroke count the same profile already carries, which is the
+convenience-versus-accumulator pattern applied backwards. **Slip / wash as a
+percentage of wasted energy** has no vendor-independent definition, so two
+implementations would produce different numbers under one field name — the exact
+failure a shared vocabulary exists to prevent.
+
+### 7.3 The promotion bar
+
+A recipe becomes a device type when, and only when:
+
+1. A real node ships it on `0x60` and the field set has not changed for two
+   further releases.
+2. A receiver can state what it gains from recognising the type **before**
+   decoding a descriptor. "It would be tidier" is not that.
+3. The registry's collision check has been repeated at claim time, not reused
+   from the proposal.
+
+`0x61` and `0x62` are claimed against criterion 2 alone, which is a departure
+recorded here rather than hidden: neither has shipped. If either fails to ship,
+the registry's rule is that the row stays with its status changed and the number
+is not recycled.
+
+---
+
+## 8. Where the code lives
+
+| File | What it is |
+|---|---|
+| `src/profiles/profile_hr.c` | ANT+ heart rate `0x78` |
+| `src/profiles/profile_power.c` | ANT+ bicycle power `0x0B` |
+| `src/profiles/profile_common.c` | Common pages 80, 81, 82 |
+| `src/profiles/profile_telemetry.c` | The `0x60` envelope, and therefore every profile in sections 5 and 6 |
+| `src/profiles/profile_bits.c` | The MSB-first packer whose vectors are the shared contract |
+| `tools/ant_pages.py` | All of the above, mirrored, plus the field-type vocabulary |
+
+A capture of the C stream is committed as `tools/vectors/compat-hr.antcap` and
+`tools/vectors/compat-power.antcap`, and `tools/test_compat_capture.py` decodes
+every message with the Python encoders and re-encodes it, asserting the bytes
+come back identical. A table in section 3 that disagreed with either
+implementation therefore fails a test rather than sitting in a document.
+
+Nothing in sections 5 and 6 has an implementation yet. They are schemas for a
+codec that already exists, which is the point of section 1.
+
+---
+
+## 9. The rest of the official ANT+ profile list
+
+**Not implemented, not decoded, not registered, not machine-checked.** This
+table exists so that a reader of this document sees the whole landscape in one
+place rather than concluding — wrongly — that a profile's absence from
+sections 1–8 means this project overlooked it or considers it out of scope. It
+did not, and it does not. Nothing here is a claim: `docs/profile-registry.md`'s
+own stated policy is that it records only device types this project
+implements, decodes, or has a documented reason to depend on, and that policy
+is correct and unchanged. Before building against or claiming any of these,
+verify independently against `thisisant.com/developer/ant-plus/device-profiles`
+and the registry's own claim process — a number below is "what research turned
+up," not "what is safe to build on."
+
+Six of the profiles this project actually has depth on — implemented, or with
+their own reference-only section because a design decision depends on them —
+are in the table for completeness of the picture, cross-referenced rather than
+repeated.
+
+| Device type | Name | Depth here | Confidence |
+|---|---|---|---|
+| `0x0B` | Bicycle Power | Implemented, §3.1 | — |
+| `0x10` | Controls | Not implemented | community + open-source |
+| `0x11` | Fitness Equipment (FE-C) | Not implemented, referenced §7.2 | community + open-source |
+| `0x12` | Blood Pressure | Not implemented; forward-noted §5.1 as the next profile that would inherit CGM's mandatory-`X_AUTH` rule | community + open-source, type only — no page layout found anywhere |
+| `0x13` | Geocache | Not implemented | community |
+| `0x14` | Light Electric Vehicle | Not implemented, reference-only §3.6 | primary spec |
+| `0x19` | Environment | Not implemented, reference-only §3.7 | four converging open-source sources |
+| `0x1F` | Muscle Oxygen | Not implemented | **vendor code** (BSX's own published source), high confidence, full page layout known but not transcribed here |
+| `0x22` | Shifting | Not implemented | open-source only |
+| `0x23` | Bike Lights | Not implemented | primary spec (publicly mirrored PDF) |
+| `0x28` | Radar | Not implemented | open-source only |
+| `0x30` | Tire Pressure Monitor | Not implemented | open-source only |
+| `0x73` | Dropper Seatpost | Not implemented | open-source, name matches the official list exactly |
+| `0x77` | Weight Scale | Not implemented. `docs/profile-registry.md`'s claim-range table already excludes this as part of a dense band — this row is cross-reference, not new information | community + open-source |
+| `0x78` | Heart Rate | Implemented, §3.2 | — |
+| `0x79`/`0x7A`/`0x7B` | Bike Speed and Cadence family | Implemented (combined) / period-only (cadence, speed), §3.3 | — |
+| `0x7C` | Stride-Based Speed and Distance | Not implemented | community + open-source |
+| `0x7F` | Core Temperature | Not implemented, reference-only §3.8 | vendor code |
+| unverified | Multi-Sport Speed and Distance | Real profile, confirmed via the official list; **device type number could not be verified from any source worth trusting** — a single low-quality search result claimed `15` and is explicitly not transcribed here | unverified |
+| unverified | Racquet | Real profile, device type not found | unverified |
+| unverified | Extended Display (marketed as "Varia Vision") | Real profile, device type not found | unverified |
+| unverified | Suspension | Real profile, device type not found | unverified |
+| unverified | Tracker | Real profile — ANT+ tech bulletins confirm it shipped — device type not found | unverified |
+| n/a | Sync | Governs ANT-FS file-transfer session behaviour rather than broadcasting sensor data; not a device-type profile in the sense every other row is | — |
+
+**Reading the confidence column.** "Primary spec" and "vendor code" mean a
+claim traceable to the manufacturer or to Garmin's own document — the same
+standard section 3.6 and 3.8 hold themselves to. "Open-source only" means a
+third-party decoder (`openant` and similar) asserts the number with no
+corroborating second source — real enough to avoid colliding with by accident,
+not real enough to build a receiver against without independent verification.
+"Unverified" means exactly what it says: the profile is real, its device type
+is not confirmed here, and this document is not the place that number will
+come from.

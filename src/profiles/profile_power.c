@@ -2,7 +2,8 @@
 /*
  * profile_power.c - ANT+ Bicycle Power, device type 0x0B.
  *
- * Provenance: docs/ant-plus-profiles.md lines 53-124, this project's own prior
+ * Provenance: docs/device-profiles.md section "Bicycle Power, device type 0x0B"
+ * (formerly docs/ant-plus-profiles.md, absorbed into it), this project's own prior
  * clean-room derivation of the four bicycle-power page layouts, and its mirror
  * in tools/ant_pages.py (encode_power_std, encode_power_torque,
  * encode_power_torque_freq). See the header. No sdk-ant source was consulted
