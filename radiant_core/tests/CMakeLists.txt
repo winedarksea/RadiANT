@@ -121,6 +121,15 @@ target_sources(app PRIVATE
   # search header on purpose: "discovery never moves" is a property of the
   # include graph here, not a rule somebody remembers.
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_freq.c"
+  # Response slots and the reliable-command state machine (RF-8): section 9's
+  # idempotency rule, the inline tag at both widths, and the downlink window
+  # profile_schedule.c has been announcing since RF-5a. The SEVENTH file here
+  # that includes a radiant_core header and the fifth that has to - verifying a
+  # command needs a key, and arming a listen slot needs the scheduler. It adds
+  # no slot kind to radiant_sched.c and reaches no search header: a response
+  # slot is an ordinary bounded receive window, which is the claim
+  # test_command.c exists to keep honest.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_command.c"
 )
 target_include_directories(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles")

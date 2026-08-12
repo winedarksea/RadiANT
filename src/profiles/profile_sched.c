@@ -53,6 +53,7 @@ int profile_sched_init(struct profile_sched *ps,
 
 	memset(ps, 0, sizeof(*ps));
 	ps->cfg = *cfg;
+	ps->sched_frame = -1;
 
 	if (cfg->desc != NULL) {
 		rc = profile_desc_encode(cfg->desc, ps->frames,
@@ -68,6 +69,11 @@ int profile_sched_init(struct profile_sched *ps,
 			return rc;
 		}
 		ps->n_pages = (uint8_t)rc;
+
+		/* Latched once. -ENOENT here is the ordinary case - most nodes
+		 * announce no schedule block at all - and is not an error. */
+		rc = profile_desc_schedule_index(cfg->desc);
+		ps->sched_frame = (rc < 0) ? -1 : (int8_t)rc;
 
 		ps->sparse = (cfg->desc->flags & PROFILE_TLM_FLAG_SPARSE) != 0u;
 		if (ps->sparse && cfg->desc->period != 0u) {
@@ -137,6 +143,29 @@ int profile_sched_set_client(struct profile_sched *ps,
 	return 0;
 }
 
+int profile_sched_set_downlink(struct profile_sched *ps,
+			       const struct profile_sched_downlink *dl)
+{
+	if (ps == NULL) {
+		return -EINVAL;
+	}
+	if (dl == NULL) {
+		ps->have_dl = false;
+		memset(&ps->dl, 0, sizeof(ps->dl));
+		return 0;
+	}
+	if (dl->phase == NULL) {
+		return -EINVAL;
+	}
+	if (ps->sched_frame < 0) {
+		/* See the header: a hook with no schedule frame under it. */
+		return -ENOENT;
+	}
+	ps->dl = *dl;
+	ps->have_dl = true;
+	return 0;
+}
+
 void profile_sched_request_descriptor(struct profile_sched *ps)
 {
 	if (ps == NULL || ps->n_frames == 0u) {
@@ -193,11 +222,40 @@ uint32_t profile_sched_m(const struct profile_sched *ps)
  * ---------------------------------------------------------------------------
  */
 
+/*
+ * Hand out one frame of the encoded set.
+ *
+ * The re-phase is the only thing in this engine that edits an encoded byte on
+ * its way out, and it is confined to one field of one frame: the caller's copy,
+ * never ps->frames[], so a hook that returns a different answer next time
+ * cannot accumulate. That is why the descriptor set is still encoded exactly
+ * once at init, which was the property the interval-0 restriction was protecting
+ * and the reason this is a patch rather than a re-encode.
+ */
 static enum profile_slot_kind take_descriptor(struct profile_sched *ps,
-					      uint8_t *body)
+					      uint8_t *body, radiant_time_t t_sync)
 {
-	memcpy(body, &ps->frames[(size_t)ps->burst_index * PROFILE_TLM_FRAME_LEN],
+	uint8_t index = ps->burst_index;
+
+	memcpy(body, &ps->frames[(size_t)index * PROFILE_TLM_FRAME_LEN],
 	       PROFILE_TLM_FRAME_LEN);
+
+	if (ps->have_dl && t_sync != RADIANT_TIME_NEVER &&
+	    ps->sched_frame >= 0 && index == (uint8_t)ps->sched_frame) {
+		int32_t phase = ps->dl.phase(t_sync, ps->dl.user);
+
+		if (phase >= 0) {
+			/* -ENOENT (this block announces no window) and -EINVAL
+			 * (a phase past the interval) are both a hook
+			 * disagreeing with the descriptor it was installed
+			 * against. The encoded bytes are the ones that were
+			 * validated, so they go out unchanged and the node
+			 * announces the phase it was built with rather than one
+			 * nobody checked. */
+			(void)profile_sched_rephase(&body[2], (uint16_t)phase);
+		}
+	}
+
 	ps->burst_index++;
 	if (ps->burst_index >= ps->n_frames) {
 		ps->burst = false;
@@ -259,7 +317,8 @@ static bool page_82_due(struct profile_sched *ps)
 }
 
 static enum profile_slot_kind next_periodic(struct profile_sched *ps,
-					    uint32_t m, uint8_t *body)
+					    uint32_t m, uint8_t *body,
+					    radiant_time_t t_sync)
 {
 	if (m == PROFILE_TLM_SLOT_PAGE_80 && ps->cfg.common_80 != NULL) {
 		if (ps->cfg.common_80(body, ps->cfg.user) == 0) {
@@ -278,7 +337,7 @@ static enum profile_slot_kind next_periodic(struct profile_sched *ps,
 		ps->burst_index = 0u;
 	}
 	if (ps->burst) {
-		return take_descriptor(ps, body);
+		return take_descriptor(ps, body, t_sync);
 	}
 
 	if (ps->have_client && ps->client.claim(m, body, ps->client.user)) {
@@ -295,7 +354,7 @@ static enum profile_slot_kind next_periodic(struct profile_sched *ps,
 }
 
 static enum profile_slot_kind next_sparse(struct profile_sched *ps, uint32_t m,
-					  uint8_t *body)
+					  uint8_t *body, radiant_time_t t_sync)
 {
 	/*
 	 * The 121-message interleave is useless to a node that sends forty
@@ -317,7 +376,7 @@ static enum profile_slot_kind next_sparse(struct profile_sched *ps, uint32_t m,
 	}
 
 	if (ps->burst) {
-		return take_descriptor(ps, body);
+		return take_descriptor(ps, body, t_sync);
 	}
 
 	if (ps->want_82) {
@@ -347,7 +406,8 @@ static enum profile_slot_kind next_sparse(struct profile_sched *ps, uint32_t m,
 	return PROFILE_SLOT_IDLE;
 }
 
-enum profile_slot_kind profile_sched_next(struct profile_sched *ps, uint8_t *body)
+enum profile_slot_kind profile_sched_next_at(struct profile_sched *ps,
+					     uint8_t *body, radiant_time_t t_sync)
 {
 	uint32_t m;
 
@@ -358,9 +418,14 @@ enum profile_slot_kind profile_sched_next(struct profile_sched *ps, uint8_t *bod
 	m = ps->m;
 	if (ps->sparse) {
 		ps->m++;
-		return next_sparse(ps, m, body);
+		return next_sparse(ps, m, body, t_sync);
 	}
 
 	ps->m = (m + 1u) % PROFILE_TLM_CYCLE;
-	return next_periodic(ps, m, body);
+	return next_periodic(ps, m, body, t_sync);
+}
+
+enum profile_slot_kind profile_sched_next(struct profile_sched *ps, uint8_t *body)
+{
+	return profile_sched_next_at(ps, body, RADIANT_TIME_NEVER);
 }

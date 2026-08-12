@@ -928,10 +928,96 @@ until some measured way of putting a longer frame on the air exists. Rate
 limiting and logged rejections are the whole mitigation, and a deployment that
 cannot accept 2^-16 per attempt has no answer inside this envelope today.
 
+**Amended 2026-08-11 — one such mechanism now exists, on exactly one PHY.** The
+long-range phase built a RadiANT-authored length field for `RADIANT_FRAME_CFG_LR`
+(ADR [0007](decisions/0007-long-range-phy.md)), permitted there and only there
+because no stock receiver can hear that PHY at all — which is a different
+argument from extension axis 3's, and is why its withdrawal still stands for the
+1 M format. So:
+
+**On an LR control channel the inline tag is 64 bits; everywhere else it stays
+16.** The covered bytes are the same six either way — page number, sequence,
+command, target, argument — so the tag grows off the end and no field in front
+of it moves. Page `0x10` is 8 bytes on 1 M and 14 bytes on LR, and the same for
+page `0x11`.
+
+Three things about that are worth stating so they are not re-argued:
+
+- **The width is the channel's, never the node's.** A 64-bit tag does not fit in
+  an eight-byte ANT frame, and a node that could choose 16 bits on a channel that
+  fits 64 would be choosing to be forgeable for no saving. It is a function of
+  the frame configuration and there is nothing to negotiate.
+- **It changes what the rate limit is for.** At 2^-16 the backoff below is
+  load-bearing and is the whole mitigation; at 2^-64 it is belt and braces. This
+  is the difference between a defensible actuator path and a rate-limit-mitigated
+  one, and it is the reason a real actuator should be on a control channel.
+- **The paragraph above still governs the 1 M case**, which is most nodes. Two
+  bytes remains the limit there, for the reason it always was.
+
 The command page is also why a spread MAC is not enough on its own: a spread
 MAC lets an attacker inject up to one window of forged data before detection,
 which is acceptable for telemetry and wrong for anything that actuates. See
 `docs/radiant-security.md`.
+
+### Response slots — when the node is listening, which is the whole of the latency
+
+The page above says nothing about *when* a command can arrive, and until it does
+the idempotency rule is solving the cheaper half of the problem. A command
+reaches a node only while the node's receiver is on. For a periodic node that is
+near its own transmit slot, so actuator latency is bounded by the channel period;
+for the sparse air-conditioning node of section 1 it is bounded by the heartbeat,
+which is up to 60 s.
+
+**The fix is not a shorter period.** Running a control channel faster multiplies
+duty across the 99 % of slots in which nothing is commanded, and it does so on
+the merged RF 57 window every other channel shares — which is this link layer's
+load-bearing property and the last thing to spend on an idle actuator.
+
+Instead the node keeps its period and opens a **downlink sub-slot at a fixed
+offset inside it**. That window is already specified: it is section 6's schedule
+block, whose interval, phase and dwell have been on the wire, announced and
+unopened, since the block was defined. This section is what opens it.
+
+- **The interval is not the period**, and that separation is the point. A node
+  at a 2 s heartbeat may announce a 1 s downlink interval without changing
+  anything it transmits. Latency and duty become two knobs instead of one.
+- **The phase is recomputed for every transmission of the schedule frame.** The
+  block's own text records that a node encoding its descriptor set once "must
+  announce interval 0" until this section existed; a node may now announce a live
+  window, and the cost is rewriting one 16-bit field on the way out rather than
+  re-encoding the set.
+- **The node listens only when it expects a command.** An always-open window at
+  the announced cadence is the receive duty this design exists to avoid, so
+  arming is explicit and consumable. A received command automatically buys two
+  further windows, which is what makes a retry free in the sense the idempotency
+  rule means: a receiver whose acknowledgement was lost retries into a window
+  that is still open.
+- **The cost is node receive current and nothing else.** No extra transmission,
+  no extra airtime, and no change to any other channel's window. 500 µs of
+  listening every 2 s is 0.025 % duty.
+
+**A control channel is coded S=8 on the long-range PHY.** That is a
+configuration convention rather than radio work: at eight bytes an S=8 frame is
+~1.23 ms against a period measured in hundreds of milliseconds, so airtime is
+not the latency problem here and never was — slot placement is. What S=8 buys is
+the link budget an actuator at range needs and, through the length field, the
+64-bit tag above. The two arrive together or neither does.
+
+**What this is worth, stated honestly.** The worst case is one downlink interval
+and the mean is half of one, against a worst case of one channel period or one
+heartbeat before. A missed slot costs exactly one further interval — not one
+period — which is the number a rider or an occupant would actually feel.
+**None of it is available to an ANT+ compatibility profile.** FE-C cannot change,
+so a Zwift resistance command still waits for the next FE-C slot; everything here
+is available only to RadiANT-native control device types.
+
+The mechanism lives in `src/profiles/profile_command.c`, the announcement in
+`src/profiles/profile_schedule.c`, and the slot placement is an ordinary bounded
+receive window through `radiant_sched_request_rx()` — **no new scheduler slot
+kind**, because a response slot has a format, a filter, an rf index, an open and
+a close, which is precisely what an RX window is. Posting it as one also lets
+several nodes' response windows merge into a single armed window, which a
+dedicated kind could not do.
 
 ---
 

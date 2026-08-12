@@ -45,12 +45,16 @@
  *     because they are layouts and section 9 fixes them; the idempotency rule,
  *     the accept window, the tag computation and the failed-verification rate
  *     limit are not, because they need a key and they belong to the phase that
- *     turns the command path on. The inline tag is a caller-supplied u16 here
- *     and this file has no opinion about how it was derived.
+ *     turns the command path on. That phase has landed and they are in
+ *     profile_command.h - so this remains a boundary rather than a gap, and the
+ *     inline tag is still a caller-supplied value about whose derivation this
+ *     file has no opinion. What DID change here is that the tag comes in two
+ *     widths now, because the long-range PHY can carry the longer one; see the
+ *     section-9 block near the end of this header.
  *   - NO SCHEDULE-BLOCK POLICY. The block itself is here now - frame 1 byte [3]
  *     bits 3..0 and the schedule frame, both in profile_schedule.h - but this
  *     file only moves it to and from the wire. What a receiver DOES with a
- *     downlink window is the response-slot phase's, and this file has no
+ *     downlink window is profile_command.h's, and this file still has no
  *     opinion about it beyond decoding it correctly.
  */
 
@@ -553,13 +557,38 @@ int profile_data_decode(const struct profile_descriptor *d, const uint8_t *body,
 /* ---------------------------------------------------------------------------
  * The reliable-command pages - docs/radiant-telemetry.md section 9
  *
- * LAYOUT ONLY. The idempotency rule, the accept window, the tag derivation and
- * the exponential backoff on FAILED verifications all need a key and a state
- * machine, and both belong to the phase that turns the command path on. What
- * is here is the byte order, so that the phase which does that work does not
- * also get to choose it.
+ * STILL LAYOUT ONLY, and that is now a boundary rather than a gap. The
+ * idempotency rule, the accept window, the tag derivation and the exponential
+ * backoff on failed verifications are implemented - they are in
+ * profile_command.h, which is where they went because they need a key, a clock
+ * and per-node state, and this file has none of the three. What is here is the
+ * byte order and the two widths it comes in.
+ *
+ * WHAT THE RESPONSE-SLOT PHASE ADDED HERE IS ONE THING: the tag is no longer
+ * always two bytes. The long-range PHY carries a RadiANT-authored length field,
+ * so an LR control channel can put a 64-bit tag on the air where an eight-byte
+ * ANT frame can only fit 16 bits - and section 9's "two bytes is the limit" was
+ * written when no mechanism for a longer frame existed. It does now, on exactly
+ * one PHY, so the width is a function of the frame configuration and never a
+ * node's preference. profile_cmd_tag_bytes() is that function; this file only
+ * moves the bytes.
  * ---------------------------------------------------------------------------
  */
+
+/*
+ * The two tag widths, and the page lengths they produce.
+ *
+ * The covered length is the same six bytes either way - page number, sequence,
+ * command, target, argument - so the tag grows off the end and the fields in
+ * front of it do not move. A receiver decoding a 14-byte page 0x10 with an
+ * eight-byte reader gets the right command and the wrong tag rather than
+ * garbage, which is the failure mode worth having.
+ */
+#define PROFILE_TLM_CMD_COVERED  6u  /* body[0..5]: what a tag is computed over */
+#define PROFILE_TLM_CMD_TAG_STD  2u  /* an 8-byte ANT frame; section 9's limit */
+#define PROFILE_TLM_CMD_TAG_LR   8u  /* an LR frame; the length extension's use */
+#define PROFILE_TLM_CMD_LEN_STD  (PROFILE_TLM_CMD_COVERED + PROFILE_TLM_CMD_TAG_STD)
+#define PROFILE_TLM_CMD_LEN_LR   (PROFILE_TLM_CMD_COVERED + PROFILE_TLM_CMD_TAG_LR)
 
 #define PROFILE_TLM_TARGET_NODE 0xFFu /* target field id meaning "the node" */
 
@@ -598,10 +627,45 @@ struct profile_command_ack {
 	uint16_t tag;
 };
 
+/*
+ * The eight-byte forms, unchanged. `tag` is the u16 of the struct, little-
+ * endian in body[6..7], and these are exactly the functions the envelope phase
+ * shipped - byte for byte, so every existing vector still passes.
+ */
 int profile_command_encode(const struct profile_command *c, uint8_t *body);
 int profile_command_decode(const uint8_t *body, struct profile_command *out);
 int profile_command_ack_encode(const struct profile_command_ack *a, uint8_t *body);
 int profile_command_ack_decode(const uint8_t *body, struct profile_command_ack *out);
+
+/*
+ * The width-carrying forms. `tag_len` is PROFILE_TLM_CMD_TAG_STD or
+ * PROFILE_TLM_CMD_TAG_LR and nothing else - a width that is neither is a caller
+ * inventing a third format, which is the thing a vocabulary field exists to
+ * prevent.
+ *
+ * The tag is passed as BYTES rather than as an integer, and that is deliberate:
+ * a 64-bit tag is a truncated MAC, truncation is a byte operation, and routing
+ * it through a uint64_t would put an endianness decision between the MAC and
+ * the wire where there is no reason for one. The struct's `tag` field is left
+ * alone by these functions for the same reason; on the decode side it receives
+ * the low 16 bits so that a caller which only wants the standard width does not
+ * have to reassemble them.
+ *
+ * Encode returns the number of body bytes written, or -EINVAL. Decode returns
+ * the tag length it found, or -EINVAL / -EPROTO for the wrong page number.
+ */
+int profile_command_encode_tag(const struct profile_command *c,
+			       const uint8_t *tag, uint8_t tag_len,
+			       uint8_t *body, size_t cap);
+int profile_command_decode_tag(const uint8_t *body, uint8_t len,
+			       struct profile_command *out, uint8_t *tag,
+			       uint8_t tag_cap);
+int profile_command_ack_encode_tag(const struct profile_command_ack *a,
+				   const uint8_t *tag, uint8_t tag_len,
+				   uint8_t *body, size_t cap);
+int profile_command_ack_decode_tag(const uint8_t *body, uint8_t len,
+				   struct profile_command_ack *out,
+				   uint8_t *tag, uint8_t tag_cap);
 
 #ifdef __cplusplus
 }

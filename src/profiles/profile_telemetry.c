@@ -895,6 +895,128 @@ int profile_command_ack_decode(const uint8_t *body, struct profile_command_ack *
 }
 
 /* ---------------------------------------------------------------------------
+ * The same two pages at either tag width
+ *
+ * The six covered bytes are written by the pair above and then the tag is
+ * appended, so there is exactly one statement of where the sequence number and
+ * the argument live. A second copy of that layout for the long form is the
+ * thing this file exists to not have.
+ * ---------------------------------------------------------------------------
+ */
+
+static bool cmd_tag_len_ok(uint8_t tag_len)
+{
+	return tag_len == PROFILE_TLM_CMD_TAG_STD ||
+	       tag_len == PROFILE_TLM_CMD_TAG_LR;
+}
+
+int profile_command_encode_tag(const struct profile_command *c,
+			       const uint8_t *tag, uint8_t tag_len,
+			       uint8_t *body, size_t cap)
+{
+	uint8_t std[PROFILE_TLM_CMD_LEN_STD];
+	int rc;
+
+	if (tag == NULL || body == NULL || !cmd_tag_len_ok(tag_len)) {
+		return -EINVAL;
+	}
+	if (cap < (size_t)PROFILE_TLM_CMD_COVERED + tag_len) {
+		return -EINVAL;
+	}
+
+	rc = profile_command_encode(c, std);
+	if (rc != 0) {
+		return rc;
+	}
+	memcpy(body, std, PROFILE_TLM_CMD_COVERED);
+	memcpy(&body[PROFILE_TLM_CMD_COVERED], tag, tag_len);
+	return (int)(PROFILE_TLM_CMD_COVERED + tag_len);
+}
+
+int profile_command_decode_tag(const uint8_t *body, uint8_t len,
+			       struct profile_command *out, uint8_t *tag,
+			       uint8_t tag_cap)
+{
+	uint8_t tag_len;
+
+	if (body == NULL || out == NULL || tag == NULL) {
+		return -EINVAL;
+	}
+	if (len < PROFILE_TLM_CMD_COVERED) {
+		return -EINVAL;
+	}
+	tag_len = (uint8_t)(len - PROFILE_TLM_CMD_COVERED);
+	if (!cmd_tag_len_ok(tag_len) || tag_cap < tag_len) {
+		return -EINVAL;
+	}
+	if (body[0] != PROFILE_TLM_PAGE_COMMAND) {
+		return -EPROTO;
+	}
+
+	out->seq = body[1];
+	out->cmd = body[2];
+	out->target = body[3];
+	out->arg = (uint16_t)((uint16_t)body[4] | ((uint16_t)body[5] << 8));
+	memcpy(tag, &body[PROFILE_TLM_CMD_COVERED], tag_len);
+	/* The low 16 bits, so a caller at the standard width reads the struct
+	 * and a caller at the long width reads the bytes. */
+	out->tag = (uint16_t)((uint16_t)tag[0] | ((uint16_t)tag[1] << 8));
+	return (int)tag_len;
+}
+
+int profile_command_ack_encode_tag(const struct profile_command_ack *a,
+				   const uint8_t *tag, uint8_t tag_len,
+				   uint8_t *body, size_t cap)
+{
+	uint8_t std[PROFILE_TLM_CMD_LEN_STD];
+	int rc;
+
+	if (tag == NULL || body == NULL || !cmd_tag_len_ok(tag_len)) {
+		return -EINVAL;
+	}
+	if (cap < (size_t)PROFILE_TLM_CMD_COVERED + tag_len) {
+		return -EINVAL;
+	}
+
+	rc = profile_command_ack_encode(a, std);
+	if (rc != 0) {
+		return rc;
+	}
+	memcpy(body, std, PROFILE_TLM_CMD_COVERED);
+	memcpy(&body[PROFILE_TLM_CMD_COVERED], tag, tag_len);
+	return (int)(PROFILE_TLM_CMD_COVERED + tag_len);
+}
+
+int profile_command_ack_decode_tag(const uint8_t *body, uint8_t len,
+				   struct profile_command_ack *out,
+				   uint8_t *tag, uint8_t tag_cap)
+{
+	uint8_t tag_len;
+
+	if (body == NULL || out == NULL || tag == NULL) {
+		return -EINVAL;
+	}
+	if (len < PROFILE_TLM_CMD_COVERED) {
+		return -EINVAL;
+	}
+	tag_len = (uint8_t)(len - PROFILE_TLM_CMD_COVERED);
+	if (!cmd_tag_len_ok(tag_len) || tag_cap < tag_len) {
+		return -EINVAL;
+	}
+	if (body[0] != PROFILE_TLM_PAGE_COMMAND_ACK) {
+		return -EPROTO;
+	}
+
+	out->seq = body[1];
+	out->result = body[2];
+	out->cmd = body[3];
+	out->value = (uint16_t)((uint16_t)body[4] | ((uint16_t)body[5] << 8));
+	memcpy(tag, &body[PROFILE_TLM_CMD_COVERED], tag_len);
+	out->tag = (uint16_t)((uint16_t)tag[0] | ((uint16_t)tag[1] << 8));
+	return (int)tag_len;
+}
+
+/* ---------------------------------------------------------------------------
  * The descriptor-set collapse - ADR 0007
  *
  * Everything here is concatenation and division. That is the whole point: the

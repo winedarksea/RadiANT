@@ -417,6 +417,25 @@ int radiant_sec_aes_ecb(const struct radiant_sec_key *k,
 #define RADIANT_SEC_DOM_COMPAT_MAC 0x04
 
 /*
+ * The telemetry envelope's reliable-command pages, docs/radiant-telemetry.md
+ * section 9. Reserved here for the reason the paragraph above gives - this is
+ * the list a reader checks a new domain byte against.
+ *
+ * It is a FIFTH domain rather than a reuse of RADIANT_SEC_DOM_COMPAT_MAC even
+ * though both authenticate a command, because the two commands are different
+ * messages under keys derived from the same root: the compat layer's private-
+ * mode switch is three bytes under K_cmd with a subtype at nonce_block[9], and
+ * this one is six bytes of a page 0x10 body. Sharing a domain byte between them
+ * would make the pair's security depend on the two message formats never
+ * colliding, which is a property nobody would notice losing.
+ *
+ * Command and acknowledge do NOT need separate domains: page 0x10 and page 0x11
+ * differ in body[0], which is the first covered byte, so the page number is
+ * already inside the MAC input.
+ */
+#define RADIANT_SEC_DOM_TLM_CMD    0x05
+
+/*
  * nonce_block = epoch[4 LE] || devnum[2 LE] || counter[2 LE] || dom || 0x00 x7
  */
 void radiant_sec_nonce_block(uint8_t out[RADIANT_SEC_BLOCK_BYTES],

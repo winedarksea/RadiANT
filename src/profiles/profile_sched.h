@@ -121,6 +121,37 @@ struct profile_sched_client {
 };
 
 /*
+ * THE DOWNLINK HOOK - the second seam, and the whole of what the response-slot
+ * phase needed from this file.
+ *
+ * profile_schedule.h records why it is here: the schedule frame's downlink
+ * phase is measured from the t_sync of the frame that carries it, this engine
+ * encodes the descriptor set once at init and retransmits the bytes, and a
+ * retransmitted phase points at a window that has already gone. So a node
+ * driven by this engine had to announce interval 0.
+ *
+ * The fix is one function pointer, and it is deliberately the same shape as the
+ * client seam above rather than a new mechanism. When the engine is about to
+ * hand out the schedule frame it asks the hook for the phase to announce and
+ * re-writes that one field of the outgoing copy. Return a negative value and
+ * the bytes go out exactly as the encoder wrote them, which is what a node with
+ * no live window gets and what every existing caller gets for free.
+ *
+ * It is asked ONLY for the schedule frame of a descriptor whose block actually
+ * announces a window. A hook is never called speculatively, so a node that
+ * announces nothing pays nothing - which is the same compatibility claim the
+ * schedule block itself makes.
+ */
+struct profile_sched_downlink {
+	/* The phase to announce, in counts of 1/32768 s, for a schedule frame
+	 * whose carrier t_sync is `t_sync`. Negative leaves the encoded bytes
+	 * alone. profile_cmd_sched_phase() in profile_command.h is the
+	 * implementation this tree ships. */
+	int32_t (*phase)(radiant_time_t t_sync, void *user);
+	void *user;
+};
+
+/*
  * What the node supplies.
  *
  * Every page builder is a callback rather than a buffer, because a body must
@@ -186,6 +217,14 @@ struct profile_sched {
 	struct profile_sched_client client;
 	bool                       have_client;
 
+	struct profile_sched_downlink dl;
+	bool                          have_dl;
+	/* Frame index of the schedule frame within the encoded set, or -1 when
+	 * the descriptor has none. Latched at init from
+	 * profile_desc_schedule_index() so the hot path compares an integer
+	 * rather than re-deriving a layout. */
+	int8_t                        sched_frame;
+
 	/* The encoded descriptor set, built once at init. It is at most 128
 	 * bytes and it changes only when the schema does, so encoding it per
 	 * slot would be work proportional to the field count in the hot path
@@ -230,12 +269,44 @@ int profile_sched_set_client(struct profile_sched *ps,
 			     const struct profile_sched_client *client);
 
 /*
+ * Install or replace the downlink hook. NULL removes it.
+ *
+ * -ENOENT when the configured descriptor carries no schedule frame: a hook on a
+ * node with nothing to re-phase is a caller that thinks it announced a window
+ * and did not, and that is worth an error code at start-up rather than a
+ * downlink that silently never opens.
+ */
+int profile_sched_set_downlink(struct profile_sched *ps,
+			       const struct profile_sched_downlink *dl);
+
+/*
  * Decide the next slot and fill `body` with eight bytes.
  *
  * `body` is untouched for PROFILE_SLOT_IDLE. Every other return means "put
  * these eight bytes on the air in this slot".
+ *
+ * This form knows no time and therefore cannot re-phase a downlink window; it
+ * is profile_sched_next_at() with RADIANT_TIME_NEVER, which is the value that
+ * means "do not ask the hook". Every caller written before the response-slot
+ * phase keeps this signature and keeps emitting exactly the bytes it emitted.
  */
 enum profile_slot_kind profile_sched_next(struct profile_sched *ps, uint8_t *body);
+
+/*
+ * The same decision, told when the slot will actually be transmitted.
+ *
+ * `t_sync` is the instant the caller is about to hand to
+ * radiant_sched_request_tx() as `t_sync_at`, and it is the ONE thing a page
+ * scheduler is told about microseconds - see the file comment's claim that
+ * nothing here knows one. That claim narrows rather than breaks: this function
+ * does not interpret t_sync, it forwards it to the downlink hook, which is the
+ * only thing in the chain that may.
+ *
+ * RADIANT_TIME_NEVER means "not known", and is the value the hookless form
+ * passes.
+ */
+enum profile_slot_kind profile_sched_next_at(struct profile_sched *ps,
+					     uint8_t *body, radiant_time_t t_sync);
 
 /*
  * Send the whole descriptor set starting at the next slot.

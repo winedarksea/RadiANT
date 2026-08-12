@@ -83,13 +83,22 @@
  * dwell it is supposed to land inside, and a phase whose error is comparable to
  * the window it points at is not a pointer.
  *
- * ONE RESTRICTION IS RECORDED HERE RATHER THAN SOLVED. Because the phase is
- * relative to the carrying frame, a node must recompute it for each
- * transmission of that frame. profile_sched.c encodes the descriptor set ONCE
- * at init and retransmits the bytes, so a node driven by it cannot announce a
- * live downlink window and must leave the interval at zero. That is a real
- * limitation of this phase, it is why nothing in this tree announces a nonzero
- * interval yet, and it is the first thing the response-slot phase has to fix.
+ * ONE RESTRICTION WAS RECORDED HERE RATHER THAN SOLVED, AND IS NOW SOLVED.
+ * Because the phase is relative to the carrying frame, a node must recompute it
+ * for each transmission of that frame. profile_sched.c encodes the descriptor
+ * set ONCE at init and retransmits the bytes, so a node driven by it could not
+ * announce a live downlink window and had to leave the interval at zero.
+ *
+ * The response-slot phase closes that with two functions at the end of this
+ * header and one hook in profile_sched.h, and the shape is worth stating
+ * because it is smaller than the obvious fix. The descriptor set is still
+ * encoded once. What changes is that the six bytes of the schedule frame are
+ * RE-PHASED in place on their way out - profile_sched_phase_for() computes the
+ * count, profile_sched_rephase() writes that one field and touches no other -
+ * so the cost of a live window is a 16-bit store per descriptor set rather than
+ * a re-encode of the whole set per slot. Every other field, including the
+ * interval and the dwell the phase must agree with, is still the one the
+ * encoder validated at init.
  */
 
 #ifndef RADIANT_PROFILE_SCHEDULE_H_
@@ -387,6 +396,68 @@ uint8_t profile_sched_clk_nibble(uint8_t code, bool stated);
  */
 radiant_time_t profile_sched_listen_at(const struct profile_schedule *s,
 				       radiant_time_t t_carrier, uint32_t k);
+
+/* ---------------------------------------------------------------------------
+ * The node side of the same arithmetic - the response-slot phase
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * THE INVERSE OF profile_sched_listen_at(), and the reason the interval-0
+ * restriction above is no longer a restriction.
+ *
+ * A node opens its downlink window on a grid of its own: `t_anchor` plus a
+ * whole number of intervals, forever. `t_carrier` is the t_sync of the frame
+ * about to carry the schedule block. This returns the phase that frame must
+ * announce, in counts of 1/32768 s, so that a receiver applying
+ * profile_sched_listen_at() to it lands on the SAME absolute instant the node
+ * will open - which is the property the two functions exist to have, and the
+ * one radiant_core/tests/src/test_command.c asserts across two frames sent at
+ * different times.
+ *
+ * The grid is unbounded in both directions: an anchor in the past is reduced
+ * forward and an anchor more than an interval ahead is reduced back, so a
+ * caller never has to advance the anchor itself. The result is always in
+ * 0 .. interval_counts-1, which is exactly the range profile_sched_check()
+ * accepts.
+ *
+ * Returns the phase, or -1 when the block announces no window - the case a
+ * caller must handle before any other, stated the same way listen_at() states
+ * it. Negative rather than a zero phase, because phase 0 is a legal
+ * announcement meaning "the window opens at this frame's t_sync".
+ */
+int32_t profile_sched_phase_for(const struct profile_schedule *s,
+				radiant_time_t t_anchor, radiant_time_t t_carrier);
+
+/*
+ * Rewrite the phase field of an ALREADY PACKED schedule block, in place.
+ *
+ * `body` is the six bytes profile_sched_pack() wrote. This touches bits 15..30
+ * and nothing else: the interval, the dwell, the coding rate, the announced
+ * power and the reservation all keep the values the encoder validated, so a
+ * re-phase cannot turn a checked block into an unchecked one. The interval it
+ * validates the new phase against is read back out of the body rather than
+ * taken from a caller, for the same reason - there is one interval and it is
+ * the one on the wire.
+ *
+ * Returns 0, -EINVAL for a null body or a phase at or past the interval, or
+ * -ENOENT when the packed block announces no window at all. -ENOENT rather than
+ * a silent success, because a caller re-phasing a block with no window has a
+ * bug one layer up and a quiet no-op is how it survives to the bench.
+ *
+ * ONE OBLIGATION THIS FUNCTION CANNOT DISCHARGE, so it is stated rather than
+ * checked here. profile_sched_check()'s dwell-versus-drift rule is a bound on
+ * the PHASE - a 500 ppm node pointing further ahead has drifted further by the
+ * time its window opens - so a block validated at one phase is not thereby
+ * validated at every phase, and this function has neither the clock accuracy
+ * nor a reason to be told it. A caller that intends to re-phase must therefore
+ * validate its block ONCE AT THE WORST CASE, phase = interval_counts - 1, and
+ * then every phase this function can write is covered. profile_cmd_window_set()
+ * is the caller in this tree and does exactly that; the alternative - checking
+ * per re-phase - would put a multiply in a path whose whole point is that it is
+ * a single store.
+ */
+int profile_sched_rephase(uint8_t *body, uint16_t phase);
 
 #ifdef __cplusplus
 }

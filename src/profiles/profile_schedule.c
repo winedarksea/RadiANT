@@ -424,3 +424,102 @@ radiant_time_t profile_sched_listen_at(const struct profile_schedule *s,
 
 	return t_carrier + (radiant_time_t)counts_to_us(counts);
 }
+
+/* ---------------------------------------------------------------------------
+ * The node side - the response-slot phase
+ * ---------------------------------------------------------------------------
+ */
+
+/* Microseconds back into 1/32768 s counts, rounded to NEAREST rather than
+ * truncated. Truncation would bias every announced phase early by up to 30 us,
+ * always in the same direction, and a systematic error in a pointer is exactly
+ * what the header's 244 us argument was about. */
+static uint32_t us_to_counts(uint64_t us)
+{
+	return (uint32_t)(((us * US_DEN) + (US_NUM / 2u)) / US_NUM);
+}
+
+int32_t profile_sched_phase_for(const struct profile_schedule *s,
+				radiant_time_t t_anchor, radiant_time_t t_carrier)
+{
+	uint32_t interval_counts;
+	uint64_t interval_us;
+	uint64_t delta_us;
+	uint32_t counts;
+
+	if (s == NULL) {
+		return -1;
+	}
+	interval_counts = profile_sched_interval_counts(s);
+	if (interval_counts == 0u) {
+		return -1;
+	}
+	interval_us = counts_to_us((uint64_t)interval_counts);
+	if (interval_us == 0u) {
+		return -1;
+	}
+
+	/*
+	 * Reduce the anchor onto the interval grid relative to the carrier.
+	 * Both directions, in unsigned arithmetic: radiant_time_t is a 64-bit
+	 * absolute microsecond and the two operands can sit either side of each
+	 * other, so the subtraction is done once in each order and the branch
+	 * picks the one that did not wrap.
+	 */
+	if (t_anchor >= t_carrier) {
+		delta_us = (uint64_t)(t_anchor - t_carrier) % interval_us;
+	} else {
+		uint64_t behind = (uint64_t)(t_carrier - t_anchor) % interval_us;
+
+		delta_us = (behind == 0u) ? 0u : (interval_us - behind);
+	}
+
+	counts = us_to_counts(delta_us);
+	if (counts >= interval_counts) {
+		/*
+		 * The rounding above can push a delta that is within half a
+		 * count of a full interval up ONTO the interval, which is not a
+		 * legal phase. Clamp DOWN to the last representable one.
+		 *
+		 * The other direction is a real bug and was caught by
+		 * test_command.c rather than by inspection: wrapping to phase 0
+		 * would announce "the window opens at this frame's t_sync",
+		 * which is one whole interval early - up to 128 s for a slow
+		 * node, against a dwell measured in microseconds, so the
+		 * commanding receiver would miss every time. Clamping down is
+		 * at most one count early, 30.5 us, which is inside the
+		 * smallest dwell in the ladder.
+		 */
+		counts = interval_counts - 1u;
+	}
+
+	return (int32_t)counts;
+}
+
+int profile_sched_rephase(uint8_t *body, uint16_t phase)
+{
+	struct profile_schedule s;
+	uint64_t value;
+
+	if (body == NULL) {
+		return -EINVAL;
+	}
+
+	(void)profile_bits_unpack(body, PROFILE_SCHED_AREA_BITS,
+				  PROFILE_SCHED_INTERVAL_OFF,
+				  PROFILE_SCHED_INTERVAL_W, &value);
+	if (value == 0u) {
+		return -ENOENT;
+	}
+
+	memset(&s, 0, sizeof(s));
+	s.dl_interval = (uint16_t)value;
+	if ((uint32_t)phase >= profile_sched_interval_counts(&s)) {
+		return -EINVAL;
+	}
+
+	(void)profile_bits_pack(body, PROFILE_SCHED_AREA_BITS,
+				PROFILE_SCHED_PHASE_OFF, PROFILE_SCHED_PHASE_W,
+				phase);
+	return 0;
+}
