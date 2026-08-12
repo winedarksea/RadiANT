@@ -113,6 +113,7 @@ static struct {
 	uint32_t done_missed[RADIANT_SCHED_MAX_CHANNELS];
 	uint32_t done_aborted[RADIANT_SCHED_MAX_CHANNELS];
 	uint32_t done_failed[RADIANT_SCHED_MAX_CHANNELS];
+	uint32_t done_denied[RADIANT_SCHED_MAX_CHANNELS];
 
 	bool       repost;
 	radiant_time_t next_open[RADIANT_SCHED_MAX_CHANNELS];
@@ -163,6 +164,11 @@ static void on_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		break;
 	case RADIANT_SCHED_DONE_ABORTED:
 		log.done_aborted[ch]++;
+		break;
+	case RADIANT_SCHED_DONE_DENIED:
+		/* Its own bucket, not folded into `failed`: the whole claim of
+		 * the denial signal is that these two are different facts. */
+		log.done_denied[ch]++;
 		break;
 	default:
 		log.done_failed[ch]++;
@@ -818,6 +824,62 @@ ZTEST(ed, test_sched_ed_never_expires)
 	zassert_equal(0u, log.done_missed[ED_CH],
 		      "the ED request was reported MISSED");
 	zassert_true(log.n_dwell > 0u, "the ED request never measured anything");
+}
+
+/*
+ * THE ONE WAY AN ARBITER CAN SILENTLY END ENERGY-DETECT SCANNING FOR EVER.
+ *
+ * Nothing re-posts a struct radiant_sched_ed. A background scan is re-posted by
+ * radiant_api.c's pump if its slot is ever dropped, and a tracked window by the
+ * channel that owns it, but an ED request is posted once and survives on the
+ * strength of end_armed() choosing not to consume it. That choice keys on the
+ * done reason, so a reason it does not list drops the request - and the failure
+ * is completely silent: no counter moves, no event fires, the channel-quality
+ * map simply stops updating from the first denial onwards.
+ *
+ * Both denial moments are exercised, because they reach end_armed() by
+ * different routes: a run of refused ARM CALLS never installs an operation at
+ * all, and a run of accepted-then-DENIED operations does.
+ */
+ZTEST(ed, test_sched_ed_survives_a_denial)
+{
+	uint32_t dwells_before;
+
+	bring_up();
+	post_ed(ED_CH);
+	zassert_ok(radiant_sched_tick());
+	fake_radio_advance((uint64_t)ED_PERIOD_US);
+	dwells_before = log.n_dwell;
+	zassert_true(dwells_before > 0u, "the ED request never got going");
+
+	/* Accepted, then never granted. */
+	fake_radio_force_terminal_repeat(RADIANT_RADIO_STATUS_DENIED, 4u);
+	fake_radio_advance(4u * (uint64_t)ED_PERIOD_US);
+
+	zassert_true(radiant_sched_pending(ED_CH),
+		     "a denied chunk consumed the standing ED request");
+	zassert_equal(0u, log.done_missed[ED_CH], NULL);
+	zassert_equal(0u, log.done_failed[ED_CH],
+		      "a denial was reported as a backend fault");
+	zassert_true(log.done_denied[ED_CH] > 0u,
+		     "the denial was not reported to the owner at all");
+
+	/* Refused at the arm call - the synchronous EDENIED path. */
+	fake_radio_force_arm_repeat(RADIANT_RADIO_EDENIED, 4u);
+	fake_radio_advance(4u * (uint64_t)ED_PERIOD_US);
+
+	zassert_true(radiant_sched_pending(ED_CH),
+		     "a refused arm consumed the standing ED request");
+
+	/* And when the air comes back, so does the sweep. Asserting the request
+	 * is still pending is not enough: it has to be armable again, which is
+	 * the property a cleared rf_cursor or a stuck in_flight flag would
+	 * break without touching the pending bit. */
+	fake_radio_advance(4u * (uint64_t)ED_PERIOD_US);
+	zassert_true(log.n_dwell > dwells_before,
+		     "the ED sweep never resumed after the arbiter let go");
+	zassert_equal(0u, fake_radio_viol_count(), "%s",
+		      fake_radio_viol_name(fake_radio_viol(0)->code));
 }
 
 static void ed_before(void *fixture)

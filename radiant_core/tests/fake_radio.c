@@ -150,7 +150,11 @@ struct fake_state {
 	bool     isr_work_flagged;
 
 	int      force_arm_rc;
-	bool     force_arm_set;
+	/* Arm calls still to be refused with force_arm_rc. 0 = none. A count
+	 * rather than a flag because an arbitrated backend's characteristic
+	 * failure is a RUN of refusals, and re-arming the one-shot between them
+	 * would be re-arming it from inside the very callback under test. */
+	uint32_t force_arm_n;
 	int32_t  tx_offset_us;
 	int8_t   default_rssi;
 
@@ -176,7 +180,8 @@ struct fake_state {
 	uint16_t ed_samples;
 
 	/* A forced terminal status waiting for the next operation to be armed. */
-	bool                  pending_force_set;
+	/* Operations still to have their terminal status replaced. 0 = none. */
+	uint32_t              pending_force_n;
 	enum radiant_radio_status pending_force;
 
 	struct air_slot air[FAKE_RADIO_AIR_MAX];
@@ -1335,6 +1340,71 @@ static bool next_due(radiant_time_t *t_out, enum due_kind *kind_out,
 
 	*air_out = -1;
 
+	/*
+	 * A DENIED OPERATION NEVER OCCUPIES THE RADIO, AND MODELLING THAT IS
+	 * NOT A DETAIL.
+	 *
+	 * Every other forced terminal replaces the STATUS of an operation that
+	 * genuinely ran: a FAILED window still held the receiver for its whole
+	 * duration, because that is what "the backend could not complete it"
+	 * means. RADIANT_RADIO_STATUS_DENIED means the opposite - the request
+	 * was accepted and never granted, the window did not open, and not a
+	 * bit of preamble was lost. A mock that held the radio until t_close
+	 * anyway would be modelling something no arbiter does.
+	 *
+	 * It is not a cosmetic difference. With the radio held for the full
+	 * window, the scheduler cannot arm anything else inside it, and a slot
+	 * whose own deadline falls in that span would expire as MISSED - so a
+	 * run of denials could manufacture misses out of the mock rather than
+	 * out of the code under test. That is exactly the confusion between "the
+	 * arbiter took our slot" and "the sensor was not there" that the whole
+	 * denial signal exists to prevent, reproduced inside the instrument that
+	 * is supposed to detect it.
+	 *
+	 * NO SUCH MISS HAS BEEN OBSERVED, and this is here on the strength of
+	 * the model rather than of a bug it fixed:
+	 * test_a_quiet_tracked_channel_misses_the_same_either_way compares a
+	 * twelve-period run with every window denied against one with none, and
+	 * the counts were already equal before this. It is kept because a mock
+	 * that holds the radio for an operation the arbiter refused is simply
+	 * describing something that does not happen, and the next test to lean
+	 * on it would have no warning.
+	 *
+	 * ENDED AT t_open RATHER THAN AT THE ARM, and the microsecond matters:
+	 * a real denial is LATE. MPSL delivers SIGNAL_BLOCKED from
+	 * mpsl_low_priority_process() at or after the start that was requested,
+	 * which is why the front end needs a deadline timer of its own. Ending
+	 * at the instant the window would have opened is the earliest a denial
+	 * can honestly arrive, and it keeps the core's own slot occupied for
+	 * the same span it would be on hardware.
+	 *
+	 * TRANSMIT NEEDS NOTHING HERE and has no case below. A transmit is an
+	 * instant rather than a span - it already ends at t_fire - so there is
+	 * no occupancy to give back and the ordinary path is already the right
+	 * model of a denied one.
+	 */
+	if (g.cur.force_terminal_set &&
+	    g.cur.force_terminal == RADIANT_RADIO_STATUS_DENIED) {
+		switch (g.cur.kind) {
+		case FAKE_RADIO_ARM_RX:
+			*t_out = g.cur.t_open;
+			*kind_out = DUE_CLOSE;
+			return true;
+		case FAKE_RADIO_ARM_ED:
+			/* ed_done was set past the last index when the force was
+			 * taken, so the DUE_ED dispatch reports no measurement
+			 * for any index and goes straight to the terminal -
+			 * which is what a sweep that was never listened to
+			 * produces. Set there rather than here so that this
+			 * function stays a query with no side effects. */
+			*t_out = g.cur.ed_t_start;
+			*kind_out = DUE_ED;
+			return true;
+		default:
+			break;
+		}
+	}
+
 	if (g.cur.kind == FAKE_RADIO_ARM_TX) {
 		*t_out = g.cur.t_fire;
 		*kind_out = DUE_TX;
@@ -1798,16 +1868,29 @@ radiant_time_t radiant_radio_now(void)
 
 static void take_pending_force(void);
 
+/* True if this span exceeds what the configured caps.max_window_us allows. 0 is
+ * unbounded and is what both presets report, so this is inert unless a suite
+ * asks for a ceiling. */
+static bool window_over_cap(radiant_time_t t_open, radiant_time_t t_close)
+{
+	if (g.caps.max_window_us == 0u || t_close <= t_open) {
+		return false;
+	}
+	return (t_close - t_open) > (radiant_time_t)g.caps.max_window_us;
+}
+
 static int arm_preflight(void)
 {
 	if (g.lc != LC_ENABLED) {
 		return RADIANT_RADIO_ESTATE;
 	}
-	if (g.force_arm_set) {
+	if (g.force_arm_n > 0u) {
 		int rc = g.force_arm_rc;
 
-		g.force_arm_set = false;
-		g.force_arm_rc = RADIANT_RADIO_OK_RC;
+		g.force_arm_n--;
+		if (g.force_arm_n == 0u) {
+			g.force_arm_rc = RADIANT_RADIO_OK_RC;
+		}
 		if (rc != RADIANT_RADIO_OK_RC) {
 			g.stats.rc_forced++;
 			return rc;
@@ -1852,6 +1935,7 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	rec->rf_index = req->rf_index;
 	rec->power = req->power;
 	rec->t_sync_at = req->t_sync_at;
+	rec->follow_on_us = req->follow_on_us;
 	if (req->fmt != NULL) {
 		rec->fmt = *req->fmt;
 	}
@@ -2028,6 +2112,7 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	rec->t_open = req->t_open;
 	rec->t_close = req->t_close;
 	rec->flags = req->flags;
+	rec->follow_on_us = req->follow_on_us;
 	rec->n_filters = req->n_filters;
 	if (req->fmt != NULL) {
 		rec->fmt = *req->fmt;
@@ -2112,6 +2197,23 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 			rc = RADIANT_RADIO_EINVAL;
 		} else if (too_late(req->t_open)) {
 			rc = RADIANT_RADIO_ETIME;
+		} else if (window_over_cap(req->t_open, req->t_close)) {
+			/*
+			 * Longer than caps.max_window_us, which on an arbitrated
+			 * backend is an API ceiling and not a preference:
+			 * MPSL_TIMESLOT_LENGTH_MAX_US is 100 000, so a 250 ms
+			 * chunk cannot be requested at all.
+			 *
+			 * ENOTSUP - "well formed, but this backend cannot do it"
+			 * - and refused rather than quietly shortened, because a
+			 * backend that shortened it would have the scheduler
+			 * credit a dwell that was never spent. A mock that
+			 * accepted it would certify exactly that bug; and
+			 * test_sched.c's finish() already asserts rc_enotsup ==
+			 * 0, so a scheduler that stopped honouring the cap fails
+			 * every test in the suite rather than one.
+			 */
+			rc = RADIANT_RADIO_ENOTSUP;
 		}
 	}
 
@@ -2205,6 +2307,17 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 		rc = RADIANT_RADIO_ETIME;
 		goto refuse;
 	}
+	/* An ED chunk's span is (hi - lo + 1) * dwell by construction, so the
+	 * ceiling applies to it exactly as it does to a receive window - the
+	 * arbiter is holding the radio for the same wall-clock time either way. */
+	if (window_over_cap(req->t_start,
+			    req->t_start +
+				    (radiant_time_t)((uint32_t)req->rf_index_hi -
+						     req->rf_index_lo + 1u) *
+					    (radiant_time_t)req->dwell_us)) {
+		rc = RADIANT_RADIO_ENOTSUP;
+		goto refuse;
+	}
 
 	clear_cur();
 	g.cur.kind = FAKE_RADIO_ARM_ED;
@@ -2270,8 +2383,33 @@ int radiant_radio_abort(void)
 
 void fake_radio_force_next_arm(int rc)
 {
+	fake_radio_force_arm_repeat(rc, 1u);
+}
+
+void fake_radio_force_arm_repeat(int rc, uint32_t count)
+{
 	g.force_arm_rc = rc;
-	g.force_arm_set = (rc != RADIANT_RADIO_OK_RC);
+	g.force_arm_n = (rc == RADIANT_RADIO_OK_RC) ? 0u : count;
+}
+
+void fake_radio_force_terminal_repeat(enum radiant_radio_status status,
+				      uint32_t count)
+{
+	g.pending_force = status;
+	g.pending_force_n = count;
+	/*
+	 * Deliberately NOT applied to g.cur here, unlike the one-shot below.
+	 *
+	 * A run of forced terminals is set up before the operations it applies
+	 * to exist - that is the whole use - so taking the first one out of the
+	 * count for an operation that is already armed would silently make a
+	 * count of twelve mean eleven future windows plus this one. Every
+	 * operation installed from now on takes one, including one armed inside
+	 * the callback that is running when this is called.
+	 */
+	if (count == 0u) {
+		g.cur.force_terminal_set = false;
+	}
 }
 
 void fake_radio_force_next_terminal(enum radiant_radio_status status)
@@ -2285,25 +2423,33 @@ void fake_radio_force_next_terminal(enum radiant_radio_status status)
 	if (g.cur.kind != FAKE_RADIO_ARM_NONE) {
 		g.cur.force_terminal_set = true;
 		g.cur.force_terminal = status;
-		g.pending_force_set = false;
+		g.pending_force_n = 0u;
 		return;
 	}
 	/* clear_cur() wipes g.cur on the way into the next arm call, so the
 	 * request waits in its own field until there is an operation to put it
 	 * on. */
-	g.pending_force_set = true;
+	g.pending_force_n = 1u;
 	g.pending_force = status;
 }
 
 /* Called by both arm paths once the new operation is installed. */
 static void take_pending_force(void)
 {
-	if (!g.pending_force_set) {
+	if (g.pending_force_n == 0u) {
 		return;
 	}
 	g.cur.force_terminal_set = true;
 	g.cur.force_terminal = g.pending_force;
-	g.pending_force_set = false;
+	g.pending_force_n--;
+
+	/* A denied energy-detect sweep measured no index at all - see the note
+	 * in next_due(). Marking every index done here, where the operation is
+	 * installed, keeps next_due() a query without side effects. */
+	if (g.pending_force == RADIANT_RADIO_STATUS_DENIED &&
+	    g.cur.kind == FAKE_RADIO_ARM_ED) {
+		g.cur.ed_done = (uint32_t)(g.cur.ed_hi - g.cur.ed_lo) + 1u;
+	}
 }
 
 void fake_radio_set_tx_offset_us(int32_t us)

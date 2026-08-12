@@ -613,7 +613,7 @@ Section 7.4 is the measurement.
 metric on its own, and taken alone it makes coexistence look far more
 comfortable than it is.
 
-So the architectural rule is:
+So the architectural rule was:
 
 > **Scanning is a bounded pairing state, not a running state.** Once a sensor is
 > bound the bridge tracks it, and gives ~95 % of the radio back to Thread.
@@ -622,6 +622,37 @@ Enforced, not merely intended: the sink layer refuses to arm a wildcard sweep
 while a Thread session is up, except inside a user-initiated pairing window
 with a hard timeout. That is the same rule as "binding is opt-in" from section
 5, arrived at from the other direction.
+
+> ### ⚠ AMENDED BY ADR 0013 FOR THE COMBINED USB + THREAD BUILD
+>
+> **The rule above does not survive contact with Zwift, and it is kept here
+> rather than rewritten because the premise it rests on is the interesting
+> part.**
+>
+> It rests on scanning being a state a *user* enters. The USBPcap capture
+> analysed on this project shows that is false for the hostless bridge's
+> nearest sibling: **Zwift tears down and rebuilds a background-scan channel
+> every 4–5 s, cycling networks 0/1/2, for the entire session.** A combined USB
+> + Thread dongle therefore has a permanent scanner in it from the moment the
+> ride starts, put there by the host rather than by the user — and under the
+> rule above, Matter would be dead for the whole ride.
+>
+> The amendment inverts which side is elastic:
+>
+> - **A tracked slot is inviolate.** Tracked RX, master TX, and the
+>   acknowledged-data reply that may follow either are reserved as a unit and
+>   are never shortened or displaced by anything `radiant_core` decides.
+> - **The second stack's slice comes out of the sweep**, which yields when the
+>   arbiter says so and takes the whole cost of coexistence.
+> - **The yield point is discovered, not configured.** A scan chunk is granted a
+>   short timeslot and extended repeatedly; MPSL grants an extension only when
+>   it has nothing else scheduled in the extended region. A fixed slice yields
+>   when it need not and overruns when it must not.
+>
+> The rule as written above **still stands for the hostless bridge of this
+> document**, which has no host putting a scanner in it. It is the *combined*
+> build that needs the amendment. ADR 0013 has the full reasoning, including
+> the two measured dead ends it fences.
 
 ### 7.3 Two consequences that have to be said out loud
 
@@ -667,6 +698,38 @@ the measurement that settles it.
 short while the frames are long. Worse than uniform suggests, too: the blackout
 phases come from N independent masters' clocks, so clustering is guaranteed
 rather than avoidable.
+
+> ### ⚠ THE ARITHMETIC ABOVE IS UNDERSTATED IN TWO PLACES
+>
+> **The PHY switch is 8–20× larger than the 20 µs assumed here.** Nordic
+> publishes measured multiprotocol switching tables
+> (`nrf_802154/doc/multiprotocol_switching_tables.rst`): **164–303 µs mean,
+> 414 µs worst case**, not the ~20 µs this section's `B ≈ 1.3 ms` was built on.
+> The real blackout is nearer **1.6–1.9 ms**, and every figure in the table
+> above scales roughly with it.
+>
+> **And the blackout table is not the only cost.** The arbitrated backend
+> reserves air for the acknowledged-data reply a tracked frame may turn into
+> (`struct radiant_rx_req::follow_on_us`), because MPSL cannot be asked for more
+> air from inside a granted timeslot without closing it — and there is no ANT
+> retry. That takes the tracked **reservation** at eight sensors from
+> 32 × 0.94 ms ≈ 3.2 % to 32 × 2.9 ms ≈ **9.3 %**, and re-running this section
+> against it puts a max-size 802.15.4 frame at ~**24 %** rather than 18 %.
+>
+> **Two different numbers, and this document currently records neither
+> separately.** The reserve costs Thread's **scheduler** — deferral, latency,
+> refused extensions — and *not* Thread's **air**, provided the backend returns
+> the grant the moment an empty window closes. It does, and that is a required
+> line of the design rather than an optimisation. So:
+>
+> | | Air blackout | Scheduler reservation |
+> |---|---|---|
+> | 8 sensors, tracked | ~1.6–1.9 ms per slot, ~4–6 % | ~9.3 % |
+>
+> P3.5 measures the first directly — 802.15.4 frame loss *caused by* ANT
+> blackouts, against a stub 15.4 receiver — and it was moved ahead of the Matter
+> work for a specific reason: **if the real figure is 24 %, the Matter data
+> model is being written against a link that does not work.**
 
 One asymmetry matters. MPSL knows the ANT schedule ahead of time, so a
 well-behaved 802.15.4 driver **defers its own transmissions** that would not
@@ -773,16 +836,34 @@ There is a product-shape argument in the same direction. A USB dongle is mobile
 dongle to my laptop and the house lost its Thread route" is a support burden
 designed in rather than encountered.
 
-#### The three configurations, and they are mutually exclusive
+#### The configurations, and which combinations are refused
 
 | Config | Thread role | ANT role | Host | ANT data path |
 |---|---|---|---|---|
 | **A. Dongle** (today) | none | full: scan and track | yes | USB |
 | **B. Bridge** (this document) | CSL child / SED / MED | track only; scan is a bounded pairing state | **no** | MQTT over Thread, plus Matter |
+| **A+B. Combined dongle** | CSL child / SED | full: scan and track, both permanent | yes | **USB only.** Matter carries the control plane; **no MQTT** |
 | **C. Border router RCP** | Router / Leader, via a host daemon | none on this radio | yes | USB, if ANT at all |
 
-A+C and B+C are refused at compile time, in the `BUILD_ASSERT` shape
-[`backends.md`](backends.md) already uses for `CONFIG_BT` on the direct backend.
+**A+C and B+C are refused at compile time**, in the `BUILD_ASSERT` shape
+[`backends.md`](backends.md) already uses for `CONFIG_BT` on the direct gate.
+
+**A+B was in this row as "mutually exclusive" and is not.** It is the combined
+USB + Thread dongle: a rider's heart rate drives a fan over Matter while Zwift
+is served over USB. Three things make it a different configuration rather than a
+merge of the two above, and all three are decisions rather than consequences:
+
+- **No MQTT plane.** A host is present, so values go over USB and Matter carries
+  the control plane only. MQTT stays in the hostless bridge build, where it is
+  the *normative* path for values — see ADR 0010, which this does not overturn.
+- **The scanner is permanent**, put there by the host rather than by a user.
+  That is what forced the amendment to section 7.2 above, and it is why the
+  combined build depends on ADR 0013 in a way the hostless bridge does not.
+- **Never all three at once.** BLE + RadiANT + Thread is out of scope by
+  decision, not by arithmetic.
+
+The Thread-free dongle build (A) remains the safe Zwift default. A+B ships
+beside it, not instead of it.
 
 #### If the 2-in-1 is wanted anyway, it is a BOM decision
 

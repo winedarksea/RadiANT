@@ -94,6 +94,36 @@ extern "C" {
 #define RADIANT_RADIO_ETIME      (-4)  /* the requested instant is already unreachable */
 #define RADIANT_RADIO_ESTATE     (-5)  /* called in the wrong lifecycle state */
 #define RADIANT_RADIO_EIO        (-6)  /* the hardware did not do as it was told */
+/*
+ * RADIANT_RADIO_EDENIED - the request is well formed and its instant is
+ * reachable, but the backend does not have the air to give.
+ *
+ * ONLY an arbitrated backend produces this: one that does not own the radio
+ * outright and must reserve air time from something else (MPSL's timeslot API
+ * beside a BLE controller or an 802.15.4 stack; RAIL's multi-protocol command
+ * scheduler). A backend that owns the radio never returns it, and no core code
+ * may treat its absence as an error.
+ *
+ * WHY NOT ETIME, WHICH IS THE OBVIOUS REUSE. ETIME means "the requested instant
+ * is already unreachable", and radiant_sched.c reads it exactly that way: the
+ * pass subtracts caps.min_arm_lead_us itself, so ETIME means a backend is
+ * stricter than it advertises, and the window is reported MISSED. Under an
+ * arbiter the instant IS reachable - we simply were not given it - so ETIME
+ * would be a true sentence about the wrong thing, reported through a path that
+ * exists to diagnose a different defect. That confusion is precisely what the
+ * ENOTSUP arm was added to fix, and reusing ETIME here would reintroduce it.
+ *
+ * WHY IT IS SYNCHRONOUS AND NOT ONLY AN EVENT. Denial happens at two different
+ * moments. radiant_transfer.c arms the acknowledged-data reply by calling
+ * radiant_radio_tx() from inside the receive callback, 1.56 ms before the
+ * frame must be on the air; there is no time to place a request, hear back and
+ * recover. A backend that knows at that instant that it cannot cover the reply
+ * must say so from the call. Denial of a request that WAS placed and then never
+ * granted arrives later, as RADIANT_RADIO_STATUS_DENIED on the terminal event.
+ * The two are the same fact at two different times and the core handles them
+ * with the same accounting; neither can substitute for the other.
+ */
+#define RADIANT_RADIO_EDENIED    (-7)
 
 /* ---------------------------------------------------------------------------
  * Time
@@ -508,6 +538,39 @@ struct radiant_tx_req {
 	 * frame, because it lands in the next slot.
 	 */
 	radiant_time_t                   t_sync_at;
+
+	/*
+	 * The core may arm one follow-on operation whose t_sync is no later
+	 * than this many microseconds after t_sync_at. 0 = none.
+	 *
+	 * A BACKEND THAT OWNS THE RADIO IGNORES IT. It exists for a backend
+	 * that must RESERVE air time from an arbiter, which has to ask for the
+	 * reply's air at the same moment it asks for this frame's - and cannot
+	 * ask again in between.
+	 *
+	 * The mechanism is not negotiable on MPSL: a new request may not be
+	 * issued from inside a granted timeslot without CLOSING it, which hands
+	 * the radio back and asks for it again 1.4 ms later, with another
+	 * stack's event free to land in the gap. There is no retry -
+	 * radiant_transfer.h says the retransmit path is deliberately unwired -
+	 * so a reply that loses that gap is simply lost.
+	 *
+	 * WHY THE CORE SUPPLIES IT RATHER THAN THE BACKEND INFERRING IT. A
+	 * backend could in principle read `fmt` and work out that a master's
+	 * slot may be answered. It must not: rule 6 of this header's preamble
+	 * and the note at the end of this file both say a backend knows about
+	 * addresses, bodies and time, and nothing about ANT. Inferring the
+	 * turnaround from a packet format is exactly "reading ANT semantics out
+	 * of a pointer".
+	 *
+	 * IT IS A RESERVATION, NOT A PROMISE. The core may arm nothing at all,
+	 * and usually does. What it costs an arbitrated backend is scheduling
+	 * pressure on the other stack - deferral, latency, refused extensions -
+	 * and NOT air time, provided the backend releases the reservation the
+	 * moment it knows the follow-on is not coming. Releasing early is a
+	 * requirement of any backend that reads this field, not an optimisation.
+	 */
+	uint16_t                     follow_on_us;
 };
 
 /* Close the window as soon as one frame is accepted. Saves receive current on
@@ -549,6 +612,21 @@ struct radiant_rx_req {
 	radiant_time_t                   t_open;    /* earliest acceptable t_sync */
 	radiant_time_t                   t_close;   /* latest acceptable t_sync */
 	uint32_t                     flags;
+	/*
+	 * As struct radiant_tx_req::follow_on_us, measured from t_close.
+	 *
+	 * THE RESERVE IS UNCONDITIONAL ON A TRACKED WINDOW, AND THAT IS NOT
+	 * CONSERVATISM. Any tracked frame can become a transmit 1.56 ms later:
+	 * every one of them reaches radiant_transfer_on_data() through
+	 * api_sched_rx() -> api_tracked_frame(), and whether it does depends on
+	 * a payload byte that does not exist when this request is built. There
+	 * is nothing to predict on, so there is nothing to condition on.
+	 *
+	 * Zero on a search window, an energy-detect sweep and a master's
+	 * turnaround: none of those can be followed by a transmit whose instant
+	 * is already fixed.
+	 */
+	uint16_t                     follow_on_us;
 };
 
 /* ---------------------------------------------------------------------------
@@ -635,7 +713,25 @@ enum radiant_radio_status {
 	RADIANT_RADIO_STATUS_CRC_FAIL,     /* address matched, CRC did not */
 	RADIANT_RADIO_STATUS_TIMEOUT,      /* window closed */
 	RADIANT_RADIO_STATUS_ABORTED,      /* radiant_radio_abort() or a lifecycle call */
-	RADIANT_RADIO_STATUS_FAILED        /* the backend could not complete it */
+	RADIANT_RADIO_STATUS_FAILED,       /* the backend could not complete it */
+	/*
+	 * The operation was accepted and then never got the air.
+	 *
+	 * An arbitrated backend only; see RADIANT_RADIO_EDENIED above for why the
+	 * synchronous refusal is a separate thing from this one. The window did
+	 * not open and not a bit of preamble was lost, so this says nothing at
+	 * all about the peer - which is the whole reason it is not FAILED.
+	 * radiant_channel.c counts it in its own counter and widens the guard by
+	 * it, but does not raise RX_FAIL: a channel whose radio was lent to
+	 * another stack has learnt nothing about whether its sensor is still
+	 * there, and telling a host otherwise is a lie the host acts on.
+	 *
+	 * NEW APPENDED, DELIBERATELY. The four above have been on the wire in
+	 * bench logs and in fake_radio traces since the first backend; renumbering
+	 * them to put this one "where it belongs" would silently reinterpret every
+	 * archived capture.
+	 */
+	RADIANT_RADIO_STATUS_DENIED
 };
 
 struct radiant_rx_event {
@@ -762,6 +858,27 @@ struct radiant_ed_event {
  * the next operation from inside the completion callback is the low-jitter
  * path, and it is the only one that reliably meets an acknowledged-data
  * turnaround.
+ *
+ * THE ONE AMENDMENT, MADE DELIBERATELY AND NOT BY EXCEPTION. A terminal event
+ * whose status is RADIANT_RADIO_STATUS_DENIED may be delivered from a
+ * cooperative thread instead of from the radio interrupt, because on an
+ * arbitrated backend that is where the arbiter says no: MPSL delivers its
+ * BLOCKED and CANCELLED signals from mpsl_low_priority_process(), and a
+ * callback that returned anything but "no action" from a low-priority signal
+ * would assert inside MPSL rather than merely be wrong.
+ *
+ * Everything a callback may and may not do is UNCHANGED for such an event,
+ * including the prohibition on blocking - the point of the amendment is that a
+ * consumer must not rely on interrupt context for MUTUAL EXCLUSION. The core
+ * does not: radiant_event.c's critical section is taken by the event poster
+ * regardless of context, so the same code is correct either way. It is written
+ * down because a future consumer that inferred "no other thread can be inside
+ * the core right now" from the paragraph above would be reading a guarantee
+ * this event does not carry, and the resulting corruption would be rare,
+ * timing-dependent and attributed to the arbiter.
+ *
+ * A backend that CAN deliver DENIED from the radio interrupt should. This
+ * permits a context, it does not prefer one.
  *
  * A callback MAY:
  *   - read the event (only for the duration of the call),
@@ -908,10 +1025,83 @@ struct radiant_radio_caps {
 	 * running late. The scheduler's slack budget is built on this number. */
 	uint16_t min_arm_lead_us;
 
+	/*
+	 * The same lead, for an operation that follows one already in flight -
+	 * a reply, a turnaround, the next packet of a burst.
+	 *
+	 * EQUAL TO min_arm_lead_us ON A BACKEND THAT OWNS THE RADIO, and a
+	 * backend may leave it 0 to say exactly that. The two come apart only
+	 * under an arbiter, and when they do the gap is large enough to change
+	 * what the link layer can do:
+	 *
+	 *   min_arm_lead_us            has to cover PLACING A RESERVATION with
+	 *                              something that may say no. On MPSL that
+	 *                              is the measured grant latency - about
+	 *                              1.7 ms, essentially all of it the HFXO
+	 *                              startup - plus margin.
+	 *
+	 *   min_arm_lead_in_grant_us   covers programming the peripheral inside
+	 *                              air we have ALREADY been given. Nothing
+	 *                              is being asked of the arbiter, so it is
+	 *                              the hardware's own setup and ramp-up and
+	 *                              nothing more.
+	 *
+	 * WHY THE DISTINCTION IS LOAD-BEARING RATHER THAN TIDY. radiant_burst.c
+	 * refuses acknowledged data at configuration time unless the lead plus
+	 * ACK_GUARD_US fits inside REPLY_US - 1310 us, and an arbiter needs 2500.
+	 * Read against min_arm_lead_us that says "no ERG mode on a combined
+	 * build", which would be a real product decision taken by accident: the
+	 * reply does not need a reservation, because struct radiant_rx_req's
+	 * follow_on_us reserved its air when the window was requested. Asking
+	 * the right one of these two is what keeps the trainer working.
+	 *
+	 * A CORE CONSUMER MUST PICK THE RIGHT FIELD, and the test is simply
+	 * whether an operation is already in flight. radiant_sched.c's arming
+	 * pass uses min_arm_lead_us, because it is placing new work;
+	 * radiant_burst.c and radiant_transfer.c use this one, because they arm
+	 * from inside a completion callback.
+	 */
+	uint16_t min_arm_lead_in_grant_us;
+
 	/* Granularity of the underlying timebase, in nanoseconds. 1000 on a
 	 * 1 MHz timer and on RAIL. Timestamps are still microseconds; this says
 	 * how much of the last digit to believe. */
 	uint16_t time_resolution_ns;
+
+	/*
+	 * The longest single receive or energy-detect operation this backend can
+	 * arm, in microseconds. 0 means unbounded, which is what a backend that
+	 * owns the radio reports and what every existing backend reports.
+	 *
+	 * A CAPABILITY, NOT A POLICY KNOB, AND THE DISTINCTION IS THE WHOLE
+	 * REASON IT IS HERE. On an arbitrated backend it is an API ceiling:
+	 * MPSL's MPSL_TIMESLOT_LENGTH_MAX_US is 100 000, so a 250 ms scan chunk
+	 * cannot be REQUESTED at all - not "is discouraged", cannot be
+	 * expressed. It is a fixed constant, identical on every arm, and
+	 * independent of what else happens to be scheduled.
+	 *
+	 * WHAT IT REPLACES, AND WHY THAT ALTERNATIVE WAS A BUG. The obvious
+	 * design is for the backend to accept the long request and quietly run
+	 * a shorter window. It cannot: radiant_sched.c stores the close it
+	 * ASKED for and reports those bounds to the window's owner, and
+	 * radiant_search.c credits the full dwell whenever the window ran to
+	 * that close. A 250 ms grant silently run for 20 ms would credit 250 ms
+	 * of listening for 20 ms of it - the address set advances after 8 % of
+	 * its dwell, "certain within one sweep" quietly becomes false, and no
+	 * counter moves. Bounding the REQUEST instead keeps the scheduler's
+	 * model of the world true, which is the property every measured sweep
+	 * defect so far has violated.
+	 *
+	 * IT IS NOT A SUBSTITUTE FOR YIELDING EARLY EITHER. An arbitrated
+	 * backend that runs out of granted air inside a window it did arm ends
+	 * it with RADIANT_RADIO_STATUS_ABORTED, which the search accounting
+	 * already handles as "credit what was actually listened to". Denial,
+	 * elasticity and this ceiling are three different signals and none of
+	 * them may be expressed as another.
+	 *
+	 * Transmits are unaffected: a transmit is an instant, not a span.
+	 */
+	uint32_t max_window_us;
 
 	/* True if t_sync comes from a hardware capture of the address event
 	 * rather than from an inference. When false, events carry

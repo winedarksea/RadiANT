@@ -150,6 +150,26 @@ if(CONFIG_RADIANT_CORE_BACKEND_NULL)
   zephyr_library_sources(src/radiant_radio_null.c)
 elseif(CONFIG_RADIANT_CORE_BACKEND_NRF)
   zephyr_library_sources(src/radiant_radio_nrf.c)
+  # Who owns the RADIO. A seam inside the backend rather than a second backend
+  # beside it - see src/radiant_radio_nrf_gate.h for why the file is not split.
+  # Exactly one of these is ever compiled.
+  if(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/radiant_radio_nrf_gate_mpsl.c")
+      # Loud, and naming the phase, on the same terms as the FATAL_ERROR this
+      # replaces. What it replaces was about a whole missing BACKEND; this is
+      # about a missing front end, which is the smaller and more accurate claim
+      # now that the seam exists.
+      message(FATAL_ERROR
+        "radiant_core: CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL is selected "
+        "but src/radiant_radio_nrf_gate_mpsl.c does not exist - it is P3 of "
+        "the multiprotocol plan, and its head and tail margins are derived "
+        "from the P0 spike (radiant_core/spike/mpsl_arb) rather than guessed. "
+        "Leave the symbol off for the direct build.")
+    endif()
+    zephyr_library_sources(src/radiant_radio_nrf_gate_mpsl.c)
+  else()
+    zephyr_library_sources(src/radiant_radio_nrf_gate_direct.c)
+  endif()
   message(WARNING
     "radiant_core: the nrf backend transmits and receives. Its ramp-up and "
     "turnaround figures are datasheet values, and the t_sync calibration "
@@ -164,9 +184,4 @@ elseif(CONFIG_RADIANT_CORE_BACKEND_NRF)
     "calibrated rather than exact - see the 'what is measured and what is not' "
     "header in src/radiant_radio_nrf.c before reading any A/B timing result "
     "off this build.")
-elseif(CONFIG_RADIANT_CORE_BACKEND_MPSL)
-  message(FATAL_ERROR
-    "radiant_core: CONFIG_RADIANT_CORE_BACKEND_MPSL is selected but "
-    "src/radiant_radio_mpsl.c does not exist - the MPSL-arbitrated backend is "
-    "Phase 6b. See RADIANT_CORE_BACKEND_NRF's message for the alternatives.")
 endif()

@@ -592,6 +592,114 @@ def gate_scale(cfg: dict, a: Baseline, b: Baseline) -> GateResult:
                       PASS if ok else FAIL, detail)
 
 
+def gate_coexistence(cfg: dict, a: Baseline, b: Baseline) -> list[GateResult]:
+    """What a second protocol stack on the same radio costs.
+
+    A DIFFERENT COMPARISON FROM EVERY OTHER GATE IN THIS FILE, and the
+    difference is why it reads its numbers out of one baseline instead of two.
+    Every gate above compares baseline A against baseline B - two *backends* on
+    one rig. This one is about the *same* backend with the second stack on
+    against the same backend with it off, which is a pair of numbers that has to
+    come from the same sitting on the same build, and therefore from one file.
+
+    So `b.block("coexistence")` carries three figures the operator recorded in
+    one sitting:
+
+      loss_second_stack_off_pct   the arbitrated build, nothing else on the radio
+      loss_second_stack_on_pct    the same build with BLE or Thread running
+      loss_direct_pct             the direct-gate build, for the arbiter's own cost
+
+    `a` is unused and is accepted only so that every gate has one signature.
+    """
+    results: list[GateResult] = []
+    required = cfg.get("required", False)
+    threshold = f"<= second-stack-off + {cfg['max_delta_pp']} pp"
+
+    try:
+        block = b.block("coexistence")
+    except MissingField as exc:
+        return [GateResult("coexistence (second stack on)", "-", "-", threshold,
+                           FAIL if required else SKIP,
+                           f"{exc}. A build with no second stack has no such "
+                           f"block, and that is not a pass")]
+
+    def need(key: str) -> float:
+        value = block.get(key)
+        if value is None:
+            raise MissingField(f"{b.path}: coexistence has no {key}")
+        return float(value)
+
+    # 1. What the second stack costs.
+    try:
+        off, on = need("loss_second_stack_off_pct"), need("loss_second_stack_on_pct")
+    except MissingField as exc:
+        results.append(GateResult("coexistence (second stack on)", "-", "-",
+                                  threshold, FAIL if required else SKIP,
+                                  str(exc)))
+    else:
+        ceiling = cfg.get("absolute_ceiling_pct")
+        ok = (on - off) <= cfg["max_delta_pp"]
+        detail = f"second stack: {block.get('second_stack', 'unnamed')}"
+        if ceiling is not None and on > ceiling:
+            # Same argument as loss_exact's ceiling: being within 0.5 pp of a
+            # bad afternoon is not a pass.
+            ok = False
+            detail += f"; {on:.3f} % is over the {ceiling} % ceiling on its own"
+        results.append(GateResult("coexistence (second stack on)",
+                                  f"{off:.3f} %", f"{on:.3f} %", threshold,
+                                  PASS if ok else FAIL, detail,
+                                  _cmp_better(off, on)))
+
+    # 2. The arbiter's OWN cost, isolated from the second stack's. THE EXIT
+    #    CRITERION FOR THE COMBINED BUILD rather than a threshold to tune: if
+    #    the timeslot machinery alone costs this much, no amount of shaping the
+    #    other stack's demand recovers it, and the answer is the two-box handoff
+    #    of docs/radiant-bridge.md section 7.3.
+    limit = cfg.get("arbiter_only_max_delta_pp")
+    if limit is not None:
+        arbiter_threshold = f"<= direct + {limit} pp (EXIT CRITERION)"
+        try:
+            direct, off = need("loss_direct_pct"), need("loss_second_stack_off_pct")
+        except MissingField as exc:
+            results.append(GateResult("arbiter cost (no second stack)", "-", "-",
+                                      arbiter_threshold,
+                                      FAIL if required else SKIP, str(exc)))
+        else:
+            ok = (off - direct) <= limit
+            results.append(GateResult(
+                "arbiter cost (no second stack)", f"{direct:.3f} %",
+                f"{off:.3f} %", arbiter_threshold, PASS if ok else FAIL,
+                "" if ok else "the combined build is not viable on this "
+                              "silicon; see docs/radiant-bridge.md 7.3",
+                _cmp_better(direct, off)))
+
+    # 3. The sweep is the elastic consumer (ADR 0013), so it IS slower - that is
+    #    the intended cost. Bounded rather than accepted, because "the sweep
+    #    gives way" with no number attached is indistinguishable from a sweep
+    #    that stopped.
+    ratio_limit = cfg.get("min_sweep_rate_ratio")
+    if ratio_limit is not None:
+        sweep_threshold = f">= {ratio_limit} x the rate with it off"
+        rate_off = block.get("sweep_sets_per_s_off")
+        rate_on = block.get("sweep_sets_per_s_on")
+        if rate_off is None or rate_on is None or not rate_off:
+            results.append(GateResult(
+                "sweep rate under contention", "-", "-", sweep_threshold,
+                FAIL if required else SKIP,
+                f"{b.path}: coexistence has no sweep_sets_per_s_off/_on "
+                f"(CONFIG_RADIANT_CORE_SWEEP_DEBUG)"))
+        else:
+            ratio = float(rate_on) / float(rate_off)
+            results.append(GateResult(
+                "sweep rate under contention", f"{float(rate_off):.2f} sets/s",
+                f"{float(rate_on):.2f} sets/s", sweep_threshold,
+                PASS if ratio >= ratio_limit else FAIL,
+                f"{ratio:.2f} x", _cmp_better(rate_off, rate_on,
+                                              lower_is_better=False)))
+
+    return results
+
+
 def gate_ack(cfg: dict, a: Baseline, b: Baseline) -> GateResult:
     threshold = (f">= {cfg['min_success_pct']} % and >= A - "
                  f"{cfg['max_delta_pp']} pp")
@@ -681,6 +789,9 @@ def evaluate(gates: dict, a: Baseline, b: Baseline,
     block = cfg("ack_data")
     if block:
         results.append(gate_ack(block, a, b))
+    block = cfg("coexistence")
+    if block:
+        results.extend(gate_coexistence(block, a, b))
     block = cfg("usb_latency")
     if block:
         results.append(gate_usb(block, a, b))

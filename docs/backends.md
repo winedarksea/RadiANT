@@ -8,6 +8,23 @@ when the backend seam lands. Until then, everything under *Radio backends* and
 *HAL contract* is design, not shipped code — the transport, build-target and
 optional-feature material below is the shipping behaviour and is asserted.
 
+**The gate seam is shipped code; the MPSL gate is not, and every coexistence
+number on this page is still narrative.**
+[`radiant_core/src/radiant_radio_nrf_gate.h`](../radiant_core/src/radiant_radio_nrf_gate.h)
+and its direct implementation are compiled into every `-DRADIANT_BACKEND=nrf`
+build. `radiant_radio_nrf_gate_mpsl.c` does not exist yet: selecting
+`CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL` is a configure-time error naming the
+phase, which is the same shape of refusal the missing backend used to carry.
+
+So the +0.5 pp coexistence bar below, the arbiter's own cost and the sweep-rate
+ratio are **thresholds, not results**. They live in
+[`tools/ab_gates.toml`](../tools/ab_gates.toml) as `[gates.coexistence]`, which
+is written and evaluated by `ant_ab.py` and `enabled = false` until it has been
+measured on the nRF54L15 DK — a gate that runs against a guessed threshold is
+worse than one that does not run, because it reports PASS. Turning it on is the
+line that moves this page's coexistence claims from *treat as narrative* to a
+named gate.
+
 ---
 
 ## Radio backends: `sdk_ant` | `core` | `stub`
@@ -95,38 +112,68 @@ seam exists to make.
 
 ---
 
-## Inside `radiant_core`: two radio backends
+## Inside `radiant_core`: one nRF backend, two gates
 
-**These are not alternatives to choose between — they are two implementations
-of `radiant_radio_hal.h`, selected by Kconfig.** That is the whole reason the HAL is
-expressed as "arm at absolute microseconds / call back on completion" rather
-than in register terms.
+**This section used to describe two backends and it now describes one backend
+with a seam in it.** The change is recorded rather than edited away, because the
+reason for it is the more useful half.
 
-| Backend | Owns | For |
+The original plan was `radiant_radio_nrf.c` and `radiant_radio_nrf_mpsl.c` as
+two implementations of `radiant_radio_hal.h`, selected by Kconfig. Writing the
+second one made it clear that they would not have been two implementations: the
+2800 lines that turn a `struct radiant_rx_req` into RADIO registers, a TIMER
+compare and two (D)PPI connections are *identical* under both, and exactly one
+thing differs — whether the radio is ours whenever we want it.
+
+And the refactor that would have split them **cannot be verified by this
+project's own gate.** `radiant_radio_hal.h` states at length that a `t_sync`
+calibration error moves RX yield "by a few tenths of a percent, at the same
+order as the bench's characterised ~0.4 % collision floor, which is precisely
+the range in which a real regression is easiest to mistake for noise". An A/B
+run cannot detect the most likely failure of splitting that file.
+
+So the file is not split. Who owns the RADIO is a small internal interface —
+[`radiant_core/src/radiant_radio_nrf_gate.h`](../radiant_core/src/radiant_radio_nrf_gate.h) —
+with two implementations:
+
+| Gate | Answers "may I have the air?" | For |
 |---|---|---|
-| `radiant_radio_nrf.c` | RADIO, one TIMER, one RTC/GRTC channel, 4–6 (D)PPI via `nrfx_gppi_channel_alloc()` | **The dongle.** Best determinism, no second binary, ports to EFR32 |
-| `radiant_radio_nrf_mpsl.c` | a timeslot session on the public `mpsl_timeslot_*` API | **Combo nodes** — ANT and BLE on one chip |
+| `radiant_radio_nrf_gate_direct.c` | always yes, immediately | **The dongle.** ~30 lines of constants; the compiler folds the branch and the emitted code is what it was |
+| `radiant_radio_nrf_gate_mpsl.c` | a timeslot session on the public `mpsl_timeslot_*` API | **Combo builds** — ANT beside BLE, or beside Thread/Matter |
 
-**Direct is the default and lands first**, for a technical reason rather than a
+Selected by `CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL`, off by default.
+
+**Direct is the default and landed first**, for a technical reason rather than a
 preference: developing the link layer on timeslots from day one means debugging
 two unknowns at once, and a missed slot is indistinguishable between "my
 scheduler is wrong" and "the grant didn't arrive". Prove the core against
-peripherals you fully control, *then* port it under timeslots — at which point
+peripherals you fully control, *then* put it under timeslots — at which point
 any regression is unambiguously the timeslot layer.
 
-So the direct backend carries `BUILD_ASSERT(!IS_ENABLED(CONFIG_BT))`. Choosing
-the wrong backend for a build that also wants Bluetooth is then loud at compile
-time rather than silent on the air, which is the only failure mode that matters
-here: two stacks each believing they own RADIO do not announce themselves, they
+`BUILD_ASSERT(!IS_ENABLED(CONFIG_BT))` is now conditional on the gate rather
+than absolute, and the point of it is unchanged: on the direct gate, choosing
+the wrong configuration for a build that also wants Bluetooth is loud at compile
+time rather than silent on the air. That is the only failure mode that matters
+here — two stacks each believing they own RADIO do not announce themselves, they
 just lose packets.
 
-Cost of the direct backend: HFCLK management becomes ours (~20 LOC, nearly free
-on a USB build since USBD already holds HFXO) and one bench day for nRF52840
-RADIO anomalies. Cost of the MPSL backend: ~600 LOC, plus accepting MPSL's
-scheduling granularity and a closed Nordic binary *under that backend only* —
-the direct build stays free of it. On EFR32 the equivalent is RAIL's own
-multiprotocol support, not MPSL; the HAL abstraction holds because neither
-leaks into the core.
+Cost of the direct gate: HFCLK management is ours (~20 LOC, nearly free on a USB
+build since USBD already holds HFXO) and one bench day for nRF52840 RADIO
+anomalies. **Under the MPSL gate that line inverts**: MPSL owns the HFXO,
+because every timeslot request asks for `XTAL_GUARANTEED` and MPSL turns the
+crystal on and off at the timeslot's edges. What it costs instead is
+`CONFIG_MPSL_HFCLK_LATENCY` — the DT `hfxo/startup-time-us`, 1650 µs on nRF54L —
+built into how far ahead a request has to be placed.
+
+Cost of the MPSL gate: a closed Nordic binary *under that gate only* — the
+direct build stays free of it — and accepting that **we cannot outrank the other
+stack.** `timeslot.rst` says applications should always request
+`PRIORITY_NORMAL` and that other MPSL users hold priority levels above anything
+an application may request; the two application-visible levels rank us against
+*ourselves*. The product priority is delivered by shaping the other stack's
+demand instead, and ADR 0013 records how. On EFR32 the equivalent is RAIL's own
+multiprotocol command scheduling rather than MPSL; the abstraction holds because
+no MPSL type or symbol appears above the gate.
 
 ### BLE coexistence is a v1 requirement, not a someday
 
@@ -138,15 +185,45 @@ S332/S340 SoftDevices exist for.
 Note the asymmetry, because it decides the ordering: **the dongle never needs
 BLE; a sensor does.** Nothing about a USB dongle wants a second radio protocol.
 Anything built on `radiant_core` as a *node* — `sim/`, a CdA sensor, a telemetry
-node — is where coexistence is the whole point. That is why the timeslot
-backend is Phase 6b and not Phase 5, and why the dongle is not held up waiting
-for it.
+node — is where coexistence is the whole point. That is why the timeslot gate is
+a later phase than the dongle, and why the dongle is not held up waiting for it.
+
+**The asymmetry has since acquired an exception**, and it is worth stating
+because it is what makes the arbiter a dongle problem after all: a combined USB
++ Thread/Matter dongle serves Zwift over USB *and* drives a fan over Matter. The
+dongle still does not want BLE — it wants 802.15.4 — but it wants the same
+arbiter, and it wants it while a permanent background scanner is running. See
+ADR 0013.
 
 **Coexistence gate:** a build with `CONFIG_BT=y` and a minimal BLE peripheral
 advertising continuously, with `ant_verify.py` showing `loss (exact)` no worse
 than +0.5 pp against the same board running ANT alone. That single number is
 the whole acceptance test, and it is cheap to run. See
 [`testing.md`](testing.md) for how to read it.
+
+**That number now has somewhere to live.** It had none: `tools/ab_gates.toml`
+had no coexistence entry at all, and its `[gates.loss_exact]` requires
+`max_delta_pp = 0.2` — a *tighter* bar than the +0.5 pp stated here, which reads
+as though this paragraph had been superseded. It has not; the two measure
+different things. `loss_exact` compares two **backends** with nothing else on the
+radio; coexistence compares the **same** backend with the second stack on
+against off. Both exist in `ab_gates.toml` now, as `[gates.loss_exact]` and
+`[gates.coexistence]`, and both must pass on a combined build.
+
+Three further things belong to that block rather than to this paragraph, and
+they are stated there: the arbiter's own cost with no second stack attached
+(+1.5 pp is the **exit criterion** for the combined build, not a threshold to
+tune), the sweep-rate ratio that quantifies what "the sweep is the elastic
+consumer" cost, and `rig.second_stack`, without which a BLE-on run could be
+compared against a Thread-on run and produce a figure for neither.
+
+**`CONFIG_NET_L2_OPENTHREAD` must be as loud as `CONFIG_BT` on the direct
+gate**, and for the identical reason: the 802.15.4 driver takes the RADIO
+through MPSL, so a build with Thread on and the direct gate selected has two
+owners and loses packets silently. `radiant_core/Kconfig`'s `depends on !BT ||
+RADIANT_CORE_BACKEND_NRF_GATE_MPSL` is the pattern; the OpenThread half lands
+with the Thread branch, because until then there is nothing in-tree that can
+turn it on.
 
 ## HAL contract
 

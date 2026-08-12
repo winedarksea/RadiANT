@@ -242,9 +242,50 @@ ignored.
 
 ## Flash
 
-**Not performed here, and deliberately: `west flash` / JLink was not run at
-all.** The bench radio was in use by another measurement and a second
-transmitter would have corrupted it.
+> ### ⚠ BLOCKING DEFECT, found on first contact with hardware 2026-08-11
+>
+> **The Feather build's USB console does not work. Do not flash this image to a
+> Feather again until it is fixed** — recovering the board costs a physical
+> double-tap of RESET, which is the rationed resource this whole spike is
+> supposed to economise.
+>
+> Observed, with the image built by the command below flashed to the Feather:
+>
+> - the CDC ACM port **enumerates** (`VID 2FE3 / PID 0004`, appeared as `COM4`),
+>   so USB comes up and the application is running at least that far;
+> - the port **emits nothing at all** — 0 bytes over a 6 s listen with DTR and
+>   RTS asserted, so not even the banner;
+> - **writes to it time out** (`SerialTimeoutException`), i.e. the device is not
+>   draining the bulk-OUT endpoint. Without `write_timeout` set, the host blocks
+>   forever — that is what it looks like first.
+>
+> **The same image on the nRF54L15 DK is completely healthy** and prints its
+> banner and `help` on the UART VCOM (COM7) immediately. So the spike's logic,
+> its command parser and its build are fine; what fails is specifically the
+> Feather's USB-console binding.
+>
+> **The board cannot be recovered from software.** A 1200-baud touch on the CDC
+> port — the Arduino/Adafruit reset convention — does **not** work here; Zephyr
+> does not implement it, and the port simply stays up. `FTHR840BOOT` never
+> appears. Only a physical double-tap of RESET recovers the board.
+>
+> This is the exact failure `hardware-bench` warns about: the Feather has no
+> debugger, so anything that fails at or before the console is bound is
+> invisible on it. **Whatever the fix is, prove it on a board with a debugger
+> first** — or add a heartbeat that is observable without the console (an LED),
+> so "did it boot" and "is the console bound" stop being the same question.
+>
+> Suspects, in the order worth checking: the app polling the console before the
+> USB stack has finished configuring; a missing wait on DTR where the CDC
+> device only starts servicing endpoints once the host raises it; and console
+> output being routed to a `chosen` node that is not the enumerated CDC
+> instance. The generated DTS was confirmed to say
+> `zephyr,console = &board_cdc_acm_uart`, so the third is the least likely and
+> the first two are not distinguishable from the outside.
+
+**Not performed by the author of this spike, deliberately: `west flash` / JLink
+was not run at all** while it was being written. The bench radio was in use by
+another measurement and a second transmitter would have corrupted it.
 
 When it is done: two J-Link probes are attached and non-interactive JLink cannot
 choose between them, and **`exec DisableAutoUpdateFW` must be the first line of

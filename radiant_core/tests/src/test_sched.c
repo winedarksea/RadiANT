@@ -120,6 +120,7 @@ static struct {
 	uint32_t ok_count[RADIANT_SCHED_MAX_CHANNELS];
 	uint32_t missed_count[RADIANT_SCHED_MAX_CHANNELS];
 	uint32_t aborted_count[RADIANT_SCHED_MAX_CHANNELS];
+	uint32_t denied_count[RADIANT_SCHED_MAX_CHANNELS];
 
 	/* Steady-state driver: re-post the next window from done(), which is
 	 * what radiant_channel.c will do and the only way the round-robin fairness
@@ -232,6 +233,9 @@ static void on_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		break;
 	case RADIANT_SCHED_DONE_ABORTED:
 		log.aborted_count[ch]++;
+		break;
+	case RADIANT_SCHED_DONE_DENIED:
+		log.denied_count[ch]++;
 		break;
 	default:
 		break;
@@ -1725,6 +1729,301 @@ ZTEST(radiant_sched, test_a_failed_operation_ends_the_request)
 	zassert_equal(RADIANT_SCHED_DONE_FAILED, log.done[0].why);
 	zassert_false(radiant_sched_pending(0u));
 	zassert_true(fake_radio_is_idle(), "%s", fake_radio_busy_reason());
+
+	assert_every_window_bounded();
+	finish();
+}
+
+/* ---------------------------------------------------------------------------
+ * Denial - an arbitrated backend lending the radio to another stack
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * A bounded window the backend refused at the arm call is consumed and reported
+ * as DENIED, never as MISSED or FAILED.
+ *
+ * The two counters it must not land in are the two whose meanings are already
+ * spoken for: MISSED is what a channel counts eight of before it decides its
+ * sensor is gone, and FAILED is the request-is-broken code. A denial is neither
+ * - it is a statement about the other stack - and it is the OWNER's business
+ * what to do about it. The pass must also terminate: a request left in the
+ * table after a refusal is retried by the very next step, for ever.
+ */
+ZTEST(radiant_sched, test_a_denied_arm_is_reported_as_denied_and_consumed)
+{
+	radiant_time_t t0;
+	radiant_time_t open;
+
+	bring_up();
+	t0 = radiant_radio_now();
+	open = t0 + 100000u;
+
+	fake_radio_force_next_arm(RADIANT_RADIO_EDENIED);
+	post_track(0u, open, open + TEST_WINDOW_US);
+	zassert_ok(radiant_sched_tick());
+
+	zassert_equal(1u, fake_radio_arm_count());
+	zassert_equal(0u, fake_radio_arm(0u)->op, "the arm was not rejected");
+	zassert_equal(1u, radiant_sched_stats_get()->arm_denied);
+	zassert_equal(1u, radiant_sched_stats_get()->denied);
+	zassert_equal(0u, radiant_sched_stats_get()->missed,
+		      "a denial was charged to the miss counter");
+	zassert_equal(0u, radiant_sched_stats_get()->arm_rejected,
+		      "a denial was charged to the rejection counter");
+	zassert_equal(1u, log.n_done);
+	zassert_equal(RADIANT_SCHED_DONE_DENIED, log.done[0].why);
+	zassert_false(radiant_sched_pending(0u),
+		      "a bounded request survived a denial and would be retried");
+
+	assert_every_window_bounded();
+	finish();
+}
+
+/*
+ * The same fact arriving late: accepted, then never granted.
+ *
+ * This is the ordinary MPSL shape - the request is placed, the other stack wins
+ * the slot, and BLOCKED comes back from a cooperative thread after the window
+ * should have opened. It must reach the owner as DENIED and not as ABORTED,
+ * because ABORTED means the window HAD opened and was cut short, which is what
+ * decides whether a scan's dwell is credited.
+ */
+ZTEST(radiant_sched, test_a_denied_terminal_is_not_an_abort)
+{
+	radiant_time_t t0;
+	radiant_time_t open;
+
+	bring_up();
+	t0 = radiant_radio_now();
+	open = t0 + 100000u;
+
+	post_track(0u, open, open + TEST_WINDOW_US);
+	fake_radio_force_next_terminal(RADIANT_RADIO_STATUS_DENIED);
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(1u, fake_radio_arm_count());
+
+	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+	zassert_equal(1u, log.n_done);
+	zassert_equal(RADIANT_SCHED_DONE_DENIED, log.done[0].why);
+	zassert_equal(0u, log.aborted_count[0], NULL);
+	zassert_equal(1u, radiant_sched_stats_get()->denied);
+	zassert_equal(0u, radiant_sched_stats_get()->arm_denied,
+		      "a late denial was counted as a synchronous refusal");
+	zassert_false(radiant_sched_pending(0u));
+	zassert_true(fake_radio_is_idle(), "%s", fake_radio_busy_reason());
+
+	assert_every_window_bounded();
+	finish();
+}
+
+/*
+ * A CONTINUOUS request survives a run of denials, and the pass still terminates.
+ *
+ * Two properties in one test because they are in tension. The request must not
+ * be consumed - a background scan denied a chunk has lost nothing and wants the
+ * next gap - and a request that is kept AND retried inside the same pass would
+ * be offered to the same arbiter and refused again all the way to pass()'s
+ * iteration bound, burning the whole budget every time the other stack is busy.
+ * fake_radio's arm log is what makes the second one checkable: one refused arm
+ * per commit, not thirty.
+ */
+ZTEST(radiant_sched, test_a_denied_scan_chunk_keeps_the_request_and_ends_the_pass)
+{
+	struct radiant_sched_rx r;
+	radiant_time_t          t0;
+	uint32_t            arms_after_first;
+
+	bring_up();
+	t0 = radiant_radio_now();
+
+	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_SEARCH), search_filter,
+		    8u, t0, RADIANT_TIME_NEVER);
+	r.chunk_us = 50000u;
+	zassert_ok(radiant_sched_request_rx(31u, &r));
+
+	fake_radio_force_arm_repeat(RADIANT_RADIO_EDENIED, 8u);
+	zassert_ok(radiant_sched_tick());
+
+	arms_after_first = fake_radio_arm_count();
+	zassert_equal(1u, arms_after_first,
+		      "one commit made %u arm attempts against a denying backend",
+		      arms_after_first);
+	zassert_true(radiant_sched_pending(31u),
+		     "a denied chunk consumed the standing continuous request");
+
+	/* Several more commits, each costing exactly one refusal. */
+	zassert_ok(radiant_sched_tick());
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(3u, fake_radio_arm_count(), NULL);
+	zassert_equal(3u, radiant_sched_stats_get()->arm_denied);
+	zassert_true(radiant_sched_pending(31u), NULL);
+
+	/* And when the air comes back the scan simply resumes - no re-post, no
+	 * pump, no thread. */
+	fake_radio_force_arm_repeat(RADIANT_RADIO_OK_RC, 0u);
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_arm(fake_radio_arm_count() - 1u)->rc,
+		      "the scan never armed again after the arbiter let go");
+
+	fake_radio_advance(200000u);
+	zassert_true(fake_radio_arm_count() > 5u, "the chain did not restart");
+
+	assert_every_window_bounded();
+	finish();
+}
+
+/* ---------------------------------------------------------------------------
+ * caps.max_window_us - the arbitrated backend's operation-length ceiling
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * A backend that cannot arm a long window gets a short REQUEST, not a long one
+ * it has to shorten behind the scheduler's back.
+ *
+ * This is the one that has to be got right, because the wrong version is
+ * plausible and silent. `s.armed_end` is the close the scheduler ASKED for, and
+ * it is what armed() reports to the window's owner and what the search layer
+ * credits its dwell against. A backend that accepted a 250 ms chunk and quietly
+ * ran 20 ms of it would have the sweep credit 250 ms of listening for 20 ms of
+ * it - the address set advances after 8 % of its dwell, "certain within one
+ * sweep" becomes false, and not one counter moves.
+ *
+ * fake_radio refuses an over-long window with ENOTSUP for exactly that reason,
+ * and finish() asserts rc_enotsup == 0 - so a scheduler that stopped honouring
+ * the cap fails the whole suite rather than this one test.
+ */
+ZTEST(radiant_sched, test_a_capped_backend_gets_shorter_chunks_not_shortened_ones)
+{
+	struct radiant_sched_rx r;
+	radiant_time_t          t0;
+	uint32_t            i;
+
+	bring_up();
+	fake_radio_caps_mut()->max_window_us = 20000u;
+	t0 = radiant_radio_now();
+
+	/* A chunk five times the ceiling. */
+	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_SEARCH), search_filter,
+		    8u, t0, RADIANT_TIME_NEVER);
+	r.chunk_us = 100000u;
+	zassert_ok(radiant_sched_request_rx(31u, &r));
+	zassert_ok(radiant_sched_tick());
+
+	zassert_equal(1u, fake_radio_arm_count());
+	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_arm(0u)->rc,
+		      "the capped window was refused rather than bounded");
+	zassert_equal(20000u,
+		      (uint32_t)(fake_radio_arm(0u)->t_close -
+				 fake_radio_arm(0u)->t_open),
+		      "the request was not bounded by caps.max_window_us");
+
+	/*
+	 * And the dwell is not lost, it is chunked: several windows in a row,
+	 * every one of them inside the ceiling. A continuous request is not
+	 * consumed by a chunk that ended normally, which is the machinery this
+	 * relies on rather than new machinery of its own.
+	 */
+	fake_radio_advance(250000u);
+	zassert_true(fake_radio_arm_count() >= 8u,
+		     "only %u chunks in 250 ms against a 20 ms ceiling",
+		     fake_radio_arm_count());
+	for (i = 0u; i < fake_radio_arm_count(); i++) {
+		const struct fake_radio_arm *a = fake_radio_arm(i);
+
+		if (a->kind != FAKE_RADIO_ARM_RX || a->rc != RADIANT_RADIO_OK_RC) {
+			continue;
+		}
+		zassert_true(a->t_close - a->t_open <= 20000u,
+			     "arm %u ran %u us against a 20000 us ceiling", i,
+			     (uint32_t)(a->t_close - a->t_open));
+	}
+	zassert_true(radiant_sched_pending(31u), NULL);
+
+	assert_every_window_bounded();
+	finish();
+	fake_radio_caps_mut()->max_window_us = 0u;
+}
+
+/*
+ * Zero means unbounded, and it is the answer every backend that owns the radio
+ * gives. Nothing changes for them - asserted directly, because "inert unless
+ * asked for" is the entire compatibility claim of this field.
+ */
+ZTEST(radiant_sched, test_an_uncapped_backend_is_completely_unaffected)
+{
+	struct radiant_sched_rx r;
+	radiant_time_t          t0;
+	uint16_t            lead;
+
+	bring_up();
+	zassert_equal(0u, radiant_radio_caps_get()->max_window_us,
+		      "the default preset acquired a window ceiling");
+	t0 = radiant_radio_now();
+	lead = radiant_radio_caps_get()->min_arm_lead_us;
+
+	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_SEARCH), search_filter,
+		    8u, t0, RADIANT_TIME_NEVER);
+	r.chunk_us = 100000u;
+	zassert_ok(radiant_sched_request_rx(31u, &r));
+	zassert_ok(radiant_sched_tick());
+
+	zassert_equal(t0 + (radiant_time_t)lead + 100000u,
+		      fake_radio_arm(0u)->t_close,
+		      "an uncapped backend had its chunk shortened");
+
+	assert_every_window_bounded();
+	finish();
+}
+
+/* ---------------------------------------------------------------------------
+ * follow_on_us - reserving the reply
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * The reserve reaches the backend, and on a merged window it is the MAXIMUM
+ * over members rather than the leader's.
+ *
+ * Under-reserving on a merged window is the interesting failure: any of the
+ * channels sharing it may be the one whose frame becomes an acknowledged-data
+ * reply, so taking the leader's number would under-reserve exactly when merging
+ * did its job - and the population that merges is the population of dongles
+ * tracking several sensors, which is to say all of them.
+ */
+ZTEST(radiant_sched, test_the_follow_on_reserve_reaches_the_backend)
+{
+	struct radiant_sched_rx r;
+	radiant_time_t          t0;
+	radiant_time_t          open;
+
+	bring_up();
+	t0 = radiant_radio_now();
+	open = t0 + 100000u;
+
+	/* Two channels whose windows overlap, so they merge; only the second
+	 * asks for a reserve. */
+	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_TRACKING),
+		    &track_filter[0], 1u, open, open + TEST_WINDOW_US);
+	r.follow_on_us = 0u;
+	zassert_ok(radiant_sched_request_rx(0u, &r));
+
+	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_TRACKING),
+		    &track_filter[1], 1u, open, open + TEST_WINDOW_US);
+	r.follow_on_us = 1960u;
+	zassert_ok(radiant_sched_request_rx(1u, &r));
+
+	zassert_ok(radiant_sched_tick());
+
+	zassert_equal(1u, fake_radio_arm_count(), "the two windows did not merge");
+	zassert_equal(2u, fake_radio_arm(0u)->n_filters, NULL);
+	zassert_equal(1960u, fake_radio_arm(0u)->follow_on_us,
+		      "a merged window reserved the leader's follow-on rather "
+		      "than the largest its members asked for");
+
+	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
 
 	assert_every_window_bounded();
 	finish();

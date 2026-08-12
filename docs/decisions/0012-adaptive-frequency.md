@@ -359,6 +359,27 @@ reproducible**, and only the repeat established which was which.
   used, so `profile_freq_select()` would have returned "no data" and refused to
   move — which is this record's own designed behaviour and is why nothing was
   selected automatically for this run. **The indices above were set by hand.**
+
+- **RF-4's own gate is not currently measurable, and this was found while trying
+  to run it (2026-08-11).** That gate is "`loss_exact` unchanged with ED scanning
+  on under full tracked load". But `radiant_sched_request_ed()` — the only way an
+  ED slot is ever created — is called from **exactly two places, both in
+  `radiant_core/tests/src/test_ed.c`**. No application code, no API-layer code
+  and no profile calls it. So building the dongle with
+  `CONFIG_RADIANT_CORE_ED_SCAN=y` compiles the slot kind, the backend entry point
+  and the map in, and then **nothing ever asks for a scan**: the image behaves
+  identically on air to one built with the symbol off.
+
+  An A/B between those two images would therefore have shown "`loss_exact`
+  unchanged" and **passed the gate while measuring nothing** — the same shape of
+  vacuous pass as the null-backend trap, where every post-build assertion held on
+  an image with no radio in it. The gate needs a caller before it means anything:
+  either an API-layer hook that posts scans on some cadence, or a spike that does
+  it deliberately. Until then, RF-4's map is filled only by its tests.
+
+  Nothing here is wrong with `radiant_chanmap.c` or the `SLOT_ED` work, which are
+  tested and correct. What is missing is the one line that would put them on the
+  air.
 - Whether any index anywhere is better. Four were tried out of 125.
 
 **No dB figure appears anywhere in this record, in `profile_freq.c`, or in

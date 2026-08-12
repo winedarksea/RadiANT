@@ -57,6 +57,23 @@ require_same_recorded_date = true
 # same attenuation. A changed cable is a changed measurement.
 require_same_rig = true
 
+# A baseline from an arbitrated build MUST carry `rig.second_stack`, naming what
+# else was on the chip's radio: "none", "ble", "thread_sed", "thread_med".
+#
+# NO SEPARATE SWITCH FOR IT, AND THAT IS THE POINT RATHER THAN AN OMISSION.
+# `require_same_rig` above compares the whole `rig` object, so a field inside it
+# is already enforced - adding `require_same_second_stack = true` here would
+# read as the rule and be inert, because `ant_ab.py` reads the two keys above
+# and no others. Recording the field in the rig is the whole of the mechanism.
+#
+# The failure it prevents is specific: comparing a BLE-on run against a
+# Thread-on run produces a coexistence figure for neither, and both runs look
+# perfectly well-formed. The sitting is refused before any gate is reached.
+#
+# Baselines recorded before the arbitrated build existed have no such field.
+# They are not wrong - those runs owned the radio outright - but they will
+# refuse to compare against a run that names one, which is the correct answer.
+
 # A/B/A: pass three baselines and the first and last must be the same backend
 # and must agree to within this many percentage points of exact loss. If they do
 # not, the sitting is void and the B number means nothing - the repeated A is
@@ -247,6 +264,68 @@ required = false
 # sets trainer resistance - so this is the gate closest to the Tier 3 ride.
 min_success_pct = 99.0
 max_delta_pp = 1.0
+
+[gates.coexistence]
+# THE THRESHOLDS ARE HERE AND `ant_ab.py` DOES NOT YET EVALUATE THEM. It reads
+# gate blocks by name and has no `coexistence` case, so this block is inert
+# until P3 adds one - which is stated rather than left to be discovered,
+# because a threshold that is present and unread is worse than one that is
+# absent: a reviewer sees a number and assumes something checks it.
+#
+# It is written now anyway, because the +0.5 pp coexistence bar has been in
+# docs/backends.md since before the arbiter existed and had nowhere to live.
+# The alternative was to let P3 invent a number at the moment it needs to pass
+# one, which is the failure mode the header of this file is entirely about.
+enabled = false
+
+# Not required, for the same reason as `scale` and `ack_data`: a sitting on a
+# build with no second stack legitimately has no coexistence block at all, and
+# the absence must read as SKIP rather than as a pass.
+required = false
+
+# THIS IS A DIFFERENT COMPARISON FROM `loss_exact` AND THE LOOSER NUMBER IS NOT
+# A LOOSER STANDARD.
+#
+# `loss_exact` compares two BACKENDS on the same rig with nothing else on the
+# radio, and 0.2 pp is what the bench's own spread allows. This compares the
+# SAME backend with the second stack on against the second stack off - so it
+# measures what coexistence costs, and 0.5 pp is the figure docs/backends.md
+# has stated for it since before the arbiter existed.
+#
+# Both gates exist and both must pass on a combined build. Reading the tighter
+# one as superseding the looser one would be a category error: a build can be
+# 0.15 pp from sdk-ant with BLE off and 2 pp worse with BLE on, and only this
+# gate can see it.
+max_delta_pp = 0.5
+
+# Applied to the candidate with the second stack ON, on its own terms. Same
+# argument as loss_exact's ceiling: being within 0.5 pp of a bad afternoon is
+# not a pass.
+absolute_ceiling_pct = 1.5
+
+# The arbiter's OWN cost, with no second stack attached - CONFIG_MPSL=y and
+# nothing else on the radio, against the direct build. It isolates what the
+# timeslot machinery costs from what the other stack costs, and they are two
+# different numbers that a single figure would conflate.
+#
+# THIS ONE IS THE EXIT CRITERION FOR THE WHOLE COMBINED BUILD, written down
+# rather than left implicit: if the arbiter alone costs more than 1.5 pp, the
+# combined USB + Thread dongle is abandoned in favour of the two-box handoff of
+# docs/radiant-bridge.md section 7.3, and no amount of tuning the second stack's
+# demand recovers it.
+arbiter_only_max_delta_pp = 1.5
+
+# The sweep is the elastic consumer (ADR 0013), so it gets slower and that is
+# the intended cost rather than a regression. It is still bounded: sets/s from
+# CONFIG_RADIANT_CORE_SWEEP_DEBUG with the second stack on must be at least this
+# fraction of the same build with it off.
+#
+# Quantified rather than merely accepted, because "the sweep gives way" with no
+# number attached is indistinguishable from a sweep that stopped. The value is a
+# placeholder until P3 measures it on the nRF54L15 DK against a scripted host
+# replaying the Zwift capture's open/close/network-rotation cadence - a static
+# device set never reproduces the permanent scanner the whole amendment rests on.
+min_sweep_rate_ratio = 0.5
 
 [gates.usb_latency]
 enabled = true

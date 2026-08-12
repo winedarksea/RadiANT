@@ -215,6 +215,11 @@ struct sched_slot {
 	const uint8_t               *body;    /* transmit; caller-owned */
 
 	struct radiant_tx_power power;
+	/* Air time the owner may still need after this operation ends. Carried
+	 * verbatim to the HAL request; see radiant_radio_hal.h. Two bytes in
+	 * padding the struct already had, which is why it does not move the
+	 * 72 B budget below. */
+	uint16_t            follow_on_us;
 	uint32_t            chunk_us;
 	/* Energy detect only: the per-index ceiling. Not folded into chunk_us,
 	 * because the two bound different things - one arm call against one
@@ -574,6 +579,33 @@ static radiant_time_t t_back(radiant_time_t t, radiant_time_t d)
 	return (t > d) ? (t - d) : 0u;
 }
 
+/*
+ * Bound a window by what the backend can arm in ONE operation.
+ *
+ * Applied where `limit` and `cap_close` are applied, and for the same class of
+ * reason: it changes the request, so the bounds the owner is told about stay
+ * the bounds that were armed. That identity is the whole point - see
+ * caps.max_window_us. A backend reporting 0 is unbounded and this is one
+ * comparison that never fires.
+ *
+ * The remainder is not lost. A continuous request is not consumed by a chunk
+ * that ended normally, radiant_search_dwell_remaining() and
+ * radiant_sched_rechunk() already carry a set's dwell across chunk boundaries,
+ * and that machinery has seven tests over it.
+ */
+static radiant_time_t window_cap(radiant_time_t open, radiant_time_t close)
+{
+	uint32_t max = (s.caps != NULL) ? s.caps->max_window_us : 0u;
+
+	if (max == 0u || close <= open) {
+		return close;
+	}
+	if ((close - open) <= (radiant_time_t)max) {
+		return close;
+	}
+	return open + (radiant_time_t)max;
+}
+
 static void slot_clear(uint8_t ch)
 {
 	memset(&s.ch[ch], 0, sizeof(s.ch[ch]));
@@ -584,6 +616,8 @@ static void notify_done(uint8_t ch, enum radiant_sched_done why)
 {
 	if (why == RADIANT_SCHED_DONE_MISSED) {
 		s.stats.missed++;
+	} else if (why == RADIANT_SCHED_DONE_DENIED) {
+		s.stats.denied++;
 	}
 	if (s.cbs.done != NULL) {
 		s.cbs.done(ch, why, s.user);
@@ -651,7 +685,21 @@ static void end_armed(enum radiant_sched_done why)
 		 * scan is - it is never consumed by a chunk that ended
 		 * normally - but it carries no `continuous` flag of its own,
 		 * because there is no bounded form of it to distinguish from. */
-		keep = why == RADIANT_SCHED_DONE_OK &&
+		/*
+		 * DONE_DENIED KEEPS THE REQUEST FOR THE SAME REASON DONE_OK
+		 * DOES, AND OMITTING IT WOULD STOP ED SCANNING FOR EVER.
+		 *
+		 * A denial means the chunk never opened - so a continuous
+		 * request has lost nothing and wants the next chunk exactly as
+		 * it did before. That is merely efficient for a background
+		 * scan, which radiant_api.c re-posts from its pump anyway. It is
+		 * load-bearing for ED: NOTHING re-posts an energy-detect
+		 * request. slot_clear()ing it here would silently end the sweep
+		 * at the first denial, with the map simply ceasing to update and
+		 * no counter moving.
+		 */
+		keep = (why == RADIANT_SCHED_DONE_OK ||
+			why == RADIANT_SCHED_DONE_DENIED) &&
 		       ((sl->continuous && sl->kind == (uint8_t)SLOT_RX) ||
 			sl->kind == (uint8_t)SLOT_ED);
 		if (!keep) {
@@ -783,6 +831,50 @@ static enum step arm_failed(uint8_t ch, int rc)
 		slot_clear(ch);
 		notify_done(ch, RADIANT_SCHED_DONE_MISSED);
 		return STEP_RETRY;
+	case RADIANT_RADIO_EDENIED: {
+		/*
+		 * An arbitrated backend has the radio but not the air. Unlike
+		 * every other code here this describes NEITHER the request nor
+		 * the radio's lifecycle - it describes another stack - so it
+		 * needs its own arm rather than either of the two shapes above.
+		 *
+		 * WHETHER THE REQUEST SURVIVES IS THE SAME QUESTION end_armed()
+		 * ASKS, AND IT MUST BE ANSWERED THE SAME WAY. A continuous scan
+		 * or an ED sweep denied a chunk has lost nothing - the chunk
+		 * never opened - and still wants the next gap. Consuming it here
+		 * would be merely wasteful for a scan, which radiant_api.c
+		 * re-posts from its pump, and permanent for ED, which NOTHING
+		 * re-posts: the map would simply stop updating at the first
+		 * denial with no counter moving.
+		 *
+		 * A bounded request is consumed and reported, on the same terms
+		 * as ETIME above and for the same reason: the governing rule is
+		 * that a pass must terminate, and a request left in the table
+		 * after a refusal is retried by the very next step, for ever. It
+		 * is then the OWNER's business whether to re-post - and for a
+		 * tracked channel radiant_api.c does, having first told
+		 * radiant_channel.c that the slot was lent rather than missed.
+		 *
+		 * WHICH IS ALSO WHY A KEPT REQUEST ENDS THE PASS. Left in the
+		 * table AND retried, the very next step would offer the same
+		 * slot to the same arbiter and be refused again, all the way to
+		 * pass()'s iteration bound - a bounded loop, but one that does
+		 * nothing and burns the whole budget every time the other stack
+		 * is busy. STEP_DONE for the kept case, STEP_RETRY for the
+		 * consumed one, so that in both arms progress is strictly
+		 * monotone.
+		 */
+		bool keep = (s.ch[ch].continuous &&
+			     s.ch[ch].kind == (uint8_t)SLOT_RX) ||
+			    s.ch[ch].kind == (uint8_t)SLOT_ED;
+
+		s.stats.arm_denied++;
+		if (!keep) {
+			slot_clear(ch);
+		}
+		notify_done(ch, RADIANT_SCHED_DONE_DENIED);
+		return keep ? STEP_DONE : STEP_RETRY;
+	}
 	case RADIANT_RADIO_ENOTSUP:
 		/*
 		 * A filter set the backend cannot put on the air.
@@ -866,6 +958,7 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 	radiant_time_t           lead_close;
 	radiant_time_t           cap_close;
 	uint32_t             flags = 0u;
+	uint16_t             follow_on = 0u;
 	uint32_t             k;
 	uint32_t             op = 0u;
 	uint8_t              i;
@@ -916,6 +1009,7 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 	if (limit != RADIANT_TIME_NEVER) {
 		close = t_min(close, limit);
 	}
+	close = window_cap(open, close);
 	if (close < open) {
 		return STEP_SKIP;
 	}
@@ -938,6 +1032,7 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 	if (lead->report_crc_fail) {
 		flags |= RADIANT_RX_REPORT_CRC_FAIL;
 	}
+	follow_on = lead->follow_on_us;
 
 	for (k = 1u; k < RADIANT_SCHED_MAX_CHANNELS; k++) {
 		uint8_t            c = (uint8_t)(((uint32_t)leader + k) %
@@ -1001,6 +1096,7 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 			n_close = t_min(n_close, limit);
 		}
 		n_close = t_min(n_close, cap_close);
+		n_close = window_cap(n_open, n_close);
 		/* After the caps, would this member get any coverage at all? A
 		 * filter spent on a channel the window cannot hear is worse
 		 * than not merging it, because on RAIL it is half of them. */
@@ -1020,6 +1116,9 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 		s.n_members++;
 		if (m->report_crc_fail) {
 			flags |= RADIANT_RX_REPORT_CRC_FAIL;
+		}
+		if (m->follow_on_us > follow_on) {
+			follow_on = m->follow_on_us;
 		}
 	}
 
@@ -1041,6 +1140,17 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 	req.t_open = open;
 	req.t_close = close;
 	req.flags = flags;
+	/*
+	 * THE MAXIMUM OVER MEMBERS, NOT THE LEADER'S.
+	 *
+	 * A merged window carries up to caps.max_filters channels and any one of
+	 * them may be the one whose frame turns into an acknowledged-data reply.
+	 * Reserving only the leader's would under-reserve exactly when merging
+	 * did its job, and the shortfall would appear as ERG commands that
+	 * occasionally do not take on a dongle tracking several sensors - which
+	 * is the population that merges. Accumulated in the member loop above.
+	 */
+	req.follow_on_us = follow_on;
 
 	rc = radiant_radio_rx(&req, &op);
 	if (rc != RADIANT_RADIO_OK_RC) {
@@ -1100,6 +1210,7 @@ static enum step arm_tx_op(uint8_t ch)
 	req.body = sl->body;
 	req.body_len = sl->body_len;
 	req.t_sync_at = sl->t_start;
+	req.follow_on_us = sl->follow_on_us;
 
 	rc = radiant_radio_tx(&req, &op);
 	if (rc != RADIANT_RADIO_OK_RC) {
@@ -1840,6 +1951,23 @@ static void hal_rx(const struct radiant_rx_event *evt, void *user)
 		end_armed(RADIANT_SCHED_DONE_ABORTED);
 		terminal = true;
 		break;
+	case RADIANT_RADIO_STATUS_DENIED:
+		/*
+		 * Accepted, then never granted. Distinct from ABORTED, which
+		 * means the window HAD opened and was cut short: this one never
+		 * opened at all, so a continuous scan's dwell must be credited
+		 * nothing rather than credited to now, and a tracked channel
+		 * must not be told its sensor went quiet.
+		 *
+		 * MAY ARRIVE FROM A COOPERATIVE THREAD rather than from the
+		 * radio interrupt - see the amended callback contract in
+		 * radiant_radio_hal.h. Nothing here depends on the context:
+		 * pass() takes radiant_event_crit_enter() for the whole of
+		 * itself, and s.in_pass is checked and set inside it.
+		 */
+		end_armed(RADIANT_SCHED_DONE_DENIED);
+		terminal = true;
+		break;
 	case RADIANT_RADIO_STATUS_FAILED:
 	default:
 		end_armed(RADIANT_SCHED_DONE_FAILED);
@@ -1889,6 +2017,13 @@ static void hal_tx(const struct radiant_tx_event *evt, void *user)
 		break;
 	case RADIANT_RADIO_STATUS_ABORTED:
 		end_armed(RADIANT_SCHED_DONE_ABORTED);
+		break;
+	case RADIANT_RADIO_STATUS_DENIED:
+		/* The frame never went out and nothing was preempted; the air
+		 * was lent. For a master that means only that the slot clock
+		 * must advance, which radiant_api.c does off the slot kind
+		 * rather than off this status. */
+		end_armed(RADIANT_SCHED_DONE_DENIED);
 		break;
 	default:
 		end_armed(RADIANT_SCHED_DONE_FAILED);
@@ -1968,6 +2103,14 @@ static void hal_ed(const struct radiant_ed_event *evt, void *user)
 		break;
 	case RADIANT_RADIO_STATUS_ABORTED:
 		end_armed(RADIANT_SCHED_DONE_ABORTED);
+		terminal = true;
+		break;
+	case RADIANT_RADIO_STATUS_DENIED:
+		/* The chunk never ran, so no index was measured and rf_cursor
+		 * stays where it was - the next chunk resumes on the index this
+		 * one would have started with. end_armed() keeps the request:
+		 * nothing else re-posts an ED sweep. */
+		end_armed(RADIANT_SCHED_DONE_DENIED);
 		terminal = true;
 		break;
 	case RADIANT_RADIO_STATUS_CRC_FAIL:
@@ -2097,6 +2240,7 @@ int radiant_sched_request_rx(uint8_t ch, const struct radiant_sched_rx *req)
 	sl->fmt = req->fmt;
 	sl->filters = req->filters;
 	sl->chunk_us = req->chunk_us;
+	sl->follow_on_us = req->follow_on_us;
 	sl->t_start = req->t_open;
 	sl->t_end = req->t_close;
 
@@ -2151,6 +2295,7 @@ int radiant_sched_request_tx(uint8_t ch, const struct radiant_sched_tx *req)
 	sl->body = req->body;
 	sl->body_len = req->body_len;
 	sl->power = req->power;
+	sl->follow_on_us = req->follow_on_us;
 	sl->t_start = req->t_sync_at;
 
 	s.dirty = true;

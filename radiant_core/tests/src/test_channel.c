@@ -1644,6 +1644,257 @@ ZTEST(radiant_channel, test_a_slot_after_a_miss_is_not_fed_to_the_estimator)
 	radio_clean();
 }
 
+/* ---------------------------------------------------------------------------
+ * Denial - the radio lent to another protocol stack
+ *
+ * Every test below is about the one distinction the denial signal exists to
+ * make: a window that never opened says nothing about the sensor, so it must
+ * not be able to take a live channel off the air, and it must not be reported
+ * to a host as an RX failure. What it DOES cost is a period of extrapolation
+ * with no fresh sync, and the guard has to be charged for that exactly as a
+ * miss charges it - the two facts pull in opposite directions and getting
+ * either one alone is a plausible-looking bug.
+ * ---------------------------------------------------------------------------
+ */
+
+/* The denial at which the guard first reaches its ceiling, from the floor, at
+ * one drift quantum each. 12 with the constants as they stand - and derived
+ * rather than written down, because a change to any of the three should move
+ * the test rather than break it. */
+#define DENIALS_TO_CEILING                                    \
+	((RADIANT_CHANNEL_GUARD_MAX_US - RADIANT_CHANNEL_GUARD_MIN_US) / \
+	 RADIANT_CHANNEL_DRIFT_WORST_US)
+
+ZTEST(radiant_channel, test_denied_slots_widen_the_guard_and_never_leave_tracking)
+{
+	radiant_time_t t0;
+	uint32_t prev;
+	uint32_t i;
+
+	up();
+	t0 = radiant_radio_now();
+	acquire_slave(1u, t0);
+	(void)clean_slots(1u, 64u, 0);
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u),
+		      NULL);
+
+	/*
+	 * Twelve denials is half again what RX_FAIL_TO_SEARCH allows in misses.
+	 * A channel that treated the two alike would already be SEARCHING here,
+	 * and Zwift would have seen the sensor drop - because the other stack
+	 * was busy for three seconds.
+	 *
+	 * The guard is checked against an arithmetic expectation rather than
+	 * "it went up", because both failure directions are silent: too narrow
+	 * loses packets at the same order as the bench's own collision floor,
+	 * too wide burns receive current and swallows the next sensor's window.
+	 */
+	prev = 0u;
+	for (i = 1u; i <= DENIALS_TO_CEILING; i++) {
+		uint32_t expect = RADIANT_CHANNEL_GUARD_MIN_US +
+				  i * RADIANT_CHANNEL_DRIFT_WORST_US;
+		uint32_t guard;
+
+		zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()),
+			      "denial %u took the channel off the air", i);
+		zassert_equal(RADIANT_CH_STATE_TRACKING,
+			      radiant_channel_state_get(1u), NULL);
+		zassert_equal((uint8_t)i, radiant_channel_denied_count(1u), NULL);
+
+		guard = radiant_channel_guard_us(1u);
+		zassert_equal(expect, guard, "guard after %u denial(s)", i);
+		zassert_true(guard >= prev, "the guard went backwards at %u", i);
+		prev = guard;
+	}
+
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, prev,
+		      "twelve denials should reach the ceiling exactly");
+
+	/*
+	 * And from the twelfth on it STAYS at the ceiling. "Widens
+	 * monotonically to twenty" is false from here - the clamp is what makes
+	 * the RADIANT_CHANNEL_DENY_TO_SEARCH bound necessary, because past this
+	 * point extra denials accumulate disagreement the window provably no
+	 * longer covers.
+	 */
+	for (; i < RADIANT_CHANNEL_DENY_TO_SEARCH; i++) {
+		zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()),
+			      "denial %u took the channel off the air", i);
+		zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US,
+			      radiant_channel_guard_us(1u), NULL);
+	}
+
+	/* No host ever heard about any of it. */
+	zassert_equal(0u, evt_count_of(1u, RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH),
+		      "a denial reached the host as a sensor failure");
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
+		      NULL);
+	radio_clean();
+}
+
+ZTEST(radiant_channel, test_a_denial_run_past_the_bound_does_go_back_to_search)
+{
+	radiant_time_t t0;
+	uint32_t i;
+
+	up();
+	t0 = radiant_radio_now();
+	acquire_slave(1u, t0);
+	(void)clean_slots(1u, 64u, 0);
+
+	/*
+	 * The bound is not a safety net that never fires by accident - it is the
+	 * statement that a channel stops claiming to track once its window
+	 * provably cannot contain the master any more. Under a working arbiter
+	 * it never fires; if it does, the arbiter is broken, and the counter
+	 * that says so is the reason denials are counted apart from misses in
+	 * the first place.
+	 */
+	for (i = 1u; i < RADIANT_CHANNEL_DENY_TO_SEARCH; i++) {
+		zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()),
+			      NULL);
+	}
+
+	zassert_true(radiant_channel_on_slot_denied(1u, radiant_radio_now()),
+		     "sixteen denials left the channel claiming to track");
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(1u),
+		      NULL);
+	zassert_equal(1u, evt_count_of(1u, RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH),
+		      "the one transition raised none or two events");
+	zassert_equal(0u, radiant_channel_denied_count(1u),
+		      "the denial counter survived the transition");
+	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, radiant_channel_guard_us(1u),
+		      NULL);
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
+		      NULL);
+	radio_clean();
+}
+
+ZTEST(radiant_channel, test_a_slot_after_a_denial_run_is_not_fed_to_the_estimator)
+{
+	radiant_time_t t0;
+	radiant_time_t predicted;
+	uint32_t i;
+
+	up();
+	t0 = radiant_radio_now();
+	acquire_slave(1u, t0);
+	(void)clean_slots(1u, 64u, 0);
+	zassert_equal(0u, radiant_channel_residual_us(1u), NULL);
+
+	/*
+	 * The trap this test exists for, and the one place where "a denial is
+	 * not evidence about the peer" gives the wrong answer if applied
+	 * literally.
+	 *
+	 * The residual measured on a slot is |t_sync - predicted|, and after a
+	 * run of denials the prediction has been extrapolated once per denial.
+	 * The 260 us below is twenty periods of drift, not one. Feeding it to
+	 * an EWMA with a memory of eight slots clamps the guard at the ceiling
+	 * and then decays it back over roughly eight further slots - so a link
+	 * behaving perfectly would run a maximally wide window for two seconds
+	 * after every busy patch in the other stack, with nothing anywhere
+	 * saying why.
+	 */
+	for (i = 0u; i < 10u; i++) {
+		zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()),
+			      NULL);
+	}
+
+	predicted = radiant_channel_next_slot(1u);
+	radiant_channel_on_slot(1u, predicted + 260u);
+
+	zassert_equal(0u, radiant_channel_residual_us(1u),
+		      "the estimator swallowed a multi-period residual");
+	zassert_equal(0u, radiant_channel_denied_count(1u),
+		      "a slot heard did not retire the denial run");
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u),
+		      "the guard stayed wide after the link came back");
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
+		      NULL);
+	radio_clean();
+}
+
+ZTEST(radiant_channel, test_denials_and_misses_are_charged_at_the_same_weight)
+{
+	radiant_time_t t0;
+
+	up();
+	t0 = radiant_radio_now();
+	acquire_slave(1u, t0);
+	(void)clean_slots(1u, 64u, 0);
+
+	/*
+	 * Interleaved, because the two counters run at the same time and the
+	 * guard is a function of their SUM. A build that charged only one of
+	 * them would pass every single-counter test above and open a window
+	 * three quanta too narrow here.
+	 */
+	zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()), NULL);
+	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()), NULL);
+	zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()), NULL);
+	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()), NULL);
+
+	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US +
+			      4u * RADIANT_CHANNEL_DRIFT_WORST_US,
+		      radiant_channel_guard_us(1u),
+		      "two misses and two denials are four periods of drift");
+
+	/* And a master is untouched by either: it advances its slot and counts
+	 * nothing, because it has nothing to hear and nowhere to go back to. */
+	assign_and_id(2u, TYPE_MASTER);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(2u, 0u, t0), NULL);
+	zassert_false(radiant_channel_on_slot_denied(2u, radiant_radio_now()), NULL);
+	zassert_equal(0u, radiant_channel_denied_count(2u), NULL);
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(2u), NULL);
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
+		      NULL);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(2u, radiant_radio_now()),
+		      NULL);
+	radio_clean();
+}
+
+ZTEST(radiant_channel, test_a_denied_slot_advances_the_clock_by_exactly_one_period)
+{
+	radiant_time_t t0;
+	radiant_time_t before_slot;
+	radiant_time_t period;
+
+	up();
+	t0 = radiant_radio_now();
+	acquire_slave(1u, t0);
+
+	/* acquire_slave() anchors t_next one period after t0, so the period is
+	 * read off the channel rather than assumed from a constant this helper
+	 * never sets. */
+	before_slot = radiant_channel_next_slot(1u);
+	period = before_slot - t0;
+	zassert_true(period > 0u, NULL);
+
+	/*
+	 * From the slot that was lost, NOT from now - the same rule a miss
+	 * keeps, and for the same reason: advancing from `now` lets scheduler
+	 * latency walk the phase away from the master one late notification at
+	 * a time. `now` is passed a long way ahead here precisely so that an
+	 * implementation which advanced from it would fail.
+	 *
+	 * For a master the advance is what stops the hot loop described at
+	 * radiant_channel.c's "A MASTER ADVANCES ITS SLOT" comment, which under
+	 * an arbiter is reachable from a single denied transmit.
+	 */
+	zassert_false(radiant_channel_on_slot_denied(1u, t0 + 999999u), NULL);
+	zassert_equal(before_slot + period, radiant_channel_next_slot(1u),
+		      "a denied slot did not advance by exactly one period");
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()),
+		      NULL);
+	radio_clean();
+}
+
 ZTEST(radiant_channel, test_the_guard_floor_can_be_raised_but_never_lowered)
 {
 	radiant_time_t t0;

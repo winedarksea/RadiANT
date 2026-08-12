@@ -289,6 +289,12 @@ struct fake_radio_arm {
 	radiant_time_t           t_open;
 	radiant_time_t           t_close;
 	uint32_t             flags;
+	/* Recorded for both kinds: air the core asked to have held past the end
+	 * of this operation. See struct radiant_rx_req::follow_on_us. This mock
+	 * owns the radio, so it reserves nothing and only records - which is
+	 * exactly what makes "the core asked for the right reserve" checkable
+	 * without an arbiter anywhere in the picture. */
+	uint16_t             follow_on_us;
 	struct radiant_rx_filter filters[FAKE_RADIO_MAX_FILTERS];
 	uint8_t              n_filters;
 
@@ -599,6 +605,30 @@ void fake_radio_force_next_arm(int rc);
  * RADIANT_RADIO_STATUS_FAILED, "the backend could not complete it", which nothing
  * else in the mock produces. */
 void fake_radio_force_next_terminal(enum radiant_radio_status status);
+
+/*
+ * The same two, for a RUN of operations - which is the shape an arbitrated
+ * backend fails in, and the shape a one-shot cannot express.
+ *
+ * A backend that must reserve air time from another protocol stack does not
+ * refuse one window; it refuses every window that lands inside the other
+ * stack's activity, and the core's response to a run of them is where all the
+ * interesting behaviour is: a guard that widens per denial to a ceiling, a
+ * counter that must not promote a live sensor to SEARCHING, an ED sweep that
+ * must still be alive at the end of it. Re-arming a one-shot between each would
+ * mean re-arming it from inside the very callback under test.
+ *
+ * force_arm_repeat refuses the next `count` ARM CALLS with rc - the synchronous
+ * RADIANT_RADIO_EDENIED case. force_terminal_repeat replaces the terminal status
+ * of the next `count` ACCEPTED OPERATIONS - the accepted-then-never-granted
+ * RADIANT_RADIO_STATUS_DENIED case. They compose: the two are genuinely
+ * different moments and a backend may produce either.
+ *
+ * RADIANT_RADIO_OK_RC, or a count of 0, cancels a run in progress.
+ */
+void fake_radio_force_arm_repeat(int rc, uint32_t count);
+void fake_radio_force_terminal_repeat(enum radiant_radio_status status,
+				      uint32_t count);
 
 /* Offset, in microseconds, between the t_sync a transmit asks for and the
  * t_sync it reports. Models a backend that cannot schedule exactly; the

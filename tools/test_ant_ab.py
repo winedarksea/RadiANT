@@ -613,6 +613,91 @@ class Gates(unittest.TestCase):
         self.assertEqual(self.name(self.evaluate(mutate), "ack-data").verdict,
                          ant_ab.PASS)
 
+    # -- coexistence --------------------------------------------------------
+    #
+    # Tested against gate_coexistence() directly rather than through
+    # evaluate(), because the block is `enabled = false` in ab_gates.toml until
+    # P3 measures its thresholds - so evaluate() correctly skips it, and a test
+    # that went through evaluate() would be asserting nothing while looking
+    # like it asserted something.
+
+    COEX_CFG = {"required": False, "max_delta_pp": 0.5,
+                "absolute_ceiling_pct": 1.5,
+                "arbiter_only_max_delta_pp": 1.5,
+                "min_sweep_rate_ratio": 0.5}
+
+    def coex(self, block):
+        a, b = pair()
+        if block is not None:
+            b.data["coexistence"] = block
+        return {r.name: r for r in
+                ant_ab.gate_coexistence(self.COEX_CFG, a, b)}
+
+    def test_coexistence_absent_is_a_skip_not_a_pass(self):
+        results = self.coex(None)
+        self.assertEqual(results["coexistence (second stack on)"].verdict,
+                         ant_ab.SKIP)
+
+    def test_coexistence_within_half_a_point_passes(self):
+        results = self.coex({"second_stack": "ble",
+                             "loss_direct_pct": 0.40,
+                             "loss_second_stack_off_pct": 0.45,
+                             "loss_second_stack_on_pct": 0.85,
+                             "sweep_sets_per_s_off": 4.0,
+                             "sweep_sets_per_s_on": 3.0})
+        for result in results.values():
+            self.assertEqual(result.verdict, ant_ab.PASS, result.name)
+
+    def test_coexistence_beyond_half_a_point_fails(self):
+        results = self.coex({"second_stack": "thread_med",
+                             "loss_direct_pct": 0.40,
+                             "loss_second_stack_off_pct": 0.45,
+                             "loss_second_stack_on_pct": 1.10,
+                             "sweep_sets_per_s_off": 4.0,
+                             "sweep_sets_per_s_on": 3.0})
+        self.assertEqual(results["coexistence (second stack on)"].verdict,
+                         ant_ab.FAIL)
+
+    def test_coexistence_within_half_a_point_of_a_bad_afternoon_still_fails(self):
+        # 1.60 - 1.20 is inside 0.5 pp and 1.60 % is over the 1.5 % ceiling.
+        # The delta gate alone would pass this, which is the whole reason
+        # loss_exact carries a ceiling too.
+        results = self.coex({"second_stack": "ble",
+                             "loss_direct_pct": 0.40,
+                             "loss_second_stack_off_pct": 1.20,
+                             "loss_second_stack_on_pct": 1.60,
+                             "sweep_sets_per_s_off": 4.0,
+                             "sweep_sets_per_s_on": 3.0})
+        self.assertEqual(results["coexistence (second stack on)"].verdict,
+                         ant_ab.FAIL)
+
+    def test_the_arbiter_paying_for_itself_is_the_exit_criterion(self):
+        # The second stack is off in both numbers, so this is the timeslot
+        # machinery's own cost. Over the limit, the combined build is abandoned
+        # for the two-box handoff rather than tuned.
+        results = self.coex({"second_stack": "none",
+                             "loss_direct_pct": 0.40,
+                             "loss_second_stack_off_pct": 2.10,
+                             "loss_second_stack_on_pct": 2.20,
+                             "sweep_sets_per_s_off": 4.0,
+                             "sweep_sets_per_s_on": 3.0})
+        result = results["arbiter cost (no second stack)"]
+        self.assertEqual(result.verdict, ant_ab.FAIL)
+        self.assertIn("7.3", result.detail)
+
+    def test_a_sweep_that_stopped_is_not_a_sweep_that_gave_way(self):
+        # ADR 0013 makes the sweep the elastic consumer, so it IS slower. The
+        # bound is what separates "gave way" from "stopped", which no other
+        # number in this file can see.
+        results = self.coex({"second_stack": "thread_sed",
+                             "loss_direct_pct": 0.40,
+                             "loss_second_stack_off_pct": 0.45,
+                             "loss_second_stack_on_pct": 0.85,
+                             "sweep_sets_per_s_off": 4.0,
+                             "sweep_sets_per_s_on": 0.4})
+        self.assertEqual(results["sweep rate under contention"].verdict,
+                         ant_ab.FAIL)
+
     def test_ack_below_99_percent_fails(self):
         def mutate(data):
             data["ack_data"] = {"attempts": 1000, "successes": 989}
@@ -734,8 +819,36 @@ class GatesFile(unittest.TestCase):
     def test_every_gate_the_code_knows_exists_in_the_file(self):
         known = {"conformance", "loss_exact", "unexplained_loss",
                  "accumulator_violations", "timing", "acquisition",
-                 "sensitivity", "scale", "ack_data", "usb_latency"}
+                 "sensitivity", "scale", "ack_data", "usb_latency",
+                 "coexistence"}
         self.assertEqual(set(gates()["gates"]), known)
+
+    def test_the_coexistence_gate_is_off_until_it_is_measured(self):
+        # It is written and evaluated, and its thresholds are placeholders
+        # until P3 measures them on the nRF54L15 DK. `enabled = false` is what
+        # keeps it out of the table meanwhile - a gate that runs against a
+        # guessed threshold is worse than one that does not run, because it
+        # reports PASS.
+        #
+        # The DEFAULT is what this pins, not the mechanism: gate_coexistence()
+        # is tested directly below, so turning the block on is a one-line
+        # change with a working gate behind it.
+        cfg = gates()["gates"]["coexistence"]
+        self.assertFalse(cfg["enabled"])
+        self.assertEqual(cfg["max_delta_pp"], 0.5)
+        self.assertEqual(cfg["arbiter_only_max_delta_pp"], 1.5)
+
+    def test_the_two_loss_gates_measure_different_things(self):
+        # docs/backends.md has stated +0.5 pp for coexistence since before the
+        # arbiter existed, and [gates.loss_exact] requires 0.2 pp - which reads
+        # as though the looser number had been superseded. It has not: one
+        # compares two BACKENDS with nothing else on the radio, the other the
+        # SAME backend with a second stack on against off. Both must pass on a
+        # combined build, and this is the assertion that stops someone
+        # "reconciling" them.
+        cfg = gates()["gates"]
+        self.assertNotEqual(cfg["loss_exact"]["max_delta_pp"],
+                            cfg["coexistence"]["max_delta_pp"])
 
 
 if __name__ == "__main__":

@@ -301,6 +301,19 @@ struct radiant_sched_rx {
 	 * correctly either way.
 	 */
 	bool stop_on_first;
+
+	/*
+	 * Air time to reserve for a follow-on transmit after this window closes,
+	 * in microseconds. 0 = none. Passed through verbatim to
+	 * struct radiant_rx_req::follow_on_us, where the contract is stated;
+	 * this module neither interprets it nor charges the schedule for it.
+	 *
+	 * NOT INFERRED HERE, AND NOT INFERRABLE HERE. Whether a tracked frame
+	 * becomes an acknowledged-data reply is a fact about ANT message types,
+	 * which this module has no access to and by design never will. The
+	 * caller that knows sets it.
+	 */
+	uint16_t follow_on_us;
 };
 
 /*
@@ -327,6 +340,10 @@ struct radiant_sched_tx {
 	const uint8_t               *body;
 	uint8_t                      body_len;
 	radiant_time_t                   t_sync_at;
+	/* As struct radiant_sched_rx::follow_on_us, measured from t_sync_at.
+	 * Non-zero on a listening master's own slot, whose turnaround window is
+	 * armed 2.19 ms later from inside the transmit's own completion. */
+	uint16_t                     follow_on_us;
 };
 
 /*
@@ -401,7 +418,35 @@ enum radiant_sched_done {
 	RADIANT_SCHED_DONE_MISSED,
 	/* The backend refused the operation or could not complete it. A
 	 * malformed request lands here rather than looping. */
-	RADIANT_SCHED_DONE_FAILED
+	RADIANT_SCHED_DONE_FAILED,
+	/*
+	 * THE RADIO WAS LENT TO SOMETHING ELSE. The request was well formed, its
+	 * instant was reachable, and an arbitrated backend did not give us the
+	 * air - either by refusing the arm call outright (RADIANT_RADIO_EDENIED)
+	 * or by accepting it and never granting it
+	 * (RADIANT_RADIO_STATUS_DENIED). See both in radiant_radio_hal.h.
+	 *
+	 * IT IS NOT A MISS AND THE DIFFERENCE IS THE WHOLE POINT OF THE CODE.
+	 * MISSED means the window ran, or would have, and the peer was not heard;
+	 * eight of those means the sensor is gone and radiant_channel.c drops to
+	 * SEARCHING, visibly, on the wire, to a host. A denial is evidence about
+	 * US, not about the peer - the window never opened, so nothing was
+	 * learnt. Folding the two together would make a dongle that loses sensors
+	 * whenever the second stack is busy, which is the exact failure this whole
+	 * mechanism exists to prevent.
+	 *
+	 * A denial is not free either: the slot clock still advanced a period with
+	 * no fresh sync, so the guard must widen by it exactly as a miss does.
+	 * radiant_channel.c keeps a second counter of equal weight for that, and
+	 * promotes into the miss path once the guard provably cannot cover the
+	 * accumulated disagreement any more.
+	 *
+	 * LIKE DONE_OK AND DONE_ABORTED, THIS DOES NOT CONSUME A CONTINUOUS
+	 * REQUEST. A background scan or an ED sweep denied one chunk still wants
+	 * the next one; and nothing else re-posts an ED request, so consuming it
+	 * here would stop energy-detect scanning permanently at the first denial.
+	 */
+	RADIANT_SCHED_DONE_DENIED
 };
 
 /*
@@ -490,6 +535,25 @@ struct radiant_sched_stats {
 				     * which is the number the "loss_exact
 				     * unchanged" claim is made against */
 	uint32_t missed;            /* requests reported RADIANT_SCHED_DONE_MISSED */
+	uint32_t denied;            /* requests reported RADIANT_SCHED_DONE_DENIED:
+				     * air lent to another stack, from either the
+				     * synchronous refusal or the late terminal.
+				     * ZERO ON A BACKEND THAT OWNS THE RADIO, and
+				     * that identity is what makes it readable -
+				     * against `missed` it separates "the arbiter
+				     * took our slot" from "the sensor was not
+				     * there", which is the one distinction a loss
+				     * figure on a combined build cannot be
+				     * interpreted without */
+	uint32_t arm_denied;        /* of those, the ones refused synchronously by
+				     * the arm call. The rest were accepted and
+				     * never granted. Split out because the two
+				     * have different fixes: a synchronous refusal
+				     * means the reservation could not even be
+				     * asked for - typically an acknowledged-data
+				     * reply arming from inside a grant too short
+				     * to hold it - while a late denial means the
+				     * request lost to the other stack's scheduler */
 	uint32_t preempted;         /* running operations cut short for a nearer
 				     * deadline; their members lost the rest of
 				     * their window and were told so */

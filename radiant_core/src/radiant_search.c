@@ -720,9 +720,16 @@ static void on_event(struct radiant_search *s, const struct radiant_rx_event *ev
 
 	case RADIANT_RADIO_STATUS_ABORTED:
 	case RADIANT_RADIO_STATUS_FAILED:
+	case RADIANT_RADIO_STATUS_DENIED:
 	default:
 		/*
 		 * Credit nothing, deliberately, and unlike the scheduler path.
+		 *
+		 * DENIED lands here and needs no arm of its own: a window the
+		 * arbiter refused did not listen for a microsecond, so zero is
+		 * not a conservative choice for it, it is the exact answer. The
+		 * scheduler path in radiant_api.c reaches the same conclusion by
+		 * passing ran=false, credited=false.
 		 * This is the direct-HAL search - the module owns the radio
 		 * outright - so nothing is competing for it and a window is not
 		 * being cut short every period. There is no trustworthy end

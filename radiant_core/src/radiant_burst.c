@@ -376,14 +376,42 @@ int radiant_transfer_init(struct radiant_transfer *t, const struct radiant_trans
 	 * alternative to failing here is discovering it as "ERG mode does not
 	 * work" some months downstream.
 	 */
-	if ((uint32_t)caps->min_arm_lead_us + (uint32_t)RADIANT_TRANSFER_ACK_GUARD_US >
-	    (uint32_t)RADIANT_TRANSFER_REPLY_US) {
-		return RADIANT_TRANSFER_ENOTSUP;
+	/*
+	 * THE IN-GRANT LEAD, NOT min_arm_lead_us, AND THE DIFFERENCE DECIDES
+	 * WHETHER ERG MODE EXISTS ON A COMBINED BUILD.
+	 *
+	 * This path arms the reply from inside the data packet's own completion
+	 * callback - the operation is already in flight and the air for the
+	 * reply was reserved with it (struct radiant_rx_req::follow_on_us). So
+	 * what has to fit inside REPLY_US is the time to PROGRAMME the
+	 * peripheral, which is the hardware's own setup and ramp-up.
+	 *
+	 * min_arm_lead_us is the wrong question here the moment a backend has to
+	 * ask an arbiter for air: on MPSL it is about 2500 us against this
+	 * check's 1310 us ceiling, so reading it would refuse acknowledged data
+	 * on every arbitrated build - which is to say "no ERG mode when Thread
+	 * is on", a product decision that would have been taken by an
+	 * inequality rather than by anybody.
+	 *
+	 * 0 means "the same as min_arm_lead_us", which is what a backend that
+	 * owns the radio reports and what every backend reported before the
+	 * field existed.
+	 */
+	{
+		uint32_t lead = caps->min_arm_lead_in_grant_us != 0u
+					? caps->min_arm_lead_in_grant_us
+					: caps->min_arm_lead_us;
+
+		if (lead + (uint32_t)RADIANT_TRANSFER_ACK_GUARD_US >
+		    (uint32_t)RADIANT_TRANSFER_REPLY_US) {
+			return RADIANT_TRANSFER_ENOTSUP;
+		}
+		if ((uint32_t)caps->rx_to_tx_us >
+		    (uint32_t)RADIANT_TRANSFER_REPLY_US) {
+			return RADIANT_TRANSFER_ENOTSUP;
+		}
+		t->min_lead_us = (uint16_t)lead;
 	}
-	if ((uint32_t)caps->rx_to_tx_us > (uint32_t)RADIANT_TRANSFER_REPLY_US) {
-		return RADIANT_TRANSFER_ENOTSUP;
-	}
-	t->min_lead_us = caps->min_arm_lead_us;
 
 	reset_transfer(t);
 	t->ready = true;

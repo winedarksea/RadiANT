@@ -304,10 +304,35 @@ BUILD_ASSERT(RADIANT_CHANNEL_GUARD_MIN_US >= RADIANT_CHANNEL_DRIFT_WORST_US,
  * worst failure mode there is for a path that decides whether a packet is
  * authentic.
  */
-#if defined(CONFIG_RADIANT_SEC)
-#define API_EVENT_STACK_SIZE (1280 + 256)
+/*
+ * ...and 1024 B more under an arbitrated backend, because the arm path grows a
+ * whole layer.
+ *
+ * This thread's deepest call is the pump: post -> radiant_sched_tick() ->
+ * arm_rx_window() -> radiant_radio_rx(). On the direct backend that ends at a
+ * few register writes. Under the MPSL gate it continues into gate_acquire(),
+ * which builds an mpsl_timeslot_request_t, and on into MPSL itself.
+ *
+ * MEASURED THE HARD WAY. At 1280 the board faulted with "Stack overflow on CPU
+ * 0" in thread `radiant_event` the moment a channel was opened - and because
+ * the default logging mode is deferred, the fault message needed a thread that
+ * had just died, so the console simply stopped and the dongle looked wedged
+ * rather than crashed. It was in fact rebooting several times a second. Three
+ * other stacks (ISR, system work queue, MPSL work) were raised first on the
+ * strength of plausible reasoning and none of them was the one; the fault dump
+ * names the thread, and CONFIG_THREAD_NAME=y plus CONFIG_LOG_MODE_IMMEDIATE=y
+ * is what made it say so.
+ */
+#if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
+#define API_EVENT_STACK_GATE 1024
 #else
-#define API_EVENT_STACK_SIZE 1280
+#define API_EVENT_STACK_GATE 0
+#endif
+
+#if defined(CONFIG_RADIANT_SEC)
+#define API_EVENT_STACK_SIZE (1280 + 256 + API_EVENT_STACK_GATE)
+#else
+#define API_EVENT_STACK_SIZE (1280 + API_EVENT_STACK_GATE)
 #endif
 #define API_EVENT_PRIORITY   6
 
@@ -738,6 +763,26 @@ static enum radiant_radio_status api_done_to_status(enum radiant_sched_done why)
 		return RADIANT_RADIO_STATUS_TIMEOUT; /* the window closed */
 	case RADIANT_SCHED_DONE_ABORTED:
 		return RADIANT_RADIO_STATUS_ABORTED;
+	case RADIANT_SCHED_DONE_DENIED:
+		/*
+		 * FAILED, and that is not a shortcut - it is the only answer the
+		 * consumer of this value can act on correctly.
+		 *
+		 * The consumer is the transfer engine (api_feed_xfer_terminal)
+		 * and radiant_channel_on_terminal(). A denied acknowledged-data
+		 * reply did not go out, and by the time we know that the peer's
+		 * receive window has passed: there is nothing to wait for and a
+		 * retry must not be invented - radiant_transfer.h says the
+		 * retransmit path is deliberately unwired. So the transfer must
+		 * end, which is what FAILED means here.
+		 *
+		 * What must NOT be lost is that it was a denial, and that is why
+		 * api_stats.sched_denied is incremented at the top of
+		 * api_sched_done() from `why` rather than from this status. The
+		 * mapping is lossy on purpose and the loss is compensated
+		 * exactly where it happens, once.
+		 */
+		return RADIANT_RADIO_STATUS_FAILED;
 	case RADIANT_SCHED_DONE_MISSED:
 	case RADIANT_SCHED_DONE_FAILED:
 	default:
@@ -1357,6 +1402,64 @@ static void api_post_search_window(radiant_time_t now)
 	 */
 }
 
+/* ---------------------------------------------------------------------------
+ * The follow-on reserve
+ *
+ * How much air an arbitrated backend must hold past the end of an operation so
+ * that the reply the core may arm from inside its completion has somewhere to
+ * go. See struct radiant_rx_req::follow_on_us. Zero cost on a backend that owns
+ * the radio, which ignores the field entirely.
+ *
+ * DERIVED HERE AND NOWHERE ELSE, because this is the only file that holds both
+ * halves: radiant_transfer.h's turnaround constants and radiant_sched.h's slot
+ * kinds. The backend must not compute it - it would have to read ANT semantics
+ * out of a packet-format pointer, which radiant_radio_hal.h forbids in as many
+ * words.
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * One ANT+ frame on the air at 1 Mbit/s, as a budget.
+ *
+ * 1 byte preamble + 5 address + 10 body + 2 CRC = 18 bytes = 144 us; 150 is
+ * that rounded up. A BUDGET RATHER THAN radiant_frame_airtime_us(), which is
+ * exact but is a function, and this number has to be a compile-time constant to
+ * be checked against the merge span below. The rounding is in the safe
+ * direction: over-reserving costs the other stack a few microseconds of
+ * scheduling pressure, under-reserving costs a reply.
+ */
+#define API_FRAME_AIRTIME_US 150u
+
+/*
+ * A tracked window's reserve: the acknowledged-data turnaround, its window
+ * guard, and the reply frame's own airtime.
+ *
+ * It comes out at 1960 us, which is within 2 % of RADIANT_SCHED_MERGE_SPAN_MAX_US
+ * (2000) - and that is not a coincidence worth hiding. The merge span exists
+ * because two tracked channels more than one turnaround apart cannot share a
+ * window without one of them losing its reply slot; this reserve exists because
+ * a tracked frame may become a transmit one turnaround later. Same quantity,
+ * same reason, so the merge span is reused as the bound rather than a second
+ * number being introduced that could drift away from it.
+ */
+#define API_FOLLOW_ON_TRACK_US ((uint16_t)RADIANT_SCHED_MERGE_SPAN_MAX_US)
+
+_Static_assert(RADIANT_TRANSFER_REPLY_US + RADIANT_TRANSFER_ACK_GUARD_US +
+			       API_FRAME_AIRTIME_US <=
+		       RADIANT_SCHED_MERGE_SPAN_MAX_US,
+	       "the tracked follow-on reserve no longer fits inside the merge "
+	       "span, so the two have stopped being the same quantity and the "
+	       "reserve needs its own constant");
+
+/*
+ * A listening master's reserve: its slave's reply lands
+ * RADIANT_TRANSFER_SLOT_REPLY_US after its own t_sync, and api_post_master_rx()
+ * arms that turnaround from inside this transmit's completion.
+ */
+#define API_FOLLOW_ON_MASTER_TX_US                                       \
+	((uint16_t)(RADIANT_TRANSFER_SLOT_REPLY_US +                     \
+		    RADIANT_TRANSFER_ACK_GUARD_US + API_FRAME_AIRTIME_US))
+
 static void api_post_track_rx(uint8_t ch)
 {
 	struct radiant_channel_id id;
@@ -1419,6 +1522,18 @@ static void api_post_track_rx(uint8_t ch)
 	 * the same callback.
 	 */
 	req.stop_on_first = true;
+	/*
+	 * UNCONDITIONAL, AND THERE IS NOTHING TO CONDITION IT ON.
+	 *
+	 * Any frame this window receives may become a transmit 1.56 ms later:
+	 * api_sched_rx() -> api_tracked_frame() -> radiant_transfer_on_data()
+	 * is reachable from every tracked frame, and which way it goes depends
+	 * on a control byte that does not exist yet. So an arbitrated backend
+	 * holds the reserve on every tracked window - and gives it straight back
+	 * the moment an empty window closes, which is what keeps the cost the
+	 * other stack's SCHEDULER rather than the other stack's AIR.
+	 */
+	req.follow_on_us = API_FOLLOW_ON_TRACK_US;
 
 	if (radiant_sched_request_rx(ch, &req) != RADIANT_RADIO_OK_RC) {
 		api_bind_rejected(ch);
@@ -1636,6 +1751,15 @@ static void api_post_master_tx(uint8_t ch)
 	req.body = api_ch[ch].tx_body;
 	req.body_len = api_ch[ch].tx_body_len;
 	req.t_sync_at = t;
+	/*
+	 * Only a LISTENING master needs the reserve. api_master_listens() is the
+	 * one place that asks the channel type rather than "is this a master",
+	 * and a MASTER_TX_ONLY channel arms no turnaround at all - reserving air
+	 * for it would charge the other stack for a window that is never opened,
+	 * four times a second, for the whole session.
+	 */
+	req.follow_on_us = api_master_listens(ch) ? API_FOLLOW_ON_MASTER_TX_US
+						  : 0u;
 
 	if (radiant_sched_request_tx(ch, &req) != RADIANT_RADIO_OK_RC) {
 		api_bind_rejected(ch);
@@ -2223,6 +2347,11 @@ static void api_feed_xfer_terminal(uint8_t ch, enum radiant_radio_status st)
 static uint32_t dbg_scan_us, dbg_scan_n, dbg_track_us, dbg_track_n;
 /* How scan chunks END, which is what decides how much dwell they credit. */
 static uint32_t dbg_end_ok, dbg_end_abort, dbg_end_missed, dbg_end_failed;
+/* Chunks the arbiter refused. Its own counter and not folded into `failed`,
+ * because on a combined build this is the number the sweep-rate slowdown is
+ * read against - "the sweep is the elastic consumer" is a claim about exactly
+ * this quantity, and lumping it with backend faults would make it unreadable. */
+static uint32_t dbg_end_denied;
 #endif
 
 static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_close,
@@ -2289,6 +2418,11 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		api_stats.sched_missed++;
 	} else if (why == RADIANT_SCHED_DONE_FAILED) {
 		api_stats.sched_failed++;
+	} else if (why == RADIANT_SCHED_DONE_DENIED) {
+		/* Counted from `why`, because api_done_to_status() below folds a
+		 * denial into FAILED for the transfer engine and this is the one
+		 * point where the distinction still exists. */
+		api_stats.sched_denied++;
 	}
 
 	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_SEARCH) {
@@ -2299,8 +2433,17 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		 * listened to up to now: that is the normal case whenever
 		 * anything is tracking, and crediting it zero is what froze the
 		 * sweep on one set and made every device outside that set
-		 * undiscoverable. MISSED and FAILED never opened and credit
-		 * nothing.
+		 * undiscoverable. MISSED, FAILED and DENIED never opened and
+		 * credit nothing.
+		 *
+		 * DENIED CREDITS ZERO AND THAT IS THE POINT. Under an arbiter
+		 * the sweep is the elastic consumer (ADR 0013), so it is the
+		 * request that gets refused - hundreds of times over a sweep.
+		 * Crediting a chunk that never opened would advance the address
+		 * set after a fraction of its dwell and make "certain within one
+		 * sweep" false with no counter moving, which is the same class
+		 * of defect as the two dead ends fenced below, arrived at from
+		 * the opposite direction.
 		 */
 		radiant_search_on_done(&api_search, why == RADIANT_SCHED_DONE_OK,
 				   why == RADIANT_SCHED_DONE_ABORTED, now);
@@ -2314,6 +2457,9 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 			break;
 		case RADIANT_SCHED_DONE_MISSED:
 			dbg_end_missed++;
+			break;
+		case RADIANT_SCHED_DONE_DENIED:
+			dbg_end_denied++;
 			break;
 		default:
 			dbg_end_failed++;
@@ -2355,8 +2501,35 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		 * the pump - which has a rate limit - decide what happens next.
 		 */
 		if (api_search_slot == ch) {
+			/*
+			 * DENIED IS "RAN" HERE, AND IT IS THE ONE PLACE THE TWO
+			 * SENSES OF THE WORD COME APART.
+			 *
+			 * Above, the dwell was credited zero because no
+			 * listening happened. This flag asks a different
+			 * question: may the scheduler keep the request and arm
+			 * the next chunk of it on the way out of this callback,
+			 * or must it be cancelled and re-posted by the pump?
+			 *
+			 * The bound the flag exists for is the unbounded-loop
+			 * one - a backend refusing every arm drove post -> arm
+			 * -> refused -> done() -> post until the stack was 648
+			 * bytes from PSPLIM - and a denial does not reopen it:
+			 * radiant_sched.c's own EDENIED arm ends the pass when
+			 * it keeps a continuous request, so the retry costs one
+			 * refused arm per pass and not a loop.
+			 *
+			 * Excluding it, on the other hand, sends every denied
+			 * chunk round the rate-limited pump - the same round
+			 * trip that measured 12.8 s per sweep against 8.3 s -
+			 * paid hundreds of times per sweep instead of never.
+			 * That is the difference between a sweep that survives
+			 * contention and one that stalls under it, and it is
+			 * this line.
+			 */
 			bool ran = (why == RADIANT_SCHED_DONE_OK) ||
-				   (why == RADIANT_SCHED_DONE_ABORTED);
+				   (why == RADIANT_SCHED_DONE_ABORTED) ||
+				   (why == RADIANT_SCHED_DONE_DENIED);
 
 			if (ran && !radiant_search_set_complete(&api_search) &&
 			    radiant_search_is_searching(&api_search, ch)) {
@@ -2435,9 +2608,24 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		 * period from the slot that was missed rather than from now,
 		 * which is what keeps a master's phase its own; it counts no
 		 * misses and never sends a master to search.
+		 *
+		 * KEYED ON slot_kind AND !slot_heard, NOT ON `why`, which is why
+		 * a DENIED master transmit already lands here and already gets
+		 * its clock advanced. That is correct rather than accidental
+		 * only if it stays true, so test_denied_master_tx_does_not_wedge
+		 * asserts it directly: under an arbiter a denied transmit is
+		 * routine, and the wedge it would otherwise reproduce is the one
+		 * at radiant_channel.c's MASTER ADVANCES ITS SLOT comment.
+		 * radiant_channel_on_slot_denied() does the same arithmetic and
+		 * is used for the honest counter.
 		 */
-		api_stats.slots_missed++;
-		(void)radiant_channel_on_slot_missed(ch, now);
+		if (why == RADIANT_SCHED_DONE_DENIED) {
+			api_stats.slots_denied++;
+			(void)radiant_channel_on_slot_denied(ch, now);
+		} else {
+			api_stats.slots_missed++;
+			(void)radiant_channel_on_slot_missed(ch, now);
+		}
 	} else if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_TRACK_RX &&
 		   !api_ch[ch].slot_heard) {
 		/*
@@ -2447,11 +2635,31 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		 * master one late notification at a time; after eight in a row
 		 * the channel goes back to search and raises
 		 * RX_FAIL_GO_TO_SEARCH itself.
+		 *
+		 * A DENIED WINDOW DID NOT RUN, SO NEITHER HALF OF THAT APPLIES.
+		 * The clock still advances - a period elapsed with no fresh sync
+		 * whatever the reason - but it advances through
+		 * radiant_channel_on_slot_denied(), which charges the guard and
+		 * NOT the miss counter, so eight busy moments in the other stack
+		 * cannot drop a live sensor back to SEARCHING.
+		 *
+		 * AND NO ANTW_EVENT_RX_FAIL IS POSTED. That event is a statement
+		 * to the host about the sensor: "the window ran and nothing was
+		 * there". A denial is a statement about us, and a host - Zwift -
+		 * that acts on it will tear down and rebuild a channel that was
+		 * never in trouble. The denial must be invisible above this
+		 * line; api_stats.sched_denied and slots_denied are where it is
+		 * visible instead.
 		 */
-		api_stats.slots_missed++;
-		if (!radiant_channel_on_slot_missed(ch, now)) {
-			(void)radiant_event_post_channel_event(
-				ch, (uint8_t)ANTW_EVENT_RX_FAIL);
+		if (why == RADIANT_SCHED_DONE_DENIED) {
+			api_stats.slots_denied++;
+			(void)radiant_channel_on_slot_denied(ch, now);
+		} else {
+			api_stats.slots_missed++;
+			if (!radiant_channel_on_slot_missed(ch, now)) {
+				(void)radiant_event_post_channel_event(
+					ch, (uint8_t)ANTW_EVENT_RX_FAIL);
+			}
 		}
 	}
 
@@ -2568,6 +2776,51 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 	 * covers the one deadline that genuinely cannot wait for a thread.
 	 * Everything else is re-posted on the next pass.
 	 */
+
+	/*
+	 * A DENIAL DOES NOT WAKE THE EVENT THREAD, AND WITHOUT THIS THE WHOLE
+	 * DONGLE SPINS.
+	 *
+	 * Every other completion has something for the thread to do - a host
+	 * message to drain, a slot to refill. A denial has neither: nothing
+	 * happened that a host may see, and the request that was refused is
+	 * still in the scheduler's slot, because `ran` above deliberately keeps
+	 * it there rather than paying the 12.8 s-per-sweep round trip through
+	 * the pump.
+	 *
+	 * So waking the thread only makes it pump, post nothing new, tick, be
+	 * refused again, and complete back into here. MEASURED on the nRF54L15
+	 * against an arbiter that was refusing every arm: 510 000 housekeeping
+	 * passes and 510 000 denials in nineteen seconds, a solid CPU load,
+	 * and - because the logging ring drops what it cannot keep up with -
+	 * the diagnostics that would have explained WHY the arm was refused
+	 * were themselves the first casualty.
+	 *
+	 * api_arming exists to bound exactly this shape of loop and does not
+	 * cover it: the loop is not post -> arm -> refuse -> POST, it is
+	 * post -> arm -> refuse -> WAKE -> pump. The bound has to be here.
+	 *
+	 * The housekeeping tick still runs on its own cadence, so a denied
+	 * request is retried a few times a second rather than never - which is
+	 * the rate the pump was rate-limited to in the first place.
+	 *
+	 * ONLY WHEN THE SLOT WAS KEPT, AND THAT QUALIFIER IS NOT OPTIONAL.
+	 * Skipping the wake for EVERY denial was the first attempt and it
+	 * regressed test_a_denied_master_transmit_does_not_wedge: a denied
+	 * master TX has its request CONSUMED, so its owner has to re-post it,
+	 * and the pump is what does that. Without the wake the next slot came
+	 * round before anything was posted and the denial turned into the very
+	 * missed slot this whole mechanism exists to avoid.
+	 *
+	 * keep_search is exactly the case that loops: the request is still in
+	 * the scheduler's slot, so waking the thread produces a pump that posts
+	 * nothing new and ticks into another refusal. Everything else genuinely
+	 * has something for the thread to do.
+	 */
+	if (why == RADIANT_SCHED_DONE_DENIED && keep_search) {
+		return;
+	}
+
 	k_sem_give(&api_event_sem);
 }
 
@@ -2752,7 +3005,8 @@ static void api_housekeep(void)
 				"win=%u ok=%u searching=%u carrier=%d | chunks=%u "
 				"preempt=%u missed=%u ebusy=%u rej=%u | pumps=%u "
 				"hk=%u | scan_us=%u/%u track_us=%u/%u | "
-				"end ok=%u abrt=%u miss=%u fail=%u replan=%u",
+				"end ok=%u abrt=%u miss=%u fail=%u deny=%u "
+				"replan=%u",
 				(unsigned int)api_search.cur_set,
 				(unsigned int)api_search.n_steer,
 				(unsigned int)api_search.set_dwell_us,
@@ -2778,6 +3032,7 @@ static void api_housekeep(void)
 				(unsigned int)dbg_end_abort,
 				(unsigned int)dbg_end_missed,
 				(unsigned int)dbg_end_failed,
+				(unsigned int)dbg_end_denied,
 				(unsigned int)ds->replans);
 		}
 	}

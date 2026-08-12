@@ -118,7 +118,24 @@ struct radiant_api_stats {
 	uint32_t sched_dones;
 	uint32_t sched_missed;    /* RADIANT_SCHED_DONE_MISSED reports */
 	uint32_t sched_failed;    /* RADIANT_SCHED_DONE_FAILED reports */
+	/*
+	 * RADIANT_SCHED_DONE_DENIED reports: the radio lent to another protocol
+	 * stack by an arbitrated backend. Zero on a backend that owns the radio.
+	 *
+	 * THE REASON IT IS A SEPARATE FIELD RATHER THAN PART OF sched_failed IS
+	 * ATTRIBUTION, AND IT IS THE ONLY WAY TO GET IT. Downstream, a denial
+	 * has to be reported to the transfer engine as a failure - the peer's
+	 * window has gone past and no retry may be invented - so from the host's
+	 * side "ERG mode occasionally does not take" looks the same whether the
+	 * air was bad or the arbiter took the slot. This counter is what tells
+	 * those two apart, and without it the first bug report on a combined
+	 * USB + Thread build is unanswerable.
+	 */
+	uint32_t sched_denied;
 	uint32_t slots_missed;    /* windows that ran and heard nothing */
+	/* Tracked or master slots lost to the arbiter. Against slots_missed:
+	 * loss that is ours versus loss that is the air's. */
+	uint32_t slots_denied;
 	uint32_t acquired;        /* search acquisitions accepted onto a channel */
 	uint32_t id_list_rejects; /* acquisitions refused by a device ID list */
 	uint32_t key_rejects;     /* network keys not in the key -> address table */

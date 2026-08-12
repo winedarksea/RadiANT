@@ -158,6 +158,14 @@ struct chan {
 	uint8_t sdu_mask_config;
 	uint8_t miss_count;
 	/*
+	 * Consecutive slots lost to an arbitrated backend lending the radio to
+	 * another stack. Weighted exactly as miss_count in the guard and cleared
+	 * wherever it is cleared, but kept apart from it so that a denial never
+	 * counts towards RX_FAIL_GO_TO_SEARCH. Always zero on a backend that owns
+	 * the radio outright.
+	 */
+	uint8_t denied_count;
+	/*
 	 * Clean consecutive slots the estimator above has seen since it was last
 	 * reset. Saturates; only the comparison against
 	 * RADIANT_CHANNEL_GUARD_LOCK_SLOTS matters. Zero means "no evidence",
@@ -435,6 +443,7 @@ static void chan_finish_close(uint8_t channel, struct chan *c)
 	c->t_next = RADIANT_TIME_NEVER;
 	c->t_search_start = RADIANT_TIME_NEVER;
 	c->miss_count = 0u;
+	c->denied_count = 0u;
 	c->flags &= (uint8_t)~(CHF_ACQUIRED | CHF_CLOSING_FROM_TRACKING);
 
 	radiant_channel_event_out(channel, RADIANT_CH_EVENT_CHANNEL_CLOSED);
@@ -719,6 +728,7 @@ radiant_channel_err_t radiant_channel_open(uint8_t channel, uint16_t offset,
 	}
 
 	c->miss_count = 0u;
+	c->denied_count = 0u;
 	c->flags &= (uint8_t)~(CHF_ACQUIRED | CHF_CLOSING_FROM_TRACKING);
 
 	return RADIANT_CH_OK;
@@ -1485,7 +1495,19 @@ uint32_t radiant_channel_guard_us(uint8_t channel)
 	if (guard < floor_us) {
 		guard = floor_us;
 	}
-	guard += (uint32_t)c->miss_count * drift;
+	/*
+	 * TWO COUNTERS, ONE WEIGHT. A period extrapolated with no fresh sync is
+	 * a period of unmeasured disagreement whether we chose not to listen or
+	 * were not given the air, so a denial is charged at exactly the same
+	 * rate as a miss. The counters are separate only because one of them is
+	 * evidence about the master and the other is evidence about us; the
+	 * arithmetic cannot tell them apart and must not try.
+	 *
+	 * Their sum is bounded: RX_FAIL_TO_SEARCH (8) and DENY_TO_SEARCH (16)
+	 * each promote to SEARCHING before their own term can exceed the
+	 * ceiling, and the clamp below covers any interleaving of the two.
+	 */
+	guard += (uint32_t)(c->miss_count + c->denied_count) * drift;
 
 	if (guard > guard_ceiling_us(c)) {
 		guard = guard_ceiling_us(c);
@@ -1640,8 +1662,22 @@ void radiant_channel_on_slot(uint8_t channel, radiant_time_t t_sync)
 	 * so the difference is the drift over all of them; averaging that in
 	 * would size a window from how lossy the link is rather than from how
 	 * good the master's clock is.
+	 *
+	 * A DENIAL EXTRAPOLATES THE PREDICTION IDENTICALLY, so it must gate the
+	 * estimator identically. This is the one place where "a denial is not
+	 * evidence about the peer" would give the wrong answer if applied
+	 * literally: the residual measured here is not evidence about the peer
+	 * either, it is the accumulated error of OUR extrapolation, and after a
+	 * run of denials it is the sum over all of them. Feeding that in would
+	 * hand an EWMA with a memory of eight slots a sample of up to
+	 * DENY_TO_SEARCH + 1 periods of drift, which clamps at
+	 * RADIANT_CHANNEL_GUARD_MAX_US and then decays back over roughly eight
+	 * further slots - so the first slot heard after a busy patch in the
+	 * other stack would pin the window wide for two seconds afterwards, on a
+	 * link that is behaving perfectly.
 	 */
-	if (c->miss_count == 0u && c->t_next != RADIANT_TIME_NEVER) {
+	if (c->miss_count == 0u && c->denied_count == 0u &&
+	    c->t_next != RADIANT_TIME_NEVER) {
 		guard_observe(c, (t_sync > c->t_next) ? (t_sync - c->t_next)
 						     : (c->t_next - t_sync));
 	}
@@ -1656,6 +1692,9 @@ void radiant_channel_on_slot(uint8_t channel, radiant_time_t t_sync)
 	 */
 	c->t_next = t_sync + period_us(c);
 	c->miss_count = 0u;
+	/* A slot heard is a fresh sync, and a fresh sync retires every period of
+	 * extrapolation behind it - whichever counter charged it. */
+	c->denied_count = 0u;
 }
 
 void radiant_channel_on_acquired(uint8_t channel, const struct radiant_channel_id *id,
@@ -1686,6 +1725,7 @@ void radiant_channel_on_acquired(uint8_t channel, const struct radiant_channel_i
 	c->t_search_start = RADIANT_TIME_NEVER;
 	c->t_next = t_sync + period_us(c);
 	c->miss_count = 0u;
+	c->denied_count = 0u;
 	/* A newly acquired master is a master nothing has been measured about.
 	 * Whatever the previous one's clock was doing is not evidence about this
 	 * one, and the first window after acquisition is the one least able to
@@ -1764,6 +1804,7 @@ bool radiant_channel_on_slot_missed(uint8_t channel, radiant_time_t now)
 	c->state = RADIANT_CH_STATE_SEARCHING;
 	c->flags &= (uint8_t)~CHF_ACQUIRED;
 	c->miss_count = 0u;
+	c->denied_count = 0u;
 	c->t_search_start = c->t_next;
 	/* Eight consecutive misses is the channel admitting it does not know
 	 * where the master is. An average built while it did know is not
@@ -1773,6 +1814,102 @@ bool radiant_channel_on_slot_missed(uint8_t channel, radiant_time_t now)
 	radiant_channel_event_out(channel, RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH);
 
 	return true;
+}
+
+bool radiant_channel_on_slot_denied(uint8_t channel, radiant_time_t now)
+{
+	struct chan *c;
+	radiant_time_t t_before;
+
+	if (!ch_valid(channel)) {
+		return false;
+	}
+
+	c = &channels[channel];
+	if (c->state != RADIANT_CH_STATE_SEARCHING &&
+	    c->state != RADIANT_CH_STATE_TRACKING) {
+		return false;
+	}
+
+	t_before = c->t_next;
+
+	/*
+	 * THE CLOCK MOVES, AND IT MOVES FROM THE SLOT THAT WAS LOST.
+	 *
+	 * Identical to a miss, and non-optional for the identical reason: a
+	 * master whose t_next is left in the past is re-posted by
+	 * radiant_api.c's pump, refused by the scheduler without ever reaching
+	 * the backend, and completes synchronously back into the pump - a hot
+	 * loop with no fault and no log line. Under an arbiter that loop is
+	 * reachable from a single denied transmit, which is a routine event
+	 * rather than the rare one that wedged a board before.
+	 *
+	 * ONE PERIOD, NOT "WHOLE PERIODS UNTIL AHEAD OF now", AND THAT WAS
+	 * TESTED RATHER THAN ASSUMED. The argument for skipping ahead is
+	 * plausible: a synchronous refusal completes inside the pass that posted
+	 * the request, so several denials could land inside one channel period,
+	 * leave t_next behind `now`, and have the next window expire MISSED.
+	 * test_a_quiet_tracked_channel_misses_the_same_either_way was written to
+	 * check exactly that, by running twelve periods with every window denied
+	 * and twelve with none, and comparing the miss counts. They are equal.
+	 * The behaviour the skip-ahead would have fixed does not occur, so the
+	 * simpler rule stands and the phase argument above is not weakened by an
+	 * exception nothing needs.
+	 */
+	if (c->t_next != RADIANT_TIME_NEVER) {
+		c->t_next += period_us(c);
+	}
+
+	/* A master has nothing to hear, so the accounting below - which is
+	 * entirely about how confident a slave is that it still knows where its
+	 * master is - does not apply to it. Same early return, same reason, as
+	 * radiant_channel_on_slot_missed(). */
+	if ((c->type & RADIANT_CH_TYPE_MASTER_BIT) != 0u) {
+		return false;
+	}
+
+	if (c->state != RADIANT_CH_STATE_TRACKING) {
+		return false;
+	}
+
+	if (c->denied_count < 255u) {
+		c->denied_count++;
+	}
+
+	if (c->denied_count < RADIANT_CHANNEL_DENY_TO_SEARCH) {
+		return false;
+	}
+
+	/*
+	 * The guard has been at RADIANT_CHANNEL_GUARD_MAX_US for a while and can
+	 * no longer cover what has accumulated behind it - see
+	 * RADIANT_CHANNEL_DENY_TO_SEARCH. From here on, staying TRACKING would
+	 * mean opening windows in a place the master demonstrably is not, and
+	 * reporting to a host that the sensor is fine.
+	 *
+	 * PROMOTED RATHER THAN HANDLED SEPARATELY. The counter is folded into
+	 * the miss path and the ordinary machinery does the rest, so there is
+	 * exactly one place in this module that returns a channel to SEARCHING
+	 * and exactly one origin for RX_FAIL_GO_TO_SEARCH. A second copy of that
+	 * transition is how the two come to disagree.
+	 *
+	 * on_slot_missed() advances t_next itself, so the advance above is undone
+	 * first: this function has already charged the period for this slot, and
+	 * charging it twice would put the channel's search start one period into
+	 * the future.
+	 */
+	c->denied_count = 0u;
+	c->t_next = t_before;
+	c->miss_count = (uint8_t)(RADIANT_CHANNEL_RX_FAIL_TO_SEARCH - 1u);
+	return radiant_channel_on_slot_missed(channel, now);
+}
+
+uint8_t radiant_channel_denied_count(uint8_t channel)
+{
+	if (!ch_valid(channel)) {
+		return 0u;
+	}
+	return channels[channel].denied_count;
 }
 
 int radiant_channel_on_terminal(uint32_t op, enum radiant_radio_status status,

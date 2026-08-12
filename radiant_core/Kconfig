@@ -74,7 +74,14 @@ config RADIANT_CORE_BACKEND_NRF
 	# tests the same pair.
 	#
 	depends on SOC_COMPATIBLE_NRF52X || SOC_COMPATIBLE_NRF54LX
-	depends on !BT
+	# `!BT` used to be here unconditionally, because this backend owned the
+	# RADIO and a Bluetooth controller would have reprogrammed it underneath
+	# us. Whether it owns the RADIO is now the gate's answer (see
+	# RADIANT_CORE_BACKEND_NRF_GATE_MPSL below), so the exclusion is
+	# conditional on the gate instead of absolute. The C file carries the
+	# same test as a BUILD_ASSERT, so a configuration that reached here by
+	# another route still fails loudly rather than losing packets quietly.
+	depends on !BT || RADIANT_CORE_BACKEND_NRF_GATE_MPSL
 	select CLOCK_CONTROL
 	select NRFX_GPPI
 	help
@@ -104,13 +111,115 @@ config RADIANT_CORE_BACKEND_NRF_IRQ_PRIO
 	  the only path that meets a 1.55 ms acknowledged-data turnaround.
 	  Lower this only with a measurement in hand.
 
-config RADIANT_CORE_BACKEND_MPSL
-	bool "mpsl - RADIO through MPSL timeslots (Phase 6b, not written)"
-	help
-	  A backend arbitrating with the BLE controller through MPSL rather than
-	  owning RADIO. Reserved here on the same terms as the nrf one.
-
 endchoice
+
+# ── Who owns the RADIO ───────────────────────────────────────────────────────
+#
+# THIS USED TO BE A THIRD ARM OF THE CHOICE ABOVE, and moving it here is a
+# decision rather than a tidy-up. "mpsl" was written as a separate BACKEND -
+# a second implementation of the whole of radiant_radio_hal.h beside the nrf
+# one. It is not: the nrf backend already knows how to turn a request into
+# RADIO registers, a TIMER compare and two (D)PPI connections, and exactly one
+# thing changes when a second protocol stack is on the chip - it stops being
+# true that the radio is ours whenever we want it.
+#
+# So it is a seam inside the backend (src/radiant_radio_nrf_gate.h) rather than
+# a backend beside it, and the reason is written down there: an A/B gate cannot
+# detect the most likely failure of splitting that file, because
+# radiant_radio_hal.h's own analysis says a t_sync calibration error moves RX
+# yield at the same order as the bench's ~0.4 % collision floor.
+
+config RADIANT_CORE_BACKEND_NRF_GATE_MPSL
+	bool "arbitrate the RADIO with a second stack through MPSL timeslots"
+	# NOT `depends on RADIANT_CORE_BACKEND_NRF`, which reads as the obvious
+	# thing to write and is a Kconfig dependency loop: the nrf backend's own
+	# `!BT` exclusion is relaxed by this symbol, so each would depend on the
+	# other. The relationship is enforced where it can be - CMakeLists.txt
+	# compiles a gate only under the nrf arm, so selecting this beside the
+	# null backend selects nothing and builds the null backend as asked.
+	depends on MPSL
+	select MPSL_ASSERT_HANDLER
+	help
+	  Take the RADIO through MPSL's timeslot API instead of owning it, so
+	  that a BLE controller or an 802.15.4 stack can share the chip. The
+	  default is off and the Thread-free dongle build stays the safe
+	  default; see ADR 0013 for what gives way to what.
+
+	  THREE THINGS THIS TURNS FROM TUNING CHOICES INTO REQUIREMENTS:
+
+	  CONFIG_MPSL_TIMESLOT_SESSION_COUNT must be at least 1. It defaults to
+	  0, and with the default every session_open() fails while the image
+	  still runs - so the failure is a dongle that refuses every arm rather
+	  than a build error.
+
+	  CONFIG_RADIANT_CORE_BACKEND_NRF_IRQ_PRIO must stay 0. mpsl.rst makes
+	  the application responsible for the RADIO interrupt when the timeslot
+	  API is used for RADIO access, and MPSL_HIGH_IRQ_PRIORITY is 0. The
+	  default already satisfies it; what changes is that lowering it is no
+	  longer a tuning choice with a measurement behind it, it is broken.
+
+	  The tracked-slot reservation grows by the acknowledged-data reply it
+	  may have to make (struct radiant_rx_req::follow_on_us), which takes
+	  the tracked duty from ~3.2 % to ~9.3 % of the other stack's SCHEDULE.
+	  It does not take its air, provided the reservation is released the
+	  moment an empty window closes - which the backend does, and which is a
+	  required line of the design rather than an optimisation.
+
+# ── The ISR stack, and it is a REQUIREMENT rather than a tuning knob ─────────
+#
+# MPSL delivers SIGNAL_START on the INTERRUPT STACK, and that is where the
+# arbitrated backend programmes the peripheral - it cannot be done earlier,
+# because touching the compare or the (D)PPI outside a grant enables the RADIO
+# inside another stack's event. apply_format() and apply_filters() write every
+# register the operation needs, and apply_filters() carries two 8-byte arrays
+# and a packing loop of its own.
+#
+# ZEPHYR'S DEFAULT 2048 IS NOT ENOUGH, and the way it fails is the reason this
+# is a default here rather than a line in a document. The overflow happens
+# inside the grant callback and resets the board; the default logging mode is
+# deferred, so the fault message needs a thread that no longer exists, and the
+# console simply stops mid-line. From the outside the dongle looks wedged
+# rather than crashed - it boots, answers every serial command, opens a
+# channel, and then goes quiet - and it is in fact rebooting several times a
+# second. It took a build with CONFIG_LOG_MODE_IMMEDIATE=y to see the fault at
+# all, after five wrong hypotheses about priorities and locks.
+config ISR_STACK_SIZE
+	default 4096 if RADIANT_CORE_BACKEND_NRF_GATE_MPSL
+
+# ── And the two THREAD stacks this gate runs the core from ──────────────────
+#
+# The gate defers every call into the core to a work item, because arming
+# reaches it from the RADIO interrupt inside a timeslot where the MPSL API is
+# not callable. What that work item then does is deliver a terminal event -
+# which runs the completion callback, which runs a whole scheduler pass, which
+# may build and arm the next operation.
+#
+# THAT DOES NOT FIT IN 1024 BYTES, which is Zephyr's default system work queue
+# stack, and the failure is the same silent reboot loop the ISR stack note
+# above describes: overflow, reset, boot, overflow. Raising ISR_STACK_SIZE
+# alone does not fix it and the fault dump looks identical, which is what makes
+# this worth writing down - the two stacks fail the same way and only the
+# thread name in the dump tells them apart.
+config SYSTEM_WORKQUEUE_STACK_SIZE
+	default 4096 if RADIANT_CORE_BACKEND_NRF_GATE_MPSL
+
+# MPSL's own low-priority thread, which is where BLOCKED, CANCELLED and
+# SESSION_IDLE are delivered from. Nothing of ours runs deep there - the
+# handlers hand their work on rather than doing it - but the default is 1024
+# and the margin over "hand it on" is not worth being tight about on a path
+# that only runs when something has already gone wrong.
+config MPSL_WORK_STACK_SIZE
+	default 2048 if RADIANT_CORE_BACKEND_NRF_GATE_MPSL
+
+config RADIANT_CORE_BACKEND_MPSL
+	bool
+	depends on RADIANT_CORE_BACKEND_NRF_GATE_MPSL
+	help
+	  Deliberately not user-selectable, and kept only so that an out-of-tree
+	  configuration naming the old symbol fails to select a backend rather
+	  than silently selecting the null one. The MPSL-arbitrated build is
+	  CONFIG_RADIANT_CORE_BACKEND_NRF plus
+	  CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL.
 
 config RADIANT_CORE_ANTR_API
 	bool "compile the antr_* adapter (src/radiant_api.c)"

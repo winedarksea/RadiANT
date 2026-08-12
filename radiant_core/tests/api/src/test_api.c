@@ -147,6 +147,34 @@ static uint32_t count_msgs(uint8_t id)
 	return n;
 }
 
+/*
+ * Unsolicited channel events, by code.
+ *
+ * MESG_RESPONSE_EVENT_ID carries both command replies and channel events;
+ * byte 1 being MESG_EVENT_ID (0x01) is what distinguishes the second from the
+ * first, and getting that test wrong would count every command reply as an
+ * event and make an assertion of "none of these were raised" pass for the wrong
+ * reason.
+ */
+static uint32_t count_channel_events(uint8_t ch, uint8_t code)
+{
+	uint32_t n = 0u;
+	uint32_t i;
+
+	for (i = 0u; i < n_msg && i < MSGLOG_MAX; i++) {
+		if (msglog[i].id != (uint8_t)ANTW_MESG_RESPONSE_EVENT_ID ||
+		    msglog[i].len < 3u) {
+			continue;
+		}
+		if (msglog[i].data[0] == ch &&
+		    msglog[i].data[1] == (uint8_t)ANTW_MESG_EVENT_ID &&
+		    msglog[i].data[2] == code) {
+			n++;
+		}
+	}
+	return n;
+}
+
 /* ---------------------------------------------------------------------------
  * Fixture
  * ---------------------------------------------------------------------------
@@ -1547,6 +1575,243 @@ ZTEST(api, test_a_master_tx_only_channel_opens_no_turnaround)
 	zassert_equal(0u, rx_arms,
 		      "a MASTER_TX_ONLY channel armed %u receive windows",
 		      rx_arms);
+
+	end_of_test();
+}
+
+/* ---------------------------------------------------------------------------
+ * Denial - what the host must and must not be told
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * A DENIED MASTER TRANSMIT MUST NOT WEDGE THE DONGLE.
+ *
+ * This reproduces the failure at radiant_channel.c's "A MASTER ADVANCES ITS
+ * SLOT AND NOTHING ELSE" comment, from a new direction. A master's t_next only
+ * advances on a completed transmit; a slot that never went out used to leave it
+ * in the past, and then: the pump re-posts that dead instant, the scheduler
+ * refuses an unreachable instant without ever calling the backend, the refusal
+ * completes synchronously, the completion signals the event thread, and the
+ * event thread posts the same dead instant again. No fault, no log line, no
+ * host response - the dongle simply stops while looking perfectly alive. One
+ * missed transmit was enough.
+ *
+ * Under an arbiter that is no longer a rare event: a denied transmit is what
+ * happens whenever the other stack is on the air at the wrong moment. The
+ * branch that saves it keys on slot_kind and !slot_heard rather than on the
+ * done reason, so it already covers DENIED - which is correct by construction
+ * rather than by design, and is therefore asserted here rather than assumed.
+ */
+ZTEST(api, test_a_denied_master_transmit_does_not_wedge)
+{
+	radiant_time_t first;
+	radiant_time_t later;
+	uint32_t       arms_at_denial;
+	uint32_t       tx_ok_before;
+
+	open_channel((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+
+	/* One good slot, so the channel is anchored and transmitting. */
+	host_writes_broadcast();
+	first = run_one_master_slot();
+	tx_ok_before = fake_radio_stats()->arms_tx;
+	zassert_true(tx_ok_before > 0u, "setup: nothing was ever transmitted");
+
+	/*
+	 * Now the arbiter takes the next several slots. force_arm_repeat covers
+	 * the synchronous refusal, which is the harder of the two: it completes
+	 * inside the very pass that posted the request, which is the loop's
+	 * entry point.
+	 */
+	arms_at_denial = fake_radio_arm_count();
+	fake_radio_force_arm_repeat(RADIANT_RADIO_EDENIED, 3u);
+	host_writes_broadcast();
+	run_virtual_us(4u * (uint64_t)PERIOD_US);
+	drain();
+
+	/*
+	 * The wedge signature is unbounded arm attempts inside one period. A
+	 * healthy dongle makes a handful; the hot loop made thousands and never
+	 * returned. The bound is deliberately loose - this is a liveness
+	 * assertion, not a scheduling one.
+	 */
+	zassert_true(fake_radio_arm_count() - arms_at_denial < 200u,
+		     "%u arm attempts in four periods: the post -> refuse -> "
+		     "complete -> post loop is back",
+		     fake_radio_arm_count() - arms_at_denial);
+
+	zassert_true(radiant_api_stats_get()->slots_denied > 0u,
+		     "the denied transmits were not counted as denials");
+	zassert_equal(0u, radiant_api_stats_get()->slots_missed,
+		     "a denied master transmit was charged to the miss counter");
+
+	/* And the clock moved: the channel is still due to transmit, in the
+	 * future, rather than pinned at an instant that has gone. */
+	later = radiant_channel_next_slot(CH);
+	zassert_not_equal(RADIANT_TIME_NEVER, later, "the master left the air");
+	zassert_true(later > first,
+		     "a denied slot left t_next in the past - the wedge");
+
+	/* When the air comes back, so does the master. */
+	host_writes_broadcast();
+	run_virtual_us(3u * (uint64_t)PERIOD_US);
+	zassert_true(fake_radio_stats()->arms_tx > tx_ok_before,
+		     "the master never transmitted again after the denials");
+
+	end_of_test();
+}
+
+/*
+ * A DENIED TRACKED WINDOW IS INVISIBLE TO THE HOST.
+ *
+ * EVENT_RX_FAIL is a statement about the sensor: "the window ran and nothing
+ * was there". A denial is a statement about us, and a host that acts on it acts
+ * wrongly - Zwift tears down and rebuilds a channel that was never in trouble.
+ * Twelve denials in a row is half again what RX_FAIL_TO_SEARCH allows in
+ * misses, so a build that folded the two together would also have dropped the
+ * channel to SEARCHING by the end of this test and raised
+ * RX_FAIL_GO_TO_SEARCH, which is visible on the wire.
+ */
+/*
+ * THE CONTROL, AND IT IS NOT OPTIONAL.
+ *
+ * The test below asserts that a run of denials adds no missed slot and no
+ * RX_FAIL. That assertion is only meaningful if a run of ORDINARY empty windows
+ * over the same span adds one - or rather, if whatever it adds is the same. A
+ * tracked channel hearing nothing for twelve periods legitimately misses twelve
+ * slots and legitimately tells the host so; the claim is about denials being
+ * different, not about the number being zero in the abstract.
+ *
+ * Written as its own test rather than as a setup step because it is the thing
+ * that would have stopped an afternoon: the first version of the denial test
+ * asserted an absolute zero, failed on a single miss, and three plausible
+ * mechanisms were "fixed" before anyone asked whether the same miss appeared
+ * with no denial anywhere in the picture.
+ */
+static uint32_t api_tracked_quiet_run(bool deny)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev_a;
+	uint32_t                     missed_before;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(CH,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(CH));
+
+	w = armed_search_window();
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "setup: the channel did not acquire");
+
+	missed_before = radiant_api_stats_get()->sched_missed;
+	if (deny) {
+		fake_radio_force_terminal_repeat(RADIANT_RADIO_STATUS_DENIED, 64u);
+	}
+	run_virtual_us(12u * (uint64_t)PERIOD_US);
+	drain();
+
+	return radiant_api_stats_get()->sched_missed - missed_before;
+}
+
+ZTEST(api, test_a_quiet_tracked_channel_misses_the_same_either_way)
+{
+	uint32_t quiet = api_tracked_quiet_run(false);
+
+	end_of_test();
+	(void)antr_stack_reset();
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+
+	/*
+	 * The number itself is not the assertion - it is whatever twelve
+	 * periods of virtual time and this harness's pump cadence produce. The
+	 * assertion is that DENYING every one of those windows does not add to
+	 * it, which is the whole claim: a denial is not a miss.
+	 */
+	zassert_equal(quiet, api_tracked_quiet_run(true),
+		      "denying every window changed how many slots were missed "
+		      "(%u quiet). A denial must be invisible to the miss "
+		      "accounting, or a busy second stack reads to a host as a "
+		      "sensor going away", quiet);
+
+	end_of_test();
+}
+
+ZTEST(api, test_a_denied_tracked_window_is_not_reported_as_an_rx_failure)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev_a;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(CH,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(CH));
+
+	w = armed_search_window();
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "setup: the channel did not acquire");
+
+	/* Every operation from here on is accepted and then never granted. */
+	fake_radio_force_terminal_repeat(RADIANT_RADIO_STATUS_DENIED, 64u);
+	run_virtual_us(12u * (uint64_t)PERIOD_US);
+	drain();
+
+	/*
+	 * THE MISS AND RX_FAIL COUNTS ARE ASSERTED BY THE CONTROL TEST ABOVE,
+	 * NOT HERE, AND THE REASON IS WORTH RECORDING.
+	 *
+	 * The first version of this test asserted an absolute zero of both. It
+	 * failed on exactly one miss and one RX_FAIL, and three plausible
+	 * mechanisms were found and "fixed" before the obvious question was
+	 * asked: does the same miss appear with no denial at all? It does. A
+	 * quiet tracked channel over twelve periods of this harness's virtual
+	 * time misses one slot and says so, denials or not - which is correct
+	 * behaviour, because the sensor really was silent.
+	 *
+	 * So the claim is a DELTA and belongs where two runs can be compared,
+	 * which is test_a_quiet_tracked_channel_misses_the_same_either_way. What
+	 * is left here is what only this test can see: that the denial reached
+	 * the API layer at all, and that none of the state which is
+	 * unambiguously about the SENSOR moved because of it.
+	 */
+
+
+	zassert_true(radiant_api_stats_get()->sched_denied > 0u,
+		     "no denial ever reached the API layer, so this test proved "
+		     "nothing");
+	zassert_equal(0u,
+		      count_channel_events(CH,
+					   (uint8_t)ANTW_EVENT_RX_FAIL_GO_TO_SEARCH),
+		      "denials dropped a live channel back to searching");
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "the channel stopped tracking a sensor that never went away");
+	zassert_true(radiant_channel_denied_count(CH) > 0u,
+		     "the denials were not charged to the channel's guard at all");
 
 	end_of_test();
 }

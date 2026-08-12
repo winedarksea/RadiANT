@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+﻿/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * radiant_radio_nrf.c - radiant_radio_hal.h on a bare nRF RADIO.
  *
@@ -137,16 +137,48 @@
 #include <radiant_core/radiant_radio_hal.h>
 #include <radiant_core/radiant_radio_nrf_diag.h>
 
+/*
+ * Who owns the RADIO right now. A private header rather than one under
+ * include/radiant_core/ on purpose: nothing above the backend may know that
+ * this question exists, let alone how it is answered.
+ */
+#include "radiant_radio_nrf_gate.h"
+
 LOG_MODULE_REGISTER(radiant_radio_nrf, CONFIG_RADIANT_CORE_LOG_LEVEL);
 
-/* This file pokes RADIO registers directly and owns the peripheral outright.
- * Anything else that owns it - a Bluetooth controller, an MPSL timeslot session
- * - would silently reprogram them underneath us and the symptom would be
- * unexplained loss rather than an error. Loud beats silent; the MPSL-arbitrated
- * backend is a separate file and a separate Kconfig choice for this reason. */
-BUILD_ASSERT(!IS_ENABLED(CONFIG_BT),
-	     "radiant_radio_nrf owns the RADIO outright; CONFIG_BT must be off. "
-	     "Coexistence with a BLE controller is RADIANT_CORE_BACKEND_MPSL.");
+/*
+ * This file pokes RADIO registers directly. WHETHER IT OWNS THE PERIPHERAL
+ * OUTRIGHT IS NOW THE GATE'S ANSWER RATHER THAN THIS FILE'S ASSUMPTION - see
+ * src/radiant_radio_nrf_gate.h - so the assertion is conditional on the gate
+ * rather than absolute.
+ *
+ * On the direct gate the old rule stands unchanged and for the old reason:
+ * anything else that owns the RADIO would silently reprogram it underneath us,
+ * and the symptom is unexplained loss rather than an error. Loud beats silent.
+ *
+ * On the MPSL gate the whole point is that CONFIG_BT is on, so the assertion
+ * would be asserting the thing the build exists to do.
+ */
+BUILD_ASSERT(IS_ENABLED(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL) ||
+		     !IS_ENABLED(CONFIG_BT),
+	     "radiant_radio_nrf owns the RADIO outright unless it is arbitrated; "
+	     "with CONFIG_BT on, select "
+	     "CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL.");
+
+/*
+ * THE INTERRUPT PRIORITY IS NO LONGER A TUNING CHOICE UNDER AN ARBITER.
+ *
+ * mpsl.rst makes the application responsible for enabling and disabling the
+ * RADIO interrupt when the timeslot API is used for RADIO access, and
+ * MPSL_HIGH_IRQ_PRIORITY is 0. The default has always been 0 for an unrelated
+ * reason - the acknowledged-data turnaround - so this changes no shipping
+ * build; what it changes is that lowering it is now broken rather than
+ * merely unmeasured.
+ */
+BUILD_ASSERT(!IS_ENABLED(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL) ||
+		     CONFIG_RADIANT_CORE_BACKEND_NRF_IRQ_PRIO == 0,
+	     "MPSL requires the application's RADIO interrupt at priority 0 "
+	     "(MPSL_HIGH_IRQ_PRIORITY)");
 
 /* ---------------------------------------------------------------------------
  * The timebase
@@ -550,7 +582,10 @@ with the bench measurement that produced them, or select a different backend."
 #define PHY_SWITCH_US          0u
 #endif
 
-static const struct radiant_radio_caps radiant_nrf_caps = {
+/* Not const: max_window_us is filled from the gate in radiant_radio_caps_get().
+ * Everything else here is a compile-time property of the part and is never
+ * written after this initialiser. */
+static struct radiant_radio_caps radiant_nrf_caps = {
 	.name                = CAPS_NAME,
 
 	/* Eight logical addresses. See this file's header for the constraint
@@ -574,6 +609,11 @@ static const struct radiant_radio_caps radiant_nrf_caps = {
 	.rx_to_tx_us         = RX_TO_TX_US,
 	.tx_to_rx_us         = TX_TO_RX_US,
 	.min_arm_lead_us     = ARM_LEAD_US,
+	/* What it costs to programme the peripheral inside air already held.
+	 * Equal to the above on the direct gate; the gate raises only the other
+	 * one. See the field's comment - the two coming apart is what keeps
+	 * acknowledged data working under an arbiter. */
+	.min_arm_lead_in_grant_us = ARM_LEAD_US,
 
 	.time_resolution_ns  = 1000,   /* the 1 MHz TIMER */
 
@@ -606,6 +646,47 @@ static const struct radiant_radio_caps radiant_nrf_caps = {
 
 const struct radiant_radio_caps *radiant_radio_caps_get(void)
 {
+	/*
+	 * ONE FIELD IS FILLED HERE RATHER THAN IN THE INITIALISER, AND ONLY ONE.
+	 *
+	 * max_window_us is a property of the GATE, not of the part: unbounded
+	 * where radiant_core owns the radio, and MPSL's own
+	 * MPSL_TIMESLOT_LENGTH_MAX_US where it does not. A static initialiser
+	 * cannot call a function, and an #if on the gate here would put "which
+	 * front end is this" back inside the file the seam exists to keep free
+	 * of it.
+	 *
+	 * Assigned on every call rather than once at init because this function
+	 * is documented as callable BEFORE init - radiant_sched_init() reads the
+	 * capabilities to size its own budgets - and a window ceiling that only
+	 * became true after init would be read as "unbounded" by exactly the
+	 * caller that plans against it. It is one store of a constant.
+	 */
+	radiant_nrf_caps.max_window_us = gate_max_window_us();
+	/*
+	 * TWO LEADS, AND ONLY THE FIRST ONE MOVES.
+	 *
+	 * min_arm_lead_us is what radiant_sched.c's arming pass plans against,
+	 * so under an arbiter it has to be big enough to PLACE A RESERVATION -
+	 * ARM_LEAD_US is nowhere near, and advertising it produced a dongle that
+	 * configured perfectly and heard nothing, because every window was
+	 * posted nearer than the arbiter could grant.
+	 *
+	 * min_arm_lead_in_grant_us never moves: programming the peripheral
+	 * inside air we already hold costs exactly what it always cost, and it
+	 * is what radiant_burst.c must read or acknowledged data is refused on
+	 * every arbitrated build.
+	 */
+	/*
+	 * ADDITIVE, NOT A MAXIMUM, because the two are sequential rather than
+	 * alternative: the reservation has to be placed with the arbiter, and
+	 * THEN the peripheral has to be programmed inside the grant it produces.
+	 * Taking the larger of the two was the first attempt and it left the
+	 * hardware's own lead unaccounted for - every arm was refused for being
+	 * a few hundred microseconds too near, and the dongle heard nothing.
+	 */
+	radiant_nrf_caps.min_arm_lead_us =
+		(uint16_t)(ARM_LEAD_US + gate_min_arm_lead_us());
 	return &radiant_nrf_caps;
 }
 
@@ -930,7 +1011,38 @@ static struct {
 	 */
 	nrfx_gppi_handle_t conn_rssi;
 	bool               conn_ok;
+	/* A grant arrived but its programming failed. The terminal is delivered
+	 * later, from thread context, so the signal callback stays short - see
+	 * radiant_nrf_gate_on_grant(). */
+	bool               gate_failed;
 } radiant_op;
+
+/*
+ * The request an arm call validated but has not programmed yet.
+ *
+ * WHY A COPY AND NOT A POINTER. The pointer would be legal: the HAL says
+ * radiant_rx_req.filters stays valid until the terminal event, and
+ * radiant_tx_req.body likewise. But radiant_rx_req itself is a stack local in
+ * radiant_sched.c's arm_rx_window(), and it is gone the instant that function
+ * returns - which under an arbitrated gate is milliseconds before the grant
+ * arrives. The two INNER pointers are the ones with a lifetime promise; the
+ * struct holding them has none, so the struct is copied and they are not.
+ *
+ * Only one is live at a time, for the same reason radiant_op.kind is one field:
+ * at most one operation exists at a time, which is a HAL rule and also what
+ * MPSL enforces with -NRF_EAGAIN on a second request.
+ */
+static struct {
+	struct radiant_rx_req rx;
+	struct radiant_tx_req tx;
+#if defined(CONFIG_RADIANT_CORE_ED_SCAN)
+	struct radiant_ed_req ed;
+#endif
+	/* True between a GATE_PENDING acquire and the grant or denial that
+	 * resolves it. Read by the gate callbacks to tell a real deferred
+	 * operation from a late signal for one that has already ended. */
+	bool pending;
+} radiant_staged;
 
 /* Bring-up counters. Logging from the RADIO interrupt is not safe at this
  * priority, so the interrupt counts and thread context reports. */
@@ -966,7 +1078,8 @@ static uint8_t radiant_tx_buf[RADIANT_RADIO_BODY_MAX + 4] __aligned(4);
  * ---------------------------------------------------------------------------
  */
 
-static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index)
+static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index,
+			bool dry_run)
 {
 	bool lr;
 
@@ -1061,6 +1174,24 @@ static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index)
 	if (fmt->crc.width_bits != 16u || fmt->crc.poly != 0x1021u ||
 	    fmt->crc.xor_out != 0u || fmt->crc.reflect_in || fmt->crc.reflect_out) {
 		return RADIANT_RADIO_ENOTSUP;
+	}
+
+	/*
+	 * EVERYTHING ABOVE IS A PURE FUNCTION OF THE REQUEST; EVERYTHING BELOW
+	 * TOUCHES THE PERIPHERAL. The boundary was already here - this line only
+	 * names it - and naming it is what lets an arm call answer EINVAL and
+	 * ENOTSUP synchronously, as radiant_radio_hal.h requires, while the
+	 * register writes wait for the gate to say the radio is ours.
+	 *
+	 * ONE FUNCTION WITH A FLAG RATHER THAN TWO FUNCTIONS. A separate
+	 * check_format() would be a second copy of forty lines of refusals that
+	 * has to stay in step with this one for ever, and the failure of it
+	 * drifting is a format the arm accepts and the grant then cannot
+	 * programme - which under an arbiter surfaces as an operation that
+	 * silently never happens.
+	 */
+	if (dry_run) {
+		return RADIANT_RADIO_OK_RC;
 	}
 
 #if defined(RADIO_MODE_MODE_Ble_LR125Kbit)
@@ -1250,7 +1381,7 @@ static void apply_power(const struct radiant_tx_power *p)
 static uint8_t radiant_filter_slot[8];
 
 static int apply_filters(const struct radiant_rx_filter *filters, uint8_t n,
-			 uint8_t addr_len)
+			 uint8_t addr_len, bool dry_run)
 {
 	uint32_t base0 = 0, base1 = 0;
 	uint8_t  prefixes[8];
@@ -1331,6 +1462,20 @@ static int apply_filters(const struct radiant_rx_filter *filters, uint8_t n,
 		 * aliasing it onto a real address. */
 		base0 = ~base1;
 		prefixes[0] = (uint8_t)~prefixes[1];
+	}
+
+	/*
+	 * The same boundary apply_format() draws, and here the packing loop
+	 * above is not merely validation - it is the whole decision about which
+	 * filter lands on which logical address, and it can refuse a set (a
+	 * third base, or an eighth filter with logical 0 already taken). A dry
+	 * run therefore has to run all of it and only skip the four register
+	 * writes below. Checking "would this pack?" any other way would be a
+	 * second implementation of the packer, which is the one thing a mock
+	 * more capable than the hardware is made of.
+	 */
+	if (dry_run) {
+		return RADIANT_RADIO_OK_RC;
 	}
 
 	NRF_RADIO->BASE0   = base0;
@@ -1582,9 +1727,24 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 		return RADIANT_RADIO_ESTATE;
 	}
 
+	/*
+	 * The gate first, before a single peripheral is claimed. On the direct
+	 * gate this returns OK having done nothing; on an arbitrated one it
+	 * opens the session that every later acquire runs through, and a backend
+	 * that had claimed the RADIO and the TIMER before finding out the
+	 * session could not be opened would be holding two peripherals it is not
+	 * entitled to.
+	 */
+	err = gate_init();
+	if (err != RADIANT_RADIO_OK_RC) {
+		LOG_ERR("radio gate did not initialise (%d)", err);
+		return err;
+	}
+
 	clk = DEVICE_DT_GET_ONE(nordic_nrf_clock);
 	if (!device_is_ready(clk)) {
 		LOG_ERR("clock controller not ready");
+		gate_shutdown();
 		return RADIANT_RADIO_EIO;
 	}
 
@@ -1818,6 +1978,16 @@ int radiant_radio_disable(void)
 		return RADIANT_RADIO_OK_RC;
 	}
 
+	/*
+	 * THE ABORT FIRST, AND IT MATTERS MORE UNDER AN ARBITER THAN IT LOOKS.
+	 *
+	 * This path and SIGNAL_SESSION_CLOSED are the two ways an arbitrated
+	 * build can be torn down with an operation armed and no grant held - and
+	 * both are paths that otherwise only run during suspend and resume,
+	 * which is to say never on a bench. radiant_radio_abort() clears the
+	 * staged operation and releases the reservation, so what follows is a
+	 * teardown with nothing outstanding.
+	 */
 	(void)radiant_radio_abort();
 	irq_disable(RADIANT_RADIO_IRQn);
 #if defined(RADIANT_RADIO_IRQn_2)
@@ -1860,13 +2030,13 @@ int radiant_radio_disable(void)
  * disagrees with its format - so the requirement is now stated in three places
  * that a build has to satisfy, rather than assumed in none.
  */
+static int program_tx(const struct radiant_tx_req *req);
+
 int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 {
-	unsigned int   key;
-	radiant_time_t now;
-	radiant_time_t t_start;
-	uint32_t       lead;
-	int            rc;
+	unsigned int key;
+	enum gate_rc g;
+	int          rc;
 
 	if (op == NULL) {
 		return RADIANT_RADIO_EINVAL;
@@ -1900,7 +2070,7 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	radiant_op.kind = OP_TX;
 	irq_unlock(key);
 
-	rc = apply_format(req->fmt, req->rf_index);
+	rc = apply_format(req->fmt, req->rf_index, true);
 	if (rc != RADIANT_RADIO_OK_RC) {
 		goto fail;
 	}
@@ -1935,6 +2105,82 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 		goto fail;
 	}
 
+	/*
+	 * The transmit's own air, from the compare that fires TASKS_TXEN to the
+	 * last bit of the body and CRC. follow_on_us extends the reservation
+	 * past that: on a listening master's own slot the turnaround window is
+	 * armed from inside this transmit's completion, and an arbiter that had
+	 * not been told would give the radio back in between.
+	 */
+	{
+		uint32_t lead_us = air_lead_us(req->fmt->phy, req->addr_len) +
+				   (uint32_t)T_SYNC_CAL_TX_US;
+
+		g = gate_acquire(GATE_OP_TX,
+				 req->t_sync_at - (radiant_time_t)lead_us,
+				 req->t_sync_at +
+					 (radiant_time_t)(((uint32_t)req->body_len +
+							   2u) *
+							  US_PER_BYTE),
+				 req->follow_on_us, RADIANT_GATE_PRIO_HIGH);
+	}
+	if (g == GATE_DENIED) {
+		/*
+		 * THE SYNCHRONOUS REFUSAL, AND THIS IS THE CALL THAT NEEDS IT.
+		 * radiant_transfer.c arms the acknowledged-data reply from
+		 * inside the receive callback with 1.56 ms to go. There is no
+		 * time to place a request and hear back, and there is no retry.
+		 * Saying so from the call is the only report that can be acted
+		 * on.
+		 */
+		rc = RADIANT_RADIO_EDENIED;
+		goto fail;
+	}
+
+	radiant_op.id = radiant_op.next_id++;
+	if (radiant_op.next_id == 0u) {
+		radiant_op.next_id = 1u;   /* ids are non-zero by contract */
+	}
+	*op = radiant_op.id;
+
+	if (g == GATE_PENDING) {
+		/* Copied only on the deferred path - see radiant_radio_rx(). The
+		 * body pointer keeps its own promise: the HAL requires it to
+		 * stay valid and unmodified until the completion callback. */
+		radiant_staged.tx = *req;
+		radiant_staged.pending = true;
+		return RADIANT_RADIO_OK_RC;
+	}
+
+	rc = program_tx(req);
+	if (rc != RADIANT_RADIO_OK_RC) {
+		*op = 0u;
+		gate_release();
+		goto fail;
+	}
+	return RADIANT_RADIO_OK_RC;
+
+fail:
+	LOG_DBG("tx refused: %d (addr_len=%u)", rc, (unsigned)req->addr_len);
+	radiant_op.kind = OP_NONE;
+	return rc;
+}
+
+/*
+ * Everything a transmit does to the peripheral, from the staged request. The
+ * arm's body verbatim; see program_rx() for why it is a function.
+ */
+static int program_tx(const struct radiant_tx_req *req)
+{
+	radiant_time_t now;
+	radiant_time_t t_start;
+	uint32_t lead;
+	int rc;
+
+	rc = apply_format(req->fmt, req->rf_index, false);
+	if (rc != RADIANT_RADIO_OK_RC) {
+		return rc;
+	}
 	apply_tx_address(req->addr, req->addr_len);
 	apply_power(&req->power);
 
@@ -1971,8 +2217,7 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	if (req->t_sync_at < now + lead) {
 		/* Never silently late. A late master frame lands in the next
 		 * slot and is worse than no frame at all. */
-		rc = RADIANT_RADIO_ETIME;
-		goto fail;
+		return RADIANT_RADIO_ETIME;
 	}
 
 	radiant_op.addr_len        = req->addr_len;
@@ -2029,25 +2274,14 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	if (t_start <= now) {
 		nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
 		nrf_radio_shorts_set(NRF_RADIO, 0);
-		rc = RADIANT_RADIO_ETIME;
-		goto fail;
+		return RADIANT_RADIO_ETIME;
 	}
 
-	radiant_op.id = radiant_op.next_id++;
-	if (radiant_op.next_id == 0u) {
-		radiant_op.next_id = 1u;   /* ids are non-zero by contract */
-	}
-	*op = radiant_op.id;
 	LOG_DBG("tx op=%u alen=%u blen=%u start=+%d last_err=%d",
 		(unsigned)radiant_op.id, (unsigned)req->addr_len,
 		(unsigned)req->body_len, (int)(int64_t)(t_start - now),
 		(int)radiant_dbg_tx_err);
 	return RADIANT_RADIO_OK_RC;
-
-fail:
-	LOG_DBG("tx refused: %d (addr_len=%u)", rc, (unsigned)req->addr_len);
-	radiant_op.kind = OP_NONE;
-	return rc;
 }
 
 /* ---------------------------------------------------------------------------
@@ -2055,47 +2289,34 @@ fail:
  * ---------------------------------------------------------------------------
  */
 
-int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
+/*
+ * Everything a receive window does to the peripheral, in one step, from the
+ * staged request.
+ *
+ * SEPARATED FROM THE ARM CALL BECAUSE OF THE GATE AND FOR NO OTHER REASON, and
+ * the body below is the arm's body verbatim - same order, same registers, same
+ * comments. On the direct gate this is called from the arm, one line further
+ * down, and the compiler inlines it back into the same instructions.
+ *
+ * Returns a HAL code. It can only fail the way the arm already failed
+ * (ETIME, if the grant arrived so late that the window is now unreachable),
+ * because every other refusal is a pure function of the request and was
+ * answered synchronously before the gate was consulted.
+ */
+static int program_rx(const struct radiant_rx_req *req)
 {
-	unsigned int key;
 	radiant_time_t now;
 	uint32_t start_cc, close_cc;
 	int rc;
 
-	if (op == NULL) {
-		return RADIANT_RADIO_EINVAL;
-	}
-	*op = 0u;
-
-	if (req == NULL || req->fmt == NULL) {
-		return RADIANT_RADIO_EINVAL;
-	}
-	if (!radiant_op.inited || !radiant_op.enabled) {
-		return RADIANT_RADIO_ESTATE;
-	}
-	if (req->t_close < req->t_open) {
-		return RADIANT_RADIO_EINVAL;
-	}
-
-	/* One operation in flight. The lock is what resolves the race
-	 * radiant_radio_hal.h names explicitly: a thread arming while the
-	 * callback that frees the slot is about to run. EBUSY, never
-	 * corruption. */
-	key = irq_lock();
-	if (radiant_op.kind != OP_NONE) {
-		irq_unlock(key);
-		return RADIANT_RADIO_EBUSY;
-	}
-	radiant_op.kind = OP_RX;
-	irq_unlock(key);
-
-	rc = apply_format(req->fmt, req->rf_index);
+	rc = apply_format(req->fmt, req->rf_index, false);
 	if (rc != RADIANT_RADIO_OK_RC) {
-		goto fail;
+		return rc;
 	}
-	rc = apply_filters(req->filters, req->n_filters, req->fmt->addr_len);
+	rc = apply_filters(req->filters, req->n_filters, req->fmt->addr_len,
+			   false);
 	if (rc != RADIANT_RADIO_OK_RC) {
-		goto fail;
+		return rc;
 	}
 	NRF_RADIO->PACKETPTR = (uint32_t)(uintptr_t)radiant_rx_buf;
 
@@ -2122,8 +2343,7 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 		/* Never silently late. A window opened after the frame it was
 		 * meant to catch is indistinguishable from a sensor that went
 		 * quiet, and that is the report nobody can act on. */
-		rc = RADIANT_RADIO_ETIME;
-		goto fail;
+		return RADIANT_RADIO_ETIME;
 	}
 
 	radiant_op.n_filters       = req->n_filters;
@@ -2233,17 +2453,149 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	 * has one answer rather than an exception. */
 	nrfx_gppi_conn_enable(radiant_op.conn_rssi);
 
-	radiant_op.id = radiant_op.next_id++;
-	if (radiant_op.next_id == 0u) {
-		radiant_op.next_id = 1u;   /* ids are non-zero by contract */
-	}
-	*op = radiant_op.id;
 	LOG_DBG("rx op=%u n=%u alen=%u cov=%u open=+%d close=+%d isr=%u ev=%u ok=%u term=%u",
 		(unsigned)radiant_op.id, req->n_filters,
 		(unsigned)req->fmt->addr_len, (unsigned)req->fmt->crc.cover_addr,
 		(int)(int64_t)(req->t_open - now), (int)(int64_t)(req->t_close - now),
 		(unsigned)radiant_dbg_isr, (unsigned)radiant_dbg_rx_ev, (unsigned)radiant_dbg_ok,
 		(unsigned)radiant_dbg_term);
+	return RADIANT_RADIO_OK_RC;
+}
+
+int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
+{
+	unsigned int key;
+	enum gate_rc g;
+	int rc;
+
+	if (op == NULL) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	*op = 0u;
+
+	if (req == NULL || req->fmt == NULL) {
+		return RADIANT_RADIO_EINVAL;
+	}
+	if (!radiant_op.inited || !radiant_op.enabled) {
+		return RADIANT_RADIO_ESTATE;
+	}
+	if (req->t_close < req->t_open) {
+		return RADIANT_RADIO_EINVAL;
+	}
+
+	/* One operation in flight. The lock is what resolves the race
+	 * radiant_radio_hal.h names explicitly: a thread arming while the
+	 * callback that frees the slot is about to run. EBUSY, never
+	 * corruption. */
+	key = irq_lock();
+	if (radiant_op.kind != OP_NONE) {
+		irq_unlock(key);
+		return RADIANT_RADIO_EBUSY;
+	}
+	radiant_op.kind = OP_RX;
+	irq_unlock(key);
+
+	/*
+	 * EVERY REFUSAL THAT IS A PURE FUNCTION OF THE REQUEST, ANSWERED BEFORE
+	 * THE GATE IS ASKED AND BEFORE A SINGLE REGISTER IS WRITTEN.
+	 *
+	 * radiant_radio_hal.h requires an arm call to answer EINVAL and ENOTSUP
+	 * synchronously, and radiant_sched.c's stats treat a non-zero
+	 * arm_enotsup as "the core and the backend disagree about what the
+	 * hardware can match" rather than as traffic. Both remain true under an
+	 * arbiter only if the checks happen here, where the answer is still
+	 * available, instead of at a grant that may be milliseconds away and may
+	 * never come.
+	 */
+	rc = apply_format(req->fmt, req->rf_index, true);
+	if (rc != RADIANT_RADIO_OK_RC) {
+		goto fail;
+	}
+	rc = apply_filters(req->filters, req->n_filters, req->fmt->addr_len,
+			   true);
+	if (rc != RADIANT_RADIO_OK_RC) {
+		goto fail;
+	}
+
+	/*
+	 * The instants the hardware needs, not the instants the caller named:
+	 * the window must be live from before t_open by the ramp-up and address
+	 * airtime, and the close compare fires after t_close by the rest of the
+	 * longest legal frame. A gate adds its own head and tail margins to
+	 * these; it does not have to rediscover them.
+	 */
+	g = gate_acquire(GATE_OP_RX,
+			 req->t_open -
+				 (radiant_time_t)air_lead_us(req->fmt->phy,
+							     req->fmt->addr_len),
+			 req->t_close +
+				 (radiant_time_t)(((uint32_t)req->fmt->body_len +
+						   2u) *
+						  US_PER_BYTE),
+			 req->follow_on_us,
+			 /*
+			  * WHICH OF OUR OWN REQUESTS GIVES WAY, DERIVED FROM
+			  * DURATION AND FROM NOTHING ELSE.
+			  *
+			  * ADR 0013 makes the sweep the elastic consumer and
+			  * tracked slots inviolate, so the gate has to be able
+			  * to tell them apart - and rule 1 of this header's
+			  * contract forbids a backend knowing anything about
+			  * ANT. Window LENGTH is not ANT knowledge: it is the
+			  * one thing this layer is entirely about.
+			  *
+			  * A tracked window is a guard either side of a
+			  * predicted instant - under a millisecond, and bounded
+			  * by RADIANT_CHANNEL_GUARD_MAX_US at 400 us each way.
+			  * A master's turnaround is the same order. Only a scan
+			  * chunk or an energy-detect sweep is ever tens of
+			  * milliseconds long, because only those are "as much
+			  * as fits". 10 ms is an order of magnitude clear of
+			  * both populations.
+			  */
+			 ((req->t_close - req->t_open) >= 10000u)
+				 ? RADIANT_GATE_PRIO_NORMAL
+				 : RADIANT_GATE_PRIO_HIGH);
+	if (g == GATE_DENIED) {
+		rc = RADIANT_RADIO_EDENIED;
+		goto fail;
+	}
+
+	radiant_op.id = radiant_op.next_id++;
+	if (radiant_op.next_id == 0u) {
+		radiant_op.next_id = 1u;   /* ids are non-zero by contract */
+	}
+	*op = radiant_op.id;
+
+	if (g == GATE_PENDING) {
+		/*
+		 * The operation exists and the core may account for it, but no
+		 * peripheral has been touched. radiant_nrf_gate_on_grant() or
+		 * _on_denied() resolves it.
+		 *
+		 * THE COPY IS TAKEN HERE AND ONLY HERE. struct radiant_rx_req is
+		 * a stack local in radiant_sched.c's arm_rx_window() and is gone
+		 * the instant that function returns, which under an arbitrated
+		 * gate is milliseconds before the grant. Its two inner pointers
+		 * - filters and fmt - are the ones with a lifetime promise, so
+		 * the struct is copied and they are not.
+		 *
+		 * Not taken on the granted path, deliberately: that would charge
+		 * every shipping dongle a struct copy per arm for a deferral it
+		 * can never perform, and the whole claim of this seam is that
+		 * the direct path is what it was.
+		 */
+		radiant_staged.rx = *req;
+		radiant_staged.pending = true;
+		return RADIANT_RADIO_OK_RC;
+	}
+
+	rc = program_rx(req);
+	if (rc != RADIANT_RADIO_OK_RC) {
+		*op = 0u;
+		gate_release();
+		goto fail;
+	}
 	return RADIANT_RADIO_OK_RC;
 
 fail:
@@ -2429,6 +2781,10 @@ static void ed_dwell(void)
 
 #endif /* CONFIG_RADIANT_CORE_ED_SCAN */
 
+#if defined(CONFIG_RADIANT_CORE_ED_SCAN)
+static void program_ed(const struct radiant_ed_req *req);
+#endif
+
 int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 {
 #if !defined(CONFIG_RADIANT_CORE_ED_SCAN)
@@ -2443,7 +2799,7 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 #else
 	unsigned int   key;
 	radiant_time_t now;
-	uint32_t       start_cc;
+	enum gate_rc   g;
 	int            rc;
 
 	if (op == NULL) {
@@ -2489,6 +2845,61 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 		rc = RADIANT_RADIO_ETIME;
 		goto fail;
 	}
+
+	/*
+	 * An ED chunk's span is (hi - lo + 1) * dwell by construction - the
+	 * scheduler sizes the range from the gap for exactly that reason - so
+	 * the reservation is that span and no guesswork. No follow-on: nothing
+	 * follows an energy-detect index at a fixed instant.
+	 *
+	 * PRIO_NORMAL, and this is the request class ADR 0013 is about. Energy
+	 * detect already "takes gaps only"; under an arbiter it is elastic work
+	 * beside the sweep, and it is what gives way when the other stack wants
+	 * the air.
+	 */
+	g = gate_acquire(GATE_OP_ED, req->t_start - (radiant_time_t)RAMP_UP_US,
+			 req->t_start +
+				 (radiant_time_t)(((uint32_t)req->rf_index_hi -
+						   req->rf_index_lo + 1u) *
+						  req->dwell_us),
+			 0u, RADIANT_GATE_PRIO_NORMAL);
+	if (g == GATE_DENIED) {
+		rc = RADIANT_RADIO_EDENIED;
+		goto fail;
+	}
+
+	radiant_op.id = radiant_op.next_id++;
+	if (radiant_op.next_id == 0u) {
+		radiant_op.next_id = 1u;
+	}
+	*op = radiant_op.id;
+
+	if (g == GATE_PENDING) {
+		radiant_staged.ed = *req;
+		radiant_staged.pending = true;
+		return RADIANT_RADIO_OK_RC;
+	}
+
+	program_ed(req);
+	LOG_DBG("ed op=%u rf=%u..%u dwell=%u start=+%d",
+		(unsigned)radiant_op.id, (unsigned)req->rf_index_lo,
+		(unsigned)req->rf_index_hi, (unsigned)req->dwell_us,
+		(int)(int64_t)(req->t_start - now));
+	return RADIANT_RADIO_OK_RC;
+
+fail:
+	LOG_DBG("ed refused: %d", rc);
+	radiant_op.kind = OP_NONE;
+	return rc;
+#endif /* CONFIG_RADIANT_CORE_ED_SCAN */
+}
+
+#if defined(CONFIG_RADIANT_CORE_ED_SCAN)
+/* Everything an energy-detect chunk does to the peripheral, from the staged
+ * request. See program_rx() for why it is a function. */
+static void program_ed(const struct radiant_ed_req *req)
+{
+	uint32_t start_cc;
 
 	radiant_op.ed_hi = req->rf_index_hi;
 	radiant_op.ed_cur = req->rf_index_lo;
@@ -2539,23 +2950,145 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 	 * index ends when its own burst does, and a compare firing
 	 * TASKS_DISABLE underneath a burst would take the receiver away
 	 * mid-measurement. */
-
-	radiant_op.id = radiant_op.next_id++;
-	if (radiant_op.next_id == 0u) {
-		radiant_op.next_id = 1u;
-	}
-	*op = radiant_op.id;
-	LOG_DBG("ed op=%u rf=%u..%u dwell=%u start=+%d",
-		(unsigned)radiant_op.id, (unsigned)req->rf_index_lo,
-		(unsigned)req->rf_index_hi, (unsigned)req->dwell_us,
-		(int)(int64_t)(req->t_start - now));
-	return RADIANT_RADIO_OK_RC;
-
-fail:
-	LOG_DBG("ed refused: %d", rc);
-	radiant_op.kind = OP_NONE;
-	return rc;
+}
 #endif /* CONFIG_RADIANT_CORE_ED_SCAN */
+
+/* ---------------------------------------------------------------------------
+ * What the gate calls back
+ *
+ * Neither runs in the direct build - GATE_PENDING is a state that gate cannot
+ * enter - so on a shipping dongle image these two are unreachable code that the
+ * linker keeps because the gate's header declares them. That is the correct
+ * cost: the alternative is an #ifdef on the gate inside the arm paths, which is
+ * the "backend selected by a part number" shape radiant_radio_hal.h's six rules
+ * were written to keep out.
+ * ---------------------------------------------------------------------------
+ */
+
+void radiant_nrf_gate_on_grant(void)
+{
+	unsigned int key;
+	int          rc = RADIANT_RADIO_OK_RC;
+
+	key = irq_lock();
+	if (!radiant_staged.pending) {
+		/*
+		 * A grant for an operation that has already ended - aborted by
+		 * the core, or resolved by our own deadline before the arbiter
+		 * got round to us. Not an error and not rare: it is the same
+		 * race the op id exists for, one layer down. The grant is given
+		 * straight back rather than used, because programming the
+		 * peripheral for an operation nobody is waiting for would arm
+		 * the radio against a window with no owner.
+		 */
+		irq_unlock(key);
+		gate_release();
+		return;
+	}
+	radiant_staged.pending = false;
+	irq_unlock(key);
+
+	switch (radiant_op.kind) {
+	case OP_RX:
+		rc = program_rx(&radiant_staged.rx);
+		break;
+	case OP_TX:
+		rc = program_tx(&radiant_staged.tx);
+		break;
+#if defined(CONFIG_RADIANT_CORE_ED_SCAN)
+	case OP_ED:
+		program_ed(&radiant_staged.ed);
+		break;
+#endif
+	default:
+		/* The slot was freed under us between the acquire and the
+		 * grant. Nothing to programme and nothing to report - whoever
+		 * freed it delivered the terminal event. */
+		gate_release();
+		return;
+	}
+
+	if (rc != RADIANT_RADIO_OK_RC) {
+		/*
+		 * The only failure reachable here is ETIME: the grant arrived so
+		 * late that the instant is now unreachable. Every other refusal
+		 * is a pure function of the request and was answered
+		 * synchronously by the arm call.
+		 *
+		 * FAILED rather than DENIED, and the distinction is the one this
+		 * whole mechanism is about. We WERE given the air; we could not
+		 * use it in time. Reporting that as a denial would blame the
+		 * other stack for our own late start, and would be counted in
+		 * the statistic that exists to tell those two apart.
+		 *
+		 * HANDED BACK TO THE GATE RATHER THAN DELIVERED HERE. This runs
+		 * inside the grant's own signal callback, and delivering a
+		 * terminal from here runs the completion callback, a scheduler
+		 * pass, and possibly another arm - all before the callback can
+		 * return. Nordic's own nrf/samples/mpsl/timeslot does almost
+		 * nothing in that callback, and it gets a TIMER0 signal on every
+		 * one of its timeslots where this file gets none and MPSL
+		 * asserts instead. Keeping the callback short is the difference
+		 * being tested.
+		 */
+		radiant_op.gate_failed = true;
+	}
+}
+
+/*
+ * Deliver the terminal for a grant whose programming failed. Called by the gate
+ * from thread context once the timeslot has been given back - never from
+ * inside the signal callback. See radiant_nrf_gate_on_grant().
+ */
+void radiant_nrf_gate_finish_failed(void)
+{
+	if (!radiant_op.gate_failed) {
+		return;
+	}
+	radiant_op.gate_failed = false;
+	deliver_terminal(RADIANT_RADIO_STATUS_FAILED);
+}
+
+void radiant_nrf_gate_on_denied(void)
+{
+	unsigned int key;
+
+	key = irq_lock();
+	radiant_staged.pending = false;
+	irq_unlock(key);
+
+	/*
+	 * DELIVERED UNCONDITIONALLY, AND THE GUARD THAT USED TO BE HERE LEFT
+	 * THE OPERATION SLOT OCCUPIED FOR EVER.
+	 *
+	 * This used to return early when radiant_staged.pending was already
+	 * false, on the reasoning that the operation must have been resolved by
+	 * something else. It is not a safe inference: an operation can be armed
+	 * and staged, have its staging cleared by an unrelated terminal, and
+	 * still be the operation the core is waiting on. Measured - a grant
+	 * whose programming failed delivered FAILED and cleared the flag, the
+	 * NEXT request was denied, this function returned without telling
+	 * anyone, and the core's single operation slot stayed occupied by an
+	 * operation that would never complete. The dongle stopped searching and
+	 * nothing was ever armed again: chunks=2, fail=1, deny=0.
+	 *
+	 * deliver_terminal() is already idempotent - it refuses when the
+	 * terminal has been sent or the slot is idle - so calling it
+	 * unconditionally is both safe and the only way to guarantee the HAL's
+	 * promise that every accepted arm produces exactly one terminal event.
+	 *
+	 * NOT ONE REGISTER WAS TOUCHED, which is what makes this a clean
+	 * terminal rather than a teardown. The compare was never programmed, so
+	 * no (D)PPI can fire; the RADIO was never configured, so the other
+	 * stack's operation is intact.
+	 *
+	 * MAY RUN IN A COOPERATIVE THREAD rather than in the radio interrupt -
+	 * MPSL delivers BLOCKED and CANCELLED from mpsl_low_priority_process().
+	 * This is the amendment radiant_radio_hal.h's callback-context
+	 * paragraph now carries, and it is why it was made deliberately rather
+	 * than by exception.
+	 */
+	deliver_terminal(RADIANT_RADIO_STATUS_DENIED);
 }
 
 /* ---------------------------------------------------------------------------
@@ -2587,7 +3120,14 @@ int radiant_radio_abort(void)
 	nrfx_gppi_conn_disable(radiant_op.conn_rssi);
 	nrf_radio_shorts_set(NRF_RADIO, 0);
 	nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_STOP);
+	/* An operation that was still waiting for a grant is aborted too, and it
+	 * is the easy case: nothing was programmed, so there is nothing to tear
+	 * down. Clearing the flag under the same lock is what stops a grant that
+	 * is already in flight from programming the radio for a window whose
+	 * owner has gone. */
+	radiant_staged.pending = false;
 	irq_unlock(key);
+	gate_release();
 
 	/*
 	 * THE OPERATION SLOT IS RELEASED HERE, SYNCHRONOUSLY, AND IT HAS TO BE.
@@ -2741,6 +3281,22 @@ static void deliver_terminal(enum radiant_radio_status st)
 	nrf_radio_shorts_set(NRF_RADIO, 0);
 
 	radiant_op.kind = OP_NONE;
+	/*
+	 * GIVE THE AIR BACK BEFORE THE CALLBACK, NOT AFTER.
+	 *
+	 * This is the line that decides whether the follow_on reserve costs the
+	 * other stack its SCHEDULER or its AIR. A tracked window that closed
+	 * empty is holding ~2 ms of reservation for a reply that is now known
+	 * not to be coming, four times a second per sensor; released here, the
+	 * blackout stays the ~1.3 ms the window actually used.
+	 *
+	 * Before the callback because the callback is entitled to arm the next
+	 * operation - that is the low-jitter path the HAL contract exists to
+	 * permit - and an arm that found the previous reservation still held
+	 * would be asking the arbiter for air it has already been given.
+	 */
+	radiant_staged.pending = false;
+	gate_release();
 
 #if defined(CONFIG_RADIANT_CORE_ED_SCAN)
 	if (kind == OP_ED) {
@@ -3050,3 +3606,4 @@ static void radio_isr(const void *arg)
 #endif
 	}
 }
+

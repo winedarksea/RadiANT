@@ -269,6 +269,31 @@ typedef uint8_t radiant_channel_err_t;
  */
 #define RADIANT_CHANNEL_RX_FAIL_TO_SEARCH 8u
 
+/*
+ * Consecutive DENIED slots - the radio lent to another stack, never a window
+ * that ran - before a TRACKING channel stops pretending it still knows where
+ * its master is and promotes into the miss path above.
+ *
+ * WHY THERE IS A BOUND AT ALL, WHEN A DENIAL IS EXPLICITLY NOT EVIDENCE ABOUT
+ * THE PEER. Because the guard is finite. A denial still advances the slot clock
+ * by one period with no fresh sync, so the accumulated worst-case disagreement
+ * grows by RADIANT_CHANNEL_DRIFT_WORST_US every time, and
+ * radiant_channel_guard_us() charges it exactly as it charges a miss. Past
+ * RADIANT_CHANNEL_GUARD_MAX_US / RADIANT_CHANNEL_DRIFT_WORST_US periods the
+ * guard has hit its ceiling and provably no longer covers the disagreement: the
+ * channel is listening in the wrong place, and calling that TRACKING is the
+ * lie RX_FAIL_GO_TO_SEARCH exists to prevent. The ceiling is not a coincidence
+ * - it is the same quantity radiant_channel.c's second _Static_assert names.
+ *
+ * 16 slots is ~4 s at the ANT+ period. UNDER A WORKING ARBITER IT NEVER FIRES:
+ * the design gives tracked windows an inviolate reservation and takes the
+ * second stack's slice out of the search sweep, so sixteen consecutive denials
+ * means the arbiter is broken - and this counter, against `missed`, is what
+ * says which of the two it was.
+ */
+#define RADIANT_CHANNEL_DENY_TO_SEARCH \
+	(RADIANT_CHANNEL_GUARD_MAX_US / RADIANT_CHANNEL_DRIFT_WORST_US)
+
 /* ---------------------------------------------------------------------------
  * The tracked-window guard
  *
@@ -1016,6 +1041,42 @@ void radiant_channel_on_acquired(uint8_t channel, const struct radiant_channel_i
  * RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH is raised. Returns true if that happened.
  */
 bool radiant_channel_on_slot_missed(uint8_t channel, radiant_time_t now);
+
+/*
+ * A slot this channel expected was never put on the air, because an arbitrated
+ * backend lent the radio to another protocol stack. See
+ * RADIANT_RADIO_STATUS_DENIED and RADIANT_RADIO_EDENIED in radiant_radio_hal.h.
+ *
+ * THE SAME CLOCK ARITHMETIC AS A MISS, AND DELIBERATELY NOT THE SAME COUNTER.
+ *
+ * Same: t_next advances by exactly one period from the slot that was lost - not
+ * from `now` - so scheduler latency cannot walk the phase away from the master;
+ * and the guard widens by one RADIANT_CHANNEL_DRIFT_WORST_US, because a period
+ * has genuinely elapsed with no fresh sync and the disagreement it may have
+ * accumulated is real whatever the reason we did not listen.
+ *
+ * Not the same: this is not evidence that the sensor stopped transmitting. It
+ * is evidence about us. Counting it as a miss would drop a channel to SEARCHING
+ * after eight busy moments in the other stack - visibly, on the wire, to a host
+ * - which is exactly the failure the denial signal exists to prevent, and the
+ * caller must not post ANTW_EVENT_RX_FAIL for it either.
+ *
+ * "Charge the drift but do not count the miss" is NOT available as an
+ * implementation: the guard's miss term is literally miss_count * drift, so
+ * there is no third place to put the charge. Hence a second counter of equal
+ * weight, cleared wherever miss_count is cleared, and bounded by
+ * RADIANT_CHANNEL_DENY_TO_SEARCH - past which the guard has hit its ceiling and
+ * this function does promote into the miss path, returning whatever
+ * radiant_channel_on_slot_missed() would have.
+ *
+ * Returns true if the channel went back to SEARCHING, on the same terms.
+ */
+bool radiant_channel_on_slot_denied(uint8_t channel, radiant_time_t now);
+
+/* Consecutive denials on this channel since the last slot it heard. Zero on a
+ * backend that owns the radio; readable so that a bench run can attribute a
+ * widened guard to the arbiter rather than to the master's clock. */
+uint8_t radiant_channel_denied_count(uint8_t channel);
 
 /*
  * The terminal event of a radio operation.
