@@ -148,6 +148,19 @@ class Sensor:
     # a sixth to all of them for one flag would be a worse trade.
     serial_number: int | None = SERIAL_NUMBER
 
+    # The RF index this master transmits on, as an offset from 2400 MHz. The
+    # ANT+ default (57, i.e. 2457 MHz) unless a caller moves it.
+    #
+    # It exists for RF-7's gate, which asks whether the characterised ~0.4 %
+    # loss floor on this bench is really Wi-Fi collision on 2457 MHz: the
+    # measurement is the same link on a quiet index against the same link on
+    # 57, so BOTH ends have to move. ant_verify.py already had --rf-freq on the
+    # receiving side and this is its counterpart - without it the receiver
+    # simply moves away from the transmitter and the run measures nothing but
+    # an empty channel, which reads as spectacular loss rather than as a
+    # misconfiguration.
+    rf_freq: int = ap.ANT_PLUS_RF_FREQ
+
     def __init__(self, channel: int, device_number: int, trans_type: int,
                  watts: Signal, rpm: Signal):
         self.channel = channel
@@ -206,7 +219,7 @@ class Sensor:
                     self.device_type, self.trans_type]),
              "channel id"),
             (MESG_CHANNEL_RADIO_FREQ_ID,
-             bytes([self.channel, ap.ANT_PLUS_RF_FREQ]), "radio frequency"),
+             bytes([self.channel, self.rf_freq]), "radio frequency"),
             (MESG_CHANNEL_MESG_PERIOD_ID,
              bytes([self.channel, self.period & 0xFF, self.period >> 8]),
              "message period"),
@@ -1105,6 +1118,14 @@ def main() -> int:
              "what every node built before the schedule block does",
     )
     parser.add_argument(
+        "--rf-freq", type=int, default=None, metavar="N",
+        help="transmit on RF index N (2400+N MHz) instead of the ANT+ default "
+             "57. The counterpart of ant_verify.py's --rf-freq, and both ends "
+             "must be given the same value or the run measures an empty "
+             "channel. For RF-7's quiet-channel gate the candidates are 2, 26 "
+             "and 80, which sit in the gaps between Wi-Fi 1, 6 and 11",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="build the payload stream without a board and write it out; "
              "feed the result to ant_verify.py --replay",
@@ -1160,6 +1181,8 @@ def main() -> int:
                 **kwargs)
             sensor.serial_number = serial_number
             sensor.period_ppm = args.period_ppm
+            if args.rf_freq is not None:
+                sensor.rf_freq = args.rf_freq
             if args.attest:
                 if name not in ATTESTABLE:
                     sys.exit(f"--attest is for an ANT+ compat profile; {name} "

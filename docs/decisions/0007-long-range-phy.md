@@ -281,7 +281,7 @@ needed it most.
 
 ---
 
-## Does 1 M also qualify? — **NOT SETTLED, and not assumed**
+## Does 1 M also qualify? — **MEASURED 2026-08-11: yes, on the interop question**
 
 The authorship argument above applies equally to a RadiANT-authored **1 M**
 format with a real `PCNF0.LFLEN=8` on a device type no stock receiver opens. If
@@ -291,29 +291,112 @@ arrives without coded PHY at all, and most of this phase becomes optional.
 
 The plan required this be settled **first**, with one Tier 4 capture.
 
-**It was not performed, and the reason is hardware.** The bench today has the
-nRF5340 DK and the nRF54L15 DK attached and radio-capable. The stock-dongle
-stand-in is the Adafruit Feather, which enumerates as `239A:0029` — its
-bootloader — rather than `0FCF:1009`, the ANT dongle firmware. Putting it back
-into that firmware costs a Feather flash, which is a rationed, physically-gated
-resource (the user must double-tap RESET) and is explicitly reserved for a
-combined bench session. This is the same blocker RF Phase 4 recorded.
+**The capture has now been performed.** The Feather was returned to the ANT
+dongle firmware (`dist/ant_dongle.uf2`, sdk-ant, enumerating `0FCF:1009` and
+answering `MESG_VERSION` with `BOK02.01.00`) and used as the stock receiver.
 
-**The consequence is deliberate: this phase was built in full rather than
-skipped.** "Most of this phase becomes optional" is a claim that depends
-entirely on a capture nobody has taken, and building the reduced version on the
-strength of an untested prediction would mean discovering on somebody's dongle
-that the prediction was wrong. The coded PHY is worth ~8 dB on its own merits
-regardless of how the 1 M question resolves.
+### The rig, and the control that makes it mean anything
 
-**What the capture would change if it passes:** it would permit a second
-length-extended format on 1 M, which is an *addition* to what is recorded here
-and not a revision of it. The rule above would need restating, because the
-justification would no longer be physical invisibility but device-type
-isolation — a weaker argument that would need its own record. Nothing built in
-this phase would be wasted or wrong.
+`radiant_core/spike/x1m_len/` on the nRF54L15 DK transmits **two** frames,
+alternating, on the same radio at the same power, each at 4 Hz — both device
+type `0x60`, both 1 M GFSK, both ordinary five-byte tracking geometry, both
+`RADIANT_LEN_FIXED`, differing **only in body length**:
 
-**Status: open. Owed a Tier 4 capture in the deferred hardware session.**
+| | device | body | on-air frame |
+|---|---|---|---|
+| **A — control** | `0x60A0` | 10 bytes | the ordinary 17-byte ANT frame |
+| **B — experiment** | `0x60B0` | **30 bytes** | 37 bytes |
+
+The control is the whole reason this run can be believed. A capture that only
+transmitted B and saw nothing would be indistinguishable from a dead
+transmitter, a wrong network address, a wrong frequency or an unplugged dongle
+— every one of which manufactures the desired answer. A and B differ in one
+byte count and nothing else, so A being heard while B is not isolates *length*
+as the only variable.
+
+Note that **no shipping code was changed to do this**, and that is a fact about
+the design rather than a convenience: `apply_format()` requires
+`RADIANT_LEN_FIXED` on 1 M and then accepts any `body_len` up to
+`RADIANT_RADIO_BODY_MAX`, which this ADR raised to 40 for the coded format's
+sake. A 30-byte static-length 1 M body is therefore already expressible through
+the public HAL. The receiver was `tools/ant_rf6_capture.py`, which assigns a
+wildcard channel with the extended-assign background-scan bit (`0x01`) — the
+mechanism Zwift actually uses — so it never locks onto one device and keeps
+reporting everything it hears.
+
+### The result
+
+120 s, one sitting, with a real trainer on the air throughout:
+
+```
+  device    type  broadcasts   first    last   rssi(min/mean/max)
+  #24736    0x60          47    1.1s  117.3s   -33/-33/-32     <- A, control
+  #52233    0x0B          72    2.1s  118.6s   -73/-71/-70     <- real trainer
+  #52233    0x11          39    1.5s  120.5s   -71/-71/-70
+  #52233    0x7B          36    1.7s  114.5s   -71/-70/-70
+```
+
+- **A was heard 47 times at −33 dBm**, spread evenly across the whole window.
+  The link was not marginal — it was some 40 dB above where ANT stops tracking,
+  and stronger than the real trainer the same dongle was holding.
+- **B was transmitted about 480 times and heard exactly zero times.** The
+  transmitter's own console reported `B/long sent=…  fail=0 refuse=0` climbing
+  at 4 Hz throughout, so the frames were on the air; they did not reach the
+  host. Against an expectation of ~47 sightings had it been receivable, zero is
+  not a marginal result.
+- **The trainer kept being reported on all three of its device types for the
+  whole window**, first to last. Nothing else on the air was disturbed.
+
+**So a stock ANT receiver drops a length-extended 1 M frame before the host and
+is otherwise unaffected by it.** That is exactly the prediction, and it is now
+a measurement.
+
+### What this permits, and what it does not
+
+It permits a second, length-extended 1 M format as an **addition** to this
+record and not a revision of it. Everything built in this phase stands; the
+coded PHY is still worth its ~8 dB on its own merits.
+
+**It does not license writing that format yet, and the reason is recorded here
+so it is not lost.** The justification for length extension on the coded PHY is
+*physical invisibility* — a stock receiver cannot demodulate LE Coded at all.
+The justification on 1 M would be *device-type isolation*, which is strictly
+weaker: it depends on no stock receiver ever opening a channel on the device
+type in question, which is a claim about other people's software rather than
+about physics. **That is a different argument and it owes its own decision
+record**, with at minimum: the choice of device type and why it is safe, what
+happens to a receiver that does open it, and whether the backend's 1 M
+`RADIANT_LEN_FIXED` requirement should be relaxed at all or whether a second
+fixed length is enough. The guard in `apply_format()` deliberately pairs
+`RADIANT_LEN_FROM_BODY` with the coded PHY, and this result is **not** grounds
+to loosen that pairing casually — it is grounds to write the record that would
+justify doing so deliberately.
+
+### Two limitations, stated rather than buried
+
+**1. This run proves HARMLESSNESS, not USABILITY, and the difference matters.**
+Nothing in it demonstrates that frame B is a *well-formed* 30-byte frame — only
+that the transmitter's HAL accepted it (`refuse=0`) and that a stock receiver
+did not report it. A frame that was malformed for some reason unrelated to its
+length would produce a byte-for-byte identical result. The experiment was
+designed to answer "does a long frame damage a stock receiver", and it answers
+that; it does not answer "can a RadiANT receiver read a long 1 M frame", which
+has never been tested at all.
+
+Closing that gap is one run: put a `radiant_core` receiver on the same air and
+show it decoding B while the stock dongle continues not to. **The ADR owed for a
+length-extended 1 M format must not be written until that has been done** —
+otherwise the format would rest on a capture that is equally consistent with the
+frame being broken.
+
+**2. The only independent sensor on the air was the trainer**, since heart-rate
+straps sleep when not worn. "Keeps every other sensor" therefore rests on one
+real device across three device types, plus the A control. A repeat with a
+second live sensor would strengthen that half. It would not change the B result,
+which is what the question turned on.
+
+**Status: settled for the interop question, 2026-08-11. A length-extended 1 M
+format remains unwritten and owes its own ADR.**
 
 ---
 
