@@ -8,13 +8,139 @@ when the backend seam lands. Until then, everything under *Radio backends* and
 *HAL contract* is design, not shipped code — the transport, build-target and
 optional-feature material below is the shipping behaviour and is asserted.
 
-**The gate seam is shipped code; the MPSL gate is not, and every coexistence
-number on this page is still narrative.**
+**The MPSL gate now exists and receives; the coexistence *numbers* on this page
+are still thresholds rather than results, and those are two different claims.**
 [`radiant_core/src/radiant_radio_nrf_gate.h`](../radiant_core/src/radiant_radio_nrf_gate.h)
 and its direct implementation are compiled into every `-DRADIANT_BACKEND=nrf`
-build. `radiant_radio_nrf_gate_mpsl.c` does not exist yet: selecting
-`CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL` is a configure-time error naming the
-phase, which is the same shape of refusal the missing backend used to carry.
+build; [`radiant_radio_nrf_gate_mpsl.c`](../radiant_core/src/radiant_radio_nrf_gate_mpsl.c)
+is selected by `CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL`, off by default.
+
+What has been measured, on the nRF54L15 DK against a real sensor, three builds
+in one sitting on one bench:
+
+| build | packets in 60 s |
+|---|---|
+| direct | 30 |
+| MPSL gate, `CONFIG_MPSL=y`, no second stack | 30 |
+| MPSL gate + `CONFIG_BT=y` SoftDevice Controller linked in | 30 |
+
+with 273 reservations placed, 272 granted, **0 blocked**, 2868 extensions and
+zero refusals, and the scheduler reporting `end ok=36 abrt=0 miss=0 fail=0
+deny=0`. **That is a yield comparison against a sensor of opportunity, not the
+`loss (exact)` A/B the gate below specifies** — which needs a driven master and
+has not been run. It is enough to say the arbiter works and not enough to say
+what it costs.
+
+One structural cost IS visible and is by design: a scan chunk is 94 200 µs under
+the gate against 260 000 µs direct, because `caps.max_window_us` bounds a window
+to what MPSL can grant, so the sweep needs about three times the chunks for the
+same dwell.
+
+**The sweep-rate cost has now been measured, and the number that matters is duty
+rather than chunk count.** Sixty seconds searching for a device number that is
+not on the air — a wildcard channel finds the sensor in the room within a second
+or two and stops sweeping, so a wildcard run measures acquisition and not the
+sweep:
+
+| build | chunks/s | air time |
+|---|---|---|
+| direct | 3.78 | 97.7 % |
+| MPSL gate, no second stack | 10.94 | 94.8 % |
+
+The chunk rate nearly triples and means nothing on its own — the chunks are a
+third the length. **The sweep spends 94.8 % of wall-clock on air against the
+direct build's 97.7 %, a ratio of 0.970** against the 0.5 floor in
+`[gates.coexistence] min_sweep_rate_ratio`. Arbitration costs the sweep about
+3 % of its air with nothing else on the radio.
+
+That is the arbiter's own cost. **The ratio with a second stack actually running
+is not yet measurable, and the reason is an open bug rather than a missing
+run.**
+
+### The open coexistence bug
+
+`CONFIG_ANT_DONGLE_BLE_COEX_LOAD=y` starts a BLE advertiser beside ANT+ so that
+the gate has a second stack that wants the radio. Built that way, the
+SoftDevice Controller asserts:
+
+```
+<err> bt_sdc_hci_driver: SoftDevice Controller ASSERT: 48, 1792
+```
+
+within about 4–18 ms of the first advertising event, **with no ANT+ channel ever
+opened**. What has been established about it, so the next session does not
+re-establish it:
+
+- **It is ours, not the platform's.** Zephyr's stock
+  `samples/bluetooth/peripheral` advertises perfectly on this exact board and
+  SDK. The reference build is the first move on any "does the controller work
+  here" question, exactly as `nrf/samples/mpsl/timeslot` was for the timeslot
+  API.
+- **It is not starvation.** With the ANT+ channel never opened — one 100 µs
+  bootstrap timeslot and nothing since — it still asserts. The elastic sweep
+  giving way is not the missing piece.
+- **It is not an ordering problem at init.** With the load deferred eight
+  seconds (`CONFIG_ANT_DONGLE_BLE_COEX_LOAD_DELAY_S`), ANT+ sweeps normally for
+  those eight seconds and the controller asserts 114 ms after it starts.
+- **It is not the application.** `-DRADIANT_BACKEND=null` — same image, same
+  MPSL, same controller, same advertiser, no radiant radio — runs clean. **This
+  is the one clean configuration and every other difference is measured against
+  it.**
+- **It is not arbitration.** `CONFIG_RADIANT_CORE_GATE_MPSL_NO_SESSION=y` builds
+  the arbitrated backend and never opens a timeslot session. It still asserts.
+
+Beyond that, each of the following was removed individually from an asserting
+build and **the assert survived every one**, so none of them is the cause. They
+are listed because each is a plausible half-day, and because the switches that
+tested them are kept:
+
+| removed | switch |
+|---|---|
+| the permanent HFXO request | `RADIANT_CORE_NRF_NO_HFXO_HOLD` |
+| all five (D)PPI allocations | `RADIANT_CORE_NRF_NO_GPPI` |
+| enabling MPSL's own RADIO_0 NVIC line | `RADIANT_CORE_NRF_NO_RADIO0_IRQ` |
+| radiant's TIMER moved off TIMER20 onto TIMER22 | devicetree overlay |
+| the RADIO `PUBLISH`/`SUBSCRIBE` endpoints, detached at init | (reverted) |
+| the RADIO interrupt mask left set between grants | fixed and kept |
+| enabling RADIO line 1, which is not ours | fixed and kept |
+
+**P0's "TIMER20 does not collide" is a statement about MPSL, not about the
+SoftDevice Controller** — MPSL's `BUILD_ASSERT`s reserve TIMER10 on this part
+and nothing else, and the controller ships as a binary that asserts nothing at
+build time. That gap was real and worth closing; TIMER22 behaves identically, so
+the choice of timer is not the problem either.
+
+What remains between the one clean configuration and the asserting ones is now
+small: the errata-20 `CONSTLAT` power-mode trigger, the static `IRQ_CONNECT`
+table entries, the RSSI/temperature work queue — **and the fact that the null
+build also does not compile the gate or select `MPSL_ASSERT_HANDLER` at all,
+which is a confound in the baseline that should be removed before trusting it
+further.** That last point is the honest next step, not another peripheral.
+
+Removing that confound the obvious way does not build: selecting
+`RADIANT_CORE_BACKEND_NRF_GATE_MPSL` beside `RADIANT_BACKEND=null` selects
+`MPSL_ASSERT_HANDLER`, whose `mpsl_assert_handle()` lives in the gate file that
+the null arm does not compile, and the link fails on the undefined symbol. So
+the clean baseline genuinely differs from the asserting builds by more than the
+radio backend, and a trustworthy control needs either a handler outside the gate
+or an nrf build whose `radiant_radio_init()` is skipped outright. Until one of
+those exists, "it is in `radiant_radio_init()`" is the best-supported reading
+rather than a proven one.
+- **One cause was found and fixed**: `RADIO->INTENSET` was set once at enable and
+  left, so the controller's own events raised interrupts nobody scheduled. It is
+  now established inside a grant and cleared when the grant ends. It was not
+  sufficient.
+- **A second leak of the same kind is confirmed and unfixed**: the RADIO's
+  `PUBLISH_*`/`SUBSCRIBE_*` registers are written by `nrfx_gppi_conn_alloc()` and
+  are not touched by `conn_enable()`/`conn_disable()`, so they stay attached
+  between grants — and the t_sync capture is deliberately always-live. Detaching
+  them at the grant boundary was tried and stops the receive path dead
+  (`chunks=256, end ok=0, deny=256`), so the leak is real and that is not the fix.
+  The save side is kept in `radiant_radio_nrf.c`; the restore side is what needs
+  the next idea.
+
+Until that is closed, `[gates.coexistence]`'s `max_delta_pp` and the second-stack
+half of `min_sweep_rate_ratio` have no run behind them.
 
 So the +0.5 pp coexistence bar below, the arbiter's own cost and the sweep-rate
 ratio are **thresholds, not results**. They live in

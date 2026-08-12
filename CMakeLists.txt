@@ -326,6 +326,13 @@ if(CONFIG_ANT_DONGLE_FLASH_LOG)
   target_sources(app PRIVATE src/diag_flash_log.c)
 endif()
 
+# The bench instrument for the coexistence gate: a BLE advertiser that competes
+# for the radio, so the gate has a second stack that wants air rather than one
+# that is merely linked in. See src/ble_coex_load.c.
+if(CONFIG_ANT_DONGLE_BLE_COEX_LOAD)
+  target_sources(app PRIVATE src/ble_coex_load.c)
+endif()
+
 # ── The hostless node's identity (compat-C6) ────────────────────────────────
 #
 # docs/decisions/0009-hostless-node-identity.md. Default off and off in every

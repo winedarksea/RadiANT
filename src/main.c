@@ -42,6 +42,10 @@ static bool led_ok;
 
 #include "diag_flash_log.h"
 
+#if defined(CONFIG_ANT_DONGLE_BLE_COEX_LOAD)
+#include "ble_coex_load.h"
+#endif
+
 /* The radio contract - whichever backend is compiled in behind it. Bringing
  * the stack up is the only thing main() needs from it.
  */
@@ -127,6 +131,23 @@ int main(void)
 		return ret;
 	}
 	LOG_INF("antr_init ok");
+
+#if defined(CONFIG_ANT_DONGLE_BLE_COEX_LOAD)
+	/*
+	 * AFTER antr_init(), FOR THE SAME REASON USB IS. The radio backend takes
+	 * an explicit HFXO request at init that the multiprotocol spike showed is
+	 * load-bearing rather than tidy - without it the 1 MHz timebase runs on
+	 * the internal RC between timeslots, 0.42 % fast, which is about a
+	 * millisecond of slot-placement error per ANT+ period and shows up in no
+	 * counter anywhere. Starting the controller first would have it cycling
+	 * the clock before anything held it.
+	 *
+	 * A failure here is logged and not fatal: this is a bench instrument, and
+	 * a dongle that still does ANT+ with no advertiser is more useful than
+	 * one that refuses to boot.
+	 */
+	(void)ble_coex_load_start();
+#endif
 
 	usb_ant_class_init();
 	LOG_INF("usb_ant_class_init ok");

@@ -921,6 +921,27 @@ static struct {
 	enum radiant_phy phy;
 	bool         stop_on_first;
 	bool         report_crc_fail;
+	/*
+	 * This operation has had its one terminal event. See CLAIM_TERMINAL(),
+	 * and note WHERE it is cleared: at the arm, under the same lock that
+	 * claims the slot - not in program_rx()/program_tx()/program_ed().
+	 *
+	 * UNDER AN ARBITRATED GATE THOSE TWO INSTANTS ARE MILLISECONDS APART,
+	 * and the whole denial mechanism lives in the gap. An operation that is
+	 * armed and waiting for air has no registers programmed, so it used to
+	 * inherit the PREVIOUS operation's true - which made it unterminatable:
+	 * deliver_terminal() refused it, silently, exactly when the gate needed
+	 * to report that the air never came.
+	 *
+	 * The observed failure was a dongle that swept twice and stopped. The
+	 * gate had a grant with nothing staged behind it, because the denial
+	 * that cleared the staging had delivered nothing, and the core's single
+	 * operation slot stayed occupied by a window that would never end:
+	 * chunks=2, end ok=1, deny=0, and every counter afterwards frozen.
+	 *
+	 * Nothing changes for the direct build, where the arm and the
+	 * programming are the same instant.
+	 */
 	bool         terminal_sent;
 
 	/*
@@ -1706,6 +1727,22 @@ static int8_t rssi_sample_dbm(void)
  * ---------------------------------------------------------------------------
  */
 
+/*
+ * A newly claimed operation has not had its terminal event yet. Written as a
+ * macro so the three arm calls say the same thing in the same place - beside
+ * `radiant_op.kind = OP_x`, under the same irq_lock, because the two facts are
+ * one fact: the slot is claimed AND it is owed exactly one terminal.
+ */
+#define CLAIM_TERMINAL() (radiant_op.terminal_sent = false)
+
+#if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
+/* Defined beside the other gate callbacks, because that is where the reasoning
+ * about who owns the RADIO lives; declared here because the allocation they
+ * capture happens at init, far above it. */
+static void radio_endpoints_save(void);
+static void radio_endpoints_attach(bool on);
+#endif
+
 static void radio_isr(const void *arg);
 /* Both are defined with the interrupt handler, because that is where the
  * reasoning about EVENTS_DISABLED lives; radiant_radio_abort() needs them
@@ -1750,10 +1787,14 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 
 	/* The RADIO needs the crystal, not the internal oscillator: a 1 Mbps
 	 * GFSK link will not hold bit sync on HFINT. Blocking call. */
-	err = clock_control_on(clk, CLOCK_CONTROL_NRF_SUBSYS_HF);
-	if (err < 0) {
-		LOG_ERR("HFXO did not start (%d)", err);
-		return RADIANT_RADIO_EIO;
+	if (!IS_ENABLED(CONFIG_RADIANT_CORE_NRF_NO_HFXO_HOLD)) {
+		err = clock_control_on(clk, CLOCK_CONTROL_NRF_SUBSYS_HF);
+		if (err < 0) {
+			LOG_ERR("HFXO did not start (%d)", err);
+			return RADIANT_RADIO_EIO;
+		}
+	} else {
+		LOG_WRN("HFXO hold skipped (diagnostic build)");
 	}
 
 #if defined(NRF54L_ERRATA_20_PRESENT)
@@ -1830,6 +1871,12 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	 * and disabled per operation rather than reallocated, and
 	 * RXREADY -> RSSISTART for the noise floor.
 	 */
+	if (IS_ENABLED(CONFIG_RADIANT_CORE_NRF_NO_GPPI)) {
+		LOG_WRN("(D)PPI allocation skipped (diagnostic build): this "
+			"radio cannot transmit or receive");
+		goto gppi_done;
+	}
+
 	if (nrfx_gppi_conn_alloc(
 		    nrf_radio_event_address_get(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS),
 		    nrf_timer_task_address_get(TIMER_ADDR,
@@ -1864,6 +1911,22 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	 * path, which is the whole reason this backend owns a TIMER at all, and
 	 * it never needs turning off. */
 	nrfx_gppi_conn_enable(radiant_op.conn_sync);
+
+#if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
+	/*
+	 * Take a copy of what the five allocations just wrote into the RADIO's
+	 * own PUBLISH and SUBSCRIBE registers, and then take them straight back
+	 * off it. Under arbitration the RADIO is not ours between grants, and
+	 * those registers are the part of a (D)PPI connection that lives in the
+	 * RADIO rather than in the DPPIC - see radio_endpoints_attach().
+	 *
+	 * Saved here, at the one moment they are known to be exactly right,
+	 * rather than reconstructed later.
+	 */
+	radio_endpoints_save();
+#endif
+
+gppi_done:
 
 	/*
 	 * BOTH RADIO interrupt lines on nRF54L, not one.
@@ -1959,12 +2022,61 @@ int radiant_radio_enable(void)
 		return RADIANT_RADIO_OK_RC;
 	}
 
+#if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
+	/*
+	 * BUG 16: THE INTERRUPT MASK IS A REGISTER IN A PERIPHERAL WE DO NOT OWN
+	 * BETWEEN GRANTS, AND LEAVING IT SET CRASHES THE OTHER STACK.
+	 *
+	 * RADIO->INTENSET is not ours to hold. On a direct build it can be set
+	 * once at enable and left, because the RADIO is ours for ever. Under
+	 * arbitration the same two bits stay set while the SoftDevice Controller
+	 * is advertising on the same peripheral, so its END and DISABLED raise
+	 * interrupts nobody scheduled - and the controller does not survive it:
+	 *
+	 *     <err> bt_sdc_hci_driver: SoftDevice Controller ASSERT: 48, 1792
+	 *
+	 * about five milliseconds after the first advertising event, every boot.
+	 * ANT+ alone never showed it, because with nothing else on the radio
+	 * there is nothing else to raise the events.
+	 *
+	 * So under the gate the mask is established INSIDE the grant and cleared
+	 * when the grant ends - see radiant_nrf_gate_on_grant() and
+	 * radiant_nrf_gate_on_grant_end().
+	 *
+	 * LINE 0 STAYS ENABLED AND LINE 1 DOES NOT, AND THE ASYMMETRY IS THE
+	 * WHOLE POINT.
+	 *
+	 * Line 0 is MPSL's - mpsl_init.c defines MPSL_RADIO_IRQn as RADIO_0_IRQn
+	 * on this part - and it is also the only line this backend ever raises an
+	 * interrupt on, because nrf_radio_int_enable() writes INTENSET00. So it
+	 * has to stay enabled: disabling it was tried, and every window then runs
+	 * its full length and never completes (chunks=256, end ok=0, deny=256).
+	 *
+	 * LINE 1 IS NOT OURS AND WE NEVER PUT ANYTHING ON IT. Nothing in this
+	 * file writes INTENSET10, so a RADIO_1 interrupt can only come from bits
+	 * somebody else set - and on a combined build that somebody is the
+	 * SoftDevice Controller. Our handler is statically connected to that
+	 * vector (MPSL only takes line 0), so leaving the line enabled hands the
+	 * controller's own interrupts to radio_isr(), which consumes the RADIO
+	 * events the controller was waiting for.
+	 *
+	 * On a direct build both lines are ours and both are enabled, which is
+	 * what the two IRQ_CONNECTs above are for and why this is a difference
+	 * between the gates rather than a correction to the backend.
+	 */
+	if (!IS_ENABLED(CONFIG_RADIANT_CORE_NRF_NO_RADIO0_IRQ)) {
+		irq_enable(RADIANT_RADIO_IRQn);
+	} else {
+		LOG_WRN("RADIO_0 NVIC line left to MPSL (diagnostic build)");
+	}
+#else
 	nrf_radio_int_enable(NRF_RADIO, NRF_RADIO_INT_END_MASK |
 					NRF_RADIO_INT_DISABLED_MASK);
 	irq_enable(RADIANT_RADIO_IRQn);
 #if defined(RADIANT_RADIO_IRQn_2)
 	irq_enable(RADIANT_RADIO_IRQn_2);
 #endif
+#endif /* CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL */
 	radiant_op.enabled = true;
 	return RADIANT_RADIO_OK_RC;
 }
@@ -2068,6 +2180,7 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 		return RADIANT_RADIO_EBUSY;
 	}
 	radiant_op.kind = OP_TX;
+	CLAIM_TERMINAL();
 	irq_unlock(key);
 
 	rc = apply_format(req->fmt, req->rf_index, true);
@@ -2493,6 +2606,7 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 		return RADIANT_RADIO_EBUSY;
 	}
 	radiant_op.kind = OP_RX;
+	CLAIM_TERMINAL();
 	irq_unlock(key);
 
 	/*
@@ -2834,6 +2948,7 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 		return RADIANT_RADIO_EBUSY;
 	}
 	radiant_op.kind = OP_ED;
+	CLAIM_TERMINAL();
 	irq_unlock(key);
 
 	/* Against what the hardware genuinely needs, not against the advertised
@@ -2988,6 +3103,16 @@ void radiant_nrf_gate_on_grant(void)
 	radiant_staged.pending = false;
 	irq_unlock(key);
 
+	/*
+	 * Take the peripheral, for the duration of this grant and no longer:
+	 * the interrupt mask, and the RADIO's own end of our (D)PPI
+	 * connections. See radiant_radio_enable() and radio_endpoints_attach()
+	 * for what leaving either of them set does to the stack that has the
+	 * radio the rest of the time.
+	 */
+	nrf_radio_int_enable(NRF_RADIO, NRF_RADIO_INT_END_MASK |
+					NRF_RADIO_INT_DISABLED_MASK);
+
 	switch (radiant_op.kind) {
 	case OP_RX:
 		rc = program_rx(&radiant_staged.rx);
@@ -3047,6 +3172,228 @@ void radiant_nrf_gate_finish_failed(void)
 	}
 	radiant_op.gate_failed = false;
 	deliver_terminal(RADIANT_RADIO_STATUS_FAILED);
+}
+
+#if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
+/*
+ * THE RADIO'S OWN VIEW OF OUR (D)PPI, ATTACHED AND DETACHED WITH THE GRANT.
+ *
+ * BUG 17, and it is the twin of bug 16 one layer down. nrfx_gppi_conn_alloc()
+ * writes the RADIO's PUBLISH_* and SUBSCRIBE_* registers; conn_enable() and
+ * conn_disable() only toggle the DPPIC channel and leave those registers
+ * exactly as alloc left them. So even a "disabled" connection leaves the RADIO
+ * itself publishing its events onto a channel - and the t_sync capture is
+ * enabled at init and deliberately never disabled at all, because on a direct
+ * build it is correct for it to be always live.
+ *
+ * Under arbitration those registers belong to whoever holds the timeslot.
+ * Leaving RADIO->PUBLISH_ADDRESS set means every packet the SoftDevice
+ * Controller sends publishes on our channel, on a peripheral it believes it has
+ * configured itself. The stock Zephyr peripheral sample advertises perfectly on
+ * this exact board and SDK; the same controller inside this application asserts
+ * about four milliseconds after the first advertising event, with no ANT+
+ * channel ever opened. The difference is these six registers.
+ *
+ * So they are written on entry to a grant and cleared on the way out. The DPPI
+ * CHANNELS stay allocated across the boundary - only the RADIO's end of them
+ * moves - because allocating and freeing five connections every ninety
+ * milliseconds is churn with a failure mode (allocation can fail) in the one
+ * path that must not have one.
+ */
+/*
+ * THE REGISTER CONTENTS ARE SAVED RATHER THAN RECONSTRUCTED, and that is a
+ * deliberate choice about coupling. nrfx_gppi_conn_alloc() hands back an opaque
+ * handle, not a channel number, so rebuilding these six values would mean
+ * knowing how a connection maps onto channels - which is nrfx's business and
+ * changes between SoC families. Reading back what alloc wrote asks nrfx no
+ * questions and cannot disagree with it.
+ */
+static struct {
+	uint32_t pub_address;
+	uint32_t pub_rxready;
+	uint32_t sub_rssistart;
+	uint32_t sub_rxen;
+	uint32_t sub_txen;
+	uint32_t sub_disable;
+	bool     saved;
+} radio_ep;
+
+static void radio_endpoints_save(void)
+{
+	radio_ep.pub_address   = NRF_RADIO->PUBLISH_ADDRESS;
+	radio_ep.pub_rxready   = NRF_RADIO->PUBLISH_RXREADY;
+	radio_ep.sub_rssistart = NRF_RADIO->SUBSCRIBE_RSSISTART;
+	radio_ep.sub_rxen      = NRF_RADIO->SUBSCRIBE_RXEN;
+	radio_ep.sub_txen      = NRF_RADIO->SUBSCRIBE_TXEN;
+	radio_ep.sub_disable   = NRF_RADIO->SUBSCRIBE_DISABLE;
+	radio_ep.saved         = true;
+}
+
+/*
+ * NOT CALLED YET, AND KEPT BECAUSE THE SNAPSHOT IS THE HARD PART.
+ *
+ * Attaching and detaching these six registers with the grant is the correct
+ * shape and does not work as written - see radiant_nrf_gate_on_grant_end() for
+ * the measurement. The save side is right and was fiddly to get right (nrfx
+ * hands back an opaque handle, so the values have to be read back rather than
+ * reconstructed); throwing it away would mean rediscovering that. The restore
+ * side is what needs the next idea.
+ */
+__maybe_unused static void radio_endpoints_attach(bool on)
+{
+	if (!radio_ep.saved) {
+		return;
+	}
+	if (on) {
+		NRF_RADIO->PUBLISH_ADDRESS      = radio_ep.pub_address;
+		NRF_RADIO->PUBLISH_RXREADY      = radio_ep.pub_rxready;
+		NRF_RADIO->SUBSCRIBE_RSSISTART  = radio_ep.sub_rssistart;
+		NRF_RADIO->SUBSCRIBE_RXEN       = radio_ep.sub_rxen;
+		NRF_RADIO->SUBSCRIBE_TXEN       = radio_ep.sub_txen;
+		NRF_RADIO->SUBSCRIBE_DISABLE    = radio_ep.sub_disable;
+	} else {
+		NRF_RADIO->PUBLISH_ADDRESS      = 0;
+		NRF_RADIO->PUBLISH_RXREADY      = 0;
+		NRF_RADIO->SUBSCRIBE_RSSISTART  = 0;
+		NRF_RADIO->SUBSCRIBE_RXEN       = 0;
+		NRF_RADIO->SUBSCRIBE_TXEN       = 0;
+		NRF_RADIO->SUBSCRIBE_DISABLE    = 0;
+	}
+}
+#endif /* CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL */
+
+void radiant_nrf_gate_on_grant_end(void)
+{
+	/*
+	 * Hand the peripheral back in the state it was lent in. The interrupt
+	 * mask is the part that matters and the part that was missed: two bits
+	 * left set in RADIO->INTENSET are two bits set while somebody else is
+	 * transmitting on the same radio, and the SoftDevice Controller asserts
+	 * within milliseconds of meeting them. See radiant_radio_enable().
+	 *
+	 * Everything else this operation programmed - the (D)PPI connections and
+	 * the shorts - is torn down by deliver_terminal() on the ordinary path;
+	 * this runs on EVERY path that ends a grant, including the ones where no
+	 * terminal was delivered because none was owed.
+	 *
+	 * ⚠ EXACTLY OUR OWN BITS, NEVER ~0. THIS REGISTER IS SHARED.
+	 *
+	 * nrf_radio_int_disable() writes INTENCLR00 - line 0 - and line 0 is
+	 * MPSL's: nrf/subsys/mpsl/init/mpsl_init.c defines MPSL_RADIO_IRQn as
+	 * RADIO_0_IRQn on this part. So the SoftDevice Controller's own interrupt
+	 * configuration lives in the same register as ours, and clearing it with
+	 * ~0 on the way out of a timeslot hands the controller back a radio with
+	 * its interrupts switched off. It then misses its own events, and
+	 * asserts.
+	 *
+	 * That is a trap this file walked into while fixing the opposite bug: the
+	 * first version of this function used ~0, which replaced "we leave our
+	 * bits set in the controller's register" with "we clear the controller's
+	 * bits out of our register" - a different way to break the same thing,
+	 * with the same symptom.
+	 */
+	nrf_radio_int_disable(NRF_RADIO, NRF_RADIO_INT_END_MASK |
+					 NRF_RADIO_INT_DISABLED_MASK |
+					 NRF_RADIO_INT_RXREADY_MASK);
+
+	/*
+	 * AND HAND IT BACK IDLE, NOT MERELY QUIET. THIS IS THE CONTRACT BOTH
+	 * PUBLISHED TIMESLOT IMPLEMENTATIONS KEEP AND THIS FILE DID NOT.
+	 *
+	 * Masking the interrupt stops us hearing the radio. It does not stop the
+	 * radio. Two published ESB-beside-BLE timeslot samples - Nordic's
+	 * too1/ncs-esb-ble-mpsl-demo and inductivekickback/ncs_ble_esb_demo -
+	 * both end every single timeslot by putting the peripheral all the way
+	 * back to DISABLED, and the first does it in this exact order:
+	 *
+	 *     irq_disable(RADIO_IRQn);
+	 *     NRF_RADIO->SHORTS = 0;
+	 *     NRF_RADIO->EVENTS_DISABLED = 0;
+	 *     NRF_RADIO->TASKS_DISABLE = 1;
+	 *     while (NRF_RADIO->EVENTS_DISABLED == 0);
+	 *
+	 * Neither is being careful for its own sake: the radio it hands back is
+	 * the radio the SoftDevice Controller picks up microseconds later.
+	 *
+	 * Two things leak without it, and both are live on the paths that reach
+	 * here. SHORTS is the worse of them. deliver_terminal() clears it, but
+	 * this function runs on EVERY path that ends a grant, including the ones
+	 * where no terminal was owed and none was delivered - a grant that ran
+	 * out under an armed receive, an EXTEND_FAILED, a session closing. On
+	 * those paths RADIO->SHORTS is still whatever program_rx() wrote, and a
+	 * short is a hardware edge from an event to a task that does not care
+	 * whose packet raised the event. Our END->DISABLE short left set is the
+	 * controller's next advertising packet ending and disabling the
+	 * controller's own radio, out from under it, with nothing logged
+	 * anywhere. That is a far better fit for "asserts about four
+	 * milliseconds after the first advertising event" than anything the ten
+	 * eliminated candidates offered.
+	 *
+	 * The second is the state itself. A window whose air ran out mid-receive
+	 * hands back a RADIO in RX, and MPSL's next owner configures a
+	 * peripheral that is not in the state its driver assumes.
+	 *
+	 * ORDER MATTERS AND IT IS THE SAMPLE'S ORDER. Interrupts are masked
+	 * first, above, so that the DISABLED this deliberately provokes cannot
+	 * be mistaken for an operation's terminal event; SHORTS is cleared
+	 * before the disable so the disable itself cannot chain into anything.
+	 *
+	 * radio_disable_now() is the existing bounded spin - it consumes the
+	 * event it raises and gives up against this backend's own 1 MHz TIMER
+	 * rather than spinning forever, which is what makes it safe to call from
+	 * inside a signal callback with a hand-back margin to meet.
+	 *
+	 * NEITHER REGISTER IS SHARED, which is why this is not the ~0 trap
+	 * described above wearing a different hat. INTENCLR00 is MPSL's line and
+	 * has to be touched a bit at a time; SHORTS and TASKS_DISABLE are the
+	 * RADIO's own and belong to whoever holds the timeslot, which until this
+	 * function returns is us.
+	 */
+	nrf_radio_shorts_set(NRF_RADIO, 0);
+	radio_disable_now();
+
+	/*
+	 * THE PENDING NVIC BIT IS DELIBERATELY *NOT* CLEARED, though the sample
+	 * clears it. The sample runs on a part where RADIO_IRQn is the timeslot
+	 * user's alone. Here line 0 is MPSL's as well, so NVIC_ClearPendingIRQ()
+	 * on it could swallow a controller interrupt - the same shared-register
+	 * mistake as ~0, one level up in the machine. It is not needed either:
+	 * our mask is clear and every event we raise is consumed above, so a
+	 * pending bit that does survive enters radio_isr() with kind == OP_NONE
+	 * and is dropped.
+	 */
+
+	/*
+	 * THE (D)PPI ENDPOINTS ARE *NOT* DETACHED HERE, AND THAT IS A KNOWN
+	 * REMAINING LEAK RATHER THAN A DECISION THAT THEY DO NOT MATTER.
+	 *
+	 * radio_endpoints_attach(false) belongs on this line by every argument
+	 * that put nrf_radio_int_disable() on the one above it. Adding it was
+	 * measured, and it stops the receive path dead: chunks=256, end ok=0,
+	 * deny=256, scan_us=94200 a chunk - every window running its full length
+	 * and never completing, which is the signature of the RADIO event that
+	 * ends a window not reaching the handler.
+	 *
+	 * So the leak is real and this is not the fix for it. Whatever restores
+	 * these six registers has to put them back in a state the in-flight
+	 * operation still works with, and simply writing back what alloc wrote is
+	 * not that. Left attached, ANT+ works and the SoftDevice Controller does
+	 * not; left detached, neither does. That is the honest state, recorded
+	 * here rather than as a silent omission.
+	 */
+}
+
+void radiant_nrf_gate_on_radio_irq(void)
+{
+	/*
+	 * Exactly the handler the NVIC would have entered, entered by hand.
+	 * radio_isr() already tests each event flag and clears what it consumes
+	 * - it is written to be idempotent across the part's two RADIO lines -
+	 * so being reached by this road rather than by the vector table changes
+	 * nothing it does. See the declaration in radiant_radio_nrf_gate.h for
+	 * why the vector is not ours inside a timeslot.
+	 */
+	radio_isr(NULL);
 }
 
 void radiant_nrf_gate_on_denied(void)

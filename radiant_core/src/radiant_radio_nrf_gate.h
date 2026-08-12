@@ -255,6 +255,54 @@ void radiant_nrf_gate_on_denied(void);
  */
 void radiant_nrf_gate_finish_failed(void);
 
+/*
+ * THE RADIO INTERRUPT, DELIVERED BY THE ARBITER INSTEAD OF BY THE NVIC.
+ *
+ * This is the one thing about an arbitrated backend that is not visible
+ * anywhere in the arm path, and it is the difference between a window that
+ * completes and a window that does not.
+ *
+ * radiant_radio_nrf.c connects its handler to RADIO_0_IRQn and every terminal
+ * event in the file comes from there. Inside an MPSL timeslot that vector is
+ * MPSL's: the RADIO interrupt is delivered to the timeslot signal callback as
+ * MPSL_TIMESLOT_SIGNAL_RADIO, and the connected handler is never entered. So a
+ * receive window under the MPSL gate armed correctly, ran for its full length,
+ * and then simply never ended - END and DISABLED both fired, and nothing was
+ * listening.
+ *
+ * WHAT IT LOOKED LIKE, because it looked like several other things first: the
+ * scheduler credited the full dwell (scan_us 94 200 us a chunk) and recorded
+ * NO terminal at all - end ok=0 abrt=0 fail=0 - with every window's only
+ * terminal arriving later from the gate as DENIED. Read as a denial problem it
+ * is insoluble; the arbiter had refused nothing.
+ *
+ * A no-op in the direct build, where the NVIC delivers the interrupt to the
+ * handler that was connected to it and this is never called.
+ */
+void radiant_nrf_gate_on_radio_irq(void);
+
+/*
+ * THE GRANT IS OVER. GIVE THE PERIPHERAL BACK AS IT WAS LENT.
+ *
+ * Called on every path that ends a timeslot, before ACTION_END is returned -
+ * including the paths where no terminal event was delivered, because the
+ * peripheral has to be handed back whether or not an operation was using it.
+ *
+ * What it actually does is clear RADIO->INTENSET, and that is not
+ * housekeeping. On a direct build the interrupt mask can be set once at enable
+ * and left for ever, because the RADIO is ours for ever. Under arbitration
+ * those same bits stay set while the OTHER stack transmits on the same
+ * peripheral, and its events then raise interrupts nobody scheduled. The
+ * SoftDevice Controller does not survive it - "SoftDevice Controller ASSERT:
+ * 48, 1792", about five milliseconds after the first advertising event, on
+ * every boot. ANT+ alone never sees it, because with nothing else on the radio
+ * there is nothing else to raise the events, which is why it survived every
+ * measurement taken before an advertiser existed.
+ *
+ * A no-op in the direct build, where no grant ever ends.
+ */
+void radiant_nrf_gate_on_grant_end(void);
+
 #ifdef __cplusplus
 }
 #endif

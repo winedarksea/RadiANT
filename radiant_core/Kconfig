@@ -165,6 +165,85 @@ config RADIANT_CORE_BACKEND_NRF_GATE_MPSL
 	  moment an empty window closes - which the backend does, and which is a
 	  required line of the design rather than an optimisation.
 
+config RADIANT_CORE_NRF_NO_RADIO0_IRQ
+	bool "DIAGNOSTIC: leave the RADIO_0 NVIC line entirely to MPSL"
+	depends on RADIANT_CORE_BACKEND_NRF_GATE_MPSL
+	help
+	  The last cut of the bisection through radiant_radio_init() and
+	  radiant_radio_enable(), and the subtlest, because the line is shared by
+	  agreement rather than by ownership.
+
+	  RADIO_0 is MPSL's vector - mpsl_init.c connects it with
+	  irq_connect_dynamic() and disables it first - but mpsl.rst also makes
+	  the APPLICATION responsible for the RADIO interrupt when the timeslot
+	  API is used for RADIO access. So both statements are true and the
+	  question is who calls irq_enable(). This switch answers it by
+	  experiment instead of by reading.
+
+	  Never in a shipping image.
+
+config RADIANT_CORE_NRF_NO_GPPI
+	bool "DIAGNOSTIC: do not allocate the backend's (D)PPI connections"
+	depends on RADIANT_CORE_BACKEND_NRF
+	help
+	  The third cut of the same bisection, and the one that asks whether the
+	  backend's problem with another stack is a RESOURCE problem rather than
+	  a register one. It takes five channels out of the same pool MPSL
+	  allocates from (nrf/subsys/mpsl/hwres/mpsl_hwres.c calls straight
+	  through to nrfx_gppi_channel_alloc), and it takes them at init, before
+	  any other stack has started asking.
+
+	  A build with this set CANNOT TRANSMIT OR RECEIVE AT ALL - the window
+	  edges and the t_sync capture are all (D)PPI - so it is only ever useful
+	  beside RADIANT_CORE_GATE_MPSL_NO_SESSION, where nothing was going to be
+	  received anyway, to ask whether some other stack is healthy without it.
+
+	  Never in a shipping image.
+
+config RADIANT_CORE_NRF_NO_HFXO_HOLD
+	bool "DIAGNOSTIC: do not take the backend's permanent HFXO request"
+	depends on RADIANT_CORE_BACKEND_NRF
+	help
+	  The second half of the same bisection as
+	  RADIANT_CORE_GATE_MPSL_NO_SESSION, and the two together split
+	  radiant_radio_init() down the middle: this removes what it does to the
+	  CLOCK, that removes what it does through MPSL.
+
+	  A build with this set has WORSE ANT+ TIMING, not broken ANT+ timing,
+	  and the difference is why it is a diagnostic rather than an option. The
+	  spike in radiant_core/spike/mpsl_arb measured the 1 MHz timebase
+	  running 0.42 % fast on the internal RC between grants without this
+	  request - about a millisecond of slot-placement error per ANT+ period,
+	  and it appears in no counter anywhere. So a run with this set is
+	  answering a question about some OTHER stack's health, never about
+	  ANT+'s.
+
+	  Never in a shipping image.
+
+config RADIANT_CORE_GATE_MPSL_NO_SESSION
+	bool "DIAGNOSTIC: build the MPSL gate but never open a timeslot session"
+	depends on RADIANT_CORE_BACKEND_NRF_GATE_MPSL
+	help
+	  A bisection aid. The image builds and boots exactly as the arbitrated
+	  one does - the RADIO is configured, the HFXO request is taken, the
+	  TIMER runs - but no timeslot session is opened, so no ANT+ operation
+	  can ever be granted the air. The dongle answers every command and hears
+	  nothing.
+
+	  It exists to split one question in two. When something else on the chip
+	  misbehaves beside this backend, the candidates are "what the backend
+	  does to the RADIO at initialisation" and "what the timeslot session
+	  does while it runs", and those need completely different fixes. With
+	  this set, only the first is present.
+
+	  It answered exactly that question once: with a BLE advertiser running,
+	  the SoftDevice Controller asserts either way, which puts the fault in
+	  initialisation rather than in arbitration. Keeping the switch is
+	  cheaper than rediscovering that it was the useful cut.
+
+	  Never in a shipping image. A dongle built this way is a dongle that
+	  cannot receive.
+
 # ── The ISR stack, and it is a REQUIREMENT rather than a tuning knob ─────────
 #
 # MPSL delivers SIGNAL_START on the INTERRUPT STACK, and that is where the

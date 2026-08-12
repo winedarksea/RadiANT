@@ -20,10 +20,12 @@
  * noise". An A/B run cannot see the failure this refactor is most likely to
  * cause. A file that provably changes nothing can.
  *
- * radiant_nrf_gate_on_grant() and radiant_nrf_gate_on_denied() are never called
- * from here: GATE_PENDING is a state this gate cannot enter, so there is
- * nothing to call them from. They exist for the arbitrated gate and are
- * referenced by no path in this build.
+ * radiant_nrf_gate_on_grant(), radiant_nrf_gate_on_denied() and
+ * radiant_nrf_gate_on_radio_irq() are never called from here: GATE_PENDING is a
+ * state this gate cannot enter, and the RADIO interrupt reaches its connected
+ * handler through the NVIC in the ordinary way because no arbiter has taken the
+ * vector. They exist for the arbitrated gate and are referenced by no path in
+ * this build.
  */
 
 #include "radiant_radio_nrf_gate.h"

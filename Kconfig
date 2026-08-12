@@ -485,6 +485,77 @@ config ANT_DONGLE_FLASH_LOG_OFFSET_ALT
 
 endif # ANT_DONGLE_FLASH_LOG
 
+config ANT_DONGLE_BLE_COEX_LOAD
+	bool "Start a BLE advertiser that competes with ANT+ for the radio"
+	depends on BT && BT_BROADCASTER
+	# Legal with the arbitrated backend, and legal with no real radio at all
+	# (RADIANT_BACKEND=null), which is the configuration that isolates "is
+	# this fault in the radio backend or in the application" - a question
+	# that took a whole round to answer the slow way. It is ONLY forbidden
+	# beside the DIRECT nrf backend, where two stacks would drive the RADIO
+	# with no arbiter between them: not a coexistence measurement, a
+	# collision.
+	depends on !RADIANT_CORE_BACKEND_NRF || RADIANT_CORE_BACKEND_NRF_GATE_MPSL
+	help
+	  A bench instrument, not a feature. Brings the controller up and
+	  advertises, so that the multiprotocol plan's P3 coexistence gate has a
+	  second stack that actually WANTS the radio.
+
+	  This exists because the obvious configuration does not test anything.
+	  CONFIG_BT=y on its own links the SoftDevice Controller in and leaves it
+	  asleep, asking MPSL for no air at all - measured, and it produced a
+	  sweep-rate ratio of exactly 1.000 between "BLE off" and "BLE on"
+	  builds, which is a gate that cannot fail.
+
+	  It depends on the MPSL gate rather than merely coexisting with it: with
+	  the direct gate the two stacks would both drive the RADIO with no
+	  arbiter between them, which is not a coexistence measurement but a
+	  collision.
+
+	  Not the heart-rate strap. That is a separate workstream with its own
+	  state machine (SIG HRS beside ANT+ 0x78, ANT+ suppressed once a
+	  connection is live); this advertises and nothing else, so that a loss
+	  figure taken against it measures arbitration and not profile logic.
+
+	  Off by default, and no shipping image selects it.
+
+config ANT_DONGLE_BLE_COEX_LOAD_INTERVAL_MS
+	int "BLE advertising interval for the coexistence load, ms"
+	depends on ANT_DONGLE_BLE_COEX_LOAD
+	range 20 10000
+	default 100
+	help
+	  How often the advertiser asks for the air, and therefore how much of it
+	  the second stack demands. An advertising event is three channels of
+	  about 400 us plus ramp, so roughly 1.3 ms per interval: about 4 % of
+	  the air at 30 ms and 0.4 % at 300 ms.
+
+	  Configurable rather than fixed because the question the gate exists to
+	  answer is not whether ANT+ survives one setting - it is where it stops
+	  surviving, and a hard-coded number answers that once and then hides it.
+
+	  100 ms is a common real-world connectable-advertising rate and sits in
+	  the middle of that range.
+
+config ANT_DONGLE_BLE_COEX_LOAD_DELAY_S
+	int "Seconds after boot before the coexistence load starts"
+	depends on ANT_DONGLE_BLE_COEX_LOAD
+	range 0 600
+	default 8
+	help
+	  The delay is an instrument rather than caution. Starting the controller
+	  inside main() makes "ANT+ never worked" and "ANT+ stopped when BLE
+	  started" the same observation, because both are true from the first
+	  millisecond; with the load arriving seconds later the console shows the
+	  sweep running, then the controller starting, and then whatever happens
+	  next - which is the difference between an ordering bug at
+	  initialisation and a real contention failure, and those need entirely
+	  different fixes.
+
+	  8 s is comfortably past enumeration and the host's channel setup, so a
+	  bench run has a known-good period in front of the load to compare
+	  against. 0 starts it as early as the work queue runs.
+
 endmenu
 
 # The hostless node's identity and epoch (compat-C6). Its own file and its own

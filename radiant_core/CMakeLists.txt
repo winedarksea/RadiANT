@@ -154,18 +154,10 @@ elseif(CONFIG_RADIANT_CORE_BACKEND_NRF)
   # beside it - see src/radiant_radio_nrf_gate.h for why the file is not split.
   # Exactly one of these is ever compiled.
   if(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
-    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/radiant_radio_nrf_gate_mpsl.c")
-      # Loud, and naming the phase, on the same terms as the FATAL_ERROR this
-      # replaces. What it replaces was about a whole missing BACKEND; this is
-      # about a missing front end, which is the smaller and more accurate claim
-      # now that the seam exists.
-      message(FATAL_ERROR
-        "radiant_core: CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL is selected "
-        "but src/radiant_radio_nrf_gate_mpsl.c does not exist - it is P3 of "
-        "the multiprotocol plan, and its head and tail margins are derived "
-        "from the P0 spike (radiant_core/spike/mpsl_arb) rather than guessed. "
-        "Leave the symbol off for the direct build.")
-    endif()
+    # The FATAL_ERROR that used to stand here named P3 as unwritten. P3 is
+    # written and receives - see the file's own header for the measurement and
+    # for the fourteen bugs between those two states - so the refusal is gone
+    # and the file is simply compiled.
     zephyr_library_sources(src/radiant_radio_nrf_gate_mpsl.c)
   else()
     zephyr_library_sources(src/radiant_radio_nrf_gate_direct.c)

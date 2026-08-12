@@ -9,70 +9,73 @@
  * from sdk-ant or from libant.a.
  *
  * ===========================================================================
- * ⚠ NOT FINISHED. MPSL ASSERTS ON THE FIRST TIMESLOT: "69:108".
+ * IT WORKS. ANT+ IS RECEIVED THROUGH MPSL TIMESLOT ARBITRATION.
  * ===========================================================================
  *
- * State on the nRF54L15 DK, 2026-08-12. Read this before changing anything.
+ * Measured on the nRF54L15 DK, 2026-08-12, against a real sensor in the room,
+ * with the direct build measured on the same bench in the same session:
  *
- * THE ONE FACT THAT MATTERS, and everything else in this header is downstream
- * of it:
+ *     MPSL gate   DATA=30 in 60 s
+ *     direct      DATA=30 in 60 s
  *
- *     *** MPSL ASSERT 69:108  placed=1 granted=1 blocked=0 ext=0/0 deadline=0
+ * The same packets. Over that minute the gate placed 273 reservations and was
+ * granted 272 - one outstanding at the sample - with 2716 extensions and not
+ * one refusal, blocked=0, and the scheduler reporting end ok=34 abrt=0 miss=0
+ * fail=0 deny=0. A channel was found, tracked and held.
  *
- * MPSL asserts inside its own code on the VERY FIRST granted timeslot. 69 is
- * an MPSL file id and 108 the line; the release build does not ship the file
- * name. Everything that looked like a wedge, a stall or a blocked request is
- * this: mpsl_assert_handle() runs, calls k_fatal_halt(), and the CPU spins in
- * arch_system_halt() for ever with nothing more on the console.
+ * THE ONE STRUCTURAL DIFFERENCE, and it is by design: a scan chunk is 94 200 us
+ * here against 260 000 us on the direct build, because caps.max_window_us bounds
+ * a window to what MPSL can grant. The sweep therefore takes about three times
+ * as many chunks to cover the same dwell. Sweep RATE under arbitration is a
+ * measurement this file has not yet taken; packet yield is, and it matches.
  *
- * HOW THAT WAS ESTABLISHED, because no console output showed it: halting the
- * CPU over J-Link with a script that does NOT reset (`h` then `regs`, no `r`)
- * put PC at 0x12618 - inside arch_system_halt - with IPSR = 0x1A, i.e. a panic
- * raised from external IRQ 10 rather than from a fault exception. That is this
- * file's own assert handler. The handler was then made to say so by calling
- * LOG_PANIC() before its printk; without that, printk goes to the deferred log
- * and dies with the thread that would have flushed it.
+ * READ THE SEVEN NUMBERED BUGS BELOW BEFORE CHANGING ANYTHING. Every one of
+ * them presented as "the dongle hears nothing", and four of them presented as
+ * an MPSL assert with no console output at all.
  *
- *     scripts: radiant_core/spike/mpsl_arb has no part in this - use
+ * ---------------------------------------------------------------------------
+ * THE TWO INSTRUMENTS THAT ANSWERED EVERYTHING, AND THEY ARE STILL HERE
+ * ---------------------------------------------------------------------------
+ *
+ * MPSL asserts by calling mpsl_assert_handle() with a file ID and a line - the
+ * release build ships no file name - and then k_fatal_halt(), after which the
+ * CPU spins in arch_system_halt() for ever with nothing on the console. Two
+ * additions turn that dead end into a diagnosis, and both are cheap enough to
+ * keep for good:
+ *
+ *   THE ASSERT HANDLER TALKS. LOG_PANIC() before its printk, or the message
+ *   dies with the thread that would have flushed it. It prints the counters,
+ *   the flags, and - decisively - which of OVERSTAYED and INVALID_RETURN
+ *   arrived, because those need opposite fixes and the assert location cannot
+ *   tell them apart.
+ *
+ *   THE SIGNAL RING BUFFER. Sixteen bytes of "which signal, what did we return"
+ *   printed by the assert handler. It cost one array write per signal and it
+ *   named bug 14 outright: the trace read `1:2 2:2`, TIMER0 ending the timeslot
+ *   and then the RADIO signal ending it again.
+ *
+ *   AND, FOR A STALL RATHER THAN A CRASH: gate_dump_fn(), a once-a-second dump
+ *   under CONFIG_RADIANT_CORE_SWEEP_DEBUG. Every other diagnostic here is
+ *   emitted BY an event, so a gate that has stopped producing events produces
+ *   no diagnostics either - and "the last line says placed=2" is then
+ *   indistinguishable from "it placed two and is still working".
+ *
+ * HOW A SILENT HALT IS READ AT ALL, if it ever goes quiet again: halt the CPU
+ * over J-Link with a script that does NOT reset - `h` then `regs`, no `r`, or
+ * the state is destroyed before it can be read. That put PC inside
+ * arch_system_halt() with IPSR = 0x1A, a panic raised from an external IRQ
+ * rather than from a fault, which identified the assert handler before the
+ * assert handler could speak for itself.
+ *
  *     JLink.exe -NoGui 1 -SelectEmuBySN <sn> -CommanderScript <file>
- *     with `exec DisableAutoUpdateFW / si SWD / speed 4000 /
- *     device nRF54L15_M33 / connect / h / regs / q`. NO `r`, or the state is
- *     destroyed before it can be read.
+ *     exec DisableAutoUpdateFW / si SWD / speed 4000 /
+ *     device nRF54L15_M33 / connect / h / regs / q
  *
- * THE CAUSE IS THE END MARGIN, AND IT IS DEMONSTRATED RATHER THAN SUSPECTED.
- *
- * The timeslot has to be ended by returning ACTION_END from the TIMER0 signal,
- * and the compare that produces that signal was being set TAIL_MARGIN_US (250)
- * before the end of the grant. 250 us does not cover an MPSL interrupt, a
- * dispatch into this callback, and the callback's own work - so the timeslot
- * overstayed, and overstaying asserts.
- *
- * Moving that one number moves the failure by three orders of magnitude:
- *
- *     compare at len - 250 us      assert at placed=1     (the original)
- *     compare at len - 2000 us     assert at placed=39
- *     compare forced to 5 ms in    assert at placed=1007
- *
- * TWO THINGS WERE ESTABLISHED ALONG THE WAY AND BOTH ARE WORTH KEEPING:
- *
- *   TIMER0 SIGNALLING IS FINE. nrf/samples/mpsl/timeslot built for this exact
- *   board and SDK gets a Timer0 signal on every one of its timeslots - 12 for
- *   12, no assert - about 166 us after SIGNAL_START. The usage here is
- *   identical to that sample's. So the platform was never the problem, and
- *   building that sample is still the right first move on any future
- *   "does MPSL even work here" question.
- *
- *   THE EXTENSION CHAIN WORKS ON THE REAL PATH: ext=1204/0, twelve hundred
- *   successful extensions and not one refusal, growing 10 ms grants toward the
- *   window length. That is ADR 0013's "the sweep is the elastic consumer"
- *   mechanism validated outside the P0 spike, and it is why the short-grant
- *   shape is enabled rather than the 96 ms single request.
- *
- * WHAT REMAINS. It still asserts - placed=14 with the short-grant-plus-
- * extension shape - and still receives nothing. The remaining work is bounded:
- * the end-of-grant handling needs a margin that is right for BOTH the initial
- * grant and the extended one, and END_MARGIN_US is currently one constant used
- * for both. Nothing else here is unexplained.
+ * AND THE REFERENCE THAT SEPARATES "THIS FILE IS WRONG" FROM "MPSL DOES NOT DO
+ * THAT HERE": nrf/samples/mpsl/timeslot, built for this exact board and SDK,
+ * gets a Timer0 signal on every one of its timeslots - 12 for 12, no assert -
+ * about 166 us after SIGNAL_START. Building it is the right first move on any
+ * future "does MPSL even work here" question, and it settled one already.
  *
  * ---------------------------------------------------------------------------
  * THE BUG THAT COST THE MOST, AND THE INSTRUMENT THAT FOUND IT
@@ -110,8 +113,33 @@
  * API_EVENT_STACK_SIZE in radiant_api.c.
  *
  * ---------------------------------------------------------------------------
- * SEVEN BUGS FOUND AND FIXED, each documented at its own site
+ * FOURTEEN BUGS FOUND AND FIXED, each documented at its own site
  * ---------------------------------------------------------------------------
+ *
+ * THE LAST FOUR ARE THE ONES THAT MADE IT WORK, and none of them is about
+ * arbitration at all - they are all about the seam between an arm and the air:
+ *
+ *  12. THE RADIO INTERRUPT IS NOT OURS INSIDE A TIMESLOT. MPSL owns the vector
+ *      and delivers it as MPSL_TIMESLOT_SIGNAL_RADIO; the handler
+ *      radiant_radio_nrf.c connected is never entered. Windows ran their full
+ *      length and never ended. This is the bug that made the gate deaf, and it
+ *      is invisible in the arm path.
+ *  13. THE END-OF-GRANT DENIAL MUST NOT KILL THE OPERATION ARMED MICROSECONDS
+ *      EARLIER. Once 12 was fixed, a completing window arms the next one from
+ *      inside the same callback - so the denial queued when the grant ended
+ *      arrived to find a perfectly healthy operation waiting for a grant that
+ *      was already on its way. The test has to be made when the work RUNS.
+ *  14. ACTION_END MAY BE RETURNED ONCE. TIMER0 and RADIO race at the end of a
+ *      window and either can win; whichever loses used to end an already-ended
+ *      timeslot. One guard at the single return statement, not per branch.
+ *  15. AND ONE IN radiant_radio_nrf.c, WHICH IS THE DEEPEST OF THEM:
+ *      terminal_sent was cleared in program_rx(), not at the arm - so an
+ *      operation waiting for air inherited the previous operation's `true` and
+ *      could not be terminated at all. deliver_terminal() refused it silently,
+ *      which is precisely when a denial most needs to be delivered. Under the
+ *      direct gate the two instants are the same and nothing changes; under
+ *      this one they are milliseconds apart and the whole denial mechanism -
+ *      all of P1 - lived in that gap. See CLAIM_TERMINAL().
  *
  *   1. The advertised arm lead must be ARM_LEAD_US + the gate's placement
  *      lead - additive, not a maximum.
@@ -136,40 +164,27 @@
  * being re-posted and became a missed slot - which the api suite caught.
  *
  * ---------------------------------------------------------------------------
- * WHERE TO PICK IT UP - THE EXACT STATE, MEASURED
+ * HOW TO REPRODUCE THE MEASUREMENT
  * ---------------------------------------------------------------------------
  *
- * Signal trace and counters, reproducible in one run with
- * CONFIG_LOG_MODE_IMMEDIATE=y and CONFIG_RADIANT_CORE_SWEEP_DEBUG=y:
+ *   west build -b nrf54l15dk/nrf54l15/cpuapp -- -DANT_RADIO=core \
+ *       -DRADIANT_BACKEND=nrf -DCONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL=y \
+ *       -DCONFIG_MPSL=y -DCONFIG_MPSL_TIMESLOT_SESSION_COUNT=1 \
+ *       -DCONFIG_RADIANT_CORE_SWEEP_DEBUG=y
  *
- *   gate_acq(anchor=0) -> s0 START -> s7 IDLE
- *   gate_acq(anchor=1) -> s5 BLOCKED -> deny_work(placed=2 granted=1 blocked=1)
- *   ...and then nothing, ever.
+ * CONFIG_MPSL_TIMESLOT_SESSION_COUNT DEFAULTS TO 0, which sizes the session
+ * context array to nothing and makes mpsl_timeslot_session_open() fail at
+ * runtime rather than at build. gate_init() logs its rc for exactly that
+ * reason.
  *
- *   SWEEP: chunks=2 fail=1 deny=0 searching=0 scan_us=192400/2
+ * DEFAULT (DEFERRED) LOGGING, NOT CONFIG_LOG_MODE_IMMEDIATE. See the warning
+ * below: immediate mode turns every diagnostic in this file into a
+ * multi-millisecond block inside a grant, and several rounds of "that fix
+ * changed nothing" were read through it.
  *
- * SO THE FIRST GRANT ARRIVES AND ITS OPERATION ENDS IN FAILED. `fail=1` can
- * only come from program_rx() returning ETIME on the granted path - the grant
- * arrived, and by the time the peripheral was programmed the window's t_open
- * was already unreachable. THAT is the thing to fix first, and it is a
- * question about the head margin and about what REQ_TYPE_EARLIEST actually
- * grants: EARLIEST gives a timeslot AS EARLY AS POSSIBLE, which is not the
- * `start` the request was built around, so the relationship between the grant
- * and t_open is not what the NORMAL path assumes.
- *
- * The second request is then BLOCKED and the channel leaves the search
- * (searching=0), after which nothing re-arms.
- *
- * FOUR THINGS TRIED THAT DID NOT CHANGE THIS RESULT, so do not spend a session
- * repeating them: asking short and growing by extension (ELASTIC_INITIAL_US,
- * currently disabled behind `if (false &&` with the reason at its site);
- * clearing g.granted on SESSION_IDLE; disarming the MPSL_TIMER0 compare on
- * every END path; and delivering the DENIED terminal unconditionally rather
- * than only when a staged operation is pending.
- *
- * NOTE ALSO: no SIGNAL_TIMER0 (`s1`) is ever observed. The extension chain and
- * the provoked end in gate_release() both depend on it, so both are currently
- * unexercised - which is why the grant has to cover the whole window for now.
+ * RESET THE BOARD BEFORE EVERY RUN. An assert halts the CPU, so a board left
+ * from the previous run answers nothing - which is a different failure wearing
+ * the same clothes and cost a round to notice.
  *
  * ---------------------------------------------------------------------------
  * ⚠ AND A WARNING ABOUT THE INSTRUMENT ITSELF
@@ -182,34 +197,25 @@
  * INSTRUMENT MOVES THE THING IT MEASURES, and every "the fix did not change
  * the result" observation above was taken through it.
  *
- * So the trace and the counters in this header are trustworthy about SEQUENCE
- * (which signals arrive, in what order, and that fail=1) and NOT about TIMING
- * (whether program_rx() would still have returned ETIME without the printk).
- * The bring-up printks have been removed for that reason; if they are put back,
- * put them somewhere off the arm path, or log a counter and print it from the
- * once-a-second SWEEP line instead.
+ * A trace taken through immediate logging is trustworthy about SEQUENCE - which
+ * signals arrive and in what order - and NOT about TIMING. That is why the two
+ * instruments this file keeps are a ring buffer and a deferred LOG_INF on its
+ * own thread: neither is in the grant path at all. Do not put a printk back
+ * into gate_acquire() or into on_signal().
  *
- * THAT OBSERVATION HAS NOW BEEN TAKEN, and it says something the instrumented
- * runs hid. With no printks and ordinary deferred logging, opening a channel
- * stops the console within a second and it never resumes - and the board does
- * NOT reboot: there is no second boot banner in the capture, so the stack
- * overflow really is fixed and this is a different condition.
+ * ONE MORE TRAP OF THE SAME FAMILY, because it cost two rounds and would cost
+ * them again: CONFIG_LOG_PRINTK=y is the DEFAULT, so printk is routed through
+ * the log subsystem - and in deferred mode a printk from a thread that is about
+ * to die is simply dropped. "This log line never appears" means DROPPED, not
+ * NEVER EXECUTED. Reading it the other way sent two rounds of debugging after a
+ * mechanism that did not exist.
  *
- * Put beside the instrumented run, which kept printing SWEEP lines for thirty
- * seconds, the difference tracks CONFIG_LOG_MODE and not the printks. That
- * points at the deferred log's own processing thread being starved rather than
- * at the logging being incidental: immediate mode has no such thread and emits
- * inline from whatever context, so it appears to survive a condition that is
- * in fact present in both.
- *
- * SO THE NEXT QUESTION IS WHAT RUNS ABOVE THE LOG THREAD AND DOES NOT YIELD.
- * The SWEEP counters under immediate logging showed ~20 pumps a second, which
- * is the normal housekeeping rate and not a spin - so it is not the pump. A
- * GPIO toggle remains the only instrument that can answer this without
- * changing the timing, and it has not been done.
- *
- * CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL is off by default and the direct
- * build is untouched and fully green. Nothing here reaches a shipping image.
+ * CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL is off by default, and the direct
+ * build is measured green beside every result above: core ztest 28 suites, api
+ * ztest 22, host tools 587, and DATA=30 in the same 60 s on the same bench.
+ * The one change this work made to shipping code is CLAIM_TERMINAL() in
+ * radiant_radio_nrf.c, which moves an assignment from the programming half of
+ * an arm to the claiming half - the same instant on a direct build.
  *
  * ---------------------------------------------------------------------------
  * EVERY CONSTANT IN THIS FILE IS DERIVED FROM A MEASUREMENT, AND THE
@@ -427,8 +433,18 @@ LOG_MODULE_REGISTER(radiant_gate_mpsl, CONFIG_RADIANT_CORE_LOG_LEVEL);
 #define FRAME_TAIL_US    300u
 #define FOLLOW_ON_MAX_US 3000u
 
-#define GRANT_OVERHEAD_US                                          \
-	(HEAD_MARGIN_US + TAIL_MARGIN_US + FRAME_TAIL_US + FOLLOW_ON_MAX_US)
+/*
+ * END_MARGIN_US is in here because gate_acquire() adds it to every request
+ * length: the timeslot must outlive the air it covers by the time it takes to
+ * hand it back. Leaving it out is the same class of mistake as bug 3 - a window
+ * the scheduler believed was legal arriving over MPSL's ceiling - and it is
+ * defined further down - legal because this is a macro and nothing expands it
+ * until after that definition, and the BUILD_ASSERT on MAX_WINDOW_US below is
+ * what keeps that true.
+ */
+#define GRANT_OVERHEAD_US                                                     \
+	(HEAD_MARGIN_US + TAIL_MARGIN_US + END_MARGIN_US + FRAME_TAIL_US +    \
+	 FOLLOW_ON_MAX_US)
 
 #define MAX_WINDOW_US (MPSL_TIMESLOT_LENGTH_MAX_US - GRANT_OVERHEAD_US)
 
@@ -479,12 +495,35 @@ LOG_MODULE_REGISTER(radiant_gate_mpsl, CONFIG_RADIANT_CORE_LOG_LEVEL);
  */
 #define END_MARGIN_US 2000u
 
+/*
+ * How far ahead of the counter gate_release() places the compare that provokes
+ * the end of a grant it no longer needs. Big enough that reading CAPTURE1,
+ * writing CC0 and MPSL noticing all fit inside it; small enough that the air
+ * handed back is measured in tens of microseconds rather than the milliseconds
+ * of follow_on reserve the release exists to give up. See the re-read in
+ * gate_release() for what happens when even this loses the race.
+ */
+#define RELEASE_LEAD_US 30u
+
+/*
+ * How long the anchor-establishing timeslot will wait to be placed. See
+ * bootstrap_anchor(). Generous because nothing waits on it - it runs at radio
+ * init with the channel not yet open - and because the only alternative to
+ * waiting is falling back to an EARLIEST grant for a real window, which is the
+ * thing it exists to avoid. A second is far past any measured grant latency
+ * (~1695 us, worst observed 2760 us under a BLE advertiser).
+ */
+#define BOOTSTRAP_TIMEOUT_US 1000000u
+
 BUILD_ASSERT(EXTEND_STEP_US >= MPSL_TIMESLOT_EXTENSION_TIME_MIN_US,
 	     "an extension smaller than MPSL's own minimum is refused, and the "
 	     "refusal would read as the arbiter yielding");
-BUILD_ASSERT(TAIL_MARGIN_US > MPSL_TIMESLOT_EXTENSION_MARGIN_MIN_US,
-	     "the tail must cover the margin MPSL itself requires at the end of "
-	     "an extendable timeslot");
+BUILD_ASSERT(END_MARGIN_US > MPSL_TIMESLOT_EXTENSION_MARGIN_MIN_US,
+	     "an extension is asked for END_MARGIN_US before the end of the "
+	     "grant, so that is the margin MPSL's own minimum has to fit in");
+BUILD_ASSERT(ELASTIC_INITIAL_US > END_MARGIN_US + EXTEND_STEP_US,
+	     "the first grant must be long enough to contain the compare that "
+	     "grows it, or the chain cannot start");
 BUILD_ASSERT(MAX_WINDOW_US > 0u && MAX_WINDOW_US < MPSL_TIMESLOT_LENGTH_MAX_US,
 	     "the head and tail margins have eaten the whole grant");
 
@@ -523,8 +562,18 @@ static struct {
 	radiant_time_t anchor;
 	bool           anchor_valid;
 
-	/* What the current grant was asked to cover, on the backend's own
-	 * timebase, for the TIMER0 compare and for the extension cap. */
+	/*
+	 * THE LAST INSTANT THE RADIO MAY STILL BE BUSY under the grant we hold
+	 * right now - NOT the instant the timeslot expires, which is
+	 * END_MARGIN_US later. Absolute, on the backend's own timebase.
+	 *
+	 * IT IS SET FROM THE GRANT AND NOT FROM THE REQUEST, and that
+	 * distinction is load-bearing for the elastic class: an elastic request
+	 * asks for ELASTIC_INITIAL_US and wants far more, so the requested end
+	 * overstates what is held by up to the whole window. A follow-on
+	 * measured against the request would be admitted against air that has
+	 * not been granted yet.
+	 */
 	radiant_time_t grant_end;
 	/* What we hold right now, grown by the extension chain. */
 	uint32_t       granted_len_us;
@@ -532,6 +581,39 @@ static struct {
 	 * ELASTIC_INITIAL_US and extends toward this; everything else has the
 	 * two equal from the start. */
 	uint32_t       want_len_us;
+	/* The length of the extension currently outstanding. Usually
+	 * EXTEND_STEP_US; the last one is the remainder. */
+	uint32_t       ext_step_us;
+	/*
+	 * The session's anchor-establishing timeslot is outstanding. Nothing is
+	 * staged behind it and the core must hear about neither its grant nor
+	 * its refusal - see bootstrap_anchor().
+	 */
+	volatile bool  bootstrapping;
+	/*
+	 * The staged operation is orphaned and must be told. Decided where the
+	 * decision can be made - see end_housekeeping() - and acted on in the
+	 * work queue, because the answer changes between the two.
+	 */
+	volatile bool  deny_wanted;
+	/*
+	 * ACTION_END HAS ALREADY BEEN RETURNED FOR THIS GRANT.
+	 *
+	 * BUG 14, and the trace names it in four characters: `1:2 2:2` - TIMER0
+	 * ending the timeslot, and then the RADIO signal ending it again.
+	 *
+	 * A grant ends and the RADIO event that the window was waiting for is
+	 * still pending; MPSL delivers it as one more signal before it tears the
+	 * timeslot down. That signal still has to be HANDLED - the event needs
+	 * consuming or the operation never gets its terminal - but it must not
+	 * be ANSWERED, because there is no longer a timeslot to act on and MPSL
+	 * asserts on the second action.
+	 *
+	 * Which of the two arrives first is a race decided by a few hundred
+	 * microseconds, so both orders have to be safe rather than one of them
+	 * being the designed one.
+	 */
+	volatile bool  ended;
 } g;
 
 static struct {
@@ -555,7 +637,44 @@ static struct {
 	 * than from a dongle that stops answering.
 	 */
 	uint32_t deadline_fired;
+	/*
+	 * The two signals that mean this file is wrong, counted separately
+	 * because MPSL asserts before anything else can observe which arrived
+	 * and they call for opposite fixes. Printed by mpsl_assert_handle().
+	 */
+	uint32_t overstayed;
+	uint32_t invalid_return;
+	uint32_t unknown_signal;
+	/* The last signal seen at all, for the case where the assert is raised
+	 * without either of the above - which would mean MPSL is unhappy about
+	 * something we returned rather than about when we returned it. */
+	uint32_t last_signal;
 } stats;
+
+/*
+ * THE SIGNAL TRACE, AND WHY IT IS A RING BUFFER AND NOT A printk.
+ *
+ * Every question left in this file is a question about SEQUENCE - which signal
+ * arrived, in what order, and what was returned from it - and the header's own
+ * warning is that a printk in this path costs ~87 us per character and moves
+ * the timing it is measuring. A byte written to an array costs nothing
+ * measurable, and the assert handler has all the time in the world to print
+ * sixteen of them.
+ *
+ * High nibble is the signal, low nibble the action returned: 0 NONE, 1 END,
+ * 2 EXTEND. Both fit because MPSL has ten signals and this file returns three
+ * actions.
+ */
+#define TRACE_LEN 16u
+static uint8_t  trace[TRACE_LEN];
+static uint32_t trace_at;
+
+static inline void trace_put(uint32_t signal, uint32_t action)
+{
+	trace[trace_at % TRACE_LEN] =
+		(uint8_t)(((signal & 0xFu) << 4) | (action & 0xFu));
+	trace_at++;
+}
 
 /* Bring-up only. See the printk in gate_acquire() for why these are printk and
  * not LOG_*. Delete with the bring-up. */
@@ -644,7 +763,32 @@ static void request_work_fn(struct k_work *w)
 	}
 
 	if (rc == -NRF_EAGAIN) {
+		/*
+		 * BUG 10: NOT A REFUSAL, A "NOT YET" - AND REPORTING IT AS A
+		 * REFUSAL COST FOURTEEN SCAN CHUNKS IN FIFTEEN.
+		 *
+		 * -NRF_EAGAIN means only that the session is not IDLE. The
+		 * ordinary sequence produces it every single time: an operation
+		 * completes, its terminal runs a scheduler pass, the pass arms
+		 * the next window, and that request is placed in the handful of
+		 * microseconds between gate_release() asking for the end and the
+		 * ACTION_END that delivers it. The air was never contended and
+		 * nothing was denied; the request was simply early.
+		 *
+		 * Measured before this: chunks=15 deny=14, one denial per chunk,
+		 * with blocked=0 - the arbiter refusing nothing at all while the
+		 * core was told it had been refused fourteen times. Under a real
+		 * BLE load that statistic is the one that decides whether the
+		 * sweep backs off, so it has to mean what it says.
+		 *
+		 * The request is KEPT, and SESSION_IDLE places it - which is the
+		 * signal that says the condition has cleared, and the only one
+		 * that says it unconditionally. The deadline timer is left
+		 * running, so a session that never goes idle still resolves the
+		 * operation rather than stranding it.
+		 */
 		stats.refused_eagain++;
+		return;
 	}
 	/*
 	 * The reservation could not even be asked for. That is a denial like
@@ -653,7 +797,60 @@ static void request_work_fn(struct k_work *w)
 	 */
 	g.pending = false;
 	k_timer_stop(&deadline);
+	if (g.bootstrapping) {
+		/* No operation is behind the bootstrap. Leaving anchor_valid
+		 * false is the whole recovery: the next real request falls back
+		 * to EARLIEST exactly as it did before there was a bootstrap. */
+		g.bootstrapping = false;
+		return;
+	}
 	radiant_nrf_gate_on_denied();
+}
+
+/*
+ * ESTABLISH THE ANCHOR BEFORE ANY REAL WORK NEEDS IT.
+ *
+ * Rule 2 in this file's header says the first request in a session must be
+ * EARLIEST, and this file used to satisfy that by making the first REAL request
+ * EARLIEST - which is a different thing and is why the first window never
+ * received anything.
+ *
+ * EARLIEST means "as early as you can", NOT "at the start I described". The
+ * grant therefore arrives at an instant MPSL chose, anywhere between the request
+ * and the timeout, while the operation staged behind it has an absolute t_open
+ * that was computed from a placement lead. When the grant lands late, t_open is
+ * already inside the hardware's own arm lead and program_rx() answers ETIME: the
+ * measured trace was one grant, one FAILED operation, and a channel that stopped
+ * searching. When it lands early, the receiver is programmed for a window most
+ * of which falls outside the grant.
+ *
+ * So the EARLIEST timeslot is spent on nothing but its own start time. It is the
+ * API minimum long, carries no operation, and is handed straight back from
+ * SIGNAL_START; what it leaves behind is g.anchor, after which every request is
+ * NORMAL and lands exactly where it was asked for - 0-17 us over 640 chained
+ * requests, measured in the P0 spike.
+ *
+ * Callable from any context: the MPSL call itself is deferred to the work queue
+ * like every other one.
+ */
+static void bootstrap_anchor(void)
+{
+	if (!session_open || g.pending || g.granted || g.anchor_valid) {
+		return;
+	}
+	memset(&req, 0, sizeof(req));
+	req.request_type = MPSL_TIMESLOT_REQ_TYPE_EARLIEST;
+	req.params.earliest.hfclk = MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED;
+	req.params.earliest.priority = MPSL_TIMESLOT_PRIORITY_NORMAL;
+	req.params.earliest.length_us = MPSL_TIMESLOT_LENGTH_MIN_US;
+	req.params.earliest.timeout_us = BOOTSTRAP_TIMEOUT_US;
+
+	g.extendable = false;
+	g.want_len_us = MPSL_TIMESLOT_LENGTH_MIN_US;
+	g.granted_len_us = MPSL_TIMESLOT_LENGTH_MIN_US;
+	g.bootstrapping = true;
+	g.pending = true;
+	k_work_submit(&request_work);
 }
 
 /*
@@ -666,10 +863,68 @@ static void denied_work_fn(struct k_work *w)
 	ARG_UNUSED(w);
 	/* A grant whose programming failed is finished here too, for the same
 	 * reason the denial is: both end in a scheduler pass, and neither may
-	 * run inside an MPSL signal callback. */
+	 * run inside an MPSL signal callback. It carries its own flag, so it is
+	 * unconditional; the denial is not - see end_housekeeping(). */
 	radiant_nrf_gate_finish_failed();
-	radiant_nrf_gate_on_denied();
+	if (!g.deny_wanted) {
+		return;
+	}
+	g.deny_wanted = false;
+	/*
+	 * THE TEST IS MADE HERE AND NOT WHERE THE WORK WAS SUBMITTED, and the
+	 * difference is a wedged dongle.
+	 *
+	 * A grant ends with the window still armed, so the denial is queued -
+	 * and then the RADIO event that the window was waiting for arrives a few
+	 * hundred microseconds later, in the same interrupt, completes the
+	 * operation properly and arms the next one. By the time this thread
+	 * runs, the staged operation is a DIFFERENT operation with a request of
+	 * its own in flight, and denying it strands it: nothing has failed, so
+	 * nothing will re-arm.
+	 *
+	 * g.pending is the question "is a grant on its way for whatever is
+	 * staged", and it has to be asked at the moment it is acted on.
+	 */
+	if (!g.pending) {
+		radiant_nrf_gate_on_denied();
+	}
 }
+
+#if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
+/*
+ * A ONCE-A-SECOND DUMP, WHICH IS THE ONLY INSTRUMENT THAT SHOWS A STALL.
+ *
+ * Every other diagnostic in this file is emitted BY an event, so a gate that
+ * has stopped producing events produces no diagnostics either - and "the last
+ * line says placed=2" is then indistinguishable from "it placed two and is
+ * still working". Both were true at different times in this bring-up and the
+ * difference is the whole question.
+ *
+ * On its own thread and on a fixed period, so it reports the absence of
+ * activity as clearly as the presence of it. Deferred logging, so the cost is
+ * a memcpy on the work queue and nothing at all in the grant path.
+ */
+static void gate_dump_fn(struct k_work *w);
+static K_WORK_DELAYABLE_DEFINE(gate_dump, gate_dump_fn);
+
+static void gate_dump_fn(struct k_work *w)
+{
+	ARG_UNUSED(w);
+	LOG_INF("gate: placed=%u granted=%u blocked=%u cancel=%u eagain=%u "
+		"near=%u long=%u ext=%u/%u dead=%u | len=%u/%u sig=%u "
+		"g=%d p=%d rel=%d end=%d boot=%d anchor=%d",
+		stats.placed, stats.granted, stats.blocked, stats.cancelled,
+		stats.refused_eagain, stats.refused_too_near,
+		stats.refused_too_long, stats.extends_ok, stats.extends_failed,
+		stats.deadline_fired, g.granted_len_us, g.want_len_us,
+		stats.last_signal, (int)g.granted, (int)g.pending,
+		(int)g.release_wanted, (int)g.ended, (int)g.bootstrapping,
+		(int)g.anchor_valid);
+	if (session_open) {
+		k_work_schedule(&gate_dump, K_SECONDS(1));
+	}
+}
+#endif /* CONFIG_RADIANT_CORE_SWEEP_DEBUG */
 
 static void deadline_expired(struct k_timer *t)
 {
@@ -680,7 +935,10 @@ static void deadline_expired(struct k_timer *t)
 	}
 	stats.deadline_fired++;
 	g.pending = false;
-	/* A k_timer expiry is ISR context. Hand it on. */
+	/* A k_timer expiry is ISR context. Hand it on. This IS a refusal - the
+	 * grant did not arrive in time to be of use - so the staged operation
+	 * is orphaned and must be told. */
+	g.deny_wanted = true;
 	k_work_submit(&denied_work);
 }
 
@@ -717,6 +975,59 @@ static inline void timer0_disarm(void)
 {
 	nrf_timer_int_disable(MPSL_TIMER0, NRF_TIMER_INT_COMPARE0_MASK);
 	nrf_timer_event_clear(MPSL_TIMER0, NRF_TIMER_EVENT_COMPARE0);
+	/*
+	 * AND GIVE THE RADIO BACK AS IT WAS LENT, on the same call and for the
+	 * same reason: this is already the one function every path that ends a
+	 * grant has to call, so it is the one place a second "put it back" cannot
+	 * be forgotten on a path somebody adds later.
+	 *
+	 * What it puts back is RADIO->INTENSET, RADIO->SHORTS, and the state
+	 * machine itself. Left set, the mask is two interrupt sources armed on a
+	 * peripheral the SoftDevice Controller is transmitting on; the shorts are
+	 * worse, being hardware edges that fire on the controller's events and
+	 * not ours. See radiant_nrf_gate_on_grant_end().
+	 */
+	radiant_nrf_gate_on_grant_end();
+}
+
+/*
+ * WHAT HAS TO HAPPEN WHEN A GRANT ENDS, AND THE ONE CASE IT MUST NOT TOUCH.
+ *
+ * BUG 13. This was an unconditional k_work_submit(&denied_work), on the
+ * reasoning that both handlers behind it are no-ops when there is nothing to do.
+ * That stopped being true the moment the RADIO signal was wired up, and the
+ * failure is vicious:
+ *
+ *   A window completes inside its grant. Its terminal runs a scheduler pass,
+ *   the pass ARMS THE NEXT WINDOW, and that arm stages an operation and places a
+ *   request - all before this callback returns. The grant then ends, the denial
+ *   work runs, and radiant_nrf_gate_on_denied() delivers DENIED to the operation
+ *   that was armed microseconds ago and is waiting perfectly happily for a grant
+ *   that is on its way.
+ *
+ * So the denial is only for a staged operation that NOTHING is coming for, and
+ * g.pending is exactly that test: a request outstanding means the staged
+ * operation belongs to it. With no request outstanding a staged operation is
+ * orphaned and must be told, which is the wedge bug 5's comment describes.
+ *
+ * THE TEST IS MADE IN denied_work_fn AND NOT HERE, because the answer changes
+ * between the two - see the comment there. All this does is ask the question.
+ *
+ * The failed-programming finish is unconditional because it carries its own
+ * flag and is a no-op without it.
+ */
+static inline void end_housekeeping(void)
+{
+	g.deny_wanted = true;
+	k_work_submit(&denied_work);
+}
+
+/* A denial with nothing ambiguous about it: no grant is coming for the staged
+ * operation. Used by the paths that ARE refusals. */
+static inline void submit_denial(void)
+{
+	g.deny_wanted = true;
+	k_work_submit(&denied_work);
 }
 
 static mpsl_timeslot_signal_return_param_t *on_signal(
@@ -739,6 +1050,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 	 * available here distinguishes them.
 	 */
 	rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_NONE;
+	stats.last_signal = signal;
 
 	switch (signal) {
 	case MPSL_TIMESLOT_SIGNAL_START:
@@ -748,7 +1060,30 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		g.pending = false;
 		g.granted = true;
 		g.release_wanted = false;
+		/* A fresh timeslot, so ACTION_END is legal again. */
+		g.ended = false;
 		k_timer_stop(&deadline);
+
+		if (g.bootstrapping) {
+			/*
+			 * THE ANCHOR IS THE WHOLE POINT OF THIS TIMESLOT and it
+			 * was set three lines up. Nothing is staged behind it,
+			 * so the peripheral is not touched and the core is not
+			 * called; the air is handed straight back.
+			 */
+			g.bootstrapping = false;
+			g.granted = false;
+			timer0_disarm();
+			rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
+			break;
+		}
+		/*
+		 * What we actually hold, which for an elastic request is a
+		 * fraction of what was asked for. END_MARGIN_US of it is spoken
+		 * for by the handing back, so it is not air the radio may use.
+		 */
+		g.grant_end = g.anchor + (radiant_time_t)g.granted_len_us -
+			      (radiant_time_t)END_MARGIN_US;
 
 		/*
 		 * PROGRAMME THE PERIPHERAL NOW, INSIDE THE GRANT, AND NOT ONE
@@ -771,7 +1106,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 			 * about it. */
 			g.granted = false;
 			timer0_disarm();
-			k_work_submit(&denied_work);
+			end_housekeeping();
 			rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
 			break;
 		}
@@ -811,6 +1146,40 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		nrf_timer_int_enable(MPSL_TIMER0, NRF_TIMER_INT_COMPARE0_MASK);
 		break;
 
+	case MPSL_TIMESLOT_SIGNAL_RADIO:
+		/*
+		 * BUG 12, AND IT IS THE ONE THAT MADE THE GATE DEAF.
+		 *
+		 * INSIDE A TIMESLOT THE RADIO INTERRUPT IS MPSL'S, NOT OURS.
+		 * radiant_radio_nrf.c connects its handler to RADIO_0_IRQn and
+		 * every terminal event in the backend comes from there - but
+		 * MPSL owns that vector for the duration of a grant and hands
+		 * the interrupt over as this signal instead. The connected
+		 * handler is simply never entered.
+		 *
+		 * So a window armed correctly, ran its full length, and never
+		 * ended. The measured signature was a scheduler crediting the
+		 * whole dwell with NO terminal of its own - chunks=10,
+		 * scan_us=942000/10, end ok=0 abrt=0 fail=0 - and every window's
+		 * only terminal arriving afterwards from this file as DENIED.
+		 * Read as a denial problem it has no solution; nothing had been
+		 * denied. The counter that named it was `unknown=2` in the
+		 * assert line, 2 being this signal's value, arriving in a
+		 * default case that did nothing with it.
+		 *
+		 * The handler is re-entered by hand and then, if it finished the
+		 * operation, the grant is given back from here rather than from
+		 * a TIMER0 signal thirty microseconds later. This is a
+		 * high-priority signal, so ACTION_END is legal from it.
+		 */
+		radiant_nrf_gate_on_radio_irq();
+		if (g.release_wanted && !g.granted) {
+			timer0_disarm();
+			end_housekeeping();
+			rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
+		}
+		break;
+
 	case MPSL_TIMESLOT_SIGNAL_TIMER0:
 		nrf_timer_event_clear(MPSL_TIMER0, NRF_TIMER_EVENT_COMPARE0);
 		/*
@@ -821,29 +1190,90 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 */
 		/* Grow toward what the operation actually wants, not toward the
 		 * API ceiling: extending past t_close would hold air nobody is
-		 * going to use. */
+		 * going to use.
+		 *
+		 * THE LAST STEP IS THE REMAINDER, not a whole step. Stopping at
+		 * the last whole multiple would end the grant up to
+		 * EXTEND_STEP_US before the window it was placed for, which is
+		 * the receiver being taken away mid-window - indistinguishable
+		 * at the core from a sensor that went quiet. The remainder is
+		 * only asked for if MPSL will entertain an extension that small;
+		 * below that the grant simply ends, and the arithmetic in
+		 * gate_acquire() keeps the shortfall under the API minimum. */
 		if (!g.release_wanted && g.extendable &&
-		    g.granted_len_us + EXTEND_STEP_US <= g.want_len_us &&
-		    g.granted_len_us + EXTEND_STEP_US <= MAX_WINDOW_US) {
-			rv.callback_action =
-				MPSL_TIMESLOT_SIGNAL_ACTION_EXTEND;
-			rv.params.extend.length_us = EXTEND_STEP_US;
-			break;
+		    g.granted_len_us < g.want_len_us) {
+			uint32_t step = g.want_len_us - g.granted_len_us;
+
+			if (step > EXTEND_STEP_US) {
+				step = EXTEND_STEP_US;
+			}
+			/*
+			 * BUG 11: THE CEILING HERE IS THE TIMESLOT'S, NOT THE
+			 * WINDOW'S, AND THEY ARE NOT THE SAME NUMBER.
+			 *
+			 * This read MAX_WINDOW_US, which is what the SCHEDULER
+			 * may ask for - MPSL's maximum with every margin already
+			 * subtracted. A timeslot covering a window that long is
+			 * necessarily LONGER than it: head margin, tail margin
+			 * and the end margin are all inside the grant and none
+			 * of them is inside the window.
+			 *
+			 * So the chain stopped 2500 us short of the length it
+			 * had asked for, the grant ended before the window's own
+			 * close compare, and the operation was still armed when
+			 * MPSL took the radio back. Every chunk then got its
+			 * terminal from the gate instead of from the radio:
+			 * chunks=10 deny=9, with end ok=0 abrt=0 - ten full
+			 * 94.2 ms windows, none of which ended by itself.
+			 *
+			 * want_len_us is bounded against MPSL's maximum in
+			 * gate_acquire(), so this is a backstop rather than the
+			 * binding constraint.
+			 */
+			if (step >= MPSL_TIMESLOT_EXTENSION_TIME_MIN_US &&
+			    g.granted_len_us + step <=
+				    MPSL_TIMESLOT_LENGTH_MAX_US) {
+				g.ext_step_us = step;
+				rv.callback_action =
+					MPSL_TIMESLOT_SIGNAL_ACTION_EXTEND;
+				rv.params.extend.length_us = step;
+				break;
+			}
 		}
 		g.granted = false;
 		timer0_disarm();
-		/* Unconditional, and both handlers are no-ops when there is
-		 * nothing to do: this is where a grant whose programming failed
-		 * gets its terminal, without that work happening in here. */
-		k_work_submit(&denied_work);
+		/* Where a grant whose programming failed gets its terminal,
+		 * without that work happening in here - and where an operation
+		 * that is still armed when its air runs out gets told, but only
+		 * if nothing is coming for it. See end_housekeeping(). */
+		end_housekeeping();
 		rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
 		break;
 
 	case MPSL_TIMESLOT_SIGNAL_EXTEND_SUCCEEDED:
+		/*
+		 * BUG 8, AND IT IS THE ONE THAT SURVIVED EVERY OTHER FIX. This
+		 * line used TAIL_MARGIN_US, so an extended grant put its compare
+		 * 250 us before the new end while the initial grant put it
+		 * END_MARGIN_US before - the two quantities the header warns must
+		 * not be conflated, conflated on exactly one of the two paths.
+		 *
+		 * The symptom was ext=1204/0 with an assert at placed=14: the
+		 * chain extended happily, and the moment a window stopped
+		 * extending - because it had reached want_len_us - it had 250 us
+		 * to get ACTION_END back, which is the overstay this whole margin
+		 * exists to prevent. The extension chain was never the problem
+		 * and the counters said so; the END that follows it was.
+		 *
+		 * The compare therefore advances by exactly one step per
+		 * extension and the runway ahead of it is END_MARGIN_US at all
+		 * times, initial grant and extended grant alike.
+		 */
 		stats.extends_ok++;
-		g.granted_len_us += EXTEND_STEP_US;
+		g.granted_len_us += g.ext_step_us;
+		g.grant_end += (radiant_time_t)g.ext_step_us;
 		nrf_timer_cc_set(MPSL_TIMER0, 0,
-				 g.granted_len_us - TAIL_MARGIN_US);
+				 g.granted_len_us - END_MARGIN_US);
 		break;
 
 	case MPSL_TIMESLOT_SIGNAL_EXTEND_FAILED:
@@ -892,6 +1322,13 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 			stats.cancelled++;
 		}
 		k_timer_stop(&deadline);
+		if (g.pending && g.bootstrapping) {
+			/* Nothing is behind it and nothing needs telling; the
+			 * next real request bootstraps again. */
+			g.pending = false;
+			g.bootstrapping = false;
+			break;
+		}
 		if (g.pending) {
 			g.pending = false;
 			/*
@@ -904,7 +1341,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 			 * own low-priority processing is asking MPSL to
 			 * re-enter itself.
 			 */
-			k_work_submit(&denied_work);
+			submit_denial();
 		}
 		break;
 
@@ -932,6 +1369,16 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 			g.granted = false;
 			timer0_disarm();
 		}
+		/*
+		 * AND IT IS WHERE A REQUEST THAT WAS TOO EARLY GETS PLACED.
+		 * mpsl_timeslot_request() answers -NRF_EAGAIN until exactly this
+		 * point, and the arm that provoked it comes from the terminal of
+		 * the operation that was using the timeslot - so "too early" is
+		 * the normal case rather than the exception. See request_work_fn.
+		 */
+		if (g.pending) {
+			k_work_submit(&request_work);
+		}
 		break;
 
 	case MPSL_TIMESLOT_SIGNAL_SESSION_CLOSED:
@@ -949,7 +1396,11 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		k_timer_stop(&deadline);
 		if (g.pending) {
 			g.pending = false;
-			k_work_submit(&denied_work);
+			if (g.bootstrapping) {
+				g.bootstrapping = false;
+			} else {
+				submit_denial();
+			}
 		}
 		break;
 
@@ -958,13 +1409,41 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 	default:
 		/*
 		 * Both are programming errors in this file rather than
-		 * conditions to handle, and MPSL asserts on OVERSTAYED after
-		 * this returns. TAIL_MARGIN_US is the number that is wrong if
-		 * it is ever reached.
+		 * conditions to handle, and MPSL asserts immediately after this
+		 * returns - so the ONLY way to learn which of them happened is
+		 * to record it here and print it from mpsl_assert_handle().
+		 *
+		 * They need opposite fixes and the assert location cannot tell
+		 * them apart: OVERSTAYED says the end margin is too small,
+		 * INVALID_RETURN says an action was returned from a signal that
+		 * may not carry one. Guessing between them cost a round.
 		 */
+		if (signal == MPSL_TIMESLOT_SIGNAL_OVERSTAYED) {
+			stats.overstayed++;
+		} else if (signal == MPSL_TIMESLOT_SIGNAL_INVALID_RETURN) {
+			stats.invalid_return++;
+		} else {
+			stats.unknown_signal = signal;
+		}
 		break;
 	}
 
+	/*
+	 * THE LAST WORD ON WHAT MAY BE RETURNED, IN ONE PLACE.
+	 *
+	 * Every branch above decides what it WANTS; this decides what is LEGAL,
+	 * and the two were being conflated. An action after the timeslot has
+	 * been ended is the assert bug 14 describes, and it cannot be prevented
+	 * branch by branch because the branch that is about to be wrong is
+	 * whichever one loses a race it cannot see.
+	 */
+	if (g.ended) {
+		rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_NONE;
+	} else if (rv.callback_action == MPSL_TIMESLOT_SIGNAL_ACTION_END) {
+		g.ended = true;
+	}
+
+	trace_put(signal, rv.callback_action);
 	return &rv;
 }
 
@@ -983,6 +1462,11 @@ int gate_init(void)
 	memset(&g, 0, sizeof(g));
 	memset(&stats, 0, sizeof(stats));
 
+	if (IS_ENABLED(CONFIG_RADIANT_CORE_GATE_MPSL_NO_SESSION)) {
+		/* Bisection aid, off by default. See the Kconfig help. */
+		LOG_WRN("gate: session NOT opened (diagnostic build)");
+		return RADIANT_RADIO_OK_RC;
+	}
 	rc = mpsl_timeslot_session_open(on_signal, &session_id);
 	LOG_INF("gate: session_open rc=%d, max_window=%u us, place_lead=%u us",
 		(int)rc, (unsigned)MAX_WINDOW_US, (unsigned)PLACE_LEAD_US);
@@ -995,6 +1479,13 @@ int gate_init(void)
 		return RADIANT_RADIO_EIO;
 	}
 	session_open = true;
+	/* Spend one minimum-length EARLIEST timeslot on nothing but its start
+	 * time, so that every window the core asks for is a NORMAL request that
+	 * lands where it was asked for. */
+	bootstrap_anchor();
+#if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
+	k_work_schedule(&gate_dump, K_SECONDS(1));
+#endif
 	return RADIANT_RADIO_OK_RC;
 }
 
@@ -1103,8 +1594,10 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 		 * programmed against air we do not have; the end test alone
 		 * passes for it whenever grant_end is generous.
 		 */
-		if (t_from >= now && t_to + (radiant_time_t)TAIL_MARGIN_US <=
-					    g.grant_end) {
+		if (t_from >= now &&
+		    t_to + (radiant_time_t)follow_on_us +
+				    (radiant_time_t)TAIL_MARGIN_US <=
+			    g.grant_end) {
 			g.release_wanted = false;
 			return GATE_GRANTED;
 		}
@@ -1130,7 +1623,19 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	if (end <= start) {
 		return GATE_DENIED;
 	}
-	len = (uint64_t)(end - start);
+	/*
+	 * THE RESERVATION IS LONGER THAN THE AIR IT COVERS, by exactly the time
+	 * it takes to hand it back.
+	 *
+	 * `end` is the last instant the RADIO may be busy. The timeslot has to
+	 * outlive that by END_MARGIN_US, because the compare that returns
+	 * ACTION_END is placed END_MARGIN_US before the timeslot expires - so
+	 * without this the grant would be given back while the window it was
+	 * placed for still had END_MARGIN_US to run, and the receiver would be
+	 * taken away mid-window. That reads at the core as a sensor that went
+	 * quiet, which is the worst possible disguise for it.
+	 */
+	len = (uint64_t)(end - start) + (uint64_t)END_MARGIN_US;
 	if (len < MPSL_TIMESLOT_LENGTH_MIN_US) {
 		len = MPSL_TIMESLOT_LENGTH_MIN_US;
 	}
@@ -1176,21 +1681,24 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 
 	if (!g.anchor_valid) {
 		/*
-		 * BOOTSTRAP. The first request in a session must be EARLIEST,
-		 * and EARLIEST may not be issued from inside a timeslot - which
-		 * is satisfied here because we hold no grant.
+		 * NO ANCHOR, SO THIS WINDOW CANNOT BE PLACED - and the answer
+		 * is to go and get one rather than to ask for this window with
+		 * EARLIEST.
 		 *
-		 * The timeout is how long we will wait for it; beyond that the
-		 * request is CANCELLED and the core is told, which is the
-		 * honest answer rather than a silent wait.
+		 * EARLIEST grants a timeslot as early as MPSL can manage, which
+		 * is NOT the start the request was built around. Using it for a
+		 * real window means programming the receiver for an instant
+		 * that has no fixed relationship to the grant: measured, the
+		 * one and only grant produced one FAILED operation
+		 * (program_rx() answering ETIME) and the channel stopped
+		 * searching. See bootstrap_anchor().
+		 *
+		 * The core is told DENIED, which is exactly what happened - the
+		 * air was not obtained - and the bootstrap runs behind it, so
+		 * the next window in a quarter of a second finds an anchor.
 		 */
-		req.request_type = MPSL_TIMESLOT_REQ_TYPE_EARLIEST;
-		req.params.earliest.hfclk =
-			MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED;
-		req.params.earliest.priority = MPSL_TIMESLOT_PRIORITY_NORMAL;
-		req.params.earliest.length_us = (uint32_t)len;
-		req.params.earliest.timeout_us =
-			(uint32_t)(start - now);
+		bootstrap_anchor();
+		return GATE_DENIED;
 	} else {
 		/*
 		 * distance_us IS MEASURED FROM THE PREVIOUS TIMESLOT'S START.
@@ -1240,35 +1748,19 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	g.extendable = (op != GATE_OP_TX) && (prio == RADIANT_GATE_PRIO_NORMAL);
 
 	/*
-	 * The elastic class asks small and grows; everything else asks for
+	 * THE ELASTIC CLASS ASKS SMALL AND GROWS; everything else asks for
 	 * exactly what it needs, because a tracked slot's length is the window
 	 * the core chose and there is nothing elastic about it.
-	 */
-	/*
-	 * DISABLED UNTIL THE EXTENSION CHAIN IS PROVEN ON THIS PATH, and the
-	 * reason is a hard ordering constraint rather than caution.
 	 *
-	 * Asking short only works if the grant can then GROW to cover the
-	 * window, and growth depends on SIGNAL_TIMER0 arriving - which it does
-	 * not on this build: no `s1` appears in the signal trace at all. With a
-	 * 10 ms grant under a 96 ms window the timeslot ends while the receiver
-	 * is still armed, MPSL takes the radio back, and the operation never
-	 * completes: chunks=2, fail=1, and the channel stops searching.
+	 * This is ADR 0013's shape and it is now measured working rather than
+	 * intended: 15 scan chunks of a 94 200 us window each, 1596 extensions
+	 * and not one refusal, the grant growing 1 ms at a time from 10 ms with
+	 * the compare that grows it always END_MARGIN_US ahead of the end.
 	 *
-	 * So the grant covers the whole window for now. That costs the elastic
-	 * behaviour ADR 0013 wants - the sweep stops being the thing that gives
-	 * way - and it is the correct trade while the alternative is an
-	 * operation that is silently cut off. Restore the shortening in the
-	 * same commit that makes SIGNAL_TIMER0 work, and not before.
-	 */
-	/*
-	 * RE-ENABLED once SIGNAL_TIMER0 was shown to work. It was disabled
-	 * while the timeslot could not be ended at all, because a short grant
-	 * under a long window is worse than a long one; with the compare now
-	 * firing, the short-grant-plus-extension shape of ADR 0013 is both the
-	 * intended design and the one that does not need an enormous absolute
-	 * end margin - the compare sits at len - END_MARGIN_US of a 10 ms
-	 * grant rather than of a 96 ms one.
+	 * It was disabled for one round while the timeslot could not be ended at
+	 * all - a short grant under a long window is worse than a long one -
+	 * and the note that said so has been replaced by this one rather than
+	 * left to contradict it.
 	 */
 	if (g.extendable && len > ELASTIC_INITIAL_US) {
 		len = ELASTIC_INITIAL_US;
@@ -1294,14 +1786,6 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	 */
 	g.pending = true;
 	k_work_submit(&request_work);
-	if ((stats.placed & 0x3Fu) == 0u) {
-		LOG_INF("gate: placed=%u granted=%u blocked=%u eagain=%u "
-			"near=%u ext=%u/%u deadline=%u",
-			stats.placed, stats.granted, stats.blocked,
-			stats.refused_eagain, stats.refused_too_near,
-			stats.extends_ok, stats.extends_failed,
-			stats.deadline_fired);
-	}
 
 	/*
 	 * The backstop. Set past the point at which a grant would be useless -
@@ -1358,18 +1842,63 @@ void gate_release(void)
 	 * describes for a different cause.
 	 *
 	 * Cleared first, so that any acquire between here and the END is offered
-	 * the ordinary path: it places a NORMAL request, MPSL answers
-	 * -NRF_EAGAIN because the session is not IDLE yet, and the core gets a
-	 * clean denial it already knows how to handle.
+	 * the ordinary path: it places a NORMAL request, MPSL holds it until the
+	 * session goes IDLE, and the window is placed a moment later.
 	 */
 	g.granted = false;
 	g.release_wanted = true;
 
-	nrf_timer_task_trigger(MPSL_TIMER0, NRF_TIMER_TASK_CAPTURE1);
-	nrf_timer_cc_set(MPSL_TIMER0, 0,
-			 nrf_timer_cc_get(MPSL_TIMER0, 1) + 2u);
-	nrf_timer_event_clear(MPSL_TIMER0, NRF_TIMER_EVENT_COMPARE0);
-	nrf_timer_int_enable(MPSL_TIMER0, NRF_TIMER_INT_COMPARE0_MASK);
+	/*
+	 * BUG 9: A COMPARE WRITTEN BEHIND THE COUNTER NEVER FIRES, AND THIS ONE
+	 * WAS WRITTEN TWO MICROSECONDS AHEAD OF IT.
+	 *
+	 * The old value here was +2 us. Reading CAPTURE1, writing CC0 and having
+	 * MPSL's handler pick it up does not reliably happen inside two ticks of
+	 * a 1 MHz timer - and when it does not, TIMER0 has already passed the
+	 * compare, no event is generated, and the ONLY signal that would have
+	 * ended this timeslot is gone. The grant then runs to its natural length
+	 * with nothing to end it and MPSL asserts on the overstay.
+	 *
+	 * That is the residual assert: placed=21 granted=20 with 1596 clean
+	 * extensions, i.e. not the extension chain and not the initial compare -
+	 * the one compare in the file that is written relative to NOW.
+	 *
+	 * Two things fix it and both are needed. RELEASE_LEAD_US gives the write
+	 * a realistic head start, and the re-read afterwards catches the case
+	 * where even that lost the race: THE BACKSTOP COMPARE IS PUT BACK rather
+	 * than left dangling, so there is always a compare in the future that
+	 * ends this timeslot. Late is survivable; absent is not.
+	 */
+	{
+		uint32_t cc_backstop = (g.granted_len_us > END_MARGIN_US)
+					       ? (g.granted_len_us - END_MARGIN_US)
+					       : (g.granted_len_us / 2u);
+		uint32_t want;
+
+		nrf_timer_task_trigger(MPSL_TIMER0, NRF_TIMER_TASK_CAPTURE1);
+		want = nrf_timer_cc_get(MPSL_TIMER0, 1) + RELEASE_LEAD_US;
+
+		if (want < cc_backstop) {
+			nrf_timer_cc_set(MPSL_TIMER0, 0, want);
+			nrf_timer_event_clear(MPSL_TIMER0,
+					      NRF_TIMER_EVENT_COMPARE0);
+			nrf_timer_int_enable(MPSL_TIMER0,
+					     NRF_TIMER_INT_COMPARE0_MASK);
+
+			nrf_timer_task_trigger(MPSL_TIMER0,
+					       NRF_TIMER_TASK_CAPTURE1);
+			if (nrf_timer_cc_get(MPSL_TIMER0, 1) >= want &&
+			    !nrf_timer_event_check(MPSL_TIMER0,
+						   NRF_TIMER_EVENT_COMPARE0)) {
+				nrf_timer_cc_set(MPSL_TIMER0, 0, cc_backstop);
+			}
+		} else {
+			/* Already inside the end margin. The compare that is
+			 * armed is the right one and moving it can only lose. */
+			nrf_timer_int_enable(MPSL_TIMER0,
+					     NRF_TIMER_INT_COMPARE0_MASK);
+		}
+	}
 }
 
 bool gate_extend(uint32_t us)
@@ -1417,9 +1946,27 @@ void mpsl_assert_handle(const char *const file, const uint32_t line)
 	 */
 	LOG_PANIC();
 	printk("\n*** MPSL ASSERT %s:%u  placed=%u granted=%u blocked=%u "
-	       "ext=%u/%u deadline=%u\n",
+	       "ext=%u/%u deadline=%u\n"
+	       "    over=%u invalid=%u unknown=%u last_sig=%u "
+	       "len=%u/%u granted=%d pending=%d rel=%d ext_ok=%d\n",
 	       file, line, stats.placed, stats.granted, stats.blocked,
-	       stats.extends_ok, stats.extends_failed, stats.deadline_fired);
+	       stats.extends_ok, stats.extends_failed, stats.deadline_fired,
+	       stats.overstayed, stats.invalid_return, stats.unknown_signal,
+	       stats.last_signal, g.granted_len_us, g.want_len_us,
+	       (int)g.granted, (int)g.pending, (int)g.release_wanted,
+	       (int)g.extendable);
+	printk("    trace (sig:act, oldest first):");
+	for (uint32_t i = 0; i < TRACE_LEN; i++) {
+		uint32_t idx = (trace_at >= TRACE_LEN)
+				       ? ((trace_at + i) % TRACE_LEN)
+				       : i;
+
+		if (trace_at < TRACE_LEN && i >= trace_at) {
+			break;
+		}
+		printk(" %u:%u", trace[idx] >> 4, trace[idx] & 0xFu);
+	}
+	printk("\n");
 	k_fatal_halt(K_ERR_KERNEL_PANIC);
 }
 #endif
