@@ -443,40 +443,340 @@ cadence below.
 
 ### 3.6 Light Electric Vehicle, device type `0x14` — reference only
 
-**Not implemented by this project. Recorded because it is the reason the e-bike
-profile of section 7.1 was not pursued**, and because a claimant needs to be
-able to check it without repeating the search.
+**Not implemented by this project. Recorded in full because it is the reason
+the e-bike profile of section 7.1 was not pursued**, and because a claimant
+needs the whole interoperability contract — both channels, every page, the
+travel-mode mapping rule — not just a field list to check against.
 
-Source: ANT+ Managed Network Document D00001390 Rev 1.1, "Light Electric Vehicle
-Device Profile", publicly mirrored on the Garmin forums. Channel period **8192**
-(4.00 Hz), RF 57, transmission type 5, device number 1..65535.
+Source: ANT+ Managed Network Document D00001390 Rev 1.1, "Light Electric
+Vehicle Device Profile", publicly mirrored on the Garmin forums. Every table
+below is transcribed from that document; nothing here is inferred.
 
-| Page | Name | Carries |
+#### Channel configuration
+
+| Parameter | Display (slave) | LEV (master) |
 |---|---|---|
-| 1 | Speed and System Info 1 | temperature state, travel mode, system state, gear state, error message, LEV speed |
-| 2 | Speed and Distance | odometer (u24, 0.01 km), remaining range (12-bit, 1 km), LEV speed |
-| 34 | Alt Speed and Distance | as page 2, with fuel consumption (12-bit, 0.1 Wh/km) replacing remaining range |
-| 3 | Speed and System Info 2 | battery SoC (7 bits, 1 %) + empty warning bit, travel mode, system state, gear state, % assist, LEV speed |
-| 4 | Battery Information | charge cycle count, fuel consumption, battery voltage (1/4 V), distance on current charge |
-| 5 | LEV Capabilities | travel modes supported, wheel circumference (12-bit, 1 mm) |
-| 16 | Display Data | **acknowledged, display → LEV.** Wheel circumference, requested travel mode, a 16-bit command bit field, display manufacturer id |
-| 70, 80, 81 | Common pages | request data page, manufacturer, product |
+| Channel type | Slave `0x00` | Master `0x10`, bidirectional |
+| Network key | ANT+ managed network key | same |
+| RF channel | 57 (`0x39`, 2457 MHz) | same |
+| Transmission type | `0`, for a pairing search | `5` (`0x05`) |
+| Device type | `20` (`0x14`) | `20` (`0x14`) |
+| Device number | 1..65535, `0` for wildcard search | 1..65535, **must not be `0x0000`** |
+| Channel period | 8192 (4.00 Hz) | 8192 (4.00 Hz) |
+| Search timeout | default 30 s, implementation-specific | — |
 
-Sub-fields worth knowing before proposing an extension:
+Every ANT+ message has an 8-byte payload: byte 0 is the page number, bytes
+1..7 are page-specific.
 
-- **Motor and battery temperature are a 6-level categorical scale**, not degrees:
-  unknown / cold / cold-warm / warm / warm-hot / hot, each with an alert bit.
-- **Travel mode state** is assist level 0..7 and regenerative level 0..7.
-- **System state** carries lights on/off, high/low beam, and left/right turn
-  signal.
-- **Error message** is a single enumerated code (battery, drive train, end of
-  life, overheating), not a bit field of concurrent faults.
-- **Page 16's command set** is: set wheel circumference, set travel mode, shift
-  front/rear gear, lights, high beam, turn signals.
+#### Data pages and the 4-page rotation
 
-**What LEV does not carry:** rider power in watts, motor power in watts, and
-walk assist. Those three are the entire gap, and section 7.1 is why the gap does
-not justify a profile.
+Pages 1, 2 (or 34), and 3 fill the first three channel periods of a 4-page
+rotation, one page per period — each therefore at 1 Hz. The fourth period
+rotates among page 4, page 5, a common page, or a manufacturer-specific page.
+Because LEV speed appears on pages 1, 2 and 3, it updates at an average 3 Hz;
+because travel mode / system state / gear state appear on pages 1 and 3, they
+update at an average 2 Hz. Page 2 carries remaining range and page 34 carries
+fuel consumption instead — they are the same page in every other byte, and a
+node sending 34 by default must still send page 2 **at least once every 30
+seconds** (120 messages) so a receiver that only knows page 2 stays current.
+
+Either common page 80 or 81 (alternating) must appear roughly every 20th
+channel period (~5 s at 4 Hz); Table 7-1 states each individual page's own
+cadence as every 40th message. A display's request (common page 70) gets an
+immediate reply on the next channel period, after which the LEV **resets its
+4-page rotation** back to page 1 — a receiver stays within 0.5 s of current
+state even after a request interrupts the pattern.
+
+Pages 1, 2 (or 34), 3, and 5 are required of every LEV; page 4 is optional;
+page 16 is required to *decode* (every LEV) but optional to *send* (a display
+may be receive-only).
+
+#### Page `0x01` — Speed & System Information 1
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | page number | `0x01` |
+| 1 | temperature state | u8 bit field, Table 5-3 below. Optional, `0x00` = unknown |
+| 2 | travel mode state | u8 bit field, Table 5-4 below |
+| 3 | system state | u8 bit field, Table 5-5 below |
+| 4 | gear state | u8 bit field, Table 5-6 below |
+| 5 | error message | u8 code, Table 5-7 below. Optional |
+| 6 | LEV speed, low byte | u8, low byte of a 12-bit value |
+| 7 bits 3..0 | LEV speed, high nibble | 12-bit total: 0.1 km/h, max 409.5 km/h |
+| 7 bits 7..4 | reserved | `0xF` |
+
+**Table 5-3 — Temperature state:**
+
+| Bits | Field | Value |
+|---|---|---|
+| 7 | motor temperature alert | 0 no alert/unknown, 1 overheating |
+| 6..4 | motor temperature | 000 unknown, 001 cold, 010 cold/warm, 011 warm, 100 warm/hot, 101 hot, 110..111 reserved |
+| 3 | battery temperature alert | 0 no alert/unknown, 1 overheating |
+| 2..0 | battery temperature | same 6-level scale as motor temperature |
+
+**Table 5-4 — Travel mode state** (shared by pages 1 and 3, and by page 16's
+travel-mode byte):
+
+| Bits | Field | Value |
+|---|---|---|
+| 7..6 | reserved | `00` |
+| 5..3 | current assist level | `000` off, `001`..`111` = assist 1..7 |
+| 2..0 | current regenerative level | `000` off, `001`..`111` = regen 1..7 |
+
+**Table 5-5 — System state** (shared by pages 1 and 3): every bit defaults to
+0 when the LEV doesn't support the feature, so "off" and "unsupported" share
+one code.
+
+| Bits | Field | Value |
+|---|---|---|
+| 7..5 | reserved | `000` |
+| 4 | manual throttle | 0 off/unsupported, 1 on |
+| 3 | light on/off | 0 off/unsupported, 1 on |
+| 2 | light beam | 0 low/unsupported, 1 high |
+| 1 | turn signal, left | 0 off/unsupported, 1 blinking |
+| 0 | turn signal, right | 0 off/unsupported, 1 blinking |
+
+**Table 5-6 — Gear state** (shared by pages 1 and 3):
+
+| Bits | Field | Value |
+|---|---|---|
+| 7 | gear exists | 0 no, 1 yes |
+| 6 | manual / automatic | 0 automatic or no gears, 1 manual |
+| 5..2 | current rear gear | `0001`..`1111` = gear 1..15, `0000` = none |
+| 1..0 | current front gear | `01`..`11` = gear 1..3, `00` = none |
+
+**Table 5-7 — Error message:** a single code, not a fault bit field.
+
+| Code | Meaning |
+|---|---|
+| 0 | no error |
+| 1 | battery error |
+| 2 | drive train error |
+| 3 | battery end of life |
+| 4 | overheating |
+| 5..15 | reserved |
+| 16..255 | manufacturer-specific |
+
+#### Page `0x02` — Speed & Distance Information
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | page number | `0x02` |
+| 1..3 | odometer | u24 LE accumulator, 0.01 km, wraps at 16,777,216 (~167,772 km) |
+| 4 | remaining range, low byte | u8, low byte of a 12-bit value |
+| 5 bits 3..0 | remaining range, high nibble | 12-bit total: 1 km, max 4095 km. Optional |
+| 5 bits 7..4 | reserved | `0xF` |
+| 6 | LEV speed, low byte | as page 1 |
+| 7 bits 3..0 | LEV speed, high nibble | as page 1 |
+| 7 bits 7..4 | reserved | `0xF` |
+
+**Remaining range's own field row prints `0x00` as its "unknown" sentinel**,
+not the `0x000`/`0xFFF` pattern the rest of the profile uses for a 12-bit
+field split across a nibble (fuel consumption, charging cycle count, wheel
+circumference all use `0x000`). Transcribed as printed; almost certainly the
+same `0x000` sentinel, since nothing in the spec explains a genuine exception.
+
+#### Page `0x22` (34) — Alternative Speed & Distance Information
+
+Optional; replaces page 2's remaining range with fuel consumption. Every
+other byte is identical to page 2, including the odometer and LEV speed
+fields.
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | page number | `0x22` (34) |
+| 1..3 | odometer | as page 2 |
+| 4 | fuel consumption, low byte | u8, low byte of a 12-bit value |
+| 5 bits 3..0 | fuel consumption, high nibble | 12-bit total: 0.1 Wh/km, max 409.5 Wh/km, `0x000` = unknown |
+| 5 bits 7..4 | reserved | `0xF` |
+| 6 | LEV speed, low byte | as page 1 |
+| 7 bits 3..0 | LEV speed, high nibble | as page 1 |
+| 7 bits 7..4 | reserved | `0xF` |
+
+#### Page `0x03` — Speed & System Information 2
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | page number | `0x03` |
+| 1 | battery state of charge | bits 6..0: 1 %, max 100 %. Bit 7: battery-empty warning |
+| 2 | travel mode state | Table 5-4, as page 1 |
+| 3 | system state | Table 5-5, as page 1 |
+| 4 | gear state | Table 5-6, as page 1 |
+| 5 | % assist | u8, %, max 100 %. Optional, `0xFF` = unknown |
+| 6 | LEV speed, low byte | as page 1 |
+| 7 bits 3..0 | LEV speed, high nibble | as page 1 |
+| 7 bits 7..4 | reserved | `0xF` |
+
+% assist is `motor power / (motor power + user power)` — the LEV's own
+computed answer, not something a receiver could derive from anything else on
+the wire.
+
+#### Page `0x04` — Battery Information (optional page)
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | page number | `0x04` |
+| 1 | reserved | `0xFF` |
+| 2 | charging cycle count, low byte | u8, low byte of a 12-bit value |
+| 3 bits 3..0 | charging cycle count, high nibble | 12-bit total: 1 count, max 4095, `0x000` = unknown |
+| 3 bits 7..4 | fuel consumption, high nibble | 12-bit total: 0.1 Wh/km, max 409.5 Wh/km, `0x000` = unknown |
+| 4 | fuel consumption, low byte | u8, low byte of the field above |
+| 5 | battery voltage | u8, 1/4 V, max 63.75 V (raw 255). `0x00` = unknown |
+| 6..7 | distance on current charge | u16 LE, 0.1 km, max 6553.5 km, `0x0000` = unknown. LEV resets this after every charge |
+
+**Byte 3 packs the high nibble of two unrelated fields**: bits 3..0 finish
+charging cycle count (whose low byte is byte 2), bits 7..4 finish fuel
+consumption (whose low byte is byte 4). It is the only byte in this profile
+that belongs to two different multi-byte fields at once, and a decoder that
+reads byte 3 as one field gets a number that is neither.
+
+#### Page `0x05` — LEV Capabilities
+
+Required of every LEV; sent in the fourth rotation slot at ~1 Hz or less, or
+on request (common page 70).
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | page number | `0x05` |
+| 1 | reserved | `0xFF` |
+| 2 | travel modes supported | Table 5-13 below |
+| 3 | wheel circumference, low byte | u8, low byte of a 12-bit value |
+| 4 bits 3..0 | wheel circumference, high nibble | 12-bit total: 1 mm, max 4095 mm. Optional |
+| 4 bits 7..4 | reserved | `0xF` |
+| 5..7 | reserved | `0xFF` each |
+
+**Table 5-13 — Travel modes supported:**
+
+| Bits | Field | Value |
+|---|---|---|
+| 7..6 | reserved | `00` |
+| 5..3 | assist modes supported | `0` (none) to `7` |
+| 2..0 | regenerative modes supported | `0` (none) to `7` |
+
+#### Pages `0x06`-`0x0F` — reserved for future main data pages
+
+Spec's own words: reserved for future main data page definitions. No content
+defined.
+
+#### Page `0x10` (16) — Display Data (display → LEV, acknowledged)
+
+The one page in this profile that runs the other direction: a display sends
+it to report a user-requested state change, as an **acknowledged** message so
+the display can confirm the LEV received it. Optional for a display to send;
+every LEV must be able to decode it.
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | page number | `0x10` |
+| 1 | wheel circumference, low byte | u8, low byte of a 12-bit value |
+| 2 bits 3..0 | wheel circumference, high nibble | 12-bit total: 1 mm, max 4095 mm. Optional |
+| 2 bits 7..4 | reserved | `0xF` |
+| 3 | travel mode | u8, same bit layout as Table 5-4 bits 5..0. `0xFF` = not supported/not set |
+| 4..5 | display command | u16 LE bit field, Table 5-15 below |
+| 6..7 | manufacturer id | u16 LE, the *display's* ANT+ manufacturer id — informational, not a setting |
+
+**Wheel circumference's "not set" sentinel is printed as `0xFF` in the field
+row but `0xFFF` in the prose** (section 5.10.1) — the same table/prose
+sentinel mismatch as page 2's remaining range and page 5's wheel
+circumference, and the third field to carry it.
+
+**Table 5-15 — Display command**, a 16-bit little-endian bit field (byte 4 =
+low byte, byte 5 = high byte), reflecting the state the user requested through
+the display:
+
+| Bits | Field | Value |
+|---|---|---|
+| 15..10 | reserved | `000000` |
+| 9..6 | requested rear gear | `0001`..`1111` = gear 1..15, `0000` = none |
+| 5..4 | requested front gear | `01`..`11` = gear 1..3, `00` = none |
+| 3 | light on/off | 0 off, 1 on |
+| 2 | light beam | 0 low, 1 high |
+| 1 | turn signal, left | 0 off, 1 blinking |
+| 0 | turn signal, right | 0 off, 1 blinking |
+
+Travel mode is a separate byte (3), not part of this bit field — a display
+sets gear and light/turn-signal state through the command field and travel
+mode through byte 3 in the same message.
+
+#### Common page `0x46` (70) — Request Data Page
+
+Sent display → LEV only, as an acknowledged message; the LEV must never
+request a page from the display. Descriptor bytes 1 and 2 are always invalid
+for LEV (`0xFF`, `0xFF`) — this profile has no page variants to select with
+them.
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | page number | `0x46` (70) |
+| 1..2 | reserved | `0xFF` |
+| 3 | descriptor byte 1 | `0xFF` = invalid, always invalid for LEV |
+| 4 | descriptor byte 2 | `0xFF` = invalid, always invalid for LEV |
+| 5 | requested transmission response | bits 6..0: number of transmissions requested, max 4 (one second of data). Bit 7: request an acknowledged reply if possible. `0x80` = transmit until acknowledged, `0x00` = invalid |
+| 6 | requested page number | the page to transmit |
+| 7 | command type | `0x01` = request data page (the only value LEV uses); `0x02` = request ANT-FS session |
+
+Only broadcast message types may be requested — not acknowledged, not burst.
+The LEV must be able to answer a request for any page this document defines,
+but may silently ignore a page number it doesn't support; a display using
+this page has to handle that "no response" case rather than assume every
+request lands. On a valid response the LEV resets its 4-page rotation (see
+above).
+
+#### Common pages 80 and 81
+
+Byte-exact against the ANT+ common pages already documented in section 3.4
+above — manufacturer's information and product information, same layout, no
+LEV-specific variant. **LEV has no use for common page 82 (battery
+status)**: page 4 above already carries a richer, LEV-specific battery
+picture (voltage, charge-cycle count, distance since charge) than page 82's
+generic voltage/percentage fields, so nothing in this profile spends the byte
+twice.
+
+#### Travel mode mapping (section 6)
+
+A display and an LEV can support different numbers of travel modes — up to 7
+assist and 7 regenerative each — and Table 6-1 is the rule that keeps them
+talking about the same setting anyway. Mode numbers are grouped so that
+whichever count a device supports, its lowest and highest available numbers
+still mean "least" and "most":
+
+| Modes supported | Grouping of modes 1..7 | Recommended settings |
+|---|---|---|
+| 1 | all of 1..7 | 7 |
+| 2 | 1,2,3 / 4,5,6,7 | 3, 7 |
+| 3 | 1,2 / 3,4 / 5,6,7 | 2, 4, 7 |
+| 4 | 1 / 2,3 / 4,5 / 6,7 | 1, 3, 5, 7 |
+| 5 | 1 / 2 / 3 / 4,5 / 6,7 | 1, 2, 3, 5, 7 |
+| 6 | 1 / 2 / 3 / 4 / 5 / 6,7 | 1, 2, 3, 4, 5, 7 |
+| 7 | 1 / 2 / 3 / 4 / 5 / 6 / 7 | 1, 2, 3, 4, 5, 6, 7 |
+
+The same table applies to assist and regenerative levels independently — a
+mode *number* is just a position in this grouping, not a fixed percentage.
+When a display supports more modes than the LEV, it hides the modes the LEV
+can't reach rather than showing its own full range. When a display supports
+fewer modes than the LEV, a user with manual control on the LEV can still
+reach the modes the display cannot show, and the display simply interprets
+whatever mode number it receives via this same table.
+
+#### Minimum requirements (section 7)
+
+| Required page | Transmission requirement |
+|---|---|
+| Page 1 | 1 Hz |
+| Page 2 (or page 34) | 1 Hz; page 2 itself at least once per 30 s |
+| Page 3 | 1 Hz |
+| Page 5 | on request |
+| Page 16 | on system update or on display request; sent acknowledged |
+| Common page 80 | every 40th message |
+| Common page 81 | every 40th message |
+
+A display must be able to decode all of the above, and must itself transmit
+common pages 80 and 81 at roughly the same every-40th-message cadence,
+sending its first common page immediately on detecting the LEV.
+
+**What LEV does not carry, in full despite the above:** rider power in watts,
+motor power in watts, and walk assist. Those three are the entire gap, and
+section 7.1 is why the gap does not justify a profile of its own.
 
 ---
 
@@ -863,6 +1163,20 @@ That deletes four bytes from the control page and makes the profile
 implementable by a fan vendor with no ANT receiver in the product. The `0x42` fan
 mode field remains because a fan may have modes of its own (off, manual, sleep,
 oscillate) that are not a speed.
+
+#### This profile is for a fan running RadiANT, and the Matter path is a different fan
+
+`docs/radiant-bridge.md` §8.4 also describes driving a fan from a heart rate,
+over Matter, and the two are not competing designs. **This profile is the case
+where RadiANT firmware runs on the fan itself** — the fan is an ANT node with a
+descriptor, a schema and pages `0x10`/`0x11` as its whole control surface, and a
+head unit commands it directly with no Thread, no Matter and no bridge anywhere
+in the path. The bridge's case is an ordinary smart fan that speaks Matter and
+has never heard of RadiANT, which cannot use this profile because it has no ANT
+radio.
+
+`radiant-bridge.md` §8.4a is the comparison in full. Nothing in this section
+depends on it.
 
 ---
 

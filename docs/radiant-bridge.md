@@ -44,7 +44,15 @@ So the bridge is **two planes over one Thread network**:
 | Plane | Carries | Transport | Consumer |
 |---|---|---|---|
 | **Data** | the numbers: bpm, beat accumulator, RR interval, RSSI, battery | MQTT over Thread | Home Assistant via MQTT Discovery — no custom code |
-| **Control** | the *derived* semantics: worn, in use, at rest, training zone 2+ — plus the actuator commands | Matter, as occupancy | HA / Apple / Google, or a direct device binding with no hub in the path |
+| **Control** | the *derived* semantics: elevated, worn, cohort state — plus the actuator commands | Matter | HA / Apple / Google, or a direct device binding with no hub in the path |
+
+**The split is about what Matter can express, not about numbers versus
+booleans.** Where Matter *does* have the cluster — temperature and humidity,
+`0x10` and `0x11` — the number takes the Matter plane too, at tier 1, correctly
+labelled. That is not an exception to the rule above so much as the rule stated
+precisely: heart rate travels MQTT because Matter has nowhere to put it, and the
+moment a quantity has somewhere to go, it goes there. Section 8.1a is the
+mechanism and section 8.1 is the table.
 
 This is not a workaround. Matter is a **device** model: it wants to be told
 "this endpoint is a thermostat". Heart rate is not a device, it is a
@@ -121,14 +129,15 @@ and it is what a user actually experiences:
 
 | Tier | User does | What appears | Needs |
 |---|---|---|---|
-| **1 — Matter occupancy** | scan the QR code | four `binary_sensor`s: *heart rate monitor worn*, *bike in use*, *at rest*, *training zone 2 or above* | **nothing further.** Ships with HA |
+| **1 — Matter** | scan the QR code | four `binary_sensor`s: *heart rate monitor worn*, *bike in use*, *at rest*, *training zone 2 or above* — plus a correctly-labelled temperature or humidity `sensor` for any bound source that reports one (§8.1a) | **nothing further.** Ships with HA |
 | **2 — MQTT values** | tier 1, then install the Mosquitto add-on and provision credentials | `sensor`, bpm, correct units, device registry, history | one first-party add-on |
 
 **Tier 1 is the out-of-box experience and the headline feature works entirely
 inside it.** One QR scan and those four are in Home Assistant with nothing
 installed — enough to drive the fan or the AC, which is the whole motivating
 case of `radiant-telemetry.md` section 1. Tier 2 is the opt-in "I want the
-number in bpm" step.
+number in bpm" step — **bpm specifically, not numbers in general**, because the
+numbers Matter can carry are already in tier 1.
 
 Two of the four are **correct by construction** — they ask only whether an
 accumulator is advancing, so they need no calibration and cannot be wrong about
@@ -205,6 +214,14 @@ currently holds only for RadiANT device types, because only those carry a
 descriptor. Routing the ANT+ compatibility profiles through the same vocabulary
 is the single change that extends the claim to the profiles people actually
 own, and it costs one adapter per profile — not one per profile per sink.
+
+**Environmental fields ride the same mechanism and are the shortest adapters in
+the set.** An ANT+ Environment `0x19` page 1 is one `0x10` temperature record;
+common page 84 — legal in any profile, which is what makes it the interesting
+one — would be one `0x10` and one `0x11`. Neither is implemented, and neither is
+verified against this project's code: `device-profiles.md` §3.7 and §3.4 are the
+honest status of each. Section 8.1a is where that status is set against what the
+Matter side already does with the types.
 
 An ANT+ heart rate page 0 becomes three bus records, not one:
 
@@ -784,34 +801,112 @@ exists to let two ANT receivers cooperate.
 
 ## 8. The Matter plane
 
-### 8.1 Endpoint model — four occupancy sensors, and that is the whole of tier 1
+### 8.1 Endpoint model — one table, keyed on the vocabulary type
 
-**Every derived output is an Occupancy Sensor.** One device type
-(`0x0107`), one cluster (`0x0406` Occupancy Sensing), one attribute
-(`Occupancy`), four endpoints per binding. Nothing else is needed for the
-headline feature to work.
+**An endpoint is instantiated per announced field, not per binding kind.** The
+Matter sink holds one table keyed on the section 7 field type;
+`binding_changed` (section 4) walks the binding's fields and instantiates an
+endpoint for every type that has a row. A type with no row is not an error — it
+is a field the Matter plane declines and the MQTT plane carries.
 
-| Endpoint | Name | Occupied when | From |
+```c
+struct matter_type_map {
+	uint8_t  field_type;          /* the §7 vocabulary */
+	uint16_t device_type;         /* Matter Device Library, 0 = cluster only */
+	uint32_t cluster, attribute;
+	int32_t  mul, div, offset;    /* SI -> the cluster's unit */
+};
+```
+
+| Field type | Matter device type | Cluster / attribute | SI -> cluster unit |
 |---|---|---|---|
-| 1 | **Heart rate monitor worn** | the beat accumulator is advancing | §6.1 |
-| 2 | **Bike in use** | the energy accumulator is advancing | §6.1 |
-| 3 | **At rest** | worn, and HR below `HR_rest + 0.15 x HRR` | §6.2 |
-| 4 | **Training, zone 2 or above** | worn, and HR at or above `HR_rest + 0.60 x HRR` | §6.2 |
+| `0x02` occupancy | Occupancy Sensor `0x0107` | Occupancy Sensing `0x0406` / `Occupancy` | boolean |
+| `0x10` temperature | Temperature Sensor `0x0302` | Temperature Measurement `0x0402` / `MeasuredValue` | int16, 0.01 °C: `K x 100 - 27315` |
+| `0x11` relative humidity | Humidity Sensor `0x0307` | Relative Humidity Measurement `0x0405` / `MeasuredValue` | u16, 0.01 %: `% x 100` |
+| `0x25` battery state of charge | — cluster only, on the binding's own endpoint | Power Source `0x002F` / `BatPercentRemaining` | 0.5 %: `% x 2` |
+| `0x26` heart rate | **none, and section 1 is the whole reason** | — | — |
 
-Two optional additions, neither part of tier 1:
+The four derived booleans of section 6 are all type `0x02`, so they are four
+instances of the first row rather than four cases in a switch:
+
+| Name | Occupied when | From |
+|---|---|---|
+| **Heart rate monitor worn** | the beat accumulator is advancing | §6.1 |
+| **Bike in use** | the energy accumulator is advancing | §6.1 |
+| **At rest** | worn, and HR below `HR_rest + 0.15 x HRR` | §6.2 |
+| **Training, zone 2 or above** | worn, and HR at or above `HR_rest + 0.60 x HRR` | §6.2 |
+
+Two additions carry raw bpm and neither is part of tier 1:
 
 | Cluster | Attribute | Carries |
 |---|---|---|
 | `0x0404` Flow Measurement | `MeasuredValue` | raw bpm, the default-off passenger cluster of §8.3b |
 | `0xFFF1_xxxx` (MEI) | `HeartRateMeasurement` | raw bpm, standards-clean, §8.3 |
-| `0x002F` Power Source | `BatPercentRemaining` | from ANT+ common page 82, where the sensor sends it |
 
-A binding for a power meter instantiates endpoints 2 and nothing else; a
-heart-rate binding instantiates 1, 3 and 4. Endpoints are created from
-`binding_changed` (section 4), so a household with one strap and one trainer
-shows four entities in Home Assistant, not sixteen.
+So a power meter binding instantiates one endpoint, a heart-rate binding three,
+and a household with one strap and one trainer shows four entities in Home
+Assistant rather than sixteen — unchanged from the per-binding-kind version this
+replaces, because the *outcome* was never the problem.
+
+**The earlier draft hardcoded the endpoint set per binding kind** — "a
+heart-rate binding instantiates 1, 3 and 4; a power meter instantiates 2" — with
+endpoint numbers as fixed identities. That is a switch statement per sink per
+profile, which is the exact cost section 3's sample bus exists to abolish, and
+one layer up from where the bus already solved it. The tell was that adding
+temperature to it needed a design discussion rather than a table row.
+
+### 8.1a Temperature and humidity are the clean case, and it is worth saying out loud
+
+Every other quantity in this document reaches Matter by a compromise: occupancy
+is a stretch (§8.2), the MEI cluster is invisible until someone else's code
+learns it (§8.3), the passenger cluster is deliberately mislabelled (§8.3b).
+**Temperature and humidity are the case where none of that applies.** Matter has
+a device type, a cluster and an attribute for each, with the right units and the
+right semantics, and `radiant-telemetry.md` section 7 already allocated `0x10`
+and `0x11` against them. Nothing is stretched, nothing is hidden, and nothing is
+mislabelled.
+
+They are therefore **tier 1**: they appear on the QR scan with nothing
+installed, correctly named, in every controller — the same tier as the derived
+booleans and by a much shorter argument.
+
+**The one trap is that temperature is the only row with an offset.** The
+vocabulary's canonical unit is kelvin and Matter wants 0.01 °C, so the
+conversion is `K x 100 - 27315` — a scale *and* a shift. Every other type in the
+vocabulary is a pure decimal scale, which is why `exp` alone was sufficient
+everywhere until now, and why a map struct with `mul`/`div` but no `offset`
+would look complete and ship a 273.15 K error on exactly one row.
+`radiant-telemetry.md` section 7's worked example already states the arithmetic;
+the map has to be able to express it.
+
+**Where the values come from, and the three sources are not equally solid:**
+
+| Source | Status |
+|---|---|
+| A RadiANT `0x60` node whose descriptor announces `0x10` or `0x11` | **Free by construction**, and it needs nothing phase 4 was not already building. The descriptor names the type, the bus carries it, the table maps it. No adapter, no per-profile code |
+| ANT+ Environment `0x19` | One adapter per §3.1. Not implemented; reference-only in `device-profiles.md` §3.7, on four converging open-source sources rather than a primary spec |
+| ANT+ common page 84 | The "any device type" path, and **the weakest of the three.** A common page is legal in any profile, and page 84 is documented as carrying barometric pressure, humidity, wind speed and direction — but `device-profiles.md` §3.4 records it as unimplemented on third-party evidence with no number verified against this project's code |
+
+The distinction matters because "temperature and humidity are free" is true of
+the first row and an ambition in the other two. The Matter side is free in all
+three cases; what is unverified is the ANT decode, and that is a conformance
+question rather than an architecture one. **Nothing in this section should be
+read as a claim that page 84 works.**
+
+**Endpoint budget.** Section 5 sizes the binding table against the Matter
+endpoint count and the coexistence budget together, and this is the change most
+likely to push on it. It pushes gently: an environment binding is one or two
+endpoints, against three for a heart-rate binding, so the worst case per binding
+does not move.
 
 ### 8.2 Occupancy is a stretch, not a lie, and that is why it was chosen
+
+**This section is scoped to the derived booleans, and §8.1a is why that scope
+needs stating.** Where a vocabulary type has a real Matter device type — `0x10`
+temperature, `0x11` humidity — the bridge uses it and no stretch is involved.
+Occupancy is what the `0x02` row does, and the argument below is about that row
+alone. A reader who takes it for the bridge's general posture will conclude the
+design is more compromised than it is.
 
 Matter requires each endpoint to declare a device type from the Device Library,
 and there is no wearable, vitals or heart-rate type. **Occupancy Sensor is the
@@ -831,9 +926,10 @@ rate is not a door.
 
 Three practical reasons the choice is also the cheap one:
 
-1. **One device type across every output.** No per-endpoint decision, no table
-   of which boolean is which kind of sensor, and a reader of the code never has
-   to ask why endpoint 3 differs from endpoint 1.
+1. **One device type across every derived output.** All four are type `0x02`,
+   so they are four instances of one row in §8.1's map rather than four rows.
+   No per-boolean decision, and a reader of the code never has to ask why the
+   *at rest* endpoint differs in kind from the *worn* one.
 2. **Home Assistant renders it as `binary_sensor` with `device_class:
    occupancy`**, which is a sensible label for all four, where `contact` would
    have read as a door or window on every card.
@@ -870,6 +966,14 @@ statistics that HA computes long-term sums from. Illuminance is log-encoded in
 Matter and would need un-mangling. A wrong number in the energy dashboard is a
 support ticket; a wrong number in a flow sensor nobody has is a renamed entity.
 
+**§8.1a strengthens this, and it is the one place the two sections interact.**
+Now that `0x10` temperature is a real row in §8.1's map, a bpm-as-temperature
+passenger would not merely be mislabelled — it would sit in the same controller,
+under the same bridge, alongside genuine temperature endpoints, at a plausible
+value and with no way for a user to tell which reading is the real one. That
+turns a renamed entity into a wrong one. Flow Measurement was already the choice;
+it is now the choice by a wider margin.
+
 **It is off by default**, and the reason is worth stating rather than assumed:
 shipping deliberately mislabelled entities as a default is how a product feels
 untrustworthy, and a user who never enables it is never lied to. A user who
@@ -892,6 +996,44 @@ Caveat, stated because it decides whether this can be the only path:
 controller-side support for *configuring* bindings is thin in practice. So ship
 8.1 as well and let a hub route when binding is unavailable. Client binding is
 the good path, not the only path.
+
+### 8.4a Two fans, and they are not alternatives
+
+This document and `device-profiles.md` §5.2 both describe turning a fan on from
+a heart rate, and a reader can easily take them for two competing designs with
+one of them redundant. They are not. **They are the same rule evaluator driving
+two different fans, and which one applies is decided by the fan, not by us.**
+
+| The fan speaks | Where RadiANT firmware runs | Last hop | Specified in |
+|---|---|---|---|
+| **RadiANT** — device type `0x62` | **on the fan itself.** The fan is an ANT node with a descriptor, a schema and a command surface | ANT page `0x10` reliable command: `0x02` set level, `0x04` set mode | `device-profiles.md` §5.2 |
+| **Matter, but not RadiANT** — an ordinary smart fan | **on the bridge only.** The fan has no ANT radio and never hears of RadiANT | Matter `On/Off` and `Level Control`, client-side, over Thread | this section |
+
+Two consequences worth stating, because each is easy to get backwards:
+
+- **The `0x62` path does not need this document at all.** A head unit with an
+  ANT radio commands a `0x62` fan directly — no Thread, no Matter, no bridge, no
+  hub. That profile exists so a fan *vendor* can ship an ANT product, and
+  `device-profiles.md` §5.2's resolution of the auto-mode hole is what keeps it
+  implementable by a vendor with no ANT receiver in the product.
+- **The Matter path cannot use `0x62`, and no amount of profile work changes
+  that.** The fan has no ANT radio. The only thing the bridge can send it is
+  Matter, which is precisely why §8.4's client binding is the mechanism rather
+  than a convenience.
+
+The two share everything above the last hop: the same sample bus (§3), the same
+binding table (§5), and the same rule evaluator (§6) producing the same derived
+booleans. Only the final carrier differs, which is what the sink registry of
+section 4 is for — a `0x62` fan and a Matter fan are two sinks, not two
+architectures.
+
+**Neither is the generic case, and v1 does not attempt one.** An ANT+ device
+sending a generic command that the bridge relays to an arbitrary Matter actuator
+— a remote button mapped to whatever the user likes — is a third thing, and it
+is out of scope here: it would need ANT+ Controls `0x10`, which
+`device-profiles.md` §9 records as unimplemented on community and open-source
+evidence, and it raises a mapping-registration question neither path above has
+to answer. Section 13.
 
 ### 8.5 Commissioning is what pays for the Matter stack
 
@@ -1101,7 +1243,7 @@ before anything expensive is built on top of them.
 | 1 | Sample bus + sink registry + the ANT+ `0x78` adapter. Sinks = USB only | None. A pure refactor, host-testable, mirrors into `tools/ant_pages.py`, no radio change |
 | 2 | Binding table + rule evaluator §6.1–6.2 (activity outputs, prior-only zones), still USB-only | Fully testable on the mock radio: hysteresis, the asymmetric dwell, and the worn-gates-resting rule |
 | 3 | **MPSL backend + the 802.15.4 coexistence gate (§7.4)** | The go/no-go. Independent of everything above and everything below |
-| 4 | **Matter: commissioning and the four occupancy endpoints (§8.1)** | The flash ceiling of §11, and it delivers tier 1 — the first end-to-end demo is strap → QR scan → four HA `binary_sensor`s, no host and nothing installed |
+| 4 | **Matter: commissioning and the §8.1 type map** — the four occupancy endpoints, plus `0x10` temperature and `0x11` humidity for any `0x60` source that announces them | The flash ceiling of §11, and it delivers tier 1 — the first end-to-end demo is strap → QR scan → four HA `binary_sensor`s, no host and nothing installed |
 | 5 | MQTT-over-Thread sink + discovery generator + the WebSerial provisioning page | Tier 2. Adds the number in bpm |
 | 6 | Personalisation §6.3–6.5: histogram, conjugate update, capped store, NVM on session end | Pure addition. No endpoint moves, because prior-only was already `n = 0` of the same path |
 | 7 | Matter remainder: the MEI cluster, client binding, page `0x10` as the reverse path, and the §8.3b passenger cluster behind its default-off switch | — |
@@ -1117,6 +1259,14 @@ path first, which is the escape hatch and not the product.
 Putting Matter first also front-loads the flash ceiling, which is the second of
 the two risks this ordering exists to retire early, and it means the first
 demo is the zero-install one.
+
+**Temperature and humidity add no phase, and that is the test of §8.1.** They
+are two rows in a table phase 4 has to build anyway, reachable from any `0x60`
+node whose descriptor announces them, so the Matter half costs a table edit.
+What is *not* in phase 4 is the ANT+ side of §8.1a — an Environment `0x19`
+adapter or a common page 84 decoder — because each of those is a conformance
+job against evidence this project has not verified, and neither blocks the
+other rows from working.
 
 **BLE is deliberately last.** Most heart-rate straps are already ANT+/BLE dual,
 so re-broadcasting HR over BLE is the *least* valuable sink for the headline
@@ -1141,7 +1291,24 @@ should be specified as such when its turn comes.
 - **`0x27` time interval** or any other vocabulary addition, until the type is
   allocated in `radiant-telemetry.md` and `tools/ant_pages.py` in the same
   change. Section 3.2.
+- **ANT+ Environment `0x19` and common page 84 decoders.** The Matter endpoints
+  for `0x10` and `0x11` are in v1 (§8.1a) and a `0x60` node reaches them today;
+  what is deferred is decoding the two ANT+ carriers, and the reason is evidence
+  rather than effort. `device-profiles.md` §3.7 and §3.4 record both as
+  unverified against this project's code, and page 84 — the one that would make
+  temperature and humidity arrive from any device type — is the weaker of the
+  two. Neither ships on secondary evidence alone.
 - **Cohort aggregation.** Section 10.2.
+- **A generic ANT-command-to-Matter-actuator relay**, and the two fan paths of
+  §8.4a are not it. Relaying an arbitrary ANT+ command to an arbitrary Matter
+  device needs ANT+ Controls `0x10` decoded — unimplemented, community and
+  open-source evidence only (`device-profiles.md` §9) — and it needs an answer
+  to "which command drives which actuator" that neither fan path has to give.
+  Deferred rather than refused: if it is built, the bridge should describe
+  itself as a switch and let the commissioner own the mapping, because a bridge
+  that owns a command-mapping registry has acquired a configuration UI, and
+  `radiant-telemetry.md`'s command vocabulary is explicit that the bridge gets
+  no command vocabulary of its own.
 - **Any security switch.** The bridge inherits the envelope's posture and adds
   nothing; a bridged deployment that needs `X_AUTH` waits for Phase 7 exactly
   like an unbridged one.
