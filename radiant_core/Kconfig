@@ -137,7 +137,17 @@ config RADIANT_CORE_BACKEND_NRF_GATE_MPSL
 	# other. The relationship is enforced where it can be - CMakeLists.txt
 	# compiles a gate only under the nrf arm, so selecting this beside the
 	# null backend selects nothing and builds the null backend as asked.
-	depends on MPSL
+	# SELECT, NOT DEPENDS. It was `depends on MPSL`, and that is the same
+	# silent-wrong-build trap scripts/build_all.ps1 documents for
+	# -DRADIANT_BACKEND: nothing else in this tree turns MPSL on, so the only
+	# reason it was ever set was that CONFIG_BT pulled it in. Ask for the
+	# arbitrated build WITHOUT a second stack - which is exactly the A of
+	# every coexistence A/B, and the only way to measure what the arbiter
+	# costs on its own - and Kconfig dropped this symbol to n with a warning
+	# in the middle of a hundred lines of them, compiled the direct backend,
+	# and produced an image that works perfectly and answers a different
+	# question than the one asked.
+	select MPSL
 	select MPSL_ASSERT_HANDLER
 	help
 	  Take the RADIO through MPSL's timeslot API instead of owning it, so

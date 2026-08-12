@@ -1,0 +1,121 @@
+#
+# RadiANT heart-rate strap.
+#
+# One prefix for the whole application, STRAP_*, the same way the dongle uses
+# ANT_DONGLE_* and the simulator uses ANT_SIM_*. The three never build together,
+# but a shared prefix would make "which application does this symbol belong to"
+# ambiguous, and the answer to that question is how the CI assertions stay
+# honest.
+#
+
+rsource "../src/node/Kconfig"
+rsource "../src/profiles/Kconfig"
+
+source "Kconfig.zephyr"
+
+menuconfig STRAP
+	bool "RadiANT heart-rate strap"
+	default y
+	help
+	  A RadiANT NODE: radiant_core driving a master channel with
+	  src/profiles/profile_hr.c on top, broadcasting ANT+ heart rate
+	  (device type 0x78). No USB and no serial bridge - this is not a
+	  dongle, and the only host interface is the log.
+
+	  It exists for P8 of the multiprotocol plan: the BLE coexistence work
+	  needs a node whose ANT+ side is a master, because a master owns its
+	  slot phase and a slave does not, and what happens to a transmit
+	  schedule under an arbiter is the whole question.
+
+if STRAP
+
+config STRAP_DEVICE_NUMBER
+	int "ANT device number when the node is not provisioned"
+	range 1 65535
+	default 4242
+	help
+	  Used only when src/node/ has no identity record. A provisioned node
+	  takes its device number from that record instead, which is what
+	  ADR 0009 requires - the number is a property of the node's identity,
+	  not of the image. The fallback keeps a freshly-flashed DK usable on a
+	  bench without a provisioning step.
+
+config STRAP_HR_BPM
+	int "simulated heart rate, beats per minute"
+	range 30 220
+	default 72
+	help
+	  A DK has no electrodes. The beat generator produces beats at this
+	  rate so the page 0 event count and event time - the fields that
+	  actually survive a lost packet - advance the way a real strap's do.
+
+config STRAP_MANUFACTURER_ID
+	int "manufacturer id for the common pages"
+	range 0 255
+	default 255
+	help
+	  255 is the ANT+ development id. A shipped strap needs a real one from
+	  the alliance; using it here would be claiming somebody else's.
+
+config STRAP_BLE_HRS
+	bool "also advertise the SIG Heart Rate Service over BLE"
+	depends on BT && BT_PERIPHERAL
+	select BT_HRS
+	help
+	  P8b: the SoftDevice Controller beside the ANT+ master, advertising
+	  the standard SIG Heart Rate Service, so that one strap serves both a
+	  phone and an ANT+ receiver.
+
+	  THE CONNECTION AND ADVERTISING INTERVALS ARE THE PRIORITY MECHANISM,
+	  not a power tuning. Finding 1 of the plan: MPSL's two
+	  application-visible priorities rank us against ourselves and not
+	  against the Bluetooth controller, which outranks anything an
+	  application can request. So RadiANT keeps its slots by SHAPING the
+	  other stack's demand, exactly as nrf/samples/esb/esb_ptx_ble does
+	  with a 1 s connection interval.
+
+config STRAP_BLE_ADV_INTERVAL_MS
+	int "BLE advertising interval, milliseconds"
+	depends on STRAP_BLE_HRS
+	range 100 10000
+	default 1000
+	help
+	  1-2 s is what the plan specifies for the strap. Shortening it is not
+	  a power trade, it is a decision to take air away from ANT+, and the
+	  coexistence gate is what says whether it can be afforded.
+
+config STRAP_BLE_MIN_CONN_INTERVAL_UNITS
+	int "shortest connection interval to accept, 1.25 ms units"
+	depends on STRAP_BLE_HRS
+	range 6 3200
+	default 800
+	help
+	  800 units is 1 s, which is what nrf/samples/esb/esb_ptx_ble uses to
+	  run BLE beside a timeslot user, and it is chosen for the same reason.
+	  A phone will ask for far less - iOS asks for tens of milliseconds -
+	  and accepting hands the controller a recurring high-priority event
+	  every few milliseconds for the life of the connection. MPSL gives the
+	  controller priority levels above anything this application can
+	  request, so that air is simply gone; refusing the update is the only
+	  place the decision can be made.
+
+config STRAP_SUPPRESS_ANT_WHEN_CONNECTED
+	bool "stop ANT+ while a BLE connection is live"
+	depends on STRAP_BLE_HRS
+	default y
+	help
+	  P9's suppression rule, as policy above the link layer: a phone that
+	  has connected is receiving the same heart rate over the SIG service,
+	  so continuing to broadcast ANT+ spends air on a duplicate - and it
+	  means the hard contention case never normally arises at all.
+
+	  Turn it off for the minority-manufacturer behaviour, where straps
+	  keep transmitting ANT+ while connected so a watch and a phone can be
+	  served at once. That configuration is the one the coexistence gate
+	  actually stresses.
+
+module = STRAP
+module-str = strap
+source "subsys/logging/Kconfig.template.log_config"
+
+endif # STRAP

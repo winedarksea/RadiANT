@@ -1943,12 +1943,55 @@ gppi_done:
 	 * clears what it consumes, so being entered twice for one event costs a
 	 * few cycles and changes no behaviour.
 	 */
+#if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
+	/*
+	 * NEITHER LINE IS CONNECTED UNDER THE GATE, AND IT IS THE PRIORITY, NOT
+	 * THE HANDLER, THAT MADE THIS NECESSARY.
+	 *
+	 * IRQ_CONNECT() is not only a table entry. On ARM it also expands to a
+	 * z_arm_irq_priority_set() call that runs HERE, at initialisation, on
+	 * whatever the vector currently is. RADIO_0 is MPSL's - mpsl_init.c
+	 * defines MPSL_RADIO_IRQn as RADIO_0_IRQn on this part and registers it
+	 * with IRQ_DIRECT_CONNECT under IRQ_ZERO_LATENCY, which puts it at a
+	 * priority BASEPRI cannot mask. Connecting the same line here ran
+	 * afterwards and quietly put it back to an ordinary, maskable one.
+	 *
+	 * From then on every irq_lock() in the system - ours, the kernel's,
+	 * anybody's - could hold off the SoftDevice Controller's radio
+	 * interrupt. Nordic's own answer to this assert is that MPSL was
+	 * "prevented from doing a task on time ... by other same or higher
+	 * priority threads or interrupts", and demoting its interrupt out of
+	 * zero-latency is the most direct way there is to arrange that. It
+	 * asserts about ten milliseconds into bt_enable(), before a single
+	 * advertising packet, and it does so with this backend's radio
+	 * completely idle - no timeslot session, no grant, no operation ever
+	 * programmed - which is what finally ruled out everything the gate does
+	 * at RUN time and pointed here, to a single line that runs once at boot.
+	 *
+	 * Nothing is lost by dropping the connection. Inside a grant MPSL owns
+	 * the vector anyway and hands us RADIO events as
+	 * MPSL_TIMESLOT_SIGNAL_RADIO, which the gate forwards to the same
+	 * handler through radiant_nrf_gate_on_radio_irq(); outside a grant the
+	 * radio is not ours and an interrupt from it is not ours to take. The
+	 * NVIC line itself still has to be ENABLED - see radiant_radio_enable(),
+	 * and note that irq_enable() is NVIC_EnableIRQ() and touches no
+	 * priority - because with CONFIG_MPSL_DYNAMIC_INTERRUPTS off MPSL uses
+	 * the static IRQ_DIRECT_CONNECT path, which never enables anything, and
+	 * mpsl.rst makes the timeslot user responsible for exactly that.
+	 *
+	 * And line 1 goes with it, which closes a second hole for free: with no
+	 * connection there, the controller's own RADIO_1 interrupts reach the
+	 * spurious handler instead of reaching radio_isr() and having the events
+	 * it was waiting for consumed out from under it.
+	 */
+#else
 	IRQ_CONNECT(RADIANT_RADIO_IRQn, CONFIG_RADIANT_CORE_BACKEND_NRF_IRQ_PRIO,
 		    radio_isr, NULL, 0);
 #if defined(RADIANT_RADIO_IRQn_2)
 	IRQ_CONNECT(RADIANT_RADIO_IRQn_2, CONFIG_RADIANT_CORE_BACKEND_NRF_IRQ_PRIO,
 		    radio_isr, NULL, 0);
 #endif
+#endif /* CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL */
 
 	radiant_op.cbs = cbs;
 	radiant_op.user = user;
@@ -2055,14 +2098,20 @@ int radiant_radio_enable(void)
 	 * LINE 1 IS NOT OURS AND WE NEVER PUT ANYTHING ON IT. Nothing in this
 	 * file writes INTENSET10, so a RADIO_1 interrupt can only come from bits
 	 * somebody else set - and on a combined build that somebody is the
-	 * SoftDevice Controller. Our handler is statically connected to that
-	 * vector (MPSL only takes line 0), so leaving the line enabled hands the
-	 * controller's own interrupts to radio_isr(), which consumes the RADIO
-	 * events the controller was waiting for.
+	 * SoftDevice Controller. Under the gate this file no longer connects
+	 * that vector at all (see radiant_radio_init()), so an interrupt on it
+	 * reaches the spurious handler rather than radio_isr(); leaving the line
+	 * disabled as well is the belt to that braces.
 	 *
-	 * On a direct build both lines are ours and both are enabled, which is
-	 * what the two IRQ_CONNECTs above are for and why this is a difference
-	 * between the gates rather than a correction to the backend.
+	 * AND irq_enable() IS NVIC_EnableIRQ() - IT SETS NO PRIORITY. That
+	 * distinction is the whole reason this call may stay while the
+	 * IRQ_CONNECT above it had to go: enabling a line MPSL registered is
+	 * what mpsl.rst asks the timeslot user to do, whereas re-connecting it
+	 * silently demoted MPSL's own interrupt out of zero-latency.
+	 *
+	 * On a direct build both lines are ours, both are connected in
+	 * radiant_radio_init() and both are enabled below, which is why this is
+	 * a difference between the gates rather than a correction to the backend.
 	 */
 	if (!IS_ENABLED(CONFIG_RADIANT_CORE_NRF_NO_RADIO0_IRQ)) {
 		irq_enable(RADIANT_RADIO_IRQn);

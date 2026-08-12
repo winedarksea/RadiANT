@@ -134,6 +134,29 @@ target_sources(app PRIVATE
 target_include_directories(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles")
 
+# ── src/bridge ──────────────────────────────────────────────────────────────
+#
+# The sample bus and sink registry (P5 of the multiprotocol plan; see
+# docs/radiant-bridge.md sections 3-4). Reaches no radiant_core header, same
+# claim src/profiles/profile_hr.c makes about itself - this is the layer above
+# the profile decoder, and section 2's amended rule 3 draws the line there.
+target_sources(app PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge/radiant_bridge.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge/radiant_hr_adapter.c"
+  # P6: the binding table (section 5) and the rule evaluator (section 6.1/6.2).
+  # radiant_rules.c registers itself as an ordinary RADIANT_SINK_DEFINE()
+  # sink, so it needs nothing from CMake beyond being compiled and linked -
+  # the ITERABLE_SECTION_ROM(radiant_sink, ...) fragment below already covers
+  # every sink in this application, this one included.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge/radiant_binding.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge/radiant_rules.c"
+)
+target_include_directories(app PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge")
+# The linker fragment RADIANT_SINK_DEFINE()'s STRUCT_SECTION_ITERABLE needs -
+# see the comment in radiant_bridge_sections.ld for why this is not optional.
+zephyr_linker_sources(SECTIONS "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge/radiant_bridge_sections.ld")
+
 # ── src/node ────────────────────────────────────────────────────────────────
 #
 # The hostless node's identity, epoch and pairing scalar (compat-C6):

@@ -617,6 +617,21 @@ static struct {
 } g;
 
 static struct {
+	/*
+	 * EVERY CALL IN, before any of the reasons one might not become a
+	 * request. `placed` counts what reached MPSL; this counts what the core
+	 * asked for, and the difference between them is the only way to tell
+	 * "the arbiter refused us" from "nobody asked".
+	 *
+	 * Added because a 50 pp loss measurement against a driven master looked
+	 * exactly like the former and was in fact the latter: placed == granted
+	 * == blocked 0, and still half the packets missing. With only `placed`
+	 * to read, a gate that is never called and a gate that is working
+	 * perfectly are the same four numbers.
+	 */
+	uint32_t acquires;
+	uint32_t acq_in_grant;
+	uint32_t acq_in_grant_denied;
 	uint32_t placed;
 	uint32_t granted;
 	uint32_t blocked;
@@ -743,6 +758,103 @@ static K_WORK_DEFINE(request_work, request_work_fn);
 static K_WORK_DEFINE(denied_work, denied_work_fn);
 
 /*
+ * WHAT THE NEXT GRANT WILL BE READ WITH, HELD APART FROM WHAT THE CURRENT ONE
+ * IS BEING READ WITH.
+ *
+ * These four used to be written straight into `g` by gate_acquire(). That is
+ * safe only while an acquire cannot happen during a grant - and the whole point
+ * of the change below is that it can and constantly does: a tracked window's
+ * packet arrives mid-window and the receive callback arms the next slot a
+ * quarter of a second out, with the current timeslot still live. Writing
+ * grant_end or granted_len_us through `g` at that moment would retune the
+ * running grant's own end and extension arithmetic to describe a window that
+ * has not been placed yet.
+ *
+ * So they are staged here and committed by request_work_fn() once
+ * mpsl_timeslot_request() has actually accepted the request - which is in
+ * thread context, about 1.7 ms before SIGNAL_START can read them, and after any
+ * -NRF_EAGAIN round trip through SESSION_IDLE (by which time the old grant is
+ * definitively over).
+ */
+static struct {
+	uint32_t       want_len_us;
+	uint32_t       granted_len_us;
+	radiant_time_t grant_end;
+	bool           extendable;
+} next_grant;
+
+/*
+ * HOW BIG THE ELASTIC CLASS ASKS ITS FIRST BITE, AND WHY IT IS A VARIABLE.
+ *
+ * ADR 0013 says the sweep is the consumer that gives way, and a fixed 10 ms
+ * initial request is only half of giving way. Measured against a 100 ms BLE
+ * advertiser: placed=570 granted=2 blocked=568. A tracked window - 5 ms, placed
+ * at an instant the master chose - coexists with that advertiser perfectly
+ * (blocked=0). A scan chunk asking for a fixed 10 ms and then extending does
+ * not, and once the channel drops for any reason it can never re-acquire,
+ * because acquisition is all sweep.
+ *
+ * So the first bite backs off when it is refused and grows back when it is not.
+ * Halving on BLOCKED reaches the floor in three refusals; growing by one
+ * EXTEND_STEP_US on success climbs back slowly enough that a busy neighbour is
+ * not fought over every cycle. The chunk it gets is then grown the ordinary way
+ * by the extension chain, so the backoff costs dwell only while the air is
+ * genuinely contended - which is the trade ADR 0013 asks for and the fixed
+ * constant could not express.
+ *
+ * NOT APPLIED TO TRACKED WINDOWS OR TRANSMITS. Those are not elastic: their
+ * length is the window the core chose, and shortening one would hand back air
+ * in the middle of somebody's packet.
+ */
+#define ELASTIC_FLOOR_US 2500u
+static uint32_t elastic_initial_us = ELASTIC_INITIAL_US;
+
+/*
+ * AND WHERE IT ASKS, WHICH TURNED OUT TO MATTER MORE THAN HOW MUCH.
+ *
+ * Backing the request off to 3.5 ms did not help at all: blocked=408 out of
+ * 410 against a 100 ms advertiser, which no amount of bad luck explains for a
+ * window that size. It is a phase lock. A scan chunk is ~94 ms of dwell plus
+ * placement overhead, so the sweep re-asks on a cadence within a few
+ * milliseconds of the advertiser's 100 ms interval - and the anchor
+ * deliberately does NOT move on BLOCKED, which is right for keeping a run of
+ * refusals from walking the schedule and is exactly what makes the collision
+ * reproduce forever. Every retry lands on the same phase of the neighbour's
+ * period as the one before it.
+ *
+ * So a refused elastic request moves before it tries again. The walk is a
+ * deterministic odd-increment one rather than a PRNG: it needs to be
+ * uncorrelated with 100 ms, not unpredictable, and a bench result that cannot
+ * be replayed is worth much less here. 2137 us is prime, so the sequence visits
+ * every offset before repeating, and the span is a little over one ANT+ slot so
+ * the sweep's own coverage is not distorted by it.
+ *
+ * ONLY THE ELASTIC CLASS MOVES. A tracked window's instant is the master's, not
+ * ours; skewing it would move the receiver off the packet, which is the very
+ * bug this file just finished paying for elsewhere.
+ */
+#define ELASTIC_SKEW_STEP_US 2137u
+#define ELASTIC_SKEW_SPAN_US 13000u
+static uint32_t elastic_skew_us;
+
+/* Consecutive refusals before the anchor is abandoned; see the BLOCKED case. */
+#define BLOCKED_RUN_REANCHOR 4u
+static uint32_t blocked_run;
+
+BUILD_ASSERT(ELASTIC_FLOOR_US >= MPSL_TIMESLOT_LENGTH_MIN_US,
+	     "the elastic floor must still be a timeslot MPSL will grant");
+BUILD_ASSERT(ELASTIC_FLOOR_US > END_MARGIN_US,
+	     "an elastic grant must outlive its own hand-back margin");
+
+static void commit_next_grant(void)
+{
+	g.want_len_us    = next_grant.want_len_us;
+	g.granted_len_us = next_grant.granted_len_us;
+	g.grant_end      = next_grant.grant_end;
+	g.extendable     = next_grant.extendable;
+}
+
+/*
  * Place the reservation. Thread context, so the MPSL call is legal and a
  * refusal can be handled by simply telling the core.
  */
@@ -758,6 +870,9 @@ static void request_work_fn(struct k_work *w)
 
 	rc = mpsl_timeslot_request(session_id, &req);
 	if (rc == 0) {
+		/* Accepted, so the staged numbers are now the numbers this
+		 * session's next grant will be read with. See next_grant. */
+		commit_next_grant();
 		stats.placed++;
 		return;
 	}
@@ -845,9 +960,15 @@ static void bootstrap_anchor(void)
 	req.params.earliest.length_us = MPSL_TIMESLOT_LENGTH_MIN_US;
 	req.params.earliest.timeout_us = BOOTSTRAP_TIMEOUT_US;
 
-	g.extendable = false;
-	g.want_len_us = MPSL_TIMESLOT_LENGTH_MIN_US;
-	g.granted_len_us = MPSL_TIMESLOT_LENGTH_MIN_US;
+	/* Staged like every other request, and it has to be: request_work_fn()
+	 * commits next_grant on every acceptance, so a bootstrap that wrote
+	 * through `g` would have its own numbers overwritten by whatever the
+	 * last real window staged. It cannot grow and it is the shortest
+	 * timeslot there is. */
+	next_grant.extendable = false;
+	next_grant.want_len_us = MPSL_TIMESLOT_LENGTH_MIN_US;
+	next_grant.granted_len_us = MPSL_TIMESLOT_LENGTH_MIN_US;
+	next_grant.grant_end = 0u;
 	g.bootstrapping = true;
 	g.pending = true;
 	k_work_submit(&request_work);
@@ -910,13 +1031,15 @@ static K_WORK_DELAYABLE_DEFINE(gate_dump, gate_dump_fn);
 static void gate_dump_fn(struct k_work *w)
 {
 	ARG_UNUSED(w);
-	LOG_INF("gate: placed=%u granted=%u blocked=%u cancel=%u eagain=%u "
-		"near=%u long=%u ext=%u/%u dead=%u | len=%u/%u sig=%u "
+	LOG_INF("gate: acq=%u in_grant=%u/%u placed=%u granted=%u blocked=%u cancel=%u eagain=%u "
+		"near=%u long=%u ext=%u/%u dead=%u | len=%u/%u el=%u sig=%u "
 		"g=%d p=%d rel=%d end=%d boot=%d anchor=%d",
+		stats.acquires, stats.acq_in_grant, stats.acq_in_grant_denied,
 		stats.placed, stats.granted, stats.blocked, stats.cancelled,
 		stats.refused_eagain, stats.refused_too_near,
 		stats.refused_too_long, stats.extends_ok, stats.extends_failed,
 		stats.deadline_fired, g.granted_len_us, g.want_len_us,
+		elastic_initial_us,
 		stats.last_signal, (int)g.granted, (int)g.pending,
 		(int)g.release_wanted, (int)g.ended, (int)g.bootstrapping,
 		(int)g.anchor_valid);
@@ -1055,6 +1178,17 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 	switch (signal) {
 	case MPSL_TIMESLOT_SIGNAL_START:
 		stats.granted++;
+		blocked_run = 0u;
+		/* The air was there for it, so take a little more next time. One
+		 * step per grant, against halving per refusal - deliberately
+		 * asymmetric, so a neighbour that has just started advertising is
+		 * conceded to quickly and reclaimed from slowly. */
+		if (g.extendable && elastic_initial_us < ELASTIC_INITIAL_US) {
+			elastic_initial_us += EXTEND_STEP_US;
+			if (elastic_initial_us > ELASTIC_INITIAL_US) {
+				elastic_initial_us = ELASTIC_INITIAL_US;
+			}
+		}
 		g.anchor = radiant_radio_now();
 		g.anchor_valid = true;
 		g.pending = false;
@@ -1321,6 +1455,55 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		} else {
 			stats.cancelled++;
 		}
+		/*
+		 * GIVE WAY BY ASKING FOR LESS, not merely by asking again. See
+		 * elastic_initial_us. Only the elastic class is shortened, and
+		 * `g.extendable` is exactly that class - it is the flag that
+		 * says this request is allowed to grow, which is the same thing
+		 * as saying its length was ours to choose.
+		 */
+		if (g.extendable) {
+			if (elastic_initial_us > ELASTIC_FLOOR_US) {
+				elastic_initial_us /= 2u;
+				if (elastic_initial_us < ELASTIC_FLOOR_US) {
+					elastic_initial_us = ELASTIC_FLOOR_US;
+				}
+			}
+			/* And ask somewhere else next time. See elastic_skew_us. */
+			elastic_skew_us += ELASTIC_SKEW_STEP_US;
+			if (elastic_skew_us >= ELASTIC_SKEW_SPAN_US) {
+				elastic_skew_us -= ELASTIC_SKEW_SPAN_US;
+			}
+		}
+		/*
+		 * A RUN OF REFUSALS MEANS THE ANCHOR IS THE PROBLEM, NOT THE
+		 * REQUEST - and this is the third thing tried on this symptom,
+		 * so the first two are recorded beside it rather than deleted.
+		 *
+		 * distance_us is measured from the PREVIOUS TIMESLOT'S START,
+		 * and the anchor deliberately does not move when a request is
+		 * refused. That rule is right - it is what stops a run of
+		 * denials walking the schedule - and it has an end: if nothing
+		 * is ever granted, the anchor ages without bound and every
+		 * subsequent request asks MPSL to place a slot further and
+		 * further into the future. Measured against a 100 ms advertiser,
+		 * two grants in the first second and then 93 consecutive blocks,
+		 * with the distance by then over a minute. Shrinking the request
+		 * (10 ms -> 3.5 ms) changed nothing; skewing its phase changed
+		 * nothing; both are kept because both are correct for the
+		 * contended case and neither was this.
+		 *
+		 * So after a short run of refusals the anchor is abandoned and
+		 * the next acquire re-bootstraps with EARLIEST - which is
+		 * exactly the tool for "somewhere soon, you choose", and the one
+		 * request type a busy neighbour cannot starve. The count is
+		 * small because there is nothing to lose: a fresh anchor costs
+		 * one minimum-length timeslot.
+		 */
+		if (++blocked_run >= BLOCKED_RUN_REANCHOR) {
+			blocked_run = 0u;
+			g.anchor_valid = false;
+		}
 		k_timer_stop(&deadline);
 		if (g.pending && g.bootstrapping) {
 			/* Nothing is behind it and nothing needs telling; the
@@ -1570,7 +1753,10 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	 * lead the request was built with. The instrument was moving the thing it
 	 * measured. See the header. */
 
+	stats.acquires++;
+
 	if (g.granted) {
+		stats.acq_in_grant++;
 		/*
 		 * A GRANT IS ALREADY HELD, AND THIS IS WHAT follow_on_us WAS
 		 * FOR.
@@ -1601,7 +1787,43 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 			g.release_wanted = false;
 			return GATE_GRANTED;
 		}
-		return GATE_DENIED;
+		/*
+		 * IT DID NOT FIT - AND THAT IS NOT THE SAME AS BEING REFUSED.
+		 *
+		 * BUG 18, AND IT WAS FIFTY PERCENT OF EVERY TRACKED PACKET.
+		 * This used to `return GATE_DENIED`, on the reasoning that the
+		 * branch above is the follow-on reserve and a window that does
+		 * not fit inside the reserve has missed it. That is true of a
+		 * REPLY. It is false of everything else, and everything else is
+		 * the common case:
+		 *
+		 * a tracked window's packet arrives mid-window; the receive
+		 * callback arms the next tracked slot a quarter of a second out,
+		 * which is the low-jitter path radiant_radio_hal.h's callback
+		 * contract exists to permit; the timeslot that carried the
+		 * packet is still live, because gate_release() runs from
+		 * deliver_terminal() and that has not happened yet. So the arm
+		 * arrived here, was asked whether 250 ms fits inside a 5.5 ms
+		 * grant, and was refused. The core lost the slot; the next
+		 * scheduler pump re-posted it onto the FOLLOWING one. Perfect
+		 * alternation, and against a driven master it measured 50.6 %
+		 * loss (exact) with the arbiter refusing NOTHING - blocked=0,
+		 * placed==granted, every window MPSL was asked for granted.
+		 *
+		 * A request that starts after this grant ends is an ordinary
+		 * future reservation and is placed like any other. Falling
+		 * through does that, and it costs nothing that was working: a
+		 * genuine acknowledged-data reply is ~1.56 ms away, which is
+		 * inside PLACE_MIN_US, so it still gets its synchronous refusal
+		 * from the too-near test below - the same answer by the road
+		 * that describes it.
+		 *
+		 * The counter stays. It is now "arms that had to be placed
+		 * rather than served from the reserve", which is a real property
+		 * of the traffic and the thing to watch if the reserve is ever
+		 * resized.
+		 */
+		stats.acq_in_grant_denied++;
 	}
 
 	if (g.pending) {
@@ -1622,6 +1844,20 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 
 	if (end <= start) {
 		return GATE_DENIED;
+	}
+
+	/*
+	 * Move an elastic request off whatever phase the last refusal found. The
+	 * whole window slides rather than stretching, so the chunk is the length
+	 * the caller asked for and only its instant changes - which for "as much
+	 * as fits" work is nothing the core has an opinion about. See
+	 * elastic_skew_us. Zero until something is actually refused, so an
+	 * uncontended bench places exactly where it always did.
+	 */
+	if (elastic_skew_us != 0u && op != GATE_OP_TX &&
+	    prio == RADIANT_GATE_PRIO_NORMAL) {
+		start += (radiant_time_t)elastic_skew_us;
+		end   += (radiant_time_t)elastic_skew_us;
 	}
 	/*
 	 * THE RESERVATION IS LONGER THAN THE AIR IT COVERS, by exactly the time
@@ -1737,15 +1973,21 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 		req.params.normal.length_us = (uint32_t)len;
 	}
 
-	g.want_len_us = (uint32_t)len;
-	g.grant_end = end;
+	/*
+	 * STAGED, NOT WRITTEN THROUGH `g` - because this function now runs
+	 * during a live grant as a matter of course, and these describe the
+	 * NEXT one. See next_grant and commit_next_grant().
+	 */
+	next_grant.want_len_us = (uint32_t)len;
+	next_grant.grant_end = end;
 	/*
 	 * Only the gap-filling classes grow themselves. A tracked window and a
 	 * transmit have an end the core chose and the air must not be held past
 	 * it; a scan chunk and an energy-detect sweep are exactly the "as much
 	 * as fits" work ADR 0013 makes elastic.
 	 */
-	g.extendable = (op != GATE_OP_TX) && (prio == RADIANT_GATE_PRIO_NORMAL);
+	next_grant.extendable = (op != GATE_OP_TX) &&
+				(prio == RADIANT_GATE_PRIO_NORMAL);
 
 	/*
 	 * THE ELASTIC CLASS ASKS SMALL AND GROWS; everything else asks for
@@ -1762,10 +2004,10 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	 * and the note that said so has been replaced by this one rather than
 	 * left to contradict it.
 	 */
-	if (g.extendable && len > ELASTIC_INITIAL_US) {
-		len = ELASTIC_INITIAL_US;
+	if (next_grant.extendable && len > (uint64_t)elastic_initial_us) {
+		len = elastic_initial_us;
 	}
-	g.granted_len_us = (uint32_t)len;
+	next_grant.granted_len_us = (uint32_t)len;
 
 	/*
 	 * HANDED TO A THREAD, NOT CALLED FROM HERE.

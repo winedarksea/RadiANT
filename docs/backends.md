@@ -8,28 +8,99 @@ when the backend seam lands. Until then, everything under *Radio backends* and
 *HAL contract* is design, not shipped code — the transport, build-target and
 optional-feature material below is the shipping behaviour and is asserted.
 
-**The MPSL gate now exists and receives; the coexistence *numbers* on this page
-are still thresholds rather than results, and those are two different claims.**
+**The MPSL gate exists, receives, and coexists with a running SoftDevice
+Controller — and it fails its own cost gate by a factor of thirty.** Those are
+three separate claims and only the first two are good news; see *`loss (exact)`,
+measured at last* immediately below before quoting anything from this page.
 [`radiant_core/src/radiant_radio_nrf_gate.h`](../radiant_core/src/radiant_radio_nrf_gate.h)
 and its direct implementation are compiled into every `-DRADIANT_BACKEND=nrf`
 build; [`radiant_radio_nrf_gate_mpsl.c`](../radiant_core/src/radiant_radio_nrf_gate_mpsl.c)
 is selected by `CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL`, off by default.
 
-What has been measured, on the nRF54L15 DK against a real sensor, three builds
-in one sitting on one bench:
+### `loss (exact)`, measured at last — and the arbiter fails its own gate
 
-| build | packets in 60 s |
+There is now a driven master on this bench, so the A/B the gate below specifies
+can actually be run. It does not need the `sim/` application and it does not need
+a second DK: flash a **Feather nRF52840 with the ordinary dongle image** and
+drive it with [`tools/ant_sim.py`](../tools/ant_sim.py). The firmware is a
+transparent bridge and will be an ANT+ master when a host asks it to be, which is
+what that tool exists for. Receiver is the nRF54L15 DK; both ends 45–60 s at
+4 Hz, −16 dBm:
+
+| build | `loss (exact)` |
 |---|---|
-| direct | 30 |
-| MPSL gate, `CONFIG_MPSL=y`, no second stack | 30 |
-| MPSL gate + `CONFIG_BT=y` SoftDevice Controller linked in | 30 |
+| direct | **0.00 %** — 0 of 179 messages missing |
+| MPSL gate, no second stack, *before* the fix below | **50.6 %** — 121 of 239 missing |
+| MPSL gate, no second stack, **after** | **0.00 %** — 600 of 600 received over 149.5 s |
 
-with 273 reservations placed, 272 granted, **0 blocked**, 2868 extensions and
-zero refusals, and the scheduler reporting `end ok=36 abrt=0 miss=0 fail=0
-deny=0`. **That is a yield comparison against a sensor of opportunity, not the
-`loss (exact)` A/B the gate below specifies** — which needs a driven master and
-has not been run. It is enough to say the arbiter works and not enough to say
-what it costs.
+The plan's stated exit criterion is *abandon the combined build if the arbiter
+alone costs more than 1.5 pp*. It was **+50 pp**; it is now **~0 pp**, and P3
+passes its own gate. Arrival jitter came down with it, from 22.9 ms stddev to
+3.7 ms, which is the direct build's figure. The direct column also establishes
+that this bench has essentially no floor of its own, which is what makes the
+others trustworthy.
+
+**It is diagnosed, and the arbiter is not the one refusing.** MPSL grants every
+single window it is asked for: `placed=94 granted=94 blocked=0`. The loss is
+self-inflicted, and it took a new counter to see it, because with only `placed`
+to read *a gate that is never called* and *a gate that is working perfectly* are
+the same four numbers. Counting calls **in** as well as requests **out**:
+
+```
+gate: acq=184 in_grant=91/91 placed=94 granted=94 blocked=0 ...
+```
+
+184 acquires in 45 s is 4.1/s — exactly the master's rate, so the core is asking
+for every slot. Of those, **91 arrive while a grant is still held and all 91 are
+refused by us**, at the `return GATE_DENIED` in `gate_acquire()`'s
+already-granted branch. Perfect alternation, hence exactly half.
+
+The sequence is the arm/air seam again. A tracked window's packet arrives
+mid-window; the receive callback immediately arms the next tracked slot 250 ms
+out — that is the low-jitter path the HAL contract exists to permit. But the
+current timeslot is still live (`gate_release()` runs from `deliver_terminal()`,
+which has not happened yet), so `gate_acquire()` takes the "a grant is already
+held" branch, asks whether a window a quarter of a second away fits inside a
+5.5 ms grant, and refuses it. The core loses that slot; the next scheduler pump
+re-posts and lands on the *following* one.
+
+That branch exists for the acknowledged-data reply, which really does have to be
+served out of the reserve it was granted with, and for that it is correct. What
+is wrong is the else: a request that starts *after* the current grant ends is not
+a reply that failed to fit, it is an ordinary future reservation, and it must be
+**placed** rather than denied.
+
+**Fixed.** The request is now staged in `next_grant` and committed by
+`request_work_fn()` once `mpsl_timeslot_request()` has accepted it, because the
+placement path writes `g.grant_end`, `g.granted_len_us` and `g.extendable` — all
+of which describe the *next* grant and would retune the live one's end and
+extension arithmetic if written straight through `g`. The acknowledged-data reply
+keeps its synchronous refusal: at ~1.56 ms out it is inside `PLACE_MIN_US`, so it
+is still turned away by the too-near test, which is the same answer by the road
+that describes it. The counter stays, now reading "arms that had to be placed
+rather than served from the reserve" — a real property of the traffic, and the
+thing to watch if the reserve is ever resized.
+
+**An earlier reading of this page said the cause was MPSL placement jitter
+against an 800 µs window. That was wrong** and is corrected here: P0 measured the
+anchor rule at 0–17 µs over 640 chained requests, and the radio's own timestamps
+on received packets are 0.013 ms off the slot grid. Nothing about MPSL's
+placement is loose. The 800 µs window is simply the direct build's 238 µs plus
+`HEAD_MARGIN_US` and `TAIL_MARGIN_US`, and it is not implicated.
+
+**The previous result on this page read "direct 30 / MPSL gate 30 / MPSL+BT 30
+packets in 60 s" and is withdrawn as a yield comparison.** Thirty packets in
+sixty seconds is 0.5/s against a 4 Hz power meter: it was a sensor of
+opportunity, heard at whatever rate the room offered, and an equal number on both
+sides of it means only that both builds heard the same weak thing. It concealed a
+50 pp defect completely. The lesson is the one the gate config already encodes —
+`loss (exact)`, counted against the transmitter's own event counter, is the only
+number that means anything here.
+
+The arbitration counters from that sitting are still worth keeping: 273
+reservations placed, 272 granted, **0 blocked**, 2868 extensions, zero refusals,
+scheduler `end ok=36 abrt=0 miss=0 fail=0 deny=0`. The arbiter does what it says;
+what it costs is the table above.
 
 One structural cost IS visible and is by design: a scan chunk is 94 200 µs under
 the gate against 260 000 µs direct, because `caps.max_window_us` bounds a window
@@ -57,19 +128,23 @@ That is the arbiter's own cost. **The ratio with a second stack actually running
 is not yet measurable, and the reason is an open bug rather than a missing
 run.**
 
-### The open coexistence bug
+### The coexistence bug, found and fixed
 
 `CONFIG_ANT_DONGLE_BLE_COEX_LOAD=y` starts a BLE advertiser beside ANT+ so that
 the gate has a second stack that wants the radio. Built that way, the
-SoftDevice Controller asserts:
+SoftDevice Controller used to assert:
 
 ```
 <err> bt_sdc_hci_driver: SoftDevice Controller ASSERT: 48, 1792
 ```
 
 within about 4–18 ms of the first advertising event, **with no ANT+ channel ever
-opened**. What has been established about it, so the next session does not
-re-establish it:
+opened**, and reboot into doing it again. **The cause was a single line in
+`radiant_radio_init()` and it is fixed**; see *What it actually was* below. The
+elimination table is kept because every entry in it is a plausible half-day that
+nobody should spend again, and because the shape of the mistake is worth having
+written down: ten correct experiments, each one individually sound, all of them
+looking at run time when the fault was at boot.
 
 - **It is ours, not the platform's.** Zephyr's stock
   `samples/bluetooth/peripheral` advertises perfectly on this exact board and
@@ -110,37 +185,144 @@ and nothing else, and the controller ships as a binary that asserts nothing at
 build time. That gap was real and worth closing; TIMER22 behaves identically, so
 the choice of timer is not the problem either.
 
-What remains between the one clean configuration and the asserting ones is now
-small: the errata-20 `CONSTLAT` power-mode trigger, the static `IRQ_CONNECT`
-table entries, the RSSI/temperature work queue — **and the fact that the null
-build also does not compile the gate or select `MPSL_ASSERT_HANDLER` at all,
-which is a confound in the baseline that should be removed before trusting it
-further.** That last point is the honest next step, not another peripheral.
+#### What it actually was
 
-Removing that confound the obvious way does not build: selecting
-`RADIANT_CORE_BACKEND_NRF_GATE_MPSL` beside `RADIANT_BACKEND=null` selects
-`MPSL_ASSERT_HANDLER`, whose `mpsl_assert_handle()` lives in the gate file that
-the null arm does not compile, and the link fails on the undefined symbol. So
-the clean baseline genuinely differs from the asserting builds by more than the
-radio backend, and a trustworthy control needs either a handler outside the gate
-or an nrf build whose `radiant_radio_init()` is skipped outright. Until one of
-those exists, "it is in `radiant_radio_init()`" is the best-supported reading
-rather than a proven one.
-- **One cause was found and fixed**: `RADIO->INTENSET` was set once at enable and
-  left, so the controller's own events raised interrupts nobody scheduled. It is
-  now established inside a grant and cleared when the grant ends. It was not
-  sufficient.
-- **A second leak of the same kind is confirmed and unfixed**: the RADIO's
-  `PUBLISH_*`/`SUBSCRIBE_*` registers are written by `nrfx_gppi_conn_alloc()` and
-  are not touched by `conn_enable()`/`conn_disable()`, so they stay attached
-  between grants — and the t_sync capture is deliberately always-live. Detaching
-  them at the grant boundary was tried and stops the receive path dead
-  (`chunks=256, end ok=0, deny=256`), so the leak is real and that is not the fix.
-  The save side is kept in `radiant_radio_nrf.c`; the restore side is what needs
-  the next idea.
+Two things broke the deadlock, and neither was another peripheral.
 
-Until that is closed, `[gates.coexistence]`'s `max_delta_pp` and the second-stack
-half of `min_sweep_rate_ratio` have no run behind them.
+**The experiment that pointed the right way** was setting *all four* diagnostic
+switches at once rather than one at a time. That build has no HFXO request, no
+(D)PPI, no RADIO_0 `irq_enable()` and no timeslot session — and it still
+asserted, twelve milliseconds into `bt_enable()`, before a single advertising
+packet. Re-reading the failing captures with that in hand, 54 of the 55 asserts
+in a 3000-line log had `chunks=0 end ok=0`: **no timeslot had ever been granted
+and no radio operation had ever been programmed.** Everything the gate does at
+run time was therefore already excluded by the evidence on hand, and had been
+for some time. The single-variable cuts were each sound and all of them were
+aimed at the wrong half of the program.
+
+**The cause** is one line, and it is not what it looks like:
+
+```c
+IRQ_CONNECT(RADIANT_RADIO_IRQn, CONFIG_RADIANT_CORE_BACKEND_NRF_IRQ_PRIO,
+            radio_isr, NULL, 0);
+```
+
+`IRQ_CONNECT()` is not only an ISR-table entry. On ARM it also expands to a
+`z_arm_irq_priority_set()` call that runs *where it is written* — here, inside
+`radiant_radio_init()`, well after MPSL's `SYS_INIT`. And `RADIANT_RADIO_IRQn`
+is `RADIO_0_IRQn`, which is MPSL's: `mpsl_init.c` registers it with
+`IRQ_DIRECT_CONNECT` under `IRQ_ZERO_LATENCY`, at a priority `BASEPRI` cannot
+mask. Connecting the same line afterwards put it quietly back to an ordinary,
+maskable one.
+
+From that moment every `irq_lock()` in the system — ours, the kernel's,
+anybody's — could hold off the SoftDevice Controller's radio interrupt. Nordic's
+own account of this assert is that MPSL was *"prevented from doing a task on
+time … by other same or higher priority threads or interrupts"*, and demoting
+its interrupt out of zero-latency is the most thorough way there is to arrange
+exactly that.
+
+This is also why `RADIANT_CORE_NRF_NO_RADIO0_IRQ` did not find it: that switch
+skips `irq_enable()`, and the damage was done by `IRQ_CONNECT()` — a different
+line, doing a different thing, one screenful away. The elimination was
+incomplete rather than wrong, which is the most expensive kind.
+
+Under the gate this file now connects **neither** RADIO line. Nothing is lost:
+inside a grant MPSL owns the vector and hands us RADIO events as
+`MPSL_TIMESLOT_SIGNAL_RADIO`, which the gate forwards to the same handler;
+outside a grant the radio is not ours and an interrupt from it is not ours to
+take. The NVIC line itself is still *enabled* — `irq_enable()` is
+`NVIC_EnableIRQ()` and touches no priority — because with
+`CONFIG_MPSL_DYNAMIC_INTERRUPTS` off MPSL uses the static `IRQ_DIRECT_CONNECT`
+path, which never enables anything, and `mpsl.rst` makes the timeslot user
+responsible for precisely that. Dropping line 1's connection closes a second
+hole for free: the controller's own RADIO_1 interrupts now reach the spurious
+handler instead of reaching `radio_isr()` and having the events it was waiting
+for consumed out from under it.
+
+Measured after the fix: **35 s with the advertiser running, 0 asserts, 0
+reboots**, where every previous attempt rebooted about every 9 s. A gate-only
+control built from the same tree still receives at the direct build's rate
+(`DATA=20` in 40 s), so neither this nor the teardown below cost anything.
+
+#### What the reference implementations changed
+
+Reviewing against two published ESB-beside-BLE timeslot samples —
+[`too1/ncs-esb-ble-mpsl-demo`](https://github.com/too1/ncs-esb-ble-mpsl-demo) and
+[`inductivekickback/ncs_ble_esb_demo`](https://github.com/inductivekickback/ncs_ble_esb_demo)
+— found one contract this file was not keeping. Both end **every** timeslot by
+putting the peripheral all the way back to `DISABLED`, not merely by masking its
+interrupt:
+
+```c
+irq_disable(RADIO_IRQn);
+NRF_RADIO->SHORTS = 0;
+NRF_RADIO->EVENTS_DISABLED = 0;
+NRF_RADIO->TASKS_DISABLE = 1;
+while (NRF_RADIO->EVENTS_DISABLED == 0);
+```
+
+`radiant_nrf_gate_on_grant_end()` now does the same. `SHORTS` is the part that
+mattered: `deliver_terminal()` clears it, but that function runs on every path
+that ends a grant *including the ones where no terminal was owed* — a grant that
+ran out under an armed receive, an `EXTEND_FAILED`, a session closing. On those
+paths a short is a hardware edge from an event to a task that does not care whose
+packet raised the event, so our `END`→`DISABLE` short left set is the
+controller's next advertising packet disabling the controller's own radio. It
+was not what produced assert 48/1792 — that had already been fixed — but it is a
+real leak on a real path and it is closed. Neither register is shared, which is
+what makes this different from the `INTENCLR00` trap above.
+
+Nordic's own
+[`nrf_802154` multiprotocol note](https://github.com/nrfconnect/sdk-nrfxlib/blob/main/nrf_802154/doc/multiprotocol_support.rst)
+adds only the priority rule — *"Bluetooth Low Energy has always priority over
+802.15.4"* — and says nothing about peripheral hand-back, which is worth knowing
+so nobody goes looking there for it.
+
+#### What is still open: the search phase gets blocked
+
+With the assert gone, the arbitration that was underneath it is finally visible,
+and it splits cleanly in two.
+
+**Tracking works.** ANT+ tracking a real sensor beside a 100 ms advertiser:
+`placed=36 granted=35 blocked=0`, windows about 5.5 ms. Zero refusals.
+
+**Searching does not.** The sweep's chunks are ~94 ms — see the structural cost
+above — and a 94 ms window cannot be fitted around a 100 ms advertising interval.
+Measured: `placed=744 granted=2 blocked=742`, after which the sweep gives up
+(`abrt=1`) and stops placing at all.
+
+Three things were tried. All three are kept, because two of them are right for
+the contended case even though neither was the cause, and the elimination is
+worth more than the code:
+
+| tried | effect, from `placed=570 granted=2 blocked=568` |
+|---|---|
+| back the elastic first bite off on refusal, 10 ms → 3.5 ms, grow back on grant | none — `granted=2 blocked=408` |
+| skew a refused elastic request's phase, so a ~94 ms chunk cadence cannot lock onto a 100 ms advertiser | none — `granted=2 blocked=93` |
+| **abandon the anchor after 4 consecutive refusals and re-bootstrap with EARLIEST** | **`granted=4 blocked=8`** |
+
+The third is the one that mattered, and the reason is the anchor rule.
+`distance_us` is measured from the *previous timeslot's start*, and the anchor
+deliberately does not move when a request is refused — which is correct, it is
+what stops a run of denials walking the schedule, and it has an end. If nothing
+is ever granted the anchor ages without bound, so every later request asks MPSL
+to place a slot further into the future; by the end of a two-minute run the
+distance was over a minute. A fresh anchor costs one minimum-length timeslot, and
+EARLIEST is the one request type a busy neighbour cannot starve.
+
+**It is still not enough, and what remains is in the core rather than the gate.**
+After re-anchoring the sweep gets about a third of what it asks for — and then
+stops asking: `acq=13` frozen, `deny=12`, `abrt=1`. The scheduler abandons the
+search after a dozen denials. Under an arbiter a denial during acquisition is
+ordinary weather rather than a reason to give up, so what needs changing is the
+search's response to `RADIANT_RADIO_EDENIED`: persist and keep re-posting. That
+is core policy, it is where this work stops, and until it is done
+`[gates.coexistence]`'s `max_delta_pp` and the second-stack half of
+`min_sweep_rate_ratio` still have no run behind them.
+
+Tracking is unaffected by all of this: a channel that is already locked keeps its
+packets beside a live advertiser.
 
 So the +0.5 pp coexistence bar below, the arbiter's own cost and the sweep-rate
 ratio are **thresholds, not results**. They live in

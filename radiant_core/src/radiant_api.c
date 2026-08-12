@@ -2447,6 +2447,24 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		 */
 		radiant_search_on_done(&api_search, why == RADIANT_SCHED_DONE_OK,
 				   why == RADIANT_SCHED_DONE_ABORTED, now);
+		/*
+		 * A chunk the arbiter refused credited zero dwell above, correctly
+		 * - but a channel searching under a finite ACQUIRE timeout has a
+		 * WALL-CLOCK deadline that keeps counting down regardless, and
+		 * under a busy second stack most attempts are denials. Measured:
+		 * a channel armed thirteen times, denied twelve, and simply
+		 * stopped - not because the device was absent, but because the
+		 * arbiter's own refusals had been charged against a budget meant
+		 * to measure listening time. See radiant_search_note_denied().
+		 *
+		 * RADIANT_API_HOUSEKEEP_MS is what actually paces the retry (see
+		 * api_event_thread()), so it is what this attempt cost in wall
+		 * clock and the right size for the extension.
+		 */
+		if (why == RADIANT_SCHED_DONE_DENIED) {
+			radiant_search_note_denied(&api_search,
+						RADIANT_API_HOUSEKEEP_MS * 1000u);
+		}
 #ifdef CONFIG_RADIANT_CORE_SWEEP_DEBUG
 		switch (why) {
 		case RADIANT_SCHED_DONE_OK:

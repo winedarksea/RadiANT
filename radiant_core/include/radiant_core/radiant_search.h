@@ -747,6 +747,33 @@ void radiant_search_on_done(struct radiant_search *s, bool ran_to_close,
  */
 void radiant_search_tick(struct radiant_search *s, radiant_time_t now);
 
+/*
+ * A search window was refused by an arbiter rather than by the air - RX
+ * radiant_search_on_done()'s "never opened" case. Nothing was learned about
+ * whether the wanted device is out there, which is also why on_done() credits
+ * it zero dwell; ch->deadline is a WALL-CLOCK bound, though, and keeps
+ * counting down regardless of why the window never opened.
+ *
+ * Left alone, an ACQUIRE search with a finite timeout expires on schedule even
+ * when nearly every window was denied - the caller's timeout measures "how
+ * long have we been trying", the arbiter turns most of that into "how long
+ * were we refused", and the two get silently conflated. Measured beside a
+ * busy BLE advertiser: a channel armed thirteen times, denied twelve, aborted
+ * once, and then simply stopped - not because the device was absent, but
+ * because wall-clock time the arbiter owned had been charged against a budget
+ * meant to measure listening time.
+ *
+ * The fix is the same shape as radiant_channel.c's guard: extend the ceiling
+ * by exactly what was taken from it. Every ACTIVE channel with a finite
+ * deadline - not only the one carrying the sweep, since one search window
+ * denied is time every searching channel lost - has its deadline pushed out
+ * by window_us, which the caller sizes to whatever the refused attempt
+ * actually cost in wall clock (radiant_core/src/radiant_api.c uses the
+ * housekeeping interval that drives the retry). RADIANT_TIME_NEVER is left
+ * untouched: there is no ceiling to protect.
+ */
+void radiant_search_note_denied(struct radiant_search *s, uint32_t window_us);
+
 /* ---------------------------------------------------------------------------
  * The seen cache, exposed
  *

@@ -842,6 +842,34 @@ void radiant_search_tick(struct radiant_search *s, radiant_time_t now)
 	}
 }
 
+void radiant_search_note_denied(struct radiant_search *s, uint32_t window_us)
+{
+	if (!inst_ok(s) || window_us == 0u) {
+		return;
+	}
+
+	for (uint8_t c = 0u; c < (uint8_t)RADIANT_SEARCH_MAX_CHANNELS; c++) {
+		struct radiant_search_chan *ch = &s->chans[c];
+
+		if (!ch->active || ch->deadline == RADIANT_TIME_NEVER) {
+			continue;
+		}
+		/*
+		 * Saturate rather than wrap. A deadline that overflowed back
+		 * into the past would expire the channel on the very next
+		 * tick - the opposite of what a saturating extension is for -
+		 * and a search denied often enough to reach UINT32_MAX of
+		 * pushed-out deadline has a problem this counter cannot fix
+		 * anyway.
+		 */
+		if ((radiant_time_t)(ch->deadline + window_us) < ch->deadline) {
+			ch->deadline = RADIANT_TIME_NEVER - 1u;
+		} else {
+			ch->deadline += (radiant_time_t)window_us;
+		}
+	}
+}
+
 /* ---------------------------------------------------------------------------
  * The seen cache
  *

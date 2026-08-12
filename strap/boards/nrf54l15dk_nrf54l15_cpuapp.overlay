@@ -1,0 +1,43 @@
+/*
+ * nRF54L15 DK, as a RadiANT strap.
+ *
+ * Deliberately NOT a copy of the dongle's overlay. That one's whole subject is
+ * the ANT serial transport on the second VCOM - `aliases { ant-uart = &uart30 }`
+ * and `&uart30 { status = "okay" }` - and a strap has no transport at all. It is
+ * a sensor: the only thing leaving the board is the log on the console UART,
+ * which the board's own devicetree already provides.
+ *
+ * What IS shared is the one line radiant_core's nrf backend cannot start
+ * without.
+ */
+
+/ {
+	chosen {
+		/*
+		 * The TIMER the backend owns outright. It runs at 1 MHz forever
+		 * and is what t_sync is hardware-captured into from RADIO's
+		 * ADDRESS event, so it cannot be shared - naming it here rather
+		 * than in the source is what makes a second user a devicetree
+		 * conflict instead of two drivers reprogramming each other's
+		 * prescaler.
+		 *
+		 * timer20 is free on this board, and is `status = "disabled"`
+		 * by default like every TIMER on this SoC. An unclocked
+		 * peripheral is not addressable, which the backend found once
+		 * by taking a bus fault on its first register write.
+		 *
+		 * ⚠ IT IS ALSO WHAT P0's TIMER AUDIT WAS ABOUT. mpsl.rst lists
+		 * MPSL as owning TIMER10 *and* TIMER20 on nRF54L, while
+		 * mpsl_hwres.h reserves only TIMER10. Measured: TIMER20 does not
+		 * collide, and TIMER22 behaves identically. If a future MPSL
+		 * revision does claim it, this is the line that moves, and
+		 * mpsl_init.c's BUILD_ASSERTs will say so loudly rather than
+		 * letting it fail on the air.
+		 */
+		radiant,radio-timer = &timer20;
+	};
+};
+
+&timer20 {
+	status = "okay";
+};
