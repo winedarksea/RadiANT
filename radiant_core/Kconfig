@@ -161,7 +161,7 @@ config RADIANT_CORE_BACKEND_CC26XX
 
 endchoice
 
-# ── A setting of the nrf arm, and it has to live OUTSIDE the choice ─────────
+# â”€â”€ A setting of the nrf arm, and it has to live OUTSIDE the choice â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #
 # It used to be inside it, between the nrf arm and `endchoice`, and that was a
 # latent Kconfig dependency loop that only became fatal when a third arm was
@@ -186,7 +186,7 @@ config RADIANT_CORE_BACKEND_NRF_IRQ_PRIO
 	  the only path that meets a 1.55 ms acknowledged-data turnaround.
 	  Lower this only with a measurement in hand.
 
-# ── Who owns the RADIO ───────────────────────────────────────────────────────
+# â”€â”€ Who owns the RADIO â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #
 # THIS USED TO BE A THIRD ARM OF THE CHOICE ABOVE, and moving it here is a
 # decision rather than a tidy-up. "mpsl" was written as a separate BACKEND -
@@ -247,6 +247,38 @@ config RADIANT_CORE_BACKEND_NRF_GATE_MPSL
 	  It does not take its air, provided the reservation is released the
 	  moment an empty window closes - which the backend does, and which is a
 	  required line of the design rather than an optimisation.
+
+config RADIANT_CORE_NRF_GRANT_HOLD_US
+	int "hold the CPU across a tracked receive window, microseconds (0 = off)"
+	depends on RADIANT_CORE_BACKEND_NRF_GATE_MPSL
+	default 1500
+	help
+	  BUG 23. The nRF 802.15.4 driver resets the RADIO peripheral - every
+	  SUBSCRIBE and PUBLISH register zeroed, INTENCLR00 = 0xffffffff,
+	  TASKS_SOFTRESET - from nrf_802154_core.c's on_timeslot_ended(), which
+	  runs when MPSL takes the radio away from it to give it to US. In NCS
+	  that notification is delivered out of mpsl_low_priority_process(), and
+	  nrf/subsys/mpsl/init/mpsl_init.c runs that from the MPSL WORK QUEUE
+	  THREAD, not from an interrupt. So the reset lands wherever that thread
+	  is next scheduled, which is routinely inside our own granted timeslot,
+	  after the window has been programmed and before the frame arrives.
+
+	  A thread cannot preempt an interrupt, so the fix is to not leave the
+	  CPU: the grant callback stays on it from the moment a short receive
+	  window is programmed until that window's frame is in RAM. Bounded
+	  twice - by the window's own close compare and by this ceiling - and
+	  applied only to windows shorter than 10 ms, so a scan chunk or ED
+	  sweep is never held.
+
+	  The number is a CEILING, not a duration. The hold ends at the window's
+	  close, which for a tracked slot is a few hundred microseconds; this
+	  only bounds the pathological case where the close compare never fires
+	  at all. Set it to 0 to build the unmitigated behaviour, which is what
+	  the loss figure in the coexistence gate was measured against.
+
+	  Costs nothing when no second stack is present beyond the spin itself:
+	  with the radio uncontended the window completes on time and the hold
+	  ends at EVENTS_END exactly as it would have.
 
 config RADIANT_CORE_NRF_NO_RADIO0_IRQ
 	bool "DIAGNOSTIC: leave the RADIO_0 NVIC line entirely to MPSL"
@@ -327,7 +359,7 @@ config RADIANT_CORE_GATE_MPSL_NO_SESSION
 	  Never in a shipping image. A dongle built this way is a dongle that
 	  cannot receive.
 
-# ── The ISR stack, and it is a REQUIREMENT rather than a tuning knob ─────────
+# â”€â”€ The ISR stack, and it is a REQUIREMENT rather than a tuning knob â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #
 # MPSL delivers SIGNAL_START on the INTERRUPT STACK, and that is where the
 # arbitrated backend programmes the peripheral - it cannot be done earlier,
@@ -348,7 +380,7 @@ config RADIANT_CORE_GATE_MPSL_NO_SESSION
 config ISR_STACK_SIZE
 	default 4096 if RADIANT_CORE_BACKEND_NRF_GATE_MPSL
 
-# ── And the two THREAD stacks this gate runs the core from ──────────────────
+# â”€â”€ And the two THREAD stacks this gate runs the core from â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #
 # The gate defers every call into the core to a work item, because arming
 # reaches it from the RADIO interrupt inside a timeslot where the MPSL API is
@@ -740,3 +772,4 @@ config RADIANT_CORE_SWEEP_DEBUG
 	  Off by default. -DCONFIG_RADIANT_CORE_SWEEP_DEBUG=y on a debug build.
 
 endif # RADIANT_CORE
+

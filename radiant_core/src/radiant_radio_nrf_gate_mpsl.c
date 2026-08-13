@@ -1,4 +1,4 @@
-﻿/* SPDX-License-Identifier: Apache-2.0 */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * radiant_radio_nrf_gate_mpsl.c - the RADIO, borrowed from MPSL a slot at a
  * time.
@@ -488,6 +488,29 @@ static struct {
 	 * without either of the above - which would mean MPSL is unhappy about
 	 * something we returned rather than about when we returned it. */
 	uint32_t last_signal;
+	/* Bench probe: how many times MPSL delivered each of the two signals
+	 * that can END a live grant. `sig_radio` at zero while grants are being
+	 * delivered says the RADIO never raised an event inside the timeslot -
+	 * a fact no other counter here distinguishes from a healthy grant that
+	 * simply heard nothing. */
+	uint32_t sig_radio;
+	uint32_t sig_timer0;
+	/* Bench probe: the same life story, for HIGH-priority (tracked window
+	 * and transmit) requests only. "Tracked windows never get the air" and
+	 * "tracked windows get the air and hear nothing" need opposite fixes
+	 * and no counter here separated them. */
+	uint32_t hi_acq;
+	uint32_t hi_pending;  /* ...that got as far as a placed reservation */
+	uint32_t hi_reserve;  /* ...served from air already held */
+	uint32_t hi_blocked;  /* ...refused by the arbiter */
+	uint32_t hi_granted;  /* ...that actually got the air */
+	/* Which call site ended each HIGH-priority grant. Indexed by the
+	 * END_SITE_* enum below; sized as a literal because the enum is
+	 * declared with the rest of the grant bookkeeping, further down. */
+	uint32_t hi_end_site[9];
+	/* SIGNAL_START found MPSL_TIMER0's COMPARE0 event already set before it
+	 * enabled the interrupt - a grant that ends the instant it is armed. */
+	uint32_t start_stale_compare;
 } stats;
 
 /*
@@ -586,7 +609,47 @@ static struct {
 	uint32_t       granted_len_us;
 	radiant_time_t grant_end;
 	bool           extendable;
+	/* Bench probe only: which class this request belongs to, so a BLOCKED
+	 * or a START can be attributed to it. */
+	bool           high_prio;
 } next_grant;
+
+/* The class of the request MPSL currently holds, for the probe counters. */
+static bool grant_high_prio;
+/* The length of the last HIGH-priority grant, which is the class a tracked
+ * window rides in. Printed beside the seam's `open lead` because the two
+ * together are the whole question "was there ever enough air after the grant
+ * started for this window to open in". */
+static uint32_t hi_grant_len_us;
+/* How long the last HIGH-priority grant actually lasted, and the worst case. */
+static uint32_t hi_end_us;
+static uint32_t hi_end_us_max;
+/* MPSL_TIMER0's count when SIGNAL_START armed the end compare - how much of the
+ * timeslot the callback itself consumed before the grant had an end at all. */
+static uint32_t t0_at_arm_us;
+/*
+ * Which call site last ended a grant. Set immediately before every
+ * gate_hand_back()/timer0_disarm(), so the hand-back can attribute itself.
+ * Names are in end_site_name[].
+ */
+static uint8_t end_site;
+#define END_SITE(n) (end_site = (uint8_t)(n))
+enum {
+	END_SITE_NONE = 0,
+	END_SITE_BOOTSTRAP,   /* SIGNAL_START, anchor-only timeslot */
+	END_SITE_START_REL,   /* SIGNAL_START, operation finished synchronously */
+	END_SITE_RADIO,       /* SIGNAL_RADIO finished the operation */
+	END_SITE_TIMER0,      /* the grant ran out */
+	END_SITE_EXT_FAILED,  /* an extension was refused */
+	END_SITE_LATE,        /* BLOCKED/CANCELLED arriving with the radio out */
+	END_SITE_SESSION,     /* SESSION_IDLE / SESSION_CLOSED / shutdown */
+	END_SITE_RELEASE,     /* gate_release() with no grant held */
+	END_SITE_MAX,
+};
+static const char *const end_site_name[END_SITE_MAX] = {
+	"none", "boot", "startrel", "radio", "timer0", "extfail", "late",
+	"sess", "rel",
+};
 
 /*
  * How big the elastic class asks its first bite, and why it's a variable.
@@ -640,6 +703,7 @@ static void commit_next_grant(void)
 	g.granted_len_us = next_grant.granted_len_us;
 	g.grant_end      = next_grant.grant_end;
 	g.extendable     = next_grant.extendable;
+	grant_high_prio  = next_grant.high_prio;
 }
 
 /*
@@ -760,6 +824,7 @@ static void bootstrap_anchor(void)
 	 * last real window staged. It cannot grow and it is the shortest
 	 * timeslot there is. */
 	next_grant.extendable = false;
+	next_grant.high_prio = false;
 	next_grant.want_len_us = MPSL_TIMESLOT_LENGTH_MIN_US;
 	next_grant.granted_len_us = MPSL_TIMESLOT_LENGTH_MIN_US;
 	next_grant.grant_end = 0u;
@@ -847,6 +912,85 @@ static void gate_dump_fn(struct k_work *w)
 	uint32_t by_signal = (stats.grant_end_calls > routed)
 				     ? (stats.grant_end_calls - routed)
 				     : 0u;
+	struct radiant_nrf_win_diag wd;
+
+	radiant_nrf_win_diag_get(&wd);
+	/* Everything a tracked window's request can do, in one line. den is the
+	 * remainder: acquires that never reached a reservation at all. */
+	LOG_INF("hi: acq=%u den=%u resv=%u pend=%u blk=%u grant=%u",
+		stats.hi_acq,
+		(stats.hi_acq > (stats.hi_pending + stats.hi_reserve))
+			? (stats.hi_acq - stats.hi_pending - stats.hi_reserve)
+			: 0u,
+		stats.hi_reserve, stats.hi_pending, stats.hi_blocked,
+		stats.hi_granted);
+	/*
+	 * The seam. Read left to right this is the life of a granted window:
+	 * MPSL started it (grant), the backend found something staged and
+	 * programmed it (prog), the RADIO raised an event inside the timeslot
+	 * and MPSL routed it to us (sigrad/isr), and the core got its terminal
+	 * (term). The first zero going left to right is where the window dies.
+	 */
+	LOG_INF("seam: grant=%u nostage=%u prog=%u/%u | sigrad=%u sigt0=%u "
+		"isr=%u end=%u dis=%u term=%u | ramp=%u/%u state=%u ev=0x%02x "
+		"rxen saved=0x%08x cont=0x%03x a=0x%08x p=0x%08x e=0x%08x inten=0x%08x",
+		wd.grants, wd.nostage, wd.prog_ok, wd.prog_fail,
+		stats.sig_radio, stats.sig_timer0,
+		wd.isr, wd.ev_end, wd.ev_disabled, wd.term,
+		wd.ramped, wd.never_ramped, wd.last_state,
+		(unsigned int)wd.last_events,
+		(unsigned int)wd.saved_rxen, (unsigned int)wd.contended,
+		(unsigned int)wd.rxen_attach, (unsigned int)wd.rxen_prog,
+		(unsigned int)wd.last_sub_rxen, (unsigned int)wd.last_inten);
+
+	/*
+	 * BUG 23, in one line: of the SHORT receive windows - the tracked slots
+	 * the loss figure is computed from - how many lost our routing to the
+	 * other stack's in-grant RADIO reset, how many still brought the
+	 * receiver up, and how many actually caught their frame. `wipe` against
+	 * `rx` is the correlation that says whether the reset accounts for the
+	 * loss or only part of it. `held` is the mitigation's own account: how
+	 * many of those windows the grant callback stayed on the CPU for, and
+	 * how many of THOSE had the frame in RAM before it let go.
+	 */
+	LOG_INF("sw: n=%u wipe=%u ramp=%u wipe+ramp=%u rx=%u wipe+rx=%u | "
+		"started=%u early=%u/%uus last=%dus | open lead=%dus max=%uus late=%u"
+		" glen=%u cc0=%u | held=%u end=%u cap=%u max=%uus",
+		wd.sw, wd.sw_wipe, wd.sw_ramp, wd.sw_wipe_ramp, wd.sw_rx,
+		wd.sw_wipe_rx, wd.sw_started, wd.sw_early, wd.sw_early_us_max,
+		wd.sw_last_delta_us, wd.sw_open_lead_us, wd.sw_open_lead_max,
+		wd.sw_open_late, hi_grant_len_us,
+		(hi_grant_len_us > END_MARGIN_US) ? (hi_grant_len_us - END_MARGIN_US)
+						  : 0u,
+		wd.held, wd.held_end, wd.held_cap, wd.held_us_max);
+
+	/*
+	 * How every tracked window's grant actually ended, by call site, and how
+	 * long those grants lasted. The window opens HEAD_MARGIN_US into the
+	 * grant and the grant is sized to outlive it by milliseconds, so
+	 * anything here that is not `timer0` or `radio`, or an `end` of a few
+	 * hundred microseconds, is a grant taken away before the air it was
+	 * asked for arrived.
+	 */
+	{
+		char sites[96];
+		size_t at = 0;
+
+		for (size_t i = 0; i < ARRAY_SIZE(stats.hi_end_site); i++) {
+			if (stats.hi_end_site[i] == 0u || at >= sizeof(sites) - 1) {
+				continue;
+			}
+			at += (size_t)snprintk(&sites[at], sizeof(sites) - at,
+					       "%s=%u ", end_site_name[i],
+					       stats.hi_end_site[i]);
+		}
+		sites[(at < sizeof(sites)) ? at : sizeof(sites) - 1] = '\0';
+		LOG_INF("hiend: %s| lasted=%uus max=%uus | dur=%uus max=%uus "
+			"short=%u | t0arm=%uus stale=%u",
+			sites, hi_end_us, hi_end_us_max, wd.sw_dur_us,
+			wd.sw_dur_us_max, wd.sw_dur_short, t0_at_arm_us,
+			stats.start_stale_compare);
+	}
 
 	LOG_INF("gate: acq=%u in_grant=%u/%u placed=%u granted=%u blocked=%u cancel=%u eagain=%u "
 		"near=%u long=%u ext=%u/%u dead=%u | "
@@ -934,6 +1078,26 @@ static inline void gate_hand_back(void)
 	}
 	g.hw_held = false;
 	stats.grant_end_calls++;
+#if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
+	/*
+	 * WHICH PATH ENDED A TRACKED WINDOW'S GRANT, AND HOW LONG IT LASTED.
+	 * `end=(norm rel idle late)` above is a clamped remainder: three routes
+	 * are counted and everything else falls into `norm`, so a grant ended by
+	 * a path nobody thought to count is reported as the ordinary one. That
+	 * hid this: the seam probe said tracked windows were programmed
+	 * correctly and never ramped, and the reason turned out to be that their
+	 * grant was already over - which `norm` cannot say and this can.
+	 */
+	if (grant_high_prio) {
+		if (end_site < ARRAY_SIZE(stats.hi_end_site)) {
+			stats.hi_end_site[end_site]++;
+		}
+		hi_end_us = (uint32_t)(radiant_radio_now() - g.anchor);
+		if (hi_end_us > hi_end_us_max) {
+			hi_end_us_max = hi_end_us;
+		}
+	}
+#endif
 	radiant_nrf_gate_on_grant_end();
 }
 
@@ -949,6 +1113,11 @@ static inline void timer0_disarm(void)
 	 * Timer registers are restored unconditionally; the hand-back is the
 	 * idempotent half (gate_hand_back()).
 	 */
+	/* NO END_SITE() HERE. timer0_disarm() is reached from eight different
+	 * places and this is the one line all of them run through; tagging it
+	 * would overwrite the caller's tag and attribute every grant end to this
+	 * function. (It did, for one bench run: sess=154 for grants that ended
+	 * nowhere near a session signal.) */
 	gate_hand_back();
 }
 
@@ -996,6 +1165,10 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 	switch (signal) {
 	case MPSL_TIMESLOT_SIGNAL_START:
 		stats.granted++;
+		if (grant_high_prio) {
+			stats.hi_granted++;
+			hi_grant_len_us = g.granted_len_us;
+		}
 		/* Answered. The session is ours again as far as placing the
 		 * next request goes. See g.mpsl_owes. */
 		g.mpsl_owes = false;
@@ -1029,6 +1202,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 			 * or the core. */
 			g.bootstrapping = false;
 			g.granted = false;
+			END_SITE(END_SITE_BOOTSTRAP);
 			timer0_disarm();
 			rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
 			break;
@@ -1056,6 +1230,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 			 * timeslot back now and let the work queue tell the core
 			 * about it. */
 			g.granted = false;
+			END_SITE(END_SITE_START_REL);
 			timer0_disarm();
 			end_housekeeping();
 			rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
@@ -1081,6 +1256,26 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 				 (g.granted_len_us > END_MARGIN_US)
 					 ? (g.granted_len_us - END_MARGIN_US)
 					 : (g.granted_len_us / 2u));
+#if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
+		/*
+		 * Is the compare event ALREADY set before the interrupt is
+		 * enabled? MPSL restarts TIMER0 from zero at every timeslot,
+		 * but the CC register still holds whatever the last grant (or
+		 * gate_release()) left in it until the line above rewrites it -
+		 * and everything between the timeslot starting and that line is
+		 * time the counter spends walking past a stale compare. If it
+		 * is set here, enabling the interrupt fires SIGNAL_TIMER0 at
+		 * once and the grant ends before it has begun. gate_release()
+		 * clears the event between its own cc_set and int_enable; this
+		 * path does not.
+		 */
+		nrf_timer_task_trigger(MPSL_TIMER0, NRF_TIMER_TASK_CAPTURE1);
+		t0_at_arm_us = nrf_timer_cc_get(MPSL_TIMER0, 1);
+		if (nrf_timer_event_check(MPSL_TIMER0,
+					  NRF_TIMER_EVENT_COMPARE0)) {
+			stats.start_stale_compare++;
+		}
+#endif
 		nrf_timer_int_enable(MPSL_TIMER0, NRF_TIMER_INT_COMPARE0_MASK);
 		break;
 
@@ -1099,8 +1294,10 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * waiting for TIMER0. High-priority signal, so ACTION_END is
 		 * legal.
 		 */
+		stats.sig_radio++;
 		radiant_nrf_gate_on_radio_irq();
 		if (g.release_wanted && !g.granted) {
+			END_SITE(END_SITE_RADIO);
 			timer0_disarm();
 			end_housekeeping();
 			rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
@@ -1108,6 +1305,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		break;
 
 	case MPSL_TIMESLOT_SIGNAL_TIMER0:
+		stats.sig_timer0++;
 		nrf_timer_event_clear(MPSL_TIMER0, NRF_TIMER_EVENT_COMPARE0);
 		/*
 		 * Either the core has finished and gate_release() provoked this
@@ -1157,6 +1355,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 			}
 		}
 		g.granted = false;
+		END_SITE(END_SITE_TIMER0);
 		timer0_disarm();
 		/* Where a grant whose programming failed gets its terminal,
 		 * without that work happening in here - and where an operation
@@ -1199,6 +1398,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 */
 		stats.extends_failed++;
 		g.granted = false;
+		END_SITE(END_SITE_EXT_FAILED);
 		timer0_disarm();
 		(void)radiant_radio_abort();
 		/*
@@ -1236,6 +1436,9 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 */
 		if (signal == MPSL_TIMESLOT_SIGNAL_BLOCKED) {
 			stats.blocked++;
+			if (grant_high_prio) {
+				stats.hi_blocked++;
+			}
 		} else {
 			stats.cancelled++;
 		}
@@ -1249,6 +1452,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		if (g.hw_held) {
 			stats.late_disarm++;
 			g.granted = false;
+			END_SITE(END_SITE_LATE);
 			timer0_disarm();
 		}
 		/* Answered, and refused. See g.mpsl_owes. */
@@ -1350,6 +1554,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * false and an interrupt still armed on a peripheral that's no
 		 * longer ours (the re-entering interrupt of bug 14).
 		 */
+		END_SITE(END_SITE_SESSION);
 		timer0_disarm();
 		/* "No request is outstanding" is exactly what g.mpsl_owes
 		 * tracks, so this is its authoritative clear - the backstop for
@@ -1384,6 +1589,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		if (g.hw_held) {
 			stats.idle_disarm++;
 		}
+		END_SITE(END_SITE_SESSION);
 		timer0_disarm();
 		k_timer_stop(&deadline);
 		if (g.pending) {
@@ -1484,6 +1690,7 @@ void gate_shutdown(void)
 	 * clears g.granted a good deal earlier than the radio comes back. */
 	if (g.hw_held) {
 		stats.idle_disarm++;
+		END_SITE(END_SITE_SESSION);
 		timer0_disarm();
 	}
 	(void)mpsl_timeslot_session_close(session_id);
@@ -1536,6 +1743,9 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	 * under a refusal flood, reading as "never called".) */
 
 	stats.acquires++;
+	if (prio == RADIANT_GATE_PRIO_HIGH) {
+		stats.hi_acq++;
+	}
 
 	if (g.granted) {
 		stats.acq_in_grant++;
@@ -1558,6 +1768,9 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 				    (radiant_time_t)TAIL_MARGIN_US <=
 			    g.grant_end) {
 			g.release_wanted = false;
+			if (prio == RADIANT_GATE_PRIO_HIGH) {
+				stats.hi_reserve++;
+			}
 			return GATE_GRANTED;
 		}
 		/*
@@ -1616,14 +1829,43 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 		return GATE_DENIED;
 	}
 
-	/* Move an elastic request off whatever phase the last refusal found -
-	 * the window slides rather than stretching. See elastic_skew_us; zero
-	 * until something is actually refused. */
-	if (elastic_skew_us != 0u && op != GATE_OP_TX &&
-	    prio == RADIANT_GATE_PRIO_NORMAL) {
-		start += (radiant_time_t)elastic_skew_us;
-		end   += (radiant_time_t)elastic_skew_us;
-	}
+	/*
+	 * BUG 22: THE PHASE SKEW USED TO BE APPLIED HERE, AND IT MOVED THE
+	 * RESERVATION WITHOUT MOVING THE OPERATION.
+	 *
+	 * The two lines that were here added elastic_skew_us to both `start`
+	 * and `end` for an elastic request. But `start`/`end` describe the
+	 * TIMESLOT, while the operation staged behind it keeps the absolute
+	 * t_open/t_close the core chose - so a skew of S bought a grant that
+	 * began S microseconds after the window it was supposed to cover was
+	 * already due to open. program_rx() then finds req->t_open in the past
+	 * and refuses RADIANT_RADIO_ETIME, which is exactly the right answer to
+	 * the wrong question: it is the reservation that was misplaced, not the
+	 * window that was late.
+	 *
+	 * This is only visible once windows work at all. With the skew walking
+	 * to 11401 us: grant=1236, prog=127 ok against 689 ETIME, 642 chunks
+	 * FAILED, one CRC-good frame in 60 s. Every refusal fed the skew one
+	 * more step, so it is self-sustaining as well as self-inflicted.
+	 *
+	 * The reservation MUST cover the operation - that is the whole contract
+	 * of this function - so a gate cannot decorrelate itself by sliding one
+	 * and not the other. Removed rather than repaired: shifting the
+	 * operation too is not this layer's to do (the core owns those
+	 * instants), and the phase problem the skew was written for already has
+	 * a mechanism that does not lie about placement - BLOCKED_RUN_REANCHOR
+	 * abandons the anchor after a run of refusals and the next request
+	 * re-bootstraps with EARLIEST, which lands wherever the arbiter has
+	 * room and so changes phase by construction.
+	 *
+	 * WHAT IS NOT PROVEN. The skew was introduced against a 100 ms BLE
+	 * advertiser (measured then: placed=570 granted=2 blocked=568) and this
+	 * removal has been measured only against OpenThread. The elastic
+	 * request-length backoff (elastic_initial_us) is untouched and was the
+	 * other half of that fix. Re-measure the BLE arm before treating the
+	 * advertiser case as settled.
+	 */
+	(void)elastic_skew_us;
 	/*
 	 * The reservation is longer than the air it covers, by exactly the
 	 * hand-back time: the timeslot must outlive `end` by END_MARGIN_US
@@ -1723,6 +1965,7 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	 * and must not be held past it. */
 	next_grant.extendable = (op != GATE_OP_TX) &&
 				(prio == RADIANT_GATE_PRIO_NORMAL);
+	next_grant.high_prio = (prio == RADIANT_GATE_PRIO_HIGH);
 
 	/*
 	 * The elastic class asks small and grows (ADR 0013); everything else
@@ -1743,6 +1986,9 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	 * is told PENDING either way.
 	 */
 	g.pending = true;
+	if (prio == RADIANT_GATE_PRIO_HIGH) {
+		stats.hi_pending++;
+	}
 	k_work_submit(&request_work);
 
 	/* The backstop: the operation's own start plus DEADLINE_SLACK_US
@@ -1771,6 +2017,7 @@ void gate_release(void)
 		 * radiant_radio_disable() writing the shared interrupt mask
 		 * while SUBSCRIBE_RXEN is still swapped out.
 		 */
+		END_SITE(END_SITE_RELEASE);
 		gate_hand_back();
 		return;
 	}
@@ -1850,6 +2097,7 @@ void gate_release(void)
 		 * already returned.
 		 */
 		stats.release_disarm++;
+		END_SITE(END_SITE_RELEASE);
 		gate_hand_back();
 	}
 }
@@ -1908,6 +2156,7 @@ void mpsl_assert_handle(const char *const file, const uint32_t line)
 	k_fatal_halt(K_ERR_KERNEL_PANIC);
 }
 #endif
+
 
 
 

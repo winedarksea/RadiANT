@@ -1,4 +1,4 @@
-﻿/* SPDX-License-Identifier: Apache-2.0 */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * radiant_radio_nrf.c - radiant_radio_hal.h on a bare nRF RADIO.
  *
@@ -853,6 +853,22 @@ static volatile uint32_t radiant_dbg_ok;
 /* Achieved t_sync minus requested t_sync on the last transmit, microseconds. */
 static volatile int32_t  radiant_dbg_tx_err;
 
+#if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
+/* The gate-seam probe. See struct radiant_nrf_win_diag. */
+static volatile struct radiant_nrf_win_diag radiant_win_diag;
+#define WIN_DIAG(field) (radiant_win_diag.field++)
+
+void radiant_nrf_win_diag_get(struct radiant_nrf_win_diag *out)
+{
+	if (out == NULL) {
+		return;
+	}
+	*out = *(const struct radiant_nrf_win_diag *)&radiant_win_diag;
+}
+#else
+#define WIN_DIAG(field) ((void)0)
+#endif
+
 /* The DMA buffer the RADIO reads and writes. Backend-owned, handed to the core
  * as rx_event.body for the duration of one callback only, which is exactly what
  * radiant_radio_hal.h says about it. */
@@ -1489,6 +1505,34 @@ static void radio_endpoints_attach_off_at_init(void);
 static uint32_t radio_ep_foreign[RADIO_EP_COUNT];
 static uint8_t  radio_ep_contended;
 
+/*
+ * Which of the six this backend actually programmed - the set the per-grant
+ * swap moves. Derived from OUR allocation rather than from what another stack
+ * happened to hold at init; see radio_endpoints_attach() (bug 20) for why the
+ * difference between those two is a boot-order race.
+ */
+static uint8_t  radio_ep_mine_mask;
+
+/* Whether RADIO_0_IRQn was already NVIC-enabled when this grant started, so it
+ * can be put back that way. See bug 21 in radiant_nrf_gate_on_grant(). */
+static bool     radio_irq_was_enabled;
+
+/*
+ * OUR half of the swap: what the six registers hold when the connections this
+ * backend allocated are the ones attached. Defined here rather than beside
+ * radio_endpoints_attach() so the grant hooks above it can read it for the
+ * bench probe; the reasoning about who owns what lives with that function.
+ */
+static struct {
+	uint32_t pub_address;
+	uint32_t pub_rxready;
+	uint32_t sub_rssistart;
+	uint32_t sub_rxen;
+	uint32_t sub_txen;
+	uint32_t sub_disable;
+	bool     saved;
+} radio_ep;
+
 static volatile uint32_t *radio_ep_reg(size_t i)
 {
 	switch (i) {
@@ -1782,23 +1826,53 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	 * it never needs turning off. */
 	nrfx_gppi_conn_enable(radiant_op.conn_sync);
 
+#if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
+	/*
+	 * Take a copy of what the five allocations just wrote into the RADIO's
+	 * own PUBLISH and SUBSCRIBE registers. Under arbitration the RADIO is
+	 * not ours between grants, and those registers are the part of a (D)PPI
+	 * connection that lives in the RADIO rather than in the DPPIC - see
+	 * radio_endpoints_attach().
+	 *
+	 * BUG 19, AND THE REASON THIS CALL IS HERE AND NOWHERE ELSE. This is
+	 * the one instant at which all six registers hold OUR value: after the
+	 * allocations wrote them and BEFORE radio_endpoints_attach_off_at_init()
+	 * hands the borrowed ones back to the other stack. The save used to be
+	 * done twice - once inside the `shared` branch below, correctly before
+	 * the hand-back, and then again unconditionally after it. The second
+	 * call overwrote the contended entries with the values the hand-back had
+	 * just restored, so `mine[]` in radio_endpoints_attach() held the OTHER
+	 * STACK'S routing for exactly the registers the swap exists to move.
+	 *
+	 * Beside OpenThread the contended mask is PUBLISH_ADDRESS +
+	 * SUBSCRIBE_RXEN, so attach(true) at every grant re-applied the 802.15.4
+	 * driver's SUBSCRIBE_RXEN: our CC_START compare never triggered
+	 * TASKS_RXEN, the receiver never ramped, no frame could arrive, and -
+	 * because TASKS_DISABLE on an already-DISABLED radio raises no
+	 * EVENTS_DISABLED - the window never produced a terminal either. Every
+	 * granted timeslot then ran to its TIMER0 end with the operation still
+	 * armed and was reported DONE_DENIED. Measured on P4 MED: 13001 grants
+	 * delivered, 0 windows ended OK, 0 of 961 packets, with the whole
+	 * failure invisible to the gate's own counters (dead=0, late=0,
+	 * grant_end_calls == granted). In the control arm the mask is empty, the
+	 * swap is a no-op and nothing was wrong - which is exactly why this only
+	 * ever appeared beside a second stack.
+	 */
+	radio_endpoints_save();
+#endif
+
 	/*
 	 * Hand back exactly what was borrowed - see the long comment above the
 	 * loop. Registers that were zero keep OUR value, which is why the builds
 	 * that have always worked are untouched by this.
 	 */
 	if (shared != 0U) {
-#if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
-		/* Snapshot ours BEFORE giving the registers back, or the
-		 * snapshot records the other stack's values and the
-		 * attach-on-grant re-applies somebody else's routing. */
-		radio_endpoints_save();
 		radio_endpoints_attach_off_at_init();
+#if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
 		LOG_INF("%u RADIO endpoints are shared with another stack and "
 			"are swapped in and out with each grant - see "
 			"radiant_nrf_gate_on_grant()", shared);
 #else
-		radio_endpoints_attach_off_at_init();
 		LOG_ERR("ANT+ WILL NOT TRANSMIT: %u RADIO endpoints are shared "
 			"with another stack and this build has no arbiter at "
 			"all. Whichever stack wrote the register last wins it "
@@ -1806,20 +1880,6 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 			"success.", shared);
 #endif
 	}
-
-#if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
-	/*
-	 * Take a copy of what the five allocations just wrote into the RADIO's
-	 * own PUBLISH and SUBSCRIBE registers, and then take them straight back
-	 * off it. Under arbitration the RADIO is not ours between grants, and
-	 * those registers are the part of a (D)PPI connection that lives in the
-	 * RADIO rather than in the DPPIC - see radio_endpoints_attach().
-	 *
-	 * Saved here, at the one moment they are known to be exactly right,
-	 * rather than reconstructed later.
-	 */
-	radio_endpoints_save();
-#endif
 
 gppi_done:
 
@@ -2280,6 +2340,19 @@ static int program_tx(const struct radiant_tx_req *req)
  * other refusal is a pure function of the request, answered before the gate
  * was consulted.
  */
+/* The close compare of the receive window currently programmed, raw TIMER
+ * counter units. See the in-grant hold at grant_hold_window(). */
+static uint32_t radiant_rx_close_cc;
+#if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
+/* ...and its open compare, for the same reason: a window that never ramped is
+ * one of two completely different faults, and only the relationship between
+ * this instant and the instant the grant ended tells them apart. */
+static uint32_t radiant_rx_start_cc;
+/* When this grant's callback programmed the window, for measuring how long the
+ * grant then lasted. */
+static uint32_t grant_start_cc;
+#endif
+
 static int program_rx(const struct radiant_rx_req *req)
 {
 	radiant_time_t now;
@@ -2395,6 +2468,22 @@ static int program_rx(const struct radiant_rx_req *req)
 
 	nrf_timer_cc_set(TIMER_ADDR, CC_START, start_cc);
 	nrf_timer_cc_set(TIMER_ADDR, CC_CLOSE, close_cc);
+	/* Kept for the in-grant hold, which needs to know when this window is
+	 * over in the same units the compare is in. Written here rather than
+	 * recomputed there so the two can never disagree about the close. */
+	radiant_rx_close_cc = close_cc;
+#if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
+	radiant_rx_start_cc = start_cc;
+	/*
+	 * Cleared so that "did this window's open compare ever fire" is a
+	 * question about THIS window. The flag is sticky and nothing else in
+	 * this backend clears it, so without this it reads set from the last
+	 * window that did fire and answers nothing. Safe: the (D)PPI triggers
+	 * on the event being raised, and the compare has not been reached yet -
+	 * program_rx() has just refused any t_open already inside the arm lead.
+	 */
+	nrf_timer_event_clear(TIMER_ADDR, nrf_timer_compare_event_get(CC_START));
+#endif
 
 	/* The endpoints were wired at init; only the enable is per operation. */
 	nrfx_gppi_conn_enable(radiant_op.conn_start);
@@ -2866,6 +2955,253 @@ static void program_ed(const struct radiant_ed_req *req)
 #endif /* CONFIG_RADIANT_CORE_ED_SCAN */
 
 /* ---------------------------------------------------------------------------
+ * BUG 23: THE OTHER STACK RESETS THE RADIO INSIDE OUR OWN GRANT, FROM A THREAD.
+ *
+ * nrf_802154_trx_disable() calls nrf_radio_reset(), which on nRF54L takes the
+ * !defined(RADIO_POWER_POWER_Msk) path: every RADIO SUBSCRIBE and PUBLISH
+ * register to zero, INTENCLR00 = 0xffffffff, TASKS_SOFTRESET. It is reached from
+ * nrf_802154_core.c's on_timeslot_ended(), which the 802.15.4 driver runs when
+ * MPSL takes the radio away from it - i.e. to give it to us.
+ *
+ * THE ORDERING IS THE FAULT, AND IT IS NOT A PRIORITY RACE THAT CAN BE WON BY
+ * BEING QUICKER. In NCS the MPSL notification that ends the 802.15.4 driver's
+ * timeslot is delivered from mpsl_low_priority_process(), and
+ * nrf/subsys/mpsl/init/mpsl_init.c does not call that from an interrupt: the
+ * MPSL_LOW_PRIO_IRQN handler only submits mpsl_low_prio_work to the MPSL work
+ * queue. So the reset executes in a Zephyr THREAD, at whatever moment that
+ * thread is next scheduled - which is routinely after MPSL has already started
+ * our timeslot and after radiant_nrf_gate_on_grant() has programmed it. The
+ * seam probe shows exactly that shape: SUBSCRIBE_RXEN is ours at grant entry
+ * and immediately after programming (a= and p= both our channel), and zero at
+ * grant end, with the receiver never having ramped.
+ *
+ * WHICH IS ALSO WHY REPAIRING AFTER THE FACT CANNOT WORK. A thread can run at
+ * any instant we are not on the CPU, so a "check and re-attach" placed anywhere
+ * inside the window is only ever a check against one instant; the reset can
+ * land immediately after it, or in the middle of the frame. There is no point
+ * in the window at which having just repaired means anything.
+ *
+ * SO THE WINDOW IS HELD INSTEAD OF REPAIRED. The grant callback runs in an
+ * interrupt; a thread cannot preempt it. Staying on the CPU from the moment the
+ * window is programmed until the moment its frame is in RAM makes the reset
+ * unable to happen during the only interval in which it does damage, and it
+ * then runs the instant we return - correctly, because by then the air really
+ * is going back.
+ *
+ * WHAT IT COSTS AND WHY THAT IS AFFORDABLE. A tracked ANT+ window is under a
+ * millisecond (RADIANT_CHANNEL_GUARD_MAX_US bounds it at 400 us each way), and
+ * the hold is bounded twice over: by this window's own close compare, and by a
+ * hard microsecond ceiling. It is applied ONLY to short windows for that
+ * reason - a scan chunk or ED sweep runs tens of milliseconds and holding one
+ * would be a denial of service to everything else on the chip. Sweep windows
+ * therefore still lose their routing; that costs discovery SPEED under a second
+ * stack, not tracked loss, and is recorded as a known remaining leak rather
+ * than fixed here.
+ *
+ * The hold also SHORTENS the grant rather than lengthening it: consuming END on
+ * the spot sets release_wanted, and radiant_radio_nrf_gate_mpsl.c's
+ * SIGNAL_START already returns ACTION_END when it sees that (the "completed
+ * synchronously" path it was written for). The air goes back to the other stack
+ * earlier than it would have, not later.
+ * ---------------------------------------------------------------------------
+ */
+#if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
+
+/* Longest window the hold will sit through. Above it the operation is a scan
+ * or an ED sweep and is left to take its chances - see above. */
+#define GRANT_HOLD_MAX_WINDOW_US 10000u
+
+/* How long past this window's own close compare the hold keeps looking for the
+ * DISABLED it provokes. The same allowance radio_disable_now() makes, spelled
+ * separately because that constant is defined further down the file and this
+ * one has to be usable here. */
+#define GRANT_HOLD_CLOSE_SLACK_US 100u
+
+/* Set at the grant that programmed this window, read at whichever of the hold
+ * or the grant end scores it. */
+static bool grant_short_rx;
+static bool grant_scored;
+
+#if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
+/*
+ * THE CROSS-TAB, AND WHY IT IS SCORED AT TWO DIFFERENT PLACES.
+ *
+ * `ramped`/`never_ramped` count every grant end, including grants that
+ * programmed nothing, so they cannot answer the only question that matters
+ * before mitigating anything: are the windows whose routing was wiped the SAME
+ * windows whose packets are missing? These counters answer it, over short
+ * receive windows only - the tracked slots the loss figure is computed from.
+ *
+ * Scored once per window, from whichever comes first: the end of the hold (with
+ * the CPU still ours, before radio_isr() can consume the events the test reads)
+ * or the end of the grant. With the hold off, only the second ever runs, which
+ * is the measurement the mitigation has to be judged against.
+ */
+static void score_short_window(void)
+{
+	bool wiped, ramped;
+
+	if (!grant_short_rx || grant_scored) {
+		return;
+	}
+	grant_scored = true;
+
+	/*
+	 * "Wiped" is our routing no longer being in the peripheral we
+	 * programmed a moment ago. Either half is sufficient and both are read,
+	 * because nrf_radio_reset() does both: it zeroes SUBSCRIBE_RXEN and
+	 * writes INTENCLR00 = 0xffffffff. Comparing against rxen_prog rather
+	 * than against a constant keeps this honest in a build where our own
+	 * channel number changes.
+	 */
+	wiped = (NRF_RADIO->SUBSCRIBE_RXEN != radiant_win_diag.rxen_prog) ||
+		(NRF_RADIO->INTENSET00 == 0u);
+	ramped = nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_READY) ||
+		 nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_RXREADY) ||
+		 (nrf_radio_state_get(NRF_RADIO) != NRF_RADIO_STATE_DISABLED);
+
+	WIN_DIAG(sw);
+	if (wiped) {
+		WIN_DIAG(sw_wipe);
+	}
+
+	/*
+	 * A WINDOW THAT NEVER RAMPED IS TWO DIFFERENT FAULTS AND THESE SEPARATE
+	 * THEM. Either the open compare fired and the receiver still did not
+	 * come up - which is a routing fault, the one BUG 23 describes - or the
+	 * compare never fired at all, which means this instant is BEFORE the
+	 * window was ever due to open and the grant is being taken away before
+	 * the air it was asked for. The second is not a peripheral problem and
+	 * no amount of re-attaching endpoints would touch it.
+	 */
+	if (nrf_timer_event_check(TIMER_ADDR,
+				  nrf_timer_compare_event_get(CC_START))) {
+		WIN_DIAG(sw_started);
+	}
+	{
+		int32_t d = (int32_t)(timer_capture(CC_NOW) -
+				      radiant_rx_start_cc);
+
+		if (d < 0) {
+			WIN_DIAG(sw_early);
+			if ((uint32_t)(-d) > radiant_win_diag.sw_early_us_max) {
+				radiant_win_diag.sw_early_us_max = (uint32_t)(-d);
+			}
+		}
+		radiant_win_diag.sw_last_delta_us = d;
+	}
+	{
+		/* HOW LONG THIS TRACKED WINDOW'S GRANT ACTUALLY LASTED, measured
+		 * on our own TIMER between the grant callback and this one. The
+		 * gate asked for a timeslot that outlives the window by
+		 * milliseconds; if this is a few hundred microseconds then the
+		 * air was taken back before the window it was bought for. */
+		uint32_t dur = timer_capture(CC_NOW) - grant_start_cc;
+
+		radiant_win_diag.sw_dur_us = dur;
+		if (dur > radiant_win_diag.sw_dur_us_max) {
+			radiant_win_diag.sw_dur_us_max = dur;
+		}
+		if (dur < 1000u) {
+			WIN_DIAG(sw_dur_short);
+		}
+	}
+	if (ramped) {
+		WIN_DIAG(sw_ramp);
+		if (wiped) {
+			WIN_DIAG(sw_wipe_ramp);
+		}
+	}
+	if (radiant_op.rx_any) {
+		WIN_DIAG(sw_rx);
+		if (wiped) {
+			WIN_DIAG(sw_wipe_rx);
+		}
+	}
+}
+#else
+static inline void score_short_window(void) { }
+#endif /* CONFIG_RADIANT_CORE_SWEEP_DEBUG */
+
+static void grant_hold_window(const struct radiant_rx_req *req)
+{
+	const uint32_t cap = (uint32_t)CONFIG_RADIANT_CORE_NRF_GRANT_HOLD_US;
+	uint32_t t0, now, elapsed;
+	bool     saw_end = false;
+
+	if (cap == 0u) {
+		return;
+	}
+	if ((req->t_close - req->t_open) >= GRANT_HOLD_MAX_WINDOW_US) {
+		return;
+	}
+
+	t0 = timer_capture(CC_NOW);
+	for (;;) {
+		if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_END)) {
+			saw_end = true;
+			break;
+		}
+		/*
+		 * An empty window ends at its own close compare, which fires
+		 * TASKS_DISABLE; the DISABLED that follows is this operation's
+		 * terminal and is worth consuming here for the same reason a
+		 * frame is - it releases the grant a signal-dispatch earlier.
+		 */
+		if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_DISABLED)) {
+			break;
+		}
+		now = timer_capture(CC_NOW);
+		if ((int32_t)(now - t0) >= (int32_t)cap) {
+			WIN_DIAG(held_cap);
+			break;
+		}
+		/* The window's own close, plus what the radio needs to act on
+		 * it. Past this there is nothing left to wait for. */
+		if ((int32_t)(now - (radiant_rx_close_cc +
+				     GRANT_HOLD_CLOSE_SLACK_US)) >= 0) {
+			break;
+		}
+	}
+
+	elapsed = timer_capture(CC_NOW) - t0;
+#if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
+	WIN_DIAG(held);
+	if (saw_end) {
+		WIN_DIAG(held_end);
+	}
+	if (elapsed > radiant_win_diag.held_us_max) {
+		radiant_win_diag.held_us_max = elapsed;
+	}
+#else
+	(void)elapsed;
+	(void)saw_end;
+#endif
+
+	/* Scored with the CPU still ours and before radio_isr() consumes the
+	 * events the test reads. See score_short_window(). */
+	score_short_window();
+
+	/*
+	 * Consume what the window produced before giving the CPU back. Not an
+	 * optimisation: the reset the hold exists to outrun also writes
+	 * INTENCLR00 = 0xffffffff and re-runs the driver's own IRQ setup, so an
+	 * END left pending for the ordinary MPSL_TIMESLOT_SIGNAL_RADIO
+	 * dispatch is an END that may never be delivered. The frame is already
+	 * in radiant_rx_buf by then; what would be lost is the terminal.
+	 *
+	 * radio_isr() is idempotent and this is the same context
+	 * radiant_nrf_gate_on_radio_irq() enters it from a few microseconds
+	 * later, so nothing about re-entering it here is new.
+	 */
+	if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_END) ||
+	    nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_DISABLED)) {
+		radio_isr(NULL);
+	}
+}
+#endif /* CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL */
+
+/* ---------------------------------------------------------------------------
  * What the gate calls back
  *
  * Neither runs in the direct build (GATE_PENDING is a state direct gate can't
@@ -2881,8 +3217,10 @@ void radiant_nrf_gate_on_grant(void)
 	unsigned int key;
 	int          rc = RADIANT_RADIO_OK_RC;
 
+	WIN_DIAG(grants);
 	key = irq_lock();
 	if (!radiant_staged.pending) {
+		WIN_DIAG(nostage);
 		/*
 		 * A grant for an operation that has already ended (aborted, or
 		 * resolved before the arbiter got round to us) - not rare, the
@@ -2906,6 +3244,46 @@ void radiant_nrf_gate_on_grant(void)
 	 */
 	nrf_radio_int_enable(NRF_RADIO, NRF_RADIO_INT_END_MASK |
 					NRF_RADIO_INT_DISABLED_MASK);
+
+#if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
+	/*
+	 * BUG 21: TAKE THE NVIC LINE FOR THE GRANT TOO, NOT JUST THE MASK.
+	 *
+	 * Unmasking END/DISABLED in RADIO->INTENSET00 above only gets as far as
+	 * the peripheral. The vector itself is RADIO_0_IRQn, which nrf/subsys/
+	 * mpsl/init/mpsl_init.c owns (IRQ_DIRECT_CONNECT, zero-latency) and
+	 * which MPSL turns back into MPSL_TIMESLOT_SIGNAL_RADIO for us - and
+	 * nrfxlib/mpsl/doc/mpsl.rst is explicit that RADIO is in the "no
+	 * interrupts" set on nRF54L: "If the Timeslot API is used for RADIO
+	 * access, the application is responsible for enabling and disabling the
+	 * interrupt for RADIO."
+	 *
+	 * radiant_radio_enable() did enable it, ONCE, at startup - which is
+	 * enough beside the SoftDevice Controller and is not enough beside
+	 * OpenThread. The nRF 802.15.4 driver NVIC-disables the same line in its
+	 * own teardown (nrf_802154_trx.c, whose nRF54L reset path also writes
+	 * INTENCLR00 = 0xffffffff and triggers TASKS_SOFTRESET), so the first
+	 * time that stack stops its receiver our enable is gone for the rest of
+	 * the boot. After that the RADIO raises END and DISABLED inside our
+	 * grant and the CPU never takes the interrupt: MPSL has nothing to
+	 * forward, so SIGNAL_RADIO never arrives, radio_isr() is never entered,
+	 * and the window runs to the grant's TIMER0 end still armed and is
+	 * reported DONE_DENIED. Measured with the seam probe on P4 MED:
+	 * ramp=290/194 and ev=0x1f (the receiver up and packets arriving,
+	 * ADDRESS/END/DISABLED all set) against sigrad=0 isr=0, 0 of 961
+	 * packets.
+	 *
+	 * So the line is taken for the duration of the grant and put back the
+	 * way it was found, exactly like the endpoint registers. Restoring
+	 * rather than unconditionally disabling matters: between grants this
+	 * vector is MPSL's and the 802.15.4 driver's, and turning it off under
+	 * them would be the same class of mistake in the other direction.
+	 */
+	radio_irq_was_enabled = (NVIC_GetEnableIRQ(RADIANT_RADIO_IRQn) != 0U);
+	if (!radio_irq_was_enabled) {
+		NVIC_EnableIRQ(RADIANT_RADIO_IRQn);
+	}
+#endif
 
 	/*
 	 * Take the RADIO endpoints another stack holds, for this grant only.
@@ -2933,10 +3311,31 @@ void radiant_nrf_gate_on_grant(void)
 	 * init succeed at all in this image.
 	 */
 	radio_endpoints_attach(true);
+#if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
+	radiant_win_diag.rxen_attach = NRF_RADIO->SUBSCRIBE_RXEN;
+	radiant_win_diag.saved_rxen  = radio_ep.sub_rxen;
+	radiant_win_diag.contended   = radio_ep_mine_mask |
+				       (radio_ep.saved ? 0x100u : 0u);
+#endif
+
+	grant_short_rx = false;
+	grant_scored   = false;
 
 	switch (radiant_op.kind) {
 	case OP_RX:
 		rc = program_rx(&radiant_staged.rx);
+		/*
+		 * Which windows the in-grant hold applies to is decided here,
+		 * from window length alone, on the same reasoning as the gate
+		 * priority a few lines up in radiant_radio_rx(): a tracked slot
+		 * or turnaround is under a millisecond, only a scan chunk or ED
+		 * sweep runs tens of milliseconds. No ANT+ knowledge, per HAL
+		 * rule 1.
+		 */
+		grant_short_rx = (rc == RADIANT_RADIO_OK_RC) &&
+				 ((radiant_staged.rx.t_close -
+				   radiant_staged.rx.t_open) <
+				  GRANT_HOLD_MAX_WINDOW_US);
 		break;
 	case OP_TX:
 		rc = program_tx(&radiant_staged.tx);
@@ -2952,6 +3351,52 @@ void radiant_nrf_gate_on_grant(void)
 		 * freed it delivered the terminal event. */
 		gate_release();
 		return;
+	}
+
+#if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
+	radiant_win_diag.rxen_prog = NRF_RADIO->SUBSCRIBE_RXEN;
+#endif
+	if (rc == RADIANT_RADIO_OK_RC) {
+		WIN_DIAG(prog_ok);
+	} else {
+		WIN_DIAG(prog_fail);
+	}
+
+	/*
+	 * BUG 23. Stay on the CPU across this window so the other stack's
+	 * thread-context nrf_radio_reset() cannot land in the middle of it.
+	 * After the switch and after prog accounting, so the seam probe's `p=`
+	 * still means "SUBSCRIBE_RXEN as programming left it" rather than "as
+	 * the window left it" - two different questions, and conflating them
+	 * would destroy the instrument this was found with.
+	 */
+#if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
+	if (grant_short_rx) {
+		/*
+		 * HOW FAR INTO THIS GRANT THE WINDOW IS DUE TO OPEN. The gate
+		 * places the timeslot HEAD_MARGIN_US (250 us) before the
+		 * operation, so this should be a small positive number and the
+		 * grant should outlive it by milliseconds. Anything larger means
+		 * the timeslot did not land where it was asked to, and no
+		 * peripheral-level repair can help a window whose air arrived at
+		 * the wrong time.
+		 */
+		int32_t lead = (int32_t)(radiant_rx_start_cc -
+					 timer_capture(CC_NOW));
+
+		radiant_win_diag.sw_open_lead_us = lead;
+		grant_start_cc = timer_capture(CC_NOW);
+		if (lead > (int32_t)radiant_win_diag.sw_open_lead_max) {
+			radiant_win_diag.sw_open_lead_max = (uint32_t)lead;
+		}
+		if (lead > 1000) {
+			WIN_DIAG(sw_open_late);
+		}
+	}
+#endif
+
+	if (grant_short_rx) {
+		grant_hold_window(&radiant_staged.rx);
 	}
 
 	if (rc != RADIANT_RADIO_OK_RC) {
@@ -3013,16 +3458,6 @@ void radiant_nrf_gate_finish_failed(void)
  * changes between SoC families. Reading back what alloc wrote asks nrfx no
  * questions and cannot disagree with it.
  */
-static struct {
-	uint32_t pub_address;
-	uint32_t pub_rxready;
-	uint32_t sub_rssistart;
-	uint32_t sub_rxen;
-	uint32_t sub_txen;
-	uint32_t sub_disable;
-	bool     saved;
-} radio_ep;
-
 static void radio_endpoints_save(void)
 {
 	radio_ep.pub_address   = NRF_RADIO->PUBLISH_ADDRESS;
@@ -3032,6 +3467,39 @@ static void radio_endpoints_save(void)
 	radio_ep.sub_txen      = NRF_RADIO->SUBSCRIBE_TXEN;
 	radio_ep.sub_disable   = NRF_RADIO->SUBSCRIBE_DISABLE;
 	radio_ep.saved         = true;
+
+	/*
+	 * The swap set: every endpoint this backend actually programmed. Not
+	 * "every endpoint someone else held at init" - see the bug 20 note at
+	 * radio_endpoints_attach(). A register we never wrote stays out of it,
+	 * so the swap can only ever move our own routing in and out.
+	 *
+	 * Printed because a swap that turns out to be empty or inert is
+	 * otherwise indistinguishable from a healthy gate that simply hears
+	 * nothing, and that ambiguity cost this phase a whole sitting.
+	 */
+	radio_ep_mine_mask = 0U;
+	for (size_t r = 0U; r < RADIO_EP_COUNT; r++) {
+		const uint32_t mine[RADIO_EP_COUNT] = {
+			radio_ep.pub_address,   radio_ep.pub_rxready,
+			radio_ep.sub_rssistart, radio_ep.sub_rxen,
+			radio_ep.sub_txen,      radio_ep.sub_disable,
+		};
+
+		if (mine[r] == 0U) {
+			continue;
+		}
+		radio_ep_mine_mask |= (uint8_t)(1U << r);
+		LOG_INF("RADIO %s: ours=0x%08x, swapped in per grant "
+			"(held at init by another stack: %s)",
+			radio_ep_name(r), (unsigned int)mine[r],
+			((radio_ep_contended & (1U << r)) != 0U) ? "yes" : "no");
+	}
+	if (radio_ep_mine_mask == 0U) {
+		LOG_ERR("no RADIO endpoint was allocated to this backend - the "
+			"per-grant swap is empty and ANT+ cannot drive the "
+			"radio at all");
+	}
 }
 
 /*
@@ -3040,18 +3508,48 @@ static void radio_endpoints_save(void)
  * contending (beside the SoftDevice Controller none of these six is taken,
  * so detaching on exit threw away our own always-live t_sync capture for no
  * reason), and zero isn't what was there - the 802.15.4 driver writes
- * SUBSCRIBE_RXEN once at its own init and never again, so clearing it
- * silently stops its receiver ramp-up.
+ * SUBSCRIBE_RXEN at its own init, so clearing it silently stops its receiver
+ * ramp-up.
  *
- * So this swaps exactly the registers in radio_ep_contended (the ones
- * another stack held at init) and restores THEIR value, not zero. Empty
- * mask means this is a no-op, so enabling it can't regress builds with no
- * second stack.
+ * BUG 20: WHICH REGISTERS ARE SWAPPED, AND WHOSE VALUE GOES BACK, ARE BOTH
+ * DECIDED AT THE GRANT AND NOT AT INIT. They used to be decided once, at init,
+ * from `radio_ep_contended` - the registers that already held a foreign value
+ * when radiant_radio_init() ran - and that is a boot-order race with a silent
+ * failure on the losing side.
+ *
+ * Both orders happen on the same board, boot to boot:
+ *
+ *   802.15.4 first. Its values are there, radio_ep_contended comes out as
+ *   PUBLISH_ADDRESS + SUBSCRIBE_RXEN, the swap engages, ANT+ works.
+ *
+ *   RadiANT first. Nothing is taken, the mask comes out EMPTY, and the swap
+ *   is compiled in but permanently inert. The 802.15.4 driver then writes its
+ *   own PUBLISH_ADDRESS/SUBSCRIBE_RXEN over ours - it writes those registers
+ *   directly rather than through nrfx_gppi_conn_alloc(), so nothing refuses
+ *   it and nothing is logged - and our CC_START compare no longer reaches
+ *   TASKS_RXEN. The receiver never ramps, so no frame can arrive; and because
+ *   TASKS_DISABLE on an already-DISABLED radio raises no EVENTS_DISABLED, the
+ *   window never produces a terminal either. Every granted timeslot runs to
+ *   its TIMER0 end with the operation still armed and is reported DONE_DENIED.
+ *   Measured on P4 MED with the seam probe: grant=256 prog=238 ok, sigrad=0,
+ *   isr=0, ramp=0/318, SUBSCRIBE_RXEN reading 0x00000000 at every point inside
+ *   the grant, 0 of 961 packets. Two consecutive boots of the SAME image gave
+ *   the mask 2 and then 0.
+ *
+ * So the set is now "the registers this backend actually programmed"
+ * (radio_ep_mine_mask, non-zero after allocation), and the value handed back
+ * is whatever was in the register at THIS grant's entry rather than whatever
+ * was in it at init. That is correct by construction under any init order, and
+ * it also survives the other stack changing its own routing between grants -
+ * which the init-time snapshot could not.
+ *
+ * With no second stack the entry value IS our value, so every write is a
+ * write-back of what was already there and the uncontended build is untouched.
  */
 static void radio_endpoints_attach(bool on)
 {
 	if ((RADIANT_NRF_GRANT_EP_SWAP == 0) || !radio_ep.saved ||
-	    radio_ep_contended == 0U) {
+	    radio_ep_mine_mask == 0U) {
 		return;
 	}
 
@@ -3063,16 +3561,66 @@ static void radio_endpoints_attach(bool on)
 	};
 
 	for (size_t r = 0U; r < RADIO_EP_COUNT; r++) {
-		if ((radio_ep_contended & (1U << r)) == 0U) {
+		if ((radio_ep_mine_mask & (1U << r)) == 0U) {
 			continue;
 		}
-		*radio_ep_reg(r) = on ? mine[r] : radio_ep_foreign[r];
+		if (on) {
+			/* Read before write: this is where the other stack's
+			 * current value is learned, every time. */
+			radio_ep_foreign[r] = *radio_ep_reg(r);
+			*radio_ep_reg(r) = mine[r];
+		} else {
+			*radio_ep_reg(r) = radio_ep_foreign[r];
+		}
 	}
 }
 #endif /* CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL */
 
 void radiant_nrf_gate_on_grant_end(void)
 {
+#if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
+	/*
+	 * Read the peripheral before a single register is put back. Everything
+	 * else about a grant is observable from software counters; whether the
+	 * RECEIVER actually came up is not, and a window that never ramped is
+	 * indistinguishable at every other counter from one that ramped and
+	 * heard nothing.
+	 */
+	{
+		uint32_t ev = 0u;
+
+		if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_READY)) {
+			ev |= 1u;
+		}
+		if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS)) {
+			ev |= 2u;
+		}
+		if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_END)) {
+			ev |= 4u;
+		}
+		if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_DISABLED)) {
+			ev |= 8u;
+		}
+		if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_RXREADY)) {
+			ev |= 16u;
+		}
+		radiant_win_diag.last_state    = nrf_radio_state_get(NRF_RADIO);
+		radiant_win_diag.last_events   = ev;
+		radiant_win_diag.last_sub_rxen = NRF_RADIO->SUBSCRIBE_RXEN;
+		radiant_win_diag.last_inten    = NRF_RADIO->INTENSET00;
+		if ((ev & (1u | 16u)) != 0u ||
+		    nrf_radio_state_get(NRF_RADIO) != NRF_RADIO_STATE_DISABLED) {
+			WIN_DIAG(ramped);
+		} else {
+			WIN_DIAG(never_ramped);
+		}
+		/* No-op if the hold already scored this window. With the hold
+		 * off this is the only place it is ever scored, and that is the
+		 * baseline the mitigation is measured against. */
+		score_short_window();
+		grant_short_rx = false;
+	}
+#endif
 	/*
 	 * Hand the peripheral back in the state it was lent in. The interrupt
 	 * mask is the part that matters: two bits left set in RADIO->INTENSET
@@ -3169,6 +3717,15 @@ void radiant_nrf_gate_on_grant_end(void)
 	 * off as unproven rather than disproven.
 	 */
 	radio_endpoints_attach(false);
+
+#if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
+	/* Put the vector back the way the grant found it. See bug 21 at
+	 * radiant_nrf_gate_on_grant(). Last, after the mask is clear and the
+	 * radio is idle, so nothing we raised can be taken on the way out. */
+	if (!radio_irq_was_enabled) {
+		NVIC_DisableIRQ(RADIANT_RADIO_IRQn);
+	}
+#endif
 }
 
 void radiant_nrf_gate_on_radio_irq(void)
@@ -3372,6 +3929,7 @@ static void deliver_terminal(enum radiant_radio_status st)
 	}
 	radiant_op.terminal_sent = true;
 	radiant_dbg_term++;
+	WIN_DIAG(term);
 
 	nrfx_gppi_conn_disable(radiant_op.conn_start);
 	nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
@@ -3460,6 +4018,7 @@ static void radio_isr(const void *arg)
 {
 	ARG_UNUSED(arg);
 	radiant_dbg_isr++;
+	WIN_DIAG(isr);
 
 #if defined(CONFIG_RADIANT_CORE_ED_SCAN)
 	/*
@@ -3480,6 +4039,7 @@ static void radio_isr(const void *arg)
 
 	if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_END)) {
 		nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_END);
+		WIN_DIAG(ev_end);
 
 		if (radiant_op.kind == OP_TX && !radiant_op.terminal_sent) {
 			struct radiant_tx_event evt;
@@ -3626,6 +4186,7 @@ static void radio_isr(const void *arg)
 
 	if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_DISABLED)) {
 		nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_DISABLED);
+		WIN_DIAG(ev_disabled);
 
 		if (radiant_op.kind == OP_RX) {
 			/* The window closed on its own compare, or an abort
@@ -3659,4 +4220,5 @@ static void radio_isr(const void *arg)
 #endif
 	}
 }
+
 

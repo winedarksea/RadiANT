@@ -104,6 +104,12 @@ target_sources(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_power.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_tracker.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_controls.c"
+  # Running dynamics. Listed here for the same reason as its two neighbours -
+  # src/test_profile_rd.c is in this application's test sources, so leaving the
+  # implementation out is a link error, not a missing test. It was exactly that
+  # for a while: the RD phase added the decoder, the adapter in src/bridge and
+  # the test, and the adapter's own CMake entry below, but never this line.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_rd.c"
   # Layer D (compat-C7): the over-air enrolment window. The FOURTH file here
   # that includes a radiant_core header, and the second that has to - adding a
   # keyholder is a key operation. It names no page number and no frame index,

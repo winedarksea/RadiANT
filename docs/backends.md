@@ -12,6 +12,16 @@ optional-feature material below is the shipping behaviour and is asserted.
 Controller — and it fails its own cost gate by a factor of thirty.** Those are
 three separate claims and only the first two are good news; see *`loss (exact)`,
 measured at last* immediately below before quoting anything from this page.
+
+**And "coexists" means BLE, not Thread.** Beside an attached, transmitting
+OpenThread node the ANT channel first would not acquire at all (0 of 961 packets
+in both the MED and SED roles) and now acquires, tracks and delivers at **~96 %
+loss** — against 0.20 % for the same build with no second stack. Four defects
+behind the first figure are fixed; one remains, and it is the 802.15.4 driver
+resetting the RADIO inside a timeslot MPSL has granted to us. Do not read the
+BLE result as covering Thread. See
+[`radiant-bridge.md` §7.4.1](radiant-bridge.md#741-first-measurement-2026-08-13--the-gate-fails)
+and [§7.4.2](radiant-bridge.md#742-four-defects-in-series-and-what-is-left).
 [`radiant_core/src/radiant_radio_nrf_gate.h`](../radiant_core/src/radiant_radio_nrf_gate.h)
 and its direct implementation are compiled into every `-DRADIANT_BACKEND=nrf`
 build; [`radiant_radio_nrf_gate_mpsl.c`](../radiant_core/src/radiant_radio_nrf_gate_mpsl.c)
@@ -316,22 +326,39 @@ After re-anchoring the sweep gets about a third of what it asks for — and then
 stops asking: `acq=13` frozen, `deny=12`, `abrt=1`. The scheduler abandons the
 search after a dozen denials. Under an arbiter a denial during acquisition is
 ordinary weather rather than a reason to give up, so what needs changing is the
-search's response to `RADIANT_RADIO_EDENIED`: persist and keep re-posting. That
-is core policy, it is where this work stops, and until it is done
-`[gates.coexistence]`'s `max_delta_pp` and the second-stack half of
-`min_sweep_rate_ratio` still have no run behind them.
+search's response to `RADIANT_RADIO_EDENIED`: persist and keep re-posting.
+
+**The persistence half of that is now done**, and the OpenThread sitting of
+2026-08-13 shows it working: the search no longer gives up, placing 22 796 scan
+chunks across a 257 s contended run instead of freezing at a dozen. It did not
+help on its own — not one of those chunks completed, and the channel delivered
+0 of 961 packets in both roles. Four defects were behind that and are fixed;
+acquisition now works and the contended arms deliver, at ~96 % loss. Full
+numbers, the four defects and the one that remains:
+[`radiant-bridge.md` §7.4.1](radiant-bridge.md#741-first-measurement-2026-08-13--the-gate-fails)
+and [§7.4.2](radiant-bridge.md#742-four-defects-in-series-and-what-is-left).
+
+**The denial livelock named above is still real and still unfixed.**
+`DONE_DENIED` credits zero dwell, so a chunk that is always denied leaves
+`dwell_remaining` unchanged and `radiant_sched_rechunk()` re-arms the identical
+chunk forever — the sweep never leaves the set. That needs a bounded-denial
+escape whatever the denials turn out to be caused by.
 
 Tracking is unaffected by all of this: a channel that is already locked keeps its
-packets beside a live advertiser.
+packets beside a live advertiser. Acquisition is the whole of the problem.
 
-So the +0.5 pp coexistence bar below, the arbiter's own cost and the sweep-rate
-ratio are **thresholds, not results**. They live in
-[`tools/ab_gates.toml`](../tools/ab_gates.toml) as `[gates.coexistence]`, which
-is written and evaluated by `ant_ab.py` and `enabled = false` until it has been
-measured on the nRF54L15 DK — a gate that runs against a guessed threshold is
-worse than one that does not run, because it reports PASS. Turning it on is the
-line that moves this page's coexistence claims from *treat as narrative* to a
-named gate.
+So the +0.5 pp coexistence bar below and the arbiter's own cost are **now
+results, and the result is a fail**; the sweep-rate ratio remains a threshold
+with no run behind it, because no arm of that sitting completed a whole sweep
+set — the control arm found its sensor and went to tracking before finishing
+one, and the contended arms completed no chunk at all. The quantity is not
+measurable on a one-sensor rig, so `min_sweep_rate_ratio` has nothing to read.
+They live in [`tools/ab_gates.toml`](../tools/ab_gates.toml) as
+`[gates.coexistence]`, which is written and evaluated by `ant_ab.py` and is now
+`enabled = true` — measured on the nRF54L15 DK, which is the line that moves
+this page's coexistence claims from *treat as narrative* to a named gate. It is
+`required = false` while the root cause is open, so it reports rather than
+blocks.
 
 ---
 

@@ -243,6 +243,90 @@ void radiant_nrf_gate_on_radio_irq(void);
  */
 void radiant_nrf_gate_on_grant_end(void);
 
+#if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
+/*
+ * A bench probe across the gate seam, and the reason it exists: every counter
+ * on either side of the seam can look healthy while no window ever completes.
+ * The gate can say "13001 grants delivered, all ended cleanly" and the core can
+ * say "13001 chunks, all denied", and neither can tell you whether the RADIO
+ * was ever programmed, ever ramped, or ever raised an event inside the grant.
+ * These are the six numbers between the two.
+ */
+struct radiant_nrf_win_diag {
+	uint32_t grants;      /* on_grant() entered */
+	uint32_t nostage;     /* ...and found nothing staged to programme */
+	uint32_t prog_ok;     /* ...and the programming succeeded */
+	uint32_t prog_fail;   /* ...and it did not (ETIME) */
+	uint32_t isr;         /* radio_isr() entries, however delivered */
+	uint32_t ev_end;      /* RADIO EVENTS_END seen there */
+	uint32_t ev_disabled; /* RADIO EVENTS_DISABLED seen there */
+	uint32_t term;        /* terminals actually delivered to the core */
+
+	/*
+	 * The peripheral's own account of the last grant, sampled in
+	 * radiant_nrf_gate_on_grant_end() before anything is torn down. This is
+	 * the question no software counter can answer: did the RECEIVER ever
+	 * come up inside the grant we were given?
+	 */
+	uint32_t last_state;   /* RADIO->STATE (0 = DISABLED, 3 = RX) */
+	uint32_t last_events;  /* b0 READY b1 ADDRESS b2 END b3 DISABLED b4 RXREADY */
+	uint32_t saved_rxen;      /* what the swap believes our value is */
+	uint32_t contended;       /* radio_ep_contended, live */
+	uint32_t rxen_attach;     /* RADIO->SUBSCRIBE_RXEN just after attach(true) */
+	uint32_t rxen_prog;       /* ...and just after the operation was programmed */
+	uint32_t last_sub_rxen;   /* RADIO->SUBSCRIBE_RXEN as the grant left it */
+	uint32_t last_inten;      /* RADIO->INTENSET00 as the grant left it */
+	uint32_t ramped;       /* grants whose receiver reached READY/RX */
+	uint32_t never_ramped; /* ...and grants where it never did */
+
+	/*
+	 * THE CROSS-TAB. `ramped`/`never_ramped` above count every grant end,
+	 * including the ones that never programmed anything, so they cannot say
+	 * whether the windows that lost their routing are the same windows that
+	 * lost their packets. These do: they count only SHORT receive windows -
+	 * the tracked slots a loss figure is computed from - and cross them
+	 * against whether our routing was still in the peripheral when the grant
+	 * ended.
+	 *
+	 * "Wiped" is SUBSCRIBE_RXEN no longer holding our value at grant end,
+	 * which on this part means the 802.15.4 driver's nrf_radio_reset() ran
+	 * inside our grant. Every one of these is a count of windows, so
+	 * sw = sw_ramp + (short windows whose receiver never came up), and
+	 * sw_rx <= sw_ramp by construction.
+	 */
+	uint32_t sw;           /* short RX windows programmed inside a grant */
+	uint32_t sw_wipe;      /* ...whose routing was gone by grant end */
+	uint32_t sw_ramp;      /* ...whose receiver reached READY/RX */
+	uint32_t sw_wipe_ramp; /* ...both wiped and ramped */
+	uint32_t sw_rx;        /* ...that actually received a frame */
+	uint32_t sw_wipe_rx;   /* ...wiped AND still received a frame */
+	uint32_t sw_started;   /* ...whose open compare fired at all */
+	uint32_t sw_early;     /* ...scored BEFORE their open compare was due */
+	uint32_t sw_early_us_max; /* worst such shortfall, microseconds */
+	int32_t  sw_last_delta_us; /* scoring instant minus open compare, last one */
+	int32_t  sw_open_lead_us;  /* grant start to window open, last short window */
+	uint32_t sw_open_lead_max; /* ...worst */
+	uint32_t sw_open_late;     /* ...windows opening more than 1 ms into the grant */
+	uint32_t sw_dur_us;        /* how long the last such grant lasted */
+	uint32_t sw_dur_us_max;    /* ...the longest */
+	uint32_t sw_dur_short;     /* ...how many lasted under a millisecond */
+
+	/*
+	 * The in-grant hold (RADIANT_CORE_NRF_GRANT_HOLD_US). held = short
+	 * windows the grant callback stayed on the CPU for; held_end = those
+	 * that saw EVENTS_END before the hold ran out, i.e. the packet was in
+	 * RAM before the CPU was given back; held_cap = those that hit the
+	 * microsecond ceiling instead of the window's own close.
+	 */
+	uint32_t held;
+	uint32_t held_end;
+	uint32_t held_cap;
+	uint32_t held_us_max;  /* longest single hold, microseconds */
+};
+
+void radiant_nrf_win_diag_get(struct radiant_nrf_win_diag *out);
+#endif
+
 #ifdef __cplusplus
 }
 #endif
