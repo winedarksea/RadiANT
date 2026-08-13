@@ -4,47 +4,32 @@
  * every backend shares.
  *
  * AES-128 is the single primitive in v1: CTR for X_CONF, CMAC (RFC 4493) for
- * every MAC, SP 800-108 counter-mode KDF with CMAC as the PRF for every derived
- * key. No SHA is linked anywhere. That saves roughly 1.4 KB, and it collapses
- * the test surface to four published vector sets - FIPS-197, RFC 4493,
- * SP 800-38A and SP 800-108 - which is what radiant_core/tests/src/test_sec_aes.c
- * runs.
+ * every MAC, SP 800-108 counter-mode KDF with CMAC as the PRF for derived
+ * keys. No SHA linked anywhere (saves ~1.4 KB), test surface is four
+ * published vector sets - FIPS-197, RFC 4493, SP 800-38A, SP 800-108 - run
+ * by tests/src/test_sec_aes.c.
  *
- * ── What this file may include, and why it matters ─────────────────────────
+ * WHAT THIS FILE MAY INCLUDE: <stdint.h> and <string.h>, nothing else - no
+ * Zephyr header, no HAL, no CMSIS. Lets ztest hammer this file on native_sim
+ * with no radio and no board; protect this when someone wants "just one"
+ * logging call in here. The one CONFIG_ symbol below uses a plain #ifdef
+ * (Zephyr force-includes autoconf.h, no include needed).
  *
- * <stdint.h> and <string.h>. Nothing else. Not a Zephyr header, not the HAL,
- * not CMSIS. That is what lets the ztest suite hammer this file on native_sim
- * with no radio and no board, and it is the property to protect when somebody
- * later wants "just one" logging call in here.
+ * NO UNALIGNED WORD ACCESS, EVER. Current targets are ARM (tolerates it); an
+ * RV32 core may trap or emulate it slowly. Everything goes through memcpy
+ * into aligned locals or explicit byte shifts.
  *
- * The one CONFIG_ symbol below is read with a plain #ifdef and needs no
- * include: Zephyr force-includes autoconf.h.
- *
- * ── Two constraints that cost nothing now and are expensive to retrofit ────
- *
- * NO UNALIGNED WORD ACCESS, EVER. All current targets are ARM, which tolerates
- * it; an RV32 embedded core may trap or emulate it slowly. Everything here
- * goes through memcpy into aligned locals or through explicit byte shifts,
- * which a compiler folds to a single load on ARM and to correct byte loads on
- * a strict-alignment target.
- *
- * NO CMSIS IN THE PORTABLE PATH. No __REV, no __RBIT. Any ARM specialisation
+ * NO CMSIS IN THE PORTABLE PATH. No __REV, no __RBIT - ARM specialisation
  * goes behind a guard, not inline.
  *
- * ── Why this is not a T-table AES ──────────────────────────────────────────
- *
- * The classic four-times-256-word T-table implementation is the fast one and
- * it costs 4 KB of rodata - which is the ENTIRE .text budget the zero-cost job
- * asserts for this feature. So: a 256-byte S-box, and MixColumns computed on
- * 32-bit columns with the xtime trick, which is the word-oriented form without
- * the tables. Columns are packed by explicit shifts rather than by casting a
- * byte pointer, so this is byte-order independent by construction.
- *
- * Roughly 3-4x a naive byte loop, which on an M4 at 64 MHz is about 12 us per
- * block. At 4 Hz with W=2 that is a few blocks a second: noise against a 500 us
- * radio window. DO NOT HAND-OPTIMISE THIS. The ~30 us it would save four times
- * a second is not worth a second implementation to test; the effort belongs in
- * the seam, which is where the accelerators actually attach.
+ * WHY NOT A T-TABLE AES: the classic 4x256-word T-table is faster but costs
+ * 4 KB of rodata - the entire .text budget the zero-cost job asserts for
+ * this feature. So: a 256-byte S-box plus MixColumns on 32-bit columns via
+ * the xtime trick (word-oriented, no tables), packed by explicit shifts so
+ * it's byte-order independent by construction. ~3-4x a naive byte loop,
+ * ~12 us/block on an M4 at 64 MHz - noise against a 500 us radio window. Do
+ * not hand-optimise this; the effort belongs in the seam, where accelerators
+ * actually attach.
  */
 
 #include <stdint.h>
@@ -94,7 +79,7 @@ static const uint8_t sbox[256] = {
 
 static uint32_t rotl32(uint32_t x, unsigned n)
 {
-	return (uint32_t)((x << n) | (x >> (32u - n)));
+	return (x << n) | (x >> (32u - n));
 }
 
 static uint32_t sub_word(uint32_t w)
@@ -114,12 +99,10 @@ static uint32_t xtime_word(uint32_t x)
 }
 
 /*
- * MixColumns on one packed column.
- *
+ * MixColumns on one packed column:
  *   d = 2*c ^ 3*r1 ^ r2 ^ r3
  *     = xtime(c ^ r1) ^ r1 ^ r2 ^ r3      where rN = rotl32(c, 8*N)
- *
- * which is the identity that removes the tables.
+ * the identity that removes the tables.
  */
 static uint32_t mix_column(uint32_t c)
 {
@@ -131,21 +114,18 @@ static uint32_t mix_column(uint32_t c)
 }
 
 /*
- * ── The shared key schedule ────────────────────────────────────────────────
+ * The shared key schedule: ONE for the whole system, re-expanded when the key
+ * changes. Eight secured channels x three derived keys each would be 4.2 KB
+ * of schedule against a ~960 B budget; expansion is ~1/10th of a block
+ * encryption and the access pattern is repetitive (one key per CMAC/CTR run),
+ * so the cache hits essentially always.
  *
- * ONE schedule for the whole system, re-expanded when the key changes. Eight
- * secured channels hold three derived keys each; 176 bytes of schedule per key
- * would be 4.2 KB, against a ~960 B budget for all of this feature's state.
- * Expansion is about a tenth of a block encryption, and the access pattern is
- * strongly repetitive - a whole CMAC or a whole CTR run uses one key - so the
- * cache hits essentially always.
+ * Cache tag is the key's import serial, NOT its address: an address-keyed
+ * cache would silently encrypt under the old key if one were destroyed and
+ * another imported at the same address.
  *
- * The cache tag is the key's import serial, NOT its address: destroy a key and
- * import another at the same address and an address-keyed cache would silently
- * encrypt under the old one.
- *
- * NOT RE-ENTRANT. radiant_core serialises every call with api_lock, and the
- * no-crypto-in-ISR rule is what makes that sufficient.
+ * NOT RE-ENTRANT - radiant_core serialises every call with api_lock, and the
+ * no-crypto-in-ISR rule makes that sufficient.
  */
 static uint32_t sched[AES128_WORDS];
 static uint32_t sched_serial;   /* 0 = nothing cached */
@@ -247,9 +227,8 @@ int radiant_sec_key_import(struct radiant_sec_key *k, const uint8_t *raw,
 		return RADIANT_SEC_EINVAL;
 	}
 	if (bits != 128u) {
-		/* The seam expresses 256; the software backend and the
-		 * protocol are both AES-128. Refusing loudly beats quietly
-		 * truncating a key a caller meant. */
+		/* The seam expresses 256; this backend and the protocol are
+		 * both AES-128. Refuse loudly rather than truncate silently. */
 		return RADIANT_SEC_ENOTSUP;
 	}
 
@@ -259,11 +238,8 @@ int radiant_sec_key_import(struct radiant_sec_key *k, const uint8_t *raw,
 
 	import_serial++;
 	if (import_serial == 0u) {
-		/* Serial 0 means "empty", so a wrap that reused it would make
-		 * an empty handle look valid. At 2^32 imports this is
-		 * unreachable in a session - it is here because "unreachable"
-		 * is a claim about arithmetic, not a reason to omit the
-		 * branch. */
+		/* Serial 0 means "empty"; a wrap that reused it would make an
+		 * empty handle look valid. */
 		import_serial = 1u;
 		sched_serial = 0u;
 	}
@@ -302,11 +278,10 @@ int radiant_sec_aes_ecb(const struct radiant_sec_key *k, const uint8_t in[16],
 }
 
 /*
- * ── Level 2: the portable mode layer ───────────────────────────────────────
- *
- * Compiled only when the selected backend does not implement the modes itself.
- * A mode-level backend - CRACEN through PSA, CC310 - defines these and its own
- * radiant_sec_caps(), and this whole section disappears.
+ * Level 2: the portable mode layer. Compiled only when the selected backend
+ * doesn't implement the modes itself - a mode-level backend (CRACEN via PSA,
+ * CC310) defines these and its own radiant_sec_caps(), and this section
+ * disappears.
  */
 #ifndef CONFIG_RADIANT_SEC_BACKEND_MODES
 
@@ -314,22 +289,18 @@ static const struct radiant_sec_caps sw_caps = {
 	.name          = "software",
 	.has_ctr       = false,   /* the portable layer provides it over ECB */
 	.has_cmac      = false,
-	/* Whether the public-key entry point exists at all. It is a separate
-	 * file under a separate symbol - src/ext/radiant_x25519.c - so this
-	 * tracks the symbol rather than this backend: "not built" and "this
-	 * backend cannot" are the same condition to a caller, and only the cap
-	 * expresses both. */
+	/* Tracks the symbol for src/ext/radiant_x25519.c (a separate file),
+	 * not this backend: "not built" and "this backend cannot" are the
+	 * same condition to a caller. */
 #if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
 	.has_x25519    = true,
 #else
 	.has_x25519    = false,
 #endif
 	.key_is_opaque = false,
-	/* Tracks the entropy backend's symbol for the same reason has_x25519
-	 * tracks X25519's: it is a separate file under a separate symbol, and
-	 * "this build has no RNG" is what a caller needs to know either way.
-	 * A plain #ifdef, because this file includes no Zephyr header and
-	 * IS_ENABLED() lives in one. */
+	/* Same reasoning as has_x25519, tracking the entropy backend's
+	 * symbol. Plain #ifdef since this file includes no Zephyr header
+	 * (IS_ENABLED() lives in one). */
 #if defined(CONFIG_RADIANT_SEC_HAS_RNG)
 	.has_rng       = true,
 #else
@@ -373,7 +344,7 @@ int radiant_sec_ctr_xor(const struct radiant_sec_key *k, const uint8_t iv[16],
 		len -= chunk;
 
 		if (len != 0u) {
-			/* 128-bit big-endian increment, per SP 800-38A F.5. */
+			/* 128-bit big-endian increment, SP 800-38A F.5. */
 			for (i = 16; i-- > 0;) {
 				counter[i]++;
 				if (counter[i] != 0u) {
@@ -454,12 +425,12 @@ int radiant_sec_cmac_update(struct radiant_sec_cmac_ctx *c, const uint8_t *msg,
 		msg += take;
 		len -= take;
 
-		/* A FULL BLOCK IS NOT PROCESSED UNTIL MORE DATA ARRIVES.
-		 * CMAC's last block takes a different subkey, and whether this
-		 * block is the last one is not known until the next update or
-		 * the final. Processing eagerly is the classic incremental-CMAC
-		 * bug and it produces a tag that is right for every message
-		 * except the ones whose length is a multiple of 16. */
+		/* A full block is not processed until more data arrives:
+		 * CMAC's last block takes a different subkey, and whether
+		 * this is the last block isn't known until the next update or
+		 * final. Processing eagerly is the classic incremental-CMAC
+		 * bug - wrong only for messages whose length is a multiple
+		 * of 16. */
 		if (c->partial_len == 16u && len != 0u) {
 			for (i = 0; i < 16; i++) {
 				c->chain[i] ^= c->partial[i];
@@ -534,11 +505,10 @@ int radiant_sec_cmac(const struct radiant_sec_key *k, const uint8_t *msg,
 #endif /* !CONFIG_RADIANT_SEC_BACKEND_MODES */
 
 /*
- * ── Portable helpers on top of the seam ────────────────────────────────────
- *
- * Compiled for every backend, because two backends disagreeing about a block
- * this protocol pins to the byte is exactly the failure the pinning exists to
- * prevent. These call Level 2, never Level 1.
+ * Portable helpers on top of the seam. Compiled for every backend - two
+ * backends disagreeing about a block this protocol pins to the byte is
+ * exactly the failure the pinning exists to prevent. Call Level 2, never
+ * Level 1.
  */
 
 void radiant_sec_nonce_block(uint8_t out[16], uint32_t epoch, uint16_t devnum,

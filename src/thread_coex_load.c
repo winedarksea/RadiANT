@@ -2,70 +2,30 @@
 /*
  * thread_coex_load.c - an 802.15.4 stack whose only job is to want the radio.
  *
- * ---------------------------------------------------------------------------
- * WHY THIS EXISTS
- * ---------------------------------------------------------------------------
+ * WHY THIS EXISTS. docs/radiant-bridge.md section 7.4's P4 gate requires a
+ * build attached and "carrying continuous traffic", loss (exact) no worse
+ * than +0.5 pp against ANT alone. `CONFIG_NET_L2_OPENTHREAD=y` alone is not
+ * that - the same trap as the BLE side's inert `CONFIG_BT=y` (sweep ratio
+ * 1.000, a gate that cannot fail), but worse: a sleepy attached child looks
+ * successful (role, address, `ot state child`) while transmitting almost
+ * nothing, by design. So this file sends datagrams on a timer and counts
+ * them; a P4 number without `sent` beside it is not a measurement.
  *
- * docs/radiant-bridge.md section 7.4 states the P4 gate in full: a build with
- * `CONFIG_NET_L2_OPENTHREAD=y`, attached in the role section 7.3b selects and
- * "carrying continuous traffic", with `loss (exact)` no worse than +0.5 pp
- * against the same board running ANT alone.
+ * DESTINATION IS MULTICAST (`ff03::1`, mesh-local all-nodes) on purpose: a
+ * unicast peer that rebooted or never commissioned would turn every send
+ * into a silent address-resolution failure while `sent` still incremented.
+ * Multicast transmits whenever this node is attached, full stop - though
+ * that also makes the traffic one-directional, reproducing only the
+ * transmit demand of a chatty node, not a substitute for a busy mesh.
  *
- * The words "carrying continuous traffic" are load-bearing, and this project has
- * already paid once for ignoring the equivalent words on the BLE side.
- * `CONFIG_BT=y` alone linked a controller in and left it asleep, and the gate
- * came back with a sweep-rate ratio of exactly 1.000 - a gate that cannot fail.
- * `CONFIG_NET_L2_OPENTHREAD=y` alone is the same trap wearing a different hat,
- * and it is a WORSE one, because an attached MTD is not obviously idle: it has a
- * role, it has an address, `ot state` says `child`, and every one of those is
- * true of a node that has transmitted four MLE frames in the last minute and
- * nothing since. A sleepy child that is doing its job correctly is nearly silent
- * BY DESIGN - that is what section 7.3b chose it FOR - so the configuration that
- * looks most like success is exactly the configuration that measures nothing.
+ * SED VS MED: section 7.4 requires measuring both, since MED (always-on) is
+ * the worst case and a gate measured only in the role that schedules its
+ * own windows would measure the mitigation rather than the problem. Role is
+ * a Kconfig choice (thread.conf / thread_sed.conf), not runtime, so numbers
+ * can't be attributed to the wrong role.
  *
- * So this file sends datagrams on a timer, and counts them, and the count is
- * part of the result. A P4 number quoted without `sent` beside it is not a
- * measurement.
- *
- * ---------------------------------------------------------------------------
- * THE DESTINATION IS A MULTICAST ADDRESS, ON PURPOSE
- * ---------------------------------------------------------------------------
- *
- * Default `ff03::1` - mesh-local all-nodes. Not because a unicast peer would be
- * worse traffic, but because it removes an entire class of silent failure from
- * the rig: with a unicast destination, a peer that has rebooted, moved, or never
- * commissioned turns every send into an address-resolution failure, and the
- * board still logs `sent` while putting a quite different amount of energy on
- * the air than the operator thinks. Multicast to all-nodes is transmitted by
- * this node whenever this node is attached, full stop, and what the rest of the
- * mesh does with it is not part of the measurement.
- *
- * It does mean the traffic is one-directional. That is the honest limitation and
- * it belongs in the write-up: this instrument reproduces the TRANSMIT demand of
- * a chatty Thread node, and the receive demand only insofar as an attached MTD
- * or MED already keeps its receiver on. It is not a substitute for a busy mesh.
- *
- * ---------------------------------------------------------------------------
- * SED VERSUS MED, AND WHY BOTH GET MEASURED
- * ---------------------------------------------------------------------------
- *
- * Section 7.4: "Run it in the MED role as well as the intended one, even though
- * MED is the last preference. MED is the always-on case, so it is the worst
- * case, and a gate measured only in the role that schedules its own windows
- * would be measuring the mitigation rather than the problem."
- *
- * The role is chosen in Kconfig rather than here, because it is a property of
- * the image and changing it at runtime would let one console session's numbers
- * be attributed to the other role. thread.conf and thread_sed.conf are the two
- * builds; this file is identical in both and reports which one it is.
- *
- * ---------------------------------------------------------------------------
- * OFF UNLESS ASKED FOR
- * ---------------------------------------------------------------------------
- *
- * Selecting CONFIG_NET_L2_OPENTHREAD on this application does not start a load;
- * CONFIG_ANT_DONGLE_THREAD_COEX_LOAD does. A shipping dongle builds neither, and
- * docs/decisions/0011-never-a-border-router.md is why it never will.
+ * OFF UNLESS ASKED FOR: CONFIG_ANT_DONGLE_THREAD_COEX_LOAD starts the load,
+ * not CONFIG_NET_L2_OPENTHREAD alone. A shipping dongle builds neither.
  */
 
 #include <zephyr/kernel.h>
@@ -119,12 +79,9 @@ static bool socket_ready(void)
 			     CONFIG_ANT_DONGLE_THREAD_COEX_LOAD_DEST,
 			     &dest.sin6_addr);
 	if (rc != 1) {
-		/*
-		 * Loud and fatal to the load, not to the dongle. A malformed
-		 * destination that fell through to "send nothing" would produce
-		 * a perfect coexistence result from an image with no second
-		 * stack traffic at all, which is the single most misleading
-		 * outcome this file can have.
+		/* Loud and fatal to the load, not the dongle: silently sending
+		 * nothing would produce a perfect coexistence result from an
+		 * image with no second-stack traffic at all.
 		 */
 		LOG_ERR("destination '%s' is not an IPv6 address - the "
 			"coexistence load will transmit NOTHING and any gate "
@@ -141,12 +98,9 @@ static bool socket_ready(void)
 	return true;
 }
 
-/*
- * Attachment is a precondition for the traffic, and NOT for the measurement's
- * validity on its own. An unattached MTD is not silent - it is running MLE
- * discovery, which is itself radio demand - so the run is still meaningful; it
- * is just not the run that was asked for. Hence: log the role, count the sends,
- * and let whoever reads the console see which of the two they got.
+/* Attachment gates the traffic but not the measurement's validity - an
+ * unattached MTD runs MLE discovery, itself radio demand, just not the run
+ * that was asked for. Log the role and let the console show which was got.
  */
 static void note_role(void)
 {
@@ -168,15 +122,10 @@ static void note_role(void)
 			  role == OT_DEVICE_ROLE_LEADER);
 }
 
-/*
- * THE BUCKET INDEX, AND THE FLOOR IS DELIBERATE.
- *
- * Everything below 64 us lands in bucket 0. There is nothing to resolve down
- * there: the uncontended call is a queue push, and separating a 3 us push from
- * an 11 us push would only add columns that never move. What has to be
- * resolvable is the region from "a few hundred microseconds of ordinary stack
- * work" up to "the whole 96 ms grant", which is what the remaining twelve
- * buckets cover.
+/* The 64 us floor is deliberate: an uncontended call is a queue push, and
+ * separating a 3 us push from an 11 us push would add columns that never
+ * move. The remaining twelve buckets resolve the region that matters, from
+ * ordinary stack work up to the whole 96 ms grant.
  */
 static uint32_t lat_bucket(uint32_t us)
 {
@@ -194,22 +143,14 @@ static uint32_t lat_bucket(uint32_t us)
 }
 
 /*
- * THE MAC COUNTERS, SAMPLED WHERE THEY CAN BE READ AGAINST THE SENDS THAT
- * PROVOKED THEM.
+ * MAC counters, stored absolute but reported as deltas since the previous
+ * report - a total of 4000 tx/300 retries doesn't say whether the retries
+ * clustered inside the two minutes an ANT channel was open; the delta does.
  *
- * Absolute, not deltas, and the report prints them as deltas since the previous
- * report - which is the form that answers the question. A total of 4000 tx with
- * 300 retries says nothing about whether the retries were spread evenly or all
- * arrived in the two minutes an ANT channel was open; the per-report delta,
- * printed beside `sent` on the same line, does.
- *
- * Read WITHOUT taking the OpenThread API lock, which is a deliberate and
- * bounded choice rather than an oversight. note_role() above has always read
- * otThreadGetDeviceRole() the same way and this is a bench instrument reading
- * five monotonic uint32 counters for a printout; the cost of being wrong is a
- * torn value in one report line, and the cost of blocking this work item on the
- * OT mutex is that the instrument measuring scheduler latency becomes a source
- * of it.
+ * Read without the OpenThread API lock, deliberately: this is a bench
+ * instrument reading five monotonic counters for a printout, and blocking
+ * this work item on the OT mutex would make the latency instrument a source
+ * of the latency it measures.
  */
 static void sample_mac_counters(void)
 {
@@ -244,11 +185,9 @@ static void coex_send_fn(struct k_work *w)
 
 		rc = zsock_sendto(sock, payload, sizeof(payload), 0,
 				  (struct sockaddr *)&dest, sizeof(dest));
-		/*
-		 * TIMED ACROSS THE CALL AND NOTHING ELSE. The bracket is as
-		 * tight as it can be on purpose: widen it to include note_role()
-		 * or the reporting below and the histogram starts measuring this
-		 * file instead of the 15.4 stack.
+		/* Timed across the call and nothing else, deliberately - widen
+		 * this bracket and the histogram measures this file instead of
+		 * the 15.4 stack.
 		 */
 		us = k_cyc_to_us_floor32(k_cycle_get_32() - t0);
 		stats.lat[lat_bucket(us)]++;
@@ -258,13 +197,10 @@ static void coex_send_fn(struct k_work *w)
 		/* Counted whether or not the send succeeded: a call that took
 		 * 40 ms and then failed still waited 40 ms. */
 		if (rc < 0) {
-			/*
-			 * Counted separately from `sent` and never folded into
-			 * it. A refusal here is the stack declining to transmit
-			 * - buffer exhaustion, no route - and it costs the
-			 * arbiter nothing. Folding the two would let an image
-			 * that failed every send report the same `sent` as one
-			 * that succeeded on every one.
+			/* Never folded into `sent`: a refusal here (buffer
+			 * exhaustion, no route) costs the arbiter nothing, and
+			 * folding it in would let a failing image report the
+			 * same `sent` as a succeeding one.
 			 */
 			stats.send_failed++;
 		} else {
@@ -289,18 +225,14 @@ static void coex_send_fn(struct k_work *w)
 			(unsigned int)sizeof(payload));
 
 		/*
-		 * CUMULATIVE, NOT PER-REPORT, and that is the right choice for
-		 * the histogram even though the MAC counters below are printed
-		 * as deltas. An arm is a whole run against one image; the shape
-		 * of the tail over the whole run is the result, and resetting
-		 * the buckets every report would leave the operator adding
-		 * columns by hand across a console capture. The MAC counters
-		 * are the opposite case - they are already cumulative in the
-		 * stack and have been counting since boot, including through
-		 * attach, so only their delta belongs to this arm.
+		 * Histogram is cumulative, not per-report: an arm is a whole
+		 * run, and resetting buckets every report would make the
+		 * operator add columns by hand. MAC counters below are the
+		 * opposite case - already cumulative since boot - so only
+		 * their delta belongs to this arm.
 		 *
 		 * `us<` labels are the bucket's lower bound: 0 is everything
-		 * under 64 us, then 64, 128, 256 ... and the last is >=256 ms.
+		 * under 64 us, then 64, 128, 256 ... last is >=256 ms.
 		 */
 		LOG_INF("thread lat us: <64=%u 64=%u 128=%u 256=%u 512=%u "
 			"1k=%u 2k=%u 4k=%u 8k=%u 16k=%u 32k=%u 64k=%u "
@@ -322,12 +254,10 @@ static void coex_send_fn(struct k_work *w)
 		prev_mac[3] = stats.mac_tx_err_abort;
 		prev_mac[4] = stats.mac_tx_err_busy;
 
-		/*
-		 * THIS IS DEFERRAL, MEASURED ON THE OTHER STACK'S OWN TERMS.
-		 * A CCA failure or a retry is the 15.4 MAC finding the air
-		 * taken, which under this build is very often taken by us -
-		 * so these five deltas are what "the reserve costs Thread's
-		 * scheduler" means as a number rather than as a claim.
+		/* Deferral measured on the other stack's own terms: a CCA
+		 * failure or retry is the 15.4 MAC finding the air taken (often
+		 * by us), so these five deltas are what "the reserve costs
+		 * Thread's scheduler" means as a number.
 		 */
 		LOG_INF("thread mac d: tx=%u retry=%u cca=%u abort=%u busy=%u "
 			"| tot tx=%u retry=%u cca=%u abort=%u busy=%u",
@@ -341,12 +271,9 @@ static void coex_send_fn(struct k_work *w)
 		K_MSEC(CONFIG_ANT_DONGLE_THREAD_COEX_LOAD_INTERVAL_MS));
 }
 
-/*
- * DELAYED, AND THE DELAY IS AN INSTRUMENT RATHER THAN CAUTION - the same
- * argument ble_coex_load.c makes at length. With the load running from the first
- * millisecond, "ANT+ never worked" and "ANT+ stopped when Thread started" are
- * the same observation. With it arriving seconds later the console shows the
- * sweep running, then the load starting, and then whatever happens next.
+/* Delayed start is an instrument, not caution (see ble_coex_load.c): running
+ * from millisecond zero makes "ANT+ never worked" and "ANT+ stopped when
+ * Thread started" the same observation; a delayed start separates them.
  */
 int thread_coex_load_start(void)
 {

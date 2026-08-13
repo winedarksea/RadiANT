@@ -28,28 +28,17 @@ extern "C" {
 int thread_coex_load_start(void);
 
 /*
- * THE SCHEDULER COST, sampled rather than derived.
+ * docs/radiant-bridge.md section 7.4 requires P4 record the scheduler cost
+ * (what 802.15.4 asked for and got) separately from the air cost (ANT+
+ * `loss (exact)`, measured off-board) - reporting one without the other
+ * hides whether the other stack transmitted at all.
  *
- * docs/radiant-bridge.md section 7.4 and the plan both insist P4 record the
- * scheduler cost and the air cost SEPARATELY, and today the docs record neither.
- * The air cost is ANT+ `loss (exact)` from tools/ant_verify.py, measured off the
- * board entirely. The scheduler cost is this: what the 802.15.4 side actually
- * asked for and got while that loss was being measured. Reporting one without
- * the other is how "coexistence is fine" and "coexistence is fine because the
- * other stack never transmitted" become the same sentence.
- */
-/*
- * THE SEND-LATENCY HISTOGRAM, AND WHY IT IS BUCKETS AND NOT A MEAN.
- *
- * The scheduler cost of a reserve is not a shift in the average - it is a TAIL.
- * A window we hold is ~96 ms of air the 802.15.4 stack cannot have, four times a
- * second per tracked sensor; the sends that fall outside those windows are
- * completely unaffected, and the ones that land inside them wait. Averaged
- * together those two populations produce a small number that is true of neither,
- * and a mean is exactly the statistic that would let a gate this phase is
- * supposed to fail slip through. The buckets are logarithmic because the
- * quantity being resolved spans from "no contention at all" to "one whole
- * grant".
+ * The send-latency histogram uses buckets rather than a mean because the
+ * cost is a TAIL, not a shift in the average: a ~96 ms reserved window four
+ * times a second per tracked sensor leaves sends outside it unaffected and
+ * sends inside it waiting, and averaging those two populations produces a
+ * number true of neither. Buckets are logarithmic to span "no contention"
+ * through "one whole grant".
  */
 #define THREAD_COEX_LAT_BUCKETS 13
 
@@ -68,13 +57,11 @@ struct thread_coex_stats {
 	uint32_t lat_max_us;
 
 	/*
-	 * THE 15.4 STACK'S OWN VIEW OF BEING PUSHED OFF THE AIR, which is the
-	 * half of the scheduler cost that the socket call cannot see. A send
-	 * that returns promptly and is then retried three times, or abandoned on
-	 * a busy channel, cost the other stack real air; the latency histogram
-	 * records it as fast. These counters are the Thread-side mirror of the
-	 * gate's own ext=a/b, and a CCA failure in particular IS our grant seen
-	 * from the other side.
+	 * The 15.4 stack's own view of being pushed off the air - the half
+	 * of the scheduler cost the socket call cannot see. A send that
+	 * returns promptly but was retried or abandoned cost real air while
+	 * the latency histogram records it as fast; a CCA failure here IS
+	 * our grant seen from the other side.
 	 */
 	uint32_t mac_tx_total;
 	uint32_t mac_tx_retry;

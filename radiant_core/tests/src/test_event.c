@@ -1,45 +1,37 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * Provenance: original work. Every expected byte in this file was written from
+ * Provenance: original work. Every expected byte here was written from
  * src/ant_wire.h (generated from protocol/ant_wire.yaml), from
- * tools/ant_verify.py's extended_fields() - which this module has to be the
+ * tools/ant_verify.py's extended_fields() - which this module must be the
  * exact inverse of - and from the t_sync contract in
- * radiant_core/include/radiant_core/radiant_radio_hal.h, not from running radiant_event.c and writing
- * down what it did. Nothing here derives from sdk-ant, from libant.a, from
- * disassembly of any binary, or from any adopter-gated ANT+ device profile
- * document.
+ * radiant_core/include/radiant_core/radiant_radio_hal.h, not from running
+ * radiant_event.c and writing down what it did. Nothing here derives from
+ * sdk-ant, from libant.a, from disassembly of any binary, or from any
+ * ANT+ device profile document.
  *
- * ---------------------------------------------------------------------------
- * The suite for radiant_core/src/radiant_event.c
- * ---------------------------------------------------------------------------
- * Three things in this module have no functional symptom when they are wrong,
- * and most of the file is about them.
+ * The suite for radiant_core/src/radiant_event.c. Three things here have no
+ * functional symptom when wrong, and most of the file is about them:
  *
- *   THE RX TIMESTAMP. Reading a clock at drain time instead of using the
- *   backend's t_sync passes every functional test in existence and destroys
- *   the only measurement the field exists for - the 0.009 ms radio-clock
- *   figure the A/B `timing` gate is read against, and the basis of the
- *   sub-millisecond fusion claim. test_rx_timestamp_survives_the_clock_moving
- *   advances the virtual clock by more than a second between the frame
- *   arriving and the queue draining, and asserts the reported ticks did not
- *   move. It is the single most important test here.
+ *   THE RX TIMESTAMP - reading the clock at drain time instead of the
+ *   backend's t_sync passes every functional test and destroys the field's
+ *   whole purpose (the sub-ms fusion claim the `timing` gate reads against).
+ *   test_rx_timestamp_survives_the_clock_moving advances the clock over a
+ *   second between arrival and drain and checks the reported ticks did not
+ *   move - the single most important test here.
  *
- *   THE EXTENDED FIELD LAYOUT. Field order and the flag byte are a Tier 1
- *   byte-diff, so they are asserted byte by byte rather than round-tripped.
- *   test_ext_offsets_move_with_the_flags is the one that would catch a
- *   decoder-shaped bug: it omits the channel id and checks that RSSI moved up
- *   to where the channel id used to be, which is exactly the mistake
- *   extended_fields() is written to avoid.
+ *   THE EXTENDED FIELD LAYOUT - field order and the flag byte are a Tier 1
+ *   byte-diff, asserted byte by byte. test_ext_offsets_move_with_the_flags
+ *   catches the decoder-shaped bug: omitting the channel id and checking
+ *   RSSI moved up into its place.
  *
- *   THE CRC GATE. With eight filters armed the bench sees ~1.4 CRC failures a
- *   second on a quiet room, and Spike A measured a 3-byte address triggering
- *   the matcher on noise with zero valid frames behind it. A CRC-failed frame
- *   that becomes an event is a phantom sensor, and phantom sensors are hard to
- *   attribute later.
+ *   THE CRC GATE - with eight filters armed the bench sees ~1.4 CRC failures
+ *   a second on a quiet room, and Spike A measured a 3-byte address
+ *   triggering the matcher on noise alone. A CRC-failed frame that becomes
+ *   an event is a phantom sensor.
  *
  * These run only in CI on Linux: native_sim does not build on Windows, so no
- * amount of local work executes them. See radiant_core/tests/testcase.yaml.
+ * local work executes them. See radiant_core/tests/testcase.yaml.
  */
 
 #include <stdint.h>
@@ -55,11 +47,10 @@
 /* ---------------------------------------------------------------------------
  * The port hooks, and the one definition of antr_on_message() in this binary
  *
- * radiant_event.c deliberately includes no Zephyr header, so the two things it
- * needs from an RTOS are symbols the port supplies. Here the mock radio is
- * single-threaded and its clock only moves when a test moves it, so the
- * critical section is a no-op and the wakeup is a counter - which is also the
- * cheapest way to assert that a post really did try to wake the drain.
+ * radiant_event.c includes no Zephyr header, so it needs these as symbols the
+ * port supplies. The mock radio is single-threaded, so the critical section
+ * is a no-op and the wakeup is a counter - the cheapest way to assert a post
+ * tried to wake the drain.
  * ---------------------------------------------------------------------------
  */
 
@@ -411,14 +402,10 @@ ZTEST(radiant_event, test_ext_device_id_only)
 	zassert_equal(0x3Au, out[2]);
 }
 
-/*
- * The decoder-shaped bug, made reproducible. Ask for RSSI and the timestamp
- * but not the channel id: every field must shift up by four, and the flag byte
- * must say so. A module that emitted a placeholder for the channel id, or that
- * wrote fields at fixed offsets, passes the 0xE0 test above and fails this
- * one - which is the same trap tools/ant_verify.py's extended_fields() is
- * written to avoid on the other side of the wire.
- */
+/* The decoder-shaped bug, made reproducible: ask for RSSI and the timestamp
+ * but not the channel id, so every field must shift up by four with the flag
+ * byte saying so. A module writing fields at fixed offsets passes the 0xE0
+ * test above and fails this one. */
 ZTEST(radiant_event, test_ext_offsets_move_with_the_flags)
 {
 	struct radiant_event_ext ext = mk_ext();
@@ -513,15 +500,11 @@ ZTEST(radiant_event, test_missing_rssi_downgrades_rather_than_reporting_zero)
  * ---------------------------------------------------------------------------
  */
 
-/*
- * The timestamp must be the instant the frame's address was at the antenna,
- * not whatever the clock says when the queue is drained. The mock's clock only
- * moves when a test moves it, so moving it by more than a second between the
- * two makes the difference unmissable: a drain-time reading would be about
- * 40,448 ticks further on, and a reading of the callback's own arrival time
- * would still be right, which is why the assertion is against the
- * transmitter's t_sync rather than against anything the receiver produced.
- */
+/* The timestamp must be the instant the frame's address was at the antenna,
+ * not whatever the clock reads at drain. Moving the clock by over a second
+ * between the two makes a drain-time reading unmissably wrong (~40,448 ticks
+ * off), which is why the assertion is against the transmitter's t_sync
+ * rather than anything the receiver produced. */
 ZTEST(radiant_event, test_rx_timestamp_survives_the_clock_moving)
 {
 	radiant_time_t t_air;

@@ -27,8 +27,7 @@ import sys
 import time
 
 try:
-    import usb.core
-    import usb.util
+    import usb.core  # noqa: F401 - import-guard, verifies pyusb is installed
 except ImportError:  # pragma: no cover - user-facing guidance
     sys.exit("pyusb is not installed. Run: pip install pyusb")
 
@@ -37,8 +36,8 @@ sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 from ant_probe import (  # noqa: E402
     EP_OUT,
     FrameReader,
-    frame,
     close_device,
+    frame,
     open_device,
     reset_stack,
 )
@@ -48,19 +47,16 @@ from ant_scan import (  # noqa: E402
     DEVICE_TYPES,
     command,
 )
+
 # Protocol constants come from the generated module, never from a second copy
 # here. See tools/ant_wire.py and protocol/ant_wire.yaml.
 #
 # MESG_EVENT_ID is the value body[1] of a 0x40 message carries when it is a
-# channel event rather than a reply to a command - the same 0x01 this file used
-# to call EVENT_MARKER, and the same one src/ant_wire.h calls
-# ANTW_MESG_EVENT_ID.
+# channel event rather than a reply to a command - what this file used to call
+# EVENT_MARKER, and what src/ant_wire.h calls ANTW_MESG_EVENT_ID.
 #
-# EVENT_CODES_BY_VALUE names the event codes. The names it gives are the
-# protocol's own (EVENT_RX_FAIL, not RX_FAIL), which is a visible change in
-# what this tool prints; it is the price of there being one table instead of
-# two, and the printed name now matches what the firmware, the header and the
-# spec all call it.
+# EVENT_CODES_BY_VALUE names events using the protocol's own names
+# (EVENT_RX_FAIL, not RX_FAIL), matching firmware, header and spec.
 from ant_wire import (  # noqa: E402,F401
     BURST_HEADER_CHANNEL_MASK,
     BURST_HEADER_LAST,
@@ -136,12 +132,11 @@ def open_channel(dev, reader, ch: int, dev_type: int, period: int,
 def burst_probe(dev, reader, ch: int) -> str:
     """Send one burst packet at a channel that is not open.
 
-    Only asks whether the message is bridged at all. A firmware that does not
-    implement it answers INVALID_MESSAGE from its own dispatcher; one that
-    does passes it to the stack, which refuses it with CHANNEL_IN_WRONG_STATE
-    because the channel is closed. Both are errors - but only the second
-    proves the message got as far as the radio, and neither puts anything on
-    the air, which matters when the nearby sensor is somebody's trainer.
+    Only asks whether the message is bridged at all. Firmware that doesn't
+    implement it answers INVALID_MESSAGE from its own dispatcher; firmware
+    that does passes it to the stack, which refuses with
+    CHANNEL_IN_WRONG_STATE since the channel is closed - only the second
+    proves the message reached the radio, and neither transmits.
     """
     # Sequence 0 with the last-packet bit set: a complete one-packet burst.
     header = (ch & BURST_HEADER_CHANNEL_MASK) | BURST_HEADER_LAST
@@ -175,19 +170,17 @@ def wait_for_close(reader, ch: int, timeout_s: float = 3.0) -> bool:
 
 
 def ack_probe(dev, reader, ch: int, timeout_s: float = 15.0) -> str:
-    """Send acknowledged data on an open channel.
+    """Send acknowledged data on an open channel (the message Zwift sends to
+    set trainer resistance).
 
-    This is the message Zwift sends to set trainer resistance. What is being
-    tested is whether the bridge carries it, and the answer to that is the
-    RESPONSE_EVENT: accepted means it is queued in the stack, INVALID_MESSAGE
-    means the dispatcher never heard of it.
-
-    The transfer outcome after that is the radio's business and not
-    deterministic. A slave only transmits in the receive slot of the master it
-    is tracking, so an accepted message sits queued for as long as the channel
-    stays in search - with eight channels contending, that happens. Both
+    Whether the bridge carries it is the RESPONSE_EVENT: accepted means it's
+    queued in the stack, INVALID_MESSAGE means the dispatcher never heard of
+    it. The transfer outcome after that is the radio's business and not
+    deterministic - a slave only transmits in the receive slot of the master
+    it is tracking, so with eight channels contending an accepted message can
+    sit queued for as long as the channel stays in search. Both
     TRANSFER_TX_COMPLETED and TRANSFER_TX_FAILED mean it went out; staying
-    queued is a fact about the airwaves, not a fault in the dongle.
+    queued is a fact about the airwaves, not a dongle fault.
     """
     # FE-C page 0x30, basic resistance, 0%.
     page = bytes([0x30, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00])

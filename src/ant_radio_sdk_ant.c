@@ -3,34 +3,26 @@
 /*
  * src/ant_radio.h implemented on Nordic's prebuilt libant.a, from sdk-ant.
  *
- * Two halves, and the second one is the reason this file is worth keeping
- * rather than deleting once radiant_core works.
+ * Two halves. The first is fifty forwarders, almost all a single renamed
+ * call; the exceptions (error narrowing, seven const casts, event inversion)
+ * are documented where they happen.
  *
- * The first half is fifty forwarders. Almost every one is a single call with
- * the name changed; three things are not, and each is documented where it
- * happens: the error narrowing, seven const casts, and the event inversion.
+ * The second is a BUILD_ASSERT block comparing every ANTW_* constant in
+ * src/ant_wire.h against its sdk-ant counterpart. This is the only
+ * translation unit permitted to include both headers - the ANTW_ prefix is
+ * what makes that legal, since sdk-ant spells its error codes as computed
+ * expressions and an unprefixed macro of the same name would be a hard
+ * redefinition error. Every YAML value with no witness elsewhere in the repo
+ * is confirmed here at compile time. A drifted constant fires the assert by
+ * name; a drifted signature just stops the file compiling.
  *
- * The second half is a BUILD_ASSERT block that compares every ANTW_* constant
- * in src/ant_wire.h against its sdk-ant counterpart. That block exists because
- * this is the only translation unit in the project that may include both
- * headers - the ANTW_ prefix is what makes that legal, since sdk-ant spells
- * its error codes as computed expressions (NRF_ANT_ERROR_OFFSET +
- * INVALID_MESSAGE) and an unprefixed macro of the same name would be a hard
- * redefinition error rather than a warning. Every value in the YAML that had
- * no witness inside this repository is confirmed here, at compile time, in the
- * one configuration where it can be confirmed at all. If a constant drifts the
- * assert fires with the name of the constant in the message; if a signature
- * drifts the file simply stops compiling.
- *
- * Read scope, because it is the clean-room control rather than a promise:
- * writing this file is the only role in the project permitted to read sdk-ant,
- * and only its headers. docs/decisions/0002-clean-room-policy.md states that
- * outright, and states the consequence too - this file is glue against a
- * licensed API we are entitled to call, it is not part of radiant_core, and it
- * must not be used as a route to inform radiant_core. Someone implementing a
- * clean-room backend reads src/ant_radio.h and docs/sdk-ant-contract.md, which
- * are ours. libant.a itself was not disassembled, inspected or instrumented by
- * any means; that prohibition is absolute and does not expire.
+ * Read scope is the clean-room control: writing this file is the only role
+ * permitted to read sdk-ant, and only its headers (docs/decisions/0002-clean-
+ * room-policy.md). This file is glue against a licensed API, not part of
+ * radiant_core, and must not inform radiant_core - a clean-room backend is
+ * written from src/ant_radio.h and docs/sdk-ant-contract.md only. libant.a
+ * itself was never disassembled, inspected or instrumented, and that
+ * prohibition does not expire.
  */
 
 #include <stdint.h>
@@ -51,29 +43,20 @@
 /* ── Error narrowing ───────────────────────────────────────────────────────── */
 
 /*
- * antr_err_t is a uint8_t and its value *is* the byte the serial protocol puts
- * on the wire. sdk-ant's ant_err_t is an int32_t carrying NRF_ANT_ERROR_OFFSET
- * (0x4000) added to the wire code.
+ * antr_err_t is a uint8_t whose value *is* the wire byte. sdk-ant's ant_err_t
+ * is an int32_t carrying NRF_ANT_ERROR_OFFSET (0x4000) added to the wire
+ * code. 0x4000 is a multiple of 256, so truncating to the low byte loses
+ * nothing - checked below by BUILD_ASSERT for every sdk-ant error code, so a
+ * future non-256-aligned offset fails the build rather than putting a wrong
+ * byte on the wire.
  *
- * 0x4000 is a multiple of 256, so the low byte of NRF_ANT_ERROR_<X> is exactly
- * <X> - the narrowing is a truncation and nothing is lost. That is checked
- * below rather than asserted in prose: the BUILD_ASSERT block proves it for
- * every error code sdk-ant defines, so a future sdk-ant that changed the
- * offset to something not 256-aligned would fail the build here instead of
- * putting a wrong byte on the wire.
- *
- * The other return family is different and is worth being honest about.
- * sdk-ant also returns plain negative errnos (-NRF_EINVAL, -NRF_EPERM,
- * -NRF_ETIMEDOUT) for misuse the ANT response codes have no spelling for. The
- * low byte of one of those is not a wire code and never was: -22 narrows to
- * 0xEA, which no host recognises. This function does not try to fix that,
- * deliberately. src/ant_serial_bridge.c already narrowed with a (uint8_t) cast
- * at three sites before Wave 1, so truncation is exactly the behaviour every
- * capture and every Zwift session was recorded against, and tools/
- * ant_conformance.py's pass condition is a byte-identical diff against those
- * captures. Inventing a mapping here would be an improvement that fails the
- * gate. If the errno family ever needs handling it is a change to the contract
- * in src/ant_radio.h, agreed once, not a quiet fix in a shim.
+ * sdk-ant also returns plain negative errnos for misuse the ANT response
+ * codes have no spelling for; their low byte is not a meaningful wire code
+ * (-22 narrows to 0xEA, unrecognised by any host). Left untouched
+ * deliberately: every capture and Zwift session was recorded against this
+ * truncation, and tools/ant_conformance.py's pass condition is a
+ * byte-identical diff against those captures. Handling the errno family is a
+ * contract change in src/ant_radio.h, not a quiet fix here.
  */
 static inline antr_err_t wire_err(ant_err_t err)
 {
@@ -83,24 +66,19 @@ static inline antr_err_t wire_err(ant_err_t err)
 /* ── Event inversion ───────────────────────────────────────────────────────── */
 
 /*
- * sdk-ant hands events back through a callback taking ant_evt_t, whose message
- * field is a four-level nested union. The bridge needs three values out of it
- * and nothing else, so this is where the union stops: the shim flattens it
- * into struct antr_msg and calls antr_on_message(), which the bridge
- * implements and the linker resolves. Nothing above this line ever sees an
- * sdk-ant type.
+ * sdk-ant hands events back through a callback taking ant_evt_t, a
+ * four-level nested union. The shim flattens the three fields the bridge
+ * needs into struct antr_msg and calls antr_on_message(); nothing above this
+ * line sees an sdk-ant type.
  *
- * Lifetime. src/ant_radio.h requires msg->data to stay readable for the
- * duration of the call and permits the backend to reuse the buffer the instant
- * it returns; the bridge copies what it needs before returning. That is
- * satisfied by pointing straight into the event, which sdk-ant's work handler
- * owns as an automatic variable for the whole callback. Copying it here would
- * be 41 bytes of memcpy per received packet buying nothing.
+ * Lifetime: pointing straight into the event satisfies the "readable until
+ * return, backend may reuse after" contract for free, since sdk-ant's work
+ * handler owns it as an automatic variable for the whole callback - no copy
+ * needed.
  *
- * Serialisation. The contract also requires that the bridge is never called
- * concurrently with itself - it does not lock around the burst semaphore.
- * sdk-ant satisfies that structurally: events are drained by a single work
- * item on one dedicated work queue, so there is exactly one thread in here.
+ * Serialisation: the contract's "never called concurrently with itself" is
+ * satisfied structurally, since sdk-ant drains events on one dedicated work
+ * queue.
  */
 static void shim_evt_cb(ant_evt_t *p_evt)
 {
@@ -116,13 +94,11 @@ static void shim_evt_cb(ant_evt_t *p_evt)
 /* ── Initialisation and stack lifecycle ────────────────────────────────────── */
 
 /*
- * The one forwarder that does not narrow its return value, and the reason is
- * the errno family above: ant_init() reports "no memory for the configured
- * channel count" as -NRF_ENOMEM, whose low byte is a number main() would print
- * and nobody could interpret. src/ant_radio.h says this returns 0 or
- * ANTW_INVALID_PARAMETER_PROVIDED, so it does. Nothing downstream of main()
- * can act on the difference - the value never reaches the wire, because there
- * is no host yet when this runs.
+ * The one forwarder that does not narrow its return value: ant_init() reports
+ * "no memory for the channel count" as -NRF_ENOMEM, whose low byte would be
+ * uninterpretable in main()'s log. src/ant_radio.h says this returns 0 or
+ * ANTW_INVALID_PARAMETER_PROVIDED, so it does - harmless since no host exists
+ * yet to see the value.
  */
 antr_err_t antr_init(void)
 {
@@ -130,10 +106,8 @@ antr_err_t antr_init(void)
 		return ANTW_INVALID_PARAMETER_PROVIDED;
 	}
 
-	/* Registration happens after the stack is up and before this returns,
-	 * which is what makes the header's rule - no antr_on_message() before
-	 * antr_init() returns 0 - true rather than merely likely. Nothing can
-	 * be received in the gap: no channel exists until the host assigns one.
+	/* Registered after the stack is up, before this returns - satisfies the
+	 * header's "no antr_on_message() before antr_init() returns 0" rule.
 	 */
 	if (ant_cb_register(shim_evt_cb) != NRF_ANT_SUCCESS) {
 		return ANTW_INVALID_PARAMETER_PROVIDED;
@@ -160,13 +134,9 @@ antr_err_t antr_channel_unassign(uint8_t channel)
 	return wire_err(ant_channel_unassign(channel));
 }
 
-/*
- * The offset form is the only one implemented, because sdk-ant's plain
- * ant_channel_open() is a macro over ant_channel_open_with_offset() with
- * CHANNEL_START_OFFSET_NONE - forwarding to the macro would recurse straight
- * back here through our own static inline. src/ant_radio.h reproduces the same
- * split for the same reason, so a backend has exactly one function to write.
- * The assert below pins the two definitions of "no offset" together.
+/* The offset form is the only one implemented: sdk-ant's plain
+ * ant_channel_open() is a macro over this with CHANNEL_START_OFFSET_NONE, and
+ * forwarding to the macro would recurse through our own static inline.
  */
 BUILD_ASSERT(CHANNEL_START_OFFSET_NONE == 0,
 	     "sdk-ant's no-offset value is no longer 0, so antr_channel_open()'s "
@@ -239,15 +209,10 @@ antr_err_t antr_enhanced_channel_spacing_enable(uint8_t enable)
 /* ── Data transfer ─────────────────────────────────────────────────────────── */
 
 /*
- * The const casts start here. Our contract takes const uint8_t * for every
- * buffer the callee only reads and copies before returning; sdk-ant takes a
- * mutable pointer for all of them but one. Casting the const away is exactly
- * what a shim is for - the alternative is seven casts scattered through the
- * bridge, which is where they used to live.
- *
- * Seven, not eight. docs/sdk-ant-contract.md predicts eight; the count is one
- * lower because ant_network_address_set() already takes a const pointer, so
- * the eight const-taking contract functions need seven casts between them.
+ * The const casts start here. Our contract takes const uint8_t * for buffers
+ * the callee only reads; sdk-ant takes mutable pointers for all but one
+ * (ant_network_address_set()), so seven casts land here instead of scattered
+ * through the bridge.
  */
 antr_err_t antr_broadcast_message_tx(uint8_t channel, uint8_t size,
 				     const uint8_t *data)
@@ -263,11 +228,8 @@ antr_err_t antr_acknowledge_message_tx(uint8_t channel, uint8_t size,
 						   (uint8_t *)data));
 }
 
-/*
- * The segment byte is forwarded untouched. All three ANTR_BURST_SEGMENT_*
- * values equal their sdk-ant BURST_SEGMENT_* counterparts, which is asserted
- * below rather than assumed - src/ant_radio.h records that END was 0x04 on an
- * assumption until this file checked it, and what a wrong END costs.
+/* The segment byte is forwarded untouched; all three ANTR_BURST_SEGMENT_*
+ * values are asserted equal to their sdk-ant counterparts below.
  */
 antr_err_t antr_burst_tx(uint8_t channel, uint16_t size, uint8_t *data,
 			 uint8_t segment)
@@ -462,46 +424,25 @@ antr_err_t antr_crypto_info_get(uint8_t type, uint8_t *info)
  * The BUILD_ASSERT block
  * ==========================================================================
  *
- * Everything below is compiled away to nothing. It exists so that a number in
- * protocol/ant_wire.yaml cannot quietly stop being the number the radio uses.
+ * Compiled away to nothing. Exists so a number in protocol/ant_wire.yaml
+ * cannot quietly stop being the number the radio uses.
  *
- * Sixty-six of the seventy-four constants that tools/ant_wire.py lists in
- * VERIFY_IN_SHIM - the ones with no witness anywhere inside this repository -
- * are confirmed here, along with every other ANTW_* constant that has an
- * sdk-ant counterpart. Where a name has none, that is stated at the point
- * where the assert would otherwise be, because an unasserted constant that
- * looks asserted is exactly the failure this block exists to prevent.
+ * 66 of the 74 constants tools/ant_wire.py lists in VERIFY_IN_SHIM (no
+ * witness elsewhere in the repo) are confirmed here, plus every other ANTW_*
+ * constant with an sdk-ant counterpart. Where a name has none, that is
+ * stated at the point an assert would otherwise be.
  *
- * The eight VERIFY_IN_SHIM names with no sdk-ant counterpart at all, and so
- * still unconfirmed by anything:
+ * Eight VERIFY_IN_SHIM names have no sdk-ant counterpart at all and remain
+ * unconfirmed: MESG_GET_SERIAL_NUM_ID (0x61), MESG_SERIAL_NUM_SET_CHANNEL_
+ * ID_ID (0x65), MESG_XTAL_ENABLE_ID (0x6D), MESG_USER_CONFIG_PAGE_ID (0x7C),
+ * MESG_SERIAL_ERROR_ID (0xAE), EVENT_SERIAL_QUE_OVERFLOW (0x34) - none
+ * implemented by sdk-ant or bridged - plus MESG_RSSI_SEARCH_THRESHOLD_ID and
+ * MESG_SLEEP_ID, still `value: null`: neither appears in sdk-ant either
+ * (the latter only inside a commented-out, never-defined dispatch arm).
  *
- *   MESG_GET_SERIAL_NUM_ID              0x61   Rev 5.1, not implemented by
- *   MESG_SERIAL_NUM_SET_CHANNEL_ID_ID   0x65   sdk-ant, so there is no macro
- *   MESG_XTAL_ENABLE_ID                 0x6D   to compare against. The spec
- *   MESG_USER_CONFIG_PAGE_ID            0x7C   is the only authority these
- *   MESG_SERIAL_ERROR_ID                0xAE   have, and none is bridged.
- *   EVENT_SERIAL_QUE_OVERFLOW           0x34
- *   MESG_RSSI_SEARCH_THRESHOLD_ID       -      still value: null - see below
- *   MESG_SLEEP_ID                       -      still value: null - see below
- *
- * Neither remaining unresolved id is recoverable from sdk-ant either.
- * MESG_RSSI_SEARCH_THRESHOLD_ID appears nowhere in it. MESG_SLEEP_ID appears
- * exactly once, inside a commented-out dispatch arm, and is never defined - so
- * that source does not know the number either. Both stay `value: null`, which
- * is now a stronger statement than it was: not "we did not look" but "the one
- * place left to look does not have it".
- *
- * A note on how this block is maintained. It is a hand-written table today,
- * one line per constant, because the mapping is not mechanical: eleven names
- * differ between the two headers (ANTW_CAPABILITIES_NO_BURST_MESSAGES against
- * CAPABILITIES_NO_BURST_TRANSFER, and so on) and six ANTW_ constants have no
- * single counterpart and are asserted against an expression instead. A
- * generated block would need that mapping expressed somewhere anyway. The
- * change request that would make it generated - have scripts/gen_ant_wire.py
- * emit an ANTW_VERIFY_IN_SHIM_LIST(X) X-macro into src/ant_wire.h, so that a
- * constant added to the YAML makes this file fail to compile until it is
- * mapped - is recorded in this wave's report against a file this wave does not
- * own.
+ * Hand-written rather than generated, because the mapping isn't mechanical:
+ * eleven names differ between the two headers and six ANTW_ constants have
+ * no single counterpart and are asserted against an expression instead.
  */
 
 /*
@@ -523,14 +464,11 @@ ANTW_EQ(MSG_OVERHEAD, MESG_FRAME_SIZE);
 ANTW_EQ(CHANNEL_NUM_SIZE, MESG_CHANNEL_NUM_SIZE);
 ANTW_EQ(ANT_MAX_PAYLOAD_SIZE, ANT_STANDARD_DATA_PAYLOAD_SIZE);
 
-/*
- * The four size constants that decide whether a 24-byte burst packet survives
- * the parser. K1's first draft derived 20 and 24 from the longest message the
- * *host* sends; src/usb_ant_class.c:30 said 38 and 42 and was right. These
- * four asserts are the evidence for that correction, and they are the reason
- * the correction is not a matter of opinion: sdk-ant computes 38 as 8 payload
- * + 1 extended bitfield + 28 extended data + 1 channel byte, which is the same
- * arithmetic src/usb_ant_class.c arrived at independently.
+/* The four size constants deciding whether a 24-byte burst packet survives
+ * the parser: sdk-ant computes 38 as 8 payload + 1 extended bitfield + 28
+ * extended data + 1 channel byte, matching src/usb_ant_class.c:30's figure
+ * independently (an earlier 20/24, derived from the longest host-sent
+ * message rather than the ceiling, was wrong).
  */
 ANTW_EQ(MAX_SIZE_VALUE, MESG_MAX_SIZE_VALUE);
 ANTW_EQ(MAX_DATA_SIZE, MESG_MAX_DATA_SIZE);
@@ -538,12 +476,10 @@ ANTW_EQ(MESG_MAX_SIZE, MESG_MAX_SIZE);
 ANTW_EQ(MAX_FRAME_SIZE, MESG_BUFFER_SIZE + MESG_SYNC_SIZE);
 
 /*
- * ANTW_ADV_BURST_BLOCK_MAX (24) has no sdk-ant counterpart: sdk-ant names the
- * three advanced-burst sizes only as the configuration codes 1, 2 and 3
- * (ADV_BURST_MODES_SIZE_*_BYTES), never as byte counts. What can be asserted
- * is the property the bridge actually depends on - that a full advanced-burst
- * data message, one channel byte plus a maximum block, still fits inside the
- * LEN byte's ceiling. That is the check that fails if either number moves.
+ * ANTW_ADV_BURST_BLOCK_MAX (24) has no sdk-ant counterpart - sdk-ant names
+ * the three sizes only as codes 1/2/3, never byte counts - so what's
+ * asserted instead is the property the bridge depends on: a full
+ * advanced-burst message still fits the LEN byte's ceiling.
  */
 BUILD_ASSERT(ANTW_ADV_BURST_BLOCK_MAX + MESG_CHANNEL_NUM_SIZE <=
 		     MESG_MAX_SIZE_VALUE,
@@ -617,14 +553,11 @@ ANTW_EQ(MESG_PENDING_TRANSMIT_CLEAR_ID, MESG_PENDING_TRANSMIT_CLEAR_ID);
 /* ANTW_MESG_SERIAL_ERROR_ID (0xAE): no sdk-ant counterpart. */
 
 /*
- * The RadiANT ids (ANTW_MESG_RADIANT_* , 0xE0-0xE4) have no sdk-ant
- * counterpart by construction - they are ours. They are NOT asserted here as
- * "unclaimed", and that is deliberate, because they are not: sdk-ant reserves
- * 0xE0-0xE4 as MESG_EXT_ID_0..MESG_EXT_ID_4, the extended-message id prefixes
- * selected by MSG_EXT_ID_MASK (0xE0). The YAML's collision check could not see
- * that, because it only had this repository to look at. This wave's report
- * carries the change request; nothing is changed here, because reallocating a
- * message id touches docs this wave does not own.
+ * The RadiANT ids (ANTW_MESG_RADIANT_*, 0xE0-0xE4) have no sdk-ant
+ * counterpart by construction - they are ours. Not asserted "unclaimed"
+ * because they aren't: sdk-ant reserves 0xE0-0xE4 as MESG_EXT_ID_0..4
+ * (selected by MSG_EXT_ID_MASK), invisible to the YAML's repo-only collision
+ * check. Reallocating the id is a separate change; nothing is done here.
  */
 
 /* ── Reply sizes ───────────────────────────────────────────────────────────── */
@@ -768,15 +701,10 @@ ANTW_EQ(EVENT_QUE_OVERFLOW, EVENT_QUE_OVERFLOW);
 /* ── The error narrowing itself ────────────────────────────────────────────── */
 
 /*
- * This is the assert that matters most in the whole block, because it is the
- * one that decides every error byte the dongle puts on the wire.
- *
- * wire_err() keeps the low byte and throws the rest away. That is correct if
- * and only if the low byte of NRF_ANT_ERROR_<X> is <X>, i.e. if the offset is
- * a multiple of 256. It is - 0x4000 - but "it is" is a fact about today's
- * sdk-ant, so it is checked rather than believed, once for the offset and once
- * for every code, since a code could in principle exceed a byte and wrap into
- * the offset.
+ * The assert that matters most here: it decides every error byte the dongle
+ * puts on the wire. wire_err() keeps only the low byte, correct iff the
+ * offset is a multiple of 256 (it is, 0x4000) - checked rather than assumed,
+ * once for the offset and once per code, since a code could wrap into it.
  */
 BUILD_ASSERT((NRF_ANT_ERROR_OFFSET & 0xFF) == 0,
 	     "sdk-ant's error offset is no longer 256-aligned, so narrowing an "
@@ -808,13 +736,11 @@ BUILD_ASSERT(NRF_ANT_SUCCESS == ANTW_RESPONSE_NO_ERROR,
 /* ── Burst ─────────────────────────────────────────────────────────────────── */
 
 /*
- * The burst header byte, as the bridge takes it apart. Ours splits the byte
- * into a channel mask, a sequence shift and mask, and a last-packet bit;
- * sdk-ant names the same byte's fields as whole-byte masks and an increment.
- * The two middle asserts are the interesting ones - they check that shifting
- * by ANTW_BURST_HEADER_SEQ_SHIFT lands on sdk-ant's sequence field and that
- * the field is exactly as wide as we think, which is what the bridge's
- * seq == 0 test for "first block" depends on.
+ * The burst header byte. Ours splits it into a channel mask, sequence
+ * shift/mask, and last-packet bit; sdk-ant uses whole-byte masks and an
+ * increment. The middle two asserts check that ANTW_BURST_HEADER_SEQ_SHIFT
+ * lands on sdk-ant's sequence field at the width the bridge's seq == 0
+ * "first block" test depends on.
  */
 ANTW_EQ(BURST_HEADER_CHANNEL_MASK, CHANNEL_NUMBER_MASK);
 ANTW_EQ(BURST_HEADER_LAST, SEQUENCE_LAST_MESSAGE);

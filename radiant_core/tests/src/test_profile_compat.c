@@ -3,39 +3,28 @@
  * test_profile_compat.c - compat-C5's gate: the emitted stream is byte-exact
  * ANT+ apart from two added page numbers.
  *
- * ---------------------------------------------------------------------------
- * What is being claimed, and how this file and a Python file split the work
- * ---------------------------------------------------------------------------
- * The claim is not "the encoders round-trip". It is that a RadiANT heart-rate
- * strap and a RadiANT power meter put a STOCK ANT+ STREAM on the air, with
- * pages 0x70, 0x71 and 0x72 added and nothing else changed. Half of that is
- * checkable here and half of it is not:
+ * The claim is not "the encoders round-trip" but that a RadiANT heart-rate
+ * strap and power meter put a stock ANT+ stream on the air, with pages 0x70,
+ * 0x71 and 0x72 added and nothing else changed. Checkable here: the cadence
+ * and structure (page 80 at message 119, page 81 at 120 of every 121; the
+ * toggle stepping every four transmitted messages including inserted ones;
+ * one alternating beacon frame per cycle; no page number outside the
+ * profile's set plus 0x70-0x72; a node with no compat layer emitting plain
+ * ANT+; attestation pages verifying at a keyholder). Not checkable here:
+ * whether the bytes of a heart-rate page match what a real receiver expects
+ * - a C test against constants from the same author proves consistency, not
+ * correctness.
  *
- *   HERE       the cadence and the structure. Page 80 at message 119 and page
- *              81 at message 120 of every 121; the page-change toggle stepping
- *              every four TRANSMITTED messages including the inserted ones; one
- *              beacon frame per cycle, alternating; no page number outside the
- *              union of the profile's own set and 0x70-0x72; a node with no
- *              compat layer emitting nothing but ANT+; and the attestation
- *              pages verifying at a receiver that holds the key.
+ * So this suite also prints the whole stream as .antcap lines (the format
+ * tools/ant_pages.py's write_capture()/read_capture() define), and
+ * tools/test_compat_capture.py decodes those bytes with Python encoders
+ * written independently (compat-C3) and re-encodes them: byte-for-byte
+ * equality between the two implementations is the gate. The capture is
+ * committed to tools/vectors/ as a cross-platform regression test.
  *
- *   NOT HERE   whether the BYTES of a heart-rate page are the bytes a real
- *              receiver expects. A C test asserting that against constants
- *              written by the same author in the same hour proves the author
- *              was consistent, not that the profile is right.
- *
- * So this suite also PRINTS the whole stream as .antcap lines, in the format
- * tools/ant_pages.py's write_capture()/read_capture() already define, and
- * tools/test_compat_capture.py decodes those bytes with the Python encoders written
- * in a different phase (compat-C3) and re-encodes them: byte-for-byte equality
- * between two independent implementations is the gate. The capture is committed
- * to tools/vectors/ so it is a regression test on every platform rather than a
- * thing somebody once ran on a DK.
- *
- * The prefix on those lines is "@@ <name> ", which is not part of the format -
- * ztest's console carries other traffic, and a marker is what lets the capture
- * be lifted out of it. scripts/ has no extractor because one PowerShell line
- * does it; the format's own header is written by the Python side.
+ * The "@@ <name> " prefix on those lines is not part of the format - it lets
+ * the capture be lifted out of ztest's console traffic with one PowerShell
+ * line; the format's own header is written by the Python side.
  */
 
 #include <zephyr/ztest.h>
@@ -54,12 +43,11 @@
 #define RX_CH 1u
 
 /*
- * The key, the epoch and the device number are pinned here AND in
- * tools/test_compat_capture.py, because the Python side has to derive the same
+ * The key, epoch and device number are pinned here and in
+ * tools/test_compat_capture.py, since the Python side must derive the same
  * K_auth to check the tags in the committed capture. The root is
- * tools/ant_sim.py's DEFAULT_COMPAT_ROOT - bytes 0x00..0x0F - so a reader
- * comparing a capture from this suite against one from the simulator is
- * comparing two streams under one key rather than two unrelated ones.
+ * tools/ant_sim.py's DEFAULT_COMPAT_ROOT (bytes 0x00..0x0F), so a capture
+ * from this suite and one from the simulator are under one key.
  */
 static const uint8_t compat_root[16] = {
 	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
@@ -72,15 +60,15 @@ static const uint8_t compat_root[16] = {
 #define TEST_N      RADIANT_SEC_COMPAT_N_DEFAULT
 
 /*
- * The default configuration: Tier I on, Tier II off. Two page numbers exist and
- * only one of them is on the air here, which is what "on by default" and "off
- * by default" mean in a capture.
+ * The default configuration: Tier I on, Tier II off - one of the two page
+ * numbers is on the air here, which is what "on/off by default" means in a
+ * capture.
  *
- * The receiver PINS, and that is not decoration either: an unpinned receiver
- * reads a stream with no attestation as CLEAR, so a test that asserted VERIFIED
- * without pinning would be asserting the default answer. Pinning is the whole
- * of downgrade protection - strip the attestation off the air and this receiver
- * says UNVERIFIED where a naive one falls back to clear and calls it normal.
+ * The receiver pins: an unpinned receiver reads a stream with no attestation
+ * as CLEAR, so asserting VERIFIED without pinning would just assert the
+ * default answer. Pinning is downgrade protection - strip the attestation
+ * off the air and a pinned receiver says UNVERIFIED where a naive one falls
+ * back to clear and calls it normal.
  */
 #define TX_SWITCHES RADIANT_SEC_COMPAT_SW_TIER_I
 #define RX_SWITCHES ((uint8_t)(RADIANT_SEC_COMPAT_SW_TIER_I | \
@@ -91,9 +79,9 @@ static const uint8_t compat_root[16] = {
 #define CYCLES 3u
 #define SLOTS  (CYCLES * PROFILE_TLM_CYCLE)
 
-/* An origin above 2^32 microseconds, for the reason test_sec_compat_attest.c
- * gives: a test anchored at zero passes on an implementation that truncated
- * every instant to 32 bits. */
+/* An origin above 2^32 microseconds: a test anchored at zero would pass an
+ * implementation that truncated every instant to 32 bits (see
+ * test_sec_compat_attest.c). */
 #define T_ORIGIN ((uint64_t)0x100000000ull + 4321u)
 
 #define US_PER_S 1000000u
@@ -129,13 +117,10 @@ static void log_put(const uint8_t *body, enum profile_slot_kind kind)
 }
 
 /*
- * One .antcap line per transmitted message, with a marker so it can be lifted
- * out of the console.
- *
- * The time column is printed as two integers rather than a float: Zephyr's
- * printk has no floating point unless CONFIG_CBPRINTF_FP_SUPPORT is on, and
- * turning that on to print a timestamp would be a build-wide change made for a
- * test's convenience. Six digits of microseconds is exactly what
+ * One .antcap line per transmitted message, with a marker so it can be
+ * lifted out of the console. The time column is two integers rather than a
+ * float: Zephyr's printk has no floating point unless
+ * CONFIG_CBPRINTF_FP_SUPPORT is on, and six digits of microseconds is what
  * ant_pages.format_capture_line() emits anyway.
  */
 static void dump_capture(const char *name, uint8_t device_type,
@@ -358,13 +343,9 @@ ZTEST(profile_compat, test_hr_keeps_the_119_120_121_interleave)
 
 	run_hr(&hr, &pc, SLOTS);
 
-	/*
-	 * NOTHING DISPLACES THE COMMON PAGES. The seam never offers message 119
-	 * or 120 precisely so a client cannot, and this is the assertion that
-	 * makes that a fact about the stream rather than about the header
-	 * comment - a certified receiver pairs on this cadence, and
-	 * tools/ant_verify.py fails a sensor whose common-page gap exceeds 121.
-	 */
+	/* Nothing displaces the common pages: the seam never offers message
+	 * 119 or 120, so a client can't. tools/ant_verify.py fails a sensor
+	 * whose common-page gap exceeds 121. */
 	for (i = 0u; i < log_n; i++) {
 		uint8_t page = (uint8_t)(log_buf[i].body[0] &
 					 PROFILE_COMPAT_PAGE_MASK);
@@ -413,9 +394,8 @@ ZTEST(profile_compat, test_hr_emits_no_page_outside_the_allocation)
 			     "allocated compat numbers", i, page);
 	}
 
-	/* Every one of the profile's own pages appeared: a rotation that had
-	 * silently stopped walking its background set would otherwise pass
-	 * every assertion above. */
+	/* Every one of the profile's own pages appeared: a rotation stuck on
+	 * its background set would otherwise pass every assertion above. */
 	zassert_true(count_page(PROFILE_HR_PAGE_PREVIOUS_BEAT) > 0u);
 	zassert_true(count_page(PROFILE_HR_PAGE_DEFAULT) > 0u);
 	zassert_true(count_page(PROFILE_HR_PAGE_CUMULATIVE) > 0u);
@@ -439,13 +419,9 @@ ZTEST(profile_compat, test_the_toggle_counts_transmitted_messages)
 
 	run_hr(&hr, &pc, SLOTS);
 
-	/*
-	 * The toggle steps every four TRANSMITTED messages, and the common
-	 * pages and the compat pages are messages. This is the assertion behind
-	 * the bench question docs/decisions/0008 records as open: inserted pages
-	 * must not disturb the toggle sequence, and the cheapest way for them to
-	 * disturb it is for the sensor to leave them out of its own count.
-	 */
+	/* The toggle steps every four transmitted messages, and the common and
+	 * compat pages count as messages too (docs/decisions/0008): inserted
+	 * pages must not disturb the toggle sequence. */
 	for (i = 0u; i < log_n; i++) {
 		bool want = ((i / PROFILE_HR_TOGGLE_INTERVAL) & 1u) != 0u;
 		bool got = (log_buf[i].body[0] & PROFILE_HR_PAGE_TOGGLE) != 0u;
@@ -499,15 +475,12 @@ ZTEST(profile_compat, test_the_beacon_is_one_frame_per_cycle_and_alternates)
 	}
 
 	/*
-	 * EXACTLY one per 121-message cycle: 0.8% of slots, which is the
-	 * beacon's half of the 2.0% the compatibility claim rests on.
-	 *
-	 * Exactly, and not "at least", because both ways of missing are real
-	 * and both are bugs. A node owes its first Tier I page on the first
-	 * slot it is offered and that slot is the beacon's, so a client that
-	 * treated a displaced frame as a lost one would emit two frames in
-	 * three cycles here - and the first run of this suite did, which is why
-	 * profile_compat.c owes the frame instead of dropping it.
+	 * Exactly one per 121-message cycle: 0.8% of slots, half of the 2.0%
+	 * the compatibility claim rests on. Exactly, not "at least" - a node
+	 * owes its first Tier I page on the beacon's slot, so a client that
+	 * treated a displaced frame as lost would emit two frames in three
+	 * cycles (the first run of this suite did, which is why
+	 * profile_compat.c owes the frame instead of dropping it).
 	 */
 	zassert_equal(CYCLES, seen,
 		      "expected one beacon frame per cycle, got %u in %u cycles",
@@ -535,13 +508,10 @@ ZTEST(profile_compat, test_tier1_pages_ride_the_stream_and_verify)
 
 	emitted = count_page(PROFILE_COMPAT_PAGE_ATTEST_I);
 
-	/*
-	 * T = 20 s at ~4.06 Hz is one page in ~81, so three cycles of 121 is
-	 * four intervals plus the one served at t = 0. The exact number is the
-	 * point rather than "more than zero": a Tier I page every slot would
-	 * also verify, and would cost 100% of the airtime this tier exists to
-	 * spend 1.2% of.
-	 */
+	/* T = 20 s at ~4.06 Hz is one page in ~81, so three cycles of 121 is
+	 * four intervals plus the one served at t = 0. The exact count is the
+	 * point - a Tier I page every slot would also verify, but at 100%
+	 * airtime instead of the 1.2% this tier is meant to cost. */
 	zassert_true(emitted >= 4u && emitted <= 6u,
 		     "expected ~5 Tier I pages in %u slots, got %u", SLOTS,
 		     emitted);
@@ -563,12 +533,10 @@ ZTEST(profile_compat, test_a_strap_with_no_compat_layer_is_stock_ant_plus)
 	struct profile_hr_cfg cfg;
 	uint32_t              i;
 
-	/*
-	 * The configuration most straps should ship in, and it is not a
-	 * degraded mode: no client is registered at all, so the rotation never
-	 * learns one existed. This is also the assertion that a build without
-	 * compat attestation is a plain ANT+ sensor rather than a broken one.
-	 */
+	/* The configuration most straps should ship in, and not a degraded
+	 * mode: no client is registered, so the rotation never learns one
+	 * existed - a build without compat attestation is a plain ANT+
+	 * sensor, not a broken one. */
 	radiant_sec_compat_reset();
 	hr_cfg_fill(&cfg);
 	zassert_equal(0, profile_hr_init(&hr, &cfg));

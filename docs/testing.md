@@ -17,13 +17,14 @@ old loss figure was the measuring tool.
 ## The tools
 
 Everything is a host-side Python script over the dongle's own serial protocol.
-The interpreter is `C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe` — there is
-no system Python on this machine. Note that this is *not* the bundle that builds
+The interpreter is the NCS toolchain's own Python — there is no system Python
+in this project's workflow. Note that this is *not* the bundle that builds
 the firmware: an sdk-ant build needs **NCS v3.2.4 with toolchain bundle
 `fd21892d0f`** (what `build/release`'s `CMakeCache.txt` records for the shipping
 images), because sdk-ant v2.1.0 fails to link against v3.4.0's renamed
 `CONFIG_SOC_SERIES_NRF52X` — see [`backends.md`](backends.md#stub-build). The
-`dcbdc366a1` interpreter above is for the Python tools only.
+toolchain's own interpreter is for the Python tools only, and may be a
+different bundle than the one that builds firmware.
 
 Two USB boards enumerate as the same
 `0FCF:1009`, so every invocation that touches hardware needs `--serial`; a UART
@@ -105,10 +106,10 @@ Every cheaper option has been tried and none of them work, which is worth
 recording so nobody re-litigates it:
 
 - The automatic `GITHUB_TOKEN` is scoped to this repository alone, so it can
-  never reach another organisation's private repo. An adopter's *personal*
+  never reach another organisation's private repo. A maintainer's *personal*
   access has to be delegated explicitly; that is the whole problem.
 - A GitHub App token or a deploy key both need admin rights on
-  `ant-nrfconnect/sdk-ant`, which adopters do not have.
+  `ant-nrfconnect/sdk-ant`, which individual contributors do not have.
 - A fine-grained PAT works only if that organisation has opted into them.
 - Under SAML SSO the PAT must additionally be authorised for the org, or the
   checkout fails **as though the repository does not exist** — a misleading

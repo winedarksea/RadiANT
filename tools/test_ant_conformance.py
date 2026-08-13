@@ -3,16 +3,13 @@
 
 """Tests for tools/ant_conformance.py. No hardware, no device, no pyusb device access.
 
-The tier this tool implements is worth exactly as much as its determinism, so
-that is what most of this file checks: the same case list twice, the same bytes
-twice, the timestamp column suppressed everywhere, and a comparison that names
-the case a difference fell in rather than the byte offset.
+Checks determinism: the same case list twice, the same bytes twice, the
+timestamp column suppressed everywhere, and a comparison that names the case
+a difference fell in rather than the byte offset.
 
-The run loop is exercised against a fake device that answers every write from a
-script. That is not a substitute for a bench run - nothing here knows what the
-firmware actually replies - but it does check the thing a bench run cannot check
-cheaply: that two runs of the same tool against the same answers produce
-byte-identical files.
+The run loop is exercised against a fake device that answers every write from
+a script - not a substitute for a bench run, but it does check that two runs
+of the same tool against the same answers produce byte-identical files.
 """
 
 from __future__ import annotations
@@ -337,12 +334,9 @@ class Summary(unittest.TestCase):
         self.assertEqual(len(summary["sha256"]), 64)
         self.assertGreater(summary["messages_exercised"], 30)
         skipped = {entry["what"] for entry in summary["skipped"]}
-        # One skip from each of the two reasons a message can be left out: a
-        # deliberate exclusion, and an id nobody has recovered yet. The second
-        # was MESG_CHANNEL_CRC_MODE_ID until the sdk-ant shim resolved it to
-        # 0x58, at which point it started being exercised rather than skipped.
-        # MESG_RSSI_SEARCH_THRESHOLD_ID is genuinely still unresolved - it
-        # appears nowhere in sdk-ant either - so it is the durable example.
+        # One skip from each reason a message is left out: a deliberate
+        # exclusion, and an id nobody has recovered yet (MESG_RSSI_SEARCH_
+        # THRESHOLD_ID appears nowhere in sdk-ant either).
         self.assertIn("MESG_RADIO_CW_MODE_ID", skipped)
         self.assertIn("MESG_RSSI_SEARCH_THRESHOLD_ID", skipped)
         for entry in summary["skipped"]:

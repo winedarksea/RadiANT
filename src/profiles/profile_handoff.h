@@ -6,88 +6,49 @@
  * two-frame arithmetic, the relative-phase rule, the clock-accuracy ladder and
  * the no-epoch constraint) and section 4 (the two positional invariants that
  * fix bytes [0], [1] and [7]). That document is this project's own written
- * specification. No adopter-gated ANT+ device profile document was read for
+ * specification. No ANT+ device profile document was read for
  * this file, no sdk-ant source was consulted, and nothing here derives from
  * libant.a. See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * What this is
- * ---------------------------------------------------------------------------
- * The one page in the envelope document that a NODE does not send. A receiver
- * that already tracks a node broadcasts it so that a SECOND receiver can
- * configure a channel and go straight to tracking - and so that the same
- * receiver, having persisted it across a reboot, re-acquires in one channel
- * period instead of one sweep.
+ * WHAT THIS IS: the one page in the envelope document a NODE does not send.
+ * A receiver already tracking a node broadcasts it so a second receiver can
+ * configure a channel and go straight to tracking, or so the same receiver
+ * re-acquires in one channel period after a reboot instead of a sweep. A
+ * wildcard search walks address filters one dwell each and is only certain
+ * after a full sweep (32 windows on the nRF backend, the dominant term in
+ * discovery latency); THE SWEEP IS SKIPPED, NOT SHORTENED, when someone
+ * already knows the answer.
  *
- * A wildcard search derives its address filter from the low byte of the device
- * number, so it walks a set of filters, one dwell each, and is only certain to
- * have found every node in range after a full sweep - 32 windows on the nRF
- * backend, and the dominant term in discovery latency. None of that work is
- * necessary when somebody already knows the answer. THE SWEEP IS SKIPPED, NOT
- * SHORTENED.
+ * TWO FRAMES, AND THE ARITHMETIC THAT FORCED IT: byte [0] page number, byte
+ * [1] counter (section 4), byte [7] tag space, leaving 32 bits per frame.
+ * device number 16 + device type 7 + trans type 8 + period 16 + slot phase 13
+ * + clock accuracy 3 = 63 bits - identity and period alone are 47, so one
+ * eight-byte frame would leave no room for a phase field at all. Hence a
+ * two-frame set, same (index << 4) | (count - 1) convention as the
+ * descriptor, moved to byte [2] so byte [1] stays a counter.
  *
- * ---------------------------------------------------------------------------
- * Two frames, and the arithmetic that forced it
- * ---------------------------------------------------------------------------
- * Byte [0] is the page number and byte [1] is the counter, both fixed by
- * section 4; byte [7] is tag space by the second of the same invariants, since
- * no RadiANT page may put a field where an authentication tag has to go. That
- * leaves 32 bits per frame.
+ * THE PHASE IS RELATIVE: measured from frame 1's own t_sync, never an
+ * absolute instant, since two receivers share no time base. Consequences:
+ * frame 0 is timeless and frame 1 self-dating, so they need not be adjacent
+ * or in order; and the phase is a FRACTION of the node's period (period/8192
+ * units), self-scaling to a round-trip error of at most period/16384 counts
+ * (15 us at 4 Hz, 122 us at the longest expressible period) - both inside
+ * RADIANT_CHANNEL_GUARD_MAX_US.
  *
- *   device number 16 + device type 7 + transmission type 8
- *     + period 16 + slot phase 13 + clock accuracy 3  =  63 bits
- *
- * Identity and period alone are 47 bits, so a single eight-byte frame would
- * have had one bit spare and NO ROOM FOR A PHASE FIELD AT ALL - and the phase
- * is the entire point of the page. So this is a set of consecutive frames in
- * exactly the sense section 6 already defines for the descriptor, for exactly
- * the same reason, with the same (index << 4) | (count - 1) encoding moved to
- * byte [2] so that byte [1] can stay a counter.
- *
- * ---------------------------------------------------------------------------
- * The phase is RELATIVE, and that is not a detail
- * ---------------------------------------------------------------------------
- * The slot phase is measured from the t_sync of the frame that carries it -
- * frame 1 - and never from an absolute instant. Two receivers share no time
- * base, so an absolute slot time is not merely imprecise, it is
- * uninterpretable on the receiver that has to consume it.
- *
- * Two consequences, both free:
- *
- *   - frame 0 is timeless and frame 1 is self-dating, so the two need not be
- *     adjacent and need not arrive in order;
- *   - the phase is a FRACTION of the node's own period (period/8192 units)
- *     rather than a count, which is self-scaling: round-trip error is at most
- *     period/16384 counts, 15 us at the 4 Hz ANT+ period and 122 us at the
- *     longest period the field can express. Both are inside
- *     RADIANT_CHANNEL_GUARD_MAX_US, so the first window after a handoff is no
- *     wider than the first window after a sweep acquisition.
- *
- * ---------------------------------------------------------------------------
- * What this deliberately does NOT do
- * ---------------------------------------------------------------------------
- *   - NO EPOCH, EVER. It is the obvious field to add - a receiver handing over
- *     everything else it knows would naturally include it, and it would save a
- *     keyed recipient a forward search - and it must not be added. For a
- *     hostless node the epoch IS the boot counter, and a slowly incrementing
- *     number broadcast in the clear fingerprints the device across sessions and
- *     defeats per-boot device-number rotation on its own. That is why the
- *     compatibility beacon dropped it, and this page is broadcast in the clear
- *     too. A keyed recipient recovers it by forward search against the
- *     key-group hint; an unkeyed one never needed it. The bit budget above is
- *     the enforcement: every one of the 64 bits is assigned.
- *   - GUARD WIDENING, AS OF THE DESCRIPTOR SCHEDULE BLOCK. This page carried
- *     the clock accuracy and did not consume it, on the grounds that a handoff
- *     which widened the guard while a descriptor could not would make one node
- *     behave differently depending on how it was found. The descriptor can now,
- *     through the same ladder and the same core call, so profile_handoff_apply()
- *     consumes it too and the symmetry holds the other way up. It still only
- *     ever WIDENS: narrowing on somebody else's evidence remains the one thing
- *     the estimator must not do.
- *   - NO SECURITY. Byte [7] is written as zero and asserted to be zero on the
- *     way back in. A forged handoff costs a receiver one search timeout on a
- *     node that is not there, which is why this page can ship before the key
- *     material does.
+ * WHAT THIS DELIBERATELY DOES NOT DO:
+ *   - NO EPOCH, EVER. For a hostless node the epoch IS the boot counter, and
+ *     broadcasting it in the clear would fingerprint the device across
+ *     sessions and defeat per-boot device-number rotation. A keyed recipient
+ *     recovers it by forward search against the key-group hint instead. Every
+ *     one of the 64 bits above is assigned, enforcing the absence.
+ *   - GUARD WIDENING, matching the descriptor: profile_handoff_apply()
+ *     consumes clock accuracy through the same ladder and core call the
+ *     descriptor uses, so a node isn't treated differently depending on how
+ *     it was found. Only ever WIDENS - narrowing on somebody else's evidence
+ *     is the one thing the estimator must not do.
+ *   - NO SECURITY. Byte [7] is zero and asserted zero on the way back in. A
+ *     forged handoff costs one search timeout on a node that isn't there,
+ *     which is why this page can ship before key material does.
  */
 
 #ifndef RADIANT_PROFILE_HANDOFF_H_
@@ -97,13 +58,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* radiant_channel.h brings radiant_time_t and struct radiant_channel_id with
- * it. This was the only file in src/profiles/ that included anything from
- * radiant_core; profile_schedule.h is the second, and it inherits the include
- * along with this file's clock-accuracy ladder rather than declaring either
- * twice. The codec below is pure, but profile_handoff_apply() drives a channel,
- * and a handoff that could not do that would be a format with no consumer. The
- * dependency runs application -> core, never the other way. */
+/* radiant_channel.h brings radiant_time_t and struct radiant_channel_id. The
+ * codec below is pure, but profile_handoff_apply() drives a channel, and a
+ * handoff that couldn't would be a format with no consumer. Dependency runs
+ * application -> core, never the other way. */
 #include <radiant_core/radiant_channel.h>
 
 #ifdef __cplusplus
@@ -122,17 +80,15 @@ extern "C" {
 #define PROFILE_HANDOFF_PHASE_MAX  (PROFILE_HANDOFF_PHASE_DEN - 1u)
 
 /*
- * Clock accuracy: the CEILING on the node's clock error, in ppm. BLE's ladder,
- * adopted rather than invented - it already spans exactly the range that
- * matters here, from a coin-cell node running its RC oscillator with no 32 kHz
- * crystal at the top to a crystal-referenced sensor at the bottom, and a second
- * ladder meaning the same thing differently would be a pure interoperability
- * cost.
+ * Clock accuracy: the CEILING on the node's clock error, in ppm. BLE's
+ * ladder, adopted rather than invented - it already spans the range that
+ * matters, from an RC-oscillator coin-cell node to a crystal-referenced
+ * sensor.
  *
- * Code 0 is the worst case AND the value to send when the accuracy is not
- * known, because on no evidence the worst case is the only safe answer. A
- * consumer must round OUTWARD from these: narrowing on no evidence is the one
- * thing a window estimator must never do.
+ * Code 0 is the worst case AND the value to send when accuracy is unknown -
+ * on no evidence, the worst case is the only safe answer. A consumer must
+ * round OUTWARD: narrowing on no evidence is the one thing a window
+ * estimator must never do.
  */
 enum profile_handoff_clk {
 	PROFILE_HANDOFF_CLK_UNKNOWN = 0, /* 251..500 ppm, and "not stated" */
@@ -228,16 +184,15 @@ radiant_time_t profile_handoff_next_slot(const struct profile_handoff *h,
 uint32_t profile_handoff_us_to_counts(radiant_time_t us);
 
 /*
- * THE SENDER SIDE: fill `out` from a channel this receiver is already tracking,
- * for a handoff whose frame 1 will go on the air at `t_carrier`.
+ * THE SENDER SIDE: fill `out` from a channel this receiver is already
+ * tracking, for a handoff whose frame 1 will go on the air at `t_carrier`.
  *
- * Only a TRACKING channel may be handed over, and that is a precondition rather
- * than a nicety: a searching channel has no slot phase to give, and a channel
- * that has merely been configured knows only what somebody typed into it.
+ * Only a TRACKING channel may be handed over: a searching channel has no
+ * slot phase, and a merely configured one knows only what was typed into it.
  *
  * The phase is reduced modulo the period, so a `t_carrier` on either side of
- * the channel's next predicted slot gives the same answer - which matters
- * because a scheduler decides when the frame actually goes out.
+ * the channel's next predicted slot gives the same answer, since a
+ * scheduler decides when the frame actually goes out.
  *
  * Returns 0, -EINVAL for a bad argument, or -ENOTCONN when the channel is not
  * tracking.
@@ -247,15 +202,15 @@ int profile_handoff_from_channel(uint8_t channel, radiant_time_t t_carrier,
 				 struct profile_handoff *out);
 
 /*
- * Apply a handoff to an assigned, closed slave channel: configure it, open it,
- * and land it in TRACKING with its next slot where the handoff says, having
- * armed no window and heard nothing.
+ * Apply a handoff to an assigned, closed slave channel: configure it, open
+ * it, and land it in TRACKING with its next slot where the handoff says,
+ * having armed no window and heard nothing.
  *
- * This is the whole feature. It goes through radiant_channel_on_acquired() -
- * the same entry point a sweep acquisition goes through, and deliberately not a
- * second path into TRACKING - so a handed-off channel is in the same state a
- * swept one would be, field for field, including a guard estimator that has
- * been reset because nothing has been measured about this master yet.
+ * Goes through radiant_channel_on_acquired(), the same entry point a sweep
+ * acquisition uses (deliberately not a second path into TRACKING), so a
+ * handed-off channel ends field-for-field in the same state a swept one
+ * would, including a guard estimator reset because nothing has been
+ * measured about this master yet.
  *
  * `now` is the current instant and `t_carrier` the t_sync of frame 1. The
  * channel must already be assigned as a slave and closed.

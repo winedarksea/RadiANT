@@ -6,26 +6,23 @@
 Two things nothing else here checks:
 
 1. **Capabilities versus coverage.** `ant_capabilities_get()` reports what the
-   ANT *stack* can do; the serial messages `dispatch()` implements are what the
-   *bridge* can do, and they are separate lists that nothing keeps in step. A
-   bit that is advertised and unimplemented is a trap: a host reads the bit,
-   sends the configuration message, gets INVALID_MESSAGE back, and gives up -
-   the same failure mode that once cost this project a week over
-   `ANT_SetTransmitPower`. This walks every optional bit and probes the message
-   behind it with a harmless (usually "off") configuration.
+   *stack* can do; the messages `dispatch()` implements are what the *bridge*
+   can do - separate lists that nothing keeps in step. A bit advertised but
+   unimplemented is a trap: a host reads it, sends the message, gets
+   INVALID_MESSAGE, and gives up. Walks every optional bit and probes the
+   message behind it with a harmless (usually "off") configuration.
 
-2. **Round trips.** Advanced burst, selective data updates and event filtering
-   are all set/get pairs, so what went out can be read back and compared. That
-   is the only check that catches a payload offset which is wrong by one - the
-   reply for some of these messages leads with an index byte and for others
-   does not, and both shapes look perfectly plausible on a scope.
+2. **Round trips.** Advanced burst, selective data updates, and event
+   filtering are set/get pairs, so what went out can be read back and
+   compared - the only check that catches a payload offset off by one (some
+   replies lead with an index byte, some don't, and both look plausible).
 
     python tools/ant_features.py
     python tools/ant_features.py --port COM8      # a UART build
 
 Nothing here opens a channel or puts anything on the air. Exit status is 0 when
-every implemented feature round-trips and every mismatch is one of the known
-ones listed in KNOWN_GAPS.
+every implemented feature round-trips and every mismatch is a known one in
+KNOWN_GAPS.
 """
 
 from __future__ import annotations
@@ -38,6 +35,14 @@ import time
 
 sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 
+# Protocol constants come from the generated module, never from a second copy
+# here (see tools/ant_wire.py, protocol/ant_wire.yaml).
+#
+# INVALID_SDU_MASK detaches a channel from every mask (how check_sdu() resets
+# state). Encryption set/get info types don't line up: set 0 is the crypto ID,
+# get 0 is the supported mode - separate constants so the asymmetry is visible
+# at the call site.
+import ant_sec  # noqa: E402
 from ant_probe import (  # noqa: E402
     EP_OUT,
     FrameReader,
@@ -46,32 +51,12 @@ from ant_probe import (  # noqa: E402
     open_device,
     reset_stack,
 )
-# Protocol constants come from the generated module, never from a second copy
-# here. See tools/ant_wire.py and protocol/ant_wire.yaml.
-#
-# Two prose notes that used to sit on definitions in this file are worth
-# keeping, because they are the reason two of the round trips below look odd:
-#
-#   INVALID_SDU_MASK is the selective-data-update value that detaches a channel
-#   from every mask, which is how check_sdu() puts the stack back as it found
-#   it.
-#
-#   The encryption set and get info types do not line up: set 0 is the crypto
-#   ID and get 0 is the supported mode, so a round trip writes with one number
-#   and reads with the next. Both spellings are separate constants precisely so
-#   that asymmetry is visible at the call site.
-#
-# Everything else those comments said - which values advanced burst takes, what
-# each id is - is now carried by protocol/ant_wire.yaml's own description
-# fields, which is where the generator gets the comments in tools/ant_wire.py
-# and src/ant_wire.h from.
-import ant_sec  # noqa: E402
-
 from ant_wire import (  # noqa: E402,F401
     ADV_BURST_MODE_DISABLE,
     ADV_BURST_MODE_ENABLE,
     ADV_BURST_MODES_FREQ_HOP,
     ADV_BURST_MODES_SIZE_24_BYTES,
+    CHANNEL_IN_WRONG_STATE,
     ENCRYPTION_DISABLED_MODE,
     ENCRYPTION_INFO_GET_CRYPTO_ID,
     ENCRYPTION_INFO_GET_CUSTOM_USER_DATA,
@@ -81,7 +66,6 @@ from ant_wire import (  # noqa: E402,F401
     ENCRYPTION_INFO_SET_RNG_SEED,
     ENCRYPTION_KEY_SIZE,
     ENCRYPTION_USER_DATA_SIZE,
-    CHANNEL_IN_WRONG_STATE,
     INVALID_MESSAGE,
     INVALID_PARAMETER_PROVIDED,
     INVALID_SDU_MASK,
@@ -113,9 +97,8 @@ ADV3_BITS = [
     (0x80, "single channel encryption"),
 ]
 
-# Advertised, not bridged, and staying that way. Each entry says why, because
-# the alternative - clearing the capability bit - would make this dongle report
-# something a real ANT USB-m does not, and hosts do read these bytes.
+# Advertised, not bridged, and staying that way (clearing the capability bit
+# would make this dongle report something a real ANT USB-m does not).
 KNOWN_GAPS = {
     "high duty search":
         "no ant_interface.h API on the single-chip path; sdk-ant handles 0x77 "
@@ -128,11 +111,9 @@ KNOWN_GAPS = {
         "ant_coex_config_set() exists but no host API reaches it",
 }
 
-# Bridged messages that no Windows host can send, where that is a recorded fact
-# rather than drift. Anything bridged and unreachable that is *not* named here
-# fails the run: bridging a message nothing can call is dead code that costs
-# dispatch space and, on the encryption path, stack RAM shared with the plain
-# channels.
+# Bridged messages no Windows host can send, recorded as fact rather than
+# drift. Anything bridged-and-unreachable not named here fails the run:
+# bridging a message nothing can call is dead code.
 HOST_UNREACHABLE = {
     "single channel encryption":
         "ANT_DLL.dll exports 154 functions and not one of them keys a channel "
@@ -141,10 +122,8 @@ HOST_UNREACHABLE = {
         "the argument for CONFIG_ANT_DONGLE_ENCRYPTION defaulting off",
 }
 
-# archive/host-api/ant_dll_exports.json, found relative to this file rather
-# than to the working directory. These tools get run from the repository root,
-# from tools/, and from a copy of tools/ dropped somewhere else entirely, and
-# the script's own path is the only one true in all three.
+# archive/host-api/ant_dll_exports.json, relative to this file rather than the
+# working directory, since these tools get run from several different cwds.
 HOST_API_JSON = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), os.pardir,
     "archive", "host-api", "ant_dll_exports.json")
@@ -153,27 +132,18 @@ HOST_API_JSON = os.path.join(
 def load_host_api(path: str = HOST_API_JSON):
     """Index ANT_DLL.dll's export table by the message each call puts on the wire.
 
-    On Windows every ANT application reaches the stick through `ANT_DLL.dll`,
-    so its export table bounds what any of them can ask a dongle for - not by
-    convention, by construction: a function that is not exported cannot be
-    called. That turns "can anything actually reach this bridged message" from
-    an argument into a lookup.
+    Every Windows ANT app reaches the stick through `ANT_DLL.dll`, so its
+    export table bounds what any of them can ask for by construction - turning
+    "can anything reach this bridged message" from an argument into a lookup.
 
-    Returns `{mesg_id: [export, ...]}` covering the 72 of 154 exports that
-    carry a message id, grouped into the 36 distinct ids they name - the list
-    per id is not a formality, because `_RTO` (caller-supplied response
-    timeout) and `_ext` variants are separate exports with separate ordinals
-    sending the same message. Returns None if the archive is not there: a copy
-    of tools/ on its own is a supported way to run these, so a missing archive
-    is a reduced check and not a failure.
+    Returns `{mesg_id: [export, ...]}` (`_RTO`/`_ext` variants are separate
+    exports sending the same message, so the list per id matters). Returns
+    None if the archive is missing - a copy of tools/ alone is supported, so
+    that's a reduced check, not a failure.
 
-    Rows with a null `mesg_id` are dropped rather than guessed at. Null means
-    one of two different things - the call is host-local (`ANT_Init`, the
-    `ANTFS_*` family), or the message is real but its id is not yet in
-    protocol/ant_wire.yaml - and the six-field JSON cannot tell them apart.
-    archive/host-api/README.md writes both groups out by name, and the fix for
-    the second is to add the message to the YAML and regenerate, never to edit
-    the JSON.
+    Rows with a null `mesg_id` are dropped rather than guessed at (host-local
+    calls vs. messages not yet in protocol/ant_wire.yaml look the same in the
+    JSON); see archive/host-api/README.md.
     """
     try:
         with open(path, encoding="utf-8") as handle:
@@ -262,9 +232,8 @@ def request(dev, reader, index: int, req_id: int, timeout: float = 2.0):
 def bridged(code) -> bool:
     """Did the message reach the stack, whatever the stack then said?
 
-    A message the dispatcher does not implement is refused by the dispatcher
-    itself with INVALID_MESSAGE. Anything else - success, or a complaint about
-    the parameters - means the message was decoded and handed on.
+    An unimplemented message is refused by the dispatcher with
+    INVALID_MESSAGE; anything else means it was decoded and handed on.
     """
     return code is not None and code != INVALID_MESSAGE
 
@@ -272,17 +241,13 @@ def bridged(code) -> bool:
 def check_coverage(dev, reader, adv3: int, by_message=None) -> list[str]:
     """Probe every advertised optional feature. Returns unexpected mismatches.
 
-    Three lists have to agree for an optional feature to be worth anything: the
-    capability bits the stack advertises, the messages `dispatch()` implements,
-    and the entry points `ANT_DLL.dll` exports for a host to call them with.
-    The first two are asked of the device; the third is read from
-    archive/host-api/ant_dll_exports.json, which is generated from the real PE
-    export directory. A feature that is advertised and unbridged strands a host
-    that believes the bit; a feature that is bridged and unexported is code no
-    host can reach.
+    Three lists have to agree: capability bits advertised, messages
+    `dispatch()` implements, and entry points `ANT_DLL.dll` exports (from
+    archive/host-api/ant_dll_exports.json). Advertised-and-unbridged strands a
+    host that believes the bit; bridged-and-unexported is code no host reaches.
     """
-    # Each probe is the "off" configuration for its feature, so a firmware that
-    # does implement the message is left exactly as it was found.
+    # Each probe is the "off" configuration, so an implemented message is left
+    # exactly as it was found.
     probes = {
         "advanced burst": (MESG_CONFIG_ADV_BURST_ID,
                            bytes([0x00, ADV_BURST_MODE_DISABLE,
@@ -304,9 +269,8 @@ def check_coverage(dev, reader, adv3: int, by_message=None) -> list[str]:
     for bit, name in ADV3_BITS:
         advertised = bool(adv3 & bit)
         if name not in probes:
-            # Search sharing is configured per channel by a message the bridge
-            # already implements, and radio coexistence has no host API to
-            # reach it. Neither has a probe that is worth a false alarm.
+            # Search sharing is per-channel already; coexistence has no host
+            # API to reach it. Neither is worth a false-alarm probe.
             note = KNOWN_GAPS.get(name, "not probed")
             print(f"  .  {name}: "
                   f"{'advertised' if advertised else 'not advertised'} ({note})")
@@ -351,8 +315,6 @@ def check_adv_burst(dev, reader) -> list[str]:
     print(f"  OK: supported = {caps.hex()} "
           f"(max packet size code {caps[0]}, modes 0x{caps[1]:02X})")
 
-    # [filler, enable, rf payload size, required modes, 0, 0, optional modes,
-    #  0, 0] - the 8-byte required part of the structure, one byte in.
     wanted = bytes([ADV_BURST_MODE_ENABLE, ADV_BURST_MODES_SIZE_24_BYTES,
                     0x00, 0, 0, ADV_BURST_MODES_FREQ_HOP, 0, 0])
     code = command(dev, reader, MESG_CONFIG_ADV_BURST_ID, bytes([0x00]) + wanted)
@@ -366,8 +328,7 @@ def check_adv_burst(dev, reader) -> list[str]:
         print(f"  FAIL: configuration request refused ({got})")
         problems.append("advanced burst: config unreadable")
     else:
-        # The reply drops the enable byte the command carried: it is
-        # [size, required, 0, 0, optional, 0, 0, stall lsb, stall msb, retry].
+        # Reply drops the enable byte the command carried.
         print(f"  .  read back {got.hex()}")
         if got[0] != wanted[1] or got[1] != wanted[2] or got[4] != wanted[5]:
             print(f"  FAIL: expected size={wanted[1]} required={wanted[2]} "
@@ -407,8 +368,8 @@ def check_sdu(dev, reader) -> list[str]:
             problems.append(f"sdu: mask {index} unreadable")
             continue
 
-        # [mask index, mask[8]]. An off-by-one in either direction shows up
-        # here as the index byte carrying mask[0] and the mask sliding down.
+        # An off-by-one shows up here as the index byte carrying mask[0] and
+        # the mask sliding down.
         if len(got) < 9:
             print(f"  FAIL: mask {index} reply is {len(got)} bytes, want 9: {got.hex()}")
             problems.append(f"sdu: mask {index} reply truncated")
@@ -469,13 +430,8 @@ def check_event_filter(dev, reader) -> list[str]:
 def check_encryption(dev, reader) -> list[str]:
     """Read the encryption capability, and round-trip the writes if they are in.
 
-    The read side is always bridged. The writes are behind
-    CONFIG_ANT_DONGLE_ENCRYPTION and are off in a shipping image, so finding
-    them absent is a result, not a failure.
-
-    The read is worth checking on its own: it is the other message whose reply
-    leads with the byte that was requested, and a misframed one looks exactly
-    like a stack that supports nothing.
+    Read side is always bridged; writes are behind CONFIG_ANT_DONGLE_ENCRYPTION
+    and off in a shipping image, so absent writes is a result, not a failure.
     """
     print("\n[6/6] encryption (0x7D–0x7F)")
 
@@ -517,18 +473,11 @@ def check_encryption(dev, reader) -> list[str]:
     else:
         print(f"  OK: crypto ID {wanted_id.hex()} set and read back")
 
-    # Custom user data is the longest message a *host* sends: one byte of info
-    # type plus 19 of payload, and nothing a host can put on the wire is
-    # longer.
-    #
-    # It is not the longest message the parser sees, which is what this comment
-    # used to claim. MAX_SIZE_VALUE is 38, not 20 - src/usb_ant_class.c:30-31
-    # says so outright and both USB class files size their frame buffer from
-    # the resulting 42. An advanced-burst data message reaches LEN 25 on its
-    # own, and an extended receive message adds a flag byte and three appended
-    # fields on top of a payload. Sizing a body buffer from 20 makes
-    # handle_burst() see size = 19, fail its size % 8 check, and silently
-    # reject every 24-byte burst packet. See MAX_SIZE_VALUE in tools/ant_wire.py.
+    # Custom user data (1 info-type byte + 19 payload) is the longest message a
+    # *host* sends, but NOT the longest the parser sees - MAX_SIZE_VALUE is 38
+    # (src/usb_ant_class.c), sized for advanced-burst/extended-receive traffic.
+    # Sizing the body buffer from 20 instead makes handle_burst() reject every
+    # 24-byte burst packet.
     wanted_data = bytes(range(1, ENCRYPTION_USER_DATA_SIZE + 1))
     code = command(dev, reader, MESG_SET_ENCRYPT_INFO_ID,
                    bytes([ENCRYPTION_INFO_SET_CUSTOM_USER_DATA]) + wanted_data)
@@ -573,20 +522,18 @@ def check_encryption(dev, reader) -> list[str]:
 def check_radiant_security(dev, reader) -> list[str]:
     """Probe the RadiANT security messages, 0xF1-0xF4.
 
-    NOT ANT protocol. A stock ANT stick answers INVALID_MESSAGE to all four and
-    that is the correct answer, so an absent family is a result rather than a
-    failure - exactly like the encryption writes above.
+    NOT ANT protocol - a stock ANT stick correctly answers INVALID_MESSAGE to
+    all four, so an absent family is a result, not a failure.
 
-    Structured to leave the device as it was found. 0xF1 with no switches at
-    all is the last thing this does, because a probe that left a channel
-    transforming would make every later test on that channel read as garbage.
+    Structured to leave the device as found: 0xF1 with no switches is last,
+    since a probe leaving a channel transforming would corrupt later tests.
     """
     print("\n[7/7] RadiANT security (0xF1-0xF4)")
 
     ch = 0
 
-    # 0xF4 first: it is the read arm, it is harmless, and its reply tells us
-    # whether the family is compiled in without writing anything.
+    # 0xF4 first: read arm, harmless, tells us if the family is compiled in
+    # without writing anything.
     got = request(dev, reader, ch, ant_sec.MESG_STATUS)
     if isinstance(got, (int, type(None))):
         print(f"  -- not compiled in (CONFIG_RADIANT_SEC_HOST_MESSAGES=n, "
@@ -604,11 +551,9 @@ def check_radiant_security(dev, reader) -> list[str]:
 
     problems = []
 
-    # A key needs a channel ID, because the provisioning device number is bound
-    # into the KDF and antr_sec_key_set() reads it from the channel rather than
-    # taking it on the wire. Without one the answer is CHANNEL_IN_WRONG_STATE,
-    # which is the honest reply and not a fault - so this reports it and moves
-    # on rather than counting it as a problem.
+    # A key needs a channel ID first: the provisioning device number is bound
+    # into the KDF and read from the channel, not the wire. Without one,
+    # CHANNEL_IN_WRONG_STATE is the honest reply, not a fault.
     code = command(dev, reader, ant_sec.MESG_SET_KEY,
                    ant_sec.encode_set_key(ch, bytes(range(16))))
     if code == RESPONSE_NO_ERROR:
@@ -683,9 +628,8 @@ def main() -> int:
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--radiant-security", action="store_true",
                         help="also probe the RadiANT security messages "
-                             "(0xF1-0xF4). Off by default because a stock ANT "
-                             "stick answers INVALID_MESSAGE to all four and "
-                             "the noise is not informative.")
+                             "(0xF1-0xF4). Off by default: a stock ANT stick "
+                             "answers INVALID_MESSAGE to all four")
     parser.add_argument("-q", "--quiet", action="store_true")
     args = parser.parse_args()
 

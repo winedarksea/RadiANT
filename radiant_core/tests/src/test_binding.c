@@ -4,19 +4,10 @@
  * Provenance: original clean-room work, against radiant_binding.h/.c, itself
  * a transcription of docs/radiant-bridge.md section 5.
  *
- * Four things earn their place:
- *   1. THE SAME KEY RETURNS THE SAME SOURCE. Binding is idempotent by key -
- *      posting the same sensor twice must not fragment its history across
- *      two sources.
- *   2. A FULL TABLE REFUSES A NEW KEY, NOT AN EXISTING ONE. -ENOSPC only when
- *      the table is full AND the key is new; an existing binding must still
- *      resolve even with every other slot occupied.
- *   3. UUID SURVIVES THE LOOKUP PATH AND DIFFERS ACROSS BINDINGS. Section 5's
- *      whole reason for the field existing.
- *   4. UNBIND FREES THE SLOT AND THE NEXT BIND OF THE SAME KEY IS A NEW
- *      IDENTITY - re-pair is a user action per the header comment, not an
- *      automatic reconciliation, and this is the negative-space test of that:
- *      nothing here should be found "the same" without one.
+ * Covers: bind is idempotent by key; -ENOSPC only for a new key on a full
+ * table, an existing key still resolves; uuid is nonzero and differs per
+ * binding; unbind-then-rebind of the same key is a new identity (re-pair is
+ * a user action, not automatic reconciliation).
  */
 
 #include <errno.h>

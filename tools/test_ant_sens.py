@@ -3,17 +3,10 @@
 
 """Check the sensitivity instrument on the host, with no radio at all.
 
-tools/ant_sens.py turns a loss curve into one number in dBm, and that number is
-what Phases 2 and 5 of the RF plan are graded against. So the arithmetic that
-produces it is tested here against curves whose answer is known by construction:
-a synthetic knee placed at a chosen power has to come back at that power.
-
-The negative cases carry more weight than the positive one, because every way
-this tool can be wrong produces a plausible-looking number rather than an error.
-A ladder that bottoms out before the knee, a transmitter that ignored the power
-it was told to use, a link already broken at full power - all three yield a
-curve somebody would read straight off a chart. Each one has to be *refused*
-here.
+tools/ant_sens.py turns a loss curve into one number in dBm, graded against
+curves whose answer is known by construction. The negative cases matter most:
+a bottomed-out ladder, a stuck transmitter, or a link already broken at full
+power must each be *refused*, not answered with a plausible-looking number.
 """
 
 from __future__ import annotations
@@ -26,18 +19,16 @@ sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 try:
     import ant_sens
 except SystemExit:
-    # ant_sens imports ant_sim and ant_verify, and both exit rather than raise
-    # when pyusb is missing so that a developer running the tool sees advice
-    # instead of a traceback. Here that would take the whole test run down.
+    # ant_sens imports ant_sim/ant_verify, which exit (not raise) when pyusb
+    # is missing; that would otherwise take the whole test run down.
     ant_sens = None
 
 
 def curve(points, rssi_at_top: float | None = -35.0, samples: int = 240):
     """A ladder from (tx_power_dbm, loss_pct) pairs, loudest first.
 
-    RSSI tracks transmit power exactly, which is what a real path does and what
-    the dial check expects to see. Tests that care about a broken dial override
-    it.
+    RSSI tracks transmit power exactly by default; tests of a broken dial
+    override it.
     """
     top = max(dbm for dbm, _ in points)
     steps = []
@@ -53,9 +44,8 @@ def curve(points, rssi_at_top: float | None = -35.0, samples: int = 240):
     return steps
 
 
-# A knee at -14 dBm, which is what every interpolation test below has to find.
-# Loss is flat at the bench floor until the link runs out of margin and then
-# climbs steeply, which is the shape a packet error rate actually has.
+# A knee at -14 dBm: loss flat at the bench floor, then climbs steeply once
+# margin runs out, matching a real packet error rate shape.
 KNEE_DBM = -14.0
 SYNTHETIC = [
     (8, 0.4), (4, 0.4), (0, 0.5), (-4, 0.6), (-8, 1.0),
@@ -67,9 +57,8 @@ SYNTHETIC = [
 class TestKneeInterpolation(unittest.TestCase):
     def test_a_synthetic_knee_is_found_where_it_was_put(self):
         knee = ant_sens.interpolate_knee(curve(SYNTHETIC), 5.0)
-        # 3.0 % at -12 and 11.0 % at -16, so 5 % lands a quarter of the way
-        # down that 4 dB bracket: -13 dBm. The curve was drawn so the answer is
-        # arithmetic rather than opinion.
+        # 3.0% at -12 and 11.0% at -16, so 5% lands a quarter of the way down
+        # that 4 dB bracket: -13 dBm.
         self.assertAlmostEqual(knee["tx_power_dbm"], -13.0, places=6)
         self.assertEqual(knee["bracket"], [-12, -16])
         self.assertEqual(knee["bracket_db"], 4)
@@ -85,13 +74,8 @@ class TestKneeInterpolation(unittest.TestCase):
         self.assertAlmostEqual(knee["tx_power_dbm"], -4.0)
 
     def test_a_ladder_that_bottoms_out_reports_no_answer(self):
-        """The failure mode that would otherwise fabricate a sensitivity figure.
-
-        A desk pair at +8 dBm sits ~60 dB above the knee and the coarse ladder
-        spans 28, so this is the *expected* first result on this bench rather
-        than an exotic case. Extrapolating past the last rung would produce a
-        number nobody could tell from a measured one.
-        """
+        # Extrapolating past the last rung would fabricate a number
+        # indistinguishable from a measured one.
         knee = ant_sens.interpolate_knee(
             curve([(8, 0.3), (4, 0.4), (0, 0.3), (-4, 0.5), (-12, 0.4),
                    (-20, 0.6)]), 5.0)
@@ -106,19 +90,15 @@ class TestKneeInterpolation(unittest.TestCase):
         self.assertIn("broken before the ladder starts", knee["reason"])
 
     def test_the_first_crossing_wins_not_the_last(self):
-        """Past the knee the curve is 90 % loss and noise, and noise crosses back.
-
-        Taking the last crossing would report whichever deep rung happened to
-        bounce below 5 %, which is 20 dB from the truth.
-        """
+        # Taking the last crossing would report whichever deep, noisy rung
+        # happened to bounce below 5%, 20 dB from the truth.
         knee = ant_sens.interpolate_knee(
             curve([(0, 1.0), (-4, 9.0), (-8, 3.0), (-12, 80.0)]), 5.0)
         self.assertEqual(knee["bracket"], [0, -4])
 
     def test_a_wide_bracket_says_so(self):
-        # The coarse ladder's -12 to -20 gap. The number is still the best one
-        # available; what must not happen is it being quoted to 1 dB without
-        # anyone knowing 8 of those dB were a straight line.
+        # The coarse ladder's -12 to -20 gap: still the best number available,
+        # but must not be quoted to 1 dB without flagging the 8 dB span.
         knee = ant_sens.interpolate_knee(
             curve([(0, 0.4), (-12, 1.0), (-20, 40.0)]), 5.0)
         self.assertIsNotNone(knee["tx_power_dbm"])
@@ -138,11 +118,8 @@ class TestKneeInterpolation(unittest.TestCase):
 
 @unittest.skipIf(ant_sens is None, "pyusb is not installed")
 class TestTheDialIsChecked(unittest.TestCase):
-    """Three ways the transmitter can ignore the power it was told to use.
-
-    All three produce a loss curve that looks entirely normal, which is why the
-    ladder is measured on the RSSI axis as well as commanded on the power axis.
-    """
+    """Three ways the transmitter can ignore its commanded power, all of
+    which produce a normal-looking loss curve - hence checking RSSI too."""
 
     def test_a_working_dial_reads_one_db_per_db(self):
         slope = ant_sens.rssi_slope(curve(SYNTHETIC))
@@ -152,12 +129,8 @@ class TestTheDialIsChecked(unittest.TestCase):
         self.assertTrue(ok, detail)
 
     def test_a_transmitter_stuck_at_one_power_is_caught(self):
-        """What --rungs fine does against firmware that drops the custom byte.
-
-        Every rung asks for a different power, every rung transmits at 0 dBm,
-        and the loss curve is flat - which reads as a spectacularly sensitive
-        receiver rather than as a stuck transmitter.
-        """
+        # Every rung asks for a different power but all transmit at 0 dBm; the
+        # flat loss curve reads as a great receiver, not a stuck transmitter.
         steps = curve([(8, 0.4), (4, 0.4), (0, 0.4), (-4, 0.5), (-12, 0.4)])
         for step in steps:
             step["rssi_dbm_mean"] = -35.0
@@ -166,15 +139,10 @@ class TestTheDialIsChecked(unittest.TestCase):
         self.assertIn("not transmitting at the powers it was told", detail)
 
     def test_tx_power_boost_folding_two_levels_together_is_caught(self):
-        """The case a slope tolerance alone lets through.
-
-        CONFIG_ANT_DONGLE_TX_POWER_BOOST maps levels 3 and 4 both onto +8 dBm,
-        so the coarse ladder's top three rungs are one rung and its bottom three
-        are where they should be. The best-fit slope through that is 1.12 -
-        inside any sane slope tolerance - because the ladder still walks about
-        the right total distance. What gives it away is the shape: three rungs
-        sit 3-6 dB off the line.
-        """
+        # CONFIG_ANT_DONGLE_TX_POWER_BOOST maps levels 3 and 4 both onto
+        # +8 dBm. The best-fit slope through that is still ~1.12 (within any
+        # sane tolerance), so it's the per-rung residual, not the slope, that
+        # catches the three rungs sitting 3-6 dB off the line.
         steps = curve([(8, 0.4), (4, 0.4), (0, 0.4), (-4, 0.6), (-12, 1.2),
                        (-20, 4.0)])
         for step in steps:
@@ -196,12 +164,9 @@ class TestTheDialIsChecked(unittest.TestCase):
         self.assertIn("never checked", detail)
 
     def test_rungs_past_the_knee_do_not_flatten_the_slope(self):
-        """Survivor bias, and why the slope is fitted below the knee only.
-
-        At 90 % loss the packets that arrive are the ones that faded up, so
-        their mean RSSI stops tracking the dial. Fitting through those rungs
-        reads as a broken dial on a working bench.
-        """
+        # Survivor bias: at 90% loss the packets that arrive are the ones
+        # that faded up, so fitting through those rungs reads as a broken
+        # dial on a working bench - hence fitting below the knee only.
         steps = curve(SYNTHETIC)
         for step in steps:
             if step["loss_pct"] > 20.0:
@@ -242,12 +207,9 @@ class TestTheLadderItself(unittest.TestCase):
 
 @unittest.skipIf(ant_sens is None, "pyusb is not installed")
 class TestPowerEncoding(unittest.TestCase):
-    """A raw register value guessed for the wrong part is a silent wrong answer.
-
-    radiant_core/src/radiant_radio_nrf.c spends a paragraph on this: nRF52840
-    encodes TXPOWER as signed dBm and nRF54L15 does not, so the same byte is two
-    different powers with no error on either.
-    """
+    """A raw register value guessed for the wrong part is a silent wrong
+    answer: nRF52840 encodes TXPOWER as signed dBm, nRF54L15 does not, so the
+    same byte is two different powers on either part with no error raised."""
 
     def test_the_six_named_levels_need_no_part(self):
         for dbm, level in ((-20, 0), (-12, 1), (-4, 2), (0, 3), (4, 4), (8, 5)):
@@ -276,8 +238,9 @@ class TestPowerEncoding(unittest.TestCase):
 
 @unittest.skipIf(ant_sens is None, "pyusb is not installed")
 class TestRepeatability(unittest.TestCase):
-    """The Phase 0 gate. Two ladders on an unchanged rig within 1 dB, or the
-    instrument cannot grade the 1 dB claims that Phases 2 and 5 rest on."""
+    """The Phase 0 gate: two ladders on an unchanged rig must agree within
+    1 dB, or the instrument cannot grade the 1 dB claims Phases 2 and 5 rest
+    on."""
 
     def test_agreement_is_the_spread(self):
         self.assertAlmostEqual(ant_sens.agreement_db([-13.0, -13.4]), 0.4)
@@ -295,14 +258,10 @@ class TestRepeatability(unittest.TestCase):
 @unittest.skipIf(ant_sens is None, "pyusb is not installed")
 class TestDerivedBlock(unittest.TestCase):
     def test_the_receiver_side_figure_is_derived_not_read_off_the_knee(self):
-        """The knee rung's own RSSI is biased by the thing being measured.
-
-        At 5 % loss the packets that arrived are slightly the ones that faded
-        up. The reference rung is well above the knee where nothing is being
-        selected, and the dB walked down from it is exact because the path loss
-        does not change. Here the top rung reads -35 dBm and the knee is 21 dB
-        down, so the answer is -56 whatever the knee rung's own RSSI says.
-        """
+        # The knee rung's own RSSI is biased (arrivals near the knee skew
+        # toward faded-up), so the figure is walked down in dB from a
+        # reference rung well above the knee instead: -35 dBm top, 21 dB down
+        # to the knee, giving -56 regardless of what the knee rung reports.
         steps = curve(SYNTHETIC)
         for step in steps:
             if step["loss_pct"] > 2.0:
@@ -323,9 +282,8 @@ class TestDerivedBlock(unittest.TestCase):
         for step in steps:
             step["rssi_dbm_mean"] = -35.0
         derived = ant_sens.derive(steps, 5.0)
-        # The knee arithmetic still runs and still produces a number. That is
-        # the danger: it is `dial_trustworthy` and nothing else that says the
-        # number is fiction.
+        # The knee arithmetic still runs and produces a number; only
+        # `dial_trustworthy` says it's fiction.
         self.assertIsNotNone(derived["loss5pct_tx_power_dbm"])
         self.assertFalse(derived["dial_trustworthy"])
 

@@ -2,19 +2,16 @@
 /*
  * gate_probe.h - reading the gate's own counters from a test.
  *
- * Provenance: original clean-room work.
+ * The counters and flags exposed here are `static` inside
+ * radiant_radio_nrf_gate_mpsl.c and must stay that way - read on a running
+ * dongle only via the 1 Hz gate_dump_fn() line; an exported symbol would
+ * invite something to branch on one.
  *
- * The counters and flags this exposes are `static` inside
- * radiant_radio_nrf_gate_mpsl.c and they must stay that way - they are read on a
- * running dongle through the 1 Hz gate_dump_fn() line and nowhere else, and an
- * exported symbol would be an invitation to make something branch on one.
- *
- * So the file under test is COMPILED INTO gate_under_test.c by #include, and
- * these accessors are the only things that leave that translation unit. Nothing
- * in the production file changes for the sake of the tests - which matters more
- * here than usual, because the thing being tested is a set of invariants that
- * hold across paths, and a #ifdef CONFIG_ZTEST anywhere in them would mean the
- * shipping build takes a different path from the tested one.
+ * So the file under test is compiled into gate_under_test.c by #include,
+ * and these accessors are the only things that leave that translation
+ * unit. Nothing in the production file changes for the tests - a
+ * #ifdef CONFIG_ZTEST anywhere in it would mean the shipping build takes a
+ * different path than the tested one.
  */
 
 #ifndef RADIANT_CORE_TESTS_GATE_PROBE_H_
@@ -46,10 +43,10 @@ struct gate_probe {
 	uint32_t overstayed;
 	uint32_t invalid_return;
 	uint32_t unknown_signal;
-	/* A request MPSL answered from inside mpsl_timeslot_request(). BUG 15. */
+	/* A request MPSL answered from inside mpsl_timeslot_request(). Bug 15. */
 	uint32_t answered_inline;
-	/* Acquires refused because MPSL still owed an answer. The wedge's own
-	 * counter: once it is the only thing moving, the radio is dead. */
+	/* Acquires refused because MPSL still owed an answer - the wedge's
+	 * own counter: once it's the only thing moving, the radio is dead. */
 	uint32_t den_owed;
 
 	/* g */

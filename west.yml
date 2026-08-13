@@ -20,10 +20,10 @@
 # The two are alternative entry points into the same source tree:
 #
 #   this manifest      -> public workspace, no sdk-ant, builds the open backends
-#   sdk-ant's manifest -> adopter workspace, sdk-ant present, builds everything
+#   sdk-ant's manifest -> full workspace, sdk-ant present, builds everything
 #
 # If the two ever disagree about the SDK version, sdk-ant's pin wins for the
-# gated build and this one wins for the public build; the difference is
+# full build and this one wins for the public build; the difference is
 # visible in .config and is exactly what the CI assertions exist to catch.
 
 manifest:
@@ -33,7 +33,7 @@ manifest:
     - name: nrfconnect
       url-base: https://github.com/nrfconnect
     # sdk-ant lives in its own GitHub organisation, separate from nrfconnect,
-    # and access is granted per account under an ANT+ adopter agreement.
+    # and access is granted per account under Garmin's terms for the SDK.
     - name: ant-nrfconnect
       url-base: https://github.com/ant-nrfconnect
     # Upstream Zephyr's own organisation, for the one HAL NCS filters out of
@@ -44,15 +44,15 @@ manifest:
   # The `ant` group is disabled by default, and this is the single most
   # important line in the file.
   #
-  # sdk-ant is a private, adopter-gated repository. If it were an ordinary
-  # project entry, `west update` on a fresh public clone would attempt to clone
-  # it, fail authentication, and abort the whole update - so nobody without
-  # adopter access could set up a workspace at all, which is precisely the
-  # failure mode this project exists to remove. Putting it in a disabled group
-  # means the default path clones nothing private, succeeds, and yields a tree
-  # that builds the open backends.
+  # sdk-ant is a private repository. If it were an ordinary project entry,
+  # `west update` on a fresh public clone would attempt to clone it, fail
+  # authentication, and abort the whole update - so nobody without access to
+  # the private repository could set up a workspace at all, which is
+  # precisely the failure mode this project exists to remove. Putting it in a
+  # disabled group means the default path clones nothing private, succeeds,
+  # and yields a tree that builds the open backends.
   #
-  # An adopter opts in explicitly, per workspace:
+  # A workspace opts in explicitly:
   #
   #   west config manifest.group-filter +ant
   #   west update

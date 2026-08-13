@@ -3,52 +3,24 @@
  * Pairing: turning one X25519 exchange into the 16 bytes every other file in
  * this feature already knows how to use.
  *
- * Provenance: clean-room. Written from docs/radiant-security.md sections 7.4
- * and 8, RFC 7748 for the exchange itself, and NIST SP 800-56C's
- * extract-then-expand shape for the derivation. No third-party implementation
- * was consulted.
+ * Clean-room: docs/radiant-security.md sections 7.4 and 8, RFC 7748 for the
+ * exchange, NIST SP 800-56C's extract-then-expand shape for the derivation.
  *
- * ---------------------------------------------------------------------------
- * PAIRING HAPPENS IN THE CLEAR, AND THAT IS STRUCTURAL
- * ---------------------------------------------------------------------------
- * There is no prior secret and no out-of-band channel on the air, so an active
- * attacker present during the exchange can be the man in the middle. That is
- * not an oversight to be fixed later - it is what an anonymous key agreement
- * is. Section 7.4 records it as a limit rather than hiding it.
+ * Pairing happens in the clear, structurally: no prior secret and no
+ * out-of-band channel, so an active attacker present during the exchange can
+ * MITM it - that's what an anonymous key agreement is (section 7.4). The
+ * mitigation is the FINGERPRINT: six digits derived from the shared secret
+ * and both public keys, shown at both ends for a human to compare. A MITM
+ * holds two different shared secrets and can't make both match. Out-of-band
+ * pairing (QR code, typed key) remains the recommended path where it matters.
  *
- * The mitigation is the FINGERPRINT: six digits derived from the shared secret
- * and both public keys, shown at both ends for a human to compare. An attacker
- * in the middle holds two different shared secrets and cannot make both
- * fingerprints match. This converts an undetectable attack into one that
- * requires the user not to look, which is the same bargain BLE numeric
- * comparison makes.
- *
- * The window is small and it is not zero. A user who skips the comparison gets
- * an unauthenticated key and no warning, which is why out-of-band pairing - a
- * QR code, a typed key - remains the recommended path for anything that
- * matters.
- *
- * ---------------------------------------------------------------------------
- * NO EXCLUSIVITY FLAG, DELIBERATELY
- * ---------------------------------------------------------------------------
- * sdk-ant serialises its own key exchange across the whole device with a
- * single global "one channel negotiates at a time" flag. Nothing here does,
- * because nothing here needs a shared resource: each channel's state is its
- * own and the ladder runs on the calling thread.
- *
- * If that ever changes, section 8.1 records the trap in advance and it is worth
- * repeating at the point where the flag would be added: the flag must be
- * released on LOSS OF TRACKING, not only on completion or failure. A channel
- * that starts pairing and then loses its peer has no completion event and no
- * failure event - the sensor walked out of range - and
- * RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH is the only transition that fires.
- * Miss it and that channel deadlocks negotiation for every other channel on the
- * device, permanently, with nothing anywhere to say so.
- *
- * radiant_sec_pair_on_search() exists for exactly that reason and is called
- * from the same place, so the hook is live before there is anything to hang on
- * it. Today it cancels one channel's own pairing; that is cheap and it means
- * the release path is exercised rather than merely designed.
+ * No exclusivity flag, deliberately: unlike sdk-ant's single global
+ * "one channel negotiates at a time" lock, each channel's state here is its
+ * own. If a flag is ever added, it must be released on LOSS OF TRACKING
+ * (RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH), not only on completion/failure -
+ * a channel whose peer walks out of range mid-exchange gets neither event,
+ * and missing this would deadlock negotiation device-wide. See section 8.1.
+ * radiant_sec_pair_on_search() is the hook for this, already wired in.
  */
 
 #include <string.h>
@@ -155,17 +127,12 @@ static bool pair_expired(const struct pair_ctx *c, uint32_t now_ms)
 }
 
 /*
- * Extract-then-expand over CMAC, which is the only MAC this build has.
- *
- * EXTRACT. The raw X25519 output is not a uniform key: it is a curve point's
- * u-coordinate, with structure. CMAC under an all-zero key condenses all 32
- * bytes into 16 uniform ones. Importing the first 16 bytes directly would have
- * been simpler and would have thrown away half the entropy.
- *
- * EXPAND. Both public keys go into the expansion, ordered by value rather than
- * by role, so the two ends compute the same thing without having to agree on
- * who was the initiator. Binding them is what makes the fingerprint attest to
- * the identities and not merely to the secret.
+ * Extract-then-expand over CMAC (the only MAC this build has). Extract:
+ * the raw X25519 output is a curve point's u-coordinate, not a uniform key,
+ * so CMAC under an all-zero key condenses it into 16 uniform bytes. Expand:
+ * both public keys go in ordered by value (not by role), so both ends
+ * compute the same thing without agreeing who initiated, and the
+ * fingerprint attests to the identities, not just the secret.
  */
 static int pair_derive(const uint8_t *shared, const uint8_t *pub_a,
 		       const uint8_t *pub_b, uint8_t *root_out,
@@ -249,15 +216,9 @@ static int pair_derive(const uint8_t *shared, const uint8_t *pub_a,
 		return rc;
 	}
 
-	/*
-	 * Six digits, from four bytes.
-	 *
-	 * Six rather than four or eight because it is what a person will
-	 * actually read off two screens and compare: a 1-in-10^6 chance of a
-	 * man in the middle guessing it, against a comparison a user will
-	 * finish. Eight digits raise the work factor and lower the number of
-	 * users who complete the check, and the second effect dominates.
-	 */
+	/* Six digits (from four bytes): a 1-in-10^6 guess chance a user will
+	 * actually read and compare. Eight digits raise the work factor but
+	 * lower completion, and that effect dominates. */
 	*fp_out = (((uint32_t)tag[0] << 24) | ((uint32_t)tag[1] << 16) |
 		   ((uint32_t)tag[2] << 8) | (uint32_t)tag[3]) % 1000000u;
 
@@ -273,12 +234,8 @@ int radiant_sec_pair_enter(uint8_t ch, uint8_t timeout_s)
 		return RADIANT_SEC_ENOKEY;
 	}
 
-	/*
-	 * A TIMEOUT IS NOT OPTIONAL. A node left in pairing mode accepts a key
-	 * from anyone who asks, so an interface that let a host enter it
-	 * without a bound would turn a forgotten command into a permanently
-	 * open node. Zero means the default rather than "forever".
-	 */
+	/* A timeout is not optional: a node left in pairing mode accepts a
+	 * key from anyone. Zero means the default, not "forever". */
 	if (timeout_s == 0u) {
 		timeout_s = RADIANT_SEC_PAIR_TIMEOUT_DEFAULT_S;
 	}
@@ -299,13 +256,8 @@ void radiant_sec_pair_on_search(uint8_t ch)
 {
 	struct pair_ctx *c = ctx_of(ch);
 
-	/*
-	 * Loss of tracking. The peer is gone mid-exchange and no completion or
-	 * failure event will ever arrive, so this is the only place the state
-	 * can be released. See the header comment: today that matters because
-	 * it wipes a half-finished exchange's scalar; it matters far more the
-	 * day anything here becomes device-wide.
-	 */
+	/* Loss of tracking: peer is gone mid-exchange, no completion/failure
+	 * event will ever arrive, so this is the only release point. */
 	if (c != NULL) {
 		ctx_free(c);
 	}
@@ -331,15 +283,11 @@ int radiant_sec_pair_set_scalar(uint8_t ch, const uint8_t *scalar)
 	}
 
 	/*
-	 * THE SCALAR COMES FROM THE HOST, and that is a limitation rather than
-	 * a design preference: the only entropy source on nRF54L is
-	 * psa_rng/CRACEN, and reaching it drags nrf_security into every build
-	 * of this module. The honest consequence is that a host-less node
-	 * cannot pair this way and must be provisioned out of band.
-	 *
-	 * Nothing here can check that what arrived is random. A host that sends
-	 * a constant has a node whose private key is public, and neither end
-	 * can tell.
+	 * The scalar comes from the host - a limitation, not a preference:
+	 * the only entropy source on nRF54L is psa_rng/CRACEN, and reaching
+	 * it drags nrf_security into every build. A host-less node must be
+	 * provisioned out of band instead. Nothing here can check the scalar
+	 * is actually random.
 	 */
 	memcpy(c->scalar, scalar, RADIANT_SEC_X25519_BYTES);
 	c->have_scalar = true;
@@ -394,13 +342,9 @@ int radiant_sec_pair_peer(uint8_t ch, const uint8_t *peer_pub,
 		goto out;
 	}
 
-	/*
-	 * A small-order peer key makes the shared secret all zeros whatever our
-	 * scalar was. RFC 7748 leaves rejecting it optional for Diffie-Hellman;
-	 * it is mandatory here, because this value becomes a root key - so
-	 * accepting it would let anyone able to inject one packet fix the group
-	 * key to a value they already know.
-	 */
+	/* A small-order peer key makes the shared secret all zeros regardless
+	 * of our scalar. RFC 7748 leaves rejecting it optional; mandatory
+	 * here since this becomes a root key. */
 	if (radiant_sec_x25519_is_degenerate(shared)) {
 		rc = RADIANT_SEC_EINVAL;
 		goto out;
@@ -412,12 +356,8 @@ int radiant_sec_pair_peer(uint8_t ch, const uint8_t *peer_pub,
 	}
 	c->have_fp = true;
 
-	/*
-	 * Install it. The provisioning device number is read from the channel
-	 * for the same reason antr_sec_key_set() reads it rather than taking it
-	 * on the wire: it is bound into the KDF, and a second copy of it would
-	 * be a second place for it to be wrong.
-	 */
+	/* Install it. Device number read from the channel, not the wire, since
+	 * it's bound into the KDF (same reasoning as antr_sec_key_set()). */
 	if (radiant_channel_id_get(ch, &id) != RADIANT_CH_OK ||
 	    id.device_number == 0u) {
 		rc = RADIANT_SEC_ENOKEY;
@@ -429,15 +369,9 @@ int radiant_sec_pair_peer(uint8_t ch, const uint8_t *peer_pub,
 	}
 	(void)radiant_sec_set_devnum(ch, id.device_number);
 
-	/*
-	 * The group gained a keyholder, and every existing one is entitled to
-	 * know. Counted HERE rather than in the caller because this is the one
-	 * place where a pairing has actually taken - a refused small-order key
-	 * and an abandoned window both leave by other doors - so the "exactly
-	 * once per completed enrolment" property is structural rather than a
-	 * rule each of the two callers has to remember. See the field's comment
-	 * in radiant_sec.h for why silence would be the mistake.
-	 */
+	/* Counted HERE rather than in the caller: this is the one place a
+	 * pairing has actually taken, so "exactly once per enrolment" is
+	 * structural rather than a rule each caller must remember. */
 	radiant_sec_stat_enrolment(ch);
 
 	if (fingerprint != NULL) {

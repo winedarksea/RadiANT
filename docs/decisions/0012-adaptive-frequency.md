@@ -10,7 +10,7 @@
 > decision records and its own `docs/radiant-telemetry.md`, and from the
 > published Bluetooth core specification's advertising-channel placement
 > (public). Nothing here derives from sdk-ant, from `libant.a`, from disassembly
-> of any binary, or from any adopter-gated ANT+ device profile document. See
+> of any binary, or from any non-redistributable ANT+ device profile document. See
 > [0002](0002-clean-room-policy.md).
 
 ---

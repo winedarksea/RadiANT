@@ -2,104 +2,71 @@
 /*
  * radiant_search.h - wildcard search: the sweep, the seen cache, and scan mode.
  *
- * Provenance: clean-room. Written from docs/ant-radio-link.md (the search
- * packet configuration, the BALEN < 4 packing rule, the 32-set sweep and the
- * refutation of preamble-as-address), docs/spike-a-results.md and
- * docs/spike-b-results.md (the measurements those rest on: the noise floor of a
- * 3-byte matcher, RXMATCH recovery of devnum_lo, eight logical addresses in one
- * window), from radiant_core/include/radiant_core/radiant_radio_hal.h and radiant_core/include/radiant_core/radiant_frame.h,
- * and from the free ANT Message Protocol and Usage Rev 5.1 (D00000652) for the
- * wildcard channel-ID convention and the 25 s default search timeout. Nothing
- * here derives from sdk-ant, from libant.a, from disassembly of any binary, or
- * from any adopter-gated ANT+ device profile document. See
+ * Provenance: clean-room, from docs/ant-radio-link.md (search packet config,
+ * BALEN < 4 packing rule, 32-set sweep, refutation of preamble-as-address),
+ * docs/spike-a-results.md and docs/spike-b-results.md (3-byte matcher noise
+ * floor, RXMATCH recovery of devnum_lo, eight logical addresses in one
+ * window), radiant_radio_hal.h, radiant_frame.h, and the free ANT Message
+ * Protocol and Usage Rev 5.1 (D00000652) for the wildcard channel-ID
+ * convention and the 25 s default timeout. Nothing here derives from sdk-ant,
+ * libant.a, or any ANT+ device profile document. See
  * docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * What this module is
- * ---------------------------------------------------------------------------
- * ANT asks a slave to find "any device of type 0x0B". No radio in view can do
- * that. The nRF's shortest matchable on-air address is three bytes, so the
- * third matched byte is unavoidably devnum_lo, and RAIL matches at most two
- * sync words at a time. Wildcard search is therefore not a HAL feature but
- * *core policy driven by a capability query*: enumerate caps.max_filters
- * concrete addresses per window and sweep enough sets to cover all 256 values
- * of that byte.
- *
- * On nRF that is 8 filters and 32 sets. On EFR32/RAIL it is 2 filters and 128
- * sets, from the same code. THE TWO NUMBERS ARE ARITHMETIC, NOT CONSTANTS.
- * radiant_search_filters_per_window() and radiant_search_sets() are public so a test
- * can assert them at both presets, because a hardcoded 8 is otherwise
- * invisible until somebody builds the second backend.
+ * ANT asks a slave to find "any device of type 0x0B", which no radio here can
+ * match in hardware: the shortest matchable address is 3 bytes (third byte
+ * unavoidably devnum_lo) and RAIL matches at most two sync words at once. So
+ * wildcard search is core policy, not a HAL feature: enumerate
+ * caps.max_filters concrete addresses per window and sweep enough sets to
+ * cover all 256 values of devnum_lo - 8 filters/32 sets on nRF, 2/128 on
+ * EFR32/RAIL, same code. radiant_search_filters_per_window()/_sets() are
+ * public so a test can assert both, since a hardcoded 8 is otherwise
+ * invisible until a second backend exists.
  *
  * ---------------------------------------------------------------------------
- * Four things this module gets right that a naive one does not
+ * Four things this module gets right
  * ---------------------------------------------------------------------------
- *
- * 1. CRC IS THE GATE, MATCH COUNT IS NOISE. A 3-byte address matcher fires on
- *    noise several times a second on a quiet bench; with eight filters armed
- *    Spike B measured 19, 22 and 27 CRC failures per 15 s window with the
- *    transmitter switched off - of order 1.4 per second. Every one was rejected
- *    by the CRC and none decoded to a plausible channel ID, and the RSSI column
- *    separated them from the real transmitter by about 70 dB. So an
- *    RADIANT_RADIO_STATUS_CRC_FAIL event NEVER contributes to an acquisition here.
- *    It is counted, and counting it is the whole of its use: a configuration
- *    whose only output is CRC errors has found the noise floor, not a sensor.
- *
- * 2. devnum_lo COMES FROM THE FILTER INDEX, NEVER FROM THE BODY. The matched
- *    address byte is consumed by the hardware and never reaches RAM. The core
- *    recovers it by indexing its OWN filter table with radiant_rx_event.filter_index
- *    (Spike B put the real device in slot 5 and decoys in the other seven, and
- *    RXMATCH read 5 on all 750 CRC-valid frames - slot 5 rather than slot 0
- *    precisely so a register stuck at zero could not have passed). A search
- *    frame's body is [devnum_hi][dtype][ttype][ctrl][d0..d7]: devnum_lo is not
- *    in it and cannot be read out of it.
- *
- * 3. ONE SWEEP SERVES EVERY SEARCHING CHANNEL. All ANT+ traffic is on RF 57,
- *    network 0, so a single window with every filter armed catches any matching
- *    packet, and the resulting channel ID is offered *in software* to every
- *    channel in RADIANT_SEARCH_MODE_ACQUIRE or _SCAN. Without this, eight
- *    simultaneous searches take ~64 s instead of ~8 s and tools/ant_session.py
- *    fails outright. It is not an optimisation; it is the difference between
- *    working and not.
- *
- * 4. A RECENTLY-SEEN CACHE. 16 entries, 60 s. When a channel starts searching
- *    for something the cache has seen, the set holding that devnum_lo is tried
- *    first, so a dropped sensor is re-acquired in about one dwell (~250 ms)
- *    rather than an average half-sweep (~4 s). Dropout recovery is the thing a
- *    rider actually notices, and it is thirty lines.
+ * 1. CRC is the gate, match count is noise. Spike B measured ~1.4 CRC
+ *    failures/sec on a quiet bench with 8 filters armed and the transmitter
+ *    off, all ~70 dB weaker than the real signal - a CRC_FAIL event never
+ *    contributes to acquisition, only to a noise-floor count.
+ * 2. devnum_lo comes from the filter index, never the body: the matched
+ *    address byte is consumed by hardware and never reaches RAM (Spike B put
+ *    the real device in slot 5, decoys elsewhere, and RXMATCH read 5 on all
+ *    750 CRC-valid frames). A search frame's body has no devnum_lo in it.
+ * 3. One sweep serves every searching channel: all ANT+ traffic is on RF 57,
+ *    so one window's result is offered in software to every ACQUIRE/SCAN
+ *    channel - without this, 8 simultaneous searches take ~64 s not ~8 s.
+ * 4. A 16-entry, 60 s recently-seen cache: a channel searching for something
+ *    the cache holds tries that set first, cutting re-acquisition from an
+ *    average half-sweep (~4 s) to about one dwell (~250 ms).
  *
  * ---------------------------------------------------------------------------
- * Dwell, and why it is one channel period
+ * Dwell = one channel period
  * ---------------------------------------------------------------------------
- * A shorter dwell does not raise the per-transmission acquisition probability:
- * that is 1/n_sets either way, because a short window simply misses more
- * transmissions of the set it is on. A dwell equal to the channel period
- * *guarantees* the sensor transmits at least once while its set is selected, so
- * acquisition is certain within one full sweep rather than merely likely. On
- * nRF that is 32 x 260 ms = 8.3 s worst case, ~4 s average, comfortably inside
- * ANT's 25 s default search timeout.
+ * A shorter dwell doesn't raise per-transmission acquisition probability
+ * (still 1/n_sets); a dwell equal to the channel period guarantees the sensor
+ * transmits at least once while its set is selected, making acquisition
+ * certain within one sweep rather than merely likely (32 x 260 ms = 8.3 s
+ * worst case on nRF, ~4 s average, well inside ANT's 25 s timeout).
  *
- * The dwell is accounted as *accumulated listening time on the current set*,
- * not as one window. That matters because the scheduler owns the radio and may
- * legitimately cut a search window short to service a tracked channel; crediting
- * only what was actually listened to keeps the "certain within one sweep"
- * guarantee under fragmentation instead of quietly degrading it to "likely".
+ * Dwell is accounted as accumulated listening time on the current set, not as
+ * one window, because the scheduler may cut a search window short for a
+ * tracked channel - crediting only actual listening time keeps "certain
+ * within one sweep" true under fragmentation.
  *
  * ---------------------------------------------------------------------------
  * This module never touches the radio
  * ---------------------------------------------------------------------------
- * The HAL permits exactly one operation in flight, so there is exactly one
- * arming authority, and it is radiant_sched.c. radiant_search.c is pure policy: it
- * produces a window request, is told what was armed, and consumes the events.
- * The only HAL function it calls is radiant_radio_caps_get(), once, in
- * radiant_search_init(). That is what lets the scheduler merge, delay, truncate or
- * refuse a search window without this module knowing or caring, and it is why
- * a search suite needs no scheduler.
+ * radiant_sched.c is the sole arming authority (the HAL permits one operation
+ * in flight); radiant_search.c is pure policy - it produces a window request,
+ * is told what was armed, and consumes events. Its only HAL call is
+ * radiant_radio_caps_get(), once, in radiant_search_init(). That's what lets
+ * the scheduler merge/delay/truncate/refuse a window without this module
+ * knowing, and why a search suite needs no scheduler.
  *
- * A consequence worth stating: there is no open-ended window. RADIANT_TIME_NEVER is
- * not a valid window edge, so background scan mode is not "arm once and leave
- * it"; it is the same bounded sweep with no timeout and no channel ever leaving
- * it. Scan mode was designed in rather than bolted on for exactly this reason.
+ * Consequence: no open-ended window. RADIANT_TIME_NEVER isn't a valid window
+ * edge, so background scan mode is the same bounded sweep with no timeout and
+ * no channel ever leaving - designed in, not bolted on.
  */
 
 #ifndef RADIANT_SEARCH_H_
@@ -117,12 +84,8 @@ extern "C" {
 #endif
 
 /* ---------------------------------------------------------------------------
- * Return codes
- *
- * Our own, for the reason the HAL's and radiant_frame.h's are their own: this
- * header must compile standalone against a freestanding toolchain and inside a
- * host unit test with no Zephyr present, and the tests that matter most are the
- * ones asserting *which* rejection happened.
+ * Return codes - our own, freestanding (must compile with no Zephyr present),
+ * because the tests that matter most assert *which* rejection happened.
  * ---------------------------------------------------------------------------
  */
 #define RADIANT_SEARCH_OK        0
@@ -138,118 +101,81 @@ extern "C" {
 				  * radiant_search_init() */
 
 /* ---------------------------------------------------------------------------
- * Sizes
- *
- * All state is caller-provided (struct radiant_search below) and every array in it
- * is fixed. The module allocates nothing: on a dongle there is no allocator
- * worth trusting in an interrupt path, and in CI a leak checker that has
- * nothing to find is one fewer source of noise.
+ * Sizes - all state is caller-provided (struct radiant_search) with fixed
+ * arrays; the module allocates nothing.
  * ---------------------------------------------------------------------------
  */
 
-/* Channels that may be searching at once. 32 is the project ceiling - the
- * serial protocol's burst header uses the low five bits for the channel
- * number - and search is sized for it from the first line rather than
- * retrofitted, because a channel-count assumption threaded through a module is
- * far more expensive to remove later than to size correctly now. */
+/* Channels that may be searching at once. 32 is the project ceiling (serial
+ * protocol's burst header, low five bits), sized in from the start. */
 #ifndef RADIANT_SEARCH_MAX_CHANNELS
 #define RADIANT_SEARCH_MAX_CHANNELS 32
 #endif
 
 /*
- * Storage for one window's filters. Eight is the nRF ceiling (one base address
- * plus eight prefixes) and therefore the largest any planned backend needs.
- *
- * This is a STORAGE bound, not the sweep width. The sweep width is
- * caps.max_filters, clamped to this; a backend advertising more would be
- * honoured up to this number and the sweep would simply be longer. Nothing in
- * this module computes anything from the literal 8.
+ * Storage for one window's filters. Eight is the nRF ceiling (one base
+ * address plus eight prefixes), a STORAGE bound only - the sweep width is
+ * caps.max_filters clamped to this. Nothing here computes from the literal 8.
  */
 #ifndef RADIANT_SEARCH_MAX_FILTERS
 #define RADIANT_SEARCH_MAX_FILTERS 8
 #endif
 
-/* Recently-seen ring. 16 entries covers a dense bench or a crowded gym rack
- * without making the linear scan through it interesting. */
+/* Recently-seen ring. 16 entries covers a dense bench or crowded gym rack. */
 #ifndef RADIANT_SEARCH_SEEN_ENTRIES
 #define RADIANT_SEARCH_SEEN_ENTRIES 16
 #endif
 
-/* Values of devnum_lo the sweep must cover. It is the size of one byte, and it
- * is written as a name so that the arithmetic below reads as coverage rather
- * than as a magic 256. */
+/* Values of devnum_lo the sweep must cover - one byte, named for clarity. */
 #define RADIANT_SEARCH_LO_VALUES 256u
 
-/* Lifetime of a seen entry. 60 s is long enough to cover a sensor that dropped
- * out behind a rider's body and short enough that a stale entry does not steer
- * the sweep at a device that has left the room. */
+/* Lifetime of a seen entry. 60 s covers a sensor dropped behind a rider's
+ * body without steering the sweep at a device that has left the room. */
 #define RADIANT_SEARCH_SEEN_LIFETIME_US 60000000u
 
-/* One ANT+ channel period (8182/32768 s = 249.7 ms) plus guards. See the dwell
- * discussion in the header comment: this is not a tuning parameter with a range
- * of reasonable values, it is "one channel period", and shortening it buys
- * nothing while losing the within-one-sweep guarantee. */
+/* One ANT+ channel period (8182/32768 s = 249.7 ms) plus guards. Not a
+ * tunable: see the dwell discussion above - shortening it loses the
+ * within-one-sweep guarantee for no gain. */
 #define RADIANT_SEARCH_DWELL_DEFAULT_US 260000u
 
 /*
  * THE RESIDUE THAT ENDS A SET. A set with less than this still owed is
- * FINISHED, and without this the sweep can freeze a second way.
+ * FINISHED, or the sweep can freeze a second way: without it, a dwindling
+ * remainder (e.g. 260 ms budget minus two ~94 ms chunks) gets armed as a
+ * chunk of a few hundred microseconds - too short to hear a 4 Hz master and,
+ * on an arbitrated backend, likely refused outright, crediting zero. The set
+ * then sits fractionally short forever, since only a new set resets the
+ * ceiling.
  *
- * The dwell is a budget spent in chunks, and the arming authority sizes the
- * next chunk from radiant_search_dwell_remaining(). Nothing stopped that
- * remainder from becoming arbitrarily small: two or three full chunks credit
- * ~94 ms each against a 260 ms budget, and the third leaves a few hundred
- * microseconds. The next chunk is then armed for a few hundred microseconds -
- * far too short to hear a 4 Hz master, whose period is 250 ms - and on an
- * ARBITRATED backend a chunk that short is very likely to be refused, which
- * credits ZERO. So the set sits fractionally short of complete, never
- * finishes, never advances, and every chunk from then on is the same useless
- * length. THE CHUNK CEILING NEVER RECOVERS, because only a new set resets it.
+ * MEASURED on the nRF54L15 beside a 1 s BLE advertiser: chunks collapsed to
+ * 3378 us, 11339 of them in 55 s, sets_advanced stuck at 1, frames_ok 0 - vs.
+ * immediate acquisition with the advertiser off. MPSL was granting 97.7% of
+ * what was asked; the starvation was self-inflicted. Same freeze as the
+ * dwell-is-a-budget note below, reached by a different route.
  *
- * MEASURED on the nRF54L15 DK beside a 1 s BLE advertiser: chunks collapsed
- * from 94 200 us to 3 378 us, 11 339 of them in 55 s, `sets_advanced` stuck at
- * 1, `frames_ok` 0 - against two chunks and an immediate acquisition on the
- * same image with the advertiser off. MPSL was granting 97.7 % of what was
- * asked for; the starvation was entirely self-inflicted.
- *
- * This is the SAME freeze the note below describes - "set_dwell_us never
- * filled ... THE SWEEP FROZE on whichever set it was on" - reached by a
- * different route, which is why the cure belongs here beside it rather than in
- * the caller that happened to notice.
- *
- * 5 ms is a choice, not a derived constant: comfortably longer than the arm
- * and teardown a chunk costs, and 2 % of the budget, so declaring a set done
- * this much early cannot meaningfully weaken the within-one-sweep guarantee.
+ * 5 ms is a choice: comfortably longer than one chunk's arm/teardown cost,
+ * and only 2% of the budget.
  */
 #define RADIANT_SEARCH_DWELL_EPSILON_US 5000u
 
 /*
- * THE DWELL IS A BUDGET, NOT A SINGLE WINDOW, AND THAT DISTINCTION IS LOAD-
- * BEARING. It is why radiant_search_on_done() credits time rather than counting
- * windows, and getting it wrong cost this project a working dongle.
+ * THE DWELL IS A BUDGET, NOT A SINGLE WINDOW - load-bearing, since
+ * radiant_search_on_done() credits time rather than counting windows.
  *
  * A tracked slave demands the radio every 249.7 ms, so a 260 ms search window
- * can never reach its close: the scheduler preempts it and reports
- * RADIANT_SCHED_DONE_ABORTED. Until 2026-08-10 an abort credited NOTHING, so
- * set_dwell_us never filled, radiant_search_window() never reached
- * select_next_set(), and THE SWEEP FROZE on whichever set it was on. Every
- * device outside that one set was undiscoverable for as long as anything was
- * tracking - which is every real session, and no bench session this project
- * ever ran.
+ * can never reach its close and gets preempted (RADIANT_SCHED_DONE_ABORTED).
+ * Until 2026-08-10 an abort credited nothing, so set_dwell_us never filled and
+ * THE SWEEP FROZE on whichever set it was on - every device outside that set
+ * was undiscoverable while anything was tracking, i.e. every real session.
+ * MEASURED: a -25 dBm transmitter in set 2 was invisible to a 60 s wildcard
+ * scan while one in set 1 was found every time (Zwift saw one sensor only).
+ * Fix: credit the time actually listened to.
  *
- * MEASURED, not reasoned: on 2026-08-10, with one channel tracking, a
- * transmitter at -25 dBm whose devnum_lo put it in set 2 was invisible to a 60 s
- * wildcard scan, while a device in set 1 was found every time. Zwift saw one
- * sensor and no others. The fix is to credit the time actually listened to.
- *
- * CHUNKING THE DWELL WAS TRIED AND REJECTED, and the reason belongs here so it
- * is not tried again. Capping a window at some fraction of the dwell makes more
- * windows complete, which also unfreezes the sweep - but a 50 ms window catches
- * a 4 Hz sensor only when it happens to align with a transmission, which is
- * exactly the failure the full-period dwell exists to prevent. It converts
- * "certain within one sweep" into "likely", silently, for no gain over
- * crediting honestly. Seven tests in test_search.c encode that guarantee and all
- * seven fail if the cap is reintroduced; they are the guard, and they are right.
+ * CHUNKING THE DWELL WAS TRIED AND REJECTED: capping windows at a fraction of
+ * the dwell unfreezes the sweep too, but a short window only catches a 4 Hz
+ * sensor when it happens to align, silently degrading "certain within one
+ * sweep" to "likely" for no gain. Seven tests in test_search.c encode that
+ * guarantee and fail if the cap comes back.
  */
 
 /* ANT's default search timeout: 10 counts of 2.5 s [rev5.1]. */
@@ -265,16 +191,14 @@ extern "C" {
  */
 
 /*
- * ANT's wildcard convention: zero means "any" in each of the three fields
- * [rev5.1]. A pure wildcard search is therefore all three zero, and pairing to
- * a specific strap is device_number set with the other two zero.
+ * ANT's wildcard convention: zero means "any" in each field [rev5.1]. A pure
+ * wildcard search is all three zero; pairing to a specific strap is
+ * device_number set with the other two zero.
  *
- * device_type is compared with the pairing bit masked off, because the pairing
- * bit is a property of the *transmission* rather than of the device type and a
- * search that failed to match a sensor in pairing mode would fail at exactly
- * the moment it is most wanted. The bit is not discarded - the raw on-air byte
- * reaches the caller in radiant_search_result.id.device_type, so a channel that
- * wants to know whether the sensor was pairing can see it.
+ * device_type is compared with the pairing bit masked off, since that bit is
+ * a property of the transmission, not the device type, and a search must not
+ * fail to match a sensor that's actively pairing. The raw byte still reaches
+ * the caller via radiant_search_result.id.device_type.
  */
 struct radiant_search_id_filter {
 	uint16_t device_number; /* 0 = any */
@@ -284,25 +208,18 @@ struct radiant_search_id_filter {
 
 enum radiant_search_mode {
 	/*
-	 * The ANT default. The first matching frame is offered to the channel
-	 * and the channel then LEAVES the search - it has a channel ID now and
-	 * belongs to the scheduler's tracked set. It may call
-	 * radiant_search_begin() again if it loses the sensor, which is the path
-	 * the seen cache makes fast.
+	 * The ANT default. The first matching frame is offered to the channel,
+	 * which then LEAVES the search and joins the scheduler's tracked set.
+	 * May call radiant_search_begin() again on loss - fast via the seen
+	 * cache.
 	 */
 	RADIANT_SEARCH_MODE_ACQUIRE = 0,
 	/*
 	 * Background scan. Every matching frame is reported, the channel never
-	 * leaves, and the sweep runs until something ends it. libant.a
-	 * advertises this mode and never implemented it; radiant_core implements it,
-	 * and the sweep is the natural shape for it because a scanning receiver
-	 * wants to hear *everything* rather than to lock onto one master.
-	 *
-	 * Scan mode is also what the telemetry envelope's sparse nodes require:
-	 * a node that transmits on change rather than periodically cannot be
-	 * tracked with a predicted window, and only a scanning receiver hears
-	 * it. That dependency runs in this direction and is worth knowing when
-	 * changing anything here.
+	 * leaves. libant.a advertised this mode and never implemented it;
+	 * radiant_core does. Also what the telemetry envelope's sparse nodes
+	 * require: a node that transmits on change rather than periodically
+	 * can't be tracked with a predicted window, only heard by scanning.
 	 */
 	RADIANT_SEARCH_MODE_SCAN = 1
 };
@@ -342,18 +259,14 @@ struct radiant_search_result {
 };
 
 /*
- * Delivery.
+ * Delivery. Both callbacks run under the radio-interrupt callback contract
+ * from radiant_radio_hal.h (no blocking, no mutex, no retaining past return,
+ * no proportional work) - acquired() genuinely runs there via
+ * radiant_search_on_rx(); timeout() is thread context via
+ * radiant_search_tick() but follows the same rules so the two need no
+ * separate reasoning.
  *
- * BOTH CALLBACKS RUN IN THE RADIO INTERRUPT. acquired() is called from
- * radiant_search_on_rx(), which the scheduler calls from the HAL's rx callback, and
- * it therefore inherits every MUST NOT in the callback contract in
- * radiant_radio_hal.h: it must not block, must not take a mutex, must not retain
- * anything past its return, and must not do work proportional to anything.
- * Queue it and return. timeout() is called from radiant_search_tick() and is
- * thread context, but writing it to the same rules costs nothing and means the
- * two do not have to be reasoned about separately.
- *
- * result is valid only for the duration of the call. Copy what must outlive it.
+ * result is valid only for the duration of the call.
  */
 struct radiant_search_cbs {
 	void (*acquired)(uint8_t channel, const struct radiant_search_result *r,
@@ -382,25 +295,18 @@ struct radiant_search_cfg {
 	uint32_t seen_lifetime_us;
 
 	/*
-	 * Reject frames weaker than this, for ANT's proximity pairing - "pair
-	 * with the strap I am holding, not the one on the next bike".
-	 * 0 disables it, which is the default and the only setting a normal
-	 * search should use.
-	 *
-	 * This is a threshold on a CRC-VALID frame. It is not, and must never
-	 * become, a substitute for the CRC gate: the noise triggers a 3-byte
-	 * matcher produces sit 70 dB down, so an RSSI floor would filter most
-	 * of them and thereby hide the ones it did not.
+	 * Reject frames weaker than this, for ANT's proximity pairing ("this
+	 * strap, not the one on the next bike"). 0 disables it (default).
+	 * A threshold on a CRC-VALID frame only - must never substitute for the
+	 * CRC gate, since a 3-byte matcher's noise sits 70 dB down and an RSSI
+	 * floor would hide it rather than reject it cleanly.
 	 */
 	int8_t min_rssi_dbm;
 
 	/*
-	 * Ask the backend for RADIANT_RADIO_STATUS_CRC_FAIL events too. Off by
-	 * default: the core does not need them to work, and on a search window
-	 * they arrive at over one a second. Turn them on for the RX_FAIL
-	 * accounting that makes "unexplained loss" a meaningful gate, and for
-	 * the test that proves noise never acquires - which is the single most
-	 * important test in this module and cannot be written without them.
+	 * Ask the backend for CRC_FAIL events too. Off by default (they arrive
+	 * >1/sec on a search window); turn on for RX_FAIL accounting and for
+	 * the test proving noise never acquires.
 	 */
 	bool report_crc_fail;
 };
@@ -419,11 +325,9 @@ struct radiant_search_window {
 	uint8_t                      rf_index;
 
 	/*
-	 * Points INTO the struct radiant_search that produced it, which is what the
-	 * HAL requires: filters must stay valid until the terminal event. It is
-	 * invalidated by the next radiant_search_window() call on the same
-	 * instance, and there can only be one window in flight, so that is not
-	 * a constraint anyone can trip over accidentally.
+	 * Points INTO the struct radiant_search that produced it (HAL requires
+	 * filters stay valid until the terminal event); invalidated by the next
+	 * radiant_search_window() call, and only one window is ever in flight.
 	 */
 	const struct radiant_rx_filter *filters;
 	uint8_t                     n_filters;
@@ -433,11 +337,9 @@ struct radiant_search_window {
 
 	/*
 	 * RADIANT_RX_REPORT_CRC_FAIL if cfg.report_crc_fail. Never
-	 * RADIANT_RX_STOP_ON_FIRST: the HAL forbids it on a search window and the
-	 * reason is this module's whole point - several masters may transmit
-	 * inside one window, and stopping at the first would hand one channel
-	 * an acquisition while silently costing every other searching channel
-	 * the rest of the dwell.
+	 * RADIANT_RX_STOP_ON_FIRST - the HAL forbids it on a search window
+	 * since several masters may transmit inside one, and stopping at the
+	 * first would cost every other searching channel the rest of the dwell.
 	 */
 	uint32_t flags;
 
@@ -545,23 +447,18 @@ struct radiant_search {
  */
 
 /*
- * Zero the instance and compute the sweep geometry from radiant_radio_caps_get().
+ * Zero the instance and compute the sweep geometry from
+ * radiant_radio_caps_get(). cbs may be NULL, or either function in it, for a
+ * caller that only reads counters.
  *
- * cbs may be NULL, and either function in it may be NULL, for a caller that
- * only reads the counters.
+ * Caps are read ONCE (the HAL says the pointer is static for the program's
+ * lifetime and capabilities don't change at runtime); a test wanting RAIL
+ * geometry calls fake_radio_caps_preset_rail() before this, not after.
  *
- * Caps are read ONCE. The HAL says the caps pointer is static for the lifetime
- * of the program and no backend changes its own capabilities at run time, so a
- * snapshot is honest; a test that wants the RAIL geometry calls
- * fake_radio_caps_preset_rail() before this, not after.
- *
- * RADIANT_SEARCH_ENOTSUP if caps.filter_wildcard_dev is set. That flag says the
- * backend can match "any device number" in one filter, which would collapse the
- * sweep to a single window - but struct radiant_rx_filter has no field in which to
- * ASK for a wildcard, so there is nothing this module could arm. Failing loudly
- * is the correct response to a capability the contract cannot express: the fix
- * is a HAL change, and a policy module quietly ignoring the flag would hide the
- * need for it. No planned backend sets it.
+ * RADIANT_SEARCH_ENOTSUP if caps.filter_wildcard_dev is set: that flag would
+ * collapse the sweep to one window, but struct radiant_rx_filter has no field
+ * to ask for a wildcard, so failing loudly is correct - the fix is a HAL
+ * change. No planned backend sets it.
  */
 int radiant_search_init(struct radiant_search *s, const struct radiant_search_cfg *cfg,
 		    const struct radiant_search_cbs *cbs, void *user);
@@ -579,23 +476,17 @@ uint16_t radiant_search_sets(const struct radiant_search *s);
 uint64_t radiant_search_sweep_us(const struct radiant_search *s);
 
 /*
- * Has the selected set had its whole dwell?
+ * Has the selected set had its whole dwell? Pure read, safe from a radio
+ * callback - the arming authority calls it on every chunk completion to
+ * decide whether the current request is still right to re-arm as-is (false)
+ * or a new set must come from radiant_search_window() (true, thread context
+ * only).
  *
- * Pure read, safe from a radio callback, and that is the point of it. The
- * arming authority hands the sweep the radio a chunk at a time and gets a
- * completion for each chunk; the question it has to answer there is whether the
- * request in its slot is still the right thing to listen to. It is, for as long
- * as this returns false - the filters describe ONE address set and the set is
- * not finished with. Only when it returns true does the next window have to
- * come from radiant_search_window(), which is the only function that may choose
- * a new set and the only one that must run in thread context.
- *
- * Answering it any other way costs a round trip through the caller's own pump
- * per chunk. Measured on the nRF54L15 with one channel tracking at 4 Hz: 7.6
- * windows a second against 38.5 housekeeping passes, sets advancing at 2.5/s
- * against a nominal 3.85/s, and a full sweep taking 12.8 s instead of 8.3 s -
- * with no preemption and nothing missed. The radio was free; the sweep was
- * waiting to be told to use it.
+ * MEASURED cost of getting this wrong (answering via a round trip through the
+ * caller's pump instead): on the nRF54L15 with one 4 Hz tracked channel, 7.6
+ * windows/s against 38.5 housekeeping passes, sets advancing at 2.5/s instead
+ * of 3.85/s, full sweep 12.8 s instead of 8.3 s - radio idle, sweep waiting to
+ * be told to use it.
  */
 bool radiant_search_set_complete(const struct radiant_search *s);
 
@@ -616,25 +507,21 @@ uint32_t radiant_search_dwell_remaining(const struct radiant_search *s);
  */
 
 /*
- * Put a channel into the search.
- *
- * timeout_us is RADIANT_SEARCH_TIMEOUT_NONE for no expiry, or a duration from now;
- * RADIANT_SEARCH_TIMEOUT_DEFAULT_US is the 25 s the protocol defaults to. The
- * deadline is only examined by radiant_search_tick().
+ * Put a channel into the search. timeout_us is RADIANT_SEARCH_TIMEOUT_NONE
+ * for no expiry, or a duration from now; the deadline is examined only by
+ * radiant_search_tick().
  *
  * If the seen cache holds a device matching want, the set containing its
- * devnum_lo is queued ahead of the round-robin cursor. That is the whole
- * mechanism of fast re-acquisition, and it is why a channel that loses a sensor
- * should call this again rather than the caller inventing a retry path.
+ * devnum_lo is queued ahead of the round-robin cursor - the whole mechanism
+ * of fast re-acquisition, so a channel losing a sensor should just call this
+ * again.
  *
- * RADIANT_SEARCH_EINVAL for a null filter or an unknown mode; RADIANT_SEARCH_ENOSPC for
- * a channel number this build was not sized for (see RADIANT_SEARCH_MAX_CHANNELS).
+ * RADIANT_SEARCH_EINVAL for a null filter or unknown mode;
+ * RADIANT_SEARCH_ENOSPC for an out-of-range channel.
  *
  * Re-issuing for a channel already searching REPLACES its filter, mode and
- * deadline in place rather than failing. That is what a host changing its mind
- * looks like, and a channel state machine re-entering SEARCHING after losing a
- * sensor takes the same path - which is exactly the case the cache steering
- * below is for.
+ * deadline rather than failing - what a host changing its mind looks like,
+ * and the same path a re-SEARCHING state machine takes.
  */
 int radiant_search_begin(struct radiant_search *s, uint8_t channel,
 		     enum radiant_search_mode mode,
@@ -749,29 +636,22 @@ void radiant_search_on_rx_indexed(struct radiant_search *s, const struct radiant
  * The window in flight has finished. Credits the time actually spent listening
  * on the current set, which is what the dwell is accounted in.
  *
- * There are exactly three outcomes and they are not interchangeable:
+ * Three outcomes, not interchangeable:
+ *   ran_to_close       reached its close - credit the whole span.
+ *   opened, cut short  listened t_open..ended_at, then lost the radio -
+ *                      credit up to ended_at.
+ *   never opened       credit NOTHING (never armed/refused).
  *
- *   ran_to_close        the window reached its close. Credit the whole span.
- *   opened, cut short   it listened from t_open until ended_at and the radio
- *                       was then taken away. Credit up to ended_at.
- *   never opened        credit NOTHING. A request that was never armed, or was
- *                       refused, listened for no time at all, and crediting a
- *                       window that never existed would skip a set silently.
+ * The middle case is the one that matters - it used to credit zero, which
+ * under a tracked channel (every search window cut short) meant the dwell
+ * never filled and the sweep never advanced (see the dwell-is-a-budget
+ * comment above).
  *
- * THE MIDDLE CASE IS THE ONE THAT MATTERS AND IT USED TO CREDIT ZERO. Under a
- * tracked channel every search window is cut short, so zero credit meant the
- * dwell never filled and the sweep never advanced past its current set - see
- * the dwell-is-a-budget comment above for the measurement that found it. Crediting
- * what was really listened to is what makes this module's own claim - "accounted
- * as accumulated listening time on the current set", in the header comment -
- * true under fragmentation rather than merely intended.
+ * ended_at is ignored except in the middle case, and clamped to
+ * [t_open, t_close] so a slightly-late clock read cannot over-credit.
  *
- * ended_at is ignored unless the window opened and was cut short. It is clamped
- * to [t_open, t_close], so a caller that passes a clock reading taken slightly
- * after the abort cannot over-credit.
- *
- * Called for you by radiant_search_on_rx() on a terminal event; called directly
- * by a scheduler whose completion notification is not a HAL event.
+ * Called for you by radiant_search_on_rx() on a terminal event; call
+ * directly if the scheduler's completion isn't a HAL event.
  */
 void radiant_search_on_done(struct radiant_search *s, bool ran_to_close,
 			bool opened, radiant_time_t ended_at);
@@ -785,29 +665,24 @@ void radiant_search_on_done(struct radiant_search *s, bool ran_to_close,
 void radiant_search_tick(struct radiant_search *s, radiant_time_t now);
 
 /*
- * A search window was refused by an arbiter rather than by the air - RX
- * radiant_search_on_done()'s "never opened" case. Nothing was learned about
- * whether the wanted device is out there, which is also why on_done() credits
- * it zero dwell; ch->deadline is a WALL-CLOCK bound, though, and keeps
- * counting down regardless of why the window never opened.
+ * A search window was refused by an arbiter rather than by the air -
+ * radiant_search_on_done()'s "never opened" case, credited zero dwell.
+ * ch->deadline is a WALL-CLOCK bound though, and keeps counting down
+ * regardless of why the window never opened.
  *
- * Left alone, an ACQUIRE search with a finite timeout expires on schedule even
- * when nearly every window was denied - the caller's timeout measures "how
- * long have we been trying", the arbiter turns most of that into "how long
- * were we refused", and the two get silently conflated. Measured beside a
- * busy BLE advertiser: a channel armed thirteen times, denied twelve, aborted
- * once, and then simply stopped - not because the device was absent, but
- * because wall-clock time the arbiter owned had been charged against a budget
- * meant to measure listening time.
+ * Left alone, an ACQUIRE search with a finite timeout expires on schedule
+ * even when nearly every window was denied, conflating "how long have we
+ * been trying" with "how long were we refused". MEASURED beside a busy BLE
+ * advertiser: a channel armed 13 times, denied 12, aborted once, then simply
+ * stopped - not because the device was absent, but because arbiter-owned
+ * wall-clock time had been charged against a listening-time budget.
  *
- * The fix is the same shape as radiant_channel.c's guard: extend the ceiling
- * by exactly what was taken from it. Every ACTIVE channel with a finite
- * deadline - not only the one carrying the sweep, since one search window
- * denied is time every searching channel lost - has its deadline pushed out
- * by window_us, which the caller sizes to whatever the refused attempt
- * actually cost in wall clock (radiant_core/src/radiant_api.c uses the
- * housekeeping interval that drives the retry). RADIANT_TIME_NEVER is left
- * untouched: there is no ceiling to protect.
+ * Fix, same shape as radiant_channel.c's guard: push every ACTIVE channel's
+ * finite deadline out by window_us (one denied window is time every
+ * searching channel lost, not just the one carrying the sweep). The caller
+ * sizes window_us to what the refused attempt cost in wall clock
+ * (radiant_api.c uses the housekeeping interval driving the retry).
+ * RADIANT_TIME_NEVER is untouched - no ceiling to protect.
  */
 void radiant_search_note_denied(struct radiant_search *s, uint32_t window_us);
 

@@ -75,8 +75,8 @@ endfunction()
 # It supplies both the ANT headers (include/, init/) and the prebuilt libant.a.
 # Only the sdk_ant backend needs it; core and stub builds never look at it.
 #
-# The default is resolved rather than hardcoded, because sdk-ant is a private
-# adopter-gated checkout that lands wherever its owner put it:
+# The default is resolved rather than hardcoded, because sdk-ant is a private,
+# non-redistributable checkout that lands wherever its owner put it:
 #   1. $ENV{SDK_ANT_DIR} if the environment names one. This is the per-machine
 #      setting - set it once in a shell profile and every build in the tree
 #      picks it up, including sim/ and any out-of-tree consumer.

@@ -7,46 +7,40 @@
  * docs/ant-radio-link.md and the measurements in docs/spike-a-results.md, plus
  * public nRF52840/nRF54L15 datasheet figures and public Silicon Labs RAIL
  * documentation for the capability presets. Nothing here derives from sdk-ant,
- * from libant.a, or from any adopter-gated ANT+ device profile document.
+ * from libant.a, or from any ANT+ device profile document.
  *
  * ---------------------------------------------------------------------------
  * The shape of it
  * ---------------------------------------------------------------------------
- * This file defines every function radiant_radio_hal.h declares, so the unit-test
- * binary links it in place of a backend. See fake_radio.h for the control
- * surface a test drives it with and for why the mock is deliberately strict.
+ * Defines every function radiant_radio_hal.h declares, so the unit-test binary
+ * links it in place of a backend. See fake_radio.h for the control surface a
+ * test drives it with and for why the mock is deliberately strict.
  *
- * Three design choices are worth stating here, because they are what make the
- * mock worth trusting rather than merely convenient.
+ * Three design choices matter here:
  *
- * 1. IT MODELS THE AIR, NOT THE API. A queued frame is a byte stream that
- *    exists at one instant. Whether the core hears it depends on whether a
- *    window was open, whether one of the window's filters matched its leading
- *    bytes, and whether the body that remains after the address agrees with
- *    the window's length rule. Nothing is "handed to the next rx call". The
- *    consequence is that "the window closed with nothing in it" is the default
- *    outcome of a mistake rather than something a test has to arrange, which
- *    is the same way the bench behaves.
+ * 1. IT MODELS THE AIR, NOT THE API. A queued frame is a byte stream at one
+ *    instant. Whether the core hears it depends on whether a window was open,
+ *    whether a filter matched its leading bytes, and whether the remaining
+ *    body agrees with the window's length rule - nothing is "handed to the
+ *    next rx call". "The window closed with nothing in it" is the default
+ *    outcome of a mistake, as on the bench.
  *
  * 2. THE ADDRESS/BODY SPLIT BELONGS TO THE RECEIVER. Spike A measured the same
- *    frame arriving as a 5-byte address plus a 10-byte body under the tracking
- *    configuration and as a 3-byte address plus a 12-byte body under the
- *    search configuration. Storing one byte stream and cutting it at
- *    fmt->addr_len reproduces both from one queued frame, which is exactly the
- *    behaviour radiant_search.c depends on when it reads devnum_hi and the device
- *    type out of the body of a frame whose devnum_lo it recovered from the
- *    filter index.
+ *    frame as a 5-byte address + 10-byte body under tracking config and a
+ *    3-byte address + 12-byte body under search config. Storing one byte
+ *    stream and cutting it at fmt->addr_len reproduces both from one queued
+ *    frame, matching what radiant_search.c depends on when recovering devnum_hi
+ *    and device type from the body.
  *
- * 3. NO WALL CLOCK, ANYWHERE. radiant_radio_now() reads a variable. It changes
- *    only inside fake_radio_advance*() / fake_radio_step(), and while a
- *    callback runs it reads that event's own instant. A test that has to sleep
- *    to make something happen is a test that will flake in CI.
+ * 3. NO WALL CLOCK, ANYWHERE. radiant_radio_now() reads a variable that
+ *    changes only inside fake_radio_advance*() / fake_radio_step(); during a
+ *    callback it reads that event's own instant. A test that sleeps to make
+ *    something happen is a test that flakes.
  *
- * There is no dynamic allocation and no synchronisation: the test thread is
- * the only thread, and "interrupt context" is modelled by a flag that the
- * entry points check. That flag is not decoration - the HAL's callback
- * contract lists things a callback must not do, and a mock that allows them
- * trains six core modules to write code that deadlocks on real silicon.
+ * No dynamic allocation, no synchronisation: the test thread is the only
+ * thread, and "interrupt context" is a flag the entry points check. That flag
+ * enforces the HAL callback contract's MUST NOTs, so the mock doesn't train
+ * core modules to write code that deadlocks on real silicon.
  */
 
 #include <stdbool.h>
@@ -104,17 +98,14 @@ struct cur_op {
 	 * energy detect
 	 *
 	 * ed_done counts indices already reported, so the next dwell is due at
-	 * t_start + (ed_done + 1) * dwell. Counting rather than holding a
-	 * cursor keeps a preempted sweep honest: the arm record says what was
-	 * asked for and ed_done says how far it actually got, and a test can
-	 * assert on the difference.
+	 * t_start + (ed_done + 1) * dwell; a test can assert on the difference
+	 * between what was asked for and how far a preempted sweep got.
 	 *
 	 * Every index takes the WHOLE dwell here, unlike the nRF backend which
-	 * leaves early once its sample burst is done. That is the right
-	 * modelling choice for a mock: the HAL permits finishing early and
-	 * requires never overrunning, so the mock should sit exactly on the
-	 * bound a scheduler sized its gap against. A mock that finished early
-	 * would hide a scheduler that had budgeted too little.
+	 * leaves early once its sample burst is done: the HAL permits
+	 * finishing early but requires never overrunning, so the mock sits on
+	 * the bound a scheduler sized its gap against, rather than hiding an
+	 * under-budgeted scheduler.
 	 */
 	uint8_t    ed_lo;
 	uint8_t    ed_hi;
@@ -158,22 +149,17 @@ struct fake_state {
 	int32_t  tx_offset_us;
 	int8_t   default_rssi;
 
-	/*
-	 * The noise floor this mock reports on a window that heard nothing.
-	 *
-	 * Not in g.cur, and the reason is a trap rather than a preference:
-	 * end_op() calls clear_cur() BEFORE delivering the terminal event, so
-	 * anything kept there is already gone by the time the event that needs
-	 * it is built. `rx_any` lives here for the same reason and is reset by
-	 * the rx arm rather than by the window's end.
-	 */
+	/* The noise floor this mock reports on a window that heard nothing.
+	 * Not in g.cur: end_op() calls clear_cur() BEFORE delivering the
+	 * terminal event, so anything kept there is gone by the time it's
+	 * needed. `rx_any` lives here for the same reason, reset by the rx arm
+	 * rather than by the window's end. */
 	bool     noise_set;
 	int8_t   noise_dbm;
 	bool     rx_any;
 
-	/* What each RF index sounds like to an energy-detect dwell. Per index
-	 * rather than one figure, because the only interesting thing a
-	 * channel-quality map does is tell one index from another. */
+	/* What each RF index sounds like to an energy-detect dwell, per index
+	 * so a channel-quality map can tell one index from another. */
 	int8_t   ed_min[RADIANT_RF_INDEX_MAX + 1];
 	int8_t   ed_mean[RADIANT_RF_INDEX_MAX + 1];
 	bool     ed_set[RADIANT_RF_INDEX_MAX + 1];
@@ -202,36 +188,27 @@ struct fake_state {
 	struct fake_radio_stats stats;
 
 	/* The event body the callback sees. Poisoned the moment the callback
-	 * returns, so retaining the pointer - which the HAL forbids, because on
-	 * hardware it is a DMA buffer - produces visible garbage rather than a
-	 * test that passes by luck. */
+	 * returns, so retaining the pointer (forbidden - it's a DMA buffer on
+	 * hardware) produces visible garbage rather than passing by luck. */
 	uint8_t body_buf[RADIANT_RADIO_BODY_MAX];
 };
 
 static struct fake_state g;
 
 /*
- * The default presets advertise 1 Mbps GFSK only, and that stays true now that
- * the coded PHY exists.
- *
- * IT IS A DEFAULT, NOT A LIMITATION OF THE MOCK. Every existing suite was
- * written against a single-PHY backend and asserts window arithmetic that a
- * non-zero phy_switch_us would move; making both presets dual-PHY would have
- * changed numbers in test_sched.c and test_search.c that have nothing to do
- * with this phase, which is how a phase acquires unrelated failures and the
- * next person learns to re-baseline instead of read.
- *
- * A test that wants a two-PHY backend says so, with fake_radio_set_phys() and
- * one of the arrays below. That is the same shape as fake_radio_caps_preset_*:
- * the mock can model it, and a suite opts in.
+ * The default presets advertise 1 Mbps GFSK only. This is a default, not a
+ * limitation: every existing suite asserts window arithmetic that a non-zero
+ * phy_switch_us would move, so making both presets dual-PHY would break
+ * test_sched.c/test_search.c numbers unrelated to this phase. A test that
+ * wants two PHYs opts in via fake_radio_set_phys() and the arrays below.
  */
 static const enum radiant_phy fake_phys_1m[] = { RADIANT_PHY_1M_GFSK };
 const enum radiant_phy fake_phys_1m_lr[] = {
 	RADIANT_PHY_1M_GFSK,
 	RADIANT_PHY_LR_CODED,
 };
-/* sizeof rather than ARRAY_SIZE: this file includes no Zephyr header, which is
- * what lets the mock be built by anything with a C compiler. */
+/* sizeof rather than ARRAY_SIZE: this file includes no Zephyr header, so it
+ * can be built by anything with a C compiler. */
 const uint8_t fake_phys_1m_lr_count =
 	(uint8_t)(sizeof(fake_phys_1m_lr) / sizeof(fake_phys_1m_lr[0]));
 
@@ -312,15 +289,12 @@ const struct fake_radio_viol_rec *fake_radio_viol(uint32_t index)
 
 /*
  * Every HAL entry point calls this first. Inside a callback it counts, and
- * past the budget it records a violation once.
- *
- * The budget is a heuristic and is documented as one: "do work proportional to
- * anything - queue it and return" is not mechanically checkable, but a
- * callback that loops over 32 channels calling radiant_radio_now() is doing
- * precisely that, and the count catches it. Blocking, sleeping and taking a
- * mutex are not checkable here at all - there is nothing to block on in a
- * single-threaded test - which is why fake_radio_in_callback() is public: core
- * code that has any doubt can assert on it directly.
+ * past the budget it records a violation once. This is a heuristic - "do work
+ * proportional to anything, queue it and return" isn't mechanically
+ * checkable, but a callback looping over 32 channels calling
+ * radiant_radio_now() trips the count. Blocking/sleeping/mutexes aren't
+ * checkable here at all (nothing to block on single-threaded), which is why
+ * fake_radio_in_callback() is public for core code to assert on directly.
  */
 static void isr_tick(void)
 {
@@ -362,22 +336,16 @@ void fake_radio_set_isr_call_budget(uint16_t calls)
  */
 
 /*
- * The presets.
+ * The presets. Only three numbers in each are documented facts rather than
+ * placeholders - max_filters, addr_len_hw_max, crc_in_hw (docs/backends.md,
+ * "the caps table"). nRF: 8/5/true (one base + eight prefixes, five-byte
+ * matcher, CRC engine covers the address). RAIL: 2/4/false (two runtime sync
+ * words, four-byte matcher, CRC engine can't fold in a per-channel sync word
+ * so the backend verifies in software).
  *
- * Only three numbers in each are documented facts rather than plausible
- * placeholders, and they are the three the portability argument rests on:
- * max_filters, addr_len_hw_max and crc_in_hw (docs/backends.md, "the caps
- * table"). The nRF row is 8 / 5 / true - one base address plus eight prefixes,
- * a five-byte matcher, a CRC engine that can be made to cover the address. The
- * RAIL row is 2 / 4 / false - two runtime sync words, a four-byte matcher, and
- * a CRC engine that cannot fold in a sync word that varies per channel, so the
- * backend verifies in software.
- *
- * The timing figures are deliberately non-zero and deliberately different
- * between the two presets. They are not measurements and must not be quoted as
- * any part's real behaviour - Spike A did not timestamp anything and the
- * t_sync calibration constant remains unmeasured. Their only job is to make a
- * core module that hardcoded one backend's constant fail under the other.
+ * The timing figures are deliberately non-zero and different between presets
+ * but are NOT measurements - their only job is to fail a core module that
+ * hardcoded one backend's constant under the other.
  */
 void fake_radio_caps_preset_nrf(void)
 {
@@ -387,20 +355,14 @@ void fake_radio_caps_preset_nrf(void)
 	c->name = "fake:nrf";
 	c->max_filters = 8u;
 	/*
-	 * Two, and this is the fourth documented fact rather than a placeholder.
-	 *
-	 * The nRF's eight logical addresses are one BASE0+AP0 and seven
-	 * BASE1+AP1..AP7, so a window carries at most two distinct bases. On the
-	 * 3-byte search format the base is [A6 C5] and every filter shares it;
-	 * on the 5-byte tracking format the base carries the device number, so
-	 * two tracked channels can share a window only if they are the same
-	 * sensor.
-	 *
-	 * Modelling it here is the point: this preset used to be 8 with no base
-	 * model at all, which is exactly why CI could not see that the scheduler
-	 * merged eight tracked channels into a window the real backend refuses.
-	 * A mock that is more capable than the hardware is a mock that certifies
-	 * bugs.
+	 * Two, a fourth documented fact rather than a placeholder: the nRF's
+	 * eight logical addresses are one BASE0+AP0 and seven BASE1+AP1..AP7,
+	 * so a window carries at most two distinct bases. On the 3-byte search
+	 * format the base [A6 C5] is shared by every filter; on the 5-byte
+	 * tracking format the base carries the device number, so two tracked
+	 * channels share a window only if they're the same sensor. Modelling
+	 * this matters: an unmodelled 8 would let CI miss a scheduler merging
+	 * eight tracked channels into a window the real backend refuses.
 	 */
 	c->max_addr_groups = 2u;
 	c->filter_wildcard_dev = false;
@@ -419,12 +381,8 @@ void fake_radio_caps_preset_nrf(void)
 	c->crc_in_hw = true;
 	/* RXCRC holds the received CRC, not just a pass/fail bit. */
 	c->has_rx_crc = true;
-	/*
-	 * True here and false in the RAIL preset below, on exactly the same
-	 * terms as has_rx_crc: the two presets have to differ on it, or
-	 * "backends without it return RADIANT_RADIO_ENOTSUP" is a rule no suite
-	 * can exercise. This is the backend that has it.
-	 */
+	/* True here, false in the RAIL preset below: the two presets must
+	 * differ or "backends without it return ENOTSUP" is unexercisable. */
 	c->has_ed_scan = true;
 	c->tx_power_min_dbm = -40;
 	c->tx_power_max_dbm = 8;
@@ -437,17 +395,11 @@ void fake_radio_caps_preset_rail(void)
 	memset(c, 0, sizeof(*c));
 	c->name = "fake:rail";
 	c->max_filters = 2u;
-	/*
-	 * Two, and equal to max_filters here rather than smaller: RAIL's two
-	 * runtime sync words are two INDEPENDENT full addresses, with no shared
-	 * base register between them, so the group constraint never binds.
-	 *
-	 * That is the more useful setting to have in a preset, for the same
-	 * reason has_rx_crc is false below. The two presets now differ on
-	 * whether max_addr_groups equals max_filters, so a core module that
-	 * conflated the two numbers fails under exactly one of them - which is
-	 * what a portability preset is for.
-	 */
+	/* Equal to max_filters here: RAIL's two runtime sync words are two
+	 * INDEPENDENT full addresses with no shared base register, so the
+	 * group constraint never binds. The presets differ on whether
+	 * max_addr_groups equals max_filters, so a module conflating the two
+	 * fails under exactly one. */
 	c->max_addr_groups = 2u;
 	c->filter_wildcard_dev = false;
 	c->addr_len_hw_max = 4u;
@@ -466,22 +418,12 @@ void fake_radio_caps_preset_rail(void)
 	c->has_sync_timestamp = true;
 	c->has_rssi = true;
 	c->crc_in_hw = false;
-	/*
-	 * False, and it is the more useful of the two settings to have in a
-	 * preset: the core's single-bit repair has to be provably inert on a
-	 * backend that reports only a pass/fail bit, and a test needs a
-	 * capability block that says so to prove it. Whether RAIL itself could
-	 * surface a received CRC is not the point - this preset's job here is
-	 * to be the backend that does not.
-	 */
+	/* False: the core's single-bit repair must be provably inert on a
+	 * backend reporting only pass/fail. This preset is that backend. */
 	c->has_rx_crc = false;
-	/*
-	 * False, and it is the useful setting to have in one of the two presets
-	 * rather than a claim about RAIL. The HAL's rule is that a backend
-	 * without energy detect refuses every arm with RADIANT_RADIO_ENOTSUP
-	 * and that core policy reads the capability rather than trying; this
-	 * preset is what makes both halves of that assertable.
-	 */
+	/* False: makes assertable the HAL rule that a backend without energy
+	 * detect refuses every arm with ENOTSUP and core policy checks the
+	 * capability rather than trying. */
 	c->has_ed_scan = false;
 	c->tx_power_min_dbm = -26;
 	c->tx_power_max_dbm = 20;
@@ -732,28 +674,18 @@ static void deliver_rx(uint32_t op, enum radiant_radio_status status, bool termi
 	evt.has_rssi = frame && g.caps.has_rssi;
 	evt.rssi_dbm = evt.has_rssi ? rssi_dbm : 0;
 
-	/*
-	 * The received CRC, on CRC_FAIL only and only if the backend claims to
-	 * keep one. All three conditions are enforced here rather than left to
-	 * the caller, because that is what the HAL promises the core: a core
-	 * that reads crc_rx on an OK event, or on a backend without the
-	 * capability, must find it absent in the mock exactly as it would on
-	 * hardware. A mock that was more generous than the contract is a mock
-	 * that lets a contract violation pass CI.
-	 */
+	/* The received CRC, on CRC_FAIL only and only if the backend claims to
+	 * keep one. Enforced here rather than left to the caller, so a core
+	 * module reading crc_rx where it shouldn't finds it absent exactly as
+	 * it would on hardware. */
 	evt.has_crc_rx = (status == RADIANT_RADIO_STATUS_CRC_FAIL) &&
 			 g.caps.has_rx_crc && crc_rx_set;
 	evt.crc_rx = evt.has_crc_rx ? crc_rx : 0u;
 
-	/*
-	 * The noise floor, on the same terms the HAL states and the nRF backend
-	 * implements: a terminal TIMEOUT for a window that delivered nothing.
-	 *
-	 * The mock enforces the "delivered nothing" half itself rather than
-	 * trusting the test to set it up, because that is the condition a core
-	 * module could get wrong in a way no assertion would catch - it would
-	 * simply be measuring transmitters and calling them noise.
-	 */
+	/* The noise floor: a terminal TIMEOUT for a window that delivered
+	 * nothing. The mock enforces "delivered nothing" itself rather than
+	 * trusting the test to set it up, since a core module getting this
+	 * wrong would measure transmitters and call them noise. */
 	if (status == RADIANT_RADIO_STATUS_TIMEOUT && terminal &&
 	    g.noise_set && !g.rx_any) {
 		evt.has_noise = true;
@@ -847,17 +779,11 @@ static void deliver_tx(uint32_t op, enum radiant_radio_status status,
 	run_deferred();
 }
 
-/*
- * One energy-detect event.
- *
- * `terminal` selects which of the two shapes the HAL defines this is: an OK
- * measurement for one index, or the end of the operation carrying nothing. The
- * mock enforces the split itself - a terminal event's measurement fields are
- * left zero here rather than by the caller - for the same reason it enforces
- * the noise floor's eligibility: it is a condition a core module could get
- * wrong in a way no assertion would catch, because a stale number reads like a
- * fresh one.
- */
+/* One energy-detect event. `terminal` selects the HAL's two shapes: an OK
+ * measurement for one index, or the operation's end carrying nothing. The
+ * mock enforces the split itself (terminal fields zeroed here, not by the
+ * caller), since a stale number reading like a fresh one is a bug no
+ * assertion would catch. */
 static void deliver_ed(uint32_t op, enum radiant_radio_status status,
 		       bool terminal, uint8_t rf_index, int8_t min_dbm,
 		       int8_t mean_dbm, uint16_t samples)
@@ -938,13 +864,9 @@ static void clear_cur(void)
 	g.cur.arm_idx = -1;
 }
 
-/*
- * The slot is freed *before* the terminal callback runs. That is not a
- * shortcut: the HAL says chaining is done by arming the next operation from
- * inside the completion callback, so a mock that still held the slot would
- * return RADIANT_RADIO_EBUSY for the one call pattern the contract exists to
- * permit.
- */
+/* The slot is freed *before* the terminal callback runs: chaining is done by
+ * arming the next operation from inside the completion callback, so holding
+ * the slot would EBUSY the one call pattern the contract permits. */
 static void end_op(enum radiant_radio_status status, radiant_time_t t_sync)
 {
 	enum fake_radio_arm_kind kind = g.cur.kind;
@@ -1254,13 +1176,10 @@ enum air_fit {
 
 /*
  * Cut the queued byte stream at fmt->addr_len and check what remains against
- * the window's length rule.
- *
- * A mismatch is a CRC failure rather than an error: a receiver configured for
- * the wrong body length reads the wrong bytes as its CRC, and that is what
- * comes out. Modelling it that way is what makes a len_bias mistake in the
- * frame layer show up as loss in a scheduler test rather than as nothing at
- * all.
+ * the window's length rule. A mismatch is a CRC failure, not an error: a
+ * receiver configured for the wrong body length reads the wrong bytes as its
+ * CRC. This makes a len_bias mistake in the frame layer show up as loss in a
+ * scheduler test rather than as nothing at all.
  */
 static enum air_fit air_body(const struct fake_radio_air *f,
 			     const uint8_t **body, uint8_t *body_len)
@@ -1341,47 +1260,22 @@ static bool next_due(radiant_time_t *t_out, enum due_kind *kind_out,
 	*air_out = -1;
 
 	/*
-	 * A DENIED OPERATION NEVER OCCUPIES THE RADIO, AND MODELLING THAT IS
-	 * NOT A DETAIL.
+	 * A denied operation never occupies the radio, and that matters: every
+	 * other forced terminal replaces the status of an operation that
+	 * genuinely ran (a FAILED window held the receiver its whole duration),
+	 * but DENIED means the request was accepted and never granted - the
+	 * window never opened. Holding the radio until t_close anyway would let
+	 * the scheduler wrongly fail to arm something else in that span, and a
+	 * slot whose deadline falls there would expire as a manufactured MISS
+	 * rather than a real one.
 	 *
-	 * Every other forced terminal replaces the STATUS of an operation that
-	 * genuinely ran: a FAILED window still held the receiver for its whole
-	 * duration, because that is what "the backend could not complete it"
-	 * means. RADIANT_RADIO_STATUS_DENIED means the opposite - the request
-	 * was accepted and never granted, the window did not open, and not a
-	 * bit of preamble was lost. A mock that held the radio until t_close
-	 * anyway would be modelling something no arbiter does.
+	 * Ends at t_open, not at the arm: a real denial is LATE (MPSL delivers
+	 * SIGNAL_BLOCKED at or after the requested start), so t_open is the
+	 * earliest a denial can honestly arrive while still occupying the
+	 * core's slot for the same span it would on hardware.
 	 *
-	 * It is not a cosmetic difference. With the radio held for the full
-	 * window, the scheduler cannot arm anything else inside it, and a slot
-	 * whose own deadline falls in that span would expire as MISSED - so a
-	 * run of denials could manufacture misses out of the mock rather than
-	 * out of the code under test. That is exactly the confusion between "the
-	 * arbiter took our slot" and "the sensor was not there" that the whole
-	 * denial signal exists to prevent, reproduced inside the instrument that
-	 * is supposed to detect it.
-	 *
-	 * NO SUCH MISS HAS BEEN OBSERVED, and this is here on the strength of
-	 * the model rather than of a bug it fixed:
-	 * test_a_quiet_tracked_channel_misses_the_same_either_way compares a
-	 * twelve-period run with every window denied against one with none, and
-	 * the counts were already equal before this. It is kept because a mock
-	 * that holds the radio for an operation the arbiter refused is simply
-	 * describing something that does not happen, and the next test to lean
-	 * on it would have no warning.
-	 *
-	 * ENDED AT t_open RATHER THAN AT THE ARM, and the microsecond matters:
-	 * a real denial is LATE. MPSL delivers SIGNAL_BLOCKED from
-	 * mpsl_low_priority_process() at or after the start that was requested,
-	 * which is why the front end needs a deadline timer of its own. Ending
-	 * at the instant the window would have opened is the earliest a denial
-	 * can honestly arrive, and it keeps the core's own slot occupied for
-	 * the same span it would be on hardware.
-	 *
-	 * TRANSMIT NEEDS NOTHING HERE and has no case below. A transmit is an
-	 * instant rather than a span - it already ends at t_fire - so there is
-	 * no occupancy to give back and the ordinary path is already the right
-	 * model of a denied one.
+	 * Transmit needs no case below: it's an instant (ends at t_fire
+	 * already), so the ordinary path already models a denied one.
 	 */
 	if (g.cur.force_terminal_set &&
 	    g.cur.force_terminal == RADIANT_RADIO_STATUS_DENIED) {
@@ -1391,12 +1285,10 @@ static bool next_due(radiant_time_t *t_out, enum due_kind *kind_out,
 			*kind_out = DUE_CLOSE;
 			return true;
 		case FAKE_RADIO_ARM_ED:
-			/* ed_done was set past the last index when the force was
-			 * taken, so the DUE_ED dispatch reports no measurement
-			 * for any index and goes straight to the terminal -
-			 * which is what a sweep that was never listened to
-			 * produces. Set there rather than here so that this
-			 * function stays a query with no side effects. */
+			/* ed_done was set past the last index when the force
+			 * was taken, so DUE_ED reports no measurement and goes
+			 * straight to terminal - what an unheard sweep
+			 * produces. Set elsewhere so this stays a pure query. */
 			*t_out = g.cur.ed_t_start;
 			*kind_out = DUE_ED;
 			return true;
@@ -1411,15 +1303,11 @@ static bool next_due(radiant_time_t *t_out, enum due_kind *kind_out,
 		return true;
 	}
 	if (g.cur.kind == FAKE_RADIO_ARM_ED) {
-		/*
-		 * The next index's dwell ends one dwell after the last one did.
-		 * Once every index has reported, the due time stops advancing -
-		 * so the very next dispatch at that same instant is the
-		 * operation's terminal event, with no gap between the last
-		 * measurement and the end of the sweep. A sweep whose terminal
-		 * event arrived a dwell late would let a scheduler that
-		 * overbooked the gap look correct.
-		 */
+		/* The next index's dwell ends one dwell after the last. Once
+		 * every index has reported, due time stops advancing, so the
+		 * next dispatch is the terminal event with no gap - a sweep
+		 * whose terminal arrived a dwell late would let a scheduler
+		 * that overbooked the gap look correct. */
 		uint32_t n = (uint32_t)(g.cur.ed_hi - g.cur.ed_lo) + 1u;
 		uint32_t k = (g.cur.ed_done < n) ? (g.cur.ed_done + 1u) : n;
 
@@ -1511,13 +1399,10 @@ static void dispatch_air(int32_t idx)
 	status = crc_ok ? RADIANT_RADIO_STATUS_OK : RADIANT_RADIO_STATUS_CRC_FAIL;
 	rssi = s->f.rssi_set ? s->f.rssi_dbm : g.default_rssi;
 
-	/*
-	 * RADIANT_RX_STOP_ON_FIRST closes the window on the first *accepted* frame,
-	 * and a CRC failure is not an accepted frame. Spike A measured a
-	 * 3-byte search address triggering the matcher on noise several times a
-	 * second; a mock that let a noise trigger close a tracked window would
-	 * make every tracking test pass for the wrong reason.
-	 */
+	/* RADIANT_RX_STOP_ON_FIRST closes the window on the first *accepted* frame;
+	 * a CRC failure is not accepted, so a noise trigger must not close a
+	 * tracked window (Spike A: search address triggers matcher on noise
+	 * several times a second). */
 	terminal = crc_ok && ((g.cur.flags & RADIANT_RX_STOP_ON_FIRST) != 0u);
 
 	g.stats.air_delivered++;
@@ -1724,16 +1609,12 @@ static void count_rc(int rc)
 }
 
 /*
- * Per-operation configuration is validated in full on every arm call, and this
- * is the single most useful thing the mock does for the core agents.
- *
- * The HAL makes configuration per-operation precisely so that tracking, search
- * and the extension formats cannot contaminate each other. The failure that
- * rule exists to prevent is a module that fills in half a struct and inherits
- * the rest - and on hardware that produces a window that is subtly wrong
- * rather than a window that fails. So a zero addr_len, a zero max_body_len or
- * a length rule that does not describe the body are all rejected here, loudly,
- * at the arm call.
+ * Per-operation configuration is validated in full on every arm call, so
+ * tracking, search and extension formats cannot contaminate each other: a
+ * module that fills in half a struct and inherits the rest would produce a
+ * subtly-wrong window on hardware rather than a failing one. A zero addr_len,
+ * zero max_body_len, or a length rule that doesn't describe the body are all
+ * rejected here, loudly, at the arm call.
  */
 static int check_fmt(const struct radiant_pkt_format *fmt)
 {
@@ -1957,12 +1838,8 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 		rc = RADIANT_RADIO_EINVAL;
 	}
 	if (rc == RADIANT_RADIO_OK_RC) {
-		/*
-		 * No address, no transmit. The mock has no hardware to inherit a
-		 * stale one from, so this rejection exists purely to make the
-		 * mock as strict as the nRF backend has to be - which is the
-		 * only reason the mock is worth anything as a contract test.
-		 */
+		/* No address, no transmit - keeps the mock as strict as the
+		 * real backend has to be. */
 		if (req->addr_len != req->fmt->addr_len ||
 		    req->addr_len > RADIANT_RADIO_ADDR_MAX) {
 			rc = RADIANT_RADIO_EINVAL;
@@ -2047,12 +1924,10 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 
 /*
  * How many distinct address groups a filter set holds. A group is
- * addr[0 .. addr_len-2] - everything the nRF puts in a BASE register, with the
- * last byte being the freely-varying prefix.
- *
- * Deliberately the same definition the scheduler uses and deliberately a second
- * implementation of it: if the two ever disagree, the disagreement shows up as
- * a refused arm in a test rather than as a lost sensor on a bench.
+ * addr[0 .. addr_len-2] (everything the nRF puts in a BASE register; the last
+ * byte is the freely-varying prefix). Deliberately a second implementation of
+ * the same definition the scheduler uses, so a disagreement shows up as a
+ * refused arm in a test rather than a lost sensor on a bench.
  */
 static uint8_t count_addr_groups(const struct radiant_rx_filter *filters,
 				 uint8_t n)
@@ -2083,8 +1958,8 @@ static uint8_t count_addr_groups(const struct radiant_rx_filter *filters,
 }
 
 /* Zero means "no group constraint", matching how the core reads the field, so
- * a suite that builds a caps block by hand and forgets it gets the permissive
- * behaviour rather than a mysterious ENOTSUP. */
+ * a hand-built caps block that forgets it gets permissive behaviour rather
+ * than a mysterious ENOTSUP. */
 static uint8_t effective_addr_groups(void)
 {
 	return (g.caps.max_addr_groups == 0u) ? g.caps.max_filters
@@ -2131,9 +2006,8 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 		rc = RADIANT_RADIO_EINVAL;
 	}
 	if (rc == RADIANT_RADIO_OK_RC) {
-		/* The capability gate. A scheduler that hardcoded 8 fails here
-		 * the moment a suite sets caps.max_filters = 2, which is the
-		 * only way anyone finds out before an EFR32 exists. */
+		/* The capability gate: a scheduler that hardcoded 8 fails here
+		 * the moment a suite sets caps.max_filters = 2. */
 		if (req->filters == NULL || req->n_filters == 0u ||
 		    req->n_filters > g.caps.max_filters ||
 		    req->n_filters > FAKE_RADIO_MAX_FILTERS) {
@@ -2150,21 +2024,13 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	}
 	if (rc == RADIANT_RADIO_OK_RC) {
 		/*
-		 * THE ADDRESS-GROUP GATE, and it is the reason this mock has a
-		 * base model at all now.
-		 *
-		 * The nRF matcher holds one BASE0+AP0 and seven BASE1+AP1..AP7,
-		 * so a window expresses at most two distinct values of
-		 * addr[0 .. addr_len-2]. On the 3-byte search format that never
-		 * binds; on the 5-byte tracking format the device number is
-		 * inside the group, so it binds on the third tracked channel.
-		 *
-		 * The real backend answers RADIANT_RADIO_ENOTSUP - "I will not
-		 * programme something close" - and so does this, with the same
-		 * code, because a mock more capable than the hardware certifies
-		 * exactly the bug it was written to catch. Until this existed,
-		 * CI could not see that the scheduler merged eight tracked
-		 * channels into a window no nRF can arm.
+		 * The address-group gate. The nRF matcher holds one BASE0+AP0
+		 * and seven BASE1+AP1..AP7, so a window expresses at most two
+		 * distinct values of addr[0 .. addr_len-2]: never binds on the
+		 * 3-byte search format, binds on the third tracked channel on
+		 * the 5-byte tracking format. The real backend answers ENOTSUP
+		 * and so does this, with the same code - a mock more capable
+		 * than the hardware would certify the bug it exists to catch.
 		 */
 		if (count_addr_groups(req->filters, req->n_filters) >
 		    effective_addr_groups()) {
@@ -2179,39 +2045,29 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 			rc = RADIANT_RADIO_EINVAL;
 		} else if ((req->flags & RADIANT_RX_STOP_ON_FIRST) != 0u &&
 			   req->n_filters > 1u) {
-			/* The HAL says STOP_ON_FIRST must not be set on a
-			 * merged or search window, where more than one master
-			 * may transmit inside one window. More than one filter
-			 * is what a merged or search window is. */
+			/* STOP_ON_FIRST must not be set on a merged or search
+			 * window, where more than one master may transmit
+			 * inside one window - i.e. more than one filter. */
 			rc = RADIANT_RADIO_EINVAL;
 		}
 	}
 	if (rc == RADIANT_RADIO_OK_RC) {
 		if (req->t_open == RADIANT_TIME_NEVER ||
 		    req->t_close == RADIANT_TIME_NEVER) {
-			/* RADIANT_TIME_NEVER is never a valid arm time, so an
-			 * open-ended window is not expressible: background
-			 * scan re-arms bounded windows. */
+			/* RADIANT_TIME_NEVER is never a valid arm time: an
+			 * open-ended window isn't expressible; background scan
+			 * re-arms bounded windows. */
 			rc = RADIANT_RADIO_EINVAL;
 		} else if (req->t_close < req->t_open) {
 			rc = RADIANT_RADIO_EINVAL;
 		} else if (too_late(req->t_open)) {
 			rc = RADIANT_RADIO_ETIME;
 		} else if (window_over_cap(req->t_open, req->t_close)) {
-			/*
-			 * Longer than caps.max_window_us, which on an arbitrated
-			 * backend is an API ceiling and not a preference:
-			 * MPSL_TIMESLOT_LENGTH_MAX_US is 100 000, so a 250 ms
-			 * chunk cannot be requested at all.
-			 *
-			 * ENOTSUP - "well formed, but this backend cannot do it"
-			 * - and refused rather than quietly shortened, because a
-			 * backend that shortened it would have the scheduler
-			 * credit a dwell that was never spent. A mock that
-			 * accepted it would certify exactly that bug; and
-			 * test_sched.c's finish() already asserts rc_enotsup ==
-			 * 0, so a scheduler that stopped honouring the cap fails
-			 * every test in the suite rather than one.
+			/* Longer than caps.max_window_us, an API ceiling on an
+			 * arbitrated backend (MPSL_TIMESLOT_LENGTH_MAX_US is
+			 * 100000), not a preference. Refused with ENOTSUP
+			 * rather than quietly shortened - a shortened window
+			 * would let the scheduler credit a dwell never spent.
 			 */
 			rc = RADIANT_RADIO_ENOTSUP;
 		}
@@ -2279,22 +2135,17 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 	if (rc != RADIANT_RADIO_OK_RC) {
 		goto refuse;
 	}
-	/*
-	 * The capability is checked HERE, before the request is validated,
-	 * because that is the order the rule is written in: "backends without
-	 * it return RADIANT_RADIO_ENOTSUP". A mock that validated first would
-	 * answer EINVAL for a malformed request on a backend that could not
-	 * have done a well-formed one either, and a core module testing the
-	 * refusal would be testing the wrong branch.
-	 */
+	/* Capability checked HERE, before request validation, matching the
+	 * rule's own order ("backends without it return ENOTSUP") - otherwise
+	 * a malformed request on an incapable backend would answer EINVAL and
+	 * a test for the refusal would exercise the wrong branch. */
 	if (!g.caps.has_ed_scan) {
 		rc = RADIANT_RADIO_ENOTSUP;
 		goto refuse;
 	}
 	if (g.cbs.ed == NULL) {
-		/* No consumer. Refused rather than armed, on the same terms as
-		 * the real backend: a sweep whose events have nowhere to go
-		 * still occupies the radio. */
+		/* No consumer: refused rather than armed, since a sweep whose
+		 * events have nowhere to go still occupies the radio. */
 		rc = RADIANT_RADIO_ENOTSUP;
 		goto refuse;
 	}
@@ -2307,9 +2158,8 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 		rc = RADIANT_RADIO_ETIME;
 		goto refuse;
 	}
-	/* An ED chunk's span is (hi - lo + 1) * dwell by construction, so the
-	 * ceiling applies to it exactly as it does to a receive window - the
-	 * arbiter is holding the radio for the same wall-clock time either way. */
+	/* An ED chunk's span is (hi - lo + 1) * dwell, so the same ceiling
+	 * applies as to a receive window. */
 	if (window_over_cap(req->t_start,
 			    req->t_start +
 				    (radiant_time_t)((uint32_t)req->rf_index_hi -
@@ -2356,15 +2206,10 @@ int radiant_radio_abort(void)
 	}
 
 	if (g.in_cb) {
-		/*
-		 * A callback may abort, but callbacks never nest. Free the slot
-		 * immediately - so the caller does observe it as free, and may
-		 * re-arm before returning - and deliver the ABORTED terminal
-		 * the moment the current callback returns. The core therefore
-		 * sees a terminal event for an operation it has already
-		 * replaced, which is exactly the case the op id exists to make
-		 * unambiguous.
-		 */
+		/* A callback may abort, but callbacks never nest: free the
+		 * slot immediately (caller may re-arm before returning) and
+		 * deliver ABORTED once the current callback returns - the
+		 * case the op id exists to disambiguate. */
 		mark_terminal(g.cur.arm_idx, RADIANT_RADIO_STATUS_ABORTED);
 		g.defer_abort_op = g.cur.op;
 		g.defer_abort_kind = g.cur.kind;
@@ -2397,16 +2242,10 @@ void fake_radio_force_terminal_repeat(enum radiant_radio_status status,
 {
 	g.pending_force = status;
 	g.pending_force_n = count;
-	/*
-	 * Deliberately NOT applied to g.cur here, unlike the one-shot below.
-	 *
-	 * A run of forced terminals is set up before the operations it applies
-	 * to exist - that is the whole use - so taking the first one out of the
-	 * count for an operation that is already armed would silently make a
-	 * count of twelve mean eleven future windows plus this one. Every
-	 * operation installed from now on takes one, including one armed inside
-	 * the callback that is running when this is called.
-	 */
+	/* Deliberately NOT applied to g.cur here, unlike the one-shot below: a
+	 * run is set up before the operations it applies to exist, so taking
+	 * one from an already-armed operation would silently miscount. Every
+	 * operation installed from now on takes one. */
 	if (count == 0u) {
 		g.cur.force_terminal_set = false;
 	}
@@ -2414,21 +2253,17 @@ void fake_radio_force_terminal_repeat(enum radiant_radio_status status,
 
 void fake_radio_force_next_terminal(enum radiant_radio_status status)
 {
-	/*
-	 * Applied to the operation that is armed next, and only to its natural
-	 * terminal event (window close or transmit completion). An operation
-	 * ended by RADIANT_RX_STOP_ON_FIRST or by abort keeps the status that
-	 * genuinely describes what happened.
-	 */
+	/* Applied to the operation armed next, and only to its natural
+	 * terminal event (window close or transmit completion) - an operation
+	 * ended by RADIANT_RX_STOP_ON_FIRST or abort keeps its real status. */
 	if (g.cur.kind != FAKE_RADIO_ARM_NONE) {
 		g.cur.force_terminal_set = true;
 		g.cur.force_terminal = status;
 		g.pending_force_n = 0u;
 		return;
 	}
-	/* clear_cur() wipes g.cur on the way into the next arm call, so the
-	 * request waits in its own field until there is an operation to put it
-	 * on. */
+	/* clear_cur() wipes g.cur on the way into the next arm call, so this
+	 * waits in its own field until there is an operation to put it on. */
 	g.pending_force_n = 1u;
 	g.pending_force = status;
 }
@@ -2443,9 +2278,8 @@ static void take_pending_force(void)
 	g.cur.force_terminal = g.pending_force;
 	g.pending_force_n--;
 
-	/* A denied energy-detect sweep measured no index at all - see the note
-	 * in next_due(). Marking every index done here, where the operation is
-	 * installed, keeps next_due() a query without side effects. */
+	/* A denied ED sweep measured no index at all (see next_due()); marking
+	 * done here, at install, keeps next_due() a pure query. */
 	if (g.pending_force == RADIANT_RADIO_STATUS_DENIED &&
 	    g.cur.kind == FAKE_RADIO_ARM_ED) {
 		g.cur.ed_done = (uint32_t)(g.cur.ed_hi - g.cur.ed_lo) + 1u;

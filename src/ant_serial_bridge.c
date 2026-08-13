@@ -5,33 +5,27 @@
  * messages) to/from the radio contract in ant_radio.h.
  *
  * Inbound (host → chip):
- *   Parser thread drains ant_rx_ring_buf byte by byte through a state machine,
- *   validates the XOR checksum, and calls the matching antr_* function.
- *   Each command gets an ANTW_MESG_RESPONSE_EVENT_ID (0x40) acknowledgement.
+ *   Parser thread drains ant_rx_ring_buf byte by byte through a state
+ *   machine, validates the XOR checksum, and calls the matching antr_*
+ *   function. Each command gets an ANTW_MESG_RESPONSE_EVENT_ID (0x40) ack.
  *
  * Outbound (chip → host):
- *   The radio backend calls antr_on_message() - which this file implements -
- *   for every message the host should see. The handler wraps it in a serial
- *   frame and pushes it to usb_ant_send(). There is no registration step: the
- *   symbol is resolved at link time and exactly one translation unit in the
- *   image defines it. ant_serial_bridge_init() therefore only starts the
- *   parser thread.
+ *   The radio backend calls antr_on_message() - implemented here - for every
+ *   message the host should see; it is wrapped in a serial frame and pushed
+ *   to usb_ant_send(). No registration step: the symbol resolves at link
+ *   time, so ant_serial_bridge_init() only starts the parser thread.
  *
  * Wire frame format (ANT Serial Protocol):
  *   [SYNC=0xA4] [LEN] [ID] [payload: LEN bytes] [XOR checksum]
  *
- * The checksum is the XOR of every preceding byte *including the SYNC byte*.
- * Leaving SYNC out yields a value that differs by exactly 0xA4, so every frame
- * a real host sends fails validation and is dropped without a word, and every
- * frame we send is rejected the same way at the other end. Two implementations
- * that both omit it agree with each other perfectly and with nobody else -
- * which is how this survived a passing test suite.
+ * The checksum is the XOR of every preceding byte INCLUDING the SYNC byte.
+ * Omitting SYNC yields a value off by exactly 0xA4, so two implementations
+ * that both omit it agree with each other and with nobody else - how that
+ * bug once survived a passing test suite.
  *
- * Nothing here names a symbol from sdk-ant. Protocol constants come from
- * src/ant_wire.h (ANTW_*, generated from protocol/ant_wire.yaml) and every
- * call into the radio goes through src/ant_radio.h (antr_*). That is what lets
- * this file build with no sdk-ant present at all, and it is the boundary the
- * clean-room rebuild is defended on.
+ * Nothing here names a symbol from sdk-ant: protocol constants come from
+ * src/ant_wire.h (ANTW_*) and every radio call goes through src/ant_radio.h
+ * (antr_*), which is what lets this file build with no sdk-ant present.
  */
 
 #include <string.h>
@@ -64,13 +58,9 @@ LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
 
 #define BRIDGE_STACK_SIZE  2048
 
-/*
- * Taken from src/ant_radio.h rather than spelled again here, because a backend's
- * event-delivery thread has to sit BELOW it and the two numbers only stay
- * consistent if there is one of them. See ANTR_HOST_THREAD_PRIORITY: a backend
- * thread that can preempt this one delivers an event caused by a command ahead
- * of that command's own response, and the host discards it while looking for the
- * response.
+/* Taken from src/ant_radio.h, not respelled here, so this and a backend's
+ * event thread (which must sit below it - see ANTR_HOST_THREAD_PRIORITY)
+ * stay consistent by construction.
  */
 #define BRIDGE_PRIORITY    ANTR_HOST_THREAD_PRIORITY
 
@@ -153,26 +143,17 @@ static void send_message(uint8_t msg_id, const uint8_t *payload, uint8_t len)
 #define ANT_DONGLE_TX_POWER_DEFAULT ANTW_RADIO_TX_POWER_LVL_3
 #endif
 
-/* What each channel should transmit at, whether or not it is currently
- * assigned. antr_channel_radio_tx_power_set() only takes on an assigned channel
- * - which is why the 0x47 fan-out below swallows its errors - and every host
- * sets power before assigning anything, so applying it at the moment the host
- * asks would drop the request on the floor for every channel that does not
- * exist yet. Holding it here and reapplying after each successful assign is
- * what makes the setting survive that ordering.
+/* What each channel should transmit at, whether or not it is assigned yet.
+ * antr_channel_radio_tx_power_set() only takes on an assigned channel (why
+ * the 0x47 fan-out below swallows its errors), and hosts set power before
+ * assigning - holding it here and reapplying after each assign survives
+ * that ordering.
  */
 static uint8_t tx_power[CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED];
 
-/* The raw register value that goes with ANTW_RADIO_TX_POWER_LVL_CUSTOM, held
- * per channel for the same reason the level is: it has to survive being set
- * before the channel is assigned, and be reapplied afterwards.
- *
- * Meaningless unless the matching tx_power[] entry has the custom bit set, and
- * it is by definition not portable - the same byte is +8 dBm on an nRF52840 and
- * something else entirely on an nRF54L15, which radiant_core's radio backend
- * documents at length. Nothing in the firmware ever sets one; only a host that
- * asked for it by name does, and the only thing that asks is
- * tools/ant_sens.py's fine power ladder.
+/* Raw register value paired with ANTW_RADIO_TX_POWER_LVL_CUSTOM, held per
+ * channel for the same reason. Meaningless unless the matching tx_power[]
+ * entry has the custom bit set, and not portable across parts.
  */
 static uint8_t tx_power_custom[CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED];
 
@@ -186,21 +167,14 @@ static void tx_power_reset(void)
 
 /*
  * Map a host's requested power level onto what this radio can actually do.
- *
- * Levels 0-2 are -20, -12 and -4 dBm. Nobody sends those by accident, so they
- * are a deliberate request to be quiet - a bike shop, or a race paddock with
- * forty trainers in one room - and are honoured exactly.
- *
- * Level 3 is 0 dBm. It is the ANT default and what a host sends when it has no
- * opinion, which is the common case. Level 4 is +4 dBm, the ceiling on the
- * nRF51422 inside the stick being impersonated: a host asking for it is asking
- * for everything the hardware has, and on an nRF52840 that is +8 dBm rather
- * than +4. Both are raised, which is the only way the extra 8 dB is ever
- * reachable - no host will ever request LVL_5 by name, because no retail stick
- * has ever had it.
- *
- * ANTW_RADIO_TX_POWER_LVL_CUSTOM (0x80) names a raw register value rather than
- * a level, so it is passed through untouched.
+ * Levels 0-2 (-20/-12/-4 dBm) are honoured exactly - a deliberate request to
+ * be quiet. Level 3 (0 dBm, the common default) and level 4 (+4 dBm, the
+ * ceiling on the impersonated nRF51422) are both raised to the boosted
+ * default, since a host asking for level 4 wants everything the hardware
+ * has, and on an nRF52840 that's +8 dBm - the only way the extra 8 dB is
+ * reachable, as no retail stick ever had LVL_5 to request by name.
+ * ANTW_RADIO_TX_POWER_LVL_CUSTOM (0x80) names a raw register value, passed
+ * through untouched.
  */
 static uint8_t tx_power_resolve(uint8_t requested)
 {
@@ -515,13 +489,9 @@ static void handle_request(const uint8_t *body, uint8_t len)
 
 /* ── System reset ──────────────────────────────────────────────────────────── */
 
-/*
- * ANTW_MESG_SYSTEM_RESET_ID resets the ANT protocol stack, not the MCU.
- *
- * Every host library (openant, Zwift, Golden Cheetah) opens the device, sends
- * a reset, and then keeps using the same USB handle. Rebooting here drops the
- * device off the bus, and the host's next transfer fails on a stale pipe -
- * which is exactly what a session start looks like, so nothing works.
+/* ANTW_MESG_SYSTEM_RESET_ID resets the ANT protocol stack, not the MCU: every
+ * host library keeps using the same USB handle after sending reset, and
+ * rebooting here would drop the device off the bus mid-session.
  */
 static void handle_system_reset(void)
 {
@@ -547,16 +517,11 @@ static void handle_system_reset(void)
 /* ── Burst transmit ─────────────────────────────────────────────────────────── */
 
 /*
- * The serial protocol streams a burst as a run of packets, but antr_burst_tx()
- * takes ownership of the buffer it is handed and keeps it until the radio has
- * sent it. `body` points into the parser's frame buffer, which the very next
- * packet overwrites, so each block has to be copied somewhere that outlives the
- * call - and then held there.
- *
- * Advanced burst carries up to ANTW_ADV_BURST_BLOCK_MAX (24) bytes per packet;
- * plain burst carries 8. That constant is generated from
- * protocol/ant_wire.yaml and is deliberately not re-spelled locally: two
- * constants for one buffer length is how a block gets truncated.
+ * antr_burst_tx() takes ownership of the buffer it is handed until the radio
+ * has sent it, but `body` points into the parser's frame buffer, overwritten
+ * by the next packet - so each block is copied somewhere that outlives the
+ * call and held there. Advanced burst carries up to ANTW_ADV_BURST_BLOCK_MAX
+ * (24) bytes per packet; plain burst carries 8.
  */
 
 static uint8_t burst_block[ANTW_ADV_BURST_BLOCK_MAX];
@@ -614,11 +579,9 @@ static void handle_burst(uint8_t msg_id, const uint8_t *body, uint8_t len)
 
 static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 {
-	/* Starts as a failure so a command whose body is too short falls through
-	 * every `if (len >= N)` below and is reported as ANTW_INVALID_MESSAGE.
-	 * Starting at 0 instead acknowledges a truncated command with
-	 * RESPONSE_NO_ERROR without ever having run it, and the host has no way
-	 * to tell.
+	/* Starts as a failure so a too-short body falls through every
+	 * `if (len >= N)` below as ANTW_INVALID_MESSAGE, rather than silently
+	 * acknowledging a truncated command that never ran.
 	 */
 	antr_err_t err = ANTW_INVALID_MESSAGE;
 	/* body[0] is channel number (or network number for NETWORK_KEY) */
@@ -696,22 +659,12 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	case ANTW_MESG_CHANNEL_RADIO_TX_POWER_ID:
 		/* body: [ch, tx_power] or [ch, tx_power, custom]
 		 *
-		 * A real stick's message is two bytes and every host sends two.
-		 * The third is an extension, and it is additive rather than a
-		 * protocol change: a two-byte message means exactly what it
-		 * always did, and the byte is only read at all when the level
-		 * carries ANTW_RADIO_TX_POWER_LVL_CUSTOM, which no host sends
-		 * by accident.
-		 *
-		 * Without it the custom level is unreachable from the wire.
-		 * ANTW_RADIO_TX_POWER_LVL_CUSTOM names a raw register value,
-		 * the radio contract has carried the parameter for it since it
-		 * was written, and this arm used to pass a hardcoded 0 - so a
-		 * host asking for a custom power silently got register 0, which
-		 * on an nRF52840 is 0 dBm. That is the failure mode a
-		 * transmit-power ladder cannot see from the far end of the
-		 * link, and it is why tools/ant_sens.py checks its dial against
-		 * measured RSSI rather than trusting it.
+		 * The third byte is an additive extension: a two-byte message
+		 * means what it always did, and the byte is only read when the
+		 * level carries ANTW_RADIO_TX_POWER_LVL_CUSTOM. Without it, a
+		 * custom-power request silently got register 0 (0 dBm on an
+		 * nRF52840) - a failure invisible from the far end of the link,
+		 * which is why tools/ant_sens.py checks against measured RSSI.
 		 */
 		if (len >= 2) {
 			uint8_t level = tx_power_resolve(body[1]);
@@ -730,15 +683,10 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		break;
 
 	case ANTW_MESG_RADIO_TX_POWER_ID:
-		/* body: [filler, tx_power]. The device-wide form, which every ANT
-		 * stick answers and which is what ANT_SetTransmitPower() sends;
-		 * 0x60 above is the per-channel one. The radio contract exposes
-		 * only the per-channel setter, so fan it out.
-		 *
-		 * Per-channel failures are deliberately not propagated: a host
-		 * sets the default power before assigning any channel, and
-		 * refusing the message because channel 7 is unassigned would fail
-		 * a command a real stick accepts.
+		/* body: [filler, tx_power]. Device-wide form (ANT_SetTransmitPower);
+		 * 0x60 above is per-channel. The radio contract only exposes the
+		 * per-channel setter, so fan it out - failures not propagated,
+		 * since a host sets default power before assigning any channel.
 		 */
 		if (len >= 2) {
 			uint8_t level = tx_power_resolve(body[1]);
@@ -779,21 +727,15 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	case ANTW_MESG_OPEN_RX_SCAN_MODE_ID: {
 		/*
 		 * body: [(synchronous channel packets only, optional)]. That flag
-		 * restricts reporting to already-tracked channel periods; this
-		 * bridge has no notion of the restriction to honour, so it is
-		 * accepted and ignored - reporting everything is a superset of
-		 * the synchronous-only subset, never a smaller set than a host
-		 * that asked for the restriction expects. Nothing here depends on
-		 * the body's length or content, so len is not checked.
+		 * restricts reporting to already-tracked periods; accepted and
+		 * ignored here since reporting everything is a superset. len is
+		 * not checked - nothing depends on it.
 		 *
-		 * Real scan mode takes over the whole radio and requires every
-		 * other channel closed first (ANTW_CLOSE_ALL_CHANNELS otherwise).
-		 * Channel 0 is then the one taken over - assigned as a wildcard
-		 * background-scan slave, the same mechanism a host can already
-		 * reach one message at a time through MESG_ASSIGN_CHANNEL's
-		 * extended byte (ANTW_EXT_PARAM_ALWAYS_SEARCH), reached here
-		 * through the single call ZwiftApp.exe actually resolves - see
-		 * archive/host-api/ant_dll_exports.json.
+		 * Real scan mode takes over the whole radio, requiring every
+		 * other channel closed first (else ANTW_CLOSE_ALL_CHANNELS).
+		 * Channel 0 is assigned as a wildcard background-scan slave via
+		 * MESG_ASSIGN_CHANNEL's extended byte (ANTW_EXT_PARAM_ALWAYS_
+		 * SEARCH) - the same call ZwiftApp.exe resolves.
 		 */
 		uint8_t status;
 		uint8_t i;
@@ -973,9 +915,8 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 
 #ifdef CONFIG_ANT_DONGLE_ENCRYPTION
 	/* The three writes that can put a channel into AES-CTR mode. Compiled out
-	 * by default: no host on this platform can send them, and a mode nothing
-	 * asks for should not be reachable on the path Zwift runs. See the Kconfig.
-	 * The matching reads live in handle_request() and are always present.
+	 * by default since no host on this platform sends them. Matching reads
+	 * live in handle_request() and are always present.
 	 */
 	case ANTW_MESG_ENCRYPT_ENABLE_ID:
 		/* body: [ch, mode, key_num, decimation_rate] */
@@ -1032,15 +973,10 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 #ifdef CONFIG_RADIANT_SEC_HOST_MESSAGES
 	/*
 	 * The RadiANT payload transforms: 0xF1 configure, 0xF2 key, 0xF3 epoch.
-	 * 0xF4 is read-only and lives in handle_request(); 0xF5 is pairing and
-	 * arrives with X25519.
-	 *
-	 * Same shape as the encryption block above and for the same reason: a
-	 * message family nothing on this platform sends by default should not be
-	 * reachable on the path Zwift runs. Unlike that block, the declarations
-	 * are under the symbol too - these have exactly one implementation,
-	 * whereas the four crypto calls stand in for libant.a exports every
-	 * backend owes.
+	 * 0xF4 is read-only (handle_request()); 0xF5 is pairing, with X25519.
+	 * Unlike the encryption block above, the declarations are under the
+	 * symbol too - these have exactly one implementation, not a contract
+	 * every backend owes.
 	 */
 	case ANTW_MESG_RADIANT_SEC_CONFIG_ID:
 		/* body: [ch, switches, W, page_lo, page_hi] */
@@ -1084,9 +1020,8 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 
 #ifdef CONFIG_RADIANT_SEC_PAIRING_X25519
 	case ANTW_MESG_RADIANT_PAIRING_ID: {
-		/* body: [ch, subcmd, arg...]. The reply is a 0xF5 of its own
-		 * rather than a response code, because three of the four
-		 * sub-commands have something to say. */
+		/* body: [ch, subcmd, arg...]. Reply is a 0xF5 of its own, not a
+		 * response code, since three of the four sub-commands reply. */
 		uint8_t reply[2 + 32];
 		uint8_t reply_len = 0u;
 
@@ -1244,38 +1179,27 @@ static void process_byte(uint8_t b)
 			if (msg_id == ANTW_MESG_RADIANT_SET_KEY_ID
 #ifdef CONFIG_RADIANT_SEC_PAIRING_X25519
 			    /* 0xF5 sub-command 0x02 carries the host's private
-			     * X25519 scalar, which is as sensitive as a root
-			     * key and is wiped on the same grounds. Checked by
-			     * message id alone rather than by sub-command: the
-			     * other three carry public values, and a wipe that
-			     * had to parse the body to decide would be one
-			     * parsing bug away from keeping a private key. */
+			     * X25519 scalar, wiped on the same grounds as a root
+			     * key. Checked by message id alone, not sub-command:
+			     * a wipe that had to parse the body first would be
+			     * one parsing bug away from keeping a private key. */
 			    || msg_id == ANTW_MESG_RADIANT_PAIRING_ID
 #endif
 			) {
 				/*
-				 * A root key just crossed this buffer, and this
-				 * buffer is static and long-lived - it would
-				 * otherwise hold those sixteen bytes until a
-				 * later message happened to overwrite them,
-				 * which on a quiet link is indefinitely.
+				 * A root key just crossed this static, long-lived
+				 * buffer, which would otherwise hold it until a
+				 * later message overwrote it - indefinitely on a
+				 * quiet link.
 				 *
-				 * WHAT THIS DOES NOT COVER, stated because a
-				 * wipe that implied more than it delivers is
-				 * worse than none. The same bytes passed
-				 * through the USB stack's ring buffer and
-				 * whatever transport buffer sits beneath it,
-				 * neither of which is reachable from here and
-				 * neither of which is wiped. They were also in
-				 * the host's memory before that. A root key
-				 * that has crossed a USB cable should be
-				 * treated as having been in host memory,
-				 * because it has - this narrows the window, it
-				 * does not close it.
+				 * DOES NOT COVER: the same bytes passed through
+				 * the USB ring buffer and transport buffer beneath
+				 * it, neither reachable or wiped from here, and
+				 * were in host memory before that. This narrows
+				 * the exposure window, it does not close it.
 				 *
-				 * Unconditional rather than only on success: a
-				 * key rejected for a bad length was still a
-				 * key.
+				 * Unconditional: a key rejected for bad length was
+				 * still a key.
 				 */
 				memset(msg_body, 0, sizeof(msg_body));
 			}
@@ -1316,17 +1240,16 @@ static void bridge_thread_fn(void *p1, void *p2, void *p3)
 /* ── Radio event handler (outbound path, chip → host) ───────────────────────── */
 
 /*
- * The one definition of antr_on_message() in the image. The backend calls it;
- * nothing registers it, and there is no callback pointer to get wrong. The
- * struct it takes is wire-shaped on purpose - three fields, no unions - because
- * everything this function does is wrap those bytes in a frame, so a field that
- * added meaning beyond them would be a field that could disagree with them.
+ * The one definition of antr_on_message() in the image; the backend calls it,
+ * nothing registers it. The struct it takes is wire-shaped on purpose - three
+ * fields, no unions - since this function's whole job is wrapping those bytes
+ * in a frame.
  *
- * Runs on the backend's own thread, work queue or callback context, never
- * re-entrantly, and never before antr_init() has returned. It touches only
- * statically-initialised state (an atomic_t, a K_SEM_DEFINE and a queueing
- * send), so it does not depend on the bridge thread existing - keep it that
- * way: antr_init() runs before ant_serial_bridge_init().
+ * Runs on the backend's own thread/work queue/callback context, never
+ * re-entrantly, never before antr_init() has returned. Touches only
+ * statically-initialised state, so it does not depend on the bridge thread
+ * existing - keep it that way: antr_init() runs before
+ * ant_serial_bridge_init().
  */
 void antr_on_message(const struct antr_msg *msg)
 {
@@ -1371,12 +1294,9 @@ void antr_on_message(const struct antr_msg *msg)
 		return;
 	}
 
-	/* Sized like send_message(), from ANTW_MAX_FRAME_SIZE and never from
-	 * ANTW_MESG_MAX_SIZE. The latter frames ANTW_MAX_DATA_SIZE, but the size
-	 * byte is allowed to reach ANTW_MAX_SIZE_VALUE, which is one larger - it
-	 * also counts the channel byte. A full extended-data message therefore
-	 * writes the checksum one past the end and hands usb_ant_send_async() a
-	 * length one over the buffer, from the backend's own thread.
+	/* Sized like send_message(), from ANTW_MAX_FRAME_SIZE - never
+	 * ANTW_MESG_MAX_SIZE, which is one byte short since it doesn't count
+	 * the channel byte the LEN ceiling does.
 	 */
 	uint8_t buf[ANTW_MAX_FRAME_SIZE];
 	uint8_t xor = ANTW_SYNC_TX;

@@ -14,25 +14,15 @@
 #define ACTIVITY_ASSERT_US ((uint64_t)2 * 1000000u)
 #define ACTIVITY_CLEAR_US  ((uint64_t)20 * 1000000u)
 
-/*
- * NOT FROM THE DOC - see the header's scope note. Three seconds is a guess at
- * "long enough that a 4 Hz stream crossing a threshold once does not chatter,
- * short enough that a real zone change reads as prompt", the same shape of
- * reasoning section 6.2 gives for needing a dwell at all, but with no
- * measured or specified number behind THIS constant the way 6.1's 2 s/20 s
- * are behind ACTIVITY_ASSERT_US/ACTIVITY_CLEAR_US.
- */
+/* Not from the doc (see header's scope note): 3s is a guess at "long
+ * enough not to chatter on a 4Hz stream, short enough to read as prompt" -
+ * unlike 6.1's 2s/20s, this number isn't measured or specified. */
 #define ZONE_DWELL_US ((uint64_t)3 * 1000000u)
 
-/* Section 6.2's worked example, transcribed: HR_max ~ N(180, 15^2),
- * HR_rest ~ N(65, 10^2) => HRR = 115, rest < HR_rest + 0.15*HRR = 82.25,
- * zone2 >= HR_rest + 0.60*HRR = 134. Hardcoded rather than recomputed from
- * the two priors at runtime: recomputing would need the floating-point
- * Karvonen formula section 6.3's personalisation requires anyway, and until
- * that lands (explicitly out of scope here - see the header) the inputs
- * never change, so carrying the formula would be a second, unexercised
- * implementation of arithmetic the section itself already solved once.
- */
+/* Section 6.2's worked example: HR_max~N(180,15^2), HR_rest~N(65,10^2) =>
+ * HRR=115, rest < 82.25, zone2 >= 134. Hardcoded rather than recomputed via
+ * the Karvonen formula, since personalisation (6.3) is out of scope and
+ * the inputs don't change until it lands. */
 #define REST_THRESHOLD_BPM  82u
 #define ZONE2_THRESHOLD_BPM 134u
 
@@ -42,10 +32,8 @@ struct activity_state {
 	bool     have_prev;
 	int64_t  prev_raw;   /* the accumulator's own previous raw value, for the delta */
 
-	bool     edge_track; /* dwell_update()'s memory of the last raw test result -
-			      * NOT the same thing as prev_raw above, which is the
-			      * accumulator's value; this is the boolean "was it
-			      * advancing" that the dwell timer edges on */
+	bool     edge_track; /* dwell_update()'s last raw test result ("was it
+			      * advancing"), distinct from prev_raw's accumulator value */
 	uint64_t raw_edge_us;
 	bool     debounced;  /* the published, dwelled output */
 };
@@ -138,17 +126,15 @@ static void eval_activity(uint32_t source, const struct radiant_sample *s)
 	a->field_type = s->field_type;
 
 	if (stale) {
-		/* Liveness overrides the ordinary dwell entirely - see the
-		 * header's scope note on why this module reacts to STALE
-		 * without producing it. */
+		/* Liveness overrides the ordinary dwell entirely (see header's
+		 * scope note - this module reacts to STALE but doesn't produce it). */
 		raw_now = false;
 	} else if (a->have_prev) {
 		raw_now = (s->raw - a->prev_raw) > 0;
 	} else {
 		a->have_prev = true;
 		a->prev_raw = s->raw;
-		return; /* nothing to difference against yet, same as the HR
-			 * adapter's own first-message rule */
+		return; /* nothing to difference against yet */
 	}
 	a->prev_raw = s->raw;
 
@@ -164,9 +150,7 @@ static void eval_activity(uint32_t source, const struct radiant_sample *s)
 
 	if (stale) {
 		/* Zones are gated on "worn"; losing liveness must drop them
-		 * too, immediately, for the same reason section 6.2 gates
-		 * them on worn in the first place - a strap not heard from
-		 * is not a strap correctly reporting "at rest". */
+		 * too, immediately (section 6.2). */
 		struct zone_state *z = &states[source].zone;
 
 		if (z->rest_debounced) {
@@ -192,13 +176,9 @@ static void eval_zone(uint32_t source, const struct radiant_sample *s)
 	z->have_hr = true;
 	z->hr_bpm = (uint8_t)s->raw;
 
-	/*
-	 * "Both require the monitor to be worn" (section 6.2) - gated on the
-	 * SAME binding's activity output, and specifically the WORN one
-	 * (0x36-derived), not ACTIVE: a power meter binding has no HR to
-	 * evaluate a zone against in the first place, so field_type is the
-	 * discriminator rather than an extra flag.
-	 */
+	/* "Both require the monitor to be worn" (section 6.2) - gated on the
+	 * same binding's WORN output (0x36-derived), not ACTIVE: field_type
+	 * is the discriminator rather than an extra flag. */
 	worn = a->tracked && a->debounced &&
 	       a->field_type == RADIANT_FIELD_EVENT_COUNT;
 
@@ -223,9 +203,7 @@ static bool rules_want(const struct radiant_sample *s)
 {
 	if ((s->flags & RADIANT_SAMPLE_DERIVED) != 0u) {
 		/* Never re-evaluate this module's own output - the loop
-		 * guard section 6's opening paragraph implies by saying
-		 * derived records reach sinks "through the same path", not
-		 * "through the same path including this one". */
+		 * guard section 6 implies. */
 		return false;
 	}
 	if (s->source == RADIANT_BRIDGE_DIAG_SOURCE) {
@@ -233,9 +211,7 @@ static bool rules_want(const struct radiant_sample *s)
 	}
 	if (s->source >= RADIANT_BINDING_MAX) {
 		/* No rule state slot for a source outside the binding table's
-		 * range - see radiant_binding.h. Declining rather than
-		 * asserting: a caller posting samples ahead of ever binding
-		 * anything is a sequencing choice this module does not police. */
+		 * range. Declining rather than asserting. */
 		return false;
 	}
 	return (s->flags & RADIANT_SAMPLE_ACCUMULATING) != 0u ||

@@ -4,37 +4,30 @@
  *
  * Provenance: docs/decisions/0012-adaptive-frequency.md and
  * docs/decisions/0005-extension-inside-ant-plus.md axis 5, both this project's
- * own documents. No adopter-gated ANT+ device profile document was read for this
- * file. See docs/decisions/0002-clean-room-policy.md.
+ * own documents. No ANT+ device profile document was read for
+ * this file. See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * What this suite is standing in for
- * ---------------------------------------------------------------------------
- * The phase's bench gate is "loss ~ 0 on the selected quiet channel with a
- * single copy per event, against ~0.4 % on 57, in one sitting", and it cannot be
- * run: the Feather that stands in for the stock dongle is in its UF2 bootloader
- * and is reserved for the combined session. THIS SUITE DOES NOT SUBSTITUTE FOR
- * THAT MEASUREMENT AND MUST NOT BE READ AS ONE. No dB figure and no loss figure
- * appears anywhere in this file.
+ * What this suite stands in for: the phase's bench gate ("loss ~ 0 on the
+ * selected quiet channel, single copy per event, against ~0.4% on 57") needs
+ * hardware that is unavailable and is deferred to the combined session. This
+ * suite does NOT substitute for that measurement - no dB or loss figure
+ * appears anywhere in this file. It checks the claims that are about
+ * software, chiefly two that a bench would find last:
  *
- * What it does check is every claim the mechanism makes that is a claim about
- * software, and two of them are the ones a bench would find last:
+ *   THE COUNTDOWN TERMINATES - the re-anchor moves the node's target to
+ *   whatever it most recently announced. Applied one announcement too many,
+ *   it moves the target past the move itself and the node never leaves,
+ *   which looks like "adaptive frequency does not work" on a bench and like
+ *   nothing at all in a code review.
  *
- *   THE COUNTDOWN TERMINATES. The re-anchor moves the node's target to whatever
- *   it most recently announced, which is what makes every receiver land on one
- *   message. Applied one announcement too many it moves the target past the move
- *   itself, and then again, and the node never leaves - a bug that looks exactly
- *   like "adaptive frequency does not work" on a bench and exactly like nothing
- *   at all in a code review.
+ *   NODE AND RECEIVER LAND ON THE SAME SLOT, including a receiver that
+ *   joined mid-countdown or lost most of it - an agreement that fails
+ *   silently: the two do not fail, they stop meeting.
  *
- *   NODE AND RECEIVER LAND ON THE SAME SLOT, including a receiver that joined
- *   part way through the countdown and one that lost most of it. That agreement
- *   is silent when it breaks: the two do not fail, they stop meeting.
- *
- * The scheduler half of the phase - an off-57 window never joining the merged
- * one - is asserted in test_sched.c, next to the merge tests it is the negative
- * case for, rather than here where it would need the whole mock-radio harness a
- * second time.
+ * The scheduler half of the phase (an off-57 window never joining the merged
+ * one) is asserted in test_sched.c next to the merge tests it is the
+ * negative case for, rather than here where it would need the whole
+ * mock-radio harness a second time.
  */
 
 #include <errno.h>
@@ -385,13 +378,10 @@ ZTEST(profile_freq, test_a_node_that_never_moves_puts_nothing_extra_on_the_air)
 	zassert_equal(PROFILE_FREQ_RF_HOME, profile_freq_rf_index(&pf));
 }
 
-/*
- * THE REGRESSION THAT MATTERS. The re-anchor moves the node's target to whatever
- * it just said; applied to the last slot before the move it would push the move
- * one unit further out, and the next announcement would do it again. The node
- * would announce forever and never leave - which reads on a bench as "adaptive
- * frequency does not work" with nothing in any log.
- */
+/* The regression that matters: the re-anchor moves the node's target to
+ * whatever it just said. Applied to the last slot before the move, it would
+ * push the move one unit further out, and the next announcement would do it
+ * again - the node announcing forever and never leaving. */
 ZTEST(profile_freq, test_the_countdown_terminates_rather_than_walking_away)
 {
 	struct profile_freq_cfg cfg = { 0 };
@@ -480,13 +470,10 @@ ZTEST(profile_freq, test_a_receiver_joining_mid_countdown_lands_on_the_same_slot
 	zassert_true(late.heard >= 1u, "the late joiner heard nothing");
 }
 
-/*
- * A receiver counts SLOTS, not messages, and this is the test that says why. The
- * node's countdown is in transmitted messages; a receiver that counted only what
- * it heard would fall behind by its own loss rate - which is the ~0.4 % this
- * whole phase exists to remove, so the feature would be least reliable exactly
- * where it is most needed.
- */
+/* A receiver counts SLOTS, not messages: the node's countdown is in
+ * transmitted messages, and a receiver counting only what it heard would
+ * fall behind by its own loss rate - least reliable exactly where it's
+ * most needed. */
 ZTEST(profile_freq, test_a_receiver_that_loses_most_of_the_countdown_is_still_on_time)
 {
 	struct profile_freq_cfg cfg = { 0 };
@@ -551,15 +538,11 @@ ZTEST(profile_freq, test_a_second_move_inside_the_rate_limit_is_refused)
 	(void)run(&pf, NULL, 4u * PROFILE_FREQ_K_DEFAULT, 0u, 0u, NULL);
 	zassert_equal(1u, pf.moves);
 
-	/*
-	 * THE FLOOR RUNS FROM THE MOVE, NOT FROM THE REQUEST THAT STARTED IT AND
-	 * NOT FROM THE LAST MESSAGE SENT. The countdown is time a receiver has
-	 * already spent following this move, so charging it against the next one
-	 * would let a long K buy the next move sooner - backwards. run() sent
-	 * messages long past the move, and reading the instant from the module
-	 * rather than recomputing it here is what makes this a test of the rule
-	 * instead of a test of the test's arithmetic.
-	 */
+	/* The floor runs from the move, not the request that started it or the
+	 * last message sent: charging the countdown against the next move
+	 * would let a long K buy the next move sooner - backwards. Reading the
+	 * instant from the module rather than recomputing it tests the rule,
+	 * not the test's own arithmetic. */
 	t = pf.last_move_us;
 	zassert_true(t < (uint64_t)(4u * PROFILE_FREQ_K_DEFAULT - 1u) * 250000u,
 		     "the floor was charged from the last message, not the move");

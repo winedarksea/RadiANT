@@ -3,16 +3,12 @@
 
 """Run the simulator through the verifier on the host, with no radio at all.
 
-tools/test_ant_pages.py proves a page survives its own round trip. This proves
-the two halves of the closed loop agree: ant_sim.py's sensors are driven for a
-simulated quarter of an hour and every packet is fed to ant_verify.py's
-analyser, which must find no fault. When it later finds one on the bench, that
-is a fact about the radio or the firmware rather than about these two scripts.
-
-The negative cases matter as much as the positive one. An instrument that
-passes everything is not an instrument, so a stream with packets removed has to
-report loss, and one with a corrupted accumulator has to report a continuity
-violation.
+Proves the two halves of the closed loop agree: ant_sim.py's sensors are
+driven for a simulated quarter of an hour and every packet is fed to
+ant_verify.py's analyser, which must find no fault. A later bench fault is
+then a fact about the radio/firmware, not these two scripts. Negative cases
+matter equally: a stream with packets removed must report loss, and one with
+a corrupted accumulator must report a continuity violation.
 """
 
 from __future__ import annotations
@@ -29,15 +25,13 @@ try:
     import ant_sim
     import ant_verify
 except SystemExit:
-    # Both exit rather than raise when pyusb is missing, so that a developer
-    # running the tool sees advice instead of a traceback. Here that would take
-    # the whole test run down.
+    # Both exit rather than raise when pyusb is missing; that would otherwise
+    # take the whole test run down.
     ant_sim = None
     ant_verify = None
 
-# Long enough that the 16-bit accumulators wrap: the crank-torque period wraps
-# every ~32 s and the torque-frequency tick count every ~9 minutes, and a run
-# that stops short of those has not tested them.
+# Long enough that the 16-bit accumulators wrap: crank-torque period wraps
+# every ~32 s, torque-frequency tick count every ~9 minutes.
 RUN_SECONDS = 900.0
 WATTS = 100.0
 RPM = 80.0
@@ -81,8 +75,7 @@ class TestSimulatorPassesVerification(unittest.TestCase):
 
     def test_standard_power(self):
         summary = self._run("power")
-        # The accumulator has to wrap inside the run or the wrap is untested,
-        # and a run that quietly did not reach it would look like a pass.
+        # Must actually wrap inside the run, or the wrap goes untested.
         self.assertGreater(summary["accumulator_wraps"].get("acc_power", 0), 0)
         self.assertGreater(summary["accumulator_wraps"].get("event_count", 0), 0)
 
@@ -103,24 +96,22 @@ class TestSimulatorPassesVerification(unittest.TestCase):
 
     def test_combined_speed_and_cadence(self):
         summary = self._run("csc")
-        # This page has no page numbers, so the histogram must be empty rather
-        # than full of whatever byte 0 happened to hold.
+        # This page has no page numbers, so the histogram must be empty.
         self.assertEqual(summary["pages"], {})
         self.assertIsNotNone(summary["cadence"])
         self.assertGreater(summary["cadence"]["n"], 0)
 
     def test_heart_rate(self):
         summary = self._run("heart-rate")
-        # A main page and a four-page background rotation, plus the common
-        # pages. All five heart-rate encoders are on the air in one run.
+        # All five heart-rate encoders (main page, four-page rotation, common
+        # pages) on the air in one run.
         self.assertEqual(set(summary["pages"]),
                          {"0x00", "0x01", "0x02", "0x03", "0x04",
                           "0x50", "0x51"})
         self.assertGreater(summary["heart_rate_bpm"]["n"], 0)
         self.assertAlmostEqual(summary["heart_rate_bpm"]["mean"],
                                ant_sim.DEFAULT_BPM, delta=5.0)
-        # The event time wraps every ~64 s at 1/1024 s, so a 15-minute run that
-        # did not reach it would be hiding the wrap rather than testing it.
+        # Event time wraps every ~64 s at 1/1024 s; a 15-min run should reach it.
         self.assertGreater(summary["accumulator_wraps"].get("hr_event_time", 0),
                            0)
         self.assertGreater(summary["accumulator_wraps"].get("beat_count", 0), 0)
@@ -183,10 +174,9 @@ def analyse_attested(sensor, records, window=None, key: bytes = ROOT,
 class TestAttestedStream(unittest.TestCase):
     """The compat layer end to end: sim emits, verifier judges, no radio.
 
-    docs/radiant-security.md section 11. The verifier is told the key, the
-    epoch and the device number and nothing else - not the interval, not the
-    schedule, not which slots the sim chose - so a pass here is the two halves
-    agreeing about bytes rather than about intentions.
+    docs/radiant-security.md section 11. The verifier is told only the key,
+    epoch and device number - not interval, schedule, or slot choice - so a
+    pass means the two halves agree about bytes, not about intentions.
     """
 
     def test_a_default_attested_stream_verifies(self):
@@ -209,12 +199,9 @@ class TestAttestedStream(unittest.TestCase):
         self.assertEqual(attestation["tier_ii"]["verified"], 0)
 
     def test_the_stream_is_the_same_ant_plus_profile_plus_two_page_numbers(self):
-        # The whole claim, and the reason it is stated as a page-number set
-        # rather than a byte-for-byte diff against a plain run: the compat pages
-        # DISPLACE data pages, so the two streams carry different samples at the
-        # same instants and always will. What must hold is that nothing existing
-        # changed - the same profile, the same layouts, the same accumulators,
-        # plus exactly two numbers a legacy receiver skips.
+        # Compat pages DISPLACE data pages, so the two streams never carry the
+        # same samples at the same instant - hence comparing page-number sets
+        # rather than a byte-for-byte diff.
         added = {ap.COMPAT_PAGE_BEACON, ap.COMPAT_PAGE_ATTEST_TIER_I}
         plain = ant_sim.dry_run([build("power")], 300.0)
         attested = ant_sim.dry_run([build_attested("power")], 300.0)
@@ -224,8 +211,8 @@ class TestAttestedStream(unittest.TestCase):
         self.assertEqual(attested_numbers, plain_numbers | added)
         self.assertEqual(plain_numbers & added, set())
 
-        # And a legacy receiver's view: drop what it does not know and every
-        # remaining page decodes as a page of the profile it does.
+        # A legacy receiver drops what it does not know; every remaining page
+        # still decodes as a page of the profile it does know.
         for _, _, _, payload in attested:
             if payload[0] in added:
                 continue
@@ -234,9 +221,8 @@ class TestAttestedStream(unittest.TestCase):
             self.assertNotIn("raw", got)
 
     def test_the_default_configuration_spends_about_two_percent_of_slots(self):
-        # 0.8 % beacon plus 1.2 % Tier I, against the 1.65 % ANT+ itself spends
-        # on common pages 80 and 81. That comparison is the compatibility
-        # argument; the bare number on its own is just a number.
+        # 0.8% beacon + 1.2% Tier I, vs. the 1.65% ANT+ itself spends on
+        # common pages 80/81 - that comparison is the compatibility argument.
         sensor = build_attested("power")
         records = ant_sim.dry_run([sensor], RUN_SECONDS)
         pages = __import__("collections").Counter(
@@ -252,10 +238,9 @@ class TestAttestedStream(unittest.TestCase):
         self.assertAlmostEqual(common, 0.0165, delta=0.003)
 
     def test_tier_one_verifies_at_the_delivery_rate_under_heavy_loss(self):
-        # THE CLAIM THE TIER EXISTS FOR, as an assertion rather than a
-        # paragraph: its tag covers no payload, so a packet lost anywhere else
-        # costs it nothing. Twenty percent loss is fifty times the characterised
-        # bench floor and every DELIVERED Tier I page still verifies.
+        # The claim the tier exists for: its tag covers no payload, so a
+        # packet lost elsewhere costs it nothing. 20% loss (50x bench floor)
+        # and every DELIVERED Tier I page still verifies.
         sensor = build_attested("power")
         records = ant_sim.dry_run([sensor], RUN_SECONDS)
         rng = random.Random(11)
@@ -267,8 +252,8 @@ class TestAttestedStream(unittest.TestCase):
         self.assertGreater(tier1["verified"], 0)
         self.assertEqual(tier1["unverified"], 0)
         self.assertEqual(tier1["verified_of_delivered"], 1.0)
-        # And loss is reported as loss, in its own column, rather than as a
-        # failed tag. Conflating the two is how a bench floor becomes an attack.
+        # Loss is reported as loss, not a failed tag - conflating the two
+        # turns a bench floor into an apparent attack.
         self.assertGreater(tier1["lost"], 0)
 
     def test_a_wrong_key_is_unverified_rather_than_clear(self):
@@ -291,8 +276,8 @@ class TestAttestedStream(unittest.TestCase):
         self.assertTrue(summary["pass"])
 
     def test_stripping_the_attestation_is_unverified_not_clear(self):
-        # Receiver-side downgrade protection. Strip the added pages and a naive
-        # receiver falls back to clear; a pinned one must not.
+        # Downgrade protection: a naive receiver would fall back to clear
+        # after the added pages are stripped; a pinned one must not.
         sensor = build_attested("power")
         records = ant_sim.dry_run([sensor], 300.0)
         stripped = [r for r in records
@@ -344,16 +329,16 @@ class TestAttestedStream(unittest.TestCase):
     def test_the_key_group_hint_is_epoch_derived(self):
         sensor = build_attested("power")
         records = ant_sim.dry_run([sensor], RUN_SECONDS)
-        # The same key one epoch later produces a different hint, which is what
-        # stops the field being a stable tracking identifier.
+        # The same key one epoch later gives a different hint, so the field
+        # cannot be a stable tracking identifier.
         matched = analyse_attested(sensor, records)["attestation"]
         stale = analyse_attested(sensor, records, epoch=EPOCH + 1)["attestation"]
         self.assertGreater(matched["key_group_hint_matches"], 0)
         self.assertEqual(stale["key_group_hint_matches"], 0)
 
     def test_a_faster_interval_costs_proportionally_more_slots(self):
-        # T is in seconds and decoupled from the data rate, so halving it
-        # doubles the page count and nothing else moves.
+        # T is seconds, decoupled from data rate: halving it doubles the
+        # page count and nothing else moves.
         counts = []
         for interval in (20.0, 10.0):
             sensor = build_attested("power", interval_s=interval)
@@ -364,7 +349,7 @@ class TestAttestedStream(unittest.TestCase):
         self.assertAlmostEqual(counts[1], 600 / 10, delta=2)
 
     def test_heart_rate_carries_the_same_two_page_numbers(self):
-        # The same numbers in every compat profile, so a receiver has one rule.
+        # Same numbers in every compat profile, so a receiver has one rule.
         sensor = build_attested("heart-rate")
         records = ant_sim.dry_run([sensor], RUN_SECONDS)
         summary = analyse_attested(sensor, records)
@@ -376,16 +361,16 @@ class TestAttestedStream(unittest.TestCase):
         self.assertIn(f"0x{ap.COMPAT_PAGE_BEACON:02X}", summary["pages"])
         self.assertIn(f"0x{ap.COMPAT_PAGE_ATTEST_TIER_I:02X}",
                       summary["pages"])
-        # Every compat page number is 7-bit, so the toggle bit never lifts one
-        # out of the namespace a heart-rate receiver can express.
+        # Every compat page number is 7-bit, so the toggle bit never lifts
+        # one outside the namespace a heart-rate receiver can express.
         for page in summary["pages"]:
             self.assertLessEqual(int(page, 16), ap.COMPAT_PAGE_MAX)
 
     def test_speed_and_cadence_can_never_carry_these_pages(self):
         self.assertNotIn("csc", ant_sim.ATTESTABLE)
         self.assertNotIn(ap.BSC_COMBINED_DEVICE_TYPE, ap.COMPAT_DEVICE_TYPES)
-        # And structurally: its profile overrides the rotation outright, so
-        # there is no slot for a compat page even if one were configured.
+        # Structurally too: its profile overrides the rotation outright, so
+        # there is no slot for a compat page even if configured.
         sensor = build("csc")
         sensor.compat = ant_sim.CompatAttestation(ROOT, EPOCH, DEVNUM)
         records = ant_sim.dry_run([sensor], 300.0)
@@ -394,9 +379,9 @@ class TestAttestedStream(unittest.TestCase):
         self.assertEqual(sensor.compat.tier1_sent, 0)
 
     def test_an_announcement_is_acted_on_only_after_its_tag_verifies(self):
-        # The SWITCH/RETURN path, which is otherwise written in C8 and never
-        # exercised until then. Frame B tags frame A's full eight bytes under
-        # subtype 0x03 and the Tier I counter.
+        # The SWITCH/RETURN path (otherwise written in C8, unexercised until
+        # then). Frame B tags frame A's full eight bytes under subtype 0x03
+        # and the Tier I counter.
         verifier = ant_verify.CompatVerifier(ROOT, EPOCH, DEVNUM)
         tier1 = ap.encode_compat_attest_tier1(
             5, __import__("radiant_crypto").compat_tier1_tag(
@@ -452,9 +437,9 @@ class TestTierTwoDataAttestation(unittest.TestCase):
                                delta=0.005)
 
     def test_a_lost_packet_unverifies_a_window_but_not_the_next_one(self):
-        # The honest regression: a window CMAC is not self-synchronising, so a
-        # dropped packet leaves nothing to check the tag against. That is LOST,
-        # not UNVERIFIED - the tag never failed, its evidence never arrived.
+        # A window CMAC is not self-synchronising, so a dropped packet leaves
+        # nothing to check the tag against - LOST, not UNVERIFIED, since the
+        # tag never failed; its evidence just never arrived.
         sensor, records = self.stream(300.0)
         victim = next(i for i, r in enumerate(records)
                       if i > 40 and r[3][0] == ap.PAGE_POWER_STANDARD)
@@ -466,8 +451,8 @@ class TestTierTwoDataAttestation(unittest.TestCase):
         self.assertGreater(tier2["verified"], 20)
 
     def test_a_flipped_payload_bit_is_unverified_not_lost(self):
-        # The other half of the same distinction: everything arrived and the
-        # tag says the bytes are not the ones that were sent.
+        # The other half: everything arrived, but the tag says the bytes are
+        # not the ones that were sent.
         sensor, records = self.stream(300.0)
         victim = next(i for i, r in enumerate(records)
                       if i > 40 and r[3][0] == ap.PAGE_POWER_STANDARD)
@@ -482,9 +467,9 @@ class TestTierTwoDataAttestation(unittest.TestCase):
         self.assertEqual(tier2["lost"], 0)
 
     def test_tier_one_is_unmoved_by_what_breaks_tier_two(self):
-        # One lost packet unverifies a whole Tier II window and costs Tier I
-        # nothing at all, because Tier I covers no payload. That difference is
-        # the entire reason the two tiers exist separately.
+        # One lost packet unverifies a whole Tier II window but costs Tier I
+        # nothing, since Tier I covers no payload - the reason the two tiers
+        # exist separately.
         sensor, records = self.stream(600.0)
         rng = random.Random(3)
         lossy = [r for r in records if rng.random() > 0.10]
@@ -499,19 +484,12 @@ class TestTierTwoDataAttestation(unittest.TestCase):
 class TestTelemetryEnvelope(unittest.TestCase):
     """Device type 0x60, end to end on the host with no radio.
 
-    THIS IS THE PYTHON HALF OF PHASE E'S GATE. The C half
-    (radiant_core/tests/src/test_profiles.c) puts frames across a mock radio
-    and decodes a schema from them; this half drives a real page rotation for
-    a simulated quarter of an hour and requires ant_verify.py's accumulator
-    continuity check to pass over the whole of it.
-
-    What makes it a gate rather than a round trip is that ant_verify.py is
-    told nothing about ant_sim.py. It does not know this node's fields, their
-    widths, their offsets or which pages carry them. It assembles the
-    descriptor set off the stream, decodes against what it assembled, looks up
-    the accumulating field's instantaneous partner in the section 7
-    vocabulary, and checks one against the other. Every one of those steps is
-    a step a receiver in the field takes.
+    The Python half of Phase E's gate (C half: test_profiles.c, mock radio).
+    ant_verify.py is told nothing about ant_sim.py's fields, widths, offsets
+    or page layout - it assembles the descriptor set off the stream, decodes
+    against it, looks up each accumulating field's instantaneous partner in
+    the section 7 vocabulary, and checks one against the other, exactly as a
+    real receiver would.
     """
 
     def _run(self, profile: str, seconds: float = RUN_SECONDS):
@@ -538,9 +516,8 @@ class TestTelemetryEnvelope(unittest.TestCase):
         self.assertFalse(heard["sparse"])
         self.assertEqual(heard["schema_changes"], 0)
 
-        # The vocabulary lookup is the part that makes a bridge mechanical
-        # rather than bespoke: the receiver got a quantity and a unit for each
-        # field without a line of per-node code.
+        # The vocabulary lookup: quantity and unit for each field with no
+        # per-node code, which is what makes a bridge mechanical.
         by_id = {f["id"]: f for f in heard["fields"]}
         self.assertEqual(by_id[1]["quantity"], "heart rate")
         self.assertEqual(by_id[1]["unit"], "bpm")
@@ -553,8 +530,8 @@ class TestTelemetryEnvelope(unittest.TestCase):
         self.assertTrue(by_id[4]["signed"])
         self.assertEqual(by_id[4]["bit_offset"], 32)
 
-        # And it decoded most of the stream against it. Everything before the
-        # first complete set is counted rather than guessed at.
+        # Everything before the first complete descriptor set is counted,
+        # not guessed at.
         self.assertGreater(heard["data_pages_decoded"], 3000)
         self.assertLessEqual(heard["data_pages_before_schema"], 6)
 
@@ -562,9 +539,8 @@ class TestTelemetryEnvelope(unittest.TestCase):
         sensor, records, summary = self._run("telemetry")
         pages = summary["pages"]
         self.assertEqual(set(pages), {"0x00", "0x01", "0x02", "0x50", "0x51"})
-        # Six descriptor frames, two common pages and 113 data pages per cycle
-        # of 121 - and the descriptor set is CONSECUTIVE, so a receiver joining
-        # mid-stream waits one cycle rather than six.
+        # 6 descriptor frames + 2 common + 113 data pages per 121-cycle; the
+        # descriptor set is CONSECUTIVE, so a mid-stream join waits one cycle.
         cycles = len(records) / ap.RADIANT_TLM_CYCLE
         self.assertAlmostEqual(pages["0x00"] / cycles, 6.0, delta=0.2)
         self.assertAlmostEqual(pages["0x50"] / cycles, 1.0, delta=0.1)
@@ -572,8 +548,7 @@ class TestTelemetryEnvelope(unittest.TestCase):
 
     def test_the_event_counter_wraps_and_is_still_continuous(self):
         sensor, records, summary = self._run("telemetry")
-        # 3600 messages at 4 Hz, so the 8-bit counter goes round many times.
-        # A run that never reached the wrap has not tested the delta.
+        # 3600 messages at 4 Hz, so the 8-bit counter wraps many times.
         for page in ("0x01", "0x02"):
             self.assertGreater(
                 summary["accumulator_wraps"].get(f"counter({page})", 0), 5,
@@ -581,9 +556,8 @@ class TestTelemetryEnvelope(unittest.TestCase):
         self.assertEqual(summary["violations"]["count"], 0)
 
     def test_a_corrupted_accumulator_is_caught(self):
-        # The instrument has to fail things. Jump the energy accumulator on one
-        # page-2 packet and the integral check must notice it disagreeing with
-        # the instantaneous power beside it.
+        # Jump the energy accumulator on one page-2 packet; the integral check
+        # must notice it disagreeing with the instantaneous power beside it.
         sensor = build("telemetry")
         records = ant_sim.dry_run([sensor], 120.0)
         page2 = [i for i, r in enumerate(records) if r[3][0] == 0x02]
@@ -600,9 +574,8 @@ class TestTelemetryEnvelope(unittest.TestCase):
         self.assertGreater(summary["violations"]["count"], 0)
 
     def test_a_corrupted_descriptor_frame_is_refused_not_decoded(self):
-        # A receiver that guesses a layout reports confident nonsense, so a
-        # descriptor frame that cannot be parsed must leave the schema unknown
-        # rather than half-applied.
+        # A descriptor frame that cannot be parsed must leave the schema
+        # unknown, not half-applied, or a receiver reports confident nonsense.
         sensor = build("telemetry")
         records = ant_sim.dry_run([sensor], 60.0)
         broken = []
@@ -622,11 +595,8 @@ class TestTelemetryEnvelope(unittest.TestCase):
 
 @unittest.skipIf(ant_sim is None, "pyusb is not installed")
 class TestSparseAssetTag(unittest.TestCase):
-    """The envelope with everything turned off.
-
-    Free to run - there is nothing to encode - and the cheapest exercise of the
-    sparse path there is.
-    """
+    """The envelope with everything turned off: the cheapest exercise of the
+    sparse path there is."""
 
     def _run(self, privacy_pages: bool, seconds: float = RUN_SECONDS):
         sensor = build("asset-tag")
@@ -637,10 +607,10 @@ class TestSparseAssetTag(unittest.TestCase):
 
     def test_a_tag_with_a_privacy_posture_emits_nothing_but_a_heartbeat(self):
         sensor, records, summary = self._run(privacy_pages=True)
-        # 900 s, a 30 s heartbeat, two frames per set. Nothing else at all:
-        # page 82's operating-time counter is monotone, so it survives an
-        # identity change and fingerprints a battery swap - which for a node
-        # whose whole payload IS an identity is the leak that matters.
+        # 900 s, 30 s heartbeat, two frames per set, nothing else: page 82's
+        # operating-time counter is monotone, so it would survive an identity
+        # change and fingerprint a battery swap - the leak that matters for a
+        # node whose whole payload IS an identity.
         self.assertEqual(set(summary["pages"]), {"0x00"})
         self.assertEqual(summary["pages"]["0x00"], 60)
         self.assertEqual(summary["violations"]["count"], 0)
@@ -657,11 +627,9 @@ class TestSparseAssetTag(unittest.TestCase):
         self.assertEqual(summary["pages"]["0x52"], 30, "one per heartbeat")
 
     def test_a_sparse_node_is_not_judged_against_a_period_it_never_claimed(self):
-        # Section 8's failure mode, and the reason the flag is in the
-        # descriptor: a receiver that measured this node's 60 transmissions
-        # against a 4 Hz period would report 98 % loss and enormous jitter for
-        # a node that is working exactly as specified, "as terrible link
-        # quality rather than as a configuration mismatch."
+        # Section 8's failure mode, and why the flag is in the descriptor: a
+        # receiver measuring 60 transmissions against a 4 Hz period would
+        # report 98% loss for a node working exactly as specified.
         _, _, summary = self._run(privacy_pages=True)
         names = {c["name"] for c in summary["checks"]}
         self.assertIn("sparse cadence", names)
@@ -696,9 +664,8 @@ class TestVerifierCatchesFaults(unittest.TestCase):
         sensor = build("power")
         records = ant_sim.dry_run([sensor], 120.0)
 
-        # Jump the accumulated-power field by 5000 on one packet. Nothing else
-        # changes, so only the accumulator-versus-instantaneous cross-check can
-        # notice - which is the check that exists for exactly this.
+        # Jump the accumulated-power field by 5000 on one packet; only the
+        # accumulator-vs-instantaneous cross-check can notice.
         t, device_type, device_number, payload = records[100]
         bumped = bytearray(payload)
         acc = (ap._rd_le16(payload, 4) + 5000) % ap.U16_WRAP
@@ -714,10 +681,9 @@ class TestVerifierCatchesFaults(unittest.TestCase):
     def test_a_stalled_transmitter_is_reported(self):
         sensor = build("power")
         records = ant_sim.dry_run([sensor], 120.0)
-        # Every packet repeats the first: the radio is alive, the sensor is
-        # not. Loss is zero, jitter is zero, and the decoded power is a
-        # perfectly correct 100 W forever - so every check except liveness
-        # passes, which is why liveness exists.
+        # Every packet repeats the first: radio alive, sensor not. Loss and
+        # jitter are zero and power decodes correctly forever, so every check
+        # except liveness passes - which is why liveness exists.
         first = records[0]
         frozen = [(t, dt, dn, first[3]) for t, dt, dn, _ in records]
         summary = self._summary_of(frozen, sensor)
@@ -746,10 +712,10 @@ class TestVerifierCatchesFaults(unittest.TestCase):
 class TestSharedTorqueBaselineIsGarbage(unittest.TestCase):
     """Pin down what aerosense's write-back item 1 actually costs.
 
-    ant_power_rx.c keeps one accumulator set for pages 0x11 and 0x12 and routes
-    both into it. This is that mistake, made against a real simulated stream, so
-    the replay test in zephyr_aerosense has a number to expect rather than an
-    assertion that something is wrong.
+    ant_power_rx.c keeps one accumulator set for pages 0x11 and 0x12 and
+    routes both into it; this reproduces that mistake against a real
+    simulated stream so the replay test in zephyr_aerosense has a number to
+    expect.
     """
 
     def test_one_baseline_for_two_pages_produces_absurd_power(self):
@@ -761,7 +727,7 @@ class TestSharedTorqueBaselineIsGarbage(unittest.TestCase):
                                           ap.PAGE_POWER_CRANK_TORQUE)]
 
         shared = []
-        for before, now in zip(torque_pages, torque_pages[1:]):
+        for before, now in zip(torque_pages, torque_pages[1:], strict=False):
             d_period = ap.delta_u16(now["acc_period"], before["acc_period"])
             d_torque = ap.delta_u16(now["acc_torque"], before["acc_torque"])
             if d_period:
@@ -770,7 +736,7 @@ class TestSharedTorqueBaselineIsGarbage(unittest.TestCase):
         per_page = []
         for page in (ap.PAGE_POWER_WHEEL_TORQUE, ap.PAGE_POWER_CRANK_TORQUE):
             series = [p for p in torque_pages if p["page"] == page]
-            for before, now in zip(series, series[1:]):
+            for before, now in zip(series, series[1:], strict=False):
                 d_period = ap.delta_u16(now["acc_period"], before["acc_period"])
                 d_torque = ap.delta_u16(now["acc_torque"], before["acc_torque"])
                 if d_period:
@@ -779,9 +745,8 @@ class TestSharedTorqueBaselineIsGarbage(unittest.TestCase):
         self.assertTrue(per_page)
         self.assertTrue(shared)
 
-        # Keeping the series apart recovers the transmitted power almost
-        # exactly - there is no noise in this run, so anything left is rounding
-        # in the accumulators.
+        # Keeping the series apart recovers transmitted power almost exactly
+        # (no noise in this run, so anything left is accumulator rounding).
         per_page_mae = sum(abs(w - WATTS) for w in per_page) / len(per_page)
         self.assertLess(per_page_mae, 2.0)
 
@@ -790,11 +755,10 @@ class TestSharedTorqueBaselineIsGarbage(unittest.TestCase):
         self.assertGreater(shared_mae, 1000.0)
         self.assertGreater(max(shared), 100000.0)
 
-        # And yet only about one sample in six is individually absurd. That is
-        # the reason this defect survives on real hardware: most samples land
-        # somewhere a receiver's smoothing will accept, and the rest look like
-        # dropouts. Anyone judging the fix by eye will conclude it was already
-        # working, so the replay test asserts on the aggregate instead.
+        # Only about one sample in six is individually absurd - most land
+        # where a receiver's smoothing accepts them or look like dropouts -
+        # which is why this defect survives eyeball review on real hardware;
+        # the replay test asserts on the aggregate instead.
         absurd = [w for w in shared if w > 3000.0 or w < 20.0]
         self.assertLess(len(absurd) / len(shared), 0.30)
 
@@ -803,11 +767,10 @@ class TestSharedTorqueBaselineIsGarbage(unittest.TestCase):
 class TestLossAccounting(unittest.TestCase):
     """Loss the radio never reported did not happen on the radio.
 
-    This is the check that would have caught the libusb read timeout that once
-    sat at 250 ms against a 249.7 ms channel period, cancelling transfers on top
-    of the packets they were waiting for. The invented losses were
-    indistinguishable from on-air ones in every figure the tool printed; the only
-    signal was that the radio raised no RX_FAIL for them.
+    Would have caught a past bug: a libusb read timeout of 250 ms against a
+    249.7 ms channel period cancelled transfers on top of the packets they
+    awaited, inventing losses indistinguishable from on-air ones in every
+    printed figure - except that the radio raised no RX_FAIL for them.
     """
 
     @staticmethod
@@ -818,8 +781,8 @@ class TestLossAccounting(unittest.TestCase):
         })
 
     def test_silent_loss_fails(self):
-        # Eight missing, three RX_FAIL: the shape of a real 300 s run before the
-        # timeout was fixed.
+        # Eight missing, three RX_FAIL: shape of a real 300 s run before the
+        # timeout fix.
         result = self.run_of(1201, 1193, {"RX_FAIL": 3})
         self.assertEqual(result["missing"], 8)
         self.assertEqual(result["unaccounted"], 5)
@@ -827,7 +790,7 @@ class TestLossAccounting(unittest.TestCase):
         self.assertIn("without the radio noticing", result["verdict"])
 
     def test_loss_the_radio_owns_passes(self):
-        # Same run after the fix: fewer missing, and every one of them announced.
+        # Same run after the fix: fewer missing, all announced.
         result = self.run_of(1200, 1195, {"RX_FAIL": 5})
         self.assertEqual(result["unaccounted"], 0)
         self.assertTrue(result["pass"])
@@ -835,7 +798,7 @@ class TestLossAccounting(unittest.TestCase):
 
     def test_a_packet_either_way_is_not_a_bug(self):
         # `missing` is a wall-clock estimate and an event can land after the
-        # window closes, so the check has to survive being off by one or two.
+        # window closes, so off-by-one-or-two must not fail the check.
         self.assertTrue(self.run_of(1200, 1194, {"RX_FAIL": 4})["pass"])
 
     def test_no_events_at_all_is_the_loudest_case(self):
@@ -845,9 +808,9 @@ class TestLossAccounting(unittest.TestCase):
         self.assertIn("USB path", result["verdict"])
 
     def test_replay_declines_to_judge(self):
-        # A capture stores payloads, not channel events. Reading the absent
-        # events as "the radio reported nothing" would blame the host for every
-        # packet the air ate.
+        # A capture stores payloads, not channel events; reading their
+        # absence as "the radio reported nothing" would blame the host for
+        # every packet the air ate.
         self.assertIsNone(self.run_of(1200, 1180, None))
 
     def test_a_clean_run_has_nothing_to_account_for(self):
@@ -858,10 +821,10 @@ class TestLossAccounting(unittest.TestCase):
 class TestExtendedFields(unittest.TestCase):
     """The appended fields are positional, and the flag byte is the position.
 
-    Every offset here depends on which *earlier* fields turned up, so reading
-    RSSI at a fixed byte works perfectly until a run is made without the
-    channel id and then reports half a device number as a signal strength. The
-    tests that matter are the ones where a field is absent.
+    Every offset depends on which *earlier* fields turned up, so reading
+    RSSI at a fixed byte works until a run without the channel id reports
+    half a device number as a signal strength. Tests where a field is
+    absent are the ones that matter.
     """
 
     # A real body off the bench: channel 0, page 0x10, flags 0xE0, then
@@ -884,13 +847,13 @@ class TestExtendedFields(unittest.TestCase):
         self.assertNotIn("rx_ticks", fields)
 
     def test_rssi_without_channel_id_moves_up_four_bytes(self):
-        # The whole reason for reading the flag byte. At a fixed offset of 14
-        # this would return the -80 threshold, or nothing at all.
+        # Why the flag byte is read at all: at a fixed offset of 14 this
+        # would return the -80 threshold, or nothing.
         body = self.REAL[:9] + b"\x40" + bytes([0x20, 0xE5, 0xB0])
         self.assertEqual(ant_verify.extended_fields(body)["rssi_dbm"], -27)
 
     def test_a_scale_we_cannot_read_is_not_reported(self):
-        # Measurement types other than 0x20 are proprietary. A number on an
+        # Measurement types other than 0x20 are proprietary; a number on an
         # unknown scale printed as dBm is worse than no number.
         body = bytearray(self.REAL)
         body[14] = 0x00
@@ -925,19 +888,17 @@ class TestRadioClock(unittest.TestCase):
         return a
 
     def test_a_wrap_is_subtracted_not_reconstructed(self):
-        # The counter is 16 bits at 32768 Hz, so it rolls every 2 s - once
-        # every eight packets at this period. A masked subtraction gets every
-        # one of them right; anything that tried to track the high bits would
-        # have to be right about them.
+        # The 16-bit counter at 32768 Hz rolls every 2 s (every eight packets
+        # at this period); masked subtraction gets every one right without
+        # needing to track the high bits.
         a = self.feed_run([1000 + i * self.PERIOD for i in range(40)])
         self.assertEqual(len(a.radio_intervals), 39)
         self.assertTrue(all(abs(d - self.PERIOD / 32768.0) < 1e-9
                             for d in a.radio_intervals))
 
     def test_a_gap_too_long_to_be_unambiguous_is_dropped(self):
-        # Beyond 2 s the masked subtraction cannot tell one wrap from two, and
-        # a jitter sample invented from that is worse than a missing one. The
-        # host clock is crude but it is easily good enough to notice.
+        # Beyond 2 s the masked subtraction cannot tell one wrap from two;
+        # the crude host clock is good enough to catch that and drop it.
         a = self.analyzer()
         a.feed(0.0, self.PAGE, {"rx_ticks": 0})
         a.feed(3.0, bytes([0x10, 1]) + self.PAGE[2:], {"rx_ticks": 500})
@@ -954,13 +915,9 @@ class TestRadioClock(unittest.TestCase):
         self.assertAlmostEqual(summary["jitter"]["offgrid_radio_s"], 0.0)
 
     def test_a_lost_packet_moves_jitter_but_not_the_grid(self):
-        """The distinction the whole measurement turns on.
-
-        Skipping a slot doubles one interval. The plain stddev reads that as
-        tens of ms of jitter even though every packet arrived exactly on time -
-        which is how the jitter figure came to track the loss figure and say
-        nothing on its own.
-        """
+        # Skipping a slot doubles one interval; plain stddev reads that as
+        # tens of ms of jitter even though every packet arrived on time,
+        # which is why the raw figure would just track the loss figure.
         clean = self.feed_run([1000 + i * self.PERIOD for i in range(40)])
         holed = self.feed_run([1000 + i * self.PERIOD
                                for i in range(40) if i != 20])
@@ -973,9 +930,8 @@ class TestRadioClock(unittest.TestCase):
         self.assertAlmostEqual(st.pstdev(clean.radio_intervals), 0.0)
 
     def test_a_dongle_that_reports_neither_still_works(self):
-        # Replay, and any dongle that refuses the library config. Everything
-        # that existed before these two fields has to keep working without
-        # them, which is why they are reported and not judged.
+        # Replay, and any dongle that refuses the library config: everything
+        # that predates these two fields must keep working without them.
         a = self.analyzer()
         for i in range(20):
             a.feed(i * 0.2497, bytes([0x10, i]) + self.PAGE[2:])

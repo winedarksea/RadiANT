@@ -3,64 +3,52 @@
 
 """Normalise Garmin's `Device0.txt` into `.antser`, and read `.antser` back.
 
-Two directions, and the second one is the one that works today.
+Two directions; the reverse one is the one that works today.
 
-**Forward.** `ANT_DLL.dll` exports `ANT_SetDebugLogDirectory` (ordinal 132).
-Call it before `ANT_Init` and the DLL writes `Device0.txt`, Garmin's own account
-of Garmin's own `Tx`/`Rx` bytes. That file is the third implementation this
-project needed and never had: the checksum bug survived a full green test suite
-because `src/ant_serial_bridge.c` and `tools/ant_probe.py` made the same mistake
-in the same direction and agreed perfectly with each other and with nothing else
-in the world. A transcript from a stack neither of them wrote is what catches a
-wrong *rule*, and a constant-for-constant cross-check never can.
+**Forward.** `ANT_DLL.dll` exports `ANT_SetDebugLogDirectory` (ordinal 132);
+called before `ANT_Init`, the DLL writes `Device0.txt`, Garmin's own account of
+its own `Tx`/`Rx` bytes. That is a transcript from a stack neither
+`src/ant_serial_bridge.c` nor `tools/ant_probe.py` wrote, which is what catches
+a wrong *rule* rather than a constant-for-constant self-agreement (the two
+made the same checksum mistake and passed a full green suite against each
+other).
 
     python tools/ant_trace.py <logdir>/Device0.txt --out zwift-pairing.antser
 
 **THE FORWARD PARSER IS UNVALIDATED AGAINST A REAL SAMPLE.** `Device0.txt`'s
-line format is documented nowhere - not in the ANT PC SDK, not in
-`archive/host-api/`, not on thisisant.com - and no sample was available when
-this was written. What is below is a set of *strict candidate dialects* written
-against the plausible shapes, not a parser written against a specimen. It
-therefore refuses to guess: an unrecognised line is a hard error naming the line
-number and its text, never a silently skipped one, because a parser that skips
-what it does not understand turns a golden transcript into an incomplete one
-that still looks fine.
+line format is documented nowhere and no sample was available when this was
+written. What follows is a set of *strict candidate dialects* guessed at
+plausible shapes, not written against a specimen - so it refuses to guess: an
+unrecognised line is a hard error naming the line and its text, never silently
+skipped, since a parser that skips what it doesn't understand turns a golden
+transcript into an incomplete one that still looks fine.
 
-To validate it, a human must:
+To validate: produce a real `Device0.txt` (any Windows host with the ANT
+driver + `ANT_DLL.dll`; Zwift pairing a sensor is the case worth having, see
+`archive/captures/serial/README.md`), run with `--dump-unparsed`, and if lines
+fail add a `Dialect` below (name, note, regex, timestamp kind) rather than
+loosening an existing one. Then write the real format into
+`archive/captures/serial/README.md`, which currently says it's unknown.
 
-1. Produce a `Device0.txt` - any Windows host with the ANT driver, `ANT_DLL.dll`
-   and an app that drives a session; Zwift pairing a sensor is the case worth
-   having (see `archive/captures/serial/README.md` for the shopping list).
-2. Run `python tools/ant_trace.py Device0.txt --dump-unparsed`. If every line
-   parses, the dialect guessed right and the resulting `.antser` is good.
-3. If it does not, the dump names the lines. Add one `Dialect` below - a name, a
-   prose note, a compiled regex and a timestamp kind. Adding an input dialect is
-   deliberately a function, not a rewrite.
-4. Write the real line format into the "On `Device0.txt`'s own format" section
-   of `archive/captures/serial/README.md`, which currently says it is unknown.
+Two assumptions are most likely wrong and cheap to check against a sample:
+that `Tx` means host-to-dongle (the DLL's own point of view), and that logged
+bytes are the complete frame including SYNC and checksum - if frames turn out
+logged without SYNC, `frames_from_bytes()` is where that gets absorbed.
 
-Two assumptions are worth naming because they are the ones most likely to be
-wrong, and both are cheap to check against a sample: that `Tx` means
-host-to-dongle (the DLL's point of view, so `Tx` is what the host wrote), and
-that the bytes logged are the complete frame including SYNC and checksum. If the
-frames turn out to be logged without SYNC, `frames_from_bytes()` is where that is
-absorbed.
-
-**Reverse.** `.antser` back to annotated text, decoding message ids and payloads
-through `tools/ant_wire.py`. This needs no sample, is useful the moment the
-first conformance transcript exists, and is what makes a byte diff readable:
+**Reverse.** `.antser` back to annotated text, decoding message ids and
+payloads through `tools/ant_wire.py`. Needs no sample and is what makes a byte
+diff readable:
 
     python tools/ant_trace.py conformance-sdk-ant.antser --to-text
     python tools/ant_trace.py annotated.txt --from-text --out round-trip.antser
 
-The annotated form is `.antser` with a trailing `# ...` comment on each line, so
-it reads back losslessly. Readers here tolerate trailing comments; the writer
-never emits them into a `.antser`, because the format archived in
-`archive/captures/serial/` is meant to stay one `sscanf` per line.
+The annotated form is `.antser` with a trailing `# ...` comment per line, so it
+reads back losslessly; the writer never emits those comments into a plain
+`.antser`, which stays one `sscanf` per line.
 
-This module owns the `.antser` reader and writer for the whole tools directory -
-`tools/ant_conformance.py` imports them rather than growing a second copy. It is
-standard library plus `ant_wire`, and touches no hardware.
+This module owns the `.antser` reader/writer for the whole tools directory -
+`tools/ant_conformance.py` imports them rather than growing a second copy. It
+is standard library plus `ant_wire`, and touches no hardware.
 """
 
 from __future__ import annotations
@@ -69,8 +57,8 @@ import argparse
 import json
 import re
 import sys
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from typing import Callable, Iterable, Sequence
 
 sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 
@@ -256,7 +244,7 @@ def read_antser(text: str, *, source: str = "<string>") -> list[Record]:
 
 
 def read_antser_file(path: str) -> list[Record]:
-    with open(path, "r", encoding="utf-8") as handle:
+    with open(path, encoding="utf-8") as handle:
         return read_antser(handle.read(), source=path)
 
 
@@ -699,7 +687,7 @@ def _read_lines(path: str) -> list[str]:
     # carry a stray byte in a banner line, and losing the whole capture to one
     # of those would be absurd. Anything it mangles lands in a line that then
     # fails to parse, loudly.
-    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+    with open(path, encoding="utf-8", errors="replace") as handle:
         return handle.readlines()
 
 

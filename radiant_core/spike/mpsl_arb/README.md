@@ -117,9 +117,9 @@ which is the bound that would have fired if the arbiter were broken.
 ### ⚠ THE DEADLINE TIMER IS NOT REQUIRED, AND THE PLAN SAYS IT IS
 
 The plan's finding is that denial *"arrives late, and from a cooperative
-thread… It is too late to be useful on its own"*, and it concludes that the
-front end needs its own deadline timer as a **required component** — the single
-most complex and least testable part of P3.
+thread… It is too late to be useful on its own"*, concluding the front end
+needs its own deadline timer as a **required component** — the single most
+complex and least testable part of P3.
 
 **Measured, that is false on this part.** Of seventeen `BLOCKED` signals across
 both loads, **not one arrived after the start it referred to.** Every one

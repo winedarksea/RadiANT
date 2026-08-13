@@ -23,9 +23,9 @@ from ant_sec import (
     SW_CONF,
     SW_DESC_CONF,
     SW_DROP_UNVER,
-    SecStatus,
     VERDICT_UNVERIFIED,
     VERDICT_VERIFIED,
+    SecStatus,
     decode_config,
     decode_epoch,
     decode_set_key,
@@ -37,7 +37,6 @@ from ant_sec import (
     switches_str,
     verdict_str,
 )
-
 
 KEY = bytes(range(16))
 
@@ -76,9 +75,8 @@ class TestConfig(unittest.TestCase):
         # version understands and silently drop the one it does not, which is
         # the worst of both answers.
         for bit in (0x10, 0x20, 0x40, 0x80):
-            with self.subTest(bit=bit):
-                with self.assertRaises(ValueError):
-                    encode_config(0, SW_AUTH | bit, 2)
+            with self.subTest(bit=bit), self.assertRaises(ValueError):
+                encode_config(0, SW_AUTH | bit, 2)
 
     def test_only_w_two_four_and_eight(self):
         for w in range(0, 17):
@@ -138,9 +136,8 @@ class TestSetKey(unittest.TestCase):
 
     def test_only_128_bits_in_v1(self):
         for bits in (0, 64, 192, 256):
-            with self.subTest(bits=bits):
-                with self.assertRaises(ValueError):
-                    encode_set_key(0, KEY, bits=bits)
+            with self.subTest(bits=bits), self.assertRaises(ValueError):
+                encode_set_key(0, KEY, bits=bits)
 
 
 class TestEpoch(unittest.TestCase):

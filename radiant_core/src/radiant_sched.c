@@ -2,100 +2,73 @@
 /*
  * radiant_sched.c - the radio schedule.
  *
- * Provenance: clean-room. Written from radiant_core/include/radiant_core/radiant_radio_hal.h (the
- * frozen backend contract) and radiant_core/include/radiant_core/radiant_sched.h, against the mock
- * in radiant_core/tests/fake_radio.c, with the two bounded constants in the header
- * taken from the bench measurements in docs/ant-radio-link.md and
- * docs/spike-b-part2-results.md. Nothing here derives from sdk-ant, from
- * libant.a, from disassembly of any binary, or from any adopter-gated ANT+
- * device profile document. See docs/decisions/0002-clean-room-policy.md.
+ * Clean-room: written from radiant_radio_hal.h and radiant_sched.h against the
+ * mock in tests/fake_radio.c; the two bounded constants come from the bench
+ * measurements in docs/ant-radio-link.md and docs/spike-b-part2-results.md.
+ * See docs/decisions/0002-clean-room-policy.md.
  *
  * ---------------------------------------------------------------------------
- * The shape of it
- * ---------------------------------------------------------------------------
- * A table of 32 slots, each holding at most one intent, and one function -
- * pass() - that looks at the table and at the clock and decides what the radio
- * does next. Everything else in this file either fills the table, feeds pass()
- * an event, or is pass() split up so it can be read.
+ * Shape: a table of 32 slots, each holding at most one intent, and pass() -
+ * which looks at the table and the clock and decides what the radio does
+ * next. Everything else fills the table, feeds pass() an event, or is pass()
+ * split up for readability.
  *
- * pass() is called from exactly two places, and the list is short on purpose:
+ * pass() runs from exactly two places: the tail of a radio callback (the
+ * low-jitter re-arm path the HAL's callback contract permits), and
+ * radiant_sched_tick(), the commit point for anything posted from thread
+ * context.
  *
- *   - the tail of a radio callback, which is the low-jitter re-arm path the
- *     HAL's callback contract exists to permit;
- *   - radiant_sched_tick(), the commit point for anything posted from thread
- *     context.
+ * POSTING A REQUEST DOES NOT ARM ANYTHING - that's what makes merging work.
+ * Re-planning on every mutation would arm the first channel's window the
+ * instant it posted, and a second channel whose window overlaps it exactly
+ * would arrive to find the radio already committed and merge with nothing.
+ * Requests are collected and committed once; in steady state every channel
+ * posts its next window from inside the last one's terminal callback, so the
+ * tail pass sees them all together.
  *
- * POSTING A REQUEST DOES NOT ARM ANYTHING, and that is what makes merging work
- * rather than an accident of timing. A scheduler that re-planned on every
- * mutation would arm the first channel's window the instant it was posted, and
- * the second channel - whose window overlaps it exactly - would arrive to find
- * the radio already committed and merge with nothing. Requests are collected,
- * then committed once. In steady state that costs nothing extra, because every
- * channel posts its next window from inside the terminal callback of the last
- * one and the tail pass sees them all together.
+ * A window that is armed but not yet open can be torn down and rebuilt for
+ * free, so a late-opening channel still joins the merge on the next tick
+ * instead of waiting a period. See want_preempt().
  *
- * The transient is handled separately: a window that is armed but has not
- * opened yet can be torn down and rebuilt for free, so a channel that opens
- * late still joins the merge on the next tick instead of waiting a period. See
- * want_preempt().
- *
- * A pass costs one radiant_radio_now() and at most one arm call, whatever the state
- * of the table. That budget is not an optimisation: fake_radio.c records a
- * contract violation when a callback makes more than sixteen HAL calls, because
- * "do work proportional to anything - queue it and return" is exactly what a
- * scheduler is tempted to do in an ISR. The slot scans are pure arithmetic and
- * touch no hardware.
+ * A pass costs one radiant_radio_now() and at most one arm call regardless of
+ * table state - fake_radio.c flags a contract violation past sixteen HAL
+ * calls per callback. The slot scans are pure arithmetic, no hardware.
  *
  * ---------------------------------------------------------------------------
- * THE ORDER OF OPERATIONS AROUND AN ABORT, which is the subtle part
- * ---------------------------------------------------------------------------
- * radiant_radio_hal.h: an aborted operation's terminal event is STILL DELIVERED,
- * and the op id exists so that a late event from a cancelled operation is
- * recognisable rather than merely surprising. This file therefore always
- * retires the live operation - clearing s.armed_op - BEFORE calling
- * radiant_radio_abort(), and every event handler's first act is to compare the
- * event's op id against s.armed_op and drop anything that does not match.
+ * Abort ordering (the subtle part): an aborted operation's terminal event is
+ * STILL DELIVERED (radiant_radio_hal.h), and the op id lets a late event from
+ * a cancelled operation be recognised. This file always retires the live
+ * operation (clears s.armed_op) BEFORE calling radiant_radio_abort(), and
+ * every event handler's first act is comparing the event's op id against
+ * s.armed_op and dropping mismatches.
  *
- * Get that order wrong and the bug is not a crash. The ABORTED event of the
- * operation you just replaced is taken for the terminal event of the one you
- * armed in its place, the replacement is retired while its window is still
- * open, and the radio is left listening for addresses nobody is routing any
- * more. This happens on every preemption, with no fault injection at all, so
- * s.stats.stale_events is a normal non-zero number and not an error count.
+ * Get the order wrong and the ABORTED event of the operation you just
+ * replaced is taken for the terminal event of its replacement, which is then
+ * retired while its window is still open - radio left listening for nobody.
+ * Happens on every preemption with no fault injection, so
+ * s.stats.stale_events is normally non-zero, not an error count.
  *
  * ---------------------------------------------------------------------------
- * Thread against interrupt
- * ---------------------------------------------------------------------------
- * There are exactly two writers of `s`: thread context, through the three
- * request entry points and radiant_sched_tick(); and the radio ISR, through
- * hal_rx()/hal_tx(). Until a backend existed that actually raised callbacks,
- * the only thing between them was `in_pass`, a plain bool that was set on the
- * way into a callback and UNCONDITIONALLY CLEARED on the way out - so an ISR
- * landing on top of a thread-context pass() told the thread, on its way back,
- * that no pass was running. radiant_api.c predicted this in its own words at
- * the mutex that cannot cover it.
+ * Thread against interrupt: `s` has exactly two writers - thread context via
+ * the three request entry points and radiant_sched_tick(), and the radio ISR
+ * via hal_rx()/hal_tx(). A plain bool `in_pass`, unconditionally cleared on
+ * the way out of a callback, would let an ISR landing on top of a
+ * thread-context pass() tell the thread, on return, that no pass was running.
+ * Not rare: a master's EVENT_TX pumps a pass in thread context, and the
+ * slave's reply lands 2.19 ms later - inside that window, every exchange.
  *
- * It is not a rare interleaving either. It is scheduled by the protocol: a
- * master's EVENT_TX tells the host to write, the host's write pumps a pass in
- * thread context, and the slave's reply lands 2.19 ms later - inside that
- * window, on every exchange.
- *
- * Two things fix it, and both are needed:
- *
+ * Two fixes, both needed:
  *   - in_pass is SAVED AND RESTORED in hal_rx()/hal_tx(), so a nested entry
- *     leaves the flag as it found it and defers the commit to the pass that
- *     owns it;
- *   - every write to the slot table, and the whole of pass(), runs with
- *     interrupts off, via the port's radiant_event_crit_enter()/_exit(). That
- *     is the same primitive radiant_event.c uses for its ring, chosen over
- *     anything of this module's own precisely because the ISR side must not
- *     block. A pass is bounded arithmetic plus at most one arm call - the
- *     budget above - so the section cannot grow with the channel count.
+ *     defers the commit to the pass that owns it;
+ *   - every write to the slot table, and all of pass(), runs with interrupts
+ *     off via radiant_event_crit_enter()/_exit() (same primitive
+ *     radiant_event.c uses for its ring - the ISR side must not block). Bounded
+ *     arithmetic plus at most one arm call, so the section can't grow with
+ *     channel count.
  *
- * What this deliberately does NOT do is take a lock the HAL would have to know
- * about. Backends call these callbacks from their own interrupt; the contract
- * stays "call us, we return quickly", and the exclusion is entirely on this
- * side of it.
+ * This deliberately does not take a lock the HAL has to know about - backends
+ * call these callbacks from their own interrupt, and the exclusion stays
+ * entirely on this side.
  */
 
 #include <stdbool.h>
@@ -107,11 +80,9 @@
 #include <radiant_core/radiant_noise.h>
 #include <radiant_core/radiant_radio_hal.h>
 #include <radiant_core/radiant_sched.h>
-/*
- * For radiant_event_crit_enter()/_exit() ONLY - the port's irq_lock() under a
- * neutral name, and the one primitive this module needs that the HAL does not
- * supply. Nothing here queues an event. See "Thread against interrupt" below.
- */
+/* For radiant_event_crit_enter()/_exit() only - the port's irq_lock() under a
+ * neutral name; nothing here queues an event. See "Thread against interrupt"
+ * above. */
 #include <radiant_core/radiant_event.h>
 
 /* ---------------------------------------------------------------------------
@@ -119,15 +90,10 @@
  * ---------------------------------------------------------------------------
  */
 
-/*
- * Whether the energy-detect slot kind is compiled at all.
- *
- * A plain 0/1 macro rather than IS_ENABLED(), because this file includes no
- * Zephyr header by design and IS_ENABLED() is one. Every ED branch below is
- * written as `if (SCHED_ED_BUILT && ...)` so the compiler folds it away rather
- * than the preprocessor cutting the file into two shapes - the scheduler is
- * hard enough to read once.
- */
+/* Whether the energy-detect slot kind is compiled at all. Plain 0/1 macro,
+ * not IS_ENABLED() (this file includes no Zephyr header by design). ED
+ * branches read `if (SCHED_ED_BUILT && ...)` so the compiler folds it away
+ * rather than the preprocessor forking the file into two shapes. */
 #if defined(CONFIG_RADIANT_CORE_ED_SCAN)
 #define SCHED_ED_BUILT 1
 #else
@@ -135,35 +101,19 @@
 #endif
 
 /*
- * SLOT_ED - the fourth kind, and the only one that is allowed to get nothing.
- *
- * It measures the band on frequencies the link layer is not using, so that
- * adaptive frequency selection has evidence rather than a preference. Four
- * rules govern it and each one is a way it could otherwise cost a packet:
- *
- *   LOWEST PRIORITY, ALWAYS. It is chosen only when no transmit, no bounded
- *   receive and no background scan wants the radio in the gap. A dongle that is
- *   searching therefore measures nothing, which is correct: discovery is worth
- *   more than a map, and the map fills in tracked steady state where the gap
- *   between two 4 Hz windows is ~245 ms of otherwise idle radio.
- *
- *   NEVER PREEMPTS. An ED slot is skipped entirely by want_preempt(). Nothing
- *   this module can measure is worth tearing down a window that is already
- *   open.
- *
- *   MERGES WITH NOTHING. arm_rx_window()'s membership test is `kind == SLOT_RX`
- *   and an ED slot fails it, so an ED chunk never joins a receive window and no
- *   receive window ever grows to accommodate one. This is not merely true, it
- *   is unexpressible: an ED operation is a different HAL call.
- *
- *   TAKES GAPS ONLY. A chunk is bounded by the next committed operation minus
- *   the arm lead, exactly as a scan chunk is, so the operation the gap is in
- *   front of is armed at the instant it always would have been.
- *
- * The last two together are what the phase's gate rests on: the sequence of
- * receive and transmit arms under a full tracked load is identical whether an
- * ED request is posted or not, because an ED chunk can neither change a
- * window's membership nor delay one.
+ * SLOT_ED - the fourth kind, and the only one allowed to get nothing. It
+ * measures the band on frequencies the link layer isn't using, for adaptive
+ * frequency selection. Four rules, each closing off a way it could cost a
+ * packet:
+ *   - LOWEST PRIORITY, ALWAYS: chosen only when no TX/RX/scan wants the gap.
+ *     A searching dongle measures nothing (correct - discovery beats a map).
+ *   - NEVER PREEMPTS: skipped entirely by want_preempt().
+ *   - MERGES WITH NOTHING: arm_rx_window()'s membership test is
+ *     `kind == SLOT_RX`, which an ED slot fails; also a different HAL call.
+ *   - TAKES GAPS ONLY: bounded by the next committed op minus arm lead, like
+ *     a scan chunk, so it never delays what follows.
+ * Together these mean the RX/TX arm sequence under full tracked load is
+ * identical whether or not ED is posted.
  */
 enum slot_kind {
 	SLOT_IDLE = 0,
@@ -195,18 +145,11 @@ struct sched_slot {
 	uint8_t addr_len;
 	uint8_t addr[RADIANT_RADIO_ADDR_MAX];
 
-	/*
-	 * Energy detect only. rf_index above is the range's low end, so these
-	 * two bytes are the whole of the extra addressing an ED slot needs -
-	 * and they sit in padding the struct already had.
-	 *
-	 * rf_cursor is where the NEXT chunk starts, and it advances per
-	 * delivered dwell rather than per armed chunk. A chunk cut short by a
-	 * tracked window has measured the indices it reached and not the ones
-	 * it did not; advancing at the arm would silently skip the tail of
-	 * every preempted chunk, and the indices skipped would be the same ones
-	 * every time because preemption is periodic.
-	 */
+	/* Energy detect only; rf_index above is the range's low end. rf_cursor
+	 * is where the NEXT chunk starts, advanced per delivered dwell rather
+	 * than per armed chunk - advancing at arm time would skip the tail of
+	 * every chunk cut short by a tracked window, and always the same
+	 * indices since preemption is periodic. */
 	uint8_t rf_hi;
 	uint8_t rf_cursor;
 
@@ -215,15 +158,12 @@ struct sched_slot {
 	const uint8_t               *body;    /* transmit; caller-owned */
 
 	struct radiant_tx_power power;
-	/* Air time the owner may still need after this operation ends. Carried
-	 * verbatim to the HAL request; see radiant_radio_hal.h. Two bytes in
-	 * padding the struct already had, which is why it does not move the
-	 * 72 B budget below. */
+	/* Air time the owner may still need after this op ends; carried
+	 * verbatim to the HAL request, see radiant_radio_hal.h. */
 	uint16_t            follow_on_us;
 	uint32_t            chunk_us;
-	/* Energy detect only: the per-index ceiling. Not folded into chunk_us,
-	 * because the two bound different things - one arm call against one
-	 * index - and a chunk is sized as a whole number of dwells. */
+	/* Energy detect only: per-index ceiling. Not folded into chunk_us -
+	 * one arm call vs. one index; a chunk is a whole number of dwells. */
 	uint32_t            dwell_us;
 
 	radiant_time_t t_start;
@@ -241,46 +181,37 @@ _Static_assert(sizeof(struct sched_slot) <= 72u,
 
 static struct {
 	bool inited;
-	/*
-	 * A pass, or a callback that may lead to one, is running. Requests
+	/* A pass, or a callback that may lead to one, is running. Requests
 	 * posted underneath it are recorded and considered on the way out
-	 * rather than arming re-entrantly.
-	 *
-	 * SAVED AND RESTORED, NEVER UNCONDITIONALLY CLEARED, and the difference
-	 * is not hypothetical against a real backend. hal_rx()/hal_tx() run in
-	 * the radio ISR and can land on top of a thread-context pass() that is
-	 * already inside its own; clearing the flag on the way out of the ISR
-	 * would hand the suspended thread a false "no pass is running", and the
-	 * very next thing it does is arm. The collision is scheduled rather than
-	 * rare: EVENT_TX tells the host to write, the host's write pumps a pass
-	 * in thread context, and the slave's reply lands 2.19 ms later - inside
-	 * that window, every exchange.
-	 */
+	 * rather than arming re-entrantly. SAVED AND RESTORED, never
+	 * unconditionally cleared: hal_rx()/hal_tx() run in the radio ISR and
+	 * can land on top of a thread-context pass() already in progress -
+	 * clearing on the way out would tell the suspended thread "no pass is
+	 * running" right before it arms. See "Thread against interrupt" above. */
 	bool in_pass;
 	/* Something in the table changed. Lets a non-terminal receive event
 	 * cost nothing at all unless a callback actually posted something. */
 	bool dirty;
 	/* A request was posted since the last successful arm, so an armed
 	 * window that has not opened yet is worth rebuilding. Cleared on every
-	 * arm, which is what bounds re-planning to one attempt per request and
-	 * keeps a request that cannot join from provoking one on every tick. */
+	 * arm, which bounds re-planning to one attempt per request. */
 	bool replan;
 
 	struct radiant_sched_cbs cbs;
 	void                *user;
 
 	/* The POINTER is cached, never the contents: the HAL says it is static
-	 * for the lifetime of the program, so max_filters and min_arm_lead_us
-	 * are re-read on every pass and a suite that swaps capability presets
-	 * between operations is obeyed immediately. */
+	 * for the lifetime of the program, so max_filters/min_arm_lead_us are
+	 * re-read on every pass and a preset swap between operations is obeyed
+	 * immediately. */
 	const struct radiant_radio_caps *caps;
 
 	struct sched_slot ch[RADIANT_SCHED_MAX_CHANNELS];
 
 	/* The live operation. armed_open/armed_end are the window it was armed
-	 * with, not what anyone requested; armed_fmt and armed_rf are kept so
-	 * that "could this new request have joined it?" is answerable without
-	 * consulting a member slot that may already have been replaced. */
+	 * with, not what was requested; armed_fmt/armed_rf let "could this new
+	 * request have joined it?" be answered without consulting a member slot
+	 * that may already have been replaced. */
 	uint32_t                     armed_op;
 	uint8_t                      armed_kind;
 	bool                         armed_stop_on_first;
@@ -292,13 +223,10 @@ static struct {
 	uint8_t                      members[RADIANT_SCHED_MAX_FILTERS];
 	uint8_t                      n_members;
 
-	/*
-	 * The filter array handed to radiant_radio_rx(). The HAL requires it to
-	 * stay valid until the terminal event, which is why it lives here and
-	 * not on a stack frame; one radio means one live window means one
-	 * array. owner[] and local[] are how an rx_event.filter_index becomes
-	 * "channel c, its own filter i" with no search.
-	 */
+	/* The filter array handed to radiant_radio_rx(). The HAL requires it to
+	 * stay valid until the terminal event, hence it lives here rather than
+	 * on a stack frame. owner[]/local[] turn an rx_event.filter_index into
+	 * "channel c, its own filter i" with no search. */
 	struct radiant_rx_filter merged[RADIANT_SCHED_MAX_FILTERS];
 	uint8_t              owner[RADIANT_SCHED_MAX_FILTERS];
 	uint8_t              local[RADIANT_SCHED_MAX_FILTERS];
@@ -309,25 +237,14 @@ static struct {
 	 * high-numbered ones would never be armed at all. */
 	uint8_t cursor;
 
-	/*
-	 * The PHY the radio is currently configured for, and whether that is
-	 * known at all.
-	 *
-	 * `phy_known` is false until the first operation is armed and after
-	 * every radiant_sched_init(), and while it is false EVERY candidate is
-	 * charged the switch cost. That is the conservative direction and it is
-	 * the deliberate one: the alternative is assuming caps.phys[0], which
-	 * is right on a dongle that has only ever been on 1 M and wrong exactly
-	 * once - on the first operation after a reset that left the radio
-	 * configured for something else - which is the single hardest case here
-	 * to reproduce and the one that would produce a late window with no
-	 * counter to explain it. One over-lead on the first arm of a session
-	 * costs nothing measurable.
-	 *
-	 * Updated ONLY on a successful arm. An arm the backend refused left the
-	 * radio in whatever state it was in, and recording the PHY we hoped for
-	 * would under-lead every subsequent operation on the real one.
-	 */
+	/* The PHY the radio is currently configured for, and whether that is
+	 * known. `phy_known` is false until the first arm (and after every
+	 * radiant_sched_init()), and while false every candidate is charged the
+	 * switch cost - the conservative direction, since assuming caps.phys[0]
+	 * is wrong exactly on the first op after a reset that left the radio on
+	 * something else, and would produce a late window with no counter to
+	 * explain it. Updated ONLY on a successful arm - a refused arm leaves
+	 * the radio in whatever state it was in. */
 	uint8_t phy;
 	bool    phy_known;
 
@@ -346,13 +263,9 @@ enum step {
  * ---------------------------------------------------------------------------
  */
 
-/*
- * How many addresses one window may carry, RIGHT NOW.
- *
- * This function is the whole of the module's portability. Eight on nRF (one
- * base address plus eight prefixes), two on EFR32/RAIL (two runtime sync
- * words), and there is no other number anywhere in this file.
- */
+/* How many addresses one window may carry, right now: 8 on nRF (base address
+ * + 8 prefixes), 2 on EFR32/RAIL (2 runtime sync words). No other number
+ * appears anywhere in this file. */
 static uint8_t max_filters(void)
 {
 	uint8_t mf;
@@ -371,23 +284,15 @@ static uint8_t max_filters(void)
 }
 
 /*
- * How many DISTINCT ADDRESS GROUPS one window may carry, RIGHT NOW.
- *
- * The second half of the module's portability, and the half that was missing.
- * caps.max_filters is how many addresses fit; this is how many distinct values
- * of addr[0 .. addr_len-2] fit, and on the nRF they are 8 and 2 respectively
- * because seven of the eight logical addresses share one base register.
- *
- * On the 3-byte search format every filter shares the group [A6 C5] and this
- * never binds. On the 5-byte tracking format the group carries the device
- * number, so it binds on the second tracked channel - which is why ADR 0005's
- * "32 sensors do not cost 32 windows" was false on nRF until this existed: the
- * scheduler merged eight tracked channels into a window the backend then
- * refused with RADIANT_RADIO_ENOTSUP, and the refusal was charged to whichever
- * channel happened to be the leader.
- *
- * Zero means "the backend has no group constraint", which is the honest reading
- * of a caps block written before this field existed.
+ * How many DISTINCT ADDRESS GROUPS one window may carry, right now.
+ * caps.max_filters is how many addresses fit; this is how many distinct
+ * values of addr[0 .. addr_len-2] fit - 8 and 2 on nRF, since 7 of its 8
+ * logical addresses share one base register. On the 5-byte tracking format
+ * the group carries the device number, so it binds on the second tracked
+ * channel: without this check, ADR 0005's "32 sensors do not cost 32
+ * windows" was false on nRF - the scheduler merged 8 tracked channels into a
+ * window the backend refused with RADIANT_RADIO_ENOTSUP, charged to whichever
+ * channel happened to lead. Zero means no group constraint.
  */
 static uint8_t max_addr_groups(void)
 {
@@ -406,15 +311,10 @@ static uint8_t max_addr_groups(void)
 	return mg;
 }
 
-/*
- * Is `f` in the same address group as `other`? Groups compare
- * addr[0 .. addr_len-2]: everything except the last byte, which is the part the
- * nRF puts in a prefix register and can vary freely inside one group.
- *
- * A one-byte address is entirely prefix, so every such filter is in the same
- * (empty) group. That is the right answer rather than a degenerate one: with
- * nothing outside the prefix there is nothing to constrain.
- */
+/* Is `f` in the same address group as `other`? Compares
+ * addr[0 .. addr_len-2] - everything but the last byte, which nRF puts in a
+ * prefix register and can vary freely within a group. A one-byte address is
+ * entirely prefix, so every such filter shares the (empty) group. */
 static bool same_addr_group(const struct radiant_rx_filter *f,
 			    const struct radiant_rx_filter *other)
 {
@@ -427,14 +327,9 @@ static bool same_addr_group(const struct radiant_rx_filter *f,
 	return memcmp(f->addr, other->addr, (size_t)(f->addr_len - 1u)) == 0;
 }
 
-/*
- * How many distinct groups the merged set would hold if `add` filters starting
- * at `from` were included. Counts against s.merged[0 .. s.n_merged), which is
- * the set built so far.
- *
- * Linear in the set size, and the set size is at most eight - a hash would cost
- * more than it saved and would be a second thing to be wrong about.
- */
+/* How many distinct groups the merged set would hold if `add` were included,
+ * counted against s.merged[0 .. s.n_merged). Linear in set size (max 8); a
+ * hash would cost more than it saves. */
 static uint8_t addr_groups_with(const struct radiant_rx_filter *add,
 				uint8_t n_add)
 {
@@ -488,21 +383,14 @@ static radiant_time_t arm_lead(void)
 }
 
 /*
- * The EXTRA lead this candidate needs because the radio is not already
- * configured for its PHY. Zero whenever it is, and zero on any backend that
- * switches for free.
- *
- * WHY THIS IS NOT FOLDED INTO arm_lead(). min_arm_lead_us is what EVERY
- * operation costs; this is what ONE operation costs when it follows a
- * different one. Folding them would charge every window on a two-PHY build for
- * a switch that happens twice a period at most, and on a dongle at ~19 % duty
- * the gap between two tracked windows is the resource the background scan and
- * the energy-detect map both live in. The nRF backends pay zero here and must
- * keep paying zero: a constant added unconditionally would be invisible on the
- * bench that ships and expensive on the one that does not.
- *
- * A NULL format is an energy-detect chunk, which has no format and no PHY of
- * its own. It is charged nothing and leaves s.phy alone - see arm_ed_chunk().
+ * The EXTRA lead this candidate needs because the radio isn't already
+ * configured for its PHY. Zero when it already is, or on a backend that
+ * switches for free. Not folded into arm_lead(): that's what EVERY op costs,
+ * this is what ONE op costs following a different one - folding them would
+ * charge every window on a two-PHY build for a switch that happens at most
+ * twice a period, eating into the gap the scan and ED map live in.
+ * NULL format = an ED chunk, which has no PHY; charged nothing, s.phy
+ * untouched (see arm_ed_chunk()).
  */
 static radiant_time_t phy_lead(const struct radiant_pkt_format *fmt)
 {
@@ -516,23 +404,15 @@ static radiant_time_t phy_lead(const struct radiant_pkt_format *fmt)
 }
 
 /*
- * The lead a gap must leave in front of a committed operation, when something
- * else is going to run in that gap first.
- *
- * NOT phy_lead(), AND THE DIFFERENCE IS THE WHOLE BUG THIS FUNCTION EXISTS TO
- * AVOID. phy_lead() asks "does this differ from what the radio is configured
- * for NOW", which is the right question when the next thing armed is the
- * committed operation itself. It is the wrong question when a background scan
- * or an energy-detect chunk is about to run in between: by the time the
- * committed operation is armed, the radio will be configured for whatever the
- * gap filler left behind, not for what it is on today. A tracked long-range
- * window preceded by a 1 M scan chunk needs the switch even when the radio is
- * already on the coded PHY at the moment the gap is sized - and it would have
- * been armed exactly phy_switch_us late, once per period, with nothing but a
+ * The lead a gap must leave in front of a committed operation, when
+ * something else runs in that gap first. NOT phy_lead(): phy_lead() asks
+ * "does this differ from what the radio is configured for NOW", which is
+ * wrong here because by the time the committed operation is armed, the radio
+ * will be configured for whatever the gap filler left behind, not for today's
+ * PHY. Get this wrong and a tracked window preceded by a scan chunk on a
+ * different PHY is armed phy_switch_us late, every period, with only a
  * dropped frame to show for it.
- *
- * `after` NULL means the filler leaves the configuration alone, which is what
- * an energy-detect chunk does.
+ * `after` NULL means the filler leaves the configuration alone (an ED chunk).
  */
 static radiant_time_t phy_gap(const struct radiant_pkt_format *after,
 			      const struct radiant_pkt_format *next)
@@ -579,20 +459,11 @@ static radiant_time_t t_back(radiant_time_t t, radiant_time_t d)
 	return (t > d) ? (t - d) : 0u;
 }
 
-/*
- * Bound a window by what the backend can arm in ONE operation.
- *
- * Applied where `limit` and `cap_close` are applied, and for the same class of
- * reason: it changes the request, so the bounds the owner is told about stay
- * the bounds that were armed. That identity is the whole point - see
- * caps.max_window_us. A backend reporting 0 is unbounded and this is one
- * comparison that never fires.
- *
- * The remainder is not lost. A continuous request is not consumed by a chunk
- * that ended normally, radiant_search_dwell_remaining() and
- * radiant_sched_rechunk() already carry a set's dwell across chunk boundaries,
- * and that machinery has seven tests over it.
- */
+/* Bound a window by what the backend can arm in ONE operation
+ * (caps.max_window_us; 0 = unbounded). Changes the request itself, so the
+ * bounds the owner is told about match what was armed. The remainder isn't
+ * lost - a continuous request survives a chunk that ended normally; dwell
+ * carries across chunk boundaries via radiant_sched_rechunk(). */
 static radiant_time_t window_cap(radiant_time_t open, radiant_time_t close)
 {
 	uint32_t max = (s.caps != NULL) ? s.caps->max_window_us : 0u;
@@ -654,14 +525,11 @@ static void clear_armed(void)
  */
 
 /*
- * The armed operation reached its own end. Members are consumed and told why -
- * except a continuous request that ended normally, which is not consumed at
- * all: its done() is the per-dwell hook, and it is re-armed on the way out
- * unless the callback cancelled or replaced it.
- *
- * The slot is cleared BEFORE its owner is told, so that a done() callback which
- * immediately posts the next window is not overwritten by this function's own
- * tidying up.
+ * The armed operation reached its own end. Members are consumed and told why,
+ * except a continuous request that ended normally: its done() is the
+ * per-dwell hook and it re-arms unless the callback cancelled/replaced it.
+ * The slot is cleared BEFORE its owner is told, so a done() that immediately
+ * posts the next window isn't overwritten by this function's own tidying.
  */
 static void end_armed(enum radiant_sched_done why)
 {
@@ -682,53 +550,23 @@ static void end_armed(enum radiant_sched_done why)
 
 		sl->in_flight = false;
 		/* An ED request is continuous in the same sense a background
-		 * scan is - it is never consumed by a chunk that ended
-		 * normally - but it carries no `continuous` flag of its own,
-		 * because there is no bounded form of it to distinguish from. */
+		 * scan is - never consumed by a chunk that ended normally -
+		 * but carries no `continuous` flag: there is no bounded form
+		 * to distinguish it from. */
 		/*
-		 * DONE_DENIED KEEPS THE REQUEST FOR THE SAME REASON DONE_OK
-		 * DOES, AND OMITTING IT WOULD STOP ED SCANNING FOR EVER.
-		 *
-		 * A denial means the chunk never opened - so a continuous
-		 * request has lost nothing and wants the next chunk exactly as
-		 * it did before. That is merely efficient for a background
-		 * scan, which radiant_api.c re-posts from its pump anyway. It is
-		 * load-bearing for ED: NOTHING re-posts an energy-detect
-		 * request. slot_clear()ing it here would silently end the sweep
-		 * at the first denial, with the map simply ceasing to update and
-		 * no counter moving.
-		 */
-		/*
-		 * DONE_ABORTED KEEPS IT TOO, AND LEAVING IT OUT WEDGED THE
-		 * DONGLE PERMANENTLY UNDER ARBITRATION.
-		 *
-		 * abort_armed() - the PREEMPTION path, thirty lines below -
-		 * already says this in its own words: "Paused, not ended - the
-		 * request survives untouched", with exactly this continuous-RX
-		 * / ED test. This function is the other way a chunk stops: the
-		 * RADIO reports RADIANT_RADIO_STATUS_ABORTED, which under the
-		 * MPSL gate is what a chunk cut short by the end of a timeslot
-		 * looks like. Same event, same meaning, and the two paths
-		 * disagreed - so a scan the scheduler intended to pause was
-		 * instead slot_clear()ed out of the table.
-		 *
-		 * What that cost, measured on the nRF54L15 DK with a 100 ms BLE
-		 * advertiser beside the sweep (coex.conf): the search ran 84
-		 * arms in under a second - 83 denied, one ABORTED - and then
-		 * every counter froze for ever. `acq` stuck at 84 while
-		 * housekeeping ticked on at 20/s, `searching=1`, `win=1`, zero
-		 * packets in 100 s against 406 of 406 on the same image with
-		 * the advertiser off.
-		 *
-		 * The wedge is a broken invariant across the two files rather
-		 * than a stall in either. radiant_api.c's api_sched_done()
-		 * treats ABORTED as "ran", so it keeps api_search_slot bound
-		 * and re-binds for the next chunk; api_post_search_window()
-		 * then returns early on `api_search_slot != CH_NONE` at every
-		 * subsequent pump, for ever. One side believed a request was in
-		 * the table and the other had just deleted it, and NOTHING
-		 * re-posts a background scan that both layers think is somebody
-		 * else's problem.
+		 * DONE_DENIED and DONE_ABORTED must also keep the request, or
+		 * ED scanning stops for good: nothing re-posts an ED request,
+		 * so slot_clear() here would silently end the sweep at the
+		 * first denial/abort with the map simply going stale and no
+		 * counter moving. abort_armed()'s preemption path uses the
+		 * same continuous-RX/ED test ("paused, not ended"); this is
+		 * the other way a chunk stops (RADIANT_RADIO_STATUS_ABORTED,
+		 * e.g. an MPSL timeslot cutting a chunk short) and the two
+		 * paths must agree, or a scan meant to pause instead gets
+		 * deleted here while radiant_api.c still thinks it's live -
+		 * wedging the dongle under arbitration permanently (reproduced
+		 * on nRF54L15 DK with a BLE advertiser beside the sweep:
+		 * search stalled after 84 arms, zero packets thereafter).
 		 */
 		keep = (why == RADIANT_SCHED_DONE_OK ||
 			why == RADIANT_SCHED_DONE_DENIED ||
@@ -743,27 +581,20 @@ static void end_armed(enum radiant_sched_done why)
 }
 
 /*
- * Take the radio away from whatever holds it. Returns true if the operation had
- * actually started, which is the only thing the caller needs to know about it.
+ * Take the radio away from whatever holds it. Returns true if the operation
+ * had actually started.
  *
- * WHETHER A MEMBER'S REQUEST SURVIVES DEPENDS ENTIRELY ON WHETHER THE WINDOW
- * HAD OPENED, and getting that wrong is subtle in both directions.
+ * Whether a member's request survives depends entirely on whether the window
+ * had opened. If not, nothing was lost, so every member's request stays
+ * pending silently - this is what makes rebuilding around a newly-opened
+ * channel free; consuming them here would mean merging quietly stops working
+ * for channels that don't open in the same millisecond as their neighbours.
+ * If it had opened, members really did lose the rest of their window and are
+ * told so, to re-predict rather than wait for a done() that isn't coming -
+ * except a background scan, which pauses and resumes in the next gap.
  *
- * If it had not opened, nothing was lost - not a bit of preamble - so every
- * member's request is exactly as good as it was and stays pending, silently.
- * That is what makes rebuilding a window around a newly-opened channel free.
- * Consuming them here instead would be self-defeating: the rebuild would find
- * only the channel that provoked it, and merging would quietly stop happening
- * for every channel that did not open in the same millisecond as its
- * neighbours.
- *
- * If it had opened, the members really did lose the rest of their window, and
- * telling them so is what lets them re-predict rather than sit waiting for a
- * done() that is not coming. The exception is a background scan, which does not
- * end when it is displaced - it pauses, and resumes in the next gap.
- *
- * skip_ch is the channel that asked for this and therefore does not need to be
- * told. Retire first, abort second: see the header comment on this file.
+ * skip_ch is the channel that asked for this and needs no telling. Retire
+ * first, abort second - see the header comment.
  */
 static bool abort_armed(uint8_t skip_ch)
 {
@@ -793,14 +624,11 @@ static bool abort_armed(uint8_t skip_ch)
 		}
 		if ((sl->continuous && sl->kind == (uint8_t)SLOT_RX) ||
 		    sl->kind == (uint8_t)SLOT_ED) {
-			/* Paused, not ended - the request survives untouched.
-			 * It is still told, because the chunk that was running
-			 * really did stop early and an owner accounting in
-			 * listening time has to know where it stopped. An ED
-			 * chunk is the same shape: the indices it had already
-			 * measured are in the map, the ones it had not are
-			 * where rf_cursor is pointing, and the next gap picks
-			 * up exactly there. */
+			/* Paused, not ended - request survives untouched, but
+			 * still told, since an owner accounting listening time
+			 * needs to know it stopped early. ED: indices already
+			 * measured are in the map; rf_cursor marks where the
+			 * next gap resumes. */
 			if (c != skip_ch) {
 				notify_done(c, RADIANT_SCHED_DONE_ABORTED);
 			}
@@ -832,70 +660,50 @@ static void drop_slot(uint8_t ch)
 static void pass(void);
 
 /*
- * What to do about an arm call the backend refused.
- *
- * The governing rule is that a pass must always terminate. EBUSY and ESTATE are
- * transient and describe the radio rather than the request, so nothing is
- * consumed and the pass stops; everything else describes the request, so the
- * request is consumed and reported. A rejected request left in the table would
- * be retried by the very next pass, for ever.
+ * What to do about an arm call the backend refused. Governing rule: a pass
+ * must always terminate. EBUSY/ESTATE are transient and describe the radio,
+ * not the request, so nothing is consumed and the pass stops; everything else
+ * describes the request, so it's consumed and reported - left in the table it
+ * would be retried by the very next pass, forever.
  */
 static enum step arm_failed(uint8_t ch, int rc)
 {
 	switch (rc) {
 	case RADIANT_RADIO_EBUSY:
-		/* The backend resolved a race with a callback that was about to
-		 * consume the operation slot. The HAL says the core must handle
-		 * this rather than assume it cannot happen. */
+		/* Backend resolved a race with a callback about to consume the
+		 * op slot; the HAL says the core must handle this. */
 		s.stats.arm_ebusy++;
 		return STEP_DONE;
 	case RADIANT_RADIO_ESTATE:
-		/* Not enabled. Every request in the table would fail the same
-		 * way, so consuming them would empty it for a reason that has
-		 * nothing to do with any of them. */
+		/* Not enabled. Every request would fail the same way, so
+		 * consuming them would empty the table for no reason of their
+		 * own. */
 		s.stats.arm_rejected++;
 		return STEP_DONE;
 	case RADIANT_RADIO_ETIME:
-		/* Unreachable by construction - the pass subtracts
-		 * min_arm_lead_us itself - so reaching it means a backend is
-		 * stricter than it advertises. Report the window as missed,
-		 * which is what happened, and move on. */
+		/* Unreachable by construction (the pass subtracts
+		 * min_arm_lead_us itself); reaching it means the backend is
+		 * stricter than advertised. Report missed and move on. */
 		s.stats.arm_rejected++;
 		slot_clear(ch);
 		notify_done(ch, RADIANT_SCHED_DONE_MISSED);
 		return STEP_RETRY;
 	case RADIANT_RADIO_EDENIED: {
 		/*
-		 * An arbitrated backend has the radio but not the air. Unlike
-		 * every other code here this describes NEITHER the request nor
-		 * the radio's lifecycle - it describes another stack - so it
-		 * needs its own arm rather than either of the two shapes above.
-		 *
-		 * WHETHER THE REQUEST SURVIVES IS THE SAME QUESTION end_armed()
-		 * ASKS, AND IT MUST BE ANSWERED THE SAME WAY. A continuous scan
-		 * or an ED sweep denied a chunk has lost nothing - the chunk
-		 * never opened - and still wants the next gap. Consuming it here
-		 * would be merely wasteful for a scan, which radiant_api.c
-		 * re-posts from its pump, and permanent for ED, which NOTHING
-		 * re-posts: the map would simply stop updating at the first
-		 * denial with no counter moving.
-		 *
-		 * A bounded request is consumed and reported, on the same terms
-		 * as ETIME above and for the same reason: the governing rule is
-		 * that a pass must terminate, and a request left in the table
-		 * after a refusal is retried by the very next step, for ever. It
-		 * is then the OWNER's business whether to re-post - and for a
-		 * tracked channel radiant_api.c does, having first told
-		 * radiant_channel.c that the slot was lent rather than missed.
-		 *
-		 * WHICH IS ALSO WHY A KEPT REQUEST ENDS THE PASS. Left in the
-		 * table AND retried, the very next step would offer the same
-		 * slot to the same arbiter and be refused again, all the way to
-		 * pass()'s iteration bound - a bounded loop, but one that does
-		 * nothing and burns the whole budget every time the other stack
-		 * is busy. STEP_DONE for the kept case, STEP_RETRY for the
-		 * consumed one, so that in both arms progress is strictly
-		 * monotone.
+		 * An arbitrated backend has the radio but not the air -
+		 * describes another stack, not this request or the radio's
+		 * lifecycle. Survival follows the same rule end_armed() uses:
+		 * a denied continuous scan or ED sweep lost nothing (the chunk
+		 * never opened) and still wants the next gap - consuming it
+		 * would be wasteful for a scan (radiant_api.c re-posts it) and
+		 * permanent for ED (nothing re-posts it, so the map would just
+		 * go stale). A bounded request is consumed and reported like
+		 * ETIME above, for the same "a pass must terminate" reason;
+		 * it's then the owner's business whether to re-post.
+		 * A kept request ends the pass (STEP_DONE) rather than
+		 * retrying, or the next step would offer the same slot to the
+		 * same arbiter and be refused again up to the iteration bound,
+		 * burning the whole budget for nothing.
 		 */
 		bool keep = (s.ch[ch].continuous &&
 			     s.ch[ch].kind == (uint8_t)SLOT_RX) ||
@@ -909,24 +717,15 @@ static enum step arm_failed(uint8_t ch, int rc)
 		return keep ? STEP_DONE : STEP_RETRY;
 	}
 	case RADIANT_RADIO_ENOTSUP:
-		/*
-		 * A filter set the backend cannot put on the air.
-		 *
-		 * Now unreachable by construction too, for the same shape of
-		 * reason as ETIME above: arm_rx_window() enforces both
-		 * caps.max_filters and caps.max_addr_groups before it builds a
-		 * set. Reaching it means the core and the backend disagree
-		 * about what the hardware can match, so it gets its own counter
-		 * rather than being folded into arm_rejected - a number that
-		 * should be zero is only useful if it is visible.
-		 *
-		 * MISSED rather than FAILED, and that is the repair. `ch` is
-		 * the leader, which on a merged window is whichever channel
-		 * happened to be scheduled first; charging it a hard failure
-		 * for a constraint imposed by a channel that merged in behind
-		 * it is how a healthy master ends up looking broken. The window
-		 * did not happen, which is exactly what MISSED means.
-		 */
+		/* A filter set the backend cannot put on the air. Unreachable
+		 * by construction (arm_rx_window() enforces max_filters and
+		 * max_addr_groups before building a set); reaching it means
+		 * the core and backend disagree about the hardware, so it gets
+		 * its own counter rather than folding into arm_rejected.
+		 * MISSED rather than FAILED: `ch` is the leader, and charging
+		 * it a hard failure for a constraint from a channel that
+		 * merged in behind it would make a healthy master look broken -
+		 * the window just didn't happen. */
 		s.stats.arm_enotsup++;
 		slot_clear(ch);
 		notify_done(ch, RADIANT_SCHED_DONE_MISSED);
@@ -943,40 +742,32 @@ static enum step arm_failed(uint8_t ch, int rc)
  * Build one hardware receive window around a leader, merging in every other
  * channel that can share it, and arm it.
  *
- * THIS IS THE HIGHEST-VALUE FUNCTION IN THE MODULE. Everything ANT+ is on RF
- * 57, so two tracked channels whose predicted windows overlap can be heard by
- * one radiant_radio_rx() carrying one filter each. Without it, the scheduler must
- * pick one of the two and lose the other channel's packet outright; with it,
- * slave-side collisions between our own tracked channels are not reduced, they
- * are zero, and 32 sensors cost a handful of windows rather than 32.
+ * The highest-value function in the module: since all ANT+ is on RF 57, two
+ * tracked channels whose predicted windows overlap can be heard by one
+ * radiant_radio_rx() carrying one filter each - so 32 sensors cost a handful
+ * of windows, not 32, and slave-side collisions between our own tracked
+ * channels go to zero.
  *
- * Five rules decide membership, and each one is a specific failure designed
- * out:
- *
- *   1. SAME FORMAT AND SAME RF INDEX. Radio configuration is per-operation, so
- *      merging two requests that disagree about it would put one of them on the
- *      air wrong. Pointer equality on fmt is the intended test - the core uses a
- *      small set of static const formats - and it is also, for free, what keeps
- *      a 3-byte search window out of a 5-byte tracking window and what will keep
- *      the planned long-range and off-57 channels out of the merge.
- *   2. AT MOST caps.max_filters ADDRESSES. Eight on nRF, two on RAIL. A window
- *      is never built past that number, and the number is read here rather than
- *      assumed anywhere.
- *   3. EVERY MEMBER MUST OVERLAP THE LEADER'S OWN WINDOW. Not merely the union
- *      so far: overlapping the union lets a chain of barely-touching windows
- *      walk the merged span arbitrarily far from where it started.
- *   4. THE UNION IS CAPPED. See RADIANT_SCHED_MERGE_SPAN_MAX_US - a merged window
- *      that could outlive the measured 2.19 ms master-to-slave turnaround could
- *      block a reply the link layer owes. The cap never shrinks the leader's own
- *      request; it only bounds what merging may add to it.
- *   5. AT MOST caps.max_addr_groups DISTINCT ADDRESS GROUPS. Two on nRF,
- *      because seven of its eight logical addresses share one base register,
- *      and on the 5-byte tracking format the device number is inside that base.
- *      Rule 2 counts addresses; this one counts device numbers, and conflating
- *      them is what made ADR 0005's "32 sensors do not cost 32 windows" false
- *      on the one backend that ships: the scheduler built sets of eight, the
- *      backend refused them with RADIANT_RADIO_ENOTSUP, and the refusal was
- *      charged to whichever channel happened to be leading.
+ * Five membership rules:
+ *   1. SAME FORMAT AND SAME RF INDEX (pointer equality on fmt - the core uses
+ *      static const formats). Keeps a 3-byte search window out of a 5-byte
+ *      tracking window; radio config is per-operation so mixing would put one
+ *      request on the air wrong.
+ *   2. AT MOST caps.max_filters ADDRESSES (8 on nRF, 2 on RAIL), read here
+ *      rather than assumed.
+ *   3. EVERY MEMBER MUST OVERLAP THE LEADER'S OWN WINDOW, not merely the
+ *      union so far - overlapping the union would let a chain of
+ *      barely-touching windows walk the merged span arbitrarily far.
+ *   4. THE UNION IS CAPPED (RADIANT_SCHED_MERGE_SPAN_MAX_US) so a merged
+ *      window can't outlive the measured 2.19 ms master-to-slave turnaround
+ *      and block a reply the link layer owes. Never shrinks the leader's own
+ *      request, only bounds what merging adds.
+ *   5. AT MOST caps.max_addr_groups DISTINCT ADDRESS GROUPS (2 on nRF: 7 of
+ *      its 8 logical addresses share one base register, and the tracking
+ *      format's device number lives inside that base). Rule 2 counts
+ *      addresses, this counts device numbers - conflating them is what made
+ *      ADR 0005's "32 sensors do not cost 32 windows" false on nRF until this
+ *      existed.
  */
 static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 			       radiant_time_t limit)
@@ -998,22 +789,18 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 	int                  rc;
 
 	if (lead->n_filters == 0u || lead->n_filters > mf) {
-		/*
-		 * More addresses than this backend can match at once. On nRF
-		 * with eight filters a sweep asking for eight is fine; the same
-		 * request on RAIL's two is not, and the only honest answer is
-		 * to say so once rather than to arm something smaller that the
-		 * caller did not ask for and cannot tell apart.
-		 */
+		/* More addresses than this backend can match at once. Say so
+		 * once rather than silently arming something smaller than
+		 * asked for. */
 		s.stats.arm_rejected++;
 		slot_clear(leader);
 		notify_done(leader, RADIANT_SCHED_DONE_FAILED);
 		return STEP_RETRY;
 	}
 
-	/* Same test against the group cap, and it is a separate one: a leader
-	 * can be inside max_filters and outside max_addr_groups the moment its
-	 * own filters carry two different device numbers. */
+	/* Same test against the group cap, separately: a leader can be inside
+	 * max_filters and outside max_addr_groups the moment its own filters
+	 * carry two different device numbers. */
 	s.n_merged = 0u;
 	if (addr_groups_with(lead->filters, lead->n_filters) > mg) {
 		s.stats.arm_rejected++;
@@ -1022,14 +809,10 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 		return STEP_RETRY;
 	}
 
-	/*
-	 * The window cannot open before the radio can be reconfigured for its
-	 * PHY. Applied to the LEADER only, and that is exact rather than
-	 * approximate: membership rule 1 requires pointer-equal formats, so
-	 * every member of a merged window is on the leader's PHY by
-	 * construction and there is no second switch to pay for inside one
-	 * window.
-	 */
+	/* The window cannot open before the radio can be reconfigured for its
+	 * PHY. Applied to the LEADER only - exact, not approximate: rule 1
+	 * requires pointer-equal formats, so every member is on the leader's
+	 * PHY by construction and there is no second switch inside one window. */
 	open = t_max(lead->t_start, earliest + phy_lead(lead->fmt));
 	if (lead->continuous) {
 		uint32_t chunk = (lead->chunk_us != 0u) ? lead->chunk_us
@@ -1092,23 +875,13 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 		    (uint32_t)s.n_merged + (uint32_t)m->n_filters > (uint32_t)mf) {
 			continue;
 		}
-		/*
-		 * Rule 5: AT MOST caps.max_addr_groups DISTINCT ADDRESS GROUPS.
-		 *
-		 * Two on nRF, because seven of its eight logical addresses share
-		 * one base register. On the 3-byte search format every filter is
-		 * in the group [A6 C5] and this never fires; on the 5-byte
-		 * tracking format the group carries the device number, so it
-		 * fires on the third tracked channel and a merged tracking
-		 * window holds two.
-		 *
-		 * Skipping the member is the right response rather than
-		 * refusing the window: the leader and whatever already merged
-		 * are still perfectly armable, and this channel gets its own
-		 * window on a later pass. Before this test the set went to the
-		 * backend, came back RADIANT_RADIO_ENOTSUP, and cost the leader
-		 * a DONE_FAILED for a constraint it had no part in.
-		 */
+		/* Rule 5: at most caps.max_addr_groups distinct groups (2 on
+		 * nRF). Skipping this member is correct, not refusing the
+		 * window - the leader and whatever already merged are still
+		 * armable, and this channel gets its own window later. Before
+		 * this test the set went to the backend, came back ENOTSUP,
+		 * and cost the leader a DONE_FAILED for a constraint it had no
+		 * part in. */
 		if (addr_groups_with(m->filters, m->n_filters) > mg) {
 			continue;
 		}
@@ -1155,12 +928,9 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 		}
 	}
 
-	/*
-	 * RADIANT_RX_STOP_ON_FIRST saves receive current on a single-master window
-	 * and the HAL forbids it on any window carrying more than one filter,
-	 * because more than one master may transmit inside such a window. So it
-	 * survives merging only when there was nothing to merge.
-	 */
+	/* RADIANT_RX_STOP_ON_FIRST saves receive current on a single-master
+	 * window; the HAL forbids it on any window carrying more than one
+	 * filter. So it survives merging only when there was nothing to merge. */
 	if (s.n_merged == 1u && lead->stop_on_first && !lead->continuous) {
 		flags |= RADIANT_RX_STOP_ON_FIRST;
 	}
@@ -1173,16 +943,10 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 	req.t_open = open;
 	req.t_close = close;
 	req.flags = flags;
-	/*
-	 * THE MAXIMUM OVER MEMBERS, NOT THE LEADER'S.
-	 *
-	 * A merged window carries up to caps.max_filters channels and any one of
-	 * them may be the one whose frame turns into an acknowledged-data reply.
-	 * Reserving only the leader's would under-reserve exactly when merging
-	 * did its job, and the shortfall would appear as ERG commands that
-	 * occasionally do not take on a dongle tracking several sensors - which
-	 * is the population that merges. Accumulated in the member loop above.
-	 */
+	/* The maximum over members, not the leader's: any member's frame may
+	 * turn into an acknowledged-data reply, so reserving only the leader's
+	 * would under-reserve exactly when merging did its job. Accumulated in
+	 * the member loop above. */
 	req.follow_on_us = follow_on;
 
 	rc = radiant_radio_rx(&req, &op);
@@ -1271,27 +1035,20 @@ static enum step arm_tx_op(uint8_t ch)
 }
 
 /*
- * Arm one energy-detect chunk into the gap ahead of `limit`.
+ * Arm one energy-detect chunk into the gap ahead of `limit`. Modelled on the
+ * continuous-scan path in arm_rx_window(), not the bounded-window one: a
+ * bounded request has a deadline to hit or report missed, this has neither,
+ * so the chunk is "as much of the request as fits" - a gap too small for one
+ * dwell produces no chunk and no complaint.
  *
- * Modelled on the continuous-scan path in arm_rx_window() rather than on the
- * bounded-window one, and the difference is not cosmetic. A bounded request has
- * a deadline the scheduler must hit or report as missed; this one has neither.
- * So the chunk is not "the request, truncated to fit" - it is "as much of the
- * request as fits", computed from the gap, and a gap too small for one dwell
- * produces no chunk at all and no complaint.
+ * THE CHUNK IS A WHOLE NUMBER OF DWELLS. The backend gets rf_index_lo..hi and
+ * a per-index ceiling, so the longest it can run is (hi-lo+1)*dwell - sizing
+ * the range from the gap bounds the operation by construction rather than by
+ * a close-compare each backend would have to honour separately.
  *
- * THE CHUNK IS A WHOLE NUMBER OF DWELLS, and that is what keeps the gap
- * promise. The backend is told rf_index_lo..rf_index_hi and a per-index
- * ceiling, so the longest the operation can run is (hi - lo + 1) * dwell; sizing
- * the range from the gap therefore bounds the operation by construction rather
- * than by a close compare the backend has to honour. A chunk sized in
- * microseconds and left to the backend to truncate would put the "does ED delay
- * a tracked window" question inside a backend, once per backend.
- *
- * The range never wraps inside one chunk. A sweep that reaches rf_hi stops
- * there and the next chunk starts at rf_lo, which costs at most one short chunk
- * per sweep and keeps the arm's arithmetic a subtraction rather than a modulo
- * over two segments.
+ * The range never wraps inside one chunk: a sweep that reaches rf_hi stops
+ * there and the next chunk restarts at rf_lo (at most one short chunk per
+ * sweep), keeping the arm arithmetic a subtraction, not a modulo.
  */
 static enum step arm_ed_chunk(uint8_t ch, radiant_time_t earliest,
 			      radiant_time_t limit)
@@ -1312,12 +1069,9 @@ static enum step arm_ed_chunk(uint8_t ch, radiant_time_t earliest,
 
 	open = t_max(sl->t_start, earliest);
 	if (limit == RADIANT_TIME_NEVER || limit <= open) {
-		/*
-		 * No committed operation to bound the chunk. Unreachable from
-		 * arm_next(), which always passes a limit for this kind, and
-		 * skipped rather than treated as unbounded: an ED operation
-		 * with no end is a radio this module has given away.
-		 */
+		/* No committed operation to bound the chunk. Unreachable from
+		 * arm_next() (always passes a limit here); skipped rather than
+		 * unbounded, since an ED op with no end is a radio given away. */
 		return STEP_SKIP;
 	}
 
@@ -1376,27 +1130,14 @@ static enum step arm_ed_chunk(uint8_t ch, radiant_time_t earliest,
 	s.n_members = 1u;
 	sl->in_flight = true;
 
-	/*
-	 * NEITHER s.cursor NOR s.replan IS TOUCHED, and both omissions are the
-	 * phase's gate written as two lines of code rather than as a claim.
-	 *
-	 * s.cursor is where the next leader search starts, and it exists so that
-	 * channels all wanting the same instant are not served in index order
-	 * for ever. Moving it here would let an ED chunk decide which tracked
-	 * channel leads the next merged window - and on a set of channels whose
-	 * windows tie, which channel leads decides which ones merge with it. The
-	 * receive schedule would then be a function of whether energy detect was
-	 * compiled in, which is exactly what this phase promises it is not. An ED
-	 * slot does not compete for the radio, so it has no business in the
-	 * fairness rotation of the slots that do.
-	 *
-	 * s.replan says a request has been posted that an armed window might be
-	 * worth rebuilding for. Clearing it on an arm is right when the arm
-	 * produced a window that request could have joined; an ED chunk is not
-	 * one - could_join_armed() requires both sides to be SLOT_RX - so
-	 * clearing it here would spend a pending channel's one rebuild
-	 * opportunity on an operation it could never have been part of.
-	 */
+	/* NEITHER s.cursor NOR s.replan IS TOUCHED. Moving s.cursor here would
+	 * let an ED chunk decide which tracked channel leads the next merged
+	 * window, making the receive schedule depend on whether ED is
+	 * compiled in - an ED slot doesn't compete for the radio, so it has no
+	 * place in the fairness rotation of slots that do. Clearing s.replan
+	 * here would spend a pending channel's one rebuild opportunity on an
+	 * operation it could never join (could_join_armed() requires both
+	 * sides SLOT_RX). */
 	s.stats.ed_chunks++;
 	return STEP_DONE;
 }
@@ -1407,16 +1148,13 @@ static enum step arm_ed_chunk(uint8_t ch, radiant_time_t earliest,
  */
 
 /*
- * Could this request have been part of the window that is currently armed?
- *
- * Answered against the armed window's own recorded shape rather than against a
- * member slot, because a member slot may already have been replaced. It has to
- * mirror the membership rules in arm_rx_window() closely, for one reason: if it
- * says yes and the rebuild then says no, the request stays pending and would
- * ask for another rebuild on the next tick. That is why re-planning is
- * additionally gated on s.replan, which a successful arm clears - so a request
- * that cannot in fact join provokes at most one wasted rebuild rather than one
- * per tick for ever.
+ * Could this request have been part of the window currently armed? Checked
+ * against the armed window's own recorded shape, not a member slot (which
+ * may already have been replaced). Must mirror arm_rx_window()'s membership
+ * rules closely: a false positive here leaves the request pending and asks
+ * for another rebuild next tick - which is why re-planning is also gated on
+ * s.replan, cleared on a successful arm, bounding the waste to one rebuild
+ * per request rather than one per tick forever.
  */
 static bool could_join_armed(const struct sched_slot *sl, radiant_time_t earliest)
 {
@@ -1457,36 +1195,23 @@ static bool could_join_armed(const struct sched_slot *sl, radiant_time_t earlies
 }
 
 /*
- * Displace the live operation?
+ * Displace the live operation? Only for a deadline that can't survive
+ * waiting, or a rebuild that costs nothing.
  *
- * Only for a deadline that cannot survive waiting, or for a rebuild that costs
- * nothing.
- *
- * A TRANSMIT INSIDE, OR JUST AFTER, THE ARMED WINDOW. This is the turnaround,
- * and it is the reason preemption exists at all: a tracking channel that hears
- * acknowledged data owes a full 8-byte frame about 1.55 ms later
- * (docs/spike-b-part2-results.md), which is the tightest deadline in the link
- * layer. The request arrives from inside the receive callback of the very
- * window that is still armed, so nothing but preemption can serve it. Waiting
- * for the window to close would mean arming inside min_arm_lead_us, and a
- * backend refuses a late arm rather than running it - correctly, since a late
- * reply is worse than none.
- *
- * A BOUNDED REQUEST UNDER A BACKGROUND SCAN. Tracked work outranks searching,
- * always; a scan chunk that has already started is simply cut short and resumed
- * afterwards.
- *
- * A CHANNEL THAT COULD HAVE JOINED A WINDOW THAT HAS NOT OPENED YET. Tearing
- * down a window before its first bit of preamble costs nothing at all, so a
- * channel opened after its neighbours joins the merge immediately instead of
- * spending a whole channel period in its own window. Without this, merging
- * would only ever happen in steady state, where every channel posts from the
- * same terminal callback - which is the case the tests would exercise and the
- * bench would not.
- *
- * AN ARMED TRANSMIT IS NEVER DISPLACED. Its t_sync is exact and already
- * committed, and this module schedules nothing more urgent than a reply that is
- * already owed.
+ *   - A TRANSMIT INSIDE/JUST AFTER THE ARMED WINDOW: the turnaround, and the
+ *     reason preemption exists - a tracking channel that hears acknowledged
+ *     data owes an 8-byte reply ~1.55 ms later (docs/spike-b-part2-results.md),
+ *     the tightest deadline in the link layer, requested from inside the
+ *     still-armed window's own receive callback. Waiting would mean arming
+ *     inside min_arm_lead_us, which backends refuse.
+ *   - A BOUNDED REQUEST UNDER A BACKGROUND SCAN: tracked work always
+ *     outranks searching; an in-progress scan chunk is just cut short and
+ *     resumed afterwards.
+ *   - A CHANNEL THAT COULD HAVE JOINED A WINDOW NOT YET OPEN: tearing down
+ *     before the first bit of preamble costs nothing, so a late-opened
+ *     channel joins the merge immediately instead of waiting a period.
+ *   - AN ARMED TRANSMIT IS NEVER DISPLACED: its t_sync is exact and already
+ *     committed, and nothing here is more urgent than a reply already owed.
  */
 static bool want_preempt(radiant_time_t earliest)
 {
@@ -1503,21 +1228,17 @@ static bool want_preempt(radiant_time_t earliest)
 		if (sl->kind == (uint8_t)SLOT_IDLE || sl->in_flight) {
 			continue;
 		}
-		/* AN ED REQUEST NEVER PREEMPTS ANYTHING. Skipped before any
-		 * other test, including the scan test below, which it would
-		 * otherwise satisfy: an ED slot carries continuous == false, so
-		 * "a bounded request under a background scan" would read as
-		 * true and a measurement would displace a search chunk. */
+		/* An ED request never preempts anything. Skipped before the
+		 * scan test below, which it would otherwise satisfy (ED slots
+		 * carry continuous == false), letting a measurement displace a
+		 * search chunk. */
 		if (sl->kind == (uint8_t)SLOT_ED) {
 			continue;
 		}
 		if (sl->kind == (uint8_t)SLOT_TX) {
-			/* Plus the reconfiguration it needs, so a transmit on
-			 * the other PHY displaces the live window early enough
-			 * to be armed rather than early enough to be refused.
-			 * s.phy is the armed operation's PHY, which is what the
-			 * radio will be left on when it ends - so this is the
-			 * right comparison and not an approximation of one. */
+			/* Plus reconfiguration lead, so a transmit on the other
+			 * PHY displaces early enough to be armed rather than
+			 * refused. */
 			if (sl->t_start < s.armed_end + lead + phy_lead(sl->fmt)) {
 				return true;
 			}
@@ -1527,15 +1248,11 @@ static bool want_preempt(radiant_time_t earliest)
 				return true;
 			}
 		}
-		/*
-		 * ANYTHING DISPLACES AN ARMED ED CHUNK. The chunk was sized to
-		 * end before whatever was committed when it was armed, but a
-		 * request posted afterwards - a reply that has just fallen due,
-		 * a channel that re-predicted - knows nothing about it. A
-		 * measurement is the cheapest thing in this module to throw
-		 * away, and the indices already measured are already in the
-		 * map.
-		 */
+		/* Anything displaces an armed ED chunk. It was sized to end
+		 * before whatever was committed when armed, but a request
+		 * posted afterwards knows nothing about that; ED is the
+		 * cheapest thing here to throw away and its measured indices
+		 * are already in the map. */
 		if (s.armed_kind == (uint8_t)SLOT_ED &&
 		    sl->t_start < s.armed_end + lead) {
 			return true;
@@ -1548,24 +1265,18 @@ static bool want_preempt(radiant_time_t earliest)
 }
 
 /*
- * Pick and arm.
- *
- * The rule is "run whatever starts first", with three refinements that all come
+ * Pick and arm. Rule: "run whatever starts first", with three refinements
  * from there being one radio and no timer of our own:
- *
- *   - A TRANSMIT BREAKS A TIE and truncates a receive window that would
- *     otherwise still be open when the transmit has to be armed. Truncating
- *     costs the tail of a window; overrunning costs the frame.
- *   - A BACKGROUND SCAN FILLS THE GAP ahead of the next committed operation,
- *     and only if the gap is worth an arm. This is what makes it background:
- *     it never delays tracked work and it never has to be told when to stop,
- *     because the stop is computed from what else is pending.
- *   - OTHERWISE THE RADIO IS COMMITTED EARLY, even to something far away.
- *     There is no timer here - this module arms for absolute instants and lets
- *     the backend hold them - so leaving the radio idle would mean nothing woke
- *     up to arm it. Committing early costs nothing for a receive and is
- *     strictly better for a transmit's jitter, and preemption exists for the
- *     case where something nearer turns up afterwards.
+ *   - A TRANSMIT BREAKS A TIE and truncates a receive window still open when
+ *     the transmit must be armed - truncating costs the window's tail,
+ *     overrunning costs the frame.
+ *   - A BACKGROUND SCAN FILLS THE GAP ahead of the next committed operation
+ *     when the gap is worth an arm - never delays tracked work, and its stop
+ *     is computed from what else is pending.
+ *   - OTHERWISE THE RADIO IS COMMITTED EARLY, even to something far away:
+ *     there's no timer of our own, so leaving the radio idle means nothing
+ *     wakes up to arm it. Costs nothing for a receive, helps a transmit's
+ *     jitter, and preemption handles anything nearer that turns up later.
  */
 static enum step arm_next(radiant_time_t earliest)
 {
@@ -1600,11 +1311,10 @@ static enum step arm_next(radiant_time_t earliest)
 		}
 		at = t_max(sl->t_start, earliest);
 		if (sl->kind == (uint8_t)SLOT_ED) {
-			/* Tested BEFORE sl->continuous, which an ED slot does
-			 * not set and must not be read through: falling into
-			 * the bounded-receive bucket here is how a slot with no
-			 * deadline would acquire one, and the expiry sweep
-			 * would then delete it on the next pass. */
+			/* Tested BEFORE sl->continuous, which an ED slot leaves
+			 * unset - falling into the bounded-receive bucket here
+			 * would give a deadline-less slot a deadline, and the
+			 * expiry sweep would delete it next pass. */
 			if (ed_ch < 0 || at < ed_at) {
 				ed_ch = (int)c;
 				ed_at = at;
@@ -1624,11 +1334,9 @@ static enum step arm_next(radiant_time_t earliest)
 		return STEP_DONE;
 	}
 
-	/*
-	 * WHICH operation is committed, not merely when - because sizing the
-	 * gap in front of it now needs its format. A transmit breaks the tie,
-	 * which is the same rule that governs the arming order below.
-	 */
+	/* WHICH operation is committed, not merely when - sizing the gap in
+	 * front of it needs its format. A transmit breaks the tie, matching
+	 * the arming order below. */
 	committed = RADIANT_TIME_NEVER;
 	committed_fmt = NULL;
 	if (tx_ch >= 0) {
@@ -1667,20 +1375,12 @@ static enum step arm_next(radiant_time_t earliest)
 	}
 
 	/*
-	 * Energy detect, in whatever gap the background scan did not want.
-	 *
-	 * GATED ON scan_ch < 0, WHICH IS THE PRIORITY RULE STATED AS ONE LINE.
-	 * A pending scan takes the gap even if it could not be armed into this
-	 * particular one, because a gap too short for a scan chunk
-	 * (RADIANT_SCHED_SCAN_MIN_US, 1 ms) is shorter still against
-	 * RADIANT_SCHED_ED_MIN_US (2 ms) - and because letting ED in whenever
-	 * the scan happened to skip would make "lowest priority" depend on a
-	 * gap length rather than on the rule.
-	 *
-	 * The consequence is deliberate and worth stating plainly: a dongle that
-	 * is searching measures nothing at all. Discovery is worth more than a
-	 * map, the map is for a decision that is minutes-scale at the fastest,
-	 * and a search sweep ends.
+	 * Energy detect, in whatever gap the scan didn't want. Gated on
+	 * scan_ch < 0: a pending scan takes the gap even if it couldn't be
+	 * armed into this one (RADIANT_SCHED_SCAN_MIN_US < RADIANT_SCHED_ED_MIN_US),
+	 * so "lowest priority" stays a rule rather than a function of gap
+	 * length. Consequence: a searching dongle measures nothing at all -
+	 * deliberate, since discovery outranks the map.
 	 */
 	if (SCHED_ED_BUILT && ed_ch >= 0 && scan_ch < 0) {
 		radiant_time_t e_open = t_max(ed_at, earliest);
@@ -1697,13 +1397,10 @@ static enum step arm_next(radiant_time_t earliest)
 			e_limit = t_back(committed,
 					 lead + phy_gap(NULL, committed_fmt));
 		}
-		/*
-		 * An unbounded gap - nothing committed at all - is still
-		 * bounded here, at the chunk ceiling. The scan may run to its
-		 * own chunk length against RADIANT_TIME_NEVER because a scan
-		 * that overruns costs listening time it wanted anyway; an ED
-		 * chunk that overruns costs the next window that turns up.
-		 */
+		/* An unbounded gap is still bounded at the chunk ceiling here:
+		 * an overrunning scan costs listening time it wanted anyway,
+		 * but an overrunning ED chunk costs whatever window turns up
+		 * next. */
 		if (e_limit == RADIANT_TIME_NEVER ||
 		    e_limit >= e_open + (radiant_time_t)RADIANT_SCHED_ED_MIN_US) {
 			radiant_time_t want = e_open + (radiant_time_t)chunk;
@@ -1722,11 +1419,10 @@ static enum step arm_next(radiant_time_t earliest)
 		enum step  st;
 
 		if (tx_ch >= 0) {
-			/* The receive window is truncated so the transmit can
-			 * still be armed - and, if the two are on different
-			 * PHYs, so the radio can still be reconfigured between
-			 * them. Truncating costs the tail of a window;
-			 * overrunning costs the frame. */
+			/* Truncated so the transmit can still be armed, and, on
+			 * a different PHY, so the radio can still switch between
+			 * them. Truncating costs the window's tail; overrunning
+			 * costs the frame. */
 			limit = t_back(tx_at,
 				       lead + phy_gap(s.ch[rx_ch].fmt,
 						      s.ch[tx_ch].fmt));
@@ -1761,15 +1457,11 @@ static enum step arm_next(radiant_time_t earliest)
  */
 
 /*
- * Report and drop anything whose deadline has already gone, then either preempt
- * or arm.
- *
- * The expiry sweep runs even while an operation is armed, and that is
- * deliberate: a window lost to contention should be reported as
- * RADIANT_SCHED_DONE_MISSED at the moment it becomes unreachable, not silently
- * carried until the radio happens to be free. A channel counting those is a
- * channel losing its slot to another, which is exactly the condition merging
- * exists to remove and exactly the number that says whether it worked.
+ * Report and drop anything whose deadline has already gone, then either
+ * preempt or arm. The expiry sweep runs even while an operation is armed,
+ * deliberately: a window lost to contention is reported MISSED the moment it
+ * becomes unreachable, not silently carried until the radio is free - that
+ * count is exactly the number that says whether merging is working.
  */
 static enum step pass_step(radiant_time_t now)
 {
@@ -1784,44 +1476,28 @@ static enum step pass_step(radiant_time_t now)
 			continue;
 		}
 		if (sl->kind == (uint8_t)SLOT_ED) {
-			/*
-			 * NEVER EXPIRES, and it has to be said explicitly here
-			 * rather than left to fall through.
-			 *
-			 * The receive branch below reads `!sl->continuous &&
-			 * sl->t_end < earliest`, and an ED slot has neither
-			 * field set - so it would test 0 < earliest, which is
-			 * true on the very first pass after the request was
-			 * posted. The request would be reported MISSED and
-			 * deleted before a single dwell ran, on a clock that had
-			 * simply moved forward, and the symptom would be an ED
-			 * scan that does nothing at all with no counter to say
-			 * why.
-			 */
+			/* Never expires - said explicitly rather than falling
+			 * through: the receive branch below reads
+			 * `!sl->continuous && sl->t_end < earliest`, and an ED
+			 * slot has neither field set, so it would test
+			 * 0 < earliest (true on the very first pass) and get
+			 * reported MISSED and deleted before a single dwell ran. */
 			expired = false;
 		} else if (sl->kind == (uint8_t)SLOT_TX) {
-			/*
-			 * t_sync is exact and cannot be moved. A transmit that
-			 * can no longer hit it does not go out at all.
-			 *
-			 * INCLUDING THE PHY SWITCH, which is the one deadline in
-			 * this module that a receive window can absorb and a
-			 * transmit cannot. A receive window whose open has
-			 * slipped is still worth arming for the rest of its
-			 * span; a transmit that needs 500 us of reconfiguration
-			 * it does not have would be handed to the backend, be
-			 * refused RADIANT_RADIO_ETIME, and be reported through
-			 * arm_failed()'s "a backend is stricter than it
-			 * advertises" path - which would be a true statement
-			 * about the wrong thing. Reported as MISSED here, where
-			 * it is exactly what happened.
-			 */
+			/* t_sync is exact and can't be moved - a transmit that
+			 * can no longer hit it doesn't go out. Includes the PHY
+			 * switch, unlike a receive window which can absorb a
+			 * slipped open: without this a transmit needing
+			 * reconfiguration it doesn't have would reach the
+			 * backend, get refused ETIME, and be reported through
+			 * arm_failed()'s "backend stricter than advertised" path -
+			 * true about the wrong thing. MISSED here is what
+			 * actually happened. */
 			expired = sl->t_start < earliest + phy_lead(sl->fmt);
 		} else {
 			/* A receive window whose open has passed is still worth
-			 * arming for the rest of its span - the window is
-			 * defined on t_sync, and a t_sync inside what remains is
-			 * still a frame caught - so only the close expires it. */
+			 * arming for the rest of its span, so only the close
+			 * expires it. */
 			expired = !sl->continuous && sl->t_end < earliest;
 		}
 		if (expired) {
@@ -1847,10 +1523,9 @@ static enum step pass_step(radiant_time_t now)
 
 /*
  * One scheduling decision, from whichever of the three entry points asked.
- *
- * radiant_radio_now() is read once and shared by every step: a pass reasons about
- * one instant, which is both cheaper in an ISR and easier to think about than a
- * clock that moves underneath the decision.
+ * radiant_radio_now() is read once and shared by every step: a pass reasons
+ * about one instant, cheaper in an ISR and simpler than a clock moving
+ * underneath the decision.
  */
 static void pass(void)
 {
@@ -1859,19 +1534,14 @@ static void pass(void)
 	unsigned int key;
 
 	/*
-	 * INTERRUPTS OFF FOR THE WHOLE PASS. See "Thread against interrupt" in
-	 * the header comment.
-	 *
-	 * The check-and-set of in_pass has to be atomic or it is not a guard at
-	 * all, and the table this reads has to stop moving while it is read: a
-	 * radio ISR landing between "choose the leader" and "arm it" runs
-	 * end_armed() and clear_armed() underneath a decision already made
-	 * against the old armed state. A pass costs one radiant_radio_now() and
-	 * at most one arm call whatever the table looks like - that budget is
-	 * stated at the top of this file and enforced by fake_radio.c - so this
-	 * is bounded arithmetic plus one register write, not a section that can
-	 * grow. Nested entry from a callback's own request is free: the port
-	 * maps these onto irq_lock()/irq_unlock(), which nest by key.
+	 * INTERRUPTS OFF FOR THE WHOLE PASS. See "Thread against interrupt"
+	 * above. The check-and-set of in_pass must be atomic, and the table
+	 * must stop moving while read: an ISR landing between "choose the
+	 * leader" and "arm it" would run end_armed()/clear_armed() underneath
+	 * a decision already made against the old armed state. Bounded
+	 * arithmetic plus at most one arm call (the budget stated at the top
+	 * of this file, enforced by fake_radio.c). Nested entry is free - the
+	 * port maps this onto irq_lock()/irq_unlock(), which nest by key.
 	 */
 	key = radiant_event_crit_enter();
 	if (!s.inited || s.in_pass) {
@@ -1881,11 +1551,10 @@ static void pass(void)
 	s.in_pass = true;
 	now = radiant_radio_now();
 
-	/* Bounded because it must be: every retry either consumes a request or
-	 * arms one, and there are only so many of each. The margin over the
-	 * channel count is for the case that motivated the bound - one window
-	 * closing late enough to expire every other channel at once, each of
-	 * which posts its next window from inside the notification. */
+	/* Bounded: every retry consumes a request or arms one, and there are
+	 * only so many. The margin over channel count covers one window
+	 * closing late enough to expire every other channel at once, each
+	 * posting its next window from inside the notification. */
 	for (guard = 0u; guard < (2u * RADIANT_SCHED_MAX_CHANNELS) + 4u; guard++) {
 		enum step st;
 
@@ -1910,10 +1579,10 @@ static void route_rx(const struct radiant_rx_event *evt)
 	uint8_t fi = evt->filter_index;
 
 	if (fi >= s.n_merged) {
-		/* A backend reporting a filter index the window did not have.
-		 * Counted rather than trusted: routing it to a channel that
-		 * did not ask for it is how a frame ends up on the wrong
-		 * ANT channel, which is unfalsifiable from the host side. */
+		/* A backend reporting a filter index the window didn't have.
+		 * Counted rather than trusted - routing it to a channel that
+		 * didn't ask for it would misattribute a frame with no way to
+		 * catch it from the host side. */
 		s.stats.stale_events++;
 		return;
 	}
@@ -1947,33 +1616,22 @@ static void hal_rx(const struct radiant_rx_event *evt, void *user)
 	case RADIANT_RADIO_STATUS_OK:
 	case RADIANT_RADIO_STATUS_CRC_FAIL:
 		route_rx(evt);
-		/* With RADIANT_RX_STOP_ON_FIRST the first accepted frame's event is
-		 * itself the terminal one. A CRC failure is not an accepted
-		 * frame, and on a 3-byte search address the matcher fires on
-		 * noise several times a second, so the distinction is not
-		 * academic. */
+		/* With RADIANT_RX_STOP_ON_FIRST the first accepted frame's
+		 * event is the terminal one; a CRC failure doesn't count - on
+		 * a 3-byte search address the matcher fires on noise several
+		 * times a second. */
 		if (evt->status == RADIANT_RADIO_STATUS_OK && s.armed_stop_on_first) {
 			end_armed(RADIANT_SCHED_DONE_OK);
 			terminal = true;
 		}
 		break;
 	case RADIANT_RADIO_STATUS_TIMEOUT:
-		/*
-		 * The noise floor, taken here because this is the one place
-		 * that knows both that the window ended empty and which
-		 * frequency it was on.
-		 *
-		 * Before end_armed(), which clears s.armed_rf. A sample
-		 * attributed to rf_index 0 instead of the one it was measured
-		 * on is worse than no sample: the whole use of this figure is
-		 * comparing one frequency against another.
-		 *
-		 * The backend has already decided whether the window is
-		 * eligible - it sets has_noise only on a terminal timeout that
-		 * received nothing - so there is no second test of that here,
-		 * and deliberately: two places deciding the same condition is
-		 * how they come to disagree.
-		 */
+		/* Noise floor, taken here since this is the one place that
+		 * knows both that the window ended empty and which frequency
+		 * it was on. Before end_armed(), which clears s.armed_rf - a
+		 * sample attributed to rf_index 0 is worse than no sample. No
+		 * second eligibility test here; the backend already decided
+		 * (has_noise set only on an empty terminal timeout). */
 		if (evt->has_noise) {
 			radiant_noise_note(s.armed_rf, evt->noise_dbm);
 		}
@@ -1985,19 +1643,12 @@ static void hal_rx(const struct radiant_rx_event *evt, void *user)
 		terminal = true;
 		break;
 	case RADIANT_RADIO_STATUS_DENIED:
-		/*
-		 * Accepted, then never granted. Distinct from ABORTED, which
-		 * means the window HAD opened and was cut short: this one never
-		 * opened at all, so a continuous scan's dwell must be credited
-		 * nothing rather than credited to now, and a tracked channel
-		 * must not be told its sensor went quiet.
-		 *
-		 * MAY ARRIVE FROM A COOPERATIVE THREAD rather than from the
-		 * radio interrupt - see the amended callback contract in
-		 * radiant_radio_hal.h. Nothing here depends on the context:
-		 * pass() takes radiant_event_crit_enter() for the whole of
-		 * itself, and s.in_pass is checked and set inside it.
-		 */
+		/* Accepted, then never granted - distinct from ABORTED (window
+		 * HAD opened, cut short): this never opened, so a continuous
+		 * scan's dwell is credited nothing and a tracked channel isn't
+		 * told its sensor went quiet. May arrive from a cooperative
+		 * thread rather than the radio interrupt (radiant_radio_hal.h);
+		 * nothing here depends on context. */
 		end_armed(RADIANT_SCHED_DONE_DENIED);
 		terminal = true;
 		break;
@@ -2009,12 +1660,9 @@ static void hal_rx(const struct radiant_rx_event *evt, void *user)
 	}
 
 	s.in_pass = was_in_pass;
-	/*
-	 * Nested inside a thread-context pass: leave the commit to the pass that
-	 * owns it. s.dirty is set by anything a callback posted and that pass's
-	 * loop re-checks it, so nothing is lost - and calling pass() here would
-	 * only be refused by its own guard anyway.
-	 */
+	/* Nested inside a thread-context pass: leave the commit to the pass
+	 * that owns it. s.dirty is set by anything a callback posted, and
+	 * that pass's loop re-checks it, so nothing is lost. */
 	if (!was_in_pass && (terminal || s.dirty)) {
 		pass();
 	}
@@ -2052,10 +1700,9 @@ static void hal_tx(const struct radiant_tx_event *evt, void *user)
 		end_armed(RADIANT_SCHED_DONE_ABORTED);
 		break;
 	case RADIANT_RADIO_STATUS_DENIED:
-		/* The frame never went out and nothing was preempted; the air
-		 * was lent. For a master that means only that the slot clock
-		 * must advance, which radiant_api.c does off the slot kind
-		 * rather than off this status. */
+		/* The frame never went out; the air was lent. For a master
+		 * this only means the slot clock must advance, which
+		 * radiant_api.c does off the slot kind, not this status. */
 		end_armed(RADIANT_SCHED_DONE_DENIED);
 		break;
 	default:
@@ -2069,16 +1716,10 @@ static void hal_tx(const struct radiant_tx_event *evt, void *user)
 }
 
 #if SCHED_ED_BUILT
-/*
- * One energy-detect dwell, or the end of a chunk.
- *
- * The measurement is fed to radiant_chanmap.c HERE, for exactly the reason the
- * noise sample is taken in hal_rx(): this is the one place that knows both the
- * number and which frequency it was measured on. Unlike the noise sample there
- * is no attribution hazard - the event carries its own rf_index - but there is
- * the same reason to keep the aggregation out of the backend, which is that a
- * second backend would then have to agree with the first about the binning.
- */
+/* One energy-detect dwell, or the end of a chunk. Fed to radiant_chanmap.c
+ * here, same reason as the noise sample in hal_rx(): this is the one place
+ * that knows the number and the frequency. Kept out of the backend so a
+ * second backend doesn't have to agree with the first about binning. */
 static void hal_ed(const struct radiant_ed_event *evt, void *user)
 {
 	uint8_t ch;
@@ -2112,9 +1753,9 @@ static void hal_ed(const struct radiant_ed_event *evt, void *user)
 		if (ch != RADIANT_SCHED_CH_NONE) {
 			sl = &s.ch[ch];
 			if (sl->kind == (uint8_t)SLOT_ED) {
-				/* Past the top of the range, start again at the
-				 * bottom. Advanced per dwell rather than per
-				 * chunk - see struct sched_slot::rf_cursor. */
+				/* Past the top of the range, restart at the
+				 * bottom. Advanced per dwell, see
+				 * struct sched_slot::rf_cursor. */
 				sl->rf_cursor = (evt->rf_index >= sl->rf_hi)
 							? sl->rf_index
 							: (uint8_t)(evt->rf_index + 1u);
@@ -2126,11 +1767,9 @@ static void hal_ed(const struct radiant_ed_event *evt, void *user)
 		break;
 	}
 	case RADIANT_RADIO_STATUS_TIMEOUT:
-		/* The range completed. TIMEOUT rather than OK for the same
-		 * reason a receive window reports it: the operation reached its
-		 * own end without being interrupted, and the terminal event of
-		 * an operation that ran to completion should not be
-		 * indistinguishable from one of its own results. */
+		/* The range completed. TIMEOUT rather than OK, same reason a
+		 * receive window reports it: the terminal event of a completed
+		 * operation shouldn't look like one of its own results. */
 		end_armed(RADIANT_SCHED_DONE_OK);
 		terminal = true;
 		break;
@@ -2139,10 +1778,9 @@ static void hal_ed(const struct radiant_ed_event *evt, void *user)
 		terminal = true;
 		break;
 	case RADIANT_RADIO_STATUS_DENIED:
-		/* The chunk never ran, so no index was measured and rf_cursor
-		 * stays where it was - the next chunk resumes on the index this
-		 * one would have started with. end_armed() keeps the request:
-		 * nothing else re-posts an ED sweep. */
+		/* Chunk never ran; rf_cursor stays put so the next chunk
+		 * resumes where this one would have started. end_armed()
+		 * keeps the request: nothing else re-posts an ED sweep. */
 		end_armed(RADIANT_SCHED_DONE_DENIED);
 		terminal = true;
 		break;
@@ -2183,12 +1821,10 @@ int radiant_sched_init(const struct radiant_sched_cbs *cbs, void *user)
 {
 	memset(&s, 0, sizeof(s));
 
-	/* The histogram belongs to the samples this module feeds it, so it is
-	 * reset with this module and not separately. A stale distribution from
-	 * before a reset would be reported as if it were this session's. */
+	/* The histogram belongs to the samples this module feeds it, so it
+	 * resets with this module rather than separately. */
 	radiant_noise_reset();
-	/* The channel-quality map, on exactly the same terms and for exactly
-	 * the same reason. It is a no-op inline without
+	/* Same reasoning for the channel-quality map; no-op inline without
 	 * CONFIG_RADIANT_CORE_ED_SCAN. */
 	radiant_chanmap_reset();
 
@@ -2216,14 +1852,10 @@ void radiant_sched_reset(void)
 	s.cursor = 0u;
 	s.dirty = false;
 	s.replan = false;
-	/*
-	 * The radio's PHY becomes unknown again, on the conservative side.
-	 * A reset is what accompanies a disable/enable pair, and a backend that
-	 * came back up in its reset configuration would leave this module
-	 * under-leading the first operation of the next session by
-	 * phy_switch_us. One over-led arm costs nothing; the other direction
-	 * costs a frame with no counter to explain it.
-	 */
+	/* The radio's PHY becomes unknown again, conservatively: a backend
+	 * that came back up in its reset configuration would otherwise
+	 * under-lead the first operation of the next session by
+	 * phy_switch_us. */
 	s.phy_known = false;
 	radiant_event_crit_exit(key);
 }
@@ -2252,13 +1884,9 @@ int radiant_sched_request_rx(uint8_t ch, const struct radiant_sched_rx *req)
 		return RADIANT_RADIO_EINVAL;
 	}
 
-	/*
-	 * The mutation window, closed against the radio ISR. Everything from
-	 * here down rewrites one slot, and drop_slot() may retire the live
-	 * operation on the way; an ISR landing in the middle would see a slot
-	 * that is half the old request and half the new one. See "Thread
-	 * against interrupt" in the header comment.
-	 */
+	/* The mutation window, closed against the radio ISR: an ISR landing
+	 * mid-rewrite would see a slot half old request, half new. See
+	 * "Thread against interrupt" above. */
 	key = radiant_event_crit_enter();
 
 	drop_slot(ch);
@@ -2300,15 +1928,11 @@ int radiant_sched_request_tx(uint8_t ch, const struct radiant_sched_tx *req)
 	if (req->t_sync_at == RADIANT_TIME_NEVER) {
 		return RADIANT_RADIO_EINVAL;
 	}
-	/*
-	 * Refused here rather than passed down, because a backend that is handed
-	 * a zero-length address has no honest move left: nRF's TXADDRESS would
-	 * simply select whatever BASE/PREFIX the last operation loaded and emit
-	 * a well-formed frame addressed to the wrong device. Checking against
-	 * fmt->addr_len rather than merely against zero also catches the
-	 * search-format address (3 bytes) being posted against the tracking
-	 * format (5), which is a transmit nothing should ever make.
-	 */
+	/* Refused here rather than passed down: a backend handed a zero-length
+	 * address has no honest move (nRF's TXADDRESS would emit a
+	 * well-formed frame addressed to the wrong device). Checking against
+	 * fmt->addr_len, not just zero, also catches a search-format address
+	 * (3 bytes) posted against the tracking format (5). */
 	if (req->addr_len != req->fmt->addr_len ||
 	    req->addr_len > RADIANT_RADIO_ADDR_MAX) {
 		return RADIANT_RADIO_EINVAL;
@@ -2355,15 +1979,11 @@ int radiant_sched_request_ed(uint8_t ch, const struct radiant_sched_ed *req)
 	    req->rf_index_hi > RADIANT_RF_INDEX_MAX) {
 		return RADIANT_RADIO_EINVAL;
 	}
-	/*
-	 * REFUSED HERE RATHER THAN REPORTED THROUGH done(), which is the
-	 * opposite of what radiant_sched_request_rx() does with a filter set
-	 * the backend cannot match - and the difference is that one is a
-	 * property of the request and this is a property of the build. A slot
-	 * holding a request no backend on this image will ever accept is
-	 * scanned by the leader search on every pass, for ever, and reports the
-	 * same failure every time. The caller finds out now instead.
-	 */
+	/* Refused here rather than reported through done() - the opposite of
+	 * radiant_sched_request_rx()'s unmatchable filter set, because that's
+	 * a property of the request while this is a property of the build. A
+	 * slot no backend on this image will ever accept would otherwise be
+	 * scanned and fail on every pass forever. */
 	if (s.caps == NULL || !s.caps->has_ed_scan) {
 		return RADIANT_RADIO_ENOTSUP;
 	}
@@ -2380,21 +2000,16 @@ int radiant_sched_request_ed(uint8_t ch, const struct radiant_sched_ed *req)
 	sl->rf_cursor = req->rf_index_lo;
 	sl->dwell_us = req->dwell_us;
 	sl->chunk_us = req->chunk_us;
-	/* Ready now and ready always. See struct radiant_sched_ed on why there
-	 * is no instant in the request. */
+	/* Ready now and always. See struct radiant_sched_ed on why there is
+	 * no instant in the request. */
 	sl->t_start = 0u;
 	sl->t_end = 0u;
 
 	s.dirty = true;
-	/*
-	 * s.replan is deliberately NOT set, unlike every other post.
-	 *
-	 * replan exists to let a request that could have joined an armed window
-	 * provoke one rebuild before that window opens. could_join_armed()
-	 * requires both sides to be SLOT_RX, so it can never say yes to this
-	 * one - and setting the flag would therefore buy exactly one wasted
-	 * rebuild attempt per ED post and nothing else.
-	 */
+	/* s.replan deliberately NOT set, unlike every other post:
+	 * could_join_armed() requires both sides SLOT_RX, so it can never
+	 * say yes to an ED slot - setting the flag would only buy one wasted
+	 * rebuild attempt. */
 	radiant_event_crit_exit(key);
 	return RADIANT_RADIO_OK_RC;
 }
@@ -2409,13 +2024,9 @@ int radiant_sched_cancel(uint8_t ch)
 	if (ch >= RADIANT_SCHED_MAX_CHANNELS) {
 		return RADIANT_RADIO_EINVAL;
 	}
-	/*
-	 * The abort happens here rather than at the next commit, because
-	 * cancelling is the one mutation whose whole point is that the radio
-	 * stops doing something now. Choosing what it does instead is still the
-	 * commit's job - except inside a callback, where the dispatch tail runs
-	 * a pass anyway and the radio is never left idle.
-	 */
+	/* Abort happens here rather than at the next commit, since cancelling
+	 * means the radio stops doing something now. Choosing what runs
+	 * instead is still the commit's job. */
 	key = radiant_event_crit_enter();
 	drop_slot(ch);
 	s.dirty = true;
@@ -2443,12 +2054,9 @@ int radiant_sched_rechunk(uint8_t ch, uint32_t chunk_us)
 	}
 
 	key = radiant_event_crit_enter();
-	/*
-	 * Only a continuous request has a chunk, and only shorter is allowed -
-	 * see the header. An in-flight chunk keeps the length it was armed with;
-	 * this bounds the NEXT one, which is the one the caller still has a say
-	 * over.
-	 */
+	/* Only a continuous request has a chunk, and only shorter is allowed
+	 * (see the header). An in-flight chunk keeps its armed length; this
+	 * bounds the NEXT one. */
 	if (s.ch[ch].kind == (uint8_t)SLOT_RX && s.ch[ch].continuous &&
 	    (s.ch[ch].chunk_us == 0u || chunk_us < s.ch[ch].chunk_us)) {
 		s.ch[ch].chunk_us = chunk_us;

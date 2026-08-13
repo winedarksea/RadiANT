@@ -13,7 +13,7 @@
 > the MDK and nrfx headers shipped in NCS v3.4.0, and from Nordic's
 > open-source Zephyr Bluetooth controller (per-SoC chain-delay tables,
 > Apache-2.0, already a dependency). Nothing here derives from sdk-ant, from
-> `libant.a`, from disassembly of any binary, or from any adopter-gated ANT+
+> `libant.a`, from disassembly of any binary, or from any non-redistributable ANT+
 > device profile document. See [0002](0002-clean-room-policy.md).
 
 ---

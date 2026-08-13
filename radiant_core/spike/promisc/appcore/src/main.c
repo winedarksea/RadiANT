@@ -2,48 +2,30 @@
 /*
  * Spike B part 2 - the nRF5340 application-core companion to radiant_core/spike/promisc.
  *
- * Provenance: clean-room. Written from the nRF5340 product specification's
- * GPIO.PIN_CNF.MCUSEL and RESET.NETWORK.FORCEOFF sections, the public Nordic MDK
- * headers shipped with NCS, and Zephyr's public Kconfig
- * (CONFIG_SOC_NRF53_CPUNET_ENABLE). Nothing here derives from sdk-ant or from an
- * adopter-gated ANT+ device profile document.
+ * Clean-room: written from the nRF5340 product spec's GPIO.PIN_CNF.MCUSEL and
+ * RESET.NETWORK.FORCEOFF sections, the public Nordic MDK headers, and
+ * Zephyr's CONFIG_SOC_NRF53_CPUNET_ENABLE Kconfig. Nothing derives from
+ * sdk-ant or an ANT+ profile document.
  *
- * ---------------------------------------------------------------------------
- * Why this exists at all
- * ---------------------------------------------------------------------------
- * The nRF5340's RADIO lives on the network core, so the promiscuous capture must
- * run there. Two things stand between that image and a usable console, and both
- * are the application core's job:
+ * The nRF5340's RADIO lives on the network core, so the promiscuous capture
+ * must run there, and two things - both the application core's job - stand
+ * between that image and a usable console:
+ *  1. RESET.NETWORK.FORCEOFF holds the network core in reset until an
+ *     app-core image clears it; CONFIG_SOC_NRF53_CPUNET_ENABLE=y does that,
+ *     set explicitly in prj.conf rather than relying on a default.
+ *  2. Every GPIO belongs to the app core until PIN_CNF[n].MCUSEL is set to
+ *     NetworkMCU. The network core's uart0 (P1.00/P1.01) is wired to the
+ *     DK's second VCOM; without that write the capture program has nowhere
+ *     to print. Spike B part 1 stalled here and wrongly concluded the
+ *     network core "cannot print".
  *
- *  1. The network core is held in reset by RESET.NETWORK.FORCEOFF until an
- *     application-core image clears it. Zephyr does that for us when
- *     CONFIG_SOC_NRF53_CPUNET_ENABLE=y, which is why prj.conf sets it explicitly
- *     rather than relying on a default that could change.
- *
- *  2. Every GPIO belongs to the application core until it hands the pin over by
- *     writing PIN_CNF[n].MCUSEL = NetworkMCU. The network core's uart0 is
- *     P1.00/P1.01, wired to the DK's second VCOM, so without that write the
- *     capture program runs and has nowhere to print. Spike B part 1 stalled
- *     exactly here and concluded, wrongly, that the network core "cannot print".
- *
- * ---------------------------------------------------------------------------
- * Why not nrf/samples/nrf5340/empty_app_core
- * ---------------------------------------------------------------------------
- * That sample does both jobs and is the documented answer, but it grants *all*
- * GPIOs to the network core and then powers off application-core RAM and spins
- * in WFI with interrupts disabled. Two costs, and on a board that has to be
- * reflashed several times in one sitting both of them bite:
- *
- *  - Granting P0.20/P0.22 away takes the *application* core's own console with
- *    it, so if the network core stays silent there is no second opinion about
- *    why. Here the application core keeps its VCOM and prints a heartbeat, which
- *    turns "which core is dead" from an inference into a reading.
- *  - RAM off plus interrupts off is a harder state for a debugger to interrupt.
- *    It is recoverable, but it is a recovery rather than a connect, and this
- *    board is on a strict "leave it working" obligation.
- *
- * So this grants exactly the two pins the network-core console needs and
- * otherwise stays out of the way.
+ * Why not nrf/samples/nrf5340/empty_app_core: it does both jobs but grants
+ * *all* GPIOs to the network core, then powers off app-core RAM and spins in
+ * WFI with interrupts disabled. That takes the app core's own console with
+ * it (no second opinion if the network core stays silent) and leaves a
+ * harder state for a debugger to interrupt on a board that gets reflashed
+ * repeatedly. This grants only the two console pins and otherwise stays out
+ * of the way, keeping a heartbeat on the app core's own VCOM.
  */
 
 #include <zephyr/kernel.h>

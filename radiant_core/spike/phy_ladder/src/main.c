@@ -4,129 +4,70 @@
  * ">= 6 dB improvement in the 5 %-loss point for the coded PHY at S=8 versus
  * 1 M GFSK, on the same rig".
  *
- * Provenance: clean-room. Written from
- *   - docs/decisions/0007-long-range-phy.md, "Verification status", which is
- *     where that gate is recorded as owed and unmeasured, and its "Two
- *     limitations" section, which is where the 1m-long objective below comes
- *     from,
- *   - radiant_core/include/radiant_core/radiant_radio_hal.h, the frozen backend
- *     contract (the arm/callback rules, t_sync, caps),
- *   - radiant_core/include/radiant_core/radiant_frame.h and the two shipping
- *     encoders it declares - radiant_frame_encode() and radiant_frame_lr_body(),
- *   - radiant_core/spike/x1m_len/src/main.c, this repository's own spike, for
- *     the build guard, the frame-B bytes this program's third mode receives,
- *     and the shape of a bench program,
- *   - tools/ab_gates.toml's header, for the "read loss (exact), never the
- *     wall-clock line" rule this program's counting obeys.
- * Nothing here derives from sdk-ant, from libant.a, or from any adopter-gated
- * ANT+ device profile document. See docs/decisions/0002-clean-room-policy.md.
+ * Clean-room: written from docs/decisions/0007-long-range-phy.md
+ * ("Verification status" - the gate recorded as owed; "Two limitations" -
+ * where the 1m-long objective comes from), radiant_core/include/radiant_core/
+ * radiant_radio_hal.h (backend contract: arm/callback rules, t_sync, caps),
+ * radiant_frame.h and its shipping encoders (radiant_frame_encode(),
+ * radiant_frame_lr_body()), this repo's own radiant_core/spike/x1m_len/src/
+ * main.c (build guard, frame-B bytes the third mode receives), and
+ * tools/ab_gates.toml's header (the "read loss (exact), never wall-clock"
+ * rule this program's counting obeys). Nothing derives from sdk-ant,
+ * libant.a, or an ANT+ profile document. See
+ * docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * Why this is firmware and not tools/ant_sens.py
- * ---------------------------------------------------------------------------
- * The ladder tools/ant_sens.py runs - walk the master's transmit power down
- * until the receiver misses 5 % - is exactly the right measurement, and it
- * cannot be used here. It drives boards over the ANT serial protocol, and NO
- * ANT SERIAL MESSAGE SELECTS A PHY. There is no message to add without
- * inventing one, so the ladder has to live where the PHY selection lives:
- * inside an image that calls radiant_radio_tx() with a struct radiant_pkt_format.
+ * Why firmware, not tools/ant_sens.py: that script's ladder (walk transmit
+ * power down until 5% loss) is the right measurement but drives boards over
+ * the ANT serial protocol, and no ANT serial message selects a PHY. The
+ * ladder has to live where PHY selection lives - an image calling
+ * radiant_radio_tx() with a struct radiant_pkt_format.
  *
- * ---------------------------------------------------------------------------
- * One application, two roles, selected at run time
- * ---------------------------------------------------------------------------
- * A rung of a ladder is one power setting. A build-time switch, or two
- * applications, would make a twelve-rung ladder cost a dozen flashes - and on
- * this bench one of the two radios is the Adafruit Feather, whose flashes are
- * rationed and physically gated. So the role and the PHY are console commands:
- *
+ * One application, two roles, selected at run time over the console (not a
+ * build-time switch or two apps): a rung is one power setting, and a
+ * twelve-rung ladder must not cost twelve flashes of the Feather, whose
+ * flashes are rationed and physically gated.
  *     role tx | rx
  *     phy 1m | s8 | 1m-long        (1m-long is RX only - see below)
  *     power <dbm>                  (TX role)
- *     start | stop
- *     stats
- *     help
+ *     start | stop | stats | help
  *
- * ---------------------------------------------------------------------------
- * COUNTING LOSS WITHOUT A CLOCK, which is the whole design
- * ---------------------------------------------------------------------------
- * tools/ab_gates.toml states the rule this project already learned the hard
- * way: read `loss (exact)`, never the wall-clock line. A wall-clock figure
- * divides elapsed time by a nominal period and so quietly assumes the
- * transmitter's crystal, the receiver's crystal and the operator's stopwatch
- * all agree. They do not, and the disagreement is the same order as the effect
- * being measured.
- *
- * So the transmitter puts an incrementing 32-bit SEQUENCE NUMBER in the
- * payload and the receiver counts gaps in it:
- *
+ * Counting loss without a clock, the whole design: a wall-clock figure
+ * divides elapsed time by a nominal period, silently assuming transmitter
+ * crystal, receiver crystal and stopwatch all agree - they don't, by an
+ * amount comparable to the effect being measured (tools/ab_gates.toml). So
+ * the transmitter puts an incrementing 32-bit sequence number in the payload
+ * and the receiver counts gaps in it:
  *     expected = highest_seq_seen - first_seq_seen + 1
  *     received = frames that decoded and carried this program's marker
  *     loss     = (expected - received) / expected
+ * No clock anywhere. `stats` prints no rate/pps/elapsed-time on purpose.
  *
- * There is no clock anywhere in that. The only three numbers the gate may be
- * read from are the three printed on the `[rx] seq` line, and `stats` prints
- * no rate, no packets-per-second and no elapsed time on purpose - a figure
- * divided by wall-clock time is exactly the number this project has already
- * once mistaken for a result.
+ * Consequence that must be obeyed at the bench: `start` on TX resets the
+ * sequence to zero. A receiver already running sees it go BACKWARDS and every
+ * number after is nonsense - counted, not repaired; `stats` marks the run
+ * VOID. Restart TX first, then RX. See README.md.
  *
- * A CONSEQUENCE THAT MUST BE OBEYED AT THE BENCH: `start` on the TX role resets
- * the sequence to zero. A receiver that is already running when that happens
- * sees the sequence go BACKWARDS, and every number after it is nonsense. That
- * is not silently repaired here - it is counted, and `stats` marks the run VOID
- * if it ever happened. Restart the TX first, then the RX. See README.md.
- *
- * ---------------------------------------------------------------------------
- * The shipping frame formats, not local copies
- * ---------------------------------------------------------------------------
+ * Shipping frame formats, not local copies:
  * radiant_frame_format(RADIANT_FRAME_CFG_TRACKING) for 1 M and
- * radiant_frame_format(RADIANT_FRAME_CFG_LR) for S=8, with radiant_frame_encode()
- * and radiant_frame_lr_body() composing the bodies. A ladder run against a
- * locally-declared format would measure a format nothing ships, and the number
- * would then have to be re-measured the first time the shipping one was used.
+ * RADIANT_FRAME_CFG_LR for S=8, so the number measured matches what ships.
+ * The one local format is the third mode's, local because the thing it must
+ * be byte-identical to (x1m_len's frame B) is also local to another spike.
  *
- * The ONE local format in this file is the third mode's, and it is local
- * because the thing it is byte-compatible with is also local to another spike -
- * see "The secondary objective" below.
+ * Secondary objective, `phy 1m-long`: ADR 0007's 2026-08-11 x1m_len capture
+ * proved a stock dongle ignores a length-extended 1 M frame but explicitly
+ * did not prove usability - a malformed-for-other-reasons frame would look
+ * identical. `phy 1m-long` closes that gap: a radiant_core receiver reading
+ * x1m_len's frame B off the air, checking all thirty body bytes (not just
+ * "something arrived", which a noise-triggered matcher can also produce) -
+ * this is the one mode with no sequence number to cross-check.
  *
- * ---------------------------------------------------------------------------
- * The secondary objective: `phy 1m-long`
- * ---------------------------------------------------------------------------
- * ADR 0007 records the 2026-08-11 capture that proved a stock ANT dongle
- * IGNORES a length-extended 1 M frame, and then records, in the same breath,
- * exactly what that capture does not prove:
- *
- *   > This run proves HARMLESSNESS, not USABILITY [...] A frame that was
- *   > malformed for some reason unrelated to its length would produce a
- *   > byte-for-byte identical result.
- *
- * Closing it is one run: a radiant_core receiver reading spike x1m_len's frame
- * B off the air. `phy 1m-long` is that receiver. Its format is a local
- * RADIANT_LEN_FIXED / addr_len 5 / body_len 30 declaration because that is what
- * frame B is - a local declaration in radiant_core/spike/x1m_len/src/main.c -
- * and the two must be byte-identical or the run proves nothing. This mode
- * therefore checks all thirty body bytes against what x1m_len builds, not just
- * that something arrived: "a frame arrived" is consistent with a matcher firing
- * on noise, and this is the one mode where the frame carries no sequence number
- * to cross-check against.
- *
- * ---------------------------------------------------------------------------
- * Why RX re-arms from the callback and TX does not
- * ---------------------------------------------------------------------------
- * radiant_radio_hal.h permits re-arming inside a completion callback and calls
- * it the low-jitter path. Spike x1m_len declined it, because at 8 transmissions
- * a second nothing needed it. Here the two sides differ:
- *
- *   TRANSMIT is thread-driven, as x1m_len is, for the same reason: the schedule
- *   is absolute, so thread latency moves when the arm call happens and not when
- *   the frame leaves the antenna.
- *
- *   RECEIVE re-arms from the terminal event, and that IS load-bearing. Every
- *   microsecond between one window closing and the next opening is a
- *   microsecond in which a transmitted frame is lost to the instrument rather
- *   than to the link - and this program's entire output is a loss figure. The
- *   windows are a second long each, so the residual gap is the backend's arm
- *   path, order 10^-4 of the run. It is not zero, and README.md says so rather
- *   than letting a reader assume it is.
+ * Why RX re-arms from the callback and TX does not: the HAL's low-jitter
+ * re-arm-from-callback path isn't needed for TX (thread-driven, as x1m_len
+ * is - the schedule is absolute, so latency shifts the arm call not the
+ * frame's departure). RX re-arming from the terminal event IS load-bearing:
+ * every microsecond between windows is loss this *instrument* invents rather
+ * than the link. 1 s windows keep the residual arm-path gap to ~10^-4 of the
+ * run - not zero, and README.md says so.
  */
 
 #include <stdlib.h>
@@ -146,20 +87,15 @@
  */
 
 /*
- * THE ONE THAT MATTERS, copied verbatim in intent from
- * radiant_core/spike/x1m_len/src/main.c because it has already cost this
- * project real bench sessions.
+ * Same guard as radiant_core/spike/x1m_len/src/main.c, and it has already
+ * cost this project real bench sessions. CONFIG_RADIANT_CORE_BACKEND_NRF
+ * depends on SOC_COMPATIBLE_NRF52X || SOC_COMPATIBLE_NRF54LX; asking for it
+ * on an nRF5340 doesn't error - Kconfig falls back to the null backend, which
+ * boots, accepts every console command, and refuses every arm with ENOTSUP.
  *
- * CONFIG_RADIANT_CORE_BACKEND_NRF is a `depends on SOC_COMPATIBLE_NRF52X ||
- * SOC_COMPATIBLE_NRF54LX` choice entry. Ask for it on a part outside that pair -
- * an nRF5340, either core - and nothing errors: the dependency is unmet,
- * Kconfig falls back to RADIANT_CORE_BACKEND_NULL, and the image builds, boots,
- * accepts every console command and refuses every arm with ENOTSUP.
- *
- * On a ladder that is worse than on x1m_len. The null backend's receiver hears
- * nothing, so it manufactures 100 % loss at every rung - which looks exactly
- * like a rig whose attenuation is too high, and an operator would spend the
- * session moving boards closer together.
+ * Worse on a ladder than on x1m_len: the null backend's receiver hears
+ * nothing, manufacturing 100% loss at every rung - indistinguishable from a
+ * rig with too much attenuation.
  */
 BUILD_ASSERT(IS_ENABLED(CONFIG_RADIANT_CORE_BACKEND_NRF),
 	     "This spike transmits and receives. CONFIG_RADIANT_CORE_BACKEND_NRF "
@@ -184,37 +120,28 @@ BUILD_ASSERT(!IS_ENABLED(CONFIG_BT),
 #define DEVICE_TYPE     0x60u   /* the RadiANT telemetry envelope's type */
 #define TRANS_TYPE      0x05u
 
-/*
- * 0x60C0, deliberately neither of spike x1m_len's numbers. Both spikes may be
- * on this bench at once - `phy 1m-long` exists precisely so that they are - and
- * a ladder whose 1 M receiver also matched x1m_len's control frame would be
- * counting somebody else's packets into its own loss figure.
- */
+/* 0x60C0, deliberately neither of x1m_len's numbers - both spikes may be on
+ * the bench at once, and a 1 M receiver matching x1m_len's control frame
+ * would count somebody else's packets into its own loss figure. */
 #define DEVNUM_LADDER   0x60C0u
 
-/* Spike x1m_len's frame B, which `phy 1m-long` receives. These three constants
- * and the thirty body bytes below are the interface between the two programs;
- * they are duplicated rather than shared because a spike that reached into
- * another spike's source is a spike that breaks when that one is deleted. */
+/* x1m_len's frame B, which `phy 1m-long` receives. Duplicated rather than
+ * shared - a spike reaching into another spike's source breaks when that one
+ * is deleted. */
 #define DEVNUM_X1M_LONG 0x60B0u
 #define X1M_LONG_BODY_LEN 30u
 #define X1M_LONG_TRANS_TYPE 0x05u
 #define X1M_LONG_CTRL       0x0Au
 
 /*
- * 20 Hz, and THE SAME 20 Hz ON BOTH PHYS.
+ * 20 Hz on BOTH PHYs, deliberately. The gate is a comparison, so anything
+ * that differs between arms besides the PHY is a confound - slowing S=8 down
+ * (its frame is 1.3 ms airtime vs 0.1 ms at 1 M) looks harmless but would
+ * change collision exposure on this bench's ~0.4% collision floor. Same
+ * rate, same exposure, same floor on both arms.
  *
- * The gate is a comparison, so anything that differs between the two arms
- * other than the PHY is a confound. Cadence is the one that would be tempting
- * to change - a coded frame is 1.3 ms of airtime against 0.1 ms at 1 M, so
- * "slow S=8 down a bit" looks harmless - and it is not: the collision exposure
- * of a bench with other ANT traffic on RF 57 scales with how often this program
- * is on the air, and this bench has a characterised ~0.4 % collision floor.
- * Same rate, same exposure, same floor on both arms.
- *
- * 20 Hz also sizes a rung: 1,000 packets in 50 s, which resolves a 5 % point to
- * about +/-0.7 % (1-sigma binomial) - comfortably finer than the 6 dB the gate
- * is asking about.
+ * Also sizes a rung: 1,000 packets in 50 s resolves a 5% point to about
+ * +/-0.7% (1-sigma binomial), well inside the 6 dB the gate asks about.
  */
 #define SLOT_US         50000u
 
@@ -236,16 +163,10 @@ BUILD_ASSERT(PAYLOAD_LEN == RADIANT_FRAME_PAYLOAD_STD,
 BUILD_ASSERT(X1M_LONG_BODY_LEN <= RADIANT_RADIO_BODY_MAX,
 	     "x1m_len's frame B no longer fits RADIANT_RADIO_BODY_MAX");
 
-/* ---------------------------------------------------------------------------
- * The one local packet format
- *
- * Byte-for-byte spike x1m_len's fmt_long: RADIANT_LEN_FIXED on
- * RADIANT_PHY_1M_GFSK, five address bytes, thirty body bytes, and ANT's CRC.
- * It is local for the reason given in the header - the thing it must match is
- * itself local to another spike - and it is the only format in this file that
- * radiant_frame.c does not supply.
- * ---------------------------------------------------------------------------
- */
+/* The one local packet format: byte-for-byte x1m_len's fmt_long
+ * (RADIANT_LEN_FIXED, RADIANT_PHY_1M_GFSK, 5-byte address, 30-byte body,
+ * ANT's CRC). Local because the thing it must match is itself local to
+ * another spike - the only format here radiant_frame.c doesn't supply. */
 static const struct radiant_pkt_format fmt_1m_long = {
 	.phy          = RADIANT_PHY_1M_GFSK,
 	.addr_len     = (uint8_t)RADIANT_FRAME_ADDR_LEN_TRACKING,
@@ -365,10 +286,10 @@ static const struct radiant_channel_id id_x1m_long = {
 };
 
 /*
- * The thirty bytes spike x1m_len's frame_build() writes for frame B, rebuilt
- * here from the same rule rather than copied as a literal array: a literal
- * would be one edit away from disagreeing with the transmitter silently, and a
- * disagreement in these bytes is a failed run that looks like a broken frame.
+ * The thirty bytes x1m_len's frame_build() writes for frame B, rebuilt from
+ * the same rule rather than copied as a literal array - a literal could drift
+ * from the transmitter silently, and a disagreement here would look like a
+ * broken frame rather than a stale constant.
  *
  *   body[0] = transmission type
  *   body[1] = control byte (broadcast)
@@ -482,13 +403,9 @@ static void rx_handle_ok(const struct radiant_rx_event *evt)
 	}
 
 	if (cur_mode == MODE_1M_LONG) {
-		/*
-		 * No sequence number exists in x1m_len's frame B, so the
-		 * question here is not "how many" but "is it the frame". All
-		 * thirty bytes are checked: a matcher firing on noise also
-		 * produces an event, and "something arrived" is not the claim
-		 * ADR 0007 is owed.
-		 */
+		/* No sequence number in frame B, so the question is "is it the
+		 * frame", not "how many" - all thirty bytes are checked, since
+		 * a noise-triggered matcher also produces an event. */
 		if (evt->body_len == X1M_LONG_BODY_LEN &&
 		    memcmp(evt->body, x1m_long_expect, X1M_LONG_BODY_LEN) == 0) {
 			rx_long_exact++;
@@ -519,14 +436,13 @@ static void rx_handle_ok(const struct radiant_rx_event *evt)
 	}
 
 	/*
-	 * 1 M, through the shipping decoder rather than by reading bytes out of
-	 * evt->body directly. The address is not in the buffer - in tracking
-	 * geometry the matcher consumed it and radiant_radio_hal.h says a
-	 * matched byte never reaches RAM - so it is refilled here from the
-	 * filter this program armed, which is the same recovery radiant_api.c
-	 * performs. RADIANT_FRAME_TRUSTED_CRC because caps.crc_in_hw is true and
-	 * an OK event means a verified CRC by contract; the received CRC bytes
-	 * are not in the buffer to re-check.
+	 * 1 M, through the shipping decoder rather than reading evt->body
+	 * directly. The address isn't in the buffer (tracking geometry: the
+	 * matcher consumes it, radiant_radio_hal.h says a matched byte never
+	 * reaches RAM), so it's refilled from the armed filter - the same
+	 * recovery radiant_api.c performs. RADIANT_FRAME_TRUSTED_CRC because
+	 * caps.crc_in_hw is true and an OK event means a verified CRC by
+	 * contract; the CRC bytes aren't in the buffer to re-check.
 	 */
 	{
 		struct radiant_frame_wire w;
@@ -837,21 +753,14 @@ static void tx_run(void)
 
 		rc = radiant_radio_tx(&req, &op);
 		if (rc != RADIANT_RADIO_OK_RC) {
-			/*
-			 * A refusal is a RESULT, not a hiccup. ENOTSUP on
-			 * `phy s8` means this part's RADIO has no coded mode
-			 * and the entire comparison is unavailable on this
-			 * board - which must be loud, because the ladder would
-			 * otherwise read as "S=8 loses every packet".
-			 *
-			 * Printed on the first occurrence of each distinct
-			 * code and then once every hundred, rather than every
-			 * time: at 20 Hz an unconditional line is 20 writes a
-			 * second down a USB CDC console whose ring buffer
-			 * discards when full, and the first line - the one
-			 * that says WHICH refusal it is - would be the one
-			 * lost. The counter carries the rest.
-			 */
+			/* A refusal is a result, not a hiccup - ENOTSUP on `phy
+			 * s8` means this board's RADIO has no coded mode and the
+			 * comparison is unavailable here, which must be loud or
+			 * the ladder reads as "S=8 loses every packet". Printed
+			 * on the first occurrence of each distinct code and then
+			 * every hundredth: at 20 Hz, an unconditional line would
+			 * overrun the USB CDC console's ring buffer and lose the
+			 * one line that says which refusal it is. */
 			int prev = tx_last_refusal;
 
 			tx_refused++;
@@ -877,15 +786,11 @@ static void tx_run(void)
 			tx_failed++;
 		}
 
-		/*
-		 * THE SEQUENCE ADVANCES WHATEVER HAPPENED, and that is not
-		 * sloppiness. A frame the transmitter refused to arm is a frame
-		 * the receiver never had a chance at, and it must show up in
-		 * the receiver's gap count - otherwise a transmitter defect
-		 * would be invisible on the only line the gate is read from.
-		 * The `refused`/`failed` counters here are how an operator
-		 * tells that case from a link one.
-		 */
+		/* Sequence advances whatever happened - a frame the transmitter
+		 * refused to arm never reached the receiver either, and must
+		 * show up as a gap or a transmitter defect would be invisible
+		 * on the gate's only readout. `refused`/`failed` distinguish
+		 * that case from a link one. */
 		tx_seq++;
 		next += SLOT_US;
 	}

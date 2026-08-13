@@ -2,39 +2,23 @@
 /*
  * radiant_noise.h - what the band sounds like when nothing is transmitting.
  *
- * Provenance: original clean-room work. Nothing here derives from sdk-ant, from
- * libant.a, or from any adopter-gated ANT+ device profile document.
+ * Provenance: original clean-room work.
  *
- * ---------------------------------------------------------------------------
- * The failure this exists to make visible
- * ---------------------------------------------------------------------------
- * The most common real-world 2.4 GHz dongle failure that is not in
- * docs/gotchas.md is USB 3.0 broadband noise desensing the receiver. It is
- * routinely 10-20 dB, it is entirely a property of which port the dongle is in,
- * and today it is invisible: a receiver 15 dB deaf and a sensor with a flat
- * battery produce the same symptom, which is "it does not pair any more".
+ * Exists to make USB 3.0 broadband desense visible: routinely 10-20 dB,
+ * port-dependent, and today indistinguishable from "sensor battery is
+ * flat" (both just look like "it does not pair any more"). A number
+ * settles that in one look.
  *
- * A number would settle that in one look. This is the number.
+ * Samples come ONLY from windows that timed out having received nothing -
+ * that population IS the noise floor, and the samples are free (no new
+ * radio operation, no scheduler slot; these windows open anyway). A window
+ * that received a packet contributes nothing - its RSSI is the
+ * transmitter's, the opposite measurement.
  *
- * ---------------------------------------------------------------------------
- * Where the samples come from, and why they are trustworthy
- * ---------------------------------------------------------------------------
- * ONLY from windows that ended in a timeout having received nothing. That
- * population IS the noise floor - it is the radio listening to a frequency at a
- * moment when, by observation, nothing was transmitting on it. No new radio
- * operation is needed and no scheduler slot: these are windows the core was
- * going to open anyway, and the samples are free.
- *
- * A window that received a packet contributes nothing, and must not: its RSSI
- * is the transmitter's, which is the opposite measurement.
- *
- * ---------------------------------------------------------------------------
- * What it does NOT do
- * ---------------------------------------------------------------------------
- * It does not change anything. No decision anywhere in the core reads these
- * numbers - they go to the log and stop there. That is the condition on which
- * this was worth building at all: a diagnostic that also steers behaviour is a
- * diagnostic that has to be right, and this one only has to be informative.
+ * It changes nothing: no decision in the core reads these numbers, they go
+ * to the log and stop. That's the condition it was worth building under -
+ * a diagnostic that also steers behaviour has to be right, one that only
+ * informs only has to be honest.
  */
 
 #ifndef RADIANT_NOISE_H_
@@ -48,16 +32,13 @@ extern "C" {
 #endif
 
 /*
- * The histogram's range, in dBm, inclusive at both ends.
+ * The histogram's range, in dBm, inclusive at both ends. -110 is below any
+ * part's stated noise floor; -47 is far above a quiet band and well below
+ * a nearby transmitter, so a sample clipping the top is interference by
+ * definition. 64 bins of 1 dB, RSSI's reported resolution.
  *
- * -110 is below any part's stated noise floor; -47 is far above anything a
- * quiet band produces and well below the level a nearby transmitter reaches, so
- * a sample that clips the top is interference by definition rather than by
- * threshold. 64 bins of 1 dB, which is the resolution RSSI is reported at.
- *
- * Samples outside the range are counted at the edges AND counted separately, so
- * a distribution that has piled up against a wall is visible as such rather
- * than as a percentile that quietly stopped moving.
+ * Out-of-range samples are counted at the edges AND counted separately, so
+ * a distribution piled against a wall is visible as such.
  */
 #define RADIANT_NOISE_DBM_MIN (-110)
 #define RADIANT_NOISE_DBM_MAX (-47)
@@ -65,23 +46,15 @@ extern "C" {
 	((uint8_t)(RADIANT_NOISE_DBM_MAX - RADIANT_NOISE_DBM_MIN + 1))
 
 /*
- * THE ONE DEFINITION OF THE 1 dB BINNING, and it is inline in the header
- * rather than private to radiant_noise.c because it acquired a second user.
+ * THE ONE DEFINITION OF THE 1 dB BINNING - inline here rather than private
+ * to radiant_noise.c because radiant_chanmap.c shares it. Both files
+ * measure the same physical quantity for different reasons ("RF 26 is
+ * 14 dB quieter than 57" is only a statement if both are binned the same
+ * way), and two copies of an edge rule would disagree by up to a bin,
+ * unnoticed.
  *
- * radiant_chanmap.c aggregates deliberate energy-detect dwells; this file
- * aggregates the free samples from windows that heard nothing. The two are
- * measurements of the same physical quantity taken for different reasons, and
- * the whole value of having both is that a figure from one can be compared
- * against a figure from the other - "the map says RF 26 is 14 dB quieter than
- * 57" is only a statement if both were binned the same way. Two copies of an
- * edge rule and a clamp is how that quietly stops being true, and the
- * disagreement would be at most one bin, which is exactly the size of error
- * nobody notices.
- *
- * Clamping rather than rejecting is deliberate and matches what
- * radiant_noise_note() has always done: a sample outside the range is counted
- * at the edge AND counted separately by the caller, so a distribution piled
- * against a wall is visible as such.
+ * Clamping rather than rejecting matches radiant_noise_note(): an
+ * out-of-range sample is counted at the edge AND separately by the caller.
  */
 static inline uint8_t radiant_noise_bin(int8_t dbm)
 {
@@ -96,9 +69,8 @@ static inline uint8_t radiant_noise_bin(int8_t dbm)
 	return (uint8_t)idx;
 }
 
-/* The dBm a bin index names. The inverse of radiant_noise_bin() for every
- * value inside the range, and the bottom or top of the range for one that was
- * clamped into it. */
+/* The dBm a bin index names - the inverse of radiant_noise_bin() inside the
+ * range, and the range's edge for a clamped bin. */
 static inline int8_t radiant_noise_bin_dbm(uint8_t bin)
 {
 	if (bin >= RADIANT_NOISE_BINS) {
@@ -108,17 +80,12 @@ static inline int8_t radiant_noise_bin_dbm(uint8_t bin)
 }
 
 /*
- * How many frequencies are tracked at once.
- *
- * Per rf_index, because the whole point is to tell one frequency from another -
- * a dongle that hears 20 dB more noise on 2457 MHz than on 2402 is being told
- * exactly which Wi-Fi channel it is sitting under. Four rather than 125,
- * because a histogram per possible RF index would be 16 KB of RAM on a part
- * where RAM is the budget being defended, and a running dongle uses one
- * frequency for ANT+ and at most a couple more.
- *
- * A fifth frequency's samples are DROPPED and counted, never silently folded
- * into somebody else's histogram.
+ * How many frequencies are tracked at once, per rf_index (the point is
+ * telling one frequency from another - 20 dB more noise on 2457 than 2402
+ * names the Wi-Fi channel). Four rather than 125, since a histogram per
+ * index would be 16 KB and a running dongle uses one ANT+ frequency plus
+ * at most a couple more. A fifth frequency's samples are DROPPED and
+ * counted, never folded into somebody else's histogram.
  */
 #define RADIANT_NOISE_SLOTS 4u
 
@@ -126,17 +93,12 @@ struct radiant_noise_report {
 	uint8_t  rf_index;
 	uint32_t samples;
 
-	/*
-	 * The 10th percentile: the floor. What the band sounds like at its
-	 * quietest, which is the number that moves when a USB 3.0 port desenses
-	 * the receiver and the number to compare between two ports.
-	 */
+	/* The 10th percentile: the floor. Moves when a USB 3.0 port
+	 * desenses the receiver - the number to compare between ports. */
 	int8_t floor_dbm;
-	/*
-	 * The 90th percentile: the interference. The gap between this and the
-	 * floor is how bursty the band is - a quiet room has them within a few
-	 * dB of each other, and a room with Wi-Fi on the same channel does not.
-	 */
+	/* The 90th percentile: interference. Gap to the floor is how
+	 * bursty the band is - close together in a quiet room, apart
+	 * with Wi-Fi on the same channel. */
 	int8_t busy_dbm;
 
 	int8_t min_dbm;
@@ -153,28 +115,20 @@ struct radiant_noise_report {
 /* Forget everything. Called at init and from a stack reset. */
 void radiant_noise_reset(void);
 
-/*
- * One sample, from a window on `rf_index` that ended having received nothing.
- *
- * Callable from the radio callback context: it is a bounds check, an array
- * index and two increments, with no loop over anything.
- */
+/* One sample, from a window on `rf_index` that ended having received
+ * nothing. Callable from radio callback context: a bounds check, an array
+ * index, two increments, no loops. */
 void radiant_noise_note(uint8_t rf_index, int8_t dbm);
 
-/*
- * Read slot `slot` (0 .. RADIANT_NOISE_SLOTS-1). False if that slot has never
- * been used, or if `out` is NULL, or if there are too few samples for a
- * percentile to mean anything.
- */
+/* Read slot `slot` (0 .. RADIANT_NOISE_SLOTS-1). False if never used, `out`
+ * is NULL, or too few samples for a percentile to mean anything. */
 bool radiant_noise_get(uint8_t slot, struct radiant_noise_report *out);
 
 /*
- * Start a fresh interval for `slot`, keeping its frequency.
- *
- * The intended shape is report-then-clear, so each log line describes the
- * interval since the last one rather than everything since boot. A histogram
- * that never clears converges and stops responding, and the whole use of this
- * is watching a number MOVE when the dongle is plugged into a different port.
+ * Start a fresh interval for `slot`, keeping its frequency. Intended shape
+ * is report-then-clear, so each log line describes the interval since the
+ * last one - a histogram that never clears converges and stops responding,
+ * defeating the point of watching a number MOVE across a port change.
  */
 void radiant_noise_clear(uint8_t slot);
 

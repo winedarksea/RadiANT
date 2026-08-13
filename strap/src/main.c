@@ -1,32 +1,18 @@
 ﻿/*
  * SPDX-License-Identifier: Apache-2.0
  *
- * RadiANT heart-rate strap: a NODE, not a dongle.
+ * RadiANT heart-rate strap: a NODE, not a dongle. P8a of the multiprotocol
+ * plan - the first image where radiant_core transmits as an ANT+ master
+ * with a real profile on top, rather than a dongle bridge.
  *
- * P8a of the multiprotocol plan, and the plan is blunt about why it exists:
- * "there is no RadiANT node application, and this is new scope". Everything
- * needed for one was already written and none of it was ever linked into an
- * image. `src/profiles/*.c` is compiled only by radiant_core/tests/CMakeLists.txt
- * - the root application never lists it - so every profile in this project has,
- * until now, only ever run inside a unit test. `sim/` is not the missing piece
- * either: it is an *sdk-ant* application (CONFIG_ANT=y, evaluation licence key)
- * and shares nothing with radiant_core but the antenna.
+ * P8b pairs this with a SoftDevice Controller advertising the SIG Heart
+ * Rate Service while ANT+ 0x78 keeps broadcasting, testing coexistence on
+ * a MASTER channel (a dongle, as a slave, can't stand in for this - a
+ * master owns its slot phase). P9 adds the suppression rule on top.
  *
- * So this is the first image in the tree where radiant_core transmits as a
- * master with a real ANT+ profile on top of it.
- *
- * WHAT IT IS FOR, and it is not a demo. P8b puts a SoftDevice Controller beside
- * this advertising the SIG Heart Rate Service while this keeps broadcasting
- * ANT+ 0x78, which is the BLE half of the coexistence work. That test needs a
- * node whose ANT+ side is a MASTER - a dongle cannot stand in for it, because a
- * master owns its slot phase and a slave does not, and the whole question is
- * what happens to a transmit schedule when another stack wants the radio. P9
- * then adds the suppression rule on top.
- *
- * NO USB AND NO SERIAL BRIDGE, deliberately. The dongle application is a
- * transparent bridge with no profile logic of its own; this is the opposite
- * shape, and mixing them would produce a third thing that is neither. The only
- * host interface is the log.
+ * No USB/serial bridge: the dongle app is a transparent bridge with no
+ * profile logic; this is the opposite shape. The log is the only host
+ * interface.
  */
 
 #include <zephyr/kernel.h>
@@ -44,10 +30,9 @@
 LOG_MODULE_REGISTER(strap, CONFIG_STRAP_LOG_LEVEL);
 
 /*
- * THE ANT+ NETWORK KEY IS NOT THE STACK LICENCE KEY, and confusing the two
- * produces a node that runs perfectly and is heard by nothing. This is the
- * public ANT+ network key, which every ANT+ device on the air uses; the stack
- * licence is an sdk-ant concept that radiant_core does not have.
+ * The public ANT+ network key, used by every ANT+ device on the air - not
+ * the stack licence key (an sdk-ant concept radiant_core doesn't have).
+ * Confusing the two produces a node that runs and is heard by nothing.
  */
 static const uint8_t ant_plus_key[8] = {
 	0xB9, 0xA5, 0x21, 0xFB, 0xBD, 0x72, 0xC3, 0x45
@@ -67,23 +52,18 @@ static const uint8_t ant_plus_key[8] = {
 static struct profile_hr hr;
 
 /*
- * The beat generator. A real strap gets these from an electrode; this one
- * produces a plausible resting rhythm so that the accumulators advance and a
- * receiver's "sensor liveness" and "accumulator continuity" checks have
- * something true to check. It is deliberately a beat GENERATOR rather than a
- * bpm setting: profile_hr's page 0 carries an event count and an event time,
- * and those are what survive a lost packet, so a node that only ever set a
- * computed bpm would be exercising the field that does not matter.
+ * A beat generator rather than a bpm setting: profile_hr's page 0 carries
+ * an event count and event time, the fields that survive a lost packet, so
+ * only a real generator exercises those - a node that just set a computed
+ * bpm would be testing the field that doesn't matter.
  */
 #define BEAT_TICK_MS 100u
 
 static uint16_t event_time_1024(void)
 {
-	/* 1/1024 s, wrapping at 16 bits, which is the ANT+ common time base.
-	 * k_uptime_get() is milliseconds, so this is ms * 1024 / 1000 reduced
-	 * to avoid the divide: the profile only needs a consistent clock, and
-	 * the ~2.4 % error a naive ms<<10/1000 would introduce is not
-	 * acceptable to a receiver computing bpm from the interval. */
+	/* 1/1024 s, wrapping at 16 bits (ANT+ common time base). ms * 1024 /
+	 * 1000 rather than ms<<10/1000: the latter's ~2.4% error would show
+	 * up in a receiver's bpm-from-interval calculation. */
 	uint64_t ms = (uint64_t)k_uptime_get();
 
 	return (uint16_t)((ms * 1024u) / 1000u);
@@ -98,22 +78,16 @@ static void load_next_page(void);
 
 #if defined(CONFIG_STRAP_SUPPRESS_ANT_WHEN_CONNECTED)
 /*
- * P9 â€” the suppression rule, and it lives HERE rather than in strap_ble.c on
- * purpose.
+ * P9 suppression rule lives here, not in strap_ble.c: stopping an ANT+
+ * channel is ANT+'s business, so the BLE module only reports the fact and
+ * this decides what to do - keeping the dependency one-way. Taken on the
+ * beat tick rather than the connect callback, since that runs in
+ * controller context - the wrong place to be closing a radio channel.
  *
- * Stopping an ANT+ channel is the ANT+ side's business. The BLE module reports
- * a fact and this decides what to do about it, so the dependency runs one way
- * and a controller callback never reaches into radiant_core. That also means
- * the transition is taken on the beat tick - a thread, at a predictable
- * instant - rather than from inside the connect callback, which is the
- * controller's own context and the last place to be closing a radio channel.
- *
- * WHAT IT BUYS is not airtime, it is the removal of the hard case. A connected
- * phone is already receiving this heart rate over the SIG service, so the ANT+
- * broadcast is a duplicate - and with it stopped, the contention the whole
- * multiprotocol design exists to arbitrate never arises on a strap at all. That
- * is why the Kconfig defaults on. Turning it OFF is what stresses the arbiter,
- * and it is the configuration the coexistence gate should be run in.
+ * Defaults on because a connected phone already gets HR over BLE, so the
+ * ANT+ broadcast is a duplicate - suppressing it means the contention this
+ * project exists to arbitrate never arises on a strap. Turn it off to
+ * stress the arbiter; that's the config the coexistence gate should run.
  */
 static bool ant_open = true;
 
@@ -156,47 +130,29 @@ static void beat_work_fn(struct k_work *w)
 	elapsed_ms += BEAT_TICK_MS;
 	if (elapsed_ms >= next_beat_ms) {
 		/*
-		 * ADVANCE THE SCHEDULE, DO NOT RE-ANCHOR IT TO THE TICK.
-		 *
-		 * `next_beat_ms = elapsed_ms + interval_ms` looks equivalent and
-		 * is not: elapsed_ms is quantised to BEAT_TICK_MS, so each beat
-		 * re-anchors to the tick that noticed it and the rounding error
-		 * compounds instead of cancelling. At 72 bpm the interval is
-		 * 833 ms, every beat lands on the next 100 ms boundary, and the
-		 * strap beats every 900 ms - 66.7 bpm - while page 0's computed
-		 * field goes on claiming 72.
-		 *
-		 * That was MEASURED, not reasoned about: a host BLE central held
-		 * a connection for 60 s (scripts\ble_central.ps1) and counted 67
-		 * Heart Rate Measurement notifications, one per beat.
-		 *
-		 * It matters more than a cosmetic 7 %: this file's own comment
-		 * above says the event count and event time are the fields that
-		 * survive a lost packet, so a receiver computes bpm from the
-		 * interval and reads 67 while the computed field says 72. The
-		 * two disagreeing is exactly the sensor bug the profile tests
-		 * exist to catch. Accumulating the exact interval keeps the
-		 * average right - individual beats still land on a tick, but the
-		 * error cancels rather than accrues.
+		 * Advance the schedule; don't re-anchor it to the tick.
+		 * `next_beat_ms = elapsed_ms + interval_ms` looks equivalent
+		 * but isn't: elapsed_ms is quantised to BEAT_TICK_MS, so
+		 * re-anchoring every beat compounds rounding instead of
+		 * cancelling it. Measured effect at 72 bpm (833 ms interval):
+		 * a 60 s BLE connection saw 67 HR notifications, not 72 -
+		 * exactly the event-count/interval disagreement the profile
+		 * tests exist to catch. Accumulating the exact interval keeps
+		 * the average right; individual beats still land on a tick.
 		 */
 		next_beat_ms += interval_ms;
 		if (next_beat_ms <= elapsed_ms) {
-			/* Recovery, not steady state: a bpm change (or a missed
-			 * run of ticks) can leave the schedule far behind, and
-			 * catching up one interval per tick would fire a burst
-			 * of false beats. Re-anchoring is right HERE and wrong
-			 * above. */
+			/* Recovery, not steady state: a bpm change or missed
+			 * ticks can leave the schedule far behind; re-anchor
+			 * here, once, rather than burst-fire catch-up beats. */
 			next_beat_ms = elapsed_ms + interval_ms;
 		}
 		profile_hr_beat(&hr, event_time_1024());
 		profile_hr_set_computed(&hr, (uint8_t)bpm);
 #if defined(CONFIG_STRAP_BLE_HRS)
-		/* ONE HEART, TWO RADIOS. The SIG service is notified from the
+		/* One heart, two radios: the SIG service is notified from the
 		 * same beat that advances the ANT+ accumulators, so the two
-		 * sides cannot disagree about the rate - which is the first
-		 * thing anybody checks when a strap serves a phone and a watch
-		 * at once, and the first thing that goes wrong if each side
-		 * keeps its own timebase. */
+		 * sides can't disagree about the rate. */
 		strap_ble_notify_hr((uint8_t)bpm);
 #endif
 	}
@@ -210,14 +166,10 @@ static void beat_work_fn(struct k_work *w)
 }
 
 /*
- * Load the next page.
- *
- * PACED BY EVENT_TX, NEVER BY A WALL CLOCK, which is the same discipline
- * tools/ant_sim.py describes for driving a dongle from a host: the stack raises
- * this event at the moment it has put a payload on the air, which is exactly
- * when the next one should be staged. A node that instead loaded on a timer
- * would drift against its own channel period and, under an arbiter, would stage
- * payloads for slots that were never granted.
+ * Load the next page, paced by EVENT_TX rather than a wall clock: the stack
+ * raises this exactly when a payload just went on air, which is when the
+ * next one should be staged. A timer-driven load would drift against the
+ * channel period and, under an arbiter, stage for slots never granted.
  */
 static void load_next_page(void)
 {
@@ -271,11 +223,8 @@ static int ant_start(uint16_t devnum)
 		return -EIO;
 	}
 
-	/*
-	 * Transmission type 5, matching sim/ and tools/ant_sim.py. It is part
-	 * of the channel id a receiver matches on, so a strap that picked its
-	 * own number would be invisible to every tool in this repository.
-	 */
+	/* Transmission type 5, matching sim/ and tools/ant_sim.py - part of
+	 * the channel id a receiver matches on. */
 	rc = antr_channel_id_set(HR_CHANNEL, devnum, HR_DEVICE_TYPE, 5u);
 	if (rc != ANTW_RESPONSE_NO_ERROR) {
 		LOG_ERR("channel id: %d", (int)rc);
@@ -295,12 +244,9 @@ static int ant_start(uint16_t devnum)
 	}
 
 	/*
-	 * STAGE THE FIRST PAGE BEFORE OPENING, not after. A master starts
-	 * transmitting the instant the channel opens, and the first slot is
-	 * gone before any EVENT_TX can be delivered for it - so a node that
-	 * waited for the event would put one empty message on the air, which a
-	 * receiver reads as a page 0 with a zero event count and an
-	 * accumulator that then jumps.
+	 * Stage the first page before opening, not after: a master transmits
+	 * the instant the channel opens, so the first slot is gone before any
+	 * EVENT_TX could stage it - otherwise the first frame goes out empty.
 	 */
 	load_next_page();
 
@@ -327,13 +273,10 @@ int main(void)
 	}
 
 	/*
-	 * THE DEVICE NUMBER COMES FROM THE IDENTITY RECORD WHEN THERE IS ONE.
-	 * docs/decisions/0009-hostless-node-identity.md makes the device number
-	 * a property of the node's provisioned identity rather than of its
-	 * firmware image, and src/node/ already implements the tiers and the
-	 * power-up rule. Falling back to the Kconfig when the node has never
-	 * been provisioned keeps a freshly-flashed DK usable on a bench without
-	 * a provisioning step, which is what this application is mostly for.
+	 * Device number comes from the identity record when provisioned (see
+	 * docs/decisions/0009-hostless-node-identity.md); falls back to
+	 * Kconfig so a freshly-flashed DK works on a bench without a
+	 * provisioning step.
 	 */
 	if (node_ident_boot() == 0 && node_ident_is_provisioned()) {
 		uint16_t d;
@@ -348,13 +291,9 @@ int main(void)
 	}
 
 	/*
-	 * cfg.id IS THE COMMON-PAGE IDENTITY (pages 0x50/0x51), NOT the ANT
-	 * channel id. The channel id - device number, device type, transmission
-	 * type - is what a receiver matches on and was set in ant_start(); this
-	 * is the manufacturer and serial a receiver reads out of the common
-	 * pages once it is already listening. Two different identities, and
-	 * conflating them produces a strap that is found and then describes
-	 * itself as something else.
+	 * cfg.id is the common-page identity (0x50/0x51), not the ANT channel
+	 * id set in ant_start() - conflating them produces a strap that's
+	 * found and then misidentifies itself.
 	 */
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.id.hw_revision = 1u;
@@ -386,11 +325,9 @@ int main(void)
 		devnum, HR_DEVICE_TYPE, (unsigned)CONFIG_STRAP_HR_BPM);
 
 #if defined(CONFIG_STRAP_BLE_HRS)
-	/*
-	 * P8b. Started last and deliberately: the ANT+ channel is the thing
-	 * under test, and bringing the controller up after it means a failure
-	 * to advertise cannot be mistaken for a failure to transmit.
-	 */
+	/* P8b, started last: bringing the controller up after the ANT+
+	 * channel means a failure to advertise can't be mistaken for a
+	 * failure to transmit. */
 	(void)strap_ble_start();
 #endif
 

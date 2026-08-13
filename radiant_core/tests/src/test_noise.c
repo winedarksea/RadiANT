@@ -3,26 +3,15 @@
  *
  * Provenance: original clean-room work, written against
  * radiant_core/include/radiant_core/radiant_noise.h and
- * radiant_core/tests/fake_radio.h. Nothing here derives from sdk-ant, from
- * libant.a, or from any adopter-gated ANT+ device profile document.
+ * radiant_core/tests/fake_radio.h.
  *
- * ---------------------------------------------------------------------------
- * The suite for radiant_core/src/radiant_noise.c
- * ---------------------------------------------------------------------------
- * The noise floor is a diagnostic, so nothing in the core acts on it and a bug
- * here cannot lose a packet. What it CAN do is be quietly wrong in a way that
- * sends somebody looking in the wrong place - which is the opposite of what a
- * diagnostic is for, and worse than not having one.
- *
- * Two failure modes are worth the whole file:
- *
- *   - Measuring the wrong population. A window that received a packet has an
- *     RSSI, and it is the transmitter's. Folding those in would make a busy
- *     channel look like a noisy one, which is exactly the confusion this
- *     exists to end.
- *   - A percentile that is not one. The 10th percentile is the number somebody
- *     will compare between two USB ports and conclude a 15 dB desense from, so
- *     it has to be the 10th percentile of the samples and not of the bins.
+ * The noise floor is a diagnostic - a bug here cannot lose a packet, but it
+ * can be quietly wrong in a way that sends somebody looking in the wrong
+ * place, which is worse than not having one. Two failure modes matter:
+ *   - Measuring the wrong population: a window that received a packet has an
+ *     RSSI, and it's the transmitter's, not the noise floor's.
+ *   - A percentile that isn't one: it must be the 10th percentile of the
+ *     samples, not of the bins.
  */
 
 #include <stdbool.h>
@@ -57,13 +46,9 @@ ZTEST(radiant_noise, test_percentiles_of_a_known_distribution)
 	struct radiant_noise_report r;
 	int i;
 
-	/*
-	 * A hundred samples spread evenly from -99 to -90 dBm, ten of each.
-	 * The 10th percentile is then the tenth sample, which is the last -99,
-	 * and the 90th is the ninetieth, which is the last -91. Both are
-	 * arithmetic rather than opinion, which is the point of choosing a flat
-	 * distribution for this.
-	 */
+	/* A hundred samples spread evenly from -99 to -90 dBm, ten of each: the
+	 * 10th percentile is the tenth sample (last -99), the 90th is the
+	 * ninetieth (last -91) - a flat distribution makes both arithmetic. */
 	for (i = 0; i < 10; i++) {
 		int j;
 
@@ -89,12 +74,10 @@ ZTEST(radiant_noise, test_a_quiet_band_and_a_busy_one_are_told_apart)
 	struct radiant_noise_report busy;
 	int i;
 
-	/*
-	 * The measurement this feature exists to make. A quiet band sits within
-	 * a couple of dB of itself; a band with something bursty on it has the
-	 * same floor and a 90th percentile 30 dB above it. A single mean would
-	 * report both as "about -93" and "about -85" and settle nothing.
-	 */
+	/* The measurement this feature exists to make: a quiet band sits within
+	 * a couple dB of itself, while a bursty band has the same floor but a
+	 * 90th percentile 30 dB above it. A mean would blur both into "about
+	 * -93"/"about -85" and settle nothing. */
 	for (i = 0; i < 100; i++) {
 		radiant_noise_note(2u, (int8_t)(-95 + (i % 3)));
 		radiant_noise_note(57u, (i % 5 == 0) ? (int8_t)-60
@@ -118,11 +101,9 @@ ZTEST(radiant_noise, test_samples_outside_the_range_are_counted_at_the_edges)
 	struct radiant_noise_report r;
 	int i;
 
-	/*
-	 * A distribution piled against a wall must SAY it is piled against a
-	 * wall. A percentile that quietly stopped moving because every sample
-	 * lands in the last bin reads as a stable measurement and is not one.
-	 */
+	/* A distribution piled against a wall must say so: a percentile that
+	 * quietly stopped moving because every sample lands in the last bin
+	 * reads as stable and isn't. */
 	for (i = 0; i < 30; i++) {
 		radiant_noise_note(57u, (int8_t)-120);   /* below the range */
 	}
@@ -194,12 +175,9 @@ ZTEST(radiant_noise, test_a_fifth_frequency_is_dropped_and_counted)
 	uint8_t rf;
 	int i;
 
-	/*
-	 * Dropped rather than evicted, and counted rather than dropped
-	 * silently. Evicting would let a frequency the dongle visits once
-	 * destroy the record of the one it lives on, and there would be no sign
-	 * of it having happened.
-	 */
+	/* Dropped rather than evicted, and counted rather than silent: evicting
+	 * would let a frequency visited once destroy the record of the one the
+	 * dongle lives on, with no sign it happened. */
 	for (rf = 0u; rf < (uint8_t)RADIANT_NOISE_SLOTS; rf++) {
 		for (i = 0; i < 40; i++) {
 			radiant_noise_note(rf, (int8_t)-90);
@@ -235,12 +213,9 @@ ZTEST(radiant_noise, test_clearing_keeps_the_frequency_and_drops_the_distributio
 	zassert_false(radiant_noise_get(0u, &r),
 		      "a cleared slot still reported a distribution");
 
-	/*
-	 * The frequency has to survive. A slot that gave up its rf_index would
-	 * be reallocated to whichever frequency spoke next, and the identity in
-	 * each log line would wander between intervals - so two consecutive
-	 * lines would appear to be about the same band and would not be.
-	 */
+	/* The frequency has to survive: a slot that gave up its rf_index would
+	 * be reallocated to whichever frequency spoke next, and consecutive log
+	 * lines would appear to be about the same band without being so. */
 	for (i = 0; i < 40; i++) {
 		radiant_noise_note(2u, (int8_t)-70);
 	}
@@ -361,15 +336,10 @@ ZTEST(radiant_noise, test_an_empty_window_reports_the_floor)
 
 ZTEST(radiant_noise, test_a_window_that_received_a_packet_contributes_nothing)
 {
-	/*
-	 * THE TEST THE FEATURE IS WORTH HAVING FOR.
-	 *
-	 * A window that received something has an RSSI and it is the
+	/* A window that received something has an RSSI, and it's the
 	 * transmitter's. Counting it as noise would make every busy channel
-	 * look noisy, which is precisely the confusion this exists to end - and
-	 * it would do so with numbers that look entirely plausible, because a
-	 * nearby ANT+ master really is 40 dB above the floor.
-	 */
+	 * look noisy - plausibly so, since a nearby ANT+ master really is
+	 * 40 dB above the floor. */
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_init(&noise_cbs, NULL),
 		      NULL);
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_enable(), NULL);

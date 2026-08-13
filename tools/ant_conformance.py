@@ -3,7 +3,7 @@
 
 """Tier 1: drive every message the bridge implements and record what came back.
 
-One board, no radio, no sensors, no statistics. The tool sends every message
+One board, no radio, no sensors, no statistics. Sends every message
 `dispatch()` in `src/ant_serial_bridge.c` implements - valid, then deliberately
 malformed - and writes the whole conversation to a `.antser` transcript. **The
 A/B is a byte diff of two transcripts; byte-identical is the pass.**
@@ -13,85 +13,51 @@ A/B is a byte diff of two transcripts; byte-identical is the pass.**
     python tools/ant_conformance.py --serial <suffix> --out core.antser
     python tools/ant_conformance.py --compare sdk-ant.antser core.antser
 
-That catches most of the divergence there is to catch between two radio
-backends - response codes, reply framing and sizes, error mapping, and the
-leading-index-byte shapes in `handle_request()` where a reply carries a mask
-number or an encryption info type in the slot everything else puts a channel in
-- and it catches it without owning a sensor, without a second board and without
-a single statistic. That is why it is worth more than it looks.
+Catches response codes, reply framing/sizes, error mapping, and the
+leading-index-byte shapes in `handle_request()` (mask number vs. encryption
+info type vs. channel in the same slot) - without a sensor, a second board, or
+a single statistic.
 
-Determinism is the whole product
---------------------------------
+Determinism rules, all load-bearing:
 
-A transcript that is not reproducible cannot be diffed, and a tier whose
-acceptance criterion is a byte diff is then worth nothing. Four rules follow,
-and all four are load-bearing:
-
-* **The timestamp column is always `-`.** Real timestamps never repeat.
-  `archive/captures/serial/README.md` fixes this: a conformance transcript is a
-  statement about bytes and ordering, not about timing.
-* **Every case starts from a stack reset.** A case that depended on what the
-  previous case left behind would reorder its own meaning the first time a case
-  was inserted above it. The cost is about a second per case; the run takes a
-  few minutes and that is the right trade.
-* **Nothing here ever puts anything on the air.** Not for politeness - for
-  determinism. An open channel hears whatever is in the room, and a transcript
-  containing the neighbour's heart-rate strap can never be byte-identical
-  twice. `MESG_RADIO_CW_MODE`, `MESG_RADIO_CW_INIT` and
+* Timestamp column is always `-` (real timestamps never repeat;
+  `archive/captures/serial/README.md`).
+* Every case starts from a stack reset, so a case's meaning can't depend on
+  what the previous one left behind.
+* Nothing here transmits: `MESG_RADIO_CW_MODE`, `MESG_RADIO_CW_INIT`,
   `MESG_OPEN_RX_SCAN_MODE` are excluded outright (see `EXCLUDED`), and
-  `MESG_OPEN_CHANNEL` is only ever sent at a channel that has no channel id
-  set, so it is refused before the radio is touched.
-* **Order everything this tool controls; sort nothing the device ordered.**
-  Cases run in a fixed order and replies are recorded in arrival order.
+  `MESG_OPEN_CHANNEL` only runs on a channel with no id set, refused before
+  the radio is touched - an open channel hearing the room would break
+  byte-identical repeatability.
+* Cases run in a fixed order; replies recorded in arrival order.
 
-The message set comes from `tools/ant_wire.py`, not from a list here
---------------------------------------------------------------------
+Cases are generated from `tools/ant_wire.py`'s `MESSAGES`/`BRIDGED_MESSAGE_IDS`,
+so a message added to `protocol/ant_wire.yaml` enters the run by itself.
+`CANONICAL` gives a *sensible* payload where it has an opinion; anything else
+gets a case built from its declared `payload_len`.
 
-Cases are generated from `MESSAGES` and `BRIDGED_MESSAGE_IDS`, so a message
-added to `protocol/ant_wire.yaml` enters the conformance run by itself. The
-per-message payloads in `CANONICAL` only say what a *sensible* invocation looks
-like; a message with no entry there still gets a case built from its declared
-`payload_len`. Constants are imported by name and never restated - the values
-in that module are generated, and a copy here would be a fifth place for one
-number to live.
-
-What a bench sitting has to run
--------------------------------
-
-One board, no sensors, nothing on the air. About 260 cases at roughly a second
-each, so budget five minutes per backend plus the reflash between them:
+A bench sitting: one board, no sensors, nothing on the air, ~260 cases at
+roughly a second each (~5 min per backend plus reflash):
 
     python tools\ant_conformance.py --serial <suffix> --out conformance-sdk-ant.antser --json conformance-sdk-ant.json
     # reflash the other backend on the same board, same session
     python tools\ant_conformance.py --serial <suffix> --out conformance-core.antser --json conformance-core.json
     python tools\ant_conformance.py --compare conformance-sdk-ant.antser conformance-core.antser
 
-`--serial` is not optional in practice: two boards here enumerate as the same
-`0FCF:1009`, so a transcript recorded without it cannot be attributed to a
-board. The sdk-ant transcript is the Tier 1 reference and belongs in
-`archive/captures/serial/` with its hash recorded in the sitting's baseline
-JSON (`conformance.antser_path`, `conformance.sha256`). It is as perishable as
-the performance numbers: it can only be recorded while a working sdk-ant build
-exists.
+`--serial` is not optional in practice: two boards enumerate as the same
+`0FCF:1009`. The sdk-ant transcript is the Tier 1 reference, belongs in
+`archive/captures/serial/` with its hash in the sitting's baseline JSON
+(`conformance.antser_path`, `conformance.sha256`), and can only be recorded
+while a working sdk-ant build exists.
 
-Where the time goes, and why it is not shortened: after every write the tool
-reads until the device has been quiet for `--settle`, and the floor on that is
-`ant_probe.READ_TIMEOUT_MS`. That value is deliberately a full second, because a
-read timeout that lands while the dongle is answering loses the answer - the bug
-that manufactured 0.4 percentage points of imaginary packet loss and hid for
-weeks behind losses that looked exactly like the on-air kind.
+The settle floor is `ant_probe.READ_TIMEOUT_MS`, deliberately a full second: a
+read timeout racing a reply loses the answer - the bug that once manufactured
+0.4pp of imaginary packet loss.
 
-What a difference means
------------------------
-
-`--compare` reports differences by case name rather than by byte offset, which
-is the difference between "case 4d-request-version/valid differs" and "the files
-differ at byte 8417". One difference is expected and is a decision rather than a
-bug: the version string. `MESG_VERSION` returns whatever the backend calls
-itself, so sdk-ant and `radiant_core` cannot both answer it identically and should
-not. Use `--allow-differing-case` for it, and record the allowance in
-`tools/ab_gates.toml` where somebody has to review it, rather than dropping the
-message from the run.
+`--compare` reports differences by case name, not byte offset. One expected
+difference: `MESG_VERSION` returns the backend's own name, so sdk-ant and
+`radiant_core` can't and shouldn't match. Use `--allow-differing-case` for it,
+recorded in `tools/ab_gates.toml` for review.
 """
 
 from __future__ import annotations
@@ -107,35 +73,25 @@ sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 
 import ant_trace  # noqa: E402
 import ant_wire as wire  # noqa: E402
-from ant_trace import DONGLE_TO_HOST, HOST_TO_DONGLE, Record  # noqa: E402
 
-# The published ANT+ network key. Imported rather than restated: it lives in
-# ant_scan.py because it is a network key, not a protocol constant, and
-# docs/ant-serial-protocol.md says it stays there. It matters here because
-# `ant_network_address_set()` is one of the few calls whose result depends on
-# the *value* handed in - radiant_core holds a table seeded with the ANT+ pair and
-# refuses unknown keys - so a made-up key would manufacture a divergence that
-# says nothing about the bridge.
+# The published ANT+ network key, imported from ant_scan.py (its canonical
+# home per docs/ant-serial-protocol.md). radiant_core refuses unknown keys, so
+# a made-up key here would manufacture a divergence unrelated to the bridge.
 from ant_scan import ANT_PLUS_KEY  # noqa: E402
+from ant_trace import DONGLE_TO_HOST, HOST_TO_DONGLE, Record  # noqa: E402
 
 # The channel every case uses. Channel 0 exists on every build; anything higher
 # would make the transcript depend on CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED.
 CHANNEL = 0
 
-# The channel/index byte used by the out-of-range variant. 0xFF is out of range
-# for a channel on any build, out of range for a network number, out of range
-# for an SDU mask index and not a defined encryption info type, so the same
-# value exercises the range check whatever byte 0 happens to mean.
+# Out-of-range for a channel, a network number, and an SDU mask index, and not
+# a defined encryption info type - so it exercises the range check whatever
+# byte 0 happens to mean.
 BAD_INDEX = 0xFF
 
-# Messages that are never sent, whatever the YAML says about them.
-#
-# All three are radio-quiet on today's firmware only because the bridge does not
-# implement them. `radiant_core` implements scan mode by design (the capability bit
-# is turned on in the plan), and a continuous-wave test mode keys the
-# transmitter and leaves it keyed. A conformance run that opened either would
-# stop being reproducible the moment the room changed, and one of them would put
-# a carrier on 2457 MHz for the rest of the session.
+# Messages never sent, whatever the YAML says. All three would break
+# reproducibility: scan mode fills the transcript with whatever's in the room,
+# and CW mode keys the transmitter and leaves it keyed.
 EXCLUDED = {
     wire.MESG_RADIO_CW_MODE_ID:
         "keys the transmitter; a backend that bridges it would leave a carrier "
@@ -147,30 +103,13 @@ EXCLUDED = {
         "transcript with whatever sensors happen to be in the room",
 }
 
-# The token that marks a case as deliberately not conformant.
-#
-# `tools/test_ant_golden.py` replays every `.antser` in
-# `archive/captures/serial/` against the framing rules, and it keys on this word
-# in the case name to know that a record is not meant to be well formed. That
-# suite was written by a different agent in the same wave and settled on the
-# token independently; using the same one is what lets a committed conformance
-# transcript be replayed at all.
-#
-# The gap that was recorded here as a change request is closed. That suite once
-# read "malformed" as "unframe() must reject this" - true of
-# `malformed-checksum` and `malformed-sync`, false of `malformed-short`,
-# `malformed-long` and `malformed-oob-index`, which are perfectly well-formed
-# frames carrying a payload the message id does not admit, and that is exactly
-# what makes them worth sending. It now reads it as "a problem with this record
-# is recorded and waived rather than failed", which is per record, so a case
-# that happens to be conformant simply has nothing to waive. The written
-# contract between the two files is `tools/vectors/README.md`; neither owns the
-# other, so a change to the convention goes there first.
-#
-# The one thing this tool must never do is claim the waiver for a record that is
-# conformant. `frame/sync-in-payload` deliberately carries channel 0xA4 so a
-# SYNC byte lands inside a payload, and naming it `malformed` to quiet a checker
-# would record a true fact - this frame is unusual - as a false one.
+# Token marking a case as deliberately not conformant. `tools/test_ant_golden.py`
+# keys on this word in the case name to know a record isn't meant to be
+# well-formed - some `malformed-*` cases (short/long/oob-index) are actually
+# well-framed but carry a disallowed payload, which is per record, not "must
+# fail unframe()". Contract lives in `tools/vectors/README.md`; change it there
+# first. Never apply this to a record that IS conformant just to quiet a
+# checker (e.g. `frame/sync-in-payload` is unusual but well-formed).
 MALFORMED = "malformed"
 
 # The four-byte prefix of a message name, stripped for case names.
@@ -190,23 +129,15 @@ def short_name(msg_id: int) -> str:
 def payload_bounds(msg_id: int) -> tuple[int, int] | None:
     """(min, max) *command* payload length from the YAML, or None for `var`.
 
-    `payload_len` is an int for a fixed-size message and a `'a..b'` string for
-    one with an optional tail. `var` means the size depends on a field inside
-    the payload, and there is nothing generic to derive from it.
+    `payload_len` is an int for a fixed size or an `'a..b'` string for an
+    optional tail; `var` means the size depends on a payload field, nothing
+    generic to derive.
 
-    Deliberately the command length and never `reply_len`. Everything built
-    from this goes out in the host column - the canonical case, and the
-    malformed-short and malformed-long siblings derived one byte either side of
-    these bounds - and a reply length has no business setting the size of a
-    frame this tool transmits.
-
-    A second and blunter reason not to touch these numbers: the bounds decide
-    how long the short and long variants are, so narrowing one silently changes
-    the bytes of two cases, and the committed Tier 1 reference transcript stops
-    being reproducible by the tool that produced it. `0x79` is the live example
-    - its command is two bytes and its reply three, and `payload_len` still
-    reads `2..3` for exactly this reason, with the reply side pinned exactly by
-    `reply_len` instead.
+    Always the command length, never `reply_len` - everything built from this
+    (canonical case, malformed-short/-long) goes out in the host column, and a
+    reply length has no business sizing a transmitted frame. Changing these
+    numbers reshapes the short/long cases and breaks reproducibility of the
+    committed Tier 1 transcript.
     """
     declared = wire.MESSAGES[msg_id]["payload_len"]
     if isinstance(declared, int):
@@ -218,12 +149,9 @@ def payload_bounds(msg_id: int) -> tuple[int, int] | None:
 
 
 # ---------------------------------------------------------------------------
-# Canonical payloads
-#
-# What a *sensible* invocation of each message looks like. Everything else is
-# derived, so this table is about intent, not coverage: a message missing from
-# it still gets a case. Values come from tools/ant_wire.py wherever a constant
-# names them, because a literal here would be a constant with no source.
+# Canonical payloads: a *sensible* invocation of each message. A message
+# missing from this table still gets a case (generated). Values come from
+# tools/ant_wire.py wherever a constant names them.
 # ---------------------------------------------------------------------------
 
 # ANT+ RF channel and the heart-rate message period, the two settings every
@@ -251,8 +179,7 @@ CANONICAL: dict[int, bytes] = {
     wire.MESG_CHANNEL_SEARCH_TIMEOUT_ID: bytes([CHANNEL, 0xFF]),
     wire.MESG_CHANNEL_RADIO_FREQ_ID: bytes([CHANNEL, ANT_PLUS_RF_CHANNEL]),
     wire.MESG_NETWORK_KEY_ID: bytes([0]) + ANT_PLUS_KEY,
-    # The device-wide form, which is the one Zwift sends while setting up a
-    # search and the one whose INVALID_MESSAGE answer stalled it.
+    # Device-wide form: what Zwift sends while setting up a search.
     wire.MESG_RADIO_TX_POWER_ID: bytes([
         0, wire.RADIO_TX_POWER["RADIO_TX_POWER_LVL_3"]]),
     wire.MESG_SEARCH_WAVEFORM_ID:
@@ -278,17 +205,14 @@ CANONICAL: dict[int, bytes] = {
         CHANNEL, wire.RADIO_TX_POWER["RADIO_TX_POWER_LVL_3"]]),
     wire.MESG_SET_LP_SEARCH_TIMEOUT_ID: bytes([CHANNEL, 2]),
     wire.MESG_RX_EXT_MESGS_ENABLE_ID: bytes([0, 1]),
-    # 0xE0 - channel id + RSSI + RX timestamp. Not 0x80: all three fields are
-    # on the path ant_verify.py depends on, and the RX timestamp is what gives
-    # the radio-clock timing figure the Tier 2 timing gate is read against.
+    # 0xE0 = channel id + RSSI + RX timestamp; RX timestamp feeds the
+    # radio-clock figure the Tier 2 timing gate reads.
     wire.MESG_ANTLIB_CONFIG_ID: bytes([
         0, wire.LIB_CONFIG["LIB_CONFIG_ALL_EXT_FIELDS"]]),
     wire.MESG_AUTO_FREQ_CONFIG_ID: bytes([CHANNEL, 3, 39, 75]),
     wire.MESG_PROX_SEARCH_CONFIG_ID: bytes([CHANNEL, 0]),
     wire.MESG_SET_SEARCH_CH_PRIORITY_ID: bytes([CHANNEL, 0]),
-    # [filler, enable, rf payload size, required modes, 0, 0, optional modes,
-    # 0, 0]. Enable is 0: turning advanced burst *on* changes what later
-    # messages mean, and the reset before each case would undo it anyway.
+    # Enable is 0: turning advanced burst *on* changes what later messages mean.
     wire.MESG_CONFIG_ADV_BURST_ID: bytes([
         0, wire.ADV_BURST["ADV_BURST_MODE_DISABLE"],
         wire.ADV_BURST["ADV_BURST_MODES_SIZE_8_BYTES"], 0, 0, 0, 0, 0, 0]),
@@ -308,14 +232,12 @@ CANONICAL: dict[int, bytes] = {
     wire.MESG_ACTIVE_SEARCH_SHARING_ID: bytes([CHANNEL, 0]),
 }
 
-# Messages that need the channel to exist before they mean anything. Without
-# the assign, every one of them answers CHANNEL_IN_WRONG_STATE and the case
-# proves only that the error path works. With it, the success path is exercised
-# too - and the assign itself is recorded, so a divergence in the preamble is
-# visible rather than silently changing what the case measured.
+# Messages that need the channel to exist first. Without the assign, every one
+# answers CHANNEL_IN_WRONG_STATE and only the error path is exercised; with it,
+# the success path is too, and the assign itself is recorded.
 #
-# Deliberately absent: anything that would complete a channel and open it. See
-# the module docstring.
+# Deliberately absent: anything that would complete a channel and open it (see
+# module docstring).
 NEEDS_ASSIGNED_CHANNEL = frozenset({
     wire.MESG_CHANNEL_MESG_PERIOD_ID,
     wire.MESG_CHANNEL_SEARCH_TIMEOUT_ID,
@@ -343,11 +265,9 @@ ASSIGN_PREAMBLE = (wire.frame(wire.MESG_ASSIGN_CHANNEL_ID,
 
 # What MESG_REQUEST (0x4D) can ask for, and the index byte to ask with.
 #
-# Hand-written, and it is the one list here that is: `protocol/ant_wire.yaml`
-# records a message's direction but not whether `handle_request()` answers it,
-# nor what byte 0 means when it does. Adding a `requestable:` field to the YAML
-# would let this be generated too - see the change request in this agent's
-# report.
+# Hand-written, unlike the other tables: the YAML records a message's
+# direction but not whether `handle_request()` answers it, nor what byte 0
+# means when it does.
 REQUESTABLE: tuple[tuple[int, int, str], ...] = (
     (wire.MESG_CAPABILITIES_ID, 0, "what the stack can do"),
     (wire.MESG_VERSION_ID, 0,
@@ -356,9 +276,8 @@ REQUESTABLE: tuple[tuple[int, int, str], ...] = (
     (wire.MESG_CHANNEL_ID_ID, CHANNEL, "reply leads with the channel"),
     (wire.MESG_CHANNEL_MESG_PERIOD_ID, CHANNEL, ""),
     (wire.MESG_CHANNEL_RADIO_FREQ_ID, CHANNEL, ""),
-    # 0x58 and 0x8C are Nordic extensions whose ids this repository did not
-    # know until the Wave 2 shim recovered them. Both are dispatched and both
-    # are answered by handle_request(), so both belong in the run.
+    # 0x58 and 0x8C are Nordic extensions, both dispatched and answered by
+    # handle_request(), so both belong in the run.
     (wire.MESG_CHANNEL_CRC_MODE_ID, CHANNEL,
      "the command's byte 0 is a filler and the request's is a channel - the "
      "asymmetry is the thing worth pinning"),
@@ -390,20 +309,12 @@ REQUESTABLE: tuple[tuple[int, int, str], ...] = (
      "no such message: the default arm of handle_request()"),
 )
 
-# Messages whose numeric id this repository still does not know, so no case can
-# be built for them. Recorded rather than dropped: a reader of the JSON summary
-# should be able to see the hole.
+# Messages whose numeric id this repository still doesn't know, so no case can
+# be built. Recorded rather than dropped, so the JSON summary shows the hole.
 #
-# **Derived, not listed.** This was a hand-written tuple naming
-# MESG_CHANNEL_CRC_MODE_ID and MESG_PENDING_TRANSMIT_CLEAR_ID, and it stayed
-# that way after the Wave 2 shim resolved them to 0x58 and 0x8C - so two
-# messages the bridge implements were silently absent from every transcript
-# while the summary claimed, with a reason attached, that they could not be
-# sent. Nothing failed: the test on this list only checks that each entry
-# carries a non-empty "why". A transcript that quietly omits a message is
-# exactly the coverage hole this tool exists to close, so the list now comes
-# from `tools/ant_wire.py`'s UNRESOLVED dict, which is generated from the YAML
-# and cannot fall behind it.
+# Derived from `tools/ant_wire.py`'s UNRESOLVED dict (generated from the YAML)
+# rather than hand-listed here, so it can't silently fall behind as ids get
+# resolved.
 UNREQUESTABLE_UNRESOLVED = tuple(sorted(
     name for name in wire.UNRESOLVED
     if name.startswith("MESG_") and name.endswith("_ID")
@@ -419,10 +330,9 @@ UNREQUESTABLE_UNRESOLVED = tuple(sorted(
 class Case:
     """One thing to send, and why.
 
-    `frames` is everything written to the device for this case, in order:
-    preamble first, then the frame under test. Every byte written is recorded,
-    so a divergence in a preamble shows up as a difference rather than as a
-    changed meaning.
+    `frames` is everything written for this case, in order: preamble first,
+    then the frame under test. Every byte is recorded, so a preamble
+    divergence shows up as a difference rather than a changed meaning.
     """
 
     name: str
@@ -441,19 +351,15 @@ def _variants(msg_id: int, canonical: bytes,
 
     if bounds is not None:
         low, high = bounds
-        # Short: one byte less than the declared minimum. Every handler in
-        # dispatch() guards on `len >= N` and leaves `err` at its INVALID_MESSAGE
-        # initial value when the guard fails - the reason that initial value is
-        # not RESPONSE_NO_ERROR is that a truncated command would otherwise be
-        # acknowledged without ever having run.
+        # Short: one byte less than the declared minimum. dispatch() handlers
+        # guard on `len >= N` and leave `err` at INVALID_MESSAGE when it fails.
         if low >= 1:
             cases.append(Case(
                 f"{stem}/{MALFORMED}-short",
                 preamble + (wire.frame(msg_id, canonical[: low - 1]),),
                 f"{low - 1} payload bytes where the message declares {low}"))
-        # Long: one byte more than the declared maximum, capped so the frame
-        # still fits the parser's body buffer. Beyond that the bridge stops
-        # storing bytes and the case would measure the buffer, not the handler.
+        # Long: one byte more than the declared maximum, capped to the
+        # parser's body buffer so the case measures the handler, not the buffer.
         long_len = min(high + 1, wire.MAX_SIZE_VALUE)
         if long_len > high:
             padded = (canonical + bytes(long_len))[:long_len]
@@ -481,14 +387,11 @@ def _variants(msg_id: int, canonical: bytes,
                 "every parameter byte 0xFF: the error mapping is the thing "
                 "under test, not the value"))
 
-    # A frame whose checksum is wrong by one bit. The bridge drops it silently
-    # rather than answering MESG_SERIAL_ERROR, so the expected recording is the
-    # request and nothing else - which is a real statement about the firmware
-    # and is exactly what a byte diff can check.
+    # Checksum wrong by one bit: bridge drops it silently instead of answering
+    # MESG_SERIAL_ERROR, so the expected recording is just the request.
     #
-    # No preamble on this one. A malformed frame never reaches dispatch(), so
-    # channel state cannot affect the answer, and a preamble that replies would
-    # make "expect silence" untestable - the case would look answered.
+    # No preamble here - a malformed frame never reaches dispatch(), and a
+    # preamble that replies would make "expect silence" untestable.
     good = bytearray(wire.frame(msg_id, canonical))
     good[-1] ^= 0x01
     cases.append(Case(f"{stem}/{MALFORMED}-checksum", (bytes(good),),
@@ -510,12 +413,8 @@ def _request_cases() -> list[Case]:
 
 
 def unknown_message_id() -> int:
-    """The highest id no table claims. Computed, so it cannot go stale.
-
-    A hardcoded 0xFE would quietly stop being an unknown id the day somebody
-    allocated it - and `protocol/ant_wire.yaml` has an unclaimed-id allocation
-    process precisely so that ids do get allocated.
-    """
+    """The highest id no table claims. Computed so it can't go stale as ids
+    get allocated in `protocol/ant_wire.yaml`."""
     claimed = set(wire.MESSAGES) | set(getattr(wire, "RADIANT_MESSAGES", {}))
     return max(value for value in range(0x100) if value not in claimed)
 
@@ -523,8 +422,8 @@ def unknown_message_id() -> int:
 def _frame_cases() -> list[Case]:
     """Cases about the frame parser rather than about any one message.
 
-    Last in the run, because two of them deliberately leave junk in the parser's
-    input and the next thing down the wire should be a reset.
+    Last in the run: two of them deliberately leave junk in the parser's
+    input, so the next thing on the wire should be a reset.
     """
     freq = wire.frame(wire.MESG_CHANNEL_RADIO_FREQ_ID,
                       CANONICAL[wire.MESG_CHANNEL_RADIO_FREQ_ID])
@@ -557,11 +456,9 @@ def _frame_cases() -> list[Case]:
              "would lose this one"),
     ]
 
-    # A header that declares three body bytes, followed immediately by a
-    # complete valid frame. The header eats the valid frame's first bytes as its
-    # own body, fails its checksum and is dropped; the parser must then find the
-    # next SYNC and carry on. If it does not, everything after this point in the
-    # transcript shifts - which a byte diff sees at once.
+    # A header declaring three body bytes, then a complete valid frame. The
+    # header eats the valid frame's first bytes as its own body, fails its
+    # checksum, and is dropped; the parser must resync on the next SYNC.
     truncated = bytes([wire.SYNC_TX, 0x03, wire.MESG_CHANNEL_RADIO_FREQ_ID])
     cases.append(Case(
         f"frame/{MALFORMED}-partial-then-valid", (truncated + freq, freq),
@@ -573,9 +470,9 @@ def _frame_cases() -> list[Case]:
 def generate_cases() -> list[Case]:
     """Every case, in the fixed order they are sent in.
 
-    Pure: no clock, no device, no environment. Two calls return equal cases,
-    which is the property `tools/test_ant_conformance.py` asserts and the
-    foundation the byte diff stands on.
+    Pure: no clock, no device, no environment. Two calls return equal cases
+    (asserted by `tools/test_ant_conformance.py`), the foundation the byte
+    diff stands on.
     """
     cases: list[Case] = []
 
@@ -592,9 +489,8 @@ def generate_cases() -> list[Case]:
         if canonical is None:
             bounds = payload_bounds(msg_id)
             if bounds is None:
-                # `var`: the length depends on a field inside the payload and
-                # there is nothing safe to derive. Two bytes reaches every
-                # handler's guard, which is what the case is for.
+                # `var`: nothing safe to derive. Two bytes reaches every
+                # handler's guard.
                 canonical = bytes([CHANNEL, 0])
             else:
                 canonical = (bytes([CHANNEL]) + bytes(bounds[0]))[:bounds[0]]
@@ -625,18 +521,14 @@ def _collect(reader, case_name: str, seconds: float, state: RunState,
              until: int | None = None) -> int:
     """Record every frame that arrives within `seconds`. Returns the count.
 
-    With `until`, stop as soon as that message id lands. That is only used for
-    the reset before each case: waiting the full settle window there would
-    double the length of the run for a message whose reply is the one thing
-    guaranteed to arrive, and nothing else is in flight at that point because
-    the previous case's window already closed.
+    With `until`, stop as soon as that message id lands - used only for the
+    reset before each case, where waiting the full settle window would double
+    the run length for a guaranteed reply.
 
-    The frame bytes are rebuilt with `wire.frame()` rather than kept raw,
-    because `FrameReader` hands back (id, payload) and discards the buffer. That
-    is byte-exact and not an approximation: the reader has already checked that
-    the length byte matches the payload it split out and that the checksum over
-    the whole frame is right, so there is exactly one byte sequence those two
-    values can have come from.
+    Frame bytes are rebuilt with `wire.frame()` rather than kept raw, since
+    `FrameReader` hands back (id, payload) and discards the buffer - this is
+    byte-exact, not an approximation, because the reader already validated
+    length and checksum.
     """
     count = 0
     deadline = time.monotonic() + seconds
@@ -656,9 +548,8 @@ def _collect(reader, case_name: str, seconds: float, state: RunState,
 def run_cases(dev, reader, cases, *, settle: float, reset_each: bool,
               verbose: bool, reset_timeout: float = 3.0) -> RunState:
     """Drive every case against an open device and record the conversation."""
-    # Imported here rather than at the top so that every name that can touch a
-    # device is inside the one function that does. --list, --replay, --compare
-    # and the unit tests never reach this line.
+    # Imported here, not at top, so --list/--replay/--compare and the unit
+    # tests never need a device import.
     from ant_probe import EP_OUT
 
     state = RunState()
@@ -675,9 +566,8 @@ def run_cases(dev, reader, cases, *, settle: float, reset_each: bool,
             dev.write(EP_OUT, reset_frame)
             if _collect(reader, case.name, reset_timeout, state,
                         until=wire.MESG_STARTUP_MESG_ID) == 0:
-                # A stack that does not answer a reset is not going to produce
-                # a transcript worth diffing, and carrying on would bury that
-                # fact in 260 more cases.
+                # A stack that doesn't answer a reset won't produce a
+                # transcript worth diffing; don't bury that in 260 more cases.
                 raise SystemExit(
                     f"no startup message after reset before case {case.name} - "
                     f"is this the ANT firmware?")
@@ -712,10 +602,8 @@ class Difference:
 def compare_records(a: list[Record], b: list[Record]) -> list[Difference]:
     """Line-for-line differences, attributed to the case they fall in.
 
-    Aligned by position rather than by a longest-common-subsequence: two
-    transcripts from the same tool run the same cases in the same order, so a
-    positional difference is a real one and an insertion shows up as a run of
-    them. Attributing to a case is what makes that readable anyway.
+    Aligned by position, not LCS: two transcripts from the same tool run the
+    same cases in the same order, so a positional difference is a real one.
     """
     diffs: list[Difference] = []
     for index in range(max(len(a), len(b))):
@@ -807,23 +695,14 @@ def summarise(cases: list[Case], state: RunState, path: str,
               text: str) -> dict:
     """The JSON `tools/ant_ab.py` reads, and the record of what was skipped.
 
-    Also, since the Tier 1 reference landed, the integrity record for the
-    transcript itself. `tools/test_ant_golden.py` reads `sha256`, `records` and
-    `case_index` back out of the committed copy in `archive/benchmarks/` and
-    fails if the bytes on disk no longer hash to them - which is the only check
-    in the tree that can see a flipped byte inside an otherwise well-formed
-    reply, because a framing rule has no opinion about what a dongle should
-    have answered.
+    Also the integrity record for the transcript: `tools/test_ant_golden.py`
+    reads `sha256`, `records`, and `case_index` back from the committed copy
+    and fails if the bytes no longer hash to them - the only check that can
+    see a flipped byte inside an otherwise well-formed reply.
 
-    Three consequences for anyone editing this function:
-
-    * `case_index` earns its keep as more than a summary - it is what turns
-      "this file changed" into "this case changed", so keep it per case and
-      keep the hash over the same `<dir><hex>` lines joined with newlines.
-    * A transcript committed to `archive/captures/serial/` needs its summary
-      committed too, or nothing checks it.
-    * Changing how any of these three fields is computed invalidates every
-      committed baseline at once. That is a deliberate act, not a refactor.
+    `case_index` is per-case (not just per-file) so a diff can say which case
+    changed. Changing how any of these three fields is computed invalidates
+    every committed baseline - a deliberate act, not a refactor.
     """
     per_case: dict[str, dict] = {}
     for record in state.records:
@@ -845,10 +724,8 @@ def summarise(cases: list[Case], state: RunState, path: str,
         "records": len(state.records),
         "replies": state.replies,
         "messages_exercised": len(exercised),
-        # A case that expected a reply and got none is not automatically a
-        # failure - a bad checksum is meant to be silent - but a *valid* case
-        # falling silent means the dongle never answered, and that is worth
-        # having in the file rather than only on the terminal.
+        # A silent malformed-checksum case is expected; a silent *valid* case
+        # means the dongle never answered.
         "silent_cases": state.silent_cases,
         "unexpected_replies": state.unexpected_replies,
         "skipped": [
@@ -909,19 +786,14 @@ def main() -> int:
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--settle", type=float, default=0.25,
                         help="seconds to keep reading after each write "
-                             "(default: 0.25). The floor on how long that "
-                             "takes is ant_probe.READ_TIMEOUT_MS, which is "
-                             "deliberately not short: a read timeout racing a "
-                             "reply loses it, and that bug cost this project "
-                             "0.4 pp of imaginary packet loss")
+                             "(default: 0.25). Floored by "
+                             "ant_probe.READ_TIMEOUT_MS")
     parser.add_argument("--no-reset-each", action="store_true",
                         help="do not reset the stack before every case. "
-                             "Faster, and gives up the independence that makes "
-                             "the transcript diffable after a case is inserted")
+                             "Faster, but loses per-case independence")
     parser.add_argument("--only", metavar="SUBSTRING",
                         help="run only cases whose name contains this. For "
-                             "debugging one case; a transcript produced this "
-                             "way is not a Tier 1 baseline")
+                             "debugging one case; not a Tier 1 baseline")
     parser.add_argument("--list", action="store_true",
                         help="print the case list and exit. No device needed")
     parser.add_argument("--replay", metavar="FILE",

@@ -4,37 +4,32 @@
  * USB ANT vendor class on the *new* USB device stack (USBD/UDC).
  *
  * Same device on the wire as usb_ant_class.c: VID 0x0FCF / PID 0x1009, one
- * vendor-specific interface, two bulk endpoints at 0x01 (OUT) and 0x81 (IN).
- * A host cannot tell which of the two files produced the descriptors, which is
- * the point - the legacy build is the one verified against Zwift, and this one
- * has to be swappable for it without renegotiating that.
+ * vendor-specific interface, two bulk endpoints at 0x01 (OUT) and 0x81 (IN) -
+ * a host cannot tell which file produced the descriptors, which is the point:
+ * the legacy build is the one verified against Zwift, and this one must be
+ * swappable for it without renegotiating that.
  *
- * Why it exists at all: every nRF54 part that has a USB device controller has
- * a DesignWare DWC2, and Zephyr's only DWC2 driver is drivers/usb/udc/udc_dwc2.c.
- * There is no usb_dc_dwc2.c. So the legacy stack is not "older but available"
- * on those parts, it is absent, and this file is the price of admission.
+ * Why it exists: every nRF54 part with a USB device controller has a
+ * DesignWare DWC2, and Zephyr's only DWC2 driver lives under
+ * drivers/usb/udc/ - there is no legacy usb_dc_dwc2.c, so the legacy stack
+ * is simply absent on those parts.
  *
- * The two stacks differ in ways that matter here:
+ * Differences that matter here:
+ *   Transfers.  USBD is asynchronous only (net_buf + completion callback);
+ *               usb_ant_send() rebuilds a synchronous shape on top with a
+ *               semaphore, since the bridge is written against a blocking
+ *               send.
+ *   Buffers.    Shared UDC pool (CONFIG_UDC_BUF_COUNT/POOL_SIZE) rather than
+ *               static per-class arrays, so pool exhaustion is a new failure
+ *               mode.
+ *   State.      Configured/deconfigured via the class .enable/.disable;
+ *               suspend/resume via the device message callback, rather than
+ *               one status callback.
  *
- *   Transfers.  Legacy had usb_transfer_sync(). USBD is asynchronous only:
- *               allocate a net_buf from the UDC pool, enqueue it, and get a
- *               completion callback. usb_ant_send() rebuilds the synchronous
- *               shape on top with a semaphore, because the bridge is written
- *               against a blocking send.
- *   Buffers.    Buffers come from a shared UDC pool (CONFIG_UDC_BUF_COUNT,
- *               CONFIG_UDC_BUF_POOL_SIZE) rather than from static per-class
- *               arrays, so exhausting it is a new failure mode. Both are set
- *               in prj.conf.
- *   State.      Configured/deconfigured arrives through the class .enable and
- *               .disable callbacks; suspend/resume arrives through the device
- *               message callback. Legacy funnelled all of it through one
- *               status callback.
- *
- * The suspend/resume handling below is deliberately a transcription of the
- * legacy file's, including the reason it is shaped that way - a host does not
- * repeat SET_CONFIGURATION after a bus resume, so nothing re-arms the OUT
- * endpoint unless resume does it explicitly. That bug cost a physical replug
- * after every laptop sleep and it is not worth rediscovering on a new stack.
+ * Suspend/resume below deliberately mirrors the legacy file's: a host does
+ * not repeat SET_CONFIGURATION after a bus resume, so nothing re-arms OUT
+ * unless resume does it explicitly - that bug cost a replug after every
+ * laptop sleep and isn't worth rediscovering here.
  */
 
 #include <zephyr/kernel.h>

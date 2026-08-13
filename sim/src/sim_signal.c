@@ -11,13 +11,11 @@
 
 /* Torque in 1/32 Nm for one revolution delivering P watts at r rpm:
  *
- *   torque_Nm = P / (2*pi*r/60)          so   torque_32 = 32 * 60 * P / (2*pi*r)
- *                                             torque_32 = 305.5775 * P / r
+ *   torque_Nm = P / (2*pi*r/60)   so   torque_32 = 305.5775 * P / r
  *
- * Scaled by 1000 so it stays in integers. The receiver recovers
+ * Scaled by 1000 to stay in integers. The receiver recovers
  * P = delta_torque * 2*pi * 64 / delta_period, so an error here shows up
- * directly as a power error and nowhere else - which is what makes it worth
- * writing the derivation down rather than the constant alone.
+ * directly as a power error.
  */
 #define TORQUE_TICKS_NUMERATOR      305577u
 #define TORQUE_TICKS_SCALE          1000u
@@ -66,13 +64,11 @@ uint32_t sim_revs_advance(struct sim_revs *revs, uint32_t dt_us, uint32_t rpm)
 	}
 
 	/* rpm * dt_us / 60000000 revolutions, kept in 1/1000000ths so the
-	 * remainder carries into the next call rather than being rounded away
-	 * every message - at ~4 Hz that rounding would lose most of a
-	 * revolution a second, and the cadence a receiver reconstructs would
-	 * be wrong by a constant factor rather than by noise.
-	 *
-	 * rpm is bounded by 255 (it is a byte on the air) and dt_us by one
-	 * channel period, so the product stays inside 32 bits.
+	 * remainder carries into the next call instead of being rounded away
+	 * every message - at ~4 Hz that would lose most of a revolution a
+	 * second, biasing the reconstructed cadence by a constant factor.
+	 * rpm is bounded by 255 (a byte on the air) and dt_us by one channel
+	 * period, so the product stays inside 32 bits.
 	 */
 	revs->phase_micro += (rpm * dt_us) / 60u;
 	completed = revs->phase_micro / 1000000u;
@@ -109,8 +105,8 @@ uint16_t sim_torque_ticks(uint32_t watts, uint32_t rpm)
 	}
 
 	/* 64-bit on purpose: at 2000 W this overflows 32 bits before the
-	 * division, and the result would be a small plausible number rather
-	 * than an obvious one.
+	 * division, giving a small plausible-looking wrong answer rather
+	 * than an obviously broken one.
 	 */
 	numerator = (uint64_t)watts * TORQUE_TICKS_NUMERATOR;
 	denominator = (uint64_t)rpm * TORQUE_TICKS_SCALE;

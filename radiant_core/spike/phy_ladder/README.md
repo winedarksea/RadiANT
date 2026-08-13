@@ -7,7 +7,7 @@ Provenance: clean-room. Written from `docs/decisions/0007-long-range-phy.md`
 `radiant_frame.h`, from `tools/ab_gates.toml`'s header (the
 `loss (exact)` rule), and from this repository's own spikes
 `radiant_core/spike/x1m_len` and `radiant_core/spike/rx_raw`. Nothing here
-derives from `sdk-ant`, from `libant.a`, or from an adopter-gated ANT+ device
+derives from `sdk-ant`, from `libant.a`, or from an ANT+ device
 profile document. See `docs/decisions/0002-clean-room-policy.md`.
 
 **Status: BUILT for both boards, NOT FLASHED, NOT RUN.** The bench radio was in
@@ -32,10 +32,9 @@ suite is not a met gate.
 ### Why this is firmware and not `tools/ant_sens.py`
 
 `ant_sens.py` already runs exactly the right measurement — walk the master's
-transmit power down until the receiver misses 5 % — and it **cannot be used
-here**. It drives boards over the ANT serial protocol, and **no ANT serial
-message selects a PHY.** There is no message to send without inventing one. So
-the ladder has to live where the PHY selection lives: in an image that calls
+transmit power down until the receiver misses 5 % — but it drives boards over
+the ANT serial protocol, and **no ANT serial message selects a PHY.** So the
+ladder has to live where PHY selection lives: in an image that calls
 `radiant_radio_tx()` with a `struct radiant_pkt_format`.
 
 ### The secondary objective, and why it is nearly free
@@ -160,9 +159,8 @@ SOC_COMPATIBLE_NRF54LX`, which no nRF53 core sets.
 **And the failure is silent.** Kconfig falls back to
 `RADIANT_CORE_BACKEND_NULL`, and the image boots, accepts every console command
 and refuses every arm with `ENOTSUP`. On a *ladder* that is worse than on
-`x1m_len`: the null backend's receiver hears nothing, so it manufactures **100 %
-loss at every rung** — which looks exactly like a rig with too much attenuation,
-and an operator would spend the session moving boards closer together.
+`x1m_len`: the null backend's receiver hears nothing, manufacturing **100 %
+loss at every rung** — indistinguishable from a rig with too much attenuation.
 
 `src/main.c` therefore opens with the same guard `x1m_len` does:
 

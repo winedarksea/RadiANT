@@ -18,7 +18,7 @@ Provenance: clean-room. Written from `docs/ant-radio-link.md`,
 public Nordic MDK headers and product specifications, and Zephyr's public
 clock-control and IRQ APIs. The host script additionally uses the free *ANT
 Message Protocol and Usage Rev 5.1* for the meaning of the messages it sends.
-Nothing here derives from `sdk-ant`, from `libant.a`, or from an adopter-gated
+Nothing here derives from `sdk-ant`, from `libant.a`, or from an
 ANT+ device profile document. See `docs/decisions/0002-clean-room-policy.md`.
 
 ## What it is for
@@ -50,16 +50,15 @@ inferences.
 
 ## Why it does not reuse Spike A's tracking configuration
 
-Spike A's 5-byte-address configuration parses byte 3 with `LFLEN=8`, i.e. it has
-already decided the byte is a length. A receiver that has decided that cannot
-report that it was wrong: a frame whose byte 3 read `0x8A` would be taken as a
-138-byte body, overrun, and fail its CRC, and the byte itself would be lost in
-the wreckage. It would look like interference.
+Spike A's 5-byte-address configuration parses byte 3 with `LFLEN=8` - it has
+already decided the byte is a length, so it can't report otherwise: a frame
+whose byte 3 read `0x8A` would be taken as a 138-byte body, overrun, fail its
+CRC, and look like interference.
 
 So this uses the *search* configuration Spike A measured instead - `PCNF0 = 0`,
 `BALEN = 2`, `STATLEN = 12` - which treats the body as opaque bytes and puts
-byte 3 in RAM whatever it means. That is the whole reason for the choice, and it
-is the one design decision in this spike that had to be right in advance.
+byte 3 in RAM whatever it means. That is the one design decision in this
+spike that had to be right in advance.
 
 The consequence is a fixed body length. A frame carrying a *different* payload
 length is still received - the header still reads correctly - but its CRC fails,

@@ -4,16 +4,15 @@
  *
  * Provenance: docs/radiant-telemetry.md section 9 and section 6's schedule
  * block, this project's own written specification, authored in advance of any
- * code. No adopter-gated ANT+ device profile document was read for this file,
+ * code. No ANT+ device profile document was read for this file,
  * no sdk-ant source was consulted, and nothing here derives from libant.a. See
  * docs/decisions/0002-clean-room-policy.md. The argument for every decision is
  * in profile_command.h.
  *
  * The order of on_command() is section 9's order and must stay that way: tag,
- * then duplicate, then window, then execute. Every rearrangement of those four
- * is a different protocol - checking the window before the tag, for instance,
- * turns the accept window into a free oracle for which sequence numbers are
- * live.
+ * then duplicate, then window, then execute. Checking the window before the
+ * tag, for instance, turns the accept window into a free oracle for which
+ * sequence numbers are live.
  */
 
 #include <errno.h>
@@ -42,13 +41,8 @@ int profile_cmd_channel_check(const struct profile_schedule *s,
 		return -EINVAL;
 	}
 
-	/*
-	 * The coding rate the node ANNOUNCES and the configuration the channel
-	 * RUNS are two statements about one PHY. profile_sched_check() already
-	 * requires the announcement to agree with frame 0's long-range bit; this
-	 * is the third leg, against what the radio was actually handed, and it
-	 * is the one no encoder can make on its own.
-	 */
+	/* Third leg (besides profile_sched_check()'s announcement check):
+	 * announced coding vs. what the radio was actually handed. */
 	if (cfg == RADIANT_FRAME_CFG_LR) {
 		if (s->coding != PROFILE_CMD_CTRL_CODING) {
 			return -EINVAL;
@@ -131,21 +125,17 @@ int profile_cmd_tag(const struct profile_cmd_node *n, const uint8_t *body,
 		return -EACCES;
 	}
 
-	/*
-	 * K_cmd is derived per call and destroyed before returning, which is
-	 * what the compat layer's command tag does and for the same reason: a
-	 * cached subkey is a key that outlives the epoch it was bound to, and
-	 * the epoch is the entire replay defence here.
-	 */
+	/* K_cmd derived per call, destroyed before returning: a cached subkey
+	 * would outlive the epoch it was bound to, and the epoch is the whole
+	 * replay defence here. */
 	rc = radiant_sec_kdf(n->cfg.k_root, RADIANT_SEC_LABEL_CMD, n->cfg.epoch,
 			     n->cfg.devnum, &k_cmd);
 	if (rc != RADIANT_SEC_OK) {
 		return -EIO;
 	}
 
-	/* The sequence number rides the nonce's counter field as well as the
-	 * covered bytes. It costs nothing and it means two pages differing only
-	 * in their sequence never share a MAC block. */
+	/* Sequence number rides the nonce too, so two pages differing only in
+	 * sequence never share a MAC block. */
 	radiant_sec_nonce_block(nonce, n->cfg.epoch, n->cfg.devnum,
 				(uint16_t)body[1], RADIANT_SEC_DOM_TLM_CMD);
 
@@ -164,8 +154,7 @@ int profile_cmd_tag(const struct profile_cmd_node *n, const uint8_t *body,
 		return -EIO;
 	}
 
-	/* Truncation is a prefix of the tag, matching every other truncated tag
-	 * in this project. */
+	/* Truncation is a prefix, matching every other truncated tag here. */
 	memcpy(tag, full, n->cfg.tag_len);
 	memset(full, 0, sizeof(full));
 	return 0;
@@ -192,9 +181,8 @@ bool profile_cmd_tag_ok(const struct profile_cmd_node *n, const uint8_t *body,
 		return false;
 	}
 
-	/* Constant time over the configured width: an early return on the first
-	 * differing byte leaks how much of a forged tag was right, which for a
-	 * two-byte tag is most of the work. */
+	/* Constant time over the configured width: an early return would leak
+	 * how much of a forged tag was right. */
 	for (i = 0u; i < n->cfg.tag_len; i++) {
 		diff |= (uint8_t)(want[i] ^ tag[i]);
 	}
@@ -233,9 +221,8 @@ static void backoff_clear(struct profile_cmd_node *n)
  * ---------------------------------------------------------------------------
  */
 
-/* "delta_u8(seq, last_seq)" - unsigned difference on a counter that wraps at
- * 256, which is the only arithmetic under which a window near the wrap behaves
- * the same as a window anywhere else. */
+/* Unsigned difference on a counter that wraps at 256, so a window near the
+ * wrap behaves the same as one anywhere else. */
 static uint8_t delta_u8(uint8_t seq, uint8_t last)
 {
 	return (uint8_t)(seq - last);
@@ -249,9 +236,8 @@ static int emit_ack(struct profile_cmd_node *n,
 	uint8_t tag[PROFILE_TLM_CMD_TAG_LR];
 	int rc;
 
-	/* Covered bytes first, then the tag over them. The zero tag handed to
-	 * the encoder here never reaches the air: it is overwritten below, and
-	 * the six bytes it sits behind are the six the MAC covers. */
+	/* Zero tag lays out covered bytes first; overwritten below and never
+	 * reaches the air. */
 	memset(tag, 0, sizeof(tag));
 	rc = profile_command_ack_encode_tag(a, tag, n->cfg.tag_len, body,
 					    sizeof(body));
@@ -289,10 +275,8 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 		return -EINVAL;
 	}
 	if (len != (uint8_t)(PROFILE_TLM_CMD_COVERED + n->cfg.tag_len)) {
-		/* A page at the other width is not a malformed page, it is a
-		 * page from a channel this node is not running. Refusing it
-		 * here rather than verifying a truncated tag is what keeps the
-		 * width a property of the channel. */
+		/* Wrong width = wrong channel, not malformed; refuse rather
+		 * than verify a truncated tag. */
 		return -EINVAL;
 	}
 
@@ -301,30 +285,23 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 		return rc;
 	}
 
-	/* Counted before any verdict, because the question it answers is "did a
-	 * response slot catch this", not "was it legitimate". windows minus
-	 * window_hits is the miss rate, and a miss costs a full interval - which
-	 * is the number the gate asks for. */
+	/* Counted before any verdict: this answers "did a response slot catch
+	 * this", not "was it legitimate". */
 	if (n->armed_close != 0u && now >= n->armed_open && now <= n->armed_close) {
 		n->stats.window_hits++;
 	}
 
-	/*
-	 * The throttle sits in front of everything, including the verification
-	 * it exists to limit. A node that verified first and then declined to
-	 * answer would still be spending a CMAC per forged packet, which on a
-	 * coin cell is the cost, not the airtime.
-	 */
+	/* Throttle sits in front of verification itself - verifying first and
+	 * declining to answer would still spend a CMAC per forged packet; on
+	 * a coin cell that's the cost, not airtime. */
 	if (n->fails != 0u && now < n->blocked_until) {
 		n->stats.throttled++;
 		return 0;
 	}
 
 	/* --- Rule 1: verify the tag first. ---------------------------------
-	 * A failure changes no protocol state - not last_seq, not the stored
-	 * acknowledgement. The backoff counter is not protocol state; it is the
-	 * mitigation section 9 requires, and it is the one thing a failure is
-	 * allowed to move.
+	 * A failure changes no protocol state (not last_seq, not the stored
+	 * ack) - only the backoff counter moves.
 	 */
 	if (!profile_cmd_tag_ok(n, body, tag)) {
 		bool first = (n->fails == 0u);
@@ -346,21 +323,12 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 	backoff_clear(n);
 
 	/* --- Rule 2: a duplicate executes nothing. -------------------------
-	 * Section 9 says "re-send the stored acknowledgement and do not execute
-	 * again". This re-sends the stored CONTENT - the same command, the same
-	 * resulting value - but reports result 0x01 where the stored result was
-	 * 0x00.
-	 *
-	 * THAT IS A JUDGMENT CALL AND HERE IS THE ARGUMENT. The result table
-	 * defines 0x01 as "accepted; already executed (idempotent repeat)", and
-	 * a byte-identical resend would make 0x01 unreachable - a code in a
-	 * normative table that no implementation can ever emit is a defect in
-	 * one of the two. A REJECTION, by contrast, is repeated verbatim: a
-	 * duplicate of a command that was refused for a bad argument is still a
-	 * bad argument, and answering "already executed" would be a lie about an
-	 * effect that never ran.
-	 *
-	 * The tag is recomputed either way, because the tag covers the result.
+	 * Re-sends the stored content but reports 0x01 (already executed)
+	 * where the stored result was 0x00 (accepted) - otherwise 0x01 would
+	 * be unreachable in the result table. A stored REJECTION is repeated
+	 * verbatim instead: reporting "already executed" for an effect that
+	 * never ran would be a lie. Tag is recomputed either way since it
+	 * covers the result.
 	 */
 	if (n->seq_known && c.seq == n->last_seq && n->stored_valid) {
 		a = n->stored;
@@ -374,17 +342,15 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 
 	/* --- Rules 3 and 4: the accept window, and adoption from nothing. --- */
 	if (!n->seq_known) {
-		/* Rule 4. The tag check above is what makes this safe: a command
-		 * captured in a previous epoch does not reach here at all. */
+		/* Rule 4. Safe because the tag check above already excludes a
+		 * command captured in a previous epoch. */
 		n->stats.adopted++;
 	} else {
 		uint8_t d = delta_u8(c.seq, n->last_seq);
 
 		if (d == 0u || d > PROFILE_CMD_ACCEPT_WINDOW) {
-			/* d == 0 with no stored acknowledgement: the sequence
-			 * is current but the answer is gone, which is a node
-			 * that rebooted mid-exchange. Outside the window is
-			 * outside the window either way. */
+			/* d == 0 with no stored ack: node rebooted mid-
+			 * exchange. Still outside the window either way. */
 			n->stats.bad_seq++;
 			memset(&a, 0, sizeof(a));
 			a.seq = c.seq;
@@ -408,12 +374,8 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 	a.cmd = c.cmd;
 	a.value = value;
 
-	/*
-	 * The sequence advances on any ANSWER, accepted or refused, because the
-	 * answer is what the commanding receiver will retry for. Storing only
-	 * successes would make a refused command retry forever against a node
-	 * that has already decided.
-	 */
+	/* Sequence advances on any answer, accepted or refused - storing only
+	 * successes would make a refused command retry forever. */
 	n->last_seq = c.seq;
 	n->seq_known = true;
 	n->stored = a;
@@ -444,15 +406,9 @@ int profile_cmd_window_set(struct profile_cmd_node *n,
 		return -ENOENT;
 	}
 
-	/*
-	 * THE WORST-CASE CHECK profile_sched_rephase() cannot make. The dwell
-	 * must cover twice the drift accumulated over the phase, and a
-	 * re-phasing node reaches every phase in the interval, so the block is
-	 * checked at the largest of them. A node that passes here can be
-	 * re-phased to anything; a node that fails here would have worked at
-	 * the phase it was encoded with and failed later, at a time nobody was
-	 * watching.
-	 */
+	/* Worst-case check profile_sched_rephase() cannot make: dwell must
+	 * cover twice the drift accumulated at the largest phase in the
+	 * interval, so a node that passes here can be re-phased to anything. */
 	worst = *s;
 	worst.dl_phase = (uint16_t)(counts - 1u);
 	rc = profile_sched_check(&worst, lr_phy, clk_ppm);
@@ -488,21 +444,15 @@ radiant_time_t profile_cmd_next_window(const struct profile_cmd_node *n,
 		return RADIANT_TIME_NEVER;
 	}
 
-	/*
-	 * Reusing the announcing arithmetic rather than repeating it: the phase
-	 * from `now` IS the offset to the next window, because that is what the
-	 * announcement means. One implementation of "where is the grid" is one
-	 * more than the number that can be right.
-	 */
+	/* Reuses the announcing arithmetic rather than repeating it: the phase
+	 * from `now` IS the offset to the next window. */
 	phase = profile_sched_phase_for(&n->sched, n->anchor, now);
 	if (phase < 0) {
 		return RADIANT_TIME_NEVER;
 	}
 
-	/* The announcement, applied to itself: a block carrying that phase,
-	 * heard at `now`, opens its first window exactly where this node will.
-	 * Going through listen_at() rather than converting counts here is what
-	 * keeps the node's grid and the receiver's the same arithmetic. */
+	/* Going through listen_at() rather than converting counts here keeps
+	 * the node's grid and the receiver's the same arithmetic. */
 	at = n->sched;
 	at.dl_phase = (uint16_t)phase;
 	return profile_sched_listen_at(&at, now, 0u);
@@ -522,8 +472,7 @@ int profile_cmd_arm_listen(struct profile_cmd_node *n, radiant_time_t now)
 		return -ENOENT;
 	}
 	if (n->expect_left == 0u) {
-		/* The ordinary case: nothing is expected, so nothing is armed
-		 * and the radio stays off. */
+		/* Ordinary case: nothing expected, radio stays off. */
 		return -EAGAIN;
 	}
 	if (n->cfg.slot.fmt == NULL || n->cfg.slot.filters == NULL ||
@@ -547,9 +496,8 @@ int profile_cmd_arm_listen(struct profile_cmd_node *n, radiant_time_t now)
 	rx.n_filters = n->cfg.slot.n_filters;
 	rx.t_open = open_at;
 	rx.t_close = open_at + (radiant_time_t)dwell;
-	/* One command per window. A second frame inside the same dwell is
-	 * either a duplicate, which rule 2 handles on the next window, or
-	 * somebody else's traffic. */
+	/* One command per window; a second frame in the same dwell is either
+	 * a duplicate (rule 2 handles it next window) or other traffic. */
 	rx.stop_on_first = true;
 
 	rc = radiant_sched_request_rx(n->cfg.slot.ch, &rx);

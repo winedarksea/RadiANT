@@ -1,40 +1,29 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * Provenance: original clean-room work. Written against
- * radiant_core/include/radiant_core/radiant_sched.h, radiant_core/include/radiant_core/radiant_radio_hal.h,
- * radiant_core/tests/fake_radio.h and the measurements in docs/spike-a-results.md
- * and docs/spike-b-part2-results.md. Nothing here derives from sdk-ant, from
- * libant.a, or from any adopter-gated ANT+ device profile document.
+ * Provenance: original clean-room work. Written against radiant_sched.h,
+ * radiant_radio_hal.h, fake_radio.h and the measurements in
+ * docs/spike-a-results.md and docs/spike-b-part2-results.md. Nothing here
+ * derives from sdk-ant, libant.a, or any ANT+ profile document.
  *
- * ---------------------------------------------------------------------------
- * Tests for the radio schedule
- * ---------------------------------------------------------------------------
- * radiant_sched.c is pure logic over radiant_radio_hal.h, so everything about it is
- * testable here and nothing about it needs a board. This suite is written to
- * make the module's two expensive mistakes impossible to ship:
+ * Tests for the radio schedule. radiant_sched.c is pure logic over
+ * radiant_radio_hal.h, so it's fully testable with no board. Guards against
+ * two expensive mistakes:
  *
- *   MERGING THAT DOES NOT MERGE. A scheduler that arms one window per channel
- *   still works - it just loses a packet every time two windows overlap, at a
- *   rate that looks exactly like the ~0.4 % collision floor the bench already
- *   characterised. So the merge tests assert on fake_radio_arm_count(): three
- *   overlapping channels must cost ONE arm call, not three, and the frame that
- *   arrives must come back attributed to the right channel and the right one of
- *   that channel's own filters.
+ *   MERGING THAT DOES NOT MERGE - a scheduler arming one window per channel
+ *   still works but loses a packet on every window overlap, at a rate that
+ *   looks like the ~0.4% collision floor the bench already characterised. The
+ *   merge tests assert on fake_radio_arm_count(): overlapping channels must
+ *   cost ONE arm call, and the arriving frame must attribute to the right
+ *   channel/filter.
  *
- *   A HARDCODED EIGHT. caps.max_filters is 8 on nRF and 2 on EFR32/RAIL, and a
- *   module that assumed 8 would pass every test on the nRF preset and then
- *   build a request the RAIL backend rejects outright. Every merge test here
- *   therefore runs at 2 as well, and every test ends by asserting that the mock
- *   rejected no arm call at all - which is the only way "it hardcoded 8" is
- *   visible before an EFR32 exists.
+ *   A HARDCODED EIGHT - caps.max_filters is 8 on nRF, 2 on EFR32/RAIL. Every
+ *   merge test runs at both, and every test asserts the mock rejected no arm
+ *   call, which is the only way "it hardcoded 8" is visible before an EFR32
+ *   exists.
  *
- * Two more properties are checked at the end of every single test, because they
- * catch a class of bug that no individual assertion does: the radio is idle
- * (nothing was left armed) and fake_radio_viol_count() is zero (nothing was
- * done in a callback that would deadlock a real radio ISR, including making
- * more HAL calls in one callback than the mock's budget allows - which is the
- * check on "a pass is one radiant_radio_now() and one arm call").
+ * Every test also checks: the radio ends idle, and fake_radio_viol_count() is
+ * zero (nothing done in a callback that would deadlock a real radio ISR).
  */
 
 #include <stdbool.h>
@@ -148,15 +137,9 @@ static void rx_req_init(struct radiant_sched_rx *r, const struct radiant_pkt_for
 }
 
 /*
- * A well-formed transmit request for a channel.
- *
- * THE ADDRESS COMES FROM track_filter[ch], and that is the assertion rather
- * than a convenience: a channel transmits on the address it listens on, so
- * building the request from the same bytes the receive filter uses is what makes
- * "the scheduler passed the right address to the backend" checkable at all.
- * struct radiant_sched_tx had no address field until the first real backend
- * needed one, and every transmit test in this file was written without one - so
- * the helper exists partly to make sure the next one cannot be.
+ * A well-formed transmit request for a channel. The address deliberately
+ * comes from track_filter[ch] - a channel transmits on the address it listens
+ * on - so "the scheduler passed the right address" is checkable at all.
  */
 static void tx_req_init(struct radiant_sched_tx *t, uint8_t ch, radiant_time_t t_sync_at)
 {
@@ -268,9 +251,8 @@ static const struct radiant_sched_cbs test_cbs = {
 	.done = on_done,
 };
 
-/* Build the 32 tracking filters and the 8 search filters out of the frame
- * layer, so a filter and the frame a test puts on the air cannot disagree
- * about byte order by construction. */
+/* Build filters from the frame layer so filter and on-air frame cannot
+ * disagree about byte order by construction. */
 static void build_filters(void)
 {
 	uint32_t i;
@@ -307,9 +289,8 @@ static void build_filters(void)
 }
 
 /* Put one good ANT+ frame from channel ch's device on the air at t_sync. The
- * same 15 bytes serve a 5-byte tracking window and a 3-byte search window - the
- * split belongs to the receiver, which is the whole reason the mock stores a
- * byte stream. */
+ * same 15 bytes serve both the 5-byte tracking and 3-byte search windows -
+ * the split belongs to the receiver, so the mock stores a byte stream. */
 static void air_frame_for(uint8_t ch, radiant_time_t t_sync)
 {
 	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
@@ -330,14 +311,10 @@ static void bring_up(void)
 }
 
 /*
- * The end of every test, and the assertions here are worth more than most of
- * the ones above them.
- *
- * rc_etime == 0 is the direct statement of "late arming is rejected rather than
- * silently run late": the scheduler subtracts caps.min_arm_lead_us itself, so
- * the backend must never have had to refuse anything on those grounds. rc_einval
- * and rc_enotsup == 0 is the hardcoded-eight detector, because a window asking
- * for more filters than caps.max_filters is exactly RADIANT_RADIO_EINVAL.
+ * The end of every test; these assertions matter more than most above them.
+ * rc_etime == 0 states "late arming is rejected, never silently run late" -
+ * the scheduler subtracts caps.min_arm_lead_us itself. rc_einval/rc_enotsup
+ * == 0 is the hardcoded-eight detector: too many filters is RADIANT_RADIO_EINVAL.
  */
 static void finish(void)
 {
@@ -362,9 +339,8 @@ static void finish(void)
 	zassert_equal(0u, st->rc_estate, "an arm call was made with the radio down");
 }
 
-/* Every accepted window must be finite and well ordered. RADIANT_TIME_NEVER is
- * rejected as a window edge by the HAL, so a scheduler that let a continuous
- * request through unchopped would be caught here rather than by one test. */
+/* Every accepted window must be finite and well ordered - RADIANT_TIME_NEVER is
+ * rejected as a window edge by the HAL. */
 static void assert_every_window_bounded(void)
 {
 	uint32_t i;
@@ -398,14 +374,10 @@ ZTEST_SUITE(radiant_sched, NULL, NULL, sched_before, NULL, NULL);
  * ---------------------------------------------------------------------------
  */
 
-/*
- * The window goes on the air at the microsecond that was asked for, and the
- * instant is far enough above 2^32 that a uint32_t anywhere in the path
- * truncates it. The mock's clock origin sits one second below the boundary
- * precisely so that every suite crosses it; this test crosses it deliberately
- * and says so, because "the scheduler stores time in the right width" is
- * otherwise only tested by accident.
- */
+/* The window goes on the air at the requested microsecond, at an instant far
+ * enough above 2^32 that a uint32_t anywhere in the path would truncate it.
+ * The mock's clock origin sits one second below that boundary so every suite
+ * crosses it; this test crosses it deliberately. */
 ZTEST(radiant_sched, test_a_window_is_armed_at_the_requested_absolute_microsecond)
 {
 	const struct fake_radio_arm *a;
@@ -453,22 +425,17 @@ ZTEST(radiant_sched, test_a_window_is_armed_at_the_requested_absolute_microsecon
  */
 
 /*
- * THE CENTRAL TEST. Tracked channels whose windows overlap cost ONE hardware
- * window carrying one filter each, and the frame that arrives is still
- * attributed to the one channel it belongs to.
+ * THE CENTRAL TEST: overlapping tracked windows cost ONE hardware window, and
+ * the arriving frame still attributes to the right channel. An unmerged
+ * scheduler passes every other test here and fails only this one, showing up
+ * on the bench as a fraction of a percent of extra loss, indistinguishable
+ * from the collision floor.
  *
- * The assertion that matters is that the merge happens at all. An unmerged
- * scheduler passes every other assertion in this file and fails only this one -
- * and on the bench it would fail as a fraction of a percent of extra loss,
- * indistinguishable from the collision floor.
- *
- * TWO CHANNELS, NOT THREE, AND THAT IS THE HARDWARE TALKING. This test used to
- * post three and assert a window carrying three filters, which no nRF can arm:
- * on the 5-byte tracking format the device number lives inside the address
- * BASE, the part has one BASE0 and one BASE1, and so a tracking window
- * expresses two device numbers. caps.max_addr_groups is that number, and the
- * third channel gets its own window immediately afterwards rather than being
- * lost - which is what the tail of this test now checks.
+ * TWO CHANNELS, NOT THREE - hardware talking. On the 5-byte tracking format
+ * the device number lives inside the address BASE, and the part has one
+ * BASE0 and one BASE1, so a tracking window expresses two device numbers
+ * (caps.max_addr_groups). The third channel gets its own window right after,
+ * which the tail of this test checks.
  */
 ZTEST(radiant_sched, test_overlapping_windows_collapse_into_one_hardware_window)
 {
@@ -550,13 +517,9 @@ ZTEST(radiant_sched, test_overlapping_windows_collapse_into_one_hardware_window)
 	finish();
 }
 
-/*
- * Windows that do not overlap are not merged, however tempting the arithmetic.
- * The negative case is worth a test of its own: a merge rule that ignored the
- * times would pass the test above and would silently widen every window to
- * cover both, which costs receive current and, once the span cap bites, real
- * coverage.
- */
+/* Windows that do not overlap are not merged. A merge rule that ignored the
+ * times would pass the test above and silently widen every window, costing
+ * receive current and, once the span cap bites, real coverage. */
 ZTEST(radiant_sched, test_disjoint_windows_are_not_merged)
 {
 	radiant_time_t t0;
@@ -591,22 +554,16 @@ ZTEST(radiant_sched, test_disjoint_windows_are_not_merged)
 }
 
 /*
- * ADAPTIVE FREQUENCY'S HALF OF THE MERGE RULE (RF-7), AND IT IS THE PRICE RATHER
- * THAN THE FEATURE.
+ * ADAPTIVE FREQUENCY'S HALF OF THE MERGE RULE (RF-7) - the price, not the
+ * feature. ADR 0005 axis 5 buys frequency escape by accepting that a channel
+ * leaving RF 57 leaves the merged window with it: "costs its own RX window,
+ * same as a second-network channel would; only nodes that opted in pay it."
+ * That cost is only paid if the scheduler REFUSES to merge across
+ * frequencies - a scheduler that merged anyway would silently drop every
+ * packet on the frequency it didn't arm.
  *
- * ADR 0005 axis 5 buys frequency escape by accepting that a channel which leaves
- * RF 57 leaves the merged window with it: "an adaptive-frequency node costs its
- * own RX window, the same as a second-network channel would. The saving is that
- * only nodes that opted in pay it." That cost is only actually paid if the
- * scheduler REFUSES to merge across frequencies - and a scheduler that merged
- * anyway would arm one window on one of the two frequencies and silently drop
- * every packet from the other, which on a bench is a sensor that stops working
- * when an unrelated node moves.
- *
- * Three channels whose windows all overlap: two on RF 57 and one on RF 26, the
- * middle of the phase's candidate set. The two on 57 still merge - the property
- * axis 5 promises to leave alone for everybody who did not opt in - and the
- * third gets a window of its own.
+ * Three overlapping channels: two on RF 57, one on RF 26. The two on 57 still
+ * merge; the third gets its own window.
  */
 ZTEST(radiant_sched, test_an_off_57_window_never_joins_the_merged_one)
 {
@@ -624,15 +581,10 @@ ZTEST(radiant_sched, test_an_off_57_window_never_joins_the_merged_one)
 	post_track(0u, open, close);
 	post_track(1u, open + 40u, close + 40u);
 
-	/*
-	 * The same overlap, on 2426 MHz - and deliberately much LONGER, for two
-	 * reasons. It overlaps the pair above, so a scheduler that ignored
-	 * frequency would fold it in; and it outlives them, so that after the
-	 * merged window closes there is still a window left to arm, which is how
-	 * "costs its own RX window" is observed rather than asserted. A short
-	 * one would simply be reported missed, which proves nothing about
-	 * frequency.
-	 */
+	/* Same overlap, on 2426 MHz, deliberately much LONGER: it overlaps the
+	 * pair above (so a frequency-blind scheduler would fold it in) and
+	 * outlives them, so "costs its own RX window" is observed, not just
+	 * asserted. */
 	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_TRACKING),
 		    &track_filter[2], 1u, open + 80u, close + 40000u);
 	r.rf_index = 26u;
@@ -678,26 +630,20 @@ ZTEST(radiant_sched, test_an_off_57_window_never_joins_the_merged_one)
 }
 
 /*
- * THE MERGE IS BOUNDED BY caps.max_addr_groups, NOT BY caps.max_filters, ON THE
- * TRACKING FORMAT - and confusing the two is the defect this test was rewritten
- * to pin.
+ * THE MERGE IS BOUNDED BY caps.max_addr_groups, NOT caps.max_filters, ON THE
+ * TRACKING FORMAT - confusing the two is the defect this test pins.
  *
- * Twelve tracked channels want the same window. On the nRF preset TWO of them
- * get it, because the eight logical addresses are one BASE0+AP0 and seven
- * BASE1+AP1..AP7, and on the 5-byte tracking address the device number is
- * inside the BASE. Eight filters is eight addresses; it is not eight device
- * numbers.
+ * Twelve tracked channels want the same window; the nRF preset serves TWO,
+ * because the eight logical addresses are one BASE0+AP0 and seven
+ * BASE1+AP1..AP7, and the tracking address's device number lives inside the
+ * BASE - eight filters is eight addresses, not eight device numbers.
  *
- * This test previously asserted eight, and passed, because the mock modelled
- * max_filters and no base at all. The scheduler duly built sets of eight, the
- * real backend refused every one of them with RADIANT_RADIO_ENOTSUP, and the
- * refusal was charged to whichever channel happened to be leading - which on a
- * bench looks like one healthy sensor failing at random.
+ * This test previously asserted eight and passed, because the mock modelled
+ * max_filters with no base at all; the real backend would have refused every
+ * arm with RADIANT_RADIO_ENOTSUP, charged to whichever channel happened to lead.
  *
- * The ten that do not fit are reported RADIANT_SCHED_DONE_MISSED rather than
- * dropped, which is the honest answer: twelve sensors whose slots coincide
- * exactly cannot all be heard at once by this part, and a scheduler that hid it
- * would turn a capacity limit into unexplained loss.
+ * The ten that do not fit are reported RADIANT_SCHED_DONE_MISSED, not dropped -
+ * the honest answer for a capacity limit rather than unexplained loss.
  */
 ZTEST(radiant_sched, test_merging_is_bounded_by_max_addr_groups_on_tracking)
 {
@@ -739,17 +685,12 @@ ZTEST(radiant_sched, test_merging_is_bounded_by_max_addr_groups_on_tracking)
 }
 
 /*
- * THE OTHER HALF OF THE SAME FACT, AND THE REASON THE FIX COSTS NOTHING WHERE
- * IT MATTERS MOST.
- *
- * On the 3-byte SEARCH format the address is [A6 C5 devnum_lo]: the group is
- * [A6 C5], every filter shares it, and the prefix is the device-number byte. So
- * eight search filters ride one window with one address group, the sweep
- * geometry is unchanged, and the group cap never fires.
- *
- * Without this test the change above reads as "merging got worse". It did not:
- * merging got correct on the one format where the hardware constrains it, and
- * stayed at eight on the one where the sweep's whole rate depends on it.
+ * THE OTHER HALF: the fix costs nothing where it matters most. On the 3-byte
+ * SEARCH format the address is [A6 C5 devnum_lo] - the group [A6 C5] is
+ * shared by every filter, and the prefix is the device-number byte - so eight
+ * search filters ride one window and the group cap never fires. Merging got
+ * correct on the format the hardware constrains and stayed at eight on the
+ * one the sweep's rate depends on.
  */
 ZTEST(radiant_sched, test_search_filters_share_one_address_group)
 {
@@ -781,15 +722,9 @@ ZTEST(radiant_sched, test_search_filters_share_one_address_group)
 	finish();
 }
 
-/*
- * THE SAME SCENARIO ON A BACKEND WITH TWO SYNC WORDS.
- *
- * This is the only test that can catch a hardcoded eight, and it catches it two
- * ways: n_filters is asserted to be 2, and finish() asserts the mock rejected
- * nothing - a request for eight filters at caps.max_filters == 2 is
- * RADIANT_RADIO_EINVAL, so a module that ignored the capability would fail here
- * even if this test's own assertion were deleted.
- */
+/* Same scenario on a backend with two sync words. The only test that can
+ * catch a hardcoded eight two ways: n_filters == 2, and finish() asserts the
+ * mock rejected nothing (eight filters at max_filters == 2 is EINVAL). */
 ZTEST(radiant_sched, test_merging_is_bounded_by_max_filters_at_two)
 {
 	radiant_time_t t0;
@@ -824,16 +759,10 @@ ZTEST(radiant_sched, test_merging_is_bounded_by_max_filters_at_two)
 	finish();
 }
 
-/*
- * A request for more addresses than the backend has matchers is reported once
- * and consumed, not retried for ever.
- *
- * radiant_search.c's sweep asks for caps.max_filters addresses at a time, so on nRF
- * it asks for eight and on RAIL for two. If it ever asks for eight on RAIL, the
- * scheduler must not loop on a request the backend will refuse every time - a
- * livelock inside a radio ISR is the worst way to report a caller's mistake,
- * and it is what fake_radio's advance budget exists to catch.
- */
+/* A request for more addresses than the backend has matchers is reported once
+ * and consumed, not retried forever - the scheduler must not loop on a
+ * request the backend will refuse every time, a livelock inside a radio ISR
+ * that fake_radio's advance budget exists to catch. */
 ZTEST(radiant_sched, test_a_request_for_more_filters_than_exist_is_reported_once)
 {
 	struct radiant_sched_rx r;
@@ -867,17 +796,11 @@ ZTEST(radiant_sched, test_a_request_for_more_filters_than_exist_is_reported_once
 	finish();
 }
 
-/*
- * A merged window's filter index is translated back into "channel c, filter i
- * of c's own array".
- *
- * This is what radiant_search.c's recovery of devnum_lo rests on: with a 3-byte
- * search address the matched byte never reaches RAM, so which filter matched IS
- * the identity of that byte. A scheduler that handed the merged window's global
- * index straight through would give the search layer the wrong device number
- * for every channel except the first, and the symptom would be a sensor that
- * pairs as a device it is not.
- */
+/* A merged window's filter index is translated back into "channel c, filter i
+ * of c's own array". radiant_search.c's devnum_lo recovery rests on this: with
+ * a 3-byte search address the matched byte never reaches RAM, so a scheduler
+ * passing the global index straight through would give every channel but the
+ * first the wrong device number. */
 ZTEST(radiant_sched, test_filter_index_is_translated_to_the_channels_own_filter)
 {
 	struct radiant_sched_rx r;
@@ -921,16 +844,10 @@ ZTEST(radiant_sched, test_filter_index_is_translated_to_the_channels_own_filter)
 	finish();
 }
 
-/*
- * A channel that opens after its neighbours joins the merge on the next commit
- * rather than a channel period later.
- *
- * Tearing down a window that has not reached its first bit of preamble costs
- * nothing, so there is no reason to make a newly-opened channel wait - and
- * without this, merging would only ever happen in the steady state where every
- * channel re-posts from the same terminal callback, which is exactly the case a
- * test arranges and the bench does not.
- */
+/* A channel that opens after its neighbours joins the merge on the next
+ * commit rather than a channel period later - tearing down a window that has
+ * not reached preamble costs nothing. Without this, merging would only ever
+ * happen in the steady state a test arranges and the bench does not. */
 ZTEST(radiant_sched, test_a_late_channel_joins_a_window_that_has_not_opened_yet)
 {
 	radiant_time_t t0;
@@ -977,19 +894,15 @@ ZTEST(radiant_sched, test_a_late_channel_joins_a_window_that_has_not_opened_yet)
  */
 
 /*
- * THIRTY-TWO CHANNELS, ALL CONTENDING FOR THE SAME INSTANT, ON THE BACKEND WITH
- * TWO MATCHERS - and every one of them gets served.
+ * THIRTY-TWO CHANNELS CONTENDING FOR THE SAME INSTANT, ON THE BACKEND WITH TWO
+ * MATCHERS - every one gets served. Worst case the module is sized for: 32 is
+ * the serial protocol's ceiling, 2 is the smallest max_filters any planned
+ * backend has, so only two per slot and thirty are turned away each round. A
+ * scheduler that always picked the lowest-numbered pending channel would
+ * starve channel 2 forever and every other test here would still pass.
  *
- * This is the worst case the module is sized for: 32 is the serial protocol's
- * ceiling and 2 is the smallest caps.max_filters any planned backend has, so
- * only two channels can be heard per slot and thirty are turned away. A
- * scheduler that always picked the lowest-numbered pending channel would serve
- * channels 0 and 1 for ever and channel 2 would never once be armed, and every
- * other test in this file would still pass.
- *
- * The channels re-post from done() at the measured 249,696 us slot period,
- * which is what radiant_channel.c will do, and it is the only way the rotation is
- * observable.
+ * Channels re-post from done() at the measured 249,696 us slot period (what
+ * radiant_channel.c will do), the only way the rotation is observable.
  */
 ZTEST(radiant_sched, test_thirty_two_contending_channels_are_all_served)
 {
@@ -1028,22 +941,18 @@ ZTEST(radiant_sched, test_thirty_two_contending_channels_are_all_served)
 }
 
 /*
- * The same thirty-two channels on the nRF preset - and the number is TWO here
- * as well, which is the point of running it both ways now.
- *
- * The two presets used to differ: RAIL two, nRF eight. That difference was an
- * artefact of the mock, not of the parts. RAIL fits two because it has two
- * runtime sync words; the nRF fits two because seven of its eight logical
+ * The same thirty-two channels on the nRF preset - also TWO here, which is
+ * the point of running it both ways. The presets used to differ (RAIL two,
+ * nRF eight) as an artefact of the mock, not the parts: RAIL fits two because
+ * it has two sync words, nRF fits two because seven of its eight logical
  * addresses share a BASE register and a tracked address carries the device
- * number inside that BASE. Same answer, different reasons, and the reasons are
- * what caps.max_filters and caps.max_addr_groups now say separately.
+ * number inside it. Same answer, different reasons - now separated as
+ * caps.max_filters and caps.max_addr_groups.
  *
- * What that costs is real and is stated rather than hidden: thirty-two tracked
- * sensors need sixteen windows per slot rather than four, so this test needs
- * the same nineteen cycles the RAIL one does. ADR 0005's "32 sensors do not
- * cost 32 windows" survives - sixteen is not thirty-two, merging still halves
- * it - but the claim as written was measured against a mock that modelled a
- * radio nobody has.
+ * The real cost: 32 tracked sensors need sixteen windows per slot, not four.
+ * ADR 0005's "32 sensors do not cost 32 windows" survives (merging still
+ * halves it) but was originally measured against a mock modelling a radio
+ * nobody has.
  */
 ZTEST(radiant_sched, test_thirty_two_tracked_channels_merge_two_at_a_time_on_nrf)
 {
@@ -1085,14 +994,11 @@ ZTEST(radiant_sched, test_thirty_two_tracked_channels_merge_two_at_a_time_on_nrf
 
 /*
  * A request that can no longer be honoured is refused by the scheduler, not
- * offered to the backend and refused there.
- *
- * caps.min_arm_lead_us is the slack budget and the HAL is explicit that a
- * backend never silently runs late - it returns RADIANT_RADIO_ETIME. So the correct
- * behaviour is not "handle ETIME"; it is "never provoke it", and the assertion
- * is that fake_radio recorded no arm call at all. The transmit boundary is
- * tested to the microsecond because a transmit's t_sync cannot be nudged: a
- * late master frame lands in the next slot, and a late acknowledgement is worse.
+ * offered to the backend and refused there. caps.min_arm_lead_us is the slack
+ * budget; the HAL never silently runs late (RADIANT_RADIO_ETIME), so the correct
+ * behaviour is "never provoke it" - fake_radio must record no arm call at
+ * all. The transmit boundary is tested to the microsecond because t_sync
+ * cannot be nudged: a late frame lands in the next slot.
  */
 ZTEST(radiant_sched, test_an_unreachable_deadline_is_refused_rather_than_run_late)
 {
@@ -1129,17 +1035,11 @@ ZTEST(radiant_sched, test_an_unreachable_deadline_is_refused_rather_than_run_lat
 	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_arm(0u)->rc);
 	zassert_equal(t.t_sync_at, fake_radio_arm(0u)->t_sync_at);
 
-	/*
-	 * AND IT WENT OUT ADDRESSED TO CHANNEL 2, not to channel 1 whose
-	 * transmit was refused a few lines above.
-	 *
-	 * This is the assertion the whole file lacked. On the nRF backend the
-	 * transmit address is TXADDRESS - an index into BASE/PREFIX registers
-	 * that some earlier operation loaded - so a scheduler that forwarded no
-	 * address would not fail here; it would emit a well-formed frame
-	 * carrying the previous channel's device number. Nothing above the HAL
-	 * would see it, and another device might accept it.
-	 */
+	/* AND IT WENT OUT ADDRESSED TO CHANNEL 2, not channel 1 whose transmit
+	 * was refused above. On the nRF backend TXADDRESS is an index into
+	 * BASE/PREFIX registers some earlier operation loaded, so a scheduler
+	 * that forwarded no address would emit a well-formed frame carrying
+	 * the previous channel's device number, invisibly. */
 	zassert_equal(5u, fake_radio_arm(0u)->addr_len,
 		      "the transmit carried no on-air address");
 	zassert_mem_equal(fake_radio_arm(0u)->addr, track_filter[2].addr, 5u,
@@ -1155,14 +1055,10 @@ ZTEST(radiant_sched, test_an_unreachable_deadline_is_refused_rather_than_run_lat
 	finish();
 }
 
-/*
- * A window that would still be open when a transmit has to be armed is
- * truncated, not abandoned and not allowed to overrun.
- *
- * There is one radio. The tail of a receive window is worth less than a frame
- * that must go out at an exact instant, so the scheduler gives up the tail -
- * and it gives up exactly enough of it, which is caps.min_arm_lead_us.
- */
+/* A window still open when a transmit must be armed is truncated, not
+ * abandoned and not allowed to overrun. One radio: the receive tail is worth
+ * less than an exact-instant transmit, so the scheduler gives up exactly
+ * caps.min_arm_lead_us of it. */
 ZTEST(radiant_sched, test_a_window_is_truncated_to_clear_a_transmit_deadline)
 {
 	struct radiant_sched_tx t;
@@ -1204,18 +1100,13 @@ ZTEST(radiant_sched, test_a_window_is_truncated_to_clear_a_transmit_deadline)
 }
 
 /*
- * A reply that falls due inside an armed window takes the radio.
- *
- * This is the turnaround, and it is the tightest deadline in the link layer: a
- * tracking channel that hears acknowledged data owes a full 8-byte frame about
- * 1.55 ms later (docs/spike-b-part2-results.md). The request arrives from
- * inside the receive callback of the window that is still armed, so nothing but
- * preemption can serve it.
- *
- * It also produces the late terminal event with no fault injection at all: the
- * aborted window's RADIANT_RADIO_STATUS_ABORTED arrives after the transmit has been
- * armed, carrying the dead operation's id, and the scheduler must recognise it
- * rather than take it for the end of the transmit.
+ * A reply that falls due inside an armed window takes the radio. This is the
+ * turnaround, the tightest deadline in the link layer: a tracking channel
+ * that hears acknowledged data owes a full 8-byte reply ~1.55 ms later
+ * (docs/spike-b-part2-results.md). The request arrives from inside the
+ * receive callback of the still-armed window, so only preemption can serve
+ * it, and it also produces a late ABORTED terminal (with no fault injection)
+ * that the scheduler must recognise rather than mistake for the transmit's end.
  */
 ZTEST(radiant_sched, test_a_reply_preempts_the_window_it_was_heard_in)
 {
@@ -1272,18 +1163,11 @@ ZTEST(radiant_sched, test_a_reply_preempts_the_window_it_was_heard_in)
 	finish();
 }
 
-/*
- * The same displacement, driven from thread context, so that the preemption
- * path itself is exercised rather than the incidental abort that replacing a
- * channel's own in-flight request performs.
- *
- * The clock is moved INTO the window first, and that is the whole point of the
- * test rather than set dressing: a window that has not opened yet is rebuilt
- * for free and nobody is told anything, while a window that is already
- * listening genuinely loses its tail and its members have to hear about it. The
- * two paths differ in what they do to the members' requests, and only one of
- * them is a preemption.
- */
+/* The same displacement, driven from thread context, to exercise the
+ * preemption path itself rather than the incidental abort of replacing a
+ * channel's own in-flight request. The clock is moved INTO the window first:
+ * an unopened window rebuilds for free, but an already-listening one loses
+ * its tail and its members must be told. */
 ZTEST(radiant_sched, test_a_transmit_deadline_displaces_an_armed_window)
 {
 	struct radiant_sched_tx t;
@@ -1328,17 +1212,10 @@ ZTEST(radiant_sched, test_a_transmit_deadline_displaces_an_armed_window)
  * ---------------------------------------------------------------------------
  */
 
-/*
- * An event carrying the id of an operation that has already ended changes
- * nothing.
- *
- * On real hardware the frame was already in the receiver's pipeline when the
- * window ended, so the event arrives after the core has moved on. The op id
- * exists for exactly this, and the failure it prevents is not a crash: it is a
- * frame routed to whichever channel happens to occupy that filter slot in the
- * window armed afterwards, and a terminal event counted twice, retiring a
- * window that is still open.
- */
+/* An event carrying the id of an already-ended operation changes nothing. On
+ * real hardware the frame was in the receiver's pipeline when the window
+ * ended, so the event arrives late; the op id exists to catch it, preventing
+ * a frame routed to the wrong channel or a terminal counted twice. */
 ZTEST(radiant_sched, test_a_dead_operations_late_event_changes_nothing)
 {
 	struct fake_radio_air air;
@@ -1397,15 +1274,11 @@ ZTEST(radiant_sched, test_a_dead_operations_late_event_changes_nothing)
  * ---------------------------------------------------------------------------
  */
 
-/*
- * RADIANT_TIME_NEVER is not a valid window edge, so "receive until I say stop" has
- * to be a chain of bounded windows that something re-arms. That something is
- * this module, and the translation lives nowhere else in radiant_core.
- *
- * The test also checks the two properties that make it a *background* scan: it
- * fills the gap ahead of a tracked window, and it gets out of the way exactly
- * when the tracked window needs the radio.
- */
+/* RADIANT_TIME_NEVER is not a valid window edge, so "receive until I say stop" is
+ * a chain of bounded windows this module re-arms (that translation lives
+ * nowhere else in radiant_core). Also checks the two properties that make it a
+ * *background* scan: it fills the gap ahead of a tracked window, and gets out
+ * of the way exactly when that window needs the radio. */
 ZTEST(radiant_sched, test_a_continuous_request_becomes_a_chain_of_bounded_windows)
 {
 	struct radiant_sched_rx r;
@@ -1466,16 +1339,11 @@ ZTEST(radiant_sched, test_a_continuous_request_becomes_a_chain_of_bounded_window
 	finish();
 }
 
-/*
- * A scan chunk is reported with the bounds it ACTUALLY got, not the ones its
- * request asked for.
- *
- * This is the whole reason armed() exists. A wildcard sweep accounts its dwell
- * in listening time, and the gap a chunk is cut to is computed here, from
- * pending work the sweep's own layer cannot see. Told only what it proposed, it
- * would credit a 60 ms chunk as the 250 ms it asked for, and "certain within one
- * sweep" would quietly become "certain within four".
- */
+/* A scan chunk is reported with the bounds it ACTUALLY got, not the ones
+ * requested - the whole reason armed() exists. A wildcard sweep credits its
+ * dwell in listening time; told only what it proposed, a 60 ms chunk would be
+ * credited as the 250 ms asked for, and "certain within one sweep" would
+ * quietly become "certain within four". */
 ZTEST(radiant_sched, test_a_scan_chunk_is_reported_with_the_bounds_it_got)
 {
 	struct radiant_sched_rx r;
@@ -1516,17 +1384,11 @@ ZTEST(radiant_sched, test_a_scan_chunk_is_reported_with_the_bounds_it_got)
 	finish();
 }
 
-/*
- * A scan chunk displaced by a tracked window that turned up after it was armed
- * is REPORTED, and the request survives it.
- *
- * Both halves matter and they pull in opposite directions. The request has to
- * survive, or a background scan would be consumed by the first tracked channel
- * to want the radio. But the chunk that was running really did stop early, and
- * an owner told nothing at all would go on believing it was listening - which
- * for a sweep crediting its dwell in listening time is how a set gets credited
- * time the radio spent somewhere else.
- */
+/* A scan chunk displaced by a tracked window that turned up after arming is
+ * REPORTED, and the request survives. Both halves pull opposite ways: the
+ * request must survive or a scan would be consumed by the first tracked
+ * channel to want the radio, but an unreported chunk would leave a
+ * dwell-crediting sweep believing it listened when it did not. */
 ZTEST(radiant_sched, test_a_displaced_scan_chunk_is_reported_and_stays_live)
 {
 	struct radiant_sched_rx r;
@@ -1605,17 +1467,11 @@ ZTEST(radiant_sched, test_cancelling_a_scan_leaves_the_radio_idle)
  * ---------------------------------------------------------------------------
  */
 
-/*
- * RADIANT_RX_STOP_ON_FIRST survives an unmerged window and is dropped from a merged
- * one.
- *
- * The HAL forbids it on a window carrying more than one filter, because more
- * than one master may transmit inside such a window; a scheduler that passed it
- * through would have its merged windows rejected outright with
- * RADIANT_RADIO_EINVAL, which finish() would also catch. The interesting half is
- * the other one: it must still be set when there was nothing to merge, or the
- * receive-current saving it exists for is silently lost.
- */
+/* RADIANT_RX_STOP_ON_FIRST survives an unmerged window and is dropped from a merged
+ * one. The HAL forbids it on multi-filter windows (more than one master may
+ * transmit), so a scheduler that passed it through would get RADIANT_RADIO_EINVAL,
+ * which finish() also catches. The other half matters too: it must still be
+ * set with nothing to merge, or the receive-current saving is lost. */
 ZTEST(radiant_sched, test_stop_on_first_survives_only_an_unmerged_window)
 {
 	struct radiant_sched_rx r;
@@ -1665,15 +1521,10 @@ ZTEST(radiant_sched, test_stop_on_first_survives_only_an_unmerged_window)
 	finish();
 }
 
-/*
- * RADIANT_RADIO_EBUSY leaves the request pending.
- *
- * The HAL says an arm from thread context races the callback that may be about
- * to consume the operation slot, that the backend resolves the race by
- * returning EBUSY, and that the core must handle it rather than assume it
- * cannot happen. Handling it means neither losing the request nor spinning on
- * it: the next commit tries again.
- */
+/* RADIANT_RADIO_EBUSY leaves the request pending. An arm from thread context can
+ * race the callback consuming the operation slot; the backend resolves it
+ * with EBUSY, and the core must neither lose the request nor spin on it -
+ * the next commit tries again. */
 ZTEST(radiant_sched, test_ebusy_leaves_the_request_for_the_next_commit)
 {
 	radiant_time_t t0;
@@ -1704,12 +1555,10 @@ ZTEST(radiant_sched, test_ebusy_leaves_the_request_for_the_next_commit)
 	finish();
 }
 
-/*
- * A backend that says it could not complete an operation ends the request
- * rather than leaving it in flight for ever. RADIANT_RADIO_STATUS_FAILED is the one
- * terminal status nothing else in the mock produces, and a scheduler that had
- * no case for it would hold the channel in flight and never schedule it again.
- */
+/* A backend reporting it could not complete an operation ends the request
+ * rather than leaving it in flight forever - a scheduler with no case for
+ * RADIANT_RADIO_STATUS_FAILED would hold the channel in flight and never
+ * schedule it again. */
 ZTEST(radiant_sched, test_a_failed_operation_ends_the_request)
 {
 	radiant_time_t t0;
@@ -1739,17 +1588,11 @@ ZTEST(radiant_sched, test_a_failed_operation_ends_the_request)
  * ---------------------------------------------------------------------------
  */
 
-/*
- * A bounded window the backend refused at the arm call is consumed and reported
- * as DENIED, never as MISSED or FAILED.
- *
- * The two counters it must not land in are the two whose meanings are already
- * spoken for: MISSED is what a channel counts eight of before it decides its
- * sensor is gone, and FAILED is the request-is-broken code. A denial is neither
- * - it is a statement about the other stack - and it is the OWNER's business
- * what to do about it. The pass must also terminate: a request left in the
- * table after a refusal is retried by the very next step, for ever.
- */
+/* A bounded window the backend refused at the arm call is consumed and
+ * reported as DENIED, never MISSED (which a channel counts eight of before
+ * deciding its sensor is gone) or FAILED (request-is-broken). A denial is a
+ * statement about the other stack, the owner's business - and the request
+ * must not be left in the table, or it retries forever. */
 ZTEST(radiant_sched, test_a_denied_arm_is_reported_as_denied_and_consumed)
 {
 	radiant_time_t t0;
@@ -1780,15 +1623,11 @@ ZTEST(radiant_sched, test_a_denied_arm_is_reported_as_denied_and_consumed)
 	finish();
 }
 
-/*
- * The same fact arriving late: accepted, then never granted.
- *
- * This is the ordinary MPSL shape - the request is placed, the other stack wins
- * the slot, and BLOCKED comes back from a cooperative thread after the window
- * should have opened. It must reach the owner as DENIED and not as ABORTED,
- * because ABORTED means the window HAD opened and was cut short, which is what
- * decides whether a scan's dwell is credited.
- */
+/* The same fact arriving late: accepted, then never granted. This is the
+ * ordinary MPSL shape - the request is placed, the other stack wins the slot,
+ * BLOCKED comes back after the window should have opened - and it must reach
+ * the owner as DENIED, not ABORTED, since ABORTED means the window HAD opened
+ * (which decides whether a scan's dwell is credited). */
 ZTEST(radiant_sched, test_a_denied_terminal_is_not_an_abort)
 {
 	radiant_time_t t0;
@@ -1817,17 +1656,12 @@ ZTEST(radiant_sched, test_a_denied_terminal_is_not_an_abort)
 	finish();
 }
 
-/*
- * A CONTINUOUS request survives a run of denials, and the pass still terminates.
- *
- * Two properties in one test because they are in tension. The request must not
- * be consumed - a background scan denied a chunk has lost nothing and wants the
- * next gap - and a request that is kept AND retried inside the same pass would
- * be offered to the same arbiter and refused again all the way to pass()'s
- * iteration bound, burning the whole budget every time the other stack is busy.
- * fake_radio's arm log is what makes the second one checkable: one refused arm
- * per commit, not thirty.
- */
+/* A CONTINUOUS request survives a run of denials, and the pass still
+ * terminates - two properties in tension. The request must not be consumed
+ * (a denied scan chunk wants the next gap), but retrying it within the same
+ * pass would burn the whole iteration budget refusing against the same
+ * arbiter. fake_radio's arm log checks the second: one refused arm per
+ * commit, not thirty. */
 ZTEST(radiant_sched, test_a_denied_scan_chunk_keeps_the_request_and_ends_the_pass)
 {
 	struct radiant_sched_rx r;
@@ -1876,31 +1710,21 @@ ZTEST(radiant_sched, test_a_denied_scan_chunk_keeps_the_request_and_ends_the_pas
 
 /*
  * A CONTINUOUS request survives the RADIO reporting ABORTED, not just a
- * preemption. This one is the twin of the denial test above and it is the case
- * that actually shipped broken.
+ * preemption - the twin of the denial test above, and the case that actually
+ * shipped broken.
  *
- * There are two ways a scan chunk stops early and they went through different
- * code. abort_armed() - the scheduler preempting itself for tracked work - has
- * always said "Paused, not ended - the request survives untouched" and skipped
- * slot_clear() for a continuous RX or an ED sweep. end_armed() is the other
- * way: the BACKEND reports RADIANT_RADIO_STATUS_ABORTED, which under the MPSL
- * gate is simply what a chunk cut short by the end of a timeslot looks like.
- * That path kept the request for DONE_OK and DONE_DENIED and dropped it for
- * DONE_ABORTED, so the same event meant "paused" down one path and "finished"
- * down the other.
+ * Two ways a scan chunk stops early went through different code: abort_armed()
+ * (scheduler preempting itself) always kept the request, but end_armed()
+ * handling a backend RADIANT_RADIO_STATUS_ABORTED (an MPSL timeslot cutting a chunk
+ * short) dropped it - the same event meant "paused" down one path and
+ * "finished" down the other. No existing test caught it: preemption tests
+ * never reach end_armed(), and every end_armed() test used OK. On the bench
+ * it caused a total wedge (0/100 packets beside a BLE advertiser, vs 406/406
+ * without) because radiant_api.c keeps its search slot bound across an
+ * ABORTED, so with the request deleted underneath it neither layer moves.
  *
- * WHY NO EXISTING TEST CAUGHT IT, which is the interesting part. Nothing in
- * 228 tests ever delivered an ABORTED terminal to a continuous request: the
- * preemption tests drive abort_armed() and never reach here, and every test
- * that drives end_armed() uses OK. On the bench it cost a total wedge - the
- * dongle heard 0 packets in 100 s beside a 100 ms BLE advertiser, against 406
- * of 406 with the advertiser off - because radiant_api.c keeps api_search_slot
- * bound across an ABORTED (it counts as "ran"), so with the request deleted
- * underneath it, one layer waits for a chunk that will never be armed and the
- * other refuses to post because it believes one already is.
- *
- * The assertion is therefore on the REQUEST SURVIVING, not on any count: the
- * wedge is a lost request, and everything downstream of it is a consequence.
+ * The assertion is on the REQUEST SURVIVING: the wedge is a lost request, and
+ * everything downstream is a consequence.
  */
 ZTEST(radiant_sched, test_an_aborted_scan_chunk_keeps_the_standing_request)
 {
@@ -1945,20 +1769,13 @@ ZTEST(radiant_sched, test_an_aborted_scan_chunk_keeps_the_standing_request)
  */
 
 /*
- * A backend that cannot arm a long window gets a short REQUEST, not a long one
- * it has to shorten behind the scheduler's back.
- *
- * This is the one that has to be got right, because the wrong version is
- * plausible and silent. `s.armed_end` is the close the scheduler ASKED for, and
- * it is what armed() reports to the window's owner and what the search layer
- * credits its dwell against. A backend that accepted a 250 ms chunk and quietly
- * ran 20 ms of it would have the sweep credit 250 ms of listening for 20 ms of
- * it - the address set advances after 8 % of its dwell, "certain within one
- * sweep" becomes false, and not one counter moves.
- *
- * fake_radio refuses an over-long window with ENOTSUP for exactly that reason,
- * and finish() asserts rc_enotsup == 0 - so a scheduler that stopped honouring
- * the cap fails the whole suite rather than this one test.
+ * A backend that cannot arm a long window gets a short REQUEST, not a long
+ * one it has to shorten behind the scheduler's back. The wrong version is
+ * plausible and silent: a backend that accepted 250 ms and quietly ran 20 ms
+ * would have the sweep credit 250 ms of listening for 20 ms of it, silently
+ * breaking "certain within one sweep". fake_radio refuses an over-long window
+ * with ENOTSUP, and finish() asserts rc_enotsup == 0, so a regression here
+ * fails the whole suite.
  */
 ZTEST(radiant_sched, test_a_capped_backend_gets_shorter_chunks_not_shortened_ones)
 {
@@ -2012,11 +1829,9 @@ ZTEST(radiant_sched, test_a_capped_backend_gets_shorter_chunks_not_shortened_one
 	fake_radio_caps_mut()->max_window_us = 0u;
 }
 
-/*
- * Zero means unbounded, and it is the answer every backend that owns the radio
- * gives. Nothing changes for them - asserted directly, because "inert unless
- * asked for" is the entire compatibility claim of this field.
- */
+/* Zero means unbounded - the answer every backend that owns the radio gives.
+ * Nothing changes for them: "inert unless asked for" is the entire
+ * compatibility claim of this field. */
 ZTEST(radiant_sched, test_an_uncapped_backend_is_completely_unaffected)
 {
 	struct radiant_sched_rx r;
@@ -2048,16 +1863,10 @@ ZTEST(radiant_sched, test_an_uncapped_backend_is_completely_unaffected)
  * ---------------------------------------------------------------------------
  */
 
-/*
- * The reserve reaches the backend, and on a merged window it is the MAXIMUM
- * over members rather than the leader's.
- *
- * Under-reserving on a merged window is the interesting failure: any of the
- * channels sharing it may be the one whose frame becomes an acknowledged-data
- * reply, so taking the leader's number would under-reserve exactly when merging
- * did its job - and the population that merges is the population of dongles
- * tracking several sensors, which is to say all of them.
- */
+/* The reserve reaches the backend, and on a merged window it is the MAXIMUM
+ * over members, not the leader's - any member sharing the window may be the
+ * one whose frame becomes an acknowledged-data reply, so taking the leader's
+ * number would under-reserve exactly when merging did its job. */
 ZTEST(radiant_sched, test_the_follow_on_reserve_reaches_the_backend)
 {
 	struct radiant_sched_rx r;
@@ -2094,15 +1903,10 @@ ZTEST(radiant_sched, test_the_follow_on_reserve_reaches_the_backend)
 	finish();
 }
 
-/*
- * CRC failures reach only the channel that asked for them, and asking is
- * per-channel even though the HAL flag is per-window.
- *
- * A 3-byte search address triggers the matcher on noise several times a second
- * on a quiet bench, so this is not a diagnostic nicety: it is what keeps
- * radiant_search.c able to rank and gate on CRC, and it is why the flag is off by
- * default.
- */
+/* CRC failures reach only the channel that asked for them, per-channel even
+ * though the HAL flag is per-window. A 3-byte search address triggers the
+ * matcher on noise several times a second on a quiet bench, so this keeps
+ * radiant_search.c able to rank/gate on CRC - why the flag is off by default. */
 ZTEST(radiant_sched, test_crc_failures_are_delivered_only_when_asked_for)
 {
 	struct radiant_sched_rx r;
@@ -2191,13 +1995,10 @@ ZTEST(radiant_sched, test_malformed_requests_are_rejected_at_the_door)
 	zassert_equal(RADIANT_RADIO_EINVAL, radiant_sched_request_tx(0u, &t),
 		      "a transmit with no body was accepted");
 
-	/*
-	 * A TRANSMIT WITH NO ADDRESS IS MALFORMED, and it is refused here rather
-	 * than passed down, because a backend handed one has no honest move
-	 * left. On nRF the address is a register index the previous operation
-	 * loaded, so the frame goes out addressed to whichever device was last
-	 * listened for - well-formed, on the air, and wrong.
-	 */
+	/* A transmit with no address is malformed and refused here rather than
+	 * passed down: on nRF the address is a register index the previous
+	 * operation loaded, so a backend handed one would emit a well-formed
+	 * frame addressed to whichever device was last listened for. */
 	tx_req_init(&t, 0u, t0 + 100000u);
 	t.addr_len = 0u;
 	zassert_equal(RADIANT_RADIO_EINVAL, radiant_sched_request_tx(0u, &t),

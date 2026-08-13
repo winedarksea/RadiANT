@@ -2,96 +2,62 @@
 /*
  * profile_rd.h - ANT+ Running Dynamics, device type 0x1E.
  *
- * Provenance: the ANT+ Running Dynamics device profile, D00001679 Rev 1.1
- * (Garmin Canada, 2016-2018), obtained under this project's adopter login and
- * supplied by Colin on 2026-08-13. Layout tables 6-8 (page 0), 6-9 (page 1),
- * 6-10 (page 16), 6-11 (page 32) and 6-12 (page 74), the channel-parameter
- * tables 5-1 through 5-5, and the RF enumeration of table 5-4 are the source of
- * every constant and every bit position here. Field semantics are transcribed;
- * no prose is copied, per docs/decisions/0002-clean-room-policy.md, which
- * permits adopter-gated profile documents in src/profiles/ and nowhere else.
- * No sdk-ant source was consulted and nothing here derives from libant.a.
- *
- * The document is marked DEPRECATED and "provided AS IS with no support from
- * the ANT team" - which is the state of every ANT+ profile since the program
- * closed on 30 June 2025, and is why docs/device-profiles.md records the
- * revision this was written from rather than "the current revision".
- *
- * ---------------------------------------------------------------------------
- * THIS FILE CONTAINS NO CRYPTOGRAPHY AND CALLS radiant_sec NOWHERE
- * ---------------------------------------------------------------------------
- * Same claim profile_hr.h makes about itself, expressed the same way: the
- * include list reaches no radiant_core header, even transitively. Unlike heart
- * rate this profile has no compat client attached, because the RadiANT additive
- * pages are allocated in the 0x78 page space (profile_compat.h) and this device
- * type's page space is a different one - see "The page numbers do not collide"
- * below.
+ * No cryptography here and no call to radiant_sec, matching profile_hr.h's
+ * claim about itself. Unlike heart rate this profile has no compat client
+ * attached: RadiANT's additive pages live in the 0x78 page space
+ * (profile_compat.h) and this device type's page space is a different one -
+ * see "The page numbers do not collide" below.
  *
  * ---------------------------------------------------------------------------
  * Three rules of this profile that are easy to get subtly wrong
  * ---------------------------------------------------------------------------
- *   THERE IS NO PAGE-CHANGE TOGGLE. Byte [0] is the whole page number, all
- *   eight bits of it. Heart rate 0x78 reserves bit 7 as the toggle and every
- *   page there appears under two byte values; nothing of the kind happens here,
- *   and a decoder that masked byte [0] with 0x7F out of habit would still work
- *   by accident on pages 0x00, 0x01, 0x10, 0x20 and 0x4A - all of which are
- *   below 0x80 - right up until the reserved range 33-63 is allocated.
+ *   NO PAGE-CHANGE TOGGLE. Byte [0] is the whole page number, all eight bits.
+ *   Heart rate 0x78 reserves bit 7 as a toggle; this profile does not, and a
+ *   decoder that masked byte [0] with 0x7F out of habit would work by
+ *   accident on pages 0x00/0x01/0x10/0x20/0x4A (all below 0x80) until the
+ *   reserved range 33-63 is allocated.
  *
- *   EVERY METRIC IS A SPLIT FIXED-POINT FIELD, AND THE FRACTIONS ARE NOT ALL
- *   THE SAME WIDTH. Cadence carries 5 fractional bits worth 1/32 strides/min;
- *   vertical oscillation carries 2 worth 1/4 mm; stance time carries 2 worth
- *   1/4 %; ground contact balance and vertical ratio carry 5 worth 1/32 %.
- *   Ground contact time and step length carry none at all. This module
- *   therefore takes and returns every value ALREADY IN ITS WIRE SCALE - see
- *   struct profile_rd_metrics - so that a caller converting from float does it
- *   once, visibly, rather than four times with three different multipliers.
+ *   EVERY METRIC IS A SPLIT FIXED-POINT FIELD WITH DIFFERENT FRACTION WIDTHS.
+ *   Cadence: 5 bits, 1/32 strides/min. Vertical oscillation: 2 bits, 1/4 mm.
+ *   Stance time: 2 bits, 1/4%. Ground contact balance and vertical ratio: 5
+ *   bits, 1/32%. Ground contact time and step length: none. This module takes
+ *   and returns every value already in its wire scale (struct
+ *   profile_rd_metrics), so a caller converting from float does it once,
+ *   visibly.
  *
- *   THE SPLIT FIELDS ARE NOT CONTIGUOUS AND NOT ALL LITTLE-ENDIAN-ISH. Ground
- *   contact time puts its THREE LOW BITS in byte [4] bits 5..7 and its eight
- *   high bits in byte [5]. Stance time's two fractional bits are split across a
- *   byte boundary, low bit first (byte [6] bit 7, then byte [7] bit 0). Ground
- *   contact balance's five fractional bits are split the same way, one bit in
- *   byte [1] bit 7 and four in byte [2] bits 0..3. Each of those is a place
- *   where a plausible reading produces a value that is wrong by a factor of
- *   two only sometimes.
+ *   THE SPLIT FIELDS ARE NOT CONTIGUOUS OR ALL LITTLE-ENDIAN-ISH. Ground
+ *   contact time: three low bits in byte [4] bits 5..7, eight high bits in
+ *   byte [5]. Stance time's two fractional bits split low-bit-first across a
+ *   byte boundary (byte [6] bit 7, byte [7] bit 0); ground contact balance's
+ *   five do the same (byte [1] bit 7, byte [2] bits 0..3). Each is a place
+ *   where a plausible reading is wrong by a factor of two only sometimes.
  *
  * ---------------------------------------------------------------------------
- * The two channel configurations, which is the part that is not a page layout
+ * The two channel configurations
  * ---------------------------------------------------------------------------
  * A standalone RD pod is one channel: device type 0x1E, RF 57 (2457 MHz),
  * period 4096 (8 Hz), transmission type 5.
  *
- * An HR-RD strap is TWO channels, and this is the fact that decides how a
- * receiver finds it. The strap's heart-rate channel is an ordinary ANT+ HRM
- * channel (device type 0x78, period 8070) and carries no running dynamics at
- * all. The running dynamics ride a SECOND channel, device type 0x1E again but
- * period 8070 and transmission type 1, on one of four permitted RF indices
- * rather than the ANT+ 57. Two things point at it:
- *
- *   - The display asks for it. Page 74 (0x4A) is sent as an acknowledged
- *     message on the HRM channel after pairing, naming the RF index, the
- *     device type and the period. A strap with no session leader opens the RD
- *     channel where it was told to.
- *   - The strap then advertises where it went, in the byte HRM page 0x04
- *     reserves as manufacturer-specific: byte [1] becomes an RF enumeration
- *     (PROFILE_RD_RF_ENUM_*), so a receiver that did NOT become session leader
- *     can still find the channel. That is why profile_hr.c writes
- *     PROFILE_COMMON_INVALID_U8 there and why this header exports
- *     profile_rd_rf_enum_index(): 0xFF is "not an RD strap, do not interpret",
- *     which is exactly what the RD document requires a receiver to assume of
- *     any value outside the enumeration.
+ * An HR-RD strap is TWO channels. The heart-rate channel (device type 0x78,
+ * period 8070) carries no running dynamics. Running dynamics ride a second
+ * channel, device type 0x1E again but period 8070 and transmission type 1, on
+ * one of four permitted RF indices rather than ANT+ 57. Two things point at
+ * it: the display's page 74 (0x4A), sent as acknowledged data on the HRM
+ * channel after pairing, names the RF index/type/period the strap should open
+ * the RD channel on; and the strap then advertises where it went in HRM page
+ * 0x04's manufacturer-specific byte [1] as an RF enumeration
+ * (PROFILE_RD_RF_ENUM_*), so a receiver that didn't become session leader can
+ * still find it. 0xFF there (profile_hr.c writes PROFILE_COMMON_INVALID_U8)
+ * means "not an RD strap, do not interpret" - profile_rd_rf_enum_index()
+ * returns 0 for that and for every value outside the enumeration alike.
  *
  * ---------------------------------------------------------------------------
  * The page numbers do not collide with the RadiANT compat pages
  * ---------------------------------------------------------------------------
- * Checked rather than assumed, because docs/device-profiles.md raised it as an
- * open question before this document was in hand. profile_compat.h allocates
- * 0x70..0x72 in the HEART RATE page space. This profile uses 0x00, 0x01, 0x10,
- * 0x20 and 0x4A in the RUNNING DYNAMICS page space, and its reserved ranges are
- * 2-15, 17-31 and 33-63 - so 0x70..0x72 is not reserved here either. The two
- * allocations are disjoint twice over: different device types, and no shared
- * number. Nothing in this file needs to defend against the compat pages, and
- * the compat layer is not attached to this profile at all.
+ * profile_compat.h allocates 0x70..0x72 in the HEART RATE page space; this
+ * profile uses 0x00, 0x01, 0x10, 0x20 and 0x4A in the RUNNING DYNAMICS page
+ * space (reserved ranges 2-15, 17-31, 33-63). Disjoint twice over - different
+ * device types, no shared number - and the compat layer is not attached here.
  */
 
 #ifndef RADIANT_PROFILE_RD_H_
@@ -110,13 +76,12 @@ extern "C" {
 #define PROFILE_RD_DEVICE_TYPE 0x1Eu
 
 /*
- * The two channel periods, in counts of 1/32768 s. Unlike a page number a
- * period is not something a receiver can skip: it has to match or the channel
- * does not open at all.
+ * The two channel periods, in counts of 1/32768 s. Unlike a page number, a
+ * period has to match or the channel does not open at all.
  *
  *   4096   8 Hz      a standalone RD pod
- *   8070   ~4.06 Hz  the RD channel of an HR-RD strap, which matches the rate
- *                    of the heart-rate channel it was opened from
+ *   8070   ~4.06 Hz  the RD channel of an HR-RD strap, matching the rate of
+ *                    the heart-rate channel it was opened from
  */
 #define PROFILE_RD_PERIOD       4096u
 #define PROFILE_RD_PERIOD_HR_RD 8070u
@@ -135,11 +100,9 @@ extern "C" {
  * The four RF indices an HR-RD strap's RD channel may use, and the enumeration
  * that names them on the wire.
  *
- * THE ENUMERATION IS NOT SORTED AND THAT IS NOT A TRANSCRIPTION ERROR: code 3
- * is 2475 MHz and code 4 is 2461 MHz. The document's own table 5-4 and its
- * restatement under page 0x04 agree with each other on that ordering, which is
- * why it is written out here as a table rather than computed. Code 0 means the
- * RD channel is not open.
+ * The enumeration is NOT sorted, and that is not a transcription error: code 3
+ * is 2475 MHz, code 4 is 2461 MHz (table 5-4 and page 0x04 agree on the
+ * ordering). Code 0 means the RD channel is not open.
  */
 #define PROFILE_RD_RF_ENUM_INVALID 0u
 #define PROFILE_RD_RF_ENUM_2403    1u
@@ -161,14 +124,12 @@ extern "C" {
 #define PROFILE_RD_PAGE_OPEN_CHANNEL   0x4Au
 
 /*
- * The invalid-value sentinels, which on this profile are ZERO for every
- * measurement and not the 0xFF/0xFFFF the common pages use. A decoder that
- * reached for the common sentinel would read "no motion detected" as a real
- * measurement on every field below.
+ * The invalid-value sentinels are ZERO for every measurement here, not the
+ * 0xFF/0xFFFF the common pages use. A decoder reaching for the common
+ * sentinel would read "no motion detected" as a real measurement.
  *
- * Step length and step count have NO invalid value: 0 mm is a legitimate
- * reading and the step count is a rollover accumulator where 0 is one of the
- * 128 values it visits.
+ * Step length and step count have NO invalid value: 0 mm is legitimate, and
+ * step count is a rollover accumulator where 0 is one of its 128 values.
  */
 #define PROFILE_RD_INVALID_CADENCE      0u
 #define PROFILE_RD_INVALID_VERTICAL_OSC 0u
@@ -176,14 +137,13 @@ extern "C" {
 #define PROFILE_RD_INVALID_STANCE       0u
 #define PROFILE_RD_INVALID_BALANCE      0u
 
-/* Percentage fields reserve 101..127 rather than leaving them undefined, so a
- * sensor clamping a computed percentage must clamp to 100 and not to the field
- * maximum. */
+/* Percentage fields reserve 101..127, so a sensor clamping a computed
+ * percentage must clamp to 100, not the field maximum. */
 #define PROFILE_RD_PERCENT_RESERVED_MIN 101u
 
 /* Session leader. 0 means "no leader assigned"; an HR-RD strap always reports
- * 0xFFFF, because session leadership is negotiated on its HRM channel with page
- * 74 instead of in this field. */
+ * 0xFFFF, since session leadership is negotiated on its HRM channel with page
+ * 74 instead. */
 #define PROFILE_RD_LEADER_NONE  0x0000u
 #define PROFILE_RD_LEADER_HR_RD 0xFFFFu
 
@@ -194,8 +154,7 @@ extern "C" {
 #define PROFILE_RD_SPEED_INVALID_FRAC 0xFFu
 
 /* The wire scales, one per fractional field, so a caller converting from
- * physical units names the multiplier from here rather than writing 32 or 4 and
- * hoping it picked the right one. */
+ * physical units names the multiplier from here. */
 #define PROFILE_RD_CADENCE_PER_STRIDE_MIN 32u /* 1/32 strides/min */
 #define PROFILE_RD_VERT_OSC_PER_MM        4u  /* 1/4 mm */
 #define PROFILE_RD_STANCE_PER_PERCENT     4u  /* 1/4 % */
@@ -215,13 +174,9 @@ extern "C" {
 #define PROFILE_RD_SPEED_MAX     4095u /* 12 bits: 4 integer + 8 fractional */
 
 /*
- * One sensor's running dynamics, every value in its wire scale.
- *
- * Wire scale rather than SI or float, for the reason the header comment gives:
- * four fractional widths in one profile is four chances to apply the wrong
- * multiplier, and the conversion is the caller's to do once. A node holding
- * millimetres converts to quarter-millimetres where it fills this struct, and
- * that line is the only place the number 4 appears in its source.
+ * One sensor's running dynamics, every value in its wire scale rather than SI
+ * or float: four fractional widths in one profile is four chances to apply
+ * the wrong multiplier, so the conversion is the caller's to do once.
  */
 struct profile_rd_metrics {
 	uint16_t cadence_32;      /* strides/min * 32; 0 = invalid/no motion */
@@ -243,15 +198,11 @@ struct profile_rd_cfg {
 	/* Common pages 80 and 81, and page 82 when the node has a battery. */
 	struct profile_common_id id;
 
-	/*
-	 * True for the RD channel of an HR-RD strap, false for a standalone
-	 * pod. Three things follow from it and no others: the session-leader
-	 * field reports 0xFFFF rather than a negotiated id, the bidirectional-
-	 * support bit is not used (the document says the bit "is only used for
-	 * Running Dynamics"), and page 0x20 is not part of this channel's
-	 * conversation. The period and transmission type are the CALLER's to
-	 * set on the channel, not this module's - nothing here opens a channel.
-	 */
+	/* True for the RD channel of an HR-RD strap, false for a standalone
+	 * pod. Follows: session-leader reports 0xFFFF rather than a negotiated
+	 * id, the bidirectional-support bit is unused, and page 0x20 is not
+	 * part of this channel's conversation. Period and transmission type
+	 * are the caller's to set - nothing here opens a channel. */
 	bool hr_rd;
 
 	/* Page 82 every N data slots; 0 means never. */
@@ -278,18 +229,15 @@ struct profile_rd {
 };
 
 /* ---------------------------------------------------------------------------
- * The page encoders
- *
- * Pure, and public, for the reason profile_hr.h gives: tools/test_ant_pages.py
- * compares per page, so a failure names the page and the field rather than the
- * byte offset of a stream. Each writes eight bytes and returns 0, or -EINVAL.
+ * The page encoders. Pure and public: tools/test_ant_pages.py compares per
+ * page, so a failure names the page and field, not a stream offset. Each
+ * writes eight bytes and returns 0, or -EINVAL.
  * ---------------------------------------------------------------------------
  */
 
 /* Page 0x00. Values above their field width are REJECTED with -EINVAL rather
- * than masked: a masked cadence is a plausible number and a receiver has no way
- * to tell it was truncated, where a sensor that refuses to encode is a bug its
- * own author finds. */
+ * than masked: a masked cadence is a plausible number no receiver can tell
+ * was truncated. */
 int profile_rd_encode_a(const struct profile_rd_metrics *m, bool bidirectional,
 			uint8_t *out);
 
@@ -320,25 +268,22 @@ int profile_rd_encode_open_channel(uint32_t leader_id_24, uint8_t rf_freq,
 				   uint16_t period, uint8_t *out);
 
 /* ---------------------------------------------------------------------------
- * The page decoders
- *
- * A dongle is a receiver first, and every field above is split across a byte
- * boundary at least once. One decoder used by both the bridge adapter and the
+ * The page decoders. One decoder used by both the bridge adapter and the
  * tests is one implementation of each split; two would be two.
  * ---------------------------------------------------------------------------
  */
 
 /* Fills `m` from a page 0x00 body and, if `bidirectional` is non-NULL, reports
  * the bidirectional-support bit. -EINVAL if byte [0] is not 0x00. Fields the
- * sensor marked invalid arrive as 0, which is the same sentinel the encoder
- * takes - so a decode/encode round trip of an all-invalid page is exact. */
+ * sensor marked invalid arrive as 0, the same sentinel the encoder takes, so
+ * a decode/encode round trip of an all-invalid page is exact. */
 int profile_rd_decode_a(const uint8_t *body, struct profile_rd_metrics *m,
 			bool *bidirectional);
 
 /* Fills the page 0x01 half of `m` and, if non-NULL, `session_leader`. The
- * struct's page 0x00 members are left ALONE rather than zeroed, so a caller may
- * decode a page 0x00 and a page 0x01 into one struct in either order and hold
- * a complete picture of the sensor. -EINVAL if byte [0] is not 0x01. */
+ * struct's page 0x00 members are left alone rather than zeroed, so a caller
+ * may decode pages 0x00 and 0x01 into one struct in either order. -EINVAL if
+ * byte [0] is not 0x01. */
 int profile_rd_decode_b(const uint8_t *body, struct profile_rd_metrics *m,
 			uint16_t *session_leader);
 
@@ -359,14 +304,9 @@ int profile_rd_decode_open_channel(const uint8_t *body, uint32_t *leader_id_24,
 
 /*
  * The RF index an HRM page 0x04 byte [1] enumeration names, or 0 for "this is
- * not an RD strap".
- *
- * 0 is returned for PROFILE_RD_RF_ENUM_INVALID and for every value outside the
- * enumeration, which are two different facts that a receiver must act on
- * identically: the document is explicit that byte [1] is manufacturer-specific
- * on a strap without running dynamics, so an unrecognised value must NOT be
- * interpreted. Returning 0 for both is what makes "do not interpret" the
- * default rather than something a caller has to remember.
+ * not an RD strap". Returned for PROFILE_RD_RF_ENUM_INVALID and for every
+ * value outside the enumeration alike, so "do not interpret" is the default
+ * rather than something a caller has to remember.
  */
 uint8_t profile_rd_rf_enum_index(uint8_t rf_enum);
 
@@ -395,10 +335,9 @@ void profile_rd_add_steps(struct profile_rd *rd, uint8_t steps);
 /*
  * A display claimed session leadership with page 0x20.
  *
- * Returns 0 if this node accepted it, -EBUSY if a different display already
- * holds it (the document's rule: a sensor with a leader does not change leader
- * on request), and -EINVAL on an id of 0 or on an HR-RD strap, whose leader is
- * negotiated with page 74 on the heart-rate channel instead.
+ * Returns 0 if accepted, -EBUSY if a different display already holds it (a
+ * sensor with a leader does not change leader on request), -EINVAL on an id
+ * of 0 or an HR-RD strap (leader negotiated via page 74 instead).
  */
 int profile_rd_claim_leader(struct profile_rd *rd, uint16_t leader_id);
 
@@ -408,11 +347,10 @@ int profile_rd_apply_speed(struct profile_rd *rd, const uint8_t *body);
 /*
  * Fill `body` with the next message and say what it was.
  *
- * The rotation is pages 0x00 and 0x01 alternating, which is the document's
- * "~2 Hz each" at the 8 Hz channel period and its "interleave page 1 with page
- * 0" on an HR-RD strap - one rotation satisfies both because both say the same
- * thing. Common pages 80 and 81 arrive on profile_sched.c's own 119/120-of-121
- * cadence, which is inside this profile's "at least once every 260 messages".
+ * The rotation is pages 0x00 and 0x01 alternating - the document's "~2 Hz
+ * each" at 8 Hz. Common pages 80/81 arrive on profile_sched.c's own
+ * 119/120-of-121 cadence, inside this profile's "at least once every 260
+ * messages".
  */
 enum profile_slot_kind profile_rd_next(struct profile_rd *rd, uint8_t *body);
 

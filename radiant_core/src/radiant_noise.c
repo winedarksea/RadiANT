@@ -61,15 +61,10 @@ static struct noise_slot *slot_for(uint8_t rf_index)
 		}
 	}
 
-	/*
-	 * Every slot belongs to another frequency.
-	 *
-	 * Dropped rather than evicted, and counted rather than dropped
-	 * silently. Evicting would let a frequency the dongle visits once
-	 * destroy the record of the one it lives on; folding the sample into
-	 * somebody else's histogram would produce a number that is a mixture of
-	 * two bands and looks exactly like a single noisy one.
-	 */
+	/* Every slot belongs to another frequency. Dropped, not evicted:
+	 * evicting would let a frequency visited once destroy the record of
+	 * the one the dongle lives on; folding it into another histogram would
+	 * mix two bands into what looks like a single noisy one. */
 	return NULL;
 }
 
@@ -91,17 +86,10 @@ void radiant_noise_note(uint8_t rf_index, int8_t dbm)
 		s->max_dbm = dbm;
 	}
 
-	/*
-	 * The out-of-range test is here and the clamp is in radiant_noise_bin().
-	 * They used to be one expression, and splitting them is what lets
-	 * radiant_chanmap.c share the binning without also inheriting these two
-	 * counters, which are this module's own accounting and mean nothing to
-	 * a map that keeps no distribution.
-	 *
-	 * Counted at the edge as well as separately: a percentile computed with
-	 * the clipped samples missing would be computed over a different
-	 * population than the one `samples` names.
-	 */
+	/* The out-of-range test is here and the clamp is in radiant_noise_bin(),
+	 * split so radiant_chanmap.c can share the binning without inheriting
+	 * these counters. Counted separately so a percentile over the clipped
+	 * samples still matches the population `samples` names. */
 	raw = (int)dbm - RADIANT_NOISE_DBM_MIN;
 	if (raw < 0) {
 		s->below_range++;
@@ -116,14 +104,10 @@ void radiant_noise_note(uint8_t rf_index, int8_t dbm)
 	s->samples++;
 }
 
-/*
- * The value at the p-th percentile, walking up from the quiet end.
- *
- * Bins are ordered from most negative dBm to least, so walking from index 0
- * walks from quietest to loudest and a low percentile is the floor. Rank is
- * the (1-based) sample this percentile names, rounded up so that p10 of ten
- * samples is the first one rather than the zeroth.
- */
+/* The value at the p-th percentile, walking up from the quiet end. Bins run
+ * quietest to loudest, so a low percentile is the floor. Rank is the
+ * (1-based) sample this percentile names, rounded up so p10 of ten samples
+ * is the first one, not the zeroth. */
 static int8_t percentile(const struct noise_slot *s, uint32_t p)
 {
 	uint32_t rank = ((s->samples * p) + 99u) / 100u;
@@ -178,9 +162,9 @@ void radiant_noise_clear(uint8_t slot)
 		return;
 	}
 
-	/* The frequency survives the clear; the distribution does not. A slot
-	 * that gave up its rf_index here would be reallocated to whichever
-	 * frequency spoke next, and the log line's identity would wander. */
+	/* The frequency survives the clear; the distribution does not. Losing
+	 * rf_index here would reallocate the slot to whichever frequency
+	 * spoke next, and the log line's identity would wander. */
 	rf_index = noise[slot].rf_index;
 	memset(&noise[slot], 0, sizeof(noise[slot]));
 	noise[slot].used = true;

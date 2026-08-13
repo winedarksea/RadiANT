@@ -1,54 +1,25 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * Compat attestation, driven end to end inside one process: the emit hooks, the
- * receive path, the verdicts and the epoch recovery of
- * docs/radiant-security.md sections 11.3 and 11.4.
+ * Compat attestation, driven end to end inside one process: emit hooks,
+ * receive path, verdicts, and epoch recovery of docs/radiant-security.md
+ * sections 11.3 and 11.4.
  *
- * Channel 0 is the sensor and channel 1 is the receiver, the same 1:N shape
- * test_sec.c uses. The clock is not fake_radio's here and not anything else's:
- * radiant_sec_compat takes every instant as an argument, so a test chooses
- * them - which is what lets a day of attestation at T = 20 s run in a
- * millisecond and lets the 65 536-boot row of the cost table be an assertion
- * rather than a paragraph.
+ * Channel 0 is the sensor, channel 1 the receiver (same 1:N shape as
+ * test_sec.c). radiant_sec_compat takes every instant as an argument, so a
+ * test can choose them - which lets a day of attestation or the 65,536-boot
+ * cost-table row run as an assertion instead of waiting real time.
  *
- * ── THE PAGE NUMBERS ARE IN THIS FILE AND NOT IN THE MODULE ────────────────
+ * radiant_sec_compat.c contains no page number; byte [0] is composed HERE from
+ * the subtype the emit hook returned, exactly as src/profiles/ will - proving
+ * the interface is usable by a profile that knows nothing about attestation
+ * beyond "put this nibble in the page byte". Values mirror
+ * tools/ant_pages.py's COMPAT_PAGE_BASE.
  *
- * radiant_sec_compat.c contains no page number, so byte [0] is composed HERE,
- * from the subtype the emit hook returned, exactly as src/profiles/ will
- * compose it. That is not a test shortcut - it is the interface, and writing
- * the test this way is what proves the interface is usable by a profile that
- * knows nothing about attestation beyond "put this nibble in the page byte".
- * The values mirror tools/ant_pages.py's COMPAT_PAGE_BASE.
- *
- * WHAT THESE TESTS ARE FOR, in one line each:
- *
- *   Tier I, the default configuration and therefore first
- *     the cadence            a page every T seconds, ~1.2% of slots
- *     loss independence      20% of EVERYTHING ELSE lost, every delivered page
- *                            still verifies. This is the entire reason the tier
- *                            exists and it is an assertion, not a paragraph
- *     the replay             a recorded page fails on the counter
- *     the skipped page       a PINNED receiver says UNVERIFIED, not CLEAR
- *
- *   Tier II, when enabled
- *     the window             an N = 8 window verifies
- *     the flipped bit        one verdict, at the attestation page, and no more
- *     the lost packet        one window unverified, the NEXT one verifies
- *
- *   Both
- *     the subtype            a Tier I and a Tier II tag over one counter value
- *                            differ, through the emit path rather than at the
- *                            primitive
- *
- *   Epoch recovery, which is what removing the epoch field has to earn
- *     the hint search        50, 1 000 and 65 536 boots stale, with the
- *                            operation count asserted against the cost table
- *     the hint collision     24 bits collide; 48 bits decide
- *     the tag search         the same set with advertise = off, which is the
- *                            path that otherwise gets written and never run
- *     the re-provision       the epoch moved BACKWARDS, and the bounded
- *                            absolute scan finds it
- *     the miss               nothing matches, and the search still ends
+ * Coverage: Tier I cadence/loss-independence/replay/skipped-page; Tier II
+ * window/flipped-bit/lost-packet; subtype separation through the emit path;
+ * epoch recovery by hint (50/1000/65536 boots stale, hint collision, tag
+ * search with advertise off, backwards re-provision, and a search that
+ * matches nothing but still terminates).
  */
 
 #include <zephyr/ztest.h>
@@ -68,21 +39,14 @@
 #define TEST_DEVNUM    0x2C41u
 #define TEST_N         8u
 
-/*
- * The page byte, composed here. 0x70 is the beacon and the nibble base of the
- * attestation claim, so an attestation page is COMPAT_PAGE_BASE | subtype -
- * the same nibble that went into the MAC'd nonce at position 9.
- */
+/* The page byte, composed here: an attestation page is COMPAT_PAGE_BASE |
+ * subtype, the same nibble that went into the MAC'd nonce at position 9. */
 #define PAGE_BASE      0x70u
 #define PAGE_MASK      0x7Fu   /* byte 0 bit 7 is a page-change toggle */
 #define DATA_PAGE      0x04u   /* a synthetic data page; no profile meaning */
 
-/*
- * An origin above 2^32 microseconds, deliberately. The module takes 64-bit
- * instants and a test that anchored at zero would pass on an implementation
- * that truncated every one of them to 32 bits - which is the same trap
- * fake_radio's clock origin exists to spring on the rest of radiant_core.
- */
+/* Origin above 2^32 us, deliberately: an implementation that truncated 64-bit
+ * instants to 32 bits would still pass at a zero-anchored test. */
 #define T_ORIGIN       ((uint64_t)0x100000000ull + 4321u)
 
 static const uint8_t compat_root[16] = {
@@ -90,16 +54,10 @@ static const uint8_t compat_root[16] = {
 	0x87, 0x96, 0xa5, 0xb4, 0xc3, 0xd2, 0xe1, 0xf0,
 };
 
-/*
- * A genuine 24-bit hint collision under the key above, found by birthday search
- * offline and pinned here.
- *
- * IT IS A REAL COLLISION AND THE TEST ASSERTS THAT FIRST. Simulating one - by
- * handing the search a hint that belongs to nobody - would test the search's
- * failure path and call it a collision, which is the opposite of the claim
- * being made: that a hint match is not a confirmation, and that the 48-bit
- * attestation tag is what settles it.
- */
+/* A genuine 24-bit hint collision under the key above, found offline by
+ * birthday search. The test asserts it's a real collision first - simulating
+ * one would test the search's failure path, not the claim that a hint match
+ * needs the 48-bit tag to confirm it. */
 #define HINT_COLLISION_DECOY 55089u
 #define HINT_COLLISION_TRUE  55171u
 
@@ -165,9 +123,8 @@ static uint64_t t_of(uint32_t slot)
 	return T_ORIGIN + (uint64_t)slot * PERIOD_US;
 }
 
-/* The subtype a receiver reads out of byte [0] - the layer above's job, done
- * here so the round trip through the page byte is part of what is asserted
- * rather than being short-circuited by the emit hook's return value. */
+/* The subtype a receiver reads out of byte [0], done here so the round trip
+ * through the page byte is asserted rather than short-circuited. */
 static uint8_t sub_of(const uint8_t *pay)
 {
 	uint8_t page = pay[0] & PAGE_MASK;
@@ -209,16 +166,10 @@ static void setup_pair(uint8_t tx_sw, uint8_t rx_sw, uint32_t tx_epoch,
 						   TEST_PERIOD));
 }
 
-/*
- * One transmitted slot, exactly as a profile would drive it:
- *
- *   ask whether this slot owes an attestation page; compose byte [0] if it
- *   does, otherwise build an ordinary data page; tell the module what actually
- *   went on the air; hand it to the receiver unless it was lost.
- *
- * `air` receives the eight bytes that went out, for the tests that care.
- * `corrupt_bit` flips one bit on the way, which is what an active injector does.
- */
+/* One transmitted slot, as a profile would drive it: ask whether it owes an
+ * attestation page, build it or an ordinary data page, tell the module what
+ * went on the air, and deliver it unless lost. `air` returns the bytes sent;
+ * `corrupt_bit` simulates an active injector. */
 static int slot_run(uint32_t slot, bool deliver, int corrupt_bit, uint8_t *air,
 		    int *rx_rc)
 {
@@ -308,12 +259,9 @@ ZTEST(sec_compat_stream, test_tier1_emits_at_T_and_verifies_on_receipt)
 		      "expected one page per %u s interval over 500 slots, got "
 		      "%u", (unsigned)TEST_T_S, emitted);
 
-	/*
-	 * THE COMPATIBILITY CLAIM, AS ARITHMETIC. 1.2% of slots is what makes
-	 * the cost of authentication smaller than the 1.65% ANT+ itself spends
-	 * on common pages 80 and 81 - the sentence the whole tier rests on - so
-	 * the ceiling is asserted rather than described.
-	 */
+	/* The compatibility claim as arithmetic: 1.2% of slots keeps
+	 * authentication cheaper than the 1.65% ANT+ itself spends on common
+	 * pages 80/81. */
 	zassert_true(emitted * 100u <= 500u * 2u,
 		     "Tier I took %u of 500 slots; the claim is ~1.2%%",
 		     emitted);
@@ -327,19 +275,10 @@ ZTEST(sec_compat_stream, test_tier1_emits_at_T_and_verifies_on_receipt)
 
 ZTEST(sec_compat_stream, test_every_delivered_tier1_page_verifies_through_loss)
 {
-	/*
-	 * THE ASSERTION THIS TIER EXISTS FOR.
-	 *
-	 * The tag covers no payload, so nothing outside the page can break it:
-	 * verification rate equals PAGE DELIVERY rate, independently of the
-	 * interval and independently of what else was lost. A window CMAC
-	 * cannot have that property at any length, and it is the reason the
-	 * cheap tier is the one that is on by default.
-	 *
-	 * 20% loss is fifty times the characterised ~0.4% bench floor. If a
-	 * single delivered page failed to verify here, the tier would be a
-	 * window MAC wearing a different name.
-	 */
+	/* The tag covers no payload, so verification rate equals PAGE DELIVERY
+	 * rate regardless of what else was lost - a property no window CMAC has,
+	 * and why this cheap tier is on by default. 20% loss here is fifty
+	 * times the ~0.4% bench floor. */
 	struct radiant_sec_compat_stats st;
 	uint32_t                        emitted = 0u;
 	uint32_t                        lost = 0u;
@@ -349,9 +288,8 @@ ZTEST(sec_compat_stream, test_every_delivered_tier1_page_verifies_through_loss)
 	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_I, RADIANT_SEC_COMPAT_SW_TIER_I,
 		   77u, 77u);
 
-	/* The loop is written out rather than going through slot_run(), because
-	 * whether to drop depends on what the emit hook returned and that is
-	 * only known after asking it. */
+	/* Written out rather than via slot_run(), since whether to drop depends
+	 * on what the emit hook returned. */
 	for (i = 0u; i < 500u; i++) {
 		uint8_t  pay[RADIANT_SEC_COMPAT_MSG_BYTES];
 		uint8_t  body[RADIANT_SEC_COMPAT_BODY_BYTES];
@@ -375,12 +313,9 @@ ZTEST(sec_compat_stream, test_every_delivered_tier1_page_verifies_through_loss)
 			      radiant_sec_compat_tx_sent(TX_CH, pay,
 							 sizeof(pay)));
 
-		/* EVERYTHING ELSE is dropped at 20%. The attestation pages
-		 * themselves are delivered, because the claim under test is
-		 * about DELIVERED pages: at the same 20% one page in five would
-		 * simply not arrive, which is the "verification rate equals
-		 * page delivery rate" half of the same sentence and needs no
-		 * cryptography to demonstrate. */
+		/* Everything else is dropped at 20%; attestation pages themselves
+		 * are always delivered since the claim under test is about
+		 * delivered pages, not raw drop rate. */
 		if (sub == 0 && drop) {
 			lost++;
 			continue;
@@ -431,11 +366,8 @@ ZTEST(sec_compat_stream, test_a_replayed_tier1_page_is_rejected_by_the_counter)
 	}
 	zassert_true(have, "no Tier I page was emitted at all");
 
-	/*
-	 * The recording, replayed later. Its tag is perfectly valid - that is
-	 * what makes replay the interesting attack on a tag that covers no
-	 * payload - and the counter is what makes it worthless.
-	 */
+	/* The recording, replayed later. Its tag is perfectly valid - the
+	 * counter is what makes the replay worthless. */
 	zassert_equal(RADIANT_SEC_EREPLAY,
 		      radiant_sec_compat_rx(RX_CH, sub_of(captured), captured,
 					    sizeof(captured), t_of(300u)),
@@ -452,13 +384,10 @@ ZTEST(sec_compat_stream, test_a_replayed_tier1_page_is_rejected_by_the_counter)
 
 ZTEST(sec_compat_stream, test_a_skipped_page_is_unverified_on_a_pinned_receiver)
 {
-	/*
-	 * DOWNGRADE PROTECTION IS RECEIVER-SIDE, and this is the whole of it.
-	 * Strip the attestation off the air and a naive receiver falls back to
-	 * clear and calls that normal; a receiver that has enrolled this sensor
-	 * pins it, and a stream with no attestation in it reads UNVERIFIED.
-	 * CLEAR keeps meaning "no key here".
-	 */
+	/* Downgrade protection is receiver-side: a naive receiver falls back to
+	 * clear if attestation is stripped off the air, but a receiver that
+	 * enrolled this sensor pins it, so a stream with no attestation reads
+	 * UNVERIFIED. CLEAR keeps meaning "no key here". */
 	const uint8_t pinned = RADIANT_SEC_COMPAT_SW_TIER_I |
 			       RADIANT_SEC_COMPAT_SW_PIN;
 	uint32_t      i;
@@ -494,11 +423,9 @@ ZTEST(sec_compat_stream, test_a_skipped_page_is_unverified_on_a_pinned_receiver)
 							t_first_page + 1000u),
 		      NULL);
 
-	/*
-	 * One whole interval of slack and no more: a single lost page at the
-	 * ~0.4% floor is ordinary and must not un-pin a stream, and two
-	 * consecutive misses are ~1.6e-5 and are a signal.
-	 */
+	/* One interval of slack and no more: a single lost page at the ~0.4%
+	 * floor is ordinary, but two consecutive misses (~1.6e-5) are a
+	 * signal. */
 	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
 		      radiant_sec_compat_stream_verdict(
 			      RX_CH, t_first_page +
@@ -512,11 +439,8 @@ ZTEST(sec_compat_stream, test_a_skipped_page_is_unverified_on_a_pinned_receiver)
 		      "a skipped attestation page read as anything but "
 		      "UNVERIFIED. CLEAR here would be the downgrade");
 
-	/*
-	 * And the other half of the claim: UNPINNED, the same silence is CLEAR.
-	 * If both answers were UNVERIFIED the distinction would be decorative,
-	 * and CLEAR would have stopped meaning "no key here".
-	 */
+	/* The other half of the claim: unpinned, the same silence is CLEAR, not
+	 * UNVERIFIED - otherwise the distinction is decorative. */
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_configure(RX_CH,
 						   RADIANT_SEC_COMPAT_SW_TIER_I,
@@ -537,9 +461,8 @@ ZTEST(sec_compat_stream, test_an_n8_window_verifies)
 
 	setup_pair(BOTH_TIERS, BOTH_TIERS, 55u, 55u);
 
-	/* Three windows of eight transmitted messages. Unlike the spread MAC
-	 * there is no one-window tag lag here: the tag rides in the window it
-	 * covers, so the first window a receiver hears is judged. */
+	/* Three windows of eight. Unlike the spread MAC, no one-window tag lag:
+	 * the tag rides in the window it covers. */
 	for (i = 0u; i < 24u; i++) {
 		(void)slot_at(i, true);
 	}
@@ -564,16 +487,13 @@ ZTEST(sec_compat_stream, test_a_flipped_bit_lands_once_at_the_attestation_page)
 
 	setup_pair(BOTH_TIERS, BOTH_TIERS, 56u, 56u);
 
-	/* One flipped payload bit in slot 3, which is inside window 0. */
+	/* One flipped payload bit in slot 3, inside window 0. */
 	for (i = 0u; i < 7u; i++) {
 		(void)slot_run(i, true, (i == 3u) ? (4 * 8 + 2) : -1, NULL, NULL);
 	}
 
-	/*
-	 * NOTHING HAS BEEN SAID YET, and that is the tier's cost rather than a
-	 * bug: a window CMAC cannot be judged until the window closes, which is
-	 * N-1 messages of latency and the reason this tier is off by default.
-	 */
+	/* Nothing said yet - a window CMAC can't be judged until it closes
+	 * (N-1 messages of latency), the reason this tier is off by default. */
 	before_close = verdicts(RADIANT_SEC_COMPAT_SUBTYPE_TIER_II,
 				RADIANT_SEC_VERDICT_UNVERIFIED) +
 		       verdicts(RADIANT_SEC_COMPAT_SUBTYPE_TIER_II,
@@ -606,9 +526,8 @@ ZTEST(sec_compat_stream, test_a_dropped_packet_costs_one_window_and_no_more)
 
 	setup_pair(BOTH_TIERS, BOTH_TIERS, 57u, 57u);
 
-	/* Drop slot 3, inside window 0. At a measured ~0.4% floor this is the
-	 * ordinary case, not an exotic one - and it is the honest regression a
-	 * window MAC has and the spread tag does not. */
+	/* Drop slot 3, inside window 0 - ordinary at the ~0.4% bench floor, and
+	 * the honest regression a window MAC has that the spread tag doesn't. */
 	for (i = 0u; i < 24u; i++) {
 		(void)slot_at(i, i != 3u);
 	}
@@ -632,14 +551,10 @@ ZTEST(sec_compat_stream, test_a_dropped_packet_costs_one_window_and_no_more)
 
 ZTEST(sec_compat_stream, test_the_subtype_reaches_the_nonce_through_the_emit_path)
 {
-	/*
-	 * test_sec_compat.c asserts this at the primitive, by building two
-	 * nonce blocks. This asserts it END TO END: the two tiers' first tags
-	 * of an epoch are both over counter value 0 - interval 0 and window 0 -
-	 * under one epoch and one device number, so if the subtype reached only
-	 * the page byte the two tags would be interchangeable and a Tier II tag
-	 * would replay as a Tier I one.
-	 */
+	/* test_sec_compat.c asserts this at the primitive; this asserts it end
+	 * to end. Both tiers' first tags of an epoch are over counter value 0,
+	 * so if the subtype reached only the page byte the tags would be
+	 * interchangeable. */
 	uint8_t tier1_air[RADIANT_SEC_COMPAT_MSG_BYTES];
 	uint8_t tier2_air[RADIANT_SEC_COMPAT_MSG_BYTES];
 	uint8_t forged[RADIANT_SEC_COMPAT_MSG_BYTES];
@@ -688,11 +603,7 @@ ZTEST(sec_compat_stream, test_the_subtype_reaches_the_nonce_through_the_emit_pat
 
 /* ═══ Occasional contact: recovering an epoch nobody broadcasts ══════════ */
 
-/*
- * The bound, as one expression, so a test cannot assert a number the header
- * does not stand behind: every phase is bounded and `ops` counts across all
- * three.
- */
+/* Every recovery phase is bounded; `ops` counts across all three. */
 #define OPS_CEILING (RADIANT_SEC_COMPAT_EPOCH_FORWARD + 1u +		\
 		     RADIANT_SEC_COMPAT_EPOCH_BACKWARD +		\
 		     RADIANT_SEC_COMPAT_EPOCH_SCAN + 1u)
@@ -737,13 +648,9 @@ static void recover_by_hint(uint32_t epoch, uint32_t staleness)
 		      epoch);
 	zassert_equal(RADIANT_SEC_COMPAT_PATH_FORWARD, path, NULL);
 
-	/*
-	 * THE COST TABLE, AS AN ASSERTION. docs/radiant-security.md section
-	 * 11.3 quotes 50 / 1 000 / 65 536 CMAC operations; the search tries
-	 * `last_seen` itself first, because a sensor that has not rebooted
-	 * since is the common case and not an edge case, so the number is one
-	 * higher and that off-by-one is stated rather than rounded away.
-	 */
+	/* docs/radiant-security.md section 11.3's cost table: the search tries
+	 * `last_seen` itself first (the common case), so the op count is one
+	 * higher than the staleness. */
 	zassert_equal(staleness + 1u, ops,
 		      "%u boots behind cost %u operations, not %u", staleness,
 		      ops, staleness + 1u);
@@ -832,13 +739,9 @@ ZTEST(sec_compat_stream, test_a_hint_collision_is_settled_by_the_48_bit_tag)
 
 /* ── advertise = off: no hint to search against ─────────────────────────── */
 
-/*
- * The path that otherwise gets written and never exercised. With no beacon
- * there is nothing to match, so candidate epochs are trial-verified against the
- * attestation tag itself: one derivation and one block per candidate for
- * Tier I, N blocks for Tier II. An advertise-off node is slower to re-acquire,
- * not undiscoverable to a keyholder.
- */
+/* With no beacon to match against, candidate epochs are trial-verified against
+ * the attestation tag itself: one block/candidate for Tier I, N for Tier II.
+ * Slower to re-acquire, not undiscoverable. */
 static void recover_by_tier1_tag(uint32_t epoch, uint32_t staleness)
 {
 	uint8_t  air[RADIANT_SEC_COMPAT_MSG_BYTES];
@@ -890,13 +793,8 @@ ZTEST(sec_compat_stream, test_advertise_off_recovers_65536_boots_behind)
 
 ZTEST(sec_compat_stream, test_advertise_off_recovers_against_a_window_tag)
 {
-	/*
-	 * The same path against Tier II, which costs N blocks per candidate
-	 * rather than one. Worth its own test because the two tags differ in
-	 * what they cover: this one has to be handed the covered messages as
-	 * well, and a receiver that had them in the wrong order would recover
-	 * nothing.
-	 */
+	/* Same path against Tier II (N blocks/candidate, not one). Needs its own
+	 * test since it must be handed the covered messages too, in order. */
 	const uint32_t epoch = 300000u;
 	const uint32_t staleness = 50u;
 	uint8_t        covered[TEST_N - 1u][RADIANT_SEC_COMPAT_MSG_BYTES];
@@ -929,14 +827,10 @@ ZTEST(sec_compat_stream, test_advertise_off_recovers_against_a_window_tag)
 
 ZTEST(sec_compat_stream, test_a_re_provisioned_sensor_is_found_by_the_scan)
 {
-	/*
-	 * The epoch MOVED BACKWARDS. For a hostless strap the epoch is the boot
-	 * counter, so a re-provisioned one is at a small number again and a
-	 * forward search from where this receiver last saw it can never
-	 * succeed. The bounded absolute scan is what answers, and asserting
-	 * WHICH PHASE answered is the point: a search that quietly ran forever
-	 * would also produce the right epoch eventually.
-	 */
+	/* The epoch moved backwards: for a hostless strap the epoch is the boot
+	 * counter, so re-provisioning resets it low and a forward search can
+	 * never succeed. Asserting WHICH PHASE answered matters - an unbounded
+	 * search would also eventually find it. */
 	const uint32_t last_seen = 5000u;
 	const uint32_t reset_to = 3u;
 	uint8_t        hint[RADIANT_SEC_COMPAT_HINT_BYTES];
@@ -975,22 +869,12 @@ ZTEST(sec_compat_stream, test_a_re_provisioned_sensor_is_found_by_the_scan)
 
 ZTEST(sec_compat_stream, test_a_search_that_matches_nothing_still_ends)
 {
-	/*
-	 * The claim that makes every number above safe to run in a receiver's
-	 * event thread: not "the search finds it", but "the search ENDS".
-	 *
-	 * `last_seen` sits four below the top of the counter, which does two
-	 * things at once. It exercises the overflow guard - a forward search
-	 * from 0xFFFFFFFC must stop at 0xFFFFFFFF rather than wrapping to zero
-	 * and walking the whole space again - and it makes this test cost one
-	 * scan rather than two, which matters because every operation here is a
-	 * real CMAC. The forward phase's own ceiling is asserted exactly by the
-	 * re-provision test above, which exhausts it.
-	 *
-	 * The sensor's epoch is above the absolute scan's ceiling and below the
-	 * backward probe, so no phase can match and the answer is a refusal at
-	 * a stated cost rather than a receiver that never comes back.
-	 */
+	/* The claim that makes every number above safe in a receiver's event
+	 * thread: the search ENDS, even on a miss. `last_seen` sits four below
+	 * the counter's top, exercising the overflow guard (forward search must
+	 * stop at 0xFFFFFFFF, not wrap) at the cost of one scan instead of two.
+	 * The target epoch is unreachable by any phase, so the answer is a
+	 * bounded refusal. */
 	const uint32_t last_seen = 0xFFFFFFFCu;
 	const uint32_t unreachable = 150000u;
 	const uint32_t expect_ops = 4u + RADIANT_SEC_COMPAT_EPOCH_BACKWARD +

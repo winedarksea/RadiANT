@@ -129,6 +129,9 @@ ANT_PAGES_TYPES = [
     ("BSC_CADENCE_DEVICE_TYPE", "BSC_CADENCE_PERIOD"),
     ("BSC_COMBINED_DEVICE_TYPE", "BSC_COMBINED_PERIOD"),
     ("HRM_DEVICE_TYPE", "HRM_PERIOD"),
+    ("RD_DEVICE_TYPE", "RD_PERIOD"),
+    ("TRK_DEVICE_TYPE", "TRK_PERIOD"),
+    ("CTRL_DEVICE_TYPE", "CTRL_PERIOD"),
     # The profile device types. 0x60 is absent from this list on purpose - its
     # period is per-node and announced in the descriptor, so there is no number
     # to agree on. A profile type FIXES a period, which is most of what a
@@ -147,6 +150,9 @@ ANT_PAGES_TYPES = [
 ANT_PAGES_PERIOD_SETS = [
     ("BPWR_DEVICE_TYPE", "BPWR_PERIOD", "BPWR_PERIODS"),
     ("HRM_DEVICE_TYPE", "HRM_PERIOD", "HRM_PERIODS"),
+    ("RD_DEVICE_TYPE", "RD_PERIOD", "RD_PERIODS"),
+    ("TRK_DEVICE_TYPE", "TRK_PERIOD", "TRK_PERIODS"),
+    ("CTRL_DEVICE_TYPE", "CTRL_PERIOD", "CTRL_PERIODS"),
 ]
 
 

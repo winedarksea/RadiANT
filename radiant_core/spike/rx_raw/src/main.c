@@ -2,83 +2,47 @@
 /*
  * Spike A - rx_raw: can a bare nRF RADIO hear a real ANT+ broadcast?
  *
- * Provenance: clean-room. Written from
- *   - docs/ant-radio-link.md (the frame layout, the CRC parameters, the
- *     register predictions, and the two facts this program exists to test),
- *   - the public Nordic MDK headers shipped with NCS
- *     (modules/hal/nordic/nrfx/bsp/stable/mdk/nrf54l15_types.h) and the
- *     nRF54L15/nRF52840 product specifications for register semantics,
- *   - Zephyr's public clock-control API for starting the HFXO.
- * Nothing here derives from sdk-ant, from libant.a, or from any adopter-gated
- * ANT+ device profile document. See docs/decisions/0002-clean-room-policy.md.
+ * Clean-room: written from docs/ant-radio-link.md (frame layout, CRC params,
+ * register predictions), the public Nordic MDK headers/product specs, and
+ * Zephyr's clock-control API. Nothing derives from sdk-ant, libant.a, or any
+ * ANT+ profile doc. See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * What this program is for
- * ---------------------------------------------------------------------------
- * The whole RadiANT plan rests on one claim: the nRF RADIO can be configured to
- * put a byte-exact ANT frame on the air, and to take one off it, with no
- * software in the bit path. docs/ant-radio-link.md states that claim as a
- * register mapping and marks it a *prediction*. This program's only job is to
- * try to falsify it cheaply, before four months are spent assuming it.
+ * docs/ant-radio-link.md predicts a register mapping that lets the nRF RADIO
+ * hear/send a byte-exact ANT frame with no software in the bit path. This
+ * program tries to falsify that cheaply. It sweeps the two documented details
+ * that are easy to get backwards - address bit-reversal into BASE/PREFIX, and
+ * which end of BASE goes out first - and reports which combination, if any,
+ * produces CRC-valid frames. Every phase prints its counters regardless of
+ * outcome; hearing nothing is as much a result as hearing everything.
  *
- * It does not assume the mapping is right. It sweeps the plausible readings of
- * the two documented details that are easy to get backwards - whether address
- * bytes must be bit-reversed on their way into BASE/PREFIX, and which end of
- * BASE goes out first - and reports which one, if any, produces CRC-valid
- * frames. A configuration that hears nothing is as much a result as one that
- * hears everything, which is why every phase prints its counters whether or not
- * it succeeded.
- *
- * ---------------------------------------------------------------------------
- * The five phases
- * ---------------------------------------------------------------------------
- *   A  Address-order sweep. Eight permutations of {bit-reversal} x {which end
- *      of BASE is first on air} x {prefix first or last}, all with a 5-byte
- *      address and a *static* 10-byte body. Static length is deliberate: it
- *      makes phase A independent of whether the length byte is a length byte
- *      at all, so one unknown is resolved at a time.
- *
- *   B  Length-field configuration, on whichever address order won phase A.
- *      L0 is the prediction - S0LEN=1, LFLEN=8, CRCINC=1, so the on-air 0x0A
- *      is parsed as "8 payload + 2 CRC". L1 is the documented fallback -
- *      PCNF0=0, STATLEN=10 - which is identical on air and cannot fail for a
- *      reason CRCINC could. If L0 works, CRCINC behaves and the mapping stands
- *      as written.
- *
- *      HISTORY, and the answer is in: byte 3 is a CONTROL byte of six
- *      independent fields, not a length. L0 works only because everything this
- *      spike heard was a broadcast; it is a broadcast-only receiver and L1 is
- *      the required form for receive and transmit alike. See
+ * Five phases, repeating forever (so any capture window sees a full cycle):
+ *   A  Address-order sweep: 8 permutations of {bit-reversal} x {which end of
+ *      BASE is first on air} x {prefix first/last}, 5-byte address, static
+ *      10-byte body. Static length isolates the address question from the
+ *      length-field question.
+ *   B  Length-field config on phase A's winner. L0 is the prediction
+ *      (S0LEN=1, LFLEN=8, CRCINC=1); L1 is the documented fallback (PCNF0=0,
+ *      STATLEN=10), identical on air but immune to a CRCINC failure mode.
+ *      Resolved: byte 3 is a 6-field CONTROL byte, not a length. L0 only
+ *      worked because this spike only ever heard broadcasts - L1 is the
+ *      required form for receive and transmit alike. See
  *      docs/spike-b-results.md and docs/spike-b-part2-results.md.
+ *   C  Search config: 3-byte on-air address [A6 C5 devnum_lo] + 12-byte
+ *      static body, putting devnum_hi/device type/trans type in RAM so they
+ *      can be read rather than merely matched (makes the pass criterion
+ *      non-circular).
+ *   D  Measurement: 60 s tracking then 60 s search, counting CRC-valid frames
+ *      and checking every decoded field against tools/ant_scan.py's reading.
+ *   E  Preamble-as-address (docs/ant-radio-link.md): BALEN=2, address
+ *      [55 A6 C5], matches every ANT+ packet with no sweep. The preamble
+ *      isn't covered by ANT's CRC, so SKIPADDR=Skip with CRCINIT preloaded to
+ *      the state after A6 C5 (0x233E) - itself a prediction, so phase E tests
+ *      two things at once.
  *
- *   C  Search configuration. A 3-byte on-air address [A6 C5 devnum_lo] and a
- *      12-byte static body, which puts devnum_hi, device type and transmission
- *      type in RAM where they can be *read* rather than merely matched. This is
- *      what makes the pass criterion non-circular: a 5-byte address match
- *      proves those bytes were on the air, but phase C prints them.
- *
- *   D  Measurement. 60 s tracking, then 60 s search, counting CRC-valid frames
- *      and checking every decoded field against the ground truth that
- *      tools/ant_scan.py reported for this transmitter.
- *
- *   E  The preamble-as-address experiment from docs/ant-radio-link.md: BALEN=2
- *      with the on-air address [55 A6 C5], matching every ANT+ packet in one
- *      window with no sweep. It needs a different CRC setup - the preamble is
- *      *not* covered by ANT's CRC, so SKIPADDR=Skip with CRCINIT preloaded to
- *      the state after A6 C5 (0x233E). That constant is itself a prediction
- *      from the same document, so phase E tests two things at once.
- *
- * The whole sequence then repeats, so a capture started at any moment gets a
- * complete cycle, and two cycles are a reproducibility check for free.
- *
- * ---------------------------------------------------------------------------
- * Why it polls instead of using the RADIO interrupt
- * ---------------------------------------------------------------------------
- * A spike wants to be obviously correct rather than fast. The transmitter runs
- * at 4 Hz, the SHORTS chain (READY_START | END_START) keeps the receiver armed
- * with no software involvement between packets, and the only thing the CPU has
- * to do is notice EVENTS_END and copy the buffer before the next frame lands
- * 250 ms later. An interrupt would add a concurrency question and answer none.
+ * Polls rather than using the RADIO interrupt: SHORTS (READY_START |
+ * END_START) keeps the receiver armed between packets, so the CPU only needs
+ * to notice EVENTS_END and copy the buffer before the next frame lands 250 ms
+ * later (4 Hz transmitter). An interrupt would add concurrency for no benefit.
  */
 
 #include <string.h>
@@ -95,21 +59,14 @@
 #include <hal/nrf_power.h>
 #endif
 
-/* This program pokes RADIO registers directly. Anything else that owns the
- * radio - a Bluetooth controller, an MPSL timeslot session - would silently
- * reprogram them underneath it and the results would be noise. Loud beats
- * silent. */
+/* This program pokes RADIO registers directly; anything else that owns the
+ * radio (BT controller, MPSL timeslot) would silently reprogram them. */
 BUILD_ASSERT(!IS_ENABLED(CONFIG_BT), "Spike A owns the RADIO; CONFIG_BT must be off");
 
-/* ---------------------------------------------------------------------------
- * Ground truth - what the transmitter on this bench actually is.
- *
- * These are not guesses. tools/ant_scan.py was run against a second board while
- * tools/ant_sim.py drove the Feather as an ANT+ master, and it reported
- * "#14871 - power meter". The transmission type comes from ant_sim.py's own
- * configuration line. Override at build time if the bench changes.
- * ---------------------------------------------------------------------------
- */
+/* Ground truth for the bench transmitter: tools/ant_scan.py reported
+ * "#14871 - power meter" while tools/ant_sim.py drove the Feather as an
+ * ANT+ master. Transmission type comes from ant_sim.py's config. Override
+ * at build time if the bench changes. */
 #ifndef SPIKE_DEVNUM
 #define SPIKE_DEVNUM   14871u   /* 0x3A17 */
 #endif
@@ -147,10 +104,9 @@ static uint8_t rx_buf[RX_BUF_LEN] __aligned(4);
  * ---------------------------------------------------------------------------
  */
 
-/* Reverse the bits of one byte. docs/ant-radio-link.md predicts every address
- * byte needs this on the way into BASE/PREFIX, because the address is emitted
- * least-significant-bit first whatever PCNF1.ENDIAN says. Phase A is the test:
- * half the permutations apply it and half do not. */
+/* docs/ant-radio-link.md predicts every address byte needs this before
+ * BASE/PREFIX, since the address is emitted LSB-first regardless of
+ * PCNF1.ENDIAN. Phase A tests it: half the permutations apply it. */
 static uint8_t rev8(uint8_t b)
 {
 	b = (uint8_t)(((b & 0xF0u) >> 4) | ((b & 0x0Fu) << 4));
@@ -160,9 +116,8 @@ static uint8_t rev8(uint8_t b)
 }
 
 /* CRC-16/CCITT-FALSE: width 16, poly 0x1021, no reflection, no final XOR.
- * The initial value is a parameter because ANT's CRC chains - preloading the
- * state after A6 C5 is what phase E and the EFR32 notes in docs/backends.md
- * both depend on. */
+ * init is a parameter because ANT's CRC chains - phase E preloads the state
+ * after A6 C5 (see docs/backends.md EFR32 notes). */
 static uint16_t crc16_ccitt_false(const uint8_t *p, size_t n, uint16_t init)
 {
 	uint16_t crc = init;
@@ -190,22 +145,18 @@ static void hex_dump(const uint8_t *p, size_t n)
  */
 struct rx_cfg {
 	const char *name;
-	/* The on-air address, first byte first. This is the invariant the whole
-	 * sweep is trying to produce; everything below is register arithmetic
-	 * that may or may not produce it. */
+	/* On-air address, first byte first - the invariant the sweep is trying
+	 * to produce; everything below is register arithmetic that may or may
+	 * not produce it. */
 	uint8_t addr[5];
 	uint8_t addr_len;      /* 3 or 5; BALEN = addr_len - 1 */
 
 	bool bitrev;           /* bit-reverse each address byte into the registers */
-	/* Two independent questions about BASE0, which is why they are two flags:
-	 *   base_reverse      - does the first base byte on air sit in the lowest
-	 *                       used register byte, or the highest?
-	 *   base_top_aligned  - when BALEN < 4, are the used bytes the low ones or
-	 *                       the high ones? ("Truncated from the least
-	 *                       significant byte" is the documented wording, and
-	 *                       which end that is depends on the answer above.)
-	 * With BALEN = 4 the second flag has no effect, so phase A only sweeps the
-	 * first; the pair only separates once a 3-byte address is in play. */
+	/* base_reverse: does the first base byte on air sit in the lowest or
+	 * highest used register byte?
+	 * base_top_aligned: when BALEN < 4, are the used bytes the low ones or
+	 * high ones? No effect at BALEN=4, so phase A sweeps only base_reverse;
+	 * the pair separates once a 3-byte address is in play (phase C). */
 	bool base_reverse;
 	bool base_top_aligned;
 	bool prefix_first;     /* hardware emits PREFIX before BASE, not after */
@@ -271,15 +222,10 @@ static void radio_apply(const struct rx_cfg *c, uint32_t *out_base,
 		prefix = rev8(prefix);
 	}
 
-	/* Pack the base bytes. base[0] is the first of them on the air.
-	 *
-	 * The offset is where the used window of the register starts, and the
-	 * index within it is either forwards or reversed. Writing it as one
-	 * expression rather than four cases is the only way the BALEN=4 and
-	 * BALEN=2 cases stay provably consistent with each other, which matters:
-	 * the whole point of phase C is to carry phase A's answer over to a
-	 * shorter address without quietly changing a second thing at the same
-	 * time. */
+	/* base[0] is first on air. offset is where the used register window
+	 * starts; one expression (not four cases) keeps BALEN=4 and BALEN=2
+	 * consistent, which matters since phase C carries phase A's answer to
+	 * a shorter address without changing anything else. */
 	{
 		const uint8_t offset = c->base_top_aligned ? (uint8_t)(4u - balen) : 0u;
 
@@ -371,15 +317,11 @@ static void radio_start_rx(void)
  * ---------------------------------------------------------------------------
  */
 
-/*
- * Rebuild the 18 bytes that were on the air.
- *
- * Only 10 to 13 of them are ever in RAM: the address bytes are consumed by the
- * hardware matcher and the CRC lands in RADIO->RXCRC. Saying so explicitly
- * matters, because "all 18 raw bytes" from a matched receive is necessarily a
- * reconstruction, and the only byte in it that is a genuine assumption is the
- * preamble - the demodulator does not report what it locked on to.
- */
+/* Rebuild the 18 bytes that were on the air. Only 10-13 are ever in RAM -
+ * the address is consumed by the hardware matcher and the CRC lands in
+ * RADIO->RXCRC - so this is a reconstruction, not a capture. The preamble is
+ * the one genuine assumption in it: the demodulator doesn't report what it
+ * locked onto. */
 static size_t rebuild_frame(const struct rx_cfg *c, const uint8_t *body,
 			    uint16_t rxcrc, uint8_t *out)
 {
@@ -413,11 +355,9 @@ static void report_packet(const struct rx_cfg *c, const uint8_t *body,
 	uint16_t devnum;
 	uint8_t dlo, dhi, dtype, ttype, lenb;
 
-	/* 0xFF means "not in RAM": the byte was consumed by the address matcher,
-	 * so the only thing that can be said about it is that the match - and
-	 * therefore the CRC over it - succeeded. Phases C and E do have these
-	 * bytes in RAM, which is what makes their identity check real rather
-	 * than circular. */
+	/* 0xFF = not in RAM (consumed by the address matcher) - only phases C
+	 * and E have these bytes in RAM, which is what makes their identity
+	 * check real rather than circular. */
 	dlo = (c->off_devnum_lo == 0xFFu) ? DEVNUM_LO : body[c->off_devnum_lo];
 	dhi = (c->off_devnum_hi == 0xFFu) ? DEVNUM_HI : body[c->off_devnum_hi];
 	devnum = (uint16_t)(dlo | ((uint16_t)dhi << 8));
@@ -593,11 +533,10 @@ static struct rx_cfg search_cfg(const char *name, bool bitrev,
 /* Preamble-as-address: 3-byte on-air address 55 A6 C5, 13-byte static body
  * [devnum_lo][devnum_hi][device_type][trans_type][0x0A][d0..d7].
  *
- * The CRC has to be set up differently and that is the interesting part. ANT's
- * CRC does not cover the preamble, but SKIPADDR=Include would make the hardware
- * cover all three matched bytes. So the address is skipped and CRCINIT is
- * preloaded with the register state after A6 C5. If frames come back CRC-valid,
- * the 0x233E constant in docs/ant-radio-link.md is confirmed on hardware. */
+ * ANT's CRC doesn't cover the preamble, but SKIPADDR=Include would make the
+ * hardware cover all three matched bytes - so the address is skipped instead
+ * and CRCINIT preloaded with the state after A6 C5. CRC-valid frames confirm
+ * the 0x233E constant from docs/ant-radio-link.md on hardware. */
 static struct rx_cfg preamble_cfg(const char *name, bool bitrev,
 				  bool base_reverse, bool base_top_aligned)
 {

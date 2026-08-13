@@ -22,8 +22,7 @@ import sys
 import time
 
 try:
-    import usb.core
-    import usb.util
+    import usb.core  # noqa: F401 - import-guard, verifies pyusb is installed
 except ImportError:  # pragma: no cover - user-facing guidance
     sys.exit("pyusb is not installed. Run: pip install pyusb")
 
@@ -32,11 +31,12 @@ sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 from ant_probe import (  # noqa: E402
     EP_OUT,
     FrameReader,
-    frame,
     close_device,
+    frame,
     open_device,
     reset_stack,
 )
+
 # Protocol constants come from the generated module, never from a second copy
 # here. See tools/ant_wire.py and protocol/ant_wire.yaml.
 from ant_wire import (  # noqa: E402
@@ -123,12 +123,9 @@ def main() -> int:
         return 1
 
     # 0xE0 is all three extended fields: channel id, RSSI, receive timestamp.
-    # Without the channel id every broadcast arrives anonymous, so sensors can
-    # be heard but not named, and that is what this tool is for. The other two
-    # are free for the asking - the radio is already measuring both - and
-    # asking for them here keeps every tool on one lib config, which is what
-    # ant_verify.py's timing and signal figures are read against. Worth having,
-    # not worth aborting over.
+    # Without the channel id, sensors can be heard but not named. The other
+    # two are free and keep every tool on one lib config; not worth aborting
+    # over if refused.
     command(dev, reader, MESG_ANTLIB_CONFIG_ID,
             bytes([0x00, LIB_CONFIG_ALL_EXT_FIELDS]), "extended messages")
 
@@ -167,16 +164,10 @@ def main() -> int:
         if msg_id in (MESG_BROADCAST_DATA_ID, MESG_ACKNOWLEDGED_DATA_ID,
                       MESG_BURST_DATA_ID):
             packets += 1
-            # Flagged extended messages append the channel id first: device
-            # number (2 bytes), device type, transmission type. Without the
-            # flag we only know something transmitted.
-            #
-            # RSSI and the receive timestamp follow it, in that order, and this
-            # tool ignores both - ant_verify.py's extended_fields() is the one
-            # that decodes all three. The offsets below stay right whether or
-            # not those two are present precisely because the channel id comes
-            # first; reading a later field at a fixed offset is what does not
-            # survive a change of lib config.
+            # Extended messages append the channel id first (device number,
+            # device type, trans type), then RSSI and receive timestamp, which
+            # this tool ignores (see ant_verify.py's extended_fields()). Fixed
+            # offsets work because the channel id always comes first.
             if len(body) >= 13 and body[9] & EXT_FLAG_CHANNEL_ID:
                 number = body[10] | (body[11] << 8)
                 dtype = body[12] & 0x7F
@@ -186,7 +177,7 @@ def main() -> int:
                     print(f"  found: #{number} - {label}")
                 seen[key] = seen.get(key, 0) + 1
 
-    print(f"\nClosing")
+    print("\nClosing")
     command(dev, reader, MESG_CLOSE_CHANNEL_ID, bytes([CHANNEL]),
             "close channel")
     close_device(dev)

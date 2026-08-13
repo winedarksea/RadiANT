@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "recorded": "2026-08-13",
+    "operator": "agent, on Colin's bench",
+    "backend": "core",
+    "git_describe": "uncommitted working tree (P4 grant-abort work: g.hw_held, bug 15)",
+    "board": "nrf54l15dk/nrf54l15/cpuapp",
+    "serial_suffix": "001057737173",
+    "sdk_ant_revision": null,
+    "ncs_version": "v3.4.0",
+    "toolchain_bundle": "dcbdc366a1",
+    "extra_conf": ["thread.conf", "thread_sed.conf"]
+  },
+  "rig": {
+    "second_stack": "thread_sed",
+    "transmitter": {
+      "kind": "ant_sim_py",
+      "board": "RadiANT USB stick (nRF52840) 3D55F77818BE772A",
+      "profile": "power",
+      "seed": 1,
+      "tx_power_level": null,
+      "description": "tools/ant_sim.py drove a RadiANT USB stick (nRF52840, serial 3D55F77818BE772A) as an ANT+ power master: device 777, type 0x0B, transmission type 5, 8182 ticks (4.0049 Hz), 100 W, 80 rpm, RF 57. Identical to the MED sitting's transmitter, in the same session, without the rig being touched between them - which is what makes the two roles comparable to each other as well as to the control."
+    },
+    "receiver": {
+      "board": "nrf54l15dk/nrf54l15/cpuapp",
+      "antenna": "onboard PCB antenna, board flat on the desk, not moved between arms"
+    },
+    "link": {
+      "kind": "fixed_open_air",
+      "sensitivity_method": null,
+      "attenuator_model": null,
+      "attenuation_db": null,
+      "distance_m": null,
+      "rf_channel": 57,
+      "interference": "Short bench path with ~35 dB of margin. Thread peer is an nRF5340 DK on 802.15.4 channel 26, three feet away, leader throughout. Not a sensitivity measurement."
+    }
+  },
+  "coexistence": {
+    "second_stack": "thread_sed",
+    "loss_direct_pct": null,
+    "loss_second_stack_off_pct": 0.0,
+    "loss_second_stack_on_pct": 100.0,
+    "sweep_sets_per_s_off": null,
+    "sweep_sets_per_s_on": null,
+    "thread_load_sent": 2400,
+    "scheduler_cost": {
+      "send_latency_us_max_ant_idle": 296,
+      "send_latency_us_max_ant_loaded": 347,
+      "send_latency_us_p99_ant_idle": 256,
+      "send_latency_us_p99_ant_loaded": 512,
+      "mac_tx_total": 4917,
+      "mac_tx_retry_ant_idle": 76,
+      "mac_tx_retry_ant_loaded": 330,
+      "mac_tx_err_cca_ant_idle": 0,
+      "mac_tx_err_cca_ant_loaded": 1,
+      "mac_tx_err_busy_ant_idle": 0,
+      "mac_tx_err_busy_ant_loaded": 0
+    },
+    "gate_counters": {
+      "granted": 13687,
+      "grant_end_calls": 13687,
+      "late_disarm": 0,
+      "idle_disarm": 0,
+      "overstayed": 0,
+      "invalid_return": 0,
+      "blocked": 12077,
+      "extends_ok": 2541,
+      "extends_failed": 102
+    },
+    "arbiter_note": "SAME OUTCOME AS MED AND THE SAME MECHANISM: 0 of 961 expected packets, because chunks=6450+ scan chunks were placed and end ok=0 completed. The channel never acquires. See the MED baseline's arbiter_note for the full argument, the control-arm evidence that the arbiter itself is not the cause, what loss_second_stack_off_pct actually measures here, why sweep_sets_per_s is null, and the ant_sim_py transmitter limitation that removes `loss (exact)` from every arm. All of it applies unchanged.\n\nWHAT IS DIFFERENT IN SED, AND IT IS THE OPPOSITE OF THE EXPECTED DIRECTION. SED is the intended role and MED is meant to be the worst case, because MED keeps its receiver on. On this rig the SED arm is HARDER on the gate, not easier: 12077 of 25764 requests blocked (47 %) against MED's 9792 of 25241 (39 %), and 102 EXTEND_FAILEDs against 29. It is also the only arm with a measurable scheduler cost - see scheduler_cost, where the ANT-loaded arm shows 42 sends in the 256-512 us bucket against 8 idle, and 330 MAC retries against 76, a 4.3x increase. MED shows none of that (96 retries loaded against 144 idle - if anything fewer). A sleepy child schedules its own radio windows, and those windows are what our reservations now collide with; the always-on role has no such structure to collide with. Whatever else this sitting concludes, 'measure MED because it is the worst case' did not hold here and section 7.4's reasoning for preferring one role should not be relied on without re-measuring both.\n\nAND THIS IS WHERE 7.3a's CENTRAL CLAIM GETS ITS FIRST NUMBER. 7.3a says the reserve costs Thread's SCHEDULER rather than Thread's AIR. Measured across both roles: the Thread side loses almost nothing - worst case a 347 us send against a 296 us idle worst case, zero CCA failures in MED and one in SED, and no send ever failed in any arm (failed=0, sent=2400 every time) - while the ANT side loses everything it has. The cost is real and it is not where 7.3a put it. It lands on ANT."
+  },
+  "notes": "P4 / docs/radiant-bridge.md section 7.4, SED role - the role section 7.3b selects. Taken in the same sitting and on the same board as 2026-08-13-radiant-coex-thread-med.json, between the two control arms, on the bug-15-fixed build. See that file's notes for the wedge this sitting found and fixed.\n\nThe grant-abort invariant held here too and under heavier contention than MED: grant_end_calls tracks granted exactly (13687/13687), late_disarm / idle_disarm / overstayed / invalid_return all zero, across 102 EXTEND_FAILEDs and 12077 synchronous blocks. That is the strongest evidence this sitting produced that the A-phase work is sound - the invariant is being tested here by an arbiter refusing nearly half of everything asked of it, which is a good deal harder than the soak in D was ever going to be."
+}

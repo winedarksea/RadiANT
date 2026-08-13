@@ -3,27 +3,22 @@
  * profile_sched.c - which page goes in the next message slot.
  *
  * Provenance: docs/radiant-telemetry.md section 6 (the 119/120/121 interleave
- * and the consecutive descriptor set) and section 8 (sparse mode: heartbeat,
- * repeat count, and "the node emits the whole descriptor set with every
- * heartbeat"). That document is this project's own written specification. No
- * adopter-gated ANT+ device profile document was read for this file, no
- * sdk-ant source was consulted, and nothing here derives from libant.a. See
- * docs/decisions/0002-clean-room-policy.md.
+ * and the consecutive descriptor set) and section 8 (sparse mode). This
+ * project's own written specification. No ANT+ device profile
+ * document was read for this file, no sdk-ant source was consulted, and
+ * nothing here derives from libant.a. See docs/decisions/0002-clean-room-policy.md.
  *
- * The priority order in next() is the whole file, and it is worth reading as
- * an ordered list rather than as control flow:
- *
- *   1. message 119 is page 80, message 120 is page 81. Nothing displaces
- *      them, because they are the cadence rule a certified receiver pairs on.
- *   2. a descriptor burst in progress takes the slot. Consecutive is the
- *      point; a burst interrupted by a data page costs a joining receiver a
- *      whole cycle.
+ * The priority order in next(), read as an ordered list:
+ *   1. message 119 is page 80, message 120 is page 81 - the cadence rule a
+ *      certified receiver pairs on, never displaced.
+ *   2. a descriptor burst in progress takes the slot (consecutive, so a
+ *      joining receiver doesn't lose a whole cycle to an interruption).
  *   3. the client seam gets first refusal.
  *   4. page 82, if the node emits one and its cadence is due.
  *   5. the data-page rotation.
  *
- * Sparse mode replaces 1 and 5 rather than modifying them: there is no 121
- * cycle to hang a common page on, and a slot with nothing to say is silent.
+ * Sparse mode replaces 1 and 5 rather than modifying them: no 121 cycle to
+ * hang a common page on, and a slot with nothing to say is silent.
  */
 
 #include <errno.h>
@@ -35,11 +30,9 @@
 #include "profile_sched.h"
 #include "profile_telemetry.h"
 
-/* The ANT timebase: a channel period is in counts of 1/32768 s. This is the
- * one number from the link layer that a page scheduler legitimately needs -
- * it converts a heartbeat stated in seconds into a count of message slots,
- * and there is no other way to express section 8's heartbeat on a slot
- * grid. */
+/* The ANT timebase: a channel period is in counts of 1/32768 s. The one
+ * number from the link layer this scheduler needs, to convert a heartbeat
+ * stated in seconds into a count of message slots. */
 #define ANT_TICKS_PER_S 32768u
 
 int profile_sched_init(struct profile_sched *ps,
@@ -70,32 +63,27 @@ int profile_sched_init(struct profile_sched *ps,
 		}
 		ps->n_pages = (uint8_t)rc;
 
-		/* Latched once. -ENOENT here is the ordinary case - most nodes
-		 * announce no schedule block at all - and is not an error. */
+		/* Latched once. -ENOENT is the ordinary case (no schedule
+		 * block announced) and not an error. */
 		rc = profile_desc_schedule_index(cfg->desc);
 		ps->sched_frame = (rc < 0) ? -1 : (int8_t)rc;
 
 		ps->sparse = (cfg->desc->flags & PROFILE_TLM_FLAG_SPARSE) != 0u;
 		if (ps->sparse && cfg->desc->period != 0u) {
 			/* Slot-aligned sparse: the node keeps its period
-			 * configured, so the transmissions it does make land
-			 * on a predictable phase and a scan receiver's dwell
-			 * can be aligned to them. */
+			 * configured so transmissions land on a predictable
+			 * phase a scan receiver's dwell can align to. */
 			uint32_t slots = ((uint32_t)cfg->desc->heartbeat_s *
 					  ANT_TICKS_PER_S) / cfg->desc->period;
 
 			ps->hb_slots = (slots == 0u) ? 1u : slots;
 		}
-		/* Asynchronous sparse leaves hb_slots at 0: there is no grid,
-		 * so the node's own timer calls profile_sched_post_heartbeat().
-		 */
+		/* Asynchronous sparse leaves hb_slots at 0: no grid, so the
+		 * node's own timer calls profile_sched_post_heartbeat(). */
 	} else if (cfg->pages != NULL && cfg->n_pages != 0u) {
-		/*
-		 * A family with no descriptor states its rotation outright.
-		 * Copied rather than referenced: the rest of this engine reads
-		 * ps->pages, and a caller whose array went out of scope would
-		 * transmit whatever replaced it for as long as the node ran.
-		 */
+		/* A family with no descriptor states its rotation outright.
+		 * Copied rather than referenced, so a caller's array going
+		 * out of scope can't corrupt what this engine transmits. */
 		if (cfg->n_pages > (uint8_t)sizeof(ps->pages)) {
 			return -ENOSPC;
 		}
@@ -104,15 +92,13 @@ int profile_sched_init(struct profile_sched *ps,
 	}
 
 	/*
-	 * The first thing a node transmits is its schema. A receiver that was
-	 * already listening when the node powered up should not have to wait
-	 * for message 0 of the second cycle.
+	 * The first thing a node transmits is its schema, so a receiver
+	 * already listening at power-up needn't wait for the second cycle.
 	 *
-	 * A sparse node expresses the same thing as a pending heartbeat rather
-	 * than as a burst, and the difference is not cosmetic: the heartbeat
-	 * is what resets the interval, so starting the burst directly would
-	 * leave the pending flag set and fire a second heartbeat two slots
-	 * later.
+	 * A sparse node expresses this as a pending heartbeat rather than a
+	 * burst directly: the heartbeat resets the interval, so starting the
+	 * burst directly would leave the pending flag set and fire a second
+	 * heartbeat two slots later.
 	 */
 	if (ps->sparse) {
 		ps->hb_pending = true;
@@ -158,7 +144,7 @@ int profile_sched_set_downlink(struct profile_sched *ps,
 		return -EINVAL;
 	}
 	if (ps->sched_frame < 0) {
-		/* See the header: a hook with no schedule frame under it. */
+		/* A hook with no schedule frame under it - see the header. */
 		return -ENOENT;
 	}
 	ps->dl = *dl;
@@ -225,12 +211,10 @@ uint32_t profile_sched_m(const struct profile_sched *ps)
 /*
  * Hand out one frame of the encoded set.
  *
- * The re-phase is the only thing in this engine that edits an encoded byte on
- * its way out, and it is confined to one field of one frame: the caller's copy,
- * never ps->frames[], so a hook that returns a different answer next time
- * cannot accumulate. That is why the descriptor set is still encoded exactly
- * once at init, which was the property the interval-0 restriction was protecting
- * and the reason this is a patch rather than a re-encode.
+ * The re-phase is the only thing here that edits an encoded byte on its way
+ * out, confined to one field of one frame in the caller's copy - never
+ * ps->frames[] - so a hook returning a different answer next time cannot
+ * accumulate, and the descriptor set stays encoded exactly once at init.
  */
 static enum profile_slot_kind take_descriptor(struct profile_sched *ps,
 					      uint8_t *body, radiant_time_t t_sync)
@@ -244,14 +228,10 @@ static enum profile_slot_kind take_descriptor(struct profile_sched *ps,
 	    ps->sched_frame >= 0 && index == (uint8_t)ps->sched_frame) {
 		int32_t phase = ps->dl.phase(t_sync, ps->dl.user);
 
+		/* A negative phase means the hook disagrees with the
+		 * descriptor it was installed against; the validated encoded
+		 * bytes then go out unchanged. */
 		if (phase >= 0) {
-			/* -ENOENT (this block announces no window) and -EINVAL
-			 * (a phase past the interval) are both a hook
-			 * disagreeing with the descriptor it was installed
-			 * against. The encoded bytes are the ones that were
-			 * validated, so they go out unchanged and the node
-			 * announces the phase it was built with rather than one
-			 * nobody checked. */
 			(void)profile_sched_rephase(&body[2], (uint16_t)phase);
 		}
 	}
@@ -265,10 +245,9 @@ static enum profile_slot_kind take_descriptor(struct profile_sched *ps,
 }
 
 /*
- * Build one data page from the rotation.
- *
- * The counter is advanced only when the builder actually produced a body: it
- * counts TRANSMISSIONS, and a slot the application declined is not one.
+ * Build one data page from the rotation. The counter advances only when the
+ * builder actually produced a body: it counts transmissions, and a declined
+ * slot is not one.
  */
 static enum profile_slot_kind take_data(struct profile_sched *ps, uint8_t page,
 					uint8_t *body)
@@ -289,9 +268,8 @@ static enum profile_slot_kind take_rotation(struct profile_sched *ps,
 	uint8_t page;
 
 	if (ps->n_pages == 0u) {
-		/* A node with no fields at all. That is a legal descriptor -
-		 * an asset tag is the envelope with everything turned off -
-		 * and it has nothing to rotate. */
+		/* A node with no fields at all - legal (an asset tag), and
+		 * nothing to rotate. */
 		return PROFILE_SLOT_IDLE;
 	}
 
@@ -300,9 +278,9 @@ static enum profile_slot_kind take_rotation(struct profile_sched *ps,
 	return take_data(ps, page, body);
 }
 
-/* Page 82 rides any data slot at whatever cadence the node likes; it is not
- * announced in the descriptor because it is a page every ANT+ receiver already
- * understands. */
+/* Page 82 rides any data slot at whatever cadence the node likes; not
+ * announced in the descriptor since every ANT+ receiver already understands
+ * it. */
 static bool page_82_due(struct profile_sched *ps)
 {
 	if (ps->cfg.common_82 == NULL || ps->cfg.common_82_every == 0u) {
@@ -356,11 +334,9 @@ static enum profile_slot_kind next_periodic(struct profile_sched *ps,
 static enum profile_slot_kind next_sparse(struct profile_sched *ps, uint32_t m,
 					  uint8_t *body, radiant_time_t t_sync)
 {
-	/*
-	 * The 121-message interleave is useless to a node that sends forty
+	/* The 121-message interleave is useless to a node that sends forty
 	 * messages a day, so section 8 replaces it: the whole descriptor set
-	 * rides every heartbeat, and nothing else is periodic.
-	 */
+	 * rides every heartbeat, and nothing else is periodic. */
 	if (!ps->burst) {
 		ps->since_hb++;
 		if (ps->hb_pending ||
@@ -393,12 +369,9 @@ static enum profile_slot_kind next_sparse(struct profile_sched *ps, uint32_t m,
 		return kind;
 	}
 
-	/*
-	 * Nothing to say. The client seam is offered the silence rather than a
-	 * data slot, because on a sparse node silence is where the free slots
-	 * are - and a client that wants one has to say so, which is the whole
-	 * of the contract.
-	 */
+	/* Nothing to say. The client seam is offered the silence rather than a
+	 * data slot, since on a sparse node silence is where the free slots
+	 * are. */
 	if (ps->have_client && ps->client.claim(m, body, ps->client.user)) {
 		return PROFILE_SLOT_CLIENT;
 	}

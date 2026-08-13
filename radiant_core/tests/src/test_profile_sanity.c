@@ -1,27 +1,19 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * Provenance: clean-room. The page layouts asserted against are the two
- * public ANT+ facts radiant_profile_sanity.h cites: bicycle power's
- * instantaneous power at payload[6..7] LE (tools/ant_pages.py's
- * decode_power_std, reused rather than re-derived) and a heart rate
- * monitor's computed heart rate at payload[7]. Nothing here derives from
- * sdk-ant, from libant.a, or from any adopter-gated ANT+ device profile
- * document.
+ * Provenance: clean-room. Asserts against the two public ANT+ facts
+ * radiant_profile_sanity.h cites: bicycle power's instantaneous power at
+ * payload[6..7] LE (tools/ant_pages.py's decode_power_std, reused rather than
+ * re-derived) and a heart rate monitor's computed heart rate at payload[7].
+ * Nothing here derives from sdk-ant, libant.a, or any ANT+
+ * device profile document.
  *
- * ---------------------------------------------------------------------------
- * The suite for radiant_core/src/radiant_profile_sanity.c
- * ---------------------------------------------------------------------------
- * The one property this module must never have is a false "implausible" on
- * data that could really come off a sensor: a track sprint's watts, a hard
- * effort's heart rate, a "not reported" sentinel, or any device type or page
- * this module has no business judging. Getting that wrong drops good data
- * silently, on live channels, and radiant_api.c only ever calls this on
- * REPAIRED frames - so a false positive here reads as an unrelated receiver
- * fault rather than as this feature. Every test below is really a boundary
- * test for exactly that reason: the values right at the edge of "still a
- * bicycle", "still a heart", or "still reported at all" matter far more than
- * the values deep inside "obviously wrong".
+ * Tests for radiant_core/src/radiant_profile_sanity.c. This module must never
+ * false-positive "implausible" on data a real sensor could send - a false
+ * positive here (radiant_api.c calls this only on REPAIRED frames) reads as
+ * an unrelated receiver fault. So every test is a boundary test: values at
+ * the edge of "still a bicycle" or "still a heart" matter more than values
+ * deep inside "obviously wrong".
  */
 
 #include <stdbool.h>

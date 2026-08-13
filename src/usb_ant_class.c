@@ -27,15 +27,12 @@ LOG_MODULE_REGISTER(usb_ant, LOG_LEVEL_INF);
 #define ANT_EP_OUT_IDX  0
 #define ANT_EP_IN_IDX   1
 #define ANT_EP_MPS  64
-/* The largest ANT serial frame is 42 bytes (sync + size + id + a size byte's
- * worth of body at its MESG_MAX_SIZE_VALUE maximum of 38 + checksum). 64 keeps
- * it to one bulk packet with room to spare.
- *
- * This is not just a buffer bound: usb_ant_send_async() puts a whole
- * struct ant_tx_frame on the stack, and its caller ant_evt_handler() runs on
- * sdk-ant's work queue, whose stack is CONFIG_ANT_WORK_STACK_SIZE (1 KB) and
- * is not ours to spend. At 260 that single local was ~262 bytes of someone
- * else's stack, with CONFIG_HW_STACK_PROTECTION off to catch it.
+/* Largest ANT serial frame is 42 bytes (sync+size+id+38 body max+checksum);
+ * 64 keeps it to one bulk packet with room to spare. Not just a buffer bound
+ * either: usb_ant_send_async() puts a whole struct ant_tx_frame on the
+ * stack, and its caller runs on sdk-ant's 1 KB work queue stack, which is
+ * not ours to spend - a larger value here was ~262 bytes of someone else's
+ * stack, with CONFIG_HW_STACK_PROTECTION off to catch it.
  */
 #define ANT_TX_FRAME_MAX 64
 #define ANT_TX_QUEUE_DEPTH 32
@@ -193,14 +190,11 @@ USBD_CLASS_DESCR_DEFINE(primary, 0) struct usb_ant_descriptor ant_desc = {
 		.bInterfaceProtocol = 0x00,
 		.iInterface       = 0,
 	},
-	/* AUTO_EP_*, not the literal 0x01/0x81 the ANTUSB-2 uses. The stack
+	/* AUTO_EP_*, not the literal 0x01/0x81 the ANTUSB-2 uses: the stack
 	 * pairs each endpoint descriptor with its usb_ep_cfg_data entry by
-	 * matching bEndpointAddress against ep_addr, then rewrites both with a
-	 * real address; a descriptor that already carries the final address
-	 * matches nothing, so usb_fix_descriptor() fails and usb_enable()
-	 * returns -1 without ever touching the bus. Allocation starts at
-	 * endpoint 1 in each direction, so this still lands on 0x01 and 0x81 -
-	 * ant_ep_data[] carries the assigned addresses for the transfers.
+	 * matching addresses, then rewrites both - a descriptor already
+	 * carrying the final address matches nothing and usb_enable() fails
+	 * silently. Allocation still lands on 0x01/0x81 in practice.
 	 */
 	.ep_out = {
 		.bLength          = sizeof(struct usb_ep_descriptor),
@@ -484,16 +478,12 @@ void usb_ant_class_init(void)
 int ant_transport_enable(void)
 {
 #if CONFIG_ANT_DONGLE_BCD_DEVICE != 0
-	/* Bring-up knob, moved here from main() when the transport gained
-	 * alternatives: usb_get_device_descriptor() is a legacy-stack API, and
-	 * the new stack sets the same field through usbd_device_set_bcd_device().
-	 * Keeping each in its own file is what lets main() stay stack-agnostic.
-	 *
-	 * Zephyr pins bcdDevice to USB_BCD_DRN, derived from the kernel version,
-	 * so it is identical across rebuilds - and Windows keys its cached MS OS
-	 * descriptor verdict on VID+PID+bcdDevice. Bumping this between
-	 * iterations gives Windows a device it has no cached verdict for. Must
-	 * run before usb_enable(), which is what publishes the descriptor.
+	/* Bring-up knob: usb_get_device_descriptor() is legacy-stack API, kept
+	 * here (not main()) so main() stays stack-agnostic. Zephyr pins
+	 * bcdDevice identically across rebuilds, and Windows keys its cached
+	 * MS OS descriptor verdict on VID+PID+bcdDevice - bumping it gives
+	 * Windows a device with no cached verdict. Must run before
+	 * usb_enable(), which publishes the descriptor.
 	 */
 	struct usb_device_descriptor *dev_desc =
 		(struct usb_device_descriptor *)usb_get_device_descriptor();

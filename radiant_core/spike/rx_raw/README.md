@@ -8,7 +8,7 @@ stale.
 Provenance: clean-room. Written from `docs/ant-radio-link.md`, from the public
 Nordic MDK headers and product specifications, and from Zephyr's public
 clock-control API. Nothing here derives from `sdk-ant`, from `libant.a`, or from
-an adopter-gated ANT+ device profile document. See
+an ANT+ device profile document. See
 `docs/decisions/0002-clean-room-policy.md`.
 
 ## What it is for
@@ -18,11 +18,11 @@ byte-exact ANT frame with no software in the bit path.** `docs/ant-radio-link.md
 states that claim as a register mapping and marks every row a *prediction*. This
 program is the cheapest available attempt to falsify it.
 
-It is a go/no-go, so it is written to fail loudly rather than to succeed
-quietly. It does not assume the predicted register arithmetic is right; it
-sweeps the readings of the two documented details that are easy to get
-backwards, prints the register values it actually programmed for every one, and
-reports the counters whether or not anything was heard.
+It is a go/no-go, written to fail loudly rather than succeed quietly. It does
+not assume the predicted register arithmetic is right: it sweeps the two
+documented details that are easy to get backwards, prints the register values
+it actually programmed each time, and reports counters whether or not anything
+was heard.
 
 ## Running it
 

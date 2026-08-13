@@ -23,13 +23,13 @@ Where the two disagree, the ADR wins.
 
 | Component | Licence | Redistributed here? | May we read it? |
 |---|---|---|---|
-| `ant-nrfconnect/sdk-ant` | Proprietary, adopter-gated | No | Only the `sdk-ant-shim` role |
+| `ant-nrfconnect/sdk-ant` | Proprietary, not redistributable | No | Only the `sdk-ant-shim` role |
 | `libant.a` (inside sdk-ant) | Proprietary binary, $0.08/unit royalty | No | **No.** Never disassembled |
 | Zephyr RTOS | Apache-2.0 | No (fetched by west) | Yes, freely |
 | nRF Connect SDK (`sdk-nrf`, `nrfxlib`) | Nordic 5-clause BSD / Apache-2.0 / proprietary blobs | No (fetched by west) | Yes, freely |
 | rtl_433 | GPL-3.0-or-later | No | Facts only, never expression |
 | ANT Message Protocol Rev 5.1 (D00000652) | Free download, Garmin copyright | No — pointers only | Yes, freely |
-| ANT+ device profile documents | Adopter-gated, Garmin copyright | No | Only for `src/profiles/`, `tools/ant_pages.py`, profile docs |
+| ANT+ device profile documents | Not freely redistributable, Garmin copyright | No | Only for `src/profiles/`, `tools/ant_pages.py`, profile docs |
 | Garmin libusb-win32 driver package | Garmin package wrapping LGPL libusb0 | **No** | N/A |
 | pyusb | BSD-3-Clause | No (pip) | Yes, freely |
 | RFC 7748 (X25519) | IETF standard, free | N/A — clean-room, nothing vendored | Yes, freely |
@@ -44,7 +44,7 @@ libraries that `sim/` is built from, and the prebuilt radio binary `libant.a`.
 Pinned at `v2.1.0`.
 
 **Licence.** Proprietary. Access to the repository is granted per GitHub
-account under an ANT+ adopter agreement — which is why
+account under Garmin's terms for the SDK — which is why
 `.github/workflows/build.yml` needs a personal access token rather than the
 automatic `GITHUB_TOKEN`, and why `west.yml` puts it in a disabled group. The
 licence text (`LICENSE.txt` in that repository) explicitly forbids
@@ -143,7 +143,7 @@ document that makes this project possible: it describes exactly the layer we
 must be byte-compatible at, and it is free.
 
 **Licence / availability.** Free download from thisisant.com, no login and no
-adopter agreement required. Garmin retains copyright in the document.
+agreement to sign. Garmin retains copyright in the document.
 
 **Posture.** *Permitted source, pointers only.* Free to download is not the
 same as ours to republish, so the PDF is not committed. What is committed is
@@ -159,9 +159,9 @@ bicycle power (`0x0B`), speed and cadence (`0x79`), fitness equipment (`0x11`),
 and the common pages. They define the 8-byte page layouts that make a sensor
 interoperable.
 
-**Licence / availability.** Adopter-gated. Adopter signup has been free since
-January 2025 and no longer requires certification; this project holds a login
-from other work. Garmin retains copyright.
+**Licence / availability.** Not freely redistributable. Obtaining a copy has
+been free since January 2025 and no longer requires certification; this
+project holds one from other work. Garmin retains copyright.
 
 **Posture.** *Permitted, but only in three places.* These documents may be used
 for `src/profiles/`, for `tools/ant_pages.py`, and for the profile
@@ -240,7 +240,7 @@ that is what the seam is for, and it is the same seam a CC310 or CRACEN PKE
 backend would use.
 
 **Read-scope note.** RFC 7748 is a free, published IETF standard with no
-adopter gate and no proprietary encumbrance, so it falls under the same
+access restriction and no proprietary encumbrance, so it falls under the same
 "interoperability specification" reasoning that permits ANT+ page layouts: a
 public standard describing a mathematical construction, where there is no design
 freedom to infringe.

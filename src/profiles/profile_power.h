@@ -2,47 +2,26 @@
 /*
  * profile_power.h - ANT+ Bicycle Power, device type 0x0B.
  *
- * Provenance: docs/device-profiles.md section "Bicycle Power, device type 0x0B"
- * (formerly docs/ant-plus-profiles.md, which that document absorbed; the
- * reference is by SECTION rather than by line number because line numbers in a
- * living document silently stop pointing at what they cited) - the byte tables
- * for pages 0x10 Standard Power Only, 0x11 Wheel
- * Torque, 0x12 Crank Torque and 0x20 Crank Torque Frequency, together with the
- * two power formulae. That document is this project's OWN prior clean-room
- * derivation, and its statement of provenance ("Facts and tables only. Every
- * layout here is derived from the encoders and decoders in tools/ant_pages.py
- * ... No prose is taken from any ANT+ device profile document") is the
- * derivation this file inherits. The byte-for-byte reference is
+ * Provenance: docs/device-profiles.md, "Bicycle Power, device type 0x0B" - byte
+ * tables for pages 0x10 Standard Power Only, 0x11 Wheel Torque, 0x12 Crank
+ * Torque and 0x20 Crank Torque Frequency, and the two power formulae. This
+ * project's own clean-room derivation; byte-for-byte reference is
  * tools/ant_pages.py's encode_power_std(), encode_power_torque() and
  * encode_power_torque_freq(), checked against this file by
- * tools/test_compat_capture.py.
+ * tools/test_compat_capture.py. Permitted under docs/decisions/0002 (fact 5 of
+ * 0008). No sdk-ant source was consulted and nothing here derives from libant.a.
  *
- * ANT+ device profiles are open spec and may be implemented anywhere in this
- * library (fact 5 of docs/decisions/0008, amending
- * docs/decisions/0002-clean-room-policy.md). No sdk-ant source was consulted
- * and nothing here derives from libant.a.
+ * No cryptography here and no call to radiant_sec, same boundary as
+ * profile_hr.c: everything a legacy receiver sees is built here; RadiANT's
+ * additions are built in profile_compat.c and arrive through profile_sched.c's
+ * client seam.
  *
- * ---------------------------------------------------------------------------
- * THIS FILE CONTAINS NO CRYPTOGRAPHY AND CALLS radiant_sec NOWHERE
- * ---------------------------------------------------------------------------
- * Same boundary as profile_hr.c and for the same reason: everything a legacy
- * receiver sees is built here, everything RadiANT adds is built in
- * profile_compat.c and arrives through profile_sched.c's client seam.
- *
- * ---------------------------------------------------------------------------
- * Three traps this profile sets, all of them in the tables above
- * ---------------------------------------------------------------------------
- *   PAGE 0x20 IS BIG-ENDIAN. Every other multi-byte field in every other page
- *   of every other profile here is little-endian.
- *
- *   PAGES 0x11 AND 0x12 ARE INDEPENDENT ACCUMULATOR SERIES THAT SHARE A
- *   CHANNEL. A sensor emitting both advances two unrelated sets, so this
- *   module keeps one struct per series rather than one per node - differencing
- *   one against the other produces a plausible number rather than an error.
- *
- *   EVERY ACCUMULATOR IS MEANT TO WRAP. Widening one before subtracting is
- *   correct for hours and then reports a single absurd sample, which is easy to
- *   dismiss as radio noise.
+ * Three traps, all in the tables above:
+ *   - PAGE 0x20 IS BIG-ENDIAN; every other multi-byte field in this repo is
+ *     little-endian.
+ *   - PAGES 0x11 AND 0x12 ARE INDEPENDENT ACCUMULATOR SERIES sharing a
+ *     channel, so this module keeps one struct per series, not per node.
+ *   - EVERY ACCUMULATOR IS MEANT TO WRAP.
  */
 
 #ifndef RADIANT_PROFILE_POWER_H_
@@ -61,14 +40,8 @@ extern "C" {
 
 #define PROFILE_POWER_DEVICE_TYPE 0x0Bu
 
-/*
- * The permitted channel period, in counts of 1/32768 s: 8182, ~4.005 Hz. One
- * rate, so a compat power node has no choice to get wrong - and the constant
- * exists so that "one" is a recorded fact rather than an omission. No
- * reduced-rate variant is registered for 0x0B because this project has not
- * verified one against its own code, and the rule is that a number nobody has
- * verified does not get written down.
- */
+/* The permitted channel period, in counts of 1/32768 s: 8182, ~4.005 Hz. The
+ * only rate; no reduced-rate variant is registered because none is verified. */
 #define PROFILE_POWER_PERIOD 8182u
 
 #define PROFILE_POWER_PAGE_STANDARD     0x10u
@@ -76,9 +49,7 @@ extern "C" {
 #define PROFILE_POWER_PAGE_CRANK_TORQUE 0x12u
 #define PROFILE_POWER_PAGE_TORQUE_FREQ  0x20u
 
-/* Up to four data pages in the rotation, which is every page this profile
- * defines. A node emitting all four at once is not a sensor anybody ships; the
- * capacity is here so the array is not the limit. */
+/* Up to four data pages in the rotation - every page this profile defines. */
 #define PROFILE_POWER_MAX_PAGES 4u
 
 /* The torque series, one per page. `ticks` counts wheel or crank ticks; the
@@ -155,14 +126,12 @@ int profile_power_encode_torque_freq(uint8_t event_count,
 int profile_power_init(struct profile_power *pw,
 		       const struct profile_power_cfg *cfg);
 
-/* Turn the RadiANT compat layer on. NULL turns it off, and off is the default.
- * Device type 0x0B has no page-change toggle, so this installs none - byte [0]
- * of every page here is a whole page number. */
+/* Turn the RadiANT compat layer on. NULL turns it off (the default). Device
+ * type 0x0B has no page-change toggle, so this installs none. */
 int profile_power_set_compat(struct profile_power *pw,
 			     struct profile_compat *compat);
 
-/* One power event, for page 0x10: the event count advances, the accumulator
- * takes the instantaneous value, and both are meant to wrap. */
+/* One power event, for page 0x10: event count and accumulator both wrap. */
 void profile_power_event(struct profile_power *pw, uint16_t watts,
 			 uint8_t cadence);
 

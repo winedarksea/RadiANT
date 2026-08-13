@@ -3,31 +3,23 @@
 /*
  * An ANT+ sensor that does not exist, on a board that does.
  *
- * The dongle this repository builds is a transparent bridge with no profile
- * logic in it, so there is nothing in the firmware that can generate ANT+
- * traffic for itself. Testing the radio therefore needs a sensor, and not
- * everybody has one. This is a sensor.
- *
- * It is a separate application rather than a mode of the dongle: the root
- * sysbuild.cmake's PM_STATIC_YML_FILE regex, the transport selection in the
- * root CMakeLists.txt and the CI matrix's CONFIG_FLASH_LOAD_OFFSET assertions
- * are all statements about a dongle, and every one of them would be either
- * dead weight or actively wrong here.
+ * The dongle this repo builds is a transparent bridge with no profile
+ * logic, so testing the radio needs a separate sensor. Kept as its own
+ * application (not a dongle mode) because the root build's sysbuild/CMake
+ * transport selection and CI flash-offset assertions are all dongle-
+ * specific and would be wrong here.
  *
  *   west build sim -b nrf54l15dk/nrf54l15/cpuapp --sysbuild -p auto
  *   scripts\flash_sim_jlink.ps1
  *
- * The nRF54L15 DK is the natural host for it: it has no USB device controller
- * in silicon, so it can never be a dongle, which keeps the nRF5340 DK free for
+ * Runs on the nRF54L15 DK (no USB device controller in silicon, so it can
+ * never be mistaken for a dongle), keeping the nRF5340 DK free for
  * debugging the thing under test.
  *
- * The profile plumbing is sdk-ant's - ant_bpwr and ant_bsc already encode
- * every page correctly and there is no reason to reimplement that. What is
- * ours is src/sim_signal.c: the stock simulators sweep a ramp from 0 to
- * 2000 W, and a receiver cannot be shown to be right about a value that never
- * settles. This holds a target with bounded noise instead, so
- * tools/ant_verify.py can state a mean absolute error against a number that
- * means something.
+ * Profile plumbing is sdk-ant's (ant_bpwr/ant_bsc). sim_signal.c is ours:
+ * the stock simulators ramp 0-2000 W, which never settles and so can't be
+ * checked against a reference value; this holds a target with bounded
+ * noise so tools/ant_verify.py can report a mean absolute error.
  */
 
 #include <zephyr/kernel.h>
@@ -59,10 +51,9 @@ LOG_MODULE_REGISTER(ant_sim, LOG_LEVEL_INF);
  */
 #define TARGET_STEP 5
 
-/* Channel period in microseconds, from the ticks the profile transmits at.
- * Computed rather than written down because the two must not drift: the
- * revolution counter uses this to decide when an event happened, and a wrong
- * value here is a cadence error that looks exactly like a receiver bug.
+/* Channel period in microseconds, computed from the profile's ticks rather
+ * than written separately: the revolution counter uses this, and a mismatch
+ * would be a cadence error indistinguishable from a receiver bug.
  */
 #define TICKS_PER_S 32768u
 #define PERIOD_US(ticks) ((uint32_t)(((uint64_t)(ticks) * 1000000u) / TICKS_PER_S))
@@ -82,19 +73,12 @@ static uint16_t sim_devnum = CONFIG_ANT_SIM_DEVICE_NUMBER;
 /*
  * Identity tier, resolved once at start-up.
  *
- * Tier 0 - the default - is the provisioned number and never moves, which is
- * why it costs no user anything: A ROTATION NEVER HAPPENS WHILE A CHANNEL IS
- * OPEN, and no receiver ever loses this sensor.
- *
- * Tier 2 takes a fresh number every power-up. That answers the stalking case -
- * a worn strap power-cycles between rides, so a receiver planted near your
- * house sees a different node each time - and it silently costs every standard
- * receiver a re-pair per session, which is stated in the Kconfig help rather
- * than discovered on the bench.
- *
- * Tier 1 has no expression here: this application has no non-volatile storage,
- * so "re-roll and keep the new number" cannot survive a reset. Provision a new
- * one with tools/ant_identity.py and rebuild.
+ * Tier 0 (default): provisioned number, never moves, no channel disruption.
+ * Tier 2: fresh number every power-up - answers the stalking case (a strap
+ * that power-cycles between rides looks like a new node each time) at the
+ * cost of a re-pair per session for standard receivers (see Kconfig help).
+ * Tier 1 isn't implemented here: no non-volatile storage, so a re-rolled
+ * number can't survive a reset. Provision with tools/ant_identity.py.
  */
 static void sim_identity_init(void)
 {
@@ -111,14 +95,10 @@ static void sim_identity_init(void)
 #endif
 }
 
-/* sdk-ant writes the ANT+ frequency straight into its channel config macro and
- * makes the result const, so moving off 2457 MHz means copying the config and
- * patching the copy. One instance is enough: a build transmits exactly one
- * profile, so only one channel is ever opened.
- *
- * At the default this is a no-op and the sensor is a valid ANT+ device. See
- * CONFIG_ANT_SIM_RF_FREQ for why anything else is a bench measurement rather
- * than a configuration.
+/* sdk-ant bakes the ANT+ frequency into a const channel-config macro, so
+ * changing it means patching a copy. One instance is enough - a build only
+ * ever opens one channel. At the default this is a no-op and the sensor
+ * stays a valid ANT+ device; see CONFIG_ANT_SIM_RF_FREQ.
  */
 static const ant_channel_config_t *sim_channel_config(
 	const ant_channel_config_t *base)
@@ -135,14 +115,11 @@ static const ant_channel_config_t *sim_channel_config(
 }
 
 /*
- * What page 81 reports.
- *
- * A 32-bit globally unique serial in the clear, every 30 seconds, is strictly
- * more identifying than the 16-bit device number and is unaffected by any
- * re-roll - so a Tier 2 node that keeps broadcasting its serial has not
- * changed identity, it has added a field. 0xFFFFFFFF is the sentinel the ANT+
- * page already defines as "not supplied", so this costs no format change and
- * no receiver anything.
+ * Page 81's serial: a 32-bit globally unique serial, broadcast in the clear
+ * every 30 s, is more identifying than the device number and unaffected by
+ * a tier-2 re-roll - so a tier-2 node still leaks identity through it
+ * unless privacy pages sentinel it out (0xFFFFFFFF, the page's own "not
+ * supplied" value).
  */
 #if defined(CONFIG_ANT_SIM_PRIVACY_PAGES)
 #define SIM_SERIAL_NUM 0xFFFFFFFFu
@@ -150,10 +127,9 @@ static const ant_channel_config_t *sim_channel_config(
 #define SIM_SERIAL_NUM CONFIG_ANT_SIM_SERIAL_NUM
 #endif
 
-/* Transmit power is not part of the channel config, so it is set separately
- * once the channel exists. Logged rather than returned: a sensor that is
- * transmitting at the default power is still a working sensor, and taking the
- * whole application down over it would cost a bench session to diagnose.
+/* Transmit power isn't part of the channel config, so it's set separately
+ * once the channel exists. Logged rather than fatal: a sensor at default
+ * power still works, so failing hard here would cost a bench session.
  */
 static void sim_tx_power_set(uint8_t channel)
 {
@@ -172,10 +148,9 @@ static void signals_init(void)
 {
 	sim_signal_init(&sig_power, target_watts, CONFIG_ANT_SIM_NOISE,
 			CONFIG_ANT_SIM_SEED);
-	/* A different seed for the second generator. Sharing one would make
-	 * cadence noise a copy of power noise, which is exactly the
-	 * correlation a receiver's torque arithmetic would quietly benefit
-	 * from - the errors would cancel instead of compounding.
+	/* A different seed for the second generator: sharing one would make
+	 * cadence noise a copy of power noise, so their errors would cancel
+	 * instead of compounding - flattering a receiver's torque arithmetic.
 	 */
 	sim_signal_init(&sig_cadence, target_rpm, CONFIG_ANT_SIM_NOISE,
 			CONFIG_ANT_SIM_SEED + 1);
@@ -333,11 +308,10 @@ static void bpwr_update_standard(ant_bpwr_profile_t *p_profile)
 	uint16_t watts = (uint16_t)sim_signal_next(&sig_power);
 
 	p_profile->BPWR_PROFILE_instantaneous_power = watts;
-	/* Left to wrap at 65536, which is what the profile specifies and what
-	 * a receiver subtracts in 16-bit arithmetic to undo. The stock
-	 * simulator instead resets the accumulator to zero when it happens to
-	 * land on 65535, which puts a discontinuity on the air that no real
-	 * sensor produces and that a correct receiver reports as a fault.
+	/* Left to wrap at 65536 per the profile spec (receivers undo it in
+	 * 16-bit arithmetic), rather than resetting to zero like the stock
+	 * simulator, which puts a discontinuity on air no real sensor
+	 * produces.
 	 */
 	p_profile->BPWR_PROFILE_accumulated_power += watts;
 	p_profile->BPWR_PROFILE_instantaneous_cadence =
@@ -524,10 +498,9 @@ static int ant_stack_setup(void)
 		return err;
 	}
 
-	/* The ANT+ network key, supplied by sdk-ant rather than written down
-	 * here. It is not the same thing as CONFIG_ANT_EVALUATION_KEY, which
-	 * is the stack's licence key - conflating the two produces a build
-	 * that runs and is never heard.
+	/* The ANT+ network key, supplied by sdk-ant - not the same thing as
+	 * CONFIG_ANT_EVALUATION_KEY (the stack's licence key); conflating the
+	 * two produces a build that runs and is never heard.
 	 */
 	err = ant_plus_key_set(CONFIG_ANT_SIM_NETWORK_NUM);
 	if (err) {
@@ -563,10 +536,9 @@ int main(void)
 		goto error_exit;
 	}
 
-	/* Everything from here runs out of the ANT event callback. There is no
-	 * loop to write: the stack raises a page-updated event each time it
-	 * has transmitted, which is the only correct moment to advance the
-	 * simulated sensor, and a k_sleep loop alongside it would drift.
+	/* Everything from here runs out of the ANT event callback: the stack
+	 * raises a page-updated event on each transmit, which is the correct
+	 * moment to advance the simulated sensor - a k_sleep loop would drift.
 	 */
 	return 0;
 

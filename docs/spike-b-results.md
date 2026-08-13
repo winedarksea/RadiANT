@@ -35,7 +35,7 @@ Provenance: `[measured]` throughout unless stated. Measured on this bench on
 2026-08-09. The register semantics referenced are `[nRF datasheet]`; the
 prediction being tested is the `[inferred]` *Spike B gap* section of
 `docs/ant-radio-link.md`. Nothing here derives from `sdk-ant`, from `libant.a`,
-or from an adopter-gated ANT+ device profile document.
+or from a non-redistributable ANT+ device profile document.
 
 ---
 
@@ -334,8 +334,8 @@ network core and grants it every pin. It was built (`build/promisc_appcore/`) an
 COM9 carries a Zephyr shell (`dk:~$`) from an application with log modules
 `st_health` and `st_ble_hr` - a BLE heart-rate peripheral - which had been up for
 about four hours. It is **not** this repository: an exhaustive search of the
-machine outside `C:/Users/Colin/sdk-ant/` (which the clean-room policy forbids
-opening) found no source containing those module names and no build tree that
+machine, excluding the sibling ANT SDK tree that the clean-room policy forbids
+opening, found no source containing those module names and no build tree that
 could have produced that image. The only two applications on the machine are
 `ant_dongle` and `zephyr_aerosense`, whose modules are `ant_*` and `aero_*`.
 

@@ -3,8 +3,8 @@
  * profile_hr.c - ANT+ Heart Rate, device type 0x78.
  *
  * Provenance: the ANT+ Heart Rate Monitor device profile, as published in the
- * HRM sample documentation on thisisant.com - publicly retrievable, cited by
- * Colin on 2026-08-11 - by way of this repository's own two prior statements
+ * HRM sample documentation on thisisant.com - publicly retrievable, added to
+ * this project on 2026-08-11 - by way of this repository's own two prior statements
  * of the same layouts: docs/device-profiles.md section "Heart Rate, device
  * type 0x78" (formerly docs/ant-plus-profiles.md, absorbed into it; cited by
  * section rather than by line number so the citation cannot silently drift)
@@ -48,11 +48,9 @@ int profile_hr_encode(uint8_t page, const uint8_t body3[3], uint16_t event_time,
 		return -EINVAL;
 	}
 	if (page > PROFILE_HR_PAGE_MASK) {
-		/* Byte 0 bit 7 is the page-change toggle, so a page number on
-		 * this device type is 7-bit and nothing at or above 0x80 is
-		 * expressible at all. That is the constraint that decided the
-		 * whole compat allocation, and it is worth an error rather than
-		 * a truncation. */
+		/* Byte 0 bit 7 is the page-change toggle, so a page number here
+		 * is 7-bit; nothing at or above 0x80 is expressible. Worth an
+		 * error rather than a silent truncation. */
 		return -EINVAL;
 	}
 
@@ -67,9 +65,8 @@ int profile_hr_encode(uint8_t page, const uint8_t body3[3], uint16_t event_time,
 	return 0;
 }
 
-/* Every encoder below hands profile_hr_encode() the same four tail values, and
- * none of them can opt out: a page that changed bytes [4..7] would not be a new
- * page, it would be a broken sensor. */
+/* Every encoder below hands profile_hr_encode() the same four tail values;
+ * a page that changed bytes [4..7] would be a broken sensor, not a new page. */
 static int hr_page(const struct profile_hr *hr, uint8_t page,
 		   const uint8_t body3[3], bool toggle, uint8_t *out)
 {
@@ -112,9 +109,8 @@ int profile_hr_encode_manufacturer(const struct profile_hr *hr, bool toggle,
 	if (hr == NULL) {
 		return -EINVAL;
 	}
-	/* EIGHT bits of manufacturer id here, against common page 80's
-	 * sixteen. Different fields, different widths, one struct member each
-	 * so the truncation cannot happen silently. */
+	/* Eight bits of manufacturer id here, against common page 80's
+	 * sixteen - different fields, separate struct members. */
 	body3[0] = hr->cfg.manufacturer_id_8;
 	body3[1] = (uint8_t)(hr->cfg.serial_upper16 & 0xFFu);
 	body3[2] = (uint8_t)((hr->cfg.serial_upper16 >> 8) & 0xFFu);
@@ -143,9 +139,9 @@ int profile_hr_encode_previous_beat(const struct profile_hr *hr, bool toggle,
 	if (hr == NULL) {
 		return -EINVAL;
 	}
-	/* Byte [1] is manufacturer-specific and 0xFF when unused; bytes [2..3]
-	 * are the PREVIOUS heartbeat event time, which beside bytes [4..5] is
-	 * an R-R interval from one packet. */
+	/* Byte [1] is manufacturer-specific, 0xFF when unused; bytes [2..3]
+	 * are the PREVIOUS heartbeat event time, giving an R-R interval
+	 * against bytes [4..5] from one packet. */
 	body3[0] = PROFILE_COMMON_INVALID_U8;
 	body3[1] = (uint8_t)(hr->previous_event_time & 0xFFu);
 	body3[2] = (uint8_t)((hr->previous_event_time >> 8) & 0xFFu);
@@ -159,9 +155,9 @@ bool profile_hr_toggle(const struct profile_hr *hr)
 	if (hr == NULL) {
 		return false;
 	}
-	/* Transmitted messages, not data pages: the common pages and the compat
-	 * pages are messages, and a toggle that skipped them would step out of
-	 * the sensor's own sequence twice per 121-message cycle. */
+	/* Transmitted messages, not data pages - common and compat pages are
+	 * messages too, and a toggle that skipped them would drift out of the
+	 * sensor's sequence. */
 	return ((hr->messages / PROFILE_HR_TOGGLE_INTERVAL) & 1u) != 0u;
 }
 
@@ -171,13 +167,9 @@ static bool hr_toggle_cb(void *user)
 }
 
 /*
- * One data slot.
- *
- * `page` is what the engine's rotation offered and it is ignored, because this
- * profile's rotation is not a round robin: page 0x04 goes out in every data
- * slot except one in 64, which takes the next background page. The engine's
- * one-entry rotation exists to make the slot a DATA slot at all; which data
- * page rides it is the profile's rule and belongs here.
+ * One data slot. `page` (what the engine's rotation offered) is ignored:
+ * this profile's rotation is not round-robin - page 0x04 goes out every data
+ * slot except one in 64, which takes the next background page instead.
  */
 static int hr_data_page(uint8_t page, uint8_t counter, uint8_t *body,
 			void *user)
@@ -187,9 +179,8 @@ static int hr_data_page(uint8_t page, uint8_t counter, uint8_t *body,
 	uint8_t            background;
 
 	(void)page;
-	/* Device type 0x78 carries no event counter of the envelope's kind; its
-	 * accumulators are the beat count and the event time, both in the tail
-	 * every page shares. */
+	/* Device type 0x78 has no envelope-style event counter; its
+	 * accumulators are the beat count and event time in the shared tail. */
 	(void)counter;
 
 	if (hr == NULL) {
@@ -220,13 +211,9 @@ static int hr_data_page(uint8_t page, uint8_t counter, uint8_t *body,
 }
 
 /*
- * The common pages carry the toggle too.
- *
- * Every page on this device type does - tools/ant_pages.py's decode_hr()
- * exists because a decoder that dispatched on the raw byte would see each
- * common page under two different numbers and find neither - so a sensor that
- * emitted 0x50 with the toggle bit clear while its data pages carried it set
- * would be inconsistent with itself for four messages in eight.
+ * The common pages carry the toggle too - every page on this device type
+ * does, so a sensor that emitted 0x50 with the toggle clear while its data
+ * pages carried it set would be inconsistent with itself.
  */
 static int hr_common_80(uint8_t *body, void *user)
 {
@@ -286,9 +273,8 @@ int profile_hr_init(struct profile_hr *hr, const struct profile_hr_cfg *cfg)
 	hr->rotation[0] = PROFILE_HR_PAGE_PREVIOUS_BEAT;
 
 	memset(&sched_cfg, 0, sizeof(sched_cfg));
-	sched_cfg.desc = NULL; /* an ANT+ compatibility type announces no schema:
-				* its pages are fixed by somebody else's
-				* document, which is the whole point of it */
+	sched_cfg.desc = NULL; /* pages are fixed by the ANT+ HR document, not
+				* announced by a schema */
 	sched_cfg.pages = hr->rotation;
 	sched_cfg.n_pages = (uint8_t)sizeof(hr->rotation);
 	sched_cfg.data_page = hr_data_page;
@@ -312,8 +298,8 @@ int profile_hr_set_compat(struct profile_hr *hr, struct profile_compat *compat)
 		return profile_sched_set_client(&hr->sched, NULL);
 	}
 
-	/* The compat layer needs one fact about heart rate and gets it as a
-	 * callback: what the toggle is for the message about to go out. */
+	/* The compat layer needs one fact about heart rate: the toggle for the
+	 * message about to go out. */
 	compat->cfg.toggle = hr_toggle_cb;
 	compat->cfg.user = hr;
 	return profile_compat_attach(compat, &hr->sched);
@@ -359,11 +345,9 @@ enum profile_slot_kind profile_hr_next(struct profile_hr *hr, uint64_t now_us,
 		kind = profile_sched_next(&hr->sched, body);
 	}
 
-	/*
-	 * AFTER the message is built, not before. The toggle for message k is
-	 * (k / 4) & 1 and k is the index of the message going out, so a counter
-	 * advanced first would put every message in the next message's phase.
-	 */
+	/* AFTER the message is built, not before: the toggle for message k is
+	 * (k / 4) & 1, so advancing first would put every message in the next
+	 * message's phase. */
 	if (kind != PROFILE_SLOT_IDLE) {
 		hr->messages++;
 	}

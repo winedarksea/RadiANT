@@ -1,0 +1,18 @@
+Checks: >
+  -*,
+  bugprone-*,
+  clang-diagnostic-*,
+  readability-braces-around-statements,
+  readability-else-after-return,
+  readability-redundant-*,
+  performance-*,
+  misc-redundant-expression,
+  misc-unused-parameters,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-assignment-in-if-condition,
+  -bugprone-implicit-widening-of-multiplication-result
+
+WarningsAsErrors: ''
+HeaderFilterRegex: 'radiant_core/(src|include)/.*'
+FormatStyle: none

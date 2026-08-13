@@ -1,40 +1,33 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * Provenance: original work. Every expected value in this file comes from
- * docs/ant-radio-link.md, from docs/spike-a-results.md, from
- * docs/spike-b-results.md or from docs/spike-b-part2-results.md, and from the
- * capture logs those cite
+ * Provenance: original work. Every expected value here comes from
+ * docs/ant-radio-link.md, docs/spike-a-results.md, docs/spike-b-results.md
+ * or docs/spike-b-part2-results.md, and the capture logs those cite
  * (archive/captures/radio/2026-08-09-nrf54l15-run*.log,
  * archive/captures/radio/2026-08-09-spike-b-*.log and
  * archive/captures/radio/2026-08-09-spike-b2-*.log) - not from running
  * radiant_frame.c and writing down what it did. Nothing here derives from
  * sdk-ant, from libant.a, from disassembly of any binary, or from any
- * adopter-gated ANT+ device profile document.
+ * ANT+ device profile document.
  *
- * ---------------------------------------------------------------------------
- * The suite for radiant_core/src/radiant_frame.c
- * ---------------------------------------------------------------------------
- * radiant_frame.c is pure logic with no radio in it, so there is no excuse for
- * thin coverage here and no hardware needed to get it. Two things this file
- * tries hard to be:
+ * The suite for radiant_core/src/radiant_frame.c, which is pure logic with
+ * no radio in it, so there is no excuse for thin coverage. Two things this
+ * file tries hard to be:
  *
- *   - *Independent*. The constants below were derived from the documents and
- *     cross-checked with a separate implementation before radiant_frame.c existed
- *     in this form. A test whose expected value came out of the code under
- *     test asserts only that the code is deterministic.
+ *   - Independent: constants below were derived from the documents and
+ *     cross-checked with a separate implementation before radiant_frame.c
+ *     existed in this form, rather than read back off the code under test.
  *
- *   - *Capable of going red*. Several tests here name the specific wrong
- *     answer they exist to exclude - the naive short-address truncation, a
- *     silently repaired CRC, a control byte whose bits 2:0 are not 010, a
- *     cross-check on bits 4:0 that rejects every valid slave frame, a
- *     length-from-body format that would drop every acknowledged frame -
- *     rather than merely asserting that the right one comes out. Those were
- *     real documented errors or real design hazards, and an assertion that
- *     cannot distinguish the two answers is not a test of anything.
+ *   - Capable of going red: several tests name the specific wrong answer
+ *     they exclude (naive short-address truncation, a silently repaired
+ *     CRC, bits 2:0 != 010, a bits-4:0 cross-check that rejects every valid
+ *     slave frame, a length-from-body format that drops every acknowledged
+ *     frame) rather than only asserting the right one comes out - these
+ *     were real documented errors or hazards.
  *
  * These run only in CI on Linux: native_sim does not build on Windows, so no
- * amount of local work executes them. See radiant_core/tests/testcase.yaml.
+ * local work executes them. See radiant_core/tests/testcase.yaml.
  */
 
 #include <stdint.h>
@@ -105,14 +98,12 @@ static const uint8_t spike_b_payload[8] = {
 
 /* ---------------------------------------------------------------------------
  * The eleven control bytes, from docs/spike-b-part2-results.md's table and
- * from the analyser's own decode of
- * archive/captures/radio/2026-08-09-spike-b2-run{0,A,B,C}.log.
+ * the analyser's decode of archive/captures/radio/2026-08-09-spike-b2-run{0,A,B,C}.log.
  *
- * Written out as fields AND as the hex byte the capture shows, deliberately.
- * The two columns were derived independently - the fields from the part 2 bit
- * table, the hex from the logs' B3= column - so the table asserts that the
- * six-field model reproduces the air rather than that the encoder is
- * self-consistent.
+ * Written as fields AND as the hex byte the capture shows, derived
+ * independently (fields from the bit table, hex from the logs' B3= column),
+ * so the table asserts the six-field model reproduces the air rather than
+ * that the encoder is merely self-consistent.
  * ---------------------------------------------------------------------------
  */
 struct ctrl_case {
@@ -289,16 +280,13 @@ ZTEST(radiant_frame, test_addr_pack_tracking)
 }
 
 /*
- * The rule the documentation originally got wrong, and the one that costs a
- * bench day. With fewer than four leading bytes the used bytes are the HIGH
- * ones: a short address is truncated from its least significant byte, and
- * under the byte order the rest of the frame establishes those are exactly the
- * bytes that must survive.
- *
- * The naive answer is asserted against by name, because it does not fail
- * quietly - Spike A measured it producing 9 to 20 address matches per window
- * with zero CRC-valid frames at -54 to -101 dBm. That is a matcher firing on
- * noise, and it looks like a working receiver until you look at the CRC column.
+ * The rule the documentation originally got wrong. With fewer than four
+ * leading bytes the used bytes are the HIGH ones: a short address is
+ * truncated from its least significant byte. The naive (wrong) answer is
+ * asserted against by name because it does not fail quietly - Spike A
+ * measured it producing 9-20 address matches per window with zero CRC-valid
+ * frames at -54 to -101 dBm: a matcher firing on noise, looking like a
+ * working receiver until you check the CRC column.
  */
 ZTEST(radiant_frame, test_addr_pack_search_is_shifted_not_truncated)
 {
@@ -401,17 +389,14 @@ ZTEST(radiant_frame, test_crc_coverage_is_15_in_both_configs)
 }
 
 /*
- * The two HAL packet formats. The interesting assertion is now the first pair:
- * BOTH are RADIANT_LEN_FIXED, and tracking is fixed because of Spike B rather than
- * because of the hardware.
- *
- * RADIANT_LEN_FROM_BODY is what a backend maps onto nRF PCNF0.LFLEN=8, and that
- * register reads byte 3 as a length. Byte 3 is a control byte: an acknowledged
- * frame carries 0xAA there, which parses as LENGTH=170, overruns MAXLEN and is
- * discarded as a CRC error. Such a receiver hears every broadcast perfectly
- * and drops every acknowledged and burst frame in silence - which is "ERG mode
- * does not work", found months later. This assertion is the regression test
- * for that, and it is worth more than anything else in this file.
+ * The two HAL packet formats. The key assertion is the first pair: BOTH are
+ * RADIANT_LEN_FIXED, and tracking is fixed because of Spike B rather than
+ * the hardware. RADIANT_LEN_FROM_BODY maps onto nRF PCNF0.LFLEN=8, which
+ * reads byte 3 (actually a control byte) as a length - an acknowledged
+ * frame's 0xAA there parses as LENGTH=170, overruns MAXLEN, and is silently
+ * discarded as a CRC error: a receiver that hears every broadcast perfectly
+ * and drops every acknowledged/burst frame ("ERG mode does not work", found
+ * months later). This is the regression test for that.
  */
 ZTEST(radiant_frame, test_pkt_formats)
 {
@@ -725,14 +710,11 @@ ZTEST(radiant_frame, test_decode_captured_frame)
  */
 
 /*
- * BITS 2:0 == 010 is the whole invariant, on encode and on decode. Nothing else
- * about the byte is ever an error.
- *
- * The wrong answer this test exists to exclude is named, because it shipped:
- * the version of radiant_frame.c written against Spike B part 1 cross-checked bits
- * 4:0 against payload_len + 2, which rejects EVERY valid in-slot frame. 0xA2 is
- * an eight-byte slave packet whose low five bits read 2, and part 1's check
- * wanted 10. That is the PCNF0.LFLEN=8 defect reintroduced in software.
+ * Bits 2:0 == 010 is the whole invariant, on encode and decode; nothing else
+ * about the byte is ever an error. The wrong answer this test excludes
+ * shipped once: a version cross-checked bits 4:0 against payload_len + 2,
+ * which rejects EVERY valid in-slot frame - 0xA2's low five bits read 2, but
+ * that check wanted 10. The PCNF0.LFLEN=8 defect, reintroduced in software.
  */
 ZTEST(radiant_frame, test_control_byte_low_bits_are_the_only_invariant)
 {
@@ -1035,14 +1017,12 @@ ZTEST(radiant_frame, test_null_and_unknown_configuration_are_rejected)
 }
 
 /*
- * The flat parser takes the frame geometry from the configuration and the
- * control byte's bits 2:0 from the air, and nothing else. Every combination of
- * the five flags above legal bits 2:0 must parse as a 17-byte frame; every
- * value with bits 2:0 != 010 must be RADIANT_FRAME_ECTRL.
- *
- * The wrong answer this excludes by name: taking the length from bits 4:0. It
- * gives the right answer for 0x0A - 8 + 2 = 10 - and the wrong one for all
- * eight in-slot values, which is why part 1's reading survived 750 frames.
+ * The flat parser takes frame geometry from the configuration and only bits
+ * 2:0 of the control byte from the air. Every combination of the five flags
+ * above legal bits 2:0 must parse as a 17-byte frame; bits 2:0 != 010 must be
+ * RADIANT_FRAME_ECTRL. The wrong answer this excludes: taking the length
+ * from bits 4:0, which is right for 0x0A (8+2=10) and wrong for all eight
+ * in-slot values - why part 1's reading survived 750 frames.
  */
 ZTEST(radiant_frame, test_flat_parse_ignores_everything_but_bits_2_0)
 {
@@ -1103,14 +1083,10 @@ ZTEST(radiant_frame, test_flat_parse_ignores_everything_but_bits_2_0)
  * ---------------------------------------------------------------------------
  */
 
-/*
- * THE table test. All eleven values that have been on the air, against the
- * six-field decode.
- *
- * The two columns of ctrl_cases[] were derived independently - the hex from the
- * logs' B3= column, the fields from part 2's bit table - so this asserts that
- * the field model reproduces the air, not that the encoder agrees with itself.
- */
+/* The table test: all eleven values that have been on the air, against the
+ * six-field decode. The two columns of ctrl_cases[] were derived
+ * independently (hex from the logs' B3= column, fields from part 2's bit
+ * table), so this asserts the field model reproduces the air. */
 ZTEST(radiant_frame, test_eleven_measured_control_bytes)
 {
 	zassert_equal(ARRAY_SIZE(ctrl_cases), 11u,
@@ -1169,16 +1145,12 @@ ZTEST(radiant_frame, test_eleven_measured_control_bytes)
 }
 
 /*
- * 0xAA and 0xA2 are the same frame apart from the slot bit, and that is the
- * single most load-bearing sentence in part 2.
- *
- * Part 1 saw 0xAA four times from a one-block burst and wrote down "do not read
- * that as burst-last". Part 2's run C is the control that settles it: the same
- * Feather, the same stack, the same driver script, the same payload bytes, with
- * only the channel role changed from slave to master - 0xA2 became 0xAA and
- * 0x82 became 0x8A. One bit moved. Acknowledged data IS a one-packet burst, on
- * air and byte for byte, which is why radiant_ack.c and radiant_burst.c share one
- * encoder and why a receiver dispatching on this byte cannot tell them apart.
+ * 0xAA and 0xA2 are the same frame apart from the slot bit - the single most
+ * load-bearing sentence in part 2. Run C's control settled it: same rig,
+ * same payload, only the channel role changed slave->master, and 0xA2 became
+ * 0xAA, 0x82 became 0x8A. One bit moved. Acknowledged data IS a one-packet
+ * burst on air, which is why radiant_ack.c and radiant_burst.c share one
+ * encoder and a receiver cannot tell them apart by this byte.
  */
 ZTEST(radiant_frame, test_ack_data_is_a_one_packet_burst)
 {
@@ -1213,13 +1185,10 @@ ZTEST(radiant_frame, test_ack_data_is_a_one_packet_burst)
 }
 
 /*
- * The reply frame - the row part 1 listed as never observed.
- *
- * Bit 6 set, bit 5 echoed, bit 4 complemented: 82 -> D2, 92 -> C2, A2 -> F2,
- * B2 -> E2, on every one of the 165 adjacent CRC-valid data/acknowledgement
- * pairs in runs 0, A and B. Read as "the sequence bit I expect next" that is
- * exactly right, and read as "an echo of what I just received" it is exactly
- * wrong - which is why the complement is asserted rather than the echo.
+ * The reply frame, a row part 1 listed as never observed: bit 6 set, bit 5
+ * echoed, bit 4 complemented - 82->D2, 92->C2, A2->F2, B2->E2, over every one
+ * of 165 adjacent CRC-valid pairs in runs 0, A and B. Bit 4 is "the sequence
+ * bit expected next", not an echo of what was just received.
  */
 ZTEST(radiant_frame, test_reply_frame_relationship)
 {
@@ -1353,13 +1322,12 @@ ZTEST(radiant_frame, test_same_payload_two_control_bytes)
 }
 
 /*
- * THE REGRESSION TEST FOR THE LIVE BUG.
- *
- * A slave's in-slot frame - bit 3 clear - must make, encode, transmit-shape and
- * decode. The version of radiant_frame.c written against Spike B part 1 rejected
- * every one of these with RADIANT_FRAME_ELEN, because 0xA2's low five bits are
- * 00010 = 2 and the check wanted payload_len + 2 = 10. Nothing on the receive
- * side would have got through: every frame a slave sends has bit 3 clear.
+ * The regression test for the live bug: a slave's in-slot frame (bit 3
+ * clear) must make, encode, transmit-shape and decode. An earlier version
+ * rejected every one of these with RADIANT_FRAME_ELEN, since 0xA2's low five
+ * bits are 00010=2 and the check wanted payload_len+2=10 - nothing on the
+ * receive side would have got through, since every slave frame has bit 3
+ * clear.
  */
 ZTEST(radiant_frame, test_a_slave_frame_is_not_rejected)
 {
@@ -1444,27 +1412,15 @@ ZTEST(radiant_frame, test_flat_parse_accepts_every_measured_control_byte)
  */
 
 /*
- * THE ADVANCED-BURST CONTROL-BYTE PREDICTION IS WITHDRAWN, NOT RESTATED.
- *
- * docs/ant-radio-link.md once predicted 0x1A for a 24-byte advanced-burst
- * frame. A later pass corrected that to 0x9A, on the reading that bits 4:0
- * carry payload + 2 with the burst type bits above them. Spike B part 2
- * falsified the premise: 0x0A's low five bits read 10 and 0xA2's read 2, both
- * with an eight-byte payload, so bits 4:0 are not a length and there is nothing
- * to compute a prediction from. Neither 0x1A nor 0x9A is asserted as a control
- * byte anywhere in this module or this file, and the test that pinned 0x9A was
- * deleted rather than adjusted - a test asserting a withdrawn prediction is
- * worse than no test, because it makes the prediction look checked.
- *
- * (For the record: the only 0x1A this bench has ever seen appeared twice, in
- * runs B and C, as a CRC-FAILED frame one bit away from 0x0A. It is a bit
- * error.)
- *
- * What this test asserts is only what is not speculative: the control byte does
- * not move when the payload length does - which is the positive form of "there
- * is no length in it" - the module's arithmetic holds at the top of its range,
- * the coverage invariant still binds the two configurations at 31 bytes, and
- * NEITHER hardware format claims it can carry the frame.
+ * The advanced-burst control-byte prediction is withdrawn, not restated.
+ * docs/ant-radio-link.md once predicted 0x1A, later corrected to 0x9A, for a
+ * 24-byte advanced-burst frame, on the reading that bits 4:0 carry payload+2.
+ * Spike B part 2 falsified that premise (0x0A reads 10, 0xA2 reads 2, same
+ * 8-byte payload), so neither byte is asserted anywhere in this module. What
+ * this test asserts is only the non-speculative part: the control byte does
+ * not move with payload length, the module's arithmetic holds at the top of
+ * its range, the coverage invariant still binds both configs at 31 bytes,
+ * and neither hardware format claims it can carry the frame.
  */
 ZTEST(radiant_frame, test_long_payload_arithmetic_and_the_format_limit)
 {

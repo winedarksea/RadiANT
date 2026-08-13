@@ -2,28 +2,16 @@
 /*
  * radiant_bridge.h - the sample bus and the sink registry.
  *
- * Provenance: docs/radiant-bridge.md sections 3-4, which is this project's own
- * architecture document. `struct radiant_sample` is that document's record,
- * transcribed rather than redesigned; the vocabulary constants below mirror
- * docs/radiant-telemetry.md section 7's table, which is also mirrored in
- * tools/ant_pages.py - three copies of one table, and a divergence between any
- * two of them is a bug in this file or in that script, never a design choice.
+ * struct radiant_sample mirrors docs/radiant-bridge.md sections 3-4; the
+ * field vocabulary below mirrors docs/radiant-telemetry.md section 7's
+ * table and tools/ant_pages.py - three copies that must never diverge.
  *
- * ---------------------------------------------------------------------------
- * What this is and is not
- * ---------------------------------------------------------------------------
- * This is P5 of the multiprotocol plan: "the sample bus and sink registry
- * (SS3-4)... pure refactor, no radio risk." It is deliberately scoped to
- * exactly that. The binding table (S5) and the rule evaluator (S6) are P6 and
- * are not here - `source` below is an opaque caller-supplied index, exactly as
- * S3's record defines it ("binding index - NOT a device number"), and nothing
- * in this file resolves one into a label, a UUID or a policy. A caller with no
- * binding table yet may use any stable per-sensor index it already has (a
- * channel number, for instance) and the bus does not care.
- *
- * Everything here sits strictly above the profile decoder, per section 2's
- * amended rule 3: nothing in this file or in radiant_bridge_hr.c ever adds a
- * byte to an ANT frame, and neither reaches a radiant_core header.
+ * This is P5 of the multiprotocol plan: sample bus + sink registry only.
+ * `source` is an opaque caller-supplied index (not a device number, not
+ * resolved to a label/UUID/policy here) - the binding table (S5) and rule
+ * evaluator (S6) are P6, not this file. Sits strictly above the profile
+ * decoder: nothing here or in radiant_bridge_hr.c touches an ANT frame or
+ * a radiant_core header.
  */
 
 #ifndef RADIANT_BRIDGE_H_
@@ -37,19 +25,11 @@ extern "C" {
 #endif
 
 /* ---------------------------------------------------------------------------
- * The section 7 vocabulary
- *
- * Instantaneous classes (0x01-0x2F) and the accumulating class (0x30-0x3F) are
- * both decimal-scaled: value_SI = raw * 10^exp, in the canonical unit named
- * here. 0x26 heart rate is the one stated exception - bpm, not SI - and it is
- * stated as an exception in radiant-telemetry.md section 7 for that reason.
- *
- * 0x27 time interval is PROPOSED, NOT ALLOCATED (radiant-bridge.md section
- * 3.2): the vocabulary table in radiant-telemetry.md and its mirror in
- * tools/ant_pages.py do not carry it yet, and allocating it in one place and
- * not the other three is exactly the drift the mirror exists to prevent. It is
- * therefore deliberately absent here too. RR interval has no home until it is
- * allocated in all three places at once.
+ * Section 7 vocabulary. Instantaneous (0x01-0x2F) and accumulating
+ * (0x30-0x3F) classes are decimal-scaled: value_SI = raw * 10^exp. 0x26
+ * heart rate is bpm, the one stated non-SI exception. 0x27 time interval is
+ * proposed, not allocated (section 3.2) - absent here until allocated in
+ * all three vocabulary copies at once.
  * ---------------------------------------------------------------------------
  */
 #define RADIANT_FIELD_BOOLEAN_STATE       0x01u /* canonical unit: none (0/1) */
@@ -102,12 +82,9 @@ extern "C" {
 #define RADIANT_SAMPLE_STALE        (1u << 2) /* liveness heartbeat missed 3x its interval */
 
 /*
- * The record. docs/radiant-bridge.md section 3, verbatim: "the record is what
- * the envelope already defines, made concrete."
- *
- * t_us is the t_sync that produced the value, not the time it was dequeued -
- * captured at decode, so a sink delayed behind a full bus can still report
- * when a sample was actually heard.
+ * The record (docs/radiant-bridge.md section 3). t_us is the decode-time
+ * t_sync, not dequeue time, so a sink delayed behind a full bus still
+ * reports when the sample was actually heard.
  */
 struct radiant_sample {
 	uint32_t source;     /* binding index - NOT a device number; see S5 (P6) */
@@ -119,23 +96,16 @@ struct radiant_sample {
 	uint64_t t_us;
 };
 
-/*
- * A reserved `source` for the bus's own diagnostics - the drop counter
- * section 3.3 says must be "visible as a number, not as a gap". No real
- * binding will ever be assigned this index: RADIANT_BRIDGE_MAX_SOURCES (below)
- * bounds ordinary sources strictly below it.
- */
+/* Reserved source for the bus's own diagnostics (drop counter, section
+ * 3.3) - never a real binding's index. */
 #define RADIANT_BRIDGE_DIAG_SOURCE  UINT32_MAX
 #define RADIANT_BRIDGE_DIAG_FIELD_DROPPED 0u
 
 /* ---------------------------------------------------------------------------
- * The bus
- *
- * A ring buffer that drops oldest and counts the drops (section 3.3). Posting
- * is safe from any context including a radio callback - it is bounded work: a
- * critical section, a copy, an index update, nothing that can block. Draining
- * dispatches to every registered sink and must run from thread context, since
- * a sink's publish() may do real work (a socket write, a flash write).
+ * The bus. Ring buffer, drops oldest and counts drops (section 3.3).
+ * post() is ISR-safe (bounded: lock, copy, index update, no blocking).
+ * drain() dispatches to every sink and must run in thread context, since
+ * publish() may do real work (socket write, flash write).
  * ---------------------------------------------------------------------------
  */
 
@@ -159,22 +129,15 @@ struct radiant_bridge_stats {
 
 const struct radiant_bridge_stats *radiant_bridge_stats_get(void);
 
-/* Test/reset hook. Not for production use - see fake_radio.c's equivalent for
- * why a reset primitive belongs beside the module it resets rather than being
- * synthesised by a test from public API calls. */
+/* Test/reset hook. Not for production use. */
 void radiant_bridge_reset(void);
 
 /* ---------------------------------------------------------------------------
- * Sinks
- *
- * "A sink is a registration, not a case in a switch" (section 4). The same
- * shape src/profiles/profile_sched.c uses for its client seam - a registered
- * callback getting first refusal - reused rather than reinvented, with the
- * one necessary difference that a sink registry is N entries where the
- * scheduler's client seam is exactly one: STRUCT_SECTION_ITERABLE is Zephyr's
- * mechanism for "every TU that defines one of these, linked into one array,
- * with no central list to edit" - the same trick DEVICE_DEFINE and
- * SHELL_CMD_ARG_REGISTER already use elsewhere in the tree.
+ * Sinks. A sink is a registration, not a case in a switch (section 4) -
+ * same callback-first-refusal shape as profile_sched.c's client seam, but
+ * N entries instead of one. STRUCT_SECTION_ITERABLE links every TU's
+ * definition into one array with no central list to edit (as DEVICE_DEFINE
+ * and SHELL_CMD_ARG_REGISTER do elsewhere in the tree).
  * ---------------------------------------------------------------------------
  */
 

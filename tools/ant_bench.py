@@ -45,8 +45,8 @@ from ant_probe import (  # noqa: E402
     MESG_CAPABILITIES_ID,
     MESG_REQUEST_ID,
     FrameReader,
-    frame,
     close_device,
+    frame,
     open_device,
     reset_stack,
 )
@@ -176,7 +176,10 @@ def report(result: dict) -> None:
 
 
 def compare(paths: list[str]) -> int:
-    results = [json.load(open(p)) for p in paths]
+    results = []
+    for p in paths:
+        with open(p) as handle:
+            results.append(json.load(handle))
     for r in results:
         report(r)
 

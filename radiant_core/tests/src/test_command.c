@@ -2,44 +2,27 @@
 /*
  * test_command.c - response slots and the reliable-command state machine.
  *
- * Four things are being established, and only the last needs the radio.
+ * Covers, and only the last needs the radio:
+ *   1. The tag, at both widths - the width is the channel's, never the
+ *      node's; the 16-bit tag is the 64-bit tag's prefix; a forgery right in
+ *      its first two bytes passes short and fails long.
+ *   2. Section 9's idempotency rule: verify first and change no state on
+ *      failure, answer a duplicate without executing it, accept only inside
+ *      1..64, adopt a sequence exactly once per epoch; plus backoff, costed
+ *      in simulated microseconds.
+ *   3. The phase, recomputed - RF-5a's forward reference: two schedule
+ *      frames sent at different instants must announce different phases
+ *      resolving to the SAME absolute window, asserted against the page
+ *      scheduler rather than the arithmetic alone.
+ *   4. The slot itself: a response slot is an ordinary bounded receive
+ *      window, and a node that announces no window arms nothing new.
  *
- *   1. THE TAG, AT BOTH WIDTHS. The width is the channel's and never the
- *      node's, the 16-bit tag is the 64-bit tag's prefix, and a forgery that is
- *      right in its first two bytes passes at the short width and fails at the
- *      long one. That last assertion is the whole of what the long-range PHY's
- *      length extension bought this page.
- *   2. SECTION 9'S IDEMPOTENCY RULE, as four numbered rules in four separate
- *      tests: verify first and change no state on failure, answer a duplicate
- *      without executing it, accept only inside 1..64, and adopt a sequence
- *      from nothing exactly once per epoch. Plus the backoff, costed in
- *      simulated microseconds rather than asserted to exist.
- *   3. THE PHASE, RECOMPUTED. RF-5a announced a downlink window and recorded
- *      that a scheduler-driven node had to leave the interval at zero because
- *      the phase is relative to the carrying frame. Two schedule frames sent at
- *      different instants must announce different phases that resolve to the
- *      SAME absolute window, and that is asserted directly against the page
- *      scheduler rather than against the arithmetic alone.
- *   4. THE SLOT ITSELF. A response slot is an ordinary bounded receive window -
- *      the arm the mock records is RADIANT_FRAME's RX arm, at the announced
- *      instant, for the announced dwell - and a node that announces no window
- *      arms exactly what it armed before this file existed.
- *
- * ---------------------------------------------------------------------------
- * WHAT THE LATENCY NUMBERS HERE ARE, AND WHAT THEY ARE NOT
- * ---------------------------------------------------------------------------
- * The phase gate asks for MEASURED command latency, host request to node
- * execution, against an FE-C channel as the control, with a bounded worst case,
- * a mean and a miss rate. That measurement needs a host driving a real dongle
- * against a real node, and it is deferred to the combined bench session.
- *
- * What is here is the deterministic equivalent, on the mock's virtual clock,
- * and it is labelled as such in every test name that carries it: latency in
- * SIMULATED microseconds, bounded by construction rather than observed. It
- * establishes that the mechanism has the shape the gate will measure - worst
- * case one interval, mean half an interval, and a missed slot costing exactly
- * one further interval and never a whole period. It does not establish what
- * that costs in the air.
+ * Latency numbers here are the deterministic equivalent on the mock's
+ * virtual clock (labelled SIMULATED in every test name), not the phase
+ * gate's measured host-to-node latency against a real dongle - that
+ * measurement is deferred to the combined bench session. What's asserted
+ * here is the mechanism's shape: worst case one interval, mean half an
+ * interval, a missed slot costing exactly one more interval.
  */
 
 #include <errno.h>
@@ -273,13 +256,9 @@ ZTEST(command, test_the_short_tag_is_the_long_tags_prefix_and_the_rest_is_the_ga
 	 * bytes. That is what makes the two widths one scheme. */
 	zassert_mem_equal(tag_s, tag_l, PROFILE_TLM_CMD_TAG_STD);
 
-	/*
-	 * AND HERE IS THE POINT OF THE LONGER FRAME. A forgery that got the
-	 * first two bytes right - which is 2^-16 of guesses - is accepted at the
-	 * short width and refused at the long one. The six extra bytes are the
-	 * difference between a rate-limit-mitigated actuator path and a
-	 * defensible one.
-	 */
+	/* The point of the longer frame: a forgery right in its first two bytes
+	 * (2^-16 of guesses) is accepted at the short width and refused at the
+	 * long one. */
 	zassert_true(profile_cmd_tag_ok(&short_n, body_l,
 					&body_l[PROFILE_TLM_CMD_COVERED]));
 	body_l[PROFILE_TLM_CMD_COVERED + 2u] ^= 0x01u;
@@ -1034,12 +1013,9 @@ ZTEST(command, test_simulated_latency_is_bounded_by_one_interval_and_averages_ha
 		}
 	}
 
-	/*
-	 * THE BOUNDED WORST CASE. A request arriving just after a window waits
-	 * almost exactly one interval and never more. This is the number the
-	 * bench gate will measure against an FE-C channel, whose equivalent is
-	 * its channel period; here it is asserted rather than observed.
-	 */
+	/* The bounded worst case: a request arriving just after a window waits
+	 * almost exactly one interval and never more - asserted here rather
+	 * than observed on the bench. */
 	zassert_true(worst < DL_INTERVAL_US, "simulated worst case %llu us",
 		     (unsigned long long)worst);
 	zassert_true(worst > (DL_INTERVAL_US - (DL_INTERVAL_US / 100u)),
@@ -1073,12 +1049,9 @@ ZTEST(command, test_a_missed_response_slot_costs_exactly_one_interval_and_no_mor
 	first = profile_cmd_next_window(&n, t_req);
 	zassert_not_equal(RADIANT_TIME_NEVER, first);
 
-	/*
-	 * A miss is a window that opened and caught nothing. The next attempt
-	 * lands on the next window, so the cost of m misses is m intervals -
-	 * NOT m channel periods, which is what it would be without a response
-	 * slot and is the whole reason this phase exists.
-	 */
+	/* A miss is a window that opened and caught nothing; the next attempt
+	 * lands on the next window, so m misses cost m intervals - not m
+	 * channel periods, which is the whole reason this phase exists. */
 	for (misses = 0u; misses <= 3u; misses++) {
 		radiant_time_t landed =
 			profile_cmd_next_window(&n, first + 1u +

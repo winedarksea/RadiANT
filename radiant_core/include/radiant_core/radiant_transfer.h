@@ -2,143 +2,109 @@
 /*
  * radiant_transfer.h - acknowledged data and burst: the one engine both of them are.
  *
- * Provenance: clean-room. Written from docs/spike-b-part2-results.md (the whole
- * control byte, the four measured data/acknowledgement pairs, and every
- * microsecond figure below), docs/spike-b-results.md, docs/ant-radio-link.md,
- * radiant_core/include/radiant_core/radiant_frame.h, radiant_core/include/radiant_core/radiant_radio_hal.h and the
- * buffer-ownership obligations B1-B5 written into src/ant_radio.h. Nothing here
- * derives from sdk-ant, from libant.a, from disassembly of any binary, or from
- * any adopter-gated ANT+ device profile document.
- * See docs/decisions/0002-clean-room-policy.md.
+ * Provenance: clean-room, from docs/spike-b-part2-results.md (control byte,
+ * the four measured data/ack pairs, every us figure below),
+ * docs/spike-b-results.md, docs/ant-radio-link.md, radiant_frame.h,
+ * radiant_radio_hal.h, and the buffer-ownership obligations B1-B5 in
+ * src/ant_radio.h. Nothing here derives from sdk-ant, libant.a, or any
+ * ANT+ device profile document. See
+ * docs/decisions/0002-clean-room-policy.md.
  *
  * ---------------------------------------------------------------------------
- * Why there is one module and not two
+ * Why one module, not two
  * ---------------------------------------------------------------------------
- * Acknowledged data is a one-packet burst. Not "like" one - byte for byte the
- * same frame, because 0xAA decomposes as exchange + not-ack + LAST + sequence 0
- * + slot-opener, and "last packet of the transfer, sequence 0" is exactly what
- * a one-packet burst is. Spike B part 1 saw 0xAA on four one-block bursts and
- * refused to call it burst-last; part 2 captured 0xB2 and 0xA2 from real
- * multi-packet bursts and settled it. A receiver dispatching on the control
- * byte cannot tell acknowledged data from a one-packet burst and must not
- * pretend to: the distinction between them is a serial-layer distinction only.
- *
- * So radiant_ack.c and radiant_burst.c share one encoder and one state machine.
- * radiant_transfer_ack_data() is radiant_transfer_submit() with a copied eight-byte
- * block carrying START|END, and that is the whole of the difference.
+ * Acknowledged data is a one-packet burst byte for byte: 0xAA decomposes as
+ * exchange + not-ack + LAST + sequence 0 + slot-opener, exactly what "last
+ * packet, sequence 0" means. A receiver dispatching on the control byte
+ * cannot and must not tell the two apart - the distinction is serial-layer
+ * only. So radiant_ack.c and radiant_burst.c share one encoder and one state
+ * machine; radiant_transfer_ack_data() is radiant_transfer_submit() with a
+ * copied eight-byte block carrying START|END.
  *
  * ---------------------------------------------------------------------------
  * The sequence is ONE BIT, so this is stop-and-wait
  * ---------------------------------------------------------------------------
- * There is no three-bit burst sequence anywhere in an ANT frame; there is
- * nowhere for one to live. Bit 4 alternates 0,1,0,1,... across on-air packets
- * and nothing else moves until the final packet sets bit 5. Nineteen bursts of
- * 1, 2, 3, 6, 9, 17, 27 and 51 packets, with the sniffer's ring-drop counter at
- * zero throughout, and no frame where the sequence bit disagreed with the packet
- * index (docs/spike-b-part2-results.md).
+ * No three-bit burst sequence exists in an ANT frame. Bit 4 alternates per
+ * on-air packet and nothing else moves until the final packet sets bit 5
+ * (docs/spike-b-part2-results.md: 19 bursts, sequence bit never disagreed
+ * with packet index). A one-bit sequence cannot express a window, so the
+ * protocol is stop-and-wait; a future design assuming a sliding window
+ * (including the serial protocol's own two-bit burst-header sequence) is a
+ * serial-side concept to translate here, not forward.
  *
- * A one-bit sequence number cannot express a window, so the protocol is
- * stop-and-wait: one data packet, one acknowledgement, one data packet. This
- * module implements exactly that, and any future design that assumed a sliding
- * window - including the serial protocol's own two-bit burst-header sequence -
- * is a serial-side concept that has to be translated here rather than forwarded.
- *
- * THE SEQUENCE BIT ALTERNATES PER ON-AIR PACKET, NOT PER HOST BLOCK. Run B sent
- * seventeen 24-byte advanced-burst blocks, the stack fragmented each into three
- * eight-byte packets, and the bit alternated fifty-one times. A block of 8, 16
- * or 24 bytes is 1, 2 or 3 packets here for the same reason.
+ * THE SEQUENCE BIT ALTERNATES PER ON-AIR PACKET, NOT PER HOST BLOCK: a
+ * 24-byte advanced-burst block fragments into three 8-byte packets, each
+ * flipping the bit. A block of 8/16/24 bytes is 1/2/3 packets for the same
+ * reason.
  *
  * ---------------------------------------------------------------------------
  * The acknowledgement is a full frame, and its bit 4 is a COMPLEMENT
  * ---------------------------------------------------------------------------
- * It is not a short ack. It carries the same channel ID and eight payload
- * bytes, and the acknowledger sends whatever is in its own broadcast buffer at
- * that moment - in every capture, the master's next bicycle-power page, which
- * then goes out unchanged as the next scheduled broadcast one period later.
+ * Not a short ack: same channel ID and eight payload bytes, carrying whatever
+ * is in the acknowledger's broadcast buffer at that moment.
  *
  * Relative to the packet it answers: bit 6 set, bit 5 echoed, bit 4
- * COMPLEMENTED. 165 adjacent CRC-valid pairs across runs 0, A and B, no
- * counterexamples: 82 -> D2, 92 -> C2, A2 -> F2, B2 -> E2. Read as "the
- * sequence bit I expect next", which is what a stop-and-wait protocol
- * acknowledges with, that is exactly right; read as "an echo of what I just
- * received" it is exactly wrong, and a receiver built on the second reading
- * acknowledges every packet with the wrong byte.
+ * COMPLEMENTED (165 adjacent CRC-valid pairs, no counterexamples:
+ * 82->D2, 92->C2, A2->F2, B2->E2). Read as "the sequence bit I expect next"
+ * this is exactly right for stop-and-wait; read as "an echo of what I just
+ * received" it is exactly wrong.
  *
  * ---------------------------------------------------------------------------
- * The receive path must TRANSMIT, and it is the tightest deadline in the link
+ * The receive path must TRANSMIT - the tightest deadline in the link
  * ---------------------------------------------------------------------------
- * A channel that hears acknowledged data or a burst packet has about 1.55 ms to
- * put a full eight-byte frame back on the air. That is what
- * RADIANT_TRANSFER_REPLY_US is, it is what radiant_transfer_on_data() spends its budget
- * on, and it is why that function arms the transmit BEFORE it hands the payload
- * up to its caller.
+ * A channel that hears acknowledged data or a burst packet has ~1.55 ms
+ * (RADIANT_TRANSFER_REPLY_US) to reply, which is why
+ * radiant_transfer_on_data() arms the transmit BEFORE handing the payload to
+ * its caller.
  *
- * EVERY MICROSECOND FIGURE BELOW IS A SOFTWARE TIMESTAMP. They are
- * ADDRESS-interrupt to ADDRESS-interrupt, so both ends of every interval carry
- * one interrupt entry and the constant offset cancels - but the jitter does
- * not. docs/spike-b-part2-results.md names hardware ((D)PPI) timestamps as
- * untested item 7 and says the 1.55 ms turnaround in particular deserves a
- * hardware-captured measurement before a transmit deadline is designed around
- * it. A backend whose timer arming depends on these numbers should treat them
- * as accurate to tens of microseconds and no better, and the guard band below
- * is sized on that basis rather than on the sample standard deviations.
+ * EVERY MICROSECOND FIGURE BELOW IS A SOFTWARE TIMESTAMP (ADDRESS-interrupt
+ * to ADDRESS-interrupt; the constant offset cancels but jitter doesn't).
+ * Hardware ((D)PPI) timestamps are unmeasured - treat these as accurate to
+ * tens of microseconds and no better; the guard band below is sized on that
+ * basis, not on the sample standard deviations.
  *
  * ---------------------------------------------------------------------------
  * Buffer ownership - the expensive part
  * ---------------------------------------------------------------------------
- * src/ant_radio.h states obligations B1-B5 at length. The short form: the
- * bridge holds ONE 24-byte block behind a binary semaphore and gives it back
- * only on EVENT_TRANSFER_NEXT_DATA_BLOCK, _TX_COMPLETED or _TX_FAILED. Miss the
- * first exactly once per accepted block and a host burst does not break, it
- * stalls 1000 ms per packet and then reports a plausible-looking error.
+ * src/ant_radio.h states obligations B1-B5. Short form: the bridge holds ONE
+ * 24-byte block behind a binary semaphore, released only on
+ * EVENT_TRANSFER_NEXT_DATA_BLOCK/_TX_COMPLETED/_TX_FAILED. Miss the first
+ * once and a host burst stalls 1000 ms per packet before a plausible-looking
+ * error.
  *
- * This module expresses those three events as radiant_transfer_event and guarantees
- * the invariant that makes B1-B5 hold:
+ * This module expresses those three events as radiant_transfer_event and
+ * guarantees: EXACTLY ONE radiant_transfer_ops::done() CALL CARRIES ANY GIVEN
+ * BLOCK POINTER, AND EXACTLY ONE TERMINAL EVENT ENDS ANY TRANSFER.
  *
- *   EXACTLY ONE radiant_transfer_ops::done() CALL CARRIES ANY GIVEN BLOCK POINTER,
- *   AND EXACTLY ONE TERMINAL EVENT (TX_COMPLETED or TX_FAILED) ENDS ANY
- *   TRANSFER.
+ * A block is released with RADIANT_TRANSFER_EV_NEXT_BLOCK when its final
+ * packet's acknowledgement arrives - the last moment the old block could
+ * still be needed. Releasing earlier (at copy-into-frame-buffer time) would
+ * buy one turnaround of pipelining but let the engine hold two blocks at
+ * once; deliberately not taken, since B1 forbids re-reading a released
+ * buffer for any reason and a single block in flight mirrors the bridge's
+ * own single buffer.
  *
- * A block is released with RADIANT_TRANSFER_EV_NEXT_BLOCK when the acknowledgement
- * of its final packet arrives - the moment the engine genuinely needs the next
- * one and the last moment it could still have needed the old one. Releasing
- * earlier, at the instant the last packet's bytes were copied into the frame
- * buffer, would buy one turnaround of pipelining and would mean the engine can
- * hold two blocks at once; that is a real option and it is deliberately not
- * taken, because a single block in flight mirrors the bridge's own single
- * buffer and because B1 says the backend must not assume the buffer is still
- * valid after it releases it - which forecloses re-reading it for any reason.
- *
- * A submit call that fails releases nothing and raises no event (B2). That is
- * why radiant_transfer_submit() arms the radio before it records the block as
- * accepted, rather than the other way round.
+ * A failed submit call releases nothing and raises no event (B2) - why
+ * radiant_transfer_submit() arms the radio before recording the block as
+ * accepted, not after.
  *
  * ---------------------------------------------------------------------------
  * What is NOT here, because it was not measured
  * ---------------------------------------------------------------------------
- * Named so their absence is visibly a decision rather than an oversight. Each
- * one is marked again at the code that would have used it.
- *
- *   1. SENDER-SIDE RETRY. What a data sender does when an acknowledgement goes
- *      missing was never captured, because no acknowledgement went missing in a
- *      completed transfer. An empty reply window therefore fails the transfer
- *      with RADIANT_TRANSFER_FAIL_NO_ACK and does not retransmit. Inventing a retry
- *      here would put an unmeasured frame on the air at an unmeasured instant.
- *   2. ACKNOWLEDGING A SLOT OPENER. radiant_ctrl_reply_for() returns 0 for 0x8A and
- *      0xAA because no acknowledgement of a slot-opening data packet has ever
- *      been captured, so bit 3 of that reply has no measured value. This module
- *      does not guess one: radiant_transfer_on_data() refuses, counts it in
- *      stats.unackable_openers, and returns RADIANT_TRANSFER_ENOTSUP.
- *   3. AN ACKNOWLEDGEMENT CARRYING ANYTHING BUT THE BROADCAST BUFFER. Every one
- *      observed carried it. radiant_transfer_on_data() therefore requires
- *      ops->broadcast_payload and refuses rather than sending something else.
- *   4. BIT 3 AS "SLOT OPENER" IS `[inferred]`. What is measured is that it is
- *      not master-versus-slave. cfg.slot_opener follows the reading that fits
- *      every frame in both parts of the spike; the experiment that would settle
- *      it is a master-originated multi-packet burst to a real slave.
- *   5. ANY PAYLOAD OTHER THAN EIGHT BYTES. No frame with one has ever been on
- *      this bench's air across three spikes. A 16- or 24-byte block is
- *      fragmented into eight-byte packets here for that reason, and
+ * Marked again at the code that would have used each:
+ *   1. SENDER-SIDE RETRY. Never captured, so an empty reply window fails the
+ *      transfer with RADIANT_TRANSFER_FAIL_NO_ACK and does not retransmit.
+ *   2. ACKNOWLEDGING A SLOT OPENER. No such acknowledgement has ever been
+ *      captured, so radiant_transfer_on_data() refuses (ENOTSUP), counted in
+ *      stats.unackable_openers, rather than guessing bit 3's value.
+ *   3. AN ACKNOWLEDGEMENT CARRYING ANYTHING BUT THE BROADCAST BUFFER. Every
+ *      one observed carried it, so ops->broadcast_payload is required.
+ *   4. BIT 3 AS "SLOT OPENER" IS `[inferred]` - measured only that it isn't
+ *      master-vs-slave. cfg.slot_opener follows the reading that fits every
+ *      captured frame; a master-originated multi-packet burst to a real
+ *      slave would settle it.
+ *   5. ANY PAYLOAD OTHER THAN EIGHT BYTES. Never observed; a 16/24-byte
+ *      block fragments into 8-byte packets instead, and
  *      RADIANT_TRANSFER_PKT_BYTES is not a tunable.
  */
 
@@ -196,16 +162,13 @@ extern "C" {
  */
 
 /*
- * "The events routed to me are mine."
+ * "The events routed to me are mine." Stored in t->op by an arm that went
+ * through an authority with no HAL operation id to report; with this token
+ * radiant_transfer_on_tx/rx_event() stop filtering by op id. Every other
+ * value keeps the original filtering behaviour.
  *
- * Stored in t->op by an arm that went through an authority with no HAL
- * operation id to report. With this token radiant_transfer_on_tx_event() and
- * radiant_transfer_on_rx_event() stop filtering by op id; every other value keeps
- * the original behaviour, so a caller that DOES have real op ids - a future
- * direct-to-HAL user, or a test double - loses nothing.
- *
- * It is 0xFFFFFFFF rather than a small number because the HAL's ids are
- * "monotonically increasing, non-zero" and a small sentinel could collide with
+ * 0xFFFFFFFF rather than a small number because the HAL's ids are
+ * monotonically increasing and non-zero; a small sentinel could collide with
  * a real one on a long-running image.
  */
 #define RADIANT_TRANSFER_OP_EXTERNAL ((uint32_t)0xFFFFFFFFu)
@@ -320,36 +283,25 @@ extern "C" {
 #define RADIANT_TRANSFER_ACK_GUARD_US    250u
 
 /*
- * What a receiver does when a burst stops, from the failed run 0, and the only
- * place any run could show it: the master answered 0xD2 and then retransmitted
- * that identical frame - same payload, same CRC - twenty more times at 3143 us,
- * spanning 66 ms, before giving up. 21 attempts, twice, in the two 16-block
- * attempts of that run. `[measured, n=2]`, on one stack.
+ * What a receiver does when a burst stops, `[measured, n=2]`: the master
+ * answered 0xD2 then retransmitted that identical frame 20 more times at
+ * 3143 us, spanning 66 ms, before giving up (21 attempts, twice). 3143 vs.
+ * the 3113 a running burst takes is close enough to be the same timer and
+ * far enough apart (1%) to record as two numbers.
  *
- * 3143 against the 3113 a running burst actually takes is near enough that it
- * is plainly the same timer and far enough apart, at 1 %, to be worth recording
- * as two numbers rather than one.
+ * Implemented as radiant_transfer_reply_retransmit(), limit enforced here,
+ * but this module does NOT own the timer - that would be a second scheduler.
+ * radiant_sched.c owns no timer either (it arms absolute instants and lets
+ * the backend hold them), so recovery is meant to be driven off a
+ * housekeeping wake in api_sched_done().
  *
- * This module implements the retransmission as radiant_transfer_reply_retransmit()
- * and enforces the limit, but does NOT own the timer, and a timer in here would
- * be a second scheduler.
- *
- * WHERE THE TIMER GOES WHEN IT IS WIRED - not radiant_sched.c, which is what an
- * earlier version of this paragraph said. That module owns no timer of any
- * kind: it arms for absolute instants and lets the backend hold them, which is
- * exactly why radiant_api.c has to drive recovery off a housekeeping wake. The
- * retransmission belongs in api_sched_done(), the same low-jitter re-arm path
- * api_post_master_rx() already uses.
- *
- * AND IT IS NOT WIRED YET, deliberately. There is no production caller. Our
- * only receive window closes about 2.9 ms before a peer retry can arrive
- * (radiant_api.c arms the turnaround at broadcast t_sync + 2190 +/- 250; the
- * measured peer retry cadence puts the next data packet at t_sync + 5333), so
- * an acknowledger-side retransmission would put repeated replies on the air
- * into a link where the peer's own retries are already unhearable. What run 0
- * measured was a master repeating a NON-FINAL 0xD2 after a burst stopped, never
- * a final acknowledgement. Wiring it correctly needs a WAIT_NEXT state and a
- * window at ack t_sync + 1550 +/- 250, which is inbound-burst work.
+ * NOT WIRED YET, deliberately: there's no production caller. Our own receive
+ * window closes ~2.9 ms before a peer retry can arrive, so an
+ * acknowledger-side retransmission today would put replies on air into a
+ * link where the peer's own retries are already unhearable - run 0 measured
+ * a NON-FINAL 0xD2 repeat, never a final acknowledgement. Wiring it needs a
+ * WAIT_NEXT state and a window at ack t_sync + 1550 +/- 250 (inbound-burst
+ * work).
  */
 #define RADIANT_TRANSFER_REPLY_RETRY_US  3143u
 /* ATTEMPTS, not retransmissions: the measured 21 is one original plus twenty
@@ -357,20 +309,16 @@ extern "C" {
 #define RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX 21u
 
 /*
- * How long after the original acknowledgement a retransmission of it may still
- * be armed, and it is a SECOND limit rather than a restatement of the first.
+ * How long after the original acknowledgement a retransmission may still be
+ * armed - a SECOND limit, not a restatement of the first. The attempt
+ * counter alone isn't enough: TX_REPLY returns to IDLE without going through
+ * finish(), so reply_ctrl stays loaded for the channel's life, and an
+ * attempt count under 21 would say "repeat this" just as readily an hour
+ * later as 3 ms later.
  *
- * The attempt counter alone is not enough, because nothing clears the saved
- * reply when an exchange ends: TX_REPLY returns to IDLE without going through
- * finish(), so reset_transfer() never runs for a reply and reply_ctrl stays
- * loaded for the life of the channel. An attempt counter that has not reached
- * 21 therefore says "you may repeat this" just as readily an hour later as
- * 3 ms later, and the frame it would put on the air is a correctly-formed
- * acknowledgement of a packet nobody remembers sending.
- *
- * 21 x 3143 us. The last attempt the measurement permits is the 21st, at
- * 20 x 3143 = 62.9 ms, so this is that plus exactly one retry interval of
- * slack - derived from the same two measured numbers rather than picked.
+ * 21 x 3143 us: the 21st attempt lands at 20 x 3143 = 62.9 ms, so this is
+ * that plus one retry interval of slack, derived from the same two measured
+ * numbers rather than picked.
  */
 #define RADIANT_TRANSFER_REPLY_VALID_US \
 	((uint32_t)RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX * \
@@ -389,17 +337,16 @@ extern "C" {
 /*
  * The five control-byte fields for on-air packet `index` of a transfer.
  *
- *   exchange    always true - this is an acknowledged exchange either way
- *   ack         always false - these are the data packets, not the replies
- *   last        the caller's `last`, which is (final packet of the final block)
- *   seq         index & 1, and there is no wider form
+ *   exchange    always true - an acknowledged exchange either way
+ *   ack         always false - these are data packets, not replies
+ *   last        the caller's `last` (final packet of the final block)
+ *   seq         index & 1, no wider form
  *   slot_opener slot_opener_role && index == 0
  *
- * The slot rule is the `[inferred]` one (see gap 4 in the header comment): run C
- * changed only the channel role and moved 0x82 -> 0x8A and 0xA2 -> 0xAA, so the
- * bit follows the frame that opens the slot rather than the transmitter that is
- * master. Under that reading packet 0 of a master's burst carries it and
- * packets 1..N do not, which is what this produces.
+ * The slot rule is the `[inferred]` one (gap 4): changing only channel role
+ * moved 0x82->0x8A and 0xA2->0xAA, so the bit follows the frame that opens
+ * the slot rather than the master transmitter - packet 0 of a master's burst
+ * carries it, packets 1..N don't.
  *
  * Returns RADIANT_TRANSFER_OK, or RADIANT_TRANSFER_EINVAL for a null argument.
  */
@@ -567,26 +514,20 @@ struct radiant_transfer_cfg {
 	struct radiant_tx_power   power;
 
 	/*
-	 * The ANT channel this engine belongs to, 0 .. RADIANT_SCHED_MAX_CHANNELS-1.
-	 *
-	 * The engine posts its packets and its reply windows to radiant_sched.c
-	 * (see "One radio, one arming authority" above), whose slots are per
-	 * channel, so it has to name its own. There is no default: zero is a
-	 * real channel, and an engine that silently posted every transfer
-	 * against channel 0 would cancel channel 0's window on every
-	 * acknowledged message any other channel sent.
+	 * The ANT channel this engine belongs to,
+	 * 0 .. RADIANT_SCHED_MAX_CHANNELS-1. Needed because radiant_sched.c's
+	 * slots are per channel; no default - zero is a real channel, and
+	 * silently defaulting to it would cancel channel 0's window on every
+	 * other channel's acknowledged message.
 	 */
 	uint8_t               channel;
 
 	/*
-	 * True if this end's frames open the channel slot - under the
-	 * `[inferred]` reading of bit 3, that is the channel master. Only the
-	 * FIRST packet of a transfer carries the bit; packets 1..N do not.
-	 *
-	 * There is no safe default and it is therefore not defaulted: a master
-	 * that sent in-slot bytes would put 0x82 where 0x8A belongs, and a
-	 * slave that sent slot-opening bytes would claim a slot it does not
-	 * own. Both are one bit and neither is visible without a sniffer.
+	 * True if this end's frames open the channel slot (the `[inferred]`
+	 * reading of bit 3 - the channel master). Only the FIRST packet of a
+	 * transfer carries it. No safe default: getting it wrong either
+	 * misdirects 0x82 where 0x8A belongs or claims a slot not owned, and
+	 * neither is visible without a sniffer.
 	 */
 	bool slot_opener;
 
@@ -790,15 +731,11 @@ int radiant_transfer_ack_data(struct radiant_transfer *t, const uint8_t *payload
 			  uint8_t len, radiant_time_t t_sync_at);
 
 /*
- * Cancel whatever is in flight.
- *
- * The cancelled operation's terminal event STILL ARRIVES - the HAL says so and
- * K5 observed the mock doing it with no fault injection - so this may complete
- * synchronously (called from thread context, where radiant_radio_abort() delivers
- * the terminal before it returns) or on the deferred terminal (called from
- * inside a callback). Either way exactly one TX_FAILED with
- * RADIANT_TRANSFER_FAIL_ABORTED ends the transfer, and any block still held is
- * released with it.
+ * Cancel whatever is in flight. The cancelled operation's terminal event
+ * STILL ARRIVES (the HAL guarantees it), so this may complete synchronously
+ * from thread context or on the deferred terminal from inside a callback.
+ * Either way exactly one TX_FAILED with RADIANT_TRANSFER_FAIL_ABORTED ends
+ * the transfer, releasing any block still held.
  *
  * Returns RADIANT_TRANSFER_OK, including when there was nothing to cancel.
  */
@@ -831,47 +768,36 @@ int radiant_transfer_on_data(struct radiant_transfer *t, const struct radiant_fr
 			 radiant_time_t t_sync);
 
 /*
- * Send the last acknowledgement again.
+ * Send the last acknowledgement again, per RADIANT_TRANSFER_REPLY_RETRY_US
+ * and RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX (see those constants for the
+ * measurement); this function enforces the limit.
  *
- * A receiver in the middle of a burst re-sends its acknowledgement rather than
- * waiting quietly: run 0 caught a master repeating one 20 further times at
- * 3143 us before abandoning the transfer, twice, with 21 attempts each. That is
- * RADIANT_TRANSFER_REPLY_RETRY_US and RADIANT_TRANSFER_REPLY_ATTEMPTS_MAX, and this
- * function enforces the limit.
+ * The TIMER IS NOT HERE - radiant_sched.c decides when a channel can spend a
+ * slot on a repeat; a timer inside this engine would be a second scheduler.
  *
- * The TIMER IS NOT HERE. radiant_sched.c decides when a channel can spend a slot on
- * a repeat; an independent timer inside the transfer engine would be a second
- * scheduler competing with the first for the same radio.
- *
- * Returns RADIANT_TRANSFER_OK, RADIANT_TRANSFER_ESTATE (nothing to repeat, engine busy,
- * or the limit reached) or RADIANT_TRANSFER_EIO.
+ * Returns RADIANT_TRANSFER_OK, RADIANT_TRANSFER_ESTATE (nothing to repeat,
+ * engine busy, or limit reached) or RADIANT_TRANSFER_EIO.
  */
 int radiant_transfer_reply_retransmit(struct radiant_transfer *t, radiant_time_t t_sync_at);
 
 /* ---------------------------------------------------------------------------
  * Radio events
  *
- * The HAL has one global callback pair for the whole image. radiant_sched.c
- * owns it, and routes each event to the CHANNEL that posted the request; the
- * caller of these two functions is whoever sits under radiant_sched_cbs and
- * knows which engine that channel is.
+ * The HAL has one global callback pair for the whole image; radiant_sched.c
+ * owns it and routes each event to the CHANNEL that posted the request.
  *
- * ROUTING MUST BE EXACT. An earlier revision of this comment said a
- * conservative fan-out - hand every event to every engine - was correct if
- * wasteful, because each engine compared the event's op id against its own.
- * That stopped being true when the arming authority moved: an arm through the
- * scheduler has no HAL operation id to report, so the engine stores
- * RADIANT_TRANSFER_OP_EXTERNAL and deliberately stops filtering. Handing engine
- * B's completion to engine A now makes engine A act on it.
+ * ROUTING MUST BE EXACT: a conservative fan-out (hand every event to every
+ * engine, let each filter by op id) stopped being safe once the arming
+ * authority moved to the scheduler, which has no HAL op id to report - the
+ * engine stores RADIANT_TRANSFER_OP_EXTERNAL and stops filtering, so handing
+ * engine B's completion to engine A would make A act on it.
  *
- * Both functions still ignore an event whose op is a real id that is not
- * theirs, and count it in stats.late_events. That path is what catches an event
- * arriving for an operation this engine has already retired - after an abort,
- * t->op is 0 and everything is late by definition.
+ * Both functions still ignore an event whose op is a real id that isn't
+ * theirs (counted in stats.late_events) - the path that catches an event for
+ * an operation already retired (after an abort, t->op is 0).
  *
- * Both run in radio interrupt context and both may re-arm the radio before
- * returning. That is the supported low-jitter path and, at 1.55 ms, the only
- * one that works.
+ * Both run in radio interrupt context and may re-arm the radio before
+ * returning - the only path that meets a 1.55 ms deadline.
  * ---------------------------------------------------------------------------
  */
 void radiant_transfer_on_tx_event(struct radiant_transfer *t,

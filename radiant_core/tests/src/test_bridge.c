@@ -2,28 +2,15 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Provenance: original clean-room work, against radiant_bridge.h/.c and
- * radiant_hr_adapter.h/.c, which are themselves transcriptions of
- * docs/radiant-bridge.md sections 3-4. Nothing here derives from sdk-ant.
+ * radiant_hr_adapter.h/.c, themselves transcriptions of docs/radiant-bridge.md
+ * sections 3-4. Nothing here derives from sdk-ant.
  *
- * ---------------------------------------------------------------------------
- * Tests for the sample bus, the sink registry, and the ANT+ HR adapter
- * ---------------------------------------------------------------------------
- * Five things earn their place:
- *
- *   1. THE RING DROPS OLDEST AND COUNTS IT. Section 3.3's whole contract - a
- *      sink that falls behind loses history, not the module.
- *   2. want() IS FIRST REFUSAL. A sink that declines a sample never sees it in
- *      publish(), which is what makes "adding a sink touches zero ANT code"
- *      true rather than aspirational.
- *   3. THE DROP COUNTER SELF-PUBLISHES, ONCE PER CHANGE. Not a heartbeat: an
- *      idle bus that never drops must never manufacture a diagnostics sample.
- *   4. THE HR ADAPTER'S FIRST MESSAGE ESTABLISHES A BASELINE AND POSTS NO
- *      ACCUMULATOR DELTA. There is nothing yet to difference against.
- *   5. THE 1/1024 S CONVERSION IS EXACT ACROSS A WRAP, both for the u8 beat
- *      count and the u16 event time. This is the test that would have caught
- *      the "convert then difference" trap section 3.2 warns about - a wrapped
- *      counter is exactly where truncate-then-difference and
- *      difference-then-convert disagree.
+ * Tests for the sample bus, the sink registry, and the ANT+ HR adapter.
+ * Covers: the ring drops oldest and counts it; want()==false never reaches
+ * publish(); the drop counter self-publishes once per change, never as a
+ * heartbeat; the HR adapter's first message posts no accumulator delta; the
+ * 1/1024 s conversion is exact across a u8/u16 wrap (difference in 1/1024 s
+ * before converting, per section 3.2 - convert-then-difference truncates).
  */
 
 #include <stdbool.h>
@@ -36,13 +23,9 @@
 #include "radiant_bridge.h"
 #include "radiant_hr_adapter.h"
 
-/* ---------------------------------------------------------------------------
- * One capturing sink, registered for the life of the test binary
- * (STRUCT_SECTION_ITERABLE is a link-time array; a sink cannot be
- * created and destroyed per test). test_reset() below clears its capture
- * state instead, alongside radiant_bridge_reset()'s clearing of the bus.
- * ---------------------------------------------------------------------------
- */
+/* Registered for the life of the test binary (STRUCT_SECTION_ITERABLE is a
+ * link-time array, so a sink cannot be created/destroyed per test);
+ * test_reset() clears its capture state instead. */
 
 #define CAP_MAX 40 /* > RADIANT_BRIDGE_RING_CAP (32) + one diagnostics sample */
 
@@ -122,12 +105,8 @@ ZTEST(radiant_bridge, test_post_and_drain_delivers_in_order)
 
 ZTEST(radiant_bridge, test_want_false_never_reaches_publish)
 {
-	/*
-	 * test_deaf_sink's publish is NULL; if want()==false were ignored and
-	 * dispatch_one() called it anyway, this would crash rather than merely
-	 * fail an assertion - which is the point of using a NULL publish as
-	 * the probe instead of a counter.
-	 */
+	/* test_deaf_sink's publish is NULL, so if want()==false were ignored this
+	 * would crash rather than merely fail an assertion. */
 	struct radiant_sample a = sample(1u, 0u, RADIANT_FIELD_TEMPERATURE, 1);
 
 	radiant_bridge_post(&a);
@@ -314,17 +293,11 @@ ZTEST(radiant_bridge, test_hr_adapter_event_time_conversion_exact_across_wrap)
 	int                   i;
 
 	/*
-	 * THE TEST THIS FILE EXISTS FOR. Sixty-five one-beat steps of 1000
-	 * (1/1024 s) each - just under one second per step - crossing the
-	 * u16 event-time wrap (65536) once partway through. If the adapter
-	 * converted-then-differenced (the wrong construction section 3.2
-	 * names), each step would carry a truncation error and the total
-	 * published duration would drift; the right construction - difference
-	 * in 1/1024 s, accumulate exactly, convert once per publish - cannot
-	 * drift by more than the single final rounding.
-	 *
-	 * Exact total: 65 * 1000 = 65000 (1/1024 s) = 63476.5625 ms, so the
-	 * published total after integer ms truncation must be exactly 63476.
+	 * Sixty-five one-beat steps of 1000 (1/1024 s), crossing the u16
+	 * event-time wrap (65536) partway through. Converting-then-differencing
+	 * (the wrong construction) would drift; differencing in 1/1024 s and
+	 * converting once per publish cannot drift beyond the final rounding.
+	 * Exact total: 65000/1024 s = 63476.5625 ms -> truncates to 63476.
 	 */
 	radiant_hr_adapter_init(&a);
 	body(b, 0x00u, 0u, 0u, 72u);

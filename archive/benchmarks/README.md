@@ -47,7 +47,7 @@ sensitivity, ack-data success, USB latency — is phrased relative to what
 sdk-ant does *on this rig, with these boards, in this room*. Not to a datasheet
 figure and not to a remembered number.
 
-sdk-ant is a private, adopter-gated repository pinned at `v2.1.0`, reached with
+sdk-ant is a private, non-redistributable repository pinned at `v2.1.0`, reached with
 one person's personal access token. The day that access lapses, every one of
 those numbers becomes unobtainable. Not harder to obtain — unobtainable. And
 the failure is silent: the rebuild proceeds, the gates get quietly restated as

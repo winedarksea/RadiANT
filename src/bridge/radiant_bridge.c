@@ -16,14 +16,9 @@
 #include "radiant_bridge.h"
 
 /*
- * Capacity, not yet a Kconfig choice. Section 3.3 sizes nothing here against
- * the deployment - the ring exists to absorb the gap between a decode and the
- * next drain, not to buffer a sink that has fallen permanently behind, and a
- * sink that falls permanently behind is what the drop counter is for. 32
- * matches four decode-to-drain periods of an 8-sensor deployment at ~4 Hz
- * each producing up to 3 records (the HR adapter's worst case, section 3.1) -
- * generous rather than tight, and cheap: 32 * sizeof(struct radiant_sample) is
- * well under a kilobyte.
+ * 32: absorbs ~4 decode-to-drain periods for an 8-sensor deployment at
+ * ~4 Hz each producing up to 3 records (HR adapter worst case) - generous,
+ * and still well under a kilobyte. Not yet a Kconfig choice.
  */
 #define RADIANT_BRIDGE_RING_CAP 32u
 
@@ -60,14 +55,9 @@ void radiant_bridge_post(const struct radiant_sample *s)
 	stats.posted++;
 
 	if (ring_count == RADIANT_BRIDGE_RING_CAP) {
-		/*
-		 * Full: drop the OLDEST record to make room, per section 3.3 -
-		 * "drops oldest and counts the drops". The oldest slot is the
-		 * one ring_head is about to overwrite when the ring is full
-		 * (a full ring's write cursor and its read cursor coincide),
-		 * so writing here already discards it; only ring_count stays
-		 * put and the drop is counted.
-		 */
+		/* Full: drop oldest (section 3.3). Write cursor == read
+		 * cursor when full, so writing here already discards the
+		 * oldest slot; just count it. */
 		stats.dropped++;
 	} else {
 		ring_count++;
@@ -128,11 +118,8 @@ uint32_t radiant_bridge_drain(void)
 		n++;
 	}
 
-	/*
-	 * The drop counter, self-published. Only when it moved, so an idle bus
-	 * with nothing ever dropped does not manufacture traffic - section
-	 * 3.3 asks for the count to be visible, not for it to be a heartbeat.
-	 */
+	/* Self-published only when dropped moved, so an idle bus doesn't
+	 * manufacture traffic. */
 	if (stats.dropped != diag_reported_drops) {
 		struct radiant_sample diag = {
 			.source = RADIANT_BRIDGE_DIAG_SOURCE,

@@ -13,7 +13,7 @@
  * implementation in this repository is radiant_core/spike/rx_raw/src/main.c, which
  * is our own Apache-2.0 code. Nothing here derives from sdk-ant, from
  * libant.a, from disassembly of any binary, from rtl_433's expression, or from
- * any adopter-gated ANT+ device profile document.
+ * any ANT+ device profile document.
  * See docs/decisions/0002-clean-room-policy.md.
  *
  * This file includes no Zephyr header and nothing from the application, on
@@ -31,10 +31,8 @@
 
 #include <radiant_core/radiant_frame.h>
 
-/*
- * _Static_assert rather than Zephyr's BUILD_ASSERT, because this file
- * deliberately includes no Zephyr header. C11 gives it to us directly.
- */
+/* _Static_assert rather than Zephyr's BUILD_ASSERT, since this file
+ * deliberately includes no Zephyr header. */
 
 /* The frame must fit inside the HAL's advisory buffer ceilings, or a backend
  * sized from those would silently truncate the largest frame this module can
@@ -43,31 +41,23 @@ _Static_assert(RADIANT_FRAME_BODY_MAX <= RADIANT_RADIO_BODY_MAX,
 	       "radiant_frame body exceeds the HAL's advisory body ceiling");
 _Static_assert(RADIANT_FRAME_ADDR_MAX <= RADIANT_RADIO_ADDR_MAX,
 	       "radiant_frame address exceeds the HAL's address ceiling");
-/* The long-range body is the reason that ceiling is 40 rather than 32. If
- * someone lowers one without the other, the backend's DMA buffers are too
- * small for the longest frame this module can produce - which on the receive
- * side is a truncation the CRC turns into a plain packet loss, i.e. exactly
- * the failure that looks like poor sensitivity. */
+/* The long-range body is why that ceiling is 40 rather than 32; if someone
+ * lowers one without the other, DMA buffers become too small for the longest
+ * frame, and the receive-side truncation the CRC turns into looks exactly
+ * like poor sensitivity. */
 _Static_assert(RADIANT_FRAME_LR_BODY_MAX <= RADIANT_RADIO_BODY_MAX,
 	       "the long-range body exceeds the HAL's advisory body ceiling");
 _Static_assert(RADIANT_FRAME_ADDR_LEN_LR <= RADIANT_FRAME_ADDR_MAX,
 	       "the long-range address exceeds the address ceiling");
-/*
- * The length byte has to be able to express the longest body, or the format
- * can encode frames it cannot describe. body[0] = body_len - 1, so the bound
- * is on body_len - 1 rather than on body_len.
- */
+/* The length byte must be able to express the longest body (body[0] =
+ * body_len - 1), so the bound is on body_len - 1, not body_len. */
 _Static_assert(RADIANT_FRAME_LR_BODY_MAX - RADIANT_FRAME_LR_LEN_BIAS <= 255,
 	       "the long-range length byte cannot express its own longest body");
 
-/*
- * The 15-byte coverage invariant, at compile time as well as in the tests.
- * Tracking is 5 address + 2 header, search is 3 address + 4 header; they are
- * both 7, so both configurations cover the same 15 bytes for a standard frame
- * and produce the same CRC over them. If someone changes one of the four
- * numbers this stops the build, which is a better place to find out than the
- * air.
- */
+/* The 15-byte coverage invariant, at compile time too: tracking is 5 addr +
+ * 2 hdr, search is 3 addr + 4 hdr, both 7, so both cover the same 15 bytes
+ * and produce the same CRC. Catches a change to any of the four numbers at
+ * build time rather than on the air. */
 _Static_assert(RADIANT_FRAME_ADDR_LEN_TRACKING + RADIANT_FRAME_HDR_LEN_TRACKING ==
 		       RADIANT_FRAME_ADDR_LEN_SEARCH + RADIANT_FRAME_HDR_LEN_SEARCH,
 	       "the two packet configurations no longer cover the same bytes");
@@ -85,15 +75,11 @@ const uint8_t radiant_net_addr_ant_plus[RADIANT_NET_ADDR_LEN] = {
  * ---------------------------------------------------------------------------
  */
 
-/*
- * Bitwise, not table-driven. A 512-byte table would buy about 8x on a
- * calculation that runs over 15 bytes at 4 Hz per channel - roughly 2 us of
- * Cortex-M4 time per frame even at 32 channels - and would spend flash on a
- * part where flash is the scarce resource and where the CRC is done in
- * hardware anyway on the backend that matters. If a software-CRC backend ever
- * makes this hot, the table goes behind a Kconfig symbol and this comment is
- * the record of why it was not there from the start.
- */
+/* Bitwise, not table-driven: a 512-byte table would buy ~8x on a calculation
+ * that costs ~2 us of Cortex-M4 time per frame even at 32 channels, spending
+ * flash where flash is scarce and the CRC runs in hardware on the backend
+ * that matters. If a software-CRC backend ever makes this hot, the table
+ * goes behind a Kconfig symbol. */
 uint16_t radiant_crc16(uint16_t seed, const uint8_t *data, size_t len)
 {
 	uint16_t crc = seed;
@@ -117,24 +103,17 @@ uint16_t radiant_crc16(uint16_t seed, const uint8_t *data, size_t len)
 }
 
 /* ---------------------------------------------------------------------------
- * The control byte
- *
- * Encoded and decoded as six fields, because that is what it is. But the field
- * model can express 256 bytes and only eleven have ever been transmitted, so
- * the model is paired with a table of the measured eleven and every place that
- * chooses a byte for the air is checked against it. Encoding by shift-and-mask
- * with nothing behind it is how the other 245 get invented; a table with no
- * arithmetic is how bit 4 stayed invisible through six runs of part 1. Both
- * halves are needed.
+ * The control byte: encoded/decoded as six fields, but the field model can
+ * express 256 bytes and only eleven have ever been transmitted, so it's
+ * paired with a table of the measured eleven that every on-air byte choice is
+ * checked against. Both halves are needed - shift-and-mask alone invents the
+ * other 245, a table alone missed bit 4 for six runs of part 1.
  * ---------------------------------------------------------------------------
  */
 
-/*
- * The eleven values measured on air, in ascending order.
- * archive/captures/radio/2026-08-09-spike-b2-run{0,A,B,C}.log; the first three
- * also appear in all six runs of part 1. Nothing may be added here that has not
- * been captured.
- */
+/* The eleven values measured on air, in ascending order
+ * (archive/captures/radio/2026-08-09-spike-b2-run{0,A,B,C}.log). Nothing may
+ * be added here that has not been captured. */
 static const uint8_t ctrl_observed[] = {
 	RADIANT_CTRL_BROADCAST,       /* 0x0A */
 	RADIANT_CTRL_BURST_SEQ0,      /* 0x82 */
@@ -149,12 +128,9 @@ static const uint8_t ctrl_observed[] = {
 	RADIANT_CTRL_ACK_LAST_SEQ1,   /* 0xF2 */
 };
 
-/*
- * Every measured value has 010 in bits 2:0 - 0 exceptions in 2,354 CRC-valid
- * frames in part 2 and 750 in part 1. If a row is ever added that does not,
- * the invariant the whole decode path rests on has changed and the build should
- * stop rather than the air find out.
- */
+/* Every measured value has 010 in bits 2:0 - 0 exceptions in 2,354 CRC-valid
+ * frames in part 2 and 750 in part 1. A row that breaks this changes an
+ * invariant the whole decode path rests on, so the build should catch it. */
 _Static_assert((RADIANT_CTRL_BROADCAST & RADIANT_CTRL_LOW_MASK) == RADIANT_CTRL_LOW_VALUE &&
 		       (RADIANT_CTRL_BURST_SEQ0 & RADIANT_CTRL_LOW_MASK) == RADIANT_CTRL_LOW_VALUE &&
 		       (RADIANT_CTRL_BURST_OPEN_SEQ0 & RADIANT_CTRL_LOW_MASK) == RADIANT_CTRL_LOW_VALUE &&
@@ -168,15 +144,11 @@ _Static_assert((RADIANT_CTRL_BROADCAST & RADIANT_CTRL_LOW_MASK) == RADIANT_CTRL_
 		       (RADIANT_CTRL_ACK_LAST_SEQ1 & RADIANT_CTRL_LOW_MASK) == RADIANT_CTRL_LOW_VALUE,
 	       "a control byte in the observed table does not carry 010 in bits 2:0");
 
-/*
- * The four measured data -> acknowledgement pairs, and no fifth. Every one of
- * the 168 adjacent CRC-valid pairs in runs 0, A and B is one of these: bit 6
- * set, bit 5 echoed, bit 4 complemented, bits 7 and 3 unchanged.
- *
- * A slot opener is deliberately absent. All four measured pairs are in-slot
- * frames answered by in-slot frames, so what bit 3 of an acknowledgement to
- * 0x8A or 0xAA would be is not measured, and this table does not invent it.
- */
+/* The four measured data -> acknowledgement pairs, and no fifth: every one
+ * of the 168 adjacent CRC-valid pairs in runs 0, A and B is one of these
+ * (bit 6 set, bit 5 echoed, bit 4 complemented, bits 7/3 unchanged). A slot
+ * opener is deliberately absent - what bit 3 of an ack to 0x8A/0xAA would be
+ * is not measured, and this table does not invent it. */
 static const struct {
 	uint8_t data;
 	uint8_t reply;
@@ -255,8 +227,8 @@ uint8_t radiant_ctrl_reply_for(uint8_t data_ctrl)
 	}
 
 	/* Not a data packet this bench has ever seen acknowledged. 0 is not a
-	 * legal control byte, so a caller that ignores it puts a frame on the
-	 * air no receiver accepts rather than a plausible wrong one. */
+	 * legal control byte, so an ignoring caller puts an unacceptable frame
+	 * on the air rather than a plausible wrong one. */
 	return 0;
 }
 
@@ -267,12 +239,9 @@ enum radiant_msg_type radiant_frame_msg_type(uint8_t ctrl_byte)
 	}
 
 	if (!radiant_ctrl_is_exchange(ctrl_byte)) {
-		/*
-		 * b7 = 0 occurred only ever with b6 = b5 = 0, across all 3,104
-		 * CRC-valid frames of both parts: bits 7:5 never took 001, 010
-		 * or 011. So the only broadcast encoding is 0x0A, and anything
-		 * else with b7 clear is a combination nothing has transmitted.
-		 */
+		/* b7 = 0 occurred only with b6 = b5 = 0 across all 3,104
+		 * CRC-valid frames: the only broadcast encoding is 0x0A, and
+		 * anything else with b7 clear is untransmitted. */
 		if (radiant_ctrl_is_ack(ctrl_byte) || radiant_ctrl_is_last(ctrl_byte)) {
 			return RADIANT_MSG_UNKNOWN;
 		}
@@ -437,40 +406,25 @@ int radiant_frame_covered_len(enum radiant_frame_cfg cfg, uint8_t payload_len)
 }
 
 /*
- * The two ANT formats a HAL arm call takes - the long-range one is below, and
- * every sentence here is about these two. BOTH are static-length, and tracking
- * is static-length because of Spike B rather than because of the hardware.
+ * Both ANT formats below (tracking, search) are static-length. Tracking used
+ * to be RADIANT_LEN_FROM_BODY assuming byte 3 was a length byte - it's a
+ * control byte. Mapping that mode onto nRF PCNF0.LFLEN=8 reads an
+ * acknowledged frame's 0xAA as LENGTH=170, overrunning MAXLEN and discarding
+ * it as a CRC error: every broadcast works, every acknowledged/burst frame
+ * silently drops. Acknowledged data sets a trainer's resistance, so this
+ * bug reads as "ERG mode does not work" months downstream.
  *
- * Tracking used to be RADIANT_LEN_FROM_BODY with a bias of zero, on the reading
- * that byte 3 was a length that happened to count the CRC bytes. It is a
- * control byte. A backend that maps RADIANT_LEN_FROM_BODY onto the obvious
- * register - nRF PCNF0.LFLEN=8 - reads an acknowledged frame's 0xAA as
- * LENGTH=170, overruns MAXLEN and discards it as a CRC error, so it receives
- * every broadcast perfectly and drops every acknowledged and burst frame
- * without a symptom. On transmit the same field would try to send 170 bytes.
- * Acknowledged data is how a trainer's resistance gets set, so that bug
- * surfaces as "ERG mode does not work" months downstream of the line that
- * caused it. It is not worth one register bit.
+ * Spike B part 2 makes this permanent: byte 3 reads 0x0A on a broadcast (low
+ * five bits 10) and 0xA2 on a slave frame (low five bits 2) for the same
+ * eight-byte payload - no hardware length field can parse both.
  *
- * Spike B part 2 makes that permanent rather than merely well-evidenced. Byte 3
- * reads 0x0A on a broadcast - low five bits 01010 = 10 - and 0xA2 on the same
- * bench's slave frames - low five bits 00010 = 2 - and BOTH carry exactly eight
- * payload bytes. A hardware length field cannot parse a byte that says 10 and 2
- * for the same payload. There is nothing left to configure a length field
- * with, on this part or any other.
+ * Fixed length (PCNF0=0/STATLEN) is byte-identical on air to CRCINC (40/40
+ * CRC-valid in Spike A; 750 + 2,354 frames captured this way) and puts byte 3
+ * in RAM for software to read/choose.
  *
- * Fixed length is the PCNF0=0 / STATLEN form, measured byte-identical on air
- * to the CRCINC form (40/40 CRC-valid both ways in Spike A; 750 frames of
- * part 1 and 2,354 of part 2 captured in exactly this configuration). It puts
- * byte 3 in RAM where software reads it, and on transmit lets software choose
- * it.
- *
- * The cost, and it is the same one search already carried: a payload other
- * than 8 bytes is not receivable under either format and would need one of its
- * own. Nothing has ever put such a frame on the air - both parts of Spike B
- * enabled advanced burst, sent 24-byte blocks, and watched the stack fragment
- * them into 8-byte on-air packets, with the sequence bit alternating per packet
- * rather than per block.
+ * Cost: a payload other than 8 bytes needs its own format, same as search
+ * already carries. Nothing has ever needed one - both parts of Spike B sent
+ * 24-byte advanced-burst blocks fragmented into 8-byte on-air packets.
  */
 static const struct radiant_pkt_format fmt_tracking = {
 	.phy = RADIANT_PHY_1M_GFSK,
@@ -513,33 +467,18 @@ static const struct radiant_pkt_format fmt_search = {
 /*
  * The third format, and the only one that is not ANT.
  *
- * RADIANT_LEN_FROM_BODY IS CORRECT HERE FOR EXACTLY THE REASON IT IS WRONG
- * ABOVE. The mode maps onto nRF PCNF0.LFLEN=8, and the objection to it has
- * always been specific: on an ANT frame the byte at that offset is a control
- * byte reading 0xAA, so the radio would try to receive 170 bytes and discard
- * every acknowledged and burst frame. Here the byte at that offset is a length,
- * because this module put one there. There is no pre-existing byte being
- * reinterpreted, and no receiver anywhere that expects a different meaning.
+ * RADIANT_LEN_FROM_BODY is correct here for the reason it's wrong above: the
+ * byte at that offset is genuinely a length, because this module put one
+ * there - no pre-existing control byte being reinterpreted.
  *
- * THE CRC IS THE SAME CRC, AND THAT IS A DECISION RATHER THAN AN OMISSION.
- * BLE's own coded PHY uses a 24-bit CRC, and 24 bits over a 40-byte body is
- * unarguably better than 16. It is not adopted here because it would buy a
- * second CRC implementation in software (radiant_crc16() is the only one in
- * this tree and a capture reader uses it), a second one in
- * radiant_crc_repair.c, or the loss of single-bit repair on this format - for
- * a residual-error improvement that FEC has already made the smaller term. At
- * S=8 the convolutional code corrects the raw bit errors that reach the CRC at
- * all, and what survives arrives in the bursts CCITT-FALSE detects up to 16
- * bits of. If long frames ever become the common case rather than the
- * descriptor-collapse case, CRC-24 is the obvious next change and this comment
- * is the record of why it was not the first one.
+ * The CRC stays 16-bit (not BLE coded PHY's 24-bit) to avoid a second CRC
+ * implementation and the loss of single-bit repair, for a residual-error
+ * improvement that FEC (S=8) already makes the smaller term. CRC-24 is the
+ * obvious next change if long frames become the common case.
  *
- * cover_addr stays true, matching both ANT formats, so one software CRC covers
- * every format this project defines. Note what that means on hardware: the CRC
- * configuration is the one thing here that fails LOUDLY rather than silently.
- * A wrong t_sync constant costs tenths of a percent of yield and hides in the
- * noise floor; a wrong CRC configuration produces zero valid frames. That is
- * why this line is safe to land ahead of the bench session that confirms it.
+ * cover_addr stays true, matching both ANT formats, so one software CRC
+ * covers every format. A wrong CRC configuration here fails loudly (zero
+ * valid frames) rather than silently, unlike a wrong t_sync constant.
  */
 static const struct radiant_pkt_format fmt_lr = {
 	.phy = RADIANT_PHY_LR_CODED,
@@ -578,40 +517,24 @@ const struct radiant_pkt_format *radiant_frame_format(enum radiant_frame_cfg cfg
 }
 
 /* ---------------------------------------------------------------------------
- * Airtime
- *
- * Two PHYs, two entirely different shapes of arithmetic, and the second one is
- * why S=2 was not built.
+ * Airtime. Two PHYs, two shapes of arithmetic.
  *
  * 1 M GFSK is linear: preamble, address, body and CRC at 8 us per byte.
  *
- * LE Coded is not. FEC BLOCK 1 IS ALWAYS CODED AT S=8 WHATEVER THE DATA RATE -
- * that is hardware, not a choice - and it carries the preamble, the 32-bit
- * access address, the coding indicator and TERM1:
+ * LE Coded is not: FEC BLOCK 1 IS ALWAYS CODED AT S=8 WHATEVER THE DATA RATE
+ * (hardware, not a choice), carrying preamble (80 us) + 32-bit access
+ * address (256 us) + coding indicator (16 us) + TERM1 (24 us) = 376 us fixed.
+ * FEC block 2 carries body + CRC + TERM2 at the selected rate (64 us/byte
+ * at S=8).
  *
- *     preamble         80 us
- *     access address  256 us   (32 bits at 8 us/bit)
- *     coding indicator 16 us
- *     TERM1            24 us
- *     ------------------------
- *     FEC block 1     376 us
+ * Consequence (why ADR 0007 builds one rate): at these frame sizes the fixed
+ * 376 us dominates, so S=2 would only be ~2.1x cheaper than S=8, not 4x - not
+ * worth the ~3 dB link margin it costs.
  *
- * FEC block 2 carries the body, the CRC and TERM2 at the selected rate, which
- * at S=8 is 8 us per bit, i.e. 64 us per byte.
- *
- * The consequence, and the reason ADR 0007 builds one rate: at these frame
- * sizes the fixed 376 us dominates, so S=2 would be only about 2.1x cheaper
- * than S=8 rather than 4x. The last ~3 dB costs ~0.64 ms of extra radio-on
- * time per frame - a quarter of a percent of duty at 4 Hz - and nothing in this
- * design is short of that.
- *
- * The reference table in the plan gives ~1.23 ms for an eight-byte frame at
- * S=8. This function returns 1.30 ms for the format actually built, and the
- * 64 us difference is one byte: the table assumed a 3-byte header where the
- * format carries 4, because it did not yet include the length byte the length
- * extension needs. The table's FEC-block arithmetic is reproduced exactly; only
- * the byte count it was applied to has moved, and it moved because the format
- * became real.
+ * This function returns 1.30 ms for an eight-byte frame at S=8, vs. the
+ * plan's reference ~1.23 ms; the 64 us difference is one byte, because the
+ * reference assumed a 3-byte header where the format carries 4 (the length
+ * byte the length extension needs).
  * ---------------------------------------------------------------------------
  */
 
@@ -636,11 +559,9 @@ uint32_t radiant_frame_airtime_us(enum radiant_frame_cfg cfg, uint8_t payload_le
 	}
 
 	if (cfg == RADIANT_FRAME_CFG_LR) {
-		/* The address is inside FEC block 1's fixed 376 us - it IS the
-		 * coded PHY's 32-bit access address - so it is deliberately not
-		 * added again here. Adding it would be the single most plausible
-		 * mistake in this function and would inflate every long-range
-		 * budget by 256 us. */
+		/* The address is inside FEC block 1's fixed 376 us (it IS the
+		 * coded PHY's 32-bit access address), so it's deliberately not
+		 * added again - the most plausible mistake in this function. */
 		return AIR_LR_FEC1_US +
 		       ((uint32_t)body + RADIANT_FRAME_CRC_BYTES) * AIR_LR_US_PER_BYTE +
 		       AIR_LR_TERM2_US;
@@ -680,8 +601,8 @@ int radiant_frame_lr_body(const struct radiant_channel_id *id, uint8_t ctrl_byte
 		return RADIANT_FRAME_ETRUNC;
 	}
 
-	/* The length counts everything after itself, which is the RADIO's own
-	 * convention and therefore needs no translation in a backend. */
+	/* The length counts everything after itself - the radio's own
+	 * convention, needing no translation in a backend. */
 	out[0] = (uint8_t)(body_len - RADIANT_FRAME_LR_LEN_BIAS);
 	out[1] = id->device_type;
 	out[2] = id->trans_type;
@@ -707,16 +628,12 @@ int radiant_frame_lr_parse(const uint8_t *body, uint8_t body_len,
 		return RADIANT_FRAME_ETRUNC;
 	}
 
-	/*
-	 * The length byte is CHECKED, not trusted, and this is the line that
-	 * keeps a length-from-body format from being a buffer overrun waiting
-	 * for a bit error. The CRC covers this byte, so a corrupted length
-	 * normally arrives as a CRC failure and never reaches here - but "the
-	 * CRC would have caught it" is an argument about probability, and the
-	 * consequence of the residual case is a read past the end of a
-	 * backend's DMA buffer. The delivered length is authoritative; the
-	 * declared one has to agree with it.
-	 */
+	/* The length byte is CHECKED, not trusted - this keeps a
+	 * length-from-body format from being a buffer overrun waiting for a
+	 * bit error. The CRC normally catches a corrupted length before it
+	 * reaches here, but the residual case is a read past a DMA buffer, so
+	 * the delivered length is authoritative and the declared one must
+	 * agree. */
 	declared = (uint8_t)(body_len - RADIANT_FRAME_LR_LEN_BIAS);
 	if (body[RADIANT_FRAME_LR_LEN_OFFSET] != declared) {
 		return RADIANT_FRAME_ETRUNC;
@@ -727,13 +644,10 @@ int radiant_frame_lr_parse(const uint8_t *body, uint8_t body_len,
 	}
 
 	if (id != NULL) {
-		/*
-		 * The device number is NOT here: it is in the on-air address,
-		 * which the matcher consumed. A caller fills it from the filter
-		 * that matched, exactly as search does with devnum_lo, and this
-		 * function leaves it alone rather than writing a zero that would
-		 * look like an answer.
-		 */
+		/* The device number is NOT here: it's in the on-air address the
+		 * matcher consumed. A caller fills it from the matched filter,
+		 * as search does with devnum_lo; leaving it alone here beats
+		 * writing a zero that would look like an answer. */
 		id->device_type = body[1];
 		id->trans_type = body[2];
 	}
@@ -771,13 +685,9 @@ int radiant_frame_make(struct radiant_frame *f, const struct radiant_channel_id 
 		return RADIANT_FRAME_EINVAL;
 	}
 
-	/*
-	 * The field model would happily pack any of 32 flag combinations.
-	 * Eleven have been on the air. This is the one place that difference is
-	 * enforced, and it is enforced here rather than in radiant_frame_encode()
-	 * so that a bench experiment can still put a candidate encoding on the
-	 * air by setting ctrl_byte directly.
-	 */
+	/* The field model can pack any of 32 flag combinations; eleven have
+	 * been on the air. Enforced here, not in radiant_frame_encode(), so a
+	 * bench experiment can still set ctrl_byte directly. */
 	ctrl = radiant_ctrl_encode(ctrl_fields);
 	if (!radiant_ctrl_observed(ctrl)) {
 		return RADIANT_FRAME_EINVAL;
@@ -818,14 +728,11 @@ int radiant_frame_addr(enum radiant_frame_cfg cfg, const uint8_t net_addr[RADIAN
 	 * Both longer configurations carry the high byte of the device number;
 	 * only tracking has a fifth byte for the device type.
 	 *
-	 * THE LONG-RANGE ADDRESS IS A FULL DEVICE NUMBER AND NOTHING ELSE, and
-	 * that is what makes it worth four bytes. Search matches three and
-	 * recovers devnum_lo from the filter index because a 256-way sweep is
-	 * the price of finding an unknown device; a long-range channel is never
-	 * discovered by sweeping - ADR 0007 keeps discovery on 1 M/RF 57 - so
-	 * its address is always known in full when the window is armed, and
-	 * spending the fourth byte on the rest of the device number buys eight
-	 * more bits against false triggers for nothing.
+	 * THE LONG-RANGE ADDRESS IS A FULL DEVICE NUMBER AND NOTHING ELSE: a
+	 * long-range channel is never discovered by sweeping (ADR 0007 keeps
+	 * discovery on 1 M/RF 57), so its address is always known in full when
+	 * armed, and the fourth byte buys eight more bits against false
+	 * triggers for free.
 	 */
 	if (cfg == RADIANT_FRAME_CFG_TRACKING || cfg == RADIANT_FRAME_CFG_LR) {
 		out[3] = (uint8_t)((id->device_number >> 8) & 0xFFu);
@@ -885,39 +792,26 @@ int radiant_frame_encode(enum radiant_frame_cfg cfg, const uint8_t net_addr[RADI
 	if (net_addr == NULL || in == NULL || out == NULL) {
 		return RADIANT_FRAME_EINVAL;
 	}
-	/*
-	 * REFUSED RATHER THAN APPROXIMATED, and explicitly rather than by
-	 * falling off the end of a switch.
-	 *
-	 * struct radiant_frame_wire's body buffer is RADIANT_FRAME_BODY_MAX -
-	 * sized for ANT - and body_write() below reaches its tracking branch
-	 * for anything that is not search, so a long-range frame routed here
-	 * would be laid out as a tracking frame with no length byte, a
-	 * transmission type where the length belongs, and a silent truncation
-	 * past 28 bytes. radiant_frame_lr_body() is this configuration's
-	 * encoder; there is no shared path and there should not be one.
-	 */
+	/* REFUSED RATHER THAN APPROXIMATED, explicitly: struct
+	 * radiant_frame_wire's body buffer is sized for ANT, and body_write()
+	 * below would lay out a long-range frame as a tracking frame (wrong
+	 * header, silent truncation). radiant_frame_lr_body() is this
+	 * configuration's encoder; there is no shared path. */
 	if (cfg == RADIANT_FRAME_CFG_LR) {
 		return RADIANT_FRAME_EINVAL;
 	}
 	if (in->payload_len > RADIANT_FRAME_PAYLOAD_MAX) {
 		return RADIANT_FRAME_EINVAL;
 	}
-	/*
-	 * Bits 2:0, and nothing else. This used to cross-check bits 4:0 against
-	 * payload_len + 2, which rejects every valid in-slot frame: 0xA2's low
-	 * five bits are 00010 = 2 and no check expecting 10 accepts it. Bits 4
-	 * and 3 are the sequence and slot flags and have nothing to do with the
-	 * payload.
+	/* Bits 2:0 only. This used to cross-check bits 4:0 against
+	 * payload_len + 2, which rejected every valid in-slot frame (0xA2's low
+	 * five bits are 2, not the expected 10) - bits 4/3 are sequence/slot
+	 * flags, unrelated to payload length.
 	 *
-	 * The five flags go out untouched, including combinations nothing has
-	 * measured: this module refuses to fabricate a control byte in
-	 * radiant_frame_make(), but a caller who has evidence for one and sets
-	 * ctrl_byte directly is not second-guessed here. Validating the flags
-	 * on the transmit path would only mean that the module has to be edited
-	 * before a bench experiment can put a candidate encoding on the air,
-	 * which is backwards.
-	 */
+	 * The five flags go out untouched, including unmeasured combinations:
+	 * radiant_frame_make() refuses to fabricate a control byte, but a
+	 * caller setting ctrl_byte directly (e.g. a bench experiment) is not
+	 * second-guessed here. */
 	if (!radiant_ctrl_low_ok(in->ctrl_byte)) {
 		return RADIANT_FRAME_ECTRL;
 	}
@@ -985,10 +879,9 @@ int radiant_frame_decode(enum radiant_frame_cfg cfg, const struct radiant_frame_
 	if (in == NULL || out == NULL) {
 		return RADIANT_FRAME_EINVAL;
 	}
-	/* The counterpart of the refusal in radiant_frame_encode(): this
-	 * function reads a transmission type out of body[0], which on a
-	 * long-range frame is the length. radiant_frame_lr_parse() is that
-	 * configuration's decoder. */
+	/* Counterpart of the refusal in radiant_frame_encode(): body[0] here is
+	 * a transmission type, but on a long-range frame it's the length.
+	 * radiant_frame_lr_parse() is that configuration's decoder. */
 	if (cfg == RADIANT_FRAME_CFG_LR) {
 		return RADIANT_FRAME_EINVAL;
 	}
@@ -1013,19 +906,11 @@ int radiant_frame_decode(enum radiant_frame_cfg cfg, const struct radiant_frame_
 		return RADIANT_FRAME_EINVAL;
 	}
 
-	/*
-	 * Dispatch, not validation. A tracking channel sees eleven values and
-	 * one day may see more; the byte is carried out to the caller and
+	/* Dispatch, not validation: the byte is carried out to the caller and
 	 * radiant_frame_msg_type() names it or returns RADIANT_MSG_UNKNOWN.
-	 *
-	 * Bits 2:0 are the only thing checked, because they are the only thing
-	 * that is invariant - 010 on every one of the 3,104 CRC-valid frames of
-	 * both parts of Spike B. The version of this line written against
-	 * part 1 cross-checked bits 4:0 against payload_len + 2 and therefore
-	 * rejected EVERY valid slave frame, which is a broadcast-only receiver
-	 * reintroduced in software one layer above the register that used to
-	 * hold it.
-	 */
+	 * Bits 2:0 are the only invariant thing (010 on all 3,104 CRC-valid
+	 * Spike B frames) - checking bits 4:0 against payload_len + 2 instead
+	 * (as an earlier version did) rejected every valid slave frame. */
 	ctrl_byte = in->body[hdr - 1];
 	if (!radiant_ctrl_low_ok(ctrl_byte)) {
 		return RADIANT_FRAME_ECTRL;
@@ -1110,17 +995,11 @@ int radiant_frame_from_bytes(enum radiant_frame_cfg cfg, const uint8_t *buf, siz
 		return RADIANT_FRAME_EINVAL;
 	}
 
-	/*
-	 * The geometry comes from cfg. It has to: there is no length anywhere
-	 * in an ANT frame, and the byte that used to supply one here reads 10
-	 * on a broadcast and 2 on a slave's in-slot frame for the same eight
-	 * payload bytes. Taking the length from bits 4:0 parsed broadcasts
-	 * correctly and rejected everything else - the PCNF0.LFLEN=8 defect,
-	 * moved into software.
-	 *
-	 * Both configurations are static at the standard payload, so a frame is
-	 * 17 bytes: 5 + 2 + 8 + 2 tracking, 3 + 4 + 8 + 2 search.
-	 */
+	/* The geometry comes from cfg, not a length byte: there is no length
+	 * anywhere in an ANT frame (the PCNF0.LFLEN=8 defect, moved into
+	 * software, is what taking it from bits 4:0 would reproduce). Both
+	 * configurations are static at the standard payload, so a frame is 17
+	 * bytes: 5+2+8+2 tracking, 3+4+8+2 search. */
 	total = (size_t)addr_len + (size_t)hdr + RADIANT_FRAME_PAYLOAD_STD +
 		RADIANT_FRAME_CRC_BYTES;
 	if (len < total) {

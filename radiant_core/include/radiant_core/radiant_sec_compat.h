@@ -8,52 +8,38 @@
  * bytes and records why there are two tiers rather than one.
  *
  * ── This file names no page and no field, deliberately ─────────────────────
+ * A compat channel's data pages are ANT+ heart rate or power, byte for byte -
+ * NOT this module's business. What's here takes an epoch, device number,
+ * counter, and opaque 8-byte messages, and returns a truncated CMAC, with no
+ * page number or field name inside it. That makes it testable against
+ * synthetic payloads, usable unchanged by a profile nobody's written yet, and
+ * unable to grow an opinion about heart rate a power meter has to work
+ * around. Same discipline as "radiant_sec.c contains no call to
+ * radiant_sec_aes_ecb()"; the `zero-cost` CI job greps for it too. Page
+ * numbers, the subtype nibble's position in the page, the beacon, and
+ * SWITCH/RETURN frames all live above this layer.
  *
- * A compat channel exists to be read by a Garmin head unit, so its data pages
- * are ANT+ heart rate or ANT+ power, byte for byte. THAT IS NOT THIS MODULE'S
- * BUSINESS. What is here takes an epoch, a device number, a counter and some
- * opaque eight-byte messages, and returns a truncated CMAC. It contains no page
- * number and no field name, which is what makes it
- *
- *   - testable against synthetic payloads with no profile in the loop,
- *   - usable unchanged by a profile nobody has written yet, and
- *   - unable to grow an opinion about heart rate that a power meter then has to
- *     work around.
- *
- * Same discipline as "radiant_sec.c contains no call to radiant_sec_aes_ecb()",
- * and the `zero-cost` CI job greps for it in the same spirit. The page numbers,
- * the subtype nibble's position IN THE PAGE, the beacon and the SWITCH/RETURN
- * frames all live above this layer.
- *
- * ── Why two tiers, in one paragraph ────────────────────────────────────────
- *
- * Authenticating an identity and authenticating a data stream are two different
- * things with two different costs. Tier I answers "is this stream from the
- * holder of K_auth, now?" and covers NO PAYLOAD, so it is verifiable on receipt
- * and its verification rate equals its page delivery rate no matter how rarely
- * it is sent - which is what lets it be on by default at ~1.2% of slots. Tier II
- * answers "were these exact bytes sent by that holder?", costs one page in N,
- * and one lost packet unverifies the whole window - which is why it is off by
- * default. Neither is a degraded version of the other.
+ * ── Why two tiers ───────────────────────────────────────────────────────────
+ * Tier I answers "is this stream from the holder of K_auth, now?", covers NO
+ * payload, is verifiable on receipt with verification rate = delivery rate -
+ * on by default at ~1.2% of slots. Tier II answers "were these exact bytes
+ * sent?", costs one page in N, and one lost packet unverifies the whole
+ * window - off by default. Neither is a degraded version of the other.
  *
  * ── Zero cost when off ─────────────────────────────────────────────────────
- *
- * CONFIG_RADIANT_SEC_COMPAT is default n and depends on CONFIG_RADIANT_SEC, and
- * the discipline is radiant_sec.h's, inherited unchanged: no ops struct, no
- * structs in hot-path signatures, no init call, and no-op static inlines below
- * when the symbol is off. The tag entry points refuse with
- * RADIANT_SEC_ENOTSUP rather than returning OK, because a disabled build that
- * answered OK would hand its caller a tag of stack garbage.
+ * CONFIG_RADIANT_SEC_COMPAT is default n, depends on CONFIG_RADIANT_SEC, and
+ * inherits radiant_sec.h's discipline unchanged (no ops struct, no structs in
+ * hot-path signatures, no init call, no-op inlines when off). Tag entry
+ * points refuse with RADIANT_SEC_ENOTSUP rather than OK, since a disabled
+ * build answering OK would hand back a tag of stack garbage.
  *
  * ── Every clock reading is an argument ─────────────────────────────────────
- *
- * Nothing below calls radiant_radio_now(), and the .c includes no HAL header:
- * the caller passes the instant it means. radiant_sec.c reads the clock itself
- * and that is right for a module wired into the schedule; this one is reached
- * from a profile that already knows when a slot is, and keeping the clock out
- * of it is what lets a whole day of attestation be tested in a millisecond
- * without a mock clock in the loop. Microseconds, 64-bit, monotone, and the
- * origin is the caller's business.
+ * Nothing below calls radiant_radio_now(); the caller passes the instant it
+ * means. radiant_sec.c reads the clock itself (right for a module wired into
+ * the schedule); this one is reached from a profile that already knows when
+ * a slot is, which lets a whole day of attestation be tested in a
+ * millisecond with no mock clock. Microseconds, 64-bit, monotone; origin is
+ * the caller's business.
  */
 
 #ifndef RADIANT_CORE_RADIANT_SEC_COMPAT_H_
@@ -69,62 +55,52 @@ extern "C" {
 #endif
 
 /*
- * The subtype, at nonce_block[9]. RADIANT_SEC_DOM_COMPAT_MAC (0x04) is in
- * radiant_sec.h beside the other three domain bytes, because that is the byte a
- * reader compares against them.
+ * The subtype, at nonce_block[9]. RADIANT_SEC_DOM_COMPAT_MAC (0x04) lives in
+ * radiant_sec.h beside the other domain bytes for the same reason.
  *
- * THE SUBTYPE IS INSIDE THE MAC'D BLOCK AND NOT ONLY IN THE PAGE. Both tiers
- * ride one page number - the 7-bit page namespace is why - so the subtype is
- * the only thing separating a Tier I tag from a Tier II tag over the same
- * counter value, and a separator an attacker rewrites in a page byte separates
- * nothing.
+ * Inside the MAC'd block, not only in the page: both tiers share one page
+ * number, so the subtype is the only thing separating a Tier I tag from a
+ * Tier II tag over the same counter value - a separator an attacker could
+ * rewrite in a plain page byte would separate nothing.
  *
- * 0x03 is the SWITCH/RETURN announcement's, pinned here rather than left free
- * so the value cannot be spent twice before the layer that emits it exists.
- * Nothing in this module computes that tag today.
+ * 0x03 is SWITCH/RETURN's, pinned here so the value can't be double-spent
+ * before that layer exists. Nothing here computes that tag today.
  */
 #define RADIANT_SEC_COMPAT_SUBTYPE_TIER_I    0x01
 #define RADIANT_SEC_COMPAT_SUBTYPE_TIER_II   0x02
 #define RADIANT_SEC_COMPAT_SUBTYPE_ANNOUNCE  0x03
 
 /*
- * 0x04 is the INBOUND command's, and it is the one subtype that is not under
- * K_auth: a command is verified under K_cmd (RADIANT_SEC_LABEL_CMD), which had
- * no user anywhere in the tree until Layer C's trigger needed one.
+ * 0x04 is the INBOUND command's, the one subtype not under K_auth - a command
+ * verifies under K_cmd (RADIANT_SEC_LABEL_CMD).
  *
- * Two separations rather than one, and both are wanted. The KEY separates a
- * thing a receiver sends to the node from the three things the node broadcasts,
- * so a recorded attestation can never be replayed into the command path however
- * the bytes are rearranged. The SUBTYPE separates it inside the block anyway,
- * because "it is under a different key" is a property of the deployment - one
- * root, four derived keys - rather than of the block, and the block is where
- * this protocol puts its separations.
+ * Two separations, both wanted: the KEY separates what a receiver sends the
+ * node from what the node broadcasts, so a recorded attestation can never be
+ * replayed into the command path; the SUBTYPE separates it inside the block
+ * too, since "different key" is a property of the deployment, and the block
+ * is where this protocol puts its separations.
  */
 #define RADIANT_SEC_COMPAT_SUBTYPE_COMMAND   0x04
 
 /*
- * 40 bits for Tier I and 48 for Tier II, and the difference is arithmetic
- * rather than a security judgement: Tier I carries a two-byte counter in its
- * page because no window index is implied, and 8 - 1 - 2 = 5 bytes are what is
- * left. 2^-40 per attempt, against a mechanism rate-limited to one attempt per
- * T by construction, is not the weak link in this system.
+ * 40 bits for Tier I, 48 for Tier II - arithmetic, not a security judgement:
+ * Tier I carries a 2-byte counter (no window index implied), leaving
+ * 8-1-2 = 5 bytes. 2^-40 per attempt, against a mechanism rate-limited to one
+ * attempt per T, is not the weak link.
  */
 #define RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES   5
 #define RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES  6
 
 /*
- * The announcement's tag is 48 bits, in a frame of its own that carries nothing
- * else: bytes [2..7] of a frame whose [0] and [1] belong to the framing
- * convention. Tier II's width for the same reason Tier II has it - six bytes
- * are what is left - and NOT Tier II's function, because that one's subtype
- * says "this covers the last N-1 transmitted messages", which is a different
- * claim about different bytes.
+ * The announcement's tag is 48 bits (bytes [2..7] of a frame whose [0]/[1]
+ * are framing) - same width as Tier II because six bytes are what's left, but
+ * NOT Tier II's function; its subtype makes a different claim about
+ * different bytes.
  *
- * A command's is 40 bits, because a command carries three bytes of its own
- * before the tag and 8 - 3 = 5 is what is left. The forgery bound that matters
- * for it is not 2^-40 anyway: an attacker without K_cmd is guessing against a
- * node that rate-limits accepted commands, and one that HAS K_cmd is a
- * keyholder, which is the trust boundary rather than a break of it.
+ * A command's is 40 bits: 3 bytes precede the tag, leaving 8-3=5. The forgery
+ * bound that matters isn't 2^-40 anyway - an attacker without K_cmd is
+ * guessing against a rate-limited node, and one WITH K_cmd is a keyholder,
+ * the trust boundary rather than a break of it.
  */
 #define RADIANT_SEC_COMPAT_ANNOUNCE_TAG_BYTES 6
 #define RADIANT_SEC_COMPAT_CMD_TAG_BYTES      5
@@ -173,10 +149,10 @@ extern "C" {
 #define RADIANT_SEC_COMPAT_SW_PIN      0x04  /* receiver-side pinning, below */
 
 /*
- * T, the Tier I interval, in SECONDS and decoupled from the data rate. That
- * decoupling is the whole compatibility argument: at 4 Hz, 20 s is one page in
- * ~81 - 1.2% of slots, below the 1.65% ANT+ itself spends on common pages 80
- * and 81 - and a slower profile spends proportionally LESS, not more.
+ * T, the Tier I interval, in SECONDS and decoupled from the data rate - the
+ * whole compatibility argument: at 4 Hz, 20 s is one page in ~81 (1.2% of
+ * slots, below ANT+'s own 1.65% on common pages 80/81), and a slower profile
+ * spends proportionally LESS.
  */
 #define RADIANT_SEC_COMPAT_T_DEFAULT_S 20u
 #define RADIANT_SEC_COMPAT_T_MIN_S     1u
@@ -184,43 +160,34 @@ extern "C" {
 
 /*
  * How stale a verified Tier I page may be before a pinned receiver stops
- * calling the stream verified: two intervals, i.e. the page due at T is a whole
- * interval late. One interval of slack rather than none, because at the
- * characterised ~0.4% loss floor a single missing page is ordinary and
- * unpinning a stream over it would make the mechanism cry wolf; two consecutive
- * misses are ~1.6e-5 and are a signal.
+ * calling the stream verified: two intervals. One interval of slack rather
+ * than none, since at the ~0.4% loss floor a single missing page is
+ * ordinary; two consecutive misses (~1.6e-5) are a real signal.
  */
 #define RADIANT_SEC_COMPAT_STALE_INTERVALS 2u
 
 /*
  * ── Epoch recovery, and its bounds ─────────────────────────────────────────
- *
  * The beacon carries no epoch, deliberately: for a hostless node the epoch is
- * the boot counter, and a slowly incrementing 32-bit number broadcast every 30 s
- * is a device fingerprint that survives every other privacy measure here. What
- * the removed field has to keep satisfying is occasional contact - receiver A
- * this week, receiver B next month, each many boots out of date and neither able
- * to ask the sensor anything - and it survives as a forward search.
+ * the boot counter, and broadcasting a slowly-incrementing 32-bit number
+ * every 30 s would be a device fingerprint surviving every other privacy
+ * measure here. Occasional contact (receiver A this week, B next month, both
+ * many boots out of date) survives instead as a forward search.
  *
- * THE SEARCH IS BOUNDED IN EVERY PHASE AND THE BOUNDS ARE HERE, not buried in
- * the .c, because "search until it matches" against a re-provisioned sensor that
- * will never match is an unbounded loop in a receiver's event thread.
+ * THE SEARCH IS BOUNDED IN EVERY PHASE, HERE not buried in the .c, because
+ * "search until it matches" against a re-provisioned sensor that never will
+ * is an unbounded loop in a receiver's event thread.
  *
- *   FORWARD   65536 is the "absurd" row of the cost table in
- *             docs/radiant-security.md section 11.3 - ~200 ms once, on a
- *             Cortex-M4 with AES hardware. A sensor that has booted more often
- *             than that since this receiver last heard it is not going to be
- *             found by trying 65537 either.
- *   BACKWARD  16, the small probe. It covers a receiver that recorded a
- *             candidate epoch which never went on to confirm, not a sensor that
- *             went backwards - that is what the absolute scan is for.
- *   SCAN      65536 from zero, the re-provisioned case: a strap whose boot
- *             counter was reset is at a SMALL epoch, so a scan from 0 finds it
- *             in a handful of operations and the ceiling is only there to make
- *             the failure bounded.
+ *   FORWARD   65536, the "absurd" row of the cost table (11.3) - ~200 ms once
+ *             on a Cortex-M4 with AES hardware. A sensor that's booted more
+ *             often than that won't be found by trying 65537 either.
+ *   BACKWARD  16: covers a receiver holding an unconfirmed candidate epoch,
+ *             not a sensor gone backwards - that's the absolute scan.
+ *   SCAN      65536 from zero: a re-provisioned strap is at a SMALL epoch, so
+ *             this finds it in a handful of operations; the ceiling just
+ *             bounds the failure case.
  *
- * Total worst case is FORWARD + 1 + BACKWARD + SCAN + 1 operations, and a
- * caller may hold that number against the table rather than hoping.
+ * Worst case: FORWARD + 1 + BACKWARD + SCAN + 1 operations.
  */
 #define RADIANT_SEC_COMPAT_EPOCH_FORWARD  65536u
 #define RADIANT_SEC_COMPAT_EPOCH_BACKWARD 16u
@@ -327,15 +294,12 @@ int radiant_sec_compat_tier2_tag(const struct radiant_sec_key *k_auth,
  *
  * ── Why this is not radiant_sec.c's context table ──────────────────────────
  *
- * A compat channel is not a secured RadiANT channel and could not be one:
- * radiant_sec_configure() bounds the secured page range to 0x01..0x1F so that
- * the descriptor and the common pages stay in the clear mechanically, and a
- * compat attestation page is nowhere near that range. The two also disagree
- * about the payload: radiant_sec OWNS byte [1] of every secured page, and a
- * compat data page is a byte-exact ANT+ page whose byte [1] belongs to the
- * profile. So the state is its own, the switches are their own, and the one
- * thing they share is the key hierarchy - both derive K_auth from a root
- * through radiant_sec_kdf().
+ * A compat channel could not be a secured RadiANT channel:
+ * radiant_sec_configure() bounds the secured range to 0x01..0x1F (a compat
+ * attestation page is nowhere near it), and radiant_sec owns byte [1] of
+ * every secured page while a compat data page's byte [1] belongs to the
+ * profile. So state and switches are separate; only the key hierarchy is
+ * shared (both derive K_auth from a root via radiant_sec_kdf()).
  */
 
 /*
@@ -358,12 +322,12 @@ int radiant_sec_compat_set_key(uint8_t ch, const uint8_t *root, size_t bits,
  * in {4, 8, 16, 32}, and is ignored when Tier II is off; `t_s` is Tier I's
  * interval in seconds.
  *
- * RADIANT_SEC_COMPAT_SW_PIN IS THE DOWNGRADE DEFENCE AND IT IS RECEIVER-SIDE.
- * Strip the beacon from the air and a naive receiver falls back to clear, so a
- * receiver that has enrolled a sensor pins it: with a key installed and
- * attestation expected, a stream carrying no attestation reads UNVERIFIED
- * rather than CLEAR. CLEAR keeps meaning "no key here". Sensor-side advertising
- * is a discovery aid and never a security decision.
+ * RADIANT_SEC_COMPAT_SW_PIN is the downgrade defence, receiver-side: strip
+ * the beacon from the air and a naive receiver falls back to clear, so an
+ * enrolled receiver pins the sensor instead - with a key installed, a stream
+ * carrying no attestation reads UNVERIFIED, not CLEAR (which stays "no key
+ * here"). Sensor-side advertising is a discovery aid, never a security
+ * decision.
  */
 int radiant_sec_compat_configure(uint8_t ch, uint8_t switches, uint8_t n,
 				 uint16_t t_s);
@@ -490,39 +454,26 @@ int radiant_sec_compat_hint(uint8_t ch, uint32_t epoch,
  *   trunc16( CMAC(K_id, "priv" || epoch[4 LE]) ), 0x0000 excluded
  *   collision: rederive with a 1-byte suffix, 0x00, 0x01, ...
  *
- * The same shape as the hint above and for the same reason - K_id is
- * epoch-less, so one CMAC answers it - and this module computes it because K_id
- * is here and only here. It is a NUMBER, not a channel and not a page: what the
- * caller does with sixteen bits is the caller's business, and this file stays
- * unable to name the thing they identify.
+ * Same shape as the hint above and for the same reason (K_id is epoch-less);
+ * a NUMBER, not a channel or page - what the caller does with sixteen bits is
+ * the caller's business.
  *
- * IT IS WHAT MAKES AN ANNOUNCEMENT OPTIONAL. Any holder of the root computes
- * where the node went from the epoch it already has, so the announcement saves
- * a search rather than being the only way to find the node; a receiver enrolled
- * after the switch finds a node that is already gone, with nothing to have
- * missed; and an observer without the key cannot predict the number at all,
- * which is what closes the switch-time linkage down to timing correlation when
- * nothing is announced.
+ * WHAT MAKES AN ANNOUNCEMENT OPTIONAL: any root holder computes where the
+ * node went from the epoch it already has, so the announcement only saves a
+ * search; an observer without the key cannot predict the number at all,
+ * closing switch-time linkage down to timing correlation when nothing is
+ * announced.
  *
- * `attempt` walks the sequence: 0 is the first candidate, and 1, 2, 3 are what
- * a searcher tries next before falling back to a wildcard search.
- * RADIANT_SEC_COMPAT_LOCATOR_TRIES is how many of them a searcher tries, and it
- * is here rather than in the searcher so that both ends count the same way.
+ * `attempt` walks the sequence (0 = first candidate, 1/2/3 = fallbacks before
+ * a wildcard search); RADIANT_SEC_COMPAT_LOCATOR_TRIES is the count, kept
+ * here so both ends agree. Two skip rules fold into one walk: "derivation 0
+ * with no suffix, then suffix 0x00, 0x01, ..., dropping any 0x0000 result" -
+ * a node and searcher that disagreed about whether zero counts would
+ * disagree about every candidate after it.
  *
- * TWO RULES ARE FOLDED INTO ONE WALK, and the folding is this function's only
- * judgement call. The excluded 0x0000 and the collision suffix are two
- * different reasons to move on to the next derivation, so the sequence is
- * "derivation 0 with no suffix, then suffix 0x00, 0x01, ... , with any
- * derivation that comes out 0x0000 dropped". A caller therefore never sees the
- * wildcard, never has to know why a candidate was skipped, and both ends skip
- * the same one - which is the property that matters, because a node and a
- * searcher that disagreed about whether a zero counts would disagree about
- * every candidate after it.
- *
- * Returns RADIANT_SEC_OK, RADIANT_SEC_ENOKEY when the channel holds no root, or
- * RADIANT_SEC_EINVAL for a null `out` or an `attempt` the bounded walk cannot
- * reach (which needs 256 consecutive zeros and is therefore a bug, not a
- * collision).
+ * Returns RADIANT_SEC_OK, RADIANT_SEC_ENOKEY with no root, or
+ * RADIANT_SEC_EINVAL for null `out` or an unreachable `attempt` (needs 256
+ * consecutive zeros - a bug, not a collision).
  */
 #define RADIANT_SEC_COMPAT_LOCATOR_TRIES    4u
 #define RADIANT_SEC_COMPAT_LOCATOR_WILDCARD 0x0000u
@@ -542,33 +493,24 @@ int radiant_sec_compat_locator(uint8_t ch, uint32_t epoch, uint8_t attempt,
 
 /*
  * ── The announcement's tag, and the command's ──────────────────────────────
+ * Both take the covered bytes and the instant (not a clock read), since the
+ * nonce's counter is Tier I's interval index, a function of time on both
+ * sides. Neither message carries a counter field - it's DERIVED from the
+ * shared epoch anchor, so a message replayed into another interval just
+ * fails the tag.
  *
- * Both take the covered bytes and answer with a tag, and both take the instant
- * rather than reading a clock, because the counter in the nonce is Tier I's
- * interval index and that is a function of time on both sides. There is no
- * counter field in either message: an announcement carries a locator and a
- * countdown and has no room for one, and adding a counter a sender chooses
- * would hand the replay defence to the sender. So the counter is DERIVED, both
- * ends compute it from the epoch anchor they already share, and a message
- * replayed into another interval fails the tag rather than being noticed
- * afterwards.
+ * The cost of that exactness: a message straddling an interval boundary
+ * verifies on one side only. At default T that's one boundary per 20 s
+ * against an announcement repeated 8x over a countdown - costs at most one
+ * copy, versus accepting a neighbouring interval accepting a whole interval
+ * of replay.
  *
- * The exactness that buys is worth stating, because it is also the cost: a
- * message whose transmission and reception straddle an interval boundary
- * verifies on one side of it and not the other. At the default T that is one
- * boundary every 20 s against an announcement repeated eight times over a
- * countdown, so it costs at most one copy - and the alternative, accepting a
- * neighbouring interval, would accept a replay for a whole interval after the
- * fact. Exact, and repeat.
+ * `len` is the covered length: 8 for an announcement (whole frame, bytes
+ * [0]/[1] included) and RADIANT_SEC_COMPAT_CMD_BYTES for a command.
  *
- * `len` is the covered length: 8 for an announcement (the whole transmitted
- * frame, byte [0] and byte [1] included, so nothing an attacker can rewrite is
- * outside the tag) and RADIANT_SEC_COMPAT_CMD_BYTES for a command.
- *
- * Returns RADIANT_SEC_OK; RADIANT_SEC_EBADMAC from the verify arms when the tag
- * does not match, which is the answer a caller acts on; RADIANT_SEC_ENOKEY with
- * no key or no epoch on the channel; RADIANT_SEC_EINVAL for a null argument or
- * a length that is not the covered length.
+ * Returns RADIANT_SEC_OK; RADIANT_SEC_EBADMAC when the tag doesn't match;
+ * RADIANT_SEC_ENOKEY with no key/epoch; RADIANT_SEC_EINVAL for a null
+ * argument or wrong length.
  */
 int radiant_sec_compat_announce_tag(uint8_t ch, uint64_t now_us,
 				    const uint8_t *msg, uint8_t len,
@@ -579,16 +521,13 @@ int radiant_sec_compat_announce_verify(uint8_t ch, uint64_t t_sync,
 				       const uint8_t *tag);
 
 /*
- * The command arm, under K_cmd. THE NODE IS THE VERIFIER HERE, which is the
- * opposite direction from everything else in this file, and it is why the key
- * is different: a receiver that can verify the node's attestation must not
- * thereby be able to forge a command to it, and a passive observer who records
- * one must not be able to replay it into a later interval.
+ * The command arm, under K_cmd. The NODE is the verifier here - the opposite
+ * direction from everything else in this file, and why the key differs: a
+ * receiver that can verify the node's attestation must not thereby forge a
+ * command to it.
  *
- * What this does NOT do is decide anything. It answers "did the holder of
- * K_cmd send these bytes, in this interval". Whether the node then acts is
- * policy, it lives above this file, and on a `never` node the answer is no
- * however good the tag is.
+ * Decides nothing: answers "did the holder of K_cmd send these bytes, in
+ * this interval". Whether the node acts is policy above this file.
  */
 int radiant_sec_compat_cmd_tag(uint8_t ch, uint64_t now_us, const uint8_t *msg,
 			       uint8_t len,
@@ -649,17 +588,14 @@ int radiant_sec_compat_recover_tier2(uint8_t ch, uint16_t devnum,
 /*
  * Take a recovered epoch, MOVING BACKWARDS IF THAT IS WHERE IT WENT.
  *
- * This is the one entry point that may lower an epoch, and the asymmetry is the
- * point: D3's monotonicity rule binds the epoch AUTHORITY, which is the sensor.
- * A receiver is not the authority - it is reading the sensor's epoch off the
- * air - and a sensor that has been re-provisioned genuinely is at a lower one.
- * Refusing to follow it would leave the receiver permanently deaf to a strap
- * the user has just reset, which is not a security property, it is a support
- * call.
+ * The one entry point that may lower an epoch: D3's monotonicity rule binds
+ * the epoch AUTHORITY (the sensor), not a receiver reading it off the air,
+ * and a re-provisioned sensor genuinely is at a lower epoch. Refusing to
+ * follow it would leave the receiver permanently deaf to a strap the user
+ * just reset - a support call, not a security property.
  *
- * Everything in flight belonged to the previous epoch, so the window state is
- * cleared and the Tier I replay high-water mark with it - a fresh epoch has its
- * own counter space and judging it against the old one's high-water mark would
+ * Clears window state and the Tier I replay high-water mark, since a fresh
+ * epoch has its own counter space and judging it against the old mark would
  * reject every page.
  */
 int radiant_sec_compat_adopt_epoch(uint8_t ch, uint32_t epoch);

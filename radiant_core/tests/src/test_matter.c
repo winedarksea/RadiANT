@@ -134,12 +134,10 @@ ZTEST(radiant_matter, test_temperature_is_a_scale_AND_a_shift)
 	int64_t v = 0;
 
 	/*
-	 * Section 8.1a: "temperature is the only row with an offset... the
-	 * conversion is K x 100 - 27315 - a scale *and* a shift".
-	 *
-	 * 273.15 K is 0.00 C, which is 0 in the cluster's 0.01 C units. This
-	 * is the value that catches a missing offset AND a wrong sign on it,
-	 * because both give something far from zero.
+	 * Section 8.1a: temperature is the only row with an offset - the
+	 * conversion is K x 100 - 27315, a scale and a shift. 273.15 K is
+	 * 0.00 C = 0 in the cluster's units, which catches a missing offset or
+	 * a wrong sign on it.
 	 */
 	s = mk(1u, 0u, RADIANT_FIELD_TEMPERATURE, 27315, -2);
 	zassert_true(radiant_matter_convert(&s, &v), NULL);
@@ -164,13 +162,9 @@ ZTEST(radiant_matter, test_the_negative_exponent_is_not_lost_before_the_scale)
 	struct radiant_sample s;
 	int64_t v = 0;
 
-	/*
-	 * 3 decimal places of kelvin. 300.123 K -> 26.973 C -> 2697.3 in
-	 * hundredths, which rounds to 2697. An implementation that computes
-	 * value_SI first as an integer gets 300 K and answers 2685 - twelve
-	 * hundredths of a degree out, which no user would ever notice and no
-	 * test but this one would catch.
-	 */
+	/* 300.123 K -> 26.973 C -> 2697.3 hundredths -> 2697. An implementation
+	 * that truncates to an integer kelvin first gets 300 K and answers
+	 * 2685 - twelve hundredths of a degree out and easy to miss. */
 	s = mk(1u, 0u, RADIANT_FIELD_TEMPERATURE, 300123, -3);
 	zassert_true(radiant_matter_convert(&s, &v), NULL);
 	zassert_equal(v, 2697, "300.123 K is 26.973 C -> 2697, got %lld",
@@ -213,12 +207,9 @@ ZTEST(radiant_matter, test_an_unrepresentable_value_is_refused_not_saturated)
 	struct radiant_sample s;
 	int64_t v = 0;
 
-	/*
-	 * A saturating cast would put a plausible wrong number in front of a
-	 * user - 327.67 C reads like a real fault rather than like a broken
-	 * decoder. Refusing means publish() logs and writes nothing, leaving
-	 * the previous value and the node's reachability to tell the story.
-	 */
+	/* A saturating cast would put a plausible wrong number in front of a
+	 * user (327.67 C reads as a real fault, not a broken decoder).
+	 * Refusing leaves the previous value and reachability to tell the story. */
 	s = mk(1u, 0u, RADIANT_FIELD_TEMPERATURE, INT64_MAX / 2, 0);
 	zassert_false(radiant_matter_convert(&s, &v),
 		      "an overflowing conversion is refused");
@@ -240,14 +231,11 @@ ZTEST(radiant_matter, test_four_derived_booleans_are_four_endpoints_not_one)
 	uint8_t f;
 
 	/*
-	 * THE TEST THAT JUSTIFIES SECTION 8.1's REWRITE.
-	 *
 	 * The four derived booleans of section 6 - worn, bike in use, at rest,
-	 * training - are ALL field type 0x02. Keyed on TYPE they collapse into
-	 * one endpoint that four rules fight over, and Home Assistant shows one
-	 * entity flickering between four meanings. Keyed on FIELD_ID they are
-	 * four instances of one table row, which is what "an endpoint is
-	 * instantiated per announced field, not per binding kind" means.
+	 * training - are all field type 0x02. Keyed on TYPE they'd collapse
+	 * into one endpoint four rules fight over; keyed on FIELD_ID they're
+	 * four instances of one table row (an endpoint is instantiated per
+	 * announced field, not per binding kind).
 	 */
 	for (f = 0u; f < 4u; f++) {
 		s = mk(7u, f, RADIANT_FIELD_OCCUPANCY, (f & 1u) ? 1 : 0, 0);
@@ -319,14 +307,11 @@ ZTEST(radiant_matter, test_a_declined_type_never_reaches_the_seam)
 {
 	struct radiant_sample s;
 
-	/*
-	 * Heart rate goes on the bus like everything else - the MQTT plane
-	 * carries it - and must not produce a Matter write or an endpoint.
-	 * This is the sink's `want` doing its job rather than publish()
-	 * checking again, and it is worth a test because a `want` that
-	 * returned true for everything would still LOOK correct: publish()
-	 * declines too, and only the endpoint count would differ.
-	 */
+	/* Heart rate goes on the bus like everything else (MQTT carries it)
+	 * and must not produce a Matter write or endpoint - this is the sink's
+	 * `want` doing its job, not publish() checking again. A `want` that
+	 * returned true for everything would still look correct in the write
+	 * count, so the endpoint count matters too. */
 	s = mk(4u, 0u, RADIANT_FIELD_HEART_RATE, 72, 0);
 	radiant_bridge_post(&s);
 	radiant_bridge_drain();
@@ -342,13 +327,11 @@ ZTEST(radiant_matter, test_a_heart_rate_binding_shows_three_and_a_power_meter_on
 	uint8_t f;
 
 	/*
-	 * Section 8.1's worked outcome: "a power meter binding instantiates one
-	 * endpoint, a heart-rate binding three, and a household with one strap
-	 * and one trainer shows four entities in Home Assistant rather than
-	 * sixteen."
-	 *
-	 * The strap announces raw bpm (declined) plus three derived booleans:
-	 * worn, at rest, training. The trainer announces power (declined) plus
+	 * Section 8.1's worked outcome: a power meter binding instantiates one
+	 * endpoint, a heart-rate binding three, so one strap plus one trainer
+	 * shows four entities rather than sixteen. The strap announces raw bpm
+	 * (declined) plus three derived booleans: worn, at rest, training. The
+	 * trainer announces power (declined) plus
 	 * one derived boolean: bike in use.
 	 */
 	s = mk(1u, 0u, RADIANT_FIELD_HEART_RATE, 72, 0);
@@ -377,12 +360,10 @@ ZTEST(radiant_matter, test_a_stale_sample_is_still_written)
 {
 	struct radiant_sample s;
 
-	/*
-	 * Matter has no "this value is old" on these clusters. Not writing
-	 * leaves the last good value in place, which is indistinguishable from
-	 * a live sensor reporting the same thing - strictly worse than writing
-	 * the value we actually have. Staleness belongs in reachability.
-	 */
+	/* Matter has no "this value is old" on these clusters. Not writing
+	 * leaves the last good value in place, indistinguishable from a live
+	 * sensor - worse than writing the value we have. Staleness belongs in
+	 * reachability. */
 	s = mk(5u, 0u, RADIANT_FIELD_HUMIDITY, 400, -1);
 	s.flags = RADIANT_SAMPLE_STALE;
 	radiant_bridge_post(&s);

@@ -102,6 +102,8 @@ target_sources(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_compat.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_hr.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_power.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_tracker.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_controls.c"
   # Layer D (compat-C7): the over-air enrolment window. The FOURTH file here
   # that includes a radiant_core header, and the second that has to - adding a
   # keyholder is a key operation. It names no page number and no frame index,
@@ -143,6 +145,10 @@ target_include_directories(app PRIVATE
 target_sources(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge/radiant_bridge.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge/radiant_hr_adapter.c"
+  # The running-dynamics adapter. It includes src/profiles/profile_rd.h for the
+  # two page decoders rather than re-deriving the bit splits, which is why the
+  # src/profiles include directory above is not optional for this file.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge/radiant_rd_adapter.c"
   # P6: the binding table (section 5) and the rule evaluator (section 6.1/6.2).
   # radiant_rules.c registers itself as an ordinary RADIANT_SINK_DEFINE()
   # sink, so it needs nothing from CMake beyond being compiled and linked -

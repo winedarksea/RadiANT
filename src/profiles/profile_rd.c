@@ -2,31 +2,17 @@
 /*
  * profile_rd.c - ANT+ Running Dynamics, device type 0x1E.
  *
- * Provenance: the ANT+ Running Dynamics device profile, D00001679 Rev 1.1,
- * tables 5-1 through 5-5 and 6-8 through 6-12, obtained under this project's
- * adopter login and supplied by Colin on 2026-08-13. Layout tables and field
- * semantics only; no prose copied. ANT+ device profiles are implementable in
- * src/profiles/ under docs/decisions/0002-clean-room-policy.md's graded
- * posture, as amended by fact 5 of docs/decisions/0008. No sdk-ant source was
- * consulted and nothing here derives from libant.a.
  *
- * There is no cryptography in this file and no call to radiant_sec anywhere in
- * it. See the header.
+ * No cryptography in this file; no call to radiant_sec. See the header.
  *
- * ---------------------------------------------------------------------------
- * Every split field is packed and unpacked in ONE place
- * ---------------------------------------------------------------------------
- * The eight helpers below are the whole of the bit arithmetic in this file, and
- * every encoder and decoder goes through them. That is not indirection for its
- * own sake: the ground-contact-time split (3 low bits, then 8 high bits) and
- * the two low-bit-first fraction splits are each written once and read by both
- * directions, so an encoder and a decoder cannot disagree about a field the way
- * two independently-written shift expressions eventually do.
+ * Every split field is packed and unpacked in ONE place: the eight helpers
+ * below are the whole of this file's bit arithmetic, so an encoder and a
+ * decoder cannot disagree about a field the way two independently-written
+ * shift expressions eventually do.
  *
- * profile_bits.c is deliberately NOT used. It packs MSB-first into the RadiANT
- * envelope's field area, which is a different convention from this document's
- * numbered bit positions within a byte, and borrowing it here would mean two
- * bit orders in one file with nothing but a comment separating them.
+ * profile_bits.c is deliberately NOT used - it packs MSB-first into the
+ * RadiANT envelope's field area, a different convention from this document's
+ * numbered bit positions within a byte.
  */
 
 #include <errno.h>
@@ -40,10 +26,8 @@
 #include "profile_sched.h"
 
 /* ── The splits ─────────────────────────────────────────────────────────────
- *
  * "lo bits at `lo_off` of byte a, hi bits at bit 0 of byte b" is the shape of
- * every multi-byte field on this profile. Naming it once makes each call site
- * read as the table row it came from.
+ * every multi-byte field on this profile.
  */
 
 /* An integer whose low 8 bits are in `lsb` and whose high bits are the low
@@ -57,18 +41,15 @@ static uint16_t split_lo8(uint8_t lsb, uint8_t hi, uint8_t hi_off,
 	return (uint16_t)(lsb | (uint16_t)(((hi >> hi_off) & mask) << 8));
 }
 
-/* Ground contact time, which is the other way round: the THREE LOW bits live in
- * byte [4] bits 5..7 and the eight high bits are all of byte [5]. A field whose
- * low bits are the ones sharing a byte is unusual enough on this profile to be
- * worth its own function rather than a parameter to the one above. */
+/* Ground contact time is the other way round: the three low bits live in byte
+ * [4] bits 5..7 and the eight high bits are all of byte [5]. */
 static uint16_t split_lo3(uint8_t lo, uint8_t lo_off, uint8_t msb)
 {
 	return (uint16_t)(((lo >> lo_off) & 0x07u) | ((uint16_t)msb << 3));
 }
 
 /* A fraction split low-bit-first: bit 0 of the fraction at `lo_off` of byte
- * `lo`, the remaining `hi_width` bits at bit `hi_off` of byte `hi`. Stance time
- * (1+1) and ground contact balance (1+4) are both this, and getting the
+ * `lo`, the remaining `hi_width` bits at bit `hi_off` of byte `hi`. Getting the
  * direction backwards is the "wrong by a factor of two only sometimes" bug the
  * header warns about. */
 static uint8_t split_frac(uint8_t lo, uint8_t lo_off, uint8_t hi,
@@ -81,12 +62,9 @@ static uint8_t split_frac(uint8_t lo, uint8_t lo_off, uint8_t hi,
 }
 
 /* ── Range checks ───────────────────────────────────────────────────────────
- *
- * A percentage field is 7 bits wide and 101..127 is reserved, so "fits the
- * field" and "is a legal value" are two different questions and this profile is
- * one of the few that says so explicitly. Both are refused rather than
- * truncated: a masked percentage is a plausible number no receiver can tell
- * was wrong.
+ * A percentage field is 7 bits wide and 101..127 is reserved. Out-of-range
+ * values are refused rather than truncated: a masked percentage is a
+ * plausible number no receiver can tell was wrong.
  */
 static bool percent_ok(uint16_t scaled, uint8_t per_percent)
 {
@@ -137,8 +115,8 @@ int profile_rd_encode_a(const struct profile_rd_metrics *m, bool bidirectional,
 
 	out[0] = PROFILE_RD_PAGE_A;
 	out[1] = (uint8_t)(m->cadence_32 / PROFILE_RD_CADENCE_PER_STRIDE_MIN);
-	/* Bit 7 is reserved and set to 0 - the one reserved field on this
-	 * profile that is not 0xFF-filled, because it shares a byte. */
+	/* Bit 7 reserved = 0; the one reserved field here not 0xFF-filled,
+	 * since it shares a byte. */
 	out[2] = (uint8_t)((m->cadence_32 % PROFILE_RD_CADENCE_PER_STRIDE_MIN) |
 			   (m->walking ? (1u << 5) : 0u) |
 			   (bidirectional ? (1u << 6) : 0u));
@@ -182,12 +160,9 @@ int profile_rd_decode_a(const uint8_t *body, struct profile_rd_metrics *m,
 				       split_frac(body[6], 7u, body[7], 0u, 1u));
 	m->step_count = (uint8_t)((body[7] >> 1) & 0x7Fu);
 
-	/*
-	 * A sensor reporting "no motion" sets the INTEGER part to zero, and the
-	 * fractional bits beside it are then not a quarter of anything. Zeroing
-	 * the whole scaled value here is what makes PROFILE_RD_INVALID_* a
-	 * single comparison for the caller rather than a shift and a mask.
-	 */
+	/* A sensor reporting "no motion" sets the integer part to zero; zeroing
+	 * the whole scaled value here makes PROFILE_RD_INVALID_* a single
+	 * comparison for the caller. */
 	if (body[1] == 0u) {
 		m->cadence_32 = PROFILE_RD_INVALID_CADENCE;
 	}
@@ -229,9 +204,8 @@ int profile_rd_encode_b(const struct profile_rd_metrics *m,
 			   (uint8_t)((m->vert_ratio_32 %
 				      PROFILE_RD_VERT_RATIO_PER_PERCENT) << 3));
 	out[4] = (uint8_t)(m->step_length_mm & 0xFFu);
-	/* Bits 6..7 are reserved and set to 0b11 here, where page 0's reserved
-	 * bit is set to 0. Two reserved conventions in one profile, one line
-	 * apart in the two tables, and neither is a typo in this file. */
+	/* Bits 6..7 reserved = 0b11 here, vs. 0 on page 0 - two reserved
+	 * conventions in one profile, neither a typo. */
 	out[5] = (uint8_t)(((m->step_length_mm >> 8) & 0x1Fu) |
 			   (m->upside_down ? (1u << 5) : 0u) | 0xC0u);
 	out[6] = (uint8_t)(session_leader & 0xFFu);
@@ -286,8 +260,8 @@ int profile_rd_encode_speed(uint16_t speed_256, uint8_t *out)
 		whole = PROFILE_RD_SPEED_INVALID_INT;
 		frac = PROFILE_RD_SPEED_INVALID_FRAC;
 	} else {
-		/* 0x0F is the integer field's sentinel, so 15 m/s is not
-		 * expressible and the range stops at 14.996 m/s. */
+		/* 0x0F is the integer field's sentinel; 15 m/s is not
+		 * expressible, so the range stops at 14.996 m/s. */
 		if (speed_256 >= (PROFILE_RD_SPEED_INVALID_INT * 256u)) {
 			return -EINVAL;
 		}
@@ -318,8 +292,8 @@ int profile_rd_decode_speed(const uint8_t *body, uint16_t *speed_256)
 	frac = (uint8_t)(((body[1] >> 4) & 0x0Fu) |
 			 (uint8_t)((body[2] & 0x0Fu) << 4));
 
-	/* Either sentinel alone invalidates the reading: they are different
-	 * values in different widths and the document gives each its own. */
+	/* Either sentinel alone invalidates the reading - different values in
+	 * different widths, each with its own. */
 	if (whole == PROFILE_RD_SPEED_INVALID_INT ||
 	    frac == PROFILE_RD_SPEED_INVALID_FRAC) {
 		*speed_256 = PROFILE_RD_SPEED_INVALID;
@@ -395,9 +369,7 @@ int profile_rd_decode_open_channel(const uint8_t *body, uint32_t *leader_id_24,
 	if (body[0] != PROFILE_RD_PAGE_OPEN_CHANNEL) {
 		return -EINVAL;
 	}
-	/* Byte [4] is the device type and the document fixes it at 30. A page
-	 * naming any other device type is not an open-channel command for this
-	 * profile, whatever else it may be. */
+	/* Byte [4] is the device type, fixed at 30 by the document. */
 	if (body[4] != PROFILE_RD_DEVICE_TYPE) {
 		return -EINVAL;
 	}
@@ -430,9 +402,8 @@ uint8_t profile_rd_rf_enum_index(uint8_t rf_enum)
 	case PROFILE_RD_RF_ENUM_2461:
 		return PROFILE_RD_RF_2461;
 	default:
-		/* PROFILE_RD_RF_ENUM_INVALID, and every value outside the
-		 * enumeration - which on a strap without running dynamics is
-		 * manufacturer-specific data that must not be interpreted. */
+		/* Every value outside the enumeration is manufacturer-specific
+		 * data that must not be interpreted. */
 		return 0u;
 	}
 }
@@ -460,8 +431,8 @@ static int rd_data_page(uint8_t page, uint8_t counter, uint8_t *body,
 {
 	struct profile_rd *rd = (struct profile_rd *)user;
 
-	/* This device type carries no event counter of the envelope's kind; its
-	 * one accumulator is the 7-bit step count inside page 0x00. */
+	/* No envelope-style event counter; the one accumulator is the 7-bit
+	 * step count inside page 0x00. */
 	(void)counter;
 
 	if (rd == NULL) {
@@ -471,9 +442,8 @@ static int rd_data_page(uint8_t page, uint8_t counter, uint8_t *body,
 	if (page == PROFILE_RD_PAGE_B) {
 		return profile_rd_encode_b(&rd->m, rd->session_leader, body);
 	}
-	/* The bidirectional-support bit says this pod can be given a session
-	 * leader and be told the display's speed. An HR-RD strap does not use
-	 * the bit at all, so it reports 0 there. */
+	/* The bidirectional-support bit: this pod can take a session leader
+	 * and be told the display's speed. An HR-RD strap reports 0. */
 	return profile_rd_encode_a(&rd->m, !rd->cfg.hr_rd, body);
 }
 
@@ -524,9 +494,8 @@ int profile_rd_init(struct profile_rd *rd, const struct profile_rd_cfg *cfg)
 	rd->leader_speed_256 = PROFILE_RD_SPEED_INVALID;
 
 	memset(&sched_cfg, 0, sizeof(sched_cfg));
-	sched_cfg.desc = NULL; /* an ANT+ compatibility type announces no
-				* schema: its pages are fixed by somebody
-				* else's document */
+	sched_cfg.desc = NULL; /* an ANT+ compatibility type: pages are fixed
+				* by somebody else's document */
 	sched_cfg.pages = rd->rotation;
 	sched_cfg.n_pages = (uint8_t)sizeof(rd->rotation);
 	sched_cfg.data_page = rd_data_page;

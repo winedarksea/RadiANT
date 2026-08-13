@@ -16,8 +16,8 @@ permissions:
 env:
   SDK_ANT_REVISION: v2.1.0
   # Upstream sdk-ant. Override with repository variable SDK_ANT_REPO to build
-  # against a fork. Access is granted per GitHub account by ANT+ adopter
-  # agreement, which is why the token below is needed at all.
+  # against a fork. Access is granted per GitHub account by Nordic's terms,
+  # which is why the token below is needed at all.
   SDK_ANT_REPO: ant-nrfconnect/sdk-ant
 
 jobs:

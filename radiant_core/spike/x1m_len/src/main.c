@@ -3,88 +3,47 @@
  * Spike x1m_len: does a longer-than-standard 1 M frame stay INVISIBLE to a
  * stock ANT+ dongle doing a wildcard search?
  *
- * Provenance: clean-room. Written from
- *   - docs/decisions/0007-long-range-phy.md, section "Does 1 M also qualify? -
- *     NOT SETTLED", which is the question this program exists to answer,
- *   - radiant_core/include/radiant_core/radiant_radio_hal.h, the frozen backend
- *     contract, and radiant_core/include/radiant_core/radiant_frame.h for the
- *     ANT+ network address and the CRC parameters,
- *   - docs/ant-radio-link.md and docs/spike-b-part2-results.md for the ANT
- *     tracking frame's geometry and for what byte 3 actually is,
- *   - radiant_core/spike/rx_raw/src/main.c, this repository's own spike, for
- *     the shape of a bench program.
- * Nothing here derives from sdk-ant, from libant.a, or from any adopter-gated
- * ANT+ device profile document. See docs/decisions/0002-clean-room-policy.md.
+ * Clean-room: written from docs/decisions/0007-long-range-phy.md ("Does 1 M
+ * also qualify? - NOT SETTLED", the question this exists to answer),
+ * radiant_core/include/radiant_core/radiant_radio_hal.h and radiant_frame.h
+ * (backend contract, ANT+ network address, CRC params), docs/ant-radio-link.md
+ * and docs/spike-b-part2-results.md (tracking frame geometry, what byte 3 is),
+ * and this repo's own radiant_core/spike/rx_raw/src/main.c for the shape of a
+ * bench program. Nothing derives from sdk-ant, libant.a, or an
+ * ANT+ profile document. See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * The question
- * ---------------------------------------------------------------------------
- * ADR 0007 permits length extension "exactly where the PHY already makes us
- * invisible", and records one thing it deliberately did not settle: whether a
- * RadiANT-authored frame that is LONGER than an ANT frame, on the ORDINARY 1 M
- * GFSK PHY, on a device type no stock receiver opens, is simply dropped on CRC
- * by a stock dongle in wildcard search - which keeps hearing every other sensor
- * normally. If it is, the descriptor-set collapse (the largest battery item in
- * that record) arrives without the coded PHY at all.
+ * The question: ADR 0007 permits length extension "exactly where the PHY
+ * already makes us invisible" but left open whether a RadiANT-authored frame
+ * LONGER than an ANT frame, on ordinary 1 M GFSK, on a device type no stock
+ * receiver opens, is simply dropped on CRC by a stock dongle in wildcard
+ * search while it keeps hearing everything else. If so, the descriptor-set
+ * collapse arrives without the coded PHY at all. That's a claim about
+ * somebody else's receiver - needs a transmitter and a stock dongle, not a
+ * unit test. This is the transmitter.
  *
- * That is a claim about somebody else's receiver, so it cannot be settled in a
- * unit test and it cannot be settled by reading. It needs a transmitter and a
- * stock dongle. This is the transmitter.
+ * The A/B control is the whole design: two frames alternate on the same
+ * radio/power/cadence, both device type 0x60.
+ *   FRAME A (control): devnum 0x60A0, addr [A6 C5 A0 60 60], ordinary 10-byte
+ *   body. A stock dongle SHOULD report it.
+ *   FRAME B (experiment): devnum 0x60B0, addr [A6 C5 B0 60 60], 30-byte body.
+ *   A stock dongle should NEVER report it.
+ * Without frame A, "B was not seen" proves nothing - equally consistent with
+ * a dead transmitter, wrong address arithmetic, a dead link, wrong frequency,
+ * or a dongle not really searching. Frame A differs from B in exactly one
+ * property (body length), so A-seen-but-not-B isolates length as the cause.
  *
- * ---------------------------------------------------------------------------
- * The A/B control, which is the whole design
- * ---------------------------------------------------------------------------
- * Two frames, alternating on the same radio, at the same power, at the same
- * cadence, on the same device type 0x60:
+ * No shipping code changed to build this, which is itself a result: both
+ * formats are local consts here, and apply_format() in
+ * src/radiant_radio_nrf.c already requires RADIANT_LEN_FIXED on 1 M (byte 3
+ * is a control byte, not a length) while accepting any body_len up to
+ * RADIANT_RADIO_BODY_MAX (raised to 40 by ADR 0007). So a 30-byte
+ * static-length 1 M body is expressible today through the public HAL alone -
+ * demonstrated at build time, not in prose.
  *
- *   FRAME A - the CONTROL. Device number 0x60A0. Ordinary ANT tracking
- *   geometry: 5-byte on-air address [A6 C5 A0 60 60], 10-byte body
- *   [trans_type][control 0x0A][8 payload]. This is a well-formed ordinary ANT
- *   frame and a stock dongle in wildcard search SHOULD report device 0x60A0.
- *
- *   FRAME B - the EXPERIMENT. Device number 0x60B0. The same address geometry,
- *   [A6 C5 B0 60 60], and a 30-BYTE body instead of 10. A stock dongle should
- *   NEVER report device 0x60B0.
- *
- * WITHOUT FRAME A, "B WAS NOT SEEN" IS NOT A RESULT. It is equally consistent
- * with a transmitter that never keyed, an address arithmetic mistake, a dongle
- * that cannot hear this board across the bench, a wrong frequency, or a dongle
- * that was not really searching. Frame A removes every one of those at once:
- * it differs from B in exactly one property - the number of body bytes - so if
- * A appears in the scan and B does not, the only thing that can have caused the
- * difference is frame length. The control is not a nicety here; it is what
- * converts a negative observation into evidence.
- *
- * ---------------------------------------------------------------------------
- * Why this needed no change to shipping code, which is itself a result
- * ---------------------------------------------------------------------------
- * Both formats below are LOCAL static consts in this file. Nothing in
- * radiant_core was touched to build them, and that is not a coincidence - it is
- * what apply_format() in src/radiant_radio_nrf.c already says:
- *
- *   - on 1 M it requires RADIANT_LEN_FIXED (Spike B: byte 3 of an ANT frame is
- *     a control byte, not a length, so a length-decoding format on this PHY is
- *     something the backend must refuse),
- *   - and having required it, it accepts ANY fmt->body_len from 1 to
- *     RADIANT_RADIO_BODY_MAX, which ADR 0007 raised to 40 for the coded
- *     format's sake.
- *
- * So a 30-byte static-length 1 M body is expressible today, through the public
- * HAL, with no register knowledge in this file at all. That is the second thing
- * this spike demonstrates, and it demonstrates it at build time rather than in
- * prose.
- *
- * ---------------------------------------------------------------------------
- * Why it drives the HAL from a thread instead of chaining in the callback
- * ---------------------------------------------------------------------------
- * radiant_radio_hal.h permits re-arming from inside a completion callback and
- * calls it the low-jitter path. This program does not need low jitter - it
- * needs to be obviously correct at 8 transmissions per second - so the callback
- * does the one thing a callback here can do without adding a concurrency
- * question: it records the status and gives a semaphore. The schedule itself is
- * absolute (every slot is a fixed number of microseconds after the last), so
- * thread latency changes when the arm call happens and not when the frame goes
- * out; the backend works backwards from t_sync either way.
+ * Thread-driven, not callback-chained: the HAL's low-jitter re-arm-from-
+ * callback path isn't needed at 8 tx/s, so the callback only records status
+ * and signals a semaphore. The schedule is absolute (fixed us per slot), so
+ * thread latency shifts the arm call, not the frame's departure time.
  */
 
 #include <string.h>
@@ -101,18 +60,13 @@
  */
 
 /*
- * THE ONE THAT MATTERS. CONFIG_RADIANT_CORE_BACKEND_NRF is a `depends on
- * SOC_COMPATIBLE_NRF52X || SOC_COMPATIBLE_NRF54LX` choice entry. Ask for it on
- * a part outside that pair - an nRF5340, either core - and nothing errors: the
- * dependency is unmet, Kconfig falls back to RADIANT_CORE_BACKEND_NULL, and the
- * image builds, boots, runs this loop and refuses every arm with ENOTSUP. The
- * counters below would read zero and the operator would be looking at a dongle
- * that heard nothing from a board that transmitted nothing.
- *
- * That failure has already cost this project a session once (radiant_core/
- * Kconfig records it against a Zephyr symbol rename), and here it would be
- * worse than a wasted session: "neither A nor B was seen" is a result shape
- * this experiment can produce, and a null backend manufactures it.
+ * The one that matters. CONFIG_RADIANT_CORE_BACKEND_NRF depends on
+ * SOC_COMPATIBLE_NRF52X || SOC_COMPATIBLE_NRF54LX. Asking for it on an nRF5340
+ * (either core) doesn't error - Kconfig silently falls back to
+ * RADIANT_CORE_BACKEND_NULL, and the image builds, boots, and refuses every
+ * arm with ENOTSUP, indistinguishable from a genuine "neither A nor B seen"
+ * result. This trap already cost a session once (see radiant_core/Kconfig,
+ * a Zephyr symbol rename); catch it at build time instead.
  */
 BUILD_ASSERT(IS_ENABLED(CONFIG_RADIANT_CORE_BACKEND_NRF),
 	     "This spike transmits. CONFIG_RADIANT_CORE_BACKEND_NRF did not "
@@ -227,18 +181,14 @@ static struct frame_def frames[2] = {
 };
 
 /*
- * Fill in the on-air address and the body.
+ * Fill in the on-air address and the body. Address is
+ * [net0][net1][devnum_lo][devnum_hi][device_type], first byte on air first
+ * (docs/ant-radio-link.md geometry, same as fmt_tracking). Network bytes come
+ * from radiant_net_addr_ant_plus rather than a literal A6 C5 - one source of
+ * truth for the constant this whole spike claims is on the air.
  *
- * The address is [net0][net1][devnum_lo][devnum_hi][device_type], first byte on
- * the air first - the geometry docs/ant-radio-link.md records and the one
- * radiant_frame.c's fmt_tracking uses. The network bytes come from
- * radiant_net_addr_ant_plus rather than from a literal A6 C5 here: two copies of
- * a constant is two places for it to be wrong, and this program's whole claim
- * is that it is on the air a stock dongle is listening to.
- *
- * There is no bit- or byte-reversal anywhere in this file. That is the backend's
- * job and radiant_radio_hal.h says so; a spike that did its own would be testing
- * its own arithmetic rather than the shipping path.
+ * No bit/byte reversal here - that's the backend's job per radiant_radio_hal.h;
+ * doing it here would test this file's arithmetic, not the shipping path.
  */
 static void frame_build(struct frame_def *f)
 {
@@ -251,15 +201,9 @@ static void frame_build(struct frame_def *f)
 	f->body[0] = TRANS_TYPE;
 	f->body[1] = CONTROL_BYTE;
 
-	/*
-	 * The payload is filler and is deliberately identical in shape for both
-	 * frames: a marker byte so a raw capture can tell them apart by eye,
-	 * then an incrementing ramp. A stock dongle in wildcard search decides
-	 * whether to report a device from the address and the CRC, so nothing
-	 * about this content can affect the result - which is the point of
-	 * saying so rather than choosing something meaningful and leaving a
-	 * reader to wonder whether it mattered.
-	 */
+	/* Filler payload, same shape for both frames: a marker byte then an
+	 * incrementing ramp. A wildcard-search dongle decides from the address
+	 * and CRC alone, so payload content can't affect the result. */
 	f->body[2] = (uint8_t)(f->devnum & 0xFFu);
 	for (uint8_t i = 3; i < f->body_len; i++) {
 		f->body[i] = i;
@@ -396,14 +340,10 @@ int main(void)
 		radiant_time_t now = radiant_radio_now();
 		uint32_t op = 0;
 
-		/*
-		 * Fell behind - a long console write, or a refused arm that cost
-		 * a slot. Re-anchor rather than firing a burst of catch-up
-		 * frames at the dongle, which would change the cadence the two
-		 * frames are supposed to share. Counted, because a resync rate
-		 * above zero means the 4 Hz claim in the banner is not quite
-		 * what is on the air.
-		 */
+		/* Fell behind (slow console write, or a refused arm). Re-anchor
+		 * rather than bursting catch-up frames, which would change the
+		 * shared cadence. Counted: resyncs > 0 means the 4 Hz banner claim
+		 * isn't quite what's on the air. */
 		if (next < now + lead) {
 			next = now + lead;
 			resyncs++;
@@ -423,14 +363,10 @@ int main(void)
 
 		rc = radiant_radio_tx(&req, &op);
 		if (rc != RADIANT_RADIO_OK_RC) {
-			/*
-			 * A refusal is a RESULT, not a hiccup, and the loudest
-			 * one would be ENOTSUP on frame B alone: that would mean
-			 * the backend cannot express a 30-byte 1 M body after
-			 * all, and this spike's premise - that today's code
-			 * already does this - is wrong. So it is printed, once
-			 * per occurrence, rather than folded into a counter.
-			 */
+			/* A refusal is a result, not a hiccup - ENOTSUP on frame B
+			 * alone would mean the backend can't express a 30-byte 1 M
+			 * body, contradicting this spike's premise. Print every
+			 * occurrence rather than folding it into a silent counter. */
 			f->refused++;
 			printk("[arm] %s REFUSED rc=%d (ENOTSUP=%d EINVAL=%d "
 			       "ETIME=%d EBUSY=%d)\n", f->name, rc,

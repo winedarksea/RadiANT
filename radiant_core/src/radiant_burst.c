@@ -9,7 +9,7 @@
  * into three eight-byte on-air packets), from the buffer-ownership obligations
  * B1-B5 in src/ant_radio.h, and from radiant_core/include/radiant_core/radiant_radio_hal.h. Nothing
  * here derives from sdk-ant, from libant.a, from disassembly of any binary, or
- * from any adopter-gated ANT+ device profile document.
+ * from any ANT+ device profile document.
  * See docs/decisions/0002-clean-room-policy.md.
  *
  * This file includes no Zephyr header and nothing from the application. The
@@ -18,9 +18,7 @@
  *   arm-zephyr-eabi-gcc -c -std=c11 -Wall -Wextra -Werror \
  *       -I radiant_core/include -I radiant_core/tests -fsyntax-only radiant_core/src/radiant_burst.c
  *
- * ---------------------------------------------------------------------------
- * The loop, once, in full
- * ---------------------------------------------------------------------------
+ * The loop:
  *   submit(block)          -> arm packet 0                      TX_DATA
  *   tx event OK            -> arm the reply window, +1560 -/+250 WAIT_ACK
  *   the acknowledgement    -> was it the last packet?
@@ -31,40 +29,25 @@
  *   window closed empty    -> TX_FAILED / NO_ACK. NOT retried.         IDLE
  *
  * Every arm after the first happens inside a completion callback, in radio
- * interrupt context. That is the supported low-jitter path and at these
- * intervals it is the only one that works: the operation slot is freed before
- * the terminal callback runs precisely so that the next operation can be armed
- * from inside it.
+ * interrupt context - the only path that meets these intervals, because the
+ * operation slot frees before the terminal callback runs so the next
+ * operation can be armed from inside it.
  *
- * "Arm" means POST TO radiant_sched.c, not call the HAL. radiant_sched.c is the single
- * arming authority and the only place in radiant_core that calls radiant_radio_tx() or
- * radiant_radio_rx(); this file used to call both, and the two sites - the shared
- * radiant_transfer_arm_tx() and the static arm_ack_window() below - were redirected
- * when the two modules first met. See "One radio, one arming authority" in
- * radiant_transfer.h for what that costs and what it buys.
+ * "Arm" means POST TO radiant_sched.c, not call the HAL. radiant_sched.c is the
+ * single arming authority and the only place in radiant_core that calls
+ * radiant_radio_tx()/rx(); see "One radio, one arming authority" in
+ * radiant_transfer.h.
  *
- * ---------------------------------------------------------------------------
- * Where every event goes, so that B1-B5 hold by construction
- * ---------------------------------------------------------------------------
- * There are exactly three places a done() call is made - release_next() and
- * finish(), and finish() is reached from six branches - and both of them are
- * guarded by t->block_released. The invariant is a conjunction of two things
- * that are each cheap to see:
- *
- *   a block is recorded as accepted only after the radio has taken its first
- *   packet (so a rejected submit raises nothing, B2 and B5); and
- *
- *   a block is released once, by whichever of release_next() or finish()
- *   reaches it first, and the flag stops the other (B3 and B4).
- *
- * The failure mode if this is wrong is not a crash. The bridge's k_sem_take()
- * waits its full 1000 ms and then answers the host with a plausible-looking
- * ANTW_TRANSFER_IN_PROGRESS, so an ANT-FS transfer that should take two seconds
- * takes ten minutes and nothing in the build, the log or the host library says
- * why. It cannot be caught by inspection, which is why
- * radiant_core/tests/src/test_transfer.c counts released blocks against accepted
- * ones on the success path, the mid-transfer-failure path, the abort path and
- * the rejected-block path.
+ * B1-B5 (buffer ownership, see src/ant_radio.h) hold because: a block is
+ * recorded as accepted only after the radio has taken its first packet (B2,
+ * B5), and it is released exactly once, by whichever of release_next() or
+ * finish() reaches it first, gated by t->block_released (B3, B4). Getting
+ * this wrong doesn't crash - the bridge's k_sem_take() times out after
+ * 1000 ms and answers ANTW_TRANSFER_IN_PROGRESS, so a two-second transfer
+ * takes ten minutes with nothing in the log to explain why. Not catchable by
+ * inspection, so radiant_core/tests/src/test_transfer.c counts released blocks
+ * against accepted ones on every path (success, mid-transfer failure, abort,
+ * rejected block).
  */
 
 #include <string.h>
@@ -93,14 +76,9 @@ static void reset_transfer(struct radiant_transfer *t)
 	t->next_t_sync = RADIANT_TIME_NEVER;
 }
 
-/*
- * Hand the block back and ask for the next one.
- *
- * The engine's state is moved to WAIT_BLOCK *before* done() runs, because
- * done() is where the bridge gives its semaphore back and the very next thing
- * that can happen is a submit call - possibly re-entrantly, from inside this
- * callback. A state machine that updated itself afterwards would overwrite it.
- */
+/* Hand the block back and ask for the next one. State moves to WAIT_BLOCK
+ * *before* done() runs, because done() is where the bridge frees its
+ * semaphore and a submit call can arrive re-entrantly from inside it. */
 static void release_next(struct radiant_transfer *t)
 {
 	struct radiant_transfer_result r;
@@ -119,9 +97,8 @@ static void release_next(struct radiant_transfer *t)
 	r.packets = t->pkt_acked;
 
 	t->block_released = true;
-	/* Null it as well as flagging it: B1 says the backend must not assume
-	 * the buffer is still valid after the releasing event, so there must be
-	 * nothing left here to read by accident. */
+	/* Null it too, not just flag it: B1 says the buffer isn't valid after
+	 * the releasing event, so nothing here should be readable by accident. */
 	t->block = NULL;
 	t->stats.blocks_released++;
 
@@ -195,66 +172,42 @@ int radiant_transfer_arm_tx(struct radiant_transfer *t, uint8_t ctrl,
 	req.fmt = t->fmt;
 	req.rf_index = t->cfg.rf_index;
 	req.power = t->cfg.power;
-	/*
-	 * The same five bytes the reply window filters on, and not a second
-	 * derivation of them. radiant_transfer_init() already resolved the
-	 * channel ID into t->filter because "the peer answers on the channel's
-	 * own address" - which is the same statement as "this is the address the
-	 * channel transmits with", read in the other direction. Calling
-	 * radiant_frame_addr() again here would be a second copy of that fact,
-	 * free to drift from the first.
-	 */
+	/* The same five bytes the reply window filters on, not a second
+	 * derivation: radiant_transfer_init() already resolved them into
+	 * t->filter, and recomputing via radiant_frame_addr() here would risk
+	 * drift from that copy. */
 	memcpy(req.addr, t->filter.addr, sizeof(req.addr));
 	req.addr_len = t->filter.addr_len;
-	/* t->tx_body, not a local: the HAL says the body must stay valid and
-	 * unmodified until the completion callback because backends DMA out of
-	 * it. The mock deep-copies at the arm call and would not catch a stack
-	 * buffer here, so this has to be right by construction rather than by
-	 * test. */
+	/* t->tx_body, not a local: backends DMA out of it until the completion
+	 * callback, and the mock's deep-copy at arm time wouldn't catch a stack
+	 * buffer here - this has to be right by construction. */
 	req.body = t->tx_body;
 	req.body_len = t->tx_body_len;
 	req.t_sync_at = t_sync_at;
 
-	/*
-	 * THE SCHEDULER, NOT THE RADIO. radiant_sched.c is the single arming
-	 * authority - see "One radio, one arming authority" in radiant_transfer.h.
-	 * This posts an intent against the engine's channel slot; the commit
-	 * happens on the way out of the current radio callback, or at the
-	 * radiant_sched_tick() the thread-context caller owes.
-	 */
+	/* The scheduler, not the radio: this posts an intent against the
+	 * engine's channel slot; the commit happens on the way out of the
+	 * current radio callback or at the caller's next radiant_sched_tick(). */
 	rc = radiant_sched_request_tx(t->cfg.channel, &req);
 	if (rc != RADIANT_RADIO_OK_RC) {
-		/*
-		 * The scheduler's codes are the HAL's, deliberately. A
-		 * malformed request is RADIANT_RADIO_EINVAL and posting before
-		 * radiant_sched_init() is RADIANT_RADIO_ESTATE; neither is something a
-		 * transfer can recover from, so both become EIO and the
-		 * transfer fails loudly rather than waiting for a frame that
-		 * was never going to go out.
-		 */
+		/* The scheduler's codes are the HAL's, deliberately - neither
+		 * EINVAL (malformed) nor ESTATE (posted before init) is
+		 * recoverable, so both become EIO and the transfer fails loudly. */
 		return RADIANT_TRANSFER_EIO;
 	}
 
-	/*
-	 * There is no HAL operation id to record: the scheduler merges several
-	 * channels' requests into one hardware operation and hands each channel
-	 * back only its own events, so the id it would report is not this
-	 * engine's. The sentinel says "the events routed to me are mine", which
-	 * is true precisely because the router is the thing that routed them.
-	 */
+	/* No HAL operation id to record: the scheduler merges several channels'
+	 * requests into one hardware operation and routes each channel only its
+	 * own events, so the sentinel below is what's true instead. */
 	t->op = RADIANT_TRANSFER_OP_EXTERNAL;
 	return RADIANT_TRANSFER_OK;
 }
 
-/*
- * Open the window the acknowledgement is expected in.
- *
- * Centred on the measured 1560 us with a guard sized on the observed range
- * rather than the standard deviation, and RADIANT_RX_STOP_ON_FIRST because exactly
- * one frame is expected: the peer's reply. STOP_ON_FIRST also frees the
- * operation slot on that frame, which is what lets the next data packet be
- * armed from inside the same callback.
- */
+/* Open the window the acknowledgement is expected in, centred on the
+ * measured 1560 us with a guard sized on the observed range rather than the
+ * standard deviation. STOP_ON_FIRST because exactly one frame is expected
+ * and it frees the operation slot immediately, letting the next data packet
+ * arm from inside the same callback. */
 static int arm_ack_window(struct radiant_transfer *t, radiant_time_t t_data_sync)
 {
 	struct radiant_sched_rx req;
@@ -266,21 +219,19 @@ static int arm_ack_window(struct radiant_transfer *t, radiant_time_t t_data_sync
 	/* &t->filter, not a local: the HAL says the filter array must stay
 	 * valid until the terminal event, and the scheduler copies it into the
 	 * merged array only at the moment it arms. */
+	/* &t->filter, not a local: must stay valid until the terminal event,
+	 * since the scheduler copies it into the merged array only when it
+	 * arms. */
 	req.filters = &t->filter;
 	req.n_filters = 1u;
 	req.t_open = t_data_sync + (radiant_time_t)RADIANT_TRANSFER_REPLY_US -
 		     (radiant_time_t)RADIANT_TRANSFER_ACK_GUARD_US;
 	req.t_close = t_data_sync + (radiant_time_t)RADIANT_TRANSFER_REPLY_US +
 		      (radiant_time_t)RADIANT_TRANSFER_ACK_GUARD_US;
-	/*
-	 * A request rather than a guarantee now that the scheduler owns the
-	 * arm: the HAL forbids STOP_ON_FIRST on a merged window, so a reply
-	 * window that ends up sharing a hardware window with a tracked channel
-	 * will not stop early. That costs receive current and delays the free
-	 * of the operation slot; it does not change what this engine does,
-	 * because the acknowledgement is recognised by its control byte and not
-	 * by being the only frame in the window.
-	 */
+	/* A request, not a guarantee: the HAL forbids STOP_ON_FIRST on a merged
+	 * window, so a reply window sharing hardware with a tracked channel
+	 * won't stop early. Costs receive current but doesn't change behaviour -
+	 * the ack is recognised by its control byte, not by being alone. */
 	req.stop_on_first = true;
 
 	rc = radiant_sched_request_rx(t->cfg.channel, &req);
@@ -346,12 +297,9 @@ int radiant_transfer_init(struct radiant_transfer *t, const struct radiant_trans
 		return RADIANT_TRANSFER_EINVAL;
 	}
 
-	/*
-	 * The peer answers on the channel's own address, so the window filters
-	 * on exactly the five bytes the channel transmits with. An on-air
-	 * address match IS a channel-ID match, which is why no software
-	 * comparison of the reply's channel ID follows.
-	 */
+	/* The peer answers on the channel's own address, so the window filters
+	 * on exactly those five bytes; an on-air address match IS a channel-ID
+	 * match, so no software comparison follows. */
 	n = radiant_frame_addr(RADIANT_FRAME_CFG_TRACKING, t->cfg.net_addr, &t->cfg.id,
 			   t->filter.addr, sizeof(t->filter.addr));
 	if (n < 0) {
@@ -363,40 +311,21 @@ int radiant_transfer_init(struct radiant_transfer *t, const struct radiant_trans
 	if (caps == NULL) {
 		return RADIANT_TRANSFER_ESTATE;
 	}
-	/*
-	 * Refuse a backend that cannot acknowledge, loudly and at
-	 * configuration time.
+	/* Refuse a backend that cannot acknowledge, loudly, at configuration
+	 * time: the reply window must arm REPLY_US-GUARD ahead of the data
+	 * packet's address, and the reply frame REPLY_US ahead of itself.
+	 * Acknowledged data is how a trainer's resistance gets set, so failing
+	 * here beats discovering "ERG mode does not work" months downstream.
 	 *
-	 * The reply window has to be armed REPLY_US - GUARD ahead of itself and
-	 * the reply frame REPLY_US ahead of itself, both measured from the
-	 * instant the data packet's address was at the antenna. A backend whose
-	 * minimum arm lead exceeds the first, or whose receive-to-transmit
-	 * turnaround exceeds the second, cannot do acknowledged data at all -
-	 * and acknowledged data is how a trainer's resistance gets set, so the
-	 * alternative to failing here is discovering it as "ERG mode does not
-	 * work" some months downstream.
-	 */
-	/*
-	 * THE IN-GRANT LEAD, NOT min_arm_lead_us, AND THE DIFFERENCE DECIDES
-	 * WHETHER ERG MODE EXISTS ON A COMBINED BUILD.
-	 *
-	 * This path arms the reply from inside the data packet's own completion
-	 * callback - the operation is already in flight and the air for the
-	 * reply was reserved with it (struct radiant_rx_req::follow_on_us). So
-	 * what has to fit inside REPLY_US is the time to PROGRAMME the
-	 * peripheral, which is the hardware's own setup and ramp-up.
-	 *
-	 * min_arm_lead_us is the wrong question here the moment a backend has to
-	 * ask an arbiter for air: on MPSL it is about 2500 us against this
-	 * check's 1310 us ceiling, so reading it would refuse acknowledged data
-	 * on every arbitrated build - which is to say "no ERG mode when Thread
-	 * is on", a product decision that would have been taken by an
-	 * inequality rather than by anybody.
-	 *
-	 * 0 means "the same as min_arm_lead_us", which is what a backend that
-	 * owns the radio reports and what every backend reported before the
-	 * field existed.
-	 */
+	 * min_arm_lead_in_grant_us, NOT min_arm_lead_us: this path arms from
+	 * inside the data packet's own completion callback, with the reply's
+	 * air already reserved (follow_on_us), so what must fit in REPLY_US is
+	 * just the peripheral programming time. min_arm_lead_us is the wrong
+	 * number once a backend has to ask an arbiter for air - on MPSL it's
+	 * ~2500 us against this check's 1310 us ceiling, so using it would
+	 * refuse acknowledged data (ERG mode) on every arbitrated build. 0 means
+	 * "same as min_arm_lead_us", the value every backend reported before
+	 * this field existed. */
 	{
 		uint32_t lead = caps->min_arm_lead_in_grant_us != 0u
 					? caps->min_arm_lead_in_grant_us
@@ -461,10 +390,8 @@ int radiant_transfer_submit(struct radiant_transfer *t, uint8_t *block, uint8_t 
 			return RADIANT_TRANSFER_ESEQ;
 		}
 		if (owned != t->own_block) {
-			/* An acknowledged-data transfer is one block by
-			 * construction and can never reach here; a burst that
-			 * changed its mind about ownership mid-transfer is a
-			 * caller bug, not a state to model. */
+			/* A burst changing its mind about ownership mid-transfer
+			 * is a caller bug, not a state to model. */
 			return RADIANT_TRANSFER_EINVAL;
 		}
 		starting = false;
@@ -488,16 +415,11 @@ int radiant_transfer_submit(struct radiant_transfer *t, uint8_t *block, uint8_t 
 		when = radiant_radio_now() + (radiant_time_t)t->min_lead_us +
 		       (radiant_time_t)RADIANT_TRANSFER_ARM_SLACK_US;
 	}
-	/*
-	 * A continuation whose scheduled instant has already gone by - the host
-	 * took longer than one turnaround to produce the block - is sent as
-	 * soon as the backend can instead of being failed. WHAT A REAL SENDER
-	 * DOES HERE IS NOT MEASURED: the spike measured the *receiver*
-	 * retransmitting, never a sender rescheduling, because no host block
-	 * was ever late in a completed transfer. Slipping the packet is the
-	 * choice that keeps a slow host working; failing the transfer would be
-	 * equally defensible and equally unevidenced.
-	 */
+	/* A continuation whose scheduled instant already passed (host was
+	 * slower than one turnaround) is sent as soon as possible rather than
+	 * failed. Unmeasured: the spike only saw the *receiver* retransmit,
+	 * never a late host block, so this choice (vs. failing the transfer) is
+	 * unevidenced either way. */
 	if (!starting) {
 		radiant_time_t earliest = radiant_radio_now() +
 				      (radiant_time_t)t->min_lead_us +
@@ -508,19 +430,11 @@ int radiant_transfer_submit(struct radiant_transfer *t, uint8_t *block, uint8_t 
 		}
 	}
 
-	/*
-	 * Arm BEFORE recording the block as accepted.
-	 *
-	 * B2: on a non-zero return the backend owns nothing, must not touch the
-	 * buffer and must not raise any of the three events for it. If the
-	 * radio refuses, nothing below has run, nothing is released, and the
-	 * bridge's synchronous release on a non-zero return is the only thing
-	 * that happens to this block. Doing it the other way round - install,
+	/* Arm BEFORE recording the block as accepted (B2: on failure the backend
+	 * owns nothing and raises no events). Doing it the other way - install,
 	 * arm, roll back on failure - is how B5 gets violated: a released block
-	 * hands back a semaphore the bridge still holds for a different one,
-	 * and the next host packet overwrites a buffer the radio is
-	 * transmitting from.
-	 */
+	 * frees a semaphore the bridge still holds for a different one, and the
+	 * next host packet overwrites a buffer the radio is transmitting from. */
 	rc = try_send(t, index, last, block, when);
 	if (rc != RADIANT_TRANSFER_OK) {
 		return rc;
@@ -564,35 +478,20 @@ int radiant_transfer_abort(struct radiant_transfer *t)
 		break;
 	}
 
-	/*
-	 * The cancelled operation's terminal event still arrives - the HAL
-	 * promises it, and K5 saw the mock deliver one with no fault injection
-	 * at all. So this does not finish the transfer; it marks the engine as
-	 * waiting for a terminal it is going to get either way, and the event
-	 * handler below finishes it. From thread context radiant_radio_abort()
-	 * delivers that terminal before it returns, so the transfer is over by
-	 * the time this function does; from inside a callback the terminal is
-	 * deferred until the current one returns, and so is the done() call.
-	 */
-	/*
-	 * radiant_radio_abort(), NOT radiant_sched_cancel(), and the asymmetry with the
-	 * two arm sites is deliberate rather than an oversight.
+	/* The cancelled operation's terminal event still arrives (HAL guarantee,
+	 * confirmed by the mock with no fault injection), so this marks the
+	 * engine ABORTING rather than finishing now; the event handler below
+	 * finishes it when the terminal lands. From thread context
+	 * radiant_radio_abort() delivers it before returning; from inside a
+	 * callback it's deferred until the current one returns.
 	 *
-	 * radiant_sched_cancel() is documented as SILENT for the channel it
-	 * cancels - the caller already knows - so no completion would arrive
-	 * and the ABORTING state, which exists only to wait for one, would
-	 * never end. Aborting the radio directly still produces the terminal
-	 * event the HAL guarantees, the scheduler recognises it as its own
-	 * armed operation and cleans up its members correctly, and this engine
-	 * finishes on it exactly as before.
-	 *
-	 * The cost is real and is worth naming: if the operation being aborted
-	 * was a MERGED receive window, the other channels sharing it lose the
-	 * rest of their window and are told RADIANT_SCHED_DONE_ABORTED. That is
-	 * loud and recoverable, whereas an engine stuck in ABORTING is neither.
-	 * Closing it properly needs a "cancel and tell me" entry point in
-	 * radiant_sched.h, which this change was not authorised to add.
-	 */
+	 * radiant_radio_abort(), NOT radiant_sched_cancel(): the latter is
+	 * documented SILENT for the cancelled channel, so no completion would
+	 * ever end the ABORTING wait. The cost: if the aborted operation was a
+	 * merged receive window, other channels sharing it lose the rest of
+	 * their window (RADIANT_SCHED_DONE_ABORTED) - loud and recoverable,
+	 * unlike an engine stuck in ABORTING. A proper fix needs a "cancel and
+	 * tell me" entry point in radiant_sched.h that this change didn't add. */
 	t->state = RADIANT_TRANSFER_STATE_ABORTING;
 	(void)radiant_radio_abort();
 
@@ -604,19 +503,13 @@ int radiant_transfer_abort(struct radiant_transfer *t)
  * ---------------------------------------------------------------------------
  */
 
-/*
- * Rebuild the received frame.
+/* Rebuild the received frame. The matched address bytes never reach RAM (a
+ * hardware address match means exactly that), so the address half is
+ * regenerated from the channel ID this window filtered on.
  *
- * The matched address bytes never reach RAM - that is what a hardware address
- * match means - so the address half of the wire frame is regenerated from the
- * channel ID this window filtered on, which is exactly the identity the match
- * proved.
- *
- * RADIANT_FRAME_TRUSTED_CRC is right for every delivered event, not only on a
- * backend with crc_in_hw: the HAL says a packet delivered with status OK has a
- * verified CRC, and a backend without a usable CRC engine verifies in software
- * before delivering. The received CRC bytes are not available here either way.
- */
+ * RADIANT_FRAME_TRUSTED_CRC is right for every delivered event, not just
+ * crc_in_hw backends: status OK means the CRC was verified, in hardware or
+ * software, and the received CRC bytes aren't available here either way. */
 static bool decode_rx(const struct radiant_transfer *t,
 		      const struct radiant_rx_event *e, struct radiant_frame *out)
 {
@@ -654,11 +547,8 @@ static void advance(struct radiant_transfer *t, radiant_time_t ack_t_sync)
 	t->pkt_in_block++;
 
 	if (t->pkt_in_block >= t->n_pkt_in_block) {
-		/*
-		 * The block is spent. State first, then the release, because
-		 * done() is where the bridge frees its buffer and the submit
-		 * for the next block can arrive re-entrantly from inside it.
-		 */
+		/* The block is spent. State first, then release: done() frees
+		 * the bridge's buffer and a re-entrant submit can follow. */
 		t->state = RADIANT_TRANSFER_STATE_WAIT_BLOCK;
 		t->next_t_sync = ack_t_sync +
 				 (radiant_time_t)RADIANT_TRANSFER_NEXT_PACKET_US;
@@ -666,9 +556,8 @@ static void advance(struct radiant_transfer *t, radiant_time_t ack_t_sync)
 		return;
 	}
 
-	/* Another packet out of the block already in hand - a 16- or 24-byte
-	 * advanced-burst block, fragmented. The sequence bit alternates across
-	 * these too: it counts on-air packets, not host blocks. */
+	/* Another packet from a fragmented 16- or 24-byte advanced-burst block.
+	 * The sequence bit counts on-air packets, not host blocks. */
 	last = ((t->block_seg & RADIANT_TRANSFER_SEG_END) != 0u) &&
 	       (t->pkt_in_block + 1u == t->n_pkt_in_block);
 
@@ -686,14 +575,10 @@ void radiant_transfer_on_tx_event(struct radiant_transfer *t,
 	if (t == NULL || e == NULL || !t->ready) {
 		return;
 	}
-	/*
-	 * RADIANT_TRANSFER_OP_EXTERNAL means the arming authority has no HAL
-	 * operation id to compare against and has already routed this event to
-	 * the channel that owns it - see radiant_transfer.h. Any other non-zero
-	 * value is a real id and is still checked: somebody else's operation,
-	 * or the late terminal of one this engine already replaced, is
-	 * recognisable rather than merely surprising.
-	 */
+	/* RADIANT_TRANSFER_OP_EXTERNAL means the scheduler has already routed
+	 * this event to its owner and there's no HAL id to check; any other
+	 * non-zero value is a real id, still checked against a stale or
+	 * someone-else's operation. */
 	if (t->op == 0u ||
 	    (t->op != RADIANT_TRANSFER_OP_EXTERNAL && e->op != t->op)) {
 		t->stats.late_events++;
@@ -706,30 +591,18 @@ void radiant_transfer_on_tx_event(struct radiant_transfer *t,
 	}
 
 	if (t->state == RADIANT_TRANSFER_STATE_TX_REPLY) {
-		/*
-		 * Our acknowledgement of somebody else's data packet. Nothing
-		 * follows it: the peer either sends the next packet or does not.
+		/* Our acknowledgement of somebody else's data packet. Nothing
+		 * follows it. A retransmission timer, if wired, belongs in
+		 * api_sched_done(), not radiant_sched.c (which owns no timer -
+		 * see gap 1 in radiant_transfer.h).
 		 *
-		 * The retransmission timer, when one is wired, belongs in
-		 * api_sched_done() - the same low-jitter re-arm path
-		 * api_post_master_rx() already uses. It is NOT radiant_sched.c's:
-		 * that module owns no timer at all, it arms for absolute instants
-		 * and lets the backend hold them, and radiant_api.c says so in as
-		 * many words. See gap 1 in radiant_transfer.h.
-		 *
-		 * reply_ctrl, reply_payload and reply_attempts DELIBERATELY
-		 * SURVIVE this transition, because the retransmission is defined
-		 * on an engine that is back in IDLE - which is also how they
-		 * became a trap. Nothing clears them: this is the only path out
-		 * of an acknowledgement and it does not go through finish(), so
-		 * reset_transfer() never runs for a reply, and the first caller
-		 * of radiant_transfer_reply_retransmit() would have put an
-		 * ancient acknowledgement on the air in the first idle window it
-		 * found - a correctly-formed frame answering a packet from
-		 * minutes ago. What closes that is the staleness check in
-		 * radiant_transfer_reply_retransmit(), against the t_sync stamped
-		 * here.
-		 */
+		 * reply_ctrl/reply_payload/reply_attempts deliberately survive
+		 * this transition since retransmission is defined on an idle
+		 * engine - nothing clears them here because this path skips
+		 * finish()/reset_transfer(). That means a stale ack could go out
+		 * on the next idle window; the staleness check in
+		 * radiant_transfer_reply_retransmit() (against the t_sync stamped
+		 * below) is what prevents it. */
 		t->op = 0u;
 		t->state = RADIANT_TRANSFER_STATE_IDLE;
 		t->reply_t_sync = e->t_sync;
@@ -749,12 +622,10 @@ void radiant_transfer_on_tx_event(struct radiant_transfer *t,
 		return;
 	}
 
-	/*
-	 * The window is placed on the t_sync the backend actually achieved, not
-	 * on the one that was asked for. They are the same on any backend that
-	 * can schedule exactly; on one that cannot, anchoring on the request
-	 * would put the window 1560 us after an instant that never happened.
-	 */
+	/* Anchored on the t_sync the backend actually achieved, not the one
+	 * requested - on a backend that can't schedule exactly, anchoring on
+	 * the request would put the window after an instant that never
+	 * happened. */
 	if (arm_ack_window(t, e->t_sync) != RADIANT_TRANSFER_OK) {
 		finish(t, RADIANT_TRANSFER_EV_TX_FAILED, RADIANT_TRANSFER_FAIL_RADIO);
 		return;
@@ -795,20 +666,11 @@ void radiant_transfer_on_rx_event(struct radiant_transfer *t,
 		 * there is nothing to do but wait. */
 		return;
 	case RADIANT_RADIO_STATUS_TIMEOUT:
-		/*
-		 * The reply window closed with nothing in it.
-		 *
-		 * NOT RETRIED, and that is the honest answer rather than a
-		 * missing feature. What a data sender does when an
-		 * acknowledgement goes missing was never captured - untested
-		 * item 5 of docs/spike-b-part2-results.md - because no
-		 * acknowledgement went missing inside a completed transfer. The
-		 * receiver's behaviour IS measured (21 retransmissions at
-		 * 3143 us) and is implemented, in radiant_ack.c, for the direction
-		 * it was measured in. Inventing a sender-side retry here would
-		 * put an unmeasured frame on the air at an unmeasured instant
-		 * and, worse, would look like evidence to whoever read it next.
-		 */
+		/* The reply window closed empty. NOT RETRIED: what a sender does
+		 * when an ack goes missing was never measured (untested item 5,
+		 * docs/spike-b-part2-results.md) - only the receiver's retry
+		 * behaviour was, and that's implemented in radiant_ack.c.
+		 * Inventing a sender-side retry here would be unevidenced. */
 		finish(t, RADIANT_TRANSFER_EV_TX_FAILED, RADIANT_TRANSFER_FAIL_NO_ACK);
 		return;
 	default:
@@ -828,9 +690,8 @@ void radiant_transfer_on_rx_event(struct radiant_transfer *t,
 	}
 
 	if (radiant_ctrl_is_last(t->cur_ctrl)) {
-		/* Bit 5 was set on the packet and echoed by the reply, so this
-		 * is 0xE2 or 0xF2 - the transfer is complete. The END block is
-		 * released by this event and by no other (B4). */
+		/* 0xE2/0xF2: the transfer is complete. The END block is
+		 * released by this event and no other (B4). */
 		t->pkt_acked++;
 		t->stats.packets_sent++;
 		finish(t, RADIANT_TRANSFER_EV_TX_COMPLETED, RADIANT_TRANSFER_FAIL_NONE);

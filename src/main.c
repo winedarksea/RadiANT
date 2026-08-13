@@ -14,18 +14,13 @@
 
 #include "ant_transport.h"
 
-/* Measured on an nRF54L15 DK, alternating builds against a live power meter in
- * one sitting: XTAL heard 14 broadcasts, SYNTH heard none, XTAL heard 14 again.
- *
- * Nothing announces the failure. The LFSYNT source exists in the nRF54L
- * register map, the clock starts, antr_init() returns 0, channels open and
- * acknowledge every command - and the radio receives nothing, ever. A dongle
- * built this way looks completely healthy to a host and is deaf.
- *
- * That is worth refusing to build rather than warning about, because the
- * warning would be read once and the silence would be debugged forever. The
- * exact mechanism is not established; on nRF52840 this configuration works and
- * is a supported fallback, which is why synth.conf still exists.
+/* Measured on an nRF54L15 DK, alternating builds: XTAL heard 14 broadcasts,
+ * SYNTH heard none, XTAL heard 14 again. Nothing announces the failure - the
+ * clock starts, antr_init() returns 0, channels open and acknowledge every
+ * command, and the radio just never receives. Refused at build time rather
+ * than warned about, since the warning would be read once and the silence
+ * debugged forever. Mechanism not established; nRF52840 is unaffected and
+ * synth.conf remains a supported fallback there.
  */
 BUILD_ASSERT(!(IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_K32SRC_SYNTH) &&
 	       IS_ENABLED(CONFIG_SOC_SERIES_NRF54LX)),
@@ -62,19 +57,12 @@ extern int ant_serial_bridge_init(void);
 
 /*
  * The UF2 bootloader ejects its mass-storage drive and soft-resets into this
- * image. macOS needs a moment to finish processing that detach; enumerating
- * into the gap leaves the dongle unusable until it is physically replugged.
- *
- * That race exists only on the boot immediately following a flash. A cold plug
- * - what a user does every day, and the only thing most users ever do - has no
- * mass-storage device to detach from, so the wait there buys nothing and just
- * delays the dongle appearing on the bus. RESETREAS separates the two cases:
- * the bootloader's jump into the application is a software reset, a plug is
- * power-on, and the RESET button is a pin reset.
- *
- * RESETREAS latches its bits until they are cleared, so this clears them after
- * reading. Without that, the software-reset bit set by one flash would still
- * be set on every boot afterwards and the wait would never be skipped.
+ * image. macOS needs a moment to finish that detach; enumerating into the gap
+ * leaves the dongle unusable until replugged. That race only exists right
+ * after a flash - a cold plug has nothing to detach from, so RESETREAS
+ * distinguishes the cases (software reset vs. power-on vs. pin reset) and
+ * only the former waits. RESETREAS latches until cleared, so this clears it
+ * after reading, or the wait would never be skipped again.
  */
 static void settle_after_uf2_bootloader(void)
 {
@@ -93,13 +81,10 @@ static void settle_after_uf2_bootloader(void)
 	if (hwinfo_get_reset_cause(&cause) == 0) {
 		(void)hwinfo_clear_reset_cause();
 
-		/* A power-on reset leaves RESETREAS empty, and it is the only
-		 * cause that guarantees no mass-storage device preceded us -
-		 * nothing was mounted, so the host has nothing to detach. Every
-		 * other cause can race: the bootloader's own jump after writing
-		 * an image, and equally the RESET button pressed to leave the
-		 * bootloader while its drive is still mounted, which is a pin
-		 * reset rather than a software one. Both wait.
+		/* Power-on reset leaves RESETREAS empty and is the only cause
+		 * guaranteeing no mass-storage device preceded us. Every other
+		 * cause (bootloader jump, or RESET pressed while the drive is
+		 * still mounted) can race, so both wait.
 		 */
 		if (cause == 0) {
 			return;
@@ -110,9 +95,8 @@ static void settle_after_uf2_bootloader(void)
 	}
 #endif
 
-	/* Either this boot followed a software reset, or the reset cause could
-	 * not be established - in which case wait unconditionally rather than
-	 * assume a cold boot and risk the race.
+	/* Wait unconditionally if the reset cause could not be established,
+	 * rather than assume a cold boot and risk the race.
 	 */
 	k_sleep(K_MSEC(CONFIG_ANT_DONGLE_UF2_SETTLE_MS));
 }
@@ -138,17 +122,11 @@ int main(void)
 
 #if defined(CONFIG_ANT_DONGLE_BLE_COEX_LOAD)
 	/*
-	 * AFTER antr_init(), FOR THE SAME REASON USB IS. The radio backend takes
-	 * an explicit HFXO request at init that the multiprotocol spike showed is
-	 * load-bearing rather than tidy - without it the 1 MHz timebase runs on
-	 * the internal RC between timeslots, 0.42 % fast, which is about a
-	 * millisecond of slot-placement error per ANT+ period and shows up in no
-	 * counter anywhere. Starting the controller first would have it cycling
-	 * the clock before anything held it.
-	 *
-	 * A failure here is logged and not fatal: this is a bench instrument, and
-	 * a dongle that still does ANT+ with no advertiser is more useful than
-	 * one that refuses to boot.
+	 * After antr_init(), for the same reason USB is: the radio backend
+	 * holds an explicit HFXO request that's load-bearing - without it the
+	 * 1 MHz timebase runs 0.42% fast on the internal RC between timeslots,
+	 * invisible in any counter. Failure here is logged, not fatal - ANT+
+	 * with no advertiser beats refusing to boot.
 	 */
 	(void)ble_coex_load_start();
 #endif

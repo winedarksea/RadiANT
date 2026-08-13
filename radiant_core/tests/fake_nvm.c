@@ -3,19 +3,15 @@
  * fake_nvm.c - src/node/node_nvm.h against RAM, with a reboot you can call.
  *
  * Provenance: docs/decisions/0009-hostless-node-identity.md and
- * src/node/node_nvm.h. This project's own documents; no external
- * specification.
+ * src/node/node_nvm.h.
  *
- * See fake_nvm.h for why this exists. In short: the shipping backend is the
- * settings subsystem over NVS, the bench board's test application has no
- * storage partition, and the properties this phase has to assert - a counter
- * that survives a power cycle, a write that fails - are properties of the
- * SEAM, not of NVS. So the seam gets an implementation that can be made to do
- * both on demand, exactly as fake_radio.c is the radio HAL's.
+ * See fake_nvm.h for why this exists: the properties this phase must assert
+ * (a counter that survives a power cycle, a write that fails) belong to the
+ * seam, not to NVS, so the seam gets an implementation that can do both on
+ * demand - as fake_radio.c is to the radio HAL.
  *
  * No allocation, no threads, fixed records. The record set is closed because
- * node_nvm.h's is: three names, and a fourth would be a deliberate act in both
- * files.
+ * node_nvm.h's is: three names.
  */
 
 #include <stdbool.h>
@@ -71,8 +67,7 @@ void fake_nvm_wipe(void)
 
 void fake_nvm_reboot(void)
 {
-	/* Contents survive. That is the entire point of the function, and it is
-	 * why this is one line and not a memset. */
+	/* Contents survive - the whole point - so this is not a memset. */
 	initialised = false;
 }
 
@@ -156,8 +151,8 @@ int node_nvm_store(const char *key, const void *val, size_t len)
 		return NODE_NVM_EIO;
 	}
 	if (swallow) {
-		/* Reported as durable, never written. node_ident.c's re-read is
-		 * what has to catch this. */
+		/* Reported as durable, never written; node_ident.c's re-read
+		 * has to catch this. */
 		return NODE_NVM_OK;
 	}
 

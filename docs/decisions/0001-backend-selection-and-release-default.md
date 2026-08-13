@@ -16,7 +16,7 @@ here so that changing it requires editing this file.
 ## Context
 
 Today the radio is Nordic's `libant.a`, a prebuilt binary from the private,
-adopter-gated `ant-nrfconnect/sdk-ant` repository pinned at `v2.1.0`. Losing
+non-redistributable `ant-nrfconnect/sdk-ant` repository pinned at `v2.1.0`. Losing
 access to that repository means **nothing builds** — not even the radio-stub
 configuration, because the root `CMakeLists.txt` hard-fails when sdk-ant's
 headers are absent and `src/ant_serial_bridge.c` takes every protocol constant

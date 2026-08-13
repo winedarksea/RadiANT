@@ -6,28 +6,21 @@
  * Provenance: original clean-room work. Written against
  * radiant_core/include/radiant_core/radiant_radio_hal.h, radiant_sched.h and
  * radiant_chanmap.h, and driven through radiant_core/tests/fake_radio.c.
- * Nothing here derives from sdk-ant, from libant.a, or from any adopter-gated
+ * Nothing here derives from sdk-ant, from libant.a, or from any
  * ANT+ device profile document. See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * The test that matters is sched_ed_leaves_tracked_schedule_identical
- * ---------------------------------------------------------------------------
- * The phase's gate is "loss_exact unchanged with ED scanning on under full
- * tracked load". loss_exact is an on-air figure and this suite has no radio, so
- * what is asserted here is the mechanism the on-air claim rests on, and it is
- * asserted far more sharply than a loss figure could be: under a full tracked
- * load, with an ED request posted and measuring throughout, EVERY receive
- * window is armed at the same instant, with the same members, in the same
- * order, as it is with no ED request at all. Not "within a tolerance" -
- * identical, entry for entry.
- *
- * That is the strong form of the claim. A packet is lost to a scheduler when
- * its window is late, short, or never armed; if not one window moved, no packet
- * can have been lost to this feature, and any on-air difference would have to
- * come from somewhere else. A 300-second loss run can only ever say "the
- * difference is smaller than this bench's ~0.3 pp run-to-run spread"; this says
- * the difference is zero, and says which two properties of the implementation
- * make it zero - see arm_ed_chunk() on s.cursor and s.replan.
+ * The test that matters is sched_ed_leaves_tracked_schedule_identical. The
+ * phase's gate is "loss_exact unchanged with ED scanning on under full
+ * tracked load", an on-air figure this suite (no radio) cannot measure - so
+ * instead it asserts the mechanism more sharply than a loss figure could:
+ * under full tracked load with an ED request measuring throughout, EVERY
+ * receive window is armed at the same instant, same members, same order, as
+ * with no ED request at all. Not "within tolerance" - identical, entry for
+ * entry. A packet is lost to a scheduler when its window is late, short, or
+ * never armed; if no window moved, no packet was lost to this feature. A
+ * 300-second loss run can only say "smaller than the bench's ~0.3 pp
+ * run-to-run spread"; this says zero, and why (see arm_ed_chunk() on
+ * s.cursor and s.replan).
  */
 
 #include <stdbool.h>
@@ -71,15 +64,12 @@
 #define ED_CH 20u
 
 /*
- * The ED range and dwell used by the scheduler tests.
- *
- * Five indices at 40 ms is deliberately unlike anything a product would ask
- * for, and it is chosen against the mock rather than against the radio: the
- * mock spends the WHOLE dwell on every index (the real backend leaves early),
- * so a realistic 400 us dwell would fit ~600 dwells into one 249 ms gap and
- * overflow the mock's 128-entry event log inside the first period. At 40 ms a
- * gap holds one full sweep and part of another, which exercises the chunking,
- * the wrap and the resumption in a run whose logs a test can still read.
+ * The ED range and dwell used by the scheduler tests. Five indices at 40 ms
+ * is deliberately unlike a product setting, chosen against the mock (which
+ * spends the WHOLE dwell on every index, unlike the real backend): a
+ * realistic 400 us dwell would overflow the mock's 128-entry event log
+ * inside the first period, whereas 40 ms holds one full sweep and part of
+ * another per gap, exercising chunking, wrap and resumption readably.
  */
 #define ED_RF_LO     2u
 #define ED_RF_HI     6u
@@ -532,17 +522,11 @@ ZTEST(ed, test_chanmap_floor_busy_and_mean)
  * ---------------------------------------------------------------------------
  */
 
-/*
- * Slot phase for a tracked channel.
- *
- * PAIRED, NOT SPREAD, and not all on one instant either. Channels 2k and 2k+1
- * share an instant so they merge - caps.max_addr_groups is 2 on the nRF preset,
- * so a pair is exactly what fits in one window and the load is four merged
- * windows per period rather than eight single ones. The pairs are then spaced,
- * because eight channels asking for the SAME 400 us window is not a load, it is
- * contention: two would be served and six would expire, in both runs, and the
- * gate would be comparing two piles of missed windows.
- */
+/* Slot phase for a tracked channel: paired, not spread, and not all on one
+ * instant either. Channels 2k and 2k+1 share an instant so they merge
+ * (caps.max_addr_groups is 2 on the nRF preset - a pair per window, four
+ * merged windows per period). The pairs are then spaced, since eight
+ * channels on the SAME window would be contention, not load. */
 static radiant_time_t ch_phase(uint8_t ch)
 {
 	return (radiant_time_t)((uint32_t)(ch / 2u) * 3000u);
@@ -575,16 +559,12 @@ static void run_load(bool with_ed, uint32_t periods)
 }
 
 /*
- * THE GATE, in its deterministic form.
- *
- * Run the same eight-channel tracked load twice - once with an ED request
- * measuring underneath it and once without - and assert that the sequence of
- * receive-window arms is identical entry for entry: same channel, same t_open,
- * same t_close, same order.
- *
- * Every way a scheduler can cost a packet is a change to that sequence. A
- * window armed late, a window truncated, a window that never happened, a
- * channel dropped out of a merge - each one moves an entry. None move.
+ * The gate, in its deterministic form: run the same eight-channel tracked
+ * load twice, once with an ED request measuring underneath it and once
+ * without, and assert the sequence of receive-window arms is identical
+ * entry for entry - same channel, t_open, t_close, order. Every way a
+ * scheduler can cost a packet (late, truncated, never armed, dropped from a
+ * merge) moves an entry in that sequence. None move.
  */
 ZTEST(ed, test_sched_ed_leaves_tracked_schedule_identical)
 {
@@ -827,19 +807,13 @@ ZTEST(ed, test_sched_ed_never_expires)
 }
 
 /*
- * THE ONE WAY AN ARBITER CAN SILENTLY END ENERGY-DETECT SCANNING FOR EVER.
- *
- * Nothing re-posts a struct radiant_sched_ed. A background scan is re-posted by
- * radiant_api.c's pump if its slot is ever dropped, and a tracked window by the
- * channel that owns it, but an ED request is posted once and survives on the
- * strength of end_armed() choosing not to consume it. That choice keys on the
- * done reason, so a reason it does not list drops the request - and the failure
- * is completely silent: no counter moves, no event fires, the channel-quality
- * map simply stops updating from the first denial onwards.
- *
- * Both denial moments are exercised, because they reach end_armed() by
- * different routes: a run of refused ARM CALLS never installs an operation at
- * all, and a run of accepted-then-DENIED operations does.
+ * The one way an arbiter can silently end energy-detect scanning for ever:
+ * nothing re-posts a struct radiant_sched_ed (unlike a scan or a tracked
+ * window). It survives on end_armed() choosing not to consume it, keyed on
+ * the done reason - a reason not in that list drops the request silently, no
+ * counter, no event, the map just stops updating. Both denial routes are
+ * exercised: refused arm calls (no op installed) and accepted-then-DENIED
+ * operations.
  */
 ZTEST(ed, test_sched_ed_survives_a_denial)
 {

@@ -2,10 +2,10 @@
 /*
  * profile_schedule.c - the descriptor schedule block.
  *
- * Provenance: docs/radiant-telemetry.md section 6 and section 12, this
- * project's own written specification, authored in advance of any code. No
- * adopter-gated ANT+ device profile document was read for this file, no
- * sdk-ant source was consulted, and nothing here derives from libant.a. See
+ * Provenance: docs/radiant-telemetry.md sections 6 and 12, this project's own
+ * written specification, authored in advance of any code. No ANT+
+ * device profile document was read for this file, no sdk-ant source was
+ * consulted, and nothing here derives from libant.a. See
  * docs/decisions/0002-clean-room-policy.md. The argument for every field is in
  * profile_schedule.h.
  */
@@ -21,9 +21,8 @@
 #include "profile_bits.h"
 #include "profile_schedule.h"
 
-/* The whole body is assigned, and this is the arithmetic that says so. Adding a
- * field means taking bits from the reservation in this sum, in this file,
- * rather than discovering an overlap on air. */
+/* The whole body is assigned; adding a field means taking bits from the
+ * reservation in this sum rather than discovering an overlap on air. */
 _Static_assert(PROFILE_SCHED_DWELL_W + PROFILE_SCHED_INTERVAL_W +
 		       PROFILE_SCHED_PHASE_W + PROFILE_SCHED_CODING_W +
 		       PROFILE_SCHED_POWER_W + PROFILE_SCHED_RSVD_W ==
@@ -36,8 +35,8 @@ _Static_assert(PROFILE_SCHED_CODING_COUNT <= (1u << PROFILE_SCHED_CODING_W),
 	       "the coding-rate vocabulary outgrew its field");
 
 /* 1e6 / 32768 exactly, as a ratio, so counts convert to microseconds without
- * floating point and without the rounding error that a us-per-count constant
- * would accumulate over a 128 s interval. */
+ * floating point or the rounding error a us-per-count constant would
+ * accumulate over a 128 s interval. */
 #define US_NUM 15625u
 #define US_DEN 512u
 
@@ -69,11 +68,9 @@ uint16_t profile_sched_coding_kbps(uint8_t coding)
 
 bool profile_sched_coding_implemented(uint8_t coding)
 {
-	/* S=8 is not built yet either - the long-range phase builds it - but it
-	 * is the rate this project has committed to, and a build that gains the
-	 * PHY gains it here by gaining the PHY. S=2 and the reserved codes are
-	 * refused because nothing will ever transmit them from this tree
-	 * without a further decision. */
+	/* S=8 is not built yet either (the long-range phase builds it), but is
+	 * the rate this project has committed to. S=2 and the reserved codes
+	 * are refused - nothing transmits them without a further decision. */
 	return coding == PROFILE_SCHED_CODING_NONE ||
 	       coding == PROFILE_SCHED_CODING_S8;
 }
@@ -88,15 +85,11 @@ bool profile_sched_coding_implemented(uint8_t coding)
 static uint64_t counts_to_us(uint64_t counts);
 
 /*
- * Which frame configuration a coding rate describes.
- *
- * THE MAPPING IS THE ONE PLACE THE PROFILE LAYER AND THE FRAME LAYER MEET, and
- * it is a function rather than an assumption spread over two files. Uncoded is
- * the ANT tracking geometry; S=8 is the long-range one. S=2 has no
- * configuration because nothing builds it, so it maps to nothing and every
- * caller below reports it as such rather than quietly budgeting it as S=8 -
- * which would be the natural bug, since S=8 is the conservative direction for a
- * duty bound and therefore the one that would never be noticed.
+ * Which frame configuration a coding rate describes - the one place the
+ * profile layer and the frame layer meet, as a function rather than an
+ * assumption spread over two files. Uncoded is the ANT tracking geometry;
+ * S=8 is the long-range one. S=2 maps to nothing (nothing builds it) rather
+ * than quietly budgeting it as S=8, which would silently under-report duty.
  */
 static int coding_cfg(uint8_t coding)
 {
@@ -124,9 +117,7 @@ uint32_t profile_sched_frame_us(uint8_t coding, uint8_t body_len)
 	}
 
 	/* radiant_frame_airtime_us() is stated in payload rather than body,
-	 * because that is what a caller choosing a frame actually varies. The
-	 * header is the configuration's, so the conversion is a subtraction and
-	 * belongs here rather than in either caller. */
+	 * since that is what a caller choosing a frame actually varies. */
 	return radiant_frame_airtime_us((enum radiant_frame_cfg)cfg,
 					(uint8_t)((int)body_len - hdr));
 }
@@ -139,27 +130,22 @@ int profile_sched_duty_check(uint8_t coding, uint16_t period_counts,
 
 	frame_us = profile_sched_frame_us(coding, body_len);
 	if (frame_us == 0u) {
-		/* Either a rate nothing implements or a body the matching
-		 * format cannot carry. Both are a caller describing a frame
-		 * that will never exist, and neither is a duty question. */
+		/* A rate nothing implements, or a body the matching format
+		 * cannot carry - a frame that will never exist, not a duty
+		 * question. */
 		return -EINVAL;
 	}
 
 	if (period_counts == 0u) {
-		/* Asynchronous. See the header: there is no period to take a
-		 * quarter of. */
+		/* Asynchronous: no period to take a quarter of. */
 		return 0;
 	}
 
 	period_us = counts_to_us((uint64_t)period_counts);
 
-	/*
-	 * frame * DEN > period * NUM, rather than frame/period > NUM/DEN.
-	 * Integer division would round a frame at 25.4 % down to 25 % and pass
-	 * it, and the whole value of an encoder refusal is that it is exact at
-	 * the boundary. Both sides fit in 64 bits by a wide margin: the largest
-	 * period is 2 s and the longest frame is ~3.2 ms.
-	 */
+	/* frame * DEN > period * NUM, rather than frame/period > NUM/DEN:
+	 * integer division would round a frame at 25.4% down to 25% and pass
+	 * it. Both sides fit in 64 bits by a wide margin. */
 	if ((uint64_t)frame_us * PROFILE_SCHED_DUTY_DEN >
 	    period_us * PROFILE_SCHED_DUTY_NUM) {
 		return -EINVAL;
@@ -189,10 +175,8 @@ static uint64_t counts_to_us(uint64_t counts)
 uint16_t profile_sched_clk_ppm(uint8_t nibble)
 {
 	if ((nibble & PROFILE_SCHED_CLK_STATED) == 0u) {
-		/* Nothing stated. NOT "500 ppm" and not "20 ppm": every node
-		 * built before this block existed transmits these bits as
-		 * zeros, so reading a claim out of them would put a claim on
-		 * every node in the field retroactively. */
+		/* Nothing stated - not "500 ppm" or "20 ppm": every node built
+		 * before this block existed transmits these bits as zeros. */
 		return 0u;
 	}
 	return profile_handoff_clk_ppm((uint8_t)(nibble & PROFILE_SCHED_CLK_MASK));
@@ -244,8 +228,8 @@ int profile_sched_check(const struct profile_schedule *s, bool lr_phy,
 		return -EINVAL;
 	}
 
-	/* Frame 0's long-range bit and this field are two statements about one
-	 * PHY, so they agree or the block is refused. */
+	/* Frame 0's long-range bit and this field must agree - two statements
+	 * about one PHY. */
 	if (lr_phy != (s->coding != PROFILE_SCHED_CODING_NONE)) {
 		return -EINVAL;
 	}
@@ -255,7 +239,7 @@ int profile_sched_check(const struct profile_schedule *s, bool lr_phy,
 
 	if (s->dl_interval == 0u) {
 		/* No window: section 11's rule, applied to two fields that
-		 * would otherwise describe a window nobody opens. */
+		 * would otherwise describe one nobody opens. */
 		if (s->dl_phase != 0u || s->dl_dwell != 0u) {
 			return -EINVAL;
 		}
@@ -268,18 +252,12 @@ int profile_sched_check(const struct profile_schedule *s, bool lr_phy,
 		return -EINVAL;
 	}
 
-	/*
-	 * The dwell must cover the clock error accumulated between the frame
-	 * that announces the window and the window itself, in BOTH directions -
-	 * the commanding receiver aims at the middle and can be early or late -
-	 * so twice the drift, not once.
-	 *
-	 * This is the field that makes the block internally honest. A 500 ppm
-	 * node pointing two seconds ahead has drifted a millisecond by the time
-	 * it opens, so the plan's example duty of 500 us every 2 s is a window
-	 * only a crystal node can offer. Announcing it anyway would produce a
-	 * downlink that never works and reports nothing.
-	 */
+	/* The dwell must cover the clock error accumulated between the
+	 * announcing frame and the window itself, in BOTH directions (the
+	 * receiver aims at the middle and can be early or late) - so twice
+	 * the drift. A 500 ppm node pointing two seconds ahead has drifted a
+	 * millisecond by the time it opens, so announcing a window too narrow
+	 * for that drift would produce a downlink that never works. */
 	if (clk_ppm != 0u) {
 		phase_us = counts_to_us(s->dl_phase);
 		drift_us = (phase_us *
@@ -350,9 +328,8 @@ int profile_sched_unpack(const uint8_t *body, bool lr_phy, uint16_t clk_ppm,
 				  PROFILE_SCHED_RSVD_OFF, PROFILE_SCHED_RSVD_W,
 				  &value);
 	if (value != 0u) {
-		/* Reserved-must-be-zero, and unlike an unknown informational
-		 * flag these bits have no defined meaning at all - a receiver
-		 * that ignored them would be inventing one. */
+		/* Reserved-must-be-zero; unlike an unknown informational flag,
+		 * these bits have no defined meaning a receiver could assume. */
 		return -EPROTO;
 	}
 
@@ -380,10 +357,9 @@ int profile_sched_unpack(const uint8_t *body, bool lr_phy, uint16_t clk_ppm,
 	} else {
 		int dbm = (int)value - PROFILE_SCHED_POWER_BIAS;
 
-		/* Range-checked BEFORE the narrowing cast, not after. Biased
-		 * byte 228 minus 100 is 128, which lands on the sentinel when
-		 * squeezed into an int8 - so a receiver that cast first would
-		 * read a nonsense announcement as no announcement at all. */
+		/* Range-checked before the narrowing cast: biased byte 228
+		 * minus 100 is 128, which lands on the sentinel if squeezed
+		 * into an int8 first, misreading nonsense as "no announcement". */
 		if (dbm < PROFILE_SCHED_TX_POWER_MIN ||
 		    dbm > PROFILE_SCHED_TX_POWER_MAX) {
 			return -EINVAL;
@@ -391,13 +367,10 @@ int profile_sched_unpack(const uint8_t *body, bool lr_phy, uint16_t clk_ppm,
 		s.tx_power_dbm = (int8_t)dbm;
 	}
 
-	/*
-	 * A coding rate this build cannot use is NOT a decode error, and that
-	 * asymmetry with the encoder is the forward-compatibility rule of
-	 * section 6 applied to a vocabulary field: the node is describing
-	 * itself, not the layout of these bytes, so a receiver decodes it and
-	 * then declines the channel. Everything else is checked.
-	 */
+	/* A coding rate this build cannot use is NOT a decode error - the
+	 * forward-compatibility rule of section 6: the node describes itself,
+	 * not the layout of these bytes, so a receiver decodes and then
+	 * declines the channel. Everything else is checked. */
 	rc = profile_sched_check(&s, lr_phy, clk_ppm);
 	if (rc == -ENOTSUP) {
 		rc = 0;
@@ -430,10 +403,9 @@ radiant_time_t profile_sched_listen_at(const struct profile_schedule *s,
  * ---------------------------------------------------------------------------
  */
 
-/* Microseconds back into 1/32768 s counts, rounded to NEAREST rather than
- * truncated. Truncation would bias every announced phase early by up to 30 us,
- * always in the same direction, and a systematic error in a pointer is exactly
- * what the header's 244 us argument was about. */
+/* Microseconds back into 1/32768 s counts, rounded to nearest rather than
+ * truncated: truncation would bias every announced phase early by up to
+ * 30 us, always in the same direction. */
 static uint32_t us_to_counts(uint64_t us)
 {
 	return (uint32_t)(((us * US_DEN) + (US_NUM / 2u)) / US_NUM);
@@ -459,13 +431,10 @@ int32_t profile_sched_phase_for(const struct profile_schedule *s,
 		return -1;
 	}
 
-	/*
-	 * Reduce the anchor onto the interval grid relative to the carrier.
-	 * Both directions, in unsigned arithmetic: radiant_time_t is a 64-bit
-	 * absolute microsecond and the two operands can sit either side of each
+	/* Reduce the anchor onto the interval grid relative to the carrier, in
+	 * unsigned arithmetic: the two operands can sit either side of each
 	 * other, so the subtraction is done once in each order and the branch
-	 * picks the one that did not wrap.
-	 */
+	 * picks the one that did not wrap. */
 	if (t_anchor >= t_carrier) {
 		delta_us = (uint64_t)(t_anchor - t_carrier) % interval_us;
 	} else {
@@ -476,20 +445,13 @@ int32_t profile_sched_phase_for(const struct profile_schedule *s,
 
 	counts = us_to_counts(delta_us);
 	if (counts >= interval_counts) {
-		/*
-		 * The rounding above can push a delta that is within half a
-		 * count of a full interval up ONTO the interval, which is not a
-		 * legal phase. Clamp DOWN to the last representable one.
-		 *
-		 * The other direction is a real bug and was caught by
-		 * test_command.c rather than by inspection: wrapping to phase 0
-		 * would announce "the window opens at this frame's t_sync",
-		 * which is one whole interval early - up to 128 s for a slow
-		 * node, against a dwell measured in microseconds, so the
-		 * commanding receiver would miss every time. Clamping down is
-		 * at most one count early, 30.5 us, which is inside the
-		 * smallest dwell in the ladder.
-		 */
+		/* The rounding above can push a delta within half a count of a
+		 * full interval onto the interval, an illegal phase. Clamp
+		 * DOWN to the last representable one; wrapping to phase 0
+		 * instead would announce a window up to 128 s early against a
+		 * dwell measured in microseconds - the receiver would miss
+		 * every time. Clamping down is at most 30.5 us early, inside
+		 * the smallest dwell in the ladder. */
 		counts = interval_counts - 1u;
 	}
 

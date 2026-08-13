@@ -3,13 +3,11 @@
 
 """Tests for tools/ant_trace.py. No hardware, no device, standard library only.
 
-The forward parser cannot be tested against a real `Device0.txt` because no
-sample exists yet - that limitation is stated in `ant_trace`'s docstring and it
-is not something a test can fix. What *can* be tested, and is, is everything
-around it: that each dialect reads what it claims to read, that an unrecognised
-line fails loudly and names itself rather than being skipped, that detection
-refuses an ambiguous file, and that the reverse direction round-trips a
-transcript through annotated text and back to the same bytes.
+The forward parser cannot be tested against a real `Device0.txt` since no
+sample exists yet (see `ant_trace`'s docstring). What is tested: each dialect
+reads what it claims to, an unrecognised line fails loudly and names itself,
+detection refuses an ambiguous file, and the reverse direction round-trips a
+transcript through annotated text back to the same bytes.
 """
 
 from __future__ import annotations
@@ -41,9 +39,6 @@ class FrameSplitting(unittest.TestCase):
         broken[-1] ^= 0x01
         with self.assertRaises(TraceError) as caught:
             ant_trace.frames_from_bytes(bytes(broken))
-        # The message has to say *what* is wrong, because the likeliest cause
-        # is that this tool read the wrong columns, not that Garmin emitted a
-        # bad frame.
         self.assertIn("checksum", str(caught.exception))
 
     def test_wrong_sync_names_the_bidirectional_variant(self):
@@ -85,7 +80,6 @@ class AntserRoundTrip(unittest.TestCase):
         self.assertEqual(text.count("# case 4a-system-reset/valid"), 1)
 
     def test_formatting_is_deterministic(self):
-        # The whole Tier 1 gate rests on this one property.
         self.assertEqual(ant_trace.format_antser(self.records()),
                          ant_trace.format_antser(self.records()))
 
@@ -117,8 +111,7 @@ class AntserRoundTrip(unittest.TestCase):
         self.assertIn("one frame", str(caught.exception))
 
     def test_a_deliberately_broken_frame_is_still_recordable(self):
-        # A bad-checksum conformance case has to survive a write/read cycle;
-        # the transcript records what was sent, not only what was well formed.
+        # The transcript records what was sent, not only what was well formed.
         broken = bytearray(RESET)
         broken[-1] ^= 0x01
         text = ant_trace.format_antser(
@@ -176,7 +169,7 @@ class Dialects(unittest.TestCase):
                          [HOST_TO_DONGLE, DONGLE_TO_HOST])
         self.assertEqual(result.records[0].data, RESET)
         self.assertEqual(result.records[0].seconds, 0.0)
-        # Timestamps are relative to the first record, per the format contract.
+        # Timestamps are relative to the first record.
         self.assertAlmostEqual(result.records[1].seconds, 0.05, places=6)
 
     def test_clock_and_spaced_bytes(self):
@@ -205,8 +198,6 @@ class Dialects(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("Device0.txt:2", message)
         self.assertIn("Session opened", message)
-        # And it must say what to do about it, because guessing is the failure
-        # mode this whole design is arranged against.
         self.assertIn("--dump-unparsed", message)
 
     def test_dump_unparsed_collects_instead_of_stopping(self):
@@ -239,8 +230,8 @@ class Dialects(unittest.TestCase):
             ant_trace.detect_dialect(["ANT log v3", "started", "closed"])
         message = str(caught.exception)
         self.assertIn("no dialect reads this file", message)
-        # It must name what it tried, or the next person has to read the source
-        # to find out which guesses were already made.
+        # Must name what it tried, or the next person reads the source to
+        # find out which guesses were already made.
         self.assertIn("clock-dir-bracketed", message)
 
     def test_detection_refuses_a_mostly_unreadable_file(self):

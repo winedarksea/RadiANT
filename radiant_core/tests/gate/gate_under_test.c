@@ -1,32 +1,21 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * gate_under_test.c - the real gate, compiled with a window into it.
+ * gate_under_test.c - the real gate, compiled with a window into it. The
+ * one #include below is the file under test, verbatim and unmodified;
+ * everything after it is read-only.
  *
- * Provenance: original clean-room work. The one #include below is the file
- * under test, verbatim and unmodified; everything after it is read-only.
+ * Why the .c and not the .o: the invariant this suite defends is observable
+ * from outside (the fake backend counts calls), but the STATE it's carried
+ * by is not - g.hw_held (A1's fix) and stats.late_disarm (names a fault
+ * with no other symptom) are both static. An accessor behind
+ * #ifdef CONFIG_ZTEST in the production file would be worse here
+ * specifically: the subject is which code path runs on which exit, so a
+ * compiled-in conditional would make the tested build and the shipping
+ * build different builds. Including the translation unit costs nothing at
+ * runtime and leaves the shipping file byte-identical.
  *
- * ---------------------------------------------------------------------------
- * WHY THE .c AND NOT THE .o
- * ---------------------------------------------------------------------------
- *
- * The invariant this suite defends - exactly one radiant_nrf_gate_on_grant_end()
- * per granted timeslot, on every exit - is observable from outside: the fake
- * backend counts the calls. But the STATE the invariant is carried by is not.
- * g.hw_held is the whole of A1's fix and it is a static bool; stats.late_disarm
- * exists precisely to name a fault that has no other symptom, and it is a static
- * counter. A test that could not read them would be asserting on the symptom of
- * the fix rather than on the fix.
- *
- * The alternative was an accessor inside the production file behind
- * #ifdef CONFIG_ZTEST. That is worse, and specifically worse HERE: the whole
- * subject is which code path runs on which exit, so a conditional compiled into
- * the file under test means the tested build and the shipping build are not the
- * same build. Including the translation unit costs nothing at runtime and leaves
- * the shipping file byte-identical.
- *
- * The consequence to remember: this file must be the ONLY one that includes it,
- * or the statics inside it exist twice and the suites silently test two
- * different gates.
+ * Consequence to remember: this must be the ONLY file that includes it, or
+ * the statics exist twice and the suites silently test two different gates.
  */
 
 #include "../../src/radiant_radio_nrf_gate_mpsl.c"

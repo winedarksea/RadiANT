@@ -13,7 +13,7 @@
  *       radiant_core/src/radiant_crc_repair.c
  *
  * ---------------------------------------------------------------------------
- * The arithmetic, in full, because it is short and it is the whole file
+ * The arithmetic
  * ---------------------------------------------------------------------------
  * A CRC is linear over GF(2). For a fixed length, CRC_I(d) = L(d) + c(I), where
  * L is linear and c depends only on the initial value. So for any error vector
@@ -46,12 +46,10 @@
 
 #include <radiant_core/radiant_crc_repair.h>
 
-/*
- * One entry per correctable bit. Sorted is not worth it: 112 entries at 4 Hz
- * per channel is a few microseconds of Cortex-M4 time on the rare frame that
- * failed its CRC at all, and a linear scan needs no ordering invariant to go
- * wrong. The same argument radiant_frame.c makes for its bitwise CRC.
- */
+/* One entry per correctable bit. Sorted is not worth it: 112 entries is a
+ * few microseconds of scan time on the rare CRC failure, and a linear scan
+ * needs no ordering invariant to go wrong - same argument radiant_frame.c
+ * makes for its bitwise CRC. */
 struct repair_entry {
 	uint16_t syndrome;
 	/* Bit index counted from the END of the CRC-covered data, so entry i
@@ -68,15 +66,10 @@ static struct repair_entry repair_table[RADIANT_CRC_REPAIR_ENTRIES];
 static bool repair_built;
 static bool repair_usable;
 
-/*
- * CRC_0 of the unit vector `bit` bits from the end of the data.
- *
- * Built by running the real radiant_crc16() over an error vector rather than by
- * a shortcut, so the table cannot disagree with the CRC the rest of the stack
- * computes. If radiant_frame.c's polynomial or bit order ever changes, this
- * changes with it and the duplicate check below is what notices if the change
- * broke something.
- */
+/* CRC_0 of the unit vector `bit` bits from the end of the data. Built by
+ * running the real radiant_crc16() over an error vector, not a shortcut, so
+ * this cannot disagree with the CRC the rest of the stack computes; the
+ * duplicate check below notices if a polynomial/bit-order change broke it. */
 static uint16_t syndrome_of_data_bit(uint16_t bit)
 {
 	uint8_t vector[RADIANT_FRAME_BODY_MAX];
@@ -85,11 +78,9 @@ static uint16_t syndrome_of_data_bit(uint16_t bit)
 	size_t len = (size_t)byte_from_end + 1u;
 
 	memset(vector, 0, sizeof(vector));
-	/* Bit 0 of the position is the LEAST significant bit of the last byte,
-	 * which is the bit that arrives last. Nothing here reverses anything:
-	 * radiant_crc16() consumes bytes most-significant-bit first, so the
-	 * numbering only has to be consistent with itself and with the flip
-	 * below. */
+	/* Bit 0 is the LSB of the last byte (the bit that arrives last).
+	 * Nothing here reverses anything - the numbering just has to be
+	 * consistent with itself and the flip below. */
 	vector[0] = (uint8_t)(1u << bit_in_byte);
 
 	return radiant_crc16(0u, vector, len);
@@ -114,17 +105,11 @@ bool radiant_crc_repair_init(void)
 			(uint16_t)(CRC_BIT_BASE + i);
 	}
 
-	/*
-	 * No duplicates, and no zero.
-	 *
-	 * A duplicate means two different single-bit errors are
-	 * indistinguishable, so a "repair" would be a coin toss between them; a
-	 * zero syndrome means some single-bit error is invisible to the CRC
-	 * entirely, which would be a broken polynomial. Neither can happen for
-	 * CRC-16/CCITT over 136 bits - it detects every single-bit error in
-	 * blocks up to 32767 - so this loop exists to catch a change to the
-	 * polynomial or the frame geometry, and the cost of it is once per boot.
-	 */
+	/* No duplicates, and no zero: a duplicate would make "repair" a coin
+	 * toss between two errors, and a zero syndrome means an error is
+	 * invisible to the CRC (a broken polynomial). Neither can happen for
+	 * CRC-16/CCITT over 136 bits, so this loop exists only to catch a
+	 * future change to the polynomial or frame geometry. */
 	repair_usable = true;
 	for (i = 0u; i < RADIANT_CRC_REPAIR_ENTRIES && repair_usable; i++) {
 		if (repair_table[i].syndrome == 0u) {
@@ -171,13 +156,9 @@ int radiant_crc_repair(enum radiant_frame_cfg cfg, const uint8_t *addr,
 	uint16_t byte_from_end;
 	uint16_t bit_in_byte;
 
-	/*
-	 * TRACKING ONLY, decided here and not by the caller. The 1-in-585
-	 * false-accept rate is tolerable against a population that already
-	 * matched a full 5-byte address and intolerable against noise-triggered
-	 * 3-byte matches - see the header. A call site can forget which window
-	 * it is on; this cannot.
-	 */
+	/* TRACKING ONLY, decided here and not by the caller: the 1-in-585
+	 * false-accept rate is tolerable after a full 5-byte address match but
+	 * not against noise-triggered 3-byte matches - see the header. */
 	if (cfg != RADIANT_FRAME_CFG_TRACKING) {
 		return RADIANT_CRC_REPAIR_EINVAL;
 	}
@@ -197,11 +178,9 @@ int radiant_crc_repair(enum radiant_frame_cfg cfg, const uint8_t *addr,
 
 	syndrome = (uint16_t)((uint16_t)crc_rx ^ computed);
 	if (syndrome == 0u) {
-		/* The backend called this a CRC failure and the software CRC
-		 * over the same bytes disagrees. That is a configuration fault
-		 * - a different polynomial, a different coverage - and it must
-		 * not be reported as an unrepairable frame, because the two
-		 * have entirely different fixes. */
+		/* Backend flagged a CRC failure but the software CRC agrees -
+		 * a configuration fault (wrong polynomial/coverage), not an
+		 * unrepairable frame; the two have different fixes. */
 		return RADIANT_CRC_REPAIR_EAGREE;
 	}
 
@@ -218,14 +197,10 @@ int radiant_crc_repair(enum radiant_frame_cfg cfg, const uint8_t *addr,
 	byte_from_end = (uint16_t)(position / 8u);
 	bit_in_byte = (uint16_t)(position % 8u);
 	if (byte_from_end >= body_len) {
-		/*
-		 * The syndrome names a bit that would lie in the ADDRESS, in
-		 * front of this body. That cannot have happened: a flipped
-		 * address bit does not match the filter and produces no event.
-		 * So the syndrome is a coincidence from a multi-bit error, and
-		 * "unrepairable" is the honest answer rather than a write past
-		 * the front of the buffer.
-		 */
+		/* The syndrome names a bit in the ADDRESS, which can't have
+		 * happened (a flipped address bit wouldn't match the filter).
+		 * A coincidence from a multi-bit error - "unrepairable" beats
+		 * writing past the front of the buffer. */
 		return RADIANT_CRC_REPAIR_ENONE;
 	}
 

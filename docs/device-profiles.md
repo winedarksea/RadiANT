@@ -1,15 +1,14 @@
 # RadiANT device profiles
 
-Checked by: `scripts/check_profile_registry.py` — run it with
-`C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe scripts\check_profile_registry.py`.
-It cross-checks the device type and period tables below against
+Checked by: `scripts/check_profile_registry.py`, run with the NCS toolchain's
+Python interpreter (there is no system Python in this project). It cross-checks the device type and period tables below against
 `tools/ant_pages.py` and `docs/profile-registry.md`, and the page maps of the
 RadiANT device types against the registry's page rows. The ANT+ layout tables
 are pinned by `tools/test_ant_pages.py`, which round-trips every encoder through
 its decoder:
 
 ```
-C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe -m unittest discover -s tools -p "test_*.py"
+python -m unittest discover -s tools -p "test_*.py"
 ```
 
 This document absorbs the former `docs/ant-plus-profiles.md`. It is the one
@@ -126,9 +125,12 @@ invites the same proposal again in a year.
 | Type | Name | Period | Implemented in `tools/ant_pages.py` |
 |---|---|---|---|
 | `0x0B` | Bicycle Power | 8182 | pages `0x10`, `0x11`, `0x12`, `0x20` |
+| `0x10` | Controls | 8192 | pages `0x10`, `0x49` (command surface only) |
 | `0x11` | Fitness Equipment (FE-C) | — | no |
 | `0x14` | Light Electric Vehicle (LEV) | — | no |
 | `0x19` | Environment | — | no |
+| `0x1E` | Running Dynamics | 4096 | pages `0x00`, `0x01`, `0x10`, `0x20`, `0x4A` |
+| `0x29` | Tracker (Asset Tracker) | 2048 | pages `0x01`, `0x02`, `0x03`, `0x10`, `0x11`, `0x20` |
 | `0x78` | Heart Rate | 8070 | pages `0x00`, `0x01`, `0x02`, `0x03`, `0x04` |
 | `0x79` | Bike Speed and Cadence, combined | 8086 | the single page, which has no page number |
 | `0x7A` | Bike Cadence | 8102 | period only |
@@ -447,10 +449,6 @@ cadence below.
 the e-bike profile of section 7.1 was not pursued**, and because a claimant
 needs the whole interoperability contract — both channels, every page, the
 travel-mode mapping rule — not just a field list to check against.
-
-Source: ANT+ Managed Network Document D00001390 Rev 1.1, "Light Electric
-Vehicle Device Profile", publicly mirrored on the Garmin forums. Every table
-below is transcribed from that document; nothing here is inferred.
 
 #### Channel configuration
 
@@ -922,6 +920,264 @@ Deliberately not JSON: one `sscanf` on the C side against a parser dependency.
 The device number is not decoration — two sensors can share a device type, and
 merging their streams is the same mistake as rule 3 above, made in the analysis
 tool instead of the firmware.
+
+### 3.13 Running Dynamics, device type `0x1E`
+
+Numbered last rather than beside the other implemented profiles because 3.4
+through 3.12 are already referenced from `docs/profile-registry.md` and from
+several source headers; a renumbering to put this in tidy order would break
+those citations to buy nothing. It is an implemented profile, not a
+reference-only one.
+
+Implemented in `src/profiles/profile_rd.c` and mirrored in
+`tools/ant_pages.py`; the two are checked against the same vectors by
+`tools/test_ant_pages.py` and `radiant_core/tests/src/test_profile_rd.c`.
+
+#### The metrics
+
+| Metric | Page | Wire scale | Range | Invalid |
+|---|---|---|---|---|
+| Cadence | `0x00` | 1/32 strides/min | 0–255.97 | integer part 0 |
+| Vertical oscillation | `0x00` | 1/4 mm | 0–2047.75 mm | integer part 0 |
+| Ground contact time | `0x00` | 1 ms | 0–2047 ms | 0 |
+| Stance time | `0x00` | 1/4 % | 0–100 % | integer part 0 |
+| Step count | `0x00` | 1 step | 7-bit rollover | none — 0 is a real value |
+| Ground contact balance | `0x01` | 1/32 % | 0–100 % | integer part 0 |
+| Vertical ratio | `0x01` | 1/32 % | 0–100 % | none stated |
+| Step length | `0x01` | 1 mm | 0–8191 mm | none — 0 is a real value |
+| Walking flag, module orientation | `0x00`, `0x01` | 1 bit | — | — |
+| Horizontal speed (display → sensor) | `0x10` | 1/256 m/s | 0–14.996 m/s | `0x0F` / `0xFF` |
+
+**Every measurement spells invalid as ZERO, not as `0xFF`.** This is the one
+implemented profile where section 3.11's sentinels do not apply at all, and a
+decoder that reached for `INVALID_U8` reports a stationary runner's stance time
+as 63.75 %.
+
+Percentage fields reserve 101–127 rather than leaving them undefined, so a
+sensor clamping a computed percentage clamps to 100 and not to the field
+maximum. `profile_rd.c` refuses to encode a reserved value rather than
+transmitting it.
+
+#### Three layout traps
+
+- **There is no page-change toggle.** Byte `[0]` is the whole page number, all
+  eight bits. That is the opposite of heart rate `0x78` (section 3.2), and a
+  decoder that masked with `0x7F` out of habit would work by accident on every
+  page this profile currently defines and break when 33–63 are allocated.
+- **Ground contact time is split low-bits-first**: three low bits in byte `[4]`
+  bits 5–7, eight high bits in byte `[5]`. Every other split field on the
+  profile puts its low byte first and its high bits in the shared byte.
+- **Two fractions are split across a byte boundary, low bit first.** Stance
+  time's 2 bits (byte `[6]` bit 7, then byte `[7]` bit 0) and ground contact
+  balance's 5 bits (byte `[1]` bit 7, then byte `[2]` bits 0–3). Reading either
+  the other way round is wrong by a factor of two *only when the low bit is
+  set*, so half of a naive test set passes.
+
+Page `0x00` sets its one reserved bit to `0`; page `0x01` sets its two reserved
+bits to `0b11`. Both are transcribed from the tables and neither is a typo.
+
+#### The two channel configurations, which is the part that is not a layout
+
+A **standalone RD pod** is one channel: device type `0x1E`, RF 57 (2457 MHz),
+period 4096 (8 Hz), transmission type 5.
+
+An **HR-RD strap** — the Garmin HRM-Run / HRM-Pro shape — is **two channels**,
+and this is the fact that decides how a receiver finds the running dynamics:
+
+1. Its heart-rate channel is an ordinary ANT+ HRM channel (`0x78`, period 8070)
+   and **carries no running dynamics at all**. Section 3.2's page set is the
+   whole of it.
+2. The running dynamics ride a **second channel**, device type `0x1E` again but
+   period 8070 and transmission type 1, on one of four permitted RF indices
+   (3 / 39 / 61 / 75) rather than the ANT+ 57.
+3. A display opens it by sending page `0x4A` as an acknowledged message **on
+   the heart-rate channel** after pairing, naming the RF index, the device type
+   and the period. A strap with no session leader opens the RD channel where it
+   was told.
+4. The strap then advertises where it went in the byte HRM page `0x04` reserves
+   as manufacturer-specific — byte `[1]` becomes an RF enumeration — so a
+   receiver that did *not* become session leader can still find the channel.
+
+**The enumeration is not sorted**: code 1 is 2403 MHz, 2 is 2439, **3 is 2475
+and 4 is 2461**. The document states it twice and both statements agree, so it
+is transcribed as a table rather than computed. Code 0 means the RD channel is
+not open, and — critically — **any value outside the enumeration must not be
+interpreted**, because on a strap without running dynamics that byte is
+ordinary manufacturer-specific data. `profile_rd_rf_enum_index()` returns 0 for
+both cases so that "do not interpret" is the default rather than something a
+caller remembers. This is also why `profile_hr.c` writes `0xFF` there.
+
+#### The page numbers do not collide with the RadiANT compat pages
+
+Checked rather than assumed, because this document raised it as an open
+question before the specification was in hand. Section 3.5 allocates
+`0x70`–`0x72` in the **heart rate** page space. This profile uses `0x00`,
+`0x01`, `0x10`, `0x20` and `0x4A` in the **running dynamics** page space, whose
+reserved ranges are 2–15, 17–31 and 33–63. The two allocations are disjoint
+twice over: different device types, and no shared number. No compat client is
+attached to this profile.
+
+#### What RadiANT does with it
+
+`src/bridge/radiant_rd_adapter.c` decodes both main pages onto the sample bus.
+Six of the eight metrics map onto the section 7 vocabulary exactly and are
+published today; **cadence and ground contact time are not**, and that is a
+vocabulary gap rather than a decoder gap — see `docs/radiant-bridge.md` and the
+note in that adapter's header. Nothing is silently dropped: the decoder parses
+every field, and the two unpublished ones are readable from
+`struct profile_rd_metrics` by any caller that wants them before the vocabulary
+question is settled.
+
+#### Independent corroboration: the HRM 600's BLE side, and why it does not touch this section
+
+Two community sources reverse-engineer the Garmin HRM 600's data path: a blog post
+(`dropbars.be/blog/reverse-engineering-garmin-hrm600-running-dynamics`) and its
+companion repository `codeberg.org/samdumont/openrd-ble-running-dynamics`
+(an ESP32/NimBLE simulator of the sensor, referencing Gadgetbridge's public
+Garmin BLE protocol notes as its own foundation). Recorded here as
+`[community, reverse-engineered]` per this project's own provenance-tagging
+convention — corroboration, not a source this section's page layout was
+written from.
+
+**The transport is a different, proprietary stack, not ANT+ pages carried over
+BLE.** The HRM 600 talks to a watch over Bluetooth using Garmin's own
+Multi-Link service, GFDI framing, COBS byte-stuffing, and a protobuf payload
+exchanged through an `EventSharing` mechanism — four nested layers with no
+relationship to an ANT+ data page at all. This settles a question this
+document's HR-RD section otherwise left open: whatever a Garmin watch does
+over BLE, it is not "the RD pages, GATT-wrapped." The ANT+ side — this
+section's own scope — is a separate, simpler, openly-interoperable path; the
+blog post's own words are that "over ANT+ a non-Garmin sensor can feed \[RD]
+to a Garmin watch today. The lock is specifically the Bluetooth path."
+
+**The physiological scale factors match this section's exactly**, recovered
+independently from a decompiled protobuf schema on a transport with no
+ANT+ ancestry:
+
+| Field (protobuf name) | Scale | Matches this section's |
+|---|---|---|
+| `vertical_oscillation_1_4ths_mm` | 0.25 mm | §3.13 vertical oscillation, 1/4 mm |
+| `stance_time_1_4ths_percent` | 0.25 % | §3.13 stance time, 1/4 % |
+| `ground_contact_balance_1_32nds_percent` | 1/32 % | §3.13 ground contact balance, 1/32 % |
+| `vertical_ratio_1_32nds_percent` | 1/32 % | §3.13 vertical ratio, 1/32 % |
+| `cadence_1_32_strides_per_min` | 1/32 strides/min | §3.13 cadence, 1/32 strides/min |
+| `ground_contact_time_ms`, `step_length_mm`, `step_count` | whole units | §3.13, same |
+
+Two independent reverse-engineering efforts against two unrelated transports
+recovering the same seven scale factors is strong corroboration that
+`profile_rd.c`'s wire-scale constants are right, without being a second source
+for anything this section states about ANT+ specifically — the BLE schema
+names its fields differently and carries them through protobuf, not through an
+8-byte ANT+ payload, so there is no byte offset or bit-packing fact to import
+from it.
+
+**One field this project's ANT+ source does not define at all**: protobuf field
+11, `step_speed_loss_data`, is present in the schema but — per the blog post —
+"never observed in captures." Not implemented here; recorded so a future reader
+does not wonder whether it was missed.
+
+Full protocol notes — UUIDs, envelope framing, the field table, the
+twelve-step handshake — are kept separately in
+[`docs/ble-running-dynamics-notes.md`](ble-running-dynamics-notes.md) rather
+than here, because they describe a BLE application that does not exist in
+this repository yet; nothing above depends on that document.
+
+### 3.14 Controls, device type `0x10`
+**Scoped to the command surface, not the full 64-page document.** Rev 2.0 also
+defines a peripheral-enumeration model — pages 1, 2, 5, 7, 8, 17, 20, 70 and 72,
+through which one "generic controllable device" announces a set of child
+devices — and a text-transfer sub-protocol for now-playing metadata. Neither is
+implemented. What is implemented is page `0x10` (Audio/Video Command) and page
+`0x49` (Generic Command): a remote sending transport and menu/stopwatch
+commands to a controllable master, which is what "control a device over ANT+"
+means in the overwhelming majority of real deployments. The channel this
+profile opens is unaffected by the scope decision — this implementation
+interoperates with any Rev 2.0 controllable device's command pages regardless
+of whether that device also implements peripheral enumeration.
+
+**Channel.** Device type `0x10`, RF 57 (2457 MHz), period 8192 (4 Hz),
+transmission type ending in nibble 5. A controllable device's periodic
+broadcast has no required main-page content beyond common pages 80/81/82 — the
+command pages are slave-initiated (`0x49`, acknowledged) or issued by the
+master in response to a local event (`0x10`), not a periodic report.
+
+**The sequence number is shared across both page types, not one per type.**
+Table 9-1 and table 9-9 each carry a "Sequence #" byte, and the document is
+explicit both draw from the SAME counter: an audio command, a generic command,
+then another audio command are sequence numbers N, N+1, N+2. A node emitting
+both page types owns one counter and both encoders draw from it —
+`profile_controls_send_av()` and `_send_generic()` share
+`struct profile_controls::sequence`, and a node with two independent counters
+would silently disagree with the profile the moment it used both page types in
+one session.
+
+**Page `0x49`'s command field is 16 bits, despite what the source table's own
+length column says.** Table 9-9 lists byte range "6-7" against a length column
+reading "1 Byte" — internally inconsistent, since table 9-8's value range is
+0..65535 (65535 = "No Command"), which needs both bytes. The byte range and the
+value table are treated as authoritative; the length column is recorded here as
+a likely transcription artifact of the source document rather than silently
+"corrected" without comment.
+
+**"No Command" is a page a sender must be able to emit, not just decode.**
+When a generic-command exchange has an odd number of real commands, the
+padding packet's command field must be `0xFFFF` and its serial/manufacturer
+bytes must equal the PRECEDING packet's — a "No Command" packet must not itself
+look like a new command to a receiver differencing sequence numbers, so it also
+does not advance the sequence counter. `profile_controls_encode_generic()`
+enforces this: sequence increments on every command except `0xFFFF`.
+
+**What is deliberately not modelled**: audio-device-class support tiers
+(table 9-2's "required for audio / optional for video recorder" columns) are a
+receiver-conformance policy question, not a wire fact, and are not transcribed.
+
+### 3.15 Tracker (Asset Tracker), device type `0x29`
+**Channel.** Device type `0x29`, RF 57 (2457 MHz), period 2048 (16 Hz),
+transmission type ending in nibble 5.
+
+**One tracker reports MANY assets, each named by a 5-bit ASSET INDEX — not a
+device number.** Pages 1, 2, 16 and 17 all carry it in byte `[1]` bits 0-4
+(reserved top 3 bits `0b111`). Indices are assigned sequentially from 0 and are
+**never reused or shifted** when an asset is removed: the document's own rule
+is that a removed index's pages simply stop being sent, leaving a hole rather
+than a renumbering. `struct profile_tracker` therefore holds 32 independent
+asset slots, addressed by index, not one sensor's worth of state.
+
+**Location is split across TWO pages, and the split is not symmetric.** Page 1
+(`0x01`) carries distance, bearing, status and latitude's LOW 16 bits; page 2
+(`0x02`) carries latitude's HIGH 16 bits **and all 32 bits of longitude**. A
+receiver holding only page 1 does not have half a position report — it has a
+quarter of one, since it is also missing the entirety of longitude. The
+document's transmission pattern (page 1 always immediately followed by page 2
+for the same asset) is what makes this safe in practice; this project's decode
+API enforces the pairing by taking both pages together rather than exposing two
+independent half-decoders a caller could invoke out of order.
+
+**Units are semicircles and bradians, matched pairs of integer mappings chosen
+so neither device needs π:**
+
+| Unit | Formula | Range |
+|---|---|---|
+| Semicircles (lat/lon) | `value = degrees * 2^31 / 180` | signed 32-bit, two's complement |
+| Bradians (bearing) | `value = degrees * 256 / 360` | unsigned 8-bit, 0-255 = 0-360° |
+
+Both are stored as the raw wire integer by this module; degree conversion is
+the caller's, the same split `profile_rd.h` draws between wire scale and
+physical units.
+
+**The asset situation enum is asset-type-dependent.** Table 7-5 defines five
+values for a dog (`Sitting`/`Moving`/`Pointed`/`Treed`/`Unknown`) and states
+`0xFF` "Undefined" for a plain Asset Tracker and for every asset type this
+document does not separately enumerate. `PROFILE_TRACKER_SITUATION_*` carries
+the dog values because they are the document's own worked case; any other
+asset type's situation values are not defined here because the document does
+not define them either.
+
+**What is deliberately not modelled**: the higher-rate temporary-RF-channel
+text exchange the sibling Controls profile's page 20 can trigger is out of
+scope for the same reason page 20 itself is out of scope in §3.14 — it belongs
+to Controls, not to Tracker, and neither document's temporary-channel mechanism
+is implemented here.
 
 ---
 
@@ -1502,12 +1758,14 @@ repeated.
 | Device type | Name | Depth here | Confidence |
 |---|---|---|---|
 | `0x0B` | Bicycle Power | Implemented, §3.1 | — |
-| `0x10` | Controls | Not implemented | community + open-source |
+| `0x10` | Controls | Implemented (command surface only), §3.14 | — |
 | `0x11` | Fitness Equipment (FE-C) | Not implemented, referenced §7.2 | community + open-source |
 | `0x12` | Blood Pressure | Not implemented; forward-noted §5.1 as the next profile that would inherit CGM's mandatory-`X_AUTH` rule | community + open-source, type only — no page layout found anywhere |
 | `0x13` | Geocache | Not implemented | community |
 | `0x14` | Light Electric Vehicle | Not implemented, reference-only §3.6 | primary spec |
 | `0x19` | Environment | Not implemented, reference-only §3.7 | four converging open-source sources |
+| `0x1E` | Running Dynamics | Implemented, §3.13 | — |
+| `0x29` | Tracker (Asset Tracker) | Implemented, §3.15 | — |
 | `0x1F` | Muscle Oxygen | Not implemented | **vendor code** (BSX's own published source), high confidence, full page layout known but not transcribed here |
 | `0x22` | Shifting | Not implemented | open-source only |
 | `0x23` | Bike Lights | Not implemented | primary spec (publicly mirrored PDF) |
@@ -1523,7 +1781,6 @@ repeated.
 | unverified | Racquet | Real profile, device type not found | unverified |
 | unverified | Extended Display (marketed as "Varia Vision") | Real profile, device type not found | unverified |
 | unverified | Suspension | Real profile, device type not found | unverified |
-| unverified | Tracker | Real profile — ANT+ tech bulletins confirm it shipped — device type not found | unverified |
 | n/a | Sync | Governs ANT-FS file-transfer session behaviour rather than broadcasting sensor data; not a device-type profile in the sense every other row is | — |
 
 **Reading the confidence column.** "Primary spec" and "vendor code" mean a

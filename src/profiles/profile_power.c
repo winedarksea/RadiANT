@@ -2,15 +2,12 @@
 /*
  * profile_power.c - ANT+ Bicycle Power, device type 0x0B.
  *
- * Provenance: docs/device-profiles.md section "Bicycle Power, device type 0x0B"
- * (formerly docs/ant-plus-profiles.md, absorbed into it), this project's own prior
- * clean-room derivation of the four bicycle-power page layouts, and its mirror
- * in tools/ant_pages.py (encode_power_std, encode_power_torque,
- * encode_power_torque_freq). See the header. No sdk-ant source was consulted
- * and nothing here derives from libant.a.
+ * Provenance: docs/device-profiles.md, "Bicycle Power, device type 0x0B", this
+ * project's own clean-room derivation, mirrored in tools/ant_pages.py
+ * (encode_power_std, encode_power_torque, encode_power_torque_freq). See the
+ * header. No sdk-ant source was consulted and nothing here derives from libant.a.
  *
- * There is no cryptography in this file and no call to radiant_sec anywhere in
- * it.
+ * No cryptography in this file; no call to radiant_sec.
  */
 
 #include <errno.h>
@@ -77,9 +74,7 @@ int profile_power_encode_torque_freq(uint8_t event_count,
 		return -EINVAL;
 	}
 
-	/* BIG-ENDIAN, and it is the only page in this repository that is. A
-	 * copy-paste of the little-endian writer above produces a page that
-	 * decodes to a plausible slope and an absurd power. */
+	/* BIG-ENDIAN - the only page in this repository that is. */
 	out[0] = PROFILE_POWER_PAGE_TORQUE_FREQ;
 	out[1] = event_count;
 	out[2] = (uint8_t)((slope_tenth_nm_hz >> 8) & 0xFFu);
@@ -98,9 +93,8 @@ static int power_data_page(uint8_t page, uint8_t counter, uint8_t *body,
 {
 	struct profile_power *pw = (struct profile_power *)user;
 
-	/* The engine's rotation names the page here, unlike heart rate: this
-	 * profile's pages ARE a round robin, one per page number the node
-	 * emits, and each carries its own event count in byte [1]. */
+	/* Unlike heart rate, this profile's pages ARE the round robin; each
+	 * carries its own event count in byte [1], not the engine's counter. */
 	(void)counter;
 
 	if (pw == NULL) {
@@ -170,9 +164,8 @@ int profile_power_init(struct profile_power *pw,
 		case PROFILE_POWER_PAGE_TORQUE_FREQ:
 			break;
 		default:
-			/* A page this profile does not define would go out as
-			 * whatever power_data_page() refused to build, i.e. as
-			 * a silent slot for the life of the node. */
+			/* An undefined page would go out as a silent slot for
+			 * the life of the node. */
 			return -EINVAL;
 		}
 	}
@@ -180,9 +173,7 @@ int profile_power_init(struct profile_power *pw,
 	memset(pw, 0, sizeof(*pw));
 	pw->cfg = *cfg;
 
-	/* Not reported, until the node says otherwise. 0xFF and not 0: zero
-	 * cadence is a real reading, and a sensor that starts by claiming a
-	 * genuine 0 rpm is claiming the rider has stopped. */
+	/* 0xFF, not 0: zero cadence is a real reading (rider stopped). */
 	pw->cadence = PROFILE_COMMON_INVALID_U8;
 	pw->pedal_power = PROFILE_COMMON_INVALID_U8;
 
@@ -214,8 +205,7 @@ int profile_power_set_compat(struct profile_power *pw,
 	}
 
 	/* No toggle on this device type: byte [0] is a whole page number and
-	 * bit 7 belongs to the page number. Installing heart rate's rule here
-	 * would put page 0x90 on the air. */
+	 * bit 7 belongs to it, not a toggle. */
 	compat->cfg.toggle = NULL;
 	compat->cfg.user = NULL;
 	return profile_compat_attach(compat, &pw->sched);
@@ -227,8 +217,8 @@ void profile_power_event(struct profile_power *pw, uint16_t watts,
 	if (pw == NULL) {
 		return;
 	}
-	pw->event_count++;              /* wraps at 256, and is meant to */
-	pw->acc_power += watts;         /* wraps at 65536, and is meant to */
+	pw->event_count++;              /* wraps at 256, meant to */
+	pw->acc_power += watts;         /* wraps at 65536, meant to */
 	pw->inst_power = watts;
 	pw->cadence = cadence;
 }

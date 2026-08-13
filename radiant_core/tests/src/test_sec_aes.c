@@ -3,29 +3,20 @@
  * Published vectors for the crypto primitives, and the two blocks
  * docs/radiant-security.md pins to the byte.
  *
- * Four published sets and one cross-check:
- *
  *   FIPS-197 C.1 and appendix B    AES-128 block encryption
  *   RFC 4493 section 4             AES-CMAC, subkeys and the empty message
  *   SP 800-38A F.5.1               AES-128-CTR
- *   tools/radiant_crypto.py        the SP 800-108 KDF outputs, as literals
+ *   tools/radiant_crypto.py        SP 800-108 KDF outputs, as literals
  *
- * That last one is the one worth explaining. The KDF is CMAC over a block this
- * project invented, so no standards body publishes a vector for it - but the
- * host tools have to compute the same value the node does or a two-dongle 1:N
- * proof cannot work. The literals below also appear in
- * tools/test_radiant_crypto.py. Neither implementation is authoritative;
- * agreeing is the assertion, and the published sets above are what keep both
- * of them honest about AES itself.
+ * The KDF is CMAC over a block this project invented, so no standards body
+ * publishes a vector for it - host tools must compute the same value the node
+ * does or the 1:N proof breaks. Same literals also appear in
+ * tools/test_radiant_crypto.py; neither implementation is authoritative,
+ * agreeing is the assertion.
  *
- * This suite needs no radio, no HAL and no fake_radio - src/radiant_sec_aes.c
- * includes nothing but <stdint.h>, <string.h> and the seam header, which is
- * exactly the property that lets a suite hammer it.
- *
- * It runs twice: once against the portable mode layer, and once with
- * CONFIG_RADIANT_SEC_BACKEND_MODES=y, where src/sec_modes_backend.c supplies
- * AES-CTR and AES-CMAC itself. The second run is what proves the two-level
- * seam is live rather than decorative.
+ * Runs twice: once against the portable mode layer, and once with
+ * CONFIG_RADIANT_SEC_BACKEND_MODES=y where src/sec_modes_backend.c supplies
+ * AES-CTR/CMAC itself, proving the two-level seam is live not decorative.
  */
 
 #include <zephyr/ztest.h>
@@ -136,13 +127,9 @@ ZTEST(sec_aes, test_rfc4493_vectors)
 
 ZTEST(sec_aes, test_cmac_incremental_matches_one_shot)
 {
-	/*
-	 * The incremental path is what the spread-MAC window uses, and it is
-	 * where a full block held back one update too early or too late stops
-	 * mattering only for messages whose length is a multiple of 16 - which
-	 * is most of the cases a casual test would try. So: every split of
-	 * every length, against the one-shot answer.
-	 */
+	/* The incremental path is what the spread-MAC window uses; a block held
+	 * back one update early/late only shows for non-multiple-of-16 lengths,
+	 * so test every split of every length. */
 	struct radiant_sec_key k;
 	size_t len;
 
@@ -232,8 +219,8 @@ ZTEST(sec_aes, test_sp800_38a_ctr)
 		      RADIANT_SEC_OK, NULL);
 	zassert_mem_equal(buf, ctr_cipher, sizeof(buf), "SP 800-38A F.5.1");
 
-	/* CTR is its own inverse, which is what makes one transform function
-	 * serve both directions in radiant_sec.c. */
+	/* CTR is its own inverse, so one transform function serves both
+	 * directions in radiant_sec.c. */
 	zassert_equal(radiant_sec_ctr_xor(&k, ctr_iv, buf, sizeof(buf)),
 		      RADIANT_SEC_OK, NULL);
 	zassert_mem_equal(buf, nist_message, sizeof(buf), "CTR round trip");
@@ -258,13 +245,10 @@ ZTEST(sec_aes, test_ctr_five_bytes)
 
 ZTEST(sec_aes, test_ctr_counter_carries_across_the_whole_block)
 {
-	/*
-	 * A counter block of all-ones must carry all the way into byte 0
-	 * rather than wrapping the last byte in place. RadiANT never reaches
-	 * this - its nonce block ends in seven zeroes - but two
-	 * implementations disagreeing here would diverge silently on the first
-	 * long message, so it is pinned rather than left to be discovered.
-	 */
+	/* An all-ones counter block must carry into byte 0, not wrap the last
+	 * byte in place. RadiANT never reaches this (nonce block ends in seven
+	 * zeroes) but two implementations disagreeing here would diverge
+	 * silently, so it's pinned. */
 	struct radiant_sec_key k;
 	uint8_t ones[16];
 	uint8_t zeros[16];
@@ -309,12 +293,9 @@ ZTEST(sec_aes, test_nonce_block_layout)
 
 ZTEST(sec_aes, test_domain_byte_separates_keystream_from_mac)
 {
-	/*
-	 * The field the first draft omitted, and the omission that produces a
-	 * scheme passing every test and leaking the tag key: without it, a
-	 * keystream block and a MAC block coincide under one
-	 * (epoch, devnum, counter).
-	 */
+	/* Without the domain byte, a keystream block and a MAC block coincide
+	 * under one (epoch, devnum, counter) - a scheme that passes every test
+	 * yet leaks the tag key. */
 	uint8_t ctr[16];
 	uint8_t mac[16];
 	uint8_t desc[16];
@@ -348,8 +329,7 @@ ZTEST(sec_aes, test_kdf_vectors_shared_with_the_python_mirror)
 		{ RADIANT_SEC_LABEL_AUTH, 0x11223344u,
 		  { 0x60, 0x70, 0x64, 0x5b, 0x3a, 0x9f, 0x3e, 0xac,
 		    0x4a, 0x9e, 0xaf, 0xa0, 0x5b, 0x77, 0x71, 0x12 } },
-		/* The "id" label is epoch-less and uses epoch = 0. Pinned so
-		 * two implementations cannot differ. */
+		/* The "id" label is epoch-less and uses epoch = 0. */
 		{ RADIANT_SEC_LABEL_ID, 0u,
 		  { 0x5a, 0x6a, 0x14, 0xa0, 0x28, 0x97, 0x35, 0x71,
 		    0x2b, 0xf7, 0xd1, 0x9a, 0x02, 0x30, 0x88, 0x7f } },
@@ -519,15 +499,11 @@ ZTEST(sec_aes, test_an_empty_or_destroyed_key_is_refused)
 
 ZTEST(sec_aes, test_two_keys_do_not_alias_through_the_shared_schedule)
 {
-	/*
-	 * The software backend keeps ONE key schedule for the whole system and
-	 * re-expands it when the key changes, because 176 bytes per key would
-	 * be 4.2 KB against a ~960 B budget. The cache tag is an import
-	 * serial, not an address: destroy a key and import another at the same
-	 * address and an address-keyed cache would silently encrypt under the
-	 * old one. This is that test, and it is written to interleave rather
-	 * than to run one key and then the other, because the interleave is
-	 * what the spread-MAC window does.
+	/* The software backend keeps ONE key schedule system-wide, re-expanded
+	 * on key change (176 B/key would be 4.2 KB against a ~960 B budget). The
+	 * cache tag is an import serial, not an address, or a destroyed key's
+	 * address getting reused would silently encrypt under the old key.
+	 * Interleaved to match the spread-MAC window's access pattern.
 	 */
 	static const uint8_t other_raw[16] = {
 		0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88,

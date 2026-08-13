@@ -4,7 +4,7 @@
  *
  * Provenance: docs/decisions/0005-extension-inside-ant-plus.md axis 5,
  * docs/decisions/0012-adaptive-frequency.md and docs/radiant-telemetry.md's page
- * map, all of which are this project's own documents. No adopter-gated ANT+
+ * map, all of which are this project's own documents. No ANT+
  * device profile document was read for this file, no sdk-ant source was
  * consulted, and nothing here derives from libant.a. See
  * docs/decisions/0002-clean-room-policy.md. The argument for every rule is in
@@ -59,14 +59,10 @@ find_evidence(const struct profile_freq_evidence *ev, uint8_t n, uint8_t rf)
 }
 
 /*
- * True when `a` outranks `b`. Quieter busy figure first, then quieter floor,
- * then the lower index.
- *
- * THE LAST TIE-BREAK IS NOT COSMETIC. Two receivers that ranked two equally
- * quiet indices by arrival order would recommend different frequencies for the
- * same node from the same evidence, and the node would take whichever asked
- * last. An arbitrary rule that both sides share beats a natural one that only
- * one of them has.
+ * True when `a` outranks `b`: quieter busy figure, then quieter floor, then
+ * lower index. The index tie-break is not cosmetic - two receivers ranking
+ * equally-quiet candidates by arrival order would disagree on the same
+ * evidence; a shared arbitrary rule beats a natural one only one side has.
  */
 static bool outranks(const struct profile_freq_evidence *a,
 		     const struct profile_freq_evidence *b)
@@ -99,9 +95,8 @@ int profile_freq_select(uint8_t incumbent, const struct profile_freq_evidence *e
 
 	here = find_evidence(ev, n, incumbent);
 	if (here == NULL || !here->have) {
-		/* Not a failure of the candidates - a failure to have measured
-		 * where we already are, which is the half of the comparison a
-		 * margin cannot be computed without. */
+		/* Not measured where we already are - a margin can't be
+		 * computed without it. */
 		return -ENODATA;
 	}
 
@@ -111,10 +106,8 @@ int profile_freq_select(uint8_t incumbent, const struct profile_freq_evidence *e
 		if (!c->have || c->rf_index == incumbent) {
 			continue;
 		}
-		/* Integer arithmetic in int, not int8: busy_dbm + 6 on a
-		 * candidate at -123 dBm is representable, and on the promotion
-		 * rules of C it is done in int anyway. Written out so that is a
-		 * decision rather than an accident. */
+		/* Arithmetic in int, not int8: busy_dbm + 6 must stay
+		 * representable (C's promotion rules do this anyway). */
 		if ((int)c->busy_dbm + PROFILE_FREQ_MARGIN_DB > (int)here->busy_dbm) {
 			continue;
 		}
@@ -124,10 +117,8 @@ int profile_freq_select(uint8_t incumbent, const struct profile_freq_evidence *e
 	}
 
 	if (best == NULL) {
-		/* Either nothing was measured, or nothing cleared the margin.
-		 * The two are distinguished because they mean different things
-		 * to a caller: one is "ask again when the map has filled in",
-		 * the other is "you are already in the right place". */
+		/* Distinguish "nothing measured" (ask again later) from
+		 * "nothing cleared the margin" (already in the right place). */
 		for (i = 0u; i < n; i++) {
 			if (ev[i].have && ev[i].rf_index != incumbent) {
 				return -EALREADY;
@@ -301,10 +292,9 @@ int profile_freq_begin(struct profile_freq *pf, uint8_t target, uint64_t now_us)
 		return -EINVAL;
 	}
 	if (target == pf->rf_index) {
-		/* Uncounted on purpose. A caller asking a node to move where it
-		 * already is has not been refused anything; it has asked for
-		 * nothing, and a counter here would tick every time a selector
-		 * confirmed the status quo. */
+		/* Uncounted on purpose: asking to move where it already is
+		 * isn't a refusal, and a counter here would tick every time
+		 * a selector confirmed the status quo. */
 		return -EALREADY;
 	}
 	if (pf->cfg.sparse) {
@@ -345,20 +335,19 @@ static uint8_t countdown_now(struct profile_freq *pf, uint32_t after)
 	remaining = (pf->move_at > after) ? (pf->move_at - after) : 0u;
 	c = (remaining + PROFILE_FREQ_UNIT - 1u) / PROFILE_FREQ_UNIT;
 	if (c == 0u) {
-		/* The move is due before another announcement could be heard.
-		 * One unit is the smallest thing this field can say, and saying
-		 * it moves the target out rather than naming a message that has
-		 * already gone. */
+		/* Move due before another announcement could be heard; one unit
+		 * is the smallest this field can say, and pushes the target out
+		 * rather than naming an already-gone message. */
 		c = 1u;
 	}
 	if (c > PROFILE_FREQ_COUNTDOWN_MAX) {
 		c = PROFILE_FREQ_COUNTDOWN_MAX;
 	}
 
-	/* MOVE THE TARGET TO WHAT WAS JUST SAID. Every receiver that heard this
-	 * copy computes the identical message; one holding an older copy is at
-	 * most PROFILE_FREQ_UNIT - 1 messages early, which costs it the tail of
-	 * the old channel rather than the head of the new one. */
+	/* Move the target to what was just said, so every receiver that heard
+	 * this copy computes an identical message; an older copy is at most
+	 * PROFILE_FREQ_UNIT - 1 messages early, costing the old channel's
+	 * tail rather than the new one's head. */
 	pf->move_at = after + c * PROFILE_FREQ_UNIT;
 	return (uint8_t)c;
 }
@@ -376,14 +365,9 @@ bool profile_freq_claim(uint32_t m, uint8_t *body, void *user)
 	if ((pf->msgs % PROFILE_FREQ_ANNOUNCE_EVERY) != 0u) {
 		return false;
 	}
-	/*
-	 * THE LAST SLOT BEFORE THE MOVE IS NOT ANNOUNCED, and without this the
-	 * feature never fires at all. The re-anchor below moves the target to
-	 * the smallest countdown it can express, so an announcement built for
-	 * the message the move is already due on would push the move one unit
-	 * further out - and the next one would do it again, forever. A node that
-	 * has nothing left to say says nothing and moves.
-	 */
+	/* The last slot before the move is not announced - without this the
+	 * re-anchor's smallest-countdown behavior would push the move one
+	 * unit further out on every announcement, forever. */
 	if (pf->move_at <= pf->msgs + 1u) {
 		return false;
 	}
@@ -411,10 +395,8 @@ bool profile_freq_sent(struct profile_freq *pf, uint64_t now_us)
 	pf->rf_index = pf->target;
 	pf->announcing = false;
 	pf->ever_moved = true;
-	/* The rate limit is measured from HERE and not from the request that
-	 * started the countdown, so a long K cannot be used to buy a second move
-	 * sooner - the floor is between moves, which is what a receiver
-	 * following them actually pays. */
+	/* Measured from here, not the request that started the countdown, so
+	 * a long K can't buy a second move sooner. */
 	pf->last_move_us = now_us;
 	pf->moves++;
 	return true;
@@ -461,10 +443,8 @@ int profile_freq_rx_slot(struct profile_freq_rx *rx, const uint8_t *body,
 		return -EINVAL;
 	}
 
-	/* The slot happened whether or not anything was in it, and it is counted
-	 * before the message is examined so that an announcement's own slot is
-	 * inside both counts - the node's message index and this one - exactly
-	 * once. */
+	/* Counted before the message is examined, so an announcement's own
+	 * slot is inside both counts exactly once. */
 	rx->slots++;
 
 	if (body == NULL) {

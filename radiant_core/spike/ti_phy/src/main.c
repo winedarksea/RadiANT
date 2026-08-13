@@ -3,96 +3,58 @@
 /*
  * Spike TI-PHY - can a CC26x2 RF core hear a real ANT+ frame?
  *
- * Provenance: clean-room. Written from docs/ant-radio-link.md, from TI's
- * public CC13x2/CC26x2 Technical Reference Manual and driverlib headers
- * (rf_prop_cmd.h, rf_prop_mailbox.h, rf_mailbox.h), from the public SimpleLink
- * RF driver API, and from SmartRF Studio's published settings database as
- * shipped in the SimpleLink CC13xx/CC26xx SDK
- * (source/ti/devices/radioconfig/.meta/config/cc2652r_prop_pg21/). Nothing
- * here derives from sdk-ant, from libant.a, or from an adopter-gated ANT+
- * device profile document. See docs/decisions/0002-clean-room-policy.md.
+ * Clean-room: written from docs/ant-radio-link.md, TI's public CC13x2/CC26x2
+ * Technical Reference Manual and driverlib headers (rf_prop_cmd.h,
+ * rf_prop_mailbox.h, rf_mailbox.h), the public SimpleLink RF driver API, and
+ * SmartRF Studio's published settings database as shipped in the SimpleLink
+ * CC13xx/CC26xx SDK (source/ti/devices/radioconfig/.meta/config/
+ * cc2652r_prop_pg21/). Nothing derives from sdk-ant, libant.a, or an
+ * ANT+ profile document. See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * What this is for
- * ---------------------------------------------------------------------------
+ * What this is for: the TI port rests on one untested claim - that TI's RF
+ * core can be configured for ANT's PHY (1 Mbps 2-GFSK, ~170 kHz deviation)
+ * and demodulate a byte-exact ANT frame. Not obviously true: SmartRF ships
+ * only three 2.4 GHz proprietary PHYs for this part, all stopping at 250 kbps
+ * (tc900 100 kbps/50 kHz, tc901 250 kbps/125 kHz, tc902 250 kbps/62.5 kHz
+ * MSK). So this is a go/no-go, written to FAIL LOUDLY rather than succeed
+ * quietly - if it can't receive a frame, the TI backend isn't written and the
+ * port stops here, the cheapest place to stop. Sixth spike in this
+ * directory, same shape: bare, no radiant_core, no HAL, just the peripheral
+ * and a console.
  *
- * The TI port rests on one claim nobody here has tested: that TI's RF core can
- * be configured for ANT's PHY - 1 Mbps 2-GFSK at ~170 kHz deviation - and
- * demodulate a byte-exact ANT frame. It is not obviously true. SmartRF's
- * shipped 2.4 GHz proprietary settings for this exact part are three, and they
- * stop at 250 kbps:
+ * Two things the settings database already answered, before any hardware:
+ *   1. The rate is reachable on paper. symbolRate is a 21-bit rate word (1
+ *      Mbps nowhere near a ceiling) and the RX filter bandwidth table runs
+ *      to 1883.7 kHz. Carson's rule wants ~1340 kHz for ANT at 1 Mbps/170 kHz
+ *      deviation, and the table has codes at 1243.2 and 1567.2 either side.
+ *      The stock settings stop at 250 kbps because nobody at TI wrote a
+ *      faster one, not because the front end can't.
+ *   2. The hardware sync word is four bytes, not five. nSwBits is documented
+ *      8..32; ANT's tracking address is five bytes, so this part can't match
+ *      a tracked channel's address in hardware - a backend must match four
+ *      and finish the fifth in software. A real caps difference from the
+ *      nRF, knowable from a header.
  *
- *     tc900   100 kbps, 50 kHz deviation, 2-GFSK, 350 kHz RX BW
- *     tc901   250 kbps, 125 kHz deviation, 2-GFSK, 530 kHz RX BW
- *     tc902   250 kbps, 62.5 kHz deviation, MSK, 530 kHz RX BW
+ * The geometry, and why it's the search one: ANT's frame after the preamble
+ * is 17 bytes, CRC covering the first 15. This spike splits them the way a
+ * SEARCH window does (3-byte sync word A6 C5 devnum_lo, 12-byte body, 2-byte
+ * CRC) rather than a TRACKING window (5-byte address, 10-byte body), for two
+ * reasons: inherited from Spike B, a receiver that misparses a body byte
+ * can't report what it is, so search geometry puts every interesting byte in
+ * RAM; and new, it fits inside the 4-byte hardware limit above with a byte
+ * to spare, answering the PHY question without also answering the
+ * address-matcher question at the same time.
  *
- * So this program is a go/no-go, and it is written to FAIL LOUDLY rather than
- * to succeed quietly. If it cannot receive a frame, the TI backend is not
- * written and the port stops here - which is the cheapest possible place for
- * it to stop.
- *
- * It is the sixth spike in this directory and keeps their shape: bare, no
- * radiant_core, no HAL, just the peripheral and a console.
- *
- * ---------------------------------------------------------------------------
- * Two things the settings database already answered, before any hardware
- * ---------------------------------------------------------------------------
- *
- * ONE - THE RATE IS REACHABLE ON PAPER. symbolRate is a 21-bit rate word, so
- * 1 Mbps is not near any ceiling, and the RX filter bandwidth table runs to
- * 1883.7 kHz. ANT at 1 Mbps with 170 kHz deviation needs about
- * 2 * (170 + 500) = 1340 kHz by Carson's rule, and the table has 1243.2 and
- * 1567.2 either side of it. The stock settings stop at 250 kbps because
- * nobody at TI wrote a faster one, not because the front end cannot.
- *
- * TWO - THE HARDWARE SYNC WORD IS FOUR BYTES, NOT FIVE. nSwBits is documented
- * 8..32. ANT's tracking address is five bytes, so this part cannot match a
- * tracked channel's address in hardware; a backend must match four and finish
- * the fifth in software. That is a real caps difference from the nRF and it
- * was knowable from a header.
- *
- * ---------------------------------------------------------------------------
- * The geometry, and why it is the search one
- * ---------------------------------------------------------------------------
- *
- * ANT's frame after the preamble is 17 bytes, of which the CRC covers the
- * first 15. This spike splits them the way a SEARCH window does:
- *
- *     sync word  3 bytes   A6 C5 devnum_lo
- *     body      12 bytes   devnum_hi dtype ttype control d0..d7
- *     CRC        2 bytes
- *
- * rather than the way a TRACKING window does (5-byte address, 10-byte body),
- * for two reasons - one inherited and one new.
- *
- * INHERITED, from Spike B: a receiver that misparses a body byte cannot report
- * what that byte is. The search geometry puts every interesting byte in RAM.
- *
- * NEW: it is inside the 4-byte hardware limit above with a byte to spare, so
- * it answers the PHY question without also answering the address-matcher
- * question at the same time. One unknown at a time.
- *
- * ---------------------------------------------------------------------------
- * Running it
- * ---------------------------------------------------------------------------
- *
- * Two boards. One transmits, one receives - a board cannot hear itself.
- *
- * TRANSMITTER: the Feather, already flashed with the ordinary dongle image and
- * enumerating as 0FCF:1009, driven as an ANT+ master from the host. That costs
+ * Running it: two boards, one transmits one receives (a board can't hear
+ * itself). TRANSMITTER: the Feather, already flashed with the ordinary
+ * dongle image (0FCF:1009), driven as an ANT+ master from the host - costs
  * no Feather flash:
- *
- *   & C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe tools\ant_sim.py \
- *       --serial 6183 --seconds 720 -q
- *
- * Confirm the device number, device type and transmission type independently
- * with tools/ant_scan.py and set them below. A spike that matches its own
- * assumption has proved nothing.
- *
- * RECEIVER: the LaunchXL. Output is on the XDS110 backchannel COM port at
- * 115200 - COM14 on this bench. Note that is the SPIKE's arrangement and the
- * opposite of the dongle image's, which reserves that port for ANT frames; see
- * prj.conf.
+ *   & <python> tools\ant_sim.py --serial 6183 --seconds 720 -q
+ * Confirm device number/type/trans type independently with tools/ant_scan.py
+ * and set them below - a spike that matches its own assumption proves
+ * nothing. RECEIVER: the LaunchXL. Output is on the XDS110 backchannel COM
+ * port at 115200 (COM14 on this bench) - the spike's arrangement, opposite
+ * the dongle image's which reserves that port for ANT frames; see prj.conf.
  */
 
 #include <stdbool.h>
@@ -111,41 +73,24 @@
 
 #include <ti/drivers/rf/RF.h>
 
-/* â”€â”€ Ground truth â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
- *
- * The transmitter's channel ID. NOT the values ant_sim.py is asked for - the
- * values a SECOND, independent ANT stick heard it send. ant_sim.py derives the
- * device number from the transmitting stick's own identity rather than taking
- * a default, so the number below cannot be predicted from the command line and
- * a spike that assumed one would be matching its own assumption.
- *
- * Confirmed 2026-08-13 with the Feather transmitting and the other stick
- * scanning:
- *
+/* Ground truth: the transmitter's channel ID, as heard by a SECOND,
+ * independent ANT stick - not the values ant_sim.py is asked for, since it
+ * derives the device number from the transmitting stick's own identity, not
+ * the command line. Confirmed 2026-08-13:
  *   & <python> tools\ant_sim.py --serial 6183 --seconds 900 -q
  *   & <python> tools\ant_scan.py --serial 772A --seconds 20
  *     found: #52233 - power meter
- *
- * so devnum_lo = 0x09 and the 24-bit sync word is A6 C5 09. Transmission type
- * 5 is ant_sim.py's default and is not independently observable through
- * ant_scan.py; it is the one value here still taken on trust, and a body-byte
- * mismatch on it alone would not invalidate a receive.
- */
-/*
- * 14871 IS tools/ant_sim.py's DEVICE NUMBER, NOT AN AMBIENT SENSOR'S, AND THE
- * DIFFERENCE IS THE WHOLE POINT OF RE-RUNNING THIS.
- *
- * The first two sweeps ran against whatever was transmitting in the room - a
- * real device on 52233 that this bench does not start, stop or pace. That makes
- * "entries" a measurement of the ROOM as much as of the setting, and it is why
- * the two sweeps disagreed about rxBw/aaFilter (98/0xB then 97/0xF). A sweep
- * whose transmitter is a script this bench launches, at a known 4.00 Hz, turns
- * "how many frames did this setting catch" into a rate against a known
- * denominator.
- *
- * Start the transmitter first:
- *   python tools\ant_sim.py --profile power --seconds 260
- */
+ * so devnum_lo = 0x09, sync word A6 C5 09. Transmission type 5 is
+ * ant_sim.py's default and not independently observable via ant_scan.py -
+ * the one value here taken on trust; a mismatch on it alone wouldn't
+ * invalidate a receive. */
+/* 14871 is ant_sim.py's device number, not an ambient sensor's - the point
+ * of re-running this. Earlier sweeps ran against whatever was transmitting
+ * in the room (a real device on 52233, unpaced by this bench), making
+ * "entries" a measurement of the room as much as the setting. A known,
+ * bench-launched transmitter at 4.00 Hz turns "frames caught" into a rate
+ * against a known denominator. Start the transmitter first:
+ *   python tools\ant_sim.py --profile power --seconds 260 */
 #define SPIKE_DEVNUM  14871u
 #define SPIKE_DTYPE   0x0Bu   /* bicycle power */
 #define SPIKE_TTYPE   5u
@@ -162,25 +107,19 @@
 #define SPIKE_CRC_BYTES   2u
 #define SPIKE_CRC_COVER   (SPIKE_SYNC_BYTES + SPIKE_BODY_BYTES)   /* 15 */
 
-/* â”€â”€ Phase 0: the CRC, before the radio is touched â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+/* Phase 0: the CRC, before the radio is touched. CRC-16/CCITT-FALSE: width
+ * 16, poly 0x1021, init 0xFFFF, no reflection, no final XOR, covering the
+ * on-air address bytes as well as the body.
  *
- * CRC-16/CCITT-FALSE: width 16, poly 0x1021, init 0xFFFF, no reflection, no
- * final XOR, covering the on-air address bytes as well as the body.
- *
- * Software here, deliberately, and it is the plan's instruction: get bytes on
- * the ground before optimising. The hardware question is worth stating anyway,
- * because this spike is where it gets answered and the answer looks unlike the
- * EFR32 one in docs/backends.md.
- *
- * That analysis says a CRC engine which starts AFTER the sync word can still
- * produce ANT's CRC by folding the constant prefix into the initial value -
- * CRC(A6 C5) = 0x233E - and that the trick fails for the 5-byte tracking
- * format, whose sync word carries the device number and is therefore not
- * constant. TI's RX command has bCrcIncSw, "include sync word in CRC
- * calculation", so on this part the fold may not be needed in either geometry.
- * Whether the engine computes CCITT-FALSE specifically is the other half and
- * is a measurement, not a reading.
- */
+ * Software here, deliberately - the plan's instruction is bytes on the
+ * ground before optimising. Worth noting the hardware path looks unlike the
+ * EFR32 one in docs/backends.md: that CRC engine can fold a constant prefix
+ * (CRC(A6 C5) = 0x233E) into the initial value to start after the sync
+ * word, but the trick fails for the 5-byte tracking format whose sync word
+ * carries the device number. TI's RX command has bCrcIncSw ("include sync
+ * word in CRC calculation"), so the fold may not be needed here in either
+ * geometry - whether the engine computes CCITT-FALSE specifically is a
+ * measurement, not a reading. */
 static uint16_t crc_ccitt_false(const uint8_t *p, size_t n)
 {
 	uint16_t crc = 0xFFFFu;
@@ -196,13 +135,10 @@ static uint16_t crc_ccitt_false(const uint8_t *p, size_t n)
 	return crc;
 }
 
-/*
- * The golden vector from docs/ant-radio-link.md, computed rather than
- * captured, re-derived at boot before the radio is touched. Spike A does the
- * same thing for the same reason: if this fails, nothing printed later about a
- * CRC means anything, and the fault is in fifteen bytes of arithmetic rather
- * than in a radio.
- */
+/* The golden vector from docs/ant-radio-link.md, re-derived at boot before
+ * the radio is touched (Spike A does the same): if this fails, nothing
+ * printed later about a CRC means anything - the fault is in fifteen bytes
+ * of arithmetic, not a radio. */
 static bool crc_self_test(void)
 {
 	static const uint8_t msg[15] = {
@@ -229,64 +165,42 @@ static bool crc_self_test(void)
 	return (c == 0x1B12u) && (z == 0x0000u) && (prefix == 0x233Eu);
 }
 
-/* â”€â”€ The PHY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+/* The PHY. Every field below whose value follows a documented formula
+ * carries the formula; every override word carries SmartRF's own comment.
  *
- * Every field below whose value follows from a documented formula carries the
- * formula. Every override word carries SmartRF's own comment for it, and an
- * override with no comment would be a word this project cannot explain - there
- * are none.
- *
- * THE COMMAND IS CMD_PROP_RADIO_DIV_SETUP AND NOT CMD_PROP_RADIO_SETUP. The
- * "DIV" in the name reads as sub-GHz and is not: SmartRF's own 2.4 GHz
- * proprietary settings for this part use the DIV form with loDivider = 0 and
- * centerFreq = 2440, because that is the command that carries a centre
- * frequency at all. Getting this wrong is a first-attempt error that costs a
- * bench session, because the plain form configures and then transmits nowhere
+ * Command is CMD_PROP_RADIO_DIV_SETUP, not CMD_PROP_RADIO_SETUP - "DIV"
+ * reads as sub-GHz but isn't: SmartRF's own 2.4 GHz settings use the DIV
+ * form (loDivider=0, centerFreq=2440) because that's the command that
+ * carries a centre frequency at all. Getting this wrong transmits nowhere
  * near where you asked.
  *
- * modulation.deviation is in units of deviationStepSz, 250 Hz at setting 0:
- *     170000 / 250 = 680.
- * Checked against SmartRF's own tc901: 125 kHz -> 500. Same rule.
+ * modulation.deviation is in units of deviationStepSz (250 Hz at setting 0):
+ * 170000/250 = 680. Checked against tc901: 125 kHz -> 500, same rule.
  *
- * symbolRate follows the TRM (section 25.10.5.2):
- *     rateWord = symbolRate * preScale * 2^20 / 24e6
- * At preScale 15 and 1 Mbps: 1e6 * 15 * 1048576 / 24e6 = 655360.
- * Checked against tc901: 250 kbps -> 163840, and 655360 = 4 * 163840. Same
- * rule, and the factor of four is the rate ratio, which is the cheap sanity
- * check on the whole formula.
+ * symbolRate follows TRM 25.10.5.2: rateWord = symbolRate*preScale*2^20/24e6.
+ * preScale 15, 1 Mbps: 1e6*15*1048576/24e6 = 655360. Checked against tc901's
+ * 250 kbps -> 163840; 655360 = 4*163840, the rate ratio as sanity check.
  *
- * rxBw is a CODE, not a number, from the table in the settings database:
- *     ...  93 = 621.6   94 = 783.6   95 = 941.8   96 = 1092.5
- *          97 = 1243.2  98 = 1567.2  99 = 1883.7   (kHz)
- * ANT needs ~1340 kHz and there is no code at 1340, so the first attempt is a
- * SWEEP of the codes either side rather than a choice. This is the field most
- * likely to be wrong and it is the reason phase 2 is a sweep at all.
+ * rxBw is a CODE from the settings-database table (93=621.6 94=783.6
+ * 95=941.8 96=1092.5 97=1243.2 98=1567.2 99=1883.7 kHz). ANT needs ~1340 kHz
+ * with no code there, so the first attempt sweeps the codes either side
+ * rather than choosing - the field most likely wrong, why phase 2 sweeps.
  *
- * formatConf.bMsbFirst is TRUE, and that is not what a hasty reading of
- * docs/ant-radio-link.md's "Fact two" would produce. That fact says address
- * bytes must be BIT-REVERSED into the nRF's BASE/PREFIX registers - because
- * the nRF serialises its address field LSBit-first while serialising the
- * payload MSBit-first under ENDIAN=Big. The invariant is the ON-AIR order, and
- * on air the whole ANT frame is MSBit-first. A radio that serialises sync word
- * and payload the same way therefore needs no reversal anywhere: the sync word
- * goes in as 0x00A6C5xx and the body bytes as they are. Getting this backwards
- * produces SILENCE, not a weak link - which is exactly what Spike A measured
- * on the nRF across its eight permutations, and is worth knowing when a
- * backend port comes up dead.
- */
+ * formatConf.bMsbFirst = TRUE, not what a hasty reading of
+ * docs/ant-radio-link.md's "Fact two" produces: that fact bit-reverses
+ * address bytes into the nRF's BASE/PREFIX because the nRF serialises its
+ * address LSBit-first but payload MSBit-first under ENDIAN=Big. The
+ * invariant is the ON-AIR order, which for the whole ANT frame is
+ * MSBit-first - a radio serialising sync word and payload the same way
+ * needs no reversal anywhere. Getting this backwards produces SILENCE, not
+ * a weak link, matching what Spike A measured on the nRF. */
 
-/*
- * SmartRF's override set for 2.4 GHz proprietary mode on CC2652R, from
- * setting_tc901.json, with the one bandwidth-dependent entry lifted out into
- * the sweep below.
- *
- * override_prop_common.json, override_tc901.json and override_hposc.json are
- * the three blocks SmartRF emits; the AGC reference level and the PA ramp are
- * common to any 2.4 GHz proprietary PHY on this part, and the anti-aliasing
- * filter bandwidth is not - it is a function of rxBw, and 0x5 is tc901's value
- * for 530 kHz. At ANT's ~1.3 MHz it must be wider, and the value is not
- * derivable from anything shipped, so it is swept.
- */
+/* SmartRF's override set for 2.4 GHz proprietary mode on CC2652R, from
+ * setting_tc901.json, with the one bandwidth-dependent entry lifted into the
+ * sweep below. AGC reference level and PA ramp are common to any 2.4 GHz
+ * proprietary PHY on this part; anti-aliasing filter bandwidth is not (a
+ * function of rxBw, 0x5 is tc901's value for 530 kHz) - ANT's ~1.3 MHz needs
+ * something wider, not derivable from anything shipped, so it's swept. */
 #define AA_FILTER_OVERRIDE_INDEX 2
 /* The AGC reference level entry, swept alongside the filter bandwidth. TI's
  * default is 0x2E and tc901 lowers it to 0x22; which one suits a 1 Mbps PHY
@@ -638,20 +552,13 @@ struct sweep_result {
 	bool opened;
 };
 
-/*
- * THE DENOMINATOR, WHICH THE FIRST VERSION OF THIS SWEEP DID NOT HAVE.
- *
- * tools/ant_sim.py transmits at 8182/32768 s = 4.0049 Hz, so a point that
- * listens for listen_ms milliseconds is offered a KNOWN number of frames. That
- * is the difference between "this setting caught more than that one", which is
- * a statement about the room, and "this setting caught 45% of what was sent",
- * which is a statement about the radio.
- *
- * P1's gate did not have this. It reported 40 of 40 CRC-valid and read as a
- * clean pass, but its denominator was the frames already detected - so a PHY
- * that silently drops half of everything scores exactly the same as a perfect
- * one. Every number below is a fraction of frames TRANSMITTED.
- */
+/* The denominator, which the first version of this sweep didn't have.
+ * ant_sim.py transmits at 8182/32768 s = 4.0049 Hz, so listen_ms offers a
+ * KNOWN frame count - the difference between "caught more than that
+ * setting" (a room statement) and "caught 45% of what was sent" (a radio
+ * statement). P1's gate lacked this: its denominator was frames already
+ * detected, so a PHY silently dropping half of everything scored the same
+ * as a perfect one. Every number below is a fraction of frames TRANSMITTED. */
 #define SIM_HZ_NUM   8182u
 #define SIM_HZ_DEN   32768u
 
@@ -710,21 +617,14 @@ static void sweep_point(struct sweep_result *r, uint32_t listen_ms)
 	}
 
 	if (r->windowed) {
-		/*
-		 * WINDOWED RECEIVE, THE WAY THE BACKEND ACTUALLY RUNS.
-		 *
-		 * Everything measured so far was one CMD_PROP_RX_ADV left
-		 * running for the whole point - and the backend never does
-		 * that. radiant_sched arms a fresh command per window with an
-		 * absolute start and an absolute end, 260 ms of receive in
-		 * every 282 ms, because the search sweep has to change sync
-		 * words between windows.
-		 *
-		 * That is the last untested difference between a spike that
-		 * hears 96% and a backend that hears almost nothing, and it is
-		 * tested here rather than argued about: same PHY, same sync
-		 * word, same room, same denominator, one variable.
-		 */
+		/* Windowed receive, the way the backend actually runs.
+		 * Everything measured so far left one CMD_PROP_RX_ADV running
+		 * for the whole point; the backend never does that -
+		 * radiant_sched arms a fresh command per window, 260 ms
+		 * receive in every 282 ms, since the search sweep must change
+		 * sync words between windows. Last untested difference
+		 * between a spike hearing 96% and a backend hearing almost
+		 * nothing: same PHY, same sync word, same room, one variable. */
 		const uint32_t win_us = 260190u;   /* what the sched asks for */
 		const uint32_t period_us = 281949u;
 		uint32_t t = RF_getCurrentTime() + 4u * 2000u;
@@ -853,103 +753,39 @@ int main(void)
 	printk("  rxBw codes: 96=1092.5 kHz  97=1243.2  98=1567.2 (ANT wants ~1340)\n");
 
 	/*
-	 * ONE AXIS AT A TIME, AGAINST A KNOWN FRAME COUNT.
+	 * Sweep history, compressed: each round changes one axis at a time
+	 * against a known frame count (percentage of frames the simulator
+	 * actually sent).
 	 *
-	 * The earlier sweeps moved rxBw and aaFilter together against an
-	 * uncontrolled transmitter and produced a different winner every run.
-	 * Every point below changes ONE field from the baseline, and the score
-	 * is a percentage of frames the simulator actually sent.
-	 *
-	 * DEVIATION IS THE AXIS WORTH THE MOST AND IT WAS NEVER TESTED. 680
-	 * units is 170 kHz, a modulation index of 0.34 at 1 Mbps. If ANT is
-	 * really BLE-like at 250 kHz (index 0.5) then the demodulator has been
-	 * told to expect a tone spacing narrower than the one on the air - which
-	 * degrades the SYNC CORRELATION long before it costs a bit error, and
-	 * that is precisely the signature measured: frames missed wholesale,
-	 * nRxNok zero on every frame that did lock.
-	 */
-	/*
-	 * ROUND TWO. Round one moved deviation and the AGC reference level and
-	 * the answer was not close: agc 0x22 scored 37% and 47%, agc 0x2E
-	 * scored 87% and 90%, and the round's LAST point was a repeat of its
-	 * first which came back 47% - so the difference is the setting and not
-	 * drift over the run.
-	 *
-	 * tc901's AGC reference level was the defect. It is SmartRF's value for
-	 * a 530 kHz PHY and this file copied it along with the rest of the
-	 * override block; TI's own default is 0x2E and lowering it to 0x22 was
-	 * costing half of every transmission. Deviation barely moved the number
-	 * once the AGC was right (87% at 680, 90% at 1000), which retires the
-	 * modulation-index theory round one was built to test.
-	 *
-	 * So this round walks the reference level PAST TI's default, and holds
-	 * everything else at two candidate PHYs.
-	 */
-	/*
-	 * ROUND THREE - confirm, on a bigger denominator.
-	 *
-	 * Round two found rxBw 98 / aa 0x5 / deviation 1000 / agc 0x34 at 40 of
-	 * 40, and that combination is the one the physics also asks for:
-	 * deviation 1000 units is 250 kHz, a modulation index of 0.5 at 1 Mbps,
-	 * and Carson's rule then wants 2*(250 + 500) = 1500 kHz, which is code
-	 * 98 (1567.2) and not the 96 (1092.5) the earlier deviation-680 sweeps
-	 * kept choosing. The two earlier rounds were choosing a narrow filter to
-	 * compensate for a deviation that was wrong.
-	 *
-	 * 40 of 40 is 100% on a denominator of 40, which cannot distinguish
-	 * 100% from 98%. This round runs 15 s a point (60 frames) and repeats
-	 * the candidate three times - first, middle and last.
-	 */
-	/*
-	 * ROUND FOUR - CONTINUOUS AGAINST WINDOWED, and it is the only
-	 * comparison left that can explain the backend.
-	 *
-	 * Round three settled the PHY at 91-96% of frames sent. The backend runs
-	 * that same PHY and hears almost nothing: over one 150 s run it armed
-	 * the transmitter's own sync word five times and caught zero, while
-	 * catching seven noise triggers elsewhere. Every difference between the
-	 * two has now been eliminated except one - the spike listens
-	 * CONTINUOUSLY and the backend arms a fresh 260 ms command every 282 ms.
-	 *
-	 * So each PHY below is run both ways, back to back.
-	 */
-	/*
-	 * ROUND FIVE - the sync-word REWRITE, which is the last difference left.
-	 *
-	 * Round four measured continuous at 93-98% and windowed at 85%, so
-	 * windowing costs about ten points and cannot explain a backend that
-	 * armed the transmitter's own sync word five times and caught zero.
-	 *
-	 * What the backend also does, and nothing here has ever done, is REWRITE
-	 * syncWord0 and syncWord1 between windows - radiant_search sweeps 128
-	 * pairs. The "cyc" points below alternate the real pair with a decoy
-	 * pair, and put the real address in syncWord1 rather than syncWord0
-	 * because that is the slot an odd devnum_lo lands in and the slot the
-	 * backend was using when it heard nothing.
-	 *
-	 * Half the windows are live, so a healthy result is about half of 85%.
-	 * A zero means the rewrite is the defect.
-	 */
-	/*
-	 * ROUND SIX - the preamble, which is the last correlator knob untried.
-	 *
-	 * The backend now tracks a sensor end to end and loses 8.3% of its
-	 * packets. The gate is 1.5% and the nRF backend on this bench loses
-	 * about 0.4%, so the gap is the PHY's own detection rate rather than
-	 * anything about windows: continuous receive measures 91-98% on this
-	 * setting and the tracked channel measures about the same.
-	 *
-	 * ANT sends one preamble byte, which is eight bit-times at 1 Mbps for
-	 * the demodulator to acquire bit timing before the sync word starts.
-	 * preamMode 2 - "same first bit in preamble and sync word" - is what
-	 * reproduces ANT's rule on transmit. Neither field has ever been swept
-	 * on RECEIVE, where they tell the demodulator what to expect, and this
-	 * file's own failure text has been suggesting it since P1: "the
-	 * demodulator may want more preamble to lock at 1 Mbps."
-	 *
-	 * Telling the receiver to expect MORE preamble than is on the air is
-	 * not obviously safe - it may simply never declare preamble found - so
-	 * the baseline is repeated first and last.
+	 * R1 (deviation, untested before): 680 units = 170 kHz, mod index
+	 * 0.34 at 1 Mbps - too narrow a correlator window degrades sync
+	 * detection before it costs a bit error (frames missed wholesale,
+	 * nRxNok zero on locked frames).
+	 * R2 (AGC reference level): tc901's AGC ref (0x22, tuned for 530 kHz)
+	 * was the real defect, costing half of every transmission; TI's
+	 * default 0x2E scored 87-90% regardless of deviation, retiring the
+	 * modulation-index theory.
+	 * R3 (confirm on bigger denominator): rxBw 98 / aa 0x5 / deviation
+	 * 1000 / agc 0x34 hit 40/40. Deviation 1000 = 250 kHz = mod index 0.5,
+	 * and Carson's rule then wants 1500 kHz = code 98 - the physics
+	 * agrees; earlier rounds' narrow-filter picks were compensating for
+	 * wrong deviation.
+	 * R4 (continuous vs windowed): the backend runs this same PHY and
+	 * hears almost nothing (0/5 armed windows over 150 s). Only
+	 * difference left: the spike listens continuously, the backend arms
+	 * a fresh 260 ms command every 282 ms - so run each PHY both ways.
+	 * R5 (sync-word rewrite): continuous scored 93-98%, windowed 85% -
+	 * windowing alone can't explain zero. The backend also rewrites
+	 * syncWord0/1 between windows (128 pairs); "cyc" points below
+	 * alternate the real pair with a decoy, real address in syncWord1
+	 * (the slot the backend was using). Half-live windows should score
+	 * ~half of 85%; a zero means the rewrite itself is the defect.
+	 * R6 (preamble, last correlator knob): the backend now tracks
+	 * end-to-end but loses 8.3% vs a 1.5% gate (nRF loses ~0.4%) - the
+	 * PHY's own detection rate, not windowing. ANT sends one preamble
+	 * byte; preamMode 2 reproduces its rule on transmit but neither field
+	 * had been swept on receive. More preamble than is on air may never
+	 * lock, so the baseline is repeated first and last.
 	 */
 	static struct sweep_result sweep[] = {
 		{ .rx_bw = 98, .aa_filter = 0x5, .deviation = 1000, .agc_ref = 0x34,

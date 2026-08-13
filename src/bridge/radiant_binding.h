@@ -2,35 +2,19 @@
 /*
  * radiant_binding.h - the binding table: docs/radiant-bridge.md section 5.
  *
- * "Nothing downstream may key on an ANT device number." The table is the
- * pivot the sample bus's `source` field is an index into (section 3's
- * comment on `struct radiant_sample::source` says so directly), and section
- * 5's three reasons are why: a device number is 16 bits, it is re-rollable by
- * design (identity Tier 0), and a collision across two straps in one room is
- * a one-in-65535 event that will happen at a trade show.
+ * Nothing downstream may key on an ANT device number: it's 16 bits,
+ * re-rollable by design, and can collide across two straps in one room.
+ * `source` (radiant_bridge.h's struct radiant_sample::source) is a table
+ * index instead.
  *
- * ---------------------------------------------------------------------------
- * What P6 implements of section 5, and what it does not
- * ---------------------------------------------------------------------------
- * Implemented: the table itself, capacity-bounded lookup and bind/unbind,
- * `uuid` generation at first bind.
- *
- * NOT implemented, named rather than silently missing:
- *   - Persistence. Section 5 does not say the table must survive a reboot -
- *     that requirement is stated for the PERSONALISATION HISTOGRAM in section
- *     6.5, which is out of scope for P6 (see radiant_rules.h). A real product
- *     build would persist this table the same way src/node/node_nvm_settings.c
- *     persists node identity, through the settings subsystem; this module is
- *     storage-backend-agnostic on purpose (RAM here, NVS later) for the same
- *     reason radiant_core's HAL is backend-agnostic - swapping the backend
- *     should not touch a caller.
- *   - "Matching a re-paired strap back to its uuid is a user action, not an
- *     inference." No such reconciliation UI exists in this codebase, so a
- *     re-paired strap binds as a NEW entry with a new uuid until something
- *     above this layer offers that choice to a human.
- *   - Consent / policy thresholds. Section 5's binding record has a `policy`
- *     member; this one does not, because nothing in P6's scope (the bus and
- *     the four built-in derived rules of section 6.1/6.2) reads one yet.
+ * Not implemented here, deliberately rather than by omission:
+ *   - Persistence. Section 5 doesn't require it (that's section 6.5's
+ *     personalisation histogram, out of scope for P6). RAM-backed for now,
+ *     storage-backend-agnostic like radiant_core's HAL.
+ *   - Reconciling a re-paired strap to its old uuid is a user action, not
+ *     an inference; no such UI exists, so a re-pair binds as a new entry.
+ *   - Consent/policy thresholds (section 5's `policy` member) - unused,
+ *     since nothing in P6's scope (bus + built-in rules of 6.1/6.2) reads it.
  */
 
 #ifndef RADIANT_BINDING_H_
@@ -43,12 +27,9 @@
 extern "C" {
 #endif
 
-/*
- * Eight for the household SKU (section 5: "Table capacity sizes the Matter
- * endpoint count, the ANT tracked-channel count and the coexistence budget of
- * section 7 together... Raising it is a radio decision before it is a memory
- * decision" - so it is not raised here without that decision being made).
- */
+/* 8, for the household SKU: sized with the Matter endpoint count, ANT
+ * tracked-channel count, and coexistence budget (section 7) together -
+ * raising it is a radio decision, not a memory one. */
 #define RADIANT_BINDING_MAX 8u
 
 /* An invalid source / lookup miss. Never a real table index: valid indices
@@ -66,28 +47,19 @@ struct radiant_binding {
 	 * binding with no label is still a binding. */
 	char label[16];
 
-	/*
-	 * "Stable across a re-roll and a re-pair" is a promise about THIS
-	 * binding's uuid never changing while it exists - not, per the header
-	 * comment above, a promise that a re-paired physical strap gets the
-	 * SAME binding back. Generated once at bind time from sys_rand32_get()
-	 * x2 - a label, not a key, so a non-cryptographic RNG is the right
-	 * tool and pulling in radiant_sec for it would be the wrong kind of
-	 * dependency for a bridge-layer module to have.
-	 */
+	/* Stable across a re-roll/re-pair for THIS binding only - not a
+	 * promise a re-paired strap gets the same binding back. Generated
+	 * once at bind time; a label, not a key, so non-cryptographic is fine. */
 	uint64_t uuid;
 };
 
 void radiant_binding_init(void);
 
 /*
- * Find the binding for (devnum, devtype, trans_type), creating one if none
+ * Finds the binding for (devnum, devtype, trans_type), creating one if none
  * exists and a slot is free. *source_out receives the table index either
- * way. Returns 0 on success, -ENOSPC if the table is full and no existing
- * binding matches - the caller's contract per section 5's "binding is
- * explicit and opt-in, always": this function is the opt-in act, so it is
- * deliberately not automatic on every frame the bus happens to see one of -
- * a caller (the not-yet-built pairing flow) decides when to call it.
+ * way. Returns 0 on success, -ENOSPC if full with no match. This is the
+ * opt-in act (section 5): never called automatically by the bus itself.
  */
 int radiant_binding_bind(uint16_t devnum, uint8_t devtype, uint8_t trans_type,
 		     const char *label, uint32_t *source_out);

@@ -1,9 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/*
- * fake_mpsl.c - the arbiter and the backend, as two dozen lines each.
- *
- * Provenance: original clean-room work. See fake_mpsl.h.
- */
+/* fake_mpsl.c - the arbiter and the backend, as two dozen lines each. See
+ * fake_mpsl.h. */
 
 #include <string.h>
 
@@ -94,13 +91,9 @@ int32_t mpsl_timeslot_request(mpsl_timeslot_session_id_t      session_id,
 		return m.force_rc;
 	}
 	m.accepted++;
-	/*
-	 * The answer, on the caller's stack, BEFORE the acceptance is reported.
-	 * See fake_mpsl_answer_inline(). fake_mpsl_signal() is reused whole so
-	 * that the three MPSL rule-violation counters still watch this delivery
-	 * like any other - an action returned from here would be exactly the
-	 * low-priority violation they exist to catch.
-	 */
+	/* Answer on the caller's stack before acceptance is reported; see
+	 * fake_mpsl_answer_inline(). Reuses fake_mpsl_signal() whole so the
+	 * rule-violation counters still watch this delivery like any other. */
 	if (m.inline_left > 0u) {
 		m.inline_left--;
 		(void)fake_mpsl_signal(m.inline_signal);

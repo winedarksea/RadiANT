@@ -3,49 +3,26 @@
  * test_profile_private.c - compat-C8's gate: the node stops being an ANT+
  * sensor, and everybody who holds its key follows.
  *
- * Provenance: docs/radiant-security.md sections 11.5 and 11.6 and
- * docs/decisions/0008-antplus-additive-pages-and-compat-security.md, which are
- * this project's own documents, plus the locator and command vectors that
- * tools/test_radiant_crypto.py pins from the other side. No adopter-gated ANT+
- * device profile document was read for this file and nothing here derives from
+ * Provenance: docs/radiant-security.md sections 11.5-11.6 and
+ * docs/decisions/0008-antplus-additive-pages-and-compat-security.md, plus the
+ * locator/command vectors tools/test_radiant_crypto.py pins independently. No
+ * ANT+ profile document was read; nothing derives from
  * libant.a. See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * The failure this file exists to catch
- * ---------------------------------------------------------------------------
- * A switch that works on the bench with ONE head unit and fails in the room.
- * The command comes from one keyholder and the stream has N listeners, so the
- * receiver that asked gets a clean handover and the receivers that did not ask
- * get a dropout - and every test below that counts to three is counting to
- * three for that reason.
+ * Catches the 1:N failure a single-head-unit bench cannot see: one keyholder
+ * sends the switch command, and all three receivers (only one of which asked)
+ * must retune on the SAME message, because receivers act on countdown expiry
+ * rather than on receipt.
  *
- * Three receivers, one of which sent the command and two of which did not, and
- * the assertion is that ALL THREE RETUNE ON THE SAME MESSAGE. Not "all three
- * eventually arrive": the same message, because acting on countdown expiry
- * rather than on receipt is the whole mechanism and a test that allowed them to
- * drift would pass on an implementation that had none of it.
+ * Real: every byte on air, every tag, every countdown, the beacon frame set,
+ * the derived locator, policy resolution and every refusal - a genuine
+ * profile_hr.c stream with profile_compat.c inserting pages, and receivers are
+ * profile_private.c's own receiver half. Simulated: the radio (no channel is
+ * opened) and the private channel's synthetic 8-byte bodies.
  *
- * ---------------------------------------------------------------------------
- * What is simulated and what is real
- * ---------------------------------------------------------------------------
- * Real: every byte on the air, every tag, every countdown, the beacon page's
- * frame set, the derived locator, the policy resolution and every refusal.
- * The node is a genuine profile_hr.c stream with profile_compat.c inserting
- * pages through profile_sched.c's seam, exactly as the C5 and C7 suites drive
- * it, and the receivers are profile_private.c's own receiver half rather than
- * an idea of a receiver written in this file.
- *
- * Simulated: the radio. Nothing here opens a channel, so "the node is now on
- * device type 0x60" is a callback that records what it was told, and the
- * private channel's messages are synthetic eight-byte bodies at the same
- * period. That is enough for everything C8 claims, because every claim is
- * about which message a receiver acts on and what is in it.
- *
- * THE ONE PLACE THE MODEL MATTERS IS THE MEASURED GAP, and it is stated as a
- * model rather than smuggled in: a retune costs RETUNE_MSGS message periods,
- * the same constant in both modes, so the DIFFERENCE between the broadcast gap
- * and the silent gap is entirely the announcement and none of it is the
- * constant.
+ * The one modelled quantity is the retune cost: RETUNE_MSGS message periods,
+ * the same constant in both modes, so the broadcast-vs-silent gap difference
+ * measures the announcement's cost alone.
  */
 
 #include <zephyr/ztest.h>
@@ -235,11 +212,8 @@ static void log_put(const uint8_t *body)
 	}
 }
 
-/*
- * One receiver, one message. `node_private` is the channel the message went out
- * on, and a receiver on the other one hears nothing at all - that is what a
- * CLOSE means and it is the thing this whole layer is about.
- */
+/* One receiver, one message; a receiver not on `node_private`'s channel hears
+ * nothing at all. */
 static void deliver(struct follower *f, const uint8_t *body, uint64_t now,
 		    int announce_frame, bool node_private)
 {
@@ -280,13 +254,10 @@ static void deliver(struct follower *f, const uint8_t *body, uint64_t now,
 }
 
 /*
- * One message of the node's life, on whichever channel it is on.
- *
- * The compat half is a real profile_hr.c stream. The private half is synthetic
- * - there is no radio here - but it drives profile_private_sent() for every
- * message and profile_private_frame() for the RETURN countdown's frames, so the
- * countdown, the capture of frame A's transmitted bytes and the tag are the
- * shipped code either way.
+ * One message of the node's life, on whichever channel it is on. The compat
+ * half is a real profile_hr.c stream; the private half is synthetic (no radio)
+ * but still drives profile_private_sent()/profile_private_frame(), so the
+ * countdown and tag logic are the shipped code either way.
  */
 static void step(void)
 {
@@ -353,12 +324,8 @@ static void step(void)
 
 	log_put(body);
 
-	/*
-	 * The node's own transition, observed from outside and recorded at the
-	 * message it happened on. It happens INSIDE profile_private_sent(), so
-	 * the message above is the last one of the old channel and this index
-	 * is the one every receiver's countdown should also expire on.
-	 */
+	/* The transition happens INSIDE profile_private_sent(), so this index is
+	 * the one every receiver's countdown should also expire on. */
 	if (!g_switched && profile_private_is_private(&g_pp)) {
 		g_switched = true;
 		g_switch_msg = g_stream;
@@ -394,13 +361,9 @@ static void step(void)
 		} else if (!f->saw_target && !f->retuning &&
 			   f->on_private != profile_private_is_private(&g_pp) &&
 			   profile_private_rx_lost(&f->rx, now)) {
-			/*
-			 * NOTHING HAS ARRIVED FOR EIGHT MESSAGE PERIODS. The
-			 * receiver concludes the stream has stopped, derives
-			 * the locator from the root it holds and the epoch it
-			 * knows, and retunes. No announcement was involved and
-			 * none had to be.
-			 */
+			/* Nothing arrived for 8 message periods: the receiver
+			 * derives the locator from its own root/epoch and
+			 * retunes, with no announcement involved. */
 			uint16_t devnum = 0u;
 
 			zassert_equal(0, profile_private_rx_locator(&f->rx,
@@ -619,15 +582,9 @@ ZTEST(profile_private, test_three_keyed_receivers_follow_one_switch)
 	uint8_t  cmd[8];
 	uint32_t i;
 
-	/*
-	 * THE WHOLE OF LAYER C IN ONE TEST.
-	 *
-	 * A strap on the compat channel with three keyed receivers listening.
-	 * ONE of them sends an authenticated command. Sixteen seconds later all
-	 * three are on the private channel, they left on the same message, and
-	 * the two that did not ask had exactly as good a handover as the one
-	 * that did.
-	 */
+	/* THE WHOLE OF LAYER C IN ONE TEST: one of three keyed receivers sends
+	 * an authenticated command, and ~16 s later all three are on the
+	 * private channel, having left on the same message. */
 	node_up(PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_BROADCAST,
 		PROFILE_PRIVATE_K_DEFAULT);
 
@@ -675,11 +632,8 @@ ZTEST(profile_private, test_three_keyed_receivers_follow_one_switch)
 		      "receivers %u and %u retuned on different messages",
 		      0u, 2u);
 
-	/*
-	 * ...and on the message the node itself left on. Receivers act on
-	 * countdown expiry, and the node's own departure is the same expiry, so
-	 * these are one number and not two that happen to be close.
-	 */
+	/* ...and on the message the node itself left on: both act on the same
+	 * countdown expiry, so these are one number, not two that are close. */
 	zassert_equal(g_switch_msg, g_f[0].due_at,
 		      "the node left on message %u and its receivers retuned on "
 		      "message %u", g_switch_msg, g_f[0].due_at);
@@ -700,12 +654,9 @@ ZTEST(profile_private, test_a_receiver_joining_mid_countdown_follows)
 	uint8_t  cmd[8];
 	uint32_t joined_at;
 
-	/*
-	 * A receiver that was not listening when the announcement started reads
-	 * the REMAINING count out of the frame rather than needing the first
-	 * one. That is what "act on expiry, not on receipt" buys, and it is the
-	 * difference between a handover and N independent dropouts.
-	 */
+	/* A receiver that joins mid-countdown reads the REMAINING count out of
+	 * the frame rather than needing the first one - "act on expiry, not
+	 * receipt" is what buys this. */
 	node_up(PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_BROADCAST,
 		PROFILE_PRIVATE_K_DEFAULT);
 
@@ -747,13 +698,9 @@ ZTEST(profile_private, test_the_locator_agrees_with_the_python_mirror)
 	uint16_t devnum = 0u;
 	uint8_t  attempt;
 
-	/*
-	 * tools/test_radiant_crypto.py's TestCompatLocator pins these same four
-	 * numbers under the same K_id, and neither side computes the other's
-	 * expectation. That agreement IS the test: a node that derives its
-	 * private device number one way and a keyholder that derives it another
-	 * way do not fail loudly, they simply never meet.
-	 */
+	/* tools/test_radiant_crypto.py's TestCompatLocator pins these same four
+	 * numbers independently under the same K_id: a node and a keyholder
+	 * that derive the locator differently would never meet, silently. */
 	static const uint16_t expected[4] = { 0xBB18u, 0xB4B5u, 0x8A57u,
 					      0x472Cu };
 
@@ -786,18 +733,10 @@ ZTEST(profile_private, test_the_wildcard_is_excluded_and_the_suffix_takes_over)
 {
 	uint16_t devnum = 0u;
 
-	/*
-	 * EPOCH 1315 IS NOT ARBITRARY. Under this root's K_id the unsuffixed
-	 * derivation at that epoch comes out 0x0000, which is the ANT wildcard
-	 * and cannot be a master's device number - the one epoch in ~65 000
-	 * where the exclusion rule does anything. An implementation without the
-	 * rule answers 0x0000 here; one whose suffix never reaches the block
-	 * answers 0x0000 for every attempt.
-	 *
-	 * tools/test_radiant_crypto.py pins the same epoch and the same two
-	 * numbers, and asserts from the other side that derivation 0 really is
-	 * the wildcard.
-	 */
+	/* Epoch 1315 is not arbitrary: under this root's K_id the unsuffixed
+	 * derivation there comes out 0x0000 (the ANT wildcard) - the one epoch
+	 * in ~65000 where the exclusion rule does anything. Pinned the same way
+	 * in tools/test_radiant_crypto.py. */
 	keys_up();
 
 	zassert_equal(RADIANT_SEC_OK,
@@ -818,13 +757,9 @@ ZTEST(profile_private, test_a_node_walks_the_candidates_on_a_collision)
 	int      rc;
 	uint8_t  i;
 
-	/*
-	 * A node learns about a collision the only way it can - by opening the
-	 * channel and finding it occupied - so rederiving is a function it
-	 * calls. It walks exactly as far as a searching keyholder looks, and
-	 * then stops: a node that walked further would be walking to numbers
-	 * nobody tries.
-	 */
+	/* A node learns of a collision by opening the channel and finding it
+	 * occupied, so it walks exactly as far as a searching keyholder looks,
+	 * then stops. */
 	node_up(PROFILE_PRIVATE_PHYSICAL, PROFILE_PRIVATE_BROADCAST,
 		PROFILE_PRIVATE_K_DEFAULT);
 
@@ -846,13 +781,9 @@ ZTEST(profile_private, test_a_receiver_that_missed_the_announcement_reacquires)
 {
 	uint8_t cmd[8];
 
-	/*
-	 * Receiver C hears the stream but not one copy of the announcement -
-	 * two frames lost out of a rotation is not a case worth designing
-	 * around, and this is what happens when it is not designed around. It
-	 * notices the silence, derives the locator from the root it holds and
-	 * the epoch it knows, and arrives where the node is.
-	 */
+	/* Receiver C hears the stream but misses every copy of the
+	 * announcement; it notices the silence, derives the locator from its
+	 * own root/epoch, and arrives where the node is. */
 	node_up(PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_BROADCAST,
 		PROFILE_PRIVATE_K_DEFAULT);
 	g_f[2].hears_announcements = false;
@@ -889,18 +820,11 @@ ZTEST(profile_private, test_silent_says_nothing_and_everyone_still_reacquires)
 	uint8_t  cmd[8];
 
 	/*
-	 * THE NEGATIVE CLAIM AND THE MEASURED COST, in one test.
-	 *
-	 * With announce = silent nothing about the switch appears on the air:
-	 * no announcement frame, no locator field in the beacon, no
-	 * pending-switch bit, and no promotion of the beacon rate. The whole
-	 * capture is inspected for all four, because a privacy setting is worth
-	 * exactly as much as the capture that shows nothing is there.
-	 *
-	 * And all three receivers still arrive, at a cost this test MEASURES
-	 * rather than asserting is finite - because users choosing between
-	 * broadcast and silent are choosing between two costs and the docs
-	 * should quote the measured one.
+	 * THE NEGATIVE CLAIM AND THE MEASURED COST, in one test. With
+	 * announce = silent, nothing about the switch appears on the air (no
+	 * announcement frame, no locator, no pending-switch bit) - the whole
+	 * capture is checked for all of those. All three receivers still
+	 * arrive, at a cost this test MEASURES rather than asserts is finite.
 	 */
 
 	/* ── First, the broadcast run, for the number to compare against ── */
@@ -1115,14 +1039,10 @@ ZTEST(profile_private, test_a_replayed_announcement_fails_in_another_window)
 	uint64_t then = at(40u);
 	uint64_t later = then + (uint64_t)TEST_T_S * US_PER_S;
 
-	/*
-	 * A recorded announcement is a perfectly valid set of bytes forever.
-	 * What makes it worthless is that Tier I's counter has moved on: the
-	 * counter is in the nonce and in nothing else, both ends derive it from
-	 * time, and the same frame A in a later interval produces a different
-	 * tag. So the replay does not have to be RECOGNISED - it simply does
-	 * not verify.
-	 */
+	/* A recorded announcement replayed later fails not because it's
+	 * recognised, but because Tier I's counter (in the nonce, derived from
+	 * time) has moved on: the same frame A produces a different tag in a
+	 * later interval. */
 	keys_up();
 	zassert_equal(0, profile_private_rx_init(&rx, RX_A,
 						 period_us(PROFILE_HR_PERIOD)));
@@ -1166,12 +1086,9 @@ ZTEST(profile_private, test_a_never_node_refuses_an_authenticated_command)
 {
 	uint8_t cmd[8];
 
-	/*
-	 * `never` means never: the node refuses an OTHERWISE-VALID
-	 * authenticated command from a keyholder it trusts, and COUNTS the
-	 * refusal - because an owner has to be able to tell a refusal from a
-	 * command that never arrived.
-	 */
+	/* `never` means never: the node refuses an otherwise-valid authenticated
+	 * command and COUNTS the refusal, so an owner can tell it apart from a
+	 * command that never arrived. */
 	node_up(PROFILE_PRIVATE_NEVER, PROFILE_PRIVATE_BROADCAST,
 		PROFILE_PRIVATE_K_DEFAULT);
 	run(8u);
@@ -1216,13 +1133,9 @@ ZTEST(profile_private, test_an_unauthenticated_request_can_never_switch_a_node)
 	uint8_t cmd[8];
 	uint8_t i;
 
-	/*
-	 * THE SECURITY PROPERTY, and the reason there is no unauthenticated
-	 * path at all: a stranger on RF 57 who could mute a power meter for
-	 * every legacy receiver in the room would have a one-packet denial of
-	 * service against everybody, and the sensor cannot switch "just for one
-	 * receiver" because it has one stream and N listeners.
-	 */
+	/* THE SECURITY PROPERTY: there is no unauthenticated path because a
+	 * stranger who could mute a power meter for every legacy receiver in
+	 * the room would have a one-packet DoS against everybody. */
 	node_up(PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_BROADCAST,
 		PROFILE_PRIVATE_K_DEFAULT);
 	run(8u);
@@ -1281,16 +1194,10 @@ ZTEST(profile_private, test_no_over_air_path_can_change_policy)
 	uint8_t cmd[8];
 	uint8_t op;
 
-	/*
-	 * AS A NEGATIVE. An over-air policy-change command is not deferred, it
-	 * is REFUSED - a policy a remote party can rewrite is not a policy, and
-	 * downgrading `command` to `never` over the air would be a mute attack
-	 * wearing a safety hat.
-	 *
-	 * So this sends the message such a command would be, WITH A VALID TAG,
-	 * under every operation byte that is not one of the two that exist, and
-	 * asserts that nothing consumes any of them as anything.
-	 */
+	/* An over-air policy-change command is REFUSED, not deferred - a policy
+	 * a remote party can rewrite is not a policy. Sends a validly-tagged
+	 * command under every operation byte that isn't one of the two real
+	 * ones and asserts none of them are consumed as anything. */
 	node_up(PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_BROADCAST,
 		PROFILE_PRIVATE_K_DEFAULT);
 	run(8u);
@@ -1323,12 +1230,8 @@ ZTEST(profile_private, test_policy_precedence_is_nvm_then_kconfig)
 {
 	struct profile_private_cfg cfg;
 
-	/*
-	 * NVM IF PROVISIONED, ELSE KCONFIG; THE HOST MESSAGE WRITES NVM rather
-	 * than shadowing it. Three sources with an unstated precedence is a bug
-	 * report waiting six months, so the rule is asserted rather than
-	 * described.
-	 */
+	/* NVM if provisioned, else Kconfig; the host message writes NVM rather
+	 * than shadowing it. */
 	keys_up();
 	hr_up();
 
@@ -1404,20 +1307,13 @@ ZTEST(profile_private, test_attest_off_refuses_every_policy_but_the_exemption)
 	uint8_t announce;
 
 	/*
-	 * THE KEY DEPENDENCY, over the whole matrix.
-	 *
-	 * "A node with attest off refuses to BUILD with private_policy != never
-	 * except the physical + silent combination, which must build and work."
-	 * A compile-time refusal cannot be asserted from a test that has to
-	 * compile, so what is asserted here is THE PREDICATE ITSELF - the same
-	 * expression the BUILD_ASSERT in profile_private.c holds and the same
-	 * one src/profiles/Kconfig spells as `depends on`. One expression, and
-	 * this walks all sixteen of its inputs; if the predicate is wrong the
-	 * build rule is wrong in exactly the same way.
-	 *
-	 * The runtime arm is asserted underneath it, because it is the one that
-	 * catches a policy arriving from NVM on a node built for a different
-	 * one - which no BUILD_ASSERT can see.
+	 * THE KEY DEPENDENCY: a node with attest off refuses to BUILD with
+	 * private_policy != never, except physical + silent, which must build
+	 * and work. A compile-time refusal can't be asserted by a test that has
+	 * to compile, so this walks all sixteen inputs of THE PREDICATE ITSELF
+	 * - the same expression as the BUILD_ASSERT and the Kconfig `depends
+	 * on`. The runtime arm underneath catches a policy arriving from NVM on
+	 * a node built for a different one, which no BUILD_ASSERT can see.
 	 */
 	keys_up();
 	hr_up();
@@ -1488,12 +1384,9 @@ ZTEST(profile_private, test_the_exempted_combination_actually_switches)
 {
 	struct profile_private_cfg cfg;
 
-	/*
-	 * "...which must build and work". The exemption is not a hole in the
-	 * dependency, it is a supported node: a button, no announcement, no
-	 * attestation, and a private channel whose only on-air security surface
-	 * is the ciphertext itself.
-	 */
+	/* The exemption is not a hole, it's a supported node: a button, no
+	 * announcement, no attestation, and a private channel whose only on-air
+	 * security surface is the ciphertext itself. */
 	keys_up();
 	hr_up();
 	compat_up(PROFILE_PRIVATE_PHYSICAL);
@@ -1528,12 +1421,9 @@ ZTEST(profile_private, test_the_node_announces_the_return_and_reverts_on_timeout
 	struct profile_private_cfg cfg;
 	uint32_t i;
 
-	/*
-	 * A SENSOR THAT SILENTLY STAYS PRIVATE IS INDISTINGUISHABLE FROM A DEAD
-	 * ONE, so the duration is bounded and the revert announces itself the
-	 * same way the switch did - from the private channel, with the reason
-	 * on the air, so a receiver can say why the node came back.
-	 */
+	/* A sensor that silently stays private is indistinguishable from a dead
+	 * one, so the duration is bounded and the revert announces itself the
+	 * same way the switch did, reason included. */
 	keys_up();
 	hr_up();
 	compat_up(PROFILE_PRIVATE_PHYSICAL);
@@ -1596,13 +1486,9 @@ ZTEST(profile_private, test_a_power_cycle_reverts)
 {
 	struct profile_private_cfg cfg;
 
-	/*
-	 * The revert path that needs no code, asserted anyway because "no code"
-	 * is a claim: private mode is RAM state and is never persisted, so a
-	 * node that comes back up is an ANT+ sensor again. The policy survives
-	 * the reboot because it is in NVM; the private STATE does not, and the
-	 * two things being in different places is the design.
-	 */
+	/* Private mode is RAM state, never persisted, so a rebooted node is an
+	 * ANT+ sensor again. Policy survives (it's in NVM); state does not -
+	 * the two being in different places is the design. */
 	keys_up();
 	hr_up();
 	compat_up(PROFILE_PRIVATE_PHYSICAL);
@@ -1662,12 +1548,9 @@ ZTEST(profile_private, test_accepted_commands_are_rate_limited)
 	uint8_t  cmd[8];
 	uint64_t t;
 
-	/*
-	 * Not a defence against an attacker - the tag is that - but a bound on
-	 * what one buggy or captured receiver can do to the OTHER N-1
-	 * listeners, each of whom pays a countdown and a retune for every
-	 * accepted command.
-	 */
+	/* Not a defence against an attacker (the tag is that) but a bound on
+	 * what one buggy/captured receiver can cost the other N-1 listeners,
+	 * each of whom pays a countdown and a retune per accepted command. */
 	node_up(PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_SILENT,
 		PROFILE_PRIVATE_K_DEFAULT);
 	run(8u);
@@ -1720,13 +1603,10 @@ ZTEST(profile_private, test_a_countdown_and_an_open_window_refuse_each_other)
 	struct profile_compat_client other;
 	uint8_t                      cmd[8];
 
-	/*
-	 * THE INTERLOCK. Layer D's six pubkey frames occupy the indices this
-	 * announcement's two would, and a switch closes the channel that window
-	 * is running on. A countdown and a window must not run at once, and
-	 * whichever arrives second is refused - both ways round, because a rule
-	 * that only holds in one direction is a race.
-	 */
+	/* THE INTERLOCK: Layer D's frames and this announcement share indices,
+	 * and a switch closes the channel the window runs on. A countdown and a
+	 * window must not run at once; whichever arrives second is refused,
+	 * both directions, or the rule is a race. */
 	node_up(PROFILE_PRIVATE_COMMAND, PROFILE_PRIVATE_BROADCAST,
 		PROFILE_PRIVATE_K_DEFAULT);
 

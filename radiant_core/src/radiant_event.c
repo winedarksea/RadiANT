@@ -10,7 +10,7 @@
  * protocol/ant_wire.yaml - for every wire constant. The extended-message
  * layout is the exact inverse of tools/ant_verify.py's extended_fields().
  * Nothing here derives from sdk-ant, from libant.a, from disassembly of any
- * binary, or from any adopter-gated ANT+ device profile document.
+ * binary, or from any ANT+ device profile document.
  * See docs/decisions/0002-clean-room-policy.md.
  *
  * This file includes no Zephyr header and nothing from the application beyond
@@ -32,10 +32,8 @@
 #include <radiant_core/radiant_event.h>
 
 /* ---------------------------------------------------------------------------
- * Compile-time checks
- *
- * _Static_assert rather than Zephyr's BUILD_ASSERT, because this file
- * deliberately includes no Zephyr header. C11 gives it to us directly.
+ * Compile-time checks (_Static_assert, not Zephyr's BUILD_ASSERT, since this
+ * file deliberately includes no Zephyr header)
  * ---------------------------------------------------------------------------
  */
 
@@ -68,16 +66,12 @@ _Static_assert(1u + 4u + 3u + 2u == RADIANT_EVENT_EXT_MAX,
 _Static_assert(RADIANT_EVENT_PAYLOAD_MAX >= RADIANT_FRAME_PAYLOAD_MAX,
 	       "a frame payload no longer fits in an event slot");
 
-/*
- * The library-configuration bit that requests a field and the extended-message
- * flag bit that announces it have the same value, for all three fields. That
- * is true of the protocol and it is convenient, but they are two different
- * namespaces - one is a payload byte of message 0x6E, the other is a byte
- * appended to every received data message - so the code below maps them
- * explicitly rather than passing the configuration through as flags. These
- * assertions exist so that the explicit map cannot silently disagree with the
- * generated header if one of the two ever moves.
- */
+/* The library-configuration request bit and the extended-message flag bit
+ * share a value for all three fields - true of the protocol, but they are two
+ * different namespaces (a payload byte of message 0x6E vs. a byte appended to
+ * every received data message), so the code below maps them explicitly. These
+ * assertions catch the explicit map silently disagreeing with the generated
+ * header if either one moves. */
 _Static_assert((uint8_t)ANTW_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID ==
 		       (uint8_t)ANTW_EXT_FLAG_CHANNEL_ID,
 	       "channel-id request bit and flag bit have diverged");
@@ -133,14 +127,9 @@ uint16_t radiant_event_rx_ticks(radiant_time_t t_sync)
 #define SLOT_TS_EXACT  (1u << 2)
 #define SLOT_HAS_RSSI  (1u << 3)
 
-/*
- * One queued message.
- *
- * The layout is chosen for size: the 64-bit t_sync goes first so the structure
- * does not grow a hole, and everything else is a byte. It comes out at 48
- * bytes with 8-byte alignment, which is what RADIANT_EVENT_QUEUE_DEPTH is costed
- * against in the header.
- */
+/* One queued message. Layout chosen for size: 64-bit t_sync first so no hole
+ * opens up, everything else a byte. Comes out at 48 bytes / 8-byte alignment,
+ * which is what RADIANT_EVENT_QUEUE_DEPTH is costed against in the header. */
 struct radiant_event_slot {
 	radiant_time_t t_sync;
 	uint16_t   device_number;
@@ -156,11 +145,9 @@ struct radiant_event_slot {
 static struct {
 	struct radiant_event_slot ring[RADIANT_EVENT_QUEUE_DEPTH];
 
-	/*
-	 * Free-running, masked on use. Unsigned wraparound is defined, and
-	 * head - tail is the occupancy at any 32-bit value of either, so there
-	 * is no full-versus-empty ambiguity and no sacrificed slot.
-	 */
+	/* Free-running, masked on use: unsigned wraparound is defined, so
+	 * head - tail is the occupancy at any value of either, with no
+	 * full-vs-empty ambiguity. */
 	uint32_t head;
 	uint32_t tail;
 
@@ -178,15 +165,11 @@ static struct {
 
 #define RING_MASK  (RADIANT_EVENT_QUEUE_DEPTH - 1u)
 
-/*
- * Counters are plain words on distinct addresses, incremented from whichever
- * context reached them. The ring's own accounting happens inside the critical
- * section that moves the indices; the reject counters below take the section
- * too, so that a post from a radio ISR and a post from a thread cannot lose an
- * increment against each other. Nothing reads a counter to make a decision -
- * they exist for tests and for the A/B report - so this is accounting, not
- * synchronisation.
- */
+/* Counters are plain words, incremented from whichever context reached them.
+ * The reject counters take the same critical section as the ring's index
+ * moves, so a post from a radio ISR and one from a thread can't lose an
+ * increment. Nothing reads a counter to make a decision - this is accounting
+ * for tests/reports, not synchronisation. */
 static void bump(uint32_t *counter)
 {
 	unsigned int key = radiant_event_crit_enter();
@@ -230,9 +213,9 @@ void radiant_event_flush(void)
 antr_err_t radiant_event_lib_config_set(uint8_t config)
 {
 	if ((config & (uint8_t)~RADIANT_EVENT_LIB_CONFIG_SUPPORTED) != 0u) {
-		/* Refuse the whole request rather than the unknown bits. A
-		 * partially applied configuration is worse than none: the
-		 * host's error handling cannot tell which half took. */
+		/* Refuse the whole request rather than the unknown bits: a
+		 * partial configuration is worse than none, since the host
+		 * can't tell which half took. */
 		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
 	}
 
@@ -261,10 +244,9 @@ antr_err_t radiant_event_lib_config_get(uint8_t *config)
 
 antr_err_t radiant_event_filter_set(uint16_t filter)
 {
-	/* Stored and never consulted. src/ant_radio.h is explicit that a
-	 * backend which does not filter must still round-trip the value for
-	 * tools/ant_features.py, and must not pretend to filter, because loss
-	 * accounting needs the RX_FAIL events to actually arrive. */
+	/* Stored and never consulted: a backend that doesn't filter must still
+	 * round-trip the value for tools/ant_features.py, and must not pretend
+	 * to filter, since loss accounting needs RX_FAIL events to arrive. */
 	g.filter = filter;
 	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
 }
@@ -290,12 +272,10 @@ enum radiant_event_ts_policy radiant_event_get_ts_policy(void)
 }
 
 /* ---------------------------------------------------------------------------
- * The extended tail
- *
- * The inverse of tools/ant_verify.py's extended_fields(). Field order is
- * fixed - channel id, RSSI, receive timestamp - but a field's offset depends
- * on which earlier fields turned up, which is what the flag byte is for and
- * why nothing here ever emits a placeholder.
+ * The extended tail: the inverse of tools/ant_verify.py's extended_fields().
+ * Field order is fixed (channel id, RSSI, receive timestamp), but a field's
+ * offset depends on which earlier fields turned up, which is what the flag
+ * byte is for; nothing here ever emits a placeholder.
  * ---------------------------------------------------------------------------
  */
 
@@ -356,16 +336,12 @@ int radiant_event_build_ext(uint8_t config, const struct radiant_event_ext *in,
 			buf[n++] = (uint8_t)(ticks & 0xFFu);
 			buf[n++] = (uint8_t)(ticks >> 8);
 		} else {
-			/*
-			 * The downgrade. The only accuracy this wire format
-			 * advertises is the presence of the field, so an
-			 * inexact stamp is reported as no stamp rather than as
-			 * a millisecond-scale number in a field the host will
-			 * read as microsecond-scale. Counted, so that a
-			 * backend quietly failing to capture the address event
-			 * shows up as a number rather than as a missing column
-			 * in someone's plot.
-			 */
+			/* The downgrade: this wire format's only accuracy signal
+			 * is field presence, so an inexact stamp is reported as
+			 * no stamp rather than a millisecond number the host would
+			 * read as microsecond-scale. Counted so a backend quietly
+			 * missing the address event shows up as a number, not a
+			 * gap in someone's plot. */
 			g.stats.ts_suppressed++;
 		}
 	}
@@ -400,14 +376,10 @@ static int enqueue(const struct radiant_event_slot *s)
 	key = radiant_event_crit_enter();
 	used = g.head - g.tail;
 	if (used >= (uint32_t)RADIANT_EVENT_QUEUE_DEPTH) {
-		/*
-		 * Drop the newest, not the oldest: the queued messages are
-		 * already in order and a host that loses the head of a burst
-		 * is worse off than one that loses its tail. Never silent -
-		 * overflow_pending turns into an ANTW_EVENT_QUE_OVERFLOW at
-		 * the head of the next drain, which is what keeps
-		 * "unexplained loss" an honest figure.
-		 */
+		/* Drop the newest, not the oldest: a host that loses the head
+		 * of a burst is worse off than one that loses its tail. Never
+		 * silent - overflow_pending becomes an ANTW_EVENT_QUE_OVERFLOW
+		 * at the head of the next drain. */
 		g.overflow_pending = true;
 		g.stats.dropped_full++;
 		rc = RADIANT_EVENT_ENOSPC;
@@ -441,15 +413,11 @@ int radiant_event_post_rx(const struct radiant_event_rx *rx)
 		return RADIANT_EVENT_EINVAL;
 	}
 
-	/*
-	 * The CRC gate, and it is the reason this function takes the HAL event
-	 * rather than a set of decoded values. With eight filters armed the
-	 * bench sees about 1.4 CRC failures a second on a quiet room, and
-	 * Spike A measured a 3-byte search address triggering the matcher on
-	 * noise at -54..-101 dBm with zero valid frames behind it. A
-	 * CRC-failed frame must never become an event; the check is duplicated
-	 * here, at the last gate before the host, on purpose.
-	 */
+	/* The CRC gate - why this function takes the HAL event, not decoded
+	 * values. A 3-byte search address triggers the matcher on noise
+	 * (Spike A: -54..-101 dBm, zero valid frames), so a CRC-failed frame
+	 * must never become an event; duplicated here as the last gate before
+	 * the host. */
 	if (rx->hal->status == RADIANT_RADIO_STATUS_CRC_FAIL) {
 		bump(&g.stats.rejected_crc);
 		return RADIANT_EVENT_ECRC;
@@ -501,13 +469,9 @@ int radiant_event_post_rx(const struct radiant_event_rx *rx)
 	s.device_type = rx->id.device_type;
 	s.trans_type = rx->id.trans_type;
 
-	/*
-	 * The whole point of the module, in four lines: the timestamp is the
-	 * backend's t_sync, copied here in the callback. Nothing below this
-	 * point reads a clock - there is no call to the HAL's current-time
-	 * function anywhere in this translation unit, and a grep that finds
-	 * one has found the bug.
-	 */
+	/* The timestamp is the backend's t_sync, copied here in the callback.
+	 * Nothing below this point reads a clock - a grep that finds a call to
+	 * the HAL's current-time function in this file has found a bug. */
 	s.t_sync = rx->hal->t_sync;
 	s.flags = (uint8_t)(SLOT_EXT | SLOT_HAS_TS);
 	if (rx->hal->t_sync_exact) {
@@ -550,10 +514,9 @@ int radiant_event_post_channel_event(uint8_t channel, uint8_t code)
 		return RADIANT_EVENT_EINVAL;
 	}
 
-	/* [channel][MESG_EVENT_ID][code] under MESG_RESPONSE_EVENT_ID: byte 1
-	 * being 0x01 is what distinguishes an unsolicited channel event from a
-	 * reply to a command, and it is what the bridge switches on to catch
-	 * the three burst release codes. */
+	/* [channel][MESG_EVENT_ID][code] under MESG_RESPONSE_EVENT_ID: byte 1 =
+	 * 0x01 distinguishes an unsolicited channel event from a reply to a
+	 * command; the bridge switches on it for the three burst release codes. */
 	body[0] = channel;
 	body[1] = (uint8_t)ANTW_MESG_EVENT_ID;
 	body[2] = code;
@@ -564,9 +527,9 @@ int radiant_event_post_channel_event(uint8_t channel, uint8_t code)
 		return rc;
 	}
 
-	/* The three that carry buffer ownership as well as status. Counted
-	 * here so that "released exactly once per accepted block" is a
-	 * comparison of two numbers rather than a reading of a log. */
+	/* The three that carry buffer ownership as well as status, counted so
+	 * "released exactly once per accepted block" is a number comparison,
+	 * not a log reading. */
 	switch (code) {
 	case ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK:
 		bump(&g.stats.next_data_block);
@@ -676,10 +639,9 @@ uint32_t radiant_event_drain(uint32_t max_msgs)
 
 	key = radiant_event_crit_enter();
 	if (!g.ready || g.draining) {
-		/* Re-entered from inside antr_on_message(). The bridge is
-		 * never called recursively and docs/sdk-ant-contract.md says
-		 * so; returning zero is how that stays true even if some
-		 * future implementation tries. */
+		/* Re-entered from inside antr_on_message(). The bridge must
+		 * never be called recursively (docs/sdk-ant-contract.md);
+		 * returning zero keeps that true even if a future caller tries. */
 		radiant_event_crit_exit(key);
 		return 0u;
 	}
@@ -705,9 +667,8 @@ uint32_t radiant_event_drain(uint32_t max_msgs)
 		g.tail++;
 		radiant_event_crit_exit(key);
 
-		/* Outside the section: antr_on_message() queues to the
-		 * bridge's writer thread and must not run with interrupts
-		 * masked. */
+		/* Outside the section: antr_on_message() must not run with
+		 * interrupts masked. */
 		deliver(&s);
 		sent++;
 	}

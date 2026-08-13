@@ -58,12 +58,9 @@ int profile_common_82(const struct profile_common_battery *b, uint8_t *body)
 		return -EINVAL;
 	}
 
-	/*
-	 * Byte [7] is three fields in one byte and the resolution bit is
-	 * INVERTED with respect to how it reads: bit 7 SET means 2-second
-	 * units, clear means 16-second units. Writing it the other way round
-	 * scales a battery's operating time by eight and nothing rejects it.
-	 */
+	/* Byte [7]'s resolution bit is inverted: SET means 2-second units,
+	 * clear means 16-second units. Getting it backwards scales operating
+	 * time by 8 with nothing to catch it. */
 	descriptor = (uint8_t)((b->coarse_voltage & 0x0Fu) |
 			       ((b->status & 0x07u) << 4));
 	if (!b->resolution_16s) {

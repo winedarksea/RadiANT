@@ -2,139 +2,67 @@
 /*
  * Spike B - promisc: where does ANT signal the packet type?
  *
- * Provenance: clean-room. Written from
- *   - docs/ant-radio-link.md (the frame layout, the CRC parameters and the
- *     open question this program exists to close),
- *   - docs/spike-a-results.md (the measured BASE0 packing rule for BALEN < 4,
- *     and the body layout a 3-byte address puts in RAM),
- *   - radiant_core/spike/rx_raw/src/main.c, which is this repository's own
- *     Apache-2.0 code and is where rev8(), the CRC and the register
- *     programming come from,
- *   - the public Nordic MDK headers shipped with NCS and the nRF5340 /
- *     nRF54L15 product specifications for register semantics,
- *   - Zephyr's public clock-control and IRQ APIs.
- * Nothing here derives from sdk-ant, from libant.a, or from any adopter-gated
- * ANT+ device profile document. See docs/decisions/0002-clean-room-policy.md.
+ * Clean-room: written from docs/ant-radio-link.md, docs/spike-a-results.md
+ * (BASE0 packing rule for BALEN < 4, body layout with a 3-byte address),
+ * radiant_core/spike/rx_raw/src/main.c (rev8(), CRC, register programming -
+ * this repo's own code), the public Nordic MDK headers/product specs, and
+ * Zephyr's clock-control/IRQ APIs. Nothing derives from sdk-ant, libant.a, or
+ * an ANT+ profile doc. See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * The question
- * ---------------------------------------------------------------------------
- * The 18-byte ANT frame accounts for every byte: preamble, 2-byte network
- * address, 2-byte device number, device type, transmission type, one byte
- * rtl_433 calls "length", 8 payload bytes, 2 CRC bytes. There is nowhere in it
- * for the thing ANT obviously must signal - broadcast versus acknowledged
- * versus burst-sequence-N versus burst-last.
+ * The question: the 18-byte ANT frame has nowhere for the thing ANT must
+ * signal - broadcast vs acknowledged vs burst-sequence-N vs burst-last. The
+ * standing guess is that the byte rtl_433 calls "length" is really a control
+ * byte, and rtl_433 only ever watched broadcasts so a varying field looked
+ * constant. Spike A saw a constant 0x0A, which both readings predict, so it
+ * settled nothing.
  *
- * The standing guess is that the "length" byte is really ANT's control byte,
- * and that rtl_433 only ever watched sensor broadcasts, so a varying field
- * looked constant. Spike A saw 0x0A on 2,164 broadcasts, which is exactly what
- * *both* readings predict, so it settled nothing.
+ * This program captures every frame with a known channel ID in both
+ * directions (a slave answers on the master's channel ID), timestamps each
+ * one, and prints byte 3. A host script makes the device send a broadcast,
+ * then acknowledged data, then a burst: if byte 3 moves while the payload
+ * stays 8 bytes, it's a control byte; if it only changes with payload length,
+ * it's a length.
  *
- * This program captures every frame carrying a known channel ID - in both
- * directions, because a slave answers on the master's channel ID - timestamps
- * each one, and prints byte 3 of the body. A host script then makes the same
- * device send a broadcast, then acknowledged data, then a burst. If byte 3
- * moves while the payload stays 8 bytes long, it is a control byte. If it
- * stays 0x0A throughout and only ever changes when the payload length changes,
- * it is a length.
+ * Why not Spike A's tracking configuration: that 5-byte-address config
+ * matches the channel ID in hardware (so it never reaches RAM) and parses
+ * byte 3 as a LENGTH field - a receiver that already decided the byte is a
+ * length can't report otherwise (overrun, CRC fail, byte lost). So this uses
+ * Spike A's measured *search* configuration instead (PCNF0=0, BALEN=2,
+ * STATLEN=12), which treats the body as opaque and lands byte 3 in RAM
+ * regardless of meaning.
  *
- * ---------------------------------------------------------------------------
- * Why this configuration and not Spike A's tracking one
- * ---------------------------------------------------------------------------
- * Spike A's 5-byte-address tracking configuration matches the channel ID in
- * hardware, which means the channel ID never reaches RAM - and, worse here, it
- * parses byte 3 as a LENGTH field. A receiver that has already decided the byte
- * is a length cannot report that it was not one: a frame whose byte 3 said 0x1C
- * would be read as a 28-byte body and fail its CRC, and the byte itself would
- * be lost in the wreckage.
- *
- * So this uses the *search* configuration Spike A measured - PCNF0 = 0,
- * BALEN = 2, STATLEN = 12 - which treats the whole body as opaque bytes. Byte 3
- * lands in RAM whatever it means. That is the entire reason for the choice.
- *
- * The packing rule is the one Spike A had to correct on the bench: with
- * BALEN < 4 the *high* bytes of BASE0 are used, so
- *
+ * Packing rule (measured on Spike A's bench, not the naive low-bytes guess):
+ * with BALEN < 4 the *high* bytes of BASE0 are used -
  *     BASE0 = (lsb-first packing of the base bytes) << (8 * (4 - BALEN))
+ * giving BASE0 = 0xA3650000 for [A6 C5], PREFIX = rev8(devnum_lo).
  *
- * giving BASE0 = 0xA3650000 for [A6 C5], with PREFIX = rev8(devnum_lo). The
- * naive low-bytes packing hears nothing but noise.
+ * Eight logical addresses, on purpose: only one prefix is needed for one
+ * device, but arming all eight (real devnum_lo at a non-zero slot) tests two
+ * things docs/ant-radio-link.md still marks [inferred] - that 8 addresses can
+ * be armed in one window, and that RADIO->RXMATCH identifies which prefix
+ * matched. Cost: 8 filters see ~8x the noise of one, so noise is counted, not
+ * printed, and nothing is ranked on raw match count.
  *
- * ---------------------------------------------------------------------------
- * Eight logical addresses, on purpose
- * ---------------------------------------------------------------------------
- * Only one prefix is needed to hear one device. This programs all eight anyway,
- * with the real devnum_lo at a slot chosen not to be zero, because two rows of
- * docs/ant-radio-link.md are still [inferred] and both are free to close here:
- * that eight logical addresses can be armed in one window (which the whole
- * 32-set wildcard sweep depends on), and that RADIO->RXMATCH identifies which
- * prefix matched (which is how devnum_lo is recovered when it is not known in
- * advance). If RXMATCH comes back as the slot the real device was put in, both
- * rows are answered by a run that was happening anyway.
+ * Interrupt-driven, unlike Spike A's polling: a burst arrives back to back
+ * and printing at 115200 baud is slower than the gap between packets, so the
+ * RADIO ISR writes fixed-size records into a ring and main() drains it
+ * (single producer/consumer). Timestamps are captured in software at ISR
+ * entry, not by (D)PPI - interrupt entry adds a small, roughly constant
+ * offset, so only *differences* between timestamps are trustworthy; every
+ * figure this spike reports is a difference.
  *
- * It costs something and the cost is stated: eight 3-byte filters fire on noise
- * roughly eight times as often as one. That is why noise is counted rather than
- * printed, and why nothing here is ever ranked on match count.
+ * Part 2 completeness: a dropped frame mid-burst is indistinguishable from an
+ * encoding that skips a value, so every completed frame carries n= (ISR END
+ * counter, all frames including noise - gaps here are expected), dr=
+ * (ring_dropped at enqueue time - must stay 0 for a complete capture;
+ * spike_b_analyse.py fails the run if it ever increments), and q= (ring depth
+ * at enqueue, so headroom is reported not assumed).
  *
- * ---------------------------------------------------------------------------
- * Why interrupts here when Spike A polled
- * ---------------------------------------------------------------------------
- * Spike A polled because its transmitter ran at 4 Hz and an interrupt would
- * have added a concurrency question and answered none. A burst is the opposite
- * case: packets arrive back to back, and printing one at 115200 baud takes
- * longer than the gap to the next. So the RADIO interrupt writes fixed-size
- * records into a ring and main() drains the ring to the console. Single
- * producer, single consumer, one word of shared state each way.
- *
- * Timestamps are captured in software at the top of the ISR, not by (D)PPI.
- * That is a deliberate accuracy limit and it is stated wherever a number is
- * reported: interrupt entry adds a small, roughly constant offset, so
- * *differences* between timestamps - inter-packet spacing, reply turnaround,
- * slot jitter - carry the ISR's jitter (order 1-2 us) and nothing more, while
- * an absolute timestamp carries the offset as well. Every figure this spike is
- * asked for is a difference.
- *
- * ---------------------------------------------------------------------------
- * Part 2: proving the capture is complete
- * ---------------------------------------------------------------------------
- * Part 1 of this spike answered the broadcast/acknowledged half of the question
- * from a histogram, where a lost frame costs a count and nothing else. The burst
- * half is different: the whole result is "sequence 0, then 1, then 2, ..., then
- * the last one", and a *silently dropped* frame in the middle of that is
- * indistinguishable from an encoding that skips a value. A gap in the sequence
- * would be read as a finding.
- *
- * So every frame that completes now carries two numbers that make a gap
- * impossible to miss rather than merely unlikely:
- *
- *   n=   a counter incremented in the ISR on every END event, before the ring
- *        is consulted. It counts frames the radio finished, not frames that got
- *        printed, so noise and foreign frames consume values too - gaps in the
- *        printed n are expected and are not the check.
- *   dr=  the value of ring_dropped at the moment this record was enqueued. This
- *        *is* the check. printk is synchronous and cannot lose a line once it
- *        starts, so the ring is the only place a frame can vanish; dr constant
- *        at zero across a whole capture is the positive statement that nothing
- *        was lost. spike_b_analyse.py fails the run if it ever increments.
- *   q=   ring occupancy at enqueue, so headroom is reported rather than assumed.
- *
- * ---------------------------------------------------------------------------
- * Part 2: what counts as "ours"
- * ---------------------------------------------------------------------------
- * Part 1 only ever had to recognise one transmitter, so it required the device
- * number, the device type and the transmission type all to match before it would
- * print. That is too strict for the reply frame, which is the thing part 2 exists
- * to see and whose layout is exactly what is not yet known: a reply that put
- * anything unexpected in the type or transmission-type byte would have been
- * silently discarded as "foreign", and the run would have looked like the slave
- * never transmitted.
- *
- * So the test is now the two things that cannot be wrong without the frame
- * belonging to someone else - the hardware address match landing on the slot the
- * real devnum_lo was written into, and devnum_hi reading back correctly - and
- * the device type and transmission type are *reported* rather than required. A
- * frame whose type bytes are not the expected ones is printed with a `!` so it
- * cannot be mistaken for an ordinary one.
+ * Part 2 "ours": part 1 required device number + type + trans type to all
+ * match. Too strict for the reply frame under test, whose layout is unknown -
+ * an unexpected type byte would be silently discarded as foreign. So only the
+ * address-match slot and devnum_hi are required; type/trans-type are
+ * reported, and a frame with unexpected type bytes prints with a `!`.
  */
 
 #include <string.h>
@@ -159,22 +87,16 @@
 #include <hal/nrf_power.h>
 #endif
 
-/* This program pokes RADIO registers directly. Anything else that owns the
- * radio - a Bluetooth controller, an MPSL timeslot session, the 802.15.4
- * driver the network core ships with - would reprogram them underneath it. */
+/* This program pokes RADIO registers directly; anything else that owns the
+ * radio (BT controller, MPSL timeslot, network-core 802.15.4 driver) would
+ * reprogram them underneath it. */
 BUILD_ASSERT(!IS_ENABLED(CONFIG_BT), "Spike B owns the RADIO; CONFIG_BT must be off");
 BUILD_ASSERT(!IS_ENABLED(CONFIG_NRF_802154_RADIO_DRIVER),
 	     "Spike B owns the RADIO; the 802.15.4 driver must be off");
 
-/* ---------------------------------------------------------------------------
- * Which device to listen to
- *
- * Only devnum_lo is a hardware filter - it is the prefix byte. devnum_hi, the
- * device type and the transmission type land in RAM and are checked in
- * software, which is what makes an "is this our device?" decision reportable
- * rather than assumed.
- * ---------------------------------------------------------------------------
- */
+/* Which device to listen to. Only devnum_lo is a hardware filter (the prefix
+ * byte); devnum_hi/device type/trans type land in RAM and are checked in
+ * software, making "is this our device?" reportable rather than assumed. */
 #ifndef SPIKE_DEVNUM
 #define SPIKE_DEVNUM   14871u   /* 0x3A17 - the bench transmitter, per Spike A */
 #endif

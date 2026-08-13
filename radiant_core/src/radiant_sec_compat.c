@@ -3,38 +3,20 @@
  * radiant_sec_compat - the two attestation tags of docs/radiant-security.md
  * section 11.4, as bytes in and bytes out.
  *
- * Provenance: clean-room, and in this file's case the phrase is nearly
- * redundant - it is derived entirely from this project's own specifications,
- * docs/decisions/0008-antplus-additive-pages-and-compat-security.md and
- * docs/radiant-security.md section 11.4, on top of the seam in
- * radiant_core/include/radiant_core/radiant_sec.h. NOTHING HERE DERIVES FROM
- * ANY ANT+ DEVICE PROFILE DOCUMENT, gated or otherwise, and it could not: this
- * file names no page and no field, so there is nothing in it an external
- * profile specification could have said. It derives nothing from sdk-ant, from
- * libant.a, or from disassembly of any binary. See
+ * Clean-room, derived from docs/decisions/0008-antplus-additive-pages-and-compat-security.md
+ * and docs/radiant-security.md section 11.4 only; nothing here derives from
+ * any ANT+ device profile document, sdk-ant, or libant.a. See
  * docs/decisions/0002-clean-room-policy.md.
  *
- * ── Two halves, and the first one is still pure ────────────────────────────
+ * The three tag functions are pure (arguments in, tag out); everything below
+ * them holds per-channel state (due pages, window contents, seen counters,
+ * receiver epoch).
  *
- * The three tag functions retain nothing between calls: arguments in, tag out.
- * Everything below them holds per-channel state - when a page is due, what the
- * window covers, which counters have been seen, which epoch a receiver is on -
- * and the split is worth keeping visible, because the pure half is what the
- * pinned vectors check and the stateful half is what a running node exercises.
- *
- * ── What is still deliberately absent ──────────────────────────────────────
- *
- *   - Any page number. The emit hook returns a SUBTYPE and fills bytes [1..7];
- *     the layer above composes byte [0]. So the page byte is derived from what
- *     went into the nonce rather than stated twice, and this file can be read
- *     without knowing which profile is on the air.
- *   - Any field name. The messages this file covers are eight opaque bytes.
- *   - Any clock. Every instant is an argument. The .h says why.
- *   - Any scheduler. Nothing here decides when a slot happens; it answers
- *     whether the slot it was told about owes an attestation page.
- *
- * radiant_core/include/radiant_core/radiant_sec_compat.h carries the reasoning;
- * this file carries the bytes.
+ * Deliberately absent: any page number (the emit hook returns a SUBTYPE and
+ * fills bytes [1..7]; the layer above composes byte [0]), any field name
+ * (messages here are eight opaque bytes), any clock (every instant is an
+ * argument), any scheduler (this only answers whether an already-told-about
+ * slot owes an attestation page).
  */
 
 #include <stdint.h>
@@ -46,13 +28,8 @@
 
 #if defined(CONFIG_RADIANT_SEC_COMPAT)
 
-/*
- * N in {4, 8, 16, 32} - inside the bounds with a single bit set, which is that
- * set spelled as an arithmetic property rather than as a table. Enumerating it
- * matters because N is simultaneously the airtime cost, the verification
- * latency and the amplification factor, and a caller reaching this with 5 has
- * one of three bugs rather than a rounding error.
- */
+/* N in {4, 8, 16, 32}: inside range with a single bit set. N is the airtime
+ * cost, verification latency, and amplification factor at once. */
 static bool window_is_legal(uint8_t n)
 {
 	return n >= RADIANT_SEC_COMPAT_N_MIN &&
@@ -68,10 +45,8 @@ void radiant_sec_compat_nonce_block(uint8_t out[RADIANT_SEC_BLOCK_BYTES],
 		return;
 	}
 
-	/* Built by the shared helper and then extended, rather than laid out
-	 * again here. Two byte layouts that must agree are two byte layouts
-	 * that eventually do not, and the domain byte and the six trailing
-	 * zeros are exactly the part a second copy would drift on. */
+	/* Built by the shared helper and extended, not laid out again here -
+	 * two copies of a byte layout eventually drift. */
 	radiant_sec_nonce_block(out, epoch, devnum, counter,
 				RADIANT_SEC_DOM_COMPAT_MAC);
 	out[9] = sub;
@@ -178,13 +153,9 @@ struct compat_ctx {
 	uint16_t base_devnum;  /* provisioning time, in the KDF */
 
 	bool     epoch_set;
-	/*
-	 * base_epoch is what was set or adopted; `wraps` is how many times the
-	 * attestation counter has rolled over since, and the epoch actually in
-	 * the nonce is the sum. Keeping them apart is what makes a wrap
-	 * reproducible from time alone on both sides rather than being a piece
-	 * of history a receiver has to have witnessed.
-	 */
+	/* base_epoch is what was set/adopted; `wraps` is rollovers since;
+	 * epoch = base_epoch + wraps. Kept apart so a wrap is reproducible
+	 * from time alone rather than requiring witnessed history. */
 	uint32_t base_epoch;
 	uint32_t wraps;
 	uint32_t epoch;
@@ -219,12 +190,8 @@ struct compat_ctx {
 	struct radiant_sec_compat_stats stats;
 };
 
-/*
- * No channel -> context map array. radiant_sec.c keeps one because it allocates
- * eight contexts and is on the RX hot path; two contexts are searched in two
- * comparisons, and skipping the map is what keeps this file free of
- * radiant_channel.h and therefore of the HAL header behind it.
- */
+/* No channel -> context map: skipping it keeps this file free of
+ * radiant_channel.h and the HAL header behind it. */
 static struct compat_ctx compat[COMPAT_MAX_CH];
 
 static struct compat_ctx *ctx_of(uint8_t ch)
@@ -258,15 +225,8 @@ static uint64_t elapsed_us(const struct compat_ctx *c, uint64_t now_us)
 	return (now_us > c->anchor_us) ? (now_us - c->anchor_us) : 0u;
 }
 
-/*
- * Tier I's counter: intervals of T seconds since the epoch anchor.
- *
- * DERIVED FROM TIME AND CARRIED EXPLICITLY, which is what "decoupled from the
- * data rate" means in arithmetic. Both sides compute it from their own clocks
- * and the page carries all sixteen low bits, so what a receiver has to get
- * right from time is only which rollover it is in - and that is a seven-day
- * question at the default T, not a per-packet one.
- */
+/* Tier I's counter: intervals of T seconds since the epoch anchor, derived
+ * from time on both sides rather than carried per-packet. */
 static uint32_t interval_index(const struct compat_ctx *c, uint64_t now_us)
 {
 	uint64_t t_us = (uint64_t)c->t_s * COMPAT_US_PER_S;
@@ -294,13 +254,10 @@ static uint32_t msg_index(const struct compat_ctx *c, uint64_t now_us)
 }
 
 /*
- * The full counter, from the low bits on the air and the index time expects:
- * pick the rollover nearest to what time says. `span` is 0x10000 for Tier I,
- * whose page carries two bytes, and 0x100 for Tier II, whose page carries one.
- *
- * This is radiant_sec.c's resolve_counter() generalised in width rather than
- * copied, and the reason it has to exist at all is the same: a receiver joining
- * mid-stream is the NORMAL case and has no arrival history to count from.
+ * Full counter from the low bits on the air plus the index time expects:
+ * pick the rollover nearest to what time says. `span` is 0x10000 for Tier I
+ * (two-byte page) and 0x100 for Tier II (one-byte page). A receiver joining
+ * mid-stream is normal and has no arrival history to count from.
  */
 static uint32_t resolve_low(uint32_t expected, uint32_t low, uint32_t span)
 {
@@ -335,20 +292,13 @@ static int derive_auth(struct compat_ctx *c)
 }
 
 /*
- * D14, on the compat surface: a counter wrap advances the epoch by one on both
- * sides and re-derives the keys.
+ * D14, on the compat surface: a counter wrap advances the epoch by one on
+ * both sides and re-derives the keys.
  *
- * ONE COUNTER DRIVES IT, AND IT IS TIER I'S. The nonce has one 16-bit counter
- * field and the two tiers put different quantities in it - an interval index
- * and a window index - which roll over at different times, so exactly one of
- * them can be the epoch's clock or the two sides will disagree about which
- * epoch they are in. Tier I's is the one, because it is a property of elapsed
- * time and of nothing else: it is reproducible on a receiver that has heard no
- * Tier II page, on a node with Tier II switched off, and after any amount of
- * loss. The window index simply rolls over inside an epoch, which costs
- * nothing - a repeated MAC nonce is not a repeated keystream, and a replayed
- * old window fails the receiver's time-derived index check long before its tag
- * is reached.
+ * Only Tier I's counter drives the epoch: the nonce has one 16-bit counter
+ * field, and Tier I's is purely a function of elapsed time, so it stays
+ * reproducible even with no Tier II page ever heard. The Tier II window
+ * index just rolls over inside an epoch instead.
  */
 static int apply_wraps(struct compat_ctx *c, uint32_t wraps)
 {
@@ -587,12 +537,9 @@ enum radiant_sec_verdict radiant_sec_compat_stream_verdict(uint8_t ch,
 		return RADIANT_SEC_VERDICT_CLEAR;
 	}
 
-	/*
-	 * Pinned. From here the answer is UNVERIFIED unless something recent
-	 * says otherwise, which is the whole of downgrade protection: strip the
-	 * attestation off the air and a pinned receiver notices, where a naive
-	 * one would quietly fall back to clear and call it normal.
-	 */
+	/* Pinned: UNVERIFIED unless something recent says otherwise. This is
+	 * downgrade protection - stripping attestation off the air is noticed
+	 * here instead of quietly falling back to clear. */
 	if ((c->switches & RADIANT_SEC_COMPAT_SW_TIER_I) == 0u) {
 		/* Tier II only: the last window is all there is to go on. */
 		return (c->last_verdict == RADIANT_SEC_VERDICT_VERIFIED)
@@ -632,11 +579,9 @@ int radiant_sec_compat_tx_attest(uint8_t ch, uint64_t now_us, uint8_t *body,
 		return rc;
 	}
 
-	/*
-	 * TIER II FIRST WHEN BOTH FALL DUE. Its window closes at the Nth
-	 * transmitted message and has no slack anywhere; Tier I's counter is
-	 * derived from elapsed time, so a slot of slip is invisible to it.
-	 */
+	/* Tier II goes first when both fall due: its window closes at the Nth
+	 * message with no slack, while Tier I's time-derived counter tolerates
+	 * a slot of slip. */
 	if ((c->switches & RADIANT_SEC_COMPAT_SW_TIER_II) != 0u &&
 	    (c->tx_msgs % c->n) == (uint32_t)(c->n - 1u)) {
 		uint32_t window = c->tx_msgs / c->n;
@@ -719,10 +664,8 @@ static void rx_absorb(struct compat_ctx *c, const uint8_t *pay)
 		memcpy(&c->rx_win[c->rx_absorbed * COMPAT_MSG], pay, COMPAT_MSG);
 		c->rx_absorbed++;
 	} else {
-		/* More messages than this window covers: the tag page was lost
-		 * or something was injected. Either way the window cannot be
-		 * judged, and saying so is cheaper and truer than tagging N
-		 * messages and reporting a mismatch. */
+		/* More messages than this window covers: tag page lost or
+		 * something injected. Window is unjudgeable either way. */
 		c->rx_overflow = true;
 	}
 }
@@ -743,15 +686,10 @@ static int rx_tier1(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
 		return rc;
 	}
 
-	/*
-	 * REPLAY IS CLOSED BY THE COUNTER AND BY NOTHING ELSE. The tag covers
-	 * no payload, so a recorded page is a perfectly valid tag forever; what
-	 * makes it worthless is that its counter has already been spent. The
-	 * check is before the MAC because a replay is not a forgery and must
-	 * not be counted as one - and because refreshing the freshness anchor
-	 * from a recording would let an attacker hold a stream "verified" after
-	 * the sensor had gone.
-	 */
+	/* Replay is closed by the counter alone: the tag covers no payload, so
+	 * a recorded page stays validly-tagged forever, and only a spent
+	 * counter makes it worthless. Checked before the MAC so a replay isn't
+	 * counted as a forgery and can't refresh the freshness anchor. */
 	if (c->rx_t1_any && full <= c->rx_t1_last) {
 		stat_bump(&c->stats.tier1_replays);
 		return RADIANT_SEC_EREPLAY;
@@ -800,12 +738,9 @@ static int rx_tier2(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
 		return rc;
 	}
 
-	/*
-	 * The window is judged on what arrived, and a hole in it is not a
-	 * forgery: a window CMAC is not self-synchronising under loss the way
-	 * the spread tag is, and that regression is the honest reason this tier
-	 * is off by default.
-	 */
+	/* Judged on what arrived; a hole is not a forgery. A window CMAC is
+	 * not self-synchronising under loss the way the spread tag is - the
+	 * reason this tier is off by default. */
 	if (!c->rx_overflow && c->rx_absorbed == (uint8_t)(c->n - 1u)) {
 		rc = radiant_sec_compat_tier2_tag(&c->k_auth, c->epoch,
 						  c->devnum,
@@ -850,14 +785,9 @@ int radiant_sec_compat_rx(uint8_t ch, uint8_t sub, const uint8_t *pay,
 		return RADIANT_SEC_EINVAL;
 	}
 
-	/*
-	 * EVERYTHING BUT THE TAG PAGE IS COVERED, including the Tier I page,
-	 * the beacon and the common pages: the window is N consecutive
-	 * TRANSMITTED messages rather than N data messages, which is what keeps
-	 * a receiver counting messages instead of deciding which ones were
-	 * "data" - a decision it would have to make with profile knowledge this
-	 * layer does not have.
-	 */
+	/* Everything but the tag page is covered (Tier I page, beacon, common
+	 * pages): the window is N consecutive transmitted messages, not N
+	 * data messages, so a receiver just counts rather than classifying. */
 	if (sub != RADIANT_SEC_COMPAT_SUBTYPE_TIER_II) {
 		rx_absorb(c, pay);
 	}
@@ -910,17 +840,11 @@ int radiant_sec_compat_hint(uint8_t ch, uint32_t epoch,
 	return hint_of(&c->k_id, epoch, out);
 }
 
-/* ── The derived locator ────────────────────────────────────────────────────
- *
- * trunc16( CMAC(K_id, "priv" || epoch[4 LE]) ), 0x0000 dropped, then the same
- * with a 1-byte suffix 0x00, 0x01, ... The header carries the argument for
- * folding the exclusion and the collision rule into one walk; this is the walk.
- *
- * READ LITTLE-ENDIAN, which is the same choice the beacon's locator field
- * already made: a device number goes on the air low byte first, so composing
- * the first two CMAC bytes low-first means the bytes on the air ARE the first
- * two bytes of the tag, in tag order, and a capture can be checked against a
- * CMAC without reversing anything.
+/* ── The derived locator ─────────────────────────────────────────────────
+ * trunc16( CMAC(K_id, "priv" || epoch[4 LE]) ), 0x0000 dropped, then the
+ * same with a 1-byte suffix 0x00, 0x01, ... Read little-endian, matching
+ * the beacon's locator field, so the on-air bytes equal the tag's first
+ * two bytes without reversing anything.
  */
 #define COMPAT_LOCATOR_MSG_MAX 9u   /* "priv" + epoch[4] + one suffix byte */
 #define COMPAT_LOCATOR_WALK    257u /* the unsuffixed derivation plus all 256 */
@@ -1032,14 +956,10 @@ static int tagged(const struct radiant_sec_key *k, uint32_t epoch,
 	return rc;
 }
 
-/*
- * Armed enough to authenticate, which is a WEAKER condition than ctx_armed():
- * a key and an epoch, and no requirement that either attestation tier is
- * switched on. `physical` + `silent` is the one policy combination permitted
- * with both tiers off, and a node in it still has a key - so refusing here on
- * the tier switches would refuse the exempted configuration for a reason that
- * has nothing to do with it.
- */
+/* Armed enough to authenticate: a key and an epoch, weaker than ctx_armed()
+ * because it doesn't require either attestation tier on. `physical` +
+ * `silent` is the one policy combo permitted with both tiers off, and it
+ * still has a key. */
 static bool ctx_keyed(const struct compat_ctx *c)
 {
 	return c != NULL && c->used && c->epoch_set && c->k_root.bits != 0u;
@@ -1108,12 +1028,9 @@ static int cmd_tag(struct compat_ctx *c, uint64_t when_us, const uint8_t *msg,
 	struct radiant_sec_key k_cmd;
 	int                    rc;
 
-	/*
-	 * Derived per call and destroyed. A command is a rare event - a node
-	 * takes one when a person asks for privacy - so caching K_cmd would
-	 * spend a key slot in every context for one CMAC a minute, and the
-	 * slot is the scarce thing on a node with no key store.
-	 */
+	/* Derived per call and destroyed rather than cached: a command is
+	 * rare, and a key slot is the scarce resource on a node with no key
+	 * store. */
 	memset(&k_cmd, 0, sizeof(k_cmd));
 	rc = radiant_sec_kdf(&c->k_root, RADIANT_SEC_LABEL_CMD, c->epoch,
 			     c->base_devnum, &k_cmd);
@@ -1174,12 +1091,8 @@ int radiant_sec_compat_cmd_verify(uint8_t ch, uint64_t t_sync,
 						      : RADIANT_SEC_EBADMAC;
 }
 
-/*
- * What a candidate epoch is tested against. An internal struct, which the
- * no-structs-in-signatures rule permits and in fact wants: the alternative is
- * three near-identical searches, and three copies of a bounded loop is three
- * places for one of the bounds to go missing.
- */
+/* What a candidate epoch is tested against; kept as one internal struct so
+ * the three searches share one bounded loop instead of three near-copies. */
 struct epoch_probe {
 	const uint8_t *hint;    /* the beacon's, or NULL for a tag probe */
 	const uint8_t *tag;
@@ -1226,19 +1139,11 @@ static bool probe_at(struct compat_ctx *c, const struct epoch_probe *p,
 }
 
 /*
- * The three bounded phases, in the order the cost table makes sense in.
- *
- * Forward first, because being behind is the ordinary condition and
- * `last_seen` itself is the ordinary answer - a sensor that has not rebooted
- * since. The backward probe is second and small; it is for a receiver that
- * recorded a candidate which never confirmed, not for a sensor that moved
- * backwards. The absolute scan is last and is the re-provisioned case: a strap
- * whose boot counter was reset is at a small epoch, so it is found in a handful
- * of operations once the search stops assuming forward motion.
- *
- * EVERY PHASE HAS A CEILING AND `ops` COUNTS ACROSS ALL THREE, so a caller can
- * hold the number against the published table and a failure costs a bounded
- * amount of time rather than a receiver that never comes back.
+ * Three bounded phases: forward (the ordinary case - sensor hasn't
+ * rebooted), backward (small, for a candidate that never confirmed), then
+ * an absolute scan from 0 (the re-provisioned/reset-strap case). `ops`
+ * counts across all three and every phase has a ceiling, so a failure costs
+ * bounded time rather than a receiver that never comes back.
  */
 static int epoch_search(struct compat_ctx *c, const struct epoch_probe *p,
 			uint32_t last_seen, uint32_t *found, uint32_t *ops,

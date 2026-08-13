@@ -9,33 +9,19 @@
  * Naming authority: ANT Message Protocol and Usage Rev 5.1 (D00000652)
  * Human-readable companion: docs/ant-serial-protocol.md
  *
- * Why every name here carries an ANTW_ prefix
+ * Why every name here carries an ANTW_ prefix: sdk-ant's ant_parameters.h
+ * defines its error codes as computed expressions rather than literals, so an
+ * unprefixed constant of ours would be a hard macro redefinition error if it
+ * ever shared a translation unit with sdk-ant's - which src/ant_radio_sdk_ant.c
+ * does, on purpose, to BUILD_ASSERT every ANTW_* constant against its sdk-ant
+ * counterpart. It also keeps src/ant_serial_bridge.c textually free of
+ * Garmin's API names, which matters for the clean-room boundary.
  *
- * This is not house style. sdk-ant's ant_parameters.h defines its error codes as
- * computed expressions - NRF_ANT_ERROR_OFFSET + INVALID_MESSAGE - rather than as
- * literals. C permits a macro to be redefined only with an identical token
- * sequence, so a header of ours that spelled a constant INVALID_MESSAGE could
- * never share a translation unit with sdk-ant's: it is a hard redefinition error,
- * not a warning, and no include order fixes it.
+ * The Python module deliberately does NOT carry the prefix - Python already
+ * has module namespaces, so `ant_wire.MESG_ASSIGN_CHANNEL_ID` is unambiguous.
  *
- * The prefix is exactly what makes the two coexist. src/ant_radio_sdk_ant.c is
- * the one file permitted to include both, and it is where every ANTW_* constant
- * is BUILD_ASSERTed against its sdk-ant counterpart. That check costs nothing,
- * runs only where sdk-ant is present - which is the only place it can run - and
- * is why keeping the sdk-ant backend is worth more than a fallback.
- *
- * It also makes src/ant_serial_bridge.c textually free of Garmin's API names,
- * which is not cosmetic either: this is a clean-room rebuild, and the boundary is
- * easier to defend when it is visible in the source.
- *
- * The Python module deliberately does NOT carry the prefix. The collision it
- * solves is a C preprocessor problem, and Python already has module namespaces:
- * `ant_wire.MESG_ASSIGN_CHANNEL_ID` is unambiguous, and keeping the bare spelling
- * makes converting the five tools a matter of deleting a local definition and
- * adding an import, with no renaming at all.
- *
- * Nothing here describes the on-air link layer. This header is about
- * bytes on a USB bulk endpoint or a UART, and about nothing else.
+ * Nothing here describes the on-air link layer. This header is about bytes
+ * on a USB bulk endpoint or a UART, and about nothing else.
  */
 
 #ifndef ANT_WIRE_H_
@@ -71,19 +57,12 @@
 #define ANTW_MSG_OVERHEAD                                    4
 
 /*
- * Largest value the LEN byte may carry. src/usb_ant_class.c:30 states it
- * outright - 'a size byte's worth of body at its MESG_MAX_SIZE_VALUE maximum
- * of 38' - and both USB class files size their frame buffer from the
- * resulting 42. An earlier draft of this file said 20, reasoning from the
- * encryption path: one info-type byte plus ENCRYPTION_USER_DATA_SIZE fills
- * exactly 20, and ant_features.py calls that 'the longest message the parser
- * ever sees'. That is the longest message the *host* sends, not the ceiling.
- * An advanced-burst data message is one channel byte plus
- * ADV_BURST_BLOCK_MAX, so LEN reaches 25 on its own, and an extended receive
- * message adds a flag byte plus three appended fields on top of a payload.
- * Sizing msg_body[] from 20 makes handle_burst() see size = 19, fail its size
- * % 8 check, and silently reject every 24-byte burst packet.
- * [src/usb_ant_class.c:30]
+ * Largest value the LEN byte may carry: 38, per src/usb_ant_class.c:30, which
+ * both USB class files size their frame buffer from (42 with overhead). Not
+ * 20 - the longest message the *host* sends, reasoning from the encryption
+ * path - since an advanced-burst message reaches 25 on its own; sizing
+ * msg_body[] from 20 would make handle_burst() silently reject every
+ * 24-byte burst packet. [src/usb_ant_class.c:30]
  */
 #define ANTW_MAX_SIZE_VALUE                                  38
 
@@ -291,13 +270,10 @@
 /*
  * Background scanning. Bridged as of 2026-08-10: refuses with
  * ANTW_CLOSE_ALL_CHANNELS unless every channel is closed, then takes over
- * channel 0 as a wildcard background-scan slave - the same mechanism
- * MESG_ASSIGN_CHANNEL's extended byte already reaches, one message at a time.
- * The optional synchronous-channel-packets-only byte is accepted and ignored;
- * reporting everything is a superset of the restricted subset. radiant_core
- * backend only - the capabilities reply advertises this on radiant_core and
- * OFF elsewhere, which is why a host with the call (ANT_OpenRxScanMode) sends
- * it only there. [bridge]
+ * channel 0 as a wildcard background-scan slave via MESG_ASSIGN_CHANNEL's
+ * extended byte. The optional synchronous-only byte is accepted and ignored.
+ * radiant_core backend only - the capabilities reply advertises this there
+ * and OFF elsewhere. [bridge]
  */
 #define ANTW_MESG_OPEN_RX_SCAN_MODE_ID                       0x5B
 
@@ -347,12 +323,9 @@
 
 /*
  * Set the channel's device number from the device's own serial number.
- * Implied by the ANT_DLL export ANT_SetSerialNumChannelId, which the
- * archive's export table left unmapped. Not bridged. Both neighbours in the
- * id sequence are confirmed by that same export table (0x63
- * ANT_SetLowPriorityChannelSearchTimeout, 0x66 ANT_RxExtMesgsEnable), which
- * is the corroboration this value rests on. [rev5.1 sec 9.5 + verify:sdk-ant-
- * shim]
+ * Implied by the ANT_DLL export ANT_SetSerialNumChannelId; not bridged.
+ * Corroborated by its neighbours in the id sequence (0x63, 0x66). [rev5.1
+ * sec 9.5 + verify:sdk-ant-shim]
  */
 #define ANTW_MESG_SERIAL_NUM_SET_CHANNEL_ID_ID               0x65
 
@@ -372,10 +345,8 @@
 
 /*
  * Force the crystal oscillator on. Implied by the ANT_DLL export
- * ANT_CrystalEnable, which Zwift resolves and the archive's export table left
- * unmapped. Not bridged. The adjacent 0x6E is confirmed by that export table
- * (ANT_LibConfigCustom), which is the corroboration this value rests on.
- * [rev5.1 sec 9.5 + verify:sdk-ant-shim]
+ * ANT_CrystalEnable, which Zwift resolves. Not bridged. Corroborated by the
+ * adjacent 0x6E (ANT_LibConfigCustom). [rev5.1 sec 9.5 + verify:sdk-ant-shim]
  */
 #define ANTW_MESG_XTAL_ENABLE_ID                             0x6D
 
@@ -427,35 +398,21 @@
 
 /*
  * [filler, enable, rf payload size, required modes, 0, 0, optional modes, 0,
- * 0, (stall lo, stall hi, retry extension)]. Requesting it with index 0
- * returns capabilities, with index 1 the current configuration - and the
- * reply drops the enable byte the command carried. REQUEST REPLY, a different
- * shape from the command above: 0x00 -> 4 bytes
+ * 0, (stall lo, stall hi, retry extension)]. Request index 0 returns
+ * capabilities, index 1 the current configuration (reply drops the enable
+ * byte). REQUEST REPLY: 0x00 -> 4 bytes
  * (ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE); 0x01 -> 10 bytes
- * (ANTW_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE), selected by byte 0 of the
- * MESG_REQUEST that asked, which the reply does not repeat.
- * src/ant_serial_bridge.c picks the reply length from byte 0 of the
- * MESG_REQUEST - `ch ? ..._REQ_CONFIG_SIZE : ..._REQ_CAPABILITIES_SIZE` - and
- * neither reply repeats that byte, so nothing in the reply says which of the
- * two it is. Pairing it with the request that drew it is the only way to
- * know, and that is a fact about this message rather than a limitation of any
- * reader. [bridge, tools]
+ * (ANTW_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE). Neither reply repeats the
+ * selecting byte, so nothing in the reply itself says which shape it is -
+ * only pairing it with the request that drew it does. [bridge, tools]
  */
 #define ANTW_MESG_CONFIG_ADV_BURST_ID                        0x78
 
 /*
- * Command is [filter lo, filter hi] with no channel byte; the reply is
- * [filler, filter lo, filter hi]. That asymmetry is real and is what the
- * round-trip check in ant_features.py exists to catch. REQUEST REPLY, a
- * different shape from the command above: 3 bytes
- * (ANTW_MESG_EVENT_FILTER_CONFIG_REQ_SIZE), selected by nothing - there is
- * only one shape. One shape, one byte longer than the command. The `2..3` on
- * payload_len above is the union of the two and predates this field; it is
- * left as it stands because tools/ant_conformance.py derives its malformed-
- * short and malformed-long cases from those bounds, so narrowing it would
- * change the generated case set and the committed Tier 1 reference transcript
- * would stop being reproducible. The reply side is exact here regardless,
- * which is where the asymmetry actually shows. [bridge, tools]
+ * Command is [filter lo, filter hi] with no channel byte; reply is
+ * [filler, filter lo, filter hi] - one byte longer, which is what the
+ * round-trip check in ant_features.py exists to catch. REQUEST REPLY: one
+ * shape, 3 bytes (ANTW_MESG_EVENT_FILTER_CONFIG_REQ_SIZE). [bridge, tools]
  */
 #define ANTW_MESG_EVENT_FILTER_CONFIG_ID                     0x79
 
@@ -474,29 +431,23 @@
 
 /*
  * User NVM configuration page. No sdk-ant API; not bridged. Implied by the
- * ANT_DLL export ANT_ConfigUserNVM, which the archive's export table left
- * unmapped. Both neighbours are confirmed by that table (0x7B
- * ANT_SetSelectiveDataUpdateMask, 0x7D-0x7F encryption), which is the
- * corroboration this value rests on. [rev5.1 sec 9.5 + verify:sdk-ant-shim]
+ * ANT_DLL export ANT_ConfigUserNVM, corroborated by its neighbours (0x7B
+ * ANT_SetSelectiveDataUpdateMask, 0x7D-0x7F encryption). [rev5.1 sec 9.5 +
+ * verify:sdk-ant-shim]
  */
 #define ANTW_MESG_USER_CONFIG_PAGE_ID                        0x7C
 
 /*
  * Write [channel, mode, key number, decimation rate] - compiled out unless
- * CONFIG_ANT_DONGLE_ENCRYPTION. The read side is always bridged: requesting
- * it with an ENCRYPTION_INFO_GET_* index returns [info type, data...], the
- * info type echoed at byte 0. REQUEST REPLY, a different shape from the
- * command above: 0x00 -> 2 bytes
+ * CONFIG_ANT_DONGLE_ENCRYPTION. Read side always bridged: an
+ * ENCRYPTION_INFO_GET_* request returns [info type, data...], the type
+ * echoed at byte 0. REQUEST REPLY: 0x00 -> 2 bytes
  * (ANTW_MESG_CONFIG_ENCRYPT_REQ_CAPABILITIES_SIZE); 0x01 -> 5 bytes
  * (ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_ID_SIZE); 0x02 -> 20 bytes
- * (ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_USER_DATA_SIZE), selected by the info
- * type the reply echoes at byte 0. Three reply shapes behind one id, and the
- * reply says which it is: the ENCRYPTION_INFO_GET_* type is echoed at byte 0,
- * so a reader with no memory of the request can still check the length
- * exactly. An index that is not one of these three is refused with a
- * RESPONSE_EVENT naming 0x4D rather than answered with a 0x7D - the reply-
- * size switch has no default that could send a zero-length frame, which is
- * what case 4d-request-encrypt-enable-3 pins. [bridge, tools]
+ * (ANTW_MESG_CONFIG_ENCRYPT_REQ_CONFIG_USER_DATA_SIZE). Unlike the
+ * advanced-burst reply above, the echoed type byte lets a reader check length
+ * with no memory of the request. An unrecognised index is refused with a
+ * RESPONSE_EVENT naming 0x4D. [bridge, tools]
  */
 #define ANTW_MESG_ENCRYPT_ENABLE_ID                          0x7D
 
@@ -545,29 +496,22 @@
 
 /*
  * ANTW_MESG_RSSI_SEARCH_THRESHOLD_ID is UNRESOLVED. Proximity search
- * threshold expressed in RSSI rather than in the proximity bins
- * MESG_PROX_SEARCH_CONFIG (0x71) uses. Implied by the ANT_DLL export
- * ANT_RSSI_SetSearchThreshold. Believed to sit in the 0xC0 block of AP2-era
- * extension messages, but no value in that block is corroborated by anything
- * in this repository - the whole host-callable API in archive/host-
- * api/ant_dll_exports.json tops out at 0x7B - so no number is recorded here.
- * The Wave 2 shim looked and came back empty as well: sdk-ant v2.1.0 defines
- * no such id anywhere in its headers or sources, so this stays unresolved
- * rather than merely unverified. Recover it in src/ant_radio_sdk_ant.c and
- * BUILD_ASSERT it there; see the unresolved table in docs/ant-serial-
- * protocol.md. [host-api + verify:sdk-ant-shim]
+ * threshold in RSSI rather than the bins MESG_PROX_SEARCH_CONFIG (0x71)
+ * uses. Implied by the ANT_DLL export ANT_RSSI_SetSearchThreshold. Believed
+ * to sit in the 0xC0 AP2-era extension block, but no value there is
+ * corroborated anywhere in this repository, and sdk-ant v2.1.0 defines no
+ * such id either. Recover it in src/ant_radio_sdk_ant.c and BUILD_ASSERT it
+ * there; see the unresolved table in docs/ant-serial-protocol.md.
+ * [host-api + verify:sdk-ant-shim]
  */
 
 /*
- * ANTW_MESG_SLEEP_ID is UNRESOLVED. Put the device into its low-power sleep
- * state. Implied by the ANT_DLL export ANT_SleepMessage, which Zwift
- * resolves. Same 0xC0 block and the same lack of corroboration as
- * MESG_RSSI_SEARCH_THRESHOLD_ID; no number is recorded. The Wave 2 shim found
- * the name referenced in sdk-ant but never defined - the only occurrence is
- * inside a commented-out dispatch arm - so there is no value to recover there
- * either. Recover it in src/ant_radio_sdk_ant.c and BUILD_ASSERT it there;
- * see the unresolved table in docs/ant-serial-protocol.md. [host-api +
- * verify:sdk-ant-shim]
+ * ANTW_MESG_SLEEP_ID is UNRESOLVED. Low-power sleep state. Implied by the
+ * ANT_DLL export ANT_SleepMessage, which Zwift resolves. Same 0xC0 block and
+ * lack of corroboration as MESG_RSSI_SEARCH_THRESHOLD_ID; sdk-ant references
+ * the name only inside a commented-out, never-defined dispatch arm. Recover
+ * in src/ant_radio_sdk_ant.c and BUILD_ASSERT it there; see the unresolved
+ * table in docs/ant-serial-protocol.md. [host-api + verify:sdk-ant-shim]
  */
 
 /* ------------------------------------------------------------------------
@@ -635,17 +579,12 @@
 #define ANTW_MESG_CONFIG_ADV_BURST_REQ_CONFIG_SIZE           10
 
 /*
- * The advanced-burst capabilities reply: byte 0 is a maximum packet size
- * code, byte 1 is a supported-modes bitfield, bytes 2 and 3 are reserved and
- * zero. Not visible in this repository - ant_features.py reads only the first
- * two bytes and prints the rest as hex, and no captured reply is committed -
- * so it was recovered by the Wave 2 shim and is BUILD_ASSERTed in
- * src/ant_radio_sdk_ant.c. It had to be: this one is the LEN byte on a reply
- * the bridge composes, so no local substitute is legitimate, and while it was
- * unresolved the capabilities form of the request declined. Used at
- * src/ant_radio_stub.c:254, where it bounds the memset; the #ifdef on this
- * name that stood in for it there now resolves, so the fallback has been
- * removed. [sdk-ant-shim + verify:sdk-ant-shim]
+ * The advanced-burst capabilities reply: byte 0 is a max packet size code,
+ * byte 1 a supported-modes bitfield, bytes 2-3 reserved and zero. Recovered
+ * and BUILD_ASSERTed in src/ant_radio_sdk_ant.c, since it is the LEN byte on
+ * a reply the bridge composes and no local substitute was legitimate while
+ * unresolved. Used at src/ant_radio_stub.c:254 to bound a memset.
+ * [sdk-ant-shim + verify:sdk-ant-shim]
  */
 #define ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE     4
 
@@ -1437,13 +1376,10 @@
 #define ANTW_CAPABILITIES_ENCRYPTED_CHANNEL_ENABLED          0x80
 
 /*
- * byte 7 - advanced_options_4. Observed as 0x8D on this firmware. The bit
- * names are not recoverable from this repository - K1 left them blank rather
- * than guess - so they were recovered by the Wave 2 shim and are
- * BUILD_ASSERTed in src/ant_radio_sdk_ant.c. Seven of the eight are named
- * below; bit 0x80 is set in the observed reply and has no name in the source
- * the shim could check, so it is left unnamed for the same reason the whole
- * byte used to be.
+ * byte 7 - advanced_options_4. Observed as 0x8D on this firmware; the bit
+ * names were recovered and BUILD_ASSERTed in src/ant_radio_sdk_ant.c. Seven
+ * of the eight are named below; bit 0x80 has no corroborated name and stays
+ * unnamed.
  */
 #define ANTW_CAPABILITIES_OFFSET_ADVANCED_OPTIONS_4          7
 

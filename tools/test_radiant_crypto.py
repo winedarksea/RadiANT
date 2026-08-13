@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Published vectors for tools/radiant_crypto.py.
 
-    C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe -m unittest discover -s tools -p "test_*.py"
+    python -m unittest discover -s tools -p "test_*.py"
 
 Four published sets and one cross-check:
 
@@ -15,15 +15,13 @@ Four published sets and one cross-check:
                                          docs/radiant-security.md pins
 
 The same vectors run in C in radiant_core/tests/src/test_sec_aes.c, and the KDF
-and nonce values below appear there as literals, so the two implementations are
-checked against each other and not only against themselves. That matters more
-than it sounds: both were written from the same identity for MixColumns, and
-two implementations of one idea agreeing proves less than either agreeing with
-NIST.
+and nonce values below appear there as literals, so the two implementations
+check against each other, not only against themselves - two implementations
+of one idea agreeing proves less than either agreeing with NIST.
 
-No board, no toolchain, no `native_sim` - which is the point. Every C assertion
-in this project runs only in CI on Linux, so this is the layer a developer
-iterates against on Windows.
+No board, no toolchain, no `native_sim`: every C assertion in this project
+runs only in CI on Linux, so this is the layer a developer iterates against
+on Windows.
 """
 
 from __future__ import annotations
@@ -61,8 +59,7 @@ class TestAes128(unittest.TestCase):
         self.assertEqual(got.hex(), "3925841d02dc09fbdc118597196a0b32")
 
     def test_key_length_is_refused_loudly(self):
-        # A truncated or padded key is a wrong answer that looks like a right
-        # one, so it raises rather than being coerced.
+        # A truncated/padded key raises rather than being coerced.
         with self.assertRaises(ValueError):
             rc.encrypt_block(bytes(15), bytes(16))
         with self.assertRaises(ValueError):
@@ -89,10 +86,8 @@ class TestCmac(unittest.TestCase):
                 self.assertEqual(got.hex(), want)
 
     def test_multiple_of_sixteen_uses_the_other_subkey(self):
-        # The case an incremental implementation gets wrong: a message whose
-        # length is a multiple of 16 takes K1 and no padding, and one byte
-        # shorter takes K2 and a 0x80 pad. If the two agreed, one of them would
-        # be wrong.
+        # A message length that's a multiple of 16 takes K1 and no padding;
+        # one byte shorter takes K2 and a 0x80 pad, so they must differ.
         a = rc.cmac(RFC4493_KEY, NIST_MESSAGE[:16])
         b = rc.cmac(RFC4493_KEY, NIST_MESSAGE[:15])
         self.assertNotEqual(a, b)
@@ -118,17 +113,14 @@ class TestCtr(unittest.TestCase):
         self.assertEqual(back, NIST_MESSAGE)
 
     def test_partial_block(self):
-        # Five bytes is the length X_CONF actually uses - bytes [2..6] of a
-        # page - so it is worth a vector of its own rather than trusting that
-        # truncating a 16-byte result is the same thing.
+        # Five bytes is what X_CONF actually uses (bytes [2..6] of a page).
         got = rc.ctr_xor(RFC4493_KEY, self.IV, NIST_MESSAGE[:5])
         self.assertEqual(got, self.CIPHERTEXT[:5])
 
     def test_counter_increments_across_the_whole_block(self):
-        # A counter block of all-ones must carry all the way into byte 0, not
-        # wrap the last byte in place. RadiANT never reaches this, but two
-        # implementations disagreeing here would diverge silently on the first
-        # long message.
+        # An all-ones counter block must carry into byte 0, not wrap the
+        # last byte in place; RadiANT never reaches this but two
+        # implementations disagreeing here would diverge on a long message.
         iv = b"\xff" * 16
         stream = rc.ctr_xor(RFC4493_KEY, iv, bytes(32))
         self.assertEqual(stream[:16], rc.encrypt_block(RFC4493_KEY, iv))
@@ -144,9 +136,8 @@ class TestPinnedBlocks(unittest.TestCase):
         self.assertEqual(len(got), 16)
 
     def test_domain_byte_separates_keystream_from_mac(self):
-        # The field the first draft omitted. Without it a keystream block and a
-        # MAC block can coincide under one (epoch, devnum, counter), which is a
-        # scheme that passes every test and leaks the tag key.
+        # Without this field, a keystream block and a MAC block can coincide
+        # under one (epoch, devnum, counter), leaking the tag key.
         args = (7, 0x1234, 9)
         ctr = rc.nonce_block(*args, rc.DOM_CTR)
         mac = rc.nonce_block(*args, rc.DOM_SPREAD_MAC)
@@ -169,8 +160,8 @@ class TestPinnedBlocks(unittest.TestCase):
                     rc.cmac(root, rc.kdf_block(label, 0x11223344, 0xBEEF)))
 
     def test_kdf_vectors_shared_with_the_c_implementation(self):
-        # These literals also appear in radiant_core/tests/src/test_sec_aes.c.
-        # Neither implementation is authoritative; agreeing is the assertion.
+        # Also in radiant_core/tests/src/test_sec_aes.c; agreeing is the
+        # assertion, neither side is authoritative.
         root = bytes(range(16))
         self.assertEqual(rc.kdf(root, "enc", 0x11223344, 0xBEEF).hex(),
                          "58d0157f06ca49c14144c2db93e91b40")
@@ -182,14 +173,13 @@ class TestPinnedBlocks(unittest.TestCase):
                          "4ba0c7a190d3dd0e45243a1dee283b29")
 
     def test_id_label_is_epoch_less(self):
-        # Pinned so two implementations cannot differ: "id" uses epoch = 0, and
-        # passing anything else is a mistake rather than a variant.
+        # "id" uses epoch = 0; anything else is a mistake, not a variant.
         with self.assertRaises(ValueError):
             rc.kdf(bytes(16), "id", 1, 0)
 
     def test_base_devnum_separates_two_sensors_under_one_root(self):
         # A household sharing one root across two same-type sensors: binding
-        # base_devnum into the KDF is what gives each its own keys.
+        # base_devnum into the KDF gives each its own keys.
         root = bytes(range(16))
         self.assertNotEqual(rc.kdf(root, "enc", 5, 1),
                             rc.kdf(root, "enc", 5, 2))
@@ -234,14 +224,13 @@ class TestTransforms(unittest.TestCase):
                 self.assertEqual(len(tag), window)
 
     def test_w_of_one_is_refused(self):
-        # An inline 16-bit tag needs bytes [6..7], no text defines that layout,
-        # and a descriptor declaring a field at bit offsets 32..39 would
-        # silently overlap it. W=1 is reserved for the command page.
+        # W=1 is reserved for the command page (an inline 16-bit tag would
+        # silently overlap a descriptor field at bit offsets 32..39).
         with self.assertRaises(ValueError):
             rc.spread_tag(bytes(16), 0, 0, 0, [bytes(8)])
 
     def test_page_number_is_inside_the_message(self):
-        # D1: leave byte [0] out and flipping the page number reinterprets the
+        # D1: without byte [0], flipping the page number reinterprets the
         # same authenticated bits against a different schema.
         k_auth = self.keys()[rc.LABEL_AUTH]
         a = [bytes([0x01, 0, 1, 2, 3, 4, 5, 0]), bytes([0x01, 1, 1, 2, 3, 4, 5, 0])]
@@ -272,16 +261,15 @@ class TestWindowArithmetic(unittest.TestCase):
                                  counter - start)
 
     def test_a_lost_packet_does_not_desynchronise_the_next_window(self):
-        # The whole reason the index is counter-derived. Drop counter 5 and
-        # counter 6 still lands where it belongs.
+        # Drop counter 5; counter 6 still lands where it belongs.
         window = 4
         self.assertEqual(rc.window_start(6, window), 4)
         self.assertEqual(rc.tag_byte_index(6, window), 2)
 
     def test_every_legal_w_divides_both_wrap_points(self):
-        # The property that makes the scheme self-synchronising through a
-        # byte-counter wrap and a 16-bit counter wrap alike. A future W of 3,
-        # 5 or 6 would break resynchronisation silently.
+        # Makes the scheme self-synchronising through a byte-counter wrap
+        # and a 16-bit counter wrap alike; a future W of 3, 5 or 6 would
+        # break resynchronisation silently.
         for window in rc.LEGAL_W:
             self.assertEqual(256 % window, 0)
             self.assertEqual(65536 % window, 0)
@@ -290,16 +278,13 @@ class TestWindowArithmetic(unittest.TestCase):
 class TestCompatAttestation(unittest.TestCase):
     """docs/radiant-security.md section 11.4 and ADR 0008, byte for byte.
 
-    Every literal in this class also appears in
-    radiant_core/tests/src/test_sec_compat.c. Neither implementation computes
-    the other's expected value at test time and neither is authoritative:
-    agreeing is the assertion, and pinning both is what stops two
-    implementations that share a mistake from reporting it as a pass.
-
-    There is no page here and no profile. The subtype's separation of the two
-    tiers is asserted by building the nonce inputs directly, because a test that
-    checked only a page byte would pass on an implementation that never put the
-    subtype anywhere near the MAC.
+    Every literal here also appears in
+    radiant_core/tests/src/test_sec_compat.c; neither side computes the
+    other's expected value, so agreeing is the assertion. There is no page
+    or profile here - the subtype's separation of the two tiers is asserted
+    by building the nonce inputs directly, since a test checking only a page
+    byte would pass on an implementation that never put the subtype near
+    the MAC.
     """
 
     K_AUTH = bytes(range(16))
@@ -307,10 +292,9 @@ class TestCompatAttestation(unittest.TestCase):
     DEVNUM = 0xBEEF
     COUNTER = 0x0501
 
-    #: Seven synthetic transmitted messages - N = 8 means p_1..p_7 - with no
-    #: profile meaning of any kind. Byte [0] differs from the rest of each so
-    #: that an implementation skipping it, as spread_tag() legitimately does,
-    #: is caught.
+    #: Seven synthetic messages (N=8 means p_1..p_7), no profile meaning.
+    #: Byte [0] differs from the rest of each so a skipped-byte-0
+    #: implementation is caught.
     MSGS = [bytes([0x10 + i] + [i] * 7) for i in range(7)]
 
     def test_nonce_block_is_section_3_3_extended_at_position_9(self):
@@ -326,8 +310,8 @@ class TestCompatAttestation(unittest.TestCase):
         self.assertEqual(got.hex(), "44332211efbe01050402000000000000")
 
     def test_the_compat_domain_byte_is_its_own(self):
-        # Without it a compat tag and a spread tag over the same (epoch,
-        # devnum, counter) are the same block.
+        # Without it, a compat tag and a spread tag over the same (epoch,
+        # devnum, counter) would be the same block.
         args = (self.EPOCH, self.DEVNUM, self.COUNTER)
         self.assertEqual(rc.COMPAT_DOM, 0x04)
         self.assertNotEqual(rc.compat_nonce_block(*args,
@@ -335,9 +319,9 @@ class TestCompatAttestation(unittest.TestCase):
                             rc.nonce_block(*args, rc.DOM_SPREAD_MAC))
 
     def test_the_subtype_reaches_the_mac_and_not_only_the_page(self):
-        # The assertion the whole subtype pin exists for. A subtype written
-        # only into a page byte is chosen by whoever sends the page, so the two
-        # tiers' tags over one counter value would be interchangeable.
+        # A subtype written only into a page byte is chosen by whoever sends
+        # the page, so the two tiers' tags over one counter would be
+        # interchangeable.
         args = (self.EPOCH, self.DEVNUM, self.COUNTER)
         one = rc.cmac(self.K_AUTH,
                       rc.compat_nonce_block(*args, rc.COMPAT_SUBTYPE_TIER_I))
@@ -347,8 +331,8 @@ class TestCompatAttestation(unittest.TestCase):
         self.assertEqual(two.hex(), "18d0a91fa67558479b5e3415fe72854e")
         self.assertNotEqual(one, two)
 
-        # The third subtype, which nothing computes yet: pinned now so the
-        # value cannot be spent twice before C8 exists.
+        # The third subtype, unused elsewhere yet: pinned now so the value
+        # cannot be spent twice before C8 exists.
         three = rc.compat_nonce_block(*args, rc.COMPAT_SUBTYPE_ANNOUNCE)
         self.assertEqual(three[9], 0x03)
         self.assertEqual(len({rc.COMPAT_SUBTYPE_TIER_I,
@@ -356,8 +340,8 @@ class TestCompatAttestation(unittest.TestCase):
                               rc.COMPAT_SUBTYPE_ANNOUNCE}), 3)
 
     def test_an_illegal_subtype_is_refused(self):
-        # The subtype is a nibble because it also has to fit in a page byte
-        # beside something else.
+        # The subtype is a nibble: it also has to fit in a page byte beside
+        # something else.
         for sub in (0, 0x10, 0xFF, -1):
             with self.subTest(sub=sub), self.assertRaises(ValueError):
                 rc.compat_nonce_block(self.EPOCH, self.DEVNUM, self.COUNTER,
@@ -367,8 +351,8 @@ class TestCompatAttestation(unittest.TestCase):
         got = rc.compat_tier1_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
                                   self.COUNTER)
         self.assertEqual(got.hex(), "86a63d5114")
-        # trunc40 takes the FIRST five bytes; which end a truncation takes is
-        # exactly what two implementations settle differently.
+        # trunc40 takes the FIRST five bytes - the kind of detail two
+        # implementations settle differently.
         self.assertEqual(
             got,
             rc.cmac(self.K_AUTH,
@@ -379,7 +363,7 @@ class TestCompatAttestation(unittest.TestCase):
         self.assertEqual(rc.COMPAT_TIER_I_TAG_BITS, 40)
 
     def test_tier1_covers_the_counter_the_devnum_and_the_epoch(self):
-        # It covers no payload, so these three are the whole of what it says.
+        # Covers no payload, so these three are the whole of what it says.
         base = rc.compat_tier1_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
                                    self.COUNTER)
         for label, args in (
@@ -402,8 +386,8 @@ class TestCompatAttestation(unittest.TestCase):
             rc.compat_tier2_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
                                 self.COUNTER, self.MSGS).hex(),
             "b61aa9878f10")
-        # A second window size, because an implementation that hard-coded 8
-        # would pass everything above.
+        # A second window size: an implementation that hard-coded 8 would
+        # pass everything above.
         self.assertEqual(
             rc.compat_tier2_tag(self.K_AUTH, self.EPOCH, self.DEVNUM, 0x0007,
                                 self.MSGS[:3]).hex(),
@@ -420,10 +404,10 @@ class TestCompatAttestation(unittest.TestCase):
             "221f4a94dc76")
 
         # Byte [0] and byte [7] specifically. The spread tag excludes [7]
-        # because that is where it rides; a compat tag rides on a page of its
-        # own and covers all eight - and leaving [0] out would let an attacker
-        # who flips it reinterpret the same authenticated bits against a
-        # different schema.
+        # because that is where it rides; a compat tag rides on a page of
+        # its own and covers all eight, since omitting [0] would let an
+        # attacker flip the page number and reinterpret the same
+        # authenticated bits against a different schema.
         base = rc.compat_tier2_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
                                    self.COUNTER, self.MSGS)
         for index in (0, 7):
@@ -439,7 +423,7 @@ class TestCompatAttestation(unittest.TestCase):
 
     def test_tier2_message_order_is_transmission_order(self):
         # A MAC over a set rather than a sequence would let an attacker
-        # reorder a window's history and keep it verifiable.
+        # reorder a window's history and it would still verify.
         swapped = list(self.MSGS)
         swapped[0], swapped[-1] = swapped[-1], swapped[0]
         self.assertNotEqual(
@@ -456,16 +440,15 @@ class TestCompatAttestation(unittest.TestCase):
                                 self.COUNTER + 1, self.MSGS))
 
     def test_tier2_refuses_an_unenumerated_window(self):
-        # N is simultaneously the airtime cost, the verification latency and
-        # the DoS amplification factor, so an unenumerated N is three
-        # surprises. `messages` is N-1 long, so these counts are the illegal
-        # ones.
+        # N is simultaneously airtime cost, verification latency and DoS
+        # amplification factor. `messages` is N-1 long, so these counts are
+        # the illegal ones.
         for count in (0, 1, 2, 4, 5, 6, 8, 11, 23, 30, 32, 63):
             with self.subTest(messages=count), self.assertRaises(ValueError):
                 rc.compat_tier2_tag(self.K_AUTH, self.EPOCH, self.DEVNUM,
                                     self.COUNTER, [bytes(8)] * count)
 
-        # And every legal one is accepted, so the check above cannot pass by
+        # Every legal one is accepted, so the check above isn't just
         # refusing everything.
         for window in rc.COMPAT_WINDOW_SIZES:
             with self.subTest(n=window):
@@ -481,9 +464,8 @@ class TestCompatAttestation(unittest.TestCase):
                                     self.COUNTER, [bad] * 7)
 
     def test_the_enumerated_sets_are_what_adr_0008_pins(self):
-        # scripts/check_profile_registry.py asserts the same values against
-        # this module. Stated here too so a change fails a fast test rather
-        # than only the registry checker.
+        # scripts/check_profile_registry.py asserts the same values; stated
+        # here too so a change fails a fast test, not just the registry check.
         self.assertEqual(rc.COMPAT_WINDOW_SIZES, (4, 8, 16, 32))
         self.assertEqual(rc.COMPAT_COUNTDOWN_LENGTHS, (16, 32, 64, 128))
         self.assertEqual(rc.COMPAT_DEFAULT_WINDOW, 8)
@@ -494,16 +476,16 @@ class TestCompatLocator(unittest.TestCase):
     """docs/radiant-security.md section 11.5, the derived locator.
 
     Every literal here also appears in
-    radiant_core/tests/src/test_profile_private.c, under a channel keyed with
-    the same root and the same provisioning device number, and neither side
-    computes the other's expectation. That agreement is the whole test: a node
-    that derives its private device number one way and a keyholder that derives
-    it another way do not fail loudly, they simply never meet.
+    radiant_core/tests/src/test_profile_private.c, under a channel keyed
+    with the same root and provisioning device number, and neither side
+    computes the other's expectation - a node and a keyholder deriving the
+    private device number two different ways would not fail loudly, they'd
+    simply never meet.
 
     K_ID is the "id" key of the root radiant_core/tests/src/test_profile_*.c
     pins, under that suite's NODE_DEVNUM. The class asserts the derivation as
-    well as pinning the value, so a change to the KDF cannot quietly leave this
-    file testing a key nothing uses.
+    well as pinning the value, so a KDF change cannot quietly leave this file
+    testing a key nothing uses.
     """
 
     ROOT = bytes(range(16))
@@ -515,13 +497,11 @@ class TestCompatLocator(unittest.TestCase):
     EPOCH = 7
     CANDIDATES = (0xBB18, 0xB4B5, 0x8A57, 0x472C)
 
-    #: THE WILDCARD CASE, FOUND RATHER THAN CONSTRUCTED. Under this key the
-    #: unsuffixed derivation at epoch 1315 comes out 0x0000, which is the ANT
-    #: wildcard and cannot be a master's device number. It is the one epoch in
-    #: ~65 000 where the exclusion rule does something, and pinning it is the
-    #: only way to test that rule against a real derivation rather than against
-    #: a mocked one - an untested exclusion is a rule two implementations will
-    #: disagree about exactly once, on a device somebody owns.
+    #: The wildcard case, found rather than constructed: under this key, the
+    #: unsuffixed derivation at epoch 1315 comes out 0x0000 (the ANT
+    #: wildcard, illegal as a device number) - the one epoch in ~65000 where
+    #: the exclusion rule does anything, so pinning it tests that rule
+    #: against a real derivation rather than a mocked one.
     WILDCARD_EPOCH = 1315
     WILDCARD_FIRST = 0x50E2   # the suffix-0x00 derivation, promoted to first
     WILDCARD_SECOND = 0xDEAB  # the suffix-0x01 derivation
@@ -535,13 +515,13 @@ class TestCompatLocator(unittest.TestCase):
             self.assertEqual(
                 rc.compat_private_locator(self.K_ID, self.EPOCH, attempt),
                 expected,
-                "candidate %d moved" % attempt)
+                f"candidate {attempt} moved")
 
     def test_the_message_is_priv_then_the_epoch(self):
-        # Written out by hand, because "trunc16(CMAC(K_id, "priv" || epoch))"
-        # has three places to differ - the label's terminator, the epoch's byte
-        # order and the truncation's - and a round trip through the module
-        # would agree with itself in all three.
+        # Written out by hand: "trunc16(CMAC(K_id, "priv" || epoch))" has
+        # three places to differ (label terminator, epoch byte order,
+        # truncation), and a round trip through the module would agree
+        # with itself in all three.
         message = b"priv" + (7).to_bytes(4, "little")
         self.assertEqual(rc.compat_private_locator(self.K_ID, 7, 0),
                          int.from_bytes(rc.cmac(self.K_ID, message)[:2],
@@ -553,9 +533,9 @@ class TestCompatLocator(unittest.TestCase):
 
     def test_the_locator_is_read_in_tag_order(self):
         # A device number goes on the air low byte first, so reading the tag
-        # little-endian means the two bytes ON THE AIR are the first two bytes
-        # of the CMAC, in CMAC order. A capture is then checkable without
-        # reversing anything, which is the reason for the choice.
+        # little-endian means the two on-air bytes are the first two bytes
+        # of the CMAC, in CMAC order - a capture is checkable without
+        # reversing anything.
         message = b"priv" + (7).to_bytes(4, "little")
         tag = rc.cmac(self.K_ID, message)
         devnum = rc.compat_private_locator(self.K_ID, 7, 0)
@@ -584,26 +564,24 @@ class TestCompatLocator(unittest.TestCase):
                     rc.COMPAT_LOCATOR_WILDCARD)
 
     def test_the_candidates_of_one_epoch_are_distinct(self):
-        # They are four CMACs of four different messages, so a repeat would
-        # mean the suffix never reached the block - which would make the
-        # collision rule a loop that tries the same number four times.
+        # Four CMACs of four different messages; a repeat would mean the
+        # suffix never reached the block.
         got = {rc.compat_private_locator(self.K_ID, self.EPOCH, attempt)
                for attempt in range(rc.COMPAT_LOCATOR_TRIES)}
         self.assertEqual(len(got), rc.COMPAT_LOCATOR_TRIES)
 
     def test_the_locator_moves_with_the_epoch_and_with_the_key(self):
-        # An observer without the key cannot predict it, and a node that has
-        # rebooted is somewhere else. Both are the point of deriving it.
+        # An observer without the key cannot predict it; a rebooted node is
+        # somewhere else - both are the point of deriving it.
         self.assertNotEqual(rc.compat_private_locator(self.K_ID, 7),
                             rc.compat_private_locator(self.K_ID, 8))
         self.assertNotEqual(rc.compat_private_locator(self.K_ID, 7),
                             rc.compat_private_locator(b"\xa5" * 16, 7))
 
     def test_it_is_not_the_key_group_hint(self):
-        # Both are CMACs under K_id over the epoch, and the "priv" prefix is
-        # the only thing keeping them apart. Without it the beacon would
-        # broadcast the first three bytes of the private device number in every
-        # hint, which is the leak the derivation exists to avoid.
+        # Both are CMACs under K_id over the epoch; only the "priv" prefix
+        # keeps them apart. Without it, the beacon would broadcast the
+        # private device number's bytes in every hint.
         hint = rc.compat_key_group_hint(self.K_ID, self.EPOCH)
         devnum = rc.compat_private_locator(self.K_ID, self.EPOCH, 0)
         self.assertNotEqual(bytes([devnum & 0xFF, devnum >> 8]), hint[:2])
@@ -617,9 +595,9 @@ class TestCompatLocator(unittest.TestCase):
 class TestCompatCommand(unittest.TestCase):
     """The inbound command's tag - docs/radiant-security.md section 11.6.
 
-    Mirrored by radiant_core/tests/src/test_profile_private.c, which builds a
-    command with these bytes and asserts the node accepts it, and mutates each
-    of them in turn and asserts it does not.
+    Mirrored by radiant_core/tests/src/test_profile_private.c, which builds
+    a command with these bytes, asserts the node accepts it, then mutates
+    each byte in turn and asserts it does not.
     """
 
     ROOT = bytes(range(16))
@@ -650,9 +628,8 @@ class TestCompatCommand(unittest.TestCase):
             rc.cmac(self.k_cmd(), block + self.COMMAND)[:5])
 
     def test_a_keyholder_who_can_verify_cannot_forge(self):
-        # K_auth verifies everything the node broadcasts and is held by every
-        # receiver. If it also signed commands, every receiver could mute the
-        # sensor for every other one.
+        # K_auth is held by every receiver; if it also signed commands, any
+        # receiver could mute the sensor for every other one.
         k_auth = rc.kdf(self.ROOT, rc.LABEL_AUTH, self.EPOCH, self.BASE_DEVNUM)
         self.assertNotEqual(
             rc.compat_command_tag(k_auth, self.EPOCH, self.DEVNUM,
@@ -685,8 +662,8 @@ class TestCounterReconstruction(unittest.TestCase):
                                delta=1)
 
     def test_nearest_rollover_is_picked(self):
-        # The receiver sees byte 0x02 with an expected index of 0x00FF: the
-        # right answer is 0x0102, not 0x0002.
+        # Byte 0x02 seen with an expected index of 0x00FF: the right answer
+        # is 0x0102, not 0x0002.
         counter, delta = rc.resolve_counter(0x00FF, 0x02)
         self.assertEqual(counter, 0x0102)
         self.assertEqual(delta, 0)
@@ -697,8 +674,8 @@ class TestCounterReconstruction(unittest.TestCase):
         self.assertEqual(delta, 1)
 
     def test_mid_epoch_join_needs_no_arrival_history(self):
-        # The normal case, not an edge case: a receiver that has heard nothing
-        # still resolves the counter from the epoch phase alone.
+        # The normal case: a receiver that has heard nothing still resolves
+        # the counter from the epoch phase alone.
         counter, _ = rc.resolve_counter(5000, 5000 & 0xFF)
         self.assertEqual(counter, 5000)
 
@@ -706,9 +683,9 @@ class TestCounterReconstruction(unittest.TestCase):
 class TestNodeIdentity(unittest.TestCase):
     """ADR 0009: what a node with no host derives from K_dev and a counter.
 
-    These are the vectors radiant_core/tests/src/test_node_ident.c asserts, and
-    the two implementations share no code, so agreement here is evidence rather
-    than tautology.
+    Vectors radiant_core/tests/src/test_node_ident.c also asserts; the two
+    implementations share no code, so agreement here is evidence rather than
+    tautology.
     """
 
     K_DEV = bytes(range(16))
@@ -716,7 +693,7 @@ class TestNodeIdentity(unittest.TestCase):
 
     def test_tier0_device_number_is_derived_and_in_range(self):
         self.assertEqual(rc.node_tier0_devnum(self.K_DEV), self.TIER0_DEVNUM)
-        # 0 is the ANT wildcard and must never come out of this.
+        # 0 is the ANT wildcard and must never come out.
         for byte in range(256):
             key = bytes([byte]) * 16
             devnum = rc.node_tier0_devnum(key)
@@ -737,25 +714,24 @@ class TestNodeIdentity(unittest.TestCase):
             "49a819493dfa29f1f4085a66d1b5c438")
 
     def test_the_scalar_is_deterministic_in_the_counter(self):
-        # The whole point: the same counter is the same private key, which is
-        # why the counter may never repeat.
+        # The same counter is the same private key, which is why the
+        # counter may never repeat.
         first = rc.node_pair_scalar(self.K_DEV, 4, 1)
         self.assertEqual(first, rc.node_pair_scalar(self.K_DEV, 4, 1))
         self.assertNotEqual(first, rc.node_pair_scalar(self.K_DEV, 5, 1))
         self.assertNotEqual(first, rc.node_pair_scalar(b"\xff" * 16, 4, 1))
 
     def test_the_two_halves_differ(self):
-        # A 32-byte output built by calling a 128-bit KDF twice with an
-        # unchanged block would be the same 16 bytes repeated, which is the
-        # mistake this asserts against.
+        # A 32-byte output from calling a 128-bit KDF twice with an
+        # unchanged block would repeat the same 16 bytes.
         scalar = rc.node_pair_scalar(self.K_DEV, 3, 9)
         self.assertEqual(len(scalar), rc.NODE_PAIR_SCALAR_BYTES)
         self.assertNotEqual(scalar[:16], scalar[16:])
 
     def test_the_length_field_is_bound(self):
-        # [L]_2 = 256 here and 128 in kdf_block(), so the first block of the
-        # pairing derivation is NOT the 128-bit "pair" key. If it were, a caller
-        # that reached for the ordinary KDF would silently get half a scalar
+        # [L]_2 = 256 here vs. 128 in kdf_block(), so the first block of the
+        # pairing derivation is NOT the 128-bit "pair" key - else a caller
+        # reaching for the ordinary KDF would silently get half a scalar
         # that happened to match.
         self.assertNotEqual(
             rc.node_pair_scalar(self.K_DEV, 1, self.TIER0_DEVNUM)[:16],

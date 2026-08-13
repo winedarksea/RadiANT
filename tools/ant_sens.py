@@ -3,25 +3,15 @@
 
 """Measure a receiver's sensitivity by walking the *transmitter* down a power ladder.
 
-READ THIS BEFORE STOPPING THE TOOL BECAUSE IT LOOKS LIKE A SWEEP THAT WAS BANNED.
-
-There are two power sweeps in this project's history and they are not the same
-experiment:
-
-  * The one that is closed swept the **dongle's own transmit power** against
-    packet loss at high SNR, looking for a link that was never marginal. It
-    found nothing, because at 60 dB of margin nothing is there to find. Do not
-    revive it.
-  * This one steps the **master's** transmit power down until the *receiver*
-    starts missing packets, and reports the power at which it misses 5 %. The
-    quantity being measured is the receiver's knee - its sensitivity - and the
-    transmitter is only the instrument's dial.
+Not the same as the (closed) sweep of the dongle's own TX power against loss at
+high SNR, which found nothing at 60 dB of margin. This steps the **master's**
+TX power down until the *receiver* starts missing packets, and reports the
+power at 5 % loss - the receiver's sensitivity knee; the transmitter is only
+the dial.
 
 `[gates.sensitivity]` in tools/ab_gates.toml requires two backends' 5 %-loss
-points to agree within 1 dB, and the methods it originally named - an inline
-attenuator, or a repeatable distance - are both hardware this bench does not
-have. Transmit power is the software substitute: it is the same attenuation,
-applied at the other end of the link, and it is already plumbed end to end.
+points to agree within 1 dB. Transmit power substitutes for the attenuator or
+repeatable distance this bench does not have.
 
     # coarse ladder, six ANT power levels, no firmware change needed anywhere
     python tools/ant_sens.py --tx-serial 1234 --rx-serial 5678 --seconds 60
@@ -34,52 +24,29 @@ applied at the other end of the link, and it is already plumbed end to end.
 as an ANT+ master and paced from EVENT_TX exactly as tools/ant_sim.py does it
 (on a thread, because the receive loop is the other half of the measurement);
 the other is opened as a slave and its stream is handed to
-tools/ant_verify.py's analyser unchanged. Nothing about loss is recounted here -
-`loss (exact)`, counted from the transmitter's own event counter, is read out of
-that analyser's summary.
+tools/ant_verify.py's analyser unchanged. `loss (exact)`, from the
+transmitter's own event counter, is read out of that analyser's summary.
 
-What the ladder can and cannot reach
-------------------------------------
+**Ladder range.** The six ANT power levels span -20 to +8 dBm (28 dB). With
+`--rungs fine` and a transmitter carrying the custom byte of
+MESG_CHANNEL_RADIO_TX_POWER (0x60), the nRF52840 register table reaches
+-40 dBm (48 dB). If the bottom rung still shows no loss, the knee was not
+reached - this reports that rather than extrapolating a fabricated figure; move
+the boards apart or add absorber and rerun.
 
-The six ANT power levels span -20 to +8 dBm: 28 dB, in steps of 4 and 8. With
-`--rungs fine` and a transmitter whose firmware carries the custom byte of
-MESG_CHANNEL_RADIO_TX_POWER (0x60), the nRF52840 register table reaches -40 dBm
-and the span becomes 48 dB in mostly 1-4 dB steps.
+**The RSSI slope check is not decoration.** Every rung's mean RSSI should fall
+~1 dB per commanded dB. It won't if `CONFIG_ANT_DONGLE_TX_POWER_BOOST` folds
+levels 3 and 4 onto the same +8 dBm, if `--rungs fine` is used against the
+wrong `--tx-part` (the raw register values then mean something else), or if
+the firmware predates the custom byte and silently transmits at 0 dBm for
+every fine rung. All three still produce a plausible-looking curve, which is
+why both axes are checked rather than one.
 
-Either way the span is finite, and a desk pair at +8 dBm sits around -30 dBm at
-the receiver while the knee is near -93. **If the bottom rung still shows no
-loss, the knee was not reached** and this reports that rather than
-extrapolating: move the boards apart, put something absorbing between them, and
-run it again. A number extrapolated past the end of the ladder would be a
-fabricated sensitivity figure, which is worse than no figure at all.
-
-The RSSI slope check is not decoration
---------------------------------------
-
-Every rung records the mean RSSI the receiver reported. Across the ladder that
-must fall roughly 1 dB per commanded dB. It does not if:
-
-  * `CONFIG_ANT_DONGLE_TX_POWER_BOOST` is set on the transmitter, which folds
-    levels 3 and 4 onto the same +8 dBm and flattens two rungs into one;
-  * `--rungs fine` is used against a transmitter whose part is not the one
-    `--tx-part` names, in which case the raw register values mean something
-    else entirely and the dial is lying;
-  * the transmitter's firmware predates the custom byte and silently transmits
-    at 0 dBm for every fine rung.
-
-All three produce a plausible-looking curve and a fabricated dB figure. The
-check is what turns those from silent wrong answers into a failure, and it is
-why the ladder is measured on both axes rather than trusted on one.
-
-A note on the transmitter's provenance
---------------------------------------
-
-archive/captures/README.md rules that `ant_sim_py` is not an acceptable
-transmitter for a *profile-conformance* baseline, and that stands. It is
-acceptable here, and the reason the two do not conflict: a sensitivity ladder
-measures RF level, the host pacing this master affects timing, and both sides of
-any A/B see the identical transmitter within one sitting. The JSON records
-`transmitter: ant_sim_py` so nobody has to reconstruct that argument later.
+**Transmitter provenance.** archive/captures/README.md bars `ant_sim_py` as a
+*profile-conformance* baseline transmitter; that does not apply here, since a
+sensitivity ladder measures RF level (not timing) and both sides of any A/B
+see the same transmitter within one sitting. The JSON records
+`transmitter: ant_sim_py`.
 """
 
 from __future__ import annotations
@@ -109,7 +76,7 @@ from ant_probe import (  # noqa: E402
     open_device,
     reset_stack,
 )
-from ant_scan import ANT_PLUS_KEY, ANT_PLUS_FREQ, command  # noqa: E402
+from ant_scan import ANT_PLUS_FREQ, ANT_PLUS_KEY, command  # noqa: E402
 from ant_session import wait_for_close  # noqa: E402
 from ant_wire import (  # noqa: E402
     MESG_CHANNEL_RADIO_TX_POWER_ID,
@@ -118,7 +85,6 @@ from ant_wire import (  # noqa: E402
     MESG_UNASSIGN_CHANNEL_ID,
     RADIO_TX_POWER_LVL_CUSTOM,
 )
-
 
 # ---------------------------------------------------------------------------
 # The dial
@@ -132,14 +98,12 @@ DBM_LEVEL = {dbm: level for level, dbm in LEVEL_DBM.items()}
 
 # Raw TXPOWER register values, per part, for the fine ladder.
 #
-# THIS TABLE IS PART-SPECIFIC AND THERE IS NO WAY TO ASK THE BOARD WHICH PART IT
-# IS. radiant_core/src/radiant_radio_nrf.c says why at length: nRF52840 encodes
-# TXPOWER as signed dBm, so +8 is 0x08 and -40 is 0xD8, and nRF54L15 encodes +8
-# as 0x3F and 0 as 0x18. The same byte means two different powers on the two
-# parts, with no error anywhere on the wrong one.
-#
-# So only parts with an entry here can drive a fine ladder, and the RSSI slope
-# check below is what catches the case where --tx-part named the wrong one.
+# Part-specific and there is no way to ask the board which part it is: per
+# radiant_core/src/radiant_radio_nrf.c, nRF52840 encodes TXPOWER as signed dBm
+# (+8 = 0x08, -40 = 0xD8) while nRF54L15 encodes +8 as 0x3F and 0 as 0x18 - the
+# same byte means two different powers, with no error on the wrong one. Only
+# parts with an entry here can drive a fine ladder; the RSSI slope check below
+# catches a wrong --tx-part.
 PART_FINE_DBM = {
     # radiant_core/src/radiant_radio_nrf.c radiant_txp_table[], which is every
     # setting the part has. The register value is the dBm in two's complement.
@@ -213,20 +177,18 @@ WIDE_BRACKET_DB = 5.0
 def interpolate_knee(steps: list[dict], target_pct: float = 5.0) -> dict:
     """Where the loss curve crosses `target_pct`, in dBm.
 
-    `steps` are rungs in the order they were measured - loudest first - each a
-    dict with `tx_power_dbm` and `loss_pct`. The crossing taken is the first one
-    walking *down* from the loud end: below the knee the curve is noise around
-    the bench floor and can wander back and forth across a 5 % line, and the
-    first time it goes over is the knee. Taking the last crossing instead would
-    report whichever rung happened to bounce lowest at 90 % loss.
+    `steps` are rungs in measured order (loudest first), each with
+    `tx_power_dbm` and `loss_pct`. Takes the first crossing walking *down* from
+    the loud end - below the knee the curve is noise and can wander back and
+    forth across the line, so the last crossing would report whichever rung
+    happened to bounce lowest.
 
-    Linear in (dBm, loss %) between the two bracketing rungs. Packet error rate
-    against SNR is not linear, so this is only as good as the rungs are close -
-    which is exactly what `bracket_db` is reported for, and exactly why the
-    Phase 0 gate is a repeat run rather than an appeal to the arithmetic.
+    Linear interpolation between the two bracketing rungs; PER-vs-SNR is not
+    linear, so this is only as good as the rungs are close, which is what
+    `bracket_db` reports.
 
-    Returns a dict that always carries `reason`; `tx_power_dbm` is None whenever
-    the ladder did not actually contain the crossing. Nothing here extrapolates.
+    Always carries `reason`; `tx_power_dbm` is None if the ladder never
+    contained the crossing. Never extrapolates.
     """
     if len(steps) < 2:
         return {"tx_power_dbm": None, "reason": "fewer than two rungs"}
@@ -243,7 +205,7 @@ def interpolate_knee(steps: list[dict], target_pct: float = 5.0) -> dict:
                        f"the receiver"),
         }
 
-    for above, below in zip(ordered, ordered[1:]):
+    for above, below in zip(ordered, ordered[1:], strict=False):
         if below["loss_pct"] <= target_pct:
             continue
         span = below["loss_pct"] - above["loss_pct"]
@@ -284,15 +246,13 @@ def interpolate_knee(steps: list[dict], target_pct: float = 5.0) -> dict:
 def rssi_slope(steps: list[dict]) -> dict:
     """How far the measured RSSI actually moved per commanded dB.
 
-    A least-squares slope of mean RSSI against commanded transmit power, over
-    the rungs where the receiver still heard enough to have an opinion. One is
-    the right answer and the only right answer: the path between the boards does
-    not care what the transmitter's register says, so a dB commanded is a dB
-    received.
+    Least-squares slope of mean RSSI against commanded TX power, over rungs
+    where the receiver heard enough to have an opinion. 1 is the only right
+    answer: the path loss does not care what the register says.
 
-    Rungs past the knee are excluded. Once most packets are gone the survivors
-    are the ones that faded up, so their mean RSSI stops falling and the slope
-    flattens for a reason that has nothing to do with the dial.
+    Rungs past the knee are excluded - once most packets are gone the
+    survivors are the ones that faded up, flattening the slope for a reason
+    unrelated to the dial.
     """
     usable = [s for s in steps
               if s.get("rssi_dbm_mean") is not None
@@ -310,8 +270,10 @@ def rssi_slope(steps: list[dict]) -> dict:
     if denominator == 0:
         return {"slope": None, "n": len(usable),
                 "reason": "every usable rung commanded the same power"}
-    slope = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / denominator
-    residuals = [y - (mean_y + slope * (x - mean_x)) for x, y in zip(xs, ys)]
+    slope = sum((x - mean_x) * (y - mean_y)
+                for x, y in zip(xs, ys, strict=True)) / denominator
+    residuals = [y - (mean_y + slope * (x - mean_x))
+                for x, y in zip(xs, ys, strict=True)]
     return {
         "slope": slope,
         "n": len(usable),
@@ -323,18 +285,14 @@ def rssi_slope(steps: list[dict]) -> dict:
 # How far the slope may sit from 1, and how far any one rung may sit off the
 # fitted line.
 #
-# The residual bound is not redundant with the slope bound and is the one that
-# does the work. CONFIG_ANT_DONGLE_TX_POWER_BOOST folds levels 3 and 4 onto +8
-# dBm, which collapses the top three rungs of the coarse ladder into one point
-# and leaves the bottom three where they were: the best-fit slope through that
-# is 1.12, comfortably inside any sane slope tolerance, while three of the six
-# rungs sit 3-6 dB off the line. A ladder whose top is squashed and whose bottom
-# is not still walks the right total number of dB, so only the shape gives it
-# away.
+# The residual bound does the real work, not the slope bound: TX_POWER_BOOST
+# collapses the coarse ladder's top three rungs onto one point and leaves the
+# bottom three alone, giving a best-fit slope of 1.12 (inside tolerance) while
+# three rungs sit 3-6 dB off the line - only the residual catches it.
 #
-# 3 dB is loose against a real path - the RSSI figures are means over hundreds
-# of packets on a fixed bench, so the residual is the part's own transmit-power
-# accuracy and little else - and tight against every folding failure.
+# 3 dB is loose against a real path (RSSI is a mean over hundreds of packets,
+# so the residual is mostly the part's own TX-power accuracy) and tight
+# against every folding failure.
 SLOPE_TOLERANCE = 0.25
 MAX_RESIDUAL_DB = 3.0
 
@@ -385,16 +343,13 @@ def agreement_db(values: list[float]) -> float | None:
 class MasterDriver(threading.Thread):
     """tools/ant_sim.py's EVENT_TX pacing loop, on a thread, with a power dial.
 
-    The pacing is deliberately not reimplemented: `ant_sim.Sensor` builds the
-    pages and `run()`'s rule - load the next payload when the stack says the
-    last one went out - is reproduced here rather than approximated, because a
-    master that falls back to wall-clock pacing transmits at a rate the receiver
-    is not expecting and manufactures exactly the loss this tool is measuring.
+    Reuses `ant_sim.Sensor`'s page-building and EVENT_TX pacing rather than
+    approximating it - a wall-clock fallback would manufacture exactly the
+    loss this tool measures.
 
-    A thread, and not a subprocess per rung, so the receiver stays tracked for
-    the whole ladder. Every rung is then the same acquired link at a different
-    power, which is the measurement; restarting the master per rung would put a
-    re-acquisition inside every step and count it as loss.
+    A thread, not a subprocess per rung, so the receiver stays tracked for the
+    whole ladder: restarting the master per rung would put a re-acquisition
+    inside every step and count it as loss.
     """
 
     def __init__(self, dev, reader, sensor, verbose: bool = False):
@@ -409,16 +364,10 @@ class MasterDriver(threading.Thread):
         self.fallbacks = 0
         self.failures: list[str] = []
 
-        # NOT self._stop. threading.Thread._stop() is a private METHOD of the
-        # base class and join() calls it from _wait_for_tstate_lock(); binding
-        # an Event over it makes every join() raise
-        #
-        #     TypeError: 'Event' object is not callable
-        #
-        # from inside threading.py, which reads like a bug in the standard
-        # library rather than in this file. It fired at the END of a ladder, in
-        # the finally block, so the measurement printed and then the JSON was
-        # never written - the one artefact the run existed to produce.
+        # NOT self._stop: threading.Thread._stop() is a private method of the
+        # base class, and join() calls it internally - binding an Event over
+        # that name makes every join() raise TypeError('Event' object is not
+        # callable') from inside threading.py.
         self._stop_evt = threading.Event()
         self._lock = threading.Lock()
         self._pending: tuple[int, int] | None = None
@@ -505,12 +454,10 @@ def measure_rung(rx_dev, rx_reader, channel: int, profile: str, seconds: float,
                  master: MasterDriver, verbose: bool) -> dict:
     """One rung: listen, then let ant_verify.py say how much was lost.
 
-    Loss is not counted here. `ChannelAnalyzer.summary()` reports `exact_loss`
-    from the transmitter's own event counter - no clock, no nominal period, no
-    rounding - and that is the figure every gate in this project reads. The one
-    thing this adds is a fallback for the rungs past the knee, where too few
-    packets arrive for that counter to be readable at all and the analyser
-    rightly declines to report it.
+    `ChannelAnalyzer.summary()`'s `exact_loss`, from the transmitter's own
+    event counter, is the figure every gate reads. This adds a fallback for
+    rungs past the knee, where too few packets arrive for that counter to be
+    readable and the analyser declines to report it.
     """
     spec = ap.PROFILES[profile]
     analyzer = ant_verify.ChannelAnalyzer(profile, spec["device_type"],
@@ -596,13 +543,10 @@ def derive(steps: list[dict], target_pct: float) -> dict:
         "dial_detail": slope_detail,
     }
 
-    # The knee expressed as received power rather than as transmitted power,
-    # which is the number that means something off this bench. Derived from the
-    # reference rung and the dB walked down from it rather than read off the
-    # rung at the knee: past the knee the packets that survive are the ones that
-    # faded up, so their RSSI is biased high by exactly the thing being
-    # measured. The path loss does not change, so the subtraction is exact and
-    # the selection bias never enters.
+    # The knee as received power, which is the number that means something off
+    # this bench. Derived from a clean reference rung and the dB walked down
+    # from it, not read off the rung at the knee itself: packets surviving past
+    # the knee are the ones that faded up, so their RSSI is biased high.
     reference = next((s for s in sorted(steps, key=lambda s: -s["tx_power_dbm"])
                       if s.get("rssi_dbm_mean") is not None
                       and s.get("rssi_samples", 0) >= 10

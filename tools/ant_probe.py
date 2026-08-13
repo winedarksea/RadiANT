@@ -67,24 +67,13 @@ PID = PIDS[0]
 EP_OUT = 0x01
 EP_IN = 0x81
 
-# How long a bulk-IN read waits before giving up, and why it is not 250 ms.
-#
-# libusb-win32 cancels the pending transfer when a read times out, and a cancel
-# landing at the same moment the dongle is answering loses that answer: the host
-# never sees the frame, and the dongle - which handed it to a USB stack that
-# reported success - has no idea anything went missing.
-#
-# Every tool here used 250 ms against an ANT+ channel period of 249.7 ms, so
-# essentially every read was racing the packet it was waiting for. It cost about
-# 0.4 percentage points of apparent packet loss and several ms of apparent
-# jitter, none of it real, and it was invisible because the invented losses look
-# exactly like on-air ones. What gives it away is that the radio reports a
-# RX_FAIL for a packet lost on the air and nothing at all for one lost here, so
-# a run that loses more than it can account for is losing it locally.
-#
-# The value only has to be comfortably clear of the slowest period a tool waits
-# on; nothing wants it short. It bounds how long a tool waits on a device that
-# is not going to answer, and no more.
+# Not 250 ms: libusb-win32 cancels the pending transfer on timeout, and a
+# cancel landing as the dongle answers loses that frame silently. 250 ms
+# against a 249.7 ms ANT+ channel period meant nearly every read raced its own
+# packet, costing ~0.4 points of fake packet loss (indistinguishable from real
+# loss except that the radio logs RX_FAIL for on-air losses and nothing for
+# this). Nothing wants this value short, so it just needs to clear the
+# slowest period a tool waits on.
 READ_TIMEOUT_MS = 1000
 
 
@@ -214,25 +203,13 @@ class SerialDevice:
     def read(self, endpoint, size, timeout=None):
         """Return as soon as ANY bytes have arrived, never after `size` of them.
 
-        A bulk-IN read hands back one packet the moment the endpoint has one,
-        and `size` is the caller's buffer bound rather than an amount to wait
-        for. `serial.Serial.read(size)` is the opposite: it blocks until it has
-        collected exactly `size` bytes or the timeout expires.
-
-        That difference is not cosmetic, and it invented a firmware bug. An
-        EVENT_TX frame is 7 bytes and a master raises one every 249.7 ms, so a
-        read for 64 bytes could never be satisfied by the traffic it was
-        watching - every read ran the full 1000 ms and then delivered four
-        events at once. `ant_sim.py` paces from EVENT_TX and falls back to the
-        wall clock after two silent message periods, so it reported ~1 fallback
-        a second and blamed the dongle's event filter, while the radio log
-        showed every slot armed and transmitted on time. Same shape as the
-        FrameReader timeout bug in docs/testing.md: the instrument, not the
-        thing measured.
-
-        So: block for the first byte, then take whatever else has already
-        arrived and return. That is the bulk-IN semantics the tools were
-        written against.
+        A bulk-IN read hands back one packet the moment the endpoint has one;
+        `size` is a buffer bound, not an amount to wait for.
+        `serial.Serial.read(size)` is the opposite and blocks for exactly
+        `size` bytes or the timeout - which previously starved `ant_sim.py`'s
+        EVENT_TX pacing (7-byte frames every 249.7 ms could never fill a
+        64-byte read) and was misread as a dongle event-filter bug. So: block
+        for the first byte, then take whatever else has already arrived.
         """
         self._port.timeout = (timeout or 0) / 1000.0
         data = self._port.read(1)

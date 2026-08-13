@@ -337,8 +337,8 @@ named gate.
 
 ## Radio backends: `sdk_ant` | `core` | `stub`
 
-Today the radio is Nordic's prebuilt `libant.a`, from a private adopter-gated
-repository, and `CMakeLists.txt` hard-fails without its headers — so losing
+Today the radio is Nordic's prebuilt `libant.a`, from a private,
+non-redistributable repository, and `CMakeLists.txt` hard-fails without its headers — so losing
 access to that repository means nothing builds, not even the radio-stub build.
 The seam below is what removes that, and it mirrors the transport pattern in
 [`src/ant_transport.h`](../src/ant_transport.h) exactly, because that pattern

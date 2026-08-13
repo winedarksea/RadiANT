@@ -3,13 +3,10 @@
 
 """Tests for tools/ant_ab.py. No hardware, standard library only.
 
-Every gate is exercised on both sides of its threshold *and* exactly on it,
-because "<=" and "<" is the kind of difference that only ever shows up as an
-argument about a bench result six months later. The two rules the tool exists to
-enforce get tests of their own: that the loss gate reads `loss_exact_pct` and
-never `loss_pct`, and that the timing gate reads `timing_offgrid_host_ms` and
-never a jitter figure. And a missing field is checked to FAIL rather than pass,
-which is the failure mode that would quietly make this whole tier decorative.
+Every gate is exercised on both sides of its threshold and exactly on it.
+The loss gate must read `loss_exact_pct` (never `loss_pct`), the timing gate
+must read `timing_offgrid_host_ms` (never a jitter figure), and a missing
+field must FAIL rather than pass.
 """
 
 from __future__ import annotations
@@ -27,7 +24,7 @@ SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "..", "archive", "benchmarks",
                            "baseline.schema.json")
 
-with open(SCHEMA_PATH, "r", encoding="utf-8") as _handle:
+with open(SCHEMA_PATH, encoding="utf-8") as _handle:
     SCHEMA = json.load(_handle)
 
 GATES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -145,8 +142,8 @@ class SchemaValidator(unittest.TestCase):
         self.assertIn("does not match", errors[0])
 
     def test_a_boolean_is_not_an_integer(self):
-        # bool subclasses int in Python, and a validator that forgets it
-        # accepts `"unexplained_loss": true` as zero holes.
+        # bool subclasses int in Python; a naive validator would accept
+        # `"unexplained_loss": true` as zero holes.
         data = baseline()
         data["radio_runs"][0]["derived"]["unexplained_loss"] = True
         self.assertTrue(ant_ab.validate(data, SCHEMA))
@@ -275,8 +272,7 @@ class Gates(unittest.TestCase):
                          ant_ab.FAIL)
 
     def test_loss_over_the_absolute_ceiling_fails_even_if_a_was_worse(self):
-        # A backend can be within 0.2 pp of a reference run that was itself
-        # having a bad afternoon; 1.5 % is the acceptance ceiling regardless.
+        # 1.5 % is an absolute ceiling regardless of how A performed.
         a, b = pair()
         a.data["radio_runs"][0]["derived"]["loss_exact_pct"] = 1.45
         b.data["radio_runs"][0]["derived"]["loss_exact_pct"] = 1.55
@@ -285,9 +281,7 @@ class Gates(unittest.TestCase):
         self.assertIn("ceiling", result.detail)
 
     def test_the_wall_clock_loss_line_is_never_read(self):
-        # loss_pct passing while loss_exact_pct fails must fail. If this test
-        # ever goes green by accident, the gate is reading the wrong line - the
-        # exact mistake docs/testing.md warns about.
+        # loss_pct passing while loss_exact_pct fails must still fail.
         def mutate(data):
             data["radio_runs"][0]["derived"]["loss_pct"] = 0.01
             data["radio_runs"][0]["derived"]["loss_exact_pct"] = 3.0
@@ -380,7 +374,7 @@ class Gates(unittest.TestCase):
     def test_no_gate_reads_a_jitter_field(self):
         # The tool must not grow a jitter reader by accident: one lost packet
         # turns a 250 ms gap into 500 ms, so gating on it gates on loss twice.
-        with open(ant_ab.__file__, "r", encoding="utf-8") as handle:
+        with open(ant_ab.__file__, encoding="utf-8") as handle:
             source = handle.read()
         code = "\n".join(line for line in source.splitlines()
                          if not line.lstrip().startswith("#"))
@@ -450,11 +444,7 @@ class Gates(unittest.TestCase):
     # -- the transmit-power ladder, where the sign is the other way round ----
 
     def ladder(self, a_dbm: float, b_dbm: float, spread: float | None = 0.3):
-        """A tx_ladder sitting: the master's power stepped down to the knee.
-
-        Both baselines get the ladder, because a comparison across two methods
-        is refused before any number is read.
-        """
+        """A tx_ladder sitting: the master's power stepped down to the knee."""
         def block(dbm):
             got = {
                 "method": "tx_ladder",
@@ -474,14 +464,9 @@ class Gates(unittest.TestCase):
         return ant_ab.evaluate(gates(), a, b)
 
     def test_a_quieter_transmitter_at_the_knee_is_better_hearing(self):
-        """The sign that is silent when it is wrong.
-
-        More attenuation at the 5 % point means a better receiver, and so does
-        LESS transmit power. B needing the master 3 dB quieter than A did is B
-        hearing 3 dB further, and it must read as a pass with B in bold - not
-        as a 3 dB regression, which is what a single lower-is-better rule
-        applied to every sensitivity field would report.
-        """
+        # Lower tx power at the knee means a better receiver (opposite sign
+        # from attenuation): B needing 3 dB less power than A is a pass, not
+        # a 3 dB regression.
         result = self.name(self.ladder(-14.0, -17.0), "sensitivity")
         self.assertEqual(result.verdict, ant_ab.PASS)
         self.assertEqual(result.better, "b")
@@ -497,13 +482,9 @@ class Gates(unittest.TestCase):
             ant_ab.PASS)
 
     def test_a_ladder_that_cannot_repeat_cannot_grade_the_gate(self):
-        """Phase 0's own gate, applied at the point the number gets used.
-
-        A ladder whose two passes disagreed by 2 dB has not measured a 1 dB
-        difference; it has measured its own noise. The comparison is refused
-        even though the two numbers are within the threshold, because the
-        threshold is narrower than the instrument that read them.
-        """
+        # A ladder whose two passes disagreed by 2 dB measured its own noise,
+        # not a 1 dB difference, so the comparison is refused even though the
+        # numbers are within the threshold.
         result = self.name(self.ladder(-14.0, -14.2, spread=2.0),
                            "sensitivity")
         self.assertEqual(result.verdict, ant_ab.FAIL)
@@ -530,14 +511,10 @@ class Gates(unittest.TestCase):
         self.assertIn("not comparable", result.detail)
 
     def test_the_rig_refuses_a_ladder_against_a_distance_run_before_any_gate(self):
-        """Why the method is recorded in the RIG and not only in the result.
-
-        gate_sensitivity() already refuses two different methods, but it does so
-        one gate deep, in a detail line, after nine other gates have printed
-        verdicts about a sitting that should never have been compared at all.
-        The rig is what `check_sitting()` reads, and a refusal there stops the
-        whole comparison with the reason at the top.
-        """
+        # gate_sensitivity() also refuses mismatched methods, but only after
+        # nine other gates have printed verdicts on a sitting that should
+        # never have been compared. Recording the method in the rig lets
+        # check_sitting() refuse it up front instead.
         a, b = pair(lambda data:
                     data["rig"]["link"].update({"sensitivity_method":
                                                 "tx_ladder"}))
@@ -616,14 +593,9 @@ class Gates(unittest.TestCase):
     # -- coexistence --------------------------------------------------------
     #
     # Tested against gate_coexistence() directly rather than through
-    # evaluate(), and the reason has changed since these were written. It used
-    # to be that the block was `enabled = false`, so evaluate() correctly
-    # skipped it and a test routed through evaluate() would have asserted
-    # nothing while looking like it asserted something. The block is on now, and
-    # the direct call is kept for a better reason: this gate reads THREE loss
-    # figures out of ONE baseline rather than comparing two, so driving it
-    # through evaluate() would mean building a second baseline that plays no
-    # part in the assertion.
+    # evaluate(): this gate reads THREE loss figures out of ONE baseline
+    # rather than comparing two, so evaluate() would need a second baseline
+    # that plays no part in the assertion.
 
     COEX_CFG = {"required": False, "max_delta_pp": 0.5,
                 "absolute_ceiling_pct": 1.5,
@@ -663,9 +635,8 @@ class Gates(unittest.TestCase):
                          ant_ab.FAIL)
 
     def test_coexistence_within_half_a_point_of_a_bad_afternoon_still_fails(self):
-        # 1.60 - 1.20 is inside 0.5 pp and 1.60 % is over the 1.5 % ceiling.
-        # The delta gate alone would pass this, which is the whole reason
-        # loss_exact carries a ceiling too.
+        # 1.60 - 1.20 is inside 0.5 pp but 1.60 % is over the 1.5 % ceiling,
+        # which is why loss_exact carries a ceiling as well as a delta gate.
         results = self.coex({"second_stack": "ble",
                              "loss_direct_pct": 0.40,
                              "loss_second_stack_off_pct": 1.20,
@@ -676,9 +647,9 @@ class Gates(unittest.TestCase):
                          ant_ab.FAIL)
 
     def test_the_arbiter_paying_for_itself_is_the_exit_criterion(self):
-        # The second stack is off in both numbers, so this is the timeslot
-        # machinery's own cost. Over the limit, the combined build is abandoned
-        # for the two-box handoff rather than tuned.
+        # Second stack is off in both numbers, so this is the arbiter's own
+        # cost; over the limit, the combined build is abandoned for the
+        # two-box handoff rather than tuned.
         results = self.coex({"second_stack": "none",
                              "loss_direct_pct": 0.40,
                              "loss_second_stack_off_pct": 2.10,
@@ -690,9 +661,8 @@ class Gates(unittest.TestCase):
         self.assertIn("7.3", result.detail)
 
     def test_a_sweep_that_stopped_is_not_a_sweep_that_gave_way(self):
-        # ADR 0013 makes the sweep the elastic consumer, so it IS slower. The
-        # bound is what separates "gave way" from "stopped", which no other
-        # number in this file can see.
+        # ADR 0013 makes the sweep the elastic consumer, so it IS slower; this
+        # bound separates "gave way" from "stopped".
         results = self.coex({"second_stack": "thread_sed",
                              "loss_direct_pct": 0.40,
                              "loss_second_stack_off_pct": 0.45,
@@ -814,9 +784,8 @@ class GatesFile(unittest.TestCase):
         self.assertTrue(cfg["conformance"]["require_byte_identical"])
 
     def test_no_case_is_allowed_to_differ_out_of_the_box(self):
-        # An allowance added speculatively excuses a difference nobody looked
-        # at. The version string will need one; it should be added when the
-        # first real A/B runs, in a reviewable commit.
+        # Any allowance should be added in a reviewable commit when the first
+        # real A/B run needs it, not speculatively.
         self.assertEqual(gates()["gates"]["conformance"]
                          ["allowed_differing_cases"], [])
 
@@ -828,19 +797,9 @@ class GatesFile(unittest.TestCase):
         self.assertEqual(set(gates()["gates"]), known)
 
     def test_the_coexistence_gate_is_on_and_its_thresholds_are_measured(self):
-        # THIS TEST USED TO PIN `enabled == False`, on the reasoning that a gate
-        # running against a guessed threshold is worse than one that does not
-        # run, because it reports PASS. That reasoning was right and it has
-        # expired: the thresholds are measured now, and the schema that used to
-        # reject a real coexistence baseline before any gate could read it
-        # carries both `coexistence` and `rig.second_stack`.
-        #
-        # What is pinned instead is the pair of numbers, because those are what
-        # the reasoning was actually protecting. +0.5 pp is docs/backends.md's
-        # long-standing coexistence bar and 1.5 pp is the EXIT CRITERION for the
-        # whole combined build - if the arbiter alone costs that much, no amount
-        # of shaping the other stack's demand recovers it and the answer is the
-        # two-box handoff. Neither should move without the doc moving with it.
+        # +0.5 pp is docs/backends.md's coexistence bar; 1.5 pp is the exit
+        # criterion for the combined build (arbiter cost alone past that
+        # means the two-box handoff). Neither should move without the doc.
         cfg = gates()["gates"]["coexistence"]
         self.assertTrue(cfg["enabled"])
         self.assertEqual(cfg["max_delta_pp"], 0.5)
@@ -850,13 +809,9 @@ class GatesFile(unittest.TestCase):
                          "coexistence block, and its absence must read as SKIP")
 
     def test_the_two_loss_gates_measure_different_things(self):
-        # docs/backends.md has stated +0.5 pp for coexistence since before the
-        # arbiter existed, and [gates.loss_exact] requires 0.2 pp - which reads
-        # as though the looser number had been superseded. It has not: one
-        # compares two BACKENDS with nothing else on the radio, the other the
-        # SAME backend with a second stack on against off. Both must pass on a
-        # combined build, and this is the assertion that stops someone
-        # "reconciling" them.
+        # loss_exact (0.2 pp) compares two backends with nothing else on the
+        # radio; coexistence (0.5 pp) compares the same backend with a second
+        # stack on vs. off. Both must pass; they must not be reconciled.
         cfg = gates()["gates"]
         self.assertNotEqual(cfg["loss_exact"]["max_delta_pp"],
                             cfg["coexistence"]["max_delta_pp"])

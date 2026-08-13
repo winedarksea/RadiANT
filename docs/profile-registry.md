@@ -1,8 +1,7 @@
 # The RadiANT device type and page registry
 
-Checked by: `scripts/check_profile_registry.py` — run it with
-`C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe scripts\check_profile_registry.py`.
-It fails on a duplicate device type, a duplicate or overlapping page within a
+Checked by: `scripts/check_profile_registry.py`, run with the NCS toolchain's
+Python interpreter (there is no system Python in this project). It fails on a duplicate device type, a duplicate or overlapping page within a
 type, a missing or empty required column, a device type outside 1..127, a value
 outside a column's vocabulary, a page claimed here but not in
 `docs/radiant-telemetry.md`'s page map (or the reverse), and a period that
@@ -187,9 +186,12 @@ window and costs nothing extra.
 | Type | Name | Status | Claimant | Date | Period | LR PHY | Adaptive freq | Notes |
 |---|---|---|---|---|---|---|---|---|
 | `0x0B` | Bicycle Power | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 8182 | no | no | Implemented in `tools/ant_pages.py`; byte-exact to Garmin's profile |
+| `0x10` | Controls | ant-plus-reserved | Dynastream / Garmin | 2025-06-30 | 8192 | no | no | Implemented in `tools/ant_pages.py` and `src/profiles/profile_controls.c`; pages `0x10` (Audio/Video Command) and `0x49` (Generic Command) only. **Scoped to the command surface** — the peripheral-enumeration pages (1, 2, 5, 7, 8, 17, 20, 70, 72) and text transfer are not implemented; see `docs/device-profiles.md` 3.14. **One sequence counter is shared across both page types**, not one per page |
 | `0x11` | Fitness Equipment (FE-C) | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | — | no | no | Compatibility target; not yet implemented in `tools/ant_pages.py`, so no period is recorded rather than a guessed one |
 | `0x14` | Light Electric Vehicle (LEV) | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | — | no | no | Recorded so a claimant does not repeat the search. Spec D00001390 Rev 1.1 states period 8192 (4.00 Hz); the column stays `—` because this project has not implemented the type. Fields in `docs/device-profiles.md` 3.6. **This is why no e-bike type is claimed** |
 | `0x19` | Environment | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | — | no | no | Temperature only, and it has **no sensor placement field**, which is why physiological temperature is a `0x60` recipe rather than an additive page here. Default period 65535 (0.5 Hz), alternate 8192, from third-party implementations rather than the spec. `docs/device-profiles.md` 3.7 |
+| `0x1E` | Running Dynamics | ant-plus-reserved | Garmin / ANT+ | 2025-06-30 | 4096 | no | no | Implemented in `tools/ant_pages.py` and `src/profiles/profile_rd.c`; pages `0x00`, `0x01`, `0x10`, `0x20`, `0x4A`. **Two periods**: 4096 (8 Hz) for a standalone pod, 8070 for the RD channel an HR-RD strap opens beside its heart-rate channel — both below. **Byte 0 is the whole page number; there is no page-change toggle**, unlike `0x78`. `docs/device-profiles.md` 3.13 |
+| `0x29` | Tracker (Asset Tracker) | ant-plus-reserved | Dynastream / ANT+ | 2025-06-30 | 2048 | no | no | Implemented in `tools/ant_pages.py` and `src/profiles/profile_tracker.c`; pages `0x01`, `0x02`, `0x03`, `0x10`, `0x11`, `0x20`. One tracker reports many assets by a 5-bit **asset index**, not a device number. **Location is split across two pages**: page `0x01` carries latitude's low 16 bits, page `0x02` carries the high 16 bits and all of longitude. `docs/device-profiles.md` 3.15 |
 | `0x60` | RadiANT Generic Telemetry | radiant | RadiANT project | 2026-08-08 | per-node | per-node | per-node | The envelope in `docs/radiant-telemetry.md`; period is announced in descriptor frame 0. Implemented in `src/profiles/` and mirrored in `tools/ant_pages.py`. `LR PHY` is `per-node` from ADR 0007: a `0x60` node may run LE Coded S=8, and announces the rate in its schedule block. `Adaptive freq` is `per-node` from ADR 0012: a `0x60` node may move to a quieter RF index, announcing it in page `0x13` first. A node that switched to private mode is exactly this type |
 | `0x61` | RadiANT Continuous Glucose Monitor | radiant | RadiANT project | 2026-08-11 | 65535 | no | no | The `0x60` envelope with a pinned schema; `docs/device-profiles.md` 5.1. **`X_AUTH` is mandatory** — a forged reading has a physiological consequence, so an unverified reading is reported as no reading. Not implemented. **Claimed knowing an ANT+ Glucose profile existed as a 2013 members-only beta whose device type could not be verified** |
 | `0x62` | RadiANT Smart Fan | radiant | RadiANT project | 2026-08-11 | 8192 | no | no | The `0x60` envelope with a pinned schema; `docs/device-profiles.md` 5.2. Period is 4 Hz because commands land near the node's own slot, so the period is the command latency. Not implemented |
@@ -223,6 +225,10 @@ is enumerated here and in `tools/ant_pages.py` where
 | `0x78` | half | 16140 | ~2.03 Hz | `HRM_PERIOD_HALF` |
 | `0x78` | quarter | 32280 | ~1.02 Hz | `HRM_PERIOD_QUARTER` |
 | `0x0B` | standard (default) | 8182 | ~4.005 Hz | `BPWR_PERIOD` |
+| `0x1E` | standalone pod (default) | 4096 | 8 Hz | `RD_PERIOD` |
+| `0x1E` | HR-RD strap's run channel | 8070 | ~4.06 Hz | `RD_PERIOD_HR_RD` |
+| `0x10` | standard (default) | 8192 | 4 Hz | `CTRL_PERIOD` |
+| `0x29` | standard (default) | 2048 | 16 Hz | `TRK_PERIOD` |
 
 **Bicycle power has one rate and that is a recorded fact, not an omission.** No
 reduced-rate variant is registered for `0x0B` because this project has not
@@ -325,6 +331,28 @@ rule this registry already states for device types.
 | `0x78` | `0x51` | Common page 81, product | `ant_pages.encode_common_81` | Byte-exact ANT+ |
 | `0x78` | `0x70` | RadiANT compat beacon | `ant_pages.encode_compat_beacon` | The same number as on `0x0B`, so a receiver has one rule |
 | `0x78` | `0x71-0x72` | RadiANT compat attestation | `ant_pages.encode_compat_attest_tier1` | The same numbers as on `0x0B` |
+| `0x1E` | `0x00` | Running Dynamics A | `ant_pages.encode_rd_a` | Main page; cadence, vertical oscillation, ground contact time, stance time %, step count. Ground contact time keeps its **three low** bits in byte `[4]` and its eight high bits in byte `[5]` |
+| `0x1E` | `0x01` | Running Dynamics B | `ant_pages.encode_rd_b` | Main page; ground contact balance, vertical ratio, step length, module orientation, session leader id |
+| `0x1E` | `0x10` | Session Leader Speed Metrics | `ant_pages.encode_rd_speed` | Back channel, display -> sensor. Two sentinels of two different widths, either one invalidating the speed |
+| `0x1E` | `0x20` | Session Leader Request | `ant_pages.encode_rd_leader_request` | Acknowledged message, display -> sensor. Not used by an HR-RD strap |
+| `0x1E` | `0x4A` | Open Channel Command | `ant_pages.encode_rd_open_channel` | **Rides the `0x78` channel, not this one**: it is what tells an HR-RD strap where to open its RD channel |
+| `0x1E` | `0x50` | Common page 80, manufacturer | `ant_pages.encode_common_80` | Interleaved at message 119 of 121, inside this profile's "once every 260 messages" |
+| `0x1E` | `0x51` | Common page 81, product | `ant_pages.encode_common_81` | Interleaved at message 120 of 121 |
+| `0x1E` | `0x52` | Common page 82, battery | `ant_pages.encode_common_82` | Optional |
+| `0x10` | `0x10` | Audio/Video Command | `ant_pages.encode_ctrl_av` | One sequence counter shared with page `0x49` |
+| `0x10` | `0x49` | Generic Command | `ant_pages.encode_ctrl_generic` | Command field is **16 bits** despite the source table's own length column; `0xFFFF` is "No Command" and does not advance the sequence counter |
+| `0x10` | `0x50` | Common page 80, manufacturer | `ant_pages.encode_common_80` | Byte-exact ANT+ |
+| `0x10` | `0x51` | Common page 81, product | `ant_pages.encode_common_81` | Byte-exact ANT+ |
+| `0x10` | `0x52` | Common page 82, battery | `ant_pages.encode_common_82` | Optional |
+| `0x29` | `0x01` | Asset Location Page 1 | `ant_pages.encode_trk_location_1` | Latitude's **low** 16 bits; distance, bearing, status |
+| `0x29` | `0x02` | Asset Location Page 2 | `ant_pages.encode_trk_location_2` | Latitude's **high** 16 bits plus the whole 32-bit longitude |
+| `0x29` | `0x03` | No Assets | `ant_pages.encode_trk_no_assets` | Sent in place of the location pair when nothing is connected |
+| `0x29` | `0x10` | Asset Identification Page 1 | `ant_pages.encode_trk_ident_1` | Colour, first 5 name characters |
+| `0x29` | `0x11` | Asset Identification Page 2 | `ant_pages.encode_trk_ident_2` | Asset type, last 5 name characters |
+| `0x29` | `0x20` | Disconnect Command | `ant_pages.encode_trk_disconnect` | Sent 5 times before the tracker turns off |
+| `0x29` | `0x50` | Common page 80, manufacturer | `ant_pages.encode_common_80` | Byte-exact ANT+ |
+| `0x29` | `0x51` | Common page 81, product | `ant_pages.encode_common_81` | Byte-exact ANT+ |
+| `0x29` | `0x52` | Common page 82, battery | `ant_pages.encode_common_82` | Optional |
 | `0x79` | none | Combined speed and cadence | `ant_pages.encode_bsc_combined` | This device type has **no page-number byte**; byte 0 is the low half of the cadence event time, so it can never carry an additional page and gets no compat row, permanently |
 | `0x60` | `0x00` | Descriptor | `ant_pages.encode_tlm_descriptor` | Frame set; the retained message. C: `profile_desc_encode` |
 | `0x60` | `0x01-0x0F` | Data | `ant_pages.encode_tlm_data` | Field area packed MSB-first against the descriptor. C: `profile_data_encode` |

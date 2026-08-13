@@ -2,36 +2,21 @@
 /*
  * A mode-level crypto backend, for the seam and not for a product.
  *
- * ── Why this file exists ───────────────────────────────────────────────────
- *
  * radiant_sec.h claims a two-level seam: policy calls modes, modes call
- * blocks, and a backend implements whichever level it can do well. That claim
- * is free to make and easy to get wrong - a "seam" whose only implementation
- * is the portable one is indistinguishable from a direct implementation with
- * extra prototypes, and it stays that way until the day somebody tries to
- * attach CRACEN and discovers the mode-level path was never live.
+ * blocks, and a backend implements whichever level it can do well. This file
+ * proves the seam is live: CONFIG_RADIANT_SEC_BACKEND_MODES suppresses the
+ * portable AES-CTR/CMAC layer in src/radiant_sec_aes.c, and this supplies the
+ * Level 2 entry points and radiant_sec_caps() (has_ctr/has_cmac) instead, as
+ * a CRACEN or CC310 backend would. The same published vectors run against it.
+ * If policy ever reaches past Level 2 to radiant_sec_aes_ecb() directly, the
+ * vectors would still pass, so the zero-cost job also greps radiant_sec.c for
+ * that call.
  *
- * So: CONFIG_RADIANT_SEC_BACKEND_MODES suppresses the portable AES-CTR and
- * AES-CMAC layer in src/radiant_sec_aes.c, and this file supplies the Level 2
- * entry points and radiant_sec_caps() instead - advertising has_ctr and
- * has_cmac, exactly as a CRACEN or CC310 backend would. The same published
- * vectors then run against it. If a future edit lets policy reach past Level 2
- * to radiant_sec_aes_ecb(), the vectors still pass and the seam is still
- * broken, which is why the zero-cost job greps radiant_sec.c for that call as
- * well.
- *
- * ── Why it is a second implementation and not a wrapper ────────────────────
- *
- * The CMAC below buffers differently from the portable one: it processes a
- * full block eagerly and keeps a one-block lookahead, where the portable
- * version holds a full block back until more data arrives. Both are correct;
- * they fail differently. Running the RFC 4493 vectors through both is a real
- * cross-check rather than a check that memcpy still works, and the
- * message-length-a-multiple-of-16 case - the classic incremental-CMAC bug -
- * is exactly where two buffering strategies diverge.
- *
- * The block primitive is shared, because there is only one AES here and
- * duplicating it would test the S-box twice and the seam not at all.
+ * The CMAC here buffers differently from the portable one (eager, one-block
+ * lookahead, vs. holding a full block back) so running RFC 4493 vectors
+ * through both is a real cross-check, not just a memcpy check - the
+ * message-length-multiple-of-16 case is where the two strategies diverge.
+ * The block primitive is shared since there is only one AES to test.
  */
 
 #ifdef CONFIG_RADIANT_SEC_BACKEND_MODES
@@ -45,9 +30,8 @@ static const struct radiant_sec_caps modes_caps = {
 	.has_ctr       = true,
 	.has_cmac      = true,
 	.has_x25519    = false,
-	/* Stated rather than left to the zero-initialiser: a mode-level
-	 * accelerator is exactly the sort of part that also has a TRNG, so the
-	 * next person to copy this struct should see the field. */
+	/* Stated rather than left to the zero-initialiser, so the next person
+	 * to copy this struct sees the field. */
 	.has_rng       = false,
 	.key_is_opaque = false,
 	.key_bits_mask = RADIANT_SEC_KEY_BITS_128,
@@ -131,12 +115,9 @@ int radiant_sec_cmac_init(struct radiant_sec_cmac_ctx *c,
 	return RADIANT_SEC_OK;
 }
 
-/*
- * Eager buffering with a one-block lookahead: `partial` holds a block that has
- * been accepted but not yet folded in, because it might turn out to be the
- * last one. partial_len == 16 therefore means "a full block is pending", which
- * is the same state the portable version reaches by a different route.
- */
+/* Eager buffering with a one-block lookahead: `partial` holds a block
+ * accepted but not yet folded in, since it might be the last one.
+ * partial_len == 16 means "a full block is pending". */
 int radiant_sec_cmac_update(struct radiant_sec_cmac_ctx *c, const uint8_t *msg,
 			    size_t len)
 {

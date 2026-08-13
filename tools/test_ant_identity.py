@@ -65,10 +65,10 @@ class TestIdentity(unittest.TestCase):
             before = identity.device_number
             identity.on_boot()
             self.assertEqual(identity.device_number, before,
-                             "tier %d must not move at power-up; a receiver "
-                             "that loses its sensor every session is exactly "
-                             "the experience the tiering exists to avoid"
-                             % tier)
+                             f"tier {tier} must not move at power-up; a "
+                             f"receiver that loses its sensor every session "
+                             f"is exactly the experience the tiering exists "
+                             f"to avoid")
 
         identity = ai.Identity.new(tier=2)
         moved = False

@@ -3,15 +3,13 @@
 
 """RF-6: does a stock ANT+ dongle ignore a length-extended 1 M frame?
 
-The measurement instrument for the one open question in
-docs/decisions/0007-long-range-phy.md, section "Does 1 M also qualify? - NOT
-SETTLED". ADR 0007 permits length extension only where the coded PHY makes us
-physically invisible to a stock receiver. The unanswered question is whether a
-RadiANT-authored *1 M* format with a real length field would also be safe -
-because if it is, the descriptor-set collapse (the largest battery item in that
-record) arrives without the coded PHY at all, and most of that phase becomes
-optional. ADR 0007 deliberately refused to assume the answer and built the
-phase in full. This tool is what settles it.
+The measurement instrument for the open question in
+docs/decisions/0007-long-range-phy.md ("Does 1 M also qualify? - NOT
+SETTLED"). ADR 0007 permits length extension only where the coded PHY makes
+us physically invisible to a stock receiver; whether a RadiANT *1 M* format
+would also be safe is unsettled, and if so most of the descriptor-set-collapse
+phase (the record's largest battery item) becomes optional. This tool settles
+it rather than assuming.
 
     python tools/ant_rf6_capture.py --seconds 120 \
         --expect-seen 0x60A0 --expect-unseen 0x60B0
@@ -23,55 +21,39 @@ A separate board transmits two frames, both device type 0x60:
 - device **0x60A0**, a standard 10-byte body - the control;
 - device **0x60B0**, a 30-byte body - the length-extended frame under test.
 
-A stock dongle should hear 0x60A0 and should **never** hear 0x60B0: the long
-frame's CRC is computed over bytes the stock receiver never clocks in, so it
-should be dropped in hardware. Meanwhile any real ANT+ sensors in the room
-should keep being reported for the whole window, which is the "does it damage
-anything else" half of the question - a receiver that goes deaf to its own
-sensors while a long frame is on the air has failed just as surely as one that
-decodes it.
+A stock dongle should hear 0x60A0 and should **never** hear 0x60B0 (the long
+frame's CRC covers bytes a stock receiver never clocks in, so it should drop
+in hardware). Real ANT+ sensors in the room should keep being reported the
+whole window too - a receiver gone deaf to its own sensors while the long
+frame is on air has failed just as surely as one that decodes it.
 
-So the three outcomes, which is why this tool is self-grading rather than
-something to eyeball:
+Three outcomes, hence self-grading rather than eyeballed:
 
-- **0x60A0 seen + 0x60B0 unseen + other sensors still seen** -> the 1 M length
-  extension is interop-safe. ADR 0007 gains a second, 1 M length-extended
-  format, on a *weaker* justification (device-type isolation, not physical
-  invisibility) that would need its own record.
-- **0x60A0 seen + 0x60B0 also seen** -> it is NOT safe. ADR 0007's exclusion
-  stands exactly as written and nothing changes.
-- **0x60A0 unseen** -> the rig is broken. Wrong address, wrong frequency, dead
-  transmitter, sick dongle - it does not matter which, because a run that
-  cannot hear its own control says **nothing either way**. This is the case a
-  tool without a verdict gets wrong: silence looks identical to "the long frame
-  was correctly ignored", and would be read as a pass by anyone in a hurry.
-  --expect-seen exists so that reading is impossible.
+- **0x60A0 seen + 0x60B0 unseen + other sensors still seen** -> interop-safe.
+  ADR 0007 gains a second, weaker-justified (device-type isolation, not
+  physical invisibility) 1 M length-extended format.
+- **0x60A0 seen + 0x60B0 also seen** -> NOT safe. ADR 0007's exclusion stands.
+- **0x60A0 unseen** -> the rig is broken (wrong address/frequency, dead
+  transmitter, sick dongle) and the run says **nothing either way** - silence
+  looks identical to "correctly ignored", so --expect-seen makes that
+  ambiguity impossible to misread as a pass.
 
 ## Why this is not ant_scan.py
 
-ant_scan.py assigns a plain wildcard slave channel (a 3-byte
-MESG_ASSIGN_CHANNEL, `[channel, 0x00, 0x00]`) and so **acquires the first
-sensor it hears and tracks only that one**. For naming the sensor on your
-handlebars that is correct behaviour. Here it is useless: the run has to keep
-hearing every device in the room for the whole window, including the two the
-experiment transmits and every real sensor that was already there.
+ant_scan.py's plain wildcard slave channel acquires the first sensor it hears
+and tracks only that one - useless here, since the run must keep hearing
+every device in the room for the whole window.
 
-The difference is one byte. MESG_ASSIGN_CHANNEL takes an optional **fourth**
-byte, the extended assignment, and bit 0 of it (EXT_PARAM_ALWAYS_SEARCH) is
-"background scan": the channel never stops searching, never locks on, and
-reports every device it hears rather than the first. This is not an invention
-for this tool - it is what Zwift does against a stock dongle, captured and
-pinned in radiant_core/tests/api/src/test_api.c
-(test_a_background_scan_reports_every_device_not_only_the_first). The stock
-dongle advertises support for the fourth byte as
-CAPABILITIES_EXT_ASSIGN_ENABLED.
+MESG_ASSIGN_CHANNEL's optional fourth byte, bit 0
+(EXT_PARAM_ALWAYS_SEARCH), is "background scan": the channel never locks on
+and reports every device it hears. This is what Zwift does against a stock
+dongle (captured in radiant_core/tests/api/src/test_api.c,
+test_a_background_scan_reports_every_device_not_only_the_first); the stock
+dongle advertises it as CAPABILITIES_EXT_ASSIGN_ENABLED.
 
-Extended messages are enabled with lib config 0xE0 - channel id, RSSI and
-receive timestamp - exactly as every other tool here does, so that every
-broadcast carries the (device number, device type) this whole tool is about.
-The channel id is what is graded; RSSI is reported because it is free and it
-tells you at a glance whether the control frame arrived at a sane level, but it
-is informational and no verdict depends on it.
+Extended messages use lib config 0xE0 (channel id, RSSI, receive timestamp),
+same as every other tool here. The channel id is what's graded; RSSI is
+reported for free and is informational only.
 """
 
 from __future__ import annotations
@@ -81,8 +63,7 @@ import sys
 import time
 
 try:
-    import usb.core
-    import usb.util
+    import usb.core  # noqa: F401 - import-guard, verifies pyusb is installed
 except ImportError:  # pragma: no cover - user-facing guidance
     sys.exit("pyusb is not installed. Run: pip install pyusb")
 
@@ -91,11 +72,12 @@ sys.path.insert(0, __file__.rsplit("\\", 1)[0].rsplit("/", 1)[0])
 from ant_probe import (  # noqa: E402
     EP_OUT,
     FrameReader,
-    frame,
     close_device,
+    frame,
     open_device,
     reset_stack,
 )
+
 # ant_scan.py owns the ANT+ network key, the frequency, the device-type names
 # and the command/acknowledge wrapper. Importing them is the pattern the other
 # tools already follow (ant_verify.py imports the same three from it), and it
@@ -107,11 +89,13 @@ from ant_scan import (  # noqa: E402
     DEVICE_TYPES,
     command,
 )
+
 # The extended-field decoder, which reads the channel id, RSSI and receive
 # timestamp by walking the flag byte rather than at fixed offsets. Not copied:
 # reading RSSI at a fixed offset silently reports a device number as a signal
 # strength the first time a run is made without the channel id.
 from ant_verify import extended_fields  # noqa: E402
+
 # Protocol constants come from the generated module, never from a second copy
 # here. See tools/ant_wire.py and protocol/ant_wire.yaml.
 from ant_wire import (  # noqa: E402
@@ -141,20 +125,13 @@ from ant_wire import (  # noqa: E402
 
 CHANNEL = 0
 
-# The assignments to try, best first, and what each one costs if it is the one
-# that lands.
-#
-# The first is what this tool is for. The second is byte-for-byte what the
-# Zwift capture in test_api.c shows (`ASSIGN_CHANNEL 00 40 00 01`) - a
-# receive-only slave rather than a bidirectional one, which is the same search
-# behaviour with the transmit half switched off, and is here in case a stock
-# dongle is fussier about the pair than about the extended byte.
-#
-# The third is the plain 3-byte assign ant_scan.py uses, and it is a **failure
-# mode, not a fallback**: it locks onto the first device it hears, so it cannot
-# answer this experiment's question at all. It is attempted only so that a run
-# on a dongle with no extended assignment produces a diagnosis rather than a
-# traceback, and it disqualifies the run - see grade().
+# The assignments to try, best first. #1 is what this tool needs. #2 is the
+# Zwift capture in test_api.c (`ASSIGN_CHANNEL 00 40 00 01`) - rx-only rather
+# than bidirectional, same search behaviour, tried in case a stock dongle is
+# fussier about the pair. #3 is ant_scan.py's plain 3-byte assign - a
+# **failure mode, not a fallback**: it locks onto the first device heard, so
+# it disqualifies the run (see grade()) but at least yields a diagnosis
+# instead of a traceback on a dongle with no extended assignment.
 ASSIGNMENTS = (
     (bytes([CHANNEL, CHANNEL_TYPE_SLAVE, 0x00, EXT_PARAM_ALWAYS_SEARCH]),
      "assign channel (slave + background scan)", True),
@@ -178,7 +155,7 @@ def device_number(text: str) -> int:
     except ValueError:
         raise argparse.ArgumentTypeError(
             f"{text!r} is not a device number. Write it in decimal (24736) or "
-            "0x-prefixed hex (0x60A0).")
+            "0x-prefixed hex (0x60A0).") from None
     if not 0 <= value <= 0xFFFF:
         raise argparse.ArgumentTypeError(
             f"device number {value} is out of range; ANT device numbers are "
@@ -190,15 +167,10 @@ def assign_background_scan(dev, reader) -> tuple[bool, str]:
     """Assign channel 0 as a never-locking background scan.
 
     Returns (scanning, description). `scanning` is False if only the plain
-    3-byte assign was accepted, which means the channel will track one device
-    and the run cannot be graded.
-
-    The rejection path prints the response code by name. A dongle that refuses
-    the fourth byte answers INVALID_MESSAGE or INVALID_PARAMETER_PROVIDED, and
-    those two are the difference between "this firmware has no extended
-    assignment at all" and "it has one and dislikes this combination" - which
-    is worth a sentence rather than a bare number, because it decides whether
-    the next thing to try is a different dongle or a different byte.
+    3-byte assign was accepted, meaning the channel tracks one device and the
+    run cannot be graded. Rejection prints the response code by name -
+    INVALID_MESSAGE vs INVALID_PARAMETER_PROVIDED distinguishes "no extended
+    assignment at all" from "dislikes this combination".
     """
     for payload, name, scanning in ASSIGNMENTS:
         dev.write(EP_OUT, frame(MESG_ASSIGN_CHANNEL_ID, payload))
@@ -223,7 +195,7 @@ def assign_background_scan(dev, reader) -> tuple[bool, str]:
             print(f"  FAIL: {name} was not acknowledged  [{payload.hex()}]")
         else:
             print(f"  REJECTED: {name}  [{payload.hex()}] "
-                  f"-> {RESPONSE_CODES_BY_VALUE.get(code, 'code %d' % code)}")
+                  f"-> {RESPONSE_CODES_BY_VALUE.get(code, f'code {code}')}")
 
     return False, "nothing"
 
@@ -234,16 +206,13 @@ def summarise(seen: dict, started: float) -> None:
           "   rssi(min/mean/max)")
     for (number, dtype), rec in sorted(seen.items()):
         rssi = rec["rssi"]
-        if rssi:
-            signal = (f"{min(rssi)}/{round(sum(rssi) / len(rssi))}/"
-                      f"{max(rssi)}")
-        else:
-            # Not a defect and not worth a warning: the flag byte says which
-            # fields a broadcast carried, and a dongle is free to carry none.
-            signal = "-"
-        print(f"{'#' + str(number):>8}{'0x%02X' % dtype:>8}{rec['count']:>12}"
-              f"{'%.1fs' % (rec['first'] - started):>8}"
-              f"{'%.1fs' % (rec['last'] - started):>8}   {signal}")
+        # A dongle is free to carry no RSSI field; not a defect.
+        signal = (f"{min(rssi)}/{round(sum(rssi) / len(rssi))}/{max(rssi)}"
+                  if rssi else "-")
+        first_s = f"{rec['first'] - started:.1f}s"
+        last_s = f"{rec['last'] - started:.1f}s"
+        print(f"{'#' + str(number):>8}{f'0x{dtype:02X}':>8}{rec['count']:>12}"
+              f"{first_s:>8}{last_s:>8}   {signal}")
 
 
 def grade(seen: dict, expect_seen: list, expect_unseen: list,

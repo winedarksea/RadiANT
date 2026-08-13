@@ -4,80 +4,64 @@
  *
  * Provenance: docs/radiant-telemetry.md section 6 ("Interleave cadence: every
  * 121 messages", and the descriptor-set consecutiveness argument) and section
- * 8 ("Descriptor cadence in sparse mode"). That document is this project's own
- * written specification. No adopter-gated ANT+ device profile document was
- * read for this file, no sdk-ant source was consulted, and nothing here
- * derives from libant.a. See docs/decisions/0002-clean-room-policy.md.
+ * 8 ("Descriptor cadence in sparse mode"). This project's own written
+ * specification. No ANT+ device profile document was read for
+ * this file, no sdk-ant source was consulted, and nothing here derives from
+ * libant.a. See docs/decisions/0002-clean-room-policy.md.
  *
  * ---------------------------------------------------------------------------
  * This is a PAGE scheduler, not a radio scheduler
  * ---------------------------------------------------------------------------
  * radiant_core/src/radiant_sched.c decides which operation the radio performs
- * next and at which absolute microsecond. This file decides which eight bytes
- * go out when that operation is a master's transmit slot. They are two
- * different questions and they stay in two different files: nothing here knows
- * a microsecond, and nothing there knows a page number.
- *
- * The whole of the coupling is that a master calls profile_sched_next() to
- * fill the body it then hands to radiant_sched_request_tx(). That is a
- * function call, and it needed no new scheduler API to exist - see the note at
- * the end of this comment.
+ * next and at which absolute microsecond; this file decides which eight bytes
+ * go out for a master's transmit slot. Nothing here knows a microsecond and
+ * nothing there knows a page number - the only coupling is that a master
+ * calls profile_sched_next() to fill the body it hands to
+ * radiant_sched_request_tx(), a plain function call needing no new scheduler
+ * API.
  *
  * ---------------------------------------------------------------------------
  * The cadence, and why 121 rather than 65
  * ---------------------------------------------------------------------------
- * Page 80 at message 119, page 81 at message 120, cycle length 121. The
- * generic ANT+ guidance says 65; a real certified sensor does 121, and
- * tools/ant_pages.py's COMMON_PAGE_INTERVAL carries the same number and the
- * same reason. A node that sends common pages twice as often as the profile
- * requires is not being careful, it is spending radio energy.
+ * Page 80 at message 119, page 81 at message 120, cycle length 121 (a real
+ * certified sensor's cadence; the generic ANT+ guidance says 65, and a node
+ * that follows that is spending radio energy it doesn't need to).
  *
- * The descriptor set is sent CONSECUTIVELY, at messages 0..D, and that is the
- * decision worth defending. A node with 8 fields has D = 9; spreading those
- * frames one per cycle would make a receiver wait 10 x 121 messages - over
- * eight minutes at 2 Hz, over an hour at 0.25 Hz - before it could decode
- * anything at all. Consecutive costs 10 slots out of 121 and makes a
+ * The descriptor set is sent CONSECUTIVELY, at messages 0..D. A node with 8
+ * fields has D = 9; spreading those frames one per cycle would make a
+ * receiver wait 10 x 121 messages - over eight minutes at 2 Hz - before it
+ * could decode anything. Consecutive costs 10 slots out of 121 and makes a
  * mid-stream join take one cycle.
  *
  * ---------------------------------------------------------------------------
- * THE SLOT-INSERTION SEAM, which is why this file is more general than this
- * plan needs
+ * The slot-insertion seam
  * ---------------------------------------------------------------------------
- * Two plans need this engine. This one runs it for device type 0x60; the ANT+
- * compatibility work needs the same 119/120/121 interleave for device types
- * 0x78 and 0x0B, and wants to insert its own beacon and attestation pages into
- * the rotation. Two implementations of one cadence rule is one implementation
- * and one drift, so there is one engine and the other plan is a CLIENT of it:
- * it registers a claim callback and takes the slots it wants, rather than
- * forking the rotation.
+ * Two plans need this engine: this one runs it for device type 0x60, and the
+ * ANT+ compatibility work needs the same 119/120/121 interleave for device
+ * types 0x78 and 0x0B while inserting its own beacon and attestation pages.
+ * Rather than a second implementation of the cadence rule, the other plan is
+ * a CLIENT: it registers a claim callback and takes the slots it wants.
  *
- * The seam is deliberately one function pointer and nothing else. A client
- * gets FIRST REFUSAL on any slot the default rotation would have filled with a
- * data page - and, on a sparse node, on any slot that would otherwise be
- * silent. It never gets offered message 119, message 120, or a descriptor
- * frame, because those three are the cadence rule itself: a client that could
- * displace a common page or half a descriptor set would be forking the
- * rotation with extra steps.
+ * The seam is one function pointer. A client gets first refusal on any slot
+ * the default rotation would fill with a data page (and, on a sparse node,
+ * any otherwise-silent slot) - never message 119, 120, or a descriptor frame,
+ * since those are the cadence rule itself.
  *
- * A client profile family with no descriptor at all - which is what an ANT+
- * compatibility type is - configures cfg.desc = NULL and gets the interleave
- * with the descriptor slots simply absent. That is the case this file is built
- * to serve without a retrofit, and it is why it is written now rather than
- * when the second caller shows up.
+ * A client family with no descriptor at all - an ANT+ compatibility type -
+ * configures cfg.desc = NULL and gets the interleave with the descriptor
+ * slots simply absent.
  *
  * ---------------------------------------------------------------------------
  * What this needed from radiant_sched.c: nothing
  * ---------------------------------------------------------------------------
- * Recorded here because it was an open question and the answer is worth
- * having in writing. A page-rotation client claims a radio slot by posting a
- * transmit against a channel and posting the next one from inside the
- * completion callback, which is what radiant_sched.h already documents as the
- * intended low-jitter path. Sparse mode - "the node keeps a channel period
- * configured and simply declines to transmit in most of its slots" - is
- * expressed by not posting, which needs no scheduler concept at all.
+ * A page-rotation client claims a radio slot by posting a transmit and
+ * posting the next one from inside the completion callback - the intended
+ * low-jitter path radiant_sched.h already documents. Sparse mode (the node
+ * keeps a channel period configured but declines to transmit in most slots)
+ * is expressed by not posting, needing no scheduler concept at all.
  * radiant_core/tests/src/test_profiles.c drives a real 0x60 master through
- * radiant_sched.c against the mock radio to keep that claim honest rather than
- * merely asserted.
+ * radiant_sched.c against the mock radio to keep that claim tested rather
+ * than merely asserted.
  */
 
 #ifndef RADIANT_PROFILE_SCHED_H_
@@ -95,9 +79,8 @@ extern "C" {
 
 /* What profile_sched_next() decided this slot is. */
 enum profile_slot_kind {
-	/* Transmit nothing. Only a sparse node ever sees this, and seeing it
-	 * is the whole of the energy saving: the slot exists, the timer is
-	 * still running, and the radio stays off. */
+	/* Transmit nothing. Only a sparse node sees this: the slot exists,
+	 * the timer keeps running, and the radio stays off. */
 	PROFILE_SLOT_IDLE = 0,
 	PROFILE_SLOT_DESCRIPTOR,
 	PROFILE_SLOT_DATA,
@@ -121,26 +104,19 @@ struct profile_sched_client {
 };
 
 /*
- * THE DOWNLINK HOOK - the second seam, and the whole of what the response-slot
- * phase needed from this file.
+ * The downlink hook - the second seam, needed because the schedule frame's
+ * downlink phase is measured from the t_sync of the frame that carries it,
+ * while this engine encodes the descriptor set once at init and retransmits
+ * the bytes; a retransmitted phase would point at a window already gone.
  *
- * profile_schedule.h records why it is here: the schedule frame's downlink
- * phase is measured from the t_sync of the frame that carries it, this engine
- * encodes the descriptor set once at init and retransmits the bytes, and a
- * retransmitted phase points at a window that has already gone. So a node
- * driven by this engine had to announce interval 0.
+ * One function pointer, same shape as the client seam. When the engine is
+ * about to hand out the schedule frame it asks the hook for the phase to
+ * announce and rewrites that one field of the outgoing copy. A negative
+ * return leaves the bytes exactly as the encoder wrote them.
  *
- * The fix is one function pointer, and it is deliberately the same shape as the
- * client seam above rather than a new mechanism. When the engine is about to
- * hand out the schedule frame it asks the hook for the phase to announce and
- * re-writes that one field of the outgoing copy. Return a negative value and
- * the bytes go out exactly as the encoder wrote them, which is what a node with
- * no live window gets and what every existing caller gets for free.
- *
- * It is asked ONLY for the schedule frame of a descriptor whose block actually
- * announces a window. A hook is never called speculatively, so a node that
- * announces nothing pays nothing - which is the same compatibility claim the
- * schedule block itself makes.
+ * Asked only for the schedule frame of a descriptor whose block actually
+ * announces a window - never speculatively, so a node announcing nothing
+ * pays nothing.
  */
 struct profile_sched_downlink {
 	/* The phase to announce, in counts of 1/32768 s, for a schedule frame
@@ -155,15 +131,12 @@ struct profile_sched_downlink {
  * What the node supplies.
  *
  * Every page builder is a callback rather than a buffer, because a body must
- * be built at the moment it goes out: the event counter is the packet index
- * and the values are the values at the instant of transmission. A cached body
- * is a repeated counter, and under a secured channel a repeated counter within
- * one (epoch, device number) is keystream reuse.
+ * be built at the moment it goes out: the event counter is the packet index,
+ * and a cached body would repeat a counter, which under a secured channel is
+ * keystream reuse.
  *
  * A NULL builder means the node does not emit that page. Suppressing page 82
- * outright is not an omission - it is the privacy rule of section 6, and it
- * is the mitigation that matters most for a node whose whole payload is a
- * stable identity.
+ * outright is the privacy rule of section 6, not an omission.
  */
 struct profile_sched_cfg {
 	/* NULL for a client profile family with no descriptor - an ANT+
@@ -173,22 +146,17 @@ struct profile_sched_cfg {
 
 	/*
 	 * The data-page rotation for a family with NO DESCRIPTOR, copied at
-	 * init. Ignored entirely when `desc` is non-NULL, where the rotation is
-	 * DERIVED from the schema - two places to state which pages exist is
-	 * one place and one drift, and that argument does not change just
-	 * because a second caller arrived.
+	 * init. Ignored entirely when `desc` is non-NULL, where the rotation
+	 * is derived from the schema instead.
 	 *
-	 * It exists because an ANT+ compatibility type's page numbers are fixed
-	 * by somebody else's document rather than announced by the node, so
-	 * there is nothing to derive them from. Without it a descriptor-less
-	 * family reaches take_rotation() with no pages and every data slot is
-	 * silent - which is a scheduler that interleaves common pages into
-	 * nothing.
+	 * Exists because an ANT+ compatibility type's page numbers are fixed
+	 * by somebody else's document, not announced by the node, so there is
+	 * nothing to derive them from. Without it a descriptor-less family
+	 * would reach take_rotation() with no pages and every data slot idle.
 	 *
-	 * A one-entry rotation is normal and is not a degenerate case: heart
-	 * rate sends its main page in almost every data slot and swaps in a
-	 * background page on its own cadence, which is the profile's rule and
-	 * belongs in the profile rather than here.
+	 * A one-entry rotation is normal, not degenerate: heart rate sends its
+	 * main page in almost every data slot and swaps in a background page
+	 * on its own cadence - the profile's rule, not this file's.
 	 */
 	const uint8_t *pages;
 	uint8_t        n_pages;
@@ -202,10 +170,9 @@ struct profile_sched_cfg {
 	int (*common_81)(uint8_t *body, void *user);
 	int (*common_82)(uint8_t *body, void *user);
 
-	/* Emit page 82 once every N data slots. 0 means never, which together
-	 * with common_82 == NULL is the two ways to say the same thing - a
-	 * node that has a battery page and a node that refuses to broadcast a
-	 * monotone operating-time counter. */
+	/* Emit page 82 once every N data slots. 0 (or common_82 == NULL) means
+	 * never - a node refusing to broadcast a monotone operating-time
+	 * counter. */
 	uint16_t common_82_every;
 
 	void *user;
@@ -220,15 +187,12 @@ struct profile_sched {
 	struct profile_sched_downlink dl;
 	bool                          have_dl;
 	/* Frame index of the schedule frame within the encoded set, or -1 when
-	 * the descriptor has none. Latched at init from
-	 * profile_desc_schedule_index() so the hot path compares an integer
-	 * rather than re-deriving a layout. */
+	 * the descriptor has none. Latched at init so the hot path compares
+	 * an integer rather than re-deriving a layout. */
 	int8_t                        sched_frame;
 
-	/* The encoded descriptor set, built once at init. It is at most 128
-	 * bytes and it changes only when the schema does, so encoding it per
-	 * slot would be work proportional to the field count in the hot path
-	 * for no benefit. */
+	/* The encoded descriptor set, built once at init: at most 128 bytes,
+	 * changing only when the schema does. */
 	uint8_t frames[PROFILE_TLM_MAX_FRAMES * PROFILE_TLM_FRAME_LEN];
 	uint8_t n_frames;
 
@@ -258,8 +222,8 @@ struct profile_sched {
  * Latch the configuration and encode the descriptor set.
  *
  * Returns 0, or whatever profile_desc_encode() refused the descriptor for -
- * so a malformed schema is a configuration error at start-up rather than a
- * node that transmits nonsense for a decade.
+ * a malformed schema is a start-up error rather than a node transmitting
+ * nonsense for a decade.
  */
 int profile_sched_init(struct profile_sched *ps,
 		       const struct profile_sched_cfg *cfg);
@@ -271,10 +235,9 @@ int profile_sched_set_client(struct profile_sched *ps,
 /*
  * Install or replace the downlink hook. NULL removes it.
  *
- * -ENOENT when the configured descriptor carries no schedule frame: a hook on a
- * node with nothing to re-phase is a caller that thinks it announced a window
- * and did not, and that is worth an error code at start-up rather than a
- * downlink that silently never opens.
+ * -ENOENT when the configured descriptor carries no schedule frame - a caller
+ * that thinks it announced a window and did not, worth catching at start-up
+ * rather than a downlink that silently never opens.
  */
 int profile_sched_set_downlink(struct profile_sched *ps,
 			       const struct profile_sched_downlink *dl);
@@ -286,9 +249,7 @@ int profile_sched_set_downlink(struct profile_sched *ps,
  * these eight bytes on the air in this slot".
  *
  * This form knows no time and therefore cannot re-phase a downlink window; it
- * is profile_sched_next_at() with RADIANT_TIME_NEVER, which is the value that
- * means "do not ask the hook". Every caller written before the response-slot
- * phase keeps this signature and keeps emitting exactly the bytes it emitted.
+ * is profile_sched_next_at() with RADIANT_TIME_NEVER, "do not ask the hook".
  */
 enum profile_slot_kind profile_sched_next(struct profile_sched *ps, uint8_t *body);
 
@@ -296,14 +257,11 @@ enum profile_slot_kind profile_sched_next(struct profile_sched *ps, uint8_t *bod
  * The same decision, told when the slot will actually be transmitted.
  *
  * `t_sync` is the instant the caller is about to hand to
- * radiant_sched_request_tx() as `t_sync_at`, and it is the ONE thing a page
- * scheduler is told about microseconds - see the file comment's claim that
- * nothing here knows one. That claim narrows rather than breaks: this function
- * does not interpret t_sync, it forwards it to the downlink hook, which is the
- * only thing in the chain that may.
+ * radiant_sched_request_tx() as `t_sync_at` - the one microsecond value this
+ * scheduler ever sees, and it only forwards it to the downlink hook rather
+ * than interpreting it.
  *
- * RADIANT_TIME_NEVER means "not known", and is the value the hookless form
- * passes.
+ * RADIANT_TIME_NEVER means "not known", the value the hookless form passes.
  */
 enum profile_slot_kind profile_sched_next_at(struct profile_sched *ps,
 					     uint8_t *body, radiant_time_t t_sync);
@@ -311,32 +269,29 @@ enum profile_slot_kind profile_sched_next_at(struct profile_sched *ps,
 /*
  * Send the whole descriptor set starting at the next slot.
  *
- * Three callers, all from the specification: a schema change (section 6),
- * command 0x06 "send the descriptor set now" (section 9), and every heartbeat
- * of a sparse node (section 8, which the engine does for itself). The first
- * two are what a receiver that just joined uses to get a schema without
- * waiting for the next cycle.
+ * Three callers: a schema change (section 6), command 0x06 "send the
+ * descriptor set now" (section 9), and every sparse-node heartbeat (section 8,
+ * done by the engine itself).
  */
 void profile_sched_request_descriptor(struct profile_sched *ps);
 
 /*
- * A sparse node has something to say. The page is repeated k times, one per
- * slot, k from the descriptor's repeat code - because there is no
- * retransmission and a scanning receiver may be mid-dwell elsewhere. The event
- * counter is what lets the receiver deduplicate the repeats, and it is the
- * same counter that detects loss in periodic mode: one mechanism, two jobs.
+ * A sparse node has something to say. The page repeats k times, one per slot
+ * (k from the descriptor's repeat code), since there is no retransmission and
+ * a scanning receiver may be mid-dwell elsewhere. The event counter lets a
+ * receiver deduplicate the repeats - the same counter that detects loss in
+ * periodic mode.
  *
  * Ignored on a node that is not sparse.
  */
 int profile_sched_post_event(struct profile_sched *ps, uint8_t page);
 
 /*
- * Heartbeat now, for an ASYNCHRONOUS sparse node - channel period 0x0000, no
- * slot discipline at all, so the engine has no grid to count heartbeat
- * intervals on and the node's own timer must say when.
+ * Heartbeat now, for an asynchronous sparse node - channel period 0x0000, no
+ * slot discipline, so the node's own timer must say when.
  *
  * A slot-aligned sparse node needs this only to force an early heartbeat; it
- * counts its own.
+ * counts its own otherwise.
  */
 void profile_sched_post_heartbeat(struct profile_sched *ps);
 

@@ -43,7 +43,7 @@ document and those logs disagree, the logs are right.
 Provenance: `[measured]` throughout unless stated. Measured on this bench on
 2026-08-09. The register semantics referenced are `[nRF datasheet]`; the
 predictions being tested are the `[inferred]` rows of `docs/ant-radio-link.md`.
-Nothing here derives from `sdk-ant`, from `libant.a`, or from an adopter-gated
+Nothing here derives from `sdk-ant`, from `libant.a`, or from a non-redistributable
 ANT+ device profile document.
 
 ---

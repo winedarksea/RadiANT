@@ -1,37 +1,27 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  * The 0xF1-0xF4 adapter: antr_sec_config(), antr_sec_key_set(),
- * antr_sec_epoch_set() and antr_sec_status_get().
+ * antr_sec_epoch_set(), antr_sec_status_get(). Tests the ADAPTER, not the
+ * transforms (radiant_sec's own suite covers those): the two ordering
+ * rules, the refusals, and the status encoding.
  *
- * These tests are about the ADAPTER, not about the transforms - radiant_sec's
- * own suite covers those. What is only testable here is the part the adapter
- * adds: the two ordering rules, the refusals, and the status encoding.
+ * Ordering rules: a channel needs its ID before its key (the device number
+ * is bound into the KDF and read from the channel, not the wire) and its
+ * period before its epoch (period turns a phase into a packet index).
+ * Neither fails loudly if skipped - keys under device 0 verify against
+ * nothing, a counter from the wrong period drifts like clock error - so
+ * both are refused with ANTW_CHANNEL_IN_WRONG_STATE.
  *
- * THE ORDERING RULES ARE THE POINT.
- *
- * A channel must have its ID before its key, because the provisioning device
- * number is bound into the KDF and antr_sec_key_set() reads it from the channel
- * rather than taking it on the wire. It must have its period before its epoch,
- * because the period is what turns a phase into a packet index. Neither is
- * guessable and both fail silently if guessed - keys derived under device
- * number 0 verify against nothing, and a counter derived from the wrong period
- * drifts in a way that looks exactly like clock error. So both are refused with
- * ANTW_CHANNEL_IN_WRONG_STATE, and both refusals are asserted here.
- *
- * Compiled only into the radiant_core.api.sec_host scenario, which is the only
- * one that links the adapter.
+ * Compiled only into the radiant_core.api.sec_host scenario, the only one
+ * that links the adapter.
  */
 
 #include <zephyr/kernel.h>
 
-/*
- * The whole file is behind the symbol, because CMakeLists.txt globs src/*.c
- * into every scenario this application defines and two of the three do not link
- * the adapter. A file that guarded only its ZTEST bodies would still fail at the
- * antr_sec_* declarations, which are themselves inside the same #ifdef in
- * src/ant_radio.h - deliberately, so the two halves appear and disappear
- * together.
- */
+/* The whole file is behind the symbol because CMakeLists.txt globs src/*.c
+ * into every scenario and two of three don't link the adapter; the
+ * antr_sec_* declarations are behind the same #ifdef in src/ant_radio.h so
+ * the two halves appear and disappear together. */
 #if defined(CONFIG_RADIANT_SEC_HOST_MESSAGES)
 
 #include <zephyr/ztest.h>

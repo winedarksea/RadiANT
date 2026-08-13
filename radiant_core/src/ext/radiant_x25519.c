@@ -2,56 +2,27 @@
 /*
  * X25519, from RFC 7748.
  *
- * Provenance: clean-room. Written from RFC 7748 sections 4.1 and 5 - the
- * curve parameters, the scalar clamping, the Montgomery ladder step and the
- * decodeUCoordinate rule - and verified against the test vectors in RFC 7748
- * section 5.2 and the Diffie-Hellman vector in section 6.1. No third-party
- * implementation was consulted or copied.
+ * Clean-room: written from RFC 7748 sections 4.1 and 5 (curve parameters,
+ * scalar clamping, Montgomery ladder step, decodeUCoordinate), verified
+ * against the test vectors in sections 5.2 and 6.1. No third-party
+ * implementation consulted.
  *
- * ---------------------------------------------------------------------------
- * WHY THIS IS WRITTEN RATHER THAN VENDORED
- * ---------------------------------------------------------------------------
- * The plan for this phase said "vendored public-domain X25519 with a
- * Provenance: line". Vendoring is normally the right call for a primitive this
- * well-studied - fewer eyes on new crypto code is strictly worse - and the
- * intent behind that instruction is preserved here: one entry point, one file,
- * displaceable wholesale by a PKA backend.
+ * Written rather than vendored: a reconstructed-from-memory file labelled
+ * "vendored public-domain" would carry a provenance claim nobody can check,
+ * which this repo's clean-room posture (ADR 0002) can't rest on. One entry
+ * point, one file - a real vendored implementation or a PKA backend can drop
+ * in behind radiant_sec_x25519() later without anything above it changing.
  *
- * What is NOT preserved is the word "vendored", and the difference matters
- * enough to write down. A vendored file's value is its provenance: it is the
- * bytes that thousands of deployments audited, and the Provenance: line is a
- * verifiable claim about where they came from. A file reconstructed from
- * memory and labelled "vendored public-domain" would carry a provenance claim
- * nobody can check, in a repository whose entire clean-room posture (ADR 0002)
- * rests on those claims being accurate. That is a worse outcome than an honest
- * clean-room implementation, so this is the honest one.
+ * Constant time in the secret scalar: every bit runs the same field-op
+ * sequence, conditional swap is arithmetic not branching, multiplication is
+ * schoolbook with no data-dependent branches/lookups. NOT claimed: resistance
+ * to power/EM analysis - a node needing that should use a PKA backend.
  *
- * If a real vendored implementation is wanted later, it drops in behind
- * radiant_sec_x25519() and nothing above this file changes. That is the point
- * of the seam.
- *
- * ---------------------------------------------------------------------------
- * WHAT IS AND IS NOT CONSTANT TIME
- * ---------------------------------------------------------------------------
- * The ladder is constant time in the secret scalar: every bit runs the same
- * sequence of field operations, and the conditional swap is arithmetic rather
- * than branching. Field multiplication is schoolbook with no data-dependent
- * branches or table lookups.
- *
- * NOT claimed: resistance to power or electromagnetic analysis, which is a
- * different threat model and needs hardware this does not have. A node whose
- * physical security matters should use a PKA backend, and the caps bit exists
- * so it can.
- *
- * ---------------------------------------------------------------------------
- * REPRESENTATION
- * ---------------------------------------------------------------------------
- * A field element is 16 signed 64-bit limbs of 16 bits each, little-endian,
- * value = sum(limb[i] * 2^(16i)). Limbs are signed and allowed to run wide
- * between carries, which is what makes subtraction free of borrows. 16-bit
- * limbs in 64-bit accumulators leave enormous headroom: a schoolbook product
- * accumulates at most 16 terms of 2^32, then folds with a factor of 38, which
- * reaches about 2^41 - twenty-two bits below overflow.
+ * Representation: a field element is 16 signed 64-bit limbs of 16 bits each,
+ * little-endian, value = sum(limb[i] * 2^(16i)). Limbs are signed and run
+ * wide between carries (borrow-free subtraction); a schoolbook product
+ * accumulates at most 16 terms of 2^32, folds by 38, reaching ~2^41 - 22 bits
+ * below overflow in the 64-bit accumulator.
  */
 
 #include <stdint.h>
@@ -101,14 +72,10 @@ static void fe_copy(fe o, const fe a)
 }
 
 /*
- * Swap a and b when `swap` is 1, leave them alone when it is 0, in the same
- * instructions either way.
- *
- * The mask is built by negating the flag, so 1 becomes all-ones and 0 becomes
- * all-zeros; the XOR dance then either exchanges the limbs or exchanges them
- * with zero. Nothing branches on `swap`, which is the whole requirement - the
- * ladder calls this once per bit of the secret scalar, so a branch here would
- * leak the scalar through timing.
+ * Swap a and b when `swap` is 1, in the same instructions either way. Mask
+ * is the negated flag (all-ones or all-zeros); nothing branches on `swap`,
+ * because the ladder calls this once per scalar bit and a branch would leak
+ * the scalar through timing.
  */
 static void fe_cswap(fe a, fe b, int64_t swap)
 {
@@ -142,12 +109,10 @@ static void fe_sub(fe o, const fe a, const fe b)
 }
 
 /*
- * One carry pass, bringing every limb back to 16 bits.
- *
- * The shift is arithmetic and therefore floors, which is exactly right for a
- * signed limb: a negative limb borrows from the next one up, and the borrow is
- * the floored quotient. The top limb's overflow wraps into limb 0 multiplied by
- * 38, because 2^255 = 19 (mod p) and therefore 2^256 = 38.
+ * One carry pass, bringing every limb back to 16 bits. The shift is
+ * arithmetic (floors), which is correct for a signed limb's borrow. Top
+ * limb's overflow wraps into limb 0 * 38, since 2^255 = 19 (mod p) so
+ * 2^256 = 38.
  */
 static void fe_carry(fe o)
 {
@@ -207,12 +172,9 @@ static void fe_mul_small(fe o, const fe a, int64_t n)
 }
 
 /*
- * Modular inverse by Fermat: a^(p-2) mod p.
- *
- * p - 2 = 2^255 - 21, whose binary expansion is all ones except bits 2 and 4.
- * So: square 255 times, multiplying in `a` at every step except those two.
- * 254 squarings and 252 multiplications, and it is constant time because the
- * exponent is a constant.
+ * Modular inverse by Fermat: a^(p-2) mod p. p - 2 = 2^255 - 21, all-ones
+ * except bits 2 and 4, so: square 255 times, multiply in `a` except at those
+ * two steps. Constant time since the exponent is a constant.
  */
 static void fe_invert(fe o, const fe a)
 {
@@ -230,13 +192,10 @@ static void fe_invert(fe o, const fe a)
 }
 
 /*
- * decodeUCoordinate, RFC 7748 section 5: little-endian, and the most
- * significant bit of the last byte is MASKED OFF rather than rejected.
- *
- * That masking is normative and easy to skip. Curve25519 u-coordinates are
- * 255 bits, so bit 255 carries no information - but implementations exist that
- * set it, and a receiver that treated the value as 256 bits would compute a
- * different shared secret from its peer and fail to agree, silently.
+ * decodeUCoordinate, RFC 7748 section 5: little-endian, most significant
+ * bit of the last byte MASKED OFF rather than rejected (normative). Some
+ * peers set that bit; treating it as 256 bits would silently disagree with
+ * such a peer on the shared secret.
  */
 static void fe_unpack(fe o, const uint8_t *in)
 {
@@ -249,13 +208,10 @@ static void fe_unpack(fe o, const uint8_t *in)
 }
 
 /*
- * Freeze into the canonical range [0, p) and serialise little-endian.
- *
- * After carrying, a value can still be anywhere in [0, 2p): the limbs are in
- * range but the number may be at or above p. Subtracting p conditionally twice
- * settles it. The subtraction is computed unconditionally into a scratch
- * element and selected with the same constant-time swap the ladder uses, so
- * nothing branches on the value.
+ * Freeze into [0, p) and serialise little-endian. After carrying the value
+ * can still be anywhere in [0, 2p), so subtract p conditionally, twice.
+ * Subtraction is computed unconditionally into scratch and selected with the
+ * same constant-time swap the ladder uses.
  */
 static void fe_pack(uint8_t *out, const fe n)
 {
@@ -304,12 +260,9 @@ int radiant_sec_x25519(uint8_t *out, const uint8_t *scalar, const uint8_t *point
 
 	/*
 	 * decodeScalar25519, RFC 7748 section 5. Clearing the low three bits
-	 * makes the scalar a multiple of the cofactor, which is what kills
-	 * small-subgroup contributions; setting bit 254 and clearing bit 255
-	 * fixes the ladder's length so the loop below is constant time.
-	 *
-	 * Done on a copy: the caller's scalar is theirs, and a function that
-	 * silently rewrote it would corrupt a host's stored key.
+	 * kills small-subgroup contributions (cofactor multiple); setting bit
+	 * 254 and clearing bit 255 fixes the ladder length for constant time.
+	 * Done on a copy so the caller's stored key isn't rewritten.
 	 */
 	memcpy(k, scalar, RADIANT_SEC_X25519_BYTES);
 	k[0] &= 248u;
@@ -323,14 +276,11 @@ int radiant_sec_x25519(uint8_t *out, const uint8_t *scalar, const uint8_t *point
 	fe_one(z3);
 
 	/*
-	 * The Montgomery ladder, RFC 7748 section 5. Bit 255 is always 0 after
-	 * clamping, so the loop starts at 254.
-	 *
-	 * The swap is deferred rather than performed twice per bit: `swap`
-	 * holds whether the two points are currently exchanged, and the XOR
-	 * makes each iteration swap only when the bit differs from the last
-	 * one. One conditional swap per bit instead of two, with the same
-	 * result and the same timing.
+	 * The Montgomery ladder, RFC 7748 section 5; loop starts at bit 254
+	 * (bit 255 is always 0 after clamping). Swap is deferred rather than
+	 * done twice per bit: `swap` tracks whether the points are currently
+	 * exchanged, XORed with each bit so a swap only happens when the bit
+	 * changes - one conditional swap per bit instead of two.
 	 */
 	for (i = 254; i >= 0; i--) {
 		bit = (int64_t)((k[i >> 3] >> (i & 7)) & 1u);
@@ -367,11 +317,8 @@ int radiant_sec_x25519(uint8_t *out, const uint8_t *scalar, const uint8_t *point
 	fe_mul(x2, x2, z2);
 	fe_pack(out, x2);
 
-	/*
-	 * Wipe the clamped scalar and every intermediate. The ladder's working
-	 * state is as sensitive as the scalar itself - x2/z2 at any point in
-	 * the loop plus the remaining bits would reconstruct the secret.
-	 */
+	/* Wipe the clamped scalar and every intermediate: the ladder's working
+	 * state is as sensitive as the scalar itself. */
 	memset(k, 0, sizeof(k));
 	memset(x1, 0, sizeof(x1));
 	memset(x2, 0, sizeof(x2));
@@ -394,11 +341,8 @@ int radiant_sec_x25519(uint8_t *out, const uint8_t *scalar, const uint8_t *point
 
 /*
  * An all-zero output means the peer sent a small-order point and the shared
- * secret carries no secrecy at all. RFC 7748 section 6.1 leaves rejecting it
- * optional for Diffie-Hellman; here it is mandatory, because the result is fed
- * straight into a KDF and installed as a root key. Accepting it would let any
- * passive attacker who can inject one packet fix the group key to a value they
- * know.
+ * secret carries no secrecy. RFC 7748 6.1 leaves rejecting it optional;
+ * mandatory here since the result becomes a root key.
  */
 bool radiant_sec_x25519_is_degenerate(const uint8_t *shared)
 {

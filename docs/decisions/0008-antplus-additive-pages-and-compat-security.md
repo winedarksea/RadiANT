@@ -50,7 +50,7 @@ Four facts constrain everything below.
 
 A fifth fact is a scope correction rather than a constraint: **ANT+ device
 profiles are open spec and may be implemented anywhere in this library**
-(Colin's ruling, 2026-08-10, amending ADR 0002). A page layout is a fact about an
+(maintainer ruling, 2026-08-10, amending ADR 0002). A page layout is a fact about an
 interoperation target, which is the reasoning ADR 0002 already applied to
 `src/profiles/`; extending it to `radiant_core/**` is a correction of scope, not
 a relaxation. The clean room that remains is `libant.a` and sdk-ant, and nothing

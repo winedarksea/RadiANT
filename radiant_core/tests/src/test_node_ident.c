@@ -2,24 +2,22 @@
 /*
  * test_node_ident.c - the hostless node's counters, epoch and pairing scalar.
  *
- * Provenance: docs/decisions/0009-hostless-node-identity.md. The ADR says its
- * own assertions belong to the phase that implements it and names three: the
- * boot counter advancing across a simulated reboot, the pairing counter
- * advancing BEFORE the public key is transmitted, and the caps.has_rng seam
- * compiling out. All three are here.
+ * Provenance: docs/decisions/0009-hostless-node-identity.md, which names three
+ * required assertions: the boot counter advancing across a simulated reboot,
+ * the pairing counter advancing BEFORE the public key is transmitted, and the
+ * caps.has_rng seam compiling out. All three are here.
  *
- * The scalar and device-number vectors come from tools/radiant_crypto.py's
+ * Scalar and device-number vectors come from tools/radiant_crypto.py's
  * node_pair_scalar() and node_tier0_devnum(), which share no code with
- * src/node/node_ident.c - so these assert agreement between two
- * implementations rather than self-consistency of one.
+ * src/node/node_ident.c, so these assert agreement between two independent
+ * implementations.
  *
- * ── Why a fake NVM rather than the real backend ────────────────────────────
- *
- * The bench board's test application has no storage partition, and the two
- * properties this file has to prove - a counter that survives a power cycle,
- * and a write that fails - are properties of node_nvm.h, not of NVS. So
- * radiant_core/tests/fake_nvm.c is the storage backend for this image exactly
- * as fake_radio.c is its radio, and node_ident.c is compiled unmodified.
+ * A fake NVM stands in for the real backend: the bench board's test
+ * application has no storage partition, and the two properties this file has
+ * to prove - a counter that survives a power cycle, and a write that fails -
+ * are properties of node_nvm.h, not of NVS. radiant_core/tests/fake_nvm.c is
+ * the storage backend here, exactly as fake_radio.c is the radio, and
+ * node_ident.c is compiled unmodified.
  */
 
 #include <zephyr/ztest.h>
@@ -160,12 +158,10 @@ ZTEST(node_ident, test_boot_counter_survives_a_power_cycle)
 	zassert_equal(NODE_IDENT_OK, node_ident_boot_counter(&counter));
 	zassert_equal(1u, counter);
 
-	/*
-	 * The assertion ADR 0009 asks for by name. fake_nvm_reboot() keeps the
+	/* The assertion ADR 0009 asks for by name. fake_nvm_reboot() keeps the
 	 * contents and forgets the init flag, so this is the same code path a
-	 * cold start takes - a counter that only incremented in RAM would read
-	 * 1 again here, and that node would reuse its epoch.
-	 */
+	 * cold start takes - a RAM-only counter would read 1 again here, and
+	 * that node would reuse its epoch. */
 	for (uint32_t expected = 2u; expected <= 5u; expected++) {
 		fake_nvm_reboot();
 		node_ident_reset();
@@ -452,12 +448,9 @@ ZTEST(node_ident, test_the_counter_is_in_nvm_before_any_scalar_exists)
 
 	zassert_equal(NODE_IDENT_OK, node_ident_pair_window_open(NULL));
 
-	/*
-	 * THE ASSERTION ADR 0009 ASKS FOR. Read straight out of the simulated
-	 * part, bypassing the layer under test, at the moment before any scalar
-	 * has been derived - so the public key that will be computed from it
-	 * cannot yet exist, and the counter has already moved.
-	 */
+	/* The assertion ADR 0009 asks for: read straight out of the simulated
+	 * part, bypassing the layer under test, before any scalar has been
+	 * derived - the counter has already moved. */
 	zassert_true(fake_nvm_peek_u32(NODE_NVM_KEY_PAIR, &stored));
 	zassert_equal(1u, stored,
 		      "pair_counter had not been persisted before the scalar "

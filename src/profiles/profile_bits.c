@@ -4,16 +4,13 @@
  *
  * Provenance: docs/radiant-telemetry.md section 6 (bit-packing convention and
  * the width-code table). That document is this project's own written
- * specification. No adopter-gated ANT+ device profile document, no sdk-ant
+ * specification. No ANT+ device profile document, no sdk-ant
  * source and nothing derived from libant.a informed this file. See
  * docs/decisions/0002-clean-room-policy.md.
  *
- * The whole of the implementation is the two loops below, and they are written
- * as bit-at-a-time deliberately rather than as a shift-and-mask over a
- * uint64_t straddle. A 48-bit field at offset 0 in a 48-bit area is the exact
- * case where the clever version shifts by 64 and is undefined; the readable
- * version is also the one that is right at the edges, and a field area is six
- * bytes.
+ * Bit-at-a-time rather than shift-and-mask over a uint64_t straddle: a 48-bit
+ * field at offset 0 in a 48-bit area would shift a uint64_t by 64, which is
+ * undefined.
  */
 
 #include <errno.h>
@@ -23,13 +20,9 @@
 
 #include "profile_bits.h"
 
-/*
- * docs/radiant-telemetry.md section 6. The gaps are not accidents: 1, 2, 4 and
- * 6 bits exist for the boolean and small-enum types of the vocabulary's class
- * 0x00-0x0F, and there is no 64-bit code because the field area is 48 bits and
- * a width that cannot fit in one page would be a width no descriptor could
- * describe.
- */
+/* docs/radiant-telemetry.md section 6. Gaps are deliberate: 1/2/4/6-bit codes
+ * serve the boolean/small-enum vocabulary; no 64-bit code because the field
+ * area itself is only 48 bits. */
 static const uint8_t width_table[PROFILE_BITS_WIDTH_CODE_MAX + 1u] = {
 	1u, 2u, 4u, 6u, 8u, 10u, 12u, 16u, 20u, 24u, 32u, 40u, 48u
 };
@@ -140,8 +133,7 @@ int64_t profile_bits_sign_extend(uint64_t raw, uint8_t width)
 	if ((raw & sign) == 0u) {
 		return (int64_t)raw;
 	}
-	/* Two's complement in `width` bits, widened. Built by subtraction
-	 * rather than by shifting ones in, so there is no implementation-
-	 * defined right shift of a negative value anywhere in the path. */
+	/* Widened two's complement via subtraction, not a right shift of a
+	 * negative value (implementation-defined). */
 	return (int64_t)raw - (int64_t)(sign << 1);
 }

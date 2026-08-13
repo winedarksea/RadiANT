@@ -1,53 +1,34 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * Provenance: original clean-room work. Written against
- * radiant_core/include/radiant_core/radiant_search.h, radiant_core/include/radiant_core/radiant_frame.h,
- * radiant_core/include/radiant_core/radiant_radio_hal.h, radiant_core/tests/fake_radio.h and the
- * measurements in docs/spike-a-results.md and docs/spike-b-results.md. Nothing
- * here derives from sdk-ant, from libant.a, or from any adopter-gated ANT+
- * device profile document.
+ * Provenance: original clean-room work. Written against radiant_search.h,
+ * radiant_frame.h, radiant_radio_hal.h, fake_radio.h and the measurements in
+ * docs/spike-a-results.md and docs/spike-b-results.md. Nothing here derives
+ * from sdk-ant, libant.a, or any ANT+ device profile document.
  *
- * ---------------------------------------------------------------------------
- * Tests for wildcard search
- * ---------------------------------------------------------------------------
- * radiant_search.c is policy, not plumbing, so every test here is about a decision
- * rather than about a return code. The seven that earn their place:
+ * Tests for wildcard search. radiant_search.c is policy, not plumbing, so every
+ * test is about a decision. The seven that earn their place:
  *
- *   1. THE SWEEP IS ARITHMETIC. 8 filters -> 32 sets, 2 filters -> 128 sets,
- *      from the same code and the same instance shape. A hardcoded 8 is
- *      invisible until somebody builds the RAIL backend, and running the suite
- *      at fake_radio_caps_preset_rail() is the only thing that finds it before
- *      then.
- *
- *   2. NOISE WITH A BAD CRC NEVER ACQUIRES. The single most important test in
- *      this module. A three-byte matcher fires on noise of order 1.4 times a
- *      second with eight filters armed (docs/spike-b-results.md, transmitter
- *      switched off), so a search that ranked on match count would acquire a
- *      device number out of thermal noise within seconds. Everything else here
- *      could regress and be caught on a bench; this one would ship.
- *
- *   3. devnum_lo COMES FROM THE FILTER INDEX. Proved the only way it can be:
- *      by delivering a frame whose own low byte disagrees with the filter it
- *      arrived on, and requiring the filter to win. If the module ever reads
- *      the body for it, this test fails and nothing else does.
- *
- *   4. ONE SWEEP SERVES EVERY SEARCHING CHANNEL. Two channels, two sensors, one
- *      window, one arm call. Without it eight searches take ~64 s and
- *      tools/ant_session.py fails outright, which is a symptom nobody would
- *      attribute to this module.
- *
- *   5. THE SEEN CACHE STEERS, AND EXPIRES. Fast re-acquisition is the thing a
- *      rider notices; a cache that never expired would steer at a sensor that
- *      left the room.
- *
- *   6. A TRUNCATED WINDOW DOES NOT SKIP A SET. The scheduler owns the radio and
- *      will cut search short for a tracked channel. If a short window advanced
- *      the sweep, coverage would silently degrade from certain-within-one-sweep
- *      to probabilistic, with no symptom but occasional slow pairing.
- *
- *   7. IDLE AND ZERO VIOLATIONS AT THE END OF EVERY TEST. end_of_test() is
- *      called by all of them.
+ *   1. THE SWEEP IS ARITHMETIC: 8 filters -> 32 sets, 2 filters -> 128 sets,
+ *      same code and instance shape. Running at fake_radio_caps_preset_rail()
+ *      is the only thing that catches a hardcoded 8 before a RAIL backend
+ *      exists.
+ *   2. NOISE WITH A BAD CRC NEVER ACQUIRES - the single most important test
+ *      here. Noise fires the 3-byte matcher ~1.4/s with eight filters armed
+ *      (docs/spike-b-results.md, TX off), so ranking on match count would
+ *      acquire a device number out of thermal noise within seconds.
+ *   3. devnum_lo COMES FROM THE FILTER INDEX, proved by delivering a frame
+ *      whose own low byte disagrees with the filter it arrived on and
+ *      requiring the filter to win.
+ *   4. ONE SWEEP SERVES EVERY SEARCHING CHANNEL - without it eight searches
+ *      take ~64 s and tools/ant_session.py fails outright.
+ *   5. THE SEEN CACHE STEERS, AND EXPIRES, so it never steers at a sensor
+ *      that left the room.
+ *   6. A TRUNCATED WINDOW DOES NOT SKIP A SET - the scheduler cuts search
+ *      short for tracked channels, and a short window advancing the sweep
+ *      would silently degrade coverage from certain-within-one-sweep to
+ *      probabilistic.
+ *   7. IDLE AND ZERO VIOLATIONS AT THE END OF EVERY TEST, via end_of_test().
  */
 
 #include <stdbool.h>
@@ -114,12 +95,9 @@ static const struct radiant_search_cbs search_cbs = {
 	.timeout = on_timeout,
 };
 
-/*
- * The HAL rx callback forwards straight into the module, which is exactly what
- * radiant_sched.c will do. Nothing in this path calls the HAL, so the mock's ISR
- * call budget is never at risk and a violation from this suite means a real
- * contract breach rather than a noisy fixture.
- */
+/* The HAL rx callback forwards straight into the module, exactly what
+ * radiant_sched.c will do; nothing in this path calls the HAL, so a violation
+ * here means a real contract breach, not a noisy fixture. */
 static void rx_cb(const struct radiant_rx_event *evt, void *user)
 {
 	ARG_UNUSED(user);
@@ -170,9 +148,9 @@ ZTEST_SUITE(radiant_search, NULL, NULL, setup, NULL, NULL);
 /* ---------------------------------------------------------------------------
  * The pump - a two-line stand-in for radiant_sched.c
  *
- * The module never touches the radio, so a suite has to arm for it. That is not
- * a test-only affordance: it is the same three calls the scheduler will make,
- * and writing them here is how the API's shape gets checked.
+ * The module never touches the radio, so the suite arms for it - the same
+ * three calls the scheduler will make, which is how the API's shape gets
+ * checked.
  * ---------------------------------------------------------------------------
  */
 
@@ -186,11 +164,8 @@ static int win_open(void)
 	radiant_time_t earliest;
 	int rc;
 
-	/*
-	 * The scheduler, not the search module, owns the arming lead. Passing
-	 * now + min_arm_lead_us is the convention radiant_search_window() documents,
-	 * and getting it wrong here would show up as RADIANT_RADIO_ETIME below.
-	 */
+	/* The scheduler, not the search module, owns the arming lead; getting
+	 * this wrong shows up as RADIANT_RADIO_ETIME below. */
 	earliest = radiant_radio_now() + radiant_radio_caps_get()->min_arm_lead_us + 100u;
 
 	rc = radiant_search_window(&g_s, earliest, &g_w);
@@ -402,16 +377,13 @@ ZTEST(radiant_search, test_window_shape_at_two_filters)
 }
 
 /*
- * A backend whose matcher cannot separate two addresses one bit apart gets the
- * two devnum_lo values of each set spread to opposite ends of the byte instead
- * of consecutive.
- *
- * This is not a preference. On a CC26x2 the two sync words are matched by a
- * correlator, and measured against a known 4 Hz transmitter at -47 dBm it
- * received ZERO frames when the two words were one bit apart against about
- * twenty when they were eight - so the consecutive layout, which is what every
- * set produced, made the part deaf for a whole sweep with no error anywhere.
- * See caps.min_filter_hamming_bits.
+ * A backend whose matcher cannot separate two addresses one bit apart gets
+ * the two devnum_lo values of each set spread to opposite ends of the byte.
+ * Not a preference: on a CC26x2 the correlator received ZERO frames from a
+ * known 4 Hz transmitter at -47 dBm when the two sync words were one bit
+ * apart, vs ~20 at eight bits apart - the consecutive layout made the part
+ * deaf for a whole sweep with no error anywhere. See
+ * caps.min_filter_hamming_bits.
  */
 static uint8_t popcount8(uint8_t v)
 {
@@ -448,11 +420,9 @@ ZTEST(radiant_search, test_spread_pairs_when_the_matcher_needs_distance)
 	end_of_test();
 }
 
-/*
- * Coverage survives the change: 128 sets still name all 256 values exactly
- * once, and the lookup that the seen cache and a named-device search depend on
- * still points at the set that really carries the device.
- */
+/* Coverage survives the change: 128 sets still name all 256 values exactly
+ * once, and the lookup the seen cache and a named-device search depend on
+ * still points at the set that really carries the device. */
 ZTEST(radiant_search, test_spread_pairs_still_cover_every_value_once)
 {
 	uint8_t seen[256] = { 0 };
@@ -506,9 +476,8 @@ ZTEST(radiant_search, test_consecutive_pairs_when_no_distance_is_needed)
 	end_of_test();
 }
 
-/* The invariant that says the two configurations are two views of the same 15
- * bytes. Cheap, and a future format that breaks it announces itself here rather
- * than on the air. */
+/* The invariant that the two configurations are two views of the same 15
+ * bytes; a future format that breaks it announces itself here, not on air. */
 ZTEST(radiant_search, test_crc_coverage_is_fifteen_either_way)
 {
 	zassert_equal(15, radiant_frame_covered_len(RADIANT_FRAME_CFG_SEARCH,
@@ -541,10 +510,10 @@ ZTEST(radiant_search, test_acquires_within_one_sweep)
 	len = fake_radio_build_ant_frame(frame, WORST_CASE_DEVNUM, WORST_CASE_DTYPE,
 					 WORST_CASE_TTYPE, payload8);
 
-	/* A real master: 45 frames at the measured 4.005 Hz, which spans more
-	 * than a full 8.32 s sweep. The dwell is longer than the period, so
-	 * every window necessarily contains at least one transmission - that is
-	 * the whole argument for dwell = one channel period. */
+	/* A real master: 45 frames at the measured 4.005 Hz, spanning more than
+	 * a full 8.32 s sweep. Dwell > period, so every window necessarily
+	 * contains a transmission - the argument for dwell = one channel
+	 * period. */
 	(void)fake_radio_air_master(radiant_radio_now() + 1000u, FAKE_RADIO_ANT_PERIOD_US,
 				    45u, frame, len);
 
@@ -634,15 +603,12 @@ ZTEST(radiant_search, test_devnum_lo_from_filter_index_not_body)
 	zassert_equal(0u, g_w.set_index);
 
 	/*
-	 * A frame built for device 0xBEEF - low byte 0xEF - delivered on filter
-	 * slot 3 of set 0, which is device_number low byte 0x03. On real
-	 * silicon that pairing cannot happen; here it is arranged deliberately,
-	 * because it is the only construction that can tell "read the filter
-	 * table" apart from "read the frame". The correct answer is 0xBE03: the
-	 * high byte from the body, the low byte from OUR table.
-	 *
-	 * If radiant_search.c ever parses the low byte out of the frame, this reads
-	 * 0xBEEF and no other test in the suite notices.
+	 * A frame built for device 0xBEEF (low byte 0xEF) delivered on filter
+	 * slot 3 of set 0 (device_number low byte 0x03). Real silicon can't
+	 * produce this pairing; it's arranged deliberately as the only
+	 * construction that tells "read the filter table" apart from "read the
+	 * frame". Correct answer: 0xBE03. If radiant_search.c ever parses the low
+	 * byte out of the frame, this reads 0xBEEF and nothing else notices.
 	 */
 	len = fake_radio_build_ant_frame(frame, 0xBEEFu, 0x0Bu, 5u, payload8);
 
@@ -665,14 +631,12 @@ ZTEST(radiant_search, test_devnum_lo_from_filter_index_not_body)
 }
 
 /*
- * The same recovery when the window was MERGED by the scheduler.
- *
- * radiant_sched.c combines several channels' requests into one hardware window, so
- * the HAL's filter_index indexes the merged array and the scheduler hands back
- * the index into the requesting channel's own filters beside the event. If
- * search read evt->filter_index there it would recover a real device number
- * that simply is not the one that transmitted - wrong, plausible, and invisible
- * on a bench. This is the test that pins the seam.
+ * The same recovery when the window was MERGED by the scheduler. radiant_sched.c
+ * combines several channels into one hardware window, so the HAL's
+ * filter_index indexes the merged array and the scheduler hands back the
+ * index into the requesting channel's own filters beside the event. Reading
+ * evt->filter_index directly would recover a real but wrong device number -
+ * wrong, plausible, and invisible on a bench.
  */
 ZTEST(radiant_search, test_merged_window_uses_the_supplied_filter_index)
 {
@@ -725,18 +689,15 @@ ZTEST(radiant_search, test_merged_window_uses_the_supplied_filter_index)
 /*
  * THE SWEEP MUST STILL ADVANCE WHEN EVERY WINDOW IS CUT SHORT.
  *
- * This is the regression test for the bug that made a real bench fail where
- * this project's own bench passed. A tracked slave takes the radio every
- * 249.7 ms, so with anything tracking, EVERY search window is preempted and
- * ends RADIANT_SCHED_DONE_ABORTED. While an abort credited nothing, set_dwell_us
- * never reached dwell_us, radiant_search_window() never called select_next_set(),
- * and the sweep sat on one set for ever - so a sensor anywhere else was
- * undiscoverable for as long as any channel was tracking. Measured on air
- * 2026-08-10: a transmitter at -25 dBm in set 2 was invisible to a 60 s scan.
+ * Regression test: a tracked slave takes the radio every 249.7 ms, so with
+ * anything tracking, EVERY search window is preempted and ends
+ * RADIANT_SCHED_DONE_ABORTED. Since an abort credited nothing, dwell never
+ * reached dwell_us and the sweep sat on one set forever - a sensor elsewhere
+ * was undiscoverable for as long as any channel tracked. Measured on air
+ * 2026-08-10: a -25 dBm transmitter in set 2 was invisible to a 60 s scan.
  *
- * Driven through the EXTERNAL sentinel because that is exactly how radiant_api.c
- * drives it, and because it needs no HAL: the whole mechanism is window ->
- * armed -> cut short, and none of it requires a radio to be present.
+ * Driven through the EXTERNAL sentinel, exactly how radiant_api.c drives it, and
+ * needing no HAL: window -> armed -> cut short.
  */
 ZTEST(radiant_search, test_a_sweep_advances_even_when_every_window_is_cut_short)
 {
@@ -783,13 +744,10 @@ ZTEST(radiant_search, test_a_sweep_advances_even_when_every_window_is_cut_short)
 	end_of_test();
 }
 
-/*
- * The other half of the contract: a window that never opened must credit
- * nothing. Without this, "credit what was listened to" would drift into
- * "credit anything that was asked for", and a sweep that skipped a set on every
- * refused arm would lose coverage silently - which is the failure the original
- * credit-nothing rule was protecting against and which must survive the fix.
- */
+/* The other half of the contract: a window that never opened must credit
+ * nothing, or "credit what was listened to" drifts into "credit anything
+ * asked for", and a sweep skipping a set on every refused arm loses coverage
+ * silently. */
 ZTEST(radiant_search, test_a_window_that_never_opened_credits_nothing)
 {
 	struct radiant_search_window w;
@@ -820,15 +778,11 @@ ZTEST(radiant_search, test_a_window_that_never_opened_credits_nothing)
 	end_of_test();
 }
 
-/*
- * stats.bad_filter_index has no test, and the reason is worth writing down: the
- * mock cannot produce an index outside the window's filter array - MATCH_INDEX
- * with an index past the end is simply not heard - so an out-of-range index is
- * only reachable from a real backend that has miscounted. The guard stays in
- * radiant_search.c because indexing filter_lo[] with an unchecked value from a
- * backend would be a read past the end of the array, and the counter stays so
- * that the bench sees it if it ever happens.
- */
+/* stats.bad_filter_index has no test: the mock cannot produce an index
+ * outside the window's filter array, so it's only reachable from a real
+ * backend that miscounted. The guard stays in radiant_search.c to avoid
+ * indexing filter_lo[] past the array end, and the counter stays so the
+ * bench sees it if it ever happens. */
 
 /* ---------------------------------------------------------------------------
  * 2. Noise never acquires
@@ -846,12 +800,9 @@ ZTEST(radiant_search, test_noise_with_bad_crc_never_acquires)
 	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
 				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
 
-	/*
-	 * Spike B measured 19, 22 and 27 CRC failures per 15 s window with eight
-	 * three-byte matchers armed and the transmitter switched OFF - about 1.4
-	 * a second. Thirty over three dwells is that rate, and there is no
-	 * transmitter here at all.
-	 */
+	/* Spike B measured 19, 22, 27 CRC failures per 15 s window with eight
+	 * 3-byte matchers armed, TX off - about 1.4/s. Thirty over three dwells
+	 * matches that rate, with no transmitter here at all. */
 	queued = fake_radio_air_noise(radiant_radio_now() + 1000u,
 				      radiant_radio_now() + 3u * RADIANT_SEARCH_DWELL_DEFAULT_US,
 				      30u, FAKE_RADIO_RSSI_NOISE_DBM);
@@ -1018,15 +969,12 @@ ZTEST(radiant_search, test_a_channel_only_gets_what_it_asked_for)
 }
 
 /*
- * Two wildcard ACQUIRE channels both match the same frame - which is exactly
- * what several simultaneous "find any device" channels look like to this
- * module, and is how a host commonly starts a multi-sensor pairing session.
- * The frame must claim only one of them; the other must still be searching
- * afterwards, ready for the NEXT device. Before the fix, both channels
- * matched id_match() (all-zero want matches anything) and the loop in
- * handle_ok() offered the acquisition to each in turn, so a single frame
- * emptied every wildcard ACQUIRE channel at once and nothing was left
- * listening for a second sensor.
+ * Two wildcard ACQUIRE channels both match the same frame, as several
+ * simultaneous "find any device" channels do during a multi-sensor pairing
+ * session. The frame must claim only one; the other keeps searching for the
+ * NEXT device. Before the fix, id_match()'s all-zero wildcard matched both
+ * and handle_ok() offered the acquisition to each in turn, so one frame
+ * emptied every wildcard channel at once.
  */
 ZTEST(radiant_search, test_a_frame_claims_only_one_wildcard_acquire_channel)
 {
@@ -1277,14 +1225,12 @@ ZTEST(radiant_search, test_scan_mode_reports_every_frame_and_never_leaves)
 }
 
 /*
- * radiant_search_chan_mode() is what a caller has to check before deciding
- * whether a match should convert a channel to tracking - api_search_acquired()
- * in radiant_api.c used to skip that check and called
- * radiant_channel_on_acquired() unconditionally, which silently turned a
- * background scan into a one-shot acquire the moment anything answered it.
- * This is the query that fix depends on; radiant_api.c has no slave-side test
- * scaffolding to exercise the fix itself (see the API composition suite's
- * README), so this is the coverage there is.
+ * radiant_search_chan_mode() is what a caller must check before converting a
+ * matched channel to tracking - api_search_acquired() used to skip it and
+ * called radiant_channel_on_acquired() unconditionally, silently turning a
+ * background scan into a one-shot acquire. radiant_api.c has no slave-side test
+ * scaffolding of its own (see the API composition suite's README), so this
+ * is the coverage there is.
  */
 ZTEST(radiant_search, test_chan_mode_reports_which_kind_of_search)
 {
@@ -1346,28 +1292,19 @@ ZTEST(radiant_search, test_truncated_windows_do_not_skip_a_set)
 
 /*
  * A SET WITH ONLY A SLIVER OF DWELL LEFT IS FINISHED, AND SAYS SO IN BOTH
- * ANSWERS AT ONCE.
+ * ANSWERS AT ONCE. The caller's contract needs radiant_search_set_complete() and
+ * radiant_search_dwell_remaining() to agree - "not finished" plus "600 us" is a
+ * sweep pinned forever on chunks too short to hear anything, since an
+ * arbitrated backend is likely to refuse a chunk that short, which credits
+ * ZERO and never shrinks the residue.
  *
- * The caller's contract has two halves that have to agree: keep the request
- * armed while radiant_search_set_complete() is false, and size the next chunk
- * from radiant_search_dwell_remaining(). A state where the first says "not
- * finished" and the second says "600 us" is a sweep pinned forever on chunks
- * far too short to hear anything - the set can never be finished off, so it
- * never advances, and the chunk ceiling never recovers because only a new set
- * resets it.
+ * MEASURED: on the nRF54L15 DK beside a 1 s BLE advertiser, chunks collapsed
+ * from 94200 us to 3378 us and stayed there for 11339 consecutive chunks,
+ * sets_advanced stuck at 1, frames_ok at 0, while MPSL granted 97.7% of every
+ * request. Same image with the advertiser off found the sensor in two chunks.
  *
- * MEASURED, which is why the epsilon exists: on the nRF54L15 DK beside a 1 s
- * BLE advertiser the chunks collapsed from 94 200 us to 3 378 us and stayed
- * there for 11 339 consecutive chunks, sets_advanced stuck at 1 and frames_ok
- * at 0, while MPSL was granting 97.7 % of every request made of it. The same
- * image with the advertiser off found the sensor in two chunks. An arbitrated
- * backend turns the sliver into a trap because a chunk that short is very
- * likely to be refused, and a refusal credits ZERO - so the residue never
- * shrinks.
- *
- * Asserted on both functions deliberately: either one alone can be made to
- * pass while the pair is still inconsistent, and it is the inconsistency that
- * wedges the sweep.
+ * Asserted on both functions deliberately: either alone can pass while the
+ * pair is still inconsistent, and the inconsistency is what wedges the sweep.
  */
 ZTEST(radiant_search, test_a_sliver_of_remaining_dwell_finishes_the_set)
 {

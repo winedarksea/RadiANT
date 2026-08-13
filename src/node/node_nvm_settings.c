@@ -3,39 +3,21 @@
  * node_nvm_settings.c - node_nvm.h over Zephyr's settings subsystem.
  *
  * Provenance: docs/decisions/0009-hostless-node-identity.md. The ADR specifies
- * two u32 counters and one key in NVM and deliberately does not specify a
- * storage backend; this is the standard Zephyr answer - the settings subsystem
- * over NVS in the board's storage_partition - chosen because this repository
- * had no persistence layer at all before this phase and inventing a private one
- * to hold three records would be the worse of the two mistakes available.
+ * the records but not a backend; this is the Zephyr-standard answer -
+ * settings over NVS in storage_partition - rather than a private format.
  *
- * ── The cache, and why loads do not touch flash ────────────────────────────
+ * The settings subtree-walk read path is the wrong shape/cost for a lookup
+ * node_ident.c makes before every public key. So the three records are read
+ * once at init into a RAM cache, and node_nvm_load() answers from it. This
+ * narrows what a load after store proves: it confirms the cache, not that the
+ * flash sector reads back. The durability claim rests on settings_save_one()
+ * returning 0 (committed, for the NVS backend); re-reading flash to verify
+ * would cost a second write's worth of wear per pairing window.
  *
- * The settings subsystem's read path is a subtree walk with a callback, which
- * is the wrong shape for "give me the boot counter" and the wrong cost for a
- * path that node_ident.c takes before every public key it emits. So the three
- * records are read once at init into a RAM cache, and node_nvm_load() answers
- * from it.
- *
- * That is a real narrowing of what node_nvm_load() proves, and it is stated
- * here rather than discovered: after a successful store, a load confirms that
- * this image agrees with itself about the value, not that the flash sector
- * reads back. The durability claim rests on settings_save_one() returning 0,
- * which for the NVS backend means the record is committed. Re-reading flash to
- * check would be a second write's worth of wear per pairing window on a device
- * whose entire storage argument is write frequency.
- *
- * ── Wear ───────────────────────────────────────────────────────────────────
- *
- * ADR 0009's table promises "once per boot, once per pairing window", and NVS
- * over a two-sector partition wear-levels within the sectors it is given. A
- * strap worn twice a day for ten years is on the order of 7 000 boot-counter
- * writes; at 4 bytes plus a name in an NVS sector pair that is comfortably
- * inside any Nordic flash's 10 000-cycle-per-page endurance once NVS's own
- * levelling is counted, because 7 000 records do not land on 7 000 erases.
- * THAT IS AN ARGUMENT, NOT A MEASUREMENT. The ADR asks for the number to be
- * measured in the implementation phase and this phase did not measure it: no
- * board in this project runs the settings backend yet.
+ * Wear: ADR 0009 promises writes once per boot, once per pairing window. A
+ * strap used twice daily for ten years is ~7000 boot-counter writes, well
+ * inside Nordic flash's 10k-cycle/page endurance with NVS levelling - this is
+ * an argument, not a measurement; no board here runs this backend yet.
  */
 
 #include <errno.h>
@@ -94,12 +76,8 @@ static int set_cb(const char *name, size_t len, settings_read_cb read_cb,
 	if (r == NULL) {
 		return -ENOENT;
 	}
-	/*
-	 * A stored record of the wrong length is left ABSENT rather than
-	 * partially loaded. See node_nvm.h: the only way this happens is a
-	 * firmware update that redefined a record, and half an old boot counter
-	 * is a boot counter that went backwards.
-	 */
+	/* Wrong-length record left absent rather than partially loaded
+	 * (see node_nvm.h). */
 	if (len != r->len) {
 		return -EINVAL;
 	}
@@ -182,11 +160,9 @@ int node_nvm_store(const char *key, const void *val, size_t len)
 		return NODE_NVM_EINVAL;
 	}
 
-	/*
-	 * Flash first, cache second. The other order would leave a caller that
-	 * checks by loading - which node_ident.c does before it lets a public
-	 * key out - agreeing with a value that never reached the part.
-	 */
+	/* Flash first, cache second - the other order would let a caller's
+	 * post-store load (node_ident.c does this) confirm a value that never
+	 * reached the part. */
 	rc = settings_save_one(path, val, len);
 	if (rc != 0) {
 		return NODE_NVM_EIO;

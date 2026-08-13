@@ -4,23 +4,12 @@
  * Provenance: original clean-room work, against radiant_rules.h/.c, which is
  * itself a transcription of docs/radiant-bridge.md sections 6.1 and 6.2.
  *
- * Five things earn their place:
- *   1. THE ACCUMULATOR RULE NEEDS A SECOND SAMPLE. Section 6.1's rule is
- *      about a DELTA; one sample cannot have one.
- *   2. THE DWELL IS ASYMMETRIC AND ENFORCED IN BOTH DIRECTIONS. ~2 s to
- *      assert, ~20 s to clear - the single number this section states, and
- *      the test that would catch a symmetric-dwell regression outright.
- *   3. ZONES ARE GATED ON WORN. Section 6.2's own words: "a strap on a table
- *      reads no pulse, and a bridge that reported 'at rest' for it would
- *      switch the air conditioning off in the middle of a workout." A zone
- *      output must never assert while worn is false, however the HR number
- *      reads.
- *   4. THE THRESHOLDS ARE THE SECTION'S OWN WORKED NUMBERS: rest < 82,
- *      zone2 >= 134.
- *   5. DERIVED OUTPUTS DO NOT RE-TRIGGER THE RULE THAT MADE THEM. Posting a
- *      DERIVED occupancy sample back onto the bus must not be picked up by
- *      eval_activity()/eval_zone() as if it were a real accumulator or HR
- *      reading - the loop guard rules_want() exists for exactly this.
+ * Five things earn their place: the accumulator rule needs a second sample
+ * (6.1 is about a DELTA); the dwell is asymmetric in both directions (~2 s to
+ * assert, ~20 s to clear); zones are gated on worn (6.2: a strap on a table
+ * must never read "at rest"); the thresholds are 6.2's own worked numbers
+ * (rest < 82, zone2 >= 134); and derived outputs must not re-trigger the rule
+ * that made them (rules_want() is the loop guard for this).
  */
 
 #include <stdbool.h>
@@ -234,15 +223,10 @@ ZTEST(radiant_rules, test_zone_thresholds_are_82_and_134)
 	zassert_not_null(at_rest, NULL);
 	zassert_equal(at_rest->raw, 0, "134 bpm is not resting: must have cleared");
 
-	/*
-	 * Between the two thresholds, held past the zone dwell: zone 2 must
-	 * CLEAR (it was asserted above) and at-rest must stay clear - neither
-	 * output may read true for a mid-range value. Not resetting cap_n
-	 * here on purpose: with change-only publishing, a rule that produces
-	 * no new event for an already-false output is CORRECT, not silent -
-	 * the assertion is on the last known value in the whole capture, and
-	 * at-rest's last known value is already the block-2 clear.
-	 */
+	/* Between the two thresholds, held past the zone dwell: zone 2 must
+	 * CLEAR and at-rest must stay clear. cap_n is deliberately not reset -
+	 * with change-only publishing, no new event for an already-false output
+	 * is correct, not silent. */
 	t += 1u * US_PER_S;
 	post_hr(src, 100, t);
 	t += 4u * US_PER_S;

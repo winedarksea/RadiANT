@@ -10,10 +10,8 @@
 
 #include "radiant_matter.h"
 
-/* A fixed level and no Kconfig symbol, matching radiant_rules.c and
- * radiant_binding.c beside it: nothing in src/bridge carries configuration of
- * its own, and a table that is the same on every build has nothing to
- * configure. */
+/* Fixed level, no Kconfig symbol - nothing in src/bridge carries its own
+ * configuration. */
 LOG_MODULE_REGISTER(radiant_matter, LOG_LEVEL_INF);
 
 /* ---------------------------------------------------------------------------
@@ -23,9 +21,8 @@ LOG_MODULE_REGISTER(radiant_matter, LOG_LEVEL_INF);
 
 static const struct radiant_matter_type_map type_map[] = {
 	{
-		/* Occupancy. Section 8.2 calls this "a stretch" and it is, but
-		 * it is the row that makes the four derived booleans of
-		 * section 6 appear in every controller with nothing installed. */
+		/* Occupancy: a stretch (section 8.2), but it's the row that
+		 * surfaces the four derived booleans of section 6. */
 		.field_type = RADIANT_FIELD_OCCUPANCY,
 		.device_type = MATTER_DEVTYPE_OCCUPANCY_SENSOR,
 		.cluster = MATTER_CLUSTER_OCCUPANCY_SENSING,
@@ -33,14 +30,9 @@ static const struct radiant_matter_type_map type_map[] = {
 		.mul = 1, .div = 1, .offset = 0,
 	},
 	{
-		/*
-		 * THE ONLY ROW WITH AN OFFSET, and section 8.1a says so in as
-		 * many words. The vocabulary's canonical unit is KELVIN and
-		 * Matter wants 0.01 degrees Celsius: K x 100 - 27315, a scale
-		 * AND a shift. Every other row in this table is a pure decimal
-		 * scale, which is why `exp` alone was enough everywhere else
-		 * and is not enough here.
-		 */
+		/* The only row with an offset (section 8.1a): canonical unit
+		 * is kelvin, Matter wants 0.01degC, so K*100-27315 is a scale
+		 * and a shift, not a pure decimal scale. */
 		.field_type = RADIANT_FIELD_TEMPERATURE,
 		.device_type = MATTER_DEVTYPE_TEMPERATURE_SENSOR,
 		.cluster = MATTER_CLUSTER_TEMP_MEASUREMENT,
@@ -56,28 +48,19 @@ static const struct radiant_matter_type_map type_map[] = {
 		.mul = 100, .div = 1, .offset = 0,
 	},
 	{
-		/*
-		 * device_type 0 - "cluster only, on the binding's own
-		 * endpoint". A battery is not a device; it is a property of
-		 * one, and giving it an endpoint of its own would put a
-		 * phantom entity in every controller.
-		 */
+		/* device_type 0: cluster only, on the binding's own endpoint.
+		 * A battery is a property, not a device - its own endpoint
+		 * would be a phantom entity. */
 		.field_type = RADIANT_FIELD_BATTERY_SOC,
 		.device_type = 0u,
 		.cluster = MATTER_CLUSTER_POWER_SOURCE,
 		.attribute = MATTER_ATTR_BAT_PERCENT_REMAINING,
 		.mul = 2, .div = 1, .offset = 0,
 	},
-	/*
-	 * AND THAT IS THE WHOLE TABLE. RADIANT_FIELD_HEART_RATE (0x26) is
-	 * ABSENT ON PURPOSE - section 8.1's table spells the entry out as
-	 * "none, and section 1 is the whole reason". Anyone adding it here
-	 * should read section 8.3 and 8.3b first: both candidates are outside
-	 * tier 1, one is a deliberately mislabelled Flow Measurement and the
-	 * other is invisible until somebody else's controller learns an MEI
-	 * cluster. Neither belongs in a table whose promise is "appears
-	 * correctly named on a QR scan with nothing installed".
-	 */
+	/* RADIANT_FIELD_HEART_RATE (0x26) is absent on purpose (section 8.1):
+	 * both Matter candidates - a mislabelled Flow Measurement, or an MEI
+	 * cluster invisible to most controllers - are outside tier 1. See
+	 * section 8.3/8.3b before adding it. */
 };
 
 const struct radiant_matter_type_map *radiant_matter_row(uint8_t field_type)
@@ -136,18 +119,10 @@ bool radiant_matter_convert(const struct radiant_sample *s, int64_t *out)
 	}
 
 	/*
-	 * ONE DIVISION, AT THE END, AND THAT IS THE WHOLE REASON THIS IS NOT
-	 * THREE LINES.
-	 *
-	 * value_SI = raw * 10^exp, and the cluster value is
-	 * value_SI * mul / div + offset. Doing that as written loses the
-	 * fraction twice for a negative exponent - once turning raw into
-	 * value_SI and again applying mul/div - and a sample carrying
-	 * 29815 x 10^-2 K (298.15 K, a perfectly ordinary room) would land two
-	 * hundredths of a degree out before the offset is even applied.
-	 *
-	 * So the negative exponent is folded into the DENOMINATOR and the
-	 * division happens once.
+	 * One division, at the end. value_SI = raw * 10^exp, cluster value =
+	 * value_SI * mul / div + offset; doing that literally loses the
+	 * fraction twice for a negative exponent. So a negative exponent is
+	 * folded into the denominator instead, and division happens once.
 	 */
 	num = s->raw;
 	den = row->div;
@@ -176,37 +151,19 @@ bool radiant_matter_convert(const struct radiant_sample *s, int64_t *out)
 	}
 	num *= row->mul;
 
-	/*
-	 * ROUND HALF AWAY FROM ZERO, not truncate. C integer division rounds
-	 * toward zero, which biases every converted value toward 0 degrees and
-	 * makes the bias asymmetric across the freezing point - the same
-	 * reading would round down above it and up below it. Half a hundredth
-	 * of a degree is not a lot; a discontinuity at one particular
-	 * temperature is the kind of thing that gets found much later.
-	 */
+	/* Round half away from zero, not truncate: C's toward-zero integer
+	 * division would bias asymmetrically around 0 (e.g. the freezing
+	 * point for temperature). */
 	if ((num >= 0) == (den > 0)) {
 		v = (num + den / 2) / den;
 	} else {
 		v = (num - den / 2) / den;
 	}
 
-	/*
-	 * The offset guard has to branch on the SIGN of the offset, and the
-	 * version that did not is why every temperature sample was refused.
-	 *
-	 * `v > INT64_MAX - offset` reads like a bounds check and is one only for
-	 * a positive offset. Temperature's offset is -27315, so the subtrahend is
-	 * negative and INT64_MAX - (-27315) overflows before the comparison ever
-	 * happens - undefined, and in practice a large negative number that every
-	 * v is greater than. The single row in this table with an offset was
-	 * therefore the single row the guard rejected outright, which is the most
-	 * unhelpful possible distribution of the bug: the three pure-scale rows
-	 * all passed and the arithmetic they exercise is the arithmetic that
-	 * cannot go wrong.
-	 *
-	 * Only one of the two bounds can be at risk for a given sign, so each is
-	 * tested in the branch where it is the reachable one.
-	 */
+	/* Must branch on offset's sign: `v > INT64_MAX - offset` is only a
+	 * valid bounds check for offset > 0 - for temperature's -27315,
+	 * INT64_MAX - (-27315) overflows before the comparison runs. Each
+	 * bound is tested only in the branch where it's the reachable one. */
 	if (row->offset > 0) {
 		if (v > INT64_MAX - row->offset) {
 			return false;
@@ -225,12 +182,7 @@ bool radiant_matter_convert(const struct radiant_sample *s, int64_t *out)
  * ---------------------------------------------------------------------------
  */
 
-/*
- * Endpoint 0 is the Matter root node and can never be ours, so assignment
- * starts at 1. Section 8.1's worked example - "a household with one strap and
- * one trainer shows four entities" - is the size this is scaled for, with room
- * for the section 8.1a temperature and humidity rows on top.
- */
+/* Endpoint 0 is the Matter root node, so assignment starts at 1. */
 #define MATTER_ENDPOINT_FIRST 1u
 
 static struct radiant_matter_endpoint endpoints[RADIANT_MATTER_MAX_ENDPOINTS];
@@ -270,14 +222,10 @@ const struct radiant_matter_endpoint *radiant_matter_endpoint_for(uint32_t sourc
 }
 
 /*
- * Instantiate on first sight of a (source, field_id) whose type has a row.
- *
- * KEYED ON field_id AND NOT ON field_type, which is the entire point of
- * section 8.1's rewrite. The four derived booleans of section 6 - worn, bike in
- * use, at rest, training - are ALL type 0x02. Keyed on type they would collapse
- * into one endpoint that four different rules fought over; keyed on field_id
- * they are four instances of one table row, which is what "an endpoint is
- * instantiated per announced field, not per binding kind" means.
+ * Instantiates on first sight of a (source, field_id) whose type has a row.
+ * Keyed on field_id, not field_type (section 8.1): the four derived booleans
+ * of section 6 are all type 0x02, and keying on type would collapse them
+ * into one contested endpoint instead of four instances of one row.
  */
 static const struct radiant_matter_endpoint *endpoint_get_or_add(
 	const struct radiant_sample *s, const struct radiant_matter_type_map *row)
@@ -332,15 +280,9 @@ __weak void radiant_matter_attr_write(uint16_t endpoint_id, uint32_t cluster,
 
 static bool matter_want(const struct radiant_sample *s)
 {
-	/*
-	 * First refusal, and it is a real filter rather than a formality: the
-	 * bus carries every field of every binding, and the Matter plane has
+	/* Real filter: the bus carries every field, the Matter plane has
 	 * rows for four of them. Declining here keeps heart rate, power,
-	 * cadence and the whole accumulating half of the vocabulary out of
-	 * publish() entirely - which is section 8.1's "a field the Matter
-	 * plane declines and the MQTT plane carries", enforced at the one
-	 * place that can enforce it.
-	 */
+	 * cadence etc. out of publish() (section 8.1). */
 	return radiant_matter_row(s->field_type) != NULL;
 }
 
@@ -366,14 +308,9 @@ static void matter_publish(const struct radiant_sample *s)
 		return;
 	}
 
-	/*
-	 * A STALE SAMPLE IS STILL WRITTEN, and that is deliberate. Matter has
-	 * no "this value is old" on these clusters - the alternative to writing
-	 * it is leaving the last good value in place, which is
-	 * indistinguishable from a live sensor reporting the same thing. The
-	 * staleness belongs in reachability, which is a node-level property and
-	 * not this table's business.
-	 */
+	/* A stale sample is still written, deliberately: these clusters have
+	 * no "old value" flag, and staleness is a node-level (reachability)
+	 * concern, not this table's. */
 	radiant_matter_attr_write(e->endpoint_id, row->cluster, row->attribute,
 				  value);
 }

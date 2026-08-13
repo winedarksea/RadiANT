@@ -4,13 +4,12 @@
  *
  * Provenance: docs/radiant-telemetry.md in full - section 3 (channel
  * parameters), section 4 (page map), section 5 (field kinds), section 6 (the
- * descriptor and the data pages), section 7 (the field-type vocabulary),
- * section 8 (sparse mode), section 9 (the reliable-command page layouts) and
- * section 11 (what is not in v1, and the rule that every reservation is
- * populated with zeros). That document is this project's own written
- * specification, authored in advance of any code. No adopter-gated ANT+ device
- * profile document was read for it, no sdk-ant source was consulted, and
- * nothing here derives from libant.a. See
+ * descriptor and data pages), section 7 (field-type vocabulary), section 8
+ * (sparse mode), section 9 (reliable-command page layouts) and section 11
+ * (what is not in v1, and the rule that every reservation is zero). This
+ * project's own written specification, authored in advance of any code. No
+ * ANT+ device profile document was read for it, no sdk-ant
+ * source was consulted, and nothing here derives from libant.a. See
  * docs/decisions/0002-clean-room-policy.md.
  *
  * ---------------------------------------------------------------------------
@@ -18,44 +17,35 @@
  * ---------------------------------------------------------------------------
  * The envelope, not a sensor. A node publishes typed values against a schema
  * it broadcasts itself, and a receiver that has never heard of the node
- * decodes them from that broadcast alone - no registry lookup, no back-channel,
- * no out-of-band knowledge beyond "device type 0x60 means read page 0x00 as a
- * descriptor". That last sentence is the gate this file exists to pass.
+ * decodes them from that broadcast alone - no registry lookup, no
+ * back-channel, no out-of-band knowledge beyond "device type 0x60 means read
+ * page 0x00 as a descriptor".
  *
- * Three things live here:
- *
- *   - struct profile_descriptor, and the encoder and decoder that move it to
- *     and from the frame set of page 0x00;
- *   - struct profile_desc_rx, the receiver-side accumulator that assembles a
- *     frame set out of frames arriving one per slot, in any order, with holes;
- *   - the data-page encode and decode, which are the bit packer plus the
- *     descriptor's offsets and nothing else.
+ * Three things live here: struct profile_descriptor with its encoder/decoder
+ * for page 0x00's frame set; struct profile_desc_rx, the receiver-side
+ * accumulator that assembles a frame set arriving one per slot, in any order,
+ * with holes; and data-page encode/decode, which is the bit packer plus the
+ * descriptor's offsets and nothing else.
  *
  * ---------------------------------------------------------------------------
  * What this deliberately does NOT do, and why
  * ---------------------------------------------------------------------------
- *   - NO SECURITY. v1 sets no transform bit, computes no MAC, and emits no
- *     descriptor authentication frame. Every reserved field is written as
- *     zero, per section 11: "Every reservation in this document is populated
- *     with zeros in v1." The encoder REFUSES a descriptor with a transform bit
- *     set rather than emitting one it cannot authenticate - the mandatory
- *     authentication frame of section 6 has no implementation yet, and a
- *     transform announced without it is worse than no transform.
- *   - NO COMMAND STATE MACHINE. The page 0x10 / 0x11 byte layouts are here
- *     because they are layouts and section 9 fixes them; the idempotency rule,
- *     the accept window, the tag computation and the failed-verification rate
- *     limit are not, because they need a key and they belong to the phase that
- *     turns the command path on. That phase has landed and they are in
- *     profile_command.h - so this remains a boundary rather than a gap, and the
- *     inline tag is still a caller-supplied value about whose derivation this
- *     file has no opinion. What DID change here is that the tag comes in two
- *     widths now, because the long-range PHY can carry the longer one; see the
- *     section-9 block near the end of this header.
- *   - NO SCHEDULE-BLOCK POLICY. The block itself is here now - frame 1 byte [3]
- *     bits 3..0 and the schedule frame, both in profile_schedule.h - but this
- *     file only moves it to and from the wire. What a receiver DOES with a
- *     downlink window is profile_command.h's, and this file still has no
- *     opinion about it beyond decoding it correctly.
+ *   - NO SECURITY. v1 sets no transform bit, computes no MAC, emits no
+ *     descriptor authentication frame; every reserved field is zero (section
+ *     11). The encoder refuses a descriptor with a transform bit set rather
+ *     than emitting one it cannot authenticate, since the mandatory
+ *     authentication frame of section 6 has no implementation yet.
+ *   - NO COMMAND STATE MACHINE. The page 0x10/0x11 byte layouts are here
+ *     since section 9 fixes them; the idempotency rule, accept window, tag
+ *     computation and rate limit are in profile_command.h, which needs a key
+ *     and per-node state this file doesn't have. The inline tag remains a
+ *     caller-supplied value this file has no opinion about deriving. What DID
+ *     change: the tag now comes in two widths, since the long-range PHY can
+ *     carry the longer one - see the section-9 block near the end.
+ *   - NO SCHEDULE-BLOCK POLICY. The block itself (frame 1 byte [3] bits 3..0
+ *     and the schedule frame, both in profile_schedule.h) is here, but this
+ *     file only moves it to and from the wire; what a receiver does with a
+ *     downlink window is profile_command.h's.
  */
 
 #ifndef RADIANT_PROFILE_TELEMETRY_H_
@@ -66,9 +56,7 @@
 #include <stdint.h>
 
 /* The schedule block: the clock-accuracy nibble of frame 1 and the schedule
- * frame's 48 bits. Its own header carries the argument for every field, and it
- * inherits the clock-accuracy ladder from profile_handoff.h rather than
- * restating it. */
+ * frame's 48 bits. Its own header carries the argument for every field. */
 #include "profile_schedule.h"
 
 #ifdef __cplusplus
@@ -112,12 +100,9 @@ extern "C" {
 /* ---------------------------------------------------------------------------
  * The interleave - docs/radiant-telemetry.md section 6
  *
- * 119 / 120, cycle length 121. NOT the 65 the generic ANT+ guidance claims and
- * not the 64 tools/ant_pages.py once used: sdk-ant's certified bicycle power
- * profile interleaves page 80 at 119 and page 81 at 120, commented "Minimum:
- * Interleave every 121 messages". A node that sends common pages twice as
- * often as the profile requires is not simulating anything and spends radio
- * energy to do it.
+ * 119/120, cycle length 121. NOT the 65 the generic ANT+ guidance claims: a
+ * node sending common pages twice as often as required spends radio energy
+ * for nothing.
  * ---------------------------------------------------------------------------
  */
 #define PROFILE_TLM_CYCLE        121u
@@ -127,18 +112,15 @@ extern "C" {
 /* ---------------------------------------------------------------------------
  * Frame 0 flags, byte [7] - docs/radiant-telemetry.md section 6
  *
- * THE FORWARD-COMPATIBILITY RULE, and it is the most important line in the
- * envelope document:
+ * The forward-compatibility rule:
+ *   bits 7..4 are TRANSFORM flags. They change how bytes must be interpreted,
+ *   so a receiver seeing one it doesn't implement must not decode the node's
+ *   data pages. FAIL CLOSED.
+ *   bits 3..0 are INFORMATIONAL - describe the node, not the byte layout, so
+ *   an unknown one is ignored. FAIL OPEN.
  *
- *   bits 7..4 are TRANSFORM flags. They change how the bytes must be
- *   interpreted, so a receiver that sees one it does not implement MUST NOT
- *   decode the node's data pages. FAIL CLOSED.
- *
- *   bits 3..0 are INFORMATIONAL. They describe the node, not the byte layout,
- *   so an unknown one is ignored. FAIL OPEN.
- *
- * profile_desc_may_decode_data() is that rule, and it is the only place it
- * should ever be written.
+ * profile_desc_may_decode_data() is that rule, the only place it should be
+ * written.
  * ---------------------------------------------------------------------------
  */
 #define PROFILE_TLM_FLAG_X_CONF   0x80u /* data pages are AES-128-CTR ciphertext */
@@ -146,16 +128,13 @@ extern "C" {
 #define PROFILE_TLM_FLAG_RSVD_5   0x20u /* descriptor-set encryption; refused */
 #define PROFILE_TLM_FLAG_RSVD_4   0x10u /* v2 TESLA delayed key disclosure */
 /*
- * Bit 3 was X_PRIV, "the device number rotates per epoch", and it is now
- * reserved-must-be-zero. ADR 0006 rejected CONTINUOUS per-128-second rotation,
- * whose cost cliff is mid-session rotation; it did not reject rotation as such,
- * and its own cost table marks first-boot-only, explicit-user-action and
- * every-power-up rotation as free "because a rotation never happens while a
- * channel is open". Per-boot re-roll is identity Tier 2, an approved opt-in,
- * and it needs NO BIT HERE - a node that re-rolls at power-up is
- * indistinguishable on air from one provisioned with that number, which is the
- * point. Announcing a privacy posture in the clear is itself a leak, so this
- * bit stays reserved rather than being reused.
+ * Bit 3 was X_PRIV, "the device number rotates per epoch", now
+ * reserved-must-be-zero. ADR 0006 rejected continuous per-128-second
+ * rotation (its cost cliff is mid-session rotation), not rotation as such;
+ * per-boot re-roll is identity Tier 2, an approved opt-in, and needs no bit
+ * here - a node that re-rolls at power-up is indistinguishable on air from
+ * one provisioned with that number. Announcing a privacy posture in the
+ * clear is itself a leak, so this bit stays reserved.
  */
 #define PROFILE_TLM_FLAG_RSVD_3   0x08u
 #define PROFILE_TLM_FLAG_SPARSE   0x04u /* transmits on change plus a heartbeat */
@@ -169,9 +148,8 @@ extern "C" {
  * The field-type vocabulary - docs/radiant-telemetry.md section 7
  *
  * Only the class boundaries and the handful of types this file reasons about
- * are named here. The full table lives in the document and, for a host, in
- * tools/ant_pages.py: a firmware node knows the two or three types it
- * publishes and has no use for a 40-entry table in flash.
+ * are named here; the full table lives in the document and tools/ant_pages.py.
+ * A firmware node has no use for a 40-entry table in flash.
  * ---------------------------------------------------------------------------
  */
 #define PROFILE_TLM_CLASS_STATE_FIRST 0x00u /* boolean and state */
@@ -193,14 +171,9 @@ extern "C" {
 #define PROFILE_TLM_TYPE_REVOLUTIONS 0x35u
 #define PROFILE_TLM_TYPE_EVENT_COUNT 0x36u
 
-/*
- * True for a type in class 0x30-0x3F.
- *
- * "Everything in this class MUST carry the accumulate bit. That is what the
- * class is for, and a descriptor that clears the bit on one of these types is
- * malformed." The encoder enforces it and the decoder rejects it, which is
- * cheaper than every receiver discovering the same malformed node separately.
- */
+/* True for a type in class 0x30-0x3F. Everything in this class must carry the
+ * accumulate bit; the encoder enforces it and the decoder rejects it, cheaper
+ * than every receiver discovering the same malformed node separately. */
 bool profile_tlm_type_is_accumulating(uint8_t type);
 
 /* ---------------------------------------------------------------------------
@@ -209,14 +182,13 @@ bool profile_tlm_type_is_accumulating(uint8_t type);
  */
 
 /*
- * W in {2, 4, 8} in v1. Encoding 0 means W=1 - an inline 16-bit tag - and is
- * reserved for the reliable-command page, refused on a data page. The window
- * set is not arbitrary: the spread MAC self-synchronises across packet loss
- * only because W divides both 256 and 65536, so a byte-counter wrap and a
- * 16-bit counter wrap both land on a window boundary. A future W of 3, 5 or 6
- * would break resynchronisation silently, one lost packet at a time.
+ * W in {2, 4, 8} in v1. Encoding 0 means W=1 (an inline 16-bit tag), reserved
+ * for the reliable-command page and refused on a data page. The window set
+ * is not arbitrary: the spread MAC self-synchronises across packet loss only
+ * because W divides both 256 and 65536, so a future W of 3, 5 or 6 would
+ * break resynchronisation silently, one lost packet at a time.
  *
- * With no transform enabled the field is reserved and is written as zero.
+ * With no transform enabled the field is reserved and written as zero.
  */
 #define PROFILE_TLM_W_CODE_RESERVED 0u
 #define PROFILE_TLM_W_CODE_2        1u
@@ -240,10 +212,9 @@ uint8_t profile_tlm_repeat_for(uint8_t k_code);
 /*
  * One field descriptor - one of frames 2..N.
  *
- * `page` and `bit_offset` together are what make the layout a SCHEMA rather
- * than a format: turning X_AUTH on shrinks the field area from 48 bits to 40
- * and moves nothing, because the node re-publishes a descriptor with a new
- * schema id and every receiver picks it up within one interleave cycle.
+ * `page` and `bit_offset` together make the layout a schema rather than a
+ * format: turning X_AUTH on shrinks the field area from 48 bits to 40 and
+ * moves nothing, since the node re-publishes with a new schema id.
  */
 struct profile_field {
 	uint8_t id;         /* node-chosen, stable; the MQTT topic of section 1 */
@@ -275,12 +246,10 @@ struct profile_descriptor {
 	/*
 	 * The schedule block - frame 1 byte [3] bits 3..0, plus one frame.
 	 *
-	 * BOTH HALVES DEFAULT TO SILENCE, and that is the compatibility
-	 * argument rather than a convenience: `clock_stated` false and
-	 * `has_schedule` false encode to exactly the bytes this encoder emitted
-	 * before the block existed, frame for frame, so a node that announces
-	 * nothing is not merely compatible with a pre-block node - it is
-	 * indistinguishable from one.
+	 * Both halves default to silence: `clock_stated` false and
+	 * `has_schedule` false encode to exactly the bytes emitted before the
+	 * block existed, so a node announcing nothing is indistinguishable
+	 * from a pre-block one.
 	 */
 	bool     clock_stated;   /* the field below is a ladder code at all */
 	uint8_t  clock_accuracy; /* enum profile_handoff_clk; the 5b ladder */
@@ -295,48 +264,42 @@ struct profile_descriptor {
 uint16_t profile_desc_field_area_bits(const struct profile_descriptor *d);
 
 /*
- * The clock-accuracy ceiling this descriptor announces, in ppm, or 0 for a node
- * that announces nothing - which is every node built before the block existed,
- * and is the value that leaves radiant_channel_guard_us() exactly as it was.
+ * The clock-accuracy ceiling this descriptor announces, in ppm, or 0 for a
+ * node announcing nothing - the value that leaves radiant_channel_guard_us()
+ * unchanged.
  *
- * This is what a receiver hands to radiant_channel_clock_accuracy_set(), and
+ * A receiver hands this to radiant_channel_clock_accuracy_set();
  * profile_sched_apply_clock() is the one-call version that does both.
  */
 uint16_t profile_desc_clock_ppm(const struct profile_descriptor *d);
 
 /*
- * The forward-compatibility rule, in one function.
- *
- * False when any transform bit is set, because v1 implements none of them.
- * A receiver that gets false here has still learned the node's identity, its
- * period, its RF index and its schema - it simply must not turn its data pages
- * into numbers. FAIL CLOSED means "do not decode", not "do not listen".
+ * The forward-compatibility rule, in one function. False when any transform
+ * bit is set (v1 implements none). A receiver getting false has still
+ * learned the node's identity, period, RF index and schema - fail closed
+ * means "do not decode", not "do not listen".
  */
 bool profile_desc_may_decode_data(const struct profile_descriptor *d);
 
 /*
- * How many frames the set has: 2 + a schedule frame if there is one + n_fields.
- * There is no authentication frame in v1 because there is no transform in v1;
- * when there is one, it takes the last slot and this grows by one.
+ * How many frames the set has: 2 + a schedule frame if there is one +
+ * n_fields. No authentication frame in v1 (no transform in v1); when there
+ * is one, it takes the last slot and this grows by one.
  *
- * THE ORDER IS FIXED AND THE SCHEDULE FRAME IS AT INDEX 2, before the fields
- * rather than after them, so that the authentication frame keeps the last slot
- * section 6 promises it - and so that a receiver joining mid-rotation has the
- * node's timing before it has the node's schema, which is the order in which it
- * needs them.
+ * The schedule frame is fixed at index 2, before the fields, so the
+ * authentication frame keeps the last slot section 6 promises it, and a
+ * receiver joining mid-rotation gets the node's timing before its schema.
  */
 uint8_t profile_desc_frame_count(const struct profile_descriptor *d);
 
 /* The index of the schedule frame in the set, or -ENOENT when the node sends
- * none. A constant today; a function because the authentication frame will
+ * none. A constant today; a function since the authentication frame will
  * make the set's shape depend on the flags. */
 int profile_desc_schedule_index(const struct profile_descriptor *d);
 
 /*
- * Distinct data pages the schema uses, ascending, deduplicated. This is the
- * node's page rotation, derived from the schema rather than configured
- * alongside it - two places to state which pages exist is one place and one
- * drift.
+ * Distinct data pages the schema uses, ascending, deduplicated - the node's
+ * page rotation, derived from the schema rather than configured alongside it.
  *
  * Returns the count written, or -ENOSPC.
  */
@@ -357,14 +320,13 @@ int profile_desc_encode(const struct profile_descriptor *d, uint8_t *frames,
 			uint8_t cap_frames);
 
 /*
- * Decode a complete, in-order frame set. The inverse of the above, and the
- * function the gate turns on: given nothing but n_frames * 8 bytes heard on
- * the air, produce the schema.
+ * Decode a complete, in-order frame set: given nothing but n_frames * 8
+ * bytes heard on the air, produce the schema.
  *
  * Returns 0, or -EPROTO for a malformed set, or -ENOTSUP for a version this
  * build does not implement. A transform bit is NOT an error here - the
- * descriptor still decodes, and profile_desc_may_decode_data() is what refuses
- * the data pages.
+ * descriptor still decodes; profile_desc_may_decode_data() refuses the data
+ * pages.
  */
 int profile_desc_decode(const uint8_t *frames, uint8_t n_frames,
 			struct profile_descriptor *out);
@@ -372,10 +334,9 @@ int profile_desc_decode(const uint8_t *frames, uint8_t n_frames,
 /* ---------------------------------------------------------------------------
  * Receiver-side assembly
  *
- * A receiver does not get a frame set; it gets frames, one per slot, starting
- * wherever it happened to join. Byte [1] carries (index << 4) | (count - 1),
- * which is enough to assemble the set with no ordering assumption and no
- * timer - and to notice, from a single frame, that the count changed under it.
+ * A receiver gets frames, one per slot, starting wherever it happened to
+ * join. Byte [1] carries (index << 4) | (count - 1), enough to assemble the
+ * set with no ordering assumption and no timer.
  * ---------------------------------------------------------------------------
  */
 struct profile_desc_rx {
@@ -394,10 +355,8 @@ void profile_desc_rx_init(struct profile_desc_rx *rx);
  * Feed one 8-byte payload. Ignores anything that is not page 0x00.
  *
  * Restarts the accumulation when the frame count changes, or when frame 0
- * arrives carrying a schema id different from the one being assembled - which
- * is exactly the cache-invalidation the schema id exists for, and the reason a
- * receiver can notice a change after reading a single frame instead of the
- * whole set.
+ * carries a schema id different from the one being assembled - the
+ * cache-invalidation the schema id exists for.
  *
  * Returns 1 when the set is now complete, 0 when it is not, -EPROTO for a
  * frame that cannot belong to any set.
@@ -413,30 +372,24 @@ int profile_desc_rx_take(const struct profile_desc_rx *rx,
 /* ---------------------------------------------------------------------------
  * The descriptor-set collapse - ADR 0007
  *
- * THE LARGEST BATTERY ITEM THE LONG-RANGE PHY BUYS, and it is not the PHY: it
- * is the length extension the PHY permits.
+ * The largest battery item the long-range PHY buys is the length extension it
+ * permits, not the PHY itself.
  *
  * A descriptor set is one 8-byte frame per header, per schedule block and per
- * field, and every one of those frames is a separate transmission - which means
- * a separate high-frequency crystal start and a separate ramp-up. On a coin
- * cell those dominate: the HFXO start and the ramp are paid whether the frame
- * that follows is 8 bytes or 40, so N frames cost N wakes and one frame costs
- * one. It also cuts mid-stream join, because a receiver that hears one long
- * frame has the whole set instead of one N-th of it.
+ * field, and every frame is a separate transmission - a separate HFXO start
+ * and ramp-up. On a coin cell those dominate whether the frame is 8 bytes or
+ * 40, so N frames cost N wakes. It also cuts mid-stream join: a receiver that
+ * hears one long frame has the whole set instead of one N-th of it.
  *
- * NOTHING ABOUT THE 8-BYTE FRAMES CHANGES, AND THAT IS THE DESIGN. Each
- * descriptor frame already carries its own page number and its own
- * (index << 4) | (count - 1) byte, so a set of them is SELF-DESCRIBING when
- * concatenated: a receiver splits a long payload into 8-byte chunks and feeds
- * each one to profile_desc_rx_feed(), which is the same function, with the same
- * ordering rules and the same schema-id invalidation, that a receiver on 1 M
- * has always used. The codec is untouched, the wire format of each frame is
- * untouched, and a node can emit the same descriptor either way with no second
- * encoder to keep in step.
+ * Nothing about the 8-byte frames changes. Each descriptor frame already
+ * carries its own page number and (index << 4) | (count - 1) byte, so a set
+ * of them is self-describing when concatenated: a receiver splits a long
+ * payload into 8-byte chunks and feeds each to profile_desc_rx_feed(), the
+ * same function a 1 M receiver has always used.
  *
- * HOW COMPLETE THE COLLAPSE IS, STATED IN ARITHMETIC RATHER THAN IN HOPE. One
- * long-range payload is at most RADIANT_FRAME_PAYLOAD_LR_MAX = 36 bytes, and
- * the chunks are whole 8-byte frames, so FOUR frames fit per transmission:
+ * How complete the collapse is: one long-range payload is at most
+ * RADIANT_FRAME_PAYLOAD_LR_MAX = 36 bytes, so four 8-byte frames fit per
+ * transmission:
  *
  *     asset tag, no fields          2 frames  -> 1 wake   (was 2)
  *     2 fields                      4 frames  -> 1 wake   (was 4)
@@ -444,21 +397,17 @@ int profile_desc_rx_take(const struct profile_desc_rx *rx,
  *     8 fields                     10 frames  -> 3 wakes  (was 10)
  *     14 fields + schedule block   17 frames  -> refused, as it always was
  *
- * So the collapse is TOTAL up to four frames and PARTIAL beyond it, and the
- * plan's "a sparse node with eight fields wakes ten times per heartbeat; one
- * frame is one wake" is right about the mechanism and optimistic about the
- * count - ten becomes three, not one. Ten becoming one would need a ~76-byte
- * body, which at S=8 is ~5.4 ms of airtime and fails the 25 % duty bound at any
- * period under 22 ms. The honest version of the claim is a 70 % cut in wakes for
- * the eight-field case and a complete one for the sparse node the envelope was
- * written for, which is the node that needed it most.
+ * So the collapse is total up to four frames and partial beyond it - ten
+ * wakes becomes three, not one, for an eight-field sparse node. Ten becoming
+ * one would need a ~76-byte body, ~5.4 ms of airtime at S=8, failing the 25%
+ * duty bound at any period under 22 ms.
  * ---------------------------------------------------------------------------
  */
 
 /* Whole 8-byte descriptor frames that fit in one payload of `payload_max`
- * bytes. Never partial: a split frame would have to be reassembled across
- * transmissions, which is the accumulator that already exists one level up and
- * would then exist twice. */
+ * bytes. Never partial: a split frame would need reassembling across
+ * transmissions, duplicating the accumulator that already exists one level
+ * up. */
 uint8_t profile_desc_frames_per_body(uint8_t payload_max);
 
 /*
@@ -471,14 +420,13 @@ int profile_desc_long_count(const struct profile_descriptor *d,
 /*
  * Refuse a collapsed set the node cannot afford.
  *
- * This is where ADR 0007's duty bound is enforced for the descriptor path: the
- * longest payload this set will emit, at the rate the schedule block announces,
- * against the period frame 0 announces. -EINVAL when it does not fit.
+ * ADR 0007's duty bound enforced for the descriptor path: the longest
+ * payload this set will emit, at the schedule block's rate, against frame
+ * 0's period. -EINVAL when it does not fit.
  *
- * SEPARATE FROM profile_desc_long_payload() SO THAT THE REFUSAL CANNOT BE
- * SKIPPED BY A CALLER THAT ONLY WANTS ONE FRAME. It is called by the payload
- * accessor as well; having it public is what lets a caller find out before it
- * has built anything.
+ * Separate from profile_desc_long_payload() so the refusal cannot be skipped
+ * by a caller wanting only one frame - it is called by the payload accessor
+ * too, but being public lets a caller find out before building anything.
  */
 int profile_desc_long_check(const struct profile_descriptor *d,
 			    uint8_t payload_max);
@@ -496,14 +444,14 @@ int profile_desc_long_payload(const struct profile_descriptor *d,
 			      size_t out_len);
 
 /*
- * The receiver's half: split one long payload into 8-byte descriptor frames and
- * feed each to profile_desc_rx_feed().
+ * The receiver's half: split one long payload into 8-byte descriptor frames
+ * and feed each to profile_desc_rx_feed().
  *
  * Returns 1 when the set is complete, 0 when it is not, or -EPROTO for a
- * payload that is not a whole number of frames or whose frames do not belong to
- * one set. A receiver needs no notion of "this node collapsed its descriptor" -
- * it feeds what it heard and the accumulator behaves identically either way,
- * which is what makes a node's choice to collapse invisible above this line.
+ * payload that is not a whole number of frames or whose frames don't belong
+ * to one set. A receiver needs no notion of "this node collapsed its
+ * descriptor" - it feeds what it heard and the accumulator behaves
+ * identically either way.
  */
 int profile_desc_rx_feed_long(struct profile_desc_rx *rx, const uint8_t *payload,
 			      uint8_t payload_len);
@@ -516,12 +464,10 @@ int profile_desc_rx_feed_long(struct profile_desc_rx *rx, const uint8_t *payload
  *   [2..7] field area, 48 bits, bit offset 0 = MSB of byte [2]
  *
  * The counter counts transmissions, not application writes: a master
- * retransmits its current body every slot whether or not the application
- * supplied a new one, and a counter that advanced per write would repeat
- * across retransmissions. Under a secured channel a repeated counter within
- * one (epoch, device number) is keystream reuse, which is why this is
- * mandatory in v1 even though nothing here is secured - adding it later would
- * renumber every field offset in every deployed schema.
+ * retransmits its current body every slot regardless, and a counter
+ * advancing per write would repeat across retransmissions - a repeated
+ * counter within one (epoch, device number) is keystream reuse under a
+ * secured channel, so this is mandatory in v1 even unsecured.
  * ---------------------------------------------------------------------------
  */
 
@@ -529,9 +475,9 @@ int profile_desc_rx_feed_long(struct profile_desc_rx *rx, const uint8_t *payload
  * Pack every field of `page` into `body`.
  *
  * `values` is parallel to d->fields[] and n_values must equal d->n_fields;
- * entries for fields on other pages are ignored. Bytes the schema does not
- * claim are zero - a node must not leave stale bytes in a field area, because
- * a later schema may claim them and a receiver mid-change would read them.
+ * entries for fields on other pages are ignored. Bytes the schema doesn't
+ * claim are zero - a later schema may claim them, and a receiver mid-change
+ * would read stale bytes as a number.
  *
  * Returns the number of fields packed, or -EINVAL / -ERANGE.
  */
@@ -542,14 +488,13 @@ int profile_data_encode(const struct profile_descriptor *d, uint8_t page,
 /*
  * Unpack every field the descriptor places on this body's page.
  *
- * Signed fields are sign-extended; unsigned ones are not. `present` receives a
- * bitmask over d->fields[] of the entries written, so a caller can tell "this
- * page does not carry that field" from "it carries zero".
+ * Signed fields are sign-extended; unsigned ones are not. `present` receives
+ * a bitmask over d->fields[] of the entries written, so a caller can tell
+ * "this page does not carry that field" from "it carries zero".
  *
  * Returns the number of fields decoded, -EINVAL, or -EACCES when a transform
- * bit forbids decoding (profile_desc_may_decode_data()). -EACCES rather than a
- * silent zero, because failing closed silently is how a receiver ends up
- * reporting plaintext-looking numbers off a ciphertext page.
+ * bit forbids decoding (profile_desc_may_decode_data()) - not a silent zero,
+ * which would report plaintext-looking numbers off a ciphertext page.
  */
 int profile_data_decode(const struct profile_descriptor *d, const uint8_t *body,
 			int64_t *values, uint8_t n_values, uint16_t *present);
@@ -557,32 +502,28 @@ int profile_data_decode(const struct profile_descriptor *d, const uint8_t *body,
 /* ---------------------------------------------------------------------------
  * The reliable-command pages - docs/radiant-telemetry.md section 9
  *
- * STILL LAYOUT ONLY, and that is now a boundary rather than a gap. The
- * idempotency rule, the accept window, the tag derivation and the exponential
- * backoff on failed verifications are implemented - they are in
- * profile_command.h, which is where they went because they need a key, a clock
- * and per-node state, and this file has none of the three. What is here is the
- * byte order and the two widths it comes in.
+ * Still layout only, a boundary rather than a gap: idempotency, accept
+ * window, tag derivation and backoff on failed verifications are in
+ * profile_command.h, which needs a key, a clock and per-node state this file
+ * doesn't have. What is here is the byte order and the two widths.
  *
- * WHAT THE RESPONSE-SLOT PHASE ADDED HERE IS ONE THING: the tag is no longer
- * always two bytes. The long-range PHY carries a RadiANT-authored length field,
- * so an LR control channel can put a 64-bit tag on the air where an eight-byte
- * ANT frame can only fit 16 bits - and section 9's "two bytes is the limit" was
- * written when no mechanism for a longer frame existed. It does now, on exactly
- * one PHY, so the width is a function of the frame configuration and never a
- * node's preference. profile_cmd_tag_bytes() is that function; this file only
- * moves the bytes.
+ * What the response-slot phase added: the tag is no longer always two bytes.
+ * The long-range PHY carries a RadiANT-authored length field, so an LR
+ * control channel can put a 64-bit tag on the air where an eight-byte ANT
+ * frame fits only 16 bits. The width is a function of the frame
+ * configuration, never a node's preference; profile_cmd_tag_bytes() is that
+ * function, and this file only moves the bytes.
  * ---------------------------------------------------------------------------
  */
 
 /*
  * The two tag widths, and the page lengths they produce.
  *
- * The covered length is the same six bytes either way - page number, sequence,
- * command, target, argument - so the tag grows off the end and the fields in
- * front of it do not move. A receiver decoding a 14-byte page 0x10 with an
- * eight-byte reader gets the right command and the wrong tag rather than
- * garbage, which is the failure mode worth having.
+ * The covered length is the same six bytes either way - page number,
+ * sequence, command, target, argument - so the tag grows off the end and the
+ * fields in front don't move. A receiver decoding a 14-byte page 0x10 with
+ * an eight-byte reader gets the right command and the wrong tag, not
+ * garbage.
  */
 #define PROFILE_TLM_CMD_COVERED  6u  /* body[0..5]: what a tag is computed over */
 #define PROFILE_TLM_CMD_TAG_STD  2u  /* an 8-byte ANT frame; section 9's limit */
@@ -628,9 +569,9 @@ struct profile_command_ack {
 };
 
 /*
- * The eight-byte forms, unchanged. `tag` is the u16 of the struct, little-
- * endian in body[6..7], and these are exactly the functions the envelope phase
- * shipped - byte for byte, so every existing vector still passes.
+ * The eight-byte forms, unchanged. `tag` is the u16 of the struct,
+ * little-endian in body[6..7] - byte for byte the functions the envelope
+ * phase shipped, so every existing vector still passes.
  */
 int profile_command_encode(const struct profile_command *c, uint8_t *body);
 int profile_command_decode(const uint8_t *body, struct profile_command *out);
@@ -639,17 +580,13 @@ int profile_command_ack_decode(const uint8_t *body, struct profile_command_ack *
 
 /*
  * The width-carrying forms. `tag_len` is PROFILE_TLM_CMD_TAG_STD or
- * PROFILE_TLM_CMD_TAG_LR and nothing else - a width that is neither is a caller
- * inventing a third format, which is the thing a vocabulary field exists to
- * prevent.
+ * PROFILE_TLM_CMD_TAG_LR and nothing else.
  *
- * The tag is passed as BYTES rather than as an integer, and that is deliberate:
- * a 64-bit tag is a truncated MAC, truncation is a byte operation, and routing
- * it through a uint64_t would put an endianness decision between the MAC and
- * the wire where there is no reason for one. The struct's `tag` field is left
- * alone by these functions for the same reason; on the decode side it receives
- * the low 16 bits so that a caller which only wants the standard width does not
- * have to reassemble them.
+ * The tag is passed as bytes rather than an integer: a 64-bit tag is a
+ * truncated MAC, truncation is a byte operation, and a uint64_t would put an
+ * unnecessary endianness decision between the MAC and the wire. The struct's
+ * `tag` field is left alone by these functions; on decode it receives the
+ * low 16 bits so a standard-width caller doesn't have to reassemble them.
  *
  * Encode returns the number of body bytes written, or -EINVAL. Decode returns
  * the tag length it found, or -EINVAL / -EPROTO for the wrong page number.

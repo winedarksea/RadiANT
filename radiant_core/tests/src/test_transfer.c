@@ -1,51 +1,32 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * Provenance: original clean-room work. Written against
- * radiant_core/include/radiant_core/radiant_transfer.h, radiant_core/include/radiant_core/radiant_frame.h,
- * radiant_core/tests/fake_radio.h and the measurements in
- * docs/spike-b-part2-results.md - every control byte, every microsecond and
- * every packet count asserted below is quoted from that document or from the
- * capture logs it is checked against. Nothing here derives from sdk-ant, from
- * libant.a, or from any adopter-gated ANT+ device profile document.
+ * Provenance: original clean-room work, written against radiant_transfer.h,
+ * radiant_frame.h, fake_radio.h, and the measurements in
+ * docs/spike-b-part2-results.md - every control byte, microsecond, and packet
+ * count asserted below is quoted from that document or its capture logs.
+ * Nothing here derives from sdk-ant, libant.a, or any ANT+
+ * device profile document.
  *
- * ---------------------------------------------------------------------------
- * What this suite is for
- * ---------------------------------------------------------------------------
  * Acknowledged data is how Zwift sets trainer resistance, so this is the path
- * whose failures look like "ERG mode does not work" three months after the line
- * that caused them. Three of its failure modes are silent by construction and
- * each has a test here that exists specifically because inspection cannot find
- * it:
+ * whose failures look like "ERG mode does not work" months later. Three
+ * silent failure modes, each with a dedicated test:
  *
  *   1. THE STALL. src/ant_radio.h obligations B1-B5: the bridge holds one
- *      24-byte block behind a semaphore and gives it back only on
- *      NEXT_DATA_BLOCK, TX_COMPLETED or TX_FAILED. Miss the first exactly once
- *      per accepted block and the bridge's k_sem_take() waits its full 1000 ms
- *      and then answers the host with a plausible-looking
- *      ANTW_TRANSFER_IN_PROGRESS. An ANT-FS transfer that should take two
- *      seconds takes ten minutes, and nothing in the build, the log or the host
- *      library says why. test_one_release_per_accepted_block and its three
- *      siblings count releases against accepted blocks on the success path, the
- *      mid-transfer-failure path, the abort path and the rejected-block path.
+ *      24-byte block behind a semaphore, released only on NEXT_DATA_BLOCK,
+ *      TX_COMPLETED, or TX_FAILED. Miss one release and the bridge's
+ *      k_sem_take() waits its full 1000 ms per host packet, invisibly.
  *
- *   2. THE SEQUENCE BIT. It is ONE bit and it alternates per ON-AIR PACKET.
- *      Part 1 of the spike could only see the first packet of a burst and
- *      inferred a three-bit sequence field in bits 7:5; part 2 captured 17- and
- *      51-packet bursts and found bit 4 alternating while bits 7:6 held still
- *      (7:6 - bit 5 moves once, on the final packet, which is b5 "last").
- *      The assertion that catches the old reading is that packet 2 and packet 0
- *      carry the SAME byte.
+ *   2. THE SEQUENCE BIT is ONE bit, alternating per ON-AIR PACKET (not a
+ *      three-bit field in 7:5, as a partial capture once suggested). Caught
+ *      by asserting packet 2 and packet 0 carry the SAME byte.
  *
- *   3. THE REPLY'S BIT 4 IS A COMPLEMENT, not an echo. 165 adjacent CRC-valid
- *      pairs, no counterexamples: 82 -> D2, 92 -> C2, A2 -> F2, B2 -> E2. An
- *      implementation that echoed would look right in a diagram and would
- *      acknowledge every packet with the wrong byte.
+ *   3. THE REPLY'S BIT 4 IS A COMPLEMENT, not an echo (165 adjacent CRC-valid
+ *      pairs, no counterexamples: 82->D2, 92->C2, A2->F2, B2->E2).
  *
- * Two habits from fake_radio.h are followed everywhere: every test ends idle
- * and every test ends with zero recorded contract violations. Between them they
- * catch an engine that left a window armed and one that did something in a
- * callback that would deadlock a real radio ISR.
+ * Every test ends idle and with zero recorded fake_radio.h contract
+ * violations - together they catch a window left armed and a callback doing
+ * something that would deadlock a real radio ISR.
  */
 
 #include <stdbool.h>
@@ -74,9 +55,8 @@
 #define DEVTYPE     0x0Bu
 #define TRANSTYPE   5u
 
-/* Body layout in ANT's tracking geometry: [ttype][ctrl][d0..d7]. Named because
- * every assertion below indexes a recorded transmit body by hand, and body[1]
- * being the control byte is the single most load-bearing offset in the file. */
+/* Body layout: [ttype][ctrl][d0..d7]. body[1] (the control byte) is the most
+ * load-bearing offset in the file. */
 #define BODY_TTYPE  0u
 #define BODY_CTRL   1u
 #define BODY_D0     2u
@@ -164,29 +144,13 @@ static const struct radiant_transfer_ops ops = {
 /* ---------------------------------------------------------------------------
  * Routing radio events, exactly as radiant_api.c does
  *
- * The engine no longer touches the radio. It posts to radiant_sched.c, which is
- * "the only place in radiant_core that calls radiant_radio_tx() or
- * radiant_radio_rx()" - so the scheduler owns the HAL's one global callback
- * pair, and this harness owns the scheduler's.
- *
- * This suite used to register its own radio callbacks and fan every event out
- * to every engine, on the reasoning that a conservative fan-out is wasteful but
- * correct and exercises the engine's own op-id filter. Both halves of that are
- * now wrong, and the same change is why:
- *
- *   - Nothing was ever armed. radiant_sched_request_tx() against an
- *     uninitialised scheduler fails, so ten of the sixteen tests here failed at
- *     the first "no packet was armed". That is the whole of the CI-red.
- *   - The fan-out would be a bug rather than waste. An arm that goes through
- *     the scheduler has no HAL operation id to report, so the engine stores
- *     RADIANT_TRANSFER_OP_EXTERNAL and STOPS filtering - it trusts its caller's
- *     routing, correctly, because the caller is the thing that did the routing.
- *     Handing engine B's completion to engine A would now make engine A act on
- *     it.
- *
- * So the routing here is exact and per channel, which is what the scheduler
- * hands us anyway: each callback carries the channel the request was posted
- * against.
+ * The engine posts to radiant_sched.c (the only caller of radiant_radio_tx/rx
+ * in radiant_core), so the scheduler owns the HAL's one global callback pair
+ * and this harness owns the scheduler's. An arm through the scheduler has no
+ * HAL operation id, so the engine stores RADIANT_TRANSFER_OP_EXTERNAL and
+ * trusts its caller's routing instead of filtering by op id - so routing here
+ * must be exact and per channel, which is what the scheduler's callbacks
+ * already carry.
  * ---------------------------------------------------------------------------
  */
 
@@ -229,15 +193,9 @@ static void sched_tx(uint8_t ch, const struct radiant_tx_event *e, void *user)
 	}
 }
 
-/*
- * The scheduler consumed a request and swallowed the HAL's terminal event, so
- * the engine has to be handed the one it is waiting for. This is
- * api_feed_xfer_terminal() from radiant_api.c, reduced to the two states this
- * suite can be in - and it exists for the same reason there: without it a reply
- * window that closed empty never tells the engine, and
- * test_a_missing_acknowledgement_fails_once_and_releases_the_block waits
- * forever for a NO_ACK that nothing raises.
- */
+/* api_feed_xfer_terminal() from radiant_api.c, reduced to the two states this
+ * suite can be in: without it a reply window that closed empty never tells
+ * the engine, and the missing-ack test waits forever for a NO_ACK. */
 static void sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 {
 	struct radiant_transfer *t = engine_for(ch);
@@ -251,14 +209,9 @@ static void sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		return;
 	}
 
-	/*
-	 * api_done_to_status() from radiant_api.c, and the first line is the one
-	 * that matters: a window that RAN and closed with nothing in it is
-	 * RADIANT_RADIO_STATUS_TIMEOUT, not _OK. The engine reads TIMEOUT as
-	 * RADIANT_TRANSFER_FAIL_NO_ACK; mapping DONE_OK to STATUS_OK instead
-	 * hands it a success event with no frame attached, which is not a case
-	 * the engine has or should have.
-	 */
+	/* api_done_to_status() from radiant_api.c: a window that ran and closed
+	 * empty is TIMEOUT, not OK - mapping DONE_OK to STATUS_OK would hand the
+	 * engine a success event with no frame attached. */
 	switch (why) {
 	case RADIANT_SCHED_DONE_OK:      st = RADIANT_RADIO_STATUS_TIMEOUT; break;
 	case RADIANT_SCHED_DONE_ABORTED: st = RADIANT_RADIO_STATUS_ABORTED; break;
@@ -301,15 +254,9 @@ static const struct radiant_sched_cbs sched_cbs = {
 	.done = sched_done,
 };
 
-/*
- * "From thread context the caller owes one radiant_sched_tick()" -
- * radiant_transfer.h on radiant_transfer_arm_tx(), and radiant_api.c does it at
- * the end of the antr_* call that provoked the submit. Every arm this suite
- * makes from a ZTEST body rather than from inside a radio callback is a thread-
- * context arm, so this is that caller. Posting is not committing, and a test
- * that inspected fake_radio's arm log without ticking first would see nothing
- * and blame the engine.
- */
+/* Per radiant_transfer.h: a thread-context arm owes one radiant_sched_tick().
+ * Posting is not committing - a test that inspected the arm log without
+ * ticking first would see nothing and blame the engine. */
 static void commit(void)
 {
 	(void)radiant_sched_tick();
@@ -421,14 +368,10 @@ static uint32_t collect_tx_bodies(uint8_t out[][RADIANT_RADIO_BODY_MAX], uint32_
 	return found;
 }
 
-/*
- * The peer's frame, hand-assembled rather than run through radiant_frame_encode().
- *
- * A test that built its expected bytes with the same code under test would
- * assert that the module agrees with itself. This is the layout from
- * docs/ant-radio-link.md, confirmed byte for byte by Spike A, written out
- * again: A6 C5 | dl dh | dtype | ttype | ctrl | d0..d7.
- */
+/* The peer's frame, hand-assembled rather than run through
+ * radiant_frame_encode() (else the test would only assert the module agrees
+ * with itself). Layout from docs/ant-radio-link.md, confirmed byte for byte
+ * by Spike A: A6 C5 | dl dh | dtype | ttype | ctrl | d0..d7. */
 static uint8_t build_peer_frame(uint8_t *out, uint8_t ctrl, const uint8_t *payload8)
 {
 	out[0] = RADIANT_NET_ADDR_ANT_PLUS_0;
@@ -446,15 +389,10 @@ static const uint8_t peer_payload[RADIANT_TRANSFER_PKT_BYTES] = {
 	0x10u, 0x22u, 0x33u, 0x44u, 0x55u, 0x66u, 0x77u, 0x88u
 };
 
-/*
- * Put the acknowledgement of the packet just transmitted on the air, at the
- * nominal instant the window is centred on: t_open + guard, which is the data
- * packet's t_sync + RADIANT_TRANSFER_REPLY_US.
- *
- * The reply's control byte is derived from the byte that ACTUALLY went out
- * (arm->body[1]), not from what the test thinks should have gone out, so this
- * helper cannot paper over a wrong encoding upstream of it.
- */
+/* Put the acknowledgement of the packet just transmitted on the air, at
+ * t_open + guard (the nominal window centre). The reply's control byte is
+ * derived from what ACTUALLY went out (arm->body[1]), not what the test
+ * expected, so this helper can't paper over a wrong encoding upstream. */
 static void air_the_ack(void)
 {
 	const struct fake_radio_arm *tx = last_arm_of(FAKE_RADIO_ARM_TX);
@@ -529,11 +467,8 @@ static bool feed_next_block(void)
 	return true;
 }
 
-/*
- * Fire the first data packet and let the peer acknowledge it, leaving the
- * engine part-way through a multi-packet block. Two steps: one for the
- * transmit, whose callback opens the reply window, and one for the reply.
- */
+/* Fire the first data packet and let the peer acknowledge it, leaving the
+ * engine part-way through a multi-packet block. */
 static void run_one_packet_exchange(void)
 {
 	zassert_true(fake_radio_step(), "nothing was due; no packet was armed");
@@ -543,12 +478,9 @@ static void run_one_packet_exchange(void)
 	zassert_true(fake_radio_step(), "the acknowledgement never arrived");
 }
 
-/*
- * Run the exchange to completion on the virtual clock.
- *
- * Nothing sleeps and nothing polls: every event fires inside fake_radio_step(),
- * and the loop only decides what the peer and the host do between two of them.
- */
+/* Run the exchange to completion on the virtual clock. Nothing sleeps or
+ * polls: every event fires inside fake_radio_step(); the loop only decides
+ * what the peer and host do between two of them. */
 static void drive(void)
 {
 	uint32_t acked_tx = 0u;
@@ -570,17 +502,10 @@ static void drive(void)
 			}
 			continue;
 		}
-		/*
-		 * One acknowledgement per data packet, and the count of accepted
-		 * transmits is what says a new one went out.
-		 *
-		 * This used to key off radiant_transfer_op(). It cannot any
-		 * more: every arm now goes through the scheduler, which has no
-		 * HAL operation id to report, so the engine holds the constant
-		 * RADIANT_TRANSFER_OP_EXTERNAL and the "did the op change"
-		 * question has no answer. arms_tx does, it is monotonic, and it
-		 * counts the thing the peer would actually have heard.
-		 */
+		/* One acknowledgement per data packet. Keyed off arms_tx (monotonic,
+		 * counts what the peer would have heard) rather than
+		 * radiant_transfer_op(), which is now always OP_EXTERNAL since arms
+		 * go through the scheduler. */
 		if (st == RADIANT_TRANSFER_STATE_WAIT_ACK &&
 		    fake_radio_stats()->arms_tx != acked_tx) {
 			acked_tx = fake_radio_stats()->arms_tx;
@@ -601,15 +526,9 @@ static void drive(void)
  * ---------------------------------------------------------------------------
  */
 
-/*
- * Acknowledged data IS a one-packet burst, and 0xAA is burst-last.
- *
- * Part 1 saw 0xAA on four one-block bursts and refused to read it as
- * burst-last, on the grounds that it said something about the stack's serial
- * layer. It said both: the serial observation was right AND 0xAA is "sequence
- * 0, last packet, opening the slot". There is no RADIANT_MSG_ACKNOWLEDGED in
- * radiant_frame.h and its absence is the finding.
- */
+/* Acknowledged data IS a one-packet burst, and 0xAA is burst-last: sequence 0,
+ * last packet, opening the slot. There is no RADIANT_MSG_ACKNOWLEDGED in
+ * radiant_frame.h, and its absence is the finding. */
 ZTEST(transfer, test_acknowledged_data_is_a_one_packet_burst)
 {
 	uint8_t opener = 0u;
@@ -627,9 +546,8 @@ ZTEST(transfer, test_acknowledged_data_is_a_one_packet_burst)
 		      "a one-packet in-slot transfer must be 0xA2, got 0x%02X",
 		      in_slot);
 
-	/* The two differ in exactly one bit, and it is bit 3. Run C is the
-	 * control that measured this: same board, same stack, same driver
-	 * script, same payload, only the channel role changed. */
+	/* The two differ in exactly one bit, bit 3 (measured on run C: same
+	 * board/stack/script/payload, only the channel role changed). */
 	zassert_equal((uint8_t)(opener ^ in_slot), RADIANT_CTRL_SLOT,
 		      "the slot-opening and in-slot forms must differ in bit 3 only");
 
@@ -646,14 +564,9 @@ ZTEST(transfer, test_acknowledged_data_is_a_one_packet_burst)
 	end_of_test();
 }
 
-/*
- * The sequence is one bit and it alternates per on-air packet.
- *
- * The assertion that would have caught part 1's inference is the last one:
- * under a three-bit sequence in bits 7:5, packet 2 would differ from packet 0.
- * It does not - they are both 0x82 - and that is measured, over bursts of 1, 2,
- * 3, 6, 9, 17, 27 and 51 packets with the sniffer's ring-drop counter at zero.
- */
+/* The sequence is one bit, alternating per on-air packet. Measured over
+ * bursts of 1, 2, 3, 6, 9, 17, 27, and 51 packets with the sniffer's
+ * ring-drop counter at zero. */
 ZTEST(transfer, test_the_sequence_is_one_bit_and_alternates_per_packet)
 {
 	uint32_t i;
@@ -717,12 +630,9 @@ ZTEST(transfer, test_the_sequence_is_one_bit_and_alternates_per_packet)
 	end_of_test();
 }
 
-/*
- * The reply relation, on all four measured pairs.
- *
- * 165 adjacent CRC-valid data/acknowledgement pairs across runs 0, A and B,
- * with no counterexample anywhere in the 171 data packets those runs carried.
- */
+/* The reply relation on all four measured pairs: 165 adjacent CRC-valid
+ * data/acknowledgement pairs across runs 0, A, and B, no counterexamples in
+ * the 171 data packets those runs carried. */
 ZTEST(transfer, test_the_reply_relation_on_the_four_measured_pairs)
 {
 	static const struct {
@@ -771,11 +681,9 @@ ZTEST(transfer, test_the_reply_relation_on_the_four_measured_pairs)
 		}
 	}
 
-	/*
-	 * A slot opener has no measured acknowledgement, so there is none to
-	 * give. Guessing bit 3 here is the gap this refusal keeps open and
-	 * visible - see gap 2 in radiant_transfer.h.
-	 */
+	/* A slot opener has no measured acknowledgement; guessing bit 3 here is
+	 * the gap this refusal keeps open and visible (gap 2 in
+	 * radiant_transfer.h). */
 	zassert_equal(0u, radiant_transfer_reply_ctrl(RADIANT_CTRL_BURST_OPEN_SEQ0));
 	zassert_equal(0u, radiant_transfer_reply_ctrl(RADIANT_CTRL_ACK_DATA_OPEN));
 	zassert_equal(0u, radiant_transfer_reply_ctrl(RADIANT_CTRL_BROADCAST));
@@ -788,14 +696,9 @@ ZTEST(transfer, test_the_reply_relation_on_the_four_measured_pairs)
  * ---------------------------------------------------------------------------
  */
 
-/*
- * The stall bug, directly.
- *
- * Three host blocks of 8 bytes each. Two of them must produce exactly one
- * NEXT_BLOCK; the third, carrying END, must produce exactly one TX_COMPLETED
- * and no NEXT_BLOCK. Every accepted block appears in exactly one event and no
- * block appears twice.
- */
+/* The stall bug, directly: three 8-byte blocks, two producing exactly one
+ * NEXT_BLOCK, the END block producing exactly one TX_COMPLETED. Every
+ * accepted block appears in exactly one event. */
 ZTEST(transfer, test_one_release_per_accepted_block)
 {
 	const struct radiant_transfer_stats *st;
@@ -852,14 +755,9 @@ ZTEST(transfer, test_one_release_per_accepted_block)
 	end_of_test();
 }
 
-/*
- * A 24-byte advanced-burst block is three on-air packets, and the sequence bit
- * alternates across the PACKETS, not the blocks.
- *
- * Run B enabled advanced burst, the dongle accepted 24-byte blocks, and the air
- * still only ever carried eight-byte packets - fifty-one alternations for a
- * seventeen-block transfer. One block still produces exactly one release.
- */
+/* A 24-byte advanced-burst block is three on-air packets, and the sequence bit
+ * alternates across the PACKETS, not the blocks - the air always carries
+ * eight-byte packets. One block still produces exactly one release. */
 ZTEST(transfer, test_an_advanced_burst_block_fragments_into_three_packets)
 {
 	const struct radiant_transfer_stats *st;
@@ -902,15 +800,10 @@ ZTEST(transfer, test_an_advanced_burst_block_fragments_into_three_packets)
 	end_of_test();
 }
 
-/*
- * B2 and B5: a rejected block is not owned, is not touched, and produces no
- * event of any kind.
- *
- * Releasing one that was never accepted is worse than failing to release one
- * that was: it hands back a semaphore the bridge still holds for a different
- * block, and the next host packet overwrites a buffer the radio is
- * transmitting from.
- */
+/* B2 and B5: a rejected block is not owned, not touched, and produces no
+ * event. Releasing one never accepted is worse than not releasing one that
+ * was: it hands back a semaphore for a different block, and the next host
+ * packet overwrites a buffer the radio is transmitting from. */
 ZTEST(transfer, test_a_rejected_block_is_never_released)
 {
 	const struct radiant_transfer_stats *st;
@@ -966,16 +859,10 @@ ZTEST(transfer, test_a_rejected_block_is_never_released)
 	end_of_test();
 }
 
-/*
- * A missing acknowledgement fails the transfer once and releases the block that
- * was in hand - and does NOT retry.
- *
- * What a data sender does when an acknowledgement goes missing is untested item
- * 5 of the spike: no acknowledgement went missing inside a completed transfer,
- * so there is no measured behaviour to implement. This test pins the decision
- * so that adding a retry later is a deliberate change with a measurement behind
- * it rather than a quiet one.
- */
+/* A missing acknowledgement fails the transfer once, releases the block in
+ * hand, and does NOT retry. Untested item 5 of the spike (no measured
+ * behaviour exists); this pins the decision so a retry, if added, is
+ * deliberate. */
 ZTEST(transfer, test_a_missing_acknowledgement_fails_once_and_releases_the_block)
 {
 	const struct radiant_transfer_stats *st;
@@ -1016,14 +903,10 @@ ZTEST(transfer, test_a_missing_acknowledgement_fails_once_and_releases_the_block
 	end_of_test();
 }
 
-/*
- * A burst aborted mid-flight, and the late terminal event that follows it.
- *
- * A cancelled operation's terminal event still arrives - the HAL says so and
- * K5 observed the mock delivering one with no fault injection at all - so the
- * engine has to end on that event rather than on the abort call, and then has
- * to recognise a second, genuinely late one as somebody else's.
- */
+/* A burst aborted mid-flight, and the late terminal event that follows it. A
+ * cancelled operation's terminal event still arrives (per HAL contract), so
+ * the engine ends on that event, not the abort call, and must recognise a
+ * second, genuinely late one as somebody else's. */
 ZTEST(transfer, test_a_burst_aborted_midflight_and_its_late_terminal_event)
 {
 	const struct radiant_transfer_stats *st;
@@ -1057,21 +940,12 @@ ZTEST(transfer, test_a_burst_aborted_midflight_and_its_late_terminal_event)
 	zassert_equal(1u, st->blocks_accepted);
 	zassert_equal(1u, st->blocks_released);
 
-	/*
-	 * Now the events that were already in the pipeline when the abort ran.
-	 *
-	 * These are handed to the engine directly rather than injected into
-	 * fake_radio with fake_radio_inject_late_tx()/_rx(), and the reason is
-	 * the arming authority. The HAL's guarantee that a cancelled operation's
-	 * terminal event still arrives is now radiant_sched.c's to absorb - it
-	 * owns the operation ids and counts what it does not recognise in
-	 * stats.stale_events - so an injected late event would be dropped one
-	 * layer below the thing under test and this would assert nothing.
-	 *
-	 * What is under test here is the engine's own last line of defence: it
-	 * has retired its operation, t->op is 0, and an event arriving anyway
-	 * must be counted and dropped rather than turned into a second release -
-	 * which would hand the bridge back a semaphore it no longer holds.
+	/* The events already in the pipeline when the abort ran, handed to the
+	 * engine directly rather than via fake_radio's injection helpers - an
+	 * injected late event would now be absorbed by radiant_sched.c, one
+	 * layer below the thing under test. What's under test is the engine's
+	 * own last line of defence: t->op is 0 (retired), so an event arriving
+	 * anyway must be counted and dropped, not turned into a second release.
 	 */
 	{
 		struct radiant_tx_event late_tx;
@@ -1107,26 +981,19 @@ ZTEST(transfer, test_a_burst_aborted_midflight_and_its_late_terminal_event)
 /* ---------------------------------------------------------------------------
  * Defensive invariants, cross-checked against sdk-ant's own burst handler
  *
- * sdk-ant's burst handling is unremarkable in a good way: every unexpected
- * state resets the handler rather than continuing
- * (docs/sdk-ant-comparison.md item 5 lists five). None of the three below
- * copies sdk-ant's code or its wire behaviour - the source is D00000652's
- * sequencing rules, restated as a property of this engine - but the shape of
- * the fault is the same fault, and the engine's answer to each is written out
- * so a future change to radiant_burst.c or radiant_ack.c has something to
- * break loudly against.
+ * sdk-ant resets its handler on every unexpected state rather than continuing
+ * (docs/sdk-ant-comparison.md item 5). None of the three below copies
+ * sdk-ant's code or wire behaviour - the source is D00000652's sequencing
+ * rules, restated as a property of this engine - but the fault shape is the
+ * same, and the engine's answer is written out so a future change has
+ * something to break loudly against.
  * ---------------------------------------------------------------------------
  */
 
-/*
- * Out-of-order sequencing, this engine's version: a SEG_START where a
- * CONTINUE was expected - a host restarting a transfer without finishing the
- * one already in flight. sdk-ant resets and answers
- * TRANSFER_SEQUENCE_NUMBER_ERROR; this engine does not need to reset
- * anything, because radiant_transfer_submit() refuses the bad request before
- * it touches any state - the block already in flight is untouched and
- * un-released.
- */
+/* Out-of-order sequencing: a SEG_START where a CONTINUE was expected. sdk-ant
+ * resets and answers TRANSFER_SEQUENCE_NUMBER_ERROR; this engine needs no
+ * reset since radiant_transfer_submit() refuses the bad request before
+ * touching any state. */
 ZTEST(transfer, test_a_restart_mid_block_wait_is_a_sequence_error)
 {
 	uint32_t ev_before;
@@ -1139,15 +1006,9 @@ ZTEST(transfer, test_a_restart_mid_block_wait_is_a_sequence_error)
 	zassert_equal(RADIANT_TRANSFER_STATE_WAIT_BLOCK, radiant_transfer_state(&xfer),
 		      "one packet in an 8-byte block must finish the block");
 
-	/*
-	 * SNAPSHOT, not zero. Reaching WAIT_BLOCK is itself an event - the
-	 * acknowledgement of the block's last packet releases it with
-	 * RADIANT_TRANSFER_EV_NEXT_BLOCK, which is the whole of B1-B5 - so
-	 * n_ev is 1 here and always was. The claim this test makes is about the
-	 * REFUSAL, which is what the message says; asserting zero asserted
-	 * something else, disagreed with the setup two lines above it, and was
-	 * red at HEAD.
-	 */
+	/* Snapshot, not zero: reaching WAIT_BLOCK is itself an event
+	 * (NEXT_BLOCK on the block's last-packet ack), so n_ev is 1 here.
+	 * The claim under test is about the refusal, not the count. */
 	ev_before = n_ev;
 
 	zassert_equal(RADIANT_TRANSFER_ESEQ,
@@ -1164,15 +1025,10 @@ ZTEST(transfer, test_a_restart_mid_block_wait_is_a_sequence_error)
 	end_of_test();
 }
 
-/*
- * An unrecognised message arriving mid-transfer, this engine's version: a
- * frame that decodes cleanly but is not the acknowledgement this packet is
- * waiting for - the control byte the peer would have sent if it mistook the
- * reply window for its own transmit slot, rather than the ACK byte
- * radiant_transfer_ack_matches() requires. sdk-ant resets; this engine fails
- * the transfer once (B1: the block in hand still comes back) and returns to
- * IDLE rather than waiting out a reply that was never coming.
- */
+/* An unrecognised message mid-transfer: a frame that decodes cleanly but
+ * isn't the acknowledgement expected. sdk-ant resets; this engine fails the
+ * transfer once (B1: the block in hand still comes back) and returns to
+ * IDLE. */
 ZTEST(transfer, test_a_reply_that_is_not_an_acknowledgement_fails_like_sdk_ants_reset)
 {
 	const struct fake_radio_arm *tx;
@@ -1210,16 +1066,10 @@ ZTEST(transfer, test_a_reply_that_is_not_an_acknowledgement_fails_like_sdk_ants_
 	end_of_test();
 }
 
-/*
- * A stack event arriving in HANDLER_IDLE, this engine's version. sdk-ant
- * resets harmlessly, with a comment noting it legitimately happens after an
- * input-error re-init. This engine's IDLE has the same property by
- * construction rather than by a special case: reset_transfer() clears t->op
- * to 0, and both event entry points check t->op != 0 before acting on
- * anything, so an event that turns up with nothing armed - here, on an
- * engine that was never armed at all rather than one recovering from an
- * error - is counted as late and dropped, not acted on.
- */
+/* A stack event arriving in IDLE. sdk-ant resets harmlessly; this engine gets
+ * the same property by construction: reset_transfer() clears t->op to 0, and
+ * both event entry points check t->op != 0, so an event with nothing armed is
+ * counted as late and dropped. */
 ZTEST(transfer, test_an_event_with_nothing_armed_is_counted_and_dropped)
 {
 	struct radiant_rx_event rx_ev;
@@ -1250,16 +1100,10 @@ ZTEST(transfer, test_an_event_with_nothing_armed_is_counted_and_dropped)
  * ---------------------------------------------------------------------------
  */
 
-/*
- * A received data packet is acknowledged within the measured budget, with the
- * channel's broadcast payload, on the virtual clock.
- *
- * Data -> acknowledgement was 1567 us (n=33) and 1559 us (n=128) across the two
- * runs, range 1515..1599. The engine must arm a full eight-byte frame inside
- * that, and it must do it before it hands the payload up: anything spent in the
- * caller comes straight out of the budget, and missing it has no error code
- * attached to it anywhere.
- */
+/* A received data packet is acknowledged within the measured budget
+ * (data->ack was 1567 us n=33 and 1559 us n=128, range 1515..1599). The
+ * engine must arm the ack frame before handing the payload up - time spent
+ * in the caller comes out of the budget, with no error code to catch it. */
 ZTEST(transfer, test_the_receive_path_meets_the_turnaround_deadline)
 {
 	struct radiant_frame in;
@@ -1336,17 +1180,9 @@ ZTEST(transfer, test_received_acknowledged_data_is_answered_with_transfer_ack)
 
 	arm = last_arm_of(FAKE_RADIO_ARM_TX);
 	zassert_not_null(arm);
-	/*
-	 * 0xA2 -> 0xF2, which is RADIANT_CTRL_ACK_LAST_SEQ1 and not _SEQ0.
-	 *
-	 * This assertion named _SEQ0 (0xE2) while its own comment said 0xF2,
-	 * and it had never executed - native_sim does not build on Windows, so
-	 * the first run of this suite was on an nRF5340 DK. The engine was
-	 * right: bit 4 is the sequence bit and the reply COMPLEMENTS it, which
-	 * is the third of the three silent failure modes this file exists to
-	 * catch, so the constant that acknowledges a sequence-0 final packet is
-	 * necessarily the sequence-1 one. 0xE2 is what acknowledges 0xB2.
-	 */
+	/* 0xA2 -> 0xF2 (RADIANT_CTRL_ACK_LAST_SEQ1, not _SEQ0): bit 4 is the
+	 * sequence bit and the reply complements it, so the ack of a
+	 * sequence-0 final packet is necessarily the sequence-1 constant. */
 	zassert_equal(RADIANT_CTRL_ACK_LAST_SEQ1, arm->body[BODY_CTRL],
 		      "0xA2 is acknowledged by 0xF2 - bit 5 echoed, bit 4 "
 		      "flipped - got 0x%02X", arm->body[BODY_CTRL]);
@@ -1357,15 +1193,9 @@ ZTEST(transfer, test_received_acknowledged_data_is_answered_with_transfer_ack)
 	end_of_test();
 }
 
-/*
- * A slot-opening data packet is not acknowledged, because no acknowledgement of
- * one has ever been captured.
- *
- * radiant_ctrl_reply_for() returns 0 for 0x8A and 0xAA and this module refuses
- * rather than guessing bit 3. The experiment that closes the gap is a
- * master-originated multi-packet burst to a real slave, which needs a
- * scriptable ANT master that sim/ is not.
- */
+/* A slot-opening data packet is not acknowledged - no acknowledgement of one
+ * has ever been captured. radiant_ctrl_reply_for() returns 0 for 0x8A/0xAA
+ * and this module refuses rather than guessing bit 3. */
 ZTEST(transfer, test_a_slot_opening_packet_has_no_measured_acknowledgement)
 {
 	struct radiant_frame in;
@@ -1428,14 +1258,9 @@ ZTEST(transfer, test_a_channel_with_no_broadcast_buffer_is_not_answered)
 	end_of_test();
 }
 
-/*
- * The receiver's retransmission limit.
- *
- * Run 0 caught a master answering 0xD2 and then re-sending that identical frame
- * twenty more times at 3143 us, spanning 66 ms, before abandoning the transfer -
- * twice, with 21 attempts each. `[measured, n=2]`, on one stack, which is why
- * the limit is a named constant.
- */
+/* The receiver's retransmission limit: run 0 caught a master resending an
+ * identical ack frame 20 times at 3143 us before abandoning (21 attempts,
+ * measured n=2 on one stack, hence the named constant). */
 ZTEST(transfer, test_the_acknowledgement_retransmission_limit)
 {
 	struct radiant_frame in;
@@ -1482,19 +1307,11 @@ ZTEST(transfer, test_the_acknowledgement_retransmission_limit)
 	end_of_test();
 }
 
-/*
- * A saved acknowledgement goes stale, and the attempt counter alone cannot say
- * so.
- *
- * Nothing clears reply_ctrl when an exchange ends: TX_REPLY returns to IDLE
- * without going through finish(), so reset_transfer() never runs for a reply
- * and the saved frame stays loaded for the life of the channel. With only the
- * attempt limit to consult, radiant_transfer_reply_retransmit() would authorise
- * repeating an acknowledgement an hour after the packet it answers just as
- * readily as 3 ms after - and the frame it put on the air would be correctly
- * formed, which is exactly what makes it dangerous. The engine has no
- * production caller yet; this is what the first one will be standing on.
- */
+/* A saved acknowledgement goes stale; the attempt counter alone can't say so.
+ * TX_REPLY returns to IDLE without going through finish(), so the saved frame
+ * stays loaded for the channel's life, and without a staleness check
+ * radiant_transfer_reply_retransmit() would authorise repeating a
+ * well-formed but hour-old acknowledgement just as readily as a fresh one. */
 ZTEST(transfer, test_an_ancient_acknowledgement_is_not_retransmitted)
 {
 	struct radiant_frame in;
@@ -1532,8 +1349,8 @@ ZTEST(transfer, test_an_ancient_acknowledgement_is_not_retransmitted)
 		      "a repeat a whole validity window late must be refused");
 	zassert_equal(1u, radiant_transfer_stats(&xfer)->stale_replies);
 
-	/* Dropped, not merely refused. A refusal that left the frame loaded
-	 * would be answered by the next caller that happened to ask in time. */
+	/* Dropped, not merely refused: a refusal that left the frame loaded
+	 * would be answered by the next caller that asked in time. */
 	zassert_equal(RADIANT_TRANSFER_ESTATE,
 		      radiant_transfer_reply_retransmit(
 			      &xfer, radiant_radio_now() +
@@ -1550,12 +1367,10 @@ ZTEST(transfer, test_an_ancient_acknowledgement_is_not_retransmitted)
  * ---------------------------------------------------------------------------
  */
 
-/*
- * The first packet goes out at the instant the scheduler asked for, and a slave
- * answering its master asks for master_t_sync + 2190 us: n=7 at 2186 us and
- * n=12 at 2191 us, a visibly different population from the 1.55 ms in-burst
- * turnaround (sd 8 against sd 21), which is why the two are separate constants.
- */
+/* The first packet goes out at the instant the scheduler asked for. A slave
+ * answering its master asks for master_t_sync + 2190 us (n=7 at 2186 us, n=12
+ * at 2191 us) - a distinct population from the 1.55 ms in-burst turnaround,
+ * hence the separate constants. */
 ZTEST(transfer, test_the_first_packet_lands_where_the_scheduler_asked)
 {
 	const struct fake_radio_arm *arm;
@@ -1595,15 +1410,10 @@ ZTEST(transfer, test_the_first_packet_lands_where_the_scheduler_asked)
 	end_of_test();
 }
 
-/*
- * A backend too slow to acknowledge is refused at configuration time.
- *
- * The reply window has to be armed 1310 us ahead of itself and the reply frame
- * 1560 us ahead of itself. A backend whose minimum arm lead exceeds the first
- * cannot do acknowledged data at all, and acknowledged data is how a trainer's
- * resistance gets set - so this has to be a loud RADIANT_TRANSFER_ENOTSUP here
- * rather than "ERG mode does not work" on somebody's bike months later.
- */
+/* A backend too slow to acknowledge is refused at configuration time: the
+ * reply window needs 1310 us of arm lead and the reply frame 1560 us. A
+ * backend that can't meet the first is loudly RADIANT_TRANSFER_ENOTSUP here
+ * rather than "ERG mode does not work" months later. */
 ZTEST(transfer, test_a_backend_that_cannot_turn_a_frame_round_is_refused)
 {
 	struct radiant_transfer slow;
@@ -1659,30 +1469,18 @@ ZTEST(transfer, test_a_master_opens_the_slot_on_the_first_packet_only)
 
 	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_abort(&master));
 	zassert_true(radiant_transfer_is_idle(&master));
-	/*
-	 * And the engine on the other channel was not disturbed by any of it.
-	 *
-	 * This used to assert xfer->late_events >= 1: the harness handed every
-	 * event to every engine and the op-id filter was what made the second
-	 * one disown it. Since the arming authority moved to radiant_sched.c
-	 * there IS no op id to compare - the engine holds
-	 * RADIANT_TRANSFER_OP_EXTERNAL and trusts its caller's routing - so
-	 * "disowned it" is no longer a thing the engine can do or a thing worth
-	 * asking it to do. The scheduler routes by channel and the property that
-	 * matters is unchanged and asserted directly: channel 0's engine neither
-	 * acted on channel 1's transfer nor released a block it never held.
-	 */
+	/* The engine on the other channel was not disturbed. Now asserted
+	 * directly (channel 0 neither acted on channel 1's transfer nor
+	 * released a block it never held) rather than via late_events, since the
+	 * engine no longer has an op id to filter by. */
 	zassert_true(radiant_transfer_is_idle(&xfer),
 		     "channel 0's engine acted on channel 1's transfer");
 	zassert_equal(0u, radiant_transfer_stats(&xfer)->blocks_released);
 	zassert_equal(0u, radiant_transfer_stats(&xfer)->packets_sent,
 		      "channel 0's engine transmitted for channel 1's transfer");
-	/*
-	 * Exactly one event, and it is the master's own abort. Both engines
-	 * share `ops`, so n_ev counts the pair - which is why this asserts what
-	 * the event WAS rather than that there were none. Acknowledged data
-	 * carries no block, so nothing comes back through it.
-	 */
+	/* Exactly one event: the master's own abort. Both engines share `ops`,
+	 * so n_ev counts the pair - hence asserting what the event was, not
+	 * just its absence. */
 	zassert_equal(1u, n_ev, "expected the master's abort alone, got %u events",
 		      (unsigned)n_ev);
 	zassert_equal(RADIANT_TRANSFER_EV_TX_FAILED, evlog[0].ev);

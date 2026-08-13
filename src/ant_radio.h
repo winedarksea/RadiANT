@@ -1,56 +1,35 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Radio contract between the ANT serial bridge and whatever implements the
- * ANT link layer underneath it.
- *
- * The bridge does not care which radio stack is below it. It needs a way to
- * configure channels, push data at them, ask what state they are in, and be
- * told when something arrives. Three backends implement this, selected by
+ * ANT link layer underneath it. Three backends, selected by
  * CONFIG_ANT_DONGLE_RADIO_*:
  *
- *   ant_radio_sdk_ant.c    thin forwarders onto Nordic's prebuilt libant.a,
- *                          plus a BUILD_ASSERT block that compares every
- *                          constant and signature in this file against its
- *                          sdk-ant counterpart. The proven one - it is what
- *                          Zwift has been verified against, and it is the only
- *                          configuration where the asserts can run at all.
- *   ant_radio_stub.c       accepts configuration and discards it; getters
- *                          return zeroed or obviously-synthetic data. Nothing
- *                          is ever transmitted and antr_on_message() is never
- *                          called, so a host sees a dongle that enumerates and
- *                          answers reset / capabilities / version but finds no
- *                          sensors. The cheapest proof this seam holds: it
- *                          builds in seconds with no sdk-ant present at all.
- *   radiant_core/              the clean-room rebuild. This file is its
- *                          specification - written so that radiant_core can be
- *                          implemented without anyone opening sdk-ant.
+ *   ant_radio_sdk_ant.c   thin forwarders onto Nordic's prebuilt libant.a,
+ *                         plus a BUILD_ASSERT block checking every constant
+ *                         and signature here against sdk-ant. Proven backend
+ *                         (Zwift-verified) and the only one where the
+ *                         asserts can run.
+ *   ant_radio_stub.c      accepts config and discards it; getters return
+ *                         synthetic data. Nothing transmits. Builds with no
+ *                         sdk-ant present, proving this seam holds standalone.
+ *   radiant_core/         the clean-room rebuild; this file is its spec.
  *
- * Everything here is prefixed antr_. The prefix is not cosmetic. sdk-ant's
- * error macros are computed expressions rather than literals, so a macro of
- * the same name with a different token sequence is a hard redefinition error:
- * without a prefix, ant_wire.h and ant_parameters.h could never sit in one
- * translation unit, and ant_radio_sdk_ant.c could not assert one against the
- * other. The prefix is what buys the self-check.
+ * Everything here is prefixed antr_ because sdk-ant's error macros are
+ * computed expressions, not literals - an unprefixed macro of the same name
+ * would be a hard redefinition error, so ant_wire.h and ant_parameters.h
+ * could never share a translation unit and ant_radio_sdk_ant.c could not
+ * assert one against the other.
  *
- * Two things are deliberately not modelled the way sdk-ant models them, and
- * both are documented in place below:
+ * Two deliberate departures from sdk-ant's model, documented in place below:
+ *   - The event path is inverted: the backend calls antr_on_message() (a flat
+ *     struct we define) instead of sdk-ant's callback over a nested union.
+ *   - antr_channel_open() is a convenience over
+ *     antr_channel_open_with_offset(), the real entry point, because sdk-ant
+ *     makes the plain form a macro and a backend needs exactly one function.
  *
- *   - The event path is inverted. sdk-ant hands events back through a
- *     registered callback taking a four-level nested union whose layout is not
- *     ours to depend on. Here the backend calls antr_on_message(), which the
- *     bridge implements, with a flat struct we define. Normalising costs the
- *     sdk-ant shim about ten lines and deletes the hardest coupling in
- *     ant_serial_bridge.c.
- *   - antr_channel_open() is a convenience over antr_channel_open_with_offset(),
- *     which is the real entry point. sdk-ant makes the plain form a macro; the
- *     split is reproduced here so a backend has exactly one function to write.
- *
- * A note on scope, because it is easy to read this file as bigger than it is:
- * there are 50 backend functions below, and src/ant_serial_bridge.c and main()
- * between them call 49 of them directly - the fiftieth,
- * antr_channel_open_with_offset(), is reached through its convenience wrapper.
- * Nothing here exists purely for symmetry. If a function looks unused, check
- * docs/sdk-ant-contract.md: it records the call site for every one of them.
+ * 50 backend functions below; 49 are called directly by ant_serial_bridge.c
+ * or main(), the 50th (antr_channel_open_with_offset()) via its wrapper.
+ * Call sites for all of them are in docs/sdk-ant-contract.md.
  */
 
 #ifndef ANT_RADIO_H_
@@ -61,99 +40,64 @@
 
 /*
  * ANTW_* names below are the ANT serial protocol's own response and event
- * codes, generated into src/ant_wire.h from protocol/ant_wire.yaml. Nothing in
- * this file needs a *value* from that header - every ANTW_* spelling here
- * appears in prose - but a caller acting on a return value needs the codes in
- * scope, so it is pulled in here rather than left to each includer.
+ * codes, generated into src/ant_wire.h from protocol/ant_wire.yaml. Pulled in
+ * here so a caller acting on a return value has the codes in scope.
  */
 #include "ant_wire.h"
 
 /* ── Error convention ──────────────────────────────────────────────────────── */
 
 /*
- * Every function here returns a response code, and the code *is* the byte the
- * serial protocol puts on the wire. Zero is ANTW_RESPONSE_NO_ERROR; anything
- * else is one of the ANTW_* channel response codes, and the bridge forwards it
- * to the host unchanged.
+ * Every function returns a response code that *is* the byte the serial
+ * protocol puts on the wire: 0 is ANTW_RESPONSE_NO_ERROR, else an ANTW_*
+ * channel response code, forwarded to the host unchanged.
  *
- * This differs from sdk-ant, whose ant_err_t carries a wide NRF error offset
- * that the bridge already narrows with a (uint8_t) cast at three call sites
- * before it reaches the wire. The narrowing moves into ant_radio_sdk_ant.c,
- * one place instead of three, and the bridge's casts disappear. Behaviour is
- * unchanged: the offset is a multiple of 256, which is exactly why the
- * existing casts work.
+ * sdk-ant's ant_err_t instead carries a wide NRF error offset; narrowing that
+ * to a wire byte happens once in ant_radio_sdk_ant.c rather than at three
+ * bridge call sites. A clean-room backend must return wire codes directly and
+ * invent no error space of its own - an unrecognised code makes a host
+ * library hang waiting for a reply it can parse.
  *
- * The consequence for a clean-room backend is that it must return wire codes
- * directly and must not invent an error space of its own. A code the host does
- * not recognise is worse than a wrong-but-valid one, because a host library
- * will typically hang waiting for a reply it can parse.
- *
- * Which codes each function may return is documented per function. Those lists
- * are the permitted set, not a promise about which case produces which code -
- * that is pinned byte-for-byte against sdk-ant by tools/ant_conformance.py,
- * whose pass condition is a byte-identical diff of two .antser captures.
+ * Per-function return lists are the permitted set, not a promise of which
+ * case produces which code - that is pinned against sdk-ant byte-for-byte by
+ * tools/ant_conformance.py.
  */
 typedef uint8_t antr_err_t;
 
 /* ── Inbound events: the message the backend hands up ──────────────────────── */
 
 /*
- * One ANT message travelling from the radio to the host.
- *
- * This is deliberately wire-shaped rather than semantically decomposed. The
- * bridge's entire job for an inbound event is to wrap it in
- * [0xA4][len][id][data...][xor] and push it at the transport, so any field the
- * struct adds beyond these three is a field that has to be kept consistent
- * with the bytes and can therefore disagree with them. There are no unions.
- *
- * A backend raises broadcast data, acknowledged data, burst data, channel
- * response events, and the startup message through this one call. There is no
- * separate event type enum: `id` already distinguishes them, and it is the
- * same value the host will see.
+ * One ANT message travelling from the radio to the host. Deliberately
+ * wire-shaped rather than semantically decomposed - the bridge's whole job is
+ * wrapping it in [0xA4][len][id][data...][xor], and an extra field would just
+ * be one more thing that could disagree with the bytes. No unions: `id`
+ * alone distinguishes broadcast/acknowledged/burst/response/startup.
  */
 struct antr_msg {
-	/*
-	 * ANT message ID - ANTW_MESG_BROADCAST_DATA_ID, ANTW_MESG_RESPONSE_EVENT_ID,
-	 * ANTW_MESG_STARTUP_MESG_ID and so on. Goes on the wire unchanged.
+	/* ANT message ID - ANTW_MESG_BROADCAST_DATA_ID, _RESPONSE_EVENT_ID,
+	 * _STARTUP_MESG_ID etc. Goes on the wire unchanged.
 	 */
 	uint8_t id;
 
 	/*
-	 * Number of valid bytes at `data`. This is the value that becomes the
-	 * frame's LEN byte, so it counts the channel byte as well as the
-	 * payload. Must be <= ANTW_MAX_SIZE_VALUE; a backend that exceeds it
-	 * has its message dropped with a warning rather than overrunning the
-	 * frame buffer.
-	 *
-	 * Two places in the tree currently disagree about that bound and the
-	 * disagreement is not cosmetic: src/ant_wire.h derives 20 from the
-	 * longest *inbound* message the parser sees, while src/usb_ant_class.c:30
-	 * states 38 and sizes the USB frame buffer from it. An advanced-burst
-	 * data message is one channel byte plus up to ANTW_ADV_BURST_BLOCK_MAX
-	 * bytes, so LEN reaches 25 and 20 cannot be right. Do not size anything
-	 * from the smaller value until that is settled - a frame buffer one byte
-	 * short writes its checksum past the end, and a parser buffer five bytes
-	 * short silently truncates every 24-byte burst packet.
+	 * Valid bytes at `data`, becoming the frame's LEN byte - so it counts
+	 * the channel byte plus payload. Must be <= ANTW_MAX_SIZE_VALUE (38,
+	 * not the 20 derived elsewhere from inbound-only messages: an
+	 * advanced-burst message reaches 25). Exceeding it drops the message
+	 * with a warning rather than overrunning the frame buffer.
 	 */
 	uint8_t len;
 
 	/*
-	 * The message body, exactly as it goes on the wire.
+	 * The message body, exactly as it goes on the wire. data[0] is the
+	 * channel number for channel-scoped messages, else the first payload
+	 * byte.
 	 *
-	 * For every channel-scoped message data[0] is the channel number and
-	 * data[1..] is the payload; for the few that are not channel-scoped
-	 * (the startup message, for instance) data[0] is simply the first
-	 * payload byte. The struct does not try to know which is which, because
-	 * the serial protocol already decides it per message ID.
+	 * LIFETIME: valid only for the duration of the antr_on_message() call;
+	 * the bridge copies what it needs before returning, so a backend must
+	 * not hand up a DMA pointer the radio could rewrite mid-call.
 	 *
-	 * LIFETIME: valid only for the duration of the antr_on_message() call.
-	 * The backend may reuse or free the buffer the instant the call
-	 * returns, and the bridge copies what it needs before returning. A
-	 * backend must not hand up a pointer into a DMA buffer that the radio
-	 * could rewrite mid-call.
-	 *
-	 * Never NULL. A message with no body has len == 0 and data pointing at
-	 * a valid (unread) address.
+	 * Never NULL - a bodyless message has len == 0 and data still valid.
 	 */
 	const uint8_t *data;
 };
@@ -161,134 +105,92 @@ struct antr_msg {
 /*
  * Called by the backend for every message the host should see.
  *
- * IMPLEMENTED BY THE BRIDGE, NOT BY THE BACKEND. This is the inversion: there
- * is no registration call, the symbol is resolved at link time, and exactly
- * one translation unit in the image defines it (src/ant_serial_bridge.c in the
- * firmware, a test double in radiant_core/tests/).
+ * IMPLEMENTED BY THE BRIDGE, NOT BY THE BACKEND - no registration call, the
+ * symbol is resolved at link time, exactly one translation unit defines it
+ * (src/ant_serial_bridge.c, or a test double in radiant_core/tests/).
  *
- * Contract on the caller - a backend must satisfy all of these:
- *
- *   1. Not before antr_init() has returned 0. Before that the bridge's state
- *      is whatever static initialisation left it.
- *   2. `msg` and `msg->data` are non-NULL and remain readable until the call
- *      returns. See the lifetime note above.
- *   3. The call must be re-entrant-free: the backend serialises its own event
- *      delivery, so the bridge is never called concurrently with itself. The
- *      bridge relies on this - it does not lock around the burst semaphore.
- *   4. The implementation may run on the backend's own thread, work queue or
- *      callback context, and may not block. The bridge honours this by
- *      queueing to a writer thread rather than sending inline.
+ * Contract on the caller:
+ *   1. Not before antr_init() has returned 0.
+ *   2. `msg` and `msg->data` non-NULL and readable until the call returns.
+ *   3. Never called re-entrantly - the backend serialises its own event
+ *      delivery; the bridge relies on this and does not lock around the
+ *      burst semaphore.
+ *   4. May run on the backend's own thread/work queue/callback context, but
+ *      must not block.
  *   5. Three ANTW_EVENT_* codes carry buffer-ownership meaning as well as
- *      status. See the burst contract below - getting that wrong is the single
- *      most expensive mistake a backend can make here.
- *   6. An event raised as a side effect of an antr_* call must not reach the
- *      host BEFORE that call's own response. See ANTR_HOST_THREAD_PRIORITY.
+ *      status - see the burst contract below.
+ *   6. An event caused by an antr_* call must not reach the host before that
+ *      call's own response - see ANTR_HOST_THREAD_PRIORITY.
  */
 void antr_on_message(const struct antr_msg *msg);
 
 /*
- * The Zephyr thread priority the bridge makes antr_* calls on, and the number a
- * backend's own event-delivery thread has to sit below.
+ * Zephyr thread priority the bridge makes antr_* calls on; a backend's own
+ * event-delivery thread must sit below it (numerically higher).
  *
- * It is stated here rather than left inside ant_serial_bridge.c because it is
- * half of a two-sided requirement and the other half lives in the backend.
- * Rule 6 above is not a style note: the bridge sends a command's
- * ANTW_MESG_RESPONSE_EVENT_ID reply after the antr_* call returns, so any
- * backend thread that can preempt this one will put an event the command
- * *caused* onto the wire ahead of the reply to the command itself. A host
- * library reads until it finds its own response and discards what it passes, so
- * the event is not merely early - it is gone.
+ * Why: the bridge sends a command's RESPONSE_EVENT reply after the antr_*
+ * call returns. A backend thread able to preempt this one would put an event
+ * the command caused onto the wire before the reply to the command itself -
+ * and a host library, which reads until it finds its own response and
+ * discards what it passes, never sees that event at all. Measured on the
+ * bench: with the event thread one priority above this one, closing a
+ * channel delivered EVENT_CHANNEL_CLOSED before the close response, the host
+ * missed it, and the following unassign was refused CHANNEL_IN_WRONG_STATE.
  *
- * Measured on the bench with radiant_core, whose event thread was one priority
- * above this one: closing a master channel produced EVENT_CHANNEL_CLOSED, then
- * the response to MESG_CLOSE_CHANNEL, in that order. The host saw only the
- * response, never learned the channel had closed, and the unassign that follows
- * a close was refused CHANNEL_IN_WRONG_STATE.
- *
- * A backend that delivers events from an ISR or a work queue instead of a
- * thread has the same obligation and must meet it its own way; this constant is
- * for the ones that use a thread, which is all of them today.
+ * A backend delivering events from an ISR or work queue instead of a thread
+ * has the same obligation, met its own way.
  */
 #define ANTR_HOST_THREAD_PRIORITY 5
 
 /* ── Burst buffer ownership: the contract that costs a second per packet ───── */
 
 /*
- * antr_burst_tx() is the only function here that takes ownership of a caller's
- * buffer, and the rule for giving it back is written out at length because
- * getting it wrong does not fail loudly - it just makes the dongle slow.
+ * antr_burst_tx() is the only function here that takes ownership of a
+ * caller's buffer. Getting the handback wrong does not fail loudly - it just
+ * makes the dongle slow.
  *
- * What the bridge does (src/ant_serial_bridge.c:452-502): it holds one static
- * 24-byte block behind a binary semaphore. Each burst packet arriving from the
- * host takes the semaphore, is memcpy'd into that block, and the block is
- * handed to antr_burst_tx(). The semaphore is given back in exactly three
- * places, all of them in the inbound event path:
+ * The bridge holds one static 24-byte block behind a binary semaphore: each
+ * incoming burst packet takes the semaphore, is copied into the block, and
+ * the block is handed to antr_burst_tx(). The semaphore is given back only
+ * on ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK, _TX_COMPLETED, _TX_FAILED, or
+ * synchronously if antr_burst_tx() itself returns an error.
  *
- *   ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK   the backend is done with this block
- *                                         and wants the next one
- *   ANTW_EVENT_TRANSFER_TX_COMPLETED      the whole transfer finished
- *   ANTW_EVENT_TRANSFER_TX_FAILED         the whole transfer failed
+ * Contract a backend must satisfy:
+ *   B1. Return 0 -> backend owns `data` until it raises one of the three
+ *       events above; not valid to assume afterwards.
+ *   B2. Return non-zero -> backend owns nothing, must not touch `data` or
+ *       raise any of the three events for it.
+ *   B3. NEXT_DATA_BLOCK exactly once per accepted block that is not the
+ *       transfer's last.
+ *   B4. The last block (ANTR_BURST_SEGMENT_END) is released by
+ *       TX_COMPLETED/TX_FAILED instead, exactly once - never also
+ *       NEXT_DATA_BLOCK.
+ *   B5. Never raise NEXT_DATA_BLOCK for a block that was never accepted -
+ *       it frees a semaphore the bridge still holds for a different block,
+ *       letting the next host packet overwrite an in-flight buffer.
  *
- * plus a synchronous release when antr_burst_tx() itself returns an error,
- * because a rejected block was never accepted in the first place.
+ * Missing B3: the bridge's k_sem_take() waits its full 1000 ms then answers
+ * ANTW_TRANSFER_IN_PROGRESS - a burst stalls a second per packet with a
+ * plausible-looking error instead of failing outright, which is why this is
+ * unit-tested (release-event count == accepted-block count) rather than
+ * caught by inspection; radiant_core/tests owns it, on Linux CI since
+ * native_sim does not build on Windows.
  *
- * The contract a backend must satisfy:
- *
- *   B1. If antr_burst_tx() returns 0, the backend owns `data` until it raises
- *       one of the three events above. Until then the buffer must not be read
- *       by anyone else, and the backend must not assume it is still valid
- *       afterwards.
- *   B2. If antr_burst_tx() returns non-zero, the backend owns nothing. It must
- *       not touch `data` and must not raise any of the three events for it.
- *   B3. ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK must be raised EXACTLY ONCE PER
- *       ACCEPTED BLOCK, for every accepted block that is not the last one of
- *       the transfer.
- *   B4. The last block of a transfer - the one whose segment carries
- *       ANTR_BURST_SEGMENT_END - is released by TX_COMPLETED or TX_FAILED
- *       instead, exactly once. It must not also produce NEXT_DATA_BLOCK.
- *   B5. Raising NEXT_DATA_BLOCK for a block that was never accepted is worse
- *       than not raising it: it gives back a semaphore the bridge still holds
- *       for a different block, and the next host packet overwrites a buffer
- *       the radio is transmitting from.
- *
- * The failure mode when B3 is missed: the bridge's k_sem_take() waits its full
- * 1000 ms timeout, then answers the host with ANTW_TRANSFER_IN_PROGRESS. So a
- * burst does not break - it stalls one second per packet and then reports a
- * plausible-looking error. An ANT-FS transfer that should take two seconds
- * takes ten minutes. Nothing in the build, the log or the host library says
- * why.
- *
- * Because the symptom is a timeout rather than a fault, this cannot be caught
- * by inspection and must be unit-tested: drive a multi-block transfer against
- * a mock and assert the release-event count equals the accepted-block count,
- * for the success path, the mid-transfer-failure path and the rejected-block
- * path. radiant_core/tests owns that test; it runs on Linux CI, since native_sim
- * does not build on Windows.
- *
- * ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK is internal flow control and never
- * reaches the host - the bridge consumes it and returns. A real ANT stick
- * frames bursts itself and never puts it on the wire.
+ * NEXT_DATA_BLOCK is internal flow control and never reaches the host - a
+ * real ANT stick frames bursts itself and never puts it on the wire.
  */
 
 /*
- * Segment flags for antr_burst_tx(). A block that is both the first and the
- * last of its transfer carries both bits.
+ * Segment flags for antr_burst_tx(). A block first and last of its transfer
+ * carries both bits.
  *
- * These are API values, not wire values - the serial protocol carries a burst
- * *sequence* number in the top bits of the channel byte and the bridge derives
- * the segment from it, so nothing here appears on the wire and the values are
- * ours to choose. They are chosen to match sdk-ant's BURST_SEGMENT_CONTINUE /
- * _START / _END, which the Wave 2 shim checked against sdk-ant directly. That
- * is what lets src/ant_radio_sdk_ant.c forward the byte untouched rather than
- * remap it, and the shim BUILD_ASSERTs all three so the agreement stays a
- * checked fact rather than a remembered one.
- *
- * END was 0x04 here until that check ran. 0x04 was an assumption about the bit
- * pattern src/ant_serial_bridge.c assembles, and it was wrong; forwarding it
- * would have marked the last block of every burst as a middle block, so
- * TRANSFER_TX_COMPLETED never arrives and the bridge's burst semaphore times
- * out at 1000 ms per transfer - the same silent stall obligations B3 and B4
- * above exist to prevent, reached from the backend side.
+ * API values, not wire values - the bridge derives them from the burst
+ * sequence number, so these are ours to choose. Chosen to match sdk-ant's
+ * BURST_SEGMENT_CONTINUE/_START/_END (BUILD_ASSERTed in
+ * ant_radio_sdk_ant.c), which is what lets that shim forward the byte
+ * untouched. END was wrongly 0x04 before that assert existed - it would have
+ * marked every burst's last block as a middle block, so TX_COMPLETED never
+ * arrives and the burst semaphore times out at 1000 ms per transfer.
  */
 #define ANTR_BURST_SEGMENT_CONTINUE  0x00  /* a middle block */
 #define ANTR_BURST_SEGMENT_START     0x01  /* first block of the transfer */
@@ -828,25 +730,15 @@ antr_err_t antr_id_list_config(uint8_t channel, uint8_t size,
  * @param key      8 bytes. Copied before this returns.
  *
  * PERMANENT LIMITATION, not a to-do. The on-air network address is derived
- * from the key by a function that is not public and that this project will not
- * attempt to recover - fitting it from samples is the activity most likely to
- * be characterised as reverse-engineering, and the plan rules it out
- * explicitly. A clean-room backend therefore holds a small table of
- * key -> address pairs, seeded with the published ANT+ pair
- * (B9A521FBBD72C345 -> network address A6 C5), and returns
- * ANTW_INVALID_PARAMETER_PROVIDED for any key not in it.
+ * from the key by a non-public function this project will not attempt to
+ * recover (fitting it from samples would be reverse-engineering). A
+ * clean-room backend holds a small key -> address table, seeded with the
+ * published ANT+ pair (B9A521FBBD72C345 -> A6 C5), and returns
+ * ANTW_INVALID_PARAMETER_PROVIDED for any other key. This costs nothing on
+ * the path anyone actually runs, since every ANT+ profile uses that one key.
  *
- * That is the correct behaviour and must be documented as a limitation
- * wherever the backend's capabilities are described - never left to be
- * rediscovered as a bug. Every ANT+ profile, every fitness app and every
- * shipping sensor uses the one key that is in the table, so the limitation
- * costs nothing on the path anyone actually runs. The table may be extended by
- * observing RF emissions from a shipping master, subject to the licence
- * position being confirmed first.
- *
- * The sdk-ant backend has no such limitation: libant.a computes the address.
- * A/B comparisons between backends must therefore use the ANT+ key, or they
- * are comparing the table against the algorithm rather than the radios.
+ * sdk-ant has no such limitation - libant.a computes the address - so A/B
+ * comparisons between backends must use the ANT+ key, not an arbitrary one.
  *
  * Returns 0, ANTW_INVALID_NETWORK_NUMBER, or ANTW_INVALID_PARAMETER_PROVIDED
  * for a key whose network address the backend cannot derive.
@@ -866,12 +758,10 @@ antr_err_t antr_network_address_set(uint8_t network, const uint8_t *key);
  *                (ANTW_LIB_CONFIG_ALL_EXT_FIELDS, 0xE0) rather than the
  *                device-ID-only 0x80.
  *
- * The RX timestamp is not a host-side clock reading. It must come from the
- * backend's own capture of when the packet arrived - that is what gives the
- * 0.009 ms figure the timing gate is read against, against ~2.6 ms of USB
- * jitter on a host clock. A backend that fills it in from a software timer
- * will pass every functional test and quietly destroy the one measurement this
- * field exists for.
+ * The RX timestamp must come from the backend's own capture of packet
+ * arrival, not a host-side clock reading (0.009 ms vs ~2.6 ms of USB jitter).
+ * A backend filling it from a software timer passes every functional test
+ * while quietly destroying the one measurement this field exists for.
  *
  * Bits are additive: setting one leaves the others alone.
  *
@@ -1110,20 +1000,18 @@ antr_err_t antr_channel_radio_crc_mode_get(uint8_t channel, uint8_t *mode);
 /* ── Encryption (ANT+ AES-CTR) ─────────────────────────────────────────────── */
 
 /*
- * These four are declared unconditionally, whatever CONFIG_ANT_DONGLE_ENCRYPTION
- * says, because a backend stands in for libant.a - which exports them
- * regardless of which the bridge chooses to call. The bridge compiles the three
- * write paths out by default; the read path is always present, and
- * antr_capabilities_get() advertises the encrypted-channel bit either way.
+ * Declared unconditionally, whatever CONFIG_ANT_DONGLE_ENCRYPTION says, since
+ * a backend stands in for libant.a which exports them regardless. The bridge
+ * compiles the three write paths out by default; the read path is always
+ * present, and antr_capabilities_get() advertises the encrypted-channel bit
+ * either way.
  *
- * A clean-room backend is not expected to implement ANT+'s own AES-CTR: no
- * Windows host can reach it (ANT_DLL.dll exports no encryption call at all), it
- * is malleable and unauthenticated, and it reserves RAM shared with the plain
- * channels. The honest implementation is to accept the reads, report
- * ANTW_INVALID_PARAMETER_PROVIDED from antr_crypto_channel_enable() for any
- * non-zero mode, and say so in the backend's documentation. What replaces it is
- * a separate, optional design (see docs/radiant-security.md) and is not part of
- * this contract.
+ * A clean-room backend need not implement ANT+'s own AES-CTR - no Windows
+ * host can reach it, it is malleable and unauthenticated. The honest
+ * implementation accepts the reads and refuses antr_crypto_channel_enable()
+ * for any non-zero mode with ANTW_INVALID_PARAMETER_PROVIDED. Its
+ * replacement is a separate, optional design (docs/radiant-security.md), not
+ * part of this contract.
  */
 
 /**
@@ -1192,19 +1080,14 @@ antr_err_t antr_crypto_info_get(uint8_t type, uint8_t *info);
  * Messages 0xF1-0xF4. NOT ANT protocol - ours, answered by no ANT device, and
  * described in docs/radiant-security.md.
  *
- * Declared inside the #ifdef rather than unconditionally, which is the opposite
- * of the encryption block above and is deliberate. Those four stand in for
- * libant.a exports, so every backend owes them a definition whatever the bridge
- * calls; these four are implemented by exactly one backend and by nothing else,
- * so declaring them always would oblige the stub and sdk_ant builds to carry
- * declining stubs for a feature they cannot have. The bridge's dispatch is under
- * the same symbol, so the two halves appear and disappear together.
+ * Declared inside the #ifdef (unlike the encryption block above) because
+ * these four are implemented by exactly one backend, not every backend
+ * standing in for libant.a; the bridge's dispatch is under the same symbol so
+ * the two halves appear and disappear together.
  *
- * ORDERING. A channel must have its ID before its key: the provisioning device
- * number is bound into the KDF, and antr_sec_key_set() reads it from the channel
- * rather than taking it on the wire. It must have its period before its epoch,
- * for the same reason - the period is what turns a phase into a packet index.
- * Both are refused with ANTW_CHANNEL_IN_WRONG_STATE rather than guessed.
+ * ORDERING: a channel needs its ID before its key (the device number is
+ * bound into the KDF) and its period before its epoch (the period turns a
+ * phase into a packet index). Both refused with ANTW_CHANNEL_IN_WRONG_STATE.
  */
 
 /**

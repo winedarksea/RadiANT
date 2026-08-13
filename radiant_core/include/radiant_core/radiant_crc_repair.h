@@ -3,115 +3,44 @@
  * radiant_crc_repair.h - turn a frame that failed its CRC by one bit into a
  * frame that did not.
  *
- * Provenance: clean-room. The arithmetic is the standard linearity property of
- * a CRC over GF(2), which is textbook and older than this project; the
- * polynomial and the frame geometry come from radiant_frame.h, which was
- * recovered on this bench. Nothing here derives from sdk-ant, from libant.a, or
- * from any adopter-gated ANT+ device profile document.
+ * Provenance: clean-room. Arithmetic is the standard CRC-over-GF(2) linearity
+ * property; polynomial and frame geometry come from radiant_frame.h.
  *
- * ---------------------------------------------------------------------------
- * Why this is worth doing
- * ---------------------------------------------------------------------------
- * At the sensitivity knee essentially every CRC failure is one flipped bit.
- * A tracked ANT frame has 15 CRC-covered bytes plus a 2-byte CRC, so around
- * 136 bits are exposed; at a 1 % packet error rate the implied bit error rate
- * is about 1e-4, which puts two-bit failures two orders of magnitude below
- * one-bit ones. Recovering the single-bit cases therefore recovers nearly all
- * of the failures, and it costs a small table and no change on the air at all.
- * Roughly 1-3 dB of effective sensitivity, for arithmetic.
+ * At the sensitivity knee, essentially every CRC failure is one flipped bit
+ * (~1e-4 bit error rate at 1% PER over 136 covered bits puts two-bit failures
+ * two orders of magnitude below one-bit ones), so recovering single-bit cases
+ * recovers nearly all failures for the cost of a small table - roughly 1-3 dB
+ * of effective sensitivity.
  *
- * ---------------------------------------------------------------------------
- * Why it runs on tracked windows only
- * ---------------------------------------------------------------------------
- * THIS IS THE DECISION THAT MAKES THE FALSE-ACCEPT RATE ACCEPTABLE, AND IT IS
- * NOT NEGOTIABLE FROM THE CALL SITE.
+ * TRACKED WINDOWS ONLY, not negotiable from the call site. A frame with more
+ * than one bit error can land on a valid single-bit syndrome by chance and
+ * get "repaired" into something still wrong. Two-bit errors are excluded
+ * outright by the polynomial (x^16+x^12+x^5+1 is divisible by x+1, so
+ * syndrome parity matches error weight parity - no two-bit error can collide
+ * with a one-bit entry). What remains is 3+-bit odd-weight errors: for a
+ * standard 10-byte body, 96 reachable entries (80 body bits + 16 CRC bits;
+ * address-bit positions are refused since a flipped address bit wouldn't
+ * match the filter) against 32768 odd-popcount syndromes, ~1 in 341.
  *
- * A frame with more bit errors than one can have its syndrome land on a valid
- * single-bit entry by chance, in which case this module "repairs" it into a
- * frame that is still wrong and now claims to be right.
+ * On a TRACKED window that's acceptable - the hardware already matched a
+ * full 5-byte address, so a mis-repair produces one bad payload in an
+ * otherwise-cumulative ANT+ stream. On a SEARCH window the same odds would
+ * promote noise-triggered 3-byte address matches (19-27 per 15s,
+ * radiant_search.c) into fabricated sensors, so RADIANT_FRAME_CFG_SEARCH is
+ * refused rather than served.
  *
- * TWO-BIT ERRORS ARE EXCLUDED OUTRIGHT, and by the polynomial rather than by
- * luck. x^16 + x^12 + x^5 + 1 evaluates to 0 at x = 1 and is therefore
- * divisible by (x + 1); for e = q*p + r that gives e(1) = r(1), and e(1) is the
- * parity of the error's weight. So an odd-weight error's syndrome always has
- * odd popcount, an even-weight error's always has even popcount, and no
- * two-bit error can ever collide with a one-bit entry. Since two-bit errors are
- * the commonest multi-bit case at the knee, that removes most of the exposure
- * before the argument below even starts.
- *
- * What remains is odd-weight errors of three bits and up, and the count that
- * matters there is the number of entries a given frame can actually reach - not
- * the size of the table.
- *
- * The table is built for RADIANT_FRAME_BODY_MAX so that one table serves every
- * body length, but a repair whose position lies further from the end than the
- * body is long would name a bit inside the ADDRESS, and those are refused: a
- * flipped address bit does not match the filter and produces no event, so such
- * a syndrome is a coincidence rather than an explanation. For a standard
- * tracked frame - 10 body bytes - that leaves 80 body bits plus 16 CRC bits,
- * so 96 reachable entries against 32768 odd-popcount syndromes: about 1 in 341,
- * on a population that is itself another order of magnitude rarer than the
- * two-bit one.
- *
- * On a TRACKED window that residual is acceptable, because the population is
- * already known to be a frame from the right sensor: the hardware matched a
- * full 5-byte address, so what is being repaired is a real frame from a known
- * master that arrived damaged. A mis-repair there produces one bad payload,
- * which every ANT+ profile survives because its values are cumulative.
- *
- * On a SEARCH window it would be applied instead to the 19-27 noise-triggered
- * address matches per 15 seconds that radiant_search.c counts and discards -
- * matches on 3 bytes, from nothing at all - and one in 341 of those would be
- * promoted into a device number manufactured out of thermal noise. A host would
- * then be told a sensor exists that does not.
- *
- * So the configuration is an argument to every call, and RADIANT_FRAME_CFG_SEARCH
- * is refused rather than served.
- *
- * ---------------------------------------------------------------------------
- * Refuting a bad repair with evidence outside the CRC
- * ---------------------------------------------------------------------------
- * The residual false accepts are not undetectable, they are merely undetectable
- * FROM HERE. A mis-repair flips a uniformly random one of the reachable
- * positions, and a receiver usually knows something about what the result
- * should look like. radiant_api.c applies the two such checks that exist at the
- * link layer, to repaired frames only:
- *
- *   - the CONTROL BYTE, of whose 256 values eleven have ever been transmitted.
- *     radiant_frame_decode() already enforces that for other reasons, so a
- *     mis-repair into those 8 bits is refuted about 96 % of the time for free;
- *   - the TRANSMISSION TYPE, which is body byte 0 and which the channel knows
- *     whenever it is not a wildcard. The address match cannot prove it, because
- *     trans_type sits in the body rather than in the matched address.
- *
- * Between them that covers 16 of the 80 body bits, and api_stats.crc_repair_refuted
- * counts what they catch.
- *
- * THE OTHER 64 BITS ARE PAYLOAD, and this layer has no business knowing what a
- * payload means: the frame codec knows frames, the profile layer knows watts
- * and beats per minute, and the clean-room boundary sits between them.
- *
- * radiant_profile_sanity.c IS that profile-layer check, in its own file behind
- * its own Kconfig symbol (CONFIG_RADIANT_CORE_PROFILE_SANITY) rather than in
- * this one: a power reading is an integer in a bounded range, a heart rate is
- * an integer in a much tighter one, and an implausible value in a REPAIRED
- * frame is far more likely a mis-repair than a real reading. api_tracked_frame()
- * applies it as the third refutation, counted in api_stats.crc_repair_implausible.
- *
- * THE CONDITION IS THAT SUCH A CHECK APPLIES TO REPAIRED FRAMES AND NOTHING
- * ELSE, and that is not a technicality. A track sprinter really does put out
- * 2000 W and a young athlete's heart rate really does pass 200 bpm; the same
- * range check applied to clean data would silently delete the most interesting
- * moments of a ride and would look like a receiver fault. tools/ant_verify.py
- * already draws that line at 3000 W ("not a bicycle"), which is the figure
- * radiant_profile_sanity.h reuses rather than a tighter guess.
- *
- * That separation is the whole reason api_stats.crc_repaired is counted apart
- * from a clean receive: the label is what makes the profile-level check safe.
- * Everything else ANT+ reports here - torque pages, speed, cadence - is an
- * accumulator that needs the previous frame's reading to mean anything, which
- * is why only power and heart rate get this treatment: they are the two
- * instantaneous, single-frame values the profile layer has.
+ * Residual false accepts are undetectable here but not elsewhere: radiant_api.c
+ * refutes repaired frames (only) against two structural checks - the control
+ * byte (11 of 256 values ever transmitted, already enforced by
+ * radiant_frame_decode()) and the transmission type (known from the channel
+ * when not a wildcard) - covering 16 of the 80 body bits
+ * (api_stats.crc_repair_refuted). The other 64 bits are payload, outside this
+ * layer's business; radiant_profile_sanity.c is the third refutation, a
+ * separate profile-layer plausibility check (bounded power/heart-rate ranges)
+ * applied to repaired frames only - never to clean data, since real athletes
+ * do exceed "typical" ranges - counted in api_stats.crc_repair_implausible.
+ * That's also why crc_repaired is counted apart from a clean receive: the
+ * label is what makes the profile-level check safe to apply at all.
  */
 
 #ifndef RADIANT_CRC_REPAIR_H_
@@ -136,12 +65,9 @@ extern "C" {
  * now produces the CRC that was received. */
 #define RADIANT_CRC_REPAIR_BODY      0
 
-/*
- * The flipped bit was in the CRC field itself, so the body was already correct
- * and has not been touched. Counted as a repair rather than as a pass, because
- * it is the same 1-in-585 gamble and the caller must be able to tell the two
- * apart.
- */
+/* The flipped bit was in the CRC field itself, so the body is untouched.
+ * Counted as a repair, not a pass - same 1-in-585 gamble, and the caller
+ * must be able to tell the two apart. */
 #define RADIANT_CRC_REPAIR_IN_CRC    1
 
 /* No single flipped bit explains the difference. Two or more bits, or a burst.
@@ -152,19 +78,13 @@ extern "C" {
 /* A null pointer, an over-long body, or RADIANT_FRAME_CFG_SEARCH. */
 #define RADIANT_CRC_REPAIR_EINVAL  (-2)
 
-/*
- * The syndrome table has not been built, or was built and found to contain a
- * collision. Never a transient condition: it means this build cannot repair
- * anything and the caller should stop asking.
- */
+/* The syndrome table was never built, or was built and found to collide.
+ * Never transient - this build can't repair anything, ever. */
 #define RADIANT_CRC_REPAIR_ESTATE  (-3)
 
-/*
- * The received CRC and the computed one agree, so there is nothing to repair.
- * A CRC_FAIL event that produces this is a backend disagreeing with
- * radiant_crc16() about the same bytes, which is a configuration fault worth
- * separating from an unrepairable frame.
- */
+/* The received CRC and the computed one agree - nothing to repair. A
+ * CRC_FAIL event producing this means the backend disagrees with
+ * radiant_crc16(), a configuration fault distinct from an unrepairable frame. */
 #define RADIANT_CRC_REPAIR_EAGREE  (-4)
 
 /* ---------------------------------------------------------------------------
@@ -173,27 +93,21 @@ extern "C" {
  */
 
 /*
- * Entries: every bit of the largest body, plus every bit of the CRC.
- *
- * The address is deliberately absent, and its absence is a fact about the
- * radio rather than an economy. A matched address never reaches RAM - that is
- * what a hardware address match means - and a frame with a flipped address bit
- * does not match in the first place, so it produces no event to repair. There
- * is nothing there to correct and no way to correct it.
+ * Entries: every bit of the largest body, plus every bit of the CRC. The
+ * address is deliberately absent - a matched address never reaches RAM, and
+ * a frame with a flipped address bit doesn't match in the first place, so
+ * there's no event to repair and nothing to correct.
  */
 #define RADIANT_CRC_REPAIR_ENTRIES \
 	(((size_t)RADIANT_FRAME_BODY_MAX * 8u) + (RADIANT_FRAME_CRC_BYTES * 8u))
 
 /*
- * Build the syndrome table and check it. Idempotent; safe to call again.
+ * Build the syndrome table and check it. Idempotent.
  *
- * Returns true if the table is usable. False means two different single-bit
- * errors produce the same syndrome, in which case a "repair" would be a coin
- * toss between two positions and this module refuses to do any. That cannot
- * happen for CRC-16/CCITT over a frame this short - the polynomial detects
- * every single-bit error in blocks up to 32767 bits - so a false here means the
- * polynomial or the geometry changed, and it is checked rather than asserted in
- * a comment for exactly that reason.
+ * Returns true if usable. False means two single-bit errors produced the
+ * same syndrome (a "repair" would be a coin toss, so this module refuses to
+ * do any) - shouldn't happen for CRC-16/CCITT over a frame this short, so a
+ * false here means the polynomial or geometry changed. Checked, not assumed.
  */
 bool radiant_crc_repair_init(void);
 
@@ -203,17 +117,13 @@ bool radiant_crc_repair_ready(void);
 /*
  * Attempt one single-bit correction.
  *
- * `addr` and `body` are the frame as struct radiant_frame_wire holds it: the
- * address the window filtered on (regenerated, since the hardware never handed
- * it over) and the body the radio DMA'd. `crc_rx` is the CRC as received, from
- * radiant_rx_event.crc_rx - not one recomputed here, which would make the
- * syndrome identically zero and the whole exercise circular.
+ * `addr`/`body` are the frame as struct radiant_frame_wire holds it (address
+ * regenerated, since hardware never hands it over; body as DMA'd). `crc_rx`
+ * is the CRC as received (radiant_rx_event.crc_rx) - not recomputed here,
+ * which would make the syndrome identically zero.
  *
- * On RADIANT_CRC_REPAIR_BODY the body has been modified in place. On every
- * other return it is untouched.
- *
- * `cfg` must be RADIANT_FRAME_CFG_TRACKING. See the header comment for why
- * search is refused here rather than at the call site.
+ * Body modified in place only on RADIANT_CRC_REPAIR_BODY.
+ * `cfg` must be RADIANT_FRAME_CFG_TRACKING - see the header comment.
  */
 int radiant_crc_repair(enum radiant_frame_cfg cfg, const uint8_t *addr,
 		       uint8_t addr_len, uint8_t *body, uint8_t body_len,

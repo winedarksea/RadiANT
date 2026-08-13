@@ -3,68 +3,45 @@
  * radiant_sec - the two per-channel payload transforms, X_AUTH and X_CONF,
  * and the crypto seam underneath them.
  *
- * docs/radiant-security.md is normative for everything here; this header is
- * the C shape of it. docs/decisions/0006-security-v1-scope-and-x-priv-
- * withdrawal.md records why there are two switches and not three.
+ * docs/radiant-security.md is normative; this header is its C shape.
+ * docs/decisions/0006-security-v1-scope-and-x-priv-withdrawal.md records why
+ * there are two switches and not three.
  *
  * ── The governing constraint ────────────────────────────────────────────────
+ * Almost nobody will turn this on, so it must cost zero flash/RAM/latency/
+ * power when off - enforced by a CI job (`zero-cost`), not a comment. Three
+ * rules, each a deliberate departure from this module's usual conventions:
+ *   1. No ops struct/callback table (unlike radiant_transfer/search/sched):
+ *      a function pointer table is a .data relocation the linker can't
+ *      garbage-collect, and one survivor defeats the size gate.
+ *   2. No structs in hot-path signatures - scalars and uint8_t * only, so
+ *      the disabled inline collapses without proving a struct copy dead.
+ *   3. No init call and no allocation on the non-secured path - the context
+ *      table is static BSS, and the first 0xF2 SET_KEY allocates an entry.
  *
- * Almost nobody will turn this on. So it must cost zero flash, zero RAM, zero
- * latency and zero power for every user who does not - and that is a CI job
- * (`zero-cost`) rather than an assertion in a comment. Three rules follow, and
- * each is a deliberate departure from a convention the rest of this module
- * keeps:
- *
- *   1. NO OPS STRUCT, NO CALLBACK TABLE. radiant_transfer, radiant_search and
- *      radiant_sched all take a `struct *_cbs`. This one does not: a function
- *      pointer table is a .data relocation the linker cannot garbage-collect,
- *      and one surviving relocation defeats the size gate.
- *   2. NO STRUCTS IN HOT-PATH SIGNATURES. Scalars and uint8_t * only, so the
- *      disabled inline collapses without the compiler having to prove a struct
- *      copy dead.
- *   3. NO INIT CALL AND NO ALLOCATION ON THE NON-SECURED PATH. antr_init()
- *      gains nothing. The context table is a static BSS array and the first
- *      0xF2 SET_KEY is what allocates an entry.
- *
- * ── Two levels, and why the seam is shaped for hardware that does not exist ─
- *
- * Every accelerator on the roadmap operates on WHOLE MODES with DMA, not on
- * single blocks:
- *
- *   nRF52840   ECB peripheral (AES-128 ECB, block at a time) *and* CryptoCell
- *              CC310 - ECB/CBC/CTR/CCM/CMAC, SHA, RSA, ECC incl. Curve25519
- *   nRF54L15   CRACEN - ECB/CBC/CTR/CCM/GCM/CMAC, SHA-2, TRNG, PKE. There is
- *              NO standalone ECB peripheral on this family at all, and CRACEN
- *              is reachable only through PSA / nrf_security
- *   others     a third-party part, if one is adopted, looks like CC310
- *
- * So a block-only seam is a design error: per-call setup dominates on all
- * three, and the nRF54L path is reachable only as a mode-level call. Hence:
- *
- *   Level 2 - modes.  radiant_sec.c calls ONLY these.
- *   Level 1 - block.  A backend implementing only this gets the modes for
- *                     free from the portable layer built on top of it.
- *
- * A backend implements whichever level it can do well. Software and the nRF52
- * ECB peripheral implement Level 1; CRACEN and CC310 implement Level 2.
- *
- * The seam is the one piece of this that is expensive to retrofit and free to
- * get right now, which is why it lands with the primitives rather than being
- * fitted around them afterwards. Two checks keep that honest: radiant_sec.c
- * contains no call to radiant_sec_aes_ecb(), and a test build selects a
- * mode-level backend and still passes every published vector.
+ * ── Two levels, shaped for hardware that doesn't exist yet ──────────────────
+ * Every accelerator on the roadmap operates on WHOLE MODES with DMA, not
+ * single blocks: nRF52840's CryptoCell CC310 and nRF54L15's CRACEN both do
+ * ECB/CBC/CTR/CCM/CMAC-class modes, and CRACEN has no standalone ECB
+ * peripheral at all (PSA/nrf_security only). A block-only seam would be a
+ * design error, so:
+ *   Level 2 - modes. radiant_sec.c calls ONLY these.
+ *   Level 1 - block. A backend implementing only this gets the modes for
+ *             free from the portable layer built on top of it.
+ * Software and the nRF52 ECB peripheral implement Level 1; CRACEN and CC310
+ * implement Level 2. Kept honest by two checks: radiant_sec.c contains no
+ * call to radiant_sec_aes_ecb(), and a test build with a mode-level backend
+ * still passes every published vector.
  *
  * ── Serialisation ──────────────────────────────────────────────────────────
- *
- * NO CRYPTO RUNS IN ISR CONTEXT, unconditionally, and that rule does not vary
- * with caps.block_us - a rule that changes with the backend is a rule that
- * gets debugged twice. TX assembly is already thread-only; every RX packet
- * already transits the event thread before a host sees it, so the CTR XOR, the
- * CMAC absorption and the verdicts all happen there.
+ * NO CRYPTO RUNS IN ISR CONTEXT, unconditionally, regardless of
+ * caps.block_us. TX assembly is thread-only already; every RX packet
+ * transits the event thread before a host sees it, so CTR XOR, CMAC
+ * absorption and verdicts all happen there.
  *
  * The software backend keeps ONE shared key schedule to stay inside its RAM
- * budget, so the Level 1 and Level 2 entry points are NOT re-entrant. Callers
- * serialise them; radiant_core does that with api_lock.
+ * budget, so Level 1/2 entry points are NOT re-entrant - callers serialise
+ * (radiant_core uses api_lock).
  */
 
 #ifndef RADIANT_CORE_RADIANT_SEC_H_
@@ -90,15 +67,12 @@ extern "C" {
 #define RADIANT_SEC_BLOCK_BYTES   16
 
 /*
- * Storage inside a key handle. Sixteen bytes, because the PROTOCOL is AES-128:
- * 256 buys nothing against casual snooping and costs distribution bytes.
- *
- * The API is still 256-capable - radiant_sec_key_import() takes `bits` and
- * caps->key_bits_mask advertises what a backend can do - and an opaque
- * hardware handle is a slot index, which is four bytes. Only a *software*
- * 256-bit backend would need more room here, and that backend would raise this
- * constant. Sizing it at 32 today would double the RAM of every secured
- * channel to express something nothing implements.
+ * Storage inside a key handle. Sixteen bytes because the PROTOCOL is AES-128
+ * (256 buys nothing against casual snooping, costs distribution bytes). The
+ * API stays 256-capable (radiant_sec_key_import() takes `bits`,
+ * caps->key_bits_mask advertises support); only a future *software* 256-bit
+ * backend would need more room and would raise this constant. Sizing at 32
+ * today would double every secured channel's RAM for nothing implemented.
  */
 #define RADIANT_SEC_KEY_MAX_BYTES 16
 
@@ -108,42 +82,35 @@ extern "C" {
 #define RADIANT_SEC_ENOTSUP  -2
 #define RADIANT_SEC_ENOKEY   -3
 #define RADIANT_SEC_EBADMAC  -4
-/* A counter this receiver has already accepted. Distinct from EBADMAC because
- * the two mean opposite things about the sender: a replay is a tag that
- * verifies perfectly and is worthless, and a caller that could not tell them
- * apart would count an attacker's recording as a forgery attempt or, worse,
- * a forgery attempt as a stale packet. Defined here rather than beside its one
- * user in radiant_sec_compat.h, because this is the list a reader checks a new
- * code against and a fifth value defined elsewhere is a collision waiting for
- * the sixth. */
+/* A counter this receiver has already accepted. Distinct from EBADMAC: a
+ * replay is a tag that verifies perfectly and is worthless, so conflating the
+ * two would count an attacker's recording as a forgery or vice versa. Defined
+ * here rather than beside its one user in radiant_sec_compat.h so a reader
+ * checking a new code has one list to check against. */
 #define RADIANT_SEC_EREPLAY  -5
 
 /*
  * An opaque key handle. NEVER a `const uint8_t key[16]` at a call site.
  *
- * The software backend stores raw bytes here and expands them into a shared
- * schedule on demand; a hardware backend stores A SLOT INDEX FOR A KEY THE CPU
- * MAY NEVER BE ABLE TO READ BACK, in the same space, and sets
- * caps->key_is_opaque. That is precisely why PSA's API looks the way it does,
- * and taking that shape for one struct is what makes PSA/nrf_security a
- * *backend* later rather than a rewrite of every call site - which matters,
- * because on nRF54L PSA is the only route to CRACEN at all.
+ * The software backend stores raw bytes here and expands them on demand; a
+ * hardware backend stores a slot index for a key the CPU may never read
+ * back, in the same space, setting caps->key_is_opaque - the same shape PSA
+ * uses, so PSA/nrf_security can become a *backend* later without a rewrite
+ * (PSA is the only route to CRACEN on nRF54L).
  *
- * Raw bytes rather than a stored key schedule is a RAM decision, not an
- * oversight: eight secured channels hold three keys each, and 44 words of
- * schedule per key would be 2.8 KB against a ~960 B budget for the whole
- * feature's state.
+ * Raw bytes rather than a stored key schedule is a RAM decision: eight
+ * secured channels x three keys x 44-word schedules would be 2.8 KB against
+ * a ~960 B budget for the whole feature.
  */
 struct radiant_sec_key {
 	uint8_t  b[RADIANT_SEC_KEY_MAX_BYTES];
 	uint16_t bits;      /* 128 or 256; 0 when the handle is empty */
 	uint32_t serial;    /* import serial - the shared-schedule cache tag.
-			     * Pointer identity is not enough: destroy one key
-			     * and import another at the same address and a
-			     * pointer-keyed cache silently uses the old
-			     * schedule. Thirty-two bits rather than sixteen so
-			     * the counter cannot wrap into a live serial in a
-			     * long session that re-derives keys every epoch. */
+			     * Pointer identity isn't enough: destroying one
+			     * key and importing another at the same address
+			     * would let a pointer-keyed cache reuse the old
+			     * schedule. 32 bits so a long session re-deriving
+			     * keys every epoch can't wrap into a live serial. */
 };
 
 /*
@@ -168,12 +135,9 @@ struct radiant_sec_caps {
 	 * load-bearing the day a host asks to. */
 	bool key_is_opaque;
 
-	/* True when radiant_sec_rng() below is real. See ADR 0009: a hostless
-	 * node derives its pairing scalar from K_dev and a counter BECAUSE
-	 * there is usually no entropy source, and where one does exist it
-	 * should be used instead. This bit is the whole of how a caller asks,
-	 * and it is a bit rather than a backend name for the reason every other
-	 * field here is: policy never names a backend. */
+	/* True when radiant_sec_rng() below is real. ADR 0009: a hostless node
+	 * derives its pairing scalar from K_dev and a counter because there's
+	 * usually no entropy source; use one when it exists. */
 	bool has_rng;
 
 	/* Bit 0 = 128-bit keys, bit 1 = 192, bit 2 = 256. */
@@ -192,40 +156,32 @@ const struct radiant_sec_caps *radiant_sec_caps(void);
 
 /*
  * ── Entropy, optional and never assumed ────────────────────────────────────
+ * `len` cryptographically strong random bytes, or RADIANT_SEC_ENOTSUP when
+ * the build has no entropy source - the DEFAULT, not an error path (reaching
+ * psa_rng/CRACEN drags nrf_security into the build, so it's opt-in per part).
  *
- * `len` cryptographically strong random bytes, or RADIANT_SEC_ENOTSUP when the
- * build has no entropy source - which is the DEFAULT and not an error path.
- * docs/radiant-security.md section 7.4 pins why: reaching psa_rng/CRACEN drags
- * nrf_security into the build, so it is opt-in per part rather than assumed
- * per project.
+ * A CALLER MUST CHECK caps.has_rng RATHER THAN CALLING AND HOPING: the weak
+ * definition returns ENOTSUP without touching `out`, so ignoring both the cap
+ * and the return code leaves stale buffer contents - which is why ADR 0009
+ * makes the deterministic KDF path primary rather than a fallback.
  *
- * A CALLER MUST CHECK caps.has_rng RATHER THAN CALLING AND HOPING. The weak
- * definition below returns ENOTSUP without touching `out`, so a caller that
- * ignores the cap and also ignores the return code gets whatever was already in
- * its buffer - which is the failure mode a security-critical default must not
- * have quietly, and is why ADR 0009 makes the deterministic KDF path the
- * primary one rather than the fallback.
- *
- * Nothing in radiant_core calls this. It exists for the node application's
- * pairing-scalar precedence rule (ADR 0009): host-supplied scalar if present,
- * else the RNG when caps.has_rng, else KDF(K_dev, "pair" || pair_counter).
+ * Nothing in radiant_core calls this; it's for the node app's pairing-scalar
+ * precedence (ADR 0009): host-supplied scalar, else RNG when has_rng, else
+ * KDF(K_dev, "pair" || pair_counter).
  */
 int radiant_sec_rng(uint8_t *out, size_t len);
 
 /*
  * ── Public key: X25519 ─────────────────────────────────────────────────────
- *
  * One entry point, so a PKA backend (CC310, CRACEN's PKE, the CC2652's PKA)
- * displaces the software implementation without the pairing logic knowing.
- * Public-key work is where hardware actually earns its keep - the ladder below
- * is milliseconds where an AES block is microseconds - so this is the seam most
- * likely to be taken up.
+ * displaces the software implementation transparently - public-key work is
+ * where hardware earns its keep (milliseconds vs. microseconds for AES), so
+ * this seam is the most likely to be taken up.
  *
  * Declared whenever CONFIG_RADIANT_SEC is on, defined only when something
- * provides it: CONFIG_RADIANT_SEC_PAIRING_X25519 selects the software one, and
- * caps.has_x25519 says whether any exists. A caller must check the cap rather
- * than assume, because "not built" and "not supported by this backend" are the
- * same condition from above.
+ * provides it (CONFIG_RADIANT_SEC_PAIRING_X25519 selects the software one);
+ * caps.has_x25519 says whether any exists. A caller must check the cap, since
+ * "not built" and "not supported by this backend" look the same from above.
  */
 #define RADIANT_SEC_X25519_BYTES 32
 
@@ -257,21 +213,18 @@ bool radiant_sec_x25519_is_degenerate(const uint8_t *shared);
 
 /*
  * ── Pairing ────────────────────────────────────────────────────────────────
- *
  * One exchange, turned into the 16 bytes the rest of this feature already
  * knows how to use. Driven by message 0xF5; see docs/radiant-security.md
  * sections 7.4 and 8.
  *
- * PAIRING HAPPENS IN THE CLEAR. There is no prior secret and no out-of-band
- * channel on the air, so an active attacker present during the exchange can be
- * the man in the middle. That is what an anonymous key agreement is, not an
- * oversight. The mitigation is the fingerprint below - six digits a human
- * compares across two screens, which an attacker holding two different shared
- * secrets cannot make match.
+ * PAIRING HAPPENS IN THE CLEAR - no prior secret, no out-of-band channel, so
+ * an active attacker present during the exchange can MITM it. That's what an
+ * anonymous key agreement is, mitigated by the fingerprint below: six digits
+ * a human compares across two screens, which two different shared secrets
+ * cannot be made to match.
  *
- * Out-of-band pairing (a QR code, a typed key) remains the recommended path
- * for anything that matters: no protocol, no attack surface during pairing at
- * all, and no dependence on the user actually looking.
+ * Out-of-band pairing (QR code, typed key) remains the recommended path for
+ * anything that matters - no attack surface during pairing at all.
  */
 
 /* A node in pairing mode accepts a key from whoever asks, so the mode is always
@@ -335,12 +288,10 @@ void radiant_sec_key_destroy(struct radiant_sec_key *k);
  */
 
 /*
- * AES-CTR. `iv` is the initial counter block and is incremented AS A 128-BIT
- * BIG-ENDIAN INTEGER between blocks, which is what SP 800-38A F.5's vectors
- * do. RadiANT's nonce block ends in seven zero bytes, so for any payload this
- * protocol carries that is indistinguishable from incrementing the last byte -
- * but two implementations that disagree about it would diverge on the first
- * long message, so it is pinned rather than left to be discovered.
+ * AES-CTR. `iv` is the initial counter block, incremented as a 128-bit
+ * big-endian integer between blocks (SP 800-38A F.5). Pinned rather than left
+ * ambiguous: two implementations that disagreed would diverge on the first
+ * long message.
  *
  * XORs in place over `len` bytes. `iv` is not modified.
  */
@@ -354,14 +305,13 @@ int radiant_sec_cmac(const struct radiant_sec_key *k, const uint8_t *msg,
 		     size_t len, uint8_t tag[RADIANT_SEC_BLOCK_BYTES]);
 
 /*
- * Incremental CMAC - this is what the spread-MAC window uses, and it is the
- * reason the window needs no payload buffer at all: CMAC absorbs 16 bytes at a
- * time, packets are delivered as they arrive, and the window is marked
- * retroactively when its tag lands.
+ * Incremental CMAC - what the spread-MAC window uses, and why that window
+ * needs no payload buffer: CMAC absorbs 16 bytes at a time as packets arrive,
+ * and the window is marked retroactively when its tag lands.
  *
- * The context is opaque to callers even though its size is public, for the
- * same reason struct radiant_sec_key is: a hardware backend puts a session
- * handle where the software one puts a chaining value.
+ * Opaque to callers despite the public size, same reason as
+ * struct radiant_sec_key: a hardware backend puts a session handle where
+ * software puts a chaining value.
  */
 struct radiant_sec_cmac_ctx {
 	uint8_t  chain[RADIANT_SEC_BLOCK_BYTES];
@@ -404,34 +354,26 @@ int radiant_sec_aes_ecb(const struct radiant_sec_key *k,
 #define RADIANT_SEC_DOM_DESC_MAC   0x03
 
 /*
- * The compat layer's, from docs/decisions/0008 and docs/radiant-security.md
- * section 11.4. It lives here rather than in radiant_core/radiant_sec_compat.h
- * for one reason: this is the list a reader checks a new domain byte against,
- * and a fourth value defined somewhere else is a collision waiting for the
- * fifth. Everything else about the compat layer - the subtype at position 9,
- * the two tag lengths, the window sizes - is in that header, behind
- * CONFIG_RADIANT_SEC_COMPAT.
- *
- * Nothing under CONFIG_RADIANT_SEC uses this byte. It is here to be reserved.
+ * The compat layer's (docs/decisions/0008, docs/radiant-security.md 11.4).
+ * Lives here rather than in radiant_sec_compat.h because this is the list a
+ * reader checks a new domain byte against - a fourth value defined elsewhere
+ * is a collision waiting to happen. Nothing under CONFIG_RADIANT_SEC uses it;
+ * it's reserved here.
  */
 #define RADIANT_SEC_DOM_COMPAT_MAC 0x04
 
 /*
- * The telemetry envelope's reliable-command pages, docs/radiant-telemetry.md
- * section 9. Reserved here for the reason the paragraph above gives - this is
- * the list a reader checks a new domain byte against.
+ * The telemetry envelope's reliable-command pages (docs/radiant-telemetry.md
+ * section 9), reserved for the same list-collision reason above.
  *
- * It is a FIFTH domain rather than a reuse of RADIANT_SEC_DOM_COMPAT_MAC even
- * though both authenticate a command, because the two commands are different
- * messages under keys derived from the same root: the compat layer's private-
- * mode switch is three bytes under K_cmd with a subtype at nonce_block[9], and
- * this one is six bytes of a page 0x10 body. Sharing a domain byte between them
- * would make the pair's security depend on the two message formats never
- * colliding, which is a property nobody would notice losing.
+ * A FIFTH domain rather than reusing RADIANT_SEC_DOM_COMPAT_MAC, even though
+ * both authenticate a command: different message shapes under keys derived
+ * from the same root (compat's is 3 bytes under K_cmd with a subtype at
+ * nonce_block[9]; this is 6 bytes of a page 0x10 body), and sharing a domain
+ * would make security depend on the two formats never colliding.
  *
- * Command and acknowledge do NOT need separate domains: page 0x10 and page 0x11
- * differ in body[0], which is the first covered byte, so the page number is
- * already inside the MAC input.
+ * Command and acknowledge do NOT need separate domains - page 0x10 vs 0x11
+ * differ in body[0], the first covered byte, so it's already in the MAC input.
  */
 #define RADIANT_SEC_DOM_TLM_CMD    0x05
 
@@ -458,18 +400,15 @@ void radiant_sec_nonce_block(uint8_t out[RADIANT_SEC_BLOCK_BYTES],
 #define RADIANT_SEC_LABEL_CMD  "cmd"
 
 /*
- * RESERVED, and used by nothing in radiant_core - the node application's
- * pairing-scalar derivation (ADR 0009) is the only holder. It is declared here
- * for the reason RADIANT_SEC_DOM_COMPAT_MAC is: this is the list a reader
- * checks a new label against, and a fifth label defined somewhere else is a
- * collision waiting for the sixth.
+ * RESERVED - used by nothing in radiant_core; only the node app's
+ * pairing-scalar derivation (ADR 0009) holds it. Declared here for the same
+ * list-collision reason as RADIANT_SEC_DOM_COMPAT_MAC.
  *
- * NOTE THE TRAP, because it is a real one: an X25519 scalar is 32 bytes and
- * radiant_sec_kdf() emits 16, so passing this label to radiant_sec_kdf() does
- * NOT produce a pairing scalar and does not produce half of one either -
- * [L]_2 is part of the PRF input, so the 256-bit derivation's first block
- * differs from this label's 128-bit output in every byte. The node's
- * derivation is src/node/node_ident.c's, and it says so there.
+ * REAL TRAP: passing this label to radiant_sec_kdf() does NOT produce a
+ * pairing scalar or half of one - an X25519 scalar is 32 bytes, this KDF
+ * emits 16, and [L]_2 being part of the PRF input means the 256-bit
+ * derivation's first block differs from this label's 128-bit output in every
+ * byte. The node's derivation is in src/node/node_ident.c.
  */
 #define RADIANT_SEC_LABEL_PAIR "pair"
 
@@ -565,12 +504,11 @@ int radiant_sec_rx_ingest(uint8_t ch, const uint8_t *pay, uint8_t len,
  * All RX crypto. Event-thread context, called BEFORE the event drain so that
  * plaintext and verdict stay ordered behind the packets they describe.
  *
- * This is the whole of the no-crypto-in-ISR rule. Every RX packet already
- * transits the event thread before a host sees it and the MAC verdicts are
- * computed there anyway, so moving the CTR XOR here too costs no wakeup and no
- * host-visible latency - and it deletes the keystream-precompute state, the
- * miss-defer path, and the "no AES in the ISR, but XOR in the ISR" carve-out.
- * One unconditional rule instead of a nuanced one.
+ * The whole of the no-crypto-in-ISR rule: every RX packet already transits
+ * the event thread before a host sees it and MAC verdicts are computed there
+ * anyway, so moving CTR XOR here costs no extra wakeup or latency, and
+ * deletes the keystream-precompute state and miss-defer path a "no AES but
+ * XOR in the ISR" carve-out would need.
  */
 void radiant_sec_pump(void);
 
@@ -607,19 +545,18 @@ int  radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 /*
  * Set the epoch and anchor its phase.
  *
- * `us_into_epoch` is how far into the epoch the caller believes it is now, and
- * it is what lets the receiver derive the packet counter from TIME rather than
- * from arrival history - the only thing that works for a mid-epoch join, for a
- * gap longer than 255 packets, and for sparse mode.
+ * `us_into_epoch` is how far into the epoch the caller believes it is now,
+ * letting the receiver derive the packet counter from TIME rather than
+ * arrival history - the only thing that works for a mid-epoch join, a gap
+ * longer than 255 packets, or sparse mode.
  *
- * `period_counts` is the channel period in counts of 1/32768 s, passed in
- * rather than read from radiant_channel so that this module depends on nothing
- * but the seam and the clock.
+ * `period_counts` (channel period in 1/32768 s counts) is passed in rather
+ * than read from radiant_channel so this module depends on nothing but the
+ * seam and the clock.
  *
- * REFUSES an epoch less than or equal to the current one, and refuses epochs
- * within RADIANT_SEC_EPOCH_HEADROOM of 0xFFFFFFFF so a counter wrap always has
- * room to advance into. No transform enables until this has been called after a
- * reset.
+ * Refuses an epoch <= the current one, and epochs within
+ * RADIANT_SEC_EPOCH_HEADROOM of 0xFFFFFFFF so a wrap always has room to
+ * advance into. No transform enables until this is called after a reset.
  */
 #define RADIANT_SEC_EPOCH_HEADROOM 0x1000u
 
@@ -634,33 +571,26 @@ int  radiant_sec_set_devnum(uint8_t ch, uint16_t devnum);
 /*
  * IDENTITY TIER 2, THE RECEIVER HALF: try a candidate on-air device number.
  *
- * A Tier 2 node re-rolls its device number at every power-up, which is what
- * answers the stalking case - a worn strap power-cycles between rides, so a
- * receiver planted near your house sees a different node each time. The cost is
- * that a STANDARD receiver must re-pair every session, and that cost is why
- * Tier 2 is opt-in and off by default.
+ * A Tier 2 node re-rolls its device number every power-up (answering the
+ * stalking case - a strap power-cycled between rides looks like a different
+ * node each time), at the cost that a standard receiver must re-pair every
+ * session - why Tier 2 is opt-in.
  *
- * A keyed RadiANT receiver does not re-pair, and this is the whole of how. It
- * wildcard-searches its device type, hears some candidate node, and asks the
- * only question that survives a re-roll: does X_AUTH verify under my key? The
- * answer is cryptographic, so "which sensor is this" is decided by the MAC
- * rather than by a number an attacker can also read.
+ * A keyed receiver avoids that: it wildcard-searches, hears a candidate node,
+ * and asks the question that survives a re-roll - does X_AUTH verify under my
+ * key? "Which sensor is this" is then decided by the MAC, not a number an
+ * attacker can also read. Strictly the MAC answers with the KEY GROUP, not
+ * the node - two same-type sensors sharing a root are indistinguishable this
+ * way, hence one root per sensor.
  *
- * Strictly the MAC answers with the KEY GROUP, not the node - two same-type
- * sensors sharing one household root are indistinguishable this way, which is
- * why the provisioning rule is one root per sensor.
+ * Mechanically this is set_devnum plus a clean slate (the old candidate's RX
+ * window state would otherwise poison the verdict). The base device number
+ * (fixed at provisioning, what the KDF binds) is untouched, so no key is
+ * re-derived; the trial costs one nonce block per packet.
  *
- * Mechanically this is set_devnum plus a clean slate: the RX window state
- * belonged to the previous candidate, and judging a new one on a window half
- * filled by the old one produces an unverified verdict that means nothing. The
- * base device number is untouched - it is fixed at provisioning, it does not
- * re-roll, and it is what the KDF binds - so no key is re-derived here and the
- * trial costs one nonce block per packet and nothing else.
- *
- * The caller drives the ordinary search path, calls this for each candidate,
- * and watches radiant_sec_last_verdict(): VERIFIED is the match. There is no
- * timeout here because there is no state to time out - a candidate that never
- * verifies is simply abandoned by the caller moving on to the next one.
+ * The caller drives the ordinary search path, calls this per candidate, and
+ * watches radiant_sec_last_verdict(): VERIFIED is the match. No timeout - a
+ * candidate that never verifies is just abandoned.
  */
 int  radiant_sec_try_devnum(uint8_t ch, uint16_t devnum);
 
@@ -689,23 +619,16 @@ struct radiant_sec_stats {
 	uint32_t dropped_policy;
 	uint32_t epoch_advances;
 	/*
-	 * COMPLETED PAIRINGS ON THIS CHANNEL - the enrolment counter of
-	 * docs/radiant-security.md section 11.7, and it is a security signal
-	 * rather than a diagnostic.
+	 * COMPLETED PAIRINGS ON THIS CHANNEL (docs/radiant-security.md 11.7) -
+	 * a security signal, not a diagnostic. Adding a receiver to a group
+	 * is additive and silent to existing keyholders, which is exactly why
+	 * this counter must not also be silent: an enrolment the owner didn't
+	 * perform is the whole attack, and a climbing counter surfaces it.
 	 *
-	 * Adding a receiver to an existing group is additive and disturbs
-	 * nothing: no epoch change, no re-keying, no interruption, and every
-	 * existing keyholder observes nothing. That is exactly why it can be a
-	 * supported operation - and exactly why it must not be SILENT. An
-	 * enrolment the owner did not perform is the whole attack, so a
-	 * keyholder that reads this counter climbing can surface "a new receiver
-	 * joined this sensor" with no other machinery.
-	 *
-	 * Bumped by radiant_sec_pair_peer() after the root key is installed, so
-	 * it counts pairings that took rather than pairings that were attempted;
-	 * a refused small-order peer key leaves it alone. It counts BOTH ways in
-	 * - the 0xF5 host exchange and src/profiles/profile_enrol.c's over-air
-	 * window - because from the group's point of view they are one event.
+	 * Bumped by radiant_sec_pair_peer() after the root key installs
+	 * (counts pairings that took, not attempts; a refused small-order
+	 * peer key leaves it alone), for both the 0xF5 host exchange and
+	 * profile_enrol.c's over-air window - one event either way.
 	 */
 	uint32_t enrolments;
 };
@@ -713,35 +636,23 @@ struct radiant_sec_stats {
 void radiant_sec_get_stats(uint8_t ch, struct radiant_sec_stats *out);
 
 /*
- * INTERNAL. radiant_sec_pair.c's hook into the counter above.
- *
- * The stats live in radiant_sec.c's per-channel context and pairing lives in
- * radiant_sec_pair.c, which is a second translation unit with no view of that
- * struct. Declared here rather than in a private header for the reason
- * radiant_transfer.h gives for radiant_transfer_arm_tx(): there are exactly two
- * translation units and one function, and a third file whose only job is to let
- * them see one prototype costs more than it explains.
- *
- * A no-op for a channel with no security context. That cannot happen on the
- * path that calls it - radiant_sec_pair_peer() installs the key first, and
- * installing the key is what allocates the context - and it is written to
- * survive being wrong about that rather than to assert it.
+ * INTERNAL. radiant_sec_pair.c's hook into the counter above. Declared here
+ * rather than a private header for the reason radiant_transfer.h gives for
+ * radiant_transfer_arm_tx(): two translation units, one function, not worth
+ * a third file. A no-op for a channel with no security context (can't
+ * happen on this path, but written to survive being wrong about that).
  */
 void radiant_sec_stat_enrolment(uint8_t ch);
 
 /*
- * The non-counter half of what 0xF4 reports: configuration and clock, as they
- * stand now.
+ * The non-counter half of what 0xF4 reports: configuration and clock, now.
+ * Kept apart from radiant_sec_stats deliberately - those are monotone
+ * counters a host subtracts for a rate; these are levels. Merging them would
+ * conflate "did this change" with "how many since last time".
  *
- * Kept apart from radiant_sec_stats deliberately. Those are monotone counters a
- * host subtracts to get a rate; these are levels a host reads to know what the
- * channel is currently doing. Merging them would make "did this change" and
- * "how many since last time" the same question, and they are not.
- *
- * `expected_index` is the packet index time says we should be at, which is what
- * makes a stalled or drifting link visible to a host: it advances whether or not
- * anything is arriving, so an expected index climbing against a flat verified
- * count is a link that has gone quiet rather than a receiver that has gone
+ * `expected_index` is the packet index time says we should be at: it
+ * advances regardless of arrivals, so a climbing expected_index against a
+ * flat verified count means the link has gone quiet, not the receiver gone
  * wrong. Zero when no epoch is set.
  */
 struct radiant_sec_state {

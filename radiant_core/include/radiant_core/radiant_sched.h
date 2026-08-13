@@ -1,117 +1,88 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * radiant_sched.h - the radio schedule: which operation the radio performs next,
- * and at which absolute microsecond it is armed.
+ * radiant_sched.h - the radio schedule: which operation the radio performs
+ * next, and at which absolute microsecond it is armed.
  *
- * Provenance: clean-room. Written from radiant_core/include/radiant_core/radiant_radio_hal.h (the
- * frozen backend contract), from the on-air and timing facts recorded in
- * docs/ant-radio-link.md, docs/spike-a-results.md and
- * docs/spike-b-part2-results.md, and from the free ANT Message Protocol and
- * Usage Rev 5.1 (D00000652). Nothing here derives from sdk-ant, from libant.a,
- * from disassembly of any binary, or from any adopter-gated ANT+ device profile
- * document. See docs/decisions/0002-clean-room-policy.md.
+ * Provenance: clean-room, from radiant_radio_hal.h, docs/ant-radio-link.md,
+ * docs/spike-a-results.md, docs/spike-b-part2-results.md, and the free ANT
+ * Message Protocol and Usage Rev 5.1 (D00000652). Nothing here derives from
+ * sdk-ant, libant.a, or any ANT+ device profile document. See
+ * docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * What this module is
- * ---------------------------------------------------------------------------
- * There is exactly one radio and it does exactly one thing at a time
- * (radiant_radio_hal.h: "a second arm call while one is armed or running returns
- * RADIANT_RADIO_EBUSY"). Everything above this module - up to 32 channel state
- * machines, a shared wildcard search sweep, an acknowledged-data reply that is
- * owed inside 1.55 ms - wants the radio at once. This module is the single
- * place that decides who gets it, and it is the only place in radiant_core that
- * calls radiant_radio_tx() or radiant_radio_rx().
+ * There is exactly one radio (radiant_radio_hal.h: a second arm call while
+ * one is running returns EBUSY), and everything above this module - up to 32
+ * channel state machines, a shared search sweep, a 1.55 ms acknowledged-data
+ * reply - wants it at once. This is the only place in radiant_core that calls
+ * radiant_radio_tx()/rx(); a caller posts an *intent* against a channel slot
+ * and gets told what happened. Intents are one-shot, consumed by their
+ * terminal event; the owner usually posts the next one from inside the
+ * completion callback (the HAL's low-jitter path).
  *
- * A caller does not arm anything. It posts an *intent* against a channel slot -
- * "hear this address between T0 and T1", "put these bytes on the air with
- * t_sync exactly T" - and gets told what happened. Intents are one-shot: an
- * accepted request is consumed by its terminal event, and the owner posts the
- * next one, usually from inside the completion callback, which is the
- * low-jitter path the HAL's callback contract exists to permit.
- *
- * POSTING IS NOT COMMITTING. radiant_sched_request_rx() and radiant_sched_request_tx()
- * change the plan and return; radiant_sched_tick() acts on it. From thread context
- * a caller therefore posts everything it knows about and ticks once. That is
- * not ceremony, it is what makes merging possible at all: a scheduler that
- * armed on every post would commit the radio to the first channel's window
- * before the second channel - whose window overlaps it exactly - had said a
- * word, and the two would never share a window. From inside a callback there is
- * nothing to remember, because the scheduler runs the commit itself on the way
- * out.
+ * POSTING IS NOT COMMITTING: radiant_sched_request_rx/tx() change the plan and
+ * return, radiant_sched_tick() acts on it. This is what makes merging
+ * possible - a scheduler that armed on every post would commit to the first
+ * channel's window before an overlapping second channel had posted, and the
+ * two would never share a window. From inside a callback there's nothing to
+ * remember; the scheduler commits on the way out.
  *
  * ---------------------------------------------------------------------------
- * RX-WINDOW MERGING, which is the reason this module is interesting
+ * RX-window merging - the reason this module exists
  * ---------------------------------------------------------------------------
- * All ANT+ traffic is on RF 57, network A6 C5 (docs/ant-radio-link.md). So two
- * tracked channels whose predicted receive windows overlap do not need two
- * hardware windows: one radiant_radio_rx() carrying one filter per channel hears
- * both. The HAL was shaped to make that expressible - struct radiant_rx_req takes
- * an array of filters and every event reports which one matched - and deciding
- * what to merge is this file's job and nothing else's.
+ * All ANT+ traffic is on RF 57, network A6 C5. Two tracked channels whose
+ * predicted windows overlap share one radiant_radio_rx() carrying one filter
+ * per channel (struct radiant_rx_req takes an array of filters and reports
+ * which matched); deciding what to merge is this file's job alone.
  *
- * Two things follow, and they are the whole return on the module:
+ *   1. Slave-side collisions between our own tracked channels drop to zero -
+ *      an unmerged scheduler must choose one of two overlapping windows and
+ *      lose the other's packet outright.
+ *   2. 32 tracked sensors do not cost 32 windows: unmerged duty at 4 Hz/
+ *      ~400 us windows is ~19%; merged, it's a fraction of that.
  *
- *   1. SLAVE-SIDE COLLISIONS BETWEEN OUR OWN TRACKED CHANNELS DROP TO ZERO. An
- *      unmerged scheduler must choose one of two overlapping windows and lose
- *      the other channel's packet outright. A merged window loses neither,
- *      because the radio was listening for both addresses at once.
- *   2. 32 TRACKED SENSORS DO NOT COST 32 WINDOWS. At 4 Hz with ~400 us windows
- *      the unmerged duty cycle is ~19 %; merged, it is a fraction of that, and
- *      the schedule has room left for the search sweep.
- *
- * NEVER HARDCODE EIGHT FILTERS. The number of addresses one window can carry is
- * caps.max_filters, and it is 8 on nRF (one base address plus eight prefixes)
- * and 2 on EFR32/RAIL (two runtime sync words). This module reads that field on
- * every scheduling pass and never assumes it. RADIANT_SCHED_MAX_FILTERS below is a
- * static-allocation ceiling, not a policy number: the policy number is always
- * caps.max_filters, clamped to it.
+ * NEVER HARDCODE EIGHT FILTERS: the addresses one window can carry is
+ * caps.max_filters (8 on nRF, 2 on EFR32/RAIL), read on every pass.
+ * RADIANT_SCHED_MAX_FILTERS is a static-allocation ceiling only; the policy
+ * number is always caps.max_filters clamped to it.
  *
  * ---------------------------------------------------------------------------
  * Sized for 32 channels from the first line
  * ---------------------------------------------------------------------------
- * 32 is the serial protocol's natural ceiling - the burst header carries the
- * channel number in its low five bits - and retrofitting a channel count
- * through a scheduler costs far more than starting at the ceiling. The slot
- * table is a fixed array with no allocation anywhere; see the size assertion in
+ * 32 is the serial protocol's ceiling (the burst header's low five bits). The
+ * slot table is a fixed array with no allocation; see the size assertion in
  * radiant_sched.c.
  *
  * ---------------------------------------------------------------------------
  * The five HAL facts this module is built around
  * ---------------------------------------------------------------------------
- *   - RADIANT_TIME_NEVER IS NEVER A VALID WINDOW EDGE. There is therefore no such
- *     thing as an open-ended receive, and background scan cannot be expressed
- *     as one. This module accepts RADIANT_TIME_NEVER as radiant_sched_rx.t_close,
- *     meaning "until cancelled", and turns it into a chain of bounded chunks
- *     that it re-arms itself. That translation is the only place in radiant_core
- *     that needs to know the restriction exists.
- *   - EVERY ARM RETURNS AN OP ID, AND A CANCELLED OPERATION'S TERMINAL EVENT
- *     STILL ARRIVES. So this module retires an operation *before* aborting it,
- *     and every event whose op id is not the live one is counted and dropped.
- *     That is not defensive programming against a hypothetical: it happens on
- *     every preemption, with no fault injection.
- *   - THE OPERATION SLOT FREES BEFORE THE TERMINAL CALLBACK RUNS, so the next
- *     window is armed from inside the callback.
- *   - CALLBACKS RUN IN RADIO ISR CONTEXT. A scheduling pass is pure arithmetic
- *     over the slot table plus at most one radiant_radio_now() and one arm call. A
- *     pass runs after every terminal event, and after a non-terminal one only
- *     if a callback actually posted or cancelled something.
- *   - RADIO CONFIGURATION IS PER-OPERATION. Every request carries its own
- *     struct radiant_pkt_format, and two requests merge only if they name the same
- *     format and the same RF index. That single test is also what keeps a
- *     search window out of a tracking window, and what will keep the planned
- *     long-range and adaptive-frequency channels out of the RF 57 merge without
- *     another line of policy.
+ *   - RADIANT_TIME_NEVER is never a valid window edge, so there's no
+ *     open-ended receive. This module accepts it as radiant_sched_rx.t_close
+ *     ("until cancelled") and turns it into a chain of bounded, self-re-armed
+ *     chunks - the only place in radiant_core that needs to know.
+ *   - Every arm returns an op id, and a cancelled operation's terminal event
+ *     still arrives. This module retires an operation *before* aborting it,
+ *     and drops any event whose op id isn't current - happens on every
+ *     preemption, with no fault injection needed.
+ *   - The operation slot frees before the terminal callback runs, so the next
+ *     window can be armed from inside the callback.
+ *   - Callbacks run in radio ISR context. A scheduling pass is pure
+ *     arithmetic plus at most one radiant_radio_now() and one arm call, and
+ *     runs after every terminal event (and after a non-terminal one only if
+ *     something was posted or cancelled).
+ *   - Radio configuration is per-operation: two requests merge only if they
+ *     name the same struct radiant_pkt_format and RF index. That single test
+ *     also keeps search out of tracking windows and will keep future
+ *     long-range/adaptive-frequency channels out of the RF 57 merge for free.
  *
  * ---------------------------------------------------------------------------
  * What this module does NOT know
  * ---------------------------------------------------------------------------
- * Nothing about ANT. No channel period, no device number, no message type, no
- * frame layout, no drift estimate. It moves absolute microseconds and opaque
- * filters around. Predicting the next window's centre is radiant_channel.c's job;
- * choosing the sweep's addresses is radiant_search.c's; deciding a reply is owed is
- * radiant_ack.c's. If a constant from docs/ant-radio-link.md appears in
- * radiant_sched.c, something has been put in the wrong file - the two exceptions
- * are named at their definitions below and both are bounds, not predictions.
+ * Nothing about ANT: no channel period, device number, message type, frame
+ * layout, drift estimate - just absolute microseconds and opaque filters.
+ * Predicting a window's centre is radiant_channel.c's job; choosing sweep
+ * addresses is radiant_search.c's; deciding a reply is owed is radiant_ack.c's.
+ * A docs/ant-radio-link.md constant appearing in radiant_sched.c means
+ * something is in the wrong file (the two exceptions are bounds, not
+ * predictions, named at their definitions below).
  */
 
 #ifndef RADIANT_SCHED_H_
@@ -132,20 +103,14 @@ extern "C" {
  * ---------------------------------------------------------------------------
  */
 
-/*
- * Channel slots. 32 because the serial protocol's burst header carries the
- * channel number in its low five bits, so 32 is the ceiling a host can address
- * at all, and because sizing a scheduler for 8 and widening it later is the
- * expensive order to do it in.
- */
+/* Channel slots. 32 is the serial protocol's ceiling (burst header's low five
+ * bits), and sizing for it now is cheaper than widening later. */
 #define RADIANT_SCHED_MAX_CHANNELS 32u
 
 /*
- * Static ceiling on filters in one hardware window. This is an allocation
- * bound - the largest caps.max_filters any planned backend advertises - and it
- * is NOT the policy number. Every decision in radiant_sched.c reads
- * caps.max_filters and clamps it to this; a build for a part with more filters
- * raises this constant and changes nothing else.
+ * Static ceiling on filters in one hardware window - an allocation bound (the
+ * largest caps.max_filters any planned backend advertises), NOT the policy
+ * number. Every decision reads caps.max_filters and clamps to this.
  */
 #define RADIANT_SCHED_MAX_FILTERS 8u
 
@@ -153,16 +118,12 @@ extern "C" {
 #define RADIANT_SCHED_CH_NONE 0xFFu
 
 /*
- * How long a background-scan chunk runs before the scheduler re-arms it.
- *
- * One ANT channel period. docs/ant-radio-link.md argues the optimum for a
- * wildcard sweep dwell: a shorter dwell does not raise the per-transmission
- * acquisition probability, while a dwell of one full period guarantees a
- * transmitting sensor is heard at least once while its address set is
- * selected. It is a bound on how long the radio may be committed to the scan,
- * not a prediction about any master's behaviour, which is why a link-layer
- * number is allowed to appear in a scheduler at all. radiant_search.c may override
- * it per request.
+ * How long a background-scan chunk runs before re-arming: one ANT channel
+ * period. A shorter dwell doesn't raise per-transmission acquisition
+ * probability, while a full period guarantees a transmitting sensor is heard
+ * at least once while its address set is selected. A bound on radio
+ * commitment, not a prediction - which is why it's allowed in a scheduler at
+ * all. radiant_search.c may override it per request.
  */
 #define RADIANT_SCHED_SCAN_CHUNK_US 250000u
 
@@ -174,62 +135,38 @@ extern "C" {
 #define RADIANT_SCHED_SCAN_MIN_US 1000u
 
 /*
- * The widest a merged receive window may grow.
+ * The widest a merged receive window may grow. Merging takes the union of
+ * overlapping windows, which needs a bound: this one, from the bench - a
+ * master's broadcast is answered 2186-2191 us later
+ * (docs/spike-b-part2-results.md), the tightest deadline in the link layer.
+ * Real masters hold slot phase to well inside +/-25 us, so this cap is
+ * generous and rarely reached.
  *
- * Merging takes the union of overlapping windows, and a union is only bounded
- * if something bounds it. This is the bound, and the number comes from the
- * bench: a master's broadcast is answered by its slave 2186-2191 us later
- * (docs/spike-b-part2-results.md), and that reply is the tightest deadline in
- * the link layer. Windows are hundreds of microseconds wide - a real master
- * holds its slot to well inside +/-25 us over minutes, so the guards are about
- * our own drift and clock error - so this cap is generous in practice and is
- * only ever reached by a caller asking for something unusual.
- *
- * WHAT THIS CAP DOES NOT DO, stated because it is easy to over-read: it bounds
- * one merged window's OCCUPANCY, not the reply's LATENCY, and those are not the
- * same guarantee. sdk-ant's own published per-slot airtime budget for a
- * bidirectional acknowledged exchange is 378 ticks (~11.5 ms) - 5.75x this cap
- * - which would be alarming if this cap were what stood between a merged
- * window and a blocked reply. It is not. want_preempt() in radiant_sched.c is:
- * an armed merged window is torn down the instant a channel's own transmit (an
- * acknowledgement, or a master's slot) falls due, "A TRANSMIT INSIDE, OR JUST
- * AFTER, THE ARMED WINDOW" in that function's comment. So the reply deadline is
- * protected by preemption, which fires regardless of how wide the merged
- * window is; this cap's job is only to keep a merge from growing without
- * bound while nothing yet needs to preempt it. See
- * docs/sdk-ant-comparison.md item 4, which is where this paragraph's
- * confirmation was asked for and answered.
+ * IT BOUNDS OCCUPANCY, NOT REPLY LATENCY. The reply deadline is actually
+ * protected by want_preempt() in radiant_sched.c, which tears down an armed
+ * merged window the instant a channel's own transmit falls due, regardless of
+ * window width; this cap only stops a merge from growing unbounded before
+ * anything needs to preempt it.
  */
 #define RADIANT_SCHED_MERGE_SPAN_MAX_US 2000u
 
 /*
- * Energy detect: the three numbers that make it background.
+ * Energy detect: modelled on the continuous background scan, not the bounded
+ * window path - never ends, armed one gap-sized chunk at a time. Unlike the
+ * scan it has the lowest priority: the scan, every tracked window, and every
+ * transmit all outrank it (see "SLOT_ED" in radiant_sched.c).
  *
- * An ED request is modelled on the continuous background scan and not on the
- * bounded window path - it never ends, it is armed one gap-sized chunk at a
- * time, and it is re-armed for as long as it is posted. What it does NOT share
- * with the scan is priority: the scan outranks it, every tracked window
- * outranks it, and every transmit outranks it. See "SLOT_ED" in
- * radiant_sched.c.
+ * DWELL_US (400 us): one index's ceiling, sized from ~40 us ramp-up plus a
+ * bounded RSSI sample burst. A ceiling, not a duration - a backend that's
+ * taken every sample leaves early, so a full 0..124 sweep costs less than
+ * 125 * 400 us.
  *
- * RADIANT_SCHED_ED_DWELL_US is one index's ceiling. 400 us is sized from the
- * nRF backend's own arithmetic - ~40 us of ramp-up plus a bounded burst of RSSI
- * samples - with room for a backend that can sample across the whole dwell
- * rather than at the start of it. A dwell is a ceiling and not a duration: a
- * backend that has taken every sample it can leaves early, which is why a full
- * 0..124 sweep does not actually cost 125 * 400 us.
+ * CHUNK_US (10 ms, 25 indices): bounds one arm call, deliberately far below
+ * the ~245 ms gap a 4 Hz tracked channel leaves, so a newly-posted window
+ * only has to preempt a short chunk rather than wait out a long one.
  *
- * RADIANT_SCHED_ED_CHUNK_US bounds ONE arm call, at 25 indices' worth. It is
- * deliberately far below the ~245 ms gap a 4 Hz tracked channel leaves: an ED
- * chunk cannot be merged with anything and cannot be usefully rebuilt once
- * armed, so a long chunk is a long stretch during which a newly-posted window
- * can only be served by preempting - and preemption throws away the tail of a
- * measurement rather than the tail of a window nobody was in.
- *
- * RADIANT_SCHED_ED_MIN_US is the shortest gap worth an ED chunk at all, at five
- * indices. Below it the arm costs more than the measurement is worth, on the
- * same reasoning as RADIANT_SCHED_SCAN_MIN_US and with a larger number for a
- * larger fixed cost.
+ * MIN_US (2 ms, 5 indices): shortest gap worth an ED chunk - below it the arm
+ * costs more than the measurement, same reasoning as SCAN_MIN_US.
  */
 #define RADIANT_SCHED_ED_DWELL_US 400u
 #define RADIANT_SCHED_ED_CHUNK_US 10000u
@@ -241,19 +178,14 @@ extern "C" {
  */
 
 /*
- * One receive intent.
+ * One receive intent. Times are in t_sync terms, exactly as
+ * struct radiant_rx_req: don't add ramp-up/preamble airtime here, the backend
+ * already does (see the t_sync contract in radiant_radio_hal.h).
  *
- * TIMES ARE IN t_sync TERMS, exactly as struct radiant_rx_req is: the window must
- * catch any frame whose last address bit reaches the antenna between t_open and
- * t_close. Do not add ramp-up or preamble airtime here - the backend already
- * did, and adding it twice is the silent yield loss the t_sync contract in
- * radiant_radio_hal.h has a page of prose about.
- *
- * FILTERS ARE CALLER-OWNED and must stay valid until done() fires, on the same
- * terms as struct radiant_rx_req.filters. A tracked channel passes one; the search
- * sweep passes as many as caps.max_filters allows. The scheduler copies them
- * into the contiguous array it hands the HAL, so a merged window's filters need
- * not be adjacent in anyone's memory.
+ * Filters are caller-owned and must stay valid until done() fires, same as
+ * struct radiant_rx_req.filters. The scheduler copies them into the
+ * contiguous array it hands the HAL, so a merged window's filters need not be
+ * adjacent in anyone's memory.
  */
 struct radiant_sched_rx {
 	/* Per-operation radio configuration. Two requests merge only if this
@@ -268,15 +200,13 @@ struct radiant_sched_rx {
 
 	radiant_time_t t_open;
 	/*
-	 * t_close, or RADIANT_TIME_NEVER for "until cancelled".
-	 *
-	 * RADIANT_TIME_NEVER is the background-scan form and it is the one thing
-	 * this module accepts that the HAL refuses. Such a request is never
-	 * consumed by its terminal event: the scheduler arms bounded chunks of
-	 * at most chunk_us, calls done() with RADIANT_SCHED_DONE_OK at the end of
-	 * each one - which is the per-dwell hook a sweep needs - and re-arms
-	 * unless the callback cancelled or replaced it. It always yields to a
-	 * bounded request, and it fills the gaps between them.
+	 * t_close, or RADIANT_TIME_NEVER for "until cancelled" - the
+	 * background-scan form, the one thing this module accepts that the HAL
+	 * refuses. Such a request is never consumed by its terminal event: the
+	 * scheduler arms bounded chunks of at most chunk_us, calls done() with
+	 * RADIANT_SCHED_DONE_OK at each chunk's end, and re-arms unless
+	 * cancelled or replaced. Always yields to a bounded request and fills
+	 * the gaps between them.
 	 */
 	radiant_time_t t_close;
 
@@ -292,38 +222,27 @@ struct radiant_sched_rx {
 
 	/*
 	 * Close the window as soon as one good frame is accepted, to save
-	 * receive current on a single-master window.
-	 *
-	 * HONOURED ONLY IF THE WINDOW IS NOT MERGED. The HAL forbids
-	 * RADIANT_RX_STOP_ON_FIRST on a window carrying more than one filter, and
-	 * for a good reason: more than one master may transmit inside it. So
-	 * this is a request, not a guarantee, and a channel must behave
-	 * correctly either way.
+	 * receive current on a single-master window. Honoured only if the
+	 * window is not merged - the HAL forbids this flag on a
+	 * multi-filter window since more than one master may transmit inside
+	 * it - so this is a request, not a guarantee.
 	 */
 	bool stop_on_first;
 
 	/*
-	 * Air time to reserve for a follow-on transmit after this window closes,
-	 * in microseconds. 0 = none. Passed through verbatim to
-	 * struct radiant_rx_req::follow_on_us, where the contract is stated;
-	 * this module neither interprets it nor charges the schedule for it.
-	 *
-	 * NOT INFERRED HERE, AND NOT INFERRABLE HERE. Whether a tracked frame
-	 * becomes an acknowledged-data reply is a fact about ANT message types,
-	 * which this module has no access to and by design never will. The
-	 * caller that knows sets it.
+	 * Air time to reserve for a follow-on transmit after this window
+	 * closes, in microseconds. 0 = none. Passed through verbatim to
+	 * struct radiant_rx_req::follow_on_us. Not inferred here: whether a
+	 * tracked frame becomes an acknowledged-data reply is an ANT-semantics
+	 * fact this module has no access to; the caller that knows sets it.
 	 */
 	uint16_t follow_on_us;
 };
 
 /*
- * One transmit intent.
- *
- * t_sync_at is the instant the last bit of the on-air address must be at the
- * antenna, and it is not negotiable: the scheduler either arms it to hit that
- * instant exactly or reports RADIANT_SCHED_DONE_MISSED and transmits nothing. A
- * late master frame lands in the next slot and is worse than no frame, and a
- * late acknowledgement is worse still.
+ * One transmit intent. t_sync_at is not negotiable: the scheduler either
+ * hits it exactly or reports RADIANT_SCHED_DONE_MISSED and transmits nothing
+ * - a late master frame lands in the next slot and is worse than none.
  *
  * body is caller-owned, must be DMA-reachable RAM, and must stay unmodified
  * until done() or tx() fires.
@@ -347,23 +266,14 @@ struct radiant_sched_tx {
 };
 
 /*
- * One energy-detect intent.
+ * One energy-detect intent. Deliberately has no time field, unlike every
+ * other request: it wants whatever is left over, ready the moment it's
+ * posted or a chunk ends, never late for anything.
  *
- * THERE IS NO TIME IN THIS STRUCTURE, and its absence is the whole character of
- * the slot kind. Every other request names an instant it must happen at, and
- * the scheduler's job is to honour it or report that it could not. An ED
- * request names no instant because it wants whatever is left over: it is ready
- * the moment it is posted, it is ready again the moment a chunk ends, and it is
- * never late for anything. A t_open would only ever have been a lie the
- * expiry sweep then had to be taught to ignore.
- *
- * The request is CONTINUOUS in the same sense radiant_sched_rx's
- * RADIANT_TIME_NEVER is: it is not consumed by its terminal event. done() fires
- * with RADIANT_SCHED_DONE_OK at the end of every chunk and the request stays
- * live until radiant_sched_cancel(). It sweeps rf_index_lo .. rf_index_hi in
- * ascending order, wrapping back to lo, and it resumes from the index it
- * reached rather than from the start of the range - a chunk cut short by a
- * tracked window loses the indices it had not reached yet, not the ones it had.
+ * Continuous like radiant_sched_rx's RADIANT_TIME_NEVER form: not consumed by
+ * its terminal event, done() fires RADIANT_SCHED_DONE_OK per chunk, stays
+ * live until radiant_sched_cancel(). Sweeps rf_index_lo..rf_index_hi
+ * ascending, wrapping to lo, resuming from wherever a chunk was cut off.
  */
 struct radiant_sched_ed {
 	uint8_t rf_index_lo;
@@ -391,83 +301,62 @@ enum radiant_sched_done {
 	RADIANT_SCHED_DONE_OK = 0,
 	/*
 	 * It ended early - preempted by a nearer deadline, or the radio was
-	 * disabled underneath it. The owner should re-predict and re-post
-	 * rather than assume the window ran.
+	 * disabled underneath it. The owner should re-predict rather than
+	 * assume the window ran.
 	 *
-	 * A continuous request gets this too, when a chunk that had already
-	 * opened was displaced, and for it the request STAYS LIVE exactly as it
-	 * does for DONE_OK - the scan pauses and resumes in the next gap. It is
-	 * reported rather than swallowed because the chunk really did stop
-	 * early, and an owner accounting in listening time that never heard
-	 * about it would credit the displaced remainder as though it had been
-	 * spent on the air. That is not hypothetical: crediting a cut-short
-	 * search window as if it had never run is what once froze the wildcard
+	 * A continuous request stays live for this too (scan pauses and resumes
+	 * in the next gap), and it's reported rather than swallowed: an owner
+	 * that credited a displaced chunk as if it ran would silently break its
+	 * own listening-time accounting - this is what once froze the wildcard
 	 * sweep on a single address set.
 	 */
 	RADIANT_SCHED_DONE_ABORTED,
 	/*
-	 * It was never armed, because its deadline passed while the radio was
-	 * busy with something else, or because it was already unreachable
-	 * inside caps.min_arm_lead_us when it was posted.
-	 *
-	 * This is the honest report of contention and it is worth counting
-	 * rather than logging: a channel seeing it repeatedly is a channel
-	 * whose window is being lost to another, which is precisely the
-	 * condition merging exists to remove.
+	 * Never armed: its deadline passed while the radio was busy, or it was
+	 * already unreachable inside caps.min_arm_lead_us when posted. Worth
+	 * counting: a channel seeing this repeatedly is losing its window to
+	 * another, exactly the condition merging exists to remove.
 	 */
 	RADIANT_SCHED_DONE_MISSED,
 	/* The backend refused the operation or could not complete it. A
 	 * malformed request lands here rather than looping. */
 	RADIANT_SCHED_DONE_FAILED,
 	/*
-	 * THE RADIO WAS LENT TO SOMETHING ELSE. The request was well formed, its
-	 * instant was reachable, and an arbitrated backend did not give us the
-	 * air - either by refusing the arm call outright (RADIANT_RADIO_EDENIED)
-	 * or by accepting it and never granting it
-	 * (RADIANT_RADIO_STATUS_DENIED). See both in radiant_radio_hal.h.
+	 * The radio was lent to something else: an arbitrated backend didn't
+	 * give us the air, either refusing synchronously (RADIANT_RADIO_EDENIED)
+	 * or accepting and never granting (RADIANT_RADIO_STATUS_DENIED).
 	 *
-	 * IT IS NOT A MISS AND THE DIFFERENCE IS THE WHOLE POINT OF THE CODE.
-	 * MISSED means the window ran, or would have, and the peer was not heard;
-	 * eight of those means the sensor is gone and radiant_channel.c drops to
-	 * SEARCHING, visibly, on the wire, to a host. A denial is evidence about
-	 * US, not about the peer - the window never opened, so nothing was
-	 * learnt. Folding the two together would make a dongle that loses sensors
-	 * whenever the second stack is busy, which is the exact failure this whole
-	 * mechanism exists to prevent.
+	 * NOT a miss: MISSED means the window ran (or would have) and the peer
+	 * wasn't heard - eight of those and radiant_channel.c drops to
+	 * SEARCHING. A denial is evidence about US, not the peer; nothing was
+	 * learnt. Folding the two together would drop sensors whenever the
+	 * other stack is busy - exactly what this mechanism exists to prevent.
 	 *
-	 * A denial is not free either: the slot clock still advanced a period with
-	 * no fresh sync, so the guard must widen by it exactly as a miss does.
-	 * radiant_channel.c keeps a second counter of equal weight for that, and
-	 * promotes into the miss path once the guard provably cannot cover the
-	 * accumulated disagreement any more.
+	 * Not free either: the slot clock still advanced with no fresh sync, so
+	 * radiant_channel.c widens its guard by a second counter of equal
+	 * weight and promotes to the miss path once the guard can no longer
+	 * cover it.
 	 *
-	 * LIKE DONE_OK AND DONE_ABORTED, THIS DOES NOT CONSUME A CONTINUOUS
-	 * REQUEST. A background scan or an ED sweep denied one chunk still wants
-	 * the next one; and nothing else re-posts an ED request, so consuming it
-	 * here would stop energy-detect scanning permanently at the first denial.
+	 * Like DONE_OK/DONE_ABORTED, does not consume a continuous request - a
+	 * denied scan/ED chunk still wants the next one.
 	 */
 	RADIANT_SCHED_DONE_DENIED
 };
 
 /*
- * Every one of these runs in radio interrupt context, under the whole of
- * radiant_radio_hal.h's callback contract: do not block, do not retain evt->body,
- * do not call the radio lifecycle functions, and do not do work proportional to
- * anything.
- *
- * Posting the next request from inside one is not merely allowed, it is the
- * intended path: the scheduler runs one arming pass on the way out, so a window
- * posted here is armed with no thread wakeup in between.
+ * Every one of these runs in radio interrupt context, under
+ * radiant_radio_hal.h's whole callback contract (no blocking, no retaining
+ * evt->body, no lifecycle calls, no proportional work). Posting the next
+ * request from inside one is the intended path: the scheduler arms it on the
+ * way out with no thread wakeup in between.
  */
 struct radiant_sched_cbs {
 	/*
 	 * One received frame, already routed to the channel whose filter
-	 * matched.
-	 *
-	 * filter_index is the index into that channel's OWN filters[] array,
-	 * not into the merged window's - so a search sweep recovers devnum_lo
-	 * from it exactly as if it had the radio to itself, and a tracked
-	 * channel with one filter always sees 0.
+	 * matched. filter_index indexes that channel's OWN filters[] array,
+	 * not the merged window's, so a search sweep recovers devnum_lo as if
+	 * it had the radio to itself, and a tracked channel with one filter
+	 * always sees 0.
 	 */
 	void (*rx)(uint8_t ch, uint8_t filter_index,
 		   const struct radiant_rx_event *evt, void *user);
@@ -477,33 +366,29 @@ struct radiant_sched_cbs {
 	void (*tx)(uint8_t ch, const struct radiant_tx_event *evt, void *user);
 
 	/*
-	 * One energy-detect dwell finished, for the channel that posted the ED
-	 * request. Fires only for RADIANT_RADIO_STATUS_OK events - the terminal
-	 * one reaches done() like every other operation's.
+	 * One energy-detect dwell finished, for the channel that posted the
+	 * ED request. Fires only for OK events - the terminal one reaches
+	 * done() like every other operation's.
 	 *
-	 * OPTIONAL, AND NOTHING IN THE CORE NEEDS IT. The scheduler has already
-	 * fed the measurement to radiant_chanmap.c by the time this runs, which
-	 * is where a consumer should read it from; this exists for a bench
-	 * capture that wants the dwells themselves rather than the aggregate.
-	 * Leave it NULL unless something is being measured.
+	 * Optional: nothing in the core needs it, since the scheduler has
+	 * already fed the measurement to radiant_chanmap.c by the time this
+	 * runs. Exists for a bench capture that wants individual dwells.
 	 */
 	void (*ed)(uint8_t ch, const struct radiant_ed_event *evt, void *user);
 
 	/*
-	 * A receive window carrying this channel has been armed, with the shape
-	 * it ACTUALLY got - which is routinely not the shape that was asked
-	 * for. Merging widens a window, a nearer deadline truncates one, and a
-	 * continuous request is armed one gap-sized chunk at a time.
+	 * A receive window carrying this channel has been armed, with the
+	 * shape it ACTUALLY got - routinely not what was asked for (merging
+	 * widens, a nearer deadline truncates, a continuous request is armed
+	 * one chunk at a time).
 	 *
-	 * Optional, and a tracked channel has no use for it: a window either
-	 * catches its slot or it does not. The caller that needs it is a
-	 * wildcard sweep, whose dwell is accounted in listening time rather
-	 * than in operations, and which therefore cannot credit anything
-	 * against bounds it merely proposed. Fires once per member per arm, so
-	 * a continuous request sees one of these per chunk.
+	 * Optional: a tracked channel has no use for it (a window either
+	 * catches its slot or not). The wildcard sweep needs it because its
+	 * dwell is accounted in listening time and can't credit bounds it
+	 * merely proposed. Fires once per member per arm.
 	 *
-	 * Runs in the arming path, which is usually the radio interrupt. Do not
-	 * post from it: the pass that armed this window is still running.
+	 * Runs in the arming path (usually the radio interrupt). Do not post
+	 * from it: the pass that armed this window is still running.
 	 */
 	void (*armed)(uint8_t ch, radiant_time_t t_open, radiant_time_t t_close,
 		      void *user);
@@ -529,66 +414,40 @@ struct radiant_sched_stats {
 	uint32_t tx_armed;          /* accepted radiant_radio_tx() calls */
 	uint32_t scan_chunks;       /* continuous-request chunks armed */
 	uint32_t ed_chunks;         /* energy-detect chunks armed */
-	uint32_t ed_dwells;         /* per-index measurements delivered. Against
-				     * ed_chunks this is the sweep rate; against
-				     * windows_armed it is what the map cost,
-				     * which is the number the "loss_exact
-				     * unchanged" claim is made against */
+	uint32_t ed_dwells;         /* per-index measurements delivered: sweep
+				     * rate against ed_chunks, map cost against
+				     * windows_armed */
 	uint32_t missed;            /* requests reported RADIANT_SCHED_DONE_MISSED */
-	uint32_t denied;            /* requests reported RADIANT_SCHED_DONE_DENIED:
-				     * air lent to another stack, from either the
-				     * synchronous refusal or the late terminal.
-				     * ZERO ON A BACKEND THAT OWNS THE RADIO, and
-				     * that identity is what makes it readable -
-				     * against `missed` it separates "the arbiter
-				     * took our slot" from "the sensor was not
-				     * there", which is the one distinction a loss
-				     * figure on a combined build cannot be
-				     * interpreted without */
-	uint32_t arm_denied;        /* of those, the ones refused synchronously by
-				     * the arm call. The rest were accepted and
-				     * never granted. Split out because the two
-				     * have different fixes: a synchronous refusal
-				     * means the reservation could not even be
-				     * asked for - typically an acknowledged-data
-				     * reply arming from inside a grant too short
-				     * to hold it - while a late denial means the
-				     * request lost to the other stack's scheduler */
+	uint32_t denied;            /* RADIANT_SCHED_DONE_DENIED: air lent to
+				     * another stack. Zero on a backend that owns
+				     * the radio; separates "arbiter took our
+				     * slot" from "sensor not there" against
+				     * `missed` */
+	uint32_t arm_denied;        /* of `denied`, refused synchronously by the
+				     * arm call (vs. accepted and never granted) -
+				     * different fixes: too-short a grant to hold
+				     * the reservation, vs. lost to the other
+				     * stack's scheduler */
 	uint32_t preempted;         /* running operations cut short for a nearer
-				     * deadline; their members lost the rest of
-				     * their window and were told so */
-	uint32_t replans;           /* windows rebuilt before they opened, which
-				     * costs nothing and loses nobody - the
-				     * mechanism by which a channel that opened
-				     * late still joins the merge */
+				     * deadline */
+	uint32_t replans;           /* windows rebuilt before opening - free, lets
+				     * a late-opened channel still join a merge */
 	uint32_t stale_events;      /* events for an operation already retired */
 	uint32_t arm_ebusy;         /* arm calls that lost the backend's race */
 	uint32_t arm_rejected;      /* arm calls refused for any other reason */
 	uint32_t arm_enotsup;       /* filter sets the backend could not put on
 				     * the air. SHOULD STAY ZERO: the scheduler
-				     * enforces caps.max_filters and
-				     * caps.max_addr_groups itself, so a non-zero
-				     * count means the core and the backend
-				     * disagree about what the hardware can match
-				     * - which is a bug in one of them and not a
-				     * property of the traffic */
-	uint32_t phy_switches;      /* operations armed on a PHY the radio was
-				     * not already configured for, and therefore
-				     * charged caps.phy_switch_us of extra arm
-				     * lead.
-				     *
-				     * WORTH COUNTING BECAUSE THE COST IS PER
-				     * SWITCH AND NOT PER FRAME. A dongle holding
-				     * one long-range channel among thirty-one
-				     * 1 M ones pays this on every long-range
-				     * window AND on the first 1 M window after
-				     * each - twice per period, not once - and
-				     * that is the number that says whether
-				     * mixing PHYs on one radio is affordable
-				     * before anybody reads a loss figure. On a
-				     * backend with phy_switch_us == 0, which is
-				     * both nRF builds, it counts switches that
-				     * cost nothing and stays honest anyway. */
+				     * enforces caps.max_filters/max_addr_groups
+				     * itself, so non-zero means core and backend
+				     * disagree about the hardware */
+	uint32_t phy_switches;      /* operations armed on a PHY not already
+				     * configured, charged caps.phy_switch_us extra
+				     * arm lead. Cost is per switch, not per frame:
+				     * one long-range channel among 31 1M ones pays
+				     * this twice per period (out and back), which
+				     * is what says whether mixing PHYs is
+				     * affordable. Zero-cost on both nRF builds
+				     * (phy_switch_us == 0) but still counted. */
 };
 
 /* ---------------------------------------------------------------------------
@@ -630,11 +489,10 @@ int radiant_sched_init(const struct radiant_sched_cbs *cbs, void *user);
  * Drop every request without firing done(), aborting anything in flight. For
  * teardown; radiant_sched_cancel() is what a running system uses.
  *
- * CALL THIS BEFORE radiant_radio_disable(), not after. Disabling aborts the live
- * operation and delivers its terminal event, and this module's response to a
- * terminal event is to arm the next thing - from inside the callback, which is
- * still inside the disable call and still in the enabled state. The radio would
- * then be powered down with an operation armed on it.
+ * Call this BEFORE radiant_radio_disable(), not after: disable() aborts the
+ * live operation and delivers its terminal event from inside the still-
+ * enabled disable call, which this module would otherwise respond to by
+ * arming the next thing - powering down with an operation armed on it.
  */
 void radiant_sched_reset(void);
 
@@ -689,23 +547,17 @@ bool radiant_sched_pending(uint8_t ch);
 
 /*
  * Shorten the chunk ceiling of a continuous request already in the slot.
+ * chunk_us bounds ONE chunk, not the total; a caller spending a budget across
+ * several chunks (a sweep dwell) must lower it as the budget runs down or the
+ * last chunk overshoots.
  *
- * A continuous request outlives its chunks, and chunk_us is a CEILING ON ONE
- * CHUNK rather than a total. A caller that spends a budget across several
- * chunks - which is what a sweep dwell is - therefore has to lower the ceiling
- * as the budget runs down, or the last chunk of a set overshoots it.
+ * MEASURED on the nRF54L15 without this: one 4 Hz tracked channel left a
+ * search chunk at its original ceiling and got 145.7 ms armed per chunk,
+ * 2.6 chunks per set - 379 ms spent on a 260 ms dwell, sweep 46% slower than
+ * its own budget, with no counter showing why.
  *
- * Measured on the nRF54L15, one channel tracking at 4 Hz, when this did not
- * exist and the request was left at its original ceiling: 145.7 ms armed per
- * chunk, 2.6 chunks per set, so 379 ms spent on a 260 ms dwell - every chunk
- * ending DONE_OK and crediting in full, the sweep advancing 46 % slower than
- * its own budget says it should, and worst-case time-to-discover 46 % longer
- * for no reason a counter anywhere would show.
- *
- * Only shortens: a request may not grow its ceiling behind the planner's back,
- * and a bounded (non-continuous) request has no chunk to shorten. Both are
- * quietly ignored. Safe from a completion callback - it writes one slot field
- * with interrupts off, like every other write to the table.
+ * Only shortens - cannot grow the ceiling, and a bounded request has nothing
+ * to shorten (both quietly ignored). Safe from a completion callback.
  */
 int radiant_sched_rechunk(uint8_t ch, uint32_t chunk_us);
 

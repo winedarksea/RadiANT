@@ -3,147 +3,72 @@
  * radiant_event.h - the event queue, and the assembly of a received frame into the
  * flat struct antr_msg the serial bridge implements.
  *
- * Provenance: clean-room. Written from src/ant_radio.h and
- * docs/sdk-ant-contract.md (the inverted event path, the burst
- * buffer-ownership obligations and the threading table), from
- * src/ant_wire.h - generated from protocol/ant_wire.yaml, never hand-edited -
- * for every wire constant, from radiant_core/include/radiant_core/radiant_radio_hal.h for the
- * t_sync contract and the callback rules, from radiant_core/include/radiant_core/radiant_frame.h
- * for the channel ID, and from tools/ant_verify.py's extended_fields() for the
- * decoder this module has to be the exact inverse of. Nothing here derives
- * from sdk-ant, from libant.a, from disassembly of any binary, or from any
- * adopter-gated ANT+ device profile document.
+ * Provenance: clean-room, from src/ant_radio.h and docs/sdk-ant-contract.md
+ * (event path, burst buffer-ownership, threading), src/ant_wire.h (generated
+ * from protocol/ant_wire.yaml) for wire constants, radiant_radio_hal.h for
+ * the t_sync contract, radiant_frame.h for the channel ID, and
+ * tools/ant_verify.py's extended_fields() for the decoder this must invert.
  * See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * What this module is
- * ---------------------------------------------------------------------------
- * Everything that travels chip -> host goes through here, and leaves through
- * exactly one call: antr_on_message(). The module is two halves that are worth
- * keeping separate in your head.
+ * Everything chip -> host goes through here and leaves via one call,
+ * antr_on_message(). Two halves: THE QUEUE - radio callbacks run in
+ * interrupt context, must not block or retain the received body (a DMA
+ * buffer reused the instant the callback returns; radiant_core/tests/fake_radio.c
+ * overwrites it with 0xDD to make a violation reproducible), so a callback
+ * copies into a ring and a thread drains it later. THE ASSEMBLY - a queued
+ * receive becomes [channel][payload...] plus, per library configuration, a
+ * flag byte and up to three extended fields, the exact inverse of
+ * tools/ant_verify.py's extended_fields() (a Tier 1 byte-diff gate). The
+ * drain is a separate call, not a callback, because the ISR half must stay
+ * cheap and the assembly half must not run in it.
  *
- *   THE QUEUE. Radio callbacks run in the backend's interrupt context, at the
- *   highest priority the backend uses, and must not block, must not do work
- *   proportional to anything, and MUST NOT retain the received body - it is a
- *   DMA buffer that is reused the instant the callback returns
- *   (radiant_radio_hal.h; radiant_core/tests/fake_radio.c overwrites it with 0xDD to
- *   make a violation reproducible). So a callback copies what it needs into a
- *   ring here and returns. A thread drains the ring later.
+ * Library configuration 0xE0 (every tool in tools/ requests it) is THREE
+ * fields assembled in order, each present only if its bit is set: flag byte
+ * (CHANNEL_ID 0x80, RSSI 0x40, RX_TIMESTAMP 0x20), then channel ID (4B),
+ * RSSI (3B), RX timestamp (2B, 32768 Hz counter LE). Order is fixed but
+ * *offsets* are not - a field's position depends on which earlier fields
+ * turned up, which is the whole reason the flag byte exists; never emit a
+ * placeholder for an unreported field. Device type keeps its pairing bit
+ * (bit 7) - tools mask it themselves when they want the bare type.
  *
- *   THE ASSEMBLY. A queued receive becomes the bytes the host will see:
- *   [channel][payload...] plus, when library configuration asks for them, a
- *   flag byte and up to three appended extended fields. That assembly is the
- *   inverse of tools/ant_verify.py's extended_fields(), and getting the field
- *   order or the flag byte wrong is a Tier 1 byte-diff failure rather than a
- *   cosmetic one.
+ * THE RX TIMESTAMP COMES FROM t_sync, AND NOTHING ELSE - the subtlest
+ * requirement here, with no functional symptom when wrong. t_sync is the
+ * instant the last address bit was at the antenna, on the backend's own
+ * corrected microsecond timebase; any other clock (radiant_radio_now() at
+ * drain, host clock, thread tick) passes every functional test but destroys
+ * the measurement the field exists for (0.009 ms on the radio clock vs.
+ * ~2.6 ms of USB jitter on a host clock - sub-ms multi-sensor fusion rests
+ * on the former). So struct radiant_event_rx has NO timestamp field, only a
+ * pointer to the HAL event this module copies t_sync out of, and the tick
+ * conversion happens at drain time but on the value captured in the
+ * callback (radiant_core/tests/src/test_event.c asserts this against a
+ * clock advanced between arrival and drain).
  *
- * The split is why the drain is a separate call rather than a callback: the
- * expensive half must not run in the ISR, and the ISR half must not allocate,
- * loop or format anything.
+ * A backend with caps.has_sync_timestamp false still fills t_sync
+ * best-effort but clears t_sync_exact; the rule is to *suppress* rather than
+ * report a worse number as if accurate, so by default an inexact stamp
+ * clears ANTW_EXT_FLAG_RX_TIMESTAMP for that message (counted in
+ * radiant_event_stats.ts_suppressed; RADIANT_EVENT_TS_BEST_EFFORT opts back
+ * in for bench use). Same rule for RSSI: has_rssi false suppresses the flag
+ * rather than emitting an implausible 0 dBm.
  *
- * ---------------------------------------------------------------------------
- * Library configuration 0xE0 is THREE fields, not one
- * ---------------------------------------------------------------------------
- * Every tool in tools/ requests ANTW_LIB_CONFIG_ALL_EXT_FIELDS (0xE0) -
- * channel ID + RSSI + RX timestamp - not the device-ID-only 0x80. All three
- * are assembled here, in this order, each present only if its bit is set:
+ * Event codes are wire values: antr_err_t and every ANTW_EVENT_* code raised
+ * here is the literal wire byte (tools/ant_conformance.py byte-diffs it),
+ * always from src/ant_wire.h, never invented. Three codes also carry buffer
+ * ownership, releasing the bridge's single 24-byte burst block
+ * (src/ant_serial_bridge.c:452-502): TRANSFER_NEXT_DATA_BLOCK (once per
+ * non-final accepted block), TRANSFER_TX_COMPLETED, TRANSFER_TX_FAILED.
+ * Missing the first doesn't fail loudly - the bridge's k_sem_take() just
+ * waits its full 1000 ms per block, silently turning a two-second transfer
+ * into ten minutes. radiant_burst.c raises them; this module counts each one
+ * (radiant_event_stats) so the "release count equals accepted-block count"
+ * contract is a counter check, not a log read.
  *
- *   byte 0 of the tail   flag byte: ANTW_EXT_FLAG_CHANNEL_ID   0x80
- *                                   ANTW_EXT_FLAG_RSSI         0x40
- *                                   ANTW_EXT_FLAG_RX_TIMESTAMP 0x20
- *   channel ID   4 bytes  devnum lo, devnum hi, device type, transmission type
- *   RSSI         3 bytes  measurement type, value, threshold configuration
- *   RX timestamp 2 bytes  32768 Hz counter, little endian
- *
- * The order is fixed but the *offsets* are not: a field's position depends on
- * which earlier fields turned up. That is the whole reason the flag byte
- * exists, and reading a later field at a fixed offset is the mistake
- * extended_fields() is written to avoid - so this module must never emit a
- * placeholder for a field it is not reporting.
- *
- * The device type keeps its pairing bit (bit 7). Masking it here would lose
- * information the host is entitled to; ant_verify.py and ant_scan.py mask it
- * themselves when they want the bare type.
- *
- * ---------------------------------------------------------------------------
- * The RX timestamp comes from t_sync, and from nothing else
- * ---------------------------------------------------------------------------
- * This is the subtlest requirement in the module and the one with no
- * functional symptom when it is wrong.
- *
- * radiant_rx_event.t_sync is defined by radiant_radio_hal.h as the instant the last
- * bit of the on-air address was at the antenna, on the backend's own
- * microsecond timebase, with each backend applying its measured demodulation
- * correction. That is the number the host must get. A reading of
- * radiant_radio_now() taken when the queue is drained, or a host-side clock, or a
- * thread-context tick would pass every functional test and destroy the one
- * measurement the field exists for: the A/B `timing` gate reads 0.009 ms on
- * the radio clock against ~2.6 ms through USB jitter on a host clock, and the
- * sub-millisecond multi-sensor fusion capability rests entirely on the former.
- *
- * Two things in this header are shaped by that:
- *
- *   - struct radiant_event_rx has NO timestamp field. It carries a pointer to the
- *     HAL event instead, and this module copies t_sync out of it. There is
- *     nowhere to put a wrong number, which is a stronger guarantee than a
- *     comment asking for the right one.
- *   - the conversion to 32768 Hz ticks happens at drain time, but on the
- *     t_sync value captured in the callback. radiant_core/tests/src/test_event.c
- *     advances the virtual clock between arrival and drain and asserts the
- *     reported ticks did not move. That test exists for exactly one bug.
- *
- * WHEN THE BACKEND CANNOT STAMP EXACTLY. A backend with
- * caps.has_sync_timestamp false still fills t_sync best-effort and clears
- * radiant_rx_event.t_sync_exact. The rule from the HAL header is to *degrade the
- * advertised accuracy* rather than report the worse number as if it were the
- * good one - and the only accuracy this wire format advertises is the presence
- * of the field. So by default an inexact stamp suppresses
- * ANTW_EXT_FLAG_RX_TIMESTAMP for that message: the host sees no timestamp,
- * which is true, instead of a millisecond-scale number in a field documented
- * to carry a microsecond-scale one. The suppression is counted, not silent
- * (radiant_event_stats.ts_suppressed), and a bench build that genuinely wants the
- * approximate value opts in with RADIANT_EVENT_TS_BEST_EFFORT.
- *
- * The same rule applies to RSSI: radiant_rx_event.has_rssi false suppresses
- * ANTW_EXT_FLAG_RSSI rather than emitting 0 dBm, which is a physically
- * implausible reading that a host would nonetheless believe.
- *
- * ---------------------------------------------------------------------------
- * Event codes are wire values
- * ---------------------------------------------------------------------------
- * antr_err_t is a uint8_t whose value *is* the byte the serial protocol puts
- * on the wire, and the same is true of every ANTW_EVENT_* code raised through
- * here. A wrong code is wire-visible and tools/ant_conformance.py's byte diff
- * catches it. Nothing in this module invents a value; every one comes from
- * src/ant_wire.h.
- *
- * Three of those codes carry buffer ownership as well as status, and are what
- * release the bridge's single 24-byte burst block
- * (src/ant_serial_bridge.c:452-502):
- *
- *   ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK   exactly once per accepted block that
- *                                         is not the last of the transfer
- *   ANTW_EVENT_TRANSFER_TX_COMPLETED      the transfer finished
- *   ANTW_EVENT_TRANSFER_TX_FAILED         the transfer failed
- *
- * Missing the first does not fail loudly: the bridge's k_sem_take() waits its
- * full 1000 ms and then answers ANTW_TRANSFER_IN_PROGRESS, so an ANT-FS
- * transfer that should take two seconds takes ten minutes and nothing says
- * why. radiant_burst.c owns raising them; this module owns the codes and counts
- * each one (radiant_event_stats), so the "release count equals accepted-block
- * count" assertion the contract demands can be made against a counter instead
- * of by reading a log.
- *
- * ---------------------------------------------------------------------------
- * Sized for 32 channels and background scan
- * ---------------------------------------------------------------------------
- * 32 is the serial protocol's own ceiling: the burst header keeps the channel
- * number in its low five bits (ANTW_BURST_HEADER_CHANNEL_MASK), so 0..31 is
- * every channel that can be named on the wire at all. At 4 Hz, 32 tracked
- * channels produce ~128 messages per second, and background scan adds every
- * sensor in range on top of that. The queue is sized from that rate rather
- * than from the eight channels libant.a allocates, because a queue depth is
- * exactly the kind of assumption that is expensive to retrofit.
+ * Sized for 32 channels (the serial protocol's own ceiling: burst header
+ * channel field is 5 bits) and background scan: ~128 msg/s from 32 tracked
+ * channels at 4 Hz, plus every sensor scan picks up. Sized from that rate
+ * rather than libant.a's eight channels, since queue depth is expensive to
+ * retrofit later.
  */
 
 #ifndef RADIANT_EVENT_H_
@@ -170,12 +95,9 @@ extern "C" {
 #endif
 
 /* ---------------------------------------------------------------------------
- * Return codes
- *
- * Negative and module-private, on the same terms as radiant_frame.h's: these are
- * internal outcomes, not wire codes, and a caller must never forward one to
- * the host. The functions that DO answer a host message - the library
- * configuration setters - return antr_err_t instead, and are marked as such.
+ * Return codes - negative, module-private internal outcomes, never
+ * forwarded to the host. Functions answering a host message (the library
+ * configuration setters) return antr_err_t instead, marked as such.
  * ---------------------------------------------------------------------------
  */
 #define RADIANT_EVENT_OK        0
@@ -214,34 +136,25 @@ extern "C" {
 
 /*
  * Queued messages. Must be a power of two - the ring masks rather than
- * divides, because the producer runs in a radio ISR.
+ * divides, since the producer runs in a radio ISR.
  *
- * 64 slots is ~500 ms of headroom at the 128 messages per second that 32
- * tracked channels at 4 Hz produce, and it comfortably absorbs the 51-packet
- * burst Spike B part 2 captured end to end. It costs about 3 KB of static RAM
- * (see struct radiant_event_slot in radiant_event.c), which is real: libant.a's whole
- * footprint is 2,389 B, for eight channels rather than thirty-two. Override it
- * with -DANT_EVENT_QUEUE_DEPTH=<n> on a build that would rather have the RAM;
- * 32 - one slot per channel - is the lowest value that cannot lose a message
- * to a single slot's worth of simultaneous arrivals.
+ * 64 slots is ~500 ms of headroom at 128 msg/s (32 channels at 4 Hz), and
+ * comfortably absorbs the 51-packet burst Spike B part 2 captured. Costs
+ * ~3 KB static RAM. Override with -DANT_EVENT_QUEUE_DEPTH=<n>; 32 (one slot
+ * per channel) is the lowest value that can't lose a message to one slot's
+ * worth of simultaneous arrivals.
  */
 #ifndef RADIANT_EVENT_QUEUE_DEPTH
 #define RADIANT_EVENT_QUEUE_DEPTH  64u
 #endif
 
 /* Library configuration bits this module implements. Anything outside it is
- * refused by radiant_event_lib_config_set() with ANTW_INVALID_PARAMETER_PROVIDED
- * rather than accepted and ignored - a host that believes it configured a
- * field and did not is worse off than one that got an error.
+ * refused with ANTW_INVALID_PARAMETER_PROVIDED rather than silently ignored.
  *
- * ANTW_LIB_CONFIG_RADIO_CONFIG_ALWAYS is in the set and is a no-op by
- * construction: radiant_radio_hal.h rule 6 makes radio configuration per-operation
- * already, so "reconfigure on every event" is what the core does whether or
- * not the bit is set. Accepting it is therefore honest, not a pretence.
- *
- * Which bits a real stick refuses is a byte-diff question rather than a
- * reasoned one; tools/ant_conformance.py is what pins it, and narrowing or
- * widening this mask afterwards is a one-line change. */
+ * ANTW_LIB_CONFIG_RADIO_CONFIG_ALWAYS is a no-op by construction: HAL rule 6
+ * already reconfigures per-operation regardless of this bit, so accepting
+ * it is honest, not a pretence. Which bits a real stick refuses is pinned
+ * by tools/ant_conformance.py's byte diff. */
 #define RADIANT_EVENT_LIB_CONFIG_SUPPORTED                                       \
 	((uint8_t)(ANTW_LIB_CONFIG_RADIO_CONFIG_ALWAYS |                     \
 		   ANTW_LIB_CONFIG_MESG_OUT_INC_TIME_STAMP |                 \
@@ -251,37 +164,29 @@ extern "C" {
 /* ---------------------------------------------------------------------------
  * Two hooks the port provides
  *
- * Deliberately undefined here, so that a build which forgets one fails at the
- * link with a named symbol rather than shipping a silent data race or a queue
- * nothing ever drains. radiant_core/src/radiant_event.c includes no Zephyr header - it
- * compiles as a freestanding translation unit, the same rule radiant_frame.c
- * follows - so it cannot reach irq_lock() or a semaphore itself.
+ * Deliberately undefined here, so a build that forgets one fails at link
+ * time rather than shipping a silent data race. radiant_event.c compiles as
+ * a freestanding translation unit (no Zephyr header, same rule as
+ * radiant_frame.c) so it can't reach irq_lock() or a semaphore itself.
  *
- * In the firmware these are two lines in radiant_api.c. In the unit tests they are
- * a no-op and a counter (the mock radio is single-threaded and its clock only
- * moves when a test moves it).
+ * In firmware these are two lines in radiant_api.c; in unit tests, a no-op
+ * and a counter (the mock radio is single-threaded).
  * ---------------------------------------------------------------------------
  */
 
 /*
- * Enter and leave the critical section protecting the ring.
- *
- * The producer may be a radio ISR and the consumer is a thread, so the two
- * index updates need mutual exclusion. Map these onto irq_lock() and
- * irq_unlock(): a mutex is wrong, because the producer side runs in interrupt
- * context and must not block. The section is a handful of instructions plus
- * one 48-byte copy; it never calls out and never loops.
+ * Enter and leave the critical section protecting the ring. Producer may be
+ * a radio ISR, consumer is a thread, so map onto irq_lock()/irq_unlock() - a
+ * mutex is wrong since the producer must not block. A handful of
+ * instructions plus one 48-byte copy; never calls out, never loops.
  */
 unsigned int radiant_event_crit_enter(void);
 void         radiant_event_crit_exit(unsigned int key);
 
 /*
  * Called once per successfully queued message, possibly from the radio ISR.
- *
- * Its only job is to make the drain run: k_sem_give(), k_work_submit(), or
- * whatever the port uses. It must be O(1), must be safe from interrupt
- * context, and must not call back into this module - the HAL's "queue it and
- * return" rule applies to everything on this path, not only to HAL calls.
+ * Only job is to make the drain run (k_sem_give(), k_work_submit(), ...).
+ * Must be O(1), interrupt-safe, and must not call back into this module.
  */
 void radiant_event_wakeup(void);
 
@@ -292,27 +197,24 @@ void radiant_event_wakeup(void);
 
 /*
  * Bring the module up: empty ring, library configuration and event filter
- * zeroed, statistics cleared, timestamp policy back to the default.
+ * zeroed, statistics cleared, timestamp policy back to default.
  *
- * Call it from antr_init() BEFORE the radio is enabled. Posting before this
- * returns is RADIANT_EVENT_ESTATE, which mirrors the rule that antr_on_message()
- * is never called before antr_init() has returned 0.
+ * Call from antr_init() BEFORE the radio is enabled. Posting before this
+ * returns is RADIANT_EVENT_ESTATE, mirroring the antr_on_message() rule.
  */
 void radiant_event_init(void);
 
 /*
- * What antr_stack_reset() needs: discard every queued message and put the
- * library configuration and the event filter back to zero, without delivering
- * anything.
+ * What antr_stack_reset() needs: discard every queued message and zero the
+ * library configuration and event filter, without delivering anything.
  *
- * Discarding rather than draining is the correct behaviour and not a
- * shortcut. A real stick emits nothing between the reset command and the
- * startup message, the bridge discards inbound events for 50 ms afterwards for
- * exactly that reason, and draining here would call antr_on_message()
- * recursively from inside an antr_* call, which docs/sdk-ant-contract.md
- * forbids outright. Discarded messages are counted in
- * radiant_event_stats.dropped_flush; statistics themselves are not cleared,
- * because a reset in the middle of a session is a thing a test wants to see.
+ * Discarding, not draining, is correct: a real stick emits nothing between
+ * reset and the startup message (the bridge discards inbound events for
+ * 50 ms for that reason), and draining here would recursively call
+ * antr_on_message() from inside an antr_* call, which
+ * docs/sdk-ant-contract.md forbids. Discards counted in
+ * radiant_event_stats.dropped_flush; stats themselves are not cleared, so a
+ * mid-session reset stays visible to a test.
  */
 void radiant_event_flush(void);
 
@@ -325,9 +227,8 @@ void radiant_event_flush(void);
  * Turn bits on. Additive: setting one leaves the others alone.
  *
  * Returns ANTW_RESPONSE_NO_ERROR, or ANTW_INVALID_PARAMETER_PROVIDED for any
- * bit outside RADIANT_EVENT_LIB_CONFIG_SUPPORTED. Nothing is applied when a bit is
- * refused - a partially applied configuration is worse than none, because the
- * host's error handling cannot tell which half took.
+ * bit outside RADIANT_EVENT_LIB_CONFIG_SUPPORTED. Nothing is applied when
+ * refused - a host can't tell which half of a partial configuration took.
  */
 antr_err_t radiant_event_lib_config_set(uint8_t config);
 
@@ -344,14 +245,12 @@ antr_err_t radiant_event_lib_config_clear(uint8_t config);
 antr_err_t radiant_event_lib_config_get(uint8_t *config);
 
 /* ---------------------------------------------------------------------------
- * Event filtering - stored, honoured by nobody, and that is deliberate
+ * Event filtering - stored, honoured by nobody, deliberately
  *
- * src/ant_radio.h is explicit: a backend that does not filter must still store
- * and return the mask, because tools/ant_features.py round-trips it, and must
- * NOT pretend to filter, because loss accounting depends on the RX_FAIL events
- * actually arriving and "unexplained loss must be 0" is one of the A/B gates.
- * So this is storage with a getter, and no filtering is applied anywhere in
- * this module.
+ * src/ant_radio.h requires a non-filtering backend to still round-trip the
+ * mask (tools/ant_features.py checks it) and NOT pretend to filter, since
+ * loss accounting needs every RX_FAIL to actually arrive ("unexplained loss
+ * must be 0" is an A/B gate). So: storage plus a getter, no filtering.
  * ---------------------------------------------------------------------------
  */
 antr_err_t radiant_event_filter_set(uint16_t filter);
@@ -363,21 +262,15 @@ antr_err_t radiant_event_filter_get(uint16_t *filter);
  */
 enum radiant_event_ts_policy {
 	/*
-	 * The default. An event whose t_sync_exact is false gets no RX
-	 * timestamp field at all: the flag bit is cleared for that message and
-	 * radiant_event_stats.ts_suppressed counts it. Absence is the only way
-	 * this wire format can say "I cannot give you the accurate number",
-	 * and saying nothing is better than a number a host will read as
-	 * radio-clock accurate when it is not.
+	 * Default. An inexact event (t_sync_exact false) gets no RX timestamp
+	 * field - the flag bit clears and radiant_event_stats.ts_suppressed
+	 * counts it. Absence is the only way to say "can't give you the
+	 * accurate number" without a host reading a bad one as accurate.
 	 */
 	RADIANT_EVENT_TS_EXACT_ONLY = 0,
-	/*
-	 * Bench and bring-up only: emit the best-effort stamp anyway. Useful
-	 * when characterising a new backend's correction constant, where a
-	 * biased number is exactly what you want to measure. Never appropriate
-	 * for a shipped image, and never for a run whose `timing` figure will
-	 * be quoted.
-	 */
+	/* Bench/bring-up only: emit the best-effort stamp anyway, for
+	 * characterising a new backend's correction constant. Never for a
+	 * shipped image or a quoted `timing` run. */
 	RADIANT_EVENT_TS_BEST_EFFORT = 1
 };
 
@@ -390,12 +283,10 @@ enum radiant_event_ts_policy radiant_event_get_ts_policy(void);
  */
 
 /*
- * Everything a received message can append, gathered in one place.
- *
- * There is no field here for "now". The timestamp is t_sync and only t_sync;
- * see the header comment. has_t_sync exists for the small number of paths that
- * have no HAL event behind them at all, not as an invitation to substitute
- * another clock.
+ * Everything a received message can append, gathered in one place. No
+ * "now" field - the timestamp is t_sync only (see header comment).
+ * has_t_sync exists for the few paths with no HAL event behind them, not as
+ * an invitation to substitute another clock.
  */
 struct radiant_event_ext {
 	struct radiant_channel_id id;
@@ -403,9 +294,8 @@ struct radiant_event_ext {
 	bool   has_rssi;
 	int8_t rssi_dbm;
 
-	/* Straight from radiant_rx_event. t_sync is the instant the last bit of
-	 * the on-air address was at the antenna; t_sync_exact is false when
-	 * the backend inferred it rather than captured it. */
+	/* Straight from radiant_rx_event. t_sync_exact is false when inferred
+	 * rather than captured. */
 	bool       has_t_sync;
 	bool       t_sync_exact;
 	radiant_time_t t_sync;
@@ -415,20 +305,16 @@ struct radiant_event_ext {
  * Write the flag byte and the fields `config` asks for into out, in wire
  * order, and return the number of bytes written.
  *
- * Returns 0 - and writes nothing - when no field is emitted. That is not the
- * same as writing a flag byte of zero: a message with no extended fields has
- * no flag byte either, which is what makes a plain broadcast nine bytes long
- * on the wire whatever the library configuration is set to.
+ * Returns 0 (writes nothing) when no field is emitted - not the same as a
+ * flag byte of zero: no extended fields means no flag byte at all, so a
+ * plain broadcast is nine bytes regardless of library configuration.
  *
- * A field the configuration asked for but the event cannot supply (RSSI on a
- * backend without it, an inexact timestamp under the default policy) is
- * omitted and its flag bit stays clear. out_len must be at least
- * RADIANT_EVENT_EXT_MAX; anything smaller is RADIANT_EVENT_EINVAL rather than a
- * truncated tail.
+ * A field asked for but the event can't supply (RSSI missing, inexact
+ * timestamp under the default policy) is omitted, flag bit clear. out_len
+ * must be at least RADIANT_EVENT_EXT_MAX or this is RADIANT_EVENT_EINVAL.
  *
- * Exposed because it is a pure function of its arguments and the byte layout
- * is the part with a byte-diff gate on it - a test should be able to assert
- * the ten bytes without standing up a queue.
+ * Exposed as a pure function so the byte-diff-gated layout can be asserted
+ * without standing up a queue.
  */
 int radiant_event_build_ext(uint8_t config, const struct radiant_event_ext *in,
 			uint8_t *out, size_t out_len);
@@ -436,16 +322,11 @@ int radiant_event_build_ext(uint8_t config, const struct radiant_event_ext *in,
 /*
  * t_sync, in the 16 bits of 32768 Hz counter the wire field carries.
  *
- * 65536 ticks is exactly 2,000,000 microseconds, so the field wraps every two
- * seconds and the conversion is exact with no accumulated rounding: reduce the
- * microsecond value modulo 2,000,000 first and the multiply cannot overflow 32
- * bits. Doing it the other way round - converting the full 64-bit value and
- * truncating - is arithmetically identical and needlessly 64-bit on a
- * Cortex-M.
- *
- * Two seconds of range is enough because the host only ever differences
- * consecutive packets; the ~250 ms channel period leaves eight periods of
- * margin before an unwrapped difference becomes ambiguous.
+ * 65536 ticks = exactly 2,000,000 us, so the field wraps every 2 s; reducing
+ * mod 2,000,000 before multiplying keeps this exact and inside 32 bits
+ * (equivalent to converting the full 64-bit value, but avoids 64-bit math on
+ * a Cortex-M). Two seconds is enough range since the host only differences
+ * consecutive packets, leaving eight periods of margin at ~250 ms.
  */
 uint16_t radiant_event_rx_ticks(radiant_time_t t_sync);
 
@@ -457,18 +338,14 @@ uint16_t radiant_event_rx_ticks(radiant_time_t t_sync);
 /*
  * One received data message, as the module that decoded the frame sees it.
  *
- * NOTE WHAT IS NOT HERE: no timestamp, no RSSI, no exactness flag. Those come
- * out of `hal`, which is the event the backend handed to the callback, and
- * copying them here would create a second place they could be wrong. The
- * single most valuable property of this structure is that a caller holding a
- * clock reading has nowhere to put it.
+ * No timestamp, RSSI or exactness flag here - those come from `hal` (the
+ * backend's event), and copying them would create a second place they could
+ * be wrong. A caller holding a clock reading has nowhere to put it.
  */
 struct radiant_event_rx {
-	/*
-	 * The HAL event this message came from. Required, and must have
-	 * status RADIANT_RADIO_STATUS_OK - see the CRC rule on
-	 * radiant_event_post_rx(). Read only for the duration of the call.
-	 */
+	/* The HAL event this came from. Required, status must be
+	 * RADIANT_RADIO_STATUS_OK (see the CRC rule below). Read only for the
+	 * duration of the call. */
 	const struct radiant_rx_event *hal;
 
 	/* ANTW_MESG_BROADCAST_DATA_ID, ANTW_MESG_ACKNOWLEDGED_DATA_ID or
@@ -479,85 +356,72 @@ struct radiant_event_rx {
 	uint8_t channel;
 
 	/*
-	 * Burst framing, for ANTW_MESG_BURST_DATA_ID only and ignored
-	 * otherwise. The serial protocol's burst header is
-	 * [last<<7 | seq<<5 | channel], and the sequence field there is two
-	 * bits wide (ANTW_BURST_HEADER_SEQ_MASK).
-	 *
-	 * That is a serial-layer counter and is NOT the on-air sequence bit:
-	 * Spike B part 2 measured the control byte's sequence as a single
-	 * alternating bit with no wider form (docs/spike-b-part2-results.md,
-	 * radiant_frame.h). radiant_burst.c owns the mapping between the two; this
-	 * module only places the bits.
+	 * Burst framing, for ANTW_MESG_BURST_DATA_ID only. Serial burst
+	 * header is [last<<7 | seq<<5 | channel], seq field 2 bits wide.
+	 * This is a serial-layer counter, NOT the on-air sequence bit,
+	 * which is a single alternating bit with no wider form
+	 * (docs/spike-b-part2-results.md). radiant_burst.c owns the
+	 * mapping; this module only places the bits.
 	 */
 	uint8_t burst_seq;
 	bool    burst_last;
 
-	/*
-	 * The sender's channel ID, wildcards already resolved. In tracking
-	 * this is proven by the address match; in search the caller recovered
-	 * devnum_lo from radiant_rx_event.filter_index and the rest from the body.
-	 * Either way it is settled before it gets here - this module never
-	 * guesses an identity.
-	 */
+	/* The sender's channel ID, wildcards already resolved (proven by
+	 * address match in tracking; recovered from filter_index and the
+	 * body in search) - this module never guesses an identity. */
 	struct radiant_channel_id id;
 
-	/* The payload, 1 .. RADIANT_EVENT_PAYLOAD_MAX bytes. COPIED before this
-	 * function returns, which is what lets a callback pass
-	 * radiant_rx_event.body straight in. */
+	/* The payload, 1 .. RADIANT_EVENT_PAYLOAD_MAX bytes. Copied before
+	 * this function returns, so a callback can pass radiant_rx_event.body
+	 * straight in. */
 	const uint8_t *payload;
 	uint8_t        payload_len;
 };
 
 /*
- * Queue one received data message. Safe to call from the radio callback, and
- * that is where it is meant to be called from.
+ * Queue one received data message. Safe to call from, and meant to be
+ * called from, the radio callback.
  *
- * A CRC-FAILED FRAME NEVER BECOMES AN EVENT. A HAL event whose status is
- * RADIANT_RADIO_STATUS_CRC_FAIL is refused with RADIANT_EVENT_ECRC and nothing is
- * queued; any other non-OK status is RADIANT_EVENT_EINVAL. The check is here, at
- * the last gate before the host, as well as in the modules that decide what to
- * deliver - Spike A measured a 3-byte search address triggering the matcher on
- * noise several times a second at -54..-101 dBm, and with eight filters armed
- * the bench sees about 1.4 CRC failures a second while idle. Ranking or gating
- * on match count instead of CRC turns that noise into phantom sensors, so the
- * refusal is duplicated on purpose.
+ * A CRC-FAILED FRAME NEVER BECOMES AN EVENT: RADIANT_RADIO_STATUS_CRC_FAIL is
+ * refused with RADIANT_EVENT_ECRC (any other non-OK status is EINVAL). This
+ * check is duplicated here on purpose - a bare 3-byte search address
+ * triggers the matcher on noise (~1.4 CRC failures/s while idle with eight
+ * filters armed), and gating on match count instead of CRC would turn that
+ * into phantom sensors.
  *
- * Returns RADIANT_EVENT_OK, RADIANT_EVENT_ECRC, RADIANT_EVENT_EINVAL, RADIANT_EVENT_ENOSPC or
- * RADIANT_EVENT_ESTATE. ENOSPC is a dropped message, counted, and followed by an
- * ANTW_EVENT_QUE_OVERFLOW to the host - never a silent loss.
+ * Returns RADIANT_EVENT_OK, ECRC, EINVAL, ENOSPC or ESTATE. ENOSPC is a
+ * dropped message, counted, followed by ANTW_EVENT_QUE_OVERFLOW to the host
+ * - never a silent loss.
  */
 int radiant_event_post_rx(const struct radiant_event_rx *rx);
 
 /*
- * Queue a channel event: [channel][ANTW_MESG_EVENT_ID][code] under message ID
- * ANTW_MESG_RESPONSE_EVENT_ID, which is the shape every ANTW_EVENT_* takes on
- * the wire.
+ * Queue a channel event: [channel][ANTW_MESG_EVENT_ID][code] under message
+ * ID ANTW_MESG_RESPONSE_EVENT_ID, the shape every ANTW_EVENT_* takes.
  *
- * Safe from the radio callback. `code` is an ANTW_EVENT_* value and is not
- * validated against a list: eleven of them exist today, the set grows, and a
- * whitelist here would silently swallow a new one. What IS counted is the
- * three that carry buffer ownership.
+ * Safe from the radio callback. `code` is not validated against a list -
+ * eleven exist today and the set grows, so a whitelist would silently
+ * swallow a new one. The three that carry buffer ownership are counted.
  */
 int radiant_event_post_channel_event(uint8_t channel, uint8_t code);
 
 /*
- * Queue an arbitrary message. The escape hatch for anything that is neither a
- * data message nor a channel event - and, today, nothing in the firmware needs
- * it: the bridge builds the startup message itself
- * (src/ant_serial_bridge.c:98), so a backend must not also raise one.
+ * Queue an arbitrary message - the escape hatch for anything neither a data
+ * message nor a channel event. Nothing in the firmware needs it today: the
+ * bridge builds the startup message itself, so a backend must not also
+ * raise one.
  *
- * body may be NULL only when len is 0. Returns RADIANT_EVENT_EINVAL for a len
- * above RADIANT_EVENT_BODY_MAX.
+ * body may be NULL only when len is 0. Returns RADIANT_EVENT_EINVAL for a
+ * len above RADIANT_EVENT_BODY_MAX.
  */
 int radiant_event_post_raw(uint8_t msg_id, const uint8_t *body, uint8_t len);
 
 /* ---------------------------------------------------------------------------
  * The three burst release codes
  *
- * Wrappers over radiant_event_post_channel_event() with the code spelled once, so
- * that radiant_burst.c cannot pick the wrong one and so that "released exactly
- * once per accepted block" is a counter comparison rather than a log read.
+ * Wrappers over radiant_event_post_channel_event() with the code spelled
+ * once, so radiant_burst.c can't pick the wrong one and "released exactly
+ * once per accepted block" is a counter comparison, not a log read.
  * ---------------------------------------------------------------------------
  */
 static inline int radiant_event_post_transfer_next_block(uint8_t channel)
@@ -589,31 +453,27 @@ bool radiant_event_pending(void);
 
 /*
  * Assemble and deliver queued messages through antr_on_message(), oldest
- * first, and return how many were delivered. max_msgs bounds one call; 0 means
- * "everything currently queued".
+ * first, returning how many were delivered. max_msgs bounds one call; 0
+ * means "everything currently queued".
  *
- * THREAD CONTEXT ONLY. antr_on_message() may run on any context the backend
- * likes, but it must not be re-entered and it must not be called from inside
- * an antr_* call the bridge made - so the drain belongs on radiant_api.c's own
- * thread or work queue, woken by radiant_event_wakeup(). A drain re-entered from
- * inside antr_on_message() returns RADIANT_EVENT_ESTATE's worth of nothing: zero,
- * with nothing delivered.
+ * THREAD CONTEXT ONLY. antr_on_message() must not be re-entered or called
+ * from inside an antr_* call the bridge made, so the drain belongs on
+ * radiant_api.c's own thread/work queue, woken by radiant_event_wakeup(). A
+ * drain re-entered from inside antr_on_message() delivers nothing and
+ * returns zero.
  *
- * Delivery is FIFO and is never reordered. A message dropped because the ring
- * was full is reported to the host as ANTW_EVENT_QUE_OVERFLOW on channel 0 at
- * the head of the next drain; the marker says that something was lost, not
- * where, and it is emitted at the head rather than in position so that a ring
- * which stays busy cannot starve the report.
+ * FIFO, never reordered. A message dropped for a full ring is reported as
+ * ANTW_EVENT_QUE_OVERFLOW on channel 0 at the head of the next drain - at
+ * the head rather than in position so a busy ring can't starve the report.
  */
 uint32_t radiant_event_drain(uint32_t max_msgs);
 
 /* ---------------------------------------------------------------------------
  * Statistics
  *
- * Every one of these exists because some test or gate needs to distinguish two
- * outcomes that look the same from outside. They are read by
- * radiant_core/tests/src/test_event.c and are cheap enough to keep in a shipped
- * image.
+ * Each exists because some test or gate needs to distinguish two outcomes
+ * that look the same from outside. Read by
+ * radiant_core/tests/src/test_event.c; cheap enough to ship.
  * ---------------------------------------------------------------------------
  */
 struct radiant_event_stats {

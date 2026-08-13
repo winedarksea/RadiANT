@@ -3,10 +3,10 @@
 
 """Apply the Tier 2 A/B gates to two bench sittings and print the table.
 
-Consumes the baseline JSON that a bench sitting produces - one file per backend,
-carrying the verbatim output of `tools/ant_verify.py --json` and
-`tools/ant_bench.py --json` plus a `derived` block per run - validates each one
-against `archive/benchmarks/baseline.schema.json`, applies the thresholds in
+Consumes the baseline JSON a bench sitting produces (one file per backend,
+carrying `tools/ant_verify.py --json` + `tools/ant_bench.py --json` plus a
+`derived` block per run), validates against
+`archive/benchmarks/baseline.schema.json`, applies the thresholds in
 `tools/ab_gates.toml`, and prints a comparison in the shape of the USB-stack
 table in `docs/backends.md`.
 
@@ -18,39 +18,25 @@ table in `docs/backends.md`.
 
 Exit status is 0 only if every enabled gate passed.
 
-What this tool refuses to do
-----------------------------
+Refuses to compare runs not from one sitting: if `meta.recorded` or `rig`
+differ it refuses outright; run-to-run spread on this bench rivals the effect
+being measured (four identical 300 s runs landed between 0.26% and 0.60%). If
+only two files are given it prints the A/B/A rule instead, since two files
+can't show whether the two A runs would have agreed.
 
-**It will not compare two runs that are not from one sitting.** The run-to-run
-spread on this bench is comparable to the effect being measured - four identical
-300 s runs landed between 0.26 % and 0.60 % - so a number recorded today against
-a number recorded last week measures the room, the neighbours' Wi-Fi and the
-position of the boards on the desk. If `meta.recorded` or `rig` differ, this
-refuses. If they match but only two files were given, it prints the A/B/A rule
-in full, because two files cannot show whether the two A runs would have agreed.
+Reads exactly `derived.loss_exact_pct` (never `loss_pct`, which assumes an
+exact transmitter crystal) and `derived.timing_offgrid_host_ms` (never a
+jitter figure, since one lost packet inflates a 250 ms gap to 500 ms - gating
+on jitter gates on loss twice under a different name).
 
-**It will not read a number it was not asked to read.** The loss gate reads
-`derived.loss_exact_pct` and there is no code path here that reads `loss_pct`.
-The timing gate reads `derived.timing_offgrid_host_ms` and there is no code path
-that reads a jitter figure. Both of those were mistakes waiting to be made:
-`loss_pct` divides by elapsed time over the nominal period and assumes the
-transmitter's crystal is exact, and `jitter` is a standard deviation over raw
-gaps, so one lost packet turns a 250 ms gap into 500 ms and six losses in 1,200
-packets produce its entire figure. Gating on jitter gates on loss twice under a
-different name.
+A `required` gate whose field is absent FAILS and names the field. A
+non-required gate reports SKIP and is counted separately, never silently
+dropped. The 32-channel scale run and ack-data success are optional only
+because `libant.a` cannot reach 32 channels, not because they matter less.
 
-**It will not treat a missing measurement as a pass.** A gate marked
-`required` in `ab_gates.toml` whose field is absent FAILS, and the failure names
-the field. A gate not marked required reports SKIP in its own column and is
-counted separately in the summary; it never silently disappears. The two gates
-that are legitimately optional - the 32-channel scale run and acknowledged-data
-success - are optional because `libant.a` cannot reach 32 channels and there is
-no baseline to invent, not because they are less important.
-
-The schema validator here is a small one written into this file rather than
-`jsonschema` from PyPI. The CI `host-tests` job installs `pyusb` and nothing
-else, and that job is the only one that runs on a fork; a validator that worked
-on the development machine and skipped in CI would be worse than none.
+The JSON Schema validator here is hand-written rather than `jsonschema` from
+PyPI, because the CI `host-tests` job (the only one that runs on a fork)
+installs `pyusb` and nothing else.
 """
 
 from __future__ import annotations
@@ -71,13 +57,10 @@ DEFAULT_SCHEMA = _HERE + "/../archive/benchmarks/baseline.schema.json"
 
 
 # ---------------------------------------------------------------------------
-# A very small JSON Schema subset
-#
-# Covers exactly what `baseline.schema.json` uses: $ref into $defs, type
-# (including union types), required, properties, additionalProperties, enum,
-# const, minimum, maximum, minItems, items and pattern. Anything the schema
-# grows that is not on that list raises rather than being ignored - a validator
-# that quietly skips a keyword reports "valid" for a document it never checked.
+# A very small JSON Schema subset: $ref into $defs, type (incl. union types),
+# required, properties, additionalProperties, enum, const, minimum, maximum,
+# minItems, items, pattern. Anything else raises rather than being silently
+# ignored, so a validator never reports "valid" for a document it didn't check.
 # ---------------------------------------------------------------------------
 
 _KNOWN_KEYWORDS = {
@@ -151,10 +134,10 @@ def validate(instance: Any, schema: dict, *, root: dict | None = None,
             errors.append(f"{path}: {instance} is above the maximum "
                           f"{schema['maximum']}")
 
-    if isinstance(instance, str) and "pattern" in schema:
-        if re.search(schema["pattern"], instance) is None:
-            errors.append(f"{path}: {instance!r} does not match "
-                          f"{schema['pattern']!r}")
+    if (isinstance(instance, str) and "pattern" in schema
+            and re.search(schema["pattern"], instance) is None):
+        errors.append(f"{path}: {instance!r} does not match "
+                      f"{schema['pattern']!r}")
 
     if isinstance(instance, dict):
         properties = schema.get("properties", {})
@@ -187,11 +170,7 @@ def validate(instance: Any, schema: dict, *, root: dict | None = None,
 # ---------------------------------------------------------------------------
 
 class MissingField(Exception):
-    """A gate asked for a number the baseline does not carry.
-
-    Carries the field's path in the words `archive/benchmarks/README.md` uses,
-    so the message says which slot of which run a bench sitting failed to fill.
-    """
+    """A gate asked for a number the baseline does not carry."""
 
 
 @dataclass
@@ -224,9 +203,8 @@ class Baseline:
               single_channel: bool = True) -> tuple[float, dict]:
         """The worst (largest) value of a derived field, and the run it came from.
 
-        Worst rather than mean: a sitting that produced one bad 300 s run
-        produced one bad 300 s run, and averaging it away is how a regression
-        gets shipped. The run is returned too so the report can name it.
+        Worst rather than mean: averaging away one bad run is how a
+        regression ships.
         """
         runs = self.radio_runs(min_seconds=min_seconds,
                                single_channel=single_channel)
@@ -266,7 +244,7 @@ class Baseline:
 
 
 def load_baseline(path: str, schema: dict) -> Baseline:
-    with open(path, "r", encoding="utf-8") as handle:
+    with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
     errors = validate(data, schema, path=path)
     if errors:
@@ -309,9 +287,8 @@ def _cmp_better(a: float, b: float, lower_is_better: bool = True) -> str | None:
 def _ratio_pass(a: float, b: float, max_ratio: float, floor: float) -> bool:
     """b within a x max_ratio, with an absolute floor underwriting the ratio.
 
-    A ratio against a number that is already tiny goes unstable: 25 % of 0.009 ms
-    is 2 microseconds, which is nothing but noise. The floor says "anything this
-    small passes regardless", and is stated per gate in ab_gates.toml.
+    A ratio against an already-tiny number is unstable noise, so the floor
+    (per gate in ab_gates.toml) says "anything this small passes regardless".
     """
     return b <= max(a * max_ratio, a + floor)
 
@@ -320,11 +297,9 @@ def gate_conformance(cfg: dict, a: Baseline, b: Baseline,
                      override: dict | None) -> GateResult:
     """Tier 1. Byte-identical is the pass.
 
-    Takes its answer from `tools/ant_conformance.py --compare` when the two
-    transcripts were handed over, and otherwise from the `conformance.sha256`
-    each baseline recorded. Comparing the two hashes is the same test - a hash
-    of a file that is byte-identical is byte-identical - and it means a
-    committed baseline can be gated long after the transcripts moved.
+    Uses `tools/ant_conformance.py --compare` if transcripts were handed over,
+    otherwise falls back to comparing each baseline's recorded
+    `conformance.sha256` (equivalent, and works after the transcripts move).
     """
     allowed = set(cfg.get("allowed_differing_cases", []))
     threshold = "byte-identical" + (f" except {len(allowed)} allowed case(s)"
@@ -371,7 +346,7 @@ def gate_loss(cfg: dict, a: Baseline, b: Baseline) -> GateResult:
         value_a, run_a = a.worst("loss_exact_pct", min_seconds=seconds)
         value_b, run_b = b.worst("loss_exact_pct", min_seconds=seconds)
     except MissingField as exc:
-        return GateResult("loss (exact), %ds runs" % seconds, "-", "-",
+        return GateResult(f"loss (exact), {int(seconds)}s runs", "-", "-",
                           threshold, FAIL, str(exc))
 
     ok = value_b <= value_a + cfg["max_delta_pp"]
@@ -410,8 +385,8 @@ def gate_count(cfg: dict, a: Baseline, b: Baseline, field_name: str,
     ok = value_b <= cfg["max"]
     detail = ""
     if value_a > cfg["max"]:
-        # The reference having the same problem does not excuse it: the whole
-        # sitting is suspect, per archive/benchmarks/README.md.
+        # Reference having the same problem doesn't excuse it: whole sitting
+        # is suspect (archive/benchmarks/README.md).
         detail = ("the sdk-ant reference is also nonzero - this invalidates "
                   "the sitting rather than failing one gate")
         ok = False
@@ -432,9 +407,8 @@ def gate_timing(cfg: dict, a: Baseline, b: Baseline) -> GateResult:
     ok = _ratio_pass(value_a, value_b, cfg["max_ratio"], cfg.get("floor_ms", 0))
     detail = "intervals minus whole periods - not the jitter line"
     warnings = []
-    # The radio-clock figure is not gated, but its absence means lib config
-    # 0xE0 was not on, and that is worth saying out loud because the same
-    # setting is what the sub-millisecond fusion capability rests on.
+    # Radio-clock figure isn't gated, but its absence means lib config 0xE0
+    # (the sub-millisecond fusion capability) was off.
     for base in (a, b):
         try:
             base.worst("timing_offgrid_radio_ms")
@@ -471,15 +445,11 @@ def gate_acquisition(cfg: dict, a: Baseline, b: Baseline) -> list[GateResult]:
     return results
 
 
-# The three fields a sensitivity ladder can report its 5 % point in, and which
-# direction is better hearing in each.
-#
-# The sign is per field and not per gate, and getting it wrong is silent. More
-# attenuation and more distance at the 5 % point mean a receiver that hears
-# further. *Less* transmit power at the 5 % point means the same thing: the
-# quieter the master can go before the link breaks, the better the receiver. A
-# single `lower_is_better` for the whole gate would report the winner of every
-# tx_ladder comparison backwards, and the table would look entirely normal.
+# The three fields a sensitivity ladder can report its 5% point in, and which
+# direction is better hearing in each. Sign is per field, not per gate: more
+# attenuation/distance means better hearing, but *less* tx power at the 5%
+# point also means better hearing. A single gate-wide sense would silently
+# report tx_ladder comparisons backwards.
 SENSITIVITY_KEYS = (
     ("loss5pct_attenuation_db", "dB", False),
     ("loss5pct_distance_m", "m", False),
@@ -497,10 +467,9 @@ def gate_sensitivity(cfg: dict, a: Baseline, b: Baseline) -> GateResult:
                           FAIL if cfg.get("required", True) else SKIP,
                           str(exc))
 
-    # The method is checked before any number is looked for, and that ordering
-    # is deliberate. Two different methods usually also report in two different
-    # fields, so a key search that ran first would report "no field in both
-    # baselines" - which is true, and is not the problem.
+    # Method checked before any number is looked for: different methods
+    # usually report in different fields, so checking keys first would
+    # misreport a method mismatch as "no field in both baselines".
     method_a, method_b = block_a.get("method"), block_b.get("method")
     if method_a != method_b:
         return GateResult("sensitivity (5 % loss point)", str(method_a),
@@ -514,11 +483,10 @@ def gate_sensitivity(cfg: dict, a: Baseline, b: Baseline) -> GateResult:
                           str(method_b), threshold, FAIL,
                           f"method {method_a!r} is not one of {allowed}")
 
-    # Distance is the documented fallback when there is no inline attenuator,
-    # and the transmit-power ladder is the fallback when there is neither. All
-    # three are only comparable within one sitting - which the sitting checks
-    # have already enforced by this point.
-    for key, unit, lower_is_better in SENSITIVITY_KEYS:
+    # Distance is the fallback with no inline attenuator; tx-power ladder is
+    # the fallback with neither. All three are only comparable within one
+    # sitting, already enforced above.
+    for key, _unit, _lower_is_better in SENSITIVITY_KEYS:
         value_a, value_b = block_a.get(key), block_b.get(key)
         if value_a is not None and value_b is not None:
             break
@@ -532,18 +500,17 @@ def gate_sensitivity(cfg: dict, a: Baseline, b: Baseline) -> GateResult:
               "missing field: the ladder needs to reach the knee")
 
     # Cast to a common scale: how much the link was degraded before the
-    # receiver lost 5 %. More is better hearing, whichever field it came from.
-    margin_a = -value_a if lower_is_better else value_a
-    margin_b = -value_b if lower_is_better else value_b
+    # receiver lost 5%. More is better hearing, whichever field it came from.
+    margin_a = -value_a if _lower_is_better else value_a
+    margin_b = -value_b if _lower_is_better else value_b
     ok = margin_a - margin_b <= cfg["max_delta_db"]
 
     detail = f"method {method_a}"
     warnings = []
 
-    # The instrument's own repeat, which Phase 0 exists to establish. A gate
-    # cannot be tighter than the instrument that reads it, so a sitting whose
-    # ladder could not repeat to the gate's own tolerance has not measured a
-    # difference at this size - it has measured its own noise.
+    # The instrument's own repeat (Phase 0). A sitting whose ladder can't
+    # repeat to the gate's own tolerance has measured its own noise, not a
+    # real difference.
     limit = cfg.get("repeat_max_delta_db")
     if limit is not None:
         for base, block in ((a, block_a), (b, block_b)):
@@ -560,8 +527,8 @@ def gate_sensitivity(cfg: dict, a: Baseline, b: Baseline) -> GateResult:
                            f"wider than the difference being gated - the "
                            f"instrument cannot read this comparison")
 
-    return GateResult("sensitivity (5 % loss point)", f"{value_a:.1f} {unit}",
-                      f"{value_b:.1f} {unit}", threshold,
+    return GateResult("sensitivity (5 % loss point)", f"{value_a:.1f} {_unit}",
+                      f"{value_b:.1f} {_unit}", threshold,
                       PASS if ok else FAIL, detail,
                       _cmp_better(margin_a, margin_b, lower_is_better=False),
                       warnings)
@@ -595,21 +562,15 @@ def gate_scale(cfg: dict, a: Baseline, b: Baseline) -> GateResult:
 def gate_coexistence(cfg: dict, a: Baseline, b: Baseline) -> list[GateResult]:
     """What a second protocol stack on the same radio costs.
 
-    A DIFFERENT COMPARISON FROM EVERY OTHER GATE IN THIS FILE, and the
-    difference is why it reads its numbers out of one baseline instead of two.
-    Every gate above compares baseline A against baseline B - two *backends* on
-    one rig. This one is about the *same* backend with the second stack on
-    against the same backend with it off, which is a pair of numbers that has to
-    come from the same sitting on the same build, and therefore from one file.
+    Unlike every other gate here, this compares the *same* backend/build with
+    the second stack on vs. off - one sitting, one file (`b.block("coexistence")`),
+    not baseline A vs B. It carries three figures:
 
-    So `b.block("coexistence")` carries three figures the operator recorded in
-    one sitting:
+      loss_second_stack_off_pct   arbitrated build, nothing else on the radio
+      loss_second_stack_on_pct    same build with BLE or Thread running
+      loss_direct_pct             direct-gate build, for the arbiter's own cost
 
-      loss_second_stack_off_pct   the arbitrated build, nothing else on the radio
-      loss_second_stack_on_pct    the same build with BLE or Thread running
-      loss_direct_pct             the direct-gate build, for the arbiter's own cost
-
-    `a` is unused and is accepted only so that every gate has one signature.
+    `a` is unused, kept only so every gate shares one signature.
     """
     results: list[GateResult] = []
     required = cfg.get("required", False)
@@ -641,8 +602,8 @@ def gate_coexistence(cfg: dict, a: Baseline, b: Baseline) -> list[GateResult]:
         ok = (on - off) <= cfg["max_delta_pp"]
         detail = f"second stack: {block.get('second_stack', 'unnamed')}"
         if ceiling is not None and on > ceiling:
-            # Same argument as loss_exact's ceiling: being within 0.5 pp of a
-            # bad afternoon is not a pass.
+            # Same as loss_exact's ceiling: within 0.5pp of a bad afternoon
+            # is not a pass.
             ok = False
             detail += f"; {on:.3f} % is over the {ceiling} % ceiling on its own"
         results.append(GateResult("coexistence (second stack on)",
@@ -650,11 +611,9 @@ def gate_coexistence(cfg: dict, a: Baseline, b: Baseline) -> list[GateResult]:
                                   PASS if ok else FAIL, detail,
                                   _cmp_better(off, on)))
 
-    # 2. The arbiter's OWN cost, isolated from the second stack's. THE EXIT
-    #    CRITERION FOR THE COMBINED BUILD rather than a threshold to tune: if
-    #    the timeslot machinery alone costs this much, no amount of shaping the
-    #    other stack's demand recovers it, and the answer is the two-box handoff
-    #    of docs/radiant-bridge.md section 7.3.
+    # 2. The arbiter's OWN cost, isolated from the second stack's. EXIT
+    #    CRITERION for the combined build: if the timeslot machinery alone
+    #    costs this much, nothing recovers it (docs/radiant-bridge.md 7.3).
     limit = cfg.get("arbiter_only_max_delta_pp")
     if limit is not None:
         arbiter_threshold = f"<= direct + {limit} pp (EXIT CRITERION)"
@@ -673,10 +632,9 @@ def gate_coexistence(cfg: dict, a: Baseline, b: Baseline) -> list[GateResult]:
                               "silicon; see docs/radiant-bridge.md 7.3",
                 _cmp_better(direct, off)))
 
-    # 3. The sweep is the elastic consumer (ADR 0013), so it IS slower - that is
-    #    the intended cost. Bounded rather than accepted, because "the sweep
-    #    gives way" with no number attached is indistinguishable from a sweep
-    #    that stopped.
+    # 3. Sweep is the elastic consumer (ADR 0013) and is meant to slow down;
+    #    bounded rather than merely accepted so a slow sweep is distinguishable
+    #    from a stopped one.
     ratio_limit = cfg.get("min_sweep_rate_ratio")
     if ratio_limit is not None:
         sweep_threshold = f">= {ratio_limit} x the rate with it off"
@@ -876,9 +834,8 @@ def render(results: list[GateResult], label_a: str, label_b: str) -> str:
     Same columns, same bolding of whichever side is better, so a result can be
     pasted straight into `docs/backends.md` next to the table it is modelled on.
     """
-    # The first header cell is blank, exactly as in docs/backends.md, so the
-    # metric column reads as a row label rather than as a heading. The two
-    # extra columns are what makes it a gate table rather than a comparison.
+    # Blank first header cell, as in docs/backends.md, so the metric column
+    # reads as a row label.
     rows = [("", label_a, label_b, "Threshold", "Verdict")]
     for result in results:
         a_text, b_text = result.a, result.b
@@ -921,8 +878,7 @@ def report(results: list[GateResult], label_a: str, label_b: str) -> bool:
 
     print()
     if skipped:
-        # Loud, and in its own sentence. A gate that could not be evaluated is
-        # not a gate that passed, and the difference has to survive a glance.
+        # A gate that couldn't be evaluated is not a gate that passed.
         print(f"{len(skipped)} gate(s) COULD NOT BE EVALUATED and were not "
               f"counted either way:")
         for result in skipped:
@@ -966,7 +922,7 @@ def main() -> int:
 
     with open(args.gates, "rb") as handle:
         gates = tomllib.load(handle)
-    with open(args.schema, "r", encoding="utf-8") as handle:
+    with open(args.schema, encoding="utf-8") as handle:
         schema = json.load(handle)
 
     baselines = [load_baseline(path, schema) for path in args.baselines]

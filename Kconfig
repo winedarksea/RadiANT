@@ -324,7 +324,7 @@ config ANT_DONGLE_RADIO_CORE
 	  sdk-ant of any kind is present in this configuration: the sdk-ant
 	  module is never appended to ZEPHYR_EXTRA_MODULES, so no ANT header is
 	  reachable and no libant.a is linked. That is what lets the project
-	  build on a fork, with no adopter-gated repository and no secret.
+	  build on a fork, with no private repository dependency and no secret.
 
 	  This symbol is the *application's* backend selector, chosen by
 	  -DANT_RADIO=core in CMakeLists.txt. CONFIG_RADIANT_CORE is the

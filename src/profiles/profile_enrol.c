@@ -5,21 +5,14 @@
  * Provenance: docs/radiant-security.md sections 11.5, 11.6 and 11.7,
  * docs/decisions/0008-antplus-additive-pages-and-compat-security.md and
  * docs/decisions/0009-hostless-node-identity.md. All of those are this
- * project's own documents; no adopter-gated ANT+ device profile document was
+ * project's own documents; no ANT+ device profile document was
  * read for this file, no sdk-ant source was consulted, and nothing here
  * derives from libant.a. See docs/decisions/0002-clean-room-policy.md.
  *
- * The header carries the argument for every decision in here, including the
- * one this file must not be read as having solved: a strap has no screen, so
- * the fingerprint is one-sided, and `closed` remains the recommendation for
- * anything that matters.
- *
- * This is the SECOND file in src/profiles/ that includes a radiant_core
- * header, and it is for the same reason profile_compat.c is the first: adding
- * a keyholder is a key operation and something has to hold the key. What it
- * does NOT do is name a page number or a frame index - profile_compat.c owns
- * byte [0] and byte [1] of every frame this module contributes - so the two
- * boundaries cross without either one bending.
+ * A strap has no screen, so the fingerprint is one-sided; `closed` remains
+ * the recommendation for anything that matters. This file names no page
+ * number or frame index - profile_compat.c owns byte [0] and byte [1] of
+ * every frame this module contributes.
  */
 
 #include <errno.h>
@@ -35,12 +28,9 @@
 
 #if defined(CONFIG_RADIANT_SEC) && defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
 
-/*
- * The two numbers this file restates rather than includes, checked rather than
- * trusted. Restated because profile_enrol.h must not name a radiant_core type
- * and a header that pulled one in would put a key type on profile_hr.c's
- * include path the first time somebody was tidy.
- */
+/* Restated rather than included, because profile_enrol.h must not name a
+ * radiant_core type - that would put a key type on profile_hr.c's include
+ * path. Checked here instead. */
 _Static_assert(PROFILE_ENROL_PUBKEY_BYTES == RADIANT_SEC_X25519_BYTES,
 	       "the public key on the air and the one radiant_sec produces "
 	       "must be the same length");
@@ -53,12 +43,10 @@ _Static_assert(PROFILE_ENROL_SET_BYTES ==
 	       "six frames of six bytes is exactly a key plus its set check; "
 	       "a spare byte here is a byte nobody has decided the meaning of");
 
-/* ── The set check ──────────────────────────────────────────────────────────
- *
- * trunc32( CMAC(all-zero key, pubkey) ). Integrity, not authentication - the
- * header says at length what it catches (a set spliced across two windows) and
- * what it cannot (a man in the middle, which is the fingerprint's job).
- */
+/* ── The set check ─────────────────────────────────────────────────────────
+ * trunc32( CMAC(all-zero key, pubkey) ). Integrity, not authentication: it
+ * catches a set spliced across two windows, not a man in the middle (the
+ * fingerprint's job). See the header. */
 static int set_check(const uint8_t *pubkey, uint8_t *out)
 {
 	struct radiant_sec_key zero_key;
@@ -88,9 +76,8 @@ static int set_check(const uint8_t *pubkey, uint8_t *out)
 /* ── The window ─────────────────────────────────────────────────────────── */
 
 /* Leave pairing mode, drop the half-assembled peer key, clear the beacon bit.
- * One function so that completion, timeout and an explicit close cannot drift
- * into clearing different subsets - the same argument radiant_sec_pair.c's
- * ctx_free() makes one layer down. */
+ * One function so completion, timeout and explicit close can't clear
+ * different subsets. */
 static void window_close(struct profile_enrol *pe)
 {
 	if (!pe->open) {
@@ -119,17 +106,11 @@ static int window_open(struct profile_enrol *pe, uint64_t now_us)
 	}
 
 	/*
-	 * THE INTERLOCK, from this side. Layer C's SWITCH/RETURN frames occupy
-	 * the same frame indices this window's six do, and profile_compat.h
-	 * states the rule: a countdown and a window must not run at once, and
-	 * whoever is second is refused.
-	 *
-	 * Asked HERE rather than at the trigger, because this is the last point
-	 * before anything is spent: refusing after open_pairing() would have
-	 * burnt a pairing counter for a window that transmits nothing, and ADR
-	 * 0009 does not roll that counter back. The refusal is counted for the
-	 * same reason every other one is - a node being asked repeatedly is a
-	 * node somebody is working on.
+	 * THE INTERLOCK: Layer C's SWITCH/RETURN frames occupy the same frame
+	 * indices this window's six do, so a countdown and a window must not
+	 * run at once - whoever is second is refused. Checked here, before
+	 * anything is spent: refusing after open_pairing() would burn a
+	 * pairing counter (not rolled back per ADR 0009) for nothing.
 	 */
 	if (pe->compat != NULL &&
 	    profile_compat_client_busy(pe->compat, now_us, pe)) {
@@ -137,13 +118,9 @@ static int window_open(struct profile_enrol *pe, uint64_t now_us)
 		return -EBUSY;
 	}
 
-	/*
-	 * The scalar and the public key come from the node, through the seam,
-	 * and the counter-advance-before-transmission rule is enforced on that
-	 * side. If it refuses, NOTHING here changes state: no window, no
-	 * frames, no beacon bit. A burnt pair counter is not rolled back, which
-	 * is the cheap half of ADR 0009's trade.
-	 */
+	/* Scalar and public key come from the node through the seam; the
+	 * counter-advance-before-transmission rule is enforced on that side.
+	 * If it refuses, nothing here changes state. */
 	rc = pe->cfg.open_pairing(pe->cfg.user, pe->cfg.ch, timeout_s, pe->tx);
 	if (rc != 0) {
 		memset(pe->tx, 0, sizeof(pe->tx));
@@ -170,12 +147,8 @@ static int window_open(struct profile_enrol *pe, uint64_t now_us)
 	pe->have_fp = false;
 	pe->windows_opened++;
 
-	/*
-	 * The bit that makes an enrolment visible to the receivers that already
-	 * exist. An enrolment the owner did not perform is the whole attack, so
-	 * a window that opened silently would be the mistake - section 11.7,
-	 * rule three.
-	 */
+	/* Makes the window visible to existing receivers; a window that opened
+	 * silently would defeat the point (section 11.7, rule three). */
 	if (pe->compat != NULL) {
 		(void)profile_compat_set_pairing_open(pe->compat, true);
 	}
@@ -195,12 +168,9 @@ int profile_enrol_init(struct profile_enrol *pe,
 	    cfg->mode != (uint8_t)PROFILE_ENROL_OPEN_WINDOW) {
 		return -EINVAL;
 	}
-	/*
-	 * Both callbacks are required in EVERY mode, `closed` included. A
-	 * `closed` node that was refusing because it had been misconfigured
-	 * would be indistinguishable from one refusing on policy, and the
-	 * second is a decision while the first is a bug.
-	 */
+	/* Both callbacks are required in every mode, `closed` included, so a
+	 * misconfigured node refusing by bug can't look like one refusing by
+	 * policy. */
 	if (cfg->open_pairing == NULL || cfg->close_pairing == NULL) {
 		return -EINVAL;
 	}
@@ -220,10 +190,9 @@ int profile_enrol_attach(struct profile_enrol *pe, struct profile_compat *pc)
 		return -EINVAL;
 	}
 
-	/* Zeroed rather than field-by-field: the seam grew an optional `sent`
-	 * callback for Layer C's countdown, and a stack struct filled member by
-	 * member is how an added member becomes a call through a garbage
-	 * pointer in a module that never asked for it. */
+	/* Zeroed rather than field-by-field: a later member added to the seam
+	 * must not become a garbage-pointer call for a caller that never set
+	 * it. */
 	memset(&client, 0, sizeof(client));
 	client.frames = profile_enrol_frame_count;
 	client.frame = profile_enrol_frame;
@@ -234,9 +203,8 @@ int profile_enrol_attach(struct profile_enrol *pe, struct profile_compat *pc)
 		return rc;
 	}
 	pe->compat = pc;
-	/* Whatever the beacon was built with, the truth is what this module
-	 * knows: a node that initialised with pairing_open set and no window
-	 * open would advertise a window nobody could use. */
+	/* Reconcile the beacon to this module's actual state, so it can't
+	 * advertise a window nobody can use. */
 	return profile_compat_set_pairing_open(pc, pe->open);
 }
 
@@ -250,19 +218,15 @@ int profile_enrol_physical_action(struct profile_enrol *pe, uint64_t now_us)
 	(void)profile_enrol_tick(pe, now_us);
 
 	if (pe->cfg.mode == (uint8_t)PROFILE_ENROL_CLOSED) {
-		/*
-		 * `closed` means no over-air enrolment EVER. Not "unless
-		 * somebody holds the button down", not "unless a keyholder
-		 * asks". Counted, because a node whose button is being pressed
-		 * repeatedly is a node somebody is trying to enrol against.
-		 */
+		/* `closed` means no over-air enrolment ever, no exceptions.
+		 * Counted: repeated presses mean someone is trying to enrol
+		 * against this node. */
 		pe->windows_refused++;
 		return -EPERM;
 	}
 	if (pe->open) {
-		/* ONE PAIRING PER WINDOW, and a second press does not extend
-		 * the first - an extension is an unbounded window reached one
-		 * press at a time. */
+		/* One pairing per window; a second press must not extend the
+		 * first into an unbounded one. */
 		pe->windows_refused++;
 		return -EBUSY;
 	}
@@ -292,13 +256,9 @@ int profile_enrol_keyholder_request(struct profile_enrol *pe, uint64_t now_us)
 				    : PROFILE_ENROL_OPEN_WINDOW_MIN_S) *
 		 1000000ull;
 
-	/*
-	 * THE RATE LIMIT, and it is measured from the last window's OPENING
-	 * rather than its closing. Measuring from the close would let a caller
-	 * that completes an enrolment in one second reopen 299 seconds later,
-	 * so the interval between two windows would depend on how long the
-	 * previous one took - which is exactly the input an attacker controls.
-	 */
+	/* Measured from the last window's OPENING, not its closing - measuring
+	 * from the close would make the interval between windows depend on how
+	 * long the previous one took, which an attacker controls. */
 	if (pe->ever_opened && (now_us - pe->last_open_us) < min_us) {
 		pe->windows_refused++;
 		return -EAGAIN;
@@ -323,9 +283,8 @@ bool profile_enrol_tick(struct profile_enrol *pe, uint64_t now_us)
 	if (pe == NULL || !pe->armed || !pe->open) {
 		return false;
 	}
-	/* Unsigned, and the clock is 64-bit microseconds handed in by the
-	 * caller, so there is no wrap to survive here - unlike the 32-bit
-	 * millisecond deadline radiant_sec_pair.c has to. */
+	/* 64-bit microsecond clock from the caller, so no wrap to survive here
+	 * (unlike radiant_sec_pair.c's 32-bit millisecond deadline). */
 	if ((now_us - pe->opened_us) < pe->window_us) {
 		return false;
 	}
@@ -343,9 +302,8 @@ uint8_t profile_enrol_frame_count(void *user, uint64_t now_us)
 	if (pe == NULL || !pe->armed) {
 		return 0u;
 	}
-	/* Expiry lives here so that a node whose frames go through
-	 * profile_compat.c owes no separate tick, and so that the frame count
-	 * and the open state can never disagree by one slot. */
+	/* Expiry lives here so a node driven through profile_compat.c owes no
+	 * separate tick, and frame count and open state can't disagree. */
 	(void)profile_enrol_tick(pe, now_us);
 	return pe->open ? (uint8_t)PROFILE_ENROL_FRAMES : 0u;
 }
@@ -382,13 +340,8 @@ int profile_enrol_on_ack_data(struct profile_enrol *pe, const uint8_t *payload,
 		return -EINVAL;
 	}
 	if (!pe->open) {
-		/*
-		 * A key arriving with no window open is not an error the node
-		 * can act on and is not silently absorbed either: it is exactly
-		 * what "one pairing per window" looks like from the outside
-		 * when a second peer answers a window the first one already
-		 * closed.
-		 */
+		/* A key with no window open: expected when a second peer
+		 * answers a window the first one already closed. */
 		pe->rx_rejected++;
 		return -EINVAL;
 	}
@@ -420,12 +373,9 @@ int profile_enrol_on_ack_data(struct profile_enrol *pe, const uint8_t *payload,
 	}
 	if (memcmp(check, &pe->rx[PROFILE_ENROL_PUBKEY_BYTES],
 		   PROFILE_ENROL_CHECK_BYTES) != 0) {
-		/*
-		 * The six frames did not come from one key. The commonest way
-		 * for that to happen is honest - a receiver that joined as one
-		 * window closed and another opened - so the accumulator starts
-		 * again and the window stays open.
-		 */
+		/* The six frames didn't come from one key - commonly a
+		 * receiver that joined as one window closed and another
+		 * opened. Accumulator resets, window stays open. */
 		pe->rx_have = 0u;
 		memset(pe->rx, 0, sizeof(pe->rx));
 		pe->rx_rejected++;
@@ -434,13 +384,9 @@ int profile_enrol_on_ack_data(struct profile_enrol *pe, const uint8_t *payload,
 
 	rc = radiant_sec_pair_peer(pe->cfg.ch, pe->rx, &fp);
 	if (rc != RADIANT_SEC_OK) {
-		/*
-		 * Refused - a small-order point is the case that matters, and
-		 * refusing it is mandatory rather than optional because the
-		 * result becomes a root key. ONE INJECTED PACKET MUST NOT BURN
-		 * A WINDOW the user opened, so the window stays open and only
-		 * the accumulator is reset.
-		 */
+		/* Mandatory refusal (e.g. a small-order point): the result
+		 * becomes a root key. One injected packet must not burn a
+		 * window the user opened, so only the accumulator resets. */
 		pe->rx_have = 0u;
 		memset(pe->rx, 0, sizeof(pe->rx));
 		pe->rx_rejected++;
@@ -451,13 +397,9 @@ int profile_enrol_on_ack_data(struct profile_enrol *pe, const uint8_t *payload,
 	pe->have_fp = true;
 	pe->enrolments++;
 
-	/*
-	 * ONE PAIRING PER WINDOW. Closing here rather than at the timeout is
-	 * what makes that structural: the frames stop, the beacon bit drops,
-	 * pairing mode is left, and a second peer answering the same window
-	 * finds no window. The fingerprint survives the close because it is
-	 * this module's, not the pairing context's.
-	 */
+	/* One pairing per window: closing here rather than at timeout makes
+	 * that structural, so a second peer answering the same window finds
+	 * none. The fingerprint survives the close - it's this module's. */
 	window_close(pe);
 	return 1;
 }
@@ -473,13 +415,8 @@ int profile_enrol_fingerprint(const struct profile_enrol *pe, uint32_t *out)
 
 #else /* no security, or no X25519 */
 
-/*
- * The refusing shape.
- *
- * A build with no pairing has no way to complete an exchange, so the honest
- * behaviour is the behaviour of `closed` - and it is reached by refusing at
- * init rather than by broadcasting a public key that can never be answered.
- */
+/* A build with no pairing behaves as `closed`: refuse at init rather than
+ * broadcast a public key that can never be answered. */
 
 int profile_enrol_init(struct profile_enrol *pe,
 		       const struct profile_enrol_cfg *cfg)

@@ -1,40 +1,20 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * Provenance: original clean-room work. Written against
+ * Provenance: original clean-room work, written against
  * src/profiles/profile_handoff.h, radiant_core/include/radiant_core/radiant_channel.h,
  * radiant_core/include/radiant_core/radiant_search.h and
- * radiant_core/tests/fake_radio.h, with every layout expectation taken from
- * docs/radiant-telemetry.md section 12 - this project's own written
- * specification of the page. No adopter-gated ANT+ device profile document was
- * read for it, no sdk-ant source was consulted, and nothing here derives from
- * libant.a. See docs/decisions/0002-clean-room-policy.md.
+ * radiant_core/tests/fake_radio.h, with layout expectations from
+ * docs/radiant-telemetry.md section 12. See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * The gate this suite exists for
- * ---------------------------------------------------------------------------
- * A SYNC-HANDOFF ACQUISITION LANDS IN THE SAME CHANNEL STATE A SWEEP WOULD,
- * AND GETS THERE WITHOUT ARMING A WINDOW.
+ * Gate: a sync-handoff acquisition lands in the same channel state a sweep
+ * would, without arming a search window. A real wildcard sweep and a handoff
+ * are run against the same mock radio and compared field by field, so a
+ * handoff that merely LOOKS tracked (right state, wrong guard, slot clock a
+ * period out) cannot pass unnoticed. A second test turns the same comparison
+ * into a discovery-latency measurement (virtual microseconds, not wall clock).
  *
- * Both halves are asserted against each other in one test, on one rig, in one
- * run: a real wildcard sweep runs against the mock radio and acquires a master
- * on the worst-case address set, a second channel is handed the same node
- * through eight bytes twice, and every observable of the two channels is
- * compared field by field. The comparison is the point. A handoff that produced
- * a channel which merely LOOKED tracked - right state, wrong guard, or a slot
- * clock a period out - would show no symptom until packets started going
- * missing, which is the failure this arrangement is shaped against.
- *
- * The A/B that follows it is the plan's discovery-latency gate reduced to
- * something deterministic: windows armed, and virtual microseconds from "I want
- * this node" to "I can hear this node". The live two-receiver bench version
- * needs two radios and belongs to a hardware session; this is the same
- * comparison with the clock replaced by one that cannot flake.
- *
- * The frames pinned in CANON_* are shared BYTE FOR BYTE with
- * tools/test_ant_pages.py. Two implementations checked only against each other
- * are not checked at all, and this page in particular exists so that a receiver
- * can act on parameters it never measured.
+ * CANON_* frame bytes are shared byte for byte with tools/test_ant_pages.py.
  */
 
 #include <errno.h>
@@ -107,12 +87,9 @@ static radiant_time_t g_t_acquired;
 
 static const struct radiant_search_id_filter want_any = { 0u, 0u, 0u };
 
-/*
- * What radiant_api.c's adapter does, and nothing more: hand the search result
- * to the channel. Writing it out here rather than mocking it is what makes the
- * comparison below meaningful - both channels reach TRACKING through
- * radiant_channel_on_acquired(), which is the only path there is.
- */
+/* Mirrors radiant_api.c's adapter: hand the search result to the channel via
+ * radiant_channel_on_acquired(), the only path there is - which is what makes
+ * the comparison below meaningful. */
 static void on_acquired(uint8_t channel, const struct radiant_search_result *r,
 			void *user)
 {
@@ -249,12 +226,9 @@ ZTEST(handoff, test_page_number_counter_and_frame_index)
 		const uint8_t *f = &out[i * PROFILE_HANDOFF_FRAME_LEN];
 
 		zassert_equal(PROFILE_HANDOFF_PAGE, f[0]);
-		/*
-		 * Byte [1] is the COUNTER, not the frame index. The index moved
-		 * to byte [2] so that this page needs no third exception to the
-		 * section 4 counter invariant - the invariant the security
-		 * switches read a nonce out of.
-		 */
+		/* Byte [1] is the COUNTER, not the frame index (that's byte [2]) -
+		 * avoids a third exception to the section 4 counter invariant,
+		 * which the security switches read a nonce out of. */
 		zassert_equal(CANON.counter, f[1]);
 		zassert_ok(profile_handoff_frame_index(f, &index, &count));
 		zassert_equal(i, index);
@@ -361,17 +335,11 @@ ZTEST(handoff, test_every_reserved_field_is_zero_and_is_asserted_not_assumed)
 
 ZTEST(handoff, test_the_page_has_no_room_for_an_epoch)
 {
-	/*
-	 * The cross-plan constraint, enforced as arithmetic rather than as a
-	 * comment. For a hostless node the epoch IS the boot counter, and a
-	 * slowly incrementing number broadcast in the clear fingerprints the
-	 * device across sessions and defeats per-boot device-number rotation on
-	 * its own - so this page must never carry one. The defence is that
-	 * every one of the 64 field bits is already assigned: adding an epoch
-	 * would need a third frame and a visible format change rather than an
-	 * edit, and _Static_asserts in profile_handoff.c are where an author
-	 * finds that out.
-	 */
+	/* No room for an epoch: for a hostless node the epoch is the boot
+	 * counter, and broadcasting it in the clear would fingerprint the
+	 * device and defeat per-boot device-number rotation. All 64 field bits
+	 * are already assigned; _Static_asserts in profile_handoff.c catch any
+	 * attempt to add one. */
 	const uint32_t assigned = 16u + 7u + 8u + 1u   /* who  */
 				  + 16u + 13u + 3u;    /* when */
 
@@ -411,14 +379,10 @@ ZTEST(handoff, test_the_clock_accuracy_ladder_is_the_documented_one)
 
 ZTEST(handoff, test_phase_resolution_stays_inside_the_guard_at_every_period)
 {
-	/*
-	 * The whole reason the phase is a period/8192 FRACTION rather than a
-	 * count of 1/32768 s. A round trip must not cost more than
-	 * RADIANT_CHANNEL_GUARD_MAX_US at any period the field can express, or
-	 * a handed-off channel would open its first window on a slot the node
-	 * has already left - and a fixed-resolution count would have had to
-	 * choose between covering a 2 s period and being useful at 4 Hz.
-	 */
+	/* Phase is a period/8192 fraction rather than a 1/32768 s count: a
+	 * round trip must stay under RADIANT_CHANNEL_GUARD_MAX_US at every
+	 * period the field can express, which a fixed-resolution count could
+	 * not do at both a 2 s period and 4 Hz. */
 	static const uint16_t periods[] = { 273u, 1024u, 8182u, 16384u,
 					    32768u, 65535u };
 	size_t i;
@@ -580,13 +544,9 @@ ZTEST(handoff, test_a_handoff_lands_in_the_same_channel_state_a_sweep_does)
 
 	next_swept = radiant_channel_next_slot(SWEEP_CH);
 
-	/*
-	 * Now the actual feature: the receiver that is tracking the node builds
-	 * a handoff out of what it knows, and it crosses the air as sixteen
-	 * bytes. Nothing else passes between the two channels - no pointer, no
-	 * shared struct, no back door - which is what makes the comparison
-	 * below an assertion about the format rather than about this test.
-	 */
+	/* The receiver already tracking builds a handoff from what it knows and
+	 * sends it as sixteen bytes; nothing else passes between the two
+	 * channels, so the comparison below tests the format, not this test. */
 	t_carrier = radiant_radio_now();
 	zassert_ok(profile_handoff_from_channel(SWEEP_CH, t_carrier, 0x2Au,
 						PROFILE_HANDOFF_CLK_30PPM, &h));
@@ -633,14 +593,10 @@ ZTEST(handoff, test_a_handoff_lands_in_the_same_channel_state_a_sweep_does)
 		period_us = radiant_channel_counts_to_us(handed_period);
 	}
 
-	/*
-	 * The guard, and this is the one worth stating out loud. A handed-off
-	 * channel has measured NOTHING about this master's clock, so it must
-	 * get the widest guard there is - exactly like a freshly swept one. A
-	 * handoff that arrived with a narrow guard because the sender had a
-	 * good estimate would be narrowing on somebody else's evidence, which
-	 * is the one thing the estimator must never do.
-	 */
+	/* A handed-off channel has measured nothing about this master's clock,
+	 * so it must get the widest guard - same as a freshly swept one.
+	 * Narrowing on the sender's estimate is the one thing the estimator
+	 * must never do. */
 	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US,
 		      radiant_channel_guard_us(HANDOFF_CH));
 	zassert_equal(radiant_channel_guard_us(SWEEP_CH),
@@ -661,15 +617,9 @@ ZTEST(handoff, test_a_handoff_lands_in_the_same_channel_state_a_sweep_does)
 	zassert_equal(radiant_channel_search_deadline(SWEEP_CH),
 		      radiant_channel_search_deadline(HANDOFF_CH));
 
-	/*
-	 * And the slot clock. Compared MODULO THE PERIOD, because that is what
-	 * a phase is: the handoff hands over where in the node's cycle the next
-	 * slot falls, and a slot one period later is the same schedule. The
-	 * residual is the documented quantisation - the phase is a period/8192
-	 * fraction and microseconds round to counts on the way out and back -
-	 * and it has to land inside the NARROWEST guard the estimator will ever
-	 * choose, or the handoff would be handing over a window that misses.
-	 */
+	/* Slot clock compared modulo the period: a slot one period later is the
+	 * same schedule. The residual is the phase's period/8192 quantisation
+	 * and must fit inside the narrowest guard the estimator ever chooses. */
 	next_handed = radiant_channel_next_slot(HANDOFF_CH);
 	off = (next_handed > next_swept) ? (next_handed - next_swept)
 					 : (next_swept - next_handed);
@@ -707,12 +657,9 @@ ZTEST(handoff, test_a_handoff_acquires_faster_than_a_sweep_on_the_same_rig)
 
 	bring_up();
 
-	/*
-	 * The A/B. Both halves answer the same question - "how long from
-	 * wanting this node to being able to hear it" - on one rig, in one run,
-	 * against one master. The sweep half is a real sweep: a wildcard search
-	 * walking address sets until the node's own set comes up.
-	 */
+	/* Both halves answer "how long from wanting this node to hearing it"
+	 * on one rig, in one run, against one master. The sweep half is a real
+	 * wildcard search walking address sets. */
 	t_begin = radiant_radio_now();
 	windows_swept = sweep_acquire();
 	arms_after_sweep = fake_radio_stats()->arms_rx;

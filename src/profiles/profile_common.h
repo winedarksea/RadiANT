@@ -14,34 +14,27 @@
  * ---------------------------------------------------------------------------
  * Why these are here and not in each profile
  * ---------------------------------------------------------------------------
- * Heart rate 0x78 and bicycle power 0x0B both owe common pages 80 and 81 at
- * the 119/120 of 121 cadence, and they owe exactly the same bytes: the page
- * layouts belong to the common-page definition, not to either device type.
- * One implementation shared by two device types is one implementation; two
- * copies is a place for a manufacturer id to be little-endian in one profile
- * and big-endian in the other, which is the kind of bug a receiver reports as
- * "sensor works, name is garbage".
+ * Heart rate 0x78 and bicycle power 0x0B both owe common pages 80/81 at the
+ * 119/120-of-121 cadence, with identical bytes - the layout belongs to the
+ * common-page definition, not the device type. Two copies would risk a
+ * manufacturer id little-endian in one profile and big-endian in the other.
  *
- * Device type 0x60 does NOT come through here, and that is deliberate rather
- * than an oversight: profile_sched.c takes its common pages as node-supplied
- * callbacks precisely so the envelope has no opinion about what a
- * manufacturer id is. These functions are what an ANT+ compatibility profile
- * hands it.
+ * Device type 0x60 does NOT come through here (deliberate): profile_sched.c
+ * takes its common pages as node-supplied callbacks so the envelope has no
+ * opinion about the manufacturer id. These functions are what an ANT+
+ * compatibility profile hands it.
  *
  * ---------------------------------------------------------------------------
  * The serial number is a privacy decision and this file does not make it
  * ---------------------------------------------------------------------------
  * PROFILE_COMMON_INVALID_U32 in `serial_number` emits page 81's not-supplied
- * sentinel, and that is the whole of the page 81 privacy rule
- * (docs/radiant-security.md section 5.4): a 32-bit globally unique serial
- * broadcast in the clear every 30 seconds is STRICTLY MORE IDENTIFYING than
- * the 16-bit device number, it survives any device-number re-roll, and a node
- * that re-rolls its device number while broadcasting its serial has not
- * changed identity - it has added a field.
+ * sentinel (docs/radiant-security.md section 5.4): a 32-bit globally unique
+ * serial broadcast every 30 s is more identifying than the 16-bit device
+ * number and survives any device-number re-roll - broadcasting it while
+ * re-rolling the device number doesn't change identity, it adds a field.
  *
- * The sentinel is not the default here because a struct has no defaults; it is
- * what profile_hr_init() and profile_power_init() install when the node says
- * nothing, which is where a default belongs.
+ * The sentinel isn't the struct default (structs have none); it's what
+ * profile_hr_init() and profile_power_init() install when unspecified.
  */
 
 #ifndef RADIANT_PROFILE_COMMON_H_
@@ -54,16 +47,15 @@
 extern "C" {
 #endif
 
-/* The three page numbers. Named 80/81/82 everywhere in the ANT+ documents and
- * 0x50/0x51/0x52 on the air, which is a trap worth one line of header: they
- * are the same pages and the decimal names are not page numbers. */
+/* Named 80/81/82 in ANT+ documents, 0x50/0x51/0x52 on the air - same pages,
+ * decimal names are not page numbers. */
 #define PROFILE_COMMON_PAGE_80 0x50u
 #define PROFILE_COMMON_PAGE_81 0x51u
 #define PROFILE_COMMON_PAGE_82 0x52u
 
-/* The invalid-value sentinels these pages use. Heart rate's computed-bpm byte
- * does NOT use them - 0 means "no reading" there and 0xFF is a real 255 bpm -
- * which is why that sentinel lives in profile_hr.h and not here. */
+/* Invalid-value sentinels these pages use. Heart rate's computed-bpm byte
+ * does NOT use them (0 = "no reading", 0xFF = real 255 bpm there), so that
+ * sentinel lives in profile_hr.h instead. */
 #define PROFILE_COMMON_INVALID_U8  0xFFu
 #define PROFILE_COMMON_INVALID_U16 0xFFFFu
 #define PROFILE_COMMON_INVALID_U32 0xFFFFFFFFu
@@ -75,15 +67,10 @@ extern "C" {
 #define PROFILE_COMMON_BATTERY_LOW      4u
 #define PROFILE_COMMON_BATTERY_CRITICAL 5u
 
-/*
- * What pages 80 and 81 say about the node.
- *
- * Page 80's manufacturer id is SIXTEEN bits and heart rate page 0x02's is
- * EIGHT. They are different fields of different widths in different documents,
- * and a node that shares one struct member between them truncates silently -
- * which is why profile_hr.h carries its own 8-bit id rather than reaching in
- * here for this one.
- */
+/* What pages 80 and 81 say about the node. Page 80's manufacturer id is 16
+ * bits; heart rate page 0x02's is a separate 8-bit field - sharing one
+ * struct member between them would truncate silently, so profile_hr.h
+ * carries its own. */
 struct profile_common_id {
 	uint8_t  hw_revision;
 	uint16_t manufacturer_id;
@@ -102,13 +89,9 @@ struct profile_common_battery {
 	uint8_t  battery_id;         /* 0x00 when there is only one battery */
 };
 
-/*
- * Each writes eight bytes and returns 0, or -EINVAL for a null argument.
- *
- * Every reserved byte is written, not skipped: a caller handing these an
- * uninitialised body would otherwise put stack contents on the air in the
- * bytes the layout reserves, and 0xFF is what the reservation says.
- */
+/* Each writes eight bytes and returns 0, or -EINVAL for a null argument.
+ * Reserved bytes are written too (0xFF), not skipped, so an uninitialised
+ * body never puts stack contents on the air. */
 int profile_common_80(const struct profile_common_id *id, uint8_t *body);
 int profile_common_81(const struct profile_common_id *id, uint8_t *body);
 int profile_common_82(const struct profile_common_battery *b, uint8_t *body);

@@ -185,14 +185,12 @@ def encode_epoch(channel: int, epoch: int, us_into_epoch: int = 0,
 
     `us_into_epoch` is the phase a receiver derives the packet counter from,
     rather than from arrival history - the only thing that works for a
-    mid-epoch join, for a gap longer than 255 packets, and for sparse mode.
+    mid-epoch join, a gap longer than 255 packets, or sparse mode.
 
-    THE MONOTONICITY IS THE HOST'S JOB. The firmware refuses an epoch less than
-    or equal to the one it currently holds, but a reset clears that, so the
-    obligation to persist the last epoch issued and never reissue it sits here
-    - outside anything this repository can enforce. A reboot that restarted the
-    counter under an unchanged epoch is a two-time pad for X_CONF and a full
-    session replay against X_AUTH.
+    Monotonicity is the HOST's job: firmware refuses an epoch <= the one it
+    holds, but a reset clears that state. A reboot that restarts the counter
+    under an unchanged epoch is a two-time pad for X_CONF and a full session
+    replay against X_AUTH.
     """
     _check_channel(channel)
     if not 0 <= epoch <= EPOCH_MAX:

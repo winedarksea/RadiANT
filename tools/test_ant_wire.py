@@ -11,65 +11,40 @@ no `pyusb`.
 ## Why this file exists, and the one rule for adding to it
 
 `protocol/ant_wire.yaml` generates both `src/ant_wire.h` and
-`tools/ant_wire.py`, so the *constants* cannot drift apart - there is only one
-of each. What generation cannot check is a **rule**, and the rule is where this
-project lost a week: the parser seeded its running XOR at `0` instead of at the
-`0xA4` SYNC byte it had just consumed. Firmware and tools made the identical
-mistake, so every checksum was off by exactly `0xA4`, the two sides agreed
-perfectly with each other and with nothing else in the world, and the whole
-suite passed while Zwift never executed a single command.
+`tools/ant_wire.py`, so the *constants* cannot drift apart. What generation
+cannot check is a **rule** - and a rule is exactly what firmware and tools
+both got wrong once: the parser seeded its running XOR at `0` instead of at
+the `0xA4` SYNC byte it had just consumed, so every checksum was off by
+exactly `0xA4` on both sides, they agreed perfectly with each other and with
+nothing else, and the whole suite passed while Zwift never executed a
+command. A constant-for-constant cross-check would have passed too - both
+sides had `SYNC = 0xA4`.
 
-A constant-for-constant cross-check between the header and the module **would
-have passed too.** Both sides had `SYNC = 0xA4`.
+What catches a rule is a third implementation, which is what the vectors
+below are. One absolute rule for extending them: **never obtain an expected
+byte string by running frame() and freezing its output** - a vector derived
+from the implementation under test agrees with it by construction and looks
+like coverage while proving nothing.
 
-What catches a rule is a third implementation. That is what the vectors below
-are, and it imposes one absolute rule on anyone extending them:
-
-    **Never obtain an expected byte string by running frame() and freezing
-    its output.** A vector derived from the implementation under test agrees
-    with that implementation by construction, would have passed during the
-    checksum bug, and is worse than no vector at all because it looks like
-    coverage.
-
-Every vector here carries a `source` naming where its bytes came from, and one
-of four things is true of it:
+Every vector carries a `source`:
 
 * `observed`  - read off real hardware, recorded in `docs/` or `archive/`.
-* `doc`       - a decoded example in a document, whose XOR is worked out there
-                by hand and is re-worked term by term in the comment here.
-* `hand`      - assembled here by hand, with the XOR shown term by term in the
-                comment so a reader can verify it with a pencil.
-* `negative`  - bytes that must be **rejected**. Provenance still matters: the
-                one below was found printed as a valid example.
+* `doc`       - a decoded example in a document, XOR re-worked here.
+* `hand`      - assembled here by hand, XOR shown term by term.
+* `negative`  - bytes that must be **rejected**; provenance still matters.
 
-## What is missing, and exactly what a human must capture to complete it
+## What is missing
 
-The plan names Garmin's own `Device0.txt` - written by `ANT_DLL.dll`'s
-`ANT_SetDebugLogDirectory` (ordinal 132) - as the ideal source, because it is
-the one transcript in this project produced by software nobody here wrote.
-**No `Device0.txt` exists in this repository and none was available when this
-file was written.** Everything below is therefore either an observation already
-recorded in the repo or a hand-derivation, and the set is thinner than it
-should be: it has no acknowledged data, no burst run, no extended receive
-message with the flag byte and appended fields, and nothing at all from a
-genuine ANTUSB-m.
-
-To complete the set, a human with a Windows box, the libusb-win32 driver and an
-application that drives a real session must:
-
-1. Call `ANT_SetDebugLogDirectory(<dir>)` **before** `ANT_Init`.
-2. Run a session that pairs a power meter, an HRM and a controllable trainer,
-   then ride long enough for resistance changes to be sent - that is what puts
-   acknowledged data and a burst in the log.
-3. Normalise `<dir>\\Device0.txt` with `tools/ant_trace.py` into
-   `archive/captures/serial/zwift-pairing.antser` and `zwift-erg.antser`, which
-   `tools/test_ant_golden.py` then replays.
-4. While a host is in the room, also record a genuine ANTUSB-m's capabilities
-   reply next to ours. Ours is `080800b23200fd8d0f`; the real stick's is the
-   only thing that would settle a future argument about a capability bit.
-
-That is a bench/host task with a human in the loop, and it is declared here
-rather than faked.
+No `Device0.txt` (Garmin's own debug log, the one transcript here produced by
+software nobody here wrote) exists in this repository. Everything below is
+therefore an observation already in the repo or a hand-derivation; there is
+no acknowledged data, no burst run, no extended receive message with the flag
+byte and appended fields, and nothing from a genuine ANTUSB-m. Completing the
+set needs a human, a Windows box with the libusb-win32 driver, and a real
+session logged via `ANT_SetDebugLogDirectory` before `ANT_Init`, normalised
+with `tools/ant_trace.py` into `archive/captures/serial/`. It also needs a
+genuine ANTUSB-m's capabilities reply recorded alongside ours
+(`080800b23200fd8d0f`) to settle any future argument about a capability bit.
 """
 
 from __future__ import annotations
@@ -83,7 +58,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import ant_wire as w  # noqa: E402
 
-
 # `direction` is the `.antser` column: '>' host to dongle, '<' dongle to host.
 Vector = namedtuple("Vector", "name direction hex msg_id payload source")
 
@@ -93,155 +67,107 @@ def _v(name, direction, text, msg_id, payload, source):
 
 
 # ---------------------------------------------------------------------------
-# The vectors
-#
-# Each `hex` string below was typed from its source, not produced by frame().
-# The XOR is worked out term by term so it can be checked without running
-# anything - which is the whole point, since the thing being checked is the
-# code that would otherwise do the checking.
+# The vectors. Each `hex` string was typed from its source, not produced by
+# frame(); the XOR is worked out term by term so it can be checked by hand.
 # ---------------------------------------------------------------------------
 
 GOLDEN = [
 
     # -- request capabilities -----------------------------------------------
-    # docs/ant-serial-protocol.md, "The checksum rule, worked" (the frame is
-    # stated there as `a4 02 4d 00 54 bf`, with this exact running XOR):
-    #
-    #   byte:      A4    02    4D    00    54
-    #   running:   A4 -> A6 -> EB -> EB -> BF
-    #
-    #   0xA4 ^ 0x02 = 0xA6
-    #   0xA6 ^ 0x4D = 0xEB
-    #   0xEB ^ 0x00 = 0xEB   (channel/index byte)
-    #   0xEB ^ 0x54 = 0xBF   (the requested message id, MESG_CAPABILITIES)
-    #
-    # The shortest message with a guaranteed reply, which is why it is the
-    # first thing every host-side tool here sends.
+    # docs/ant-serial-protocol.md, "The checksum rule, worked":
+    #   A4 ^ 02 = A6   A6 ^ 4D = EB   EB ^ 00 = EB   EB ^ 54 = BF
+    # The shortest message with a guaranteed reply, hence the first thing
+    # every host-side tool here sends.
     _v("request capabilities", ">", "a4024d0054bf",
        0x4D, [0x00, 0x54],
        "doc: docs/ant-serial-protocol.md 'The checksum rule, worked'"),
 
     # -- capabilities reply -------------------------------------------------
-    # docs/ant-serial-protocol.md, "Capabilities reply, decoded":
-    #
-    #   A4 09 54 08 08 00 B2 32 00 FD 8D 0F 06
-    #
-    # The nine payload bytes are independently recorded as
-    # ant_wire.OBSERVED_CAPABILITIES and in protocol/ant_wire.yaml, and are
-    # quoted a third time in docs/backends.md - they are what this firmware
-    # actually answers, identically on nRF52840 over USB and nRF54L15 over
-    # UART. Worked:
-    #
-    #   A4 ^ 09 = AD    AD ^ 54 = F9    F9 ^ 08 = F1    F1 ^ 08 = F9
-    #   F9 ^ 00 = F9    F9 ^ B2 = 4B    4B ^ 32 = 79    79 ^ 00 = 79
-    #   79 ^ FD = 84    84 ^ 8D = 09    09 ^ 0F = 06
+    # docs/ant-serial-protocol.md, "Capabilities reply, decoded". The nine
+    # payload bytes are what this firmware actually answers, identically on
+    # nRF52840/USB and nRF54L15/UART (also in ant_wire.OBSERVED_CAPABILITIES,
+    # protocol/ant_wire.yaml, docs/backends.md). Worked:
+    #   A4^09=AD  AD^54=F9  F9^08=F1  F1^08=F9  F9^00=F9  F9^B2=4B
+    #   4B^32=79  79^00=79  79^FD=84  84^8D=09  09^0F=06
     _v("capabilities reply", "<", "a40954080800b23200fd8d0f06",
        0x54, [0x08, 0x08, 0x00, 0xB2, 0x32, 0x00, 0xFD, 0x8D, 0x0F],
        "observed: real reply from this firmware; "
        "docs/ant-serial-protocol.md and ant_wire.OBSERVED_CAPABILITIES"),
 
     # -- system reset -------------------------------------------------------
-    # archive/captures/serial/README.md prints this as the first line of its
-    # worked `.antser` example. Checked by hand:
-    #
-    #   A4 ^ 01 = A5    A5 ^ 4A = EF    EF ^ 00 = EF
-    #
-    # Every host library opens a session with 0x4A, so this is the first frame
-    # in essentially every capture that will ever land in archive/.
+    # archive/captures/serial/README.md's worked `.antser` example:
+    #   A4 ^ 01 = A5   A5 ^ 4A = EF
+    # Every host library opens a session with 0x4A.
     _v("system reset", ">", "a4014a00ef",
        0x4A, [0x00],
        "doc: archive/captures/serial/README.md example transcript"),
 
     # -- startup message ----------------------------------------------------
-    # The reply to 0x4A, carrying STARTUP_COMMAND_RESET (0x20). Hand-derived
-    # from MESG_STARTUP_MESG_ID = 0x6F and MESG_STARTUP_MESG_SIZE = 1:
-    #
-    #   A4 ^ 01 = A5    A5 ^ 6F = CA    CA ^ 20 = EA
-    #
+    # The reply to 0x4A, carrying STARTUP_COMMAND_RESET (0x20):
+    #   A4 ^ 01 = A5   A5 ^ 6F = CA   CA ^ 20 = EA
     # See NEGATIVE below: this frame is printed with checksum FA, not EA, in
-    # two places in the repository. That is why it is worth having here.
+    # two places in the repository.
     _v("startup message, command reset", "<", "a4016f20ea",
        0x6F, [0x20],
        "hand: MESG_STARTUP_MESG_ID + STARTUP_COMMAND_RESET, XOR shown"),
 
     # -- assign channel, whose checksum IS the SYNC byte --------------------
-    # Hand-assembled, and chosen deliberately - see TestSyncInChecksum. Payload
-    # is the documented [channel, channel type, network] of MESG_ASSIGN_CHANNEL
-    # with channel 1, CHANNEL_TYPE_SLAVE_RX_ONLY (0x40) and network 0:
-    #
-    #   A4 ^ 03 = A7    A7 ^ 42 = E5    E5 ^ 01 = E4
-    #   E4 ^ 40 = A4    A4 ^ 00 = A4
-    #
-    # Two properties, both wanted:
-    #   * omit the SYNC byte and the checksum comes out 0x00 - a byte that
-    #     already appears in the frame and looks entirely unremarkable;
-    #   * the correct checksum is 0xA4, so the frame ends in something that
-    #     looks like the start of the next frame. A reader that resynchronises
-    #     by hunting for 0xA4 instead of trusting LEN mis-splits here.
+    # Chosen deliberately - see TestSyncInChecksum. [channel 1,
+    # CHANNEL_TYPE_SLAVE_RX_ONLY (0x40), network 0]:
+    #   A4^03=A7  A7^42=E5  E5^01=E4  E4^40=A4  A4^00=A4
+    # Two properties wanted: omitting SYNC gives checksum 0x00 (unremarkable,
+    # already present elsewhere); the correct checksum 0xA4 makes the frame
+    # end in what looks like the start of the next frame, tripping a reader
+    # that resyncs by hunting for 0xA4 instead of trusting LEN.
     _v("assign channel (checksum == SYNC)", ">", "a40342014000a4",
        0x42, [0x01, 0x40, 0x00],
        "hand: MESG_ASSIGN_CHANNEL [channel, type, network], XOR shown"),
 
     # -- broadcast data whose payload is all SYNC bytes ---------------------
-    # Hand-assembled. Eight 0xA4 data bytes XOR to zero, which makes the
-    # arithmetic checkable at a glance:
-    #
-    #   A4 ^ 09 = AD    AD ^ 4E = E3    E3 ^ 00 = E3
-    #   E3 ^ (A4 eight times) = E3 ^ 00 = E3
-    #
-    # A payload byte equal to SYNC is legal and unavoidable - there is no
-    # escaping in this protocol - so a reader must be driven by LEN.
+    # Eight 0xA4 data bytes XOR to zero:
+    #   A4^09=AD  AD^4E=E3  E3^00=E3  E3^(A4 x8)=E3
+    # A payload byte equal to SYNC is legal and unavoidable (no escaping in
+    # this protocol), so a reader must be driven by LEN.
     _v("broadcast data, payload is eight SYNC bytes", "<",
        "a4094e00a4a4a4a4a4a4a4a4e3",
        0x4E, [0x00] + [0xA4] * 8,
        "hand: MESG_BROADCAST_DATA [channel, data*8], XOR shown"),
 
     # -- response event, no error ------------------------------------------
-    # [channel 0, the command's own id 0x4B, RESPONSE_NO_ERROR]. Hand-derived:
-    #
-    #   A4 ^ 03 = A7    A7 ^ 40 = E7    E7 ^ 00 = E7
-    #   E7 ^ 4B = AC    AC ^ 00 = AC
+    # [channel 0, the command's own id 0x4B, RESPONSE_NO_ERROR]:
+    #   A4^03=A7  A7^40=E7  E7^00=E7  E7^4B=AC  AC^00=AC
     _v("response event: open channel, no error", "<", "a40340004b00ac",
        0x40, [0x00, 0x4B, 0x00],
        "hand: MESG_RESPONSE_EVENT [channel, id, code], XOR shown"),
 
     # -- unsolicited channel event -----------------------------------------
-    # The same 0x40 frame with MESG_EVENT_ID (0x01) in the middle byte, so
-    # byte 2 is an event code (EVENT_TX) and not a response code. A reader
-    # that skips the middle-byte check reports EVENT_TX as a reply to message
-    # 0x03. Hand-derived:
-    #
-    #   A4 ^ 03 = A7    A7 ^ 40 = E7    E7 ^ 00 = E7
-    #   E7 ^ 01 = E6    E6 ^ 03 = E5
+    # Same 0x40 frame with MESG_EVENT_ID (0x01) in the middle byte, so byte 2
+    # is an event code (EVENT_TX), not a response code - a reader skipping
+    # the middle-byte check would report EVENT_TX as a reply to message 0x03.
+    #   A4^03=A7  A7^40=E7  E7^00=E7  E7^01=E6  E6^03=E5
     _v("channel event: EVENT_TX", "<", "a40340000103e5",
        0x40, [0x00, 0x01, 0x03],
        "hand: MESG_RESPONSE_EVENT with MESG_EVENT_ID marker, XOR shown"),
 
     # -- advanced burst at its largest block --------------------------------
-    # One burst header byte plus ADV_BURST_BLOCK_MAX (24) data bytes, so LEN
-    # reaches 25 on this message alone. Header 0x20 is sequence 1, channel 0.
-    # Data is 00..17, whose XOR is zero (0..23 pairs up: 00^01^02^03 = 0 and
-    # so on for each aligned group of four), so:
-    #
-    #   A4 ^ 19 = BD    BD ^ 72 = CF    CF ^ 20 = EF    EF ^ 00 = EF
-    #
-    # This is the frame that proves MAX_SIZE_VALUE cannot be 20: LEN is 25
-    # here, and a msg_body[20] makes handle_burst() compute size = 19, fail
-    # its size % 8 check, and drop every 24-byte block without a word.
+    # One burst header byte + ADV_BURST_BLOCK_MAX (24) data bytes, LEN=25.
+    # Header 0x20 is sequence 1, channel 0. Data 00..17 XORs to zero:
+    #   A4^19=BD  BD^72=CF  CF^20=EF  EF^00=EF
+    # Proves MAX_SIZE_VALUE cannot be 20: a msg_body[20] would make
+    # handle_burst() compute size=19, fail its size%8 check, and silently
+    # drop every 24-byte block.
     _v("advanced burst, 24-byte block", ">",
        "a4197220000102030405060708090a0b0c0d0e0f1011121314151617ef",
        0x72, [0x20] + list(range(24)),
        "hand: MESG_ADV_BURST_DATA at ADV_BURST_BLOCK_MAX, XOR shown"),
 
     # -- the largest frame the LEN byte can express -------------------------
-    # LEN = MAX_SIZE_VALUE = 38, so the frame is MAX_FRAME_SIZE = 42 bytes.
-    # No message defined today declares a payload that long - the longest is
-    # the 25 above - and that is exactly the point: the buffer ceiling is set
-    # by what the LEN byte can *say*, not by the longest message anyone has
-    # thought of. Message id 0x7C is used because it is the one id whose
-    # declared length is 'var'. Payload is 38 zero bytes, which XOR to zero:
-    #
-    #   A4 ^ 26 = 82    82 ^ 7C = FE    FE ^ (38 zeros) = FE
+    # LEN = MAX_SIZE_VALUE = 38, frame = MAX_FRAME_SIZE = 42 bytes. No
+    # defined message declares a payload this long (longest is 25 above) -
+    # the buffer ceiling is set by what LEN can *say*, not by the longest
+    # message anyone has thought of. 0x7C is the one id whose declared
+    # length is 'var'. 38 zero bytes XOR to zero:
+    #   A4^26=82  82^7C=FE  FE^(38 zeros)=FE
     _v("maximum-size frame (LEN = 38)", ">",
        "a4267c" + "00" * 38 + "fe",
        0x7C, [0x00] * 38,
@@ -256,40 +182,33 @@ GOLDEN = [
 Negative = namedtuple("Negative", "name hex why source")
 
 NEGATIVE = [
-    # Found printed as a valid example line in two places:
-    # archive/captures/serial/README.md's transcript, and the error message
-    # tools/ant_trace.py raises when it cannot read an .antser line. The
-    # checksum is wrong: A4 ^ 01 ^ 6F ^ 20 = EA, not FA. Nothing on the wire
-    # ever looked like this, and a reader must throw it away.
-    #
-    # Keeping it as a negative rather than asserting on the documents' text
-    # means this test stays correct whether or not those files get fixed:
-    # these bytes are an invalid frame either way.
+    # Found printed as a valid example in archive/captures/serial/README.md
+    # and in tools/ant_trace.py's error text. Checksum is wrong:
+    # A4 ^ 01 ^ 6F ^ 20 = EA, not FA. Kept as a negative rather than asserted
+    # against the documents' text so this stays correct even if those files
+    # are fixed later.
     Negative("startup message with a typo'd checksum", "a4016f20fa",
              "A4 ^ 01 ^ 6F ^ 20 = 0xEA; this says 0xFA",
              "negative: printed as valid in archive/captures/serial/"
              "README.md and tools/ant_trace.py's error text"),
 
-    # The same README's third example line. LEN says 2, so the frame is six
-    # bytes and its checksum byte is the 0x00 at index 5 - but the XOR through
-    # index 4 is 0xBF. It looks like `a4024d0054bf` with a stray 0x00 spliced
-    # in before the checksum.
+    # Same README's third example line. LEN says 2, so the checksum byte is
+    # the 0x00 at index 5, but the XOR through index 4 is 0xBF - a stray 0x00
+    # spliced into `a4024d0054bf` before the checksum.
     Negative("request capabilities with a stray byte", "a4024d005400bf",
              "LEN = 2 makes index 5 the checksum, and 0x00 != 0xBF",
              "negative: printed as valid in archive/captures/serial/"
              "README.md"),
 
-    # The checksum bug itself, on the vector the documentation works out by
-    # hand. 0x1B is what you get by seeding the XOR at 0 and starting after
-    # SYNC. This is the single most important line in the file.
+    # The checksum bug itself: 0x1B is what you get seeding the XOR at 0 and
+    # starting after SYNC. The single most important line in the file.
     Negative("request capabilities, SYNC omitted from the checksum",
              "a4024d00541b",
              "0x02 ^ 0x4D ^ 0x00 ^ 0x54 = 0x1B; the correct value is 0xBF",
              "negative: the historical bug, reproduced"),
 
-    # 0xA5 is the SYNC of the bidirectional/asynchronous serial variants. This
-    # dongle never emits or accepts it, and a parser that resynchronises on
-    # 'any plausible SYNC' will happily decode this.
+    # 0xA5 is SYNC for the bidirectional/asynchronous serial variants; this
+    # dongle never emits or accepts it.
     Negative("valid frame under the wrong SYNC", "a5024d0054be",
              "SYNC_RX (0xA5) is not SYNC_TX (0xA4)",
              "hand: SYNC_RX substituted, checksum recomputed for it"),
@@ -299,8 +218,8 @@ NEGATIVE = [
 def _naive_checksum(frame_bytes):
     """The wrong checksum: XOR from LEN onwards, SYNC left out.
 
-    Written out here rather than imported, because the point of the test below
-    is to compare the implementation against a rule stated independently of it.
+    Written out here rather than imported, so the test compares the real
+    implementation against a rule stated independently of it.
     """
     total = 0
     for byte in frame_bytes[1:-1]:
@@ -346,8 +265,6 @@ class TestGoldenVectors(unittest.TestCase):
                 self.assertEqual(bytes.fromhex(vec.hex)[0], w.SYNC_TX)
 
     def test_vector_message_ids_are_known(self):
-        # A vector naming an id the tables do not know would mean the vector
-        # and the generated tables disagree about what the protocol contains.
         for vec in GOLDEN:
             with self.subTest(vec.name):
                 self.assertIn(vec.msg_id, w.MESSAGES,
@@ -367,11 +284,8 @@ class TestSyncInChecksum(unittest.TestCase):
     """The rule that cost a week, checked from three directions."""
 
     def test_error_is_exactly_the_sync_byte_on_every_vector(self):
-        # The tell, stated in docs/gotchas.md and worked in
-        # docs/ant-serial-protocol.md: leaving SYNC out shifts the checksum by
-        # exactly 0xA4, in every frame, in both directions. If you are
-        # debugging a dongle that answers nothing, XOR the checksum you
-        # computed against the one on the wire before looking anywhere else.
+        # Leaving SYNC out shifts the checksum by exactly 0xA4 in every frame,
+        # both directions (docs/gotchas.md, docs/ant-serial-protocol.md).
         for vec in GOLDEN:
             with self.subTest(vec.name):
                 raw = bytes.fromhex(vec.hex)
@@ -392,11 +306,9 @@ class TestSyncInChecksum(unittest.TestCase):
                                   f"checksum")
 
     def test_the_wrong_answer_can_look_entirely_plausible(self):
-        # This is why "it looked right" is not evidence. On the assign-channel
-        # vector the SYNC-omitted checksum is 0x00 - a byte that already
-        # appears twice in the frame and reads as an unremarkable zero - while
-        # the correct one is 0xA4. Eyeballing a hex dump cannot separate them;
-        # only the rule can.
+        # On the assign-channel vector the SYNC-omitted checksum is 0x00 (an
+        # unremarkable byte already present twice) while the correct one is
+        # 0xA4 - a hex dump alone cannot tell them apart, only the rule can.
         raw = bytes.fromhex("a40342014000a4")
         self.assertEqual(_naive_checksum(raw), 0x00)
         self.assertEqual(raw[-1], 0xA4)
@@ -404,10 +316,8 @@ class TestSyncInChecksum(unittest.TestCase):
         self.assertIsNone(w.unframe(raw[:-1] + b"\x00"))
 
     def test_checksum_covers_the_sync_byte_by_construction(self):
-        # Stated as a property rather than as a vector: the checksum of a
-        # buffer must change if its first byte changes. An implementation that
-        # skips byte 0 passes every round-trip test in this file except this
-        # one and the vectors above.
+        # A property rather than a vector: an implementation skipping byte 0
+        # would pass every round-trip test in this file except this one.
         head = bytes([w.SYNC_TX, 0x02, 0x4D, 0x00, 0x54])
         other = bytes([0x00]) + head[1:]
         self.assertNotEqual(w.checksum(head), w.checksum(other))
@@ -428,11 +338,9 @@ class TestObservedCapabilities(unittest.TestCase):
                          w.MESG_CAPABILITIES_SIZE)
 
     def test_the_two_load_bearing_zeros(self):
-        # docs/ant-serial-protocol.md: scan mode and LED are both reported
-        # OFF, which is exactly why a host holding ANT_OpenRxScanMode and
-        # ANT_EnableLED never sends 0x5B or 0x68. If either bit ever turns on
-        # in the observed reply, that behaviour changes and the documentation
-        # around it is wrong.
+        # Scan mode and LED both report OFF, which is why a host holding
+        # ANT_OpenRxScanMode/ANT_EnableLED never sends 0x5B or 0x68
+        # (docs/ant-serial-protocol.md).
         byte4 = w.OBSERVED_CAPABILITIES[
             w.CAPABILITIES_OFFSET_ADVANCED_OPTIONS_2]
         self.assertEqual(byte4 & w.CAPABILITIES_SCAN_MODE_ENABLED, 0)
@@ -463,10 +371,9 @@ class TestRoundTrip(unittest.TestCase):
                          (w.MESG_BROADCAST_DATA_ID, payload))
 
     def test_single_bit_flips_anywhere_in_a_frame_are_caught(self):
-        # An XOR checksum catches every single-bit error. It does not catch
-        # every double-bit error, which is a property worth knowing rather
-        # than a defect: the protocol runs over USB bulk, which has its own
-        # CRC, and the checksum is here to reject mis-framing, not line noise.
+        # An XOR checksum catches every single-bit error but not every
+        # double-bit error - not a defect, since USB bulk has its own CRC and
+        # this checksum is here to reject mis-framing, not line noise.
         raw = bytes.fromhex("a4024d0054bf")
         for index in range(len(raw)):
             for bit in range(8):
@@ -486,8 +393,8 @@ class TestMalformedInput(unittest.TestCase):
                 self.assertIsNone(w.unframe(b"\xa4\x02\x4d\x00"[:size]))
 
     def test_wrong_sync(self):
-        # Recomputed for 0xA5 so that only the SYNC value is wrong - otherwise
-        # the checksum would reject it and the SYNC check would go untested.
+        # Recomputed for 0xA5 so only the SYNC value is wrong; otherwise the
+        # checksum would reject it first and the SYNC check would go untested.
         raw = bytearray(bytes.fromhex("a4024d0054bf"))
         raw[0] = w.SYNC_RX
         raw[-1] = w.checksum(bytes(raw[:-1]))
@@ -499,10 +406,9 @@ class TestMalformedInput(unittest.TestCase):
         self.assertIsNone(w.unframe(bytes(raw)))
 
     def test_len_larger_than_the_bytes_present(self):
-        # LEN claims 5 payload bytes; only 2 are here. This is the ordinary
-        # partial-frame case on USB, where a frame may span two bulk
-        # transfers, so it must be a clean rejection and never a read past
-        # the end.
+        # LEN claims 5 payload bytes; only 2 are here - the ordinary
+        # partial-frame case on USB (a frame may span two bulk transfers), so
+        # this must be a clean rejection, never a read past the end.
         self.assertIsNone(w.unframe(bytes.fromhex("a4054d0054bf")))
 
     def test_truncated_by_one_byte(self):
@@ -511,26 +417,24 @@ class TestMalformedInput(unittest.TestCase):
 
     def test_len_smaller_than_the_bytes_present(self):
         # Trailing bytes are the *next* frame, not an error: unframe() reads
-        # one frame and leaves the rest to the caller's ring buffer, which is
-        # what its docstring promises. Asserted so that a future change to
-        # "reject anything with trailing bytes" cannot pass silently - it
-        # would break every reassembling reader in tools/.
+        # one frame and leaves the rest to the caller's ring buffer. Asserted
+        # so a future "reject trailing bytes" change cannot pass silently -
+        # it would break every reassembling reader in tools/.
         two = bytes.fromhex("a4024d0054bf") + bytes.fromhex("a4014a00ef")
         self.assertEqual(w.unframe(two), (0x4D, b"\x00\x54"))
 
     def test_a_frame_whose_declared_length_is_absurd(self):
-        # LEN = 0xFF with nothing behind it. 259 bytes are claimed; 4 exist.
+        # LEN = 0xFF: 259 bytes claimed, 4 exist.
         self.assertIsNone(w.unframe(b"\xa4\xff\x4d\x00"))
 
 
 class TestFrameSizeCeiling(unittest.TestCase):
     """The 38/42 pair, and the arithmetic that makes 20/24 wrong.
 
-    These are relationships between constants, not the constants themselves.
-    A generated header and a generated module cannot disagree about the number
-    38 - but they can both be generated from a YAML that says 20, which is what
-    an earlier draft said. What rules out 20 is that a 24-byte advanced-burst
-    block plus its header byte does not fit inside it.
+    Relationships between constants, not the constants themselves - a
+    generated header and module can't disagree about 38, but both could be
+    generated from a YAML that says 20 (an earlier draft's value), which a
+    24-byte advanced-burst block plus its header byte does not fit inside.
     """
 
     def test_the_arithmetic_that_defines_the_ceiling(self):
@@ -540,17 +444,15 @@ class TestFrameSizeCeiling(unittest.TestCase):
         self.assertEqual(w.MESG_MAX_SIZE, w.MAX_DATA_SIZE + w.MSG_OVERHEAD)
 
     def test_mesg_max_size_is_one_short_and_must_not_be_used_for_buffers(self):
-        # The documented trap: MESG_MAX_SIZE is exactly one byte less than the
-        # largest frame that can legally arrive, because LEN counts the channel
-        # byte that MAX_DATA_SIZE does not. Sizing a buffer from it writes the
-        # checksum one past the end.
+        # MESG_MAX_SIZE is exactly one byte less than the largest legal frame,
+        # since LEN counts the channel byte that MAX_DATA_SIZE does not.
+        # Sizing a buffer from it writes the checksum one past the end.
         self.assertEqual(w.MAX_FRAME_SIZE - w.MESG_MAX_SIZE, 1)
 
     def test_an_advanced_burst_block_fits(self):
-        # The rule that rules out MAX_SIZE_VALUE = 20.
         burst_len = w.CHANNEL_NUM_SIZE + w.ADV_BURST_BLOCK_MAX
         self.assertLessEqual(burst_len, w.MAX_SIZE_VALUE)
-        # And handle_burst()'s own check on what is left after the header.
+        # handle_burst()'s own check on what is left after the header.
         self.assertEqual((burst_len - w.CHANNEL_NUM_SIZE)
                          % w.ANT_MAX_PAYLOAD_SIZE, 0)
 
@@ -570,19 +472,17 @@ class TestFrameSizeCeiling(unittest.TestCase):
         self.assertEqual(w.unframe(raw), (0x7C, b"\x00" * 38))
 
     def test_one_byte_over_the_maximum(self):
-        # LEN = 39. The frame is 43 bytes, one more than any buffer in the
-        # firmware, so it cannot be received whole.
-        #
-        #   A4 ^ 27 = 83    83 ^ 7C = FF    FF ^ (39 zeros) = FF
+        # LEN = 39: frame is 43 bytes, one more than any firmware buffer, so
+        # it cannot be received whole.
+        #   A4^27=83  83^7C=FF  FF^(39 zeros)=FF
         raw = bytes.fromhex("a4277c" + "00" * 39 + "ff")
         self.assertEqual(len(raw), w.MAX_FRAME_SIZE + 1)
         self.assertGreater(raw[1], w.MAX_SIZE_VALUE)
         self.assertEqual(w.checksum(raw[:-1]), raw[-1])
-        # unframe() itself does NOT enforce the ceiling - it is a pure framing
-        # function and the LEN byte can express up to 255. Enforcement is the
-        # receive buffer's, and asserting the current behaviour here means a
-        # future decision to reject in unframe() shows up as a deliberate
-        # change to this line rather than as a surprise.
+        # unframe() does NOT enforce the ceiling itself (pure framing, LEN
+        # can express up to 255) - enforcement is the receive buffer's, so
+        # asserting current behaviour here makes a future change to reject
+        # in unframe() a deliberate diff rather than a surprise.
         self.assertEqual(w.unframe(raw), (0x7C, b"\x00" * 39))
         self.assertGreater(len(raw), w.MAX_FRAME_SIZE)
 
@@ -591,9 +491,9 @@ class TestFalseFrameHazard(unittest.TestCase):
     """A payload byte equal to SYNC can start a false frame."""
 
     def test_a_length_driven_reader_splits_a_run_correctly(self):
-        # The assign-channel vector ends in 0xA4 by construction. Concatenated
-        # with the next frame it is a two-frame run where the last byte of the
-        # first frame looks like the start of the second.
+        # The assign-channel vector ends in 0xA4 by construction, so
+        # concatenated with the next frame, the last byte of the first frame
+        # looks like the start of the second.
         run = bytes.fromhex("a40342014000a4") + bytes.fromhex("a4024d0054bf")
         frames = []
         offset = 0
@@ -607,11 +507,9 @@ class TestFalseFrameHazard(unittest.TestCase):
                          ["a40342014000a4", "a4024d0054bf"])
 
     def test_hunting_for_the_next_sync_byte_gets_it_wrong(self):
-        # Stated so the reason for the rule above is on the record: a reader
-        # that resynchronises by searching for 0xA4 finds the checksum of the
-        # first frame and starts a frame there. The checksum is what throws
-        # that frame away again - which is the whole reason the checksum
-        # cannot be optional.
+        # A reader resynchronising by searching for 0xA4 finds the checksum
+        # of the first frame and starts a frame there; only the checksum
+        # throws it away again, which is why the checksum can't be optional.
         run = bytes.fromhex("a40342014000a4") + bytes.fromhex("a4024d0054bf")
         false_start = run.index(w.SYNC_TX, 1)
         self.assertEqual(false_start, 6)          # the checksum, not a frame

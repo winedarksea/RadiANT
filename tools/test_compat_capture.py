@@ -6,18 +6,14 @@
 `radiant_core/tests/src/test_profile_compat.c` drives `src/profiles/profile_hr.c`
 and `src/profiles/profile_power.c` on a DK and prints every transmitted message
 as a `.antcap` line. Those captures are committed to `tools/vectors/`, and this
-file decodes them with `tools/ant_pages.py` - written in a different phase
-(compat-C3), from the layout tables rather than from the C - and **re-encodes
-every page, asserting the bytes come back identical**.
+file decodes them with `tools/ant_pages.py` - written independently, from the
+layout tables rather than from the C - and **re-encodes every page, asserting
+the bytes come back identical**. The re-encode is the load-bearing half: a
+decode that merely succeeds proves the page number was recognised, but a
+decode whose fields re-encode to the same eight bytes proves the two
+implementations agree about every field, width, byte order and sentinel.
 
-That is the whole gate, and the re-encode is the load-bearing half. A decode
-that merely succeeds proves the page number was recognised; a decode whose
-fields re-encode to the same eight bytes proves the two implementations agree
-about every field, its width, its byte order and its sentinel. Nothing in that
-loop knows what the C encoder does.
-
-Three claims are checked here and each one is a sentence from
-`docs/decisions/0008`:
+Three claims are checked here, each a sentence from `docs/decisions/0008`:
 
   * **"byte-exact ANT+ apart from the two added page numbers."** Strip pages
     `0x70`-`0x72` from either capture and what is left decodes as a stock ANT+
@@ -50,10 +46,9 @@ TOOLS = os.path.dirname(os.path.abspath(__file__))
 VECTORS = os.path.join(TOOLS, "vectors")
 SRC_PROFILES = os.path.join(os.path.dirname(TOOLS), "src", "profiles")
 
-# Pinned in radiant_core/tests/src/test_profile_compat.c, and the two have to
-# agree or nothing in the capture verifies. The root is ant_sim's
-# DEFAULT_COMPAT_ROOT so a capture from the C and a capture from the simulator
-# are two streams under one key.
+# Pinned in radiant_core/tests/src/test_profile_compat.c; must agree or
+# nothing verifies. Also ant_sim's DEFAULT_COMPAT_ROOT, so a C capture and a
+# simulator capture are two streams under one key.
 ROOT = bytes(range(16))
 EPOCH = 7
 DEVNUM = 0x2C41
@@ -61,10 +56,10 @@ DEVNUM = 0x2C41
 HR_CAPTURE = os.path.join(VECTORS, "compat-hr.antcap")
 POWER_CAPTURE = os.path.join(VECTORS, "compat-power.antcap")
 
-# Every page number a stock sensor of each type may put on the air. The compat
-# allocation is deliberately NOT in these: the test subtracts it and asserts
-# what is left is a subset, which is the difference between "these pages are
-# expected" and "nothing else got in".
+# Every page number a stock sensor of each type may put on the air. The
+# compat allocation is deliberately excluded: the test subtracts it and
+# asserts what's left is a subset ("these pages are expected", not "nothing
+# else got in").
 HR_ANT_PLUS_PAGES = {
     ap.PAGE_HR_DEFAULT, ap.PAGE_HR_CUMULATIVE_TIME, ap.PAGE_HR_MANUFACTURER,
     ap.PAGE_HR_PRODUCT, ap.PAGE_HR_PREVIOUS_BEAT,
@@ -117,9 +112,8 @@ def reencode_hr(payload: bytes) -> bytes:
             got["previous_event_time"],
             manufacturer_specific=got["manufacturer_specific"], **tail)
 
-    # A common page on device type 0x78 carries the toggle too, which is why
-    # ant_pages.decode_hr() strips it before dispatching: a decoder that did
-    # not would see each common page under two numbers and find neither.
+    # A common page on device type 0x78 carries the toggle too, so
+    # ant_pages.decode_hr() strips it before dispatching.
     body = reencode_common(bytes([page]) + payload[1:])
     if toggle:
         body = bytes([body[0] | ap.HR_PAGE_TOGGLE]) + body[1:]
@@ -181,8 +175,7 @@ def reencode(payload: bytes, device_type: int) -> bytes:
         return ap.encode_compat_attest_tier2(got["window_index"], got["tag"],
                                              toggle)
     if page == ap.COMPAT_PAGE_BEACON:
-        # A single frame cannot be rebuilt on its own - the beacon is a
-        # two-frame set - so this is handled per capture in
+        # The beacon is a two-frame set; handled per capture in
         # test_the_beacon_round_trips_as_a_set.
         return payload
 
@@ -192,13 +185,9 @@ def reencode(payload: bytes, device_type: int) -> bytes:
 
 
 class TestTheCapturesExist(unittest.TestCase):
-    """The fixture is the evidence, so its absence has to be a failure.
-
-    A suite that silently skipped when the capture was missing would report a
-    pass on a tree where the gate had been deleted - which is the failure mode
-    tools/vectors/README.md records for the .antser harness and the same one
-    applies here.
-    """
+    """The fixture is the evidence, so its absence must be a failure - a
+    silent skip would report a pass on a tree where the gate was deleted
+    (tools/vectors/README.md documents the same failure mode)."""
 
     def test_both_captures_are_present_and_the_right_length(self):
         for path, device_type in ((HR_CAPTURE, ap.HRM_DEVICE_TYPE),
@@ -245,8 +234,8 @@ class TestByteExactness(unittest.TestCase):
                              f"that are neither this profile's nor the compat "
                              f"allocation: "
                              f"{sorted(hex(p) for p in extra - set(ap.COMPAT_PAGES))}")
-            # And the allocation really is on the air - a capture with no
-            # compat page at all would pass every assertion above.
+            # The allocation really is on the air - a capture with no compat
+            # page at all would pass every assertion above.
             self.assertIn(ap.COMPAT_PAGE_BEACON, pages)
             self.assertIn(ap.COMPAT_PAGE_ATTEST_TIER_I, pages)
             # Tier II is off by default, and that is a claim about the stream.
@@ -289,9 +278,9 @@ class TestTheCadence(unittest.TestCase):
     def test_the_common_pages_are_never_displaced(self):
         for path, device_type in ((HR_CAPTURE, ap.HRM_DEVICE_TYPE),
                                   (POWER_CAPTURE, ap.BPWR_DEVICE_TYPE)):
-            # Exactly 121: the inserted pages ride the rotation rather than
-            # lengthening it. A gap that grew would be the compat layer
-            # stretching the cycle, which is the one thing a receiver's own
+            # Exactly 121: inserted pages ride the rotation rather than
+            # lengthening it. A grown gap would be the compat layer
+            # stretching the cycle - the one thing a receiver's own
             # conformance check would notice.
             self.assertEqual(ap.RADIANT_TLM_CYCLE,
                              self.check_gap(path, device_type))
@@ -313,9 +302,9 @@ class TestTheCadence(unittest.TestCase):
 class TestTheTwoPercentClaim(unittest.TestCase):
     """0.8% beacon + 1.2% Tier I, against ANT+'s own 1.65%.
 
-    Measured from the capture rather than calculated, because the number is
-    what the whole compatibility argument rests on and a calculation in a plan
-    cannot be wrong in a way anybody notices.
+    Measured from the capture rather than calculated: the number is what the
+    whole compatibility argument rests on, and a calculation in a plan can be
+    wrong in a way nobody notices.
     """
 
     def test_the_compat_pages_cost_about_two_percent_of_slots(self):
@@ -359,9 +348,8 @@ class TestTheAttestation(unittest.TestCase):
             self.assertEqual(0, tier1["unverified"])
             self.assertEqual(0, tier1["replays"])
             self.assertEqual(0, tier1["lost"])
-            # The claim the tier exists for: of the pages delivered, all of
-            # them verified. Nothing was lost in a file, so this is 1.0 or the
-            # tag construction is wrong.
+            # A file has no loss, so this must be 1.0 or the tag
+            # construction is wrong.
             self.assertEqual(1.0, tier1["verified_of_delivered"])
             self.assertEqual(av.ATTEST_VERIFIED, summary["verdict"])
 
@@ -375,16 +363,16 @@ class TestTheAttestation(unittest.TestCase):
                                  "no complete beacon set in the capture")
             self.assertEqual(ap.COMPAT_VERSION, beacon["version"])
             self.assertTrue(beacon["attest_available"])
-            # policy `never` and no locator, which must agree or the beacon is
-            # malformed - and a `never` node has nowhere to go.
+            # policy `never` and no locator must agree, or the beacon is
+            # malformed - a `never` node has nowhere to go.
             self.assertEqual(ap.COMPAT_POLICY_NEVER, beacon["policy"])
             self.assertFalse(beacon["private_available"])
             self.assertFalse(beacon["pending_switch"])
             self.assertEqual(0, beacon["target_device_type"])
             self.assertEqual(0, beacon["target_device_number"])
             self.assertEqual(0, beacon["target_period"])
-            # The key-group hint is epoch-derived and it matched, which is the
-            # "is this one of mine" a receiver with several roots asks first.
+            # The epoch-derived key-group hint matched: "is this one of
+            # mine", which a receiver with several roots asks first.
             self.assertGreaterEqual(summary["key_group_hint_matches"], 1)
 
     def test_the_hint_the_c_emitted_is_the_one_the_python_derives(self):
@@ -423,16 +411,12 @@ class TestTheAttestation(unittest.TestCase):
 class TestTheBoundary(unittest.TestCase):
     """profile_hr.c and profile_power.c call radiant_sec nowhere.
 
-    The plan's sentence is "the profile modules themselves never call
-    radiant_sec", and this is that sentence as a check rather than as a
-    comment. It greps rather than reasoning about the call graph because the
-    thing being protected is a habit: the next profile author reads
-    profile_hr.c, and if a key ever appears in it the reason it must not be
-    there is three documents away.
-
-    The include closure is checked too, which is the stronger half:
-    profile_compat.h deliberately names no radiant_sec type, so these two files
-    do not reach a radiant_core header even transitively.
+    Greps rather than reasoning about the call graph, because the thing being
+    protected is a habit: the next profile author reads profile_hr.c, and if
+    a key ever appears there the reason it must not be is three documents
+    away. The include closure is checked too (the stronger half):
+    profile_compat.h names no radiant_sec type, so these files do not reach
+    a radiant_core header even transitively.
     """
 
     PROFILE_FILES = ("profile_hr.c", "profile_hr.h", "profile_power.c",
@@ -444,8 +428,7 @@ class TestTheBoundary(unittest.TestCase):
             with open(path, encoding="utf-8") as handle:
                 for lineno, line in enumerate(handle, start=1):
                     stripped = line.strip()
-                    # Comments may - and do - discuss the boundary. Code may
-                    # not cross it.
+                    # Comments may discuss the boundary; code may not cross it.
                     if stripped.startswith("*") or stripped.startswith("/*"):
                         continue
                     self.assertNotIn("radiant_sec", stripped,
@@ -463,7 +446,7 @@ class TestTheBoundary(unittest.TestCase):
                                  f"{name} includes {line.strip()}")
 
     def test_profile_compat_is_the_one_file_that_does(self):
-        """And it must, or the boundary is a wall with nothing behind it."""
+        """Or the boundary is a wall with nothing behind it."""
         with open(os.path.join(SRC_PROFILES, "profile_compat.c"),
                   encoding="utf-8") as handle:
             text = handle.read()

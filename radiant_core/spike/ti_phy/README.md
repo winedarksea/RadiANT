@@ -15,7 +15,7 @@ CC13x2/CC26x2 Technical Reference Manual and `driverlib` headers, from the
 public SimpleLink RF driver API, and from SmartRF Studio's settings database as
 shipped in the SimpleLink CC13xx/CC26xx SDK
 (`source/ti/devices/radioconfig/.meta/config/cc2652r_prop_pg21/`). Nothing here
-derives from `sdk-ant`, from `libant.a`, or from an adopter-gated ANT+ device
+derives from `sdk-ant`, from `libant.a`, or from an ANT+ device
 profile document. See
 [`docs/decisions/0002-clean-room-policy.md`](../../../docs/decisions/0002-clean-room-policy.md).
 
@@ -181,12 +181,11 @@ so the first instinct is to switch one on, and this spike originally switched
 on `CONFIG_POWEROFF` (rather than `PM`, which additionally lets the idle thread
 enter standby and power down the debug interface).
 
-**That was wrong, and the hardware said so on the first run.** The version
-Zephyr compiles for anything that is not one of its three in-tree radio drivers
-sets `.calibrateFxn = NULL`, under a comment reading "disable oscillator
-calibration functionality for now" — and `PowerCC26X2.c:1357` dereferences that
-pointer with no NULL check, the first time anything requests XOSC_HF, which is
-the first `RF_open()`:
+**That was wrong.** The version Zephyr compiles for anything that is not one of
+its three in-tree radio drivers sets `.calibrateFxn = NULL`, under a comment
+reading "disable oscillator calibration functionality for now" — and
+`PowerCC26X2.c:1357` dereferences that pointer with no NULL check, the first
+time anything requests XOSC_HF, which is the first `RF_open()`:
 
 ```
 ***** USAGE FAULT *****

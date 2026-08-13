@@ -5,26 +5,19 @@
     C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe -m unittest tools.test_radiant_crypto
 
 AES-128, AES-CMAC (RFC 4493), AES-CTR (SP 800-38A) and the SP 800-108
-counter-mode KDF, in pure Python with no dependency of any kind. The toolchain
-interpreter has pyusb and nothing else, so "no dependency" is not a style
-preference - a `pip install pycryptodome` here is a tool that does not run.
+counter-mode KDF, in pure Python with no dependency of any kind - the
+toolchain interpreter has pyusb and nothing else, so pycryptodome is not
+installable here.
 
-Two reasons this exists rather than being a wrapper around a library:
+Exists because `native_sim` does not build on Windows (every C assertion runs
+only in CI on Linux) - this is the layer for local iteration, cross-checked
+against FIPS-197/RFC 4493/SP 800-38A vectors and the C implementation's own
+output - and because the host tools need it anyway: `ant_verify.py` cannot
+tell replay from packet loss without computing a tag.
 
-  * `native_sim` does not build on Windows, so every C assertion in this
-    project runs only in CI on Linux. This module is the layer a developer can
-    iterate against locally, and tools/test_radiant_crypto.py runs the same
-    published vectors the ztest suite does - FIPS-197, RFC 4493, SP 800-38A
-    F.5.1 and, for the two blocks this protocol pins itself, a cross-check
-    against the C implementation's own output.
-  * The host tools need this anyway. `tools/ant_verify.py` cannot tell "replay
-    dropped" from "packet lost" without being able to compute a tag, and a
-    two-dongle 1:N proof needs a host that can decrypt.
-
-DO NOT USE THIS FOR ANYTHING BUT RADIANT. It is a clear, slow, textbook AES
-with no timing-attack hardening whatsoever: the S-box is a table lookup, and
-`bytes` objects are copied freely. That is fine for a test oracle on a desktop
-and wrong for anything holding a secret an attacker can time.
+DO NOT USE THIS FOR ANYTHING BUT RADIANT: textbook AES with no timing-attack
+hardening (table-lookup S-box, freely copied `bytes`). Fine for a test oracle,
+wrong for anything holding a secret an attacker can time.
 
 docs/radiant-security.md sections 3.1 to 3.4 are normative for every layout
 here.
@@ -95,7 +88,7 @@ def _mix_column(col: int) -> int:
 def key_schedule(key: bytes) -> list:
     """The 44 round-key words of AES-128."""
     if len(key) != 16:
-        raise ValueError("AES-128 takes a 16-byte key, got %d" % len(key))
+        raise ValueError(f"AES-128 takes a 16-byte key, got {len(key)}")
     words = [int.from_bytes(key[i * 4:i * 4 + 4], "big") for i in range(4)]
     for i in range(4, 44):
         temp = words[i - 1]
@@ -108,7 +101,7 @@ def key_schedule(key: bytes) -> list:
 def encrypt_block(key: bytes, block: bytes) -> bytes:
     """One AES-128 block encryption."""
     if len(block) != 16:
-        raise ValueError("AES operates on 16-byte blocks, got %d" % len(block))
+        raise ValueError(f"AES operates on 16-byte blocks, got {len(block)}")
     words = key_schedule(key)
     col = [int.from_bytes(block[j * 4:j * 4 + 4], "big") ^ words[j]
            for j in range(4)]
@@ -159,18 +152,18 @@ def cmac(key: bytes, message: bytes) -> bytes:
 
     if len(message) != 0 and len(message) % 16 == 0:
         blocks = [message[i:i + 16] for i in range(0, len(message), 16)]
-        last = bytes(a ^ b for a, b in zip(blocks[-1], k1))
+        last = bytes(a ^ b for a, b in zip(blocks[-1], k1, strict=True))
         blocks = blocks[:-1]
     else:
         padded = message + b"\x80" + bytes((-len(message) - 1) % 16)
         blocks = [padded[i:i + 16] for i in range(0, len(padded), 16)]
-        last = bytes(a ^ b for a, b in zip(blocks[-1], k2))
+        last = bytes(a ^ b for a, b in zip(blocks[-1], k2, strict=True))
         blocks = blocks[:-1]
 
     chain = bytes(16)
     for block in blocks:
-        chain = encrypt_block(key, bytes(a ^ b for a, b in zip(chain, block)))
-    return encrypt_block(key, bytes(a ^ b for a, b in zip(chain, last)))
+        chain = encrypt_block(key, bytes(a ^ b for a, b in zip(chain, block, strict=True)))
+    return encrypt_block(key, bytes(a ^ b for a, b in zip(chain, last, strict=True)))
 
 
 # ── AES-CTR, SP 800-38A ─────────────────────────────────────────────────────
@@ -186,13 +179,13 @@ def ctr_xor(key: bytes, iv: bytes, data: bytes) -> bytes:
     implementations diverging on the first long message.
     """
     if len(iv) != 16:
-        raise ValueError("the counter block is 16 bytes, got %d" % len(iv))
+        raise ValueError(f"the counter block is 16 bytes, got {len(iv)}")
     out = bytearray()
     counter = int.from_bytes(iv, "big")
     for offset in range(0, len(data), 16):
         stream = encrypt_block(key, counter.to_bytes(16, "big"))
         chunk = data[offset:offset + 16]
-        out.extend(a ^ b for a, b in zip(chunk, stream))
+        out.extend(a ^ b for a, b in zip(chunk, stream, strict=False))  # chunk may be < 16 bytes on the final block
         counter = (counter + 1) & ((1 << 128) - 1)
     return bytes(out)
 
@@ -269,7 +262,7 @@ def nonce_block(epoch: int, devnum: int, counter: int, dom: int) -> bytes:
 def kdf_block(label: str, epoch: int, base_devnum: int) -> bytes:
     """0x01 || label || 0x00 || epoch[4 LE] || base_devnum[2 LE] || 0x0080."""
     if not 1 <= len(label) <= 4:
-        raise ValueError("label %r is not one of enc/auth/id/cmd" % label)
+        raise ValueError(f"label {label!r} is not one of enc/auth/id/cmd")
     return (
         b"\x01"
         + label.encode("ascii")
@@ -304,14 +297,12 @@ def conf_transform(k_enc: bytes, epoch: int, devnum: int, counter: int,
                    payload: bytes) -> bytes:
     """X_CONF, both directions - CTR is its own inverse.
 
-    Bytes [0] and [1] stay in the clear because a receiver needs the page
-    number to tell a data page from a descriptor and the counter to build the
-    nonce. Byte [7] is left alone too: with X_AUTH on it is the tag byte, and
-    with X_AUTH off nothing there is a field, because the trailing byte is
-    reserved tag space on every RadiANT page.
+    Bytes [0..1] stay clear (page number, counter for the nonce). Byte [7] is
+    left alone too: it's X_AUTH's tag byte when on, and reserved tag space
+    regardless.
     """
     if len(payload) != 8:
-        raise ValueError("a RadiANT page is 8 bytes, got %d" % len(payload))
+        raise ValueError(f"a RadiANT page is 8 bytes, got {len(payload)}")
     iv = nonce_block(epoch, devnum, counter, DOM_CTR)
     body = ctr_xor(k_enc, iv, payload[2:7])
     return payload[:2] + body + payload[7:]
@@ -321,24 +312,20 @@ def spread_tag(k_auth: bytes, epoch: int, devnum: int, window_start: int,
                packets) -> bytes:
     """X_AUTH's W-byte tag over one window, encrypt-then-MAC.
 
-    `packets` is W packets AS THEY APPEAR ON THE AIR - ciphertext when X_CONF
-    is on, plaintext when it is not - and each contributes bytes [0..6]. Byte
-    [7] is excluded because that is where the tag itself rides.
-
-    Byte [0] is inside the message on purpose: leave the page number out and an
-    attacker who flips it reinterprets the same authenticated bits against a
-    different schema.
-
-    The nonce uses the counter of the FIRST packet of the window and domain
-    byte 0x02, and the returned tag is W bytes - 8*W bits - not a fixed 32.
+    `packets` is W packets as they appear on the air (ciphertext if X_CONF is
+    on), each contributing bytes [0..6] - byte [7] excluded since that's where
+    the tag itself rides. Byte [0], the page number, stays in the authenticated
+    bytes so it can't be flipped to reinterpret the message under a different
+    schema. Nonce uses the first packet's counter and domain 0x02; tag is W
+    bytes, not a fixed 32.
     """
     window = len(packets)
     if window not in LEGAL_W:
-        raise ValueError("W must be one of %s, got %d" % (LEGAL_W, window))
+        raise ValueError(f"W must be one of {LEGAL_W}, got {window}")
     message = nonce_block(epoch, devnum, window_start, DOM_SPREAD_MAC)
     for packet in packets:
         if len(packet) != 8:
-            raise ValueError("a RadiANT page is 8 bytes, got %d" % len(packet))
+            raise ValueError(f"a RadiANT page is 8 bytes, got {len(packet)}")
         message += bytes(packet[0:7])
     return cmac(k_auth, message)[:window]
 
@@ -359,18 +346,16 @@ def compat_nonce_block(epoch: int, devnum: int, counter: int,
                        sub: int) -> bytes:
     """epoch[4 LE] || devnum[2 LE] || counter[2 LE] || 0x04 || sub || 0x00 x6.
 
-    Section 3.3's block extended at position 9 rather than duplicated - the
-    domain byte stays where every other block has it, positions 10..15 stay
-    zero, and the subtype is inside the MAC'd block rather than only in the page
-    byte that announces it.
+    Section 3.3's block extended at position 9, not duplicated: the domain
+    byte stays put, positions 10..15 stay zero, and the subtype lives inside
+    the MAC'd block rather than only in the page byte announcing it.
 
-    `counter` is the attestation counter for Tier I and the window index for
-    Tier II. Both are 16-bit here and both are carried truncated in the page,
-    which is what lets a receiver reconstruct the high bits from time exactly as
-    resolve_counter() already does for the data counter.
+    `counter` is the attestation counter (Tier I) or window index (Tier II),
+    16-bit and carried truncated in the page - a receiver reconstructs the
+    high bits from time, as resolve_counter() does for the data counter.
     """
     if not 1 <= sub <= 0x0F:
-        raise ValueError("the subtype is a nibble in 1..15, got %r" % (sub,))
+        raise ValueError(f"the subtype is a nibble in 1..15, got {sub!r}")
     return nonce_block(epoch, devnum, counter, COMPAT_DOM)[:9] \
         + bytes([sub]) + bytes(6)
 
@@ -379,16 +364,13 @@ def compat_tier1_tag(k_auth: bytes, epoch: int, devnum: int,
                      att_counter: int) -> bytes:
     """Tier I, the identity attestation: trunc40( CMAC(K_auth, nonce_block) ).
 
-    IT COVERS NO PAYLOAD, AND THAT IS THE POINT. The tag proves "this stream
-    comes from the holder of K_auth, now, and is not a replay" and nothing else,
-    so it is verifiable on receipt and a packet lost anywhere else costs
-    nothing - verification rate equals page delivery rate, independently of how
-    often the page is sent. A window CMAC cannot have that property at any
-    length, which is the whole reason this tier exists and is the one that is on
-    by default.
+    Covers no payload, on purpose: it only proves "this stream comes from the
+    holder of K_auth, now, and is not a replay", so it's verifiable on
+    receipt - verification rate equals page delivery rate, unlike a window
+    CMAC. That's why it's the tier on by default.
 
-    Replay is closed by `att_counter`, which is monotone and derivable from
-    elapsed time; a receiver rejects a counter it has already seen.
+    Replay is closed by `att_counter` (monotone, derivable from elapsed time);
+    a receiver rejects a counter it has already seen.
     """
     block = compat_nonce_block(epoch, devnum, att_counter,
                                COMPAT_SUBTYPE_TIER_I)
@@ -401,35 +383,27 @@ def compat_tier2_tag(k_auth: bytes, epoch: int, devnum: int,
 
         trunc48( CMAC(K_auth, nonce_block || p_1 || p_2 || ... || p_{N-1}) )
 
-    `messages` is the N-1 preceding TRANSMITTED messages - not N-1 data
-    messages, so the common pages, the beacon and any Tier I page in the window
-    are covered too - in transmission order, each the full 8 payload bytes with
-    the page number included. Leaving the page number out would let an attacker
-    who flips it reinterpret the same authenticated bits against a different
-    schema, and including it is also what keeps this function ignorant of what
-    any of those bytes mean.
+    `messages` is the N-1 preceding TRANSMITTED messages, not N-1 data
+    messages - common pages, the beacon and any Tier I page in the window are
+    covered too - each the full 8 payload bytes including the page number, so
+    the tag can't be reinterpreted under a flipped page byte. Contrast
+    spread_tag(), which excludes byte [7] because its own tag rides there;
+    here the tag has its own page, so all eight bytes are covered.
 
-    Contrast spread_tag(), which takes bytes [0..6] because byte [7] is where
-    its own tag rides. Nothing rides in a compat page's byte [7]: the tag has a
-    page of its own, so all eight bytes are covered.
-
-    The honest regression, and the reason this tier is off by default: a window
-    CMAC is not self-synchronising under loss, so one lost packet in the window
-    makes the whole window unverifiable.
+    Off by default because a window CMAC isn't self-synchronising under loss:
+    one lost packet makes the whole window unverifiable.
     """
     window = len(messages) + 1
     if window not in COMPAT_WINDOW_SIZES:
-        raise ValueError("N must be one of %s, so `messages` is N-1 = %s "
-                         "messages, got %d"
-                         % (COMPAT_WINDOW_SIZES,
-                            tuple(n - 1 for n in COMPAT_WINDOW_SIZES),
-                            len(messages)))
+        raise ValueError(
+            f"N must be one of {COMPAT_WINDOW_SIZES}, so `messages` is "
+            f"N-1 = {tuple(n - 1 for n in COMPAT_WINDOW_SIZES)} messages, "
+            f"got {len(messages)}")
     block = compat_nonce_block(epoch, devnum, window_index,
                                COMPAT_SUBTYPE_TIER_II)
     for message in messages:
         if len(message) != 8:
-            raise ValueError("a transmitted message is 8 bytes, got %d"
-                             % len(message))
+            raise ValueError(f"a transmitted message is 8 bytes, got {len(message)}")
         block += bytes(message)
     return cmac(k_auth, block)[:COMPAT_TIER_II_TAG_BITS // 8]
 
@@ -440,33 +414,25 @@ def compat_announce_tag(k_auth: bytes, epoch: int, devnum: int,
 
         trunc48( CMAC(K_auth, nonce_block || frame_A) ), sub = 0x03
 
-    Subtype 0x03 was pinned by C2 without a function to go with it, so that the
-    value could not be re-used before the layer that emits it existed. This is
-    that layer's half. `att_counter` is Tier I's counter, which is what makes a
-    replayed announcement fail: the same frame A in a later counter's nonce
-    produces a different tag, and a receiver that has already seen the counter
-    rejects it before checking anything else.
+    `att_counter` is Tier I's counter: a replayed announcement fails because
+    the same frame A under a later counter's nonce produces a different tag,
+    and a receiver that has already seen the counter rejects it outright.
 
-    It is deliberately NOT compat_tier2_tag() with a window of one. That
-    function's N must be a legal window size and its subtype says "this covers
-    the last N-1 transmitted messages", which is a different claim about
-    different bytes; sharing the code would have meant sharing the subtype, and
-    the subtype is the only thing keeping the three claims apart.
+    Deliberately NOT compat_tier2_tag() with a window of one - that function's
+    subtype claims "the last N-1 transmitted messages", a different claim
+    about different bytes, and sharing the code would mean sharing the
+    subtype that keeps the two claims apart.
     """
     if len(frame_a) != 8:
-        raise ValueError("a transmitted frame is 8 bytes, got %d" % len(frame_a))
+        raise ValueError(f"a transmitted frame is 8 bytes, got {len(frame_a)}")
     block = compat_nonce_block(epoch, devnum, att_counter,
                                COMPAT_SUBTYPE_ANNOUNCE) + bytes(frame_a)
     return cmac(k_auth, block)[:COMPAT_TIER_II_TAG_BITS // 8]
 
 
-#: The inbound command's subtype, and the one that is NOT under K_auth: a
-#: command is verified under K_cmd, which had no user anywhere until Layer C's
-#: trigger needed one. Two separations rather than one - the key stops a
-#: recorded attestation being replayed into the command path however the bytes
-#: are rearranged, and the subtype separates it inside the block anyway, because
-#: "it is under a different key" is a property of the deployment rather than of
-#: the block.
+#: The inbound command's subtype - the one NOT under K_auth. Verified under
+#: K_cmd instead: the key alone stops a recorded attestation being replayed
+#: into the command path, and the subtype separates it inside the block too.
 COMPAT_SUBTYPE_COMMAND = 0x04
 
 #: 40 bits, because a command carries three bytes of its own before the tag and
@@ -479,17 +445,18 @@ def compat_command_tag(k_cmd: bytes, epoch: int, devnum: int,
                        att_counter: int, command) -> bytes:
     """An inbound command's tag: trunc40( CMAC(K_cmd, nonce_block || cmd) ).
 
-    THE NODE IS THE VERIFIER, which is the opposite direction from every other
-    tag here, and it is why the key is different: a receiver that can verify the
-    node's attestation must not thereby be able to forge a command to it.
+    The node is the verifier here, the opposite direction from every other tag
+    - hence the separate key: a receiver that can verify the node's own
+    attestation must not thereby be able to forge a command to it.
 
-    `att_counter` is Tier I's counter again, derived from time on both sides and
-    carried nowhere, so a recorded command replayed into a later interval fails
-    the tag rather than being noticed afterwards.
+    `att_counter` is Tier I's counter again, derived from time on both sides
+    and carried nowhere, so a replayed command fails the tag in a later
+    interval rather than being merely noticed.
     """
     if len(command) != COMPAT_CMD_BYTES:
-        raise ValueError("a command covers %d bytes before its tag, got %d"
-                         % (COMPAT_CMD_BYTES, len(command)))
+        raise ValueError(
+            f"a command covers {COMPAT_CMD_BYTES} bytes before its tag, "
+            f"got {len(command)}")
     block = compat_nonce_block(epoch, devnum, att_counter,
                                COMPAT_SUBTYPE_COMMAND) + bytes(command)
     return cmac(k_cmd, block)[:COMPAT_CMD_TAG_BITS // 8]
@@ -506,29 +473,23 @@ COMPAT_HINT_BITS = 24
 def compat_key_group_hint(k_id: bytes, epoch: int) -> bytes:
     """trunc24( CMAC(K_id, epoch) ) - the beacon's "is this one of mine".
 
-    EPOCH-DERIVED, NEVER STATIC, and that is the whole design of the field. A
-    fixed "RadiANT, group ABC" byte string broadcast every 30 s would be a
-    better tracking identifier than the device number, which is the same lesson
-    that makes page 81's serial 0xFFFFFFFF under a privacy posture.
-
-    It is also the epoch anchor that replaced the epoch field: a receiver whose
-    last_seen_epoch is stale searches forward, one CMAC per candidate, until a
-    hint matches - which is cheaper than the field it replaced and is paid once
-    at re-acquisition rather than on every message.
+    Epoch-derived, never static: a fixed group identifier would be a worse
+    tracking beacon than the device number it replaces under a privacy
+    posture. A receiver whose last_seen_epoch is stale searches forward, one
+    CMAC per candidate, until a hint matches - paid once at re-acquisition
+    rather than on every message.
     """
     return cmac(k_id, (epoch & 0xFFFFFFFF).to_bytes(4, "little"))[
         :COMPAT_HINT_BITS // 8]
 
 
-#: The derived private-mode locator. "priv" is a CMAC MESSAGE PREFIX and not a
-#: fifth KDF label: a KDF block is sixteen bytes beginning 0x01 and this message
-#: is eight or nine beginning 'p', so the two inputs cannot collide even though
-#: both are CMACs under a derived key.
+#: The derived private-mode locator. "priv" is a CMAC message prefix, not a
+#: fifth KDF label - a KDF block is 16 bytes starting 0x01, this message is
+#: 8-9 bytes starting 'p', so the two can't collide.
 #:
-#: 0x0000 is excluded because it is the ANT wildcard and a master cannot own it,
-#: and a collision is answered by rederiving with a 1-byte suffix 0x00, 0x01,
-#: ... - of which a searching keyholder tries COMPAT_LOCATOR_TRIES before
-#: falling back to a wildcard search on the private device type.
+#: 0x0000 is excluded (the ANT wildcard); a collision is answered by
+#: rederiving with a 1-byte suffix, tried COMPAT_LOCATOR_TRIES times before
+#: falling back to a wildcard search.
 COMPAT_LOCATOR_LABEL = b"priv"
 COMPAT_LOCATOR_WILDCARD = 0x0000
 COMPAT_LOCATOR_TRIES = 4
@@ -543,19 +504,16 @@ COMPAT_LOCATOR_WALK = 257
 def compat_locator_derivation(k_id: bytes, epoch: int, derivation: int) -> int:
     """One candidate: trunc16( CMAC(K_id, "priv" || epoch[4 LE] [|| suffix]) ).
 
-    `derivation` 0 is unsuffixed; 1, 2, 3, ... append the suffix bytes 0x00,
-    0x01, 0x02, ... The result is read LITTLE-ENDIAN, which is the same choice
-    the beacon's locator field already made: a device number goes on the air low
-    byte first, so the two bytes on the air ARE the first two bytes of the tag in
-    tag order and a capture can be checked against a CMAC without reversing
-    anything.
+    `derivation` 0 is unsuffixed; 1, 2, 3, ... append suffix bytes 0x00, 0x01,
+    0x02, ... Result is read little-endian, matching the beacon's locator
+    field: a device number goes on the air low byte first, so a capture can be
+    checked against a CMAC without reversing anything.
 
-    This is the raw candidate INCLUDING the excluded wildcard.
+    This is the raw candidate including the excluded wildcard;
     compat_private_locator() is the sequence a node and a searcher both walk.
     """
     if not 0 <= derivation < COMPAT_LOCATOR_WALK:
-        raise ValueError("derivation %r is outside the bounded walk"
-                         % (derivation,))
+        raise ValueError(f"derivation {derivation!r} is outside the bounded walk")
     message = COMPAT_LOCATOR_LABEL + (epoch & 0xFFFFFFFF).to_bytes(4, "little")
     if derivation > 0:
         message += bytes([(derivation - 1) & 0xFF])
@@ -566,19 +524,15 @@ def compat_locator_derivation(k_id: bytes, epoch: int, derivation: int) -> int:
 def compat_private_locator(k_id: bytes, epoch: int, attempt: int = 0) -> int:
     """Where the node goes when it switches, as a device number.
 
-    Any holder of the root computes this from the epoch it already has, which is
-    what makes the SWITCH announcement an OPTIMISATION THAT SAVES A SEARCH
-    rather than the only way to find the node: a receiver enrolled after the
-    switch finds a node that is already private with nothing to have missed, and
-    an observer without the key cannot predict the number at all.
+    Any holder of the root computes this from the epoch it already has, which
+    makes the SWITCH announcement an optimisation that saves a search rather
+    than the only way to find the node - an observer without the key can't
+    predict the number at all.
 
-    `attempt` walks the candidates a searcher tries in order. TWO RULES ARE
-    FOLDED INTO ONE WALK: the excluded 0x0000 and the collision suffix are two
-    different reasons to move to the next derivation, so the sequence is
-    "unsuffixed, then suffix 0x00, 0x01, ..., with any derivation that comes out
-    0x0000 dropped". Both ends therefore skip the same candidate - a node and a
-    searcher that disagreed about whether a zero counts would disagree about
-    every candidate after it.
+    `attempt` walks the candidates a searcher tries in order: unsuffixed, then
+    suffix 0x00, 0x01, ..., with any derivation landing on the excluded
+    0x0000 skipped. Both ends must skip the same candidate, or they'd
+    disagree about every candidate after it.
     """
     found = 0
     for derivation in range(COMPAT_LOCATOR_WALK):
@@ -600,24 +554,23 @@ def tag_byte_index(counter: int, window: int) -> int:
     resync procedure anywhere in the design.
     """
     if window not in LEGAL_W:
-        raise ValueError("W must be one of %s, got %d" % (LEGAL_W, window))
+        raise ValueError(f"W must be one of {LEGAL_W}, got {window}")
     return counter % window
 
 
 def window_start(counter: int, window: int) -> int:
     """The first counter of the window this packet belongs to."""
     if window not in LEGAL_W:
-        raise ValueError("W must be one of %s, got %d" % (LEGAL_W, window))
+        raise ValueError(f"W must be one of {LEGAL_W}, got {window}")
     return counter - (counter % window)
 
 
 def expected_index(epoch_us: int, period_counts: int) -> int:
     """The packet index a receiver expects `epoch_us` into the epoch.
 
-    `period_counts` is the ANT channel period in counts of 1/32768 s. The
-    receiver derives the counter from TIME rather than from arrival history,
-    which is what makes a mid-epoch join, a gap longer than 255 packets and
-    sparse mode all work at all.
+    `period_counts` is the ANT channel period in counts of 1/32768 s. Deriving
+    the counter from time rather than arrival history is what makes a
+    mid-epoch join, a >255-packet gap, and sparse mode all work.
     """
     if period_counts <= 0:
         raise ValueError("the channel period is 1..65535 counts of 1/32768 s")
@@ -628,10 +581,9 @@ def expected_index(epoch_us: int, period_counts: int) -> int:
 def resolve_counter(expected: int, counter_low: int) -> tuple:
     """(counter, epoch_delta) from the byte on the air and the expected index.
 
-    Picks the 16-bit rollover nearest the expected index, then reports how many
-    counter wraps that implies - because a wrap advances the epoch by 1 on both
-    sides, and the receiver's time-derived index carries the high bits for
-    free.
+    Picks the 16-bit rollover nearest the expected index, then reports the
+    counter-wrap count it implies - a wrap advances the epoch by 1 on both
+    sides, and the time-derived index carries the high bits for free.
     """
     base = expected - (expected & 0xFF)
     best = None
@@ -672,11 +624,10 @@ NODE_PAIR_SCALAR_BYTES = 32
 def node_pair_block(i: int, pair_counter: int, base_devnum: int) -> bytes:
     """i || "pair" || 0x00 || pair_counter[4 LE] || base_devnum[2 LE] || 0x0100.
 
-    kdf_block()'s layout with two fields changed, and both changes are the
-    reason it is a separate function rather than a call to it: the SP 800-108
-    counter runs 1..2 instead of being pinned at 1, and [L]_2 is 256 rather than
-    128. Deriving 32 bytes by calling a 128-bit KDF twice with the same block
-    would return the same 16 bytes twice, so the counter has to reach the PRF.
+    kdf_block()'s layout with the SP 800-108 counter running 1..2 (not pinned
+    at 1) and [L]_2 = 256 (not 128) - a separate function because calling a
+    128-bit KDF twice with the same block would return the same 16 bytes
+    twice; the counter has to reach the PRF to get 32 distinct bytes.
     """
     if i not in (1, 2):
         raise ValueError("the SP 800-108 counter runs 1..2 for a 256-bit output")
@@ -706,15 +657,13 @@ def node_pair_scalar(k_dev: bytes, pair_counter: int,
 def node_tier0_devnum(k_dev: bytes) -> int:
     """The identity Tier 0 device number, 1..65535.
 
-    Tier 0 is the fixed-number tier, and "fixed" here means derived rather than
-    stored: a node that can recompute its device number from K_dev cannot lose
-    it, and a factory reset that re-rolls K_dev re-rolls the number with it,
-    which is the property ADR 0006 wants and a stored number does not have.
+    "Fixed" means derived, not stored: a node recomputes it from K_dev rather
+    than risk losing it, and a factory reset that re-rolls K_dev re-rolls the
+    number with it (ADR 0006).
 
-    0 is the ANT wildcard, so the range is 1..65535 - the same range
-    tools/ant_identity.py's random_device_number() draws from, reached by
-    reduction instead of by rejection because a node deriving this at boot
-    cannot afford an unbounded retry.
+    0 is the ANT wildcard, so range is 1..65535, reached by reduction rather
+    than rejection - a node deriving this at boot can't afford an unbounded
+    retry.
     """
     block = kdf(k_dev, LABEL_ID, 0, 0)
     return (int.from_bytes(block[:2], "little") % 65535) + 1

@@ -1,39 +1,18 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * test_api.c - the composition, which is the part that was never tested.
+ * test_api.c - ztest coverage for radiant_api.c's composition (previously
+ * untested; the module suites below it were). Clean-room; see
+ * docs/decisions/0002-clean-room-policy.md.
  *
- * Provenance: clean-room. Written against src/ant_radio.h, the radiant_core
- * headers, docs/spike-b-part2-results.md (every microsecond figure asserted
- * here) and archive/captures/radio/2026-08-09-spike-b2-runA-burst-seq.log (the
- * reference trace of a working master). Nothing here derives from sdk-ant, from
- * libant.a, from disassembly of any binary, or from any adopter-gated ANT+
- * device profile document. See docs/decisions/0002-clean-room-policy.md.
- *
- * ---------------------------------------------------------------------------
- * Why this file exists
- * ---------------------------------------------------------------------------
- * radiant_api.c is 2700 lines and had zero ztest coverage. Every module below
- * it is tested; the composition was not - and the whole master-exchange path
- * lives in the composition. The bug that motivated this suite is exactly a
- * composition bug: a master answered a slave's first acknowledged exchange on a
- * channel and none after it, with every module underneath behaving correctly in
- * isolation.
- *
- * ---------------------------------------------------------------------------
- * Two constraints, both learned the hard way
- * ---------------------------------------------------------------------------
- *   1. NEVER k_sleep() WHILE A FAKE_RADIO OPERATION IS ARMED. ztest runs at a
- *      cooperative priority and radiant_api.c's event thread at 6, so the event
- *      thread runs only when this thread blocks - which makes a sleep the one
- *      place the suite loses control of the ordering. Where the event thread IS
- *      the subject (the housekeeping watchdog), the sleep is deliberate, the
- *      radio is quiet first, and it says so.
- *   2. THIS SUITE CANNOT REPRODUCE H1, the thread-against-interrupt race in
- *      radiant_sched.c. fake_radio delivers callbacks synchronously on the
- *      calling thread, so "an ISR preempts a thread-context pass" is
- *      unreachable in the mock by construction. What this suite proves is that
- *      the logic closes the loop; the bench proves the concurrency does. Saying
- *      so here is the point - a green run is not evidence about H1 either way.
+ * Two constraints:
+ *   1. Never k_sleep() while a fake_radio operation is armed - ztest is
+ *      cooperative and the event thread (prio 6) only runs when this thread
+ *      blocks, so a sleep loses ordering control. The housekeeping-watchdog
+ *      tests sleep deliberately, with the radio quiet first.
+ *   2. This suite cannot reproduce H1 (the thread/interrupt race in
+ *      radiant_sched.c): fake_radio delivers callbacks synchronously, so an
+ *      ISR preempting thread context is unreachable here. A green run proves
+ *      the logic, not the concurrency.
  */
 
 #include <zephyr/kernel.h>
@@ -54,14 +33,8 @@
 #include "ant_radio.h"
 #include "ant_wire.h"
 
-/* ---------------------------------------------------------------------------
- * The channel under test
- *
- * Spike A's and Spike B's own sensor: #14871 (0x3A17), device type 0x0B
- * (bicycle power), transmission type 5. Using the real one means a byte
- * comparison against a capture line needs no translation.
- * ---------------------------------------------------------------------------
- */
+/* A real sensor (#14871 / 0x3A17, bicycle power, trans type 5) so byte
+ * comparisons against capture lines need no translation. */
 #define CH          0u
 #define DEVNUM      0x3A17u
 #define DEVNUM_LO   0x17u
@@ -82,16 +55,9 @@
 #define PERIOD_US \
 	radiant_channel_counts_to_us(RADIANT_CHANNEL_PERIOD_ANT_PLUS)
 
-/* ---------------------------------------------------------------------------
- * The bridge, which in this image is us
- *
- * antr_on_message() is resolved at link time and exactly one translation unit
- * defines it. In the firmware that is src/ant_serial_bridge.c; here it is this
- * file, and it records rather than serialises. Everything the host would see
- * comes through here, which makes it the only honest place to assert on
- * "what the host was told".
- * ---------------------------------------------------------------------------
- */
+/* antr_on_message() is resolved at link time; the firmware's definition is
+ * src/ant_serial_bridge.c, this file's records instead of serialising -
+ * everything the host would see passes through here. */
 
 #define MSGLOG_MAX 64
 
@@ -122,13 +88,8 @@ void antr_on_message(const struct antr_msg *msg)
 	n_msg++;
 }
 
-/*
- * Deliver whatever the core has queued, from THIS thread.
- *
- * radiant_event_drain() is public and re-entrant-safe, and calling it here
- * rather than sleeping to let the event thread do it is what keeps every
- * assertion below deterministic. See constraint 1 in the header.
- */
+/* Deliver whatever the core has queued, from this thread - keeps assertions
+ * deterministic instead of sleeping for the event thread (constraint 1). */
 static void drain(void)
 {
 	(void)radiant_event_drain(0u);
@@ -147,15 +108,9 @@ static uint32_t count_msgs(uint8_t id)
 	return n;
 }
 
-/*
- * Unsolicited channel events, by code.
- *
- * MESG_RESPONSE_EVENT_ID carries both command replies and channel events;
- * byte 1 being MESG_EVENT_ID (0x01) is what distinguishes the second from the
- * first, and getting that test wrong would count every command reply as an
- * event and make an assertion of "none of these were raised" pass for the wrong
- * reason.
- */
+/* Unsolicited channel events, by code. MESG_RESPONSE_EVENT_ID carries both
+ * command replies and channel events; byte 1 == MESG_EVENT_ID distinguishes
+ * the two, else a "none raised" assertion would pass for the wrong reason. */
 static uint32_t count_channel_events(uint8_t ch, uint8_t code)
 {
 	uint32_t n = 0u;
@@ -204,14 +159,11 @@ static void *api_setup(void)
 }
 
 /*
- * antr_init() creates a Zephyr thread and must run once for the suite, so the
- * per-test reset is antr_stack_reset() plus a fresh mock.
- *
- * k_sched_lock() around the mock half is not decoration: fake_radio_reset()
- * puts the HAL back to pre-init, and the event thread calling
- * radiant_radio_now() in that window would be asking a radio that does not
- * exist. Interrupts are irrelevant here - the mock has none - so locking the
- * scheduler is exactly the right size of exclusion.
+ * antr_init() creates a thread and must run once for the suite; per-test
+ * reset is antr_stack_reset() plus a fresh mock. k_sched_lock() guards the
+ * mock reset because fake_radio_reset() puts the HAL back to pre-init, and
+ * the event thread calling radiant_radio_now() in that window would be
+ * asking a radio that doesn't exist.
  */
 static void api_before(void *f)
 {
@@ -231,12 +183,9 @@ static void api_before(void *f)
 
 ZTEST_SUITE(api, NULL, api_setup, api_before, NULL, NULL);
 
-/*
- * The end-of-test pair. The channel is closed first, because unlike the module
- * suites this one leaves a live channel behind that would keep the radio armed
- * for ever - which is the correct behaviour and would make an unconditional
- * is_idle() assertion a false alarm.
- */
+/* Close the channel first: a live channel keeps the radio armed forever
+ * (correct behaviour), which would make an unconditional is_idle() a false
+ * alarm. */
 static void end_of_test(void)
 {
 	(void)antr_channel_close(CH);
@@ -270,9 +219,8 @@ static const struct fake_radio_arm *last_arm_of(enum fake_radio_arm_kind kind)
 	return NULL;
 }
 
-/* The last accepted transmit carrying this control byte. A master's own
- * broadcast is 0x0A and its acknowledgement is 0xF2, so this is how the two
- * are told apart in the arm log without threading any state through. */
+/* Last accepted transmit with this control byte (0x0A = broadcast, 0xF2 =
+ * acknowledgement) - distinguishes the two in the arm log. */
 static const struct fake_radio_arm *last_tx_with_ctrl(uint8_t ctrl)
 {
 	uint32_t n = fake_radio_arm_count();
@@ -313,10 +261,8 @@ static uint32_t count_tx_with_ctrl(uint8_t ctrl)
 
 /*
  * The peer's frame, hand-assembled rather than run through the encoder under
- * test. A test that built its expected bytes with the code under test would
- * assert that the module agrees with itself. Layout from
- * docs/ant-radio-link.md, confirmed byte for byte by Spike A:
- *
+ * test (else the test would just assert the module agrees with itself).
+ * Layout from docs/ant-radio-link.md:
  *     A6 C5 | dl dh | dtype | ttype | ctrl | d0..d7
  */
 static uint8_t build_peer_frame(uint8_t *out, uint8_t ctrl, const uint8_t *payload8)
@@ -350,12 +296,9 @@ static void open_channel(uint8_t type)
 		      antr_channel_open(CH));
 }
 
-/*
- * What a real host does on EVENT_TX: write the next payload. This is the
- * scenario rather than a workaround for one - the ANT pattern is that the host
- * paces its writes off EVENT_TX, and it is also what pumps a scheduling pass in
- * thread context, which is the half of H1's collision the mock can model.
- */
+/* What a real host does on EVENT_TX: write the next payload. This also pumps
+ * a scheduling pass in thread context - the half of H1's collision the mock
+ * can model. */
 static void host_writes_broadcast(void)
 {
 	uint8_t buf[8];
@@ -367,24 +310,16 @@ static void host_writes_broadcast(void)
 
 /*
  * Run the master's own slot to completion and return the t_sync it achieved.
- *
- * The caller has already written a payload, so a transmit is posted and armed;
- * this advances just past it and no further, so that the turnaround the
- * completion arms is inspectable before anything is injected into it.
+ * Advances just past it and no further, so the turnaround the completion
+ * arms is inspectable before anything is injected into it.
  */
 static radiant_time_t run_one_master_slot(void)
 {
 	const struct fake_radio_arm *tx = last_tx_with_ctrl(RADIANT_CTRL_BROADCAST);
 	radiant_time_t               t_sync;
 
-	/*
-	 * ARMED, NOT TRANSMITTED. fake_radio records an arm at the instant the
-	 * call is made, and the host's write pumps a pass that arms the slot
-	 * synchronously - so the record exists long before any of it is on the
-	 * air, and a helper that waited for a NEW record would wait for ever.
-	 * The record is updated in place as the operation runs, which is what
-	 * makes `terminated` the honest question to ask.
-	 */
+	/* Armed, not transmitted: the record is updated in place as the op
+	 * runs, so `terminated` is the honest question, not a new record. */
 	zassert_not_null(tx,
 			 "the master's own slot was never armed: arms=%u "
 			 "(tx=%u rx=%u rejected=%u etime=%u estate=%u) "
@@ -417,23 +352,16 @@ static radiant_time_t run_one_master_slot(void)
 
 	t_sync = tx->t_sync_at;
 
-	/* Just past its terminal event, which is what arms the turnaround, and
-	 * no further - so the turnaround is inspectable before anything is
-	 * injected into it. */
+	/* Just past the terminal event that arms the turnaround, no further. */
 	fake_radio_advance_to(t_sync + 1u);
 	zassert_true(tx->terminated, "the master's slot did not complete");
 	return t_sync;
 }
 
-/*
- * One whole period with nothing from the slave.
- *
- * THE TURNAROUND HAS TO CLOSE BEFORE THE NEXT SLOT CAN BE POSTED, and that is
- * not incidental: api_pump_locked() skips any channel whose scheduler slot is
- * still pending, and between a master's transmit and its turnaround's close the
- * turnaround IS that slot. A test that wrote the next payload without running
- * the window out would find nothing armed and blame the pump.
- */
+/* One whole period with nothing from the slave. The turnaround must close
+ * before the next slot posts: api_pump_locked() skips a channel whose
+ * scheduler slot is still pending, and between a transmit and its
+ * turnaround's close the turnaround IS that slot. */
 static radiant_time_t run_one_quiet_period(void)
 {
 	radiant_time_t t_tx;
@@ -451,19 +379,10 @@ static radiant_time_t run_one_quiet_period(void)
  */
 
 /*
- * THE ONE THIS SUITE EXISTS FOR.
- *
- * A master answers a slave's acknowledged data with 0xF2 carrying its own
- * broadcast buffer, 1560 us after the slave's packet - and it does so on EVERY
- * exchange, not only the first. The symptom that started all of this was an
- * sdk-ant slave accepting exchange 1 on a channel and nothing after it.
- *
- * The reference trace is
- * archive/captures/radio/2026-08-09-spike-b2-runA-burst-seq.log, where three
- * standalone exchanges seconds apart (n=1878, n=1891, n=1903) are all A2 -> F2:
- * the sequence bit resets at the start of every transfer, so the reply byte is
- * the same every time and "right for exchange 1, wrong for exchange 2" is
- * falsified by data already on disk.
+ * THE ONE THIS SUITE EXISTS FOR: a master must answer a slave's acknowledged
+ * data with 0xF2 carrying its own broadcast buffer, 1560 us after the
+ * slave's packet, on EVERY exchange - not only the first. Reference trace:
+ * archive/captures/radio/2026-08-09-spike-b2-runA-burst-seq.log.
  */
 ZTEST(api, test_a_master_answers_every_slave_exchange_not_only_the_first)
 {
@@ -481,13 +400,10 @@ ZTEST(api, test_a_master_answers_every_slave_exchange_not_only_the_first)
 		host_writes_broadcast();
 		t_tx = run_one_master_slot();
 
-		/*
-		 * The turnaround, armed from inside the completion of the
-		 * transmit it is placed against. Measured: a slave's reply
-		 * t_sync is master t_sync + 2190 us, and the guard band is
-		 * sized on the observed range rather than on a standard
-		 * deviation.
-		 */
+		/* The turnaround, armed from inside the completion of the
+		 * transmit it is placed against. Measured: slave reply
+		 * t_sync = master t_sync + 2190 us; guard band sized on the
+		 * observed range. */
 		turn = last_arm_of(FAKE_RADIO_ARM_RX);
 		zassert_not_null(turn, "period %u: no turnaround was armed",
 				 period);
@@ -534,14 +450,8 @@ ZTEST(api, test_a_master_answers_every_slave_exchange_not_only_the_first)
 			      "period %u: exactly one reply per exchange",
 			      period);
 
-		/*
-		 * And the exchange did not drag the master's phase. A master
-		 * owns the slot grid rather than following one, so the frame it
-		 * just heard - a slave's reply 2.19 ms INTO its own period -
-		 * must not re-anchor anything. In the reference trace the
-		 * master's next broadcast is +245914 us after the reply, which
-		 * is exactly one period after its own previous broadcast.
-		 */
+		/* The exchange must not drag the master's phase: a master owns
+		 * the slot grid, so the slave's reply must not re-anchor it. */
 		if (period > 0u) {
 			zassert_equal(PERIOD_US, t_tx - prev_slot,
 				      "period %u: the slot clock moved by "
@@ -559,20 +469,14 @@ ZTEST(api, test_a_master_answers_every_slave_exchange_not_only_the_first)
 }
 
 /*
- * H3, and it went red before the fix.
- *
- * A listening master's own transmit produced no done() at all. The chain:
- * hal_tx() called the tx callback BEFORE end_armed(); api_sched_tx() posted the
- * turnaround; radiant_sched_request_rx() called drop_slot() on a slot still in
- * flight, which aborted the armed operation and cleared it; end_armed() then
- * returned immediately because nothing was armed any more. Every period, on
- * every listening master.
- *
- * Two things it cost. A channel the host is CLOSING never finished closing if
- * the close raced a master slot, because radiant_channel_on_terminal() is the
- * only route to chan_finish_close(); and radiant_radio_abort() was called on
- * the real RADIO from inside a completed transmit's own ISR, four times a
- * second, purely as a side effect of posting the turnaround.
+ * H3. A listening master's own transmit produced no done() at all: hal_tx()
+ * called the tx callback before end_armed(); api_sched_tx() posted the
+ * turnaround; radiant_sched_request_rx() called drop_slot() on the still-
+ * in-flight slot, aborting the armed op; end_armed() then returned with
+ * nothing armed to finish. Every period, on every listening master. Cost: a
+ * closing channel never finished closing if the close raced a master slot,
+ * and radiant_radio_abort() fired on the real radio from inside a completed
+ * transmit's own ISR, 4x/s.
  */
 ZTEST(api, test_the_masters_own_transmit_produces_a_done)
 {
@@ -584,16 +488,14 @@ ZTEST(api, test_the_masters_own_transmit_produces_a_done)
 	before = radiant_api_stats_get()->sched_dones;
 
 	for (slots = 0u; slots < 4u; slots++) {
-		/* The turnaround runs out empty as well, so each period
+		/* The turnaround runs out empty too, so each period
 		 * contributes exactly two completed operations. */
 		(void)run_one_quiet_period();
 	}
 
-	/*
-	 * Two per period: the transmit and the turnaround. The bug produced
-	 * exactly one - the turnaround's - so a >= would have passed while
-	 * broken and the equality is the whole test.
-	 */
+	/* Two per period: transmit + turnaround. The bug produced only one
+	 * (the turnaround's), so >= would pass while broken - equality is
+	 * the whole test. */
 	zassert_equal(8u, radiant_api_stats_get()->sched_dones - before,
 		      "a listening master's own transmit lost its completion");
 
@@ -601,14 +503,11 @@ ZTEST(api, test_the_masters_own_transmit_produces_a_done)
 }
 
 /*
- * H2's fingerprint, from the sniffer side: do the master's own 0x0A broadcasts
- * continue after an exchange?
- *
- * If they stop, a transfer is wedged - api_pump_locked() skips a channel whose
- * transfer engine is not idle, so a stuck engine takes the channel's broadcast
- * slot down with it and the dongle goes quiet while looking perfectly alive.
- * If they continue and only the reply is missing, the fault is in the
- * receive/decide path instead. This is that discriminator, on the desk.
+ * H2's fingerprint: do the master's own 0x0A broadcasts continue after an
+ * exchange? If they stop, the transfer is wedged (api_pump_locked() skips a
+ * channel whose transfer engine isn't idle, so the whole broadcast slot goes
+ * with it); if they continue with only the reply missing, the fault is in
+ * the receive/decide path instead.
  */
 ZTEST(api, test_the_master_keeps_broadcasting_after_an_exchange)
 {
@@ -645,18 +544,13 @@ ZTEST(api, test_the_master_keeps_broadcasting_after_an_exchange)
 }
 
 /*
- * The H2 watchdog, which exists regardless of root cause.
- *
- * The wedge is synthesised with radiant_sched_cancel(), and that is not a
- * contrivance - it is the exact shape of the real failure. Cancelling is silent
- * for the channel that asked, so no done() arrives; the transfer engine is left
- * mid-reply with nothing armed; api_feed_xfer_terminal() is reachable only from
- * api_sched_done() and only a completion calls that. Before the watchdog, that
- * state was permanent and silent for the life of the process.
- *
- * The sleeps are the one place this suite hands control to the event thread on
- * purpose - housekeeping IS the subject - and the radio is quiet by then,
- * because a wedged channel posts nothing.
+ * The H2 watchdog. The wedge is synthesised with radiant_sched_cancel(),
+ * which is the exact shape of the real failure: cancelling is silent, so no
+ * done() arrives, the transfer engine is left mid-reply with nothing armed,
+ * and api_feed_xfer_terminal() (reachable only from a completion) never
+ * runs. Before the watchdog that state was permanent. The sleeps here
+ * deliberately hand control to the event thread since housekeeping is the
+ * subject, and the radio is quiet by then.
  */
 ZTEST(api, test_a_wedged_reply_is_recovered_by_housekeeping)
 {
@@ -702,24 +596,14 @@ ZTEST(api, test_a_wedged_reply_is_recovered_by_housekeeping)
 }
 
 /*
- * A CONSTANT TRANSMIT TIMING ERROR IS NOT FREE FOR A MASTER, and the asymmetry
- * with the receive side is the whole point of pinning it.
- *
- * radiant_radio_hal.h's "THE FAILURE MODE, WHICH IS SILENT" is about a slave: a
- * constant error in the t_sync it REPORTS cancels out of the period estimate,
- * the drift PLL still locks, and the only cost is an off-centre window. A
- * master is the other case. Its next slot is anchored on the t_sync its last
- * transmit ACHIEVED, so a backend that is systematically late by d puts its
- * frames one period plus d apart - for ever, cumulatively, with nothing
- * anywhere to notice.
- *
- * That is why the nrf backend carries radiant_dbg_tx_err (achieved minus
- * requested, every frame) and why T_SYNC_CAL_TX_US is applied to the ARM path
- * and not only to the report. This test is the core-side half of that claim,
- * and it asserts the exact relationship rather than merely that nothing
- * exploded: a constant offset produces a constant period error of the same
- * size, and the exchange keeps working throughout, which is precisely what
- * makes it invisible on the air.
+ * A constant transmit timing error is not free for a master, unlike for a
+ * slave (radiant_radio_hal.h: a slave's reported t_sync error cancels out of
+ * the period estimate). A master's next slot anchors on the t_sync its last
+ * transmit ACHIEVED, so a backend systematically late by d drifts its frames
+ * by d every period, cumulatively, with nothing to notice it - hence
+ * radiant_dbg_tx_err and T_SYNC_CAL_TX_US applying to the arm path, not just
+ * the report. Asserts the exact relationship: constant offset -> constant
+ * period error of the same size, with the exchange still working throughout.
  */
 ZTEST(api, test_a_constant_transmit_offset_moves_the_period_by_exactly_that)
 {
@@ -753,25 +637,17 @@ ZTEST(api, test_a_constant_transmit_offset_moves_the_period_by_exactly_that)
 }
 
 /* ---------------------------------------------------------------------------
- * The slave side: a background scan
- *
- * Everything above drives a master. This half exists because the bug that cost
- * a whole session lived here and nothing in this suite could see it - the
- * module suites test radiant_search.c's own decisions, and radiant_search.c was
- * right; what was wrong was what radiant_api.c did with the answer.
+ * The slave side: a background scan. radiant_search.c's own decisions are
+ * tested by its module suite; what's wrong lived in what radiant_api.c did
+ * with the answer.
  * ---------------------------------------------------------------------------
  */
 
 /*
- * A host's broadcast, as it reaches antr_on_message() with lib config asking
- * for the extended tail:
- *
+ * A host's broadcast with the extended tail (lib config ALL_EXT_FIELDS):
  *     [channel][d0..d7][flag][devnum lo][devnum hi][device type][trans type]
- *
- * The device number is the whole point of a scan - it is how the host tells one
- * sensor from another - so counting messages per device number is the honest
- * question to ask of a discovery mechanism. See radiant_event.h's layout
- * comment; index 9 is the flag byte because the payload is always 8.
+ * See radiant_event.h's layout comment; index 9 is the flag byte since the
+ * payload is always 8.
  */
 #define EXT_FLAG   9u
 #define EXT_NUM_LO 10u
@@ -803,14 +679,10 @@ static uint32_t count_bcast_from(uint16_t device_number)
 	return n;
 }
 
-/*
- * Zwift's actual discovery channel, byte for byte from a USBPcap capture of a
- * real pairing session: ASSIGN_CHANNEL 00 40 00 01 - channel 0, SLAVE_RX_ONLY,
- * network 0, extended assignment ALWAYS_SEARCH - then a wildcard channel ID and
- * an open. This is NOT MESG_OPEN_RX_SCAN_MODE; the capture shows Zwift never
- * sends 0x5B. Writing the assignment out here rather than reusing
- * open_channel() is deliberate: the four bytes ARE the scenario.
- */
+/* Zwift's actual discovery channel: SLAVE_RX_ONLY, network 0, extended
+ * assignment ALWAYS_SEARCH, wildcard channel ID. Not MESG_OPEN_RX_SCAN_MODE -
+ * Zwift never sends 0x5B. Written out rather than via open_channel() since
+ * the assignment bytes ARE the scenario. */
 static void open_background_scan_channel(void)
 {
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
@@ -831,16 +703,10 @@ static void open_background_scan_channel(void)
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(CH));
 }
 
-/*
- * The armed search window, with its filters - which is where the device numbers
- * below come from.
- *
- * A sweep set only matches eight device-number low bytes at a time, so a test
- * that hardcoded a device number would be asserting about the sweep's phase
- * rather than about discovery, and would break the first time the sweep order
- * or the seen-cache steering changed. Reading the low byte out of the window
- * that is actually armed makes the frame match by construction.
- */
+/* The armed search window and its filters, source of the device numbers used
+ * below. A sweep set only matches 8 device-number low bytes at a time, so
+ * reading the low byte from the actually-armed window (rather than
+ * hardcoding one) makes the frame match by construction. */
 static const struct fake_radio_arm *armed_search_window(void)
 {
 	const struct fake_radio_arm *w = last_arm_of(FAKE_RADIO_ARM_RX);
@@ -855,18 +721,12 @@ static const struct fake_radio_arm *armed_search_window(void)
 }
 
 /*
- * Let the event thread post the next window of the sweep.
- *
- * A SEARCHING channel has nothing host-side to pump it. A master's next slot is
- * posted when the host writes the next payload - that is what every test above
- * relies on - but a sweep's next window comes from api_housekeep() and from
- * nowhere else, so without this the sweep stops dead after one window and the
- * suite would be measuring its own pacing rather than the firmware's.
- *
- * This is the second of the two deliberate sleeps in this file (see constraint 1
- * at the top). It is legitimate for the same reason the housekeeping watchdog's
- * is: the window has just run out, so nothing is armed, and the assertion below
- * states that rather than trusting it.
+ * Let the event thread post the next window of the sweep. A SEARCHING
+ * channel has nothing host-side to pump it - a sweep's next window comes
+ * only from api_housekeep(), so without this it stops dead after one
+ * window. Second of the two deliberate sleeps in this file (constraint 1):
+ * legitimate because nothing is armed when it runs, and the assertion below
+ * checks that rather than trusting it.
  */
 static void run_housekeeping(void)
 {
@@ -893,27 +753,16 @@ static void air_device(const struct fake_radio_arm *w, uint8_t filter_index,
 }
 
 /*
- * THE ONE THE SLAVE HALF OF THIS SUITE EXISTS FOR, and it goes red before the
- * fix in api_search_acquired().
+ * Fix in api_search_acquired(): a background scan must never leave. It used
+ * to call radiant_channel_on_acquired() for every match regardless of mode,
+ * which unconditionally sets TRACKING - so the first sensor to answer
+ * converted the scan into an ordinary tracked channel and every other sensor
+ * became invisible (symptom: Zwift's pairing screen showed one sensor, a
+ * different one each run).
  *
- * A background scan is defined by never leaving: the host opens ONE wildcard
- * channel and expects to be told about every device on the air, indefinitely.
- * api_search_acquired() used to call radiant_channel_on_acquired() for every
- * match regardless of the search mode, and that function knows nothing about
- * modes - it unconditionally sets RADIANT_CH_STATE_TRACKING. The state check at
- * the end of the callback then ended the search. So the very first sensor to
- * answer converted the scan into an ordinary tracked channel locked to that one
- * device, and every other sensor in the room became invisible.
- *
- * The symptom on a real host was exactly this and nothing more: Zwift's pairing
- * screen showed ONE sensor, a different one each run, whichever happened to
- * transmit first.
- *
- * Two devices in the SAME window is the sharp half of the assertion - it needs
- * no second window and no timing argument, because if the channel left the
- * search on the first frame the second one has nowhere to be delivered. The
- * third device in a LATER window then proves the sweep itself kept running,
- * which is the other thing the conversion destroyed.
+ * Two devices in the SAME window is the sharp half: if the channel left the
+ * search on the first frame, the second has nowhere to be delivered. A third
+ * device in a LATER window proves the sweep itself kept running.
  */
 ZTEST(api, test_a_background_scan_reports_every_device_not_only_the_first)
 {
@@ -944,13 +793,9 @@ ZTEST(api, test_a_background_scan_reports_every_device_not_only_the_first)
 		     "tracked channel on the first match",
 		     (unsigned int)dev_b, (unsigned int)dev_a);
 
-	/*
-	 * And the channel is still searching. This is the mechanism rather than
-	 * the symptom, and it is what makes the failure above unambiguous: a
-	 * scan channel that reads TRACKING has been acquired, and an acquired
-	 * channel is one radiant_search_end() away from discovering nothing
-	 * else, for the rest of the session.
-	 */
+	/* Still searching: a scan channel reading TRACKING has been acquired,
+	 * and is one radiant_search_end() away from discovering nothing else
+	 * for the rest of the session. */
 	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH),
 		      "a background scan must never leave the search - state %d",
 		      (int)radiant_channel_state_get(CH));
@@ -990,21 +835,14 @@ static uint32_t count_bcast_on(uint8_t ch)
 }
 
 /*
- * Run virtual time forward while letting the event thread keep up.
- *
- * Both halves are needed and neither is optional. fake_radio fires its events
- * on the calling thread, so a single long advance runs a whole second of radio
- * with no pump in between - the sweep would look starved for a reason that is
- * purely an artefact of the harness. The event thread is where api_housekeep()
- * re-posts the next chunk, and it only runs when this thread blocks.
- *
- * So: step to the next due event (never more than 20 ms at a time), deliver,
- * then yield. This is the one place in this file that sleeps with operations
- * armed, and it is deliberate - the subject of the test IS the interaction
- * between the event thread's pump and a radio that is busy with something else,
- * which is unreachable any other way. The assertions it feeds are lower bounds
- * over a long window rather than exact orderings, which is what makes that
- * safe.
+ * Run virtual time forward while letting the event thread keep up. fake_radio
+ * fires events on the calling thread, so a single long advance would starve
+ * the sweep as a pure harness artefact; api_housekeep() only runs when this
+ * thread blocks. So: step to the next due event (max 20 ms), deliver, yield.
+ * This is the one place in the file that sleeps with operations armed -
+ * deliberate, since the subject IS the event thread's pump racing a busy
+ * radio. Assertions fed by this are lower bounds over a long window, not
+ * exact orderings, which is what makes it safe.
  */
 static void run_virtual_us(uint64_t total_us)
 {
@@ -1041,27 +879,17 @@ static void air_repeating(uint16_t number, uint8_t dev_type, radiant_time_t t_fi
 }
 
 /*
- * THE SECOND BUG, AND THE ONE THAT MADE PAIRING FEEL BROKEN EVEN AFTER THE
- * SCAN-MODE FIX.
+ * The second bug: Zwift keeps its wildcard scan channel open alongside
+ * already-paired channels and expects to keep discovering while they track.
+ * A real capture showed that stopping dead - with one channel receiving at
+ * 4 Hz, the scan reported zero devices for 25 s then 35 s across six scan
+ * cycles - the sweep was getting no radio at all. api_post_search_window()
+ * posts the sweep as radiant_sched.c's CONTINUOUS form so the scheduler fits
+ * chunks into the gaps between tracked slots; this test asserts that claim.
  *
- * Zwift keeps its wildcard scan channel open ALONGSIDE the channels it has
- * already paired, and expects to go on discovering while they track - that is
- * how a pairing screen adds a second sensor without dropping the first. A
- * USBPcap capture of a real session showed that stopping dead: with one channel
- * receiving at 4 Hz, the scan channel reported ZERO devices for 25 s and then
- * 35 s, across six full scan cycles, including a trainer it had already found
- * twice. The first report after the tracked channel closed arrived 1 ms later,
- * so nothing was slow - the sweep was getting no radio at all.
- *
- * api_post_search_window() posts the sweep as radiant_sched.c's CONTINUOUS form
- * precisely so the scheduler can fit chunks into the gaps between tracked
- * slots, and its comment claims "the sweep gets every microsecond the tracked
- * channels are not using". A tracked channel at 4 Hz uses about 2 ms in 250 ms.
- * This test states that claim as an assertion.
- *
- * Twelve seconds is one and a half full sweeps (32 sets x 260 ms = 8.32 s), so
- * a healthy sweep must reach every set - including whichever one device B sits
- * in - regardless of the phase it happened to be at when tracking started.
+ * Twelve seconds is one and a half full sweeps (32 sets x 260 ms = 8.32 s),
+ * so a healthy sweep must reach every set regardless of phase at tracking
+ * start.
  */
 ZTEST(api, test_the_scan_keeps_finding_devices_while_another_channel_tracks)
 {
@@ -1087,11 +915,8 @@ ZTEST(api, test_the_scan_keeps_finding_devices_while_another_channel_tracks)
 		      antr_channel_radio_freq_set(1u, RF_INDEX));
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(1u));
 
-	/*
-	 * Device A alone in the first window, so channel 1 acquires A and
-	 * nothing else - B is not on the air yet, which makes which channel
-	 * takes which sensor a fact rather than a race.
-	 */
+	/* Device A alone in the first window (B not on air yet), so which
+	 * channel takes which sensor is a fact, not a race. */
 	w = armed_search_window();
 	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
 	t_acq = w->t_open + 1000u;
@@ -1124,14 +949,11 @@ ZTEST(api, test_the_scan_keeps_finding_devices_while_another_channel_tracks)
 	fake_radio_advance(1000u);
 	drain();
 
-	/*
-	 * end_of_test()'s ending, minus the one violation this test is
-	 * guaranteed to provoke. Twelve seconds of a tracked channel plus a
-	 * sweep is a few hundred arm calls and the mock records 64, so
-	 * FAKE_RADIO_VIOL_LOG_FULL here is the harness running out of room to
-	 * write in - not the firmware breaking a contract. Every other code
-	 * still fails the test, which is the part that matters.
-	 */
+	/* end_of_test()'s ending, minus the one violation this test always
+	 * provokes: 12 s of tracked channel + sweep is a few hundred arm
+	 * calls against a 64-entry mock log, so FAKE_RADIO_VIOL_LOG_FULL here
+	 * is the harness running out of room, not a firmware contract
+	 * violation. Every other code still fails the test. */
 	zassert_true(fake_radio_is_idle(), "radio not idle: %s",
 		     fake_radio_busy_reason());
 	for (uint32_t i = 0u; i < fake_radio_viol_count() &&
@@ -1147,32 +969,19 @@ ZTEST(api, test_the_scan_keeps_finding_devices_while_another_channel_tracks)
 }
 
 /*
- * ZWIFT'S AUTO-PAIR: A CHANNEL THAT NAMES ITS DEVICE MUST NOT WAIT FOR THE
- * ROUND ROBIN.
+ * A channel that names its device must not wait for the round robin: since
+ * devnum_lo picks a channel's device out to exactly one sweep set,
+ * radiant_search_begin() pushes that set to the front, so acquisition should
+ * cost one dwell, not one sweep.
  *
- * A channel opened with a device number in its ID can only ever be caught by
- * ONE sweep set - devnum_lo picks it outright - so radiant_search_begin() pushes
- * that set to the front of the queue and the acquisition should cost one dwell,
- * not one sweep. That steer is the entire reason re-pairing a known sensor is
- * supposed to be instant.
+ * Measured 2026-08-10, one channel already tracking: ch1 (dev 8265, nothing
+ * else tracking) acquired in 0.24 s; ch2 (dev 20329, ch1 tracking) took
+ * 18.72 s though the device was on air throughout - the steer wasn't being
+ * honoured.
  *
- * Measured against the real thing on 2026-08-10, one channel already tracking:
- *
- *   ch1 (HR    dev 8265)  opened 33.92s -> first rx 34.16s =  0.24s
- *   ch2 (power dev 20329) opened 36.81s -> first rx 55.54s = 18.72s
- *
- * The only difference between them is that ch1 opened with nothing tracking and
- * ch2 opened with ch1 already tracking. 18.72 s is about two full sweeps, so the
- * steer was not being honoured at all AND the sweep was running at about half
- * wall-clock speed. The scan heard device 20329 at 36.81 s - the very instant
- * ch2 opened, at -62.9 dBm - and then not again until 55.54 s, which is the
- * instant ch2 finally acquired. The device was on the air throughout; the sweep
- * simply never looked at its set.
- *
- * Device B is placed half the address space from wherever the sweep is when
- * channel 2 opens - sixteen sets, ~4.2 s of round robin - so passing inside the
- * 2 s budget cannot be the cursor happening to arrive. Only the steer gets there
- * in time.
+ * Device B is placed 16 sets (~4.2 s of round robin) from the sweep's
+ * position when channel 2 opens, so passing inside the 2 s budget can only
+ * be the steer, not the cursor arriving naturally.
  */
 ZTEST(api, test_a_named_device_is_steered_to_rather_than_waited_for)
 {
@@ -1214,8 +1023,8 @@ ZTEST(api, test_a_named_device_is_steered_to_rather_than_waited_for)
 	dev_b = (uint16_t)(0x0700u | (uint16_t)(uint8_t)(lo_now + 128u));
 	air_repeating(dev_b, 0x78u, t_acq + (PERIOD_US / 3u), 64u);
 
-	/* Channel 2 NAMES device B - this is Zwift re-pairing the sensor it
-	 * used last session, and it is the channel that took 18.72 s. */
+	/* Channel 2 names device B: Zwift re-pairing a known sensor, the case
+	 * that took 18.72 s. */
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_channel_assign(2u,
 					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
@@ -1247,10 +1056,9 @@ ZTEST(api, test_a_named_device_is_steered_to_rather_than_waited_for)
 	fake_radio_advance(1000u);
 	drain();
 
-	/* Same ending as the sibling test above, and for the same reason: a
-	 * multi-second run with a tracked channel plus a sweep overflows the
-	 * mock's 64-entry arm log, which is the harness running out of room to
-	 * write in rather than the firmware breaking a contract. */
+	/* Same ending as the sibling test above and for the same reason: the
+	 * mock's 64-entry arm log overflows, not a firmware contract
+	 * violation. */
 	zassert_true(fake_radio_is_idle(), "radio not idle: %s",
 		     fake_radio_busy_reason());
 	for (uint32_t i = 0u; i < fake_radio_viol_count() &&
@@ -1265,30 +1073,16 @@ ZTEST(api, test_a_named_device_is_steered_to_rather_than_waited_for)
 }
 
 /*
- * A SCAN CHUNK THAT ENDS PART-WAY THROUGH ITS SET MUST KEEP THE SLOT.
+ * A scan chunk that ends part-way through its set must keep the slot. A
+ * tracked channel ends a chunk 4x/s per channel; api_sched_done() used to
+ * cancel the request each time and wait for the event thread to re-post the
+ * same filters, buying nothing and costing the sweep the gap. Measured on
+ * nRF54L15 (1 channel @ 4 Hz) before the fix: full sweep 12.8 s vs nominal
+ * 8.3 s, with nothing else competing or failing.
  *
- * The sweep's dwell is a budget spent a chunk at a time, and a tracked channel
- * ends a chunk four times a second per channel. api_sched_done() used to cancel
- * the request on every one of those and wait for the event thread to hand back
- * a request the scheduler already had. The filters still described the same
- * address set - there was nothing to decide - so the round trip bought nothing
- * and cost the sweep the gap.
- *
- * Measured on the nRF54L15, one channel tracking at 4 Hz, before the fix:
- *
- *   housekeeping passes   38.5/s      search windows posted     7.6/s
- *   sets advanced          2.5/s      nominal                   3.85/s
- *   full sweep            12.8 s      nominal                   8.3 s
- *   preempt=0  missed=0  ebusy=0  rejected=0
- *
- * Nothing was competing for the radio and nothing was failing; the sweep was
- * idle waiting to be told to use time it already had. Worst-case time to
- * discover a device IS that number, which is why pairing a second sensor while
- * one is tracked feels slow.
- *
- * The chunk is asserted to be SHORT first. A chunk that ran the full dwell
- * finishes the set legitimately and must drop the slot, so without that check a
- * pass would prove nothing.
+ * Asserts the chunk is SHORT first: a chunk that ran the full dwell finishes
+ * its set legitimately and must drop the slot, so without that check a pass
+ * would prove nothing.
  */
 ZTEST(api, test_a_scan_chunk_that_ends_mid_set_keeps_its_slot)
 {
@@ -1324,8 +1118,8 @@ ZTEST(api, test_a_scan_chunk_that_ends_mid_set_keeps_its_slot)
 
 	air_repeating(dev_a, 0x0Bu, t_acq + PERIOD_US, 32u);
 
-	/* One pump, so the tracked channel's slot is posted and the scheduler
-	 * can see it - a scan chunk armed now ends before it. */
+	/* One pump so the tracked channel's slot is posted and visible - a
+	 * scan chunk armed now ends before it. */
 	run_housekeeping();
 
 	w = armed_search_window();
@@ -1337,11 +1131,9 @@ ZTEST(api, test_a_scan_chunk_that_ends_mid_set_keeps_its_slot)
 		     (unsigned int)len,
 		     (unsigned int)RADIANT_SEARCH_DWELL_DEFAULT_US);
 
-	/*
-	 * Run that chunk out and stop. drain() delivers queued host messages and
-	 * deliberately does NOT sleep, so the event thread's pump has not run.
-	 * Anything in this channel's slot now was left there by the completion.
-	 */
+	/* Run the chunk out and stop. drain() delivers queued host messages
+	 * but doesn't sleep, so the event thread hasn't pumped - anything in
+	 * this slot now was left by the completion itself. */
 	fake_radio_advance_to(w->t_close + 1u);
 	drain();
 
@@ -1368,22 +1160,14 @@ ZTEST(api, test_a_scan_chunk_that_ends_mid_set_keeps_its_slot)
 
 /*
  * A background scan must still be searching long after an ordinary channel
- * would have given up. This went red before the fix in search_deadline().
+ * would give up. Fix in search_deadline(): a scan channel with DEFAULT
+ * timeouts hit the ordinary search deadline at 25 s, raised
+ * RX_SEARCH_TIMEOUT, and closed itself - leaving a discovery channel that
+ * could never discover anything again ("dongle stops finding sensors after
+ * a while").
  *
- * Found on the bench, not by inspection. With the search counters logged once a
- * second on a DK, a scan channel opened with the DEFAULT timeouts - which is
- * what a host gets when it never sends MESG_SEARCH_TIMEOUT - reported devices
- * happily and then stopped, permanently, at exactly 25 s:
- * radiant_search_n_searching() read 0 from that moment on. The channel had hit
- * the ordinary search deadline, raised RX_SEARCH_TIMEOUT and closed itself,
- * leaving the host holding a discovery channel that could never discover
- * anything again. From the outside that is "the dongle stops finding sensors
- * after a while", which is a symptom nobody would attribute to a timeout the
- * host never asked for.
- *
- * Forty seconds of virtual time is well past the 25 s default, and the
- * assertion is the channel STATE rather than a device report, so a quiet bench
- * cannot make it pass by accident.
+ * 40 s is well past the 25 s default; asserting channel STATE rather than a
+ * device report means a quiet bench can't pass by accident.
  */
 ZTEST(api, test_a_background_scan_never_times_out)
 {
@@ -1406,14 +1190,10 @@ ZTEST(api, test_a_background_scan_never_times_out)
 }
 
 /*
- * The other side of the same coin, and the reason the fix is a mode check
- * rather than "never acquire from a search callback".
- *
- * An ordinary wildcard slave - no extended assignment - is ACQUIRE mode, and it
- * MUST leave the search and start tracking the first device it matches. That is
- * how every normal pairing works. A fix that made the scan case work by
- * removing the acquire path would break this, silently, and the dongle would
- * pair with nothing at all.
+ * The other side of the same coin: an ordinary wildcard slave (no extended
+ * assignment) is ACQUIRE mode and must leave the search and track the first
+ * match - that's how normal pairing works. Confirms the fix is a mode check,
+ * not "never acquire from a search callback".
  */
 ZTEST(api, test_a_plain_wildcard_slave_still_acquires_and_tracks)
 {
@@ -1424,8 +1204,7 @@ ZTEST(api, test_a_plain_wildcard_slave_still_acquires_and_tracks)
 		      antr_network_address_set(0u, ant_plus_key));
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_lib_config_set((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
-	/* Same channel, same wildcard ID - the ONLY difference from the test
-	 * above is the extended assignment byte. */
+	/* Only difference from the test above: the extended assignment byte. */
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_channel_assign(CH,
 					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
@@ -1450,8 +1229,7 @@ ZTEST(api, test_a_plain_wildcard_slave_still_acquires_and_tracks)
 		      "it matches - state %d",
 		      (int)radiant_channel_state_get(CH));
 
-	/* And it took the device's identity with it, which is what makes the
-	 * next period a tracked slot rather than more searching. */
+	/* And it took the device's identity with it. */
 	{
 		struct radiant_channel_id id;
 
@@ -1465,30 +1243,20 @@ ZTEST(api, test_a_plain_wildcard_slave_still_acquires_and_tracks)
 }
 
 /*
- * A TRACKED CHANNEL OWES ITS NEXT WINDOW IMMEDIATELY, NOT ONE PUMP LATER.
+ * A tracked channel owes its next window immediately, not one pump later -
+ * the invariant a background scan lives or dies on. radiant_sched.c ends a
+ * scan chunk at t_back(committed, lead), so if a tracked slave's next window
+ * instead waits for api_pump_locked() on the event thread, the scan gets
+ * armed with no end in the gap and the pump's later post preempts it. On the
+ * bench this cost everything: 109 scan chunks armed unbounded vs 6 bounded,
+ * frames_ok frozen at 15 for 14 s.
  *
- * This is the invariant a background scan lives or dies on, and it is worth
- * stating as a mechanism rather than as an outcome because the outcome is not
- * reproducible here at all.
- *
- * radiant_sched.c ends a scan chunk at t_back(committed, lead), so a sweep and a
- * tracked channel interleave exactly - but only against work it can already
- * see. If a tracked slave's next window waits for api_pump_locked() on the
- * event thread, then in the instant after its previous window completes there
- * is no committed work, the scan is armed with NO end, and the pump's later
- * post preempts it. On the bench that costs everything: 109 scan chunks armed
- * unbounded against 6 bounded, one preemption per chunk, and frames_ok frozen
- * at 15 for fourteen seconds while the sweep ran flat out and decoded nothing.
- * The dongle stops finding sensors the moment one is paired.
- *
- * Why this test asserts the POST and not the discovery: the mock's completions
- * are synchronous, so the pump follows the callback closely enough that
- * test_the_scan_keeps_finding_devices_while_another_channel_tracks passes with
- * or without the fix. It cannot see the gap. The gap is real on hardware, where
- * arm_next() runs inside the completion callback and the event thread has not
- * been scheduled yet. So this pins the thing that differs - that the slot is
- * refilled by the completion itself - which is checkable here and is precisely
- * what supplies the scheduler the fact it was missing.
+ * This asserts the POST rather than discovery, because the mock's
+ * synchronous completions make the gap unobservable otherwise (the sibling
+ * discovery test passes with or without the fix) - on hardware arm_next()
+ * runs inside the completion callback before the event thread is scheduled,
+ * so pinning "the slot is refilled by the completion itself" is what
+ * actually catches it.
  */
 ZTEST(api, test_a_tracked_channel_reposts_its_next_window_without_a_pump)
 {
@@ -1519,19 +1287,13 @@ ZTEST(api, test_a_tracked_channel_reposts_its_next_window_without_a_pump)
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
 		      "setup: the channel did not acquire");
 
-	/*
-	 * One pump, so the FIRST tracked window is posted and armed - that one
-	 * legitimately comes from the pump, because nothing has completed yet.
-	 * The question this test asks is about its successor.
-	 */
+	/* One pump for the FIRST tracked window, which legitimately comes
+	 * from the pump since nothing has completed yet. The test is about
+	 * its successor. */
 	run_housekeeping();
 
-	/*
-	 * Now run that window to completion and stop. drain() delivers queued
-	 * host messages; it deliberately does NOT sleep, so the event thread's
-	 * housekeeping pump has not run again. Anything pending on this channel
-	 * now was put there by the completion itself.
-	 */
+	/* Run that window to completion and stop; drain() doesn't sleep, so
+	 * anything pending now was put there by the completion itself. */
 	{
 		const struct fake_radio_arm *tw = last_arm_of(FAKE_RADIO_ARM_RX);
 
@@ -1585,23 +1347,16 @@ ZTEST(api, test_a_master_tx_only_channel_opens_no_turnaround)
  */
 
 /*
- * A DENIED MASTER TRANSMIT MUST NOT WEDGE THE DONGLE.
- *
- * This reproduces the failure at radiant_channel.c's "A MASTER ADVANCES ITS
- * SLOT AND NOTHING ELSE" comment, from a new direction. A master's t_next only
- * advances on a completed transmit; a slot that never went out used to leave it
- * in the past, and then: the pump re-posts that dead instant, the scheduler
- * refuses an unreachable instant without ever calling the backend, the refusal
- * completes synchronously, the completion signals the event thread, and the
- * event thread posts the same dead instant again. No fault, no log line, no
- * host response - the dongle simply stops while looking perfectly alive. One
- * missed transmit was enough.
- *
- * Under an arbiter that is no longer a rare event: a denied transmit is what
- * happens whenever the other stack is on the air at the wrong moment. The
- * branch that saves it keys on slot_kind and !slot_heard rather than on the
- * done reason, so it already covers DENIED - which is correct by construction
- * rather than by design, and is therefore asserted here rather than assumed.
+ * A denied master transmit must not wedge the dongle. Reproduces the
+ * failure at radiant_channel.c's "a master advances its slot and nothing
+ * else": a master's t_next only advances on a completed transmit, so a slot
+ * that never went out used to leave it stuck in the past - pump re-posts the
+ * dead instant, scheduler refuses it without calling the backend, refusal
+ * completes synchronously, event thread posts the same dead instant again.
+ * No fault, no log, the dongle just stops. Under an arbiter, denials are
+ * routine (whenever the other stack is on air at the wrong moment); the
+ * saving branch keys on slot_kind/!slot_heard rather than the done reason,
+ * so DENIED is covered by construction - asserted here rather than assumed.
  */
 ZTEST(api, test_a_denied_master_transmit_does_not_wedge)
 {
@@ -1618,24 +1373,18 @@ ZTEST(api, test_a_denied_master_transmit_does_not_wedge)
 	tx_ok_before = fake_radio_stats()->arms_tx;
 	zassert_true(tx_ok_before > 0u, "setup: nothing was ever transmitted");
 
-	/*
-	 * Now the arbiter takes the next several slots. force_arm_repeat covers
-	 * the synchronous refusal, which is the harder of the two: it completes
-	 * inside the very pass that posted the request, which is the loop's
-	 * entry point.
-	 */
+	/* Now the arbiter takes the next several slots. force_arm_repeat
+	 * covers the synchronous refusal - the harder case, completing inside
+	 * the very pass that posted the request. */
 	arms_at_denial = fake_radio_arm_count();
 	fake_radio_force_arm_repeat(RADIANT_RADIO_EDENIED, 3u);
 	host_writes_broadcast();
 	run_virtual_us(4u * (uint64_t)PERIOD_US);
 	drain();
 
-	/*
-	 * The wedge signature is unbounded arm attempts inside one period. A
-	 * healthy dongle makes a handful; the hot loop made thousands and never
-	 * returned. The bound is deliberately loose - this is a liveness
-	 * assertion, not a scheduling one.
-	 */
+	/* The wedge signature is unbounded arm attempts inside one period - a
+	 * healthy dongle makes a handful, the hot loop made thousands. Bound
+	 * is deliberately loose: a liveness assertion, not a scheduling one. */
 	zassert_true(fake_radio_arm_count() - arms_at_denial < 200u,
 		     "%u arm attempts in four periods: the post -> refuse -> "
 		     "complete -> post loop is back",
@@ -1646,8 +1395,8 @@ ZTEST(api, test_a_denied_master_transmit_does_not_wedge)
 	zassert_equal(0u, radiant_api_stats_get()->slots_missed,
 		     "a denied master transmit was charged to the miss counter");
 
-	/* And the clock moved: the channel is still due to transmit, in the
-	 * future, rather than pinned at an instant that has gone. */
+	/* The channel is still due to transmit in the future, not pinned to a
+	 * past instant. */
 	later = radiant_channel_next_slot(CH);
 	zassert_not_equal(RADIANT_TIME_NEVER, later, "the master left the air");
 	zassert_true(later > first,
@@ -1663,31 +1412,21 @@ ZTEST(api, test_a_denied_master_transmit_does_not_wedge)
 }
 
 /*
- * A DENIED TRACKED WINDOW IS INVISIBLE TO THE HOST.
- *
- * EVENT_RX_FAIL is a statement about the sensor: "the window ran and nothing
- * was there". A denial is a statement about us, and a host that acts on it acts
- * wrongly - Zwift tears down and rebuilds a channel that was never in trouble.
- * Twelve denials in a row is half again what RX_FAIL_TO_SEARCH allows in
- * misses, so a build that folded the two together would also have dropped the
- * channel to SEARCHING by the end of this test and raised
- * RX_FAIL_GO_TO_SEARCH, which is visible on the wire.
+ * A denied tracked window is invisible to the host. EVENT_RX_FAIL says "the
+ * window ran and nothing was there"; a denial says "us", and a host acting
+ * on it acts wrongly (Zwift tears down a channel that was never in
+ * trouble). Twelve denials in a row is 1.5x what RX_FAIL_TO_SEARCH allows in
+ * misses, so folding the two together would visibly drop the channel to
+ * SEARCHING.
  */
 /*
- * THE CONTROL, AND IT IS NOT OPTIONAL.
- *
- * The test below asserts that a run of denials adds no missed slot and no
- * RX_FAIL. That assertion is only meaningful if a run of ORDINARY empty windows
- * over the same span adds one - or rather, if whatever it adds is the same. A
- * tracked channel hearing nothing for twelve periods legitimately misses twelve
- * slots and legitimately tells the host so; the claim is about denials being
- * different, not about the number being zero in the abstract.
- *
- * Written as its own test rather than as a setup step because it is the thing
- * that would have stopped an afternoon: the first version of the denial test
- * asserted an absolute zero, failed on a single miss, and three plausible
- * mechanisms were "fixed" before anyone asked whether the same miss appeared
- * with no denial anywhere in the picture.
+ * The control, and not optional: "denials add no missed slot" is only
+ * meaningful if ordinary empty windows over the same span add the same
+ * amount - a quiet tracked channel legitimately misses slots regardless.
+ * The claim is that denials are no different, not that the count is zero.
+ * (Written as its own test because the original version asserted an
+ * absolute zero, failed on an unrelated miss, and cost an afternoon of
+ * chasing the wrong mechanisms before anyone compared against no-denial.)
  */
 static uint32_t api_tracked_quiet_run(bool deny)
 {
@@ -1735,12 +1474,8 @@ ZTEST(api, test_a_quiet_tracked_channel_misses_the_same_either_way)
 	memset(msglog, 0, sizeof(msglog));
 	n_msg = 0u;
 
-	/*
-	 * The number itself is not the assertion - it is whatever twelve
-	 * periods of virtual time and this harness's pump cadence produce. The
-	 * assertion is that DENYING every one of those windows does not add to
-	 * it, which is the whole claim: a denial is not a miss.
-	 */
+	/* The number itself isn't the assertion; that denying every window
+	 * doesn't add to it is - a denial is not a miss. */
 	zassert_equal(quiet, api_tracked_quiet_run(true),
 		      "denying every window changed how many slots were missed "
 		      "(%u quiet). A denial must be invisible to the miss "
@@ -1781,26 +1516,10 @@ ZTEST(api, test_a_denied_tracked_window_is_not_reported_as_an_rx_failure)
 	run_virtual_us(12u * (uint64_t)PERIOD_US);
 	drain();
 
-	/*
-	 * THE MISS AND RX_FAIL COUNTS ARE ASSERTED BY THE CONTROL TEST ABOVE,
-	 * NOT HERE, AND THE REASON IS WORTH RECORDING.
-	 *
-	 * The first version of this test asserted an absolute zero of both. It
-	 * failed on exactly one miss and one RX_FAIL, and three plausible
-	 * mechanisms were found and "fixed" before the obvious question was
-	 * asked: does the same miss appear with no denial at all? It does. A
-	 * quiet tracked channel over twelve periods of this harness's virtual
-	 * time misses one slot and says so, denials or not - which is correct
-	 * behaviour, because the sensor really was silent.
-	 *
-	 * So the claim is a DELTA and belongs where two runs can be compared,
-	 * which is test_a_quiet_tracked_channel_misses_the_same_either_way. What
-	 * is left here is what only this test can see: that the denial reached
-	 * the API layer at all, and that none of the state which is
-	 * unambiguously about the SENSOR moved because of it.
-	 */
-
-
+	/* Miss/RX_FAIL counts are asserted by the control test above, not
+	 * here, as a delta (a quiet channel legitimately misses one slot
+	 * regardless of denials). What's left here is that the denial reached
+	 * the API layer and that sensor-state stayed put. */
 	zassert_true(radiant_api_stats_get()->sched_denied > 0u,
 		     "no denial ever reached the API layer, so this test proved "
 		     "nothing");
@@ -1817,16 +1536,12 @@ ZTEST(api, test_a_denied_tracked_window_is_not_reported_as_an_rx_failure)
 }
 
 /*
- * Acknowledged data is reported as acknowledged data, exchange after exchange -
- * and a truncated inbound burst does not turn every later one into a burst.
- *
- * in_pkts is only cleared on a packet carrying LAST, so an inbound multi-packet
- * burst whose final packet is missed left it non-zero for ever, and every later
- * acknowledged message on that channel was reported to the host as
- * MESG_BURST_DATA with a sequence number counted from a burst that ended
- * minutes earlier. Nothing different went on the air; it was a host-facing lie,
- * which is worse rather than better. The abandoned-burst watchdog is what
- * clears it now.
+ * Acknowledged data stays reported as acknowledged data, and a truncated
+ * inbound burst doesn't turn every later exchange into a burst. in_pkts is
+ * only cleared on a packet carrying LAST, so a burst whose final packet is
+ * missed used to leave it non-zero forever, misreporting every later
+ * message as MESG_BURST_DATA - a host-facing lie. The abandoned-burst
+ * watchdog now clears it.
  */
 ZTEST(api, test_the_second_acknowledged_data_is_reported_as_acknowledged_data)
 {
@@ -1856,8 +1571,8 @@ ZTEST(api, test_the_second_acknowledged_data_is_reported_as_acknowledged_data)
 		      "something else");
 	zassert_equal(0u, count_msgs((uint8_t)ANTW_MESG_BURST_DATA_ID));
 
-	/* Now a burst that stops after its first packet: 0x82 is not LAST, so
-	 * in_pkts goes to one and nothing on the air will ever clear it. */
+	/* A burst that stops after its first packet: 0x82 isn't LAST, so
+	 * in_pkts goes to one and nothing on the air clears it. */
 	host_writes_broadcast();
 	t_tx = run_one_master_slot();
 	(void)build_peer_frame(frame, RADIANT_CTRL_BURST_SEQ0, peer_payload);

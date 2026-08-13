@@ -2,39 +2,21 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * P7 - the Matter plane's endpoint model and type map.
- * docs/radiant-bridge.md section 8.1, transcribed rather than redesigned.
+ * docs/radiant-bridge.md section 8.1.
  *
- * ---------------------------------------------------------------------------
- * WHAT THIS IS, AND WHAT IT DELIBERATELY IS NOT
- * ---------------------------------------------------------------------------
+ * This is the data model: the table keyed on the section 7 vocabulary type,
+ * unit conversion into each cluster's unit, and the rule that instantiates
+ * one endpoint per announced field. It's a `radiant_sink` like any other -
+ * samples via P5's bus, bindings via P6's `binding_changed`.
  *
- * This is the DATA MODEL: the table keyed on the section 7 vocabulary type, the
- * unit conversion into each cluster's unit, and the rule that instantiates one
- * endpoint per announced field. It is a `radiant_sink` like any other, so it
- * reaches the samples through P5's bus and learns about bindings through P6's
- * `binding_changed` - no new seam, and no switch statement per profile.
+ * Not the Matter stack: no CHIP, commissioning, fabric or QR code here.
+ * `radiant_matter_attr_write()` is the seam a real stack plugs into; tests
+ * drive it directly.
  *
- * It is NOT the Matter stack. There is no CHIP, no commissioning, no fabric and
- * no QR code here, and the reason is not that they are hard: it is that
- * section 8.1's content - which field becomes which cluster, and what the
- * number is once it gets there - is completely independent of them, and is the
- * part that can be wrong in ways a demo would hide. `matter_attr_write()` below
- * is the seam a real stack plugs into. The tests drive it directly.
- *
- * ---------------------------------------------------------------------------
- * THE ONE ROW THAT IS NOT THERE
- * ---------------------------------------------------------------------------
- *
- * `0x26` heart rate has NO ROW, and that is section 8.1's own table saying
- * "none, and section 1 is the whole reason". Matter has no heart-rate cluster;
- * the two candidates are a deliberately mislabelled Flow Measurement (section
- * 8.3b) and an MEI cluster nothing else understands (section 8.3), and both are
- * explicitly outside tier 1. A missing row is NOT an error - section 8.1 again:
- * "A type with no row is not an error - it is a field the Matter plane declines
- * and the MQTT plane carries."
- *
- * So `radiant_matter_row()` returning NULL is a normal, expected answer, and a
- * caller that treats it as a failure has misread the design.
+ * 0x26 heart rate has no row, on purpose (section 8.1): both Matter
+ * candidates - a mislabelled Flow Measurement (8.3b), or an MEI cluster most
+ * controllers won't understand (8.3) - are outside tier 1. So
+ * `radiant_matter_row()` returning NULL is a normal answer, not a failure.
  */
 
 #ifndef RADIANT_MATTER_H_
@@ -50,13 +32,10 @@ extern "C" {
 #endif
 
 /*
- * Section 8.1's struct, verbatim.
- *
- * mul/div/offset take a value in the vocabulary's CANONICAL SI unit and produce
- * the cluster's unit. Section 8.1a: "temperature is the only row with an
- * offset" - kelvin to 0.01 degrees Celsius is a scale AND a shift, `K x 100 -
- * 27315`, where every other row is a pure decimal scale. That asymmetry is the
- * reason `offset` exists at all, and the reason it is applied AFTER the scale.
+ * mul/div/offset take a value in the vocabulary's canonical SI unit and
+ * produce the cluster's unit, offset applied after the scale. Temperature
+ * (kelvin to 0.01degC, `K*100-27315`) is the only row needing a shift as
+ * well as a scale (section 8.1a); every other row is a pure decimal scale.
  */
 struct radiant_matter_type_map {
 	uint8_t  field_type;   /* the section 7 vocabulary */
@@ -68,9 +47,9 @@ struct radiant_matter_type_map {
 	int32_t  offset;
 };
 
-/* Matter cluster and device-type identifiers used by the table. Named rather
- * than left as bare hex in the rows, because a wrong constant here is invisible
- * until a controller shows the wrong icon. */
+/* Matter cluster and device-type identifiers, named rather than left as bare
+ * hex - a wrong constant here is invisible until a controller shows the
+ * wrong icon. */
 #define MATTER_DEVTYPE_OCCUPANCY_SENSOR   0x0107u
 #define MATTER_DEVTYPE_TEMPERATURE_SENSOR 0x0302u
 #define MATTER_DEVTYPE_HUMIDITY_SENSOR    0x0307u
@@ -84,38 +63,25 @@ struct radiant_matter_type_map {
 #define MATTER_ATTR_OCCUPANCY               0x0000u
 #define MATTER_ATTR_BAT_PERCENT_REMAINING   0x000Cu
 
-/*
- * The row for a vocabulary type, or NULL if the Matter plane declines it.
- * NULL is a normal answer - see the header comment.
- */
+/* The row for a vocabulary type, or NULL if the Matter plane declines it
+ * (a normal answer - see header comment). */
 const struct radiant_matter_type_map *radiant_matter_row(uint8_t field_type);
 
-/*
- * Convert a sample into its cluster's unit.
- *
- * Returns false when the type has no row, or when the arithmetic would not fit
- * the attribute - a saturating cast would put a plausible wrong number in front
- * of a user, which is worse than an absent one.
- */
+/* Converts a sample into its cluster's unit. Returns false when the type
+ * has no row or the arithmetic doesn't fit the attribute - a saturating
+ * cast would put a plausible wrong number in front of a user. */
 bool radiant_matter_convert(const struct radiant_sample *s, int64_t *out);
 
 /*
- * How many endpoints are currently instantiated, and what is on each.
- *
- * Section 8.1: "An endpoint is instantiated per announced field, not per
- * binding kind" - so a power meter binding instantiates one, a heart-rate
- * binding three, and the four derived booleans of section 6 are four INSTANCES
- * OF ONE ROW (all type 0x02, distinguished by field_id) rather than four cases
- * in a switch.
+ * How many endpoints are currently instantiated, and what is on each. An
+ * endpoint is instantiated per announced field, not per binding kind
+ * (section 8.1): the four derived booleans of section 6 (all type 0x02)
+ * are four instances of one row, distinguished by field_id.
  */
-/*
- * Section 8.1's worked example is "a household with one strap and one trainer
- * shows four entities", plus the section 8.1a temperature and humidity rows and
- * a battery row per binding. 16 is that with room, and it is a compile-time
- * constant rather than a Kconfig symbol because nothing else in src/bridge
- * carries configuration either. Overrunning it is a logged warning and a sensor
- * that does not appear - never a silent drop; see endpoint_get_or_add().
- */
+/* 16: room for section 8.1's worked example plus temperature/humidity/
+ * battery rows. Compile-time constant, not Kconfig, like the rest of
+ * src/bridge. Overrunning it logs a warning; the sensor just doesn't
+ * appear (see endpoint_get_or_add()) - never a silent drop. */
 #define RADIANT_MATTER_MAX_ENDPOINTS 16u
 
 struct radiant_matter_endpoint {
@@ -130,23 +96,14 @@ struct radiant_matter_endpoint {
 uint16_t radiant_matter_endpoint_count(void);
 const struct radiant_matter_endpoint *radiant_matter_endpoint_at(uint16_t i);
 
-/*
- * Find the endpoint carrying one (source, field_id), or NULL. Endpoint numbers
- * are ASSIGNED, not derived: section 8.1's earlier draft used "endpoint numbers
- * as fixed identities" and that is exactly the per-binding-kind hardcoding it
- * replaced.
- */
+/* Finds the endpoint carrying one (source, field_id), or NULL. Endpoint
+ * numbers are assigned, not derived from any fixed identity. */
 const struct radiant_matter_endpoint *radiant_matter_endpoint_for(uint32_t source,
 								  uint8_t field_id);
 
-/*
- * THE SEAM A REAL MATTER STACK PLUGS INTO.
- *
- * Weak, so the tests and a stack-free build get a no-op that still exercises
- * every line above it, and an image with CHIP in it overrides this with the
- * real attribute write. Deliberately narrow: an endpoint, a cluster, an
- * attribute and an integer is the entire vocabulary the type map produces.
- */
+/* The seam a real Matter stack plugs into. Weak, so tests and a stack-free
+ * build get a no-op that still exercises everything above it; an image with
+ * CHIP overrides this with the real attribute write. */
 void radiant_matter_attr_write(uint16_t endpoint_id, uint32_t cluster,
 			       uint32_t attribute, int64_t value);
 

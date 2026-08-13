@@ -2,39 +2,30 @@
 /*
  * profile_telemetry.c - device type 0x60, the RadiANT telemetry envelope.
  *
- * Provenance: docs/radiant-telemetry.md sections 3, 4, 5, 6, 7, 8, 9 and 11,
- * which is this project's own written specification of the envelope, authored
- * before any code existed. Frame layouts, flag assignments, the width-code
- * table, the class-0x30 accumulate rule and the "every reservation is
- * populated with zeros" rule all come from there. No adopter-gated ANT+ device
- * profile document was read for this file, no sdk-ant source was consulted,
- * and nothing here derives from libant.a. See
- * docs/decisions/0002-clean-room-policy.md.
+ * Provenance: docs/radiant-telemetry.md sections 3-9 and 11, this project's
+ * own written specification of the envelope, authored before any code
+ * existed. Frame layouts, flag assignments, the width-code table, the
+ * class-0x30 accumulate rule and the "every reservation is populated with
+ * zeros" rule all come from there. No ANT+ device profile
+ * document was read for this file, no sdk-ant source was consulted, and
+ * nothing here derives from libant.a. See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * The validation is the interesting part
- * ---------------------------------------------------------------------------
- * An encoder that emits whatever it was handed is half a specification. The
- * checks below are the other half, and each one exists because the failure it
- * prevents is silent on air:
- *
- *   - A CLASS-0x30 TYPE WITHOUT THE ACCUMULATE BIT decodes as a plausible
- *     instantaneous reading that resets to zero every wrap. Nobody notices for
- *     hours.
- *   - TWO FIELDS OVERLAPPING IN ONE PAGE produces two wrong numbers with a
- *     valid CRC, which is exactly the collision docs/profile-registry.md says
- *     "there is no error to catch".
- *   - A SPARSE NODE WITH heartbeat_s == 0 cannot be told apart from a dead
- *     one, and "no data" is the one reading a telemetry system must never
- *     produce silently (section 8).
- *   - A NON-SPARSE NODE WITH period == 0 asks a tracking receiver to predict a
- *     window from a period that does not exist.
- *   - THE OFF-57 BIT DISAGREEING WITH byte [6] leaves the receiver to choose
+ * The validation is the interesting part: an encoder that emits whatever it
+ * was handed is half a specification. Each check below exists because the
+ * failure it prevents is silent on air:
+ *   - a class-0x30 type without the accumulate bit decodes as a plausible
+ *     instantaneous reading that resets to zero every wrap;
+ *   - two fields overlapping in one page produces two wrong numbers with a
+ *     valid CRC;
+ *   - a sparse node with heartbeat_s == 0 can't be told apart from a dead one;
+ *   - a non-sparse node with period == 0 asks a tracking receiver to predict
+ *     a window from a period that doesn't exist;
+ *   - the off-57 bit disagreeing with byte [6] leaves the receiver to choose
  *     which of the node's two statements about its own frequency to believe.
  *
- * All five are refused at the encoder and rejected at the decoder. Rejecting
- * at both ends is not redundancy: the encoder protects the air from this node,
- * and the decoder protects this receiver from somebody else's.
+ * All five are refused at the encoder and rejected at the decoder: the
+ * encoder protects the air from this node, the decoder protects this
+ * receiver from somebody else's.
  */
 
 #include <errno.h>
@@ -82,8 +73,7 @@ uint16_t profile_desc_field_area_bits(const struct profile_descriptor *d)
 {
 	if (d != NULL && (d->flags & PROFILE_TLM_FLAG_X_AUTH) != 0u) {
 		/* Byte [7] is the spread-MAC tag byte; the field area is bits
-		 * 0..39. The descriptor's explicit bit offsets are what make
-		 * this a schema change rather than a format break. */
+		 * 0..39. */
 		return 40u;
 	}
 	return 48u;
@@ -94,7 +84,7 @@ uint16_t profile_desc_clock_ppm(const struct profile_descriptor *d)
 	if (d == NULL || !d->clock_stated) {
 		return 0u;
 	}
-	/* One ladder, and it is the sync-handoff page's. */
+	/* One ladder: the sync-handoff page's. */
 	return profile_handoff_clk_ppm(d->clock_accuracy);
 }
 
@@ -103,8 +93,8 @@ bool profile_desc_may_decode_data(const struct profile_descriptor *d)
 	if (d == NULL) {
 		return false;
 	}
-	/* v1 implements no transform at all, so ANY transform bit is one this
-	 * receiver does not implement. Fail closed. */
+	/* v1 implements no transform, so any transform bit is unimplemented.
+	 * Fail closed. */
 	return (d->flags & PROFILE_TLM_FLAG_TRANSFORM_MASK) == 0u;
 }
 
@@ -113,11 +103,9 @@ uint8_t profile_desc_frame_count(const struct profile_descriptor *d)
 	if (d == NULL) {
 		return 0u;
 	}
-	/* Two header frames, the schedule frame if the node sends one, then one
-	 * per field. The descriptor authentication frame is mandatory whenever a
-	 * transform bit is set and absent otherwise; v1 sets none, so it never
-	 * appears. A node that announces no schedule is 2 + n exactly as it was
-	 * before the block existed. */
+	/* Two header frames, the schedule frame if the node sends one, then
+	 * one per field. The authentication frame is mandatory when a
+	 * transform bit is set; v1 sets none, so it never appears. */
 	return (uint8_t)(2u + (d->has_schedule ? 1u : 0u) + d->n_fields);
 }
 
@@ -139,10 +127,9 @@ int profile_desc_data_pages(const struct profile_descriptor *d, uint8_t *pages,
 		return -EINVAL;
 	}
 
-	/* Ascending, by scanning the small legal range rather than sorting: 15
-	 * page numbers is fewer comparisons than a sort and the result is
-	 * deterministic, which is what makes a receiver's rotation prediction
-	 * and a test's expectation the same list. */
+	/* Ascending, by scanning the small legal range rather than sorting -
+	 * deterministic, so a receiver's rotation prediction and a test's
+	 * expectation are the same list. */
 	for (page = PROFILE_TLM_PAGE_DATA_FIRST;
 	     page <= PROFILE_TLM_PAGE_DATA_LAST; page++) {
 		uint8_t i;
@@ -191,14 +178,14 @@ static int check_field(const struct profile_descriptor *d, uint8_t index)
 		return -ERANGE;
 	}
 
-	/* Section 7: everything in class 0x30-0x3F MUST carry the accumulate
-	 * bit. That is what the class is for. */
+	/* Section 7: everything in class 0x30-0x3F must carry the accumulate
+	 * bit. */
 	if (profile_tlm_type_is_accumulating(f->type) && !f->accumulate) {
 		return -EINVAL;
 	}
 
-	/* No two fields may overlap, and no two may share an id: an id is the
-	 * envelope's topic name and a duplicate makes the schema ambiguous. */
+	/* No two fields may overlap or share an id - an id is the envelope's
+	 * topic name, and a duplicate makes the schema ambiguous. */
 	for (j = 0u; j < index; j++) {
 		const struct profile_field *g = &d->fields[j];
 		int gwidth = profile_bits_width(g->width_code);
@@ -231,16 +218,15 @@ static int check_descriptor(const struct profile_descriptor *d)
 		return -ENOTSUP;
 	}
 	if (d->n_fields > PROFILE_TLM_MAX_FIELDS) {
-		/* 15 is reserved for an extended descriptor, so a field count
-		 * that would encode as 15 is not merely too big - it names a
-		 * layout this version does not have. */
+		/* 15 is reserved for an extended descriptor - a count that
+		 * would encode as 15 names a layout this version doesn't have. */
 		return -EINVAL;
 	}
 	if (d->rf_index > PROFILE_TLM_RF_INDEX_MAX) {
 		return -EINVAL;
 	}
 	if ((d->flags & PROFILE_TLM_FLAG_RSVD_3) != 0u) {
-		/* Reserved-must-be-zero. Was X_PRIV; see the header. */
+		/* Reserved-must-be-zero; was X_PRIV, see the header. */
 		return -EINVAL;
 	}
 
@@ -267,45 +253,39 @@ static int check_descriptor(const struct profile_descriptor *d)
 		if (d->k_code != 0u) {
 			return -EINVAL;
 		}
-		/* Asynchronous - period 0x0000 - has no slot discipline at all
-		 * and requires a continuous-scan receiver. A periodic node
-		 * asking for it is asking a tracking receiver to predict a
-		 * window from a period that does not exist. */
+		/* Asynchronous (period 0x0000) has no slot discipline and
+		 * requires a continuous-scan receiver; a periodic node asking
+		 * for it is asking to predict a window that doesn't exist. */
 		if (d->period == 0u) {
 			return -EINVAL;
 		}
 	}
 
-	/* Section 11: every reservation is populated with zeros in v1. With no
-	 * transform enabled the MAC window is one of them. */
+	/* Section 11: every reservation is zero in v1. With no transform
+	 * enabled the MAC window is one of them. */
 	if ((d->flags & PROFILE_TLM_FLAG_X_AUTH) == 0u) {
 		if (d->w_code != PROFILE_TLM_W_CODE_RESERVED) {
 			return -EINVAL;
 		}
 	} else if (d->w_code == PROFILE_TLM_W_CODE_RESERVED ||
 		   d->w_code > PROFILE_TLM_W_CODE_8) {
-		/* W=1 is the reliable-command page's inline tag and is refused
-		 * on a data page. */
+		/* W=1 is the reliable-command page's inline tag, refused on a
+		 * data page. */
 		return -EINVAL;
 	}
 
-	/*
-	 * The schedule block. Both halves are checked only when they are
-	 * announced, and the struct is not consulted at all when it is not -
-	 * every caller in this tree zeroes a descriptor before filling it, and
-	 * a zeroed struct is a legal-looking announcement of 0 dBm rather than
-	 * silence. Refusing on the strength of bytes nobody meant to send would
-	 * break every existing caller to enforce a rule about a frame that is
-	 * not being transmitted.
-	 */
+	/* The schedule block: checked only when announced. Every caller here
+	 * zeroes a descriptor before filling it, and a zeroed struct is a
+	 * legal-looking announcement of 0 dBm, not silence - refusing on
+	 * bytes nobody meant to send would break every existing caller. */
 	if (d->clock_stated) {
 		if (d->clock_accuracy >= PROFILE_HANDOFF_CLK_COUNT) {
 			return -EINVAL;
 		}
 	} else if (d->clock_accuracy != 0u) {
 		/* A ladder code with nothing stating it goes on the air as
-		 * three zero bits, so the caller and the wire would disagree
-		 * about what this node announced. */
+		 * three zero bits: caller and wire would disagree about what
+		 * this node announced. */
 		return -EINVAL;
 	}
 
@@ -347,22 +327,15 @@ int profile_desc_encode(const struct profile_descriptor *d, uint8_t *frames,
 	}
 
 	/*
-	 * The set is refused rather than emitted when a transform is announced.
-	 *
-	 * CHECKED BEFORE THE REST OF THE VALIDATION, deliberately. X_AUTH
-	 * shrinks the field area from 48 bits to 40, so a schema that is
-	 * perfectly well formed today reports -ERANGE the moment the bit is
-	 * set - a true statement about the fields, and a completely misleading
-	 * answer to what was actually asked. The reason this build will not
-	 * emit the set has nothing to do with where the fields sit.
-	 * Section 6 makes the descriptor authentication frame MANDATORY
-	 * whenever any transform bit is set, and it exists for a reason worth
-	 * repeating: the descriptor carries the epoch, the window W, the
-	 * transform flags and every field's offset and scale, so an attacker
-	 * who forges one descriptor frame gets wrong readings out of correctly
-	 * authenticated packets. The tag verifies and the numbers are still a
-	 * lie. This build cannot produce that frame, so it does not get to
-	 * announce a transform.
+	 * The set is refused rather than emitted when a transform is
+	 * announced, and checked BEFORE the rest of validation: X_AUTH
+	 * shrinks the field area from 48 bits to 40, so a well-formed schema
+	 * would otherwise report a misleading -ERANGE unrelated to where the
+	 * fields actually sit. Section 6 makes the authentication frame
+	 * mandatory whenever a transform bit is set - without it, an attacker
+	 * who forges one descriptor frame gets wrong readings out of
+	 * correctly authenticated packets. This build cannot produce that
+	 * frame, so it does not get to announce a transform.
 	 */
 	if ((d->flags & PROFILE_TLM_FLAG_TRANSFORM_MASK) != 0u) {
 		return -ENOTSUP;
@@ -376,8 +349,8 @@ int profile_desc_encode(const struct profile_descriptor *d, uint8_t *frames,
 	count = profile_desc_frame_count(d);
 	base = (uint8_t)(count - d->n_fields); /* 2, or 3 with a schedule frame */
 	if (count > PROFILE_TLM_MAX_FRAMES) {
-		/* A schedule frame costs a field: 14 fields and a schedule
-		 * frame is 17 frames, and the index is a nibble. */
+		/* A schedule frame costs a field: 14 fields plus one is 17
+		 * frames, and the index is a nibble. */
 		return -EINVAL;
 	}
 	if (cap_frames < count) {
@@ -390,8 +363,7 @@ int profile_desc_encode(const struct profile_descriptor *d, uint8_t *frames,
 		f = &frames[(size_t)i * PROFILE_TLM_FRAME_LEN];
 		f[0] = PROFILE_TLM_PAGE_DESCRIPTOR;
 		/* Byte [1] is a FRAME INDEX, not a counter - one of the two
-		 * documented exceptions to the counter invariant of section 4,
-		 * and it never was a counter. */
+		 * documented exceptions to section 4's counter invariant. */
 		f[1] = (uint8_t)(((uint32_t)i << 4) | (uint32_t)(count - 1u));
 	}
 
@@ -405,16 +377,13 @@ int profile_desc_encode(const struct profile_descriptor *d, uint8_t *frames,
 	f[7] = d->flags;
 
 	/* Frame 1 - mode and the reserved security space. Four bytes of epoch
-	 * from the first shipped node, because a receiver with no real-time
-	 * clock has to get the epoch from somewhere and the only place it can
-	 * come from is a page a node already sends. Adding it later is a format
-	 * break for every deployed node. */
+	 * so a receiver with no real-time clock can get it from a page the
+	 * node already sends; adding it later would be a format break. */
 	f = &frames[PROFILE_TLM_FRAME_LEN];
 	f[2] = d->heartbeat_s;
-	/* Bits 3..0 are the informational-flag extension space, and the
-	 * schedule block's clock-accuracy nibble is what fills them. A node
-	 * that states nothing writes zeros there, which is what every node
-	 * built before the block existed writes. */
+	/* Bits 3..0 are the informational-flag extension space, filled by the
+	 * schedule block's clock-accuracy nibble. A node stating nothing
+	 * writes zeros, same as every node built before the block existed. */
 	f[3] = (uint8_t)(((uint32_t)d->w_code << 6) |
 			 ((uint32_t)d->k_code << 4) |
 			 profile_sched_clk_nibble(d->clock_accuracy,
@@ -431,10 +400,9 @@ int profile_desc_encode(const struct profile_descriptor *d, uint8_t *frames,
 					(d->flags & PROFILE_TLM_FLAG_LR_PHY) != 0u,
 					profile_desc_clock_ppm(d), &f[2]);
 		if (rc != 0) {
-			/* check_descriptor() ran the same validation above, so
-			 * this is unreachable rather than merely unlikely -
-			 * and it is checked anyway, because the alternative is
-			 * emitting whatever the packer left behind. */
+			/* Unreachable given the check above, but checked
+			 * anyway rather than emitting whatever the packer
+			 * left behind. */
 			return rc;
 		}
 	}
@@ -449,7 +417,7 @@ int profile_desc_encode(const struct profile_descriptor *d, uint8_t *frames,
 		f[4] = (uint8_t)((fd->accumulate ? 0x80u : 0u) |
 				 (fd->is_signed ? 0x40u : 0u) |
 				 ((uint32_t)fd->width_code << 2));
-		/* bits 1..0 reserved, must be 0 - and they are, because the
+		/* bits 1..0 reserved, must be 0 - and are, since the
 		 * expression above never sets them. */
 		f[5] = (uint8_t)fd->exponent;
 		f[6] = fd->page;
@@ -485,9 +453,9 @@ int profile_desc_decode(const uint8_t *frames, uint8_t n_frames,
 	 * that sent no block announced nothing. */
 	d.schedule = quiet;
 
-	/* Every frame must claim page 0x00 and must agree about the index and
-	 * the count. A set assembled from two different broadcasts is the one
-	 * way a receiver produces a schema nobody transmitted. */
+	/* Every frame must claim page 0x00 and agree on index and count - a
+	 * set assembled from two different broadcasts is the one way a
+	 * receiver produces a schema nobody transmitted. */
 	for (i = 0u; i < n_frames; i++) {
 		f = &frames[(size_t)i * PROFILE_TLM_FRAME_LEN];
 		if (f[0] != PROFILE_TLM_PAGE_DESCRIPTOR) {
@@ -510,28 +478,21 @@ int profile_desc_decode(const uint8_t *frames, uint8_t n_frames,
 	d.flags = f[7];
 
 	/* A receiver that does not implement the version MUST REJECT THE NODE
-	 * rather than guess, because the version governs the frame layout
-	 * itself - including the meaning of every byte read above. */
+	 * rather than guess: the version governs the frame layout, including
+	 * every byte read above. */
 	if (d.version != PROFILE_TLM_VERSION) {
 		return -ENOTSUP;
 	}
 	if (d.n_fields == 0x0Fu) {
 		/* Reserved for an extended descriptor this version has no
-		 * layout for. Not "no fields" - a different frame set. */
+		 * layout for - not "no fields", a different frame set. */
 		return -ENOTSUP;
 	}
 
-	/*
-	 * THE SHAPE OF THE SET, DERIVED RATHER THAN ANNOUNCED.
-	 *
-	 * Two header frames plus one per field is the set as it was; one extra
-	 * frame is the schedule frame at index 2. No presence bit was spent on
-	 * this, because the count byte and the field count already say it - and
-	 * a bit that could disagree with the arithmetic would be a way for a
-	 * node to describe a set it did not send. When the authentication frame
-	 * exists it is the transform bits that tell these two extras apart, and
-	 * this is where that lands.
-	 */
+	/* The shape of the set, derived rather than announced: two header
+	 * frames plus one per field, with one extra (the schedule frame) at
+	 * index 2. No presence bit was spent on this, since the count byte
+	 * and field count already say it. */
 	base = (uint8_t)(2u + d.n_fields);
 	if (n_frames == base) {
 		d.has_schedule = false;
@@ -547,15 +508,11 @@ int profile_desc_decode(const uint8_t *frames, uint8_t n_frames,
 	d.heartbeat_s = f[2];
 	d.w_code = (uint8_t)((f[3] >> 6) & 0x03u);
 	d.k_code = (uint8_t)((f[3] >> 4) & 0x03u);
-	/*
-	 * Bits 3..0 are the informational-flag extension space of section 6,
-	 * and the schedule block's clock-accuracy nibble is what fills them.
-	 * They are INFORMATIONAL: they describe the node, not the layout of
-	 * these bytes, so the fail-open half of the forward-compatibility rule
-	 * applies and a receiver that does not care about the clock ignores
-	 * them. A pre-block build refused any nonzero value here, which is
-	 * exactly the retrofit this space was reserved to avoid.
-	 */
+	/* Bits 3..0 are the informational-flag extension space of section 6,
+	 * filled by the schedule block's clock-accuracy nibble. Informational:
+	 * they describe the node, not the byte layout, so the fail-open half
+	 * of the forward-compatibility rule applies and a receiver that
+	 * doesn't care about the clock ignores them. */
 	d.clock_stated = (f[3] & PROFILE_SCHED_CLK_STATED) != 0u;
 	d.clock_accuracy = d.clock_stated
 				   ? (uint8_t)(f[3] & PROFILE_SCHED_CLK_MASK)
@@ -583,7 +540,7 @@ int profile_desc_decode(const uint8_t *frames, uint8_t n_frames,
 		fd->is_signed = (f[4] & 0x40u) != 0u;
 		fd->width_code = (uint8_t)((f[4] >> 2) & 0x0Fu);
 		if ((f[4] & 0x03u) != 0u) {
-			return -EPROTO; /* reserved, must be 0 */
+			return -EPROTO; /* bits 1..0 reserved, must be 0 */
 		}
 		fd->exponent = (int8_t)f[5];
 		fd->page = f[6];
@@ -642,7 +599,7 @@ int profile_desc_rx_feed(struct profile_desc_rx *rx, const uint8_t *body)
 	rx->frames_fed++;
 
 	if (rx->count != 0u && rx->count != count) {
-		/* The node changed the size of its set. Everything held is
+		/* The node changed the size of its set; everything held is
 		 * from the old one. */
 		rx_restart(rx, count);
 	}
@@ -652,11 +609,9 @@ int profile_desc_rx_feed(struct profile_desc_rx *rx, const uint8_t *body)
 		uint8_t schema_id = body[3];
 
 		if (rx->schema_id_seen && schema_id != rx->schema_id) {
-			/* This is what the schema id is FOR: a receiver
-			 * notices a change after reading a single frame
-			 * instead of the whole set. Anything already
-			 * assembled describes the previous schema and would
-			 * decode this node's pages at the wrong offsets. */
+			/* This is what the schema id is for: notice a change
+			 * after one frame instead of the whole set. Anything
+			 * already assembled describes the previous schema. */
 			rx_restart(rx, count);
 		}
 		rx->schema_id = schema_id;
@@ -728,9 +683,8 @@ int profile_data_encode(const struct profile_descriptor *d, uint8_t page,
 		return -EINVAL;
 	}
 
-	/* Zeroed first, so a byte the schema does not claim is zero rather
-	 * than whatever the last page left there. A later schema may claim it,
-	 * and a receiver mid-change would read the stale value as a number. */
+	/* Zeroed first, so a byte the schema doesn't claim is zero rather than
+	 * whatever the last page left there. */
 	memset(body, 0, PROFILE_TLM_FRAME_LEN);
 	body[0] = page;
 	body[1] = counter;
@@ -776,9 +730,9 @@ int profile_data_decode(const struct profile_descriptor *d, const uint8_t *body,
 		return -EINVAL;
 	}
 	if (!profile_desc_may_decode_data(d)) {
-		/* A transform bit this build does not implement. Loudly, not
-		 * silently: a receiver that returned zeros here would be
-		 * reporting plaintext-looking numbers off a ciphertext page. */
+		/* A transform bit this build doesn't implement. Loudly, not
+		 * silently - zeros here would look like plaintext off a
+		 * ciphertext page. */
 		return -EACCES;
 	}
 
@@ -839,8 +793,8 @@ int profile_command_encode(const struct profile_command *c, uint8_t *body)
 	body[3] = c->target;
 	body[4] = (uint8_t)(c->arg & 0xFFu);
 	body[5] = (uint8_t)((c->arg >> 8) & 0xFFu);
-	/* The trailing bytes are tag space. No RadiANT page may place an
-	 * authentication tag anywhere but at the end. */
+	/* Trailing bytes are tag space; no RadiANT page places a tag anywhere
+	 * but the end. */
 	body[6] = (uint8_t)(c->tag & 0xFFu);
 	body[7] = (uint8_t)((c->tag >> 8) & 0xFFu);
 	return 0;
@@ -895,12 +849,10 @@ int profile_command_ack_decode(const uint8_t *body, struct profile_command_ack *
 }
 
 /* ---------------------------------------------------------------------------
- * The same two pages at either tag width
- *
- * The six covered bytes are written by the pair above and then the tag is
- * appended, so there is exactly one statement of where the sequence number and
- * the argument live. A second copy of that layout for the long form is the
- * thing this file exists to not have.
+ * The same two pages at either tag width: the six covered bytes are written
+ * by the pair above, then the tag is appended, so there's one statement of
+ * where the sequence number and argument live rather than a second copy of
+ * the layout for the long form.
  * ---------------------------------------------------------------------------
  */
 
@@ -958,8 +910,8 @@ int profile_command_decode_tag(const uint8_t *body, uint8_t len,
 	out->target = body[3];
 	out->arg = (uint16_t)((uint16_t)body[4] | ((uint16_t)body[5] << 8));
 	memcpy(tag, &body[PROFILE_TLM_CMD_COVERED], tag_len);
-	/* The low 16 bits, so a caller at the standard width reads the struct
-	 * and a caller at the long width reads the bytes. */
+	/* The low 16 bits, so a standard-width caller reads the struct and a
+	 * long-width caller reads the bytes. */
 	out->tag = (uint16_t)((uint16_t)tag[0] | ((uint16_t)tag[1] << 8));
 	return (int)tag_len;
 }
@@ -1019,11 +971,10 @@ int profile_command_ack_decode_tag(const uint8_t *body, uint8_t len,
 /* ---------------------------------------------------------------------------
  * The descriptor-set collapse - ADR 0007
  *
- * Everything here is concatenation and division. That is the whole point: the
- * frames being packed are byte-for-byte the frames a 1 M node emits one at a
- * time, so there is no second encoding, no second wire format and no second
- * thing to get wrong. See the header for what the collapse buys and for the
- * arithmetic of how complete it actually is.
+ * Everything here is concatenation and division: the frames packed are
+ * byte-for-byte the frames a 1 M node emits one at a time, so there's no
+ * second encoding or wire format to get wrong. See the header for what the
+ * collapse buys and how complete it is.
  * ---------------------------------------------------------------------------
  */
 
@@ -1043,11 +994,10 @@ int profile_desc_long_count(const struct profile_descriptor *d,
 	}
 	per = profile_desc_frames_per_body(payload_max);
 	if (per == 0u) {
-		/* A payload that cannot hold one whole descriptor frame. There
-		 * is nothing to collapse into and no partial frame is emitted,
-		 * so this is a refusal rather than a fallback to 1 M - a
-		 * silent fallback would make a node's transmission shape depend
-		 * on a number nobody looked at. */
+		/* A payload that can't hold one whole descriptor frame:
+		 * refused rather than falling back to 1 M, since a silent
+		 * fallback would make transmission shape depend on a number
+		 * nobody looked at. */
 		return -EINVAL;
 	}
 
@@ -1073,37 +1023,28 @@ int profile_desc_long_check(const struct profile_descriptor *d,
 	}
 
 	/*
-	 * A COLLAPSED SET IS ONLY MEANINGFUL ON THE CODED PHY, and the
-	 * descriptor has to say so. The length extension is permitted exactly
-	 * where the PHY makes this node invisible to a stock receiver (ADR
-	 * 0007); a node claiming 1 M and emitting a 32-byte body would be
-	 * putting a frame on RF 57 in the ANT+ network address that no ANT
-	 * receiver can parse and every ANT receiver will try to. That is the
-	 * one thing this whole phase promises not to do, so it is refused here
-	 * rather than left to a caller to remember.
+	 * A collapsed set is only meaningful on the coded PHY, and the
+	 * descriptor has to say so: a node claiming 1 M and emitting a
+	 * 32-byte body would put a frame on RF 57 in the ANT+ network address
+	 * that no ANT receiver can parse and every ANT receiver will try to.
 	 */
 	if ((d->flags & PROFILE_TLM_FLAG_LR_PHY) == 0u) {
 		return -EINVAL;
 	}
 	if (!d->has_schedule) {
-		/* The LR bit and the coding rate must agree, and the rate lives
-		 * in the schedule block - so an LR node without one has
-		 * announced a PHY and no way to say how long its frames take.
-		 * profile_sched_check() enforces the same pairing from the
-		 * other side. */
+		/* The LR bit and coding rate must agree, and the rate lives in
+		 * the schedule block - an LR node without one has announced a
+		 * PHY with no way to say how long its frames take. */
 		return -EINVAL;
 	}
 
 	per = profile_desc_frames_per_body(payload_max);
 	count = profile_desc_frame_count(d);
 
-	/*
-	 * The LONGEST body this set will emit, which is a full one whenever
-	 * there is more than one transmission and the remainder otherwise.
-	 * Bounding on the longest rather than on the average is the only
-	 * defensible reading of a duty rule: the node has to be able to afford
-	 * every frame it sends, not its mean frame.
-	 */
+	/* The longest body this set will emit - a full one whenever there's
+	 * more than one transmission, the remainder otherwise. Bounding on
+	 * the longest rather than the average: a node must afford every
+	 * frame it sends, not its mean frame. */
 	longest = (count >= per) ? per : count;
 	longest = (uint8_t)(longest * PROFILE_TLM_FRAME_LEN);
 
@@ -1130,7 +1071,7 @@ int profile_desc_long_payload(const struct profile_descriptor *d,
 		return -EINVAL;
 	}
 	/* The caller's frame count and the descriptor's must agree, or the
-	 * bytes being packed are not this descriptor's set. */
+	 * bytes packed aren't this descriptor's set. */
 	if (n_frames != profile_desc_frame_count(d)) {
 		return -EINVAL;
 	}
@@ -1174,14 +1115,10 @@ int profile_desc_rx_feed_long(struct profile_desc_rx *rx, const uint8_t *payload
 	if (rx == NULL || payload == NULL) {
 		return -EINVAL;
 	}
-	/*
-	 * A WHOLE NUMBER OF FRAMES OR NOTHING. The packer never emits a partial
-	 * frame, so a payload that is not a multiple of eight did not come from
-	 * one - it is a different page, a truncated frame, or a length byte
-	 * that survived the CRC while being wrong. Feeding the first floor(n/8)
-	 * frames and discarding the tail would accept exactly the corrupted
-	 * cases while looking like robustness.
-	 */
+	/* A whole number of frames or nothing. The packer never emits a
+	 * partial frame, so a payload not a multiple of eight didn't come
+	 * from one - feeding the first floor(n/8) frames would accept
+	 * exactly the corrupted cases while looking like robustness. */
 	if (payload_len == 0u ||
 	    (payload_len % PROFILE_TLM_FRAME_LEN) != 0u) {
 		return -EPROTO;
@@ -1195,7 +1132,7 @@ int profile_desc_rx_feed_long(struct profile_desc_rx *rx, const uint8_t *payload
 		}
 	}
 
-	/* The last chunk's verdict is the set's verdict: feeding is ordered and
-	 * completeness is monotonic within one payload. */
+	/* The last chunk's verdict is the set's verdict: feeding is ordered
+	 * and completeness is monotonic within one payload. */
 	return rc;
 }

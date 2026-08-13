@@ -1,52 +1,39 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * test_profile_enrol.c - compat-C7's gate: a node gains a SECOND receiver
+ * test_profile_enrol.c - compat-C7's gate: a node gains a second receiver
  * without the first one noticing.
  *
- * ---------------------------------------------------------------------------
- * The load-bearing claim, and what this file can and cannot assert today
- * ---------------------------------------------------------------------------
- * The plan's sentence is: "a node in private mode gains a second receiver, the
- * first receiver's stream is uninterrupted across the whole window, and the new
- * receiver reaches the node by deriving the locator rather than by any
- * announcement."
+ * The plan's claim has three clauses: "a node in private mode gains a second
+ * receiver, the first receiver's stream is uninterrupted across the whole
+ * window, and the new receiver reaches the node by deriving the locator
+ * rather than by any announcement." Not all belong to this phase:
  *
- * Three clauses, and they do not all belong to this phase:
+ *   - Gains a second receiver: asserted here end to end, with the node's
+ *     public key read back off the air and the peer's answer arriving as
+ *     eight-byte acknowledged-data payloads.
+ *   - Uninterrupted across the whole window: asserted here over a full
+ *     60-second window of a real heart-rate stream - no silent slot, no
+ *     channel change, no page number outside the profile's own union, a
+ *     monotone event counter, and every Tier I window still verifying at the
+ *     receiver that was already there.
+ *   - In private mode, by deriving the locator: asserted since compat-C8, in
+ *     test_a_private_node_gains_a_receiver_that_derives_it, against a node
+ *     that is genuinely private and genuinely silent.
  *
- *   GAINS A SECOND RECEIVER              asserted here, end to end, with the
- *                                        node's public key read back OFF THE
- *                                        AIR and the peer's answer arriving as
- *                                        eight-byte acknowledged-data payloads
- *   UNINTERRUPTED ACROSS THE WHOLE       asserted here, over a full 60-second
- *   WINDOW                               window of a real heart-rate stream:
- *                                        no silent slot, no channel change, no
- *                                        page number outside the profile's own
- *                                        union, a monotone event counter and
- *                                        EVERY Tier I window still verifying at
- *                                        the receiver that was already there
- *   IN PRIVATE MODE, BY DERIVING THE     asserted here since compat-C8, in
- *   LOCATOR                              test_a_private_node_gains_a_receiver_
- *                                        that_derives_it, against a node that
- *                                        is genuinely private and genuinely
- *                                        silent
+ * The third clause was deferred by C7 rather than faked, because the locator
+ * is trunc16(CMAC(K_id, "priv" || epoch)) and K_id is reachable only from the
+ * layer holding the root key - deriving it here would mean inventing C8's
+ * entry point from outside. What C7 paid instead is the property that makes
+ * the third clause possible: enrolment does not depend on the `announce`
+ * setting, does not touch the beacon's locator fields, and needs no compat
+ * instance at all, so it works on whichever channel the node happens to be
+ * on. test_enrolment_needs_no_beacon_at_all is that assertion, and the C8
+ * test at the bottom of this file stands on it.
  *
- * The third clause was deferred by C7 rather than faked, and the reason was a
- * boundary rather than effort: the locator is trunc16(CMAC(K_id, "priv" ||
- * epoch)) and K_id is reachable only from the layer that holds the root key.
- * Deriving it from a test would have meant inventing C8's entry point from the
- * outside and then having C8 either adopt it or contradict it. What C7 owed and
- * paid instead was the property that makes the third clause POSSIBLE: enrolment
- * does not depend on the `announce` setting, does not read or write the
- * beacon's locator fields, and does not need a compat instance at all - so it
- * works on whichever channel the node happens to be on, including one that
- * phase could not yet build. test_enrolment_needs_no_beacon_at_all is that
- * assertion, and it is what the C8 test at the bottom of this file stands on.
- *
- * The other half of the deferral stands, recorded so it is a decision: on
- * device type 0x60 the enrolment frames would need a page number in the
- * telemetry envelope's own namespace, and allocating one is an envelope change.
- * That belongs with the phase that creates a reason for a node to be there.
- * C8's RETURN frames inherit exactly the same deferral, which is why the C8
+ * The other deferral: on device type 0x60 the enrolment frames need a page
+ * number in the telemetry envelope's own namespace, which is an envelope
+ * change that belongs with the phase that creates a reason for a node to be
+ * there. C8's RETURN frames inherit the same deferral, which is why the C8
  * test picks a page number locally rather than either module naming one.
  */
 
@@ -329,21 +316,19 @@ static void hr_cfg_fill(struct profile_hr_cfg *cfg)
 
 /*
  * Run the strap for `slots` messages, feeding every transmitted body to the
- * receiver that was already there. That second half is the point: the watcher
- * is a PINNED receiver, so a stream that lost its attestation reads UNVERIFIED
- * rather than falling back to clear and looking normal.
+ * receiver that was already there. The watcher is a pinned receiver, so a
+ * stream that lost its attestation reads UNVERIFIED rather than falling back
+ * to clear and looking normal.
  */
 static void run_hr(struct profile_hr *hr, uint32_t first_slot, uint32_t slots)
 {
 	uint64_t period = period_us(PROFILE_HR_PERIOD);
 	uint32_t i;
 
-	/*
-	 * `first_slot` rather than always starting at zero, so a test can run
-	 * the strap in several stretches without the clock going backwards
-	 * under the attestation counter - which would be a replay to the
-	 * receiver, and a test failure that meant nothing.
-	 */
+	/* `first_slot` rather than always zero, so a test can run the strap in
+	 * several stretches without the clock going backwards under the
+	 * attestation counter (a replay to the receiver, and a meaningless
+	 * test failure). */
 	log_reset();
 	profile_hr_set_computed(hr, 60u);
 
@@ -400,10 +385,9 @@ static void check_of(const uint8_t *pubkey, uint8_t *out4)
 	((uint8_t)(PROFILE_COMPAT_BEACON_FRAMES + PROFILE_ENROL_FRAMES))
 
 /*
- * Reassemble the node's public key from the LOGGED STREAM - which is the only
- * thing a new receiver has. Nothing is read out of the node's own state, so a
- * pass here means the key genuinely went on the air in frames a stranger can
- * find.
+ * Reassemble the node's public key from the logged stream - the only thing a
+ * new receiver has. Nothing is read from the node's own state, so a pass
+ * here means the key genuinely went on the air in frames a stranger can find.
  */
 static int pubkey_from_air(uint8_t *out36)
 {
@@ -502,13 +486,12 @@ ZTEST(profile_enrol, test_a_second_receiver_joins_and_the_first_stream_holds)
 	uint8_t                  k;
 
 	/*
-	 * THE WHOLE OF LAYER D IN ONE TEST.
-	 *
-	 * A strap that is already running, with a keyholder already listening
-	 * and verifying. The owner presses the button. Sixty seconds later the
-	 * strap has a second keyholder, and the first one saw a capability bit
-	 * go up and back down and nothing else: no channel change, no re-key,
-	 * no epoch move, no silent slot and no unverified window.
+	 * The whole of Layer D in one test: a strap already running, with a
+	 * keyholder already listening and verifying. The owner presses the
+	 * button. Sixty seconds later the strap has a second keyholder, and
+	 * the first one saw a capability bit go up and back down and nothing
+	 * else - no channel change, no re-key, no epoch move, no silent slot
+	 * and no unverified window.
 	 */
 	give_id(NODE_CH, NODE_DEVNUM);
 	give_id(PEER_CH, PEER_DEVNUM);
@@ -590,12 +573,10 @@ ZTEST(profile_enrol, test_a_second_receiver_joins_and_the_first_stream_holds)
 
 	/* ── AND THE FIRST RECEIVER'S STREAM WAS UNINTERRUPTED ──────────── */
 
-	/*
-	 * Not "mostly". Every Tier I window across the whole run verified at
-	 * the receiver that was already there, and none failed. A node that had
-	 * re-keyed, moved its epoch, changed its device number or dropped its
-	 * channel would fail this line first.
-	 */
+	/* Not "mostly": every Tier I window across the whole run verified at
+	 * the receiver that was already there, and none failed. A node that
+	 * had re-keyed, moved its epoch, changed devnum or dropped its channel
+	 * would fail this line first. */
 	tier1 = count_page(PROFILE_COMPAT_PAGE_ATTEST_I);
 	radiant_sec_compat_get_stats(WATCHER_CH, &st);
 	zassert_equal(tier1, st.tier1_verified,
@@ -632,14 +613,10 @@ ZTEST(profile_enrol, test_a_second_receiver_joins_and_the_first_stream_holds)
 			data_pages++;
 		}
 	}
-	/*
-	 * The enrolment frames DO cost data slots, and the honest assertion is
-	 * that the cost is bounded rather than absent. The promoted beacon rate
-	 * is one message in eight, so at worst 7/8 of the run stays the
-	 * sensor's own pages once the common-page pair and the Tier I interval
-	 * are taken out. Below 3/4 would mean the window had displaced more
-	 * than it is allowed to.
-	 */
+	/* Enrolment frames do cost data slots; the honest claim is that the
+	 * cost is bounded, not absent. The promoted beacon rate is one message
+	 * in eight, so at worst 7/8 of the run stays the sensor's own pages.
+	 * Below 3/4 would mean the window displaced more than it's allowed. */
 	zassert_true(data_pages * 4u >= SLOTS * 3u,
 		     "only %u of %u slots carried heart-rate data during the "
 		     "window; the promotion displaced more than 1 in 8",
@@ -659,11 +636,9 @@ ZTEST(profile_enrol, test_the_open_window_is_visible_to_existing_keyholders)
 	uint32_t              seen_shut = 0u;
 	uint32_t              seen_count8 = 0u;
 
-	/*
-	 * An enrolment the owner did not perform is the whole attack, so making
-	 * it silent would be the mistake. The bit is in the beacon and every
-	 * keyholder already reads the beacon.
-	 */
+	/* An enrolment the owner did not perform is the whole attack, so making
+	 * it silent would be the mistake - the bit is in the beacon, which
+	 * every keyholder already reads. */
 	give_id(NODE_CH, NODE_DEVNUM);
 	keys_up(PROFILE_HR_PERIOD);
 	hr_cfg_fill(&hcfg);
@@ -760,12 +735,10 @@ ZTEST(profile_enrol, test_closed_refuses_both_ways_in)
 {
 	struct profile_enrol pe;
 
-	/*
-	 * `closed` means no over-air enrolment EVER. Not "unless somebody holds
-	 * the button", not "unless a keyholder asks". It is the posture
-	 * radiant_sec.h already recommends for anything that matters and
-	 * nothing in Layer D weakens it.
-	 */
+	/* `closed` means no over-air enrolment ever - not "unless somebody
+	 * holds the button", not "unless a keyholder asks". It's the posture
+	 * radiant_sec.h recommends for anything that matters, and nothing in
+	 * Layer D weakens it. */
 	give_id(NODE_CH, NODE_DEVNUM);
 	enrol_up(&pe, PROFILE_ENROL_CLOSED, node_scalar);
 
@@ -820,11 +793,9 @@ ZTEST(profile_enrol, test_a_physical_node_refuses_a_keyholder_command)
 {
 	struct profile_enrol pe;
 
-	/*
-	 * `physical` is not a superset of `open-window`. A node whose owner
-	 * chose "only a button opens this" must not have a second door that a
-	 * keyholder - or anything that can forge a command - can walk through.
-	 */
+	/* `physical` is not a superset of `open-window`: a node whose owner
+	 * chose "only a button opens this" must not have a second door a
+	 * keyholder, or a forged command, can walk through. */
 	give_id(NODE_CH, NODE_DEVNUM);
 	enrol_up(&pe, PROFILE_ENROL_PHYSICAL, node_scalar);
 
@@ -891,13 +862,10 @@ ZTEST(profile_enrol, test_a_set_spliced_from_two_windows_is_refused)
 	uint8_t              set_b[PROFILE_ENROL_FRAMES][8];
 	uint8_t              k;
 
-	/*
-	 * The failure the framing convention cannot catch on its own. Byte [1]
-	 * says WHICH FRAME this is and never WHICH KEY it belongs to, so a
-	 * receiver that joined as one peer's window closed and another opened
-	 * would otherwise splice two halves into a key neither end holds and
-	 * derive a shared secret that is simply wrong, with no error anywhere.
-	 */
+	/* The failure the framing convention cannot catch on its own: byte [1]
+	 * says which frame this is, never which key it belongs to, so a
+	 * receiver joining as one window closes and another opens could splice
+	 * two halves into a key neither end holds, with no error anywhere. */
 	give_id(NODE_CH, NODE_DEVNUM);
 	give_id(PEER_CH, PEER_DEVNUM);
 	enrol_up(&pe, PROFILE_ENROL_PHYSICAL, node_scalar);
@@ -942,16 +910,12 @@ ZTEST(profile_enrol, test_an_injected_bad_key_does_not_burn_the_window)
 	struct radiant_sec_stats sstats;
 	uint8_t              k;
 
-	/*
-	 * A small-order point makes the shared secret all zeros whatever our
-	 * scalar was, and refusing it is MANDATORY here rather than optional:
-	 * the result becomes a root key, so accepting it would let anyone able
-	 * to inject one packet fix the group key to a value they already know.
-	 *
-	 * And refusing it must not cost the window. One injected packet that
-	 * ends a window the user opened is a denial of service with a one-frame
-	 * price tag.
-	 */
+	/* A small-order point makes the shared secret all zeros regardless of
+	 * our scalar; refusing it is mandatory, since the result becomes a
+	 * root key and accepting it would let anyone inject one packet to fix
+	 * the group key to a known value. Refusing must not cost the window -
+	 * one injected packet ending a user-opened window is a denial of
+	 * service with a one-frame price tag. */
 	give_id(NODE_CH, NODE_DEVNUM);
 	give_id(PEER_CH, PEER_DEVNUM);
 	enrol_up(&pe, PROFILE_ENROL_PHYSICAL, node_scalar);
@@ -1047,14 +1011,12 @@ ZTEST(profile_enrol, test_enrolment_needs_no_beacon_at_all)
 	uint8_t              k;
 
 	/*
-	 * RULE ONE OF SECTION 11.7, AS AN API PROPERTY: the window opens on
-	 * whichever channel the node is currently on.
-	 *
-	 * This instance has no compat client, no beacon, no page number and no
-	 * locator - it is the shape a node in private mode would use, and it is
-	 * the hook C8 wires into. Nothing here reads or writes the beacon's
-	 * locator fields or asks what `announce` is set to, which is why
-	 * enrolment does not depend on that setting at all.
+	 * Section 11.7 rule one, as an API property: the window opens on
+	 * whichever channel the node is currently on. This instance has no
+	 * compat client, no beacon, no page number and no locator - the shape
+	 * a node in private mode would use, and the hook C8 wires into. Nothing
+	 * here reads or writes the beacon's locator fields or checks
+	 * `announce`, which is why enrolment doesn't depend on that setting.
 	 */
 	give_id(NODE_CH, NODE_DEVNUM);
 	give_id(PEER_CH, PEER_DEVNUM);
@@ -1088,14 +1050,12 @@ ZTEST(profile_enrol, test_the_hostless_seam_advances_the_counter_first)
 	uint32_t                 second = 0u;
 
 	/*
-	 * The seam wired to what a strap actually runs (ADR 0009), so that the
-	 * one rule most likely to be implemented backwards is exercised through
-	 * Layer D rather than only in node_ident's own suite: pair_counter
-	 * advances and is DURABLY WRITTEN before the derived public key leaves
-	 * the radio, never on completion. An abandoned window never completes,
-	 * windows are abandoned all the time, and advance-on-completion would
-	 * therefore reuse the scalar on the very next attempt - a repeated
-	 * private key and an invariant 32-byte name on the air.
+	 * The seam wired to what a strap actually runs (ADR 0009), exercising
+	 * through Layer D the rule most likely to be implemented backwards:
+	 * pair_counter advances and is durably written before the derived
+	 * public key leaves the radio, never on completion. Windows are
+	 * abandoned all the time, so advance-on-completion would reuse the
+	 * scalar on the next attempt - a repeated private key on the air.
 	 */
 	fake_nvm_wipe();
 	node_ident_reset();
@@ -1161,22 +1121,19 @@ ZTEST(profile_enrol, test_init_refuses_a_configuration_that_cannot_work)
 #if defined(CONFIG_RADIANT_SEC_COMPAT)
 
 /*
- * "A NODE IN PRIVATE MODE GAINS A SECOND RECEIVER, the first receiver's stream
- * is uninterrupted across the whole window, and the new receiver reaches the
- * node by deriving the locator rather than by any announcement."
+ * "A node in private mode gains a second receiver, the first receiver's
+ * stream is uninterrupted across the whole window, and the new receiver
+ * reaches the node by deriving the locator rather than by any announcement."
  *
- * The first two clauses were asserted when this file was written. The third was
- * deferred, and the reason was a boundary rather than effort: the locator is
- * trunc16(CMAC(K_id, "priv" || epoch)) and K_id is reachable only from the layer
- * that holds the root key, so deriving it from a test would have meant inventing
- * C8's entry point from the outside and then having C8 either adopt it or
- * contradict it. C8 has landed, the entry point is
- * radiant_sec_compat_locator(), and this is the deferral paid.
+ * The first two clauses were asserted when this file was written. The third
+ * was deferred because the locator is trunc16(CMAC(K_id, "priv" || epoch))
+ * and K_id is reachable only from the layer holding the root key. C8 has
+ * landed with the entry point radiant_sec_compat_locator(), and this test
+ * pays that deferral.
  *
- * The node here is `physical` + `silent`, which makes the third clause
- * unambiguous rather than merely true: there is no announcement anywhere on the
- * air to have reached the new receiver, so derivation is the only thing that
- * can have.
+ * The node here is `physical` + `silent`, so no announcement anywhere on the
+ * air could have reached the new receiver - derivation is the only thing
+ * that can have.
  */
 
 #define PRIVATE_DEVICE_TYPE 0x60u
@@ -1263,13 +1220,11 @@ ZTEST(profile_enrol, test_a_private_node_gains_a_receiver_that_derives_it)
 
 		memset(body, 0, sizeof(body));
 
-		/*
-		 * A device type 0x60 master's own rotation, driving the two
-		 * client entry points directly - which is exactly what
-		 * profile_enrol.h says a node with no beacon page does. The
-		 * page number for these frames on 0x60 is still deferred; this
-		 * loop picks one so there is a stream to assert about.
-		 */
+		/* A device type 0x60 master's own rotation, driving the two
+		 * client entry points directly - what profile_enrol.h says a
+		 * node with no beacon page does. The page number for these
+		 * frames on 0x60 is still deferred; this loop picks one so
+		 * there is a stream to assert about. */
 		if ((i % 8u) == 0u &&
 		    profile_enrol_frame_count(&pe, now) == PROFILE_ENROL_FRAMES) {
 			body[0] = 0x40u;
@@ -1283,8 +1238,8 @@ ZTEST(profile_enrol, test_a_private_node_gains_a_receiver_that_derives_it)
 		}
 		if (!is_frame) {
 			/* An ordinary telemetry data page with a monotone
-			 * counter: this is the FIRST RECEIVER'S STREAM and the
-			 * whole claim is that nothing here stops. */
+			 * counter: this is the first receiver's stream, and
+			 * the whole claim is that nothing here stops. */
 			body[0] = 0x01u;
 			body[1] = (uint8_t)(data_msgs & 0xFFu);
 			data_msgs++;
@@ -1338,14 +1293,11 @@ ZTEST(profile_enrol, test_a_private_node_gains_a_receiver_that_derives_it)
 	for (i = 0u; i < log_n && i < SLOTS; i++) {
 		const uint8_t *b = log_buf[i].body;
 
-		/*
-		 * No beacon page at all, therefore no announcement frame, no
-		 * locator field and no pending-switch bit - there is no beacon
-		 * on device type 0x60 to carry any of them, and a silent node
-		 * would not have set them if there were. The new receiver's
-		 * derivation below is therefore the ONLY thing that can have
-		 * told it where the node is.
-		 */
+		/* No beacon page, so no announcement frame, locator field or
+		 * pending-switch bit - device type 0x60 has no beacon to carry
+		 * any of them, and a silent node wouldn't set them if it did.
+		 * The new receiver's derivation below is the only thing that
+		 * can have told it where the node is. */
 		zassert_not_equal(PROFILE_COMPAT_PAGE_BEACON,
 				  (uint8_t)(b[0] & PROFILE_COMPAT_PAGE_MASK),
 				  "a beacon page appeared on a private node");
@@ -1373,11 +1325,9 @@ ZTEST(profile_enrol, test_a_private_node_gains_a_receiver_that_derives_it)
 	 * A completed enrolment is exactly "this receiver now holds the group
 	 * root", so its compat context is keyed with that root - the same
 	 * operation a host-provisioned receiver performs, and the reason
-	 * enrolment is additive at all.
-	 *
-	 * From there it computes where the node is with no announcement to have
-	 * missed, no beacon to read and nothing on the air above that says
-	 * anything about it. THAT is the clause this test was written to pay.
+	 * enrolment is additive at all. From there it computes where the node
+	 * is with no announcement to have missed and no beacon to read - the
+	 * clause this test was written to pay.
 	 */
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_compat_set_key(PEER_CH, compat_root, 128,
@@ -1400,11 +1350,11 @@ ZTEST(profile_enrol, test_a_countdown_refuses_a_window_and_is_refused_by_one)
 	struct profile_enrol       pe;
 
 	/*
-	 * THE INTERLOCK, from Layer D's side and against the real Layer C.
-	 * profile_compat.h states the rule - a countdown and an enrolment window
-	 * must not run at once, and whichever arrives second is refused - and
-	 * both halves of it are load-bearing: the frames share indices 2 and 3,
-	 * and a switch closes the channel the window is running on.
+	 * The interlock, from Layer D's side against the real Layer C.
+	 * profile_compat.h states the rule - a countdown and an enrolment
+	 * window must not run at once, whichever arrives second is refused -
+	 * and both halves matter: the frames share indices 2 and 3, and a
+	 * switch closes the channel the window is running on.
 	 */
 	struct profile_compat_cfg ccfg;
 

@@ -5,7 +5,7 @@ Provenance: clean-room. Written from `docs/decisions/0007-long-range-phy.md`,
 from `radiant_core/include/radiant_core/radiant_radio_hal.h` and
 `radiant_frame.h`, from `docs/ant-radio-link.md` and
 `docs/spike-b-part2-results.md`, and from this repository's own earlier spikes.
-Nothing here derives from `sdk-ant`, from `libant.a`, or from an adopter-gated
+Nothing here derives from `sdk-ant`, from `libant.a`, or from an
 ANT+ device profile document. See `docs/decisions/0002-clean-room-policy.md`.
 
 **Status: RUN 2026-08-11, and it passed.** The reading rule below was agreed
@@ -26,10 +26,10 @@ invisible**, and it deliberately left one thing open:
 > sensor, the descriptor collapse — the largest battery item here — arrives
 > without coded PHY at all, and most of this phase becomes optional.
 
-The record marked it **open, owed a Tier 4 capture**, and said why it had not
-been taken: the stock-dongle stand-in is the Adafruit Feather, and putting it
-back into ANT dongle firmware costs a rationed, physically-gated Feather flash.
-That flash was spent on 2026-08-11 and the capture was taken.
+The record marked it open, owed a Tier 4 capture, because the stock-dongle
+stand-in is the Adafruit Feather and putting it back into ANT dongle firmware
+costs a rationed, physically-gated Feather flash. That flash was spent on
+2026-08-11 and the capture was taken.
 
 This directory is the **transmitter** half of that capture. The receiver under
 test is a real stock ANT dongle (the Feather in `sdk-ant` firmware, enumerating

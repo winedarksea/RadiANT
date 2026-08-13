@@ -321,6 +321,330 @@ class TestHeartRatePages(unittest.TestCase):
         self.assertEqual(ap.BPWR_PERIODS, (8182,))
 
 
+class TestRunningDynamicsPages(unittest.TestCase):
+    """
+    The vectors here are hand-placed bit patterns, not encoder output fed back
+    to the decoder: a round trip agrees with itself whichever way the two split
+    fields were read, and three of this profile's fields are split across a
+    byte boundary in a direction that is easy to reverse.
+    """
+
+    def test_page_a_bit_placement(self):
+        # Cadence 180.25 strides/min = 5768 in 1/32; VO 96.5 mm = 386 quarters;
+        # GCT 261 ms; stance 35.75 % = 143 quarters; 100 steps.
+        raw = ap.encode_rd_a(cadence_32=5768, vert_osc_quarter_mm=386,
+                             gct_ms=261, stance_quarter=143, step_count=100)
+        self.assertEqual(raw[0], 0x00)
+        self.assertEqual(raw[1], 180)           # integer strides/min
+        self.assertEqual(raw[2] & 0x1F, 8)      # 8/32 = 0.25
+        self.assertEqual(raw[2] & 0x80, 0)      # bit 7 reserved, set to 0
+        # Vertical oscillation: 386 quarters = 96 mm remainder 2.
+        self.assertEqual(raw[3], 96)
+        self.assertEqual(raw[4] & 0x07, 0)      # 96 needs no high bits
+        self.assertEqual((raw[4] >> 3) & 0x03, 2)
+        # Ground contact time keeps its THREE LOW bits in byte 4.
+        self.assertEqual((raw[4] >> 5) & 0x07, 261 & 0x07)
+        self.assertEqual(raw[5], 261 >> 3)
+        # Stance 143 quarters = 35 % remainder 3 (binary 11), split low bit
+        # first across the byte boundary.
+        self.assertEqual(raw[6] & 0x7F, 35)
+        self.assertEqual((raw[6] >> 7) & 0x01, 1)   # fraction bit 0
+        self.assertEqual(raw[7] & 0x01, 1)          # fraction bit 1
+        self.assertEqual((raw[7] >> 1) & 0x7F, 100)
+
+    def test_page_a_round_trip(self):
+        raw = ap.encode_rd_a(cadence_32=5768, vert_osc_quarter_mm=386,
+                             gct_ms=261, stance_quarter=143, step_count=100,
+                             walking=True, bidirectional=True)
+        got = ap.decode_rd_a(raw)
+        self.assertEqual(got["cadence_32"], 5768)
+        self.assertEqual(got["vert_osc_quarter_mm"], 386)
+        self.assertEqual(got["gct_ms"], 261)
+        self.assertEqual(got["stance_quarter"], 143)
+        self.assertEqual(got["step_count"], 100)
+        self.assertTrue(got["walking"])
+        self.assertTrue(got["bidirectional"])
+
+    def test_page_a_gct_uses_the_full_eleven_bits(self):
+        raw = ap.encode_rd_a(cadence_32=0, vert_osc_quarter_mm=0, gct_ms=2047,
+                             stance_quarter=0, step_count=0)
+        self.assertEqual(ap.decode_rd_a(raw)["gct_ms"], 2047)
+
+    def test_page_a_invalid_is_zero_not_ff(self):
+        """Every measurement on this profile spells invalid as ZERO."""
+        raw = ap.encode_rd_a(cadence_32=0, vert_osc_quarter_mm=0, gct_ms=0,
+                             stance_quarter=0, step_count=0)
+        got = ap.decode_rd_a(raw)
+        self.assertEqual(got["cadence_32"], ap.RD_INVALID)
+        self.assertEqual(got["vert_osc_quarter_mm"], ap.RD_INVALID)
+        self.assertEqual(got["stance_quarter"], ap.RD_INVALID)
+        self.assertNotIn(ap.INVALID_U8, raw[1:])
+
+    def test_page_b_bit_placement(self):
+        # Balance 49.5 % = 1584 in 1/32; vertical ratio 7.75 % = 248; step
+        # length 1200 mm.
+        raw = ap.encode_rd_b(balance_32=1584, vert_ratio_32=248,
+                             step_length_mm=1200, session_leader=0x1234)
+        self.assertEqual(raw[0], 0x01)
+        self.assertEqual(raw[1] & 0x7F, 49)
+        # 1584 = 49*32 + 16, so the 5-bit fraction is 16 = 0b10000: bit 0 is 0
+        # and the four high bits are 0b1000.
+        self.assertEqual((raw[1] >> 7) & 0x01, 0)
+        self.assertEqual(raw[2] & 0x0F, 8)
+        self.assertEqual((raw[2] >> 4) & 0x0F, 7 & 0x0F)   # ratio low nibble
+        self.assertEqual(raw[3] & 0x07, 7 >> 4)            # ratio high bits
+        self.assertEqual((raw[3] >> 3) & 0x1F, 248 % 32)
+        self.assertEqual(raw[4], 1200 & 0xFF)
+        self.assertEqual(raw[5] & 0x1F, 1200 >> 8)
+        # Page 0x01's two reserved bits are 0b11, where page 0x00's one
+        # reserved bit is 0.
+        self.assertEqual(raw[5] & 0xC0, 0xC0)
+        self.assertEqual(raw[5] & 0x20, 0)                 # right side up
+        self.assertEqual(raw[6], 0x34)
+        self.assertEqual(raw[7], 0x12)
+
+    def test_page_b_round_trip(self):
+        raw = ap.encode_rd_b(balance_32=1584, vert_ratio_32=248,
+                             step_length_mm=1200, session_leader=0x1234,
+                             upside_down=True)
+        got = ap.decode_rd_b(raw)
+        self.assertEqual(got["balance_32"], 1584)
+        self.assertEqual(got["vert_ratio_32"], 248)
+        self.assertEqual(got["step_length_mm"], 1200)
+        self.assertEqual(got["session_leader"], 0x1234)
+        self.assertTrue(got["upside_down"])
+
+    def test_balance_fraction_is_split_low_bit_first(self):
+        """The bug this catches is wrong only when the low bit is set."""
+        # 32 % + 1/32: fraction 1, so bit 0 is set and the high nibble is 0.
+        raw = ap.encode_rd_b(balance_32=32 * 32 + 1, vert_ratio_32=0,
+                             step_length_mm=0)
+        self.assertEqual((raw[1] >> 7) & 0x01, 1)
+        self.assertEqual(raw[2] & 0x0F, 0)
+        self.assertEqual(ap.decode_rd_b(raw)["balance_32"], 32 * 32 + 1)
+
+    def test_hr_rd_strap_reports_the_invalid_leader(self):
+        raw = ap.encode_rd_b(balance_32=0, vert_ratio_32=0, step_length_mm=0,
+                             session_leader=ap.RD_LEADER_HR_RD)
+        self.assertEqual(ap.decode_rd_b(raw)["session_leader"], 0xFFFF)
+
+    def test_percentage_reserved_range_is_refused(self):
+        with self.assertRaises(ValueError):
+            ap.encode_rd_a(cadence_32=0, vert_osc_quarter_mm=0, gct_ms=0,
+                           stance_quarter=101 * 4, step_count=0)
+        with self.assertRaises(ValueError):
+            ap.encode_rd_b(balance_32=101 * 32, vert_ratio_32=0,
+                           step_length_mm=0)
+
+    def test_speed_page_and_its_two_sentinels(self):
+        raw = ap.encode_rd_speed(3 * 256 + 128)        # 3.5 m/s
+        self.assertEqual(ap.decode_rd_speed(raw)["speed_256"], 3 * 256 + 128)
+        self.assertEqual(raw[3:], bytes([ap.INVALID_U8] * 5))
+
+        invalid = ap.encode_rd_speed(None)
+        self.assertEqual(invalid[1], 0xFF)
+        self.assertEqual(invalid[2], 0xFF)
+        self.assertIsNone(ap.decode_rd_speed(invalid)["speed_256"])
+
+        # Either sentinel alone invalidates the reading, and they are different
+        # values in different widths.
+        half = bytearray(ap.encode_rd_speed(3 * 256 + 128))
+        half[1] = (half[1] & 0xF0) | ap.RD_SPEED_INVALID_INT
+        self.assertIsNone(ap.decode_rd_speed(bytes(half))["speed_256"])
+
+    def test_speed_stops_below_fifteen_metres_per_second(self):
+        with self.assertRaises(ValueError):
+            ap.encode_rd_speed(15 * 256)
+
+    def test_leader_request_refuses_the_invalid_id(self):
+        raw = ap.encode_rd_leader_request(0x2A2B)
+        self.assertEqual(ap.decode_rd_leader_request(raw)["leader_id"], 0x2A2B)
+        with self.assertRaises(ValueError):
+            ap.encode_rd_leader_request(ap.RD_LEADER_NONE)
+
+    def test_open_channel_page(self):
+        raw = ap.encode_rd_open_channel(0xAABBCC, rf_freq=61)
+        got = ap.decode_rd_open_channel(raw)
+        self.assertEqual(got["page"], 0x4A)
+        self.assertEqual(got["leader_id_24"], 0xAABBCC)
+        self.assertEqual(got["device_type"], ap.RD_DEVICE_TYPE)
+        self.assertEqual(got["rf_freq"], 61)
+        self.assertEqual(got["period"], ap.RD_PERIOD_HR_RD)
+        with self.assertRaises(ValueError):
+            ap.encode_rd_open_channel(0, rf_freq=57)   # the ANT+ frequency is
+                                                       # not a legal RD channel
+        with self.assertRaises(ValueError):
+            ap.encode_rd_open_channel(0, rf_freq=61, period=4096)
+
+    def test_rf_enumeration_is_not_sorted(self):
+        """Code 3 is 2475 MHz and code 4 is 2461 MHz. Not a transcription slip."""
+        self.assertEqual(ap.rd_rf_from_hr_page4(3), 75)
+        self.assertEqual(ap.rd_rf_from_hr_page4(4), 61)
+        self.assertEqual(ap.rd_rf_from_hr_page4(1), 3)
+        self.assertEqual(ap.rd_rf_from_hr_page4(2), 39)
+
+    def test_rf_enumeration_refuses_to_interpret_anything_else(self):
+        # 0 is "not open"; 0xFF and everything else is manufacturer-specific
+        # data on a strap without running dynamics, and the profile forbids
+        # interpreting it. Both answer None so that is the default.
+        self.assertIsNone(ap.rd_rf_from_hr_page4(0))
+        self.assertIsNone(ap.rd_rf_from_hr_page4(ap.INVALID_U8))
+        self.assertIsNone(ap.rd_rf_from_hr_page4(57))
+
+    def test_page_numbers_are_eight_bit_here(self):
+        """No page-change toggle on this device type, unlike 0x78."""
+        raw = ap.encode_rd_open_channel(1, rf_freq=39)
+        self.assertEqual(raw[0], ap.PAGE_RD_OPEN_CHANNEL)
+        self.assertEqual(raw[0] & ap.HR_PAGE_TOGGLE, 0)
+
+    def test_periods(self):
+        self.assertEqual(ap.RD_PERIOD, 4096)
+        self.assertEqual(ap.RD_PERIOD_HR_RD, ap.HRM_PERIOD)
+        self.assertEqual(ap.RD_PERIODS, (4096, 8070))
+
+
+class TestTrackerPages(unittest.TestCase):
+    """ANT+ Tracker"""
+
+    def test_location_1_bit_placement(self):
+        raw = ap.encode_trk_location_1(asset_index=3, distance_m=1500,
+                                       bearing_brad=128,
+                                       status=ap.TRK_STATUS_LOW_BATTERY
+                                       | ap.TRK_SITUATION_DOG_MOVING,
+                                       latitude_semi=0x1A6CFB08)
+        self.assertEqual(raw[0], 0x01)
+        self.assertEqual(raw[1] & 0x1F, 3)
+        self.assertEqual(raw[1] & 0xE0, 0xE0, "reserved top 3 bits are 0x7")
+        self.assertEqual(raw[2] | (raw[3] << 8), 1500)
+        self.assertEqual(raw[4], 128)
+        self.assertEqual(raw[5], ap.TRK_STATUS_LOW_BATTERY | 1)
+        # Latitude's LOW 16 bits only.
+        self.assertEqual(raw[6] | (raw[7] << 8), 0xFB08)
+
+    def test_location_split_across_two_pages(self):
+        """Page 1 alone is a QUARTER of a position report, not half of one."""
+        lat = 0x1A6CFB08
+        lon = -1424586524 & 0xFFFFFFFF   # 0xAB1688E4, the spec's own example
+        p1 = ap.encode_trk_location_1(0, 0, 0, 0, lat)
+        p2 = ap.encode_trk_location_2(0, lat, -1424586524)
+
+        loc1 = ap.decode_trk_location_1(p1)
+        loc2 = ap.decode_trk_location_2(p2)
+        self.assertEqual(ap.trk_combine_latitude(loc1, loc2), lat)
+        self.assertEqual(loc2["longitude_semi"], -1424586524)
+        self.assertEqual(p2[4] | (p2[5] << 8) | (p2[6] << 16) | (p2[7] << 24),
+                         lon)
+
+    def test_semicircle_conversion_round_trips(self):
+        # Not pinned to the document's own worked-example decimals: the PDF
+        # extraction of those particular figures does not reproduce exactly,
+        # and a round trip through the formula is what the wire actually
+        # needs to satisfy - encode then decode recovers the angle to the
+        # field's own resolution (2^-31 of 180 degrees, well under 1e-6).
+        for degrees in (-119.407462, 37.16148287, 0.0, 179.999999, -180.0):
+            semi = ap.trk_degrees_to_semicircles(degrees)
+            self.assertAlmostEqual(ap.trk_semicircles_to_degrees(semi),
+                                   degrees, places=5)
+
+    def test_bradian_conversion_matches_the_spec_example(self):
+        # Equation 5's worked example: 60 degrees rounds to 0x2B bradians.
+        self.assertEqual(ap.trk_degrees_to_bradians(60.0), 0x2B)
+        # The inverse (equation 6) is only accurate to the field's own
+        # resolution - 360/256 = 1.40625 degrees per count - which is why
+        # 0x2B decodes to 60.46875 deg and not exactly 60.
+        self.assertAlmostEqual(ap.trk_bradians_to_degrees(0x2B), 60.0,
+                               delta=360.0 / ap.TRK_BRADIANS_PER_360DEG)
+
+    def test_no_assets_page(self):
+        raw = ap.encode_trk_no_assets()
+        self.assertEqual(raw[0], 0x03)
+        self.assertEqual(raw[1:], bytes([ap.INVALID_U8] * 7))
+
+    def test_identity_pages_split_the_name(self):
+        name = b"BuddyMax"    # 8 chars: first 5 on page 16, last 3 on page 17
+        p1 = ap.encode_trk_ident_1(asset_index=5, colour=0b11100000, name=name)
+        p2 = ap.encode_trk_ident_2(asset_index=5,
+                                   asset_type=ap.TRK_ASSET_TYPE_DOG, name=name)
+        self.assertEqual(p1[0], 0x10)
+        self.assertEqual(p2[0], 0x11)
+        got1 = ap.decode_trk_ident_1(p1)
+        got2 = ap.decode_trk_ident_2(p2)
+        self.assertEqual(got1["name_lo"], b"Buddy")
+        self.assertEqual(got2["name_hi"], b"Max\x00\x00")
+        self.assertEqual(got2["asset_type"], ap.TRK_ASSET_TYPE_DOG)
+
+    def test_asset_index_out_of_range_is_refused(self):
+        with self.assertRaises(ValueError):
+            ap.encode_trk_location_1(32, 0, 0, 0, 0)
+
+    def test_disconnect_page(self):
+        raw = ap.encode_trk_disconnect()
+        self.assertEqual(raw[0], 0x20)
+        self.assertEqual(raw[1:], bytes([ap.INVALID_U8] * 7))
+
+    def test_period_and_device_type(self):
+        self.assertEqual(ap.TRK_DEVICE_TYPE, 0x29)
+        self.assertEqual(ap.TRK_PERIOD, 2048)
+
+
+class TestControlsPages(unittest.TestCase):
+    """ANT+ Controls 0x10, against Rev 2.0 tables 9-1, 9-2, 9-8, 9-9."""
+
+    def test_av_command_bit_placement(self):
+        raw = ap.encode_ctrl_av(serial_number=0x1234, sequence=7, av=True,
+                                command=ap.CTRL_AV_CMD_PLAY,
+                                volume_percent=50)
+        self.assertEqual(raw[0], 0x10)
+        self.assertEqual(raw[1] | (raw[2] << 8), 0x1234)
+        self.assertEqual(raw[3], 7)
+        self.assertEqual(raw[4], ap.INVALID_U8)
+        self.assertEqual(raw[5], ap.INVALID_U8)
+        self.assertEqual(raw[6], 50)
+        self.assertEqual(raw[7] & 0x80, 0x80, "video flag")
+        self.assertEqual(raw[7] & 0x7F, ap.CTRL_AV_CMD_PLAY)
+
+    def test_av_command_round_trip(self):
+        raw = ap.encode_ctrl_av(0xFFFF, 0, av=False,
+                                command=ap.CTRL_AV_CMD_VOLUME_UP,
+                                volume_percent=ap.CTRL_AV_VOLUME_DEFAULT)
+        got = ap.decode_ctrl_av(raw)
+        self.assertFalse(got["av"])
+        self.assertEqual(got["command"], ap.CTRL_AV_CMD_VOLUME_UP)
+        self.assertEqual(got["serial_number"], ap.CTRL_SERIAL_UNKNOWN)
+        self.assertEqual(got["volume_percent"], ap.CTRL_AV_VOLUME_DEFAULT)
+
+    def test_generic_command_is_sixteen_bits(self):
+        """Table 9-9's length column says 1 byte; table 9-8's range (0..65535)
+        is what this project trusts, per the module's own note."""
+        raw = ap.encode_ctrl_generic(1, 2, sequence=9,
+                                     command=ap.CTRL_GENERIC_CUSTOM_MIN)
+        self.assertEqual(raw[6] | (raw[7] << 8), ap.CTRL_GENERIC_CUSTOM_MIN)
+        got = ap.decode_ctrl_generic(raw)
+        self.assertEqual(got["command"], ap.CTRL_GENERIC_CUSTOM_MIN)
+        self.assertEqual(got["slave_serial"], 1)
+        self.assertEqual(got["slave_manufacturer_id"], 2)
+        self.assertEqual(got["sequence"], 9)
+
+    def test_generic_command_reserved_range_is_refused(self):
+        with self.assertRaises(ValueError):
+            ap.encode_ctrl_generic(0, 0, 0, command=5)      # 5..31 reserved
+        with self.assertRaises(ValueError):
+            ap.encode_ctrl_generic(0, 0, 0, command=1000)   # 37..32767 reserved
+
+    def test_no_command_is_encodable_and_named(self):
+        raw = ap.encode_ctrl_generic(1, 2, sequence=9,
+                                     command=ap.CTRL_GENERIC_NO_COMMAND)
+        self.assertEqual(ap.decode_ctrl_generic(raw)["command"], 0xFFFF)
+
+    def test_av_command_number_is_seven_bits(self):
+        with self.assertRaises(ValueError):
+            ap.encode_ctrl_av(0, 0, av=False, command=0x80)
+
+    def test_period_and_device_type(self):
+        self.assertEqual(ap.CTRL_DEVICE_TYPE, 0x10)
+        self.assertEqual(ap.CTRL_PERIOD, 8192)
+
+
 class TestCommonPages(unittest.TestCase):
     def test_page_80_round_trip(self):
         raw = ap.encode_common_80(hw_revision=1, manufacturer_id=255,
@@ -404,12 +728,9 @@ class TestDispatch(unittest.TestCase):
 
 class TestCompatAllocation(unittest.TestCase):
     def test_two_page_numbers_and_the_nibble_that_makes_them_three_bytes(self):
-        # The beacon is one page number. The attestation claim is one
-        # contiguous, nibble-aligned pair, because neither tier's layout has a
-        # spare bit anywhere - Tier I spends [1..2] on the counter and [3..7] on
-        # the tag, Tier II spends [1] on the window index and [2..7] on the tag -
-        # so the only place a subtype can live is byte [0], which is the page
-        # number.
+        # Neither tier's layout has a spare bit anywhere (Tier I: [1..2]
+        # counter, [3..7] tag; Tier II: [1] window index, [2..7] tag), so the
+        # subtype can only live in byte [0], the page number.
         self.assertEqual(ap.COMPAT_PAGE_BEACON, 0x70)
         self.assertEqual(ap.COMPAT_PAGE_ATTEST_TIER_I, 0x71)
         self.assertEqual(ap.COMPAT_PAGE_ATTEST_TIER_II, 0x72)
@@ -450,7 +771,7 @@ class TestCompatAllocation(unittest.TestCase):
 
 
 class TestCompatBeacon(unittest.TestCase):
-    def beacon(self, **kwargs) -> "ap.CompatBeacon":
+    def beacon(self, **kwargs) -> ap.CompatBeacon:
         kwargs.setdefault("key_group_hint", bytes([0xAA, 0xBB, 0xCC]))
         return ap.CompatBeacon(**kwargs)
 
@@ -472,10 +793,9 @@ class TestCompatBeacon(unittest.TestCase):
         b = self.beacon()
         steady = ap.encode_compat_beacon(b)
         self.assertEqual([f[1] for f in steady], [0x01, 0x11])
-        # ADR 0008 writes frames 2 and 3 as 0x23 and 0x33, and the convention it
-        # writes them under is (index << 4) | (count - 1). Both are only true at
-        # once if frames 0 and 1 restate the new count while the set is four
-        # frames long - so they become 0x03 and 0x13 for the duration.
+        # ADR 0008 writes frames 2/3 as 0x23/0x33 under (index << 4) |
+        # (count - 1); frames 0/1 must restate the new count while the set
+        # is four frames long, becoming 0x03/0x13 for the duration.
         announcing = ap.encode_compat_beacon(
             b, frame_count=ap.COMPAT_BEACON_FRAMES_ANNOUNCING)
         self.assertEqual([f[1] for f in announcing], [0x03, 0x13])
@@ -681,14 +1001,13 @@ class TestCompatAttestation(unittest.TestCase):
         self.assertNotIn("kind", got)
 
 
-def sample_descriptor(**kwargs) -> "ap.TlmDescriptor":
+def sample_descriptor(**kwargs) -> ap.TlmDescriptor:
     """The node the C suite uses too, field for field.
 
-    Four fields over two data pages, chosen so every packing case the envelope
-    allows appears at least once: byte-aligned and not, signed and unsigned,
-    accumulating and instantaneous. Field 4 is the interesting one - 12 bits
-    starting at bit 32 - because a receiver that packed little-endian gets a
-    plausible wrong number out of it rather than an error.
+    Four fields over two data pages covering every packing case: byte-aligned
+    and not, signed and unsigned, accumulating and instantaneous. Field 4 (12
+    bits at bit 32) is the one where a little-endian packer would silently
+    produce a plausible wrong number rather than an error.
     """
     fields = [
         ap.TlmField(id=1, type=0x26, page=1, bit_offset=0, width_code=4),
@@ -708,13 +1027,10 @@ def sample_descriptor(**kwargs) -> "ap.TlmDescriptor":
 class TestTelemetryBitPacker(unittest.TestCase):
     """The MSB-first field area of device type 0x60.
 
-    THESE VECTORS ARE SHARED, BYTE FOR BYTE, WITH
-    radiant_core/tests/src/test_profiles.c. That is the whole reason they are
-    written as a table of literals rather than as round trips: two
-    implementations checked only against each other are not checked at all, and
-    docs/radiant-telemetry.md section 6 says MSB-first bit order exists
-    precisely because little-endian bit order is "a reliable source of two
-    implementations that each work alone."
+    These vectors are shared, byte for byte, with
+    radiant_core/tests/src/test_profiles.c - written as literals rather than
+    round trips so two implementations aren't just checked against each
+    other.
     """
 
     VECTORS = [
@@ -1153,13 +1469,10 @@ class TestTelemetryCommandPages(unittest.TestCase):
 class TestTelemetryScheduleBlock(unittest.TestCase):
     """Frame 1 byte [3] bits 3..0, plus the schedule frame - section 6.
 
-    THESE FRAMES ARE PINNED AS HEX AND ARE SHARED, BYTE FOR BYTE, WITH
-    radiant_core/tests/src/test_schedule.c, for the same reason as every other
-    pin in this file: two implementations checked only against each other are
-    not checked at all. This block earns the treatment twice over, because a
-    receiver acts on it - it sizes a receive window from the clock accuracy,
-    and a decoder that is self-consistently wrong there loses packets with no
-    error anywhere.
+    Frames pinned as hex, shared byte for byte with
+    radiant_core/tests/src/test_schedule.c: a receiver sizes its receive
+    window from the clock accuracy here, so a self-consistently wrong decoder
+    would lose packets with no error anywhere.
     """
 
     # 500 us of listening every 2 s - the plan's example duty - announced by a
@@ -1197,14 +1510,8 @@ class TestTelemetryScheduleBlock(unittest.TestCase):
         self.assertEqual(frames[2][1] >> 4, 2)
 
     def test_a_node_that_announces_nothing_is_the_node_it_was_before(self):
-        """The idle-cost A/B, on the wire.
-
-        The block is in the encoder either way; the only difference is whether
-        the node fills it. A node that does not must produce the same frames,
-        in the same number, with frame 1's nibble still zero - which is what
-        every node built before this phase transmits, so "compatible" and
-        "identical" are the same claim here.
-        """
+        """The idle-cost A/B: a node that fills nothing must emit the exact
+        frames it did before this feature existed."""
         frames = ap.encode_tlm_descriptor(self.QUIET)
         self.assertEqual([f.hex() for f in frames], self.QUIET_HEX)
         self.assertEqual(frames[1][3] & 0x0F, 0)
@@ -1219,7 +1526,7 @@ class TestTelemetryScheduleBlock(unittest.TestCase):
         got = ap.encode_tlm_descriptor(tagged)
         self.assertEqual(len(got), len(frames))
         self.assertEqual(tagged.clock_ppm, 500)
-        for index, (a, b) in enumerate(zip(got, frames)):
+        for index, (a, b) in enumerate(zip(got, frames, strict=True)):
             if index == 1:
                 a = bytes(a[:3]) + bytes([a[3] & 0xF0]) + bytes(a[4:])
             self.assertEqual(a, b)
@@ -1386,11 +1693,9 @@ class TestTelemetryScheduleBlock(unittest.TestCase):
 class TestTelemetrySyncHandoff(unittest.TestCase):
     """Page 0x12, section 12. The page a RECEIVER sends about a node.
 
-    THESE FRAMES ARE PINNED AS HEX AND ARE SHARED, BYTE FOR BYTE, WITH
-    radiant_core/tests/src/test_handoff.c. Same reason as the bit packer above:
-    two implementations checked only against each other are not checked at all,
-    and this page exists so that a receiver can act on parameters it never
-    measured - the one situation where a decoder that is self-consistently wrong
+    Frames pinned as hex, shared byte for byte with
+    radiant_core/tests/src/test_handoff.c: this page lets a receiver act on
+    parameters it never measured, where a self-consistently wrong decoder
     costs the most.
     """
 
@@ -1461,15 +1766,10 @@ class TestTelemetrySyncHandoff(unittest.TestCase):
             ap.decode_tlm_handoff([frames[0], bytes(tagged)])
 
     def test_the_page_has_no_room_for_an_epoch(self):
-        """The cross-plan constraint, enforced as arithmetic.
-
-        For a hostless node the epoch IS the boot counter, and a slowly
-        incrementing number broadcast in the clear fingerprints the device
-        across sessions - so this page must never carry one. The defence is
-        that every one of the 64 field bits is already assigned: there is no
-        space an epoch could quietly occupy, and adding one would need a third
-        frame and a visible format change rather than an edit.
-        """
+        """For a hostless node the epoch IS the boot counter, so broadcasting
+        it in the clear would fingerprint the device across sessions; all 64
+        field bits are already assigned, so there's no space for one to
+        quietly occupy."""
         assigned = 16 + 7 + 8 + 1 + 16 + 13 + 3   # who, then when
         self.assertEqual(assigned, 2 * ap.TLM_HANDOFF_AREA_BITS)
         # And the field area genuinely ends where the tag space begins.
@@ -1550,9 +1850,8 @@ class TestTelemetrySyncHandoff(unittest.TestCase):
 class TestFrequencyMove(unittest.TestCase):
     """Page 0x13, adaptive frequency (RF-7).
 
-    CANON_HEX is shared BYTE FOR BYTE with radiant_core/tests/src/test_freq.c.
-    Two implementations checked only against each other are not checked at all,
-    and this page in particular tells a receiver where to point its radio.
+    CANON_HEX is shared byte for byte with radiant_core/tests/src/test_freq.c;
+    this page tells a receiver where to point its radio.
     """
 
     CANON_HEX = "13001a08000000 00".replace(" ", "")
@@ -1605,13 +1904,10 @@ class TestFrequencyMove(unittest.TestCase):
             ap.decode_tlm_freq_move(bytes(body))
 
     def test_the_countdown_terminates_rather_than_walking_away(self):
-        """The regression the C suite pins, in the mirror.
-
-        The re-anchor moves the target to whatever was just said. Applied one
-        announcement too many it moves the target past the move itself, and then
-        again - the node announces forever and never leaves, which reads on a
-        bench as "adaptive frequency does not work" with nothing in any log.
-        """
+        """The regression the C suite pins, in the mirror: a re-anchor applied
+        one announcement too many pushes the target past the move itself
+        forever, reading on a bench as a silent "adaptive frequency does not
+        work"."""
         move_at = ap.TLM_FREQ_K_DEFAULT
         msgs = 0
         moved_at = None

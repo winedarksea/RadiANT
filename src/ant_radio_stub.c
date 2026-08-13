@@ -7,19 +7,13 @@
  * Purpose: bring up and iterate on the USB half of the dongle (enumeration,
  * WinUSB auto-binding, the 0xA4 serial bridge) without a working ANT build.
  * ant_serial_bridge.c and usb_ant_class.c are unchanged and unaware of this
- * file - every entry point here has the exact signature declared in
- * src/ant_radio.h.
+ * file - every entry point here matches the signature in src/ant_radio.h.
  *
- * It is also the cheapest proof that the src/ant_radio.h seam holds, and that
- * claim is stronger than it used to be: this file builds and links with no
- * sdk-ant present at all. No sdk-ant header is included, no include path to
- * one is set, no CONFIG_ANT* symbol exists in the image, and libant.a is not
- * on the link line. The previous src/ant_stub.c could not say that - it
- * included sdk-ant's own interface headers and so still needed the checkout it
- * was standing in for, which meant the stub build proved the bridge could run without the
- * radio but not that it could build without the SDK. Anything added here that
- * reaches for an sdk-ant name silently reintroduces the dependency this file
- * exists to disprove.
+ * Also the cheapest proof the src/ant_radio.h seam holds: this file builds
+ * and links with no sdk-ant present at all - no sdk-ant header, no include
+ * path, no CONFIG_ANT* symbol, libant.a not on the link line. Anything added
+ * here that reaches for an sdk-ant name silently reintroduces the dependency
+ * this file exists to disprove.
  *
  * Behaviour: configuration calls are accepted and discarded; getters return
  * zeroed or obviously-synthetic data. Nothing is ever transmitted and
@@ -50,44 +44,23 @@ LOG_MODULE_REGISTER(ant_radio_stub, LOG_LEVEL_INF);
  */
 static const char stub_version[] = "STUB0.01B00";
 
-/* ── The three substituted constants, and why they are gone ────────────────
- *
- * Three values this file needs were recorded as UNRESOLVED in
- * protocol/ant_wire.yaml: their numbers appeared nowhere in this repository
- * and recovering them needed sdk-ant, which src/ant_radio_sdk_ant.c may read
- * and this file may not. Each was substituted with a local STUB_* placeholder
- * rather than pulled in behind a conditional include, because a #define
- * reaching into sdk-ant here would reintroduce exactly the dependency this
- * file exists to disprove, and it would do it invisibly.
- *
- * The Wave 2 shim recovered all three. They are generated into src/ant_wire.h
- * from the YAML and BUILD_ASSERTed against sdk-ant in the shim, so the
- * placeholders have retired and the real names are used directly:
- *
- *   ANTW_SDU_MASK_ACK_CONFIG_BIT                      0x80 (placeholder 0x80)
- *   ANTW_MAX_SUPPORTED_ENCRYPTION_MODE                   2 (placeholder 1)
- *   ANTW_MESG_CONFIG_ADV_BURST_REQ_CAPABILITIES_SIZE     4 (placeholder 2)
- *
- * Two guesses were right and one was not, which is the whole argument for the
- * rule that produced them. The stub used to answer
- * ENCRYPTION_INFO_GET_SUPPORTED_MODE with 1 and to refuse
- * antr_crypto_channel_enable(.., 2, ..); it now answers 2 and accepts it. That
- * is a deliberate change in what a stub build reports, and it is a change
- * towards what a real stack says rather than away from it.
- *
- * The include set is unchanged by any of this: ANTW_* comes from
- * src/ant_wire.h, which is generated from protocol/ant_wire.yaml and reaches
- * for no sdk-ant name.
+/*
+ * Three constants this file needs (ANTW_SDU_MASK_ACK_CONFIG_BIT,
+ * ANTW_MAX_SUPPORTED_ENCRYPTION_MODE, ANTW_MESG_CONFIG_ADV_BURST_REQ_
+ * CAPABILITIES_SIZE) were once UNRESOLVED and stood in behind local STUB_*
+ * placeholders rather than a conditional sdk-ant include, which would have
+ * reintroduced the dependency this file exists to disprove. All three have
+ * since been recovered into src/ant_wire.h and BUILD_ASSERTed against
+ * sdk-ant elsewhere, so the real names are used directly now. One of the
+ * three placeholder guesses was wrong (encryption mode 1 vs the real 2);
+ * this stub's behaviour changed accordingly, towards what a real stack says.
  */
 
 /* ── Configuration state ───────────────────────────────────────────────────── */
 
-/*
- * Configuration calls are discarded here with one exception: the settings that
- * the serial protocol also lets a host read back. A set/get pair that always
- * reads zero cannot distinguish a bridge that mangles the payload from a stub
- * that threw it away, so these are stored and returned in the shape
- * src/ant_radio.h documents - which is not the shape they arrive in.
+/* Configuration is discarded except where the protocol lets a host read it
+ * back - a set/get pair that always reads zero couldn't distinguish a
+ * mangling bridge from a discarding stub - so those are stored and returned.
  */
 #define STUB_SDU_MASKS  4
 
@@ -407,17 +380,10 @@ antr_err_t antr_burst_tx(uint8_t channel, uint16_t size, uint8_t *data,
 	ARG_UNUSED(size);
 	ARG_UNUSED(data);
 	ARG_UNUSED(segment);
-	/* This declines obligation B3 of the burst contract in src/ant_radio.h,
-	 * deliberately and visibly. Accepting the block means owning it until
-	 * ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK is raised, and nothing here raises
-	 * events, so the bridge never learns the block is free: its
-	 * k_sem_take() waits the full 1000 ms and every burst packet after the
-	 * first is answered with ANTW_TRANSFER_IN_PROGRESS. That is precisely
-	 * the failure mode the contract warns about, which makes this stub a
-	 * working illustration of it rather than a bug - a burst against a stub
-	 * build stalls a second per packet and reports a plausible error.
-	 * Accepted: this stub exists to bring up USB without the radio, and
-	 * burst needs the radio.
+	/* Deliberately declines burst-contract obligation B3 (src/ant_radio.h):
+	 * never raises the release event, so a burst against this stub stalls
+	 * 1000 ms per packet and reports ANTW_TRANSFER_IN_PROGRESS. Accepted -
+	 * this stub exists for USB bring-up, not burst.
 	 */
 	return ANTW_RESPONSE_NO_ERROR;
 }

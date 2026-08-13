@@ -3,29 +3,15 @@
  * The compat attestation primitives: docs/radiant-security.md section 11.4 and
  * docs/decisions/0008, as assertions.
  *
- * ── Why the vectors are literals rather than a round trip ──────────────────
+ * Vectors are literals, also pinned in tools/test_radiant_crypto.py, rather
+ * than a round trip - two implementations checked only against each other can
+ * agree on a shared mistake and pass. AES itself is covered by test_sec_aes.c;
+ * this file asserts only the layer this project invented.
  *
- * Every tag below also appears as a literal in tools/test_radiant_crypto.py.
- * Neither implementation is authoritative and neither computes the other's
- * expected value at test time, because two implementations checked only against
- * each other are not checked at all - they agree on their shared mistake and
- * report it as a pass. Pinning the bytes in both suites means a change to
- * either one has to be typed into both, deliberately, and a receiver built from
- * this specification a year from now has something to compare against that no
- * code in this repository produced.
- *
- * The AES underneath is checked against FIPS-197, RFC 4493 and SP 800-38A in
- * test_sec_aes.c, so what is asserted here is only the layer this project
- * invented: which bytes go into the block, in what order, and what comes out.
- *
- * ── What this suite deliberately cannot test ───────────────────────────────
- *
- * There is no page here, and there is no channel. The subtype's separation of
- * the two tiers is asserted BY CONSTRUCTING THE NONCE INPUTS DIRECTLY, not by
- * sending a page with a subtype nibble in it - no such page exists yet, and a
- * test that only checked a page byte would pass on an implementation that put
- * the subtype nowhere near the MAC, which is precisely the failure ADR 0008
- * pins the position to prevent.
+ * No page and no channel here: subtype separation is asserted by constructing
+ * the nonce inputs directly, not by sending a page with a subtype nibble - a
+ * page-only test would pass even if the subtype never reached the MAC, the
+ * failure ADR 0008 pins the position to prevent.
  */
 
 #include <zephyr/ztest.h>
@@ -33,13 +19,8 @@
 
 #include <radiant_core/radiant_sec_compat.h>
 
-/*
- * K_auth as a literal rather than a KDF output. The key hierarchy is
- * test_sec_aes.c's subject; if these vectors depended on the KDF as well, a KDF
- * change would move every tag here and the failure would point at the wrong
- * layer. Anybody with an AES-CMAC implementation can reproduce these from this
- * key and the pinned blocks below.
- */
+/* K_auth as a literal, not a KDF output - a KDF change would otherwise move
+ * every tag here and misattribute the failure. */
 static const uint8_t k_auth_raw[16] = {
 	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
 	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
@@ -60,10 +41,8 @@ static const uint8_t nonce_tier_ii[16] = {
 	0x04, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
-/* The UNTRUNCATED CMAC over each of those two blocks. Pinned so the
- * separation is visible as sixteen different bytes rather than as five, and so
- * the truncation below is demonstrably a prefix of this and not some other
- * five bytes. */
+/* Untruncated CMAC over each block, so the separation is visible as sixteen
+ * bytes and the truncation below is demonstrably a prefix of this. */
 static const uint8_t full_tag_tier_i[16] = {
 	0x86, 0xa6, 0x3d, 0x51, 0x14, 0x99, 0x83, 0xaa,
 	0x92, 0x94, 0xad, 0x0d, 0x7d, 0x00, 0x7a, 0xd6,
@@ -78,12 +57,9 @@ static const uint8_t tier1_tag[RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES] = {
 	0x86, 0xa6, 0x3d, 0x51, 0x14,
 };
 
-/*
- * Seven synthetic transmitted messages - N = 8 means p_1..p_7 - with no
- * profile meaning of any kind. Byte [0] differs from the rest of each message
- * so that a Tier II implementation which skipped byte [0], as the spread tag
- * legitimately does, would produce a different tag and be caught.
- */
+/* Seven synthetic transmitted messages (N=8 means p_1..p_7). Byte [0] differs
+ * from the rest so a Tier II implementation that skips byte [0] (legitimate
+ * for the spread tag) produces a different tag and is caught. */
 static const uint8_t window_msgs[7][RADIANT_SEC_COMPAT_MSG_BYTES] = {
 	{ 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
 	{ 0x11, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01 },
@@ -148,9 +124,8 @@ ZTEST(sec_compat, test_the_compat_domain_byte_is_its_own)
 	uint8_t compat[16];
 	uint8_t spread[16];
 
-	/* Without a domain byte of its own, a compat tag and a spread tag over
-	 * the same (epoch, devnum, counter) are the same block - which is the
-	 * omission section 3.3 exists to prevent, one layer up. */
+	/* Without its own domain byte, a compat tag and a spread tag over the
+	 * same (epoch, devnum, counter) would be the same block. */
 	radiant_sec_compat_nonce_block(compat, VEC_EPOCH, VEC_DEVNUM,
 				       VEC_COUNTER,
 				       RADIANT_SEC_COMPAT_SUBTYPE_TIER_I);
@@ -163,13 +138,9 @@ ZTEST(sec_compat, test_the_compat_domain_byte_is_its_own)
 
 ZTEST(sec_compat, test_the_subtype_reaches_the_mac_and_not_only_the_page)
 {
-	/*
-	 * THE ASSERTION THE WHOLE SUBTYPE PIN EXISTS FOR, and it is made by
-	 * building the two blocks directly rather than by sending a page:
-	 * a subtype written only into a page byte is chosen by whoever sends
-	 * the page, so the tags would be interchangeable and a Tier II tag
-	 * would be replayable as a Tier I one.
-	 */
+	/* Built directly rather than via a page: a subtype written only into a
+	 * page byte is chosen by the sender, so the tags would be interchangeable
+	 * and a Tier II tag replayable as a Tier I one. */
 	struct radiant_sec_key k;
 	uint8_t block[16];
 	uint8_t got_i[16];
@@ -215,10 +186,8 @@ ZTEST(sec_compat, test_an_illegal_subtype_writes_nothing)
 		0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5,
 	};
 
-	/* The subtype is a nibble because it also has to fit in a page byte
-	 * beside something else. A caller passing 0 or 0x10 has a bug, and a
-	 * block built from it would be a domain separation that separates the
-	 * wrong things. */
+	/* Subtype is a nibble (fits in a page byte beside other data); 0 or 0x10
+	 * is a caller bug. */
 	memset(got, 0xa5, sizeof(got));
 	radiant_sec_compat_nonce_block(got, VEC_EPOCH, VEC_DEVNUM, VEC_COUNTER,
 				       0x00);
@@ -243,9 +212,8 @@ ZTEST(sec_compat, test_tier1_vector_shared_with_the_python_mirror)
 	zassert_mem_equal(got, tier1_tag, sizeof(got),
 			  "Tier I disagrees with tools/radiant_crypto.py");
 
-	/* trunc40 is the FIRST five bytes. Which end a truncation takes is
-	 * exactly the kind of thing two implementations settle differently and
-	 * discover in the field. */
+	/* trunc40 is the first five bytes - the end matters, two implementations
+	 * could easily disagree here. */
 	zassert_mem_equal(got, full_tag_tier_i,
 			  RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES, NULL);
 	zassert_equal(RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES * 8, 40,
@@ -256,12 +224,9 @@ ZTEST(sec_compat, test_tier1_vector_shared_with_the_python_mirror)
 
 ZTEST(sec_compat, test_tier1_covers_the_counter_the_devnum_and_the_epoch)
 {
-	/*
-	 * It covers no payload, so these three are the whole of what it says -
-	 * and each of them has to reach the tag or the claim is empty. The
-	 * counter is what closes replay; the device number and epoch are what
-	 * make it this node's stream and this boot's.
-	 */
+	/* Covers no payload, so counter/devnum/epoch are the whole claim, and
+	 * each has to reach the tag: counter closes replay, devnum/epoch bind it
+	 * to this node's stream and this boot. */
 	struct radiant_sec_key k;
 	uint8_t base[RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES];
 	uint8_t other[RADIANT_SEC_COMPAT_TIER_I_TAG_BYTES];
@@ -352,12 +317,8 @@ ZTEST(sec_compat, test_tier2_vectors_shared_with_the_python_mirror)
 
 ZTEST(sec_compat, test_tier2_covers_every_byte_of_every_covered_message)
 {
-	/*
-	 * One flipped bit, in the last covered message, in byte [1]. The tag
-	 * has to move - that is what "data attestation" means - and the moved
-	 * value is pinned too, so this cannot pass by the tag becoming
-	 * constant.
-	 */
+	/* One flipped bit in the last covered message; the tag must move (and
+	 * the moved value is pinned, so it can't pass by going constant). */
 	struct radiant_sec_key k;
 	uint8_t msgs[7][RADIANT_SEC_COMPAT_MSG_BYTES];
 	uint8_t got[RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES];
@@ -377,13 +338,10 @@ ZTEST(sec_compat, test_tier2_covers_every_byte_of_every_covered_message)
 
 ZTEST(sec_compat, test_tier2_covers_byte_zero_unlike_the_spread_tag)
 {
-	/*
-	 * The spread tag excludes byte [7] because that is where it rides; a
-	 * compat tag has a page of its own and rides nowhere, so all eight
-	 * bytes of every covered message are inside the MAC. Byte [0] is the
-	 * one that matters most: leave it out and an attacker who flips it
-	 * reinterprets the same authenticated bits against a different schema.
-	 */
+	/* The spread tag excludes byte [7] (where it rides); a compat tag has
+	 * its own page, so all eight bytes are inside the MAC. Byte [0] matters
+	 * most - flip it unauthenticated and an attacker reinterprets the bits
+	 * against a different schema. */
 	struct radiant_sec_key k;
 	uint8_t msgs[7][RADIANT_SEC_COMPAT_MSG_BYTES];
 	uint8_t first[RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES];

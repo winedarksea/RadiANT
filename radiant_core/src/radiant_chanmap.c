@@ -5,7 +5,7 @@
  * Provenance: original clean-room work, derived from this project's own RF plan
  * and from radiant_noise.c's existing 1 dB binning, which it shares rather than
  * repeats. Nothing here derives from sdk-ant, from libant.a, or from any
- * adopter-gated ANT+ device profile document.
+ * ANT+ device profile document.
  * See docs/decisions/0002-clean-room-policy.md.
  *
  * See radiant_chanmap.h for what this is for, why an entry is eight bytes, and
@@ -32,23 +32,16 @@
 
 #include <radiant_core/radiant_noise.h>
 
-/*
- * Eight bytes, and the layout is the size.
+/* Eight bytes, and the layout is the size.
  *
- * mean_sum accumulates BIN INDICES rather than dBm, which is what keeps it
- * unsigned and keeps the mean's arithmetic away from the sign of a negative
- * eighth-bit value. 64 bins at a uint16 dwell ceiling is 4 194 240, comfortably
- * inside 32 bits, so the sum cannot wrap before the dwell counter saturates.
+ * mean_sum accumulates BIN INDICES, not dBm, keeping it unsigned; 64 bins at
+ * a uint16 dwell ceiling is 4,194,240, well inside 32 bits.
  *
- * `dwells == 0` IS THE "NEVER SAMPLED" TEST, for min_bin as well as for
- * max_bin, rather than a sentinel value in min_bin itself. A sentinel would
- * have to be written by radiant_chanmap_reset() and by radiant_chanmap_clear()
- * and would be absent from the static zero-initialisation that precedes both -
- * and bin 0 is the QUIETEST bin, so an entry that missed the sentinel would
- * report a floor of RADIANT_NOISE_DBM_MIN and never move off it. That is the
- * most misleading possible default for a map whose whole job is finding quiet,
- * and it would depend on an initialisation order rather than on the data.
- */
+ * `dwells == 0` is the "never sampled" test for both min_bin and max_bin,
+ * rather than a sentinel value in min_bin: bin 0 is the QUIETEST bin, so an
+ * entry that missed a sentinel would silently report the quietest possible
+ * floor forever - the most misleading default for a map whose job is finding
+ * quiet. */
 struct chanmap_entry {
 	uint32_t mean_sum;
 	uint16_t dwells;
@@ -73,12 +66,9 @@ void radiant_chanmap_note(uint8_t rf_index, int8_t min_dbm, int8_t mean_dbm,
 	uint8_t mean_bin;
 
 	if (rf_index >= RADIANT_CHANMAP_INDICES || samples == 0u) {
-		/*
-		 * A dwell with no samples is not a quiet index, and folding it
-		 * in as one is the specific way this map could lie in the
-		 * direction that matters: adaptive frequency selection would
-		 * pick the frequency nothing could be measured on.
-		 */
+		/* A dwell with no samples is not a quiet index; folding it in
+		 * as one would make adaptive frequency selection pick the
+		 * frequency nothing could be measured on. */
 		chanmap_dropped_n++;
 		return;
 	}

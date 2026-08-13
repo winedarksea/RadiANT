@@ -3,26 +3,21 @@
 /*
  * ANT serial transport over a plain UART.
  *
- * For parts with no USB device peripheral. The nRF54L05/L10/L15 are the
- * immediate reason: they have no USB controller in silicon at all, so the
- * nRF54L15 DK cannot enumerate as a dongle no matter what software says. That
- * board is still worth building for - it is where the ANT stack, MPSL and the
- * clock setup get exercised on nRF54L hardware, and this transport is what
- * makes that exercisable end to end instead of a link test.
+ * For parts with no USB device peripheral - the nRF54L05/L10/L15 have no USB
+ * controller in silicon, so the nRF54L15 DK cannot enumerate as a dongle
+ * regardless of software. Worth building for anyway: it's where the ANT
+ * stack, MPSL and clock setup get exercised end to end on nRF54L hardware.
  *
- * This is less of a compromise than it sounds. ANT's serial protocol is a
- * UART protocol; the 0xA4-framed messages this carries are byte-for-byte what
- * the USB build puts in its bulk endpoints, because a USB ANT stick is a
- * UART-to-USB bridge with the UART hidden inside. Point tools/ant_probe.py at
- * a COM port instead of a USB device and it is the same conversation.
+ * Less of a compromise than it sounds: ANT's serial protocol is a UART
+ * protocol, and a USB ANT stick is a UART-to-USB bridge with the UART hidden
+ * inside, so the 0xA4-framed messages here are byte-for-byte what the USB
+ * build puts on its bulk endpoints.
  *
- * One real difference: USB bulk endpoints can NAK, so the legacy and USBD
- * transports apply genuine backpressure when the bridge falls behind. A UART
- * without RTS/CTS cannot - bytes arrive whether or not there is room. If the
- * ring buffer fills, they are dropped and counted rather than silently
- * corrupting a frame boundary, and the checksum on the following frame is what
- * tells the host. Enable hardware flow control in the board devicetree if the
- * pins are wired and this ever becomes more than theoretical.
+ * One real difference: USB bulk endpoints NAK, giving genuine backpressure;
+ * a UART without RTS/CTS cannot, so bytes that arrive with no room are
+ * dropped and counted rather than corrupting a frame boundary - the checksum
+ * on the following frame is what tells the host. Enable hardware flow
+ * control in the board devicetree if the pins are wired.
  */
 
 #include <string.h>
@@ -36,10 +31,10 @@
 
 LOG_MODULE_REGISTER(ant_uart, LOG_LEVEL_INF);
 
-/* The board overlay names which UART carries ANT. It must not be the console:
- * the two would interleave into one unparseable stream. On the nRF54L15 DK the
- * console is uart20 (VCOM0) and this is uart30 (VCOM1), so both arrive over
- * the same debugger cable as two separate COM ports.
+/* The board overlay names which UART carries ANT. Must not be the console -
+ * the two would interleave into one unparseable stream. On the nRF54L15 DK
+ * the console is uart20 (VCOM0) and this is uart30 (VCOM1), both arriving
+ * over the same debugger cable as separate COM ports.
  */
 #define ANT_UART_NODE DT_ALIAS(ant_uart)
 
@@ -47,21 +42,11 @@ BUILD_ASSERT(DT_NODE_HAS_STATUS(ANT_UART_NODE, okay),
 	     "No ant-uart alias. The UART transport needs a board overlay "
 	     "naming a UART that is not the console.");
 
-/* Two records of one number, and this is what stops them disagreeing.
- *
- * The devicetree's current-speed is what CONFIGURES the UART;
- * CONFIG_ANT_DONGLE_UART_BAUD is what RECORDS the rate somewhere a script and
- * a person can read it, because .config is where every other property of a
- * build is asserted from and a devicetree property is not. Neither is
- * redundant and neither is authoritative on its own - the pair is, and only
- * because of this line.
- *
- * The failure it catches is specifically the quiet one. A baud mismatch is
- * invisible on the wire: the host sends, the board receives framing errors,
- * tools/ant_probe.py reports "no response to reset", and that is the same
- * message a hung image or a wrong COM port produces. See
- * boards/cc26x2r1_launchxl.overlay for the target where the two numbers
- * differ from every other board's and this assert earns its place.
+/* Two records of one number; this assert is what stops them disagreeing. The
+ * devicetree's current-speed CONFIGURES the UART; CONFIG_ANT_DONGLE_UART_BAUD
+ * RECORDS the rate where a script can read it. A mismatch is invisible on
+ * the wire - framing errors that look exactly like a hung image or wrong COM
+ * port - which is the failure this catches.
  */
 BUILD_ASSERT(DT_PROP(ANT_UART_NODE, current_speed) == CONFIG_ANT_DONGLE_UART_BAUD,
 	     "The ant-uart node's current-speed and CONFIG_ANT_DONGLE_UART_BAUD "

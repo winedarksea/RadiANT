@@ -3,30 +3,20 @@
 
 """Encode and decode the ANT+ data pages this project cares about.
 
-Pure functions over 8-byte payloads: no USB, no serial port, no hardware. That
-is deliberate. Everything else in tools/ needs a board attached before it can
-say anything at all, so a byte-order mistake costs a flash cycle to find. Here
-the same mistake is a unittest away (tools/test_ant_pages.py), and the encoders
-and decoders check each other.
+Pure functions over 8-byte payloads: no USB, no serial port, no hardware, so a
+byte-order mistake is a unittest away (tools/test_ant_pages.py) instead of a
+flash cycle. The constants mirror zephyr_aerosense/src/ant/ant_pages.h.
 
-The constants mirror zephyr_aerosense/src/ant/ant_pages.h, which is why they
-carry the same values with different names: these pages are the contract
-between the two projects, and a page built here is fed to that project's C
-decoders in its replay tests.
-
-Three traps worth stating up front, because all three produce plausible-looking
-garbage rather than an error:
+Three traps, because all three produce plausible-looking garbage rather than
+an error:
 
 - The combined speed-and-cadence page (device type 0x79) has **no page-number
-  byte**. Byte 0 is the low half of the cadence event time. Dispatching on
-  payload[0] the way every other profile does will decode it as whatever page
-  that byte happens to name.
-- Page 0x20 is big-endian. Every other multi-byte field in every other page
-  here is little-endian.
-- On heart rate (device type 0x78) **byte 0's high bit is not part of the page
-  number**. It is the page-change toggle, so every page appears under two byte
-  values and page numbers there are 7-bit. That is also why the RadiANT compat
-  pages below are all <= 0x7F.
+  byte** - byte 0 is the low half of the cadence event time, so dispatching on
+  payload[0] decodes it as whatever page that byte happens to name.
+- Page 0x20 is big-endian; every other page here is little-endian.
+- On heart rate (device type 0x78) **byte 0's high bit is the page-change
+  toggle, not part of the page number** - pages there are 7-bit, which is also
+  why the RadiANT compat pages below are all <= 0x7F.
 """
 
 from __future__ import annotations
@@ -315,37 +305,20 @@ def speed_mps_from(delta_revs: int, delta_event_time: int,
 # ---------------------------------------------------------------------------
 # Heart rate, device type 0x78
 #
-# The tightest page namespace in this file, and the reason the compat
-# allocation below looks the way it does. Two structural facts govern
-# everything here:
-#
-#   * BYTE 0's HIGH BIT IS NOT PART OF THE PAGE NUMBER. It is the page-change
-#     toggle, which flips once the sensor has sent every background page it
-#     has, so a receiver knows it has seen the whole set. Page numbers on this
-#     device type are therefore 7-bit - 0x00..0x7F - and nothing at or above
-#     0x80 is expressible at all. That is what makes the manufacturer-private
-#     range every other profile uses (0xF0..0xFF) unreachable here.
-#   * BYTES [4..7] ARE THE SAME ON EVERY PAGE. Heartbeat event time, beat count
-#     and computed heart rate are the data; the page number only says what the
-#     three bytes in between mean. A page that changed those four bytes would
-#     not be a new page, it would be a broken sensor - which is why every
-#     encoder below takes them and none of them can opt out.
+# * Byte 0's high bit is NOT part of the page number - it's the page-change
+#   toggle, so page numbers here are 7-bit (0x00..0x7F) and the manufacturer-
+#   private range other profiles use (0xF0..0xFF) is unreachable.
+# * Bytes [4..7] (event time, beat count, computed HR) are the same on every
+#   page; every encoder below takes them and none can opt out.
 # ---------------------------------------------------------------------------
 
 HRM_DEVICE_TYPE = 0x78
 
-# The three permitted channel periods, in counts of 1/32768 s. Unlike a page
-# number, a period is not something a receiver can skip: it has to match or the
-# channel does not open at all, so a compat node choosing one of these is
-# choosing from a closed set rather than picking a rate.
-#
-#   8070  ~4.06 Hz   the standard rate, and the default
-#   16140 ~2.03 Hz   half rate
-#   32280 ~1.02 Hz   quarter rate
-#
-# Halving the rate halves the airtime an attestation page costs as a fraction
-# of nothing at all: Tier I's interval T is in SECONDS, so a slower profile
-# spends proportionally less of its slots on RadiANT, not more.
+# The three permitted channel periods, in counts of 1/32768 s. A period must
+# match exactly or the channel won't open, so this is a closed set, not a rate
+# choice: 8070 (~4.06 Hz, default), 16140 (~2.03 Hz), 32280 (~1.02 Hz). Tier I's
+# interval is in SECONDS, so a slower profile spends proportionally fewer of
+# its slots on RadiANT attestation, not more.
 HRM_PERIOD = 8070
 HRM_PERIOD_HALF = 16140
 HRM_PERIOD_QUARTER = 32280
@@ -545,6 +518,591 @@ _HR_DECODERS = {
 
 
 # ---------------------------------------------------------------------------
+# Running dynamics, device type 0x1E
+#
+#   * Byte 0 is the WHOLE 8-bit page number - no page-change toggle, nothing
+#     masks it.
+#   * No two pages share a tail: page 0x00 and 0x01 have no field in common.
+#   * Every metric is split fixed-point with four different fraction widths
+#     (cadence 1/32, vert. osc. 1/4 mm, stance 1/4 %, balance/vert. ratio
+#     1/32 %); encoders take values already in wire scale.
+#
+# Three easy-to-misread splits:
+#   * Ground contact time: 3 low bits in byte [4] bits 5..7, 8 high bits in
+#     byte [5] - reversed from every other split field here.
+#   * Stance time's 2-bit fraction and balance's 5-bit fraction both split
+#     across a byte boundary LOW BIT FIRST - reversed reads wrong by 2x, but
+#     only when the low bit is set.
+#   * Page 0x01's two reserved bits are 0b11; page 0x00's one reserved bit is
+#     0. Both intentional.
+# ---------------------------------------------------------------------------
+
+RD_DEVICE_TYPE = 0x1E
+
+# The two channel periods. 4096 (8 Hz) is a standalone RD pod; 8070 (~4.06 Hz)
+# is the RD channel an HR-RD strap opens beside its heart-rate channel, and it
+# matches the heart-rate rate because it was opened from that channel.
+RD_PERIOD = 4096
+RD_PERIOD_HR_RD = 8070
+RD_PERIODS = (RD_PERIOD, RD_PERIOD_HR_RD)
+
+# Transmission types. The low nibble is fixed by the profile; the high nibble
+# is the optional 20-bit device-number extension, so these are what a sensor
+# that does not extend its device number transmits.
+RD_TRANS_TYPE = 0x05
+RD_TRANS_TYPE_HR_RD = 0x01
+
+# A standalone pod lives on the ANT+ public frequency; an HR-RD strap's RD
+# channel is told which of four to use. THE ENUMERATION IS NOT SORTED - code 3
+# is 2475 MHz and code 4 is 2461 MHz - and that is transcribed from the two
+# places the document states it, which agree with each other.
+RD_RF_FREQ = 57
+RD_RF_ENUM = {0: None, 1: 3, 2: 39, 3: 75, 4: 61}
+RD_RF_FREQS = (3, 39, 61, 75)
+
+PAGE_RD_A = 0x00
+PAGE_RD_B = 0x01
+PAGE_RD_SPEED = 0x10
+PAGE_RD_LEADER_REQUEST = 0x20
+PAGE_RD_OPEN_CHANNEL = 0x4A
+
+# Every measurement on this profile spells "invalid / no motion detected" as
+# ZERO, not as INVALID_U8. A decoder reaching for the common sentinel reads a
+# stationary runner as a real measurement on every field.
+RD_INVALID = 0
+
+# 101..127 is reserved on every percentage field, so a sensor clamping a
+# computed percentage clamps to 100 and not to the field maximum.
+RD_PERCENT_RESERVED_MIN = 101
+
+RD_LEADER_NONE = 0x0000
+RD_LEADER_HR_RD = 0xFFFF
+
+# Page 0x10's two sentinels are different values in different widths, and
+# either one alone invalidates the speed.
+RD_SPEED_INVALID_INT = 0x0F
+RD_SPEED_INVALID_FRAC = 0xFF
+
+# The wire scales, one per fractional field.
+RD_CADENCE_PER_STRIDE_MIN = 32
+RD_VERT_OSC_PER_MM = 4
+RD_STANCE_PER_PERCENT = 4
+RD_BALANCE_PER_PERCENT = 32
+RD_VERT_RATIO_PER_PERCENT = 32
+RD_SPEED_PER_MPS = 256
+
+
+def _rd_check(name: str, value: int, maximum: int) -> int:
+    if not 0 <= value <= maximum:
+        raise ValueError(f"{name} is {value}, outside 0..{maximum} in its "
+                         "wire scale")
+    return value
+
+
+def _rd_check_percent(name: str, scaled: int, per_percent: int,
+                      maximum: int) -> int:
+    _rd_check(name, scaled, maximum)
+    if scaled // per_percent >= RD_PERCENT_RESERVED_MIN:
+        raise ValueError(f"{name} is {scaled / per_percent}%, and 101..127 is "
+                         "reserved on every percentage field of this profile")
+    return scaled
+
+
+def encode_rd_a(cadence_32: int, vert_osc_quarter_mm: int, gct_ms: int,
+                stance_quarter: int, step_count: int, walking: bool = False,
+                bidirectional: bool = False) -> bytes:
+    """Page 0x00, Running Dynamics A.
+
+    Every argument is in its wire scale: cadence in 1/32 strides/min, vertical
+    oscillation in 1/4 mm, ground contact time in whole ms, stance time in
+    1/4 %. `step_count` is a 7-bit rollover accumulator and is meant to wrap.
+    """
+    _rd_check("cadence_32", cadence_32, 8191)
+    _rd_check("vert_osc_quarter_mm", vert_osc_quarter_mm, 8191)
+    _rd_check("gct_ms", gct_ms, 2047)
+    _rd_check_percent("stance_quarter", stance_quarter,
+                      RD_STANCE_PER_PERCENT, 511)
+    _rd_check("step_count", step_count, 127)
+
+    vo_mm, vo_frac = divmod(vert_osc_quarter_mm, RD_VERT_OSC_PER_MM)
+    stance_int, stance_frac = divmod(stance_quarter, RD_STANCE_PER_PERCENT)
+    cadence_int, cadence_frac = divmod(cadence_32, RD_CADENCE_PER_STRIDE_MIN)
+    return bytes([
+        PAGE_RD_A,
+        cadence_int,
+        cadence_frac | (0x20 if walking else 0) | (0x40 if bidirectional else 0),
+        vo_mm & 0xFF,
+        ((vo_mm >> 8) & 0x07) | (vo_frac << 3) | ((gct_ms & 0x07) << 5),
+        (gct_ms >> 3) & 0xFF,
+        stance_int | ((stance_frac & 0x01) << 7),
+        ((stance_frac >> 1) & 0x01) | ((step_count & 0x7F) << 1),
+    ])
+
+
+def decode_rd_a(payload: bytes) -> dict:
+    vo_mm = payload[3] | ((payload[4] & 0x07) << 8)
+    stance_int = payload[6] & 0x7F
+    stance_frac = ((payload[6] >> 7) & 0x01) | ((payload[7] & 0x01) << 1)
+    return {
+        "page": payload[0],
+        "cadence_32": (payload[1] * RD_CADENCE_PER_STRIDE_MIN
+                       + (payload[2] & 0x1F)) if payload[1] else RD_INVALID,
+        "walking": bool(payload[2] & 0x20),
+        "bidirectional": bool(payload[2] & 0x40),
+        "vert_osc_quarter_mm": (vo_mm * RD_VERT_OSC_PER_MM
+                                + ((payload[4] >> 3) & 0x03)) if vo_mm
+                               else RD_INVALID,
+        "gct_ms": ((payload[4] >> 5) & 0x07) | (payload[5] << 3),
+        "stance_quarter": (stance_int * RD_STANCE_PER_PERCENT + stance_frac)
+                          if stance_int else RD_INVALID,
+        "step_count": (payload[7] >> 1) & 0x7F,
+    }
+
+
+def encode_rd_b(balance_32: int, vert_ratio_32: int, step_length_mm: int,
+                session_leader: int = RD_LEADER_NONE,
+                upside_down: bool = False) -> bytes:
+    """Page 0x01, Running Dynamics B.
+
+    Balance and vertical ratio are in 1/32 %, step length in whole mm.
+    `session_leader` is RD_LEADER_HR_RD on an HR-RD strap, whose leader is
+    negotiated on the heart-rate channel with page 74 instead of in this field.
+    """
+    _rd_check_percent("balance_32", balance_32, RD_BALANCE_PER_PERCENT, 4095)
+    _rd_check_percent("vert_ratio_32", vert_ratio_32,
+                      RD_VERT_RATIO_PER_PERCENT, 4095)
+    _rd_check("step_length_mm", step_length_mm, 8191)
+
+    bal_int, bal_frac = divmod(balance_32, RD_BALANCE_PER_PERCENT)
+    vr_int, vr_frac = divmod(vert_ratio_32, RD_VERT_RATIO_PER_PERCENT)
+    return bytes([
+        PAGE_RD_B,
+        bal_int | ((bal_frac & 0x01) << 7),
+        ((bal_frac >> 1) & 0x0F) | ((vr_int & 0x0F) << 4),
+        ((vr_int >> 4) & 0x07) | (vr_frac << 3),
+        step_length_mm & 0xFF,
+        # Bits 6..7 reserved and set to 0b11 here, against page 0x00's single
+        # reserved bit set to 0.
+        ((step_length_mm >> 8) & 0x1F) | (0x20 if upside_down else 0) | 0xC0,
+        session_leader & 0xFF,
+        (session_leader >> 8) & 0xFF,
+    ])
+
+
+def decode_rd_b(payload: bytes) -> dict:
+    bal_int = payload[1] & 0x7F
+    bal_frac = ((payload[1] >> 7) & 0x01) | ((payload[2] & 0x0F) << 1)
+    vr_int = ((payload[2] >> 4) & 0x0F) | ((payload[3] & 0x07) << 4)
+    return {
+        "page": payload[0],
+        "balance_32": (bal_int * RD_BALANCE_PER_PERCENT + bal_frac)
+                      if bal_int else RD_INVALID,
+        "vert_ratio_32": vr_int * RD_VERT_RATIO_PER_PERCENT
+                         + ((payload[3] >> 3) & 0x1F),
+        "step_length_mm": payload[4] | ((payload[5] & 0x1F) << 8),
+        "upside_down": bool(payload[5] & 0x20),
+        "session_leader": _rd_le16(payload, 6),
+    }
+
+
+def encode_rd_speed(speed_256: int | None) -> bytes:
+    """Page 0x10, from the session leader to the sensor on the back channel.
+
+    `speed_256` is 1/256 m/s, or None for "no speed". 0x0F is the integer
+    field's sentinel, so 15 m/s is not expressible and the range stops at
+    14.996 m/s.
+    """
+    if speed_256 is None:
+        whole, frac = RD_SPEED_INVALID_INT, RD_SPEED_INVALID_FRAC
+    else:
+        _rd_check("speed_256", speed_256, RD_SPEED_INVALID_INT * 256 - 1)
+        whole, frac = divmod(speed_256, RD_SPEED_PER_MPS)
+    return bytes([PAGE_RD_SPEED,
+                  (whole & 0x0F) | ((frac & 0x0F) << 4),
+                  ((frac >> 4) & 0x0F) | 0xF0]) + bytes([INVALID_U8] * 5)
+
+
+def decode_rd_speed(payload: bytes) -> dict:
+    whole = payload[1] & 0x0F
+    frac = ((payload[1] >> 4) & 0x0F) | ((payload[2] & 0x0F) << 4)
+    invalid = whole == RD_SPEED_INVALID_INT or frac == RD_SPEED_INVALID_FRAC
+    return {
+        "page": payload[0],
+        "speed_256": None if invalid else whole * RD_SPEED_PER_MPS + frac,
+    }
+
+
+def encode_rd_leader_request(leader_id: int) -> bytes:
+    """Page 0x20, sent by a display as an acknowledged message."""
+    if not 1 <= leader_id <= 0xFFFF:
+        raise ValueError("session leader id 0x0000 is the invalid value and a "
+                         "manufacturer must verify it is never transmitted")
+    return (bytes([PAGE_RD_LEADER_REQUEST]) + _le16(leader_id)
+            + bytes([INVALID_U8] * 5))
+
+
+def decode_rd_leader_request(payload: bytes) -> dict:
+    return {"page": payload[0], "leader_id": _rd_le16(payload, 1)}
+
+
+def encode_rd_open_channel(leader_id_24: int, rf_freq: int,
+                           period: int = RD_PERIOD_HR_RD) -> bytes:
+    """Page 0x4A, sent by a display on the HEART-RATE channel, not this one.
+
+    `rf_freq` is the RF index itself (3, 39, 61 or 75), not the enumeration
+    that heart-rate page 0x04 byte [1] carries.
+    """
+    if not 0 <= leader_id_24 <= 0xFFFFFF:
+        raise ValueError("session leader id is the lower 3 bytes of a serial")
+    if rf_freq not in RD_RF_FREQS:
+        raise ValueError(f"RF index {rf_freq} is not one of {RD_RF_FREQS}")
+    if period != RD_PERIOD_HR_RD:
+        raise ValueError(f"the RD channel period is fixed at {RD_PERIOD_HR_RD}")
+    return (bytes([PAGE_RD_OPEN_CHANNEL,
+                   leader_id_24 & 0xFF,
+                   (leader_id_24 >> 8) & 0xFF,
+                   (leader_id_24 >> 16) & 0xFF,
+                   RD_DEVICE_TYPE,
+                   rf_freq])
+            + _le16(period))
+
+
+def decode_rd_open_channel(payload: bytes) -> dict:
+    return {
+        "page": payload[0],
+        "leader_id_24": (payload[1] | (payload[2] << 8) | (payload[3] << 16)),
+        "device_type": payload[4],
+        "rf_freq": payload[5],
+        "period": _rd_le16(payload, 6),
+    }
+
+
+def rd_rf_from_hr_page4(manufacturer_byte: int) -> int | None:
+    """The RF index an HR-RD strap advertises in heart-rate page 0x04 byte [1].
+
+    None for the "not open" code AND for every value outside the enumeration,
+    which are two different facts a receiver must act on identically: on a
+    strap without running dynamics that byte is manufacturer-specific data and
+    the document forbids interpreting it.
+    """
+    return RD_RF_ENUM.get(manufacturer_byte)
+
+
+_RD_DECODERS = {
+    PAGE_RD_A: decode_rd_a,
+    PAGE_RD_B: decode_rd_b,
+    PAGE_RD_SPEED: decode_rd_speed,
+    PAGE_RD_LEADER_REQUEST: decode_rd_leader_request,
+    PAGE_RD_OPEN_CHANNEL: decode_rd_open_channel,
+}
+
+
+# ---------------------------------------------------------------------------
+# Tracker (Asset Tracker), device type 0x29
+# One tracker reports MANY assets, each identified by a 5-bit asset index on
+# pages 1, 2, 16 and 17 - not a device number, not reused when removed.
+#
+# Location splits across TWO pages: page 1 carries distance, bearing, status
+# and latitude's LOW 16 bits; page 2 carries latitude's HIGH 16 bits and the
+# whole 32-bit longitude. Page 1 alone is a quarter of a position, not half.
+# ---------------------------------------------------------------------------
+
+TRK_DEVICE_TYPE = 0x29
+TRK_PERIOD = 2048          # 16 Hz, the profile's one permitted rate
+TRK_PERIODS = (TRK_PERIOD,)
+TRK_RF_FREQ = 57
+
+PAGE_TRK_LOCATION_1 = 0x01
+PAGE_TRK_LOCATION_2 = 0x02
+PAGE_TRK_NO_ASSETS = 0x03
+PAGE_TRK_IDENT_1 = 0x10
+PAGE_TRK_IDENT_2 = 0x11
+PAGE_TRK_DISCONNECT = 0x20
+
+TRK_ASSET_INDEX_MASK = 0x1F
+TRK_MAX_ASSETS = 32
+
+TRK_STATUS_LOW_BATTERY = 1 << 3
+TRK_STATUS_GPS_LOST = 1 << 4
+TRK_STATUS_COMM_LOST = 1 << 5
+TRK_STATUS_REMOVE = 1 << 6
+TRK_SITUATION_MASK = 0x07
+
+TRK_SITUATION_DOG_SITTING = 0
+TRK_SITUATION_DOG_MOVING = 1
+TRK_SITUATION_DOG_POINTED = 2
+TRK_SITUATION_DOG_TREED = 3
+TRK_SITUATION_DOG_UNKNOWN = 4
+TRK_SITUATION_UNDEFINED = 0xFF
+
+TRK_ASSET_TYPE_TRACKER = 0
+TRK_ASSET_TYPE_DOG = 1
+
+# semicircles = degrees * 2^31 / 180; bradians = degrees * 256 / 360. Both
+# exact-in-reverse integer mappings that let neither device carry pi.
+TRK_SEMICIRCLES_PER_180DEG = 2 ** 31
+TRK_BRADIANS_PER_360DEG = 256
+
+
+def trk_degrees_to_semicircles(degrees: float) -> int:
+    value = int(degrees * (TRK_SEMICIRCLES_PER_180DEG / 180.0))
+    return value & 0xFFFFFFFF
+
+
+def trk_semicircles_to_degrees(semicircles: int) -> float:
+    signed = semicircles - U32_WRAP if semicircles >= (1 << 31) else semicircles
+    return signed * (180.0 / TRK_SEMICIRCLES_PER_180DEG)
+
+
+def trk_degrees_to_bradians(degrees: float) -> int:
+    # Rounded, not truncated: the profile's own worked example (equation 5)
+    # rounds 42.67 up to 43 = 0x2B, and at this field's coarse ~1.4-degree
+    # resolution truncation would silently bias every conversion downward.
+    return round(degrees * (TRK_BRADIANS_PER_360DEG / 360.0)) & 0xFF
+
+
+def trk_bradians_to_degrees(bradians: int) -> float:
+    return bradians * (360.0 / TRK_BRADIANS_PER_360DEG)
+
+
+def _trk_index_byte(asset_index: int) -> int:
+    if not 0 <= asset_index < TRK_MAX_ASSETS:
+        raise ValueError(f"asset index {asset_index} is not 0..31")
+    # Reserved top 3 bits are 0x7 on every page carrying an asset index.
+    return (asset_index & TRK_ASSET_INDEX_MASK) | 0xE0
+
+
+def encode_trk_location_1(asset_index: int, distance_m: int, bearing_brad: int,
+                          status: int, latitude_semi: int) -> bytes:
+    lat_lo = latitude_semi & 0xFFFF
+    return bytes([
+        PAGE_TRK_LOCATION_1,
+        _trk_index_byte(asset_index),
+        distance_m & 0xFF, (distance_m >> 8) & 0xFF,
+        bearing_brad & 0xFF,
+        status & 0xFF,
+        lat_lo & 0xFF, (lat_lo >> 8) & 0xFF,
+    ])
+
+
+def decode_trk_location_1(payload: bytes) -> dict:
+    lat_lo = _rd_le16(payload, 6)
+    return {
+        "page": payload[0],
+        "asset_index": payload[1] & TRK_ASSET_INDEX_MASK,
+        "distance_m": _rd_le16(payload, 2),
+        "bearing_brad": payload[4],
+        "status": payload[5],
+        "latitude_semi_lo16": lat_lo,
+    }
+
+
+def encode_trk_location_2(asset_index: int, latitude_semi: int,
+                          longitude_semi: int) -> bytes:
+    lat_hi = (latitude_semi >> 16) & 0xFFFF
+    lon = longitude_semi & 0xFFFFFFFF
+    return bytes([
+        PAGE_TRK_LOCATION_2,
+        _trk_index_byte(asset_index),
+        lat_hi & 0xFF, (lat_hi >> 8) & 0xFF,
+        lon & 0xFF, (lon >> 8) & 0xFF, (lon >> 16) & 0xFF, (lon >> 24) & 0xFF,
+    ])
+
+
+def decode_trk_location_2(payload: bytes) -> dict:
+    lon = (payload[4] | (payload[5] << 8) | (payload[6] << 16)
+           | (payload[7] << 24))
+    if lon >= (1 << 31):
+        lon -= U32_WRAP
+    return {
+        "page": payload[0],
+        "asset_index": payload[1] & TRK_ASSET_INDEX_MASK,
+        "latitude_semi_hi16": _rd_le16(payload, 2),
+        "longitude_semi": lon,
+    }
+
+
+def trk_combine_latitude(loc1: dict, loc2: dict) -> int:
+    """Join the two halves latitude is split across; see the module note."""
+    raw = loc1["latitude_semi_lo16"] | (loc2["latitude_semi_hi16"] << 16)
+    return raw - U32_WRAP if raw >= (1 << 31) else raw
+
+
+def encode_trk_no_assets() -> bytes:
+    return bytes([PAGE_TRK_NO_ASSETS]) + bytes([INVALID_U8] * 7)
+
+
+def encode_trk_ident_1(asset_index: int, colour: int, name: bytes) -> bytes:
+    return bytes([PAGE_TRK_IDENT_1, _trk_index_byte(asset_index), colour & 0xFF]
+                 ) + (name[:5]).ljust(5, b"\x00")
+
+
+def decode_trk_ident_1(payload: bytes) -> dict:
+    return {
+        "page": payload[0],
+        "asset_index": payload[1] & TRK_ASSET_INDEX_MASK,
+        "colour": payload[2],
+        "name_lo": payload[3:8],
+    }
+
+
+def encode_trk_ident_2(asset_index: int, asset_type: int, name: bytes) -> bytes:
+    return bytes([PAGE_TRK_IDENT_2, _trk_index_byte(asset_index),
+                  asset_type & 0xFF]) + (name[5:10]).ljust(5, b"\x00")
+
+
+def decode_trk_ident_2(payload: bytes) -> dict:
+    return {
+        "page": payload[0],
+        "asset_index": payload[1] & TRK_ASSET_INDEX_MASK,
+        "asset_type": payload[2],
+        "name_hi": payload[3:8],
+    }
+
+
+def encode_trk_disconnect() -> bytes:
+    return bytes([PAGE_TRK_DISCONNECT]) + bytes([INVALID_U8] * 7)
+
+
+_TRK_DECODERS = {
+    PAGE_TRK_LOCATION_1: decode_trk_location_1,
+    PAGE_TRK_LOCATION_2: decode_trk_location_2,
+    PAGE_TRK_IDENT_1: decode_trk_ident_1,
+    PAGE_TRK_IDENT_2: decode_trk_ident_2,
+}
+
+
+# ---------------------------------------------------------------------------
+# Controls, device type 0x10
+#
+# Mirror of src/profiles/profile_controls.c (ANT+ Device Profile - Controls
+# Rev 2.0, tables 6-1/6-2, 9-1, 9-2, 9-8, 9-9). Scope is the command surface
+# only (page 16 audio/video, page 73 generic); see profile_controls.h for the
+# rest of the 64-page document.
+#
+# The sequence number is SHARED across page 16 and page 73 - one counter, not
+# one per page type. Page 73's command field is 16 bits (table 9-8's value
+# range, 0..65535 with 65535 = "No Command"), despite table 9-9's length
+# column saying otherwise.
+# ---------------------------------------------------------------------------
+
+CTRL_DEVICE_TYPE = 0x10
+CTRL_PERIOD = 8192          # 4 Hz, the profile's one permitted rate
+CTRL_PERIODS = (CTRL_PERIOD,)
+CTRL_RF_FREQ = 57
+
+PAGE_CTRL_AV_COMMAND = 0x10
+PAGE_CTRL_GENERIC = 0x49
+
+CTRL_AV_AUDIO = 0
+CTRL_AV_VIDEO = 1
+
+CTRL_AV_CMD_RESERVED = 0
+CTRL_AV_CMD_PLAY = 1
+CTRL_AV_CMD_PAUSE = 2
+CTRL_AV_CMD_STOP = 3
+CTRL_AV_CMD_VOLUME_UP = 4
+CTRL_AV_CMD_VOLUME_DOWN = 5
+CTRL_AV_CMD_MUTE = 6
+CTRL_AV_CMD_TRACK_AHEAD = 7
+CTRL_AV_CMD_TRACK_BACK = 8
+CTRL_AV_CMD_REPEAT_TRACK = 9
+CTRL_AV_CMD_REPEAT_ALL = 10
+CTRL_AV_CMD_REPEAT_OFF = 11
+CTRL_AV_CMD_SHUFFLE_TRACKS = 12
+CTRL_AV_CMD_SHUFFLE_ALBUMS = 13
+CTRL_AV_CMD_SHUFFLE_OFF = 14
+CTRL_AV_CMD_FAST_FORWARD = 15
+CTRL_AV_CMD_FAST_REWIND = 16
+CTRL_AV_CMD_CUSTOM_REPEAT = 17
+CTRL_AV_CMD_CUSTOM_SHUFFLE = 18
+CTRL_AV_CMD_RECORD = 19
+
+CTRL_AV_VOLUME_DEFAULT = INVALID_U8
+CTRL_SERIAL_UNKNOWN = 0xFFFF
+
+CTRL_GENERIC_MENU_UP = 0
+CTRL_GENERIC_MENU_DOWN = 1
+CTRL_GENERIC_MENU_SELECT = 2
+CTRL_GENERIC_MENU_BACK = 3
+CTRL_GENERIC_HOME = 4
+CTRL_GENERIC_START = 32
+CTRL_GENERIC_STOP = 33
+CTRL_GENERIC_RESET = 34
+CTRL_GENERIC_LENGTH = 35
+CTRL_GENERIC_LAP = 36
+CTRL_GENERIC_CUSTOM_MIN = 32768
+CTRL_GENERIC_CUSTOM_MAX = 65534
+CTRL_GENERIC_NO_COMMAND = 0xFFFF
+
+
+def _ctrl_generic_ok(command: int) -> bool:
+    if 0 <= command <= CTRL_GENERIC_HOME:
+        return True
+    if CTRL_GENERIC_START <= command <= CTRL_GENERIC_LAP:
+        return True
+    if CTRL_GENERIC_CUSTOM_MIN <= command <= CTRL_GENERIC_CUSTOM_MAX:
+        return True
+    return command == CTRL_GENERIC_NO_COMMAND
+
+
+def encode_ctrl_av(serial_number: int, sequence: int, av: bool, command: int,
+                   volume_percent: int = CTRL_AV_VOLUME_DEFAULT) -> bytes:
+    if not 0 <= command <= 0x7F:
+        raise ValueError("command number is 7 bits; bit 7 of byte [7] is the "
+                         "audio/video flag")
+    return bytes([
+        PAGE_CTRL_AV_COMMAND,
+        serial_number & 0xFF, (serial_number >> 8) & 0xFF,
+        sequence & 0xFF,
+        INVALID_U8, INVALID_U8,
+        volume_percent & 0xFF,
+        (command & 0x7F) | (0x80 if av else 0),
+    ])
+
+
+def decode_ctrl_av(payload: bytes) -> dict:
+    return {
+        "page": payload[0],
+        "serial_number": _rd_le16(payload, 1),
+        "sequence": payload[3],
+        "volume_percent": payload[6],
+        "av": bool(payload[7] & 0x80),
+        "command": payload[7] & 0x7F,
+    }
+
+
+def encode_ctrl_generic(slave_serial: int, slave_manufacturer_id: int,
+                        sequence: int, command: int) -> bytes:
+    if not _ctrl_generic_ok(command):
+        raise ValueError(f"generic command {command} is reserved on this "
+                         "profile (table 9-8)")
+    return bytes([
+        PAGE_CTRL_GENERIC,
+        slave_serial & 0xFF, (slave_serial >> 8) & 0xFF,
+        slave_manufacturer_id & 0xFF, (slave_manufacturer_id >> 8) & 0xFF,
+        sequence & 0xFF,
+        command & 0xFF, (command >> 8) & 0xFF,
+    ])
+
+
+def decode_ctrl_generic(payload: bytes) -> dict:
+    return {
+        "page": payload[0],
+        "slave_serial": _rd_le16(payload, 1),
+        "slave_manufacturer_id": _rd_le16(payload, 3),
+        "sequence": payload[5],
+        "command": _rd_le16(payload, 6),
+    }
+
+
+_CTRL_DECODERS = {
+    PAGE_CTRL_AV_COMMAND: decode_ctrl_av,
+    PAGE_CTRL_GENERIC: decode_ctrl_generic,
+}
+
+
+# ---------------------------------------------------------------------------
 # Common pages
 # ---------------------------------------------------------------------------
 
@@ -583,16 +1141,10 @@ def encode_common_81(sw_revision_main: int, serial_number: int | None,
         [3]    main software revision
         [4..7] serial number (LE, 32-bit), 0xFFFFFFFF when not supplied
 
-    `serial_number=None` emits the not-supplied sentinel, and that is the whole
-    of the page 81 privacy rule.
-
-    A 32-bit globally unique serial broadcast in the clear every 30 seconds is
-    STRICTLY MORE IDENTIFYING than the 16-bit device number, it is unaffected
-    by any device-number re-roll, and it therefore defeats identity Tiers 1 and
-    2 outright. A node that re-rolls its device number and keeps broadcasting
-    its serial has not changed identity; it has added a field. See
-    docs/radiant-security.md section 5.4, which makes this normative and
-    independent of every security switch.
+    `serial_number=None` emits the not-supplied sentinel - the whole of the
+    page 81 privacy rule. A 32-bit serial broadcast in the clear is unaffected
+    by device-number re-rolling and defeats identity Tiers 1 and 2 outright;
+    see docs/radiant-security.md section 5.4.
     """
     supplemental = (INVALID_U8 if sw_revision_supplemental is None
                     else _u8(sw_revision_supplemental))
@@ -613,11 +1165,9 @@ def encode_common_81(sw_revision_main: int, serial_number: int | None,
 def decode_common_81(payload: bytes) -> dict:
     """The mirror of encode_common_81.
 
-    `serial_number` is None when the node sent the not-supplied sentinel. The
-    encoder documented that sentinel from the day it was written and the
-    decoder returned 4294967295 for it anyway - so a tool asking "which sensor
-    is this" got an answer that looked like a serial number, sorted like one,
-    and was the same for every privacy-preserving node on the air.
+    `serial_number` is None when the node sent the not-supplied sentinel
+    (0xFFFFFFFF) - returning that raw value instead would look like a real,
+    shared serial number to every caller.
     """
     serial = int.from_bytes(payload[4:8], "little")
     return {
@@ -674,22 +1224,18 @@ def decode_common_82(payload: bytes) -> dict:
 # ---------------------------------------------------------------------------
 # RadiANT compat pages, on an ANT+ device type
 #
-# docs/radiant-security.md section 11 is normative and
+# docs/radiant-security.md section 11 is normative;
 # docs/decisions/0008-antplus-additive-pages-and-compat-security.md pins the
-# bytes. These pages are ADDED to an ANT+ profile and nothing existing is
-# touched: a legacy receiver skips a page number it does not know, which is the
-# whole mechanism.
+# bytes. Pages are ADDED to an ANT+ profile - a legacy receiver just skips a
+# page number it doesn't know.
 #
-# THE FRAMING IS HERE AND THE CRYPTOGRAPHY IS NOT. Every function below takes
-# tag bytes and returns tag bytes; tools/radiant_crypto.py computes them, and
-# radiant_core/src/radiant_sec_compat.c is its C mirror. That split is why this
-# module still imports nothing - and it is the same discipline the ADR states
-# from the other side, where the attestation code contains no page number and no
-# field name. Neither half knows what the other one means.
+# Framing lives here; cryptography does not. Every function below takes/
+# returns tag bytes only - tools/radiant_crypto.py computes them, mirrored by
+# radiant_core/src/radiant_sec_compat.c. This module imports nothing from
+# either.
 #
-# Two page numbers are allocated, and 0x79 gets neither, permanently: it has no
-# page-number byte at all, so an inserted page decodes as speed and cadence and
-# steps four accumulators.
+# Two page numbers are allocated; 0x79 gets neither, permanently - it has no
+# page-number byte, so an inserted page would decode as speed and cadence.
 # ---------------------------------------------------------------------------
 
 COMPAT_VERSION = 1
@@ -834,12 +1380,10 @@ def compat_frame_index(payload: bytes) -> tuple:
 class CompatBeacon:
     """Layer A, the capability beacon. Two frames under page 0x70.
 
-    It carries NO EPOCH, and that is a constraint rather than an omission: for a
-    hostless node the epoch is the boot counter, so a slowly incrementing 32-bit
-    number broadcast every 30 s is a device fingerprint that survives every other
-    privacy measure in this design - and it would have sat directly beside a
-    key-group hint made epoch-derived precisely to avoid that class of leak. A
-    receiver recovers the epoch by searching forward against the hint instead.
+    No epoch field, deliberately: for a hostless node the epoch is the boot
+    counter, and broadcasting it would fingerprint the device across every
+    other privacy measure here. A receiver recovers the epoch by searching
+    forward against the key-group hint instead.
     """
 
     version: int = COMPAT_VERSION
@@ -1180,16 +1724,14 @@ _COMPAT_DECODERS = {
 # ---------------------------------------------------------------------------
 # The RadiANT telemetry envelope, device type 0x60
 #
-# The mirror of src/profiles/. docs/radiant-telemetry.md section 10 says why
-# the split exists at all: the Python encoders and decoders check each other
-# here, the same vectors feed the C decoders, and native_sim does not build on
-# Windows - so this is the only layer a developer can iterate against locally.
+# Mirror of src/profiles/; docs/radiant-telemetry.md section 10 explains the
+# split (native_sim doesn't build on Windows, so this is the only layer a
+# developer can iterate against locally; the same vectors feed the C decoders).
 #
-# Everything below is the envelope, not a sensor. A node publishes a schema and
-# a receiver decodes typed values against it having never heard of the node
-# before. Read section 6 of that document alongside this; the layout tables
-# there are normative and the code here is meant to be checkable against them
-# line by line.
+# This is the envelope, not a sensor: a node publishes a schema and a receiver
+# decodes typed values against it having never heard of the node before.
+# Section 6 of that doc is normative; the code here should match it line by
+# line.
 # ---------------------------------------------------------------------------
 
 RADIANT_TLM_DEVICE_TYPE = 0x60
@@ -1405,22 +1947,15 @@ def tlm_code_for_width(bits: int) -> int:
 # ---------------------------------------------------------------------------
 # The MSB-first bit packer
 #
-# THE TWIN OF src/profiles/profile_bits.c, AND THE VECTORS IN
-# tools/test_ant_pages.py ARE SHARED WITH radiant_core/tests/src/test_profiles.c.
+# Twin of src/profiles/profile_bits.c; vectors in tools/test_ant_pages.py are
+# shared with radiant_core/tests/src/test_profiles.c.
 #
-# Section 6: bit packing here is MSB-first and the value is stored MSB-first
-# within its width. That is the opposite of the little-endian byte order every
-# other page in this file uses, and the difference is deliberate - those fields
-# are byte-aligned, where little-endian is unambiguous; these are not, where
-# little-endian bit order is "a reliable source of two implementations that
-# each work alone."
-#
-#   bit offset 0 is the MOST SIGNIFICANT BIT OF THE FIRST BYTE of the area,
-#   which is payload byte [2] of a data page.
-#
-# There is no alignment requirement: a 6-bit field may start at offset 7. The
-# descriptor carries an explicit bit offset per field precisely so a node may
-# pack tightly and a receiver never has to guess.
+# Section 6: bit packing is MSB-first, both across bytes and within a value's
+# width - deliberately the opposite of every other (byte-aligned,
+# little-endian) page here, since little-endian bit order is ambiguous.
+# Bit offset 0 is the MSB of the first byte of the area (payload byte [2] of a
+# data page). No alignment requirement: a 6-bit field may start at offset 7,
+# since the descriptor carries an explicit bit offset per field.
 # ---------------------------------------------------------------------------
 
 
@@ -1513,20 +2048,17 @@ class TlmField:
 # ---------------------------------------------------------------------------
 # The schedule block - frame 1 byte [3] bits 3..0, plus one frame
 #
-# The mirror of src/profiles/profile_schedule.h, which carries the argument for
-# every field. Three things go in the descriptor because the descriptor is a
-# standing pointer a node already transmits: a clock-accuracy ceiling (a bug
-# fix - an RC-clocked node is outside every window a +/-50 ppm receiver opens),
-# a published downlink window (announced here, opened by the phase that builds
-# response slots), and the coding rate and announced TX power that the
-# long-range PHY phase must not get to name a second time.
+# Mirror of src/profiles/profile_schedule.h. Three things live in the
+# descriptor because it's a standing pointer a node already transmits: a
+# clock-accuracy ceiling (an RC-clocked node is outside every window a
+# +/-50 ppm receiver opens), a published downlink window, and the coding rate
+# / TX power that the long-range PHY phase must not get to name a second time.
 #
-# THE CLOCK LADDER IS THE SYNC-HANDOFF PAGE'S, unchanged - see TLM_CLK_* below,
-# which this block reuses rather than restating. What it adds is the stated
-# bit: a handoff is only ever sent by a receiver that already knows something,
-# so its code 0 can mean 500 ppm, but a descriptor's zeros are what every node
-# built before this block existed transmits, and reading a claim out of those
-# would put one on every node in the field retroactively.
+# The clock ladder is the sync-handoff page's (TLM_CLK_* below), reused not
+# restated. It adds a "stated" bit: a handoff's code 0 can mean 500 ppm
+# because it's only ever sent by a receiver that already knows something, but
+# a descriptor's zeros are what every pre-block node transmits, so those must
+# not be read as a claim.
 # ---------------------------------------------------------------------------
 
 TLM_SCHED_CLK_STATED = 0x08      # frame 1 byte [3] bit 3
@@ -2292,25 +2824,21 @@ def decode_tlm_command_ack(body: bytes) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# The sync-handoff page, section 12 - the mirror of src/profiles/profile_handoff.c
+# The sync-handoff page, section 12 - mirror of src/profiles/profile_handoff.c
 #
-# The one page in the envelope document that a NODE does not send. A receiver
-# already tracking a node broadcasts it so that a second receiver can configure
-# a channel and go straight to tracking, skipping the wildcard sweep entirely -
-# and so that the same receiver, after a reboot, re-acquires in one channel
-# period instead of one sweep.
+# The one page a NODE does not send: a receiver already tracking a node
+# broadcasts it so a second receiver (or the same one after reboot) can
+# configure a channel and skip the wildcard sweep.
 #
-# Two frames under one page number, and the arithmetic that forced it is in
-# section 12: page byte and counter byte are fixed by the section 4 positional
-# invariants, byte [7] is tag space by the second of them, and identity plus
-# period alone is 47 of the 48 bits a single frame would have left - one bit
-# spare and no room for a phase field, which is the entire point of the page.
+# Two frames under one page number: page/counter bytes are fixed by the
+# section 4 positional invariants, byte [7] is tag space, and identity plus
+# period alone leaves only one spare bit - no room for a phase field in one
+# frame, which is the whole reason for the second.
 #
-# THE PAGE CARRIES NO EPOCH. It is the obvious field to add and it must not be
-# added: for a hostless node the epoch is the boot counter, and a slowly
-# incrementing number broadcast in the clear fingerprints the device across
-# sessions and defeats per-boot device-number rotation on its own. Every one of
-# the 64 bits below is assigned, so there is no space it could quietly occupy.
+# NO EPOCH FIELD, deliberately: for a hostless node the epoch is the boot
+# counter, and broadcasting it in the clear would fingerprint the device and
+# defeat per-boot device-number rotation. Every one of the 64 bits is
+# assigned, so there's no space for one to sneak in later.
 # ---------------------------------------------------------------------------
 
 PAGE_TLM_SYNC_HANDOFF = 0x12
@@ -2541,22 +3069,20 @@ def tlm_handoff_next_slot(h: TlmHandoff, t_carrier_counts: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Adaptive frequency, page 0x13 - the mirror of src/profiles/profile_freq.c
+# Adaptive frequency, page 0x13 - mirror of src/profiles/profile_freq.c
 #
 # The characterised ~0.4% loss floor on this bench is collision with Wi-Fi
-# channel 11 over 2457 MHz. A node leaves, once, to a quiet index, and stays;
-# it announces the move on a countdown first so that every receiver retunes on
-# the same message rather than at N independent moments.
+# channel 11 over 2457 MHz. A node leaves, once, to a quiet index, and stays,
+# announcing the move on a countdown first so every receiver retunes together.
 #
-# THE CANDIDATE SET IS BLE'S ADVERTISING CHANNELS - 2402, 2426 and 2480 MHz,
-# which sit in the gaps between the three non-overlapping Wi-Fi channels. A node
-# is not restricted to them (descriptor frame 0 byte [6] carries a full 0..124
-# index and this encoder will announce any of them); they are what a selector
-# considers by default and what a receiver that lost an off-57 node tries first.
+# Candidate set is BLE's advertising channels (2402/2426/2480 MHz, in the gaps
+# between the three non-overlapping Wi-Fi channels) - defaults for the
+# selector and for a receiver reacquiring a lost off-57 node, not a hard
+# restriction (descriptor frame 0 byte [6] carries a full 0..124 index).
 #
-# DISCOVERY NEVER MOVES. The search sweep stays 1 M on RF 57 forever, which is
-# why the move is announced in a page a receiver already hears rather than
-# discovered by tuning around. See docs/decisions/0012-adaptive-frequency.md.
+# Discovery never moves: the search sweep stays 1 M on RF 57 forever, so the
+# move is announced on a page a receiver already hears rather than found by
+# tuning around. See docs/decisions/0012-adaptive-frequency.md.
 # ---------------------------------------------------------------------------
 
 PAGE_TLM_FREQ_MOVE = 0x13
@@ -2701,21 +3227,18 @@ def tlm_freq_reacquire_order(last_target: int | None = None) -> list:
 
 
 # ---------------------------------------------------------------------------
-# The page scheduler - the mirror of src/profiles/profile_sched.c
+# The page scheduler - mirror of src/profiles/profile_sched.c
 #
-# Which page goes in the next message slot, and nothing else. It knows no
-# microsecond and no radio; a master calls next() to fill the body it is about
-# to transmit.
+# Which page goes in the next message slot, nothing else - no microsecond, no
+# radio; a master calls next() to fill the body it's about to transmit.
 #
-# THE SLOT-INSERTION SEAM. Two plans need this engine: this one runs it for
-# device type 0x60, and the ANT+ compatibility work needs the same interleave
-# for 0x78 and 0x0B with its own beacon and attestation pages inserted. Two
-# implementations of one cadence rule is one implementation and one drift, so
-# there is one engine and the other plan is a CLIENT of it. A client gets first
-# refusal on any slot the rotation would have filled with a data page - and, on
-# a sparse node, on any slot that would otherwise be silent. It is never
-# offered message 119, message 120 or a descriptor frame, because those three
-# ARE the cadence rule.
+# The slot-insertion seam: this engine runs for device type 0x60, and the
+# ANT+ compatibility work needs the same interleave for 0x78/0x0B with its own
+# beacon/attestation pages inserted, so that work is a CLIENT of this engine
+# rather than a second implementation. A client gets first refusal on any slot
+# the rotation would fill with a data page (or, on a sparse node, any silent
+# slot) - never message 119, 120, or a descriptor frame, since those ARE the
+# cadence rule.
 # ---------------------------------------------------------------------------
 
 SLOT_IDLE = "idle"

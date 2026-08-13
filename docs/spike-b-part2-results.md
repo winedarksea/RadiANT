@@ -2,10 +2,11 @@
 # Spike B part 2 - the whole control byte
 
 Checked by: `radiant_core/spike/promisc/spike_b_analyse.py`, which refuses to report
-a capture it cannot show to be complete. The gate is
+a capture it cannot show to be complete. The gate is run with the NCS toolchain's
+Python interpreter (there is no system Python in this project):
 
 ```powershell
-C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe radiant_core\spike\promisc\spike_b_analyse.py `
+python radiant_core\spike\promisc\spike_b_analyse.py `
     archive\captures\radio\2026-08-09-spike-b2-runA-burst-seq.log `
     archive\captures\radio\2026-08-09-spike-b2-runB-burst-seq-advburst.log `
     archive\captures\radio\2026-08-09-spike-b2-runC-master-control.log --strict
@@ -16,7 +17,7 @@ and it exits 0. If this document and those logs disagree, the logs are right.
 Provenance: `[measured]` throughout unless a line says otherwise. Measured on
 this bench on 2026-08-09, with three radios on the air at once for the first
 time. Nothing here derives from `sdk-ant`, from `libant.a`, or from an
-adopter-gated ANT+ device profile document.
+non-redistributable ANT+ device profile document.
 
 Part 1 is `docs/spike-b-results.md`. It established that byte 3 is a control
 byte and measured three of its values. It is right about everything it measured

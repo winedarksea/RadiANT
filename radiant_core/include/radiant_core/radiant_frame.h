@@ -2,27 +2,19 @@
 /*
  * radiant_frame.h - the ANT on-air frame: CRC, address packing, encode, decode.
  *
- * Provenance: clean-room. Written from docs/ant-radio-link.md (the frame
- * layout, the CRC parameters, the two packet configurations and the two
- * address-packing rules), docs/spike-a-results.md, docs/spike-b-results.md and
- * docs/spike-b-part2-results.md - which supersedes part 1 on the control byte
- * and is where the six-field model below comes from -
- * (the measurements those rest on, 2026-08-09, nRF54L15 DK), with public
- * nRF52840/nRF54L15 product specifications behind the reasoning about *why*
- * the two configurations differ. Nothing here derives from sdk-ant, from
- * libant.a, from disassembly
- * of any binary, or from any adopter-gated ANT+ device profile document; no
- * expression from rtl_433 was read or transliterated - only the facts already
- * recorded in docs/ant-radio-link.md. See docs/decisions/0002-clean-room-policy.md.
+ * Provenance: clean-room, from docs/ant-radio-link.md (frame layout, CRC
+ * parameters, the two packet configurations, address-packing rules),
+ * docs/spike-a-results.md, docs/spike-b-results.md and
+ * docs/spike-b-part2-results.md (supersedes part 1 on the control byte; the
+ * six-field model below), with public nRF52840/nRF54L15 product
+ * specifications behind the reasoning about why the two configurations
+ * differ. See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * What this file is
- * ---------------------------------------------------------------------------
- * The layer with no radio in it. Everything here is a pure function of bytes:
- * given a channel ID and a payload, what goes on the air; given what came off
- * the air, what channel ID and payload that was; and the CRC that decides
- * whether the second question was worth asking. That is why it is the first
- * module written and the only one that is fully testable in CI with no board.
+ * The layer with no radio in it. Everything here is a pure function of
+ * bytes: given a channel ID and payload, what goes on the air; given what
+ * came off the air, what channel ID and payload that was; and the CRC that
+ * decides whether the second question was worth asking. The only module
+ * fully testable in CI with no board.
  *
  * The frame, every byte of it measured (docs/ant-radio-link.md, confirmed by
  * Spike A on 2,164 real frames, by Spike B part 1 on 750 more and by part 2 on
@@ -37,15 +29,14 @@
  *           |<------------------------ 17 bytes ------------------------->|
  *
  * Byte 3 of the body is a CONTROL byte, not a length. Spike B part 1 settled
- * that: an ANT master re-broadcasts its last payload, so the same eight payload
- * bytes appear one slot apart with this byte changing 0xAA -> 0x0A. A length
- * field cannot do that. Part 2 then decomposed the byte into six independent
- * fields and killed the last of the length reading outright - see the control
- * byte section below.
+ * that: an ANT master re-broadcasts its last payload, so the same eight
+ * payload bytes appear one slot apart with this byte changing 0xAA -> 0x0A,
+ * which a length field cannot do. Part 2 decomposed it into six independent
+ * fields and killed the length reading outright - see below.
  *
- * The preamble is not this module's business: it is a PHY property, and on the
- * parts in view the radio derives it from the first address bit with no
- * software involvement. Everything from the network address onwards is.
+ * The preamble is a PHY property (the radio derives it from the first
+ * address bit, no software involved) and not this module's business;
+ * everything from the network address onward is.
  *
  * ---------------------------------------------------------------------------
  * Two configurations, not one - and the split is not where a reader expects
@@ -60,43 +51,36 @@
  *                                                   12 bytes
  *
  * Concatenated, those are byte-for-byte the same 15 bytes and therefore the
- * same CRC - which is the 15-byte coverage invariant, and is asserted in
- * radiant_core/tests/src/test_frame.c in both directions. The split matters
- * because a matched address byte never reaches RAM: in tracking the channel ID
- * is proven by the match and cannot be read back, while in search it is in the
- * buffer and can be. Search exists at all because the nRF's fixed
- * S0|LENGTH|S1 layout has no slot for a length field with three bytes ahead of
- * it, so search runs static-length; that is a backend fact, but it is the
+ * same CRC (the 15-byte coverage invariant, asserted both directions in
+ * radiant_core/tests/src/test_frame.c). The split matters because a matched
+ * address byte never reaches RAM: in tracking the channel ID is proven by
+ * the match, in search it's in the buffer. Search exists because the nRF's
+ * fixed S0|LENGTH|S1 layout has no slot for a length field ahead of three
+ * address bytes, so it runs static-length - a backend fact that's still the
  * reason this module has to express both layouts and convert between them.
  *
- * BOTH formats are static-length now, and that is a Spike B consequence rather
- * than a tidy-up. Parsing byte 3 as a hardware length field (nRF
- * PCNF0.LFLEN=8) reads an acknowledged frame's 0xAA as LENGTH=170, overruns
- * MAXLEN and discards it as a CRC error - a receiver that hears every
- * broadcast perfectly and silently drops every acknowledged and burst frame.
- * On transmit the same field would try to send 170 bytes. So both
- * radiant_pkt_formats below are RADIANT_LEN_FIXED, which is the nRF's PCNF0=0 /
- * STATLEN form, and byte 3 is a body byte that software writes and reads.
+ * BOTH formats are static-length now, a Spike B consequence, not a tidy-up.
+ * Parsing byte 3 as a hardware length field (nRF PCNF0.LFLEN=8) reads an
+ * acknowledged frame's 0xAA as LENGTH=170, overruns MAXLEN, and silently
+ * drops every acknowledged and burst frame; transmit would try to send
+ * 170 bytes. So both radiant_pkt_formats below are RADIANT_LEN_FIXED
+ * (PCNF0=0/STATLEN), byte 3 a plain body byte software writes and reads.
+ * Part 2 confirmed this further: 0x0A's low five bits read 10, 0xA2's read
+ * 2, same 8-byte payload - no length field can parse both.
  *
- * Part 2 strengthened that call rather than weakening it. 0x0A's low five bits
- * read 10 and 0xA2's read 2, and both frames carry eight payload bytes: no
- * hardware length field can parse a byte that says 10 and 2 for the same
- * payload, in any configuration, on any part.
- *
- * The one byte of a search frame that is in neither place is devnum_lo: it is
- * consumed by the matcher, and the core recovers it from which filter matched
- * (see radiant_rx_event.filter_index in radiant_radio_hal.h). So a caller decoding a
- * search frame fills wire.addr from its own filter table before calling here.
- * This module never guesses it.
+ * The one byte of a search frame in neither place is devnum_lo, consumed by
+ * the matcher; the core recovers it from which filter matched
+ * (radiant_rx_event.filter_index). A caller decoding search fills
+ * wire.addr from its own filter table - this module never guesses it.
  *
  * ---------------------------------------------------------------------------
  * No register semantics
  * ---------------------------------------------------------------------------
  * Registers belong to a backend. This header speaks frames, channel IDs,
- * buffers and on-air byte order. radiant_addr_pack_leading() does return a 32-bit
- * word, because every planned backend wants one, but it is named for what it
- * is - the leading on-air address bytes packed in transmission order - and not
- * for the register it happens to land in on one part.
+ * buffers and on-air byte order. radiant_addr_pack_leading() returns a
+ * 32-bit word because every planned backend wants one, but it's named for
+ * what it is - leading on-air address bytes packed in transmission order -
+ * not for the register it happens to land in on one part.
  */
 
 #ifndef RADIANT_FRAME_H_
@@ -115,10 +99,9 @@ extern "C" {
 /* ---------------------------------------------------------------------------
  * Return codes
  *
- * Distinct from the HAL's, and distinct from each other, because the tests
- * that matter most here are the malformed-input ones and "it failed" is not a
- * result worth asserting on. Negative for the same reason the HAL's are: a
- * call can return either an error or a small non-negative length.
+ * Distinct from the HAL's and from each other, since the malformed-input
+ * tests need more than "it failed" to assert on. Negative, same reason as
+ * the HAL's: a call returns either an error or a small non-negative length.
  * ---------------------------------------------------------------------------
  */
 #define RADIANT_FRAME_OK        0
@@ -139,12 +122,11 @@ extern "C" {
 /* ---------------------------------------------------------------------------
  * The network address
  *
- * Two bytes, and the only key-dependent thing in the whole frame. The ANT+
- * network key B9 A5 21 FB BD 72 C3 45 corresponds to A6 C5; the key -> address
- * function is unknown outside Garmin, is not needed, and is not to be fitted
- * from samples (docs/ant-radio-link.md). ant_net.c holds the one-entry table.
- * Every function here takes the address as an argument rather than assuming
- * ANT+, so that table is the only place the pairing is written down.
+ * Two bytes, the only key-dependent thing in the frame. ANT+ network key
+ * B9 A5 21 FB BD 72 C3 45 corresponds to A6 C5; the key->address function is
+ * unknown outside Garmin, not needed, and not to be fitted from samples
+ * (docs/ant-radio-link.md). ant_net.c holds the one-entry table; every
+ * function here takes the address as an argument rather than assuming ANT+.
  * ---------------------------------------------------------------------------
  */
 #define RADIANT_NET_ADDR_LEN 2
@@ -158,61 +140,51 @@ extern const uint8_t radiant_net_addr_ant_plus[RADIANT_NET_ADDR_LEN];
 /* ---------------------------------------------------------------------------
  * CRC-16/CCITT-FALSE
  *
- * Width 16, polynomial 0x1021 in normal (unreflected) form, init 0xFFFF, no
- * reflection either way, no final XOR. It covers the on-air address bytes as
- * well as the body - 15 bytes for a standard frame - which is the property
- * most sync-word matchers do not have and which therefore decides whether a
- * given radio can do this in hardware at all.
+ * Width 16, polynomial 0x1021 (normal/unreflected), init 0xFFFF, no
+ * reflection, no final XOR. Covers the on-air address bytes as well as the
+ * body (15 bytes standard) - a property most sync-word matchers lack, and
+ * what decides whether a given radio can do this in hardware at all.
  * ---------------------------------------------------------------------------
  */
 #define RADIANT_CRC_POLY 0x1021u
 #define RADIANT_CRC_INIT 0xFFFFu
 
 /*
- * The state of the CRC register after it has consumed the ANT+ network address
- * A6 C5 from init 0xFFFF.
+ * The state of the CRC register after it has consumed the ANT+ network
+ * address A6 C5 from init 0xFFFF.
  *
- * This is not a curiosity. CCITT-FALSE chains, so a radio whose CRC engine
- * cannot be made to cover its own sync word still produces ANT's exact CRC by
- * folding this constant in as the initial value and covering only the
- * remaining 13 bytes. That is what makes hardware CRC reachable on EFR32/RAIL
- * (docs/backends.md), and it holds only while the covered prefix is constant -
- * a sync word carrying the device number varies per channel and cannot be
- * folded. Spike A used it on real silicon in its phase E, which failed for an
- * unrelated reason, so the confirmation behind it is arithmetic.
+ * Not a curiosity: CCITT-FALSE chains, so a radio whose CRC engine can't
+ * cover its own sync word can still produce ANT's exact CRC by folding this
+ * constant in as the initial value and covering only the remaining 13
+ * bytes - what makes hardware CRC reachable on EFR32/RAIL (docs/backends.md).
+ * Holds only while the covered prefix is constant; a device-number-bearing
+ * sync word can't be folded this way.
  */
 #define RADIANT_CRC_AFTER_ANT_PLUS_NET 0x233Eu
 
 /*
- * Run the CRC over len bytes, starting from seed.
+ * Run the CRC over len bytes, starting from seed. seed is a parameter (not
+ * a constant) so the chaining above is expressible; pass RADIANT_CRC_INIT
+ * for a whole frame.
  *
- * seed is a parameter rather than a constant precisely so the chaining above
- * is expressible. Pass RADIANT_CRC_INIT for a whole frame.
- *
- * Two ways to check a received frame, and they catch different mistakes, so
- * assert both:
- *   - compute over the 15 covered bytes and compare against the received 2, or
- *   - compute over all 17 and check the result is zero.
- * The second works because there is no final XOR and no reflection, so
- * appending a correct CRC drives the register to zero. Both held on every one
- * of Spike A's 2,164 CRC-valid frames.
+ * Two ways to check a received frame, catching different mistakes - assert
+ * both: compute over the 15 covered bytes and compare to the received 2, or
+ * compute over all 17 and check for zero (works because no final XOR/
+ * reflection means a correct CRC drives the register to zero).
  */
 uint16_t radiant_crc16(uint16_t seed, const uint8_t *data, size_t len);
 
 /* ---------------------------------------------------------------------------
  * Bit order, and the address packing every backend needs
  *
- * Address bits go out least-significant-bit first, whatever the endianness
- * setting that governs the rest of the frame says. Spike A settled this: the
- * bit-reversed packing caught every frame the transmitter sent, and the other
- * seven permutations of bit order, byte order and prefix position heard
- * literally nothing - not degraded reception, zero address matches. A wrong
- * answer here does not produce a weak link, it produces silence, which is
+ * Address bits go out LSB-first regardless of the frame's other endianness.
+ * Spike A settled this: bit-reversed packing caught every frame sent, all
+ * seven other permutations of bit/byte order and prefix position heard
+ * literally nothing. A wrong answer here produces silence, not a weak link -
  * worth knowing when a backend port comes up dead.
  *
- * These live here rather than in a backend because they are pure functions of
- * the on-air address, every backend needs them, and two implementations of
- * this arithmetic is one more than the number that can be right.
+ * Kept here rather than in a backend since they're pure functions of the
+ * on-air address every backend needs, and two implementations is one too many.
  * ---------------------------------------------------------------------------
  */
 
@@ -225,37 +197,29 @@ uint8_t radiant_rev8(uint8_t b);
  *
  *     word = (lsb-first packing of the leading bytes) << (8 * (4 - n_leading))
  *
- * Two separate rules are folded into that one expression, and the folding is
- * the point:
+ * Two rules folded into one expression: the first byte on air sits in the
+ * lowest occupied byte (each byte bit-reversed), and with fewer than four
+ * leading bytes the used bytes are the HIGH ones - a short address is
+ * truncated from the least-significant byte, so this ordering keeps exactly
+ * the bytes that must survive. Collapses to the four-byte case at
+ * n_leading == 4.
  *
- *   - the first byte on air sits in the *lowest* occupied byte of the word,
- *     and every byte is bit-reversed on the way in;
- *   - when fewer than four leading bytes are used, the used bytes are the
- *     *high* ones. A short address is truncated from the least significant
- *     byte, and under the order above the bytes truncation would discard are
- *     exactly the ones that must survive.
+ * The naive reading (keep the low bytes) is not merely suboptimal: Spike A
+ * measured it producing 9-20 address matches per 60s with ZERO CRC-valid
+ * frames at -54..-101 dBm, against 24 CRC-valid frames at -17 dBm for the
+ * correct packing - a matcher firing on noise, ~70 dB apart.
  *
- * Written as a shift it collapses to the four-byte case at n_leading == 4, so
- * a backend has one expression rather than two. The naive reading - keep the
- * low bytes - is not merely suboptimal: Spike A measured it producing 9 to 20
- * address matches per 60 s window with *zero* CRC-valid frames at -54 to
- * -101 dBm, against 24 CRC-valid frames at -17 dBm for the correct packing.
- * That is a matcher firing on noise, and the RSSI column separates the two by
- * about 70 dB. It is asserted against in test_frame.c by name.
- *
- * Returns 0 for an addr_len outside 2..RADIANT_FRAME_ADDR_MAX, which is also a
- * legitimate value for an all-zero address; callers that care validate the
- * length themselves rather than testing the result.
+ * Returns 0 for an addr_len outside 2..RADIANT_FRAME_ADDR_MAX, which is also
+ * a legitimate all-zero-address value; callers validate the length
+ * themselves rather than testing the result.
  */
 uint32_t radiant_addr_pack_leading(const uint8_t *addr, uint8_t addr_len);
 
-/*
- * The last byte of an on-air address, bit-reversed. It is transmitted last,
- * and on the nRF24-descended parts it is the byte that distinguishes one
- * logical address from another while the leading bytes are shared - which is
- * exactly what the eight-filter wildcard sweep in radiant_search.c exploits.
- * Returns 0 for an invalid addr_len, on the same terms as above.
- */
+/* The last byte of an on-air address, bit-reversed. Transmitted last; on the
+ * nRF24-descended parts it's the byte distinguishing one logical address
+ * from another while leading bytes are shared, which the eight-filter
+ * wildcard sweep in radiant_search.c exploits. Returns 0 for an invalid
+ * addr_len, same terms as above. */
 uint8_t radiant_addr_pack_trailing(const uint8_t *addr, uint8_t addr_len);
 
 /* ---------------------------------------------------------------------------
@@ -311,17 +275,15 @@ enum radiant_frame_cfg {
 #define RADIANT_FRAME_HDR_LEN_LR        4u
 
 /*
- * Payload bytes. 8 is every frame anyone has ever measured - Spike A's 2,164,
- * Spike B part 1's 750 and part 2's 2,354 alike. Part 2 enabled advanced burst
- * a second time, sent 24-byte blocks, and watched the stack fragment them into
- * three 8-byte on-air packets; the sequence bit alternated per on-air packet,
- * not per host block. No frame with a payload other than eight bytes has ever
- * been on this bench's air.
+ * Payload bytes. 8 is every frame ever measured (Spike A's 2,164, Spike B
+ * part 1's 750, part 2's 2,354). Part 2's advanced burst sent 24-byte
+ * blocks but the stack fragmented them into three 8-byte on-air packets
+ * (sequence bit alternating per packet, not per block); no other payload
+ * size has ever been on this bench's air.
  *
- * 24 is therefore a buffer ceiling and nothing more. It is NOT a prediction
- * about an advanced-burst frame's control byte: that prediction rested on the
- * low bits being a length, and part 2 falsified the premise, so there is no
- * encoding here to predict with.
+ * 24 is therefore only a buffer ceiling, not a prediction about an
+ * advanced-burst control byte - that prediction rested on the low bits
+ * being a length, which part 2 falsified.
  */
 #define RADIANT_FRAME_PAYLOAD_STD 8u
 #define RADIANT_FRAME_PAYLOAD_MAX 24u
@@ -335,43 +297,32 @@ enum radiant_frame_cfg {
 /* ---------------------------------------------------------------------------
  * The long-range configuration - ADR 0007
  *
- * The first format in this project with a real length field, and the first
- * that is not ANT. Both facts are the same decision.
+ * The first format here with a real length field, and the first that is not
+ * ANT - both facts are the same decision.
  *
- * WHY A LENGTH IS ALLOWED HERE WHEN ADR 0005 AXIS 3 WITHDREW ONE. Axis 3 asked
- * whether a length could be INFERRED from an ANT frame, and the answer is no
- * and always will be: byte 3 is a control byte reading 10 on a broadcast and 2
- * on an in-slot frame for the same eight payload bytes. That is a fact about
- * ANT. This length byte is not inferred from anything - it is written by this
- * project, at an offset this project chose, in a format this project authored,
- * on a PHY a stock ANT receiver cannot demodulate at all. There is no byte
- * here being reinterpreted and no receiver being confused.
- *
- * The isolation is PHYSICAL and therefore strictly stronger than the fresh
- * network address ADR 0005's revisit trigger asked for: a stock receiver
- * listening on A6 C5 at 1 M does not fail to parse a coded frame, it does not
- * see one. That, and not the length field, is the load-bearing part of the
- * argument - which is why ADR 0007's rule is stated as "length extension is
- * permitted exactly where the PHY already makes us invisible" rather than as a
- * permission to lengthen frames.
+ * A length is allowed here despite ADR 0005 Axis 3 withdrawing one, because
+ * Axis 3 asked whether a length could be INFERRED from an ANT frame (no:
+ * byte 3 reads 10 on a broadcast and 2 on an in-slot frame for the same
+ * eight payload bytes). This length byte is not inferred - it's written by
+ * this project, at an offset this project chose, on a PHY a stock ANT
+ * receiver cannot demodulate at all. The isolation is PHYSICAL: a stock
+ * receiver on A6 C5 at 1M doesn't fail to parse a coded frame, it doesn't
+ * see one - which is why ADR 0007's rule is "length extension is permitted
+ * exactly where the PHY already makes us invisible", not a general licence.
  *
  *   address 4 bytes  [A6 C5 dnlo dnhi]        - BALEN=3 plus one prefix byte
  *   body           [len][dtype][ttype][ctrl][payload ...]
  *
- * FOUR ADDRESS BYTES, NOT FIVE, AND THE DEVICE TYPE MOVES INTO THE BODY. Four
- * is what the nRF matcher expresses as BALEN=3 plus a prefix, it is one more
- * than search's three - so fewer false triggers, and the three-byte matcher's
- * measured 19-27 noise matches per 15 s window is the reason that matters -
- * and it is what the coded PHY's fixed 32-bit access address is anyway. The
- * device type cannot stay in the address at four bytes, so it goes to the
- * front of the body, exactly as search moves what its shorter address dropped.
+ * Four address bytes, not five, and device type moves into the body. Four
+ * is BALEN=3 plus a prefix on the nRF matcher - one more than search's
+ * three, so fewer false triggers (search's matcher sees 19-27 noise
+ * matches per 15s) - and it's what the coded PHY's fixed 32-bit access
+ * address is anyway. Device type can't stay in a four-byte address, so it
+ * moves to the body front, same move search makes with its shorter address.
  *
- * THE LENGTH BYTE COUNTS EVERYTHING AFTER ITSELF, which is the nRF RADIO's own
- * convention (PCNF0.LFLEN=8 with S0LEN=S1LEN=0: the register's LENGTH is the
- * number of bytes DMA'd after the length field) and therefore needs no
- * translation in the backend. The HAL's body is the length byte plus those
- * bytes, so body_len = body[0] + 1 - which is what len_bias exists for and is
- * the first use it has ever had.
+ * The length byte counts everything after itself, the nRF RADIO's own
+ * convention (PCNF0.LFLEN=8, S0LEN=S1LEN=0), needing no backend
+ * translation: body_len = body[0] + 1, which is len_bias's first use.
  * ---------------------------------------------------------------------------
  */
 
@@ -380,17 +331,15 @@ enum radiant_frame_cfg {
 #define RADIANT_FRAME_LR_LEN_BIAS   1
 
 /*
- * The longest payload a long-range frame may carry, and it is a BUFFER bound
- * rather than a licence to fill it.
+ * The longest payload a long-range frame may carry - a BUFFER bound, not a
+ * licence to fill it.
  *
- * At S=8 every payload byte is 64 us of radio-on time and they compound: a
- * full 40-byte body is about 3.2 ms, which is 1.3 % duty at 4 Hz and 0.16 % at
- * 0.5 Hz. What actually stops a node from spending its battery here is the duty
- * rule - a frame must stay under 25 % of its channel period at its announced
- * rate - enforced by profile_sched_duty_check() at the encoder rather than by
- * any constant in this header. That bound binds only a node with BOTH a long
- * frame and a fast period, which is the correct shape: it costs a 0.5 Hz asset
- * tag nothing and refuses a 4 Hz node that wants a 40-byte frame.
+ * At S=8, a full 40-byte body is ~3.2 ms (1.3% duty at 4 Hz, 0.16% at
+ * 0.5 Hz). What actually limits battery spend is the duty rule - a frame
+ * must stay under 25% of its channel period - enforced by
+ * profile_sched_duty_check() at the encoder, not by any constant here. That
+ * binds only a node with both a long frame and a fast period: costs a
+ * 0.5 Hz asset tag nothing, refuses a 4 Hz node wanting a 40-byte frame.
  */
 #define RADIANT_FRAME_PAYLOAD_LR_MAX 36u
 
@@ -405,31 +354,28 @@ enum radiant_frame_cfg {
  * Compose a long-range body. Returns the body length written, or
  * RADIANT_FRAME_EINVAL / RADIANT_FRAME_ETRUNC.
  *
- * DELIBERATELY NOT radiant_frame_encode(). struct radiant_frame carries a
- * 24-byte payload buffer sized for ANT's advanced burst and a control byte
- * whose eleven measured values are an ANT fact; routing a 36-byte
- * RadiANT-authored payload through it would have meant widening an ANT
- * structure, loosening the checks in radiant_frame_make() that keep the other
- * 245 control bytes off the air, and moving two pinned assertions about ANT
- * geometry - all so that two formats with nothing in common could share one
- * function. These take the channel ID and the bytes directly instead.
+ * Deliberately not radiant_frame_encode(): struct radiant_frame's 24-byte
+ * payload buffer and eleven-value control byte are ANT facts, and routing a
+ * 36-byte RadiANT-authored payload through it would mean widening an ANT
+ * structure and loosening checks that keep other control bytes off the air,
+ * just so two unrelated formats could share one function. These take the
+ * channel ID and bytes directly instead.
  *
- * The control byte is passed through with only its bits 2:0 checked, on the
- * same terms radiant_frame_encode() carries one: this is a RadiANT-authored
- * format and the caller above it decides what the byte means.
+ * Control byte passed through with only bits 2:0 checked, same terms as
+ * radiant_frame_encode(): this is a RadiANT-authored format, the caller
+ * above decides what the byte means.
  */
 int radiant_frame_lr_body(const struct radiant_channel_id *id, uint8_t ctrl_byte,
 			  const uint8_t *payload, uint8_t payload_len,
 			  uint8_t *out, size_t out_len);
 
 /*
- * The inverse, over a body as it came off the air. `payload` is set to point
- * INTO `body` - no copy - so it is valid exactly as long as body is.
+ * The inverse, over a body as it came off the air. `payload` points INTO
+ * `body` (no copy), valid as long as body is.
  *
  * The length byte is checked against the delivered body_len rather than
- * trusted: a backend that mis-programmed MAXLEN, or a frame whose length byte
- * was corrupted inside the CRC's blind spot, must not become a read past the
- * end of a DMA buffer. RADIANT_FRAME_ETRUNC when they disagree.
+ * trusted - a mis-programmed MAXLEN or a corrupted length byte must not
+ * become a read past a DMA buffer. RADIANT_FRAME_ETRUNC when they disagree.
  */
 int radiant_frame_lr_parse(const uint8_t *body, uint8_t body_len,
 			   struct radiant_channel_id *id, uint8_t *ctrl_byte,
@@ -437,25 +383,21 @@ int radiant_frame_lr_parse(const uint8_t *body, uint8_t body_len,
 
 /*
  * Airtime of one frame in this configuration, in microseconds, for a given
- * payload length. Exact integer arithmetic; see radiant_frame.c for the
- * derivation and for the FEC-block table it reproduces.
- *
- * It lives here rather than in a backend because it is a property of the
- * format and the PHY, both of which are stated here, and because the duty
- * bound and the scheduler both need it without either one being allowed to
- * know which backend is underneath. Returns 0 for an unknown configuration or
- * an over-long payload.
+ * payload length. Exact integer arithmetic (see radiant_frame.c for the
+ * derivation and FEC-block table). Lives here since it's a property of the
+ * format/PHY, both stated here, and neither the duty bound nor the
+ * scheduler should need to know the backend. Returns 0 for an unknown
+ * configuration or over-long payload.
  */
 uint32_t radiant_frame_airtime_us(enum radiant_frame_cfg cfg, uint8_t payload_len);
 
 /* ---------------------------------------------------------------------------
  * The control byte - byte 3 of the body, and what Spike B is about
  *
- * SIX INDEPENDENT FIELDS, not a type field and a length. Measured across four
- * runs and 2,354 CRC-valid frames on 2026-08-09 with three radios on the air at
- * once (docs/spike-b-part2-results.md,
- * archive/captures/radio/2026-08-09-spike-b2-*.log), and consistent with all
- * 750 frames of part 1:
+ * SIX INDEPENDENT FIELDS, not a type field and a length. Measured across
+ * four runs and 2,354 CRC-valid frames on 2026-08-09 with three radios on
+ * the air at once (docs/spike-b-part2-results.md), consistent with all 750
+ * frames of part 1:
  *
  *      bit    7      6      5      4      3     2 1 0
  *           +------+------+------+------+------+-------+
@@ -470,28 +412,22 @@ uint32_t radiant_frame_airtime_us(enum radiant_frame_cfg cfg, uint8_t payload_le
  *   b3 slot       1 = this frame opens the channel slot `[inferred]`
  *   b2:0          always 010. Meaning unknown; it is not a length
  *
- * THE BURST SEQUENCE IS ONE BIT AND SEQUENCES 2..7 DO NOT EXIST. That is a
- * positive statement, not an absence: a 17-packet and a 51-packet burst were
- * captured end to end with the sniffer's ring-drop counter at zero throughout,
- * and bit 4 alternated 0,1,0,1,... across every on-air packet while bits 7:6
- * held still. Nineteen bursts of 1, 2, 3, 6, 9, 17, 27 and 51 packets, zero
- * frames where the sequence bit disagreed with the packet index. There is no
- * field left in the frame that could hold a number larger than one.
+ * THE BURST SEQUENCE IS ONE BIT, SEQUENCES 2..7 DO NOT EXIST: a 17-packet
+ * and a 51-packet burst captured end to end (sniffer ring-drop counter zero
+ * throughout) showed bit 4 alternating 0,1,0,1... on every on-air packet
+ * while bits 7:6 held still, across nineteen bursts of 1-51 packets with
+ * zero disagreements against packet index. No field left could hold a
+ * number larger than one.
  *
- * 7:6, NOT 7:5. Bit 5 moves, once, on the final packet of every burst - which
- * is b5 "last" doing exactly what it says above. The 17-packet burst in
- * archive/captures/radio/2026-08-09-spike-b2-runA-burst-seq.log runs 82 92 82
- * 92 ... for packets 0..15 and A2 on packet 16. Earlier text here said "7:5
- * held still"; that was wrong, and it is worth stating because "bit 5 never
- * moved" would make burst-last unmeasured, which it is not.
+ * Bit 5 moves once, on the final packet of every burst - "last" doing
+ * exactly what it says (82 92 82 92 ... then A2 on the last packet of a
+ * 17-packet burst, archive/captures/radio/2026-08-09-spike-b2-runA-burst-seq.log).
  *
- * THE LOW BITS ARE NOT A LENGTH, and that is now measured rather than argued.
- * 0x0A has bits 4:0 = 01010 = 10 and 0xA2 has 00010 = 2, and both carry eight
- * payload bytes. No length field reads 10 and 2 for the same length. The two
- * bits that moved are the slot bit and the sequence bit, both accounted for
- * above. Part 1's inference - that bits 4:0 remain a ShockBurst length and that
- * bits 7:5 are a three-bit type-and-sequence field - is withdrawn, not
- * requalified.
+ * THE LOW BITS ARE NOT A LENGTH: 0x0A's bits 4:0 read 10, 0xA2's read 2, for
+ * the same eight-byte payload - no length field reads both. The two bits
+ * that moved are the slot bit and the sequence bit, both accounted for
+ * above; part 1's inference (ShockBurst length in 4:0, a 3-bit type/seq
+ * field in 7:5) is withdrawn, not requalified.
  *
  * The eleven values that have been on the air, and nothing else has:
  * ---------------------------------------------------------------------------
@@ -507,12 +443,9 @@ uint32_t radiant_frame_airtime_us(enum radiant_frame_cfg cfg, uint8_t payload_le
 #define RADIANT_CTRL_LOW_MASK  0x07u
 #define RADIANT_CTRL_LOW_VALUE 0x02u
 
-/*
- * Slot openers - part 1's three values, and the only three a master was ever
- * seen to send. Run C is the control that names the difference: the same
- * Feather, the same stack, the same driver script and the same payload bytes,
- * with only the channel role changed, moved 0x82 -> 0x8A and 0xA2 -> 0xAA.
- */
+/* Slot openers - part 1's three values, the only ones a master was ever
+ * seen to send. Run C isolated the difference: same hardware, stack, script
+ * and payload, only the channel role changed, and 0x82 -> 0x8A, 0xA2 -> 0xAA. */
 #define RADIANT_CTRL_BROADCAST         0x0Au /* the ONLY encoding with b7 = 0 */
 #define RADIANT_CTRL_BURST_OPEN_SEQ0   0x8Au /* burst packet, seq 0, not last */
 #define RADIANT_CTRL_ACK_DATA_OPEN     0xAAu /* acknowledged data == a one-packet
@@ -537,42 +470,28 @@ uint32_t radiant_frame_airtime_us(enum radiant_frame_cfg cfg, uint8_t payload_le
  * ---------------------------------------------------------------------------
  * THE REMAINING GAPS, stated so that nothing is built over them by accident
  * ---------------------------------------------------------------------------
- * A field model can express 256 values. Eleven were measured. Every function
- * below encodes from the fields and then checks the result against the
- * measured eleven, because the difference between "the model permits it" and
- * "the air has carried it" is the whole value of two spikes.
+ * A field model can express 256 values, eleven were measured. Every
+ * function below encodes from the fields and checks against the measured
+ * eleven.
  *
- * `[inferred]`, and named so it is not mistaken for a finding:
+ * `[inferred]`, not a finding:
+ *   - BIT 3 AS "SLOT OPENER": only measured that it's not master-vs-slave
+ *     (master's broadcast carries it set, its ack 1.6ms later carries it
+ *     clear). Falsifiable by a scriptable ANT master, which sim/ is not.
+ *   - BIT 4 IN AN ACKNOWLEDGEMENT as "the sequence bit I expect next" -
+ *     arithmetic measured on 165 pairs, the reading is not.
  *
- *   - BIT 3 AS "SLOT OPENER". What is measured is only that it is not
- *     master-versus-slave: the master's own broadcast carries it set and the
- *     master's acknowledgement 1.6 ms later in the same slot carries it clear.
- *     Falsify it by getting a MASTER to send a multi-packet burst to a real
- *     slave - under this reading packet 0 carries bit 3 and packets 1..N do
- *     not. That needs a scriptable ANT master, which sim/ is not.
- *   - THE READING OF BIT 4 IN AN ACKNOWLEDGEMENT as "the sequence bit I expect
- *     next". The arithmetic is measured on 165 pairs; the reading is not.
+ * NEVER OBSERVED, so nothing here encodes it: any payload other than 8
+ * bytes; bit 5 set on a broadcast (or any b7=0 value except 0x0A); an
+ * acknowledgement of a slot-opening data packet (radiant_ctrl_reply_for()
+ * refuses to invent one); what a data sender does when its ack goes
+ * missing (the receiver retransmits 21 times at 3143us and gives up, but
+ * no ack was ever actually lost in a completed transfer).
  *
- * NEVER OBSERVED, so nothing here encodes it:
- *
- *   - any payload other than 8 bytes, so bits 2:0 = 010 has no measured
- *     meaning, only a disproved one;
- *   - bit 5 set on a broadcast, and indeed any b7 = 0 value except 0x0A: bits
- *     7:5 never took 001, 010 or 011;
- *   - an acknowledgement of a slot-opening data packet, which is why
- *     radiant_ctrl_reply_for() below refuses to invent one;
- *   - what the DATA SENDER does when an acknowledgement goes missing. The
- *     receiver's behaviour is measured - it retransmits its acknowledgement 21
- *     times at 3143 us and gives up - but no acknowledgement went missing in a
- *     completed transfer.
- *
- * RADIANT_FRAME_LEN_ADV_BURST used to live here, predicting 0x1A for a 24-byte
- * advanced-burst frame, and a later pass restated it as 0x9A. Both are gone,
- * not requalified: the restatement assumed bits 4:0 were a length, and that
- * premise is falsified. The only 0x1A ever seen on this bench appeared twice
- * as a CRC-FAILED frame - one bit away from 0x0A - which is a bit error, not
- * an advanced burst. A wrong constant left in a header with a comment
- * explaining it is wrong is how it gets used.
+ * RADIANT_FRAME_LEN_ADV_BURST used to predict 0x1A (then 0x9A) for a
+ * 24-byte advanced-burst frame; both premises assumed bits 4:0 were a
+ * length, which is falsified. The only 0x1A ever seen was twice as a
+ * CRC-FAILED frame (one bit from 0x0A) - a bit error, not a real value.
  */
 
 /*
@@ -588,14 +507,13 @@ struct radiant_ctrl_fields {
 };
 
 /*
- * Which message a control byte describes, decoded FROM THE FIELDS rather than
- * matched against a list of literals.
+ * Which message a control byte describes, decoded FROM THE FIELDS rather
+ * than matched against literals.
  *
- * RADIANT_MSG_ACKNOWLEDGED does not appear, and its absence is the finding: on air,
- * acknowledged data is byte-for-byte a one-packet burst - "sequence 0, last" -
- * so a receiver dispatching on this byte cannot tell them apart and must not
- * pretend to. The distinction between them is a serial-layer distinction only.
- * radiant_ack.c and radiant_burst.c should therefore share one encoder.
+ * RADIANT_MSG_ACKNOWLEDGED does not appear - on air, acknowledged data is
+ * byte-for-byte a one-packet burst ("sequence 0, last"), so a receiver
+ * can't and shouldn't tell them apart; the distinction is serial-layer
+ * only, which is why radiant_ack.c and radiant_burst.c share one encoder.
  */
 enum radiant_msg_type {
 	/* b2:0 != 010, or a flag combination never measured: b7 = 0 with any
@@ -652,31 +570,23 @@ uint8_t radiant_ctrl_encode(const struct radiant_ctrl_fields *f);
 /* Unpack. RADIANT_FRAME_ECTRL, and out untouched, if bits 2:0 are not 010. */
 int radiant_ctrl_decode(uint8_t ctrl, struct radiant_ctrl_fields *out);
 
-/*
- * True only for the eleven values measured on air. This is the guard that keeps
- * the field model from quietly inventing the other 245: radiant_frame_make()
- * refuses anything it rejects, while radiant_frame_encode() still carries any
- * low-bits-legal byte a caller sets by hand, so a bench experiment can put a
- * candidate encoding on the air without editing this module.
- */
+/* True only for the eleven values measured on air - the guard that keeps
+ * the field model from inventing the other 245. radiant_frame_make() refuses
+ * anything it rejects; radiant_frame_encode() still carries any
+ * low-bits-legal byte set by hand, so a bench experiment can try a
+ * candidate encoding without editing this module. */
 bool radiant_ctrl_observed(uint8_t ctrl);
 
 /*
- * The acknowledgement a receiver puts on the air for a data packet: bit 6 set,
- * bit 5 echoed, bit 4 complemented, everything else unchanged. Measured on 165
- * adjacent CRC-valid data/acknowledgement pairs across runs 0, A and B with no
- * exceptions - 82 -> D2, 92 -> C2, A2 -> F2, B2 -> E2.
+ * The acknowledgement a receiver puts on the air for a data packet: bit 6
+ * set, bit 5 echoed, bit 4 complemented, everything else unchanged.
+ * Measured on 165 adjacent CRC-valid data/ack pairs across runs 0, A and B,
+ * no exceptions - 82->D2, 92->C2, A2->F2, B2->E2. (165, not 168: three
+ * pairs had a CRC-failed ack and don't count as CRC-valid.)
  *
- * 165, NOT 168. This file and test_frame.c said 168 while radiant_transfer.h
- * and test_transfer.c said 165, and the difference is three pairs whose
- * acknowledgement failed CRC - which makes them adjacent pairs but not
- * CRC-VALID ones, and the claim is about the CRC-valid set. 165 is the count
- * that matches the sentence.
- *
- * Returns 0 - never a legal control byte, since bits 2:0 must be 010 - for
- * anything else, INCLUDING the slot openers 0x8A and 0xAA. No acknowledgement
- * of a slot-opening data packet has ever been captured, so there is no measured
- * answer for what its bit 3 would be, and this function does not guess one.
+ * Returns 0 - never a legal control byte - for anything else, INCLUDING
+ * the slot openers 0x8A and 0xAA: no ack of a slot-opening data packet has
+ * ever been captured, so this function does not guess bit 3 for one.
  */
 uint8_t radiant_ctrl_reply_for(uint8_t data_ctrl);
 
@@ -690,42 +600,30 @@ int radiant_frame_addr_len(enum radiant_frame_cfg cfg);
 int radiant_frame_hdr_len(enum radiant_frame_cfg cfg);
 int radiant_frame_body_len(enum radiant_frame_cfg cfg, uint8_t payload_len);
 
-/*
- * Bytes the CRC covers: address plus body. It is 15 for a standard frame in
- * *both* configurations - 5 + 10 and 3 + 12 - and that is the invariant worth
- * asserting in CI, because the two configurations put genuinely different
- * bytes on the hardware matcher and a future format that quietly breaks the
- * equality would otherwise announce itself on the air instead.
- */
+/* Bytes the CRC covers: address plus body. 15 for a standard frame in
+ * *both* configurations (5+10 and 3+12) - worth asserting in CI so a future
+ * format that breaks the equality doesn't announce itself on the air instead. */
 int radiant_frame_covered_len(enum radiant_frame_cfg cfg, uint8_t payload_len);
 
 /*
  * The packet format a HAL arm call needs for each configuration, for the
- * standard 8-byte payload. Static and const, because a backend may have to
- * precompile the set of formats it can express (RAIL derives frame-length
- * handling from a generated configuration).
+ * standard 8-byte payload. Static/const since a backend may have to
+ * precompile the formats it can express (RAIL).
  *
- * Both are RADIANT_LEN_FIXED - tracking at 10 body bytes, search at 12 - and that
- * is the Spike B consequence, not a simplification. A length-from-body format
- * maps onto nRF PCNF0.LFLEN=8, which reads an acknowledged frame's 0xAA as a
- * 170-byte length and discards it; the same field on transmit would try to
- * send 170 bytes. Part 2 closed the argument for good: 0x0A's low five bits
- * read 10 and 0xA2's read 2 for the same 8-byte payload, so there is no length
- * field to parse in any configuration. Fixed length is the PCNF0=0 / STATLEN
- * form, it was measured byte-identical on air to the CRCINC form, and it puts
- * byte 3 where software can both read it and choose it - which is exactly what
- * radiant_ack.c and radiant_burst.c need.
+ * Both are RADIANT_LEN_FIXED - tracking 10 body bytes, search 12 - a Spike
+ * B consequence: length-from-body (nRF PCNF0.LFLEN=8) reads an
+ * acknowledged frame's 0xAA as a 170-byte length; 0x0A/0xA2's low five
+ * bits read 10/2 for the same 8-byte payload, so there's no length field
+ * to parse in either configuration. Fixed length (PCNF0=0/STATLEN) was
+ * measured byte-identical on air, and puts byte 3 where software reads
+ * and chooses it, as radiant_ack.c and radiant_burst.c need.
  *
- * The cost is honest and is the same one search already carried: a payload
- * other than 8 bytes is not receivable under either ANT format and needs one
- * of its own. Nothing has ever put such an ANT frame on the air.
- *
- * RADIANT_FRAME_CFG_LR is that format of its own, and it is the exception to
- * every sentence above: RADIANT_LEN_FROM_BODY, a 4-byte address, a payload
- * from 0 to RADIANT_FRAME_PAYLOAD_LR_MAX, and RADIANT_PHY_LR_CODED. A backend
- * built without the coded PHY must refuse it with RADIANT_RADIO_ENOTSUP, which
- * is the existing rule and needed no new one. Returns NULL for an unknown
- * configuration.
+ * Cost: a payload other than 8 bytes isn't receivable under either ANT
+ * format (nothing has ever sent one). RADIANT_FRAME_CFG_LR is the
+ * exception - RADIANT_LEN_FROM_BODY, 4-byte address, 0..PAYLOAD_LR_MAX,
+ * RADIANT_PHY_LR_CODED - and a backend without the coded PHY refuses it
+ * with the existing RADIANT_RADIO_ENOTSUP rule. Returns NULL for an
+ * unknown configuration.
  */
 const struct radiant_pkt_format *radiant_frame_format(enum radiant_frame_cfg cfg);
 
@@ -738,17 +636,10 @@ const struct radiant_pkt_format *radiant_frame_format(enum radiant_frame_cfg cfg
 struct radiant_frame {
 	struct radiant_channel_id id;
 	/*
-	 * Byte 3 exactly as it appears on air.
-	 *
-	 * It is a stated field, not derived from payload_len, and the two
-	 * writebacks that followed Spike B are the return on that. Part 1
-	 * renamed it from len_byte and broke every caller in one edit; part 2
-	 * then showed that NONE of its bits depend on the payload length, so
-	 * there was never anything here to derive.
-	 *
-	 * The only cross-check is bits 2:0 == 010. Use the radiant_ctrl_* accessors
-	 * to read the five flags above it; this module carries them and names
-	 * them, and interprets none of them.
+	 * Byte 3 exactly as it appears on air. A stated field, not
+	 * derived from payload_len - Spike B confirmed none of its bits
+	 * depend on payload length. Only cross-check is bits 2:0 == 010;
+	 * use the radiant_ctrl_* accessors for the five flags above it.
 	 */
 	uint8_t ctrl_byte;
 	uint8_t payload_len;
@@ -756,13 +647,13 @@ struct radiant_frame {
 };
 
 /*
- * One frame split the way a radio wants it: what the hardware matches, what it
- * DMAs, and what its CRC engine produces. addr[0] is the first byte on air;
- * there is no bit- or byte-reversal in here and no register layout, exactly as
- * in struct radiant_rx_filter.
+ * One frame split the way a radio wants it: what the hardware matches, what
+ * it DMAs, and what its CRC engine produces. addr[0] is the first byte on
+ * air; no bit/byte reversal or register layout here, same as
+ * struct radiant_rx_filter.
  *
- * crc is the value as a number. On air it goes out most significant byte
- * first, which radiant_frame_to_bytes() does and radiant_frame_from_bytes() undoes.
+ * crc is the value as a number; on air it goes out MSB first, which
+ * radiant_frame_to_bytes() does and radiant_frame_from_bytes() undoes.
  */
 struct radiant_frame_wire {
 	uint8_t  addr[RADIANT_FRAME_ADDR_MAX];
@@ -775,86 +666,75 @@ struct radiant_frame_wire {
 /*
  * Fill in a frame from the five control-byte fields. Returns RADIANT_FRAME_OK, or
  * RADIANT_FRAME_EINVAL for a null argument, an over-long payload, or a field
- * combination that has never been on the air (radiant_ctrl_observed()).
+ * combination never on the air (radiant_ctrl_observed()).
  *
- * The fields are an argument rather than a default because there is no safe
- * default: a caller that meant "acknowledged data" and got a broadcast would
- * set no trainer resistance and report no error, and a caller that forgot the
- * slot bit would put an in-slot byte in a slot-opening frame.
+ * Fields are an argument rather than a default because there's no safe
+ * default: a caller meaning "acknowledged data" who got a broadcast would
+ * set no trainer resistance and report no error.
  *
- * Refusing an unmeasured combination here, while radiant_frame_encode() carries
- * one set by hand, is deliberate. A field model can name 256 bytes; eleven have
- * been transmitted. This is where the difference is enforced.
+ * Refusing an unmeasured combination here, while radiant_frame_encode()
+ * carries one set by hand, is deliberate: a field model can name 256
+ * bytes, eleven have been transmitted, and this is where that's enforced.
  */
 int radiant_frame_make(struct radiant_frame *f, const struct radiant_channel_id *id,
 		   const struct radiant_ctrl_fields *ctrl, const uint8_t *payload,
 		   uint8_t payload_len);
 
-/*
- * The on-air address for a channel ID in the given configuration, first byte
- * first. Returns the address length, or RADIANT_FRAME_EINVAL.
- *
- * In search the address stops after devnum_lo: the rest of the channel ID
- * moves into the body. That is the whole difference between the two.
- */
+/* The on-air address for a channel ID in the given configuration, first
+ * byte first. Returns the address length, or RADIANT_FRAME_EINVAL. In
+ * search the address stops after devnum_lo, the rest moves into the body -
+ * the whole difference between the two configurations. */
 int radiant_frame_addr(enum radiant_frame_cfg cfg, const uint8_t net_addr[RADIANT_NET_ADDR_LEN],
 		   const struct radiant_channel_id *id, uint8_t *out,
 		   size_t out_len);
 
 /*
- * Encode. Fills out->addr, out->body and out->crc; out is fully overwritten on
- * success and untouched on failure.
+ * Encode. Fills out->addr, out->body and out->crc; fully overwritten on
+ * success, untouched on failure.
  *
- * RADIANT_FRAME_ECTRL if bits 2:0 of in->ctrl_byte are not 010. The five flags
- * above them are copied to the air untouched, including combinations nothing
- * has ever measured - see the comment on struct radiant_frame.
+ * RADIANT_FRAME_ECTRL if bits 2:0 of in->ctrl_byte are not 010. The five
+ * flags above them are copied through untouched, including combinations
+ * never measured - see the comment on struct radiant_frame.
  */
 int radiant_frame_encode(enum radiant_frame_cfg cfg, const uint8_t net_addr[RADIANT_NET_ADDR_LEN],
 		     const struct radiant_frame *in, struct radiant_frame_wire *out);
 
-/*
- * The CRC of a wire frame: address then body, seeded with RADIANT_CRC_INIT. Does
- * not look at wire->crc. Returns 0 for a null or malformed argument, which is
- * indistinguishable from a legitimate zero CRC - use radiant_frame_crc_ok() to ask
- * whether a frame verifies.
- */
+/* The CRC of a wire frame: address then body, seeded with
+ * RADIANT_CRC_INIT. Does not look at wire->crc. Returns 0 for a null or
+ * malformed argument, indistinguishable from a legitimate zero CRC - use
+ * radiant_frame_crc_ok() to ask whether a frame verifies. */
 uint16_t radiant_frame_crc(const struct radiant_frame_wire *w);
 
 /* True only if the frame is well formed and its CRC matches. */
 bool radiant_frame_crc_ok(const struct radiant_frame_wire *w);
 
 /*
- * The CRC has already been verified by something other than this module -
- * typically a hardware CRC engine, in which case wire->crc holds nothing
- * useful because the received CRC bytes never reach the core.
+ * The CRC has already been verified elsewhere - typically a hardware CRC
+ * engine, so wire->crc holds nothing useful.
  *
- * The flag is opt-*out* rather than opt-in on purpose. A caller that forgets
- * it gets a loud RADIANT_FRAME_ECRC on a frame that was actually fine; a caller
- * that forgot the other polarity would silently accept corruption. Only one of
- * those two failure modes is discoverable.
+ * Opt-*out* rather than opt-in on purpose: a caller that forgets it gets a
+ * loud RADIANT_FRAME_ECRC on a fine frame; the other polarity would
+ * silently accept corruption. Only one of those failure modes is discoverable.
  */
 #define RADIANT_FRAME_TRUSTED_CRC (1u << 0)
 
 /*
- * Decode. out is written only on success, so a rejected frame cannot leave a
- * half-populated structure behind for a caller that ignored the return value.
+ * Decode. out is written only on success, so a rejected frame can't leave
+ * a half-populated structure for a caller that ignored the return value.
  *
- * A CRC failure is RADIANT_FRAME_ECRC and nothing else: this module never repairs,
- * never guesses, and never reports a corrupt frame as good with a flag the
- * caller has to remember to read.
+ * A CRC failure is RADIANT_FRAME_ECRC and nothing else: never repaired,
+ * never guessed, never reported as good with a flag to remember to check.
  *
- * Decode DISPATCHES on the control byte rather than validating it against
- * 0x0A. A tracking channel sees eleven values today and may one day see more;
- * a receiver that rejected everything but broadcast would drop exactly the
- * acknowledged frames trainer control is made of. out->ctrl_byte holds
- * whatever was on the air and radiant_frame_msg_type() names it, or does not.
+ * Decode DISPATCHES on the control byte rather than validating against
+ * 0x0A - rejecting everything but broadcast would drop the acknowledged
+ * frames trainer control is made of. out->ctrl_byte holds whatever was on
+ * the air; radiant_frame_msg_type() names it, or doesn't.
  *
- * The one thing that IS validated is bits 2:0 == 010, which is RADIANT_FRAME_ECTRL.
- * The version of this module written against part 1 cross-checked bits 4:0
- * against the payload length instead, and that rejected every valid slave
- * frame: 0xA2's low five bits are 00010 = 2, and no length check expecting 10
- * accepts it. Bits 4:0 are the slot bit, the sequence bit and 010 - three
- * things, none of them a length.
+ * The one thing validated is bits 2:0 == 010 (RADIANT_FRAME_ECTRL). An
+ * earlier version cross-checked bits 4:0 against payload length instead,
+ * which rejected every valid slave frame (0xA2's low five bits read 2, no
+ * length check expecting 10 accepts it) - bits 4:0 are the slot bit, the
+ * sequence bit and 010, none of them a length.
  */
 int radiant_frame_decode(enum radiant_frame_cfg cfg, const struct radiant_frame_wire *in,
 		     uint32_t flags, struct radiant_frame *out);

@@ -37,16 +37,9 @@ uint32_t radiant_binding_find(uint16_t devnum, uint8_t devtype, uint8_t trans_ty
 }
 
 /*
- * A label, not a key - the header comment on struct radiant_binding::uuid
- * says so directly - so a hardware entropy source is the wrong tool: it
- * would make every product build of this file depend on
- * CONFIG_ENTROPY_GENERATOR and a bound driver for a value nothing
- * security-sensitive ever reads. Uniqueness within one image's lifetime is
- * all section 5 asks for ("stable across a re-roll and a re-pair", i.e.
- * stable for as long as the binding exists - not unguessable), so a
- * monotonic counter folded against the cycle counter at the moment of bind is
- * enough: two binds can never share a counter value, and the cycle count
- * makes a fresh image's sequence not trivially match a previous one's.
+ * uuid is a label, not a key (struct radiant_binding::uuid), so a
+ * monotonic counter folded with the cycle counter at bind time is enough -
+ * no need for a hardware entropy source.
  */
 static uint32_t bind_sequence;
 

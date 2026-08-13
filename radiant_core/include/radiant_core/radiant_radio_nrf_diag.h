@@ -3,30 +3,18 @@
  * radiant_radio_nrf_diag.h - a bench-diagnostic accessor for the nRF backend,
  * deliberately NOT part of radiant_radio_hal.h.
  *
- * Provenance: clean-room. The TEMP peripheral's task/event/result names and
- * the 0.25 degC step of its result register come from the public Nordic
- * MDK headers shipped with NCS (nrfx's hal/nrf_temp.h), which are Apache-2.0
- * / BSD-3-Clause and already a dependency. Nothing here derives from sdk-ant.
- * See docs/decisions/0002-clean-room-policy.md.
+ * Provenance: clean-room. TEMP peripheral task/event/result names and the
+ * 0.25 degC result-register step come from Nordic's public MDK headers
+ * (nrfx's hal/nrf_temp.h, Apache-2.0/BSD-3-Clause, already a dependency).
+ * Nothing here derives from sdk-ant. See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * Why this exists
- * ---------------------------------------------------------------------------
- * nRF52840 errata 153 (and 225, which is nRF52820/nRF52833-only and does not
- * apply to this part) say the RADIO's RSSI has a temperature-dependent error.
- * radiant_radio_nrf.c now corrects for it - see "RSSI temperature correction"
- * in that file, sourced from Nordic's own open-source 802.15.4 driver rather
- * than derived here - and this accessor is both the correction cache's
- * periodic refresh and, independently, a way for a bench run to record die
- * temperature alongside RSSI: not every confound is a correctable one, and
- * making one visible remains worth doing even after another is fixed. See
- * docs/sdk-ant-comparison.md item 1.
- *
- * This is deliberately not in radiant_radio_hal.h: the frozen HAL contract
- * is what every backend - including the mock and a future EFR32/RAIL one -
- * has to satisfy, and a TEMP peripheral reading is specific to this one.
- * A caller that wants it includes this header directly, the way bench
- * tooling or a debug shell command would.
+ * nRF52840 errata 153/225 give the RADIO's RSSI a temperature-dependent
+ * error; radiant_radio_nrf.c corrects for it (see "RSSI temperature
+ * correction" there). This accessor refreshes that correction cache and lets
+ * a bench run record die temperature alongside RSSI independently. Kept out
+ * of radiant_radio_hal.h because the frozen HAL contract applies to every
+ * backend and a TEMP reading is nRF-specific; include this directly for bench
+ * tooling or a debug shell.
  */
 
 #ifndef RADIANT_RADIO_NRF_DIAG_H_
@@ -41,13 +29,11 @@ extern "C" {
 /*
  * Read the die temperature, in centi-degrees Celsius (2650 == 26.50 degC).
  *
- * THREAD CONTEXT ONLY. The TEMP peripheral's own datasheet-quoted conversion
- * time is on the order of tens of microseconds and this function busy-waits
- * for it, which is a cost the radio ISR's timing budgets (see
- * radiant_radio_nrf.c's ARM_SETUP_US and the 80 us arm-from-interrupt path)
- * were never measured against. Call it from a bench thread or a debug
- * console handler between radio operations, never from radiant_radio_nrf.c's
- * own ISR or from inside a radiant_radio_cbs callback.
+ * THREAD CONTEXT ONLY: this busy-waits tens of microseconds for the TEMP
+ * peripheral's conversion, a cost never budgeted against the radio ISR's
+ * timing (radiant_radio_nrf.c's ARM_SETUP_US, the 80 us arm-from-interrupt
+ * path). Call from a bench thread or debug console between radio operations,
+ * never from the radio ISR or a radiant_radio_cbs callback.
  *
  * Returns RADIANT_RADIO_OK_RC, or RADIANT_RADIO_EINVAL if out is NULL.
  */

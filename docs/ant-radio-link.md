@@ -52,8 +52,8 @@ Every fact carries one. A fact with no tag does not belong in this file.
 | `[measured]` | Measured on this bench, naming the run. Unqualified, it means **Spike A or Spike B, 2026-08-09** — `docs/spike-a-results.md`, `docs/spike-b-results.md`, `docs/spike-b-part2-results.md`. A tag is only upgraded to `[measured]` by a run that could have failed and did not; a claim the run did not exercise keeps `[inferred]`, however confident the reasoning behind it. **Spike B is why that rule is written down, and it earned the point twice.** Part 1 upgraded two rows for free and demoted one this document had called settled. Part 2 then demoted the *replacement* — the length reading of bits 4:0 and the three-bit type field — which had survived 750 frames only because every one of them was a slot-opening frame from a master. A tag that survives a run is not the same as a tag the run could have falsified. |
 | `[inferred]` | Reasoning, not a source. Every one of these states how it can be falsified. |
 
-Absent by construction: anything derived from `libant.a`, from sdk-ant's headers, or from an
-adopter-gated ANT+ device profile document. See `docs/decisions/0002-clean-room-policy.md`.
+Absent by construction: anything derived from `libant.a`, from sdk-ant's headers, or from a
+non-redistributable ANT+ device profile document. See `docs/decisions/0002-clean-room-policy.md`.
 
 ## The on-air frame
 
@@ -839,7 +839,7 @@ rtl_433 is GPL. **RadiANT is Apache-2.0.** The distinction that matters is not "
   GPL-headered directory and is not linked into the shipped image. Nothing currently planned needs
   that.
 
-The same boundary, in the other direction, applies to adopter-gated ANT+ device profile documents:
+The same boundary, in the other direction, applies to non-redistributable ANT+ device profile documents:
 usable for `src/profiles/`, `tools/ant_pages.py` and the profile docs, and **never** for
 `radiant_core/**` or for this file. See `docs/decisions/0002-clean-room-policy.md`.
 

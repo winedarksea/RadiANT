@@ -8,13 +8,12 @@
  * docs/profile-registry.md, mirrored byte for byte by tools/ant_pages.py's
  * encode_compat_beacon() / encode_compat_attest_tier1() /
  * encode_compat_attest_tier2(). All of those are this project's own documents
- * and code; no adopter-gated ANT+ device profile document was read for this
+ * and code; no ANT+ device profile document was read for this
  * file and nothing here derives from libant.a.
  *
- * This is the ONLY file in src/profiles/ that calls radiant_sec_compat, and the
- * header says at length why. The short version: radiant_sec_compat.c knows no
- * page number, profile_hr.c and profile_power.c know no key, and this file is
- * the one place where a subtype nibble becomes a page byte.
+ * The only file in src/profiles/ that calls radiant_sec_compat (see header):
+ * radiant_sec_compat.c knows no page number, profile_hr.c/profile_power.c
+ * know no key, and this file is where a subtype nibble becomes a page byte.
  */
 
 #include <errno.h>
@@ -79,8 +78,8 @@ static bool toggle_now(const struct profile_compat *pc)
  *     [5..6] private-mode target channel period, LE
  *     [7]    reserved, must be 0
  *
- * THERE IS NO EPOCH FIELD, and its absence is a constraint rather than an
- * omission. See docs/decisions/0008, "The epoch is not broadcast".
+ * No epoch field, deliberately - see docs/decisions/0008, "The epoch is not
+ * broadcast".
  */
 static int encode_beacon(struct profile_compat *pc,
 			 const uint8_t hint[PROFILE_COMPAT_HINT_BYTES])
@@ -96,28 +95,23 @@ static int encode_beacon(struct profile_compat *pc,
 		return code;
 	}
 	if (cfg->mode != PROFILE_COMPAT_MODE_FIXED) {
-		/* Specified so it is a later configuration change rather than a
-		 * break, and deliberately not implemented in v1. Refused here
-		 * rather than emitted, because a receiver that believed it
-		 * would wait for pages this node will never send. */
+		/* Not implemented in v1; refused rather than emitted so a
+		 * receiver never waits for pages that will never come. */
 		return -ENOTSUP;
 	}
 	if (cfg->policy > PROFILE_COMPAT_POLICY_ALWAYS) {
 		return -EINVAL;
 	}
 	if ((cfg->target_device_type & PROFILE_COMPAT_PAGE_TOGGLE) != 0u) {
-		/* A device type is 7 bits in this field; bit 7 is the pairing
-		 * bit of an ANT channel id and is not ours to set. */
+		/* Device type is 7 bits here; bit 7 is the ANT channel id's
+		 * pairing bit and not ours to set. */
 		return -EINVAL;
 	}
 
 	private_available = cfg->policy != PROFILE_COMPAT_POLICY_NEVER;
 
-	/*
-	 * A `never` node has no private-mode locator to carry, and a receiver
-	 * that saw one would have to decide which half of the beacon to
-	 * believe. Refuse to build it instead.
-	 */
+	/* A `never` node has no locator to carry; refuse to build one rather
+	 * than leave a receiver guessing which half of the beacon to trust. */
 	if (!private_available &&
 	    (cfg->target_device_type != 0u || cfg->target_device_number != 0u ||
 	     cfg->target_period != 0u)) {
@@ -171,15 +165,10 @@ int profile_compat_init(struct profile_compat *pc,
 
 	memset(pc, 0, sizeof(*pc));
 	pc->cfg = *cfg;
-	/* A client survives nothing here: init is init. */
 
-	/*
-	 * The hint is the one thing this layer needs a key for, and it asks the
-	 * layer that holds one rather than holding it itself. A build with no
-	 * compat attestation answers ENOTSUP here, and the node then simply
-	 * runs as an ordinary ANT+ sensor - which is the setting most straps
-	 * should ship in, not a degraded mode.
-	 */
+	/* The hint is the one thing needing a key; asked from the layer that
+	 * holds it. No compat attestation -> ENOTSUP -> node just runs as an
+	 * ordinary ANT+ sensor, not a degraded mode. */
 	rc = radiant_sec_compat_hint(cfg->ch, cfg->epoch, hint);
 	if (rc != RADIANT_SEC_OK) {
 		return -ENOTSUP;
@@ -229,8 +218,7 @@ int profile_compat_set_client(struct profile_compat *pc,
 		return -ENOSPC;
 	}
 	pc->clients[pc->n_clients++] = *client;
-	/* A set whose size is about to change starts again from frame 0 rather
-	 * than from wherever the two-frame rotation had reached. */
+	/* Set is about to change size; restart the rotation at frame 0. */
 	pc->frame_cursor = 0u;
 	return 0;
 }
@@ -260,26 +248,11 @@ int profile_compat_set_pending_switch(struct profile_compat *pc, bool pending)
 		return -EINVAL;
 	}
 	if (pc->pending_switch != pending) {
-		/*
-		 * THE ROTATION RESTARTS AT THE ANNOUNCEMENT, not at frame 0.
-		 *
-		 * A countdown is bounded and short - K = 16 is two promoted
-		 * beacon slots - and the four-frame set emits one frame per
-		 * slot, so a rotation that began at frame 0 would reach the
-		 * announcement on its third slot and a short countdown would
-		 * expire having said nothing at all. The frames that must reach
-		 * the air inside a countdown are the client's; frames 0 and 1
-		 * go out every rotation anyway and their only change is the
-		 * count nibble, which every frame of the set restates.
-		 *
-		 * Legal because byte [1] carries the frame's INDEX: the
-		 * convention fixes which frame is which, never the order they
-		 * are sent in, and a receiver reassembles by index precisely so
-		 * that it does not have to care.
-		 *
-		 * Ending a countdown restarts at frame 0, where the bit that
-		 * has just cleared lives.
-		 */
+		/* Restart at the announcement, not frame 0: a short countdown
+		 * could otherwise expire before reaching it. Legal because
+		 * byte [1] carries the frame's index, so send order doesn't
+		 * matter to a receiver reassembling by index. Ending a
+		 * countdown restarts at frame 0. */
 		pc->frame_cursor = pending ? pc->n_frames : 0u;
 	}
 	pc->pending_switch = pending;
@@ -306,11 +279,9 @@ int profile_compat_set_locator(struct profile_compat *pc, uint8_t device_type,
 	if (pc->n_frames == 0u) {
 		return 0;
 	}
-	/* encode_beacon() is the one place that decides whether a locator may
-	 * exist at all, so a `never` node is refused here by the same three
-	 * lines that refuse it at init rather than by a second copy of them.
-	 * A refusal puts the configuration back: a beacon half-way through a
-	 * change is a beacon a receiver has to guess about. */
+	/* encode_beacon() is the sole place deciding whether a locator may
+	 * exist; a refusal here puts the configuration back rather than
+	 * leaving a beacon half-changed. */
 	rc = encode_beacon(pc, pc->hint);
 	if (rc != 0) {
 		pc->cfg = was;
@@ -325,19 +296,14 @@ int profile_compat_set_pairing_open(struct profile_compat *pc, bool open)
 		return -EINVAL;
 	}
 	if (pc->cfg.pairing_open != open) {
-		/*
-		 * The set is about to change size and frame 0 is the frame that
-		 * says so - it carries both the capability bit and, through
-		 * byte [1], the new count. Restarting the rotation there gets
-		 * the changed frame out first instead of up to seven frames
-		 * later, which is the difference between a receiver learning
-		 * about a window at its start and learning about it at its end.
-		 */
+		/* Set is about to change size; frame 0 carries the capability
+		 * bit and new count, so restart the rotation there to get the
+		 * changed frame out first rather than up to seven frames late. */
 		pc->frame_cursor = 0u;
 	}
 	pc->cfg.pairing_open = open;
 	if (pc->n_frames == 0u) {
-		/* advertise = off: no beacon, so no capability field. Not an
+		/* advertise = off: no beacon, no capability field. Not an
 		 * error - see the header. */
 		return 0;
 	}
@@ -354,15 +320,10 @@ static uint8_t client_frames(struct profile_compat *pc, uint64_t now_us)
 
 	pc->active_client = 0u;
 
-	/*
-	 * THE INTERLOCK'S BACKSTOP. The first client contributing frames owns
-	 * the set for this slot and the rest are not asked. The rule that keeps
-	 * this from ever mattering is at the request end - a countdown and an
-	 * enrolment window refuse each other before either starts - and this is
-	 * what happens if that rule is ever broken: one client's block goes out
-	 * and the other waits, rather than a ten-frame set that neither the
-	 * count nibble nor any receiver can hold.
-	 */
+	/* Interlock's backstop: the first client contributing frames owns
+	 * the slot; if the request-time exclusion is ever broken, one
+	 * client's block goes out and the other waits, rather than a set
+	 * too large for the count nibble or any receiver to hold. */
 	for (i = 0u; i < pc->n_clients; i++) {
 		n = pc->clients[i].frames(pc->clients[i].user, now_us);
 		if (n == 0u) {
@@ -382,24 +343,19 @@ static uint8_t client_frames(struct profile_compat *pc, uint64_t now_us)
 }
 
 /*
- * The seam.
- *
- * The order is a priority and every step of it is load-bearing:
- *
- *   1. ask the attestation layer whether this slot owes a page. It answers
- *      Tier II first when both fall due, because Tier II's window closes at the
- *      Nth transmitted message and has no slack, while Tier I's counter is
- *      derived from elapsed time and a slot of slip is invisible to it.
+ * The seam. Priority order:
+ *   1. ask the attestation layer whether this slot owes a page (Tier II
+ *      first when both fall due - its window closes at the Nth transmitted
+ *      message with no slack, while Tier I's counter is time-derived).
  *   2. otherwise, the beacon on its own slot.
- *   3. otherwise decline, and the rotation has the slot back at no cost.
+ *   3. otherwise decline; the rotation has the slot back at no cost.
  *
- * Asking the attestation layer FIRST, even on the beacon's slot, is the subtle
- * one. radiant_sec_compat_tx_attest() is stateful - it records that a Tier I
- * interval has been served and that a Tier II window is closing - so a caller
- * that asked and then discarded a positive answer would corrupt both. Asking
- * only when we intend to use the answer means the beacon occasionally slips a
- * cycle, which costs a receiver one frame of a set it reassembles across cycles
- * anyway.
+ * Asking the attestation layer first, even on the beacon's slot, matters
+ * because radiant_sec_compat_tx_attest() is stateful (records a served Tier I
+ * interval / closing Tier II window) - asking and discarding a positive
+ * answer would corrupt both. The cost is the beacon occasionally slipping a
+ * cycle, which just costs a receiver one frame of a set reassembled across
+ * cycles anyway.
  */
 static bool compat_claim(uint32_t m, uint8_t *body, void *user)
 {
@@ -413,33 +369,21 @@ static bool compat_claim(uint32_t m, uint8_t *body, void *user)
 		return false;
 	}
 
-	/*
-	 * Asked on every offered slot, not only on the beacon's, because this is
-	 * also where a client with a bounded window discovers that the window
-	 * has closed. A client that owns no timer and is asked only when its
-	 * frames are wanted would stay open until the next time it was wanted.
-	 */
+	/* Asked every offered slot, not just the beacon's: this is also where
+	 * a client with a bounded window discovers it has closed. */
 	n_client = client_frames(pc, pc->now_us);
 	total = (uint8_t)(pc->n_frames + n_client);
 
-	/*
-	 * The beacon's slot comes DUE here and is not necessarily SERVED here.
+	/* The beacon's slot comes due here, not necessarily served here.
+	 * Message 0 is the slot right after the two the seam never offers,
+	 * so a Tier I page slipping from 119/120 lands there too; owing the
+	 * frame instead of dropping it keeps cadence at one frame per cycle.
 	 *
-	 * Message 0 is the slot immediately after the two the seam can never
-	 * offer, so it is exactly where a Tier I page that came due at message
-	 * 119 or 120 lands after slipping - and a beacon that simply lost its
-	 * slot would then miss a whole cycle every time that happened. Owing
-	 * the frame instead costs one slot of delay and keeps the cadence at
-	 * one frame per cycle, which is the number the 0.8% claim is made of.
-	 *
-	 * WITH A CLIENT ACTIVE THE CADENCE IS PROMOTED to one frame every eight
-	 * messages, and PROFILE_COMPAT_BEACON_PROMOTED_EVERY carries the
-	 * arithmetic: at the steady rate an eight-frame set needs four minutes
-	 * and a 60-second enrolment window would close having transmitted a
-	 * quarter of a public key. Message 0 satisfies both rules, so the
-	 * steady-state cadence is a special case of the promoted one rather
-	 * than a second rule.
-	 */
+	 * With a client active the cadence promotes to one frame every eight
+	 * messages (PROFILE_COMPAT_BEACON_PROMOTED_EVERY) - an eight-frame
+	 * set needs four minutes at the steady rate, too slow for a 60 s
+	 * enrolment window. Message 0 satisfies both rules, so steady-state
+	 * is a special case of the promoted cadence. */
 	if (total != 0u) {
 		if (n_client != 0u) {
 			if ((m % PROFILE_COMPAT_BEACON_PROMOTED_EVERY) == 0u) {
@@ -491,22 +435,17 @@ static bool compat_claim(uint32_t m, uint8_t *body, void *user)
 		body[0] = PROFILE_COMPAT_PAGE_BEACON;
 		if (!cl->frame(cl->user, (uint8_t)(idx - pc->n_frames),
 			       &body[2])) {
-			/* The client changed its mind between being counted and
-			 * being asked. Decline the slot; the rotation has it
-			 * back at no cost and the cursor has not moved. */
+			/* Client changed its mind between being counted and
+			 * asked. Decline; the cursor has not moved. */
 			return false;
 		}
 	}
 
-	/*
-	 * BYTE [1] IS WRITTEN HERE AND NOWHERE ELSE, including over the value
-	 * encode_beacon() baked into frames 0 and 1. The count is the size of
-	 * the set the frame belongs to, so a set that grows to eight says eight
-	 * in EVERY frame of it - leaving frames 0 and 1 saying "two in this set"
-	 * would tell a receiver that heard only those two that no window was
-	 * open. docs/radiant-security.md section 11.5 names this as the obvious
-	 * thing to get wrong.
-	 */
+	/* Byte [1] written here and nowhere else, overriding what
+	 * encode_beacon() baked into frames 0/1: the count must match the
+	 * whole set's size in EVERY frame, or a receiver hearing only
+	 * frames 0/1 would think no window was open (see docs/radiant-
+	 * security.md section 11.5). */
 	body[1] = (uint8_t)((idx << 4) | (uint8_t)(total - 1u));
 
 	if (toggle_now(pc)) {
@@ -515,9 +454,8 @@ static bool compat_claim(uint32_t m, uint8_t *body, void *user)
 
 	pc->beacon_due = false;
 	pc->frame_cursor = (uint8_t)((idx + 1u) % total);
-	/* Two counters because they answer two questions: the 0.8%-of-slots
-	 * claim is about the steady-state beacon, and a client's frames are a
-	 * bounded burst that would make that number unreadable. */
+	/* Two counters: the steady-state claim and a client's bounded burst
+	 * would make one number unreadable together. */
 	if (idx < pc->n_frames) {
 		pc->beacons_sent++;
 	} else {
@@ -559,13 +497,8 @@ void profile_compat_sent(struct profile_compat *pc, const uint8_t *body)
 	(void)radiant_sec_compat_tx_sent(pc->cfg.ch, body,
 					 PROFILE_COMPAT_FRAME_LEN);
 
-	/*
-	 * EVERY client, EVERY message, whoever built it - the same rule this
-	 * function already owes the attestation layer one line up. A client
-	 * counting a countdown in transmitted messages and a window covering N
-	 * transmitted messages want the identical fact, so they are told by the
-	 * identical call.
-	 */
+	/* Every client, every message, whoever built it - same rule this
+	 * function already owes the attestation layer above. */
 	for (i = 0u; i < pc->n_clients; i++) {
 		if (pc->clients[i].sent != NULL) {
 			pc->clients[i].sent(pc->clients[i].user, body);

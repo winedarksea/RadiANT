@@ -26,7 +26,7 @@ protocol, still carry their provenance tags, and are still in git.
 | **Document number** | D00000652 |
 | **Title** | *ANT Message Protocol and Usage*, Rev 5.1 |
 | **URL** | <https://www.thisisant.com/assets/resources/ANT%20Protocol/D00000652_ANT_Message_Protocol_and_Usage_Rev_5.1.pdf> |
-| **Access** | Free download. **No login, no adopter agreement.** |
+| **Access** | Free download. **No login, no agreement to sign.** |
 | **Retrieved** | 2026-08-08 |
 | **Size** | 4,124,380 bytes |
 | **SHA-256** | `66dd7133d9a2799ed2e6f9375a35ccdddc5a884d87e46ce7d16826bdd8b5b9f1` |
@@ -84,12 +84,6 @@ number that changes for reasons unrelated to the announcement, which is worse
 than no number at all because it looks authoritative. The durable artifact for
 a web page is the **verbatim quotation**, and the quotations are below.
 
-**No numbered tech bulletin was found.** Garmin's tech bulletins are numbered
-`D000xxxxx` like the specifications; a search on 2026-08-08 surfaced no such
-document for the shutdown, only these pages. If a numbered bulletin exists,
-add it here with its number and hash rather than replacing this entry — a page
-and a PDF rot independently.
-
 ### The facts, quoted
 
 > The ANT+ membership program and ANT+ product certification programs, along
@@ -111,11 +105,11 @@ this project depends on being right:
   certification programme and are *unaffected*. The stack is still licensed;
   the `$0.08` per-unit royalty on `libant.a` did not go away because the
   certification programme did.
-- **The adopter agreement was modified to remove the certification
-  requirement**, while still requiring products to meet the interoperability
-  minimums the ANT+ documentation defines. This is why adopter signup has been
-  free since January 2025 and why the device profile documents remain
-  obtainable — a fact the clean-room policy in
+- **The terms for obtaining ANT+ material were modified to remove the
+  certification requirement**, while still requiring products to meet the
+  interoperability minimums the ANT+ documentation defines. This is why
+  obtaining a copy has been free since January 2025 and why the device
+  profile documents remain obtainable — a fact the clean-room policy in
   [`docs/decisions/0002`](../../docs/decisions/0002-clean-room-policy.md)
   depends on.
 
@@ -173,7 +167,7 @@ facts above are the only part this project relies on.
 
 |  |  |
 |---|---|
-| **Access** | Adopter-gated. Signup free since January 2025, no certification required |
+| **Access** | Not publicly redistributable. Free to obtain since January 2025, no certification required |
 | **Retrieved** | Not archived here, by policy |
 | **Redistribution** | **No — and no mirror is committed either** |
 
@@ -185,7 +179,7 @@ interoperable, and this project uses them — under the graded policy in
 `src/profiles/`, `tools/ant_pages.py` and the profile documentation, and
 **nowhere in `radiant_core/**`**.
 
-Obtain them the intended way: an adopter login at
+Obtain them the intended way: register for a copy at
 <https://www.thisisant.com/developer/ant-plus/>. It is free and takes minutes.
 
 ### Unofficial mirrors: references only, deliberately not committed
@@ -197,7 +191,7 @@ none is linked from this file**, for two reasons that compound:
    permission. Committing one puts an unlicensed copy of a third party's
    copyrighted work in a public repository.
 2. **Clean-room contamination.** Worse, and less obvious. Putting
-   adopter-gated material *in this tree* undermines the one structural defence
+   non-redistributable material *in this tree* undermines the one structural defence
    `radiant_core` has — that the agent or person who wrote the link layer could not
    have read it. A file in the repository is available to everybody who clones
    it. Doing both in one commit would be the single most damaging thing anyone

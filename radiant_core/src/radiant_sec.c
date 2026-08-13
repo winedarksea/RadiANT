@@ -2,29 +2,22 @@
 /*
  * radiant_sec.c - per-channel policy for the two payload transforms.
  *
- * docs/radiant-security.md is normative. This file is the policy layer of the
- * primitive / policy / host cut: it decides what happens to which bytes and
- * when, and it computes nothing itself.
- *
- * ── The one rule that keeps the seam real ──────────────────────────────────
+ * docs/radiant-security.md is normative. This is the policy layer of the
+ * primitive/policy/host cut: decides what happens to which bytes and when,
+ * computes nothing itself.
  *
  * THIS FILE CONTAINS NO CALL TO radiant_sec_aes_ecb(). Level 1 is for
- * backends; Level 2 - radiant_sec_ctr_xor(), radiant_sec_cmac*() and the
- * portable helpers over them - is for policy. The `zero-cost` CI job greps for
- * that call, because a seam whose policy layer reaches past it is a seam only
- * in the prototypes, and it stays that way until somebody tries to attach
- * CRACEN and finds the mode-level path was never live.
+ * backends; Level 2 (radiant_sec_ctr_xor(), radiant_sec_cmac*(), and the
+ * portable helpers over them) is for policy. The `zero-cost` CI job greps for
+ * that call, since a seam whose policy layer reaches past it is only a seam
+ * in the prototypes.
  *
- * ── Context ────────────────────────────────────────────────────────────────
- *
- * TX transform: thread context, under api_lock, immediately before the frame
- * is built. The TX body is DMA'd and armed arbitrarily early, so ciphertext
- * must be final before radiant_sched_request_tx().
- *
- * RX ingest: ISR context, and it does no crypto at all - it classifies and
- * copies eight bytes. RX crypto: the pump, in the event thread. That rule does
- * not vary with caps.block_us, because a rule that changes with the backend is
- * a rule that gets debugged twice.
+ * Context: TX transform runs in thread context under api_lock, immediately
+ * before the frame is built - the TX body is DMA'd and armed arbitrarily
+ * early, so ciphertext must be final before radiant_sched_request_tx(). RX
+ * ingest is ISR context and does no crypto (classifies and copies 8 bytes);
+ * RX crypto runs in the pump, on the event thread, regardless of
+ * caps.block_us.
  */
 
 #include <string.h>
@@ -41,15 +34,10 @@ LOG_MODULE_DECLARE(radiant_core, CONFIG_RADIANT_CORE_LOG_LEVEL);
 #define SEC_PAGE_BYTES  8u
 #define SEC_MAX_CH      CONFIG_RADIANT_SEC_MAX_CHANNELS
 
-/*
- * The ISR-to-pump queue.
- *
- * Sized so that a full window of every secured channel can be in flight at
- * once, which is the deepest backlog a pump that runs on every event-thread
- * wakeup can face. Overflow drops the OLDEST entry rather than the newest: a
- * dropped packet breaks its window either way, and dropping the newest would
- * also break every window after it.
- */
+/* The ISR-to-pump queue, sized so a full window of every secured channel can
+ * be in flight at once (the deepest backlog possible). Overflow drops the
+ * OLDEST entry: a dropped packet breaks its window either way, and dropping
+ * the newest would also break every window after it. */
 #define SEC_QUEUE_DEPTH (SEC_MAX_CH * RADIANT_SEC_W_MAX)
 
 struct sec_pkt {
@@ -72,13 +60,9 @@ struct sec_ctx {
 	uint16_t devnum;        /* on air, in the nonce */
 	uint16_t base_devnum;   /* provisioning time, in the KDF */
 
-	/*
-	 * D3 and D17. No transform enables until the host has advanced the
-	 * epoch after a reset: a reboot that restarts the counter under an
-	 * unchanged epoch is a two-time pad for X_CONF, and it makes K_auth and
-	 * every recorded (packet, tag) pair from the previous session valid
-	 * again, which is a full replay against an X_AUTH-only channel.
-	 */
+	/* D3/D17: no transform enables until the host advances the epoch after
+	 * a reset - a reboot restarting the counter under an unchanged epoch
+	 * is a two-time pad for X_CONF and a full replay against X_AUTH. */
 	bool     epoch_set;
 	uint32_t epoch;
 	uint64_t epoch_anchor;  /* radiant_radio_now() at us_into_epoch == 0 */
@@ -107,32 +91,19 @@ struct sec_ctx {
 	 * PREVIOUS one. */
 	uint8_t  rx_tag[RADIANT_SEC_W_MAX];
 	uint8_t  rx_tag_have;
-	/*
-	 * The previous window: whether there WAS one, what it started at, and
-	 * the tag this receiver computed for it.
-	 *
-	 * `seen` and `valid` are separate on purpose. A window with a hole in
-	 * it produces no tag, so it cannot be compared against - but a host
-	 * must still be told it was unverifiable, or a lost packet is silently
-	 * indistinguishable from a verified one. Folding the two into a single
-	 * flag skips the verdict for exactly the case that most needs it.
-	 */
+	/* The previous window: whether there WAS one, what it started at, and
+	 * the tag computed for it. `seen`/`valid` are separate: a window with
+	 * a hole produces no tag to compare, but the host must still be told
+	 * it was unverifiable rather than silently look verified. */
 	bool     rx_prev_seen;
 	bool     rx_prev_valid;
 	uint16_t rx_prev_start;
 	uint8_t  rx_prev_tag[RADIANT_SEC_BLOCK_BYTES];
 
-	/*
-	 * The drop policy's holding buffer, and the only place this feature
-	 * buys memory with a switch.
-	 *
-	 * The default - deliver an unverifiable window, marked - needs no
-	 * buffer at all: packets go up as they arrive and the verdict follows.
-	 * Dropping instead means holding a window until its verdict is known,
-	 * which is a window's worth of payload. 64 bytes per secured channel,
-	 * paid by every secured channel whether or not it sets the bit, because
-	 * a static table cannot be conditional.
-	 */
+	/* The drop policy's holding buffer. The default (deliver marked
+	 * unverifiable) needs no buffer; dropping means holding a window
+	 * until its verdict is known. Paid by every secured channel whether
+	 * or not it sets the bit - a static table can't be conditional. */
 	uint8_t  hold[RADIANT_SEC_W_MAX][SEC_PAGE_BYTES];
 	uint8_t  hold_len[RADIANT_SEC_W_MAX];
 	uint64_t hold_t[RADIANT_SEC_W_MAX];
@@ -199,14 +170,8 @@ static void stat_bump(uint32_t *counter)
 	}
 }
 
-/*
- * D4: the expected packet index, from TIME and not from arrival history.
- *
- * A receiver joining mid-epoch is the NORMAL case, not an edge case, and it has
- * no arrival history to count from. Neither does a receiver after a gap longer
- * than 255 packets, and neither does anything in sparse mode. So the index
- * comes from the epoch phase and the channel period.
- */
+/* D4: expected packet index, from TIME rather than arrival history - a
+ * receiver joining mid-epoch (the normal case) has none to count from. */
 static uint32_t expected_index(const struct sec_ctx *c, uint64_t now)
 {
 	uint64_t period_us;
@@ -227,16 +192,12 @@ static uint32_t expected_index(const struct sec_ctx *c, uint64_t now)
 }
 
 /*
- * The 16-bit counter, from the byte on the air and the expected index: pick the
- * rollover nearest what time says. `epoch_delta` reports how many counter wraps
- * that implies, because a wrap advances the epoch by 1 on both sides (D14) -
- * the receiver gets that for free from the high bits it already computed.
- *
+ * The 16-bit counter, from the on-air byte and the expected index: pick the
+ * rollover nearest what time says. `epoch_delta` reports how many counter
+ * wraps that implies (a wrap advances the epoch by 1 on both sides, D14).
  * Drift budget: nearest-rollover resolution needs combined clock error below
- * +/-128 packet periods - +/-32 s at 4 Hz, against two 50 ppm crystals
- * diverging about 8.6 s/day - and the anchor is re-established on every
- * accepted packet, so drift only accumulates across a gap in which nothing was
- * accepted.
+ * +/-128 packet periods, and the anchor re-establishes on every accepted
+ * packet, so drift only accumulates across a gap with nothing accepted.
  */
 static uint16_t resolve_counter(uint32_t expected, uint8_t low,
 				uint16_t *epoch_delta)
@@ -284,15 +245,10 @@ static int derive_keys(struct sec_ctx *c)
 			       c->base_devnum, &c->k_auth);
 }
 
-/*
- * D14: a counter wrap advances the epoch by 1, on both sides, and re-derives
- * the keys. Without it the 16-bit counter wraps after about 4.5 hours at 4 Hz
- * and reuses keystream inside one epoch - the same two-time pad the reboot rule
- * exists to prevent, reintroduced by the epoch no longer rotating on its own.
- *
- * 65536 is divisible by every legal W, so window alignment survives the wrap
- * untouched.
- */
+/* D14: a counter wrap advances the epoch by 1 on both sides and re-derives
+ * keys - without it the 16-bit counter wraps at ~4.5 h at 4 Hz and reuses
+ * keystream within one epoch. 65536 divides every legal W, so window
+ * alignment survives the wrap untouched. */
 static int advance_epoch(struct sec_ctx *c, uint16_t by)
 {
 	uint64_t period_us;
@@ -306,8 +262,8 @@ static int advance_epoch(struct sec_ctx *c, uint16_t by)
 	c->epoch += by;
 	stat_bump(&c->stats.epoch_advances);
 
-	/* Move the anchor with it, so the phase stays continuous: 65536
-	 * packets have gone by per wrap. */
+	/* Move the anchor with it so the phase stays continuous: 65536 packets
+	 * per wrap. */
 	period_us = ((uint64_t)c->period_counts * 1000000u) / 32768u;
 	c->epoch_anchor += (uint64_t)by * 65536u * period_us;
 
@@ -351,9 +307,8 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 
 	c = ctx_of(ch);
 	if (c == NULL) {
-		/* Allocation is the first SET_KEY and nothing else. There is no
-		 * init call, so a build that never keys a channel never touches
-		 * this table. */
+		/* Allocation is the first SET_KEY and nothing else - a build
+		 * that never keys a channel never touches this table. */
 		for (i = 0u; i < SEC_MAX_CH; i++) {
 			if (!sec[i].used) {
 				memset(&sec[i], 0, sizeof(sec[i]));
@@ -381,11 +336,8 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 		c->devnum = base_devnum;
 	}
 
-	/*
-	 * A new root invalidates the epoch gate. Installing a key is a fresh
-	 * start, and a fresh start under an epoch the previous key already used
-	 * would be exactly the state D3 forbids.
-	 */
+	/* A new root invalidates the epoch gate: a fresh start under an epoch
+	 * the previous key already used is exactly the state D3 forbids. */
 	c->epoch_set = false;
 	radiant_sec_key_destroy(&c->k_enc);
 	radiant_sec_key_destroy(&c->k_auth);
@@ -398,14 +350,13 @@ int radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 	struct sec_ctx *c = ctx_of(ch);
 
 	if (c == NULL) {
-		/* Configuring a channel with no key is a host sequencing error,
-		 * not a state to invent a context for. */
+		/* Configuring a channel with no key is a host sequencing
+		 * error, not a state to invent a context for. */
 		return RADIANT_SEC_ENOKEY;
 	}
 
-	/* Descriptor encryption is refused in v1: the descriptor has no
-	 * counter - byte [1] is a frame index - so it has no nonce, and the
-	 * time-derived reconstruction has nothing to reconstruct. */
+	/* Descriptor encryption refused in v1: the descriptor has no counter
+	 * (byte [1] is a frame index), so no nonce and nothing to reconstruct. */
 	if ((switches & RADIANT_SEC_SW_DESC_CONF) != 0u) {
 		return RADIANT_SEC_ENOTSUP;
 	}
@@ -419,9 +370,9 @@ int radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 	if (w != 2u && w != 4u && w != 8u) {
 		return RADIANT_SEC_EINVAL;
 	}
-	/* Bounded, so the descriptor (0x00) and the ANT+ common pages stay in
-	 * the clear mechanically rather than by memory - and so a host cannot
-	 * make its own node undiscoverable by accident. */
+	/* Bounded so the descriptor (0x00) and ANT+ common pages stay in the
+	 * clear mechanically, and a host can't make its own node
+	 * undiscoverable by accident. */
 	if (page_lo < RADIANT_SEC_PAGE_LO_MIN ||
 	    page_hi > RADIANT_SEC_PAGE_HI_MAX || page_hi < page_lo) {
 		return RADIANT_SEC_EINVAL;
@@ -463,12 +414,9 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 	if (period_counts == 0u) {
 		return RADIANT_SEC_EINVAL;
 	}
-	/*
-	 * Monotone, and this is the whole of D3's enforceable half. The rest is
-	 * a normative obligation on the epoch authority - persist the last
-	 * epoch issued and never reissue it - because keys and state are wiped
-	 * on reset and nothing here survives to check.
-	 */
+	/* Monotone - the whole of D3's enforceable half; the rest is a
+	 * normative obligation on the epoch authority since nothing here
+	 * survives a reset to check it. */
 	if (c->epoch_set && epoch <= c->epoch) {
 		return RADIANT_SEC_EINVAL;
 	}
@@ -497,15 +445,11 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 
 #if !defined(CONFIG_RADIANT_SEC_HAS_RNG)
 /*
- * No entropy source in this build, which is the default and not a degraded
- * mode: ADR 0009 makes the deterministic KDF the primary pairing-scalar path
- * precisely so that this is a supported configuration rather than a hole.
- *
- * `out` is deliberately left untouched. Zeroing it would hand a caller that
- * ignored both the cap and the return code a scalar that at least looks like
- * data; leaving it alone means such a caller keeps its own buffer, and the
- * only safe answer to "give me randomness" from a part that has none is to
- * refuse in a way the caller cannot mistake for success.
+ * No entropy source in this build - the default, not a degraded mode: ADR
+ * 0009 makes the deterministic KDF the primary pairing-scalar path so this
+ * is supported rather than a hole. `out` is deliberately left untouched:
+ * zeroing it would hand a caller that ignored the return code something that
+ * looks like data.
  */
 int radiant_sec_rng(uint8_t *out, size_t len)
 {
@@ -535,22 +479,17 @@ int radiant_sec_try_devnum(uint8_t ch, uint16_t devnum)
 	}
 	if (!c->epoch_set) {
 		/* Nothing can verify before the epoch is known, so a trial
-		 * started here would report "not my sensor" about every
-		 * candidate including the right one. */
+		 * started here would report "not my sensor" for every
+		 * candidate, including the right one. */
 		return RADIANT_SEC_EINVAL;
 	}
 
 	c->devnum = devnum;
 
-	/*
-	 * The clean slate. Everything below belonged to the previous candidate:
-	 * a window half filled under one device number and closed under another
-	 * yields an unverified verdict that says nothing about either.
-	 *
-	 * last_verdict goes back to CLEAR rather than UNVERIFIED because CLEAR
-	 * is the honest word for "no window has been judged yet", and the
-	 * caller's whole loop is "is it VERIFIED yet".
-	 */
+	/* Clean slate: everything below belonged to the previous candidate.
+	 * last_verdict goes back to CLEAR, not UNVERIFIED, since CLEAR is
+	 * "no window judged yet" and the caller's loop is "is it VERIFIED
+	 * yet". */
 	c->rx_win_open = false;
 	c->rx_prev_valid = false;
 	c->rx_prev_seen = false;
@@ -605,13 +544,9 @@ void radiant_sec_stat_enrolment(uint8_t ch)
 {
 	struct sec_ctx *c = ctx_of(ch);
 
-	/*
-	 * Silent for a channel with no context. radiant_sec_pair_peer() installs
-	 * the root key before it calls this and installing a key is what
-	 * allocates the context, so the NULL branch is unreachable from the one
-	 * caller - but a counter that faulted on an unkeyed channel would be a
-	 * worse failure than a counter that missed a tick.
-	 */
+	/* Silent for a channel with no context. Unreachable from the one
+	 * caller (which installs the key first), but a counter that faulted
+	 * on an unkeyed channel would be worse than one that missed a tick. */
 	if (c != NULL) {
 		stat_bump(&c->stats.enrolments);
 	}
@@ -663,16 +598,11 @@ void radiant_sec_get_state(uint8_t ch, struct radiant_sec_state *out)
 /* ── Transmit ───────────────────────────────────────────────────────────── */
 
 /*
- * Absorb one transmitted packet into the running window CMAC, and close the
- * window when it is full.
- *
- * The tag that comes out is transmitted across the NEXT window, one byte per
- * packet. That lag is forced rather than chosen: encrypt-then-MAC means the tag
- * of a window depends on all W of its packets, so the byte belonging in the
- * first packet cannot be known until the last has been built. The alternatives
- * are to delay every packet by up to W periods, which makes telemetry stale to
- * save a byte that was never at stake, or to build the whole window before
- * transmitting, which a host writing one page at a time cannot do.
+ * Absorb one transmitted packet into the running window CMAC, closing the
+ * window when full. The resulting tag is sent across the NEXT window, one
+ * byte per packet - forced, not chosen: encrypt-then-MAC means the tag
+ * depends on all W packets, so the first packet's byte can't be known until
+ * the last is built.
  */
 static void tx_absorb(struct sec_ctx *c, const uint8_t *pay, uint16_t counter)
 {
@@ -693,10 +623,10 @@ static void tx_absorb(struct sec_ctx *c, const uint8_t *pay, uint16_t counter)
 		c->tx_win_start = start;
 	}
 
-	/* Bytes [0..6] of the packet as it goes on the air, which includes the
-	 * page number: leave byte [0] out and an attacker who flips it
-	 * reinterprets the same authenticated bits against a different schema.
-	 * Byte [7] is excluded because that is where the tag itself rides. */
+	/* Bytes [0..6] as they go on the air, including the page number - omit
+	 * byte [0] and an attacker who flips it reinterprets the same
+	 * authenticated bits under a different schema. Byte [7] carries the
+	 * tag itself. */
 	(void)radiant_sec_cmac_update(&c->tx_cmac, pay, 7u);
 
 	if ((uint8_t)(counter % c->w) == (uint8_t)(c->w - 1u)) {
@@ -727,23 +657,16 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len)
 
 	counter = c->tx_ctr;
 
-	/*
-	 * radiant_sec OWNS BYTE [1] ON A SECURED MASTER CHANNEL.
-	 *
-	 * The host cannot satisfy "+1 per transmitted data page": a master
-	 * retransmits its current body every slot whether or not the
-	 * application wrote a new one, so a host-maintained counter would
-	 * repeat across retransmissions - and a repeated counter under one
-	 * (epoch, devnum) is keystream reuse, which is the one failure that
-	 * turns CTR from weak into catastrophic.
-	 */
+	/* radiant_sec owns byte [1] on a secured master channel: a
+	 * host-maintained counter would repeat across retransmissions (a
+	 * master resends its body every slot), and a repeated counter under
+	 * one (epoch, devnum) is keystream reuse. */
 	pay[1] = (uint8_t)counter;
 
 	if ((c->switches & RADIANT_SEC_SW_AUTH) != 0u) {
-		/* The tag of the previous window. Zeros until one has closed,
-		 * which is why the first window of an epoch is never
-		 * verifiable and why a receiver reports that as unverified
-		 * rather than as an attack. */
+		/* Tag of the previous window; zero until one has closed, so
+		 * the first window of an epoch is never verifiable - reported
+		 * as unverified, not as an attack. */
 		pay[7] = c->tx_prev_valid
 				 ? c->tx_prev_tag[counter % c->w]
 				 : 0x00u;
@@ -758,18 +681,17 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len)
 		}
 	}
 
-	/* Encrypt THEN MAC, always, in that order, and over what is on the air.
-	 * The MAC covers ciphertext when X_CONF is on and plaintext when it is
-	 * not, which is the same statement either way. */
+	/* Encrypt then MAC, always, over what's on the air - the MAC covers
+	 * ciphertext when X_CONF is on and plaintext when it isn't. */
 	if ((c->switches & RADIANT_SEC_SW_AUTH) != 0u) {
 		tx_absorb(c, pay, counter);
 	}
 
 	c->tx_ctr = (uint16_t)(counter + 1u);
 	if (c->tx_ctr == 0u) {
-		/* The wrap. Advancing the epoch here is what stops the counter
-		 * repeating under one (epoch, devnum) after ~4.5 hours at
-		 * 4 Hz; the receiver derives the same advance from time. */
+		/* The wrap. Advancing the epoch here stops the counter
+		 * repeating under one (epoch, devnum); the receiver derives
+		 * the same advance from time. */
 		(void)advance_epoch(c, 1u);
 		c->tx_prev_valid = false;
 		c->tx_win_open = false;
@@ -777,15 +699,10 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len)
 	return RADIANT_SEC_OK;
 }
 
-/*
- * The ciphertext the acknowledgement path must reuse.
- *
- * api_xfer_broadcast() memcpys the plaintext host buffer onto the air as an
- * acknowledgement payload, which under X_CONF hands a passive listener the
- * plaintext of the same page. Returning the body already built for the current
- * counter fixes it with no second nonce, no reuse and no ISR crypto: same
- * nonce, same plaintext, identical ciphertext.
- */
+/* The ciphertext the acknowledgement path must reuse: api_xfer_broadcast()
+ * memcpys the plaintext host buffer as an ack payload, which under X_CONF
+ * would leak plaintext. Returning the body already built for the current
+ * counter fixes it with no second nonce and no ISR crypto. */
 bool radiant_sec_channel_is_secured(uint8_t ch)
 {
 	return ctx_armed(ctx_of(ch));
@@ -807,16 +724,10 @@ int radiant_sec_rx_ingest(uint8_t ch, const uint8_t *pay, uint8_t len,
 		return RADIANT_SEC_RX_PLAIN;
 	}
 
-	/*
-	 * D15. X_AUTH governs what a secured channel BROADCASTS, and the decode
-	 * switch happily delivers acknowledged data and burst arms as well - so
-	 * without this an injector sends a secured-range page as acknowledged
-	 * data, skips the MAC machinery entirely, and is delivered as
-	 * implicitly trusted data.
-	 *
-	 * Dropped and counted, in ISR context, with no crypto: the page number
-	 * and the message type are all this decision needs.
-	 */
+	/* D15: X_AUTH governs what a secured channel BROADCASTS; without this
+	 * check an injector could send a secured-range page as acknowledged
+	 * data, skip the MAC machinery, and be delivered as trusted. Dropped
+	 * and counted here, in ISR context, with no crypto needed. */
 	if (!broadcast) {
 		stat_bump(&c->stats.dropped_non_broadcast);
 		return RADIANT_SEC_RX_DROP;
@@ -824,9 +735,8 @@ int radiant_sec_rx_ingest(uint8_t ch, const uint8_t *pay, uint8_t len,
 
 	key = k_spin_lock(&sec_q_lock);
 	if (sec_q_count == SEC_QUEUE_DEPTH) {
-		/* Drop the OLDEST. A dropped packet breaks its window either
-		 * way; dropping the newest would break every window after it
-		 * too. */
+		/* Drop the OLDEST - dropping the newest would break every
+		 * window after it too. */
 		sec_q_head = (uint16_t)((sec_q_head + 1u) % SEC_QUEUE_DEPTH);
 		sec_q_count--;
 		stat_bump(&c->stats.dropped_policy);
@@ -859,12 +769,10 @@ static void hold_flush(struct sec_ctx *c, enum radiant_sec_verdict verdict)
 }
 
 /*
- * Close the window that has just filled: compare the tag bytes it carried
- * against the tag this receiver computed for the PREVIOUS window, then make
- * this window's own tag the one to compare against next time.
- *
- * Order matters. The bytes collected during window k authenticate window k-1,
- * so the comparison has to happen before rx_prev_tag is overwritten.
+ * Close the window that just filled: compare its tag bytes against the tag
+ * computed for the PREVIOUS window, then make this window's own tag the one
+ * to compare next time. Order matters - window k's bytes authenticate window
+ * k-1, so the comparison must happen before rx_prev_tag is overwritten.
  */
 static void rx_close_window(struct sec_ctx *c)
 {
@@ -873,12 +781,10 @@ static void rx_close_window(struct sec_ctx *c)
 	bool                     tag_full;
 	bool                     own_ok;
 
-	/* Did this window carry a complete tag? That is what judges the
-	 * PREVIOUS window. */
+	/* Did this window carry a complete tag? Judges the PREVIOUS window. */
 	tag_full = c->rx_tag_have == (uint8_t)((1u << c->w) - 1u);
 
-	/* Could this window produce a tag of its own? That is what will judge
-	 * the NEXT one. */
+	/* Could this window produce a tag of its own? Will judge the NEXT. */
 	own_ok = !c->rx_broken && c->rx_absorbed == c->w;
 
 	if (c->rx_prev_seen) {
@@ -895,9 +801,9 @@ static void rx_close_window(struct sec_ctx *c)
 			hold_flush(c, verdict);
 		}
 	} else if ((c->switches & RADIANT_SEC_SW_DROP_UNVER) != 0u) {
-		/* Nothing authenticates the first window of an epoch, because
-		 * the tag lags one window. Under the drop policy that means
-		 * dropping it, which is what the policy asked for. */
+		/* Nothing authenticates the first window of an epoch (the tag
+		 * lags one window); under the drop policy that means dropping
+		 * it. */
 		hold_flush(c, RADIANT_SEC_VERDICT_UNVERIFIED);
 	}
 
@@ -906,9 +812,9 @@ static void rx_close_window(struct sec_ctx *c)
 		memcpy(c->rx_prev_tag, own, RADIANT_SEC_BLOCK_BYTES);
 		c->rx_prev_valid = true;
 	} else {
-		/* An incomplete window cannot authenticate the next one
-		 * either. Say so rather than comparing against a tag computed
-		 * over fewer packets than the sender used. */
+		/* An incomplete window can't authenticate the next one
+		 * either - say so rather than comparing against a tag
+		 * computed over fewer packets than the sender used. */
 		c->rx_prev_valid = false;
 	}
 	c->rx_prev_seen = true;
@@ -963,29 +869,19 @@ static void rx_process(struct sec_pkt *pkt)
 		c->rx_prev_seen = false;
 	}
 
-	/*
-	 * D5's replay rejection, and it survives a receiver reboot in a way a
-	 * volatile high-water mark cannot - the normal case is a receiver
-	 * joining mid-stream, which a high-water mark handles by accepting a
-	 * full epoch of replay.
-	 *
-	 * The slack is stated in packet counts because the anchor is
-	 * re-established on every accepted packet, so this is a bound on the
-	 * jitter of one hop rather than on accumulated drift.
-	 */
+	/* D5's replay rejection; survives a receiver reboot in a way a
+	 * volatile high-water mark can't. Slack is stated in packet counts
+	 * because the anchor re-establishes on every accepted packet, so
+	 * this bounds one hop's jitter, not accumulated drift. */
 	if (expected > counter && (uint32_t)(expected - counter) > 128u) {
 		stat_bump(&c->stats.dropped_replay);
 		return;
 	}
 
-	/*
-	 * MAC FIRST, THEN DECRYPT, because the sender did encrypt-then-MAC and
-	 * therefore MAC'd the ciphertext. Absorbing here - while pkt->pay is
-	 * still exactly what was on the air - is what makes that free: doing
-	 * the XOR first would mean either a second copy of every queued packet
-	 * or re-deriving the keystream to undo it, and both cost more than
-	 * getting the order right.
-	 */
+	/* MAC first, then decrypt - the sender did encrypt-then-MAC, so the
+	 * MAC covers ciphertext. Absorbing here while pkt->pay is still what
+	 * was on the air makes that free; doing the XOR first would cost a
+	 * second copy or re-deriving the keystream. */
 	if ((c->switches & RADIANT_SEC_SW_AUTH) != 0u) {
 		start = (uint16_t)(counter - (counter % c->w));
 		if (!c->rx_win_open || c->rx_win_start != start) {
@@ -997,9 +893,7 @@ static void rx_process(struct sec_pkt *pkt)
 
 		if (!c->rx_broken) {
 			/* Bytes [0..6] as they arrived, including the page
-			 * number: leave byte [0] out and flipping it
-			 * reinterprets the same authenticated bits against a
-			 * different schema. Byte [7] is the tag itself. */
+			 * number. Byte [7] is the tag itself. */
 			if (radiant_sec_cmac_update(&c->rx_cmac, pkt->pay, 7u) ==
 			    RADIANT_SEC_OK) {
 				c->rx_absorbed++;
@@ -1022,18 +916,17 @@ static void rx_process(struct sec_pkt *pkt)
 	}
 
 	if ((c->switches & RADIANT_SEC_SW_AUTH) == 0u) {
-		/* X_CONF alone: no window, no verdict, and CLEAR is the honest
-		 * word - the payload is confidential and nothing about it is
-		 * authenticated. This is the weakest useful configuration and
-		 * it is the one ANT+ shipped. */
+		/* X_CONF alone: no window, no verdict - CLEAR is honest here,
+		 * confidential but unauthenticated. Weakest useful config,
+		 * and the one ANT+ shipped. */
 		c->last_verdict = RADIANT_SEC_VERDICT_CLEAR;
 		radiant_sec_deliver(c->ch, pkt->pay, pkt->len,
 				    RADIANT_SEC_VERDICT_CLEAR, pkt->t_sync);
 		return;
 	}
 
-	/* Re-anchor the phase on every accepted packet. With that slew, drift
-	 * matters only across a gap in which nothing was accepted. */
+	/* Re-anchor the phase on every accepted packet, so drift matters only
+	 * across a gap with nothing accepted. */
 	{
 		uint64_t period_us = ((uint64_t)c->period_counts * 1000000u) /
 				     32768u;
@@ -1055,17 +948,12 @@ static void rx_process(struct sec_pkt *pkt)
 			c->n_hold++;
 		}
 	} else {
-		/*
-		 * D6: DELIVERED, MARKED, NOT DISCARDED - and marked unverified
-		 * because at this instant it genuinely is. The window's verdict
-		 * follows through radiant_sec_window_verdict() once the window
-		 * carrying its tag completes.
-		 *
-		 * Discarding instead would cost W packets for every one lost -
-		 * 3.2% delivered-data loss at W=8 against a measured ~0.4%
-		 * floor - and hand an attacker a W-for-1 denial of service,
-		 * where one injected frame destroys W legitimate ones.
-		 */
+		/* D6: delivered, marked, not discarded - genuinely unverified
+		 * at this instant; the verdict follows via
+		 * radiant_sec_window_verdict() once the tagging window
+		 * completes. Discarding instead would cost W packets per one
+		 * lost (3.2% loss at W=8 vs. the ~0.4% floor) and hand an
+		 * attacker a W-for-1 denial of service. */
 		c->last_verdict = RADIANT_SEC_VERDICT_UNVERIFIED;
 		radiant_sec_deliver(c->ch, pkt->pay, pkt->len,
 				    RADIANT_SEC_VERDICT_UNVERIFIED,
@@ -1093,8 +981,8 @@ void radiant_sec_pump(void)
 		sec_q_count--;
 		k_spin_unlock(&sec_q_lock, key);
 
-		/* Outside the spinlock: this is where the AES happens, and it
-		 * must not run with interrupts masked. */
+		/* Outside the spinlock: AES happens here and must not run
+		 * with interrupts masked. */
 		rx_process(&pkt);
 	}
 }

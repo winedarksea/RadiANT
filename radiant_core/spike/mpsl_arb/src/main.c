@@ -2,74 +2,53 @@
 /*
  * P0 - what MPSL's timeslot arbiter actually does, measured rather than assumed.
  *
- * Provenance: clean-room. Written against nrfxlib's mpsl_timeslot.h and the
- * in-tree nrf/samples/mpsl/timeslot and nrf/drivers/mpsl/flash_sync patterns.
- * Nothing here derives from sdk-ant or from libant.a.
+ * Clean-room: written against nrfxlib's mpsl_timeslot.h and the in-tree
+ * nrf/samples/mpsl/timeslot and nrf/drivers/mpsl/flash_sync patterns. Nothing
+ * derives from sdk-ant or libant.a.
  *
- * ---------------------------------------------------------------------------
- * WHY THIS EXISTS AND WHY IT IS THROWAWAY
- * ---------------------------------------------------------------------------
+ * Why this exists and is throwaway: the arbitrated backend (P3) is a set of
+ * margins, a deadline timer and a status set, each sized from a number. Only
+ * MPSL_TIMESLOT_START_JITTER_US is published (0 on this part, GRTC-scheduled).
+ * Unpublished elsewhere:
+ *   - GRANT LATENCY for an EARLIEST request - mpsl_timeslot.h only says
+ *     SIGNAL_START has a latency relative to timeslot start, no figure.
+ *   - HOW OFTEN a NORMAL chain is BLOCKED at 32 req/s (eight tracked ANT+
+ *     sensors) and ~90/s (those plus a sweep).
+ *   - HOW LATE BLOCKED arrives relative to the requested start - sizes the
+ *     front end's deadline timer, which is required rather than defensive:
+ *     BLOCKED runs from mpsl_low_priority_process(), so between arm and
+ *     signal the core's single operation slot holds a dead operation and
+ *     every other channel's window expires behind it as MISSED.
+ *   - WHETHER AN EXTENSION CHAIN GROWS - ADR 0013's "sweep is the elastic
+ *     consumer" is repeated SIGNAL_ACTION_EXTEND, on the argument that MPSL
+ *     only grants an extension with nothing else scheduled in that region.
+ *     If extensions don't grow, that design collapses to a fixed slice.
+ *   - WHETHER A FREE-RUNNING TIMER SURVIVES TIMESLOT EDGES - radiant_core's
+ *     absolute timebase is a 1 MHz TIMER the HAL promises never goes
+ *     backwards; if MPSL disturbed a non-MPSL_TIMER0 instance, the backend
+ *     would need a different clock and P3 would be a much larger change.
  *
- * The arbitrated backend (P3) is a set of margins, a deadline timer and a
- * status set, and every one of them is sized from a number. Only one of those
- * numbers is published: MPSL_TIMESLOT_START_JITTER_US, which is 0 on this part
- * because it schedules off GRTC. The rest are not in any header:
+ * Touches no HAL, includes no radiant_core. Anything proved here must be
+ * re-proved by P3's own gates on the shipping path; exists only to derive
+ * P3's constants, expected to be deleted once they are.
  *
- *   - GRANT LATENCY for an EARLIEST request. mpsl_timeslot.h says only that
- *     SIGNAL_START "has a latency relative to the specified timeslot start" and
- *     that the latency does not move the actual start. No figure, anywhere.
- *   - HOW OFTEN a NORMAL chain is BLOCKED at 32 requests/s (what eight tracked
- *     ANT+ sensors cost) and at ~90/s (those plus a sweep).
- *   - HOW LATE the BLOCKED signal arrives relative to the start that was
- *     requested. This one sizes the front end's own deadline timer, and the
- *     deadline timer is a REQUIRED component rather than a defensive one:
- *     BLOCKED is delivered from mpsl_low_priority_process(), so between the arm
- *     and the signal the core's single operation slot is occupied by an
- *     operation that will never happen, and every other channel's window
- *     expires behind it as MISSED - which is the exact failure the denial
- *     signal exists to prevent.
- *   - WHETHER AN EXTENSION CHAIN GROWS. "The sweep is the elastic consumer"
- *     (ADR 0013) is implemented as repeated SIGNAL_ACTION_EXTEND, on the
- *     argument that MPSL grants an extension only when it has nothing else
- *     scheduled in the extended region - so the yield point is discovered
- *     rather than configured. If extensions do not in fact grow, that design
- *     collapses into a fixed slice and the ADR needs revisiting.
- *   - WHETHER A FREE-RUNNING TIMER SURVIVES TIMESLOT EDGES. radiant_core's
- *     entire absolute timebase is a 1 MHz TIMER, and the HAL promises the core
- *     it never goes backwards. If MPSL's start/stop of a timeslot disturbed a
- *     TIMER that is not MPSL_TIMER0, the backend would need a different clock
- *     and P3 would be a much larger change than it looks.
+ * Deliberately not here: THE RADIO, not one register. mpsl.rst makes the
+ * application responsible for the RADIO interrupt if the timeslot API drives
+ * radio access; a spike that also drove the radio would measure two things
+ * and attribute the result to one. Every timeslot here is granted, timed,
+ * and given back having done nothing - every number is a floor.
  *
- * It touches no HAL and includes no radiant_core. Anything it proves has to be
- * re-proved by P3's own gates on the shipping path; this exists so that P3's
- * constants are derived rather than guessed, and it is expected to be deleted
- * once they are.
- *
- * ---------------------------------------------------------------------------
- * WHAT IS DELIBERATELY NOT HERE
- * ---------------------------------------------------------------------------
- *
- * THE RADIO. Not one register. mpsl.rst makes the application responsible for
- * enabling and disabling the RADIO interrupt if the timeslot API is used for
- * RADIO access, and MPSL_HIGH_IRQ_PRIORITY is 0 - so a spike that also drove
- * the radio would be measuring two things and attributing the result to one.
- * Every timeslot below is granted, timed, and given back having done nothing.
- * That makes every number a floor: the real backend can only be slower.
- *
- * ---------------------------------------------------------------------------
- * THE TWO WAYS THIS PROGRAM CAN ASSERT, BOTH OF THEM ON PURPOSE
- * ---------------------------------------------------------------------------
- *
- *   1. OVERSTAYED. Closing a timeslot late is a crash rather than a lost
- *      window. Every timeslot here ends from its own SIGNAL_START or from an
- *      EXTEND_FAILED, with no work in between, so it should be unreachable -
- *      and if it is reached, the assert handler prints it and the tail margin
- *      P3 needs is larger than anything this spike would have suggested.
- *   2. AN ACTION RETURNED FROM A LOW-PRIORITY SIGNAL. BLOCKED, CANCELLED and
- *      SESSION_IDLE run in mpsl_low_priority_process(), and returning anything
- *      but ACTION_NONE from one asserts inside MPSL. That is why recovery here
- *      is a semaphore and a thread rather than a request from the callback,
- *      and it is the same reason P3's recovery cannot come from the signal.
+ * Two ways this program can assert, both deliberate:
+ *   1. OVERSTAYED - closing a timeslot late is a crash, not a lost window.
+ *      Every timeslot ends from its own SIGNAL_START or an EXTEND_FAILED
+ *      with no work in between, so this should be unreachable; if reached,
+ *      the assert handler prints it and P3's tail margin needs to be bigger
+ *      than this spike would have suggested.
+ *   2. AN ACTION RETURNED FROM A LOW-PRIORITY SIGNAL - BLOCKED, CANCELLED
+ *      and SESSION_IDLE run in mpsl_low_priority_process(); returning
+ *      anything but ACTION_NONE from one asserts inside MPSL. That's why
+ *      recovery here is a semaphore and a thread, not a callback request -
+ *      the same constraint P3's recovery is under.
  */
 
 #include <zephyr/kernel.h>
@@ -89,14 +68,10 @@
 #if defined(CONFIG_BT)
 #include <zephyr/bluetooth/bluetooth.h>
 
-/*
- * FILE SCOPE, AND NOT BECAUSE IT READS BETTER. BT_DATA_BYTES takes the address
- * of a compound literal, and a compound literal declared inside a block has
- * automatic storage duration - so `static const struct bt_data ad[]` in a
- * function is "initializer element is not constant" rather than a lifetime bug
- * that compiles. Every in-tree Bluetooth sample declares it here for the same
- * reason.
- */
+/* File scope, not style: BT_DATA_BYTES takes the address of a compound
+ * literal, which has automatic storage duration inside a block - so a
+ * function-local `static const struct bt_data ad[]` is a compile error
+ * ("initializer element is not constant"), not a silent lifetime bug. */
 static const struct bt_data adv_data[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
 };
@@ -107,20 +82,13 @@ BUILD_ASSERT(CONFIG_MPSL_TIMESLOT_SESSION_COUNT >= 1,
 	     "every session_open() fail while the program still runs and "
 	     "prints zeroes");
 
-/* ---------------------------------------------------------------------------
- * The free-running absolute clock
- *
- * A 1 MHz TIMER that is NOT MPSL_TIMER0, on the instance the board overlay
- * reserves for it, programmed exactly the way radiant_core's nrf backend
- * programmes its own - prescaler derived from this instance's base frequency
- * rather than named, because nRF54L TIMERs do not run from 16 MHz and
- * nrf_timer_frequency_set() does not exist for them.
- *
- * Read from the timeslot callback and from thread context both, which is safe
- * for the same reason the backend's is: a capture task and a CC read, no
- * read-modify-write.
- * ---------------------------------------------------------------------------
- */
+/* The free-running absolute clock: a 1 MHz TIMER that is NOT MPSL_TIMER0, on
+ * the instance the board overlay reserves, programmed like radiant_core's
+ * nrf backend does its own - prescaler derived from base frequency rather
+ * than named, since nRF54L TIMERs don't run from 16 MHz and
+ * nrf_timer_frequency_set() doesn't exist for them. Read from both the
+ * timeslot callback and thread context safely: a capture task plus a CC
+ * read, no read-modify-write. */
 
 #define FREE_TIMER_NODE DT_CHOSEN(spike_free_timer)
 BUILD_ASSERT(DT_NODE_HAS_STATUS(FREE_TIMER_NODE, okay),
@@ -131,27 +99,20 @@ BUILD_ASSERT(DT_NODE_HAS_STATUS(FREE_TIMER_NODE, okay),
 #define FREE_TIMER_CC 0u
 
 /*
- * THE CRYSTAL, AND WHY THIS FUNCTION EXISTS AT ALL.
+ * Why this function exists: the free-running TIMER's PCLK comes from HFCLK,
+ * which is the internal RC until something requests the crystal. MPSL cycles
+ * the crystal on/off at XTAL_GUARANTEED timeslot edges, so without holding a
+ * request the TIMER runs off the RC between grants and the crystal during
+ * them. Measured, not a rounding error: without this the free timer read
+ * 0.42% fast over 10 s (RC accuracy), and the same 0.4% showed up in the
+ * anchor error.
  *
- * The free-running TIMER's PCLK comes from HFCLK, and on this part HFCLK is the
- * internal RC until somebody asks for the crystal. MPSL turns the crystal on and
- * off at the edges of every XTAL_GUARANTEED timeslot - so a program that does
- * not hold its own request runs the TIMER off the RC BETWEEN grants and off the
- * crystal DURING them.
- *
- * MEASURED, AND IT IS NOT A ROUNDING ERROR: without this, the free timer read
- * 10118 ms against the kernel's 10076 ms over ten seconds - 0.42 % fast, which
- * is an RC oscillator's accuracy and nothing else. The same 0.4 % turned up in
- * the anchor error, which is how it was recognised.
- *
- * IT IS A REQUIREMENT ON P3 RATHER THAN A PROPERTY OF THIS SPIKE.
- * radiant_core's nrf backend already does exactly this at init, and the
- * arbitrated gate MUST keep doing it: Zephyr's clock control refcounts, so our
- * request holds the crystal on across MPSL's own on/off cycling. Drop it and
- * the 1 MHz absolute timebase - the clock t_sync is captured on and the whole
- * scheduler plans in - acquires a 0.4 % rate error between grants. At a 250 ms
- * ANT+ channel period that is about a millisecond of slot-placement error per
- * period, silently, with every counter reading zero.
+ * A requirement on P3, not just this spike: radiant_core's nrf backend
+ * already holds the HFXO at init and the arbitrated gate must keep doing so
+ * (Zephyr's clock control refcounts, so the request survives MPSL's own
+ * cycling). Drop it and the 1 MHz absolute timebase gains a 0.4% rate error
+ * between grants - about a millisecond of slot-placement error per 250 ms
+ * ANT+ period, silently, with every counter reading zero.
  */
 static void hfxo_hold(void)
 {
@@ -196,16 +157,9 @@ static inline uint32_t now_us(void)
 	return nrf_timer_cc_get(FREE_TIMER, FREE_TIMER_CC);
 }
 
-/* ---------------------------------------------------------------------------
- * Statistics
- *
- * Min, max, mean and a coarse log-ish histogram. NOT a percentile, for the
- * reason radiant_radio_hal.h gives about energy detect: percentiles need the
- * samples kept, and what matters here is the TAIL - grant latency is a
- * distribution with an unbounded one, which is finding 2 of the plan and the
- * whole reason min_arm_lead_us cannot absorb it.
- * ---------------------------------------------------------------------------
- */
+/* Min, max, mean and a coarse log-ish histogram. Not a percentile (would
+ * need samples kept) - what matters here is the TAIL, since grant latency's
+ * distribution has an unbounded one that min_arm_lead_us cannot absorb. */
 
 #define NBUCKET 10u
 
@@ -274,13 +228,11 @@ static void stat_print(const char *name, const struct stat *s)
  * ---------------------------------------------------------------------------
  */
 
-/*
- * THE RETURN PARAMETER MUST OUTLIVE THE CALLBACK. mpsl_timeslot.h states it
- * directly - "it must not point to a stack variable" - and the failure of
- * getting it wrong is a request built from whatever the stack was reused for,
- * which is a schedule that walks rather than a crash. One static per session,
- * and the next request lives beside it for the same reason.
- */
+/* The return parameter must outlive the callback (mpsl_timeslot.h: "must not
+ * point to a stack variable"). Getting it wrong builds a request from
+ * whatever the stack was reused for - a schedule that walks, not a crash.
+ * One static per session; the next request lives beside it for the same
+ * reason. */
 static mpsl_timeslot_signal_return_param_t rv;
 static mpsl_timeslot_request_t next_req;
 
@@ -311,19 +263,15 @@ static volatile uint32_t predicted_start_us;
 static volatile uint32_t blocks_since_grant;
 
 /*
- * Set by BLOCKED/CANCELLED, cleared by the thread that re-requests.
- *
- * WITHOUT IT THE CHAIN STALLS AT THE FIRST BLOCK, and the way it failed is
- * worth recording because the result looked plausible rather than broken.
- * SESSION_IDLE gives the semaphore for reasons other than a broken chain, so
- * the recovery thread woke while the chain was perfectly healthy, issued a
- * NORMAL request into a session that was not IDLE, got -NRF_EAGAIN, and fell
- * through to a bootstrap that also failed - ending the run at its first
- * wake-up. The measured "block rate" was then 99 per 10 000 at 32/s and 3333
- * per 10 000 at 90/s against a 1 s BLE advertiser, which reads as a
- * devastating contention result and was entirely this: 100 grants in 20 s
- * instead of 640, because the chain had stopped rather than because MPSL
- * refused anything.
+ * Set by BLOCKED/CANCELLED, cleared by the thread that re-requests. Without
+ * it the chain stalls at the first block, and the failure looked plausible
+ * rather than broken: SESSION_IDLE fires for reasons other than a broken
+ * chain, so the recovery thread woke while healthy, issued a NORMAL request
+ * into a non-IDLE session, got -NRF_EAGAIN, and the run ended at its first
+ * wake-up. Measured "block rate" was 99/10000 at 32/s and 3333/10000 at
+ * 90/s against a 1 s BLE advertiser - a devastating-looking contention
+ * result that was really 100 grants in 20 s instead of 640: a stopped
+ * chain, not an MPSL refusal.
  */
 static volatile bool chain_broken;
 
@@ -345,14 +293,10 @@ static K_SEM_DEFINE(idle_sem, 0, 1);
 #define EXT_STEP_US 1000u
 #define EXT_CAP_US  90000u
 
-/*
- * How far clear of `now` a recovery request has to be placed.
- *
- * Above the measured EARLIEST grant latency (1692-1695 us on this part, which
- * is the HFXO startup), because a request placed nearer than the arbiter can
- * physically honour is a request that will be refused for a reason that has
- * nothing to do with contention - and would then be counted as contention.
- */
+/* How far clear of `now` a recovery request must be placed - above the
+ * measured EARLIEST grant latency (1692-1695 us, the HFXO startup), or a
+ * request placed nearer than the arbiter can honour gets refused for a
+ * reason unrelated to contention and miscounted as contention. */
 #define RECOVER_MARGIN_US 3000u
 
 static void request_normal(uint32_t distance_us)
@@ -391,14 +335,12 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 			break;
 		case MODE_CHAIN:
 			/*
-			 * THE ANCHOR CHECK. predicted_start_us was computed
-			 * from the anchor in force when the request was made,
-			 * plus the distance asked for. If BLOCKED really does
-			 * leave the anchor where it was, this difference stays
-			 * at the jitter (0 us on this part) however many
-			 * requests were blocked in between; if it does not, it
-			 * walks by one distance per block and the whole
-			 * schedule walks with it in P3.
+			 * The anchor check: predicted_start_us is the anchor
+			 * in force at request time plus the distance asked
+			 * for. If BLOCKED truly leaves the anchor unmoved,
+			 * this difference stays at the jitter (0 us here)
+			 * regardless of blocks in between; otherwise it walks
+			 * by one distance per block, and P3's schedule walks.
 			 */
 			if (predicted_start_us != 0u) {
 				uint32_t d = (t > predicted_start_us)
@@ -446,47 +388,32 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		break;
 
 	case MPSL_TIMESLOT_SIGNAL_EXTEND_FAILED:
-		/*
-		 * THE YIELD POINT, DISCOVERED RATHER THAN CONFIGURED. This
-		 * arrives with the timeslot still live, which is what lets P3
-		 * close the window cleanly and report a partial rather than
-		 * being cut off mid-operation. Ending here is therefore the
-		 * correct response and not a fallback.
-		 */
+		/* The yield point, discovered rather than configured. Arrives
+		 * with the timeslot still live, letting P3 close the window
+		 * cleanly and report a partial instead of being cut off
+		 * mid-operation - ending here is correct, not a fallback. */
 		n_ext_fail++;
 		stat_add(&st_extend, ext_total_us);
 		rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
 		break;
 
 	case MPSL_TIMESLOT_SIGNAL_BLOCKED:
-		/*
-		 * LOW PRIORITY CONTEXT - mpsl_low_priority_process(), a
-		 * cooperative thread. No action may be returned, so recovery is
-		 * handed to the thread below. This is exactly why P3 cannot
-		 * rely on this signal alone and needs a deadline timer of its
-		 * own: by the time this runs, the window it refers to is
-		 * already in the past.
-		 */
+		/* Low-priority context (mpsl_low_priority_process(), a
+		 * cooperative thread) - no action may be returned, so recovery
+		 * is handed to the thread below. This is why P3 can't rely on
+		 * this signal alone and needs its own deadline timer: by the
+		 * time this runs, the window it refers to is already past. */
 		n_blocked++;
 		blocks_since_grant++;
 		chain_broken = true;
-		/*
-		 * THE NUMBER THAT SIZES P3'S DEADLINE TIMER, AND BOTH SIGNS OF
-		 * IT MATTER.
-		 *
-		 * LATE is the dangerous direction and is what st_blocked
-		 * collects: between the arm and this signal the core's single
-		 * operation slot holds an operation that will never happen, and
-		 * every other channel's window expires behind it as MISSED.
-		 *
-		 * EARLY is the happy case and is counted rather than measured:
-		 * a denial that arrives BEFORE the start it refers to can be
-		 * turned into a terminal event in time for the core to do
-		 * something else with the slot, and a front end would not need a
-		 * deadline timer at all if this were always true. The ratio of
-		 * the two is the answer to "is the deadline timer required or
-		 * merely defensive".
-		 */
+		/* The number that sizes P3's deadline timer - both signs
+		 * matter. LATE (st_blocked) is dangerous: between arm and
+		 * this signal the core's single operation slot holds a dead
+		 * operation, and every other channel's window expires behind
+		 * it as MISSED. EARLY means the denial can become a terminal
+		 * event in time for the core to reuse the slot - a front end
+		 * wouldn't need a deadline timer at all if this were always
+		 * true. The ratio answers "required or merely defensive". */
 		if (predicted_start_us != 0u) {
 			if (t > predicted_start_us) {
 				stat_add(&st_blocked, t - predicted_start_us);
@@ -667,59 +594,45 @@ static void run_chain(uint32_t distance_us, uint32_t seconds)
 
 	deadline = k_uptime_get_32() + (seconds * 1000u);
 	while (k_uptime_get_32() < deadline) {
-		/*
-		 * RECOVERY FROM THE THREAD, NOT FROM THE SIGNAL. A BLOCKED
-		 * request leaves the session IDLE with nothing outstanding and
-		 * the chain broken; re-arming it from the BLOCKED callback
-		 * would assert. So the recovery lives here, and this loop is
-		 * the spike's stand-in for P3's deadline timer.
-		 *
-		 * The next distance is computed from the UNMOVED anchor plus
-		 * enough whole periods to be in the future, which is the anchor
-		 * rule stated as arithmetic. If it is wrong, st_anchor says so
-		 * on the very next grant.
-		 */
+		/* Recovery from the thread, not the signal: a BLOCKED request
+		 * leaves the session IDLE with the chain broken, and re-arming
+		 * from the BLOCKED callback would assert. This loop is the
+		 * spike's stand-in for P3's deadline timer. The next distance
+		 * comes from the UNMOVED anchor plus enough whole periods to
+		 * be in the future - the anchor rule as arithmetic; st_anchor
+		 * flags it on the next grant if wrong. */
 		(void)k_sem_take(&idle_sem, K_MSEC(50));
 
-		/*
-		 * ONLY WHEN THE CHAIN IS ACTUALLY BROKEN. SESSION_IDLE fires for
-		 * more reasons than a block, and acting on the semaphore alone
-		 * issued a NORMAL request into a session that was not IDLE,
-		 * collected -NRF_EAGAIN, and killed the run at its first wake-up
-		 * - see the note on chain_broken.
-		 */
+		/* Only when the chain is actually broken - SESSION_IDLE fires
+		 * for other reasons too, and acting on the semaphore alone
+		 * issued a NORMAL request into a non-IDLE session, got
+		 * -NRF_EAGAIN, and killed the run at its first wake-up. */
 		if (!chain_broken || mode != MODE_CHAIN) {
 			continue;
 		}
 		chain_broken = false;
 
 		/*
-		 * THE NEXT DISTANCE IS COMPUTED FROM THE CLOCK, NOT FROM THE
-		 * BLOCK COUNT, AND THAT DISTINCTION IS A RESULT RATHER THAN A
-		 * TIDY-UP.
+		 * Next distance is computed from the clock, not the block
+		 * count - a result, not a tidy-up. `distance * (blocks + 1)`
+		 * is the obvious anchor-rule reading and works at 32/s but
+		 * spirals at 90/s: at an 11.1 ms distance, thread-context
+		 * recovery costs more than one distance, so by the time the
+		 * request is placed its target instant has passed, gets
+		 * refused, and the next attempt falls one distance further
+		 * behind. Measured: blocked_lateness running to 13 s and a
+		 * "block rate" of 5283/10000 that was this loop failing to
+		 * keep up, not MPSL refusing anything.
 		 *
-		 * `distance * (blocks + 1)` is the obvious reading of the anchor
-		 * rule - the anchor does not move on a block, so aim one more
-		 * period out each time - and it works at 32/s and spirals at
-		 * 90/s. At an 11.1 ms distance a thread-context recovery costs
-		 * MORE THAN ONE DISTANCE: by the time the semaphore is taken and
-		 * the request is placed, `anchor + distance * (blocks + 1)` is
-		 * already in the past, so the request is placed for an instant
-		 * that has gone, is refused, and the next attempt is one
-		 * distance further behind. Measured: `blocked_lateness` running
-		 * to 13 s, and a "block rate" of 5283 per 10 000 that was this
-		 * loop failing to keep up rather than MPSL refusing anything.
+		 * So the skip is however many whole distances from the anchor
+		 * it takes to clear `now` - still whole distances, preserving
+		 * the anchor's grid exactly.
 		 *
-		 * So the skip is however many whole distances from the anchor it
-		 * takes to land clear of `now`. Still whole distances, so the
-		 * grid the anchor defines is preserved exactly - which is the
-		 * property the anchor rule is actually about.
-		 *
-		 * P3 INHERITS THIS. Its front end recovers from a denial in the
-		 * same thread-context way, and a tracked ANT+ slot at 249.7 ms
-		 * has far more headroom than 11.1 ms - but a burst turnaround at
-		 * 1.55 ms has far less, which is why the arbitrated backend
-		 * refuses those synchronously instead of re-requesting.
+		 * P3 inherits this: its front end recovers the same
+		 * thread-context way, and a tracked ANT+ slot at 249.7 ms has
+		 * far more headroom than 11.1 ms, but a burst turnaround at
+		 * 1.55 ms has far less - why the arbitrated backend refuses
+		 * those synchronously instead of re-requesting.
 		 */
 		{
 			uint32_t now = now_us();
@@ -838,20 +751,12 @@ static void run_timer_continuity(uint32_t seconds)
 	printk("\n== TIMER continuity across %u timeslots ==\n", n_start);
 	printk("free timer %u ms, kernel %u ms, difference %d ms\n",
 	       (t1 - t0) / 1000u, u1 - u0, drift_ms);
-	/*
-	 * READ THE VERDICT WITH hfxo_hold() IN MIND. A failure here has two
-	 * possible causes and they need completely different answers:
-	 *
-	 *   ~0.4 % fast, scaling with the run length - the TIMER is on the
-	 *   internal RC because nobody held the crystal. Not a timeslot problem
-	 *   at all. That is what this measured before hfxo_hold() existed.
-	 *
-	 *   an error that does NOT scale with the run - the timeslot edges
-	 *   really are disturbing the TIMER, and radiant_core's absolute
-	 *   timebase cannot be this clock under MPSL.
-	 *
-	 * The ratio is printed so the two are distinguishable from one line.
-	 */
+	/* Read the verdict with hfxo_hold() in mind - a failure here has two
+	 * causes needing different answers: ~0.4% fast scaling with run
+	 * length means the TIMER is on the internal RC (not a timeslot
+	 * problem - what this measured before hfxo_hold() existed); an error
+	 * that does NOT scale with run length means timeslot edges really
+	 * are disturbing the TIMER. The ppm figure distinguishes the two. */
 	printk("%s (%d ppm)\n",
 	       (drift_ms > -5 && drift_ms < 5)
 		       ? "the free-running TIMER survived every timeslot edge"

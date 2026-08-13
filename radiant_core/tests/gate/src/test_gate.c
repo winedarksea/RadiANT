@@ -2,54 +2,28 @@
 /*
  * The suite for radiant_core/src/radiant_radio_nrf_gate_mpsl.c.
  *
- * Provenance: original clean-room work, written against
- * radiant_core/src/radiant_radio_nrf_gate.h, the file under test, and nrfxlib's
- * mpsl_timeslot.h. Nothing here derives from sdk-ant, from libant.a, or from any
- * adopter-gated document.
+ * The one invariant: exactly one radiant_nrf_gate_on_grant_end() per granted
+ * timeslot, on every exit. Too many hands back a radio the controller
+ * already picked up; too few leaves the 802.15.4 driver's write-once
+ * SUBSCRIBE_RXEN swapped out for the rest of the boot - a receiver that
+ * stops and never resumes, silently. That's a fault class a soak can't be
+ * trusted to find (it only proves the run it took didn't hit it).
  *
- * ---------------------------------------------------------------------------
- * THE ONE INVARIANT, AND WHY IT IS WORTH A WHOLE APPLICATION
- * ---------------------------------------------------------------------------
- *
- * EXACTLY ONE radiant_nrf_gate_on_grant_end() PER GRANTED TIMESLOT, ON EVERY
- * EXIT.
- *
- * Not "at least one": a second call hands back a radio the controller has
- * already picked up. Not "at most one": a missed one leaves the 802.15.4
- * driver's WRITE-ONCE SUBSCRIBE_RXEN swapped out for the rest of the boot, and
- * the failure is a receiver that stops and never resumes with nothing printed
- * anywhere. That is the one residual risk of the whole arbitrated backend that
- * fails PERMANENTLY and SILENTLY, which is exactly the class of fault a soak
- * cannot be trusted to find - a soak proves only that the run it took did not
- * hit it.
- *
- * So every test here ends in assert_invariant(), which asserts three things
- * together:
- *
+ * Every test ends in assert_invariant(), which checks together:
  *   stats.grant_end_calls == stats.granted   one per granted timeslot,
- *   g.hw_held == false                       and the radio is actually back,
- *   the fake backend's own count agrees      through the real entry point.
+ *   g.hw_held == false                       radio actually back,
+ *   fake backend's own count agrees          through the real entry point.
  *
- * The scenarios are one per path that can end a grant, because the fault mode
- * is a path that skips the hand-back rather than a path that does it wrongly -
- * and a path that is never taken is a path with no evidence either way.
+ * One scenario per path that can end a grant, since the fault mode is a
+ * path that skips the hand-back - an untaken path is evidence of nothing.
  *
- * ---------------------------------------------------------------------------
- * WHAT THIS CANNOT DO, STATED HERE RATHER THAN LEFT TO BE ASSUMED
- * ---------------------------------------------------------------------------
- *
- * It cannot produce a real BLOCKED arriving late out of mpsl_low_priority_
- * process() against a real SoftDevice Controller, and it cannot produce a real
- * OVERSTAYED. Those are the soak's, and the soak is scored on the same counters
- * this suite reads. Neither substitutes for the other.
- *
- * It also does not reach radiant_radio_nrf.c: that file is the whole 2800-line
- * backend and it defines the same eight HAL entry points fake_radio.c does, so
- * the two cannot be in one image. radiant_radio_disable() is therefore covered
- * here by the property it depends on - see
- * test_release_returns_the_radio_before_disable_can_write_the_mask - and its own
- * ~0 narrowing is checked by reading radiant_radio_nrf.c:2479, not by a fake
- * that would pass whatever that line said.
+ * What this suite cannot do: produce a real late BLOCKED against a real SDC,
+ * or a real OVERSTAYED - those are the soak's, scored on the same counters.
+ * It also can't reach radiant_radio_nrf.c (2800-line backend, defines the
+ * same 8 HAL entry points fake_radio.c does, so can't coexist in one image);
+ * radiant_radio_disable() is covered here only via the property it depends
+ * on (see test_release_returns_the_radio_before_disable_can_write_the_mask),
+ * and its own ~0 narrowing is checked by reading radiant_radio_nrf.c:2479.
  */
 
 #include <stdbool.h>
@@ -70,40 +44,27 @@
 #include "../fake_mpsl.h"
 #include "../gate_probe.h"
 
-/*
- * How long to let the work queue run.
- *
- * Every MPSL call this file makes is deferred - mpsl_timeslot_request() is not
- * callable from a timeslot or from the RADIO interrupt - so a request is placed
- * by a work item and not by gate_acquire(). A test that asserted straight after
- * the acquire would be asserting that the work had NOT run yet.
- */
+/* How long to let the work queue run. Every MPSL call here is deferred
+ * (mpsl_timeslot_request() isn't callable from a timeslot or the RADIO
+ * interrupt), so a test asserting right after gate_acquire() would be
+ * asserting that the work hadn't run yet. */
 #define WORK_MS 20
 
-/*
- * The window every scenario is built on.
- *
- * The lead is half a second for one reason: gate_acquire() arms a backstop timer
- * at (t_from - now) + DEADLINE_SLACK_US, and a scenario that took longer than
- * that would have its state changed underneath it by a denial nothing asked
- * for. Half a second of lead is 520 ms of backstop against tests that are tens
- * of milliseconds long.
- */
+/* The window every scenario is built on. Lead is half a second because
+ * gate_acquire() arms a backstop timer at (t_from - now) + DEADLINE_SLACK_US,
+ * and a slower scenario would get its state changed by an unwanted denial. */
 #define WIN_LEAD_US 500000u
 #define WIN_LEN_US  5000u
 
 /*
- * What the gate should ask MPSL for, and where it should put the compare that
- * ends the grant. Pinned rather than derived, because deriving them here from
- * the same constants the file uses would make this assertion a tautology:
+ * What the gate should ask MPSL for, and where the ending compare goes.
+ * Pinned rather than derived (deriving from the same constants the file
+ * uses would make the assertion a tautology):
  *
  *   length = (t_to + follow_on + TAIL_MARGIN) - (t_from - HEAD_MARGIN)
  *            + END_MARGIN
  *          = (5000 + 0 + 250) + 250 + 2000 = 7500
  *   compare = length - END_MARGIN = 5500
- *
- * If either number changes, a margin changed, and the tail margin is the one
- * this file's header calls the most likely field failure of the whole design.
  */
 #define WIN_REQ_LEN_US 7500u
 #define WIN_CC_US      5500u
@@ -119,13 +80,10 @@ static void before(void *fixture)
 {
 	ARG_UNUSED(fixture);
 
-	/*
-	 * The gate keeps a session across tests - session_open is a file static
-	 * and gate_init() returns early when it is set - so the shutdown is what
-	 * makes each test a fresh program run. It also drains any work the
-	 * previous test left queued, which would otherwise land on this test's
-	 * counters.
-	 */
+	/* The gate keeps a session across tests (session_open is a file
+	 * static; gate_init() returns early when set), so shutdown is what
+	 * makes each test a fresh run and drains queued work from the last
+	 * one. */
 	gate_shutdown();
 	k_msleep(WORK_MS);
 
@@ -136,15 +94,11 @@ static void before(void *fixture)
 	zassert_equal(RADIANT_RADIO_OK_RC, gate_init(), "gate_init failed");
 	zassert_true(fake_mpsl_is_open(), "no session was opened");
 
-	/*
-	 * THE BOOTSTRAP TIMESLOT IS A GRANTED TIMESLOT AND IT COUNTS.
-	 *
-	 * gate_init() spends one minimum-length EARLIEST slot on nothing but its
-	 * own start time - see bootstrap_anchor(). It carries no operation, so
-	 * it is the shortest path to the hand-back there is, and it is the first
-	 * thing the invariant has to hold for. Every test therefore starts with
-	 * granted == grant_end_calls == 1.
-	 */
+	/* The bootstrap timeslot is a granted timeslot and it counts:
+	 * gate_init() spends one minimum-length EARLIEST slot on nothing but
+	 * its own start time (bootstrap_anchor()), which is the shortest path
+	 * to a hand-back. Every test starts with granted == grant_end_calls
+	 * == 1. */
 	k_msleep(WORK_MS);
 	zassert_equal(1u, fake_mpsl_requests(), "the bootstrap was not placed");
 	zassert_equal(MPSL_TIMESLOT_REQ_TYPE_EARLIEST,
@@ -262,12 +216,9 @@ ZTEST(radiant_gate, test_normal_grant_ends_once_on_timer0)
 	assert_invariant();
 }
 
-/*
- * The same invariant across two grants in a row, which is the shape a running
- * dongle is in for hours. grant_end_calls TRACKING granted is the property the
- * soak is scored on, and a bug that loses one hand-back per N grants would pass
- * every single-grant test in this file.
- */
+/* The same invariant across two grants in a row, the shape a running dongle
+ * is in for hours - a bug that loses one hand-back per N grants would pass
+ * every single-grant test here. */
 ZTEST(radiant_gate, test_the_hand_back_tracks_the_grants)
 {
 	int i;
@@ -293,13 +244,11 @@ ZTEST(radiant_gate, test_the_hand_back_tracks_the_grants)
 	assert_invariant();
 }
 
-/*
- * An operation that completes synchronously inside its own grant - an arm that
- * turns out to be unreachable delivers its own terminal - so gate_release() runs
- * from INSIDE radiant_nrf_gate_on_grant(), before SIGNAL_START has returned.
- * This is the `if (g.release_wanted)` branch of START, and it is the only path
- * where the hand-back and the ACTION_END happen in the same callback.
- */
+/* An operation that completes synchronously inside its own grant (an arm
+ * that's unreachable delivers its own terminal) so gate_release() runs
+ * inside radiant_nrf_gate_on_grant(), before SIGNAL_START returns - the
+ * `if (g.release_wanted)` branch, the only path where hand-back and
+ * ACTION_END happen in the same callback. */
 ZTEST(radiant_gate, test_release_from_inside_the_grant_callback_ends_once)
 {
 	fake_backend_release_in_grant(true);
@@ -328,13 +277,12 @@ ZTEST(radiant_gate, test_release_from_inside_the_grant_callback_ends_once)
 /* ---------------------------------------------------------------------------
  * 2. gate_release() whose compare is lost
  *
- * BUG 9's failure, and the reason A1 exists. gate_release() clears g.granted
- * EARLY and deliberately, then relies on a TIMER0 compare to reach the disarm.
- * Both backstops that would have caught a lost compare used to be gated on
- * g.granted, which gate_release() had just cleared - so a lost compare meant
- * NOTHING ever ran on_grant_end(). Both branches of the compare arithmetic are
- * driven here, and in each the assertion is that the radio came back WITHOUT the
- * compare ever firing.
+ * Bug 9's failure, and the reason A1 exists. gate_release() clears
+ * g.granted early and deliberately, then relies on a TIMER0 compare to
+ * reach the disarm. Both backstops that would catch a lost compare used to
+ * be gated on g.granted, so a lost compare meant nothing ever ran
+ * on_grant_end(). Both branches of the compare arithmetic are driven here;
+ * each asserts the radio comes back without the compare ever firing.
  * ---------------------------------------------------------------------------
  */
 
@@ -342,12 +290,9 @@ ZTEST(radiant_gate, test_release_already_inside_the_end_margin_still_hands_back)
 {
 	start_grant();
 
-	/*
-	 * The counter is already past the point where a fresh compare could be
-	 * placed ahead of it (cc_backstop is WIN_CC_US), so gate_release() takes
-	 * the else-branch: the compare that is armed is the right one and moving
-	 * it can only lose.
-	 */
+	/* The counter is already past where a fresh compare could be placed
+	 * (cc_backstop is WIN_CC_US), so gate_release() takes the else-branch:
+	 * the armed compare is already right and moving it can only lose. */
 	fake_mpsl_timer0.counter = WIN_CC_US;
 	fake_mpsl_timer0.counter_step = 0u;
 
@@ -365,12 +310,10 @@ ZTEST(radiant_gate, test_release_already_inside_the_end_margin_still_hands_back)
 	zassert_false(p.hw_held, NULL);
 	zassert_false(p.granted_flag, "g.granted must be cleared early");
 
-	/*
-	 * NOW LOSE THE COMPARE ENTIRELY. No TIMER0 signal ever arrives; the
-	 * timeslot ends by expiry, which signals nothing this file handles, and
-	 * the session goes idle. Before A1 this is where the receiver died: the
-	 * backstop was gated on g.granted, which is false three lines up.
-	 */
+	/* Now lose the compare entirely: no TIMER0 signal arrives, the
+	 * timeslot ends by expiry (nothing this file handles), session goes
+	 * idle. Before A1 this is where the receiver died - the backstop was
+	 * gated on g.granted, false three lines up. */
 	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
 		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_SESSION_IDLE), NULL);
 
@@ -386,13 +329,10 @@ ZTEST(radiant_gate, test_release_whose_compare_is_overtaken_restores_the_backsto
 {
 	start_grant();
 
-	/*
-	 * The race BUG 9 is: the counter moves between writing CC0 and reading
-	 * it back, so the compare is already in the past and the ONLY signal
-	 * that would have ended this timeslot is gone. counter_step is what
-	 * makes that reproducible rather than a coin toss - the second capture
-	 * reads 200 against a compare placed at 130.
-	 */
+	/* Bug 9's race: the counter moves between writing CC0 and reading it
+	 * back, so the compare is already past and the only signal that would
+	 * end the timeslot is gone. counter_step makes this reproducible - the
+	 * second capture reads 200 against a compare placed at 130. */
 	fake_mpsl_timer0.counter = 100u;
 	fake_mpsl_timer0.counter_step = 100u;
 
@@ -433,9 +373,8 @@ static const struct radiant_pkt_format fmt_track = {
 	.len_offset = 1u,
 	.len_bias = 0,
 	.max_body_len = 26u,
-	/* CRC-16/CCITT-FALSE, which is what the HAL requires a well-formed arm
-	 * call to carry. The mock does not compute it; nothing in this suite
-	 * depends on its value, only on the arm being accepted. */
+	/* CRC-16/CCITT-FALSE, required by the HAL for a well-formed arm call.
+	 * The mock doesn't compute it; only acceptance matters here. */
 	.crc = {
 		.width_bits = 16u,
 		.poly = 0x1021u,
@@ -478,11 +417,9 @@ ZTEST(radiant_gate, test_extend_failed_ends_once_and_denies_the_orphan)
 	arm_an_operation();
 	aborted_before = fake_radio_stats()->ev_aborted;
 
-	/*
-	 * The arbiter refused to grow the grant. It arrives with the grant still
-	 * LIVE, which is what lets the window be closed cleanly and reported as
-	 * a partial rather than as a denial.
-	 */
+	/* The arbiter refused to grow the grant, arriving with the grant still
+	 * live - which lets the window close cleanly, reported as a partial
+	 * rather than a denial. */
 	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
 		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_EXTEND_FAILED),
 		      "EXTEND_FAILED did not end the grant");
@@ -495,13 +432,11 @@ ZTEST(radiant_gate, test_extend_failed_ends_once_and_denies_the_orphan)
 		      "the armed operation was not aborted, so the peripheral "
 		      "was handed back still running");
 
-	/*
-	 * AND THE ORPHAN GETS ITS DENIAL, which this path used to omit on the
-	 * reasoning that the abort above already delivers the terminal. It does -
-	 * for an operation that is ARMED. A STAGED one has no terminal to abort
-	 * and nothing is coming for it, which is the wedge end_housekeeping()
-	 * exists to prevent: the core's single operation slot held for ever.
-	 */
+	/* And the orphan gets its denial - this path used to omit it,
+	 * reasoning the abort above already delivers the terminal. True for
+	 * an ARMED op, but a STAGED one has no terminal to abort, which is
+	 * the wedge end_housekeeping() prevents: the core's one operation
+	 * slot held forever. */
 	k_msleep(WORK_MS);
 	zassert_equal(1u, fake_backend()->on_denied,
 		      "no denial was submitted for the staged operation");
@@ -515,11 +450,10 @@ ZTEST(radiant_gate, test_extend_failed_ends_once_and_denies_the_orphan)
 /* ---------------------------------------------------------------------------
  * 4. BLOCKED / CANCELLED arriving with the radio still on loan
  *
- * These two mean NO TIMESLOT STARTED, and the anchor rule depends on it - but
- * nothing enforced it, and the cost of being wrong is not a lost packet. A2
- * turned the assumption into a check with a counter behind it; if late_disarm is
- * ever non-zero on the bench it names a real fault that today presents only as a
- * dead receiver hours later.
+ * These mean no timeslot started, and the anchor rule depends on it, but
+ * nothing enforced that. A2 turned the assumption into a checked counter -
+ * a non-zero late_disarm on the bench names a fault that otherwise presents
+ * only as a dead receiver hours later.
  * ---------------------------------------------------------------------------
  */
 
@@ -558,11 +492,9 @@ ZTEST(radiant_gate, test_cancelled_with_a_stale_loan_returns_the_radio)
 	zassert_equal(1u, p.cancelled, NULL);
 }
 
-/*
- * And the ordinary case, which must NOT count as late: a request refused before
- * any timeslot started. late_disarm has to stay zero here or it is useless as a
- * bench alarm.
- */
+/* The ordinary case, which must NOT count as late: a request refused before
+ * any timeslot started. late_disarm must stay zero or it's useless as a
+ * bench alarm. */
 ZTEST(radiant_gate, test_an_ordinary_block_is_not_a_late_disarm)
 {
 	radiant_time_t now = radiant_radio_now();
@@ -594,10 +526,9 @@ ZTEST(radiant_gate, test_an_ordinary_block_is_not_a_late_disarm)
 /* ---------------------------------------------------------------------------
  * 5. SESSION_IDLE and SESSION_CLOSED delivered mid-grant
  *
- * The designed backstop for a timeslot MPSL ended by its own length expiry -
- * which signals nothing this file handles - so idle_disarm is allowed to be
- * non-zero in a healthy run, which is exactly why it is counted apart from
- * late_disarm.
+ * The designed backstop for a timeslot MPSL ended by its own length expiry
+ * (which signals nothing this file handles), so idle_disarm may legitimately
+ * be non-zero - counted apart from late_disarm for that reason.
  * ---------------------------------------------------------------------------
  */
 
@@ -663,16 +594,11 @@ ZTEST(radiant_gate, test_shutdown_mid_grant_returns_the_radio_once)
 
 /*
  * radiant_radio_disable() (radiant_radio_nrf.c:2424) reaches gate_release()
- * through radiant_radio_abort() and THEN writes the shared RADIO interrupt mask.
- * The whole of A4's ordering claim is that the radio is already back by the time
- * that write happens - on both of gate_release()'s branches, including the
- * nothing-held early return, because the session stays open across a disable and
- * MPSL still owns the register.
- *
- * The mask write itself is in radiant_radio_nrf.c, which cannot be in this image
- * (it defines the same HAL entry points fake_radio.c does). What IS testable
- * here is the precondition it rests on, and it is the half that was left to
- * chance.
+ * via radiant_radio_abort() and then writes the shared RADIO interrupt mask.
+ * A4's ordering claim: the radio is already back by then, on both of
+ * gate_release()'s branches including the nothing-held early return. The
+ * mask write itself lives in radiant_radio_nrf.c and can't be in this
+ * image; what's testable here is the precondition it rests on.
  */
 ZTEST(radiant_gate, test_release_returns_the_radio_before_disable_can_write_the_mask)
 {
@@ -686,8 +612,8 @@ ZTEST(radiant_gate, test_release_returns_the_radio_before_disable_can_write_the_
 		      "802.15.4 driver's SUBSCRIBE_RXEN is still swapped out");
 	zassert_equal(2u, p.grant_end_calls, NULL);
 
-	/* The nothing-held early return, which is where the abort path arrives
-	 * when there was no grant at all. */
+	/* The nothing-held early return: where the abort path arrives when
+	 * there was no grant at all. */
 	gate_release();
 	gate_probe_read(&p);
 	zassert_false(p.hw_held, NULL);
@@ -713,11 +639,9 @@ ZTEST(radiant_gate, test_release_after_a_normal_terminal_does_not_end_twice)
 	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
 		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_TIMER0), NULL);
 
-	/*
-	 * And then the abort path calls gate_release() without knowing - which
-	 * is the documented way it is called, and lands on the branch where
-	 * g.granted is already false and the radio is already back.
-	 */
+	/* Then the abort path calls gate_release() without knowing - the
+	 * documented way it's called - landing on the branch where g.granted
+	 * is already false and the radio is already back. */
 	gate_release();
 
 	gate_probe_read(&p);
@@ -729,10 +653,10 @@ ZTEST(radiant_gate, test_release_after_a_normal_terminal_does_not_end_twice)
 /* ---------------------------------------------------------------------------
  * 8. ACTION_END returned twice - BUG 14
  *
- * TIMER0 and RADIO race at the end of a window and either can win; whichever
- * loses used to end an already-ended timeslot, and MPSL asserts on the second
- * action. One guard at the single return statement, not per branch, because the
- * branch that is about to be wrong is whichever one loses a race it cannot see.
+ * TIMER0 and RADIO race at the end of a window; the loser used to end an
+ * already-ended timeslot, and MPSL asserts on the second action. One guard
+ * at the single return statement, not per branch, since whichever branch is
+ * wrong is whichever loses a race it can't see.
  * ---------------------------------------------------------------------------
  */
 
@@ -746,11 +670,9 @@ ZTEST(radiant_gate, test_a_second_end_is_refused_by_the_ended_guard)
 	gate_probe_read(&p);
 	zassert_true(p.ended, NULL);
 
-	/*
-	 * The loser of the race arrives. It still has to be HANDLED - the event
-	 * needs consuming or the operation never gets its terminal - but it must
-	 * not be ANSWERED.
-	 */
+	/* The loser of the race arrives. It still has to be handled (the
+	 * event needs consuming or the operation never gets its terminal)
+	 * but must not be answered. */
 	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
 		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_TIMER0),
 		      "a second ACTION_END was returned for one timeslot");
@@ -759,12 +681,10 @@ ZTEST(radiant_gate, test_a_second_end_is_refused_by_the_ended_guard)
 	assert_invariant();
 }
 
-/*
- * The RADIO signal is the other half of the same race: MPSL owns the vector
+/* The RADIO signal is the other half of the same race: MPSL owns the vector
  * inside a grant and delivers the interrupt as a signal, so the handler is
  * re-entered by hand and the grant given back from there rather than from a
- * TIMER0 signal thirty microseconds later.
- */
+ * TIMER0 signal thirty microseconds later. */
 ZTEST(radiant_gate, test_radio_signal_completing_the_operation_ends_once)
 {
 	start_grant();
@@ -786,12 +706,9 @@ ZTEST(radiant_gate, test_radio_signal_completing_the_operation_ends_once)
 	assert_invariant();
 }
 
-/*
- * A fresh timeslot makes ACTION_END legal again, and it has to: the guard is
- * per grant and not per session. Without this, the guard that fixes bug 14 would
- * wedge the gate after its first window instead - which is the same symptom by
- * the opposite road.
- */
+/* A fresh timeslot makes ACTION_END legal again: the guard is per grant, not
+ * per session. Without this, the guard that fixes bug 14 would instead wedge
+ * the gate after its first window - the same symptom by the opposite road. */
 ZTEST(radiant_gate, test_the_ended_guard_is_cleared_by_the_next_grant)
 {
 	start_grant();
@@ -814,9 +731,8 @@ ZTEST(radiant_gate, test_the_ended_guard_is_cleared_by_the_next_grant)
 }
 
 /* ---------------------------------------------------------------------------
- * The elastic chain, because it is the one path that RETURNS FROM TIMER0
- * WITHOUT ENDING THE GRANT - and a hand-back on that return would be a radio
- * given away in the middle of a window it is still using.
+ * The elastic chain: the one path that returns from TIMER0 without ending
+ * the grant - a hand-back there would give the radio away mid-window.
  * ---------------------------------------------------------------------------
  */
 
@@ -856,14 +772,11 @@ ZTEST(radiant_gate, test_an_extension_does_not_hand_the_radio_back)
 		gate_probe_read(&p);
 		zassert_equal(before_len + fake_mpsl_last_extend_us(),
 			      p.granted_len_us, NULL);
-		/*
-		 * BUG 8: the compare must stay END_MARGIN_US ahead of the new
-		 * end, initial grant and extended grant alike. It used
-		 * TAIL_MARGIN_US on exactly one of the two paths, and the moment
-		 * a window stopped extending it had 250 us to get ACTION_END
-		 * back - which is the overstay the whole margin exists to
-		 * prevent.
-		 */
+		/* Bug 8: the compare must stay END_MARGIN_US ahead of the new
+		 * end on both initial and extended grants. It used
+		 * TAIL_MARGIN_US on only one path, leaving 250 us to get
+		 * ACTION_END back the moment a window stopped extending - the
+		 * overstay the margin exists to prevent. */
 		zassert_equal(p.granted_len_us - 2000u, fake_mpsl_timer0.cc[0],
 			      "the extended grant's compare is not "
 			      "END_MARGIN_US before its end");
@@ -880,25 +793,21 @@ ZTEST(radiant_gate, test_an_extension_does_not_hand_the_radio_back)
 }
 
 /* ---------------------------------------------------------------------------
- * BUG 15 - THE ANSWER THAT ARRIVES INSIDE THE CALL
+ * BUG 15 - the answer that arrives inside the call
  *
- * The only failure this suite has that is PERMANENT AND TOTAL rather than
- * permanent and silent. g.mpsl_owes means "MPSL has a request of ours and has
- * not answered it", and nothing this side of the API can clear it - a placed
- * request cannot be withdrawn. So a g.mpsl_owes that is true when nothing is
- * outstanding refuses every gate_acquire() for the rest of the boot with
- * den_owed, and the ANT radio is dead until the board is reset.
+ * The only failure here that's permanent and total rather than permanent
+ * and silent. g.mpsl_owes means "MPSL has an unanswered request of ours",
+ * and nothing this side of the API can clear it - so a g.mpsl_owes stuck
+ * true when nothing is outstanding refuses every gate_acquire() with
+ * den_owed forever; the ANT radio is dead until reset.
  *
- * The measured signature on the bench is arithmetic that cannot happen:
+ * Bench signature (impossible arithmetic): placed=3 granted=2 blocked=1
+ * ... owed=2403 ... owes=1 - every placed request answered, flag still set.
+ * Caused by the flag being raised AFTER the request it describes, with the
+ * answer arriving in between.
  *
- *   placed=3 granted=2 blocked=1 ... owed=2403 ... owes=1
- *
- * every placed request answered, and the flag still set. It got that way
- * because the flag was raised AFTER the request it describes, and the answer
- * arrived in between.
- *
- * These two tests are the two halves of it: the flag must survive an answer
- * that beats it, and the gate must go on working afterwards.
+ * Two tests: the flag must survive an answer that beats it, and the gate
+ * must keep working afterwards.
  * ---------------------------------------------------------------------------
  */
 
@@ -935,12 +844,10 @@ ZTEST(radiant_gate, test_a_block_answered_inside_the_request_does_not_wedge)
 	assert_invariant();
 }
 
-/*
- * THE RECOVERY, WHICH IS THE HALF THAT WAS ACTUALLY LOST. A refusal is an
- * ordinary event; what made this a wedge rather than a hiccup is that the NEXT
- * window could never be placed. So the test is not "owes is false", it is "the
- * gate takes the next window and gets a grant".
- */
+/* The recovery, the half that was actually lost. A refusal is ordinary;
+ * what made this a wedge is that the NEXT window could never be placed. So
+ * the test is "the gate takes the next window and gets a grant", not just
+ * "owes is false". */
 ZTEST(radiant_gate, test_the_gate_still_places_after_an_inline_block)
 {
 	radiant_time_t now = radiant_radio_now();
@@ -971,16 +878,14 @@ ZTEST(radiant_gate, test_the_gate_still_places_after_an_inline_block)
 }
 
 /*
- * CANCELLED ARRIVING THE SAME WAY. It is the other refusal that clears the
- * flag, it is delivered in the same low-priority context, and a fix that only
- * covered BLOCKED would leave the identical wedge one signal along.
+ * CANCELLED arriving the same way: the other refusal that clears the flag,
+ * delivered in the same low-priority context - a fix covering only BLOCKED
+ * would leave the identical wedge one signal along.
  *
- * SESSION_IDLE is deliberately NOT tested this way, and that is a statement
- * about the model rather than about the coverage: IDLE means "no request is
- * outstanding", so MPSL cannot say it about the request currently being placed.
- * Injecting it there produces a legitimately-owed flag - the gate re-places on
- * IDLE, and that second request really is unanswered - which would be a test
- * asserting that correct behaviour is a bug.
+ * SESSION_IDLE is deliberately not tested this way: IDLE means "no request
+ * outstanding", so MPSL can't say it about the request currently being
+ * placed - injecting it there would produce a legitimately-owed flag (the
+ * gate re-places on IDLE, and that second request really is unanswered).
  */
 ZTEST(radiant_gate, test_a_cancel_answered_inside_the_request_does_not_wedge)
 {
@@ -1001,12 +906,9 @@ ZTEST(radiant_gate, test_a_cancel_answered_inside_the_request_does_not_wedge)
 	assert_invariant();
 }
 
-/*
- * AND THE ORDINARY ORDER IS UNCHANGED, which is what says the fix is an
- * ordering correction and not a new behaviour. An answer that arrives after the
- * call returns must still clear the flag, and answered_inline must stay zero -
- * otherwise the counter that is about to be read off a bench log means nothing.
- */
+/* The ordinary order is unchanged - the fix is an ordering correction, not
+ * new behaviour. An answer arriving after the call returns must still clear
+ * the flag, with answered_inline staying zero. */
 ZTEST(radiant_gate, test_an_answer_after_the_call_still_clears_the_flag)
 {
 	radiant_time_t now = radiant_radio_now();
@@ -1029,12 +931,10 @@ ZTEST(radiant_gate, test_an_answer_after_the_call_still_clears_the_flag)
 	assert_invariant();
 }
 
-/*
- * A REQUEST THAT WAS NOT PLACED OWES NOTHING, and the pre-arm must be undone
- * for it. -NRF_EAGAIN is the common one: it is a "not yet", the request is kept
- * for SESSION_IDLE to place, and leaving the flag raised here would refuse the
- * very acquire that is meant to retry.
- */
+/* A request that was not placed owes nothing, and the pre-arm must be
+ * undone for it. -NRF_EAGAIN is the common case: a "not yet" - the request
+ * is kept for SESSION_IDLE to place, so leaving the flag raised would
+ * refuse the very acquire meant to retry. */
 ZTEST(radiant_gate, test_an_unplaced_request_leaves_nothing_owed)
 {
 	radiant_time_t now = radiant_radio_now();

@@ -35,7 +35,7 @@ The good news is that this is not a rebuild in the dark. A great deal is
 genuinely public:
 
 - **The ANT Message Protocol and Usage Rev 5.1** (D00000652) is free to
-  download with no login and no adopter agreement. It specifies the host↔dongle
+  download with no login and no agreement to sign. It specifies the host↔dongle
   serial protocol the bridge already implements.
 - **rtl_433's ANT+ decoder** and expired patent **US8855246B2** together give
   the complete on-air frame: preamble, the `A6 C5` ANT+ network address, device
@@ -46,9 +46,9 @@ genuinely public:
   preamble, with no whitening.
 - **Our own hardware transmits.** Anything observable off the air from a device
   we own is ours to record and reason about.
-- **ANT+ device profile documents** are adopter-gated, but adopter signup has
-  been free since January 2025, no longer requires certification, and this
-  project already holds a login.
+- **ANT+ device profile documents** are not freely redistributable, but
+  obtaining a copy has been free since January 2025, no longer requires
+  certification, and this project already holds one.
 
 So the interesting question is not "may we build this" — it is *which sources
 may touch which files*, and that answer is not uniform.
@@ -78,9 +78,6 @@ For **any** file in this repository:
 For **`src/profiles/`, `tools/ant_pages.py`, and the profile documentation
 only**:
 
-- **ANT+ device profile documents** obtained under our adopter login. Use the
-  page-layout tables and the field semantics. Copy no prose.
-
 ### Forbidden sources
 
 - **Any output of disassembling, decompiling or instrumenting `libant.a`.**
@@ -89,7 +86,7 @@ only**:
   it, not "just to check one constant". Public symbol *names* from `nm` and
   archive membership from `ar t` are inventory facts about a file and have
   already been recorded; the *contents* of the code are off limits.
-- **Adopter-gated documents anywhere under `radiant_core/**`.** The link layer
+- **Non-redistributable documents anywhere under `radiant_core/**`.** The link layer
   stays strictly clean-room. If a page-layout question arises while writing
   core code, the answer is that it belongs in `src/profiles/`, not that the PDF
   may be opened.
@@ -172,7 +169,7 @@ the work assignment rather than of anyone's self-discipline:
 |---|---|---|
 | `radiant_core/**` authors | Rev 5.1, `docs/ant-radio-link.md`, spike outputs, this repository, public datasheets | sdk-ant (at all), profile PDFs, anything derived from `libant.a` |
 | `sdk-ant-shim` author | sdk-ant headers — the **only** role that may | `libant.a` internals |
-| `profiles-c`, `profiles-py` | additionally, the adopter-gated profile PDFs | sdk-ant, `libant.a` internals |
+| `profiles-c`, `profiles-py` | additionally, the non-redistributable profile PDFs | sdk-ant, `libant.a` internals |
 | everyone | `libant.a` internals — **nobody**, ever | |
 
 This is the reason the parallel structure of the project is worth more here

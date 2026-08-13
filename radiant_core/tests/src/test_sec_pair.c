@@ -1,12 +1,9 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * Pairing, driven from both ends inside one process.
- *
- * Channel 0 is the sensor and channel 1 is the receiver, the same arrangement
- * test_sec.c uses. Because both live here, the interesting case is testable:
- * a man in the middle is just a third scalar, and the assertion is that the two
- * fingerprints DIFFER - which is the entire security argument for showing them
- * to a human.
+ * Pairing, driven from both ends inside one process (channel 0 sensor, channel
+ * 1 receiver, as in test_sec.c). A man in the middle is just a third scalar,
+ * and the assertion is that the two fingerprints DIFFER - the entire security
+ * argument for showing them to a human.
  */
 
 #include <zephyr/kernel.h>
@@ -29,9 +26,7 @@
 #define B_DEVNUM 0x51C4u
 #define M_DEVNUM 0x7788u
 
-/* Three private scalars. Fixed rather than random: a test that generated its
- * own keys would be untestable against a stated expectation and would fail
- * intermittently if the generator were ever wrong. */
+/* Three private scalars, fixed rather than random for a stated expectation. */
 static const uint8_t scalar_a[32] = {
 	0x77, 0x07, 0x6d, 0x0a, 0x73, 0x18, 0xa5, 0x7d,
 	0x3c, 0x16, 0xc1, 0x72, 0x51, 0xb2, 0x66, 0x45,
@@ -105,12 +100,9 @@ ZTEST(sec_pair, test_two_ends_reach_the_same_fingerprint)
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_pair_peer(B_CH, pub_a, &fp_b));
 
-	/*
-	 * THE FINGERPRINT IS ORDER-INDEPENDENT. Both ends bind the two public
-	 * keys ordered by value rather than by role, so neither needs to know
-	 * who initiated - which matters because on ANT the master and the slave
-	 * do not agree about that.
-	 */
+	/* The fingerprint is order-independent: both ends bind the two public
+	 * keys ordered by value, not role, since master/slave don't agree on
+	 * who initiated. */
 	zassert_equal(fp_a, fp_b, "the two ends computed different "
 		      "fingerprints: %u vs %u", fp_a, fp_b);
 	zassert_true(fp_a < 1000000u, "the fingerprint is not six digits");
@@ -126,20 +118,12 @@ ZTEST(sec_pair, test_a_man_in_the_middle_cannot_match_both_fingerprints)
 	uint32_t fp_ma = 0;
 	uint32_t fp_mb = 0;
 
-	/*
-	 * THE ATTACK THE FINGERPRINT EXISTS FOR, and the whole of section 7.4's
-	 * argument as an assertion.
-	 *
-	 * M sits between A and B, completing one exchange with each. Both
-	 * halves succeed - that is the point, the cryptography cannot tell -
-	 * and M can read and rewrite everything. What M cannot do is make A's
-	 * fingerprint equal B's, because they are functions of two different
-	 * shared secrets.
-	 *
-	 * So the attack is undetectable to the protocol and detectable to a
-	 * person holding both devices. That is the same bargain BLE numeric
-	 * comparison makes, and it is only worth anything if the user looks.
-	 */
+	/* Section 7.4's argument, as an assertion: M sits between A and B,
+	 * completing one exchange with each. Both halves succeed - the
+	 * cryptography can't tell - but M cannot make A's fingerprint equal B's,
+	 * since they're functions of two different shared secrets. The attack is
+	 * undetectable to the protocol, detectable to a human comparing devices
+	 * (the same bargain BLE numeric comparison makes). */
 	give_id(A_CH, A_DEVNUM);
 	give_id(B_CH, B_DEVNUM);
 	give_id(M_CH, M_DEVNUM);
@@ -193,12 +177,9 @@ ZTEST(sec_pair, test_a_small_order_peer_key_is_refused)
 	uint8_t  one_point[32] = { 1 };
 	uint32_t fp = 0;
 
-	/*
-	 * u = 0 and u = 1 make the shared secret all zeros whatever our scalar
-	 * was. Refused rather than accepted-with-a-weak-key: this value becomes
-	 * a root key, so accepting it would let anyone able to inject one
-	 * packet fix the group key to a value they already know.
-	 */
+	/* u=0 and u=1 make the shared secret all zeros regardless of scalar.
+	 * Refused rather than accepted-with-a-weak-key, since this becomes a
+	 * root key and accepting it lets an injector fix a known group key. */
 	give_id(A_CH, A_DEVNUM);
 	zassert_equal(RADIANT_SEC_OK, radiant_sec_pair_enter(A_CH, 60u));
 	zassert_equal(RADIANT_SEC_OK,
@@ -221,12 +202,9 @@ ZTEST(sec_pair, test_pairing_installs_a_key_both_ends_can_use)
 	uint8_t  pub_b[32];
 	uint32_t fp = 0;
 
-	/*
-	 * The point of the whole exchange: after it, both channels hold a root
-	 * key and radiant_sec will transform with it. Asserted through the
-	 * ordinary public surface rather than by reading the key back, because
-	 * there is deliberately no way to read the key back.
-	 */
+	/* The point of the exchange: both channels now hold a root key.
+	 * Asserted through the public surface since the key can't be read back
+	 * by design. */
 	give_id(A_CH, A_DEVNUM);
 	give_id(B_CH, B_DEVNUM);
 	zassert_equal(RADIANT_SEC_OK, radiant_sec_pair_enter(A_CH, 60u));
@@ -300,18 +278,10 @@ ZTEST(sec_pair, test_loss_of_tracking_releases_the_exchange)
 {
 	uint8_t pub[32];
 
-	/*
-	 * D8.1's trap, as a live path rather than a note.
-	 *
-	 * A channel that starts pairing and then loses its peer has no
-	 * completion event and no failure event - the sensor walked out of
-	 * range - so RX_FAIL_GO_TO_SEARCH is the only transition that can free
-	 * the state. Today that wipes one half-finished exchange's scalar. The
-	 * day anything here becomes device-wide, forgetting this hook would
-	 * deadlock negotiation for every channel, permanently, with nothing
-	 * anywhere to say so - which is why the hook is live now, while it is
-	 * cheap, rather than added with the thing that needs it.
-	 */
+	/* D8.1: a channel that loses its peer mid-pairing gets no completion or
+	 * failure event, so RX_FAIL_GO_TO_SEARCH is the only transition that can
+	 * free the state. Kept live now (cheap) rather than added later, when
+	 * forgetting it would deadlock negotiation permanently and silently. */
 	give_id(A_CH, A_DEVNUM);
 	zassert_equal(RADIANT_SEC_OK, radiant_sec_pair_enter(A_CH, 60u));
 	zassert_equal(RADIANT_SEC_OK,
@@ -329,11 +299,9 @@ ZTEST(sec_pair, test_loss_of_tracking_releases_the_exchange)
 
 ZTEST(sec_pair, test_a_zero_timeout_means_the_default_not_forever)
 {
-	/*
-	 * A node in pairing mode accepts a key from whoever asks. An interface
-	 * where 0 meant "no timeout" would turn one forgotten host command into
-	 * a permanently open node, so 0 means the 60-second default.
-	 */
+	/* A node in pairing mode accepts a key from whoever asks; 0 meaning
+	 * "no timeout" would turn one forgotten host command into a permanently
+	 * open node, so 0 means the 60-second default instead. */
 	give_id(A_CH, A_DEVNUM);
 	zassert_equal(RADIANT_SEC_OK, radiant_sec_pair_enter(A_CH, 0u));
 	zassert_true(radiant_sec_pair_is_open(A_CH),

@@ -2,23 +2,17 @@
 /*
  * profile_private.c - Layer C: the private-mode switch.
  *
- * Provenance: docs/radiant-security.md sections 11.5 and 11.6 and
- * docs/decisions/0008-antplus-additive-pages-and-compat-security.md. Both are
- * this project's own documents. No adopter-gated ANT+ device profile document
- * was read for this file, no sdk-ant source was consulted, and nothing here
- * derives from libant.a. See docs/decisions/0002-clean-room-policy.md.
+ * Provenance: docs/radiant-security.md sections 11.5, 11.6 and
+ * docs/decisions/0008-antplus-additive-pages-and-compat-security.md, both this
+ * project's own documents. No ANT+ device profile document was
+ * read for this file, no sdk-ant source was consulted, and nothing here derives
+ * from libant.a. See docs/decisions/0002-clean-room-policy.md.
  *
- * The header carries the argument for every decision here - the re-anchoring
- * countdown, the key dependency and its exemption, the precedence rule, and why
- * `silent` is a mode rather than a failure. This file carries the bytes and the
- * state machine.
- *
- * It is the THIRD file in src/profiles/ that includes a radiant_core header,
- * after profile_compat.c and profile_enrol.c, and it is for the third distinct
- * reason: deriving a locator and verifying a command are key operations, and
- * K_id and K_cmd live where the root key does. It names no page number that is
- * not profile_compat.h's already, and profile_hr.c and profile_power.c reach
- * neither this file nor a key.
+ * The header carries the argument for every decision here; this file carries
+ * the bytes and the state machine. Third file in src/profiles/ to include a
+ * radiant_core header (after profile_compat.c and profile_enrol.c): deriving a
+ * locator and verifying a command are key operations, and K_id/K_cmd live where
+ * the root key does.
  */
 
 #include <errno.h>
@@ -38,24 +32,15 @@
 #if defined(CONFIG_RADIANT_SEC) && defined(CONFIG_RADIANT_SEC_COMPAT)
 
 /*
- * ── THE BUILD-TIME HALF OF THE KEY DEPENDENCY ──────────────────────────────
+ * The build-time half of the key dependency: a node with attest off must not
+ * build with private_policy != never, except physical + silent. Kconfig's
+ * `depends on` blocks it at menuconfig; this BUILD_ASSERT blocks every other
+ * route (defconfig fragment, out-of-tree board file, a relaxed dependency).
+ * One predicate, shared with the runtime refusal, three enforcement points.
  *
- * "A node with attest off refuses to build with private_policy != never, except
- * the physical + silent combination, which must build and work."
- *
- * Expressed twice, and neither expression is redundant. src/profiles/Kconfig
- * carries `depends on` so the combination cannot be SELECTED - which is where a
- * person finds out, in menuconfig, while they are choosing. This BUILD_ASSERT
- * carries the same predicate so it cannot be REACHED by any other route: a
- * defconfig fragment, an out-of-tree board file, or a Kconfig edit that relaxes
- * the dependency and forgets why it was there. The predicate itself is in the
- * header, shared with the runtime refusal, so there is one expression of the
- * rule and three places that hold it.
- *
- * PROFILE_PRIVATE_ATTEST_DEFAULT is Tier I's Kconfig, defaulting to ON exactly
- * as section 11.6's table does - so an application that does not source
- * src/profiles/Kconfig at all (the unit-test image is one) gets the table's
- * default rather than an accidental "attestation is off".
+ * PROFILE_PRIVATE_ATTEST_DEFAULT mirrors Tier I's Kconfig default (ON), so an
+ * application that does not source src/profiles/Kconfig (e.g. the unit-test
+ * image) still gets the table's default rather than "attestation is off".
  */
 #if defined(CONFIG_RADIANT_PROFILE_POLICY)
 #define PROFILE_PRIVATE_ATTEST_DEFAULT IS_ENABLED(CONFIG_RADIANT_ATTEST_ID)
@@ -104,8 +89,7 @@ static bool policy_is_known(uint8_t policy)
 
 static bool k_is_legal(uint16_t k)
 {
-	/* Inside the bounds with a single bit set, which is {16, 32, 64, 128}
-	 * spelled as an arithmetic property rather than as a table. */
+	/* {16, 32, 64, 128}: in bounds and a single bit set. */
 	return k >= PROFILE_PRIVATE_K_MIN && k <= PROFILE_PRIVATE_K_MAX &&
 	       (k & (uint16_t)(k - 1u)) == 0u;
 }
@@ -134,11 +118,9 @@ static int locator_at(struct profile_private *pp, uint8_t attempt)
 	rc = radiant_sec_compat_locator(pp->cfg.ch, pp->cfg.epoch, attempt,
 					&devnum);
 	if (rc != RADIANT_SEC_OK) {
-		/* A channel with no root cannot say where this node would go,
-		 * and a node that cannot say that cannot go. ENOTSUP rather
-		 * than the module's own numbering, which is a different scale -
-		 * profile_enrol.c makes the same translation for the same
-		 * reason. */
+		/* No root key on this channel means no locator, and -ENOTSUP
+		 * (not the module's own numbering) matches profile_enrol.c's
+		 * translation for the same case. */
 		return -ENOTSUP;
 	}
 	pp->locator = devnum;
@@ -165,12 +147,8 @@ int profile_private_next_locator(struct profile_private *pp)
 
 /* ── The beacon's two Layer C fields ────────────────────────────────────── */
 
-/*
- * A silent node publishes NEITHER, ever, and that is the whole of `silent` on
- * this page: no locator field, no pending-switch bit, no announcement frame,
- * and no promotion of the beacon rate. Three absences from one decision, kept
- * in one place so that adding a fourth thing to publish cannot forget it.
- */
+/* A silent node publishes neither locator nor pending-switch bit, ever: no
+ * announcement frame and no beacon-rate promotion either. */
 static bool publishes(const struct profile_private *pp)
 {
 	return pp->compat != NULL &&
@@ -202,13 +180,9 @@ static int commit(struct profile_private *pp, bool to_private)
 	int rc;
 
 	if (to_private) {
-		/*
-		 * ONE CALL, and the compat channel's close is inside it. A node
-		 * that closed one channel and failed to open the other would be
-		 * muted, which is worse than either state it was moving
-		 * between - so the failure is the callee's to avoid and the
-		 * only thing this file does about it is refuse to have moved.
-		 */
+		/* One call; the compat channel's close is inside it. A node
+		 * that closed one channel and failed to open the other would
+		 * be muted, so on failure this file just refuses to have moved. */
 		rc = pp->cfg.enter_private(pp->cfg.user,
 					   pp->cfg.private_device_type,
 					   pp->locator, pp->cfg.private_period);
@@ -243,14 +217,10 @@ static int begin(struct profile_private *pp, uint8_t reason, bool to_private,
 {
 	pp->now_us = now_us;
 
-	/*
-	 * THE INTERLOCK. Layer D's six pubkey frames occupy the indices this
-	 * announcement's two would, and a switch closes the channel that window
-	 * is running on - so a countdown that started while a window was open
-	 * would tear a public key in half AND take the channel out from under
-	 * it. Whoever is second is refused, and this is the second one's side of
-	 * that rule; profile_enrol.c's window_open() is the other.
-	 */
+	/* The interlock: Layer D's six pubkey frames occupy the indices this
+	 * announcement's two would, and a switch closes the channel that
+	 * window runs on. Whoever is second is refused; profile_enrol.c's
+	 * window_open() is the other side of the same rule. */
 	if (pp->compat != NULL &&
 	    profile_compat_client_busy(pp->compat, now_us, pp)) {
 		pp->refused_busy++;
@@ -258,12 +228,10 @@ static int begin(struct profile_private *pp, uint8_t reason, bool to_private,
 	}
 
 	if (pp->cfg.announce == PROFILE_PRIVATE_SILENT) {
-		/*
-		 * `silent`: the channel simply closes. No countdown, because a
-		 * countdown with nothing to carry it is a delay rather than a
-		 * warning, and delaying the switch would only widen the window
-		 * in which an observer sees one channel stop and another start.
-		 */
+		/* `silent`: the channel just closes. No countdown, since a
+		 * countdown with nothing to carry it only widens the window
+		 * an observer sees between one channel stopping and another
+		 * starting. */
 		return commit(pp, to_private);
 	}
 
@@ -279,11 +247,8 @@ static int begin(struct profile_private *pp, uint8_t reason, bool to_private,
 
 /* ── Init ───────────────────────────────────────────────────────────────── */
 
-/*
- * NVM IF PROVISIONED, ELSE KCONFIG. The one precedence rule, in the one place
- * it is applied, so that the host arm below can re-run it rather than
- * re-implement it.
- */
+/* NVM if provisioned, else Kconfig - the one precedence rule, applied here so
+ * the host arm below can re-run it rather than re-implement it. */
 static void resolve_policy(struct profile_private *pp)
 {
 	uint8_t stored = 0u;
@@ -295,14 +260,11 @@ static void resolve_policy(struct profile_private *pp)
 		return;
 	}
 	if (pp->cfg.policy_load(pp->cfg.user, &stored) != 0) {
-		/* Not provisioned. The ordinary state of a node nobody has
-		 * configured, and not an error. */
+		/* Not provisioned - ordinary, not an error. */
 		return;
 	}
 	if (!policy_is_known(stored)) {
-		/* A record this firmware cannot interpret is not a licence to
-		 * pick one: fall back to the compile-time value, which on a
-		 * shipped strap is `never`. */
+		/* Unrecognised record: fall back to the compile-time value. */
 		return;
 	}
 	pp->policy = stored;
@@ -341,10 +303,9 @@ int profile_private_init(struct profile_private *pp,
 
 	resolve_policy(pp);
 
-	/* The runtime arm of the key dependency, and the one that catches a
-	 * policy which arrived from NVM on a node built for a different one -
-	 * which the BUILD_ASSERT cannot see and is the whole reason the
-	 * predicate is shared rather than duplicated. */
+	/* The runtime arm of the key dependency: catches a policy that
+	 * arrived from NVM on a node built for a different one, which the
+	 * BUILD_ASSERT cannot see. */
 	if (!PROFILE_PRIVATE_COMBINATION_OK(pp->policy, pp->cfg.announce,
 					    pp->cfg.attest)) {
 		return -ENOTSUP;
@@ -353,12 +314,8 @@ int profile_private_init(struct profile_private *pp,
 	pp->state = PROFILE_PRIVATE_STATE_COMPAT;
 
 	if (pp->policy == PROFILE_PRIVATE_NEVER) {
-		/*
-		 * No locator, because there is nowhere for this node to go and
-		 * a locator it did not use would still have to be zero in the
-		 * beacon. profile_compat.c refuses a `never` node that carries
-		 * one, which is the same rule from the other side.
-		 */
+		/* No locator: nowhere to go, and the beacon must carry zero.
+		 * profile_compat.c refuses a `never` node with a nonzero one. */
 		pp->armed = true;
 		return 0;
 	}
@@ -370,13 +327,9 @@ int profile_private_init(struct profile_private *pp,
 	pp->armed = true;
 
 	if (pp->policy == PROFILE_PRIVATE_ALWAYS) {
-		/*
-		 * Straight into PRIVATE, never through COMPAT. This is today's
-		 * radiant_sec node, named as a policy state so the axis is
-		 * complete and so the Tier 2 posture has somewhere to live -
-		 * and it is the one path where nothing is announced because
-		 * there was never a compat channel with listeners on it.
-		 */
+		/* Straight into PRIVATE, never through COMPAT - today's
+		 * radiant_sec node. Nothing is announced because there was
+		 * never a compat channel with listeners on it. */
 		rc = commit(pp, true);
 		if (rc != 0) {
 			pp->armed = false;
@@ -407,14 +360,10 @@ int profile_private_attach(struct profile_private *pp, struct profile_compat *pc
 	}
 	pp->compat = pc;
 
-	/*
-	 * A broadcast announcement is FRAMES 2 AND 3 OF THE BEACON PAGE'S SET,
-	 * so a node with advertise = off has no set for them to be frames of.
-	 * Refused here rather than discovered at the switch, because the switch
-	 * is the moment the compat channel closes and "the announcement did not
-	 * go out" is not a thing to find out then. Such a node can still switch
-	 * silently, which is the mode that needs no beacon at all.
-	 */
+	/* A broadcast announcement is frames 2 and 3 of the beacon page's set,
+	 * so advertise = off has no set for them to be frames of. Refused
+	 * here rather than discovered at the switch, when the compat channel
+	 * is already closing. Such a node can still switch silently. */
 	if (pp->cfg.announce == PROFILE_PRIVATE_BROADCAST &&
 	    pp->policy != PROFILE_PRIVATE_NEVER && pc->n_frames == 0u) {
 		pp->compat = NULL;
@@ -462,8 +411,7 @@ int profile_private_physical_action(struct profile_private *pp, uint64_t now_us)
 	if (pp->policy == PROFILE_PRIVATE_NEVER ||
 	    pp->policy == PROFILE_PRIVATE_ALWAYS) {
 		/* `never` has nowhere to go; `always` has no compat channel to
-		 * come back to. Both are counted, because a node whose button
-		 * is being pressed is a node somebody is trying something on. */
+		 * return to. Both refusals are counted. */
 		pp->refused_policy++;
 		return -EPERM;
 	}
@@ -490,22 +438,14 @@ int profile_private_on_command(struct profile_private *pp, uint64_t now_us,
 
 	if (pay[1] != PROFILE_PRIVATE_CMD_FRAME_BYTE) {
 		/* Not a one-frame set, so not a command. An enrolment frame
-		 * (count six) lands here and is neither consumed nor counted as
-		 * an attack. */
+		 * (count six) lands here uncounted as an attack. */
 		pp->refused_malformed++;
 		return -EPROTO;
 	}
 
-	/*
-	 * THE TAG FIRST, before the operation is even looked at and before the
-	 * policy is consulted.
-	 *
-	 * An unauthenticated over-air request must never reach the state
-	 * machine: a stranger on RF 57 who could mute a power meter for every
-	 * legacy receiver in the room would be a one-packet denial of service
-	 * against everybody, and the sensor cannot switch "just for one
-	 * receiver" because it has one stream and N listeners.
-	 */
+	/* The tag first, before the operation or the policy is even looked
+	 * at: an unauthenticated request must never reach the state machine,
+	 * or a stranger on RF 57 could mute the sensor for every listener. */
 	rc = radiant_sec_compat_cmd_verify(pp->cfg.ch, now_us, pay,
 					   (uint8_t)PROFILE_PRIVATE_CMD_COVERED,
 					   &pay[PROFILE_PRIVATE_CMD_COVERED]);
@@ -517,26 +457,16 @@ int profile_private_on_command(struct profile_private *pp, uint64_t now_us,
 	op = pay[2];
 	if (op != PROFILE_PRIVATE_OP_GO_PRIVATE &&
 	    op != PROFILE_PRIVATE_OP_RETURN) {
-		/*
-		 * TWO OPERATIONS EXIST. A policy-change operation is not
-		 * deferred here, it is refused: a policy a remote party can
-		 * rewrite is not a policy, and downgrading `command` to `never`
-		 * over the air would be a mute attack wearing a safety hat. An
-		 * unknown operation is counted and dropped rather than reserved
-		 * for a later meaning, so a well-tagged message shaped like a
-		 * policy change changes nothing.
-		 */
+		/* Only two operations exist. A policy-change operation is
+		 * refused, not deferred: a policy a remote party can rewrite
+		 * is not a policy. An unknown op is counted and dropped. */
 		pp->refused_malformed++;
 		return -EPROTO;
 	}
 
 	if (pp->policy != PROFILE_PRIVATE_COMMAND) {
-		/*
-		 * A `never` node refuses an OTHERWISE-VALID authenticated
-		 * command from a keyholder it trusts, and counts the refusal.
-		 * That is what `never` means, and the count is what lets an
-		 * owner tell a refusal from a command that never arrived.
-		 */
+		/* A `never` node refuses an otherwise-valid authenticated
+		 * command and counts the refusal - that is what `never` means. */
 		pp->refused_policy++;
 		return -EPERM;
 	}
@@ -544,9 +474,8 @@ int profile_private_on_command(struct profile_private *pp, uint64_t now_us,
 		return -EBUSY;
 	}
 
-	/* Idempotent rather than an error: a keyholder asking a private node to
-	 * go private has been answered already, and the retransmission of an
-	 * acknowledged message is exactly how that happens. */
+	/* Idempotent rather than an error: this is the retransmission of an
+	 * already-acknowledged message. */
 	if ((op == PROFILE_PRIVATE_OP_GO_PRIVATE &&
 	     pp->state == PROFILE_PRIVATE_STATE_PRIVATE) ||
 	    (op == PROFILE_PRIVATE_OP_RETURN &&
@@ -569,8 +498,8 @@ int profile_private_on_command(struct profile_private *pp, uint64_t now_us,
 		return rc;
 	}
 
-	/* Measured from the last ACCEPTED command, so a stream of refusals
-	 * cannot extend the floor and a refused one does not reset it. */
+	/* Measured from the last accepted command, so a stream of refusals
+	 * cannot extend the floor. */
 	pp->last_cmd_us = now_us;
 	pp->ever_cmd = true;
 	pp->commands_ok++;
@@ -590,15 +519,12 @@ int profile_private_host_set_policy(struct profile_private *pp, uint8_t policy)
 		return -EINVAL;
 	}
 	if (pp->state != PROFILE_PRIVATE_STATE_COMPAT) {
-		/* A policy that changed under a countdown would change what the
+		/* A policy changed mid-countdown would change what the
 		 * countdown was for, half way through it. */
 		return -EBUSY;
 	}
 	if (pp->cfg.policy_store == NULL) {
-		/* No record to write. Refused outright rather than applied in
-		 * RAM, because a policy that survives until the next reboot and
-		 * then does not is the bug report the precedence rule exists to
-		 * prevent. */
+		/* No record to write; refused rather than applied only in RAM. */
 		return -ENOTSUP;
 	}
 	if (!PROFILE_PRIVATE_COMBINATION_OK(policy, pp->cfg.announce,
@@ -613,13 +539,9 @@ int profile_private_host_set_policy(struct profile_private *pp, uint8_t policy)
 	was = pp->policy;
 	was_nvm = pp->policy_from_nvm;
 
-	/*
-	 * RE-RESOLVED rather than assigned. The write went to the record, so
-	 * the running value comes back out of the record through the same
-	 * precedence rule everything else uses - and if a backend accepted a
-	 * write and then read back something else, this is where that shows up
-	 * rather than three reboots later.
-	 */
+	/* Re-resolved rather than assigned, through the same precedence rule -
+	 * so a backend that read back something other than what it wrote
+	 * shows up here rather than three reboots later. */
 	resolve_policy(pp);
 
 	if (pp->policy != policy) {
@@ -661,12 +583,9 @@ bool profile_private_tick(struct profile_private *pp, uint64_t now_us)
 		return false;
 	}
 
-	/*
-	 * THE BOUNDED DURATION. A sensor that silently stays private is
-	 * indistinguishable from a dead one, so this revert needs no user, no
-	 * command and no keyholder - and it announces itself with reason
-	 * `timeout-revert` so a receiver can say why the node came back.
-	 */
+	/* The bounded duration: a sensor that silently stays private is
+	 * indistinguishable from a dead one, so this revert needs no user,
+	 * command or keyholder, and announces reason `timeout-revert`. */
 	pp->reverts_timeout++;
 	(void)begin(pp, PROFILE_PRIVATE_REASON_TIMEOUT, false, now_us);
 	return true;
@@ -681,9 +600,8 @@ uint8_t profile_private_frame_count(void *user, uint64_t now_us)
 	if (pp == NULL || !pp->armed) {
 		return 0u;
 	}
-	/* The bounded duration expires here as well as in an explicit tick, so
-	 * a node whose frames go through profile_compat.c owes nothing extra -
-	 * profile_enrol.c's window does the same in the same place. */
+	/* The bounded duration also expires here, so a node whose frames go
+	 * through profile_compat.c owes nothing extra. */
 	(void)profile_private_tick(pp, now_us);
 	pp->now_us = now_us;
 	return announcing(pp) ? (uint8_t)PROFILE_PRIVATE_FRAMES : 0u;
@@ -691,16 +609,13 @@ uint8_t profile_private_frame_count(void *user, uint64_t now_us)
 
 /*
  * Frame A, bytes [2..7]:
- *
  *   [2]     target device type (bits 6:0)
  *   [3..4]  target device number, LE
  *   [5..6]  target channel period, LE
  *   [7]     bits 7:6 reason, bits 5:0 countdown in promoted beacon intervals
  *
- * The target is where the node is GOING, which is the private locator on the
- * way out and the compat channel's own id on the way back. A RETURN frame that
- * carried the private locator would be telling receivers to follow the node to
- * where they already are.
+ * The target is where the node is going: the private locator outbound, the
+ * compat channel's own id on return (not the private locator again).
  */
 static bool build_frame_a(struct profile_private *pp, uint8_t *payload)
 {
@@ -721,28 +636,18 @@ static bool build_frame_a(struct profile_private *pp, uint8_t *payload)
 		period = pp->cfg.compat_period;
 	}
 
-	/*
-	 * THE RE-ANCHOR. `after` is the message count once this frame has gone
-	 * out, which is the instant a receiver's own count reaches when it
-	 * takes this frame in - so both sides measure the countdown from the
-	 * same message. The node then MOVES ITS TARGET to exactly what it just
-	 * said, so every receiver that heard this copy retunes on the message
-	 * the node leaves on, and one that heard only an earlier copy is at
-	 * most seven messages late rather than any amount early.
-	 */
+	/* The re-anchor: `after` is the message count once this frame has
+	 * gone out - the same instant a receiver's count reaches on taking it
+	 * in, so both sides measure from the same message. The node then
+	 * moves its target to exactly what it just said, so a receiver that
+	 * heard only an earlier copy is at most seven messages late. */
 	after = pp->msgs + 1u;
 	remaining = (pp->switch_at > after) ? (pp->switch_at - after) : 0u;
-	/*
-	 * ROUNDED UP, not down, and the direction is the whole of the choice.
-	 * Rounding down would shorten the countdown by up to seven messages
-	 * every time an announcement landed off the quantum - three
-	 * announcements and a K of 64 would be a countdown of 43 - and would
-	 * leave a receiver that heard only an earlier copy retuning LATE, after
-	 * the node had already gone, so it would miss the head of the new
-	 * channel. Rounding up costs at most seven messages of countdown and
-	 * puts that receiver EARLY instead: it arrives before the node and
-	 * loses the tail of the old channel, which is the cheaper end to lose.
-	 */
+	/* Rounded up, not down: rounding down would shorten the countdown by
+	 * up to seven messages per off-quantum announcement and leave a
+	 * receiver retuning LATE, after the node had already gone. Rounding
+	 * up costs at most seven messages and puts it EARLY instead, losing
+	 * only the tail of the old channel - the cheaper end to lose. */
 	count = (uint8_t)((remaining + PROFILE_PRIVATE_COUNTDOWN_UNIT - 1u) /
 			  PROFILE_PRIVATE_COUNTDOWN_UNIT);
 	if (count > PROFILE_PRIVATE_COUNTDOWN_MAX) {
@@ -757,9 +662,9 @@ static bool build_frame_a(struct profile_private *pp, uint8_t *payload)
 	payload[4] = (uint8_t)((period >> 8) & 0xFFu);
 	payload[5] = (uint8_t)((uint8_t)(pp->reason << 6) | count);
 
-	/* The next message on the air IS this frame, and its transmitted form -
-	 * byte [0]'s toggle and byte [1]'s count, neither of which is knowable
-	 * here - is what frame B has to tag. */
+	/* The next message on the air IS this frame; its transmitted form -
+	 * byte [0]'s toggle, byte [1]'s count, neither knowable here - is what
+	 * frame B has to tag. */
 	pp->capture_next = true;
 	return true;
 }
@@ -769,10 +674,8 @@ static bool build_frame_b(struct profile_private *pp, uint8_t *payload)
 	uint8_t tag[RADIANT_SEC_COMPAT_ANNOUNCE_TAG_BYTES];
 
 	if (!pp->have_frame_a) {
-		/* Frame A has not been on the air since this countdown began, so
-		 * there is nothing to tag. Declining the slot costs one frame;
-		 * tagging a frame that was never sent would put a verifiable
-		 * claim about bytes nobody heard on the air. */
+		/* Frame A has not been on the air this countdown, so there is
+		 * nothing to tag. */
 		return false;
 	}
 	if (radiant_sec_compat_announce_tag(pp->cfg.ch, pp->now_us, pp->frame_a,
@@ -843,25 +746,19 @@ static int rx_take(struct profile_private_rx *rx, uint8_t which,
 	if (which == (uint8_t)PROFILE_PRIVATE_FRAME_A) {
 		memcpy(rx->frame_a, body, PROFILE_COMPAT_FRAME_LEN);
 		rx->have_a = true;
-		/* The count AFTER this frame, which is what the node measured
+		/* The count after this frame, which is what the node measured
 		 * its countdown from. */
 		rx->a_at = rx->msgs;
 		return 0;
 	}
 
 	if (!rx->have_a) {
-		/* Frame B without a frame A. Nothing to verify it against, and
-		 * a tag without the bytes it covers is not evidence of
-		 * anything. */
+		/* Frame B without a frame A: nothing to verify it against. */
 		return 0;
 	}
 
-	/*
-	 * A RECEIVER ACTS ON A SWITCH FRAME ONLY AFTER ITS TAG VERIFIES. An
-	 * unverified one is counted and ignored, and the cost of ignoring it is
-	 * the re-acquisition path, which is already built and does not depend
-	 * on hearing anything.
-	 */
+	/* Act on a switch frame only after its tag verifies. An unverified
+	 * one is counted and ignored; the re-acquisition path covers it. */
 	if (radiant_sec_compat_announce_verify(rx->ch, t_sync, rx->frame_a,
 					       (uint8_t)PROFILE_COMPAT_FRAME_LEN,
 					       &body[2]) != RADIANT_SEC_OK) {
@@ -878,9 +775,9 @@ static int rx_take(struct profile_private_rx *rx, uint8_t which,
 	rx->target_reason = (uint8_t)(rx->frame_a[7] >> 6);
 	count = (uint8_t)(rx->frame_a[7] & PROFILE_PRIVATE_COUNTDOWN_MAX);
 
-	/* ACT ON EXPIRY, NOT ON RECEIPT. A receiver that joined mid-countdown
-	 * reads the remaining count out of the frame, so every keyed receiver
-	 * retunes on the same message rather than at N independent moments. */
+	/* Act on expiry, not receipt: a receiver joining mid-countdown reads
+	 * the remaining count out of the frame, so every keyed receiver
+	 * retunes on the same message. */
 	rx->act_at = rx->a_at + (uint32_t)count * PROFILE_PRIVATE_COUNTDOWN_UNIT;
 	rx->armed = true;
 	rx->have_a = false;
@@ -928,8 +825,8 @@ int profile_private_rx_message(struct profile_private_rx *rx,
 	index = (uint8_t)(body[1] >> 4);
 	count = (uint8_t)((body[1] & 0x0Fu) + 1u);
 	if (count != (uint8_t)PROFILE_PRIVATE_SET_FRAMES) {
-		/* A two-frame beacon, or an eight-frame enrolment set. Neither
-		 * is an announcement and neither is an error. */
+		/* A two-frame beacon or an eight-frame enrolment set - neither
+		 * an announcement nor an error. */
 		return 0;
 	}
 	if (index == (uint8_t)PROFILE_PRIVATE_SET_INDEX_A) {
@@ -1007,12 +904,10 @@ bool profile_private_rx_lost(const struct profile_private_rx *rx,
 #else /* no security, or no compat attestation */
 
 /*
- * The refusing shape.
- *
- * Without the compat layer there is no K_id, so there is no locator - and a
- * node that cannot say where it would go cannot go. Refusing at init is the
- * honest behaviour and it is also the safe one: the alternative is a node that
- * closes its compat channel and opens a channel nobody can predict.
+ * The refusing shape. Without the compat layer there is no K_id, so there is
+ * no locator, and a node that cannot say where it would go cannot go. Refusing
+ * at init is the safe alternative to a node that closes its compat channel and
+ * opens one nobody can predict.
  */
 
 int profile_private_init(struct profile_private *pp,

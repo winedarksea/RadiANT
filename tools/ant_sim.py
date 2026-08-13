@@ -3,28 +3,27 @@
 
 """Turn a board running this firmware into a realistic ANT+ sensor.
 
-The dongle is a transparent bridge, so it has no profile logic of its own - but
-it will happily be an ANT+ *master* if a host asks it to, and nothing in the
-firmware needs changing for that. This is that host. Point it at a spare board
-and the dongle under test hears a power meter or a speed-and-cadence sensor
-that does not exist.
+The dongle is a transparent bridge with no profile logic of its own, but it
+will happily be an ANT+ *master* if a host asks - nothing in the firmware
+needs changing. This is that host: point it at a spare board and the dongle
+under test hears a power meter or speed-and-cadence sensor that does not
+exist.
 
     python tools/ant_sim.py --profile power --watts 100 --cadence 80 --seed 1
 
-That unblocks the common case of having a Nordic DK and no ANT+ sensors, and it
-doubles as the known-truth transmitter for tools/ant_verify.py: the verifier is
-deliberately told nothing about this script, so an identical pass against the
-sim firmware in sim/ is evidence the firmware matches this reference.
+That covers having a Nordic DK and no ANT+ sensors, and it doubles as the
+known-truth transmitter for tools/ant_verify.py: the verifier is told nothing
+about this script, so an identical pass against the sim firmware in sim/ is
+evidence the firmware matches this reference.
 
-**Two boards are required.** One transmits, one receives; a single board cannot
-hear itself. Use --serial (USB) or --port (UART builds) to say which is which.
+**Two boards are required.** One transmits, one receives; a single board
+cannot hear itself. Use --serial (USB) or --port (UART builds) to say which is
+which.
 
-Pacing comes from EVENT_TX, not from a wall clock. The stack raises that event
-each time it has put a payload on the air, which is exactly the moment the next
-one should be loaded, and it means this script makes no assumption about how
-fast the host or the USB path is. A wall-clock fallback exists for the case
-where the event is filtered out, and it says so loudly - a silent fallback
-would hide the very failure worth knowing about.
+Pacing comes from EVENT_TX, not a wall clock - the stack raises it exactly
+when the next payload should be loaded, so this makes no assumption about host
+or USB speed. A wall-clock fallback exists for when the event is filtered out,
+and it says so loudly rather than silently hiding that failure.
 """
 
 from __future__ import annotations
@@ -37,8 +36,8 @@ import time
 from pathlib import Path
 
 try:
-    import usb.core
-    import usb.util
+    import usb.core  # noqa: F401 - import-guard, verifies pyusb is installed
+    import usb.util  # noqa: F401
 except ImportError:  # pragma: no cover - user-facing guidance
     sys.exit("pyusb is not installed. Run: pip install pyusb")
 
@@ -49,10 +48,10 @@ import ant_pages as ap  # noqa: E402
 import radiant_crypto as rc  # noqa: E402
 from ant_probe import (  # noqa: E402
     EP_OUT,
-    FrameReader,
     MESG_RESPONSE_EVENT_ID,
-    frame,
+    FrameReader,
     close_device,
+    frame,
     open_device,
     reset_stack,
 )
@@ -148,16 +147,13 @@ class Sensor:
     # a sixth to all of them for one flag would be a worse trade.
     serial_number: int | None = SERIAL_NUMBER
 
-    # The RF index this master transmits on, as an offset from 2400 MHz. The
-    # ANT+ default (57, i.e. 2457 MHz) unless a caller moves it.
+    # The RF index this master transmits on, as an offset from 2400 MHz -
+    # the ANT+ default (57, 2457 MHz) unless a caller moves it.
     #
-    # It exists for RF-7's gate, which asks whether the characterised ~0.4 %
-    # loss floor on this bench is really Wi-Fi collision on 2457 MHz: the
-    # measurement is the same link on a quiet index against the same link on
-    # 57, so BOTH ends have to move. ant_verify.py already had --rf-freq on the
-    # receiving side and this is its counterpart - without it the receiver
-    # simply moves away from the transmitter and the run measures nothing but
-    # an empty channel, which reads as spectacular loss rather than as a
+    # Exists for RF-7's gate (is the ~0.4 % loss floor really Wi-Fi collision
+    # on 2457 MHz): both ends must move together, since ant_verify.py's
+    # --rf-freq on the receiving side alone would just move the receiver away
+    # from the transmitter and read as spectacular loss rather than a
     # misconfiguration.
     rf_freq: int = ap.ANT_PLUS_RF_FREQ
 
@@ -177,24 +173,19 @@ class Sensor:
         # is unless --attest is given. Set after construction for the same
         # reason serial_number is: every profile takes the same five positional
         # arguments and this must not become a sixth.
-        self.compat: "CompatAttestation | None" = None
+        self.compat: CompatAttestation | None = None
 
-    # A clock that is not the one it advertises, in ppm.
+    # A clock that is not the one it advertises, in ppm. `period` is the
+    # advertised slot spacing; this offsets the TRUE spacing, modelling an
+    # RC-oscillator node (250-500 ppm) against the +/-50 ppm every receive
+    # window here was sized from - at a 2 s heartbeat, 300 ppm is 600 us of
+    # error against a 400 us window, a lost node with no error code unless it
+    # announces its accuracy.
     #
-    # `period` is what the dongle is configured with and what a 0x60 node's
-    # descriptor announces; this offsets the TRUE spacing of the slots, which
-    # is what an RC-oscillator node without a 32 kHz crystal actually does -
-    # 250 to 500 ppm, against the +/-50 ppm every receive window in this
-    # project was sized from. At a 2 s heartbeat, 300 ppm is 600 us of error
-    # per slot against a 400 us window, which is a node lost with no error code
-    # anywhere unless it announces its accuracy.
-    #
-    # IT ONLY BITES IN --dry-run, and that is a property of the bench rather
-    # than a shortcut: on the live path the dongle's own stack times the slots
-    # and this script only refills the buffer on EVENT_TX, so there is nothing
-    # here that could skew them. The deterministic version of this experiment
-    # is the ztest against the mock radio's virtual clock; the real one needs a
-    # master with a genuinely bad oscillator.
+    # Only bites in --dry-run: on the live path the dongle's own stack times
+    # the slots and this script only refills on EVENT_TX, so nothing here can
+    # skew them. The ztest against the mock radio covers the deterministic
+    # case; this needs a master with a genuinely bad oscillator.
     period_ppm: int = 0
 
     @property
@@ -306,22 +297,21 @@ class Sensor:
 class CompatAttestation:
     """The RadiANT compat layer riding an ordinary ANT+ profile's slots.
 
-    docs/radiant-security.md section 11. Three things go on the air and none of
-    them touch a page any receiver already understands:
+    docs/radiant-security.md section 11. Three things go on the air, none
+    touching a page any receiver already understands:
 
       * the capability beacon, one frame per 121-message cycle, riding the
-        rotation pages 80 and 81 already established rather than inventing a
-        cadence of its own;
-      * Tier I, one self-contained page every `interval_s` SECONDS - decoupled
-        from the data rate, which is the whole compatibility argument. At 4 Hz
-        and the 20 s default that is one page in ~81, below the 1.65 % ANT+
-        itself spends on common pages;
+        existing 80/81 rotation rather than inventing a cadence of its own;
+      * Tier I, one self-contained page every `interval_s` seconds - decoupled
+        from the data rate, which is the whole compatibility argument (at 4 Hz
+        and the 20 s default that's one page in ~81, below ANT+'s own 1.65 %
+        common-page cost);
       * Tier II, off unless a window is given, one page in every N transmitted
         messages, covering the N-1 before it.
 
-    IT KNOWS NO PAGE LAYOUT AND COMPUTES NO TAG. ant_pages.py packs the fields
-    and radiant_crypto.py computes the MACs; this decides which slot gets what,
-    which is the only thing neither of them can do.
+    Knows no page layout and computes no tag - ant_pages.py packs the fields
+    and radiant_crypto.py computes the MACs; this only decides which slot gets
+    what.
     """
 
     def __init__(self, root: bytes, epoch: int, devnum: int,
@@ -703,18 +693,16 @@ class CombinedSpeedCadenceSensor(Sensor):
 class TelemetrySensor(Sensor):
     """A RadiANT generic telemetry node, device type 0x60.
 
-    Four fields over two data pages, and the point of it is that
-    tools/ant_verify.py is told NOTHING about this class: it recovers the
-    schema from the descriptor the node broadcasts, and decodes the data pages
-    against what it recovered. That is the envelope's whole claim, exercised
-    end to end on the host with no board.
+    Four fields over two data pages. tools/ant_verify.py is told nothing about
+    this class - it recovers the schema from the descriptor the node
+    broadcasts and decodes data pages against that, which is the envelope's
+    whole claim, exercised end to end with no board.
 
-    The field set is not arbitrary. Section 5: "anything integrable is
-    published as an accumulating field" - power has an integral in the
-    accumulating block of the vocabulary, so the node publishes cumulative
-    energy and offers instantaneous power alongside as a convenience. That is
-    precisely the shape of ANT+ page 0x10, and it is what gives a receiver an
-    accumulator to check the instantaneous value against.
+    The field set is not arbitrary: section 5's "anything integrable is
+    published as an accumulating field" means power gets a cumulative-energy
+    accumulator with instantaneous power alongside as a convenience - the same
+    shape as ANT+ page 0x10, giving a receiver an accumulator to check the
+    instantaneous value against.
     """
 
     device_type = ap.RADIANT_TLM_DEVICE_TYPE
@@ -798,18 +786,16 @@ class TelemetrySensor(Sensor):
 class AssetTagSensor(Sensor):
     """The envelope with everything turned off: a sparse node with no fields.
 
-    It is free - there is nothing to encode - and it is the cheapest exercise
-    of the sparse path there is: a heartbeat carrying the whole descriptor set,
-    silence in between, and page 82 configured and then suppressed.
+    Free to encode, and the cheapest exercise of the sparse path: a heartbeat
+    carrying the whole descriptor set, silence in between, page 82 configured
+    then suppressed.
 
-    THE PRIVACY RULE IS THE POINT, and the arithmetic rather than the judgement
-    is why. A stable 16-bit device number plus page 81's 32-bit serial every
-    30 s IS a tracking beacon, and page 82's operating-time counter is monotone:
-    it survives an identity change and fingerprints a battery swap. For a tag,
-    whose entire payload is an identity, that matters far more than it does for
-    a strap. So the mitigation within a session is serial 0xFFFFFFFF and a
-    suppressed page 82 - which for a node with no page 81 at all leaves nothing
-    on the air but the heartbeat.
+    The privacy rule is the point: a stable 16-bit device number plus page
+    81's 32-bit serial every 30 s is a tracking beacon, and page 82's
+    operating-time counter is monotone - it survives an identity change and
+    fingerprints a battery swap. For a tag, whose entire payload is an
+    identity, that matters more than for a strap, so the mitigation is serial
+    0xFFFFFFFF and a suppressed page 82.
 
     Page 82 is emitted only when --privacy-pages is off, so a capture can show
     both sides of the rule.
@@ -949,10 +935,10 @@ def run(dev, reader, sensors: list[Sensor], seconds: float,
                 warned.add(channel)
                 print(f"  ! channel {channel}: no EVENT_TX within two message "
                       f"periods - falling back to wall-clock pacing.")
-                print(f"    That is a real finding: either the event filter is "
-                      f"suppressing EVENT_TX (0x6E)\n"
-                      f"    or the channel is not transmitting. Pacing from "
-                      f"here on is a guess.")
+                print("    That is a real finding: either the event filter is "
+                      "suppressing EVENT_TX (0x6E)\n"
+                      "    or the channel is not transmitting. Pacing from "
+                      "here on is a guess.")
             stats[channel]["fallback"] += 1
             send(sensor)
 
@@ -1031,7 +1017,7 @@ def main() -> int:
                              "record is created on first use (Tier 0)")
     parser.add_argument("--identity-tier", type=int, choices=ai.TIERS,
                         default=0,
-                        help="; ".join("%d = %s" % (tier, ai.TIER_DESCRIPTIONS[tier])
+                        help="; ".join(f"{tier} = {ai.TIER_DESCRIPTIONS[tier]}"
                                        for tier in ai.TIERS)
                              + ". Only used when the record is being created")
     parser.add_argument("--privacy-pages", action="store_true",
@@ -1139,15 +1125,10 @@ def main() -> int:
     profiles = args.profile or ["power"]
     verbose = not args.quiet
 
-    # Identity provisioning. Without --identity-file this is exactly what it
-    # always was: a fixed number from the command line, so every existing
-    # invocation and every recorded capture is unchanged.
-    #
-    # With it, the number comes from a provisioning record and the tier's
-    # power-up rule is applied on the way in - which for Tier 2 means a
-    # different number every run, and is the point. Nothing about this is a
-    # protocol feature: a device number is chosen by the host or by the node
-    # application, and the tiers are a rule about how it is chosen.
+    # Identity provisioning. Without --identity-file, a fixed number from the
+    # command line (existing invocations and captures unchanged). With it, the
+    # number comes from a provisioning record and the tier's power-up rule is
+    # applied - for Tier 2 that means a different number every run, by design.
     base_device_number = args.device_number
     serial_number = None if args.privacy_pages else SERIAL_NUMBER
     if args.identity_file:
@@ -1159,9 +1140,10 @@ def main() -> int:
         if identity.privacy_pages:
             serial_number = None
         if verbose:
-            print("identity: device #%d (base #%d), tier %d - %s"
-                  % (identity.device_number, identity.base_device_number,
-                     identity.tier, ai.TIER_DESCRIPTIONS[identity.tier]))
+            print(f"identity: device #{identity.device_number} "
+                  f"(base #{identity.base_device_number}), tier "
+                  f"{identity.tier} - "
+                  f"{ai.TIER_DESCRIPTIONS[identity.tier]}")
 
     def build_sensors() -> list[Sensor]:
         built = []

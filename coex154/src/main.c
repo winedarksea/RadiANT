@@ -1,54 +1,21 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * P3.5 - 802.15.4 FRAME LOSS CAUSED BY ANT BLACKOUTS.
+ * P3.5 - measures 802.15.4 frame loss caused by ANT blackouts. Stub RX/TX,
+ * deliberately not OpenThread: a retrying stack would turn air loss into
+ * latency and hide the number being measured. See docs/radiant-bridge.md
+ * section 7.3a.
  *
- * docs/radiant-bridge.md section 7.3a derives, and does not measure, that a
- * ~4 % ANT duty cycle costs ~18 % of MAX-SIZE 802.15.4 frames, and its own
- * warning box revises that to ~24 % once the follow-on reserve is counted. The
- * plan moved this measurement ahead of every line of Matter code for one
- * reason, quoted: "if the real figure is 24 %, the Matter data model is being
- * written against a link that does not work."
+ * Uses nrf_802154 directly rather than Zephyr's ieee802154 driver: the
+ * Zephyr driver always routes frames through net_pkt/L2 even in RAW_MODE,
+ * one more place to lose a frame for reasons unrelated to the arbiter. The
+ * direct API is also what carries MPSL arbitration, via RAAL.
  *
- * So this is a stub receiver and a stub transmitter, and it is deliberately NOT
- * OpenThread. Thread would answer a different question - it retries, it defers
- * its own transmissions around a schedule MPSL has told it about, and it would
- * turn air loss into latency and hide exactly the number being looked for.
- * P4 is where a real stack goes; this is the ruler P4's numbers are read
- * against.
- *
- * ---------------------------------------------------------------------------
- * WHY nrf_802154 DIRECTLY AND NOT ZEPHYR'S ieee802154 DRIVER
- * ---------------------------------------------------------------------------
- *
- * Zephyr's driver delivers every received frame through net_recv_data() into an
- * L2, and CONFIG_IEEE802154_RAW_MODE does not change that - it only stops the
- * driver registering an interface, leaving the same net_pkt path with nothing
- * at the end of it. Counting frames does not need a network stack, and a
- * network stack between the radio and the counter is one more place for a frame
- * to go missing for a reason that has nothing to do with the arbiter.
- *
- * The direct API is also the one that carries the arbitration: with CONFIG_MPSL
- * on, nrf_802154 asks MPSL's RAAL for the radio exactly as the gate asks for a
- * timeslot. That contention IS the measurement.
- *
- * ---------------------------------------------------------------------------
- * HOW LOSS IS COMPUTED, AND WHY IT IS NOT "EXPECTED MINUS RECEIVED"
- * ---------------------------------------------------------------------------
- *
- * Every frame carries its own sequence number. The receiver takes the FIRST and
- * LAST sequence it actually saw and computes the loss over THAT span:
- *
- *     sent     = last_seq - first_seq + 1
- *     received = frames counted in the span
- *     loss     = 1 - received / sent
- *
- * Not "the generator was told to send 3000, we got 2400". The two differ
- * whenever the boards are not started together, which is always, and the
- * difference lands entirely in the number being reported. tools/ant_verify.py
- * makes the same distinction and calls it `loss (exact)`; this is the same
- * quantity for the other radio, so the two are directly comparable - which is
- * the whole point of running them on one bench.
+ * Loss is computed over the span the receiver actually saw
+ * (last_seq - first_seq + 1), not "expected minus received" - the two
+ * boards are never started together, and that difference would land
+ * entirely in the reported loss. Matches tools/ant_verify.py's
+ * `loss (exact)` for comparability.
  */
 
 #include <zephyr/kernel.h>
@@ -61,28 +28,19 @@
 LOG_MODULE_REGISTER(coex154, LOG_LEVEL_INF);
 
 /* ---------------------------------------------------------------------------
- * The frame
- * ---------------------------------------------------------------------------
- *
- * A plain 802.15.4-2006 data frame, short addressing both ends, PAN id
+ * The frame: a plain 802.15.4-2006 data frame, short addressing, PAN id
  * compressed. Nine bytes of MHR:
  *
- *   [0]     PSDU length, including the 2-byte FCS, NOT including this byte
- *   [1..2]  FCF - 0x8841: data (0x1), PAN id compression (bit 6),
- *           dst addressing mode short (0x2 at bits 10-11),
- *           src addressing mode short (0x2 at bits 14-15)
- *   [3]     sequence number (the MAC's own, 8-bit and wrapping - NOT what the
- *           loss arithmetic uses; see the payload counter)
+ *   [0]     PSDU length, including 2-byte FCS, not including this byte
+ *   [1..2]  FCF 0x8841: data, PAN id compression, short dst/src addressing
+ *   [3]     MAC sequence number (8-bit, wraps every 256 frames - not what
+ *           the loss arithmetic uses; see the 32-bit counter in the payload)
  *   [4..5]  destination PAN id
  *   [6..7]  destination short address
  *   [8..9]  source short address
  *
- * then the payload, then two bytes the RADIO's CRC engine fills in.
- *
- * THE MAC SEQUENCE NUMBER IS NOT USABLE FOR THIS. It is eight bits, so it wraps
- * every 256 frames - about five seconds at the default interval - and a wrap is
- * indistinguishable from a 256-frame gap. The counter that the loss is computed
- * from is 32 bits and lives in the payload.
+ * then the payload, then two bytes the radio's CRC engine fills in.
+ * ---------------------------------------------------------------------------
  */
 #define MHR_LEN     10u
 #define FCS_LEN     2u
@@ -127,9 +85,9 @@ static void frame_build(uint8_t *buf, uint8_t mac_seq, uint32_t counter)
 	buf[PAYLOAD_OFF + 6u] = (uint8_t)(counter >> 8);
 	buf[PAYLOAD_OFF + 7u] = (uint8_t)counter;
 
-	/* Filler up to the FCS, which the hardware writes. A fixed pattern
-	 * rather than zeroes so that a frame truncated mid-air and somehow
-	 * passing CRC would still be visible in a dump. */
+	/* Filler up to the FCS (hardware-written). A fixed pattern rather than
+	 * zeroes so a frame truncated mid-air and somehow passing CRC would
+	 * still be visible in a dump. */
 	for (i = PAYLOAD_OFF + PAYLOAD_MIN; i < (uint32_t)PSDU_LEN + 1u - FCS_LEN;
 	     i++) {
 		buf[i] = (uint8_t)i;
@@ -173,30 +131,21 @@ static struct {
 	uint32_t first_seq;
 	uint32_t last_seq;
 	bool     have_first;
-	/* The largest run of consecutive missing counters. A blackout is a
-	 * BURST - the frames lost to one ANT slot are adjacent - so the mean
-	 * loss rate alone cannot distinguish "4 % spread evenly", which a
-	 * retrying stack absorbs, from "one 300 ms hole", which it does not. */
+	/* Largest run of consecutive missing counters. A blackout is a
+	 * burst - losses from one ANT slot are adjacent - so mean loss
+	 * rate alone can't distinguish "4% spread evenly" (a retrying
+	 * stack absorbs it) from "one 300ms hole" (it doesn't). */
 	uint32_t worst_gap;
 	uint32_t out_of_order;
 } rx;
 
 /*
- * THE CALLBACK THE DRIVER ACTUALLY CALLS IS THE TIMESTAMP ONE, and getting
- * this wrong costs a receiver that initialises perfectly, reports no error from
- * nrf_802154_receive(), and counts ZERO frames for ever - including zero
- * ambient traffic, which is the tell.
- *
- * nrf_802154_callouts.h says it plainly, in a note attached to
- * nrf_802154_received_raw: "Default implementation of this function provided by
- * the nRF 802.15.4 Radio Driver calls nrf_802154_received_timestamp_raw". The
- * two are declared `extern` twenty lines apart with near-identical
- * documentation, and defining the wrong one is not a link error - the driver
- * has a default for it, so the build succeeds and the application's function is
- * simply never reached.
- *
- * Both are defined here and both funnel into rx_count(), so it does not matter
- * which one this driver build decides to notify through.
+ * The driver actually calls the TIMESTAMP callback, not received_raw -
+ * getting this wrong means a receiver that initialises cleanly and counts
+ * zero frames forever, including zero ambient traffic (the tell).
+ * nrf_802154 supplies a default received_raw that forwards to
+ * received_timestamp_raw, so defining the wrong one is not a link error.
+ * Both are defined here and both funnel into rx_count().
  */
 static void rx_count(uint8_t *data)
 {
@@ -226,10 +175,10 @@ static void rx_count(uint8_t *data)
 		}
 		rx.last_seq = counter;
 	} else {
-		/* The generator numbers monotonically and the radio does not
+		/* The generator numbers monotonically and the radio doesn't
 		 * reorder, so this is a duplicate or a corrupt counter that
-		 * still passed CRC. Counted rather than folded into the loss,
-		 * because it would flatter it. */
+		 * passed CRC. Counted separately rather than folded into
+		 * loss, which it would flatter. */
 		rx.out_of_order++;
 	}
 
@@ -255,14 +204,10 @@ void nrf_802154_received_timestamp_raw(uint8_t *data, int8_t power, uint8_t lqi,
 void nrf_802154_receive_failed(nrf_802154_rx_error_t error, uint32_t id)
 {
 	ARG_UNUSED(id);
-	/*
-	 * A frame the radio started and could not finish. Logged rather than
-	 * counted into loss: it is the SAME event as a missing counter, seen
-	 * from the other side, and adding it would double-count. It is here
-	 * because NRF_802154_RX_ERROR_ABORTED specifically means the driver
-	 * gave the radio back - which is what an ANT blackout looks like from
-	 * inside 802.15.4, and seeing it at all confirms the two stacks really
-	 * are contending rather than politely taking turns.
+	/* A frame the radio started and couldn't finish. Logged, not counted
+	 * into loss - it's the same event as a missing counter seen from the
+	 * other side. NRF_802154_RX_ERROR_ABORTED is what an ANT blackout
+	 * looks like from inside 802.15.4; seeing it confirms real contention.
 	 */
 	LOG_DBG("rx failed: %u", (unsigned int)error);
 }
@@ -280,9 +225,9 @@ static void report(void)
 
 	sent = rx.last_seq - rx.first_seq + 1u;
 	lost = (sent > rx.received) ? (sent - rx.received) : 0u;
-	/* Parts per million, then printed as a percentage with three decimals.
-	 * Integer arithmetic on purpose - a float here would pull in a
-	 * formatter this image has no other use for. */
+	/* Parts per million, printed as a percentage with three decimals.
+	 * Integer arithmetic - a float here would pull in a formatter this
+	 * image has no other use for. */
 	ppm = (sent > 0u) ? (uint32_t)(((uint64_t)lost * 1000000u) / sent) : 0u;
 
 	LOG_INF("P3.5 rx: span=%u recv=%u lost=%u loss=%u.%03u %% | "
@@ -303,17 +248,14 @@ static void report(void)
 #include "ant_wire.h"
 
 /*
- * ANT+ device profile numbers are irrelevant here - nothing decodes these
- * frames, and nothing is meant to. What matters is the SHAPE of the demand:
- * one transmit slot per channel per period, at the period a real ANT+ sensor
- * uses, so the blackout cadence the 802.15.4 receiver sees is the cadence
- * section 7.3a's arithmetic is written against.
+ * Device profile numbers are irrelevant - nothing decodes these frames.
+ * What matters is the shape of the demand: one transmit slot per channel
+ * per period, at a real ANT+ sensor's period, so the blackout cadence the
+ * receiver sees matches what 7.3a's arithmetic is written against.
  *
- * 8070 counts of 32768 Hz is 246.3 ms, the ANT+ heart-rate period, and it is
- * the slowest of the common profiles - which makes it the CONSERVATIVE choice.
- * A faster profile would black the radio out more often and produce a worse
- * (larger) loss figure; picking the kindest common period keeps this
- * measurement from flattering the pessimistic prediction it is testing.
+ * 8070 counts @ 32768 Hz = 246.3 ms, the ANT+ HR period and the slowest
+ * common profile - the conservative choice, since a faster profile would
+ * blank the radio out more and inflate the loss figure.
  */
 #define ANT_PERIOD    8070u
 #define ANT_FREQ      57u   /* 2457 MHz, the ANT+ channel */
@@ -323,10 +265,9 @@ static void report(void)
 static void ant_load_start(void)
 {
 	static const uint8_t net_key[8] = {
-		/* The public network key is not a secret and is not needed:
-		 * nothing receives these. Network 0 with the default all-zero
-		 * key transmits perfectly well and keeps this file free of a
-		 * key it has no right to. */
+		/* All-zero: nothing receives these frames, so the real ANT+
+		 * network key isn't needed and this file stays free of one it
+		 * has no right to. */
 		0, 0, 0, 0, 0, 0, 0, 0
 	};
 	uint8_t ch;
@@ -341,11 +282,10 @@ static void ant_load_start(void)
 	for (ch = 0u; ch < (uint8_t)CONFIG_COEX154_ANT_MASTERS; ch++) {
 		antr_err_t rc;
 
-		/* MASTER_TX_ONLY rather than MASTER: a bidirectional master
-		 * also opens a receive window after each slot for an
-		 * acknowledged reply, which is air this measurement would
-		 * attribute to the transmit blackout. Nothing is going to
-		 * reply, so the window is pure contamination. */
+		/* MASTER_TX_ONLY, not MASTER: a bidirectional master opens a
+		 * receive window after each slot that nothing will reply to,
+		 * which this measurement would misattribute to the transmit
+		 * blackout. */
 		rc = antr_channel_assign(ch, ANTW_CHANNEL_TYPE_MASTER_TX_ONLY,
 					 0u, 0u);
 		if (rc != 0) {
@@ -358,23 +298,13 @@ static void ant_load_start(void)
 		(void)antr_channel_radio_freq_set(ch, ANT_FREQ);
 
 		/*
-		 * SPREAD ACROSS THE PERIOD, NOT ALL AT ZERO.
-		 *
-		 * Eight masters opened with no offset all place their first
-		 * slot as soon as possible and then run on the same period, so
-		 * they stay bunched for ever - eight blackouts inside a few
-		 * milliseconds and then 240 ms of clear air. That is a real
-		 * shape, and section 7.3a explicitly says clustering is
-		 * "guaranteed rather than avoidable" when the phases come from
-		 * N independent sensors' clocks. But it is the WORST case, not
-		 * the modelled one: the table's arithmetic assumes the
-		 * blackouts are spread over the period, and measuring the
-		 * bunched case against a spread prediction would report a
-		 * number that is too kind and blame the wrong thing for it.
-		 *
-		 * So they are spread evenly, which measures what 7.3a
-		 * predicts. The bunched case is a separate run, and worth one:
-		 * set every offset to zero and the same rig measures the tail.
+		 * Offsets are spread across the period rather than all zero.
+		 * With no offset all masters bunch into a few ms of blackout
+		 * followed by ~240 ms clear air - a real but worst-case shape.
+		 * 7.3a's arithmetic assumes loss spread over the period, so
+		 * spreading offsets is what actually measures that prediction;
+		 * the bunched case is a separate run (set every offset to
+		 * zero).
 		 */
 		(void)antr_channel_open_with_offset(
 			ch, (uint16_t)((ANT_PERIOD / CONFIG_COEX154_ANT_MASTERS) * ch));
@@ -387,11 +317,10 @@ static void ant_load_start(void)
 }
 
 /*
- * radiant_core hands every event back through antr_on_message(), the same seam
- * the USB bridge uses. A master needs exactly one thing from it: refill the
- * payload when the slot has gone out, or the channel repeats the last one -
- * which transmits identically and would do for a blackout generator, but
- * silently hides a channel that has stopped.
+ * radiant_core delivers events through antr_on_message(), the same seam the
+ * USB bridge uses. Refill the payload on EVENT_TX, or the channel silently
+ * repeats the last one - fine for a blackout generator but would hide a
+ * channel that has actually stopped.
  */
 void antr_on_message(const struct antr_msg *msg)
 {
@@ -480,12 +409,11 @@ void nrf_802154_transmit_failed(uint8_t *frame, nrf_802154_tx_error_t error,
 	ARG_UNUSED(frame);
 	ARG_UNUSED(meta);
 	/*
-	 * SEPARATED FROM THE SYNCHRONOUS REFUSAL, and the first run is exactly
-	 * why. One counter served both and reported offered=2000 sent=1999
-	 * failed=2000 - every frame apparently succeeding AND failing, which
-	 * is not a thing that can happen and was really two different events
-	 * sharing a number. The same mistake, and the same fix, as the gate's
-	 * `deny` counter conflating EDENIED with STATUS_DENIED.
+	 * Kept separate from the synchronous refusal counter (tx_refused):
+	 * sharing one counter produced offered=2000 sent=1999 failed=2000 -
+	 * every frame apparently both succeeding and failing. Same class of
+	 * bug as the gate's `deny` counter conflating EDENIED with
+	 * STATUS_DENIED.
 	 */
 	tx_cb_failed++;
 	tx_last_error = (uint8_t)error;
@@ -496,20 +424,12 @@ static void role_run(void)
 {
 	nrf_802154_transmit_metadata_t meta = {
 		/*
-		 * CCA OFF, AND THAT IS THE MEASUREMENT RATHER THAN A SHORTCUT.
-		 *
-		 * With CCA on, the generator would back off whenever the DUT's
-		 * ANT slot happened to be radiating - and the frames it then did
-		 * not send would be counted as frames the DUT did not hear. That
-		 * turns a receiver-side loss measurement into a
-		 * transmitter-side deferral measurement and reads LOWER, which
-		 * is the worst direction for a number this one is meant to
-		 * settle.
-		 *
-		 * A real stack does defer, and that deferral is a genuine part
-		 * of the cost - but it is the SCHEDULER cost, which section
-		 * 7.3a's warning box insists on recording separately from the
-		 * AIR cost. This image measures air. P4 measures the other.
+		 * CCA off is the measurement, not a shortcut: with CCA on the
+		 * generator would defer around the DUT's ANT slot, turning
+		 * receiver-side loss into transmitter-side deferral (reading
+		 * lower - the wrong direction). A real stack's deferral is a
+		 * genuine cost, but it's the scheduler cost (7.3a), separate
+		 * from the air cost measured here.
 		 */
 		.cca = false,
 		.tx_power = { .use_metadata_value = false },
@@ -519,12 +439,11 @@ static void role_run(void)
 	uint8_t  mac_seq = 0u;
 
 	/*
-	 * THE DRIVER MUST BE OUT OF SLEEP BEFORE IT WILL ACCEPT A TRANSMIT.
-	 * nrf_802154_init() leaves it in SLEEP, and transmit_raw() from there
-	 * is refused synchronously with no callback and no error code - a
-	 * silent false. Putting it in receive first is what the driver's own
-	 * transmit path expects; the extra receive costs this role nothing
-	 * because nothing is addressed to it.
+	 * The driver must leave SLEEP before it accepts a transmit -
+	 * nrf_802154_init() leaves it there, and transmit_raw() from SLEEP is
+	 * refused synchronously with no callback. Calling receive() first
+	 * puts it in a transmit-capable state at no cost, since nothing is
+	 * addressed to this role.
 	 */
 	if (!nrf_802154_receive()) {
 		LOG_ERR("nrf_802154_receive() refused - the driver is not in a "
@@ -539,22 +458,12 @@ static void role_run(void)
 		frame_build(tx_buf, mac_seq++, counter);
 
 		/*
-		 * == NRF_802154_TX_ERROR_NONE, NOT a truth test.
-		 *
-		 * nrf_802154_transmit_raw() returns nrf_802154_tx_error_t, and
-		 * NRF_802154_TX_ERROR_NONE is ZERO - so `if (transmit_raw(...))`
-		 * is exactly INVERTED. nrf_802154_receive() a few lines above
-		 * returns a plain bool where true means success, which is what
-		 * makes this worth a comment rather than a fix: two functions,
-		 * adjacent in the same header, with opposite conventions.
-		 *
-		 * The symptom was a set of counters that could not all be true
-		 * at once - offered=2000 sent=1998 refused=1999 - every frame
-		 * both transmitted and refused. The frames were going out
-		 * perfectly; only the bookkeeping was upside down. Worth
-		 * remembering that the impossible-looking counter was what
-		 * exposed it, which is the second time in this session that
-		 * splitting one number into two found the bug.
+		 * transmit_raw() returns nrf_802154_tx_error_t where NONE == 0,
+		 * so `if (transmit_raw(...))` would be inverted - unlike
+		 * nrf_802154_receive() above, which returns a plain bool.
+		 * Symptom of getting this wrong: offered=2000 sent=1998
+		 * refused=1999, every frame apparently both transmitted and
+		 * refused. Compare explicitly against NRF_802154_TX_ERROR_NONE.
 		 */
 		if (nrf_802154_transmit_raw(tx_buf, &meta) ==
 		    NRF_802154_TX_ERROR_NONE) {
@@ -637,18 +546,14 @@ void nrf_802154_receive_failed(nrf_802154_rx_error_t error, uint32_t id)
 #include <serialization/nrf_802154_serialization_error.h>
 
 /*
- * REQUIRED ON THE SERIALISED BUILD AND ON NO OTHER, which is why it is not in
- * the block above. The Spinel host calls this when the IPC link to the network
- * core fails - a lost response, a timeout, a decode error - and it is declared
- * `extern` with no default, so leaving it out is a link error rather than a
- * silent stub. In tree it is supplied by Zephyr's ieee802154_nrf5 driver, which
- * this application deliberately does not use.
+ * Required only on the serialised build - the Spinel host calls this when
+ * the IPC link to the network core fails, and it's `extern` with no
+ * default, so leaving it out is a link error. The in-tree default lives in
+ * Zephyr's ieee802154_nrf5 driver, which this app doesn't use.
  *
- * IT MUST BE LOUD. This is the traffic GENERATOR: every frame it fails to send
- * is a frame the DUT will be recorded as having lost. A serialisation failure
- * that printed nothing would land in the loss column and be read as a blackout,
- * which is precisely the wrong conclusion and the whole reason the generator
- * was moved to the core with a console. See boards/nrf5340dk_nrf5340_cpuapp.conf.
+ * Must log loudly: this is the traffic generator, so a silent
+ * serialisation failure would land in the loss column and be misread as an
+ * ANT blackout. See boards/nrf5340dk_nrf5340_cpuapp.conf.
  */
 void nrf_802154_serialization_error(const nrf_802154_ser_err_data_t *p_err)
 {

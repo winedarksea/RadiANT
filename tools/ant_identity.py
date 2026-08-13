@@ -58,10 +58,9 @@ from pathlib import Path
 DEVICE_NUMBER_MIN = 1
 DEVICE_NUMBER_MAX = 0xFFFF
 
-#: The birthday bound on a 16-bit field: collisions become likely around 300
-#: devices in range. That is a constraint ANT+ already lives with - device type
-#: and transmission type have to match too - and it is stated rather than
-#: discovered.
+#: Birthday bound on a 16-bit field: collisions become likely around 300
+#: devices in range. A constraint ANT+ already lives with (device type and
+#: transmission type have to match too).
 COLLISION_LIKELY_AROUND = 300
 
 TIERS = (0, 1, 2)
@@ -72,9 +71,8 @@ TIER_DESCRIPTIONS = {
     2: "re-roll at every power-up (opt-in, RadiANT device types only)",
 }
 
-#: docs/radiant-security.md section 5.4 and docs/radiant-telemetry.md. This is
-#: independent of every switch and every tier, and it is the highest-value
-#: privacy rule in the whole design because it is also the cheapest.
+#: docs/radiant-security.md section 5.4 and docs/radiant-telemetry.md.
+#: Independent of every switch and tier, and the cheapest privacy rule here.
 PRIVACY_SERIAL_NOT_SUPPLIED = 0xFFFFFFFF
 PRIVACY_MANUFACTURER_ID = 0x00FF   # the "development" id, not somebody else's
 PRIVACY_MODEL_NUMBER = 0x0001
@@ -92,24 +90,23 @@ def random_device_number() -> int:
 class Identity:
     """One node's provisioned identity.
 
-    `base_device_number` is the number FIXED AT PROVISIONING TIME and it is not
-    the same field as `device_number`. On a Tier 2 node the on-air number
-    re-rolls at every power-up and the base one does not, because the base one
-    is bound into the key derivation - `kdf_block` carries it - which is what
-    gives two same-type sensors under one household root their own keys. A
-    receiver learns it at pairing, never from the air.
+    `base_device_number` is FIXED AT PROVISIONING TIME, distinct from
+    `device_number`: on a Tier 2 node the on-air number re-rolls every
+    power-up but the base one doesn't, since it's bound into key derivation
+    (`kdf_block`) - giving same-type sensors under one household root their
+    own keys. A receiver learns it at pairing, never from the air.
     """
 
     def __init__(self, device_number: int, base_device_number: int, tier: int,
                  created: str, privacy_pages: bool = True):
         if not DEVICE_NUMBER_MIN <= device_number <= DEVICE_NUMBER_MAX:
-            raise ValueError("device number %r is outside 1..65535 (0 is the "
-                             "wildcard)" % device_number)
+            raise ValueError(f"device number {device_number!r} is outside "
+                             f"1..65535 (0 is the wildcard)")
         if not DEVICE_NUMBER_MIN <= base_device_number <= DEVICE_NUMBER_MAX:
-            raise ValueError("base device number %r is outside 1..65535"
-                             % base_device_number)
+            raise ValueError(f"base device number {base_device_number!r} is "
+                             f"outside 1..65535")
         if tier not in TIERS:
-            raise ValueError("tier %r is not one of %s" % (tier, list(TIERS)))
+            raise ValueError(f"tier {tier!r} is not one of {list(TIERS)}")
         self.device_number = device_number
         self.base_device_number = base_device_number
         self.tier = tier
@@ -118,10 +115,10 @@ class Identity:
 
     @classmethod
     def new(cls, tier: int = 0, privacy_pages: bool = True,
-            now: str | None = None) -> "Identity":
+            now: str | None = None) -> Identity:
         number = random_device_number()
         stamp = now or datetime.datetime.now(
-            datetime.timezone.utc).replace(microsecond=0).isoformat()
+            datetime.UTC).replace(microsecond=0).isoformat()
         return cls(number, number, tier, stamp, privacy_pages)
 
     def to_dict(self) -> dict:
@@ -134,7 +131,7 @@ class Identity:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Identity":
+    def from_dict(cls, data: dict) -> Identity:
         return cls(
             int(data["device_number"]),
             int(data.get("base_device_number", data["device_number"])),
@@ -143,27 +140,26 @@ class Identity:
             bool(data.get("privacy_pages", True)),
         )
 
-    def reroll(self) -> "Identity":
+    def reroll(self) -> Identity:
         """A new on-air number. THE BASE NUMBER DOES NOT MOVE.
 
-        Tier 1 and Tier 2 both land here. What changes is who calls it - a
-        user, or a power cycle - and nothing else, which is the point: the
-        expensive part of identity rotation was never the rolling, it was
-        rolling WHILE A CHANNEL WAS OPEN.
+        Tier 1 and Tier 2 both land here; only who calls it (user vs. power
+        cycle) differs. The expensive part of rotation was never the
+        rolling, it was rolling WHILE A CHANNEL WAS OPEN.
         """
         self.device_number = random_device_number()
         return self
 
-    def on_boot(self) -> "Identity":
+    def on_boot(self) -> Identity:
         """Apply the tier's power-up rule. Tier 2 re-rolls; 0 and 1 do not."""
         if self.tier == 2:
             self.reroll()
         return self
 
     def __repr__(self) -> str:
-        return ("Identity(device_number=%d, base=%d, tier=%d, privacy_pages=%r)"
-                % (self.device_number, self.base_device_number, self.tier,
-                   self.privacy_pages))
+        return (f"Identity(device_number={self.device_number}, "
+                f"base={self.base_device_number}, tier={self.tier}, "
+                f"privacy_pages={self.privacy_pages!r})")
 
 
 def load(path: Path) -> Identity | None:
@@ -196,16 +192,16 @@ def provision(path: Path, tier: int = 0, privacy_pages: bool = True) -> Identity
 def _cmd_show(args) -> int:
     identity = load(args.file)
     if identity is None:
-        print("no identity provisioned at %s" % args.file)
-        print("run: %s provision" % Path(sys.argv[0]).name)
+        print(f"no identity provisioned at {args.file}")
+        print(f"run: {Path(sys.argv[0]).name} provision")
         return 1
-    print("device number      : %d (0x%04X)"
-          % (identity.device_number, identity.device_number))
-    print("base device number : %d (0x%04X)   <- bound into the key derivation,"
-          " never re-rolled"
-          % (identity.base_device_number, identity.base_device_number))
-    print("tier               : %d - %s"
-          % (identity.tier, TIER_DESCRIPTIONS[identity.tier]))
+    print(f"device number      : {identity.device_number} "
+          f"(0x{identity.device_number:04X})")
+    print(f"base device number : {identity.base_device_number} "
+          f"(0x{identity.base_device_number:04X})   <- bound into the key "
+          f"derivation, never re-rolled")
+    print(f"tier               : {identity.tier} - "
+          f"{TIER_DESCRIPTIONS[identity.tier]}")
     print("privacy pages      : %s"
           % ("yes - page 81 serial 0xFFFFFFFF, page 82 suppressed, page 80 "
              "generic" if identity.privacy_pages else "NO"))
@@ -223,21 +219,21 @@ def _cmd_provision(args) -> int:
     if identity.tier != args.tier:
         identity.tier = args.tier
         save(args.file, identity)
-    print("device number %d (0x%04X), tier %d"
-          % (identity.device_number, identity.device_number, identity.tier))
+    print(f"device number {identity.device_number} "
+          f"(0x{identity.device_number:04X}), tier {identity.tier}")
     return 0
 
 
 def _cmd_reroll(args) -> int:
     identity = load(args.file)
     if identity is None:
-        print("nothing to re-roll: no identity at %s" % args.file)
+        print(f"nothing to re-roll: no identity at {args.file}")
         return 1
     was = identity.device_number
     identity.reroll()
     save(args.file, identity)
-    print("device number %d (0x%04X) -> %d (0x%04X)"
-          % (was, was, identity.device_number, identity.device_number))
+    print(f"device number {was} (0x{was:04X}) -> "
+          f"{identity.device_number} (0x{identity.device_number:04X})")
     print("")
     print("EVERY RECEIVER PAIRED TO THIS NODE MUST RE-PAIR. That is Tier 1's")
     print("whole cost, and it is acceptable only because you just asked for")
@@ -260,7 +256,7 @@ def main(argv=None) -> int:
     prov = sub.add_parser("provision",
                           help="create an identity if there is not one already")
     prov.add_argument("--tier", type=int, choices=TIERS, default=0,
-                      help="; ".join("%d = %s" % (tier, TIER_DESCRIPTIONS[tier])
+                      help="; ".join(f"{tier} = {TIER_DESCRIPTIONS[tier]}"
                                      for tier in TIERS))
     prov.add_argument("--no-privacy-pages", action="store_true",
                       help="keep broadcasting a real serial number in page 81. "

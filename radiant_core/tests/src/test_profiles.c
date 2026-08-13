@@ -1,42 +1,26 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * Provenance: original clean-room work. Written against src/profiles/'s three
+ * Provenance: original clean-room work, written against src/profiles/'s three
  * headers, radiant_core/include/radiant_core/radiant_sched.h,
  * radiant_core/include/radiant_core/radiant_frame.h and
- * radiant_core/tests/fake_radio.h, with every layout expectation taken from
- * docs/radiant-telemetry.md - this project's own written specification of the
- * envelope. No adopter-gated ANT+ device profile document was read for it, no
- * sdk-ant source was consulted, and nothing here derives from libant.a. See
- * docs/decisions/0002-clean-room-policy.md.
+ * radiant_core/tests/fake_radio.h, with layout expectations taken from
+ * docs/radiant-telemetry.md. See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * Tests for the RadiANT telemetry envelope, device type 0x60
- * ---------------------------------------------------------------------------
- * The suite is built around one gate, and everything above it is there to make
- * the gate's failures readable rather than mysterious:
+ * Tests for the RadiANT telemetry envelope, device type 0x60. The suite is
+ * built around one gate: a 0x60 node is discovered and its schema is decoded
+ * from the descriptor alone, with no out-of-band knowledge. "No out-of-band
+ * knowledge" is enforced in test_gate_*: the receiving half shares no
+ * variable with the transmitting half except the eight bytes that crossed the
+ * air - no struct, field list, page numbers or widths - only a device number,
+ * device type and transmission type (what a searching receiver recovers from
+ * a matched address), with everything else decoded from page 0x00.
  *
- *   A 0x60 NODE IS DISCOVERED AND ITS SCHEMA IS DECODED FROM THE DESCRIPTOR
- *   ALONE, WITH NO OUT-OF-BAND KNOWLEDGE.
- *
- * "No out-of-band knowledge" is the load-bearing half and the easy half to
- * fake, so test_gate_* is written so that faking it is impossible: the
- * receiving half of the test shares no variable with the transmitting half
- * except the eight bytes that crossed the air. It does not read the node's
- * descriptor struct, its field list, its page numbers or its widths. It is
- * handed a device number, a device type and a transmission type - which is
- * exactly what a searching receiver recovers from an address it matched on -
- * and everything else it learns by decoding page 0x00.
- *
- * The frames really do cross a radio. The node transmits through
- * radiant_sched.c against fake_radio.c, the receiver opens a continuous search
- * window through the same scheduler, and the payloads are pulled out of
- * rx_event bodies. That is deliberate, and not only for realism: Phase E's
- * page-rotation client was supposed to need a new slot-insertion hook in
- * radiant_sched.c, and this test is the evidence that it does not - a master
- * posts a transmit, posts the next from the completion, and declines to post
- * at all in a slot a sparse node skips. No new scheduler concept appears
- * anywhere in this file.
+ * The frames really do cross a radio, via radiant_sched.c against
+ * fake_radio.c, which also proves a page-rotation client needs no new
+ * slot-insertion hook in radiant_sched.c: a master posts a transmit, posts
+ * the next from the completion, and declines to post in a slot a sparse node
+ * skips. No new scheduler concept appears anywhere in this file.
  */
 
 #include <errno.h>
@@ -121,11 +105,10 @@ static void build_node_descriptor(struct profile_descriptor *d)
  * The bit packer
  * ---------------------------------------------------------------------------
  *
- * THESE VECTORS ARE SHARED WITH tools/test_ant_pages.py, byte for byte. They
- * are the reason the packer is its own file: docs/radiant-telemetry.md section
- * 6 says MSB-first bit order exists precisely because little-endian bit order
- * is "a reliable source of two implementations that each work alone", and two
- * implementations checked only against each other are not checked at all.
+ * These vectors are shared byte for byte with tools/test_ant_pages.py.
+ * MSB-first bit order (docs/radiant-telemetry.md section 6) exists because
+ * little-endian bit order is a reliable source of two implementations that
+ * each work alone but disagree.
  */
 
 ZTEST(profiles, test_bit_packer_vectors)
@@ -384,11 +367,11 @@ ZTEST(profiles, test_the_encoder_refuses_a_malformed_schema)
 }
 
 /*
- * v1 announces no transform, because the descriptor authentication frame that
- * section 6 makes mandatory alongside one has no implementation yet. Refusing
- * to encode is the honest response: a transform announced without the frame
- * that authenticates the schema gets an attacker wrong readings out of
- * correctly authenticated packets.
+ * v1 announces no transform, because the descriptor authentication frame
+ * section 6 makes mandatory alongside one has no implementation yet.
+ * Refusing to encode is the honest response: a transform announced without
+ * the frame that authenticates the schema gets an attacker wrong readings
+ * out of correctly authenticated packets.
  */
 ZTEST(profiles, test_v1_refuses_to_announce_a_transform)
 {
@@ -484,9 +467,9 @@ ZTEST(profiles, test_the_set_assembles_out_of_order_and_through_holes)
 
 /*
  * The schema id's whole job: a receiver notices a change after reading a
- * SINGLE frame instead of the whole set. Anything already assembled describes
- * the previous schema, and decoding this node's pages against it would put
- * every field at the wrong offset.
+ * single frame instead of the whole set. Anything already assembled
+ * describes the previous schema, and decoding against it would put every
+ * field at the wrong offset.
  */
 ZTEST(profiles, test_a_new_schema_id_abandons_the_partial_set)
 {
@@ -751,14 +734,11 @@ ZTEST(profiles, test_the_rotation_alternates_and_the_counter_counts_only_data)
 }
 
 /*
- * The seam, and the two things it must not be able to do.
- *
- * A client profile family gets first refusal on the slots the rotation would
- * have filled with a data page. It never gets offered message 119, message 120
- * or a descriptor frame, because those three ARE the cadence rule - a client
- * that could displace a common page or half a descriptor set would be forking
- * the rotation with extra steps, which is exactly what one engine exists to
- * prevent.
+ * The client seam: a client profile family gets first refusal on the slots
+ * the rotation would fill with a data page. It is never offered message 119,
+ * 120 or a descriptor frame - those three are the cadence rule, and a client
+ * that could displace them would be forking the rotation, which one engine
+ * exists to prevent.
  */
 static uint32_t client_offers;
 static uint32_t client_claims;
@@ -834,9 +814,9 @@ ZTEST(profiles, test_the_client_seam_takes_slots_but_never_the_cadence)
 
 /*
  * A client profile family with no descriptor of its own - an ANT+
- * compatibility device type, which is the actual first caller. The interleave
- * must hold with the descriptor slots simply absent, because that is the case
- * that would otherwise force a fork.
+ * compatibility device type, the actual first caller. The interleave must
+ * hold with the descriptor slots simply absent, or that case would force a
+ * fork.
  */
 ZTEST(profiles, test_a_client_with_no_descriptor_still_gets_the_interleave)
 {
@@ -990,17 +970,15 @@ ZTEST(profiles, test_a_sparse_event_is_repeated_k_times)
 }
 
 /*
- * The asset tag: no fields at all, a heartbeat, and page 82 - which the
- * privacy rule of section 6 then suppresses. It is the envelope with
- * everything turned off, it is free, and it is the cheapest exercise of the
- * sparse path there is.
+ * The asset tag: no fields at all, a heartbeat, and page 82 - suppressed by
+ * section 6's privacy rule. It is the envelope with everything turned off,
+ * and the cheapest exercise of the sparse path there is.
  *
- * The privacy arithmetic is worth restating because it is the reason this
- * variant exists at all: a stable 16-bit device number plus page 81's 32-bit
- * serial every 30 s IS a tracking beacon, and page 82's operating-time counter
- * is monotone - it survives an identity change and fingerprints a battery
- * swap. For a tag, whose entire payload is an identity, that matters far more
- * than it does for a strap.
+ * The privacy rule matters most here: a stable 16-bit device number plus
+ * page 81's 32-bit serial every 30 s is a tracking beacon, and page 82's
+ * operating-time counter is monotone, surviving an identity change to
+ * fingerprint a battery swap - worse for a tag, whose entire payload is an
+ * identity, than for a strap.
  */
 ZTEST(profiles, test_the_asset_tag_is_the_envelope_with_everything_off)
 {
@@ -1090,10 +1068,9 @@ ZTEST(profiles, test_the_asset_tag_is_the_envelope_with_everything_off)
 static uint8_t gate_air[GATE_SLOTS][8];
 static uint32_t gate_n_air;
 
-/* What the node actually packed, so the receiving half's decode can be checked
- * against the truth rather than against itself. Only the transmitting half
- * writes this; the receiving half reads it in the final assertions, after it
- * has already produced its own answer from the air. */
+/* What the node actually packed, so the receiving half's decode is checked
+ * against the truth rather than itself. Only the transmitting half writes
+ * this; the receiving half reads it only in the final assertions. */
 static struct {
 	uint8_t page;
 	uint8_t counter;
@@ -1128,9 +1105,9 @@ static int gate_data_page(uint8_t page, uint8_t counter, uint8_t *body,
 	return 0;
 }
 
-/* The receiving half. It knows a device number, a device type and a
- * transmission type - what a searching receiver recovers from the address it
- * matched on - and nothing else about the node. */
+/* The receiving half. It knows only a device number, device type and
+ * transmission type - what a searching receiver recovers from a matched
+ * address. */
 static struct profile_desc_rx heard_rx;
 static struct profile_descriptor heard_desc;
 static bool heard_have_schema;
@@ -1153,12 +1130,9 @@ static void gate_on_rx(uint8_t ch, uint8_t filter_index,
 		return;
 	}
 
-	/*
-	 * The search format's address is [A6 C5 dl], so the body carries
-	 * [dh][dt][tt][ctrl] before the eight payload bytes. Recovering the
-	 * payload from a search window is exactly what a receiver that has
-	 * only just found this node has to do.
-	 */
+	/* The search format's address is [A6 C5 dl], so the body carries
+	 * [dh][dt][tt][ctrl] before the eight payload bytes - the recovery a
+	 * receiver that has just found this node has to do. */
 	payload = &evt->body[4];
 	heard_n_frames++;
 
@@ -1218,12 +1192,10 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 	zassert_ok(profile_sched_init(&ps, &cfg));
 
 	/* Join mid-stream: spin the node to message 100 of its cycle, so the
-	 * 32 slots that reach the air straddle a cycle boundary and carry the
-	 * common pages, the descriptor set and data pages on both sides of
-	 * it - which is what a receiver switching on at an arbitrary moment
-	 * actually sees. The counters are zeroed AFTER the spin: the spin
-	 * transmits nothing, and a record of it would put the receiving half's
-	 * comparison one page out. */
+	 * 32 slots that reach the air straddle a cycle boundary, carrying
+	 * common pages, the descriptor set and data pages on both sides - what
+	 * a receiver switching on at an arbitrary moment actually sees. The
+	 * spin transmits nothing, so counters are zeroed after it. */
 	{
 		uint8_t scratch[8];
 
@@ -1234,14 +1206,10 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 	gate_n_air = 0u;
 	gate_n_sent = 0u;
 
-	/* ------------------------------------------------------------------
-	 * Phase 1: transmit, through radiant_sched.c, against the mock radio.
-	 *
-	 * NO NEW SCHEDULER API APPEARS HERE. A page-rotation master posts a
-	 * transmit and posts the next one when the last has gone out; that is
-	 * radiant_sched.h's documented path and it was already sufficient.
-	 * ------------------------------------------------------------------
-	 */
+	/* Phase 1: transmit, through radiant_sched.c, against the mock radio.
+	 * No new scheduler API: a page-rotation master posts a transmit and
+	 * posts the next one when the last has gone out, radiant_sched.h's
+	 * documented path. */
 	fake_radio_reset();
 	zassert_ok(radiant_sched_init(&gate_cbs, NULL));
 	zassert_ok(radiant_radio_init(radiant_sched_radio_cbs(), NULL));
@@ -1265,10 +1233,9 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 			common_pages++;
 		} else if (kind == PROFILE_SLOT_IDLE) {
 			/* Sparse mode's decline-to-transmit, expressed as not
-			 * posting. This node is periodic, so it never
-			 * happens - the branch is here because it is the
-			 * whole of what a sparse node needs from the radio
-			 * scheduler, which is nothing. */
+			 * posting. This node is periodic so it never happens;
+			 * the branch is here because "nothing" is the whole
+			 * of what a sparse node needs from the scheduler. */
 			t += FAKE_RADIO_ANT_PERIOD_US;
 			continue;
 		}
@@ -1308,14 +1275,9 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 
 	radiant_sched_reset();
 
-	/* ------------------------------------------------------------------
-	 * Phase 2: discover.
-	 *
-	 * A receiver that has never heard of this node opens a continuous
-	 * search window and is handed eight bytes at a time. Everything below
-	 * comes out of those bytes.
-	 * ------------------------------------------------------------------
-	 */
+	/* Phase 2: discover. A receiver that has never heard of this node
+	 * opens a continuous search window and is handed eight bytes at a
+	 * time; everything below comes out of those bytes. */
 	fake_radio_reset();
 	profile_desc_rx_init(&heard_rx);
 	heard_have_schema = false;
@@ -1403,9 +1365,8 @@ ZTEST(profiles, test_gate_a_0x60_node_is_discovered_and_decoded_from_the_air)
 	zassert_true(heard_desc.fields[3].is_signed);
 
 	/* And the data pages decode against that schema, to the numbers the
-	 * node packed. This is the half that would still pass if the schema
-	 * were wrong in a self-consistent way, which is why it comes second
-	 * and is checked against gate_sent[] rather than against a re-encode. */
+	 * node packed - checked against gate_sent[] rather than a re-encode,
+	 * since a self-consistently wrong schema would still pass otherwise. */
 	zassert_true(heard_n_data >= 20u, "only %u data pages heard",
 		     heard_n_data);
 	for (i = 0u; i < heard_n_data; i++) {

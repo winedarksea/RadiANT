@@ -1,28 +1,18 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * The two payload transforms, driven end to end inside one process.
+ * The two payload transforms, driven end to end inside one process. Channel 0
+ * is the sensor, channel 1 the receiver; both share one root key, epoch, and
+ * on-air device number (the 1:N model - sensor keeps zero per-receiver state).
  *
- * Channel 0 is the sensor and channel 1 is the receiver. They hold the same
- * root key, the same epoch and the same on-air device number, which is exactly
- * the 1:N model this whole design exists for: the sensor keeps zero
- * per-receiver state, so a second and a third receiver are the same two lines
- * of setup as the first.
+ * Uses fake_radio's virtual clock so t_sync can be chosen rather than waited
+ * for. The receiver derives packet index from epoch phase + channel period,
+ * not arrival history, which is what makes mid-stream join and gap cases
+ * testable at all.
  *
- * The clock is fake_radio's virtual one, so a packet's t_sync is chosen rather
- * than waited for - which is what makes the counter reconstruction testable at
- * all. A receiver derives the packet index from the epoch phase and the channel
- * period, not from arrival history, and the interesting cases for that are a
- * mid-stream join and a gap, neither of which a real-time test could produce in
- * under a second.
- *
- * WHAT THESE TESTS ARE FOR, in one line each:
- *
- *   the happy path        a window verifies at all
- *   the flipped bit       a forgery is caught, once, at a stated latency
- *   the lost packet       loss breaks ONE window and the next one recovers
- *   the injected ack      D15 - the MAC cannot be skipped by message type
- *   the epoch gate        D3/D17 - nothing transforms until the epoch moves
- *   the clear page        the descriptor and the common pages are untouched
+ * Coverage: happy path, flipped bit (forgery caught once), lost packet (one
+ * window breaks, next recovers), injected ack (D15 - MAC not skippable by
+ * message type), epoch gate (D3/D17 - no transform before epoch set), clear
+ * page (descriptor/common pages untouched).
  */
 
 #include <zephyr/ztest.h>
@@ -67,10 +57,9 @@ static uint32_t           log_n_pkt;
 static struct verdict_rec log_verdict[LOG_MAX];
 static uint32_t           log_n_verdict;
 
-/* Strong definitions displacing the weak ones in radiant_sec.c. This is the
- * whole reason those hooks are direct calls rather than an ops struct: a
- * function-pointer table would be a .data relocation the linker cannot
- * garbage-collect, and one surviving relocation defeats the size gate. */
+/* Strong definitions displacing the weak ones in radiant_sec.c. Direct calls
+ * rather than an ops struct because a function-pointer table is a .data
+ * relocation the linker can't garbage-collect, defeating the size gate. */
 void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 			 enum radiant_sec_verdict verdict, uint64_t t_sync)
 {
@@ -103,22 +92,11 @@ static uint64_t period_us(void)
 	return ((uint64_t)TEST_PERIOD * 1000000u) / 32768u;
 }
 
-/*
- * The epoch anchor, as the receiver computed it.
- *
- * radiant_sec_set_epoch() anchors on radiant_radio_now(), and fake_radio's
- * clock starts one second below 2^32 rather than at zero - so a t_sync of
- * `index * period` is not "packet index" to the receiver, it is a time far
- * BEFORE the anchor, which expected_index() floors to 0. Every packet would
- * then be resolved by its low byte alone against an expected index of zero,
- * which happens to be right for the first 128 packets and is wrong for
- * everything after them.
- *
- * That is worth stating rather than just fixing: a harness that fed
- * anchor-relative times only by accident would still pass the short tests here
- * while testing none of the time-derived counter reconstruction that D4 is
- * about.
- */
+/* Epoch anchor as the receiver computed it. radiant_sec_set_epoch() anchors on
+ * radiant_radio_now(), and fake_radio's clock starts one second below 2^32, not
+ * zero - so t_sync must be anchor-relative (sec_anchor + index*period), or
+ * expected_index() floors every packet to 0 and the test passes without
+ * exercising D4's time-derived counter reconstruction at all. */
 static uint64_t sec_anchor;
 
 static void key_both(void)
@@ -155,8 +133,7 @@ static void epoch_both(uint32_t epoch)
 }
 
 /* Build packet `index` as the sensor would, and hand it to the receiver unless
- * `drop`. `corrupt_bit` flips one bit of the payload on the way, which is what
- * an active injector does to a CTR stream. */
+ * `drop`. `corrupt_bit` flips one payload bit, simulating an active injector. */
 static void hop(uint32_t index, bool drop, int corrupt_bit)
 {
 	uint8_t  pay[8];
@@ -181,9 +158,7 @@ static void hop(uint32_t index, bool drop, int corrupt_bit)
 		pay[corrupt_bit / 8] ^= (uint8_t)(1u << (corrupt_bit % 8));
 	}
 
-	/* Packet i is on the air one period after packet i-1, measured from the
-	 * epoch anchor, which is what the receiver reconstructs the counter
-	 * from. */
+	/* Packet i is one period after i-1, measured from the epoch anchor. */
 	t_sync = sec_anchor + (uint64_t)index * period_us();
 
 	if (drop) {
@@ -235,13 +210,10 @@ ZTEST(radiant_sec, test_nothing_transforms_until_the_epoch_advances)
 	key_both();
 	configure_both(RADIANT_SEC_SW_AUTH, 4u);
 
-	/*
-	 * D3 and D17. A reboot that restarts the counter under an unchanged
-	 * epoch is a two-time pad for X_CONF, and it makes K_auth and every
-	 * recorded (packet, tag) pair from the previous session valid again,
-	 * which is a full replay against an X_AUTH-only channel. So the gate
-	 * covers BOTH switches, and it is closed until a host has set an epoch.
-	 */
+	/* D3/D17: a reboot that restarts the counter under an unchanged epoch is
+	 * a two-time pad for X_CONF and a full replay against X_AUTH, so the
+	 * gate covers both switches and stays closed until a host sets an
+	 * epoch. */
 	memcpy(before, pay, sizeof(pay));
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay)));
@@ -274,7 +246,7 @@ ZTEST(radiant_sec, test_the_epoch_only_moves_forwards)
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_set_epoch(TX_CH, 101u, 0u, TEST_PERIOD));
 
-	/* And a wrap must always have headroom to advance into. */
+	/* A wrap must always have headroom to advance into. */
 	zassert_equal(RADIANT_SEC_EINVAL,
 		      radiant_sec_set_epoch(TX_CH, 0xFFFFFFFFu, 0u, TEST_PERIOD));
 }
@@ -289,9 +261,8 @@ ZTEST(radiant_sec, test_a_window_verifies)
 	configure_both(RADIANT_SEC_SW_AUTH, 4u);
 	epoch_both(7u);
 
-	/* Three windows: window 0 has nothing to authenticate it (the tag lags
-	 * one window), so window 0's verdict never comes; windows 4 and 8
-	 * authenticate 0 and 4 respectively. */
+	/* Three windows: window 0 has no tag (it lags one window), so its
+	 * verdict never comes; windows 4 and 8 authenticate 0 and 4. */
 	for (i = 0; i < 12u; i++) {
 		hop(i, false, -1);
 	}
@@ -358,8 +329,8 @@ ZTEST(radiant_sec, test_the_page_range_is_bounded)
 {
 	key_both();
 
-	/* 0x00 would make the node's own descriptor unreadable and the node
-	 * undiscoverable - by accident, from one host typo. */
+	/* 0x00 would make the node's own descriptor unreadable/undiscoverable
+	 * from one host typo. */
 	zassert_equal(RADIANT_SEC_EINVAL,
 		      radiant_sec_configure(TX_CH, RADIANT_SEC_SW_AUTH, 2u,
 					    0x00u, 0x0Fu));
@@ -402,8 +373,8 @@ ZTEST(radiant_sec, test_descriptor_encryption_is_refused)
 {
 	key_both();
 
-	/* Underspecified rather than merely unbuilt: the descriptor has no
-	 * counter - byte [1] is a frame index - so it has no nonce. */
+	/* Underspecified, not merely unbuilt: the descriptor has no counter
+	 * (byte [1] is a frame index), so it has no nonce. */
 	zassert_equal(RADIANT_SEC_ENOTSUP,
 		      radiant_sec_configure(TX_CH,
 					    RADIANT_SEC_SW_CONF |
@@ -421,7 +392,7 @@ ZTEST(radiant_sec, test_a_flipped_bit_is_caught_once_one_window_later)
 	configure_both(RADIANT_SEC_SW_AUTH, 4u);
 	epoch_both(11u);
 
-	/* Corrupt one payload bit of packet 1, which is inside window 0. */
+	/* Corrupt one bit of packet 1's payload, inside window 0. */
 	for (i = 0; i < 12u; i++) {
 		hop(i, false, (i == 1u) ? (2 * 8 + 3) : -1);
 	}
@@ -435,9 +406,8 @@ ZTEST(radiant_sec, test_a_flipped_bit_is_caught_once_one_window_later)
 	zassert_equal(1u, verdicts_for(4u, RADIANT_SEC_VERDICT_VERIFIED),
 		      "a single forged packet poisoned the following window");
 
-	/* D6: DELIVERED, MARKED, NOT DISCARDED. Discarding would cost W
-	 * packets for every one lost and hand an attacker a W-for-1 denial of
-	 * service - one injected frame destroying W legitimate ones. */
+	/* D6: delivered and marked, not discarded - discarding would let one
+	 * injected frame cost W legitimate packets (a W-for-1 DoS). */
 	zassert_equal(12u, log_n_pkt,
 		      "packets were discarded rather than marked");
 }
@@ -474,13 +444,10 @@ ZTEST(radiant_sec, test_a_secured_page_as_acknowledged_data_is_dropped)
 	configure_both(RADIANT_SEC_SW_AUTH, 2u);
 	epoch_both(17u);
 
-	/*
-	 * D15. "Transform broadcast only" governs what a secured channel
-	 * INITIATES; the decode switch still decodes acknowledged-data and
-	 * burst arms. Without this guard an injector sends a secured-range page
-	 * as acknowledged data, skips the MAC machinery entirely, and is
-	 * delivered as implicitly trusted data.
-	 */
+	/* D15: "transform broadcast only" governs what a secured channel
+	 * initiates, but decode still handles acknowledged-data/burst. Without
+	 * this guard, a secured-range page sent as acknowledged data skips the
+	 * MAC entirely and is delivered as implicitly trusted. */
 	zassert_equal(RADIANT_SEC_RX_DROP,
 		      radiant_sec_rx_ingest(RX_CH, pay, sizeof(pay), false, 0u),
 		      "a non-broadcast secured-range page was not dropped");
@@ -547,10 +514,9 @@ ZTEST(radiant_sec, test_two_receivers_share_one_key_with_no_sensor_state)
 			      radiant_sec_tx_transform(TX_CH, pay,
 						       sizeof(pay)));
 
-		/* THE SENSOR TRANSMITS ONCE. Both receivers consume the same
-		 * eight bytes, and the sensor holds no state for either of
-		 * them - which is what BLE's pairwise LTK model structurally
-		 * cannot do. */
+		/* The sensor transmits once; both receivers consume the same
+		 * eight bytes with no per-receiver state - unlike BLE's pairwise
+		 * LTK model. */
 		zassert_equal(RADIANT_SEC_RX_DEFER,
 			      radiant_sec_rx_ingest(RX_CH, pay, sizeof(pay),
 						    true, t_sync));
@@ -587,17 +553,11 @@ ZTEST(radiant_sec, test_the_drop_policy_holds_a_window_back)
 		hop(i, false, (i == 1u) ? (3 * 8 + 1) : -1);
 	}
 
-	/*
-	 * Window 0 is forged, so under this policy its four packets never
-	 * reach a host. Window 4 verifies and is released. The default is the
-	 * other way round - deliver, marked - and both are legitimate: the
-	 * difference is whether a receiver would rather have a suspect reading
-	 * or a hole, and that is the application's call, not this module's.
-	 *
-	 * The first window is also held: nothing authenticates it, so under a
-	 * drop policy it is dropped. That is a stated cost of the one-window
-	 * tag lag, not a bug.
-	 */
+	/* Window 0 is forged, so under this policy its packets never reach a
+	 * host; window 4 verifies and is released. The default is the other way
+	 * (deliver, marked) - the choice of suspect reading vs. hole is the
+	 * application's call. The first window is also held since nothing
+	 * authenticates it, a stated cost of the one-window tag lag. */
 	zassert_equal(4u, log_n_pkt,
 		      "expected only the verified window to be released, got "
 		      "%u packets", log_n_pkt);
@@ -610,19 +570,16 @@ ZTEST(radiant_sec, test_the_drop_policy_holds_a_window_back)
 
 /* ── X_CONF ─────────────────────────────────────────────────────────────── */
 
-/*
- * The plaintext every confidentiality test sends. Byte [0] is the page and byte
- * [1] is the counter the transform owns, so only [2..6] are the sender's to
- * hide - five bytes, which is the whole payload budget X_CONF has after X_AUTH
- * has taken byte [7] and the counter has taken byte [1].
+/* Plaintext every confidentiality test sends. Byte [0] is the page and byte [1]
+ * the transform-owned counter, so only [2..6] (5 bytes) are the sender's to
+ * hide - the rest of the budget is taken by X_AUTH's byte [7] and the counter.
  */
 static const uint8_t conf_plain[8] = {
 	TEST_PAGE, 0xAAu, 0xDEu, 0xADu, 0xBEu, 0xEFu, 0x42u, 0x55u,
 };
 
-/* Transform one packet at `index` and hand back exactly what went on the air,
- * which hop() deliberately does not expose - every test above it is about what
- * came out the other end rather than about the bytes in between. */
+/* Transform one packet at `index` and hand back exactly what went on the air
+ * (hop() deliberately doesn't expose this). */
 static void tx_air(uint32_t index, uint8_t air[8])
 {
 	ARG_UNUSED(index);
@@ -642,14 +599,9 @@ ZTEST(radiant_sec, test_confidentiality_hides_five_bytes_and_gives_them_back)
 
 	tx_air(0u, air);
 
-	/*
-	 * WHAT IS AND IS NOT HIDDEN, as an assertion rather than as prose in the
-	 * spec. A receiver that cannot read the page number cannot route the
-	 * page, and byte [1] is the counter the receiver needs to derive the
-	 * keystream - so both travel in the clear by construction, and stating
-	 * that here is what stops a later "encrypt everything" change from
-	 * silently making the stream undecodable.
-	 */
+	/* Page number and byte [1] (counter, needed to derive the keystream)
+	 * travel in the clear by construction; asserted here so a later
+	 * "encrypt everything" change can't silently break decoding. */
 	zassert_equal(TEST_PAGE, air[0],
 		      "the page number must stay readable or the receiver "
 		      "cannot tell which schema it is holding");
@@ -665,11 +617,8 @@ ZTEST(radiant_sec, test_confidentiality_hides_five_bytes_and_gives_them_back)
 		      log_n_pkt);
 	zassert_mem_equal(&log_pkt[0].pay[2], &conf_plain[2], 5u,
 			  "the receiver did not recover the plaintext");
-	/*
-	 * CLEAR, not VERIFIED. X_CONF alone hides the payload and authenticates
-	 * nothing, and a host told "verified" on this configuration would be
-	 * told something false about a stream any attacker can still forge.
-	 */
+	/* CLEAR, not VERIFIED: X_CONF alone hides the payload but authenticates
+	 * nothing; a stream any attacker can still forge. */
 	zassert_equal(RADIANT_SEC_VERDICT_CLEAR, log_pkt[0].verdict);
 	zassert_equal(RADIANT_SEC_VERDICT_CLEAR, radiant_sec_last_verdict(RX_CH));
 }
@@ -683,14 +632,10 @@ ZTEST(radiant_sec, test_the_same_plaintext_twice_is_two_different_ciphertexts)
 	configure_both(RADIANT_SEC_SW_CONF, 2u);
 	epoch_both(7u);
 
-	/*
-	 * The failure this exists to catch is the whole reason radiant_sec owns
-	 * byte [1]: a master retransmits its current body every slot, so a
-	 * counter the host maintained would repeat, and two packets under one
-	 * (epoch, devnum, counter) is keystream reuse - which turns CTR from
-	 * weak into catastrophic, because XORing the two ciphertexts cancels the
-	 * key out entirely.
-	 */
+	/* Why radiant_sec owns byte [1]: a master retransmits its body every
+	 * slot, so a host-maintained counter would repeat, and two packets under
+	 * one (epoch, devnum, counter) is keystream reuse - XORing the two
+	 * ciphertexts cancels the key entirely. */
 	tx_air(0u, a);
 	tx_air(1u, b);
 
@@ -710,14 +655,10 @@ ZTEST(radiant_sec, test_a_receiver_joining_mid_stream_decrypts_with_no_history)
 	configure_both(RADIANT_SEC_SW_CONF, 2u);
 	epoch_both(7u);
 
-	/*
-	 * D4. The receiver reconstructs the counter from the epoch phase and the
-	 * channel period, not from arrival history - which is what makes a
-	 * receiver that switches on halfway through an epoch work at all. Here
-	 * the sender runs 500 packets ahead and the receiver hears only the
-	 * 501st; a design that counted arrivals would decrypt it against
-	 * counter 0 and produce garbage.
-	 */
+	/* D4: the receiver reconstructs the counter from epoch phase + channel
+	 * period, not arrival history. Sender runs 500 packets ahead; receiver
+	 * hears only the 501st - counting arrivals would decrypt against counter
+	 * 0 and produce garbage. */
 	for (i = 0u; i < 500u; i++) {
 		tx_air(i, air);
 	}
@@ -771,19 +712,11 @@ ZTEST(radiant_sec, test_the_counter_wrap_does_not_repeat_the_keystream)
 	configure_both(RADIANT_SEC_SW_CONF, 2u);
 	epoch_both(7u);
 
-	/*
-	 * D14, stated as the property rather than as the mechanism. At 4 Hz a
-	 * 16-bit counter wraps every 4.5 hours, and a wrap that left the epoch
-	 * alone would replay the entire epoch's keystream against fresh
-	 * plaintext - the same catastrophic two-time pad as a repeated counter,
-	 * just delayed by an afternoon.
-	 *
-	 * 65536 is divisible by every legal W, which is why advancing the epoch
-	 * on the wrap does not also break window alignment.
-	 *
-	 * This runs the sender through a whole counter cycle, which is the only
-	 * way to test a wrap that does not involve reaching into the context.
-	 */
+	/* D14: at 4 Hz a 16-bit counter wraps every 4.5 hours; a wrap that left
+	 * the epoch alone would replay the epoch's keystream (a delayed two-time
+	 * pad). 65536 divides every legal W, so advancing the epoch on wrap
+	 * doesn't break window alignment. Runs a full counter cycle to test it
+	 * without reaching into the context. */
 	tx_air(0u, first);
 	for (i = 1u; i < 65536u; i++) {
 		uint8_t scratch[8];
@@ -800,15 +733,10 @@ ZTEST(radiant_sec, test_the_counter_wrap_does_not_repeat_the_keystream)
 
 /* ── Identity Tier 2: re-acquisition by key ─────────────────────────────── */
 
-/*
- * Tier 2 re-rolls the on-air device number at every power-up. The base device
- * number does NOT re-roll - it is fixed at provisioning and it is what the KDF
- * binds - so the sensor's keys are the same after the reboot as before it, and
- * the only thing that changed is a number in the nonce.
- *
- * TEST_DEVNUM is the identity before the power cycle; this is the one it comes
- * back with. Both are arbitrary except that they must differ.
- */
+/* Tier 2 re-rolls the on-air device number every power-up; the base device
+ * number (fixed at provisioning, what the KDF binds) does not, so keys are
+ * unchanged and only the nonce's device number differs. TEST_DEVNUM is the
+ * pre-cycle identity; TIER2_NEW_DEVNUM the post-cycle one. */
 #define TIER2_NEW_DEVNUM 0x91C4u
 
 /* Run one whole window of packets from a sensor whose on-air device number is
@@ -831,28 +759,19 @@ ZTEST(radiant_sec, test_a_keyed_receiver_re_acquires_across_a_power_cycle)
 	configure_both(RADIANT_SEC_SW_AUTH, w);
 	epoch_both(11u);
 
-	/*
-	 * Before the power cycle: both sides on TEST_DEVNUM. Two windows,
-	 * because the tag lags one window - the bytes collected during window k
-	 * authenticate window k-1, so the first window a receiver hears can
-	 * never be the one that verifies.
-	 */
+	/* Before the power cycle: both sides on TEST_DEVNUM. Two windows since
+	 * the tag lags one window (window k authenticates k-1), so the first
+	 * window heard is never the one that verifies. */
 	tier2_window(TEST_DEVNUM, 0u, w);
 	tier2_window(TEST_DEVNUM, w, w);
 	zassert_true(verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED) > 0u,
 		     "the link did not verify before the power cycle, so what "
 		     "follows would prove nothing");
 
-	/*
-	 * THE POWER CYCLE. The sensor comes back with a new on-air device
-	 * number and the same key, and it re-anchors the same epoch - which the
-	 * monotonicity gate permits only because a reboot cleared epoch_set,
-	 * and which a real node does by persisting the epoch it was issued.
-	 *
-	 * A STANDARD receiver is now lost: it tracks by device number and the
-	 * number it has is gone. That is the documented cost of Tier 2 and the
-	 * reason it is off by default.
-	 */
+	/* The power cycle: new on-air device number, same key, same epoch
+	 * re-anchored (permitted only because reboot cleared epoch_set; a real
+	 * node persists the issued epoch). A standard receiver is now lost since
+	 * it tracks by device number - the documented cost of Tier 2. */
 	radiant_sec_channel_release(TX_CH);
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_set_key(TX_CH, test_root, 128, TEST_DEVNUM));
@@ -863,11 +782,8 @@ ZTEST(radiant_sec, test_a_keyed_receiver_re_acquires_across_a_power_cycle)
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_set_epoch(TX_CH, 11u, 0u, TEST_PERIOD));
 
-	/*
-	 * The receiver does not re-pair and the host is not consulted. It
-	 * wildcard-searched its device type, heard a candidate, and asks the
-	 * one question that survives a re-roll.
-	 */
+	/* No re-pair, no host consulted: wildcard-searched the device type,
+	 * heard a candidate, asks the one question that survives a re-roll. */
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_try_devnum(RX_CH, TIER2_NEW_DEVNUM));
 	zassert_equal(RADIANT_SEC_VERDICT_CLEAR,
@@ -895,12 +811,8 @@ ZTEST(radiant_sec, test_a_candidate_that_is_not_ours_never_verifies)
 	};
 	const uint8_t w = 4u;
 
-	/*
-	 * The other half of the claim. Re-acquisition is only identification if
-	 * it also says NO - a receiver that verified anything it heard would
-	 * "re-acquire" the first stranger to walk past, which is worse than
-	 * re-pairing because it is silent.
-	 */
+	/* The other half of the claim: re-acquisition is only identification if
+	 * it can also say no, or it silently "re-acquires" any stranger. */
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_set_key(TX_CH, stranger, 128,
 					  TIER2_NEW_DEVNUM));

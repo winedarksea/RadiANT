@@ -3,45 +3,25 @@
  * test_lr.c - the long-range coded PHY, the length extension, and the two
  * things that only exist because of them.
  *
- * Provenance: docs/decisions/0007-long-range-phy.md, which is this project's
- * own decision record, plus the Bluetooth core specification's published
- * LE Coded PHY timings (FEC block 1's fixed 376 us and the 8 us coded bit at
- * S=8) - public numbers, reproduced in the ADR with their arithmetic. No
- * adopter-gated ANT+ device profile document was read for this file, no sdk-ant
- * source was consulted, and nothing here derives from libant.a. See
- * docs/decisions/0002-clean-room-policy.md.
+ * Provenance: docs/decisions/0007-long-range-phy.md plus the Bluetooth core
+ * specification's published LE Coded PHY timings (FEC block 1's fixed 376 us
+ * and the 8 us coded bit at S=8). See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * What this suite can and cannot establish
- * ---------------------------------------------------------------------------
- * IT CANNOT ESTABLISH THE ONE NUMBER THE PHASE IS FOR. The gate is >= 6 dB of
- * improvement in the 5 %-loss point for S=8 against 1 M on the same rig, and
- * that is a measurement on real silicon with a real transmitter-power ladder.
- * Nothing here has a radio. Saying so plainly matters, because a green suite is
- * otherwise easy to mistake for a met gate.
- *
- * WHAT IT DOES ESTABLISH is everything that would make that measurement
- * meaningless if it were wrong, and each of these is a specific way the bench
- * would produce a plausible number for the wrong reason:
- *
- *   1. THE GEOMETRY AND THE ARITHMETIC. Four address bytes, a four-byte header
- *      with a real length byte, and airtime that reproduces the ADR's FEC-block
- *      table. A frame budget that is wrong by a byte is 64 us at S=8, which is
- *      a window edge rather than a rounding error.
- *   2. THE LENGTH FIELD IS SAFE. It is the first length-from-body format in
- *      this project, and the failure it can have that no other format can is a
- *      read past the end of a DMA buffer. Both directions are asserted:
- *      a declared length that disagrees with the delivered one is refused, and
- *      the transmit path refuses a length byte that disagrees with the body.
- *   3. DISCOVERY DID NOT MOVE. The sweep is still 1 M, which is what keeps
- *      "certain within one sweep" true with two PHYs in the build.
- *   4. THE SCHEDULER PAYS FOR THE SWITCH. caps.phy_switch_us was zero and unread
- *      from the day it was written until this phase, which is exactly the shape
- *      of field that is wrong the first time it is used.
- *   5. THE DUTY BOUND REFUSES AT THE BOUNDARY, one count either side.
- *   6. THE COLLAPSE ROUND-TRIPS through the unmodified 1 M accumulator, which is
- *      the property that makes a node's choice to collapse invisible to a
- *      receiver.
+ * This suite cannot establish the phase's actual gate (>= 6 dB improvement in
+ * the 5%-loss point for S=8 vs 1M, which needs real silicon). What it does
+ * establish is everything that would make that measurement meaningless if
+ * wrong:
+ *   1. Geometry/airtime arithmetic matches the ADR's FEC-block table.
+ *   2. The length field is safe both directions (this is the first
+ *      length-from-body format in the project; the failure mode unique to it
+ *      is a read past the end of a DMA buffer).
+ *   3. Discovery still sweeps 1M only, so "certain within one sweep" holds
+ *      with two PHYs in the build.
+ *   4. The scheduler actually reads caps.phy_switch_us (it was zero and
+ *      unread from the day it was written until this phase).
+ *   5. The duty bound refuses at the boundary, one count either side.
+ *   6. The collapse round-trips through the unmodified 1M accumulator, which
+ *      is what makes a node's choice to collapse invisible to a receiver.
  */
 
 #include <errno.h>
@@ -152,17 +132,10 @@ ZTEST(lr, test_the_airtime_reproduces_the_fec_block_table)
 		      "the 1 M airtime is not preamble + address + body + CRC");
 
 	/*
-	 * S=8, eight-byte payload:
-	 *   FEC block 1                            376 us
-	 *   body 12 + CRC 2 = 14 bytes at 64 us    896 us
-	 *   TERM2                                   24 us
-	 *   ---------------------------------------------
-	 *                                         1296 us
-	 *
-	 * The ADR's table says ~1.23 ms for a three-byte header; this format
-	 * carries four, because the length byte the extension needs is one of
-	 * them. The 64 us difference is that byte, and it is asserted here so
-	 * that the table and the code cannot drift apart silently.
+	 * S=8, eight-byte payload: FEC block1 376us + body(12)+CRC(2)=14 bytes
+	 * at 64us (896us) + TERM2 24us = 1296us. The ADR's ~1.23ms table used a
+	 * three-byte header; this format's fourth byte is the length byte the
+	 * extension needs, accounting for the 64us difference.
 	 */
 	zassert_equal(1296u, radiant_frame_airtime_us(RADIANT_FRAME_CFG_LR, 8u),
 		      "the S=8 airtime does not match the FEC-block arithmetic");
@@ -232,12 +205,8 @@ ZTEST(lr, test_the_body_round_trips_and_states_its_own_length)
 	zassert_equal(sizeof(payload), pl_len, NULL);
 	zassert_mem_equal(payload, pl, sizeof(payload), NULL);
 
-	/*
-	 * THE DEVICE NUMBER IS NOT IN THE BODY AND THE PARSER DOES NOT INVENT
-	 * ONE. It is in the on-air address, which the matcher consumed, exactly
-	 * as devnum_lo is in search. A parser that zeroed it would hand the
-	 * caller a device number that looks like an answer.
-	 */
+	/* The device number is not in the body - it's in the on-air address,
+	 * consumed by the matcher, same as devnum_lo in search. */
 	zassert_equal(0u, got.device_number,
 		      "the parser invented a device number");
 }
@@ -254,13 +223,9 @@ ZTEST(lr, test_a_length_that_disagrees_with_the_frame_is_refused)
 				   sizeof(body));
 	zassert_equal(4, rc, "a payload-free body is not just the header");
 
-	/*
-	 * THE ONLY WAY THIS FORMAT COULD READ PAST A BUFFER, and it is checked
-	 * rather than left to the CRC. The CRC covers the length byte, so a
-	 * corrupted length normally arrives as a CRC failure - but "the CRC
-	 * would have caught it" is a statement about probability, and the
-	 * residual case is a read past the end of a backend's DMA buffer.
-	 */
+	/* Checked explicitly rather than left to the CRC: the CRC covers the
+	 * length byte, but "the CRC would have caught it" is only probabilistic
+	 * - the residual case is a read past the end of a backend's DMA buffer. */
 	body[0] = 30u; /* claims 31 body bytes; 4 were delivered */
 	zassert_equal(RADIANT_FRAME_ETRUNC,
 		      radiant_frame_lr_parse(body, 4u, NULL, NULL, NULL, NULL),
@@ -303,12 +268,10 @@ ZTEST(lr, test_the_ant_encoders_refuse_the_long_range_configuration)
 	zassert_equal(RADIANT_FRAME_OK,
 		      radiant_frame_make(&f, &id, &cf, NULL, 0u), NULL);
 
-	/*
-	 * REFUSED, NOT APPROXIMATED. struct radiant_frame_wire's body buffer is
-	 * sized for ANT and body_write()'s tracking branch would lay a
+	/* Refused, not approximated: struct radiant_frame_wire's body buffer is
+	 * sized for ANT, and body_write()'s tracking branch would lay a
 	 * long-range frame out with a transmission type where the length
-	 * belongs. There is deliberately no shared path.
-	 */
+	 * belongs. No shared path exists on purpose. */
 	zassert_equal(RADIANT_FRAME_EINVAL,
 		      radiant_frame_encode(RADIANT_FRAME_CFG_LR,
 					   radiant_net_addr_ant_plus, &f, &w),
@@ -357,12 +320,9 @@ ZTEST(lr, test_discovery_stays_on_one_megabit)
 	zassert_equal(RADIANT_SEARCH_OK,
 		      radiant_search_window(&s, 1000u, &win), NULL);
 
-	/*
-	 * An LR node is found by its 1 M descriptor or by the sync handoff,
-	 * never by sweeping the coded PHY - because a second PHY would not add
-	 * windows to the sweep, it would DOUBLE it, and "certain within one
-	 * sweep" would quietly become "certain within two".
-	 */
+	/* An LR node is found via its 1M descriptor or a sync handoff, never by
+	 * sweeping the coded PHY: a second swept PHY would double the sweep,
+	 * and "certain within one sweep" would quietly become "two". */
 	zassert_equal(RADIANT_PHY_1M_GFSK, win.fmt->phy,
 		      "the search sweep moved to the coded PHY");
 	zassert_equal(radiant_frame_format(RADIANT_FRAME_CFG_SEARCH), win.fmt,
@@ -427,12 +387,9 @@ ZTEST(lr, test_a_change_of_phy_is_budgeted_and_a_repeat_is_not)
 	uint32_t lead;
 	uint32_t switch_us;
 
-	/*
-	 * RAIL's preset plus both PHYs: the only combination in which a
-	 * scheduler that budgets correctly and one that does not budget at all
-	 * produce different numbers. The nRF preset switches for free, so it
-	 * cannot tell them apart.
-	 */
+	/* RAIL's preset (not nRF's, which switches PHY for free) is the only
+	 * combination that distinguishes a scheduler that budgets the switch
+	 * from one that doesn't. */
 	fake_radio_caps_preset_rail();
 	fake_radio_set_phys(fake_phys_1m_lr, fake_phys_1m_lr_count);
 	lead = fake_radio_caps_mut()->min_arm_lead_us;
@@ -499,12 +456,9 @@ ZTEST(lr, test_a_change_of_phy_is_budgeted_and_a_repeat_is_not)
 		      "the coded window was not armed on the coded PHY");
 	open_switch = rec->t_open - rec->t_arm;
 
-	/*
-	 * THE ASSERTION THE FIELD EXISTS FOR. A window whose PHY the radio is
-	 * not already configured for opens later by exactly phy_switch_us than
-	 * one whose PHY it is. Before this phase the difference was zero,
-	 * because nothing in the scheduler read the field at all.
-	 */
+	/* The assertion the field exists for: a window on a PHY the radio isn't
+	 * already configured for opens later by exactly phy_switch_us. Before
+	 * this phase the difference was zero - nothing read the field. */
 	zassert_equal(open_same + switch_us, open_switch,
 		      "a change of PHY was not budgeted: same %u, switched %u, "
 		      "lead %u, switch %u",
@@ -570,12 +524,9 @@ ZTEST(lr, test_the_duty_bound_refuses_at_the_boundary)
 						  8192u, 10u),
 		      NULL);
 
-	/*
-	 * A SPARSE NODE HAS NO PERIOD AND THE RULE IS SKIPPED RATHER THAN
-	 * APPLIED TO ZERO, on the same terms the drift bound is skipped when no
-	 * clock was announced. Treating 0 as an infinitely fast period would
-	 * refuse every asset tag in the envelope document.
-	 */
+	/* A sparse node has no period, so the rule is skipped rather than
+	 * applied to zero (same as the drift bound with no announced clock) -
+	 * treating 0 as infinitely fast would refuse every asset tag. */
 	zassert_equal(0, profile_sched_duty_check(PROFILE_SCHED_CODING_S8, 0u,
 						  40u),
 		      "an asynchronous node was held to a period it has not got");
@@ -644,12 +595,9 @@ ZTEST(lr, test_the_collapse_round_trips_through_the_unchanged_accumulator)
 	bodies = profile_desc_long_count(&d, RADIANT_FRAME_PAYLOAD_LR_MAX);
 	zassert_equal(2, bodies, "five frames did not collapse into two wakes");
 
-	/*
-	 * THE PROPERTY THAT MAKES THE COLLAPSE INVISIBLE TO A RECEIVER: the
-	 * bytes are fed to profile_desc_rx_feed(), the SAME accumulator, with
-	 * the same ordering rules, that a 1 M receiver has always used. Nothing
-	 * about the 8-byte frames changed, so nothing above this line had to.
-	 */
+	/* Makes the collapse invisible to a receiver: bytes feed the same
+	 * profile_desc_rx_feed() accumulator a 1M receiver always used, with
+	 * the same ordering rules. */
 	profile_desc_rx_init(&rx);
 	for (i = 0; i < bodies; i++) {
 		int len = profile_desc_long_payload(&d, frames,
@@ -683,11 +631,8 @@ ZTEST(lr, test_how_complete_the_collapse_actually_is)
 {
 	struct profile_descriptor d;
 
-	/*
-	 * THE ARITHMETIC THE ADR CORRECTS THE PLAN ON, pinned so that neither
-	 * the claim nor the payload ceiling can move without the other. Four
-	 * whole frames per transmission is what 36 payload bytes buys.
-	 */
+	/* The arithmetic the ADR corrects the plan on: four whole frames per
+	 * transmission is what 36 payload bytes buys. */
 
 	/* The sparse asset tag - no fields, no schedule frame. Two frames, one
 	 * wake: the collapse is TOTAL for the node the envelope was written
@@ -724,13 +669,9 @@ ZTEST(lr, test_a_collapse_is_refused_where_the_phy_does_not_hide_it)
 	n_frames = profile_desc_encode(&d, frames, PROFILE_TLM_MAX_FRAMES);
 	zassert_true(n_frames > 0, NULL);
 
-	/*
-	 * THE RULE, IN ONE ASSERTION: length extension is permitted exactly
-	 * where the PHY already makes us invisible. A node that has not
-	 * announced the coded PHY must not emit a long body, because a 32-byte
-	 * frame on RF 57 in the ANT+ network address is a frame every stock ANT
-	 * receiver will try to parse and none can.
-	 */
+	/* Length extension is permitted only where the PHY already makes us
+	 * invisible: a 32-byte frame on RF 57 under the ANT+ network address is
+	 * a frame every stock ANT receiver would try (and fail) to parse. */
 	d.flags &= (uint8_t)~PROFILE_TLM_FLAG_LR_PHY;
 	d.schedule.coding = PROFILE_SCHED_CODING_NONE;
 	zassert_equal(-EINVAL,

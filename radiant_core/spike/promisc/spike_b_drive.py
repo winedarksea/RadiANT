@@ -3,35 +3,27 @@
 
 """Drive one board through broadcast, acknowledged data and a burst, for Spike B.
 
-Provenance: clean-room. Built from this repository's own tools - tools/ant_probe.py
-for the transport and tools/ant_scan.py / tools/ant_sim.py for the channel
-bring-up sequence - and from the free ANT Message Protocol and Usage Rev 5.1 for
-the meaning of the messages it sends. Nothing here derives from sdk-ant or from
-an adopter-gated ANT+ device profile document.
+Clean-room: built from this repo's own tools/ant_probe.py (transport) and
+tools/ant_scan.py / tools/ant_sim.py (channel bring-up sequence), and the
+free ANT Message Protocol and Usage Rev 5.1 for message meanings. Nothing
+derives from sdk-ant or an ANT+ device profile document.
 
-Spike A answered "can a bare nRF RADIO hear an ANT broadcast?". Spike B asks
-where the *packet type* lives, and the only way to ask is to put something other
-than a broadcast on the air. This script is that something. It does not look at
-the radio at all; radiant_core/spike/promisc does that, on a third board.
+Spike A asked whether a bare nRF RADIO can hear an ANT broadcast; Spike B
+asks where the *packet type* lives, which needs something other than a
+broadcast on the air. This script puts it there; radiant_core/spike/promisc
+does the listening, on a third board.
 
-Two modes, because the answer wants both directions:
+  --role master   Transmit broadcast, then acknowledged data, then a burst.
+                  Needs no second radio - a master sends acknowledged/burst
+                  packets regardless of a listener and just reports
+                  TRANSFER_TX_FAILED, so a two-board rig suffices.
+  --role slave    Track a master and send acknowledged data / a burst back
+                  to it - the direction Zwift uses for trainer resistance,
+                  and the only one producing a slave-to-master turnaround.
 
-  --role master   Become an ANT+ master and transmit broadcast, then
-                  acknowledged data, then a burst. Needs no second radio: a
-                  master transmits acknowledged data and burst packets whether
-                  or not anything is listening, and merely reports
-                  TRANSFER_TX_FAILED afterwards. That is what makes a two-board
-                  rig able to answer the frame-format question on its own.
-
-  --role slave    Track a master and send acknowledged data and a burst *back*
-                  to it. This is the direction Zwift uses to set trainer
-                  resistance, and it is the only one that produces a
-                  measurable slave-to-master reply turnaround.
-
-Every payload it sends is marked in byte 0 so the capture can be read without
-guessing: 0xB0 for broadcast, 0xA0 for acknowledged, 0xC0 for burst, with the
-sequence number in byte 1. A frame in the capture whose payload starts 0xA1 came
-from the second acknowledged message this script sent, and nothing else.
+Every payload is marked in byte 0 (0xB0 broadcast, 0xA0 acknowledged, 0xC0
+burst) with a sequence number in byte 1, so a captured frame traces back to
+a specific sent message without guessing.
 
     py spike_b_drive.py --role master --serial 6183
     py spike_b_drive.py --role slave  --serial 6183 --device-number 14871
@@ -57,8 +49,8 @@ from ant_probe import (  # noqa: E402
 )
 from ant_scan import ANT_PLUS_FREQ, ANT_PLUS_KEY, command  # noqa: E402
 from ant_wire import (  # noqa: E402
-    ADV_BURST_MODES_SIZE_24_BYTES,
     ADV_BURST_MODE_ENABLE,
+    ADV_BURST_MODES_SIZE_24_BYTES,
     BURST_HEADER_LAST,
     BURST_HEADER_SEQ_SHIFT,
     EVENT_CODES_BY_VALUE,
@@ -69,12 +61,12 @@ from ant_wire import (  # noqa: E402
     MESG_ASSIGN_CHANNEL_ID,
     MESG_BROADCAST_DATA_ID,
     MESG_BURST_DATA_ID,
-    MESG_CONFIG_ADV_BURST_ID,
     MESG_CHANNEL_ID_ID,
     MESG_CHANNEL_MESG_PERIOD_ID,
     MESG_CHANNEL_RADIO_FREQ_ID,
     MESG_CHANNEL_SEARCH_TIMEOUT_ID,
     MESG_CLOSE_CHANNEL_ID,
+    MESG_CONFIG_ADV_BURST_ID,
     MESG_EVENT_ID,
     MESG_NETWORK_KEY_ID,
     MESG_OPEN_CHANNEL_ID,
@@ -136,10 +128,9 @@ def drain(reader: FrameReader, seconds: float, counters: dict) -> None:
 
 def tally(result, counters: dict) -> tuple[int, int] | None:
     msg_id, body = result
-    if msg_id == MESG_RESPONSE_EVENT_ID and len(body) >= 3:
-        if body[1] == MESG_EVENT_ID:
-            counters[body[2]] = counters.get(body[2], 0) + 1
-            return (body[0], body[2])
+    if msg_id == MESG_RESPONSE_EVENT_ID and len(body) >= 3 and body[1] == MESG_EVENT_ID:
+        counters[body[2]] = counters.get(body[2], 0) + 1
+        return (body[0], body[2])
     return None
 
 
@@ -158,20 +149,12 @@ def wait_event(reader: FrameReader, wanted: set, timeout_s: float,
 def enable_adv_burst(dev, reader, size_code: int = ADV_BURST_MODES_SIZE_24_BYTES) -> bool:
     """Turn on advanced burst so a single packet can carry 24 payload bytes.
 
-    This exists for one reason: a 24-byte packet is the only way to move the
-    payload length without moving anything else, and putting a payload other
-    than eight bytes on the air is still the only way to give bits 2:0 of the
-    control byte a measured meaning rather than a disproved one.
+    A payload other than 8 bytes is the only way to give bits 2:0 of the
+    control byte a measured meaning. It originally tested a 0x1A/0x9A length
+    prediction; both are withdrawn (byte 3 is a control byte - see
+    docs/spike-b-part2-results.md), but the run is still worth doing.
 
-    It originally existed to test a prediction that such a frame would show
-    0x1A (= 24 payload + 2 CRC) in that byte. That prediction, and its later
-    restatement as 0x9A, are both withdrawn along with the length reading -
-    byte 3 is a control byte, and 0x0A reads 10 in its low bits while 0xA2
-    reads 2, both carrying eight payload bytes. See
-    docs/spike-b-part2-results.md. The function is still worth running; only
-    its stated reason changed.
-
-    Body layout is [filler, enable, rf payload size, required modes, 0, 0,
+    Body layout: [filler, enable, rf payload size, required modes, 0, 0,
     optional modes, 0, 0] - see protocol/ant_wire.yaml, MESG_CONFIG_ADV_BURST.
     """
     body = bytes([0x00, ADV_BURST_MODE_ENABLE, size_code,
@@ -183,15 +166,13 @@ def enable_adv_burst(dev, reader, size_code: int = ADV_BURST_MODES_SIZE_24_BYTES
 def burst_seq(index: int) -> int:
     """The host-side burst sequence number for the index'th block.
 
-    Two bits on the serial side (`ANTW_BURST_HEADER_SEQ_MASK` is 3), and it
-    does *not* simply count modulo 4. Sequence 0 marks the first packet of a
-    transfer and nothing else, so a long burst runs 0, 1, 2, 3, 1, 2, 3, ... -
-    the wrap skips 0. `src/ant_serial_bridge.c` derives
-    ANTR_BURST_SEGMENT_START from `seq == 0`, so a naive `index % 4` would tell
-    the stack that blocks 4, 8 and 12 each began a new transfer, in the middle
-    of one. That is a host-side field and says nothing yet about what the radio
-    puts on the air; the point of this run is to find out whether the two are
-    the same width.
+    Two bits on the wire (`ANTW_BURST_HEADER_SEQ_MASK` is 3), and it does
+    *not* count modulo 4: sequence 0 marks only the first packet of a
+    transfer, so a long burst runs 0, 1, 2, 3, 1, 2, 3, ... (wrap skips 0).
+    `src/ant_serial_bridge.c` derives ANTR_BURST_SEGMENT_START from
+    `seq == 0`, so a naive `index % 4` would tell the stack blocks 4/8/12
+    each start a new transfer mid-burst. Whether the on-air field is the
+    same width is what this run is for.
     """
     return 0 if index == 0 else ((index - 1) % 3) + 1
 
@@ -200,38 +181,28 @@ def send_burst(dev, reader, ch: int, blocks: int, counters: dict,
                block_size: int = 8, pace: float = 0.0) -> str:
     """Stream one burst of `blocks` packets of `block_size` bytes.
 
-    The serial protocol streams a burst as a run of MESG_BURST_DATA packets
-    whose header byte carries the channel in bits 0-4, a two-bit sequence
-    number in bits 5-6, and the last-packet flag in bit 7.
+    MESG_BURST_DATA packets carry the channel in header bits 0-4, a two-bit
+    sequence number in bits 5-6, and the last-packet flag in bit 7.
 
-    **Every packet is written back to back with no wait between them**, and
-    that is a correction rather than an optimisation. The first version of this
-    function waited for EVENT_TRANSFER_NEXT_DATA_BLOCK after each block,
-    because that is the event the bridge's buffer-ownership contract turns on
-    (`src/ant_radio.h`, rules B1-B5). But the bridge *consumes* that event and
-    never puts it on the wire - `src/ant_serial_bridge.c` returns immediately
-    after `k_sem_give()`, on the stated grounds that a real ANT stick frames
-    bursts itself and never shows the host its internal flow control. So the
-    wait could not be satisfied by construction: the host sat for its timeout,
-    the transfer starved of blocks, and every multi-block burst died after
-    packet 0 with EVENT_TRANSFER_TX_FAILED. Spike B part 1 read that as "a
-    burst needs a peer"; it needed a peer *and* this.
+    **Every packet is written back to back, no wait between them** - a fix,
+    not an optimisation. Waiting for EVENT_TRANSFER_NEXT_DATA_BLOCK after
+    each block (the event `src/ant_radio.h` rules B1-B5 turn on) never
+    worked: the bridge consumes that event internally and never puts it on
+    the wire (`src/ant_serial_bridge.c` returns right after `k_sem_give()`,
+    since a real ANT stick never exposes its internal flow control). Waiting
+    for it starved every multi-block burst after packet 0
+    (EVENT_TRANSFER_TX_FAILED). Back-pressure still works when streaming:
+    the bridge blocks in `k_sem_take(&burst_block_free, K_MSEC(1000))` before
+    each block, throttling the host exactly as a real stick would.
 
-    Back-pressure is not lost by streaming: the bridge blocks in
-    `k_sem_take(&burst_block_free, K_MSEC(1000))` before copying each block, so
-    it simply stops draining the endpoint until the radio is ready. The host is
-    throttled by the transport, which is exactly how a real stick behaves.
+    `pace` inserts a fixed delay between packets, only to answer "was it a
+    race?" if a burst fails again - it starves the transfer above zero, so
+    it's a diagnostic, not a setting.
 
-    `pace` exists only to answer "was it a race?" if a burst ever fails again -
-    it inserts a fixed delay between packets. Anything above zero is slower
-    than the radio and will starve the transfer, so it is a diagnostic, not a
-    setting.
-
-    blocks == 1 is not a degenerate case, it is a separate experiment: a
-    one-packet burst carries sequence 0 *with* the last-packet flag, where the
-    first packet of a longer burst carries sequence 0 without it. Those two
-    frames differ in exactly one host-side bit, so whatever differs between
-    them on the air is where the last-packet flag lives.
+    `blocks == 1` is a separate experiment, not a degenerate case: a
+    one-packet burst carries sequence 0 *with* the last-packet flag, where a
+    longer burst's first packet carries it *without* - isolating where the
+    last-packet flag lives on the air.
     """
     msg_id = MESG_ADV_BURST_DATA_ID if block_size > 8 else MESG_BURST_DATA_ID
     note(f"burst: {blocks} blocks x {block_size} bytes on channel {ch} "
@@ -307,10 +278,7 @@ def bring_up(dev, reader, args, chan_type: int) -> bool:
     if chan_type == CHANNEL_TYPE_SLAVE:
         steps.append((MESG_CHANNEL_SEARCH_TIMEOUT_ID,
                       bytes([args.channel, 0xFF]), "search timeout"))
-    for msg_id, body, what in steps:
-        if not command(dev, reader, msg_id, body, what):
-            return False
-    return True
+    return all(command(dev, reader, msg_id, body, what) for msg_id, body, what in steps)
 
 
 def run_master(dev, reader, args) -> int:

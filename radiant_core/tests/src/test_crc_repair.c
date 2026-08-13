@@ -4,39 +4,30 @@
  * Provenance: original clean-room work. The frame this file repairs over and
  * over is the one Spike A pulled off the air on real silicon
  * (docs/spike-a-results.md, archive/captures/radio/2026-08-09-nrf54l15-run*.log)
- * with its independently established CRC; the arithmetic being tested is the
+ * with its independently established CRC; the arithmetic tested is the
  * standard linearity of a CRC over GF(2). Nothing here derives from sdk-ant,
- * from libant.a, or from any adopter-gated ANT+ device profile document.
+ * from libant.a, or from any ANT+ device profile document.
  *
- * ---------------------------------------------------------------------------
- * The suite for radiant_core/src/radiant_crc_repair.c
- * ---------------------------------------------------------------------------
- * The feature turns a frame that failed its CRC into one that did not, which
- * means every bug in it produces a frame that claims to be good and is not.
- * There is no error code for that and no way to see it from the host: a
- * mis-repaired power page is a plausible number, and the accumulators it feeds
- * are cumulative, so it looks like the sensor rather than like the receiver.
+ * The suite for radiant_core/src/radiant_crc_repair.c. The feature turns a
+ * frame that failed its CRC into one that did not, so every bug in it
+ * produces a frame that claims to be good and is not - there is no error
+ * code for that and no way to see it from the host. So this suite is built
+ * around two questions:
  *
- * So this suite is built around two questions rather than around coverage:
+ *   1. Does it repair EVERY single-bit error, exactly, back to the
+ *      transmitted bytes? All 96 of them, not a sample.
+ *   2. How often does it repair a MULTI-bit error into something wrong?
+ *      That number is the whole safety argument and is quoted in
+ *      RADIANT_CORE_CRC_REPAIR's help text, so it is measured here: every
+ *      two-bit error is enumerated, the three-bit ones sampled.
  *
- *   1. Does it repair EVERY single-bit error, exactly, back to the transmitted
- *      bytes? Not a sample - all 96 of them, checked against the original.
- *   2. How often does it repair a MULTI-bit error into something wrong? That
- *      number is the whole safety argument for the feature and it is quoted in
- *      RADIANT_CORE_CRC_REPAIR's help text. A number in a help text that
- *      nothing measures is a number nobody should believe, so this file
- *      enumerates every two-bit error there is and samples the three-bit ones.
- *
- * Question 2's first answer came out of this suite rather than out of the plan
- * that asked for the feature. The plan assumed a flat 1-in-585 chance for any
- * multi-bit error; the measurement is that NO two-bit error is ever repaired,
- * because the polynomial carries an (x + 1) factor and syndrome popcount
- * therefore carries error parity. The exposure is only odd-weight errors of
- * three bits and up. Both the help text and the module header now say so.
- *
- * Everything else - the refusal to serve a search window, the refusal to run
- * without a received CRC - is about keeping question 2's answer confined to a
- * population where it is acceptable.
+ * The measured answer to question 2 (found by this suite, not assumed by the
+ * plan): NO two-bit error is ever repaired, because the polynomial's (x + 1)
+ * factor makes syndrome popcount carry error parity - exposure is only
+ * odd-weight errors of three bits and up. Both the help text and the module
+ * header say so. Everything else here (refusing a search window, refusing to
+ * run without a received CRC) keeps that answer confined to a population
+ * where it is acceptable.
  */
 
 #include <stdbool.h>
@@ -233,30 +224,17 @@ ZTEST(radiant_crc_repair, test_no_two_bit_error_is_ever_repaired)
 	unsigned int pairs = 0u;
 
 	/*
-	 * EVERY two-bit error in the body - 80 choose 2, which is 3160 of them -
-	 * and not one of them may be repaired. Not "rarely": never.
-	 *
-	 * This is stronger than the plan for this feature assumed, and the
-	 * reason is a property of the polynomial rather than luck. CRC-16/CCITT
-	 * is x^16 + x^12 + x^5 + 1, which evaluates to 0 at x = 1 and is
-	 * therefore divisible by (x + 1). For any error e, e = q*p + r gives
-	 * e(1) = r(1), and e(1) is the PARITY of the error's weight. So the
-	 * syndrome of an odd-weight error always has odd popcount and the
-	 * syndrome of an even-weight error always has even popcount, and the
-	 * two sets are disjoint. A two-bit error cannot land on a one-bit
-	 * error's syndrome no matter how the bits fall.
-	 *
-	 * That matters for the safety argument, because two-bit errors are by
-	 * far the most common multi-bit case at the knee: the false-accept
-	 * population is not "everything that is not one bit", it is odd-weight
-	 * errors of three bits and up, which are another order of magnitude
-	 * down again. test_three_bit_errors_collide_at_the_predicted_rate below
-	 * measures what is actually left.
+	 * EVERY two-bit error in the body - 80 choose 2, 3160 of them - and not
+	 * one may be repaired. Not "rarely": never. This is a property of the
+	 * polynomial, not luck: CRC-16/CCITT (x^16 + x^12 + x^5 + 1) evaluates
+	 * to 0 at x=1 and is divisible by (x + 1), so a syndrome's popcount
+	 * parity always matches the error's bit-weight parity - odd-weight and
+	 * even-weight syndromes are disjoint sets, and a two-bit error can never
+	 * land on a one-bit error's syndrome.
 	 *
 	 * EAGREE must not appear either: that would mean a frame the backend
-	 * called a CRC failure computes to a matching CRC here, which is a
-	 * configuration fault rather than a damaged frame and has an entirely
-	 * different fix.
+	 * called a CRC failure computes to a matching CRC here, a configuration
+	 * fault rather than a damaged frame.
 	 */
 	for (a = 0u; a < BODY_BITS; a++) {
 		for (b = a + 1u; b < BODY_BITS; b++) {
@@ -286,16 +264,10 @@ ZTEST(radiant_crc_repair, test_the_syndrome_parity_rule_the_above_rests_on)
 {
 	unsigned int bit;
 
-	/*
-	 * The property stated directly, so that a future change to the
-	 * polynomial fails HERE with an explanation rather than three tests
-	 * away with a rate that drifted.
-	 *
-	 * Every single-bit error's syndrome must have odd popcount. If a
-	 * polynomial without the (x + 1) factor were adopted, this is the test
-	 * that would go red, and the two-bit guarantee above would quietly
-	 * become a probability.
-	 */
+	/* The parity property stated directly, so a future polynomial change
+	 * fails HERE with an explanation instead of three tests away as a
+	 * drifted rate: every single-bit error's syndrome must have odd
+	 * popcount, or the two-bit guarantee above quietly becomes probabilistic. */
 	for (bit = 0u; bit < BODY_BITS; bit++) {
 		uint8_t vector[sizeof(spike_body)];
 		uint16_t syndrome;
@@ -327,20 +299,14 @@ ZTEST(radiant_crc_repair, test_three_bit_errors_collide_at_the_predicted_rate)
 	unsigned int correct_repairs = 0u;
 
 	/*
-	 * What the false-accept rate actually is, measured rather than asserted.
+	 * The false-accept rate, measured rather than asserted: odd-weight
+	 * errors CAN collide with a single-bit syndrome (both have odd
+	 * popcount). 96 valid entries over 32768 odd-popcount syndromes gives
+	 * ~1 in 341 - the number RADIANT_CORE_CRC_REPAIR's help text promises.
 	 *
-	 * Odd-weight errors CAN collide with a single-bit syndrome, because
-	 * both have odd popcount. There are 96 valid entries and 32768
-	 * odd-popcount syndromes, so roughly 1 in 341 three-bit errors is
-	 * repaired into something that is still wrong. That number is what
-	 * RADIANT_CORE_CRC_REPAIR's help text promises and what the decision to
-	 * run this on tracked windows only is built on, so it is measured here
-	 * rather than left as arithmetic nobody checked.
-	 *
-	 * Subsampled with a stride: 80 choose 3 is 82160 and the full sweep
-	 * takes several seconds on a DK, which is more than this suite's share
-	 * of a 60 s console budget. The stride is fixed rather than random -
-	 * a rate that only fails on some runs is not a test.
+	 * Subsampled with a fixed stride (80 choose 3 = 82160, too slow for
+	 * this suite's console budget); fixed rather than random so the test
+	 * cannot pass on some runs and fail on others.
 	 */
 	for (a = 0u; a < BODY_BITS; a++) {
 		for (b = a + 1u; b < BODY_BITS; b++) {
@@ -384,14 +350,10 @@ ZTEST(radiant_crc_repair, test_three_bit_errors_collide_at_the_predicted_rate)
 		      "bytes, which no single flip can do - the test is wrong, "
 		      "not the code");
 
-	/*
-	 * A wide band on purpose: this checks the ORDER of the rate the help
-	 * text claims, not its distribution. Both ends are real constraints -
-	 * far worse than 1 in 100 would mean the syndrome space is much smaller
-	 * than argued and the feature is not safe on the terms it was accepted
-	 * on; zero would mean the repair path was never reached and this test
-	 * proves nothing at all.
-	 */
+	/* A wide band on purpose: checks the ORDER of the claimed rate, not its
+	 * distribution. Worse than 1 in 100 would mean the syndrome space is
+	 * smaller than argued; zero would mean the repair path was never
+	 * reached. */
 	zassert_true(false_repairs > 0u,
 		     "no three-bit error was falsely repaired in %u samples, "
 		     "which is not what the arithmetic predicts - the repair "
@@ -442,17 +404,13 @@ ZTEST(radiant_crc_repair, test_a_search_window_is_refused_by_the_module_itself)
 	uint8_t body[sizeof(spike_body)];
 
 	/*
-	 * THE TEST THIS WHOLE FEATURE'S SAFETY RESTS ON.
-	 *
-	 * A search window's CRC failures are the 19-27 noise-triggered address
-	 * matches per 15 seconds that radiant_search.c counts and discards -
-	 * three matched bytes, from nothing at all. Repairing one in 683 of
-	 * those would manufacture a device number out of thermal noise and
-	 * report a sensor that does not exist.
-	 *
-	 * The refusal is inside the module rather than at the call site
-	 * precisely so that it cannot be forgotten by a future caller who has
-	 * an rx_event in hand and does not know which window produced it.
+	 * The test this feature's safety rests on. A search window's CRC
+	 * failures are the 19-27 noise-triggered address matches per 15 s that
+	 * radiant_search.c counts and discards - three matched bytes from
+	 * nothing at all. Repairing one in 683 of those would manufacture a
+	 * device number out of thermal noise. The refusal lives inside the
+	 * module, not at the call site, so it cannot be forgotten by a future
+	 * caller holding an rx_event with no idea which window produced it.
 	 */
 	memcpy(body, spike_body, BODY_LEN);
 	flip(body, 3u);
@@ -527,20 +485,12 @@ ZTEST(radiant_crc_repair, test_the_table_has_no_duplicates_for_either_geometry)
 
 	/*
 	 * The bijection over the WHOLE table, both frame geometries at once,
-	 * rebuilt here independently of the module's own check.
-	 *
-	 * radiant_crc_repair_init() checks itself and returns false on a
-	 * collision, and the fixture asserts on that - but a self-check is the
-	 * code agreeing with itself. This recomputes every syndrome from
-	 * radiant_crc16() directly and compares them pairwise.
-	 *
-	 * Both geometries, because the table is indexed from the END of the
-	 * covered data and is sized for RADIANT_FRAME_BODY_MAX - the longest
-	 * body either configuration can produce, which is the search header
-	 * plus the longest payload. A tracking frame's 10 standard body bytes
-	 * and a search frame's 12 are both suffixes of that range, so a table
-	 * that is a bijection across the whole of it is one for both, and
-	 * stays one if either geometry changes.
+	 * rebuilt independently of the module's own self-check (which is only
+	 * the code agreeing with itself): recomputes every syndrome from
+	 * radiant_crc16() directly and compares pairwise. Both geometries
+	 * together because the table is sized for RADIANT_FRAME_BODY_MAX, and
+	 * both frames' body lengths are suffixes of that range - a bijection
+	 * over the whole range is one for both.
 	 */
 	zassert_true(RADIANT_FRAME_HDR_LEN_TRACKING + RADIANT_FRAME_PAYLOAD_STD
 			     <= RADIANT_FRAME_BODY_MAX,
@@ -582,20 +532,11 @@ ZTEST(radiant_crc_repair, test_an_absent_received_crc_cannot_produce_a_repair)
 	int rc;
 
 	/*
-	 * Defence in depth for the caps.has_rx_crc gate.
-	 *
-	 * The gate that stops repair on a backend which keeps no received CRC
-	 * lives in radiant_api.c, and this module has no capability knowledge
-	 * to check for itself. So the question worth asking here is what
-	 * happens if that gate is ever bypassed: a backend without the
-	 * capability leaves crc_rx at zero, and zero is what would arrive.
-	 *
-	 * The answer must be a refusal and not a confident wrong answer. An
-	 * undamaged frame against a zero CRC produces the syndrome 0x199A,
-	 * which either names no single-bit error at all or names one and
-	 * corrupts a frame that was already correct - and the second outcome,
-	 * on EVERY CRC failure, is the shape of the bug this test exists to
-	 * make impossible to introduce quietly.
+	 * Defence in depth for the caps.has_rx_crc gate, which lives in
+	 * radiant_api.c - this module has no capability knowledge of its own.
+	 * If that gate is ever bypassed, a backend without the capability
+	 * leaves crc_rx at zero; the answer here must be a refusal, not a
+	 * confident wrong repair of an otherwise-correct frame.
 	 */
 	memcpy(body, spike_body, BODY_LEN);
 	rc = radiant_crc_repair(RADIANT_FRAME_CFG_TRACKING, spike_addr,
@@ -622,13 +563,9 @@ static void repair_rx_cb(const struct radiant_rx_event *evt, void *user)
 {
 	ARG_UNUSED(user);
 
-	/*
-	 * CRC_FAIL only, and the filter is load-bearing rather than tidy: the
-	 * window's terminal TIMEOUT event arrives through this same callback
-	 * and legitimately carries has_crc_rx false, so recording every event
-	 * would overwrite the frame's answer with the timeout's and every test
-	 * below would fail for a reason that has nothing to do with the CRC.
-	 */
+	/* CRC_FAIL only - load-bearing, not tidy: the window's terminal TIMEOUT
+	 * arrives through this same callback with has_crc_rx legitimately
+	 * false, and would overwrite the frame's answer if not filtered out. */
 	if (evt->status != RADIANT_RADIO_STATUS_CRC_FAIL) {
 		return;
 	}

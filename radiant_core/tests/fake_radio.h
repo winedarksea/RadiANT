@@ -7,39 +7,34 @@
  * and the measurements in docs/spike-a-results.md, plus public
  * nRF52840/nRF54L15 datasheet figures and public Silicon Labs RAIL
  * documentation for the capability presets. Nothing here derives from
- * sdk-ant, from libant.a, or from any adopter-gated ANT+ device profile
+ * sdk-ant, from libant.a, or from any ANT+ device profile
  * document.
  *
  * ---------------------------------------------------------------------------
  * What this is
  * ---------------------------------------------------------------------------
- * radiant_core/tests/fake_radio.c defines every function in radiant_radio_hal.h. The
- * test binary links it instead of a backend - that substitution is the whole
- * reason the HAL is plain functions rather than a vtable. Six of the seven
- * core modules (frame, sched, channel, search, events, transfer) never touch
- * hardware: they are developed against this file and verified in CI on Linux,
- * because native_sim does not build on Windows.
+ * radiant_core/tests/fake_radio.c defines every function in radiant_radio_hal.h; the test
+ * binary links it instead of a backend. Six of the seven core modules (frame,
+ * sched, channel, search, events, transfer) never touch hardware - they are
+ * developed against this file and verified in CI on Linux, because native_sim
+ * does not build on Windows.
  *
- * That makes this mock load-bearing in an uncomfortable way. Anything it
- * permits that real silicon forbids becomes six modules' worth of code that
- * deadlocks on the bench, and anything it reports that real silicon does not
- * becomes six modules' worth of tests that prove nothing. So the mock is
+ * That makes the mock load-bearing: anything it permits that real silicon
+ * forbids becomes code that deadlocks on the bench, and anything it reports
+ * that silicon does not becomes tests that prove nothing. So it is
  * deliberately *stricter* than a stub:
  *
- *   - it validates the per-operation configuration on every arm call, so a
- *     module that forgets a field gets RADIANT_RADIO_EINVAL rather than silently
- *     inheriting whatever the previous operation used;
+ *   - it validates per-operation configuration on every arm call, so a module
+ *     that forgets a field gets RADIANT_RADIO_EINVAL rather than inheriting
+ *     the previous operation's state;
  *   - it enforces the callback contract's MUST NOTs it can observe, and
  *     records what it cannot enforce as a violation a test can assert on;
  *   - it models the *air*, not the API: a frame is a byte stream that exists
- *     at an instant, and whether it is heard depends on whether a window with
- *     a matching filter was open. A window that hears nothing is the default
- *     outcome, not a special case;
- *   - the clock starts one second below 2^32 microseconds, so any core module
- *     that stores a timestamp in a uint32_t fails in its first virtual second
- *     rather than on a dongle left plugged in over a weekend. RAIL_Time_t is
- *     32-bit and the HAL says extending it is the backend's duty; this is the
- *     cheapest possible check that the core kept its side of that bargain.
+ *     at an instant, heard only if a window with a matching filter was open.
+ *     A window that hears nothing is the default outcome, not a special case;
+ *   - the clock starts one second below 2^32 microseconds, so a core module
+ *     storing a timestamp in a uint32_t fails in its first virtual second.
+ *     RAIL_Time_t is 32-bit and extending it is the backend's duty.
  *
  * ---------------------------------------------------------------------------
  * How a suite uses it
@@ -73,11 +68,10 @@
  *                         fake_radio_viol_name(fake_radio_viol(0)->code));
  *   }
  *
- * Two habits are worth adopting in every suite, because they catch the bugs
- * that are otherwise invisible: finish with fake_radio_is_idle() (it catches a
- * module that left an operation armed) and with fake_radio_viol_count() == 0
- * (it catches a module that did something in a callback that would deadlock a
- * real radio ISR).
+ * Two habits catch otherwise-invisible bugs in every suite: finish with
+ * fake_radio_is_idle() (catches a module that left an operation armed) and
+ * fake_radio_viol_count() == 0 (catches a callback that would deadlock a real
+ * radio ISR).
  */
 
 #ifndef RADIANT_CORE_TESTS_FAKE_RADIO_H_
@@ -96,10 +90,8 @@ extern "C" {
 /* ---------------------------------------------------------------------------
  * Fixed sizes
  *
- * All state is static: the mock allocates nothing, so a suite cannot leak it
- * and a leak checker cannot be confused by it. Exceeding any of these limits
- * is recorded as a violation rather than silently dropped, because a test that
- * quietly stopped recording is a test that quietly stopped asserting.
+ * All state is static: the mock allocates nothing. Exceeding any of these
+ * limits is recorded as a violation rather than silently dropped.
  * ---------------------------------------------------------------------------
  */
 
@@ -117,35 +109,26 @@ extern "C" {
 #define FAKE_RADIO_EVENT_LOG_MAX   128  /* events recorded */
 #define FAKE_RADIO_VIOL_MAX        16   /* contract violations recorded */
 
-/* Events the mock will fire inside one fake_radio_advance*() call before it
- * declares a livelock. A callback that re-arms a zero-length window forever is
- * a real bug in the core, and an infinite loop inside a CI job is the worst
- * possible way to report it. */
+/* Events fired inside one fake_radio_advance*() call before a livelock is
+ * declared - catches a core callback that re-arms a zero-length window
+ * forever, instead of hanging CI. */
 #define FAKE_RADIO_ADVANCE_BUDGET  4096
 
-/*
- * The clock origin: one second below 2^32 microseconds. See the header comment
- * - every test crosses the 32-bit boundary within its first virtual second.
- * A test that genuinely needs round numbers calls fake_radio_set_origin().
- */
+/* Clock origin: one second below 2^32 microseconds, so every test crosses
+ * the 32-bit boundary within its first virtual second. A test that needs
+ * round numbers calls fake_radio_set_origin(). */
 #define FAKE_RADIO_T_ORIGIN        ((radiant_time_t)0xFFF0BDC0ULL)
 
-/* Written over the event body buffer the moment a callback returns. A callback
- * that retained event->body - which the HAL forbids, because on real hardware
- * it is a DMA buffer that is reused immediately - reads this instead of the
- * frame it thought it kept. */
+/* Written over the event body buffer the moment a callback returns, so a
+ * callback that retained event->body (forbidden - it's a DMA buffer on real
+ * hardware) reads this instead of the frame it thought it kept. */
 #define FAKE_RADIO_BODY_POISON     0xDDu
 
 /*
- * Spike A defaults, so that a test written without thinking about signal
- * levels is still a realistic one.
- *
- *   docs/spike-a-results.md: the bench link ran at -17 dBm with 240-241
- *   CRC-valid frames per 60 s against 240.3 transmitted - essentially zero
- *   loss - while a 3-byte search address triggered the matcher on noise
- *   several times a second at -54..-101 dBm. Those noise triggers are why
- *   radiant_search.c must rank and gate on CRC and never on match count, and
- *   fake_radio_air_noise() exists to make that failure reproducible.
+ * Spike A defaults (docs/spike-a-results.md): the bench link ran at -17 dBm
+ * with ~240/60s frames and essentially zero loss, while a 3-byte search
+ * address triggered the matcher on noise several times a second at
+ * -54..-101 dBm - why radiant_search.c must gate on CRC, not match count.
  */
 #define FAKE_RADIO_RSSI_BENCH_DBM  (-17)
 #define FAKE_RADIO_RSSI_NOISE_DBM  (-85)
@@ -159,74 +142,56 @@ extern "C" {
  * ---------------------------------------------------------------------------
  *
  * bytes[] is the on-air byte stream from the first address byte to the last
- * body byte: no preamble, no CRC. The mock deliberately does not split it into
- * "address" and "body", because the split is a property of the *receiver's*
- * configuration, not of the frame. That is not a modelling nicety - it is the
- * single most important thing this mock reproduces:
+ * body byte: no preamble, no CRC. It is deliberately not pre-split into
+ * "address" and "body" - that split is a property of the receiver's
+ * configuration, not of the frame:
  *
  *   Spike A, tracking:  addr_len 5 -> address [A6 C5 dl dh dt], body 10 bytes
  *                       [tt][0x0A][d0..d7]
  *   Spike A, search:    addr_len 3 -> address [A6 C5 dl],       body 12 bytes
  *                       [dh][dt][tt][0x0A][d0..d7]
  *
- * One queued frame therefore behaves correctly for both window shapes, and
- * radiant_search.c's recovery of devnum_hi and the device type out of the *body*
- * is exercised for real rather than stubbed.
+ * One queued frame behaves correctly for both window shapes, exercising
+ * radiant_search.c's recovery of devnum_hi and device type from the body.
  */
 enum fake_radio_match {
-	/* Match bytes[0 .. filter.addr_len) against each filter in turn and
-	 * report the index of the first that matches. The faithful path, and
-	 * how radiant_search.c recovers devnum_lo from filter_index. */
+	/* Match bytes[0 .. filter.addr_len) against each filter in turn,
+	 * report the first match's index. How radiant_search.c recovers
+	 * devnum_lo from filter_index. */
 	FAKE_RADIO_MATCH_ADDR = 0,
-	/* Deliver to filter_index whatever the window's filters are. For tests
-	 * that care about the index and not about building addresses. If the
-	 * window has fewer filters than that, the frame is simply not heard. */
+	/* Deliver to filter_index whatever the window's filters are, for
+	 * tests that care about the index and not about building addresses. */
 	FAKE_RADIO_MATCH_INDEX = 1,
-	/* A noise trigger: the hardware matcher fired on something that was not
-	 * a frame. Delivered as RADIANT_RADIO_STATUS_CRC_FAIL with filter_index
-	 * taken modulo the window's filter count, skipping every length check -
-	 * a demodulator that locked onto noise produces bytes, not a
-	 * well-formed body. */
+	/* A noise trigger: the hardware matcher fired on something that was
+	 * not a frame. Delivered as CRC_FAIL with filter_index taken modulo
+	 * the filter count, skipping every length check. */
 	FAKE_RADIO_MATCH_NOISE = 2
 };
 
 struct fake_radio_air {
 	/* Absolute time, on the HAL timebase, at which the last bit of the
-	 * on-air address is at the antenna. See the t_sync contract in
-	 * radiant_radio_hal.h - this is the same instant, from the transmitter's
-	 * side. */
+	 * on-air address is at the antenna - the t_sync contract in
+	 * radiant_radio_hal.h, from the transmitter's side. */
 	radiant_time_t t_sync;
 
 	uint8_t bytes[FAKE_RADIO_AIR_FRAME_MAX];
 	uint8_t len;
 
 	/* Sense inverted on purpose: a zero-initialised struct is a *good*
-	 * frame, so a test that forgets to set anything gets the common case
-	 * rather than a silent CRC failure it then has to debug. */
+	 * frame, so a test that forgets to set anything gets the common case. */
 	bool crc_bad;
 
 	/* rssi_dbm is only read when rssi_set is true; otherwise the mock uses
-	 * the default (FAKE_RADIO_RSSI_BENCH_DBM, or whatever
-	 * fake_radio_set_default_rssi() last set). Same reasoning: 0 dBm is a
-	 * physically implausible value to have meant by accident. */
+	 * the default (FAKE_RADIO_RSSI_BENCH_DBM or whatever
+	 * fake_radio_set_default_rssi() last set). */
 	bool   rssi_set;
 	int8_t rssi_dbm;
 
-	/*
-	 * The CRC as it "arrived", for driving single-bit repair.
-	 *
-	 * Only reaches the event when the frame is delivered as CRC_FAIL and
-	 * caps.has_rx_crc is true - the mock enforces both, because a mock more
-	 * generous than the HAL contract is a mock that lets a contract
-	 * violation pass CI. A test that wants a repairable frame sets
-	 * crc_bad, flips one bit in `bytes`, and puts the ORIGINAL frame's CRC
-	 * here: that is exactly what the air does when a bit flips in flight.
-	 *
-	 * Off by default, so an existing test that produces a CRC failure
-	 * produces one carrying no CRC - which is the honest picture of a
-	 * backend that cannot report one, and keeps every such test testing
-	 * what it always did.
-	 */
+	/* The CRC as it "arrived", for driving single-bit repair. Only reaches
+	 * the event when delivered as CRC_FAIL and caps.has_rx_crc is true. A
+	 * test wanting a repairable frame sets crc_bad, flips one bit in
+	 * `bytes`, and puts the ORIGINAL frame's CRC here. Off by default, so
+	 * an existing CRC-failure test still carries no CRC. */
 	bool     crc_rx_set;
 	uint32_t crc_rx;
 
@@ -246,14 +211,9 @@ enum fake_radio_arm_kind {
 	FAKE_RADIO_ARM_ED
 };
 
-/*
- * One arm call, accepted or rejected.
- *
- * Rejected calls are recorded too, with op == 0 and rc set: a scheduler test
- * wants to assert that a window was *never* requested too late, and it can
- * only do that if the rejects are visible. This is the record that lets a test
- * assert on the scheduling decision itself rather than only on its outcome.
- */
+/* One arm call, accepted or rejected. Rejected calls are recorded too, with
+ * op == 0 and rc set, so a test can assert a window was *never* requested
+ * too late - on the scheduling decision itself, not just its outcome. */
 struct fake_radio_arm {
 	uint32_t                 op;      /* 0 if the call was rejected */
 	enum fake_radio_arm_kind kind;
@@ -268,18 +228,9 @@ struct fake_radio_arm {
 
 	/* TX */
 	radiant_time_t t_sync_at;
-	/*
-	 * The on-air address the transmit asked for.
-	 *
-	 * Recorded because for a long time it could not be: struct
-	 * radiant_tx_req had no address field, and a mock that only replays what
-	 * it was handed cannot notice a field that was never there. That is the
-	 * shape of the gap - not an oversight in one function, but a mock and a
-	 * contract agreeing with each other and both being wrong about the air.
-	 * fake_radio now rejects a transmit whose addr_len disagrees with
-	 * fmt->addr_len, so the mock states the requirement rather than merely
-	 * carrying it.
-	 */
+	/* The on-air address the transmit asked for. fake_radio rejects a
+	 * transmit whose addr_len disagrees with fmt->addr_len, so the mock
+	 * states the requirement rather than merely carrying it. */
 	uint8_t    addr[RADIANT_RADIO_ADDR_MAX];
 	uint8_t    addr_len;
 	uint8_t    body[RADIANT_RADIO_BODY_MAX];
@@ -289,19 +240,15 @@ struct fake_radio_arm {
 	radiant_time_t           t_open;
 	radiant_time_t           t_close;
 	uint32_t             flags;
-	/* Recorded for both kinds: air the core asked to have held past the end
-	 * of this operation. See struct radiant_rx_req::follow_on_us. This mock
-	 * owns the radio, so it reserves nothing and only records - which is
-	 * exactly what makes "the core asked for the right reserve" checkable
-	 * without an arbiter anywhere in the picture. */
+	/* Air the core asked to have held past this operation's end (struct
+	 * radiant_rx_req::follow_on_us). The mock owns the radio, so it only
+	 * records this rather than reserving it. */
 	uint16_t             follow_on_us;
 	struct radiant_rx_filter filters[FAKE_RADIO_MAX_FILTERS];
 	uint8_t              n_filters;
 
-	/* ED. rf_index above is the range's low end and t_open is t_start, on
-	 * the same reasoning the mock uses everywhere else: a field that means
-	 * the same thing in two kinds is one field, so a test that asserts "the
-	 * radio was put on RF 57" reads the same member whatever put it there. */
+	/* ED. rf_index above is the range's low end and t_open is t_start - a
+	 * field meaning the same thing in two kinds is one field. */
 	uint8_t  rf_index_hi;
 	uint32_t ed_dwell_us;
 
@@ -337,16 +284,10 @@ struct fake_radio_event {
 	uint16_t ed_samples;
 };
 
-/*
- * What the mock reports for an energy-detect dwell.
- *
- * Per RF index, so a suite can build a band with a loud patch in it and assert
- * that the map found it - which is the only interesting thing a channel-quality
- * map does. Unset indices report FAKE_RADIO_ED_MIN_DBM / _MEAN_DBM, five dB
- * apart so that a test which never sets anything still gets a min and a mean
- * that can be told apart; a mock reporting the same number for both would let
- * a core module that used one where it meant the other pass.
- */
+/* What the mock reports for an energy-detect dwell, per RF index, so a suite
+ * can build a band with a loud patch and assert the map found it. Unset
+ * indices report FAKE_RADIO_ED_MIN_DBM / _MEAN_DBM, five dB apart, so a
+ * module that used one where it meant the other is caught. */
 #define FAKE_RADIO_ED_MIN_DBM  (-95)
 #define FAKE_RADIO_ED_MEAN_DBM (-90)
 /* Samples the mock claims per dwell. Non-zero and not one, so that a consumer
@@ -355,25 +296,16 @@ struct fake_radio_event {
 
 void fake_radio_set_ed(uint8_t rf_index, int8_t min_dbm, int8_t mean_dbm);
 void fake_radio_clear_ed(void);
-/* Override the reported sample count for every dwell. Zero is permitted and is
- * the "this dwell measured nothing" case the HAL says a backend must not
- * deliver an OK event for - so the mock delivers no event for that index at
- * all, which is the behaviour a consumer has to survive. */
+/* Override the reported sample count for every dwell. Zero is the "this
+ * dwell measured nothing" case; the HAL forbids an OK event for it, so the
+ * mock delivers no event for that index, which a consumer must survive. */
 void fake_radio_set_ed_samples(uint16_t samples);
 
-/*
- * What a window that hears nothing reports as the band's level.
- *
- * Off until set: an unset noise floor means every terminal event carries
- * has_noise false, which is what a backend that cannot measure one does and is
- * what every test written before this existed expects.
- *
- * The mock decides for itself whether a given window is eligible - terminal
- * TIMEOUT, and nothing received inside it - rather than letting a test declare
- * it. That condition is exactly the one a core module could get wrong in a way
- * no assertion catches: it would simply be measuring transmitters and calling
- * the result a noise floor.
- */
+/* What a window that hears nothing reports as the band's level. Off until
+ * set (every terminal event carries has_noise false, as an incapable backend
+ * would). The mock decides eligibility itself - terminal TIMEOUT with
+ * nothing received - rather than letting a test declare it, since that is a
+ * condition a core module could get wrong unnoticed. */
 void fake_radio_set_noise(int8_t dbm);
 void fake_radio_clear_noise(void);
 
@@ -441,14 +373,10 @@ struct fake_radio_viol_rec {
  * ---------------------------------------------------------------------------
  */
 
-/*
- * Full reset: clock back to FAKE_RADIO_T_ORIGIN, caps back to the nRF preset,
+/* Full reset: clock back to FAKE_RADIO_T_ORIGIN, caps back to the nRF preset,
  * air queue and every log emptied, no operation armed, HAL lifecycle back to
- * pre-init. Call it from a ztest setup or before hook.
- *
- * This is the one place the clock is allowed to go backwards, because a reset
- * is a new program run as far as the HAL's monotonicity promise is concerned.
- */
+ * pre-init. Call from a ztest setup/before hook. The one place the clock may
+ * go backwards - a reset is a new program run for monotonicity purposes. */
 void fake_radio_reset(void);
 
 /* reset() + radiant_radio_init() with both callbacks NULL + radiant_radio_enable().
@@ -493,16 +421,14 @@ bool fake_radio_step(void);
 /* ---------------------------------------------------------------------------
  * Capabilities
  *
- * The caps query is the whole portability mechanism, so making a test run the
- * scheduler at a different capability has to be a one-liner:
+ * The caps query is the whole portability mechanism:
  *
  *     fake_radio_caps_mut()->max_filters = 2;      // or the RAIL preset
  *
- * radiant_sched.c must never hardcode 8 and radiant_search.c must never hardcode a
- * 32-set sweep, and the only way anyone finds out is a suite that runs them
- * both ways. Mutate caps between operations only - the HAL says the returned
- * pointer is static for the lifetime of the program, and real backends read
- * their own fields while an operation is in flight.
+ * radiant_sched.c must never hardcode 8, radiant_search.c must never hardcode
+ * a 32-set sweep. Mutate caps between operations only - the returned pointer
+ * is static for the program's lifetime, and real backends read their own
+ * fields while an operation is in flight.
  * ---------------------------------------------------------------------------
  */
 struct radiant_radio_caps *fake_radio_caps_mut(void);
@@ -519,18 +445,11 @@ void fake_radio_caps_preset_rail(void);
 /* phys must have static storage duration: caps holds the pointer. */
 void fake_radio_set_phys(const enum radiant_phy *phys, uint8_t n_phys);
 
-/*
- * A ready-made two-PHY list, since every suite that wants one wants the same
- * one: 1 M first, as caps.phys requires of any backend claiming ANT+
- * compatibility, then the coded PHY.
- *
- * BOTH PRESETS STILL DEFAULT TO 1 M ALONE. Combine this with
- * fake_radio_caps_preset_rail() to get a backend that has two PHYs AND a
- * non-zero phy_switch_us, which is the configuration radiant_sched.c's PHY
- * budgeting is actually exercised on - the nRF preset switches for free, so it
- * cannot tell a scheduler that budgets correctly from one that does not budget
- * at all.
- */
+/* A ready-made two-PHY list: 1 M first (required of any ANT+-compatible
+ * backend), then the coded PHY. Both presets still default to 1 M alone;
+ * combine with fake_radio_caps_preset_rail() to get two PHYs AND a non-zero
+ * phy_switch_us - the nRF preset switches for free, so it can't tell a
+ * scheduler that budgets PHY-switch time from one that doesn't. */
 extern const enum radiant_phy fake_phys_1m_lr[];
 extern const uint8_t          fake_phys_1m_lr_count;
 
@@ -557,14 +476,11 @@ uint32_t fake_radio_air_master(radiant_time_t t_first, uint32_t period_us,
 			       uint32_t count, const uint8_t *bytes,
 			       uint8_t len);
 
-/*
- * count spurious matcher triggers spread evenly over [t0, t1], each carrying
- * deterministic pseudo-random bytes and a bad CRC. This is Spike A's several
- * noise triggers a second on a 3-byte search address, and it is the reason a
- * search test must gate on CRC rather than on match count: with the window's
- * RADIANT_RX_REPORT_CRC_FAIL flag clear these are invisible to the core and only
- * appear in stats.crc_fail_suppressed. Returns how many were queued.
- */
+/* count spurious matcher triggers spread evenly over [t0, t1], each carrying
+ * deterministic pseudo-random bytes and a bad CRC (Spike A's several noise
+ * triggers a second on a 3-byte search address). With RADIANT_RX_REPORT_CRC_FAIL
+ * clear these are invisible to the core and only appear in
+ * stats.crc_fail_suppressed. Returns how many were queued. */
 uint32_t fake_radio_air_noise(radiant_time_t t0, radiant_time_t t1, uint32_t count,
 			      int8_t rssi_dbm);
 
@@ -591,14 +507,11 @@ uint8_t fake_radio_build_ant_frame(uint8_t *out, uint16_t devnum,
  * ---------------------------------------------------------------------------
  */
 
-/*
- * Make the next arm call return rc without arming anything. The call is still
- * recorded. Chiefly for RADIANT_RADIO_EBUSY: the HAL says a thread-context arm
- * races with the callback that may be about to consume the operation slot, and
- * that the backend resolves the race by returning EBUSY - so the core must
- * handle it, and a test cannot otherwise make the race happen on demand.
- * RADIANT_RADIO_OK_RC clears a pending force.
- */
+/* Make the next arm call return rc without arming anything (still recorded).
+ * Chiefly for RADIANT_RADIO_EBUSY: a thread-context arm can race the callback
+ * that may be about to consume the operation slot, and a test cannot
+ * otherwise make that race happen on demand. RADIANT_RADIO_OK_RC clears a
+ * pending force. */
 void fake_radio_force_next_arm(int rc);
 
 /* Replace the terminal status of the next accepted operation - the way to get
@@ -607,22 +520,15 @@ void fake_radio_force_next_arm(int rc);
 void fake_radio_force_next_terminal(enum radiant_radio_status status);
 
 /*
- * The same two, for a RUN of operations - which is the shape an arbitrated
- * backend fails in, and the shape a one-shot cannot express.
+ * The same two, for a RUN of operations - the shape an arbitrated backend
+ * fails in (it refuses every window that lands inside another stack's
+ * activity, not just one), which a one-shot can't express and re-arming
+ * between each would mean re-arming from inside the callback under test.
  *
- * A backend that must reserve air time from another protocol stack does not
- * refuse one window; it refuses every window that lands inside the other
- * stack's activity, and the core's response to a run of them is where all the
- * interesting behaviour is: a guard that widens per denial to a ceiling, a
- * counter that must not promote a live sensor to SEARCHING, an ED sweep that
- * must still be alive at the end of it. Re-arming a one-shot between each would
- * mean re-arming it from inside the very callback under test.
- *
- * force_arm_repeat refuses the next `count` ARM CALLS with rc - the synchronous
- * RADIANT_RADIO_EDENIED case. force_terminal_repeat replaces the terminal status
- * of the next `count` ACCEPTED OPERATIONS - the accepted-then-never-granted
- * RADIANT_RADIO_STATUS_DENIED case. They compose: the two are genuinely
- * different moments and a backend may produce either.
+ * force_arm_repeat refuses the next `count` ARM CALLS with rc (synchronous
+ * RADIANT_RADIO_EDENIED). force_terminal_repeat replaces the terminal status
+ * of the next `count` ACCEPTED OPERATIONS (accepted-then-never-granted
+ * RADIANT_RADIO_STATUS_DENIED). They compose - genuinely different moments.
  *
  * RADIANT_RADIO_OK_RC, or a count of 0, cancels a run in progress.
  */
@@ -635,16 +541,11 @@ void fake_radio_force_terminal_repeat(enum radiant_radio_status status,
  * channel state machine's drift handling should survive it. Default 0. */
 void fake_radio_set_tx_offset_us(int32_t us);
 
-/*
- * Deliver one event carrying the id of an operation that has already ended.
- *
- * This is the race the op id exists for: on real hardware the frame was
- * already in the receiver's pipeline when abort() ran, so the event arrives
- * after the core moved on. The mock will never do this by itself, and a core
- * module that has not been shown one has not been tested against it. The event
- * is marked late in the log and does not count as a terminal event for
- * anything.
- */
+/* Deliver one event carrying the id of an operation that has already ended -
+ * the race the op id exists for: on real hardware the frame was already in
+ * the receiver's pipeline when abort() ran, so the event arrives after the
+ * core moved on. The mock never does this by itself. Marked late in the log;
+ * does not count as a terminal event. */
 int fake_radio_inject_late_rx(uint32_t op, const struct fake_radio_air *f,
 			      uint8_t filter_index);
 int fake_radio_inject_late_tx(uint32_t op, enum radiant_radio_status status);

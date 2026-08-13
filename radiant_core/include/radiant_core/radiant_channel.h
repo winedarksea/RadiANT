@@ -3,84 +3,41 @@
  * radiant_channel.h - the per-channel state machine, its configuration, and the
  * slot clock every other core module reads.
  *
- * Provenance: clean-room. Written from docs/sdk-ant-contract.md and
- * src/ant_radio.h (the semantics, the ordering constraints and the permitted
- * error codes each entry point may return), from the free ANT Message Protocol
- * and Usage Rev 5.1 (D00000652) for the channel-status byte layout and the
- * 32768 Hz period unit, and from the bench measurements in
- * docs/ant-radio-link.md and docs/spike-b-part2-results.md (the master's
- * open-to-first-transmission delay, the slot period and its jitter). Nothing
- * here derives from sdk-ant, from libant.a, from disassembly of any binary, or
- * from any adopter-gated ANT+ device profile document. See
- * docs/decisions/0002-clean-room-policy.md.
+ * Provenance: clean-room, from docs/sdk-ant-contract.md and src/ant_radio.h
+ * (semantics, ordering, permitted error codes), the ANT Message Protocol and
+ * Usage Rev 5.1 (D00000652) for the channel-status byte layout and the
+ * 32768 Hz period unit, and bench measurements in docs/ant-radio-link.md and
+ * docs/spike-b-part2-results.md (open-to-first-transmission delay, slot
+ * period/jitter). See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * What this module is, and what it deliberately is not
- * ---------------------------------------------------------------------------
- * This is the layer with no radio in it and no scheduler in it. It owns:
+ * This layer has no radio and no scheduler in it. It owns: each of the 32
+ * channels' state and every legal/illegal transition (with the wire response
+ * code for each refusal); every per-channel configuration byte; the
+ * channel's *slot clock* (next slot time, search-gives-up time); and which
+ * radio operation id is attributed to a channel, which is the whole defence
+ * against a cancelled operation's terminal event arriving late.
  *
- *   - what state each of the 32 channels is in, and every legal and illegal
- *     transition between those states, with the exact wire response code for
- *     each refusal;
- *   - every per-channel configuration byte the host can write or read back;
- *   - the channel's *slot clock*: the absolute time of the next slot this
- *     channel wants the radio for, and the absolute time its search gives up;
- *   - which radio operation id is currently attributed to this channel, which
- *     is the whole of the defence against a cancelled operation's terminal
- *     event arriving after the core moved on.
+ * It calls no HAL function - arming the radio is radiant_sched.c's job, so
+ * windows from different channels can be merged (the scheduler's
+ * highest-value optimization; see struct radiant_rx_req in
+ * radiant_radio_hal.h). This module *decides*, radiant_sched.c *acts*; the
+ * seam is the radiant_channel_on_*()/radiant_channel_next_* functions at the
+ * bottom of this file. Consequently it's testable with no radio at all
+ * (radiant_core/tests/src/test_channel.c still drives fake_radio to prove the
+ * scheduler accepts these decisions, but every state assertion is pure).
  *
- * It calls no HAL function. Not one. Arming the radio is radiant_sched.c's job,
- * and the split is not tidiness: a channel that armed its own windows could
- * not be merged with another channel's window, and merged windows are the
- * single highest-value item in the scheduler (see struct radiant_rx_req in
- * radiant_radio_hal.h). So this module *decides* and radiant_sched.c *acts*, and the
- * seam between them is the handful of radiant_channel_on_*() / radiant_channel_next_*
- * functions at the bottom of this file.
+ * 32 channels because that's the serial protocol's own ceiling (burst header
+ * channel field is 5 bits), baked in from the start since a channel-count
+ * assumption is expensive to retrofit into a scheduler. Flat array of 32, no
+ * allocation.
  *
- * The practical consequence, which is worth knowing before reading
- * radiant_core/tests/src/test_channel.c: this module is testable with no radio at
- * all. The suite still drives fake_radio, because it must show that the
- * decisions this module hands the scheduler are ones a real backend accepts -
- * that a master's first transmit really is armable one period out, that a
- * close with an operation in flight really does survive the terminal event
- * that follows the abort - but every assertion about state is a pure-function
- * assertion.
- *
- * ---------------------------------------------------------------------------
- * Thirty-two channels, and why the number is here rather than in a Kconfig
- * ---------------------------------------------------------------------------
- * 32 is the serial protocol's own ceiling: the burst header carries the
- * channel number in the low five bits of the channel byte, so 32 is the
- * largest count that can be addressed at all. The plan requires it baked in
- * from the first line rather than retrofitted, because a channel-count
- * assumption threaded through a scheduler is far more expensive to remove
- * later than to size correctly now. Everything below is a flat array of 32;
- * there is no allocation anywhere in this module.
- *
- * ---------------------------------------------------------------------------
- * The error codes are wire bytes
- * ---------------------------------------------------------------------------
- * Every function here that radiant_api.c forwards returns radiant_channel_err_t, which
- * is a uint8_t whose value IS the byte the serial protocol puts on the wire.
- * That is src/ant_radio.h's convention and it is not negotiable: a code the
- * host does not recognise is worse than a wrong-but-valid one, because a host
- * library typically hangs waiting for a reply it can parse.
- *
- * The values are spelled as literals here rather than taken from
- * src/ant_wire.h, because this header must compile against nothing but
- * radiant_core/include - the gate is
- *
- *   arm-zephyr-eabi-gcc -c -std=c11 -Wall -Wextra -Werror \
- *       -I radiant_core/include -I radiant_core/tests -fsyntax-only \
- *       radiant_core/src/radiant_channel.c
- *
- * and pulling src/ant_wire.h in would make the link layer depend on the serial
- * layer's generated header for no gain. Two spellings of one constant is
- * exactly how a reply gets framed wrong, so the divergence is checked instead
- * of trusted: the _Static_assert block at the bottom of this file fires in any
- * translation unit that has already included src/ant_wire.h. radiant_api.c
- * includes both and must include ant_wire.h first; that is the check, and it
- * runs in the firmware build where both headers are present.
+ * Every function radiant_api.c forwards returns radiant_channel_err_t, a
+ * uint8_t whose value IS the wire byte (src/ant_radio.h's convention - an
+ * unrecognised code hangs a host library). Values are spelled as literals
+ * here rather than pulled from src/ant_wire.h because this header must
+ * compile standalone against radiant_core/include only; the _Static_assert
+ * block at the bottom checks the two spellings agree in any translation unit
+ * (radiant_api.c) that has already included src/ant_wire.h.
  */
 
 #ifndef RADIANT_CHANNEL_H_
@@ -107,12 +64,10 @@ extern "C" {
 
 /*
  * Networks, indexing the keys ant_net.c holds. Three is what every host
- * expects to find and what the ANT+ key at network 0 needs one of; the other
- * two exist because a host that configures network 1 and gets
- * INVALID_NETWORK_NUMBER concludes the dongle is broken rather than that it is
- * frugal. ant_net.c owns the keys; this module owns only the range check,
- * because antr_channel_assign() has to refuse a bad network before any key
- * lookup happens.
+ * expects; a host that configures network 1 and gets INVALID_NETWORK_NUMBER
+ * concludes the dongle is broken rather than frugal. ant_net.c owns the
+ * keys, this module owns only the range check (antr_channel_assign() must
+ * refuse a bad network before any key lookup).
  */
 #define RADIANT_CHANNEL_NETWORK_COUNT 3u
 
@@ -132,23 +87,16 @@ typedef uint8_t radiant_channel_err_t;
 #define RADIANT_CH_ERR_INVALID_PARAM  0x33u /* ANTW_INVALID_PARAMETER_PROVIDED */
 
 /*
- * The two distinctions docs/sdk-ant-contract.md calls out as load-bearing and
- * host-observable, restated here because this is where they are produced:
- *
- *   - a channel NUMBER out of range is RADIANT_CH_ERR_INVALID_MESSAGE; a bad
- *     parameter value is RADIANT_CH_ERR_INVALID_PARAM;
- *   - RADIANT_CH_ERR_WRONG_STATE is a channel that exists in the wrong state;
- *     RADIANT_CH_ERR_NOT_OPENED is a data-transfer call on a channel that is not
- *     on air. They are not interchangeable, and tools/ant_conformance.py
- *     byte-diffs them.
+ * Two host-observable distinctions, not interchangeable (tools/ant_conformance.py
+ * byte-diffs them): channel NUMBER out of range is INVALID_MESSAGE, a bad
+ * parameter value is INVALID_PARAM; WRONG_STATE is a channel in the wrong
+ * state, NOT_OPENED is a data-transfer call on a channel not on air.
  */
 
 /* ---------------------------------------------------------------------------
- * Channel events this module raises
- *
- * These are ANTW_EVENT_* codes and go to the host through radiant_event.c. They
- * are listed here rather than taken from src/ant_wire.h for the same reason
- * the response codes are, and are asserted against it in the same block.
+ * Channel events this module raises: ANTW_EVENT_* codes, sent to the host
+ * through radiant_event.c. Spelled as literals for the same reason as the
+ * response codes above, checked in the same _Static_assert block.
  * ---------------------------------------------------------------------------
  */
 #define RADIANT_CH_EVENT_RX_SEARCH_TIMEOUT   0x01u /* ANTW_EVENT_RX_SEARCH_TIMEOUT */
@@ -167,31 +115,23 @@ typedef uint8_t radiant_channel_err_t;
 #define RADIANT_CH_STATUS_TRACKING   0x03u /* ANTW_STATUS_TRACKING_CHANNEL */
 #define RADIANT_CH_STATUS_STATE_MASK 0x03u /* ANTW_STATUS_CHANNEL_STATE_MASK */
 
-/*
- * The rest of the byte, per Rev 5.1 section 9.5.7.1: bits 2:3 are the network
- * number and bits 4:7 are the channel type. The type values already live in
- * the top nibble (SLAVE 0x00 .. MASTER_TX_ONLY 0x50), so the type is copied
- * across rather than shifted, and getting that wrong is invisible until a host
- * reads a channel type of zero on a live master.
- */
+/* Rest of the byte, per Rev 5.1 9.5.7.1: bits 3:2 network, bits 7:4 channel
+ * type. Type values already live in the top nibble (SLAVE 0x00 ..
+ * MASTER_TX_ONLY 0x50) so it's copied, not shifted - a mistake here is
+ * invisible until a host reads channel type zero on a live master. */
 #define RADIANT_CH_STATUS_NETWORK_SHIFT 2u
 #define RADIANT_CH_STATUS_NETWORK_MASK  0x0Cu
 #define RADIANT_CH_STATUS_TYPE_MASK     0xF0u
 
 /*
- * Bit 4 of the channel type is the master bit, and it is set in exactly the
- * three master types (MASTER 0x10, SHARED_MASTER 0x30, MASTER_TX_ONLY 0x50)
- * and clear in exactly the three slave types (SLAVE 0x00, SHARED_SLAVE 0x20,
- * SLAVE_RX_ONLY 0x40). That is the only bit of the type byte this module
- * interprets: it decides whether opening the channel starts a transmitter or
- * a search, and nothing else here cares.
+ * Bit 4 is the master bit: set for the three master types, clear for the
+ * three slave types. The only bit of the type byte this module interprets -
+ * it decides transmitter vs. search on open.
  *
- * An UNRECOGNISED type byte is accepted rather than refused, and that is a
- * deliberate reading of the contract rather than laxity: antr_channel_assign()
- * may return only NO_ERROR, INVALID_MESSAGE (channel out of range),
- * CHANNEL_IN_WRONG_STATE and INVALID_NETWORK_NUMBER, so there is no permitted
- * code left with which to reject a type. Inventing one would be a wire-visible
- * defect. See the report against docs/sdk-ant-contract.md.
+ * An UNRECOGNISED type byte is accepted, deliberately: antr_channel_assign()
+ * has no permitted error code left to reject a type with (only NO_ERROR,
+ * INVALID_MESSAGE, WRONG_STATE, INVALID_NETWORK_NUMBER), so inventing one
+ * would be wire-visible. See docs/sdk-ant-contract.md.
  */
 #define RADIANT_CH_TYPE_MASTER_BIT 0x10u /* ANTW_CHANNEL_TYPE_MASTER */
 
@@ -201,37 +141,28 @@ typedef uint8_t radiant_channel_err_t;
  */
 
 /*
- * The channel period is in 32768 Hz counts, which is the radio's own timebase
- * and not a millisecond tick - a backend that rounded it to milliseconds would
- * walk a slave's receive window out of the master's slot within a minute.
+ * Period is in 32768 Hz counts, the radio's own timebase - a backend that
+ * rounded to milliseconds would walk a slave's window out of the master's
+ * slot within a minute.
  *
- * 8182 counts is the ANT+ 4.005 Hz default and is what the bench measured:
- * 249,694.8 us nominal against a measured mean of 249,696.4 us over 744
- * intervals, sd 5.4-6.5 us (docs/ant-radio-link.md). Note that this is NOT
- * 8192: src/ant_radio.h's comment calls 8192 "the 4 Hz that most ANT+ profiles
- * use", and 8192 counts is 250,000 us exactly, ten counts and 305 us away from
- * what a real ANT+ master transmits at. Both numbers appear in the tree; only
- * one has been on the air here.
+ * 8182 counts is the ANT+ 4.005 Hz default, matching the bench measurement
+ * (249,696.4 us mean over 744 intervals, docs/ant-radio-link.md). NOT 8192:
+ * that's 250,000 us exactly, 305 us off what a real ANT+ master transmits
+ * at, though src/ant_radio.h's comment calls it "the 4 Hz most profiles use".
  */
 #define RADIANT_CHANNEL_PERIOD_HZ         32768u
 #define RADIANT_CHANNEL_PERIOD_ANT_PLUS   8182u  /* 4.005 Hz, measured */
 
 /*
- * The schedulable range.
+ * The schedulable range. Top is what a uint16_t holds (2.0 s). The floor is
+ * measured, not chosen: a slave answers 2.19 ms after the master's address,
+ * an acknowledged exchange runs ~1.55 ms each way, a burst sustains one
+ * packet per ~3.11 ms (docs/ant-radio-link.md) - so under ~8 ms cannot fit
+ * one slot's exchange. 273 counts is 8.331 ms.
  *
- * A period of zero is not a period, and the top of the range is simply what a
- * uint16_t holds (2.0 s). The floor is derived from the bench rather than
- * chosen: a slave answers its master 2.19 ms after the master's address, an
- * acknowledged exchange runs at ~1.55 ms each way, and a burst sustains one
- * packet per ~3.11 ms (docs/ant-radio-link.md, part 2 turnarounds). A period
- * shorter than about 8 ms therefore cannot contain one slot's exchange, so
- * accepting it would mean promising a schedule the radio can never keep. 273
- * counts is 8.331 ms.
- *
- * radiant_sched.c may raise the floor at init through
- * radiant_channel_period_floor_set() once it has read caps.min_arm_lead_us from
- * the backend, because the real bound is a backend property and this one is
- * only the protocol's.
+ * radiant_sched.c may raise this floor at init via
+ * radiant_channel_period_floor_set() once it knows caps.min_arm_lead_us; this
+ * constant is only the protocol's bound, not the backend's.
  */
 #define RADIANT_CHANNEL_PERIOD_MIN_COUNTS 273u
 #define RADIANT_CHANNEL_PERIOD_MAX_COUNTS 65535u
@@ -242,10 +173,9 @@ typedef uint8_t radiant_channel_err_t;
 #define RADIANT_CHANNEL_SEARCH_INFINITE   255u
 
 /* ANT's default high-priority search timeout is 10 ticks = 25 s. The wildcard
- * sweep's worst case is 8.3 s and its average about 4 s
- * (docs/ant-radio-link.md), so a full sweep fits inside the default with room
- * to spare - which is why radiant_search.c may size its sweep without negotiating
- * with this module. */
+ * sweep's worst case is 8.3 s, average ~4 s (docs/ant-radio-link.md), so a
+ * full sweep fits with room to spare - radiant_search.c can size its sweep
+ * without negotiating with this module. */
 #define RADIANT_CHANNEL_SEARCH_TIMEOUT_DEFAULT 10u
 
 /* Default low-priority timeout: off. Low-priority search yields the radio to
@@ -258,38 +188,29 @@ typedef uint8_t radiant_channel_err_t;
  * Consecutive missed slots before a TRACKING channel gives up and searches
  * again, raising RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH.
  *
- * `[inferred]`. Nothing on this bench has measured ANT's own threshold - doing
- * so needs a master that can be silenced mid-session - so this is a chosen
- * value, not a recovered one. Eight slots is 2.0 s at the ANT+ period, which
- * is long enough that the characterised ~0.4% per-slot collision floor
- * (docs/ant-bench-loss-floor, docs/testing.md) cannot plausibly produce eight
- * in a row, and short enough that a rider notices the re-acquisition rather
- * than the dropout. radiant_sched.c may override it per build if a measurement
- * ever supersedes the guess.
+ * `[inferred]` - ANT's own threshold has not been measured (needs a master
+ * that can be silenced mid-session). 8 slots is 2.0 s at the ANT+ period:
+ * long enough that the ~0.4% per-slot collision floor can't plausibly
+ * produce 8 in a row, short enough a rider notices re-acquisition rather
+ * than dropout. radiant_sched.c may override per build.
  */
 #define RADIANT_CHANNEL_RX_FAIL_TO_SEARCH 8u
 
 /*
- * Consecutive DENIED slots - the radio lent to another stack, never a window
- * that ran - before a TRACKING channel stops pretending it still knows where
- * its master is and promotes into the miss path above.
+ * Consecutive DENIED slots (radio lent to another stack, never ran) before a
+ * TRACKING channel gives up and promotes into the miss path above.
  *
- * WHY THERE IS A BOUND AT ALL, WHEN A DENIAL IS EXPLICITLY NOT EVIDENCE ABOUT
- * THE PEER. Because the guard is finite. A denial still advances the slot clock
- * by one period with no fresh sync, so the accumulated worst-case disagreement
- * grows by RADIANT_CHANNEL_DRIFT_WORST_US every time, and
- * radiant_channel_guard_us() charges it exactly as it charges a miss. Past
- * RADIANT_CHANNEL_GUARD_MAX_US / RADIANT_CHANNEL_DRIFT_WORST_US periods the
- * guard has hit its ceiling and provably no longer covers the disagreement: the
- * channel is listening in the wrong place, and calling that TRACKING is the
- * lie RX_FAIL_GO_TO_SEARCH exists to prevent. The ceiling is not a coincidence
- * - it is the same quantity radiant_channel.c's second _Static_assert names.
+ * A bound exists even though a denial is not evidence about the peer,
+ * because the guard is finite: each denial still advances the slot clock by
+ * one period with no fresh sync, charged by radiant_channel_guard_us()
+ * exactly as a miss is. Past GUARD_MAX_US / DRIFT_WORST_US periods the guard
+ * has hit its ceiling and provably no longer covers the disagreement - the
+ * channel is listening in the wrong place, which RX_FAIL_GO_TO_SEARCH exists
+ * to catch. (Same quantity as radiant_channel.c's second _Static_assert.)
  *
- * 16 slots is ~4 s at the ANT+ period. UNDER A WORKING ARBITER IT NEVER FIRES:
- * the design gives tracked windows an inviolate reservation and takes the
- * second stack's slice out of the search sweep, so sixteen consecutive denials
- * means the arbiter is broken - and this counter, against `missed`, is what
- * says which of the two it was.
+ * 16 slots is ~4 s. Under a working arbiter this never fires - tracked
+ * windows get an inviolate reservation - so 16 consecutive denials means the
+ * arbiter is broken; this counter against `missed` says which it was.
  */
 #define RADIANT_CHANNEL_DENY_TO_SEARCH \
 	(RADIANT_CHANNEL_GUARD_MAX_US / RADIANT_CHANNEL_DRIFT_WORST_US)
@@ -308,75 +229,60 @@ typedef uint8_t radiant_channel_err_t;
 /*
  * ANT's LF clock tolerance, worst case, as one period's worth of microseconds.
  *
- * +/-50 ppm at each end (sdk-ant's compatibility.rst, and not proprietary to
- * it - any ANT datasheet states the same figure) is +/-100 ppm relative; over
- * one RADIANT_CHANNEL_PERIOD_ANT_PLUS period (~249.7 ms) that is +/-25 us THAT
- * PERIOD ALONE could add, with no accumulated drift from a previous miss.
+ * +/-50 ppm at each end (any ANT datasheet) is +/-100 ppm relative; over one
+ * ~249.7 ms period that's +/-25 us that period alone could add, with no
+ * accumulated drift from a prior miss.
  *
- * A BUDGET, NOT HEADROOM. A master built to the tolerance limit sits exactly on
- * this figure. It is the per-miss term of the guard below for that reason: an
- * extrapolated period is one whose real error is unmeasured, so it is charged
- * at the spec bound rather than at what this master has been doing.
+ * A budget, not headroom - a spec-limit master sits exactly here. Used as the
+ * guard's per-miss term below: an extrapolated period's real error is
+ * unmeasured, so it's charged at the spec bound rather than at what this
+ * master has actually been doing.
  */
 #define RADIANT_CHANNEL_DRIFT_WORST_US 25u
 
-/*
- * The widest the guard ever gets, and the value it takes whenever the estimator
- * has nothing to say: RADIANT_CHANNEL_RX_FAIL_TO_SEARCH * the figure above, with
- * margin. This was the whole guard before the estimator existed.
- */
+/* Widest the guard ever gets, and its value whenever the estimator has
+ * nothing to say: RX_FAIL_TO_SEARCH * DRIFT_WORST_US, with margin. This was
+ * the whole guard before the estimator existed. */
 #define RADIANT_CHANNEL_GUARD_MAX_US 400u
 
 /*
- * The narrowest the guard ever gets, before radiant_channel_guard_floor_set()
+ * Narrowest the guard ever gets, before radiant_channel_guard_floor_set()
  * raises it for a backend that needs more.
  *
- * DELIBERATELY FAR ABOVE WHAT THE MEASUREMENT JUSTIFIES. The measured residual
- * on this bench is 0.009 ms - nine microseconds - so eleven times that is not a
- * tight fit, it is a refusal to fit tightly. The failure mode of a guard that
- * is too narrow is the silent one radiant_radio_hal.h documents at length: yield
- * falls at the same order as the collision floor and no error code is raised
- * anywhere. There is no measurement on this bench that would tell the two
- * apart, so the floor is set where it does not need one.
- *
- * Lower it only against a Phase 0 sensitivity ladder that shows what it costs.
+ * Deliberately far above the measured residual (9 us on this bench) - not a
+ * tight fit, a refusal to fit tightly. A too-narrow guard fails silently
+ * (yield drops near the collision floor, no error code), and nothing on this
+ * bench distinguishes the two, so the floor is set where it doesn't need to.
+ * Lower it only against a Phase 0 sensitivity ladder showing the cost.
  */
 #define RADIANT_CHANNEL_GUARD_MIN_US 100u
 
-/*
- * How many measured residuals the guard is sized at. Four, so an ordinary
- * excursion to several times the running average is still comfortably inside
- * the window before the floor is even reached.
- */
+/* How many measured residuals the guard is sized at: an ordinary excursion
+ * to several times the running average still stays inside the window. */
 #define RADIANT_CHANNEL_GUARD_K 4u
 
 /*
  * Consecutive clean slots before the estimator is allowed to narrow anything.
- *
- * An unlocked estimator must never narrow a window: at acquisition the residual
- * has been measured zero times, and a guard sized from no evidence is a guard
- * sized from luck. Eight is one EWMA time constant at the 1/8 weight used
- * below, so by the time it is trusted the average is genuinely an average.
+ * An unlocked estimator must never narrow - at acquisition the residual has
+ * zero measurements, so a guard from no evidence is a guard from luck. 8 is
+ * one EWMA time constant at the 1/8 weight used below, so the average is
+ * genuinely an average by the time it's trusted.
  */
 #define RADIANT_CHANNEL_GUARD_LOCK_SLOTS 8u
 
 /*
  * The clock accuracy every constant above silently assumes, in ppm.
- *
- * RADIANT_CHANNEL_DRIFT_WORST_US is +/-50 ppm at each end over one ANT+ period.
- * Naming the 50 makes the assumption arithmetic instead of prose, because
- * radiant_channel_clock_accuracy_set() below lets a master announce a WORSE
- * one - and the receiver's own end of the budget does not go away when it does.
+ * DRIFT_WORST_US is +/-50 ppm at each end over one ANT+ period; naming the 50
+ * makes it arithmetic rather than prose, since radiant_channel_clock_accuracy_set()
+ * lets a master announce a worse one without the receiver's own budget going away.
  */
 #define RADIANT_CHANNEL_CLOCK_PPM_ANT 50u
 
 /*
- * The widest announcement that is taken at face value. A node claiming worse
- * than 1000 ppm is claiming a clock that cannot hold a channel at all, and a
- * receiver that sized a window from it would be sizing it from a typo or from
- * an attacker. Clamped rather than rejected: the announcement is still
- * evidence that the master is bad, and the widest window this core will build
- * is a better answer than the narrowest.
+ * Widest announcement taken at face value. Above 1000 ppm the master's clock
+ * couldn't hold a channel at all, so it's a typo or an attacker rather than
+ * a real bound - clamped rather than rejected, since the widest window this
+ * core builds is still a better answer than the narrowest.
  */
 #define RADIANT_CHANNEL_CLOCK_PPM_MAX 1000u
 
@@ -386,34 +292,29 @@ typedef uint8_t radiant_channel_err_t;
  */
 
 /*
- * The five states, and why there are five rather than the four the wire names.
+ * Five states, not the four the wire names.
  *
  *   UNASSIGNED --assign--> ASSIGNED --open--> SEARCHING --acquire--> TRACKING
  *        ^                    |  ^                |                     |
  *        +----unassign--------+  +----------------+---------------------+
  *                                          via CLOSING
  *
- * "CONFIGURED" is deliberately NOT a state. src/ant_radio.h requires
- * antr_channel_open_with_offset() to answer ANTW_CHANNEL_ID_NOT_SET when the
- * channel ID was never set, which reads like a state, but every other
- * configuration call is legal both before and after the ID is written and the
- * wire has no status value for it. It is a flag on an ASSIGNED channel, and
- * modelling it as a state would have produced a transition table with a dozen
- * entries that all mean "still ASSIGNED".
+ * "CONFIGURED" is deliberately not a state: the ID-not-set flag every other
+ * config call ignores would have produced a transition table with a dozen
+ * entries all meaning "still ASSIGNED", so it's just a flag on ASSIGNED.
  *
- * CLOSING is the state the wire does not name and the contract requires:
- * "the channel is not closed when this returns, it is closing", and the host
- * learns it is done from ANTW_EVENT_CHANNEL_CLOSED. A channel with a radio
- * operation in flight cannot become ASSIGNED the instant close() returns,
- * because the operation's terminal event has not arrived yet and unassigning
- * underneath it would release state the backend still refers to. So close()
- * parks the channel here, and the terminal event completes the transition.
+ * CLOSING is the state the wire doesn't name but the contract requires ("not
+ * closed when this returns, it is closing", ANTW_EVENT_CHANNEL_CLOSED tells
+ * the host when done). A channel with an operation in flight can't become
+ * ASSIGNED the instant close() returns - the terminal event hasn't arrived,
+ * and unassigning underneath it would release state the backend still
+ * refers to - so close() parks it here until the terminal event completes
+ * the transition.
  *
- * radiant_channel_status_get() reports CLOSING as whatever it was closing FROM -
- * SEARCHING or TRACKING - not as ASSIGNED. Reporting ASSIGNED early would tell
- * a host it may unassign a channel that radiant_channel_unassign() will then
- * refuse, and a status byte that disagrees with the next call's return code is
- * worse than one that lags by a millisecond.
+ * radiant_channel_status_get() reports CLOSING as whatever it was closing
+ * FROM (SEARCHING/TRACKING), not ASSIGNED - reporting ASSIGNED early would
+ * let a host try to unassign a channel that radiant_channel_unassign() would
+ * then refuse.
  */
 enum radiant_channel_state {
 	RADIANT_CH_STATE_UNASSIGNED = 0,
@@ -424,14 +325,10 @@ enum radiant_channel_state {
 	RADIANT_CH_STATE_COUNT
 };
 
-/*
- * There is no stored "why am I closing" field, and that is worth stating
- * because the obvious design has one. The events that distinguish the three
- * reasons are all raised at the moment the reason is known - a search timeout
- * raises RADIANT_CH_EVENT_RX_SEARCH_TIMEOUT immediately and only the trailing
- * RADIANT_CH_EVENT_CHANNEL_CLOSED is deferred - so by the time the terminal event
- * completes the close there is nothing left for the reason to select.
- */
+/* No stored "why am I closing" field: each reason's event is raised the
+ * moment it's known (search timeout raises RX_SEARCH_TIMEOUT immediately;
+ * only the trailing CHANNEL_CLOSED is deferred), so there's nothing left
+ * for a stored reason to select by the time the close completes. */
 
 /* ---------------------------------------------------------------------------
  * The event sink - implemented elsewhere, resolved at link time
@@ -441,22 +338,17 @@ enum radiant_channel_state {
 /*
  * One channel event, on its way to the host.
  *
- * IMPLEMENTED BY radiant_event.c, NOT BY radiant_channel.c, and by a test double in
- * radiant_core/tests/src/test_channel.c. This mirrors the inversion src/ant_radio.h
- * already uses for antr_on_message(): there is no registration call, the
- * symbol is resolved at link time, and exactly one translation unit in the
- * image defines it. A registration pointer would buy nothing here - there is
- * never more than one consumer - and would cost a null check on every event.
+ * Implemented by radiant_event.c, not by radiant_channel.c (a test double in
+ * radiant_core/tests/src/test_channel.c otherwise) - resolved at link time,
+ * the same inversion src/ant_radio.h uses for antr_on_message(). No
+ * registration pointer needed since there's never more than one consumer.
  *
  * @param channel     0 .. RADIANT_CHANNEL_COUNT-1.
- * @param event_code  An RADIANT_CH_EVENT_* value, which is an ANTW_EVENT_* wire
- *                    byte. radiant_event.c wraps it in a channel-response message.
+ * @param event_code  An RADIANT_CH_EVENT_* value (an ANTW_EVENT_* wire byte).
  *
- * Called from whatever context provoked the transition: the bridge's parser
- * thread for a host-initiated close, and radiant_sched.c's context - which may be
- * a radio callback - for a search timeout or a completed close. The
- * implementation must therefore obey the tighter of the two contracts and not
- * block. It must not call back into radiant_channel.
+ * Called from whatever context provoked the transition - the bridge's parser
+ * thread, or radiant_sched.c's context which may be a radio callback - so the
+ * implementation must not block and must not call back into radiant_channel.
  */
 void radiant_channel_event_out(uint8_t channel, uint8_t event_code);
 
@@ -474,16 +366,13 @@ void radiant_channel_init(void);
  * antr_stack_reset(): every channel closed and unassigned, synchronously.
  *
  * Channel-closed events raised as a side effect ARE delivered - the contract
- * says so, and the bridge discards them for a short window afterwards because
- * a real stick emits nothing between the reset command and the startup
- * message. Suppressing them here instead would make the backend's behaviour
- * depend on a bridge-side timing window it cannot see.
+ * requires it, and the bridge discards them for a short window afterwards
+ * (a real stick emits nothing between reset and the startup message).
  *
- * Any operation in flight is orphaned rather than waited on: this module has
- * no way to abort one, so radiant_sched.c must call radiant_radio_abort() before this
- * and feed the terminal event in afterwards. A terminal event for an orphaned
- * op arrives at a channel with no binding and is counted as stale, which is
- * exactly the same path a late event takes.
+ * Any operation in flight is orphaned rather than waited on - this module
+ * can't abort one, so radiant_sched.c must call radiant_radio_abort() first
+ * and feed the terminal event in afterwards; it arrives at a channel with no
+ * binding and is counted as stale, same path as any late event.
  */
 void radiant_channel_reset_all(void);
 
@@ -500,11 +389,10 @@ void radiant_channel_period_floor_set(uint16_t counts);
 /*
  * antr_channel_assign(). The channel must be UNASSIGNED.
  *
- * Assignment puts nothing on air and resets every configuration byte to its
- * default, including clearing the channel ID: a channel reassigned to a
- * different type must not inherit the last session's device number, because a
- * host that assigns and opens without setting an ID would then silently track
- * the wrong sensor instead of getting RADIANT_CH_ERR_ID_NOT_SET.
+ * Resets every configuration byte to default, including the channel ID - a
+ * reassigned channel must not inherit the last session's device number, or a
+ * host that opens without setting an ID would silently track the wrong
+ * sensor instead of getting RADIANT_CH_ERR_ID_NOT_SET.
  *
  * Returns RADIANT_CH_OK, RADIANT_CH_ERR_INVALID_MESSAGE (channel out of range),
  * RADIANT_CH_ERR_WRONG_STATE (already assigned) or RADIANT_CH_ERR_INVALID_NETWORK.
@@ -516,9 +404,9 @@ radiant_channel_err_t radiant_channel_assign(uint8_t channel, uint8_t type,
  * antr_channel_unassign(). The channel must be ASSIGNED and closed.
  *
  * Returns RADIANT_CH_OK, RADIANT_CH_ERR_INVALID_MESSAGE or RADIANT_CH_ERR_WRONG_STATE
- * (never assigned, still open, or still closing). Closing it first would
- * swallow the ANTW_EVENT_CHANNEL_CLOSED the host is waiting on, which is why
- * this refuses rather than obliges.
+ * (never assigned, still open, or still closing). Refuses rather than
+ * closing it first, which would swallow the CHANNEL_CLOSED event a host
+ * may be waiting on.
  */
 radiant_channel_err_t radiant_channel_unassign(uint8_t channel);
 
@@ -528,25 +416,17 @@ radiant_channel_err_t radiant_channel_unassign(uint8_t channel);
  *
  * @param offset  The one-shot start offset, in the same 32768 Hz counts the
  *                period uses.
- * @param now     radiant_radio_now(). Passed in rather than read here, because
- *                this module calls no HAL function and because a test must be
- *                able to open a channel at a chosen instant.
+ * @param now     radiant_radio_now(). Passed in since this module calls no
+ *                HAL function and a test must open a channel at a chosen instant.
  *
  * A MASTER's first transmission is scheduled one FULL CHANNEL PERIOD after
- * this call, plus `offset`. That is measured, not assumed: time from
- * MESG_OPEN_CHANNEL to the first EVENT_TX was one full period in 8 of 8 runs
- * (docs/ant-radio-link.md, "Master open-time"). A master does not transmit
- * when you open it. Reproducing that is this function's job, and a host that
- * expects data immediately after opening a master is going to wait a slot.
- *
- * The offset is applied ON TOP of that period rather than instead of it, which
- * is a reading of the contract and not a quotation from it - see the report.
- * The alternative reading makes offset 0 mean "transmit now", which the
- * measurement falsifies.
+ * this call, plus `offset` - measured, not assumed: 8 of 8 runs showed one
+ * full period from MESG_OPEN_CHANNEL to first EVENT_TX (docs/ant-radio-link.md).
+ * The offset is applied on top of that period, not instead of it - offset 0
+ * does not mean "transmit now", which the measurement falsifies.
  *
  * A SLAVE enters SEARCHING with its first receive window at now + offset and
- * its search deadline at the high-priority timeout beyond that. There is no
- * period wait: a searching slave has nothing to align to yet.
+ * search deadline beyond that - no period wait, it has nothing to align to yet.
  *
  * Returns RADIANT_CH_OK, RADIANT_CH_ERR_INVALID_MESSAGE (channel out of range),
  * RADIANT_CH_ERR_WRONG_STATE (unassigned, or already open or closing) or
@@ -558,19 +438,15 @@ radiant_channel_err_t radiant_channel_open(uint8_t channel, uint16_t offset,
 /*
  * antr_channel_close(). The channel must be on air.
  *
- * If no radio operation is bound to the channel the close completes here and
- * RADIANT_CH_EVENT_CHANNEL_CLOSED is raised before this returns. If one is bound,
- * the channel enters RADIANT_CH_STATE_CLOSING and the event is raised when
- * radiant_channel_on_terminal() delivers that operation's terminal event - which
- * WILL arrive, aborted or not, because the HAL guarantees exactly one terminal
- * event per accepted operation and delivers it even for a cancelled one.
- *
- * Either way the event is raised exactly once per successful close. A host
- * library that reopens on the event hangs without it.
+ * If no radio operation is bound, the close completes here and
+ * CHANNEL_CLOSED is raised before this returns. If one is bound, the channel
+ * enters CLOSING and the event is raised when radiant_channel_on_terminal()
+ * delivers that operation's terminal event - which WILL arrive, aborted or
+ * not, since the HAL guarantees exactly one terminal event per accepted
+ * operation even for a cancelled one. Either way, raised exactly once.
  *
  * Returns RADIANT_CH_OK, RADIANT_CH_ERR_INVALID_MESSAGE or RADIANT_CH_ERR_WRONG_STATE
- * (not open). Calling it twice returns RADIANT_CH_ERR_WRONG_STATE the second time
- * rather than raising a second event.
+ * (not open). A second call returns WRONG_STATE rather than a second event.
  */
 radiant_channel_err_t radiant_channel_close(uint8_t channel, radiant_time_t now);
 
@@ -578,11 +454,9 @@ radiant_channel_err_t radiant_channel_close(uint8_t channel, radiant_time_t now)
  * Configuration - legal only on an ASSIGNED, closed channel unless said
  * otherwise
  *
- * The rule and its reason, from docs/sdk-ant-contract.md: the ID, the period,
- * the RF frequency, the CRC mode and the frequency-hop table all retune the
- * radio, and retuning underneath a live host session is worse than refusing.
- * The search and power settings do not retune anything, so they need only an
- * assigned channel.
+ * Per docs/sdk-ant-contract.md: ID, period, RF frequency, CRC mode and
+ * frequency-hop table all retune the radio, so they require a closed channel.
+ * Search and power settings retune nothing and need only an assigned channel.
  * ---------------------------------------------------------------------------
  */
 
@@ -592,14 +466,11 @@ radiant_channel_err_t radiant_channel_id_set(uint8_t channel, uint16_t device_nu
 				     uint8_t device_type, uint8_t trans_type);
 
 /*
- * antr_channel_id_get(). On a TRACKING slave this reports the ID actually
- * acquired, with the wildcards resolved, which is how a host learns which
- * sensor it found; otherwise it reports what was configured.
- *
- * The acquired ID is kept separately from the configured one and is discarded
- * when the channel closes. A channel reopened after a wildcard search must
- * search again rather than silently narrow to last session's sensor, and the
- * host can still read the ID it found for as long as the channel is up.
+ * antr_channel_id_get(). On a TRACKING slave reports the ID actually
+ * acquired (wildcards resolved), otherwise what was configured. The
+ * acquired ID is kept separately and discarded when the channel closes, so
+ * a reopened channel searches again rather than silently narrowing to last
+ * session's sensor.
  *
  * Returns OK or INVALID_MESSAGE. Legal on an unassigned channel - the answer
  * is the all-zero ID, not an error.
@@ -619,14 +490,14 @@ radiant_channel_err_t radiant_channel_rf_freq_set(uint8_t channel, uint8_t freq)
 radiant_channel_err_t radiant_channel_rf_freq_get(uint8_t channel, uint8_t *out);
 
 /*
- * antr_channel_radio_tx_power_set(). Requires an ASSIGNED channel and is legal
- * while open - power is the one radio property that does not move the channel
- * off the air to change.
+ * antr_channel_radio_tx_power_set(). Requires an ASSIGNED channel, legal
+ * while open - power is the one radio property that doesn't need to leave
+ * the air to change.
  *
- * Bit 7 of `level` (0x80) means `custom` names a raw part-specific value
- * instead. Levels 0..5 are -20, -12, -4, 0, +4 and +8 dBm; level 5 exists only
- * on the nRF52820/52833/52840, and this module accepts it because whether the
- * part can produce it is a backend question that radiant_sched.c answers against
+ * Bit 7 of `level` (0x80) means `custom` names a raw part-specific value.
+ * Levels 0..5 are -20,-12,-4,0,+4,+8 dBm; level 5 exists only on
+ * nRF52820/52833/52840 and is accepted here regardless, since whether the
+ * part can produce it is checked by radiant_sched.c against
  * caps.tx_power_max_dbm when it arms.
  *
  * Returns OK, INVALID_MESSAGE, WRONG_STATE (unassigned) or INVALID_PARAM
@@ -649,12 +520,11 @@ radiant_channel_err_t radiant_channel_lp_search_timeout_set(uint8_t channel,
 						    uint8_t timeout);
 
 /*
- * antr_channel_radio_crc_mode_set(). The byte is opaque - src/ant_wire.h names
- * no constants for it, because nothing in this project sends anything but the
- * default - so it is validated against this module's supported set, which is
- * exactly {RADIANT_CH_CRC_MODE_DEFAULT}. A backend that accepted and ignored a
- * shorter CRC would give a host a link that works and framing that does not.
- * Returns OK, INVALID_MESSAGE, WRONG_STATE or INVALID_PARAM.
+ * antr_channel_radio_crc_mode_set(). Opaque byte, validated against this
+ * module's supported set - exactly {RADIANT_CH_CRC_MODE_DEFAULT} - since a
+ * backend that silently accepted a shorter CRC would give a host a link
+ * that works and framing that doesn't. Returns OK, INVALID_MESSAGE,
+ * WRONG_STATE or INVALID_PARAM.
  */
 #define RADIANT_CH_CRC_MODE_DEFAULT 0x00u
 radiant_channel_err_t radiant_channel_crc_mode_set(uint8_t channel, uint8_t mode);
@@ -672,22 +542,19 @@ radiant_channel_err_t radiant_channel_freq_hop_table_get(uint8_t channel,
 /* ---------------------------------------------------------------------------
  * Search configuration held per channel
  *
- * radiant_search.c owns the sweep, the seen-cache and scan mode; it does not own
- * the per-channel bytes the host writes, because those share this module's
- * state machine and its "assigned channel" precondition. It reads them back
- * through the getters below.
+ * radiant_search.c owns the sweep, seen-cache and scan mode, but not the
+ * per-channel bytes the host writes - those share this module's state
+ * machine and "assigned channel" precondition, and are read back through
+ * the getters below.
  * ---------------------------------------------------------------------------
  */
 
 /*
- * antr_search_waveform_set(). Stored and never read - radiant_search.c has no
- * duty-cycle switch, and this backend runs one search geometry. Nothing here
- * refuses the setting outright, because sdk-ant names exactly two legal
- * values for it - 316, the default window width, and 97, the fast one - and
- * says "Do not use custom values." A two-value enum is a cheap contract to
- * keep even while ignoring what it selects: accept the two real values,
- * refuse everything else, rather than storing an arbitrary uint16_t that
- * could never have meant anything. See docs/sdk-ant-comparison.md item 2.
+ * antr_search_waveform_set(). Stored and never read - this backend runs one
+ * search geometry. sdk-ant names exactly two legal values (316 default,
+ * 97 fast) and forbids custom ones, so only those two are accepted rather
+ * than storing an arbitrary uint16_t that could never mean anything. See
+ * docs/sdk-ant-comparison.md item 2.
  * Returns OK, INVALID_MESSAGE, WRONG_STATE (unassigned) or INVALID_PARAM
  * (neither DEFAULT nor FAST).
  */
@@ -699,15 +566,12 @@ radiant_channel_err_t radiant_channel_search_waveform_get(uint8_t channel,
 						  uint16_t *out);
 
 /*
- * antr_prox_search_set(). PERMANENT LIMITATION, not a gap: nothing reads
- * prox_threshold back - radiant_search.c's own RSSI gate is cfg.min_rssi_dbm,
- * and nothing wires a channel's threshold to it - and the capability bit
- * ANTW_CAPABILITIES_PROX_SEARCH_ENABLED is not advertised by
- * antr_capabilities_get(). Storing a non-zero threshold that nothing enforces
- * is the trap docs/gotchas.md warns against: a host that asked for proximity
- * pairing would believe distant sensors are being filtered when none are. So
- * only 0 (off) is accepted - it asks for nothing this stack does not already
- * do - and any non-zero threshold is refused rather than silently dropped.
+ * antr_prox_search_set(). PERMANENT LIMITATION, not a gap: nothing wires a
+ * channel's prox_threshold to radiant_search.c's RSSI gate, and the
+ * capability bit is not advertised. Storing a non-zero threshold that
+ * nothing enforces is the trap docs/gotchas.md warns against - a host would
+ * believe distant sensors are filtered when none are. So only 0 (off) is
+ * accepted; any non-zero threshold is refused rather than silently dropped.
  * See docs/sdk-ant-comparison.md item 2.
  * Returns OK, INVALID_MESSAGE, WRONG_STATE or INVALID_PARAM (threshold > 10,
  * or any non-zero threshold).
@@ -737,10 +601,9 @@ radiant_channel_err_t radiant_channel_sharing_cycles_get(uint8_t channel,
 						 uint8_t *out);
 
 /*
- * antr_sdu_mask_config(): the per-channel half of selective data update. Only
- * the channel range is checked here and the byte is stored verbatim; the
- * mask-index range check that produces INVALID_PARAM belongs to whoever owns
- * the mask table, because that is where the mask count lives.
+ * antr_sdu_mask_config(): the per-channel half of selective data update.
+ * Only the channel range is checked; the byte is stored verbatim, and the
+ * mask-index INVALID_PARAM check belongs to whoever owns the mask table.
  * Returns OK or INVALID_MESSAGE.
  */
 #define RADIANT_CH_SDU_MASK_OFF 0xFFu /* ANTW_INVALID_SDU_MASK */
@@ -755,10 +618,9 @@ radiant_channel_err_t radiant_channel_sdu_mask_config_get(uint8_t channel,
  */
 
 /*
- * antr_channel_status_get(). Legal on an unassigned channel - that is the
- * answer, not an error - which is why every host opens a session by reading
- * it. Byte layout: state in bits 1:0, network in bits 3:2, channel type in
- * bits 7:4.
+ * antr_channel_status_get(). Legal on an unassigned channel - that's the
+ * answer, not an error, which is why every host opens a session by reading
+ * it. Byte layout: state bits 1:0, network bits 3:2, channel type bits 7:4.
  *
  * Returns OK or INVALID_MESSAGE.
  */
@@ -793,177 +655,99 @@ uint8_t radiant_channel_network_get(uint8_t channel);
  */
 
 /*
- * When this channel next wants the radio: the t_sync of its next slot for a
- * master, the opening edge of its next receive window for a slave.
+ * When this channel next wants the radio: t_sync of its next slot for a
+ * master, opening edge of its next receive window for a slave.
  * RADIANT_TIME_NEVER when the channel is not on air.
  *
- * radiant_sched.c subtracts caps.ramp_up_us and caps.min_arm_lead_us; those are
- * backend properties and none of them belong here. How far either side of this
- * instant the window reaches is radiant_channel_guard_us() below, and the
- * argument for that number - including why it is no longer the constant this
- * paragraph used to describe - is on its declaration.
+ * radiant_sched.c subtracts caps.ramp_up_us and caps.min_arm_lead_us
+ * (backend properties, not this module's business). Window width either
+ * side of this instant is radiant_channel_guard_us() below.
  *
- * THE SPEC NUMBER IS +/-25 US, AND IT IS A BUDGET, NOT HEADROOM.
- * RADIANT_CHANNEL_DRIFT_WORST_US carries it; consecutive misses compound it,
- * because radiant_channel_on_slot_missed() extrapolates t_next by one more
- * period per miss without a fresh sync, so N consecutive misses carry up to
- * N * 25 us of additional worst-case disagreement by the time a receive window
- * is next armed against this t_sync. The two BUILD_ASSERTs in radiant_api.c
- * turn that into a checked invariant instead of a claim - one for the ceiling
- * the estimator falls back to, one for the floor it may narrow to.
+ * The spec figure is +/-25 us PER PERIOD, a budget not headroom
+ * (RADIANT_CHANNEL_DRIFT_WORST_US), and it compounds: each miss extrapolates
+ * t_next by one more period with no fresh sync, so N consecutive misses
+ * carry up to N*25 us of added worst-case disagreement. Checked by the two
+ * BUILD_ASSERTs in radiant_api.c (ceiling and floor).
  */
 radiant_time_t radiant_channel_next_slot(uint8_t channel);
 
 /*
  * How far either side of that instant this channel's receive window should
  * reach, in microseconds. Never zero; never above RADIANT_CHANNEL_GUARD_MAX_US
- * unless this channel's master has announced a clock that needs more, which is
- * the one thing that raises the ceiling and is described at the end of this
- * comment.
+ * unless the master has announced a clock needing more (see below).
  *
- * WHY THIS IS NOT A CONSTANT ANY MORE. The paragraph above sizes the guard from
- * the spec's worst case, compounded over eight misses, and arrives at 400 us.
- * The residual this bench actually measures - t_sync minus the predicted
- * instant, on the radio's own clock - is 9 us. Every tracked slot was therefore
- * buying 800 us of receive to cover about nine microseconds of real error.
+ * Not a constant because the spec-worst-case-over-8-misses figure is 400 us,
+ * but the bench measures a 9 us residual - so tracked slots were buying 800 us
+ * of receive (contention, current draw, matcher noise) to cover ~9 us of real
+ * error. Instead the channel keeps an EWMA of |t_sync - predicted| over clean
+ * slots, and the guard is:
  *
- * That is not free. Window occupancy is what turns into contention between
- * tracked channels, into aborted scan chunks, and into receive current for
- * anything running this core on a battery; a window forty times wider than it
- * needs to be also arms the address matcher against forty times as much noise.
+ *     clamp(floor, K * average + miss_count * DRIFT_WORST, GUARD_MAX)
  *
- * So: measure the master rather than assume the spec bound. The channel keeps
- * an exponential average of |t_sync - predicted| across clean consecutive
- * slots, and the guard is
+ * First term is what this master has been measured doing, with margin.
+ * Second is what an unmeasured extrapolated period could be doing, charged
+ * at the spec bound. A well-behaved link runs narrow and widens automatically
+ * as it loses slots.
  *
- *     clamp(floor,
- *           K * average + miss_count * DRIFT_WORST,
- *           GUARD_MAX)
+ * GUARD_MAX_US unconditionally whenever the estimator has nothing to say
+ * (not TRACKING, just acquired, or after RX_FAIL_GO_TO_SEARCH) - narrowing on
+ * no evidence is the one thing this must never do; the failure mode has no
+ * error code.
  *
- * Two terms, for two different things. The first is what this master has been
- * measured doing, times a safety factor. The second is what an extrapolated
- * period could be doing and has not been measured doing - after a miss the
- * clock has run one more period with no fresh sync, so that period is charged
- * at the spec bound. Together they mean a well-behaved link runs on a narrow
- * window and reopens the old wide one automatically as it starts to lose slots.
+ * Everything above assumes ANT's +/-50 ppm bound, which a crystal-less
+ * coin-cell node's RC oscillator (+/-250-500 ppm) blows through - at a 2 s
+ * period that's 600 us of disagreement against a 400 us ceiling, so the
+ * channel is lost silently and the estimator never gets a clean slot to
+ * lock on. radiant_channel_clock_accuracy_set() lets such a master announce
+ * its own ppm, which scales both terms (per-miss charge and ceiling) in
+ * proportion, and raises the floor to cover one such period.
  *
- * RADIANT_CHANNEL_GUARD_MAX_US, unconditionally, whenever the estimator has
- * nothing to say: on a channel that is not TRACKING, immediately after
- * acquisition, and after RX_FAIL_GO_TO_SEARCH. Narrowing on no evidence is the
- * one thing this must never do, because the failure mode has no error code.
+ * AN ANNOUNCEMENT NEVER NARROWS ANYTHING - only the measured residual
+ * estimator does, since a claim is not a measurement. A build with no
+ * announcement is byte-for-byte the guard computed before the field existed.
  *
- * THE ANNOUNCED CEILING, AND WHY BOTH TERMS SCALE WITH IT.
+ * No period (rate) estimator, deliberately: radiant_channel_on_slot()
+ * re-anchors on every received frame, so a period correction would only
+ * affect MISSED slots, where the guard already charges the safer spec-bound
+ * estimate; and acting on the slot clock instead of the window risks walking
+ * off the master silently over minutes. struct chan's 72-byte/32-channel
+ * budget also doesn't have room for one. If radiant_channel_residual_us()
+ * ever reads tens of microseconds on a link that isn't losing slots, that's
+ * the signal this needs revisiting.
  *
- * Every number above descends from ANT's +/-50 ppm bound. A coin-cell node
- * running its RC oscillator with no 32 kHz crystal is at +/-250 to 500 ppm and
- * is not covered by any of them: at a 2 s heartbeat, 300 ppm is 600 us of
- * per-period disagreement against a 400 us ceiling, so every slot lands outside
- * every window and the channel is lost with no error code anywhere - the
- * estimator never even locks, because it is never given a clean slot to
- * measure. radiant_channel_clock_accuracy_set() takes that master's own
- * statement of its clock and re-derives the two terms from it:
- *
- *   - the per-miss charge becomes one period at (announced + our own 50) ppm
- *     instead of the flat RADIANT_CHANNEL_DRIFT_WORST_US, and the floor rises
- *     to cover one such period, because the guard must cover the period being
- *     received before it covers any extrapolated one;
- *   - the ceiling rises in the same proportion, keeping GUARD_MAX's arithmetic
- *     - sixteen worst-case periods - rather than the number 400.
- *
- * AN ANNOUNCEMENT NEVER NARROWS ANYTHING. A node claiming 20 ppm gets exactly
- * the window a node claiming nothing gets, and the reason is the asymmetry this
- * whole file is written around: a claim is not a measurement. Only the residual
- * estimator narrows, because only it has looked. So the guard is monotonic in
- * the announcement, and a build with no announcement anywhere is byte-for-byte
- * the guard this core computed before the field existed.
- *
- * ONE ESTIMATOR, NOT TWO, AND THE SECOND ONE'S ABSENCE IS A DECISION.
- *
- * The obvious companion to this is an estimate of the master's PERIOD - a
- * fixed-point ppm correction, averaged the same way - so that t_next could be
- * extrapolated at the master's real rate instead of the nominal one. It is not
- * here, and it was left out rather than forgotten:
- *
- *   - It has no consumer. radiant_channel_on_slot() re-anchors on every frame
- *     that arrives, so a period correction changes nothing at all except across
- *     MISSED slots - and the guard already charges every extrapolated period at
- *     the spec's worst case, which is strictly safer than charging it at an
- *     estimate.
- *   - Where it would act, it would act on the slot clock rather than on the
- *     window width. That is a behaviour change with exactly the silent failure
- *     mode this whole feature is written around: a period estimate that is
- *     slightly wrong walks the window off the master over minutes, with no
- *     error code anywhere, and the only instrument that could grade it is the
- *     Phase 0 sensitivity ladder, which has not been run yet.
- *   - struct chan is under a checked 72-byte budget at 32 copies. Carrying a
- *     second estimator that nothing reads spends that budget on nothing.
- *
- * If the residual EWMA ever stops converging on a real master - if
- * radiant_channel_residual_us() reads tens of microseconds on a link that is
- * not losing slots - that is the signal that this decision needs revisiting,
- * because a large steady residual is a period error by another name.
- *
- * WHY AN EWMA AND NOT A KALMAN FILTER. A Kalman filter is the right tool when
- * you want the optimal estimate of a state with known dynamics, and it would
- * genuinely be better here in one respect: it carries a variance, so the guard
- * could be sized as mean + k*sigma rather than as k*mean, which is what a
- * window that must cover nearly every residual actually wants.
- *
- * It buys nothing today, and that is measurable rather than an opinion. The
- * measured residual is 9 us; k*avg is 36 us; the floor is 100 us. THE CLAMP
- * DECIDES THE ANSWER, so a better estimate of the 36 produces exactly the same
- * window. Against that, a filter needs multiplies and a division in the radio
- * event path, in a module with no float and a checked 72-byte-per-channel
- * budget at 32 copies.
- *
- * The condition that changes the answer is concrete: if a Phase 0 sensitivity
- * ladder ever justifies dropping RADIANT_CHANNEL_GUARD_MIN_US to the same order
- * as k*avg, the estimator stops being masked and its quality starts to matter.
- * At that point the cheap step is not a Kalman filter but a decaying MAXIMUM
- * rather than a mean - the guard needs the worst residual, not the typical one,
- * and a decaying max estimates that directly at the same cost as this. A
- * two-state (phase, period) filter is the step after that, and it is the same
- * behaviour change - and the same silent failure mode - as the period estimator
- * described above.
+ * EWMA rather than a Kalman filter: a filter's variance would let the guard
+ * use mean + k*sigma instead of k*mean, but at the measured 9 us residual the
+ * 100 us floor dominates the clamp regardless, so a better estimate changes
+ * nothing today - and it costs multiplies/division with no float support and
+ * the same tight per-channel budget. Revisit only if a sensitivity ladder
+ * ever justifies dropping GUARD_MIN_US near k*avg; the next cheap step then
+ * is a decaying maximum (the guard needs the worst residual, not the mean),
+ * not a filter.
  */
 uint32_t radiant_channel_guard_us(uint8_t channel);
 
 /*
  * Raise the floor of the above, in microseconds. Values below
- * RADIANT_CHANNEL_GUARD_MIN_US are ignored; the floor is a floor, and a caller
- * is not allowed to talk the core into a narrower window than its own minimum.
+ * RADIANT_CHANNEL_GUARD_MIN_US are ignored - the floor is a floor.
  *
- * Called once at init by whoever holds the backend capabilities, in the same
- * shape and for the same reason as radiant_channel_period_floor_set(): a
- * backend whose t_sync is inferred rather than captured
- * (caps.has_sync_timestamp == false) is not reporting the master's clock at all,
- * it is reporting its own inference, and an estimator fed with that must not be
- * allowed to narrow anything. Passing RADIANT_CHANNEL_GUARD_MAX_US pins the
- * guard wide and switches the whole mechanism off, which is the correct
- * behaviour for such a backend and needs no separate flag.
+ * Called once at init by whoever holds backend capabilities: a backend with
+ * caps.has_sync_timestamp == false is reporting an inferred t_sync, not a
+ * captured one, and an estimator fed that must not narrow anything - passing
+ * RADIANT_CHANNEL_GUARD_MAX_US pins the guard wide, switching the mechanism
+ * off with no separate flag needed.
  */
 void radiant_channel_guard_floor_set(uint16_t us);
 
 /*
- * The clock accuracy this channel's MASTER has announced, in ppm, or 0 for a
- * master that has announced nothing.
+ * The clock accuracy this channel's MASTER has announced, in ppm, or 0 for
+ * nothing announced. Per channel, not global - a fact about one master. Set
+ * from device type 0x60's schedule block or a sync-handoff page; cleared by
+ * assign/unassign so a reassigned channel doesn't inherit the old clock.
  *
- * Per channel and not global, because it is a fact about one master. Set from
- * whatever carried the announcement - device type 0x60's descriptor schedule
- * block, or the sync-handoff page a receiver that already tracks it sent - and
- * cleared to 0 by assign and unassign, so a channel reassigned to a different
- * master never inherits the last one's clock.
- *
- * 0 IS "NOTHING ANNOUNCED" AND NOT "PERFECT", and the distinction is the whole
- * compatibility argument: a node that says nothing gets precisely the guard
- * this core computed before this function existed, so the schedule block costs
- * nothing at all until somebody fills it in. Values above
- * RADIANT_CHANNEL_CLOCK_PPM_MAX are clamped; values at or below the receiver's
- * own RADIANT_CHANNEL_CLOCK_PPM_ANT end of the budget are stored honestly and
- * simply never widen anything at an ordinary period.
- *
- * This is an announcement, so it may only widen the window. See
- * radiant_channel_guard_us().
+ * 0 means "nothing announced", not "perfect": a silent node gets exactly the
+ * guard this core computed before this field existed. Values above
+ * RADIANT_CHANNEL_CLOCK_PPM_MAX are clamped. An announcement may only widen
+ * the window - see radiant_channel_guard_us().
  */
 void radiant_channel_clock_accuracy_set(uint8_t channel, uint16_t ppm);
 
@@ -971,13 +755,9 @@ void radiant_channel_clock_accuracy_set(uint8_t channel, uint16_t ppm);
 uint16_t radiant_channel_clock_accuracy_get(uint8_t channel);
 
 /*
- * The running average above, in microseconds, or 0 on a channel whose estimator
- * has not locked. Diagnostic only - nothing in the core branches on it.
- *
- * It exists because the Phase 1 A/B needs the win to be visible as something
- * other than "loss did not get worse": this is the number that says how much of
- * the old 400 us was ever justified, and it is the first thing to read if a
- * narrowed window is ever suspected of costing packets.
+ * The running average above, in microseconds, or 0 if the estimator hasn't
+ * locked. Diagnostic only - nothing in the core branches on it, but it's the
+ * first thing to read if a narrowed window is suspected of costing packets.
  */
 uint16_t radiant_channel_residual_us(uint8_t channel);
 
@@ -992,16 +772,16 @@ radiant_time_t radiant_channel_earliest_slot(uint8_t *channel_out);
 /*
  * Attribute a radio operation to a channel.
  *
- * `op` is the non-zero id radiant_radio_tx()/radiant_radio_rx() returned. Binding it
- * here is what makes a late terminal event recognisable: the HAL guarantees a
- * cancelled operation's terminal event still arrives, so an unbound op is not
- * an anomaly to log, it is the normal outcome of a close that raced a window.
+ * `op` is the non-zero id radiant_radio_tx()/rx() returned. Binding it makes
+ * a late terminal event recognisable: the HAL guarantees a cancelled
+ * operation's terminal event still arrives, so an unbound op is the normal
+ * outcome of a close that raced a window, not an anomaly.
  *
- * Passing op == 0 clears the binding. Binding an op to a channel that already
- * has a different one is a scheduler bug; the new binding wins and the counter
- * radiant_channel_stale_op_count() is NOT incremented, because that counter means
- * "an event arrived for an operation nobody owns" and conflating the two would
- * hide the scheduler bug behind an expected number.
+ * op == 0 clears the binding. Rebinding a channel that already has a
+ * different op is a scheduler bug; the new binding wins and
+ * radiant_channel_stale_op_count() is NOT incremented, since that counter
+ * means "event for an operation nobody owns" and conflating the two would
+ * hide the scheduler bug.
  */
 void radiant_channel_bind_op(uint8_t channel, uint32_t op);
 
@@ -1010,16 +790,13 @@ int radiant_channel_op_owner(uint32_t op);
 
 /*
  * A frame belonging to this channel was transmitted or received at t_sync.
- *
  * Advances the slot clock to t_sync + one period and clears the missed-slot
- * counter. This is the only place the slot clock is re-anchored, which is what
- * keeps a slave's window centred on the master it actually hears rather than
- * on the time the host happened to open the channel.
+ * counter - the only place the slot clock is re-anchored, keeping a slave's
+ * window centred on the master it actually hears.
  *
- * Ignored unless the channel is TRACKING. A SEARCHING channel that hears
- * something is an acquisition, not a slot, and goes through
- * radiant_channel_on_acquired(); a CLOSING channel is leaving and must not have
- * its clock re-anchored on the way out.
+ * Ignored unless TRACKING. A SEARCHING channel that hears something is an
+ * acquisition (radiant_channel_on_acquired()); a CLOSING channel must not
+ * have its clock re-anchored on the way out.
  */
 void radiant_channel_on_slot(uint8_t channel, radiant_time_t t_sync);
 
@@ -1032,44 +809,30 @@ void radiant_channel_on_acquired(uint8_t channel, const struct radiant_channel_i
 			     radiant_time_t t_sync);
 
 /*
- * A slot this channel expected produced nothing.
- *
- * Advances the slot clock by one period from the expected instant - NOT from
- * `now`, because a missed slot must not shift the phase the channel is
- * tracking - and counts the miss. After RADIANT_CHANNEL_RX_FAIL_TO_SEARCH
- * consecutive misses a TRACKING channel returns to SEARCHING and
- * RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH is raised. Returns true if that happened.
+ * A slot this channel expected produced nothing. Advances the slot clock by
+ * one period from the expected instant - NOT from `now`, since a miss must
+ * not shift the tracked phase - and counts it. After
+ * RADIANT_CHANNEL_RX_FAIL_TO_SEARCH consecutive misses the channel returns
+ * to SEARCHING and raises RX_FAIL_GO_TO_SEARCH. Returns true if that happened.
  */
 bool radiant_channel_on_slot_missed(uint8_t channel, radiant_time_t now);
 
 /*
- * A slot this channel expected was never put on the air, because an arbitrated
- * backend lent the radio to another protocol stack. See
- * RADIANT_RADIO_STATUS_DENIED and RADIANT_RADIO_EDENIED in radiant_radio_hal.h.
+ * A slot this channel expected was never put on the air because an
+ * arbitrated backend lent the radio to another stack. See
+ * RADIANT_RADIO_STATUS_DENIED / RADIANT_RADIO_EDENIED in radiant_radio_hal.h.
  *
- * THE SAME CLOCK ARITHMETIC AS A MISS, AND DELIBERATELY NOT THE SAME COUNTER.
+ * Same clock arithmetic as a miss - t_next advances one period from the lost
+ * slot, guard widens by DRIFT_WORST_US, since a period elapsed with no fresh
+ * sync regardless of why. Deliberately a separate counter though: this is
+ * not evidence the sensor stopped, it's evidence about us, so counting it as
+ * a miss would drop the channel to SEARCHING visibly on the wire after eight
+ * busy moments in the other stack, which the denial signal exists to
+ * prevent - callers must not post RX_FAIL for it either. Bounded by
+ * RADIANT_CHANNEL_DENY_TO_SEARCH, past which the guard has hit its ceiling
+ * and this promotes into the miss path.
  *
- * Same: t_next advances by exactly one period from the slot that was lost - not
- * from `now` - so scheduler latency cannot walk the phase away from the master;
- * and the guard widens by one RADIANT_CHANNEL_DRIFT_WORST_US, because a period
- * has genuinely elapsed with no fresh sync and the disagreement it may have
- * accumulated is real whatever the reason we did not listen.
- *
- * Not the same: this is not evidence that the sensor stopped transmitting. It
- * is evidence about us. Counting it as a miss would drop a channel to SEARCHING
- * after eight busy moments in the other stack - visibly, on the wire, to a host
- * - which is exactly the failure the denial signal exists to prevent, and the
- * caller must not post ANTW_EVENT_RX_FAIL for it either.
- *
- * "Charge the drift but do not count the miss" is NOT available as an
- * implementation: the guard's miss term is literally miss_count * drift, so
- * there is no third place to put the charge. Hence a second counter of equal
- * weight, cleared wherever miss_count is cleared, and bounded by
- * RADIANT_CHANNEL_DENY_TO_SEARCH - past which the guard has hit its ceiling and
- * this function does promote into the miss path, returning whatever
- * radiant_channel_on_slot_missed() would have.
- *
- * Returns true if the channel went back to SEARCHING, on the same terms.
+ * Returns true if the channel went back to SEARCHING.
  */
 bool radiant_channel_on_slot_denied(uint8_t channel, radiant_time_t now);
 
@@ -1079,15 +842,13 @@ bool radiant_channel_on_slot_denied(uint8_t channel, radiant_time_t now);
 uint8_t radiant_channel_denied_count(uint8_t channel);
 
 /*
- * The terminal event of a radio operation.
+ * The terminal event of a radio operation. Call for EVERY terminal event,
+ * including one whose op is bound to no channel - recognising the late
+ * event is the point.
  *
- * Call this for EVERY terminal event, including one whose op is bound to no
- * channel: recognising the late event is the point, and the count is what a
- * test asserts on.
- *
- * A CLOSING channel completes its close here and raises
- * RADIANT_CH_EVENT_CHANNEL_CLOSED. Every other state simply drops the binding -
- * the window closed, and choosing the next one is radiant_sched.c's business.
+ * A CLOSING channel completes its close here and raises CHANNEL_CLOSED.
+ * Every other state just drops the binding; choosing the next window is
+ * radiant_sched.c's business.
  *
  * Returns the channel the event was attributed to, or -1 if the op was stale.
  */
@@ -1095,17 +856,14 @@ int radiant_channel_on_terminal(uint32_t op, enum radiant_radio_status status,
 			    radiant_time_t now);
 
 /*
- * Deadlines: run this whenever the scheduler wakes and at least once per
- * shortest channel period.
+ * Deadlines: run whenever the scheduler wakes and at least once per shortest
+ * channel period.
  *
- * A SEARCHING channel whose deadline has passed raises
- * RADIANT_CH_EVENT_RX_SEARCH_TIMEOUT and then closes, raising
- * RADIANT_CH_EVENT_CHANNEL_CLOSED as well - both, in that order, because that is
- * what a host library waits for and a search timeout that does not close the
- * channel leaves it un-unassignable forever.
- *
- * A channel with an operation still bound goes to CLOSING instead and finishes
- * when the terminal event lands, exactly as a host-initiated close does.
+ * A SEARCHING channel past its deadline raises RX_SEARCH_TIMEOUT then closes,
+ * raising CHANNEL_CLOSED too - both, in that order, since a search timeout
+ * that doesn't close the channel leaves it un-unassignable forever. A
+ * channel with an operation still bound goes to CLOSING instead and
+ * finishes when the terminal event lands.
  *
  * Returns the number of channels that timed out.
  */

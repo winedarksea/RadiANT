@@ -63,7 +63,7 @@ whole install — the firmware lives on the board, and there is nothing to
 configure.
 
 Grab `ant_dongle.uf2` from the
-[latest release](../../releases/latest), or [build it yourself](#building-from-source).
+[latest release](https://github.com/winedarksea/RadiANT/releases/latest), or [build it yourself](#building-from-source).
 
 ### 3. Set up your platform
 

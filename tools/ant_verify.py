@@ -39,8 +39,7 @@ import time
 from collections import Counter
 
 try:
-    import usb.core
-    import usb.util
+    import usb.core  # noqa: F401 - import-guard, verifies pyusb is installed
 except ImportError:  # pragma: no cover - user-facing guidance
     sys.exit("pyusb is not installed. Run: pip install pyusb")
 
@@ -55,11 +54,12 @@ from ant_probe import (  # noqa: E402
     reset_stack,
 )
 from ant_scan import (  # noqa: E402
-    ANT_PLUS_KEY,
     ANT_PLUS_FREQ,
+    ANT_PLUS_KEY,
     command,
 )
 from ant_session import wait_for_close  # noqa: E402
+
 # Protocol constants come from the generated module, never from a second copy
 # here. See tools/ant_wire.py and protocol/ant_wire.yaml.
 #
@@ -99,65 +99,39 @@ TICK_WRAP_S = 65536 / ANT_TICKS_PER_S   # the receive timestamp is 16 bits
 
 # How many messages a sensor may go between common pages.
 #
-# 121, not 65. The generic ANT+ common-page guidance says 65, and that is what
-# this check used to enforce - so it failed the first certified transmitter it
-# was ever pointed at. sdk-ant's own bicycle power profile settles the
-# question: lib/ant_profiles/ant_bpwr/ant_bpwr.c has
-#
-#     #define COMMON_PAGE_80_INTERVAL 119 // Minimum: Interleave every 121 messages
-#     #define COMMON_PAGE_81_INTERVAL 120 // Minimum: Interleave every 121 messages
-#
-# and that is Garmin's own certified implementation of the profile. Measured
-# against it, this check reported a worst gap of 118 as a failure.
+# 121, not the generic ANT+ guidance of 65: sdk-ant's own bicycle power
+# profile (lib/ant_profiles/ant_bpwr/ant_bpwr.c) interleaves pages 80/81 every
+# 121 messages, and that is Garmin's certified implementation. At 65 this
+# check failed a worst gap of 118 against it.
 COMMON_PAGE_LIMIT = 121
 
-# Default acceptance thresholds. They are arguments, not constants, because the
-# right numbers depend on the transmitter's noise band - but a default that
-# passes a good link and fails an obviously bad one is worth having.
+# Default acceptance thresholds, exposed as arguments since the right numbers
+# depend on the transmitter's noise band.
 #
-# This number was wrong twice, in both directions, and how it moved is worth
-# more than where it landed.
-#
-# 1.0 was the first guess and it failed a healthy link about half the time, so
-# it was raised to 2.5 to fit six 300 s runs that measured 0.74 to 1.37 % on a
-# quiet desk. Both numbers were fitted to a measurement that was itself broken:
-# FrameReader read with a 250 ms timeout against a 249.7 ms channel period, and
-# every cancelled transfer took the packet it was waiting for with it. About
-# 0.4 percentage points of that "floor" was the tool measuring itself.
-#
-# With that fixed, the same bench over four 300 s runs measures 0.26 to 0.60 %,
-# and every missing packet is one the radio raised an RX_FAIL for - so what is
-# left really is the air. 1.5 sits about three times the worst of those, which
-# is room for a busier day without being room for a fault: pairing with the
-# wrong sensor still reads about 25 %, and the worst genuine anomaly seen here
-# was 5.24 %.
-#
-# The lesson is in loss_accounting(): a threshold fitted to a number nobody can
-# take apart just encodes whatever was broken at the time. Loss the radio never
-# reported is not the link's loss, and that check now fails on its own.
+# 1.5 was set after a FrameReader read-timeout bug (250 ms against a 249.7 ms
+# channel period, cancelling and losing whatever packet it was waiting for)
+# was fixed: with that gone, four 300 s bench runs measure 0.26-0.60 % loss,
+# every packet of it RX_FAIL-accounted, so 1.5 is about 3x the worst of those
+# - room for a busier day, not for a fault (a wrong-sensor pairing reads ~25 %).
+# loss_accounting() is the real check now: a threshold alone can't tell air
+# loss from a bug, which is why it fails independently when RX_FAIL doesn't
+# account for the gap.
 DEFAULT_MAX_LOSS_PCT = 1.5
 DEFAULT_JITTER_FACTOR = 0.5      # of one channel period, on the stddev
 
 
 # ── The four things a receiver can say about a compat stream ────────────────
+# docs/radiant-security.md section 11.4:
 #
-# docs/radiant-security.md section 11.4. The distinctions here are the whole
-# point of the class below, and three of them are routinely collapsed:
-#
-#   CLEAR       no key here. Not "unprotected" - a receiver that holds no key
-#               has no opinion, and CLEAR must keep meaning exactly that or
-#               downgrade protection has nothing to say.
+#   CLEAR       no key here. Not "unprotected" - a receiver holding no key has
+#               no opinion, and CLEAR must keep meaning exactly that.
 #   VERIFIED    a tag arrived and checked out.
-#   UNVERIFIED  something arrived and did NOT check out - a forged tag, a wrong
-#               key, a replayed counter - OR a key is installed, attestation is
-#               expected, and nothing came at all. Strip the beacon from a
-#               stream and a naive receiver falls back to clear; this is the
-#               state that stops it.
-#   LOST        a page that never arrived. NOT the same as UNVERIFIED, and
-#               conflating them is how a 0.4 % loss floor gets reported as an
-#               attack. Tier I sees it as a gap in the attestation counter;
-#               Tier II sees it as a window whose covered messages did not all
-#               turn up.
+#   UNVERIFIED  something arrived and did NOT check out (forged tag, wrong
+#               key, replayed counter), OR a key is installed, attestation is
+#               expected, and nothing came - this is what stops a naive
+#               receiver falling back to clear when the beacon is stripped.
+#   LOST        a page that never arrived. Not the same as UNVERIFIED -
+#               conflating them reports the ~0.4 % loss floor as an attack.
 ATTEST_CLEAR = "clear"
 ATTEST_VERIFIED = "verified"
 ATTEST_UNVERIFIED = "unverified"
@@ -201,7 +175,7 @@ class CompatVerifier:
         self.windows_seen = 0
         self.pending: list[bytes] = []
         self.announce_frame_a: bytes | None = None
-        self.beacon: "ap.CompatBeacon | None" = None
+        self.beacon: ap.CompatBeacon | None = None
         self._frames: dict = {}
 
     # -- ingestion --------------------------------------------------------
@@ -241,13 +215,13 @@ class CompatVerifier:
             return self._feed_announce_b(got["tag"])
 
         self._frames[index] = bytes(payload)
-        if index == ap.COMPAT_FRAME_BEACON_0:
-            # The hint is not a security claim - 24 bits, resolved by the 40- or
-            # 48-bit attestation tag - but it is what a receiver with several
-            # roots uses to skip the ones that cannot match, and what a receiver
-            # with a stale epoch searches forward against.
-            if got["key_group_hint"] == self.expected_hint:
-                self.hint_matches += 1
+        # The hint is not a security claim - 24 bits, resolved by the 40- or
+        # 48-bit attestation tag - but it is what a receiver with several
+        # roots uses to skip the ones that cannot match, and what a receiver
+        # with a stale epoch searches forward against.
+        if (index == ap.COMPAT_FRAME_BEACON_0
+                and got["key_group_hint"] == self.expected_hint):
+            self.hint_matches += 1
         if (ap.COMPAT_FRAME_BEACON_0 in self._frames
                 and ap.COMPAT_FRAME_BEACON_1 in self._frames):
             try:
@@ -414,7 +388,7 @@ class ChannelAnalyzer:
 
     def __init__(self, name: str, device_type: int, period: int,
                  expect_watts: float | None, expect_rpm: float | None,
-                 wheel_circ_m: float, compat: "CompatVerifier | None" = None,
+                 wheel_circ_m: float, compat: CompatVerifier | None = None,
                  expect_bpm: float | None = None):
         self.name = name
         self.device_type = device_type
@@ -467,29 +441,21 @@ class ChannelAnalyzer:
         self.event_advances = 0
 
         # Loss measured against the transmitter's own counter instead of a
-        # wall clock. The headline loss figure divides by elapsed/period, and
-        # that denominator is an estimate: it assumes the transmitter's crystal
-        # runs at exactly the nominal rate, and it rounds. On a 0.7 % reading
-        # over 1200 packets the whole result is 9 packets, which is inside the
-        # noise of the estimate.
+        # wall clock, since the headline loss figure's elapsed/period
+        # denominator is only an estimate (assumes nominal crystal rate, and
+        # rounds - noise-level error at typical packet counts).
         #
-        # Some transmitters step the update event counter once per message
-        # instead of once per pedal stroke. Where that holds the counter is a
-        # serial number, and what is missing from the sequence is exactly what
-        # was lost - no clock and no rounding anywhere. It does not hold for a
-        # real crank power meter, whose counter steps per revolution and stops
-        # entirely when the rider coasts, so summary() reports this only once
-        # the stream has proved the counter never stood still.
+        # Only valid where the counter steps once per message rather than per
+        # pedal stroke: summary() requires the stream to prove the counter
+        # never stood still, since a real crank meter's counter stops when the
+        # rider coasts.
         #
-        # Two transmitters that both step per message still disagree about
-        # what "a message" means. sdk-ant raises its page event with the page
-        # it is actually putting on the air, so a firmware sensor steps the
-        # counter on page 0x10 and leaves it alone for an interleaved common
-        # page; ant_sim.py advances every sensor once per transmission
-        # whatever page comes out. So the counter spans either the page 0x10
-        # messages alone or all of them, and which one has to be worked out
-        # from the stream rather than assumed - counting the common pages that
-        # land between two page 0x10 packets is what separates them.
+        # Even two per-message transmitters disagree about what "a message"
+        # means: sdk-ant steps the counter only on page 0x10 and leaves it
+        # alone for an interleaved common page, while ant_sim.py steps it on
+        # every transmission regardless of page. Which convention is in play
+        # has to be inferred from the stream - by counting common pages
+        # between page 0x10 packets - rather than assumed.
         self.std_event_pairs = 0
         self.std_event_span = 0
         self.std_event_still = 0
@@ -838,19 +804,14 @@ class ChannelAnalyzer:
         self._note_wrap("acc_power", got["acc_power"], before["acc_power"])
         self._note_event(d_event != 0)
 
-        # Which convention the transmitter follows is decided one pair at a
-        # time, on the pairs that carry evidence. A pair with c common pages
-        # between its two page 0x10 packets and nothing lost shows d_event ==
-        # 1 if the counter ignores common pages, or 1 + c if it counts every
-        # message; a pair that lost something shows neither and abstains.
-        # Loss is rare, so the vote is decided by the clean majority.
-        #
-        # Comparing the run totals instead would be simpler and wrong: the
-        # excess of the counter over the page 0x10 packets received is then
-        # the common pages under one reading and the lost packets under the
-        # other, and at a few hundred packets those two are the same size. A
-        # 300 s run measured here flipped its own verdict between two
-        # otherwise identical captures because loss crossed 20 packets.
+        # Which convention the transmitter follows is voted pair by pair: a
+        # clean pair (nothing lost) with c common pages between its two page
+        # 0x10 packets shows d_event == 1 if the counter ignores common pages,
+        # or 1 + c if it counts every message; a pair with loss shows neither
+        # and abstains. Comparing run totals instead is wrong - the excess of
+        # counter over packets received conflates common pages with lost ones,
+        # and at a few hundred packets they're the same size (a 300 s run here
+        # flipped its verdict once loss crossed 20 packets).
         c = self._common_since_std
         if c > 0:
             if d_event == 1:
@@ -1419,15 +1380,12 @@ def listen(dev, reader, analyzers: dict, seconds: float, verbose: bool,
            records: list) -> dict:
     """Collect broadcasts for `seconds`, timestamping each on arrival.
 
-    Arrival time is the host's, not the sensor's, so the jitter figure includes
-    the USB path - which is the honest thing to report, since that path is part
-    of what is being validated. It is not, however, the only thing worth
-    reporting: with ENABLE_RX_TIMESTAMP the radio stamps each packet on its own
-    32 kHz clock, and the difference between the two is stark. On this bench
-    the host clock puts consecutive-slot jitter at 3.3 ms and the radio clock
-    at 0.01 ms, so essentially all of the number this tool used to print was
-    Windows deciding when to return from a USB read. Both are now measured: one
-    says what the USB path did, the other says what the link did.
+    Arrival time is the host's, so the jitter figure includes the USB path -
+    honest, since that path is part of what's validated, but not the whole
+    story: with ENABLE_RX_TIMESTAMP the radio also stamps each packet on its
+    own 32 kHz clock. On this bench host-clock jitter is 3.3 ms vs. 0.01 ms on
+    the radio clock, i.e. most of what this tool used to print was Windows'
+    USB scheduling, not the link. Both are measured now.
     """
     events = Counter()
     identities = {}
@@ -1753,7 +1711,7 @@ def main() -> int:
     if json_to_stdout:
         stack.enter_context(contextlib.redirect_stdout(sys.stderr))
 
-    def make_verifier(device_number: int) -> "CompatVerifier | None":
+    def make_verifier(device_number: int) -> CompatVerifier | None:
         """A verifier per stream, or None - which is what CLEAR means.
 
         The device number is inside the nonce, so a wildcard cannot be used to

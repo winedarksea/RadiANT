@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "recorded": "2026-08-13",
+    "operator": "agent, on Colin's bench",
+    "backend": "core",
+    "git_describe": "uncommitted working tree (P4 grant-abort work: g.hw_held, bug 15)",
+    "board": "nrf54l15dk/nrf54l15/cpuapp",
+    "serial_suffix": "001057737173",
+    "sdk_ant_revision": null,
+    "ncs_version": "v3.4.0",
+    "toolchain_bundle": "dcbdc366a1",
+    "extra_conf": ["thread.conf"]
+  },
+  "rig": {
+    "second_stack": "thread_med",
+    "transmitter": {
+      "kind": "ant_sim_py",
+      "board": "RadiANT USB stick (nRF52840) 3D55F77818BE772A",
+      "profile": "power",
+      "seed": 1,
+      "tx_power_level": null,
+      "description": "tools/ant_sim.py drove a RadiANT USB stick (nRF52840, serial 3D55F77818BE772A) as an ANT+ power master: device 777, type 0x0B, transmission type 5, 8182 ticks (4.0049 Hz), 100 W, 80 rpm, RF 57. NOT the Feather this bench normally uses - see coexistence.arbiter_note. One sim process per arm, started 10 s before the measurement and killed after it, so no arm inherited another's USB claim."
+    },
+    "receiver": {
+      "board": "nrf54l15dk/nrf54l15/cpuapp",
+      "antenna": "onboard PCB antenna, board flat on the desk, not moved between arms"
+    },
+    "link": {
+      "kind": "fixed_open_air",
+      "sensitivity_method": null,
+      "attenuator_model": null,
+      "attenuation_db": null,
+      "distance_m": null,
+      "rf_channel": 57,
+      "interference": "Short bench path with ~35 dB of margin (mean RSSI -35.4 dBm against a -90 dBm tracking floor). The Thread peer is an nRF5340 DK on 802.15.4 channel 26, three feet away, holding the network as leader throughout. Not a sensitivity measurement."
+    }
+  },
+  "coexistence": {
+    "second_stack": "thread_med",
+    "loss_direct_pct": null,
+    "loss_second_stack_off_pct": 0.0,
+    "loss_second_stack_on_pct": 100.0,
+    "sweep_sets_per_s_off": null,
+    "sweep_sets_per_s_on": null,
+    "thread_load_sent": 2400,
+    "scheduler_cost": {
+      "send_latency_us_max_ant_idle": 260,
+      "send_latency_us_max_ant_loaded": 270,
+      "send_latency_us_p99_ant_idle": 256,
+      "send_latency_us_p99_ant_loaded": 256,
+      "mac_tx_total": 2407,
+      "mac_tx_retry_ant_idle": 144,
+      "mac_tx_retry_ant_loaded": 96,
+      "mac_tx_err_cca_ant_idle": 0,
+      "mac_tx_err_cca_ant_loaded": 0,
+      "mac_tx_err_busy_ant_idle": 0,
+      "mac_tx_err_busy_ant_loaded": 0
+    },
+    "gate_counters": {
+      "granted": 15449,
+      "grant_end_calls": 15449,
+      "late_disarm": 0,
+      "idle_disarm": 0,
+      "overstayed": 0,
+      "invalid_return": 0,
+      "blocked": 9792,
+      "extends_ok": 1011,
+      "extends_failed": 29
+    },
+    "arbiter_note": "READ loss_second_stack_on_pct AS 'THE CHANNEL NEVER ACQUIRED', NOT AS 'PACKETS WERE LOST'. 100.0 % is 0 of 961 expected packets, and the mechanism is in the sweep counters rather than in any loss figure: with the Thread load transmitting, chunks=22796 scan chunks were placed and end ok=0 of them completed, deny=25540. Every scan chunk is refused, so the sweep never finishes a window, so device #777 is never found, so nothing is ever tracked. The ANT-loaded arm is not a degraded version of the control arm; it is a receiver that never starts.\n\nTHE ARBITER IS NOT THE CAUSE, and the control arm is what proves it. p4ctrl - the same MPSL gate, same board, same rig, no OpenThread - measured 961 of 961 packets, loss -0.01 %, twice, 25 minutes apart (A/B/A delta 0.00 pp against a 0.35 pp bar). Timeslot arbitration on its own costs this link nothing measurable. What costs it everything is the DEMAND of an attached, transmitting OpenThread MED.\n\nWHAT loss_second_stack_off_pct ACTUALLY IS. The schema wants the arbitrated build with the second stack linked in but silent. This sitting has no such arm: the plan's six runs are control / MED-loaded / MED-ANT-idle / SED-loaded / SED-ANT-idle / control, and the ANT-idle arms turn off the WRONG stack for that question. The 0.0 % recorded here is the control arm, which has no OpenThread linked at all - so the off/on delta reads as 'what linking AND running OpenThread costs', not 'what running it costs once linked'. On nRF54L those two are closer than they look, because the 802.15.4 radio driver enables MPSL by itself and an image with 15.4 in it is arbitrated whether or not this project asked for it.\n\nsweep_sets_per_s is null in BOTH arms rather than 0-and-something. No arm of this sitting completed a whole sweep SET: the control arm found its sensor and went to tracking before finishing one, and the loaded arms completed no chunk at all. The quantity is not measurable on this rig with one sensor in the room, so no ratio is recorded and [gates.coexistence].min_sweep_rate_ratio has nothing to read.\n\nTRANSMITTER LIMITATION, and it bounds what the absolute numbers mean. baseline.schema.json refuses ant_sim_py as a baseline transmitter and wants sim_firmware or a real sensor. The nRF52840 Feather that normally carries the reference master would not enumerate after two flashes in this session (correct board target, correct 0x26000 offset, bootloader volume released cleanly), so the nRF52840 Dongle driven by ant_sim.py was the only master available. One consequence is concrete: `loss (exact)` is absent from every arm here. It needs the transmitter's event counter never to repeat, and an ANT master re-broadcasts its current payload until the host loads the next one, so over 240 s the receiver catches a repeated event count (9 repeats in 944 pairs, measured). The arm-to-arm deltas are unaffected - every arm used the identical transmitter, receiver and reader - but these absolute figures cannot be read against the characterised ~0.4 % floor. Re-take against sim_firmware when the Feather is back."
+  },
+  "notes": "P4 / docs/radiant-bridge.md section 7.4, MED role. Six arms in one sitting on one board, ~09:25-10:56 local, in the plan's order, each preceded by a J-Link reset and bracketed by an `ot state` check on the peer (COM9, DTR asserted) - leader before and after every arm except the last, where the peer CLI did not answer the closing query; it had answered `leader` at the start of that arm and at both ends of the two arms either side, so the run is kept.\n\nTHE SITTING FOUND A PERMANENT GATE WEDGE AND THIS BASELINE IS FROM THE FIXED BUILD. On the first MED arm the gate stopped placing requests entirely 11 s in: `placed=3 granted=2 blocked=1` - every placed request answered - with `owes=1` and den_owed climbing to 4786. Cause (bug 15, radiant_radio_nrf_gate_mpsl.c): `g.mpsl_owes` was raised AFTER mpsl_timeslot_request() returned, but MPSL answers a refusable request from inside that call, so on_signal(BLOCKED) cleared the flag and the assignment then re-raised it describing a request that had already been answered. Nothing this side of the API can clear it and the ANT radio was dead for the rest of the boot. It only bites where a request is refused SYNCHRONOUSLY, which needs a genuinely contending stack - which is why BLE bring-up never saw it, and why it appeared the first time an OpenThread MED arm was actually contended. The `inl=` counter now reads 9792 against blocked=9792 in this arm and 0 in the control arm, so 'answered inside the call' is a reading rather than a theory.\n\nThat wedge is also why the previously recorded MED figure of 973/974, 0.10 % should not be compared with this one. It predates both the NET_CONFIG_NEED_IPV6 boot-stall fix and the DPPI endpoint-conflict fix, i.e. it predates the first MED arm in which OpenThread was actually on the air.\n\nTHE GRANT-ABORT INVARIANT HELD THROUGHOUT, which is the other thing this sitting was for: grant_end_calls tracks granted exactly (15449/15449) with late_disarm, idle_disarm, overstayed and invalid_return all zero, across 29 EXTEND_FAILEDs - a path the source had labelled UNEXERCISED until today."
+}

@@ -1,14 +1,11 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * X25519 against RFC 7748's own published vectors.
+ * X25519 against RFC 7748's own published vectors, copied from the RFC and
+ * nothing else - a test whose expected values came from the implementation
+ * under test would only prove self-consistency.
  *
- * Every vector here is copied from the RFC and from nothing else, which is the
- * only kind of vector worth having for a primitive written from that same RFC:
- * a test whose expected values came out of the implementation under test proves
- * that the code is self-consistent and nothing more.
- *
- * The whole file is behind CONFIG_RADIANT_SEC_PAIRING_X25519 because the
- * parent application globs src/*.c and the symbol is default n.
+ * Behind CONFIG_RADIANT_SEC_PAIRING_X25519 because the parent application
+ * globs src/*.c and the symbol is default n.
  */
 
 #include <zephyr/kernel.h>
@@ -132,12 +129,9 @@ ZTEST(sec_x25519, test_both_sides_reach_the_same_secret)
 	uint8_t mine[32];
 	uint8_t theirs[32];
 
-	/*
-	 * The property the whole pairing rests on, and the published value it
-	 * has to equal. Agreeing with each other but not with the RFC would
-	 * mean two RadiANT nodes pair happily and nothing else in the world
-	 * can ever join them.
-	 */
+	/* The property pairing rests on: agreeing with each other but not the
+	 * RFC would mean two RadiANT nodes pair happily and nothing else can
+	 * ever join them. */
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_x25519(mine, alice_sk, bob_pk));
 	zassert_equal(RADIANT_SEC_OK,
@@ -152,11 +146,8 @@ ZTEST(sec_x25519, test_the_caller_s_scalar_is_not_rewritten)
 	uint8_t scalar[32];
 	uint8_t out[32];
 
-	/*
-	 * Clamping happens on a copy. A function that clamped in place would
-	 * corrupt a host's stored private key on first use, and the damage
-	 * would only show up as a peer that could no longer agree.
-	 */
+	/* Clamping happens on a copy; in-place clamping would corrupt a host's
+	 * stored private key on first use. */
 	memcpy(scalar, alice_sk, sizeof(scalar));
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_x25519(out, scalar,
@@ -171,13 +162,9 @@ ZTEST(sec_x25519, test_the_high_bit_of_a_u_coordinate_is_ignored)
 	uint8_t clean[32];
 	uint8_t dirty[32];
 
-	/*
-	 * RFC 7748 section 5: decodeUCoordinate MASKS the most significant bit
-	 * rather than rejecting the input. Implementations exist that set it,
-	 * and a receiver treating the value as 256 bits would compute a
-	 * different secret from its peer and fail to agree - silently, which is
-	 * the worst way for a pairing to fail.
-	 */
+	/* RFC 7748 section 5: decodeUCoordinate masks the MSB rather than
+	 * rejecting it. Treating the value as 256 bits would silently disagree
+	 * with a peer that set the bit. */
 	memcpy(point, bob_pk, sizeof(point));
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_x25519(clean, alice_sk, point));
@@ -196,14 +183,9 @@ ZTEST(sec_x25519, test_a_small_order_point_is_caught)
 	uint8_t one_point[32] = { 1 };
 	uint8_t out[32];
 
-	/*
-	 * u = 0 and u = 1 are small-order points: the shared secret comes out
-	 * all zeros whatever the scalar was. RFC 7748 leaves rejecting this
-	 * optional for Diffie-Hellman; here it is mandatory, because the result
-	 * is fed to a KDF and installed as a root key. Accepting it would let
-	 * anyone able to inject one packet fix the group key to a value they
-	 * already know.
-	 */
+	/* u=0 and u=1 are small-order points: the shared secret comes out all
+	 * zeros regardless of scalar. RFC 7748 leaves rejecting this optional;
+	 * here it's mandatory since the result becomes a root key. */
 	zassert_equal(RADIANT_SEC_OK,
 		      radiant_sec_x25519(out, alice_sk, zero_point));
 	zassert_true(radiant_sec_x25519_is_degenerate(out),
@@ -240,20 +222,11 @@ ZTEST(sec_x25519, test_one_ladder_costs_what_the_spec_says_it_costs)
 	uint32_t ms;
 	int      i;
 
-	/*
-	 * Not a performance test - a truth test on a number in the
-	 * documentation. docs/radiant-security.md section 8 quoted "roughly
-	 * 4 ms on a Cortex-M4", which is what an OPTIMISED implementation
-	 * costs; this one is 16-bit limbs and schoolbook multiplication, which
-	 * is far simpler to audit and an order of magnitude slower.
-	 *
-	 * The bound is deliberately loose. A pairing happens once, by hand,
-	 * with a human waiting - so a few hundred milliseconds is free and the
-	 * only thing worth catching is a change that makes it seconds. What the
-	 * assertion really protects is the DOCUMENTED figure: if this trips,
-	 * the number in the spec is wrong again and should be re-measured
-	 * rather than the bound raised.
-	 */
+	/* Not a performance test - a truth test on docs/radiant-security.md
+	 * section 8's "~4 ms on Cortex-M4" figure (which assumes an optimised
+	 * implementation; this one uses simpler, slower schoolbook math). The
+	 * bound is loose since pairing happens once, by hand; if this trips, the
+	 * documented figure needs re-measuring rather than the bound raising. */
 	start = k_uptime_get_32();
 	for (i = 0; i < 4; i++) {
 		zassert_equal(RADIANT_SEC_OK,
@@ -269,9 +242,8 @@ ZTEST(sec_x25519, test_one_ladder_costs_what_the_spec_says_it_costs)
 
 ZTEST(sec_x25519, test_the_caps_bit_says_it_is_here)
 {
-	/* A caller must test the cap rather than the Kconfig symbol: "not
-	 * built" and "this backend cannot" are the same condition from above,
-	 * and only the cap expresses both. */
+	/* A caller must test the cap, not the Kconfig symbol: "not built" and
+	 * "this backend cannot" are the same condition from above. */
 	zassert_true(radiant_sec_caps()->has_x25519,
 		     "X25519 is compiled in but the capability says otherwise");
 }

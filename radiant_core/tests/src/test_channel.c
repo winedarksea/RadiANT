@@ -5,40 +5,23 @@
  * radiant_core/include/radiant_core/radiant_channel.h, radiant_core/include/radiant_core/radiant_radio_hal.h,
  * radiant_core/tests/fake_radio.h, docs/sdk-ant-contract.md and the measurements
  * in docs/ant-radio-link.md. Nothing here derives from sdk-ant, from libant.a,
- * or from any adopter-gated ANT+ device profile document.
+ * or from any ANT+ device profile document.
  *
- * ---------------------------------------------------------------------------
- * The channel state machine
- * ---------------------------------------------------------------------------
- * radiant_channel.c calls no HAL function, so most of this suite is pure-function
- * assertion: a transition table, and the exact wire byte every refusal
- * produces. Three groups of tests are not, and they are the reason the mock is
- * linked in at all:
+ * The channel state machine calls no HAL function, so most of this suite is
+ * pure-function assertion: a transition table, and the exact wire byte every
+ * refusal produces. The mock is linked in for three cases that are not: a
+ * master's first transmit (proved by arming it against the mock and reading
+ * back t_sync, not just asserting the arithmetic), a close racing an
+ * operation in flight (an ordinary outcome, not an edge case - the HAL
+ * guarantees the cancelled op's terminal event still arrives), and a late
+ * event for an op id nobody owns any more (the mock never produces one
+ * unprompted).
  *
- *   - a master's first transmission is one full channel period after open, and
- *     the test proves it by actually arming that transmit against the mock and
- *     reading the t_sync the arm recorded. Asserting only on
- *     radiant_channel_next_slot() would prove the arithmetic and not that a
- *     backend accepts the result;
- *   - a close that races an operation in flight. The HAL guarantees a
- *     cancelled operation's terminal event still arrives, with no fault
- *     injection needed, so this is the ordinary outcome of closing a channel
- *     with a window open - not an edge case - and the mock is the only place
- *     it can be made to happen on demand;
- *   - a late event carrying an operation id nobody owns any more. The mock
- *     will never produce one by itself, and a module that has not been shown
- *     one has not been tested against it.
- *
- * Every test finishes with fake_radio_is_idle() and fake_radio_viol_count() ==
- * 0, per the two habits fake_radio.h asks for: the first catches a module that
- * left the radio armed, the second catches one that did something in a
- * callback that would deadlock a real radio ISR.
- *
- * The rx and tx callbacks below forward terminal events straight into
- * radiant_channel_on_terminal(), which is precisely what radiant_sched.c will do. They
- * run in the mock's callback context, so this suite is also the check that the
- * state machine is callable from a radio ISR - it takes no lock, allocates
- * nothing and does no work proportional to anything.
+ * Every test ends idle with zero violations (fake_radio_is_idle() /
+ * fake_radio_viol_count()). The rx/tx callbacks forward terminal events into
+ * radiant_channel_on_terminal(), exactly as radiant_sched.c will, and run in
+ * the mock's callback context - so this also checks the state machine is
+ * ISR-callable: no lock, no allocation, no unbounded work.
  */
 
 #include <stdbool.h>
@@ -840,23 +823,15 @@ ZTEST(radiant_channel, test_bad_parameter_values_and_bad_network)
 }
 
 /*
- * A master's missed slot advances its clock, counts nothing, and never sends it
- * to search.
+ * A master's missed slot advances its clock, counts nothing, and never sends
+ * it to search - unlike a slave, which has no peer to lose.
  *
- * THE ADVANCE IS WHAT STOPS A DONGLE WEDGING, and it went missing for as long as
- * no backend could transmit. A master's t_next only moves on a completed
- * transmit. A slot lost to contention therefore left it in the past; the
- * adapter re-posts a pending master on every scheduling pass, the scheduler
- * refuses an unreachable instant without ever calling the backend, the refusal
- * completes synchronously, and the completion signals the pass that posts it
- * again. That is a hot loop with no fault, no log line and no host response -
- * the dongle stops answering while looking perfectly alive - and one missed
- * transmit was enough to enter it. It was found on hardware, by halting the CPU
- * and sampling the program counter, because there was nothing else to see.
- *
- * The rest of this function is a slave's: eight silent windows means the sensor
- * is gone and search is the right answer. A master has no peer to lose, so it
- * must advance and stop there.
+ * The advance is what stops a dongle wedging: a master's t_next only moves on
+ * a completed transmit, so a slot lost to contention leaves it in the past.
+ * Without the advance, the adapter re-posts the pending master every pass,
+ * the scheduler synchronously refuses the unreachable instant, and the
+ * refusal re-triggers the same post - a hot loop with no fault, no log line
+ * and no host response. One missed transmit was enough to enter it.
  */
 ZTEST(radiant_channel, test_a_masters_missed_slot_advances_the_clock_and_nothing_else)
 {
@@ -921,13 +896,10 @@ ZTEST(radiant_channel, test_master_first_transmission_is_one_period_not_zero)
 		      NULL);
 	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 0u, t_open), NULL);
 
-	/*
-	 * Measured, 8 of 8 runs (docs/ant-radio-link.md, "Master open-time"):
+	/* Measured, 8 of 8 runs (docs/ant-radio-link.md, "Master open-time"):
 	 * MESG_OPEN_CHANNEL to the first EVENT_TX is one full channel period.
-	 * A Zwift-style host that expects data immediately after opening a
-	 * master is going to wait a slot, and that is correct behaviour rather
-	 * than latency to be optimised away.
-	 */
+	 * A host expecting data immediately after opening a master waits one
+	 * slot; that is correct behaviour, not latency to optimise away. */
 	want = t_open + RADIANT_ANT_PLUS_PERIOD_US;
 	zassert_equal(want, radiant_channel_next_slot(0u),
 		      "a master's first slot was not one period out");
@@ -940,14 +912,9 @@ ZTEST(radiant_channel, test_master_first_transmission_is_one_period_not_zero)
 	req.fmt = radiant_frame_format(RADIANT_FRAME_CFG_TRACKING);
 	req.rf_index = RADIANT_RF_INDEX_ANT_PLUS;
 	req.power.dbm = 0;
-	/*
-	 * A master transmits on its OWN channel ID, which for a tracking frame
-	 * is exactly the five bytes a slave would filter on - the same address
-	 * track_filter carries. Stating it here rather than leaving the field
-	 * zero is the point: struct radiant_tx_req had no address at all until
-	 * the first real backend needed one, and on nRF a transmit without one
-	 * silently inherits whichever device the last receive window matched.
-	 */
+	/* A master transmits on its own channel ID (the same five bytes a
+	 * slave filters on). Stated explicitly: on nRF a transmit with no
+	 * address silently inherits whichever device the last rx window matched. */
 	memcpy(req.addr, track_filter.addr, sizeof(req.addr));
 	req.addr_len = track_filter.addr_len;
 	req.body = body;
@@ -986,13 +953,9 @@ ZTEST(radiant_channel, test_open_offset_phases_on_top_of_the_period)
 	up();
 	t_open = radiant_radio_now();
 
-	/*
-	 * The offset is a phase adjustment applied on top of the period a
-	 * master waits anyway, not a replacement for it. Read the other way,
-	 * an offset of 0 would mean "transmit now", which the open-time
-	 * measurement falsifies. src/ant_radio.h does not say which reading it
-	 * means; this is the only one consistent with the bench.
-	 */
+	/* The offset phases on top of the period a master waits anyway, not in
+	 * place of it - an offset of 0 meaning "transmit now" is falsified by
+	 * the open-time measurement above. */
 	assign_and_id(0u, TYPE_MASTER);
 	zassert_equal(RADIANT_CH_OK, radiant_channel_open(0u, 4096u, t_open), NULL);
 	zassert_equal(t_open + 125000u + RADIANT_ANT_PLUS_PERIOD_US,
@@ -1233,13 +1196,9 @@ ZTEST(radiant_channel, test_close_with_an_operation_in_flight)
 	zassert_equal(RADIANT_CH_OK, radiant_channel_close(2u, t0), NULL);
 	zassert_equal(RADIANT_CH_STATE_CLOSING, radiant_channel_state_get(2u), NULL);
 
-	/*
-	 * While CLOSING the channel reports the state it is leaving, not
-	 * ASSIGNED. Reporting ASSIGNED would tell a host it may unassign a
-	 * channel that radiant_channel_unassign() then refuses, and a status byte
-	 * that disagrees with the next call's return code is worse than one
-	 * that lags.
-	 */
+	/* While CLOSING the channel reports the state it is leaving, not
+	 * ASSIGNED - reporting ASSIGNED would tell a host it may unassign a
+	 * channel that radiant_channel_unassign() then refuses. */
 	zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(2u, &status), NULL);
 	zassert_equal((uint8_t)(TYPE_SLAVE | RADIANT_CH_STATUS_SEARCHING), status,
 		      "a closing channel reported 0x%02x", status);
@@ -1253,12 +1212,8 @@ ZTEST(radiant_channel, test_close_with_an_operation_in_flight)
 	zassert_equal(RADIANT_CH_ERR_WRONG_STATE, radiant_channel_close(2u, t0),
 		      "a second close was accepted");
 
-	/*
-	 * The abort delivers the terminal event before it returns - the HAL
-	 * says so explicitly, so the core never has to reason about an
-	 * operation that ended without one - and that event is what completes
-	 * the close.
-	 */
+	/* The abort delivers the terminal event before it returns (the HAL
+	 * guarantees it), and that event is what completes the close. */
 	zassert_equal(RADIANT_RADIO_OK_RC, radiant_radio_abort(), NULL);
 	zassert_equal(1u, n_terminal, NULL);
 	zassert_equal(0u, n_terminal_stale, NULL);
@@ -1299,12 +1254,9 @@ ZTEST(radiant_channel, test_late_terminal_event_after_reopen_is_stale)
 	zassert_not_equal(op_old, op_new, "the mock reused an op id");
 	zassert_equal(6, radiant_channel_op_owner(op_new), NULL);
 
-	/*
-	 * Now the late event. On real hardware the frame was already in the
+	/* Now the late event: on real hardware the frame was already in the
 	 * receiver's pipeline when the abort ran, so it arrives after the core
-	 * moved on. The mock will never do this by itself, and a module that
-	 * has not been shown one has not been tested against it.
-	 */
+	 * moved on. The mock never produces this unprompted. */
 	zassert_equal(0u, radiant_channel_stale_op_count(), NULL);
 	zassert_equal(RADIANT_RADIO_OK_RC,
 		      fake_radio_inject_late_tx(op_old,
@@ -1354,17 +1306,13 @@ ZTEST(radiant_channel, test_op_zero_never_owns_a_channel)
 /* ---------------------------------------------------------------------------
  * The adaptive window guard
  *
- * radiant_channel_guard_us() decides how wide a slave opens its receive window,
- * and the whole point of it is to open a narrower one than the spec's worst
- * case when the master has earned it. Every test here is about the direction
- * that must never happen by accident: narrowing on no evidence, or narrowing
- * past the floor. The failure mode of a window that is too narrow is the silent
- * one radiant_radio_hal.h documents - yield falls at the same order as the
- * bench's own collision floor, with no error code raised anywhere - so a bug
- * here would look exactly like a bad afternoon on the bench.
- *
- * fake_radio's virtual clock makes all of it deterministic: t_sync is whatever
- * these tests say it is, to the microsecond.
+ * radiant_channel_guard_us() opens a narrower-than-worst-case receive window
+ * once a master has earned it. Tests here guard the failure direction:
+ * narrowing on no evidence, or past the floor. A too-narrow window fails
+ * silently (radiant_radio_hal.h) - yield drops at the same order as the
+ * bench's own collision floor, no error raised - so a bug here looks like a
+ * bad afternoon on the bench. fake_radio's virtual clock makes it
+ * deterministic: t_sync is whatever a test says it is, to the microsecond.
  * ---------------------------------------------------------------------------
  */
 
@@ -1428,13 +1376,9 @@ ZTEST(radiant_channel, test_guard_is_the_ceiling_until_the_estimator_has_locked)
 	t0 = radiant_radio_now();
 	acquire_slave(1u, t0);
 
-	/*
-	 * The case that matters most. One clean slot is one sample, and a
-	 * window sized from one sample is a window sized from luck - so every
-	 * slot up to the lock threshold must still get the old wide window,
-	 * even though the estimator by then has a perfectly good-looking
-	 * average sitting in it.
-	 */
+	/* One clean slot is one sample, and a window sized from one sample is
+	 * sized from luck - so every slot up to the lock threshold still gets
+	 * the wide window, even once the estimator has a good-looking average. */
 	for (i = 0u; i < RADIANT_CHANNEL_GUARD_LOCK_SLOTS; i++) {
 		zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US,
 			      radiant_channel_guard_us(1u),
@@ -1465,13 +1409,10 @@ ZTEST(radiant_channel, test_guard_is_the_ceiling_immediately_after_acquisition)
 	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u),
 		      NULL);
 
-	/*
-	 * A channel sent back to search and re-acquired is looking at whatever
-	 * turned up next. It may be a different sensor entirely - the
-	 * configured ID can be a wildcard - and what the previous master's
-	 * clock was doing is not evidence about this one. The first window
-	 * after an acquisition is also the one least able to afford a guess.
-	 */
+	/* A re-acquired channel may be looking at a different sensor entirely
+	 * (a wildcard ID), so the previous master's clock is not evidence about
+	 * this one - and the first window after acquisition can least afford
+	 * a guess. */
 	while (!radiant_channel_on_slot_missed(1u, radiant_radio_now())) {
 		/* until RX_FAIL_GO_TO_SEARCH */
 	}
@@ -1504,13 +1445,9 @@ ZTEST(radiant_channel, test_guard_widens_by_one_drift_quantum_per_miss)
 	narrow = radiant_channel_guard_us(1u);
 	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, narrow, NULL);
 
-	/*
-	 * Each miss extrapolates the prediction one more period with no fresh
-	 * sync, so each one is charged at the spec's worst case. This is what
-	 * makes the mechanism safe without a separate escape hatch: a link
-	 * that starts failing reopens the wide window on its own, one period at
-	 * a time, and is back at the ceiling before it gives up entirely.
-	 */
+	/* Each miss extrapolates the prediction one more period with no fresh
+	 * sync, so each is charged at the spec's worst case - a failing link
+	 * reopens the wide window on its own, one period at a time. */
 	for (i = 1u; i < RADIANT_CHANNEL_RX_FAIL_TO_SEARCH; i++) {
 		zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()),
 			      NULL);
@@ -1539,12 +1476,9 @@ ZTEST(radiant_channel, test_a_master_at_the_full_tolerance_limit_is_still_caught
 	t0 = radiant_radio_now();
 	acquire_slave(1u, t0);
 
-	/*
-	 * +/-50 ppm at each end is +/-25 us per ANT+ period. A master built to
-	 * the tolerance limit therefore lands 25 us off every single slot, and
-	 * the window has to still contain it - which is the whole claim the
-	 * narrow guard is making.
-	 */
+	/* +/-50 ppm at each end is +/-25 us per ANT+ period, so a master at the
+	 * tolerance limit lands 25 us off every slot - the window still has to
+	 * contain it. */
 	(void)clean_slots(1u, 64u, (int32_t)RADIANT_CHANNEL_DRIFT_WORST_US);
 
 	guard = radiant_channel_guard_us(1u);
@@ -1580,14 +1514,9 @@ ZTEST(radiant_channel, test_guard_never_goes_below_the_floor_for_any_residual)
 	t0 = radiant_radio_now();
 	acquire_slave(1u, t0);
 
-	/*
-	 * An instrument that only ever sees well-behaved input has not been
-	 * tested. This walks the estimator through residuals from zero to most
-	 * of a channel period, in both directions, and the invariant is checked
-	 * after every single one: never below the floor, never above the
-	 * ceiling. Those two bounds are the entire safety argument for the
-	 * feature, and neither may depend on the sequence.
-	 */
+	/* Walks the estimator through residuals from zero to most of a period,
+	 * both directions, checking after every one: never below the floor,
+	 * never above the ceiling - the entire safety argument. */
 	for (j = 0u; j < 4u; j++) {
 		for (i = 0u; i < ARRAY_SIZE(adversarial); i++) {
 			uint32_t guard;
@@ -1619,13 +1548,9 @@ ZTEST(radiant_channel, test_a_slot_after_a_miss_is_not_fed_to_the_estimator)
 	(void)clean_slots(1u, 64u, 0);
 	zassert_equal(0u, radiant_channel_residual_us(1u), NULL);
 
-	/*
-	 * Miss four slots, then hear one 90 us off. Those 90 us are four
-	 * periods of drift, not one, and averaging them in would size the
-	 * window from how lossy the link is rather than from how good the
-	 * master's clock is - on a link that loses 0.4 % of slots, permanently.
-	 * The miss term has already covered those periods at the spec bound.
-	 */
+	/* Miss four slots, then hear one 90 us off - four periods of drift, not
+	 * one. Averaging it in would size the window from link loss rather
+	 * than clock quality; the miss term already covers it at the spec bound. */
 	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()), NULL);
 	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()), NULL);
 	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()), NULL);
@@ -1647,20 +1572,17 @@ ZTEST(radiant_channel, test_a_slot_after_a_miss_is_not_fed_to_the_estimator)
 /* ---------------------------------------------------------------------------
  * Denial - the radio lent to another protocol stack
  *
- * Every test below is about the one distinction the denial signal exists to
- * make: a window that never opened says nothing about the sensor, so it must
- * not be able to take a live channel off the air, and it must not be reported
- * to a host as an RX failure. What it DOES cost is a period of extrapolation
- * with no fresh sync, and the guard has to be charged for that exactly as a
- * miss charges it - the two facts pull in opposite directions and getting
- * either one alone is a plausible-looking bug.
+ * A window that never opened says nothing about the sensor: it must not take
+ * a live channel off the air or be reported as an RX failure, but it does
+ * cost a period of extrapolation with no fresh sync, so the guard must be
+ * charged exactly as a miss charges it. Getting either half alone is a
+ * plausible-looking bug.
  * ---------------------------------------------------------------------------
  */
 
-/* The denial at which the guard first reaches its ceiling, from the floor, at
- * one drift quantum each. 12 with the constants as they stand - and derived
- * rather than written down, because a change to any of the three should move
- * the test rather than break it. */
+/* The denial count at which the guard first reaches ceiling from floor, one
+ * drift quantum each (12 with current constants) - derived rather than
+ * hardcoded so a constant change moves the test instead of breaking it. */
 #define DENIALS_TO_CEILING                                    \
 	((RADIANT_CHANNEL_GUARD_MAX_US - RADIANT_CHANNEL_GUARD_MIN_US) / \
 	 RADIANT_CHANNEL_DRIFT_WORST_US)
@@ -1678,17 +1600,11 @@ ZTEST(radiant_channel, test_denied_slots_widen_the_guard_and_never_leave_trackin
 	zassert_equal(RADIANT_CHANNEL_GUARD_MIN_US, radiant_channel_guard_us(1u),
 		      NULL);
 
-	/*
-	 * Twelve denials is half again what RX_FAIL_TO_SEARCH allows in misses.
-	 * A channel that treated the two alike would already be SEARCHING here,
-	 * and Zwift would have seen the sensor drop - because the other stack
-	 * was busy for three seconds.
-	 *
-	 * The guard is checked against an arithmetic expectation rather than
-	 * "it went up", because both failure directions are silent: too narrow
-	 * loses packets at the same order as the bench's own collision floor,
-	 * too wide burns receive current and swallows the next sensor's window.
-	 */
+	/* Twelve denials is half again what RX_FAIL_TO_SEARCH allows in misses;
+	 * a channel treating the two alike would already be SEARCHING. The
+	 * guard is checked against an arithmetic expectation rather than "it
+	 * went up", since both failure directions (too narrow, too wide) are
+	 * silent. */
 	prev = 0u;
 	for (i = 1u; i <= DENIALS_TO_CEILING; i++) {
 		uint32_t expect = RADIANT_CHANNEL_GUARD_MIN_US +
@@ -1710,13 +1626,9 @@ ZTEST(radiant_channel, test_denied_slots_widen_the_guard_and_never_leave_trackin
 	zassert_equal(RADIANT_CHANNEL_GUARD_MAX_US, prev,
 		      "twelve denials should reach the ceiling exactly");
 
-	/*
-	 * And from the twelfth on it STAYS at the ceiling. "Widens
-	 * monotonically to twenty" is false from here - the clamp is what makes
-	 * the RADIANT_CHANNEL_DENY_TO_SEARCH bound necessary, because past this
-	 * point extra denials accumulate disagreement the window provably no
-	 * longer covers.
-	 */
+	/* From the twelfth denial on it stays at the ceiling; the clamp is why
+	 * RADIANT_CHANNEL_DENY_TO_SEARCH is needed at all - past this point
+	 * extra denials accumulate disagreement the window no longer covers. */
 	for (; i < RADIANT_CHANNEL_DENY_TO_SEARCH; i++) {
 		zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()),
 			      "denial %u took the channel off the air", i);
@@ -1743,14 +1655,10 @@ ZTEST(radiant_channel, test_a_denial_run_past_the_bound_does_go_back_to_search)
 	acquire_slave(1u, t0);
 	(void)clean_slots(1u, 64u, 0);
 
-	/*
-	 * The bound is not a safety net that never fires by accident - it is the
-	 * statement that a channel stops claiming to track once its window
-	 * provably cannot contain the master any more. Under a working arbiter
-	 * it never fires; if it does, the arbiter is broken, and the counter
-	 * that says so is the reason denials are counted apart from misses in
-	 * the first place.
-	 */
+	/* The bound states that a channel stops claiming to track once its
+	 * window provably cannot contain the master. Under a working arbiter it
+	 * never fires; if it does, the arbiter is broken - which is why denials
+	 * are counted apart from misses. */
 	for (i = 1u; i < RADIANT_CHANNEL_DENY_TO_SEARCH; i++) {
 		zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()),
 			      NULL);
@@ -1784,20 +1692,11 @@ ZTEST(radiant_channel, test_a_slot_after_a_denial_run_is_not_fed_to_the_estimato
 	(void)clean_slots(1u, 64u, 0);
 	zassert_equal(0u, radiant_channel_residual_us(1u), NULL);
 
-	/*
-	 * The trap this test exists for, and the one place where "a denial is
-	 * not evidence about the peer" gives the wrong answer if applied
-	 * literally.
-	 *
-	 * The residual measured on a slot is |t_sync - predicted|, and after a
-	 * run of denials the prediction has been extrapolated once per denial.
-	 * The 260 us below is twenty periods of drift, not one. Feeding it to
-	 * an EWMA with a memory of eight slots clamps the guard at the ceiling
-	 * and then decays it back over roughly eight further slots - so a link
-	 * behaving perfectly would run a maximally wide window for two seconds
-	 * after every busy patch in the other stack, with nothing anywhere
-	 * saying why.
-	 */
+	/* After a run of denials the prediction is extrapolated once per
+	 * denial, so the 260 us residual below is twenty periods of drift, not
+	 * one. Feeding that to the EWMA would clamp the guard at the ceiling and
+	 * decay it back over ~8 slots - a perfectly healthy link running
+	 * maximally wide for two seconds after every busy patch elsewhere. */
 	for (i = 0u; i < 10u; i++) {
 		zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()),
 			      NULL);
@@ -1827,12 +1726,9 @@ ZTEST(radiant_channel, test_denials_and_misses_are_charged_at_the_same_weight)
 	acquire_slave(1u, t0);
 	(void)clean_slots(1u, 64u, 0);
 
-	/*
-	 * Interleaved, because the two counters run at the same time and the
-	 * guard is a function of their SUM. A build that charged only one of
-	 * them would pass every single-counter test above and open a window
-	 * three quanta too narrow here.
-	 */
+	/* Interleaved: the two counters run at the same time and the guard is a
+	 * function of their sum, so charging only one would pass every
+	 * single-counter test above and still open too narrow here. */
 	zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()), NULL);
 	zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()), NULL);
 	zassert_false(radiant_channel_on_slot_denied(1u, radiant_radio_now()), NULL);
@@ -1875,17 +1771,10 @@ ZTEST(radiant_channel, test_a_denied_slot_advances_the_clock_by_exactly_one_peri
 	period = before_slot - t0;
 	zassert_true(period > 0u, NULL);
 
-	/*
-	 * From the slot that was lost, NOT from now - the same rule a miss
-	 * keeps, and for the same reason: advancing from `now` lets scheduler
-	 * latency walk the phase away from the master one late notification at
-	 * a time. `now` is passed a long way ahead here precisely so that an
-	 * implementation which advanced from it would fail.
-	 *
-	 * For a master the advance is what stops the hot loop described at
-	 * radiant_channel.c's "A MASTER ADVANCES ITS SLOT" comment, which under
-	 * an arbiter is reachable from a single denied transmit.
-	 */
+	/* Advances from the slot that was lost, not from `now` - the same rule
+	 * a miss keeps, since advancing from `now` would let scheduler latency
+	 * walk the phase away one late notification at a time. `now` is passed
+	 * far ahead here so an implementation that advanced from it would fail. */
 	zassert_false(radiant_channel_on_slot_denied(1u, t0 + 999999u), NULL);
 	zassert_equal(before_slot + period, radiant_channel_next_slot(1u),
 		      "a denied slot did not advance by exactly one period");
@@ -2185,13 +2074,9 @@ ZTEST(radiant_channel, test_status_byte_carries_type_network_and_state)
 	up();
 	t0 = radiant_radio_now();
 
-	/*
-	 * Rev 5.1 section 9.5.7.1: state in bits 1:0, network in bits 3:2,
-	 * channel type in bits 7:4. The type values already sit in the top
-	 * nibble, so shifting them would report a channel type of zero on
-	 * every live master and the only symptom would be a host that refuses
-	 * to pair.
-	 */
+	/* Rev 5.1 section 9.5.7.1: state in bits 1:0, network in 3:2, type in
+	 * 7:4. Type values already sit in the top nibble - shifting them would
+	 * zero the channel type on every live master. */
 	for (i = 0u; i < (uint8_t)ARRAY_SIZE(types); i++) {
 		uint8_t net = (uint8_t)(i % RADIANT_CHANNEL_NETWORK_COUNT);
 		bool master = (types[i] & RADIANT_CH_TYPE_MASTER_BIT) != 0u;
@@ -2230,16 +2115,10 @@ ZTEST(radiant_channel, test_an_unrecognised_channel_type_is_accepted)
 {
 	uint8_t status = 0u;
 
-	/*
-	 * antr_channel_assign()'s permitted error set is {NO_ERROR,
-	 * INVALID_MESSAGE, CHANNEL_IN_WRONG_STATE, INVALID_NETWORK_NUMBER},
-	 * and INVALID_MESSAGE is already spoken for by the channel number, so
-	 * there is no code left with which to reject a channel type. Returning
-	 * INVALID_PARAMETER_PROVIDED would put a byte on the wire that the
-	 * contract says this function never produces. The type is therefore
-	 * carried verbatim, only bit 4 is interpreted, and the byte comes back
-	 * in the status reply.
-	 */
+	/* antr_channel_assign()'s permitted error set has no code left to reject
+	 * a channel type with (INVALID_MESSAGE is already spoken for by the
+	 * channel number, and INVALID_PARAMETER_PROVIDED is not in the set). So
+	 * the type is carried verbatim, only bit 4 interpreted. */
 	up();
 	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, 0x70u, 0u, 0u), NULL);
 	zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(0u, &status), NULL);

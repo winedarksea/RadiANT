@@ -4,31 +4,20 @@
  * Provenance: original clean-room work. Written against
  * radiant_core/include/radiant_core/radiant_radio_hal.h, radiant_core/tests/fake_radio.h and the
  * measurements in docs/spike-a-results.md. Nothing here derives from sdk-ant,
- * from libant.a, or from any adopter-gated ANT+ device profile document.
+ * from libant.a, or from any ANT+ device profile document.
  *
- * ---------------------------------------------------------------------------
- * Tests for the mock radio
- * ---------------------------------------------------------------------------
- * fake_radio.c is the only backend six of the seven core modules will ever run
- * against, so an untested mock is six modules' worth of tests that verify a
- * fiction. This suite is the check on the checker.
- *
- * What it covers, and why each one is here rather than assumed:
- *
- *   - the virtual clock moves only when a test moves it, and it starts below
- *     the 32-bit microsecond boundary on purpose;
- *   - op ids are non-zero, unique and monotonic, and a late event carrying a
- *     dead one is distinguishable from a live one;
- *   - every accepted operation produces exactly one terminal event, and none
- *     produces two;
- *   - the callback contract's MUST NOTs are enforced rather than documented;
- *   - caps are settable per test and the arm path actually reads them, which
- *     is what makes a scheduler test at max_filters == 2 mean anything;
- *   - a queued frame arrives at its own t_sync with the filter index that
- *     matched, and the address/body split follows the *receiver's* format -
- *     the property radiant_search.c's devnum recovery depends on;
- *   - every failure mode the core has to survive can be provoked: a silent
- *     window, a CRC failure, an arm that is already too late, and an abort.
+ * Tests for the mock radio. fake_radio.c is the only backend six of the
+ * seven core modules ever run against, so an untested mock is six modules'
+ * worth of tests verifying a fiction - this suite is the check on the
+ * checker. Covers: the virtual clock moves only when told, starting below
+ * the 32-bit microsecond boundary on purpose; op ids are non-zero, unique,
+ * monotonic, and a late event with a dead one is distinguishable from a live
+ * one; every accepted operation produces exactly one terminal event; the
+ * callback contract's MUST NOTs are enforced, not just documented; caps are
+ * settable per test and the arm path actually reads them; a queued frame
+ * arrives at its own t_sync with the matching filter index, address/body
+ * split following the receiver's format; every failure mode the core must
+ * survive can be provoked (silent window, CRC failure, late arm, abort).
  */
 
 #include <stdbool.h>
@@ -46,14 +35,10 @@
  * ---------------------------------------------------------------------------
  */
 
-/*
- * CRC-16/CCITT-FALSE covering the on-air address, per docs/ant-radio-link.md
- * and confirmed on 2,164 real frames in docs/spike-a-results.md. The mock does
- * not compute it; it is here because the HAL requires a well-formed crc block
- * on every arm call and the tests must supply a realistic one. A macro rather
- * than a const object, because a static initialiser needs a constant
- * expression.
- */
+/* CRC-16/CCITT-FALSE covering the on-air address, per docs/ant-radio-link.md
+ * and confirmed on 2,164 real frames (docs/spike-a-results.md). The HAL
+ * requires a well-formed crc block on every arm call; a macro rather than a
+ * const object because a static initialiser needs a constant expression. */
 #define RADIANT_CRC_CCITT_FALSE                                                    \
 	{                                                                      \
 		.width_bits = 16u, .poly = 0x1021u, .init = 0xFFFFu,           \
@@ -62,34 +47,23 @@
 	}
 
 /*
- * Two formats in ANT's tracking and search GEOMETRIES, expressed in HAL terms.
+ * Two formats in ANT's tracking and search geometries, expressed in HAL
+ * terms.
  *
- * ============================================================================
- * READ THIS BEFORE COPYING fmt_hal_len_from_body INTO A BACKEND. IT IS NOT
- * ANT's TRACKING FORMAT. THE REAL ONE IS radiant_frame_format(), AND IT IS
- * RADIANT_LEN_FIXED.
- * ============================================================================
+ * WARNING: fmt_hal_len_from_body is NOT ANT's tracking format - the real one
+ * is radiant_frame_format(), and it is RADIANT_LEN_FIXED. This fixture exists
+ * only to exercise the mock's RADIANT_LEN_FROM_BODY path (a legitimate HAL
+ * mode some other format will need), borrowing ANT's 5-byte address/10-byte
+ * body sizes for convenience and declaring a length at body[1] that ANT does
+ * not have. Byte 3 of an ANT body is actually a 6-field CONTROL byte
+ * (docs/spike-b-part2-results.md); a backend that mapped tracking onto
+ * RADIANT_LEN_FROM_BODY (nRF PCNF0.LFLEN=8) would read an acknowledged
+ * frame's 0xAA as LENGTH=170, overrun MAXLEN, and silently drop everything
+ * but broadcasts - and no length field can parse this byte at all (0x0A's
+ * low five bits read 10, 0xA2's read 2, for the same 8-byte payload).
  *
- * This fixture exists to exercise the mock's RADIANT_LEN_FROM_BODY path, which is a
- * legitimate HAL mode that some other packet format will one day need - the
- * enum is not going away, and an untested branch of the mock is worse than a
- * mislabelled one. It borrows ANT's five-byte address and ten-byte body only
- * because those are convenient numbers, and it declares a length at body[1]
- * that ANT does not have.
- *
- * Byte 3 of an ANT body is a CONTROL byte, six independent fields wide
- * (docs/spike-b-part2-results.md). A backend that mapped tracking onto
- * RADIANT_LEN_FROM_BODY, i.e. onto nRF PCNF0.LFLEN=8, would read an acknowledged
- * frame's 0xAA as LENGTH=170, overrun MAXLEN and discard it - a receiver that
- * hears every broadcast perfectly and silently drops everything else. Part 2
- * closed even the theoretical escape: 0x0A's low five bits read 10 and 0xA2's
- * read 2 for the same eight-byte payload, so no length field can parse this
- * byte at all.
- *
- * fmt_search: a 3-byte on-air address, so three bytes that the tracking matcher
- * consumed land in the body instead and there is no length field ahead of the
- * body at all. Static 12-byte body, exactly the STATLEN=12 both spikes ran, and
- * this one IS ANT's search format.
+ * fmt_search IS ANT's search format: 3-byte on-air address, static 12-byte
+ * body (STATLEN=12, as both spikes ran), no length field at all.
  */
 static const struct radiant_pkt_format fmt_hal_len_from_body = {
 	.phy = RADIANT_PHY_1M_GFSK,
@@ -1495,20 +1469,17 @@ ZTEST(fake_radio, test_transmit_body_must_match_the_length_rule)
 }
 
 /*
- * A transmit must name the address it emits, and the mock must say so.
+ * A transmit must name the address it emits, and the mock must say so. This
+ * was missed for a long time because a mock that only echoes a request
+ * cannot notice a field the contract never mentioned - struct radiant_tx_req
+ * had no address field at all, and every suite above the HAL asserted on
+ * body bytes instead.
  *
- * THE MOCK IS WHY THIS WAS MISSED FOR SO LONG, which is the reason the test
- * lives here rather than only in a scheduler suite. struct radiant_tx_req had no
- * address field at all; fake_radio recorded a request and replayed it, so a
- * field that was never written was also never read, and every suite above the
- * HAL asserted on body bytes. A mock that only echoes cannot notice that the air
- * needs something the contract never mentioned.
- *
- * On real hardware the omission is not a refusal. nRF's TXADDRESS is an index
- * into BASE/PREFIX registers that the previous operation loaded, so a transmit
- * with no address of its own inherits the last receive window's device number
- * and emits a well-formed frame addressed to the wrong sensor - which another
- * device may accept. So the mock is now strict where the hardware is silent.
+ * On real hardware the omission is not a refusal: nRF's TXADDRESS indexes
+ * BASE/PREFIX registers the previous operation loaded, so a transmit with no
+ * address of its own inherits the last rx window's device number and emits
+ * a well-formed frame to the wrong sensor. The mock is now strict where the
+ * hardware is silent.
  */
 ZTEST(fake_radio, test_a_transmit_must_carry_its_own_on_air_address)
 {

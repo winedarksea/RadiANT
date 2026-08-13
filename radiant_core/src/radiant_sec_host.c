@@ -3,36 +3,21 @@
  * The host surface for the two payload transforms: messages 0xF1-0xF4, as
  * antr_* entry points.
  *
- * This is the one security file that reaches an application header. Everything
- * else in radiant_sec depends on nothing above radiant_core; this file exists
- * precisely to be the seam between the module's own return codes and the
- * ANT serial protocol's, and putting that translation anywhere else would put
- * ANTW_* constants into a module that has no business knowing them.
+ * The one security file that reaches an application header - the seam
+ * between this module's return codes and the ANT serial protocol's.
  *
- * ---------------------------------------------------------------------------
- * WHY THE SWITCH BITS ARE NOT TRANSLATED
- * ---------------------------------------------------------------------------
- * RADIANT_SEC_SW_CONF/AUTH/DROP_UNVER/DESC_CONF are 0x01/0x02/0x04/0x08, and
- * 0xF1's bitmask is bit 0 X_CONF, bit 1 X_AUTH, bit 2 drop-unverified, bit 3
- * descriptor confidentiality. They are the same byte, on purpose, and the
- * BUILD_ASSERTs below are what keep them that way - a mapping table here would
- * be a second definition of the wire format, free to drift from the first, and
- * the drift would be silent because both halves would still be self-consistent.
+ * The switch bits are NOT translated on purpose: RADIANT_SEC_SW_CONF/AUTH/
+ * DROP_UNVER/DESC_CONF are 0x01/0x02/0x04/0x08, matching 0xF1's bitmask
+ * byte-for-byte. The BUILD_ASSERTs below keep them that way; a mapping table
+ * would be a second, driftable definition of the wire format.
  *
- * ---------------------------------------------------------------------------
- * WHAT THE KEY PATH PROMISES, AND WHAT IT CANNOT
- * ---------------------------------------------------------------------------
- * antr_sec_key_set() is write-only: nothing here reads a key back, there is no
- * read arm for 0xF2 anywhere, and MESG_REQUEST for it answers
- * ANTW_INVALID_MESSAGE rather than a key.
+ * antr_sec_key_set() is write-only - no read arm for 0xF2 exists.
  *
- * The caller is expected to wipe its own copy of the message body after
- * dispatching one - src/ant_serial_bridge.c does. That wipe is worth having and
- * is NOT sufficient, and saying so here is more useful than implying otherwise:
- * the bytes also passed through the USB stack's ring buffer and whatever
- * transport buffer sits under it, and neither is reachable from here. A root key
- * that has crossed a USB cable should be treated as having been in host memory,
- * because it has.
+ * The caller (src/ant_serial_bridge.c) wipes its copy of the message body
+ * after dispatch, but that is not sufficient: the bytes also passed through
+ * the USB stack's ring buffer and transport buffer, neither reachable from
+ * here. A root key that crossed USB should be treated as having been in
+ * host memory.
  */
 
 #include <string.h>
@@ -139,16 +124,11 @@ antr_err_t antr_sec_key_set(uint8_t channel, uint8_t bits, const uint8_t *key)
 	}
 
 	/*
-	 * The base device number is the channel's own, read here rather than
-	 * carried on the wire. 0xF2 moves exactly sixteen bytes and nothing
-	 * else, and a device number the host had to repeat correctly would be a
-	 * second place for it to be wrong.
-	 *
-	 * This is also why the key must be installed AFTER the channel ID:
-	 * base_devnum is bound into the KDF, so keying first and setting the ID
-	 * afterwards would derive keys under 0. Stated in the header; enforced
-	 * here only to the extent that a wildcard ID is refused, because a
-	 * wildcard cannot be the provisioning identity of anything.
+	 * base_devnum is read from the channel rather than carried on the
+	 * wire, so 0xF2 moves exactly sixteen bytes. The key must be
+	 * installed AFTER the channel ID: base_devnum is bound into the KDF,
+	 * so keying first would derive under 0. A wildcard ID is refused
+	 * since it can't be a provisioning identity.
 	 */
 	struct radiant_channel_id id;
 	int                       rc;
@@ -180,23 +160,16 @@ antr_err_t antr_sec_epoch_set(uint8_t channel, uint8_t flags, uint32_t epoch,
 	if (channel >= (uint8_t)RADIANT_CHANNEL_COUNT) {
 		return (antr_err_t)ANTW_INVALID_MESSAGE;
 	}
-	/*
-	 * Bit 0 says the epoch is coarse real time rather than a bare ordinal.
-	 * Nothing here behaves differently either way - monotonicity is the only
-	 * property the module needs and both encodings have it - so the bit is
-	 * accepted and carried by the host's own bookkeeping. Every other bit is
-	 * reserved.
-	 */
+	/* Bit 0 says the epoch is coarse real time vs. a bare ordinal; nothing
+	 * here behaves differently either way since both are monotonic. Every
+	 * other bit is reserved. */
 	if ((flags & (uint8_t)~0x01u) != 0u) {
 		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
 	}
 
-	/*
-	 * The channel period, read rather than sent. It is what turns a phase
-	 * into a packet index, radiant_channel already holds the authoritative
-	 * value, and a host-supplied one that disagreed would desynchronise the
-	 * counter in a way that looks exactly like clock drift.
-	 */
+	/* The channel period, read rather than sent: a host-supplied value
+	 * that disagreed would desynchronise the counter in a way that looks
+	 * like clock drift. */
 	if (radiant_channel_period_get(channel, &period) != RADIANT_CH_OK) {
 		return (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE;
 	}
@@ -217,12 +190,8 @@ antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len)
 		return (antr_err_t)ANTW_INVALID_MESSAGE;
 	}
 
-	/*
-	 * An unkeyed channel answers rather than erroring, with zeros and a
-	 * CLEAR verdict. "No security on this channel" is a legitimate state a
-	 * host needs to be able to read, and making it an error would force a
-	 * host to treat an ordinary channel as a fault.
-	 */
+	/* An unkeyed channel answers with zeros and CLEAR rather than erroring
+	 * - "no security here" is a legitimate state, not a fault. */
 	radiant_sec_get_state(channel, &state);
 	radiant_sec_get_stats(channel, &stats);
 
@@ -251,15 +220,10 @@ antr_err_t antr_sec_status_get(uint8_t channel, uint8_t *out, uint8_t out_len)
 #if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
 
 /*
- * 0xF5, the pairing exchange.
- *
- * Sub-commands rather than four message IDs, because they are one conversation
- * with an order: enter, supply a scalar, exchange, leave. Separate IDs would
- * have let a host skip a step and get a state error it could not localise.
- *
- * The reply echoes the sub-command at [1] so a host reading a stream of them
- * can tell which one answered - the local public key and the fingerprint are
- * both "32-ish bytes after a channel byte" otherwise.
+ * 0xF5, the pairing exchange. Sub-commands rather than four message IDs,
+ * since they are one conversation with an order: enter, supply a scalar,
+ * exchange, leave. The reply echoes the sub-command at [1] so a host can
+ * tell which one answered.
  */
 antr_err_t antr_sec_pair(uint8_t channel, uint8_t subcmd, const uint8_t *arg,
 			 uint8_t arg_len, uint8_t *reply, uint8_t reply_cap,
@@ -323,13 +287,8 @@ antr_err_t antr_sec_pair(uint8_t channel, uint8_t subcmd, const uint8_t *arg,
 		if (reply_cap < 5u) {
 			return (antr_err_t)ANTW_INVALID_MESSAGE;
 		}
-		/*
-		 * The comparison fingerprint, six digits in a u24 LE. THIS IS
-		 * THE ONLY DEFENCE AGAINST A MAN IN THE MIDDLE and it only
-		 * works if a human actually compares it against the other end's
-		 * - the exchange itself succeeds either way, which is what an
-		 * anonymous key agreement is.
-		 */
+		/* The comparison fingerprint, six digits in a u24 LE: the only
+		 * defence against a MITM, and only if a human compares it. */
 		reply[2] = (uint8_t)(fp & 0xFFu);
 		reply[3] = (uint8_t)((fp >> 8) & 0xFFu);
 		reply[4] = (uint8_t)((fp >> 16) & 0xFFu);

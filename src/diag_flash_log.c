@@ -1,33 +1,26 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 /*
- * Persistent diagnostic log for a board with no debugger attached.
- *
- * The plan for this project assumed RTT as the log channel, but RTT needs a
- * J-Link and there is none on this machine — which left bring-up blind, with
- * an LED heartbeat as the only signal. This module gives the log somewhere to
- * go that survives a reset and can be read back over the one channel the board
- * always has: the Adafruit UF2 bootloader.
+ * Persistent diagnostic log for a board with no debugger attached (RTT needs
+ * a J-Link and there is none here). Gives the log somewhere that survives a
+ * reset and can be read back over the one channel the board always has: the
+ * Adafruit UF2 bootloader.
  *
  * How it works:
- *
- *   1. It registers as a Zephyr log backend, so every LOG_INF/LOG_ERR — from
- *      the application *and* from the USB stack itself — is formatted into a
- *      RAM buffer.
+ *   1. Registers as a Zephyr log backend - every LOG_INF/LOG_ERR, app or USB
+ *      stack, is formatted into a RAM buffer.
  *   2. A low-priority thread periodically copies that buffer into a reserved
- *      flash region, and diag_flash_log_flush() does the same on demand.
- *   3. Double-tapping RESET mounts FTHR840BOOT, whose CURRENT.UF2 is a readback
- *      of the application flash. scripts/read_flash_log.ps1 pulls the region
- *      out of it and prints the text.
+ *      flash region; diag_flash_log_flush() does the same on demand.
+ *   3. Double-tapping RESET mounts FTHR840BOOT, whose CURRENT.UF2 is a
+ *      readback of the application flash. scripts/read_flash_log.ps1 pulls
+ *      the region out and prints it.
  *
- * Two copies are written, because the bootloader's CURRENT.UF2 only spans as
- * far as the last programmed page: the primary slot sits at the top of the
- * code partition, the alternate just above a typical image, so whichever way
- * the bootloader decides the extent, at least one copy is inside it.
+ * Two copies are written because CURRENT.UF2 only spans as far as the last
+ * programmed page - one slot at the top of the code partition, one just
+ * above a typical image, so at least one is inside it either way.
  *
- * Log text is captured in immediate mode (see diag.conf), so a message written
- * immediately before a hang still reaches the buffer, and the next periodic
- * flush commits it.
+ * Captured in immediate mode (diag.conf), so a message written right before
+ * a hang still reaches the buffer for the next flush to commit.
  */
 
 #include <zephyr/kernel.h>
@@ -243,17 +236,12 @@ int diag_flash_log_flush(void)
 }
 
 /*
- * Overrides the weak default, which halts the CPU without a trace. A halt is
- * indistinguishable from a hang from the outside - no USB, no LED, and no
- * periodic flush either - so committing the log here is what makes an early
- * fault visible at all.
- *
- * Overriding it also takes CONFIG_RESET_ON_FATAL_ERROR out of the picture,
- * since that option only changes what the *default* handler does. Honour it
- * explicitly instead, after the flush, so a diag build behaves the same way a
- * release build does rather than quietly still going dark. The log survives the
- * reboot - it is already in flash by this point, and read back through the
- * bootloader's CURRENT.UF2, which does not care how the CPU got there.
+ * Overrides the weak default, which halts the CPU without a trace -
+ * indistinguishable from a hang from the outside. Committing the log here
+ * is what makes an early fault visible. Also takes over
+ * CONFIG_RESET_ON_FATAL_ERROR, honoured explicitly after the flush so a diag
+ * build still reboots like a release build; the log survives since it's
+ * already in flash by then.
  */
 void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf)
 {

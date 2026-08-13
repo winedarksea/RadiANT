@@ -11,173 +11,103 @@ no `pyusb`.
 ## What this does
 
 An `.antser` file is a byte-level host<->dongle transcript, one framed message
-per line, direction in a column - the format specified in
-`archive/captures/serial/README.md`:
+per line, direction in a column (format in `archive/captures/serial/README.md`):
 
     # ant serial capture v1: <seconds|-> <dir> <framed message, hex>
     0.000000 > a4014a00ef
     0.014200 < a4016f20ea
 
-For every **host to dongle** record, this re-derives the frame from
-`tools/ant_wire.py` - `frame(msg_id, payload)` against the payload read out of
-the record - and asserts the bytes match exactly. For every **dongle to host**
-record it parses the frame and asserts the decode is self-consistent: the id
-and payload `unframe()` returns are the bytes that are actually there, the id
-is one the tables know, the length declared **for the direction the record is
-in** admits the payload it carries, its declared direction admits the column it
-arrived in, and a response event names either a real message id or the event
-marker.
+For each **host to dongle** record, this re-derives the frame via
+`ant_wire.frame(msg_id, payload)` and asserts byte equality. For each **dongle
+to host** record it asserts the decode is self-consistent: id/payload match
+the raw bytes, the id is known, the length declared for the record's
+*direction* admits the payload, the declared direction matches the column,
+and a response event names a real message id or the event marker.
 
-That is worth doing only because the transcript is foreign. A vector obtained
-by running `frame()` and freezing the result agrees with `frame()` by
-construction; a transcript recorded by `ANT_DLL.dll`, or typed by hand from a
-table, does not. This is the same argument that makes
-`scripts/gen_ant_wire.py` generate constants instead of cross-checking them:
-generation makes one number appear in three places, and only a foreign
-transcript checks the *rules*.
+This only matters because the transcript is foreign: a vector built by
+`frame()` and frozen agrees with `frame()` by construction, but a transcript
+recorded by `ANT_DLL.dll` or typed by hand does not, so only a foreign
+transcript checks the *rules* rather than round-tripping them.
 
-## Two sources, and why one of them can be missing
+## Two sources, and why one can be missing
 
-`archive/captures/serial/` is where real captures go. It now holds
-`conformance-sdk-ant.antser`, the Tier 1 reference: a real ANTUSB-m-compatible
-dongle answering 284 conformance cases, reproduced byte-identically across two
-runs, and the file every future `radiant_core` build is diffed against. When that
-directory is empty - on a clone that has not fetched it, or before one was ever
-recorded - `TestRealCaptures` skips, loudly, naming what is missing. It does
-not pass.
+`archive/captures/serial/` holds real captures, including
+`conformance-sdk-ant.antser`, the Tier 1 reference (a real ANTUSB-m-compatible
+dongle answering 284 conformance cases, byte-identical across two runs) that
+every future `radiant_core` build is diffed against. When that directory is
+empty, `TestRealCaptures` skips loudly, naming what is missing - it does not
+pass.
 
-`tools/vectors/` holds hand-assembled fixtures with their XOR worked out in
-comments, and they are replayed on every run. They exist so the harness itself
-is exercised from day one: a first real capture should add coverage, not be the
-thing that discovers the harness was broken. A test that skips on every run and
-a test that vacuously passes are the same test.
-
-That ordering paid, and not in the direction anyone expected. Replaying the
-first real transcript turned this suite red in five places, **all five of them
-this file's fault**. The bytes were right; the rules were wrong. Both defects
-are worth naming here, because both are the same mistake - a rule stated more
-broadly than the thing it is true of.
+`tools/vectors/` holds hand-assembled fixtures, replayed on every run, so the
+harness itself is exercised from day one rather than only once a real capture
+exists.
 
 ## A message id is not a message
 
-`payload_len` in `protocol/ant_wire.yaml` used to be one number per id, and a
-request's reply is not the same shape as the command sharing its id. `0x78`
-takes a 9..12-byte configuration command and answers a request with **4**
-bytes; `0x7D` takes a 4-byte enable command and answers with **2**, **5** or
-**20**, depending on which encryption info type was asked for. Four of the five
-failures were that.
+A request's reply is not the same shape as the command sharing its id: `0x78`
+takes a 9..12-byte config command but a 4-byte request reply; `0x7D` takes a
+4-byte enable command but replies with 2, 5, or 20 bytes depending on the
+encryption info type asked for. The YAML's `reply_len` block covers cases
+where the two differ, and this file picks between `payload_len` and
+`reply_len` by `record.direction`. Widening `payload_len` to the union of both
+was rejected: a length check that admits everything is worth less than none.
 
-The YAML now carries a `reply_len` block wherever the two differ, and this file
-picks between the two by `record.direction`, which it already had. The route
-not taken was widening `payload_len` to the union - it would have gone green
-immediately and would have admitted a 4-byte `0x78` *command* and a 20-byte
-`0x7D` one for the rest of the project's life. Length is one of the few things
-a Tier 1 byte diff genuinely rests on, and a check that cannot fail is worth
-less than no check, because it also stops anyone writing the real one.
-
-Each reply shape names a constant in the YAML's `message_sizes` rather than
-restating a number, so the length this file checks against is the same one the
-bridge writes into the LEN byte. Where the reply is self-describing - `0x7D`
-echoes its info type at byte 0 - the shape is pinned from the reply alone.
-Where it is not - `0x78`'s shape was chosen by byte 0 of the `MESG_REQUEST`,
-which the reply does not repeat - it is pinned by pairing the reply with the
-request earlier in the file. See `ReplayContext`.
+Each reply shape names a constant in the YAML's `message_sizes` rather than a
+raw number. Self-describing replies (`0x7D` echoes its info type at byte 0)
+are pinned from the reply alone; `0x78`'s shape is chosen by the earlier
+`MESG_REQUEST`'s byte 0, so it's pinned by pairing reply with request. See
+`ReplayContext`.
 
 ## The five-bit ceiling belongs to the burst header
 
-The fifth failure was `frame/sync-in-payload`, which sends `a4026ea4e08c`: an
-antlib-config message using channel `0xA4` **on purpose**, so that a SYNC byte
-lands inside a payload and the parser's resynchronisation is put under test.
-The dongle echoes `a40340a46e002d` back, correctly, and this file rejected it
-for carrying a channel above 32.
+Byte 0 of `MESG_BURST_DATA` and its two relatives is `[last | seq(2) |
+channel(5)]`, read by `src/ant_serial_bridge.c` with
+`ANTW_BURST_HEADER_CHANNEL_MASK` - the one place the serial protocol packs a
+channel into fewer than 8 bits. Byte 0 of a plain `0x40` response is *not* a
+channel field on most messages, so the 5-bit ceiling must not be applied
+there (case `frame/sync-in-payload` legitimately uses channel `0xA4`). See
+`burst_header_problems()`.
 
-That ceiling is real, and it belongs to exactly one byte: `[last | seq(2) |
-channel(5)]`, byte 0 of `MESG_BURST_DATA` and its two relatives, which
-`src/ant_serial_bridge.c` reads with `ANTW_BURST_HEADER_CHANNEL_MASK`. Byte 0
-of a `0x40` is a plain uint8 that echoes whatever the command carried, and on
-most messages that byte is not a channel at all. See
-`burst_header_problems()` for what is checkable there and what is not.
+## Integrity: hashes catch what shape-checks can't
 
-The other offered repair was renaming the case to carry the `malformed` token,
-which would also have gone green. It was rejected: the waiver is for records
-that are not conformant, and spending it on one that is would record a true
-fact - this frame is unusual - as a false one, and delete the only evidence in
-the tree that a `0xA4` channel byte is legal.
-
-## What none of the above can see, and the hashes that can
-
-Every rule here is about a record's *shape*. None of them has an opinion about
-what a dongle should have answered, and none can: the answer is the
-measurement. Flip one data byte in a reply and the frame is still impeccable.
-
-The gate for that is the sha256s `tools/ant_conformance.py` recorded when it
-captured the transcript, committed in `archive/benchmarks/`. This file reads
-them back - whole file and per case - so that a byte changed inside an
-otherwise conformant reply is caught and localised to its case. See
-`integrity_problems()`. It is not there for integrity in the abstract: when a
-real transcript turns this suite red, the cheapest way to green is to edit the
-transcript, and that falsifies the reference every future A/B is measured
-against.
+Every rule above is about a record's *shape*; none has an opinion on whether
+the dongle's answer was actually correct, since the answer is the
+measurement. `tools/ant_conformance.py` records sha256s (whole-file and
+per-case) alongside each transcript in `archive/benchmarks/`; this file
+checks the bytes back against them so a single flipped data byte in an
+otherwise well-formed reply is caught and localised. See
+`integrity_problems()`. This exists specifically so the reference transcript
+can't be quietly edited to make a red suite pass.
 
 ## The `malformed` case convention
 
-A `# case` name containing the token `malformed` declares that the records
-under it **need not conform**. `tools/ant_conformance.py` exports the same
-token as its `MALFORMED` constant and builds case names like
-`42-assign-channel/malformed-short` from it.
+A `# case` name containing the token `malformed` waives conformance for the
+records under it (`tools/ant_conformance.py` exports the same token as
+`MALFORMED`). Rule: **a problem with a record is a failure, unless its case
+name declares nonconformance, in which case it is recorded and waived.**
 
-The rule is one sentence: **a problem with a record is a failure, unless its
-case name declares nonconformance, in which case it is recorded and waived.**
+Two consequences:
 
-The first draft of this file said something stricter and wrong - that every
-record under such a case must be rejected by `unframe()`. Replaying a generated
-conformance transcript through it produced 718 failures, none of them real, in
-two classes worth writing down because they are the shape of the problem:
+* An unmodelled message id is still a hard failure in a record with no case
+  marker (a real `Device0.txt` capture has none) - it must be absorbed into
+  `protocol/ant_wire.yaml` rather than waived.
+* Not every defect is visible at this framing/tables level (e.g.
+  `malformed-oob-index`'s channel 0xFF is only wrong per firmware semantics),
+  so a case declaring nonconformance is not required to actually produce a
+  problem here - except for the fixtures in `tools/vectors/`, whose defects
+  were chosen to be visible at this level and are asserted.
 
-* **The reset/startup pair `ant_conformance.py` sends before every case is
-  perfectly well formed**, and it carries the case's name, malformed or not.
-  409 of the 718. Under the rule above these records simply have no problems,
-  so there is nothing to waive and nothing to fail.
-* **`malformed-short`, `-long`, `-oob-index` and `-param-ff` are well-formed
-  frames carrying a payload the message id does not admit.** That is what makes
-  them worth sending: they test the bridge's error mapping, not its framer.
-  Only `malformed-checksum`, `malformed-sync`, `malformed-oversize` and
-  `malformed-partial-then-valid` are defects this harness can see at the
-  framing level.
-
-Two consequences follow, and both are deliberate:
-
-**An unmodelled message id is still a hard failure in a real capture.** A
-record can only claim the waiver through a case marker, and a `Device0.txt`
-capture has no case markers at all - Garmin's log does not name our test cases.
-So `frame/malformed-unknown-id-high` in a conformance transcript is waived,
-while the same id turning up in a capture from a real host fails and has to be
-absorbed into `protocol/ant_wire.yaml`. That is the right split, and the
-absence of case names is what makes it free.
-
-**This harness cannot see every level at which a record is malformed.**
-`malformed-oob-index` sends channel `0xFF` in a frame that is impeccable by
-every rule here; only the firmware's handler knows it is wrong. So there is no
-requirement that a case declaring nonconformance actually produce a problem -
-that assertion would fail on exactly the cases whose defect lives above the
-framing layer. It *is* asserted for the fixtures in `tools/vectors/`, whose
-cases were written here and are known to be visible at this level.
-
-The known hole, stated rather than discovered later: a waiver is granted per
-record, so a *preamble* frame that became corrupt inside a malformed case would
-be waived along with the record the case is about. It would still be caught in
-every `valid` case, since the preamble is the same bytes everywhere. Closing it
-properly means `ant_conformance.py` emitting its preamble under a separate
-non-malformed case name, which is filed as a change request rather than assumed
-here.
+Known hole: the waiver is granted per record, so a preamble frame that went
+bad *inside* a malformed case would be waived along with it (though it would
+still be caught in a `valid` case, since the preamble is identical everywhere).
+Closing it means `ant_conformance.py` emitting its preamble under its own
+case name - filed as a change request, not assumed here.
 
 ## Deliberately not importing tools/ant_trace.py
 
-`ant_trace.py` owns the `.antser` reader for the rest of the tools directory,
-and this file reimplements a small strict parser instead. That is not
-duplication for its own sake: a fixture read back by the same code that wrote
-it proves nothing about the format, and this test's whole value is being an
-implementation that the thing under test did not produce.
+This file reimplements a small strict `.antser` parser instead of reusing
+`ant_trace.py`'s: a fixture read back by the same code that wrote it proves
+nothing about the format.
 """
 
 from __future__ import annotations
@@ -210,11 +140,8 @@ HEADER_PREFIX = "# ant serial capture v1:"
 CASE_MARKER = "# case "
 
 # The token in a case name that waives conformance for the records under it.
-# `tools/ant_conformance.py` exports the same string as its `MALFORMED`
-# constant and builds names like `42-assign-channel/malformed-short` from it.
-# Spelled out here rather than imported: that tool is the thing whose output
-# this file exists to check, and a checker that imports its subject's idea of
-# the convention is checking that the tool agrees with itself.
+# Spelled out here rather than imported from ant_conformance.py, since that
+# tool is the thing this file exists to check.
 MALFORMED_TOKEN = "malformed"
 
 # `<seconds|-> <dir> <hex>`, with an optional trailing comment so that the
@@ -275,7 +202,7 @@ def read_antser(text, source="<string>"):
 
 
 def read_antser_file(path):
-    with open(path, "r", encoding="utf-8") as handle:
+    with open(path, encoding="utf-8") as handle:
         return read_antser(handle.read(), source=os.path.basename(path))
 
 
@@ -287,11 +214,9 @@ def discover(directory):
                   if name.endswith(".antser"))
 
 
-# Byte 0 of these three is a burst header - [last | seq(2) | channel(5)] - and
-# not a plain channel byte. It is the one place in the serial protocol where a
-# channel number is packed into fewer than eight bits, which is what makes the
-# five-bit ceiling a property of *these* messages rather than of channel bytes
-# in general. See burst_header_problems().
+# Byte 0 of these three is a burst header [last | seq(2) | channel(5)], the
+# one place the serial protocol packs a channel into fewer than 8 bits. See
+# burst_header_problems().
 BURST_HEADER_IDS = frozenset({
     w.MESG_BURST_DATA_ID,
     w.MESG_ADV_BURST_DATA_ID,
@@ -316,17 +241,10 @@ def _declared_range(declared):
 # Integrity: the transcript is evidence
 # ---------------------------------------------------------------------------
 #
-# `tools/ant_conformance.py` writes a summary JSON alongside every transcript it
-# records - the sha256 of the whole file, and a sha256 per case over that case's
-# records. Those summaries are committed in archive/benchmarks/ and until now
-# nothing read them back.
-#
-# This covers what the replay rules structurally cannot. They check that a
-# record is well *formed*; they have no opinion about what a dongle should have
-# answered and cannot have one, because the answer is the measurement. Flip one
-# data byte in a reply and every framing rule still passes - correctly, and
-# uselessly, since the Tier 1 acceptance criterion is a byte diff and a silently
-# edited reference would make every future A/B agree with a fiction.
+# ant_conformance.py writes a summary JSON (whole-file sha256, plus one per
+# case) alongside each transcript, committed under archive/benchmarks/. This
+# reads them back: framing rules only check a record is well *formed*, so a
+# flipped data byte in a reply would otherwise pass silently.
 
 
 def _walk_summaries(node):
@@ -356,7 +274,7 @@ def recorded_summaries(directory=BENCHMARKS_DIR):
             continue
         path = os.path.join(directory, name)
         try:
-            with open(path, "r", encoding="utf-8") as handle:
+            with open(path, encoding="utf-8") as handle:
                 document = json.load(handle)
         except (ValueError, OSError):
             continue
@@ -425,19 +343,10 @@ def integrity_problems(path, summary):
 class ReplayContext:
     """What a record cannot say about itself, read off the transcript.
 
-    Two checks need more than the record in front of them, and both would be
-    weaker without it:
-
-    * A `request_index`-selected reply (`0x78`) does not carry the index that
-      chose its shape. Only the `MESG_REQUEST` earlier in the file does.
-    * A burst header's channel is bounded by how many channels the device has,
-      and the device states that in its own capabilities reply.
-
-    Deriving both from the transcript rather than hardcoding them is what keeps
-    the checks honest across backends: a 32-channel `radiant_core` advertises 32 and
-    the ceiling follows it, with nothing here to update. Nothing in here reads a
-    clock, a filesystem or an environment variable, so a replay is as
-    reproducible as the transcript it is given.
+    Two checks need more than the record in front of them: a `request_index`
+    reply (`0x78`) doesn't carry the index that chose its shape (only the
+    earlier `MESG_REQUEST` does), and a burst header's channel ceiling is
+    bounded by the device's own capabilities reply, not a hardcoded count.
     """
 
     def __init__(self, records=()):
@@ -647,14 +556,9 @@ class ReplayMixin:
     def length_problems(self, record, msg_id, info, payload, where, context):
         """The declared length for *this* record, not for this message id.
 
-        A message id is not a message: `MESG_REQUEST` names an id and the reply
-        carries that same id with a payload no host ever sends. `payload_len`
-        in the YAML describes the command; `reply_len`, where the two differ,
-        describes the reply. Picking between them by direction is the whole fix
-        - the alternative on offer was widening `payload_len` to the union of
-        both, which would have admitted a 4-byte 0x78 *command* and a 20-byte
-        0x7D one, and a length check that admits everything is worth less than
-        no length check at all.
+        `payload_len` describes the command; `reply_len`, where it differs,
+        describes the reply. Picked by direction rather than unioning the two,
+        which would admit both a 4-byte 0x78 command and a 20-byte 0x7D one.
         """
         reply = info.get("reply_len")
         if record.direction == DONGLE_TO_HOST and reply is not None:
@@ -688,7 +592,7 @@ class ReplayMixin:
                         f"reply shapes ({declared} bytes)"]
             match = [s for s in shapes if s["when"] == payload[0]]
             if not match:
-                known = ", ".join("0x%02X" % s["when"] for s in shapes)
+                known = ", ".join(f"0x{s['when']:02X}" for s in shapes)
                 return [f"{where}: {name} echoes info type 0x{payload[0]:02X} "
                         f"at byte 0, which is not one it declares a reply "
                         f"shape for ({known}). An undeclared info type is "
@@ -699,9 +603,9 @@ class ReplayMixin:
         else:  # request_index
             index = context.request_index_for(msg_id)
             if index is None:
-                # Nothing earlier in the file asked, so the index that chose
-                # the shape is simply not in evidence. Fall back to the set
-                # rather than pretend: a real host log may start mid-session.
+                # No earlier request in evidence; fall back to the declared
+                # set rather than pretend - a real host log may start
+                # mid-session.
                 if len(payload) in {s["len"] for s in shapes}:
                     return []
                 return [f"{where}: {name} reply carries {len(payload)} bytes. "
@@ -711,7 +615,7 @@ class ReplayMixin:
                         f"in it"]
             match = [s for s in shapes if s["when"] == index]
             if not match:
-                known = ", ".join("0x%02X" % s["when"] for s in shapes)
+                known = ", ".join(f"0x{s['when']:02X}" for s in shapes)
                 return [f"{where}: the MESG_REQUEST that drew this asked with "
                         f"index 0x{index:02X}, and {name} declares no reply "
                         f"shape for it ({known})"]
@@ -729,28 +633,11 @@ class ReplayMixin:
     def burst_header_problems(self, header, where, context):
         """Byte 0 of a burst message: [last | seq(2) | channel(5)].
 
-        This is the only place the serial protocol squeezes a channel number
-        below eight bits - `src/ant_serial_bridge.c` reads it with
-        `ANTW_BURST_HEADER_CHANNEL_MASK` - and therefore the only place the
-        five-bit ceiling is a rule about the bytes rather than about nothing.
-
-        Two consequences, and both bound what this check may honestly claim:
-
-        * Because the field *is* five bits, no burst header on a wire can
-          express a channel above 31. A literal "channel > 31 here" test could
-          never fire. That is exactly how the ceiling ended up on the
-          RESPONSE_EVENT channel byte instead, where it could fire - and did,
-          on `frame/sync-in-payload`, which is a perfectly conformant record.
-        * What a burst header *can* address is a channel the device does not
-          have. The bound for that is the channel count in byte 0 of the
-          capabilities reply, and the transcript states it about itself. Read
-          it from there rather than hardcoding this firmware's 8: a 32-channel
-          `radiant_core` advertises 32 and this check follows it with no edit.
-
-        A transcript containing no capabilities reply cannot say how many
-        channels the device has, so nothing is claimed. That is a real hole and
-        it is narrow: `ant_conformance.py` requests capabilities in every run,
-        and a host session that never asks has no basis for the check anyway.
+        Since the field is 5 bits, no burst header can literally exceed 31 -
+        what it *can* do is address a channel the device doesn't have, bounded
+        by the channel count read from the transcript's own capabilities
+        reply (never hardcoded). No capabilities reply means nothing is
+        claimed here.
         """
         channel = header & BURST_CHANNEL_MASK
         if context.max_channels is None or channel < context.max_channels:
@@ -763,23 +650,12 @@ class ReplayMixin:
     def response_event_problems(self, payload, where):
         """[channel, message id or MESG_EVENT_ID, code].
 
-        The middle byte decides which number space byte 2 lives in, and the
-        two spaces overlap. A reader that skips the check reports EVENT_TX
-        (0x03) as a reply to message 0x03.
-
-        Byte 0 carries **no** five-bit ceiling. It is a plain uint8 that echoes
-        whatever byte 0 of the command carried, and for most messages that byte
-        is not a channel number at all - it is a filler, a mask index or an
-        encryption info type. Case `frame/sync-in-payload` sends channel 0xA4
-        on purpose, so that a SYNC byte lands inside a payload and the parser's
-        resynchronisation is put under test; the dongle echoes 0xA4 back in a
-        0x40 and is right to. Rejecting that as "above the 5-bit ceiling" was
-        the check reaching outside where its constraint holds - see
-        burst_header_problems() for where it does hold.
-
-        It holds in one place here too, and that one is kept: when the response
-        answers a burst message, the bridge derived byte 0 by masking a burst
-        header, so a value above the mask could not have come from one.
+        The middle byte decides which number space byte 2 lives in (they
+        overlap - EVENT_TX 0x03 vs. message 0x03). Byte 0 carries no five-bit
+        ceiling here: it's a plain uint8 that on most messages isn't a channel
+        at all (case `frame/sync-in-payload` legitimately echoes 0xA4). The
+        ceiling does still apply when the response answers a burst message,
+        since the bridge derived byte 0 by masking a burst header.
         """
         channel, middle, code = payload
         problems = []
@@ -809,20 +685,16 @@ class ReplayMixin:
         self.assertIn(len(timed), (0, len(stamps)),
                       f"{name}: mixes real timestamps with '-'. A transcript "
                       f"is either a statement about timing or it is not.")
-        for earlier, later in zip(timed, timed[1:]):
+        for earlier, later in zip(timed, timed[1:], strict=False):
             self.assertLessEqual(earlier, later,
                                  f"{name}: timestamps go backwards")
 
     def check_request_replies(self, records, name):
         """Every MESG_REQUEST is answered somewhere later in the file.
 
-        Ordering across directions is the property the format's
-        direction-as-a-column decision exists to preserve, so it is worth one
-        check. A refusal comes back as a 0x40 naming 0x4D, not the wanted id.
-
-        Skipped entirely on a one-directional transcript: `ant_conformance.py`
-        can generate the host side of a run without a device attached, and a
-        file with no replies in it is not making a claim about ordering.
+        A refusal comes back as a 0x40 naming 0x4D, not the wanted id. Skipped
+        on a one-directional transcript (host side generated with no device
+        attached), which makes no claim about ordering.
         """
         if not any(r.direction == DONGLE_TO_HOST for r in records):
             return
@@ -868,12 +740,9 @@ class TestHandmadeFixtures(ReplayMixin, unittest.TestCase):
                 self.replay_file(path)
 
     def test_every_declared_nonconformance_is_real(self):
-        # Asserted for these fixtures and deliberately NOT for real captures.
-        # The cases here were written in this directory and their defects were
-        # chosen to be visible at the framing-and-tables level. A conformance
-        # transcript's `malformed-oob-index` is malformed in a way only the
-        # firmware's handler can see, so demanding a visible problem there
-        # would fail on a correct file.
+        # Asserted for these fixtures (their defects were chosen to be visible
+        # at this level) and deliberately NOT for real captures, where e.g.
+        # malformed-oob-index is only wrong per firmware semantics.
         for path in discover(VECTORS_DIR):
             records = read_antser_file(path)
             declared = {r.case for r in records if declares_nonconformance(r)}
@@ -887,9 +756,7 @@ class TestHandmadeFixtures(ReplayMixin, unittest.TestCase):
                         f"is stale and the case checks nothing")
 
     def test_the_fixtures_cover_both_kinds_of_defect(self):
-        # The waiver has two quite different customers and both need to be
-        # exercised in CI, or the first real conformance transcript is what
-        # discovers that one of the branches never ran:
+        # Both waiver customers need exercising in CI:
         #   * a frame the framer itself rejects (the checksum bug), and
         #   * an impeccable frame whose payload the message id does not admit,
         #     which is the whole `malformed-short` / `-long` family.
@@ -942,11 +809,9 @@ class TestRealCaptures(ReplayMixin, unittest.TestCase):
     def test_the_transcript_is_still_the_one_that_was_recorded(self):
         """Hashes from `archive/benchmarks/`, checked back against the bytes.
 
-        The reason to run this next to the replay checks is blunter than
-        integrity in the abstract. When a real transcript turns this suite red
-        the cheapest way to green is to edit the transcript, and that is
-        falsifying the reference every future A/B is measured against. It
-        should be the one repair that cannot be made quietly.
+        Guards against the cheapest way to make a red suite green: editing
+        the transcript, which would falsify the reference every future A/B
+        is measured against.
         """
         summaries = recorded_summaries()
         checked = 0
@@ -973,9 +838,8 @@ class TestRealCaptures(ReplayMixin, unittest.TestCase):
 class TestTheMalformedConvention(ReplayMixin, unittest.TestCase):
     """The waiver, exercised on transcripts built in memory.
 
-    These are the shapes `tools/ant_conformance.py` actually emits, reduced to
-    one record each. They are here rather than as fixtures because the point is
-    the *rule*, not the bytes, and because half of them must fail - which a
+    Reduced to one record each from the shapes ant_conformance.py emits;
+    in-memory rather than fixtures because half of these must fail, which a
     committed fixture cannot express.
     """
 
@@ -1008,9 +872,8 @@ class TestTheMalformedConvention(ReplayMixin, unittest.TestCase):
         self.assertIn("42-assign-channel/malformed-short", waived)
 
     def test_an_unknown_id_fails_without_a_case_marker(self):
-        # The discriminator that matters. A Device0.txt capture has no case
-        # names, so an id no table knows can never be waived there - it has to
-        # be absorbed into protocol/ant_wire.yaml.
+        # A Device0.txt capture has no case names, so an unknown id can never
+        # be waived there - it has to be absorbed into protocol/ant_wire.yaml.
         fatal, waived = self.classify_text(f"- > {self.UNKNOWN}\n")
         self.assertEqual(waived, {})
         self.assertEqual(len(fatal), 1)
@@ -1051,10 +914,9 @@ class TestTheMalformedConvention(ReplayMixin, unittest.TestCase):
 
     def test_the_known_hole_in_the_convention(self):
         # A waiver is granted per record, so a preamble frame that went bad
-        # inside a malformed case is waived along with the record the case is
-        # about. Asserted rather than left implicit: closing it means
-        # ant_conformance.py emitting its preamble under its own case name, and
-        # when that happens this test is the one that should change.
+        # inside a malformed case is waived along with the record it's about.
+        # Closing this means ant_conformance.py emitting its preamble under
+        # its own case name; this test should change when that happens.
         broken_preamble = "- > a4014a00ee\n"       # checksum EF -> EE
         fatal, waived = self.classify_text(
             "# case 42-assign-channel/malformed-short\n"
@@ -1071,16 +933,10 @@ class TestTheMalformedConvention(ReplayMixin, unittest.TestCase):
 class TestTheDirectionDependentLengthModel(ReplayMixin, unittest.TestCase):
     """`payload_len` is the command; `reply_len` is the request reply.
 
-    Written in the shape `TestTheMalformedConvention` established, and for the
-    same reason: the failure mode of a length rule is being too permissive, and
-    permissiveness cannot be tested through `assertRaises`. Every rule below is
-    pinned from both sides - the conformant bytes pass, and the smallest edit
-    that should break them does.
-
-    The bytes are the real ones from
-    `archive/captures/serial/conformance-sdk-ant.antser`, reduced to the two or
-    three records that matter, so a change that makes these pass while the
-    transcript fails is not available.
+    Every rule below is pinned from both sides: the conformant bytes pass, and
+    the smallest edit that should break them does. Bytes are the real ones
+    from `archive/captures/serial/conformance-sdk-ant.antser`, so a change
+    that passes these while the transcript fails is not available.
     """
 
     HEADER = HEADER_PREFIX + " <seconds|-> <dir> <framed message, hex>\n"
@@ -1185,11 +1041,9 @@ class TestTheDirectionDependentLengthModel(ReplayMixin, unittest.TestCase):
                 self.assertIn(expect, problem)
 
     def test_the_single_shape_selector_is_exact(self):
-        # 0x79's command is two bytes and its reply three. payload_len still
-        # reads '2..3' because ant_conformance.py derives its malformed cases
-        # from those bounds, but the reply side is pinned exactly - so the
-        # asymmetry the round trip exists to catch is checked in one direction
-        # even though the union is still tolerated in the other.
+        # 0x79's command is two bytes and its reply three; payload_len still
+        # reads '2..3' (ant_conformance.py derives its malformed cases from
+        # those bounds) but the reply side is pinned exactly.
         self.assert_clean(
             f"- < {w.frame(w.MESG_EVENT_FILTER_CONFIG_ID, bytes(3)).hex()}\n")
         problem = self.only_problem(
@@ -1199,9 +1053,8 @@ class TestTheDirectionDependentLengthModel(ReplayMixin, unittest.TestCase):
 
     def test_an_unrequested_indexed_reply_falls_back_to_the_declared_set(self):
         # A real host log may start mid-session, so a reply with no request in
-        # evidence is checked against the set rather than rejected outright.
-        # Pinned because it is the one place this model is deliberately weaker,
-        # and a future change that makes it stricter should be deliberate.
+        # evidence is checked against the declared set rather than rejected
+        # outright - the one place this model is deliberately weaker.
         self.assert_clean(f"- < {self.ADV_BURST_CAPS}\n")
         self.assert_clean(f"- < {self.ADV_BURST_CONFIG}\n")
         problem = self.only_problem(
@@ -1209,11 +1062,8 @@ class TestTheDirectionDependentLengthModel(ReplayMixin, unittest.TestCase):
         self.assertIn("No MESG_REQUEST for 0x78 appears earlier", problem)
 
     def test_every_reply_shape_resolves_to_a_committed_size_constant(self):
-        # The YAML names a size constant and the generator resolves the number
-        # from `message_sizes`, so the number exists once. Assert the link held:
-        # a shape whose length stopped matching its constant would mean the
-        # generator resolved something else, and the transcript would then be
-        # checked against a number nothing in the firmware emits.
+        # The YAML names a size constant, resolved from `message_sizes`, so
+        # the number exists once; assert the link held.
         seen = 0
         for msg_id, info in w.MESSAGES.items():
             reply = info.get("reply_len")
@@ -1234,16 +1084,9 @@ class TestTheBurstChannelCeiling(ReplayMixin, unittest.TestCase):
     """The five-bit ceiling, checked only where a burst header imposes it.
 
     The bug this pins: the ceiling was applied to byte 0 of every
-    RESPONSE_EVENT, which is a plain uint8 echoing whatever the command
-    carried. `frame/sync-in-payload` sends channel 0xA4 deliberately - it is
-    how a SYNC byte is made to land inside a payload - and the harness called
-    the dongle's correct echo a defect.
-
-    Renaming that case to carry the `malformed` token would also have made the
-    suite green, and was rejected: the record is conformant, the waiver is for
-    records that are not, and spending it here would have recorded a true fact
-    (this frame is unusual) as a false one (this frame is wrong). Scoping the
-    check keeps the information.
+    RESPONSE_EVENT (a plain uint8 echoing whatever the command carried), so
+    `frame/sync-in-payload`'s deliberate channel 0xA4 was flagged as a defect
+    even though the record is fully conformant.
     """
 
     HEADER = HEADER_PREFIX + " <seconds|-> <dir> <framed message, hex>\n"
@@ -1297,11 +1140,9 @@ class TestTheBurstChannelCeiling(ReplayMixin, unittest.TestCase):
 
     def test_a_bad_burst_header_is_still_waivable_by_case_name(self):
         # malformed-oob-index sends 0xFF as byte 0 on every message, burst
-        # included, and the waiver has to reach it like any other problem.
-        # The capabilities reply sits outside the case on purpose: a record
-        # inside a malformed case is not trusted to state the device's channel
-        # count either, which is the same waiver working in the other
-        # direction.
+        # included. The capabilities reply sits outside the case on purpose:
+        # a record inside a malformed case isn't trusted to state the
+        # device's channel count either.
         fatal, waived = self.classify_text(
             f"# case 4d-request-capabilities-0/valid\n- < {self.CAPS_8}\n"
             "# case 50-burst-data/malformed-oob-index\n"
@@ -1334,11 +1175,8 @@ class TestTheBurstChannelCeiling(ReplayMixin, unittest.TestCase):
                 self.assertIn("cannot be 164", fatal[0][1][0])
 
     def test_a_transcript_with_no_capabilities_reply_claims_nothing(self):
-        # The documented hole, pinned so that closing it is a deliberate edit
-        # rather than a silent change of meaning. Without a capabilities reply
-        # the transcript never says how many channels the device has, and the
-        # five-bit field cannot be overflowed, so there is nothing left to
-        # check.
+        # Without a capabilities reply the transcript never states the
+        # device's channel count, so there is nothing to check here.
         fatal, _ = self.classify_text(f"- > {self.burst(0x9F)}\n")
         self.assertEqual(fatal, [])
 
@@ -1346,9 +1184,9 @@ class TestTheBurstChannelCeiling(ReplayMixin, unittest.TestCase):
 class TestTheIntegrityCheckItself(unittest.TestCase):
     """A hash check nobody has watched fail is a hash check that does nothing.
 
-    Driven against transcripts written to a temporary directory, with a summary
-    built the way `ant_conformance.summarise()` builds one, so the assertions
-    are about the rule and not about the committed bytes.
+    Driven against transcripts in a temp dir, with summaries built the way
+    ant_conformance.summarise() builds them, so the assertions are about the
+    rule, not the committed bytes.
     """
 
     BODY = (HEADER_PREFIX + " <seconds|-> <dir> <framed message, hex>\n"
@@ -1424,9 +1262,9 @@ class TestTheIntegrityCheckItself(unittest.TestCase):
                       "not in the summary", joined)
 
     def test_the_committed_summary_is_found_and_names_a_real_transcript(self):
-        # The lookup, not the hashes: if archive/benchmarks/ ever stops being
-        # walked correctly, TestRealCaptures' integrity test would pass by
-        # checking nothing, and its own guard would be the only thing left.
+        # Tests the lookup, not the hashes: if archive/benchmarks/ ever stops
+        # being walked correctly, the integrity test would pass by checking
+        # nothing.
         summaries = recorded_summaries()
         self.assertIn("conformance-sdk-ant.antser", summaries)
         source, summary = summaries["conformance-sdk-ant.antser"]
@@ -1474,9 +1312,8 @@ class TestTheParserItself(unittest.TestCase):
                     "- ! a4014a00ef",        # not a direction
                     "- > zz014a00ef",        # not hex
                     "0.1 > a4014a00e"):      # odd digit count
-            with self.subTest(bad):
-                with self.assertRaises(AntserError):
-                    read_antser(self.HEADER + bad + "\n")
+            with self.subTest(bad), self.assertRaises(AntserError):
+                read_antser(self.HEADER + bad + "\n")
 
     def test_blank_lines_and_comments_are_skipped(self):
         self.assertEqual(
