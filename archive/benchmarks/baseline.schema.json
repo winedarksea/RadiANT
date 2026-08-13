@@ -24,6 +24,7 @@
       "type": "array",
       "items": { "$ref": "#/$defs/usb_run" }
     },
+    "coexistence": { "$ref": "#/$defs/coexistence" },
     "conformance": { "$ref": "#/$defs/conformance" },
     "sensitivity": { "$ref": "#/$defs/sensitivity" },
     "scale": { "$ref": "#/$defs/scale" },
@@ -88,6 +89,11 @@
       "additionalProperties": false,
       "required": ["transmitter", "receiver", "link"],
       "properties": {
+        "second_stack": {
+          "description": "What else was linked into the image under test AND actually transmitting. Part of the rig rather than of the coexistence block because rig equality is what tools/ant_ab.py checks BEFORE any gate runs, and a thread_med sitting and a ble sitting are different experiments however similar their numbers look. `none` is the honest value for an arbitrated build with nothing else on the radio; it is NOT the same as omitting the field, which says the sitting predates the question. Note that `none` says nothing about MPSL: on nRF54L the 802.15.4 driver turns multiprotocol arbitration on by itself, so there is no such thing as an unarbitrated arm on that part - see coexistence.arbiter_note.",
+          "type": ["string", "null"],
+          "enum": ["none", "ble", "thread_sed", "thread_med", null]
+        },
         "transmitter": {
           "type": "object",
           "additionalProperties": false,
@@ -251,6 +257,94 @@
             "msgs_per_s": { "type": "number" },
             "timeouts": { "type": ["integer", "null"] }
           }
+        }
+      }
+    },
+    "coexistence": {
+      "description": "What a second protocol stack on the same radio costs, from ONE sitting on ONE build. Every other block here is half of an A-versus-B comparison across two backends; this one is not, and that is why it is a block of its own. Its three loss figures are the same backend measured three ways minutes apart - direct gate, arbitrated with the second stack off, arbitrated with it on - and they are only comparable to each other because they came off the same board without the rig being touched. tools/ant_ab.py gate_coexistence() reads exactly the fields below.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["second_stack", "loss_second_stack_off_pct", "loss_second_stack_on_pct"],
+      "properties": {
+        "second_stack": {
+          "description": "Which stack was contending. Must equal rig.second_stack; it is repeated here so a coexistence block lifted out of its file still says what it measured.",
+          "enum": ["ble", "thread_sed", "thread_med"]
+        },
+        "loss_direct_pct": {
+          "description": "`loss (exact)` on the DIRECT-gate build - no arbiter at all. The reference for the arbiter's own cost, which is the exit criterion for the whole combined build. Null where the part cannot build a direct arm: on nRF54L the 802.15.4 radio driver enables MPSL by itself, so an image with 15.4 in it is arbitrated whether or not this project asked for it, and there is no honest direct number to record.",
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "loss_second_stack_off_pct": {
+          "description": "`loss (exact)` on the arbitrated build with the second stack linked in but NOT transmitting - the arbiter present and no competitor. THE ARM THAT MAKES THIS A MEASUREMENT, and the one this project has already got wrong once: `CONFIG_BT=y` alone linked a controller in and left it asleep, and the gate came back with a sweep ratio of exactly 1.000 - a gate that cannot fail. Read the pair off/on as 'what the demand cost', never as 'what arbitration cost'.",
+          "type": "number",
+          "minimum": 0
+        },
+        "loss_second_stack_on_pct": {
+          "description": "`loss (exact)` on the same build with the second stack actually carrying traffic. Record thread_load_sent beside it or the figure is not a measurement.",
+          "type": "number",
+          "minimum": 0
+        },
+        "sweep_sets_per_s_off": {
+          "description": "Discovery sweep rate with the second stack off, from CONFIG_RADIANT_CORE_SWEEP_DEBUG. The sweep is the elastic consumer (ADR 0013) so it IS the thing that gives way; bounded rather than accepted, because 'the sweep gives way' with no number attached is indistinguishable from a sweep that stopped.",
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "sweep_sets_per_s_on": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "thread_load_sent": {
+          "description": "`sent=` from src/thread_coex_load.c over the ON arm. A P4 number quoted without it is not a measurement: an attached MTD that transmitted nothing looks exactly like perfect coexistence.",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "scheduler_cost": {
+          "description": "THE OTHER HALF OF THE RESULT, and the half docs/radiant-bridge.md 7.3a says the docs record nowhere. The loss figures above are the AIR cost - what ANT+ lost. This is what the reserve cost the OTHER stack's scheduler, which 7.3a asserts is where the cost actually lands. Recorded per arm because a delta against the ANT-idle arm is the whole point; a single number would be unreadable.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "send_latency_us_max_ant_idle": {
+              "description": "Worst zsock_sendto() latency with ANT placing no windows. The reference arm - an arm whose other stack is idle is not a coexistence arm, and this is the number that proves this one was not.",
+              "type": ["number", "null"]
+            },
+            "send_latency_us_max_ant_loaded": { "type": ["number", "null"] },
+            "send_latency_us_p99_ant_idle": {
+              "description": "Interpolated from the logarithmic buckets src/thread_coex_load.c prints, so it carries the buckets' resolution and no more. A mean is deliberately not recorded: the scheduler cost is a tail, and averaging the sends that landed inside a grant with the ones that did not produces a number true of neither.",
+              "type": ["number", "null"]
+            },
+            "send_latency_us_p99_ant_loaded": { "type": ["number", "null"] },
+            "mac_tx_total": { "type": ["integer", "null"] },
+            "mac_tx_retry_ant_idle": {
+              "description": "otLinkGetCounters() deltas over the arm. These ARE deferral measured on the other stack's own terms: a CCA failure or a retry is the 15.4 MAC finding the air taken, and under this build it is very often taken by us. They are the Thread-side mirror of the gate's own ext=a/b.",
+              "type": ["integer", "null"]
+            },
+            "mac_tx_retry_ant_loaded": { "type": ["integer", "null"] },
+            "mac_tx_err_cca_ant_idle": { "type": ["integer", "null"] },
+            "mac_tx_err_cca_ant_loaded": { "type": ["integer", "null"] },
+            "mac_tx_err_busy_ant_idle": { "type": ["integer", "null"] },
+            "mac_tx_err_busy_ant_loaded": { "type": ["integer", "null"] }
+          }
+        },
+        "gate_counters": {
+          "description": "The 1 Hz gate dump at the end of the ON arm. grant_end_calls tracking granted is the invariant the whole grant-abort work exists to defend, and late_disarm/overstayed/invalid_return must all be zero - a non-zero late_disarm names a fault that otherwise presents only as a receiver that stopped hours ago.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "granted": { "type": ["integer", "null"] },
+            "grant_end_calls": { "type": ["integer", "null"] },
+            "late_disarm": { "type": ["integer", "null"] },
+            "idle_disarm": { "type": ["integer", "null"] },
+            "overstayed": { "type": ["integer", "null"] },
+            "invalid_return": { "type": ["integer", "null"] },
+            "blocked": { "type": ["integer", "null"] },
+            "extends_ok": { "type": ["integer", "null"] },
+            "extends_failed": { "type": ["integer", "null"] }
+          }
+        },
+        "arbiter_note": {
+          "description": "What this sitting could NOT isolate, in prose, and it is required reading rather than colour. On nRF54L there is no build of the 15.4 driver without MPSL, so an arm with the second stack merely linked in is 15.4-with-an-arbiter-and-no-competitor - it measures what a second stack's DEMAND costs, not what arbitration costs. Say so here rather than letting the off/on delta be read as the arbiter's price.",
+          "type": ["string", "null"]
         }
       }
     },

@@ -616,10 +616,14 @@ class Gates(unittest.TestCase):
     # -- coexistence --------------------------------------------------------
     #
     # Tested against gate_coexistence() directly rather than through
-    # evaluate(), because the block is `enabled = false` in ab_gates.toml until
-    # P3 measures its thresholds - so evaluate() correctly skips it, and a test
-    # that went through evaluate() would be asserting nothing while looking
-    # like it asserted something.
+    # evaluate(), and the reason has changed since these were written. It used
+    # to be that the block was `enabled = false`, so evaluate() correctly
+    # skipped it and a test routed through evaluate() would have asserted
+    # nothing while looking like it asserted something. The block is on now, and
+    # the direct call is kept for a better reason: this gate reads THREE loss
+    # figures out of ONE baseline rather than comparing two, so driving it
+    # through evaluate() would mean building a second baseline that plays no
+    # part in the assertion.
 
     COEX_CFG = {"required": False, "max_delta_pp": 0.5,
                 "absolute_ceiling_pct": 1.5,
@@ -823,20 +827,27 @@ class GatesFile(unittest.TestCase):
                  "coexistence"}
         self.assertEqual(set(gates()["gates"]), known)
 
-    def test_the_coexistence_gate_is_off_until_it_is_measured(self):
-        # It is written and evaluated, and its thresholds are placeholders
-        # until P3 measures them on the nRF54L15 DK. `enabled = false` is what
-        # keeps it out of the table meanwhile - a gate that runs against a
-        # guessed threshold is worse than one that does not run, because it
-        # reports PASS.
+    def test_the_coexistence_gate_is_on_and_its_thresholds_are_measured(self):
+        # THIS TEST USED TO PIN `enabled == False`, on the reasoning that a gate
+        # running against a guessed threshold is worse than one that does not
+        # run, because it reports PASS. That reasoning was right and it has
+        # expired: the thresholds are measured now, and the schema that used to
+        # reject a real coexistence baseline before any gate could read it
+        # carries both `coexistence` and `rig.second_stack`.
         #
-        # The DEFAULT is what this pins, not the mechanism: gate_coexistence()
-        # is tested directly below, so turning the block on is a one-line
-        # change with a working gate behind it.
+        # What is pinned instead is the pair of numbers, because those are what
+        # the reasoning was actually protecting. +0.5 pp is docs/backends.md's
+        # long-standing coexistence bar and 1.5 pp is the EXIT CRITERION for the
+        # whole combined build - if the arbiter alone costs that much, no amount
+        # of shaping the other stack's demand recovers it and the answer is the
+        # two-box handoff. Neither should move without the doc moving with it.
         cfg = gates()["gates"]["coexistence"]
-        self.assertFalse(cfg["enabled"])
+        self.assertTrue(cfg["enabled"])
         self.assertEqual(cfg["max_delta_pp"], 0.5)
         self.assertEqual(cfg["arbiter_only_max_delta_pp"], 1.5)
+        self.assertFalse(cfg["required"],
+                         "a sitting on a build with no second stack has no "
+                         "coexistence block, and its absence must read as SKIP")
 
     def test_the_two_loss_gates_measure_different_things(self):
         # docs/backends.md has stated +0.5 pp for coexistence since before the

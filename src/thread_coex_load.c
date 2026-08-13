@@ -75,6 +75,7 @@
 #include <zephyr/net/openthread.h>
 
 #include <openthread/thread.h>
+#include <openthread/link.h>
 
 #include "thread_coex_load.h"
 
@@ -167,6 +168,68 @@ static void note_role(void)
 			  role == OT_DEVICE_ROLE_LEADER);
 }
 
+/*
+ * THE BUCKET INDEX, AND THE FLOOR IS DELIBERATE.
+ *
+ * Everything below 64 us lands in bucket 0. There is nothing to resolve down
+ * there: the uncontended call is a queue push, and separating a 3 us push from
+ * an 11 us push would only add columns that never move. What has to be
+ * resolvable is the region from "a few hundred microseconds of ordinary stack
+ * work" up to "the whole 96 ms grant", which is what the remaining twelve
+ * buckets cover.
+ */
+static uint32_t lat_bucket(uint32_t us)
+{
+	uint32_t i = 1;
+
+	if (us < 64u) {
+		return 0;
+	}
+	us >>= 6; /* now in 64 us units, and at least 1 */
+	while (us > 1u && i < (THREAD_COEX_LAT_BUCKETS - 1u)) {
+		us >>= 1;
+		i++;
+	}
+	return i;
+}
+
+/*
+ * THE MAC COUNTERS, SAMPLED WHERE THEY CAN BE READ AGAINST THE SENDS THAT
+ * PROVOKED THEM.
+ *
+ * Absolute, not deltas, and the report prints them as deltas since the previous
+ * report - which is the form that answers the question. A total of 4000 tx with
+ * 300 retries says nothing about whether the retries were spread evenly or all
+ * arrived in the two minutes an ANT channel was open; the per-report delta,
+ * printed beside `sent` on the same line, does.
+ *
+ * Read WITHOUT taking the OpenThread API lock, which is a deliberate and
+ * bounded choice rather than an oversight. note_role() above has always read
+ * otThreadGetDeviceRole() the same way and this is a bench instrument reading
+ * five monotonic uint32 counters for a printout; the cost of being wrong is a
+ * torn value in one report line, and the cost of blocking this work item on the
+ * OT mutex is that the instrument measuring scheduler latency becomes a source
+ * of it.
+ */
+static void sample_mac_counters(void)
+{
+	otInstance *ot = openthread_get_default_instance();
+	const otMacCounters *mc;
+
+	if (ot == NULL) {
+		return;
+	}
+	mc = otLinkGetCounters(ot);
+	if (mc == NULL) {
+		return;
+	}
+	stats.mac_tx_total     = mc->mTxTotal;
+	stats.mac_tx_retry     = mc->mTxRetry;
+	stats.mac_tx_err_cca   = mc->mTxErrCca;
+	stats.mac_tx_err_abort = mc->mTxErrAbort;
+	stats.mac_tx_err_busy  = mc->mTxErrBusyChannel;
+}
+
 static void coex_send_fn(struct k_work *w)
 {
 	int rc;
@@ -176,8 +239,24 @@ static void coex_send_fn(struct k_work *w)
 	note_role();
 
 	if (stats.attached && socket_ready()) {
+		uint32_t t0 = k_cycle_get_32();
+		uint32_t us;
+
 		rc = zsock_sendto(sock, payload, sizeof(payload), 0,
 				  (struct sockaddr *)&dest, sizeof(dest));
+		/*
+		 * TIMED ACROSS THE CALL AND NOTHING ELSE. The bracket is as
+		 * tight as it can be on purpose: widen it to include note_role()
+		 * or the reporting below and the histogram starts measuring this
+		 * file instead of the 15.4 stack.
+		 */
+		us = k_cyc_to_us_floor32(k_cycle_get_32() - t0);
+		stats.lat[lat_bucket(us)]++;
+		if (us > stats.lat_max_us) {
+			stats.lat_max_us = us;
+		}
+		/* Counted whether or not the send succeeded: a call that took
+		 * 40 ms and then failed still waited 40 ms. */
 		if (rc < 0) {
 			/*
 			 * Counted separately from `sent` and never folded into
@@ -200,11 +279,62 @@ static void coex_send_fn(struct k_work *w)
 	 */
 	if (stats.sent && (stats.sent %
 	    CONFIG_ANT_DONGLE_THREAD_COEX_LOAD_REPORT_EVERY) == 0u) {
+		static uint32_t prev_mac[5];
+		uint32_t d[5];
+
 		LOG_INF("thread load: role=%u sent=%u failed=%u interval=%dms "
 			"payload=%uB", stats.role, stats.sent,
 			stats.send_failed,
 			CONFIG_ANT_DONGLE_THREAD_COEX_LOAD_INTERVAL_MS,
 			(unsigned int)sizeof(payload));
+
+		/*
+		 * CUMULATIVE, NOT PER-REPORT, and that is the right choice for
+		 * the histogram even though the MAC counters below are printed
+		 * as deltas. An arm is a whole run against one image; the shape
+		 * of the tail over the whole run is the result, and resetting
+		 * the buckets every report would leave the operator adding
+		 * columns by hand across a console capture. The MAC counters
+		 * are the opposite case - they are already cumulative in the
+		 * stack and have been counting since boot, including through
+		 * attach, so only their delta belongs to this arm.
+		 *
+		 * `us<` labels are the bucket's lower bound: 0 is everything
+		 * under 64 us, then 64, 128, 256 ... and the last is >=256 ms.
+		 */
+		LOG_INF("thread lat us: <64=%u 64=%u 128=%u 256=%u 512=%u "
+			"1k=%u 2k=%u 4k=%u 8k=%u 16k=%u 32k=%u 64k=%u "
+			">=128k=%u max=%u",
+			stats.lat[0], stats.lat[1], stats.lat[2], stats.lat[3],
+			stats.lat[4], stats.lat[5], stats.lat[6], stats.lat[7],
+			stats.lat[8], stats.lat[9], stats.lat[10],
+			stats.lat[11], stats.lat[12], stats.lat_max_us);
+
+		sample_mac_counters();
+		d[0] = stats.mac_tx_total     - prev_mac[0];
+		d[1] = stats.mac_tx_retry     - prev_mac[1];
+		d[2] = stats.mac_tx_err_cca   - prev_mac[2];
+		d[3] = stats.mac_tx_err_abort - prev_mac[3];
+		d[4] = stats.mac_tx_err_busy  - prev_mac[4];
+		prev_mac[0] = stats.mac_tx_total;
+		prev_mac[1] = stats.mac_tx_retry;
+		prev_mac[2] = stats.mac_tx_err_cca;
+		prev_mac[3] = stats.mac_tx_err_abort;
+		prev_mac[4] = stats.mac_tx_err_busy;
+
+		/*
+		 * THIS IS DEFERRAL, MEASURED ON THE OTHER STACK'S OWN TERMS.
+		 * A CCA failure or a retry is the 15.4 MAC finding the air
+		 * taken, which under this build is very often taken by us -
+		 * so these five deltas are what "the reserve costs Thread's
+		 * scheduler" means as a number rather than as a claim.
+		 */
+		LOG_INF("thread mac d: tx=%u retry=%u cca=%u abort=%u busy=%u "
+			"| tot tx=%u retry=%u cca=%u abort=%u busy=%u",
+			d[0], d[1], d[2], d[3], d[4],
+			stats.mac_tx_total, stats.mac_tx_retry,
+			stats.mac_tx_err_cca, stats.mac_tx_err_abort,
+			stats.mac_tx_err_busy);
 	}
 
 	(void)k_work_schedule(&coex_send,

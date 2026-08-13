@@ -24,17 +24,30 @@
     unless they carry a BOM, so non-ASCII characters here become parse errors.
 
 .PARAMETER App
-    Which ztest application to build, relative to the repository root. There is
-    more than one: radiant_core\tests is the 187-test suite over the module's
-    lower half, and radiant_core\tests\api is a separate application because
-    CONFIG_RADIANT_CORE_ANTR_API=y cannot be flipped in the first one - both it
-    and test_event.c/test_channel.c define radiant_event_crit_enter(),
-    radiant_event_crit_exit(), radiant_event_wakeup() and
-    radiant_channel_event_out(), so the two would collide at link, and
-    radiant_api.c's versions would change what those suites assert.
+    Which ztest application to build, relative to the repository root. There are
+    three, and each is a separate application because its prj.conf cannot be
+    reconciled with the others':
 
-    BuildDir follows App unless it is given explicitly, so running both back to
-    back does not make each one a full rebuild of the other.
+      radiant_core\tests       the suites over the module's lower half, driven
+                               against tests\fake_radio.c.
+      radiant_core\tests\api   CONFIG_RADIANT_CORE_ANTR_API=y, which cannot be
+                               flipped in the first one - both it and
+                               test_event.c/test_channel.c define
+                               radiant_event_crit_enter(),
+                               radiant_event_crit_exit(),
+                               radiant_event_wakeup() and
+                               radiant_channel_event_out(), so the two would
+                               collide at link, and radiant_api.c's versions
+                               would change what those suites assert.
+      radiant_core\tests\gate  the MPSL timeslot gate, compiled against fakes
+                               for MPSL, MPSL_TIMER0 and the five
+                               radiant_nrf_gate_* callbacks. Separate because it
+                               SHADOWS <mpsl_timeslot.h>, <mpsl_hwres.h> and
+                               <hal/nrf_timer.h> for its own app target, which
+                               is not a thing to do to the other two.
+
+    BuildDir follows App unless it is given explicitly, so all three can be run
+    back to back without any of them rebuilding the others.
 
 .PARAMETER Board
     Zephyr board target. Defaults to the nRF5340 DK's application core.
@@ -58,9 +71,14 @@
     Flash and run whatever is already in the build directory.
 
 .EXAMPLE
-    . .\scripts\env.ps1 -NcsVersion v3.2.4
-    .\scripts\run_ztest_hw.ps1
-    .\scripts\run_ztest_hw.ps1 -App radiant_core\tests\api
+    . .\scripts\env.ps1 -NcsVersion v3.4.0
+    .\scripts\run_ztest_hw.ps1                                  -NcsVersion v3.4.0
+    .\scripts\run_ztest_hw.ps1 -App radiant_core\tests\api  -NcsVersion v3.4.0
+    .\scripts\run_ztest_hw.ps1 -App radiant_core\tests\gate -NcsVersion v3.4.0
+
+    -NcsVersion is not optional on anything built against v3.4.0: the default
+    below is v3.2.4, and the mismatch surfaces as a Zephyr-SDK error that reads
+    exactly like a broken toolchain.
 
 .NOTES
     Finding the port and the probe serial:
@@ -144,15 +162,27 @@ if (-not $SkipBuild) {
     # in ErrorRecords, and with $ErrorActionPreference = 'Stop' that terminates
     # this script the moment anyone pipes its output anywhere. The build log is
     # more useful next to the image than on the terminal anyway.
+    #
+    # REDIRECTING STDOUT IS NOT ENOUGH ON ITS OWN, and that is the part this
+    # comment got wrong for as long as nobody piped the script. `> $buildLog`
+    # sends stdout to the file and leaves stderr going to the host, where the
+    # FIRST ordinary progress line - "Loading Zephyr default modules" - becomes
+    # a NativeCommandError and kills the run under 'Stop'. It reads exactly like
+    # a broken toolchain, which is the same misdiagnosis -NcsVersion already
+    # causes here, so it is worth being explicit: stderr is folded into the log
+    # as well, and $LASTEXITCODE is the only verdict trusted.
     $buildLog = Join-Path $repo "$BuildDir-build.log"
     New-Item -ItemType Directory -Force (Split-Path $buildLog) | Out-Null
     Push-Location "C:\ncs\$NcsVersion"
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     try {
         west -z "C:\ncs\$NcsVersion\zephyr" build `
             -s $appPath -b $Board -d $out -p always --no-sysbuild `
-            > $buildLog
+            > $buildLog 2>&1
         if ($LASTEXITCODE -ne 0) { throw "build failed; log at $buildLog" }
     } finally {
+        $ErrorActionPreference = $prevEap
         Pop-Location
     }
     Write-Host "built (log: $buildLog)"

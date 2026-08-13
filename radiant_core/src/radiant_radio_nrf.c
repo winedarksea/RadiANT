@@ -1832,10 +1832,27 @@ static void radio_endpoints_attach_off_at_init(void);
  * is what makes antr_init() succeed beside another stack, and it is bounded to
  * init.
  *
- * Set to 0 while isolating a ~51 s reset loop that appears in the OpenThread
- * build ONLY once an ANT channel is open (i.e. only once grants actually occur,
- * which is the only time the swap runs). Flipping this is the decisive test:
- * if the reset survives with 0, the swap is innocent.
+ * IT IS 1, AND THE BISECTION THAT PUT A 0 IN THIS COMMENT IS OVER.
+ *
+ * The text here used to say "set to 0 while isolating a ~51 s reset loop...
+ * flipping this is the decisive test", with 1 sitting underneath it - which
+ * told a reader the swap was off when it is on, and that is the worst way round
+ * for this particular switch. The swap being ON is the entire reason a grant
+ * that ends without reaching on_grant_end() is dangerous: the register it moves
+ * is the 802.15.4 driver's write-once SUBSCRIBE_RXEN, and a single missed
+ * restore stops that driver's receiver ramping for the rest of the boot. The
+ * grant-abort work in radiant_radio_nrf_gate_mpsl.c - g.hw_held, the exactly-one
+ * hand-back invariant and the ztest suite in radiant_core/tests/gate - all exist
+ * because this is 1.
+ *
+ * The reset loop it was bisecting was never the swap. It was a 31 s pre-main()
+ * stall on NET_CONFIG_NEED_IPV6 plus a DPPI endpoint conflict on RADIO ADDRESS,
+ * both since fixed and both fixed elsewhere.
+ *
+ * The switch itself stays, because it is the cheapest way to answer "is the
+ * swap doing this?" the next time something on this seam is in doubt - and
+ * because when radio_ep_contended is empty the swap is already a no-op, so the
+ * two settings differ only in the build that has another stack in it.
  */
 #define RADIANT_NRF_GRANT_EP_SWAP 1
 
@@ -2441,11 +2458,48 @@ int radiant_radio_disable(void)
 	 * teardown with nothing outstanding.
 	 */
 	(void)radiant_radio_abort();
+	/*
+	 * AND THE RADIO IS BACK WITH MPSL BEFORE THE MASK IS TOUCHED, which is
+	 * an ordering this path used to leave to chance.
+	 *
+	 * radiant_radio_abort() above reaches gate_release() on every gate, and
+	 * gate_release() now hands the peripheral back itself rather than waiting
+	 * on the compare it arms - including on its nothing-held early return, so
+	 * this holds whether or not a grant was live when disable() was called.
+	 * That matters here more than anywhere: the session STAYS OPEN across a
+	 * disable (it belongs to radiant_radio_init(), and closing it here would
+	 * leave a later radiant_radio_enable() with no session to acquire
+	 * through), so MPSL is still live and still owns the register written
+	 * below.
+	 */
 	irq_disable(RADIANT_RADIO_IRQn);
 #if defined(RADIANT_RADIO_IRQn_2)
 	irq_disable(RADIANT_RADIO_IRQn_2);
 #endif
-	nrf_radio_int_disable(NRF_RADIO, ~0u);
+	/*
+	 * ⚠ NOT ~0 UNDER THE GATE. THIS REGISTER IS SHARED. See
+	 * radiant_nrf_gate_on_grant_end(), which makes exactly this point about
+	 * exactly this register and whose own comment this line contradicted.
+	 *
+	 * nrf_radio_int_disable() writes INTENCLR00, and line 0 is MPSL's:
+	 * mpsl_init.c defines MPSL_RADIO_IRQn as RADIO_0_IRQn on this part. So
+	 * ~0 here clears the SoftDevice Controller's interrupt configuration out
+	 * of the register it shares with ours, on a path - suspend, or a
+	 * BACKEND_NULL switch at runtime - that leaves the controller running.
+	 * It then misses its own events and asserts, milliseconds later and
+	 * nowhere near here.
+	 *
+	 * On a direct build both lines are ours and there is nobody to take the
+	 * register away from, so ~0 stays: it is the stronger teardown and this
+	 * is the only place that wants one.
+	 */
+	if (IS_ENABLED(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)) {
+		nrf_radio_int_disable(NRF_RADIO, NRF_RADIO_INT_END_MASK |
+						 NRF_RADIO_INT_DISABLED_MASK |
+						 NRF_RADIO_INT_RXREADY_MASK);
+	} else {
+		nrf_radio_int_disable(NRF_RADIO, ~0u);
+	}
 	radiant_op.enabled = false;
 	return RADIANT_RADIO_OK_RC;
 }

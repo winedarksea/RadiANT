@@ -546,6 +546,29 @@ static struct {
 	volatile bool pending;
 	/* A grant is held: SIGNAL_START arrived and ACTION_END has not. */
 	volatile bool granted;
+	/*
+	 * MPSL HAS HANDED US THE RADIO AND WE HAVE NOT GIVEN IT BACK.
+	 *
+	 * Distinct from `granted`, and the split is the fix for the one residual
+	 * failure that is PERMANENT AND SILENT. `granted` means "the core may use
+	 * this grant", and gate_release() clears it EARLY and deliberately - see
+	 * the long comment there, it is load-bearing and a wedged dongle without
+	 * it. But every teardown backstop (SESSION_IDLE, SESSION_CLOSED,
+	 * gate_shutdown) was ALSO keyed on `granted`, so once gate_release() had
+	 * cleared it, a lost TIMER0 compare meant nothing ever reached
+	 * timer0_disarm() and therefore nothing ever ran on_grant_end().
+	 *
+	 * What is lost when that happens is not a packet, it is the receiver:
+	 * radio_endpoints_attach(false) is the restore of the 802.15.4 driver's
+	 * WRITE-ONCE SUBSCRIBE_RXEN. One missed restore and the other stack's
+	 * receiver never ramps again, for ever, with no error anywhere.
+	 *
+	 * So this flag tracks the HARDWARE loan rather than the core's permission:
+	 * set at SIGNAL_START, cleared ONLY by timer0_disarm(), which is also what
+	 * makes that function idempotent and gives the invariant its teeth -
+	 * exactly one on_grant_end() per granted timeslot, on every exit.
+	 */
+	volatile bool hw_held;
 	/* The core has finished with the grant and wants it given back. */
 	volatile bool release_wanted;
 	/* This operation is allowed to grow itself - the elastic classes. */
@@ -739,6 +762,45 @@ static struct {
 	uint32_t overstayed;
 	uint32_t invalid_return;
 	uint32_t unknown_signal;
+	/*
+	 * THE COUNTERS THE OVERNIGHT SOAK IS SCORED ON, and they exist because
+	 * "it did not crash" is not a result.
+	 *
+	 *   grant_end_calls  every on_grant_end() this file made. The invariant is
+	 *                    that it TRACKS `granted` - one per granted timeslot.
+	 *                    Falling behind is the permanent-and-silent failure:
+	 *                    a SUBSCRIBE_RXEN never restored. The 1 Hz line shows
+	 *                    it as `granted` still climbing while `ok` is frozen.
+	 *   late_disarm      a BLOCKED or CANCELLED arrived while the radio was
+	 *                    still on loan, which is supposed to be impossible -
+	 *                    those signals mean no timeslot started. Non-zero
+	 *                    names a real fault that today presents only as a dead
+	 *                    receiver, and it is a fault we would otherwise have
+	 *                    assumed away rather than measured.
+	 *   idle_disarm      SESSION_IDLE (or SESSION_CLOSED) found the radio
+	 *                    still on loan and gave it back. This is the DESIGNED
+	 *                    backstop for a timeslot MPSL ended by its own length
+	 *                    expiry - no signal we handle - so it is allowed to be
+	 *                    non-zero, which is exactly why it is not counted as
+	 *                    late_disarm.
+	 *   release_disarm   gate_release() handed the radio back itself rather
+	 *                    than waiting for the compare it just armed. The
+	 *                    normal path, so it should track `granted` closely;
+	 *                    it is here so that grant_end_calls can be read
+	 *                    against a known breakdown instead of a total.
+	 */
+	uint32_t grant_end_calls;
+	uint32_t late_disarm;
+	uint32_t idle_disarm;
+	uint32_t release_disarm;
+	/*
+	 * A request that MPSL answered from inside mpsl_timeslot_request()
+	 * itself, before the call returned. See BUG 15 in request_work_fn():
+	 * non-zero means the flag-ordering fix there is load-bearing on this
+	 * bench rather than defensive, and zero on a contended run would mean
+	 * the wedge came back by some other road.
+	 */
+	uint32_t answered_inline;
 	/* The last signal seen at all, for the case where the assert is raised
 	 * without either of the above - which would mean MPSL is unhappy about
 	 * something we returned rather than about when we returned it. */
@@ -770,11 +832,8 @@ static inline void trace_put(uint32_t signal, uint32_t action)
 	trace_at++;
 }
 
-/* Bring-up only. See the printk in gate_acquire() for why these are printk and
- * not LOG_*. Delete with the bring-up. */
-static uint32_t dbg_shots;
-static uint32_t dbg_sig;
-static uint32_t dbg_acq;
+/* (The bring-up printk shot counters that stood here were written nowhere and
+ * read nowhere; they went with the bring-up.) */
 
 /* ---------------------------------------------------------------------------
  * The backstop deadline timer
@@ -994,17 +1053,63 @@ static void request_work_fn(struct k_work *w)
 		return;
 	}
 
+	/*
+	 * BUG 15: THE FLAG IS ARMED BEFORE THE CALL, AND THAT ORDERING IS THE
+	 * WHOLE OF IT. IT IS A PERMANENT WEDGE OTHERWISE.
+	 *
+	 * This used to read `rc = mpsl_timeslot_request(); if (rc == 0) { ...
+	 * g.mpsl_owes = true; }` - the flag raised AFTER the request it
+	 * describes had already been placed. Between those two statements MPSL
+	 * may already have ANSWERED, and the answer's whole job is to clear this
+	 * flag. BLOCKED is delivered in mpsl_low_priority_process() context,
+	 * which is reached from inside this very call when the arbiter can
+	 * refuse the request without deferring it. So:
+	 *
+	 *   mpsl_timeslot_request() -> ... -> on_signal(BLOCKED)
+	 *                                       g.mpsl_owes = false   (answered)
+	 *   ...returns 0
+	 *   g.mpsl_owes = true;                                       (STALE)
+	 *
+	 * and from that instant the gate believes MPSL owes it an answer that
+	 * has already been given. Nothing on this side of the API can clear it:
+	 * a placed request cannot be withdrawn, so there is no request left to
+	 * be answered, no further BLOCKED, no further START, and SESSION_IDLE
+	 * has already been and gone. Every subsequent gate_acquire() is refused
+	 * with den_owed for the rest of the boot and the ANT radio is dead.
+	 *
+	 * MEASURED, and it is not a theory: P4 MED, two runs, `placed=3
+	 * granted=2 blocked=1` - every placed request answered - with `owes=1`
+	 * and `owed=2403` climbing. It only bites where a request is refused
+	 * SYNCHRONOUSLY, which needs a genuinely contending stack, which is why
+	 * a year of BLE bring-up never saw it.
+	 *
+	 * Armed first, the sequence is safe whichever way round it happens: an
+	 * answer arriving inside the call finds the flag already true and clears
+	 * it; an answer arriving later finds it true and clears it then. The
+	 * only case that needs undoing is the request that was NOT placed, and
+	 * no answer can be in flight for one of those - so clearing it below
+	 * cannot race with anything.
+	 *
+	 * stats.answered_inline counts the case, so that "this path is
+	 * exercised" is a reading rather than an assumption.
+	 */
+	g.mpsl_owes = true;
 	rc = mpsl_timeslot_request(session_id, &req);
 	if (rc == 0) {
+		if (!g.mpsl_owes) {
+			/* Answered from inside the call. The flag has done its
+			 * job; do NOT raise it again. */
+			stats.answered_inline++;
+		}
 		/* Accepted, so the staged numbers are now the numbers this
 		 * session's next grant will be read with. See next_grant. */
 		commit_next_grant();
-		/* MPSL has it now, and only MPSL can give it back. Set BEFORE
-		 * the counter so nothing reads placed>owed. */
-		g.mpsl_owes = true;
 		stats.placed++;
 		return;
 	}
+	/* Not placed, so nothing is owed. See the note above for why this
+	 * write cannot lose a race. */
+	g.mpsl_owes = false;
 
 	if (rc == -NRF_EAGAIN) {
 		/*
@@ -1173,12 +1278,48 @@ static K_WORK_DELAYABLE_DEFINE(gate_dump, gate_dump_fn);
 static void gate_dump_fn(struct k_work *w)
 {
 	ARG_UNUSED(w);
+	/*
+	 * AND IT CARRIES THE INVARIANT, WHICH IS THE DIFFERENCE BETWEEN A SOAK
+	 * AND AN OVERNIGHT RUN THAT CAN ONLY REPORT "IT DID NOT CRASH".
+	 *
+	 * `end=` against `granted=` is the whole scoring rule: exactly one
+	 * on_grant_end() per granted timeslot.
+	 *
+	 * THE BREAKDOWN AFTER IT DOES NOT SUM TO `end=` BY ITSELF, and printing
+	 * it as though it did would be the more misleading of the two options at
+	 * 3 a.m. Only the three EXCEPTIONAL routes are counted: a release that
+	 * handed back rather than waiting for its compare, a session backstop
+	 * that found the radio still out, and the must-be-zero one. The ordinary
+	 * route - a TIMER0 or RADIO signal ending the grant it was armed for -
+	 * has no counter of its own, so it is printed as `norm=`, computed as the
+	 * remainder - and named `norm` rather than `sig` because `sig=` already
+	 * means last_signal further along this same line. That also makes it
+	 * self-checking: the remainder can only go
+	 * negative if the invariant has already broken, so it is clamped and the
+	 * clamp is visible.
+	 *
+	 * `late=` is the alarm. It is the only one of the four that names a
+	 * fault rather than a route.
+	 *
+	 * The three assert counters are here for the same reason. They used to be
+	 * printed ONLY by mpsl_assert_handle(), i.e. only once it was too late to
+	 * do anything but read them, and unknown_signal was not printed anywhere
+	 * a running board could show it.
+	 */
+	uint32_t routed = stats.release_disarm + stats.idle_disarm +
+			  stats.late_disarm;
+	uint32_t by_signal = (stats.grant_end_calls > routed)
+				     ? (stats.grant_end_calls - routed)
+				     : 0u;
+
 	LOG_INF("gate: acq=%u in_grant=%u/%u placed=%u granted=%u blocked=%u cancel=%u eagain=%u "
 		"near=%u long=%u ext=%u/%u dead=%u | "
 		"den pend=%u anch=%u dist=%u degen=%u nosess=%u owed=%u | "
 		"sent grant=%u dead=%u blk=%u supp=%u | "
-		"len=%u/%u el=%u sig=%u "
-		"g=%d p=%d rel=%d end=%d boot=%d anchor=%d",
+		"end=%u (norm=%u rel=%u idle=%u late=%u) | "
+		"bad over=%u inval=%u unk=%u inl=%u | "
+		"len=%u/%u el=%u skew=%u brun=%u sig=%u "
+		"g=%d hw=%d p=%d rel=%d end=%d boot=%d anchor=%d owes=%d",
 		stats.acquires, stats.acq_in_grant, stats.acq_in_grant_denied,
 		stats.placed, stats.granted, stats.blocked, stats.cancelled,
 		stats.refused_eagain, stats.refused_too_near,
@@ -1188,11 +1329,15 @@ static void gate_dump_fn(struct k_work *w)
 		stats.den_degenerate, stats.den_no_session, stats.den_owed,
 		stats.sent_after_grant, stats.sent_deadline,
 		stats.sent_blocked, stats.deny_suppressed,
+		stats.grant_end_calls, by_signal, stats.release_disarm,
+		stats.idle_disarm, stats.late_disarm,
+		stats.overstayed, stats.invalid_return, stats.unknown_signal,
+		stats.answered_inline,
 		g.granted_len_us, g.want_len_us,
-		elastic_initial_us,
-		stats.last_signal, (int)g.granted, (int)g.pending,
+		elastic_initial_us, elastic_skew_us, blocked_run,
+		stats.last_signal, (int)g.granted, (int)g.hw_held, (int)g.pending,
 		(int)g.release_wanted, (int)g.ended, (int)g.bootstrapping,
-		(int)g.anchor_valid);
+		(int)g.anchor_valid, (int)g.mpsl_owes);
 	if (session_open) {
 		k_work_schedule(&gate_dump, K_SECONDS(1));
 	}
@@ -1245,6 +1390,36 @@ static void deadline_expired(struct k_timer *t)
  * Called before returning ACTION_END from anywhere, and on every signal that
  * means the grant is gone.
  */
+/*
+ * HANDING THE RADIO BACK IS A SEPARATE OBLIGATION FROM ENDING THE TIMESLOT,
+ * and they were one function because on every path they happen together.
+ *
+ * They are split because on exactly one path they must NOT. gate_release()
+ * needs the radio back at once - see the comment there - but it also needs the
+ * TIMER0 compare LEFT ARMED, because returning ACTION_END from the signal that
+ * compare produces is the only way MPSL ends a timeslot at all. Disarming the
+ * compare there would trade the hazard being fixed for an overstay assert,
+ * which is the failure this file's whole end margin exists to prevent.
+ *
+ * So this is the half that gives the peripheral back, and it is the half that
+ * carries the invariant: EXACTLY ONE on_grant_end() PER GRANTED TIMESLOT, ON
+ * EVERY EXIT. Not "at least one" - a second call hands back a radio the
+ * controller has already picked up. Not "at most one" - a missed one leaves the
+ * 802.15.4 driver's write-once SUBSCRIBE_RXEN swapped out for the rest of the
+ * boot, which is a receiver that stops and never resumes with nothing printed
+ * anywhere. g.hw_held is what makes it exactly one, so no caller has to reason
+ * about whether it is the first to arrive.
+ */
+static inline void gate_hand_back(void)
+{
+	if (!g.hw_held) {
+		return;
+	}
+	g.hw_held = false;
+	stats.grant_end_calls++;
+	radiant_nrf_gate_on_grant_end();
+}
+
 static inline void timer0_disarm(void)
 {
 	nrf_timer_int_disable(MPSL_TIMER0, NRF_TIMER_INT_COMPARE0_MASK);
@@ -1260,8 +1435,13 @@ static inline void timer0_disarm(void)
 	 * peripheral the SoftDevice Controller is transmitting on; the shorts are
 	 * worse, being hardware edges that fire on the controller's events and
 	 * not ours. See radiant_nrf_gate_on_grant_end().
+	 *
+	 * The timer registers are put back unconditionally - that is free, and a
+	 * compare left armed on a peripheral that is no longer ours re-enters for
+	 * ever - and the handing back is the idempotent half. See
+	 * gate_hand_back() for why the two are separable at all.
 	 */
-	radiant_nrf_gate_on_grant_end();
+	gate_hand_back();
 }
 
 /*
@@ -1349,6 +1529,9 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		g.anchor_valid = true;
 		g.pending = false;
 		g.granted = true;
+		/* The radio is on loan from this instant until timer0_disarm()
+		 * gives it back, whatever else happens to g.granted in between. */
+		g.hw_held = true;
 		g.release_wanted = false;
 		/* A fresh timeslot, so ACTION_END is legal again. */
 		g.ended = false;
@@ -1587,6 +1770,33 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		g.granted = false;
 		timer0_disarm();
 		(void)radiant_radio_abort();
+		/*
+		 * AND THE ORPHAN GETS ITS DENIAL, which this path omitted.
+		 *
+		 * Every other exit that ends a grant runs end_housekeeping();
+		 * this one did not, on the reasoning that radiant_radio_abort()
+		 * above already delivers the terminal. It does - for an
+		 * operation that is ARMED. An operation that was STAGED and had
+		 * not yet been programmed has no terminal to abort and nothing
+		 * is coming for it, which is precisely the wedge
+		 * end_housekeeping() exists to prevent: the core's single
+		 * operation slot held for ever by something waiting on a grant
+		 * that ended. The g.pending test inside denied_work_fn() is what
+		 * keeps this from denying an operation a fresh request IS coming
+		 * for, so adding it here is safe as well as necessary.
+		 *
+		 * WHAT WAS DELIBERATELY NOT CHANGED, and it is a judgement call
+		 * recorded rather than settled: radiant_radio_abort() still runs
+		 * from this priority-0 callback, where it can spin up to ~100 us
+		 * and then take a full scheduler pass through deliver_terminal().
+		 * That is more work than this file tells everybody else to do
+		 * here. It is left in place because the alternative - deferring
+		 * the abort to the work queue - hands the timeslot back with the
+		 * peripheral still armed, and this branch is only reachable
+		 * under a genuinely contending stack, which is the P4 run
+		 * itself. Move it only with a measurement of this path in hand.
+		 */
+		end_housekeeping();
 		rv.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
 		break;
 
@@ -1610,6 +1820,27 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 			stats.blocked++;
 		} else {
 			stats.cancelled++;
+		}
+		/*
+		 * AND THE ASSUMPTION ABOVE IS NOW CHECKED RATHER THAN MADE.
+		 *
+		 * "No timeslot started" is what these two signals mean, and the
+		 * anchor rule directly above depends on it - but nothing in this
+		 * file enforced it, and the cost of being wrong is not a lost
+		 * packet. It is the 802.15.4 driver's write-once SUBSCRIBE_RXEN
+		 * left swapped out for the rest of the boot: a receiver that
+		 * stops and never resumes, with no error printed anywhere.
+		 *
+		 * So the radio is handed back if it is somehow still on loan,
+		 * and the event is COUNTED. If late_disarm is ever non-zero on
+		 * the bench it names a real fault - one that today presents
+		 * only as a dead receiver hours later, which is the hardest
+		 * possible thing to trace back to here.
+		 */
+		if (g.hw_held) {
+			stats.late_disarm++;
+			g.granted = false;
+			timer0_disarm();
 		}
 		/* Answered, and refused. See g.mpsl_owes. */
 		g.mpsl_owes = false;
@@ -1705,11 +1936,41 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * The END paths clear it too, and they still should - this is
 		 * the backstop for the ones that never signal, not a
 		 * replacement for them.
+		 *
+		 * AND THE TEST IS g.hw_held, NOT g.granted. It used to be
+		 * g.granted, which made this backstop useless for the one case
+		 * it most needed to cover: gate_release() clears g.granted
+		 * BEFORE the compare it arms has fired, so a lost compare
+		 * arrived here with g.granted already false and the radio still
+		 * on loan - and nothing ran on_grant_end() at all. hw_held is
+		 * exactly "MPSL handed us the radio and we have not given it
+		 * back", which is what the teardown keys on.
 		 */
-		if (g.granted) {
-			g.granted = false;
-			timer0_disarm();
+		g.granted = false;
+		if (g.hw_held) {
+			/* Counted apart from late_disarm on purpose. This one is
+			 * the designed backstop for a timeslot MPSL ended by its
+			 * own length expiry, which signals nothing we handle, so
+			 * it can be non-zero in a healthy run and cannot carry a
+			 * must-be-zero bar. late_disarm cannot. */
+			stats.idle_disarm++;
 		}
+		/*
+		 * AND THE DISARM ITSELF IS UNCONDITIONAL, WHICH IS NOT THE SAME
+		 * TEST AS THE COUNTER'S.
+		 *
+		 * The counter asks "was the radio still out?"; this asks "could
+		 * a compare still be armed?", and since the A1 split those are
+		 * different questions. gate_release() hands the radio back
+		 * immediately and deliberately LEAVES the compare armed, because
+		 * that compare is the only thing that will produce a signal to
+		 * return ACTION_END from. So the state this backstop most needs
+		 * to clean up - a release whose compare was then lost - arrives
+		 * here with hw_held already false and an interrupt still armed
+		 * on a peripheral that is no longer ours, which is the
+		 * for-ever-re-entering interrupt of bug 14.
+		 */
+		timer0_disarm();
 		/* "No request is outstanding" is exactly what g.mpsl_owes
 		 * tracks, so this is its authoritative clear - the backstop for
 		 * any answer path that did not run. The re-place below sets it
@@ -1739,6 +2000,15 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		g.granted = false;
 		g.anchor_valid = false;
 		g.mpsl_owes = false;
+		/* THE COUNTER IS GUARDED AND THE CALL IS NOT, on both session
+		 * signals. See SESSION_IDLE above for why that split is the
+		 * right way round: the compare gate_release() leaves armed on
+		 * purpose outlives the hand-back, so a disarm skipped because
+		 * hw_held is already false would leave an interrupt armed on a
+		 * peripheral that is about to stop being ours. */
+		if (g.hw_held) {
+			stats.idle_disarm++;
+		}
 		timer0_disarm();
 		k_timer_stop(&deadline);
 		if (g.pending) {
@@ -1842,7 +2112,11 @@ void gate_shutdown(void)
 		return;
 	}
 	k_timer_stop(&deadline);
-	if (g.granted) {
+	/* g.hw_held, not g.granted: the session must not be closed with the
+	 * 802.15.4 driver's SUBSCRIBE_RXEN still swapped out, and gate_release()
+	 * clears g.granted a good deal earlier than the radio comes back. */
+	if (g.hw_held) {
+		stats.idle_disarm++;
 		timer0_disarm();
 	}
 	(void)mpsl_timeslot_session_close(session_id);
@@ -2070,9 +2344,15 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 		 */
 		stats.refused_too_long++;
 		if (stats.refused_too_long <= 2u) {
+			/* Both constants are UL in nrfxlib's own header, so they
+			 * are cast rather than given %lu - this line is the one
+			 * diagnostic for a refusal that otherwise looks like
+			 * silence, and it should be right the one time it fires
+			 * rather than carry a -Wformat warning into every build. */
 			printk("gate: too long - %u us, max %u (window cap %u)\n",
-			       (unsigned)len, MPSL_TIMESLOT_LENGTH_MAX_US,
-			       MAX_WINDOW_US);
+			       (unsigned)len,
+			       (unsigned)MPSL_TIMESLOT_LENGTH_MAX_US,
+			       (unsigned)MAX_WINDOW_US);
 		}
 		return GATE_DENIED;
 	}
@@ -2236,6 +2516,18 @@ void gate_release(void)
 		 * rather than here. */
 		g.pending = false;
 		k_timer_stop(&deadline);
+		/*
+		 * "Nothing held" is g.granted, and g.granted is the CORE's
+		 * permission, not the hardware loan - so this branch is reached
+		 * with the radio still ours in exactly the window this whole
+		 * split exists for: after a previous gate_release() and before
+		 * its compare has fired. Idempotent, so on the ordinary double
+		 * release it does nothing at all; on the lost-compare case it is
+		 * what stops radiant_radio_disable() writing the shared
+		 * interrupt mask while the 802.15.4 driver's SUBSCRIBE_RXEN is
+		 * still swapped out.
+		 */
+		gate_hand_back();
 		return;
 	}
 
@@ -2329,6 +2621,31 @@ void gate_release(void)
 			nrf_timer_int_enable(MPSL_TIMER0,
 					     NRF_TIMER_INT_COMPARE0_MASK);
 		}
+		/*
+		 * THE RESTORE MAY NOT DEPEND ON A COMPARE ACTUALLY FIRING.
+		 *
+		 * Everything above is about getting a signal to return
+		 * ACTION_END from, and that part is unchanged - MPSL will not
+		 * end a timeslot any other way, so the compare STAYS ARMED and
+		 * this is gate_hand_back() rather than timer0_disarm(). But
+		 * handing the RADIO back is a different obligation, and it was
+		 * riding on the same compare. If the compare is lost - which is
+		 * exactly BUG 9's failure, and RELEASE_LEAD_US makes it rare
+		 * rather than impossible - the timeslot still ends, by expiry,
+		 * and SESSION_IDLE still arrives. The restore, though, would
+		 * have been waiting on a signal that never came.
+		 *
+		 * It is not left to that backstop because the gap is unbounded
+		 * in the only direction that matters: for as long as it lasts
+		 * the 802.15.4 driver's SUBSCRIBE_RXEN is ours and its receiver
+		 * is deaf. The core is finished with the grant by definition
+		 * here - that is what gate_release() means, and the ~2 ms saved
+		 * is the same promptness this function's own header argues for.
+		 * The TIMER0 signal arriving a moment later still ends the
+		 * timeslot and simply finds the radio already returned.
+		 */
+		stats.release_disarm++;
+		gate_hand_back();
 	}
 }
 

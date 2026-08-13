@@ -266,17 +266,23 @@ min_success_pct = 99.0
 max_delta_pp = 1.0
 
 [gates.coexistence]
-# THE THRESHOLDS ARE HERE AND `ant_ab.py` DOES NOT YET EVALUATE THEM. It reads
-# gate blocks by name and has no `coexistence` case, so this block is inert
-# until P3 adds one - which is stated rather than left to be discovered,
-# because a threshold that is present and unread is worse than one that is
-# absent: a reviewer sees a number and assumes something checks it.
+# LIVE. `ant_ab.py` HAS A `coexistence` CASE AND THIS BLOCK IS WHAT IT READS.
 #
-# It is written now anyway, because the +0.5 pp coexistence bar has been in
-# docs/backends.md since before the arbiter existed and had nowhere to live.
-# The alternative was to let P3 invent a number at the moment it needs to pass
-# one, which is the failure mode the header of this file is entirely about.
-enabled = false
+# The header that stood here said the opposite - "the thresholds are here and
+# ant_ab.py does not yet evaluate them" - and it went on being true of the
+# comment long after it stopped being true of the code. It is recorded rather
+# than deleted because the two states it describes are worth telling apart, and
+# because a threshold that is present and unread really is worse than one that
+# is absent: a reviewer sees a number and assumes something checks it. That was
+# the risk while the case was missing; it was then the risk again, in reverse,
+# while the comment said the case was missing and it was not.
+#
+# Three other things had to change before a real baseline could reach this gate
+# at all, and all three are done: archive/benchmarks/baseline.schema.json is
+# `additionalProperties: false` at the root and in `rig`, and defined NEITHER a
+# top-level `coexistence` block NOR `rig.second_stack` - so a genuine P4
+# baseline was rejected before any gate ran. Both are now in the schema.
+enabled = true
 
 # Not required, for the same reason as `scale` and `ack_data`: a sitting on a
 # build with no second stack legitimately has no coexistence block at all, and
