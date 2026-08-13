@@ -150,6 +150,9 @@ target_sources(app PRIVATE
   # every sink in this application, this one included.
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge/radiant_binding.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge/radiant_rules.c"
+  # P7: the Matter plane's type map and endpoint model (section 8.1). Another
+  # ordinary sink, and deliberately NOT the Matter stack - see the header.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge/radiant_matter.c"
 )
 target_include_directories(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge")

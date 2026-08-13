@@ -226,24 +226,28 @@ elseif(ANT_RADIO STREQUAL "core")
   ant_sysbuild_value(RADIANT_BACKEND RADIANT_BACKEND_SYSBUILD)
   if(RADIANT_BACKEND_SYSBUILD)
     set(RADIANT_BACKEND "${RADIANT_BACKEND_SYSBUILD}" CACHE STRING
-        "radiant_core HAL backend: null or nrf" FORCE)
+        "radiant_core HAL backend: null, nrf or cc26xx" FORCE)
   else()
     set(RADIANT_BACKEND "null" CACHE STRING
-        "radiant_core HAL backend: null (refuses every arm) or nrf (the RADIO)")
+        "radiant_core HAL backend: null (refuses every arm), nrf (the RADIO) or cc26xx (TI's RF core)")
   endif()
-  set_property(CACHE RADIANT_BACKEND PROPERTY STRINGS null nrf)
+  set_property(CACHE RADIANT_BACKEND PROPERTY STRINGS null nrf cc26xx)
 
   if(RADIANT_BACKEND STREQUAL "null")
     set(RADIANT_BACKEND_CONF "CONFIG_RADIANT_CORE_BACKEND_NULL=y")
   elseif(RADIANT_BACKEND STREQUAL "nrf")
     set(RADIANT_BACKEND_CONF "CONFIG_RADIANT_CORE_BACKEND_NRF=y")
+  elseif(RADIANT_BACKEND STREQUAL "cc26xx")
+    set(RADIANT_BACKEND_CONF "CONFIG_RADIANT_CORE_BACKEND_CC26XX=y")
   else()
     message(FATAL_ERROR
       "ant_dongle: RADIANT_BACKEND='${RADIANT_BACKEND}' is not a backend.\n"
-      "  null  the lifecycle and the clock are real; every arm is refused.\n"
-      "  nrf   the RADIO, one TIMER and four (D)PPI channels, owned\n"
-      "        outright. Receives AND transmits - see\n"
-      "        radiant_core/src/radiant_radio_nrf.c.\n"
+      "  null    the lifecycle and the clock are real; every arm is refused.\n"
+      "  nrf     the RADIO, one TIMER and four (D)PPI channels, owned\n"
+      "          outright. Receives AND transmits - see\n"
+      "          radiant_core/src/radiant_radio_nrf.c.\n"
+      "  cc26xx  TI's RF core in proprietary mode, on CC13x2/CC26x2. Needs\n"
+      "          the hal_ti module - see scripts/fetch_hal_ti.ps1.\n"
       "Pass one with -DRADIANT_BACKEND=<value>.")
   endif()
   message(STATUS "ant_dongle: radiant_core HAL backend ${RADIANT_BACKEND}")
@@ -293,16 +297,37 @@ project(ant_dongle)
 # and finds no sensors, which looks exactly like a radio that is not working.
 # The dependency is fixed; this is what makes the next one loud on the first
 # build rather than after a bench session.
-if(ANT_RADIO STREQUAL "core" AND RADIANT_BACKEND STREQUAL "nrf"
-   AND NOT CONFIG_RADIANT_CORE_BACKEND_NRF)
-  message(FATAL_ERROR
-    "ant_dongle: -DRADIANT_BACKEND=nrf was asked for and Kconfig did not "
-    "select it.\n"
-    "  CONFIG_RADIANT_CORE_BACKEND_NRF is unset, so the NULL backend was "
-    "compiled instead and nothing would go on the air.\n"
-    "  Almost always an unmet `depends on` in radiant_core/Kconfig for this "
-    "board or this SDK - check SOC_COMPATIBLE_NRF52X / SOC_COMPATIBLE_NRF54LX "
-    "and !BT in this build's .config.")
+#
+# WRITTEN AGAINST THE VALUE RATHER THAN AGAINST `nrf` SPECIFICALLY, and that
+# generalisation is the point of it now. The cc26xx arm has to depend on
+# SOC_SERIES_CC13X2_CC26X2 - there is no SOC_COMPATIBLE_* symbol for any TI
+# part, so the construct this guard was written to survive is the only one
+# available there. A guard that covered one backend would have let the second
+# one walk into the same trap.
+if(ANT_RADIO STREQUAL "core")
+  string(TOUPPER "${RADIANT_BACKEND}" RADIANT_BACKEND_UPPER)
+  if(NOT CONFIG_RADIANT_CORE_BACKEND_${RADIANT_BACKEND_UPPER})
+    # Which one Kconfig did land on, so the message names the image that was
+    # actually built rather than only the one that was not.
+    set(RADIANT_BACKEND_GOT "none at all")
+    foreach(_cand NULL NRF CC26XX NONE)
+      if(CONFIG_RADIANT_CORE_BACKEND_${_cand})
+        set(RADIANT_BACKEND_GOT "CONFIG_RADIANT_CORE_BACKEND_${_cand}")
+      endif()
+    endforeach()
+    message(FATAL_ERROR
+      "ant_dongle: -DRADIANT_BACKEND=${RADIANT_BACKEND} was asked for and "
+      "Kconfig did not select it.\n"
+      "  CONFIG_RADIANT_CORE_BACKEND_${RADIANT_BACKEND_UPPER} is unset; "
+      "Kconfig chose ${RADIANT_BACKEND_GOT} instead, and if that is the null "
+      "backend then nothing would go on the air.\n"
+      "  Almost always an unmet `depends on` in radiant_core/Kconfig for this "
+      "board or this SDK. For nrf, check SOC_COMPATIBLE_NRF52X / "
+      "SOC_COMPATIBLE_NRF54LX and !BT in this build's .config. For cc26xx, "
+      "check SOC_SERIES_CC13X2_CC26X2 - that symbol has no SOC_COMPATIBLE_* "
+      "equivalent and a rename of it is exactly the failure this guard "
+      "exists for.")
+  endif()
 endif()
 
 target_sources(app PRIVATE
@@ -331,6 +356,15 @@ endif()
 # that is merely linked in. See src/ble_coex_load.c.
 if(CONFIG_ANT_DONGLE_BLE_COEX_LOAD)
   target_sources(app PRIVATE src/ble_coex_load.c)
+endif()
+
+# The same instrument for the other stack: the P4 gate's Thread load. Separate
+# symbol and separate file rather than a mode of the BLE one, because the two
+# are legal together - a build with both is the three-stack case - and because
+# the failure they guard against differs in kind: a linked-but-asleep controller
+# versus an attached-but-silent sleepy child. See src/thread_coex_load.c.
+if(CONFIG_ANT_DONGLE_THREAD_COEX_LOAD)
+  target_sources(app PRIVATE src/thread_coex_load.c)
 endif()
 
 # ── The hostless node's identity (compat-C6) ────────────────────────────────

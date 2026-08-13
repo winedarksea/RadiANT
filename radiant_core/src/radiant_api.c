@@ -325,6 +325,35 @@ BUILD_ASSERT(RADIANT_CHANNEL_GUARD_MIN_US >= RADIANT_CHANNEL_DRIFT_WORST_US,
  */
 #if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
 #define API_EVENT_STACK_GATE 1024
+#elif defined(CONFIG_RADIANT_CORE_BACKEND_CC26XX)
+/*
+ * AND THE SECOND VENDOR NEEDS IT TOO, FOR THE SAME REASON IN DIFFERENT WORDS.
+ *
+ * This thread arms the next radio operation, so whatever the backend's arm call
+ * costs is charged to this stack. On the nRF that is a handful of register
+ * writes. On the CC26x2 it is RF_postCmd(): a SimpleLink driver call that
+ * validates the command, walks its queue, negotiates with the driver's power
+ * state machine and rings a doorbell to a separate processor. It is a
+ * fundamentally deeper call, and it is not going to get shallower.
+ *
+ * MEASURED, AND THE COMMENT ABOVE PREDICTED HOW. The first window this backend
+ * ever ran timed out correctly and the board then reset inside the completion
+ * path, and - exactly as recorded above - three other stacks (ISR, system work
+ * queue, main) were raised first on plausible reasoning and none of them was
+ * the one. What identified it was reading the faulting thread pointer out of
+ * the dump and looking it up in the ELF:
+ *
+ *   >>> ZEPHYR FATAL ERROR 2: Stack overflow on CPU 0
+ *   Current thread: 0x200025e8 (unknown)
+ *
+ *   $ arm-zephyr-eabi-nm -n -S zephyr.elf
+ *   200025e8 00000080 b api_event_thread_data
+ *
+ * "(unknown)" rather than "radiant_event" because that build did not set
+ * CONFIG_THREAD_NAME - which is the other half of the advice above, and the
+ * half that was not taken.
+ */
+#define API_EVENT_STACK_GATE 1024
 #else
 #define API_EVENT_STACK_GATE 0
 #endif

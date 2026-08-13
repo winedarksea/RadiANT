@@ -969,6 +969,43 @@ struct radiant_radio_caps {
 	 */
 	uint8_t max_addr_groups;
 
+	/*
+	 * The minimum HAMMING DISTANCE, in bits, that the hardware-matched
+	 * parts of two simultaneously-armed filters must differ by before the
+	 * matcher can tell them apart. 0 or 1 means no constraint.
+	 *
+	 * WHY THIS EXISTS, WHICH IS NOT A THEORETICAL CONCERN. A correlator
+	 * that matches a sync word does not compare bytes; it scores a sliding
+	 * window against a template and fires above a threshold. Give it two
+	 * templates a single bit apart and every arriving frame scores nearly
+	 * equally against both, and the part is entitled to resolve that by
+	 * firing on neither. MEASURED on a CC26x2, against a transmitter at
+	 * -47 dBm sending a known 4.0049 frames per second, with one of the two
+	 * sync words set to the transmitter's address and the other a
+	 * controlled distance away:
+	 *
+	 *     distance    frames received, of ~30 it could have had
+	 *       1 bit      0
+	 *       2 bits     3
+	 *       4 bits    18
+	 *       8 bits    20     (a single sync word scores 21-24)
+	 *
+	 * One bit apart is not a weak link, it is a DEAF one, and it produces
+	 * no error at any layer: the window arms, the receiver runs, the
+	 * command reports an ordinary timeout, and the scheduler re-arms.
+	 *
+	 * AND THE DEFAULT SEARCH SWEEP WALKED STRAIGHT INTO IT. radiant_search
+	 * put devnum_lo 2k and 2k+1 in set k - consecutive integers, one bit
+	 * apart, all 128 sets - so a two-filter backend was arming the single
+	 * worst pair available to it every window of every sweep. The bug was
+	 * invisible on the nRF, whose matcher has no such property, and it is
+	 * exactly the kind of thing a second vendor is for.
+	 *
+	 * A backend that leaves this 0 keeps the consecutive pairing, so
+	 * nothing about an existing backend moves.
+	 */
+	uint8_t min_filter_hamming_bits;
+
 	/* True only if the backend can match "any value" in the device-number
 	 * bytes with a single filter. False on every planned backend; see
 	 * struct radiant_rx_filter for what the core does about it. */

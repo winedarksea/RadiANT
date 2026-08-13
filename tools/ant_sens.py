@@ -409,7 +409,17 @@ class MasterDriver(threading.Thread):
         self.fallbacks = 0
         self.failures: list[str] = []
 
-        self._stop = threading.Event()
+        # NOT self._stop. threading.Thread._stop() is a private METHOD of the
+        # base class and join() calls it from _wait_for_tstate_lock(); binding
+        # an Event over it makes every join() raise
+        #
+        #     TypeError: 'Event' object is not callable
+        #
+        # from inside threading.py, which reads like a bug in the standard
+        # library rather than in this file. It fired at the END of a ladder, in
+        # the finally block, so the measurement printed and then the JSON was
+        # never written - the one artefact the run existed to produce.
+        self._stop_evt = threading.Event()
         self._lock = threading.Lock()
         self._pending: tuple[int, int] | None = None
         self._applied = threading.Event()
@@ -429,7 +439,7 @@ class MasterDriver(threading.Thread):
         return self._applied.wait(timeout)
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_evt.set()
 
     # -- the loop ------------------------------------------------------------
 
@@ -460,7 +470,7 @@ class MasterDriver(threading.Thread):
 
     def run(self) -> None:
         deadline = time.monotonic() + 2.0 * self.sensor.period_s
-        while not self._stop.is_set():
+        while not self._stop_evt.is_set():
             self._apply_pending()
 
             result = self.reader.next_frame(time.monotonic() + 0.25)

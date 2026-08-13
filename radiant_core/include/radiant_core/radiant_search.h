@@ -192,6 +192,38 @@ extern "C" {
 #define RADIANT_SEARCH_DWELL_DEFAULT_US 260000u
 
 /*
+ * THE RESIDUE THAT ENDS A SET. A set with less than this still owed is
+ * FINISHED, and without this the sweep can freeze a second way.
+ *
+ * The dwell is a budget spent in chunks, and the arming authority sizes the
+ * next chunk from radiant_search_dwell_remaining(). Nothing stopped that
+ * remainder from becoming arbitrarily small: two or three full chunks credit
+ * ~94 ms each against a 260 ms budget, and the third leaves a few hundred
+ * microseconds. The next chunk is then armed for a few hundred microseconds -
+ * far too short to hear a 4 Hz master, whose period is 250 ms - and on an
+ * ARBITRATED backend a chunk that short is very likely to be refused, which
+ * credits ZERO. So the set sits fractionally short of complete, never
+ * finishes, never advances, and every chunk from then on is the same useless
+ * length. THE CHUNK CEILING NEVER RECOVERS, because only a new set resets it.
+ *
+ * MEASURED on the nRF54L15 DK beside a 1 s BLE advertiser: chunks collapsed
+ * from 94 200 us to 3 378 us, 11 339 of them in 55 s, `sets_advanced` stuck at
+ * 1, `frames_ok` 0 - against two chunks and an immediate acquisition on the
+ * same image with the advertiser off. MPSL was granting 97.7 % of what was
+ * asked for; the starvation was entirely self-inflicted.
+ *
+ * This is the SAME freeze the note below describes - "set_dwell_us never
+ * filled ... THE SWEEP FROZE on whichever set it was on" - reached by a
+ * different route, which is why the cure belongs here beside it rather than in
+ * the caller that happened to notice.
+ *
+ * 5 ms is a choice, not a derived constant: comfortably longer than the arm
+ * and teardown a chunk costs, and 2 % of the budget, so declaring a set done
+ * this much early cannot meaningfully weaken the within-one-sweep guarantee.
+ */
+#define RADIANT_SEARCH_DWELL_EPSILON_US 5000u
+
+/*
  * THE DWELL IS A BUDGET, NOT A SINGLE WINDOW, AND THAT DISTINCTION IS LOAD-
  * BEARING. It is why radiant_search_on_done() credits time rather than counting
  * windows, and getting it wrong cost this project a working dongle.
@@ -475,6 +507,11 @@ struct radiant_search {
 	/* Sweep geometry, computed once from caps. */
 	uint8_t  n_filters;
 	uint16_t n_sets;
+	/* Pair each set's two devnum_lo values as k and k ^ 0xFF rather than as
+	 * consecutive integers, because the backend's matcher cannot separate
+	 * two addresses one bit apart. Set from caps.min_filter_hamming_bits;
+	 * see set_filter_lo() in radiant_search.c. */
+	bool     spread_pairs;
 
 	/* The set currently selected, and the filters that express it. */
 	struct radiant_rx_filter filters[RADIANT_SEARCH_MAX_FILTERS];

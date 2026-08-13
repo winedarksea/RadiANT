@@ -1874,6 +1874,71 @@ ZTEST(radiant_sched, test_a_denied_scan_chunk_keeps_the_request_and_ends_the_pas
 	finish();
 }
 
+/*
+ * A CONTINUOUS request survives the RADIO reporting ABORTED, not just a
+ * preemption. This one is the twin of the denial test above and it is the case
+ * that actually shipped broken.
+ *
+ * There are two ways a scan chunk stops early and they went through different
+ * code. abort_armed() - the scheduler preempting itself for tracked work - has
+ * always said "Paused, not ended - the request survives untouched" and skipped
+ * slot_clear() for a continuous RX or an ED sweep. end_armed() is the other
+ * way: the BACKEND reports RADIANT_RADIO_STATUS_ABORTED, which under the MPSL
+ * gate is simply what a chunk cut short by the end of a timeslot looks like.
+ * That path kept the request for DONE_OK and DONE_DENIED and dropped it for
+ * DONE_ABORTED, so the same event meant "paused" down one path and "finished"
+ * down the other.
+ *
+ * WHY NO EXISTING TEST CAUGHT IT, which is the interesting part. Nothing in
+ * 228 tests ever delivered an ABORTED terminal to a continuous request: the
+ * preemption tests drive abort_armed() and never reach here, and every test
+ * that drives end_armed() uses OK. On the bench it cost a total wedge - the
+ * dongle heard 0 packets in 100 s beside a 100 ms BLE advertiser, against 406
+ * of 406 with the advertiser off - because radiant_api.c keeps api_search_slot
+ * bound across an ABORTED (it counts as "ran"), so with the request deleted
+ * underneath it, one layer waits for a chunk that will never be armed and the
+ * other refuses to post because it believes one already is.
+ *
+ * The assertion is therefore on the REQUEST SURVIVING, not on any count: the
+ * wedge is a lost request, and everything downstream of it is a consequence.
+ */
+ZTEST(radiant_sched, test_an_aborted_scan_chunk_keeps_the_standing_request)
+{
+	struct radiant_sched_rx r;
+	radiant_time_t          t0;
+	uint32_t            arms_before;
+
+	bring_up();
+	t0 = radiant_radio_now();
+
+	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_SEARCH), search_filter,
+		    8u, t0, RADIANT_TIME_NEVER);
+	r.chunk_us = 50000u;
+	zassert_ok(radiant_sched_request_rx(31u, &r));
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(1u, fake_radio_arm_count(), NULL);
+
+	/* The chunk armed and opened, and then the air was taken away - the
+	 * backend's ABORTED, not the scheduler's own preemption. */
+	arms_before = fake_radio_arm_count();
+	fake_radio_force_next_terminal(RADIANT_RADIO_STATUS_ABORTED);
+	fake_radio_advance(60000u);
+
+	zassert_true(radiant_sched_pending(31u),
+		     "an ABORTED chunk consumed the standing continuous request - "
+		     "nothing re-posts a background scan, so this is permanent");
+
+	/* And having survived, it resumes on its own, exactly as it does after a
+	 * denial. A request that is kept but never armed again is the same wedge
+	 * with a different signature. */
+	fake_radio_advance(200000u);
+	zassert_true(fake_radio_arm_count() > arms_before,
+		     "the scan never armed again after an ABORTED chunk");
+
+	assert_every_window_bounded();
+	finish();
+}
+
 /* ---------------------------------------------------------------------------
  * caps.max_window_us - the arbitrated backend's operation-length ceiling
  * ---------------------------------------------------------------------------

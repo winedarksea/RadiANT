@@ -36,6 +36,10 @@ manifest:
     # and access is granted per account under an ANT+ adopter agreement.
     - name: ant-nrfconnect
       url-base: https://github.com/ant-nrfconnect
+    # Upstream Zephyr's own organisation, for the one HAL NCS filters out of
+    # its import. See the hal_ti project below.
+    - name: zephyrproject
+      url-base: https://github.com/zephyrproject-rtos
 
   # The `ant` group is disabled by default, and this is the single most
   # important line in the file.
@@ -99,6 +103,37 @@ manifest:
       path: sdk-ant
       groups:
         - ant
+
+    # TI's SimpleLink HAL, for the CC13x2/CC26x2 backend.
+    #
+    # THIS IS THE ONLY PROJECT HERE THAT EXISTS BECAUSE OF AN OMISSION RATHER
+    # THAN A CHOICE. Both NCS Zephyr forks still ship boards/ti/cc26x2r1_launchxl
+    # and soc/ti/simplelink/cc13x2_cc26x2, so the board and the SoC are already
+    # in the workspace above - but nrf/west.yml imports zephyr's manifest through
+    # a `name-allowlist` that does not include hal_ti, so the project is dropped
+    # from the RESOLVED manifest and west never learns it exists. That is why it
+    # cannot be recovered with `manifest.project-filter`: that setting selects
+    # among projects the resolved manifest defines, and this one is not among
+    # them. Naming it here is the only way west can fetch it.
+    #
+    # The revision is zephyr's own pin, copied from
+    # <ncs>/zephyr/west.yml - the same value scripts/fetch_hal_ti.ps1 READS out
+    # of that file rather than hardcoding, for a workspace (like the local
+    # C:\ncs install) that was not created from this manifest. If the two ever
+    # disagree, that file is right and this line is stale.
+    #
+    # Its own group so it can be switched off - `west config
+    # manifest.group-filter +ant,-ti` - but enabled by default, unlike sdk-ant.
+    # The reason for sdk-ant's default does not apply: hal_ti is public, so
+    # cloning it cannot fail authentication and abort the update, and it is
+    # 44 MB rather than the multi-GB its full history suggests.
+    - name: hal_ti
+      remote: zephyrproject
+      repo-path: hal_ti
+      revision: afbcfffd393be03ca2c9b41f9ce8d94a4c2f2fbd
+      path: modules/hal/ti
+      groups:
+        - ti
 
   self:
     # Placed as a sibling of sdk-ant so that <app>/../sdk-ant resolves, which

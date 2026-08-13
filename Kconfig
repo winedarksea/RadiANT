@@ -77,6 +77,35 @@ config USB_DEVICE_STACK_NEXT
 config UART_INTERRUPT_DRIVEN
 	default y if ANT_DONGLE_TRANSPORT_UART
 
+config ANT_DONGLE_UART_BAUD
+	int "Baud rate of the UART carrying the ANT serial protocol"
+	depends on ANT_DONGLE_TRANSPORT_UART
+	default 57600 if SOC_SERIES_CC13X2_CC26X2
+	default 115200
+	help
+	  The rate the `ant-uart` alias runs at, and therefore the --baud a
+	  host tool must be given. This symbol does not CONFIGURE the UART -
+	  the devicetree's current-speed does - it RECORDS the rate, and
+	  src/ant_uart_transport.c BUILD_ASSERTs that the two agree. Two
+	  records of one number, which cannot silently disagree, rather than
+	  two settings that can.
+
+	  Why it is worth a symbol at all: the rate is invisible from the host
+	  end of a failure. A mismatched baud produces framing garbage that
+	  tools/ant_probe.py reports as "no response to reset" - the same
+	  symptom as a hung image, a dead transport or a wrong COM port - and
+	  this project has twice had a host-side reading invent a firmware bug.
+	  With the number in .config, scripts/build_all.ps1 can assert it and
+	  the question "what baud is this image?" has an answer that does not
+	  require reading a devicetree.
+
+	  115200 is what the nRF54L15 DK target runs at and what
+	  tools/ant_probe.py's SerialDevice defaults to. 57600 is the rate of
+	  the Dynastream ANT2USB that the CC2652P module impersonates - a
+	  CP2102N-based stick, and a real one runs at 57600 - so the TI
+	  targets default to it and the LaunchXL matches the dongle it is
+	  standing in for. Neither is a constraint of the silicon.
+
 if !ANT_DONGLE_TRANSPORT_UART
 
 comment "USB device identity"
@@ -555,6 +584,107 @@ config ANT_DONGLE_BLE_COEX_LOAD_DELAY_S
 	  8 s is comfortably past enumeration and the host's channel setup, so a
 	  bench run has a known-good period in front of the load to compare
 	  against. 0 starts it as early as the work queue runs.
+
+config ANT_DONGLE_THREAD_COEX_LOAD
+	bool "Attach to a Thread network and keep traffic on it"
+	depends on NET_L2_OPENTHREAD && NET_SOCKETS
+	# Identical reasoning to ANT_DONGLE_BLE_COEX_LOAD's second depends, and
+	# for once it is not merely analogous: with the DIRECT nrf backend, the
+	# 802.15.4 driver and radiant_radio_nrf.c would both drive the RADIO with
+	# no arbiter between them. On nRF54L that is not even avoidable by
+	# omission - enabling the 802.15.4 driver force-selects MPSL and
+	# NRF_802154_MULTIPROTOCOL_SUPPORT through the nrfxlib Service Layer - so
+	# the 15.4 side is arbitrated whatever this application does, and only
+	# the ANT side's backend is still ours to get wrong.
+	depends on !RADIANT_CORE_BACKEND_NRF || RADIANT_CORE_BACKEND_NRF_GATE_MPSL
+	help
+	  A bench instrument, not a feature. It is the P4 counterpart of
+	  ANT_DONGLE_BLE_COEX_LOAD, and it exists for a sharper version of the
+	  same reason.
+
+	  CONFIG_NET_L2_OPENTHREAD=y on its own attaches a node and then, if it
+	  is the sleepy role docs/radiant-bridge.md section 7.3b selects, goes
+	  almost completely quiet - by design, because being quiet is what that
+	  role is for. `ot state` says `child`, the node has an address, and it
+	  has put four MLE frames on the air in the last minute. A gate measured
+	  against that is the sweep-rate-ratio-of-1.000 failure again, except
+	  harder to spot, because this time the second stack really is running.
+
+	  So this sends datagrams on a timer and counts them, and the count is
+	  part of the result: a P4 loss figure quoted without `sent` beside it is
+	  not a measurement.
+
+	  Off by default, and no shipping image selects it.
+	  docs/decisions/0011-never-a-border-router.md is why none ever will.
+
+config ANT_DONGLE_THREAD_COEX_LOAD_INTERVAL_MS
+	int "Interval between coexistence datagrams, ms"
+	depends on ANT_DONGLE_THREAD_COEX_LOAD
+	range 10 10000
+	default 100
+	help
+	  How often the Thread side asks for the air. 100 ms matches the BLE
+	  load's default so the two gates are read at comparable demand, which
+	  matters because section 7.3a's prediction for the 802.15.4 direction
+	  (~18 %, revised to ~24 % by the follow_on_us reserve) is far larger
+	  than anything the BLE gate saw and the comparison is the point.
+
+	  Configurable for the reason the BLE interval is: the question is not
+	  whether ANT+ survives one setting, it is where it stops surviving.
+
+config ANT_DONGLE_THREAD_COEX_LOAD_PAYLOAD
+	int "Coexistence datagram payload, bytes"
+	depends on ANT_DONGLE_THREAD_COEX_LOAD
+	range 1 800
+	default 64
+	help
+	  Air time is roughly linear in this, and section 7.3a's two predictions
+	  are quoted for full-size frames, so a run at the default is NOT
+	  comparable to that number. Raise it toward a full 127-byte PSDU
+	  (payload of about 80 after IPv6 and 6LoWPAN headers, less with
+	  security) when reproducing section 7.3a; leave it at 64 for a realistic
+	  sensor-chatter load.
+
+config ANT_DONGLE_THREAD_COEX_LOAD_DEST
+	string "Coexistence datagram destination"
+	depends on ANT_DONGLE_THREAD_COEX_LOAD
+	default "ff03::1"
+	help
+	  Mesh-local all-nodes by default, and multicast rather than a unicast
+	  peer on purpose: a unicast destination whose peer has rebooted or never
+	  commissioned turns every send into an address-resolution failure, and
+	  the board still puts a quite different amount of energy on the air than
+	  the operator believes. Multicast to all-nodes is transmitted whenever
+	  this node is attached, and what the mesh does with it is not part of
+	  the measurement.
+
+	  The honest limitation: the traffic is one-directional. This reproduces
+	  the transmit demand of a chatty Thread node and the receive demand only
+	  insofar as the role already keeps its receiver on.
+
+config ANT_DONGLE_THREAD_COEX_LOAD_PORT
+	int "Coexistence datagram UDP port"
+	depends on ANT_DONGLE_THREAD_COEX_LOAD
+	range 1 65535
+	default 4711
+
+config ANT_DONGLE_THREAD_COEX_LOAD_DELAY_S
+	int "Seconds after boot before the Thread coexistence load starts"
+	depends on ANT_DONGLE_THREAD_COEX_LOAD
+	range 0 600
+	default 12
+	help
+	  Same instrument as the BLE load's delay - it separates "ANT+ never
+	  worked" from "ANT+ stopped when Thread started" - but longer, because
+	  this load has an extra thing to wait for. The BLE advertiser is on the
+	  air the moment bt_enable() returns; a Thread node has to discover and
+	  attach first, and 8 s is not reliably enough for that.
+
+config ANT_DONGLE_THREAD_COEX_LOAD_REPORT_EVERY
+	int "Log a load summary every N datagrams"
+	depends on ANT_DONGLE_THREAD_COEX_LOAD
+	range 1 100000
+	default 100
 
 endmenu
 

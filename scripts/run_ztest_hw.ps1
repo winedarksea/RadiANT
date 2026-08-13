@@ -96,7 +96,17 @@ param(
     # The loop below stops on ztest's own completion line, so this is a ceiling
     # on a hang rather than a delay anybody waits out.
     [int]$Seconds       = 240,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    # Assert DTR and RTS before releasing the core.
+    #
+    # Not the default, because it is not free: some USB-CDC consoles treat the
+    # DTR edge as a reset request, and a reset here would land in the middle of
+    # the run this script is trying to capture. The J-Link OB VCOM on both DKs
+    # does not, and a CDC stack that gates its TX on DTR produces exactly the
+    # symptom this script's help attributes to the wrong VCOM - zero bytes on a
+    # port that is in fact the right one. So: try the other VCOM first, and try
+    # this second, before suspecting the firmware.
+    [switch]$Dtr
 )
 
 $ErrorActionPreference = 'Stop'
@@ -187,6 +197,10 @@ if ($LASTEXITCODE -ne 0) { throw "JLink flash failed; see $tmp\flash.log" }
 # after reset and the whole run takes under a second, so a listener that opens
 # afterwards captures nothing and looks exactly like a hung board.
 $serialPort = New-Object System.IO.Ports.SerialPort $Port, 115200, 'None', 8, 'One'
+if ($Dtr) {
+    $serialPort.DtrEnable = $true
+    $serialPort.RtsEnable = $true
+}
 $serialPort.Open()
 try {
     & $jlink -NoGui 1 -SelectEmuBySN $Serial -CommanderScript $goScript > (Join-Path $tmp 'go.log')

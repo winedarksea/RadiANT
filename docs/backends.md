@@ -604,20 +604,57 @@ has been designed out.
 conditional. Core policy reads these; core policy never tests for a backend by
 name, and there is no `#ifdef` on a part number anywhere above the HAL.
 
-| Field | What it says | nRF | EFR32 / RAIL |
-|---|---|---|---|
-| `max_filters` | Addresses matchable in one receive window. Sets the wildcard-sweep length | **8** (one base plus eight prefixes) | **2** (two runtime sync words) |
-| `max_addr_groups` | Distinct values of `addr[0 .. addr_len-2]` matchable in one window. Sets how many *tracked* channels can share a merged window | **2** (BASE0 and BASE1) | **2** (two independent sync words) |
-| `filter_wildcard_dev` | Can one filter match *any* device number? | false | false |
-| `addr_len_hw_max` | Longest address the hardware matcher itself handles. Informational — a shorter hardware match is completed in software, at the cost of more spurious wakeups and more receive current | 5 | 4 |
-| `max_body_len` | Largest body (bytes between address and CRC), either direction | — | — |
-| `phys[]`, `n_phys`, `phy_switch_us` | PHYs this build supports, most-preferred first, and what switching between two of them costs the scheduler | switch is free | reloads a generated configuration |
-| `ramp_up_us`, `rx_to_tx_us`, `tx_to_rx_us`, `min_arm_lead_us` | The four timing budgets: transmitter ramp-up, both turnarounds, and the minimum lead an arm call needs before it fails `RADIANT_RADIO_ETIME` rather than running late | measured, antenna-referenced | measured, antenna-referenced |
-| `time_resolution_ns` | How much of the last digit of a timestamp to believe | 1000 | 1000 |
-| `has_sync_timestamp` | Is `t_sync` a hardware capture of the address event, or an inference? | true | — |
-| `has_rssi` | Is `rssi_dbm` populated? | true | — |
-| `crc_in_hw` | Is the CRC computed by hardware? | true | conditional — see below |
-| `tx_power_min_dbm`, `tx_power_max_dbm` | Inclusive dBm range, for clamping and for the bench sweep's bounds | — | — |
+The **CC13x2/CC26x2** column is the first one filled in from a backend that
+exists and has run on hardware rather than from a datasheet
+([`radiant_radio_cc26xx.c`](../radiant_core/src/radiant_radio_cc26xx.c)).
+Measured against the nRF backend in one A/B/A sitting on 2026-08-13: **3.74 %
+packet loss against 0.14 %**, and **better** slot timing (0.0093 ms off-grid by
+the radio's own clock against 0.0120 ms). See
+[ADR 0014](decisions/0014-second-vendor-port-what-it-cost.md).
+
+| Field | What it says | nRF | CC13x2 / CC26x2 | EFR32 / RAIL |
+|---|---|---|---|---|
+| `max_filters` | Addresses matchable in one receive window. Sets the wildcard-sweep length | **8** (one base plus eight prefixes) | **2** (`syncWord0`, `syncWord1`, and nothing else) | **2** (two runtime sync words) |
+| `max_addr_groups` | Distinct values of `addr[0 .. addr_len-2]` matchable in one window. Sets how many *tracked* channels can share a merged window | **2** (BASE0 and BASE1) | **2** — but for the opposite reason: each sync word is fully independent, so this *equals* `max_filters` and the constraint never binds | **2** (two independent sync words) |
+| `min_filter_hamming_bits` | Minimum bit distance between two simultaneously-armed hardware addresses before the matcher can separate them | 0 (a comparator; no constraint) | **4** — measured, and the field exists because of this part. See below | 0 (unmeasured) |
+| `filter_wildcard_dev` | Can one filter match *any* device number? | false | false | false |
+| `addr_len_hw_max` | Longest address the hardware matcher itself handles. Informational — a shorter hardware match is completed in software, at the cost of more spurious wakeups and more receive current | 5 | **3** — the silicon reaches 4 (`nSwBits` is 8..32) but `nSwBits` lives in the setup command that `RF_open()` consumes and cannot be changed under a live handle, so the backend fixes it at the 3 bytes search and tracking share | 4 |
+| `max_body_len` | Largest body (bytes between address and CRC), either direction | — | — | — |
+| `phys[]`, `n_phys`, `phy_switch_us` | PHYs this build supports, most-preferred first, and what switching between two of them costs the scheduler | switch is free | one PHY; a switch would be a fresh `RF_open` | reloads a generated configuration |
+| `ramp_up_us`, `rx_to_tx_us`, `tx_to_rx_us`, `min_arm_lead_us` | The four timing budgets: transmitter ramp-up, both turnarounds, and the minimum lead an arm call needs before it fails `RADIANT_RADIO_ETIME` rather than running late | measured, antenna-referenced | **seeded, not measured** — a P4 bench item; `min_arm_lead_us` is 600 with a separate 150 µs hard floor, split after a scheduler that subtracts the advertised figure and calls immediately produced `ETIME` on every window | measured, antenna-referenced |
+| `time_resolution_ns` | How much of the last digit of a timestamp to believe | 1000 | **250** — the RAT is 4 MHz, measured at 4 000 244 ticks/s | 1000 |
+| `has_sync_timestamp` | Is `t_sync` a hardware capture of the address event, or an inference? | true | true — `bAppendTimestamp`, and it is good: consecutive captures came out as exact multiples of the transmitter's period with 1–18 µs of residual | — |
+| `has_rssi` | Is `rssi_dbm` populated? | true | true | — |
+| `crc_in_hw` | Is the CRC computed by hardware? | true | **false** — the sync-word matcher eats the address bytes before the CRC engine sees them, and ANT's CRC covers them. Software CRC instead, which is what keeps `crc_rx` available and `radiant_crc_repair.c` usable | conditional — see below |
+| `tx_power_min_dbm`, `tx_power_max_dbm` | Inclusive dBm range, for clamping and for the bench sweep's bounds | — | **+5 … +5** — one operating point. `txPower` is fixed at `RF_open()` time and the arm call does not read `req->power`; the field read −20 … +5 until `tools/ant_sens.py` tried to use this radio as a ladder's instrument and found nothing moved. A real range needs `RF_setTxPower()` plus a SmartRF-generated power table | — |
+
+**`min_filter_hamming_bits` is new, and it is new because this part made the
+core deaf.** The nRF matches addresses with a comparator; the CC26x2 matches
+them with a *correlator*, which scores a sliding window against a template and
+fires above a threshold. Give it two templates one bit apart and every arriving
+frame scores nearly equally against both — and the part resolves that by firing
+on neither. Measured against a transmitter at −47 dBm sending a known
+4.0049 frames per second, with one sync word set to its address and the other a
+controlled distance away, out of ~30 frames each point could have received:
+
+| distance | 1 bit | 2 bits | 4 bits | 8 bits | single word |
+|---|---|---|---|---|---|
+| frames | **0** | 3 | 18 | 20 | 21–24 |
+
+`radiant_search.c` put `devnum_lo` `2k` and `2k+1` in set `k` — consecutive
+integers, one bit apart, for all 128 sets. Free on the nRF, total deafness
+here, and it produced no error at any layer: the window armed, the receiver
+ran, the command reported an ordinary timeout, and the scheduler re-armed
+forever. The core now spreads each set's pair to `k` and `k ^ 0xFF` when a
+backend asks for distance, which is 8 bits apart, is an involution so the 128
+sets still partition all 256 values exactly once, and keeps "which set holds
+device X" arithmetic rather than a table.
+
+The same defect has an extreme: a *tracked* window has one filter, and the
+backend originally aliased `syncWord1 = syncWord0` on the reasoning that the
+same word cannot match anything the window did not ask for. That is reasoning
+about a comparator. Two identical templates are zero bits apart, and it cost
+454 `EVENT_RX_FAIL` against one packet received.
 
 `max_filters` is the one to read twice. There is no wildcard field in
 `struct radiant_rx_filter`, because no planned backend can express "any device
@@ -760,6 +797,19 @@ rather than a redesign, and three of them were written with RAIL specifically in
 view: the 32-bit `RAIL_Time_t` wrap, the two-sync-word `max_filters` limit that
 turns the 32-set sweep into 128 without touching the core, and the CRC folding
 that decides whether hardware CRC is usable at all.
+
+**Three of those six were since tested for real, on different silicon.** The
+CC13x2/CC26x2 backend is built, runs, and reaches all three: its timer is a
+32-bit RAT that wraps every 1073 s, it has exactly two sync words and does
+sweep 128 sets, and its CRC engine cannot express ANT's so the CRC is folded
+into software. All three held without a HAL change. What did *not* hold was a
+constraint none of the six anticipated — how far apart two simultaneously
+armed addresses have to be — and
+[ADR 0014](decisions/0014-second-vendor-port-what-it-cost.md) records what the
+whole exercise cost. Anyone starting the EFR32 backend should read it first:
+RAIL matches sync words with a correlator too, and
+`caps.min_filter_hamming_bits` is currently 0 in the RAIL column because it is
+*unmeasured*, not because it is known to be unconstrained.
 
 **It is not built in the first pass, and the reason it is not chosen yet is a
 number that has not been measured.** Silicon Labs' ~-105 dBm sensitivity figure

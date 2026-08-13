@@ -55,6 +55,14 @@
     identify once already, because none of the three checks below looked at
     it. Now one does.
 
+.PARAMETER HalTiDir
+    Where the hal_ti Zephyr module is, for the CC26x2 target. Defaults to
+    where scripts\fetch_hal_ti.ps1 puts it. NCS's west manifest filters this
+    module out of its import, so it is never present unless that script has
+    been run; the TI row is skipped with a message rather than failing the
+    whole matrix when it is missing, because every other target builds fine
+    without it.
+
 .PARAMETER Only
     Build just the targets whose artifact name matches this wildcard.
 
@@ -74,6 +82,7 @@ param(
     [ValidateSet('null', 'nrf')]
     [string]$RadiantBackend = 'nrf',
     [string]$SdkAntDir = '',
+    [string]$HalTiDir = '',
     [string]$Only = '*',
     [switch]$SkipDfu
 )
@@ -89,9 +98,11 @@ $dist = Join-Path $repo 'dist'
 # generates the symbol from ANT_RADIO the same way.
 $backendSymbol = "CONFIG_ANT_DONGLE_RADIO_$($Backend.ToUpper())=y"
 
-# Same trick one level down, for radiant_core's own HAL choice. Only the core
-# backend has one; sdk_ant and stub never look at RADIANT_BACKEND.
-$radiantSymbol = "CONFIG_RADIANT_CORE_BACKEND_$($RadiantBackend.ToUpper())=y"
+# The same trick one level down - for radiant_core's own HAL choice - is now
+# computed per target rather than once here, because a row may pin its own
+# backend regardless of -RadiantBackend. See the cc26x2r1_launchxl row. Only
+# the core backend has such a choice at all; sdk_ant and stub never look at
+# RADIANT_BACKEND.
 
 # Same fields as the CI matrix. 'offset' is where the application must link and
 # 'transport' is which of the three src/ transports must end up compiled; both
@@ -123,6 +134,39 @@ if ($Backend -eq 'core') {
 }
 if ($Backend -eq 'sdk_ant') {
     $targets += @{ dir='feather_encryption'; board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='ant_dongle_feather_encryption.uf2'; pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='encryption.conf'; release=$false }
+}
+
+# ── The second vendor ───────────────────────────────────────────────────────
+#
+# A LAUNCHXL-CC26X2R1, and the row is here so that the four assertions below
+# cover a non-Nordic target too. Three things about it differ from every other
+# row and each one is a thing the assertions are for:
+#
+#   `radiant` overrides -RadiantBackend. nrf is not merely wrong on this part,
+#   it is unbuildable, and cc26xx does not exist until P2 of the TI port -
+#   so this row pins null, and assertion 4 then checks that null is what
+#   Kconfig landed on rather than what CMake was asked for.
+#
+#   `baud` is asserted at all. Every other target runs its ANT stream at
+#   115200 and tools/ant_probe.py defaults to it; this one runs at 57600
+#   because the CC2652P + CP2102N module it stands in for impersonates a
+#   Dynastream ANT2USB, which is a 57600 device. A mismatch is invisible
+#   except as "no response to reset", which is what a hung image looks like.
+#
+#   `modules` names hal_ti. NCS's west manifest filters that module out of its
+#   import - see scripts/fetch_hal_ti.ps1 - so it is absent until someone
+#   fetches it, and the row is skipped rather than failing the matrix.
+#
+# Only under -Backend core: sdk_ant is Nordic-only silicon by construction and
+# a stub build here would assert nothing about the port.
+if ($Backend -eq 'core') {
+    if (-not $HalTiDir) { $HalTiDir = "C:\ncs\$NcsVersion\modules\hal\ti" }
+    if (Test-Path (Join-Path $HalTiDir 'zephyr\module.yml')) {
+        $targets += @{ dir='ti_launchxl'; board='cc26x2r1_launchxl'; artifact='ant_dongle_cc26x2r1_launchxl.hex'; pkg='hex'; offset=0x0; transport='UART'; conf=$null; release=$false; radiant='null'; baud=57600; modules=($HalTiDir -replace '\\', '/') }
+    } else {
+        Write-Host "cc26x2r1_launchxl: skipped, no hal_ti module at $HalTiDir" -ForegroundColor DarkYellow
+        Write-Host "  Run scripts\fetch_hal_ti.ps1 (NCS's west manifest will never fetch it)."
+    }
 }
 
 if (-not (Get-Command west -ErrorAction SilentlyContinue)) {
@@ -167,9 +211,15 @@ try {
         $out = Join-Path $repo "build\$($t.dir)"
         Write-Host "`n=== $($t.artifact)  [$($t.board)]  [$Backend]" -ForegroundColor Cyan
 
+        # A row may pin its own HAL backend. Only the TI one does, and it does
+        # because -RadiantBackend's default (nrf) names a peripheral that part
+        # does not have - see the row's own note.
+        $rowRadiant = if ($t.radiant) { $t.radiant } else { $RadiantBackend }
+
         $extra = @('--', "-DANT_RADIO=$Backend")
-        if ($Backend -eq 'core') { $extra += "-DRADIANT_BACKEND=$RadiantBackend" }
+        if ($Backend -eq 'core') { $extra += "-DRADIANT_BACKEND=$rowRadiant" }
         if ($antModuleDir) { $extra += "-DANT_MODULE_DIR=$antModuleDir" }
+        if ($t.modules) { $extra += "-DEXTRA_ZEPHYR_MODULES=$($t.modules)" }
         if ($t.conf) { $extra += "-DEXTRA_CONF_FILE=$($t.conf)" }
 
         # Do not redirect stderr: PowerShell 5.1 wraps a native command's
@@ -232,13 +282,33 @@ try {
         # symptom is that no sensor is ever found, which reads as a hardware
         # fault and is why this check is worth its lines.
         if ($Backend -eq 'core') {
-            if (-not ($cfg | Where-Object { $_ -eq $radiantSymbol })) {
+            $rowRadiantSymbol = "CONFIG_RADIANT_CORE_BACKEND_$($rowRadiant.ToUpper())=y"
+            if (-not ($cfg | Where-Object { $_ -eq $rowRadiantSymbol })) {
                 $gotHal = ($cfg | Where-Object { $_ -match '^CONFIG_RADIANT_CORE_BACKEND_\w+=y' })
-                throw "$($t.artifact): expected $radiantSymbol in .config, found '$gotHal'"
+                throw "$($t.artifact): expected $rowRadiantSymbol in .config, found '$gotHal'"
             }
         }
 
-        $halNote = if ($Backend -eq 'core') { ", $RadiantBackend HAL" } else { '' }
+        # 5. The ANT UART's baud, where a row states one.
+        #
+        # New with the TI target and only asserted there, because it is the
+        # only board that does not run at 115200. The rate lives in two places
+        # by design - the devicetree configures the UART, this symbol records
+        # it, and src/ant_uart_transport.c BUILD_ASSERTs they agree - so this
+        # check is not about them disagreeing. It is about the number reaching
+        # .config at all: CONFIG_ANT_DONGLE_UART_BAUD's 57600 comes from a
+        # `default ... if SOC_SERIES_CC13X2_CC26X2`, and that is precisely the
+        # kind of symbol whose rename this project has been bitten by three
+        # times. If it is renamed, the default silently reverts to 115200 -
+        # and this line, not a bench session, is what says so.
+        if ($t.baud) {
+            $gotBaud = ($cfg | Where-Object { $_ -match '^CONFIG_ANT_DONGLE_UART_BAUD=' }) -replace '.*=', ''
+            if ([int]$gotBaud -ne [int]$t.baud) {
+                throw "$($t.artifact): ANT UART baud is $gotBaud, expected $($t.baud)"
+            }
+        }
+
+        $halNote = if ($Backend -eq 'core') { ", $rowRadiant HAL" } else { '' }
         Write-Host ("  ok: links at 0x{0:x}, {1} transport, {2} radio{3}" -f $offset, $got, $Backend, $halNote)
 
         # Only the sdk_ant backend produces artifacts anyone is handed. Release

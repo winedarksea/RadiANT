@@ -401,6 +401,111 @@ ZTEST(radiant_search, test_window_shape_at_two_filters)
 	end_of_test();
 }
 
+/*
+ * A backend whose matcher cannot separate two addresses one bit apart gets the
+ * two devnum_lo values of each set spread to opposite ends of the byte instead
+ * of consecutive.
+ *
+ * This is not a preference. On a CC26x2 the two sync words are matched by a
+ * correlator, and measured against a known 4 Hz transmitter at -47 dBm it
+ * received ZERO frames when the two words were one bit apart against about
+ * twenty when they were eight - so the consecutive layout, which is what every
+ * set produced, made the part deaf for a whole sweep with no error anywhere.
+ * See caps.min_filter_hamming_bits.
+ */
+static uint8_t popcount8(uint8_t v)
+{
+	uint8_t n = 0;
+
+	while (v != 0u) {
+		n = (uint8_t)(n + (v & 1u));
+		v = (uint8_t)(v >> 1);
+	}
+	return n;
+}
+
+ZTEST(radiant_search, test_spread_pairs_when_the_matcher_needs_distance)
+{
+	fake_radio_caps_preset_rail();
+	fake_radio_caps_mut()->min_filter_hamming_bits = 4;
+	bring_up(false);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_equal(2u, g_w.n_filters);
+	zassert_equal(0x00u, g_w.filters[0].addr[2]);
+	zassert_equal(0xFFu, g_w.filters[1].addr[2],
+		      "set 0 must hold 0x00 and its complement, not 0x00 and 0x01");
+	win_run();
+
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_equal(0x01u, g_w.filters[0].addr[2]);
+	zassert_equal(0xFEu, g_w.filters[1].addr[2]);
+	win_run();
+
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	end_of_test();
+}
+
+/*
+ * Coverage survives the change: 128 sets still name all 256 values exactly
+ * once, and the lookup that the seen cache and a named-device search depend on
+ * still points at the set that really carries the device.
+ */
+ZTEST(radiant_search, test_spread_pairs_still_cover_every_value_once)
+{
+	uint8_t seen[256] = { 0 };
+
+	fake_radio_caps_preset_rail();
+	fake_radio_caps_mut()->min_filter_hamming_bits = 4;
+	bring_up(false);
+
+	zassert_equal(128u, radiant_search_sets(&g_s));
+
+	for (uint16_t set = 0; set < 128u; set++) {
+		uint8_t a = (uint8_t)set;
+		uint8_t b = (uint8_t)(set ^ 0xFFu);
+
+		seen[a]++;
+		seen[b]++;
+		zassert_true(popcount8((uint8_t)(a ^ b)) >= 4,
+			     "set %u pairs two addresses the matcher cannot split",
+			     (unsigned)set);
+	}
+
+	for (unsigned v = 0; v < 256u; v++) {
+		zassert_equal(1u, seen[v], "devnum_lo 0x%02X covered %u times",
+			      v, (unsigned)seen[v]);
+		zassert_equal((uint16_t)((v < 0x80u) ? v : (v ^ 0xFFu)),
+			      radiant_search_set_for_devnum(&g_s, (uint16_t)v),
+			      "the set lookup must find the set that really holds it");
+	}
+
+	end_of_test();
+}
+
+/* The default layout is untouched, which is what keeps the nRF backend and its
+ * A/B baseline exactly where they were. */
+ZTEST(radiant_search, test_consecutive_pairs_when_no_distance_is_needed)
+{
+	fake_radio_caps_preset_rail();
+	zassert_equal(0u, radiant_radio_caps_get()->min_filter_hamming_bits);
+	bring_up(false);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_equal(0u, g_w.filters[0].addr[2]);
+	zassert_equal(1u, g_w.filters[1].addr[2]);
+	win_run();
+
+	zassert_equal(1u, radiant_search_set_for_devnum(&g_s, 3u));
+
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	end_of_test();
+}
+
 /* The invariant that says the two configurations are two views of the same 15
  * bytes. Cheap, and a future format that breaks it announces itself here rather
  * than on the air. */
@@ -1233,6 +1338,67 @@ ZTEST(radiant_search, test_truncated_windows_do_not_skip_a_set)
 	/* The dwell is now fully credited, so the fifth window moves on. */
 	zassert_equal(RADIANT_SEARCH_OK, win_open());
 	zassert_equal(1u, g_w.set_index);
+	win_run();
+
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	end_of_test();
+}
+
+/*
+ * A SET WITH ONLY A SLIVER OF DWELL LEFT IS FINISHED, AND SAYS SO IN BOTH
+ * ANSWERS AT ONCE.
+ *
+ * The caller's contract has two halves that have to agree: keep the request
+ * armed while radiant_search_set_complete() is false, and size the next chunk
+ * from radiant_search_dwell_remaining(). A state where the first says "not
+ * finished" and the second says "600 us" is a sweep pinned forever on chunks
+ * far too short to hear anything - the set can never be finished off, so it
+ * never advances, and the chunk ceiling never recovers because only a new set
+ * resets it.
+ *
+ * MEASURED, which is why the epsilon exists: on the nRF54L15 DK beside a 1 s
+ * BLE advertiser the chunks collapsed from 94 200 us to 3 378 us and stayed
+ * there for 11 339 consecutive chunks, sets_advanced stuck at 1 and frames_ok
+ * at 0, while MPSL was granting 97.7 % of every request made of it. The same
+ * image with the advertiser off found the sensor in two chunks. An arbitrated
+ * backend turns the sliver into a trap because a chunk that short is very
+ * likely to be refused, and a refusal credits ZERO - so the residue never
+ * shrinks.
+ *
+ * Asserted on both functions deliberately: either one alone can be made to
+ * pass while the pair is still inconsistent, and it is the inconsistency that
+ * wedges the sweep.
+ */
+ZTEST(radiant_search, test_a_sliver_of_remaining_dwell_finishes_the_set)
+{
+	uint32_t owed;
+
+	bring_up(false);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+
+	/* Spend all but a sliver - less than the epsilon - of the set's budget. */
+	zassert_equal(RADIANT_SEARCH_OK,
+		      win_open_truncated(RADIANT_SEARCH_DWELL_DEFAULT_US -
+					 (RADIANT_SEARCH_DWELL_EPSILON_US / 2u)));
+	win_run();
+
+	owed = radiant_search_dwell_remaining(&g_s);
+	zassert_equal(0u, owed,
+		      "a %u us residue was offered as the next chunk's ceiling; "
+		      "too short to hear a 250 ms master and, once refused, "
+		      "never repaid", owed);
+	zassert_true(radiant_search_set_complete(&g_s),
+		     "the set is not finished but has nothing arm-worthy left - "
+		     "this is the state that pins the sweep on one set for ever");
+
+	/* And the proof that it is not merely cosmetic: the sweep moves on, and
+	 * the fresh set restores a full-length chunk ceiling. */
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_equal(1u, g_w.set_index, "the sweep did not advance");
+	zassert_equal(RADIANT_SEARCH_DWELL_DEFAULT_US,
+		      radiant_search_dwell_remaining(&g_s),
+		      "a fresh set must restore the full dwell ceiling");
 	win_run();
 
 	zassert_ok(radiant_search_end(&g_s, 0u));

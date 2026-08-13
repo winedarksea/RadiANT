@@ -595,7 +595,35 @@ static struct {
 	 * decision can be made - see end_housekeeping() - and acted on in the
 	 * work queue, because the answer changes between the two.
 	 */
+	/*
+	 * MPSL HAS A REQUEST OF OURS AND HAS NOT ANSWERED IT.
+	 *
+	 * Distinct from `pending`, and the distinction is the whole fix for the
+	 * spiral described at DEADLINE_SLACK_US. `pending` is the CORE's
+	 * question - "is a grant on its way for what is staged" - and the
+	 * backstop timer answers it `false` on the core's behalf so the
+	 * operation is not stranded. This one is MPSL's state, and nothing this
+	 * side of the API may clear it: a placed request cannot be withdrawn,
+	 * there is no per-request cancel, and until BLOCKED, CANCELLED or START
+	 * arrives the session is not IDLE and every further request is -EAGAIN.
+	 *
+	 * So the backstop firing must NOT re-open the placement path. With the
+	 * slack above, this should almost never be what refuses an acquire; it
+	 * is counted (den_owed) precisely so that "almost never" is a reading
+	 * and not an assumption.
+	 */
+	volatile bool  mpsl_owes;
 	volatile bool  deny_wanted;
+#define DENY_SRC_BLOCKED     0u
+#define DENY_SRC_AFTER_GRANT 1u
+#define DENY_SRC_DEADLINE    2u
+	/*
+	 * WHICH OF THE THREE SUBMITTERS SET deny_wanted. Diagnostic only - nothing
+	 * branches on it. Last writer wins, which is correct for a flag that is
+	 * itself last-writer-wins: the denial that eventually runs is the one the
+	 * most recent submitter asked for. See the sent_* counters.
+	 */
+	volatile uint8_t deny_src;
 	/*
 	 * ACTION_END HAS ALREADY BEEN RETURNED FOR THIS GRANT.
 	 *
@@ -639,6 +667,27 @@ static struct {
 	uint32_t refused_eagain;
 	uint32_t refused_too_near;
 	uint32_t refused_too_long;
+	/*
+	 * WHICH `return GATE_DENIED` FIRED. Same argument as `acq`/`in_grant`
+	 * above, one level finer: gate_acquire() has six of them and they shared
+	 * one number, so "the gate refuses almost everything" was as far as any
+	 * measurement could get.
+	 *
+	 * Added when a coexistence run showed acq=4351 with deny=4333 while
+	 * `near` and `long` were both ZERO - so the refusals were coming from a
+	 * branch nothing counted, and there was no way to tell which. The two
+	 * candidates have completely different fixes: `pending` means the core
+	 * is re-arming faster than one placement can complete and the answer is
+	 * a rendezvous, while `no_anchor` means the anchor is being invalidated
+	 * and the answer is the bootstrap.
+	 */
+	uint32_t den_pending;
+	uint32_t den_no_anchor;
+	uint32_t den_distance;
+	uint32_t den_degenerate;
+	uint32_t den_no_session;
+	/* Refused because MPSL still owed an answer. See g.mpsl_owes. */
+	uint32_t den_owed;
 	uint32_t extends_ok;
 	uint32_t extends_failed;
 	/*
@@ -652,6 +701,36 @@ static struct {
 	 * than from a dongle that stops answering.
 	 */
 	uint32_t deadline_fired;
+	/*
+	 * WHICH ROAD A *DELIVERED* DENIAL CAME DOWN, AND HOW MANY WERE SUPPRESSED.
+	 *
+	 * The den_* block above only counts gate_acquire()'s synchronous refusals -
+	 * RADIANT_RADIO_EDENIED, returned to the caller at arm time. It came back
+	 * EIGHTY-ONE against acq=4013, which killed the working hypothesis that the
+	 * gate was refusing the acquires. Everything else the core scores as
+	 * DONE_DENIED must therefore be the OTHER code: RADIANT_RADIO_STATUS_DENIED,
+	 * an asynchronous terminal for an operation whose arm was ACCEPTED.
+	 *
+	 * There are exactly three roads to that terminal and they call for three
+	 * different fixes, so counting them together answers nothing:
+	 *
+	 *   sent_after_grant  end_housekeeping() queued a denial when a grant ended,
+	 *                     and by the time denied_work_fn() ran there was still
+	 *                     no request in flight. The window did not finish inside
+	 *                     its grant. Fix is length/extension, not arbitration.
+	 *   sent_deadline     the backstop timer beat the grant. Fix is placement
+	 *                     lead. Expected to be ZERO - see deadline_fired.
+	 *   sent_blocked      MPSL genuinely refused. Fix is demand shaping, and
+	 *                     this is the only one of the three that means the air
+	 *                     was actually contended.
+	 *   deny_suppressed   the g.pending guard did its job: something re-armed
+	 *                     between submit and run. Not a denial at all, counted
+	 *                     to show the guard is live rather than inferring it.
+	 */
+	uint32_t sent_after_grant;
+	uint32_t sent_deadline;
+	uint32_t sent_blocked;
+	uint32_t deny_suppressed;
 	/*
 	 * The two signals that mean this file is wrong, counted separately
 	 * because MPSL asserts before anything else can observe which arrived
@@ -712,6 +791,53 @@ static uint32_t dbg_acq;
  * one advertiser is not a guarantee. It costs a k_timer and a counter.
  * ---------------------------------------------------------------------------
  */
+
+/*
+ * HOW LONG PAST THE OPERATION'S OWN START THE BACKSTOP WAITS, AND WHY IT IS NOT
+ * ZERO ANY MORE.
+ *
+ * It WAS zero: the timer fired exactly at the start the grant would have been
+ * useless after, on the measurement that "every BLOCKED arrived 11-31 ms
+ * EARLY". That measurement is real and it is still quoted above - but it was
+ * taken with NO SECOND STACK. MPSL answers a request from
+ * mpsl_low_priority_process(), a COOPERATIVE THREAD, and with the SoftDevice
+ * Controller actually advertising that thread does not get to run within the
+ * ~2 ms of arm lead a scan chunk is placed on.
+ *
+ * The result was not a slow gate, it was a SPIRAL, and the counters name it
+ * exactly (nRF54L15, 100 ms connectable advertiser, 260 s):
+ *
+ *   acq=7229 placed=3730 granted=900 blocked=2830 eagain=3397 dead=3411
+ *   sent grant=119 dead=3411 blk=2828 supp=11
+ *
+ * dead=3411 against eagain=3397 is not a correlation, it is the same event
+ * counted twice round the loop:
+ *
+ *   1. A request is placed and the backstop is armed ~2 ms out.
+ *   2. MPSL has not answered yet, so the backstop fires, clears g.pending and
+ *      denies the operation - WHILE MPSL STILL OWES AN ANSWER AND STILL HOLDS
+ *      THE SESSION. There is no way to withdraw a placed request; the timeslot
+ *      API has no per-request cancel, only session close.
+ *   3. The core replans immediately and arms again. g.pending is false, so the
+ *      den_pending guard - which exists for exactly this - waves it through.
+ *   4. mpsl_timeslot_request() answers -NRF_EAGAIN, because the session is not
+ *      IDLE. The request is kept for SESSION_IDLE, next_grant is NOT committed,
+ *      and a fresh ~2 ms backstop is now running.
+ *   5. Go to 2.
+ *
+ * Half of all acquires (3397 of 7229) were burnt on that loop, and every turn
+ * of it delivered a DONE_DENIED to the core, which is why "the gate denies
+ * everything" kept being the reading no matter which counter it was read from.
+ *
+ * 20 ms is chosen against what the backstop is FOR rather than against a
+ * measured latency. It is not a scheduling deadline - MPSL's own BLOCKED is,
+ * and this only has to beat "MPSL never answers at all", which is a fault and
+ * not a load. It is comfortably past the 11-31 ms band the P0 spike measured
+ * blocks arriving in, well past any cooperative-thread scheduling delay a
+ * connectable advertiser can impose, and still two orders of magnitude below
+ * the wedge it is guarding against.
+ */
+#define DEADLINE_SLACK_US 20000u
 
 static void deadline_expired(struct k_timer *t);
 static K_TIMER_DEFINE(deadline, deadline_expired, NULL);
@@ -873,6 +999,9 @@ static void request_work_fn(struct k_work *w)
 		/* Accepted, so the staged numbers are now the numbers this
 		 * session's next grant will be read with. See next_grant. */
 		commit_next_grant();
+		/* MPSL has it now, and only MPSL can give it back. Set BEFORE
+		 * the counter so nothing reads placed>owed. */
+		g.mpsl_owes = true;
 		stats.placed++;
 		return;
 	}
@@ -1007,7 +1136,20 @@ static void denied_work_fn(struct k_work *w)
 	 * staged", and it has to be asked at the moment it is acted on.
 	 */
 	if (!g.pending) {
+		switch (g.deny_src) {
+		case DENY_SRC_AFTER_GRANT:
+			stats.sent_after_grant++;
+			break;
+		case DENY_SRC_DEADLINE:
+			stats.sent_deadline++;
+			break;
+		default:
+			stats.sent_blocked++;
+			break;
+		}
 		radiant_nrf_gate_on_denied();
+	} else {
+		stats.deny_suppressed++;
 	}
 }
 
@@ -1032,13 +1174,21 @@ static void gate_dump_fn(struct k_work *w)
 {
 	ARG_UNUSED(w);
 	LOG_INF("gate: acq=%u in_grant=%u/%u placed=%u granted=%u blocked=%u cancel=%u eagain=%u "
-		"near=%u long=%u ext=%u/%u dead=%u | len=%u/%u el=%u sig=%u "
+		"near=%u long=%u ext=%u/%u dead=%u | "
+		"den pend=%u anch=%u dist=%u degen=%u nosess=%u owed=%u | "
+		"sent grant=%u dead=%u blk=%u supp=%u | "
+		"len=%u/%u el=%u sig=%u "
 		"g=%d p=%d rel=%d end=%d boot=%d anchor=%d",
 		stats.acquires, stats.acq_in_grant, stats.acq_in_grant_denied,
 		stats.placed, stats.granted, stats.blocked, stats.cancelled,
 		stats.refused_eagain, stats.refused_too_near,
 		stats.refused_too_long, stats.extends_ok, stats.extends_failed,
-		stats.deadline_fired, g.granted_len_us, g.want_len_us,
+		stats.deadline_fired,
+		stats.den_pending, stats.den_no_anchor, stats.den_distance,
+		stats.den_degenerate, stats.den_no_session, stats.den_owed,
+		stats.sent_after_grant, stats.sent_deadline,
+		stats.sent_blocked, stats.deny_suppressed,
+		g.granted_len_us, g.want_len_us,
 		elastic_initial_us,
 		stats.last_signal, (int)g.granted, (int)g.pending,
 		(int)g.release_wanted, (int)g.ended, (int)g.bootstrapping,
@@ -1061,6 +1211,7 @@ static void deadline_expired(struct k_timer *t)
 	/* A k_timer expiry is ISR context. Hand it on. This IS a refusal - the
 	 * grant did not arrive in time to be of use - so the staged operation
 	 * is orphaned and must be told. */
+	g.deny_src = DENY_SRC_DEADLINE;
 	g.deny_wanted = true;
 	k_work_submit(&denied_work);
 }
@@ -1141,6 +1292,7 @@ static inline void timer0_disarm(void)
  */
 static inline void end_housekeeping(void)
 {
+	g.deny_src = DENY_SRC_AFTER_GRANT;
 	g.deny_wanted = true;
 	k_work_submit(&denied_work);
 }
@@ -1149,6 +1301,7 @@ static inline void end_housekeeping(void)
  * operation. Used by the paths that ARE refusals. */
 static inline void submit_denial(void)
 {
+	g.deny_src = DENY_SRC_BLOCKED;
 	g.deny_wanted = true;
 	k_work_submit(&denied_work);
 }
@@ -1178,6 +1331,9 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 	switch (signal) {
 	case MPSL_TIMESLOT_SIGNAL_START:
 		stats.granted++;
+		/* Answered. The session is ours again as far as placing the
+		 * next request goes. See g.mpsl_owes. */
+		g.mpsl_owes = false;
 		blocked_run = 0u;
 		/* The air was there for it, so take a little more next time. One
 		 * step per grant, against halving per refusal - deliberately
@@ -1455,6 +1611,8 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		} else {
 			stats.cancelled++;
 		}
+		/* Answered, and refused. See g.mpsl_owes. */
+		g.mpsl_owes = false;
 		/*
 		 * GIVE WAY BY ASKING FOR LESS, not merely by asking again. See
 		 * elastic_initial_us. Only the elastic class is shortened, and
@@ -1552,6 +1710,11 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 			g.granted = false;
 			timer0_disarm();
 		}
+		/* "No request is outstanding" is exactly what g.mpsl_owes
+		 * tracks, so this is its authoritative clear - the backstop for
+		 * any answer path that did not run. The re-place below sets it
+		 * again on acceptance. */
+		g.mpsl_owes = false;
 		/*
 		 * AND IT IS WHERE A REQUEST THAT WAS TOO EARLY GETS PLACED.
 		 * mpsl_timeslot_request() answers -NRF_EAGAIN until exactly this
@@ -1575,6 +1738,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 */
 		g.granted = false;
 		g.anchor_valid = false;
+		g.mpsl_owes = false;
 		timer0_disarm();
 		k_timer_stop(&deadline);
 		if (g.pending) {
@@ -1732,6 +1896,7 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	uint64_t       len;
 
 	if (!session_open) {
+		stats.den_no_session++;
 		return GATE_DENIED;
 	}
 	now = radiant_radio_now();
@@ -1830,6 +1995,24 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 		/* One request outstanding per session, which is also the HAL's
 		 * one-operation rule. The backend refuses a second arm with
 		 * EBUSY before reaching here, so this is a backstop. */
+		stats.den_pending++;
+		return GATE_DENIED;
+	}
+
+	if (g.mpsl_owes) {
+		/*
+		 * g.pending is clear but MPSL is still holding the last
+		 * request. Placing now costs an -NRF_EAGAIN round trip, leaves
+		 * next_grant uncommitted, and re-arms the backstop - which is
+		 * the spiral at DEADLINE_SLACK_US, one turn of it. Refuse here
+		 * instead: the core learns it did not get the air one work-queue
+		 * hop sooner and nothing is left half-placed behind it.
+		 *
+		 * Only reachable when the backstop beat MPSL's answer, so with
+		 * the slack above this should stay near zero. It is counted, not
+		 * assumed.
+		 */
+		stats.den_owed++;
 		return GATE_DENIED;
 	}
 
@@ -1843,6 +2026,7 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	      (radiant_time_t)TAIL_MARGIN_US;
 
 	if (end <= start) {
+		stats.den_degenerate++;
 		return GATE_DENIED;
 	}
 
@@ -1933,6 +2117,7 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 		 * air was not obtained - and the bootstrap runs behind it, so
 		 * the next window in a quarter of a second finds an anchor.
 		 */
+		stats.den_no_anchor++;
 		bootstrap_anchor();
 		return GATE_DENIED;
 	} else {
@@ -1951,6 +2136,7 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 			 * back to a fresh bootstrap rather than truncating the
 			 * distance, which would place the grant in the wrong
 			 * place entirely. */
+			stats.den_distance++;
 			g.anchor_valid = false;
 			return GATE_DENIED;
 		}
@@ -2031,10 +2217,13 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 
 	/*
 	 * The backstop. Set past the point at which a grant would be useless -
-	 * the operation's own start - rather than at the request, because a
-	 * BLOCKED that beats it is the normal case and every measured one did.
+	 * the operation's own start - PLUS DEADLINE_SLACK_US, because the
+	 * original reasoning was measured without a second stack and does not
+	 * survive one. See DEADLINE_SLACK_US.
 	 */
-	k_timer_start(&deadline, K_USEC((uint32_t)(t_from - now)), K_NO_WAIT);
+	k_timer_start(&deadline,
+		      K_USEC((uint32_t)(t_from - now) + DEADLINE_SLACK_US),
+		      K_NO_WAIT);
 
 	return GATE_PENDING;
 }

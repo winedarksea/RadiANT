@@ -107,15 +107,48 @@ static bool seen_live(const struct radiant_search *s, const struct radiant_searc
  * would make filter_index ambiguous, which is the one thing this module cannot
  * tolerate.
  */
+/*
+ * The devnum_lo carried by filter j of set k.
+ *
+ * ORDINARILY consecutive - see build_set()'s comment for why that shape is
+ * worth keeping - but a backend may declare that two simultaneously-armed
+ * filters have to differ by more than one bit before its matcher can separate
+ * them (caps.min_filter_hamming_bits, and read that field's comment: on a
+ * CC26x2 a one-bit gap receives NOTHING). Consecutive integers differ by one
+ * bit in exactly the case that matters, k even, so the default pairing hands
+ * such a part the worst pair available every window.
+ *
+ * For the two-filter case the answer is COMPLEMENT PAIRING: set k holds k and
+ * k ^ 0xFF. That is eight bits apart, the most this byte can offer; it is an
+ * involution, so the 128 sets still partition all 256 values exactly once with
+ * no duplicate filter; and "which set would catch device X" stays arithmetic -
+ * min(X, X ^ 0xFF) - which is what the seen cache and the named-device search
+ * need and is why a lookup table was not acceptable.
+ *
+ * Above two filters the constraint stops binding the same way: a set of eight
+ * consecutive values already contains pairs three bits apart, and no
+ * involution fixes a whole set at once. No such backend exists, so this
+ * refuses to guess - the consecutive layout is kept and the backend's own
+ * arm_rx() is left to reject what it cannot do, which is loud rather than
+ * silent.
+ */
+static uint32_t set_filter_lo(const struct radiant_search *s, uint16_t set, uint8_t j)
+{
+	if (s->spread_pairs) {
+		return (j == 0u) ? (uint32_t)set
+				 : ((uint32_t)set ^ 0xFFu);
+	}
+	return (uint32_t)set * (uint32_t)s->n_filters + (uint32_t)j;
+}
+
 static void build_set(struct radiant_search *s, uint16_t set)
 {
-	uint32_t base = (uint32_t)set * (uint32_t)s->n_filters;
 	uint8_t n = 0;
 
 	for (uint8_t j = 0; j < s->n_filters; j++) {
 		struct radiant_channel_id id;
 		uint8_t addr[RADIANT_FRAME_ADDR_MAX];
-		uint32_t lo = base + (uint32_t)j;
+		uint32_t lo = set_filter_lo(s, set, j);
 		int rc;
 
 		if (lo >= RADIANT_SEARCH_LO_VALUES) {
@@ -296,6 +329,12 @@ int radiant_search_init(struct radiant_search *s, const struct radiant_search_cf
 	s->fmt = fmt;
 	s->n_filters = nf;
 	/*
+	 * Complement pairing only where the backend asks for separation AND the
+	 * window holds exactly two filters, which is the only width the
+	 * involution covers. See set_filter_lo().
+	 */
+	s->spread_pairs = (caps->min_filter_hamming_bits > 1u) && (nf == 2u);
+	/*
 	 * Coverage arithmetic, and the one line in this file that must never
 	 * become a constant: 8 filters -> 32 sets on nRF, 2 filters -> 128 sets
 	 * on EFR32/RAIL, from the same expression.
@@ -324,6 +363,32 @@ uint64_t radiant_search_sweep_us(const struct radiant_search *s)
 	return (uint64_t)s->n_sets * (uint64_t)s->cfg.dwell_us;
 }
 
+/*
+ * Dwell still owed to the selected set, or 0 if it is finished - the single
+ * definition of "finished" that radiant_search_set_complete() and
+ * radiant_search_dwell_remaining() both answer from.
+ *
+ * They MUST agree, and the epsilon is why they cannot be written separately.
+ * The caller's contract is "keep the request armed while set_complete() is
+ * false, and size the next chunk from dwell_remaining()", so a state where
+ * set_complete() says false and dwell_remaining() says something unusably
+ * small is a sweep that stays armed forever on chunks too short to hear
+ * anything. See RADIANT_SEARCH_DWELL_EPSILON_US for the measurement.
+ */
+static uint32_t dwell_owed(const struct radiant_search *s)
+{
+	uint32_t owed;
+
+	if (s->set_dwell_us >= s->cfg.dwell_us) {
+		return 0u;
+	}
+	owed = s->cfg.dwell_us - s->set_dwell_us;
+
+	/* A residue too small to be worth arming is not owed at all: the set
+	 * has had its coverage and the next one is waiting. */
+	return (owed < RADIANT_SEARCH_DWELL_EPSILON_US) ? 0u : owed;
+}
+
 bool radiant_search_set_complete(const struct radiant_search *s)
 {
 	if (!inst_ok(s)) {
@@ -335,22 +400,28 @@ bool radiant_search_set_complete(const struct radiant_search *s)
 	if (!s->set_valid) {
 		return true;
 	}
-	return s->set_dwell_us >= s->cfg.dwell_us;
+	return dwell_owed(s) == 0u;
 }
 
 uint32_t radiant_search_dwell_remaining(const struct radiant_search *s)
 {
-	if (!inst_ok(s) || !s->set_valid ||
-	    s->set_dwell_us >= s->cfg.dwell_us) {
+	if (!inst_ok(s) || !s->set_valid) {
 		return 0u;
 	}
-	return s->cfg.dwell_us - s->set_dwell_us;
+	return dwell_owed(s);
 }
 
 uint16_t radiant_search_set_for_devnum(const struct radiant_search *s, uint16_t devnum)
 {
 	if (!inst_ok(s)) {
 		return RADIANT_SEARCH_SETS_NONE;
+	}
+	if (s->spread_pairs) {
+		uint8_t lo = (uint8_t)(devnum & 0xFFu);
+
+		/* Complement pairing: set k holds k and k ^ 0xFF, so the set is
+		 * whichever of the two is the lower. See set_filter_lo(). */
+		return (uint16_t)((lo < 0x80u) ? lo : (uint8_t)(lo ^ 0xFFu));
 	}
 	return (uint16_t)((devnum & 0xFFu) / s->n_filters);
 }
@@ -490,7 +561,7 @@ int radiant_search_window(struct radiant_search *s, radiant_time_t t_earliest,
 	 * for the remainder, so the "certain within one sweep" guarantee
 	 * survives fragmentation instead of degrading silently into "likely".
 	 */
-	if (!s->set_valid || s->set_dwell_us >= s->cfg.dwell_us) {
+	if (!s->set_valid || dwell_owed(s) == 0u) {
 		select_next_set(s);
 	}
 	if (!s->set_valid) {

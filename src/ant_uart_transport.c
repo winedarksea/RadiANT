@@ -47,6 +47,27 @@ BUILD_ASSERT(DT_NODE_HAS_STATUS(ANT_UART_NODE, okay),
 	     "No ant-uart alias. The UART transport needs a board overlay "
 	     "naming a UART that is not the console.");
 
+/* Two records of one number, and this is what stops them disagreeing.
+ *
+ * The devicetree's current-speed is what CONFIGURES the UART;
+ * CONFIG_ANT_DONGLE_UART_BAUD is what RECORDS the rate somewhere a script and
+ * a person can read it, because .config is where every other property of a
+ * build is asserted from and a devicetree property is not. Neither is
+ * redundant and neither is authoritative on its own - the pair is, and only
+ * because of this line.
+ *
+ * The failure it catches is specifically the quiet one. A baud mismatch is
+ * invisible on the wire: the host sends, the board receives framing errors,
+ * tools/ant_probe.py reports "no response to reset", and that is the same
+ * message a hung image or a wrong COM port produces. See
+ * boards/cc26x2r1_launchxl.overlay for the target where the two numbers
+ * differ from every other board's and this assert earns its place.
+ */
+BUILD_ASSERT(DT_PROP(ANT_UART_NODE, current_speed) == CONFIG_ANT_DONGLE_UART_BAUD,
+	     "The ant-uart node's current-speed and CONFIG_ANT_DONGLE_UART_BAUD "
+	     "disagree. They describe the same UART; fix the board overlay or "
+	     "the Kconfig default so both name the rate the host will use.");
+
 static const struct device *const ant_uart_dev = DEVICE_DT_GET(ANT_UART_NODE);
 
 #define ANT_TX_FRAME_MAX 64

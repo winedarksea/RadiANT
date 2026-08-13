@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+  Target configuration for the LAUNCHXL-CC26X2R1, for UniFlash's dslite.
+
+  Hand-written rather than exported from the UniFlash GUI, because the GUI
+  route needs a human at a mouse and this bench is driven from a script. The
+  format is TI's; the content is the minimum that connects.
+
+  THE ONE PROPERTY THAT MATTERS IS "SWD Mode Settings" = 4, cJTAG 2-pin.
+
+  It is stated here rather than left to default, and the reason is worth
+  recording because the obvious reading is the wrong one. devices/cc2652r1f.xml
+  contains a <jtag> block that already says
+
+      <property Type="choicelist" Value="4" id="SWD Mode Settings">
+        <choice Name="cJTAG (1149.7) 2-pin advanced modes">
+
+  which looks like the device supplying its own correct default. It is not.
+  That block is a template the CCS/UniFlash GUI reads when it generates a
+  ccxml; DebugServer, handed a ccxml directly, takes the property from the
+  CONNECTION, and connections/TIXDS110_Connection.xml defaults it to
+
+      Value="0"  ->  "JTAG (1149.1), SWD and cJTAG are disabled"
+
+  i.e. plain 4-pin JTAG. Omitting the property therefore asks this board for
+  the one protocol four separate attempts have already proved it does not
+  answer - and the failure is NOT a helpfully-worded protocol error. It is
+
+      fatal: IcePick_C: Error connecting to the target: (Error -242 @ 0x0)
+      A router subpath could not be accessed.
+      The board configuration file is probably incorrect.
+
+  which reads as a wrong device or a corrupt targetdb, and sends you looking
+  in the wrong place. Measured on this bench, 2026-08-13.
+
+  "XDS110 Aux Port" = 1 (aux COM port carries the target TDO pin) is TI's own
+  default in the device file and is kept. It does not cost the backchannel
+  UART: the XDS110 exposes two COM ports and the LaunchPad's user UART - the
+  one carrying the ANT byte stream at 57600, and the spike's console - is the
+  application port, not the auxiliary one.
+
+  See scripts/flash_ti.ps1 for the routes tried and the three that are dead,
+  and scripts/update_xds110_firmware.ps1 for the probe firmware this needs.
+-->
+<configurations XML_version="1.2" id="configurations_0">
+    <configuration XML_version="1.2" id="configuration_0">
+        <instance XML_version="1.2" desc="Texas Instruments XDS110 USB Debug Probe" href="connections/TIXDS110_Connection.xml" id="Texas Instruments XDS110 USB Debug Probe" xml="TIXDS110_Connection.xml" xmlpath="connections"/>
+        <connection XML_version="1.2" desc="Texas Instruments XDS110 USB Debug Probe" id="Texas Instruments XDS110 USB Debug Probe">
+            <!--
+              The three driver bindings for this device's debug topology, in
+              the order the scan chain presents them: the ICEPick-C router,
+              the CoreSight DAP behind it, and the Cortex-M core behind that.
+              cc2652r1f.xml names those three by routers/ and cpus/ file, but
+              naming a component is not the same as naming the code that
+              drives it over this probe - without these three lines
+              DebugServer reports "An invalid processor ID has been found",
+              which reads like a wrong device rather than a missing binding.
+            -->
+            <instance XML_version="1.2" href="drivers/tixds510icepick_c.xml" id="drivers" xml="tixds510icepick_c.xml" xmlpath="drivers"/>
+            <instance XML_version="1.2" href="drivers/tixds510cs_dap.xml" id="drivers" xml="tixds510cs_dap.xml" xmlpath="drivers"/>
+            <instance XML_version="1.2" href="drivers/tixds510cortexM.xml" id="drivers" xml="tixds510cortexM.xml" xmlpath="drivers"/>
+            <property Type="choicelist" Value="4" id="SWD Mode Settings">
+                <choice Name="cJTAG (1149.7) 2-pin advanced modes" value="enable">
+                    <property Type="choicelist" Value="1" id="XDS110 Aux Port"/>
+                </choice>
+            </property>
+            <platform XML_version="1.2" id="platform_0">
+                <instance XML_version="1.2" desc="CC2652R1F" href="devices/cc2652r1f.xml" id="CC2652R1F" xml="cc2652r1f.xml" xmlpath="devices"/>
+                <device HW_revision="1" XML_version="1.2" desc="CC2652R1F" description="SimpleLink(TM) multi-protocol CC2652R wireless MCU" id="CC2652R1F" partnum="CC2652R1F" simulation="no"/>
+            </platform>
+        </connection>
+    </configuration>
+</configurations>

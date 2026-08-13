@@ -46,6 +46,10 @@ static bool led_ok;
 #include "ble_coex_load.h"
 #endif
 
+#if defined(CONFIG_ANT_DONGLE_THREAD_COEX_LOAD)
+#include "thread_coex_load.h"
+#endif
+
 /* The radio contract - whichever backend is compiled in behind it. Bringing
  * the stack up is the only thing main() needs from it.
  */
@@ -147,6 +151,16 @@ int main(void)
 	 * one that refuses to boot.
 	 */
 	(void)ble_coex_load_start();
+#endif
+
+#if defined(CONFIG_ANT_DONGLE_THREAD_COEX_LOAD)
+	/*
+	 * After antr_init() for the identical HFXO reason above, and non-fatal
+	 * for the identical bench-instrument reason. The two loads are legal
+	 * together - that build is the three-stack case - so this is a second
+	 * `if`, not an `else`.
+	 */
+	(void)thread_coex_load_start();
 #endif
 
 	usb_ant_class_init();

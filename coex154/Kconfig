@@ -1,0 +1,145 @@
+# SPDX-License-Identifier: Apache-2.0
+
+mainmenu "coex154 - the P3.5 802.15.4 blackout measurement"
+
+choice
+	prompt "Role"
+	default COEX154_ROLE_RX
+	help
+	  Which end of the measurement this image is. Both ends are the same
+	  application on purpose: the frame layout and the sequence arithmetic
+	  have to agree exactly, and two programs that agree by inspection are
+	  two programs that stop agreeing.
+
+config COEX154_ROLE_RX
+	bool "Receiver - counts frames and reports exact loss"
+	help
+	  The DUT. Sits in promiscuous receive and tallies frames by the
+	  sequence number in their payload, so loss is computed from what was
+	  SENT rather than from what was expected to be sent. This is the end
+	  that also runs radiant_core, and therefore the end whose radio is
+	  being taken away.
+
+config COEX154_ROLE_TX
+	bool "Transmitter - the traffic generator"
+	help
+	  The reference end. Sends a counted, evenly-spaced stream and nothing
+	  else. It must NOT run radiant_core: a generator whose own radio is
+	  arbitrated cannot tell "the DUT did not hear it" from "it was never
+	  sent", which is the one distinction the whole measurement rests on.
+
+endchoice
+
+config COEX154_CHANNEL
+	int "802.15.4 channel"
+	range 11 26
+	default 26
+	help
+	  26 by default, and deliberately the top of the band: it is the
+	  furthest 802.15.4 channel from the 2.4 GHz BLE advertising channels
+	  (2402/2426/2480 MHz) and from most Wi-Fi. This measurement is about
+	  the ARBITER taking the radio away, so ambient air must not be a
+	  competing explanation for a missing frame.
+
+config COEX154_PAN_ID
+	hex "PAN id"
+	default 0xca7e
+
+config COEX154_PSDU_LEN
+	int "PSDU length in bytes, including the 2-byte FCS"
+	range 21 127
+	default 127
+	help
+	  127 is the maximum, ~4.25 ms on air at 250 kbps, and it is the row
+	  docs/radiant-bridge.md section 7.3a predicts 18 % (24 % with the
+	  follow-on reserve) for. Set 40 for the other column of that table.
+
+	  The floor of 21 is the header (9) plus the payload this application
+	  needs to identify a frame as its own and number it (10) plus FCS (2).
+
+config COEX154_TX_INTERVAL_MS
+	int "Milliseconds between transmitted frames"
+	range 5 10000
+	default 20
+	help
+	  20 ms is 50 frames a second, which gathers a statistically useful
+	  count in a minute without saturating the channel - at 4.25 ms a frame
+	  that is a 21 % duty cycle, well clear of the CCA backoff region where
+	  the generator's own retries would become the thing being measured.
+
+config COEX154_TX_COUNT
+	int "How many frames to send, 0 for endless"
+	default 0
+
+config COEX154_ANT_MASTERS
+	int "ANT+ master channels the receiver runs alongside 802.15.4"
+	depends on COEX154_ROLE_RX && RADIANT_CORE
+	range 0 8
+	default 8
+	help
+	  THE BLACKOUT GENERATOR, and it is masters rather than a receiver on
+	  purpose.
+
+	  docs/radiant-bridge.md section 7.3a models loss as N blackouts per
+	  period against frame duration, and its rows are labelled "tracked
+	  sensors". A RECEIVER cannot produce that: a channel that is searching
+	  blacks out on a sweep schedule, and a channel that is tracking blacks
+	  out only for as long as a real sensor keeps transmitting to it. Both
+	  make the ANT duty cycle a property of the room. A MASTER transmits
+	  every channel period whether anyone is listening or not, so N is
+	  exactly this number and the measurement is repeatable on a bench with
+	  no sensors on it at all.
+
+	  8 is section 7.3a's headline row - "8 tracked sensors, ~4 % aggregate
+	  duty, 18 % of max-size frames clipped" - which is the figure P3.5
+	  exists to confirm or refute. 16 and 32 are the other rows and this
+	  hardware cannot reach them; 8 channels is the ceiling the range above
+	  records rather than hides.
+
+	  0 turns ANT off while leaving radiant_core linked and initialised,
+	  which is a THIRD arm of the A/B and a useful one: it separates the
+	  cost of the arbiter merely being present from the cost of the air it
+	  takes away.
+
+config COEX154_ARBITRATED
+	bool
+	default y if RADIANT_CORE_BACKEND_NRF_GATE_MPSL
+	select NRF_802154_MULTIPROTOCOL_SUPPORT
+	help
+	  Not user-facing. Exists solely to reach
+	  NRF_802154_MULTIPROTOCOL_SUPPORT, which has no prompt and so cannot be
+	  set from a .conf file at all - assigning it there is a hard Kconfig
+	  error, not a silent drop, which is the one merciful thing about it.
+
+	  THIS SELECT IS REDUNDANT, AND THE PARAGRAPH THAT USED TO BE HERE WAS
+	  WRONG. It claimed the symbol is "selected only by the OpenThread
+	  integration", so that an application reaching nrf_802154 directly would
+	  get a driver that ignores MPSL and programs the RADIO over the top of
+	  the gate's timeslot. Checked against the generated .config on
+	  2026-08-12: not so. NRF_802154_RADIO_DRIVER=y is sufficient on its own -
+	  nrfxlib's Kconfig.nrfxlib defaults NRF_802154_SOURCE_NRFXLIB and then
+	  NRF_802154_SL, NRF_802154_SL does `select MPSL`, and MPSL does
+	  `select NRF_802154_MULTIPROTOCOL_SUPPORT if NRF_802154_RADIO_DRIVER`.
+	  Every coex154 image already had both symbols set.
+
+	  Kept anyway, and only because the intent is worth stating: nothing in
+	  this application would fail if it were deleted, and a reader who deletes
+	  it should know they are relying on an nrfxlib choice default rather than
+	  on anything here.
+
+	  THE CONSEQUENCE FOR THE A/B IS THE PART THAT MATTERS. This symbol cannot
+	  key arbitration off the control arm, because nothing can: on nRF54L
+	  there is no build of this driver that does not talk to MPSL. So the
+	  "uncontended" arm is 15.4-with-an-arbiter-and-no-competitor, not
+	  15.4-with-no-arbiter, and the A/B measures what a second stack's DEMAND
+	  costs rather than what arbitration itself costs. Getting the latter
+	  would mean NRF_802154_SL_OPENSOURCE=y or NRF_802154_SOURCE_HAL_NORDIC=y,
+	  which swaps the Service Layer wholesale - a different driver, not this
+	  one with arbitration removed - and is therefore not a control arm for
+	  this experiment either.
+
+config COEX154_REPORT_S
+	int "Seconds between receiver reports"
+	default 10
+
+source "Kconfig.zephyr"

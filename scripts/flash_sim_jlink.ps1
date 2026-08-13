@@ -62,7 +62,8 @@ param(
     [string]$JLinkExe = 'C:\Program Files\SEGGER\JLink_V966\JLink.exe',
     [string]$Device = 'nRF54L15_M33',
     [int]$Speed = 4000,
-    [string]$Serial
+    [string]$Serial,
+    [switch]$Erase
 )
 
 $ErrorActionPreference = 'Stop'
@@ -123,7 +124,32 @@ $lines += @(
     "device $Device",
     'connect',
     'r',
-    'h',
+    'h'
+)
+
+# -Erase, and it is NOT the default because it should not be.
+#
+# `loadfile` programs only the sectors the hex actually covers, and leaves
+# everything else exactly as it was. That is right almost always - it is faster,
+# it spares the flash, and it preserves the node identity and NVM pages this
+# project deliberately keeps across reflashes.
+#
+# It is wrong when the board's previous contents are UNKNOWN, and the failure is
+# a bad one: an image that boots into whatever a different application left in
+# the regions the new hex does not touch. This bench hit it on an nRF5340 DK
+# shared with another user - a fresh application image, flashed cleanly, whose
+# console produced a boot banner from an NCS version that was not the one being
+# built, followed by a bus fault.
+#
+# So: pass -Erase when taking a board over from someone else or when a
+# freshly-flashed image behaves like a different one. Do not pass it routinely.
+if ($Erase) {
+    Write-Host "Erasing $Device first (-Erase): the previous contents of any" `
+               "region this image does not cover will be lost, including NVM."
+    $lines += 'erase'
+}
+
+$lines += @(
     "loadfile $HexPath",
     'r',
     'g',

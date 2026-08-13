@@ -27,16 +27,19 @@ list(APPEND ZEPHYR_EXTRA_MODULES "${CMAKE_CURRENT_SOURCE_DIR}/../radiant_core")
 # nothing on the air - indistinguishable from a dead antenna, and it has cost
 # this project a Feather flash and a whole session once already.
 set(RADIANT_BACKEND "nrf" CACHE STRING
-    "radiant_core HAL backend: null (refuses every arm) or nrf (the RADIO)")
-set_property(CACHE RADIANT_BACKEND PROPERTY STRINGS null nrf)
+    "radiant_core HAL backend: null (refuses every arm), nrf (the RADIO) or cc26xx (TI's RF core)")
+set_property(CACHE RADIANT_BACKEND PROPERTY STRINGS null nrf cc26xx)
 
 if(RADIANT_BACKEND STREQUAL "null")
   set(RADIANT_BACKEND_CONF "CONFIG_RADIANT_CORE_BACKEND_NULL=y")
 elseif(RADIANT_BACKEND STREQUAL "nrf")
   set(RADIANT_BACKEND_CONF "CONFIG_RADIANT_CORE_BACKEND_NRF=y")
+elseif(RADIANT_BACKEND STREQUAL "cc26xx")
+  set(RADIANT_BACKEND_CONF "CONFIG_RADIANT_CORE_BACKEND_CC26XX=y")
 else()
   message(FATAL_ERROR
-    "strap: unknown -DRADIANT_BACKEND=${RADIANT_BACKEND}. Use null or nrf.")
+    "strap: unknown -DRADIANT_BACKEND=${RADIANT_BACKEND}. "
+    "Use null, nrf or cc26xx.")
 endif()
 message(STATUS "strap: radiant_core HAL backend ${RADIANT_BACKEND}")
 
@@ -51,6 +54,30 @@ list(APPEND EXTRA_CONF_FILE "${strap_backend_conf}")
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(radiant_strap)
+
+# The backend actually compiled is the backend that was asked for.
+#
+# A copy of the guard in the top-level CMakeLists.txt, and the duplication is
+# the same deliberate one the header of this file describes: `west build strap`
+# must not depend on the dongle's build files. What it guards against is a
+# Kconfig `depends on` going silently unmet - the fragment above is merged
+# last so it cannot LOSE to another fragment, but an unmet dependency makes the
+# assignment a no-op and Kconfig falls back to the choice default, which is the
+# null backend. A null-radio strap boots, logs "transmitting", and puts nothing
+# on the air.
+#
+# It has happened twice on the Nordic side. It is more likely on TI, where the
+# cc26xx arm has to depend on SOC_SERIES_CC13X2_CC26X2 because no
+# SOC_COMPATIBLE_* symbol exists for the part.
+string(TOUPPER "${RADIANT_BACKEND}" RADIANT_BACKEND_UPPER)
+if(NOT CONFIG_RADIANT_CORE_BACKEND_${RADIANT_BACKEND_UPPER})
+  message(FATAL_ERROR
+    "strap: -DRADIANT_BACKEND=${RADIANT_BACKEND} was asked for and Kconfig "
+    "did not select it. CONFIG_RADIANT_CORE_BACKEND_${RADIANT_BACKEND_UPPER} "
+    "is unset, so a different backend - almost certainly the null one, which "
+    "transmits nothing - was compiled. Check the arm's `depends on` in "
+    "radiant_core/Kconfig against this board's .config.")
+endif()
 
 target_sources(app PRIVATE src/main.c)
 

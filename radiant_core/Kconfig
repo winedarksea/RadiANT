@@ -101,6 +101,81 @@ config RADIANT_CORE_BACKEND_NRF
 	  seeded from Zephyr's per-SoC BLE chain delays rather than measured on
 	  this bench - see the warnings at the top of the file.
 
+config RADIANT_CORE_BACKEND_CC26XX
+	bool "cc26xx - TI CC13x2/CC26x2 RF core, proprietary mode"
+	#
+	# READ THE NOTE ON THE nrf ARM ABOVE BEFORE CHANGING THIS LINE, because
+	# this is the same trap with the mitigation deliberately weakened.
+	#
+	# There is no SOC_COMPATIBLE_* symbol for any TI part. Zephyr defines
+	# that family of symbols for Nordic and for a handful of others; TI's
+	# tree has SOC_SERIES_CC13X2_CC26X2 and nothing else, so the construct
+	# that a rename silently breaks is the ONLY construct available. That
+	# has cost this project four sessions across three mechanisms, and the
+	# response is not to find a cleverer symbol - there isn't one - but to
+	# make the failure loud in two other places:
+	#
+	#   1. The FATAL_ERROR in the top-level CMakeLists.txt (and in
+	#      strap/CMakeLists.txt), which compares what was ASKED for
+	#      (-DRADIANT_BACKEND=cc26xx) against what Kconfig SELECTED. That
+	#      is the guard that catches a rename on the first build, before
+	#      any hardware is involved, and it is the one to trust.
+	#   2. A BUILD_ASSERT in src/radiant_radio_cc26xx.c testing the same
+	#      symbol, so a configuration that reached here by some other route
+	#      still fails at compile time rather than on the air.
+	#
+	# The second alternative below is belt-and-braces of a different kind:
+	# SOC_FAMILY_TI_SIMPLELINK is a SEPARATE symbol, set by the series
+	# symbol above, and it is broader than we want (it also covers CC32xx).
+	# Accepting it costs nothing, because the BUILD_ASSERT in the C file
+	# names the part precisely - what it buys is that a rename of ONE of
+	# the two symbols leaves the dependency met rather than silently unmet.
+	# Two names for one fact is exactly the shape of the fix, and it is
+	# what the nrf arm gets for free from Nordic having both.
+	#
+	depends on SOC_SERIES_CC13X2_CC26X2 || SOC_FAMILY_TI_SIMPLELINK
+	select CLOCK_CONTROL
+	help
+	  src/radiant_radio_cc26xx.c: the RF core through TI's RF driver, in
+	  proprietary (CMD_PROP_*) mode with a 1 Mbps 2-GFSK PHY built from a
+	  BLE-derived override table. Receive and transmit.
+
+	  Needs the hal_ti Zephyr module, which NCS's west manifest filters out
+	  of its import - scripts/fetch_hal_ti.ps1 places it and the repo's own
+	  west.yml carries the project for a workspace built from this
+	  manifest. A build without it fails at the first <ti/drivers/rf/RF.h>.
+
+	  NO TIMER AND NO CHOSEN NODE, unlike the nrf backend. The nRF's five
+	  TIMER compares and five (D)PPI connections exist to build, in
+	  hardware, the thing the RF core gives away: a radio operation with an
+	  absolute start time. CMD_PROP_RX/CMD_PROP_TX with startTrigger =
+	  TRIG_ABSTIME and startTime in RAT ticks IS radiant_rx_req::t_open and
+	  radiant_tx_req::t_sync_at, so there is nothing to name in devicetree
+	  and nothing to share.
+
+	  The clock is the backend's own business and is the one place this is
+	  harder than the nRF: the RAT is 32-bit at 4 MHz and wraps in ~17.9
+	  minutes, so radiant_radio_now() folds it to 64 bits over a periodic
+	  tick. A dongle left plugged in over a weekend must not acquire a
+	  scheduling bug at minute 18.
+
+endchoice
+
+# ── A setting of the nrf arm, and it has to live OUTSIDE the choice ─────────
+#
+# It used to be inside it, between the nrf arm and `endchoice`, and that was a
+# latent Kconfig dependency loop that only became fatal when a third arm was
+# added. An `int` inside a choice is still a MEMBER of that choice, so the
+# choice acquires a dependency on it, while it depends on the nrf arm, which
+# depends on the choice:
+#
+#   RADIANT_CORE_BACKEND_NRF -> <choice> -> ..._NRF_IRQ_PRIO -> ..._BACKEND_NRF
+#
+# Kconfig reported exactly that cycle and refused the whole file - not the one
+# line - so the symptom was a board that had never been built failing to
+# configure with an error naming three symbols and no board. Two arms happened
+# not to trip it; three did. The fix is where the symbol belongs anyway: it is
+# a property OF a backend, not an alternative TO one.
 config RADIANT_CORE_BACKEND_NRF_IRQ_PRIO
 	int "RADIO interrupt priority"
 	depends on RADIANT_CORE_BACKEND_NRF
@@ -110,8 +185,6 @@ config RADIANT_CORE_BACKEND_NRF_IRQ_PRIO
 	  backend uses", because re-arming from inside a completion callback is
 	  the only path that meets a 1.55 ms acknowledged-data turnaround.
 	  Lower this only with a measurement in hand.
-
-endchoice
 
 # ── Who owns the RADIO ───────────────────────────────────────────────────────
 #

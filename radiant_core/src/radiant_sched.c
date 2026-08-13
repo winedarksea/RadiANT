@@ -698,8 +698,41 @@ static void end_armed(enum radiant_sched_done why)
 		 * at the first denial, with the map simply ceasing to update and
 		 * no counter moving.
 		 */
+		/*
+		 * DONE_ABORTED KEEPS IT TOO, AND LEAVING IT OUT WEDGED THE
+		 * DONGLE PERMANENTLY UNDER ARBITRATION.
+		 *
+		 * abort_armed() - the PREEMPTION path, thirty lines below -
+		 * already says this in its own words: "Paused, not ended - the
+		 * request survives untouched", with exactly this continuous-RX
+		 * / ED test. This function is the other way a chunk stops: the
+		 * RADIO reports RADIANT_RADIO_STATUS_ABORTED, which under the
+		 * MPSL gate is what a chunk cut short by the end of a timeslot
+		 * looks like. Same event, same meaning, and the two paths
+		 * disagreed - so a scan the scheduler intended to pause was
+		 * instead slot_clear()ed out of the table.
+		 *
+		 * What that cost, measured on the nRF54L15 DK with a 100 ms BLE
+		 * advertiser beside the sweep (coex.conf): the search ran 84
+		 * arms in under a second - 83 denied, one ABORTED - and then
+		 * every counter froze for ever. `acq` stuck at 84 while
+		 * housekeeping ticked on at 20/s, `searching=1`, `win=1`, zero
+		 * packets in 100 s against 406 of 406 on the same image with
+		 * the advertiser off.
+		 *
+		 * The wedge is a broken invariant across the two files rather
+		 * than a stall in either. radiant_api.c's api_sched_done()
+		 * treats ABORTED as "ran", so it keeps api_search_slot bound
+		 * and re-binds for the next chunk; api_post_search_window()
+		 * then returns early on `api_search_slot != CH_NONE` at every
+		 * subsequent pump, for ever. One side believed a request was in
+		 * the table and the other had just deleted it, and NOTHING
+		 * re-posts a background scan that both layers think is somebody
+		 * else's problem.
+		 */
 		keep = (why == RADIANT_SCHED_DONE_OK ||
-			why == RADIANT_SCHED_DONE_DENIED) &&
+			why == RADIANT_SCHED_DONE_DENIED ||
+			why == RADIANT_SCHED_DONE_ABORTED) &&
 		       ((sl->continuous && sl->kind == (uint8_t)SLOT_RX) ||
 			sl->kind == (uint8_t)SLOT_ED);
 		if (!keep) {

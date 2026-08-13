@@ -166,6 +166,37 @@ BUILD_ASSERT(IS_ENABLED(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL) ||
 	     "CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL.");
 
 /*
+ * THE SAME RULE FOR THE 802.15.4 SIDE, and this one is no longer a precaution -
+ * it is a measured failure with a register dump behind it.
+ *
+ * docs/backends.md section 7.1 has asked for this assertion for a while. What
+ * was missing was the evidence that CONFIG_BT's argument transfers, and on
+ * 2026-08-13 it arrived in a sharper form than the BLE case ever produced: the
+ * nRF 802.15.4 driver does not merely "own the RADIO sometimes", it CLAIMS
+ * SPECIFIC RADIO ENDPOINT REGISTERS AT ITS OWN INIT and never releases them -
+ * measured on nRF54L15, RADIO PUBLISH_ADDRESS = 0x80000005 (its channel 5) and
+ * SUBSCRIBE_RXEN = 0x80000017 (its channel 23).
+ *
+ * An event may PUBLISH to exactly one channel, so on the DIRECT backend this
+ * backend's own nrfx_gppi_conn_alloc() is refused outright with -EINVAL and
+ * antr_init() fails - which is at least loud. Under the arbiter the two can be
+ * swapped per grant, which is what makes the combination legal at all.
+ *
+ * CONFIG_NET_L2_OPENTHREAD is the symbol named rather than
+ * CONFIG_NRF_802154_RADIO_DRIVER, and deliberately: the driver symbol is
+ * force-selected by things a reader does not expect (enabling the driver at all
+ * pulls in nrfx's Service Layer, which selects MPSL), so asserting on it would
+ * fire in configurations that are fine. OpenThread is the thing an application
+ * author actually chooses.
+ */
+BUILD_ASSERT(IS_ENABLED(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL) ||
+		     !IS_ENABLED(CONFIG_NET_L2_OPENTHREAD),
+	     "radiant_radio_nrf cannot share the RADIO with the 802.15.4 driver "
+	     "unarbitrated - that driver holds PUBLISH_ADDRESS and "
+	     "SUBSCRIBE_RXEN from its own init. With CONFIG_NET_L2_OPENTHREAD "
+	     "on, select CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL.");
+
+/*
  * THE INTERRUPT PRIORITY IS NO LONGER A TUNING CHOICE UNDER AN ARBITER.
  *
  * mpsl.rst makes the application responsible for enabling and disabling the
@@ -1735,13 +1766,118 @@ static int8_t rssi_sample_dbm(void)
  */
 #define CLAIM_TERMINAL() (radiant_op.terminal_sent = false)
 
-#if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
+/*
+ * NOT UNDER #if CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL, and this block used
+ * to be. Everything from here to radio_ep_name() is referenced by code that is
+ * NOT gate-conditional - radiant_radio_enable() clears radio_ep_contended,
+ * captures the six registers and reports how many were shared, and the disable
+ * path calls radio_endpoints_attach(false) - so guarding the definitions while
+ * leaving the uses exposed broke every non-gate nRF build at compile time:
+ *
+ *   radiant_radio_nrf.c:1944: 'radio_ep_contended' undeclared
+ *   radiant_radio_nrf.c:2039: 'RADIO_EP_COUNT' undeclared
+ *   radiant_radio_nrf.c:2040: 'radio_ep_foreign' undeclared
+ *
+ * The block's own comment below already said it: "it is unconditional so the
+ * non-gate build has it too". The guard contradicted the intent rather than
+ * expressing it. Compiling this unconditionally costs 25 bytes of .bss and a
+ * loop over six registers that finds nothing on a build with no second stack,
+ * which is exactly what the "mask is ZERO and the swap is a no-op" argument
+ * below says it should find.
+ */
+
 /* Defined beside the other gate callbacks, because that is where the reasoning
  * about who owns the RADIO lives; declared here because the allocation they
  * capture happens at init, far above it. */
 static void radio_endpoints_save(void);
-static void radio_endpoints_attach(bool on);
-#endif
+__maybe_unused static void radio_endpoints_attach(bool on);
+
+/*
+ * Give every borrowed register back to its owner, once, at init. Not the
+ * per-grant swap - see radiant_nrf_gate_on_grant() for why that is off - just
+ * the other half of the allocation-time borrow, and it is unconditional so the
+ * non-gate build has it too.
+ */
+static void radio_endpoints_attach_off_at_init(void);
+
+/*
+ * ---------------------------------------------------------------------------
+ * THE SIX RADIO ENDPOINT REGISTERS THIS BACKEND PROGRAMS, AND WHO OWNS EACH
+ * ---------------------------------------------------------------------------
+ *
+ * A (D)PPI connection has two halves: a channel in a DPPIC, and a PUBLISH_/
+ * SUBSCRIBE_ register in the peripheral. These are the peripheral half. They
+ * are file scope rather than local to init because the grant hooks need them -
+ * see radio_endpoints_attach().
+ *
+ * `radio_ep_contended` is the whole safety argument for the swap. A bit is set
+ * only for a register that ALREADY held another stack's value when this backend
+ * initialised, and only those registers are ever touched at a grant boundary.
+ * In every build that has ever worked - the direct backend, and the MPSL gate
+ * beside the SoftDevice Controller, which takes none of these - the mask is
+ * ZERO and the swap is a no-op that cannot change behaviour. Measured 2026-08-12
+ * beside OpenThread the mask is exactly two bits: PUBLISH_ADDRESS (the 802.15.4
+ * driver's channel 5) and SUBSCRIBE_RXEN (its channel 23).
+ */
+#define RADIO_EP_COUNT 6U
+
+/*
+ * THE PER-GRANT SWAP, AS A SWITCH, BECAUSE IT IS UNDER INVESTIGATION.
+ *
+ * 1 = take the contended endpoints on grant entry and give them back on exit.
+ * 0 = allocate as normal but never move them at a grant boundary, so ANT+
+ *     cannot drive a contended endpoint at all.
+ *
+ * The allocation-time borrow is NOT controlled by this and always happens - it
+ * is what makes antr_init() succeed beside another stack, and it is bounded to
+ * init.
+ *
+ * Set to 0 while isolating a ~51 s reset loop that appears in the OpenThread
+ * build ONLY once an ANT channel is open (i.e. only once grants actually occur,
+ * which is the only time the swap runs). Flipping this is the decisive test:
+ * if the reset survives with 0, the swap is innocent.
+ */
+#define RADIANT_NRF_GRANT_EP_SWAP 1
+
+static uint32_t radio_ep_foreign[RADIO_EP_COUNT];
+static uint8_t  radio_ep_contended;
+
+static volatile uint32_t *radio_ep_reg(size_t i)
+{
+	switch (i) {
+	case 0U: return &NRF_RADIO->PUBLISH_ADDRESS;
+	case 1U: return &NRF_RADIO->PUBLISH_RXREADY;
+	case 2U: return &NRF_RADIO->SUBSCRIBE_RSSISTART;
+	case 3U: return &NRF_RADIO->SUBSCRIBE_RXEN;
+	case 4U: return &NRF_RADIO->SUBSCRIBE_TXEN;
+	default: return &NRF_RADIO->SUBSCRIBE_DISABLE;
+	}
+}
+
+/*
+ * Named, because "2 of 6 are shared" is the wrong granularity to act on and
+ * WHICH two decides the shape of the fix: a publication that is taken and a
+ * task subscription that is taken fail for the same reason and are not equally
+ * hard to work around.
+ */
+static void radio_endpoints_attach_off_at_init(void)
+{
+	for (size_t r = 0U; r < RADIO_EP_COUNT; r++) {
+		if ((radio_ep_contended & (1U << r)) != 0U) {
+			*radio_ep_reg(r) = radio_ep_foreign[r];
+		}
+	}
+}
+
+static const char *radio_ep_name(size_t i)
+{
+	static const char *const names[RADIO_EP_COUNT] = {
+		"PUBLISH_ADDRESS", "PUBLISH_RXREADY", "SUBSCRIBE_RSSISTART",
+		"SUBSCRIBE_RXEN",  "SUBSCRIBE_TXEN",  "SUBSCRIBE_DISABLE",
+	};
+
+	return names[i];
+}
 
 static void radio_isr(const void *arg);
 /* Both are defined with the interrupt handler, because that is where the
@@ -1871,39 +2007,169 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	 * and disabled per operation rather than reallocated, and
 	 * RXREADY -> RSSISTART for the noise floor.
 	 */
+	/* Nothing borrowed yet; see radio_ep_reg() and the borrow loop below. */
+	radio_ep_contended = 0U;
 	if (IS_ENABLED(CONFIG_RADIANT_CORE_NRF_NO_GPPI)) {
 		LOG_WRN("(D)PPI allocation skipped (diagnostic build): this "
 			"radio cannot transmit or receive");
 		goto gppi_done;
 	}
 
-	if (nrfx_gppi_conn_alloc(
-		    nrf_radio_event_address_get(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS),
-		    nrf_timer_task_address_get(TIMER_ADDR,
-					       nrf_timer_capture_task_get(CC_SYNC)),
-		    &radiant_op.conn_sync) < 0 ||
-	    nrfx_gppi_conn_alloc(
-		    nrf_timer_event_address_get(TIMER_ADDR,
-						nrf_timer_compare_event_get(CC_START)),
-		    nrf_radio_task_address_get(NRF_RADIO, NRF_RADIO_TASK_RXEN),
-		    &radiant_op.conn_start) < 0 ||
-	    nrfx_gppi_conn_alloc(
-		    nrf_timer_event_address_get(TIMER_ADDR,
-						nrf_timer_compare_event_get(CC_TXSTART)),
-		    nrf_radio_task_address_get(NRF_RADIO, NRF_RADIO_TASK_TXEN),
-		    &radiant_op.conn_start_tx) < 0 ||
-	    nrfx_gppi_conn_alloc(
-		    nrf_timer_event_address_get(TIMER_ADDR,
-						nrf_timer_compare_event_get(CC_CLOSE)),
-		    nrf_radio_task_address_get(NRF_RADIO, NRF_RADIO_TASK_DISABLE),
-		    &radiant_op.conn_close) < 0 ||
-	    nrfx_gppi_conn_alloc(
-		    nrf_radio_event_address_get(NRF_RADIO, NRF_RADIO_EVENT_RXREADY),
-		    nrf_radio_task_address_get(NRF_RADIO,
-					       NRF_RADIO_TASK_RSSISTART),
-		    &radiant_op.conn_rssi) < 0) {
-		LOG_ERR("no free (D)PPI connections");
-		return RADIANT_RADIO_EIO;
+	/*
+	 * ONE ALLOCATION PER STATEMENT, AND THE NAME IN THE ERROR, because the
+	 * `||`-chain this replaced could only ever say "no free (D)PPI
+	 * connections" - which is true, useless, and was the entire diagnostic
+	 * output on the day the P4 build failed here beside OpenThread.
+	 *
+	 * The distinction that matters is not which line failed but which KIND:
+	 * four of these five cross a DPPI domain boundary (the TIMER this backend
+	 * owns is in the DPPIC20 domain, the RADIO is in DPPIC10) and so consume
+	 * a channel at each end plus a PPIB channel between them, while conn_rssi
+	 * is RADIO-to-RADIO and consumes one channel in one domain. "The
+	 * cross-domain ones failed and the local one would have succeeded" and
+	 * "everything is full" call for completely different fixes, and the old
+	 * message could not tell them apart.
+	 */
+	struct {
+		const char     *name;
+		bool            cross_domain;
+		uint32_t        evt;
+		uint32_t        task;
+		nrfx_gppi_handle_t *out;
+	} conns[] = {
+		{ "sync (RADIO ADDRESS -> TIMER CAPTURE)", true,
+		  nrf_radio_event_address_get(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS),
+		  nrf_timer_task_address_get(TIMER_ADDR,
+					     nrf_timer_capture_task_get(CC_SYNC)),
+		  &radiant_op.conn_sync },
+		{ "start (TIMER CC_START -> RADIO RXEN)", true,
+		  nrf_timer_event_address_get(TIMER_ADDR,
+					      nrf_timer_compare_event_get(CC_START)),
+		  nrf_radio_task_address_get(NRF_RADIO, NRF_RADIO_TASK_RXEN),
+		  &radiant_op.conn_start },
+		{ "start_tx (TIMER CC_TXSTART -> RADIO TXEN)", true,
+		  nrf_timer_event_address_get(TIMER_ADDR,
+					      nrf_timer_compare_event_get(CC_TXSTART)),
+		  nrf_radio_task_address_get(NRF_RADIO, NRF_RADIO_TASK_TXEN),
+		  &radiant_op.conn_start_tx },
+		{ "close (TIMER CC_CLOSE -> RADIO DISABLE)", true,
+		  nrf_timer_event_address_get(TIMER_ADDR,
+					      nrf_timer_compare_event_get(CC_CLOSE)),
+		  nrf_radio_task_address_get(NRF_RADIO, NRF_RADIO_TASK_DISABLE),
+		  &radiant_op.conn_close },
+		{ "rssi (RADIO RXREADY -> RADIO RSSISTART)", false,
+		  nrf_radio_event_address_get(NRF_RADIO, NRF_RADIO_EVENT_RXREADY),
+		  nrf_radio_task_address_get(NRF_RADIO, NRF_RADIO_TASK_RSSISTART),
+		  &radiant_op.conn_rssi },
+	};
+
+	/*
+	 * ---------------------------------------------------------------------
+	 * MAKE ROOM ON THE RADIO'S OWN ENDPOINTS BEFORE ASKING FOR A CONNECTION
+	 * ---------------------------------------------------------------------
+	 *
+	 * BUG 18, and it is the third of the family: bug 16 was the DPPIC channel,
+	 * bug 17 the RADIO's copy of it across a grant, and this is the same
+	 * register set one step earlier still - at ALLOCATION rather than at use.
+	 *
+	 * nrfx_gppi_conn_alloc() refuses with -EINVAL when an endpoint is already
+	 * attached, and an event may PUBLISH to exactly one channel. Beside
+	 * OpenThread that is not hypothetical: the nRF 802.15.4 driver claims
+	 * RADIO's ADDRESS, READY, END, PHYEND, DISABLED, CCAIDLE and CCABUSY
+	 * publications at its own init, on fixed channel numbers, and it gets
+	 * there first. Measured 2026-08-12 on nRF54L15: connection 1 of 5 fails,
+	 * nothing allocated, and the whole ANT+ stack refuses to start inside an
+	 * image whose Thread side is perfectly healthy.
+	 *
+	 * So: take a copy of what is there, clear only the endpoints this backend
+	 * needs, allocate, and then put back exactly the values that were
+	 * non-zero. The asymmetry is the important part and it is what keeps the
+	 * working BLE build working:
+	 *
+	 *   - a register that was ZERO belonged to nobody. Our value stays in it,
+	 *     which is precisely the behaviour every build has had until now -
+	 *     the SoftDevice Controller does not take these, so the P3 gate build
+	 *     is bit-for-bit unaffected by this whole block.
+	 *   - a register that was NON-ZERO belongs to the other stack. It goes
+	 *     back, because between grants the RADIO is not ours and leaving our
+	 *     publication on it is exactly the fault bug 17 documents - the
+	 *     other stack then publishes its own events onto our channel on a
+	 *     peripheral it believes it configured itself.
+	 *
+	 * Which means: where the endpoints ARE shared, allocation now succeeds but
+	 * the connection is inert until something re-attaches our values inside a
+	 * grant. radio_endpoints_attach() is that something and it is not called
+	 * yet (see its comment - the restore side is unsolved). That is a real,
+	 * known gap and it is announced below rather than left to be discovered as
+	 * "ANT+ is silent", which is the single most expensive way to find it.
+	 */
+	for (size_t r = 0U; r < RADIO_EP_COUNT; r++) {
+		radio_ep_foreign[r] = *radio_ep_reg(r);
+		if (radio_ep_foreign[r] != 0U) {
+			radio_ep_contended |= (uint8_t)(1U << r);
+			LOG_WRN("RADIO %s already taken by another stack "
+				"(register value 0x%08x) - borrowing it for "
+				"allocation and swapping it per grant",
+				radio_ep_name(r),
+				(unsigned int)radio_ep_foreign[r]);
+			*radio_ep_reg(r) = 0U;
+		}
+	}
+	unsigned int shared = (unsigned int)POPCOUNT(radio_ep_contended);
+
+	for (size_t i = 0U; i < ARRAY_SIZE(conns); i++) {
+		/* Signed errno, not nrfx_err_t - this is the Zephyr-facing
+		 * wrapper, which is why the chain this replaced tested `< 0`. */
+		int err = nrfx_gppi_conn_alloc(conns[i].evt, conns[i].task,
+					       conns[i].out);
+
+		if (err < 0) {
+			LOG_ERR("(D)PPI connection %u/%u '%s' failed: %d (%s). "
+				"%u of %u already allocated.",
+				(unsigned int)(i + 1U),
+				(unsigned int)ARRAY_SIZE(conns), conns[i].name,
+				err,
+				conns[i].cross_domain ? "cross-domain, needs a "
+							"channel in each DPPIC "
+							"plus a PPIB channel"
+						      : "same-domain, one channel",
+				(unsigned int)i, (unsigned int)ARRAY_SIZE(conns));
+			/*
+			 * -EINVAL AND -ENOMEM MEAN COMPLETELY DIFFERENT THINGS
+			 * HERE, and the message this replaced ("no free (D)PPI
+			 * connections") asserted the wrong one of the two. It
+			 * reads as a resource shortage, and the first thing it
+			 * sends you to do is count channels - which is a long
+			 * walk through three reservation masks that turns out
+			 * to be irrelevant.
+			 *
+			 * Measured on 2026-08-12 with OpenThread in the image:
+			 * the FIRST connection fails, -EINVAL, nothing yet
+			 * allocated. That is not shortage, it is an ENDPOINT
+			 * CONFLICT - see the CC-assignment comment above, an
+			 * event may PUBLISH to exactly one channel, so a second
+			 * connection from an event another stack has already
+			 * attached is refused outright however many channels
+			 * are free. The nRF 802.15.4 driver claims RADIO's
+			 * ADDRESS, READY, END, PHYEND, DISABLED, CCAIDLE and
+			 * CCABUSY publications at its own init, and this
+			 * backend's t_sync capture wants ADDRESS.
+			 */
+			if (err == -EINVAL) {
+				LOG_ERR("-EINVAL is an ENDPOINT CONFLICT, not a "
+					"shortage: another stack already "
+					"PUBLISHes this event. The 802.15.4 "
+					"driver takes RADIO ADDRESS/READY/END/"
+					"PHYEND/DISABLED/CCAIDLE/CCABUSY at its "
+					"init. Counting free channels will not "
+					"explain this.");
+			} else {
+				LOG_ERR("out of (D)PPI resource - on nRF54L the "
+					"802.15.4 driver reserves a fixed block "
+					"of DPPIC10 and MPSL one more");
+			}
+			return RADIANT_RADIO_EIO;
+		}
 	}
 	radiant_op.conn_ok = true;
 
@@ -1911,6 +2177,31 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	 * path, which is the whole reason this backend owns a TIMER at all, and
 	 * it never needs turning off. */
 	nrfx_gppi_conn_enable(radiant_op.conn_sync);
+
+	/*
+	 * Hand back exactly what was borrowed - see the long comment above the
+	 * loop. Registers that were zero keep OUR value, which is why the builds
+	 * that have always worked are untouched by this.
+	 */
+	if (shared != 0U) {
+#if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
+		/* Snapshot ours BEFORE giving the registers back, or the
+		 * snapshot records the other stack's values and the
+		 * attach-on-grant re-applies somebody else's routing. */
+		radio_endpoints_save();
+		radio_endpoints_attach_off_at_init();
+		LOG_INF("%u RADIO endpoints are shared with another stack and "
+			"are swapped in and out with each grant - see "
+			"radiant_nrf_gate_on_grant()", shared);
+#else
+		radio_endpoints_attach_off_at_init();
+		LOG_ERR("ANT+ WILL NOT TRANSMIT: %u RADIO endpoints are shared "
+			"with another stack and this build has no arbiter at "
+			"all. Whichever stack wrote the register last wins it "
+			"and the loser transmits nothing while reporting "
+			"success.", shared);
+#endif
+	}
 
 #if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
 	/*
@@ -3162,6 +3453,58 @@ void radiant_nrf_gate_on_grant(void)
 	nrf_radio_int_enable(NRF_RADIO, NRF_RADIO_INT_END_MASK |
 					NRF_RADIO_INT_DISABLED_MASK);
 
+	/*
+	 * TAKE THE RADIO ENDPOINTS ANOTHER STACK HOLDS, FOR THIS GRANT ONLY.
+	 *
+	 * No-op unless another stack actually held one when we initialised - see
+	 * radio_endpoints_attach(), which moves ONLY the masked registers and
+	 * hands back THEIR value rather than zero. Before program_rx()/
+	 * program_tx(), because those arm the window and an arming whose RADIO
+	 * endpoint still carries the other stack's channel never opens one.
+	 *
+	 * MEASURED 2026-08-12, nRF54L15 beside OpenThread, mask = PUBLISH_ADDRESS
+	 * + SUBSCRIBE_RXEN: the Thread child attaches and STAYS attached - 900
+	 * datagrams at 10/s, zero send failures, 130 s - matching a swap-off
+	 * baseline taken immediately before. The swap costs the other stack
+	 * nothing observable at this granularity.
+	 *
+	 * A FALSE ALARM IS RECORDED BELOW ON PURPOSE, because it will recur.
+	 *
+	 * THE RESIDUAL RISK IS STILL REAL: 130 s did not exercise every abort
+	 * path, and the one that matters is described at the end of this comment.
+	 *
+	 * (Superseded note, kept for the trap it documents:)
+	 * ITS EFFECT IS UNMEASURED - AND THE FIRST ATTEMPT TO MEASURE IT WAS
+	 * CONFOUNDED, WHICH IS WHY THAT IS WRITTEN DOWN RATHER THAN A VERDICT.
+	 *
+	 * 2026-08-12: with the pair enabled (here, and attach(false) in
+	 * radiant_nrf_gate_on_grant_end()) the OpenThread child attached, ran
+	 * ~48 s, went `detached` and never came back. That looked conclusive. It
+	 * was not: the SAME detach then reproduced with the pair BACKED OUT, and
+	 * the Thread leader on the other board turned out to be unresponsive to
+	 * its own CLI. The peer was down. Neither run says anything about the
+	 * swap, and the "48 s" figure is a property of the bench that afternoon.
+	 *
+	 * The re-test that settled it verified the leader alive on BOTH sides of
+	 * the run - and the strongest check turned out not to be the leader's CLI
+	 * at all, which is itself flaky, but the DUT staying a child: a child
+	 * cannot remain attached to a parent that is gone.
+	 *
+	 * The design risk that made it worth being careful about is still real
+	 * and is the thing to check first when it is re-tested:
+	 * on_grant_end() is not the only way out of a grant, and any path that
+	 * ends one without reaching it leaves OUR channel in RADIO
+	 * SUBSCRIBE_RXEN. The 802.15.4 driver writes that register once at its
+	 * own init and never again, so a single missed restore stops its receiver
+	 * ramping up for ever. A swap of a register another driver treats as
+	 * write-once has to be exception-safe on EVERY path.
+	 *
+	 * The allocation-time borrow above is a different thing and stays: it is
+	 * bounded to init, it hands the registers straight back, and it is what
+	 * makes antr_init() succeed at all in this image.
+	 */
+	radio_endpoints_attach(true);
+
 	switch (radiant_op.kind) {
 	case OP_RX:
 		rc = program_rx(&radiant_staged.rx);
@@ -3279,34 +3622,47 @@ static void radio_endpoints_save(void)
 }
 
 /*
- * NOT CALLED YET, AND KEPT BECAUSE THE SNAPSHOT IS THE HARD PART.
+ * THE NEXT IDEA, AND IT IS A SMALLER ONE THAN THIS COMMENT USED TO ASK FOR.
  *
- * Attaching and detaching these six registers with the grant is the correct
- * shape and does not work as written - see radiant_nrf_gate_on_grant_end() for
- * the measurement. The save side is right and was fiddly to get right (nrfx
- * hands back an opaque handle, so the values have to be read back rather than
- * reconstructed); throwing it away would mean rediscovering that. The restore
- * side is what needs the next idea.
+ * What was here swapped all six registers and restored ZERO on the way out, and
+ * it did not work. Two things were wrong with that and both are now measurable
+ * rather than guessed:
+ *
+ *   1. IT TOUCHED REGISTERS NOBODY WAS CONTENDING. Beside the SoftDevice
+ *      Controller none of these six is taken at all, so detaching on grant exit
+ *      threw away our own always-live t_sync capture for no reason and the
+ *      direct-build invariant ("it is correct for t_sync to be always live")
+ *      quietly stopped holding.
+ *   2. ZERO IS NOT WHAT WAS THERE. If another stack owns the register, handing
+ *      it back empty is not returning it - it is breaking it. The 802.15.4
+ *      driver sets RADIO SUBSCRIBE_RXEN once, at its own init, and never writes
+ *      it again; clear it and its receiver ramp-up stops happening, silently.
+ *
+ * So this now swaps EXACTLY the registers listed in radio_ep_contended - the
+ * ones another stack held when we initialised - and puts THEIR value back, not
+ * zero. Everything else is left alone on both edges. When the mask is empty
+ * this function does nothing at all, which is why turning it on cannot regress
+ * the builds whose numbers are already banked.
  */
-__maybe_unused static void radio_endpoints_attach(bool on)
+static void radio_endpoints_attach(bool on)
 {
-	if (!radio_ep.saved) {
+	if ((RADIANT_NRF_GRANT_EP_SWAP == 0) || !radio_ep.saved ||
+	    radio_ep_contended == 0U) {
 		return;
 	}
-	if (on) {
-		NRF_RADIO->PUBLISH_ADDRESS      = radio_ep.pub_address;
-		NRF_RADIO->PUBLISH_RXREADY      = radio_ep.pub_rxready;
-		NRF_RADIO->SUBSCRIBE_RSSISTART  = radio_ep.sub_rssistart;
-		NRF_RADIO->SUBSCRIBE_RXEN       = radio_ep.sub_rxen;
-		NRF_RADIO->SUBSCRIBE_TXEN       = radio_ep.sub_txen;
-		NRF_RADIO->SUBSCRIBE_DISABLE    = radio_ep.sub_disable;
-	} else {
-		NRF_RADIO->PUBLISH_ADDRESS      = 0;
-		NRF_RADIO->PUBLISH_RXREADY      = 0;
-		NRF_RADIO->SUBSCRIBE_RSSISTART  = 0;
-		NRF_RADIO->SUBSCRIBE_RXEN       = 0;
-		NRF_RADIO->SUBSCRIBE_TXEN       = 0;
-		NRF_RADIO->SUBSCRIBE_DISABLE    = 0;
+
+	/* Our values, in radio_ep_reg() order, so the mask indexes both. */
+	const uint32_t mine[RADIO_EP_COUNT] = {
+		radio_ep.pub_address,   radio_ep.pub_rxready,
+		radio_ep.sub_rssistart, radio_ep.sub_rxen,
+		radio_ep.sub_txen,      radio_ep.sub_disable,
+	};
+
+	for (size_t r = 0U; r < RADIO_EP_COUNT; r++) {
+		if ((radio_ep_contended & (1U << r)) == 0U) {
+			continue;
+		}
+		*radio_ep_reg(r) = on ? mine[r] : radio_ep_foreign[r];
 	}
 }
 #endif /* CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL */
@@ -3429,7 +3785,37 @@ void radiant_nrf_gate_on_grant_end(void)
 	 * not that. Left attached, ANT+ works and the SoftDevice Controller does
 	 * not; left detached, neither does. That is the honest state, recorded
 	 * here rather than as a silent omission.
+	 *
+	 * ---------------------------------------------------------------------
+	 * WHAT IS CALLED BELOW IS NOT THAT, AND THE DIFFERENCE IS THE MASK
+	 * ---------------------------------------------------------------------
+	 *
+	 * radio_endpoints_attach() now moves ONLY the registers another stack
+	 * held when this backend initialised (radio_ep_contended), and restores
+	 * THEIR value rather than zero. Both differences matter here:
+	 *
+	 *   - In every build the paragraph above was measured on, the mask is
+	 *     EMPTY. The SoftDevice Controller takes none of these six, so this
+	 *     call returns immediately and the measured "chunks=256, end ok=0"
+	 *     failure cannot recur - the registers that broke the window-end path
+	 *     are exactly the ones that are never in the mask.
+	 *   - Beside OpenThread the mask is PUBLISH_ADDRESS and SUBSCRIBE_RXEN.
+	 *     Neither is load-bearing at this instant: RXEN's edge fired at the
+	 *     start of the window that is now over, and ADDRESS only drives the
+	 *     t_sync capture, which has nothing to capture until our next grant.
+	 *     The window-end path runs on SUBSCRIBE_DISABLE and the END interrupt,
+	 *     and both are untouched.
+	 *
+	 * That reasoning is why the masked version exists. It is NOT a claim that
+	 * the masked version works - enabling the pair on 2026-08-12 produced a
+	 * detached Thread child, but so did backing it out, because the leader on
+	 * the other board was down. See the long note at the would-be
+	 * attach(true) site in radiant_nrf_gate_on_grant(): the measurement was
+	 * confounded and the pair is off as UNPROVEN rather than disproven.
+	 * radio_endpoints_attach() keeps its mask so enabling them is a two-line
+	 * change once there is a rig that can tell the two outcomes apart.
 	 */
+	radio_endpoints_attach(false);
 }
 
 void radiant_nrf_gate_on_radio_irq(void)

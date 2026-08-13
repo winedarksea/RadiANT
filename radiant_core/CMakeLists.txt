@@ -148,6 +148,76 @@ zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_PAIRING_X25519
 # beats a link error whose cause is three layers away.
 if(CONFIG_RADIANT_CORE_BACKEND_NULL)
   zephyr_library_sources(src/radiant_radio_null.c)
+elseif(CONFIG_RADIANT_CORE_BACKEND_CC26XX)
+  # The second vendor. Written against include/radiant_core/radiant_radio_hal.h
+  # and the measurements in radiant_core/spike/ti_phy, and against nothing else
+  # - radiant_radio_nrf.c is expressly NOT a template for it, because most of
+  # that file is register arithmetic for a peripheral this part does not have.
+  #
+  # Guarded on existing rather than listed unconditionally, and the guard names
+  # the phase, which is the precedent the two unwritten backends set above. A
+  # missing source file makes CMake stop with "cannot find" and no clue as to
+  # why, three layers from anything a reader would recognise.
+  if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/radiant_radio_cc26xx.c")
+    message(FATAL_ERROR
+      "radiant_core: the cc26xx backend was selected but "
+      "src/radiant_radio_cc26xx.c does not exist. It is written in P2 of the "
+      "TI port, after the PHY spike in spike/ti_phy has received a real ANT+ "
+      "frame. Build -DRADIANT_BACKEND=null until then: that image enumerates, "
+      "answers every host command and runs every state machine, which is the "
+      "whole port minus the radio.")
+  endif()
+  zephyr_library_sources(src/radiant_radio_cc26xx.c)
+
+  # ── Three things hal_ti and the SoC layer will not do for a non-in-tree
+  #    radio driver. All three were found by spike/ti_phy; the first two are
+  #    link errors and the third is a branch to address zero at run time.
+  if(DEFINED ZEPHYR_HAL_TI_MODULE_DIR)
+    set(RADIANT_HAL_TI_DIR "${ZEPHYR_HAL_TI_MODULE_DIR}")
+  elseif(DEFINED ZEPHYR_TI_MODULE_DIR)
+    set(RADIANT_HAL_TI_DIR "${ZEPHYR_TI_MODULE_DIR}")
+  else()
+    message(FATAL_ERROR
+      "radiant_core: the cc26xx backend needs the hal_ti module and this "
+      "build has none. NCS's west manifest filters hal_ti out of its import, "
+      "so it is never present unless it has been fetched deliberately:\n"
+      "  .\\scripts\\fetch_hal_ti.ps1\n"
+      "and then passed on the command line:\n"
+      "  -DEXTRA_ZEPHYR_MODULES=C:/ncs/v3.4.0/modules/hal/ti")
+  endif()
+
+  # (1) and (2): hal_ti compiles RFCC26X2_multiMode.c - the RF driver -
+  # unconditionally, and then compiles the NOROM_RFC* functions that driver
+  # cannot link without only under CONFIG_IEEE802154_CC13XX_CC26XX, ..._SUB_GHZ
+  # or CONFIG_BLE_CC13XX_CC26XX. rf_patch_cpe_prop.c is compiled by nothing at
+  # all. Adding the two files here rather than patching hal_ti keeps that
+  # checkout a pristine copy of the revision scripts/fetch_hal_ti.ps1 pins,
+  # which is the whole point of pinning it.
+  zephyr_library_sources(
+    ${RADIANT_HAL_TI_DIR}/simplelink/source/ti/devices/cc13x2_cc26x2/driverlib/rfc.c
+    ${RADIANT_HAL_TI_DIR}/simplelink/source/ti/devices/cc13x2_cc26x2/rf_patches/rf_patch_cpe_prop.c
+  )
+
+  # (3): PowerCC26X2_config and the two scheduler hooks. Zephyr's version of
+  # that file installs a NULL calibrateFxn which TI's driver dereferences
+  # without checking - see src/radiant_ti_power.c for the fault this produced
+  # on hardware. Ours replaces it, which is only correct if Zephyr's is not
+  # compiled; that is decided by these three symbols, so it is asserted rather
+  # than assumed. A duplicate symbol here is a loud link error and a MISSING
+  # one is a silent branch to address zero, so the failure modes are not
+  # symmetric and the assertion is worth its lines.
+  if(CONFIG_PM OR CONFIG_PM_DEVICE OR CONFIG_POWEROFF)
+    message(FATAL_ERROR
+      "radiant_core: the cc26xx backend cannot be built with CONFIG_PM, "
+      "CONFIG_PM_DEVICE or CONFIG_POWEROFF. Any of the three makes Zephyr "
+      "compile soc/ti/simplelink/cc13x2_cc26x2/power.c, which defines "
+      "PowerCC26X2_config - and so does src/radiant_ti_power.c, because "
+      "Zephyr's version installs a NULL calibrateFxn that TI's Power driver "
+      "dereferences unchecked on the first RF_open(). Turn the symbol off, or "
+      "read src/radiant_ti_power.c and decide deliberately which definition "
+      "this build should have.")
+  endif()
+  zephyr_library_sources(src/radiant_ti_power.c)
 elseif(CONFIG_RADIANT_CORE_BACKEND_NRF)
   zephyr_library_sources(src/radiant_radio_nrf.c)
   # Who owns the RADIO. A seam inside the backend rather than a second backend

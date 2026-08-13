@@ -9,12 +9,48 @@
  */
 / {
 	chosen {
+		/*
+		 * The TIMER radiant_core's nrf backend owns outright, for
+		 * -DANT_RADIO=core -DRADIANT_BACKEND=nrf. Identical in purpose
+		 * and in choice to the Feather's, which carries the long form
+		 * of this comment: the backend needs FIVE compare/capture
+		 * channels and on nRF52 only TIMER3 and TIMER4 have more than
+		 * four, TIMER4 being the one nothing else on the board claims.
+		 * Naming it here rather than in the source is what makes a
+		 * second user a devicetree conflict instead of two drivers
+		 * quietly reprogramming each other's prescaler.
+		 *
+		 * Without it the nrf backend does not COMPILE for this board -
+		 * which is why it was missing: every core build for the dongle
+		 * so far used the null backend, where no TIMER is wanted.
+		 *
+		 * THIS DOES NOT MAKE THE ARBITRATED BUILD WORK HERE.
+		 * -DEXTRA_CONF_FILE=coex.conf (the MPSL gate) still fails to
+		 * compile for nRF52840, one layer deeper: the gate saves and
+		 * restores the RADIO's PUBLISH and SUBSCRIBE registers around
+		 * a grant, and those exist only on DPPI parts. nRF52 routes
+		 * through PPI, where the connection lives in the PPI channel
+		 * rather than in the RADIO, so there is nothing in the RADIO to
+		 * hand back - a real port, not a missing overlay line. Use an
+		 * nRF54L15 or nRF5340 as the arbitrated DUT; this board's role
+		 * in that measurement is the driven ANT+ master on the other
+		 * end of the link.
+		 */
+		radiant,radio-timer = &timer4;
+
 		/delete-property/ zephyr,console;
 		/delete-property/ zephyr,shell-uart;
 		/delete-property/ zephyr,uart-mcumgr;
 		/delete-property/ zephyr,bt-mon-uart;
 		/delete-property/ zephyr,bt-c2h-uart;
 	};
+};
+
+/* Naming the node in `chosen` is not enough - it is disabled in the board's
+ * dtsi, and radiant_radio_nrf.c makes that its own compile-time #error rather
+ * than a run-time surprise. */
+&timer4 {
+	status = "okay";
 };
 
 &board_cdc_acm_uart {
