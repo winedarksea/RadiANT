@@ -248,38 +248,6 @@ config RADIANT_CORE_BACKEND_NRF_GATE_MPSL
 	  moment an empty window closes - which the backend does, and which is a
 	  required line of the design rather than an optimisation.
 
-config RADIANT_CORE_NRF_GRANT_HOLD_US
-	int "hold the CPU across a tracked receive window, microseconds (0 = off)"
-	depends on RADIANT_CORE_BACKEND_NRF_GATE_MPSL
-	default 1500
-	help
-	  BUG 23. The nRF 802.15.4 driver resets the RADIO peripheral - every
-	  SUBSCRIBE and PUBLISH register zeroed, INTENCLR00 = 0xffffffff,
-	  TASKS_SOFTRESET - from nrf_802154_core.c's on_timeslot_ended(), which
-	  runs when MPSL takes the radio away from it to give it to US. In NCS
-	  that notification is delivered out of mpsl_low_priority_process(), and
-	  nrf/subsys/mpsl/init/mpsl_init.c runs that from the MPSL WORK QUEUE
-	  THREAD, not from an interrupt. So the reset lands wherever that thread
-	  is next scheduled, which is routinely inside our own granted timeslot,
-	  after the window has been programmed and before the frame arrives.
-
-	  A thread cannot preempt an interrupt, so the fix is to not leave the
-	  CPU: the grant callback stays on it from the moment a short receive
-	  window is programmed until that window's frame is in RAM. Bounded
-	  twice - by the window's own close compare and by this ceiling - and
-	  applied only to windows shorter than 10 ms, so a scan chunk or ED
-	  sweep is never held.
-
-	  The number is a CEILING, not a duration. The hold ends at the window's
-	  close, which for a tracked slot is a few hundred microseconds; this
-	  only bounds the pathological case where the close compare never fires
-	  at all. Set it to 0 to build the unmitigated behaviour, which is what
-	  the loss figure in the coexistence gate was measured against.
-
-	  Costs nothing when no second stack is present beyond the spin itself:
-	  with the radio uncontended the window completes on time and the hold
-	  ends at EVENTS_END exactly as it would have.
-
 config RADIANT_CORE_NRF_NO_RADIO0_IRQ
 	bool "DIAGNOSTIC: leave the RADIO_0 NVIC line entirely to MPSL"
 	depends on RADIANT_CORE_BACKEND_NRF_GATE_MPSL

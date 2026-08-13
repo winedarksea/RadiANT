@@ -731,15 +731,16 @@ rather than avoidable.
 > work for a specific reason: **if the real figure is 24 %, the Matter data
 > model is being written against a link that does not work.**
 >
-> **MEASURED 2026-08-13, AND THE COST IS NOT WHERE THIS BOX PUTS IT.** The
-> scheduler column now has numbers (section 7.4) and it is close to free:
-> across both roles Thread's worst send latency was 347 µs against a 296 µs
-> unloaded worst case, one CCA failure in the whole sitting, and not a single
-> failed transmit in 2400 sends per arm. The claim that the reserve costs
-> Thread's scheduler rather than Thread's air survives — but it is the wrong
-> thing to have been worried about, because in the same runs **ANT delivered
-> 0 of 961 packets**. The cost is real and it lands on ANT. Read the paragraph
-> above as answered-and-superseded, not as pending.
+> **MEASURED 2026-08-13, AND AT ONE TRACKED SENSOR NEITHER COLUMN COSTS
+> ANYTHING.** The scheduler column now has numbers (section 7.4.2) and it is
+> close to free: Thread's worst send latency was 431 µs against a 296 µs
+> unloaded worst case, zero CCA failures, and not a single failed transmit in
+> 2400 sends per arm. The air column is likewise free in the other direction —
+> ANT measured 0.09 % loss in MED and 0.30 % in SED against 0.30 % with no
+> second stack. The claim that the reserve costs Thread's scheduler rather than
+> Thread's air is consistent with this, but it has been tested only at **one**
+> tracked sensor, and the table above is about 8, 16 and 32. Read the paragraph
+> above as answered-at-N=1, not as answered.
 
 One asymmetry matters. MPSL knows the ANT schedule ahead of time, so a
 well-behaved 802.15.4 driver **defers its own transmissions** that would not
@@ -791,13 +792,15 @@ ANT blackouts; it just shows up as retries and tail latency rather than as
 someone else's outage. Outbound publishes are nearly unaffected, because we
 choose when to transmit and MPSL defers around ANT slots.
 
-**The blast-radius argument above is unaffected by measurement, but its
-implied corollary is.** Section 7.4.1 finds SED *harder* on the timeslot gate
-than MED — 47 % of requests blocked against 39 % — because a sleepy child picks
-its own receive windows and those are precisely what our reservations collide
-with. That does not change the preference order here, which is about who else
-suffers when we miss, not about how much we miss. It does mean a sleepy role
-should not be assumed to be gentler on our own side of the link.
+**The blast-radius argument above is unaffected by measurement.** Both roles
+were measured 2026-08-13 (section 7.4.2) and both pass the coexistence gate:
+0.09 % loss in MED, 0.30 % in SED, against 0.30 % with no second stack. SED is
+marginally the busier of the two on the arbiter — 1.6 % of requests blocked
+against 0.4 % — which is the direction a sleepy child's self-scheduled receive
+windows would predict, but the magnitude is negligible and it does not bear
+weight. An earlier reading of that difference as large came from a bug since
+fixed. Neither role is a worst case at one tracked sensor; the preference order
+here rests on who else suffers when we miss, which measurement does not touch.
 
 ### 7.4 The coexistence gate
 
@@ -870,10 +873,12 @@ Four things this sitting does establish, and they matter for what to fix next:
   previously recorded MED figure of 973/974, 0.10 % predates this and two other
   fixes and is not comparable.
 
-**Root cause of the 0 % was found the same day — see §7.4.2.** It was not the
-arbiter, not the grant-abort path and not the deadline backstop. It was four
-separate defects in series, each hiding the ones behind it, which is why every
-counter in the table above looked self-consistent while nothing worked.
+**Root cause of the 0 % was found the same day, and the gate now passes — see
+§7.4.2.** It was not the arbiter, not the grant-abort path and not the deadline
+backstop. It was five separate defects in series, each hiding the ones behind
+it, which is why every counter in the table above looked self-consistent while
+nothing worked. **Everything in this section is superseded as a result and is
+kept only as the record of how it was found.**
 
 The formal verdict, from `ant_ab.py` against `[gates.coexistence]`:
 
@@ -912,22 +917,40 @@ arm. Arm-to-arm deltas are unaffected — every arm used the identical rig — b
 these absolutes cannot be read against the ~0.4 % floor. Re-take against
 `sim_firmware` when the Feather is back.
 
-#### 7.4.2 Four defects in series, and what is left
+#### 7.4.2 Five defects in series — and the gate now PASSES
 
-Found and fixed the same day. Numbers below are independently re-measured on the
-current tree, not carried over.
+All found and fixed the same day. Numbers below are independently re-measured on
+the fixed tree, not carried over from the work that produced the fixes.
+Baselines: [`…-med-fixed.json`](../archive/benchmarks/2026-08-13-radiant-coex-thread-med-fixed.json),
+[`…-sed-fixed.json`](../archive/benchmarks/2026-08-13-radiant-coex-thread-sed-fixed.json).
 
-| arm | before | after |
-|---|---|---|
-| p4ctrl, 240 s | 961/961 | **959/961, 0.20 % — PASS** (limit 1.50 %) |
-| p4med, 240 s | **0 of 961** | 38/957, 96.03 % (`loss (exact)` 96.13 %) |
-| p4sed, 240 s | **0 of 919** | 31/952, 96.74 % (`loss (exact)` 96.85 %) |
-| ztest, 3 apps | — | **672 pass, 0 fail** (core 627, api 22, gate 23) |
+| arm | before | after | vs control |
+|---|---|---|---|
+| p4ctrl, 240 s | 961/961 | 959/962, **0.30 %** | — |
+| p4med, 240 s | **0 of 961** | 960/961, **0.09 % — PASS** | **−0.21 pp** |
+| p4sed, 240 s | **0 of 919** | 957/960, **0.30 % — PASS** | **0.00 pp** |
+| ztest, 3 apps | — | **672 pass, 0 fail** (core 627, api 22, gate 23) | — |
 
-The channel now acquires, tracks and delivers in both roles where it previously
-delivered nothing at all, and `loss (exact)` is computable again. The gate still
-fails — 96 % is not coexistence — but it fails for one identified reason rather
-than an unknown one.
+`ant_ab.py` against `[gates.coexistence]`, both roles:
+
+```
+| coexistence (second stack on) | 0.300 % | 0.090 % | <= second-stack-off + 0.5 pp | PASS |   (MED)
+| coexistence (second stack on) | 0.300 % | 0.300 % | <= second-stack-off + 0.5 pp | PASS |   (SED)
+```
+
+An ANT+ channel and an attached, transmitting OpenThread node now share one
+radio at no measurable cost to either: the contended MED arm measured very
+slightly *better* than the control, which is scatter rather than a real
+advantage, and the Thread side completed 2400 sends per arm with zero failures.
+The arbiter is close to free — 4 of 970 requests blocked in MED, 16 of 986 in
+SED.
+
+**The pre-fix sitting's "SED is harder than MED" correction does not survive**,
+and §7.3b's caveat should be read with that in mind: on the fixed build the
+direction is the same but the magnitude is negligible (1.6 % of requests blocked
+against 0.4 %), so that finding was mostly measuring bug 23 rather than the
+role. Neither role is a worst case at this load. Do not lean on either claim
+without re-measuring at higher sensor counts.
 
 **Bug 19 — the endpoint snapshot was taken at the wrong moment.**
 `radio_endpoints_save()` ran twice in `radiant_radio_init()`: once correctly,
@@ -976,22 +999,48 @@ skew was introduced against a 100 ms BLE advertiser and this removal has only
 been measured against OpenThread. Re-measure the BLE arm before treating the
 advertiser case as settled.
 
-**What remains, and it is a different defect.** The 802.15.4 driver resets the
-RADIO *while MPSL has granted the timeslot to us*. `nrf_802154_trx_enable()` and
-`nrf_802154_trx_disable()` both call `nrf_radio_reset()`, which on nRF54L takes
-the `!defined(RADIO_POWER_POWER_Msk)` path into `radio_reset_without_power_reg()`
-— zeroing every RADIO `SUBSCRIBE_*`/`PUBLISH_*`, writing
-`INTENCLR00 = 0xffffffff` and triggering `TASKS_SOFTRESET`. Measured on a 240 s
-MED arm: every window programs (`prog=1700/0`), `SUBSCRIBE_RXEN` is ours at
-grant entry and after programming (`0x80000014`), and both it and `INTENSET00`
-read zero by grant end — with 1532 of 2612 windows never ramping the receiver.
-It is not contention: tracked windows are getting the air (647 of 791 granted,
-78 blocked). The build has `CONFIG_NRF_802154_MULTIPROTOCOL_SUPPORT=y`, so the
-driver is MPSL-aware — this is a handover-ordering hazard, not the driver being
-unaware of us. Mitigation from our side is under investigation.
+**Bug 23 — the grant ended 14 µs after it started, and this was the whole of
+the remaining 96 %.** MPSL restarts TIMER0 from zero each timeslot, but CC0
+still holds the *previous* grant's value until `SIGNAL_START` rewrites it — and
+that rewrite happens ~31 µs in, after the receive window has been programmed.
+Anything the counter walks past in those 31 µs latches
+`EVENTS_COMPARE0`, and `nrf_timer_int_enable()` then raises `SIGNAL_TIMER0`
+immediately. The gate does the correct thing with a TIMER0 signal: it ends the
+timeslot — 14 µs in, against a window not due to open until 231 µs.
+Self-sustaining, too, because `gate_release()` sets CC0 from the *ending*
+grant's own count, so each short grant guarantees the next one. The fix is a
+single `nrf_timer_event_clear(MPSL_TIMER0, NRF_TIMER_EVENT_COMPARE0)` between
+the `cc_set` and the `int_enable` — the exact three-step ordering
+`gate_release()` has had all along, in the one other place that arms the same
+compare.
 
-Two further items found and deliberately not fixed:
+Why it only ever appeared beside a second stack, measured rather than argued:
+the stale-compare counter reads **0** in the control arm and **963 of 965**
+grants in a contended one. With nothing else asking for the radio, grants follow
+each other closely enough that the previous CC0 is never passed during that
+31 µs window. That is also why every control arm in this document always
+passed.
 
+**A hypothesis that the evidence killed, recorded because it was convincing.**
+The 802.15.4 driver *does* reset the RADIO inside our grants — `nrf_radio_reset()`
+zeroes every `SUBSCRIBE_*`/`PUBLISH_*`, writes `INTENCLR00 = 0xffffffff` and
+triggers `TASKS_SOFTRESET`, and it is delivered from the MPSL work-queue
+*thread*, so it lands wherever that thread is next scheduled. It was the
+obvious culprit and it was the wrong one. A cross-tab over the tracked windows
+the loss figure is actually computed from recorded **`wipe=0`** — before the fix
+as well as after. The `ramp=1080/1532` that pointed at it was dominated by long
+sweep windows and by anchor bootstraps that program nothing. An in-grant
+detect-and-repair was built against this hypothesis and then removed, since it
+had nothing to fix on the path that mattered.
+
+**Still open, and neither costs tracked packets:**
+
+- **Long sweep/ED windows can still lose their routing to that reset**, because
+  their grants are tens of milliseconds — wide enough to contain the MPSL work
+  queue being scheduled. That is a discovery-*speed* cost beside a second stack
+  and is unmeasured as a rate. Whether the handover ordering is Nordic's to fix
+  is arguable, but it is not costing packets on the tracked path, so there is no
+  case for raising it yet.
 - **`DONE_DENIED` credits zero dwell, which is a livelock rather than a slow
   path.** A chunk that is always denied leaves `dwell_remaining` unchanged, so
   `radiant_sched_rechunk()` re-arms the identical chunk forever and the sweep
@@ -1000,7 +1049,9 @@ Two further items found and deliberately not fixed:
 - **`radiant_core/tests/CMakeLists.txt` never listed `src/profiles/profile_rd.c`.**
   The RD phase added the decoder, the adapter, the test and the adapter's own
   CMake entry, but not the implementation's — so the core ztest application
-  failed to link and `profile_rd`'s 25 tests had never run once. They pass.
+  failed to link and `profile_rd`'s 25 tests had never run once. Fixed; they
+  pass.
+
 
 ### 7.5 The bridge is never a border router
 

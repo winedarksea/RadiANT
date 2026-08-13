@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "recorded": "2026-08-13",
+    "operator": "agent, on Colin's bench",
+    "backend": "core",
+    "git_describe": "fcba414 + uncommitted (bug 23: stale TIMER0 COMPARE0 at SIGNAL_START)",
+    "board": "nrf54l15dk/nrf54l15/cpuapp",
+    "serial_suffix": "001057737173",
+    "sdk_ant_revision": null,
+    "ncs_version": "v3.4.0",
+    "toolchain_bundle": "dcbdc366a1",
+    "extra_conf": ["thread.conf", "thread_sed.conf"]
+  },
+  "rig": {
+    "second_stack": "thread_sed",
+    "transmitter": {
+      "kind": "ant_sim_py",
+      "board": "RadiANT USB stick (nRF52840) 3D55F77818BE772A",
+      "profile": "power",
+      "seed": 1,
+      "tx_power_level": null,
+      "description": "tools/ant_sim.py drove a RadiANT USB stick (nRF52840, serial 3D55F77818BE772A) as an ANT+ power master: device 777, type 0x0B, transmission type 5, 8182 ticks (4.0049 Hz), 100 W, 80 rpm, RF 57. Identical to the MED arm's transmitter, in the same session, without the rig being touched between them."
+    },
+    "receiver": {
+      "board": "nrf54l15dk/nrf54l15/cpuapp",
+      "antenna": "onboard PCB antenna, board flat on the desk, not moved between arms"
+    },
+    "link": {
+      "kind": "fixed_open_air",
+      "sensitivity_method": null,
+      "attenuator_model": null,
+      "attenuation_db": null,
+      "distance_m": null,
+      "rf_channel": 57,
+      "interference": "Short bench path with ~35 dB of margin. Thread peer is an nRF5340 DK on 802.15.4 channel 26, three feet away, leader throughout; the DUT attached as a sleepy child and sent 2400 UDP payloads at 100 ms with zero failures. Not a sensitivity measurement."
+    }
+  },
+  "coexistence": {
+    "second_stack": "thread_sed",
+    "loss_direct_pct": null,
+    "loss_second_stack_off_pct": 0.3,
+    "loss_second_stack_on_pct": 0.3,
+    "sweep_sets_per_s_off": null,
+    "sweep_sets_per_s_on": null,
+    "thread_load_sent": 2400,
+    "scheduler_cost": {
+      "send_latency_us_max_ant_idle": 296,
+      "send_latency_us_max_ant_loaded": 431,
+      "send_latency_us_p99_ant_idle": 256,
+      "send_latency_us_p99_ant_loaded": 256,
+      "mac_tx_total": 4935,
+      "mac_tx_retry_ant_idle": 76,
+      "mac_tx_retry_ant_loaded": 32,
+      "mac_tx_err_cca_ant_idle": 0,
+      "mac_tx_err_cca_ant_loaded": 0,
+      "mac_tx_err_busy_ant_idle": 0,
+      "mac_tx_err_busy_ant_loaded": 0
+    },
+    "gate_counters": {
+      "granted": 970,
+      "grant_end_calls": 970,
+      "late_disarm": 0,
+      "idle_disarm": 0,
+      "overstayed": 0,
+      "invalid_return": 0,
+      "blocked": 16,
+      "extends_ok": 198,
+      "extends_failed": 4
+    },
+    "arbiter_note": "THE GATE PASSES IN THE ROLE SECTION 7.3b ACTUALLY SELECTS. 957 of 960 packets with an attached, transmitting OpenThread SED, against 959 of 962 for the control arm - a delta of 0.00 pp against a +0.5 pp bar. The pre-fix figure for this identical arm was 0 of 919; see 2026-08-13-radiant-coex-thread-sed.json and docs/radiant-bridge.md sections 7.4.1 and 7.4.2 for the five defects in between.\n\nTHE PRE-FIX SITTING'S HEADLINE FINDING DOES NOT SURVIVE THE FIX, and that is worth stating because it was recorded as a correction to the documentation. Before, SED was measurably harder on the gate than MED - 47 % of requests blocked against 39 %, 102 EXTEND_FAILEDs against 29 - and the pre-fix baseline argued from that that 'measure MED because it is the worst case' had failed. On the fixed build both roles are almost free and SED is only marginally the busier of the two: 16 of 986 requests blocked (1.6 %) against MED's 4 of 970 (0.4 %), 4 EXTEND_FAILEDs against 2, 198 extensions against 78. The direction is the same and the magnitude is now negligible, so the earlier reading was mostly measuring the bug rather than the role. Neither role is a worst case on this rig at this load; do not lean on either claim without re-measuring at higher sensor counts.\n\nSCHEDULER COST, which is what 7.3a's box asks for: the Thread side is barely touched. Worst send latency 431 us loaded against 296 us idle, 16 of 2400 sends in the 256-512 us bucket, zero CCA failures, zero busy-channel errors, and no send failed in any arm. That is the same qualitative answer the pre-fix sitting gave - the reserve costs Thread's scheduler rather than Thread's air - but it is now measured beside an ANT link that is also working, which is the only configuration in which the comparison means anything.\n\nGRANT-ABORT INVARIANT: grant_end_calls tracks granted exactly (970/970), late_disarm / idle_disarm / overstayed / invalid_return all zero.\n\nSame two caveats as the MED file, unchanged: loss_second_stack_off_pct is the control arm rather than an arbitrated-but-silent arm, and ant_sim_py is a transmitter baseline.schema.json refuses, so the absolutes cannot be read against the characterised ~0.4 % floor. sweep_sets_per_s stays null - no arm completed a whole sweep set, because the control and both fixed arms find the sensor and go to tracking before finishing one."
+  },
+  "notes": "P4 / docs/radiant-bridge.md section 7.4, SED role, on the fixed build. Independently re-measured, not carried over from the agent that made the fix. Peer confirmed `leader` before and after the arm; DUT reached `child` and completed its full 2400-send load.\n\nStill open, neither costing tracked packets: long sweep/ED windows can still lose their RADIO routing to nrf_802154's nrf_radio_reset() (delivered from the MPSL work-queue thread, so it lands inside grants wide enough to contain it) - a discovery-SPEED cost, unmeasured as a rate; and DONE_DENIED crediting zero dwell, which lets an always-denied chunk re-arm identically forever."
+}

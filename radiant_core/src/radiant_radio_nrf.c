@@ -2340,9 +2340,6 @@ static int program_tx(const struct radiant_tx_req *req)
  * other refusal is a pure function of the request, answered before the gate
  * was consulted.
  */
-/* The close compare of the receive window currently programmed, raw TIMER
- * counter units. See the in-grant hold at grant_hold_window(). */
-static uint32_t radiant_rx_close_cc;
 #if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
 /* ...and its open compare, for the same reason: a window that never ramped is
  * one of two completely different faults, and only the relationship between
@@ -2471,7 +2468,6 @@ static int program_rx(const struct radiant_rx_req *req)
 	/* Kept for the in-grant hold, which needs to know when this window is
 	 * over in the same units the compare is in. Written here rather than
 	 * recomputed there so the two can never disagree about the close. */
-	radiant_rx_close_cc = close_cc;
 #if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
 	radiant_rx_start_cc = start_cc;
 	/*
@@ -2955,70 +2951,49 @@ static void program_ed(const struct radiant_ed_req *req)
 #endif /* CONFIG_RADIANT_CORE_ED_SCAN */
 
 /* ---------------------------------------------------------------------------
- * BUG 23: THE OTHER STACK RESETS THE RADIO INSIDE OUR OWN GRANT, FROM A THREAD.
+ * WHAT THE OTHER STACK DOES TO THE RADIO INSIDE OUR GRANT, AND WHY THIS FILE
+ * DOES NOTHING ABOUT IT. Kept because it was the leading hypothesis for the
+ * whole of P4's remaining loss, was measured, and turned out not to be it.
  *
  * nrf_802154_trx_disable() calls nrf_radio_reset(), which on nRF54L takes the
  * !defined(RADIO_POWER_POWER_Msk) path: every RADIO SUBSCRIBE and PUBLISH
- * register to zero, INTENCLR00 = 0xffffffff, TASKS_SOFTRESET. It is reached from
- * nrf_802154_core.c's on_timeslot_ended(), which the 802.15.4 driver runs when
- * MPSL takes the radio away from it - i.e. to give it to us.
+ * register to zero, INTENCLR00 = 0xffffffff, TASKS_SOFTRESET. It is reached
+ * from nrf_802154_core.c's on_timeslot_ended(), which the 802.15.4 driver runs
+ * when MPSL takes the radio away from it - i.e. to give it to us. In NCS that
+ * notification comes out of mpsl_low_priority_process(), and
+ * nrf/subsys/mpsl/init/mpsl_init.c runs that from the MPSL WORK QUEUE THREAD,
+ * so the reset lands wherever that thread is next scheduled: routinely inside
+ * our own granted timeslot. That much is real and is visible in the seam probe
+ * (SUBSCRIBE_RXEN ours at grant entry, zero at grant end).
  *
- * THE ORDERING IS THE FAULT, AND IT IS NOT A PRIORITY RACE THAT CAN BE WON BY
- * BEING QUICKER. In NCS the MPSL notification that ends the 802.15.4 driver's
- * timeslot is delivered from mpsl_low_priority_process(), and
- * nrf/subsys/mpsl/init/mpsl_init.c does not call that from an interrupt: the
- * MPSL_LOW_PRIO_IRQN handler only submits mpsl_low_prio_work to the MPSL work
- * queue. So the reset executes in a Zephyr THREAD, at whatever moment that
- * thread is next scheduled - which is routinely after MPSL has already started
- * our timeslot and after radiant_nrf_gate_on_grant() has programmed it. The
- * seam probe shows exactly that shape: SUBSCRIBE_RXEN is ours at grant entry
- * and immediately after programming (a= and p= both our channel), and zero at
- * grant end, with the receiver never having ramped.
+ * IT IS NOT WHAT COSTS PACKETS. The `sw:` cross-tab counts SHORT receive
+ * windows - the tracked slots the loss figure is computed from - and separates
+ * "our routing was gone by grant end" from "the receiver never came up". Over
+ * 240 tracked windows beside an OpenThread leader it reads wipe=0, ramp=240,
+ * rx=239. Not one tracked window loses its routing. The reset does reach the
+ * LONG sweep windows, whose grants are tens of milliseconds and therefore wide
+ * enough for the MPSL work queue to be scheduled inside; that costs discovery
+ * SPEED under a second stack and is a known, unfixed leak, not tracked loss.
  *
- * WHICH IS ALSO WHY REPAIRING AFTER THE FACT CANNOT WORK. A thread can run at
- * any instant we are not on the CPU, so a "check and re-attach" placed anywhere
- * inside the window is only ever a check against one instant; the reset can
- * land immediately after it, or in the middle of the frame. There is no point
- * in the window at which having just repaired means anything.
- *
- * SO THE WINDOW IS HELD INSTEAD OF REPAIRED. The grant callback runs in an
- * interrupt; a thread cannot preempt it. Staying on the CPU from the moment the
- * window is programmed until the moment its frame is in RAM makes the reset
- * unable to happen during the only interval in which it does damage, and it
- * then runs the instant we return - correctly, because by then the air really
- * is going back.
- *
- * WHAT IT COSTS AND WHY THAT IS AFFORDABLE. A tracked ANT+ window is under a
- * millisecond (RADIANT_CHANNEL_GUARD_MAX_US bounds it at 400 us each way), and
- * the hold is bounded twice over: by this window's own close compare, and by a
- * hard microsecond ceiling. It is applied ONLY to short windows for that
- * reason - a scan chunk or ED sweep runs tens of milliseconds and holding one
- * would be a denial of service to everything else on the chip. Sweep windows
- * therefore still lose their routing; that costs discovery SPEED under a second
- * stack, not tracked loss, and is recorded as a known remaining leak rather
- * than fixed here.
- *
- * The hold also SHORTENS the grant rather than lengthening it: consuming END on
- * the spot sets release_wanted, and radiant_radio_nrf_gate_mpsl.c's
- * SIGNAL_START already returns ACTION_END when it sees that (the "completed
- * synchronously" path it was written for). The air goes back to the other stack
- * earlier than it would have, not later.
+ * SO NOTHING IS REPAIRED OR HELD HERE. An in-grant detect-and-repair was
+ * written and rejected on this evidence: it cannot work in principle (a thread
+ * runs at any instant we are not on the CPU, so a check is only ever a check
+ * against one instant), and it has nothing to fix on the path that matters.
+ * What DID account for the loss was bug 23 in radiant_radio_nrf_gate_mpsl.c -
+ * a stale MPSL_TIMER0 compare event ending each grant ~14 us after it started,
+ * before the window it was bought for was due to open.
  * ---------------------------------------------------------------------------
  */
 #if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
 
-/* Longest window the hold will sit through. Above it the operation is a scan
- * or an ED sweep and is left to take its chances - see above. */
-#define GRANT_HOLD_MAX_WINDOW_US 10000u
+/* The longest window counted as "tracked" by the cross-tab. Same threshold, and
+ * the same reasoning, as the gate priority in radiant_radio_rx(): a tracked
+ * slot or turnaround is under a millisecond, only a scan chunk or an ED sweep
+ * runs tens of milliseconds. No ANT+ knowledge, per HAL rule 1. */
+#define GRANT_SHORT_WINDOW_US 10000u
 
-/* How long past this window's own close compare the hold keeps looking for the
- * DISABLED it provokes. The same allowance radio_disable_now() makes, spelled
- * separately because that constant is defined further down the file and this
- * one has to be usable here. */
-#define GRANT_HOLD_CLOSE_SLACK_US 100u
-
-/* Set at the grant that programmed this window, read at whichever of the hold
- * or the grant end scores it. */
+/* Set at the grant that programmed this window, read when the grant end scores
+ * it. */
 static bool grant_short_rx;
 static bool grant_scored;
 
@@ -3123,82 +3098,6 @@ static void score_short_window(void)
 static inline void score_short_window(void) { }
 #endif /* CONFIG_RADIANT_CORE_SWEEP_DEBUG */
 
-static void grant_hold_window(const struct radiant_rx_req *req)
-{
-	const uint32_t cap = (uint32_t)CONFIG_RADIANT_CORE_NRF_GRANT_HOLD_US;
-	uint32_t t0, now, elapsed;
-	bool     saw_end = false;
-
-	if (cap == 0u) {
-		return;
-	}
-	if ((req->t_close - req->t_open) >= GRANT_HOLD_MAX_WINDOW_US) {
-		return;
-	}
-
-	t0 = timer_capture(CC_NOW);
-	for (;;) {
-		if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_END)) {
-			saw_end = true;
-			break;
-		}
-		/*
-		 * An empty window ends at its own close compare, which fires
-		 * TASKS_DISABLE; the DISABLED that follows is this operation's
-		 * terminal and is worth consuming here for the same reason a
-		 * frame is - it releases the grant a signal-dispatch earlier.
-		 */
-		if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_DISABLED)) {
-			break;
-		}
-		now = timer_capture(CC_NOW);
-		if ((int32_t)(now - t0) >= (int32_t)cap) {
-			WIN_DIAG(held_cap);
-			break;
-		}
-		/* The window's own close, plus what the radio needs to act on
-		 * it. Past this there is nothing left to wait for. */
-		if ((int32_t)(now - (radiant_rx_close_cc +
-				     GRANT_HOLD_CLOSE_SLACK_US)) >= 0) {
-			break;
-		}
-	}
-
-	elapsed = timer_capture(CC_NOW) - t0;
-#if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
-	WIN_DIAG(held);
-	if (saw_end) {
-		WIN_DIAG(held_end);
-	}
-	if (elapsed > radiant_win_diag.held_us_max) {
-		radiant_win_diag.held_us_max = elapsed;
-	}
-#else
-	(void)elapsed;
-	(void)saw_end;
-#endif
-
-	/* Scored with the CPU still ours and before radio_isr() consumes the
-	 * events the test reads. See score_short_window(). */
-	score_short_window();
-
-	/*
-	 * Consume what the window produced before giving the CPU back. Not an
-	 * optimisation: the reset the hold exists to outrun also writes
-	 * INTENCLR00 = 0xffffffff and re-runs the driver's own IRQ setup, so an
-	 * END left pending for the ordinary MPSL_TIMESLOT_SIGNAL_RADIO
-	 * dispatch is an END that may never be delivered. The frame is already
-	 * in radiant_rx_buf by then; what would be lost is the terminal.
-	 *
-	 * radio_isr() is idempotent and this is the same context
-	 * radiant_nrf_gate_on_radio_irq() enters it from a few microseconds
-	 * later, so nothing about re-entering it here is new.
-	 */
-	if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_END) ||
-	    nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_DISABLED)) {
-		radio_isr(NULL);
-	}
-}
 #endif /* CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL */
 
 /* ---------------------------------------------------------------------------
@@ -3335,7 +3234,7 @@ void radiant_nrf_gate_on_grant(void)
 		grant_short_rx = (rc == RADIANT_RADIO_OK_RC) &&
 				 ((radiant_staged.rx.t_close -
 				   radiant_staged.rx.t_open) <
-				  GRANT_HOLD_MAX_WINDOW_US);
+				  GRANT_SHORT_WINDOW_US);
 		break;
 	case OP_TX:
 		rc = program_tx(&radiant_staged.tx);
@@ -3362,14 +3261,6 @@ void radiant_nrf_gate_on_grant(void)
 		WIN_DIAG(prog_fail);
 	}
 
-	/*
-	 * BUG 23. Stay on the CPU across this window so the other stack's
-	 * thread-context nrf_radio_reset() cannot land in the middle of it.
-	 * After the switch and after prog accounting, so the seam probe's `p=`
-	 * still means "SUBSCRIBE_RXEN as programming left it" rather than "as
-	 * the window left it" - two different questions, and conflating them
-	 * would destroy the instrument this was found with.
-	 */
 #if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
 	if (grant_short_rx) {
 		/*
@@ -3394,10 +3285,6 @@ void radiant_nrf_gate_on_grant(void)
 		}
 	}
 #endif
-
-	if (grant_short_rx) {
-		grant_hold_window(&radiant_staged.rx);
-	}
 
 	if (rc != RADIANT_RADIO_OK_RC) {
 		/*

@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "recorded": "2026-08-13",
+    "operator": "agent, on Colin's bench",
+    "backend": "core",
+    "git_describe": "fcba414 + uncommitted (bug 23: stale TIMER0 COMPARE0 at SIGNAL_START)",
+    "board": "nrf54l15dk/nrf54l15/cpuapp",
+    "serial_suffix": "001057737173",
+    "sdk_ant_revision": null,
+    "ncs_version": "v3.4.0",
+    "toolchain_bundle": "dcbdc366a1",
+    "extra_conf": ["thread.conf"]
+  },
+  "rig": {
+    "second_stack": "thread_med",
+    "transmitter": {
+      "kind": "ant_sim_py",
+      "board": "RadiANT USB stick (nRF52840) 3D55F77818BE772A",
+      "profile": "power",
+      "seed": 1,
+      "tx_power_level": null,
+      "description": "tools/ant_sim.py drove a RadiANT USB stick (nRF52840, serial 3D55F77818BE772A) as an ANT+ power master: device 777, type 0x0B, transmission type 5, 8182 ticks (4.0049 Hz), 100 W, 80 rpm, RF 57. Same transmitter, receiver and rig as the pre-fix baselines recorded the same day, untouched between them, which is what makes before/after comparable."
+    },
+    "receiver": {
+      "board": "nrf54l15dk/nrf54l15/cpuapp",
+      "antenna": "onboard PCB antenna, board flat on the desk, not moved between arms"
+    },
+    "link": {
+      "kind": "fixed_open_air",
+      "sensitivity_method": null,
+      "attenuator_model": null,
+      "attenuation_db": null,
+      "distance_m": null,
+      "rf_channel": 57,
+      "interference": "Short bench path with ~35 dB of margin. Thread peer is an nRF5340 DK on 802.15.4 channel 26, three feet away, leader throughout; the DUT attached as a child and sent 2400 UDP payloads at 100 ms with zero failures. Not a sensitivity measurement."
+    }
+  },
+  "coexistence": {
+    "second_stack": "thread_med",
+    "loss_direct_pct": null,
+    "loss_second_stack_off_pct": 0.3,
+    "loss_second_stack_on_pct": 0.09,
+    "sweep_sets_per_s_off": null,
+    "sweep_sets_per_s_on": null,
+    "thread_load_sent": 2400,
+    "scheduler_cost": {
+      "send_latency_us_max_ant_idle": 260,
+      "send_latency_us_max_ant_loaded": 311,
+      "send_latency_us_p99_ant_idle": 256,
+      "send_latency_us_p99_ant_loaded": 256,
+      "mac_tx_total": 2407,
+      "mac_tx_retry_ant_idle": 144,
+      "mac_tx_retry_ant_loaded": 20,
+      "mac_tx_err_cca_ant_idle": 0,
+      "mac_tx_err_cca_ant_loaded": 0,
+      "mac_tx_err_busy_ant_idle": 0,
+      "mac_tx_err_busy_ant_loaded": 0
+    },
+    "gate_counters": {
+      "granted": 966,
+      "grant_end_calls": 966,
+      "late_disarm": 0,
+      "idle_disarm": 0,
+      "overstayed": 0,
+      "invalid_return": 0,
+      "blocked": 4,
+      "extends_ok": 78,
+      "extends_failed": 2
+    },
+    "arbiter_note": "THE GATE PASSES. 960 of 961 packets with an attached, transmitting OpenThread MED, against 959 of 962 for the same board with no OpenThread linked at all - a delta of -0.21 pp against a +0.5 pp bar, i.e. the contended arm measured very slightly BETTER than the control and the difference is inside this bench's run-to-run scatter either way.\n\nThe pre-fix figure for this identical arm was 0 of 961. See 2026-08-13-radiant-coex-thread-med.json for that measurement and what it did and did not establish; five defects separate the two files and they are set out in docs/radiant-bridge.md sections 7.4.1 and 7.4.2. The last of them (bug 23) is the one that mattered for tracked windows: MPSL restarts TIMER0 from zero each timeslot but CC0 still holds the previous grant's value until SIGNAL_START rewrites it ~31 us in, so anything the counter walked past in the meantime latched EVENTS_COMPARE0, and nrf_timer_int_enable() then raised SIGNAL_TIMER0 immediately. The gate did the correct thing with a TIMER0 signal and ended the timeslot - 14 us after it began, before the receive window was due to open at 231 us. Self-sustaining, because gate_release() sets CC0 from the ending grant's own count. The fix is one nrf_timer_event_clear() between the cc_set and the int_enable, which is the three-step ordering gate_release() has always had.\n\nWHY THIS ONLY EVER APPEARED BESIDE A SECOND STACK, measured rather than argued: the stale-compare counter reads 0 in the control arm and 963 of 965 grants in this one. With nothing else asking for the radio, grants follow each other closely enough that the previous CC0 is not passed during the 31 us window.\n\nTHE ARBITER IS NOW ESSENTIALLY FREE ON THIS LINK: 4 of 970 requests blocked (0.4 %), 966 grants, grant_end_calls tracking granted exactly, and late_disarm / idle_disarm / overstayed / invalid_return all zero. The grant-abort invariant that the A phase was written for held across every arm of both sittings.\n\nloss_second_stack_off_pct IS THE CONTROL ARM, not an arbitrated-but-silent arm - the same caveat as the pre-fix baseline, unchanged. On nRF54L the 802.15.4 radio driver enables MPSL by itself, so an image with 15.4 in it is arbitrated whether or not this project asked for it.\n\nTRANSMITTER LIMITATION, unchanged and still bounding the absolutes: baseline.schema.json refuses ant_sim_py as a baseline transmitter and wants sim_firmware or a real sensor. An ANT master re-broadcasts its current payload until the host loads the next, so over 240 s the receiver can catch a repeated event count and `loss (exact)` is not always computable. It was computable in one 240 s MED arm on this fix and read 0.10 %. Re-take against sim_firmware when the Feather is back."
+  },
+  "notes": "P4 / docs/radiant-bridge.md section 7.4, MED role, on the fixed build. Independently re-measured rather than carried over from the agent that made the fix: build via scripts/build_p4.ps1 with the backend read back from the generated .config, arm via scripts/p4_arm.ps1, peer confirmed `leader` before and after.\n\nStill open, and neither costs tracked packets: (1) long sweep/ED windows can still lose their RADIO routing to nrf_802154's nrf_radio_reset(), which is delivered from the MPSL work-queue THREAD (nrf_802154_core.c on_timeslot_ended via mpsl_low_priority_process) and so lands wherever that thread is next scheduled - inside grants wide enough to contain it. That costs discovery SPEED beside a second stack and is unmeasured as a rate. Tracked windows are unaffected: a cross-tab over 961 tracked windows in this arm recorded wipe=0. (2) DONE_DENIED credits zero dwell, so an always-denied chunk re-arms identically forever - a livelock needing a bounded-denial escape, independent of what causes the denials."
+}

@@ -955,14 +955,13 @@ static void gate_dump_fn(struct k_work *w)
 	 */
 	LOG_INF("sw: n=%u wipe=%u ramp=%u wipe+ramp=%u rx=%u wipe+rx=%u | "
 		"started=%u early=%u/%uus last=%dus | open lead=%dus max=%uus late=%u"
-		" glen=%u cc0=%u | held=%u end=%u cap=%u max=%uus",
+		" glen=%u cc0=%u",
 		wd.sw, wd.sw_wipe, wd.sw_ramp, wd.sw_wipe_ramp, wd.sw_rx,
 		wd.sw_wipe_rx, wd.sw_started, wd.sw_early, wd.sw_early_us_max,
 		wd.sw_last_delta_us, wd.sw_open_lead_us, wd.sw_open_lead_max,
 		wd.sw_open_late, hi_grant_len_us,
 		(hi_grant_len_us > END_MARGIN_US) ? (hi_grant_len_us - END_MARGIN_US)
-						  : 0u,
-		wd.held, wd.held_end, wd.held_cap, wd.held_us_max);
+						  : 0u);
 
 	/*
 	 * How every tracked window's grant actually ended, by call site, and how
@@ -1257,18 +1256,6 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 					 ? (g.granted_len_us - END_MARGIN_US)
 					 : (g.granted_len_us / 2u));
 #if defined(CONFIG_RADIANT_CORE_SWEEP_DEBUG)
-		/*
-		 * Is the compare event ALREADY set before the interrupt is
-		 * enabled? MPSL restarts TIMER0 from zero at every timeslot,
-		 * but the CC register still holds whatever the last grant (or
-		 * gate_release()) left in it until the line above rewrites it -
-		 * and everything between the timeslot starting and that line is
-		 * time the counter spends walking past a stale compare. If it
-		 * is set here, enabling the interrupt fires SIGNAL_TIMER0 at
-		 * once and the grant ends before it has begun. gate_release()
-		 * clears the event between its own cc_set and int_enable; this
-		 * path does not.
-		 */
 		nrf_timer_task_trigger(MPSL_TIMER0, NRF_TIMER_TASK_CAPTURE1);
 		t0_at_arm_us = nrf_timer_cc_get(MPSL_TIMER0, 1);
 		if (nrf_timer_event_check(MPSL_TIMER0,
@@ -1276,6 +1263,43 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 			stats.start_stale_compare++;
 		}
 #endif
+		/*
+		 * BUG 23: THE GRANT ENDED 14 MICROSECONDS AFTER IT STARTED,
+		 * BECAUSE THE COMPARE THAT ENDS IT HAD ALREADY FIRED.
+		 *
+		 * MPSL restarts MPSL_TIMER0 from zero at every timeslot, but
+		 * CC0 still holds whatever the LAST grant left in it until the
+		 * cc_set above rewrites it - and that rewrite happens ~31 us
+		 * into the timeslot, after this callback has programmed the
+		 * whole receive window. Anything the counter passes in those
+		 * 31 us latches EVENTS_COMPARE0, and a latched compare event
+		 * means nrf_timer_int_enable() below raises SIGNAL_TIMER0
+		 * immediately. The gate then does exactly what it is supposed
+		 * to do with a TIMER0 signal: it ends the timeslot.
+		 *
+		 * It is self-sustaining, which is why it presents as a steady
+		 * state rather than as jitter. gate_release() sets CC0 to the
+		 * ENDING grant's own count plus a small lead, so a grant that
+		 * ended at 14 us leaves CC0 at about 20 - and the next grant
+		 * walks past it before it can be rewritten, ends at 14 us too,
+		 * and leaves the same value behind. One early end is enough to
+		 * keep every later one early.
+		 *
+		 * Measured on P4 MED, 60 s beside an OpenThread leader: stale
+		 * compare found set at 291 of 317 grants; 214 of 216 tracked
+		 * windows given a grant that lasted under a millisecond (median
+		 * 14 us) against a window due to open 231 us in; 2 of 216
+		 * windows ever ramping the receiver; 14 packets of 239.
+		 *
+		 * The clear belongs BETWEEN the cc_set and the int_enable, and
+		 * only there: before the cc_set it would be clearing an event
+		 * whose compare is still the old value, and after the
+		 * int_enable it is already too late. gate_release() has had
+		 * this exact three-step ordering all along - cc_set, event
+		 * clear, int_enable - and this path is the one place that
+		 * arms the same compare and skipped the middle step.
+		 */
+		nrf_timer_event_clear(MPSL_TIMER0, NRF_TIMER_EVENT_COMPARE0);
 		nrf_timer_int_enable(MPSL_TIMER0, NRF_TIMER_INT_COMPARE0_MASK);
 		break;
 

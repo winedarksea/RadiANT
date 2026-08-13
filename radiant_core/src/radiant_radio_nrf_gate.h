@@ -310,18 +310,6 @@ struct radiant_nrf_win_diag {
 	uint32_t sw_dur_us;        /* how long the last such grant lasted */
 	uint32_t sw_dur_us_max;    /* ...the longest */
 	uint32_t sw_dur_short;     /* ...how many lasted under a millisecond */
-
-	/*
-	 * The in-grant hold (RADIANT_CORE_NRF_GRANT_HOLD_US). held = short
-	 * windows the grant callback stayed on the CPU for; held_end = those
-	 * that saw EVENTS_END before the hold ran out, i.e. the packet was in
-	 * RAM before the CPU was given back; held_cap = those that hit the
-	 * microsecond ceiling instead of the window's own close.
-	 */
-	uint32_t held;
-	uint32_t held_end;
-	uint32_t held_cap;
-	uint32_t held_us_max;  /* longest single hold, microseconds */
 };
 
 void radiant_nrf_win_diag_get(struct radiant_nrf_win_diag *out);

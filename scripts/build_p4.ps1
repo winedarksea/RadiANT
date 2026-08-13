@@ -43,8 +43,8 @@ param(
 
     # Extra -D arguments, appended AFTER the three mandatory ones so they can
     # override a default but never the backend selection - the read-back below
-    # still refuses the image if they did. Used to build the unmitigated arm
-    # (-DCONFIG_RADIANT_CORE_NRF_GRANT_HOLD_US=0) beside the mitigated one.
+    # still refuses the image if they did. Used to build an A/B pair that differs
+    # in exactly one Kconfig symbol.
     # Use -Pristine with it: a changed -D on an existing build directory is
     # exactly the class of silent stale-config failure this script exists for.
     [string[]]$ExtraCmake = @()
@@ -151,14 +151,6 @@ foreach ($arm in $arms) {
         $bad = $true
     }
     if ($bad) { $failed += $arm.Name; continue }
-
-    # Not a pass/fail check - the in-grant hold is a measured quantity and the
-    # two arms of its A/B differ ONLY in this number, so it is printed with the
-    # image rather than remembered from the command line.
-    $hold = Select-String -Path $cfg -Pattern '^CONFIG_RADIANT_CORE_NRF_GRANT_HOLD_US=' |
-            Select-Object -First 1
-    $holdv = if ($hold) { ($hold.Line -split '=', 2)[1] } else { '<absent>' }
-    Write-Host "  CONFIG_RADIANT_CORE_NRF_GRANT_HOLD_US = $holdv" -ForegroundColor Yellow
 
     $elf = Join-Path $dir 'ant_dongle\zephyr\zephyr.elf'
     Write-Host "  ok: $elf" -ForegroundColor Green
