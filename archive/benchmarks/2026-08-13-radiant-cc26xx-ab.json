@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "recorded": "2026-08-13",
+    "operator": "agent, on Colin's bench",
+    "backend": "core",
+    "git_describe": "uncommitted working tree (TI port, P0-P3)",
+    "board": "cc26x2r1_launchxl/cc2652r",
+    "serial_suffix": "",
+    "sdk_ant_revision": null,
+    "ncs_version": "v3.4.0",
+    "toolchain_bundle": "dcbdc366a1",
+    "extra_conf": []
+  },
+  "rig": {
+    "transmitter": {
+      "kind": "ant_sim_py",
+      "board": "RadiANT USB stick (nRF52840) 3D55F77818BE772A",
+      "profile": "power",
+      "seed": 1,
+      "tx_power_level": null,
+      "description": "tools/ant_sim.py drove a RadiANT USB stick (nRF52840, serial 3D55F77818BE772A) as an ANT+ power master: device 14871, type 0x0B, transmission type 5, 8182 ticks (4.0049 Hz), 120 W, 80 rpm, RF 57. ONE sim process ran continuously across all three legs and was never restarted or moved."
+    },
+    "receiver": {
+      "board": "cc26x2r1_launchxl/cc2652r",
+      "antenna": "onboard PCB antenna, board flat on the desk, not moved between legs"
+    },
+    "link": {
+      "kind": "fixed_open_air",
+      "attenuator_model": null,
+      "attenuation_db": null,
+      "distance_m": null,
+      "rf_channel": 57,
+      "interference": "Short bench path with ~40 dB of margin. Not a sensitivity measurement."
+    }
+  },
+  "radio_runs": [
+    {
+      "profile": "power",
+      "seconds": 299,
+      "channels": 1,
+      "verify": {
+        "channels": [
+          {
+            "profile": "power",
+            "device_type": 11,
+            "period_ticks": 8182,
+            "packets": 1156,
+            "elapsed_s": 299.625,
+            "expected_packets": 1200.9648007822047,
+            "loss_pct": 3.744056507977467,
+            "jitter": {
+              "n": 1155,
+              "mean_s": 0.25941558441558443,
+              "stdev_s": 0.049471147037041335,
+              "max_s": 0.75,
+              "period_s": 0.24969482421875,
+              "radio_n": 1155,
+              "offgrid_host_s": 0.00348141787535648,
+              "offgrid_radio_s": 9.311697922324226e-06
+            },
+            "signal": {
+              "n": 1156,
+              "mean_dbm": -47.923010380622834,
+              "min_dbm": -52,
+              "max_dbm": -47
+            },
+            "pages": {
+              "0x10": 1136,
+              "0x50": 10,
+              "0x51": 10
+            },
+            "common_page_gaps": {
+              "count": 19,
+              "max": 117
+            },
+            "power": {
+              "n": 1136,
+              "mean": 120.08802816901408,
+              "min": 117.0,
+              "max": 123.0
+            },
+            "cadence": {
+              "n": 1136,
+              "mean": 79.94982394366197,
+              "min": 77.0,
+              "max": 83.0
+            },
+            "speed_mps": null,
+            "heart_rate_bpm": null,
+            "attestation": {
+              "verdict": "clear"
+            },
+            "accumulator_wraps": {
+              "event_count": 5,
+              "acc_power": 2
+            },
+            "telemetry": null,
+            "event_advances": 1127,
+            "event_comparisons": 1135,
+            "exact_loss": null,
+            "violations": {
+              "count": 0,
+              "first": []
+            },
+            "checks": [
+              {
+                "name": "packets",
+                "pass": true,
+                "detail": "1156 received, 1201 expected over 299.6 s"
+              },
+              {
+                "name": "loss",
+                "pass": false,
+                "detail": "3.74 % (limit 1.50 %, one packet = 0.08 %)"
+              },
+              {
+                "name": "jitter",
+                "pass": true,
+                "detail": "stddev 49.5 ms, max 750.0 ms (limit 124.8 ms, period 249.7 ms)"
+              },
+              {
+                "name": "accumulator continuity",
+                "pass": true,
+                "detail": "0 violation(s)"
+              },
+              {
+                "name": "sensor liveness",
+                "pass": true,
+                "detail": "the event counter advanced on 1127 of 1135 packet pairs"
+              },
+              {
+                "name": "common pages",
+                "pass": true,
+                "detail": "80 x10, 81 x10, worst gap 117 (limit 121)"
+              }
+            ],
+            "pass": false
+          }
+        ],
+        "events": {
+          "EVENT_RX_FAIL": 45
+        },
+        "identities": {
+          "0": {
+            "device_number": 14871,
+            "device_type": 11
+          }
+        },
+        "accounting": {
+          "missing": 45,
+          "radio_fails": 45,
+          "unaccounted": 0,
+          "allowed_unaccounted": 11,
+          "verdict": "all of it reported by the radio as RX_FAIL, so it happened on the air",
+          "pass": true
+        },
+        "pass": false
+      },
+      "capture": null,
+      "derived": {
+        "loss_pct": 3.744056507977467,
+        "loss_exact_pct": 3.744056507977467,
+        "unexplained_loss": 0,
+        "accumulator_violations": 0,
+        "timing_offgrid_host_ms": 3.48141787535648,
+        "timing_offgrid_radio_ms": 0.009311697922324226,
+        "time_to_first_packet_s": null,
+        "reacquire_s": null,
+        "rssi_dbm_mean": -47.923010380622834
+      }
+    }
+  ],
+  "usb_runs": [],
+  "notes": "One A/B/A sitting, 2026-08-13, transmitter untouched throughout. Order was nRF (A1), cc26xx (B), nRF (A2). A1 and A2 agree to 0.01 percentage points, which is what says the difference measured is the BACKEND and not the afternoon - the whole reason docs/testing.md requires the repeat."
+}

@@ -5,8 +5,32 @@ Once baselines exist, `tools/ant_ab.py` validates each one against
 [`baseline.schema.json`](baseline.schema.json) and applies the thresholds from
 `tools/ab_gates.toml`, and that is what fails when a file here drifts.
 
-**Status: one sitting recorded — [`2026-08-09-sdk-ant.json`](2026-08-09-sdk-ant.json),
-two 300 s radio runs and a USB latency run against `sim/` on an nRF54L15 DK.**
+**Status: one sdk-ant sitting, plus one paired cross-vendor A/B/A sitting.**
+
+* [`2026-08-09-sdk-ant.json`](2026-08-09-sdk-ant.json) — two 300 s radio runs
+  and a USB latency run against `sim/` on an nRF54L15 DK.
+* [`2026-08-13-radiant-nrf.json`](2026-08-13-radiant-nrf.json) — the A legs of
+  an A/B/A: `radiant_core`'s nRF backend on an nRF54L15 DK, **0.139 %** and
+  **0.150 %** loss.
+* [`2026-08-13-radiant-cc26xx-ab.json`](2026-08-13-radiant-cc26xx-ab.json) — the
+  B leg of the same sitting: the CC26x2 backend on a LAUNCHXL, **3.744 %** loss.
+* [`2026-08-13-radiant-cc26xx.json`](2026-08-13-radiant-cc26xx.json) — a
+  standalone 300 s run and a serial latency run for the CC26x2 backend,
+  recorded before the paired sitting. Not part of an A/B.
+
+The three-file A/B/A is a real sitting: one transmitter, running continuously,
+never touched, receivers alternated, and the two A legs agree to 0.011
+percentage points.
+
+**`tools/ant_ab.py` will not gate it, and that is correct.** It compares `rig`
+dicts wholesale and the receiver board genuinely differs — you cannot put the
+nRF backend on a CC2652R, so a cross-vendor A/B cannot satisfy a same-rig rule
+built for alternating *firmware* on one board. Nothing was edited to make the
+tool agree. See
+[ADR 0014](../../docs/decisions/0014-second-vendor-port-what-it-cost.md) for
+the numbers, the 13 dB RSSI caveat, and why `[gates.sensitivity]` is still
+unmeasurable for *every* backend (`tools/ant_sens.py`'s power ladder does not
+change the transmitter's power, and it crashes at `ant_sens.py:800`).
 Still the most perishable item in the project, because what it does *not* cover
 is named in that file's own `notes` and each gap is a separate bench sitting:
 `sensitivity` (needs an attenuator or a distance sweep), `scale` (`libant.a`
