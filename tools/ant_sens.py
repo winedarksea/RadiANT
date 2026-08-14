@@ -570,7 +570,7 @@ def derive(steps: list[dict], target_pct: float) -> dict:
 
 def open_master(args, verbose: bool):
     dev = open_device(verbose, serial=args.tx_serial, port=args.tx_port,
-                      baud=args.baud)
+                      baud=args.tx_baud or args.baud)
     reader = FrameReader(dev)
     if not reset_stack(dev, reader):
         sys.exit("the transmitter sent no startup message after reset")
@@ -591,7 +591,7 @@ def open_master(args, verbose: bool):
 
 def open_receiver(args, verbose: bool):
     dev = open_device(verbose, serial=args.rx_serial, port=args.rx_port,
-                      baud=args.baud)
+                      baud=args.rx_baud or args.baud)
     reader = FrameReader(dev)
     if not reset_stack(dev, reader):
         sys.exit("the receiver sent no startup message after reset")
@@ -704,7 +704,14 @@ def main() -> int:
     parser.add_argument("--tx-port", help="serial port of the transmitter")
     parser.add_argument("--rx-serial", help="serial suffix of the receiver")
     parser.add_argument("--rx-port", help="serial port of the receiver")
-    parser.add_argument("--baud", type=int, default=115200)
+    parser.add_argument("--baud", type=int, default=115200,
+                        help="serial baud for both sides, unless overridden "
+                             "per-side (the TI LaunchXL's XDS110 backchannel "
+                             "is fixed at 57600, not 115200)")
+    parser.add_argument("--tx-baud", type=int,
+                        help="overrides --baud for the transmitter")
+    parser.add_argument("--rx-baud", type=int,
+                        help="overrides --baud for the receiver")
     parser.add_argument("--json", metavar="FILE", nargs="?", const="-",
                         help="write the sensitivity block as JSON, in the shape "
                              "archive/benchmarks/baseline.schema.json expects "

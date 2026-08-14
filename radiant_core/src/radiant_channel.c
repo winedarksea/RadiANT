@@ -828,8 +828,10 @@ radiant_channel_err_t radiant_channel_tx_power_set(uint8_t channel, uint8_t leve
 
 	/* Bit 7 means `custom` names a raw register value, so there's nothing to
 	 * range-check. With the bit clear, 0..5 are -20..+8 dBm; level 5 is
-	 * accepted even where hardware can't reach +8 - radiant_sched.c clamps
-	 * against caps.tx_power_max_dbm at arm time instead of refusing here. */
+	 * accepted even where hardware can't reach +8 - radiant_sched.c carries
+	 * power verbatim to the backend, which rounds to its nearest setting
+	 * (radiant_radio_hal.h's struct radiant_tx_power contract), not a
+	 * clamp against caps.tx_power_max_dbm. */
 	if ((level & 0x80u) == 0u && level > 5u) {
 		return RADIANT_CH_ERR_INVALID_PARAM;
 	}

@@ -326,11 +326,50 @@ disagrees with the code, instrument the boundary before rewriting the diagnosis.
 **The CC26x2 cannot be the transmitter in that measurement either**, until the
 power table exists; that is now recorded in `caps` rather than discovered again.
 
-**Still owed:**
+**Still owed, updated 2026-08-13 (see the Phase A/B/D0-D2/D4/D5 sitting this
+struck three of):**
 
+* ~~The transmit-power table~~ **DONE.** `apply_power()` +
+  `radiant_cc26xx_txp[]`; `caps.tx_power_min_dbm/_max_dbm` now read −20…+5.
+  The bench ladder that should have confirmed the dial moves the RF core's
+  register **could not discriminate it**, though — see
+  `archive/benchmarks/2026-08-13-radiant-cc26xx.json`'s `notes.phase_a_ladder`:
+  the nRF54L15 receiver's RSSI report is flat regardless of commanded power
+  (the same instrument limitation this ADR already found on the fine ladder
+  above, now reproduced on a second transmitter), and the link was too strong
+  for the loss-based fallback to discriminate the dial either. **Still
+  genuinely unconfirmed:** whether the register actually moves. The `LOG_INF`
+  instrumented at the `RF_setTxPower()` call site would settle it, but it is
+  on uart1 (the log console), unobserved on this bench without a 3V3
+  USB-serial adapter clipped to the BoosterPack pins - see
+  `boards/cc26x2r1_launchxl.overlay`.
+* ~~`conformance`~~ **DONE AND CLEAN.** Run against `sdk-ant`'s baseline
+  transcript (73/284 cases differ) and cross-checked against a plain
+  `radiant_core/nrf` build run the same sitting: the two backends' transcripts
+  are byte-identical to each other. So every difference from `sdk-ant` is
+  `radiant_core`-level (shared by both backends, not this port), and the HAL
+  boundary this port exists to test is not implicated. See
+  `archive/benchmarks/2026-08-13-radiant-cc26xx.json`'s `conformance` block.
+* ~~Coexistence design~~ **STARTED.** [ADR 0015](0015-cc26xx-coexistence-design.md)
+  records the design and lands the scheduler-only build arm
+  (`RFCC26XX_schedulerPolicy`, `post_op()`, `EDENIED`/`Preempted` handling,
+  the caps patch under coex). The fourth arm - a real second RF-core client -
+  needs an app-local fork of Zephyr's 802.15.4 driver first; see that ADR's
+  own "Status" section.
 * **An equal-power A/B**, or a harness rule for which rig fields may legitimately
-  differ across vendors.
-* **Sensitivity**, once the transmit-power path works.
+  differ across vendors. Still owed.
+* **Sensitivity.** Still no verdict for either backend - the transmit-power
+  path exists now, but the bench could not confirm it moves the register (see
+  above), so a sensitivity ladder built on it would inherit the same doubt.
+* **`ack_data`.** Tooling now exists (`tools/ant_session.py --attempts N`,
+  extending `ack_probe()`) and was exercised against the TI board - but the
+  intended responder (`sim/`, freshly flashed to the Feather) never
+  transmitted a detectable ANT+ signal to either receiver on this bench, so
+  the 100-attempt run measured an unrelated ambient sensor instead (0/100,
+  correctly, since that sensor was never paired for it). `sim/` has no
+  USB/console by design, so there is no way to introspect the failure
+  without a debugger on that board. Tool itself is confirmed working; the
+  responder is the open item.
 * **The seeded timing constants.** `T_SYNC_CAL_US`, `TX_RAMP_UP_US`,
   `RX_RAMP_UP_US`, `RX_TO_TX_US`, `TX_TO_RX_US` are seeded, marked as seeded in
   the source, and want the wired two-board trigger the HAL's `t_sync` section

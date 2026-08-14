@@ -198,26 +198,54 @@ elseif(CONFIG_RADIANT_CORE_BACKEND_CC26XX)
     ${RADIANT_HAL_TI_DIR}/simplelink/source/ti/devices/cc13x2_cc26x2/rf_patches/rf_patch_cpe_prop.c
   )
 
+  # The multi-protocol patch, only under the symbol that selects it
+  # (RADIANT_CORE_BACKEND_CC26XX_MULTI_PATCH, selected in turn by
+  # ..._COEX - see Kconfig). rf_patch_cpe_prop.c above stays unconditional:
+  # it is still what a plain, non-coex cc26xx build boots under.
+  zephyr_library_sources_ifdef(
+    CONFIG_RADIANT_CORE_BACKEND_CC26XX_MULTI_PATCH
+    ${RADIANT_HAL_TI_DIR}/simplelink/source/ti/devices/cc13x2_cc26x2/rf_patches/rf_patch_cpe_multi_protocol.c
+  )
+
+  # RFCC26XX_schedulerPolicy (the submit/execute hooks) - see that file's own
+  # header for why it is not folded into radiant_radio_cc26xx.c.
+  zephyr_library_sources_ifdef(CONFIG_RADIANT_CORE_BACKEND_CC26XX_COEX
+			       src/radiant_radio_cc26xx_arb.c)
+
   # (3): PowerCC26X2_config and the two scheduler hooks. Zephyr's version of
   # that file installs a NULL calibrateFxn which TI's driver dereferences
   # without checking - see src/radiant_ti_power.c for the fault this produced
   # on hardware. Ours replaces it, which is only correct if Zephyr's is not
-  # compiled; that is decided by these three symbols, so it is asserted rather
-  # than assumed. A duplicate symbol here is a loud link error and a MISSING
-  # one is a silent branch to address zero, so the failure modes are not
-  # symmetric and the assertion is worth its lines.
-  if(CONFIG_PM OR CONFIG_PM_DEVICE OR CONFIG_POWEROFF)
+  # compiled, or compiles it but takes a branch with a non-NULL calibrateFxn.
+  #
+  # RE-KEYED FOR COEX (was `if(CONFIG_PM OR CONFIG_PM_DEVICE OR
+  # CONFIG_POWEROFF)` alone): that conflated "power.c is compiled" with
+  # "power.c is unsafe". CONFIG_IEEE802154_CC13XX_CC26XX selects CONFIG_PM
+  # (see Kconfig.defconfig in the Zephyr SoC layer), which DOES compile
+  # Zephyr's soc/ti/simplelink/cc13x2_cc26x2/power.c - but that file's radio
+  # branch is field-for-field identical to src/radiant_ti_power.c
+  # (calibrateFxn = &PowerCC26XX_calibrate, enablePolicy = false, policyFxn =
+  # NULL), so under 802.15.4 ours must NOT exist rather than duplicate it.
+  # The three symbols below decide which *branch* power.c takes, which is
+  # what actually matters - not whether CONFIG_PM is set at all.
+  if(CONFIG_IEEE802154_CC13XX_CC26XX OR CONFIG_IEEE802154_CC13XX_CC26XX_SUB_GHZ
+     OR CONFIG_BLE_CC13XX_CC26XX)
+    # Zephyr's power.c takes the branch with a non-NULL calibrateFxn -
+    # identical to ours field for field (see above). Ours must not exist.
+  elseif(CONFIG_PM OR CONFIG_PM_DEVICE OR CONFIG_POWEROFF)
     message(FATAL_ERROR
       "radiant_core: the cc26xx backend cannot be built with CONFIG_PM, "
-      "CONFIG_PM_DEVICE or CONFIG_POWEROFF. Any of the three makes Zephyr "
-      "compile soc/ti/simplelink/cc13x2_cc26x2/power.c, which defines "
+      "CONFIG_PM_DEVICE or CONFIG_POWEROFF outside 802.15.4/BLE coexistence. "
+      "Any of the three makes Zephyr compile "
+      "soc/ti/simplelink/cc13x2_cc26x2/power.c, which defines "
       "PowerCC26X2_config - and so does src/radiant_ti_power.c, because "
       "Zephyr's version installs a NULL calibrateFxn that TI's Power driver "
       "dereferences unchecked on the first RF_open(). Turn the symbol off, or "
       "read src/radiant_ti_power.c and decide deliberately which definition "
       "this build should have.")
+  else()
+    zephyr_library_sources(src/radiant_ti_power.c)
   endif()
-  zephyr_library_sources(src/radiant_ti_power.c)
 elseif(CONFIG_RADIANT_CORE_BACKEND_NRF)
   zephyr_library_sources(src/radiant_radio_nrf.c)
   # Who owns the RADIO. A seam inside the backend rather than a second backend

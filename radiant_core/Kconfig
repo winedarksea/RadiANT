@@ -161,6 +161,113 @@ config RADIANT_CORE_BACKEND_CC26XX
 
 endchoice
 
+# â”€â”€ CC26xx PHY bench-sweep overrides, outside the choice for the same reason
+#    the coex symbols below are â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+#
+# Phase C of the CC26xx plan (docs/decisions/0014, "still owed": closing loss
+# below ~3.7% needs a paced-transmitter rxBw/AGC re-sweep). Every one of these
+# defaults to the value radiant_radio_cc26xx.c's own header comment already
+# measured and is not meant to move in a shipped build - it exists so a sweep
+# is `-DCONFIG_RADIANT_CORE_CC26XX_xxx=...` on the command line instead of a
+# source edit per rung, the same reason CONFIG_RADIANT_CORE_BACKEND_CC26XX_
+# MULTI_PATCH exists as a symbol rather than a hand edit for D1.
+config RADIANT_CORE_CC26XX_RX_BW_CODE
+	int "CMD_PROP_RADIO_DIV_SETUP.rxBw override, for a paced-transmitter sweep"
+	default 98
+	range 90 103
+	depends on RADIANT_CORE_BACKEND_CC26XX
+	help
+	  98 = 1567.2 kHz, the measured winner - see RX_BW_CODE's own comment
+	  in radiant_radio_cc26xx.c. Valid codes and their bandwidths are TI's
+	  settings-database table; the range above is generous rather than
+	  exact, so an invalid code is a runtime CMD_PROP_RADIO_DIV_SETUP
+	  failure (loud), not silently clamped.
+
+config RADIANT_CORE_CC26XX_AA_FILTER
+	hex "Anti-aliasing filter bandwidth override (ADI_HALFREG_OVERRIDE), for a sweep"
+	default 0x5
+	range 0x0 0xF
+	depends on RADIANT_CORE_BACKEND_CC26XX
+	help
+	  0x5 measured indistinguishable from 0xB once AGC and deviation are
+	  right - see AA_FILTER_VALUE's own comment. Kept sweepable anyway
+	  since ADR 0014's own lesson is that a sweep needs a paced
+	  denominator to mean anything, and the version that produced this
+	  default did not have one for every rung.
+
+config RADIANT_CORE_CC26XX_AGC_REF
+	hex "AGC reference level override (HW_REG_OVERRIDE 0x609C), for a sweep"
+	default 0x0034
+	range 0x0 0xFFFF
+	depends on RADIANT_CORE_BACKEND_CC26XX
+	help
+	  0x34 led every round of the original sweep - see AGC_REF_VALUE's
+	  own comment for the measured table (0x22/0x2E/0x34/0x3A).
+
+config RADIANT_CORE_CC26XX_RX_END_SLOP_US
+	int "Extra receive time at the late edge of every window (RX_END_SLOP_US), for a sweep"
+	default 500
+	range 0 5000
+	depends on RADIANT_CORE_BACKEND_CC26XX
+	help
+	  500 and 2000 measured the same (8.3% vs 9.0% loss) against a
+	  79.0%-loss floor at 0 slop - see RX_END_SLOP_US's own comment. That
+	  bounds it from above but says nothing below 500; sweepable at
+	  250/500/750 is Phase C's own instruction.
+
+# â”€â”€ 802.15.4 coexistence on the TI arm, and it has to live OUTSIDE the choice,
+#    same reason RADIANT_CORE_BACKEND_NRF_GATE_MPSL does below â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+#
+# NOT `depends on RADIANT_CORE_BACKEND_CC26XX`, same Kconfig-dependency-loop
+# reason as the MPSL gate: the relationship is enforced in CMakeLists.txt,
+# which only reads this symbol under the cc26xx arm, so selecting it beside
+# the null or nrf backend selects nothing and builds what was asked for.
+#
+# RF_applyRfCorePatch applies cpePatchFxn only at RF_PHY_BOOTUP_MODE and never
+# re-applies it on a client switch (RFCCpePatchReset() is an empty stub in
+# driverlib/rfc.c), so whichever patch is resident at power-up is what BOTH
+# clients run under for the whole power cycle. Zephyr's 802.15.4 driver opens
+# with rf_patch_cpe_multi_protocol; matching it is mandatory, not tidy.
+#
+# A SEPARATE SYMBOL FROM THE HOOKS BELOW, on purpose: the patch swap and the
+# scheduler swap are two independently measurable costs (build arms 2 and 3 -
+# see docs/testing.md), and the arm that isolates "does the multi-protocol
+# patch alone degrade the PHY" needs the patch WITHOUT the hooks. Selected
+# unconditionally by RADIANT_CORE_BACKEND_CC26XX_COEX below, so the hooks can
+# never link against the wrong patch.
+config RADIANT_CORE_BACKEND_CC26XX_MULTI_PATCH
+	bool "boot the CC26xx RF core under rf_patch_cpe_multi_protocol, not rf_patch_cpe_prop"
+	help
+	  RF_MODE_MULTIPLE + rf_patch_cpe_multi_protocol instead of
+	  RF_MODE_PROPRIETARY_2_4 + rf_patch_cpe_prop.
+	  RF_MODE_MULTIPLE == RF_MODE_PROPRIETARY_2_4 == 0x00 on this family, so
+	  the rfMode byte itself is a no-op - the patch function pointer is the
+	  entire change, and every PHY constant in radiant_radio_cc26xx.c was
+	  measured under rf_patch_cpe_prop. Falsify before relying on it: rerun
+	  radiant_core/spike/ti_phy with only this symbol flipped and compare
+	  frames received, nRxNok and RSSI against the rf_patch_cpe_prop
+	  baseline before turning on COEX below.
+
+config RADIANT_CORE_BACKEND_CC26XX_COEX
+	bool "arbitrate the RF core with a second client via RFCC26XX_schedulerPolicy"
+	select RADIANT_CORE_BACKEND_CC26XX_MULTI_PATCH
+	help
+	  Compile radiant_radio_cc26xx_arb.c (RFCC26XX_schedulerPolicy: a submit
+	  hook and an execute hook) and switch every RF_postCmd() in the backend
+	  to RF_scheduleCmd(). Off by default, and the direct RF_postCmd() path
+	  must compile to the same machine code it does today when this is n -
+	  the same argument radiant_radio_nrf_gate.h makes for gate_direct.c, and
+	  for the same reason: a t_sync error here moves yield by about the size
+	  of the bench's ~0.4% collision floor, too small for an A/B to prove a
+	  refactor safe by itself.
+
+	  On the default RF_defaultSubmitPolicy/RF_defaultExecutionPolicy pair,
+	  arbitration with a second RF_postCmd() client (802.15.4's background
+	  CMD_IEEE_RX) is not weak, it is impossible: RF_verifyGap refuses to
+	  insert anything ahead of a command whose endType == RF_EndNotSpecified,
+	  which is exactly how RF_postCmd posts. This symbol is what makes an ANT
+	  window able to preempt that neighbour at all.
+
 # â”€â”€ A setting of the nrf arm, and it has to live OUTSIDE the choice â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #
 # It used to be inside it, between the nrf arm and `endchoice`, and that was a

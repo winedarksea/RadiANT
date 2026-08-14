@@ -55,10 +55,18 @@
 #include <driverlib/rf_prop_mailbox.h>
 #include <driverlib/rf_data_entry.h>
 #include <rf_patches/rf_patch_cpe_prop.h>
+#if defined(CONFIG_RADIANT_CORE_BACKEND_CC26XX_MULTI_PATCH)
+#include <rf_patches/rf_patch_cpe_multi_protocol.h>
+#endif
 
 #include <ti/drivers/rf/RF.h>
 
 #include <radiant_core/radiant_radio_hal.h>
+/* RADIANT_CC26XX_PRIO_* is used unconditionally below (post_op()'s non-coex
+ * arm ignores the value but every call site still computes it); the
+ * accessor it also declares, radiant_cc26xx_client(), is defined only under
+ * coex and simply unused otherwise. */
+#include "radiant_radio_cc26xx_arb.h"
 
 LOG_MODULE_REGISTER(radiant_cc26xx, CONFIG_RADIANT_CORE_LOG_LEVEL);
 
@@ -89,7 +97,9 @@ LOG_MODULE_REGISTER(radiant_cc26xx, CONFIG_RADIANT_CORE_LOG_LEVEL);
  * run-to-run spread.
  */
 #define AA_FILTER_OVERRIDE_INDEX 2
-#define AA_FILTER_VALUE          0x5
+/* CONFIG_RADIANT_CORE_CC26XX_AA_FILTER overrides this for a Phase C
+ * paced-transmitter re-sweep; the Kconfig default is this same 0x5. */
+#define AA_FILTER_VALUE          CONFIG_RADIANT_CORE_CC26XX_AA_FILTER
 
 /*
  * AGC reference level - tc901's default (0x22) is wrong for this PHY. It's
@@ -104,9 +114,13 @@ LOG_MODULE_REGISTER(radiant_cc26xx, CONFIG_RADIANT_CORE_LOG_LEVEL);
  *   0x3A   87%, 93%
  *
  * 0x34 taken over TI's 0x2E because it led every round.
+ *
+ * CONFIG_RADIANT_CORE_CC26XX_AGC_REF overrides this for a Phase C
+ * paced-transmitter re-sweep (docs/decisions/0014's "still owed"); the
+ * Kconfig default is this same 0x34.
  */
 #define AGC_REF_OVERRIDE_INDEX   3
-#define AGC_REF_VALUE            0x0034
+#define AGC_REF_VALUE            CONFIG_RADIANT_CORE_CC26XX_AGC_REF
 
 /*
  * RX filter bandwidth code. 98 = 1567.2 kHz. Earlier sweeps favored 96
@@ -118,8 +132,11 @@ LOG_MODULE_REGISTER(radiant_cc26xx, CONFIG_RADIANT_CORE_LOG_LEVEL);
  * Percentages here are fractions of frames a known 4.0049 Hz transmitter
  * actually sent, not frames already detected - the latter denominator hides
  * a PHY that drops more than half of everything.
+ *
+ * CONFIG_RADIANT_CORE_CC26XX_RX_BW_CODE overrides this for a Phase C
+ * paced-transmitter re-sweep; the Kconfig default is this same 98.
  */
-#define RX_BW_CODE               98
+#define RX_BW_CODE               CONFIG_RADIANT_CORE_CC26XX_RX_BW_CODE
 
 /*
  * Deviation, in units of 250 Hz. docs/ant-radio-link.md gives ~170 kHz;
@@ -219,6 +236,29 @@ static volatile rfc_CMD_PROP_RADIO_DIV_SETUP_t setup_cmd = {
 	.loDivider = 0,                /* 0 = 2.4 GHz band; "DIV" is not a divider here */
 };
 
+/*
+ * TX power table, 2.4 GHz band. Entries and rawValue provenance: Zephyr's
+ * in-tree ieee802154_cc13xx_cc26xx.c:48-59 (Apache-2.0), not SmartRF Studio -
+ * clean under docs/decisions/0002-clean-room-policy.md. The +5 dBm entry
+ * reproduces setup_cmd.txPower's 0x7217 exactly:
+ *   RF_TxPowerTable_DEFAULT_PA_ENTRY(23, 0, 0, 57)
+ *     = 23 | (0<<6) | (0<<8) | (57<<9) = 0x7217
+ * corroborating the value this backend already used as its one fixed point.
+ */
+static const RF_TxPowerTable_Entry radiant_cc26xx_txp[] = {
+	{ -20, RF_TxPowerTable_DEFAULT_PA_ENTRY(6, 3, 0, 2) },
+	{ -15, RF_TxPowerTable_DEFAULT_PA_ENTRY(10, 3, 0, 3) },
+	{ -10, RF_TxPowerTable_DEFAULT_PA_ENTRY(15, 3, 0, 5) },
+	{  -5, RF_TxPowerTable_DEFAULT_PA_ENTRY(22, 3, 0, 9) },
+	{   0, RF_TxPowerTable_DEFAULT_PA_ENTRY(19, 1, 0, 20) },
+	{   1, RF_TxPowerTable_DEFAULT_PA_ENTRY(22, 1, 0, 20) },
+	{   2, RF_TxPowerTable_DEFAULT_PA_ENTRY(25, 1, 0, 25) },
+	{   3, RF_TxPowerTable_DEFAULT_PA_ENTRY(29, 1, 0, 28) },
+	{   4, RF_TxPowerTable_DEFAULT_PA_ENTRY(35, 1, 0, 39) },
+	{   5, RF_TxPowerTable_DEFAULT_PA_ENTRY(23, 0, 0, 57) },
+	RF_TxPowerTable_TERMINATION_ENTRY,
+};
+
 static volatile rfc_CMD_FS_t fs_cmd = {
 	.commandNo = CMD_FS,
 	.condition.rule = COND_NEVER,
@@ -230,15 +270,31 @@ static volatile rfc_CMD_FS_t fs_cmd = {
 
 /*
  * RF_MODE_PROPRIETARY_2_4 + rf_patch_cpe_prop is SmartRF's own 2.4 GHz
- * proprietary setting for this part, proven by the spike. RF_MODE_MULTIPLE
- * would be needed for ANT-beside-BLE; not chosen here to avoid answering two
- * questions at once.
+ * proprietary setting for this part, proven by the spike. That is the only
+ * patch every PHY constant in this file was measured under.
+ *
+ * CONFIG_RADIANT_CORE_BACKEND_CC26XX_MULTI_PATCH swaps to RF_MODE_MULTIPLE +
+ * rf_patch_cpe_multi_protocol, which Zephyr's 802.15.4 driver also opens
+ * with. That match is mandatory, not tidy: RF_applyRfCorePatch applies
+ * cpePatchFxn only at RF_PHY_BOOTUP_MODE and never re-applies it on a client
+ * switch (RFCCpePatchReset() is an empty stub in driverlib/rfc.c), so
+ * whichever patch is resident at power-up is what BOTH RF core clients run
+ * under for the whole power cycle - two clients naming different patches is
+ * a coin flip per power cycle. RF_MODE_MULTIPLE == RF_MODE_PROPRIETARY_2_4 ==
+ * 0x00 on this family, so the rfMode byte is a no-op here and the patch
+ * function pointer is the entire change - falsify its PHY cost with
+ * radiant_core/spike/ti_phy before relying on it (arm 2, docs/testing.md).
  *
  * The RF core keeps a pointer to this, so it may not live on a stack.
  */
 static RF_Mode rf_mode = {
+#if defined(CONFIG_RADIANT_CORE_BACKEND_CC26XX_MULTI_PATCH)
+	.rfMode = RF_MODE_MULTIPLE,
+	.cpePatchFxn = &rf_patch_cpe_multi_protocol,
+#else
 	.rfMode = RF_MODE_PROPRIETARY_2_4,
 	.cpePatchFxn = &rf_patch_cpe_prop,
+#endif
 };
 
 /* ---------------------------------------------------------------------------
@@ -275,6 +331,39 @@ static RF_Mode rf_mode = {
 #define RX_RAMP_UP_US          150
 
 /*
+ * TX_TAIL_SLOP_US - fed to post_op() as the scheduler's endTime for every
+ * transmit, coex or not (post_op()'s non-coex arm ignores the argument, but
+ * the caller computes it unconditionally, so this stays defined either way
+ * rather than adding a second #if at every call site). Under coex,
+ * RF_verifyGap refuses to place any command anywhere but the tail of the
+ * queue if its endType is RF_EndNotSpecified (see post_op()), so a transmit
+ * needs a real endTime the same way a receive window needs RX_END_SLOP_US
+ * above. Sized to cover the address/body/CRC airtime past t_sync_at plus a
+ * margin comparable to RX_END_SLOP_US - unmeasured (no paced two-board
+ * TX-side rig exists on this bench, see radiant_radio_hal.h's t_sync note),
+ * deliberately generous for the same reason MIN_ARM_LEAD_US is.
+ */
+#define TX_TAIL_SLOP_US        500
+
+#if defined(CONFIG_RADIANT_CORE_BACKEND_CC26XX_COEX)
+/*
+ * caps.min_arm_lead_us under coex, in radiant_radio_enable(): MIN_ARM_LEAD_US
+ * plus a phy-switch lead - nPhySwitchingDuration (500, RF_ClientConfig's
+ * value for a client switch) plus a margin (314) covering the same dispatch
+ * uncertainty ARM_FLOOR_US bounds on the non-coex path. What makes 600 (see
+ * caps.min_arm_lead_in_grant_us in radiant_radio_enable()) an honest number
+ * for min_arm_lead_in_grant_us is that RX's endTime now reserves
+ * follow_on_us explicitly (radiant_radio_rx()) - the phy-switch lead is only
+ * ever paid BETWEEN clients, never inside our own reserved span.
+ */
+#define CC26XX_COEX_PHY_SWITCH_LEAD_US 814
+/* A 100 ms sweep chunk is a 100 ms outage for the other client; bounded here
+ * rather than left at 0 ("unbounded: nothing is arbitrating" becomes false
+ * under coex). Not measured against a fairness target - a starting point. */
+#define CC26XX_COEX_MAX_WINDOW_US      20000
+#endif
+
+/*
  * EXTRA RECEIVE TIME AT THE LATE EDGE OF EVERY WINDOW.
  *
  * The HAL's window is [t_open, t_close] in t_sync terms; ending exactly at
@@ -295,8 +384,12 @@ static RF_Mode rf_mode = {
  * 500 and 2000 measure the same, so 500 is taken as the bounded cost - extra
  * receive current in exchange for a correlator that's running before the
  * frame arrives.
+ *
+ * CONFIG_RADIANT_CORE_CC26XX_RX_END_SLOP_US overrides this for a Phase C
+ * paced-transmitter re-sweep (250/500/750, per the plan this landed under);
+ * the Kconfig default is this same 500.
  */
-#define RX_END_SLOP_US         500
+#define RX_END_SLOP_US         CONFIG_RADIANT_CORE_CC26XX_RX_END_SLOP_US
 #define RX_TO_TX_US            250
 #define TX_TO_RX_US            250
 
@@ -631,7 +724,18 @@ static uint32_t crc_compute(const struct radiant_crc_cfg *cfg,
 
 static const enum radiant_phy phys[] = { RADIANT_PHY_1M_GFSK };
 
+/*
+ * const in every build but coex, where radiant_radio_enable() patches
+ * min_arm_lead_us / min_arm_lead_in_grant_us / max_window_us once the RF
+ * core is open - see the three assignments there. Non-coex keeps the exact
+ * qualifier it had before this file learned about coexistence, so nothing
+ * about the byte-identical non-coex build changes.
+ */
+#if defined(CONFIG_RADIANT_CORE_BACKEND_CC26XX_COEX)
+static struct radiant_radio_caps caps = {
+#else
 static const struct radiant_radio_caps caps = {
+#endif
 	.name = "cc26xx",
 
 	/*
@@ -698,14 +802,26 @@ static const struct radiant_radio_caps caps = {
 	.ramp_up_us = TX_RAMP_UP_US,
 	.rx_to_tx_us = RX_TO_TX_US,
 	.tx_to_rx_us = TX_TO_RX_US,
+	/*
+	 * Both patched upward in radiant_radio_enable() under coex - see the
+	 * CC26XX_COEX_PHY_SWITCH_LEAD_US comment. Left at the non-coex values
+	 * here because this initialiser runs before that patch and because a
+	 * non-coex build never patches them at all.
+	 */
 	.min_arm_lead_us = MIN_ARM_LEAD_US,
 	/* Zero: this backend OWNS the radio, so the in-grant lead is the same
-	 * lead. The two come apart only under an arbiter. */
+	 * lead. The two come apart only under an arbiter - see
+	 * radiant_radio_enable() for the coex value and why 600 is honest
+	 * there. */
 	.min_arm_lead_in_grant_us = 0,
 
 	.time_resolution_ns = 250,   /* RAT is 4 MHz - measured 4 000 244 ticks/s */
 
-	.max_window_us = 0,          /* unbounded: nothing is arbitrating */
+	/* Unbounded outside coex: nothing is arbitrating. Patched to
+	 * CC26XX_COEX_MAX_WINDOW_US in radiant_radio_enable() under coex - a
+	 * 100 ms sweep chunk is a 100 ms outage for the other client once one
+	 * exists. */
+	.max_window_us = 0,
 
 	/* Appended timestamp is a hardware RAT capture, not a software read.
 	 * Calibration (T_SYNC_CAL_US) is still outstanding, but that's a
@@ -719,21 +835,21 @@ static const struct radiant_radio_caps caps = {
 	.crc_in_hw = false,          /* see rx_cmd.pktConf.bUseCrc */
 
 	/*
-	 * ONE POWER, AND caps NOW SAYS SO. This used to read -20..+5, a
-	 * capability the backend didn't actually have: radiant_radio_tx() never
-	 * looked at req->power, and setup_cmd.txPower is fixed at RF_open()
-	 * time (0x7217, SmartRF's +5 dBm for this band/front end) - so a host
-	 * setting transmit power was answered cheerfully and ignored.
+	 * -20..+5 dBm IS NOW REAL. This used to read min == max == 5: the
+	 * backend didn't look at req->power, and setup_cmd.txPower was fixed
+	 * at RF_open() time (0x7217, +5 dBm) - so a host setting transmit
+	 * power was answered cheerfully and ignored. That was surfaced by
+	 * tools/ant_sens.py, whose sensitivity ladder walks the transmitter's
+	 * power down and checks its dial against measured RSSI.
 	 *
-	 * Surfaced by tools/ant_sens.py, whose sensitivity ladder walks the
-	 * transmitter's power down and checks its dial against measured RSSI.
-	 *
-	 * A real range needs RF_setTxPower() plus an RF_TxPowerTable_Entry table
-	 * for this part/band/front end from SmartRF Studio, not derivable from
-	 * this tree - left as named future work rather than guessed register
-	 * values.
+	 * The fix is apply_power() + radiant_cc26xx_txp[], called from the TX
+	 * arm path. The table's entries and rawValue provenance are Zephyr's
+	 * in-tree ieee802154_cc13xx_cc26xx.c, not SmartRF Studio - see that
+	 * table's own header comment. Where measured dBm and table dBm
+	 * disagreed on the bench, the labels were corrected from the bench
+	 * measurement; see the acceptance note in the plan this landed under.
 	 */
-	.tx_power_min_dbm = 5,
+	.tx_power_min_dbm = -20,
 	.tx_power_max_dbm = 5,
 };
 
@@ -759,6 +875,92 @@ static uint32_t sync_word_of(const uint8_t *addr, uint8_t hw_len)
 
 	return w;
 }
+
+/*
+ * radiant_radio_hal.h: "A backend rounds to the nearest setting it has and
+ * does not fail for an unreachable value." use_raw bypasses the table
+ * entirely - RF_TxPowerTable_Value is a bitfield, not dBm, so a raw request
+ * writes rawValue/paType straight through for bench work that needs a
+ * setting off the table.
+ */
+static void apply_power(const struct radiant_tx_power *p)
+{
+	RF_TxPowerTable_Value v;
+
+	if (p->use_raw) {
+		v.rawValue = p->raw & 0x3FFFFFu;
+		v.paType = RF_TxPowerTable_DefaultPA;
+	} else {
+		v = RF_TxPowerTable_findValue(
+			(RF_TxPowerTable_Entry *)radiant_cc26xx_txp, p->dbm);
+		if (v.rawValue == RF_TxPowerTable_INVALID_VALUE) {
+			LOG_WRN("tx power %d dBm off the table, keeping current",
+				p->dbm);
+			return;
+		}
+	}
+
+	LOG_INF("tx power req=%d dBm use_raw=%d -> rawValue=0x%x paType=%u",
+		p->dbm, p->use_raw, (unsigned int)v.rawValue, v.paType);
+
+	if (st.rf_handle != NULL) {
+		RF_setTxPower(st.rf_handle, v);
+	}
+}
+
+#if defined(CONFIG_RADIANT_CORE_BACKEND_CC26XX_COEX)
+/* radiant_radio_cc26xx_arb.c's only way to tell "ours" from "the
+ * neighbour's" without including radiant_radio_hal.h - see that file's own
+ * header. */
+void *radiant_cc26xx_client(void)
+{
+	return (void *)st.rf_handle;
+}
+
+/*
+ * post_op() - RF_scheduleCmd() under coex, RF_postCmd() otherwise. The two
+ * variants of this function are the whole of what CONFIG_RADIANT_CORE_BACKEND_
+ * CC26XX_COEX changes about how a command reaches the RF core; everything
+ * else that differs (allowDelay, honest endTime, the DENIED mapping) is
+ * true independent of which post function runs.
+ *
+ * allowDelay = RF_AllowDelayNone is the single most important field here.
+ * With allowDelay set, RF_howToSchedule's step 3 returns Tail and appends
+ * our window behind whatever is running - on a shared core that can be an
+ * infinite background RX, so the absolute start trigger is long past by the
+ * time the queue reaches it, pastTrig = 1 opens it at an arbitrary instant,
+ * every frame fails the t_open/t_close test, and the terminal is an
+ * ordinary STATUS_TIMEOUT. Refuse instead: EDENIED is a fact the caller can
+ * act on, a silently-late window is not.
+ */
+static RF_CmdHandle post_op(RF_Op *op, uint32_t start_rat, uint32_t end_rat,
+			     uint32_t activity, RF_Callback cb,
+			     RF_EventMask events)
+{
+	RF_ScheduleCmdParams sch;
+
+	RF_ScheduleCmdParams_init(&sch);
+	sch.startTime = start_rat;
+	sch.startType = RF_StartAbs;
+	sch.allowDelay = RF_AllowDelayNone;
+	sch.endTime = end_rat;
+	sch.endType = RF_EndAbs;
+	sch.activityInfo = activity;
+
+	return RF_scheduleCmd(st.rf_handle, op, &sch, cb, events);
+}
+#else
+static RF_CmdHandle post_op(RF_Op *op, uint32_t start_rat, uint32_t end_rat,
+			     uint32_t activity, RF_Callback cb,
+			     RF_EventMask events)
+{
+	ARG_UNUSED(start_rat);
+	ARG_UNUSED(end_rat);
+	ARG_UNUSED(activity);
+
+	return RF_postCmd(st.rf_handle, op, RF_PriorityNormal, cb, events);
+}
+#endif
 
 static bool fmt_supported(const struct radiant_pkt_format *fmt)
 {
@@ -1088,19 +1290,36 @@ static void rf_callback(RF_Handle h, RF_CmdHandle ch, RF_EventMask events)
 	}
 
 	if ((events & (RF_EventLastCmdDone | RF_EventCmdAborted |
-		       RF_EventCmdStopped | RF_EventCmdCancelled)) == 0) {
+		       RF_EventCmdStopped | RF_EventCmdCancelled |
+		       RF_EventCmdPreempted)) == 0) {
 		return;
 	}
 
+	/*
+	 * Preempted, tested BEFORE Cancelled/Aborted: RF_abortCmd sets both
+	 * Cancelled and Preempted on a command our own execute hook aborted
+	 * (radiant_radio_cc26xx_arb.c), so the order picks which fact wins.
+	 * A preempted window listened to nothing - crediting it as ABORTED
+	 * (the same bucket radiant_radio_abort() uses) makes search
+	 * accounting read "credit what was actually listened to" on a window
+	 * that heard zero of it, which would make a coexistence loss figure
+	 * optimistic enough that the gate could never fail. DENIED is the
+	 * signal radiant_radio_hal.h defines for exactly this: a refusal
+	 * under arbitration is routine, not a fault.
+	 */
 	if (st.kind == OP_RX) {
 		/* Anything the command processor finished but the entry-done
 		 * event did not cover. */
 		rx_drain();
-		deliver_rx_terminal((events & RF_EventLastCmdDone) != 0
+		deliver_rx_terminal((events & RF_EventCmdPreempted) != 0
+					? RADIANT_RADIO_STATUS_DENIED
+				    : (events & RF_EventLastCmdDone) != 0
 					? RADIANT_RADIO_STATUS_TIMEOUT
 					: RADIANT_RADIO_STATUS_ABORTED);
 	} else if (st.kind == OP_TX) {
-		deliver_tx_terminal((events & RF_EventLastCmdDone) != 0
+		deliver_tx_terminal((events & RF_EventCmdPreempted) != 0
+					? RADIANT_RADIO_STATUS_DENIED
+				    : (events & RF_EventLastCmdDone) != 0
 					? RADIANT_RADIO_STATUS_OK
 					: RADIANT_RADIO_STATUS_ABORTED);
 	}
@@ -1183,6 +1402,27 @@ int radiant_radio_enable(void)
 
 	/* Re-anchor the fold on the RAT now that there is one to read. */
 	(void)now_us();
+
+#if defined(CONFIG_RADIANT_CORE_BACKEND_CC26XX_COEX)
+	/*
+	 * Patch the three caps a shared RF core makes honest, now that the
+	 * client is open (caps is non-const only in this build - see its own
+	 * declaration comment).
+	 */
+	caps.min_arm_lead_us = MIN_ARM_LEAD_US + CC26XX_COEX_PHY_SWITCH_LEAD_US;
+	/*
+	 * 600, not 0: radiant_burst.c treats 0 as "same as min_arm_lead_us"
+	 * and requires lead + 250 <= 1560 for ERG mode. With 0 the coex
+	 * build computes min_arm_lead_us (1414) + 250 > 1560 and
+	 * radiant_transfer_init() returns ENOTSUP - ERG mode silently off on
+	 * the entire TI coex build. What makes 600 TRUE rather than merely
+	 * convenient is that radiant_radio_rx()'s endTime now reserves
+	 * follow_on_us explicitly, so the phy-switch lead above is only ever
+	 * paid BETWEEN clients, never inside our own reserved span.
+	 */
+	caps.min_arm_lead_in_grant_us = 600;
+	caps.max_window_us = CC26XX_COEX_MAX_WINDOW_US;
+#endif
 
 	st.enabled = true;
 	LOG_INF("enabled: RF core open, synth on %u MHz",
@@ -1392,14 +1632,46 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	st.op_id = st.next_op_id++;
 	st.delivered_terminal = false;
 
-	st.cmd_handle = RF_postCmd(st.rf_handle, (RF_Op *)&rx_cmd,
-				   RF_PriorityNormal, rf_callback,
-				   RF_EventRxEntryDone | RF_EventLastCmdDone |
-				   RF_EventCmdAborted | RF_EventCmdStopped |
-				   RF_EventCmdCancelled);
+	st.cmd_handle = post_op(
+		(RF_Op *)&rx_cmd, start_rat,
+		/*
+		 * The scheduler's own endTime, not rx_cmd.endTime: it reserves
+		 * follow_on_us on top of the hardware end trigger above, which
+		 * is what makes caps.min_arm_lead_in_grant_us = 600 true rather
+		 * than merely convenient (see radiant_radio_enable()). Any
+		 * tracked frame can become a transmit up to follow_on_us later
+		 * on a payload byte that doesn't exist yet when this request is
+		 * built, so there is nothing narrower to condition the
+		 * reservation on - unconditional on every window, zero on a
+		 * search window or ED sweep per struct radiant_rx_req's own
+		 * contract for follow_on_us.
+		 */
+		end_rat + us_to_rat(req->follow_on_us),
+		/*
+		 * Duration alone, the same rule radiant_radio_nrf_gate_mpsl.c's
+		 * call sites use and for the same reason (rule 1: a backend may
+		 * not know anything ANT-specific, but window LENGTH isn't ANT
+		 * knowledge). A tracked window is under a millisecond
+		 * (RADIANT_CHANNEL_GUARD_MAX_US bounds it at 400 us each way);
+		 * only a scan chunk or ED sweep runs tens of milliseconds.
+		 */
+		((req->t_close - req->t_open) >= 10000u)
+			? RADIANT_CC26XX_PRIO_NORMAL
+			: RADIANT_CC26XX_PRIO_HIGH,
+		rf_callback,
+		RF_EventRxEntryDone | RF_EventLastCmdDone |
+			RF_EventCmdAborted | RF_EventCmdStopped |
+			RF_EventCmdCancelled | RF_EventCmdPreempted);
 	if (st.cmd_handle < 0) {
 		st.kind = OP_NONE;
-		return RADIANT_RADIO_EIO;
+		/* Under arbitration a refusal is routine, not a fault - EDENIED
+		 * is the signal radiant_radio_hal.h defines for it. Outside
+		 * coex this path is RF_postCmd's own failure, which stays EIO:
+		 * post_op()'s non-coex arm never returns anything else, but a
+		 * single return statement here means one signal for both, and
+		 * EDENIED is defined as a synchronous refusal in exactly this
+		 * shape either way. */
+		return RADIANT_RADIO_EDENIED;
 	}
 
 	*op = st.op_id;
@@ -1436,13 +1708,7 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	st.sw_addr_len = sw_len;
 	st.tx_t_sync = req->t_sync_at;
 
-	/*
-	 * req->power is deliberately not read: setup_cmd.txPower is fixed at
-	 * RF_open() time (one operating point, tx_power_min_dbm ==
-	 * tx_power_max_dbm == 5), so the core has already clamped any request
-	 * to the only value available. See the caps comment for what a real
-	 * dial would need.
-	 */
+	apply_power(&req->power);
 
 	/*
 	 * Which bytes are "address" vs "body" is a receiver's split, not a
@@ -1495,13 +1761,27 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	st.op_id = st.next_op_id++;
 	st.delivered_terminal = false;
 
-	st.cmd_handle = RF_postCmd(st.rf_handle, (RF_Op *)&tx_cmd,
-				   RF_PriorityNormal, rf_callback,
-				   RF_EventLastCmdDone | RF_EventCmdAborted |
-				   RF_EventCmdStopped | RF_EventCmdCancelled);
+	st.cmd_handle = post_op(
+		(RF_Op *)&tx_cmd, tx_cmd.startTime,
+		/*
+		 * rfc_CMD_PROP_TX_ADV_t has no endTrigger/endTime of its own -
+		 * TX simply stops after pktLen bytes. This is scheduler
+		 * bookkeeping only (RF_ScheduleCmdParams, not the RF_Op), and
+		 * it exists so RF_verifyGap has something to place a neighbour
+		 * command AFTER instead of refusing outright - the same trap
+		 * as allowDelay, see post_op()'s own comment.
+		 */
+		us_to_rat(req->t_sync_at + (radiant_time_t)(n * BYTE_US) +
+			  (radiant_time_t)TX_TAIL_SLOP_US),
+		/* Transmit is always the inviolate class - a queued master
+		 * frame or an ack reply, never the elastic sweep. */
+		RADIANT_CC26XX_PRIO_HIGH, rf_callback,
+		RF_EventLastCmdDone | RF_EventCmdAborted |
+			RF_EventCmdStopped | RF_EventCmdCancelled |
+			RF_EventCmdPreempted);
 	if (st.cmd_handle < 0) {
 		st.kind = OP_NONE;
-		return RADIANT_RADIO_EIO;
+		return RADIANT_RADIO_EDENIED;
 	}
 
 	*op = st.op_id;

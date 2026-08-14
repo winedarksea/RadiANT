@@ -23,6 +23,7 @@ burst - reach the radio rather than being rejected by the bridge.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 
@@ -111,11 +112,24 @@ PROFILES = [
 
 
 def open_channel(dev, reader, ch: int, dev_type: int, period: int,
-                 label: str) -> bool:
-    """Assign, configure and open one slave channel. Returns success."""
+                 label: str, device_number: int = 0) -> bool:
+    """Assign, configure and open one slave channel. Returns success.
+
+    device_number=0 is the wildcard (any device of dev_type) every channel
+    uses by default - the Zwift-mimicking behaviour this file exists for.
+    A nonzero value pins the channel to one device, for --pin-device: on a
+    bench with a real ANT+ sensor of the same device TYPE already in the
+    room (a realistic Zwift scenario ant_scan.py's own wildcard search hits
+    too), a wildcard "power" channel is a coin flip between it and an
+    intended bench responder like sim/ - pinning is what makes the
+    acknowledged-data test reach the responder it means to reach instead of
+    whichever device happened to win that race.
+    """
     steps = [
         (MESG_ASSIGN_CHANNEL_ID, bytes([ch, 0x00, 0x00]), "assign"),
-        (MESG_CHANNEL_ID_ID, bytes([ch, 0, 0, dev_type, 0]), "channel id"),
+        (MESG_CHANNEL_ID_ID,
+         bytes([ch, device_number & 0xFF, (device_number >> 8) & 0xFF,
+                dev_type, 0]), "channel id"),
         (MESG_CHANNEL_RADIO_FREQ_ID, bytes([ch, ANT_PLUS_FREQ]), "frequency"),
         (MESG_CHANNEL_MESG_PERIOD_ID,
          bytes([ch, period & 0xFF, period >> 8]), "period"),
@@ -209,10 +223,51 @@ def ack_probe(dev, reader, ch: int, timeout_s: float = 15.0) -> str:
             return EVENT_CODES_BY_VALUE[body[2]]
 
 
+def ack_count(dev, reader, ch: int, attempts: int,
+             timeout_s: float = 15.0) -> dict:
+    """Drive `attempts` acknowledged-data transmissions on an open channel
+    and count outcomes, for `[gates.ack_data]` (tools/ant_ab.py:gate_ack,
+    archive/benchmarks/baseline.schema.json's ack_data block).
+
+    Extends ack_probe() rather than duplicating its channel setup and
+    message decode: each attempt is one ack_probe() call, and only
+    EVENT_TRANSFER_TX_COMPLETED counts as a success -
+    EVENT_TRANSFER_TX_FAILED, "invalid", "rejected ...", "silent" and
+    "queued" (accepted but never observed to leave, see ack_probe()'s
+    docstring) do not.
+
+    retries is None: the host side sees one RESPONSE_EVENT and one terminal
+    TRANSFER event per attempt, and how many times the radio itself retried
+    inside that window is not visible on this side of the wire - the schema
+    allows null for exactly this.
+    """
+    successes = 0
+    outcomes: dict[str, int] = {}
+    for _ in range(attempts):
+        outcome = ack_probe(dev, reader, ch, timeout_s)
+        outcomes[outcome] = outcomes.get(outcome, 0) + 1
+        if outcome == EVENT_CODES_BY_VALUE[EVENT_TRANSFER_TX_COMPLETED]:
+            successes += 1
+
+    return {
+        "attempts": attempts,
+        "successes": successes,
+        "success_pct": 100.0 * successes / attempts if attempts else None,
+        "retries": None,
+        "_outcomes": outcomes,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seconds", type=float, default=30.0,
                         help="how long to hold the session open (default: 30)")
+    parser.add_argument("--attempts", type=int,
+                        help="instead of one ack_probe(), drive this many "
+                             "acknowledged-data transmissions on the "
+                             "busiest tracked channel and report the "
+                             "{attempts, successes, success_pct, retries} "
+                             "block [gates.ack_data] reads")
     parser.add_argument("--serial",
                         help="match a device whose serial ends with this")
     parser.add_argument(
@@ -221,6 +276,16 @@ def main() -> int:
              "/dev/ttyACM1) instead of over USB",
     )
     parser.add_argument("--baud", type=int, default=115200)
+    parser.add_argument("--pin-device", type=int, metavar="N",
+                        help="pin the power channel (device type 11) to "
+                             "this device number instead of wildcard - use "
+                             "when a real sensor of the same type is "
+                             "already in the room and would otherwise win "
+                             "the wildcard race against an intended bench "
+                             "responder (e.g. sim/)")
+    parser.add_argument("--json", metavar="FILE", nargs="?", const="-",
+                        help="write the ack_data block as JSON (to stdout "
+                             "if no file), in addition to the normal report")
     args = parser.parse_args()
 
     dev = open_device(True, serial=args.serial, port=args.port,
@@ -250,7 +315,11 @@ def main() -> int:
     print(f"\n[2/5] opening {len(PROFILES)} channels")
     opened = []
     for ch, dev_type, period, label in PROFILES:
-        if open_channel(dev, reader, ch, dev_type, period, label):
+        pin = args.pin_device if (args.pin_device and dev_type == 11) else 0
+        if pin:
+            label = f"{label}, pinned to #{pin}"
+        if open_channel(dev, reader, ch, dev_type, period, label,
+                        device_number=pin):
             print(f"  OK: channel {ch} - {label}")
             opened.append(ch)
         else:
@@ -306,9 +375,21 @@ def main() -> int:
                   key=lambda ch: per_channel[ch], reverse=True)
     target = live[0] if live else None
 
+    ack_block = None
     if target is None:
         print("  SKIPPED: nothing paired, so there is no one to acknowledge")
         print("           (turn on a sensor and rerun to exercise this)")
+    elif args.attempts:
+        print(f"  sending {args.attempts} FE-C basic resistance messages on "
+              f"channel {target} ({per_channel[target]} broadcasts heard)")
+        ack_block = ack_count(dev, reader, target, args.attempts)
+        outcomes = ack_block.pop("_outcomes")
+        print(f"  {ack_block['successes']}/{ack_block['attempts']} "
+              f"acknowledged ({ack_block['success_pct']:.1f} %)")
+        print("  outcomes: " + ", ".join(
+            f"{name} x{count}" for name, count in sorted(outcomes.items())))
+        if ack_block["success_pct"] < 99.0:
+            failures.append("acknowledged data")
     else:
         print(f"  sending FE-C basic resistance on channel {target} "
               f"({per_channel[target]} broadcasts heard)")
@@ -352,6 +433,15 @@ def main() -> int:
         print(f"  OK: reached the stack ({verdict})")
 
     close_device(dev)
+
+    if ack_block is not None and args.json:
+        payload = json.dumps(ack_block, indent=2)
+        if args.json == "-":
+            print()
+            print(payload)
+        else:
+            with open(args.json, "w") as f:
+                f.write(payload + "\n")
 
     print()
     print(f"{len(opened)}/{len(PROFILES)} channels ran simultaneously, "

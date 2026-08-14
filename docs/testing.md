@@ -274,6 +274,70 @@ on the sdk-ant build until it passes, and the switchover is a recorded decision
 in [`decisions/0001-backend-selection-and-release-default.md`](decisions/0001-backend-selection-and-release-default.md),
 not a drift.
 
+### CC26xx coexistence build arms
+
+The nRF pattern is direct / [`gate.conf`](../gate.conf) / [`coex.conf`](../coex.conf)
+— three builds, isolating the arbiter and then the second stack. TI needs a
+fourth, because the multi-protocol CPE patch is a confound the nRF side never
+had (see [ADR 0015](decisions/0015-cc26xx-coexistence-design.md)):
+
+| arm | fragment | contents | isolates |
+|---|---|---|---|
+| 1 | none | today: `RF_postCmd` + `rf_patch_cpe_prop` | the floor |
+| 2 | [`ti_patch.conf`](../ti_patch.conf) | multi-protocol patch only, still `RF_postCmd` | **the CPE patch's PHY cost** |
+| 3 | [`ti_gate.conf`](../ti_gate.conf) | arm 2 + `..._CC26XX_COEX=y` (hooks linked, `RF_scheduleCmd`), no 802.15.4 | the scheduler's cost |
+| 4 | `ti_coex.conf` (not yet written) | arm 3 + `IEEE802154` + a forked driver + a traffic peer | the neighbour's cost |
+
+```powershell
+. .\scripts\env.ps1 -NcsVersion v3.4.0
+Push-Location C:\ncs\v3.4.0
+west -z C:\ncs\v3.4.0\zephyr build -s <repo> -d <repo>\build\ti_gate `
+     -b cc26x2r1_launchxl -p always -- `
+     -DANT_RADIO=core -DRADIANT_BACKEND=cc26xx `
+     -DEXTRA_ZEPHYR_MODULES=C:/ncs/v3.4.0/modules/hal/ti `
+     -DEXTRA_CONF_FILE=ti_gate.conf
+Pop-Location
+```
+
+**`arbiter_only_max_delta_pp` is measured arm 3 against arm 2, never against
+arm 1.** Measuring against arm 1 would charge the arbiter for the patch
+swap, and the patch swap could plausibly be the larger number — every PHY
+constant in `radiant_radio_cc26xx.c` was measured under `rf_patch_cpe_prop`
+(arm 1's patch), not `rf_patch_cpe_multi_protocol` (arms 2-4's).
+
+**Arm 3 is genuinely meaningful here, more so than on nRF.** With a single
+client, `pCmdBg` in the submit hook (`radiant_radio_cc26xx_arb.c`) is our own
+previous command, so `RF_verifyGap` can refuse us where `RF_postCmd`
+structurally never could. A non-zero arm-3-vs-arm-2 delta is not
+automatically a regression — it can be the scheduler doing real work even
+with nothing to arbitrate against.
+
+**Arm 4 needs a fork, not just a conf fragment.** Zephyr's 802.15.4 driver
+for this part has no re-post path for its background receive command, so the
+first preemption ends it permanently — see ADR 0015's "Status" section for
+what that needs before `ti_coex.conf` can be written.
+
+Always check the generated `.config`, not the build log:
+
+```powershell
+Select-String build\<dir>\<app>\zephyr\.config -Pattern "^CONFIG_RADIANT_CORE_BACKEND_CC26XX"
+```
+
+#### The Phase C loss re-sweep, without editing source per rung
+
+`RX_BW_CODE`, `AA_FILTER_VALUE`, `AGC_REF_VALUE` and `RX_END_SLOP_US` in
+`radiant_radio_cc26xx.c` are each backed by a Kconfig int/hex
+(`CONFIG_RADIANT_CORE_CC26XX_RX_BW_CODE`, `..._AA_FILTER`, `..._AGC_REF`,
+`..._RX_END_SLOP_US`), defaulting to the values already measured and
+documented in each constant's own comment - a plain build is
+byte-for-byte what it was before these existed. Sweep a rung with
+`-DCONFIG_RADIANT_CORE_CC26XX_RX_END_SLOP_US=250` (etc.) on the command
+line instead of editing the source and rebuilding by hand; measure loss
+against a paced transmitter (`tools/ant_sim.py` or `tools/ant_sens.py`'s
+master, never whatever happens to be transmitting in the room - see ADR
+0014's own measurement-discipline section for why that matters) with
+`tools/ant_verify.py`.
+
 ### Tier 4 — extension interop (Phase 7)
 
 The RadiANT extensions must be provably invisible to everything that does not

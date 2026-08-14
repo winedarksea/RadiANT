@@ -647,12 +647,13 @@ the radio's own clock against 0.0120 ms). See
 | `addr_len_hw_max` | Longest address the hardware matcher itself handles. Informational — a shorter hardware match is completed in software, at the cost of more spurious wakeups and more receive current | 5 | **3** — the silicon reaches 4 (`nSwBits` is 8..32) but `nSwBits` lives in the setup command that `RF_open()` consumes and cannot be changed under a live handle, so the backend fixes it at the 3 bytes search and tracking share | 4 |
 | `max_body_len` | Largest body (bytes between address and CRC), either direction | — | — | — |
 | `phys[]`, `n_phys`, `phy_switch_us` | PHYs this build supports, most-preferred first, and what switching between two of them costs the scheduler | switch is free | one PHY; a switch would be a fresh `RF_open` | reloads a generated configuration |
-| `ramp_up_us`, `rx_to_tx_us`, `tx_to_rx_us`, `min_arm_lead_us` | The four timing budgets: transmitter ramp-up, both turnarounds, and the minimum lead an arm call needs before it fails `RADIANT_RADIO_ETIME` rather than running late | measured, antenna-referenced | **seeded, not measured** — a P4 bench item; `min_arm_lead_us` is 600 with a separate 150 µs hard floor, split after a scheduler that subtracts the advertised figure and calls immediately produced `ETIME` on every window | measured, antenna-referenced |
+| `ramp_up_us`, `rx_to_tx_us`, `tx_to_rx_us`, `min_arm_lead_us` | The four timing budgets: transmitter ramp-up, both turnarounds, and the minimum lead an arm call needs before it fails `RADIANT_RADIO_ETIME` rather than running late | measured, antenna-referenced | **seeded, not measured** — a P4 bench item; `min_arm_lead_us` is 600 with a separate 150 µs hard floor, split after a scheduler that subtracts the advertised figure and calls immediately produced `ETIME` on every window. Under `CONFIG_RADIANT_CORE_BACKEND_CC26XX_COEX`, `min_arm_lead_us` grows to ~1414 µs (a phy-switch lead) — see "TI coexistence" below | measured, antenna-referenced |
+| `min_arm_lead_in_grant_us`, `max_window_us` | The arbitrated pair: lead once a grant is already held, and a fairness bound on window length | 0 / measured under the MPSL gate | **0 / 0 outside coex** ("this backend OWNS the radio" — the two lead figures coincide, nothing bounds a window). Under coex: **600 / ~20 ms** — see "TI coexistence" below | — |
 | `time_resolution_ns` | How much of the last digit of a timestamp to believe | 1000 | **250** — the RAT is 4 MHz, measured at 4 000 244 ticks/s | 1000 |
 | `has_sync_timestamp` | Is `t_sync` a hardware capture of the address event, or an inference? | true | true — `bAppendTimestamp`, and it is good: consecutive captures came out as exact multiples of the transmitter's period with 1–18 µs of residual | — |
 | `has_rssi` | Is `rssi_dbm` populated? | true | true | — |
 | `crc_in_hw` | Is the CRC computed by hardware? | true | **false** — the sync-word matcher eats the address bytes before the CRC engine sees them, and ANT's CRC covers them. Software CRC instead, which is what keeps `crc_rx` available and `radiant_crc_repair.c` usable | conditional — see below |
-| `tx_power_min_dbm`, `tx_power_max_dbm` | Inclusive dBm range, for clamping and for the bench sweep's bounds | — | **+5 … +5** — one operating point. `txPower` is fixed at `RF_open()` time and the arm call does not read `req->power`; the field read −20 … +5 until `tools/ant_sens.py` tried to use this radio as a ladder's instrument and found nothing moved. A real range needs `RF_setTxPower()` plus a SmartRF-generated power table | — |
+| `tx_power_min_dbm`, `tx_power_max_dbm` | Inclusive dBm range, for clamping and for the bench sweep's bounds | — | **−20 … +5** — real, as of the transmit-power table landing: `apply_power()` + `radiant_cc26xx_txp[]` (provenance: Zephyr's in-tree `ieee802154_cc13xx_cc26xx.c`, not SmartRF Studio), called from the TX arm path. Used to read `+5 … +5` — one operating point, `txPower` fixed at `RF_open()` time, the arm call never reading `req->power` — until `tools/ant_sens.py` tried to use this radio as a ladder's instrument and found nothing moved; see [ADR 0014](decisions/0014-second-vendor-port-what-it-cost.md) | — |
 
 **`min_filter_hamming_bits` is new, and it is new because this part made the
 core deaf.** The nRF matches addresses with a comparator; the CC26x2 matches
@@ -720,6 +721,33 @@ more capable than the hardware certifies the bug it was written to catch.**
 ADR 0005's "32 sensors do not cost 32 windows" survives, with a corrected
 number: sixteen windows rather than four. Merging still halves the cost; it does
 not divide it by eight.
+
+### TI coexistence
+
+Selected by `CONFIG_RADIANT_CORE_BACKEND_CC26XX_COEX`, off by default. See
+[ADR 0015](decisions/0015-cc26xx-coexistence-design.md) for the full design
+and why it does not look like the nRF gate above — the short version is that
+this part has no timeslot API to sit behind; coexistence is entirely a matter
+of which RF-driver scheduling function posts a command
+(`RF_postCmd`/`RF_scheduleCmd`) and what `RFCC26XX_schedulerPolicy`'s two
+hooks decide when two clients' requests collide.
+
+Two Kconfig symbols, not one: `..._MULTI_PATCH` swaps the RF core's resident
+CPE patch to `rf_patch_cpe_multi_protocol` (mandatory once a second client
+exists — the patch is fixed for the whole power cycle, see the ADR), and
+`..._COEX` (which selects the patch symbol) additionally links
+`radiant_radio_cc26xx_arb.c` and switches every arm call to
+`RF_scheduleCmd`. Kept separate so the patch's own PHY cost is a build arm on
+its own — see `docs/testing.md`'s four-arm table.
+
+The second RF-core client is Zephyr's 802.15.4 driver (there is no BLE stack
+for this part in this NCS version, and no DMM either — see the ADR). Unlike
+the nRF side, that driver does not survive being preempted: it never re-posts
+its background receive command, so the fourth build arm needs an app-local
+fork of it (under `coex154/`, not yet written) before it can be measured
+under real contention. Until then, `..._COEX` with no second client attached
+is a real, buildable, three-arm measurement (the floor, the patch alone, the
+scheduler alone) and nothing more.
 
 ### `t_sync` — the subtlest thing in the header
 

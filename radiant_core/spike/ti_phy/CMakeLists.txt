@@ -85,3 +85,13 @@ target_sources(app PRIVATE
   ${HAL_TI_DEV}/driverlib/rfc.c
   ${HAL_TI_DEV}/rf_patches/rf_patch_cpe_prop.c
 )
+
+# D1's falsifier (docs/decisions/0015-cc26xx-coexistence-design.md): does the
+# multi-protocol CPE patch alone degrade this PHY? -DSPIKE_TI_PHY_MULTI_PATCH=1
+# swaps main.c's rf_mode to RF_MODE_MULTIPLE + rf_patch_cpe_multi_protocol.
+if(SPIKE_TI_PHY_MULTI_PATCH)
+  target_sources(app PRIVATE
+    ${HAL_TI_DEV}/rf_patches/rf_patch_cpe_multi_protocol.c
+  )
+  target_compile_definitions(app PRIVATE SPIKE_TI_PHY_MULTI_PATCH=1)
+endif()

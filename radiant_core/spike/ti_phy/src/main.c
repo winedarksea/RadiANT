@@ -70,6 +70,9 @@
 #include <driverlib/rf_prop_mailbox.h>
 #include <driverlib/rf_data_entry.h>
 #include <rf_patches/rf_patch_cpe_prop.h>
+#if defined(SPIKE_TI_PHY_MULTI_PATCH)
+#include <rf_patches/rf_patch_cpe_multi_protocol.h>
+#endif
 
 #include <ti/drivers/rf/RF.h>
 
@@ -393,8 +396,13 @@ static RF_Handle rf_handle;
  * and choosing it here would answer two questions at once.
  */
 static RF_Mode rf_mode = {
+#if defined(SPIKE_TI_PHY_MULTI_PATCH)
+	.rfMode = RF_MODE_MULTIPLE,
+	.cpePatchFxn = &rf_patch_cpe_multi_protocol,
+#else
 	.rfMode = RF_MODE_PROPRIETARY_2_4,
 	.cpePatchFxn = &rf_patch_cpe_prop,
+#endif
 };
 
 static uint32_t sync_word_for(uint16_t devnum)

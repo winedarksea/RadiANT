@@ -143,9 +143,11 @@ if ($Backend -eq 'sdk_ant') {
 # row and each one is a thing the assertions are for:
 #
 #   `radiant` overrides -RadiantBackend. nrf is not merely wrong on this part,
-#   it is unbuildable, and cc26xx does not exist until P2 of the TI port -
-#   so this row pins null, and assertion 4 then checks that null is what
-#   Kconfig landed on rather than what CMake was asked for.
+#   it is unbuildable - cc26xx is what belongs here now that the port exists
+#   (P2 onward; see docs/decisions/0014 and 0015), and assertion 4 then checks
+#   that cc26xx is what Kconfig landed on rather than what CMake was asked
+#   for. Only the base row still needs this override; the coex arms below
+#   inherit it from the base row's own $t.radiant.
 #
 #   `baud` is asserted at all. Every other target runs its ANT stream at
 #   115200 and tools/ant_probe.py defaults to it; this one runs at 57600
@@ -159,10 +161,21 @@ if ($Backend -eq 'sdk_ant') {
 #
 # Only under -Backend core: sdk_ant is Nordic-only silicon by construction and
 # a stub build here would assert nothing about the port.
+#
+# THREE ROWS, NOT ONE: the base build (arm 1, today's floor) plus the two
+# coexistence arms that do not need the 802.15.4 driver fork yet - ti_patch.conf
+# (arm 2, the CPE patch alone) and ti_gate.conf (arm 3, the scheduler hooks).
+# Arm 4 (ti_coex.conf) is not a row here until the coex154/ fork exists - see
+# docs/decisions/0015-cc26xx-coexistence-design.md's "Status" section; adding
+# it before then would build a coexistence arm with nothing to arbitrate
+# against, which is arm 3 measured twice under a different name.
 if ($Backend -eq 'core') {
     if (-not $HalTiDir) { $HalTiDir = "C:\ncs\$NcsVersion\modules\hal\ti" }
     if (Test-Path (Join-Path $HalTiDir 'zephyr\module.yml')) {
-        $targets += @{ dir='ti_launchxl'; board='cc26x2r1_launchxl'; artifact='ant_dongle_cc26x2r1_launchxl.hex'; pkg='hex'; offset=0x0; transport='UART'; conf=$null; release=$false; radiant='null'; baud=57600; modules=($HalTiDir -replace '\\', '/') }
+        $halTiModule = ($HalTiDir -replace '\\', '/')
+        $targets += @{ dir='ti_launchxl';       board='cc26x2r1_launchxl'; artifact='ant_dongle_cc26x2r1_launchxl.hex';       pkg='hex'; offset=0x0; transport='UART'; conf=$null;           release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule }
+        $targets += @{ dir='ti_launchxl_patch'; board='cc26x2r1_launchxl'; artifact='ant_dongle_cc26x2r1_launchxl_patch.hex'; pkg='hex'; offset=0x0; transport='UART'; conf='ti_patch.conf'; release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule }
+        $targets += @{ dir='ti_launchxl_gate';  board='cc26x2r1_launchxl'; artifact='ant_dongle_cc26x2r1_launchxl_gate.hex';  pkg='hex'; offset=0x0; transport='UART'; conf='ti_gate.conf';  release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule }
     } else {
         Write-Host "cc26x2r1_launchxl: skipped, no hal_ti module at $HalTiDir" -ForegroundColor DarkYellow
         Write-Host "  Run scripts\fetch_hal_ti.ps1 (NCS's west manifest will never fetch it)."
