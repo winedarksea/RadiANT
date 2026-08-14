@@ -193,8 +193,8 @@ MESG_ID_LIST_CONFIG_ID = 0x5A
 # channel 0 as a wildcard background-scan slave - the same mechanism
 # MESG_ASSIGN_CHANNEL's extended byte already reaches, one message at a time.
 # The optional synchronous-channel-packets-only byte is accepted and ignored;
-# reporting everything is a superset of the restricted subset. radiant_core
-# backend only - the capabilities reply advertises this on radiant_core and OFF
+# reporting everything is a superset of the restricted subset. radiant
+# backend only - the capabilities reply advertises this on radiant and OFF
 # elsewhere, which is why a host with the call (ANT_OpenRxScanMode) sends it
 # only there. [bridge]
 MESG_OPEN_RX_SCAN_MODE_ID = 0x5B
@@ -575,7 +575,7 @@ LIB_CONFIG_MESG_OUT_INC_DEVICE_ID = 0x80
 LIB_CONFIG_DEVICE_ID_ONLY = 0x80
 
 # Channel id + RSSI + RX timestamp, all three. What ant_verify.py asks for, and
-# what radiant_core must assemble: the timestamp is the figure the timing gate
+# what radiant must assemble: the timestamp is the figure the timing gate
 # is read against. [tools (ant_verify)]
 LIB_CONFIG_ALL_EXT_FIELDS = 0xE0
 
@@ -695,7 +695,7 @@ EVENT_RX_DATA_OVERFLOW = 0x0B
 
 # The stack has finished with the burst block it was handed and the next may
 # overwrite it. The bridge consumes this internally and never puts it on the
-# wire: a real stick frames bursts itself. If radiant_core fails to raise it
+# wire: a real stick frames bursts itself. If radiant fails to raise it
 # exactly once per accepted block, host bursts stall 1000 ms per packet.
 # [bridge, rev5.1 sec 9.5.6 + verify:sdk-ant-shim]
 EVENT_TRANSFER_NEXT_DATA_BLOCK = 0x11
@@ -879,7 +879,7 @@ MAX_SUPPORTED_ENCRYPTION_MODE = 0x02
 # ---------------------------------------------------------------------------
 
 # Channel number. Five bits - which is why 32 channels is the serial protocol's
-# natural ceiling, and why radiant_core is sized for 32 from the first line.
+# natural ceiling, and why radiant is sized for 32 from the first line.
 # Because the field is five bits wide, a header on the wire cannot express a
 # channel above 31 at all; what a burst header CAN address that the device does
 # not have is a channel above the count in byte 0 of the capabilities reply,
@@ -989,7 +989,7 @@ CAPABILITIES_LED_ENABLED = 0x01
 CAPABILITIES_EXT_MESSAGE_ENABLED = 0x02
 
 # MESG_OPEN_RX_SCAN_MODE. Reported OFF in this generated reply, which is why a
-# host that has ANT_OpenRxScanMode never sends 0x5B on this build. radiant_core
+# host that has ANT_OpenRxScanMode never sends 0x5B on this build. radiant
 # reports the bit on instead, and as of 2026-08-10 0x5B is bridged there to
 # match - see the 0x5B message row and docs/backends.md. [stub, readme]
 CAPABILITIES_SCAN_MODE_ENABLED = 0x04
@@ -1364,7 +1364,7 @@ MESSAGES = {
         "payload_len": '1..2',
         "bridged": True,
         "reply": 'MESG_RESPONSE_EVENT_ID',
-        "desc": "Background scanning. Bridged as of 2026-08-10: refuses with ANTW_CLOSE_ALL_CHANNELS unless every channel is closed, then takes over channel 0 as a wildcard background-scan slave - the same mechanism MESG_ASSIGN_CHANNEL's extended byte already reaches, one message at a time. The optional synchronous-channel-packets-only byte is accepted and ignored; reporting everything is a superset of the restricted subset. radiant_core backend only - the capabilities reply advertises this on radiant_core and OFF elsewhere, which is why a host with the call (ANT_OpenRxScanMode) sends it only there.",
+        "desc": "Background scanning. Bridged as of 2026-08-10: refuses with ANTW_CLOSE_ALL_CHANNELS unless every channel is closed, then takes over channel 0 as a wildcard background-scan slave - the same mechanism MESG_ASSIGN_CHANNEL's extended byte already reaches, one message at a time. The optional synchronous-channel-packets-only byte is accepted and ignored; reporting everything is a superset of the restricted subset. radiant backend only - the capabilities reply advertises this on radiant and OFF elsewhere, which is why a host with the call (ANT_OpenRxScanMode) sends it only there.",
     },
     0x5D: {
         "name": 'MESG_EXT_BROADCAST_DATA_ID',
@@ -1851,7 +1851,7 @@ CAPABILITY_BYTES = {
     4: ('advanced_options_2', (
         (0x01, 'CAPABILITIES_LED_ENABLED', 'MESG_ENABLE_LED_FLASH. Reported OFF here, which is why a host that has ANT_EnableLED never sends 0x68.'),
         (0x02, 'CAPABILITIES_EXT_MESSAGE_ENABLED', 'Extended output fields - the whole lib config mechanism.'),
-        (0x04, 'CAPABILITIES_SCAN_MODE_ENABLED', 'MESG_OPEN_RX_SCAN_MODE. Reported OFF in this generated reply, which is why a host that has ANT_OpenRxScanMode never sends 0x5B on this build. radiant_core reports the bit on instead, and as of 2026-08-10 0x5B is bridged there to match - see the 0x5B message row and docs/backends.md.'),
+        (0x04, 'CAPABILITIES_SCAN_MODE_ENABLED', 'MESG_OPEN_RX_SCAN_MODE. Reported OFF in this generated reply, which is why a host that has ANT_OpenRxScanMode never sends 0x5B on this build. radiant reports the bit on instead, and as of 2026-08-10 0x5B is bridged there to match - see the 0x5B message row and docs/backends.md.'),
         (0x10, 'CAPABILITIES_PROX_SEARCH_ENABLED', 'MESG_PROX_SEARCH_CONFIG.'),
         (0x20, 'CAPABILITIES_EXT_ASSIGN_ENABLED', 'The optional fourth byte of MESG_ASSIGN_CHANNEL.'),
         (0x40, 'CAPABILITIES_FS_ANTFS_ENABLED', 'ANT-FS file system.'),

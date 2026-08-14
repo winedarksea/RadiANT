@@ -99,13 +99,13 @@ DBM_LEVEL = {dbm: level for level, dbm in LEVEL_DBM.items()}
 # Raw TXPOWER register values, per part, for the fine ladder.
 #
 # Part-specific and there is no way to ask the board which part it is: per
-# radiant_core/src/radiant_radio_nrf.c, nRF52840 encodes TXPOWER as signed dBm
+# radiant/src/radiant_radio_nrf.c, nRF52840 encodes TXPOWER as signed dBm
 # (+8 = 0x08, -40 = 0xD8) while nRF54L15 encodes +8 as 0x3F and 0 as 0x18 - the
 # same byte means two different powers, with no error on the wrong one. Only
 # parts with an entry here can drive a fine ladder; the RSSI slope check below
 # catches a wrong --tx-part.
 PART_FINE_DBM = {
-    # radiant_core/src/radiant_radio_nrf.c radiant_txp_table[], which is every
+    # radiant/src/radiant_radio_nrf.c radiant_txp_table[], which is every
     # setting the part has. The register value is the dBm in two's complement.
     "nrf52840": (8, 7, 6, 5, 4, 3, 2, 0, -4, -8, -12, -16, -20, -40),
 }
@@ -130,7 +130,7 @@ def encode_power(dbm: int, part: str | None = None) -> tuple[int, int]:
             f"no TXPOWER register table for {part!r}. Known parts: "
             f"{sorted(PART_FINE_DBM)}. A raw register value guessed for the "
             f"wrong part transmits at some unrelated power with no error "
-            f"anywhere - see radiant_core/src/radiant_radio_nrf.c")
+            f"anywhere - see radiant/src/radiant_radio_nrf.c")
     if dbm not in PART_FINE_DBM[part]:
         raise ValueError(f"{part} has no {dbm} dBm setting; it has "
                          f"{sorted(PART_FINE_DBM[part])}")

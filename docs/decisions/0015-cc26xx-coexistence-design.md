@@ -51,7 +51,7 @@ anticipated this ("its equivalent is RF-driver command scheduling, not a
 timeslot API") - honouring that, coexistence here is:
 
 - **A compile-time variant inside the backend**
-  (`CONFIG_RADIANT_CORE_BACKEND_CC26XX_COEX`): one `post_op()` helper in
+  (`CONFIG_RADIANT_BACKEND_CC26XX_COEX`): one `post_op()` helper in
   `radiant_radio_cc26xx.c` that is `RF_postCmd` or `RF_scheduleCmd`. The
   non-coex path must compile to the same machine code as today - the same
   argument `radiant_radio_nrf_gate.h` makes for `gate_direct.c`, and for the
@@ -68,8 +68,8 @@ timeslot API") - honouring that, coexistence here is:
 
 ## Two Kconfig symbols, not one
 
-`RADIANT_CORE_BACKEND_CC26XX_MULTI_PATCH` (swaps `rf_patch_cpe_prop` for
-`rf_patch_cpe_multi_protocol`) and `RADIANT_CORE_BACKEND_CC26XX_COEX` (the
+`RADIANT_BACKEND_CC26XX_MULTI_PATCH` (swaps `rf_patch_cpe_prop` for
+`rf_patch_cpe_multi_protocol`) and `RADIANT_BACKEND_CC26XX_COEX` (the
 hooks, `select`ing the patch symbol above) are deliberately separate, even
 though a real 802.15.4 build always needs both. `RF_applyRfCorePatch` applies
 `cpePatchFxn` only at `RF_PHY_BOOTUP_MODE` and never re-applies it on a
@@ -191,7 +191,7 @@ neighbour silently dead, EXIT=0" - exactly the failure class ADR 0013's own
 gates were written to prevent, and with no nRF analogue (both the SoftDevice
 Controller and `nrf_802154` are built to be denied; this driver is not).
 
-`radiant_core/coex154_ti/ieee802154_cc13xx_cc26xx.c` is a verbatim vendored
+`radiant/coex154_ti/ieee802154_cc13xx_cc26xx.c` is a verbatim vendored
 copy of that driver with four marked changes: the provenance comment, `CONFIG_*`
 fallback shims for the sub-symbols that vanish with the upstream menuconfig, the
 re-post branch itself, and the `rx_active` flag that branch needs. The flag is
@@ -211,7 +211,7 @@ simply sets it to **n** and turns ours on instead - exactly one driver
 compiles, one device is registered, the devicetree node is untouched. No
 Zephyr patch, no compatible-string renaming, no re-parenting. Turning it off
 is *required* rather than merely tidy for a second reason nobody predicted:
-`radiant_core/CMakeLists.txt` compiles `driverlib/rfc.c` itself and hal_ti
+`radiant/CMakeLists.txt` compiles `driverlib/rfc.c` itself and hal_ti
 compiles it under that same symbol, so leaving it `y` is a duplicate-symbol
 link error.
 
@@ -234,11 +234,11 @@ or not anyone answers it - but the neighbour's own survival across a preemption,
 which is the entire reason the fork exists, cannot be observed here. A run
 reporting only an ANT loss figure has measured half of what the arm is for.
 
-Still unwritten, and deliberately: the `radiant_core/spike/ti_coex` measurement
+Still unwritten, and deliberately: the `radiant/spike/ti_coex` measurement
 rig the original plan calls for. It needs the same peer.
 
 **R1 is FALSIFIED - the multi-protocol patch does not degrade this PHY.**
-`radiant_core/spike/ti_phy` was built twice (a `SPIKE_TI_PHY_MULTI_PATCH`
+`radiant/spike/ti_phy` was built twice (a `SPIKE_TI_PHY_MULTI_PATCH`
 CMake option added for this, off by default - see the spike's own
 CMakeLists.txt) and run back to back against the same paced transmitter
 (`tools/ant_sim.py` on an nRF54L15 DK, device 14871, 4.0049 Hz):
@@ -249,7 +249,7 @@ CMakeLists.txt) and run back to back against the same paced transmitter
 | `rf_patch_cpe_multi_protocol` (D1) | 90 % (54/60 frames) | 0 | no dropped point; if anything more consistent across the sweep |
 
 Identical best score, zero `nRxNok` in every point of both runs. The patch
-swap costs nothing measurable on this PHY. `RADIANT_CORE_BACKEND_CC26XX_
+swap costs nothing measurable on this PHY. `RADIANT_BACKEND_CC26XX_
 MULTI_PATCH` can be relied on without re-measuring every constant in
 `radiant_radio_cc26xx.c` - the risk table's "falsified first" item is closed.
 

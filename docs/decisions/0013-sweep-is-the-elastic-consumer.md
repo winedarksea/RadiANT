@@ -5,7 +5,7 @@ Status: accepted
 
 ## Context
 
-`radiant_core` owns the RADIO peripheral outright today. Two products need it
+`radiant` owns the RADIO peripheral outright today. Two products need it
 not to: a combined USB + Thread/Matter dongle
 (`docs/radiant-bridge.md`), and a strap advertising the SIG Heart Rate Service
 while broadcasting ANT+ `0x78` (`docs/backends.md` §, "a v1 requirement, not a
@@ -50,7 +50,7 @@ stack cannot coexist is replaced by:
 1. **A tracked slot is inviolate against our own work.** Tracked RX, master TX,
    and the acknowledged-data reply that may follow either of them are reserved
    as a unit (`follow_on_us`) and are never shortened, never displaced and never
-   traded for another stack's convenience by anything `radiant_core` decides.
+   traded for another stack's convenience by anything `radiant` decides.
 2. **The second stack's slice comes out of the search sweep.** The sweep is the
    elastic consumer: it fills the gaps, it yields when the arbiter says so, and
    it takes the whole cost of coexistence.
@@ -108,7 +108,7 @@ the scheduler's model of the world true.
 
 - **The sweep gets slower on a combined build, and that is the intended cost.**
   It must be quantified rather than assumed: sets/s from
-  `CONFIG_RADIANT_CORE_SWEEP_DEBUG` with and without the second stack, in P3.
+  `CONFIG_RADIANT_SWEEP_DEBUG` with and without the second stack, in P3.
 - **`[gates.acquisition]`'s `max_absolute_s = 5.0` is now reachable by a
   deliberate design choice rather than only by a bug.** Re-acquisition of a
   known device is steered by the 16-entry, 60 s seen cache and should stay fast,

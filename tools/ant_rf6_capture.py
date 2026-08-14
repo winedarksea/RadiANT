@@ -47,7 +47,7 @@ every device in the room for the whole window.
 MESG_ASSIGN_CHANNEL's optional fourth byte, bit 0
 (EXT_PARAM_ALWAYS_SEARCH), is "background scan": the channel never locks on
 and reports every device it hears. This is what Zwift does against a stock
-dongle (captured in radiant_core/tests/api/src/test_api.c,
+dongle (captured in radiant/tests/api/src/test_api.c,
 test_a_background_scan_reports_every_device_not_only_the_first); the stock
 dongle advertises it as CAPABILITIES_EXT_ASSIGN_ENABLED.
 

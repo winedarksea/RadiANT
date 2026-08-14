@@ -7,7 +7,7 @@
 		/delete-property/ zephyr,bt-c2h-uart;
 
 		/*
-		 * The TIMER radiant_core's nrf backend owns outright, for
+		 * The TIMER radiant's nrf backend owns outright, for
 		 * -DRADIANT_BACKEND=nrf. It runs at 1 MHz forever and is what
 		 * t_sync is hardware-captured into from RADIO's ADDRESS event,
 		 * so it cannot be shared: naming it here rather than in the

@@ -168,7 +168,7 @@ distinction now matters:
   This is what protects a Garmin head unit, and it is absolute.
 - **"On the host or the gateway" was never the invariant.** It was a statement
   about where the translation happened to run in v1. A combo node running
-  `radiant_core` + OpenThread on one chip translates in exactly the same place
+  `radiant` + OpenThread on one chip translates in exactly the same place
   in the *logical* stack — above the profile decoder, below the network — and
   the fact that it is the same die changes nothing on the air.
 
@@ -641,7 +641,7 @@ with a hard timeout. That is the same rule as "binding is opt-in" from section
 >
 > - **A tracked slot is inviolate.** Tracked RX, master TX, and the
 >   acknowledged-data reply that may follow either are reserved as a unit and
->   are never shortened or displaced by anything `radiant_core` decides.
+>   are never shortened or displaced by anything `radiant` decides.
 > - **The second stack's slice comes out of the sweep**, which yields when the
 >   arbiter says so and takes the whole cost of coexistence.
 > - **The yield point is discovered, not configured.** A scan chunk is granted a
@@ -815,7 +815,7 @@ nRF5340 DK, 150 s per arm at 50 frames/s, loss over the received sequence span.
 
 | Arm | PSDU 127 (~4.25 ms) | PSDU 40 (~1.28 ms) |
 |---|---|---|
-| Bench floor — `radiant_core` not linked | 4.16 % / 5.42 % (repeat) | 2.05 % |
+| Bench floor — `radiant` not linked | 4.16 % / 5.42 % (repeat) | 2.05 % |
 | **1** — arbiter up, 0 ANT channels | 4.88 % / 4.71 % (repeat) | 1.86 % |
 | **2** — 8 masters, offsets spread | **21.78 %** | **10.47 %** |
 | 3 — 8 masters, offsets bunched | 7.23 % — **confounded, do not use** | not taken |
@@ -853,7 +853,7 @@ Three caveats that bound this result:
   scheduler that can stack coincident windows, or a different way to force
   clustering.
 - **The instrument perturbs the measurement, badly, and the figures above are
-  the quiet build.** With `CONFIG_RADIANT_CORE_SWEEP_DEBUG=y` the same arm reads
+  the quiet build.** With `CONFIG_RADIANT_SWEEP_DEBUG=y` the same arm reads
   27.9 % against 21.8 % — 6 pp of instrument — because `prj.conf` sets
   `LOG_MODE_IMMEDIATE=y` and the gate's ~1 Hz multi-hundred-byte dump is written
   synchronously in context. Recorded in `coex154/rx_ant.conf`.
@@ -998,7 +998,7 @@ Two corrections to the P4 recipe, both learned the hard way and both now in
 - **Use the `power` profile, not `heart-rate`.** `ant_verify.py` only computes
   `loss (exact)` when the transmitter's event counter never stands still, and a
   heart-rate master's counter steps per *beat*, not per message.
-- **`CONFIG_RADIANT_CORE_SWEEP_DEBUG=y` is required on the build line.** Without
+- **`CONFIG_RADIANT_SWEEP_DEBUG=y` is required on the build line.** Without
   it there is no 1 Hz gate dump and no sweep counters, and a perfectly healthy
   board looks like a hang.
 
@@ -1141,7 +1141,7 @@ had nothing to fix on the path that mattered.
   `radiant_sched_rechunk()` re-arms the identical chunk forever and the sweep
   never leaves the set — observed frozen on set 3 re-arming ~110×/s. It needs a
   bounded-denial escape regardless of what caused the denials.
-- **`radiant_core/tests/CMakeLists.txt` never listed `src/profiles/profile_rd.c`.**
+- **`radiant/tests/CMakeLists.txt` never listed `src/profiles/profile_rd.c`.**
   The RD phase added the decoder, the adapter, the test and the adapter's own
   CMake entry, but not the implementation's — so the core ztest application
   failed to link and `profile_rd`'s 25 tests had never run once. Fixed; they
@@ -1641,7 +1641,7 @@ it has no QR scan, no Home Assistant device entry, and no booleans.
 
 | Target | Matterless MQTT (out-of-band provisioning) | Full build: Matter + MQTT |
 |---|---|---|
-| nRF52840 (1 MB flash / 256 KB RAM) | Fits | **Very tight.** OpenThread plus a Matter stack already runs near the flash limit before `radiant_core`, MPSL and USB are added. Expect to trade away OTA, or need external flash the dongle form factor does not have |
+| nRF52840 (1 MB flash / 256 KB RAM) | Fits | **Very tight.** OpenThread plus a Matter stack already runs near the flash limit before `radiant`, MPSL and USB are added. Expect to trade away OTA, or need external flash the dongle form factor does not have |
 | nRF5340 | Comfortable | Comfortable — the network core runs 802.15.4 and MPSL, the application core runs Matter |
 | nRF54L15 (1.5 MB NVM / 256 KB RAM) | Comfortable | Workable, and it is the part already on this bench |
 

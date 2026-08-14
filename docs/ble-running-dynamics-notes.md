@@ -167,13 +167,13 @@ nothing but "runs on the BLE stack." A real attempt would want, roughly:
    — no APK decompilation, no firmware, no captured Garmin traffic), and
    which files may read which.
 2. A GFDI/COBS/Multi-Link framing layer — new code, unrelated to
-   `radiant_core`'s ANT framing.
+   `radiant`'s ANT framing.
 3. A protobuf-varint encoder for `RunningMetrics.Dynamics` — small, and it
    can share `struct profile_rd_metrics` as input.
 4. The twelve-step handshake as an explicit state machine, since silent
    partial failure is the documented failure mode.
 5. A real Garmin watch (or the openrd ESP32 firmware acting as one) to test
    against — none of this is verifiable against `tests/fake_radio.c`-style
-   mocks the way `radiant_core`'s ANT+ profiles are, because the thing being
+   mocks the way `radiant`'s ANT+ profiles are, because the thing being
    proven is interoperability with hardware this project does not control the
    spec of.

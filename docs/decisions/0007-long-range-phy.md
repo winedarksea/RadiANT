@@ -20,7 +20,7 @@
 
 ## Context
 
-`radiant_core`'s link-layer correctness work is finished. What is left that can
+`radiant`'s link-layer correctness work is finished. What is left that can
 still move the numbers is sensitivity, and the largest lever available in
 software — by a wide margin, and without touching the hardware items that are
 out of scope by decision — is the Bluetooth LE Coded PHY.
@@ -297,7 +297,7 @@ answering `MESG_VERSION` with `BOK02.01.00`) and used as the stock receiver.
 
 ### The rig, and the control that makes it mean anything
 
-`radiant_core/spike/x1m_len/` on the nRF54L15 DK transmits **two** frames,
+`radiant/spike/x1m_len/` on the nRF54L15 DK transmits **two** frames,
 alternating, on the same radio at the same power, each at 4 Hz — both device
 type `0x60`, both 1 M GFSK, both ordinary five-byte tracking geometry, both
 `RADIANT_LEN_FIXED`, differing **only in body length**:
@@ -383,7 +383,7 @@ designed to answer "does a long frame damage a stock receiver", and it answers
 that; it does not answer "can a RadiANT receiver read a long 1 M frame", which
 has never been tested at all.
 
-Closing that gap is one run: put a `radiant_core` receiver on the same air and
+Closing that gap is one run: put a `radiant` receiver on the same air and
 show it decoding B while the stock dongle continues not to. **The ADR owed for a
 length-extended 1 M format must not be written until that has been done** —
 otherwise the format would rest on a capture that is equally consistent with the
@@ -554,7 +554,7 @@ make the scheduler's PHY budgeting dead code on the only backend that ships.
 
 ## Verification status
 
-**Deterministic, and passing** (`radiant_core/tests/src/test_lr.c`, on the
+**Deterministic, and passing** (`radiant/tests/src/test_lr.c`, on the
 nRF5340 DK via `scripts/run_ztest_hw.ps1`):
 
 - the format's geometry and the FEC-block airtime arithmetic;
@@ -586,7 +586,7 @@ rather than letting the two be confused.
 
 **`apply_format()` in `radiant_radio_nrf.c` does not apply the nRF52840's
 errata 191 workaround**, on either PHY path. Found 2026-08-11 while building the
-ladder instrument (`radiant_core/spike/phy_ladder/`), by comparison with
+ladder instrument (`radiant/spike/phy_ladder/`), by comparison with
 Nordic's own open-source Zephyr Bluetooth controller, which writes a documented
 register at `0x40001740` on every mode change into and out of the coded PHY
 (`radio_nrf52840.h`, `hal_radio_phy_mode_get()`). Public erratum, public
@@ -594,7 +594,7 @@ workaround, Apache-2.0 source already a dependency of this project — no
 clean-room concern.
 
 **Why it matters here specifically.** The nRF5340 DK cannot run this backend at
-all (its RADIO is on the network core, and `CONFIG_RADIANT_CORE_BACKEND_NRF`
+all (its RADIO is on the network core, and `CONFIG_RADIANT_BACKEND_NRF`
 depends on `SOC_COMPATIBLE_NRF52X || SOC_COMPATIBLE_NRF54LX`, neither of which
 an nRF5340 sets — it falls back to the **null** backend silently). So the only
 two radiant-capable radios on this bench are the nRF54L15 DK and the **nRF52840**

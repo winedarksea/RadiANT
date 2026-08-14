@@ -7,7 +7,7 @@
  * a sensor: the only thing leaving the board is the log on the console UART,
  * which the board's own devicetree already provides.
  *
- * What IS shared is the one line radiant_core's nrf backend cannot start
+ * What IS shared is the one line radiant's nrf backend cannot start
  * without.
  */
 

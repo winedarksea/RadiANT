@@ -10,7 +10,7 @@
 / {
 	chosen {
 		/*
-		 * The TIMER radiant_core's nrf backend owns outright, for
+		 * The TIMER radiant's nrf backend owns outright, for
 		 * -DANT_RADIO=core -DRADIANT_BACKEND=nrf. Identical in purpose
 		 * and in choice to the Feather's, which carries the long form
 		 * of this comment: the backend needs FIVE compare/capture

@@ -22,7 +22,7 @@
     every real failure this phase is chasing.
 
     So the .config is READ BACK after every build and the script throws if
-    CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL is not y. Checking the command
+    CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL is not y. Checking the command
     line is not checking the build.
 
     ASCII only, deliberately: Windows PowerShell 5.1 reads .ps1 files as ANSI
@@ -77,7 +77,7 @@ foreach ($arm in $arms) {
 
     $buildArgs = @('-z', $zephyr, 'build', '-s', $repo, '-d', $dir, '-b', $Board)
     if ($Pristine) { $buildArgs += @('-p', 'always') }
-    # CONFIG_RADIANT_CORE_SWEEP_DEBUG IS PART OF THE MEASUREMENT, NOT A DEBUG
+    # CONFIG_RADIANT_SWEEP_DEBUG IS PART OF THE MEASUREMENT, NOT A DEBUG
     # AID, and leaving it off is why the first smoke run produced a board that
     # booted perfectly and reported nothing for 45 s.
     #
@@ -92,7 +92,7 @@ foreach ($arm in $arms) {
     # because it is a property of THIS sitting, not of the images: a shipping
     # thread.conf build should not carry a once-a-second log line.
     $buildArgs += @('--', '-DANT_RADIO=core', '-DRADIANT_BACKEND=nrf',
-                    '-DCONFIG_RADIANT_CORE_SWEEP_DEBUG=y',
+                    '-DCONFIG_RADIANT_SWEEP_DEBUG=y',
                     "-DEXTRA_CONF_FILE=$($arm.Conf)")
     if ($ExtraCmake.Count) { $buildArgs += $ExtraCmake }
 
@@ -128,9 +128,9 @@ foreach ($arm in $arms) {
     }
 
     $want = @{
-        'CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL' = 'y'
-        'CONFIG_RADIANT_CORE_BACKEND_NRF'           = 'y'
-        'CONFIG_RADIANT_CORE_SWEEP_DEBUG'           = 'y'
+        'CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL' = 'y'
+        'CONFIG_RADIANT_BACKEND_NRF'           = 'y'
+        'CONFIG_RADIANT_SWEEP_DEBUG'           = 'y'
     }
     $bad = $false
     foreach ($k in $want.Keys) {
@@ -145,9 +145,9 @@ foreach ($arm in $arms) {
         }
     }
     # Named separately because its absence is the exact silent failure above.
-    $null_be = Select-String -Path $cfg -Pattern '^CONFIG_RADIANT_CORE_BACKEND_NULL=y'
+    $null_be = Select-String -Path $cfg -Pattern '^CONFIG_RADIANT_BACKEND_NULL=y'
     if ($null_be) {
-        Write-Host "  CONFIG_RADIANT_CORE_BACKEND_NULL=y - THIS IMAGE HAS NO RADIO" -ForegroundColor Red
+        Write-Host "  CONFIG_RADIANT_BACKEND_NULL=y - THIS IMAGE HAS NO RADIO" -ForegroundColor Red
         $bad = $true
     }
     if ($bad) { $failed += $arm.Name; continue }

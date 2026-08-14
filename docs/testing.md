@@ -62,7 +62,7 @@ cycle to find.
 
 C unit tests used to be a different story: `native_sim` does not build on
 Windows — no host C compiler, no QEMU — so `west twister` cannot run locally,
-and that was taken to mean the ztests in `radiant_core/tests/` execute only in
+and that was taken to mean the ztests in `radiant/tests/` execute only in
 CI on Linux.
 
 **That inference was wrong, and it cost the suite its first run.** The suites
@@ -126,7 +126,7 @@ need no secret at all, which is what makes the build green on a fork.
 
 ## The four verification tiers
 
-The tiers exist to answer one question: *is `radiant_core` a faithful replacement
+The tiers exist to answer one question: *is `radiant` a faithful replacement
 for `libant.a`?* They are ordered by what they cost to run, so a divergence is
 found by the cheapest tier that can see it.
 
@@ -175,7 +175,7 @@ comparison in [`backends.md`](backends.md). Baselines commit to
 
 Per-phase functional gates use the tools above, in this order:
 `ant_probe.py` → `ant_scan.py` → `ant_verify.py` against `sim/` → `ant_sim.py`
-driving `radiant_core` as a sensor, received by the sdk-ant dongle →
+driving `radiant` as a sensor, received by the sdk-ant dongle →
 `ant_session.py` for ack/burst and eight channels → `ant_features.py` as the
 conformance gate.
 
@@ -269,7 +269,7 @@ this part gets the same fix nRF52840 did.
 
 Zwift pairs a power meter, an HRM and a controllable trainer, and holds a
 30-minute ride with resistance changes taking effect. Not automatable, and it
-is the gate for making `radiant_core` the release default. Release artifacts stay
+is the gate for making `radiant` the release default. Release artifacts stay
 on the sdk-ant build until it passes, and the switchover is a recorded decision
 in [`decisions/0001-backend-selection-and-release-default.md`](decisions/0001-backend-selection-and-release-default.md),
 not a drift.
@@ -286,7 +286,7 @@ had (see [ADR 0015](decisions/0015-cc26xx-coexistence-design.md)):
 | 1 | none | today: `RF_postCmd` + `rf_patch_cpe_prop` | the floor |
 | 2 | [`ti_patch.conf`](../ti_patch.conf) | multi-protocol patch only, still `RF_postCmd` | **the CPE patch's PHY cost** |
 | 3 | [`ti_gate.conf`](../ti_gate.conf) | arm 2 + `..._CC26XX_COEX=y` (hooks linked, `RF_scheduleCmd`), no 802.15.4 | the scheduler's cost |
-| 4 | [`ti_coex.conf`](../ti_coex.conf) **+ [`ti_coex.overlay`](../ti_coex.overlay)** | arm 3 + `IEEE802154` + the forked driver in `radiant_core/coex154_ti/` | the neighbour's cost |
+| 4 | [`ti_coex.conf`](../ti_coex.conf) **+ [`ti_coex.overlay`](../ti_coex.overlay)** | arm 3 + `IEEE802154` + the forked driver in `radiant/coex154_ti/` | the neighbour's cost |
 
 ```powershell
 . .\scripts\env.ps1 -NcsVersion v3.4.0
@@ -317,7 +317,7 @@ easy to lose silently:
 
 - Zephyr's 802.15.4 driver for this part has no re-post path for its background
   receive command, so the first preemption ends 802.15.4 reception permanently.
-  `radiant_core/coex154_ti/ieee802154_cc13xx_cc26xx.c` is a vendored copy with
+  `radiant/coex154_ti/ieee802154_cc13xx_cc26xx.c` is a vendored copy with
   that re-post added. `ti_coex.conf` sets `CONFIG_IEEE802154_CC13XX_CC26XX=n`
   so that exactly one of the two compiles — leaving it `y` is a
   duplicate-symbol link error on `driverlib/rfc.c`, which is the good case.
@@ -338,7 +338,7 @@ Always check the generated `.config`, not the build log:
 
 ```powershell
 Select-String build\<dir>\<app>\zephyr\.config `
-    -Pattern "^CONFIG_RADIANT_CORE_BACKEND_CC26XX|^CONFIG_RADIANT_CORE_COEX154|^CONFIG_IEEE802154_CC13XX_CC26XX="
+    -Pattern "^CONFIG_RADIANT_BACKEND_CC26XX|^CONFIG_RADIANT_COEX154|^CONFIG_IEEE802154_CC13XX_CC26XX="
 ```
 
 #### Flashing the LaunchXL: the backchannel goes silent, and it is not a hang
@@ -370,11 +370,11 @@ symptom deliberately.
 
 `RX_BW_CODE`, `AA_FILTER_VALUE`, `AGC_REF_VALUE` and `RX_END_SLOP_US` in
 `radiant_radio_cc26xx.c` are each backed by a Kconfig int/hex
-(`CONFIG_RADIANT_CORE_CC26XX_RX_BW_CODE`, `..._AA_FILTER`, `..._AGC_REF`,
+(`CONFIG_RADIANT_CC26XX_RX_BW_CODE`, `..._AA_FILTER`, `..._AGC_REF`,
 `..._RX_END_SLOP_US`), defaulting to the values already measured and
 documented in each constant's own comment - a plain build is
 byte-for-byte what it was before these existed. Sweep a rung with
-`-DCONFIG_RADIANT_CORE_CC26XX_RX_END_SLOP_US=250` (etc.) on the command
+`-DCONFIG_RADIANT_CC26XX_RX_END_SLOP_US=250` (etc.) on the command
 line instead of editing the source and rebuilding by hand; measure loss
 against a paced transmitter (`tools/ant_sim.py` or `tools/ant_sens.py`'s
 master, never whatever happens to be transmitting in the room - see ADR
@@ -427,7 +427,7 @@ survives it:
 - **A keyed RadiANT receiver re-acquires with no host intervention.** It
   wildcard-searches the device type, hears the returning node under its new
   number, and confirms identity by whether `X_AUTH` verifies — not by the
-  number. `radiant_core/tests/src/test_sec.c` asserts this against the mock, so
+  number. `radiant/tests/src/test_sec.c` asserts this against the mock, so
   the bench run is confirming on air what is already regression-tested; and the
   negative half is asserted there too, because a receiver that verified whatever
   it heard would "re-acquire" the first stranger to walk past.
@@ -453,7 +453,7 @@ claims a mock cannot make.
 ```
 west build app -b adafruit_feather_nrf52840/nrf52840/uf2 -p always \
   -- "-DANT_RADIO=core" "-DRADIANT_BACKEND=nrf" "-DEXTRA_CONF_FILE=security.conf"
-grep CONFIG_RADIANT_CORE_BACKEND_NRF= build/zephyr/.config
+grep CONFIG_RADIANT_BACKEND_NRF= build/zephyr/.config
 ```
 
 `-DANT_RADIO=core` alone has silently produced the inert backend before, and a

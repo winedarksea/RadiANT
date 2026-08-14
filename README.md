@@ -248,7 +248,7 @@ files in `boards/` are one `.conf` and one `.overlay` each.
 | Path | Purpose |
 |---|---|
 | `src/` | The dongle firmware — the bridge, the transports, the USB class |
-| `radiant_core/` | The clean-room ANT-compatible link layer, as a Zephyr module: `include/radiant_core/` is its public surface, `Kconfig` selects its HAL backend, and `tests/` runs under ztest in CI as a standalone application that consumes the module the way any third party would |
+| `radiant/` | The clean-room ANT-compatible link layer, as a Zephyr module: `include/radiant/` is its public surface, `Kconfig` selects its HAL backend, and `tests/` runs under ztest in CI as a standalone application that consumes the module the way any third party would |
 | `protocol/` | `ant_wire.yaml`, the single source of truth for protocol constants. `scripts/gen_ant_wire.py` generates `src/ant_wire.h`, `tools/ant_wire.py` and a marked region of the protocol doc from it |
 | `tools/` | Host-side Python: probe, scan, session, bench, features, sim, verify, and the `test_*.py` that run in CI |
 | `sim/` | Standalone ANT+ sensor firmware for the nRF54L15 DK. Not a dongle build — it is the reference transmitter every bench measurement is made against |

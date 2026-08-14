@@ -37,7 +37,7 @@ HAPPENS WHILE A CHANNEL IS OPEN:
 This module is the provisioning half. It has no radio in it: a device number is
 set by the host (MESG_SET_CHANNEL_ID) or by the node application, so the tiers
 are a rule about how that number is CHOSEN, not a protocol feature. Nothing in
-radiant_core implements them and nothing needs to.
+radiant implements them and nothing needs to.
 
 Standard library only, and `secrets` rather than `random`, because a device
 number generated from a seeded PRNG in a shipped provisioning script is a

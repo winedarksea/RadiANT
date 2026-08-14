@@ -7,9 +7,9 @@
 
 Outputs:
 
-    radiant_core/include/radiant_core/radiant_wire.h
+    radiant/include/radiant/radiant_wire.h
                                     RADIANT_WIRE_* macros - the module's own
-                                    copy, so radiant_core never has to reach
+                                    copy, so radiant never has to reach
                                     outside itself for a wire constant
     src/ant_wire.h                 ANTW_* macros for the firmware, now a thin
                                     alias of radiant_wire.h's definitions
@@ -67,7 +67,7 @@ except ImportError:  # pragma: no cover - user-facing guidance
 ROOT = Path(__file__).resolve().parent.parent
 SPEC_PATH = ROOT / "protocol" / "ant_wire.yaml"
 HEADER_PATH = ROOT / "src" / "ant_wire.h"
-RADIANT_WIRE_HEADER_PATH = ROOT / "radiant_core" / "include" / "radiant_core" / "radiant_wire.h"
+RADIANT_WIRE_HEADER_PATH = ROOT / "radiant" / "include" / "radiant" / "radiant_wire.h"
 PYTHON_PATH = ROOT / "tools" / "ant_wire.py"
 DOC_PATH = ROOT / "docs" / "ant-serial-protocol.md"
 
@@ -106,17 +106,17 @@ solves is a C preprocessor problem, and Python already has module namespaces:
 makes converting the five tools a matter of deleting a local definition and
 adding an import, with no renaming at all.
 
-Every ANTW_* name below is now an alias of radiant_core's own
-RADIANT_WIRE_* definition (radiant_core/include/radiant_core/radiant_wire.h) -
+Every ANTW_* name below is now an alias of radiant's own
+RADIANT_WIRE_* definition (radiant/include/radiant/radiant_wire.h) -
 not a second, independently-generated copy of the same value. That is what
-lets radiant_core reach no path outside itself for a wire constant while this
+lets radiant reach no path outside itself for a wire constant while this
 file, and every ANTW_* call site in this application, stays untouched."""
 
 MODULE_RATIONALE = """\
-Why this header exists inside radiant_core, generated separately from
+Why this header exists inside radiant, generated separately from
 src/ant_wire.h
 
-radiant_core is a Zephyr module meant to be dropped into a project with
+radiant is a Zephyr module meant to be dropped into a project with
 nothing else from this repository on its include path - see
 docs/decisions/0002-clean-room-policy.md and the module's own README. Before
 this header existed, every module source that needed a wire constant reached
@@ -397,7 +397,7 @@ def render_wire_header(
 
     Two callers, two very different files from the same walk of `spec`:
 
-      alias_of=None       radiant_core/include/radiant_core/radiant_wire.h,
+      alias_of=None       radiant/include/radiant/radiant_wire.h,
                            the canonical definitions, RADIANT_WIRE_* named.
       alias_of="RADIANT_WIRE"
                            src/ant_wire.h, ANTW_* named, every #define a
@@ -434,7 +434,7 @@ def render_wire_header(
     add("#define %s" % guard)
     add("")
     if alias_of:
-        add("#include <radiant_core/radiant_wire.h>")
+        add("#include <radiant/radiant_wire.h>")
     else:
         add("#include <stdint.h>")
     add("")
@@ -1251,7 +1251,7 @@ def render_doc_region(spec: dict) -> str:
         "**The rule for consuming these: an unresolved constant may never "
         "appear in a file that builds without sdk-ant.** `ant_radio_sdk_ant.c` "
         "may `#define` it from sdk-ant, because sdk-ant is present by "
-        "construction there. `ant_radio_stub.c` and `radiant_core/**` may not, "
+        "construction there. `ant_radio_stub.c` and `radiant/**` may not, "
         "because the whole point of those builds is that sdk-ant is absent. "
         "Where the value never reaches the wire in a direction we originate, a "
         "file-local substitute is correct and the `Blocks` column says so; "
@@ -1350,9 +1350,9 @@ def main() -> int:
         RADIANT_WIRE_HEADER_PATH: render_wire_header(
             spec,
             prefix_name="RADIANT_WIRE",
-            guard="RADIANT_CORE_RADIANT_WIRE_H_",
+            guard="RADIANT_RADIANT_WIRE_H_",
             title_lines=[
-                "ANT serial protocol wire constants, generated for radiant_core's",
+                "ANT serial protocol wire constants, generated for radiant's",
                 "own internal use - see src/ant_wire.h for the application-facing",
                 "ANTW_* names these values are aliased under.",
                 "Source of truth: protocol/ant_wire.yaml",

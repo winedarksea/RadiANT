@@ -2,7 +2,7 @@
 #
 # Every RadiANT application (the dongle, strap and, later, dongle_thread and
 # dongle_ti) needs to make the same two decisions before find_package(Zephyr):
-# which HAL backend radiant_core links, and whether a value handed to
+# which HAL backend radiant links, and whether a value handed to
 # sysbuild's outer image (`west build ... -- -DRADIANT_BACKEND=nrf`) actually
 # reaches this inner one. Both used to be copy-pasted per app; this file is
 # the one implementation, included by each app's CMakeLists.txt before its own
@@ -76,9 +76,9 @@ function(radiant_sysbuild_value var out)
   endforeach()
 endfunction()
 
-# ── Which radiant_core HAL backend ───────────────────────────────────────────
+# ── Which radiant HAL backend ───────────────────────────────────────────
 #
-# Appends radiant_core to ZEPHYR_EXTRA_MODULES and resolves RADIANT_BACKEND
+# Appends radiant to ZEPHYR_EXTRA_MODULES and resolves RADIANT_BACKEND
 # (null, nrf or cc26xx), writing the Kconfig fragment text that selects it
 # into `conf_out` in the caller's scope. The caller decides what to do with
 # that text - the dongle app embeds it inside a larger generated fragment
@@ -106,26 +106,26 @@ function(radiant_select_backend module_dir default_backend conf_out)
   radiant_sysbuild_value(RADIANT_BACKEND RADIANT_BACKEND_SYSBUILD)
   if(RADIANT_BACKEND_SYSBUILD)
     set(RADIANT_BACKEND "${RADIANT_BACKEND_SYSBUILD}" CACHE STRING
-        "radiant_core HAL backend: null, nrf or cc26xx" FORCE)
+        "radiant HAL backend: null, nrf or cc26xx" FORCE)
   else()
     set(RADIANT_BACKEND "${default_backend}" CACHE STRING
-        "radiant_core HAL backend: null (refuses every arm), nrf (the RADIO) or cc26xx (TI's RF core)")
+        "radiant HAL backend: null (refuses every arm), nrf (the RADIO) or cc26xx (TI's RF core)")
   endif()
   set_property(CACHE RADIANT_BACKEND PROPERTY STRINGS null nrf cc26xx)
 
   if(RADIANT_BACKEND STREQUAL "null")
-    set(_conf "CONFIG_RADIANT_CORE_BACKEND_NULL=y")
+    set(_conf "CONFIG_RADIANT_BACKEND_NULL=y")
   elseif(RADIANT_BACKEND STREQUAL "nrf")
-    set(_conf "CONFIG_RADIANT_CORE_BACKEND_NRF=y")
+    set(_conf "CONFIG_RADIANT_BACKEND_NRF=y")
   elseif(RADIANT_BACKEND STREQUAL "cc26xx")
-    set(_conf "CONFIG_RADIANT_CORE_BACKEND_CC26XX=y")
+    set(_conf "CONFIG_RADIANT_BACKEND_CC26XX=y")
   else()
     message(FATAL_ERROR
       "radiant: RADIANT_BACKEND='${RADIANT_BACKEND}' is not a backend.\n"
       "  null    the lifecycle and the clock are real; every arm is refused.\n"
       "  nrf     the RADIO, one TIMER and four (D)PPI channels, owned\n"
       "          outright. Receives AND transmits - see\n"
-      "          radiant_core/src/radiant_radio_nrf.c.\n"
+      "          radiant/src/radiant_radio_nrf.c.\n"
       "  cc26xx  TI's RF core in proprietary mode, on CC13x2/CC26x2. Needs\n"
       "          the hal_ti module - see scripts/fetch_hal_ti.ps1.\n"
       "Pass one with -DRADIANT_BACKEND=<value>.")
@@ -142,7 +142,7 @@ endfunction()
 # to the choice default. Zephyr prints a warning about that among a hundred
 # others and carries on.
 #
-# It is not hypothetical and it is not cheap. RADIANT_CORE_BACKEND_NRF used to
+# It is not hypothetical and it is not cheap. RADIANT_BACKEND_NRF used to
 # depend on SOC_SERIES_NRF52X || SOC_SERIES_NRF54LX; Zephyr 4.4 renamed both, so
 # every -DRADIANT_BACKEND=nrf build on NCS v3.4.0 silently compiled the null
 # backend - an image that enumerates, answers the host, runs every state machine
@@ -161,22 +161,22 @@ endfunction()
 # `label` names the app in the error message, so it points at what was built.
 function(radiant_assert_backend label)
   string(TOUPPER "${RADIANT_BACKEND}" RADIANT_BACKEND_UPPER)
-  if(NOT CONFIG_RADIANT_CORE_BACKEND_${RADIANT_BACKEND_UPPER})
+  if(NOT CONFIG_RADIANT_BACKEND_${RADIANT_BACKEND_UPPER})
     # Which one Kconfig did land on, so the message names the image that was
     # actually built rather than only the one that was not.
     set(RADIANT_BACKEND_GOT "none at all")
     foreach(_cand NULL NRF CC26XX NONE)
-      if(CONFIG_RADIANT_CORE_BACKEND_${_cand})
-        set(RADIANT_BACKEND_GOT "CONFIG_RADIANT_CORE_BACKEND_${_cand}")
+      if(CONFIG_RADIANT_BACKEND_${_cand})
+        set(RADIANT_BACKEND_GOT "CONFIG_RADIANT_BACKEND_${_cand}")
       endif()
     endforeach()
     message(FATAL_ERROR
       "${label}: -DRADIANT_BACKEND=${RADIANT_BACKEND} was asked for and "
       "Kconfig did not select it.\n"
-      "  CONFIG_RADIANT_CORE_BACKEND_${RADIANT_BACKEND_UPPER} is unset; "
+      "  CONFIG_RADIANT_BACKEND_${RADIANT_BACKEND_UPPER} is unset; "
       "Kconfig chose ${RADIANT_BACKEND_GOT} instead, and if that is the null "
       "backend then nothing would go on the air.\n"
-      "  Almost always an unmet `depends on` in radiant_core/Kconfig for this "
+      "  Almost always an unmet `depends on` in radiant/Kconfig for this "
       "board or this SDK. For nrf, check SOC_COMPATIBLE_NRF52X / "
       "SOC_COMPATIBLE_NRF54LX and !BT in this build's .config. For cc26xx, "
       "check SOC_SERIES_CC13X2_CC26X2 - that symbol has no SOC_COMPATIBLE_* "

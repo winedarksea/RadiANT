@@ -1231,7 +1231,7 @@ def decode_common_82(payload: bytes) -> dict:
 #
 # Framing lives here; cryptography does not. Every function below takes/
 # returns tag bytes only - tools/radiant_crypto.py computes them, mirrored by
-# radiant_core/src/radiant_sec_compat.c. This module imports nothing from
+# radiant/src/radiant_sec_compat.c. This module imports nothing from
 # either.
 #
 # Two page numbers are allocated; 0x79 gets neither, permanently - it has no
@@ -1948,7 +1948,7 @@ def tlm_code_for_width(bits: int) -> int:
 # The MSB-first bit packer
 #
 # Twin of src/profiles/profile_bits.c; vectors in tools/test_ant_pages.py are
-# shared with radiant_core/tests/src/test_profiles.c.
+# shared with radiant/tests/src/test_profiles.c.
 #
 # Section 6: bit packing is MSB-first, both across bytes and within a value's
 # width - deliberately the opposite of every other (byte-aligned,

@@ -3,7 +3,7 @@
 
 """compat-C5's gate: the C compat master emits byte-exact ANT+ plus two pages.
 
-`radiant_core/tests/src/test_profile_compat.c` drives `src/profiles/profile_hr.c`
+`radiant/tests/src/test_profile_compat.c` drives `src/profiles/profile_hr.c`
 and `src/profiles/profile_power.c` on a DK and prints every transmitted message
 as a `.antcap` line. Those captures are committed to `tools/vectors/`, and this
 file decodes them with `tools/ant_pages.py` - written independently, from the
@@ -46,7 +46,7 @@ TOOLS = os.path.dirname(os.path.abspath(__file__))
 VECTORS = os.path.join(TOOLS, "vectors")
 SRC_PROFILES = os.path.join(os.path.dirname(TOOLS), "src", "profiles")
 
-# Pinned in radiant_core/tests/src/test_profile_compat.c; must agree or
+# Pinned in radiant/tests/src/test_profile_compat.c; must agree or
 # nothing verifies. Also ant_sim's DEFAULT_COMPAT_ROOT, so a C capture and a
 # simulator capture are two streams under one key.
 ROOT = bytes(range(16))
@@ -416,7 +416,7 @@ class TestTheBoundary(unittest.TestCase):
     a key ever appears there the reason it must not be is three documents
     away. The include closure is checked too (the stronger half):
     profile_compat.h names no radiant_sec type, so these files do not reach
-    a radiant_core header even transitively.
+    a radiant header even transitively.
     """
 
     PROFILE_FILES = ("profile_hr.c", "profile_hr.h", "profile_power.c",
@@ -435,14 +435,14 @@ class TestTheBoundary(unittest.TestCase):
                                      f"{name}:{lineno} names radiant_sec "
                                      f"outside a comment")
 
-    def test_no_profile_module_includes_a_radiant_core_header(self):
+    def test_no_profile_module_includes_a_radiant_header(self):
         for name in self.PROFILE_FILES:
             path = os.path.join(SRC_PROFILES, name)
             with open(path, encoding="utf-8") as handle:
                 includes = [line for line in handle
                             if line.lstrip().startswith("#include")]
             for line in includes:
-                self.assertNotIn("radiant_core/", line,
+                self.assertNotIn("radiant/", line,
                                  f"{name} includes {line.strip()}")
 
     def test_profile_compat_is_the_one_file_that_does(self):
@@ -450,7 +450,7 @@ class TestTheBoundary(unittest.TestCase):
         with open(os.path.join(SRC_PROFILES, "profile_compat.c"),
                   encoding="utf-8") as handle:
             text = handle.read()
-        self.assertIn("#include <radiant_core/radiant_sec_compat.h>", text)
+        self.assertIn("#include <radiant/radiant_sec_compat.h>", text)
         self.assertIn("radiant_sec_compat_tx_attest", text)
 
         with open(os.path.join(SRC_PROFILES, "profile_compat.h"),
@@ -458,9 +458,9 @@ class TestTheBoundary(unittest.TestCase):
             header = handle.read()
         for line in header.splitlines():
             if line.lstrip().startswith("#include"):
-                self.assertNotIn("radiant_core/", line,
+                self.assertNotIn("radiant/", line,
                                  "profile_compat.h must not export a "
-                                 "radiant_core header to its includers")
+                                 "radiant header to its includers")
 
 
 if __name__ == "__main__":

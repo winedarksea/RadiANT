@@ -22,7 +22,7 @@ same gap:
 
 - **The epoch authority is the host.** No transform enables until `0xF3` has
   advanced the epoch, and `radiant_sec_set_epoch()` refuses an epoch <= the
-  current one. NVM epoch ratcheting inside `radiant_core` is explicitly deferred
+  current one. NVM epoch ratcheting inside `radiant` is explicitly deferred
   (`../radiant-security.md` section 3.5).
 - **Pairing randomness comes from the host.** `radiant_sec_pair_set_scalar()`
   takes 32 bytes over `0xF5` because "no entropy driver, no PSA, no CRACEN, on
@@ -63,8 +63,8 @@ one kind of that.
    `../radiant-security.md` section 3.5 deferred. It is reopened as a decision,
    not smuggled in as an implementation detail. See below for why it is cheaper
    than the version that was deferred.
-7. **The counters live in the node application, not in `radiant_core`.**
-   `radiant_core` still only ever receives an epoch through its existing API.
+7. **The counters live in the node application, not in `radiant`.**
+   `radiant` still only ever receives an epoch through its existing API.
 
 ```
 boot_counter    u32 in NVM, +1 at every boot, never reset
@@ -118,15 +118,15 @@ never reissue an epoch — enforceable by the party that actually owns it.
 
 ## Why this is cheaper than the ratcheting that was deferred
 
-The deferred proposal was an NVM ratchet inside `radiant_core`, written per
+The deferred proposal was an NVM ratchet inside `radiant`, written per
 epoch. Two things make this one different, and they are the reason it is
 acceptable now when that one was not:
 
 | | Deferred version | This decision |
 |---|---|---|
 | Write frequency | per epoch | **once per boot, once per pairing window** |
-| Where it lives | inside `radiant_core` | **in the node application** |
-| What `radiant_core` learns | a persistence policy | nothing — it still receives an epoch through the existing API |
+| Where it lives | inside `radiant` | **in the node application** |
+| What `radiant` learns | a persistence policy | nothing — it still receives an epoch through the existing API |
 | Flash wear | proportional to session length | proportional to power cycles |
 
 Write frequency is the whole argument. A strap that is worn twice a day for ten
@@ -138,7 +138,7 @@ implementation phase, not to assert here — but the ratio between the two desig
 is not in doubt.
 
 Location is the second argument and it protects an architectural property rather
-than a budget. `radiant_core` has one job at this boundary: it is told an epoch
+than a budget. `radiant` has one job at this boundary: it is told an epoch
 and it refuses one that has not advanced. Putting persistence *inside* it would
 make every consumer inherit a flash dependency, a storage backend and a failure
 mode, to serve one class of node. The node application already owns its own NVM

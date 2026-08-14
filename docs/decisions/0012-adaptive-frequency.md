@@ -3,7 +3,7 @@
 - **Status:** the mechanism stands; **its stated motivation is REFUTED on this bench, 2026-08-11** — the gate was run and failed. See *What was measured*, which replaces the old *What is not measured*. Do not cite this record's Context section as evidence for anything until that section is reconciled.
 - **Date:** 2026-08-11
 - **Builds:** [0005](0005-extension-inside-ant-plus.md) axis 5, and **corrects one sentence of it**
-- **Depends on:** [0002](0002-clean-room-policy.md) (read scope), [0005](0005-extension-inside-ant-plus.md) (the extension axes and the merged RX window), RF-4's channel-quality map (`radiant_core/src/radiant_chanmap.c`), RF-5a's descriptor schedule block
+- **Depends on:** [0002](0002-clean-room-policy.md) (read scope), [0005](0005-extension-inside-ant-plus.md) (the extension axes and the merged RX window), RF-4's channel-quality map (`radiant/src/radiant_chanmap.c`), RF-5a's descriptor schedule block
 - **Related:** [0007](0007-long-range-phy.md) — the other extension axis, which crossed the same compatibility boundary and set the discipline this record follows
 
 > **Provenance.** Clean-room. Written from this project's own RF plan, its prior
@@ -107,7 +107,7 @@ choose wrongly:
   this admits the move the feature exists for and refuses the ones that are noise
   in the measurement.
 
-With `CONFIG_RADIANT_CORE_ED_SCAN` off, the map's accessor is a no-op inline that
+With `CONFIG_RADIANT_ED_SCAN` off, the map's accessor is a no-op inline that
 reports nothing, so the node-side path returns "no data" and the node never
 moves. That is the receiver-side case arriving at the right answer by
 construction rather than by a special case.
@@ -154,7 +154,7 @@ slot before the move: applied there it pushes the move one quantum further out,
 and the next announcement does it again, and the node announces forever and never
 leaves. On a bench that is "adaptive frequency does not work" with nothing in any
 log. `profile_freq.c` declines to announce once `move_at <= msgs + 1`, and both
-`radiant_core/tests/src/test_freq.c` and `tools/test_ant_pages.py` pin it.
+`radiant/tests/src/test_freq.c` and `tools/test_ant_pages.py` pin it.
 
 **What is deliberately not borrowed:**
 
@@ -355,7 +355,7 @@ reproducible**, and only the repeat established which was which.
   attribution should be written into any record — the previous one was held with
   more confidence than it had earned.
 - The map's verdict agreeing independently with `tools/ant_sens.py` and the noise
-  histogram. Not attempted; `CONFIG_RADIANT_CORE_ED_SCAN` was off in the image
+  histogram. Not attempted; `CONFIG_RADIANT_ED_SCAN` was off in the image
   used, so `profile_freq_select()` would have returned "no data" and refused to
   move — which is this record's own designed behaviour and is why nothing was
   selected automatically for this run. **The indices above were set by hand.**
@@ -364,9 +364,9 @@ reproducible**, and only the repeat established which was which.
   to run it (2026-08-11).** That gate is "`loss_exact` unchanged with ED scanning
   on under full tracked load". But `radiant_sched_request_ed()` — the only way an
   ED slot is ever created — is called from **exactly two places, both in
-  `radiant_core/tests/src/test_ed.c`**. No application code, no API-layer code
+  `radiant/tests/src/test_ed.c`**. No application code, no API-layer code
   and no profile calls it. So building the dongle with
-  `CONFIG_RADIANT_CORE_ED_SCAN=y` compiles the slot kind, the backend entry point
+  `CONFIG_RADIANT_ED_SCAN=y` compiles the slot kind, the backend entry point
   and the map in, and then **nothing ever asks for a scan**: the image behaves
   identically on air to one built with the symbol off.
 
@@ -394,7 +394,7 @@ What *is* verified, and what it is worth:
   the countdown.
 - The wire format, byte for byte, against `tools/ant_pages.py` — two
   implementations rather than one checked against itself.
-- Both nRF SoC branches compiling with `CONFIG_RADIANT_CORE_BACKEND_NRF=y`
+- Both nRF SoC branches compiling with `CONFIG_RADIANT_BACKEND_NRF=y`
   confirmed in `.config`.
 
 **Until that session runs, this record is a mechanism with an argument and not a

@@ -12,7 +12,7 @@
  *   ant_radio_stub.c      accepts config and discards it; getters return
  *                         synthetic data. Nothing transmits. Builds with no
  *                         sdk-ant present, proving this seam holds standalone.
- *   radiant_core/         the clean-room rebuild; this file is its spec.
+ *   radiant/         the clean-room rebuild; this file is its spec.
  *
  * Everything here is prefixed antr_ because sdk-ant's error macros are
  * computed expressions, not literals - an unprefixed macro of the same name
@@ -107,7 +107,7 @@ struct antr_msg {
  *
  * IMPLEMENTED BY THE BRIDGE, NOT BY THE BACKEND - no registration call, the
  * symbol is resolved at link time, exactly one translation unit defines it
- * (src/ant_serial_bridge.c, or a test double in radiant_core/tests/).
+ * (src/ant_serial_bridge.c, or a test double in radiant/tests/).
  *
  * Contract on the caller:
  *   1. Not before antr_init() has returned 0.
@@ -173,7 +173,7 @@ void antr_on_message(const struct antr_msg *msg);
  * ANTW_TRANSFER_IN_PROGRESS - a burst stalls a second per packet with a
  * plausible-looking error instead of failing outright, which is why this is
  * unit-tested (release-event count == accepted-block count) rather than
- * caught by inspection; radiant_core/tests owns it, on Linux CI since
+ * caught by inspection; radiant/tests owns it, on Linux CI since
  * native_sim does not build on Windows.
  *
  * NEXT_DATA_BLOCK is internal flow control and never reaches the host - a

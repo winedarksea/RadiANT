@@ -110,7 +110,7 @@ Everything above is about `.antser` serial transcripts and about frames typed
 from a table. The two `.antcap` files here are neither hand-assembled nor off a
 wire: they are **the output of C code, frozen**.
 
-`radiant_core/tests/src/test_profile_compat.c` drives `src/profiles/profile_hr.c`
+`radiant/tests/src/test_profile_compat.c` drives `src/profiles/profile_hr.c`
 and `src/profiles/profile_power.c` for three 121-message cycles on a DK and
 prints every transmitted message; the lines are lifted out of the ztest console
 and committed here. `tools/test_compat_capture.py` then decodes each message with

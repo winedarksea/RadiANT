@@ -1,0 +1,263 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The ANT+ compatibility profiles' policy settings.
+# docs/radiant-security.md section 11.6 is the table these mirror.
+
+menu "RadiANT profile policy"
+
+# ── Sourced-ness, which the C has to be able to tell from "set to n" ────────
+#
+# An application that does not source this file at all - the radiant unit
+# test image is one - sees none of these symbols, and the C then has to fall
+# back on the DEFAULTS of docs/radiant-security.md section 11.6's table rather
+# than on "unset". For a `bool` those two are indistinguishable from the
+# preprocessor, so this symbol is the difference: it is defined whenever this
+# menu exists, and profile_private.c reads section 11.6's default when it does
+# not.
+config RADIANT_PROFILE_POLICY
+	bool
+	default y
+
+config RADIANT_ATTEST_ID
+	bool "attest_id: Tier I identity attestation"
+	depends on RADIANT_SEC_COMPAT
+	default y
+	help
+	  One self-contained page every T seconds proving "this stream comes
+	  from the holder of K_auth, now, and is not a replay". It covers no
+	  payload, so it is verifiable on receipt and a packet lost anywhere
+	  else costs nothing.
+
+	  ON BY DEFAULT, and it is the most valuable thing in the compat layer:
+	  a stranger's sensor on an overlapping device number is the mainstream
+	  failure and this answers it cryptographically, at ~1.2% of slots
+	  against the 1.65% ANT+ itself already spends on common pages 80 and
+	  81. The compatibility cost of authentication is smaller than a
+	  mechanism ANT+ ships.
+
+	  Turning it off is a supported posture - a plain ANT+ sensor with
+	  nothing added - but note what it costs below: every private_policy
+	  except `never`, and the one exemption, depends on it.
+
+choice
+	prompt "announce: what a switch says on the air"
+	depends on RADIANT_SEC_COMPAT
+	default RADIANT_PRIVATE_ANNOUNCE_BROADCAST
+	help
+	  What the node puts on the air when it leaves the compat channel for
+	  the private one, and what it costs.
+
+	  NEITHER OF THESE IS "MORE SECURE". broadcast buys every keyed
+	  receiver - including the ones that did not ask - a handover bounded by
+	  retune time, and costs unlinkability at the moment of the switch:
+	  an observer present learns that compat device number X and private
+	  device number Y are one node. silent buys that unlinkability back and
+	  pays for it in availability: every listener, including the one that
+	  asked, loses the stream for as long as a search takes.
+
+config RADIANT_PRIVATE_ANNOUNCE_BROADCAST
+	bool "broadcast - SWITCH/RETURN frames on a countdown (default)"
+	help
+	  The node announces the switch in the clear, over a K-message
+	  countdown, with the beacon promoted to one frame in eight for the
+	  duration. Every keyed receiver reads the remaining count and retunes
+	  on the same message, so a handover looks like a handover rather than
+	  N independent dropouts.
+
+	  The announcement carries its own 48-bit tag under K_auth, so it cannot
+	  be forged into "everybody follow me to channel X", and a receiver acts
+	  on it only after the tag verifies.
+
+config RADIANT_PRIVATE_ANNOUNCE_SILENT
+	bool "silent - nothing on the air; the channel simply closes"
+	help
+	  No SWITCH frames, no locator field in the beacon, no pending-switch
+	  bit and no beacon promotion. Keyholders rederive the private device
+	  number - trunc16(CMAC(K_id, "priv" || epoch)) - and re-acquire, so
+	  they are not lost, merely slower.
+
+	  This is a legitimate posture and not a degradation. It is also the one
+	  setting that removes the last on-air authentication requirement, which
+	  is why `physical` + `silent` is the one policy combination permitted
+	  with attestation switched off entirely.
+
+endchoice
+
+choice
+	prompt "private_policy: whether this node can stop being an ANT+ sensor"
+	default RADIANT_PRIVATE_POLICY_NEVER
+	help
+	  Confidentiality is a SWITCH, not an addition. A ciphertext page beside
+	  the plaintext page carrying the same value is theatre, so the only way
+	  privacy means anything is if the clear stream stops - and a node whose
+	  clear stream has stopped is no longer an ANT+ sensor.
+
+	  WHILE PRIVATE, A GARMIN HEAD UNIT AND ZWIFT SEE NOTHING AT ALL. That
+	  is the price of confidentiality and there is no version of it that is
+	  cheaper. What is bought is not only privacy: device type 0x60 is also
+	  where coded PHY, frequency agility, length extension and bounded
+	  uplink latency become available, all of which exist only because the
+	  compatibility constraint was left behind.
+
+	  None of this is mandatory and the default is that none of it happens.
+
+config RADIANT_PRIVATE_POLICY_NEVER
+	bool "never - a byte-exact ANT+ sensor for its whole life (default)"
+	help
+	  THE DEFAULT, AND THE SETTING A SHIPPED STRAP SHOULD SHIP IN. The node
+	  never leaves the compat channel. It will refuse an authenticated
+	  switch command from a keyholder it trusts, and count the refusal.
+
+	  Attestation with policy `never` is a perfectly good configuration and
+	  probably the most useful one here: a strap that is byte-exact ANT+ to
+	  every receiver in the room and provably itself to the one holding its
+	  key.
+
+config RADIANT_PRIVATE_POLICY_PHYSICAL
+	bool "physical - switches only on a physical action at the node"
+	depends on RADIANT_SEC_COMPAT
+	depends on RADIANT_ATTEST_ID || RADIANT_PRIVATE_ANNOUNCE_SILENT
+	help
+	  A button, a magnet or a strap re-seat. NO OVER-AIR PATH EXISTS AT ALL,
+	  which is the right setting for a device with a button and a user who
+	  wants privacy on demand.
+
+	  With announce = silent this is the one combination that needs no
+	  attestation: nothing is announced, so there is nothing to forge, and
+	  no over-air trigger, so there is nothing to authenticate. With
+	  announce = broadcast it needs Tier I, because the announcement's tag
+	  needs K_auth and Tier I's counter.
+
+config RADIANT_PRIVATE_POLICY_COMMAND
+	bool "command - a physical action, or an authenticated command"
+	depends on RADIANT_SEC_COMPAT && RADIANT_ATTEST_ID
+	help
+	  A strict superset of `physical`: the node also accepts a command from
+	  a paired keyholder, authenticated under K_cmd with Tier I's counter in
+	  the nonce, so a recorded command replayed later fails.
+
+	  An UNAUTHENTICATED over-air request never triggers anything, in any
+	  policy. A stranger who could mute your power meter for every legacy
+	  receiver in the room would be a one-packet denial of service against
+	  everybody, and the sensor cannot switch "just for one receiver" - it
+	  has one stream and N listeners.
+
+config RADIANT_PRIVATE_POLICY_ALWAYS
+	bool "always - never appears as an ANT+ sensor at all"
+	depends on RADIANT_SEC_COMPAT && RADIANT_ATTEST_ID
+	help
+	  The node boots straight onto device type 0x60 and never enters the
+	  compat channel. This is exactly today's radiant_sec node, named as a
+	  policy state so the axis is complete and so the strongest privacy
+	  posture has somewhere to live.
+
+	  Nothing is announced, because there was never a compat channel with
+	  listeners on it to announce to.
+
+endchoice
+
+config RADIANT_PRIVATE_COUNTDOWN
+	int "K: the switch countdown, in transmitted messages"
+	depends on !RADIANT_PRIVATE_POLICY_NEVER
+	default 64
+	range 16 128
+	help
+	  How long the node announces a switch before it happens. 64 messages is
+	  ~16 s at 4 Hz and gives a receiver eight promoted beacon slots to hear
+	  it in.
+
+	  ONE OF 16, 32, 64 OR 128 - the build fails on anything else, because
+	  the countdown field carries six bits of eight-message intervals and
+	  both ends have to agree on what a countdown can be.
+
+	  The airtime cost is real - the beacon rises to one frame in eight for
+	  the duration, ~12% of slots - and it is bounded to the countdown and
+	  paid only at a switch.
+
+config RADIANT_PRIVATE_MAX_S
+	int "the bounded private duration, in seconds"
+	depends on !RADIANT_PRIVATE_POLICY_NEVER
+	default 3600
+	range 60 86400
+	help
+	  A SENSOR THAT SILENTLY STAYS PRIVATE IS INDISTINGUISHABLE FROM A DEAD
+	  ONE, so private mode is bounded and self-reverting. One hour by
+	  default: long enough for the ride the feature exists for, short enough
+	  that a node whose owner walked away is an ANT+ sensor again before
+	  they wonder whether it is broken.
+
+	  The other revert paths need no setting: a power cycle (the state is
+	  never persisted), an authenticated command, and a physical action.
+
+choice
+	prompt "enrol: how a new receiver gets this node's key"
+	default RADIANT_ENROL_PHYSICAL
+	help
+	  Adding a receiver to an existing encrypted network. A user buys a
+	  second head unit in March and has to be able to add it to a strap they
+	  set up in January, without re-provisioning the first head unit and
+	  without taking the strap apart.
+
+	  Read this before choosing, because it is the whole trade: PAIRING
+	  HAPPENS IN THE CLEAR. An active attacker present during the window can
+	  be the man in the middle. The mitigation is a six-digit fingerprint a
+	  human compares ACROSS TWO SCREENS - and a strap has no screen, so over
+	  the air that comparison is one-sided. Out-of-band provisioning, a
+	  printed key or a QR code, genuinely defeats the attack rather than
+	  mitigating it, and it stays the recommended path for anything that
+	  matters.
+
+	  And the asymmetry nobody expects: RadiANT v1 can ADD a receiver in
+	  sixty seconds and can REMOVE one only by re-provisioning the whole
+	  network, because every keyholder holds the same root key. Per-receiver
+	  revocation is out of scope. Read that sentence before choosing
+	  open-window.
+
+config RADIANT_ENROL_CLOSED
+	bool "closed - no over-air enrolment, ever"
+	help
+	  Keys arrive only out of band: the host message set on a host-attached
+	  node, or the manufacturer's provisioning path. There is no over-air
+	  pairing window and no way to open one.
+
+	  THIS IS THE RECOMMENDED SETTING FOR ANYTHING THAT MATTERS. No
+	  protocol, no attack surface during pairing at all, and no dependence
+	  on the user actually looking at a number. It is not the default only
+	  because a sealed strap with no port has no path at all under it.
+
+config RADIANT_ENROL_PHYSICAL
+	bool "physical - a bounded window opened by a physical action (default)"
+	help
+	  A 60-second pairing window opened by a button, a magnet or a strap
+	  re-seat at the node. One pairing per window, and a second press does
+	  not extend the first.
+
+	  The window opens on whichever channel the node is currently on - the
+	  frames are additional pages, not a channel change - so every receiver
+	  that is already listening keeps its stream throughout, and a node in
+	  private mode does not have to leave it to gain a receiver.
+
+	  The mitigations are the bounded window, one pairing per window, the
+	  physical trigger, and optionally reduced transmit power so the
+	  attacker has to be in the room. They are mitigations, not a fix: the
+	  fingerprint is still one-sided on a device with no display.
+
+config RADIANT_ENROL_OPEN_WINDOW
+	bool "open-window - a keyholder may open a window with a command"
+	help
+	  A window a CURRENT KEYHOLDER opens with an authenticated command, for
+	  a node with no button and no host. Rate-limited to one window every
+	  five minutes and bounded to sixty seconds.
+
+	  THIS IS THE WEAKEST OF THE THREE and it exists because a sealed strap
+	  otherwise has no path at all. The authentication of the command is the
+	  command layer's, not this module's: a node that opens a window on an
+	  unverified command has built "anybody may enrol against me".
+
+	  Combined with the paragraph above about removal - add in sixty
+	  seconds, remove only by re-provisioning - this is the setting that
+	  most deserves a second reading before a product ships with it.
+
+endchoice
+
+endmenu

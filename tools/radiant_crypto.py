@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""The host-side mirror of radiant_core/src/radiant_sec_aes.c.
+"""The host-side mirror of radiant/src/radiant_sec_aes.c.
 
     C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe -m unittest tools.test_radiant_crypto
 
@@ -332,7 +332,7 @@ def spread_tag(k_auth: bytes, epoch: int, devnum: int, window_start: int,
 
 # ── Compat attestation: two tiers over one domain byte ──────────────────────
 #
-# The mirror of radiant_core/src/radiant_sec_compat.c. docs/radiant-security.md
+# The mirror of radiant/src/radiant_sec_compat.c. docs/radiant-security.md
 # section 11.4 is normative and docs/decisions/0008 pins the bytes.
 #
 # LIKE THE C, NOTHING HERE KNOWS A PAGE NUMBER OR A FIELD NAME. These take

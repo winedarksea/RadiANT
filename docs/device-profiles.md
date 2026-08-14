@@ -931,7 +931,7 @@ reference-only one.
 
 Implemented in `src/profiles/profile_rd.c` and mirrored in
 `tools/ant_pages.py`; the two are checked against the same vectors by
-`tools/test_ant_pages.py` and `radiant_core/tests/src/test_profile_rd.c`.
+`tools/test_ant_pages.py` and `radiant/tests/src/test_profile_rd.c`.
 
 #### The metrics
 

@@ -645,7 +645,7 @@ def gate_coexistence(cfg: dict, a: Baseline, b: Baseline) -> list[GateResult]:
                 "sweep rate under contention", "-", "-", sweep_threshold,
                 FAIL if required else SKIP,
                 f"{b.path}: coexistence has no sweep_sets_per_s_off/_on "
-                f"(CONFIG_RADIANT_CORE_SWEEP_DEBUG)"))
+                f"(CONFIG_RADIANT_SWEEP_DEBUG)"))
         else:
             ratio = float(rate_on) / float(rate_off)
             results.append(GateResult(

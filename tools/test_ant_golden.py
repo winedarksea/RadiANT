@@ -34,7 +34,7 @@ transcript checks the *rules* rather than round-tripping them.
 `archive/captures/serial/` holds real captures, including
 `conformance-sdk-ant.antser`, the Tier 1 reference (a real ANTUSB-m-compatible
 dongle answering 284 conformance cases, byte-identical across two runs) that
-every future `radiant_core` build is diffed against. When that directory is
+every future `radiant` build is diffed against. When that directory is
 empty, `TestRealCaptures` skips loudly, naming what is missing - it does not
 pass.
 
@@ -302,7 +302,7 @@ def integrity_problems(path, summary):
         problems.append(
             f"{name}: sha256 is {digest}, but the summary recorded when it was "
             f"captured says {summary['sha256']}. This file is the Tier 1 "
-            f"reference every future radiant_core build is diffed against; if a "
+            f"reference every future radiant build is diffed against; if a "
             f"check disagrees with it, the check is what changes.")
 
     records = read_antser(raw.decode("utf-8"), source=name)
@@ -1131,7 +1131,7 @@ class TestTheBurstChannelCeiling(ReplayMixin, unittest.TestCase):
 
     def test_the_ceiling_comes_from_the_transcript_not_from_this_file(self):
         # The same burst that fails against an 8-channel device passes against
-        # a 32-channel one. This is what lets an radiant_core transcript be
+        # a 32-channel one. This is what lets an radiant transcript be
         # replayed by an unmodified harness.
         last = w.BURST_HEADER["BURST_HEADER_LAST"]
         fatal, _ = self.classify_text(

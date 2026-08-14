@@ -1,4 +1,4 @@
-﻿name: Build firmware
+name: Build firmware
 
 on:
   pull_request:
@@ -63,7 +63,7 @@ jobs:
   # does not build on the development machine - Windows, no host C compiler,
   # no QEMU - so `west twister` cannot run locally at all and local C
   # verification is compile-check only. That makes this job the entire
-  # verification path for radiant_core, which is why it takes no secret: it has to
+  # verification path for radiant, which is why it takes no secret: it has to
   # run on forks and on every pull request, or a parallel core rewrite has no
   # way to know whether it works.
   ztest:
@@ -101,7 +101,7 @@ jobs:
 
       # Same action, same shape as the gated build below - app-path is the
       # manifest repository and sdk-version is left unset so the fetched Zephyr
-      # tree chooses. No sdk-ant checkout and no token: radiant_core/tests is a
+      # tree chooses. No sdk-ant checkout and no token: radiant/tests is a
       # standalone Zephyr application that never includes the dongle's
       # CMakeLists.txt, so nothing on this path can reach an ANT header.
       #
@@ -110,7 +110,7 @@ jobs:
       # file's sdk-nrf revision imports - currently v3.4.0. That is
       # deliberately *not* the same pin the gated build resolves (see the
       # sdk-ant checkout below), and the two must stay decoupled: sdk-ant
-      # v2.1.0 cannot build on v3.4.0, while radiant_core has no sdk-ant in it and
+      # v2.1.0 cannot build on v3.4.0, while radiant has no sdk-ant in it and
       # should track the current SDK. Pinning both to one version would couple
       # the clean-room half of the project to the licensing constraints of the
       # proprietary half, which is the coupling this whole plan exists to
@@ -155,7 +155,7 @@ jobs:
           # pull request, and twister otherwise leaves the actual assertion
           # text in a file inside twister-out/ that nobody downloads.
           "${zephyr_base}/scripts/twister" \
-            -T app/radiant_core/tests \
+            -T app/radiant/tests \
             -p native_sim \
             --inline-logs \
             -v
@@ -398,7 +398,7 @@ jobs:
 
       # No artifact upload and no release attachment on purpose. Release
       # images stay on build-sdk-ant until the Tier 3 Zwift acceptance passes
-      # for radiant_core; moving them is a recorded decision in
+      # for radiant; moving them is a recorded decision in
       # docs/decisions/0001, not something that happens by a job quietly
       # gaining an upload step.
 
@@ -422,7 +422,7 @@ jobs:
   #
   # The on-air half of the claim is NOT here. It is a ztest assertion against
   # the recorded fake_radio TX bodies and RX filter addresses in
-  # radiant_core/tests/api, because a shell script cannot see the air and CI
+  # radiant/tests/api, because a shell script cannot see the air and CI
   # has no radio.
   zero-cost:
     name: zero cost when disabled
@@ -583,8 +583,8 @@ jobs:
           # algorithm implementations, which are below the seam rather than
           # above it.
           found=0
-          for f in app/radiant_core/src/radiant_sec.c \
-                   app/radiant_core/src/radiant_sec_pair.c \
+          for f in app/radiant/src/radiant_sec.c \
+                   app/radiant/src/radiant_sec_pair.c \
                    app/src/ant_sec_host.c; do
             [[ -f "${f}" ]] || continue
             found=1
@@ -618,7 +618,7 @@ jobs:
       - name: The compat attestation names no page and no field
         run: |
           set -euo pipefail
-          f=app/radiant_core/src/radiant_sec_compat.c
+          f=app/radiant/src/radiant_sec_compat.c
           if [[ ! -f "${f}" ]]; then
             echo "radiant_sec_compat.c does not exist yet - nothing to check"
             exit 0
@@ -824,7 +824,7 @@ jobs:
 
           exit "${fail}"
 
-      # CONFIG_RADIANT_SEC depends on CONFIG_RADIANT_CORE, so it can never
+      # CONFIG_RADIANT_SEC depends on CONFIG_RADIANT, so it can never
       # reach the sdk-ant build. Asserted rather than assumed, in the job that
       # already has both trees to hand.
       - name: The stub build carries none of it
@@ -837,7 +837,7 @@ jobs:
             -- "-DANT_RADIO=stub" "-DEXTRA_CONF_FILE=security.conf"
           cfg="$(find build-stub -name .config -path '*ant_dongle*' -print -quit)"
           if grep -qx 'CONFIG_RADIANT_SEC=y' "${cfg}"; then
-            echo "::error::security reached a build with no radiant_core in it"
+            echo "::error::security reached a build with no radiant in it"
             exit 1
           fi
 

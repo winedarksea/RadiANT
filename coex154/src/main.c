@@ -31,7 +31,7 @@ LOG_MODULE_REGISTER(coex154, LOG_LEVEL_INF);
  * THE 802.15.4 DRIVER'S OWN ASSERT, MADE NON-FATAL AND COUNTED
  * ---------------------------------------------------------------------------
  *
- * Measured on 2026-08-13: with radiant_core opening even one ANT master this
+ * Measured on 2026-08-13: with radiant opening even one ANT master this
  * image panicked about one second in, every time. Symbolicated, the panic is
  *
  *   NRF_802154_ASSERT(radio_is_disabled)
@@ -298,7 +298,7 @@ static void report(void)
  * ---------------------------------------------------------------------------
  */
 
-#if defined(CONFIG_RADIANT_CORE)
+#if defined(CONFIG_RADIANT)
 
 #include "ant_radio.h"
 #include "ant_wire.h"
@@ -345,7 +345,7 @@ static void ant_load_start(void)
 	(void)antr_network_address_set(0u, net_key);
 
 	/*
-	 * THE ARBITER-ONLY ARM, and it stops here on purpose. radiant_core is
+	 * THE ARBITER-ONLY ARM, and it stops here on purpose. radiant is
 	 * linked, initialised and holding its MPSL session; no channel is open,
 	 * so it asks MPSL for no air at all. That is the arm that separates "an
 	 * arbiter is present" from "air was taken away" - and it only means that
@@ -353,7 +353,7 @@ static void ant_load_start(void)
 	 * inside this function rather than compiled out around it.
 	 */
 	if (ANT_N == 0u) {
-		LOG_INF("ANT load: none - radiant_core is up but owns no "
+		LOG_INF("ANT load: none - radiant is up but owns no "
 			"channel. ARBITER-ONLY arm.");
 		return;
 	}
@@ -401,7 +401,7 @@ static void ant_load_start(void)
 }
 
 /*
- * radiant_core delivers events through antr_on_message(), the same seam the
+ * radiant delivers events through antr_on_message(), the same seam the
  * USB bridge uses. Refill the payload on EVENT_TX, or the channel silently
  * repeats the last one - fine for a blackout generator but would hide a
  * channel that has actually stopped.
@@ -432,12 +432,12 @@ void antr_on_message(const struct antr_msg *msg)
 
 static void ant_load_start(void)
 {
-	LOG_INF("ANT load: none - radiant_core is not even linked. BENCH FLOOR "
+	LOG_INF("ANT load: none - radiant is not even linked. BENCH FLOOR "
 		"arm: this is the room, the antennas and the two boards, with "
 		"no arbiter in the image at all.");
 }
 
-#endif /* CONFIG_RADIANT_CORE */
+#endif /* CONFIG_RADIANT */
 
 static void role_run(void)
 {

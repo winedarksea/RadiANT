@@ -21,10 +21,10 @@ second stack** — a delta of −0.21 pp and 0.00 pp against a +0.5 pp bar, and
 `[gates.coexistence]` PASSES in both roles. See
 [`radiant-bridge.md` §7.4.1](radiant-bridge.md#741-first-measurement-2026-08-13--the-gate-fails)
 and [§7.4.2](radiant-bridge.md#742-five-defects-in-series--and-the-gate-now-passes).
-[`radiant_core/src/radiant_radio_nrf_gate.h`](../radiant_core/src/radiant_radio_nrf_gate.h)
+[`radiant/src/radiant_radio_nrf_gate.h`](../radiant/src/radiant_radio_nrf_gate.h)
 and its direct implementation are compiled into every `-DRADIANT_BACKEND=nrf`
-build; [`radiant_radio_nrf_gate_mpsl.c`](../radiant_core/src/radiant_radio_nrf_gate_mpsl.c)
-is selected by `CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL`, off by default.
+build; [`radiant_radio_nrf_gate_mpsl.c`](../radiant/src/radiant_radio_nrf_gate_mpsl.c)
+is selected by `CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL`, off by default.
 
 ### `loss (exact)`, measured at last — and the arbiter fails its own gate
 
@@ -170,7 +170,7 @@ looking at run time when the fault was at boot.
   MPSL, same controller, same advertiser, no radiant radio — runs clean. **This
   is the one clean configuration and every other difference is measured against
   it.**
-- **It is not arbitration.** `CONFIG_RADIANT_CORE_GATE_MPSL_NO_SESSION=y` builds
+- **It is not arbitration.** `CONFIG_RADIANT_GATE_MPSL_NO_SESSION=y` builds
   the arbitrated backend and never opens a timeslot session. It still asserts.
 
 Beyond that, each of the following was removed individually from an asserting
@@ -180,9 +180,9 @@ tested them are kept:
 
 | removed | switch |
 |---|---|
-| the permanent HFXO request | `RADIANT_CORE_NRF_NO_HFXO_HOLD` |
-| all five (D)PPI allocations | `RADIANT_CORE_NRF_NO_GPPI` |
-| enabling MPSL's own RADIO_0 NVIC line | `RADIANT_CORE_NRF_NO_RADIO0_IRQ` |
+| the permanent HFXO request | `RADIANT_NRF_NO_HFXO_HOLD` |
+| all five (D)PPI allocations | `RADIANT_NRF_NO_GPPI` |
+| enabling MPSL's own RADIO_0 NVIC line | `RADIANT_NRF_NO_RADIO0_IRQ` |
 | radiant's TIMER moved off TIMER20 onto TIMER22 | devicetree overlay |
 | the RADIO `PUBLISH`/`SUBSCRIBE` endpoints, detached at init | (reverted) |
 | the RADIO interrupt mask left set between grants | fixed and kept |
@@ -212,7 +212,7 @@ aimed at the wrong half of the program.
 **The cause** is one line, and it is not what it looks like:
 
 ```c
-IRQ_CONNECT(RADIANT_RADIO_IRQn, CONFIG_RADIANT_CORE_BACKEND_NRF_IRQ_PRIO,
+IRQ_CONNECT(RADIANT_RADIO_IRQn, CONFIG_RADIANT_BACKEND_NRF_IRQ_PRIO,
             radio_isr, NULL, 0);
 ```
 
@@ -231,7 +231,7 @@ time … by other same or higher priority threads or interrupts"*, and demoting
 its interrupt out of zero-latency is the most thorough way there is to arrange
 exactly that.
 
-This is also why `RADIANT_CORE_NRF_NO_RADIO0_IRQ` did not find it: that switch
+This is also why `RADIANT_NRF_NO_RADIO0_IRQ` did not find it: that switch
 skips `irq_enable()`, and the damage was done by `IRQ_CONNECT()` — a different
 line, doing a different thing, one screenful away. The elimination was
 incomplete rather than wrong, which is the most expensive kind.
@@ -378,7 +378,7 @@ src/ant_serial_bridge.c        unchanged logic; speaks only ANTW_*/antr_*
         |
    +----+-----------------+----------------------+
    |                      |                      |
-ant_radio_sdk_ant.c   ant_radio_stub.c    radiant_core/   (clean-room stack)
+ant_radio_sdk_ant.c   ant_radio_stub.c    radiant/   (clean-room stack)
 (thin forwarders +    (the no-op radio)         |
  BUILD_ASSERTs)                        radiant_radio_hal.h
                                                 |
@@ -389,7 +389,7 @@ ant_radio_sdk_ant.c   ant_radio_stub.c    radiant_core/   (clean-room stack)
 | Backend | What it is | Why it exists |
 |---|---|---|
 | `sdk_ant` | ~50 one-line forwarders onto `libant.a`, plus a `BUILD_ASSERT` block comparing every `ANTW_*` constant against its `MESG_*` counterpart | The reference half of every A/B, and the shipping radio until Tier 3 passes. See [`sdk-ant-contract.md`](sdk-ant-contract.md) |
-| `core` | The clean-room rebuild in `radiant_core/` | The point of the exercise: builds with zero sdk-ant present, and is a superset — 32 channels, background scan, the RadiANT extensions |
+| `core` | The clean-room rebuild in `radiant/` | The point of the exercise: builds with zero sdk-ant present, and is a superset — 32 channels, background scan, the RadiANT extensions |
 | `stub` | A no-op radio, [`src/ant_radio_stub.c`](../src/ant_radio_stub.c) — the rename of the old `src/ant_stub.c` | The cheapest proof the seam holds. Builds in seconds, and is the only configuration today that runs with no sdk-ant at all |
 
 **The prefixes are load-bearing, not cosmetic.** sdk-ant's error macros are
@@ -446,7 +446,7 @@ seam exists to make.
 
 ---
 
-## Inside `radiant_core`: one nRF backend, two gates
+## Inside `radiant`: one nRF backend, two gates
 
 **This section used to describe two backends and it now describes one backend
 with a seam in it.** The change is recorded rather than edited away, because the
@@ -467,7 +467,7 @@ the range in which a real regression is easiest to mistake for noise". An A/B
 run cannot detect the most likely failure of splitting that file.
 
 So the file is not split. Who owns the RADIO is a small internal interface —
-[`radiant_core/src/radiant_radio_nrf_gate.h`](../radiant_core/src/radiant_radio_nrf_gate.h) —
+[`radiant/src/radiant_radio_nrf_gate.h`](../radiant/src/radiant_radio_nrf_gate.h) —
 with two implementations:
 
 | Gate | Answers "may I have the air?" | For |
@@ -475,7 +475,7 @@ with two implementations:
 | `radiant_radio_nrf_gate_direct.c` | always yes, immediately | **The dongle.** ~30 lines of constants; the compiler folds the branch and the emitted code is what it was |
 | `radiant_radio_nrf_gate_mpsl.c` | a timeslot session on the public `mpsl_timeslot_*` API | **Combo builds** — ANT beside BLE, or beside Thread/Matter |
 
-Selected by `CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL`, off by default.
+Selected by `CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL`, off by default.
 
 **Direct is the default and landed first**, for a technical reason rather than a
 preference: developing the link layer on timeslots from day one means debugging
@@ -518,7 +518,7 @@ S332/S340 SoftDevices exist for.
 
 Note the asymmetry, because it decides the ordering: **the dongle never needs
 BLE; a sensor does.** Nothing about a USB dongle wants a second radio protocol.
-Anything built on `radiant_core` as a *node* — `sim/`, a CdA sensor, a telemetry
+Anything built on `radiant` as a *node* — `sim/`, a CdA sensor, a telemetry
 node — is where coexistence is the whole point. That is why the timeslot gate is
 a later phase than the dongle, and why the dongle is not held up waiting for it.
 
@@ -554,24 +554,24 @@ compared against a Thread-on run and produce a figure for neither.
 **`CONFIG_NET_L2_OPENTHREAD` must be as loud as `CONFIG_BT` on the direct
 gate**, and for the identical reason: the 802.15.4 driver takes the RADIO
 through MPSL, so a build with Thread on and the direct gate selected has two
-owners and loses packets silently. `radiant_core/Kconfig`'s `depends on !BT ||
-RADIANT_CORE_BACKEND_NRF_GATE_MPSL` is the pattern; the OpenThread half lands
+owners and loses packets silently. `radiant/Kconfig`'s `depends on !BT ||
+RADIANT_BACKEND_NRF_GATE_MPSL` is the pattern; the OpenThread half lands
 with the Thread branch, because until then there is nothing in-tree that can
 turn it on.
 
 ## HAL contract
 
-The contract is [`radiant_core/include/radiant_core/radiant_radio_hal.h`](../radiant_core/include/radiant_core/radiant_radio_hal.h),
+The contract is [`radiant/include/radiant/radiant_radio_hal.h`](../radiant/include/radiant/radiant_radio_hal.h),
 and that file is the normative text — where it and this section disagree, the
 header wins. What follows is the part of it you need before choosing a backend
 or writing one.
 
-`radiant_core` is a link layer. It decides *what* goes on the air and *when*. A
+`radiant` is a link layer. It decides *what* goes on the air and *when*. A
 backend decides *how*: which peripheral, which registers, which DMA, which
 interrupt. The header is the whole of the boundary between them, and it is
 written so that a second backend on a completely different vendor's radio is an
 addition rather than a redesign. Two are planned on nRF (direct-peripheral and
-MPSL-timeslot) and one on EFR32/RAIL; a fourth, `radiant_core/tests/fake_radio.c`,
+MPSL-timeslot) and one on EFR32/RAIL; a fourth, `radiant/tests/fake_radio.c`,
 is what lets six core modules be developed in parallel with no hardware.
 
 ### Six rules
@@ -632,7 +632,7 @@ name, and there is no `#ifdef` on a part number anywhere above the HAL.
 
 The **CC13x2/CC26x2** column is the first one filled in from a backend that
 exists and has run on hardware rather than from a datasheet
-([`radiant_radio_cc26xx.c`](../radiant_core/src/radiant_radio_cc26xx.c)).
+([`radiant_radio_cc26xx.c`](../radiant/src/radiant_radio_cc26xx.c)).
 Measured against the nRF backend in one A/B/A sitting on 2026-08-13: **3.74 %
 packet loss against 0.14 %**, and **better** slot timing (0.0093 ms off-grid by
 the radio's own clock against 0.0120 ms). See
@@ -647,7 +647,7 @@ the radio's own clock against 0.0120 ms). See
 | `addr_len_hw_max` | Longest address the hardware matcher itself handles. Informational — a shorter hardware match is completed in software, at the cost of more spurious wakeups and more receive current | 5 | **3** — the silicon reaches 4 (`nSwBits` is 8..32) but `nSwBits` lives in the setup command that `RF_open()` consumes and cannot be changed under a live handle, so the backend fixes it at the 3 bytes search and tracking share | 4 |
 | `max_body_len` | Largest body (bytes between address and CRC), either direction | — | — | — |
 | `phys[]`, `n_phys`, `phy_switch_us` | PHYs this build supports, most-preferred first, and what switching between two of them costs the scheduler | switch is free | one PHY; a switch would be a fresh `RF_open` | reloads a generated configuration |
-| `ramp_up_us`, `rx_to_tx_us`, `tx_to_rx_us`, `min_arm_lead_us` | The four timing budgets: transmitter ramp-up, both turnarounds, and the minimum lead an arm call needs before it fails `RADIANT_RADIO_ETIME` rather than running late | measured, antenna-referenced | **seeded, not measured** — a P4 bench item; `min_arm_lead_us` is 600 with a separate 150 µs hard floor, split after a scheduler that subtracts the advertised figure and calls immediately produced `ETIME` on every window. Under `CONFIG_RADIANT_CORE_BACKEND_CC26XX_COEX`, `min_arm_lead_us` grows to ~1414 µs (a phy-switch lead) — see "TI coexistence" below | measured, antenna-referenced |
+| `ramp_up_us`, `rx_to_tx_us`, `tx_to_rx_us`, `min_arm_lead_us` | The four timing budgets: transmitter ramp-up, both turnarounds, and the minimum lead an arm call needs before it fails `RADIANT_RADIO_ETIME` rather than running late | measured, antenna-referenced | **seeded, not measured** — a P4 bench item; `min_arm_lead_us` is 600 with a separate 150 µs hard floor, split after a scheduler that subtracts the advertised figure and calls immediately produced `ETIME` on every window. Under `CONFIG_RADIANT_BACKEND_CC26XX_COEX`, `min_arm_lead_us` grows to ~1414 µs (a phy-switch lead) — see "TI coexistence" below | measured, antenna-referenced |
 | `min_arm_lead_in_grant_us`, `max_window_us` | The arbitrated pair: lead once a grant is already held, and a fairness bound on window length | 0 / measured under the MPSL gate | **0 / 0 outside coex** ("this backend OWNS the radio" — the two lead figures coincide, nothing bounds a window). Under coex: **600 / ~20 ms** — see "TI coexistence" below | — |
 | `time_resolution_ns` | How much of the last digit of a timestamp to believe | 1000 | **250** — the RAT is 4 MHz, measured at 4 000 244 ticks/s | 1000 |
 | `has_sync_timestamp` | Is `t_sync` a hardware capture of the address event, or an inference? | true | true — `bAppendTimestamp`, and it is good: consecutive captures came out as exact multiples of the transmitter's period with 1–18 µs of residual | — |
@@ -713,7 +713,7 @@ backend refused every one with `RADIANT_RADIO_ENOTSUP` — a refusal that was th
 charged to whichever channel happened to be leading the merge. On a bench that
 reads as one healthy sensor failing at random.
 
-`radiant_core/tests/fake_radio.c` models the constraint too, and that is the
+`radiant/tests/fake_radio.c` models the constraint too, and that is the
 part that keeps it fixed: the preset used to advertise eight filters with no
 base model at all, which is precisely why CI could not see any of this. **A mock
 more capable than the hardware certifies the bug it was written to catch.**
@@ -724,7 +724,7 @@ not divide it by eight.
 
 ### TI coexistence
 
-Selected by `CONFIG_RADIANT_CORE_BACKEND_CC26XX_COEX`, off by default. See
+Selected by `CONFIG_RADIANT_BACKEND_CC26XX_COEX`, off by default. See
 [ADR 0015](decisions/0015-cc26xx-coexistence-design.md) for the full design
 and why it does not look like the nRF gate above — the short version is that
 this part has no timeslot API to sit behind; coexistence is entirely a matter
@@ -878,7 +878,7 @@ this document. Committing to EFR32 on a sensitivity argument before that is
 exactly the kind of assumption that costs months if the real gain is 6 dB
 rather than 10.
 
-Nothing in `radiant_core` waits on it.
+Nothing in `radiant` waits on it.
 
 ## Backends that were rejected
 
@@ -1163,7 +1163,7 @@ rebuild is a superset rather than a clone. Both have to be sized into
 retrofitting a channel-count assumption through a scheduler is far more
 expensive than starting at 32.
 
-| | ANT+ / `libant.a` | `radiant_core` |
+| | ANT+ / `libant.a` | `radiant` |
 |---|---|---|
 | Simultaneous channels | 8 configured (`CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED`), **15 maximum** (`MAX_ANT_CHANNELS`) | **32** |
 | Background scan mode | advertised **off**, not implemented | **on** |
@@ -1186,7 +1186,7 @@ than "no worse than sdk-ant". Same for background scan, which sdk-ant
 advertises off and does not implement. Everything else in the A/B is relative,
 which is why these two are called out.
 
-**Reachable two ways, as of 2026-08-10.** `radiant_core` implements background
+**Reachable two ways, as of 2026-08-10.** `radiant` implements background
 scan at the module level through `RADIANT_SEARCH_MODE_SCAN`, and there are two
 routes in from the wire. The first is ext-assign — the
 `API_EXT_ASSIGN_BACKGROUND_SCAN` bit on `antr_channel_assign()`, which is what
@@ -1200,7 +1200,7 @@ in one call instead of three.
 This was a real gap until it was closed, not a hypothetical one:
 `archive/host-api/ant_dll_exports.json` records `ANT_OpenRxScanMode` as
 `"zwift_uses": true` — `ZwiftApp.exe` resolves it — and the capabilities reply
-`radiant_core` sends advertises the bit *on*, unlike `sdk_ant`/`stub`, which
+`radiant` sends advertises the bit *on*, unlike `sdk_ant`/`stub`, which
 report it off. A host that reads that advertisement and calls
 `ANT_OpenRxScanMode` on this backend would have gotten `INVALID_MESSAGE` for a
 capability it was just told existed — the exact trap
@@ -1214,7 +1214,7 @@ determinism, independent of whether the message is implemented.
 
 The optional features below are the other axis: what exists past the messages a
 fitness app sends. The answer is a backend property too — sdk-ant can do
-encryption and cannot do event buffering; `radiant_core` v1 does neither, which is
+encryption and cannot do event buffering; `radiant` v1 does neither, which is
 where its −38 % flash estimate comes from.
 
 ## Optional features

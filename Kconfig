@@ -276,11 +276,11 @@ config USBD_CDC_ACM_CLASS
 
 endif # ANT_DONGLE_TRANSPORT_USB_NEXT
 
-# CONFIG_RADIANT_CORE_ANTR_API and CONFIG_RADIANT_SEC_HOST_MESSAGES: the
+# CONFIG_RADIANT_ANTR_API and CONFIG_RADIANT_SEC_HOST_MESSAGES: the
 # antr_* adapter's own symbols, shared with strap/ and with
-# radiant_core/tests/api the same way src/node/Kconfig and src/profiles/Kconfig
+# radiant/tests/api the same way src/node/Kconfig and src/profiles/Kconfig
 # already are. See src/Kconfig.antr_api's header for why they live here and
-# not in radiant_core/Kconfig.
+# not in radiant/Kconfig.
 rsource "src/Kconfig.antr_api"
 
 choice ANT_DONGLE_RADIO
@@ -324,17 +324,17 @@ config ANT_DONGLE_RADIO_SDK_ANT
 	  Needs an sdk-ant checkout; see ANT_MODULE_DIR in CMakeLists.txt.
 
 config ANT_DONGLE_RADIO_CORE
-	bool "radiant_core, the clean-room stack"
+	bool "radiant, the clean-room stack"
 	help
-	  Compile radiant_core/, the open-source clean-room link layer, by
-	  setting CONFIG_RADIANT_CORE=y on the Zephyr module of that name. No
+	  Compile radiant/, the open-source clean-room link layer, by
+	  setting CONFIG_RADIANT=y on the Zephyr module of that name. No
 	  sdk-ant of any kind is present in this configuration: the sdk-ant
 	  module is never appended to ZEPHYR_EXTRA_MODULES, so no ANT header is
 	  reachable and no libant.a is linked. That is what lets the project
 	  build on a fork, with no private repository dependency and no secret.
 
 	  This symbol is the *application's* backend selector, chosen by
-	  -DANT_RADIO=core in CMakeLists.txt. CONFIG_RADIANT_CORE is the
+	  -DANT_RADIO=core in CMakeLists.txt. CONFIG_RADIANT is the
 	  module's own switch, and the two are set together by the generated
 	  fragment so that .config records the same decision twice and cannot
 	  record it inconsistently.
@@ -531,7 +531,7 @@ config ANT_DONGLE_BLE_COEX_LOAD
 	# beside the DIRECT nrf backend, where two stacks would drive the RADIO
 	# with no arbiter between them: not a coexistence measurement, a
 	# collision.
-	depends on !RADIANT_CORE_BACKEND_NRF || RADIANT_CORE_BACKEND_NRF_GATE_MPSL
+	depends on !RADIANT_BACKEND_NRF || RADIANT_BACKEND_NRF_GATE_MPSL
 	help
 	  A bench instrument, not a feature. Brings the controller up and
 	  advertises, so that the multiprotocol plan's P3 coexistence gate has a
@@ -603,7 +603,7 @@ config ANT_DONGLE_THREAD_COEX_LOAD
 	# NRF_802154_MULTIPROTOCOL_SUPPORT through the nrfxlib Service Layer - so
 	# the 15.4 side is arbitrated whatever this application does, and only
 	# the ANT side's backend is still ours to get wrong.
-	depends on !RADIANT_CORE_BACKEND_NRF || RADIANT_CORE_BACKEND_NRF_GATE_MPSL
+	depends on !RADIANT_BACKEND_NRF || RADIANT_BACKEND_NRF_GATE_MPSL
 	help
 	  A bench instrument, not a feature. It is the P4 counterpart of
 	  ANT_DONGLE_BLE_COEX_LOAD, and it exists for a sharper version of the
@@ -700,19 +700,19 @@ endmenu
 # dongle's epoch authority is the PC behind it and a strap has no PC at all.
 # See docs/decisions/0009-hostless-node-identity.md.
 #
-# Reached inside radiant_core/ now (the module, not this application) - that
+# Reached inside radiant/ now (the module, not this application) - that
 # move does not change who decides whether to build against it. RADIANT_NODE_*
 # is application-side library material, same as it was at src/node/: nothing
-# in radiant_core's own CMakeLists.txt compiles node_ident.c, this
+# in radiant's own CMakeLists.txt compiles node_ident.c, this
 # application's does, below.
-rsource "radiant_core/src/node/Kconfig"
+rsource "radiant/src/node/Kconfig"
 
 # The compatibility profiles' policy settings (compat-C7): today the `enrol`
 # choice of docs/radiant-security.md section 11.6. Its own file and its own
 # menu for the same reason: these describe a sensor's posture, not a dongle's,
 # and the person choosing one is reading menuconfig rather than the docs, which
 # is why the help text carries the argument in full. Reached inside
-# radiant_core/ now, for the same reason as RADIANT_NODE_* above.
-rsource "radiant_core/src/profiles/Kconfig"
+# radiant/ now, for the same reason as RADIANT_NODE_* above.
+rsource "radiant/src/profiles/Kconfig"
 
 source "Kconfig.zephyr"

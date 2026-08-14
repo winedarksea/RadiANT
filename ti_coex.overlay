@@ -9,7 +9,7 @@
  *
  * WHY IT IS NEEDED AT ALL, because "enable the 802.15.4 node" sounds like
  * something the driver's Kconfig would do and it is the other way round:
- * CONFIG_RADIANT_CORE_COEX154_CC26XX_FORK compiles the driver, but the driver
+ * CONFIG_RADIANT_COEX154_CC26XX_FORK compiles the driver, but the driver
  * registers against DT_DRV_COMPAT ti,cc13xx-cc26xx-ieee802154, and Zephyr's
  * own board file (boards/ti/cc26x2r1_launchxl/cc26x2r1_launchxl.dts) both
  * disables that node and does `/delete-property/ zephyr,ieee802154`. Upstream,

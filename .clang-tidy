@@ -14,5 +14,5 @@ Checks: >
   -bugprone-implicit-widening-of-multiplication-result
 
 WarningsAsErrors: ''
-HeaderFilterRegex: 'radiant_core/(src|include)/.*'
+HeaderFilterRegex: 'radiant/(src|include)/.*'
 FormatStyle: none

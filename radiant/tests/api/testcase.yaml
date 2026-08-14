@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# A second twister application under radiant/tests, for the one module the
+# first one cannot link: radiant_api.c. See CMakeLists.txt here for why.
+#
+# CI already runs `twister -T app/radiant/tests`, which walks
+# subdirectories, so this file is picked up with no workflow edit.
+
+tests:
+  radiant.api:
+    tags:
+      - radiant
+      - radiant_api
+    # Same reasoning as the parent application: no hardware access at all, and
+    # the 32-bit host build shares pointer and long widths with the nRF52/nRF54
+    # target, so it catches the size assumptions a 64-bit host would hide.
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+
+  # The same application with the security transforms COMPILED IN and every
+  # switch off at runtime.
+  #
+  # This is the on-air half of the zero-cost claim, and it is a ztest rather
+  # than a shell script because a shell script cannot see the air and CI has no
+  # radio. src/test_api_sec.c asserts that the recorded fake_radio TX bodies
+  # and RX filter addresses are what the host wrote and what the channel ID
+  # derives - which is trivially true in the scenario above and is the actual
+  # claim in this one. Running both is what makes the comparison meaningful:
+  # a suite that only ever runs one way has nothing to compare against.
+  radiant.api.sec:
+    tags:
+      - radiant
+      - radiant_api
+      - radiant_sec
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_configs:
+      - CONFIG_RADIANT_SEC=y
+      - CONFIG_RADIANT_SEC_HOST_MESSAGES=n
+
+  # The same again with the 0xF1-0xF4 adapter linked in.
+  #
+  # A third scenario rather than folding it into the second, because the two
+  # answer different questions. The second asks "does a compiled-in transform
+  # with every switch off change the air", which is the zero-cost claim and is
+  # sharpest with the smallest possible surface. This one asks "does the host
+  # adapter enforce what it promises" - the ordering rules, the refusals, and
+  # the status readback - and needs the adapter present to ask it at all.
+  radiant.api.sec_host:
+    tags:
+      - radiant
+      - radiant_api
+      - radiant_sec
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_configs:
+      - CONFIG_RADIANT_SEC=y
+      - CONFIG_RADIANT_SEC_HOST_MESSAGES=y

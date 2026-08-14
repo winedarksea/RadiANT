@@ -1,0 +1,33 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Provenance: clean-room. Devicetree only; nothing here derives from sdk-ant.
+ *
+ * The TIMER radiant's nrf backend owns outright. It runs at 1 MHz forever
+ * and is what t_sync is hardware-captured into from RADIO's ADDRESS event, so
+ * it cannot be shared: naming it here rather than in the source is what makes a
+ * second user a devicetree conflict instead of two drivers reprogramming each
+ * other's prescaler. src/radiant_radio_nrf.c #errors without it.
+ *
+ * This is a COPY of the chosen-node half of the repo-root
+ * boards/nrf54l15dk_nrf54l15_cpuapp.overlay, not an include of it. A standalone
+ * spike application does not see the product build's board directory, and a
+ * spike that reached into it would be a spike that breaks when the product
+ * board file changes for a product reason. The uart30/ant-uart half of that
+ * file is deliberately not reproduced: this program has no ANT serial host.
+ *
+ * timer20 is free on this board, and like every TIMER on this SoC it is
+ * `status = "disabled"` by default - an unclocked peripheral is not
+ * addressable, which is a precise bus fault on the first register write rather
+ * than a quiet failure.
+ */
+
+/ {
+	chosen {
+		radiant,radio-timer = &timer20;
+	};
+};
+
+&timer20 {
+	status = "okay";
+};

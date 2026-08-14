@@ -14,7 +14,7 @@ Four published sets and one cross-check:
                                          hand-built block, and the two blocks
                                          docs/radiant-security.md pins
 
-The same vectors run in C in radiant_core/tests/src/test_sec_aes.c, and the KDF
+The same vectors run in C in radiant/tests/src/test_sec_aes.c, and the KDF
 and nonce values below appear there as literals, so the two implementations
 check against each other, not only against themselves - two implementations
 of one idea agreeing proves less than either agreeing with NIST.
@@ -160,7 +160,7 @@ class TestPinnedBlocks(unittest.TestCase):
                     rc.cmac(root, rc.kdf_block(label, 0x11223344, 0xBEEF)))
 
     def test_kdf_vectors_shared_with_the_c_implementation(self):
-        # Also in radiant_core/tests/src/test_sec_aes.c; agreeing is the
+        # Also in radiant/tests/src/test_sec_aes.c; agreeing is the
         # assertion, neither side is authoritative.
         root = bytes(range(16))
         self.assertEqual(rc.kdf(root, "enc", 0x11223344, 0xBEEF).hex(),
@@ -279,7 +279,7 @@ class TestCompatAttestation(unittest.TestCase):
     """docs/radiant-security.md section 11.4 and ADR 0008, byte for byte.
 
     Every literal here also appears in
-    radiant_core/tests/src/test_sec_compat.c; neither side computes the
+    radiant/tests/src/test_sec_compat.c; neither side computes the
     other's expected value, so agreeing is the assertion. There is no page
     or profile here - the subtype's separation of the two tiers is asserted
     by building the nonce inputs directly, since a test checking only a page
@@ -476,13 +476,13 @@ class TestCompatLocator(unittest.TestCase):
     """docs/radiant-security.md section 11.5, the derived locator.
 
     Every literal here also appears in
-    radiant_core/tests/src/test_profile_private.c, under a channel keyed
+    radiant/tests/src/test_profile_private.c, under a channel keyed
     with the same root and provisioning device number, and neither side
     computes the other's expectation - a node and a keyholder deriving the
     private device number two different ways would not fail loudly, they'd
     simply never meet.
 
-    K_ID is the "id" key of the root radiant_core/tests/src/test_profile_*.c
+    K_ID is the "id" key of the root radiant/tests/src/test_profile_*.c
     pins, under that suite's NODE_DEVNUM. The class asserts the derivation as
     well as pinning the value, so a KDF change cannot quietly leave this file
     testing a key nothing uses.
@@ -595,7 +595,7 @@ class TestCompatLocator(unittest.TestCase):
 class TestCompatCommand(unittest.TestCase):
     """The inbound command's tag - docs/radiant-security.md section 11.6.
 
-    Mirrored by radiant_core/tests/src/test_profile_private.c, which builds
+    Mirrored by radiant/tests/src/test_profile_private.c, which builds
     a command with these bytes, asserts the node accepts it, then mutates
     each byte in turn and asserts it does not.
     """
@@ -683,7 +683,7 @@ class TestCounterReconstruction(unittest.TestCase):
 class TestNodeIdentity(unittest.TestCase):
     """ADR 0009: what a node with no host derives from K_dev and a counter.
 
-    Vectors radiant_core/tests/src/test_node_ident.c also asserts; the two
+    Vectors radiant/tests/src/test_node_ident.c also asserts; the two
     implementations share no code, so agreement here is evidence rather than
     tautology.
     """

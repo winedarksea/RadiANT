@@ -15,9 +15,9 @@ This ADR records the first time the seam was actually tested: a working
 backend, on a Texas Instruments CC2652R, receiving and transmitting real ANT+
 through the unmodified core.
 
-The port is `radiant_core/src/radiant_radio_cc26xx.c`, on a
+The port is `radiant/src/radiant_radio_cc26xx.c`, on a
 LAUNCHXL-CC26X2R1. It was written against the HAL contract and against the
-measurements in `radiant_core/spike/ti_phy`, deliberately not against
+measurements in `radiant/spike/ti_phy`, deliberately not against
 `radiant_radio_nrf.c` — the two radios disagree about nearly everything that
 matters and a port-by-analogy would have inherited the wrong shape.
 
@@ -346,16 +346,16 @@ does not have, not on work not done):**
   `boards/cc26x2r1_launchxl.overlay`.
 * ~~`conformance`~~ **DONE AND CLEAN.** Run against `sdk-ant`'s baseline
   transcript (73/284 cases differ) and cross-checked against a plain
-  `radiant_core/nrf` build run the same sitting: the two backends' transcripts
+  `radiant/nrf` build run the same sitting: the two backends' transcripts
   are byte-identical to each other. So every difference from `sdk-ant` is
-  `radiant_core`-level (shared by both backends, not this port), and the HAL
+  `radiant`-level (shared by both backends, not this port), and the HAL
   boundary this port exists to test is not implicated. See
   `archive/benchmarks/2026-08-13-radiant-cc26xx.json`'s `conformance` block.
 * ~~Coexistence design~~ **DONE, TO THE LEVEL THIS BENCH CAN REACH.**
   [ADR 0015](0015-cc26xx-coexistence-design.md) records the design and all four
   build arms now exist and compile: `RFCC26XX_schedulerPolicy`, `post_op()`,
   `EDENIED`/`Preempted` handling, the caps patch, and - since 2026-08-14 - the
-  forked 802.15.4 driver in `radiant_core/coex154_ti/` plus
+  forked 802.15.4 driver in `radiant/coex154_ti/` plus
   `ti_coex.conf`/`ti_coex.overlay`. Arm 1's image is still byte-for-byte the
   same size (68248 B), so the non-coex path really did not move. **What is
   still missing is a peer, not code:** nothing has run against a real 802.15.4

@@ -1,12 +1,12 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Spike B part 2 - the whole control byte
 
-Checked by: `radiant_core/spike/promisc/spike_b_analyse.py`, which refuses to report
+Checked by: `radiant/spike/promisc/spike_b_analyse.py`, which refuses to report
 a capture it cannot show to be complete. The gate is run with the NCS toolchain's
 Python interpreter (there is no system Python in this project):
 
 ```powershell
-python radiant_core\spike\promisc\spike_b_analyse.py `
+python radiant\spike\promisc\spike_b_analyse.py `
     archive\captures\radio\2026-08-09-spike-b2-runA-burst-seq.log `
     archive\captures\radio\2026-08-09-spike-b2-runB-burst-seq-advburst.log `
     archive\captures\radio\2026-08-09-spike-b2-runC-master-control.log --strict
@@ -95,7 +95,7 @@ the only broadcast encoding is `0x0A`.
 |---|---|---|
 | Master | nRF54L15 DK | `sim/`, ANT+ bicycle power, device **14871** / type `0x0B` / transmission type 5, period 8182 |
 | Slave | Adafruit Feather nRF52840 | the shipping dongle firmware, `0FCF:1009`, driven by `spike_b_drive.py --role slave`. **Zero Feather flashes were used**, as in Spike A and part 1 |
-| Sniffer | nRF5340 DK **network core** | `radiant_core/spike/promisc`, console on the network core's VCOM |
+| Sniffer | nRF5340 DK **network core** | `radiant/spike/promisc`, console on the network core's VCOM |
 
 Part 1 got two of these three working and stopped at the third. What it missed
 is one sentence long.
@@ -107,14 +107,14 @@ core until it writes `PIN_CNF[n].MCUSEL = NetworkMCU`, that the network core's
 `uart0` is P1.00/P1.01, and that therefore the capture had nowhere to print.
 All of that is true. The conclusion drawn from it - that the network core
 "cannot print" - is not: **the application core hands the pins over in two
-register writes**, and `radiant_core/spike/promisc/appcore` is those two writes plus
+register writes**, and `radiant/spike/promisc/appcore` is those two writes plus
 a heartbeat, 25 KB of flash and about eighty lines.
 
 What actually blocked part 1 was not the silicon, it was that the application
 core was believed to hold an image belonging to another project. It did not -
 the board is a stock DK - and once that was settled the route took twenty
 minutes. The RTT fallback that part 1's successor brief proposed exists
-(`radiant_core/spike/promisc/net_rtt.conf`), builds clean - `build/promisc_net_rtt`,
+(`radiant/spike/promisc/net_rtt.conf`), builds clean - `build/promisc_net_rtt`,
 22,988 B flash and 31,176 B RAM - and was **never needed and never flashed**. It
 is kept because it is the only diagnostic that separates "the capture program is
 not running" from "the pins were never granted", and those have completely
@@ -382,7 +382,7 @@ also tests for.
 
 ---
 
-## Consequences for `radiant_core`
+## Consequences for `radiant`
 
 1. **`radiant_burst.c` can be written now.** The whole encoding is known: bit 7 set,
    bit 6 clear on data and set on the acknowledgement, bit 5 on the final packet,
@@ -446,7 +446,7 @@ with a working controller, which is a stock-like arrangement and functionally
 close to what part 1 recorded finding on it. The capture images
 (`build/promisc_net2`, `build/promisc_appcore2`) are still on disk and the two
 `flash_sim_jlink.ps1` invocations that put them back are in
-`radiant_core/spike/promisc/README.md`, so the rig is twenty minutes from being
+`radiant/spike/promisc/README.md`, so the rig is twenty minutes from being
 rebuilt, not a day.
 
 The nRF54L15 was halted over SWD before run C to clear the channel. J-Link

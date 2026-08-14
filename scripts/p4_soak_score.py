@@ -101,7 +101,7 @@ def main(path):
         print("FAIL  only %d gate line(s) in %s - nothing to score."
               % (len(rows), path))
         print("      Check DTR on the log VCOM and that the image was built")
-        print("      with CONFIG_RADIANT_CORE_SWEEP_DEBUG=y.")
+        print("      with CONFIG_RADIANT_SWEEP_DEBUG=y.")
         return 1
 
     # A board that reset mid-soak restarts every counter from zero. That is not

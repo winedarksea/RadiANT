@@ -24,7 +24,7 @@
 > burst sequence, burst-last, the reply frame, the turnaround, the `(0,1)`
 > combination and the nRF5340 as a capture platform.
 
-Checked by: `radiant_core/spike/promisc` and the captures it produced,
+Checked by: `radiant/spike/promisc` and the captures it produced,
 `archive/captures/radio/2026-08-09-spike-b-nrf54l15-run{1,2,6}.log`,
 `...-run3-bursts.log`, `...-run4-burst-lengths.log`, `...-run5-timed.log` and
 `...-config.log`. Re-running the spike against a different transmitter requires
@@ -114,7 +114,7 @@ across two runs; this is three of its rows across six.
 | Role | Board | Why |
 |---|---|---|
 | Capture | nRF54L15 DK, `nrf54l15dk/nrf54l15/cpuapp`, log on COM7 | J-Link, so it reflashes unattended; and Spike A already proved this exact promiscuous configuration works on this silicon, which removes every variable except the one under test |
-| Transmitter | Adafruit Feather nRF52840, already running the shipping dongle firmware (`0FCF:1009`), driven as an ANT+ master by `radiant_core/spike/promisc/spike_b_drive.py` | **Zero Feather flashes were used**, as in Spike A |
+| Transmitter | Adafruit Feather nRF52840, already running the shipping dongle firmware (`0FCF:1009`), driven as an ANT+ master by `radiant/spike/promisc/spike_b_drive.py` | **Zero Feather flashes were used**, as in Spike A |
 
 Device under test: **#14871 (`0x3A17`), type `0x0B`, transmission type 5, period
 8182** - the same transmitter Spike A characterised, so its channel ID is
@@ -219,7 +219,7 @@ So the payload length never moved, and the falsifiable prediction in
 `docs/ant-radio-link.md` - that an advanced-burst frame shows `0x1A` - **remains
 untested.** The capture would have caught it if it had happened: a frame with a
 different payload length reads its header correctly and then fails its CRC,
-which `radiant_core/spike/promisc` counts and prints separately as `longframe`.
+which `radiant/spike/promisc` counts and prints separately as `longframe`.
 **`longframe` was zero in all six runs**, which is the positive statement that no
 frame of a non-standard length was ever on the air.
 
@@ -284,7 +284,7 @@ Do not build `radiant_burst.c` on it.
 > The instruction not to build `radiant_burst.c` on the guess was correct, and the
 > guess was wrong. `radiant_burst.c` can be written now, from part 2.
 
-**What `radiant_core` may rely on today**: `0x0A` broadcast, `0xAA` acknowledged,
+**What `radiant` may rely on today**: `0x0A` broadcast, `0xAA` acknowledged,
 `0x8A` for a burst packet that is not the last. Anything about sequence numbers
 or the final packet of a burst is unknown, and a table of three rows is enough to
 implement broadcast and acknowledged data - which is the whole of trainer
@@ -307,7 +307,7 @@ of them can be an ANT endpoint.
 
 So the nRF5340 had to be the sniffer. The plan's objection to the nRF5340 does
 not apply to a bare capture app - it needs no RPC subsystem - and that part was
-right: **`radiant_core/spike/promisc` builds and programs cleanly for
+right: **`radiant/spike/promisc` builds and programs cleanly for
 `nrf5340dk/nrf5340/cpunet`** (23,216 B flash, 22,800 B RAM), and J-Link
 programmed the network core at 122 KB/s with no complaint. The image is at
 `build/promisc_net/merged.hex`.
@@ -482,7 +482,7 @@ Spike A's advice, now with eight times the reason.
 
 ---
 
-## Consequences for `radiant_core`
+## Consequences for `radiant`
 
 1. **`PCNF0 = 0, STATLEN = 10` is mandatory for tracking, not optional.** The
    `LFLEN = 8 / CRCINC = 1` form is a broadcast-only receiver. This is the

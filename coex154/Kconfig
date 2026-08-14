@@ -17,14 +17,14 @@ config COEX154_ROLE_RX
 	  The DUT. Sits in promiscuous receive and tallies frames by the
 	  sequence number in their payload, so loss is computed from what was
 	  SENT rather than from what was expected to be sent. This is the end
-	  that also runs radiant_core, and therefore the end whose radio is
+	  that also runs radiant, and therefore the end whose radio is
 	  being taken away.
 
 config COEX154_ROLE_TX
 	bool "Transmitter - the traffic generator"
 	help
 	  The reference end. Sends a counted, evenly-spaced stream and nothing
-	  else. It must NOT run radiant_core: a generator whose own radio is
+	  else. It must NOT run radiant: a generator whose own radio is
 	  arbitrated cannot tell "the DUT did not hear it" from "it was never
 	  sent", which is the one distinction the whole measurement rests on.
 
@@ -73,7 +73,7 @@ config COEX154_TX_COUNT
 
 config COEX154_ANT_MASTERS
 	int "ANT+ master channels the receiver runs alongside 802.15.4"
-	depends on COEX154_ROLE_RX && RADIANT_CORE
+	depends on COEX154_ROLE_RX && RADIANT
 	range 0 8
 	default 8
 	help
@@ -96,14 +96,14 @@ config COEX154_ANT_MASTERS
 	  hardware cannot reach them; 8 channels is the ceiling the range above
 	  records rather than hides.
 
-	  0 turns ANT off while leaving radiant_core linked and initialised,
+	  0 turns ANT off while leaving radiant linked and initialised,
 	  which is a THIRD arm of the A/B and a useful one: it separates the
 	  cost of the arbiter merely being present from the cost of the air it
 	  takes away.
 
 config COEX154_ANT_BUNCHED
 	bool "Open every ANT master at offset zero instead of spreading them"
-	depends on COEX154_ROLE_RX && RADIANT_CORE
+	depends on COEX154_ROLE_RX && RADIANT
 	help
 	  THE THIRD ARM. With this n (the default) the masters' start offsets are
 	  spread evenly across the channel period, which is what section 7.3a's
@@ -124,7 +124,7 @@ config COEX154_ANT_BUNCHED
 
 config COEX154_ARBITRATED
 	bool
-	default y if RADIANT_CORE_BACKEND_NRF_GATE_MPSL
+	default y if RADIANT_BACKEND_NRF_GATE_MPSL
 	select NRF_802154_MULTIPROTOCOL_SUPPORT
 	help
 	  Not user-facing. Exists solely to reach

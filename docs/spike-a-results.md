@@ -34,7 +34,7 @@
 > table; a broadcast-only receiver is what the first of them describes, and
 > `docs/ant-radio-link.md` keeps it on those terms.
 
-Checked by: `radiant_core/spike/rx_raw` and the captures it produced,
+Checked by: `radiant/spike/rx_raw` and the captures it produced,
 `archive/captures/radio/2026-08-09-nrf54l15-run1.log` and
 `...-run2.log`. Re-running the spike against a transmitter with a different
 device number requires rebuilding it with a different `SPIKE_DEVNUM`; if this
@@ -446,7 +446,7 @@ Named so their absence is visibly a decision.
    Every register value above was measured on nRF54L15 silicon. The mapping is
    expected to port unchanged - the field positions are identical and the MDK
    macros are the same names - but "expected" is what this spike exists to stop
-   people saying. Build `radiant_core/spike/rx_raw` for
+   people saying. Build `radiant/spike/rx_raw` for
    `adafruit_feather_nrf52840/nrf52840/uf2`, or better for the nRF5340 DK, which
    flashes unattended and whose network core is a closer relative of the
    nRF52840 RADIO than the nRF54L15 is.

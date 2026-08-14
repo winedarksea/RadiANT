@@ -25,8 +25,8 @@
 #include <zephyr/kernel.h>
 #include <zephyr/sys/util.h>
 
-#include <radiant_core/radiant_sec.h>
-#include <radiant_core/radiant_channel.h>
+#include <radiant/radiant_sec.h>
+#include <radiant/radiant_channel.h>
 
 #include "ant_radio.h"
 #include "ant_wire.h"

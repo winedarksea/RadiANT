@@ -34,10 +34,10 @@
  * makes converting the five tools a matter of deleting a local definition and
  * adding an import, with no renaming at all.
  *
- * Every ANTW_* name below is now an alias of radiant_core's own
- * RADIANT_WIRE_* definition (radiant_core/include/radiant_core/radiant_wire.h) -
+ * Every ANTW_* name below is now an alias of radiant's own
+ * RADIANT_WIRE_* definition (radiant/include/radiant/radiant_wire.h) -
  * not a second, independently-generated copy of the same value. That is what
- * lets radiant_core reach no path outside itself for a wire constant while this
+ * lets radiant reach no path outside itself for a wire constant while this
  * file, and every ANTW_* call site in this application, stays untouched.
  *
  * Nothing here describes the on-air link layer. This header is about
@@ -47,7 +47,7 @@
 #ifndef ANT_WIRE_H_
 #define ANT_WIRE_H_
 
-#include <radiant_core/radiant_wire.h>
+#include <radiant/radiant_wire.h>
 
 /* ------------------------------------------------------------------------
  * Framing

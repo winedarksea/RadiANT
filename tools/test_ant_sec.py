@@ -55,7 +55,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(0x0F, got["page_hi"])
 
     def test_the_switches_are_the_bits_the_firmware_uses(self):
-        # radiant_core/src/radiant_sec_host.c BUILD_ASSERTs these four, so this
+        # radiant/src/radiant_sec_host.c BUILD_ASSERTs these four, so this
         # is the Python end of a pin that already exists in C.
         self.assertEqual(0x01, SW_CONF)
         self.assertEqual(0x02, SW_AUTH)

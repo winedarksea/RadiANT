@@ -19,7 +19,7 @@
  * Read scope is the clean-room control: writing this file is the only role
  * permitted to read sdk-ant, and only its headers (docs/decisions/0002-clean-
  * room-policy.md). This file is glue against a licensed API, not part of
- * radiant_core, and must not inform radiant_core - a clean-room backend is
+ * radiant, and must not inform radiant - a clean-room backend is
  * written from src/ant_radio.h and docs/sdk-ant-contract.md only. libant.a
  * itself was never disassembled, inspected or instrumented, and that
  * prohibition does not expire.

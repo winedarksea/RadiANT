@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * ant_radio_radiant.h (was radiant_core/include/radiant_core/radiant_api.h) -
+ * ant_radio_radiant.h (was radiant/include/radiant/radiant_api.h) -
  * what ant_radio_radiant.c presents to the rest of the image, now that it is
  * the application's own adapter rather than a module header. See
- * src/Kconfig.antr_api's CONFIG_RADIANT_CORE_ANTR_API for why it moved.
+ * src/Kconfig.antr_api's CONFIG_RADIANT_ANTR_API for why it moved.
  *
  * Provenance: clean-room, from src/ant_radio.h, docs/sdk-ant-contract.md and
- * the six radiant_core module headers it composes.
+ * the six radiant module headers it composes.
  * See docs/decisions/0002-clean-room-policy.md.
  *
  * ant_radio_radiant.c's real interface is src/ant_radio.h (the antr_* entry
@@ -104,7 +104,7 @@ struct radiant_api_stats {
 	uint32_t xfer_watchdogs;
 	/*
 	 * CRC failures on a tracked window recovered by flipping one bit back
-	 * (CONFIG_RADIANT_CORE_CRC_REPAIR). Kept apart from a clean receive:
+	 * (CONFIG_RADIANT_CRC_REPAIR). Kept apart from a clean receive:
 	 * about 1 in 585 unrepairable frames hits a valid syndrome by chance
 	 * and gets "repaired" wrong, so at full signal this must be zero.
 	 */
@@ -120,7 +120,7 @@ struct radiant_api_stats {
 	uint32_t crc_repair_refuted;
 	/*
 	 * Repairs refuted by radiant_profile_sanity.c
-	 * (CONFIG_RADIANT_CORE_PROFILE_SANITY): passed the CRC/control/type
+	 * (CONFIG_RADIANT_PROFILE_SANITY): passed the CRC/control/type
 	 * checks but the payload is a physically impossible reading. Kept
 	 * separate from crc_repair_refuted since the two catch mis-repairs on
 	 * different evidence (frame structure vs. payload meaning).

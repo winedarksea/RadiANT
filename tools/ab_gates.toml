@@ -103,7 +103,7 @@ require_byte_identical = true
 #
 # The one entry that will legitimately be needed is
 # "4d-request-version-0/valid": MESG_VERSION returns the backend's own name, so
-# sdk-ant and radiant_core cannot both answer it identically and should not try.
+# sdk-ant and radiant cannot both answer it identically and should not try.
 # Adding it here is better than dropping 0x3E from the conformance run, because
 # the reply's *length and framing* still get checked - only its contents are
 # excused. Add it when the first real A/B runs, not before: an allowance added
@@ -323,7 +323,7 @@ arbiter_only_max_delta_pp = 1.5
 
 # The sweep is the elastic consumer (ADR 0013), so it gets slower and that is
 # the intended cost rather than a regression. It is still bounded: sets/s from
-# CONFIG_RADIANT_CORE_SWEEP_DEBUG with the second stack on must be at least this
+# CONFIG_RADIANT_SWEEP_DEBUG with the second stack on must be at least this
 # fraction of the same build with it off.
 #
 # Quantified rather than merely accepted, because "the sweep gives way" with no

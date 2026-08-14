@@ -2,7 +2,7 @@
 #
 # ant_wire.yaml - the single source of truth for the ANT *serial* protocol
 # (host <-> dongle, 0xA4-framed). Nothing about the on-air link layer lives
-# here; that is docs/ant-radio-link.md and radiant_core/.
+# here; that is docs/ant-radio-link.md and radiant/.
 #
 # Rendered by scripts/gen_ant_wire.py into three committed outputs:
 #
@@ -472,8 +472,8 @@ messages:
            mechanism MESG_ASSIGN_CHANNEL's extended byte already reaches, one
            message at a time. The optional synchronous-channel-packets-only
            byte is accepted and ignored; reporting everything is a superset of
-           the restricted subset. radiant_core backend only - the capabilities
-           reply advertises this on radiant_core and OFF elsewhere, which is
+           the restricted subset. radiant backend only - the capabilities
+           reply advertises this on radiant and OFF elsewhere, which is
            why a host with the call (ANT_OpenRxScanMode) sends it only there."
     source: bridge
 
@@ -1156,7 +1156,7 @@ constant_groups:
          source: "tools", emit_c: false}
       - {name: LIB_CONFIG_ALL_EXT_FIELDS, value: 0xE0,
          desc: "Channel id + RSSI + RX timestamp, all three. What ant_verify.py
-                asks for, and what radiant_core must assemble: the timestamp is the
+                asks for, and what radiant must assemble: the timestamp is the
                 figure the timing gate is read against.",
          source: "tools (ant_verify)"}
       - {name: LIB_CONFIG_MASK_ALL, value: 0xFF,
@@ -1284,7 +1284,7 @@ constant_groups:
          desc: "The stack has finished with the burst block it was handed and
                 the next may overwrite it. The bridge consumes this internally
                 and never puts it on the wire: a real stick frames bursts
-                itself. If radiant_core fails to raise it exactly once per accepted
+                itself. If radiant fails to raise it exactly once per accepted
                 block, host bursts stall 1000 ms per packet.",
          source: "bridge, rev5.1 sec 9.5.6", verify: sdk-ant-shim}
 
@@ -1480,7 +1480,7 @@ constant_groups:
     values:
       - {name: BURST_HEADER_CHANNEL_MASK, value: 0x1F,
          desc: "Channel number. Five bits - which is why 32 channels is the
-                serial protocol's natural ceiling, and why radiant_core is sized
+                serial protocol's natural ceiling, and why radiant is sized
                 for 32 from the first line. Because the field is five bits
                 wide, a header on the wire cannot express a channel above 31 at
                 all; what a burst header CAN address that the device does not
@@ -1614,7 +1614,7 @@ capabilities:
         - {name: CAPABILITIES_SCAN_MODE_ENABLED, value: 0x04,
            desc: "MESG_OPEN_RX_SCAN_MODE. Reported OFF in this generated reply,
                   which is why a host that has ANT_OpenRxScanMode never sends
-                  0x5B on this build. radiant_core reports the bit on instead,
+                  0x5B on this build. radiant reports the bit on instead,
                   and as of 2026-08-10 0x5B is bridged there to match - see the
                   0x5B message row and docs/backends.md.",
            source: "stub, readme"}

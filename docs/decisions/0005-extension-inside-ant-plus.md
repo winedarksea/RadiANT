@@ -119,7 +119,7 @@ that what this ADR argued from remains readable.
 
 ## Context
 
-`radiant_core` is a superset, not a clone. Beyond byte-exact ANT+ compatibility it
+`radiant` is a superset, not a clone. Beyond byte-exact ANT+ compatibility it
 is meant to carry the things Garmin stopped developing: 32 simultaneous
 channels instead of 8, background scan mode, a generic telemetry envelope, new
 device types, and optional per-channel security. All of that needs somewhere to

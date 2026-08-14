@@ -121,7 +121,7 @@ cpunet/54H/9280 devicetrees and in no `nrf54l*.dtsi` — and reaching CRACEN mea
 PSA/`nrf_security`. So the v1 backend is **software AES**, encrypt-only, one
 shared key schedule, roughly 1.0 KB, working on every board in the matrix. The
 seam above it is built for hardware from the first line (see
-`radiant_core/include/radiant_core/radiant_sec.h`); no hardware backend ships in
+`radiant/include/radiant/radiant_sec.h`); no hardware backend ships in
 v1.
 
 ### 3.1 `X_CONF` — confidentiality
@@ -326,7 +326,7 @@ exists, is to define the epoch as **coarse real time**, minutes since a fixed
 RadiANT date: monotone for free, and it composes with the time-derived counter
 of section 3.1 because `0xF3` carries microseconds-into-epoch as well as the
 ordinal. Raw `0xF3` stays available for clockless hosts. NVM epoch ratcheting
-inside `radiant_core` is deferred.
+inside `radiant` is deferred.
 
 **A counter wrap advances the epoch by 1, on both sides.** The 16-bit counter
 was sized against 128-second epochs, where it could not wrap. With the epoch
@@ -434,7 +434,7 @@ warranty, or a previous owner. Sell or gift the sensor and it is genuinely a
 different device.
 
 **Zero UX change — no receiver ever loses a sensor**, which is the whole reason
-this is the default. It is also not `radiant_core` code: device numbers are set
+this is the default. It is also not `radiant` code: device numbers are set
 by the host (`MESG_SET_CHANNEL_ID`) or by the node application, so this is a
 provisioning rule in `docs/profile-registry.md` plus `tools/` and `sim/`
 support.
@@ -487,7 +487,7 @@ written down here rather than discovered:
   **The trial must be able to answer no.** A receiver that verified whatever it
   heard would "re-acquire" the first stranger to walk past, which is worse than
   re-pairing because it is silent. Both directions are asserted in
-  `radiant_core/tests/src/test_sec.c`, along with a refusal to start a trial
+  `radiant/tests/src/test_sec.c`, along with a refusal to start a trial
   before the epoch is known — with no epoch nothing can verify, so such a trial
   would report "not my sensor" about every candidate including the right one.
 
@@ -600,7 +600,7 @@ unchanged, that no `radiant_sec` symbol exists, and that `.config` contains
 without it the job goes green on the day someone renames the symbol.
 
 The on-air claim is a ztest assertion against the recorded `fake_radio` TX
-bodies and RX filters, not a shell script — `radiant_core/tests/api/src/test_api_sec.c`,
+bodies and RX filters, not a shell script — `radiant/tests/api/src/test_api_sec.c`,
 which runs in both a feature-absent and a feature-present scenario so the
 comparison means something.
 
@@ -797,7 +797,7 @@ named as mitigations:
   absence from the module is a decision.
 
 **And the recommendation is unchanged.** The pairing section of
-`radiant_core/include/radiant_core/radiant_sec.h` — the block headed "PAIRING
+`radiant/include/radiant/radiant_sec.h` — the block headed "PAIRING
 HAPPENS IN THE CLEAR", immediately above `radiant_sec_pair_enter()` — already
 says out-of-band pairing "remains the recommended path for anything that
 matters: no protocol, no attack surface during pairing at all, and no
@@ -916,7 +916,7 @@ comfortably — and derive the shared secret, from which `K_root` is derived. Th
 32-byte scalar comes from the host over `0xF5` (section 7.4).
 
 **Measured cost: 374 ms per scalar multiplication**, on an nRF5340 application
-core at 128 MHz, printed by `radiant_core/tests/src/test_sec_x25519.c`. A
+core at 128 MHz, printed by `radiant/tests/src/test_sec_x25519.c`. A
 pairing needs two — one to produce the local public key, one for the shared
 secret — so roughly **0.75 s of computation per pairing**.
 
@@ -962,7 +962,7 @@ Not a limit of this design - a note for whoever implements the X25519 exchange
 above, recorded now for the same reason section 7.4's limits are recorded now
 rather than found during integration.
 
-sdk-ant's own AES-CTR negotiation (declined for `radiant_core`; see section 10)
+sdk-ant's own AES-CTR negotiation (declined for `radiant`; see section 10)
 serialises key exchange across the whole device with a single global "only one
 channel negotiates at a time" flag - a reasonable design if a negotiation needs
 a scarce shared resource (a work queue, an ECB/crypto peripheral slot) that
@@ -1017,7 +1017,7 @@ one, and refuses epochs near `0xFFFFFFFF`; see section 3.5.
 
 ### The two ordering rules, and why they are refusals rather than defaults
 
-`0xF1`–`0xF4` are implemented by `radiant_core/src/radiant_sec_host.c` behind
+`0xF1`–`0xF4` are implemented by `radiant/src/radiant_sec_host.c` behind
 `CONFIG_RADIANT_SEC_HOST_MESSAGES`, and reached from the host through
 `antr_sec_config()`, `antr_sec_key_set()`, `antr_sec_epoch_set()` and
 `antr_sec_status_get()`. Two orderings are mandatory, and both answer
@@ -1147,7 +1147,7 @@ that the numbers differ.
 - **NVM epoch ratcheting**, **TESLA delayed key disclosure** (v2), and
   **per-receiver revocation** — the last stays documented as a known limit
   (7.3), not solved.
-- **ANT+'s own AES-CTR scheme in `radiant_core`.** No Windows host can call it,
+- **ANT+'s own AES-CTR scheme in `radiant`.** No Windows host can call it,
   it is malleable and unauthenticated, and it reserves stack RAM shared with the
   plain channels. `encryption.conf` and the existing sdk-ant-backed writes stay
   exactly as they are; they cost nothing while that backend exists.
@@ -1645,7 +1645,7 @@ recommendation for a product with a manufacturing step; it is not a v1 bench
 answer. The `enrol` setting picks the path:
 
 - **`closed`** — no over-air enrolment ever. This is what
-  `radiant_core/include/radiant_core/radiant_sec.h` already recommends for
+  `radiant/include/radiant/radiant_sec.h` already recommends for
   anything that matters, and that recommendation is not weakened here.
 - **`physical`** (default) — a bounded window opened by a physical action,
   reusing `RADIANT_SEC_PAIR_TIMEOUT_DEFAULT_S = 60`. One pairing per window.

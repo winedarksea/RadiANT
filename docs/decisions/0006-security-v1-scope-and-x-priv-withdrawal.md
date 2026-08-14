@@ -17,7 +17,7 @@ document.
 ## Decision
 
 1. **v1 security is two per-channel payload transforms: `X_AUTH` and `X_CONF`.**
-   Both are confined to two hook points in `radiant_core/src/radiant_api.c`.
+   Both are confined to two hook points in `radiant/src/radiant_api.c`.
    Neither touches the address path, the search policy, the RX filters, the
    scheduler or the device ID lists.
 2. **`X_PRIV` — continuous per-epoch device-number rotation — is rejected.** Not

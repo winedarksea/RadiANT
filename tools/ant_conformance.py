@@ -56,7 +56,7 @@ read timeout racing a reply loses the answer - the bug that once manufactured
 
 `--compare` reports differences by case name, not byte offset. One expected
 difference: `MESG_VERSION` returns the backend's own name, so sdk-ant and
-`radiant_core` can't and shouldn't match. Use `--allow-differing-case` for it,
+`radiant` can't and shouldn't match. Use `--allow-differing-case` for it,
 recorded in `tools/ab_gates.toml` for review.
 """
 
@@ -75,7 +75,7 @@ import ant_trace  # noqa: E402
 import ant_wire as wire  # noqa: E402
 
 # The published ANT+ network key, imported from ant_scan.py (its canonical
-# home per docs/ant-serial-protocol.md). radiant_core refuses unknown keys, so
+# home per docs/ant-serial-protocol.md). radiant refuses unknown keys, so
 # a made-up key here would manufacture a divergence unrelated to the bridge.
 from ant_scan import ANT_PLUS_KEY  # noqa: E402
 from ant_trace import DONGLE_TO_HOST, HOST_TO_DONGLE, Record  # noqa: E402
@@ -99,7 +99,7 @@ EXCLUDED = {
     wire.MESG_RADIO_CW_INIT_ID:
         "enters continuous-wave test mode - same reason",
     wire.MESG_OPEN_RX_SCAN_MODE_ID:
-        "radiant_core implements background scan mode, so this would fill the "
+        "radiant implements background scan mode, so this would fill the "
         "transcript with whatever sensors happen to be in the room",
 }
 

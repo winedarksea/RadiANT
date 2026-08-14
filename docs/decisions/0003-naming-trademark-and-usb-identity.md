@@ -41,7 +41,7 @@ but removes none of the marks.
 RadiANT is the public name for the whole effort and for the extension family —
 the optional security switches, the generic telemetry profile, the new device
 types. ~~`ant_core` remains the C module name.~~ **Amended 2026-08-09 — see
-[Amendment: the C module is `radiant_core`](#amendment-2026-08-09--the-c-module-is-radiant_core)
+[Amendment: the C module is `radiant`](#amendment-2026-08-09--the-c-module-is-radiant)
 below.**
 
 The name contains the mark, so it carries the same posture as the descriptor
@@ -63,15 +63,15 @@ carving out "reasonable and customary use in describing the origin of the
 Work". The qualifier is what keeps the use inside that carve-out. `NOTICE`
 carries the full statement and is the authoritative text.
 
-### Amendment 2026-08-09 — the C module is `radiant_core`
+### Amendment 2026-08-09 — the C module is `radiant`
 
 The sentence above originally read "`ant_core` remains the C module name." That
 is no longer true, and the change is recorded here rather than edited into the
 paragraph, because an ADR whose text quietly matches today's tree is a record of
 nothing.
 
-**What changed:** `ant_core` → `radiant_core`. The directory, the Kconfig prefix
-(`RADIANT_CORE_*`), the include path (`#include <radiant_core/radiant_frame.h>`)
+**What changed:** `ant_core` → `radiant`. The directory, the Kconfig prefix
+(`RADIANT_*`), the include path (`#include <radiant/radiant_frame.h>`)
 and every C identifier below the backend seam. Landed in the same commit that
 converted the module to Zephyr module shape.
 
@@ -81,7 +81,7 @@ the directory, the include path and the Kconfig prefix are precisely the surface
 a reviewer — or a lawyer — reads as an identity claim, and they are more durable
 than any prose: a README can be rewritten, an `#include` line is in every file
 that consumes the module and in every downstream fork of it. `ant_core` reads as
-a claim to be ANT. `radiant_core` reads as what it is, and this ADR had already
+a claim to be ANT. `radiant` reads as what it is, and this ADR had already
 committed the project to "always described as compatible, never as endorsed."
 
 **What did not change, and why the rename does not reach it.** The naming rule

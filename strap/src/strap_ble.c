@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * P8b: BLE beside RadiANT on one node. SoftDevice Controller advertises the
- * SIG Heart Rate Service while radiant_core keeps an ANT+ 0x78 master
+ * SIG Heart Rate Service while radiant keeps an ANT+ 0x78 master
  * running - one RADIO peripheral, arbitrated by the MPSL gate (P3).
  *
  * The intervals ARE the priority mechanism. Per nrfxlib's timeslot.rst,
@@ -60,7 +60,7 @@ static void on_connected(struct bt_conn *conn, uint8_t err)
 	atomic_set(&connected, 1);
 	LOG_INF("BLE connected");
 	/* Nothing is done to ANT+ from here - P9's suppression rule lives
-	 * with the ANT+ side; a BLE callback reaching into radiant_core
+	 * with the ANT+ side; a BLE callback reaching into radiant
 	 * (from controller context, no less) would be the layering violation
 	 * the gate seam exists to avoid. */
 }

@@ -31,7 +31,7 @@
 .PARAMETER Backend
     Which implementation of src/ant_radio.h to build against: sdk_ant (the
     proven path and the only one release artifacts come from), core (the
-    clean-room radiant_core stack) or stub. Passed through as -DANT_RADIO and
+    clean-room radiant stack) or stub. Passed through as -DANT_RADIO and
     asserted afterwards against .config.
 
 .PARAMETER SdkAntDir
@@ -43,7 +43,7 @@
     machine happened to have configured.
 
 .PARAMETER RadiantBackend
-    Which radiant_core radio HAL to compile, for -Backend core: nrf (the real
+    Which radiant radio HAL to compile, for -Backend core: nrf (the real
     radio) or null (an inert stub that transmits and receives nothing).
 
     It defaults to nrf here even though CMakeLists.txt defaults it to null,
@@ -98,7 +98,7 @@ $dist = Join-Path $repo 'dist'
 # generates the symbol from ANT_RADIO the same way.
 $backendSymbol = "CONFIG_ANT_DONGLE_RADIO_$($Backend.ToUpper())=y"
 
-# The same trick one level down - for radiant_core's own HAL choice - is now
+# The same trick one level down - for radiant's own HAL choice - is now
 # computed per target rather than once here, because a row may pin its own
 # backend regardless of -RadiantBackend. See the cc26x2r1_launchxl row. Only
 # the core backend has such a choice at all; sdk_ant and stub never look at
@@ -125,7 +125,7 @@ $targets = @(
 # CI matrix - so the thing it was written to prevent was never prevented for
 # it. security.conf gets its entry in the same change that creates it.
 #
-# CONFIG_RADIANT_SEC depends on CONFIG_RADIANT_CORE, so a security build under
+# CONFIG_RADIANT_SEC depends on CONFIG_RADIANT, so a security build under
 # -Backend sdk_ant would compile nothing and pass, which is worse than not
 # building it: it would look like coverage. Hence the gate on $Backend rather
 # than an unconditional row.
@@ -304,7 +304,7 @@ try {
             throw "$($t.artifact): expected $backendSymbol in .config, found '$gotRadio'"
         }
 
-        # 4. radiant_core's radio HAL. RADIANT_BACKEND defaults to null in
+        # 4. radiant's radio HAL. RADIANT_BACKEND defaults to null in
         # CMakeLists.txt, so a -Backend core build that simply never mentions
         # it compiles a radio that transmits and receives nothing - and checks
         # 1 to 3 all pass, because the link address, the transport and the
@@ -313,9 +313,9 @@ try {
         # symptom is that no sensor is ever found, which reads as a hardware
         # fault and is why this check is worth its lines.
         if ($Backend -eq 'core') {
-            $rowRadiantSymbol = "CONFIG_RADIANT_CORE_BACKEND_$($rowRadiant.ToUpper())=y"
+            $rowRadiantSymbol = "CONFIG_RADIANT_BACKEND_$($rowRadiant.ToUpper())=y"
             if (-not ($cfg | Where-Object { $_ -eq $rowRadiantSymbol })) {
-                $gotHal = ($cfg | Where-Object { $_ -match '^CONFIG_RADIANT_CORE_BACKEND_\w+=y' })
+                $gotHal = ($cfg | Where-Object { $_ -match '^CONFIG_RADIANT_BACKEND_\w+=y' })
                 throw "$($t.artifact): expected $rowRadiantSymbol in .config, found '$gotHal'"
             }
         }
@@ -344,7 +344,7 @@ try {
 
         # Only the sdk_ant backend produces artifacts anyone is handed. Release
         # images stay on that backend until the Tier 3 Zwift acceptance passes
-        # for radiant_core; moving them is a recorded decision in
+        # for radiant; moving them is a recorded decision in
         # docs/decisions/0001, not a side effect of running this script with a
         # different flag.
         if ($Backend -ne 'sdk_ant') {

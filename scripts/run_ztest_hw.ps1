@@ -2,14 +2,14 @@
 
 <#
 .SYNOPSIS
-    Build, flash and run the radiant_core ztest suite on a development kit.
+    Build, flash and run the radiant ztest suite on a development kit.
 
 .DESCRIPTION
     native_sim does not build on Windows - no host C compiler, no QEMU - so for
     a long time the only place any C assertion in this project executed was CI
     on Linux, and a broken suite cost a push and a round trip to discover.
 
-    It does not have to. The suites in radiant_core/tests touch no hardware at
+    It does not have to. The suites in radiant/tests touch no hardware at
     all: they drive the module against tests/fake_radio.c, a mock HAL with a
     virtual clock. So the board is not the thing under test, it is merely a C
     runtime with a UART - and an attached DK is one that is available now.
@@ -28,9 +28,9 @@
     three, and each is a separate application because its prj.conf cannot be
     reconciled with the others':
 
-      radiant_core\tests       the suites over the module's lower half, driven
+      radiant\tests       the suites over the module's lower half, driven
                                against tests\fake_radio.c.
-      radiant_core\tests\api   CONFIG_RADIANT_CORE_ANTR_API=y, which cannot be
+      radiant\tests\api   CONFIG_RADIANT_ANTR_API=y, which cannot be
                                flipped in the first one - both it and
                                test_event.c/test_channel.c define
                                radiant_event_crit_enter(),
@@ -39,7 +39,7 @@
                                radiant_channel_event_out(), so the two would
                                collide at link, and radiant_api.c's versions
                                would change what those suites assert.
-      radiant_core\tests\gate  the MPSL timeslot gate, compiled against fakes
+      radiant\tests\gate  the MPSL timeslot gate, compiled against fakes
                                for MPSL, MPSL_TIMER0 and the five
                                radiant_nrf_gate_* callbacks. Separate because it
                                SHADOWS <mpsl_timeslot.h>, <mpsl_hwres.h> and
@@ -73,8 +73,8 @@
 .EXAMPLE
     . .\scripts\env.ps1 -NcsVersion v3.4.0
     .\scripts\run_ztest_hw.ps1                                  -NcsVersion v3.4.0
-    .\scripts\run_ztest_hw.ps1 -App radiant_core\tests\api  -NcsVersion v3.4.0
-    .\scripts\run_ztest_hw.ps1 -App radiant_core\tests\gate -NcsVersion v3.4.0
+    .\scripts\run_ztest_hw.ps1 -App radiant\tests\api  -NcsVersion v3.4.0
+    .\scripts\run_ztest_hw.ps1 -App radiant\tests\gate -NcsVersion v3.4.0
 
     -NcsVersion is not optional on anything built against v3.4.0: the default
     below is v3.2.4, and the mismatch surfaces as a Zephyr-SDK error that reads
@@ -93,7 +93,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$App        = 'radiant_core\tests',
+    [string]$App        = 'radiant\tests',
     [string]$Board      = 'nrf5340dk/nrf5340/cpuapp',
     [string]$Port       = 'COM9',
     [string]$Serial     = '1050006310',
@@ -106,7 +106,7 @@ param(
     # instant. It is not any more: docs/radiant-security.md section 11.3
     # publishes an epoch-recovery cost table - 50, 1 000 and 65 536 CMAC
     # operations for a receiver that many boots out of date - and
-    # radiant_core/tests/src/test_sec_compat_attest.c asserts it by performing
+    # radiant/tests/src/test_sec_compat_attest.c asserts it by performing
     # those operations. With the software AES backend that is about 45 s on this
     # board, so the whole application now takes a little under a minute of
     # execution on top of the flash.

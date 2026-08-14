@@ -8,8 +8,8 @@
 # honest.
 #
 
-rsource "../radiant_core/src/node/Kconfig"
-rsource "../radiant_core/src/profiles/Kconfig"
+rsource "../radiant/src/node/Kconfig"
+rsource "../radiant/src/profiles/Kconfig"
 rsource "../src/Kconfig.antr_api"
 
 source "Kconfig.zephyr"
@@ -18,7 +18,7 @@ menuconfig STRAP
 	bool "RadiANT heart-rate strap"
 	default y
 	help
-	  A RadiANT NODE: radiant_core driving a master channel with
+	  A RadiANT NODE: radiant driving a master channel with
 	  src/profiles/profile_hr.c on top, broadcasting ANT+ heart rate
 	  (device type 0x78). No USB and no serial bridge - this is not a
 	  dongle, and the only host interface is the log.

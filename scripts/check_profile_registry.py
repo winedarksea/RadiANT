@@ -72,10 +72,10 @@ ANT_PLUS = PROFILES
 SECURITY = REPO / "docs" / "radiant-security.md"
 ANT_PAGES = REPO / "tools" / "ant_pages.py"
 RADIANT_CRYPTO = REPO / "tools" / "radiant_crypto.py"
-SEC_HEADER = REPO / "radiant_core" / "include" / "radiant_core" / "radiant_sec.h"
-SEC_COMPAT_HEADER = (REPO / "radiant_core" / "include" / "radiant_core" /
+SEC_HEADER = REPO / "radiant" / "include" / "radiant" / "radiant_sec.h"
+SEC_COMPAT_HEADER = (REPO / "radiant" / "include" / "radiant" /
                      "radiant_sec_compat.h")
-COMPAT_SOURCE = REPO / "radiant_core" / "src" / "radiant_sec_compat.c"
+COMPAT_SOURCE = REPO / "radiant" / "src" / "radiant_sec_compat.c"
 
 MARKER = re.compile(r"^<!--\s*radiant-registry:\s*([a-z0-9-]+)\s*-->\s*$")
 SEPARATOR = re.compile(r"^[\s:|-]+$")

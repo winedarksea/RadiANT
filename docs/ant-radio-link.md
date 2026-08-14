@@ -1,10 +1,10 @@
 # The ANT on-air link — clean-room reference
 
-Checked by: **Spike A** (`radiant_core/spike/rx_raw` — hears real ANT+ broadcasts and prints raw bytes,
+Checked by: **Spike A** (`radiant/spike/rx_raw` — hears real ANT+ broadcasts and prints raw bytes,
 CRC status, match index and RSSI), which **has run and passed**: `docs/spike-a-results.md`, from the
 logs `archive/captures/radio/2026-08-09-nrf54l15-run1.log` and
 `archive/captures/radio/2026-08-09-nrf54l15-run2.log`. And by **Spike B**
-(`radiant_core/spike/promisc` — promiscuous capture that separates broadcast from acknowledged from
+(`radiant/spike/promisc` — promiscuous capture that separates broadcast from acknowledged from
 burst), which **has run twice**, and which **refuted this document's reading of byte 3 and then
 refuted the replacement reading as well**:
 
@@ -14,7 +14,7 @@ refuted the replacement reading as well**:
 - **Part 2**, three radios, which **supersedes part 1 wherever they differ**:
   `docs/spike-b-part2-results.md`, from the four logs
   `archive/captures/radio/2026-08-09-spike-b2-run{0-pacing-bug,A-burst-seq,B-burst-seq-advburst,C-master-control}.log`.
-  Those four are checked by `radiant_core/spike/promisc/spike_b_analyse.py --strict`, which refuses a
+  Those four are checked by `radiant/spike/promisc/spike_b_analyse.py --strict`, which refuses a
   capture it cannot show to be complete.
 
 Nothing else in the repo fails if this file drifts. **If this file and those logs disagree, the logs
@@ -35,7 +35,7 @@ are right.**
 > but the two RADIOs differ in ramp-up, in the `TIMING`/`RXGAIN` block, and in the absence of
 > `MODECNF0`. Treat a first-run failure on the nRF52840 as a porting question, not as a refutation.
 
-This document is what every `radiant_core` agent reads **instead of** anything of Garmin's. It is the
+This document is what every `radiant` agent reads **instead of** anything of Garmin's. It is the
 whole permitted description of the physical link. If a fact is not here and not in the free
 *ANT Message Protocol and Usage Rev 5.1*, it is not available to the link layer.
 
@@ -199,7 +199,7 @@ dongle hears, and `tools/ant_scan.py` against a spike-driven master is the cheap
 
 This was written as a prediction so that Spike A could *fail*. It did not — but Spike B did move one
 row, and it is the row a backend is built from. This is the tracking / transmit configuration on the
-nRF RADIO. It appears here rather than in `radiant_core/include/radiant_core/radiant_radio_hal.h` on purpose: the HAL
+nRF RADIO. It appears here rather than in `radiant/include/radiant/radiant_radio_hal.h` on purpose: the HAL
 contains no register semantics at all, and this table is what one backend does to satisfy it.
 
 **The measurement was on an nRF54L15 DK; these values were derived for the nRF52840 and have never
@@ -475,7 +475,7 @@ it did.
 > **Its premise is falsified.** The correction assumed bits 4:0 are a length that counts the CRC,
 > and they are not; they are the slot bit, the sequence bit and `010`. There is nothing left to
 > compute a prediction *from*, so there is no prediction. Neither `0x1A` nor `0x9A` is a candidate
-> encoding, and no constant for either appears in `radiant_core` any more.
+> encoding, and no constant for either appears in `radiant` any more.
 >
 > Nor is the frame any closer to being seen. Part 2 enabled advanced burst again, the dongle
 > accepted 24-byte blocks, every transfer completed — and **the air still only ever carried
@@ -484,7 +484,7 @@ it did.
 > only one end had it enabled. So **no frame with a payload other than eight bytes has ever been on
 > this bench's air**, across both parts.
 >
-> (`radiant_core/spike/promisc` prints a frame that reads its header and then fails CRC as `longframe`,
+> (`radiant/spike/promisc` prints a frame that reads its header and then fails CRC as `longframe`,
 > which is what a non-standard length would look like. Runs A, B and C produced 5, 1 and 2 of them
 > and every one is an ordinary bit error, printed with a control byte one or two bits from a value
 > the run was already producing: `0x0C`, `0x0E`, `0x1A` against `0x0A`. In particular **the only
@@ -535,7 +535,7 @@ here does not produce a weak link; it produces silence, which is worth knowing w
 comes up dead.
 
 The invariant that must hold on any radio is the on-air order above; the register arithmetic that
-produces it is a backend's business and belongs nowhere near `radiant_core`.
+produces it is a backend's business and belongs nowhere near `radiant`.
 
 ## Search needs a different packet configuration
 
@@ -727,7 +727,7 @@ sequence lives* was not guessed and could not have been: **there is no burst seq
 
 The full table and its evidence are in *Fact one*.
 
-**What `radiant_core` may rely on today**: the whole encoding. **`radiant_burst.c` can be written now** —
+**What `radiant` may rely on today**: the whole encoding. **`radiant_burst.c` can be written now** —
 bit 7 set, bit 6 clear on data and set on the acknowledgement, bit 5 on the final packet, bit 4
 alternating per on-air packet, bit 3 set only if this frame opens the slot, bits 2:0 `010`. A
 transmitter alternates bit 4 and expects the acknowledgement to carry its complement.
@@ -831,7 +831,7 @@ rtl_433 is GPL. **RadiANT is Apache-2.0.** The distinction that matters is not "
 
 - **Facts are fine and they live here.** Centre frequency, modulation, the CRC polynomial and seed,
   the absence of whitening, the preamble rule, the field order. Facts are not copyrightable, and this
-  document is where they are recorded so that no `radiant_core` agent needs to open rtl_433 at all.
+  document is where they are recorded so that no `radiant` agent needs to open rtl_433 at all.
 - **Expression is not, ever.** No rtl_433 code, no near-verbatim translation of its decoder, no
   transliteration of its structure into C, in any Apache-2.0 file in this repo. There is no cheap way
   to unwind that later, and the whole clean-room defence rests on it.
@@ -841,7 +841,7 @@ rtl_433 is GPL. **RadiANT is Apache-2.0.** The distinction that matters is not "
 
 The same boundary, in the other direction, applies to non-redistributable ANT+ device profile documents:
 usable for `src/profiles/`, `tools/ant_pages.py` and the profile docs, and **never** for
-`radiant_core/**` or for this file. See `docs/decisions/0002-clean-room-policy.md`.
+`radiant/**` or for this file. See `docs/decisions/0002-clean-room-policy.md`.
 
 ## What this document does not contain
 

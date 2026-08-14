@@ -1,13 +1,13 @@
-# 0002 — Clean-room policy for `radiant_core`
+# 0002 — Clean-room policy for `radiant`
 
-Checked by: the `Provenance:` line required on every `radiant_core/*.c` — a file
+Checked by: the `Provenance:` line required on every `radiant/*.c` — a file
 without one is not reviewable and should not be merged. The read-scope rules
 are checked by the structure of the work itself (see *Enforcement*), not by a
 script. Nothing else here is machine-verifiable, which is precisely why it is
 written down before there is any code to argue about.
 
 - **Status:** Accepted. **This ADR must exist and be merged before the first
-  line of `radiant_core` is written.** That ordering is the whole point: a policy
+  line of `radiant` is written.** That ordering is the whole point: a policy
   adopted after the fact proves nothing.
 - **Date:** 2026-08-08
 - **Related:** [0001 backend selection](0001-backend-selection-and-release-default.md),
@@ -16,7 +16,7 @@ written down before there is any code to argue about.
 
 ## Context
 
-`radiant_core` is a from-scratch implementation of a link layer whose only existing
+`radiant` is a from-scratch implementation of a link layer whose only existing
 implementation is a proprietary, obfuscated binary — `libant.a` — distributed
 under a licence that explicitly forbids reverse-engineering it. The protocol is
 patented (Garmin holds the ANT patents; core ANT dates to 2003), the ANT+
@@ -86,11 +86,11 @@ only**:
   it, not "just to check one constant". Public symbol *names* from `nm` and
   archive membership from `ar t` are inventory facts about a file and have
   already been recorded; the *contents* of the code are off limits.
-- **Non-redistributable documents anywhere under `radiant_core/**`.** The link layer
+- **Non-redistributable documents anywhere under `radiant/**`.** The link layer
   stays strictly clean-room. If a page-layout question arises while writing
   core code, the answer is that it belongs in `src/profiles/`, not that the PDF
   may be opened.
-- **sdk-ant's source tree, for anyone writing `radiant_core/**`.** Not the headers,
+- **sdk-ant's source tree, for anyone writing `radiant/**`.** Not the headers,
   not the samples, not the documentation. See *Enforcement*.
 - **Verbatim or near-verbatim rtl_433 code**, and verbatim profile-PDF prose,
   anywhere at all.
@@ -121,7 +121,7 @@ Refusing to read them would not make `src/profiles/` any more original; it
 would make it slower to write and more likely to be wrong, which serves nobody.
 
 **The line between the two is a directory boundary, not a judgement call.**
-`radiant_core/**` is strict. `src/profiles/`, `tools/ant_pages.py` and the profile
+`radiant/**` is strict. `src/profiles/`, `tools/ant_pages.py` and the profile
 docs are pragmatic. That is checkable by looking at a path, which is the only
 kind of rule that survives contact with a deadline.
 
@@ -158,7 +158,7 @@ firmware image.
 ### Enforcement: read scope, expressed as who does the work
 
 The mechanism is the useful part. A policy that says "do not look at sdk-ant"
-is a promise. **A policy that says "the person writing `radiant_core/radiant_frame.c`
+is a promise. **A policy that says "the person writing `radiant/radiant_frame.c`
 is not the person who has sdk-ant checked out" is a control.**
 
 Work on this project is done by agents and contributors with explicitly stated
@@ -167,7 +167,7 @@ the work assignment rather than of anyone's self-discipline:
 
 | Role | May read | May not read |
 |---|---|---|
-| `radiant_core/**` authors | Rev 5.1, `docs/ant-radio-link.md`, spike outputs, this repository, public datasheets | sdk-ant (at all), profile PDFs, anything derived from `libant.a` |
+| `radiant/**` authors | Rev 5.1, `docs/ant-radio-link.md`, spike outputs, this repository, public datasheets | sdk-ant (at all), profile PDFs, anything derived from `libant.a` |
 | `sdk-ant-shim` author | sdk-ant headers — the **only** role that may | `libant.a` internals |
 | `profiles-c`, `profiles-py` | additionally, the non-redistributable profile PDFs | sdk-ant, `libant.a` internals |
 | everyone | `libant.a` internals — **nobody**, ever | |
@@ -183,8 +183,8 @@ Two consequences follow that are easy to get wrong:
 
 - **The shim is written from sdk-ant's headers and that is fine.**
   `src/ant_radio_sdk_ant.c` is glue against a licensed API we are entitled to
-  call. It is not part of `radiant_core` and must not be used as a route to inform
-  it. An `radiant_core` author who wants to know what a shim forwarder does reads
+  call. It is not part of `radiant` and must not be used as a route to inform
+  it. An `radiant` author who wants to know what a shim forwarder does reads
   `src/ant_radio.h`, our own contract.
 - **`ant_network_address_set()` stays permanently limited.** The key→address
   function is unknown to anyone outside Garmin and is not needed: `ant_net.c`
@@ -196,9 +196,9 @@ Two consequences follow that are easy to get wrong:
   in this project most likely to be characterised as reverse-engineering, and
   it buys a feature nobody has asked for.
 
-### `Provenance:` on every `radiant_core/*.c`
+### `Provenance:` on every `radiant/*.c`
 
-Every file under `radiant_core/` carries, in its header comment, both:
+Every file under `radiant/` carries, in its header comment, both:
 
 ```c
 /* SPDX-License-Identifier: Apache-2.0 */
@@ -222,7 +222,7 @@ sources in ADR 0002" is a non-answer. Useful examples:
 
 ```
  * Provenance: nRF52840 Product Specification v1.8 §6.20 (RADIO); register
- *   values measured in radiant_core/spike/rx_raw and recorded in
+ *   values measured in radiant/spike/rx_raw and recorded in
  *   docs/ant-radio-link.md. No sdk-ant source consulted.
 ```
 
@@ -247,11 +247,11 @@ is fresh, is the cheapest insurance this project buys.
 
 **Costs, accepted.**
 
-- Some work is slower. An `radiant_core` author who could resolve a question in
+- Some work is slower. An `radiant` author who could resolve a question in
   thirty seconds by opening a header instead spends a bench session measuring
   it. That cost is the deliverable — the measurement is what makes the answer
   ours — and it is the reason Spike A and Spike B exist and are scheduled
-  before `radiant_core` starts rather than alongside it.
+  before `radiant` starts rather than alongside it.
 - Facts must be laundered through `docs/ant-radio-link.md` rather than going
   straight from a source into code. The document is a real artifact with real
   value, but it is extra writing.

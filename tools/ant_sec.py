@@ -61,7 +61,7 @@ __all__ = [
 
 # 0xF1's switch bitmask. The same byte the firmware uses - radiant_sec.h's
 # RADIANT_SEC_SW_* are these values, asserted by BUILD_ASSERT in
-# radiant_core/src/radiant_sec_host.c so the two cannot drift apart quietly.
+# radiant/src/radiant_sec_host.c so the two cannot drift apart quietly.
 SW_CONF = 0x01        # X_CONF, confidentiality
 SW_AUTH = 0x02        # X_AUTH, authenticity
 SW_DROP_UNVER = 0x04  # drop an unverified window instead of delivering it

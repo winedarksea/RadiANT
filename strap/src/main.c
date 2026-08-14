@@ -1,8 +1,8 @@
-﻿/*
+/*
  * SPDX-License-Identifier: Apache-2.0
  *
  * RadiANT heart-rate strap: a NODE, not a dongle. P8a of the multiprotocol
- * plan - the first image where radiant_core transmits as an ANT+ master
+ * plan - the first image where radiant transmits as an ANT+ master
  * with a real profile on top, rather than a dongle bridge.
  *
  * P8b pairs this with a SoftDevice Controller advertising the SIG Heart
@@ -31,7 +31,7 @@ LOG_MODULE_REGISTER(strap, CONFIG_STRAP_LOG_LEVEL);
 
 /*
  * The public ANT+ network key, used by every ANT+ device on the air - not
- * the stack licence key (an sdk-ant concept radiant_core doesn't have).
+ * the stack licence key (an sdk-ant concept radiant doesn't have).
  * Confusing the two produces a node that runs and is heard by nothing.
  */
 static const uint8_t ant_plus_key[8] = {

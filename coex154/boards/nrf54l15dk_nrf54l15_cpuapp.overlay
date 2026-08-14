@@ -1,7 +1,7 @@
 /*
  * nRF54L15 DK - the P3.5 DUT.
  *
- * Only what radiant_core's nrf backend needs. This application has no ANT
+ * Only what radiant's nrf backend needs. This application has no ANT
  * serial transport and no host: it is a frame counter that prints, so uart20's
  * default console is the whole interface.
  *
@@ -15,7 +15,7 @@
  * hands to timeslot users as MPSL_TIMER0. That is a real third claim on one
  * instance - but it is NOT a claim on this one.
  *
- * radiant_core takes timer20, and timer20 alone, and it takes it outright
+ * radiant takes timer20, and timer20 alone, and it takes it outright
  * rather than through MPSL: the backend runs it at 1 MHz continuously and
  * hardware-captures t_sync into it from RADIO's ADDRESS event, so it cannot be
  * an arbitrated resource even in principle. The two do not overlap, and the

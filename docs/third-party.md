@@ -62,7 +62,7 @@ clean-room defence, and convert a public repository into a legal problem; the
 *deleted*, not *duplicated*.
 
 **Read scope.** Only the agent or contributor writing
-`src/ant_radio_sdk_ant.c` may open this tree. Everyone writing `radiant_core/**`
+`src/ant_radio_sdk_ant.c` may open this tree. Everyone writing `radiant/**`
 is barred from it. That split is the clean-room boundary; see
 [`decisions/0002`](decisions/0002-clean-room-policy.md).
 
@@ -165,7 +165,7 @@ project holds one from other work. Garmin retains copyright.
 
 **Posture.** *Permitted, but only in three places.* These documents may be used
 for `src/profiles/`, for `tools/ant_pages.py`, and for the profile
-documentation — and **nowhere in `radiant_core/**`**. The link layer stays strictly
+documentation — and **nowhere in `radiant/**`**. The link layer stays strictly
 clean-room; page semantics do not need to be, because a page layout is a fact
 about an interoperability target with no program left behind it. Use the
 tables and the semantics; copy no prose. This is the "graded, not absolute"
@@ -212,7 +212,7 @@ with no USB device attached.
 
 **There isn't one, and that is a decision rather than an omission.**
 
-`radiant_core/src/ext/radiant_x25519.c` sits in an `ext/` directory, which
+`radiant/src/ext/radiant_x25519.c` sits in an `ext/` directory, which
 normally means vendored code. It is not: it is clean-room, written from
 [RFC 7748](https://www.rfc-editor.org/rfc/rfc7748) and verified against that
 RFC's own published test vectors. The directory name marks it as a *standard
@@ -250,7 +250,7 @@ freedom to infringe.
 ## Our own licence
 
 RadiANT is Apache-2.0. Every source file carries
-`SPDX-License-Identifier: Apache-2.0`; every `radiant_core/*.c` additionally
+`SPDX-License-Identifier: Apache-2.0`; every `radiant/*.c` additionally
 carries a `Provenance:` line naming which of the permitted sources above it was
 written from. `tools/ant_pages.py` and the sibling `zephyr_aerosense` project
 are on the same licence, because a header shared between two projects under two

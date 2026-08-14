@@ -1,21 +1,21 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * ant_radio_radiant.c (was radiant_core/src/radiant_api.c, before radiant_core
+ * ant_radio_radiant.c (was radiant/src/radiant_api.c, before radiant
  * stopped reaching outside itself for src/ant_radio.h) - integration layer:
- * src/ant_radio.h's antr_* entry points on top of the six radiant_core
+ * src/ant_radio.h's antr_* entry points on top of the six radiant
  * modules, plus the seams none of them own.
  *
  * Provenance: clean-room, from src/ant_radio.h, docs/sdk-ant-contract.md,
- * src/ant_wire.h (generated from protocol/ant_wire.yaml), and the radiant_core
+ * src/ant_wire.h (generated from protocol/ant_wire.yaml), and the radiant
  * module headers. Nothing here derives from sdk-ant, libant.a, disassembly, or
  * any ANT+ device profile document.
  * See docs/decisions/0002-clean-room-policy.md.
  *
- * Living outside radiant_core now, not inside it: this is the one file that
+ * Living outside radiant now, not inside it: this is the one file that
  * was always shaped by the seam above the module rather than by the module
- * itself - see CONFIG_RADIANT_CORE_ANTR_API in src/Kconfig.antr_api for why.
+ * itself - see CONFIG_RADIANT_ANTR_API in src/Kconfig.antr_api for why.
  * radiant_channel.h's own wire-code cross-check no longer depends on include
- * order the way it used to: it includes radiant_core's own radiant_wire.h
+ * order the way it used to: it includes radiant's own radiant_wire.h
  * unconditionally now, rather than gating on whichever translation unit
  * happened to bring src/ant_wire.h into scope first (this one, always).
  *
@@ -62,21 +62,21 @@
 #include "ant_radio.h"
 
 #include "ant_radio_radiant.h"
-#include <radiant_core/radiant_channel.h>
-#include <radiant_core/radiant_crc_repair.h>
-#include <radiant_core/radiant_event.h>
-#include <radiant_core/radiant_frame.h>
-#include <radiant_core/radiant_noise.h>
-#include <radiant_core/radiant_profile_sanity.h>
-#include <radiant_core/radiant_radio_hal.h>
-#include <radiant_core/radiant_sched.h>
-#include <radiant_core/radiant_search.h>
-#include <radiant_core/radiant_sec.h>
-#include <radiant_core/radiant_transfer.h>
+#include <radiant/radiant_channel.h>
+#include <radiant/radiant_crc_repair.h>
+#include <radiant/radiant_event.h>
+#include <radiant/radiant_frame.h>
+#include <radiant/radiant_noise.h>
+#include <radiant/radiant_profile_sanity.h>
+#include <radiant/radiant_radio_hal.h>
+#include <radiant/radiant_sched.h>
+#include <radiant/radiant_search.h>
+#include <radiant/radiant_sec.h>
+#include <radiant/radiant_transfer.h>
 
-/* CONFIG_RADIANT_CORE_LOG_LEVEL, not a hardcoded LOG_LEVEL_INF, so this module
+/* CONFIG_RADIANT_LOG_LEVEL, not a hardcoded LOG_LEVEL_INF, so this module
  * can be turned up when it is the one misbehaving. */
-LOG_MODULE_REGISTER(radiant_api, CONFIG_RADIANT_CORE_LOG_LEVEL);
+LOG_MODULE_REGISTER(radiant_api, CONFIG_RADIANT_LOG_LEVEL);
 
 /*
  * RADIANT_TRANSFER_SEG_* were chosen equal to ANTR_BURST_SEGMENT_* so
@@ -203,9 +203,9 @@ BUILD_ASSERT(RADIANT_CHANNEL_GUARD_MIN_US >= RADIANT_CHANNEL_DRIFT_WORST_US,
  * thread to flush). CONFIG_THREAD_NAME + CONFIG_LOG_MODE_IMMEDIATE is what
  * named the faulting thread.
  */
-#if defined(CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL)
+#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
 #define API_EVENT_STACK_GATE 1024
-#elif defined(CONFIG_RADIANT_CORE_BACKEND_CC26XX)
+#elif defined(CONFIG_RADIANT_BACKEND_CC26XX)
 /*
  * Same reason, second vendor: this thread's arm call costs whatever the
  * backend's arm costs, and CC26x2's RF_postCmd() (SimpleLink driver call,
@@ -228,7 +228,7 @@ BUILD_ASSERT(RADIANT_CHANNEL_GUARD_MIN_US >= RADIANT_CHANNEL_DRIFT_WORST_US,
 #define API_EVENT_PRIORITY   6
 
 BUILD_ASSERT(API_EVENT_PRIORITY > ANTR_HOST_THREAD_PRIORITY,
-	     "the radiant_core event thread must be LOWER priority than the "
+	     "the radiant event thread must be LOWER priority than the "
 	     "thread the bridge makes antr_* calls on, or an event raised "
 	     "inside a command is delivered before that command's response");
 
@@ -441,9 +441,9 @@ void radiant_event_wakeup(void)
 
 /*
  * The fourth port hook, and the one that used to not need one at all:
- * radiant_event.c called antr_on_message() directly until radiant_core
+ * radiant_event.c called antr_on_message() directly until radiant
  * stopped reaching outside itself for src/ant_radio.h. Now it calls
- * radiant_on_message() (radiant_core/include/radiant_core/radiant_msg.h,
+ * radiant_on_message() (radiant/include/radiant/radiant_msg.h,
  * module-owned), and this is the one-line forward onto the real thing -
  * a field-for-field copy since struct radiant_msg and struct antr_msg are
  * layout-identical by construction. src/ant_serial_bridge.c stays the single
@@ -1445,7 +1445,7 @@ static void api_crc_repair_setup(void)
 
 	api_crc_repair_on = false;
 
-#if defined(CONFIG_RADIANT_CORE_CRC_REPAIR)
+#if defined(CONFIG_RADIANT_CRC_REPAIR)
 	if (caps == NULL || !caps->has_rx_crc) {
 		LOG_WRN("CRC repair is enabled but this backend reports no "
 			"received CRC; the feature is inert");
@@ -1462,7 +1462,7 @@ static void api_crc_repair_setup(void)
 	api_crc_repair_on = true;
 	LOG_INF("CRC repair: on, tracked windows only");
 
-#if defined(CONFIG_RADIANT_CORE_PROFILE_SANITY)
+#if defined(CONFIG_RADIANT_PROFILE_SANITY)
 	api_profile_sanity_on = true;
 	LOG_INF("CRC repair: profile sanity on (bpwr>%uW, hr>%ubpm dropped)",
 		(unsigned)RADIANT_PROFILE_SANITY_BPWR_MAX_WATTS,
@@ -1818,7 +1818,7 @@ static void api_feed_xfer_terminal(uint8_t ch, enum radiant_radio_status st)
  * this layer can't see, so crediting the bounds api_post_search_window()
  * merely proposed would overcount.
  */
-#ifdef CONFIG_RADIANT_CORE_SWEEP_DEBUG
+#ifdef CONFIG_RADIANT_SWEEP_DEBUG
 /* Armed length by slot kind - showed tracked windows cost 640 us each
  * (2.6 ms/s), ruling them out as the cause of a starved sweep. */
 static uint32_t dbg_scan_us, dbg_scan_n, dbg_track_us, dbg_track_n;
@@ -1836,7 +1836,7 @@ static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_
 	if (!api_ch_valid(ch)) {
 		return;
 	}
-#ifdef CONFIG_RADIANT_CORE_SWEEP_DEBUG
+#ifdef CONFIG_RADIANT_SWEEP_DEBUG
 	if (t_close != RADIANT_TIME_NEVER && t_close > t_open) {
 		uint32_t len = (uint32_t)(t_close - t_open);
 
@@ -1922,7 +1922,7 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 			radiant_search_note_denied(&api_search,
 						RADIANT_API_HOUSEKEEP_MS * 1000u);
 		}
-#ifdef CONFIG_RADIANT_CORE_SWEEP_DEBUG
+#ifdef CONFIG_RADIANT_SWEEP_DEBUG
 		switch (why) {
 		case RADIANT_SCHED_DONE_OK:
 			dbg_end_ok++;
@@ -2320,7 +2320,7 @@ static void api_housekeep(void)
 		}
 	}
 
-#ifdef CONFIG_RADIANT_CORE_SWEEP_DEBUG
+#ifdef CONFIG_RADIANT_SWEEP_DEBUG
 	/* Sweep rate is invisible from the host; both discovery defects fixed
 	 * in this file were found with these counters. */
 	{
@@ -2520,7 +2520,7 @@ antr_err_t antr_init(void)
 			      API_EVENT_PRIORITY, 0, K_NO_WAIT);
 	(void)k_thread_name_set(&api_event_thread_data, "radiant_event");
 
-	LOG_INF("radiant_core up: %u channels, %u filters/window, %u search sets",
+	LOG_INF("radiant up: %u channels, %u filters/window, %u search sets",
 		(unsigned int)API_CHANNELS,
 		(unsigned int)radiant_search_filters_per_window(&api_search),
 		(unsigned int)radiant_search_sets(&api_search));
@@ -3133,7 +3133,7 @@ antr_err_t antr_capabilities_get(uint8_t *capabilities)
 			  ANTW_CAPABILITIES_SELECTIVE_DATA_UPDATE_ENABLED |
 			  /* Describes what the radio layer can do, same as
 			   * src/ant_radio_stub.c reports, so an A/B diff won't
-			   * flag it. radiant_core actually refuses AES-CTR - see
+			   * flag it. radiant actually refuses AES-CTR - see
 			   * antr_crypto_channel_enable(). */
 			  ANTW_CAPABILITIES_ENCRYPTED_CHANNEL_ENABLED);
 

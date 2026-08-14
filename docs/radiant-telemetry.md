@@ -8,7 +8,7 @@ below against `docs/profile-registry.md` and the common-page cadence against
 their mirror in `tools/ant_pages.py` implement sections 5–9 of this document,
 and three suites hold them to it: `tools/test_ant_pages.py` (round trips, the
 descriptor frames pinned as hex, and the MSB-first packer's vectors),
-`radiant_core/tests/src/test_profiles.c` (**the same packer vectors, byte for
+`radiant/tests/src/test_profiles.c` (**the same packer vectors, byte for
 byte**, plus a `0x60` node discovered and decoded across the mock radio), and
 `tools/test_ant_sim.py` (a simulated node driven through `tools/ant_verify.py`,
 which learns the schema from the descriptor and checks the accumulators against
@@ -50,7 +50,7 @@ forever, whereas a RadiANT accumulating field recovers a lost packet from the
 The motivating case is **a heart-rate strap driving a smart home** — elevated
 BPM turns on the AC, resting HR dims the lights. In v1 that bridge runs
 host-side (dongle -> daemon -> Matter) and needs no new radio work at all. A
-combo node running `radiant_core` + Thread directly on one chip is what the MPSL
+combo node running `radiant` + Thread directly on one chip is what the MPSL
 backend eventually enables, and is the concrete product that justifies building
 it.
 
@@ -130,7 +130,7 @@ in the descriptor from v1.
      absolute.
    - **"On the host or the gateway" was never an invariant.** It described
      where the translation happened to run in v1. A combo node running
-     `radiant_core` and a Thread stack on one die translates at exactly the same
+     `radiant` and a Thread stack on one die translates at exactly the same
      place in the *logical* stack — above the profile decoder, below the
      network — and being the same piece of silicon changes nothing about what
      is on the air.
@@ -482,7 +482,7 @@ entirely in host arithmetic. Nothing here promises metres.
 **A node that announces neither half is byte-for-byte the node it was before
 this block existed** — same frames, same count, frame 1's nibble still zero.
 That identity is the block's whole compatibility claim, and it is asserted
-directly in `radiant_core/tests/src/test_schedule.c` and
+directly in `radiant/tests/src/test_schedule.c` and
 `tools/test_ant_pages.py`.
 
 ### Frames 2..N — one per field
@@ -767,7 +767,7 @@ error, which `radiant_radio_nrf.c` now corrects on nRF52840/nRF52833 using
 Nordic's own open-source 802.15.4 driver rather than an invented curve. This
 bench's own nRF54L15 has no equivalent correction anywhere in Nordic's tree,
 so the confound is still live there. `radiant_radio_nrf_die_temp_c()`
-(`radiant_core/include/radiant_core/radiant_radio_nrf_diag.h`) exists so a
+(`radiant/include/radiant/radiant_radio_nrf_diag.h`) exists so a
 bench capture can publish die temperature as an ordinary `0x10` field
 alongside the RSSI it is already recording, deconfounding the Phase 4
 sensitivity baseline and the Tier 2 A/B gate ([`testing.md`](testing.md)) on
@@ -1191,7 +1191,7 @@ As built, that is:
 | `src/profiles/profile_sched.c` | Which page goes in the next message slot: the 119/120/121 interleave, the consecutive descriptor set, the sparse cadence, and the client seam |
 | `tools/ant_pages.py` | All three, mirrored, plus the section 7 vocabulary as a table a host can look a quantity up in |
 
-`src/profiles/` is deliberately outside `radiant_core/`: `docs/decisions/0002-clean-room-policy.md`
+`src/profiles/` is deliberately outside `radiant/`: `docs/decisions/0002-clean-room-policy.md`
 draws its read-scope line at that path, strict on one side and pragmatic on the
 other. Nothing here links into the link layer. (Nothing in it was written from
 a gated document either — this envelope is the project's own specification —
@@ -1267,7 +1267,7 @@ address is derived from the low byte of the device number, so a wildcard search
 walks a set of address filters, one dwell each, and is only *certain* to have
 found every node in range after a full sweep. On this project's nRF backend
 that is 32 windows, and it is the dominant term in discovery latency. The
-deterministic A/B in `radiant_core/tests/src/test_handoff.c` puts a worst-case
+deterministic A/B in `radiant/tests/src/test_handoff.c` puts a worst-case
 sweep at 32 windows and 8.49 s to the first slot against 0 windows and 0.16 s
 for a handoff, on the mock radio's virtual clock; the live two-receiver
 measurement is a hardware-session job and is not this number.

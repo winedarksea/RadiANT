@@ -1028,7 +1028,7 @@ class TestTelemetryBitPacker(unittest.TestCase):
     """The MSB-first field area of device type 0x60.
 
     These vectors are shared, byte for byte, with
-    radiant_core/tests/src/test_profiles.c - written as literals rather than
+    radiant/tests/src/test_profiles.c - written as literals rather than
     round trips so two implementations aren't just checked against each
     other.
     """
@@ -1470,7 +1470,7 @@ class TestTelemetryScheduleBlock(unittest.TestCase):
     """Frame 1 byte [3] bits 3..0, plus the schedule frame - section 6.
 
     Frames pinned as hex, shared byte for byte with
-    radiant_core/tests/src/test_schedule.c: a receiver sizes its receive
+    radiant/tests/src/test_schedule.c: a receiver sizes its receive
     window from the clock accuracy here, so a self-consistently wrong decoder
     would lose packets with no error anywhere.
     """
@@ -1694,7 +1694,7 @@ class TestTelemetrySyncHandoff(unittest.TestCase):
     """Page 0x12, section 12. The page a RECEIVER sends about a node.
 
     Frames pinned as hex, shared byte for byte with
-    radiant_core/tests/src/test_handoff.c: this page lets a receiver act on
+    radiant/tests/src/test_handoff.c: this page lets a receiver act on
     parameters it never measured, where a self-consistently wrong decoder
     costs the most.
     """
@@ -1850,7 +1850,7 @@ class TestTelemetrySyncHandoff(unittest.TestCase):
 class TestFrequencyMove(unittest.TestCase):
     """Page 0x13, adaptive frequency (RF-7).
 
-    CANON_HEX is shared byte for byte with radiant_core/tests/src/test_freq.c;
+    CANON_HEX is shared byte for byte with radiant/tests/src/test_freq.c;
     this page tells a receiver where to point its radio.
     """
 

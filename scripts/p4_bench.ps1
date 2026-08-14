@@ -77,7 +77,7 @@ if (-not (Test-Path $hex)) { throw "no image for $Arm - run scripts\build_p4.ps1
 # silent fallback to the null backend is indistinguishable from every failure
 # this sitting is chasing and one check at the wrong moment is no check at all.
 $cfg = Join-Path $repo "build\$Arm\ant_dongle\zephyr\.config"
-if (-not (Select-String -Path $cfg -Pattern '^CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL=y' -Quiet)) {
+if (-not (Select-String -Path $cfg -Pattern '^CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y' -Quiet)) {
     throw "$Arm was not built with the MPSL gate. Do not take a reading from it."
 }
 
@@ -174,7 +174,7 @@ foreach ($pat in @('session_open', 'backend', 'thread coexistence load',
 Write-Host ""
 Write-Host "last gate line:" -ForegroundColor Cyan
 $gate = $text -split "`r?`n" | Where-Object { $_ -match 'gate: acq=' } | Select-Object -Last 1
-if ($gate) { Write-Host "  $($gate.Trim())" } else { Write-Host "  (none - is CONFIG_RADIANT_CORE_SWEEP_DEBUG on?)" }
+if ($gate) { Write-Host "  $($gate.Trim())" } else { Write-Host "  (none - is CONFIG_RADIANT_SWEEP_DEBUG on?)" }
 
 Write-Host "last thread lines:" -ForegroundColor Cyan
 foreach ($p in @('thread load:', 'thread lat us:', 'thread mac d:')) {
