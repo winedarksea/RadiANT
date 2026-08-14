@@ -32,7 +32,9 @@
 param(
     [string]$Serial   = '001050006310',   # the nRF5340 DK
     [string]$Port     = 'COM9',
-    [int]$SettleSeconds = 25,
+    # A CEILING on the poll below, not a fixed wait. 25 s was the old fixed
+    # value and it was measurably too short on this board.
+    [int]$SettleSeconds = 90,
     [switch]$CheckOnly
 )
 
@@ -90,7 +92,15 @@ if (-not $CheckOnly) {
     Invoke-JLink 'nRF5340_xxAA_APP' 'g' 'go'
 }
 
-Write-Host "waiting $SettleSeconds s for the peer to form a network..." -ForegroundColor Cyan
+# POLLED, NOT SLEPT AT, AND THE DIFFERENCE IS A FALSE FAILURE.
+# This used to be a flat Start-Sleep of 25 s followed by one reading. Forming
+# the network is not a fixed-cost operation - measured on this board, 25 s read
+# `detached` and the SAME board read `leader` at 60 s - so a fixed wait fails a
+# peer that is merely still working, and the script then reports a broken board
+# to someone about to start an overnight run. Polling costs nothing when the
+# peer is quick and is correct when it is not; SettleSeconds is now the CEILING
+# rather than the wait.
+Write-Host "waiting up to $SettleSeconds s for the peer to form a network..." -ForegroundColor Cyan
 
 # $com, and deliberately NOT $port. The parameter above is [string]$Port and
 # PowerShell variable names are case-insensitive, so assigning a SerialPort to
@@ -103,13 +113,28 @@ $com.RtsEnable = $true
 $com.NewLine = "`n"
 $com.Open()
 try {
-    Start-Sleep -Seconds $SettleSeconds
+    # Give the CLI a moment to exist at all before talking to it; below this
+    # the shell is not up and the answer is silence rather than a state.
+    Start-Sleep -Seconds 5
     [void]$com.ReadExisting()
 
-    # Asked twice, a second apart. `ot state` on this CLI has been flaky on this
-    # bench before, and one blank answer is not evidence the board is dead - but
-    # two are worth reporting rather than papering over.
+    $deadline = (Get-Date).AddSeconds($SettleSeconds)
     $answers = @()
+    while ($true) {
+        $com.WriteLine('ot state')
+        Start-Sleep -Milliseconds 900
+        $answers += $com.ReadExisting()
+        $seen = ($answers -join "`n") -split "`r?`n" |
+                Where-Object { $_.Trim() -match '^(leader|router|child|detached|disabled)$' } |
+                Select-Object -Last 1
+        if ($seen -and $seen.Trim() -in @('leader', 'router')) { break }
+        if ((Get-Date) -ge $deadline) { break }
+        Start-Sleep -Seconds 3
+    }
+
+    # Asked three more times once it has settled. `ot state` on this CLI has
+    # been flaky on this bench, and one blank answer is not evidence the board
+    # is dead - but three are worth reporting rather than papering over.
     foreach ($i in 1..3) {
         $com.WriteLine('ot state')
         Start-Sleep -Milliseconds 900

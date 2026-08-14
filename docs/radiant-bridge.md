@@ -731,6 +731,11 @@ rather than avoidable.
 > work for a specific reason: **if the real figure is 24 %, the Matter data
 > model is being written against a link that does not work.**
 >
+> **P3.5 IS NOW TAKEN AND THE ANSWER IS 21.8 %** — see §7.3c. The table above is
+> confirmed, not merely plausible: the prediction was 18 % here and 24 % with
+> the reserve, and the measurement lands inside that bracket, 2.2 pp short of
+> the pessimistic end. Read §7.3c's three caveats before quoting it.
+>
 > **MEASURED 2026-08-13, AND AT ONE TRACKED SENSOR NEITHER COLUMN COSTS
 > ANYTHING.** The scheduler column now has numbers (section 7.4.2) and it is
 > close to free: Thread's worst send latency was 431 µs against a 296 µs
@@ -801,6 +806,96 @@ windows would predict, but the magnitude is negligible and it does not bear
 weight. An earlier reading of that difference as large came from a bug since
 fixed. Neither role is a worst case at one tracked sensor; the preference order
 here rests on who else suffers when we miss, which measurement does not touch.
+
+### 7.3c P3.5 measured — 21.8 %, and §7.3a's arithmetic holds
+
+The reverse-direction measurement §7.3a asks for: 802.15.4 frame loss *caused by*
+ANT blackouts, taken with `coex154` on an nRF54L15 DK against a generator on an
+nRF5340 DK, 150 s per arm at 50 frames/s, loss over the received sequence span.
+
+| Arm | PSDU 127 (~4.25 ms) | PSDU 40 (~1.28 ms) |
+|---|---|---|
+| Bench floor — `radiant_core` not linked | 4.16 % / 5.42 % (repeat) | 2.05 % |
+| **1** — arbiter up, 0 ANT channels | 4.88 % / 4.71 % (repeat) | 1.86 % |
+| **2** — 8 masters, offsets spread | **21.78 %** | **10.47 %** |
+| 3 — 8 masters, offsets bunched | 7.23 % — **confounded, do not use** | not taken |
+
+**Attributable cost (arm 2 − arm 1): 16.9 pp at 127 bytes, 8.6 pp at 40 bytes.**
+Arm 1 moved 0.17 pp across an A/B/A and the floor moved 1.26 pp, so bench noise
+is ≈ ±1.3 pp and the 16.9 pp is about thirteen times it.
+
+**§7.3a predicted 18 % for this row, or 24 % with the follow-on reserve.
+Measured 21.8 % absolute — inside the bracket, 2.2 pp short of the pessimistic
+figure.** The arithmetic in that section is confirmed rather than merely
+plausible. Whether 21.8 % trips its "revisit the Matter data model before P7"
+trigger is a judgement call and is deliberately left open here: it is far closer
+to the pessimistic figure than to the headline one, and the 24 % threshold is
+not literally cleared.
+
+**An arbiter with no competitor costs nothing measurable.** Arm 1 against the
+unlinked floor is ~0.5 pp, inside the noise. That is the closest thing to an
+arbitration-only measurement available, and it agrees with the forward-direction
+result in §7.4.2.
+
+**What these numbers actually measure, stated because it is easy to overclaim.**
+On nRF54L there is no build of the 15.4 driver without MPSL, so arm 1 is
+15.4-*with*-an-arbiter-and-no-competitor. The 16.9 pp is therefore the cost of a
+second stack's **demand**, not the cost of arbitration.
+
+Three caveats that bound this result:
+
+- **Arm 3 does not measure clustering, so §7.3a's "clustering is guaranteed
+  rather than avoidable" assertion is still untested.** With all offsets at
+  zero the scheduler can only place one window per period: gate counters over
+  the same window show `granted=2089` (~34/s ≈ 8 masters × 4.06 Hz) for spread
+  against `granted=285` (~4.6/s ≈ **one** master) for bunched. Bunched is not
+  "same duty, clustered" — it is one-eighth the duty. Testing it needs a
+  scheduler that can stack coincident windows, or a different way to force
+  clustering.
+- **The instrument perturbs the measurement, badly, and the figures above are
+  the quiet build.** With `CONFIG_RADIANT_CORE_SWEEP_DEBUG=y` the same arm reads
+  27.9 % against 21.8 % — 6 pp of instrument — because `prj.conf` sets
+  `LOG_MODE_IMMEDIATE=y` and the gate's ~1 Hz multi-hundred-byte dump is written
+  synchronously in context. Recorded in `coex154/rx_ant.conf`.
+- **The raw console captures were not retained**, unlike the P4 arms in
+  `build/p4logs`. The numbers above are as reported from live readings and have
+  not been re-derived from a saved artefact. Re-take before quoting them
+  anywhere load-bearing.
+
+**Why P3.5 was blocked for so long: channel 26 is empty.** The blocker was
+`foreign=0` on the receiver — not one ambient 802.15.4 frame — read as evidence
+of a deaf receiver. It was nothing of the kind. `coex154/Kconfig` picks channel
+26 precisely *because* it is furthest from BLE advertising and most Wi-Fi, so
+there is no ambient traffic there to hear. `foreign=0` was a correct reading of
+a quiet channel. Proven by pointing traffic at it: with the receiver flashed and
+an OpenThread leader in the room, `ot ping ff02::1 100 60 0.3` moved `foreign`
+from 5 to 123, +62 for 60 multicast pings. The link then worked with the code
+exactly as committed — no fix was required. The plan's leading suspect,
+`nrf_802154_promiscuous_set()` never being called, was already false on
+inspection: it is called in `role_run()`.
+
+> ### ⚠ A REAL COEXISTENCE DEFECT FOUND WHILE TAKING THIS, AND IT IS NOT
+> ### `coex154`'s
+>
+> Under contention the 15.4 driver panics:
+> `NRF_802154_ASSERT(radio_is_disabled)` at `nrf_802154_trx.c:380`, from
+> `wait_until_radio_is_disabled()` inlined into `rxframe_finish()`. The driver
+> finishes an RX, triggers `TASKS_DISABLE`, spins `MAX_RAMPDOWN_CYCLES` waiting
+> for `RADIO->STATE == DISABLED` — and never sees it, because the gate has taken
+> the RADIO and ramped it back up.
+>
+> It was made survivable **inside `coex154` only**, by overriding the `__weak`
+> `nrf_802154_assert_handler()` to count instead of `k_panic()`; that is what
+> allowed the A/B to be taken at all, and `drv_assert` is printed beside every
+> loss figure. **A run with `drv_assert > 0` is a lower bound on a broken
+> configuration, not a clean measurement.** The figures in the table have
+> `drv_assert = 0`.
+>
+> The underlying race is untouched and is latent even in the quiet build —
+> zero hits across ~20 minutes of quiet runs is absence of evidence, not a
+> guarantee. It is the same seam as the sweep-window routing leak in §7.4.2:
+> both are the 15.4 driver and the gate disagreeing about who holds the RADIO
+> at an instant MPSL thinks is settled.
 
 ### 7.4 The coexistence gate
 

@@ -146,15 +146,45 @@ $verJob = Start-Job -Name soakver -ArgumentList $py, $repo, $AntPort, $Profile, 
 Write-Host "soaking... (progress every 10 min)" -ForegroundColor Yellow
 $end = (Get-Date).AddSeconds($secs)
 while ((Get-Date) -lt $end) {
-    Start-Sleep -Seconds 600
+    # min(600, what is left), not a flat 600. A flat sleep overshoots the end of
+    # the soak by up to ten minutes - harmless on an eight-hour run, fatal to a
+    # short one, which is exactly the run used to prove this harness works
+    # before trusting it overnight. The capture and sim jobs are sized from
+    # $secs, so overshooting also means scoring a window whose instruments have
+    # already stopped.
+    $left = [int]((New-TimeSpan -End $end).TotalSeconds)
+    if ($left -le 0) { break }
+    Start-Sleep -Seconds ([Math]::Min(600, $left))
     if (Test-Path $console) {
-        $last = Get-Content $console -Tail 400 -ErrorAction SilentlyContinue |
-                Where-Object { $_ -match 'gate: acq=' } | Select-Object -Last 1
-        $left = [int]((New-TimeSpan -End $end).TotalMinutes)
-        if ($last -and $last -match 'granted=(\d+).*in_grant=(\d+)/') {
-            Write-Host ("  {0,4} min left | granted={1} in_grant={2}" -f $left, $matches[1], $matches[2])
+        # Seek to the last 64 KB rather than reading the file. An eight-hour
+        # capture is tens of megabytes and this runs every ten minutes; the
+        # shared handle is also what lets it read a file the capture job holds
+        # open for append.
+        $last = $null
+        try {
+            $fs = New-Object IO.FileStream($console, [IO.FileMode]::Open,
+                                           [IO.FileAccess]::Read,
+                                           [IO.FileShare]::ReadWrite)
+            try {
+                if ($fs.Length -gt 65536) { [void]$fs.Seek(-65536, [IO.SeekOrigin]::End) }
+                $sr = New-Object IO.StreamReader($fs)
+                $tail = $sr.ReadToEnd()
+            } finally { $fs.Close() }
+            $last = ($tail -split "`r?`n" |
+                     Where-Object { $_ -match 'gate: acq=' } | Select-Object -Last 1)
+        } catch { }
+        $mins = [int]((New-TimeSpan -End $end).TotalMinutes)
+        # FIELD ORDER MATTERS HERE AND IT BIT ONCE. The gate line prints
+        # `in_grant=` BEFORE `granted=`:
+        #   gate: acq=965 in_grant=959/959 placed=966 granted=966 blocked=0
+        # so a pattern anchored the other way round can never match, and every
+        # tick of a perfectly healthy soak reported "no gate line yet" - which
+        # is also exactly what a dead board looks like. A progress line that
+        # cries wolf is worse than none: whoever reads it at 2 am kills the run.
+        if ($last -and $last -match 'in_grant=(\d+)/\d+.*granted=(\d+)') {
+            Write-Host ("  {0,4} min left | granted={1} in_grant={2}" -f $mins, $matches[2], $matches[1])
         } else {
-            Write-Host ("  {0,4} min left | no gate line yet" -f $left) -ForegroundColor DarkYellow
+            Write-Host ("  {0,4} min left | no gate line yet" -f $mins) -ForegroundColor DarkYellow
         }
     }
 }

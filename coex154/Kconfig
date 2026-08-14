@@ -101,6 +101,27 @@ config COEX154_ANT_MASTERS
 	  cost of the arbiter merely being present from the cost of the air it
 	  takes away.
 
+config COEX154_ANT_BUNCHED
+	bool "Open every ANT master at offset zero instead of spreading them"
+	depends on COEX154_ROLE_RX && RADIANT_CORE
+	help
+	  THE THIRD ARM. With this n (the default) the masters' start offsets are
+	  spread evenly across the channel period, which is what section 7.3a's
+	  arithmetic assumes: N independent blackouts scattered through the
+	  period, each clipping whatever 802.15.4 frame happens to be in the air.
+
+	  With it y every master opens at offset zero, so all N transmit slots
+	  land in the same few milliseconds and are followed by ~240 ms of clear
+	  air. The aggregate duty cycle is identical; only its shape changes.
+	  Section 7.3a asserts that clustering is guaranteed rather than
+	  avoidable, and this arm is what tests that: if the bunched loss is much
+	  lower than the spread loss at the same duty, then the shape matters and
+	  scattering the offsets is worth doing.
+
+	  Note what bunching does to worst_gap: spread losses are isolated single
+	  frames, bunched losses are runs. Read worst_gap, not just the
+	  percentage - a retrying stack absorbs the first and not the second.
+
 config COEX154_ARBITRATED
 	bool
 	default y if RADIANT_CORE_BACKEND_NRF_GATE_MPSL

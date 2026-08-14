@@ -28,6 +28,41 @@
 LOG_MODULE_REGISTER(coex154, LOG_LEVEL_INF);
 
 /* ---------------------------------------------------------------------------
+ * THE 802.15.4 DRIVER'S OWN ASSERT, MADE NON-FATAL AND COUNTED
+ * ---------------------------------------------------------------------------
+ *
+ * Measured on 2026-08-13: with radiant_core opening even one ANT master this
+ * image panicked about one second in, every time. Symbolicated, the panic is
+ *
+ *   NRF_802154_ASSERT(radio_is_disabled)
+ *   nrfxlib/nrf_802154/driver/src/nrf_802154_trx.c:380,
+ *   in wait_until_radio_is_disabled(), inlined into rxframe_finish() (:1718)
+ *
+ * i.e. the driver finished receiving a frame, triggered TASKS_DISABLE, spun
+ * MAX_RAMPDOWN_CYCLES waiting for RADIO->STATE to read DISABLED, and never saw
+ * it - because by then the gate had taken the RADIO for an ANT slot and ramped
+ * it back up. That is a real coexistence defect and it is reported as one; it
+ * is NOT a property of this application.
+ *
+ * nrf_802154_assert_handler() is __weak in
+ * zephyr/modules/hal_nordic/nrf_802154/nrf_802154_assert_handler.c, whose only
+ * body is k_panic(). Overriding it here is the supported hook and it is the
+ * difference between "P3.5 cannot be measured at all" and "P3.5 measured, with
+ * the driver's invariant violated N times, N printed beside the loss figure".
+ *
+ * READ drv_assert BEFORE READING loss. A run with drv_assert > 0 is a run in
+ * which the 15.4 driver continued past a state check it does not expect to
+ * survive; its loss number is a lower bound on a broken configuration, not a
+ * clean measurement of arbitration. Do not quote the percentage without it.
+ */
+static volatile uint32_t drv_assert;
+
+void nrf_802154_assert_handler(void)
+{
+	drv_assert++;
+}
+
+/* ---------------------------------------------------------------------------
  * The frame: a plain 802.15.4-2006 data frame, short addressing, PAN id
  * compressed. Nine bytes of MHR:
  *
@@ -137,6 +172,18 @@ static struct {
 	 * stack absorbs it) from "one 300ms hole" (it doesn't). */
 	uint32_t worst_gap;
 	uint32_t out_of_order;
+	/* The PSDU length actually seen on air. CONFIG_COEX154_PSDU_LEN is a
+	 * property of the GENERATOR, and the generator is a different image on a
+	 * different board - so printing the receiver's own copy of that symbol
+	 * would report 127 through an entire 40-byte pass and label the wrong
+	 * column of section 7.3a's table. */
+	uint8_t  last_len;
+	/* Frames the radio started and could not finish. `aborted` is the
+	 * subset the driver blames on losing the radio - an ANT blackout seen
+	 * from inside 802.15.4, and the only counter here that names the
+	 * mechanism rather than the symptom. */
+	uint32_t failed;
+	uint32_t aborted;
 } rx;
 
 /*
@@ -156,6 +203,8 @@ static void rx_count(uint8_t *data)
 		nrf_802154_buffer_free_raw(data);
 		return;
 	}
+
+	rx.last_len = data[0];
 
 	if (!rx.have_first) {
 		rx.have_first = true;
@@ -204,6 +253,10 @@ void nrf_802154_received_timestamp_raw(uint8_t *data, int8_t power, uint8_t lqi,
 void nrf_802154_receive_failed(nrf_802154_rx_error_t error, uint32_t id)
 {
 	ARG_UNUSED(id);
+	rx.failed++;
+	if (error == NRF_802154_RX_ERROR_ABORTED) {
+		rx.aborted++;
+	}
 	/* A frame the radio started and couldn't finish. Logged, not counted
 	 * into loss - it's the same event as a missing counter seen from the
 	 * other side. NRF_802154_RX_ERROR_ABORTED is what an ANT blackout
@@ -219,7 +272,8 @@ static void report(void)
 	uint32_t ppm;
 
 	if (!rx.have_first) {
-		LOG_INF("P3.5 rx: nothing heard yet (foreign=%u)", rx.foreign);
+		LOG_INF("P3.5 rx: nothing heard yet (foreign=%u rxfail=%u "
+			"drv_assert=%u)", rx.foreign, rx.failed, drv_assert);
 		return;
 	}
 
@@ -231,10 +285,12 @@ static void report(void)
 	ppm = (sent > 0u) ? (uint32_t)(((uint64_t)lost * 1000000u) / sent) : 0u;
 
 	LOG_INF("P3.5 rx: span=%u recv=%u lost=%u loss=%u.%03u %% | "
-		"worst_gap=%u dup=%u foreign=%u | psdu=%u ch=%u",
+		"worst_gap=%u dup=%u foreign=%u | rxfail=%u abort=%u "
+		"drv_assert=%u | psdu=%u ch=%u",
 		sent, rx.received, lost, ppm / 10000u, (ppm % 10000u) / 10u,
 		rx.worst_gap, rx.out_of_order, rx.foreign,
-		(unsigned int)PSDU_LEN, (unsigned int)CONFIG_COEX154_CHANNEL);
+		rx.failed, rx.aborted, drv_assert,
+		(unsigned int)rx.last_len, (unsigned int)CONFIG_COEX154_CHANNEL);
 }
 
 /* ---------------------------------------------------------------------------
@@ -242,7 +298,7 @@ static void report(void)
  * ---------------------------------------------------------------------------
  */
 
-#if defined(CONFIG_RADIANT_CORE) && CONFIG_COEX154_ANT_MASTERS > 0
+#if defined(CONFIG_RADIANT_CORE)
 
 #include "ant_radio.h"
 #include "ant_wire.h"
@@ -262,6 +318,15 @@ static void report(void)
 #define ANT_DEV_TYPE  0x78u
 #define ANT_TRANS     1u
 
+/*
+ * Guarded divisor. CONFIG_COEX154_ANT_MASTERS is legitimately 0 in the
+ * arbiter-only arm, and the offset expression below divides by it - a
+ * compile-time division by zero is a hard error even on a branch that never
+ * runs, because the constant is folded before the branch is discarded.
+ */
+#define ANT_N       ((unsigned int)CONFIG_COEX154_ANT_MASTERS)
+#define ANT_N_DIV   (ANT_N > 0u ? ANT_N : 1u)
+
 static void ant_load_start(void)
 {
 	static const uint8_t net_key[8] = {
@@ -279,7 +344,21 @@ static void ant_load_start(void)
 	}
 	(void)antr_network_address_set(0u, net_key);
 
-	for (ch = 0u; ch < (uint8_t)CONFIG_COEX154_ANT_MASTERS; ch++) {
+	/*
+	 * THE ARBITER-ONLY ARM, and it stops here on purpose. radiant_core is
+	 * linked, initialised and holding its MPSL session; no channel is open,
+	 * so it asks MPSL for no air at all. That is the arm that separates "an
+	 * arbiter is present" from "air was taken away" - and it only means that
+	 * if antr_init() above has actually run, which is why the zero case is
+	 * inside this function rather than compiled out around it.
+	 */
+	if (ANT_N == 0u) {
+		LOG_INF("ANT load: none - radiant_core is up but owns no "
+			"channel. ARBITER-ONLY arm.");
+		return;
+	}
+
+	for (ch = 0u; ch < (uint8_t)ANT_N; ch++) {
 		antr_err_t rc;
 
 		/* MASTER_TX_ONLY, not MASTER: a bidirectional master opens a
@@ -306,14 +385,19 @@ static void ant_load_start(void)
 		 * the bunched case is a separate run (set every offset to
 		 * zero).
 		 */
+#if defined(CONFIG_COEX154_ANT_BUNCHED)
+		(void)antr_channel_open_with_offset(ch, 0u);
+#else
 		(void)antr_channel_open_with_offset(
-			ch, (uint16_t)((ANT_PERIOD / CONFIG_COEX154_ANT_MASTERS) * ch));
+			ch, (uint16_t)((ANT_PERIOD / ANT_N_DIV) * ch));
+#endif
 	}
 
-	LOG_INF("ANT load: %u masters at %u ms, freq 24%02u MHz",
-		(unsigned int)CONFIG_COEX154_ANT_MASTERS,
-		(unsigned int)((ANT_PERIOD * 1000u) / 32768u),
-		(unsigned int)ANT_FREQ);
+	LOG_INF("ANT load: %u masters at %u ms, freq 24%02u MHz, offsets %s",
+		ANT_N, (unsigned int)((ANT_PERIOD * 1000u) / 32768u),
+		(unsigned int)ANT_FREQ,
+		IS_ENABLED(CONFIG_COEX154_ANT_BUNCHED) ? "BUNCHED (all zero)"
+						       : "spread");
 }
 
 /*
@@ -348,17 +432,12 @@ void antr_on_message(const struct antr_msg *msg)
 
 static void ant_load_start(void)
 {
-	LOG_INF("ANT load: none - this is the CONTROL arm");
+	LOG_INF("ANT load: none - radiant_core is not even linked. BENCH FLOOR "
+		"arm: this is the room, the antennas and the two boards, with "
+		"no arbiter in the image at all.");
 }
 
-#if defined(CONFIG_RADIANT_CORE)
-void antr_on_message(const struct antr_msg *msg)
-{
-	ARG_UNUSED(msg);
-}
-#endif
-
-#endif /* CONFIG_RADIANT_CORE && CONFIG_COEX154_ANT_MASTERS > 0 */
+#endif /* CONFIG_RADIANT_CORE */
 
 static void role_run(void)
 {
