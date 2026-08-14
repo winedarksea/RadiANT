@@ -29,15 +29,12 @@
 # duplicate that silently stops growing is a suite that stops testing the
 # module it names.
 #
-# The application always appends this module and CONFIG_RADIANT gates it,
-# rather than appending it only for -DANT_RADIO=core. An sdk_ant build can then
-# assert CONFIG_RADIANT=n positively; the module's mere absence proves
-# nothing. The guard below is what makes that gate real - with it, an sdk_ant
-# build cannot reach a <radiant/...> header even by accident.
-
-if(NOT CONFIG_RADIANT)
-  return()
-endif()
+# The application always appends this module and CONFIG_RADIANT gates the
+# CODE below, rather than appending it only for -DANT_RADIO=core. An sdk_ant
+# build can then assert CONFIG_RADIANT=n positively; the module's mere absence
+# proves nothing. With the guard below, an sdk_ant or stub build cannot link
+# any radiant object code even by accident - it can still see the header path,
+# which is deliberate; see the include/ note just below for why.
 
 # include/ carries the namespaced <radiant/...> headers - and nothing
 # else. There used to be a second directory here, ../src, reached for
@@ -50,7 +47,20 @@ endif()
 # radiant_api.c moved out entirely to src/ant_radio_radiant.c, where the
 # antr_* names it always spoke belong. See those two headers' own comments for
 # the full story.
+#
+# EXPOSED BEFORE THE CONFIG_RADIANT GUARD, unconditionally, and that is not an
+# accident either: apps/common/ant/ant_wire.h - the ANTW_* header every ANT_RADIO
+# backend compiles, sdk_ant included - is generated as a thin alias of
+# radiant_wire.h rather than a second independently-generated copy of the same
+# wire constants (see that file's own header). A header of pure constants
+# carries no object code and violates nothing the CONFIG_RADIANT gate below
+# protects; hiding the *path* here would just force a second copy of the same
+# values back into existence, which is the drift this design exists to avoid.
 zephyr_include_directories(include)
+
+if(NOT CONFIG_RADIANT)
+  return()
+endif()
 
 zephyr_library()
 zephyr_library_sources(

@@ -38,7 +38,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $Uf2Path) {
-    # sysbuild nests the image one level deeper (build\<dir>\ant_dongle\zephyr\)
+    # sysbuild nests the image one level deeper (build\<dir>\radiant_dongle\zephyr\)
     # than a plain application build does, so search rather than hardcode.
     $buildRoot = Join-Path $PSScriptRoot '..\build'
     $candidate = Get-ChildItem -Path $buildRoot -Filter zephyr.uf2 -Recurse -File -ErrorAction SilentlyContinue |

@@ -53,6 +53,13 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repo = Split-Path -Parent $PSScriptRoot
+# apps/dongle_thread does not have its own project() yet - that is Stage 6 of
+# the reorg plan. The gate.conf/thread.conf/thread_sed.conf fragments this
+# script passes as -DEXTRA_CONF_FILE already moved there ahead of it, so this
+# script is retargeted to match now rather than left pointing at a directory
+# (the former repository root) that no longer has a CMakeLists.txt at all.
+# It will not configure again until apps/dongle_thread exists for real.
+$dongleThreadApp = Join-Path $repo 'apps\dongle_thread'
 
 $arms = @(
     @{ Name = 'p4ctrl'; Conf = 'gate.conf' }
@@ -75,7 +82,7 @@ foreach ($arm in $arms) {
     Write-Host ""
     Write-Host "=== $($arm.Name)  EXTRA_CONF_FILE=$($arm.Conf) ===" -ForegroundColor Cyan
 
-    $buildArgs = @('-z', $zephyr, 'build', '-s', $repo, '-d', $dir, '-b', $Board)
+    $buildArgs = @('-z', $zephyr, 'build', '-s', $dongleThreadApp, '-d', $dir, '-b', $Board)
     if ($Pristine) { $buildArgs += @('-p', 'always') }
     # CONFIG_RADIANT_SWEEP_DEBUG IS PART OF THE MEASUREMENT, NOT A DEBUG
     # AID, and leaving it off is why the first smoke run produced a board that
@@ -120,7 +127,7 @@ foreach ($arm in $arms) {
     }
 
     # THE READ-BACK. See the .DESCRIPTION: this is the check, not the -D flags.
-    $cfg = Join-Path $dir 'ant_dongle\zephyr\.config'
+    $cfg = Join-Path $dir 'dongle_thread\zephyr\.config'
     if (-not (Test-Path $cfg)) {
         Write-Host "  NO .config AT $cfg" -ForegroundColor Red
         $failed += $arm.Name
@@ -152,7 +159,7 @@ foreach ($arm in $arms) {
     }
     if ($bad) { $failed += $arm.Name; continue }
 
-    $elf = Join-Path $dir 'ant_dongle\zephyr\zephyr.elf'
+    $elf = Join-Path $dir 'dongle_thread\zephyr\zephyr.elf'
     Write-Host "  ok: $elf" -ForegroundColor Green
 }
 

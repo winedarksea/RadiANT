@@ -26,6 +26,7 @@
 config RADIANT_ANTR_API
 	bool "compile the antr_* adapter (src/ant_radio_radiant.c)"
 	default y
+	depends on RADIANT
 	help
 	  src/ant_radio_radiant.c is the integration layer: it implements the
 	  fifty antr_* entry points that src/ant_radio.h declares, on top of

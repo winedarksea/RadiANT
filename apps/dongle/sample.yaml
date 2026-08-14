@@ -2,21 +2,21 @@ sample:
   description: ANT+ USB Dongle (Zwift-compatible, VID 0x0FCF / PID 0x1009)
   name: ANT+ USB Dongle
 tests:
-  sample.ant_dongle.feather_uf2:
+  sample.radiant_dongle.feather_uf2:
     platform_allow: adafruit_feather_nrf52840/nrf52840/uf2
     integration_platforms:
       - adafruit_feather_nrf52840/nrf52840/uf2
     tags: ant usb dongle
     build_only: true
     extra_args: CONFIG_ANT_EVALUATION_KEY=y
-  sample.ant_dongle.nrf52840dongle:
+  sample.radiant_dongle.nrf52840dongle:
     platform_allow: nrf52840dongle/nrf52840
     integration_platforms:
       - nrf52840dongle/nrf52840
     tags: ant usb dongle
     build_only: true
     extra_args: CONFIG_ANT_EVALUATION_KEY=y
-  sample.ant_dongle.promicro_uf2:
+  sample.radiant_dongle.promicro_uf2:
     platform_allow: promicro_nrf52840/nrf52840/uf2
     integration_platforms:
       - promicro_nrf52840/nrf52840/uf2
@@ -24,7 +24,7 @@ tests:
     build_only: true
     extra_args: CONFIG_ANT_EVALUATION_KEY=y
   # Fallback image for boards with no 32.768 kHz crystal; see synth.conf.
-  sample.ant_dongle.promicro_uf2_synth:
+  sample.radiant_dongle.promicro_uf2_synth:
     platform_allow: promicro_nrf52840/nrf52840/uf2
     integration_platforms:
       - promicro_nrf52840/nrf52840/uf2
@@ -35,8 +35,8 @@ tests:
       - EXTRA_CONF_FILE=synth.conf
   # The new USB device stack on a board that can actually be tested against a
   # host. The nRF54 targets have no legacy stack available, so this is what
-  # keeps src/usb_ant_class_next.c honest on hardware that exists.
-  sample.ant_dongle.feather_uf2_usbd:
+  # keeps apps/common/usb_ant_class_next.c honest on hardware that exists.
+  sample.radiant_dongle.feather_uf2_usbd:
     platform_allow: adafruit_feather_nrf52840/nrf52840/uf2
     integration_platforms:
       - adafruit_feather_nrf52840/nrf52840/uf2
@@ -48,7 +48,7 @@ tests:
   # nRF54L15 has no USB device peripheral at all, so this build carries the ANT
   # serial protocol over a UART. It is the only target that exercises
   # lib/nrf54l/libant.a on real nRF54L silicon.
-  sample.ant_dongle.nrf54l15dk:
+  sample.radiant_dongle.nrf54l15dk:
     platform_allow: nrf54l15dk/nrf54l15/cpuapp
     integration_platforms:
       - nrf54l15dk/nrf54l15/cpuapp
@@ -57,7 +57,7 @@ tests:
     extra_args: CONFIG_ANT_EVALUATION_KEY=y
   # nRF54LM20A: the one nRF54L part with a USB controller, and it is a DWC2,
   # so this is the new stack by necessity rather than by preference.
-  sample.ant_dongle.nrf54lm20dk:
+  sample.radiant_dongle.nrf54lm20dk:
     platform_allow: nrf54lm20dk/nrf54lm20a/cpuapp
     integration_platforms:
       - nrf54lm20dk/nrf54lm20a/cpuapp

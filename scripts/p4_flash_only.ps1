@@ -14,7 +14,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-$hex = Join-Path $repo "build\$Dir\ant_dongle\zephyr\zephyr.hex"
+$hex = Join-Path $repo "build\$Dir\dongle_thread\zephyr\zephyr.hex"
 if (-not (Test-Path $hex)) { throw "no image at $hex" }
 
 $jlink = 'C:\Program Files\SEGGER\JLink_V966\JLink.exe'

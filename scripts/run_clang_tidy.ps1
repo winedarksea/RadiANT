@@ -27,7 +27,7 @@ if (-not (Test-Path $clangTidy)) {
     $clangTidy = $cmd.Source
 }
 
-$sourceDbs = @('ztest_hw_l15\tests', 'p15_gate\ant_dongle', 'ti_cc26xx\ant_dongle') |
+$sourceDbs = @('ztest_hw_l15\tests', 'p15_gate\dongle_thread', 'ti_cc26xx\dongle_ti') |
     ForEach-Object { Join-Path $repoRoot "build\$_\compile_commands.json" }
 
 $merged = @{}

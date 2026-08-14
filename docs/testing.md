@@ -451,9 +451,9 @@ claims a mock cannot make.
 `.config`:
 
 ```
-west build app -b adafruit_feather_nrf52840/nrf52840/uf2 -p always \
+west build app/apps/dongle -b adafruit_feather_nrf52840/nrf52840/uf2 -p always \
   -- "-DANT_RADIO=core" "-DRADIANT_BACKEND=nrf" "-DEXTRA_CONF_FILE=security.conf"
-grep CONFIG_RADIANT_BACKEND_NRF= build/zephyr/.config
+grep CONFIG_RADIANT_BACKEND_NRF= build/radiant_dongle/zephyr/.config
 ```
 
 `-DANT_RADIO=core` alone has silently produced the inert backend before, and a

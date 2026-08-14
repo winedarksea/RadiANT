@@ -363,7 +363,7 @@ jobs:
           if [[ -n "${MODULE_DIR}" ]]; then
             extra+=("-DANT_MODULE_DIR=${MODULE_DIR}")
           fi
-          west build app \
+          west build app/apps/dongle \
             -b "${BOARD}" \
             -d build \
             -p always \
@@ -381,7 +381,7 @@ jobs:
           RADIO: ${{ matrix.radio }}
         run: |
           set -euo pipefail
-          cfg="$(find build -name .config -path '*ant_dongle*' -print -quit)"
+          cfg="$(find build -name .config -path '*/dongle/*' -print -quit)"
           want="CONFIG_ANT_DONGLE_RADIO_${RADIO^^}=y"
           echo "expecting ${want} in ${cfg}"
           grep -q "^${want}\$" "${cfg}"
@@ -391,7 +391,7 @@ jobs:
           EXPECTED: ${{ matrix.transport }}
         run: |
           set -euo pipefail
-          cfg="$(find build -name .config -path '*ant_dongle*' -print -quit)"
+          cfg="$(find build -name .config -path '*/dongle/*' -print -quit)"
           got="$(grep -oP '^CONFIG_ANT_DONGLE_TRANSPORT_\K\w+(?==y)' "${cfg}")"
           echo "transport: ${got}   expected: ${EXPECTED}"
           test "${got}" = "${EXPECTED}"
@@ -477,7 +477,7 @@ jobs:
         run: |
           set -euxo pipefail
           for tree in app base; do
-            west build "${tree}" \
+            west build "${tree}/apps/dongle" \
               -b adafruit_feather_nrf52840/nrf52840/uf2 \
               -d "build-${tree}" \
               -p always \
@@ -501,7 +501,7 @@ jobs:
 
           head_elf="$(find build-app -name zephyr.elf -print -quit)"
           base_elf="$(find build-base -name zephyr.elf -print -quit)"
-          head_cfg="$(find build-app -name .config -path '*ant_dongle*' -print -quit)"
+          head_cfg="$(find build-app -name .config -path '*/dongle/*' -print -quit)"
 
           # 1. Section sizes, section by section.
           #
@@ -585,7 +585,7 @@ jobs:
           found=0
           for f in app/radiant/src/radiant_sec.c \
                    app/radiant/src/radiant_sec_pair.c \
-                   app/src/ant_sec_host.c; do
+                   app/apps/common/ant_sec_host.c; do
             [[ -f "${f}" ]] || continue
             found=1
             # Match a CALL, not the word: these files discuss the rule in
@@ -625,7 +625,7 @@ jobs:
           fi
           if grep -inE 'heart|cadence|torque|watt|\brpm\b|\bbpm\b|power|speed|calorie' "${f}"; then
             echo "::error::${f} names a profile field. It authenticates bytes;"
-            echo "::error::what those bytes MEAN is src/profiles/'s business,"
+            echo "::error::what those bytes MEAN is radiant/src/profiles/'s business,"
             echo "::error::and a tag module with an opinion about one profile"
             echo "::error::is a tag module the next profile works around"
             exit 1
@@ -679,18 +679,18 @@ jobs:
       - name: Enabled build stays inside its measured budget
         run: |
           set -euo pipefail
-          west build app \
+          west build app/apps/dongle \
             -b adafruit_feather_nrf52840/nrf52840/uf2 \
             -d build-enabled \
             -p always \
             -- "-DANT_RADIO=core" "-DEXTRA_CONF_FILE=security.conf"
-          west build app \
+          west build app/apps/dongle \
             -b adafruit_feather_nrf52840/nrf52840/uf2 \
             -d build-pairing \
             -p always \
             -- "-DANT_RADIO=core" "-DEXTRA_CONF_FILE=security.conf" \
                "-DCONFIG_RADIANT_SEC_PAIRING_X25519=y"
-          west build app \
+          west build app/apps/dongle \
             -b adafruit_feather_nrf52840/nrf52840/uf2 \
             -d build-compat \
             -p always \
@@ -714,7 +714,7 @@ jobs:
           on_elf="$(find build-enabled -name zephyr.elf -print -quit)"
           pair_elf="$(find build-pairing -name zephyr.elf -print -quit)"
           compat_elf="$(find build-compat -name zephyr.elf -print -quit)"
-          compat_cfg="$(find build-compat -name .config -path '*ant_dongle*' -print -quit)"
+          compat_cfg="$(find build-compat -name .config -path '*/dongle/*' -print -quit)"
 
           fail=0
           check() {   # name measured ceiling
@@ -830,12 +830,12 @@ jobs:
       - name: The stub build carries none of it
         run: |
           set -euo pipefail
-          west build app \
+          west build app/apps/dongle \
             -b adafruit_feather_nrf52840/nrf52840/uf2 \
             -d build-stub \
             -p always \
             -- "-DANT_RADIO=stub" "-DEXTRA_CONF_FILE=security.conf"
-          cfg="$(find build-stub -name .config -path '*ant_dongle*' -print -quit)"
+          cfg="$(find build-stub -name .config -path '*/dongle/*' -print -quit)"
           if grep -qx 'CONFIG_RADIANT_SEC=y' "${cfg}"; then
             echo "::error::security reached a build with no radiant in it"
             exit 1
@@ -873,25 +873,25 @@ jobs:
       matrix:
         include:
           - board: adafruit_feather_nrf52840/nrf52840/uf2
-            artifact: ant_dongle.uf2
+            artifact: radiant_dongle.uf2
             package: uf2
             offset: "0x26000"
             transport: USB_LEGACY
             release: true
           - board: nrf52840dongle/nrf52840
-            artifact: ant_dongle_nrf52840dongle.zip
+            artifact: radiant_dongle_nrf52840dongle.zip
             package: dfu
             offset: "0x1000"
             transport: USB_LEGACY
             release: true
           - board: promicro_nrf52840/nrf52840/uf2
-            artifact: ant_dongle_promicro.uf2
+            artifact: radiant_dongle_promicro.uf2
             package: uf2
             offset: "0x26000"
             transport: USB_LEGACY
             release: true
           - board: promicro_nrf52840/nrf52840/uf2
-            artifact: ant_dongle_promicro_synth.uf2
+            artifact: radiant_dongle_promicro_synth.uf2
             package: uf2
             extra_conf: synth.conf
             offset: "0x26000"
@@ -901,20 +901,20 @@ jobs:
           # device stack, and this is the one board that stack can be tested
           # against a real host on, so it is built here to keep it compiling.
           - board: adafruit_feather_nrf52840/nrf52840/uf2
-            artifact: ant_dongle_feather_usbd.uf2
+            artifact: radiant_dongle_feather_usbd.uf2
             package: uf2
             extra_conf: next.conf
             offset: "0x26000"
             transport: USB_NEXT
           # nRF54L15: no USB peripheral in silicon, ANT serial goes out a UART.
           - board: nrf54l15dk/nrf54l15/cpuapp
-            artifact: ant_dongle_nrf54l15dk.hex
+            artifact: radiant_dongle_nrf54l15dk.hex
             package: hex
             offset: "0x0"
             transport: UART
           # nRF54LM20A: DWC2 USB controller, new stack by necessity.
           - board: nrf54lm20dk/nrf54lm20a/cpuapp
-            artifact: ant_dongle_nrf54lm20dk.hex
+            artifact: radiant_dongle_nrf54lm20dk.hex
             package: hex
             offset: "0x0"
             transport: USB_NEXT
@@ -995,7 +995,7 @@ jobs:
           if [[ -n "${EXTRA_CONF}" ]]; then
             extra+=("-DEXTRA_CONF_FILE=${EXTRA_CONF}")
           fi
-          west build app \
+          west build app/apps/dongle \
             -b "${BOARD}" \
             -d build \
             -p always \
@@ -1013,7 +1013,7 @@ jobs:
         if: steps.ant-ready.outputs.enabled == 'true'
         run: |
           set -euo pipefail
-          cfg="$(find build -name .config -path '*ant_dongle*' -print -quit)"
+          cfg="$(find build -name .config -path '*/dongle/*' -print -quit)"
           got="$(grep -oP '^CONFIG_ANT_DONGLE_RADIO_\K\w+(?==y)' "${cfg}")"
           echo "radio: ${got}   expected: SDK_ANT"
           test "${got}" = "SDK_ANT"
@@ -1029,7 +1029,7 @@ jobs:
         run: |
           set -euo pipefail
           offset="$(grep -h '^CONFIG_FLASH_LOAD_OFFSET=' \
-            "$(find build -name .config -path '*ant_dongle*' -print -quit)" | cut -d= -f2)"
+            "$(find build -name .config -path '*/dongle/*' -print -quit)" | cut -d= -f2)"
           pm_app="$(python3 -c \
             "import yaml,sys; print(hex(yaml.safe_load(open('build/partitions.yml'))['app']['address']))")"
           echo "load offset: ${offset}   partition manager app: ${pm_app}   expected: ${EXPECTED}"
@@ -1045,7 +1045,7 @@ jobs:
           EXPECTED: ${{ matrix.transport }}
         run: |
           set -euo pipefail
-          cfg="$(find build -name .config -path '*ant_dongle*' -print -quit)"
+          cfg="$(find build -name .config -path '*/dongle/*' -print -quit)"
           got="$(grep -oP '^CONFIG_ANT_DONGLE_TRANSPORT_\K\w+(?==y)' "${cfg}")"
           echo "transport: ${got}   expected: ${EXPECTED}"
           test "${got}" = "${EXPECTED}"
@@ -1054,8 +1054,9 @@ jobs:
         if: steps.ant-ready.outputs.enabled == 'true' && matrix.package == 'uf2'
         run: |
           set -euxo pipefail
-          # sysbuild nests the image under <build>/ant_dongle/zephyr/; a plain
-          # application build puts it at <build>/zephyr/. Accept either.
+          # sysbuild nests the image under <build>/dongle/zephyr/ (the sysbuild
+          # image name, taken from apps/dongle's own directory basename); a
+          # plain application build puts it at <build>/zephyr/. Accept either.
           uf2="$(find build -name zephyr.uf2 -print -quit)"
           test -n "${uf2}"
           mkdir -p dist
@@ -1069,7 +1070,7 @@ jobs:
         if: steps.ant-ready.outputs.enabled == 'true' && matrix.package == 'hex'
         run: |
           set -euxo pipefail
-          hex="$(find build -name zephyr.hex -path '*ant_dongle*' -print -quit)"
+          hex="$(find build -name zephyr.hex -path '*/dongle/*' -print -quit)"
           test -n "${hex}"
           mkdir -p dist
           cp "${hex}" "dist/${{ matrix.artifact }}"
@@ -1086,7 +1087,7 @@ jobs:
             https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/executables/x86_64-unknown-linux-gnu/nrfutil
           chmod +x nrfutil
           ./nrfutil install nrf5sdk-tools
-          hex="$(find build -name zephyr.hex -path '*ant_dongle*' -print -quit)"
+          hex="$(find build -name zephyr.hex -path '*/dongle/*' -print -quit)"
           test -n "${hex}"
           mkdir -p dist
           # --sd-req 0x00: the application needs no SoftDevice present, which is
@@ -1124,11 +1125,11 @@ jobs:
       # combined speed-and-cadence page, which is the hardest to get right and
       # is not the default.
       - name: Build ANT+ sensor simulator
-        if: steps.ant-ready.outputs.enabled == 'true' && matrix.artifact == 'ant_dongle.uf2'
+        if: steps.ant-ready.outputs.enabled == 'true' && matrix.artifact == 'radiant_dongle.uf2'
         run: |
           set -euxo pipefail
           for profile in BPWR_STANDARD BPWR_CRANK_TORQUE BPWR_WHEEL_TORQUE BSC_COMBINED; do
-            west build app/sim \
+            west build app/apps/sim \
               -b nrf54l15dk/nrf54l15/cpuapp \
               -d "build-sim-${profile}" \
               -p always \
@@ -1143,7 +1144,7 @@ jobs:
       # Emitted once, not once per board - the cause and the fix are the same
       # for every entry in the matrix.
       - name: Note skipped build
-        if: steps.ant-ready.outputs.enabled != 'true' && matrix.artifact == 'ant_dongle.uf2'
+        if: steps.ant-ready.outputs.enabled != 'true' && matrix.artifact == 'radiant_dongle.uf2'
         run: |
           {
             echo "### ANT build skipped"

@@ -9,7 +9,7 @@
  * transport selection and CI flash-offset assertions are all dongle-
  * specific and would be wrong here.
  *
- *   west build sim -b nrf54l15dk/nrf54l15/cpuapp --sysbuild -p auto
+ *   west build app/apps/sim -b nrf54l15dk/nrf54l15/cpuapp --sysbuild -p auto
  *   scripts\flash_sim_jlink.ps1
  *
  * Runs on the nRF54L15 DK (no USB device controller in silicon, so it can

@@ -68,7 +68,7 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $hex  = Join-Path $repo "build\$Arm\merged.hex"
 if (-not (Test-Path $hex)) {
-    $hex = Join-Path $repo "build\$Arm\ant_dongle\zephyr\zephyr.hex"
+    $hex = Join-Path $repo "build\$Arm\dongle_thread\zephyr\zephyr.hex"
 }
 if (-not (Test-Path $hex)) { throw "no image for $Arm - run scripts\build_p4.ps1" }
 
@@ -76,7 +76,7 @@ if (-not (Test-Path $hex)) { throw "no image for $Arm - run scripts\build_p4.ps1
 # build time; this checks the thing actually about to be flashed, because the
 # silent fallback to the null backend is indistinguishable from every failure
 # this sitting is chasing and one check at the wrong moment is no check at all.
-$cfg = Join-Path $repo "build\$Arm\ant_dongle\zephyr\.config"
+$cfg = Join-Path $repo "build\$Arm\dongle_thread\zephyr\.config"
 if (-not (Select-String -Path $cfg -Pattern '^CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y' -Quiet)) {
     throw "$Arm was not built with the MPSL gate. Do not take a reading from it."
 }

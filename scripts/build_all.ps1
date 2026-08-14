@@ -108,13 +108,13 @@ $backendSymbol = "CONFIG_ANT_DONGLE_RADIO_$($Backend.ToUpper())=y"
 # 'transport' is which of the three src/ transports must end up compiled; both
 # are asserted after the build.
 $targets = @(
-    @{ dir='release';        board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='ant_dongle.uf2';                   pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf=$null;         release=$true  }
-    @{ dir='dongle';         board='nrf52840dongle/nrf52840';                artifact='ant_dongle_nrf52840dongle.zip';    pkg='dfu'; offset=0x1000;  transport='USB_LEGACY'; conf=$null;         release=$true  }
-    @{ dir='promicro';       board='promicro_nrf52840/nrf52840/uf2';         artifact='ant_dongle_promicro.uf2';          pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf=$null;         release=$true  }
-    @{ dir='promicro_synth'; board='promicro_nrf52840/nrf52840/uf2';         artifact='ant_dongle_promicro_synth.uf2';    pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='synth.conf';  release=$true  }
-    @{ dir='feather_next';   board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='ant_dongle_feather_usbd.uf2';      pkg='uf2'; offset=0x26000; transport='USB_NEXT';   conf='next.conf';   release=$false }
-    @{ dir='l15';            board='nrf54l15dk/nrf54l15/cpuapp';             artifact='ant_dongle_nrf54l15dk.hex';        pkg='hex'; offset=0x0;     transport='UART';       conf=$null;         release=$false }
-    @{ dir='lm20';           board='nrf54lm20dk/nrf54lm20a/cpuapp';          artifact='ant_dongle_nrf54lm20dk.hex';       pkg='hex'; offset=0x0;     transport='USB_NEXT';   conf=$null;         release=$false }
+    @{ dir='release';        board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle.uf2';                   pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf=$null;         release=$true  }
+    @{ dir='dongle';         board='nrf52840dongle/nrf52840';                artifact='radiant_dongle_nrf52840dongle.zip';    pkg='dfu'; offset=0x1000;  transport='USB_LEGACY'; conf=$null;         release=$true  }
+    @{ dir='promicro';       board='promicro_nrf52840/nrf52840/uf2';         artifact='radiant_dongle_promicro.uf2';          pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf=$null;         release=$true  }
+    @{ dir='promicro_synth'; board='promicro_nrf52840/nrf52840/uf2';         artifact='radiant_dongle_promicro_synth.uf2';    pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='synth.conf';  release=$true  }
+    @{ dir='feather_next';   board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle_feather_usbd.uf2';      pkg='uf2'; offset=0x26000; transport='USB_NEXT';   conf='next.conf';   release=$false }
+    @{ dir='l15';            board='nrf54l15dk/nrf54l15/cpuapp';             artifact='radiant_dongle_nrf54l15dk.hex';        pkg='hex'; offset=0x0;     transport='UART';       conf=$null;         release=$false }
+    @{ dir='lm20';           board='nrf54lm20dk/nrf54lm20a/cpuapp';          artifact='radiant_dongle_nrf54lm20dk.hex';       pkg='hex'; offset=0x0;     transport='USB_NEXT';   conf=$null;         release=$false }
 )
 
 # The default-off configuration fragments, which only build under a backend
@@ -130,10 +130,10 @@ $targets = @(
 # building it: it would look like coverage. Hence the gate on $Backend rather
 # than an unconditional row.
 if ($Backend -eq 'core') {
-    $targets += @{ dir='feather_security'; board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='ant_dongle_feather_security.uf2'; pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='security.conf'; release=$false }
+    $targets += @{ dir='feather_security'; board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle_feather_security.uf2'; pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='security.conf'; release=$false }
 }
 if ($Backend -eq 'sdk_ant') {
-    $targets += @{ dir='feather_encryption'; board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='ant_dongle_feather_encryption.uf2'; pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='encryption.conf'; release=$false }
+    $targets += @{ dir='feather_encryption'; board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle_feather_encryption.uf2'; pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='encryption.conf'; release=$false }
 }
 
 # ── The second vendor ───────────────────────────────────────────────────────
@@ -184,10 +184,10 @@ if ($Backend -eq 'core') {
     if (-not $HalTiDir) { $HalTiDir = "C:\ncs\$NcsVersion\modules\hal\ti" }
     if (Test-Path (Join-Path $HalTiDir 'zephyr\module.yml')) {
         $halTiModule = ($HalTiDir -replace '\\', '/')
-        $targets += @{ dir='ti_launchxl';       board='cc26x2r1_launchxl'; artifact='ant_dongle_cc26x2r1_launchxl.hex';       pkg='hex'; offset=0x0; transport='UART'; conf=$null;           release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule }
-        $targets += @{ dir='ti_launchxl_patch'; board='cc26x2r1_launchxl'; artifact='ant_dongle_cc26x2r1_launchxl_patch.hex'; pkg='hex'; offset=0x0; transport='UART'; conf='ti_patch.conf'; release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule }
-        $targets += @{ dir='ti_launchxl_gate';  board='cc26x2r1_launchxl'; artifact='ant_dongle_cc26x2r1_launchxl_gate.hex';  pkg='hex'; offset=0x0; transport='UART'; conf='ti_gate.conf';  release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule }
-        $targets += @{ dir='ti_launchxl_coex';  board='cc26x2r1_launchxl'; artifact='ant_dongle_cc26x2r1_launchxl_coex.hex';  pkg='hex'; offset=0x0; transport='UART'; conf='ti_coex.conf';  release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule; overlay='ti_coex.overlay' }
+        $targets += @{ dir='ti_launchxl';       board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl.hex';       pkg='hex'; offset=0x0; transport='UART'; conf=$null;           release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule }
+        $targets += @{ dir='ti_launchxl_patch'; board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl_patch.hex'; pkg='hex'; offset=0x0; transport='UART'; conf='ti_patch.conf'; release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule }
+        $targets += @{ dir='ti_launchxl_gate';  board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl_gate.hex';  pkg='hex'; offset=0x0; transport='UART'; conf='ti_gate.conf';  release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule }
+        $targets += @{ dir='ti_launchxl_coex';  board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl_coex.hex';  pkg='hex'; offset=0x0; transport='UART'; conf='ti_coex.conf';  release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule; overlay='ti_coex.overlay' }
     } else {
         Write-Host "cc26x2r1_launchxl: skipped, no hal_ti module at $HalTiDir" -ForegroundColor DarkYellow
         Write-Host "  Run scripts\fetch_hal_ti.ps1 (NCS's west manifest will never fetch it)."
@@ -226,9 +226,19 @@ New-Item -ItemType Directory -Force -Path $dist | Out-Null
 # `west build` is an extension command discovered through the workspace
 # manifest, so west must run with its cwd inside the workspace even though
 # -s/-d/-z all point elsewhere.
+#
+# Every row still builds from apps/dongle, including the cc26x2r1_launchxl
+# ones - a stale path for those specifically, since their own conf/overlay
+# fragments (ti_patch.conf, ti_gate.conf, ti_coex.conf, ti_coex.overlay) moved
+# to apps/dongle_ti/ ahead of that application existing as a real `west
+# build` target. Harmless today: hal_ti is not fetched on this machine, so
+# the TI rows are never added to $targets in the first place (see the check
+# above). Routing them to apps/dongle_ti is apps/dongle_ti's own stage to
+# finish, not this one's to half-do.
 Push-Location "C:\ncs\$NcsVersion"
 try {
     $built = @()
+    $dongleApp = Join-Path $repo 'apps\dongle'
 
     foreach ($t in $targets) {
         if ($t.artifact -notlike $Only) { continue }
@@ -256,13 +266,13 @@ try {
         # Do not redirect stderr: PowerShell 5.1 wraps a native command's
         # stderr in ErrorRecords and reports failure even on exit code 0.
         $log = Join-Path $env:TEMP "build_$($t.dir).log"
-        west -z $zephyr build -s $repo -d $out -b $t.board -p always @extra > $log
+        west -z $zephyr build -s $dongleApp -d $out -b $t.board -p always @extra > $log
         if ($LASTEXITCODE -ne 0) {
             Get-Content $log -Tail 30
             throw "build failed for $($t.artifact); full log at $log"
         }
 
-        $cfgPath = Join-Path $out 'ant_dongle\zephyr\.config'
+        $cfgPath = Join-Path $out 'dongle\zephyr\.config'
         $cfg = Get-Content $cfgPath
 
         # 1. Link address. PM's `app` and the load offset must agree.
@@ -352,7 +362,7 @@ try {
             continue
         }
 
-        $zdir = Join-Path $out 'ant_dongle\zephyr'
+        $zdir = Join-Path $out 'dongle\zephyr'
         switch ($t.pkg) {
             'uf2' { Copy-Item (Join-Path $zdir 'zephyr.uf2') (Join-Path $dist $t.artifact) -Force }
             'hex' { Copy-Item (Join-Path $zdir 'zephyr.hex') (Join-Path $dist $t.artifact) -Force }
@@ -386,8 +396,8 @@ try {
     # cache file explicitly. Without that it would silently resolve
     # $env:SDK_ANT_DIR, build green against the real checkout, and prove
     # nothing at all - which is worse than not running it. If this ever needs
-    # debugging, check build\independence\ant_dongle\CMakeCache.txt: it must
-    # record ANT_MODULE_DIR as the nonexistent path, not as a real one.
+    # debugging, check build\independence\dongle\CMakeCache.txt: it
+    # must record ANT_MODULE_DIR as the nonexistent path, not as a real one.
     if ($Backend -ne 'sdk_ant' -and $Only -eq '*') {
         $board = 'adafruit_feather_nrf52840/nrf52840/uf2'
         $out = Join-Path $repo 'build\independence'
@@ -397,18 +407,18 @@ try {
         $log = Join-Path $env:TEMP 'build_independence.log'
         $indep = @("-DANT_RADIO=$Backend", "-DANT_MODULE_DIR=$ghost")
         if ($Backend -eq 'core') { $indep += "-DRADIANT_BACKEND=$RadiantBackend" }
-        west -z $zephyr build -s $repo -d $out -b $board -p always -- @indep > $log
+        west -z $zephyr build -s $dongleApp -d $out -b $board -p always -- @indep > $log
         if ($LASTEXITCODE -ne 0) {
             Get-Content $log -Tail 30
             throw "the $Backend backend does not build without sdk-ant present; full log at $log"
         }
 
-        $cache = Get-Content (Join-Path $out 'ant_dongle\CMakeCache.txt')
+        $cache = Get-Content (Join-Path $out 'dongle\CMakeCache.txt')
         if (-not ($cache | Where-Object { $_ -match "^ANT_MODULE_DIR:[^=]*=$([regex]::Escape($ghost))$" })) {
             throw "the independence build did not receive ANT_MODULE_DIR=$ghost; it proved nothing"
         }
 
-        $cfg = Get-Content (Join-Path $out 'ant_dongle\zephyr\.config')
+        $cfg = Get-Content (Join-Path $out 'dongle\zephyr\.config')
         if (-not ($cfg | Where-Object { $_ -eq $backendSymbol })) {
             throw "the independence build did not select $Backend"
         }

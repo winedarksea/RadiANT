@@ -28,7 +28,7 @@
     The application hex to package. Defaults to the dongle release build.
 
 .PARAMETER OutPath
-    Where to write the zip. Defaults to dist\ant_dongle_nrf52840dongle.zip.
+    Where to write the zip. Defaults to dist\radiant_dongle_nrf52840dongle.zip.
 
 .PARAMETER AppVersion
     Application version integer stamped into the package manifest.
@@ -44,8 +44,8 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$HexPath = 'build\dongle\ant_dongle\zephyr\zephyr.hex',
-    [string]$OutPath = 'dist\ant_dongle_nrf52840dongle.zip',
+    [string]$HexPath = 'build\dongle\dongle\zephyr\zephyr.hex',
+    [string]$OutPath = 'dist\radiant_dongle_nrf52840dongle.zip',
     [int]$AppVersion = 1,
     [int]$ExpectedOffset = 0x1000,
     [string]$NrfutilPath

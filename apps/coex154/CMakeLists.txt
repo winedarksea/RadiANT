@@ -9,7 +9,7 @@ cmake_minimum_required(VERSION 3.20.0)
 # it, while leaving it out would make CONFIG_RADIANT an UNDEFINED symbol -
 # and an undefined symbol in rx_ant.conf is a warning, not an error, so the
 # contended build would quietly become the uncontended one.
-list(APPEND ZEPHYR_EXTRA_MODULES "${CMAKE_CURRENT_SOURCE_DIR}/../radiant")
+list(APPEND ZEPHYR_EXTRA_MODULES "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant")
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(coex154)

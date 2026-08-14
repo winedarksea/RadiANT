@@ -12,7 +12,7 @@ set -eu
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# sysbuild nests the image one level deeper (build/<dir>/ant_dongle/zephyr/)
+# sysbuild nests the image one level deeper (build/<dir>/radiant_dongle/zephyr/)
 # than a plain application build does, so search for the newest one rather
 # than hardcoding a path.
 UF2_PATH="${1:-}"

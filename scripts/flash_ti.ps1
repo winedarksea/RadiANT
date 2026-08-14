@@ -102,7 +102,7 @@
 .EXAMPLE
     .\scripts\flash_ti.ps1 -CheckOnly
     .\scripts\flash_ti.ps1
-    .\scripts\flash_ti.ps1 -HexPath build\ti_null\ant_dongle\zephyr\zephyr.hex
+    .\scripts\flash_ti.ps1 -HexPath build\ti_null\radiant_dongle_ti\zephyr\zephyr.hex
 
 .NOTES
     Unlike the Feather, this board is NOT a rationed flash - it has an onboard
@@ -304,7 +304,7 @@ No zephyr.hex found under $buildRoot for a TI build. Build first:
   . .\scripts\env.ps1 -NcsVersion v3.4.0
   .\scripts\fetch_hal_ti.ps1
   Push-Location C:\ncs\v3.4.0
-  west -z C:\ncs\v3.4.0\zephyr build -s <repo> -d <repo>\build\ti_null ``
+  west -z C:\ncs\v3.4.0\zephyr build -s <repo>\apps\dongle_ti -d <repo>\build\ti_null ``
        -b cc26x2r1_launchxl -p always -- ``
        -DANT_RADIO=core -DRADIANT_BACKEND=null ``
        -DEXTRA_ZEPHYR_MODULES=C:/ncs/v3.4.0/modules/hal/ti

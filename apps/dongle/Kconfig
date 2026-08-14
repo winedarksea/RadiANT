@@ -8,9 +8,9 @@ choice ANT_DONGLE_TRANSPORT
 	default ANT_DONGLE_TRANSPORT_USB_NEXT if DT_HAS_SNPS_DWC2_ENABLED
 	default ANT_DONGLE_TRANSPORT_UART
 	help
-	  Which of src/usb_ant_class.c, src/usb_ant_class_next.c and
-	  src/ant_uart_transport.c is compiled. They present the same interface
-	  to the serial bridge; see src/ant_transport.h.
+	  Which of apps/common/usb_ant_class.c, apps/common/usb_ant_class_next.c
+	  and apps/common/ant_uart_transport.c is compiled. They present the
+	  same interface to the serial bridge; see apps/common/ant_transport.h.
 
 	  The defaults follow the hardware: a Nordic USBD peripheral in the
 	  devicetree means the proven legacy build is available and is chosen; a
@@ -86,7 +86,7 @@ config ANT_DONGLE_UART_BAUD
 	  The rate the `ant-uart` alias runs at, and therefore the --baud a
 	  host tool must be given. This symbol does not CONFIGURE the UART -
 	  the devicetree's current-speed does - it RECORDS the rate, and
-	  src/ant_uart_transport.c BUILD_ASSERTs that the two agree. Two
+	  apps/common/ant_uart_transport.c BUILD_ASSERTs that the two agree. Two
 	  records of one number, which cannot silently disagree, rather than
 	  two settings that can.
 
@@ -277,17 +277,17 @@ config USBD_CDC_ACM_CLASS
 endif # ANT_DONGLE_TRANSPORT_USB_NEXT
 
 # CONFIG_RADIANT_ANTR_API and CONFIG_RADIANT_SEC_HOST_MESSAGES: the
-# antr_* adapter's own symbols, shared with strap/ and with
-# radiant/tests/api the same way src/node/Kconfig and src/profiles/Kconfig
-# already are. See src/Kconfig.antr_api's header for why they live here and
-# not in radiant/Kconfig.
-rsource "src/Kconfig.antr_api"
+# antr_* adapter's own symbols, shared with apps/hrm_ble and with
+# radiant/tests/api the same way radiant/src/node/Kconfig and
+# radiant/src/profiles/Kconfig already are. See apps/common/Kconfig.antr_api's
+# header for why they live there and not in radiant/Kconfig.
+rsource "../common/Kconfig.antr_api"
 
 choice ANT_DONGLE_RADIO
 	prompt "ANT radio backend"
 	default ANT_DONGLE_RADIO_SDK_ANT
 	help
-	  Which implementation of src/ant_radio.h is compiled. All three
+	  Which implementation of apps/common/ant/ant_radio.h is compiled. All three
 	  present the same antr_* contract, so the serial bridge and main() do
 	  not know which is present - the same shape as the transport choice
 	  above, and for the same reason.
@@ -310,7 +310,7 @@ choice ANT_DONGLE_RADIO
 config ANT_DONGLE_RADIO_SDK_ANT
 	bool "Nordic's prebuilt ANT stack (sdk-ant)"
 	help
-	  Compile src/ant_radio_sdk_ant.c, ~50 one-line forwarders from the
+	  Compile apps/common/ant_radio_sdk_ant.c, ~50 one-line forwarders from the
 	  antr_* contract onto libant.a's antlib_* entry points, plus a
 	  BUILD_ASSERT block comparing every ANTW_* constant against its
 	  sdk-ant counterpart.
@@ -342,7 +342,7 @@ config ANT_DONGLE_RADIO_CORE
 config ANT_DONGLE_RADIO_STUB
 	bool "Stub out the ANT radio layer"
 	help
-	  Compile src/ant_radio_stub.c in place of a real ANT stack. Every
+	  Compile apps/common/ant_radio_stub.c in place of a real ANT stack. Every
 	  antr_*() entry point becomes a no-op returning success, so the USB
 	  half of the dongle — enumeration, WinUSB auto-binding and the 0xA4
 	  serial bridge — can be brought up without a working ANT build.
@@ -521,177 +521,11 @@ config ANT_DONGLE_FLASH_LOG_OFFSET_ALT
 
 endif # ANT_DONGLE_FLASH_LOG
 
-config ANT_DONGLE_BLE_COEX_LOAD
-	bool "Start a BLE advertiser that competes with ANT+ for the radio"
-	depends on BT && BT_BROADCASTER
-	# Legal with the arbitrated backend, and legal with no real radio at all
-	# (RADIANT_BACKEND=null), which is the configuration that isolates "is
-	# this fault in the radio backend or in the application" - a question
-	# that took a whole round to answer the slow way. It is ONLY forbidden
-	# beside the DIRECT nrf backend, where two stacks would drive the RADIO
-	# with no arbiter between them: not a coexistence measurement, a
-	# collision.
-	depends on !RADIANT_BACKEND_NRF || RADIANT_BACKEND_NRF_GATE_MPSL
-	help
-	  A bench instrument, not a feature. Brings the controller up and
-	  advertises, so that the multiprotocol plan's P3 coexistence gate has a
-	  second stack that actually WANTS the radio.
-
-	  This exists because the obvious configuration does not test anything.
-	  CONFIG_BT=y on its own links the SoftDevice Controller in and leaves it
-	  asleep, asking MPSL for no air at all - measured, and it produced a
-	  sweep-rate ratio of exactly 1.000 between "BLE off" and "BLE on"
-	  builds, which is a gate that cannot fail.
-
-	  It depends on the MPSL gate rather than merely coexisting with it: with
-	  the direct gate the two stacks would both drive the RADIO with no
-	  arbiter between them, which is not a coexistence measurement but a
-	  collision.
-
-	  Not the heart-rate strap. That is a separate workstream with its own
-	  state machine (SIG HRS beside ANT+ 0x78, ANT+ suppressed once a
-	  connection is live); this advertises and nothing else, so that a loss
-	  figure taken against it measures arbitration and not profile logic.
-
-	  Off by default, and no shipping image selects it.
-
-config ANT_DONGLE_BLE_COEX_LOAD_INTERVAL_MS
-	int "BLE advertising interval for the coexistence load, ms"
-	depends on ANT_DONGLE_BLE_COEX_LOAD
-	range 20 10000
-	default 100
-	help
-	  How often the advertiser asks for the air, and therefore how much of it
-	  the second stack demands. An advertising event is three channels of
-	  about 400 us plus ramp, so roughly 1.3 ms per interval: about 4 % of
-	  the air at 30 ms and 0.4 % at 300 ms.
-
-	  Configurable rather than fixed because the question the gate exists to
-	  answer is not whether ANT+ survives one setting - it is where it stops
-	  surviving, and a hard-coded number answers that once and then hides it.
-
-	  100 ms is a common real-world connectable-advertising rate and sits in
-	  the middle of that range.
-
-config ANT_DONGLE_BLE_COEX_LOAD_DELAY_S
-	int "Seconds after boot before the coexistence load starts"
-	depends on ANT_DONGLE_BLE_COEX_LOAD
-	range 0 600
-	default 8
-	help
-	  The delay is an instrument rather than caution. Starting the controller
-	  inside main() makes "ANT+ never worked" and "ANT+ stopped when BLE
-	  started" the same observation, because both are true from the first
-	  millisecond; with the load arriving seconds later the console shows the
-	  sweep running, then the controller starting, and then whatever happens
-	  next - which is the difference between an ordering bug at
-	  initialisation and a real contention failure, and those need entirely
-	  different fixes.
-
-	  8 s is comfortably past enumeration and the host's channel setup, so a
-	  bench run has a known-good period in front of the load to compare
-	  against. 0 starts it as early as the work queue runs.
-
-config ANT_DONGLE_THREAD_COEX_LOAD
-	bool "Attach to a Thread network and keep traffic on it"
-	depends on NET_L2_OPENTHREAD && NET_SOCKETS
-	# Identical reasoning to ANT_DONGLE_BLE_COEX_LOAD's second depends, and
-	# for once it is not merely analogous: with the DIRECT nrf backend, the
-	# 802.15.4 driver and radiant_radio_nrf.c would both drive the RADIO with
-	# no arbiter between them. On nRF54L that is not even avoidable by
-	# omission - enabling the 802.15.4 driver force-selects MPSL and
-	# NRF_802154_MULTIPROTOCOL_SUPPORT through the nrfxlib Service Layer - so
-	# the 15.4 side is arbitrated whatever this application does, and only
-	# the ANT side's backend is still ours to get wrong.
-	depends on !RADIANT_BACKEND_NRF || RADIANT_BACKEND_NRF_GATE_MPSL
-	help
-	  A bench instrument, not a feature. It is the P4 counterpart of
-	  ANT_DONGLE_BLE_COEX_LOAD, and it exists for a sharper version of the
-	  same reason.
-
-	  CONFIG_NET_L2_OPENTHREAD=y on its own attaches a node and then, if it
-	  is the sleepy role docs/radiant-bridge.md section 7.3b selects, goes
-	  almost completely quiet - by design, because being quiet is what that
-	  role is for. `ot state` says `child`, the node has an address, and it
-	  has put four MLE frames on the air in the last minute. A gate measured
-	  against that is the sweep-rate-ratio-of-1.000 failure again, except
-	  harder to spot, because this time the second stack really is running.
-
-	  So this sends datagrams on a timer and counts them, and the count is
-	  part of the result: a P4 loss figure quoted without `sent` beside it is
-	  not a measurement.
-
-	  Off by default, and no shipping image selects it.
-	  docs/decisions/0011-never-a-border-router.md is why none ever will.
-
-config ANT_DONGLE_THREAD_COEX_LOAD_INTERVAL_MS
-	int "Interval between coexistence datagrams, ms"
-	depends on ANT_DONGLE_THREAD_COEX_LOAD
-	range 10 10000
-	default 100
-	help
-	  How often the Thread side asks for the air. 100 ms matches the BLE
-	  load's default so the two gates are read at comparable demand, which
-	  matters because section 7.3a's prediction for the 802.15.4 direction
-	  (~18 %, revised to ~24 % by the follow_on_us reserve) is far larger
-	  than anything the BLE gate saw and the comparison is the point.
-
-	  Configurable for the reason the BLE interval is: the question is not
-	  whether ANT+ survives one setting, it is where it stops surviving.
-
-config ANT_DONGLE_THREAD_COEX_LOAD_PAYLOAD
-	int "Coexistence datagram payload, bytes"
-	depends on ANT_DONGLE_THREAD_COEX_LOAD
-	range 1 800
-	default 64
-	help
-	  Air time is roughly linear in this, and section 7.3a's two predictions
-	  are quoted for full-size frames, so a run at the default is NOT
-	  comparable to that number. Raise it toward a full 127-byte PSDU
-	  (payload of about 80 after IPv6 and 6LoWPAN headers, less with
-	  security) when reproducing section 7.3a; leave it at 64 for a realistic
-	  sensor-chatter load.
-
-config ANT_DONGLE_THREAD_COEX_LOAD_DEST
-	string "Coexistence datagram destination"
-	depends on ANT_DONGLE_THREAD_COEX_LOAD
-	default "ff03::1"
-	help
-	  Mesh-local all-nodes by default, and multicast rather than a unicast
-	  peer on purpose: a unicast destination whose peer has rebooted or never
-	  commissioned turns every send into an address-resolution failure, and
-	  the board still puts a quite different amount of energy on the air than
-	  the operator believes. Multicast to all-nodes is transmitted whenever
-	  this node is attached, and what the mesh does with it is not part of
-	  the measurement.
-
-	  The honest limitation: the traffic is one-directional. This reproduces
-	  the transmit demand of a chatty Thread node and the receive demand only
-	  insofar as the role already keeps its receiver on.
-
-config ANT_DONGLE_THREAD_COEX_LOAD_PORT
-	int "Coexistence datagram UDP port"
-	depends on ANT_DONGLE_THREAD_COEX_LOAD
-	range 1 65535
-	default 4711
-
-config ANT_DONGLE_THREAD_COEX_LOAD_DELAY_S
-	int "Seconds after boot before the Thread coexistence load starts"
-	depends on ANT_DONGLE_THREAD_COEX_LOAD
-	range 0 600
-	default 12
-	help
-	  Same instrument as the BLE load's delay - it separates "ANT+ never
-	  worked" from "ANT+ stopped when Thread started" - but longer, because
-	  this load has an extra thing to wait for. The BLE advertiser is on the
-	  air the moment bt_enable() returns; a Thread node has to discover and
-	  attach first, and 8 s is not reliably enough for that.
-
-config ANT_DONGLE_THREAD_COEX_LOAD_REPORT_EVERY
-	int "Log a load summary every N datagrams"
-	depends on ANT_DONGLE_THREAD_COEX_LOAD
-	range 1 100000
-	default 100
+# CONFIG_ANT_DONGLE_BLE_COEX_LOAD and CONFIG_ANT_DONGLE_THREAD_COEX_LOAD used
+# to live here. Both moved to apps/dongle_thread/Kconfig: they are bench
+# instruments for a second wireless stack this application - ANT+-only, by
+# design - never links at all. See apps/dongle_thread/thread_coex_load.c and
+# ble_coex_load.c.
 
 endmenu
 
@@ -700,12 +534,13 @@ endmenu
 # dongle's epoch authority is the PC behind it and a strap has no PC at all.
 # See docs/decisions/0009-hostless-node-identity.md.
 #
-# Reached inside radiant/ now (the module, not this application) - that
-# move does not change who decides whether to build against it. RADIANT_NODE_*
-# is application-side library material, same as it was at src/node/: nothing
-# in radiant's own CMakeLists.txt compiles node_ident.c, this
-# application's does, below.
-rsource "radiant/src/node/Kconfig"
+# Reached inside radiant/ now (the module, not this application, and two
+# directories up now that this application lives under apps/) - that move
+# does not change who decides whether to build against it. RADIANT_NODE_* is
+# application-side library material, same as it was at src/node/: nothing in
+# radiant's own CMakeLists.txt compiles node_ident.c, this application's
+# does, below.
+rsource "../../radiant/src/node/Kconfig"
 
 # The compatibility profiles' policy settings (compat-C7): today the `enrol`
 # choice of docs/radiant-security.md section 11.6. Its own file and its own
@@ -713,6 +548,6 @@ rsource "radiant/src/node/Kconfig"
 # and the person choosing one is reading menuconfig rather than the docs, which
 # is why the help text carries the argument in full. Reached inside
 # radiant/ now, for the same reason as RADIANT_NODE_* above.
-rsource "radiant/src/profiles/Kconfig"
+rsource "../../radiant/src/profiles/Kconfig"
 
 source "Kconfig.zephyr"
