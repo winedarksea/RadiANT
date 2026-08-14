@@ -1,0 +1,54 @@
+/*
+ * nRF54L15 DK - ANT serial on the second VCOM.
+ *
+ * uart20 is the console. uart30 is wired to the debugger's other virtual COM
+ * port and is disabled by default on cpuapp, so it is free and already pinned.
+ * Taking it means logs and the ANT byte stream leave the board as two separate
+ * COM ports over the one debugger cable, rather than interleaving into one
+ * unparseable stream.
+ *
+ * Which host COM port is which is worth checking rather than assuming: on the
+ * bench here, `nrfutil device list` reported COM8 as "vcom: 0" and COM7 as
+ * "vcom: 1", but the console (uart20) came out on COM7 and ANT (uart30) on
+ * COM8 - the opposite way round to what those labels suggest. Open both and
+ * see which one prints the boot banner.
+ *
+ * uart30's pinctrl also routes RTS/CTS. Hardware flow control is deliberately
+ * not enabled: it would give this transport the backpressure that USB bulk
+ * NAKs provide for free, but only if the host end asserts CTS, and a host that
+ * does not would wedge every transmit. Add hw-flow-control here if the far end
+ * is known to support it.
+ */
+
+/ {
+	aliases {
+		ant-uart = &uart30;
+	};
+
+	chosen {
+		/*
+		 * The TIMER radiant's nrf backend owns outright, for
+		 * -DRADIANT_BACKEND=nrf. It runs at 1 MHz forever and is what
+		 * t_sync is hardware-captured into from RADIO's ADDRESS event,
+		 * so it cannot be shared: naming it here rather than in the
+		 * source is what makes a second user a devicetree conflict
+		 * instead of two drivers reprogramming each other's prescaler.
+		 *
+		 * timer20 is free on this board. It is also `status =
+		 * "disabled"` by default, like every TIMER on this SoC, and an
+		 * unclocked peripheral is not addressable - the first version
+		 * of the backend hardcoded an address instead and the board
+		 * answered with a precise bus fault on the very first register
+		 * write.
+		 */
+		radiant,radio-timer = &timer20;
+	};
+};
+
+&uart30 {
+	status = "okay";
+};
+
+&timer20 {
+	status = "okay";
+};

@@ -1,0 +1,60 @@
+/*
+ * LAUNCHXL-CC26X2R1 - which UART carries ANT, which carries the log, and at
+ * what rate.
+ *
+ * WHICH IS WHICH, AND WHY ROUND THIS WAY. uart0 is DIO12/DIO13, which on this
+ * LaunchXL is the XDS110 backchannel: the same USB cable that programs the
+ * board presents it to the host as a COM port (COM14 on this bench), with no
+ * extra hardware. uart1 is DIO22/DIO24, brought out on BoosterPack header pins
+ * 5 and 6 and connected to nothing.
+ *
+ * So ANT takes uart0 - it is the port a host tool can actually reach - and the
+ * log takes uart1, where it needs a 3V3 USB-serial adapter clipped on to be
+ * read at all. That is the right way round even though it makes bring-up
+ * blind, because the ANT stream is what is under test and the whole point of
+ * separating them is that nothing else may appear in it. Sharing one UART
+ * between logs and ANT frames guarantees an afternoon lost to a host tool
+ * parsing a log line as a frame.
+ *
+ * THE BAUD IS 57600 AND THAT IS NOT A TYPO. Every other board in this
+ * repository runs its ANT UART at 115200, and tools/ant_probe.py's
+ * SerialDevice defaults to it, so `--baud 57600` has to be passed explicitly
+ * here and forgetting it produces framing garbage that reads as "no response
+ * to reset" - indistinguishable from a hung image. The reason to take that
+ * risk: the deployment target is a CC2652P + CP2102N module impersonating a
+ * Dynastream ANT2USB (0FCF:1004), and a real ANT2USB is a 57600 device. A
+ * LaunchXL that runs at a different rate from the dongle it stands in for is a
+ * LaunchXL that proves slightly less than it appears to.
+ *
+ * CONFIG_ANT_DONGLE_UART_BAUD records the same number, and
+ * src/ant_uart_transport.c BUILD_ASSERTs that the two agree - so this property
+ * and that symbol cannot drift apart silently. See that assert for why the
+ * failure it catches is worth a line of code.
+ *
+ * NO radiant,radio-timer NODE, unlike every nRF board here. That chosen node
+ * names the TIMER the nrf backend captures t_sync into and schedules window
+ * edges with. TI's RF core has its own timebase (the RAT) inside the core and
+ * takes absolute start times directly, so there is no peripheral to name and
+ * nothing for a second driver to collide with.
+ */
+
+/ {
+	aliases {
+		ant-uart = &uart0;
+	};
+
+	chosen {
+		zephyr,console = &uart1;
+		zephyr,shell-uart = &uart1;
+	};
+};
+
+&uart0 {
+	status = "okay";
+	current-speed = <57600>;
+};
+
+&uart1 {
+	status = "okay";
+	current-speed = <115200>;
+};

@@ -402,6 +402,142 @@ jobs:
       # docs/decisions/0001, not something that happens by a job quietly
       # gaining an upload step.
 
+  # apps/dongle_thread and apps/dongle_ti - the two products Stage 6 of the
+  # reorg plan adds. Neither needs sdk-ant (both build -DANT_RADIO=core), so
+  # like build-core this runs on forks with no secret.
+  #
+  # apps/dongle_thread's gate.conf row mirrors what scripts/build_p4.ps1 runs
+  # for real on a bench: the MPSL-arbitrated backend, on the board the P4 gate
+  # actually uses. A plain row with no EXTRA_CONF_FILE is also here, because a
+  # build with neither BLE nor Thread coex-load selected is this application's
+  # OTHER normal configuration (see apps/dongle_thread/prj.conf's own header)
+  # and both shapes have to stay green.
+  #
+  # apps/dongle_ti fetches hal_ti itself, the same way
+  # scripts/fetch_hal_ti.ps1 does for a local build: NCS's manifest filters
+  # the module out (it is not on nrf/west.yml's name-allowlist), so it is
+  # never present unless something fetches it deliberately. The revision comes
+  # from this job's own zephyr/west.yml, the same source of truth the script
+  # reads, so the two cannot silently pin different commits.
+  build-new-apps:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: "dongle_thread: plain"
+            app: apps/dongle_thread
+            board: nrf54l15dk/nrf54l15/cpuapp
+            radiant_backend: "null"
+          - name: "dongle_thread: P4 gate (nrf, MPSL)"
+            app: apps/dongle_thread
+            board: nrf54l15dk/nrf54l15/cpuapp
+            radiant_backend: nrf
+            extra_conf: gate.conf
+            assert_symbol: CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
+          - name: "dongle_ti: cc26xx"
+            app: apps/dongle_ti
+            board: cc26x2r1_launchxl
+            radiant_backend: cc26xx
+            fetch_hal_ti: "true"
+            assert_symbol: CONFIG_RADIANT_BACKEND_CC26XX=y
+
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Zephyr workspace and toolchain
+        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: app
+          toolchains: arm-zephyr-eabi
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-new-apps-${{ strategy.job-index }}-${{ github.sha }}
+          restore-keys: |
+            ccache-new-apps-${{ strategy.job-index }}-
+
+      # See scripts/fetch_hal_ti.ps1's own header for the full mechanism this
+      # mirrors: hal_ti is a project the resolved manifest has never heard of,
+      # not one west chose to skip, so a single-revision fetch straight from
+      # upstream is the only route in. Read from THIS job's own
+      # zephyr/west.yml so the pin can never drift from what the rest of the
+      # build resolves.
+      - name: Fetch hal_ti
+        if: matrix.fetch_hal_ti == 'true'
+        run: |
+          set -euo pipefail
+          zephyr_base="$(west list -f '{abspath}' zephyr)"
+          manifest="${zephyr_base}/west.yml"
+          revision="$(awk '
+            /^\s*- name: hal_ti\s*$/ { infound=1; next }
+            infound && /^\s*revision:/ { print $2; exit }
+            infound && /^\s*- name:/ { exit }
+          ' "${manifest}")"
+          if [[ -z "${revision}" ]]; then
+            echo "::error::no hal_ti revision found in ${manifest}"
+            exit 1
+          fi
+          echo "hal_ti revision ${revision} (from ${manifest})"
+          dest="$(dirname "${zephyr_base}")/modules/hal/ti"
+          mkdir -p "${dest}"
+          git -C "${dest}" init --quiet
+          git -C "${dest}" remote add origin https://github.com/zephyrproject-rtos/hal_ti
+          git -C "${dest}" fetch --depth 1 origin "${revision}"
+          git -C "${dest}" checkout --quiet --detach "${revision}"
+          test -f "${dest}/zephyr/module.yml"
+          echo "HAL_TI_DIR=${dest}" >> "$GITHUB_ENV"
+
+      - name: Build
+        env:
+          APP: ${{ matrix.app }}
+          BOARD: ${{ matrix.board }}
+          RADIANT_BACKEND: ${{ matrix.radiant_backend }}
+          EXTRA_CONF: ${{ matrix.extra_conf }}
+        run: |
+          set -euxo pipefail
+          extra=("-DANT_RADIO=core" "-DRADIANT_BACKEND=${RADIANT_BACKEND}")
+          if [[ -n "${EXTRA_CONF}" ]]; then
+            extra+=("-DEXTRA_CONF_FILE=${EXTRA_CONF}")
+          fi
+          if [[ -n "${HAL_TI_DIR:-}" ]]; then
+            extra+=("-DEXTRA_ZEPHYR_MODULES=${HAL_TI_DIR}")
+          fi
+          west build "app/${APP}" \
+            -b "${BOARD}" \
+            -d build \
+            -p always \
+            -- "${extra[@]}"
+
+      # Same silent-fallback trap every other RADIANT_BACKEND row in this
+      # file guards against: the symbol has a `depends on`, and an unmet one
+      # makes the assignment a no-op rather than an error. A row with no
+      # assert_symbol (the plain dongle_thread build) has nothing to check
+      # beyond "it linked".
+      - name: Verify backend
+        if: matrix.assert_symbol != ''
+        env:
+          WANT: ${{ matrix.assert_symbol }}
+        run: |
+          set -euo pipefail
+          cfg="$(find build -name .config -print -quit)"
+          echo "expecting ${WANT} in ${cfg}"
+          grep -qx "${WANT}" "${cfg}"
+
   # The governing constraint of the security feature, as a job rather than as a
   # claim in a comment.
   #

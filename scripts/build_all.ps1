@@ -184,10 +184,17 @@ if ($Backend -eq 'core') {
     if (-not $HalTiDir) { $HalTiDir = "C:\ncs\$NcsVersion\modules\hal\ti" }
     if (Test-Path (Join-Path $HalTiDir 'zephyr\module.yml')) {
         $halTiModule = ($HalTiDir -replace '\\', '/')
-        $targets += @{ dir='ti_launchxl';       board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl.hex';       pkg='hex'; offset=0x0; transport='UART'; conf=$null;           release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule }
-        $targets += @{ dir='ti_launchxl_patch'; board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl_patch.hex'; pkg='hex'; offset=0x0; transport='UART'; conf='ti_patch.conf'; release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule }
-        $targets += @{ dir='ti_launchxl_gate';  board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl_gate.hex';  pkg='hex'; offset=0x0; transport='UART'; conf='ti_gate.conf';  release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule }
-        $targets += @{ dir='ti_launchxl_coex';  board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl_coex.hex';  pkg='hex'; offset=0x0; transport='UART'; conf='ti_coex.conf';  release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule; overlay='ti_coex.overlay' }
+        # app: apps/dongle_ti, not apps/dongle - the only rows in this matrix
+        # that build from a different application, since this is the only
+        # board with no USB device peripheral to make an ANT_DONGLE-shaped
+        # image on and the only silicon radiant's cc26xx backend targets. See
+        # apps/dongle_ti's own README for the "unverified pending hardware"
+        # scope of the coexistence arm (the fourth row).
+        $dongleTiApp = Join-Path $repo 'apps\dongle_ti'
+        $targets += @{ dir='ti_launchxl';       board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl.hex';       pkg='hex'; offset=0x0; transport='UART'; conf=$null;           release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule; app=$dongleTiApp }
+        $targets += @{ dir='ti_launchxl_patch'; board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl_patch.hex'; pkg='hex'; offset=0x0; transport='UART'; conf='ti_patch.conf'; release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule; app=$dongleTiApp }
+        $targets += @{ dir='ti_launchxl_gate';  board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl_gate.hex';  pkg='hex'; offset=0x0; transport='UART'; conf='ti_gate.conf';  release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule; app=$dongleTiApp }
+        $targets += @{ dir='ti_launchxl_coex';  board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl_coex.hex';  pkg='hex'; offset=0x0; transport='UART'; conf='ti_coex.conf';  release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule; overlay='ti_coex.overlay'; app=$dongleTiApp }
     } else {
         Write-Host "cc26x2r1_launchxl: skipped, no hal_ti module at $HalTiDir" -ForegroundColor DarkYellow
         Write-Host "  Run scripts\fetch_hal_ti.ps1 (NCS's west manifest will never fetch it)."
@@ -227,14 +234,12 @@ New-Item -ItemType Directory -Force -Path $dist | Out-Null
 # manifest, so west must run with its cwd inside the workspace even though
 # -s/-d/-z all point elsewhere.
 #
-# Every row still builds from apps/dongle, including the cc26x2r1_launchxl
-# ones - a stale path for those specifically, since their own conf/overlay
-# fragments (ti_patch.conf, ti_gate.conf, ti_coex.conf, ti_coex.overlay) moved
-# to apps/dongle_ti/ ahead of that application existing as a real `west
-# build` target. Harmless today: hal_ti is not fetched on this machine, so
-# the TI rows are never added to $targets in the first place (see the check
-# above). Routing them to apps/dongle_ti is apps/dongle_ti's own stage to
-# finish, not this one's to half-do.
+# Every row builds from apps/dongle except the cc26x2r1_launchxl ones, which
+# name their own $t.app (apps/dongle_ti) - see that row's own comment. The
+# sysbuild image folder under each row's own -d is therefore the built app's
+# directory basename ('dongle' or 'dongle_ti'), not a fixed name - sysbuild
+# takes the default image name from APP_DIR's own basename, not from
+# project().
 Push-Location "C:\ncs\$NcsVersion"
 try {
     $built = @()
@@ -244,6 +249,8 @@ try {
         if ($t.artifact -notlike $Only) { continue }
 
         $out = Join-Path $repo "build\$($t.dir)"
+        $rowApp = if ($t.app) { $t.app } else { $dongleApp }
+        $imageName = Split-Path $rowApp -Leaf
         Write-Host "`n=== $($t.artifact)  [$($t.board)]  [$Backend]" -ForegroundColor Cyan
 
         # A row may pin its own HAL backend. Only the TI one does, and it does
@@ -266,13 +273,13 @@ try {
         # Do not redirect stderr: PowerShell 5.1 wraps a native command's
         # stderr in ErrorRecords and reports failure even on exit code 0.
         $log = Join-Path $env:TEMP "build_$($t.dir).log"
-        west -z $zephyr build -s $dongleApp -d $out -b $t.board -p always @extra > $log
+        west -z $zephyr build -s $rowApp -d $out -b $t.board -p always @extra > $log
         if ($LASTEXITCODE -ne 0) {
             Get-Content $log -Tail 30
             throw "build failed for $($t.artifact); full log at $log"
         }
 
-        $cfgPath = Join-Path $out 'dongle\zephyr\.config'
+        $cfgPath = Join-Path $out "$imageName\zephyr\.config"
         $cfg = Get-Content $cfgPath
 
         # 1. Link address. PM's `app` and the load offset must agree.
@@ -362,7 +369,7 @@ try {
             continue
         }
 
-        $zdir = Join-Path $out 'dongle\zephyr'
+        $zdir = Join-Path $out "$imageName\zephyr"
         switch ($t.pkg) {
             'uf2' { Copy-Item (Join-Path $zdir 'zephyr.uf2') (Join-Path $dist $t.artifact) -Force }
             'hex' { Copy-Item (Join-Path $zdir 'zephyr.hex') (Join-Path $dist $t.artifact) -Force }

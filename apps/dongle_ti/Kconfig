@@ -1,0 +1,139 @@
+# ANT+ USB Dongle, TI CC26x2 port — application configuration
+#
+# UNVERIFIED PENDING HARDWARE beyond a single bring-up bench - see this
+# application's own CMakeLists.txt header and README.md.
+
+menu "ANT+ Dongle (TI CC26x2)"
+
+choice ANT_DONGLE_TRANSPORT
+	prompt "Transport carrying the ANT serial protocol"
+	default ANT_DONGLE_TRANSPORT_UART
+	help
+	  Which of apps/common/usb_ant_class.c, apps/common/usb_ant_class_next.c
+	  and apps/common/ant_uart_transport.c is compiled. See
+	  apps/common/ant_transport.h for the common interface.
+
+	  UART is the only real answer on this silicon: the CC13x2/CC26x2 has no
+	  USB device peripheral at all, so DT_HAS_NORDIC_NRF_USBD_ENABLED and
+	  DT_HAS_SNPS_DWC2_ENABLED are never true here. The other two options
+	  are kept in the choice (rather than deleted) only so this application's
+	  Kconfig tree has the same shape as apps/dongle's and
+	  apps/dongle_thread's - selecting either on this board simply fails to
+	  configure, the same way asking for a USB stack Zephyr has no driver
+	  for always does.
+
+config ANT_DONGLE_TRANSPORT_USB_LEGACY
+	bool "USB, legacy device stack"
+	depends on DT_HAS_NORDIC_NRF_USBD_ENABLED
+
+config ANT_DONGLE_TRANSPORT_USB_NEXT
+	bool "USB, new device stack (USBD/UDC)"
+	depends on DT_HAS_NORDIC_NRF_USBD_ENABLED || DT_HAS_SNPS_DWC2_ENABLED
+
+config ANT_DONGLE_TRANSPORT_UART
+	bool "Plain UART"
+	help
+	  The CP2102N-based module this board's UART stands in for is a
+	  Dynastream ANT2USB - a UART-to-USB bridge in a plastic shell, which is
+	  what a "USB ANT stick" always was underneath. See
+	  boards/cc26x2r1_launchxl.overlay for which UART carries ANT and which
+	  carries the log, and why they are never the same one.
+
+endchoice
+
+config USB_DEVICE_STACK
+	default y if ANT_DONGLE_TRANSPORT_USB_LEGACY
+
+config USB_DEVICE_STACK_NEXT
+	default y if ANT_DONGLE_TRANSPORT_USB_NEXT
+
+config UART_INTERRUPT_DRIVEN
+	default y if ANT_DONGLE_TRANSPORT_UART
+
+config ANT_DONGLE_UART_BAUD
+	int "Baud rate of the UART carrying the ANT serial protocol"
+	depends on ANT_DONGLE_TRANSPORT_UART
+	default 57600 if SOC_SERIES_CC13X2_CC26X2
+	default 115200
+	help
+	  57600 on this part, and that is not a typo - see
+	  boards/cc26x2r1_launchxl.overlay's own header for the full story: the
+	  deployment target is a CC2652P + CP2102N module impersonating a real
+	  Dynastream ANT2USB, and a real ANT2USB is a 57600 device. This symbol
+	  RECORDS the rate; apps/common/ant_uart_transport.c BUILD_ASSERTs that
+	  it agrees with the devicetree's current-speed, so the two cannot
+	  silently drift apart.
+
+# CONFIG_RADIANT_ANTR_API and CONFIG_RADIANT_SEC_HOST_MESSAGES: the
+# antr_* adapter's own symbols, shared with every other ANT-serial
+# application. See apps/common/Kconfig.antr_api's own header.
+rsource "../common/Kconfig.antr_api"
+
+choice ANT_DONGLE_RADIO
+	prompt "ANT radio backend"
+	default ANT_DONGLE_RADIO_CORE
+	help
+	  Which implementation of apps/common/ant/ant_radio.h is compiled.
+
+	  UNLIKE EVERY OTHER APPLICATION IN THIS REPOSITORY, "sdk_ant" is not a
+	  real option here: sdk-ant is Nordic's proprietary radio stack, built
+	  against Nordic silicon, and this board's radio is TI's RF core. The
+	  option still exists in the choice for the same Kconfig-tree-shape
+	  reason ANT_DONGLE_TRANSPORT_USB_LEGACY does above; selecting it here
+	  produces a build with no radiant module and no sdk-ant module either,
+	  which fails at the antr_* link rather than doing anything useful.
+
+	  As with every other application, this choice does not actually decide
+	  anything - see apps/dongle/Kconfig's copy of this same note for why
+	  CMake's ANT_RADIO cache variable is the real switch and this choice
+	  only mirrors its result into .config.
+
+config ANT_DONGLE_RADIO_SDK_ANT
+	bool "Nordic's prebuilt ANT stack (sdk-ant) - NOT SUPPORTED ON THIS BOARD"
+
+config ANT_DONGLE_RADIO_CORE
+	bool "radiant, the clean-room stack"
+	help
+	  Compile radiant/ with CONFIG_RADIANT_BACKEND_CC26XX=y, the only
+	  radiant HAL backend this silicon has. See
+	  radiant/src/radiant_radio_cc26xx.c and docs/decisions/0014 and 0015
+	  for the port itself; UNVERIFIED PENDING HARDWARE beyond a single
+	  bring-up bench for the coexistence arm - see this application's own
+	  CMakeLists.txt header.
+
+config ANT_DONGLE_RADIO_STUB
+	bool "Stub out the ANT radio layer"
+	help
+	  Compile apps/common/ant_radio_stub.c. Useful for bringing up the UART
+	  bridge and the rest of the board without a working radio at all - the
+	  cheapest proof the antr_* seam holds on a new SoC.
+
+endchoice
+
+config ANT_DONGLE_UF2_SETTLE_MS
+	int "Settling delay after a soft reset, before USB comes up (ms)"
+	default 0
+	range 0 5000
+	help
+	  This board has no UF2 bootloader - see boards/cc26x2r1_launchxl.conf
+	  - so the race this delay exists for cannot happen here. Left at 0
+	  rather than removed, so this application's Kconfig tree keeps the same
+	  shape as apps/dongle's and apps/dongle_thread's.
+
+config ANT_DONGLE_TX_POWER_BOOST
+	bool "Transmit at the radio's maximum power by default"
+	default y
+	help
+	  See apps/dongle/Kconfig's own copy of this symbol. Whether this
+	  actually changes anything on the TI radio backend is a question for
+	  radiant/src/radiant_radio_cc26xx.c, not for this application.
+
+endmenu
+
+# The hostless node's identity and epoch (compat-C6), and the compatibility
+# profiles' policy settings (compat-C7). Same wiring as apps/dongle/Kconfig
+# and apps/dongle_thread/Kconfig - see those files' own comments.
+rsource "../../radiant/src/node/Kconfig"
+rsource "../../radiant/src/profiles/Kconfig"
+
+source "Kconfig.zephyr"

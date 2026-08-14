@@ -1,0 +1,494 @@
+# ANT+ USB Dongle + Thread — application configuration
+
+menu "ANT+ USB Dongle + Thread"
+
+choice ANT_DONGLE_TRANSPORT
+	prompt "Transport carrying the ANT serial protocol"
+	default ANT_DONGLE_TRANSPORT_USB_LEGACY if DT_HAS_NORDIC_NRF_USBD_ENABLED
+	default ANT_DONGLE_TRANSPORT_USB_NEXT if DT_HAS_SNPS_DWC2_ENABLED
+	default ANT_DONGLE_TRANSPORT_UART
+	help
+	  Which of apps/common/usb_ant_class.c, apps/common/usb_ant_class_next.c
+	  and apps/common/ant_uart_transport.c is compiled. They present the
+	  same interface to the serial bridge; see apps/common/ant_transport.h.
+
+	  The defaults follow the hardware: a Nordic USBD peripheral in the
+	  devicetree means the proven legacy build is available and is chosen; a
+	  DWC2 controller means only the new stack can drive it; neither means
+	  there is no USB device peripheral on the part at all, and the ANT
+	  serial protocol goes out a UART instead - which in practice is every
+	  board this application targets: the P4 gate runs on the nRF54L15 DK
+	  and the nRF5340 DK, neither of which is asked to enumerate as a USB
+	  dongle here.
+
+	  Note that these are the *driver-presence* symbols, not the stack
+	  symbols. Depending on USB_DEVICE_DRIVER or UDC_DRIVER here would be
+	  circular - the stacks select those, so they are consequences of the
+	  choice rather than preconditions for it.
+
+	  For the same reason the options below turn their stack on with a
+	  `default`, further down, rather than with `select`. Selecting
+	  USB_DEVICE_STACK from inside a choice closes a loop through
+	  subsys/usb/device/class/netusb: USB_DEVICE_NETWORK_ECM selects
+	  NET_L2_ETHERNET, whose reverse dependencies reach SERIAL, which a
+	  sibling option in this same choice was depending on. Kconfig rejects
+	  the whole file rather than any one line of it, and the reported loop
+	  runs through Ethernet drivers that have nothing to do with this.
+
+config ANT_DONGLE_TRANSPORT_USB_LEGACY
+	bool "USB, legacy device stack"
+	depends on DT_HAS_NORDIC_NRF_USBD_ENABLED
+	help
+	  The proven path: this is the build verified against Zwift on the
+	  Feather, and the default anywhere it is available. Available means
+	  the SoC has a Nordic USBD peripheral, which in practice means nRF52
+	  and nRF53 - drivers/usb/device/usb_dc_nrfx.c covers those and nothing
+	  newer.
+
+config ANT_DONGLE_TRANSPORT_USB_NEXT
+	bool "USB, new device stack (USBD/UDC)"
+	depends on DT_HAS_NORDIC_NRF_USBD_ENABLED || DT_HAS_SNPS_DWC2_ENABLED
+	help
+	  Same device on the wire, different plumbing. Mandatory on nRF54: those
+	  parts carry a DesignWare DWC2 controller whose only Zephyr driver is
+	  drivers/usb/udc/udc_dwc2.c, and there is no legacy equivalent, so the
+	  legacy option above is not merely older there - it does not exist.
+
+	  Also selectable on nRF52840, which is the only way to test this stack
+	  against a host that has previously accepted the legacy build.
+
+config ANT_DONGLE_TRANSPORT_UART
+	bool "Plain UART"
+	help
+	  For parts with no USB device peripheral at all - the nRF54L05, L10 and
+	  L15 among them, and the choice this application's own P4 gate boards
+	  land on. ANT's serial protocol is a UART protocol to begin with, so
+	  this is the same byte stream a USB build puts in its bulk endpoints,
+	  on a COM port instead. Needs an `ant-uart` devicetree alias naming a
+	  UART that is not the console.
+
+endchoice
+
+# Turn on whichever stack the choice above landed on. These are `default`
+# rather than `select` on purpose - see the note in the choice's help.
+
+config USB_DEVICE_STACK
+	default y if ANT_DONGLE_TRANSPORT_USB_LEGACY
+
+config USB_DEVICE_STACK_NEXT
+	default y if ANT_DONGLE_TRANSPORT_USB_NEXT
+
+config UART_INTERRUPT_DRIVEN
+	default y if ANT_DONGLE_TRANSPORT_UART
+
+config ANT_DONGLE_UART_BAUD
+	int "Baud rate of the UART carrying the ANT serial protocol"
+	depends on ANT_DONGLE_TRANSPORT_UART
+	default 57600 if SOC_SERIES_CC13X2_CC26X2
+	default 115200
+	help
+	  The rate the `ant-uart` alias runs at, and therefore the --baud a
+	  host tool must be given. This symbol does not CONFIGURE the UART -
+	  the devicetree's current-speed does - it RECORDS the rate, and
+	  apps/common/ant_uart_transport.c BUILD_ASSERTs that the two agree.
+
+	  115200 is what the nRF54L15 DK and nRF5340 DK targets run at and what
+	  tools/ant_probe.py's SerialDevice defaults to.
+
+if !ANT_DONGLE_TRANSPORT_UART
+
+comment "USB device identity"
+
+config ANT_DONGLE_USB_VID
+	hex "USB Vendor ID"
+	default 0x0FCF
+	help
+	  Dynastream/Garmin. Paired with the PID below this is what a host
+	  matches an ANT driver against.
+
+config ANT_DONGLE_USB_PID
+	hex "USB Product ID"
+	default 0x1009
+	help
+	  Identify as an ANT USB-m, the current stick and the one an ANT driver
+	  is most likely to be published for.
+
+config ANT_DONGLE_USB_MANUFACTURER
+	string "USB manufacturer string"
+	default "RadiANT Project"
+
+config ANT_DONGLE_USB_PRODUCT
+	string "USB product string"
+	default "RadiANT ANT+ compatible USB stick, plus Thread"
+
+config ANT_DONGLE_USB_SN
+	string "USB serial number string"
+	default "0123456789ABCDEF"
+	help
+	  Per-unit serial number. This literal is never what a host sees: both
+	  stacks overwrite it at runtime with the HWINFO device ID. See
+	  apps/dongle/Kconfig's own copy of this symbol for the full story of
+	  why the literal's length, not its value, is what matters.
+
+endif # !ANT_DONGLE_TRANSPORT_UART
+
+# ── Legacy stack plumbing ───────────────────────────────────────────────────
+#
+# These symbols only exist when USB_DEVICE_STACK is on, so they cannot be
+# stated in prj.conf: a UART or new-stack build would be assigning to symbols
+# that are not defined. Setting them as defaults here keeps them scoped to the
+# builds where they mean something.
+
+if ANT_DONGLE_TRANSPORT_USB_LEGACY
+
+config USB_DEVICE_VID
+	default ANT_DONGLE_USB_VID
+
+config USB_DEVICE_PID
+	default ANT_DONGLE_USB_PID
+
+config USB_DEVICE_MANUFACTURER
+	default ANT_DONGLE_USB_MANUFACTURER
+
+config USB_DEVICE_PRODUCT
+	default ANT_DONGLE_USB_PRODUCT
+
+config USB_DEVICE_SN
+	default ANT_DONGLE_USB_SN
+
+config USB_DEVICE_BOS
+	default n
+
+# We call usb_enable() ourselves, from ant_transport_enable(), after ANT is up.
+config USB_DEVICE_INITIALIZE_AT_BOOT
+	default n
+
+config USB_REQUEST_BUFFER_SIZE
+	default 2048
+
+config USB_CDC_ACM
+	default n
+
+config USB_NRFX_WORK_QUEUE_STACK_SIZE
+	default 2048
+
+config USB_WORKQUEUE
+	default y
+
+config USB_WORKQUEUE_STACK_SIZE
+	default 2048
+
+endif # ANT_DONGLE_TRANSPORT_USB_LEGACY
+
+
+# ── New stack plumbing ──────────────────────────────────────────────────────
+
+if ANT_DONGLE_TRANSPORT_USB_NEXT
+
+config UDC_BUF_COUNT
+	default 32
+
+config UDC_BUF_POOL_SIZE
+	default 4096
+
+config USBD_CDC_ACM_CLASS
+	default n
+
+endif # ANT_DONGLE_TRANSPORT_USB_NEXT
+
+# CONFIG_RADIANT_ANTR_API and CONFIG_RADIANT_SEC_HOST_MESSAGES: the
+# antr_* adapter's own symbols, shared with apps/dongle, apps/hrm_ble and
+# radiant/tests/api the same way radiant/src/node/Kconfig and
+# radiant/src/profiles/Kconfig already are. See apps/common/Kconfig.antr_api's
+# header for why they live there and not in radiant/Kconfig.
+rsource "../common/Kconfig.antr_api"
+
+choice ANT_DONGLE_RADIO
+	prompt "ANT radio backend"
+	default ANT_DONGLE_RADIO_SDK_ANT
+	help
+	  Which implementation of apps/common/ant/ant_radio.h is compiled. All three
+	  present the same antr_* contract, so the serial bridge and main() do
+	  not know which is present - the same shape as the transport choice
+	  above, and for the same reason.
+
+	  Do not expect to set this here. Unlike the transport, this choice is
+	  not actually decided by Kconfig: `list(APPEND ZEPHYR_EXTRA_MODULES)`
+	  in CMakeLists.txt runs before find_package(Zephyr), therefore before
+	  Kconfig exists, so a Kconfig symbol cannot decide whether sdk-ant's
+	  Kconfig gets sourced. CMake decides from the ANT_RADIO cache variable
+	  (-DANT_RADIO=sdk_ant|core|stub) and writes the answer back out as a
+	  generated fragment which Zephyr merges last. This choice exists so
+	  that .config records the decision.
+
+	  THE P4 GATE ALWAYS PASSES -DANT_RADIO=core: the whole point of the
+	  gate is measuring radiant's own arbitrated backend, and sdk-ant's
+	  radio is Nordic's proprietary link layer with no arbiter hook at all.
+
+config ANT_DONGLE_RADIO_SDK_ANT
+	bool "Nordic's prebuilt ANT stack (sdk-ant)"
+	help
+	  Compile apps/common/ant_radio_sdk_ant.c. Needs an sdk-ant checkout;
+	  see ANT_MODULE_DIR in apps/common/ant_radio_backend.cmake. Not what
+	  the P4 gate builds against - see the choice's own help.
+
+config ANT_DONGLE_RADIO_CORE
+	bool "radiant, the clean-room stack"
+	help
+	  Compile radiant/, the open-source clean-room link layer, by setting
+	  CONFIG_RADIANT=y on the Zephyr module of that name. The only backend
+	  the P4 coexistence gate can measure, since it is the only one with an
+	  MPSL arbitration hook (CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL) at all.
+
+config ANT_DONGLE_RADIO_STUB
+	bool "Stub out the ANT radio layer"
+	help
+	  Compile apps/common/ant_radio_stub.c in place of a real ANT stack.
+	  Every antr_*() entry point becomes a no-op returning success - useful
+	  for bringing up the Thread/coexistence half of this image without a
+	  working ANT build, but not a coexistence measurement of anything.
+
+endchoice
+
+config ANT_DONGLE_MSOS_DESCRIPTORS
+	bool "Advertise WinUSB through MS OS descriptors"
+	help
+	  Emit the MS OS 1.0 and 2.0 descriptors that ask Windows to bind
+	  winusb.sys automatically. See apps/dongle/Kconfig's own copy of this
+	  symbol for the full rationale; off by default here for the same
+	  reason.
+
+config ANT_DONGLE_ENCRYPTION
+	bool "Bridge the single channel encryption configuration messages"
+	help
+	  Implement MESG_ENCRYPT_ENABLE (0x7D), MESG_SET_ENCRYPT_KEY (0x7E) and
+	  MESG_SET_ENCRYPT_INFO (0x7F). See apps/dongle/Kconfig's own copy of
+	  this symbol for why it defaults off.
+
+config ANT_DONGLE_UF2_SETTLE_MS
+	int "Settling delay after a soft reset, before USB comes up (ms)"
+	default 1000
+	range 0 5000
+	help
+	  See apps/dongle/Kconfig's own copy of this symbol. None of this
+	  application's P4 gate boards boot from a UF2 bootloader, so the delay
+	  never actually fires there; it stays so a USB-capable board built
+	  from this application behaves the same way apps/dongle's does.
+
+config ANT_DONGLE_TX_POWER_BOOST
+	bool "Transmit at the radio's maximum power by default"
+	default y
+	help
+	  See apps/dongle/Kconfig's own copy of this symbol for the full
+	  rationale. Left on by default for parity; the P4 gate's own conf
+	  fragments do not touch it, so the bench measures the same transmit
+	  power a shipping apps/dongle image would use.
+
+config ANT_DONGLE_BCD_DEVICE
+	hex "Override bcdDevice in the USB device descriptor"
+	default 0x0000
+	range 0x0000 0xffff
+
+config ANT_DONGLE_FLASH_LOG
+	bool "Capture the log to flash, readable back over UF2"
+	depends on LOG && FLASH
+	select LOG_OUTPUT
+	help
+	  See apps/dongle/Kconfig's own copy of this symbol. Diagnostic only;
+	  none of this application's boards need it for the P4 gate, which
+	  reads its console live over a VCOM instead (see scripts/p4_bench.ps1).
+
+if ANT_DONGLE_FLASH_LOG
+
+config ANT_DONGLE_FLASH_LOG_PAGES
+	int "Flash pages reserved for the diagnostic log"
+	default 4
+	range 1 16
+
+config ANT_DONGLE_FLASH_LOG_OFFSET
+	hex "Primary diagnostic log offset"
+	default 0xe6000
+
+config ANT_DONGLE_FLASH_LOG_OFFSET_ALT
+	hex "Alternate diagnostic log offset (0 to disable)"
+	default 0x40000
+
+endif # ANT_DONGLE_FLASH_LOG
+
+# ── The P3/P4 coexistence bench instruments ─────────────────────────────────
+#
+# apps/dongle carries neither: it is ANT+-only, by design, and stripping
+# every byte of a second wireless stack out of it entirely is the reason that
+# application exists as a separate product rather than a Kconfig variant of
+# this one. These two exist BECAUSE this application links a second stack -
+# see thread_coex_load.c and ble_coex_load.c, both at this application's own
+# root rather than under src/.
+
+config ANT_DONGLE_BLE_COEX_LOAD
+	bool "Start a BLE advertiser that competes with ANT+ for the radio"
+	depends on BT && BT_BROADCASTER
+	# Legal with the arbitrated backend, and legal with no real radio at all
+	# (RADIANT_BACKEND=null), which is the configuration that isolates "is
+	# this fault in the radio backend or in the application" - a question
+	# that took a whole round to answer the slow way. It is ONLY forbidden
+	# beside the DIRECT nrf backend, where two stacks would drive the RADIO
+	# with no arbiter between them: not a coexistence measurement, a
+	# collision.
+	depends on !RADIANT_BACKEND_NRF || RADIANT_BACKEND_NRF_GATE_MPSL
+	help
+	  A bench instrument, not a feature. Brings the controller up and
+	  advertises, so that the multiprotocol plan's P3 coexistence gate has a
+	  second stack that actually WANTS the radio.
+
+	  This exists because the obvious configuration does not test anything.
+	  CONFIG_BT=y on its own links the SoftDevice Controller in and leaves it
+	  asleep, asking MPSL for no air at all - measured, and it produced a
+	  sweep-rate ratio of exactly 1.000 between "BLE off" and "BLE on"
+	  builds, which is a gate that cannot fail.
+
+	  It depends on the MPSL gate rather than merely coexisting with it: with
+	  the direct gate the two stacks would both drive the RADIO with no
+	  arbiter between them, which is not a coexistence measurement but a
+	  collision.
+
+	  Not apps/hrm_ble. That is a separate workstream with its own state
+	  machine (SIG HRS beside ANT+ 0x78, ANT+ suppressed once a connection
+	  is live); this advertises and nothing else, so that a loss figure
+	  taken against it measures arbitration and not profile logic.
+
+	  Off by default, and no shipping image selects it.
+
+config ANT_DONGLE_BLE_COEX_LOAD_INTERVAL_MS
+	int "BLE advertising interval for the coexistence load, ms"
+	depends on ANT_DONGLE_BLE_COEX_LOAD
+	range 20 10000
+	default 100
+	help
+	  How often the advertiser asks for the air, and therefore how much of it
+	  the second stack demands. An advertising event is three channels of
+	  about 400 us plus ramp, so roughly 1.3 ms per interval: about 4 % of
+	  the air at 30 ms and 0.4 % at 300 ms.
+
+	  Configurable rather than fixed because the question the gate exists to
+	  answer is not whether ANT+ survives one setting - it is where it stops
+	  surviving, and a hard-coded number answers that once and then hides it.
+
+	  100 ms is a common real-world connectable-advertising rate and sits in
+	  the middle of that range.
+
+config ANT_DONGLE_BLE_COEX_LOAD_DELAY_S
+	int "Seconds after boot before the coexistence load starts"
+	depends on ANT_DONGLE_BLE_COEX_LOAD
+	range 0 600
+	default 8
+	help
+	  The delay is an instrument rather than caution. Starting the controller
+	  inside main() makes "ANT+ never worked" and "ANT+ stopped when BLE
+	  started" the same observation, because both are true from the first
+	  millisecond; with the load arriving seconds later the console shows the
+	  sweep running, then the controller starting, and then whatever happens
+	  next.
+
+	  8 s is comfortably past enumeration and the host's channel setup. 0
+	  starts it as early as the work queue runs.
+
+config ANT_DONGLE_THREAD_COEX_LOAD
+	bool "Attach to a Thread network and keep traffic on it"
+	depends on NET_L2_OPENTHREAD && NET_SOCKETS
+	# Identical reasoning to ANT_DONGLE_BLE_COEX_LOAD's second depends, and
+	# for once it is not merely analogous: with the DIRECT nrf backend, the
+	# 802.15.4 driver and radiant_radio_nrf.c would both drive the RADIO with
+	# no arbiter between them. On nRF54L that is not even avoidable by
+	# omission - enabling the 802.15.4 driver force-selects MPSL and
+	# NRF_802154_MULTIPROTOCOL_SUPPORT through the nrfxlib Service Layer - so
+	# the 15.4 side is arbitrated whatever this application does, and only
+	# the ANT side's backend is still ours to get wrong.
+	depends on !RADIANT_BACKEND_NRF || RADIANT_BACKEND_NRF_GATE_MPSL
+	help
+	  A bench instrument, not a feature. It is the P4 counterpart of
+	  ANT_DONGLE_BLE_COEX_LOAD, and it exists for a sharper version of the
+	  same reason.
+
+	  CONFIG_NET_L2_OPENTHREAD=y on its own attaches a node and then, if it
+	  is the sleepy role docs/radiant-bridge.md section 7.3b selects, goes
+	  almost completely quiet - by design, because being quiet is what that
+	  role is for. `ot state` says `child`, the node has an address, and it
+	  has put four MLE frames on the air in the last minute. A gate measured
+	  against that is the sweep-rate-ratio-of-1.000 failure again, except
+	  harder to spot, because this time the second stack really is running.
+
+	  So this sends datagrams on a timer and counts them, and the count is
+	  part of the result: a P4 loss figure quoted without `sent` beside it is
+	  not a measurement.
+
+	  Off by default, and no shipping image selects it.
+	  docs/decisions/0011-never-a-border-router.md is why none ever will.
+
+config ANT_DONGLE_THREAD_COEX_LOAD_INTERVAL_MS
+	int "Interval between coexistence datagrams, ms"
+	depends on ANT_DONGLE_THREAD_COEX_LOAD
+	range 10 10000
+	default 100
+	help
+	  How often the Thread side asks for the air. 100 ms matches the BLE
+	  load's default so the two gates are read at comparable demand.
+
+	  Configurable for the reason the BLE interval is: the question is not
+	  whether ANT+ survives one setting, it is where it stops surviving.
+
+config ANT_DONGLE_THREAD_COEX_LOAD_PAYLOAD
+	int "Coexistence datagram payload, bytes"
+	depends on ANT_DONGLE_THREAD_COEX_LOAD
+	range 1 800
+	default 64
+	help
+	  Air time is roughly linear in this, and section 7.3a's two predictions
+	  are quoted for full-size frames, so a run at the default is NOT
+	  comparable to that number. Raise it toward a full 127-byte PSDU when
+	  reproducing section 7.3a; leave it at 64 for a realistic sensor-chatter
+	  load.
+
+config ANT_DONGLE_THREAD_COEX_LOAD_DEST
+	string "Coexistence datagram destination"
+	depends on ANT_DONGLE_THREAD_COEX_LOAD
+	default "ff03::1"
+	help
+	  Mesh-local all-nodes by default, and multicast rather than a unicast
+	  peer on purpose: a unicast destination whose peer has rebooted or never
+	  commissioned turns every send into an address-resolution failure, and
+	  the board still puts a quite different amount of energy on the air than
+	  the operator believes.
+
+config ANT_DONGLE_THREAD_COEX_LOAD_PORT
+	int "Coexistence datagram UDP port"
+	depends on ANT_DONGLE_THREAD_COEX_LOAD
+	range 1 65535
+	default 4711
+
+config ANT_DONGLE_THREAD_COEX_LOAD_DELAY_S
+	int "Seconds after boot before the Thread coexistence load starts"
+	depends on ANT_DONGLE_THREAD_COEX_LOAD
+	range 0 600
+	default 12
+	help
+	  Same instrument as the BLE load's delay, but longer: the BLE
+	  advertiser is on the air the moment bt_enable() returns, while a
+	  Thread node has to discover and attach first, and 8 s is not reliably
+	  enough for that.
+
+config ANT_DONGLE_THREAD_COEX_LOAD_REPORT_EVERY
+	int "Log a load summary every N datagrams"
+	depends on ANT_DONGLE_THREAD_COEX_LOAD
+	range 1 100000
+	default 100
+
+endmenu
+
+# The hostless node's identity and epoch (compat-C6), and the compatibility
+# profiles' policy settings (compat-C7). Same wiring as apps/dongle/Kconfig -
+# see that file's own comments for the full rationale; this application's
+# epoch authority is still the PC behind it, not this Thread network.
+rsource "../../radiant/src/node/Kconfig"
+rsource "../../radiant/src/profiles/Kconfig"
+
+source "Kconfig.zephyr"

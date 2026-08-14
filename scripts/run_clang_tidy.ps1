@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 <#
 .SYNOPSIS
   Run clang-tidy over radiant/src using existing build/*/compile_commands.json
