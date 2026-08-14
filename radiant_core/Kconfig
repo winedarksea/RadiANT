@@ -268,6 +268,37 @@ config RADIANT_CORE_BACKEND_CC26XX_COEX
 	  which is exactly how RF_postCmd posts. This symbol is what makes an ANT
 	  window able to preempt that neighbour at all.
 
+config RADIANT_CORE_COEX154_CC26XX_FORK
+	bool "compile the forked 802.15.4 driver that survives preemption"
+	depends on RADIANT_CORE_BACKEND_CC26XX
+	depends on !IEEE802154_CC13XX_CC26XX
+	select CRC
+	help
+	  Compile coex154_ti/ieee802154_cc13xx_cc26xx.c - a verbatim fork of
+	  Zephyr's driver with one change, a re-post of the background
+	  CMD_IEEE_RX on the events RADIANT_CORE_BACKEND_CC26XX_COEX's execute
+	  hook produces. Read that file's own header before this help.
+
+	  Upstream's driver never resubmits that command and never subscribes to
+	  RF_ClientEventRadioFree, so the FIRST time an ANT slot preempts it,
+	  802.15.4 reception ends permanently - with no error, and with the
+	  network interface still reporting itself up. A coexistence run against
+	  the unmodified driver reads "ANT healthy, neighbour dead, EXIT=0".
+	  There is no nRF analogue: both the SoftDevice Controller and
+	  nrf_802154 are built to be denied, this driver is not.
+
+	  `depends on !IEEE802154_CC13XX_CC26XX` is the load-bearing line, and it
+	  is a dependency rather than a `select ... = n` because Kconfig cannot
+	  express the latter: both files register NET_DEVICE against the same
+	  DT_DRV_COMPAT node, so compiling both double-registers it. Turning the
+	  upstream symbol off is also what stops driverlib/rfc.c being compiled
+	  twice - radiant_core/CMakeLists.txt adds it unconditionally, hal_ti
+	  adds it under that symbol.
+
+	  NOT VERIFIED BEYOND COMPILING. This bench has no 802.15.4 peer, so no
+	  frame has ever been received through this file after a preemption. Do
+	  not read a coexistence number off arm 4 without one.
+
 # â”€â”€ A setting of the nrf arm, and it has to live OUTSIDE the choice â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #
 # It used to be inside it, between the nrf arm and `endchoice`, and that was a

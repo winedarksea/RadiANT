@@ -115,9 +115,22 @@ LOG_MODULE_REGISTER(radiant_cc26xx, CONFIG_RADIANT_CORE_LOG_LEVEL);
  *
  * 0x34 taken over TI's 0x2E because it led every round.
  *
- * CONFIG_RADIANT_CORE_CC26XX_AGC_REF overrides this for a Phase C
- * paced-transmitter re-sweep (docs/decisions/0014's "still owed"); the
- * Kconfig default is this same 0x34.
+ * CONFIG_RADIANT_CORE_CC26XX_AGC_REF overrides this; the Kconfig default is
+ * this same 0x34.
+ *
+ * THE PACED-TRANSMITTER RE-SWEEP HAS NOW RUN (2026-08-14, 80 s per rung
+ * against tools/ant_sim.py, full numbers in
+ * archive/benchmarks/2026-08-13-radiant-cc26xx.json's
+ * phase_c_rxbw_agc_resweep) and it confirms this value without improving on
+ * it: 0x34 lost 1.57 % and 2.19 % on two runs of an unchanged rig, 0x3A lost
+ * 1.56 % and 0x40 lost 1.25 % - all four inside the 0.62 pp the two baseline
+ * runs differ by, so the axis is FLAT from 0x34 up. TI's own 0x2E lost 4.67 %,
+ * which is nine times that noise and settles the choice above properly rather
+ * than on percentage-of-frames counts from the spike.
+ *
+ * So do not "improve" this to 0x40 on the strength of one packet. What the
+ * re-sweep actually closes is the possibility that the residual ~1.5-2 % loss
+ * is an AGC mis-set: it is not, and the cause is still unidentified.
  */
 #define AGC_REF_OVERRIDE_INDEX   3
 #define AGC_REF_VALUE            CONFIG_RADIANT_CORE_CC26XX_AGC_REF
@@ -133,8 +146,16 @@ LOG_MODULE_REGISTER(radiant_cc26xx, CONFIG_RADIANT_CORE_LOG_LEVEL);
  * actually sent, not frames already detected - the latter denominator hides
  * a PHY that drops more than half of everything.
  *
- * CONFIG_RADIANT_CORE_CC26XX_RX_BW_CODE overrides this for a Phase C
- * paced-transmitter re-sweep; the Kconfig default is this same 98.
+ * CONFIG_RADIANT_CORE_CC26XX_RX_BW_CODE overrides this; the Kconfig default is
+ * this same 98.
+ *
+ * THE PACED-TRANSMITTER RE-SWEEP HAS NOW RUN (2026-08-14; see AGC_REF_VALUE
+ * above for the method and the noise figure) and 98 is a LOCAL OPTIMUM, which
+ * is more than the reasoning above establishes on its own: it lost 1.57 % and
+ * 2.19 % on two runs, while BOTH neighbours are worse by several times the
+ * 0.62 pp run-to-run noise - 97 lost 3.10 % and 99 lost 5.59 %. Narrower and
+ * wider both hurt, so this is a peak rather than a plateau edge, and Carson's
+ * rule picked it correctly.
  */
 #define RX_BW_CODE               CONFIG_RADIANT_CORE_CC26XX_RX_BW_CODE
 

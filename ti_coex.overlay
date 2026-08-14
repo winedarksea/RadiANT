@@ -1,0 +1,44 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Build arm 4's devicetree half. Pass it WITH ti_coex.conf, never instead of
+ * it:
+ *
+ *   west ... -- ... "-DEXTRA_CONF_FILE=ti_coex.conf" \
+ *                   "-DEXTRA_DTC_OVERLAY_FILE=ti_coex.overlay"
+ *
+ * WHY IT IS NEEDED AT ALL, because "enable the 802.15.4 node" sounds like
+ * something the driver's Kconfig would do and it is the other way round:
+ * CONFIG_RADIANT_CORE_COEX154_CC26XX_FORK compiles the driver, but the driver
+ * registers against DT_DRV_COMPAT ti,cc13xx-cc26xx-ieee802154, and Zephyr's
+ * own board file (boards/ti/cc26x2r1_launchxl/cc26x2r1_launchxl.dts) both
+ * disables that node and does `/delete-property/ zephyr,ieee802154`. Upstream,
+ * not us - this LaunchXL ships with 802.15.4 off.
+ *
+ * The failure without this file is not a missing-driver message. It is
+ *
+ *   error: '__device_dts_ord_53' undeclared ... did you mean '__device_dts_ord_3'?
+ *
+ * from DEVICE_DT_INST_GET(0) inside the vendored driver: the node exists in the
+ * tree but has no device, so the symbol the macro names was never generated.
+ * That is a devicetree problem wearing a C compiler's clothes, and it is worth
+ * recognising on sight because every other symptom in this arm looks like a
+ * Kconfig one.
+ *
+ * `chosen` matters as much as `status`. Without zephyr,ieee802154 the driver
+ * still builds and still registers, but NET_CONFIG's 802.15.4 setup has no
+ * interface to configure, so the channel and PAN ID in ti_coex.conf are
+ * silently applied to nothing and the neighbour sits on the default channel -
+ * which is the one case this arm must not be in, since the channel is chosen
+ * to keep the two stacks off each other's frequency (see ti_coex.conf).
+ */
+
+/ {
+	chosen {
+		zephyr,ieee802154 = &ieee802154;
+	};
+};
+
+&ieee802154 {
+	status = "okay";
+};

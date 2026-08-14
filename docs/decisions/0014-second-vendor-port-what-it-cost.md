@@ -326,8 +326,9 @@ disagrees with the code, instrument the boundary before rewriting the diagnosis.
 **The CC26x2 cannot be the transmitter in that measurement either**, until the
 power table exists; that is now recorded in `caps` rather than discovered again.
 
-**Still owed, updated 2026-08-13 (see the Phase A/B/D0-D2/D4/D5 sitting this
-struck three of):**
+**Still owed, updated 2026-08-14 (a second sitting struck the coexistence arm
+and the PHY re-sweep; the remaining four all now hinge on hardware this bench
+does not have, not on work not done):**
 
 * ~~The transmit-power table~~ **DONE.** `apply_power()` +
   `radiant_cc26xx_txp[]`; `caps.tx_power_min_dbm/_max_dbm` now read −20…+5.
@@ -350,12 +351,26 @@ struck three of):**
   `radiant_core`-level (shared by both backends, not this port), and the HAL
   boundary this port exists to test is not implicated. See
   `archive/benchmarks/2026-08-13-radiant-cc26xx.json`'s `conformance` block.
-* ~~Coexistence design~~ **STARTED.** [ADR 0015](0015-cc26xx-coexistence-design.md)
-  records the design and lands the scheduler-only build arm
-  (`RFCC26XX_schedulerPolicy`, `post_op()`, `EDENIED`/`Preempted` handling,
-  the caps patch under coex). The fourth arm - a real second RF-core client -
-  needs an app-local fork of Zephyr's 802.15.4 driver first; see that ADR's
-  own "Status" section.
+* ~~Coexistence design~~ **DONE, TO THE LEVEL THIS BENCH CAN REACH.**
+  [ADR 0015](0015-cc26xx-coexistence-design.md) records the design and all four
+  build arms now exist and compile: `RFCC26XX_schedulerPolicy`, `post_op()`,
+  `EDENIED`/`Preempted` handling, the caps patch, and - since 2026-08-14 - the
+  forked 802.15.4 driver in `radiant_core/coex154_ti/` plus
+  `ti_coex.conf`/`ti_coex.overlay`. Arm 1's image is still byte-for-byte the
+  same size (68248 B), so the non-coex path really did not move. **What is
+  still missing is a peer, not code:** nothing has run against a real 802.15.4
+  device, so the fork's re-post branch - the whole reason it exists - has never
+  executed. See that ADR's "Status" section for the exact shape of that gap.
+* ~~The rxBw/AGC re-sweep~~ **DONE, AND IT FOUND NOTHING TO WIN.** Six 80 s
+  runs against a paced transmitter, unattended (see the bench note below):
+  `RX_BW_CODE` 98 is a local optimum - both neighbours are several times worse
+  (97 → 3.10 %, 99 → 5.59 % against the default's 1.57 %) - and the AGC axis is
+  flat from `0x34` upward while TI's own `0x2E` costs 4.67 %. Defaults
+  unchanged. The useful half is the control: two runs of the *unchanged* image
+  differ by 0.62 pp, so anything inside that band is a tie, and the earlier
+  single-pass `RX_END_SLOP_US` sweep should be re-read with that in mind. This
+  closes "the residual loss might be a PHY mis-set" without identifying what
+  the residual loss actually is.
 * **An equal-power A/B**, or a harness rule for which rig fields may legitimately
   differ across vendors. Still owed.
 * **Sensitivity.** Still no verdict for either backend - the transmit-power
@@ -376,6 +391,21 @@ struck three of):**
   describes.
 
 ## A note on the bench
+
+**The LaunchXL is an unattended board now, and it was not before.** Every
+`dslite` flash leaves the XDS110's ANT backchannel (COM14) completely silent -
+zero bytes, on every image, with the LED blinking and JTAG healthy, which looks
+exactly like a firmware hang and was diagnosed as one for a while. It is not:
+`xds110reset.exe` clears it, and `scripts/flash_ti.ps1` now runs that itself.
+The order is the part that hid the fix - a bare reset into a *closed* port does
+nothing at all, which is why an earlier attempt at it concluded the reset did
+not work and that a physical USB replug was the only route.
+
+That is not just convenience. The whole rxBw/AGC sweep above ran flash-to-result
+with nobody touching the bench, and it shows in the data: mean RSSI held within
+0.9 dB across six runs, against 5 dB of drift in the earlier hand-replugged
+sweep. A measurement rig a human has to touch between rungs is a measurement rig
+that moves between rungs.
 
 The nRF54L15 DK's onboard J-Link was put into its bootloader during this
 sitting by running a bare `JLink.exe -CommanderScript` without

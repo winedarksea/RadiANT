@@ -162,13 +162,24 @@ if ($Backend -eq 'sdk_ant') {
 # Only under -Backend core: sdk_ant is Nordic-only silicon by construction and
 # a stub build here would assert nothing about the port.
 #
-# THREE ROWS, NOT ONE: the base build (arm 1, today's floor) plus the two
-# coexistence arms that do not need the 802.15.4 driver fork yet - ti_patch.conf
-# (arm 2, the CPE patch alone) and ti_gate.conf (arm 3, the scheduler hooks).
-# Arm 4 (ti_coex.conf) is not a row here until the coex154/ fork exists - see
-# docs/decisions/0015-cc26xx-coexistence-design.md's "Status" section; adding
-# it before then would build a coexistence arm with nothing to arbitrate
-# against, which is arm 3 measured twice under a different name.
+# FOUR ROWS, NOT ONE, and they are an A/B/C/D that only means anything read in
+# order - see docs/decisions/0015-cc26xx-coexistence-design.md and
+# docs/testing.md for the table:
+#
+#   ti_launchxl        arm 1  the floor
+#   ti_launchxl_patch  arm 2  the CPE multi-protocol patch's PHY cost alone
+#   ti_launchxl_gate   arm 3  the scheduler hooks, patch held constant
+#   ti_launchxl_coex   arm 4  a real second RF client (the forked 802.15.4
+#                             driver), arbiter and patch held constant
+#
+# Arm 4 is the only row in this file that needs a devicetree overlay as well as
+# a conf fragment: Zephyr's own cc26x2r1_launchxl.dts disables the 802.15.4
+# node. `overlay` exists for it and is $null everywhere else.
+#
+# ARM 4 BUILDS BUT HAS NEVER RUN AGAINST AN 802.15.4 PEER - this bench has
+# none. It belongs in the matrix because it is a build that must not rot, not
+# because a green matrix says coexistence works. Read ti_coex.conf's header
+# before recording any number off it.
 if ($Backend -eq 'core') {
     if (-not $HalTiDir) { $HalTiDir = "C:\ncs\$NcsVersion\modules\hal\ti" }
     if (Test-Path (Join-Path $HalTiDir 'zephyr\module.yml')) {
@@ -176,6 +187,7 @@ if ($Backend -eq 'core') {
         $targets += @{ dir='ti_launchxl';       board='cc26x2r1_launchxl'; artifact='ant_dongle_cc26x2r1_launchxl.hex';       pkg='hex'; offset=0x0; transport='UART'; conf=$null;           release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule }
         $targets += @{ dir='ti_launchxl_patch'; board='cc26x2r1_launchxl'; artifact='ant_dongle_cc26x2r1_launchxl_patch.hex'; pkg='hex'; offset=0x0; transport='UART'; conf='ti_patch.conf'; release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule }
         $targets += @{ dir='ti_launchxl_gate';  board='cc26x2r1_launchxl'; artifact='ant_dongle_cc26x2r1_launchxl_gate.hex';  pkg='hex'; offset=0x0; transport='UART'; conf='ti_gate.conf';  release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule }
+        $targets += @{ dir='ti_launchxl_coex';  board='cc26x2r1_launchxl'; artifact='ant_dongle_cc26x2r1_launchxl_coex.hex';  pkg='hex'; offset=0x0; transport='UART'; conf='ti_coex.conf';  release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule; overlay='ti_coex.overlay' }
     } else {
         Write-Host "cc26x2r1_launchxl: skipped, no hal_ti module at $HalTiDir" -ForegroundColor DarkYellow
         Write-Host "  Run scripts\fetch_hal_ti.ps1 (NCS's west manifest will never fetch it)."
@@ -234,6 +246,12 @@ try {
         if ($antModuleDir) { $extra += "-DANT_MODULE_DIR=$antModuleDir" }
         if ($t.modules) { $extra += "-DEXTRA_ZEPHYR_MODULES=$($t.modules)" }
         if ($t.conf) { $extra += "-DEXTRA_CONF_FILE=$($t.conf)" }
+        # Only ti_launchxl_coex sets this today. Not folded into `conf`: a
+        # fragment and an overlay are read by different tools at different
+        # stages, and a row that silently dropped its overlay would still
+        # configure, still build, and still be the wrong image (see
+        # ti_coex.overlay's header for what that failure looks like).
+        if ($t.overlay) { $extra += "-DEXTRA_DTC_OVERLAY_FILE=$($t.overlay)" }
 
         # Do not redirect stderr: PowerShell 5.1 wraps a native command's
         # stderr in ErrorRecords and reports failure even on exit code 0.

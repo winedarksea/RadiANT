@@ -286,7 +286,7 @@ had (see [ADR 0015](decisions/0015-cc26xx-coexistence-design.md)):
 | 1 | none | today: `RF_postCmd` + `rf_patch_cpe_prop` | the floor |
 | 2 | [`ti_patch.conf`](../ti_patch.conf) | multi-protocol patch only, still `RF_postCmd` | **the CPE patch's PHY cost** |
 | 3 | [`ti_gate.conf`](../ti_gate.conf) | arm 2 + `..._CC26XX_COEX=y` (hooks linked, `RF_scheduleCmd`), no 802.15.4 | the scheduler's cost |
-| 4 | `ti_coex.conf` (not yet written) | arm 3 + `IEEE802154` + a forked driver + a traffic peer | the neighbour's cost |
+| 4 | [`ti_coex.conf`](../ti_coex.conf) **+ [`ti_coex.overlay`](../ti_coex.overlay)** | arm 3 + `IEEE802154` + the forked driver in `radiant_core/coex154_ti/` | the neighbour's cost |
 
 ```powershell
 . .\scripts\env.ps1 -NcsVersion v3.4.0
@@ -312,16 +312,59 @@ structurally never could. A non-zero arm-3-vs-arm-2 delta is not
 automatically a regression — it can be the scheduler doing real work even
 with nothing to arbitrate against.
 
-**Arm 4 needs a fork, not just a conf fragment.** Zephyr's 802.15.4 driver
-for this part has no re-post path for its background receive command, so the
-first preemption ends it permanently — see ADR 0015's "Status" section for
-what that needs before `ti_coex.conf` can be written.
+**Arm 4 needs a fork and an overlay, not just a conf fragment**, and both are
+easy to lose silently:
+
+- Zephyr's 802.15.4 driver for this part has no re-post path for its background
+  receive command, so the first preemption ends 802.15.4 reception permanently.
+  `radiant_core/coex154_ti/ieee802154_cc13xx_cc26xx.c` is a vendored copy with
+  that re-post added. `ti_coex.conf` sets `CONFIG_IEEE802154_CC13XX_CC26XX=n`
+  so that exactly one of the two compiles — leaving it `y` is a
+  duplicate-symbol link error on `driverlib/rfc.c`, which is the good case.
+- Zephyr's own `cc26x2r1_launchxl.dts` **disables** the `ieee802154` node and
+  deletes the `zephyr,ieee802154` chosen property. Without `ti_coex.overlay`
+  the build fails on `error: '__device_dts_ord_53' undeclared` out of
+  `DEVICE_DT_INST_GET(0)` — a devicetree problem wearing a C compiler's
+  clothes, and worth recognising on sight because everything else in this arm
+  fails like a Kconfig problem.
+
+**Arm 4 builds; it has never run against an 802.15.4 peer**, because this bench
+has none. Its ANT-side loss figure would be honest (the neighbour's endless
+background receive contends for the core whether or not anyone answers it), but
+the neighbour's own survival across a preemption — the whole point of the
+fork — cannot be observed here. Do not record a coexistence verdict off it.
 
 Always check the generated `.config`, not the build log:
 
 ```powershell
-Select-String build\<dir>\<app>\zephyr\.config -Pattern "^CONFIG_RADIANT_CORE_BACKEND_CC26XX"
+Select-String build\<dir>\<app>\zephyr\.config `
+    -Pattern "^CONFIG_RADIANT_CORE_BACKEND_CC26XX|^CONFIG_RADIANT_CORE_COEX154|^CONFIG_IEEE802154_CC13XX_CC26XX="
 ```
+
+#### Flashing the LaunchXL: the backchannel goes silent, and it is not a hang
+
+Every `dslite` flash leaves COM14 — the XDS110 backchannel carrying the ANT
+wire protocol — completely silent. Zero bytes, not garbage, to `ant_probe.py`
+or to a raw ANT RESET frame over pyserial, on **every** image including the
+null backend and a bare blink app, with the LED blinking and JTAG perfectly
+healthy. It looks exactly like a firmware hang and once cost a long
+investigation into an `RF_open()` hang that was never real.
+
+`scripts/flash_ti.ps1` now pulses `xds110reset.exe` after each flash and the
+problem is gone; there is nothing to do by hand and no USB replug is needed.
+Two things about it are worth knowing anyway, because they are what makes it
+work:
+
+- **Order is load-bearing.** A bare reset into a *closed* port is not a weaker
+  fix, it is no fix — measured, 0 bytes. `flash → reset → open` works;
+  `reset → open` does not.
+- **For a port that is already dead** and that you do not want to reflash to
+  recover: open COM14 with **DTR and RTS asserted first**, *then* pulse
+  `xds110reset.exe`, then read. That order recovers a live board without
+  touching flash.
+
+`-NoBackchannelReset` skips it, which is only useful for reproducing the
+symptom deliberately.
 
 #### The Phase C loss re-sweep, without editing source per rung
 
@@ -337,6 +380,21 @@ against a paced transmitter (`tools/ant_sim.py` or `tools/ant_sens.py`'s
 master, never whatever happens to be transmitting in the room - see ADR
 0014's own measurement-discipline section for why that matters) with
 `tools/ant_verify.py`.
+
+**Sweep the baseline twice, at the two ends of the sweep, or the whole thing
+is unreadable.** This is not general advice, it is what the 2026-08-14 run
+found: two runs of the *unchanged* default image, 80 s and ~320 packets each,
+came out 1.57 % and 2.19 % — 0.62 pp apart, which is two packets. Every rung
+inside that band is a tie, and the first version of this sweep (RX_END_SLOP_US,
+single-pass, no control) is worth re-reading knowing it. Both re-swept
+parameters turned out to be at the top of their curve already; the numbers are
+in `archive/benchmarks/2026-08-13-radiant-cc26xx.json`.
+
+Since `scripts/flash_ti.ps1` resets the backchannel itself, a rung is
+`flash → start the transmitter → measure` in one unattended script, with
+nobody touching the bench between rungs. That is visible in the data: mean
+RSSI held within 0.9 dB across all six runs, against 5 dB of drift in the
+earlier hand-replugged sweep.
 
 ### Tier 4 — extension interop (Phase 7)
 

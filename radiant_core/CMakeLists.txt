@@ -212,6 +212,20 @@ elseif(CONFIG_RADIANT_CORE_BACKEND_CC26XX)
   zephyr_library_sources_ifdef(CONFIG_RADIANT_CORE_BACKEND_CC26XX_COEX
 			       src/radiant_radio_cc26xx_arb.c)
 
+  # The neighbour, forked so that it survives being preempted by the hooks
+  # above. A vendored copy of Zephyr's driver plus one re-post branch; see
+  # coex154_ti/ieee802154_cc13xx_cc26xx.c's header for the provenance and for
+  # why it cannot be a patch. Its own directory rather than src/ precisely
+  # because it is not ours: nothing in src/ should ever be diffed against an
+  # upstream file, and this must be.
+  #
+  # zephyr_include_directories() is NOT used for it - the private header sits
+  # beside the .c and is reached as "ieee802154_cc13xx_cc26xx.h", so adding the
+  # directory globally would put a vendor header on every consumer's search
+  # path for no gain.
+  zephyr_library_sources_ifdef(CONFIG_RADIANT_CORE_COEX154_CC26XX_FORK
+			       coex154_ti/ieee802154_cc13xx_cc26xx.c)
+
   # (3): PowerCC26X2_config and the two scheduler hooks. Zephyr's version of
   # that file installs a NULL calibrateFxn which TI's driver dereferences
   # without checking - see src/radiant_ti_power.c for the fault this produced
@@ -228,6 +242,14 @@ elseif(CONFIG_RADIANT_CORE_BACKEND_CC26XX)
   # NULL), so under 802.15.4 ours must NOT exist rather than duplicate it.
   # The three symbols below decide which *branch* power.c takes, which is
   # what actually matters - not whether CONFIG_PM is set at all.
+  # CONFIG_RADIANT_CORE_COEX154_CC26XX_FORK is deliberately NOT in this list,
+  # even though it is 802.15.4. The list is not "is there a second RF client",
+  # it is "does Zephyr's own power.c compile and take its radio branch" - and
+  # that is driven by CONFIG_PM, which IEEE802154_CC13XX_CC26XX selects from the
+  # SoC layer's Kconfig.defconfig and our fork's symbol does not. Arm 4 runs
+  # with PM off like every other arm here, so ours is still the only
+  # PowerCC26X2_config in the image. If a future arm 4 ever needs CONFIG_PM, it
+  # will hit the FATAL_ERROR below, which is the intended way to find out.
   if(CONFIG_IEEE802154_CC13XX_CC26XX OR CONFIG_IEEE802154_CC13XX_CC26XX_SUB_GHZ
      OR CONFIG_BLE_CC13XX_CC26XX)
     # Zephyr's power.c takes the branch with a non-NULL calibrateFxn -

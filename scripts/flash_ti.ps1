@@ -90,6 +90,15 @@
     run on a new board, and the cheapest way to separate a probe problem from
     an image problem.
 
+.PARAMETER Xds110Reset
+    Path to xds110reset.exe, found automatically under C:\ti otherwise. Run
+    after every flash to bring the ANT backchannel back - see Reset-Backchannel
+    below for what happens without it and why the ORDER matters.
+
+.PARAMETER NoBackchannelReset
+    Skip that. Only useful to reproduce the silent-COM14 symptom deliberately;
+    a board flashed this way needs a physical USB replug.
+
 .EXAMPLE
     .\scripts\flash_ti.ps1 -CheckOnly
     .\scripts\flash_ti.ps1
@@ -112,10 +121,89 @@ param(
     [string]$OpenOcd = 'C:\tools\xpack-openocd-0.12.0-7\bin\openocd.exe',
     [string]$Serial,
     [int]$Speed = 5500,
-    [switch]$CheckOnly
+    [switch]$CheckOnly,
+    [string]$Xds110Reset,
+    [switch]$NoBackchannelReset
 )
 
 $ErrorActionPreference = 'Stop'
+
+# ── The backchannel, after a flash ──────────────────────────────────────────
+#
+# THE ONE THING THAT MAKES THIS BOARD USABLE UNATTENDED, so it lives in the
+# script rather than in a habit.
+#
+# Every dslite session leaves COM14 - the XDS110's "Application/User UART",
+# which carries the ANT wire protocol - completely silent. Not garbage: zero
+# bytes, to ant_probe.py and to a raw ANT RESET frame over pyserial alike. It
+# reproduces on EVERY image including the null backend and a bare blink app,
+# with the LED blinking and JTAG perfectly healthy, so it looks exactly like a
+# firmware hang and once cost a whole investigation to a boot-hang theory that
+# was never true.
+#
+# The fix is a probe-side reset pulse, NOT a physical replug. Replugging does
+# work and was believed for a while to be the only thing that did; it is not,
+# and believing that makes every measurement on this board need a human.
+#
+# ORDER IS LOAD-BEARING, and getting it wrong is what made the reset look
+# unreliable. Measured, three ways, on the same board in one sitting:
+#
+#   flash, sleep, probe (no reset)          -> FAILED, 0 bytes
+#   reset with NO port open, then open      -> FAILED, 0 bytes
+#   flash, reset, then probe                -> PASS
+#   open the port (DTR+RTS high) FIRST,
+#     then reset, then read                 -> PASS, full boot banner
+#
+# So a bare reset into a closed port is not a weaker fix, it is no fix. What
+# this function does is the third form; the fourth is what to reach for by hand
+# if a port is already dead and reflashing is not wanted (see docs/testing.md).
+function Reset-Backchannel {
+    if ($NoBackchannelReset) {
+        Write-Host 'Skipping the backchannel reset (-NoBackchannelReset).'
+        Write-Host 'COM14 will very likely be silent until the USB cable is replugged.'
+        return
+    }
+
+    $reset = $Xds110Reset
+    if (-not $reset) {
+        $roots = @(
+            'C:\ti\ccs_base\common\uscif\xds110\xds110reset.exe'
+        ) + (Get-ChildItem 'C:\ti' -Filter 'uniflash*' -Directory -ErrorAction SilentlyContinue |
+             Sort-Object Name -Descending |
+             ForEach-Object {
+                Join-Path $_.FullName 'deskdb\content\TICloudAgent\win\ccs_base\common\uscif\xds110\xds110reset.exe'
+             })
+        $reset = @($roots | Where-Object { Test-Path $_ })[0]
+    }
+
+    if (-not $reset -or -not (Test-Path $reset)) {
+        Write-Warning @'
+No xds110reset.exe found, so the backchannel was not reset.
+
+It ships with UniFlash and with CCS, at
+  <install>\ccs_base\common\uscif\xds110\xds110reset.exe
+Pass -Xds110Reset <path> if it is somewhere else.
+
+Without it COM14 will be silent after this flash and the only other way back
+is physically replugging the USB cable.
+'@
+        return
+    }
+
+    # Deliberately NOT one of the uscif utilities this bench is warned about:
+    # dbgjtag updated the probe firmware without being asked (see the header),
+    # xds110reset only pulses nRESET. -a toggle -d 50 are its own defaults,
+    # named here so a future reader can see there is a knob if 50 ms is ever
+    # marginal.
+    Write-Host "Resetting the backchannel: $reset"
+    & $reset -a toggle -d 50 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "xds110reset exited with $LASTEXITCODE; COM14 may still be silent."
+    }
+    # The CDC needs a moment to come back before anything opens it. Three
+    # seconds is what the working sequence used; it is not a tuned number.
+    Start-Sleep -Seconds 3
+}
 
 $driverHelp = @'
 DRIVER: the XDS110 debug interface has no driver bound.
@@ -299,6 +387,8 @@ somewhere else.
         return
     }
 
+    Reset-Backchannel
+
     Write-Host ''
     Write-Host 'Flashed.'
     Write-Host '  ANT serial: the XDS110 backchannel COM port, AT 57600 - not 115200.'
@@ -355,6 +445,8 @@ if ($CheckOnly) {
     Write-Host 'Probe and target are reachable.'
     return
 }
+
+Reset-Backchannel
 
 Write-Host ''
 Write-Host 'Flashed and reset.'

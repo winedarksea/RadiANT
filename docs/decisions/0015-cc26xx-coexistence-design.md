@@ -1,8 +1,8 @@
 # 0015 — CC26xx coexistence: why not a portable gate, and what stands in for it
 
 Date: 2026-08-13
-Status: accepted (design and scheduler-only arm landed; the second-client arm
-is not yet built - see "Status" below)
+Status: accepted (all four arms build, including the second-client arm; nothing
+has been run against an 802.15.4 peer - see "Status" below)
 
 ## Context
 
@@ -90,7 +90,7 @@ indistinguishable in one number. Hence four build arms, not three
 | 1 | none | the floor (today) |
 | 2 | `ti_patch.conf` | the CPE patch's PHY cost alone |
 | 3 | `ti_gate.conf` | the scheduler's cost, patch held constant |
-| 4 | `ti_coex.conf` (not yet written - needs D3 below) | the neighbour's cost |
+| 4 | `ti_coex.conf` + `ti_coex.overlay` | the neighbour's cost |
 
 `arbiter_only_max_delta_pp` is measured **arm 3 against arm 2**, never
 against arm 1 - measuring against arm 1 would charge the arbiter for the
@@ -175,54 +175,67 @@ knowledge.
 
 **Landed:** the two Kconfig symbols, `radiant_radio_cc26xx_arb.c`, the
 `post_op()` split, every backend change above, the CMake PM-guard rekey (see
-`docs/testing.md`), and `ti_patch.conf`/`ti_gate.conf` (arms 2 and 3). All
-four build combinations (plain, patch-only, gate) compile and link.
+`docs/testing.md`), `ti_patch.conf`/`ti_gate.conf` (arms 2 and 3), and - since
+2026-08-14 - the forked 802.15.4 driver and `ti_coex.conf`/`ti_coex.overlay`
+(arm 4). **All four arms compile and link**, and arm 1's image is byte-for-byte
+the same size it was before any of this landed (68248 B), which is the check
+that matters for the "non-coex path must not change" claim above.
 
-**Not yet built: the fourth arm.** Zephyr's 802.15.4 driver
-(`ieee802154_cc13xx_cc26xx.c`) has no re-post path for `cmd_ieee_rx` -
-`cmd_ieee_rx_callback` never resubmits, and the driver never subscribes to
+### The fourth arm, and the fork under it
+
+Zephyr's 802.15.4 driver has no re-post path for `cmd_ieee_rx` -
+`cmd_ieee_rx_callback()` never resubmits, and the driver never subscribes to
 `RF_ClientEventRadioFree`. So the first preemption ends 802.15.4 reception
 **permanently**: a naive coexistence run would report "ANT healthy, the
 neighbour silently dead, EXIT=0" - exactly the failure class ADR 0013's own
 gates were written to prevent, and with no nRF analogue (both the SoftDevice
 Controller and `nrf_802154` are built to be denied; this driver is not).
 
-**Deliberately NOT forked this sitting, and the reason is a build-system one,
-not a knowledge gap.** Zephyr's driver is compiled in-tree
-(`zephyr/drivers/ieee802154/CMakeLists.txt`, gated on
-`CONFIG_IEEE802154_CC13XX_CC26XX`) and registers its `NET_DEVICE`/`DEVICE`
-against the devicetree node named by `DT_DRV_COMPAT ti_cc13xx_cc26xx_
-ieee802154`. An app-local fork that keeps the same compatible string would
-double-register that node the moment both the original and the fork are
-compiled; making only the fork compile needs either excluding the original
-source file from Zephyr's own `drivers/ieee802154/CMakeLists.txt` for this
-one build (there is no Kconfig seam for that - the file is listed
-unconditionally under the one Kconfig symbol) or a devicetree overlay that
-renames the compatible string and re-parents the RF node, which is itself
-untested surgery. Copying ~800 lines of vendor driver into this repo and
-guessing at that wiring, with **no 802.15.4/Thread peer on this bench to
-verify the result against real contention**, would produce something that
-*looks* landed and is not verified at any level beyond "it might compile" -
-worse than leaving the gap explicit. `ti_coex.conf` and arm 4 stay
-unwritten, and so does the `radiant_core/spike/ti_coex` measurement rig the
-original plan calls for before trusting any of the above under real
-contention.
+`radiant_core/coex154_ti/ieee802154_cc13xx_cc26xx.c` is a verbatim vendored
+copy of that driver with four marked changes: the provenance comment, `CONFIG_*`
+fallback shims for the sub-symbols that vanish with the upstream menuconfig, the
+re-post branch itself, and the `rx_active` flag that branch needs. The flag is
+the part that is easy to miss: `ieee802154_cc13xx_cc26xx_stop()` flushes with
+`RF_CMDHANDLE_FLUSH_ALL`, which delivers the *same* Aborted/Cancelled events a
+preemption does, so without it `stop()` would be undone by its own callback and
+`do_set_channel()` - which stops and then re-posts - would queue two background
+receives.
 
-**The fix itself, precisely, for whoever picks this up with a peer device
-on the bench:** in `cmd_ieee_rx_callback()`
-(`zephyr/drivers/ieee802154/ieee802154_cc13xx_cc26xx.c:89-111`), add a
-branch that re-posts `drv_data->cmd_ieee_rx` on exactly the events
-`radiant_cc26xx_execute()`'s `AbortOngoing` produces
-(`RF_EventCmdAborted | RF_EventCmdCancelled | RF_EventCmdPreempted`),
-mirroring the existing post call at
-`ieee802154_cc13xx_cc26xx_do_set_channel()`
-(same file, ~line 218: `RF_postCmd(drv_data->rf_handle, (RF_Op *)&drv_data->
-cmd_ieee_rx, RF_PriorityNormal, cmd_ieee_rx_callback, RF_EventRxEntryDone)`),
-reset `drv_data->cmd_ieee_rx.status = IDLE` first (the command struct is not
-otherwise reset between posts), and do it from the callback's own context
-since `RF_postCmd` is legal there. That is the "roughly fifteen lines"
-figure in the plan this ADR implements. The surrounding build-system
-question above is the actual remaining work, not this callback change.
+**The build-system problem that deferred this turned out to have a clean
+answer, and it is the opposite of the one that was feared.** The worry was
+double-registration: both files register `NET_DEVICE` against the same
+`DT_DRV_COMPAT` node, and Zephyr compiles the original unconditionally under
+`CONFIG_IEEE802154_CC13XX_CC26XX` with no seam to exclude one file. But that
+symbol is a plain `menuconfig bool` off a devicetree node, so `ti_coex.conf`
+simply sets it to **n** and turns ours on instead - exactly one driver
+compiles, one device is registered, the devicetree node is untouched. No
+Zephyr patch, no compatible-string renaming, no re-parenting. Turning it off
+is *required* rather than merely tidy for a second reason nobody predicted:
+`radiant_core/CMakeLists.txt` compiles `driverlib/rfc.c` itself and hal_ti
+compiles it under that same symbol, so leaving it `y` is a duplicate-symbol
+link error.
+
+What did bite, and is worth recognising on sight, is a devicetree problem
+wearing a C compiler's clothes: Zephyr's own `cc26x2r1_launchxl.dts` **disables**
+the `ieee802154` node and deletes the `zephyr,ieee802154` chosen property, so
+the first build failed on `error: '__device_dts_ord_53' undeclared` from
+`DEVICE_DT_INST_GET(0)` inside the vendored driver. Hence `ti_coex.overlay`,
+which must be passed alongside the conf fragment.
+
+**What arm 4 is verified to be, and what it is not.** It builds, it links, the
+fork's object and `radiant_cc26xx_submit` are both in the image, and its
+`.config` asserts positively (`BACKEND_CC26XX_COEX=y`, `MULTI_PATCH=y` by
+selection, `COEX154_CC26XX_FORK=y`, upstream driver absent). **Nothing in it has
+run against an 802.15.4 peer, because this bench has none.** The re-post branch
+has therefore never executed. That asymmetry is the thing to hold onto: the
+ANT-side number this arm produces would be honest either way, since the
+neighbour's endless background receive genuinely contends for the core whether
+or not anyone answers it - but the neighbour's own survival across a preemption,
+which is the entire reason the fork exists, cannot be observed here. A run
+reporting only an ANT loss figure has measured half of what the arm is for.
+
+Still unwritten, and deliberately: the `radiant_core/spike/ti_coex` measurement
+rig the original plan calls for. It needs the same peer.
 
 **R1 is FALSIFIED - the multi-protocol patch does not degrade this PHY.**
 `radiant_core/spike/ti_phy` was built twice (a `SPIKE_TI_PHY_MULTI_PATCH`
