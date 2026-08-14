@@ -521,20 +521,13 @@ config RADIANT_CORE_BACKEND_MPSL
 	  CONFIG_RADIANT_CORE_BACKEND_NRF plus
 	  CONFIG_RADIANT_CORE_BACKEND_NRF_GATE_MPSL.
 
-config RADIANT_CORE_ANTR_API
-	bool "compile the antr_* adapter (src/radiant_api.c)"
-	default y
-	help
-	  src/radiant_api.c is the integration layer: it implements the fifty
-	  antr_* entry points that src/ant_radio.h declares, on top of the
-	  modules below it. It is the only file in the module that reaches out
-	  to an application header, so it is the only one an application-free
-	  build has to be able to leave out.
-
-	  The unit-test application sets this to n. Its suites test the modules,
-	  not the forwarding, and compiling the adapter there would drag
-	  src/ant_radio.h's whole surface into a build that has no bridge to
-	  satisfy it.
+# CONFIG_RADIANT_CORE_ANTR_API and CONFIG_RADIANT_SEC_HOST_MESSAGES used to be
+# declared here. They moved to src/Kconfig.antr_api - an application-side
+# fragment, rsourced by every Kconfig tree that links this module's "core"
+# backend - because the files they gate (src/ant_radio_radiant.c,
+# src/ant_sec_host.c) are the seam between radiant_core and the ANT serial
+# protocol, not core module material. See that file's header for the full
+# reasoning.
 
 config RADIANT_CORE_CRC_REPAIR
 	bool "repair single-bit CRC errors on tracked windows"
@@ -723,19 +716,11 @@ config RADIANT_SEC_MAX_CHANNELS
 	  reset - and zero when CONFIG_RADIANT_SEC is off, because the table
 	  does not exist. Eight matches the legacy ANT+ channel ceiling.
 
-config RADIANT_SEC_HOST_MESSAGES
-	bool "compile the 0xF1-0xF5 host messages"
-	default y
-	depends on RADIANT_CORE_ANTR_API
-	help
-	  src/radiant_sec_host.c: the antr_sec_* adapter behind message IDs
-	  0xF1 (configure), 0xF2 (set key), 0xF3 (epoch), 0xF4 (status) and
-	  0xF5 (pairing). Mirrors the RADIANT_CORE_ANTR_API gate, because this
-	  is the one security file that reaches an application header.
-
-	  Without it the transforms exist and nothing can turn them on, which
-	  is the right shape for a node application that configures its own
-	  channels in C.
+# CONFIG_RADIANT_SEC_HOST_MESSAGES used to be declared here, inside this `if
+# RADIANT_SEC` block. It moved to src/Kconfig.antr_api alongside
+# CONFIG_RADIANT_CORE_ANTR_API (see the note near that symbol, above), and
+# carries an explicit `depends on RADIANT_SEC` now that it is no longer
+# nested inside this block to inherit the dependency implicitly.
 
 config RADIANT_SEC_PAIRING_X25519
 	bool "X25519 pairing over the acknowledged/burst path"

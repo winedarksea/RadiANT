@@ -276,6 +276,13 @@ config USBD_CDC_ACM_CLASS
 
 endif # ANT_DONGLE_TRANSPORT_USB_NEXT
 
+# CONFIG_RADIANT_CORE_ANTR_API and CONFIG_RADIANT_SEC_HOST_MESSAGES: the
+# antr_* adapter's own symbols, shared with strap/ and with
+# radiant_core/tests/api the same way src/node/Kconfig and src/profiles/Kconfig
+# already are. See src/Kconfig.antr_api's header for why they live here and
+# not in radiant_core/Kconfig.
+rsource "src/Kconfig.antr_api"
+
 choice ANT_DONGLE_RADIO
 	prompt "ANT radio backend"
 	default ANT_DONGLE_RADIO_SDK_ANT

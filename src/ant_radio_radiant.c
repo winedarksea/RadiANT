@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * radiant_api.c - integration layer: src/ant_radio.h's antr_* entry points on
- * top of the six radiant_core modules, plus the seams none of them own.
+ * ant_radio_radiant.c (was radiant_core/src/radiant_api.c, before radiant_core
+ * stopped reaching outside itself for src/ant_radio.h) - integration layer:
+ * src/ant_radio.h's antr_* entry points on top of the six radiant_core
+ * modules, plus the seams none of them own.
  *
  * Provenance: clean-room, from src/ant_radio.h, docs/sdk-ant-contract.md,
  * src/ant_wire.h (generated from protocol/ant_wire.yaml), and the radiant_core
@@ -9,11 +11,13 @@
  * any ANT+ device profile document.
  * See docs/decisions/0002-clean-room-policy.md.
  *
- * INCLUDE ORDER IS LOAD-BEARING: src/ant_wire.h must be in scope before
- * radiant_channel.h, whose _Static_asserts (under `#ifdef ANTW_RESPONSE_NO_ERROR`)
- * check its literal response/event codes against the generated wire header.
- * This is the only TU with both headers present, so reversing the order would
- * silently compile the checks out.
+ * Living outside radiant_core now, not inside it: this is the one file that
+ * was always shaped by the seam above the module rather than by the module
+ * itself - see CONFIG_RADIANT_CORE_ANTR_API in src/Kconfig.antr_api for why.
+ * radiant_channel.h's own wire-code cross-check no longer depends on include
+ * order the way it used to: it includes radiant_core's own radiant_wire.h
+ * unconditionally now, rather than gating on whichever translation unit
+ * happened to bring src/ant_wire.h into scope first (this one, always).
  *
  * WHAT THIS FILE OWNS: the key -> address table (no ant_net.c; see below), the
  * SDU mask table, the advanced-burst config block and encryption slots (no
@@ -57,7 +61,7 @@
 #include "ant_wire.h"
 #include "ant_radio.h"
 
-#include <radiant_core/radiant_api.h>
+#include "ant_radio_radiant.h"
 #include <radiant_core/radiant_channel.h>
 #include <radiant_core/radiant_crc_repair.h>
 #include <radiant_core/radiant_event.h>
@@ -433,6 +437,30 @@ void radiant_event_wakeup(void)
 	 * of 1 collapses a burst of arrivals into one wake, which is fine since
 	 * the drain empties the whole queue anyway. */
 	k_sem_give(&api_event_sem);
+}
+
+/*
+ * The fourth port hook, and the one that used to not need one at all:
+ * radiant_event.c called antr_on_message() directly until radiant_core
+ * stopped reaching outside itself for src/ant_radio.h. Now it calls
+ * radiant_on_message() (radiant_core/include/radiant_core/radiant_msg.h,
+ * module-owned), and this is the one-line forward onto the real thing -
+ * a field-for-field copy since struct radiant_msg and struct antr_msg are
+ * layout-identical by construction. src/ant_serial_bridge.c stays the single
+ * definition of antr_on_message() regardless of which radio backend is
+ * compiled in, which is the point: the sdk_ant and stub backends call it
+ * directly, and this file is the only thing that knows the core backend
+ * reaches it through an extra hop.
+ */
+void radiant_on_message(const struct radiant_msg *msg)
+{
+	struct antr_msg m = {
+		.id = msg->id,
+		.len = msg->len,
+		.data = msg->data,
+	};
+
+	antr_on_message(&m);
 }
 
 /*

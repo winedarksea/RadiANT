@@ -22,7 +22,7 @@
 
 #include "fake_radio.h"
 
-#include <radiant_core/radiant_api.h>
+#include "ant_radio_radiant.h"
 #include <radiant_core/radiant_channel.h>
 #include <radiant_core/radiant_event.h>
 #include <radiant_core/radiant_frame.h>

@@ -1,28 +1,32 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * radiant_api.h - what radiant_core presents to the rest of the image.
+ * ant_radio_radiant.h (was radiant_core/include/radiant_core/radiant_api.h) -
+ * what ant_radio_radiant.c presents to the rest of the image, now that it is
+ * the application's own adapter rather than a module header. See
+ * src/Kconfig.antr_api's CONFIG_RADIANT_CORE_ANTR_API for why it moved.
  *
  * Provenance: clean-room, from src/ant_radio.h, docs/sdk-ant-contract.md and
  * the six radiant_core module headers it composes.
  * See docs/decisions/0002-clean-room-policy.md.
  *
- * radiant_api.c's real interface is src/ant_radio.h (the antr_* entry points),
- * plus a few symbols the core modules leave undefined on purpose so a build
- * that forgets one fails at link time: radiant_channel_event_out() (adapts to
- * radiant_event_post_channel_event()), radiant_event_crit_enter/exit()
+ * ant_radio_radiant.c's real interface is src/ant_radio.h (the antr_* entry
+ * points), plus a few symbols the core modules leave undefined on purpose so
+ * a build that forgets one fails at link time: radiant_channel_event_out()
+ * (adapts to radiant_event_post_channel_event()), radiant_event_crit_enter/exit()
  * (irq_lock(), since the producer is a radio ISR and a mutex would be wrong),
- * and radiant_event_wakeup() (semaphore give, O(1), ISR-safe). None belong in
- * a public header; what's left here is the event thread's identity and the
- * integration counters.
+ * radiant_event_wakeup() (semaphore give, O(1), ISR-safe), and
+ * radiant_on_message() (the one-line forward onto antr_on_message()). None
+ * belong in a public header; what's left here is the event thread's identity
+ * and the integration counters.
  *
  * Hard rule: radiant_event_drain() is THREAD CONTEXT ONLY and must never run
  * inside an antr_* call the bridge made (docs/sdk-ant-contract.md forbids
- * re-entering antr_on_message()). radiant_api.c owns a thread that takes the
- * semaphore, drains, and runs housekeeping.
+ * re-entering antr_on_message()). ant_radio_radiant.c owns a thread that
+ * takes the semaphore, drains, and runs housekeeping.
  */
 
-#ifndef RADIANT_API_H_
-#define RADIANT_API_H_
+#ifndef ANT_RADIO_RADIANT_H_
+#define ANT_RADIO_RADIANT_H_
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -134,4 +138,4 @@ bool radiant_api_ready(void);
 }
 #endif
 
-#endif /* RADIANT_API_H_ */
+#endif /* ANT_RADIO_RADIANT_H_ */

@@ -10,6 +10,7 @@
 
 rsource "../src/node/Kconfig"
 rsource "../src/profiles/Kconfig"
+rsource "../src/Kconfig.antr_api"
 
 source "Kconfig.zephyr"
 

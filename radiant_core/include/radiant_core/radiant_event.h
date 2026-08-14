@@ -1,17 +1,18 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  * radiant_event.h - the event queue, and the assembly of a received frame into the
- * flat struct antr_msg the serial bridge implements.
+ * flat struct radiant_msg that radiant_on_message() carries out of the module.
  *
- * Provenance: clean-room, from src/ant_radio.h and docs/sdk-ant-contract.md
- * (event path, burst buffer-ownership, threading), src/ant_wire.h (generated
- * from protocol/ant_wire.yaml) for wire constants, radiant_radio_hal.h for
+ * Provenance: clean-room, from radiant_msg.h (this module's own copy of what
+ * used to be reached as src/ant_radio.h) and docs/sdk-ant-contract.md (event
+ * path, burst buffer-ownership, threading), radiant_wire.h (generated from
+ * protocol/ant_wire.yaml) for wire constants, radiant_radio_hal.h for
  * the t_sync contract, radiant_frame.h for the channel ID, and
  * tools/ant_verify.py's extended_fields() for the decoder this must invert.
  * See docs/decisions/0002-clean-room-policy.md.
  *
  * Everything chip -> host goes through here and leaves via one call,
- * antr_on_message(). Two halves: THE QUEUE - radio callbacks run in
+ * radiant_on_message(). Two halves: THE QUEUE - radio callbacks run in
  * interrupt context, must not block or retain the received body (a DMA
  * buffer reused the instant the callback returns; radiant_core/tests/fake_radio.c
  * overwrites it with 0xDD to make a violation reproducible), so a callback
@@ -47,14 +48,14 @@
  * A backend with caps.has_sync_timestamp false still fills t_sync
  * best-effort but clears t_sync_exact; the rule is to *suppress* rather than
  * report a worse number as if accurate, so by default an inexact stamp
- * clears ANTW_EXT_FLAG_RX_TIMESTAMP for that message (counted in
+ * clears RADIANT_WIRE_EXT_FLAG_RX_TIMESTAMP for that message (counted in
  * radiant_event_stats.ts_suppressed; RADIANT_EVENT_TS_BEST_EFFORT opts back
  * in for bench use). Same rule for RSSI: has_rssi false suppresses the flag
  * rather than emitting an implausible 0 dBm.
  *
- * Event codes are wire values: antr_err_t and every ANTW_EVENT_* code raised
+ * Event codes are wire values: radiant_msg_err_t and every RADIANT_WIRE_EVENT_* code raised
  * here is the literal wire byte (tools/ant_conformance.py byte-diffs it),
- * always from src/ant_wire.h, never invented. Three codes also carry buffer
+ * always from radiant_wire.h, never invented. Three codes also carry buffer
  * ownership, releasing the bridge's single 24-byte burst block
  * (src/ant_serial_bridge.c:452-502): TRANSFER_NEXT_DATA_BLOCK (once per
  * non-final accepted block), TRANSFER_TX_COMPLETED, TRANSFER_TX_FAILED.
@@ -82,13 +83,15 @@
 #include <radiant_core/radiant_radio_hal.h>  /* radiant_time_t, struct radiant_rx_event */
 
 /*
- * The output format. This module exists to produce struct antr_msg and to call
- * antr_on_message(), so the dependency is the point rather than a leak: it is
- * the one place in radiant_core that knows the shape of the seam above it.
- * src/ant_radio.h pulls in src/ant_wire.h, which is where every ANTW_* value
- * below comes from.
+ * The output format. This module exists to produce struct radiant_msg and to
+ * call radiant_on_message(), so the dependency is the point rather than a
+ * leak: it is the one place in radiant_core that knows the shape of the seam
+ * above it. radiant_wire.h is where every RADIANT_WIRE_* value below comes
+ * from - both module-owned, so this header never has to leave radiant_core to
+ * be complete.
  */
-#include "ant_radio.h"
+#include <radiant_core/radiant_msg.h>
+#include <radiant_core/radiant_wire.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -97,18 +100,18 @@ extern "C" {
 /* ---------------------------------------------------------------------------
  * Return codes - negative, module-private internal outcomes, never
  * forwarded to the host. Functions answering a host message (the library
- * configuration setters) return antr_err_t instead, marked as such.
+ * configuration setters) return radiant_msg_err_t instead, marked as such.
  * ---------------------------------------------------------------------------
  */
 #define RADIANT_EVENT_OK        0
 #define RADIANT_EVENT_EINVAL  (-1)  /* null pointer, bad channel, bad length */
 #define RADIANT_EVENT_ENOSPC  (-2)  /* the queue is full; the message was dropped
-				 * and ANTW_EVENT_QUE_OVERFLOW will be raised */
+				 * and RADIANT_WIRE_EVENT_QUE_OVERFLOW will be raised */
 #define RADIANT_EVENT_ECRC    (-3)  /* the HAL event did not carry a verified CRC.
 				 * See radiant_event_post_rx() - this is a refusal,
 				 * not a failure */
 #define RADIANT_EVENT_ESTATE  (-4)  /* posted before radiant_event_init(), or a drain
-				 * re-entered from inside antr_on_message() */
+				 * re-entered from inside radiant_on_message() */
 
 /* ---------------------------------------------------------------------------
  * Sizing
@@ -118,15 +121,15 @@ extern "C" {
 /* Highest channel number expressible on the wire. The burst header's low five
  * bits are the channel, so this is a protocol fact rather than a policy
  * choice, and it is what makes 32 the natural target. */
-#define RADIANT_EVENT_CHANNEL_MAX  ANTW_BURST_HEADER_CHANNEL_MASK
+#define RADIANT_EVENT_CHANNEL_MAX  RADIANT_WIRE_BURST_HEADER_CHANNEL_MASK
 
 /* Longest payload one queued message can carry. An advanced-burst block is 8,
- * 16 or 24 bytes (ANTW_ADV_BURST_BLOCK_MAX); everything else is 8. */
-#define RADIANT_EVENT_PAYLOAD_MAX  ANTW_ADV_BURST_BLOCK_MAX
+ * 16 or 24 bytes (RADIANT_WIRE_ADV_BURST_BLOCK_MAX); everything else is 8. */
+#define RADIANT_EVENT_PAYLOAD_MAX  RADIANT_WIRE_ADV_BURST_BLOCK_MAX
 
 /* The body before any extended tail: the channel byte plus the payload. This
- * is what antr_msg.len counts, so it counts the channel byte too. */
-#define RADIANT_EVENT_BODY_MAX     (ANTW_CHANNEL_NUM_SIZE + RADIANT_EVENT_PAYLOAD_MAX)
+ * is what radiant_msg.len counts, so it counts the channel byte too. */
+#define RADIANT_EVENT_BODY_MAX     (RADIANT_WIRE_CHANNEL_NUM_SIZE + RADIANT_EVENT_PAYLOAD_MAX)
 
 /* The extended tail at its longest: flag byte + 4 + 3 + 2. */
 #define RADIANT_EVENT_EXT_MAX      10u
@@ -149,17 +152,17 @@ extern "C" {
 #endif
 
 /* Library configuration bits this module implements. Anything outside it is
- * refused with ANTW_INVALID_PARAMETER_PROVIDED rather than silently ignored.
+ * refused with RADIANT_WIRE_INVALID_PARAMETER_PROVIDED rather than silently ignored.
  *
- * ANTW_LIB_CONFIG_RADIO_CONFIG_ALWAYS is a no-op by construction: HAL rule 6
+ * RADIANT_WIRE_LIB_CONFIG_RADIO_CONFIG_ALWAYS is a no-op by construction: HAL rule 6
  * already reconfigures per-operation regardless of this bit, so accepting
  * it is honest, not a pretence. Which bits a real stick refuses is pinned
  * by tools/ant_conformance.py's byte diff. */
 #define RADIANT_EVENT_LIB_CONFIG_SUPPORTED                                       \
-	((uint8_t)(ANTW_LIB_CONFIG_RADIO_CONFIG_ALWAYS |                     \
-		   ANTW_LIB_CONFIG_MESG_OUT_INC_TIME_STAMP |                 \
-		   ANTW_LIB_CONFIG_MESG_OUT_INC_RSSI |                       \
-		   ANTW_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID))
+	((uint8_t)(RADIANT_WIRE_LIB_CONFIG_RADIO_CONFIG_ALWAYS |                     \
+		   RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_TIME_STAMP |                 \
+		   RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_RSSI |                       \
+		   RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID))
 
 /* ---------------------------------------------------------------------------
  * Two hooks the port provides
@@ -200,7 +203,7 @@ void radiant_event_wakeup(void);
  * zeroed, statistics cleared, timestamp policy back to default.
  *
  * Call from antr_init() BEFORE the radio is enabled. Posting before this
- * returns is RADIANT_EVENT_ESTATE, mirroring the antr_on_message() rule.
+ * returns is RADIANT_EVENT_ESTATE, mirroring the radiant_on_message() rule.
  */
 void radiant_event_init(void);
 
@@ -211,7 +214,7 @@ void radiant_event_init(void);
  * Discarding, not draining, is correct: a real stick emits nothing between
  * reset and the startup message (the bridge discards inbound events for
  * 50 ms for that reason), and draining here would recursively call
- * antr_on_message() from inside an antr_* call, which
+ * radiant_on_message() from inside an antr_* call, which
  * docs/sdk-ant-contract.md forbids. Discards counted in
  * radiant_event_stats.dropped_flush; stats themselves are not cleared, so a
  * mid-session reset stays visible to a test.
@@ -226,23 +229,23 @@ void radiant_event_flush(void);
 /*
  * Turn bits on. Additive: setting one leaves the others alone.
  *
- * Returns ANTW_RESPONSE_NO_ERROR, or ANTW_INVALID_PARAMETER_PROVIDED for any
+ * Returns RADIANT_WIRE_RESPONSE_NO_ERROR, or RADIANT_WIRE_INVALID_PARAMETER_PROVIDED for any
  * bit outside RADIANT_EVENT_LIB_CONFIG_SUPPORTED. Nothing is applied when
  * refused - a host can't tell which half of a partial configuration took.
  */
-antr_err_t radiant_event_lib_config_set(uint8_t config);
+radiant_msg_err_t radiant_event_lib_config_set(uint8_t config);
 
 /*
- * Turn bits off. Accepts anything, including ANTW_LIB_CONFIG_MASK_ALL, which
+ * Turn bits off. Accepts anything, including RADIANT_WIRE_LIB_CONFIG_MASK_ALL, which
  * is how the bridge expresses the host's "set the configuration to zero" -
  * there is no separate clear message on the wire. Returns
- * ANTW_RESPONSE_NO_ERROR.
+ * RADIANT_WIRE_RESPONSE_NO_ERROR.
  */
-antr_err_t radiant_event_lib_config_clear(uint8_t config);
+radiant_msg_err_t radiant_event_lib_config_clear(uint8_t config);
 
-/* The current bits. Returns ANTW_RESPONSE_NO_ERROR; *config is untouched when
- * it is NULL, which is ANTW_INVALID_PARAMETER_PROVIDED. */
-antr_err_t radiant_event_lib_config_get(uint8_t *config);
+/* The current bits. Returns RADIANT_WIRE_RESPONSE_NO_ERROR; *config is untouched when
+ * it is NULL, which is RADIANT_WIRE_INVALID_PARAMETER_PROVIDED. */
+radiant_msg_err_t radiant_event_lib_config_get(uint8_t *config);
 
 /* ---------------------------------------------------------------------------
  * Event filtering - stored, honoured by nobody, deliberately
@@ -253,8 +256,8 @@ antr_err_t radiant_event_lib_config_get(uint8_t *config);
  * must be 0" is an A/B gate). So: storage plus a getter, no filtering.
  * ---------------------------------------------------------------------------
  */
-antr_err_t radiant_event_filter_set(uint16_t filter);
-antr_err_t radiant_event_filter_get(uint16_t *filter);
+radiant_msg_err_t radiant_event_filter_set(uint16_t filter);
+radiant_msg_err_t radiant_event_filter_get(uint16_t *filter);
 
 /* ---------------------------------------------------------------------------
  * The timestamp downgrade policy
@@ -348,15 +351,15 @@ struct radiant_event_rx {
 	 * duration of the call. */
 	const struct radiant_rx_event *hal;
 
-	/* ANTW_MESG_BROADCAST_DATA_ID, ANTW_MESG_ACKNOWLEDGED_DATA_ID or
-	 * ANTW_MESG_BURST_DATA_ID. Nothing else is a received data message. */
+	/* RADIANT_WIRE_MESG_BROADCAST_DATA_ID, RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID or
+	 * RADIANT_WIRE_MESG_BURST_DATA_ID. Nothing else is a received data message. */
 	uint8_t msg_id;
 
 	/* 0 .. RADIANT_EVENT_CHANNEL_MAX. */
 	uint8_t channel;
 
 	/*
-	 * Burst framing, for ANTW_MESG_BURST_DATA_ID only. Serial burst
+	 * Burst framing, for RADIANT_WIRE_MESG_BURST_DATA_ID only. Serial burst
 	 * header is [last<<7 | seq<<5 | channel], seq field 2 bits wide.
 	 * This is a serial-layer counter, NOT the on-air sequence bit,
 	 * which is a single alternating bit with no wider form
@@ -390,14 +393,14 @@ struct radiant_event_rx {
  * into phantom sensors.
  *
  * Returns RADIANT_EVENT_OK, ECRC, EINVAL, ENOSPC or ESTATE. ENOSPC is a
- * dropped message, counted, followed by ANTW_EVENT_QUE_OVERFLOW to the host
+ * dropped message, counted, followed by RADIANT_WIRE_EVENT_QUE_OVERFLOW to the host
  * - never a silent loss.
  */
 int radiant_event_post_rx(const struct radiant_event_rx *rx);
 
 /*
- * Queue a channel event: [channel][ANTW_MESG_EVENT_ID][code] under message
- * ID ANTW_MESG_RESPONSE_EVENT_ID, the shape every ANTW_EVENT_* takes.
+ * Queue a channel event: [channel][RADIANT_WIRE_MESG_EVENT_ID][code] under message
+ * ID RADIANT_WIRE_MESG_RESPONSE_EVENT_ID, the shape every RADIANT_WIRE_EVENT_* takes.
  *
  * Safe from the radio callback. `code` is not validated against a list -
  * eleven exist today and the set grows, so a whitelist would silently
@@ -427,19 +430,19 @@ int radiant_event_post_raw(uint8_t msg_id, const uint8_t *body, uint8_t len);
 static inline int radiant_event_post_transfer_next_block(uint8_t channel)
 {
 	return radiant_event_post_channel_event(
-		channel, (uint8_t)ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK);
+		channel, (uint8_t)RADIANT_WIRE_EVENT_TRANSFER_NEXT_DATA_BLOCK);
 }
 
 static inline int radiant_event_post_transfer_tx_completed(uint8_t channel)
 {
 	return radiant_event_post_channel_event(
-		channel, (uint8_t)ANTW_EVENT_TRANSFER_TX_COMPLETED);
+		channel, (uint8_t)RADIANT_WIRE_EVENT_TRANSFER_TX_COMPLETED);
 }
 
 static inline int radiant_event_post_transfer_tx_failed(uint8_t channel)
 {
 	return radiant_event_post_channel_event(
-		channel, (uint8_t)ANTW_EVENT_TRANSFER_TX_FAILED);
+		channel, (uint8_t)RADIANT_WIRE_EVENT_TRANSFER_TX_FAILED);
 }
 
 /* ---------------------------------------------------------------------------
@@ -452,18 +455,18 @@ static inline int radiant_event_post_transfer_tx_failed(uint8_t channel)
 bool radiant_event_pending(void);
 
 /*
- * Assemble and deliver queued messages through antr_on_message(), oldest
+ * Assemble and deliver queued messages through radiant_on_message(), oldest
  * first, returning how many were delivered. max_msgs bounds one call; 0
  * means "everything currently queued".
  *
- * THREAD CONTEXT ONLY. antr_on_message() must not be re-entered or called
+ * THREAD CONTEXT ONLY. radiant_on_message() must not be re-entered or called
  * from inside an antr_* call the bridge made, so the drain belongs on
  * radiant_api.c's own thread/work queue, woken by radiant_event_wakeup(). A
- * drain re-entered from inside antr_on_message() delivers nothing and
+ * drain re-entered from inside radiant_on_message() delivers nothing and
  * returns zero.
  *
  * FIFO, never reordered. A message dropped for a full ring is reported as
- * ANTW_EVENT_QUE_OVERFLOW on channel 0 at the head of the next drain - at
+ * RADIANT_WIRE_EVENT_QUE_OVERFLOW on channel 0 at the head of the next drain - at
  * the head rather than in position so a busy ring can't starve the report.
  */
 uint32_t radiant_event_drain(uint32_t max_msgs);
@@ -478,7 +481,7 @@ uint32_t radiant_event_drain(uint32_t max_msgs);
  */
 struct radiant_event_stats {
 	uint32_t posted;            /* accepted onto the ring */
-	uint32_t delivered;         /* handed to antr_on_message() */
+	uint32_t delivered;         /* handed to radiant_on_message() */
 	uint32_t dropped_full;      /* refused RADIANT_EVENT_ENOSPC */
 	uint32_t dropped_flush;     /* discarded by radiant_event_flush() */
 	uint32_t rejected_crc;      /* refused RADIANT_EVENT_ECRC - the noise gate */
@@ -486,7 +489,7 @@ struct radiant_event_stats {
 	uint32_t ts_suppressed;     /* RX timestamp asked for, not exact,
 				     * downgraded to absent */
 	uint32_t rssi_suppressed;   /* RSSI asked for, backend has none */
-	uint32_t overflow_marks;    /* ANTW_EVENT_QUE_OVERFLOW messages sent */
+	uint32_t overflow_marks;    /* RADIANT_WIRE_EVENT_QUE_OVERFLOW messages sent */
 
 	/* The three release codes, counted separately so the burst
 	 * buffer-ownership obligation is assertable. */

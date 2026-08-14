@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The antr_* adapter's Kconfig, shared between every application that links
+# radiant_core's "core" backend: rsourced by the root Kconfig, by strap/Kconfig
+# and by radiant_core/tests/api/Kconfig, the same way src/node/Kconfig and
+# src/profiles/Kconfig already are.
+#
+# WHY THIS FILE EXISTS, SEPARATELY FROM radiant_core/Kconfig: both symbols
+# below used to live there, because src/radiant_api.c and src/radiant_sec_host.c
+# used to be compiled AS PART OF the radiant_core module (Kconfig-gated with
+# zephyr_library_sources_ifdef()). They have moved out - to
+# src/ant_radio_radiant.c and src/ant_sec_host.c - because they are, and always
+# were, the seam between radiant_core and the ANT serial protocol rather than
+# core module material: the one file (each) that reaches an application
+# header. Their Kconfig symbols moved with them, for the same reason
+# CONFIG_ANT_DONGLE_RADIO_* lives in the root Kconfig and not in any module's:
+# a symbol that gates an application source list belongs in that application's
+# Kconfig tree, not in a Zephyr module meant to be dropped into a project with
+# nothing else from this repository on its include path.
+#
+# The symbol NAMES did not change - only where they are declared - so nothing
+# that already says CONFIG_RADIANT_CORE_ANTR_API or
+# CONFIG_RADIANT_SEC_HOST_MESSAGES (a .conf fragment, a testcase.yaml
+# extra_configs block, a comment) needed to change with them.
+
+config RADIANT_CORE_ANTR_API
+	bool "compile the antr_* adapter (src/ant_radio_radiant.c)"
+	default y
+	help
+	  src/ant_radio_radiant.c is the integration layer: it implements the
+	  fifty antr_* entry points that src/ant_radio.h declares, on top of
+	  radiant_core's modules. It used to be compiled as part of the
+	  radiant_core Zephyr module, gated by this very symbol under a
+	  zephyr_library_sources_ifdef() there; it moved out so the module
+	  never has to reach an application header to build - see
+	  radiant_core/include/radiant_core/radiant_msg.h for what replaced
+	  the reach-through this adapter used to provide from inside the
+	  module.
+
+	  radiant_core/tests/api sets this to y unconditionally in its own
+	  CMakeLists.txt now (not through this symbol - see that file) because
+	  compiling the adapter is the whole point of that application; the
+	  parent radiant_core/tests suite never adds it at all, for the
+	  opposite reason - its suites test the modules, not the forwarding,
+	  and compiling the adapter there would drag src/ant_radio.h's whole
+	  surface into a build that has no bridge to satisfy it.
+
+config RADIANT_SEC_HOST_MESSAGES
+	bool "compile the 0xF1-0xF5 host messages"
+	default y
+	depends on RADIANT_CORE_ANTR_API && RADIANT_SEC
+	help
+	  src/ant_sec_host.c: the antr_sec_* adapter behind message IDs 0xF1
+	  (configure), 0xF2 (set key), 0xF3 (epoch), 0xF4 (status) and 0xF5
+	  (pairing). Mirrors RADIANT_CORE_ANTR_API's gate - this is the one
+	  security file that reaches an application header - and depends on
+	  RADIANT_SEC directly now that it no longer lives inside that
+	  symbol's `if` block in radiant_core/Kconfig; moving here took it out
+	  from under that nesting; the effective constraint (both together)
+	  is unchanged.
+
+	  Without it the transforms exist and nothing can turn them on, which
+	  is the right shape for a node application that configures its own
+	  channels in C.

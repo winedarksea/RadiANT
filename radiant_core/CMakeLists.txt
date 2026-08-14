@@ -39,17 +39,18 @@ if(NOT CONFIG_RADIANT_CORE)
   return()
 endif()
 
-# include/ carries the namespaced <radiant_core/...> headers.
-#
-# ../src is here for src/radiant_event.c and src/radiant_api.c alone. Their
-# *output* format is struct antr_msg and antr_on_message(), which live in
-# src/ant_radio.h and pull in src/ant_wire.h - the generated header every
-# ANTW_* value in radiant_core comes from. Both are plain headers with no
-# application dependency, so this costs the build nothing. Note the asymmetry
-# deliberately: radiant_event.c is the only *module* allowed to know the wire
-# format, because it is the only one that produces it. Everything below it
-# speaks frames and channels.
-zephyr_include_directories(include ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+# include/ carries the namespaced <radiant_core/...> headers - and nothing
+# else. There used to be a second directory here, ../src, reached for
+# src/radiant_event.c and src/radiant_api.c's output format (struct antr_msg,
+# antr_on_message(), the generated ANTW_* wire constants) - a self-containment
+# violation for a module meant to be dropped into a project with nothing else
+# from this repository on its include path. radiant_msg.h and radiant_wire.h
+# (both in include/) are what replaced it: radiant_event.c now produces struct
+# radiant_msg and calls radiant_on_message(), both module-owned, and
+# radiant_api.c moved out entirely to src/ant_radio_radiant.c, where the
+# antr_* names it always spoke belong. See those two headers' own comments for
+# the full story.
+zephyr_include_directories(include)
 
 zephyr_library()
 zephyr_library_sources(
@@ -68,20 +69,17 @@ zephyr_library_sources(
 # application can exercise the arithmetic whether or not a given build turns
 # the feature on, so the syndrome table's duplicate check runs in CI on every
 # build instead of only on the ones that opted in. CONFIG_RADIANT_CORE_CRC_REPAIR
-# gates the CALL SITE in src/radiant_api.c, which is where the false-accept
-# trade-off is actually taken.
+# gates the CALL SITE in src/ant_radio_radiant.c (application-side; it moved
+# out of this module, see the note on zephyr_include_directories() above),
+# which is where the false-accept trade-off is actually taken.
 zephyr_library_sources(src/radiant_crc_repair.c)
 
 # The third refutation for a repaired frame: is the payload a physically
 # possible reading, for the handful of device types where that is decidable
 # from one frame. Compiled unconditionally for the same reason as
 # radiant_crc_repair.c above; CONFIG_RADIANT_CORE_PROFILE_SANITY gates the
-# call site in src/radiant_api.c.
+# call site in src/ant_radio_radiant.c.
 zephyr_library_sources(src/radiant_profile_sanity.c)
-
-# The antr_* adapter. Kconfig-gated because it is the one file here that
-# includes an application header; see RADIANT_CORE_ANTR_API.
-zephyr_library_sources_ifdef(CONFIG_RADIANT_CORE_ANTR_API src/radiant_api.c)
 
 # The channel-quality map. Gated rather than compiled unconditionally like
 # radiant_crc_repair.c above, and the difference is the same one the security
@@ -121,11 +119,13 @@ zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_RNG_PSA src/radiant_sec_rng_psa.
 # src/profiles/'s business; this authenticates bytes.
 zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_COMPAT src/radiant_sec_compat.c)
 
-# The host surface, under its own symbol because it is the one security file
-# that reaches an application header - a node with a key baked in and no serial
-# host has no use for 0xF1-0xF4 and should not link them.
-zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_HOST_MESSAGES
-			     src/radiant_sec_host.c)
+# The host surface - src/ant_sec_host.c - moved out to the application beside
+# radiant_api.c, for the same reason: it is the one security file that reaches
+# an application header. CONFIG_RADIANT_SEC_HOST_MESSAGES now lives in
+# src/Kconfig.antr_api and gates root/strap's own CMakeLists.txt instead of a
+# source line here. A node with a key baked in and no serial host still has no
+# use for 0xF1-0xF4 and still should not link them - that choice just belongs
+# to the application now, same as CONFIG_RADIANT_CORE_ANTR_API's did.
 
 # X25519, under its own symbol and in src/ext/ because it is a standard
 # algorithm rather than RadiANT protocol logic - the directory is the signal

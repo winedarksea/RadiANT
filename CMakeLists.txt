@@ -1,72 +1,10 @@
 cmake_minimum_required(VERSION 3.20.0)
 
-# ── How a build setting reaches this file under sysbuild ────────────────────
-#
-# Everything below has to be decided *before* find_package(Zephyr), because
-# `list(APPEND ZEPHYR_EXTRA_MODULES ...)` is read during it. That rules out
-# every Zephyr helper - zephyr_get(), the sysbuild_cache target, zephyr_file()
-# - since none of them exist yet. It also rules out Kconfig, which is why the
-# backend is a CMake cache variable and Kconfig only mirrors the result.
-#
-# What is left is the sysbuild cache file, and reading it by hand is not a
-# workaround - it is the only mechanism that works here, so it is worth
-# recording exactly what was measured:
-#
-#   west build ... -- -DANT_MODULE_DIR=X   lands in the *sysbuild* CMake cache.
-#     Sysbuild copies its whole cache into <build>/<image>_sysbuild_cache.txt
-#     and hands the image `-DSYSBUILD_CACHE:FILEPATH=<that file>`. The image
-#     loads it onto a `sysbuild_cache` target, but nothing reads an entry from
-#     there unless someone calls zephyr_get(<name>) - which we cannot, this
-#     early. So the value is present and inert, and the image keeps its own
-#     default. Silently.
-#   -Dant_dongle_ANT_MODULE_DIR=X          same story, one scope narrower: it
-#     appears in the sysbuild cache as an UNINITIALIZED entry and is likewise
-#     never read.
-#   --no-sysbuild, or the SDK_ANT_DIR environment variable, do work - because
-#     then the value is in this CMake process's own cache or environment.
-#
-# That difference matters more than it looks: `build_all.ps1`'s fourth
-# assertion and CI's "no sdk-ant on disk" job both *prove* independence by
-# pointing ANT_MODULE_DIR at a path that cannot exist. If the override never
-# reached the image, those builds would quietly resolve the real checkout and
-# pass while proving nothing - a green light that means nothing is worse than
-# no light at all.
-#
-# So: parse the sysbuild cache file ourselves, with zephyr_get()'s own
-# precedence (image-local `<image>_<VAR>` beats global `<VAR>`), and let the
-# ordinary CMake cache and the environment take over below when sysbuild is
-# not in the picture.
-function(ant_sysbuild_value var out)
-  set(${out} "" PARENT_SCOPE)
-  if(NOT SYSBUILD OR NOT DEFINED SYSBUILD_CACHE OR NOT EXISTS "${SYSBUILD_CACHE}")
-    return()
-  endif()
-
-  file(STRINGS "${SYSBUILD_CACHE}" _lines ENCODING UTF-8)
-
-  # The image's own name, as sysbuild knows it - "ant_dongle" here, but read it
-  # rather than assume it, because it is what prefixes an image-local setting.
-  set(_image "")
-  foreach(_line IN LISTS _lines)
-    if(_line MATCHES "^SYSBUILD_NAME:[^=]*=(.*)$")
-      set(_image "${CMAKE_MATCH_1}")
-    endif()
-  endforeach()
-
-  set(_names "${var}")
-  if(_image)
-    list(PREPEND _names "${_image}_${var}")
-  endif()
-
-  foreach(_name IN LISTS _names)
-    foreach(_line IN LISTS _lines)
-      if(_line MATCHES "^${_name}:[^=]*=(.*)$")
-        set(${out} "${CMAKE_MATCH_1}" PARENT_SCOPE)
-        return()
-      endif()
-    endforeach()
-  endforeach()
-endfunction()
+# The sysbuild-cache reader and the RADIANT_BACKEND selection/assertion
+# machinery are shared with every other RadiANT app (strap/ today; more as
+# they land) rather than copy-pasted - see that file for the sysbuild
+# mechanics this depends on.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/radiant_backend.cmake")
 
 # ── Where sdk-ant is ────────────────────────────────────────────────────────
 #
@@ -85,7 +23,7 @@ endfunction()
 #      manual `git clone` alongside this repository naturally lands, so the
 #      common case needs no configuration at all.
 # Neither is a guess about a particular user's home directory.
-ant_sysbuild_value(ANT_MODULE_DIR ANT_MODULE_DIR_SYSBUILD)
+radiant_sysbuild_value(ANT_MODULE_DIR ANT_MODULE_DIR_SYSBUILD)
 if(ANT_MODULE_DIR_SYSBUILD)
   # FORCE, because sysbuild is the outer authority: on a re-configure our own
   # cache entry from the previous run would otherwise win over a changed -D.
@@ -131,9 +69,15 @@ endif()
 # CONFIG_RADIANT_CORE=n positively, rather than proving nothing by the module's
 # absence. radiant_core/CMakeLists.txt returns immediately when the symbol is
 # n, so an sdk_ant build cannot reach a <radiant_core/...> header either.
-list(APPEND ZEPHYR_EXTRA_MODULES "${CMAKE_CURRENT_SOURCE_DIR}/radiant_core")
+#
+# The HAL backend is resolved here too (radiant_select_backend(), from
+# cmake/radiant_backend.cmake), even though it is only used below when
+# ANT_RADIO=core: resolving it once, unconditionally, is simpler than
+# threading it through both ANT_RADIO branches, and a stray RADIANT_BACKEND
+# cache entry on an sdk_ant/stub build is harmless since nothing reads it.
+radiant_select_backend("${CMAKE_CURRENT_SOURCE_DIR}/radiant_core" "null" RADIANT_BACKEND_CONF)
 
-ant_sysbuild_value(ANT_RADIO ANT_RADIO_SYSBUILD)
+radiant_sysbuild_value(ANT_RADIO ANT_RADIO_SYSBUILD)
 if(ANT_RADIO_SYSBUILD)
   set(ANT_RADIO "${ANT_RADIO_SYSBUILD}" CACHE STRING
       "ANT radio backend: sdk_ant, core or stub" FORCE)
@@ -213,45 +157,9 @@ CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED=8
 CONFIG_ANT_BURST_QUEUE_SIZE=256
 ")
 elseif(ANT_RADIO STREQUAL "core")
-  # Which HAL backend radiant_core links. It has to be stated here rather than
-  # left to a -DCONFIG_ override or an EXTRA_CONF_FILE, because this fragment is
-  # merged LAST and would silently win against either - which is exactly what it
-  # is for everywhere else, and exactly what makes it a trap here.
-  #
-  # Forwarded from sysbuild the same way ANT_RADIO is, and for the same reason:
-  # `west build -- -DRADIANT_BACKEND=nrf` sets it on the SYSBUILD cache, not on
-  # this image's, so without this the flag is accepted and silently ignored -
-  # which is how a "verified" build of the nrf backend turns out to have
-  # compiled the null one.
-  ant_sysbuild_value(RADIANT_BACKEND RADIANT_BACKEND_SYSBUILD)
-  if(RADIANT_BACKEND_SYSBUILD)
-    set(RADIANT_BACKEND "${RADIANT_BACKEND_SYSBUILD}" CACHE STRING
-        "radiant_core HAL backend: null, nrf or cc26xx" FORCE)
-  else()
-    set(RADIANT_BACKEND "null" CACHE STRING
-        "radiant_core HAL backend: null (refuses every arm), nrf (the RADIO) or cc26xx (TI's RF core)")
-  endif()
-  set_property(CACHE RADIANT_BACKEND PROPERTY STRINGS null nrf cc26xx)
-
-  if(RADIANT_BACKEND STREQUAL "null")
-    set(RADIANT_BACKEND_CONF "CONFIG_RADIANT_CORE_BACKEND_NULL=y")
-  elseif(RADIANT_BACKEND STREQUAL "nrf")
-    set(RADIANT_BACKEND_CONF "CONFIG_RADIANT_CORE_BACKEND_NRF=y")
-  elseif(RADIANT_BACKEND STREQUAL "cc26xx")
-    set(RADIANT_BACKEND_CONF "CONFIG_RADIANT_CORE_BACKEND_CC26XX=y")
-  else()
-    message(FATAL_ERROR
-      "ant_dongle: RADIANT_BACKEND='${RADIANT_BACKEND}' is not a backend.\n"
-      "  null    the lifecycle and the clock are real; every arm is refused.\n"
-      "  nrf     the RADIO, one TIMER and four (D)PPI channels, owned\n"
-      "          outright. Receives AND transmits - see\n"
-      "          radiant_core/src/radiant_radio_nrf.c.\n"
-      "  cc26xx  TI's RF core in proprietary mode, on CC13x2/CC26x2. Needs\n"
-      "          the hal_ti module - see scripts/fetch_hal_ti.ps1.\n"
-      "Pass one with -DRADIANT_BACKEND=<value>.")
-  endif()
-  message(STATUS "ant_dongle: radiant_core HAL backend ${RADIANT_BACKEND}")
-
+  # RADIANT_BACKEND and its Kconfig-fragment text (RADIANT_BACKEND_CONF) were
+  # already resolved above by radiant_select_backend(), unconditionally, so
+  # that both ANT_RADIO branches above it could stay untouched by the change.
   set(ANT_RADIO_CONF
 "# Generated by CMakeLists.txt from -DANT_RADIO. Do not edit; do not commit.
 CONFIG_ANT_DONGLE_RADIO_CORE=y
@@ -284,50 +192,11 @@ project(ant_dongle)
 
 # ── The backend actually compiled is the backend that was asked for ──────────
 #
-# ANT_RADIO_CONF above writes CONFIG_RADIANT_CORE_BACKEND_NRF=y into a fragment
-# merged last, so it cannot lose to another fragment. It CAN still lose to
-# Kconfig itself: the symbol has dependencies, and an unmet one makes the
-# assignment a no-op that falls back to the choice default. Zephyr prints a
-# warning about that among a hundred others and carries on.
-#
-# It is not hypothetical and it is not cheap. RADIANT_CORE_BACKEND_NRF used to
-# depend on SOC_SERIES_NRF52X || SOC_SERIES_NRF54LX; Zephyr 4.4 renamed both, so
-# every -DRADIANT_BACKEND=nrf build on NCS v3.4.0 silently compiled the null
-# backend - an image that enumerates, answers the host, runs every state machine
-# and finds no sensors, which looks exactly like a radio that is not working.
-# The dependency is fixed; this is what makes the next one loud on the first
-# build rather than after a bench session.
-#
-# WRITTEN AGAINST THE VALUE RATHER THAN AGAINST `nrf` SPECIFICALLY, and that
-# generalisation is the point of it now. The cc26xx arm has to depend on
-# SOC_SERIES_CC13X2_CC26X2 - there is no SOC_COMPATIBLE_* symbol for any TI
-# part, so the construct this guard was written to survive is the only one
-# available there. A guard that covered one backend would have let the second
-# one walk into the same trap.
+# See cmake/radiant_backend.cmake's radiant_assert_backend() for the full
+# rationale and what it has caught before (twice, on the Nordic side). Only
+# relevant when ANT_RADIO chose radiant_core in the first place.
 if(ANT_RADIO STREQUAL "core")
-  string(TOUPPER "${RADIANT_BACKEND}" RADIANT_BACKEND_UPPER)
-  if(NOT CONFIG_RADIANT_CORE_BACKEND_${RADIANT_BACKEND_UPPER})
-    # Which one Kconfig did land on, so the message names the image that was
-    # actually built rather than only the one that was not.
-    set(RADIANT_BACKEND_GOT "none at all")
-    foreach(_cand NULL NRF CC26XX NONE)
-      if(CONFIG_RADIANT_CORE_BACKEND_${_cand})
-        set(RADIANT_BACKEND_GOT "CONFIG_RADIANT_CORE_BACKEND_${_cand}")
-      endif()
-    endforeach()
-    message(FATAL_ERROR
-      "ant_dongle: -DRADIANT_BACKEND=${RADIANT_BACKEND} was asked for and "
-      "Kconfig did not select it.\n"
-      "  CONFIG_RADIANT_CORE_BACKEND_${RADIANT_BACKEND_UPPER} is unset; "
-      "Kconfig chose ${RADIANT_BACKEND_GOT} instead, and if that is the null "
-      "backend then nothing would go on the air.\n"
-      "  Almost always an unmet `depends on` in radiant_core/Kconfig for this "
-      "board or this SDK. For nrf, check SOC_COMPATIBLE_NRF52X / "
-      "SOC_COMPATIBLE_NRF54LX and !BT in this build's .config. For cc26xx, "
-      "check SOC_SERIES_CC13X2_CC26X2 - that symbol has no SOC_COMPATIBLE_* "
-      "equivalent and a rename of it is exactly the failure this guard "
-      "exists for.")
-  endif()
+  radiant_assert_backend("ant_dongle")
 endif()
 
 target_sources(app PRIVATE
@@ -417,10 +286,22 @@ elseif(ANT_RADIO STREQUAL "stub")
       "The link will fail with undefined antr_* references.")
   endif()
 else()
-  # Nothing to do here, and that is the point. radiant_core is a Zephyr module
-  # appended to ZEPHYR_EXTRA_MODULES above and switched on by
-  # CONFIG_RADIANT_CORE in the generated fragment; it owns its own source list,
-  # its own Kconfig-selected HAL backend, and must stay buildable outside this
-  # application (radiant_core/tests builds it with no dongle in sight).
+  # radiant_core is a Zephyr module appended to ZEPHYR_EXTRA_MODULES above and
+  # switched on by CONFIG_RADIANT_CORE in the generated fragment; it owns its
+  # own source list, its own Kconfig-selected HAL backend, and must stay
+  # buildable outside this application (radiant_core/tests builds it with no
+  # dongle in sight).
+  #
+  # What the module does NOT own any more is the antr_* adapter that sits
+  # between it and this application: src/ant_radio_radiant.c (radiant_api.c,
+  # before radiant_core stopped reaching outside itself) and
+  # src/ant_sec_host.c (radiant_sec_host.c) are application sources now, gated
+  # by CONFIG_RADIANT_CORE_ANTR_API / CONFIG_RADIANT_SEC_HOST_MESSAGES from
+  # src/Kconfig.antr_api - the same symbols, the same default-on behaviour,
+  # just declared where the files they gate actually live.
+  target_sources_ifdef(CONFIG_RADIANT_CORE_ANTR_API app PRIVATE
+    src/ant_radio_radiant.c)
+  target_sources_ifdef(CONFIG_RADIANT_SEC_HOST_MESSAGES app PRIVATE
+    src/ant_sec_host.c)
   message(STATUS "ant_dongle: radiant_core module supplies the antr_* backend")
 endif()

@@ -4,20 +4,23 @@
 #
 # ── Why this is a second application and not a suite in ../src ───────────────
 #
-# radiant_api.c is the only module in radiant_core with no ztest coverage, and
-# the whole master-exchange path lives in it: every module underneath is tested
-# and the composition is not. That gap is where the "a master answers the first
-# slave exchange and none after it" bug lived, and closing it turns a two-board
+# src/ant_radio_radiant.c (radiant_api.c, before it moved out of radiant_core -
+# see radiant_core/include/radiant_core/radiant_msg.h for why) is the only
+# module in radiant_core's orbit with no ztest coverage, and the whole
+# master-exchange path lives in it: every module underneath is tested and the
+# composition is not. That gap is where the "a master answers the first slave
+# exchange and none after it" bug lived, and closing it turns a two-board
 # human-gated experiment into a 40-second run.
 #
-# The obvious move - flip CONFIG_RADIANT_CORE_ANTR_API=y in ../prj.conf - does
-# not link. radiant_event_crit_enter(), radiant_event_crit_exit() and
+# The obvious move - add it to the parent application's own suite - does not
+# link. radiant_event_crit_enter(), radiant_event_crit_exit() and
 # radiant_event_wakeup() are port hooks, and ../src/test_event.c defines its own
 # versions of all three; ../src/test_channel.c likewise defines
-# radiant_channel_event_out(). radiant_api.c defines the production versions of
-# the same four symbols, so the two would collide at link - and if the collision
-# were resolved in radiant_api.c's favour it would change what those 187 tests
-# assert, which is worse than a link error because it is quiet.
+# radiant_channel_event_out(). ant_radio_radiant.c defines the production
+# versions of the same four symbols (plus radiant_on_message()), so the two
+# would collide at link - and if the collision were resolved in
+# ant_radio_radiant.c's favour it would change what those 187 tests assert,
+# which is worse than a link error because it is quiet.
 #
 # So: a sibling application, sharing ../fake_radio.c and the module itself, with
 # ../src/ deliberately out of the glob. Nothing in the existing suite changes,
@@ -44,8 +47,21 @@ target_sources(app PRIVATE ${suite_sources})
 # CONFIG_RADIANT_CORE_BACKEND_NONE for the same reason.
 target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../fake_radio.c")
 
+# The one thing this application exists to build: the antr_* adapter, from its
+# new home outside the module. Unconditional rather than
+# target_sources_ifdef(CONFIG_RADIANT_CORE_ANTR_API ...) - compiling it is the
+# whole point of this application, unlike root/strap's CMakeLists.txt where the
+# symbol genuinely toggles whether a real product links it.
+target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/ant_radio_radiant.c")
+target_sources_ifdef(CONFIG_RADIANT_SEC_HOST_MESSAGES app PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/ant_sec_host.c")
+
 # ../ so a suite writes #include "fake_radio.h", the same spelling the parent's
-# suites use. The module's own zephyr_include_directories() already puts
-# radiant_core/include and the application's src/ (for src/ant_radio.h and the
-# generated src/ant_wire.h) on the search path.
-target_include_directories(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+# suites use. The module's own zephyr_include_directories() puts
+# radiant_core/include on the search path; ../../../src is added explicitly
+# here (unlike the parent application, which never needs it) for
+# ant_radio_radiant.c's own #include "ant_wire.h" / "ant_radio.h" and for any
+# suite that wants the same.
+target_include_directories(app PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/.."
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../src")

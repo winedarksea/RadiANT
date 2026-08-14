@@ -45,7 +45,7 @@
 #include "fake_radio.h"
 
 /* ---------------------------------------------------------------------------
- * The port hooks, and the one definition of antr_on_message() in this binary
+ * The port hooks, and the one definition of radiant_on_message() in this binary
  *
  * radiant_event.c includes no Zephyr header, so it needs these as symbols the
  * port supplies. The mock radio is single-threaded, so the critical section
@@ -73,9 +73,11 @@ void radiant_event_wakeup(void)
 
 /*
  * The bridge's side of the inverted event path. In the firmware this is
- * src/ant_serial_bridge.c; in this binary it is here, and it is the only
- * definition, so any future suite that wants delivered messages should read
- * this recorder rather than define a second one.
+ * src/ant_radio_radiant.c's one-line forward onto src/ant_serial_bridge.c's
+ * antr_on_message(); in this binary radiant_on_message() itself is defined
+ * here, and it is the only definition, so any future suite that wants
+ * delivered messages should read this recorder rather than define a second
+ * one.
  */
 #define REC_MAX 192
 
@@ -88,12 +90,12 @@ struct rec {
 static struct rec recs[REC_MAX];
 static uint32_t   n_recs;
 
-void antr_on_message(const struct antr_msg *msg)
+void radiant_on_message(const struct radiant_msg *msg)
 {
 	uint8_t n;
 
-	zassert_not_null(msg, "antr_on_message() called with a null message");
-	zassert_not_null(msg->data, "antr_msg.data must never be null");
+	zassert_not_null(msg, "radiant_on_message() called with a null message");
+	zassert_not_null(msg->data, "radiant_msg.data must never be null");
 	zassert_true(msg->len <= RADIANT_EVENT_MSG_MAX,
 		     "message longer than this module can build: %u", msg->len);
 
@@ -193,7 +195,7 @@ static struct radiant_event_rx mk_rx(const struct radiant_rx_event *hal,
 
 	memset(&rx, 0, sizeof(rx));
 	rx.hal = hal;
-	rx.msg_id = (uint8_t)ANTW_MESG_BROADCAST_DATA_ID;
+	rx.msg_id = (uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID;
 	rx.channel = channel;
 	rx.id.device_number = DEVNUM;
 	rx.id.device_type = DTYPE;
@@ -232,7 +234,7 @@ static void rx_cb(const struct radiant_rx_event *e, void *user)
 
 	memset(&rx, 0, sizeof(rx));
 	rx.hal = e;
-	rx.msg_id = (uint8_t)ANTW_MESG_BROADCAST_DATA_ID;
+	rx.msg_id = (uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID;
 	rx.channel = 0u;
 	rx.id.device_number = DEVNUM;
 	rx.id.device_type = DTYPE;
@@ -365,7 +367,7 @@ ZTEST(radiant_event, test_ext_all_three_fields_in_order)
 	uint8_t              out[RADIANT_EVENT_EXT_MAX];
 	int                  n;
 
-	n = radiant_event_build_ext((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS, &ext,
+	n = radiant_event_build_ext((uint8_t)RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS, &ext,
 				out, sizeof(out));
 
 	/* flag + 4 + 3 + 2 */
@@ -378,7 +380,7 @@ ZTEST(radiant_event, test_ext_all_three_fields_in_order)
 	zassert_equal(0x8Bu, out[3], "the pairing bit must not be masked off");
 	zassert_equal(0x05u, out[4]);
 	/* RSSI: measurement type, value, threshold configuration. */
-	zassert_equal((uint8_t)ANTW_RSSI_MEASUREMENT_TYPE_DBM, out[5]);
+	zassert_equal((uint8_t)RADIANT_WIRE_RSSI_MEASUREMENT_TYPE_DBM, out[5]);
 	zassert_equal(0xEFu, out[6], "-17 dBm as a signed byte");
 	zassert_equal(0x00u, out[7]);
 	/* Receive timestamp, little endian: 1,000,000 us is 0x8000 ticks. */
@@ -393,11 +395,11 @@ ZTEST(radiant_event, test_ext_device_id_only)
 	int                  n;
 
 	n = radiant_event_build_ext(
-		(uint8_t)ANTW_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID, &ext, out,
+		(uint8_t)RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID, &ext, out,
 		sizeof(out));
 
 	zassert_equal(5, n);
-	zassert_equal((uint8_t)ANTW_EXT_FLAG_CHANNEL_ID, out[0]);
+	zassert_equal((uint8_t)RADIANT_WIRE_EXT_FLAG_CHANNEL_ID, out[0]);
 	zassert_equal(0x17u, out[1]);
 	zassert_equal(0x3Au, out[2]);
 }
@@ -413,15 +415,15 @@ ZTEST(radiant_event, test_ext_offsets_move_with_the_flags)
 	int                  n;
 	uint8_t              cfg;
 
-	cfg = (uint8_t)(ANTW_LIB_CONFIG_MESG_OUT_INC_RSSI |
-			ANTW_LIB_CONFIG_MESG_OUT_INC_TIME_STAMP);
+	cfg = (uint8_t)(RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_RSSI |
+			RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_TIME_STAMP);
 
 	n = radiant_event_build_ext(cfg, &ext, out, sizeof(out));
 
 	zassert_equal(6, n);
-	zassert_equal((uint8_t)(ANTW_EXT_FLAG_RSSI | ANTW_EXT_FLAG_RX_TIMESTAMP),
+	zassert_equal((uint8_t)(RADIANT_WIRE_EXT_FLAG_RSSI | RADIANT_WIRE_EXT_FLAG_RX_TIMESTAMP),
 		      out[0]);
-	zassert_equal((uint8_t)ANTW_RSSI_MEASUREMENT_TYPE_DBM, out[1],
+	zassert_equal((uint8_t)RADIANT_WIRE_RSSI_MEASUREMENT_TYPE_DBM, out[1],
 		      "RSSI must start where the channel id would have been");
 	zassert_equal(0xEFu, out[2]);
 	zassert_equal(0x00u, out[3]);
@@ -452,22 +454,22 @@ ZTEST(radiant_event, test_inexact_timestamp_downgrades_rather_than_lies)
 
 	ext.t_sync_exact = false;
 
-	n = radiant_event_build_ext((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS, &ext,
+	n = radiant_event_build_ext((uint8_t)RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS, &ext,
 				out, sizeof(out));
 
 	/* The field is gone and the flag bit went with it: the host is told
 	 * there is no timestamp, rather than handed a worse one in a field it
 	 * would read as radio-clock accurate. */
 	zassert_equal(8, n);
-	zassert_equal((uint8_t)(ANTW_EXT_FLAG_CHANNEL_ID | ANTW_EXT_FLAG_RSSI),
+	zassert_equal((uint8_t)(RADIANT_WIRE_EXT_FLAG_CHANNEL_ID | RADIANT_WIRE_EXT_FLAG_RSSI),
 		      out[0]);
-	zassert_equal(0u, out[0] & (uint8_t)ANTW_EXT_FLAG_RX_TIMESTAMP);
+	zassert_equal(0u, out[0] & (uint8_t)RADIANT_WIRE_EXT_FLAG_RX_TIMESTAMP);
 	zassert_equal(1u, radiant_event_stats_get()->ts_suppressed,
 		      "a downgrade must be counted, not silent");
 
 	/* A bench build may opt into the approximate value explicitly. */
 	radiant_event_set_ts_policy(RADIANT_EVENT_TS_BEST_EFFORT);
-	n = radiant_event_build_ext((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS, &ext,
+	n = radiant_event_build_ext((uint8_t)RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS, &ext,
 				out, sizeof(out));
 	zassert_equal(10, n);
 	zassert_equal(0xE0u, out[0]);
@@ -483,14 +485,14 @@ ZTEST(radiant_event, test_missing_rssi_downgrades_rather_than_reporting_zero)
 
 	ext.has_rssi = false;
 
-	n = radiant_event_build_ext((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS, &ext,
+	n = radiant_event_build_ext((uint8_t)RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS, &ext,
 				out, sizeof(out));
 
 	/* 0 dBm is a physically implausible reading that a host would
 	 * nonetheless believe, so the field is dropped instead. */
 	zassert_equal(7, n);
-	zassert_equal((uint8_t)(ANTW_EXT_FLAG_CHANNEL_ID |
-				ANTW_EXT_FLAG_RX_TIMESTAMP),
+	zassert_equal((uint8_t)(RADIANT_WIRE_EXT_FLAG_CHANNEL_ID |
+				RADIANT_WIRE_EXT_FLAG_RX_TIMESTAMP),
 		      out[0]);
 	zassert_equal(1u, radiant_event_stats_get()->rssi_suppressed);
 }
@@ -511,9 +513,9 @@ ZTEST(radiant_event, test_rx_timestamp_survives_the_clock_moving)
 	uint16_t   reported;
 	uint16_t   at_drain;
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_set(
-			      (uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
+			      (uint8_t)RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS));
 
 	t_air = run_one_rx(false, 0u);
 	zassert_equal(RADIANT_EVENT_OK, cb_rc);
@@ -528,7 +530,7 @@ ZTEST(radiant_event, test_rx_timestamp_survives_the_clock_moving)
 	zassert_equal(1u, radiant_event_drain(0u));
 	zassert_equal(1u, n_recs);
 
-	zassert_equal((uint8_t)ANTW_MESG_BROADCAST_DATA_ID, recs[0].id);
+	zassert_equal((uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID, recs[0].id);
 	/* channel + 8 payload + flag + 4 + 3 + 2 */
 	zassert_equal(19u, recs[0].len);
 	zassert_equal(0xE0u, recs[0].data[FLAG_OFFSET]);
@@ -626,9 +628,9 @@ ZTEST(radiant_event, test_inexact_backend_degrades_the_whole_path)
 {
 	fake_radio_caps_mut()->has_sync_timestamp = false;
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_set(
-			      (uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
+			      (uint8_t)RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS));
 
 	(void)run_one_rx(false, 0u);
 	zassert_equal(RADIANT_EVENT_OK, cb_rc);
@@ -636,7 +638,7 @@ ZTEST(radiant_event, test_inexact_backend_degrades_the_whole_path)
 	zassert_equal(1u, radiant_event_drain(0u));
 	/* channel + 8 payload + flag + 4 + 3, and no timestamp. */
 	zassert_equal(17u, recs[0].len);
-	zassert_equal((uint8_t)(ANTW_EXT_FLAG_CHANNEL_ID | ANTW_EXT_FLAG_RSSI),
+	zassert_equal((uint8_t)(RADIANT_WIRE_EXT_FLAG_CHANNEL_ID | RADIANT_WIRE_EXT_FLAG_RSSI),
 		      recs[0].data[FLAG_OFFSET]);
 	zassert_equal(1u, radiant_event_stats_get()->ts_suppressed);
 }
@@ -680,7 +682,7 @@ ZTEST(radiant_event, test_thirty_two_channels_neither_overflow_nor_reorder)
 	zassert_false(radiant_event_pending());
 
 	for (i = 0u; i < 32u; i++) {
-		zassert_equal((uint8_t)ANTW_MESG_BROADCAST_DATA_ID,
+		zassert_equal((uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID,
 			      recs[i].id);
 		zassert_equal(9u, recs[i].len);
 		zassert_equal((uint8_t)i, recs[i].data[0],
@@ -695,7 +697,7 @@ ZTEST(radiant_event, test_thirty_two_channels_neither_overflow_nor_reorder)
 /*
  * A full ring drops the newest message - the queued ones are already in order
  * and losing the head of a burst is worse than losing its tail - and says so
- * with ANTW_EVENT_QUE_OVERFLOW. Never a silent loss: "unexplained loss must be
+ * with RADIANT_WIRE_EVENT_QUE_OVERFLOW. Never a silent loss: "unexplained loss must be
  * 0" is one of the A/B gates, and a message that vanished without an event is
  * exactly what makes that figure meaningless.
  */
@@ -730,11 +732,11 @@ ZTEST(radiant_event, test_overflow_is_reported_never_silent)
 		      radiant_event_drain(0u));
 
 	/* The marker comes first and is a channel event on channel 0. */
-	zassert_equal((uint8_t)ANTW_MESG_RESPONSE_EVENT_ID, recs[0].id);
+	zassert_equal((uint8_t)RADIANT_WIRE_MESG_RESPONSE_EVENT_ID, recs[0].id);
 	zassert_equal(3u, recs[0].len);
 	zassert_equal(0u, recs[0].data[0]);
-	zassert_equal((uint8_t)ANTW_MESG_EVENT_ID, recs[0].data[1]);
-	zassert_equal((uint8_t)ANTW_EVENT_QUE_OVERFLOW, recs[0].data[2]);
+	zassert_equal((uint8_t)RADIANT_WIRE_MESG_EVENT_ID, recs[0].data[1]);
+	zassert_equal((uint8_t)RADIANT_WIRE_EVENT_QUE_OVERFLOW, recs[0].data[2]);
 	zassert_equal(1u, radiant_event_stats_get()->overflow_marks);
 
 	/* Everything that was accepted still came out in order, and the three
@@ -756,26 +758,26 @@ ZTEST(radiant_event, test_channel_event_shape)
 {
 	zassert_equal(RADIANT_EVENT_OK,
 		      radiant_event_post_channel_event(
-			      7u, (uint8_t)ANTW_EVENT_CHANNEL_CLOSED));
+			      7u, (uint8_t)RADIANT_WIRE_EVENT_CHANNEL_CLOSED));
 	zassert_equal(1u, radiant_event_drain(0u));
 
 	/* [channel][MESG_EVENT_ID][code] under MESG_RESPONSE_EVENT_ID. Byte 1
 	 * being 0x01 is what tells the bridge this is an unsolicited event and
 	 * not a reply to a command. */
-	zassert_equal((uint8_t)ANTW_MESG_RESPONSE_EVENT_ID, recs[0].id);
-	zassert_equal((uint8_t)ANTW_MESG_RESPONSE_EVENT_SIZE, recs[0].len);
+	zassert_equal((uint8_t)RADIANT_WIRE_MESG_RESPONSE_EVENT_ID, recs[0].id);
+	zassert_equal((uint8_t)RADIANT_WIRE_MESG_RESPONSE_EVENT_SIZE, recs[0].len);
 	zassert_equal(7u, recs[0].data[0]);
-	zassert_equal((uint8_t)ANTW_MESG_EVENT_ID, recs[0].data[1]);
-	zassert_equal((uint8_t)ANTW_EVENT_CHANNEL_CLOSED, recs[0].data[2]);
+	zassert_equal((uint8_t)RADIANT_WIRE_MESG_EVENT_ID, recs[0].data[1]);
+	zassert_equal((uint8_t)RADIANT_WIRE_EVENT_CHANNEL_CLOSED, recs[0].data[2]);
 
 	/* A channel event carries no extended fields whatever the library
 	 * configuration says - they belong to received data only. */
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_set(
-			      (uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
+			      (uint8_t)RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS));
 	zassert_equal(RADIANT_EVENT_OK,
 		      radiant_event_post_channel_event(
-			      7u, (uint8_t)ANTW_EVENT_RX_FAIL));
+			      7u, (uint8_t)RADIANT_WIRE_EVENT_RX_FAIL));
 	zassert_equal(1u, radiant_event_drain(0u));
 	zassert_equal(3u, recs[1].len);
 }
@@ -783,7 +785,7 @@ ZTEST(radiant_event, test_channel_event_shape)
 /*
  * The three release codes. If NEXT_DATA_BLOCK is not raised exactly once per
  * accepted block the bridge's k_sem_take() waits its full 1000 ms and then
- * answers ANTW_TRANSFER_IN_PROGRESS, so a burst stalls a second a packet and
+ * answers RADIANT_WIRE_TRANSFER_IN_PROGRESS, so a burst stalls a second a packet and
  * reports a plausible-looking error. Counting them here is what lets
  * radiant_burst.c's own suite assert release-count == accepted-block-count against
  * a number instead of a log.
@@ -799,13 +801,13 @@ ZTEST(radiant_event, test_burst_release_codes_are_the_wire_values)
 
 	zassert_equal(4u, radiant_event_drain(0u));
 
-	zassert_equal((uint8_t)ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK,
+	zassert_equal((uint8_t)RADIANT_WIRE_EVENT_TRANSFER_NEXT_DATA_BLOCK,
 		      recs[0].data[2]);
-	zassert_equal((uint8_t)ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK,
+	zassert_equal((uint8_t)RADIANT_WIRE_EVENT_TRANSFER_NEXT_DATA_BLOCK,
 		      recs[1].data[2]);
-	zassert_equal((uint8_t)ANTW_EVENT_TRANSFER_TX_COMPLETED,
+	zassert_equal((uint8_t)RADIANT_WIRE_EVENT_TRANSFER_TX_COMPLETED,
 		      recs[2].data[2]);
-	zassert_equal((uint8_t)ANTW_EVENT_TRANSFER_TX_FAILED, recs[3].data[2]);
+	zassert_equal((uint8_t)RADIANT_WIRE_EVENT_TRANSFER_TX_FAILED, recs[3].data[2]);
 	zassert_equal(5u, recs[3].data[0]);
 
 	st = radiant_event_stats_get();
@@ -821,7 +823,7 @@ ZTEST(radiant_event, test_burst_data_uses_the_serial_burst_header)
 
 	hal = mk_hal(RADIANT_RADIO_STATUS_OK, 1000000u, true, true, -40);
 	rx = mk_rx(&hal, 9u, payload8);
-	rx.msg_id = (uint8_t)ANTW_MESG_BURST_DATA_ID;
+	rx.msg_id = (uint8_t)RADIANT_WIRE_MESG_BURST_DATA_ID;
 	rx.burst_seq = 2u;
 	rx.burst_last = true;
 
@@ -829,7 +831,7 @@ ZTEST(radiant_event, test_burst_data_uses_the_serial_burst_header)
 	zassert_equal(1u, radiant_event_drain(0u));
 
 	/* [last<<7 | seq<<5 | channel] = 0x80 | 0x40 | 0x09. */
-	zassert_equal((uint8_t)ANTW_MESG_BURST_DATA_ID, recs[0].id);
+	zassert_equal((uint8_t)RADIANT_WIRE_MESG_BURST_DATA_ID, recs[0].id);
 	zassert_equal(0xC9u, recs[0].data[0]);
 
 	/* A sequence number wider than the header's two bits is a caller bug,
@@ -847,43 +849,43 @@ ZTEST(radiant_event, test_lib_config_is_additive_and_refuses_unknown_bits)
 {
 	uint8_t cfg = 0xFFu;
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_get(&cfg));
 	zassert_equal(0u, cfg, "library configuration starts cleared");
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_set(
-			      (uint8_t)ANTW_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+			      (uint8_t)RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID));
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_set(
-			      (uint8_t)ANTW_LIB_CONFIG_MESG_OUT_INC_RSSI));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+			      (uint8_t)RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_RSSI));
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_get(&cfg));
 	zassert_equal(0xC0u, cfg, "setting one bit must not clear another");
 
 	/* A bit this module does not implement is refused outright, and
 	 * nothing is applied - a half-applied configuration is worse than an
 	 * error, because the host cannot tell which half took. */
-	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
 		      radiant_event_lib_config_set(0x02u));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_get(&cfg));
 	zassert_equal(0xC0u, cfg);
 
 	/* 0xE0 - what every tool asks for - must be accepted whole. */
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_set(
-			      (uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+			      (uint8_t)RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS));
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_get(&cfg));
 	zassert_equal(0xE0u, cfg);
 
 	/* The clear path takes the mask the bridge sends for "set it to
 	 * zero"; there is no separate clear message on the wire. */
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_clear(
-			      (uint8_t)ANTW_LIB_CONFIG_MASK_ALL));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+			      (uint8_t)RADIANT_WIRE_LIB_CONFIG_MASK_ALL));
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_get(&cfg));
 	zassert_equal(0u, cfg);
 }
@@ -895,9 +897,9 @@ ZTEST(radiant_event, test_event_filter_round_trips_and_filters_nothing)
 	uint16_t            f = 0u;
 
 	/* tools/ant_features.py round-trips this, so it must be stored... */
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_filter_set(0xFFFFu));
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_filter_get(&f));
 	zassert_equal(0xFFFFu, f);
 
@@ -906,7 +908,7 @@ ZTEST(radiant_event, test_event_filter_round_trips_and_filters_nothing)
 	 * must be 0" is an A/B gate. */
 	zassert_equal(RADIANT_EVENT_OK,
 		      radiant_event_post_channel_event(
-			      0u, (uint8_t)ANTW_EVENT_RX_FAIL));
+			      0u, (uint8_t)RADIANT_WIRE_EVENT_RX_FAIL));
 	hal = mk_hal(RADIANT_RADIO_STATUS_OK, 1000000u, true, true, -40);
 	rx = mk_rx(&hal, 0u, payload8);
 	zassert_equal(RADIANT_EVENT_OK, radiant_event_post_rx(&rx));
@@ -926,9 +928,9 @@ ZTEST(radiant_event, test_flush_discards_without_delivering)
 	struct radiant_event_rx rx;
 	uint8_t             cfg = 0xFFu;
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_set(
-			      (uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
+			      (uint8_t)RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS));
 
 	hal = mk_hal(RADIANT_RADIO_STATUS_OK, 1000000u, true, true, -40);
 	rx = mk_rx(&hal, 0u, payload8);
@@ -944,7 +946,7 @@ ZTEST(radiant_event, test_flush_discards_without_delivering)
 	zassert_equal(2u, radiant_event_stats_get()->dropped_flush);
 
 	/* Library configuration goes back to zero with it. */
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_get(&cfg));
 	zassert_equal(0u, cfg);
 }
@@ -987,9 +989,9 @@ ZTEST(radiant_event, test_init_empties_the_ring)
 	struct radiant_event_rx rx;
 	uint8_t             cfg = 0xFFu;
 
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_set(
-			      (uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
+			      (uint8_t)RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS));
 
 	hal = mk_hal(RADIANT_RADIO_STATUS_OK, 1000000u, true, true, -40);
 	rx = mk_rx(&hal, 0u, payload8);
@@ -1004,7 +1006,7 @@ ZTEST(radiant_event, test_init_empties_the_ring)
 	zassert_equal(0u, n_recs);
 	zassert_equal(0u, radiant_event_stats_get()->posted,
 		      "init clears the statistics as well as the ring");
-	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+	zassert_equal((radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_event_lib_config_get(&cfg));
 	zassert_equal(0u, cfg);
 }
@@ -1046,7 +1048,7 @@ ZTEST(radiant_event, test_bad_arguments_are_refused_not_truncated)
 
 	/* Only the three received-data message IDs are data messages. */
 	rx = mk_rx(&hal, 0u, payload8);
-	rx.msg_id = (uint8_t)ANTW_MESG_RESPONSE_EVENT_ID;
+	rx.msg_id = (uint8_t)RADIANT_WIRE_MESG_RESPONSE_EVENT_ID;
 	zassert_equal(RADIANT_EVENT_EINVAL, radiant_event_post_rx(&rx));
 
 	zassert_equal(RADIANT_EVENT_EINVAL,
@@ -1062,11 +1064,11 @@ ZTEST(radiant_event, test_bad_arguments_are_refused_not_truncated)
 	 * wrong fields in it. */
 	zassert_equal(RADIANT_EVENT_EINVAL,
 		      radiant_event_build_ext(
-			      (uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS, &ext,
+			      (uint8_t)RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS, &ext,
 			      out, RADIANT_EVENT_EXT_MAX - 1u));
 	zassert_equal(RADIANT_EVENT_EINVAL,
 		      radiant_event_build_ext(
-			      (uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS, NULL,
+			      (uint8_t)RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS, NULL,
 			      out, sizeof(out)));
 
 	zassert_equal(0u, radiant_event_queued());

@@ -196,7 +196,9 @@ target_include_directories(app PRIVATE
 # without this every suite author gets the relative path wrong exactly once.
 #
 # Nothing else is needed: the module's own zephyr_include_directories() puts
-# both radiant_core/include and ../src (for src/ant_radio.h and the generated
-# src/ant_wire.h, which radiant_event.c reads) on the search path for this
-# target too.
+# radiant_core/include - and only that, now - on the search path for this
+# target too. There used to be a second entry, ../src, for src/ant_radio.h and
+# the generated src/ant_wire.h; radiant_event.c reads radiant_msg.h and
+# radiant_wire.h instead now, both inside radiant_core/include, so no suite
+# here has ever needed the application's src/ at all.
 target_include_directories(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

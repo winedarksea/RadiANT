@@ -11,14 +11,11 @@ cmake_minimum_required(VERSION 3.20.0)
 # and a dependency on the proven stack would defeat the demonstration.
 #
 # radiant_core is appended unconditionally and its backend chosen with
-# -DRADIANT_BACKEND, exactly as the root CMakeLists.txt does. The duplication is
-# deliberate and matches sim/'s note: `west build strap` must not depend on the
-# dongle's build files existing or being current.
-
-list(APPEND ZEPHYR_EXTRA_MODULES "${CMAKE_CURRENT_SOURCE_DIR}/../radiant_core")
-
-# Which HAL backend radiant_core links, stated before find_package(Zephyr)
-# because ZEPHYR_EXTRA_MODULES is read during it.
+# -DRADIANT_BACKEND, exactly as the root CMakeLists.txt does - both now
+# through the shared cmake/radiant_backend.cmake, included below. The
+# duplication of *calling* it (rather than sharing one CMakeLists.txt) is
+# deliberate and matches sim/'s note: `west build strap` must not depend on
+# the dongle's build files existing or being current.
 #
 # THE DEFAULT IS nrf AND NOT null, and the asymmetry with radiant_core's own
 # CMake default is the same one scripts/build_all.ps1 documents: null is right
@@ -26,22 +23,8 @@ list(APPEND ZEPHYR_EXTRA_MODULES "${CMAKE_CURRENT_SOURCE_DIR}/../radiant_core")
 # somebody flashes. A null-radio strap boots, logs "transmitting", and puts
 # nothing on the air - indistinguishable from a dead antenna, and it has cost
 # this project a Feather flash and a whole session once already.
-set(RADIANT_BACKEND "nrf" CACHE STRING
-    "radiant_core HAL backend: null (refuses every arm), nrf (the RADIO) or cc26xx (TI's RF core)")
-set_property(CACHE RADIANT_BACKEND PROPERTY STRINGS null nrf cc26xx)
-
-if(RADIANT_BACKEND STREQUAL "null")
-  set(RADIANT_BACKEND_CONF "CONFIG_RADIANT_CORE_BACKEND_NULL=y")
-elseif(RADIANT_BACKEND STREQUAL "nrf")
-  set(RADIANT_BACKEND_CONF "CONFIG_RADIANT_CORE_BACKEND_NRF=y")
-elseif(RADIANT_BACKEND STREQUAL "cc26xx")
-  set(RADIANT_BACKEND_CONF "CONFIG_RADIANT_CORE_BACKEND_CC26XX=y")
-else()
-  message(FATAL_ERROR
-    "strap: unknown -DRADIANT_BACKEND=${RADIANT_BACKEND}. "
-    "Use null, nrf or cc26xx.")
-endif()
-message(STATUS "strap: radiant_core HAL backend ${RADIANT_BACKEND}")
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/radiant_backend.cmake")
+radiant_select_backend("${CMAKE_CURRENT_SOURCE_DIR}/../radiant_core" "nrf" RADIANT_BACKEND_CONF)
 
 set(strap_backend_conf "${CMAKE_CURRENT_BINARY_DIR}/strap_backend.conf")
 file(WRITE "${strap_backend_conf}"
@@ -57,29 +40,32 @@ project(radiant_strap)
 
 # The backend actually compiled is the backend that was asked for.
 #
-# A copy of the guard in the top-level CMakeLists.txt, and the duplication is
-# the same deliberate one the header of this file describes: `west build strap`
-# must not depend on the dongle's build files. What it guards against is a
-# Kconfig `depends on` going silently unmet - the fragment above is merged
-# last so it cannot LOSE to another fragment, but an unmet dependency makes the
-# assignment a no-op and Kconfig falls back to the choice default, which is the
-# null backend. A null-radio strap boots, logs "transmitting", and puts nothing
-# on the air.
-#
-# It has happened twice on the Nordic side. It is more likely on TI, where the
-# cc26xx arm has to depend on SOC_SERIES_CC13X2_CC26X2 because no
+# radiant_assert_backend(), shared with the top-level CMakeLists.txt - see
+# cmake/radiant_backend.cmake for the full rationale. What it guards against
+# is a Kconfig `depends on` going silently unmet, falling back to the null
+# backend: a null-radio strap boots, logs "transmitting", and puts nothing on
+# the air. It has happened twice on the Nordic side, and is more likely on TI,
+# where the cc26xx arm has to depend on SOC_SERIES_CC13X2_CC26X2 because no
 # SOC_COMPATIBLE_* symbol exists for the part.
-string(TOUPPER "${RADIANT_BACKEND}" RADIANT_BACKEND_UPPER)
-if(NOT CONFIG_RADIANT_CORE_BACKEND_${RADIANT_BACKEND_UPPER})
-  message(FATAL_ERROR
-    "strap: -DRADIANT_BACKEND=${RADIANT_BACKEND} was asked for and Kconfig "
-    "did not select it. CONFIG_RADIANT_CORE_BACKEND_${RADIANT_BACKEND_UPPER} "
-    "is unset, so a different backend - almost certainly the null one, which "
-    "transmits nothing - was compiled. Check the arm's `depends on` in "
-    "radiant_core/Kconfig against this board's .config.")
-endif()
+radiant_assert_backend("strap")
 
 target_sources(app PRIVATE src/main.c)
+
+# ── The antr_* adapter ──────────────────────────────────────────────────────
+#
+# ../src/ant_radio_radiant.c (radiant_api.c, before it moved out of
+# radiant_core) is what actually implements antr_init() and the rest of
+# src/ant_radio.h on top of radiant_core's modules - CONFIG_RADIANT_CORE=y
+# alone no longer pulls it in, since it is application-side now (see
+# src/Kconfig.antr_api). strap_backend_conf above forces
+# CONFIG_RADIANT_CORE_ANTR_API=y unconditionally, so this is never
+# conditional in practice, but target_sources_ifdef() is used anyway to match
+# the root CMakeLists.txt exactly and to fail at configure rather than at
+# link if that ever changes.
+target_sources_ifdef(CONFIG_RADIANT_CORE_ANTR_API app PRIVATE
+  ../src/ant_radio_radiant.c)
+target_sources_ifdef(CONFIG_RADIANT_SEC_HOST_MESSAGES app PRIVATE
+  ../src/ant_sec_host.c)
 
 # ── src/profiles ────────────────────────────────────────────────────────────
 #

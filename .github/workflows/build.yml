@@ -585,7 +585,7 @@ jobs:
           found=0
           for f in app/radiant_core/src/radiant_sec.c \
                    app/radiant_core/src/radiant_sec_pair.c \
-                   app/radiant_core/src/radiant_sec_host.c; do
+                   app/src/ant_sec_host.c; do
             [[ -f "${f}" ]] || continue
             found=1
             # Match a CALL, not the word: these files discuss the rule in

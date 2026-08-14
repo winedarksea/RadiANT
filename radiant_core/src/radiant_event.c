@@ -1,30 +1,33 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  * radiant_event.c - the event queue and the assembly of a received frame into the
- * flat struct antr_msg the serial bridge implements.
+ * flat struct radiant_msg that radiant_on_message() carries out of the module.
  *
  * Provenance: clean-room. Written from radiant_core/include/radiant_core/radiant_event.h (which
- * carries the reasoning), from src/ant_radio.h and docs/sdk-ant-contract.md,
- * from radiant_core/include/radiant_core/radiant_radio_hal.h for the t_sync contract and the
- * callback rules, and from src/ant_wire.h - generated from
+ * carries the reasoning), from radiant_core/include/radiant_core/radiant_msg.h and
+ * docs/sdk-ant-contract.md, from radiant_core/include/radiant_core/radiant_radio_hal.h for the
+ * t_sync contract and the callback rules, and from
+ * radiant_core/include/radiant_core/radiant_wire.h - generated from
  * protocol/ant_wire.yaml - for every wire constant. The extended-message
  * layout is the exact inverse of tools/ant_verify.py's extended_fields().
  * Nothing here derives from sdk-ant, from libant.a, from disassembly of any
  * binary, or from any ANT+ device profile document.
  * See docs/decisions/0002-clean-room-policy.md.
  *
- * This file includes no Zephyr header and nothing from the application beyond
- * the two headers that define its input and its output. It has to compile as a
+ * This file includes no Zephyr header and nothing outside radiant_core beyond
+ * the header that defines its input and its output. It has to compile as a
  * freestanding translation unit - the same rule radiant_frame.c follows - which is
  * why the two things it genuinely needs from an RTOS (a critical section and a
  * way to wake the drain) are port hooks rather than #includes. The gate is
  *
  *   arm-zephyr-eabi-gcc -c -std=c11 -Wall -Wextra -Werror \
- *       -I radiant_core/include -I radiant_core/tests -I src \
+ *       -I radiant_core/include -I radiant_core/tests \
  *       -fsyntax-only radiant_core/src/radiant_event.c
  *
  * so that a compile error here is never confused with a Zephyr or a board
- * problem.
+ * problem. Note what is NOT on that include path: no `-I src`, unlike before
+ * radiant_msg.h and radiant_wire.h existed - this file no longer reaches
+ * outside the module for anything.
  */
 
 #include <string.h>
@@ -53,7 +56,7 @@ _Static_assert(RADIANT_EVENT_CHANNEL_MAX >= 31u,
 	       "32 channels are no longer expressible in a burst header");
 
 /* A message this module builds must fit the frame the bridge wraps it in. */
-_Static_assert(RADIANT_EVENT_MSG_MAX <= ANTW_MAX_SIZE_VALUE,
+_Static_assert(RADIANT_EVENT_MSG_MAX <= RADIANT_WIRE_MAX_SIZE_VALUE,
 	       "an assembled message can exceed the serial LEN byte's ceiling");
 
 /* The extended tail's arithmetic, spelled out so a fourth field cannot be
@@ -72,20 +75,20 @@ _Static_assert(RADIANT_EVENT_PAYLOAD_MAX >= RADIANT_FRAME_PAYLOAD_MAX,
  * every received data message), so the code below maps them explicitly. These
  * assertions catch the explicit map silently disagreeing with the generated
  * header if either one moves. */
-_Static_assert((uint8_t)ANTW_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID ==
-		       (uint8_t)ANTW_EXT_FLAG_CHANNEL_ID,
+_Static_assert((uint8_t)RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID ==
+		       (uint8_t)RADIANT_WIRE_EXT_FLAG_CHANNEL_ID,
 	       "channel-id request bit and flag bit have diverged");
-_Static_assert((uint8_t)ANTW_LIB_CONFIG_MESG_OUT_INC_RSSI ==
-		       (uint8_t)ANTW_EXT_FLAG_RSSI,
+_Static_assert((uint8_t)RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_RSSI ==
+		       (uint8_t)RADIANT_WIRE_EXT_FLAG_RSSI,
 	       "RSSI request bit and flag bit have diverged");
-_Static_assert((uint8_t)ANTW_LIB_CONFIG_MESG_OUT_INC_TIME_STAMP ==
-		       (uint8_t)ANTW_EXT_FLAG_RX_TIMESTAMP,
+_Static_assert((uint8_t)RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_TIME_STAMP ==
+		       (uint8_t)RADIANT_WIRE_EXT_FLAG_RX_TIMESTAMP,
 	       "timestamp request bit and flag bit have diverged");
 
 /* The one configuration every tool asks for must be entirely supported, or
  * ant_verify.py's three fields become two and the timing gate has nothing to
  * read. */
-_Static_assert(((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS &
+_Static_assert(((uint8_t)RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS &
 		(uint8_t)~RADIANT_EVENT_LIB_CONFIG_SUPPORTED) == 0u,
 	       "lib config 0xE0 asks for a field this module refuses");
 
@@ -210,55 +213,55 @@ void radiant_event_flush(void)
  * ---------------------------------------------------------------------------
  */
 
-antr_err_t radiant_event_lib_config_set(uint8_t config)
+radiant_msg_err_t radiant_event_lib_config_set(uint8_t config)
 {
 	if ((config & (uint8_t)~RADIANT_EVENT_LIB_CONFIG_SUPPORTED) != 0u) {
 		/* Refuse the whole request rather than the unknown bits: a
 		 * partial configuration is worse than none, since the host
 		 * can't tell which half took. */
-		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
+		return (radiant_msg_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
 	}
 
 	g.lib_config |= config;
-	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+	return (radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
-antr_err_t radiant_event_lib_config_clear(uint8_t config)
+radiant_msg_err_t radiant_event_lib_config_clear(uint8_t config)
 {
-	/* Anything, including ANTW_LIB_CONFIG_MASK_ALL - that is how the
+	/* Anything, including RADIANT_WIRE_LIB_CONFIG_MASK_ALL - that is how the
 	 * bridge expresses the host's "set the configuration to zero", since
 	 * there is no separate clear message on the wire. */
 	g.lib_config = (uint8_t)(g.lib_config & (uint8_t)~config);
-	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+	return (radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
-antr_err_t radiant_event_lib_config_get(uint8_t *config)
+radiant_msg_err_t radiant_event_lib_config_get(uint8_t *config)
 {
 	if (config == NULL) {
-		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
+		return (radiant_msg_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
 	}
 
 	*config = g.lib_config;
-	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+	return (radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
-antr_err_t radiant_event_filter_set(uint16_t filter)
+radiant_msg_err_t radiant_event_filter_set(uint16_t filter)
 {
 	/* Stored and never consulted: a backend that doesn't filter must still
 	 * round-trip the value for tools/ant_features.py, and must not pretend
 	 * to filter, since loss accounting needs RX_FAIL events to arrive. */
 	g.filter = filter;
-	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+	return (radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
-antr_err_t radiant_event_filter_get(uint16_t *filter)
+radiant_msg_err_t radiant_event_filter_get(uint16_t *filter)
 {
 	if (filter == NULL) {
-		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
+		return (radiant_msg_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
 	}
 
 	*filter = g.filter;
-	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+	return (radiant_msg_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR;
 }
 
 void radiant_event_set_ts_policy(enum radiant_event_ts_policy p)
@@ -296,8 +299,8 @@ int radiant_event_build_ext(uint8_t config, const struct radiant_event_ext *in,
 		return RADIANT_EVENT_EINVAL;
 	}
 
-	if ((config & (uint8_t)ANTW_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID) != 0u) {
-		flags |= (uint8_t)ANTW_EXT_FLAG_CHANNEL_ID;
+	if ((config & (uint8_t)RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_DEVICE_ID) != 0u) {
+		flags |= (uint8_t)RADIANT_WIRE_EXT_FLAG_CHANNEL_ID;
 		buf[n++] = (uint8_t)(in->id.device_number & 0xFFu);
 		buf[n++] = (uint8_t)(in->id.device_number >> 8);
 		/* The pairing bit stays. Masking it here would throw away
@@ -308,10 +311,10 @@ int radiant_event_build_ext(uint8_t config, const struct radiant_event_ext *in,
 		buf[n++] = in->id.trans_type;
 	}
 
-	if ((config & (uint8_t)ANTW_LIB_CONFIG_MESG_OUT_INC_RSSI) != 0u) {
+	if ((config & (uint8_t)RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_RSSI) != 0u) {
 		if (in->has_rssi) {
-			flags |= (uint8_t)ANTW_EXT_FLAG_RSSI;
-			buf[n++] = (uint8_t)ANTW_RSSI_MEASUREMENT_TYPE_DBM;
+			flags |= (uint8_t)RADIANT_WIRE_EXT_FLAG_RSSI;
+			buf[n++] = (uint8_t)RADIANT_WIRE_RSSI_MEASUREMENT_TYPE_DBM;
 			buf[n++] = (uint8_t)in->rssi_dbm;
 			buf[n++] = RSSI_THRESHOLD_CFG_NONE;
 		} else {
@@ -324,7 +327,7 @@ int radiant_event_build_ext(uint8_t config, const struct radiant_event_ext *in,
 		}
 	}
 
-	if ((config & (uint8_t)ANTW_LIB_CONFIG_MESG_OUT_INC_TIME_STAMP) != 0u) {
+	if ((config & (uint8_t)RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_TIME_STAMP) != 0u) {
 		bool usable = in->has_t_sync &&
 			      (in->t_sync_exact ||
 			       g.ts_policy == RADIANT_EVENT_TS_BEST_EFFORT);
@@ -332,7 +335,7 @@ int radiant_event_build_ext(uint8_t config, const struct radiant_event_ext *in,
 		if (usable) {
 			uint16_t ticks = radiant_event_rx_ticks(in->t_sync);
 
-			flags |= (uint8_t)ANTW_EXT_FLAG_RX_TIMESTAMP;
+			flags |= (uint8_t)RADIANT_WIRE_EXT_FLAG_RX_TIMESTAMP;
 			buf[n++] = (uint8_t)(ticks & 0xFFu);
 			buf[n++] = (uint8_t)(ticks >> 8);
 		} else {
@@ -378,7 +381,7 @@ static int enqueue(const struct radiant_event_slot *s)
 	if (used >= (uint32_t)RADIANT_EVENT_QUEUE_DEPTH) {
 		/* Drop the newest, not the oldest: a host that loses the head
 		 * of a burst is worse off than one that loses its tail. Never
-		 * silent - overflow_pending becomes an ANTW_EVENT_QUE_OVERFLOW
+		 * silent - overflow_pending becomes an RADIANT_WIRE_EVENT_QUE_OVERFLOW
 		 * at the head of the next drain. */
 		g.overflow_pending = true;
 		g.stats.dropped_full++;
@@ -435,9 +438,9 @@ int radiant_event_post_rx(const struct radiant_event_rx *rx)
 	}
 
 	switch (rx->msg_id) {
-	case ANTW_MESG_BROADCAST_DATA_ID:
-	case ANTW_MESG_ACKNOWLEDGED_DATA_ID:
-	case ANTW_MESG_BURST_DATA_ID:
+	case RADIANT_WIRE_MESG_BROADCAST_DATA_ID:
+	case RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID:
+	case RADIANT_WIRE_MESG_BURST_DATA_ID:
 		break;
 	default:
 		bump(&g.stats.rejected_invalid);
@@ -445,17 +448,17 @@ int radiant_event_post_rx(const struct radiant_event_rx *rx)
 	}
 
 	chan_byte = rx->channel;
-	if (rx->msg_id == (uint8_t)ANTW_MESG_BURST_DATA_ID) {
-		if (rx->burst_seq > (uint8_t)ANTW_BURST_HEADER_SEQ_MASK) {
+	if (rx->msg_id == (uint8_t)RADIANT_WIRE_MESG_BURST_DATA_ID) {
+		if (rx->burst_seq > (uint8_t)RADIANT_WIRE_BURST_HEADER_SEQ_MASK) {
 			bump(&g.stats.rejected_invalid);
 			return RADIANT_EVENT_EINVAL;
 		}
 		chan_byte = (uint8_t)(chan_byte |
 				      (uint8_t)(rx->burst_seq
-						<< ANTW_BURST_HEADER_SEQ_SHIFT));
+						<< RADIANT_WIRE_BURST_HEADER_SEQ_SHIFT));
 		if (rx->burst_last) {
 			chan_byte = (uint8_t)(chan_byte |
-					      (uint8_t)ANTW_BURST_HEADER_LAST);
+					      (uint8_t)RADIANT_WIRE_BURST_HEADER_LAST);
 		}
 	}
 
@@ -463,7 +466,7 @@ int radiant_event_post_rx(const struct radiant_event_rx *rx)
 	s.msg_id = rx->msg_id;
 	s.body[0] = chan_byte;
 	memcpy(&s.body[1], rx->payload, rx->payload_len);
-	s.body_len = (uint8_t)(ANTW_CHANNEL_NUM_SIZE + rx->payload_len);
+	s.body_len = (uint8_t)(RADIANT_WIRE_CHANNEL_NUM_SIZE + rx->payload_len);
 
 	s.device_number = rx->id.device_number;
 	s.device_type = rx->id.device_type;
@@ -518,10 +521,10 @@ int radiant_event_post_channel_event(uint8_t channel, uint8_t code)
 	 * 0x01 distinguishes an unsolicited channel event from a reply to a
 	 * command; the bridge switches on it for the three burst release codes. */
 	body[0] = channel;
-	body[1] = (uint8_t)ANTW_MESG_EVENT_ID;
+	body[1] = (uint8_t)RADIANT_WIRE_MESG_EVENT_ID;
 	body[2] = code;
 
-	rc = radiant_event_post_raw((uint8_t)ANTW_MESG_RESPONSE_EVENT_ID, body,
+	rc = radiant_event_post_raw((uint8_t)RADIANT_WIRE_MESG_RESPONSE_EVENT_ID, body,
 				(uint8_t)sizeof(body));
 	if (rc != RADIANT_EVENT_OK) {
 		return rc;
@@ -531,13 +534,13 @@ int radiant_event_post_channel_event(uint8_t channel, uint8_t code)
 	 * "released exactly once per accepted block" is a number comparison,
 	 * not a log reading. */
 	switch (code) {
-	case ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK:
+	case RADIANT_WIRE_EVENT_TRANSFER_NEXT_DATA_BLOCK:
 		bump(&g.stats.next_data_block);
 		break;
-	case ANTW_EVENT_TRANSFER_TX_COMPLETED:
+	case RADIANT_WIRE_EVENT_TRANSFER_TX_COMPLETED:
 		bump(&g.stats.tx_completed);
 		break;
-	case ANTW_EVENT_TRANSFER_TX_FAILED:
+	case RADIANT_WIRE_EVENT_TRANSFER_TX_FAILED:
 		bump(&g.stats.tx_failed);
 		break;
 	default:
@@ -555,7 +558,7 @@ int radiant_event_post_channel_event(uint8_t channel, uint8_t code)
 static void deliver(const struct radiant_event_slot *s)
 {
 	uint8_t         out[RADIANT_EVENT_MSG_MAX];
-	struct antr_msg msg;
+	struct radiant_msg msg;
 	uint8_t         n = s->body_len;
 
 	if (n > 0u) {
@@ -585,25 +588,25 @@ static void deliver(const struct radiant_event_slot *s)
 	msg.id = s->msg_id;
 	msg.len = n;
 	msg.data = out;
-	antr_on_message(&msg);
+	radiant_on_message(&msg);
 	g.stats.delivered++;
 }
 
 static void deliver_overflow(void)
 {
 	uint8_t         body[3];
-	struct antr_msg msg;
+	struct radiant_msg msg;
 
 	/* Channel 0: the loss is a property of the queue, not of a channel,
 	 * and there is no wire encoding for "no channel". */
 	body[0] = 0u;
-	body[1] = (uint8_t)ANTW_MESG_EVENT_ID;
-	body[2] = (uint8_t)ANTW_EVENT_QUE_OVERFLOW;
+	body[1] = (uint8_t)RADIANT_WIRE_MESG_EVENT_ID;
+	body[2] = (uint8_t)RADIANT_WIRE_EVENT_QUE_OVERFLOW;
 
-	msg.id = (uint8_t)ANTW_MESG_RESPONSE_EVENT_ID;
+	msg.id = (uint8_t)RADIANT_WIRE_MESG_RESPONSE_EVENT_ID;
 	msg.len = (uint8_t)sizeof(body);
 	msg.data = body;
-	antr_on_message(&msg);
+	radiant_on_message(&msg);
 
 	g.stats.delivered++;
 	g.stats.overflow_marks++;
@@ -639,7 +642,7 @@ uint32_t radiant_event_drain(uint32_t max_msgs)
 
 	key = radiant_event_crit_enter();
 	if (!g.ready || g.draining) {
-		/* Re-entered from inside antr_on_message(). The bridge must
+		/* Re-entered from inside radiant_on_message(). The bridge must
 		 * never be called recursively (docs/sdk-ant-contract.md);
 		 * returning zero keeps that true even if a future caller tries. */
 		radiant_event_crit_exit(key);
@@ -667,7 +670,7 @@ uint32_t radiant_event_drain(uint32_t max_msgs)
 		g.tail++;
 		radiant_event_crit_exit(key);
 
-		/* Outside the section: antr_on_message() must not run with
+		/* Outside the section: radiant_on_message() must not run with
 		 * interrupts masked. */
 		deliver(&s);
 		sent++;

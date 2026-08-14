@@ -34,10 +34,13 @@
  * Every function radiant_api.c forwards returns radiant_channel_err_t, a
  * uint8_t whose value IS the wire byte (src/ant_radio.h's convention - an
  * unrecognised code hangs a host library). Values are spelled as literals
- * here rather than pulled from src/ant_wire.h because this header must
- * compile standalone against radiant_core/include only; the _Static_assert
- * block at the bottom checks the two spellings agree in any translation unit
- * (radiant_api.c) that has already included src/ant_wire.h.
+ * here rather than pulled from radiant_wire.h so this header reads standalone
+ * without a reader having to cross-reference the generated one; the
+ * _Static_assert block at the bottom checks the two spellings agree,
+ * unconditionally - radiant_wire.h is module-owned, so unlike the src/ant_wire.h
+ * this used to (indirectly) depend on, it costs this header nothing to include
+ * outright rather than gate the check on some other translation unit having
+ * already pulled the generated names into scope first.
  */
 
 #ifndef RADIANT_CHANNEL_H_
@@ -49,6 +52,7 @@
 
 #include <radiant_core/radiant_frame.h>     /* struct radiant_channel_id, and the frame geometry */
 #include <radiant_core/radiant_radio_hal.h> /* radiant_time_t, enum radiant_radio_status */
+#include <radiant_core/radiant_wire.h>      /* RADIANT_WIRE_* - only for the _Static_assert block below */
 
 #ifdef __cplusplus
 extern "C" {
@@ -72,19 +76,19 @@ extern "C" {
 #define RADIANT_CHANNEL_NETWORK_COUNT 3u
 
 /* ---------------------------------------------------------------------------
- * Response codes - the wire bytes, checked against src/ant_wire.h at the
- * bottom of this file wherever that header is in scope.
+ * Response codes - the wire bytes, checked against radiant_wire.h at the
+ * bottom of this file.
  * ---------------------------------------------------------------------------
  */
 typedef uint8_t radiant_channel_err_t;
 
-#define RADIANT_CH_OK                 0x00u /* ANTW_RESPONSE_NO_ERROR */
-#define RADIANT_CH_ERR_WRONG_STATE    0x15u /* ANTW_CHANNEL_IN_WRONG_STATE */
-#define RADIANT_CH_ERR_NOT_OPENED     0x16u /* ANTW_CHANNEL_NOT_OPENED */
-#define RADIANT_CH_ERR_ID_NOT_SET     0x18u /* ANTW_CHANNEL_ID_NOT_SET */
-#define RADIANT_CH_ERR_INVALID_MESSAGE 0x28u /* ANTW_INVALID_MESSAGE */
-#define RADIANT_CH_ERR_INVALID_NETWORK 0x29u /* ANTW_INVALID_NETWORK_NUMBER */
-#define RADIANT_CH_ERR_INVALID_PARAM  0x33u /* ANTW_INVALID_PARAMETER_PROVIDED */
+#define RADIANT_CH_OK                 0x00u /* RADIANT_WIRE_RESPONSE_NO_ERROR */
+#define RADIANT_CH_ERR_WRONG_STATE    0x15u /* RADIANT_WIRE_CHANNEL_IN_WRONG_STATE */
+#define RADIANT_CH_ERR_NOT_OPENED     0x16u /* RADIANT_WIRE_CHANNEL_NOT_OPENED */
+#define RADIANT_CH_ERR_ID_NOT_SET     0x18u /* RADIANT_WIRE_CHANNEL_ID_NOT_SET */
+#define RADIANT_CH_ERR_INVALID_MESSAGE 0x28u /* RADIANT_WIRE_INVALID_MESSAGE */
+#define RADIANT_CH_ERR_INVALID_NETWORK 0x29u /* RADIANT_WIRE_INVALID_NETWORK_NUMBER */
+#define RADIANT_CH_ERR_INVALID_PARAM  0x33u /* RADIANT_WIRE_INVALID_PARAMETER_PROVIDED */
 
 /*
  * Two host-observable distinctions, not interchangeable (tools/ant_conformance.py
@@ -94,14 +98,14 @@ typedef uint8_t radiant_channel_err_t;
  */
 
 /* ---------------------------------------------------------------------------
- * Channel events this module raises: ANTW_EVENT_* codes, sent to the host
+ * Channel events this module raises: RADIANT_WIRE_EVENT_* codes, sent to the host
  * through radiant_event.c. Spelled as literals for the same reason as the
  * response codes above, checked in the same _Static_assert block.
  * ---------------------------------------------------------------------------
  */
-#define RADIANT_CH_EVENT_RX_SEARCH_TIMEOUT   0x01u /* ANTW_EVENT_RX_SEARCH_TIMEOUT */
-#define RADIANT_CH_EVENT_CHANNEL_CLOSED      0x07u /* ANTW_EVENT_CHANNEL_CLOSED */
-#define RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH 0x08u /* ANTW_EVENT_RX_FAIL_GO_TO_SEARCH */
+#define RADIANT_CH_EVENT_RX_SEARCH_TIMEOUT   0x01u /* RADIANT_WIRE_EVENT_RX_SEARCH_TIMEOUT */
+#define RADIANT_CH_EVENT_CHANNEL_CLOSED      0x07u /* RADIANT_WIRE_EVENT_CHANNEL_CLOSED */
+#define RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH 0x08u /* RADIANT_WIRE_EVENT_RX_FAIL_GO_TO_SEARCH */
 
 /* ---------------------------------------------------------------------------
  * Channel status byte, and channel types
@@ -109,11 +113,11 @@ typedef uint8_t radiant_channel_err_t;
  */
 
 /* Low two bits of a MESG_CHANNEL_STATUS reply. */
-#define RADIANT_CH_STATUS_UNASSIGNED 0x00u /* ANTW_STATUS_UNASSIGNED_CHANNEL */
-#define RADIANT_CH_STATUS_ASSIGNED   0x01u /* ANTW_STATUS_ASSIGNED_CHANNEL */
-#define RADIANT_CH_STATUS_SEARCHING  0x02u /* ANTW_STATUS_SEARCHING_CHANNEL */
-#define RADIANT_CH_STATUS_TRACKING   0x03u /* ANTW_STATUS_TRACKING_CHANNEL */
-#define RADIANT_CH_STATUS_STATE_MASK 0x03u /* ANTW_STATUS_CHANNEL_STATE_MASK */
+#define RADIANT_CH_STATUS_UNASSIGNED 0x00u /* RADIANT_WIRE_STATUS_UNASSIGNED_CHANNEL */
+#define RADIANT_CH_STATUS_ASSIGNED   0x01u /* RADIANT_WIRE_STATUS_ASSIGNED_CHANNEL */
+#define RADIANT_CH_STATUS_SEARCHING  0x02u /* RADIANT_WIRE_STATUS_SEARCHING_CHANNEL */
+#define RADIANT_CH_STATUS_TRACKING   0x03u /* RADIANT_WIRE_STATUS_TRACKING_CHANNEL */
+#define RADIANT_CH_STATUS_STATE_MASK 0x03u /* RADIANT_WIRE_STATUS_CHANNEL_STATE_MASK */
 
 /* Rest of the byte, per Rev 5.1 9.5.7.1: bits 3:2 network, bits 7:4 channel
  * type. Type values already live in the top nibble (SLAVE 0x00 ..
@@ -133,7 +137,7 @@ typedef uint8_t radiant_channel_err_t;
  * INVALID_MESSAGE, WRONG_STATE, INVALID_NETWORK_NUMBER), so inventing one
  * would be wire-visible. See docs/sdk-ant-contract.md.
  */
-#define RADIANT_CH_TYPE_MASTER_BIT 0x10u /* ANTW_CHANNEL_TYPE_MASTER */
+#define RADIANT_CH_TYPE_MASTER_BIT 0x10u /* RADIANT_WIRE_CHANNEL_TYPE_MASTER */
 
 /* ---------------------------------------------------------------------------
  * Time
@@ -304,7 +308,7 @@ typedef uint8_t radiant_channel_err_t;
  * entries all meaning "still ASSIGNED", so it's just a flag on ASSIGNED.
  *
  * CLOSING is the state the wire doesn't name but the contract requires ("not
- * closed when this returns, it is closing", ANTW_EVENT_CHANNEL_CLOSED tells
+ * closed when this returns, it is closing", RADIANT_WIRE_EVENT_CHANNEL_CLOSED tells
  * the host when done). A channel with an operation in flight can't become
  * ASSIGNED the instant close() returns - the terminal event hasn't arrived,
  * and unassigning underneath it would release state the backend still
@@ -344,7 +348,7 @@ enum radiant_channel_state {
  * registration pointer needed since there's never more than one consumer.
  *
  * @param channel     0 .. RADIANT_CHANNEL_COUNT-1.
- * @param event_code  An RADIANT_CH_EVENT_* value (an ANTW_EVENT_* wire byte).
+ * @param event_code  An RADIANT_CH_EVENT_* value (an RADIANT_WIRE_EVENT_* wire byte).
  *
  * Called from whatever context provoked the transition - the bridge's parser
  * thread, or radiant_sched.c's context which may be a radio callback - so the
@@ -606,7 +610,7 @@ radiant_channel_err_t radiant_channel_sharing_cycles_get(uint8_t channel,
  * mask-index INVALID_PARAM check belongs to whoever owns the mask table.
  * Returns OK or INVALID_MESSAGE.
  */
-#define RADIANT_CH_SDU_MASK_OFF 0xFFu /* ANTW_INVALID_SDU_MASK */
+#define RADIANT_CH_SDU_MASK_OFF 0xFFu /* RADIANT_WIRE_INVALID_SDU_MASK */
 radiant_channel_err_t radiant_channel_sdu_mask_config_set(uint8_t channel,
 						  uint8_t mask_config);
 radiant_channel_err_t radiant_channel_sdu_mask_config_get(uint8_t channel,
@@ -909,49 +913,48 @@ static inline radiant_time_t radiant_channel_search_ticks_to_us(uint8_t ticks)
 }
 
 /* ---------------------------------------------------------------------------
- * The agreement with src/ant_wire.h
+ * The agreement with radiant_wire.h
  *
- * These fire only in a translation unit that included src/ant_wire.h BEFORE
- * this header - radiant_api.c, in the firmware build, which is required to. That
- * is deliberate: the check runs everywhere both headers exist, and this header
- * still compiles standalone against nothing but radiant_core/include, which is
- * what the module's own gate needs.
+ * Unconditional, unlike the app-side src/ant_wire.h cross-check this replaced
+ * (which only fired in the one translation unit - radiant_api.c - that
+ * happened to have included that header first). radiant_wire.h is
+ * module-owned, so every translation unit that includes this header gets it
+ * for free, and the literals above can never drift from the generated values
+ * without a build failure naming exactly which one.
  * ---------------------------------------------------------------------------
  */
-#ifdef ANTW_RESPONSE_NO_ERROR
-_Static_assert(RADIANT_CH_OK == ANTW_RESPONSE_NO_ERROR, "wire code drift: OK");
-_Static_assert(RADIANT_CH_ERR_WRONG_STATE == ANTW_CHANNEL_IN_WRONG_STATE,
+_Static_assert(RADIANT_CH_OK == RADIANT_WIRE_RESPONSE_NO_ERROR, "wire code drift: OK");
+_Static_assert(RADIANT_CH_ERR_WRONG_STATE == RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
 	       "wire code drift: CHANNEL_IN_WRONG_STATE");
-_Static_assert(RADIANT_CH_ERR_NOT_OPENED == ANTW_CHANNEL_NOT_OPENED,
+_Static_assert(RADIANT_CH_ERR_NOT_OPENED == RADIANT_WIRE_CHANNEL_NOT_OPENED,
 	       "wire code drift: CHANNEL_NOT_OPENED");
-_Static_assert(RADIANT_CH_ERR_ID_NOT_SET == ANTW_CHANNEL_ID_NOT_SET,
+_Static_assert(RADIANT_CH_ERR_ID_NOT_SET == RADIANT_WIRE_CHANNEL_ID_NOT_SET,
 	       "wire code drift: CHANNEL_ID_NOT_SET");
-_Static_assert(RADIANT_CH_ERR_INVALID_MESSAGE == ANTW_INVALID_MESSAGE,
+_Static_assert(RADIANT_CH_ERR_INVALID_MESSAGE == RADIANT_WIRE_INVALID_MESSAGE,
 	       "wire code drift: INVALID_MESSAGE");
-_Static_assert(RADIANT_CH_ERR_INVALID_NETWORK == ANTW_INVALID_NETWORK_NUMBER,
+_Static_assert(RADIANT_CH_ERR_INVALID_NETWORK == RADIANT_WIRE_INVALID_NETWORK_NUMBER,
 	       "wire code drift: INVALID_NETWORK_NUMBER");
-_Static_assert(RADIANT_CH_ERR_INVALID_PARAM == ANTW_INVALID_PARAMETER_PROVIDED,
+_Static_assert(RADIANT_CH_ERR_INVALID_PARAM == RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
 	       "wire code drift: INVALID_PARAMETER_PROVIDED");
-_Static_assert(RADIANT_CH_EVENT_RX_SEARCH_TIMEOUT == ANTW_EVENT_RX_SEARCH_TIMEOUT,
+_Static_assert(RADIANT_CH_EVENT_RX_SEARCH_TIMEOUT == RADIANT_WIRE_EVENT_RX_SEARCH_TIMEOUT,
 	       "wire code drift: EVENT_RX_SEARCH_TIMEOUT");
-_Static_assert(RADIANT_CH_EVENT_CHANNEL_CLOSED == ANTW_EVENT_CHANNEL_CLOSED,
+_Static_assert(RADIANT_CH_EVENT_CHANNEL_CLOSED == RADIANT_WIRE_EVENT_CHANNEL_CLOSED,
 	       "wire code drift: EVENT_CHANNEL_CLOSED");
 _Static_assert(RADIANT_CH_EVENT_RX_FAIL_GO_TO_SEARCH ==
-		       ANTW_EVENT_RX_FAIL_GO_TO_SEARCH,
+		       RADIANT_WIRE_EVENT_RX_FAIL_GO_TO_SEARCH,
 	       "wire code drift: EVENT_RX_FAIL_GO_TO_SEARCH");
-_Static_assert(RADIANT_CH_STATUS_UNASSIGNED == ANTW_STATUS_UNASSIGNED_CHANNEL,
+_Static_assert(RADIANT_CH_STATUS_UNASSIGNED == RADIANT_WIRE_STATUS_UNASSIGNED_CHANNEL,
 	       "wire code drift: STATUS_UNASSIGNED_CHANNEL");
-_Static_assert(RADIANT_CH_STATUS_ASSIGNED == ANTW_STATUS_ASSIGNED_CHANNEL,
+_Static_assert(RADIANT_CH_STATUS_ASSIGNED == RADIANT_WIRE_STATUS_ASSIGNED_CHANNEL,
 	       "wire code drift: STATUS_ASSIGNED_CHANNEL");
-_Static_assert(RADIANT_CH_STATUS_SEARCHING == ANTW_STATUS_SEARCHING_CHANNEL,
+_Static_assert(RADIANT_CH_STATUS_SEARCHING == RADIANT_WIRE_STATUS_SEARCHING_CHANNEL,
 	       "wire code drift: STATUS_SEARCHING_CHANNEL");
-_Static_assert(RADIANT_CH_STATUS_TRACKING == ANTW_STATUS_TRACKING_CHANNEL,
+_Static_assert(RADIANT_CH_STATUS_TRACKING == RADIANT_WIRE_STATUS_TRACKING_CHANNEL,
 	       "wire code drift: STATUS_TRACKING_CHANNEL");
-_Static_assert(RADIANT_CH_STATUS_STATE_MASK == ANTW_STATUS_CHANNEL_STATE_MASK,
+_Static_assert(RADIANT_CH_STATUS_STATE_MASK == RADIANT_WIRE_STATUS_CHANNEL_STATE_MASK,
 	       "wire code drift: STATUS_CHANNEL_STATE_MASK");
-_Static_assert(RADIANT_CH_TYPE_MASTER_BIT == ANTW_CHANNEL_TYPE_MASTER,
+_Static_assert(RADIANT_CH_TYPE_MASTER_BIT == RADIANT_WIRE_CHANNEL_TYPE_MASTER,
 	       "wire code drift: CHANNEL_TYPE_MASTER");
-#endif /* ANTW_RESPONSE_NO_ERROR */
 
 #ifdef __cplusplus
 }
