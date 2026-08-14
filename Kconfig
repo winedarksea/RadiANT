@@ -699,13 +699,20 @@ endmenu
 # menu, outside the dongle's, because it is the opposite kind of device: a
 # dongle's epoch authority is the PC behind it and a strap has no PC at all.
 # See docs/decisions/0009-hostless-node-identity.md.
-rsource "src/node/Kconfig"
+#
+# Reached inside radiant_core/ now (the module, not this application) - that
+# move does not change who decides whether to build against it. RADIANT_NODE_*
+# is application-side library material, same as it was at src/node/: nothing
+# in radiant_core's own CMakeLists.txt compiles node_ident.c, this
+# application's does, below.
+rsource "radiant_core/src/node/Kconfig"
 
 # The compatibility profiles' policy settings (compat-C7): today the `enrol`
 # choice of docs/radiant-security.md section 11.6. Its own file and its own
 # menu for the same reason: these describe a sensor's posture, not a dongle's,
 # and the person choosing one is reading menuconfig rather than the docs, which
-# is why the help text carries the argument in full.
-rsource "src/profiles/Kconfig"
+# is why the help text carries the argument in full. Reached inside
+# radiant_core/ now, for the same reason as RADIANT_NODE_* above.
+rsource "radiant_core/src/profiles/Kconfig"
 
 source "Kconfig.zephyr"

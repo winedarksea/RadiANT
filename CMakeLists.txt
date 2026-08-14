@@ -245,16 +245,22 @@ endif()
 # home for them, and so the storage backend is selected the same way every other
 # backend in this project is.
 #
-# The counters' storage is a seam (src/node/node_nvm.h) with no default
-# implementation, which is why the backend is a separate condition rather than
-# being folded into the one above: a build that selects the identity and no
-# backend must fail at the link, not fall back to RAM.
+# The counters' storage is a seam (radiant_core/src/node/node_nvm.h) with no
+# default implementation, which is why the backend is a separate condition
+# rather than being folded into the one above: a build that selects the
+# identity and no backend must fail at the link, not fall back to RAM.
+#
+# radiant_core/src/node, not src/node: the files moved into the module
+# directory (radiant_core reaches no path outside itself, and this pair
+# always did), but the decision to compile them belongs to this application,
+# same as before the move - nothing in radiant_core/CMakeLists.txt reads
+# these two symbols.
 if(CONFIG_RADIANT_NODE_IDENT)
-  target_sources(app PRIVATE src/node/node_ident.c)
-  target_include_directories(app PRIVATE src/node)
+  target_sources(app PRIVATE radiant_core/src/node/node_ident.c)
+  target_include_directories(app PRIVATE radiant_core/src/node)
 endif()
 if(CONFIG_RADIANT_NODE_NVM_SETTINGS)
-  target_sources(app PRIVATE src/node/node_nvm_settings.c)
+  target_sources(app PRIVATE radiant_core/src/node/node_nvm_settings.c)
 endif()
 
 # Exactly one radio backend, chosen by ANT_RADIO above. All three implement

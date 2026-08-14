@@ -5,8 +5,9 @@ cmake_minimum_required(VERSION 3.20.0)
 #
 # UNLIKE sim/, THIS NEEDS NO sdk-ant AT ALL. sim/ is built entirely out of
 # sdk-ant's profile libraries and its radio, and says so in a FATAL_ERROR;
-# this one is built out of radiant_core and src/profiles/, both of which are in
-# this repository. That is the whole point of it: it is the first image where
+# this one is built out of radiant_core and radiant_core/src/profiles/, both
+# of which are in this repository. That is the whole point of it: it is the
+# first image where
 # the clean-room stack transmits as a master with a real ANT+ profile on top,
 # and a dependency on the proven stack would defeat the demonstration.
 #
@@ -67,7 +68,7 @@ target_sources_ifdef(CONFIG_RADIANT_CORE_ANTR_API app PRIVATE
 target_sources_ifdef(CONFIG_RADIANT_SEC_HOST_MESSAGES app PRIVATE
   ../src/ant_sec_host.c)
 
-# ── src/profiles ────────────────────────────────────────────────────────────
+# ── radiant_core/src/profiles ───────────────────────────────────────────────
 #
 # THE FIRST NON-TEST CONSUMER OF THESE FILES. Until this application they were
 # compiled only by radiant_core/tests/CMakeLists.txt, so every profile in the
@@ -93,28 +94,28 @@ target_sources_ifdef(CONFIG_RADIANT_SEC_HOST_MESSAGES app PRIVATE
 # LINKED and INERT, and the enrolment, private-mode, adaptive-frequency and
 # command layers are not linked at all - they join when there is a reason.
 target_sources(app PRIVATE
-  ../src/profiles/profile_bits.c
-  ../src/profiles/profile_common.c
-  ../src/profiles/profile_sched.c
-  ../src/profiles/profile_hr.c
-  ../src/profiles/profile_schedule.c
-  ../src/profiles/profile_compat.c
-  ../src/profiles/profile_telemetry.c
-  ../src/profiles/profile_handoff.c
+  ../radiant_core/src/profiles/profile_bits.c
+  ../radiant_core/src/profiles/profile_common.c
+  ../radiant_core/src/profiles/profile_sched.c
+  ../radiant_core/src/profiles/profile_hr.c
+  ../radiant_core/src/profiles/profile_schedule.c
+  ../radiant_core/src/profiles/profile_compat.c
+  ../radiant_core/src/profiles/profile_telemetry.c
+  ../radiant_core/src/profiles/profile_handoff.c
 )
-target_include_directories(app PRIVATE ../src/profiles)
+target_include_directories(app PRIVATE ../radiant_core/src/profiles)
 
-# ── src/node ────────────────────────────────────────────────────────────────
+# ── radiant_core/src/node ───────────────────────────────────────────────────
 #
 # A LIBRARY, NOT AN APPLICATION - the plan's words, and the reason it can be
 # linked here at all. The identity record decides the device number under
 # ADR 0009, and the settings-backed NVM implementation is the one the dongle
 # already uses.
 target_sources(app PRIVATE
-  ../src/node/node_ident.c
-  ../src/node/node_nvm_settings.c
+  ../radiant_core/src/node/node_ident.c
+  ../radiant_core/src/node/node_nvm_settings.c
 )
-target_include_directories(app PRIVATE ../src/node)
+target_include_directories(app PRIVATE ../radiant_core/src/node)
 
 # The antr_* declarations and the ANT wire constants. src/ is the application
 # layer of the dongle, but these two headers are the interface radiant_core

@@ -81,14 +81,17 @@ target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fake_nvm.c")
 # radiant_core header: the page codecs are pure, but applying a handoff means
 # driving a channel and announcing a clock accuracy means widening one, and a
 # format with no consumer would not have been worth specifying. The dependency
-# runs application -> core, which is the direction the module boundary already
-# permits; nothing in radiant_core knows either file exists.
+# still runs application -> core, which is the direction the module boundary
+# permits: these files live inside radiant_core/src/profiles/ now (they used to
+# reach here from outside the module entirely), but radiant_core's own
+# CMakeLists.txt does not compile them into the module's library - only an
+# application that lists them, as this one does, links them at all.
 target_sources(app PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_bits.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_telemetry.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_sched.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_handoff.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_schedule.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_bits.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_telemetry.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_sched.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_handoff.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_schedule.c"
   # The ANT+ compatibility profiles (compat-C5): heart rate 0x78 and bicycle
   # power 0x0B, the common pages they share, and the compat client that inserts
   # the RadiANT beacon and attestation pages through profile_sched.c's seam.
@@ -98,29 +101,29 @@ target_sources(app PRIVATE
   # exists to draw: profile_hr.c and profile_power.c reach no radiant_core
   # header even transitively, so "the profile modules never call radiant_sec" is
   # a property of the include graph rather than a rule somebody remembers.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_common.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_compat.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_hr.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_power.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_tracker.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_controls.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_common.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_compat.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_hr.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_power.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_tracker.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_controls.c"
   # Running dynamics. Listed here for the same reason as its two neighbours -
   # src/test_profile_rd.c is in this application's test sources, so leaving the
   # implementation out is a link error, not a missing test. It was exactly that
   # for a while: the RD phase added the decoder, the adapter in src/bridge and
   # the test, and the adapter's own CMake entry below, but never this line.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_rd.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_rd.c"
   # Layer D (compat-C7): the over-air enrolment window. The FOURTH file here
   # that includes a radiant_core header, and the second that has to - adding a
   # keyholder is a key operation. It names no page number and no frame index,
   # so the boundary profile_compat.c draws is not widened by it.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_enrol.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_enrol.c"
   # Layer C (compat-C8): the private-mode switch. The FIFTH file here that
   # includes a radiant_core header and the third that has to - deriving the
   # locator needs K_id and verifying a command needs K_cmd, and both live where
   # the root key does. It names no page number of its own: the announcement is
   # two frames of the beacon page's set, which profile_compat.h already owns.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_private.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_private.c"
   # Adaptive frequency (RF-7): choosing a quieter RF index from the
   # channel-quality map, and announcing the move on page 0x13 before it happens.
   # The SIXTH file here that includes a radiant_core header and the fourth that
@@ -128,7 +131,7 @@ target_sources(app PRIVATE
   # and radiant_radio_hal.h for the index range. It reaches no scheduler and no
   # search header on purpose: "discovery never moves" is a property of the
   # include graph here, not a rule somebody remembers.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_freq.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_freq.c"
   # Response slots and the reliable-command state machine (RF-8): section 9's
   # idempotency rule, the inline tag at both widths, and the downlink window
   # profile_schedule.c has been announcing since RF-5a. The SEVENTH file here
@@ -137,59 +140,62 @@ target_sources(app PRIVATE
   # no slot kind to radiant_sched.c and reaches no search header: a response
   # slot is an ordinary bounded receive window, which is the claim
   # test_command.c exists to keep honest.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles/profile_command.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_command.c"
 )
 target_include_directories(app PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/profiles")
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles")
 
-# ── src/bridge ──────────────────────────────────────────────────────────────
+# ── radiant_core/src/bridge ──────────────────────────────────────────────────
 #
 # The sample bus and sink registry (P5 of the multiprotocol plan; see
 # docs/radiant-bridge.md sections 3-4). Reaches no radiant_core header, same
-# claim src/profiles/profile_hr.c makes about itself - this is the layer above
-# the profile decoder, and section 2's amended rule 3 draws the line there.
+# claim radiant_core/src/profiles/profile_hr.c makes about itself - this is
+# the layer above the profile decoder, and section 2's amended rule 3 draws
+# the line there.
 target_sources(app PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge/radiant_bridge.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge/radiant_hr_adapter.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_bridge.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_hr_adapter.c"
   # The running-dynamics adapter. It includes src/profiles/profile_rd.h for the
   # two page decoders rather than re-deriving the bit splits, which is why the
   # src/profiles include directory above is not optional for this file.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge/radiant_rd_adapter.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_rd_adapter.c"
   # P6: the binding table (section 5) and the rule evaluator (section 6.1/6.2).
   # radiant_rules.c registers itself as an ordinary RADIANT_SINK_DEFINE()
   # sink, so it needs nothing from CMake beyond being compiled and linked -
   # the ITERABLE_SECTION_ROM(radiant_sink, ...) fragment below already covers
   # every sink in this application, this one included.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge/radiant_binding.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge/radiant_rules.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_binding.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_rules.c"
   # P7: the Matter plane's type map and endpoint model (section 8.1). Another
   # ordinary sink, and deliberately NOT the Matter stack - see the header.
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge/radiant_matter.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_matter.c"
 )
 target_include_directories(app PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge")
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge")
 # The linker fragment RADIANT_SINK_DEFINE()'s STRUCT_SECTION_ITERABLE needs -
 # see the comment in radiant_bridge_sections.ld for why this is not optional.
-zephyr_linker_sources(SECTIONS "${CMAKE_CURRENT_SOURCE_DIR}/../../src/bridge/radiant_bridge_sections.ld")
+zephyr_linker_sources(SECTIONS "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_bridge_sections.ld")
 
-# ── src/node ────────────────────────────────────────────────────────────────
+# ── radiant_core/src/node ────────────────────────────────────────────────────
 #
 # The hostless node's identity, epoch and pairing scalar (compat-C6):
 # docs/decisions/0009-hostless-node-identity.md in code.
 #
-# Outside radiant_core for the reason the ADR gives in its decision 7, not for
-# convenience: radiant_core is TOLD an epoch and refuses one that has not
-# advanced, and putting the persistence inside it would hand every consumer of
-# the module a flash dependency and a storage backend to serve one class of
-# node. So the dependency runs application -> core here as well, and nothing in
-# radiant_core knows this directory exists. There is no new core entry point for
-# a node-derived epoch: node_ident.c calls radiant_sec_set_epoch(), which is the
+# Not part of radiant_core's own library, for the reason the ADR gives in its
+# decision 7, not for convenience: radiant_core is TOLD an epoch and refuses
+# one that has not advanced, and putting the persistence inside its library
+# would hand every consumer of the module a flash dependency and a storage
+# backend to serve one class of node. So the dependency still runs
+# application -> core, the same direction as before this directory moved
+# inside radiant_core/src/ - only an application that lists node_ident.c
+# itself, as this one does, links it. There is no new core entry point for a
+# node-derived epoch: node_ident.c calls radiant_sec_set_epoch(), which is the
 # same function the host adapter calls with a host-supplied value.
 target_sources(app PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/node/node_ident.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/node/node_ident.c"
 )
 target_include_directories(app PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/node")
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/node")
 
 # This directory, so a suite writes #include "fake_radio.h" rather than
 # #include "../fake_radio.h". Suites live in src/ and the mock does not, so

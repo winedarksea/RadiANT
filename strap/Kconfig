@@ -8,8 +8,8 @@
 # honest.
 #
 
-rsource "../src/node/Kconfig"
-rsource "../src/profiles/Kconfig"
+rsource "../radiant_core/src/node/Kconfig"
+rsource "../radiant_core/src/profiles/Kconfig"
 rsource "../src/Kconfig.antr_api"
 
 source "Kconfig.zephyr"
