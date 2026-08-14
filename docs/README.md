@@ -97,10 +97,10 @@ construction rather than by discipline.
 
 ## One thing that does not move into `docs/`
 
-**The prose header comments in [`synth.conf`](../synth.conf),
-[`stub.conf`](../stub.conf), [`prj.conf`](../prj.conf),
-[`Kconfig`](../Kconfig) and the tops of `src/*.c` stay exactly where they
-are.** They are read at the moment somebody edits the file, which is the moment
+**The prose header comments in [`synth.conf`](../apps/dongle/synth.conf),
+[`stub.conf`](../apps/dongle/stub.conf), [`prj.conf`](../apps/dongle/prj.conf),
+[`Kconfig`](../apps/dongle/Kconfig) and the tops of `apps/common/*.c` and
+`radiant/src/*.c` stay exactly where they are.** They are read at the moment somebody edits the file, which is the moment
 the reasoning is needed; moved into `docs/` they rot within two changes and are
 read by nobody. Documents here link *to* them. This is the one place where
 duplication-by-omission beats tidiness, and rule 1 does not override it.

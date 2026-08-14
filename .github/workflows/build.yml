@@ -200,6 +200,78 @@ jobs:
           echo "README.md: ${lines} lines (cap 450)"
           test "${lines}" -lt 450
 
+  # The real proof radiant/ is importable, not merely designed to be: this
+  # extracts radiant/ ALONE via `git archive` into a temp directory - nothing
+  # else from this repository comes along - and builds tests/import_smoke
+  # against that isolated copy. A `../` reach-through re-introduced into the
+  # module (or into that test app) fails THIS job even on a machine where the
+  # full checkout sitting right there would have hidden it, which is exactly
+  # the failure mode a plain in-repo build cannot catch.
+  #
+  # native_sim rather than a real board: it needs no arm-zephyr-eabi
+  # toolchain, and the point here is source self-containment, not a radio -
+  # CONFIG_RADIANT_BACKEND_NULL, this application's only backend, needs
+  # neither. Same host-gcc override the ztest job uses, for the same reason
+  # (action-zephyr-setup makes zephyr the default toolchain variant, which
+  # native_sim is not).
+  import-smoke:
+    name: radiant/ imports standalone
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install 32-bit host runtime
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib g++-multilib
+
+      - name: Set up Zephyr workspace and toolchain
+        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: app
+          toolchains: arm-zephyr-eabi
+
+      # Extracted OUTSIDE the workspace's app/ checkout, on purpose - a path
+      # under app/ would still be "this repository", just with extra steps,
+      # and would not catch a reach-through into, say, app/apps/common.
+      - name: Extract radiant/ alone via git archive
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/radiant-isolated
+          git -C app archive --format=tar HEAD -- radiant |
+            tar -x -C /tmp/radiant-isolated --strip-components=1
+          test -f /tmp/radiant-isolated/zephyr/module.yml
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-import-smoke-${{ github.sha }}
+          restore-keys: |
+            ccache-import-smoke-
+
+      - name: Build tests/import_smoke against the isolated copy
+        env:
+          ZEPHYR_TOOLCHAIN_VARIANT: host
+        run: |
+          set -euxo pipefail
+          west build app/tests/import_smoke \
+            -b native_sim \
+            -d build \
+            -p always \
+            -- "-DRADIANT_MODULE_DIR=/tmp/radiant-isolated"
+
   # The job that finally makes CI green on a fork: no secret of any kind, and
   # no sdk-ant checkout. With -DANT_RADIO=core or =stub the module is never
   # appended to ZEPHYR_EXTRA_MODULES, CONFIG_ANT never exists, and nothing in

@@ -367,14 +367,14 @@ Today the radio is Nordic's prebuilt `libant.a`, from a private,
 non-redistributable repository, and `CMakeLists.txt` hard-fails without its headers — so losing
 access to that repository means nothing builds, not even the radio-stub build.
 The seam below is what removes that, and it mirrors the transport pattern in
-[`src/ant_transport.h`](../src/ant_transport.h) exactly, because that pattern
+[`apps/common/ant_transport.h`](../apps/common/ant_transport.h) exactly, because that pattern
 already works and is already asserted in CI.
 
 ```
-src/ant_serial_bridge.c        unchanged logic; speaks only ANTW_*/antr_*
+apps/common/ant_serial_bridge.c   unchanged logic; speaks only ANTW_*/antr_*
         |
-   src/ant_radio.h             OUR ~50-function contract  (antr_*)
-   src/ant_wire.h              OUR protocol constants     (ANTW_*)
+   apps/common/ant/ant_radio.h    OUR ~50-function contract  (antr_*)
+   apps/common/ant/ant_wire.h     OUR protocol constants     (ANTW_*)
         |
    +----+-----------------+----------------------+
    |                      |                      |
@@ -390,7 +390,7 @@ ant_radio_sdk_ant.c   ant_radio_stub.c    radiant/   (clean-room stack)
 |---|---|---|
 | `sdk_ant` | ~50 one-line forwarders onto `libant.a`, plus a `BUILD_ASSERT` block comparing every `ANTW_*` constant against its `MESG_*` counterpart | The reference half of every A/B, and the shipping radio until Tier 3 passes. See [`sdk-ant-contract.md`](sdk-ant-contract.md) |
 | `core` | The clean-room rebuild in `radiant/` | The point of the exercise: builds with zero sdk-ant present, and is a superset — 32 channels, background scan, the RadiANT extensions |
-| `stub` | A no-op radio, [`src/ant_radio_stub.c`](../src/ant_radio_stub.c) — the rename of the old `src/ant_stub.c` | The cheapest proof the seam holds. Builds in seconds, and is the only configuration today that runs with no sdk-ant at all |
+| `stub` | A no-op radio, [`apps/common/ant_radio_stub.c`](../apps/common/ant_radio_stub.c) — the rename of the old `src/ant_stub.c` | The cheapest proof the seam holds. Builds in seconds, and is the only configuration today that runs with no sdk-ant at all |
 
 **The prefixes are load-bearing, not cosmetic.** sdk-ant's error macros are
 computed expressions (`NRF_ANT_ERROR_OFFSET + INVALID_MESSAGE`), not literals,
@@ -886,7 +886,7 @@ Nothing in `radiant` waits on it.
 |---|---|
 | **nRF24L01+** | Not selected — though the frame mapping onto ShockBurst is what validates the whole design (the nRF24AP2 was an ANT MCU bonded to an nRF24L01+ core), and the HAL would not preclude one |
 | **SX1280** (2.4 GHz LoRa) | It *can* do ANT's PHY, but its CRC engine covers payload only while ANT's CRC includes the network address, so it needs software CRC — and it lands near −93 dBm, worse than the nRF52840 already in hand, while the CSS long-range mode that makes LoRa interesting is unusable for ANT. A two-radio gateway (ANT on 2.4 GHz, LoRa sub-GHz backhaul) is an *application* of the telemetry envelope, not a backend |
-| **nRF5340** | Dropped from v1. Its RADIO is on the network core, so sdk-ant needs a whole RPC subsystem for it — which is why `src/ant_serial_bridge.c` already branches on `CONFIG_ANT_NP_HOST`. A separate project of comparable size that buys nothing the nRF52840 dongle does not have. It stays valuable as a *debug* board; see [`testing.md`](testing.md) |
+| **nRF5340** | Dropped from v1. Its RADIO is on the network core, so sdk-ant needs a whole RPC subsystem for it — which is why `apps/common/ant_serial_bridge.c` already branches on `CONFIG_ANT_NP_HOST`. A separate project of comparable size that buys nothing the nRF52840 dongle does not have. It stays valuable as a *debug* board; see [`testing.md`](testing.md) |
 | **A 2 Mbps mode** | Saves ~2 µA and costs ~3 dB of sensitivity. Wrong trade for every stated goal |
 
 ---
@@ -895,7 +895,7 @@ Nothing in `radiant` waits on it.
 
 The bridge does not know what carries its bytes. It needs a byte sink, a byte
 source, and a way to signal that it has drained its input —
-[ant_transport.h](../src/ant_transport.h) — and exactly one of three
+[ant_transport.h](../apps/common/ant_transport.h) — and exactly one of three
 implementations is compiled in, chosen by `CONFIG_ANT_DONGLE_TRANSPORT_*`.
 
 | Transport | Where it applies | Status |
@@ -924,7 +924,7 @@ controller, the same descriptors, the same endpoints. What it buys is that
 that does not, and that the two can be measured against each other:
 
 ```powershell
-west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
+west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle\apps\dongle `
   -d C:\Users\Colin\ant_dongle\build\feather_next `
   -b adafruit_feather_nrf52840/nrf52840/uf2 -p always -- "-DEXTRA_CONF_FILE=next.conf"
 ```
@@ -933,7 +933,7 @@ That build enumerates as the same `0FCF:1009` with the same 16-character serial
 and passes `ant_probe.py` and `ant_scan.py` identically to the legacy one. One
 Kconfig warning is expected and harmless — `USB_NRFX_ATTACHED_EVENT_DELAY` lives
 inside `if USB_DEVICE_DRIVER` and so does not exist in a new-stack build;
-[next.conf](../next.conf) explains why it needs no replacement.
+[next.conf](../apps/dongle/next.conf) explains why it needs no replacement.
 
 One respect in which the impersonation stops being exact: DWC2 is a high-speed
 controller, so an nRF54LM20A dongle enumerates at 480 Mbit/s with 512-byte bulk
@@ -1008,11 +1008,11 @@ lines it surrounds. Every one of these is built by
 Same source, different board target, and a DFU package instead of a UF2:
 
 ```powershell
-west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
+west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle\apps\dongle `
   -d C:\Users\Colin\ant_dongle\build\dongle `
   -b nrf52840dongle/nrf52840 -p always
 
-.\scripts\package_dfu.ps1     # -> dist\ant_dongle_nrf52840dongle.zip
+.\scripts\package_dfu.ps1     # -> dist\radiant_dongle_nrf52840dongle.zip
 ```
 
 The package is unsigned, which is correct here: the dongle ships a
@@ -1021,7 +1021,7 @@ and no cable. `package_dfu.ps1` refuses an image that does not start at
 `0x1000` — a Feather build starts at `0x26000` and would otherwise package
 happily into a zip that installs cleanly and then does nothing.
 
-[`boards/nrf52840dongle_nrf52840.conf`](../boards/nrf52840dongle_nrf52840.conf)
+[`boards/nrf52840dongle_nrf52840.conf`](../apps/dongle/boards/nrf52840dongle_nrf52840.conf)
 settles the two differences: no UF2 output, and `CONFIG_USE_DT_CODE_PARTITION`
 left *off* so the offset comes out `0x1000` rather than the `slot0_partition`
 the board's devicetree names for MCUboot, which we do not use.
@@ -1031,15 +1031,15 @@ the board's devicetree names for MCUboot, which we do not use.
 The board's own `/uf2` variant already sets `CONFIG_BUILD_OUTPUT_UF2` and takes
 its offset from `nrf52840_partition_uf2_sdv6.dtsi`, the same `0x26000` layout
 the Feather uses — so it shares
-[`pm_static_nrf52840_uf2_sdv6.yml`](../pm_static_nrf52840_uf2_sdv6.yml) and needs
+[`pm_static_nrf52840_uf2_sdv6.yml`](../apps/dongle/pm_static_nrf52840_uf2_sdv6.yml) and needs
 no map of its own. Build two images:
 
 ```powershell
-west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
+west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle\apps\dongle `
   -d C:\Users\Colin\ant_dongle\build\promicro `
   -b promicro_nrf52840/nrf52840/uf2 -p always
 
-west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
+west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle\apps\dongle `
   -d C:\Users\Colin\ant_dongle\build\promicro_synth `
   -b promicro_nrf52840/nrf52840/uf2 -p always -- "-DEXTRA_CONF_FILE=synth.conf"
 ```
@@ -1061,10 +1061,10 @@ shipped in sdk-ant and does apply here: `SOC_NRF54LM20A` and `SOC_NRF54L15`
 both select `SOC_SERIES_NRF54LX`, and that is what `ANT_LIB_DIR` keys on.
 
 ```powershell
-west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
+west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle\apps\dongle `
   -d C:\Users\Colin\ant_dongle\build\l15 -b nrf54l15dk/nrf54l15/cpuapp -p always
 
-west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
+west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle\apps\dongle `
   -d C:\Users\Colin\ant_dongle\build\lm20 -b nrf54lm20dk/nrf54lm20a/cpuapp -p always
 ```
 
@@ -1100,7 +1100,7 @@ drop` — which reads like a broken image rather than a missing tool.
 ### nRF54L needs a real 32.768 kHz crystal
 
 On nRF52840, a board that omits the crystal can still be a dongle: build with
-[synth.conf](../synth.conf) and the low-frequency clock is derived from the 32 MHz
+[synth.conf](../apps/dongle/synth.conf) and the low-frequency clock is derived from the 32 MHz
 crystal the radio already requires. **That fallback does not work on nRF54L,
 and the way it fails is the problem.**
 
@@ -1119,7 +1119,7 @@ acknowledged — the radio simply never receives anything. A dongle built this
 way looks perfectly healthy to a host and is deaf.
 
 The mechanism is not established, and on nRF52840 the same configuration works
-and stays supported. But because the failure is silent, `src/main.c` carries a
+and stays supported. But because the failure is silent, `apps/dongle/src/main.c` carries a
 `BUILD_ASSERT` that refuses the nRF54L + SYNTH combination outright rather than
 warning about it.
 
@@ -1130,7 +1130,7 @@ at all. On nRF54L it would enumerate, pass `ant_probe.py`, and hear nothing.
 
 ### Stub build
 
-`stub.conf` compiles `src/ant_radio_stub.c` in place of the radio and turns on the MS
+`stub.conf` compiles `apps/common/ant_radio_stub.c` in place of the radio and turns on the MS
 OS descriptors, so the USB half builds and enumerates against whatever NCS you
 have installed. Useful for working on the USB class, or for USB debugging on a
 board sdk-ant does not target:
@@ -1138,7 +1138,7 @@ board sdk-ant does not target:
 ```powershell
 . .\scripts\env.ps1 -NcsVersion v3.4.0
 Push-Location C:\ncs\v3.4.0
-west -z C:\ncs\v3.4.0\zephyr build -s C:\Users\Colin\ant_dongle `
+west -z C:\ncs\v3.4.0\zephyr build -s C:\Users\Colin\ant_dongle\apps\dongle `
   -d C:\Users\Colin\ant_dongle\build\stub `
   -b adafruit_feather_nrf52840/nrf52840/uf2 -p always -- "-DEXTRA_CONF_FILE=stub.conf"
 Pop-Location
@@ -1193,7 +1193,7 @@ routes in from the wire. The first is ext-assign — the
 `radiant_api.c` reads to choose `RADIANT_SEARCH_MODE_SCAN` over
 `RADIANT_SEARCH_MODE_ACQUIRE` for one channel at a time. The second is
 `MESG_OPEN_RX_SCAN_MODE` (`0x5B`) itself, now handled in
-`src/ant_serial_bridge.c`: it refuses with `ANTW_CLOSE_ALL_CHANNELS` unless
+`apps/common/ant_serial_bridge.c`: it refuses with `ANTW_CLOSE_ALL_CHANNELS` unless
 every channel is closed, then takes channel 0 through the same ext-assign path
 in one call instead of three.
 
