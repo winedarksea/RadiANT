@@ -44,7 +44,7 @@ import radiant_crypto as rc
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 VECTORS = os.path.join(TOOLS, "vectors")
-SRC_PROFILES = os.path.join(os.path.dirname(TOOLS), "src", "profiles")
+SRC_PROFILES = os.path.join(os.path.dirname(TOOLS), "radiant", "src", "profiles")
 
 # Pinned in radiant/tests/src/test_profile_compat.c; must agree or
 # nothing verifies. Also ant_sim's DEFAULT_COMPAT_ROOT, so a C capture and a
