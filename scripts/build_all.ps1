@@ -105,6 +105,36 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# WEST MUST NOT BE CALLED DIRECTLY FROM A SCRIPT WITH 'Stop' IN FORCE.
+#
+# west writes its ordinary progress to stderr - "Loading Zephyr module(s)
+# (Zephyr base): sysbuild_default" and so on - and Windows PowerShell 5.1 wraps
+# a native command's stderr in ErrorRecords. With $ErrorActionPreference =
+# 'Stop' the FIRST progress line therefore aborts the script, and it aborts it
+# with a NativeCommandError that reads exactly like a build failure while the
+# build was in fact fine. `> $log` does not help: it redirects stdout, and
+# stderr is the stream causing it.
+#
+# So the preference is dropped to 'Continue' across the west call and nowhere
+# else, and $LASTEXITCODE is the only verdict tested. scripts/build_p4.ps1 does
+# the same thing for the same reason and its comment says so at length; this
+# wrapper exists so the two loops below cannot get it right in one place and
+# wrong in the other, which is exactly what had happened - the node loop threw
+# on its first row while the target loop above it did not.
+function Invoke-West([string[]]$BaseArgs, [string[]]$ExtraArgs, [string]$LogPath) {
+    $all = @($BaseArgs)
+    if ($ExtraArgs) { $all += $ExtraArgs }
+
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & west @all > $LogPath
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
 $repo = Split-Path $PSScriptRoot -Parent
 $zephyr = "C:\ncs\$NcsVersion\zephyr"
 $dist = Join-Path $repo 'dist'
@@ -356,8 +386,9 @@ try {
         # Do not redirect stderr: PowerShell 5.1 wraps a native command's
         # stderr in ErrorRecords and reports failure even on exit code 0.
         $log = Join-Path $env:TEMP "build_$($t.dir).log"
-        west -z $zephyr build -s $rowApp -d $out -b $t.board -p always @extra > $log
-        if ($LASTEXITCODE -ne 0) {
+        $rc = Invoke-West @('-z', $zephyr, 'build', '-s', $rowApp, '-d', $out,
+                            '-b', $t.board, '-p', 'always') $extra $log
+        if ($rc -ne 0) {
             Get-Content $log -Tail 30
             throw "build failed for $($t.artifact); full log at $log"
         }
@@ -497,8 +528,9 @@ try {
         $log = Join-Path $env:TEMP 'build_independence.log'
         $indep = @("-DANT_RADIO=$Backend", "-DANT_MODULE_DIR=$ghost")
         if ($Backend -eq 'core') { $indep += "-DRADIANT_BACKEND=$RadiantBackend" }
-        west -z $zephyr build -s $dongleApp -d $out -b $board -p always -- @indep > $log
-        if ($LASTEXITCODE -ne 0) {
+        $rc = Invoke-West @('-z', $zephyr, 'build', '-s', $dongleApp, '-d', $out,
+                            '-b', $board, '-p', 'always', '--') $indep $log
+        if ($rc -ne 0) {
             Get-Content $log -Tail 30
             throw "the $Backend backend does not build without sdk-ant present; full log at $log"
         }
@@ -553,8 +585,9 @@ try {
             if ($t.conf) { $extra += "-Dhrm_ble_EXTRA_CONF_FILE=$($t.conf)" }
 
             $log = Join-Path $env:TEMP "build_$($t.dir).log"
-            west -z $zephyr build -s $nodeApp -d $out -b $t.board -p always @extra > $log
-            if ($LASTEXITCODE -ne 0) {
+            $rc = Invoke-West @('-z', $zephyr, 'build', '-s', $nodeApp,
+                                '-d', $out, '-b', $t.board, '-p', 'always') $extra $log
+            if ($rc -ne 0) {
                 Get-Content $log -Tail 30
                 throw "build failed for hrm_ble $($t.dir); full log at $log"
             }
