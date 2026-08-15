@@ -19,6 +19,30 @@ why, because "unsigned" reads as carelessness when here it is a constraint:
   accepts any image dropped on the mass-storage drive. There is no signature
   check to satisfy. On these boards **physical access is the trust boundary**,
   and no firmware-side measure changes that.
+
+  The flip side is an operational cost, recorded here because it is the same
+  fact read from the other end: **physical access is also REQUIRED.** A running
+  release image on a Feather offers no route back into its own bootloader, and
+  this was verified rather than assumed on 2026-08-15 —
+  `handle_system_reset()` (`apps/common/ant_serial_bridge.c`) performs an ANT
+  *stack* reset via `antr_stack_reset()` and never reboots the SoC; the only
+  `sys_reboot()` in the tree is in `k_sys_fatal_error_handler()`, behind
+  `CONFIG_ANT_DONGLE_FLASH_LOG` and unreachable without inducing a fault; the
+  device presents a bulk ANT interface rather than CDC, so the 1200-baud touch
+  that reboots most Adafruit boards does not apply; nothing writes the
+  bootloader's `GPREGRET` magic; and the board carries no debugger. The
+  bootloader's double-tap detection would accept two rapid resets from any
+  source, and the firmware can produce none.
+
+  So every field update of a UF2 target needs a hand on the RESET button. That
+  is a defensible security posture and an unhelpful support story, and it has a
+  measurable cost: it blocked the Phase 1.7 acceptance rig in the session that
+  found it, because the transmitter had to move to nRF52 silicon for +8 dBm and
+  the only nRF52 board on the bench could not be reflashed. A host-commanded
+  reboot-to-bootloader (set `GPREGRET`, `sys_reboot()`) would remove that, and
+  would **not** weaken the boundary above — anyone who can send it can already
+  write the drive. It is deliberately not implemented here rather than added
+  unasked; this note exists so the trade is decided rather than inherited.
 - **The nRF52840 Dongle's DFU cannot *usefully* be signed.** `nrfutil pkg
   generate --key-file` will happily produce a signed package, but the stock
   Nordic bootloader validates against a public key compiled into *itself* — so
