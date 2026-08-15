@@ -1047,6 +1047,72 @@ against 0.4 %), so that finding was mostly measuring bug 23 rather than the
 role. Neither role is a worst case at this load. Do not lean on either claim
 without re-measuring at higher sensor counts.
 
+#### 7.4.2a The scheduler cost, from the Thread side
+
+§7.4.2 reports what coexistence costs **ANT+**. This is the other direction, and
+it is the column the §7.4 tables never had: what arbitration costs **Thread**.
+It is not a new sitting — every number is read out of the consoles
+`scripts/p4_arm.ps1` already captured on 2026-08-13 (`thread lat us:` and
+`thread mac d:`), which nothing had ever tabulated.
+
+| | p4ctrl (control) | p4med (Thread MED) | p4sed (Thread SED) |
+|---|---|---|---|
+| MAC frames sent, cumulative | — (no load) | 2 407 | 4 935 |
+| MAC retries | — | 20 (0.83 %) | 32 (0.65 %) |
+| CCA failures / aborts / busy | — | **0 / 0 / 0** | **0 / 0 / 0** |
+| Send latency ≤ 128 µs | — | 2 397 | 2 384 |
+| Send latency 128–256 µs | — | 3 | 16 |
+| Send latency > 256 µs | — | **0** | **0** |
+| Worst single send | — | **311 µs** | **431 µs** |
+| Gate requests blocked | 0 of 965 | 4 of 970 | 16 of 986 |
+| Gate `eagain` | 7 | 49 | 82 |
+| Grant skew | 0 | 8 548 | 6 055 |
+
+**Reading it.** Arbitration is close to invisible to Thread. Better than 99.8 %
+of sends complete inside 128 µs in both roles, nothing at all lands beyond
+256 µs, and the worst single send in either arm is 431 µs — against an ANT+
+window that recurs every 250 ms. There were **no** CCA failures, aborts or busy
+returns in either role, which is the result that matters most: the 802.15.4 MAC
+never found the air taken when it went to use it. The retry rate (0.65–0.83 %)
+is ordinary 802.15.4 behaviour at this scale and does not differ meaningfully
+between the roles.
+
+The SED arm is the slightly more contended one on every column that moves
+(16 blocked against 4, 82 `eagain` against 49, a 431 µs worst case against
+311 µs), which is the same direction §7.4.2 found from the ANT+ side and the
+same negligible magnitude. Neither role is a worst case at this load.
+
+**The ANT+ loss figures from that sitting are deliberately NOT repeated here.**
+They were taken against `tools/ant_sim.py` driving a Dongle, which
+`archive/benchmarks/baseline.schema.json` refuses as a baseline transmitter, so
+they cannot be read against the ~0.4 % floor — that is §7.4.1's own recorded
+limitation and it is what §7.4.3 below is for. The scheduler-cost numbers in
+this table are unaffected by it: they are the *Thread* stack's own account of
+its own sends, and the transmitter on the ANT+ side is not in that measurement
+at all.
+
+#### 7.4.3 Re-taking the three arms against an admissible transmitter — OUTSTANDING
+
+§7.4.1's limitation stands and is the reason the loss column above is missing.
+The fix is to re-take all three arms with `apps/sim` **firmware** as the master
+rather than a host script driving a dongle.
+
+**That transmitter now exists and is proven** (2026-08-15): `apps/sim` builds on
+the v3.2.4 pairing and runs on an nRF54L15 DK, and a Feather DUT decoded it at
+100.06 W against 100 and 80.09 rpm against 80 with clean accumulator continuity.
+`apps/sim` also builds for `nrf52840dk` and the Feather, so the rig is
+Feather-as-master / L15-as-DUT / nRF5340-DK-as-Thread-peer.
+
+**It is nevertheless blocked, and not on equipment.** Three back-to-back A-leg
+repeats on that rig measured 7.94 %, 4.87 % and 7.04 % loss — a 3.07 pp spread
+against `repeat_a_max_delta_pp = 0.35`, whose own rule voids a sitting. A
+coexistence delta of 0.5 pp cannot be read out of a bench with 3 pp of run-to-run
+scatter, so re-taking the arms today would produce numbers that look like
+results and are not. See the header of `tools/ab_gates.toml` for the full
+measurement and the likely cause (a real trainer broadcasting three device types
+continuously on the ANT+ frequency). Power that down, confirm the A1/A2 delta is
+inside 0.35 pp, and this becomes one sitting.
+
 **Bug 19 — the endpoint snapshot was taken at the wrong moment.**
 `radio_endpoints_save()` ran twice in `radiant_radio_init()`: once correctly,
 before the init-time hand-back, then again unconditionally afterwards. The
