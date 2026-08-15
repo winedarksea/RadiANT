@@ -121,19 +121,59 @@
 # spread - with loss staying between 0.85 and 1.37 %. Loss that survives 16 dB
 # is not a link-budget problem.
 #
-# The live suspicion is therefore apps/sim ON nRF54L15 SILICON. sdk-ant is an
-# nRF52 stack by construction (see ANT_LIB_DIR keying off SOC_SERIES_NRF52X),
-# and its historical figures - the 0.85-1.37 % quoted above, and the 0.26-0.60 %
-# floor in archive/benchmarks/ - were taken with the Feather in the rig. Note
-# what Phase 2.7(b) actually asks for: "re-take all three arms against apps/sim
-# firmware ON THE FEATHER". That instruction may already be the fix.
+# IT IS NOT UNSUPPORTED SILICON, and an earlier version of this note said it
+# was. That claim - "sdk-ant is an nRF52 stack by construction, see ANT_LIB_DIR
+# keying off SOC_SERIES_NRF52X" - is WRONG and is retracted. The build's own
+# .config reads CONFIG_ANT_LIB_DIR="nrf54l", and sdk-ant ships
+# lib/nrf54l/{hard,soft,softfp}-float/libant.a at 149 KB each. apps/sim on an
+# nRF54L15 is a fully supported configuration. (The SOC_SERIES_NRF52X business
+# is a v3.4.0 Kconfig-rename BUILD failure, recorded elsewhere; it is not a
+# statement about which parts sdk-ant supports.)
 #
-# WHAT TO DO WITH IT. Do not spend a sitting on the trainer; the control says
-# that is not where the evidence points. Build apps/sim for the Feather
-# (nrf52840 is in its platform_allow) and re-take A1/A2 with the L15 as the DUT
-# instead. If the 5-8 % goes with the master's silicon, the acceptance rig has
-# been wrong rather than the product, and 1.7 is unblocked by a build rather
-# than by a bench sitting.
+# So the comparison the split actually made is sharper than "one rig is
+# broken". Same nRF54L15 board, same ANT+ power profile at 4 Hz, same unchanged
+# Feather receiver, same room, both configurations supported:
+#
+#   sdk-ant's ANT stack   (apps/sim firmware)              -> 4.87-7.94 %
+#   radiant's clean-room stack (apps/dongle core+nrf)      -> 2.35 %
+#
+# That is a TRANSMIT-side comparison between the two stacks, and radiant is the
+# better of the two on this evidence. Which, if it survives a controlled repeat,
+# is a result about the product rather than a fault in the bench.
+#
+# AND IT WAS MOSTLY TRANSMIT POWER. That test was run, and it changes the
+# conclusion again - so the "radiant transmits better" reading above is weakened
+# and must not be quoted on its own.
+#
+# apps/sim defaults to ANT_SIM_TX_POWER 3 (0 dBm) while apps/dongle carries
+# ANT_DONGLE_TX_POWER_BOOST=y. Rebuilding apps/sim at level 4 (+4 dBm) and
+# changing NOTHING else - same board, same unchanged Feather DUT, same room:
+#
+#   apps/sim @ 0 dBm    4.87 / 7.04 / 7.23 / 7.94 %   -53..-55 dBm
+#   apps/sim @ +4 dBm   3.07 / 2.22 %                 -49 dBm
+#   apps/dongle master  2.35 %                        -49 dBm
+#
+# Power more than halved the loss and brought apps/sim to within 0.7 pp of the
+# radiant-stack master at the same signal level. So most of the gap was link
+# margin, not the stack, and the stack comparison is not established.
+#
+# IT ALSO HALVED THE THING THE GATE ACTUALLY MEASURES: the A1-vs-A2 spread went
+# from 3.07 pp to 0.85 pp. Still 2.4x `repeat_a_max_delta_pp` below, so the
+# sitting is still void - but the remaining gap is now one factor, not a mystery.
+#
+# ANT_SIM_TX_POWER's help claimed 16 dB of power moved loss not at all. That is
+# true AT ~1 % LOSS and false on a marginal link; the help has been corrected
+# rather than left to send the next person the wrong way.
+#
+# WHAT TO DO WITH IT, and it is now a quantified reason rather than a hunch:
+# LEVEL 5 (+8 dBm) IS nRF52-ONLY. An nRF54L master cannot reach the power a
+# Feather master can, and 4-6 dB has just been shown to halve both the loss and
+# the spread on this bench. Every historical figure - the 0.85-1.37 % and the
+# 0.26-0.60 % floor - was taken with a Feather transmitting. So: build apps/sim
+# for the Feather (already done, build/sim_feather/sim/zephyr/zephyr.uf2), put
+# the DUT on the L15, and re-take A1/A2. That is exactly what Phase 2.7(b) asks
+# for, and it now has a mechanism behind it. It needs one RESET double-tap on
+# the Feather, which has no software path on a bulk-ANT image.
 #
 # An attempt to separate room from rig by moving both ends to a quiet channel
 # (RF 72 and the RF 78 that ANT_SIM_RF_FREQ's help recommends) did not work -

@@ -219,13 +219,38 @@ config ANT_SIM_TX_POWER
 	  the ANT default, 4 is +4 dBm. Level 5 (+8 dBm) exists only on the
 	  nRF52820, nRF52833 and nRF52840 and is refused elsewhere.
 
-	  Changing this does not measurably change packet loss, which was
-	  worth finding out rather than assuming. Across 300 s runs at -12, 0
-	  and +4 dBm - a 16 dB spread - loss stayed between 0.85 and 1.37 %,
-	  which is the run-to-run spread of the 0 dBm setting on its own. Loss
-	  that survives 16 dB is not a link-budget problem: it is other
-	  traffic landing on top of a 150 us slot, and a slot that is occupied
-	  is occupied at any power.
+	  THAT RESULT IS REGIME-DEPENDENT AND THE PARAGRAPH BELOW OVERSTATES
+	  IT. Read this first.
+
+	  Changing this does not measurably change packet loss WHEN THE LINK
+	  ALREADY HAS MARGIN. Across 300 s runs at -12, 0 and +4 dBm - a 16 dB
+	  spread - loss stayed between 0.85 and 1.37 %, which is the
+	  run-to-run spread of the 0 dBm setting on its own. Loss that
+	  survives 16 dB is not a link-budget problem: it is other traffic
+	  landing on top of a 150 us slot, and a slot that is occupied is
+	  occupied at any power.
+
+	  BUT THAT WAS MEASURED AT ~1 % LOSS, and it does not generalise to a
+	  marginal link. Re-measured 2026-08-15 on an nRF54L15 DK master
+	  against an unchanged Feather receiver, in a room where the same rig
+	  was losing 5-8 %:
+
+	      level 3 (0 dBm)   4.87 / 7.04 / 7.23 / 7.94 %   -53..-55 dBm
+	      level 4 (+4 dBm)  3.07 / 2.22 %                 -49 dBm
+
+	  One rebuild, nothing else changed. Power more than halved the loss,
+	  and it halved the RUN-TO-RUN SPREAD too, from 3.07 pp to 0.85 pp -
+	  which is what tools/ab_gates.toml's repeat_a_max_delta_pp actually
+	  gates on. So when loss is already near the floor, power is
+	  irrelevant and the paragraph above holds; when the link is short of
+	  margin, power is the first thing to check and the paragraph above
+	  will send you looking in the wrong place.
+
+	  Note level 5 (+8 dBm) is nRF52-only, so an nRF54L master CANNOT
+	  reach the power a Feather master can. That is a concrete reason to
+	  prefer the Feather as the transmitter for any loss baseline, and it
+	  is what docs/radiant-bridge.md section 7.4.3 asks for in as many
+	  words.
 
 	  Those figures were taken before a host-side USB read timeout was
 	  found to be inventing about 0.4 points of loss on every run, so they
