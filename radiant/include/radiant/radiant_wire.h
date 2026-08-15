@@ -1516,7 +1516,7 @@
 /* ------------------------------------------------------------------------
  * RadiANT extension messages - NOT ANT protocol
  * Ours, not Garmin's: not in Rev 5.1, not answered by any ANT device.
- * 0xF6-0xFA is reserved for the rest of the family. Semantics live in
+ * 0xF7-0xFA is reserved for the rest of the family. Semantics live in
  * docs/radiant-security.md; only the numbering is decided in the YAML.
  * These were first proposed at 0xE0-0xE4 and moved: sdk-ant defines
  * MESG_EXT_ID_0 .. MESG_EXT_ID_4 as exactly 0xE0-0xE4, an extended-
@@ -1595,5 +1595,46 @@
  * security.md section 7.4. [K4 (docs/radiant-security.md sec 7.4, 8 and 9)]
  */
 #define RADIANT_WIRE_MESG_RADIANT_PAIRING_ID                 0xF5
+
+/*
+ * What the dongle threw away, requested with MESG_REQUEST (0x4D). Request-
+ * only: nothing is ever emitted unsolicited, so a host that never asks sees a
+ * byte stream identical to a build without it. [0] structure version, 1; [1]
+ * flags, bit 0 = at least one counter has saturated, so the whole set is a
+ * floor rather than a total; [2..3] ANT events dropped because the USB TX
+ * queue was full; [4] deepest that queue has been, in frames, out of
+ * ANT_TX_QUEUE_DEPTH; [5] deepest the radio event queue has been, out of its
+ * own depth; [6..7] event-queue overflow marks; [8..9] times bulk-OUT was
+ * left unarmed for host backpressure; [10..11] frames refused for an unusable
+ * network key; [12..13] scheduler windows missed; [14..15] failed; [16..17]
+ * denied by the arbiter; [18..19] burst transfers that hit the 1000 ms back-
+ * pressure stall; [20..21] search windows the pump declined to post WHILE a
+ * channel was still searching and its slot was held for something else, which
+ * is discovery work outstanding that could not get on the air; [22..23]
+ * reserved, sent as zero. All are u16 LE and all saturate rather than wrap,
+ * which is what the flag in [1] is for: it distinguishes 65535 from
+ * 65535-and-counting. THE OTHER HALF OF [20..21] IS DELIBERATELY ABSENT. A
+ * decline because NO channel was searching is discovery having succeeded, not
+ * failed, and it is not loss - and the pump runs about 31 times a second
+ * regardless, so such a field would climb forever on an idle dongle and
+ * saturate in about 35 minutes. Measured on the first hardware read of this
+ * reply: 231 within nine seconds of boot with no channel ever opened. Since
+ * saturation sets the flag in [1], that one field would have made every OTHER
+ * field on the board read as a floor. It lives in the SWEEP log line under
+ * CONFIG_RADIANT_SWEEP_DEBUG instead. WHY THIS EXISTS. tools/ab_gates.toml's
+ * unexplained_loss.max = 0 is a SITTING INVALIDATOR rather than a gate: a
+ * hole with no RX_FAIL means the loss happened on the host or inside the
+ * dongle, and loss_accounting() cannot tell those two apart. A firmware-side
+ * witness splits that bucket. That check has already caught 0.4 pp of
+ * imaginary loss once; a second source makes it sharper. And on a Feather -
+ * no debugger, the board most people flash - the LOG_WRN that is the only
+ * record of a drop today does not exist at all. DEPTHS 32 AND 64 ARE NOT THE
+ * ANSWER TO A NON-ZERO [2..3]. At 3103 msg/s a 64-byte frame arrives every
+ * ~322 us, so depth 32 is about 10 ms of buffer. If the host stops reading
+ * for longer than that, a deeper queue converts a drop into LATENCY - the
+ * wrong trade for a protocol whose whole value is a 0.345 ms p50. [Phase 1.4;
+ * tools/ab_gates.toml unexplained_loss]
+ */
+#define RADIANT_WIRE_MESG_RADIANT_HEALTH_ID                  0xF6
 
 #endif /* RADIANT_RADIANT_WIRE_H_ */

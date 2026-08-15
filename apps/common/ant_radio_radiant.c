@@ -59,6 +59,7 @@
 
 /* First, and see the note above. */
 #include "ant_wire.h"
+#include "ant_health.h"
 #include "ant_radio.h"
 
 #include "ant_radio_radiant.h"
@@ -1160,16 +1161,17 @@ static void api_post_search_window(radiant_time_t now)
 	 * slot was merely pending (busy for reasons unrelated to the sweep)
 	 * used to stall the whole sweep - skip a busy one and keep looking.
 	 */
-#ifdef CONFIG_RADIANT_SWEEP_DEBUG
+	/* Unconditional, not under SWEEP_DEBUG: both that log line and the
+	 * 0xF6 health reply need it, and the two symbols are independent. With
+	 * neither compiled in it is a set-but-unused bool the optimiser
+	 * deletes. */
 	bool any_searching = false;
-#endif
+
 	for (ch = 0u; ch < API_CHANNELS; ch++) {
 		if (!radiant_search_is_searching(&api_search, ch)) {
 			continue;
 		}
-#ifdef CONFIG_RADIANT_SWEEP_DEBUG
 		any_searching = true;
-#endif
 		if (!radiant_sched_pending(ch)) {
 			break;
 		}
@@ -1183,6 +1185,16 @@ static void api_post_search_window(radiant_time_t now)
 			dbg_pump_none_searching++;
 		}
 #endif
+		/* Independent of SWEEP_DEBUG: a shipping image has no business
+		 * carrying the once-a-second SWEEP log line, and this is the
+		 * half of that line a host still needs.
+		 *
+		 * Only the BUSY half. The idle half climbs forever on a dongle
+		 * with nothing open and would saturate the reply in about half
+		 * an hour - see ANT_HEALTH_SWEEP_BUSY. */
+		if (any_searching) {
+			ant_health_note(ANT_HEALTH_SWEEP_BUSY);
+		}
 		return;
 	}
 
@@ -2086,9 +2098,12 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 	api_stats.sched_dones++;
 	if (why == RADIANT_SCHED_DONE_MISSED) {
 		api_stats.sched_missed++;
+		ant_health_note(ANT_HEALTH_SCHED_MISSED);
 	} else if (why == RADIANT_SCHED_DONE_FAILED) {
 		api_stats.sched_failed++;
+		ant_health_note(ANT_HEALTH_SCHED_FAILED);
 	} else if (why == RADIANT_SCHED_DONE_DENIED) {
+		ant_health_note(ANT_HEALTH_SCHED_DENIED);
 		/* Counted from `why`: api_done_to_status() folds a denial into
 		 * FAILED for the transfer engine, so this is the one point the
 		 * distinction survives. */
@@ -3130,6 +3145,7 @@ antr_err_t antr_network_address_set(uint8_t network, const uint8_t *key)
 	 */
 	if (memcmp(key, api_ant_plus_key, sizeof(api_ant_plus_key)) != 0) {
 		api_stats.key_rejects++;
+		ant_health_note(ANT_HEALTH_KEY_REJECT);
 		return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
 	}
 

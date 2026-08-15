@@ -66,7 +66,18 @@ except ImportError:  # pragma: no cover - user-facing guidance
 
 ROOT = Path(__file__).resolve().parent.parent
 SPEC_PATH = ROOT / "protocol" / "ant_wire.yaml"
-HEADER_PATH = ROOT / "src" / "ant_wire.h"
+# apps/common/ant/, NOT src/. This said `ROOT / "src" / "ant_wire.h"` until
+# 2026-08-14, months after the apps/ reorg moved the header. The consequence was
+# worse than a broken path: the generator CREATED a stray src/ant_wire.h at the
+# repository root on every run, --check compared against that file, found it in
+# sync with itself, and passed - while the header the firmware actually compiles
+# drifted freely. The `generated-drift` CI job was green the entire time.
+#
+# That is the exact failure mode the plan's cross-cutting section warns about
+# for the tolerant CI greps: a rename does not break a check, it silently
+# disarms one. Anything added here must fail loudly when its target is missing
+# rather than quietly write a new file beside it - see check_outputs() below.
+HEADER_PATH = ROOT / "apps" / "common" / "ant" / "ant_wire.h"
 RADIANT_WIRE_HEADER_PATH = ROOT / "radiant" / "include" / "radiant" / "radiant_wire.h"
 PYTHON_PATH = ROOT / "tools" / "ant_wire.py"
 DOC_PATH = ROOT / "docs" / "ant-serial-protocol.md"
@@ -1378,6 +1389,26 @@ def main() -> int:
         PYTHON_PATH: render_python(spec),
         DOC_PATH: splice_doc(read_text(DOC_PATH), render_doc_region(spec)),
     }
+
+    # EVERY OUTPUT MUST ALREADY EXIST, and this refuses rather than creating
+    # one. All four are committed files with committed readers; a path that no
+    # longer resolves means the tree moved under this script, not that a new
+    # file is wanted there. Writing one anyway is what let HEADER_PATH point at
+    # a stale src/ for months while --check compared the stray against itself
+    # and reported "in sync" - see the note on HEADER_PATH.
+    #
+    # This runs before both arms deliberately: --check has to fail on a missing
+    # output too, or CI is exactly where the silence would survive.
+    missing = [p.relative_to(ROOT).as_posix() for p in wanted if not p.exists()]
+    if missing:
+        print(
+            "generated output(s) missing: %s\n"
+            "This script does not create them. Either the path constants at the\n"
+            "top of this file are stale after a move, or the file was deleted;\n"
+            "fix the path rather than letting a new file appear beside the real\n"
+            "one, which is a check that passes against itself." % ", ".join(missing)
+        )
+        return 1
 
     if not args.check:
         for path, text in wanted.items():

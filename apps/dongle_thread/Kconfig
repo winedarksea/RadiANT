@@ -209,6 +209,9 @@ rsource "../common/Kconfig.antr_api"
 # everything else about booting is the same file.
 rsource "../common/Kconfig.dongle_main"
 
+# CONFIG_ANT_DONGLE_HEALTH_COUNTERS: the 0xF6 reply, shared with apps/dongle.
+rsource "../common/Kconfig.health"
+
 choice ANT_DONGLE_RADIO
 	prompt "ANT radio backend"
 	default ANT_DONGLE_RADIO_SDK_ANT
@@ -487,6 +490,187 @@ config ANT_DONGLE_THREAD_COEX_LOAD_REPORT_EVERY
 	depends on ANT_DONGLE_THREAD_COEX_LOAD
 	range 1 100000
 	default 100
+
+# ── The RadiANT bridge: ANT+ in, Thread/MQTT/Matter out ─────────────────────
+#
+# docs/radiant-bridge.md. Everything here is off by default and none of it is
+# compiled into the P4 gate arms: gate.conf, thread.conf and thread_sed.conf
+# set none of these symbols, so the numbers in section 7.4 keep describing the
+# image they were taken on. bridge.conf is where a bridge build turns them on.
+
+config RADIANT_BRIDGE
+	bool "Compile the RadiANT sample bus, binding table, rules and liveness"
+	help
+	  radiant/src/bridge/: the sample bus and sink registry (section 3-4),
+	  the binding table (section 5), the rule evaluator (sections 6.1-6.2)
+	  and the liveness table that produces RADIANT_SAMPLE_STALE (section
+	  9.2). Plus src/bridge_pump.c, the thread that drains the bus - which
+	  nothing in any image did before it existed.
+
+	  This is the bus only. It ingests nothing on its own; that is
+	  ANT_DONGLE_RX_TAP, and it publishes nowhere on its own; that is a
+	  sink such as ANT_DONGLE_MQTT_SINK.
+
+	  Turning this on adds the linker fragment
+	  radiant/src/bridge/radiant_bridge_sections.ld through
+	  zephyr_linker_sources(). That is not optional and its absence is
+	  silent - see the fragment's own header, and watch for the
+	  "bridge: N sinks" line at boot.
+
+if RADIANT_BRIDGE
+
+config ANT_DONGLE_BRIDGE_PUMP_MS
+	int "Sample bus drain interval, ms"
+	default 100
+	range 10 1000
+	help
+	  How often src/bridge_pump.c calls radiant_bridge_drain(). The bus
+	  ring holds 32 records; an 8-sensor deployment at 4 Hz producing up to
+	  3 records each is ~96 records/s, so 100 ms is about a third of the
+	  ring per pass and 300 ms would be the point at which a burst starts
+	  evicting. radiant_bridge_stats().dropped is the number that says
+	  whether this is too slow, and it is published on the bus itself.
+
+config ANT_DONGLE_RX_TAP
+	bool "Feed the sample bus from received ANT broadcasts"
+	help
+	  Compiles src/rx_tap.c and makes apps/common/ant_serial_bridge.c call
+	  it at the top of antr_on_message(). The call site is compiled out
+	  entirely without this symbol, which is what keeps apps/dongle's image
+	  byte-identical and the `zero-cost` CI job meaningful.
+
+	  The tap does not change what reaches a host. It reads a copy of each
+	  broadcast, maps the channel to a bound source, and decodes; the frame
+	  still goes out the transport unchanged.
+
+	  A broadcast on a channel with no binding is DROPPED. That is section
+	  10.1 rule 1 (no promiscuous ingest, ever) enforced in code, and there
+	  is deliberately no path from the tap to radiant_binding_bind().
+
+config ANT_DONGLE_SELF_CHANNELS
+	int "Wildcard slave channels this dongle drives itself"
+	default 0
+	range 0 8
+	depends on ANT_DONGLE_RX_TAP
+	help
+	  Compiles src/self_channels.c and opens this many wildcard ANT+
+	  heart-rate slave channels without a host. A bridge that only works
+	  while a PC is plugged in is not the product section 1 describes.
+
+	  Channels are claimed from the top of the ANT allocation downward, so
+	  that a host library allocating from 0 upward collides last. There is
+	  no arbitration between the two - a host assign to a channel this file
+	  holds open is refused CHANNEL_IN_WRONG_STATE - which is most of why
+	  the default is 0.
+
+	  Acquiring a device is NOT binding it. See ANT_DONGLE_PAIRING_WINDOW_S.
+
+config ANT_DONGLE_SELF_CHANNELS_DELAY_S
+	int "Seconds after boot before the self channels open"
+	default 5
+	range 1 600
+	depends on ANT_DONGLE_SELF_CHANNELS > 0
+	help
+	  A real precondition rather than caution: ant_radio.h forbids any
+	  antr_* call before antr_init() has returned, and src/self_channels.c
+	  runs on its own thread rather than on the post-radio hook (which this
+	  application's src/main.c already owns for the coexistence loads). The
+	  boot sequence reaches antr_init() within the UF2 settle delay plus a
+	  few milliseconds; 5 s is comfortably past it.
+
+config ANT_DONGLE_PAIRING_WINDOW_S
+	int "Seconds a button press keeps the pairing window open"
+	default 60
+	range 5 600
+	depends on ANT_DONGLE_SELF_CHANNELS > 0
+	help
+	  Section 5 and section 10.1 rule 1: binding is explicit opt-in, never
+	  promiscuous, and the document says the rule cannot be retrofitted.
+	  So a press of sw0 opens this window, a device acquired on a self
+	  channel may bind while it is open, and outside it an unbound device's
+	  broadcasts are dropped.
+
+	  A board with no sw0 alias can never open the window, and therefore
+	  never binds anything. That is logged loudly at boot rather than
+	  falling back to auto-binding, because the fallback would be exactly
+	  the promiscuous ingest the rule forbids, arrived at through a board
+	  file.
+
+config ANT_DONGLE_MQTT_SINK
+	bool "Publish samples to an MQTT broker over Thread"
+	# NET_SOCKETS is deliberately NOT named here even though this sink
+	# calls zsock_*: MQTT_LIB selects it, and MQTT_LIB is turned on below
+	# by a `default y if` on this symbol, so naming it as a dependency here
+	# closes the loop a second time (measured - it is the same rejection,
+	# reported through a different chain).
+	depends on NET_TCP && NET_IPV6
+	help
+	  Section 9. Plain MQTT over TCP to a broker on the Thread network -
+	  not MQTT-SN, which section 9.0 rejects because it needs a gateway
+	  daemon nothing in this path provides.
+
+	  NEEDS CONFIG_NET_TCP, WHICH thread.conf DELIBERATELY OMITS. That is
+	  why this lives in bridge.conf and the P4 gate arms stay TCP-free:
+	  section 7.4's coexistence numbers were taken on a TCP-free image and
+	  do not transfer to one with a TCP stack and a broker connection in
+	  it. Do not fold the two fragments together.
+
+	  The sink connects LAZILY, on the first sample it is asked to publish,
+	  and never at boot. Do not "fix" that with CONFIG_NET_CONFIG_NEED_IPV6
+	  - that is a 31.04 s pre-main() stall on an unattached MTD, measured
+	  on this bench, and it looks exactly like a hung board.
+
+config ANT_DONGLE_MQTT_BROKER
+	string "Broker address, as a numeric IPv6 literal"
+	default "fd11:22::1"
+	depends on ANT_DONGLE_MQTT_SINK
+	help
+	  A NUMERIC address, not a hostname: section 9.0a's DNS-SD discovery of
+	  the broker rests on two things nobody has verified on real hardware
+	  (whether HA's OTBR add-on enables the Discovery Proxy, and the
+	  expectation that the Mosquitto add-on does not advertise _mqtt._tcp),
+	  so it is deferred and there is no resolver call in this build at all.
+	  An unparseable value here is logged as an error and the sink
+	  publishes nothing.
+
+	  The default is a placeholder in the OTBR ULA range and is certainly
+	  not your broker.
+
+config ANT_DONGLE_MQTT_PORT
+	int "Broker port"
+	default 1883
+	range 1 65535
+	depends on ANT_DONGLE_MQTT_SINK
+
+config ANT_DONGLE_MQTT_BRIDGE_ID
+	string "The <bridge_id> in every topic, and the MQTT client id"
+	default "radiant0"
+	depends on ANT_DONGLE_MQTT_SINK
+	help
+	  Section 9.1's topic tree hangs off this. Two bridges on one broker
+	  with the same value would interleave their retained messages, so it
+	  is per-unit in anything but a single-device bench.
+
+	  Note what is NOT configurable: the per-sensor half of every topic is
+	  the binding uuid, never a device number (section 5). A device number
+	  is 16 bits, re-rollable by design, and collides across two straps in
+	  one room.
+
+endif # RADIANT_BRIDGE
+
+# Turn the MQTT library on for a build that asked for the sink.
+#
+# `default`, NOT `select`, and this is the same trap the transport choice's
+# help documents at length one screen up. `select MQTT_LIB` from a symbol that
+# `depends on NET_SOCKETS` closes a Kconfig dependency loop, because
+# MQTT_CLEAN_SESSION depends on MQTT_LIB, SETTINGS is implied through
+# NRF_PROVISIONING's reverse dependencies, and NET_SOCKETS is reachable from
+# COAP_SERVER on the other side of it. Kconfig rejects the whole file rather
+# than any one line of it, and the reported loop runs through nRF Cloud
+# provisioning, which has nothing to do with this. Measured: that is exactly
+# what the first configure attempt of this file printed.
+config MQTT_LIB
+	default y if ANT_DONGLE_MQTT_SINK
 
 endmenu
 

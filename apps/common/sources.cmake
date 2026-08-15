@@ -99,3 +99,12 @@ target_sources_ifdef(CONFIG_ANT_DONGLE_FLASH_LOG app PRIVATE
 # and apps/dongle_ti exactly the way the transport lines above are.
 target_sources_ifdef(CONFIG_ANT_DONGLE_MAIN app PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}/ant_dongle_main.c")
+
+# ── The 0xF6 health counters ─────────────────────────────────────────────
+#
+# Off by default so the `zero-cost` CI job stays a real check - see
+# apps/common/Kconfig.health. With the symbol off this file is not compiled
+# and every ant_health_note() in the tree is a macro expanding to nothing, so
+# there is no empty function to call and no argument to evaluate.
+target_sources_ifdef(CONFIG_ANT_DONGLE_HEALTH_COUNTERS app PRIVATE
+  "${CMAKE_CURRENT_LIST_DIR}/ant_health.c")

@@ -289,6 +289,11 @@ rsource "../common/Kconfig.antr_api"
 # rather than copied.
 rsource "../common/Kconfig.dongle_main"
 
+# CONFIG_ANT_DONGLE_HEALTH_COUNTERS: the 0xF6 reply. Off by default; see that
+# file for why that is a mechanical consequence of the `zero-cost` CI job
+# rather than caution about the feature.
+rsource "../common/Kconfig.health"
+
 choice ANT_DONGLE_RADIO
 	prompt "ANT radio backend"
 	default ANT_DONGLE_RADIO_SDK_ANT

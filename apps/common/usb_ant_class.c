@@ -19,6 +19,7 @@
 #include <zephyr/sys/ring_buffer.h>
 #include <zephyr/logging/log.h>
 
+#include "ant_health.h"
 #include "ant_transport.h"
 
 LOG_MODULE_REGISTER(usb_ant, LOG_LEVEL_INF);
@@ -35,6 +36,23 @@ LOG_MODULE_REGISTER(usb_ant, LOG_LEVEL_INF);
  * stack, with CONFIG_HW_STACK_PROTECTION off to catch it.
  */
 #define ANT_TX_FRAME_MAX 64
+
+/*
+ * DO NOT DEEPEN THIS, and the reasoning belongs here rather than in a commit
+ * message nobody will find.
+ *
+ * At the measured 3103 msg/s a 64-byte frame arrives every ~322 us, so 32
+ * frames is about 10 ms of buffer. If the host stops reading for longer than
+ * that, a deeper queue does not save the data - it converts a DROP into
+ * LATENCY, and holds a stale event that the host will eventually receive out
+ * of any useful time relation to the air it describes. For a protocol whose
+ * whole value is a 0.345 ms p50 that is the wrong trade, and a host that has
+ * stalled for 10 ms has a problem a bigger buffer does not fix.
+ *
+ * The right response to a non-zero drop count is to find out why the host
+ * stopped reading. MESG_RADIANT_HEALTH (0xF6) is how that count leaves the
+ * board; see ant_health.h.
+ */
 #define ANT_TX_QUEUE_DEPTH 32
 #define ANT_TX_STACK_SIZE 2048
 #define ANT_TX_PRIORITY 5
@@ -321,6 +339,7 @@ static void arm_rx(void)
 
 	if (ring_buf_space_get(&ant_rx_ring_buf) < sizeof(ep_out_buf)) {
 		rx_backpressured = true;
+		ant_health_note(ANT_HEALTH_RX_BACKPRESSURE);
 		return;
 	}
 
@@ -344,6 +363,7 @@ static void ep_out_cb(uint8_t ep, int tsize, void *priv)
 	if (tsize > 0) {
 		if (ring_buf_space_get(&ant_rx_ring_buf) < (uint32_t)tsize) {
 			rx_backpressured = true;
+			ant_health_note(ANT_HEALTH_RX_BACKPRESSURE);
 			LOG_WRN("RX buffer full, delaying re-arm");
 		} else {
 			ring_buf_put(&ant_rx_ring_buf,
@@ -508,6 +528,7 @@ int usb_ant_send(const uint8_t *buf, size_t len)
 int usb_ant_send_async(const uint8_t *buf, size_t len)
 {
 	struct ant_tx_frame frame;
+	int rc;
 
 	if (!configured) {
 		return -ENODEV;
@@ -520,7 +541,18 @@ int usb_ant_send_async(const uint8_t *buf, size_t len)
 	frame.len = (uint16_t)len;
 	memcpy(frame.data, buf, len);
 
-	return k_msgq_put(&ant_tx_msgq, &frame, K_NO_WAIT);
+	rc = k_msgq_put(&ant_tx_msgq, &frame, K_NO_WAIT);
+	if (rc != 0) {
+		/* The whole reason 0xF6 exists. This is silent, dongle-side
+		 * packet loss with no RX_FAIL anywhere to account for it, and
+		 * on a Feather the caller's LOG_WRN goes nowhere at all. */
+		ant_health_note(ANT_HEALTH_TX_DROP);
+	} else {
+		ant_health_depth(ANT_HEALTH_DEPTH_TX,
+				 k_msgq_num_used_get(&ant_tx_msgq));
+	}
+
+	return rc;
 }
 
 void usb_ant_resume_rx(void)

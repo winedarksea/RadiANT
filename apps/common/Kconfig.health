@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The 0xF6 health counters' own symbol, rsourced by the applications that have
+# a host to answer - the same arrangement as Kconfig.antr_api and
+# Kconfig.dongle_main beside it. apps/hrm_ble does not source it: a node has no
+# serial host to request 0xF6 from, so the counters would have no way out.
+
+config ANT_DONGLE_HEALTH_COUNTERS
+	bool "Count what the dongle threw away, readable as MESG_RADIANT_HEALTH (0xF6)"
+	help
+	  Counts silent, dongle-side loss - USB TX queue drops, event-queue
+	  overflows, RX backpressure, refused network keys, scheduler misses
+	  and denials, burst back-pressure stalls, and the two halves of the
+	  sweep's declined-to-post reason - and answers them to a host that
+	  sends MESG_REQUEST (0x4D) for 0xF6. See apps/common/ant_health.h.
+
+	  WHY IT MATTERS MORE THAN THE COUNTERS THEMSELVES.
+	  tools/ab_gates.toml's `unexplained_loss.max = 0` is a *sitting
+	  invalidator*: a hole in the accumulator with no RX_FAIL means the
+	  loss happened on the host or inside the dongle, and
+	  loss_accounting() cannot tell those two apart. This splits that
+	  bucket with a firmware-side witness. The check has already caught
+	  0.4 pp of imaginary loss once.
+
+	  It is also the only record that survives on the board most people
+	  flash: a Feather has no debugger, so the LOG_WRN that reports a
+	  dropped event today goes nowhere at all.
+
+	  OFF BY DEFAULT, and the reason is mechanical rather than cautious.
+	  The `zero-cost` CI job asserts identical section sizes and symbol
+	  sets against the merge base, and counters on the common path fire
+	  it. With this off every note() compiles to nothing - a macro, not an
+	  empty function, so nothing evaluates its arguments either - and the
+	  shipping image is byte-identical. That keeps `zero-cost` a real
+	  check rather than one that had to be weakened to admit this.
+
+	  Turning it on does NOT change what the dongle does, only what it can
+	  be asked. Nothing is ever emitted unsolicited, so the conformance
+	  transcripts tools/ab_gates.toml pins byte-for-byte are unaffected.
+
+	  It is NOT a request to deepen a queue. See ANT_TX_QUEUE_DEPTH in
+	  apps/common/usb_ant_class.c: at 3103 msg/s depth 32 is about 10 ms
+	  of buffer, and a deeper one converts a drop into latency, which is
+	  the wrong trade for a protocol whose value is a 0.345 ms p50.
