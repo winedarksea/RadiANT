@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The heart-rate node's beat schedule. One application, one suite, one property:
+# the average beat rate equals the requested rate despite the schedule being
+# evaluated on a coarser tick than the beat interval.
+#
+# It contains no hardware access, no kernel objects and no timing at all - the
+# unit under test is a pure function driven by a counted loop - so native_sim is
+# the right platform and the run is bounded by nothing but the loop.
+#
+# On Windows there is no native_sim (no host C compiler):
+#
+#   .\scripts\run_ztest_hw.ps1 -App apps\hrm_ble\tests\sim_sched -NcsVersion v3.4.0
+tests:
+  hrm_ble.sim_sched:
+    tags:
+      - radiant
+      - hrm_ble
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim

@@ -1,0 +1,47 @@
+/*
+ * nRF52840 DK, as a RadiANT heart-rate node.
+ *
+ * THE POINT OF THIS BOARD IS THAT IT IS NOT AN nRF54L. HRM_BLE_HRS ends up
+ * compiled against radiant's nrf backend, whose `depends on` is
+ * `SOC_COMPATIBLE_NRF52X || SOC_COMPATIBLE_NRF54LX` - and until this file
+ * existed only the nRF54L half was ever built anywhere. The profile + node +
+ * BLE + MPSL-gate combination had therefore never been compiled on an nRF52 at
+ * all, on the family that most existing ANT+ silicon actually is.
+ *
+ * BUILD-VERIFIED ONLY. Nothing here has been on a bench. The two things a
+ * bench would decide - whether TIMER4 stays uncontended once the SoftDevice
+ * Controller is running, and whether the nRF52 t_sync calibration constants
+ * hold - are both open; radiant/Kconfig's own help text says the nRF52840's
+ * on-air behaviour is predicted from the nRF54L15 measurements and has not been
+ * confirmed. Do not read a green build here as a working node.
+ */
+
+/ {
+	chosen {
+		/*
+		 * The TIMER radiant's nrf backend owns outright. It runs at
+		 * 1 MHz forever and is what t_sync is hardware-captured into
+		 * from RADIO's ADDRESS event, so it cannot be shared: naming it
+		 * here rather than in the source is what makes a second user a
+		 * devicetree conflict instead of two drivers reprogramming each
+		 * other's prescaler.
+		 *
+		 * TIMER4, and the choice is constrained from both ends. The
+		 * backend needs FIVE compare/capture channels - t_sync capture,
+		 * RX start, window close, software now-capture, TX start - and
+		 * on nRF52 only TIMER3 and TIMER4 have more than four, which is
+		 * a compile-time #error in radiant_radio_nrf.c rather than
+		 * something to discover on the air.
+		 *
+		 * TIMER4 rather than TIMER3 to match apps/dongle's Feather and
+		 * Dongle overlays, so that the nRF52 answer is one number
+		 * across this repository rather than two. MPSL on nRF52 reserves
+		 * TIMER0 (mpsl_hwres.h), not these.
+		 */
+		radiant,radio-timer = &timer4;
+	};
+};
+
+&timer4 {
+	status = "okay";
+};

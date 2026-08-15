@@ -2,8 +2,8 @@
 
 **Status: not implemented.** This is a pointers document, recording where the
 facts below came from so a later implementation attempt does not have to
-re-derive them. Nothing in `strap/` does any of this today — see "What exists
-today" below for what `strap_ble.c` actually is.
+re-derive them. Nothing in `apps/hrm_ble/` does any of this today — see "What
+exists today" below for what `src/hrm_ble.c` actually is.
 
 ## Why this document exists and not code
 
@@ -36,7 +36,7 @@ page table.
 
 ## What exists today
 
-`strap/src/strap_ble.c` advertises the **standard SIG Heart Rate Service**
+`apps/hrm_ble/src/hrm_ble.c` advertises the **standard SIG Heart Rate Service**
 (`0x180D`) and nothing else. It exists for P8b of the multiprotocol
 coexistence plan — "does BLE arbitrate nicely with an ANT+ `0x78` master
 running on the same radio" — and is explicitly scoped to have "no services,
@@ -156,7 +156,7 @@ documenting precisely rather than approximating.
 
 ## If this gets built
 
-Scope it as its own thing, not a `strap_ble.c` addition — the existing file's
+Scope it as its own thing, not an `apps/hrm_ble/src/hrm_ble.c` addition — the existing file's
 job (coexistence load) and this job (protocol-compatible RD simulator) share
 nothing but "runs on the BLE stack." A real attempt would want, roughly:
 

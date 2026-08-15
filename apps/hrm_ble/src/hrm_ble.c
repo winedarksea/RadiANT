@@ -27,9 +27,9 @@
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/services/hrs.h>
 
-#include "strap_ble.h"
+#include "hrm_ble.h"
 
-LOG_MODULE_DECLARE(strap, CONFIG_STRAP_LOG_LEVEL);
+LOG_MODULE_DECLARE(hrm, CONFIG_HRM_LOG_LEVEL);
 
 static atomic_t connected;
 
@@ -38,11 +38,32 @@ static atomic_t connected;
 
 /*
  * The name goes in the advertising payload, not just the GAP Device Name
- * characteristic, so an unconnected scanner sees a name rather than a bare
- * MAC. Budget vs the 31-byte legacy adv limit: flags 3 + UUID16 4 + name
- * (2 + strlen) = 19 for "RadiANT HR"; longer than ~24 chars silently fails
- * bt_le_adv_start() with -EINVAL.
+ * characteristic, so an unconnected scanner sees a name rather than a bare MAC.
+ *
+ * THE BUDGET IS 22 CHARACTERS, and it is worth the arithmetic because the file
+ * this replaced said "~24" from memory and was wrong. Against the 31-byte
+ * legacy advertising payload, each AD structure costs a length byte and a type
+ * byte on top of its data:
+ *
+ *   flags        1 + 1 + 1 =  3
+ *   UUID16 list  1 + 1 + 2 =  4
+ *   name         1 + 1 + N =  2 + N
+ *                            ------
+ *                            9 + N  <=  31   ->   N <= 22
+ *
+ * "RadiANT HR" is 10, so the default has 12 characters of headroom. A product
+ * name that overruns is not a warning: bt_le_adv_start() returns -EINVAL, and
+ * main.c's call site is `(void)hrm_ble_start()`, so an over-long name ships a
+ * node that transmits ANT+ perfectly and never advertises, with the only
+ * evidence a log line on a board that has no console attached. Hence a
+ * BUILD_ASSERT rather than a runtime check.
  */
+BUILD_ASSERT(sizeof(CONFIG_BT_DEVICE_NAME) - 1u <= 22u,
+	     "CONFIG_BT_DEVICE_NAME does not fit the 31-byte legacy advertising "
+	     "payload beside the flags and the HRS UUID: the budget is 22 "
+	     "characters (3 + 4 + 2 + N <= 31). Over it, bt_le_adv_start() "
+	     "returns -EINVAL and the node silently never advertises.");
+
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
 	BT_DATA_BYTES(BT_DATA_UUID16_ALL,
@@ -59,7 +80,7 @@ static void on_connected(struct bt_conn *conn, uint8_t err)
 	}
 	atomic_set(&connected, 1);
 	LOG_INF("BLE connected");
-	/* Nothing is done to ANT+ from here - P9's suppression rule lives
+	/* Nothing is done to ANT+ from here - the suppression rule lives
 	 * with the ANT+ side; a BLE callback reaching into radiant
 	 * (from controller context, no less) would be the layering violation
 	 * the gate seam exists to avoid. */
@@ -80,29 +101,29 @@ static void on_disconnected(struct bt_conn *conn, uint8_t reason)
  */
 static bool on_param_req(struct bt_conn *conn, struct bt_le_conn_param *param)
 {
-	if (param->interval_max < CONFIG_STRAP_BLE_MIN_CONN_INTERVAL_UNITS) {
+	if (param->interval_max < CONFIG_HRM_BLE_MIN_CONN_INTERVAL_UNITS) {
 		LOG_INF("refusing %u-unit connection interval, holding at %u "
 			"- see finding 1: this is the arbitration policy",
 			param->interval_max,
-			(unsigned)CONFIG_STRAP_BLE_MIN_CONN_INTERVAL_UNITS);
-		param->interval_min = CONFIG_STRAP_BLE_MIN_CONN_INTERVAL_UNITS;
-		param->interval_max = CONFIG_STRAP_BLE_MIN_CONN_INTERVAL_UNITS;
+			(unsigned)CONFIG_HRM_BLE_MIN_CONN_INTERVAL_UNITS);
+		param->interval_min = CONFIG_HRM_BLE_MIN_CONN_INTERVAL_UNITS;
+		param->interval_max = CONFIG_HRM_BLE_MIN_CONN_INTERVAL_UNITS;
 	}
 	return true;
 }
 
-BT_CONN_CB_DEFINE(strap_conn_cb) = {
+BT_CONN_CB_DEFINE(hrm_ble_conn_cb) = {
 	.connected = on_connected,
 	.disconnected = on_disconnected,
 	.le_param_req = on_param_req,
 };
 
-bool strap_ble_connected(void)
+bool hrm_ble_connected(void)
 {
 	return atomic_get(&connected) != 0;
 }
 
-void strap_ble_notify_hr(uint8_t bpm)
+void hrm_ble_notify_hr(uint8_t bpm)
 {
 	if (atomic_get(&connected) == 0) {
 		return;
@@ -110,7 +131,7 @@ void strap_ble_notify_hr(uint8_t bpm)
 	(void)bt_hrs_notify(bpm);
 }
 
-int strap_ble_start(void)
+int hrm_ble_start(void)
 {
 	struct bt_le_adv_param param = *BT_LE_ADV_CONN_FAST_1;
 	int err;
@@ -121,8 +142,8 @@ int strap_ble_start(void)
 		return err;
 	}
 
-	param.interval_min = ADV_UNITS(CONFIG_STRAP_BLE_ADV_INTERVAL_MS);
-	param.interval_max = ADV_UNITS(CONFIG_STRAP_BLE_ADV_INTERVAL_MS) + 16u;
+	param.interval_min = ADV_UNITS(CONFIG_HRM_BLE_ADV_INTERVAL_MS);
+	param.interval_max = ADV_UNITS(CONFIG_HRM_BLE_ADV_INTERVAL_MS) + 16u;
 
 	err = bt_le_adv_start(&param, ad, ARRAY_SIZE(ad), NULL, 0);
 	if (err != 0) {
@@ -131,6 +152,6 @@ int strap_ble_start(void)
 	}
 
 	LOG_INF("BLE: SIG HRS advertising every %u ms",
-		(unsigned)CONFIG_STRAP_BLE_ADV_INTERVAL_MS);
+		(unsigned)CONFIG_HRM_BLE_ADV_INTERVAL_MS);
 	return 0;
 }

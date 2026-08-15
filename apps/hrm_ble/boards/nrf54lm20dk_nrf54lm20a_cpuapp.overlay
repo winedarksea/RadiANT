@@ -1,0 +1,35 @@
+/*
+ * nRF54LM20A DK, as a RadiANT heart-rate node.
+ *
+ * The same family as the nRF54L15 and the same answer, which is why this file
+ * is short: SOC_COMPATIBLE_NRF54LX covers both, the peripheral map is the same
+ * shape, and TIMER20 is free on both. It earns its place by proving that the
+ * family is a family - a second part in the same `depends on` arm - rather than
+ * by exercising anything new.
+ *
+ * BUILD-VERIFIED ONLY, and there is no LM20 on this bench. See
+ * apps/dongle/boards/nrf54lm20dk_nrf54lm20a_cpuapp.conf for what else about
+ * this part is untested.
+ */
+
+/ {
+	chosen {
+		/*
+		 * The TIMER the backend owns outright, hardware-capturing
+		 * t_sync from RADIO's ADDRESS event. See the nRF54L15 DK
+		 * overlay beside this one for the full reasoning, including
+		 * P0's TIMER audit: mpsl.rst lists MPSL as owning TIMER10 and
+		 * TIMER20 on nRF54L while mpsl_hwres.h reserves only TIMER10,
+		 * and TIMER20 was measured not to collide - ON THE L15. That
+		 * measurement has not been repeated on this part, so if a
+		 * timeslot build here misbehaves, this is the first line to
+		 * suspect and TIMER22 is the alternative that behaved
+		 * identically on the L15.
+		 */
+		radiant,radio-timer = &timer20;
+	};
+};
+
+&timer20 {
+	status = "okay";
+};

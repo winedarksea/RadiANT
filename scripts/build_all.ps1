@@ -18,6 +18,20 @@
     Kconfig runs, so a typo in -DANT_RADIO would fall back to a default and
     ship the wrong backend green.
 
+    TWO MATRICES, NOT ONE. $targets is the dongle (apps/dongle, apps/dongle_ti):
+    a release artifact with a bootloader offset, a transport and a package
+    format. $nodeTargets is apps/hrm_ble, the heart-rate node - no bootloader,
+    no transport symbol and no artifact - so it has its own loop and its own,
+    different assertions. See the comment above $nodeTargets for why folding
+    them together would have made three of the five checks vacuous rather than
+    shared.
+
+    The node rows build only under -Backend core, because that application has
+    no ANT_RADIO axis at all: it is built out of radiant and
+    radiant/src/profiles/ with no sdk-ant path, which is the demonstration it
+    exists to make. A default (-Backend sdk_ant) run therefore does not build
+    it; use -Backend core.
+
     ASCII only, deliberately: Windows PowerShell 5.1 reads .ps1 files as ANSI
     unless they carry a BOM, so non-ASCII characters here become parse errors.
 
@@ -64,7 +78,9 @@
     without it.
 
 .PARAMETER Only
-    Build just the targets whose artifact name matches this wildcard.
+    Build just the targets whose artifact name matches this wildcard. The node
+    rows (apps/hrm_ble) have no artifact - nothing there is a release image - so
+    they match on their build-directory name instead: -Only "node_*".
 
 .PARAMETER SkipDfu
     Do not package the dongle DFU zip (which needs nrfutil).
@@ -200,6 +216,73 @@ if ($Backend -eq 'core') {
         Write-Host "  Run scripts\fetch_hal_ti.ps1 (NCS's west manifest will never fetch it)."
     }
 }
+
+# ── The node ────────────────────────────────────────────────────────────────
+#
+# apps/hrm_ble, the heart-rate node and manufacturer reference design. It is not
+# a dongle and it never was; until this list existed it appeared in neither this
+# script nor .github/workflows/build.yml, so NOTHING in the repository compiled
+# it and a rename could break it invisibly.
+#
+# A SEPARATE LIST RATHER THAN MORE $targets ROWS, and the reason is that three
+# of $targets' fields have no meaning here and the five assertions below are
+# built out of them:
+#
+#   offset     there is no bootloader and no Partition Manager on this
+#              application, so `app` links wherever the board's dts says. A row
+#              claiming an offset would be asserting a number nothing decides.
+#   transport  CONFIG_ANT_DONGLE_TRANSPORT_* does not EXIST in a node's Kconfig
+#              tree. Assertion 2 reads `-ne $t.transport` against an empty
+#              string, so a node row folded into $targets would fail on a symbol
+#              that is correctly absent.
+#   pkg        nothing here is a release artifact. Only -Backend sdk_ant writes
+#              dist\, and this application has no sdk_ant build at all - it is
+#              built out of radiant and radiant/src/profiles/, which is the
+#              entire point of it.
+#
+# The alternative considered was making those fields optional and skipping the
+# assertions when absent. Rejected: `if ($t.offset)` silently skips assertion 1
+# for a row that meant to have one, and the five assertions in this file exist
+# precisely because the failures they catch are silent. A second list with its
+# own, smaller set of assertions cannot skip anything by accident.
+#
+# WHAT IS ASSERTED HERE INSTEAD, and each one is a failure that has actually
+# happened in this tree:
+#
+#   the HAL backend    RADIANT_BACKEND is a CMake cache variable resolved before
+#                      Kconfig runs, so an unmet `depends on` falls back to the
+#                      null backend and the image boots, logs "transmitting" and
+#                      puts nothing on the air.
+#   the sensor source  exactly one arm of the HRM_SENSOR choice, asserted by
+#                      name. This is what makes "I forgot to unhook the
+#                      simulator" a red build rather than a shipped strap
+#                      reporting 72 bpm from a simulator on a real chest.
+#   the BLE symbols    on the BLE row only: HRM_BLE_HRS plus the two symbols it
+#                      `select`s/`default`s rather than sets by hand. A Kconfig
+#                      `default` written after the symbol's own definition is
+#                      silently dead, and only a .config read-back tells the
+#                      difference.
+#
+# Only under -Backend core: this application has no ANT_RADIO axis at all, so
+# building it under -Backend sdk_ant or stub would compile the same image and
+# assert nothing extra.
+$nodeTargets = @(
+    @{ dir='node_l15';        board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf=$null }
+    # The other half of radiant/Kconfig's `SOC_COMPATIBLE_NRF52X ||
+    # SOC_COMPATIBLE_NRF54LX`. Build-verified only - there is no nRF52 bench slot
+    # for this application, and the part's on-air behaviour is predicted from the
+    # nRF54L15 measurements rather than confirmed.
+    @{ dir='node_52840dk';    board='nrf52840dk/nrf52840';           sensor='SIMULATED'; conf=$null }
+    @{ dir='node_lm20';       board='nrf54lm20dk/nrf54lm20a/cpuapp'; sensor='SIMULATED'; conf=$null }
+    @{ dir='node_ble';        board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf='ble.conf';                     ble=$true }
+    @{ dir='node_ble_nosup';  board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf='ble.conf;ble_nosuppress.conf'; ble=$true }
+    # The seam's second implementation, and the arm with no implementation at
+    # all. A seam with one implementation is indistinguishable from a direct
+    # call with extra prototypes; a seam whose empty case does not link is a
+    # seam an integrator's first build fails on for the wrong reason.
+    @{ dir='node_example';    board='nrf54l15dk/nrf54l15/cpuapp';    sensor='EXAMPLE';   conf='sensor_example.conf' }
+    @{ dir='node_custom';     board='nrf54l15dk/nrf54l15/cpuapp';    sensor='CUSTOM';    conf='sensor_custom.conf' }
+)
 
 if (-not (Get-Command west -ErrorAction SilentlyContinue)) {
     throw "west is not on PATH. Dot-source the environment first:`n" +
@@ -431,6 +514,97 @@ try {
         }
 
         Write-Host "  ok: $Backend builds with no sdk-ant reachable"
+    }
+
+    # ── The node ────────────────────────────────────────────────────────────
+    #
+    # See $nodeTargets above for why this is a second loop with its own
+    # assertions rather than more rows in the first one.
+    #
+    # NO -DANT_RADIO HERE. apps/hrm_ble has no ANT_RADIO axis: it is built out
+    # of radiant and radiant/src/profiles/ and has no sdk-ant path at all, which
+    # is the demonstration the application exists to make. Passing the flag
+    # would be accepted and unused, and an unused flag in a script whose job is
+    # asserting that flags took effect is the wrong habit to teach.
+    if ($Backend -eq 'core') {
+        $nodeApp = Join-Path $repo 'apps\hrm_ble'
+
+        foreach ($t in $nodeTargets) {
+            if ($t.dir -notlike $Only) { continue }
+
+            $out = Join-Path $repo "build\$($t.dir)"
+            Write-Host "`n=== hrm_ble $($t.dir)  [$($t.board)]" -ForegroundColor Cyan
+
+            $extra = @('--', "-DRADIANT_BACKEND=$RadiantBackend")
+            # IMAGE-SCOPED, and the prefix is the basename of the application
+            # directory because that is how sysbuild names an image. While this
+            # directory was strap/, `-Dstrap_EXTRA_CONF_FILE=` was correct;
+            # after the rename the same flag named an image that does not exist
+            # and was accepted in silence - CMake says nothing beyond its
+            # end-of-run "manually-specified variables were not used" warning,
+            # and the BLE image builds green with no BLE in it. Measured: two
+            # builds, with the flag and without, produced byte-identical
+            # .config files.
+            #
+            # A plain -DEXTRA_CONF_FILE= is no better - it lands in the sysbuild
+            # cache and never reaches the image - and neither is a bare
+            # -DCONFIG_x for the same reason, which is why even the sensor
+            # choice travels as a fragment.
+            if ($t.conf) { $extra += "-Dhrm_ble_EXTRA_CONF_FILE=$($t.conf)" }
+
+            $log = Join-Path $env:TEMP "build_$($t.dir).log"
+            west -z $zephyr build -s $nodeApp -d $out -b $t.board -p always @extra > $log
+            if ($LASTEXITCODE -ne 0) {
+                Get-Content $log -Tail 30
+                throw "build failed for hrm_ble $($t.dir); full log at $log"
+            }
+
+            # 'hrm_ble', the basename of the application directory - the same
+            # rule that decides the -D prefix above.
+            $cfg = Get-Content (Join-Path $out 'hrm_ble\zephyr\.config')
+
+            # 1. radiant's radio HAL, for the reason assertion 4 above gives:
+            # a null-radio node boots, logs "transmitting" and puts nothing on
+            # the air, and every other check still passes.
+            $want = "CONFIG_RADIANT_BACKEND_$($RadiantBackend.ToUpper())=y"
+            if (-not ($cfg | Where-Object { $_ -eq $want })) {
+                $got = ($cfg | Where-Object { $_ -match '^CONFIG_RADIANT_BACKEND_\w+=y' })
+                throw "hrm_ble $($t.dir): expected $want in .config, found '$got'"
+            }
+
+            # 2. The heart-rate source. The HRM_SENSOR choice is what makes "I
+            # forgot to unhook the simulator" unrepresentable, and this is what
+            # makes the choice checkable from outside the build.
+            $wantSensor = "CONFIG_HRM_SENSOR_$($t.sensor)=y"
+            if (-not ($cfg | Where-Object { $_ -eq $wantSensor })) {
+                $got = ($cfg | Where-Object { $_ -match '^CONFIG_HRM_SENSOR_(SIMULATED|EXAMPLE|CUSTOM)=y' })
+                throw "hrm_ble $($t.dir): expected $wantSensor in .config, found '$got'"
+            }
+
+            # 3. The BLE interlock, on the rows that ask for BLE.
+            #
+            # HRM_BLE_HRS is set by the fragment; the other two are NOT, and
+            # that is the point of asserting them. They come from a `select` and
+            # a `default` on HRM_BLE_HRS in apps/hrm_ble/Kconfig, and a Kconfig
+            # `default` parsed after the symbol's own definition is silently
+            # dead. Without the gate, radiant/Kconfig's `depends on !BT ||
+            # ..._GATE_MPSL` drops the nrf backend to null; with the gate but a
+            # session count of 0, every timeslot session_open() fails while the
+            # image still runs - a node that refuses every arm rather than a
+            # build error.
+            if ($t.ble) {
+                foreach ($sym in @('CONFIG_HRM_BLE_HRS=y',
+                                   'CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y',
+                                   'CONFIG_MPSL_TIMESLOT_SESSION_COUNT=1')) {
+                    if (-not ($cfg | Where-Object { $_ -eq $sym })) {
+                        throw "hrm_ble $($t.dir): expected $sym in .config"
+                    }
+                }
+            }
+
+            $bleNote = if ($t.ble) { ', BLE HRS + MPSL gate' } else { '' }
+            Write-Host ("  ok: {0} HAL, {1} sensor{2}" -f $RadiantBackend, $t.sensor, $bleNote)
+        }
     }
 } finally {
     Pop-Location

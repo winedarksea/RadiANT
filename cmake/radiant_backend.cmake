@@ -2,8 +2,8 @@
 #
 # ── Shared backend-selection machinery ───────────────────────────────────────
 #
-# Every RadiANT application (the dongle, strap and, later, dongle_thread and
-# dongle_ti) needs to make the same two decisions before find_package(Zephyr):
+# Every RadiANT application (apps/dongle, apps/hrm_ble, apps/dongle_thread and
+# apps/dongle_ti) needs to make the same two decisions before find_package(Zephyr):
 # which HAL backend radiant links, and whether a value handed to
 # sysbuild's outer image (`west build ... -- -DRADIANT_BACKEND=nrf`) actually
 # reaches this inner one. Both used to be copy-pasted per app; this file is
@@ -84,14 +84,14 @@ endfunction()
 # (null, nrf or cc26xx), writing the Kconfig fragment text that selects it
 # into `conf_out` in the caller's scope. The caller decides what to do with
 # that text - the dongle app embeds it inside a larger generated fragment
-# alongside its ANT_RADIO choice; strap writes it standalone - because only
-# the caller knows whether it has other backend axes (sdk_ant/core/stub) of
+# alongside its ANT_RADIO choice; apps/hrm_ble writes it standalone - because
+# only the caller knows whether it has other backend axes (sdk_ant/core/stub) of
 # its own.
 #
 # `default_backend` is a per-app default, and the asymmetry between apps is
 # deliberate: `null` is right for the dongle's compile-check posture (see
-# strap/CMakeLists.txt's original note, now here), `nrf` is right for a strap
-# whose whole job is producing images somebody flashes. A null-radio strap
+# apps/hrm_ble/CMakeLists.txt's original note, now here), `nrf` is right for a
+# node whose whole job is producing images somebody flashes. A null-radio node
 # boots, logs "transmitting", and puts nothing on the air - indistinguishable
 # from a dead antenna, and it has cost this project a Feather flash and a
 # whole session once already.

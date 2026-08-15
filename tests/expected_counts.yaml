@@ -19,11 +19,18 @@
 # commit that grows it. Lowering one is a claim that coverage should shrink and
 # needs a reason in the commit message.
 
-# Twister scenarios across radiant/tests, radiant/tests/api and
-# radiant/tests/gate. Counted from the three testcase.yaml files:
-# radiant.unit, radiant.unit.sec_modes, radiant.unit.pairing, radiant.api,
-# radiant.api.sec, radiant.api.sec_host, radiant.gate.
-min_scenarios: 7
+# Twister scenarios across radiant/tests, radiant/tests/api,
+# radiant/tests/gate and apps/hrm_ble/tests/sim_sched. Counted from the four
+# testcase.yaml files: radiant.unit, radiant.unit.sec_modes,
+# radiant.unit.pairing, radiant.api, radiant.api.sec, radiant.api.sec_host,
+# radiant.gate, hrm_ble.sim_sched.
+#
+# The eighth is the heart-rate node's beat scheduler and it is reached because
+# the ztest job passes a second `-T app/apps/hrm_ble/tests`. If that argument is
+# ever dropped, THIS number is what says so - which is the point, since the
+# suite it covers is the one check that would have caught a bug that escaped the
+# other 682.
+min_scenarios: 8
 
 # Total ztest cases twister executes, summed over every scenario.
 #
@@ -36,4 +43,6 @@ min_scenarios: 7
 # Tighten it to the observed total once a green run has reported one - the
 # check prints that number every time it passes, precisely so this can be
 # raised on evidence instead of on a guess.
-min_testcases: 682
+# 686 = 682 + the four ZTEST() definitions in
+# apps/hrm_ble/tests/sim_sched/src/main.c, counted the same way.
+min_testcases: 686

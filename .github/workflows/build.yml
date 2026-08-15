@@ -181,8 +181,17 @@ jobs:
           # --inline-logs because a failure here is read by whoever opened the
           # pull request, and twister otherwise leaves the actual assertion
           # text in a file inside twister-out/ that nobody downloads.
+          # Two -T roots. app/radiant/tests is the module's own suites;
+          # app/apps/hrm_ble/tests is the heart-rate node's beat scheduler,
+          # which lives with the application because it tests the application
+          # and radiant/tests/CMakeLists.txt's glob deliberately does not reach
+          # out of the module. scripts/check_test_counts.py's floors are floors,
+          # so adding a root raises the observed counts without needing an edit
+          # there - but raise them in the same commit that adds coverage, or the
+          # floor stops describing the tree.
           "${zephyr_base}/scripts/twister" \
             -T app/radiant/tests \
+            -T app/apps/hrm_ble/tests \
             -p native_sim \
             --inline-logs \
             -v
@@ -662,9 +671,11 @@ jobs:
   # apps/hrm_ble - the heart-rate node, and the manufacturer reference design.
   #
   # It had no CI job and was not in scripts/build_all.ps1 either, so nothing
-  # anywhere compiled it. That is why this job lands BEFORE the STRAP_* -> HRM_*
-  # rename rather than after: a rename that broke the build would otherwise stay
-  # invisible until somebody next needed the board.
+  # anywhere compiled it. That is why this job landed BEFORE the STRAP_* -> HRM_*
+  # rename rather than after: a rename that broke the build would otherwise have
+  # stayed invisible until somebody next needed the board. The rename has since
+  # happened, and the symbol names below are the evidence that the ordering was
+  # honoured rather than merely intended.
   #
   # A separate job rather than rows in build-new-apps for two reasons. Its
   # BLE conf is image-scoped (`-Dhrm_ble_EXTRA_CONF_FILE=`, not the sysbuild
@@ -685,26 +696,56 @@ jobs:
       matrix:
         include:
           - name: "hrm_ble: ANT+ node"
-            # No BLE: the baseline the other two are read against, and the
+            # No BLE: the baseline the others are read against, and the
             # configuration a manufacturer starts from.
             #
-            # STRAP_BLE_HRS is asserted ABSENT, not "is not set". Kconfig omits
+            # HRM_BLE_HRS is asserted ABSENT, not "is not set". Kconfig omits
             # a symbol entirely when its `depends on` is unmet - here
             # `depends on BT && BT_PERIPHERAL` - and only writes the
             # "# ... is not set" form for a symbol whose dependencies are met
             # and which is merely off. CONFIG_BT is the second kind, so the two
             # rows below are deliberately different forms. Measured on a real
             # .config, after asserting the wrong form here first.
+            board: nrf54l15dk/nrf54l15/cpuapp
             assert_symbols: |
               CONFIG_RADIANT_BACKEND_NRF=y
+              CONFIG_HRM_SENSOR_SIMULATED=y
               CONFIG_BT is not set
-              absent:CONFIG_STRAP_BLE_HRS
+              absent:CONFIG_HRM_BLE_HRS
+          # THE OTHER HALF OF THE nrf BACKEND'S `depends on`.
+          #
+          # radiant/Kconfig's nrf arm is `SOC_COMPATIBLE_NRF52X ||
+          # SOC_COMPATIBLE_NRF54LX`. Until this row existed only the nRF54L half
+          # was ever compiled anywhere in CI, so the profile + node combination
+          # had never been built on the family most existing ANT+ silicon
+          # actually is. It needs boards/nrf52840dk_nrf52840.overlay, whose
+          # TIMER4 is forced by the backend's five-CC-channel requirement.
+          #
+          # BUILD-ONLY, and that limit is real: there is no nRF52 bench slot for
+          # this application, and radiant/Kconfig records that the part's on-air
+          # behaviour is predicted from nRF54L15 measurements, not confirmed.
+          - name: "hrm_ble: ANT+ node (nRF52840)"
+            board: nrf52840dk/nrf52840
+            assert_symbols: |
+              CONFIG_RADIANT_BACKEND_NRF=y
+              CONFIG_HRM_SENSOR_SIMULATED=y
+              CONFIG_BT is not set
           - name: "hrm_ble: BLE HRS"
-            image_conf: strap_ble.conf
+            # CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL and
+            # CONFIG_MPSL_TIMESLOT_SESSION_COUNT are asserted here even though
+            # ble.conf no longer sets either. That is exactly why: they now come
+            # from a `select` and a `default` on HRM_BLE_HRS in
+            # apps/hrm_ble/Kconfig, and a Kconfig `default` placed after the
+            # symbol's own definition is silently dead. These two lines are what
+            # tell the difference between the guard working and the guard being
+            # a comment.
+            board: nrf54l15dk/nrf54l15/cpuapp
+            image_conf: ble.conf
             assert_symbols: |
               CONFIG_RADIANT_BACKEND_NRF=y
               CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
-              CONFIG_STRAP_BLE_HRS=y
+              CONFIG_MPSL_TIMESLOT_SESSION_COUNT=1
+              CONFIG_HRM_BLE_HRS=y
               CONFIG_BT=y
               CONFIG_RADIANT_BACKEND_NULL is not set
           - name: "hrm_ble: BLE HRS, no ANT suppression"
@@ -712,11 +753,36 @@ jobs:
             # (the default) the two stacks never genuinely contend. A layered
             # conf fragment, not a -DCONFIG_ on the command line - see
             # ble_nosuppress.conf for why that would be one more silent no-op.
-            image_conf: "strap_ble.conf;ble_nosuppress.conf"
+            board: nrf54l15dk/nrf54l15/cpuapp
+            image_conf: "ble.conf;ble_nosuppress.conf"
             assert_symbols: |
               CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
-              CONFIG_STRAP_BLE_HRS=y
-              CONFIG_STRAP_SUPPRESS_ANT_WHEN_CONNECTED is not set
+              CONFIG_HRM_BLE_HRS=y
+              CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED is not set
+          # THE SENSOR SEAM'S SECOND IMPLEMENTATION. A seam with one
+          # implementation is indistinguishable from a direct call with extra
+          # prototypes - the same argument this file already makes about
+          # encryption.conf. src/hrm_sensor_example.c is also the arm that
+          # reports beats from interrupt context, which is the case the
+          # lock-free {seq, event_time} record exists for.
+          - name: "hrm_ble: example sensor driver"
+            board: nrf54l15dk/nrf54l15/cpuapp
+            image_conf: sensor_example.conf
+            assert_symbols: |
+              CONFIG_HRM_SENSOR_EXAMPLE=y
+              CONFIG_HRM_SENSOR_SIMULATED is not set
+          # THE ARM WITH NO SENSOR IN IT. CONFIG_HRM_SENSOR_CUSTOM compiles no
+          # implementation of the seam at all, deliberately - there is no
+          # fallback to the simulator. The image must still LINK, because an
+          # integrator's first build failing for a reason unrelated to their
+          # driver is an expensive way to start.
+          - name: "hrm_ble: custom sensor (nothing registered)"
+            board: nrf54l15dk/nrf54l15/cpuapp
+            image_conf: sensor_custom.conf
+            assert_symbols: |
+              CONFIG_HRM_SENSOR_CUSTOM=y
+              CONFIG_HRM_SENSOR_SIMULATED is not set
+              absent:CONFIG_HRM_SENSOR_SIM_BPM
 
     steps:
       - name: Checkout application
@@ -744,6 +810,7 @@ jobs:
 
       - name: Build
         env:
+          BOARD: ${{ matrix.board }}
           IMAGE_CONF: ${{ matrix.image_conf }}
           EXTRA_CMAKE: ${{ matrix.extra_cmake }}
         run: |
@@ -756,7 +823,15 @@ jobs:
           # "manually-specified variables were not used" warning, CONFIG_BT
           # stayed unset, radiant/Kconfig's `depends on !BT || ..._GATE_MPSL`
           # was satisfied by its !BT half, and the BLE image built green with
-          # no BLE in it.
+          # no BLE in it. Two builds - one with the flag, one without - produced
+          # byte-identical .config files, which is what makes that a measured
+          # claim rather than a plausible one.
+          #
+          # Every configuration axis in this matrix goes through a conf FRAGMENT
+          # for the same reason, including the sensor choice: a bare
+          # -DCONFIG_HRM_SENSOR_EXAMPLE=y would land in the sysbuild cache and
+          # never reach the image, and the build would compile the simulator and
+          # pass.
           if [[ -n "${IMAGE_CONF}" ]]; then
             extra+=("-Dhrm_ble_EXTRA_CONF_FILE=${IMAGE_CONF}")
           fi
@@ -764,7 +839,7 @@ jobs:
             extra+=(${EXTRA_CMAKE})
           fi
           west build app/apps/hrm_ble \
-            -b nrf54l15dk/nrf54l15/cpuapp \
+            -b "${BOARD}" \
             -d build \
             -p always \
             -- "${extra[@]}"

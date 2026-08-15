@@ -2,18 +2,22 @@
 #
 # Twister coverage for the heart-rate node.
 #
-# THIS FILE EXISTS BEFORE THE STRAP_* -> HRM_* RENAME, DELIBERATELY. Until now
-# apps/hrm_ble appeared in neither .github/workflows/build.yml nor
-# scripts/build_all.ps1, so nothing anywhere compiled it: a rename that broke
-# the build would have stayed invisible until somebody next needed the board,
-# turning a mechanical edit into a bench session. Coverage first, rename second.
+# THIS FILE PREDATES THE STRAP_* -> HRM_* RENAME, DELIBERATELY. Until it and
+# .github/workflows/build.yml's build-node job existed, apps/hrm_ble appeared in
+# neither the workflow nor scripts/build_all.ps1, so nothing anywhere compiled
+# it: a rename that broke the build would have stayed invisible until somebody
+# next needed the board, turning a mechanical edit into a bench session.
+# Coverage first, rename second.
 #
 # build_only on every entry. These are compile-and-configure assertions, not
 # tests - the node's actual behaviour needs a radio, a BLE central and a
-# stopwatch, and docs/testing.md is where that lives.
+# stopwatch, and docs/hrm-reference-design.md section 7 is where that lives. The
+# one property that IS testable without hardware has its own ztest application
+# in tests/sim_sched/, because the scheduler was made a pure function so that it
+# could.
 #
 # The value is NOT in the compile. It is in the .config read-back that the
-# build-node CI job does afterwards: see 3.0 in the plan, where
+# build-node CI job does afterwards: see 3.0 of the plan, where
 # `-Dstrap_EXTRA_CONF_FILE=` turned out to be a silent no-op after the
 # directory rename, because sysbuild derives the image name from the basename
 # of APP_DIR. The flag named an image that no longer existed, CMake emitted
@@ -22,18 +26,52 @@
 # passed that too. Asserting the resulting .config is the only thing that would
 # not have.
 
+# WHO ACTUALLY RUNS THIS FILE. Not CI, today: the ztest job's twister
+# invocation walks `app/radiant/tests` and `app/apps/hrm_ble/tests`, and this
+# file sits beside them rather than under either. The configurations below are
+# built and asserted by the build-node job in .github/workflows/build.yml and by
+# scripts/build_all.ps1's node rows; this file is for
+# `twister -T apps/hrm_ble -p nrf54l15dk/nrf54l15/cpuapp` by hand, and for
+# stating the matrix in one place that the two of them can be read against.
+# Saying so here rather than implying coverage that does not exist.
+#
+# sysbuild: true, and it is load-bearing rather than boilerplate. Every
+# `hrm_ble_`-prefixed argument below is an IMAGE-SCOPED sysbuild setting; run
+# without sysbuild, twister would pass them to a build that has no image scoping
+# at all and they would be silently ignored - the exact failure this application
+# is named after.
 common:
   build_only: true
+  sysbuild: true
   tags:
     - radiant
     - hrm_ble
-  platform_allow:
-    - nrf54l15dk/nrf54l15/cpuapp
 
 tests:
   # The plain ANT+ node: no BLE, no arbiter. The baseline the others are read
   # against, and the configuration a manufacturer starts from.
   hrm_ble.node:
+    platform_allow:
+      - nrf54l15dk/nrf54l15/cpuapp
+    extra_args:
+      - RADIANT_BACKEND=nrf
+
+  # THE OTHER HALF OF THE BACKEND'S `depends on`.
+  #
+  # radiant/Kconfig's nrf arm is `SOC_COMPATIBLE_NRF52X || SOC_COMPATIBLE_NRF54LX`
+  # and until this entry existed only the nRF54L half was ever compiled - so the
+  # profile + node + BLE combination had never been built on the family most
+  # existing ANT+ silicon actually is. boards/nrf52840dk_nrf52840.overlay names
+  # TIMER4, because the backend needs five CC channels and on nRF52 only TIMER3
+  # and TIMER4 have more than four.
+  #
+  # BUILD-VERIFIED ONLY, and the overlay says so at more length: nothing on an
+  # nRF52 has been on a bench, and radiant/Kconfig's own help text records that
+  # the part's on-air behaviour is predicted from the nRF54L15 measurements
+  # rather than confirmed.
+  hrm_ble.node_nrf52840:
+    platform_allow:
+      - nrf52840dk/nrf52840
     extra_args:
       - RADIANT_BACKEND=nrf
 
@@ -41,35 +79,70 @@ tests:
   # is the fix for 3.0: the basename of this directory is what sysbuild uses,
   # so `strap_` silently addressed nothing.
   hrm_ble.ble:
+    platform_allow:
+      - nrf54l15dk/nrf54l15/cpuapp
     extra_args:
       - RADIANT_BACKEND=nrf
-      - hrm_ble_EXTRA_CONF_FILE=strap_ble.conf
+      - hrm_ble_EXTRA_CONF_FILE=ble.conf
 
   # The configuration that actually stresses the arbiter.
   #
-  # With STRAP_SUPPRESS_ANT_WHEN_CONNECTED=y - the default - the node stops
+  # With HRM_SUPPRESS_ANT_WHEN_CONNECTED=y - the default - the node stops
   # transmitting ANT+ for the duration of a BLE connection, so the two stacks
   # never genuinely contend and the gate is never asked to do its job. This
   # entry is the one where MPSL has to arbitrate a 4.06 Hz ANT+ obligation
   # against a live BLE connection, which is the case the timeslot code exists
   # for. Kconfig's own help text for that symbol says as much.
   hrm_ble.ble_nosuppress:
+    platform_allow:
+      - nrf54l15dk/nrf54l15/cpuapp
     extra_args:
       - RADIANT_BACKEND=nrf
-      - hrm_ble_EXTRA_CONF_FILE="strap_ble.conf;ble_nosuppress.conf"
+      - hrm_ble_EXTRA_CONF_FILE="ble.conf;ble_nosuppress.conf"
 
-# Deliberately not here yet, so that the absence is a recorded decision rather
-# than an oversight:
+  # THE SEAM'S SECOND IMPLEMENTATION.
+  #
+  # A seam with one implementation is indistinguishable from a direct call with
+  # extra prototypes - the same argument build.yml already makes about
+  # encryption.conf. src/hrm_sensor_example.c is the one that reports beats from
+  # interrupt context, which is the case the whole lock-free {seq, event_time}
+  # design exists for, so it is also the arm that would break first if somebody
+  # "simplified" hrm_sensor_report_beat().
+  hrm_ble.example:
+    platform_allow:
+      - nrf54l15dk/nrf54l15/cpuapp
+    extra_args:
+      - RADIANT_BACKEND=nrf
+      - hrm_ble_EXTRA_CONF_FILE=sensor_example.conf
+
+  # THE ARM WITH NO SENSOR IN IT, and it is here to prove a negative.
+  #
+  # CONFIG_HRM_SENSOR_CUSTOM compiles no implementation of the seam at all. The
+  # image must still LINK - if it does not, an integrator's first build fails
+  # for a reason that has nothing to do with their driver - and it must still
+  # run, logging an error and transmitting PROFILE_HR_INVALID_BPM rather than
+  # falling back to the simulator. Only the link half is checkable here; the
+  # rest is in hrm_sensor.c's hrm_sensor_start() and in the reference design's
+  # section on porting.
+  hrm_ble.custom:
+    platform_allow:
+      - nrf54l15dk/nrf54l15/cpuapp
+    extra_args:
+      - RADIANT_BACKEND=nrf
+      - hrm_ble_EXTRA_CONF_FILE=sensor_custom.conf
+
+# Deliberately not here, so that the absence is a recorded decision rather than
+# an oversight:
 #
-#   * An nRF52840 entry. STRAP_BLE_HRS depends on
-#     `SOC_COMPATIBLE_NRF52X || SOC_COMPATIBLE_NRF54LX`, and today only the
-#     nRF54L half is ever compiled - so the profile + node + BLE combination
-#     has never been built on an nRF52. It needs a board overlay first (the
-#     `radiant,radio-timer` chosen node wants a TIMER with >=5 CC channels that
-#     MPSL has not claimed, which is TIMER3 or TIMER4 there), and an overlay
-#     written without the board to hand is a guess. Phase 3.2b.
-#   * `hrm_ble.custom`, the sensor seam's second implementation. A seam with
-#     one implementation is indistinguishable from a direct call with extra
-#     prototypes - the same argument build.yml already makes about
-#     encryption.conf - so this entry lands in the same commit as the seam
-#     (Phase 3.1), not before it.
+#   * nrf54lm20dk/nrf54lm20a/cpuapp. The overlay exists
+#     (boards/nrf54lm20dk_nrf54lm20a_cpuapp.overlay) and scripts/build_all.ps1's
+#     node rows build it, but it adds nothing to THIS file: it is the same
+#     SOC_COMPATIBLE_NRF54LX arm as the L15 with the same TIMER answer, so a
+#     twister entry for it would cost a full build per CI run to re-prove a
+#     property the L15 row already proves. The nRF52840 row above is the one
+#     that covers a different arm.
+#   * A BLE row on nRF52840. It would be the first time SDC, MPSL and the gate
+#     were compiled together on that family, which makes it valuable and also
+#     makes it the row most likely to fail for a reason nobody here can
+#     reproduce - there is no nRF52 bench slot for this application. It lands
+#     with the first nRF52 bench session, not before it.
