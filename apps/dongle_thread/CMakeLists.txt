@@ -126,44 +126,67 @@ if(CONFIG_RADIANT_BRIDGE)
     # written against a bus that never marks anything stale grows that
     # assumption into itself.
     "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_liveness.c"
-    # ── The Matter plan's packages A, B and C ────────────────────────────
-    #
-    # Three more adapters and the page codecs behind them. Two things about
-    # this list are load-bearing:
-    #
-    # 1. THE COMMON-PAGE PAIR IS NOT OPTIONAL AND IS NOT PER-PROFILE.
-    #    ANT+ Common Data Pages Rev 3.1 Table 4-1 keys pages 0x40-0x5D on the
-    #    channel's TRANSMISSION TYPE, not on the device type, so the common
-    #    decoder runs on every bound channel alongside whichever profile
-    #    adapter owns it - see src/rx_tap.c. Omitting it does not disable a
-    #    feature, it makes every weather-reporting sensor silent.
-    #
-    # 2. profile_power_decode.c, NOT profile_power.c. The latter is the
-    #    MASTER - page rotation, the ANT+ compat layer, RadiANT beacon
-    #    insertion - so it calls profile_sched.c and profile_compat.c, and
-    #    profile_compat.c reaches radiant_sec. Linking it here to obtain one
-    #    decoder would pull the entire transmit-side chain into an image
-    #    whose whole job is to listen, and would let a linker decision nobody
-    #    reviewed make a receive-only dongle capable of transmitting. See
-    #    that file's header; the split exists for this line.
+    # The application half: the drain pump and the 1 Hz liveness clock.
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/bridge_pump.c"
+  )
+  target_include_directories(app PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+  # ── The Matter plan's packages A, B and C ──────────────────────────────
+  #
+  # Three more adapters and the page codecs behind them.
+  #
+  # NOT UNDER CONFIG_RADIANT_BRIDGE, AND THAT IS THE WHOLE POINT OF THE
+  # SYMBOL. These files were added directly to the list above once, and
+  # docs/matter-e2-regression.md measured what that cost: bridge.conf is one
+  # of the five docs/radiant-bridge.md section 7.4 coexistence arms and it
+  # gained 2 564 B of flash, 1 472 B of RAM and 22 defined symbols - plus a
+  # changed radio schedule, via the rewritten src/self_channels.c, which is
+  # the thing section 7.4 actually measures. CONFIG_ANT_DONGLE_PROFILES_EXTRA
+  # defaults n and follows CONFIG_ANT_DONGLE_MATTER, exactly as
+  # CONFIG_ANT_DONGLE_MATTER_MAP below already does and for the same reason.
+  # See that symbol's help in Kconfig; do not "simplify" this back up into
+  # the block above.
+  #
+  # Two things about the list itself are load-bearing:
+  #
+  # 1. THE COMMON-PAGE PAIR IS NOT OPTIONAL AND IS NOT PER-PROFILE.
+  #    ANT+ Common Data Pages Rev 3.1 Table 4-1 keys pages 0x40-0x5D on the
+  #    channel's TRANSMISSION TYPE, not on the device type, so the common
+  #    decoder runs on every bound channel alongside whichever profile
+  #    adapter owns it - see src/rx_tap.c. Omitting it does not disable a
+  #    feature, it makes every weather-reporting sensor silent.
+  #
+  # 2. profile_power_decode.c, NOT profile_power.c. The latter is the
+  #    MASTER - page rotation, the ANT+ compat layer, RadiANT beacon
+  #    insertion - so it calls profile_sched.c and profile_compat.c, and
+  #    profile_compat.c reaches radiant_sec. Linking it here to obtain one
+  #    decoder would pull the entire transmit-side chain into an image
+  #    whose whole job is to listen, and would let a linker decision nobody
+  #    reviewed make a receive-only dongle capable of transmitting. See
+  #    that file's header; the split exists for this line.
+  target_sources_ifdef(CONFIG_ANT_DONGLE_PROFILES_EXTRA app PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_power_adapter.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_env_adapter.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_common_adapter.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/profiles/profile_common.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/profiles/profile_power_decode.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/profiles/profile_fec.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/profiles/profile_env.c"
-    # The application half: the drain pump and the 1 Hz liveness clock.
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/bridge_pump.c"
-  )
-  target_include_directories(app PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge"
-    # New with the packages above: the adapters include their page codec's
-    # header rather than re-deriving the bit splits, exactly as
-    # radiant_rd_adapter.c already did in radiant/tests. This application
-    # listed no profile source and no profile include path before now.
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/profiles"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/profiles/profile_env.c")
+
+  # The adapters include their page codec's header rather than re-deriving
+  # the bit splits, exactly as radiant_rd_adapter.c already did in
+  # radiant/tests. This application listed no profile source and no profile
+  # include path before packages A-C, and with the symbol off it lists
+  # neither again - an include path is not free, because it is also what
+  # src/self_channels.c's header cites as the reason its periods are
+  # transcribed literals rather than the profile constants.
+  if(CONFIG_ANT_DONGLE_PROFILES_EXTRA)
+    target_include_directories(app PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/profiles")
+  endif()
+
   zephyr_linker_sources(SECTIONS
     "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_bridge_sections.ld")
 
@@ -255,12 +278,47 @@ if(CONFIG_CHIP)
     "${ZEPHYR_NRF_MODULE_DIR}/samples/matter/common/src/binding/binding_handler.cpp"
   )
 
-  # Trap 15's static_assert. It needs radiant_matter.h, therefore the include
-  # path that only the CONFIG_RADIANT_BRIDGE block above adds - hence the
-  # guard, not because the assertion is optional. matter.conf sets
-  # CONFIG_RADIANT_BRIDGE=y, so on the Matter arm this always compiles.
+  # ── Packages E4, E5 and E6: the ANT+ half, the device types and main() ────
+  #
+  # Everything here is THIS repository's, not vendored - src/matter/README.md's
+  # provenance table covers core/ and default_zap/ and nothing below.
+  #
+  # ONE OF THESE FIVE FILES IS C, AND THAT IS DELIBERATE.
+  # ant/ant_matter_sink.c carries the RADIANT_SINK_DEFINE() that gives the glue
+  # a binding_changed callback and a view of RADIANT_SAMPLE_STALE. That macro is
+  # STRUCT_SECTION_ITERABLE plus a designated initialiser; designated
+  # initialisers are only a GNU extension in C++17 and the iterable-section
+  # machinery wants an unmangled symbol in a section named after the struct.
+  # Both happen to work under -std=gnu++17 and neither is guaranteed, so the
+  # nine lines that need them are C. See that file's header.
+  #
+  # NESTED INSIDE CONFIG_RADIANT_BRIDGE, exactly like the trap-15 assertions
+  # below and for the same mechanical reason: ant_bridge.cpp includes
+  # radiant_matter.h and ant_matter_sink.c includes radiant_bridge.h, and
+  # radiant/src/bridge only reaches this target's include path from the
+  # CONFIG_RADIANT_BRIDGE block further up. It is not a second opinion about
+  # whether Matter is wanted - matter.conf sets both symbols and CONFIG_CHIP
+  # without the sample bus would be a bridge with nothing to bridge.
+  #
+  # Note what is NOT the guard: CONFIG_ANT_DONGLE_MATTER, which is what main.c
+  # tests. That symbol `depends on CHIP` and has no default, so a CHIP build
+  # that left it unset compiles these files, links them, and finds nothing
+  # calls ant_matter_start() - a dead sink and a --gc-sections discard. The
+  # other order (guarding the sources and not the call) is the one that fails,
+  # at link.
   if(CONFIG_RADIANT_BRIDGE)
     target_sources(app PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/matter/ant/ant_bridge.cpp"
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/matter/ant/ant_matter_sink.c"
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/matter/bridged_device_types/occupancy_sensor.cpp"
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/matter/bridged_device_types/measurement_sensor.cpp"
+      # E6. It also carries the one LOG_MODULE_REGISTER(app) this image has:
+      # every vendored core file and every NCS sample-common source does
+      # LOG_MODULE_DECLARE(app), and upstream registers it in the main.cpp that
+      # E3 deliberately did not vendor.
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/matter/matter_app.cpp"
+      # Trap 15's static_assert. Same include-path reason as the four above;
+      # not a statement that the assertion is optional.
       "${CMAKE_CURRENT_SOURCE_DIR}/src/matter/bridge_core_asserts.cpp")
   endif()
 

@@ -613,6 +613,248 @@ ZTEST(radiant_matter, test_wind_has_no_row_and_that_is_the_design)
 			"there is no wind direction cluster in Matter");
 }
 
+/* ---------------------------------------------------------------------------
+ * Package E6 - the deadbands
+ *
+ * Finding 7's argument, made executable. These are an EFFICIENCY measure and
+ * not a conformance one: a subscription's MinIntervalFloor already bounds how
+ * often a report leaves the device, so writing at 4 Hz would be legal. What it
+ * would not be is free - each write walks the subscription list and bumps
+ * DataVersion on the CHIP thread, which preempts the ANT host thread - and a
+ * controller subscribing with MinIntervalFloor = 0 would put 4 Hz per
+ * attribute straight into the section 7 coexistence budget.
+ * ---------------------------------------------------------------------------
+ */
+
+/* Same as mk() but with an explicit sample time, because every deadband test
+ * is really a test about two samples and the gap between them. */
+static struct radiant_sample mk_at(uint32_t source, uint8_t field_id,
+				   uint8_t field_type, int64_t raw, int8_t exp,
+				   uint64_t t_us)
+{
+	struct radiant_sample s = mk(source, field_id, field_type, raw, exp);
+
+	s.t_us = t_us;
+	return s;
+}
+
+static void post_drain(const struct radiant_sample *s)
+{
+	radiant_bridge_post(s);
+	radiant_bridge_drain();
+}
+
+ZTEST(radiant_matter, test_temperature_below_the_deadband_is_not_written)
+{
+	struct radiant_sample s;
+
+	/* 25.00 C - the first sample for a field is always written, whatever
+	 * the deadband says: there is nothing to compare it against. */
+	s = mk_at(10u, 0u, RADIANT_FIELD_TEMPERATURE, 29815, -2, 1000000u);
+	post_drain(&s);
+	zassert_equal(last.writes, 1u, NULL);
+	zassert_equal(last.value, 2500, NULL);
+
+	/* 25.20 C. Delta 0.20 C, under the 0.5 C deadband. */
+	s = mk_at(10u, 0u, RADIANT_FIELD_TEMPERATURE, 29835, -2, 2000000u);
+	post_drain(&s);
+	zassert_equal(last.writes, 1u,
+		      "0.20 degC of movement must not reach the stack");
+
+	/* 25.60 C. Delta 0.60 C from the last WRITTEN value, not from the
+	 * suppressed one - which is the whole point of comparing against what
+	 * the stack has, rather than against the previous sample. */
+	s = mk_at(10u, 0u, RADIANT_FIELD_TEMPERATURE, 29875, -2, 3000000u);
+	post_drain(&s);
+	zassert_equal(last.writes, 2u, NULL);
+	zassert_equal(last.value, 2560, NULL);
+}
+
+ZTEST(radiant_matter, test_the_heartbeat_writes_an_unchanged_value_anyway)
+{
+	struct radiant_sample s;
+
+	s = mk_at(11u, 0u, RADIANT_FIELD_TEMPERATURE, 29815, -2, 1000000u);
+	post_drain(&s);
+	zassert_equal(last.writes, 1u, NULL);
+
+	/* 59 s later, unchanged: still suppressed. */
+	s = mk_at(11u, 0u, RADIANT_FIELD_TEMPERATURE, 29815, -2, 60000000u);
+	post_drain(&s);
+	zassert_equal(last.writes, 1u, NULL);
+
+	/*
+	 * 60 s later, unchanged: written. Without this a sensor whose reading
+	 * never moves stops writing forever, and "unchanged" becomes
+	 * indistinguishable from "gone" to anything that reads timestamps
+	 * rather than Reachable.
+	 */
+	s = mk_at(11u, 0u, RADIANT_FIELD_TEMPERATURE, 29815, -2, 61000000u);
+	post_drain(&s);
+	zassert_equal(last.writes, 2u, "the 60 s heartbeat must override the "
+				       "deadband");
+}
+
+ZTEST(radiant_matter, test_a_suppressed_run_does_not_postpone_the_heartbeat)
+{
+	struct radiant_sample s;
+	uint64_t t;
+
+	/*
+	 * The subtle one. If a suppressed sample advanced the "last written"
+	 * timestamp, a sensor drifting slowly inside its deadband would push
+	 * the heartbeat out forever, one sample at a time, and the heartbeat
+	 * would silently stop existing.
+	 */
+	s = mk_at(12u, 0u, RADIANT_FIELD_TEMPERATURE, 29815, -2, 1000000u);
+	post_drain(&s);
+	zassert_equal(last.writes, 1u, NULL);
+
+	/* Ten samples over the next 50 s, each 0.1 C from the written value
+	 * and every one of them inside the deadband. */
+	for (t = 6000000u; t <= 51000000u; t += 5000000u) {
+		s = mk_at(12u, 0u, RADIANT_FIELD_TEMPERATURE, 29825, -2, t);
+		post_drain(&s);
+	}
+	zassert_equal(last.writes, 1u, "all ten are inside the deadband");
+
+	s = mk_at(12u, 0u, RADIANT_FIELD_TEMPERATURE, 29825, -2, 62000000u);
+	post_drain(&s);
+	zassert_equal(last.writes, 2u,
+		      "the heartbeat is measured from the last WRITE, not from "
+		      "the last sample");
+}
+
+ZTEST(radiant_matter, test_occupancy_is_on_change_only)
+{
+	struct radiant_sample s;
+
+	s = mk_at(13u, 0u, RADIANT_FIELD_OCCUPANCY, 1, 0, 1000000u);
+	s.flags = RADIANT_SAMPLE_DERIVED;
+	post_drain(&s);
+	zassert_equal(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING,
+				 MATTER_ATTR_OCCUPANCY, NULL, NULL),
+		      1, NULL);
+
+	/* The same boolean again. A threshold on a one-bit value can only be
+	 * "did it change". */
+	s = mk_at(13u, 0u, RADIANT_FIELD_OCCUPANCY, 1, 0, 2000000u);
+	s.flags = RADIANT_SAMPLE_DERIVED;
+	post_drain(&s);
+	zassert_equal(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING,
+				 MATTER_ATTR_OCCUPANCY, NULL, NULL),
+		      1, "an unchanged boolean is not news");
+
+	s = mk_at(13u, 0u, RADIANT_FIELD_OCCUPANCY, 0, 0, 3000000u);
+	s.flags = RADIANT_SAMPLE_DERIVED;
+	post_drain(&s);
+	zassert_equal(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING,
+				 MATTER_ATTR_OCCUPANCY, NULL, NULL),
+		      2, "an edge always is");
+
+	/* And the two constants are still written exactly once, at creation -
+	 * a deadband that suppressed the first sample's writes would have taken
+	 * OccupancySensorType with it, which is trap 16 arriving through the
+	 * back door. */
+	zassert_equal(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING,
+				 MATTER_ATTR_OCCUPANCY_SENSOR_TYPE, NULL, NULL),
+		      1, NULL);
+}
+
+ZTEST(radiant_matter, test_pressure_has_no_deadband_and_says_so)
+{
+	const struct radiant_matter_type_map *r;
+
+	/*
+	 * Finding 7's list names occupancy, temperature, humidity and battery.
+	 * Pressure is absent from it, and the row states the sentinel
+	 * explicitly so that the absence reads as a decision rather than as an
+	 * omission - MeasuredValue is already quantised to whole kPa by the
+	 * cluster, so any threshold above zero would suppress every barometric
+	 * change a user could act on.
+	 *
+	 * test_the_pressure_constant_is_written_once_not_per_sample above is
+	 * the behavioural half of this: five samples, five ScaledValue writes.
+	 */
+	r = radiant_matter_row(RADIANT_FIELD_PRESSURE);
+	zassert_not_null(r, NULL);
+	zassert_equal(r->deadband, RADIANT_MATTER_DEADBAND_EVERY, NULL);
+
+	r = radiant_matter_row(RADIANT_FIELD_OCCUPANCY);
+	zassert_equal(r->deadband, RADIANT_MATTER_DEADBAND_ON_CHANGE, NULL);
+	r = radiant_matter_row(RADIANT_FIELD_TEMPERATURE);
+	zassert_equal(r->deadband, 50, "0.5 degC in the cluster's 0.01 degC units");
+	r = radiant_matter_row(RADIANT_FIELD_HUMIDITY);
+	zassert_equal(r->deadband, 100, "1 %% in the cluster's 0.01 %% units");
+	r = radiant_matter_row(RADIANT_FIELD_BATTERY_SOC);
+	zassert_equal(r->deadband, 2, "1 %% in the cluster's 0.5 %% steps");
+	zassert_equal(r->heartbeat_s, 300u,
+		      "a battery that has not moved in five minutes is the "
+		      "normal case for the life of the cell");
+}
+
+ZTEST(radiant_matter, test_a_battery_and_its_primary_do_not_share_a_deadband)
+{
+	struct radiant_sample s;
+
+	/*
+	 * THE TRAP THIS TEST EXISTS FOR. A `device_type == 0` row publishes
+	 * onto the SOURCE'S PRIMARY endpoint, so a strap's battery and that
+	 * strap's occupancy boolean are attributes of ONE endpoint. Deadband
+	 * state indexed by endpoint would have the two overwrite each other's
+	 * last value, and the visible failure would be a battery percentage
+	 * suppressing a "strap removed" edge.
+	 */
+	s = mk_at(14u, 0u, RADIANT_FIELD_OCCUPANCY, 1, 0, 1000000u);
+	s.flags = RADIANT_SAMPLE_DERIVED;
+	post_drain(&s);
+
+	/* 80 % -> 160 in the cluster's 0.5 % steps, onto the same endpoint. */
+	s = mk_at(14u, 1u, RADIANT_FIELD_BATTERY_SOC, 80, 0, 1100000u);
+	post_drain(&s);
+	zassert_equal(find_write(MATTER_CLUSTER_POWER_SOURCE,
+				 MATTER_ATTR_BAT_PERCENT_REMAINING, NULL, NULL),
+		      1, NULL);
+
+	/* The occupancy edge must still get through, and must not be measured
+	 * against 160. */
+	s = mk_at(14u, 0u, RADIANT_FIELD_OCCUPANCY, 0, 0, 1200000u);
+	s.flags = RADIANT_SAMPLE_DERIVED;
+	post_drain(&s);
+	zassert_equal(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING,
+				 MATTER_ATTR_OCCUPANCY, NULL, NULL),
+		      2, "the strap-removed edge must not be swallowed by the "
+			 "battery's deadband state");
+
+	/* And a 0.5 % battery step is still inside the battery's own 1 %
+	 * deadband, i.e. its state was not clobbered by the occupancy edge
+	 * either. */
+	s = mk_at(14u, 1u, RADIANT_FIELD_BATTERY_SOC, 805, -1, 1300000u);
+	post_drain(&s);
+	zassert_equal(find_write(MATTER_CLUSTER_POWER_SOURCE,
+				 MATTER_ATTR_BAT_PERCENT_REMAINING, NULL, NULL),
+		      1, "80.5 %% is one 0.5 %% step, inside the 1 %% deadband");
+}
+
+ZTEST(radiant_matter, test_two_sources_deadband_independently)
+{
+	struct radiant_sample s;
+
+	/* Deadband state is keyed on (source, field_id) for the same reason
+	 * endpoints are: two straps both announce field 0. */
+	s = mk_at(1u, 0u, RADIANT_FIELD_HUMIDITY, 400, -1, 1000000u);
+	post_drain(&s);
+	s = mk_at(2u, 0u, RADIANT_FIELD_HUMIDITY, 600, -1, 1000000u);
+	post_drain(&s);
+	zassert_equal(last.writes, 2u, NULL);
+
+	/* 40.0 -> 40.5 % on source 1: half the 1 % deadband, suppressed. It
+	 * must not be compared against source 2's 60 %. */
+	s = mk_at(1u, 0u, RADIANT_FIELD_HUMIDITY, 405, -1, 2000000u);
+	post_drain(&s);
+	zassert_equal(last.writes, 2u, NULL);
+}
+
 ZTEST(radiant_matter, test_the_endpoint_ceiling_announces_itself)
 {
 	struct radiant_sample s;

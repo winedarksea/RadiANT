@@ -76,6 +76,31 @@ struct radiant_matter_attr_conv {
  * literal in a table rather than a thing with a lifetime. */
 #define RADIANT_MATTER_MAX_EXTRA 2u
 
+/*
+ * DEADBANDS - the two `deadband` sentinels, named because 0 and -1 both mean
+ * something and neither reads as a number.
+ *
+ * A deadband is an EFFICIENCY measure, not a conformance one, and the
+ * distinction decides where it may and may not be applied. Min/max interval
+ * enforcement lives in the Matter server's ReadHandler: a subscription with
+ * MinIntervalFloor = 5 emits at most one report every 5 s no matter how often
+ * a path is dirtied, so writing at 4 Hz is LEGAL. It is still wasteful - each
+ * write walks the subscription list and bumps DataVersion on the CHIP thread,
+ * which runs at K_PRIO_PREEMPT(1), above the ANT host thread - and a
+ * controller that subscribes with MinIntervalFloor = 0 would put 4 Hz of
+ * Thread traffic per attribute straight into the coexistence budget of
+ * docs/radiant-bridge.md section 7. That is the whole argument; there is no
+ * correctness claim here and a controller that wants every sample is not
+ * being denied anything it is entitled to.
+ *
+ * The heartbeat is the other half and it is not optional: a deadband with no
+ * heartbeat means a sensor whose reading never moves stops writing forever,
+ * and "unchanged" then becomes indistinguishable from "gone" to anything
+ * reading timestamps rather than Reachable.
+ */
+#define RADIANT_MATTER_DEADBAND_EVERY     (-1) /* no deadband: write every sample */
+#define RADIANT_MATTER_DEADBAND_ON_CHANGE (0)  /* write only when the value differs */
+
 struct radiant_matter_type_map {
 	uint8_t  field_type;   /* the section 7 vocabulary */
 	uint16_t device_type;  /* Matter Device Library, 0 = cluster only */
@@ -84,6 +109,24 @@ struct radiant_matter_type_map {
 	int32_t  mul;
 	int32_t  div;
 	int32_t  offset;
+
+	/*
+	 * Suppression threshold IN THE CLUSTER'S OWN UNITS, not in the
+	 * vocabulary's - it is compared against the converted value, so a
+	 * temperature deadband of 0.5 degC is 50 and not 0.5. Comparing before
+	 * conversion would make the threshold depend on whichever exponent a
+	 * decoder happened to choose for that sample.
+	 *
+	 * RADIANT_MATTER_DEADBAND_EVERY / _ON_CHANGE above are the two
+	 * sentinels. A row that states neither gets _ON_CHANGE, because it is
+	 * the value a zeroed struct has and because "identical value, written
+	 * again" is the one suppression that can never lose information.
+	 */
+	int32_t  deadband;
+	/* Write anyway if this long has passed since the last write for this
+	 * endpoint, whatever the deadband says. 0 = never (only legitimate
+	 * beside DEADBAND_EVERY, where nothing is ever suppressed). */
+	uint32_t heartbeat_s;
 
 	/* Written in addition to the primary attribute above, into the same
 	 * cluster. See struct radiant_matter_attr_conv. */

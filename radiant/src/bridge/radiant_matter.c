@@ -28,6 +28,14 @@ static const struct radiant_matter_type_map type_map[] = {
 		.cluster = MATTER_CLUSTER_OCCUPANCY_SENSING,
 		.attribute = MATTER_ATTR_OCCUPANCY,
 		.mul = 1, .div = 1, .offset = 0,
+		/* ON CHANGE ONLY. The value is one bit; anything else would be
+		 * a threshold on a boolean. radiant_rules.c already publishes
+		 * the derived booleans on change, so this is belt-and-braces
+		 * against a second producer - but it is also what makes the
+		 * 60 s heartbeat the only periodic traffic these four
+		 * endpoints generate. */
+		.deadband = RADIANT_MATTER_DEADBAND_ON_CHANGE,
+		.heartbeat_s = 60u,
 		/*
 		 * NOT PIR. Zero-initialised, OccupancySensorType means PIR, and
 		 * home-assistant/core#164839 proposes remapping PIR endpoints
@@ -57,6 +65,12 @@ static const struct radiant_matter_type_map type_map[] = {
 		.cluster = MATTER_CLUSTER_TEMP_MEASUREMENT,
 		.attribute = MATTER_ATTR_MEASURED_VALUE,
 		.mul = 100, .div = 1, .offset = -27315,
+		/* 0.5 degC, in the cluster's 0.01 degC units. Below an ANT+
+		 * thermometer's own quoted accuracy, so nothing a user could
+		 * act on is suppressed, and it turns a 4 Hz page-84 stream into
+		 * a handful of writes an hour indoors. */
+		.deadband = 50,
+		.heartbeat_s = 60u,
 	},
 	{
 		/* Percent to 0.01 percent. */
@@ -65,6 +79,9 @@ static const struct radiant_matter_type_map type_map[] = {
 		.cluster = MATTER_CLUSTER_REL_HUMIDITY,
 		.attribute = MATTER_ATTR_MEASURED_VALUE,
 		.mul = 100, .div = 1, .offset = 0,
+		/* 1 %RH, in the cluster's 0.01 % units. */
+		.deadband = 100,
+		.heartbeat_s = 60u,
 	},
 	{
 		/*
@@ -94,6 +111,23 @@ static const struct radiant_matter_type_map type_map[] = {
 		.cluster = MATTER_CLUSTER_PRESSURE_MEASUREMENT,
 		.attribute = MATTER_ATTR_MEASURED_VALUE,
 		.mul = 1, .div = 1000, .offset = 0,
+		/*
+		 * NO DEADBAND, AND THAT IS DELIBERATE RATHER THAN AN OMISSION.
+		 * The Matter plan's deadband list names occupancy, temperature,
+		 * humidity and battery and does not name pressure, and the row
+		 * states the sentinel explicitly so that the next reader does
+		 * not have to decide whether the absence was a decision.
+		 *
+		 * The reason it would be wrong here: MeasuredValue is already
+		 * quantised to whole kPa by the cluster, so ANY deadband above
+		 * zero suppresses every barometric change a user cares about,
+		 * and ScaledValue's 10 Pa step is close enough to a barometer's
+		 * own resolution that thresholding it is thresholding noise
+		 * against noise. Pressure also arrives on common page 84, which
+		 * a weather sensor sends slowly to begin with.
+		 */
+		.deadband = RADIANT_MATTER_DEADBAND_EVERY,
+		.heartbeat_s = 0u,
 		.n_extra = 2u,
 		.extra = {
 			{ .attribute = MATTER_ATTR_SCALED_VALUE,
@@ -113,6 +147,13 @@ static const struct radiant_matter_type_map type_map[] = {
 		.cluster = MATTER_CLUSTER_POWER_SOURCE,
 		.attribute = MATTER_ATTR_BAT_PERCENT_REMAINING,
 		.mul = 2, .div = 1, .offset = 0,
+		/* 1 %, in the cluster's 0.5 %-per-step units, so 2. The
+		 * heartbeat is 300 s rather than 60: a battery that has not
+		 * moved in five minutes is the normal case for the whole life
+		 * of the cell, and this is the one row where the heartbeat is
+		 * the dominant traffic rather than the exception. */
+		.deadband = 2,
+		.heartbeat_s = 300u,
 	},
 	/* RADIANT_FIELD_HEART_RATE (0x26) is absent on purpose (section 8.1):
 	 * both Matter candidates - a mislabelled Flow Measurement, or an MEI
@@ -282,9 +323,45 @@ bool radiant_matter_convert_with(const struct radiant_sample *s,
 static struct radiant_matter_endpoint endpoints[RADIANT_MATTER_MAX_ENDPOINTS];
 static uint16_t endpoint_used;
 
+/*
+ * The deadband's memory.
+ *
+ * KEYED ON (source, field_id) AND NOT ON THE ENDPOINT, which looks like the
+ * long way round until the battery row is considered: a `device_type == 0` row
+ * writes its cluster onto the SOURCE'S PRIMARY endpoint, so a strap's battery
+ * and that strap's occupancy boolean share one endpoint id. State indexed by
+ * endpoint would have the two overwrite each other's last value, and the
+ * visible result would be a battery percentage suppressing a "strap removed"
+ * edge - a deadband silently discarding the one thing it must never discard.
+ *
+ * Not stored inside `struct radiant_matter_endpoint` for the same reason it is
+ * not indexed by it, plus one more: that struct is public and is what a caller
+ * enumerates, and "the last value we happened to write" is nobody's business
+ * outside this file.
+ *
+ * SIZE. One slot per announced field, which is one more class of thing than
+ * there are endpoints - every endpoint plus every cluster-only row riding on
+ * one. Eight is radiant_binding.h's RADIANT_BINDING_MAX, i.e. at most one
+ * battery per bound sensor; that header is not included here (this file
+ * deliberately knows nothing about bindings) so the number is restated with
+ * this comment rather than imported.
+ */
+#define MATTER_DEADBAND_SLOTS (RADIANT_MATTER_MAX_ENDPOINTS + 8u)
+
+struct publish_state {
+	bool     valid;   /* this slot is allocated AND has a last value */
+	uint32_t source;
+	uint8_t  field_id;
+	int64_t  last;    /* the last value written, in the cluster's units */
+	uint64_t last_us; /* ...at this sample time */
+};
+
+static struct publish_state published[MATTER_DEADBAND_SLOTS];
+
 void radiant_matter_reset(void)
 {
 	memset(endpoints, 0, sizeof(endpoints));
+	memset(published, 0, sizeof(published));
 	endpoint_used = 0u;
 }
 
@@ -427,6 +504,90 @@ static const struct radiant_matter_endpoint *endpoint_get_or_add(
 }
 
 /* ---------------------------------------------------------------------------
+ * The deadband
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * Decides whether this converted value is worth a write, and RECORDS it if it
+ * is. One function rather than a predicate plus a bookkeeping call, because
+ * the two must never get out of step: a caller that asked and then declined to
+ * write would leave `last` claiming a value the stack never saw, and every
+ * subsequent sample would be measured against a number that does not exist.
+ *
+ * FAILS OPEN. Out of slots, or a row with no state yet, means "write it". A
+ * deadband that starts suppressing because it ran out of memory would be a
+ * silent data loss whose only symptom is an entity that stops updating.
+ */
+static bool deadband_admit(const struct radiant_sample *s,
+			   const struct radiant_matter_type_map *row,
+			   int64_t value)
+{
+	struct publish_state *slot = NULL;
+	struct publish_state *free_slot = NULL;
+	int64_t delta;
+	size_t i;
+
+	if (row->deadband == RADIANT_MATTER_DEADBAND_EVERY) {
+		return true;
+	}
+
+	for (i = 0u; i < ARRAY_SIZE(published); i++) {
+		if (published[i].valid && published[i].source == s->source &&
+		    published[i].field_id == s->field_id) {
+			slot = &published[i];
+			break;
+		}
+		if (!published[i].valid && free_slot == NULL) {
+			free_slot = &published[i];
+		}
+	}
+
+	if (slot == NULL) {
+		if (free_slot == NULL) {
+			/* See "FAILS OPEN" above. Not a warning: the ceiling
+			 * this hits is RADIANT_MATTER_MAX_ENDPOINTS', which
+			 * endpoint_get_or_add() has already announced. */
+			return true;
+		}
+		free_slot->valid = true;
+		free_slot->source = s->source;
+		free_slot->field_id = s->field_id;
+		free_slot->last = value;
+		free_slot->last_us = s->t_us;
+		return true;
+	}
+
+	/* The heartbeat, first: it overrides the threshold rather than being
+	 * combined with it. `now <= last` is not an error - a decoder may stamp
+	 * two samples with the same t_us - and must read as "not yet" rather
+	 * than as an enormous elapsed time from an unsigned wrap. */
+	if (row->heartbeat_s != 0u && s->t_us > slot->last_us &&
+	    (s->t_us - slot->last_us) >= (uint64_t)row->heartbeat_s * 1000000ULL) {
+		slot->last = value;
+		slot->last_us = s->t_us;
+		return true;
+	}
+
+	delta = value - slot->last;
+	if (delta < 0) {
+		delta = -delta;
+	}
+	if (delta <= (int64_t)row->deadband) {
+		/* Suppressed. `last_us` is NOT advanced: it is the time of the
+		 * last WRITE, and moving it here would let a stream of
+		 * suppressed samples postpone the heartbeat forever - which is
+		 * exactly the "unchanged is indistinguishable from gone"
+		 * failure the heartbeat exists to prevent. */
+		return false;
+	}
+
+	slot->last = value;
+	slot->last_us = s->t_us;
+	return true;
+}
+
+/* ---------------------------------------------------------------------------
  * The sink
  * ---------------------------------------------------------------------------
  */
@@ -468,6 +629,25 @@ static void matter_publish(const struct radiant_sample *s)
 	}
 	e = endpoint_get_or_add(s, row);
 	if (e == NULL) {
+		return;
+	}
+
+	/*
+	 * The deadband, AFTER endpoint_get_or_add() and before any write.
+	 *
+	 * After, because creating the endpoint is what writes the row's
+	 * CONSTANT attributes (OccupancySensorType, Scale) and those must land
+	 * on the first sample whether or not the reading itself is worth
+	 * reporting - a suppressed first sample that skipped them would leave
+	 * OccupancySensorType reading back as 0, i.e. PIR, i.e. trap 16.
+	 *
+	 * Before, and covering the extras as well as the primary: the extras
+	 * are the same reading in another attribute's units (pressure's
+	 * ScaledValue beside its MeasuredValue), so publishing them while the
+	 * primary is suppressed would report a change on one attribute of an
+	 * endpoint and not on another attribute of the same reading.
+	 */
+	if (!deadband_admit(s, row, value)) {
 		return;
 	}
 

@@ -742,6 +742,67 @@ config ANT_DONGLE_MATTER_MAP
 	  .config gains one `# CONFIG_ANT_DONGLE_MATTER_MAP is not set` COMMENT
 	  line. Its image is unchanged.
 
+config ANT_DONGLE_PROFILES_EXTRA
+	bool "Decode more than heart rate: power, FE-C, environment, common pages"
+	default y if ANT_DONGLE_MATTER
+	help
+	  The Matter plan's packages A, B and C, as one switch.
+
+	  WHAT IT TURNS ON. Three more bridge adapters
+	  (radiant_power_adapter.c, radiant_env_adapter.c,
+	  radiant_common_adapter.c) and the four page codecs behind them
+	  (profile_common.c, profile_power_decode.c, profile_fec.c,
+	  profile_env.c), plus radiant/src/profiles on this application's
+	  include path - see CMakeLists.txt, which is where the
+	  profile_power_decode.c-not-profile_power.c split is argued. It also
+	  turns on the two application-side halves that would otherwise have
+	  nothing to feed:
+
+	    src/rx_tap.c grows the ANT+ Common Data Pages Rev 3.1 Table 4-1
+	    path (pages 0x40-0x5D, keyed on transmission type rather than on
+	    device type, so it runs on EVERY bound channel) and the device-type
+	    dispatch arms for 0x0B bicycle power, 0x11 fitness equipment and
+	    0x19 environment. With this symbol n it is the 0x78-only tap it has
+	    always been, byte for byte.
+
+	    src/self_channels.c searches a five-row {device type, period} table
+	    and rotates a row on every search timeout. With this symbol n both
+	    self channels search device type 0x78 at period 8070 and set no
+	    search timeout at all, which is exactly what they did before.
+
+	  WHY THIS IS NOT SIMPLY IMPLIED BY RADIANT_BRIDGE, WHICH IS THE
+	  QUESTION THE NEXT READER WILL ASK. bridge.conf sets RADIANT_BRIDGE=y
+	  and IS ONE OF THE FIVE COEXISTENCE ARMS whose numbers are recorded in
+	  docs/radiant-bridge.md section 7.4. Those numbers describe the images
+	  they were taken on, and they are only comparable to each other while
+	  the five images stay byte-identical - the same rule
+	  ANT_DONGLE_MATTER_MAP above is defaulted n to protect.
+
+	  Hanging these sources off RADIANT_BRIDGE directly broke that rule
+	  twice over, and it was measured rather than argued
+	  (docs/matter-e2-regression.md): +2 564 B of flash, +1 472 B of RAM and
+	  22 new defined symbols on nrf54l15dk/nrf54l15/cpuapp. Worse than the
+	  size, the rewritten self_channels.c changed WHAT THE RADIO DOES on
+	  that arm - a rotating search over five device types at four different
+	  channel periods instead of one fixed 0x78/8070 search - and section
+	  7.4 is a measurement of exactly that. A coexistence baseline taken on
+	  a different radio schedule is not a baseline.
+
+	  So the sources follow ANT_DONGLE_MATTER, which only the Matter arm
+	  sets, and bridge.conf is left alone. THE MATTER ARM THEREFORE NEEDS NO
+	  LINE IN matter.conf: the `default y if ANT_DONGLE_MATTER` above is the
+	  whole mechanism, and adding an explicit =y there would merely be a
+	  second place to keep in step. The other four coexistence arms never
+	  see the symbol at all, because RADIANT_BRIDGE is n in them.
+
+	  Turning this on by hand on a bench build is entirely reasonable and is
+	  what it is for - just do not turn it on in one of the five .conf
+	  fragments without re-taking section 7.4's row for that arm.
+
+	  Same consequence for the E2 diff as ANT_DONGLE_MATTER_MAP: bridge.conf's
+	  generated .config gains one `# CONFIG_ANT_DONGLE_PROFILES_EXTRA is not
+	  set` COMMENT line, and its image is unchanged.
+
 endif # RADIANT_BRIDGE
 
 # Turn the MQTT library on for a build that asked for the sink.

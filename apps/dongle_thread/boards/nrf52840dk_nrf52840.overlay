@@ -1,0 +1,65 @@
+/*
+ * nRF52840 DK - the "does Matter fit on an nRF52840" arm.
+ *
+ * Written for docs/matter-nrf52840.md. BUILD-ONLY: there is no nRF52840 DK on
+ * this bench (the attached nRF52840 devices are a dongle and a Feather), so
+ * nothing here has been exercised on hardware. The pin choices below are
+ * whatever the board's own DTS already routes.
+ *
+ * uart0 is the J-Link OB VCOM and carries the console/log. uart1 is the
+ * "arduino_serial" header UART - already pinned by the board DTS - and is what
+ * the ANT byte stream goes out of, so logs and ANT do not interleave. On a DK
+ * that means a second USB-serial adapter on P1.01/P1.02; on a real product
+ * this would be the USB device peripheral instead.
+ */
+
+/ {
+	aliases {
+		ant-uart = &uart1;
+	};
+
+	chosen {
+		/*
+		 * The TIMER radiant's nrf backend owns outright. Five CC
+		 * channels are required (t_sync capture, RX start, window
+		 * close, software now-capture, TX start), which on nRF52 means
+		 * TIMER3 or TIMER4 - TIMER0/1/2 have four. TIMER0 is also
+		 * MPSL's on this family, so it could not be used here anyway.
+		 *
+		 * Naming it in devicetree rather than in the source is what
+		 * makes a second user a devicetree conflict instead of two
+		 * drivers reprogramming each other's prescaler.
+		 */
+		radiant,radio-timer = &timer4;
+	};
+};
+
+&uart1 {
+	status = "okay";
+};
+
+&timer4 {
+	status = "okay";
+};
+
+/* Peripherals this image has no use for. Off so nothing in the DK's default
+ * DTS quietly costs flash, RAM or current in a budget measurement. */
+&i2c0 {
+	status = "disabled";
+};
+
+&spi1 {
+	status = "disabled";
+};
+
+&spi3 {
+	status = "disabled";
+};
+
+&pwm0 {
+	status = "disabled";
+};
+
+&adc {
+	status = "disabled";
+};

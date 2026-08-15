@@ -22,6 +22,13 @@
 #include "thread_coex_load.h"
 #endif
 
+#if defined(CONFIG_ANT_DONGLE_MATTER)
+/* src/matter is on this target's include path only inside CMakeLists.txt's
+ * `if(CONFIG_CHIP)` block, which is exactly the condition
+ * CONFIG_ANT_DONGLE_MATTER `depends on`. */
+#include "ant/ant_matter.h"
+#endif
+
 LOG_MODULE_REGISTER(ant_dongle_thread, LOG_LEVEL_INF);
 
 /*
@@ -53,6 +60,28 @@ void ant_dongle_post_radio_init(void)
 #if defined(CONFIG_ANT_DONGLE_THREAD_COEX_LOAD)
 	LOG_INF("starting Thread coexistence load");
 	(void)thread_coex_load_start();
+#endif
+
+#if defined(CONFIG_ANT_DONGLE_MATTER)
+	/*
+	 * Package E6. THIS RETURNS IMMEDIATELY, AND THAT IS A REQUIREMENT
+	 * RATHER THAN AN OPTIMISATION. This hook runs before
+	 * usb_ant_class_init(), so anything that blocks here delays USB
+	 * enumeration - and a dongle that has not enumerated is a dongle that
+	 * looks broken. thread.conf:60-75 records what that cost the last time
+	 * (31.04 s in net_config_init(), read as a hung board by a human and by
+	 * ant_verify.py in the same session).
+	 *
+	 * ant_matter_start() therefore only creates a thread;
+	 * Nrf::Matter::PrepareServer(), the explicitly-blocking StartServer()
+	 * and the application task loop are all on the far side of it. See
+	 * src/matter/matter_app.cpp.
+	 */
+	LOG_INF("starting Matter application task");
+	if (ant_matter_start() != 0) {
+		LOG_ERR("Matter application task not started - this image will "
+			"bridge nothing to Thread");
+	}
 #endif
 
 #if !defined(CONFIG_ANT_DONGLE_BLE_COEX_LOAD) && \

@@ -325,3 +325,158 @@ is where it can be checked rather than asserted.
 - **`bridge` was built to completion in two passes** (the first was interrupted;
   the second resumed the same build directory with the same `.config`). The
   `.config` was generated in the first pass and is the one diffed.
+
+## Resolution — `CONFIG_ANT_DONGLE_PROFILES_EXTRA`
+
+**Date:** 2026-08-15, same day, same bench, same method.
+
+Result 3's finding is fixed. Of the three answers the section above listed,
+the first was taken: **the packages A-C sources are gated on a Kconfig symbol
+of their own, `ANT_DONGLE_PROFILES_EXTRA`, `default n` and
+`default y if ANT_DONGLE_MATTER`** — exactly the treatment
+`ANT_DONGLE_MATTER_MAP` already had and for the same stated reason. The symbol
+lives inside `if RADIANT_BRIDGE` in `apps/dongle_thread/Kconfig`, beside
+`ANT_DONGLE_MATTER_MAP`, and its help carries the argument for why
+`RADIANT_BRIDGE` alone must not imply it.
+
+**`apps/dongle_thread/matter.conf` was not edited and needs no line.** The
+`default y if ANT_DONGLE_MATTER` is the whole mechanism; an explicit `=y`
+would only be a second place to keep in step. Read back from the Matter arm's
+generated `.config`:
+
+```
+CONFIG_ANT_DONGLE_MATTER=y
+CONFIG_ANT_DONGLE_MATTER_MAP=y
+CONFIG_ANT_DONGLE_PROFILES_EXTRA=y
+```
+
+and from the bridge arm's, one comment line beside the one this document
+already predicted:
+
+```
+# CONFIG_ANT_DONGLE_MATTER_MAP is not set
+# CONFIG_ANT_DONGLE_PROFILES_EXTRA is not set
+```
+
+### What moved
+
+- `CMakeLists.txt`: the seven sources and the `radiant/src/profiles` include
+  directory are behind the new symbol. `radiant_bridge.c`, `radiant_binding.c`,
+  `radiant_hr_adapter.c`, `radiant_rules.c`, `radiant_liveness.c` and
+  `src/bridge_pump.c` stay under `CONFIG_RADIANT_BRIDGE`, unmoved.
+- `src/rx_tap.c`: the three extra adapter arrays, their init calls, the Table
+  4-1 common-page path and the `0x0B`/`0x11`/`0x19` dispatch arms are behind
+  `#ifdef`. With the symbol off it is the `0x78`-only tap it was before.
+- `src/self_channels.c`: **the off path is the original code verbatim, not a
+  one-row table.** A single-row table with a modulo-1 rotation reads better and
+  does not restore the old image: it still emits `self_profiles[]`,
+  `self_row[]` and `configure_and_open()`, still makes the per-row
+  `antr_channel_search_timeout_set()` call the original never made, and still
+  carries the profile-naming log strings in `.rodata`. Byte-identity was the
+  requirement, so the guard is one `#ifdef` around the table and the
+  open/retune helpers plus two more inside `self_thread_fn()` at the two places
+  the behaviours actually differ. The button, the pairing window, `try_bind()`
+  and the poll loop are shared and have one copy.
+
+### The re-measurement
+
+Same recipe as the body of this document: `git worktree add --detach` of
+`244857e` into a temp path, both sides built `-p always` on
+`nrf54l15dk/nrf54l15/cpuapp` with `-DANT_RADIO=core -DRADIANT_BACKEND=nrf
+"-DEXTRA_CONF_FILE=thread.conf;bridge.conf"`. The user's working tree was
+never stashed, reset or checked out; the worktree was removed afterwards.
+Nothing was flashed and no serial port was opened.
+
+| bridge arm | E2 baseline | E2 head | **after the fix** | residual |
+|---|---|---|---|---|
+| FLASH | 307 496 B | 310 060 B (+2 564) | **307 608 B** | **+112 B** |
+| RAM | 185 672 B | 187 144 B (+1 472) | **186 184 B** | **+512 B** |
+| `text` | 280 444 | 282 628 (+2 184) | **280 540** | **+96** |
+| `rodata` | 19 808 | 20 196 (+388) | **19 824** | **+16** |
+| `bss` | 78 882 | 80 356 (+1 474) | **79 394** | **+512** |
+| defined symbols | 5 993 | 6 014 (+22, -1) | **5 992** | **-1** |
+
+Every other allocated section — `.ARM.exidx`, `initlevel`, `device_area`,
+`_static_thread_data_area`, all seven `*_driver_api_area`s,
+`net_socket_register_area`, `log_const_area`, `log_backend_area`, `tbss`,
+`radiant_sink_area`, `.last_section`, `noinit` — is **byte-identical**.
+`.debug_*` differ as before and for the same reason (the worktree sits at a
+longer path than the repository).
+
+**The twenty-two new symbols are gone. The one removed symbol is not**, and
+that is the whole of the residual story.
+
+### The residual, and why it is not this fix
+
+`-1` symbol and `+112 B` of flash remain, and none of it comes from the gated
+code. Per-object `arm-zephyr-eabi-size` on both build trees says so directly:
+
+| object | base `text` | head `text` | `bss` | why |
+|---|---|---|---|---|
+| **`self_channels.c.obj`** | 1708 | **1708** | 1692 → **1692** | **identical** |
+| `rx_tap.c.obj` | 215 | 223 (+8) | 132 → 196 (+64) | `struct radiant_hr_adapter` grew |
+| `radiant_rules.c.obj` | 751 | 835 (+84) | 640 → 1088 (+448) | HEAD rewrote the file |
+| `radiant_hr_adapter.c.obj` | 204 | 212 (+8) | 0 → 0 | HEAD's running-total fix |
+| `mqtt_sink.c.obj` | 3192 | 3208 (+16) | 3350 → 3350 | HEAD's own 18-line diff |
+
+Everything else in `app.dir` is byte-identical on all three columns. 116 B of
+object-level growth against 112 B in the image is the linker's alignment, and
+448 + 64 = 512 accounts for the RAM delta exactly.
+
+All three causes are **uncommitted HEAD work in files outside packages A-C's
+CMake list, and outside the scope of this fix**:
+
+- **`radiant/src/bridge/radiant_hr_adapter.{c,h}`** publishes a running total
+  for `RADIANT_HR_FIELD_BEAT_COUNT` instead of the per-message delta, which
+  needed a `uint64_t acc_beats` in the adapter struct. That takes the struct
+  from 16 B to 24 B, and `rx_tap.c`'s `hr_adapters[RADIANT_BINDING_MAX]` array
+  from 0x80 to 0xC0 — `nm -S` on the two objects shows exactly that, and the
+  +4 B in each of `ant_bridge_channel_bind()` and `ant_dongle_rx_tap()` is the
+  index scaling changing from a shift by 16 to a multiply by 24. **This is a
+  correctness fix to a file `rx_tap.c` merely includes**; it is not the
+  common-page path, which is fully compiled away.
+- **`radiant/src/bridge/radiant_rules.c`** is rewritten at HEAD (193 lines).
+  `dwell_update` — the one symbol this document recorded as *disappearing* — is
+  its static helper, and its own comment at line 109 says it is deliberately no
+  longer used. That is where the `-1` comes from, and it was never part of the
+  A-C source list.
+- **`apps/dongle_thread/src/mqtt_sink.c`** has an 18-line diff at HEAD.
+
+**Byte-identity is therefore reachable for the packages A-C work and was
+reached; it is not reachable for the bridge arm as a whole while those three
+uncommitted edits sit in the tree, and closing that last 112 B is a decision
+about `radiant_rules.c` and `radiant_hr_adapter.c`, not about this symbol.**
+Whoever owns section 7.4 now has a much smaller question: 0.036 % of flash and
+0.20 % of RAM, fully attributed, none of it changing what the radio does — as
+against a rotating five-profile search across four channel periods, which is
+what the arm had before this fix and which section 7.4 could not have been
+compared across.
+
+### The other two checks
+
+- **The Matter arm still gets the sources.** `thread.conf;matter.conf` with
+  `-DSB_EXTRA_CONF_FILE=matter_sysbuild.conf` builds and links; all seven
+  objects are present in `app.dir` with 15-19 references each in `zephyr.map`
+  (`radiant_common_adapter` 19, `radiant_power_adapter` 18, `profile_common`
+  18, `profile_env` 17, `radiant_env_adapter` 16, `profile_fec` 16,
+  `profile_power_decode` 15), and `self_profiles`, `self_row`,
+  `configure_and_open`, `common_adapters`, `power_adapters` and `env_adapters`
+  are all in the ELF. The head **bridge** arm has zero of the seven objects.
+- **`radiant/tests` is unaffected.** It compiles these sources unconditionally
+  and knows nothing of the new symbol; verified by building it rather than
+  assumed (`nrf5340dk/nrf5340/cpuapp`, `--no-sysbuild`, `-p always`, exit 0,
+  all seven objects present). **Build only — nothing was flashed.**
+
+### One method note for the next re-run
+
+`-d` cannot be a deep path on this machine. A build directory under
+`AppData\Local\Temp\claude\...\scratchpad\` overruns Windows' `MAX_PATH` twice
+over: first as `ninja: error: mkdir(...): No such file or directory` inside
+`cracen_psa_driver`, and then — for the Matter arm specifically, which survives
+that — as `fatal error: .../CHIPConfig.h: Invalid argument` out of
+connectedhomeip's GN sub-build, whose include paths are long relative chains
+computed from the build directory's depth. Neither message names path length.
+The six E2 arms and the two bridge arms here were built under
+`C:\Users\Colin\AppData\Local\Temp\e2f\`, and the Matter arm under
+`C:\Users\Colin\ant_dongle\build\` (which `.gitignore`'s `build*/` covers), for
+this reason alone.

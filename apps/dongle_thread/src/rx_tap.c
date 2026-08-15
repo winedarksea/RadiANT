@@ -43,6 +43,27 @@
  * pins the resulting byte stream. Widening struct antr_msg to improve a field
  * that no accumulator reads would put a conformance transcript at risk to buy
  * nothing.
+ *
+ * ---------------------------------------------------------------------------
+ * HALF OF THIS FILE IS CONDITIONAL, AND THE CONDITION IS NOT A FEATURE FLAG
+ * ---------------------------------------------------------------------------
+ *
+ * Everything below behind CONFIG_ANT_DONGLE_PROFILES_EXTRA - the three extra
+ * adapter arrays, their init calls, the Table 4-1 common-page path and the
+ * 0x0B/0x11/0x19 dispatch arms - compiles away completely when that symbol is
+ * n, leaving the 0x78-only tap this file was before packages A-C, byte for
+ * byte. That is not caution about the new decoders; they are tested
+ * (radiant/tests) and they are on wherever the application actually wants
+ * them. It is that CONFIG_RADIANT_BRIDGE alone is ALSO set by bridge.conf,
+ * one of the five coexistence arms whose images docs/radiant-bridge.md
+ * section 7.4's numbers were taken on, and docs/matter-e2-regression.md
+ * measured what happened when these sources arrived on that arm unasked.
+ * CONFIG_ANT_DONGLE_PROFILES_EXTRA's help in apps/dongle_thread/Kconfig is
+ * the long version and is the thing to read before removing an #ifdef here.
+ *
+ * The Table 4-1 reasoning below is NOT conditional and stays as written: when
+ * the common path is compiled, it is compiled for the reason given there, and
+ * a reader who meets the #ifdef first must still meet the argument.
  */
 
 #include <errno.h>
@@ -58,10 +79,16 @@
 
 #include "radiant_binding.h"
 #include "radiant_bridge.h"
+#include "radiant_hr_adapter.h"
+
+/* Packages A-C. These three headers pull in radiant/src/profiles, which is on
+ * the include path only when the same symbol is set - see CMakeLists.txt - so
+ * the guard is a build precondition here and not only a policy. */
+#ifdef CONFIG_ANT_DONGLE_PROFILES_EXTRA
 #include "radiant_common_adapter.h"
 #include "radiant_env_adapter.h"
-#include "radiant_hr_adapter.h"
 #include "radiant_power_adapter.h"
+#endif
 
 #include "bridge_app.h"
 
@@ -97,6 +124,7 @@ static uint32_t unbound_drops;
  * accumulator from zero. */
 static struct radiant_hr_adapter hr_adapters[RADIANT_BINDING_MAX];
 
+#ifdef CONFIG_ANT_DONGLE_PROFILES_EXTRA
 /*
  * One common-page decoder per binding, for exactly the reason above and not a
  * different one: its state (prev_cycles, the last-seen table) belongs to the
@@ -125,6 +153,7 @@ static struct radiant_common_adapter common_adapters[RADIANT_BINDING_MAX];
  */
 static struct radiant_power_adapter power_adapters[RADIANT_BINDING_MAX];
 static struct radiant_env_adapter   env_adapters[RADIANT_BINDING_MAX];
+#endif /* CONFIG_ANT_DONGLE_PROFILES_EXTRA */
 
 int ant_bridge_channel_bind(uint8_t channel, uint32_t source)
 {
@@ -132,6 +161,8 @@ int ant_bridge_channel_bind(uint8_t channel, uint32_t source)
 		return -EINVAL;
 	}
 
+	radiant_hr_adapter_init(&hr_adapters[source]);
+#ifdef CONFIG_ANT_DONGLE_PROFILES_EXTRA
 	/*
 	 * EVERY adapter is reset here, not just the one this binding's device
 	 * type will use. The device type is not known to be stable across a
@@ -140,11 +171,15 @@ int ant_bridge_channel_bind(uint8_t channel, uint32_t source)
 	 * thermometer must not inherit the power meter's accumulators. Resetting
 	 * all of them costs a few hundred bytes of memset at bind time, which is
 	 * a user action, and removes the whole class of bug.
+	 *
+	 * With the symbol off there is nothing to rotate INTO - self_channels.c
+	 * searches one device type - so the single hr init above is the whole
+	 * of the same rule, which is what it was before packages A-C.
 	 */
-	radiant_hr_adapter_init(&hr_adapters[source]);
 	radiant_common_adapter_init(&common_adapters[source]);
 	radiant_power_adapter_init(&power_adapters[source]);
 	radiant_env_adapter_init(&env_adapters[source]);
+#endif
 	chan_source[channel] = source;
 	return 0;
 }
@@ -173,7 +208,9 @@ void ant_dongle_rx_tap(const struct antr_msg *msg)
 {
 	uint32_t source;
 	uint8_t  channel;
+#ifdef CONFIG_ANT_DONGLE_PROFILES_EXTRA
 	uint8_t  page;
+#endif
 	const struct radiant_binding *b;
 
 	if (msg == NULL || msg->data == NULL) {
@@ -241,7 +278,16 @@ void ant_dongle_rx_tap(const struct antr_msg *msg)
 	 * weather-reporting bike light or power meter work
 	 * (radiant_common_adapter.h), and it is why radiant_bridge.h reserves a
 	 * separate field_id block for the two-producers-one-source case.
+	 *
+	 * THE EXCEPTION IS COMPILED ONLY WITH CONFIG_ANT_DONGLE_PROFILES_EXTRA.
+	 * Everything from here to the end of the common-page block is inside
+	 * that guard, because the decoder it calls is one of the sources the
+	 * symbol gates (see this file's header, and the symbol's help in
+	 * Kconfig, for why bridge.conf must not grow it). The argument above is
+	 * unconditional and is why the path exists AT ALL; the #ifdef is only
+	 * about which images carry it.
 	 */
+#ifdef CONFIG_ANT_DONGLE_PROFILES_EXTRA
 	page = msg->data[1];
 
 	/*
@@ -297,6 +343,7 @@ void ant_dongle_rx_tap(const struct antr_msg *msg)
 		 */
 		return;
 	}
+#endif /* CONFIG_ANT_DONGLE_PROFILES_EXTRA */
 
 	/*
 	 * Below here: device-type dispatch, as before.
@@ -330,7 +377,9 @@ void ant_dongle_rx_tap(const struct antr_msg *msg)
 		(void)radiant_hr_adapter_decode(&hr_adapters[source], source,
 						&msg->data[1],
 						ant_bridge_now_us());
-	} else if (b->devtype == 0x0Bu) {
+	}
+#ifdef CONFIG_ANT_DONGLE_PROFILES_EXTRA
+	else if (b->devtype == 0x0Bu) {
 		(void)radiant_power_adapter_decode(&power_adapters[source],
 						   source, &msg->data[1],
 						   ant_bridge_now_us());
@@ -343,4 +392,5 @@ void ant_dongle_rx_tap(const struct antr_msg *msg)
 						 &msg->data[1],
 						 ant_bridge_now_us());
 	}
+#endif /* CONFIG_ANT_DONGLE_PROFILES_EXTRA */
 }

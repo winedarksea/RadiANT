@@ -103,6 +103,39 @@
  * nothing at all about which may be bound. try_bind()'s window_open() test is
  * deliberately untouched by this, and a rotation that ever grew a bind path
  * of its own would be the promiscuous ingest the rule forbids.
+ *
+ * ---------------------------------------------------------------------------
+ * AND WHY THE TABLE IS BEHIND CONFIG_ANT_DONGLE_PROFILES_EXTRA
+ * ---------------------------------------------------------------------------
+ *
+ * With that symbol n, this file is the file it was before packages A-C: both
+ * self channels search device type 0x78 at period 8070, and NO search timeout
+ * is set at all, so every channel inherits the ANT default. With it y, the
+ * five-row rotation above.
+ *
+ * The reason is not doubt about the rotation - it is that CONFIG_RADIANT_BRIDGE
+ * is also set by bridge.conf, which carries one of the five coexistence
+ * baselines in docs/radiant-bridge.md section 7.4. Those numbers are
+ * measurements OF THE RADIO, and this file is the file that decides what the
+ * radio does: one fixed 4.06 Hz search versus a rotation across four different
+ * channel periods and five device types is not the same duty cycle, not the
+ * same retune rate and not the same thing to compare a Thread throughput
+ * number against. docs/matter-e2-regression.md caught the rotation arriving on
+ * that arm unasked, alongside +2 564 B of flash. Kconfig's help for the symbol
+ * is the full argument.
+ *
+ * THE SHAPE OF THE GUARD IS DELIBERATE AND IS NOT "a one-row table". A single
+ * row plus a rotation that happens to be modulo 1 would be tidier to read and
+ * would NOT restore the old image: it still emits self_profiles[], self_row[]
+ * and configure_and_open(), still carries the per-row search-timeout call that
+ * the original never made, and still carries the profile-naming log strings.
+ * The requirement here is byte-identity with the pre-A-C image, not
+ * approximate equivalence, so the off path is the ORIGINAL code verbatim and
+ * the two paths are kept adjacent and small: one #ifdef around the table and
+ * the open/retune helpers, and two more inside self_thread_fn() at the exact
+ * two places the old and new behaviours differ. Everything else in this file -
+ * the button, the window, try_bind(), the poll loop - is shared and has one
+ * copy.
  */
 
 #include <errno.h>
@@ -145,6 +178,8 @@ static const uint8_t ant_plus_key[8] = {
 
 #define SELF_NETWORK 0u
 #define SELF_RF_FREQ 57u
+
+#ifdef CONFIG_ANT_DONGLE_PROFILES_EXTRA
 
 /*
  * ANT's high-priority search timeout is expressed in 2.5 s ticks, and its
@@ -253,6 +288,38 @@ static const struct self_profile self_profiles[] = {
  */
 static uint8_t self_row[SELF_N];
 
+#else /* !CONFIG_ANT_DONGLE_PROFILES_EXTRA */
+
+/*
+ * THE ORIGINAL, VERBATIM. Everything from here to the matching #endif is the
+ * pre-packages-A-C file, comments included, and it is copied rather than
+ * paraphrased on purpose: the point of this arm is that bridge.conf's image
+ * does not move by one byte, and a rewritten comment is fine but a rewritten
+ * log string is not (it lands in .rodata and shows up in a section diff).
+ *
+ * 8070 counts of 32768 Hz is 4.06 Hz - the ANT+ heart rate profile's period,
+ * not a choice. A slave told anything else will not find a strap. This is also
+ * the number that reaches struct radiant_binding::period and therefore
+ * radiant_liveness.c's 3x expiry, which is why it is read back off the channel
+ * with antr_channel_period_get() at bind time rather than written down twice.
+ */
+#define SELF_PERIOD_COUNTS 8070u
+
+/*
+ * The device type the wildcard is narrowed to. Fully wildcard (0) would
+ * acquire any ANT+ sensor in range, and rx_tap.c has one adapter, so the extra
+ * acquisitions would consume channels and bindings to produce nothing. 0x78 is
+ * what this bridge can actually decode.
+ *
+ * "rx_tap.c has one adapter" is true precisely BECAUSE
+ * CONFIG_ANT_DONGLE_PROFILES_EXTRA is n here: that same symbol compiles the
+ * other three adapters away in rx_tap.c. The two files agree by construction
+ * rather than by anybody remembering to keep them in step.
+ */
+#define SELF_DEVICE_TYPE 0x78u
+
+#endif /* CONFIG_ANT_DONGLE_PROFILES_EXTRA */
+
 /*
  * Channels are claimed from the TOP of the allocation downward, and this is
  * not cosmetic. Every ANT host library allocates from channel 0 upward, so a
@@ -349,6 +416,8 @@ static void button_init(void)
 #endif
 
 /* ── The channels ──────────────────────────────────────────────────────────── */
+
+#ifdef CONFIG_ANT_DONGLE_PROFILES_EXTRA
 
 /*
  * Point an ASSIGNED, CLOSED channel at one table row and put it on air.
@@ -479,6 +548,55 @@ static void rotate_and_reopen(uint8_t i)
 	(void)antr_channel_unassign(ch);
 	(void)open_one(ch, p);
 }
+
+#else /* !CONFIG_ANT_DONGLE_PROFILES_EXTRA */
+
+/* THE ORIGINAL open_one(), VERBATIM - see the header's note on the shape of
+ * the guard. One device type, one period, no search-timeout call (so the ANT
+ * default of 25 s applies, which is what the pre-A-C image did), and no
+ * rotation, so there is no configure_and_open()/rotate_and_reopen() pair
+ * either. */
+static int open_one(uint8_t ch)
+{
+	antr_err_t rc;
+
+	rc = antr_channel_assign(ch, ANTW_CHANNEL_TYPE_SLAVE, SELF_NETWORK, 0u);
+	if (rc != 0u) {
+		LOG_ERR("channel %u assign: %u", ch, rc);
+		return -EIO;
+	}
+
+	/* All three wildcards except the device type - see SELF_DEVICE_TYPE. */
+	rc = antr_channel_id_set(ch, 0u, SELF_DEVICE_TYPE, 0u);
+	if (rc != 0u) {
+		LOG_ERR("channel %u id: %u", ch, rc);
+		return -EIO;
+	}
+
+	rc = antr_channel_period_set(ch, SELF_PERIOD_COUNTS);
+	if (rc != 0u) {
+		LOG_ERR("channel %u period: %u", ch, rc);
+		return -EIO;
+	}
+
+	rc = antr_channel_radio_freq_set(ch, SELF_RF_FREQ);
+	if (rc != 0u) {
+		LOG_ERR("channel %u freq: %u", ch, rc);
+		return -EIO;
+	}
+
+	rc = antr_channel_open(ch);
+	if (rc != 0u) {
+		LOG_ERR("channel %u open: %u", ch, rc);
+		return -EIO;
+	}
+
+	LOG_INF("self channel %u searching (devtype 0x%02x, wildcard device "
+		"number)", ch, SELF_DEVICE_TYPE);
+	return 0;
+}
+
+#endif /* CONFIG_ANT_DONGLE_PROFILES_EXTRA */
 
 /*
  * A tracking channel with no binding. Called once per second per channel.
@@ -612,11 +730,18 @@ static void self_thread_fn(void *a, void *b, void *c)
 	 * heart-rate searches beside each other. With one channel this is just
 	 * row 0 and the rotation does all the work; with as many channels as
 	 * rows, every profile is covered continuously and nothing ever rotates.
+	 *
+	 * With CONFIG_ANT_DONGLE_PROFILES_EXTRA off there is no table and no
+	 * row, so this is the original single-argument open_one() loop.
 	 */
 	for (i = 0u; i < SELF_N; i++) {
+#ifdef CONFIG_ANT_DONGLE_PROFILES_EXTRA
 		self_row[i] = (uint8_t)(i % SELF_PROFILE_N);
 		(void)open_one(self_channel_index(i),
 			       &self_profiles[self_row[i]]);
+#else
+		(void)open_one(self_channel_index(i));
+#endif
 	}
 
 	for (;;) {
@@ -652,10 +777,21 @@ static void self_thread_fn(void *a, void *b, void *c)
 				 * still cannot reach three of the four device
 				 * types this bridge decodes. */
 				ant_bridge_channel_unbind(ch);
+#ifdef CONFIG_ANT_DONGLE_PROFILES_EXTRA
 				LOG_INF("self channel %u search timed out on %s "
 					"- rotating", ch,
 					self_profiles[self_row[i]].name);
 				rotate_and_reopen(i);
+#else
+				/* No table, so "the next profile" is the same
+				 * profile: the original plain reopen, verbatim. */
+				LOG_INF("self channel %u closed - reopening",
+					ch);
+				if (antr_channel_open(ch) != 0u) {
+					LOG_WRN("self channel %u reopen failed",
+						ch);
+				}
+#endif
 				break;
 			default:
 				break;

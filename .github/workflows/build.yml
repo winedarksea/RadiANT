@@ -704,8 +704,17 @@ jobs:
               radiant_matter_convert
               radiant_matter_endpoint_for
               radiant_matter_sink
+            # FOUR, not three, and the fourth is the one that is easy to lose.
+            # radiant_matter.c's sink carries the VALUES; src/matter/ant/
+            # ant_matter_sink.c carries the BINDINGS and RADIANT_SAMPLE_STALE,
+            # because radiant_matter.c passes NULL for binding_changed and its
+            # want() is filtered to mapped field types. An image that linked
+            # the first and dropped the second would publish measurements to
+            # endpoints that never got created and would never mark a sensor
+            # unreachable - and every other check in this row would stay green.
             assert_sink_names: |
               radiant_liveness_sink
+              radiant_matter_glue_sink
               radiant_rules_sink
               radiant_matter_sink
           # ── THE nRF5340 MATTER ROW IS DELIBERATELY ABSENT ────────────────
