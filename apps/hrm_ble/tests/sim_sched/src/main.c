@@ -99,11 +99,48 @@ ZTEST(hrm_sim_sched, test_steady_rate_72)
 		      "first minute: %u beats, expected 73 (72 + the anchor)",
 		      minute_counts[0]);
 
+	/*
+	 * EVERY OTHER MINUTE HOLDS 72 OR 73, AND EXACTLY ONE HOLDS 73.
+	 *
+	 * This assertion used to demand exactly 72 from all 59, which is not
+	 * merely too strict - it contradicted the `total == 4322` below it.
+	 * 73 + 59*72 is 4321, so the two could never both hold, and running the
+	 * suite on hardware for the first time is what surfaced it: minute 35
+	 * carried the 4322nd beat and the run failed.
+	 *
+	 * The truth it was reaching for is that the schedule is STABLE, not
+	 * that wall-clock minutes are uniform - and they cannot be. The true
+	 * interval at 72 bpm is 833.33 ms and the integer schedule uses 833, so
+	 * 60000 ms is not a whole number of intervals and a minute boundary
+	 * must occasionally fall either side of a beat. Exactly one extra beat
+	 * per hour is precisely the accumulated 0.33 ms truncation
+	 * (3 600 000 / 833 = 4322 against 4320 nominal, less the anchor), so
+	 * pinning the COUNT of long minutes to one says everything the old
+	 * assertion wanted to say and is also true.
+	 *
+	 * WHICH minute it lands in is deliberately not pinned. That would be
+	 * fitting the test to this arithmetic rather than to the property, and
+	 * it would break on any tick size that still satisfies the property.
+	 *
+	 * This still discriminates the bug it exists for: the re-anchoring
+	 * variant puts 67 in the first minute, which fails the assertion above
+	 * and would fail this one in every minute.
+	 */
+	uint32_t long_minutes = 0;
+
 	for (uint32_t m = 1; m < 60u; m++) {
-		zassert_equal(minute_counts[m], 72u,
-			      "minute %u: %u beats, expected exactly 72",
-			      m + 1u, minute_counts[m]);
+		zassert_true(minute_counts[m] == 72u || minute_counts[m] == 73u,
+			     "minute %u: %u beats, expected 72 or 73",
+			     m + 1u, minute_counts[m]);
+		if (minute_counts[m] == 73u) {
+			long_minutes++;
+		}
 	}
+	zassert_equal(long_minutes, 1u,
+		      "%u minutes carried 73 beats, expected exactly 1 - the "
+		      "833 vs 833.33 ms truncation contributes one beat an "
+		      "hour and no more",
+		      long_minutes);
 
 	zassert_equal(total, 4322u,
 		      "one hour at 72 bpm: %u beats, expected 4322", total);
