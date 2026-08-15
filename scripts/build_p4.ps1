@@ -53,12 +53,6 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repo = Split-Path -Parent $PSScriptRoot
-# apps/dongle_thread does not have its own project() yet - that is Stage 6 of
-# the reorg plan. The gate.conf/thread.conf/thread_sed.conf fragments this
-# script passes as -DEXTRA_CONF_FILE already moved there ahead of it, so this
-# script is retargeted to match now rather than left pointing at a directory
-# (the former repository root) that no longer has a CMakeLists.txt at all.
-# It will not configure again until apps/dongle_thread exists for real.
 $dongleThreadApp = Join-Path $repo 'apps\dongle_thread'
 
 $arms = @(
@@ -127,9 +121,21 @@ foreach ($arm in $arms) {
     }
 
     # THE READ-BACK. See the .DESCRIPTION: this is the check, not the -D flags.
-    $cfg = Join-Path $dir 'dongle_thread\zephyr\.config'
-    if (-not (Test-Path $cfg)) {
-        Write-Host "  NO .config AT $cfg" -ForegroundColor Red
+    #
+    # Two layouts, because sysbuild is not always in play: with it the image
+    # lands under <build>\dongle_thread\zephyr (the image name is APP_DIR's own
+    # basename, not project()), without it directly under <build>\zephyr. Both
+    # are tried rather than one assumed, for the reason apps/dongle's own CI
+    # already learned at .github/workflows/build.yml - a hard-coded path that
+    # stops existing turns this check into "file not found", and a check that
+    # cannot run is not a check that passed.
+    $cfg = $null
+    foreach ($candidate in @((Join-Path $dir 'dongle_thread\zephyr\.config'),
+                             (Join-Path $dir 'zephyr\.config'))) {
+        if (Test-Path $candidate) { $cfg = $candidate; break }
+    }
+    if (-not $cfg) {
+        Write-Host "  NO .config UNDER $dir (tried both the sysbuild and the plain layout)" -ForegroundColor Red
         $failed += $arm.Name
         continue
     }
@@ -159,7 +165,7 @@ foreach ($arm in $arms) {
     }
     if ($bad) { $failed += $arm.Name; continue }
 
-    $elf = Join-Path $dir 'dongle_thread\zephyr\zephyr.elf'
+    $elf = Join-Path (Split-Path $cfg -Parent) 'zephyr.elf'
     Write-Host "  ok: $elf" -ForegroundColor Green
 }
 
