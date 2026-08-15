@@ -342,6 +342,51 @@ class Gates(unittest.TestCase):
             self.name(self.evaluate(mutate), "accumulator").verdict,
             ant_ab.FAIL)
 
+    # -- scheduler windows missed -------------------------------------------
+
+    def test_a_baseline_without_the_scheduler_counter_skips(self):
+        # Every baseline recorded before this gate existed is single-channel
+        # and carries no sched_missed; libant.a has no such counter at all.
+        # SKIP, reported in its own paragraph - not a silent pass and not a
+        # FAIL that would make the reference fail by construction.
+        self.assertEqual(self.name(self.evaluate(), "scheduler").verdict,
+                         ant_ab.SKIP)
+
+    def test_a_missed_scheduler_window_fails(self):
+        # Zero, because a window the scheduler could not arm in time is not a
+        # property of the room: the radio never listened in it. That is what
+        # makes this the one loss-shaped gate a noisy bench can carry.
+        def mutate(data):
+            data["radio_runs"][0]["derived"]["sched_missed"] = 1
+        a, b = pair(mutate)
+        a.data["radio_runs"][0]["derived"]["sched_missed"] = 0
+        self.assertEqual(
+            self.name(ant_ab.evaluate(gates(), a, b), "scheduler").verdict,
+            ant_ab.FAIL)
+
+    def test_no_missed_scheduler_windows_passes(self):
+        def mutate(data):
+            data["radio_runs"][0]["derived"]["sched_missed"] = 0
+        a, b = pair(mutate)
+        a.data["radio_runs"][0]["derived"]["sched_missed"] = 0
+        self.assertEqual(
+            self.name(ant_ab.evaluate(gates(), a, b), "scheduler").verdict,
+            ant_ab.PASS)
+
+    def test_the_counter_is_read_on_multi_channel_runs_too(self):
+        # single_channel=False, unlike the loss gate: at one channel a missed
+        # window is structurally impossible - there is nothing to collide with
+        # - so a gate that only looked at single-channel runs would be reading
+        # the one case that cannot fail.
+        def mutate(data):
+            data["radio_runs"][0]["channels"] = 8
+            data["radio_runs"][0]["derived"]["sched_missed"] = 4
+        a, b = pair(mutate)
+        a.data["radio_runs"][0]["derived"]["sched_missed"] = 0
+        self.assertEqual(
+            self.name(ant_ab.evaluate(gates(), a, b), "scheduler").verdict,
+            ant_ab.FAIL)
+
     # -- timing -------------------------------------------------------------
 
     def test_timing_at_exactly_the_ratio_passes(self):
@@ -772,6 +817,11 @@ class GatesFile(unittest.TestCase):
         self.assertEqual(cfg["loss_exact"]["absolute_ceiling_pct"], 1.5)
         self.assertEqual(cfg["unexplained_loss"]["max"], 0)
         self.assertEqual(cfg["accumulator_violations"]["max"], 0)
+        self.assertEqual(cfg["sched_missed"]["max"], 0)
+        self.assertFalse(cfg["sched_missed"]["required"],
+                         "no baseline recorded before this gate carries the "
+                         "counter, and libant.a has none to carry - its "
+                         "absence must read as SKIP")
         self.assertEqual(cfg["timing"]["max_ratio"], 1.25)
         self.assertEqual(cfg["acquisition"]["max_ratio"], 1.5)
         self.assertEqual(cfg["acquisition"]["max_absolute_s"], 5.0)
@@ -791,9 +841,9 @@ class GatesFile(unittest.TestCase):
 
     def test_every_gate_the_code_knows_exists_in_the_file(self):
         known = {"conformance", "loss_exact", "unexplained_loss",
-                 "accumulator_violations", "timing", "acquisition",
-                 "sensitivity", "scale", "ack_data", "usb_latency",
-                 "coexistence"}
+                 "accumulator_violations", "sched_missed", "timing",
+                 "acquisition", "sensitivity", "scale", "ack_data",
+                 "usb_latency", "coexistence"}
         self.assertEqual(set(gates()["gates"]), known)
 
     def test_the_coexistence_gate_is_on_and_its_thresholds_are_measured(self):

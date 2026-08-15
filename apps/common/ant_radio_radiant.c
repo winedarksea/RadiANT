@@ -2087,7 +2087,15 @@ static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_
 	/*
 	 * A tracked window that really got armed owes its successor. Recorded
 	 * here rather than at post time so a refused arm - which never reaches
-	 * this callback - finds the flag false and reposts nothing.
+	 * this callback - is not credited a successor from the arm side.
+	 *
+	 * IT IS NO LONGER THE ONLY PLACE THAT SETS THIS. A window that never
+	 * armed reaches api_sched_done() as MISSED or DENIED and sets the flag
+	 * there instead, because "the arm was refused" and "the channel has
+	 * stopped asking for windows" are different facts and only the first is
+	 * true - see that branch for why waiting for the 50 ms pump was a ~2 s
+	 * dropout. What this site still buys is that the flag is set from a
+	 * TERMINAL rather than from a post, which is what makes it bounded.
 	 */
 	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_TRACK_RX) {
 		api_ch[ch].track_repost = true;
@@ -2347,6 +2355,36 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 					ch, (uint8_t)ANTW_EVENT_RX_FAIL);
 			}
 		}
+		/*
+		 * AND THE CHANNEL OWES ITSELF THE NEXT WINDOW, immediately.
+		 *
+		 * api_sched_armed() sets track_repost only for a window that
+		 * really got armed, which is right for every terminal that
+		 * follows an arm - but a window reported MISSED or DENIED may
+		 * never have been armed at all, and then nothing here re-posted
+		 * anything. The channel waited for the RADIANT_API_HOUSEKEEP_MS
+		 * pump (50 ms), by which time arm_next() has committed the radio
+		 * to something up to a quarter of a second out and the window
+		 * this clock advance just computed is missed in its turn. Eight
+		 * of those is RX_FAIL_GO_TO_SEARCH: a ~2 s dropout that looks
+		 * exactly like an RF problem and is not one.
+		 *
+		 * BOUNDEDNESS, which this file demands for every post reachable
+		 * from a callback: unlike a refused arm, a MISSED or DENIED
+		 * terminal ALWAYS follows one of the clock advances just above,
+		 * each of which moves the slot a full period past the window
+		 * that died. So the re-posted window is strictly later than the
+		 * one it replaces and cannot produce another immediate terminal;
+		 * the sequence advances in time rather than spinning. api_arming
+		 * still guards the refusal path, which is the shape that can.
+		 *
+		 * The flag rather than a direct api_post_track_rx() call so this
+		 * goes through the single repost block below with its
+		 * TRACKING / !master / !pending / transfer-idle guards - a
+		 * channel that this same callback is about to close or hand to
+		 * the transfer engine must not acquire a window behind it.
+		 */
+		api_ch[ch].track_repost = true;
 	}
 
 	op = api_ch[ch].op;

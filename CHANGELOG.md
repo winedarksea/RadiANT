@@ -13,6 +13,28 @@ reads.
 
 ### Fixed
 
+- **Two tracked channels landing within one arm lead of each other lost the
+  later one, every period.** `min_arm_lead_us` is the scheduler's exclusion
+  radius — `pass_step()` reports a window `DONE_MISSED` once
+  `t_end < now + arm_lead` — but `arm_rx_window()`'s merge rule 3 required
+  literal overlap and so reached only twice the 100 µs tracked guard. Between
+  the two was a band in which a pair could neither merge nor be armed in
+  sequence. The reach is now `arm_lead()` itself, mirrored in
+  `could_join_armed()`. Invisible at one channel, which is why every loss figure
+  this project has recorded missed it; worth roughly 1 % of slots per channel at
+  eight tracked sensors. `max_addr_groups == 2` on nRF means this rescues
+  **pairs** — a three-way pile-up inside one lead still drops the third. See
+  `docs/decisions/0016-merge-reach-is-the-arm-lead.md`.
+- **A tracked window that never armed no longer waits for the 50 ms housekeeping
+  pump.** `api_sched_done()`'s TRACK_RX miss/deny branch sets `track_repost`, so
+  the next period's window is posted immediately instead of arriving after the
+  radio has committed ~250 ms out. Eight of those in a row was
+  `RX_FAIL_GO_TO_SEARCH` — a ~2 s dropout that looked like RF and was not.
+- **`want_preempt()` lets an armed bounded receive that has not opened yet give
+  way to a pending bounded receive that genuinely starts earlier.** Tearing down
+  before the first bit of preamble costs nothing, and without it the re-posted
+  window above still lost to `arm_next()`'s deliberate early commitment.
+
 - **The nRF backend could not be built without the MPSL gate.**
   `radiant_nrf_gate_on_grant()` is defined unconditionally, but the three
   statics it writes (`grant_short_rx`, `grant_scored`, `GRANT_SHORT_WINDOW_US`)
@@ -58,6 +80,14 @@ reads.
   `archive/`.
 
 ### Changed
+
+- **The coded (LE Coded S=8) PHY is behind `CONFIG_RADIANT_PHY_LR_CODED`,
+  `default n`.** It used to be compiled into every nRF build, and its 336 µs
+  preamble+access address set the advertised `min_arm_lead_us` for every window
+  of every PHY: 456 µs on nRF54L15 and 616 µs on nRF52840, where **168** and
+  **328** now do. ADR 0007 accepted that as "scheduling slack ... costing no
+  airtime or current", which is true at one channel and false at several — see
+  its amendment. An image that wants S=8 sets the symbol and pays the lead.
 
 - `archive/captures/coex/` now holds the three P4 coexistence arms that
   `docs/radiant-bridge.md` §7.4.2 actually cites, with recorded SHA-256s. The

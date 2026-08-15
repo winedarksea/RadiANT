@@ -228,7 +228,16 @@
               "description": "Time to re-acquire after a deliberate dropout. Gate is <= sdk-ant x 1.5 and <= 5 s absolute.",
               "type": ["number", "null"]
             },
-            "rssi_dbm_mean": { "type": ["number", "null"] }
+            "rssi_dbm_mean": { "type": ["number", "null"] },
+            "sched_missed": {
+              "description": "Receive windows the dongle's scheduler declared DONE_MISSED - it could not arm them in time, so the radio never listened in them. Read out of the firmware by tools/ant_health.py (MESG_RADIANT_HEALTH, needs CONFIG_ANT_DONGLE_HEALTH_COUNTERS=y) before and after the run, and recorded as the delta. Must be 0. It is a scheduling artefact rather than an air measurement, which makes it the one loss-shaped gate a noisy room cannot move - and it is structurally zero at one channel, so read it on the multi-channel runs.",
+              "type": ["integer", "null"],
+              "minimum": 0
+            },
+            "per_channel": {
+              "description": "Per-channel figures from a multi-channel run, keyed by receive channel number as a string - `tools/ant_verify.py`'s own `derived.per_channel`, copied across. Recorded, not gated: a scheduler that drops the later of two nearby receive windows costs one channel of a pair and leaves the other alone, so the pooled loss figure beside this one halves the effect and only the spread across channels shows it. Absent on the single-channel runs, which is every baseline recorded before 2026-08-15.",
+              "type": "object"
+            }
           }
         }
       }

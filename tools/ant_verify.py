@@ -10,6 +10,20 @@ hears, and reports numbers rather than adjectives:
     python tools/ant_verify.py --profile power --expect-watts 100 \
         --expect-rpm 80 --seconds 60 --json
 
+Several channels at once, each pinned to its own sensor - which is the shape a
+fitness app runs and the only shape in which a multi-channel scheduling fault
+is visible at all:
+
+    python tools/ant_verify.py --seconds 300 \
+        --channel 0 --device-number 4660 \
+        --channel 1 --device-number 4661 \
+        --channel 2 --device-number 4662
+
+`derived.per_channel` then carries a `loss_exact_pct` per channel beside the
+pooled `derived.loss_exact_pct`, because a scheduler that drops the later of
+two nearby receive windows costs one channel of a pair and leaves the other
+alone: the pooled figure halves it, and the per-channel spread shows it.
+
 It is told nothing about the transmitter. Every expectation is reconstructed
 from the stream itself - the channel period gives the packet count to expect,
 the accumulators give the power to expect, the page numbers give the rotation
@@ -33,6 +47,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import math
 import statistics
 import sys
 import time
@@ -389,10 +404,25 @@ class ChannelAnalyzer:
     def __init__(self, name: str, device_type: int, period: int,
                  expect_watts: float | None, expect_rpm: float | None,
                  wheel_circ_m: float, compat: CompatVerifier | None = None,
-                 expect_bpm: float | None = None):
+                 expect_bpm: float | None = None, channel: int | None = None,
+                 device_number: int = 0):
         self.name = name
         self.device_type = device_type
         self.period = period
+
+        # Which receive channel this stream was heard on, and which sensor it
+        # came from. Neither is used by the analysis - the whole point of
+        # profile_for() is that a stream is judged on its own contents - but
+        # both are needed to LABEL the per-channel figures derive() emits, and
+        # a multi-channel run whose numbers cannot be attributed to a channel
+        # is exactly as useless as no per-channel numbers at all.
+        #
+        # channel is None on --replay unless the caller pairs a --channel with
+        # a --device-number: a capture records the sensor, not the receiver
+        # channel (see profile_for()'s docstring), so the only honest source
+        # for it there is the operator, not the file.
+        self.channel = channel
+        self.device_number = device_number
         self.period_s = period / ANT_TICKS_PER_S
         self.expect_watts = expect_watts
         self.expect_rpm = expect_rpm
@@ -1205,6 +1235,13 @@ class ChannelAnalyzer:
 
         return {
             "profile": self.name,
+            # Where this stream came from, for derive()'s per-channel block.
+            # Both may be absent from the sensor's point of view - a wildcard
+            # pairing has no device number until one is heard, and a replayed
+            # capture has no channel at all - so both are nullable and neither
+            # is ever invented.
+            "channel": self.channel,
+            "device_number": self.device_number or None,
             "device_type": self.device_type,
             "period_ticks": self.period,
             "packets": self.packets,
@@ -1513,6 +1550,180 @@ def loss_accounting(result: dict) -> dict | None:
     }
 
 
+def _number(value) -> float | None:
+    """A JSON number, or None where the tool has no answer.
+
+    `loss_pct` is a genuine NaN when there is no denominator to divide by (an
+    unknown device type has no period, so there is no packet count to expect).
+    NaN is not JSON, and a reader that gets one has to guess whether it means
+    zero or unknown - so the derived block says None, which the schema's
+    ["number", "null"] already allows and every consumer already handles.
+    """
+    if value is None:
+        return None
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    return value
+
+
+def _ms(seconds) -> float | None:
+    """Seconds to milliseconds, keeping None as None.
+
+    The derived block is milliseconds throughout because that is the unit the
+    gate thresholds in tools/ab_gates.toml are written in, and a unit
+    conversion between the two files is a place for a factor of 1000 to hide.
+    """
+    value = _number(seconds)
+    return None if value is None else value * 1000.0
+
+
+def derive(result: dict) -> dict:
+    """Lift out the handful of numbers `tools/ab_gates.toml`'s gates read.
+
+    archive/benchmarks/README.md keeps a `derived` block beside every recorded
+    run so that "a gate runner does not need to know the tool's object shape".
+    Until now that block was typed by hand out of the report, which is a
+    transcription step between the measurement and the gate - and the one
+    number a transcription step is most likely to pick up is `loss_pct`, the
+    wall-clock figure the gates specifically must not read. Emitting the block
+    from the tool that made the measurement removes the step.
+
+    THE AGGREGATE FIELDS KEEP THEIR SINGLE-CHANNEL MEANING EXACTLY. Every
+    baseline in archive/benchmarks/ is a one-channel run, and
+    `ant_ab.py`'s gate_loss() reads `derived.loss_exact_pct` from those files;
+    with one channel each expression below reduces, term for term, to the
+    single channel's own figure. Multi-channel is where they have to choose,
+    and they choose the way the underlying quantity composes:
+
+      * loss_exact_pct - one ratio over the pooled counters
+        (sum missed / sum sent), not a mean of ratios. A mean of ratios gives
+        a channel that heard forty packets the same weight as one that heard
+        four hundred.
+      * loss_pct - the same pooling on the wall-clock estimate.
+      * accumulator_violations - a sum. Any violation anywhere is a decoder or
+        wrap-handling bug, and burying one channel's in an average would be
+        the whole point of the gate lost.
+      * timing_offgrid_*_ms - the WORST channel, not the mean, for the reason
+        Baseline.worst() gives: averaging away one bad run is how a regression
+        ships.
+
+    per_channel is the block this exists for. The defect it was written to
+    measure - a scheduler exclusion radius that drops the later of two windows
+    that land too close together - is invisible in any aggregate: it costs
+    whole slots on one channel of a pair while the other is untouched, so the
+    pooled figure moves by half of an already small number. Per channel it is
+    a step.
+
+    Not emitted here, deliberately: `sched_missed`. That counter lives in the
+    dongle (MESG_RADIANT_HEALTH, tools/ant_health.py) and is not on this
+    tool's wire at all. It belongs in the same `derived` block - ant_ab.py
+    gates on it - but a run has to read it out of the firmware before and
+    after, and inventing a zero here would be worse than leaving it absent.
+    """
+    channels = result.get("channels", [])
+
+    per_channel: dict[str, dict] = {}
+    missed_total = 0
+    sent_total = 0
+    packets_total = 0
+    expected_total = 0.0
+    violations_total = 0
+    offgrid_host: list[float] = []
+    offgrid_radio: list[float] = []
+    rssi_weighted = 0.0
+    rssi_n = 0
+
+    for index, channel in enumerate(channels):
+        exact = channel.get("exact_loss")
+        jitter = channel.get("jitter", {})
+        signal = channel.get("signal")
+
+        # The key is the receive channel where one is known, and the stream's
+        # own name where it is not - a replayed capture carries no channel
+        # number, and a key invented from the list position would read like a
+        # channel and not be one. `channel` inside the entry is the machine-
+        # readable form of the same fact, and is null in that case.
+        number = channel.get("channel")
+        key = str(number) if number is not None else channel.get(
+            "profile", f"stream {index}")
+
+        entry = {
+            "channel": number,
+            "profile": channel.get("profile"),
+            "device_number": channel.get("device_number"),
+            "packets": channel.get("packets", 0),
+            "loss_pct": _number(channel.get("loss_pct")),
+            "loss_exact_pct": None,
+            "exact_missed": None,
+            "exact_sent": None,
+            "exact_scope": None,
+            "accumulator_violations": channel.get("violations", {}).get(
+                "count", 0),
+            "timing_offgrid_host_ms": _ms(jitter.get("offgrid_host_s")),
+            "timing_offgrid_radio_ms": _ms(jitter.get("offgrid_radio_s")),
+            "rssi_dbm_mean": signal["mean_dbm"] if signal else None,
+        }
+
+        # A wildcard channel was configured with no device number, so the only
+        # device number it has is the one it actually heard - which is the
+        # answer to "which sensor is this figure about" anyway, and is the
+        # reason lib config 0xE0 asks for the channel id at all.
+        if entry["device_number"] is None and number is not None:
+            heard = result.get("identities", {}).get(str(number))
+            if heard:
+                entry["device_number"] = heard.get("device_number")
+
+        if exact is not None:
+            entry["loss_exact_pct"] = exact["loss_pct"]
+            entry["exact_missed"] = exact["missed"]
+            entry["exact_sent"] = exact["sent"]
+            entry["exact_scope"] = exact["scope"]
+            missed_total += exact["missed"]
+            sent_total += exact["sent"]
+
+        per_channel[key] = entry
+
+        packets_total += channel.get("packets", 0)
+        expected = _number(channel.get("expected_packets"))
+        if expected:
+            expected_total += expected
+        violations_total += entry["accumulator_violations"]
+        if entry["timing_offgrid_host_ms"] is not None:
+            offgrid_host.append(entry["timing_offgrid_host_ms"])
+        if entry["timing_offgrid_radio_ms"] is not None:
+            offgrid_radio.append(entry["timing_offgrid_radio_ms"])
+        if signal:
+            rssi_weighted += signal["mean_dbm"] * signal["n"]
+            rssi_n += signal["n"]
+
+    accounting = result.get("accounting")
+
+    return {
+        # The wall-clock figure. Recorded because the baselines record it, and
+        # never the one to gate on - it assumes the transmitter's crystal is
+        # exact and rounds its denominator.
+        "loss_pct": (100.0 * (1.0 - packets_total / expected_total)
+                     if expected_total > 0 else None),
+        # THE gate. None rather than 0.0 when no channel could produce one:
+        # "the counter could not be trusted" and "nothing was lost" are
+        # different answers, and ant_ab.py already fails a gate whose field is
+        # missing. A zero here would pass it instead.
+        "loss_exact_pct": (100.0 * missed_total / sent_total
+                           if sent_total else None),
+        # None on --replay, where loss_accounting() correctly declines to
+        # judge: a capture records payloads and not channel events, so there
+        # are no RX_FAILs to account with.
+        "unexplained_loss": (accounting["unaccounted"]
+                             if accounting is not None else None),
+        "accumulator_violations": violations_total,
+        "timing_offgrid_host_ms": max(offgrid_host) if offgrid_host else None,
+        "timing_offgrid_radio_ms": (max(offgrid_radio) if offgrid_radio
+                                    else None),
+        "rssi_dbm_mean": rssi_weighted / rssi_n if rssi_n else None,
+        "per_channel": per_channel,
+    }
+
+
 def report(result: dict) -> None:
     for channel in result["channels"]:
         print(f"\n=== {channel['profile']} "
@@ -1613,6 +1824,79 @@ def report(result: dict) -> None:
         print(f"heard on channel {channel}: device #{ident['device_number']}, "
               f"type 0x{ident['device_type']:02X}")
 
+    # The per-channel exact-loss table, printed only when there is more than
+    # one channel to compare. On one channel it would restate the `loss
+    # (exact)` check line above it, and a report that says the same number
+    # twice invites the reader to wonder which one is authoritative.
+    per_channel = result.get("derived", {}).get("per_channel", {})
+    if len(per_channel) > 1:
+        print("\nper channel (exact loss, from the transmitters' own "
+              "counters):")
+        for key, entry in per_channel.items():
+            exact = entry["loss_exact_pct"]
+            figure = ("no exact figure - the event counter stood still, so it "
+                      "is not stepped per message"
+                      if exact is None else
+                      f"{exact:.2f} % ({entry['exact_missed']} of "
+                      f"{entry['exact_sent']} {entry['exact_scope']} "
+                      f"message(s) missing)")
+            label = f"channel {key}" if entry["channel"] is not None else key
+            print(f"  {label:12} {entry['profile']:24} {figure}")
+        # Spread, not mean: the whole reason for measuring per channel is that
+        # a scheduler that drops the later of two nearby windows costs one
+        # channel of a pair and leaves the other alone. That is a difference
+        # between channels, and no aggregate can show it.
+        values = [entry["loss_exact_pct"] for entry in per_channel.values()
+                  if entry["loss_exact_pct"] is not None]
+        if len(values) > 1:
+            print(f"  spread: {min(values):.2f} % to {max(values):.2f} % "
+                  f"across {len(values)} channel(s) - a per-channel spread on "
+                  f"one link is a scheduling effect, not a room effect")
+
+
+def per_channel_args(values: list[int] | None, count: int, name: str, *,
+                     default: int, ramp: bool = False,
+                     wildcard: int | None = None) -> list[int]:
+    """Expand one repeatable per-channel argument to one value per channel.
+
+    Three forms, and the first two are the ones that already existed:
+
+      * absent      - the default, on every channel.
+      * given once  - one value for every channel, except that `ramp` ones
+                      count up from it (channel N, N+1, ... and device #N,
+                      #N+1, ...). That ramp is not new and is not decoration:
+                      several bench scripts pass a single --channel with
+                      several --profile flags and rely on the channels not
+                      colliding.
+      * repeated    - one value per channel, positionally. This is the form
+                      that exists to place two receive windows deliberately
+                      close together, which is how a scheduler's exclusion
+                      radius is measured.
+
+    `wildcard` is the value that means "any", and is never ramped: 0 pairs
+    with any device, and ramping it to 1 would silently pin channel 1 to a
+    real device number that nobody asked for.
+
+    A wrong count is refused rather than zipped short. Positional pairing that
+    silently truncates would apply channel 2's frequency to channel 3 and
+    report the result as a measurement.
+    """
+    if not values:
+        return [default] * count
+    if len(values) == 1:
+        one = values[0]
+        if ramp and one != wildcard:
+            return [one + index for index in range(count)]
+        return [one] * count
+    if len(values) != count:
+        raise SystemExit(
+            f"{name} was given {len(values)} times but this run has {count} "
+            f"channel(s). Give it once (for all of them) or exactly {count} "
+            f"times, in channel order - a partial pairing would attribute one "
+            f"channel's setting to another and report the result as a "
+            f"measurement.")
+    return list(values)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -1661,15 +1945,36 @@ def main() -> int:
     parser.add_argument("--wheel-circ", type=float, default=2.105,
                         help="wheel circumference in metres, for speed "
                              "(default: 2.105)")
-    parser.add_argument("--device-number", type=int, default=0,
+    # ── The four per-channel arguments ──────────────────────────────────────
+    #
+    # All four repeat, and repeating any of them switches this tool from "one
+    # sensor, measured well" to "several sensors, measured separately". That
+    # is the measurement the multi-channel scheduling defect needs: it is
+    # invisible at one channel by construction, so a tool that can only be
+    # pointed at one channel can never see it.
+    #
+    # Given once, each keeps exactly the meaning it had - including the two
+    # ramps below, which several bench scripts depend on - so every existing
+    # invocation and every recorded baseline still means what it meant.
+    parser.add_argument("--device-number", type=int, action="append",
+                        metavar="N",
                         help="device number to pair with; 0 is a wildcard, "
-                             "which is what a fitness app uses (default: 0)")
-    parser.add_argument("--trans-type", type=int, default=0,
+                             "which is what a fitness app uses (default: 0). "
+                             "Given once with several profiles it ramps "
+                             "(N, N+1, ...); repeat it to pair each channel "
+                             "with a device of your own choosing")
+    parser.add_argument("--trans-type", type=int, action="append",
+                        metavar="N",
                         help="transmission type to pair with; 0 is a wildcard "
-                             "(default: 0)")
-    parser.add_argument("--channel", type=int, default=0,
-                        help="first ANT channel to use (default: 0)")
-    parser.add_argument("--rf-freq", type=int, default=ANT_PLUS_FREQ,
+                             "(default: 0). Give it once for every channel, "
+                             "or repeat it per channel")
+    parser.add_argument("--channel", type=int, action="append", metavar="N",
+                        help="ANT channel to use (default: 0). Given once it "
+                             "is the FIRST channel and the rest follow it "
+                             "(N, N+1, ...); repeat it to place each channel "
+                             "explicitly, which is what puts two receive "
+                             "windows where you want them")
+    parser.add_argument("--rf-freq", type=int, action="append",
                         metavar="N",
                         help="RF frequency as MHz above 2400; 57 is the ANT+ "
                              "public network and the only value a real sensor "
@@ -1699,7 +2004,38 @@ def main() -> int:
     parser.add_argument("-q", "--quiet", action="store_true")
     args = parser.parse_args()
 
+    # How many channels this run has: as many as the most-repeated of the two
+    # arguments that can name one. --profile alone (several sensors of
+    # different kinds, the Zwift shape) and --channel alone (several sensors
+    # of the SAME kind on channels of the operator's choosing, the shape the
+    # scheduling defect needs) both work, and one profile is spread across
+    # every channel because that is the multi-master bench: eight identical
+    # power masters, deliberately phased.
     profiles = args.profile or ["power"]
+    count = max(len(profiles), len(args.channel or []), 1)
+    if len(profiles) not in (1, count):
+        raise SystemExit(
+            f"--profile was given {len(profiles)} times and --channel "
+            f"{len(args.channel or [])}; give one profile for all channels or "
+            f"one per channel.")
+    if len(profiles) == 1:
+        profiles = profiles * count
+
+    channels = per_channel_args(args.channel, count, "--channel", default=0,
+                                ramp=True)
+    device_numbers = per_channel_args(args.device_number, count,
+                                      "--device-number", default=0, ramp=True,
+                                      wildcard=0)
+    trans_types = per_channel_args(args.trans_type, count, "--trans-type",
+                                   default=0)
+    rf_freqs = per_channel_args(args.rf_freq, count, "--rf-freq",
+                                default=ANT_PLUS_FREQ)
+    if len(set(channels)) != len(channels):
+        raise SystemExit(
+            f"--channel repeats a channel number: {channels}. Two streams on "
+            f"one channel cannot be told apart, and the per-channel figures "
+            f"would silently be a merge of both.")
+
     json_to_stdout = args.json == "-"
     verbose = not args.quiet and not json_to_stdout
 
@@ -1727,18 +2063,55 @@ def main() -> int:
         return CompatVerifier(bytes.fromhex(args.compat_key), args.epoch,
                               device_number, window=args.attest_window)
 
-    def make_analyzer(name: str) -> ChannelAnalyzer:
+    def make_analyzer(name: str, channel: int,
+                      device_number: int) -> ChannelAnalyzer:
+        """One analyser per channel.
+
+        Every piece of per-stream state this tool keeps - the accumulator
+        baselines, the event-counter pairs the exact-loss figure is counted
+        from, the Tier II window - is already an attribute of the analyser
+        rather than a global, so several channels need no new bookkeeping:
+        one object each, and listen() dispatches on the channel byte the
+        broadcast arrives with. What was missing was only the ability to say
+        which channel and which device each one is.
+        """
         spec = ap.PROFILES[name]
         return ChannelAnalyzer(name, spec["device_type"], spec["period"],
                                args.expect_watts, args.expect_rpm,
                                args.wheel_circ,
-                               compat=make_verifier(args.device_number),
-                               expect_bpm=args.expect_bpm)
+                               compat=make_verifier(device_number),
+                               expect_bpm=args.expect_bpm,
+                               channel=channel, device_number=device_number)
 
     extra: dict = {}
     records: list = []
 
     if args.replay:
+        # WHICH CHANNEL A REPLAYED STREAM WAS HEARD ON IS NOT IN THE FILE.
+        # A capture records the sensor - time, device type, device number,
+        # payload - because the channel a packet arrived on is a fact about
+        # the receiver and not about the sensor (profile_for()'s docstring
+        # says so, and the .antcap line format has no column for it). So the
+        # only honest way to label a replayed stream with a channel is for the
+        # operator to say which device was on which channel, which is exactly
+        # what the paired --channel/--device-number arguments already express:
+        #
+        #     --replay f.antcap --channel 0 --device-number 4660 \
+        #                       --channel 1 --device-number 4661
+        #
+        # A single ramped --device-number reproduces the same pairing a live
+        # multi-channel run used, so a capture recorded by one replays with
+        # its channel labels intact. Unpaired streams keep a null channel and
+        # are keyed by name; nothing is guessed from the order of the file.
+        # strict=True on both zips in this file: per_channel_args() has
+        # already refused a mismatched count, so a short zip here could only
+        # mean that guarantee was broken, and silently dropping a channel is
+        # how a run reports three sensors' loss as two.
+        channel_of_device = {number: channel
+                             for number, channel in zip(device_numbers,
+                                                        channels, strict=True)
+                             if number}
+
         # One analyser per sensor, discovered from the capture. Grouping by
         # device type alone would merge a standard-page power meter and a
         # torque-page one into a single stream and then report the merge as
@@ -1759,7 +2132,9 @@ def main() -> int:
                 period_for(device_type, name), args.expect_watts,
                 args.expect_rpm, args.wheel_circ,
                 compat=make_verifier(device_number),
-                expect_bpm=args.expect_bpm)
+                expect_bpm=args.expect_bpm,
+                channel=channel_of_device.get(device_number),
+                device_number=device_number)
             for t, payload in packets:
                 analyzer.feed(t, payload)
             ordered.append(analyzer)
@@ -1795,18 +2170,19 @@ def main() -> int:
             return 1
 
         analyzers = {}
-        for index, name in enumerate(profiles):
-            channel = args.channel + index
+        for name, channel, device_number, trans_type, rf_freq in zip(
+                profiles, channels, device_numbers, trans_types, rf_freqs,
+                strict=True):
             spec = ap.PROFILES[name]
             if not open_slave(dev, reader, channel, spec["device_type"],
-                              spec["period"],
-                              args.device_number + index if args.device_number
-                              else 0,
-                              args.trans_type, args.rf_freq):
+                              spec["period"], device_number, trans_type,
+                              rf_freq):
                 print(f"  FAIL: channel {channel} ({name}) did not open")
                 return 1
-            print(f"  OK: channel {channel} - {spec['label']}")
-            analyzers[channel] = make_analyzer(name)
+            pinned = (f", pinned to #{device_number}" if device_number
+                      else ", wildcard")
+            print(f"  OK: channel {channel} - {spec['label']}{pinned}")
+            analyzers[channel] = make_analyzer(name, channel, device_number)
 
         print(f"\nListening for {args.seconds:.0f} s")
         extra = listen(dev, reader, analyzers, args.seconds, verbose, records)
@@ -1823,15 +2199,29 @@ def main() -> int:
         ordered = list(analyzers.values())
 
     if args.record and not args.replay:
+        # The device number is what splits a capture back into per-sensor
+        # streams on replay, and a capture whose sensors are all #0 cannot be
+        # split at all - two channels would merge into one analysis and the
+        # merge would be reported as loss. So: the identity actually heard
+        # first, and the device number the channel was PINNED to as the
+        # fallback, which is a fact about the run rather than a guess. Zero
+        # only survives where the channel was a wildcard and nothing
+        # identified itself.
         identities = extra.get("identities", {})
+        pinned = dict(zip(channels, device_numbers, strict=True))
         resolved = [
             (t, device_type,
-             identities.get(str(channel), {}).get("device_number", 0), payload)
+             identities.get(str(channel), {}).get("device_number", 0)
+             or pinned.get(channel, 0), payload)
             for t, device_type, channel, payload in records
         ]
         ap.write_capture(args.record, resolved, comments=[
             f"ant_verify.py, {args.seconds:.0f} s, profiles: "
             f"{', '.join(profiles)}",
+            "channels: " + ", ".join(
+                f"ch{channel}=#{number}" if number else f"ch{channel}=wildcard"
+                for channel, number in zip(channels, device_numbers,
+                                           strict=True)),
             f"expected {args.expect_watts} W, {args.expect_rpm} rpm",
         ])
         print(f"\nwrote {args.record} ({len(records)} packets)")
@@ -1844,6 +2234,10 @@ def main() -> int:
     accounting = loss_accounting(result)
     if accounting is not None:
         result["accounting"] = accounting
+    # After the accounting, because unexplained_loss is one of the numbers it
+    # lifts out, and before the report, which prints the per-channel table
+    # from it.
+    result["derived"] = derive(result)
     result["pass"] = (all(c["pass"] for c in result["channels"])
                       and (accounting is None or accounting["pass"]))
 

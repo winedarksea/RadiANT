@@ -398,6 +398,30 @@ required = true
 # wrap-handling bug rather than a link problem.
 max = 0
 
+[gates.sched_missed]
+enabled = true
+
+# Not required, and for one narrow reason: this counter is read out of the
+# dongle by `tools/ant_health.py` (MESG_RADIANT_HEALTH, 0xF6), which needs
+# CONFIG_ANT_DONGLE_HEALTH_COUNTERS=y, and no baseline recorded before this
+# gate existed carries it. A sitting without it reports SKIP in its own
+# paragraph rather than failing - and `libant.a` has no such counter to report
+# at all, so requiring it would fail every sdk-ant reference by construction.
+required = false
+
+# Receive windows the scheduler declared DONE_MISSED: it could not arm them in
+# time, so the radio never listened in them. That makes this the one
+# loss-shaped number in the table that the room cannot move - every other loss
+# figure here mixes the air in with the firmware, which is why the bench at
+# 5-8 % ambient loss (2026-08-15, see the header) cannot currently carry them.
+# A scheduling artefact is measurable in a noisy room; on-air loss is not.
+#
+# Zero, because a missed window is not a link property. At one channel it is
+# structurally impossible - there is nothing to collide with - which is
+# precisely why it stayed at zero and unexamined for so long, and why the
+# multi-channel runs are the ones to read it on.
+max = 0
+
 [gates.timing]
 enabled = true
 required = true

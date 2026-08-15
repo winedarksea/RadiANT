@@ -611,7 +611,11 @@ has been designed out.
    and rejects any other. Adding the long-range coded axis
    ([ADR 0007](decisions/0007-long-range-phy.md)) grew that list and nothing
    else — which is the claim this rule was written to make, now tested rather
-   than predicted.
+   than predicted. **"Built with" is now literal on nRF**: the coded PHY is in
+   the list only when `CONFIG_RADIANT_PHY_LR_CODED=y`, which is `default n`, so
+   a stock ANT+ image advertises one PHY. It used to be in every nRF build's
+   list whether or not anything asked for it, and the arm lead came with it —
+   see the `min_arm_lead_us` row below.
 6. **Radio configuration is per-operation, never global state.** Every arm call
    carries its own `struct radiant_pkt_format`. The reason is concrete rather than
    aesthetic: tracking/TX and wildcard search need genuinely different packet
@@ -649,13 +653,13 @@ the radio's own clock against 0.0120 ms). See
 | Field | What it says | nRF | CC13x2 / CC26x2 | EFR32 / RAIL |
 |---|---|---|---|---|
 | `max_filters` | Addresses matchable in one receive window. Sets the wildcard-sweep length | **8** (one base plus eight prefixes) | **2** (`syncWord0`, `syncWord1`, and nothing else) | **2** (two runtime sync words) |
-| `max_addr_groups` | Distinct values of `addr[0 .. addr_len-2]` matchable in one window. Sets how many *tracked* channels can share a merged window | **2** (BASE0 and BASE1) | **2** — but for the opposite reason: each sync word is fully independent, so this *equals* `max_filters` and the constraint never binds | **2** (two independent sync words) |
+| `max_addr_groups` | Distinct values of `addr[0 .. addr_len-2]` matchable in one window. Sets how many *tracked* channels can share a merged window | **2** (BASE0 and BASE1) — and this is the bound on what merging can rescue: a merged window holds a **pair** of tracked device numbers, so three tracked channels piled inside one `min_arm_lead_us` still cost the third its window. See "the merge reach" below and [ADR 0016](decisions/0016-merge-reach-is-the-arm-lead.md) | **2** — but for the opposite reason: each sync word is fully independent, so this *equals* `max_filters` and the constraint never binds | **2** (two independent sync words) |
 | `min_filter_hamming_bits` | Minimum bit distance between two simultaneously-armed hardware addresses before the matcher can separate them | 0 (a comparator; no constraint) | **4** — measured, and the field exists because of this part. See below | 0 (unmeasured) |
 | `filter_wildcard_dev` | Can one filter match *any* device number? | false | false | false |
 | `addr_len_hw_max` | Longest address the hardware matcher itself handles. Informational — a shorter hardware match is completed in software, at the cost of more spurious wakeups and more receive current | 5 | **3** — the silicon reaches 4 (`nSwBits` is 8..32) but `nSwBits` lives in the setup command that `RF_open()` consumes and cannot be changed under a live handle, so the backend fixes it at the 3 bytes search and tracking share | 4 |
 | `max_body_len` | Largest body (bytes between address and CRC), either direction | — | — | — |
-| `phys[]`, `n_phys`, `phy_switch_us` | PHYs this build supports, most-preferred first, and what switching between two of them costs the scheduler | switch is free | one PHY; a switch would be a fresh `RF_open` | reloads a generated configuration |
-| `ramp_up_us`, `rx_to_tx_us`, `tx_to_rx_us`, `min_arm_lead_us` | The four timing budgets: transmitter ramp-up, both turnarounds, and the minimum lead an arm call needs before it fails `RADIANT_RADIO_ETIME` rather than running late | measured, antenna-referenced | **seeded, not measured** — a P4 bench item; `min_arm_lead_us` is 600 with a separate 150 µs hard floor, split after a scheduler that subtracts the advertised figure and calls immediately produced `ETIME` on every window. Under `CONFIG_RADIANT_BACKEND_CC26XX_COEX`, `min_arm_lead_us` grows to ~1414 µs (a phy-switch lead) — see "TI coexistence" below | measured, antenna-referenced |
+| `phys[]`, `n_phys`, `phy_switch_us` | PHYs this build supports, most-preferred first, and what switching between two of them costs the scheduler | one PHY (1 M) by default, and `phy_switch_us` is then 0 — there is nothing to switch to. `CONFIG_RADIANT_PHY_LR_CODED=y` adds the coded PHY and sets the switch cost to 20 µs, bounded not measured; the switch itself is a handful of register writes `apply_format()` already performs, so it is nearly free either way | one PHY; a switch would be a fresh `RF_open` | reloads a generated configuration |
+| `ramp_up_us`, `rx_to_tx_us`, `tx_to_rx_us`, `min_arm_lead_us` | The four timing budgets: transmitter ramp-up, both turnarounds, and the minimum lead an arm call needs before it fails `RADIANT_RADIO_ETIME` rather than running late. **`min_arm_lead_us` is not slack — it is the scheduler's exclusion radius**; read "the merge reach" below before changing it | measured, antenna-referenced. `min_arm_lead_us` = **168 µs** on nRF54L15 (80 setup + 40 ramp + 48 air) and **328 µs** on nRF52840 (240 + 40 + 48). With `CONFIG_RADIANT_PHY_LR_CODED=y` both grow by 288 µs — the coded PHY's 336 µs preamble+access address against 1 M's 48 µs — to 456 / 616 µs, on **every** window of **every** PHY. That symbol is `default n`; it used to be no symbol at all, and the 456 / 616 figures were what every nRF build advertised. See [ADR 0007's amendment](decisions/0007-long-range-phy.md) | **seeded, not measured** — a P4 bench item; `min_arm_lead_us` is 600 with a separate 150 µs hard floor, split after a scheduler that subtracts the advertised figure and calls immediately produced `ETIME` on every window. Under `CONFIG_RADIANT_BACKEND_CC26XX_COEX`, `min_arm_lead_us` grows to ~1414 µs (a phy-switch lead) — see "TI coexistence" below | measured, antenna-referenced |
 | `min_arm_lead_in_grant_us`, `max_window_us` | The arbitrated pair: lead once a grant is already held, and a fairness bound on window length | 0 / measured under the MPSL gate | **0 / 0 outside coex** ("this backend OWNS the radio" — the two lead figures coincide, nothing bounds a window). Under coex: **600 / ~20 ms** — see "TI coexistence" below | — |
 | `time_resolution_ns` | How much of the last digit of a timestamp to believe | 1000 | **250** — the RAT is 4 MHz, measured at 4 000 244 ticks/s | 1000 |
 | `has_sync_timestamp` | Is `t_sync` a hardware capture of the address event, or an inference? | true | true — `bAppendTimestamp`, and it is good: consecutive captures came out as exact multiples of the transmitter's period with 1–18 µs of residual | — |
@@ -729,6 +733,49 @@ more capable than the hardware certifies the bug it was written to catch.**
 ADR 0005's "32 sensors do not cost 32 windows" survives, with a corrected
 number: sixteen windows rather than four. Merging still halves the cost; it does
 not divide it by eight.
+
+#### The merge reach, and why it is `min_arm_lead_us`
+
+`radiant_sched.c`'s `arm_rx_window()` has five membership rules; rule 3 is the
+one that reads a capability out of this table rather than a constant.
+
+**Rule 3: every member must lie within the LEADER'S OWN window extended by the
+merge reach, and the reach is `arm_lead()`** — not within the union accumulated
+so far, which would let a chain of barely-touching windows walk the merged span
+arbitrarily far. `could_join_armed()` mirrors the identical test, and the two
+must agree exactly or a joinable channel either never triggers the rebuild that
+would take it, or asks for one on every pass.
+
+The reach is the arm lead because **`min_arm_lead_us` is an exclusion radius**.
+`pass_step()` declares a receive window `DONE_MISSED` as soon as
+`t_end < now + arm_lead`, so two windows closer together than the lead can never
+be armed in sequence — merging is the only way to hear both, which is exactly
+when the rule must say yes.
+
+**It used to require literal overlap**, which reached only twice the tracked
+guard (`radiant_channel_guard_us()`, 100 µs once locked) — about 200 µs.
+Everything between that and the advertised lead was a **bad band**: two tracked
+channels landing there could neither merge nor be armed in sequence, so the
+later one was dropped deterministically every period until the two masters'
+crystals drifted apart. It is invisible at one channel, which is why every loss
+figure on this page and in `testing.md` missed it. Cost: about 0.96 % of slots
+per channel at eight tracked sensors, against the corroborating three-channel
+record of 0.43 / 1.24 / 0.41 % versus 0.139 % for one.
+
+What it costs now: the merged window spans the dead gap between the pair rather
+than only their overlap, so up to `arm_lead` of extra receive per merged pair
+per period — about 0.07 % duty at 4 Hz, receive current, no airtime. Rule 4
+(`RADIANT_SCHED_MERGE_SPAN_MAX_US`, 2000 µs) is unchanged and still bounds the
+total span; a merged pair at Δ = 168 µs spans 368 µs.
+
+**What it does not fix:** `max_addr_groups == 2` means a window holds two
+tracked device numbers, so this rescues **pairs** — which is precisely the
+pairwise bad band — and a three-way pile-up inside one lead still drops the
+third. See [ADR 0016](decisions/0016-merge-reach-is-the-arm-lead.md).
+
+`radiant/tests/fake_radio.c`'s `min_arm_lead_us` is mutable for exactly this
+reason: a preset with an unrealistic lead certifies the wrong geometry, which is
+the trap `max_addr_groups` fell into above.
 
 ### TI coexistence
 

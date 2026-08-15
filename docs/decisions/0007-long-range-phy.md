@@ -1,7 +1,12 @@
 # 0007 — The long-range coded PHY, and the length extension it unlocks
 
-- **Status:** accepted
+- **Status:** accepted. **Amended 2026-08-15 by
+  [ADR 0016](0016-merge-reach-is-the-arm-lead.md) — the PHY's arm-lead cost was
+  assessed wrong, and the PHY is now behind `CONFIG_RADIANT_PHY_LR_CODED`,
+  default `n`.** The decision this ADR records stands in full; see *Amendment*
+  immediately below.
 - **Date:** 2026-08-11
+- **Amended:** 2026-08-15
 - **Amends:** [0005](0005-extension-inside-ant-plus.md) axis 4 (renames it, and makes it a decision rather than a reservation); partially unblocks [0005](0005-extension-inside-ant-plus.md) axis 3 **for this PHY only**
 - **Depends on:** [0002](0002-clean-room-policy.md) (read scope), [0005](0005-extension-inside-ant-plus.md) (the extension axes and the merged RX window)
 - **Related:** [0008](0008-antplus-additive-pages-and-compat-security.md) and [0009](0009-hostless-node-identity.md) — the compatibility plan whose private-mode switch produces the population eligible for everything here
@@ -15,6 +20,73 @@
 > Apache-2.0, already a dependency). Nothing here derives from sdk-ant, from
 > `libant.a`, from disassembly of any binary, or from any non-redistributable ANT+
 > device profile document. See [0002](0002-clean-room-policy.md).
+
+---
+
+## Amendment, 2026-08-15 — the lead this ADR accepted was measured wrong, and the PHY is now Kconfig-gated
+
+**Status of the amendment:** Accepted. **What changed:** the coded PHY is
+compiled in only when `CONFIG_RADIANT_PHY_LR_CODED=y`, which is `default n`, so
+an ANT+-only image no longer carries its arm lead. **What did not change:**
+every decision in this record — S=8 only, the LR frame configuration, the length
+extension scoped to the PHY that hides it, the permanent exclusion of ANT+
+compatibility channels, discovery staying on 1 M / RF 57.
+
+**What was wrong.** *Consequences → Paid* below accepted `min_arm_lead_us`
+growing "by ~328 µs on a build with the coded PHY, charged to 1 M windows that
+do not need it", on the reasoning that this is scheduling slack — it moves
+*when* an arm happens, not when a window opens or how long it stays open, and
+against a 249.7 ms period it is 0.13 %. The arithmetic is right. **The
+conclusion is wrong, because `min_arm_lead_us` is not slack: it is the
+scheduler's exclusion radius.**
+
+`radiant_sched.c`'s `pass_step()` declares a receive window `DONE_MISSED` as
+soon as `t_end < now + arm_lead`, so no second window can be armed within
+`arm_lead` of one already committed. That is a **multi-channel** quantity: it
+sets how far apart two tracked channels must be before the scheduler stops
+being able to serve both. A build advertising 456 µs (nRF54L15) or 616 µs
+(nRF52840) instead of the 168 / 328 µs a 1 M-only image actually needs was
+widening that radius for a PHY it never emits, and — with the merge rule as it
+then stood, reaching only ~200 µs — the widened band was one in which a pair of
+tracked channels could **neither merge nor be armed in sequence**. The later one
+was dropped every period until the two crystals drifted apart.
+
+**Why it survived review here.** Every loss figure this project had recorded was
+single-channel — 0.139 % / 0.150 % on nRF, 0.257 % for sdk-ant, all three P4
+coexistence arms — and this defect is exactly invisible at one channel. The
+0.13 %-of-a-period arithmetic in *Paid* is the arithmetic of a single window,
+and it was the only arithmetic anyone did. The unconnected corroboration was
+already in the repo and unread: three tracked channels measuring
+0.43 / 1.24 / 0.41 % against 0.139 % for one.
+
+**What the gate is.** `radiant/Kconfig` gains `RADIANT_PHY_LR_CODED` (`bool`,
+`default n`, `depends on RADIANT_BACKEND_NRF`), and
+`radiant/src/radiant_radio_nrf.c` derives
+
+```c
+#if defined(RADIO_MODE_MODE_Ble_LR125Kbit) && defined(CONFIG_RADIANT_PHY_LR_CODED)
+#define RADIANT_NRF_HAS_LR 1
+```
+
+keying the `phys[]` entry, `AIR_LEAD_WORST_US`, `PHY_SWITCH_US` and
+`apply_format()`'s refusal and mode set on it. **The hardware macro is
+deliberately the inner test**, so this ADR's own reasoning — that a future part
+without the coded PHY falls back with no edit needed — survives unchanged; the
+Kconfig only adds *"and this image asked for it"*.
+
+Advertised `min_arm_lead_us` with the symbol off, which is the default and the
+ANT+ case: **168 µs on nRF54L15** (80 setup + 40 ramp + 48 air) and **328 µs on
+nRF52840** (240 + 40 + 48), against 456 / 616 before.
+
+**Nothing about the coded PHY itself is withdrawn or doubted**, and the deferred
+gates in *Verification status* below are owed on exactly the same terms — an
+image that wants S=8 sets one symbol and gets it, lead included. What is
+withdrawn is the claim that carrying it was free for images that do not.
+
+The lead was only half of the pair; the merge rule that was supposed to rescue
+the affected pairs was the other half, and
+[ADR 0016](0016-merge-reach-is-the-arm-lead.md) records that change and the
+residual neither change closes.
 
 ---
 
@@ -533,10 +605,19 @@ make the scheduler's PHY budgeting dead code on the only backend that ships.
 
 - A second frame format, a second PHY configuration, and a scheduler that has to
   reason about which PHY the radio is currently on.
-- `min_arm_lead_us` grows by ~328 µs on a build with the coded PHY, charged to
+- ~~`min_arm_lead_us` grows by ~328 µs on a build with the coded PHY, charged to
   1 M windows that do not need it. This is scheduling slack — it moves *when* an
   arm happens, not when a window opens or how long it stays open — and against a
-  249.7 ms period it is 0.13 %.
+  249.7 ms period it is 0.13 %.~~
+
+  **Corrected 2026-08-15 — this is not slack, and the cost is no longer charged
+  to builds that do not ask for it.** `min_arm_lead_us` is the scheduler's
+  exclusion radius, so the 288 µs is a multi-channel cost that the 0.13 %-of-a-
+  period arithmetic above cannot see. The growth is real and is still paid by a
+  build that turns the PHY on; it is now behind `CONFIG_RADIANT_PHY_LR_CODED`
+  (`default n`) rather than compiled into every nRF image. See *Amendment,
+  2026-08-15* at the top of this record and
+  [ADR 0016](0016-merge-reach-is-the-arm-lead.md).
 - `RADIANT_RADIO_BODY_MAX` grows from 32 to 40: 8 bytes in each of a backend's
   two DMA buffers.
 - An LR channel can never join the merged 1 M window. This is the accepted price

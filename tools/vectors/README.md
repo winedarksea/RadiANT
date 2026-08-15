@@ -103,6 +103,7 @@ Nothing here should ever be cited as an observation.
 |---|---|---|
 | `handmade-session.antser` | `-` | A plausible session opening: reset, capabilities, network key, assign, lib config, open, one broadcast — plus the three shapes of deliberate defect described below |
 | `handmade-timed.antser` | real | The same opening with a real timestamp column, so the harness exercises both forms. It is `archive/captures/serial/README.md`'s own worked example with its two checksum typos corrected |
+| `handmade-multichannel.antcap` | simulated | Two power meters at once, cut to different packet losses, for `tools/test_ant_verify.py`'s per-channel accounting. See the section below — it is neither hand-assembled nor off a wire |
 
 ## The `.antcap` files are a third kind, and the paragraph above does not apply
 
@@ -118,6 +119,34 @@ and committed here. `tools/test_compat_capture.py` then decodes each message wit
 identical** — so the file is the channel through which a C implementation and a
 Python implementation, written in different phases from the same layout tables,
 check each other.
+
+## `handmade-multichannel.antcap` is a fourth kind: simulator output, then cut
+
+Neither hand-assembled nor frozen C. It is `tools/ant_sim.py`'s dry run — no
+radio, no room — with some page 0x10 packets **deleted**, and the deletions are
+the fixture: the exact-loss figure counts what is missing from the
+transmitter's own event counter, so a deleted packet leaves a hole the counter
+still numbers.
+
+Two power meters in one file, cut to different losses (1 hole for `#4660`, 6
+for `#4661`), because the property `tools/test_ant_verify.py` exists to check
+is that the two are **counted apart**. A tool that pooled them would report one
+figure roughly halfway between and look entirely reasonable doing it, which is
+exactly how a multi-channel scheduling fault stays invisible. Only data pages
+were deleted, never a common page — a common page is what the analyser votes on
+to decide whether the counter steps per message or per page, and deleting those
+would make the vector test the vote instead of the accounting.
+
+The full recipe (seeds, periods, which records were dropped) is in the comment
+block at the top of the file, so it can be rebuilt rather than patched. The
+losses it produces are asserted by name in the test, so a rebuild that changes
+them turns the suite red instead of being absorbed.
+
+It carries no channel numbers, and that is not an omission: **a capture records
+the sensor, not the receiver**. `ant_verify.py --replay` labels the streams with
+channels only when the operator pairs them on the command line
+(`--channel 0 --device-number 4660 --channel 1 --device-number 4661`), and
+reports a null channel when nobody did.
 
 | File | Timestamp column | What it covers |
 |---|---|---|

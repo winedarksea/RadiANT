@@ -529,6 +529,41 @@ config RADIANT_BACKEND_MPSL
 # protocol, not core module material. See that file's header for the full
 # reasoning.
 
+config RADIANT_PHY_LR_CODED
+	bool "advertise the coded (LE Coded S=8) PHY"
+	depends on RADIANT_BACKEND_NRF
+	default n
+	help
+	  Add RADIANT_PHY_LR_CODED to the PHYs src/radiant_radio_nrf.c
+	  advertises, and compile the register programming for it. ADR 0007 is
+	  the decision this gates; nothing in the ANT+ path uses it, because
+	  every ANT+ compatibility channel is 1 M on RF 57.
+
+	  WHAT IT COSTS, AND IT IS NOT WHAT THE FILE USED TO SAY. The advertised
+	  min_arm_lead_us must cover the WORST PHY the build can be asked for,
+	  because the lead is owed on every coded operation and not just the
+	  first after a switch. So turning this on raises min_arm_lead_us by
+	  288 us - LR's 336 us preamble+access address against 1 M's 48 us - on
+	  EVERY window of EVERY PHY, including a 1 M-only image that never emits
+	  a coded frame.
+
+	  That 288 us was written off as "pure scheduling slack, costing no
+	  airtime or current". That is true at one channel and false at several.
+	  min_arm_lead_us is the scheduler's EXCLUSION RADIUS: a receive window
+	  is reported DONE_MISSED once t_end < now + arm_lead, and arm_rx_window()
+	  can only merge two windows that lie within the leader's own window
+	  extended by that same lead. Two tracked channels closer together than
+	  the lead but further apart than the merge reach can neither be armed
+	  in sequence nor merged, so the later one is dropped deterministically,
+	  every period, until the two crystals drift apart.
+
+	  With this off the lead is 168 us (nRF54L15) / 328 us (nRF52840); with
+	  it on, 456 / 616. At eight tracked sensors the wider radius costs
+	  roughly 1% of slots per channel against roughly 0.16%.
+
+	  Default n. Turn it on only for a build that actually puts coded frames
+	  on the air, and expect to pay for it at several channels.
+
 config RADIANT_CRC_REPAIR
 	bool "repair single-bit CRC errors on tracked windows"
 	default n

@@ -14,8 +14,7 @@ ANT+ compatible USB stick. Copy one file onto the board and Zwift, TrainerRoad,
 Garmin Express, openant — anything that looks for an ANT stick — will find it.
 No soldering, no wiring.
 
-The firmware enumerates as `VID 0x0FCF / PID 0x1009`, the numeric identity of a
-Dynastream ANT USB-m, and speaks the ANT serial protocol over a bulk
+The firmware enumerates as `VID 0x0FCF / PID 0x1009` and speaks the ANT serial protocol over a bulk
 vendor interface. Eight channels, acknowledged data and burst all work, so a
 fitness app can run heart rate, power, cadence and trainer control at once.
 

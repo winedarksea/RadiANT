@@ -1371,6 +1371,240 @@ ZTEST(api, test_a_tracked_channel_reposts_its_next_window_without_a_pump)
 	end_of_test();
 }
 
+/* ---------------------------------------------------------------------------
+ * A window that never armed
+ * ---------------------------------------------------------------------------
+ */
+
+/* The setup every test below shares: a wildcard slave that finds one sensor and
+ * settles into TRACKING. Written out once here rather than folded into
+ * open_channel(), which configures a known device ID and never searches. */
+static void open_and_acquire_slave(uint16_t *out_dev)
+{
+	const struct fake_radio_arm *w;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_lib_config_set((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(CH,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(CH));
+
+	w = armed_search_window();
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, out_dev);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "setup: the channel did not acquire");
+}
+
+/* The acquired sensor transmitting in the middle of a window it is tracked in. */
+static void air_tracked_frame(const struct fake_radio_arm *w, uint16_t number)
+{
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t len = fake_radio_build_ant_frame(frame, number, 0x0Bu, 5u,
+						 peer_payload);
+
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(w->t_open +
+					   ((w->t_close - w->t_open) / 2u),
+					   frame, len),
+		      "could not put the tracked sensor on the air");
+}
+
+/*
+ * Kill the window the channel currently has pending and return with its
+ * DONE_MISSED already delivered. Every arm is refused while the window is
+ * posted, so it is never offered to the air at all - which is the shape that
+ * matters here, a window reported MISSED having never been armed. On hardware
+ * the same shape comes from arm_next() having committed the radio up to a
+ * quarter of a second out (want_preempt()'s unopened-bounded-RX branch, covered
+ * by radiant/tests/src/test_sched.c); a refused arm reaches the same terminal
+ * without needing a second channel to produce the contention.
+ *
+ * Nothing is armed while the clock is moved, so no callback fires and the pass
+ * that reports the miss is the explicit tick below - not a housekeeping pump,
+ * which is the entire point of the assertions in the callers.
+ */
+static void api_kill_the_pending_window(void)
+{
+	zassert_true(radiant_sched_pending(CH),
+		     "no window was pending to kill - the channel had already "
+		     "stopped asking for them, which is the very defect this "
+		     "helper is used to test");
+	zassert_true(fake_radio_is_idle(), "the window was armed after all: %s",
+		     fake_radio_busy_reason());
+
+	/* Past the pending window's close but short of the one after it, so
+	 * exactly one slot dies. */
+	fake_radio_advance((uint64_t)PERIOD_US + 20000u);
+
+	/* Arms work again from here, so what the callers assert is the POST and
+	 * not a second refusal leaving the old request in place. */
+	fake_radio_force_arm_repeat(RADIANT_RADIO_OK_RC, 0u);
+	zassert_equal(RADIANT_RADIO_OK_RC, radiant_sched_tick());
+}
+
+/*
+ * A TRACKED WINDOW THAT NEVER ARMED OWES ITS SUCCESSOR IMMEDIATELY.
+ *
+ * api_sched_armed() sets track_repost, so a window that ran and heard nothing
+ * re-posts from its own terminal. A window reported MISSED never reached
+ * api_sched_armed(), so before this fix the terminal advanced the slot clock
+ * and posted nothing: the channel then waited up to RADIANT_API_HOUSEKEEP_MS
+ * (50 ms) for the pump, by which time arm_next() has committed the radio to
+ * something far away and the window that clock advance just computed is missed
+ * in its turn. Eight of those in a row is RX_FAIL_GO_TO_SEARCH - a ~2 s dropout
+ * produced entirely by scheduling, with nothing wrong on the air.
+ *
+ * The discriminating assertion is `pending` with NO SLEEP AT ALL. Contrast
+ * test_a_wedged_reply_is_recovered_by_housekeeping above, which sleeps
+ * 3 x RADIANT_API_HOUSEKEEP_MS on purpose because the pump is its subject:
+ * here a sleep would hide the defect completely, since the pump does recover
+ * eventually and this is a test about when. The pump counter is asserted
+ * unchanged so that "no sleep" is a fact about what ran rather than about how
+ * this test happens to be written.
+ */
+ZTEST(api, test_a_missed_tracked_window_reposts_with_no_pump_at_all)
+{
+	const struct fake_radio_arm *tw;
+	uint16_t                     dev_a;
+	uint32_t                     pumps_before;
+	uint32_t                     missed_before;
+
+	open_and_acquire_slave(&dev_a);
+
+	/* The FIRST tracked window legitimately comes from the pump - nothing
+	 * has completed yet. Its successor is the subject. */
+	run_housekeeping();
+	tw = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(tw, "setup: no tracked window was armed after acquiring");
+	zassert_false(tw->terminated, "setup: the tracked window had already ended");
+
+	/* Run it out with every subsequent arm refused, so the window its
+	 * completion re-posts stays in the scheduler's slot and never gets
+	 * armed. RADIANT_RADIO_EBUSY leaves a request pending, which is what
+	 * makes it the right refusal to use: the slot is occupied by a window
+	 * that will die where it stands. */
+	fake_radio_force_arm_repeat(RADIANT_RADIO_EBUSY, 64u);
+	fake_radio_advance_to(tw->t_close + 1u);
+	drain();
+
+	pumps_before = radiant_api_stats_get()->pumps;
+	missed_before = radiant_api_stats_get()->sched_missed;
+
+	api_kill_the_pending_window();
+
+	zassert_equal(missed_before + 1u, radiant_api_stats_get()->sched_missed,
+		      "the window did not die as a scheduling miss, so this "
+		      "test exercised nothing");
+	zassert_true(radiant_sched_pending(CH),
+		     "a tracked window was reported MISSED and the channel "
+		     "posted nothing to replace it. It is now waiting for the "
+		     "50 ms housekeeping pump, by which time the radio is "
+		     "committed elsewhere and the next window is missed too");
+	zassert_equal(pumps_before, radiant_api_stats_get()->pumps,
+		      "a housekeeping pump ran during the test, so the re-post "
+		      "asserted above may have come from the pump rather than "
+		      "from the terminal");
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "one missed window dropped the channel out of tracking");
+
+	end_of_test();
+}
+
+/*
+ * AND THE DROPOUT IT CAUSED IS GONE. RADIANT_CHANNEL_RX_FAIL_TO_SEARCH is
+ * eight CONSECUTIVE misses, so the ~2 s dropout was never one bad window - it
+ * was a window dying, its successor being posted too late to be armed, and that
+ * repeating. Nine scheduling misses are forced here, each with the sensor
+ * audibly present in the window either side of it, and the channel must stay
+ * tracking throughout: with the successor posted from the terminal it is armed
+ * in time, hears the sensor, and the miss run resets at one every time.
+ *
+ * Nine, not eight, so the run is past the threshold rather than at it.
+ *
+ * What this does NOT prove, said plainly: the mock's arms are refused
+ * synchronously, so the contention that produced the original run is modelled
+ * by the refusal rather than reproduced. The scheduler-side half - a bounded
+ * receive re-posted behind a radio already committed - is pinned in
+ * radiant/tests/src/test_sched.c
+ * (test_an_unopened_window_gives_way_to_a_receive_that_starts_earlier).
+ */
+ZTEST(api, test_nine_scheduling_misses_never_reach_rx_fail_go_to_search)
+{
+	uint16_t dev_a;
+	uint32_t pumps_before;
+	uint32_t missed_before;
+	uint32_t i;
+
+	open_and_acquire_slave(&dev_a);
+	run_housekeeping();
+
+	pumps_before = radiant_api_stats_get()->pumps;
+	missed_before = radiant_api_stats_get()->sched_missed;
+
+	for (i = 0u; i < 9u; i++) {
+		const struct fake_radio_arm *tw = last_arm_of(FAKE_RADIO_ARM_RX);
+
+		zassert_not_null(tw, "round %u: no tracked window was armed", i);
+		zassert_false(tw->terminated,
+			      "round %u: the tracked window had already ended", i);
+
+		/* The sensor is there, in this window. A miss run only resets on
+		 * a slot that was actually heard, so this is what separates
+		 * "scheduling dropped a window" from "the sensor went away". */
+		air_tracked_frame(tw, dev_a);
+
+		/* The successor this window's completion posts is refused once,
+		 * so it is the one that dies unarmed. */
+		fake_radio_force_next_arm(RADIANT_RADIO_EBUSY);
+		fake_radio_advance_to(tw->t_close + 1u);
+		drain();
+
+		api_kill_the_pending_window();
+		drain();
+
+		zassert_true(radiant_sched_pending(CH),
+			     "round %u: the channel stopped asking for windows "
+			     "after a miss", i);
+		zassert_equal(RADIANT_CH_STATE_TRACKING,
+			      radiant_channel_state_get(CH),
+			      "round %u: the channel left TRACKING", i);
+	}
+
+	zassert_true(radiant_api_stats_get()->sched_missed >= missed_before + 9u,
+		     "only %u scheduling misses were forced; the run never "
+		     "reached RX_FAIL_TO_SEARCH's threshold and this test "
+		     "proved nothing",
+		     radiant_api_stats_get()->sched_missed - missed_before);
+	zassert_equal(pumps_before, radiant_api_stats_get()->pumps,
+		      "a housekeeping pump ran, so recovery cannot be "
+		      "attributed to the terminal's re-post");
+	zassert_equal(0u,
+		      count_channel_events(CH,
+					   (uint8_t)ANTW_EVENT_RX_FAIL_GO_TO_SEARCH),
+		      "nine scheduling misses dropped a live channel back to "
+		      "searching - the ~2 s dropout is back");
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH));
+	zassert_true(count_bcast_from(dev_a) >= 8u,
+		     "only %u frames from the sensor reached the host across "
+		     "nine rounds; the windows either side of each miss were "
+		     "not being served, so the miss run was never really reset",
+		     count_bcast_from(dev_a));
+
+	end_of_test();
+}
+
 /*
  * MASTER_TX_ONLY does not listen, and that is the one master shape ANT
  * documents as not doing so. Bit 4 of the channel type is the master bit and

@@ -889,6 +889,406 @@ ZTEST(radiant_sched, test_a_late_channel_joins_a_window_that_has_not_opened_yet)
 }
 
 /* ---------------------------------------------------------------------------
+ * The merge reach - the arm-lead exclusion radius
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * A LOCKED TRACKED WINDOW, which is a different shape from TEST_WINDOW_US and
+ * the difference is the whole subject of this section. Once a channel is
+ * tracking, radiant_channel_guard_us() is 100 us and its window is the
+ * predicted slot instant plus or minus that - 200 us wide. Two such windows
+ * therefore OVERLAP only while their centres are less than 2 x guard apart,
+ * and "overlap" is exactly what the merge rule used to require.
+ */
+#define TEST_TRACK_GUARD_US 100u
+
+/*
+ * THE ARMING LEAD THE BAND IS MEASURED AT, and it has to be set rather than
+ * taken from the preset. fake_radio's nRF preset carries min_arm_lead_us = 200,
+ * which is exactly 2 x the tracked guard, so on the preset alone the bad band
+ * is empty and none of the three tests below could tell the old rule from the
+ * new one. 328 is not a round number either: it is radiant_radio_nrf.c's
+ * ARM_LEAD_US on nRF52840 with the coded PHY off (ARM_SETUP 240 + ramp 40 +
+ * preamble/address 48), the largest lead any part this backend builds for
+ * advertises and therefore the widest exclusion radius the scheduler has to
+ * cope with. nRF54L15's 168 is NARROWER than 2 x guard, so the band is empty
+ * there and the pair merges by plain overlap - which is worth knowing but is
+ * not a test.
+ *
+ * Not restored afterwards: sched_before() calls fake_radio_reset(), which puts
+ * the whole caps table back to the preset for the next test.
+ */
+#define TEST_NRF52840_ARM_LEAD_US 328u
+
+static void post_tracked_slot(uint8_t ch, radiant_time_t centre)
+{
+	post_track(ch, centre - (radiant_time_t)TEST_TRACK_GUARD_US,
+		   centre + (radiant_time_t)TEST_TRACK_GUARD_US);
+}
+
+/*
+ * TWO TRACKED SLOTS 300 US APART SHARE ONE WINDOW.
+ *
+ * 300 us sits in the middle of the band that used to be unservable. It is more
+ * than 2 x the 100 us tracked guard, so the two windows do not overlap and the
+ * old rule 3 - "every member must overlap the LEADER'S OWN window" - refused to
+ * merge them; and it is less than caps.min_arm_lead_us, so the second window
+ * could not be armed in sequence after the first either, because by the time
+ * the first window's terminal event arrives the second is already inside the
+ * backend's arming lead. The later channel was reported DONE_MISSED,
+ * deterministically, every period, until the two masters' crystals drifted them
+ * apart: roughly 1% of slots per channel at eight sensors and exactly zero at
+ * one, which is why every loss figure this project has recorded missed it.
+ *
+ * The discriminating assertion is ONE arm carrying TWO filters. Merging is the
+ * only way to hear both inside the exclusion radius, so a scheduler that has
+ * not had the reach added cannot produce that count by any other route.
+ */
+ZTEST(radiant_sched, test_two_tracked_slots_inside_the_arming_lead_share_one_window)
+{
+	const struct fake_radio_arm *a;
+	radiant_time_t               t0;
+	radiant_time_t               c0;
+	radiant_time_t               c1;
+	uint16_t                     lead;
+
+	bring_up();
+	fake_radio_caps_mut()->min_arm_lead_us = TEST_NRF52840_ARM_LEAD_US;
+	lead = radiant_radio_caps_get()->min_arm_lead_us;
+	zassert_true(lead > 2u * TEST_TRACK_GUARD_US,
+		     "this test needs an arming lead wider than two tracked "
+		     "guards, or there is no bad band to close: lead %u", lead);
+	zassert_true(300u > 2u * TEST_TRACK_GUARD_US && 300u < lead,
+		     "300 us is no longer inside the bad band on this preset "
+		     "(guard %u, lead %u) - pick a delta that is",
+		     (unsigned int)TEST_TRACK_GUARD_US, lead);
+
+	t0 = radiant_radio_now();
+	c0 = t0 + 100000u;
+	c1 = c0 + 300u;
+
+	post_tracked_slot(0u, c0);
+	post_tracked_slot(1u, c1);
+	zassert_ok(radiant_sched_tick());
+
+	zassert_equal(1u, fake_radio_arm_count(),
+		      "two tracked slots 300 us apart cost %u windows",
+		      fake_radio_arm_count());
+	a = fake_radio_arm(0u);
+	zassert_not_null(a);
+	zassert_equal(RADIANT_RADIO_OK_RC, a->rc);
+	zassert_equal(2u, a->n_filters,
+		      "the window carried %u filters: the second slot was left "
+		      "outside the merge reach", a->n_filters);
+	/* The union covers the dead gap between them, which is what the reach
+	 * costs: up to arm_lead of extra receive per merged pair per period. */
+	zassert_equal(c0 - (radiant_time_t)TEST_TRACK_GUARD_US, a->t_open);
+	zassert_equal(c1 + (radiant_time_t)TEST_TRACK_GUARD_US, a->t_close);
+
+	/* The later master transmits at its own slot instant, in the part of
+	 * the window that only exists because of the merge. */
+	air_frame_for(1u, c1);
+	fake_radio_advance_to(a->t_close + 1u);
+
+	zassert_equal(1u, log.n_rx);
+	zassert_equal(1u, log.rx[0].ch,
+		      "the frame in the merged gap went to the wrong channel");
+	zassert_equal(1u, log.ok_count[0]);
+	zassert_equal(1u, log.ok_count[1]);
+	zassert_equal(0u, radiant_sched_stats_get()->missed,
+		      "a tracked slot inside the arming lead was still dropped");
+	zassert_equal(1u, radiant_sched_stats_get()->windows_merged);
+
+	assert_every_window_bounded();
+	finish();
+}
+
+/*
+ * THE BAD-BAND SWEEP - the test that would have caught the original defect.
+ *
+ * Step the separation between two tracked slots across the whole band and
+ * assert nothing is ever dropped. A single-point test at one delta is what was
+ * missing: the pair-merge tests above this section all sit at delta < 2 x
+ * guard, where the windows genuinely overlap, so they passed throughout.
+ *
+ * THE GEOMETRY, stated so the boundary is a derivation and not a magic number.
+ * Write G for the tracked guard (100 us) and L for caps.min_arm_lead_us. The
+ * leader's window is [c, c+2G] and the member's is [c+d, c+d+2G].
+ *
+ *   d <= 2G          the windows overlap; merged under the old rule too.
+ *   2G < d <= 2G+L   no overlap, but the member lies within the leader's own
+ *                    window extended by the merge reach L, so rule 3 takes it.
+ *                    This is the band that used to be dead - under the old rule
+ *                    it could neither merge (no overlap) nor be armed in
+ *                    sequence, because the second window opens less than L
+ *                    after the first one's terminal event.
+ *   d > 2G+L         too far to merge, and it no longer has to be: the gap
+ *                    between the leader's close and the member's open is
+ *                    d - 2G > L, which is exactly enough to arm a second
+ *                    window in sequence.
+ *
+ * The two conditions meet at d = 2G+L with no gap between them, which is the
+ * property that makes "missed == 0 at every delta" true rather than merely
+ * true-at-the-sampled-points. The step is 25 us: fine enough to land on both
+ * sides of every boundary above and to put several samples inside the dead
+ * band, without turning a boundary test into a loop nobody reads the output
+ * of. At the lead this test sets (TEST_NRF52840_ARM_LEAD_US = 328) the
+ * boundaries are 2G = 200 and 2G+L = 528, so the formerly dead band is
+ * 200-528 us and the sweep's 0-600 us range covers both sides of both.
+ *
+ * merge_max is computed from the LIVE caps inside the loop rather than from
+ * those numbers, so the assertions follow the lead if the preset or the
+ * constant ever moves; the figures above are the worked example, not the test.
+ */
+ZTEST(radiant_sched, test_no_separation_between_two_tracked_slots_drops_a_slot)
+{
+	uint16_t lead;
+	uint32_t delta;
+
+	bring_up();
+	fake_radio_caps_mut()->min_arm_lead_us = TEST_NRF52840_ARM_LEAD_US;
+	lead = radiant_radio_caps_get()->min_arm_lead_us;
+
+	for (delta = 0u; delta <= 600u; delta += 25u) {
+		const uint32_t merge_max = (2u * TEST_TRACK_GUARD_US) + lead;
+		radiant_time_t base = radiant_radio_now() + 100000u;
+		uint32_t       arms_before = fake_radio_arm_count();
+		uint32_t       missed_before = radiant_sched_stats_get()->missed;
+		uint32_t       ok0 = log.ok_count[0];
+		uint32_t       ok1 = log.ok_count[1];
+		uint32_t       arms;
+
+		post_tracked_slot(0u, base);
+		post_tracked_slot(1u, base + (radiant_time_t)delta);
+		zassert_ok(radiant_sched_tick());
+
+		fake_radio_advance_to(base + (radiant_time_t)delta +
+				      (radiant_time_t)TEST_TRACK_GUARD_US + 1u);
+
+		zassert_equal(missed_before, radiant_sched_stats_get()->missed,
+			      "delta %u us: a tracked slot was dropped. Inside "
+			      "%u us the pair must merge, beyond it there is "
+			      "room to arm a second window in sequence, so no "
+			      "separation may cost a slot",
+			      delta, merge_max);
+		zassert_equal(ok0 + 1u, log.ok_count[0], "delta %u us: channel 0",
+			      delta);
+		zassert_equal(ok1 + 1u, log.ok_count[1], "delta %u us: channel 1",
+			      delta);
+
+		arms = fake_radio_arm_count() - arms_before;
+		if (delta <= merge_max) {
+			zassert_equal(1u, arms,
+				      "delta %u us: %u windows for a pair the "
+				      "merge reach covers", delta, arms);
+			zassert_equal(2u,
+				      fake_radio_arm(arms_before)->n_filters,
+				      "delta %u us: the merged window carried "
+				      "%u filters", delta,
+				      fake_radio_arm(arms_before)->n_filters);
+		} else {
+			zassert_equal(2u, arms,
+				      "delta %u us: %u windows for a pair too "
+				      "far apart to merge", delta, arms);
+		}
+	}
+
+	assert_every_window_bounded();
+	finish();
+}
+
+/*
+ * AND THE RESIDUAL, recorded here rather than left to be rediscovered on a
+ * bench: three tracked slots piled inside one arming lead still cost the third
+ * its window. caps.max_addr_groups is 2 on nRF - seven of its eight logical
+ * addresses share one BASE register and the tracking format's device number
+ * lives inside that BASE - so a tracking window expresses at most two distinct
+ * device numbers however wide the merge reach is.
+ *
+ * The reach fixes PAIRS, which is precisely the pairwise bad band the sweep
+ * above walks. It does not make three-into-one fit, and the plan that
+ * introduced it does not claim elimination. The third channel is told
+ * DONE_MISSED, which is the honest answer for a capacity limit, and this test
+ * exists so that changing it is a deliberate act.
+ */
+ZTEST(radiant_sched, test_three_tracked_slots_inside_one_lead_still_drop_the_third)
+{
+	radiant_time_t t0;
+	radiant_time_t base;
+	uint16_t       lead;
+
+	bring_up();
+	zassert_equal(2u, radiant_radio_caps_get()->max_addr_groups,
+		      "the residual asserted below is a consequence of "
+		      "max_addr_groups == 2; the preset no longer models it");
+	fake_radio_caps_mut()->min_arm_lead_us = TEST_NRF52840_ARM_LEAD_US;
+	lead = radiant_radio_caps_get()->min_arm_lead_us;
+	zassert_true(300u <= (2u * TEST_TRACK_GUARD_US) + lead,
+		     "all three slots must be inside one merge reach for this "
+		     "to be testing the group cap and not the reach");
+
+	t0 = radiant_radio_now();
+	base = t0 + 100000u;
+	post_tracked_slot(0u, base);
+	post_tracked_slot(1u, base + 150u);
+	post_tracked_slot(2u, base + 300u);
+	zassert_ok(radiant_sched_tick());
+
+	zassert_equal(1u, fake_radio_arm_count());
+	zassert_equal(2u, fake_radio_arm(0u)->n_filters,
+		      "the window carried %u filters; a tracking window on this "
+		      "part expresses two device numbers however close the "
+		      "third slot is", fake_radio_arm(0u)->n_filters);
+
+	fake_radio_advance_to(base + 300u + TEST_TRACK_GUARD_US + 1u);
+
+	zassert_equal(1u, log.ok_count[0]);
+	zassert_equal(1u, log.ok_count[1]);
+	zassert_equal(1u, log.missed_count[2],
+		      "the third slot of a three-way pile-up was neither served "
+		      "nor told - if this now passes with ok_count[2] == 1 the "
+		      "group cap has changed and this test should be deleted, "
+		      "not weakened");
+	zassert_equal(1u, radiant_sched_stats_get()->missed);
+
+	assert_every_window_bounded();
+	finish();
+}
+
+/* ---------------------------------------------------------------------------
+ * Preemption of a window that has not opened
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * A COMMITTED-BUT-UNOPENED RECEIVE GIVES WAY TO ONE THAT REALLY STARTS EARLIER.
+ *
+ * arm_next() commits the radio early and deliberately - there is no timer of
+ * our own, so an idle radio is a radio nothing wakes up to arm. The cost is
+ * that a request arriving afterwards finds the radio spoken for up to a quarter
+ * of a second out, and a tracked window is only 200 us wide. That is how a
+ * window re-posted after a MISSED terminal (see api_sched_done() in
+ * apps/common/ant_radio_radiant.c) was itself reported MISSED, and eight of
+ * those in a row is RX_FAIL_GO_TO_SEARCH: a ~2 s dropout with nothing wrong on
+ * the air.
+ *
+ * The competitor is on RF 26 so that could_join_armed() cannot take it - this
+ * must exercise the "cannot share, so must displace" branch of want_preempt()
+ * and not the merge one, which existed already.
+ *
+ * Nothing had opened, so nobody is told anything: a rebuild before the first
+ * bit of preamble is free, which is why it counts as a replan and not a
+ * preemption.
+ */
+ZTEST(radiant_sched, test_an_unopened_window_gives_way_to_a_receive_that_starts_earlier)
+{
+	struct radiant_sched_rx r;
+	radiant_time_t          t0;
+	radiant_time_t          far_open;
+	radiant_time_t          near_open;
+
+	bring_up();
+	t0 = radiant_radio_now();
+	far_open = t0 + 250000u;   /* what arm_next() commits to, a period out */
+	near_open = far_open - 50000u;
+
+	post_track(0u, far_open, far_open + 60000u);
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(1u, fake_radio_arm_count());
+	zassert_equal(far_open, fake_radio_arm(0u)->t_open);
+
+	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_TRACKING),
+		    &track_filter[1], 1u, near_open, near_open + 55000u);
+	r.rf_index = 26u;
+	zassert_ok(radiant_sched_request_rx(1u, &r));
+	zassert_ok(radiant_sched_tick());
+
+	zassert_equal(2u, fake_radio_arm_count(),
+		      "a receive starting 50 ms earlier waited behind a window "
+		      "that had not opened");
+	zassert_equal(near_open, fake_radio_arm(1u)->t_open);
+	zassert_equal(26u, fake_radio_arm(1u)->rf_index,
+		      "the earlier request was merged rather than armed, so "
+		      "this tested the wrong branch");
+	zassert_equal(1u, radiant_sched_stats_get()->replans);
+	zassert_equal(0u, radiant_sched_stats_get()->preempted,
+		      "tearing down a window before it opened was charged as a "
+		      "preemption");
+	zassert_equal(0u, log.n_done, "a free rebuild was reported as an ending");
+
+	/* And the displaced request is not lost - it is served after, which is
+	 * the whole difference between preempting and dropping. */
+	fake_radio_advance_to(far_open + 60000u + 1u);
+	zassert_equal(1u, log.ok_count[1]);
+	zassert_equal(1u, log.ok_count[0],
+		      "the displaced window was never armed again");
+	zassert_equal(0u, radiant_sched_stats_get()->missed);
+
+	assert_every_window_bounded();
+	finish();
+}
+
+/*
+ * THE OTHER HALF, and the reason the branch is guarded on `s.armed_open >
+ * earliest` rather than on the start times alone: once a window has opened, its
+ * reception is worth more than an earlier start, and tearing it down cannot
+ * give the received preamble back.
+ *
+ * Same geometry as the test above with one difference - the clock is moved
+ * inside the armed window first - so the only thing that can change the outcome
+ * is the openness. The competitor's t_start is behind us and its t_end is not,
+ * which is the one arrangement in which a request genuinely starts earlier than
+ * an OPEN window: anything else is expired by pass_step() before want_preempt()
+ * is ever consulted.
+ *
+ * The cost is stated as an assertion rather than left implicit: the earlier
+ * request loses its window entirely (DONE_MISSED), because by the time the open
+ * window ends there is no longer room to arm it. That is the trade being made,
+ * and it is the right way round.
+ */
+ZTEST(radiant_sched, test_an_open_window_is_not_torn_down_for_a_receive_that_starts_earlier)
+{
+	struct radiant_sched_rx r;
+	radiant_time_t          t0;
+	radiant_time_t          open;
+
+	bring_up();
+	t0 = radiant_radio_now();
+	open = t0 + 100000u;
+
+	post_track(0u, open, open + 60000u);
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(1u, fake_radio_arm_count());
+
+	/* Open and listening. */
+	fake_radio_advance_to(open + 1000u);
+	zassert_equal(1u, fake_radio_arm_count());
+
+	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_TRACKING),
+		    &track_filter[1], 1u, open - 5000u, open + 50000u);
+	r.rf_index = 26u;
+	zassert_ok(radiant_sched_request_rx(1u, &r));
+	zassert_ok(radiant_sched_tick());
+
+	zassert_equal(1u, fake_radio_arm_count(),
+		      "a listening window was torn down for a request that "
+		      "merely started earlier");
+	zassert_equal(0u, radiant_sched_stats_get()->preempted);
+	zassert_equal(0u, log.aborted_count[0],
+		      "the open window's members were told it ended early");
+
+	fake_radio_advance_to(open + 60000u + 1u);
+	zassert_equal(1u, log.ok_count[0], "the open window did not run out");
+	zassert_equal(1u, log.missed_count[1],
+		      "the earlier request was neither served nor told; it loses "
+		      "its window here, and that is the trade");
+
+	assert_every_window_bounded();
+	finish();
+}
+
+/* ---------------------------------------------------------------------------
  * 32 channels
  * ---------------------------------------------------------------------------
  */

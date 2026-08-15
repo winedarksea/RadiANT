@@ -459,6 +459,15 @@ static radiant_time_t t_back(radiant_time_t t, radiant_time_t d)
 	return (t > d) ? (t - d) : 0u;
 }
 
+/* t + d, saturated at RADIANT_TIME_NEVER. The merge-reach tests below widen a
+ * window edge by arm_lead(), and one of those edges is legitimately
+ * RADIANT_TIME_NEVER (a continuous request has no close): plain addition would
+ * wrap UINT64_MAX to a tiny number and turn "no deadline" into "already over". */
+static radiant_time_t t_fwd(radiant_time_t t, radiant_time_t d)
+{
+	return (RADIANT_TIME_NEVER - t < d) ? RADIANT_TIME_NEVER : (t + d);
+}
+
 /* Bound a window by what the backend can arm in ONE operation
  * (caps.max_window_us; 0 = unbounded). Changes the request itself, so the
  * bounds the owner is told about match what was armed. The remainder isn't
@@ -755,9 +764,36 @@ static enum step arm_failed(uint8_t ch, int rc)
  *      request on the air wrong.
  *   2. AT MOST caps.max_filters ADDRESSES (8 on nRF, 2 on RAIL), read here
  *      rather than assumed.
- *   3. EVERY MEMBER MUST OVERLAP THE LEADER'S OWN WINDOW, not merely the
- *      union so far - overlapping the union would let a chain of
- *      barely-touching windows walk the merged span arbitrarily far.
+ *   3. EVERY MEMBER MUST LIE WITHIN THE LEADER'S OWN WINDOW EXTENDED BY THE
+ *      MERGE REACH, not merely within the union so far - reaching from the
+ *      union would let a chain of barely-touching windows walk the merged
+ *      span arbitrarily far.
+ *
+ *      THE REACH IS arm_lead(), AND THAT IS THE WHOLE POINT OF THE RULE.
+ *      Below that distance a second window is not merely inconvenient to arm,
+ *      it is physically impossible: pass_step() reports a window DONE_MISSED
+ *      once t_end < now + arm_lead, so two windows closer together than the
+ *      lead can never be armed in sequence. Merging is then the ONLY way to
+ *      hear both, which is exactly when this rule must say yes.
+ *
+ *      It used to require literal overlap, which reached only 2x the tracked
+ *      guard (radiant_channel_guard_us(), 100 us once locked) - about 200 us.
+ *      Everything between that and arm_lead was a BAD BAND: two tracked
+ *      channels landing there could neither merge nor be armed in sequence,
+ *      so the later one was dropped deterministically every period until the
+ *      two crystals drifted apart. Invisible at one channel, which is why
+ *      every loss figure this project recorded missed it.
+ *
+ *      WHAT IT COSTS: the merged window now spans the dead gap between the
+ *      pair rather than only their overlap, so up to arm_lead of extra
+ *      receive per merged pair per period - about 0.07% duty at 4 Hz.
+ *      Receive current, no airtime, and rule 4 still bounds the total.
+ *
+ *      WHAT IT DOES NOT FIX, stated so it is not rediscovered: rule 5 caps a
+ *      window at caps.max_addr_groups distinct device numbers, which is TWO
+ *      on nRF (radiant_radio_nrf.c's max_addr_groups). This rescues PAIRS -
+ *      which is precisely the pairwise bad band - but three tracked channels
+ *      piled inside one lead still cost the third its window.
  *   4. THE UNION IS CAPPED (RADIANT_SCHED_MERGE_SPAN_MAX_US) so a merged
  *      window can't outlive the measured 2.19 ms master-to-slave turnaround
  *      and block a reply the link layer owes. Never shrinks the leader's own
@@ -775,6 +811,9 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 	struct sched_slot   *lead = &s.ch[leader];
 	const uint8_t        mf = max_filters();
 	const uint8_t        mg = max_addr_groups();
+	/* Rule 3's reach. Read once, so every member is judged against the same
+	 * radius the pass that called us subtracted from now(). */
+	const radiant_time_t reach = arm_lead();
 	struct radiant_rx_req    req;
 	radiant_time_t           open;
 	radiant_time_t           close;
@@ -886,13 +925,40 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 			continue;
 		}
 
-		m_open = t_max(m->t_start, earliest);
+		/*
+		 * The leader's phy_lead, not none, and rule 1 is what makes
+		 * that exact rather than approximate: every member is on the
+		 * leader's PHY by pointer equality, so there is one
+		 * reconfiguration for the window and the union must not open
+		 * inside it. It reads as a no-op today because phy_lead() is
+		 * zero whenever the radio is already on that PHY, which is
+		 * always on a single-PHY image - but rule 3's reach below now
+		 * lets a member sit ENTIRELY EARLIER than the leader, so this
+		 * is the first version in which m_open can actually become the
+		 * union's open. An arm inside the reconfiguration lead is an
+		 * ETIME refusal, which arm_failed() reports as "the backend is
+		 * stricter than advertised" - true about the wrong thing.
+		 */
+		m_open = t_max(m->t_start, earliest + phy_lead(lead->fmt));
 		m_close = m->continuous ? cap_close : m->t_end;
 		if (m_close < m_open) {
 			continue;
 		}
-		/* Rule 3: overlap the leader, not the union so far. */
-		if (m_open > lead_close || m_close < lead_open) {
+		/*
+		 * Rule 3: within the leader's own window extended by the merge
+		 * reach, not within the union so far. See the reach's reasoning
+		 * in this function's header - it is arm_lead() because that is
+		 * the distance inside which a second arm is impossible.
+		 *
+		 * Widened by addition on both sides rather than by subtracting
+		 * from the other, so nothing has to be floored at zero on a
+		 * timebase a test may start near it. t_fwd() rather than `+`
+		 * because could_join_armed() mirrors this test against a close
+		 * that really can be RADIANT_TIME_NEVER, and the two must not
+		 * differ in how they saturate.
+		 */
+		if (m_open > t_fwd(lead_close, reach) ||
+		    t_fwd(m_close, reach) < lead_open) {
 			continue;
 		}
 
@@ -1189,9 +1255,19 @@ static bool could_join_armed(const struct sched_slot *sl, radiant_time_t earlies
 	if (addr_groups_with(sl->filters, sl->n_filters) > max_addr_groups()) {
 		return false;
 	}
+	/*
+	 * Rule 3, mirrored, MERGE REACH INCLUDED. The two must agree exactly:
+	 * if this said "no" where the rebuild would say "yes" a joinable
+	 * channel would never trigger the rebuild that would take it, and if it
+	 * said "yes" where the rebuild says "no" the request stays pending and
+	 * asks again - which is the one-wasted-rebuild-per-request case s.replan
+	 * bounds, now paid on every tracked pair inside a lead of each other
+	 * rather than never.
+	 */
 	o = t_max(sl->t_start, earliest);
 	c = sl->continuous ? RADIANT_TIME_NEVER : sl->t_end;
-	return !(o > s.armed_end || c < s.armed_open);
+	return !(o > t_fwd(s.armed_end, arm_lead()) ||
+		 t_fwd(c, arm_lead()) < s.armed_open);
 }
 
 /*
@@ -1210,6 +1286,11 @@ static bool could_join_armed(const struct sched_slot *sl, radiant_time_t earlies
  *   - A CHANNEL THAT COULD HAVE JOINED A WINDOW NOT YET OPEN: tearing down
  *     before the first bit of preamble costs nothing, so a late-opened
  *     channel joins the merge immediately instead of waiting a period.
+ *   - A BOUNDED RECEIVE THAT REALLY STARTS EARLIER THAN AN ARMED BOUNDED
+ *     RECEIVE THAT HAS NOT OPENED: the same "costs nothing before preamble"
+ *     argument, for a channel that cannot join the armed window rather than
+ *     one that can. It is what stops arm_next()'s deliberate early commitment
+ *     from starving a window re-posted behind it - see the branch itself.
  *   - AN ARMED TRANSMIT IS NEVER DISPLACED: its t_sync is exact and already
  *     committed, and nothing here is more urgent than a reply already owed.
  */
@@ -1258,6 +1339,41 @@ static bool want_preempt(radiant_time_t earliest)
 			return true;
 		}
 		if (s.replan && could_join_armed(sl, earliest)) {
+			return true;
+		}
+		/*
+		 * AN UNOPENED BOUNDED RECEIVE GIVES WAY TO ONE THAT REALLY
+		 * STARTS EARLIER. Without this, arm_next()'s "commit the radio
+		 * early" rule is a trap for the channel it did not choose: a
+		 * tracked window re-posted after its predecessor was reported
+		 * MISSED (see api_sched_done() in apps/common/ant_radio_radiant.c)
+		 * arrives to find the radio already committed to something up to
+		 * a quarter of a second away, waits behind it, and is itself
+		 * reported MISSED. Eight of those in a row is
+		 * RX_FAIL_GO_TO_SEARCH - a ~2 s dropout produced entirely by
+		 * scheduling, with nothing wrong on the air.
+		 *
+		 * could_join_armed() above does not cover it. That branch is for
+		 * a channel that can SHARE the armed window; this is for one
+		 * that cannot - different format, different device number past
+		 * rule 5, or simply too far away to merge - and must therefore
+		 * displace it.
+		 *
+		 * Guarded exactly as could_join_armed() is, and for the same
+		 * reason: `s.armed_open > earliest` means not a bit of preamble
+		 * has been received yet, so the teardown throws nothing away.
+		 * An armed CONTINUOUS scan is excluded because the branch above
+		 * already handles bounded-under-scan, on its own terms.
+		 *
+		 * Bounded: the replacement is strictly earlier than what it
+		 * displaced (phy_lead included, so the winner can actually be
+		 * armed rather than refused ETIME), so the displaced request
+		 * cannot turn round and displace it back.
+		 */
+		if (s.armed_kind == (uint8_t)SLOT_RX && !s.armed_continuous &&
+		    sl->kind == (uint8_t)SLOT_RX && !sl->continuous &&
+		    s.armed_open > earliest &&
+		    sl->t_start + phy_lead(sl->fmt) < s.armed_open) {
 			return true;
 		}
 	}

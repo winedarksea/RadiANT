@@ -34,7 +34,7 @@ min_scenarios: 8
 
 # Total ztest cases twister executes, summed over every scenario.
 #
-# 682 is a deliberately SAFE floor rather than the observed total: it is the
+# 697 is a deliberately SAFE floor rather than the observed total: it is the
 # number of ZTEST() definitions in radiant/tests, counted statically, and the
 # real total is higher because several scenarios re-run the same suites under
 # different Kconfig. Set this way because it is a bound that can be justified
@@ -43,6 +43,16 @@ min_scenarios: 8
 # Tighten it to the observed total once a green run has reported one - the
 # check prints that number every time it passes, precisely so this can be
 # raised on evidence instead of on a guess.
-# 686 = 682 + the four ZTEST() definitions in
+# 701 = 697 + the four ZTEST() definitions in
 # apps/hrm_ble/tests/sim_sched/src/main.c, counted the same way.
-min_testcases: 686
+#
+# Last raised for the arm-lead exclusion radius work: five cases in
+# radiant/tests/src/test_sched.c (the merge reach, the bad-band sweep, the
+# max_addr_groups residual and the two want_preempt cases) and two in
+# radiant/tests/api/src/test_api.c (a MISSED window re-posting with no pump,
+# and nine scheduling misses not reaching RX_FAIL_GO_TO_SEARCH). The previous
+# floor of 686 had also drifted: the static count was already 690 before any of
+# these were written, so it had stopped being able to notice a whole scenario
+# disappearing. Recount with the same rule when raising it again - grep for
+# ZTEST( at the start of a line under radiant/tests, and add the four.
+min_testcases: 701

@@ -286,18 +286,39 @@ static uint32_t clock_counter_at(radiant_time_t t)
  */
 
 /*
+ * DOES THIS BUILD CARRY THE CODED PHY AT ALL? Two independent questions, and
+ * conflating them is what this macro fixes:
+ *
+ *   CAN the part do it - RADIO_MODE_MODE_Ble_LR125Kbit, a hardware fact. Kept
+ *   as the INNER test so ADR 0007's reasoning survives unchanged: a future
+ *   part without the coded mode falls back to one PHY with no edit needed
+ *   here, exactly as before.
+ *
+ *   DOES this image want it - CONFIG_RADIANT_PHY_LR_CODED, off by default.
+ *   This half is new, and the reason is in that symbol's help: the coded
+ *   PHY's 336 us air lead is charged to min_arm_lead_us on EVERY window of
+ *   EVERY PHY, and min_arm_lead_us is the scheduler's exclusion radius, so a
+ *   1 M-only ANT+ image was paying 288 us of exclusion for a PHY it never
+ *   emits. At one channel that is invisible; at eight it costs about 1% of
+ *   slots per channel.
+ *
+ * Every coded site in this file keys on this one macro rather than on the
+ * hardware test, so the whole LR path leaves an ANT+ image together - there
+ * are no half-compiled branches whose reachability has to be re-derived.
+ */
+#if defined(RADIO_MODE_MODE_Ble_LR125Kbit) && defined(CONFIG_RADIANT_PHY_LR_CODED)
+#define RADIANT_NRF_HAS_LR 1
+#else
+#define RADIANT_NRF_HAS_LR 0
+#endif
+
+/*
  * PHYs this build advertises, most-preferred first: phys[0] must be 1 M
  * because every ANT+ compatibility channel is 1 M on RF 57 (ADR 0007).
- *
- * The coded entry is gated on the part defining the mode (not a Kconfig or
- * series test): every part this backend compiles for defines
- * RADIO_MODE_MODE_Ble_LR125Kbit today, but a future part without the coded
- * PHY should just fail this #if and fall back to one PHY, with no edit
- * needed here.
  */
 static const enum radiant_phy radiant_nrf_phys[] = {
 	RADIANT_PHY_1M_GFSK,
-#if defined(RADIO_MODE_MODE_Ble_LR125Kbit)
+#if RADIANT_NRF_HAS_LR
 	RADIANT_PHY_LR_CODED,
 #endif
 };
@@ -421,19 +442,42 @@ with the bench measurement that produced them, or select a different backend."
  * costing a little scheduling slack but never an unpredictable refusal.
  */
 /*
- * THE WORST CASE IS NOW THE CODED PHY'S. At 1 M, preamble+longest address is
- * 48 us; on the coded PHY, preamble+access address is 336 us. That
- * difference does NOT belong in caps.phy_switch_us - phy_switch_us is spent
- * only when the PHY changes, but this lead is owed on every coded operation
- * including back-to-back ones (the common case), so putting it in
- * phy_switch_us would under-lead the steady state and wedge the board.
+ * THE WORST CASE IS THE CODED PHY'S, ON A BUILD THAT CARRIES IT. At 1 M,
+ * preamble+longest address is 48 us; on the coded PHY, preamble+access
+ * address is 336 us. That difference does NOT belong in caps.phy_switch_us -
+ * phy_switch_us is spent only when the PHY changes, but this lead is owed on
+ * every coded operation including back-to-back ones (the common case), so
+ * putting it in phy_switch_us would under-lead the steady state and wedge the
+ * board. So the advertised lead must cover the worse case, same reasoning as
+ * address length above.
  *
- * So the advertised lead covers the worse case (same reasoning as address
- * length above): a 1 M-only window on a coded-capable build is led by
- * ~328 us more than it needs - pure scheduling slack, 0.13% of a 249.7 ms
- * channel period, costing no airtime or current.
+ * WHICH IS WHY THE CODED PHY IS NOW KCONFIG-GATED, AND WHY THE SENTENCE THAT
+ * USED TO BE HERE WAS WRONG. It read: a 1 M-only window on a coded-capable
+ * build is led by ~288 us more than it needs - "pure scheduling slack, 0.13%
+ * of a 249.7 ms channel period, costing no airtime or current". The arithmetic
+ * is right and the conclusion is wrong, because min_arm_lead_us is not slack.
+ * IT IS THE SCHEDULER'S EXCLUSION RADIUS, in two places at once:
+ *
+ *   radiant_sched.c's pass_step() reports a receive window DONE_MISSED as
+ *   soon as t_end < now + arm_lead - so no second window can be armed within
+ *   arm_lead of the one already committed.
+ *
+ *   arm_rx_window()'s membership rule 3 (see that function) is what rescues
+ *   the pair: two windows that cannot be armed in sequence can still be heard
+ *   by one merged window. Its reach is arm_lead for exactly this reason.
+ *
+ * The two agree by construction, so what the lead really costs is a
+ * MULTI-CHANNEL cost, not a per-window one: it sets how far apart two tracked
+ * channels have to be before the scheduler stops treating them as one piece
+ * of work. Widening it for a PHY the image never emits widened that radius
+ * for nothing. A single-channel loss measurement - which is every loss figure
+ * this project recorded before now - cannot see any of this.
+ *
+ * Result with CONFIG_RADIANT_PHY_LR_CODED off, which is the default and the
+ * ANT+ case: 168 us on nRF54L15 (80 setup + 40 ramp + 48 air), 328 us on
+ * nRF52840 (240 + 40 + 48).
  */
-#if defined(RADIO_MODE_MODE_Ble_LR125Kbit)
+#if RADIANT_NRF_HAS_LR
 #define AIR_LEAD_WORST_US      LR_AIR_LEAD_US
 #else
 #define AIR_LEAD_WORST_US      ((PREAMBLE_BYTES + RADIANT_RADIO_ADDR_MAX) * US_PER_BYTE)
@@ -452,7 +496,7 @@ with the bench measurement that produced them, or select a different backend."
  * lead - those are in ARM_LEAD_US unconditionally, owed on every coded
  * operation, not just the first after a switch.
  */
-#if defined(RADIO_MODE_MODE_Ble_LR125Kbit)
+#if RADIANT_NRF_HAS_LR
 #define PHY_SWITCH_US          20u
 #else
 #define PHY_SWITCH_US          0u
@@ -898,13 +942,25 @@ static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index,
 	if (fmt->phy != RADIANT_PHY_1M_GFSK && fmt->phy != RADIANT_PHY_LR_CODED) {
 		return RADIANT_RADIO_ENOTSUP;
 	}
+#if RADIANT_NRF_HAS_LR
 	lr = (fmt->phy == RADIANT_PHY_LR_CODED);
-#if !defined(RADIO_MODE_MODE_Ble_LR125Kbit)
-	/* A part whose RADIO has no coded mode. Refused, never approximated:
-	 * "close" here is a 1 M frame nobody is listening for. */
-	if (lr) {
+#else
+	/*
+	 * A part whose RADIO has no coded mode, or an image that did not ask
+	 * for it (CONFIG_RADIANT_PHY_LR_CODED - see RADIANT_NRF_HAS_LR).
+	 * Refused, never approximated: "close" here is a 1 M frame nobody is
+	 * listening for.
+	 *
+	 * Refused HERE and `lr` pinned false, rather than each coded branch
+	 * below carrying its own #if: every `if (lr)` in the rest of this
+	 * function then folds against a compile-time false, so the coded path
+	 * leaves the image in one piece and there is no half-compiled branch
+	 * whose reachability a later reader has to re-derive.
+	 */
+	if (fmt->phy == RADIANT_PHY_LR_CODED) {
 		return RADIANT_RADIO_ENOTSUP;
 	}
+	lr = false;
 #endif
 	if (fmt->addr_len < 2u || fmt->addr_len > 5u) {
 		return RADIANT_RADIO_ENOTSUP;
@@ -990,7 +1046,7 @@ static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index,
 		return RADIANT_RADIO_OK_RC;
 	}
 
-#if defined(RADIO_MODE_MODE_Ble_LR125Kbit)
+#if RADIANT_NRF_HAS_LR
 	if (lr) {
 		/*
 		 * S=8 only. LR500Kbit is deliberately not selectable: FEC

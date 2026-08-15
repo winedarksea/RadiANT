@@ -380,7 +380,16 @@ def gate_count(cfg: dict, a: Baseline, b: Baseline, field_name: str,
         value_a, _ = a.worst(field_name, single_channel=False)
         value_b, _ = b.worst(field_name, single_channel=False)
     except MissingField as exc:
-        return GateResult(label, "-", "-", threshold, FAIL, str(exc))
+        # Absent means FAIL unless the gate says otherwise, exactly as
+        # gate_acquisition() and gate_usb() do it. `required = false` is for a
+        # counter that a baseline recorded before the counter existed cannot
+        # carry - `sched_missed` is read out of the dongle by
+        # tools/ant_health.py, and every baseline in archive/benchmarks/
+        # predates it. A SKIP is reported in its own paragraph and counted
+        # separately; it is never silently dropped.
+        return GateResult(label, "-", "-", threshold,
+                          FAIL if cfg.get("required", True) else SKIP,
+                          str(exc))
 
     ok = value_b <= cfg["max"]
     detail = ""
@@ -732,6 +741,18 @@ def evaluate(gates: dict, a: Baseline, b: Baseline,
     if block:
         results.append(gate_count(block, a, b, "accumulator_violations",
                                   "accumulator continuity violations"))
+    block = cfg("sched_missed")
+    if block:
+        # The one loss-shaped number in this table that a noisy room cannot
+        # move. Every other loss figure here is a mixture of the air and the
+        # firmware, which is why the bench cannot currently carry them at
+        # 5-8 % ambient loss; `sched_missed` counts receive windows the
+        # scheduler declared DONE_MISSED because it could not arm them in
+        # time, which happens before the radio ever listens. It is an
+        # artefact of window placement, so it is the counter a multi-channel
+        # scheduling fix can be gated on in the room as it is.
+        results.append(gate_count(block, a, b, "sched_missed",
+                                  "scheduler windows missed"))
     block = cfg("timing")
     if block:
         results.append(gate_timing(block, a, b))

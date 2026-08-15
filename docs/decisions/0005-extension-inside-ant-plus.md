@@ -14,6 +14,11 @@ gate: a node moved to a quiet RF channel holds `loss (exact)` ≈ 0 over 300 s.
   **Amended 2026-08-11 by [ADR 0012](0012-adaptive-frequency.md) — axis 5 is
   built, and one clause of it ("so a searching receiver still finds every node")
   is corrected in place.**
+  **Related 2026-08-15: [ADR 0016](0016-merge-reach-is-the-arm-lead.md) changes
+  the merge rule this record's "32 sensors do not cost 32 windows" depends on.**
+  The claim and the corrected sixteen-window count below are unaffected; what
+  changed is that the merge now fires in a band of channel separations where it
+  previously could not, and where nothing else could serve the pair either.
   The decision itself stands; see *Amendment* immediately below.
 - **Date:** 2026-08-08
 - **Amended:** 2026-08-09

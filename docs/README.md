@@ -47,13 +47,16 @@ below is what keeps it.
 | [`0004`](decisions/0004-license-apache-2-0.md) | Apache-2.0 over MIT/BSD, for §3's express patent grant with a retaliation clause, plus `NOTICE` |
 | [`0005`](decisions/0005-extension-inside-ant-plus.md) | Why the extensions live inside network `A6 C5` rather than on a separate network |
 | [`0006`](decisions/0006-security-v1-scope-and-x-priv-withdrawal.md) | Security v1 is `X_AUTH` + `X_CONF`; `X_PRIV` is rejected rather than deferred, with the reasons recorded so it is not re-proposed, and the identity tiers that replace it |
+| [`0007`](decisions/0007-long-range-phy.md) | The long-range PHY is Bluetooth LE Coded at S=8, and the length extension it unlocks, permitted only where the PHY already makes us invisible. **Amended 2026-08-15:** the arm-lead cost it accepted was assessed as single-channel slack and is a multi-channel exclusion radius, so the PHY is now behind `CONFIG_RADIANT_PHY_LR_CODED`, `default n` |
 | [`0008`](decisions/0008-antplus-additive-pages-and-compat-security.md) | Additive pages are permitted on ANT+ device types, `0x79` is excluded permanently, and the compat security layer is three layers with a **two-tier** attestation — identity Tier I on by default at 1.2% of slots, data Tier II off |
 | [`0009`](decisions/0009-hostless-node-identity.md) | The hostless node: one monotonic NVM counter is the epoch and the pairing-scalar index, `K_dev` is provisioned at manufacture, and the counter advances **before** the pairing pubkey goes on the air |
 | [`0010`](decisions/0010-bridge-two-planes.md) | The bridge is two planes over one Thread network: MQTT carries the values (Matter has no heart-rate cluster), Matter carries the derived semantics and the actuator control — and Matter is implemented even in an MQTT-only build, because its commissioning is how the device joins Thread |
 | [`0011`](decisions/0011-never-a-border-router.md) | The bridge rebroadcasts but never routes. Duty cycle was the wrong metric — ~4 % ANT duty clips ~18 % of full-size 802.15.4 frames — and the rule that decides a role is **blast radius**, not radio time. A 2-in-1 border router needs a second radio, which is a BOM decision |
-
-`0007` is reserved for the RF plan's long-range-PHY decision and lands with it.
-The gap is deliberate; do not reuse the number.
+| [`0012`](decisions/0012-adaptive-frequency.md) | Leaving 2457 MHz, slowly and out loud — and the bench gate that **refuted its own stated motivation**: the loss floor is not the frequency. The mechanism stands; the Context section does not |
+| [`0013`](decisions/0013-sweep-is-the-elastic-consumer.md) | Under an arbiter the sweep gives way and tracked slots are inviolate — the product priority is delivered by shaping demand, because MPSL will not let us outrank the other stack |
+| [`0014`](decisions/0014-second-vendor-port-what-it-cost.md) | What a second vendor's silicon cost: the HAL seam held, and the three things it did not anticipate — one new capability field, PHY parameters that cannot be inherited, and a measurement discipline learned the hard way |
+| [`0015`](decisions/0015-cc26xx-coexistence-design.md) | CC26xx coexistence is two Kconfig symbols and an RF-scheduler policy, not a portable gate — there is no timeslot API on this part to sit behind |
+| [`0016`](decisions/0016-merge-reach-is-the-arm-lead.md) | `min_arm_lead_us` is the scheduler's **exclusion radius**, not slack, so the RX-window merge reach is derived from it. Closes the band in which two tracked channels could neither merge nor be armed in sequence — invisible at one channel, ~1 % per channel at eight |
 
 ---
 

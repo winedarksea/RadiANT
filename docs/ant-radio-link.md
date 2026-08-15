@@ -652,7 +652,10 @@ Three things about the sweep are **not optional**:
 2. **A recently-seen cache** — 16-entry ring, 60 s lifetime. A dropped sensor is re-acquired in
    ~250 ms instead of ~4 s by trying its own set first. About 30 lines of code, and dropout recovery
    is the thing a rider actually notices.
-3. **Merge overlapping tracked RX windows** into one multi-filter receive. Since every ANT+ channel
+3. **Merge nearby tracked RX windows** into one multi-filter receive — *nearby*, not merely
+   overlapping: two windows within `caps.min_arm_lead_us` of each other cannot be armed in sequence
+   at all, so the merge reach is that lead and not the windows' literal overlap
+   ([ADR 0016](decisions/0016-merge-reach-is-the-arm-lead.md)). Since every ANT+ channel
    shares RF 57, merged windows drop slave-side collisions *between our own tracked channels* to
    zero, and 32 tracked sensors do not cost 32 windows — they cost sixteen, because the nRF matches
    **two device numbers per tracking window** and not eight (`caps.max_addr_groups`; see
