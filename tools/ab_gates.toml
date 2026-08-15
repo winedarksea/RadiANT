@@ -75,16 +75,52 @@
 # `archive/benchmarks/`, so this is not the old floor drifting - it is a
 # different regime.
 #
-# LIKELY MECHANISM, stated as the hypothesis it is: a real trainer is powered on
-# in the room, broadcasting on THREE device types at once (#52233 as speed,
-# power meter and fitness equipment), continuously, on the ANT+ frequency, under
-# the ANT+ network key. That is co-channel ANT+ contention with our own 4 Hz
-# master, which is a direct collision mechanism and has nothing to do with
-# Wi-Fi. It was NOT confirmed by experiment: the confirming test is to re-take
-# A1/A2 with that trainer powered down, and only the bench operator can do that.
-# An attempt to confirm it by moving both ends to RF 72 produced zero packets on
-# either frequency and is unexplained - see the bench-trap note below - so treat
-# the mechanism as unproven and the SPREAD as the established fact.
+# MECHANISM: "IT IS THE ROOM" WAS PROPOSED AND IS NOT SUPPORTED. Read this
+# before acting on the trainer.
+#
+# The obvious candidate was co-channel ANT+ contention: a real trainer is
+# powered on in the room broadcasting THREE device types at once (#52233 as
+# speed, power meter and fitness equipment), continuously, on the ANT+ frequency
+# under the ANT+ network key. That is a direct collision mechanism and has
+# nothing to do with Wi-Fi.
+#
+# It does not survive the control. A SECOND rig was measured minutes later, in
+# the same room, with that trainer still transmitting:
+#
+#   rig A   DUT Feather nRF52840, sdk_ant, USB_LEGACY
+#           MASTER nRF54L15 DK running apps/sim firmware
+#           -> 7.94 / 4.87 / 7.04 / 7.23 / 5.98 %      signal -53 to -55 dBm
+#
+#   rig B   DUT nRF54L15 DK, radiant core + nrf, UART
+#           MASTER Feather driven by tools/ant_sim.py
+#           -> 0.83 % over 60 s; 21 RX_FAIL of 1202 (1.75 %) over 300 s
+#                                                      signal -46 dBm
+#
+# Three to five times less loss, same room, same interferer, same afternoon. A
+# room-wide contention floor cannot do that. So the dominant variable is THE
+# RIG, and the configuration carrying the loss is rig A - which is the A leg of
+# the ADR 0001 acceptance and the shipping release artifact.
+#
+# WHAT THIS DOES NOT ESTABLISH. The two rigs differ in every axis at once: DUT
+# silicon (nRF52840 vs nRF54L15), backend (sdk_ant vs radiant core), transport
+# (USB vs UART), master (apps/sim firmware vs a host script driving a dongle),
+# and received signal by 8 dB (-54 vs -46), which is a real difference in link
+# margin and is on its own a candidate for much of the gap. Nothing here
+# attributes the loss to any one of those, and it would be easy and wrong to
+# read this as "sdk_ant is worse than core" - that comparison is exactly what a
+# controlled A/B is for and this is not one.
+#
+# WHAT TO DO WITH IT. Do not spend a sitting on the trainer first; the control
+# above says that is not where the evidence points. Take rig A apart one axis at
+# a time - the cheapest split is the same Feather DUT against the same apps/sim
+# master with only the DUT's backend changed, which is one UF2 drop and is
+# precisely leg B of the 1.7 A/B anyway. If the loss follows the DUT, the
+# headline product has a real defect and the acceptance thresholds are the least
+# of it.
+#
+# An attempt to separate room from rig by moving both ends to a quiet channel
+# (RF 72 and the RF 78 that ANT_SIM_RF_FREQ's help recommends) did not work -
+# see the note below - so that route to the same answer is currently closed.
 #
 # THE QUIET-CHANNEL EXPERIMENT WAS ATTEMPTED AND DID NOT PRODUCE A RESULT.
 # `apps/sim`'s own Kconfig (`ANT_SIM_RF_FREQ`) documents exactly this test and
@@ -142,12 +178,14 @@
 # uptime is not a reset indicator on this part. Read the boot banner, not the
 # timestamp, and not the script's own success message either.
 #
-# WHAT HAS TO HAPPEN BEFORE PHASE 1.7: power down the other ANT+ transmitters in
-# the room, repeat A1 and A2, and confirm the delta is inside 0.35 pp. If it is,
-# these thresholds stand and the sitting can go ahead. If it is not, the numbers
-# below describe a bench that no longer exists and re-deriving them is the
-# work - but re-deriving them from a contended room would bake the contention
-# into the product's acceptance criteria, which is the one outcome to avoid.
+# WHAT HAS TO HAPPEN BEFORE PHASE 1.7. Not "quieten the room" - see the control
+# above. Split rig A one axis at a time until the 5-8 % is attributed, starting
+# with the DUT backend on the same Feather against the same apps/sim master,
+# because that is one UF2 drop and is leg B of the 1.7 A/B regardless. Only when
+# rig A's own loss is understood, and A1 vs A2 repeats inside 0.35 pp, do these
+# thresholds mean anything - and re-deriving them from a bench whose loss is
+# unexplained would bake that fault into the product's acceptance criteria,
+# which is the one outcome to avoid.
 #
 # And before fitting any threshold here to a bench number: check the number can
 # be accounted for. The previous 1.0 -> 2.5 % retune was fitted to a broken
