@@ -115,7 +115,50 @@ that gets read as a general go-ahead.
    map saves perhaps a week of that, not more. This item alone remains larger
    than Phases 1 and 3 combined.
 
-4. **No combined image was linked.** The two halves were measured separately and
-   added. That is a bound, not a build, and the arithmetic assumes RadiANT adds
-   nothing to the shared components it links against — which is very nearly true
-   and is not exactly true.
+4. **The combined image now links — but does not yet exercise RadiANT.** See the
+   section below; the flash figure above is still an added bound rather than a
+   measured one.
+
+## The combined build, 2026-08-15
+
+The spike above measured the two halves separately and added them. They have now
+been put in one build:
+
+```
+west -z C:\ncs\v3.4.0\zephyr build -s C:\ncs\v3.4.0\nrf\samples\matter\template \
+     -b nrf54l15dk/nrf54l15/cpuapp -p always -- \
+     -DEXTRA_ZEPHYR_MODULES=<repo>/radiant \
+     -DEXTRA_DTC_OVERLAY_FILE=<repo>/apps/dongle_thread/boards/nrf54l15dk_nrf54l15_cpuapp.overlay \
+     -DCONFIG_RADIANT=y -DCONFIG_RADIANT_BACKEND_NRF=y \
+     -DCONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
+```
+
+**It configures, compiles and links.** That is the result, and it is a bigger one
+than the byte count: the resolved `.config` carries
+
+```
+CONFIG_CHIP=y   CONFIG_BT=y   CONFIG_MPSL=y
+CONFIG_RADIANT_BACKEND_NRF=y   CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
+```
+
+all at once. **Risk 1 is the thing that could have failed here and it did not.**
+`radiant/Kconfig`'s `depends on !BT || ..._GATE_MPSL` resolves correctly with
+Matter's `CONFIG_BT=y` present, so the backend does *not* silently fall to NULL —
+which is the failure this project has shipped three times. There is no Kconfig
+loop, no devicetree conflict once `radiant,radio-timer` is supplied (the only
+thing the first attempt was missing, and `apps/dongle_thread`'s existing overlay
+supplies it unchanged), and radiant's sources compile against Matter's include
+set without modification.
+
+**What it does NOT measure, and the number is a trap.** The combined image is
+716 996 B against the template's 716 400 B — a delta of **596 bytes**, which is
+not RadiANT being nearly free. Nothing in the Matter sample calls RadiANT, so
+with `-ffunction-sections -fdata-sections` and `--gc-sections` the linker
+discards essentially all of it. `nm` on the final ELF finds no
+`radiant_radio_init`, no `radiant_nrf_gate_on_grant`, no `radiant_sched_tick`.
+The archive it built and threw away is text 26 691, data 140, bss 9 684.
+
+So the honest position is unchanged from the spike: **the flash projection stays
+an added bound**, and the real figure needs an application that actually drives
+both stacks — which is the Phase 2.5 build-out, not a spike. What the combined
+build removes is the *integration* risk, which was the part nobody could price.
