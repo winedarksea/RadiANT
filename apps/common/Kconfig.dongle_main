@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The shared boot sequence's own two symbols, rsourced by apps/dongle/Kconfig
+# and apps/dongle_thread/Kconfig - the same arrangement, and for the same
+# reason, as apps/common/Kconfig.antr_api beside it.
+#
+# apps/hrm_ble and apps/dongle_ti include apps/common/sources.cmake but do NOT
+# rsource this file, so CONFIG_ANT_DONGLE_MAIN is simply undefined there and
+# the target_sources_ifdef() naming it is inert - the same mechanism
+# sources.cmake's own header documents for the transport symbols. Both of
+# those applications have their own main(), and two main()s in one image is a
+# link error rather than a silent surprise, which is the right failure to have
+# available if this is ever got wrong.
+
+config ANT_DONGLE_MAIN
+	bool "Compile the shared ANT-serial dongle boot sequence"
+	default y
+	help
+	  apps/common/ant_dongle_main.c: settle-after-UF2, antr_init(), the weak
+	  post-radio hook, usb_ant_class_init(), the serial bridge, the
+	  transport, and the heartbeat loop - in that order, which is
+	  load-bearing in three places.
+
+	  An application that turns this off is undertaking to provide its own
+	  main(); nothing else in apps/common/ depends on this symbol.
+
+config ANT_DONGLE_MAIN_BANNER
+	string "Text of the boot banner"
+	depends on ANT_DONGLE_MAIN
+	default "ANT+ USB Dongle"
+	help
+	  Logged once, as "<banner> starting", as the first line either
+	  application puts on its console.
+
+	  It is a string rather than a #ifdef because it is the ONLY thing that
+	  differed between the two boot sequences before they were merged, and
+	  a whole second copy of a 185-line file is a large price for one line
+	  of text. apps/dongle_thread overrides it in its prj.conf.
+
+	  This is not the log module name - both applications still log under
+	  `ant_dongle`, deliberately, so that a log prefix does not change
+	  because a function moved between files.

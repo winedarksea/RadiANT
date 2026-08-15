@@ -283,6 +283,12 @@ endif # ANT_DONGLE_TRANSPORT_USB_NEXT
 # header for why they live there and not in radiant/Kconfig.
 rsource "../common/Kconfig.antr_api"
 
+# CONFIG_ANT_DONGLE_MAIN and CONFIG_ANT_DONGLE_MAIN_BANNER: the boot sequence
+# this application shares with apps/dongle_thread. Same arrangement as the
+# line above; see apps/common/ant_dongle_main.h for why the sequence is shared
+# rather than copied.
+rsource "../common/Kconfig.dongle_main"
+
 choice ANT_DONGLE_RADIO
 	prompt "ANT radio backend"
 	default ANT_DONGLE_RADIO_SDK_ANT

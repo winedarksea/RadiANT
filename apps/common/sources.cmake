@@ -89,3 +89,13 @@ target_sources_ifdef(CONFIG_ANT_DONGLE_TRANSPORT_UART app PRIVATE
 
 target_sources_ifdef(CONFIG_ANT_DONGLE_FLASH_LOG app PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}/diag_flash_log.c")
+
+# ── The shared boot sequence ─────────────────────────────────────────────
+#
+# apps/dongle and apps/dongle_thread ship the same main(), so they share one
+# file rather than two copies that must not diverge - see ant_dongle_main.h.
+# CONFIG_ANT_DONGLE_MAIN comes from apps/common/Kconfig.dongle_main, which
+# only those two applications rsource, so this line is inert in apps/hrm_ble
+# and apps/dongle_ti exactly the way the transport lines above are.
+target_sources_ifdef(CONFIG_ANT_DONGLE_MAIN app PRIVATE
+  "${CMAKE_CURRENT_LIST_DIR}/ant_dongle_main.c")
