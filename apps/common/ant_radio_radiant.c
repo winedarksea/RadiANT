@@ -1075,6 +1075,42 @@ static uint32_t dbg_gap_pump_us, dbg_gap_pump_n;
 static uint32_t dbg_gap_post_us, dbg_gap_post_n;
 static int64_t  dbg_overrun_us;
 static uint32_t dbg_overrun_n;
+
+/*
+ * WHY THE PUMP DID NOT POST, one counter per early return.
+ *
+ * The first run of the identity above measured gap_pump at 1.716 s per set -
+ * 86 % of the sweep's whole wall clock, and 69x the 25 ms the housekeeping
+ * tick can explain. Housekeeping itself ran 31 times a second throughout, so
+ * the pump was called about 54 times inside each of those gaps and declined to
+ * post on every one of them. Which of its four early returns fired is the
+ * whole remaining question, and it is not answerable from any counter that
+ * existed.
+ *
+ * `arming` is the recursion guard, `slot` is a sweep already in flight,
+ * `nochan` is no searching channel free to carry one, `window` is
+ * radiant_search.c refusing. `ok` is a post.
+ */
+static uint32_t dbg_pump_arming, dbg_pump_slot, dbg_pump_nochan;
+static uint32_t dbg_pump_window, dbg_pump_ok;
+
+/*
+ * `nochan` split, because the two halves mean opposite things.
+ *
+ * NONE SEARCHING is the sweep having nothing to do: every channel has acquired
+ * a device and stopped looking. That is correct - a dongle with all eight
+ * channels tracking is not failing to discover, it has discovered - and the
+ * time is not a defect, however large it is.
+ *
+ * BUSY is a channel that IS still searching and whose slot the scheduler is
+ * holding for something else. That time is a real stall: there is discovery
+ * work outstanding and the sweep cannot get on the air to do it.
+ *
+ * Without the split, `nochan` cannot tell "working as designed" from "the
+ * defect" - and on a one-channel rig the first dominates so completely that a
+ * reader would conclude the second.
+ */
+static uint32_t dbg_pump_none_searching, dbg_pump_busy;
 #endif
 
 /*
@@ -1100,6 +1136,9 @@ static void api_post_search_window(radiant_time_t now)
 
 	/* Not from inside an arm - see api_arming above. */
 	if (api_arming) {
+#ifdef CONFIG_RADIANT_SWEEP_DEBUG
+		dbg_pump_arming++;
+#endif
 		return;
 	}
 
@@ -1107,6 +1146,9 @@ static void api_post_search_window(radiant_time_t now)
 	 * flight, which is what makes its filters[] pointer safe to hand
 	 * straight to the HAL. */
 	if (api_search_slot != RADIANT_SCHED_CH_NONE) {
+#ifdef CONFIG_RADIANT_SWEEP_DEBUG
+		dbg_pump_slot++;
+#endif
 		return;
 	}
 
@@ -1118,18 +1160,38 @@ static void api_post_search_window(radiant_time_t now)
 	 * slot was merely pending (busy for reasons unrelated to the sweep)
 	 * used to stall the whole sweep - skip a busy one and keep looking.
 	 */
+#ifdef CONFIG_RADIANT_SWEEP_DEBUG
+	bool any_searching = false;
+#endif
 	for (ch = 0u; ch < API_CHANNELS; ch++) {
-		if (radiant_search_is_searching(&api_search, ch) && !radiant_sched_pending(ch)) {
+		if (!radiant_search_is_searching(&api_search, ch)) {
+			continue;
+		}
+#ifdef CONFIG_RADIANT_SWEEP_DEBUG
+		any_searching = true;
+#endif
+		if (!radiant_sched_pending(ch)) {
 			break;
 		}
 	}
 	if (ch >= API_CHANNELS) {
+#ifdef CONFIG_RADIANT_SWEEP_DEBUG
+		dbg_pump_nochan++;
+		if (any_searching) {
+			dbg_pump_busy++;
+		} else {
+			dbg_pump_none_searching++;
+		}
+#endif
 		return;
 	}
 
 	if (radiant_search_window(&api_search,
 			      now + (radiant_time_t)caps->min_arm_lead_us,
 			      &w) != RADIANT_SEARCH_OK) {
+#ifdef CONFIG_RADIANT_SWEEP_DEBUG
+		dbg_pump_window++;
+#endif
 		return;
 	}
 
@@ -1191,6 +1253,7 @@ static void api_post_search_window(radiant_time_t now)
 	 * and left the slot dropped, so charging it here would credit the pump
 	 * with work it did not do. */
 	dbg_pump_post_at = now;
+	dbg_pump_ok++;
 	if (dbg_slot_dropped_at != 0u && now > dbg_slot_dropped_at) {
 		dbg_gap_pump_us += (uint32_t)(now - dbg_slot_dropped_at);
 		dbg_gap_pump_n++;
@@ -2545,6 +2608,15 @@ static void api_housekeep(void)
 			 * deferred log message can carry, and a truncated
 			 * identity is worse than none - it reads as a number.
 			 */
+			LOG_INF("SWEEP why arm=%u slot=%u nochan=%u"
+				"(idle=%u busy=%u) win=%u ok=%u",
+				(unsigned int)dbg_pump_arming,
+				(unsigned int)dbg_pump_slot,
+				(unsigned int)dbg_pump_nochan,
+				(unsigned int)dbg_pump_none_searching,
+				(unsigned int)dbg_pump_busy,
+				(unsigned int)dbg_pump_window,
+				(unsigned int)dbg_pump_ok);
 			LOG_INF("SWEEP gap arm=%u/%u pump=%u/%u post=%u/%u "
 				"over=%lld/%u | elapsed=%lld acct=%lld "
 				"unacct=%lld",
