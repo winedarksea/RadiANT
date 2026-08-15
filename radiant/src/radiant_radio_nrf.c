@@ -3533,7 +3533,19 @@ static void radio_endpoints_attach(bool on)
 
 void radiant_nrf_gate_on_grant_end(void)
 {
-#if defined(CONFIG_RADIANT_SWEEP_DEBUG)
+	/*
+	 * GATE_MPSL as well as SWEEP_DEBUG, and not merely for tidiness. This
+	 * block reads SUBSCRIBE_RXEN and INTENSET00 and calls
+	 * score_short_window(), all three of which exist only under the gate -
+	 * the first two are DPPI-part registers and the third is defined inside
+	 * the gate's own #if. Without this second condition a
+	 * -DCONFIG_RADIANT_SWEEP_DEBUG=y build of apps/dongle on the direct
+	 * backend failed to compile, which is the exact image Phase 1.2's
+	 * sweep-gap measurement runs on. There is nothing to lose: on a direct
+	 * build there are no grants, so this function is never called at all.
+	 */
+#if defined(CONFIG_RADIANT_SWEEP_DEBUG) && \
+	defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
 	/*
 	 * Read the peripheral before a single register is put back. Everything
 	 * else about a grant is observable from software counters; whether the

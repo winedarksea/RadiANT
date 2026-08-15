@@ -1009,6 +1009,74 @@ static void api_search_begin(uint8_t ch, radiant_time_t now)
  * ---------------------------------------------------------------------------
  */
 
+#ifdef CONFIG_RADIANT_SWEEP_DEBUG
+/*
+ * ---------------------------------------------------------------------------
+ * THE SWEEP ACCOUNTING IDENTITY
+ * ---------------------------------------------------------------------------
+ *
+ * The SWEEP counters (declared with api_sched_armed(), further down) rule
+ * things out. Four of them have now ruled out preemption, tracked channels
+ * taking the radio, arm failures and crediting, and roughly 35 % of the
+ * sweep's wall clock is still unexplained - because a fifth counter of the
+ * same kind rules out a fifth thing and leaves the remainder unexplained
+ * again.
+ *
+ * These are different: they are an IDENTITY. Every microsecond between one
+ * search chunk's terminal and the next one opening falls into exactly one of
+ * four intervals, and
+ *
+ *     unacct = elapsed - (scan_armed + overrun + gap_arm + gap_pump +
+ *                         gap_post + track_armed)
+ *
+ * must come out at zero. `unacct` reaching zero IS the exit criterion for the
+ * investigation - not a number getting smaller, a number reaching zero. Until
+ * it does, the model of where the time goes is incomplete, and this line says
+ * so rather than letting a plausible story stand.
+ *
+ * The two paths out of a chunk are distinguished because they are different
+ * mechanisms, not different amounts:
+ *
+ *   KEPT (rechunk). The scheduler re-arms inside the terminal event. The gap
+ *   is arm lead + ramp + commit ordering, and should be about
+ *   caps.min_arm_lead_us. -> gap_arm
+ *
+ *   DROPPED. api_sched_done() cleared the slot, so only
+ *   api_post_search_window() can re-post, and it is reachable only from
+ *   api_housekeep() via api_event_thread()'s k_sem_take(..., K_MSEC(50)). On
+ *   quiet air there is no RX event to wake it, so the wait is the timeout:
+ *   uniform 0-50 ms. PREDICTION: mean gap_pump ~= 25 000 us, once per SET. If
+ *   it is not, the mechanism above is wrong and one run says so - which is the
+ *   point of predicting it in the source rather than after the fact.
+ *   -> gap_pump, then gap_post for the posting-to-opening remainder.
+ *
+ * overrun is signed on purpose: large and positive means the HAL holds past
+ * t_close, so the dwell credit is honest while the clock is not, and that is a
+ * different bug from a gap.
+ *
+ * Declared here, above api_post_search_window(), because that function is the
+ * one that closes gap_pump and it is defined before the rest of the SWEEP
+ * counters are.
+ */
+static radiant_time_t dbg_last_close;      /* t_close actually granted */
+static radiant_time_t dbg_last_done_now;   /* now at a search terminal */
+static radiant_time_t dbg_slot_dropped_at; /* when api_search_slot was cleared */
+static radiant_time_t dbg_pump_post_at;    /* when the pump posted */
+static radiant_time_t dbg_epoch;           /* first search arm, for elapsed */
+
+/* Which of the two paths the last terminal took, so the next arm knows which
+ * interval it closes. Not derivable at arm time - the scheduler does not tell
+ * this layer whether it kept the request. */
+static bool dbg_kept;
+static bool dbg_awaiting_post;
+
+static uint32_t dbg_gap_arm_us, dbg_gap_arm_n;
+static uint32_t dbg_gap_pump_us, dbg_gap_pump_n;
+static uint32_t dbg_gap_post_us, dbg_gap_post_n;
+static int64_t  dbg_overrun_us;
+static uint32_t dbg_overrun_n;
+#endif
+
 /*
  * True while a radiant_sched_*() call that may invoke done() synchronously is
  * in progress. A refused arm completes inline, and posting the next request
@@ -1117,6 +1185,19 @@ static void api_post_search_window(radiant_time_t now)
 
 	api_search_slot = ch;
 	api_bind_accepted(ch, API_SLOT_SEARCH);
+#ifdef CONFIG_RADIANT_SWEEP_DEBUG
+	/* The posting pass closes gap_pump and opens gap_post. Stamped after
+	 * the request is accepted, not before: a refused post returned above
+	 * and left the slot dropped, so charging it here would credit the pump
+	 * with work it did not do. */
+	dbg_pump_post_at = now;
+	if (dbg_slot_dropped_at != 0u && now > dbg_slot_dropped_at) {
+		dbg_gap_pump_us += (uint32_t)(now - dbg_slot_dropped_at);
+		dbg_gap_pump_n++;
+		dbg_slot_dropped_at = 0u;
+	}
+	dbg_awaiting_post = true;
+#endif
 	/* radiant_search_armed() is NOT called here: a scan's chunk bounds are
 	 * decided by the scheduler from work this layer can't see, so crediting
 	 * dwell here would be a guess. api_sched_armed() does it instead, once
@@ -1848,6 +1929,7 @@ static uint32_t dbg_end_ok, dbg_end_abort, dbg_end_missed, dbg_end_failed;
 /* Chunks the arbiter refused - separate from `failed` since this is the
  * number the "sweep is the elastic consumer" claim (ADR 0013) is read against. */
 static uint32_t dbg_end_denied;
+
 #endif
 
 static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_close,
@@ -1868,6 +1950,27 @@ static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_
 			dbg_track_us += len;
 			dbg_track_n++;
 		}
+	}
+
+	/* The identity's arm side. Only the search slot participates: the
+	 * question is where the SWEEP's wall clock goes. */
+	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_SEARCH) {
+		if (dbg_epoch == 0u) {
+			dbg_epoch = t_open;
+		}
+		dbg_last_close = t_close;
+
+		if (dbg_kept && dbg_last_done_now != 0u &&
+		    t_open > dbg_last_done_now) {
+			dbg_gap_arm_us += (uint32_t)(t_open - dbg_last_done_now);
+			dbg_gap_arm_n++;
+		} else if (dbg_awaiting_post && dbg_pump_post_at != 0u &&
+			   t_open > dbg_pump_post_at) {
+			dbg_gap_post_us += (uint32_t)(t_open - dbg_pump_post_at);
+			dbg_gap_post_n++;
+		}
+		dbg_kept = false;
+		dbg_awaiting_post = false;
 	}
 #endif
 	/*
@@ -1902,6 +2005,20 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 
 	now = radiant_radio_now();
 	st = api_done_to_status(why);
+
+#ifdef CONFIG_RADIANT_SWEEP_DEBUG
+	/* Taken at the top, before any of the work below can move the clock:
+	 * this instant is one end of both the arm gap and the overrun, and a
+	 * terminal that spent time in radiant_search_on_done() before being
+	 * stamped would charge that time to the wrong interval. */
+	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_SEARCH) {
+		dbg_last_done_now = now;
+		if (dbg_last_close != 0u && dbg_last_close != RADIANT_TIME_NEVER) {
+			dbg_overrun_us += (int64_t)now - (int64_t)dbg_last_close;
+			dbg_overrun_n++;
+		}
+	}
+#endif
 
 	api_stats.sched_dones++;
 	if (why == RADIANT_SCHED_DONE_MISSED) {
@@ -2009,6 +2126,12 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 				 * wouldn't reach radiant_search_armed() and the
 				 * sweep would stop advancing. */
 				keep_search = true;
+#ifdef CONFIG_RADIANT_SWEEP_DEBUG
+				/* The kept path: the scheduler re-arms from
+				 * inside this event, so the next arm closes
+				 * gap_arm rather than gap_post. */
+				dbg_kept = true;
+#endif
 
 				/*
 				 * Ceiling comes down with the budget: leaving
@@ -2027,6 +2150,14 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 				 * whatever the sweep should hear next. */
 				(void)radiant_sched_cancel(ch);
 				api_search_slot = RADIANT_SCHED_CH_NONE;
+#ifdef CONFIG_RADIANT_SWEEP_DEBUG
+				/* The dropped path. From here only
+				 * api_post_search_window() can re-post, and it
+				 * is reachable only from api_housekeep(). This
+				 * is the start of gap_pump - the interval the
+				 * 50 ms tick paces. */
+				dbg_slot_dropped_at = now;
+#endif
 			}
 		}
 	} else if (!radiant_transfer_is_idle(&api_xfer[ch]) &&
@@ -2353,6 +2484,26 @@ static void api_housekeep(void)
 			const struct radiant_sched_stats *ds =
 				radiant_sched_stats_get();
 
+			/*
+			 * The identity. Everything on the right is a measured
+			 * interval; unacct is what none of them claimed, and it
+			 * is the only number on this line that is supposed to
+			 * be zero. A negative unacct means double-counting -
+			 * most likely a tracked window armed inside a scan
+			 * chunk, which is legal and would mean track_us must
+			 * come out of the sum rather than into it.
+			 */
+			int64_t elapsed = (dbg_epoch != 0u)
+						  ? (int64_t)(now - dbg_epoch)
+						  : 0;
+			int64_t accounted = (int64_t)dbg_scan_us +
+					    (int64_t)dbg_track_us +
+					    (int64_t)dbg_gap_arm_us +
+					    (int64_t)dbg_gap_pump_us +
+					    (int64_t)dbg_gap_post_us +
+					    dbg_overrun_us;
+			int64_t unacct = elapsed - accounted;
+
 			dbg_last = now;
 			LOG_INF("SWEEP set=%u steer=%u dwell=%u/%u adv=%u sweeps=%u "
 				"win=%u ok=%u searching=%u carrier=%d | chunks=%u "
@@ -2387,6 +2538,26 @@ static void api_housekeep(void)
 				(unsigned int)dbg_end_failed,
 				(unsigned int)dbg_end_denied,
 				(unsigned int)ds->replans);
+
+			/*
+			 * A second line rather than a longer first one: the
+			 * SWEEP line is already at the edge of what a 128-byte
+			 * deferred log message can carry, and a truncated
+			 * identity is worse than none - it reads as a number.
+			 */
+			LOG_INF("SWEEP gap arm=%u/%u pump=%u/%u post=%u/%u "
+				"over=%lld/%u | elapsed=%lld acct=%lld "
+				"unacct=%lld",
+				(unsigned int)dbg_gap_arm_us,
+				(unsigned int)dbg_gap_arm_n,
+				(unsigned int)dbg_gap_pump_us,
+				(unsigned int)dbg_gap_pump_n,
+				(unsigned int)dbg_gap_post_us,
+				(unsigned int)dbg_gap_post_n,
+				(long long)dbg_overrun_us,
+				(unsigned int)dbg_overrun_n,
+				(long long)elapsed, (long long)accounted,
+				(long long)unacct);
 		}
 	}
 #endif
