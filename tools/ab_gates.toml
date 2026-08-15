@@ -157,9 +157,30 @@
 # radiant-stack master at the same signal level. So most of the gap was link
 # margin, not the stack, and the stack comparison is not established.
 #
-# IT ALSO HALVED THE THING THE GATE ACTUALLY MEASURES: the A1-vs-A2 spread went
-# from 3.07 pp to 0.85 pp. Still 2.4x `repeat_a_max_delta_pp` below, so the
-# sitting is still void - but the remaining gap is now one factor, not a mystery.
+# IT ALSO IMPROVED THE THING THE GATE ACTUALLY MEASURES, THOUGH NOT ENOUGH.
+# Five 300 s repeats at +4 dBm, nothing touched between them:
+#
+#   3.07  2.22  1.79  3.75  3.92 %
+#
+# Range 2.13 pp, against 3.07 pp at 0 dBm. Better, still 6x
+# `repeat_a_max_delta_pp`, so a sitting on this bench remains void.
+#
+# TWO WARNINGS FROM THAT SERIES, both of which nearly caught me.
+#
+# It is NOT settling. The first three readings fall monotonically - 3.07, 2.22,
+# 1.79 - and with n=3 that reads as a warm-up transient converging on a usable
+# floor. It is not: the next two go back up. Three points were enough to see a
+# trend that does not exist, and the interferer was verified still transmitting
+# throughout (#52233 on all three device types), so the decline was not the room
+# quieting either. Take five before believing a direction.
+#
+# And DO NOT CHERRY-PICK A PASSING PAIR. Consecutive deltas across that series
+# are 0.85, 0.43, 1.96 and 0.17 pp. The last pair passes the 0.35 pp gate
+# outright, by luck. Two adjacent runs agreeing is not the bench being fit; this
+# file's own header exists because moving a threshold to meet a result is the
+# failure mode, and picking the pair that meets an unmoved threshold is the same
+# act wearing a better hat. The gate wants A1 and A2 of THE SITTING, chosen
+# before they are read.
 #
 # ANT_SIM_TX_POWER's help claimed 16 dB of power moved loss not at all. That is
 # true AT ~1 % LOSS and false on a marginal link; the help has been corrected
