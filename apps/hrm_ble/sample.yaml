@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Twister coverage for the heart-rate node.
+#
+# THIS FILE EXISTS BEFORE THE STRAP_* -> HRM_* RENAME, DELIBERATELY. Until now
+# apps/hrm_ble appeared in neither .github/workflows/build.yml nor
+# scripts/build_all.ps1, so nothing anywhere compiled it: a rename that broke
+# the build would have stayed invisible until somebody next needed the board,
+# turning a mechanical edit into a bench session. Coverage first, rename second.
+#
+# build_only on every entry. These are compile-and-configure assertions, not
+# tests - the node's actual behaviour needs a radio, a BLE central and a
+# stopwatch, and docs/testing.md is where that lives.
+#
+# The value is NOT in the compile. It is in the .config read-back that the
+# build-node CI job does afterwards: see 3.0 in the plan, where
+# `-Dstrap_EXTRA_CONF_FILE=` turned out to be a silent no-op after the
+# directory rename, because sysbuild derives the image name from the basename
+# of APP_DIR. The flag named an image that no longer existed, CMake emitted
+# only its end-of-run "manually-specified variables were not used" warning, and
+# the BLE image built green with no BLE in it. A build-only entry would have
+# passed that too. Asserting the resulting .config is the only thing that would
+# not have.
+
+common:
+  build_only: true
+  tags:
+    - radiant
+    - hrm_ble
+  platform_allow:
+    - nrf54l15dk/nrf54l15/cpuapp
+
+tests:
+  # The plain ANT+ node: no BLE, no arbiter. The baseline the others are read
+  # against, and the configuration a manufacturer starts from.
+  hrm_ble.node:
+    extra_args:
+      - RADIANT_BACKEND=nrf
+
+  # The BLE half, image-scoped through the CORRECT image name. `hrm_ble_` here
+  # is the fix for 3.0: the basename of this directory is what sysbuild uses,
+  # so `strap_` silently addressed nothing.
+  hrm_ble.ble:
+    extra_args:
+      - RADIANT_BACKEND=nrf
+      - hrm_ble_EXTRA_CONF_FILE=strap_ble.conf
+
+  # The configuration that actually stresses the arbiter.
+  #
+  # With STRAP_SUPPRESS_ANT_WHEN_CONNECTED=y - the default - the node stops
+  # transmitting ANT+ for the duration of a BLE connection, so the two stacks
+  # never genuinely contend and the gate is never asked to do its job. This
+  # entry is the one where MPSL has to arbitrate a 4.06 Hz ANT+ obligation
+  # against a live BLE connection, which is the case the timeslot code exists
+  # for. Kconfig's own help text for that symbol says as much.
+  hrm_ble.ble_nosuppress:
+    extra_args:
+      - RADIANT_BACKEND=nrf
+      - hrm_ble_EXTRA_CONF_FILE="strap_ble.conf;ble_nosuppress.conf"
+
+# Deliberately not here yet, so that the absence is a recorded decision rather
+# than an oversight:
+#
+#   * An nRF52840 entry. STRAP_BLE_HRS depends on
+#     `SOC_COMPATIBLE_NRF52X || SOC_COMPATIBLE_NRF54LX`, and today only the
+#     nRF54L half is ever compiled - so the profile + node + BLE combination
+#     has never been built on an nRF52. It needs a board overlay first (the
+#     `radiant,radio-timer` chosen node wants a TIMER with >=5 CC channels that
+#     MPSL has not claimed, which is TIMER3 or TIMER4 there), and an overlay
+#     written without the board to hand is a guess. Phase 3.2b.
+#   * `hrm_ble.custom`, the sensor seam's second implementation. A seam with
+#     one implementation is indistinguishable from a direct call with extra
+#     prototypes - the same argument build.yml already makes about
+#     encryption.conf - so this entry lands in the same commit as the seam
+#     (Phase 3.1), not before it.

@@ -139,6 +139,14 @@ run.**
 
 ### The coexistence bug, found and fixed
 
+**Both coexistence loads belong to [`apps/dongle_thread`](../apps/dongle_thread/),
+not to `apps/dongle`.** `apps/dongle` does not declare either Kconfig symbol, so
+setting one on a plain dongle build is silently ignored — it is not an error, it
+simply has no effect, which is the worse of the two failures. The sources are
+[`ble_coex_load.c`](../apps/dongle_thread/ble_coex_load.c) and
+[`thread_coex_load.c`](../apps/dongle_thread/thread_coex_load.c), and
+`apps/dongle/Kconfig` carries a comment at the point of the split saying so.
+
 `CONFIG_ANT_DONGLE_BLE_COEX_LOAD=y` starts a BLE advertiser beside ANT+ so that
 the gate has a second stack that wants the radio. Built that way, the
 SoftDevice Controller used to assert:

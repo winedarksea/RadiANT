@@ -112,7 +112,7 @@ saves money on. ANT needs that clock inside ±50 ppm.
 
 If the board never enumerates at all — no ANT+ device, no COM port, nothing —
 that is the missing crystal, not a bad cable. `ant_init()` gates `usb_enable()`
-in [main.c](src/main.c#L96), so a low-frequency clock that never starts stops
+in [main.c](apps/dongle/src/main.c), so a low-frequency clock that never starts stops
 the firmware before USB comes up. Flash `ant_dongle_promicro_synth.uf2`
 instead: it synthesizes the 32.768 kHz clock from the 32 MHz crystal, which
 every nRF52840 must have for its radio to work at all.

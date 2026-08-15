@@ -6,7 +6,7 @@ Checked by: `scripts/gen_ant_wire.py --check`
 
 This is the host-to-dongle protocol: the bytes that cross a USB bulk endpoint,
 or a UART on a part with no USB peripheral. It is implemented by
-[`src/ant_serial_bridge.c`](../src/ant_serial_bridge.c) on the device side and
+[`src/ant_serial_bridge.c`](../apps/common/ant_serial_bridge.c) on the device side and
 by the five tools in [`tools/`](../tools/) on the host side. Nothing here
 describes the on-air link layer; that lives in `docs/ant-radio-link.md`.
 
@@ -216,7 +216,7 @@ rather than as a promise. Every constant in `protocol/ant_wire.yaml` carries a
 | Tag | Means |
 |---|---|
 | `bridge` | a visible use site in `src/ant_serial_bridge.c`, usually with the value stated in its own prose comment |
-| `stub` | [`src/ant_radio_stub.c`](../src/ant_radio_stub.c) — `src/ant_stub.c` before the Wave 2 rename |
+| `stub` | [`src/ant_radio_stub.c`](../apps/common/ant_radio_stub.c) — `src/ant_stub.c` before the Wave 2 rename |
 | `tools` | one of the five Python tools, which hand-duplicated these values independently of the firmware |
 | `readme` | `README.md`, including its decoded examples |
 | `observed` | read off a real reply from real hardware |

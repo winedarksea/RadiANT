@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+#
 # ── Shared backend-selection machinery ───────────────────────────────────────
 #
 # Every RadiANT application (the dongle, strap and, later, dongle_thread and

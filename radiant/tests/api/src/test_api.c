@@ -278,6 +278,61 @@ static uint8_t build_peer_frame(uint8_t *out, uint8_t ctrl, const uint8_t *paylo
 	return AIR_LEN;
 }
 
+/*
+ * Zwift sets three network keys at startup and cycles channel 0 across
+ * networks 0, 1 and 2 every ~4-5 s
+ * (archive/host-api/2026-08-10-zwift-session-decoded.txt). Only the ANT+ key
+ * is accepted, so networks 1 and 2 never get an address - and before the fix
+ * this test pins, an assign to one of them SUCCEEDED, joined the sweep,
+ * acquired, then tracked on an all-zero address and heard nothing. Silent, and
+ * it cost roughly two thirds of the host's discovery attempts.
+ *
+ * Both halves are asserted here because the exemption is the half that will
+ * look like a bug to the next reader: network 0 with an all-zero address is
+ * ANT's public network, tools/ant_conformance.py assigns to it with no key
+ * set, and ab_gates.toml pins that transcript byte-for-byte. Deleting the
+ * `network > 0` term would fail conformance on every case that needs an
+ * assigned channel, which is a slow and confusing way to discover it.
+ */
+ZTEST(api, test_an_assign_to_a_network_with_no_key_is_refused)
+{
+	/* Any key that is not the published ANT+ one. The table is closed by
+	 * policy (see antr_network_address_set), so this stands in for every
+	 * key a host might offer, including the two Zwift actually sends. */
+	static const uint8_t bogus_key[8] = {
+		0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88
+	};
+
+	/* Network 1: no key ever installed. Refused. */
+	zassert_equal((antr_err_t)ANTW_INVALID_NETWORK_NUMBER,
+		      antr_channel_assign(CH, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,1u, 0u),
+		      "an assign to a network with no address must be refused, "
+		      "not silently accepted onto a zero address");
+
+	/* Network 2: a key was offered and rejected - this is the Zwift case,
+	 * and it must not leave the network looking configured. */
+	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
+		      antr_network_address_set(2u, bogus_key));
+	zassert_equal((antr_err_t)ANTW_INVALID_NETWORK_NUMBER,
+		      antr_channel_assign(CH, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,2u, 0u),
+		      "a REJECTED key must leave the network unusable, not "
+		      "half-configured");
+
+	/* Network 1 again, this time with the real key: now it works. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(1u, ant_plus_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(CH, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,1u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_unassign(CH));
+
+	/* Network 0 with NO key at all: the public network. Must still work. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(CH, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,0u, 0u),
+		      "network 0 is ANT's public network and has a legitimate "
+		      "all-zero default - refusing it breaks conformance");
+}
+
 /* Open one channel of `type`, configured as the bench's own sensor. */
 static void open_channel(uint8_t type)
 {

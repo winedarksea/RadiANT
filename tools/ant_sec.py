@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Encode and decode the RadiANT security messages, 0xF1 to 0xF4.
 
 NOT ANT protocol. These are ours, answered by no ANT device, and their

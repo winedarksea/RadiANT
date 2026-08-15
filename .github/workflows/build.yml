@@ -59,6 +59,33 @@ jobs:
       # of its own.
       - run: python scripts/check_profile_registry.py
 
+      # The licence the tree claims must be the licence the tree ships. This
+      # is not hypothetical: until 2026-08-14 LICENSE was the Mozilla Public
+      # License 2.0 - which ADR 0004 rejects *by name* - while NOTICE, that
+      # ADR, docs/third-party.md and every SPDX header said Apache-2.0.
+      # Nothing caught it for the life of the repository, because nothing was
+      # looking. ADR 0004's own `Checked by:` line asks for exactly this and
+      # notes it "should become a CI check when there is a job to hang it on";
+      # host-tests is that job. Standard library only, sub-second, same
+      # reasoning as the check above it.
+      - run: python scripts/check_license.py
+
+      # A document that points at a file which does not exist is worse than one
+      # that says nothing: it reads as verified. The apps/ reorganisation broke
+      # 17 markdown links at once and nothing noticed, because nothing was
+      # checking. Only the markdown-link check is fatal here - it is mechanical
+      # and has no false positives. The backtick-path heuristic runs in the
+      # same pass and prints warnings; promoting it with --strict-backticks
+      # needs its allowlist worked through first, and a red check that cannot
+      # be turned green teaches people to ignore red checks.
+      - run: python scripts/check_links.py
+
+      # The version the tree ships must be the version the tree claims. See
+      # scripts/version_int.py: both DFU packaging paths used to pass a
+      # hardcoded 1, which made the bootloader's downgrade check compare 1
+      # against 1 forever.
+      - run: python scripts/version_int.py
+
   # Every C unit test in this project runs here and nowhere else. native_sim
   # does not build on the development machine - Windows, no host C compiler,
   # no QEMU - so `west twister` cannot run locally at all and local C
@@ -159,6 +186,28 @@ jobs:
             -p native_sim \
             --inline-logs \
             -v
+
+      # twister exits 0 when it discovers fewer applications than it should -
+      # from its point of view there was simply less to do - so a broken or
+      # renamed testcase.yaml silently deletes a scenario and the job stays
+      # green. This turns the counts into an assertion and puts them on the run
+      # page. Runs even if twister failed, so the summary is there either way.
+      # Paths are relative to the workspace root, not to app/: this repository
+      # is checked out into app/ (see the checkout step), but twister runs from
+      # the root and writes twister-out/ beside it.
+      - name: Assert ztest counts
+        if: always()
+        run: python app/scripts/check_test_counts.py twister-out/twister.json
+
+      - name: Upload twister report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twister-report
+          if-no-files-found: ignore
+          path: |
+            twister-out/twister.json
+            twister-out/twister.xml
 
   # src/ant_wire.h and tools/ant_wire.py are generated from
   # protocol/ant_wire.yaml and committed, so that a clone builds without
@@ -609,6 +658,156 @@ jobs:
           cfg="$(find build -name .config -print -quit)"
           echo "expecting ${WANT} in ${cfg}"
           grep -qx "${WANT}" "${cfg}"
+
+  # apps/hrm_ble - the heart-rate node, and the manufacturer reference design.
+  #
+  # It had no CI job and was not in scripts/build_all.ps1 either, so nothing
+  # anywhere compiled it. That is why this job lands BEFORE the STRAP_* -> HRM_*
+  # rename rather than after: a rename that broke the build would otherwise stay
+  # invisible until somebody next needed the board.
+  #
+  # A separate job rather than rows in build-new-apps for two reasons. Its
+  # BLE conf is image-scoped (`-Dhrm_ble_EXTRA_CONF_FILE=`, not the sysbuild
+  # cache's plain `-DEXTRA_CONF_FILE=`), and its assertion is over several
+  # symbols at once rather than one. It cannot join build-core at all, whose
+  # steps assert CONFIG_ANT_DONGLE_* symbols that do not exist in a node.
+  #
+  # No secret and no sdk-ant, so it runs on forks and on every pull request.
+  build-node:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: "hrm_ble: ANT+ node"
+            # No BLE: the baseline the other two are read against, and the
+            # configuration a manufacturer starts from.
+            #
+            # STRAP_BLE_HRS is asserted ABSENT, not "is not set". Kconfig omits
+            # a symbol entirely when its `depends on` is unmet - here
+            # `depends on BT && BT_PERIPHERAL` - and only writes the
+            # "# ... is not set" form for a symbol whose dependencies are met
+            # and which is merely off. CONFIG_BT is the second kind, so the two
+            # rows below are deliberately different forms. Measured on a real
+            # .config, after asserting the wrong form here first.
+            assert_symbols: |
+              CONFIG_RADIANT_BACKEND_NRF=y
+              CONFIG_BT is not set
+              absent:CONFIG_STRAP_BLE_HRS
+          - name: "hrm_ble: BLE HRS"
+            image_conf: strap_ble.conf
+            assert_symbols: |
+              CONFIG_RADIANT_BACKEND_NRF=y
+              CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
+              CONFIG_STRAP_BLE_HRS=y
+              CONFIG_BT=y
+              CONFIG_RADIANT_BACKEND_NULL is not set
+          - name: "hrm_ble: BLE HRS, no ANT suppression"
+            # The row that actually stresses the arbiter: with suppression on
+            # (the default) the two stacks never genuinely contend. A layered
+            # conf fragment, not a -DCONFIG_ on the command line - see
+            # ble_nosuppress.conf for why that would be one more silent no-op.
+            image_conf: "strap_ble.conf;ble_nosuppress.conf"
+            assert_symbols: |
+              CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
+              CONFIG_STRAP_BLE_HRS=y
+              CONFIG_STRAP_SUPPRESS_ANT_WHEN_CONNECTED is not set
+
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Zephyr workspace and toolchain
+        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: app
+          toolchains: arm-zephyr-eabi
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-node-${{ strategy.job-index }}-${{ github.sha }}
+          restore-keys: |
+            ccache-node-${{ strategy.job-index }}-
+
+      - name: Build
+        env:
+          IMAGE_CONF: ${{ matrix.image_conf }}
+          EXTRA_CMAKE: ${{ matrix.extra_cmake }}
+        run: |
+          set -euxo pipefail
+          extra=("-DRADIANT_BACKEND=nrf")
+          # IMAGE-SCOPED, and the prefix is the basename of the application
+          # directory. This is the whole point of the job: after strap/ was
+          # renamed to apps/hrm_ble, `-Dstrap_EXTRA_CONF_FILE=` named an image
+          # that no longer existed. CMake said nothing beyond its end-of-run
+          # "manually-specified variables were not used" warning, CONFIG_BT
+          # stayed unset, radiant/Kconfig's `depends on !BT || ..._GATE_MPSL`
+          # was satisfied by its !BT half, and the BLE image built green with
+          # no BLE in it.
+          if [[ -n "${IMAGE_CONF}" ]]; then
+            extra+=("-Dhrm_ble_EXTRA_CONF_FILE=${IMAGE_CONF}")
+          fi
+          if [[ -n "${EXTRA_CMAKE}" ]]; then
+            extra+=(${EXTRA_CMAKE})
+          fi
+          west build app/apps/hrm_ble \
+            -b nrf54l15dk/nrf54l15/cpuapp \
+            -d build \
+            -p always \
+            -- "${extra[@]}"
+
+      # THE STEP THAT EARNS THE JOB. A build-only check passes the silent-no-op
+      # above without noticing; asserting the resulting .config is the only
+      # thing that would not have. Every symbol here has a `depends on`
+      # somewhere, which is what makes an unmet assignment a no-op rather than
+      # an error.
+      - name: Verify the configuration that was asked for took effect
+        env:
+          WANT: ${{ matrix.assert_symbols }}
+        run: |
+          set -euo pipefail
+          cfg="$(find build -name .config -path '*hrm_ble*' -print -quit)"
+          if [[ -z "${cfg}" ]]; then
+            cfg="$(find build -name .config -print -quit)"
+          fi
+          echo "reading ${cfg}"
+          rc=0
+          while IFS= read -r want; do
+            [[ -z "${want}" ]] && continue
+            # `absent:CONFIG_X` asserts the symbol does not appear at all,
+            # which is what an unmet `depends on` produces. Anything else is
+            # matched as a whole literal line.
+            if [[ "${want}" == absent:* ]]; then
+              sym="${want#absent:}"
+              if grep -qE "^(# )?${sym}[= ]" "${cfg}"; then
+                echo "::error::expected ${sym} to be absent from ${cfg}"
+                echo "  actual: $(grep -E "^(# )?${sym}[= ]" "${cfg}")"
+                rc=1
+              else
+                echo "ok: ${sym} absent"
+              fi
+            elif grep -qxF "${want}" "${cfg}"; then
+              echo "ok: ${want}"
+            else
+              echo "::error::expected '${want}' in ${cfg}"
+              echo "  actual: $(grep -E "^(# )?${want%%[= ]*}[= ]" "${cfg}" || echo '(symbol absent entirely)')"
+              rc=1
+            fi
+          done <<< "${WANT}"
+          exit "${rc}"
 
   # The governing constraint of the security feature, as a job rather than as a
   # claim in a comment.
@@ -1298,13 +1497,22 @@ jobs:
           hex="$(find build -name zephyr.hex -path '*/dongle/*' -print -quit)"
           test -n "${hex}"
           mkdir -p dist
+          # The application version comes from the root VERSION file, and this
+          # step FAILS if it cannot be read. It used to be the literal 1, which
+          # meant every published package declared the same version and the
+          # bootloader's downgrade check compared 1 against 1 forever - inert,
+          # and silently so. scripts/package_dfu.ps1 derives it identically
+          # (0.1.0 -> 100); the two encodings must not drift apart.
+          appver="$(python scripts/version_int.py)"
+          test -n "${appver}"
+          echo "DFU application version: ${appver}"
           # --sd-req 0x00: the application needs no SoftDevice present, which is
           # true - the ANT stack links into the image.
           ./nrfutil nrf5sdk-tools pkg generate \
             --hw-version 52 \
             --sd-req 0x00 \
             --application "${hex}" \
-            --application-version 1 \
+            --application-version "${appver}" \
             "dist/${{ matrix.artifact }}"
           ls -l dist/
 
@@ -1316,6 +1524,33 @@ jobs:
           if-no-files-found: error
           path: dist/${{ matrix.artifact }}
 
+      # A tag that disagrees with VERSION produces a DFU package whose declared
+      # version does not match the release it hangs off. Checked here rather
+      # than in host-tests because only here is there a tag to check.
+      - name: Tag agrees with VERSION
+        if: steps.ant-ready.outputs.enabled == 'true' && matrix.release && startsWith(github.ref, 'refs/tags/v')
+        run: python scripts/version_int.py --check-tag "${GITHUB_REF_NAME}"
+
+      # UF2 targets cannot be signed at all - the bootloader takes any image on
+      # the drive - and the nRF52840 Dongle's DFU cannot USEFULLY be signed
+      # either, because the stock Nordic bootloader validates against a key
+      # compiled into itself. Replacing that bootloader would cost the
+      # works-out-of-the-box property, so the posture is published sums rather
+      # than a signature that would not be checked. SECURITY.md states this
+      # plainly rather than leaving it implied; these are the sums it promises.
+      - name: Publish SHA-256 of the artifact
+        if: steps.ant-ready.outputs.enabled == 'true' && matrix.release && startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          sha256sum "dist/${{ matrix.artifact }}" | tee "dist/${{ matrix.artifact }}.sha256"
+          {
+            echo "### ${{ matrix.artifact }}"
+            echo ''
+            echo '```'
+            cat "dist/${{ matrix.artifact }}.sha256"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
       # Only the four shipping images. The Feather new-stack build and the two
       # nRF54 DK images are built to keep them compiling and to be downloadable
       # from the run, not to be handed to anyone as a release.
@@ -1323,7 +1558,9 @@ jobs:
         if: steps.ant-ready.outputs.enabled == 'true' && matrix.release && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/${{ matrix.artifact }}
+          files: |
+            dist/${{ matrix.artifact }}
+            dist/${{ matrix.artifact }}.sha256
 
       # sim/ is a second application in this repository, not a dongle image, so
       # it is built here rather than added to the matrix above: none of that

@@ -49,7 +49,7 @@ policy, the security scope).
   application that only needs the module to *link*.
 - `-DRADIANT_BACKEND=nrf` or `=cc26xx` for a real radio, chosen the same way
   every application in this repository chooses it - see
-  [`cmake/radiant_backend.cmake`](cmake/radiant_backend.cmake), a copy of the
+  [`cmake/radiant_backend.cmake`](../cmake/radiant_backend.cmake), a copy of the
   one at the repository root kept here for exactly this reason: an
   out-of-tree consumer gets the same `radiant_select_backend()` helper
   without reaching outside this directory for it.

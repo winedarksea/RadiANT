@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Round-trip the RadiANT security messages, and pin what they refuse.
 
 The encode/decode pairs are the easy half. The half worth writing is the

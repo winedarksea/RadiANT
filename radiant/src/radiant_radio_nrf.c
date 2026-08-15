@@ -2984,8 +2984,6 @@ static void program_ed(const struct radiant_ed_req *req)
  * before the window it was bought for was due to open.
  * ---------------------------------------------------------------------------
  */
-#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
-
 /* The longest window counted as "tracked" by the cross-tab. Same threshold, and
  * the same reasoning, as the gate priority in radiant_radio_rx(): a tracked
  * slot or turnaround is under a millisecond, only a scan chunk or an ED sweep
@@ -2993,9 +2991,35 @@ static void program_ed(const struct radiant_ed_req *req)
 #define GRANT_SHORT_WINDOW_US 10000u
 
 /* Set at the grant that programmed this window, read when the grant end scores
- * it. */
+ * it.
+ *
+ * DECLARED OUTSIDE THE GATE GUARD BELOW, DELIBERATELY. These three are only
+ * *meaningful* when the MPSL gate is compiled in - nothing calls
+ * radiant_nrf_gate_on_grant() otherwise - but that function is defined
+ * unconditionally, past the #endif at the bottom of this block, and it writes
+ * both flags on its ordinary path. Declaring them under
+ * CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL therefore made the whole file fail to
+ * compile in any build that selects the nRF backend WITHOUT the gate:
+ *
+ *   radiant_radio_nrf.c: In function 'radiant_nrf_gate_on_grant':
+ *   error: 'grant_short_rx' undeclared (first use in this function)
+ *
+ * That is not a hypothetical configuration - it is the plain ANT+ node
+ * (apps/hrm_ble with no BLE, hence no arbiter), which is the configuration a
+ * manufacturer starts from. It went unnoticed because every in-tree build that
+ * reaches this file also turns the gate on: strap_ble.conf sets it to satisfy
+ * radiant/Kconfig's `depends on !BT || ..._GATE_MPSL` interlock, and the P4
+ * arms exist to exercise the gate. The ungated nRF build had no CI job until
+ * build-node, which is what surfaced this.
+ *
+ * Keeping the declarations unconditional costs two bools and is the smaller
+ * change; the alternative is guarding four separate use sites inside a
+ * function whose control flow is load-bearing.
+ */
 static bool grant_short_rx;
 static bool grant_scored;
+
+#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
 
 #if defined(CONFIG_RADIANT_SWEEP_DEBUG)
 /*

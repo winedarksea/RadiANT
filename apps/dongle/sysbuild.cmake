@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+#
 # Partition Manager arrives with the sdk-ant nRF Connect SDK module and decides
 # where the application is linked, overriding zephyr,code-partition. Left alone
 # it gives `app` the whole 1 MB at 0x0 while the output file still carries the

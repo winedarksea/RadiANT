@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 cmake_minimum_required(VERSION 3.20.0)
 
 # The same ANT+ dongle as apps/dongle, plus Thread/Matter rebroadcast and the

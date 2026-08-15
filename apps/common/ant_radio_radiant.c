@@ -352,6 +352,27 @@ static struct radiant_search   api_search;
 
 static uint8_t api_net_addr[API_NETWORKS][RADIANT_NET_ADDR_LEN];
 
+/* Which entries of api_net_addr[] were actually installed by a host.
+ *
+ * An all-zero row is indistinguishable from a real address by inspection, and
+ * that ambiguity was a silent bug rather than a theoretical one. Zwift sets
+ * three network keys at startup and cycles channel 0 across networks 0, 1 and
+ * 2 (measured - archive/host-api/2026-08-10-zwift-session-decoded.txt). Only
+ * the ANT+ key is accepted here, so networks 1 and 2 kept all-zero addresses
+ * while remaining perfectly *in range*: api_net_addr_for() only clamps
+ * out-of-range numbers, so an assign to network 1 succeeded, the channel was
+ * admitted to the sweep (which sweeps api_net_addr[0] unconditionally),
+ * acquired, then tracked on a zero address and heard nothing at all. Two
+ * thirds of the host's discovery attempts went into that hole with no error
+ * anywhere - which is what made ANT+ discovery look roughly three times
+ * slower than it is.
+ *
+ * A refusal at assign time is the same class of change as the nRF54L
+ * synthesized-clock BUILD_ASSERT: convert a silence into a diagnosable error,
+ * because the silence gets debugged forever and the error gets read once.
+ */
+static bool api_net_valid[API_NETWORKS];
+
 /* [enable, rf payload size, required modes, 0, 0, optional modes, 0, 0,
  *  stall count lsb, stall count msb, retry extension] */
 static uint8_t api_adv_burst[11];
@@ -2419,6 +2440,7 @@ static void api_reset_state(void)
 
 	memset(api_ch, 0, sizeof(api_ch));
 	memset(api_net_addr, 0, sizeof(api_net_addr));
+	memset(api_net_valid, 0, sizeof(api_net_valid));
 	memset(api_adv_burst, 0, sizeof(api_adv_burst));
 	memset(api_sdu_mask, 0, sizeof(api_sdu_mask));
 	memset(api_crypto_id, 0, sizeof(api_crypto_id));
@@ -2576,6 +2598,38 @@ antr_err_t antr_channel_assign(uint8_t channel, uint8_t type, uint8_t network,
 	antr_err_t rc;
 
 	k_mutex_lock(&api_lock, K_FOREVER);
+
+	/*
+	 * Refuse a NON-ZERO network whose address was never installed. See
+	 * api_net_valid for the bug this closes.
+	 *
+	 * NETWORK 0 IS DELIBERATELY EXEMPT, and the exemption is load-bearing
+	 * rather than cautious. Network 0 with an all-zero address is ANT's
+	 * public network - a legitimate default that a real dongle honours - so
+	 * an assign to it before any MESG_NETWORK_KEY must still succeed. Two
+	 * things in this tree depend on that and would have caught it late:
+	 * tools/ant_conformance.py's ASSIGN_PREAMBLE assigns channel 0 to
+	 * network 0 with no key set at all, and tools/ab_gates.toml requires
+	 * that transcript to stay byte-identical, so refusing here would have
+	 * failed conformance on every case that needs an assigned channel *and*
+	 * diverged from the sdk_ant backend it is compared against.
+	 *
+	 * Networks 1..N have no such default. A zero address there means only
+	 * that no key was installed, or that one was installed and rejected -
+	 * which is exactly the Zwift case.
+	 *
+	 * The bounds test stays with radiant_channel_assign(), which already
+	 * answers it: an out-of-range number is a different mistake from an
+	 * unconfigured one. This adds only the in-range-but-unset case.
+	 */
+	if (network > 0u && network < API_NETWORKS && !api_net_valid[network]) {
+		k_mutex_unlock(&api_lock);
+		LOG_WRN("assign ch%u refused: network %u has no address installed "
+			"(set a key with MESG_NETWORK_KEY first)",
+			channel, network);
+		return (antr_err_t)ANTW_INVALID_NETWORK_NUMBER;
+	}
+
 	rc = radiant_channel_assign(channel, type, network, ext_assign);
 	if (rc == RADIANT_CH_OK) {
 		/* Assignment resets every config byte to default, so this
@@ -2839,6 +2893,9 @@ antr_err_t antr_network_address_set(uint8_t network, const uint8_t *key)
 	k_mutex_lock(&api_lock, K_FOREVER);
 	api_net_addr[network][0] = RADIANT_NET_ADDR_ANT_PLUS_0;
 	api_net_addr[network][1] = RADIANT_NET_ADDR_ANT_PLUS_1;
+	/* The only place this is ever set. Everything above this line can fail,
+	 * and each failure path returns without reaching here. */
+	api_net_valid[network] = true;
 
 	/* The sweep's address is fixed at radiant_search_init(); re-initialising
 	 * would drop every channel already in the search. Hosts install keys

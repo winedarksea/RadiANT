@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Floors for the ztest job. A number in a file that only moves by a deliberate,
+# reviewable edit - the same pattern as README.md's line cap, archive/'s 10 MB
+# budget and the measured text/bss ceilings.
+#
+# WHY A FLOOR AND NOT AN EXACT COUNT: tests are added far more often than they
+# are removed, so an exact count would fail on every honest addition and would
+# be relaxed reflexively until it meant nothing. A floor only fails when
+# coverage goes DOWN, which is the event actually worth a red check.
+#
+# What this catches, and it is not hypothetical: a test application that stops
+# being discovered. `twister -T app/radiant/tests` walks subdirectories, so a
+# renamed or broken testcase.yaml removes a whole scenario and twister still
+# exits 0 - it simply runs fewer tests and says so in output nobody reads. That
+# is indistinguishable from success without a floor.
+#
+# HOW TO CHANGE THESE: raise them when coverage genuinely grows, in the same
+# commit that grows it. Lowering one is a claim that coverage should shrink and
+# needs a reason in the commit message.
+
+# Twister scenarios across radiant/tests, radiant/tests/api and
+# radiant/tests/gate. Counted from the three testcase.yaml files:
+# radiant.unit, radiant.unit.sec_modes, radiant.unit.pairing, radiant.api,
+# radiant.api.sec, radiant.api.sec_host, radiant.gate.
+min_scenarios: 7
+
+# Total ztest cases twister executes, summed over every scenario.
+#
+# 682 is a deliberately SAFE floor rather than the observed total: it is the
+# number of ZTEST() definitions in radiant/tests, counted statically, and the
+# real total is higher because several scenarios re-run the same suites under
+# different Kconfig. Set this way because it is a bound that can be justified
+# from the source rather than copied from one CI run.
+#
+# Tighten it to the observed total once a green run has reported one - the
+# check prints that number every time it passes, precisely so this can be
+# raised on evidence instead of on a guess.
+min_testcases: 682

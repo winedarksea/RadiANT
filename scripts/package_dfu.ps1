@@ -31,7 +31,9 @@
     Where to write the zip. Defaults to dist\radiant_dongle_nrf52840dongle.zip.
 
 .PARAMETER AppVersion
-    Application version integer stamped into the package manifest.
+    Application version integer stamped into the package manifest. Derived from
+    the repository-root VERSION file when not given, and NOT defaulted to a
+    constant - see the Get-RadiantAppVersion comment for why that mattered.
 
 .PARAMETER ExpectedOffset
     Address the image must start at. Only change this if you know why.
@@ -46,12 +48,64 @@
 param(
     [string]$HexPath = 'build\dongle\dongle\zephyr\zephyr.hex',
     [string]$OutPath = 'dist\radiant_dongle_nrf52840dongle.zip',
-    [int]$AppVersion = 1,
+    $AppVersion = $null,
     [int]$ExpectedOffset = 0x1000,
     [string]$NrfutilPath
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Derive the DFU application version from the repository-root VERSION file.
+#
+# THIS IS A BUG FIX, NOT HYGIENE. Until 2026-08-14 this parameter defaulted to
+# the literal 1 and the release workflow passed a literal 1 as well, so every
+# DFU package this project has ever published declared itself version 1. The
+# nRF52840 Dongle's bootloader compares that number against the installed one
+# to refuse a downgrade; a constant defeats the check outright, and it does so
+# silently - the package installs, the board runs, and nothing anywhere reports
+# that the protection is inert.
+#
+# It THROWS rather than falling back. A fallback here would restore exactly the
+# failure it replaces: a package that looks versioned and is not. A missing or
+# malformed VERSION file is a broken build, and it should read as one.
+function Get-RadiantAppVersion {
+    $versionFile = Join-Path (Split-Path -Parent $PSScriptRoot) 'VERSION'
+    if (-not (Test-Path $versionFile)) {
+        throw "No VERSION file at $versionFile. It is the single source of truth for the DFU application version; refusing to guess."
+    }
+
+    $fields = @{}
+    foreach ($line in (Get-Content $versionFile)) {
+        if ($line -match '^\s*([A-Z_]+)\s*=\s*(.*?)\s*$') {
+            $fields[$Matches[1]] = $Matches[2]
+        }
+    }
+    foreach ($required in @('VERSION_MAJOR', 'VERSION_MINOR', 'PATCHLEVEL')) {
+        if (-not $fields.ContainsKey($required) -or $fields[$required] -eq '') {
+            throw "VERSION is missing $required. Expected Zephyr's VERSION format."
+        }
+    }
+
+    # Monotonic and readable in a manifest: 0.1.0 -> 100, 1.2.3 -> 10203.
+    # Each field is capped at 99 by the caps below, so the encoding cannot
+    # collide (0.1.0 and 0.0.100 would otherwise both be 100).
+    [int]$major = $fields['VERSION_MAJOR']
+    [int]$minor = $fields['VERSION_MINOR']
+    [int]$patch = $fields['PATCHLEVEL']
+    foreach ($pair in @(@('VERSION_MINOR', $minor), @('PATCHLEVEL', $patch))) {
+        if ($pair[1] -lt 0 -or $pair[1] -gt 99) {
+            throw ("VERSION field {0} is {1}; this packaging encodes it in two decimal digits, so it must be 0-99. Widen the encoding here and in scripts\check_version.py together, or the two will disagree." -f $pair[0], $pair[1])
+        }
+    }
+
+    return ($major * 10000) + ($minor * 100) + $patch
+}
+
+if ($null -eq $AppVersion) {
+    $AppVersion = Get-RadiantAppVersion
+}
+[int]$AppVersion = $AppVersion
+Write-Host "DFU application version: $AppVersion (from VERSION)"
 
 if (-not (Test-Path $HexPath)) {
     throw "No hex at $HexPath. Build it first:`n" +

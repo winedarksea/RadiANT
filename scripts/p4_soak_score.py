@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Score a P4 soak (phase D) from its console capture.
 
 The soak exists to test ONE invariant:

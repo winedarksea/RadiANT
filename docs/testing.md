@@ -276,7 +276,7 @@ not a drift.
 
 ### CC26xx coexistence build arms
 
-The nRF pattern is direct / [`gate.conf`](../gate.conf) / [`coex.conf`](../coex.conf)
+The nRF pattern is direct / [`gate.conf`](../apps/dongle_thread/gate.conf) / [`coex.conf`](../apps/dongle_thread/coex.conf)
 — three builds, isolating the arbiter and then the second stack. TI needs a
 fourth, because the multi-protocol CPE patch is a confound the nRF side never
 had (see [ADR 0015](decisions/0015-cc26xx-coexistence-design.md)):
@@ -284,9 +284,9 @@ had (see [ADR 0015](decisions/0015-cc26xx-coexistence-design.md)):
 | arm | fragment | contents | isolates |
 |---|---|---|---|
 | 1 | none | today: `RF_postCmd` + `rf_patch_cpe_prop` | the floor |
-| 2 | [`ti_patch.conf`](../ti_patch.conf) | multi-protocol patch only, still `RF_postCmd` | **the CPE patch's PHY cost** |
-| 3 | [`ti_gate.conf`](../ti_gate.conf) | arm 2 + `..._CC26XX_COEX=y` (hooks linked, `RF_scheduleCmd`), no 802.15.4 | the scheduler's cost |
-| 4 | [`ti_coex.conf`](../ti_coex.conf) **+ [`ti_coex.overlay`](../ti_coex.overlay)** | arm 3 + `IEEE802154` + the forked driver in `radiant/coex154_ti/` | the neighbour's cost |
+| 2 | [`ti_patch.conf`](../apps/dongle_ti/ti_patch.conf) | multi-protocol patch only, still `RF_postCmd` | **the CPE patch's PHY cost** |
+| 3 | [`ti_gate.conf`](../apps/dongle_ti/ti_gate.conf) | arm 2 + `..._CC26XX_COEX=y` (hooks linked, `RF_scheduleCmd`), no 802.15.4 | the scheduler's cost |
+| 4 | [`ti_coex.conf`](../apps/dongle_ti/ti_coex.conf) **+ [`ti_coex.overlay`](../apps/dongle_ti/ti_coex.overlay)** | arm 3 + `IEEE802154` + the forked driver in `radiant/coex154_ti/` | the neighbour's cost |
 
 ```powershell
 . .\scripts\env.ps1 -NcsVersion v3.4.0
@@ -805,7 +805,7 @@ mistake found on the bench costs two boards and a flash cycle.
 
 ## Simulator firmware on an nRF54L15 DK
 
-`ant_sim.py` needs a host attached to the transmitting board. [`sim/`](../sim/)
+`ant_sim.py` needs a host attached to the transmitting board. [`sim/`](../apps/sim/)
 does not: it is a standalone application that makes a DK *be* an ANT+ sensor,
 untethered, from power-on.
 
@@ -914,7 +914,7 @@ Copy-Item build\dk5340\merged.hex D:\     # the JLINK drive
 Logs go to the VCOM COM port at 115200 (the *second* of the two the J-Link
 exposes), not RTT — RTT would need SEGGER's `JLinkARM` DLL installed, whereas
 the VCOM is just a COM port carried by the cable that already programs the
-board. [`boards/nrf5340dk_nrf5340_cpuapp.conf`](../boards/nrf5340dk_nrf5340_cpuapp.conf)
+board. [`boards/nrf5340dk_nrf5340_cpuapp.conf`](../apps/dongle/boards/nrf5340dk_nrf5340_cpuapp.conf)
 sets that up along with `CONFIG_LOG_MODE_IMMEDIATE=y`, so the last line before
 a hang has already been emitted rather than sitting in a queue that is about to
 be discarded.

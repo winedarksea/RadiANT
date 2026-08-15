@@ -1,3 +1,33 @@
+# Build outputs. `build*/` matches at any depth, so a stray in-tree build
+# directory (apps/hrm_ble/build/ was one) is covered without a second rule.
+# Note it would also match a future `builds/` or `build-tools/` directory --
+# rename the rule rather than the directory if that ever comes up.
 build*/
 dist/
+twister-out*/
+
+# Tool caches. Each of these regenerates on demand; none is an input to
+# anything. ruff.toml and .clang-tidy at the root are the tracked halves.
 __pycache__/
+.ruff_cache/
+.pytest_cache/
+.venv/
+
+# Editor and agent state.
+#
+# .claude/ is deliberately NOT ignored wholesale: settings.json and any project
+# skills there are shared configuration and belong in the tree. Only the
+# per-machine halves are excluded.
+.vscode/
+.claude/settings.local.json
+.claude/**/*.local.*
+
+# Bench captures and console logs pulled off boards.
+#
+# PENDING A PRESERVATION DECISION -- see docs/preservation.md. bench-logs/p4/
+# is 9.3 MB of primary records behind docs/radiant-bridge.md section 7.4.2, and
+# archive/ has a CI-enforced 10 MB budget with ~2.7 MB already used, so these
+# cannot simply move there. preservation.md's own rule for this case is a
+# GitHub release asset referenced by SHA-256 from the relevant archive/README.
+# Ignored here so the decision is made deliberately rather than by a commit.
+bench-logs/

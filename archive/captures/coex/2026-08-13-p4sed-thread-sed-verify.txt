@@ -1,0 +1,86 @@
+Using COM8 at 115200 baud (UART transport)
+
+Opening ANT+ receive channels
+  OK: extended messages
+  OK: ANT+ network key
+  OK: ch0 assign slave
+  OK: ch0 channel id
+  OK: ch0 radio frequency
+  OK: ch0 message period
+  OK: ch0 search timeout
+  OK: ch0 open
+  OK: channel 0 - bicycle power, standard page 0x10
+
+Listening for 240 s
+  ch0 20 pkts
+  ch0 41 pkts
+  ch0 61 pkts
+  ch0 82 pkts
+  ch0 102 pkts
+  ch0 122 pkts
+  ch0 143 pkts
+  ch0 163 pkts
+  ch0 184 pkts
+  ch0 204 pkts
+  ch0 224 pkts
+  ch0 245 pkts
+  ch0 265 pkts
+  ch0 286 pkts
+  ch0 306 pkts
+  ch0 327 pkts
+  ch0 346 pkts
+  ch0 366 pkts
+  ch0 387 pkts
+  ch0 407 pkts
+  ch0 428 pkts
+  ch0 448 pkts
+  ch0 468 pkts
+  ch0 489 pkts
+  ch0 509 pkts
+  ch0 530 pkts
+  ch0 550 pkts
+  ch0 571 pkts
+  ch0 592 pkts
+  ch0 612 pkts
+  ch0 633 pkts
+  ch0 653 pkts
+  ch0 674 pkts
+  ch0 693 pkts
+  ch0 713 pkts
+  ch0 734 pkts
+  ch0 754 pkts
+  ch0 775 pkts
+  ch0 795 pkts
+  ch0 815 pkts
+  ch0 836 pkts
+  ch0 856 pkts
+  ch0 877 pkts
+  ch0 897 pkts
+  ch0 917 pkts
+  ch0 937 pkts
+  ch0 957 pkts
+
+Closing
+  OK: close ch0
+  OK: unassign ch0
+
+=== power (device type 0x0B, 8182 ticks) ===
+  OK   packets                957 received, 960 expected over 239.4 s
+  OK   loss                   0.30 % (limit 1.50 %, one packet = 0.10 %)
+  OK   jitter                 stddev 14.3 ms, max 500.0 ms (limit 124.8 ms, period 249.7 ms)
+  OK   accumulator continuity 0 violation(s)
+  OK   sensor liveness        the event counter advanced on 936 of 940 packet pairs
+  OK   common pages           80 x8, 81 x8, worst gap 120 (limit 121)
+  pages: 0x10 x941, 0x50 x8, 0x51 x8
+  timing: 3.98 ms off the 249.7 ms slot grid by the host clock, 0.012 ms by the radio's
+  signal: mean -38.0 dBm (min -38, max -37, n=957) - ANT tracks to about -90
+  wraps observed: acc_power x1, event_count x3
+  attestation: clear - no key here, which is not the same as unprotected
+  power: mean 99.96 (min 97.00, max 103.00, n=941)
+  cadence: mean 80.04 (min 77.00, max 83.00, n=941)
+
+channel events: EVENT_RX_FAIL x3
+3 packet(s) missing, all of it reported by the radio as RX_FAIL, so it happened on the air.
+heard on channel 0: device #777, type 0x0B
+
+PASS

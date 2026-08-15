@@ -119,7 +119,7 @@ timeout per transfer. It is `0x02` now and the shim forwards the byte untouched.
 
 Three values the stub needs are Nordic extensions whose numbers appear nowhere in this
 repository, so `protocol/ant_wire.yaml` recorded them as unresolved and
-[`src/ant_radio_stub.c`](../src/ant_radio_stub.c) carried local placeholders. The rule behind the
+[`src/ant_radio_stub.c`](../apps/common/ant_radio_stub.c) carried local placeholders. The rule behind the
 placeholders is K1's and it is worth keeping: **an unresolved constant may never appear, even
 conditionally, in a file that has to build with no sdk-ant present** — a `#define` reaching into
 sdk-ant from the stub would reintroduce exactly the dependency the stub exists to disprove, and it
@@ -366,7 +366,7 @@ call-site column is the critical-path marker**: a bare `:NNN` is a line in
 (the encryption writes, behind `CONFIG_ANT_DONGLE_ENCRYPTION`, which is off by default).
 
 **The line-number column is `src/ant_stub.c` — the file as it stood *before* the Wave 2 rename to
-[`src/ant_radio_stub.c`](../src/ant_radio_stub.c).** It is deliberately not renumbered against the
+[`src/ant_radio_stub.c`](../apps/common/ant_radio_stub.c).** It is deliberately not renumbered against the
 current file. These numbers are the audit trail for how the table was built: they say which
 definition each row was read off, in the file that was read, and renumbering them against a file
 that has since been edited would quietly turn evidence into decoration. The symbol names are what

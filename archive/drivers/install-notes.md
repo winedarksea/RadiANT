@@ -42,7 +42,7 @@ arrives with no driver and problem code 28, exactly like a genuine retail
 stick, and Windows then looks up `USB\VID_0FCF&PID_1009` and offers the real
 driver. Behaving like the stick being impersonated is the *point*, not a
 shortcoming — see the `ANT_DONGLE_MSOS_DESCRIPTORS` help text in
-[`Kconfig`](../../Kconfig).
+[`apps/dongle/Kconfig`](../../apps/dongle/Kconfig).
 
 Turn it on only for the opposite case: bring-up on a machine with no ANT driver
 at all, where you want `pyusb` and `tools/` to work with nothing installed.

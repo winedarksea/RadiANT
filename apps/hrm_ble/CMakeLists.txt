@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 cmake_minimum_required(VERSION 3.20.0)
 
 # RadiANT heart-rate strap: a node, not a dongle. See src/main.c for why it

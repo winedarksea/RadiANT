@@ -1,0 +1,63 @@
+Found 0FCF:1009  bcdDevice=0x0100
+  manufacturer: RadiANT Project
+  product:      RadiANT ANT+ compatible USB stick
+  serial:       3D55F77818BE772A
+
+Opening ANT+ master channels
+  OK: ANT+ network key
+  OK: ch0 assign master
+  OK: ch0 channel id
+  OK: ch0 radio frequency
+  OK: ch0 message period
+  OK: ch0 open
+  OK: channel 0 - power (page 0x10), device #777 type 0x0B trans 5, 8182 ticks (4.00 Hz)
+
+Transmitting for 280 s (100 W, 80 rpm, +/-3, seed 1)
+  ch0 21 msgs
+  ch0 41 msgs
+  ch0 62 msgs
+  ch0 82 msgs
+  ch0 102 msgs
+  ch0 123 msgs
+  ch0 143 msgs
+  ch0 164 msgs
+  ch0 184 msgs
+  ch0 204 msgs
+  ch0 225 msgs
+  ch0 245 msgs
+  ch0 266 msgs
+  ch0 286 msgs
+  ch0 306 msgs
+  ch0 327 msgs
+  ch0 347 msgs
+  ch0 368 msgs
+  ch0 388 msgs
+  ch0 409 msgs
+  ch0 429 msgs
+  ch0 449 msgs
+  ch0 470 msgs
+  ch0 490 msgs
+  ch0 511 msgs
+  ch0 531 msgs
+  ch0 551 msgs
+  ch0 572 msgs
+  ch0 592 msgs
+  ch0 613 msgs
+  ch0 633 msgs
+  ch0 653 msgs
+  ch0 674 msgs
+  ch0 694 msgs
+  ch0 715 msgs
+  ch0 735 msgs
+  ch0 755 msgs
+  ch0 776 msgs
+  ch0 796 msgs
+  ch0 817 msgs
+  ch0 837 msgs
+  ch0 858 msgs
+  ch0 878 msgs
+  ch0 898 msgs
+  ch0 919 msgs
+  ch0 939 msgs
+  ch0 960 msgs
+  ch0 980 msgs

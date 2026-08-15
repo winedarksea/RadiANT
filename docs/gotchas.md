@@ -49,7 +49,7 @@ from the outside.
   stamps into the file — so the image is linked for `0x0`, written to
   `0x26000`, and boots into whatever the vector table happens to point at. It
   never enumerates and looks exactly like a USB fault.
-  [`pm_static_nrf52840_uf2_sdv6.yml`](../pm_static_nrf52840_uf2_sdv6.yml)
+  [`pm_static_nrf52840_uf2_sdv6.yml`](../apps/dongle/pm_static_nrf52840_uf2_sdv6.yml)
   restates the board's layout in the form PM reads; `sysbuild.cmake` selects it
   by board. Check `build/<d>/partitions.yml` says `app: address: 0x26000`, or
   that `zephyr.hex` opens with an extended-address record rather than

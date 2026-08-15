@@ -22,6 +22,18 @@
 # this bench. Measured on archive/captures/radio/2026-08-09-nrf54l15-run1.log.
 archive/captures/radio/*.log -text
 
+# Same rule, same reason, for the coexistence arms and the decoded host capture
+# added 2026-08-14 - but here it is load-bearing rather than merely tidy,
+# because archive/captures/coex/README.md commits a sha256 for each of its nine
+# files. Measured: every one of the 1612 line endings in
+# 2026-08-13-p4med-thread-med-console.log is CRLF, as are all 85 in its
+# -verify.txt sidecar and all 679 in the decoded Zwift session. With
+# core.autocrlf=true those would commit as LF, and the recorded hashes would
+# then verify on no machine at all - including this one after a fresh clone.
+archive/captures/coex/*.log -text
+archive/captures/coex/*.txt -text
+archive/host-api/*-decoded.txt -text
+
 # The firmware readbacks in archive/firmware/ are images, not text. Git was
 # treating them as text (diff --numstat reported line counts rather than '-').
 *.uf2 binary

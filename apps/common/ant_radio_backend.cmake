@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+#
 # ── The ANT_RADIO axis: sdk_ant, core or stub ────────────────────────────────
 #
 # Shared between apps/dongle and apps/dongle_thread - the two applications
