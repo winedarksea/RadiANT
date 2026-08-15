@@ -570,6 +570,61 @@ jobs:
             radiant_backend: nrf
             extra_conf: gate.conf
             assert_symbol: CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
+            assert_core: "true"
+          - name: "dongle_thread: Thread MED"
+            app: apps/dongle_thread
+            board: nrf54l15dk/nrf54l15/cpuapp
+            radiant_backend: nrf
+            extra_conf: thread.conf
+            assert_symbol: CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
+            assert_core: "true"
+          - name: "dongle_thread: Thread SED"
+            app: apps/dongle_thread
+            board: nrf54l15dk/nrf54l15/cpuapp
+            radiant_backend: nrf
+            extra_conf: thread.conf;thread_sed.conf
+            assert_symbol: CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
+            assert_core: "true"
+          # THE ARM THAT EARNS THIS JOB ITS PLACE. radiant/Kconfig's nrf
+          # backend carries `depends on !BT || RADIANT_BACKEND_NRF_GATE_MPSL`,
+          # so a build that turns CONFIG_BT on WITHOUT the gate does not fail -
+          # the dependency goes unmet, the assignment becomes a no-op, and the
+          # backend silently falls back to NULL. A NULL-radio image links,
+          # enumerates, answers every host command with OK and puts nothing on
+          # the air; this project has shipped one three times.
+          #
+          # This is the only arm in the matrix where CONFIG_BT is on, so it is
+          # the only one that exercises that branch of the interlock at all.
+          # Its presence is what turns a comment in Kconfig into a tested
+          # property - which is also why it is checked for the ABSENCE of
+          # CONFIG_RADIANT_BACKEND_NULL below and not only for the presence of
+          # the gate.
+          #
+          # It is additionally Matter risk 1 (docs/matter-flash-spike.md): bug
+          # 22's elastic_skew_us removal has only ever been measured against
+          # OpenThread, and this is the BLE-advertiser arm that has to be
+          # re-measured before the advertiser case is treated as settled.
+          # Compiling it is not measuring it; that is a bench sitting.
+          - name: "dongle_thread: BLE coexistence load"
+            app: apps/dongle_thread
+            board: nrf54l15dk/nrf54l15/cpuapp
+            radiant_backend: nrf
+            extra_conf: coex.conf
+            assert_symbol: CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
+            assert_core: "true"
+          # The rebroadcast bridge. Deliberately its own arm and NOT folded
+          # into the thread rows: bridge.conf turns CONFIG_NET_TCP on, which
+          # thread.conf leaves off, and docs/radiant-bridge.md section 7.4's
+          # coexistence numbers were taken on a TCP-free image and do not
+          # transfer to one with a TCP stack and a broker connection in it.
+          - name: "dongle_thread: MQTT bridge"
+            app: apps/dongle_thread
+            board: nrf54l15dk/nrf54l15/cpuapp
+            radiant_backend: nrf
+            extra_conf: thread.conf;bridge.conf
+            assert_symbol: CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
+            assert_core: "true"
+            assert_sinks: "true"
           - name: "dongle_ti: cc26xx"
             app: apps/dongle_ti
             board: cc26x2r1_launchxl
@@ -662,11 +717,63 @@ jobs:
         if: matrix.assert_symbol != ''
         env:
           WANT: ${{ matrix.assert_symbol }}
+          ASSERT_CORE: ${{ matrix.assert_core }}
         run: |
           set -euo pipefail
           cfg="$(find build -name .config -print -quit)"
           echo "expecting ${WANT} in ${cfg}"
           grep -qx "${WANT}" "${cfg}"
+
+          # THE NEGATIVE CHECK IS THE IMPORTANT ONE and it is not implied by
+          # the positive one above. RADIANT_BACKEND is a CMake cache variable
+          # resolved before Kconfig exists, so a -D that fails to take does not
+          # error - it leaves the default, and the default is the inert radio.
+          # An image with CONFIG_RADIANT_BACKEND_NULL=y links, enumerates,
+          # answers every host command with OK and transmits nothing, which
+          # reads at a bench as a dead antenna rather than as a build fault.
+          if grep -qx 'CONFIG_RADIANT_BACKEND_NULL=y' "${cfg}"; then
+            echo "::error::CONFIG_RADIANT_BACKEND_NULL=y - this image has no radio"
+            exit 1
+          fi
+          if [[ "${ASSERT_CORE}" == "true" ]]; then
+            # ANT_RADIO is the other cache variable decided before Kconfig, and
+            # it fails the same silent way. CMake writes this symbol out on
+            # purpose so that there is something to check.
+            grep -qx 'CONFIG_ANT_DONGLE_RADIO_CORE=y' "${cfg}"
+            grep -qx 'CONFIG_RADIANT_BACKEND_NRF=y' "${cfg}"
+          fi
+
+      # RADIANT_SINK_DEFINE() uses STRUCT_SECTION_ITERABLE, and the section it
+      # emits into is placed only by radiant_bridge_sections.ld, which the
+      # application has to add with zephyr_linker_sources(). Forget it and the
+      # final link fails - but if it ever DID link, STRUCT_SECTION_FOREACH()
+      # over an unplaced section is not a compile error: it silently iterates
+      # zero sinks, and every sample the bridge produces goes nowhere while
+      # everything reports success.
+      #
+      # A silent failure is worth two lines of CI. The firmware also logs
+      # "bridge: N sinks" at boot and errors on zero, but that needs a console
+      # and a board; this needs neither.
+      - name: Verify the bridge sink section was placed
+        if: matrix.assert_sinks == 'true'
+        run: |
+          set -euo pipefail
+          elf="$(find build -name zephyr.elf -print -quit)"
+          echo "checking sink section symbols in ${elf}"
+          for sym in _radiant_sink_list_start _radiant_sink_list_end; do
+            if ! arm-zephyr-eabi-nm "${elf}" | grep -q " ${sym}\$"; then
+              echo "::error::${sym} absent - the linker fragment was not added"
+              exit 1
+            fi
+          done
+          start="$(arm-zephyr-eabi-nm "${elf}" | awk '/ _radiant_sink_list_start$/ {print $1}')"
+          end="$(arm-zephyr-eabi-nm "${elf}" | awk '/ _radiant_sink_list_end$/ {print $1}')"
+          span=$(( 0x${end} - 0x${start} ))
+          echo "sink list spans ${span} bytes"
+          if [[ "${span}" -le 0 ]]; then
+            echo "::error::sink list is empty - STRUCT_SECTION_FOREACH would iterate zero sinks"
+            exit 1
+          fi
 
   # apps/hrm_ble - the heart-rate node, and the manufacturer reference design.
   #
