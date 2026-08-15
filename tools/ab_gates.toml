@@ -101,22 +101,39 @@
 # RIG, and the configuration carrying the loss is rig A - which is the A leg of
 # the ADR 0001 acceptance and the shipping release artifact.
 #
-# WHAT THIS DOES NOT ESTABLISH. The two rigs differ in every axis at once: DUT
-# silicon (nRF52840 vs nRF54L15), backend (sdk_ant vs radiant core), transport
-# (USB vs UART), master (apps/sim firmware vs a host script driving a dongle),
-# and received signal by 8 dB (-54 vs -46), which is a real difference in link
-# margin and is on its own a candidate for much of the gap. Nothing here
-# attributes the loss to any one of those, and it would be easy and wrong to
-# read this as "sdk_ant is worse than core" - that comparison is exactly what a
-# controlled A/B is for and this is not one.
+# AND THE SINGLE-AXIS SPLIT NARROWS IT TO THE MASTER, NOT THE DUT. Rig A and
+# rig B differ in every axis at once, so neither on its own attributes anything.
+# One further run changes only ONE thing - the same Feather DUT, unflashed and
+# unchanged (sdk_ant, USB_LEGACY), against the same nRF54L15 DK, with only what
+# that board is RUNNING swapped:
 #
-# WHAT TO DO WITH IT. Do not spend a sitting on the trainer first; the control
-# above says that is not where the evidence points. Take rig A apart one axis at
-# a time - the cheapest split is the same Feather DUT against the same apps/sim
-# master with only the DUT's backend changed, which is one UF2 drop and is
-# precisely leg B of the 1.7 A/B anyway. If the loss follows the DUT, the
-# headline product has a real defect and the acceptance thresholds are the least
-# of it.
+#   master = apps/sim firmware (sdk_ant)          -> 4.87-7.94 %   -53..-55 dBm
+#   master = apps/dongle core+nrf via ant_sim.py  -> 2.35 %        -49 dBm
+#                                                    (17 RX_FAIL of 722, 180 s)
+#
+# Same board, same receiver, same room, same afternoon, one variable. So a large
+# part of rig A's loss is on the TRANSMIT side and is a property of what the L15
+# was running - it is not the Feather, not the USB transport, not the sdk_ant
+# receive path, and not the room.
+#
+# NOT transmit power, which is already settled and must not be re-run:
+# ANT_SIM_TX_POWER's own help records 300 s runs at -12, 0 and +4 dBm - a 16 dB
+# spread - with loss staying between 0.85 and 1.37 %. Loss that survives 16 dB
+# is not a link-budget problem.
+#
+# The live suspicion is therefore apps/sim ON nRF54L15 SILICON. sdk-ant is an
+# nRF52 stack by construction (see ANT_LIB_DIR keying off SOC_SERIES_NRF52X),
+# and its historical figures - the 0.85-1.37 % quoted above, and the 0.26-0.60 %
+# floor in archive/benchmarks/ - were taken with the Feather in the rig. Note
+# what Phase 2.7(b) actually asks for: "re-take all three arms against apps/sim
+# firmware ON THE FEATHER". That instruction may already be the fix.
+#
+# WHAT TO DO WITH IT. Do not spend a sitting on the trainer; the control says
+# that is not where the evidence points. Build apps/sim for the Feather
+# (nrf52840 is in its platform_allow) and re-take A1/A2 with the L15 as the DUT
+# instead. If the 5-8 % goes with the master's silicon, the acceptance rig has
+# been wrong rather than the product, and 1.7 is unblocked by a build rather
+# than by a bench sitting.
 #
 # An attempt to separate room from rig by moving both ends to a quiet channel
 # (RF 72 and the RF 78 that ANT_SIM_RF_FREQ's help recommends) did not work -
@@ -179,13 +196,14 @@
 # timestamp, and not the script's own success message either.
 #
 # WHAT HAS TO HAPPEN BEFORE PHASE 1.7. Not "quieten the room" - see the control
-# above. Split rig A one axis at a time until the 5-8 % is attributed, starting
-# with the DUT backend on the same Feather against the same apps/sim master,
-# because that is one UF2 drop and is leg B of the 1.7 A/B regardless. Only when
-# rig A's own loss is understood, and A1 vs A2 repeats inside 0.35 pp, do these
-# thresholds mean anything - and re-deriving them from a bench whose loss is
-# unexplained would bake that fault into the product's acceptance criteria,
-# which is the one outcome to avoid.
+# above - and not a bench sitting either, on current evidence. Move the master
+# off the nRF54L15: build apps/sim for the Feather and put the DUT on the L15.
+# If the 5-8 % follows the master's silicon, the acceptance RIG was wrong rather
+# than the product, and 1.7 is unblocked by a build. Only when rig A's own loss
+# is understood, and A1 vs A2 repeats inside 0.35 pp, do these thresholds mean
+# anything - and re-deriving them from a bench whose loss is unexplained would
+# bake that fault into the product's acceptance criteria, which is the one
+# outcome to avoid.
 #
 # And before fitting any threshold here to a bench number: check the number can
 # be accounted for. The previous 1.0 -> 2.5 % retune was fitted to a broken
