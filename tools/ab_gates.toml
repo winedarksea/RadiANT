@@ -29,6 +29,75 @@
 # `derived.timing_offgrid_host_ms` and by having no code path that reads either
 # of the other two. This comment is here so that stays deliberate.
 #
+# ---------------------------------------------------------------------------
+# 2026-08-15: THESE THRESHOLDS CANNOT BE RE-DERIVED ON THE CURRENT BENCH, AND
+# NO A/B/A SITTING RUN ON IT TODAY IS VALID. Read this before planning one.
+# ---------------------------------------------------------------------------
+#
+# The plan's Phase 1.1 asked for one recalibration run with the host's RZ616
+# Wi-Fi 6E card disabled, on the theory that every number below "describes a
+# room with a Wi-Fi 6E card in it". That run was NOT done and should not be:
+# the card is this machine's only network interface, so disabling it severs the
+# bench host, and - decisively - the room carries so much other 2.4 GHz traffic
+# that switching off one local card isolates nothing. Turning it off cannot
+# answer the question it was proposed to answer. Do not re-propose it.
+#
+# What was done instead is the measurement that actually bounds these numbers:
+# three A-leg repeats, taken back to back with nothing changed between them.
+#
+#   rig  DUT   Feather nRF52840, apps/dongle, sdk_ant backend, USB_LEGACY
+#        MASTER nRF54L15 DK running apps/sim FIRMWARE (not tools/ant_sim.py
+#               driving a dongle - baseline.schema.json refuses that, and
+#               section 7.4.1 of docs/radiant-bridge.md says why), device
+#               number pinned to 33333, RF 57, 100 W / 80 rpm
+#
+#   A1   300 s   loss (exact) 7.94 %   93 of 1171 missing
+#   A2   300 s   loss (exact) 4.87 %   57 of 1171 missing
+#   A3   120 s   loss (exact) 7.04 %   33 of  469 missing
+#
+# Every packet of it was reported by the radio as RX_FAIL, so `unexplained_loss`
+# is 0 and each run is individually valid - the loss is real air, not a host or
+# dongle fault. Power and cadence decoded to within 1.7 of target throughout and
+# accumulator continuity was clean, so the link and the instrument are both
+# fine. Signal was -54 to -55 dBm, far above the ~-90 dBm ANT tracks to, so it
+# is not a range or sensitivity problem either.
+#
+# THE SPREAD IS THE RESULT. A1 vs A2 is 3.07 pp against
+# `repeat_a_max_delta_pp = 0.35` below - a factor of nearly nine. That gate's
+# own rule is that A1 and A2 disagreeing by more than it VOIDS THE SITTING, so
+# an A/B/A run on this bench is void before the B leg is even flashed. And a
+# threshold cannot be re-derived from a bench whose repeat spread is ten times
+# the threshold being derived.
+#
+# The absolute numbers are an order of magnitude above `absolute_ceiling_pct`
+# (1.5) and more than an order above the 0.26-0.60 % floor recorded in
+# `archive/benchmarks/`, so this is not the old floor drifting - it is a
+# different regime.
+#
+# LIKELY MECHANISM, stated as the hypothesis it is: a real trainer is powered on
+# in the room, broadcasting on THREE device types at once (#52233 as speed,
+# power meter and fitness equipment), continuously, on the ANT+ frequency, under
+# the ANT+ network key. That is co-channel ANT+ contention with our own 4 Hz
+# master, which is a direct collision mechanism and has nothing to do with
+# Wi-Fi. It was NOT confirmed by experiment: the confirming test is to re-take
+# A1/A2 with that trainer powered down, and only the bench operator can do that.
+# An attempt to confirm it by moving both ends to RF 72 produced zero packets on
+# either frequency and is unexplained - see the bench-trap note below - so treat
+# the mechanism as unproven and the SPREAD as the established fact.
+#
+# BENCH TRAP FOUND DOING THIS: scripts/flash_sim_jlink.ps1 reports "Flashed" and
+# the board's uptime does NOT reset - the console kept counting from 00:14:06 to
+# 00:14:36 across a reflash. The image does change (the RF-57 build stopped being
+# audible), but anything that depends on a fresh boot cannot be assumed. Check
+# the boot banner, not the script's own success message.
+#
+# WHAT HAS TO HAPPEN BEFORE PHASE 1.7: power down the other ANT+ transmitters in
+# the room, repeat A1 and A2, and confirm the delta is inside 0.35 pp. If it is,
+# these thresholds stand and the sitting can go ahead. If it is not, the numbers
+# below describe a bench that no longer exists and re-deriving them is the
+# work - but re-deriving them from a contended room would bake the contention
+# into the product's acceptance criteria, which is the one outcome to avoid.
+#
 # And before fitting any threshold here to a bench number: check the number can
 # be accounted for. The previous 1.0 -> 2.5 % retune was fitted to a broken
 # measurement and encoded the tool's own bug as the spec.
