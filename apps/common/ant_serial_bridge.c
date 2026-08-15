@@ -36,6 +36,7 @@
 
 #include "ant_transport.h"
 
+#include "ant_health.h"
 #include "ant_radio.h"
 #include "ant_wire.h"
 
@@ -215,6 +216,30 @@ static void handle_request(const uint8_t *body, uint8_t len)
 	uint8_t req_id = body[1];
 
 	switch (req_id) {
+#if defined(CONFIG_ANT_DONGLE_HEALTH_COUNTERS)
+	case ANTW_MESG_RADIANT_HEALTH_ID: {
+		/*
+		 * REQUEST-ONLY, which is the whole reason it is safe to add at
+		 * all: nothing emits 0xF6 unsolicited, so a host that never
+		 * asks sees a byte stream identical to a build without the
+		 * feature - and tools/ab_gates.toml requires the conformance
+		 * transcripts to stay byte-identical.
+		 *
+		 * The channel byte is ignored: everything counted is
+		 * device-wide, and answering per-channel would imply a
+		 * partition of the counters that does not exist.
+		 */
+		size_t n = ant_health_fill(payload, sizeof(payload));
+
+		if (n == 0u) {
+			err = (antr_err_t)ANTW_INVALID_MESSAGE;
+			break;
+		}
+		send_message(ANTW_MESG_RADIANT_HEALTH_ID, payload, (uint8_t)n);
+		break;
+	}
+#endif
+
 	case ANTW_MESG_CAPABILITIES_ID: {
 		err = antr_capabilities_get(payload);
 		if (!err) {
@@ -556,6 +581,13 @@ static void handle_burst(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	 * exists so a transfer that dies mid-flight cannot wedge this thread.
 	 */
 	if (k_sem_take(&burst_block_free, K_MSEC(1000)) != 0) {
+		/* A counter and nothing more, deliberately. Shortening the
+		 * stall does not help anyone: the 1000 ms IS the back-pressure,
+		 * so a shorter one makes the host's transfer FAIL where it
+		 * currently waits. Zwift uses acknowledged data rather than
+		 * burst, so a non-zero reading here is a different host's
+		 * problem and worth being able to see from one. */
+		ant_health_note(ANT_HEALTH_BURST_STALL);
 		send_response(ch, msg_id, ANTW_TRANSFER_IN_PROGRESS);
 		return;
 	}
@@ -1251,8 +1283,28 @@ static void bridge_thread_fn(void *p1, void *p2, void *p3)
  * existing - keep it that way: antr_init() runs before
  * ant_serial_bridge_init().
  */
+#if defined(CONFIG_ANT_DONGLE_RX_TAP)
+/*
+ * The RadiANT bridge's ingest point. Declared here rather than in a header
+ * because that is the whole hook: one declaration and one call, both compiled
+ * out entirely in any image that does not set the symbol - which is every
+ * apps/dongle build, so that image stays byte-identical and the `zero-cost` CI
+ * job keeps its meaning.
+ *
+ * Resolved at link time, exactly like antr_on_message() itself and for the
+ * same reason: there is one definition per image (apps/dongle_thread/src/
+ * rx_tap.c) and nothing to register, so there is nothing here that can fail.
+ * It reads a copy and returns; what goes out the transport below is unchanged.
+ */
+void ant_dongle_rx_tap(const struct antr_msg *msg);
+#endif
+
 void antr_on_message(const struct antr_msg *msg)
 {
+#if defined(CONFIG_ANT_DONGLE_RX_TAP)
+	ant_dongle_rx_tap(msg);
+#endif
+
 	/*
 	 * Wire format: [0xA4][LEN][ID][channel+payload...][XOR checksum]
 	 * Total size  = LEN + 4 bytes.

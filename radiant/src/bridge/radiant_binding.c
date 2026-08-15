@@ -87,6 +87,15 @@ int radiant_binding_bind(uint16_t devnum, uint8_t devtype, uint8_t trans_type,
 	return -ENOSPC;
 }
 
+int radiant_binding_set_period(uint32_t source, uint16_t period)
+{
+	if (source >= RADIANT_BINDING_MAX || !table[source].used) {
+		return -ENOENT;
+	}
+	table[source].period = period;
+	return 0;
+}
+
 const struct radiant_binding *radiant_binding_get(uint32_t source)
 {
 	if (source >= RADIANT_BINDING_MAX || !table[source].used) {

@@ -96,6 +96,12 @@ struct radiant_sample {
 	uint64_t t_us;
 };
 
+/* P6 (S5) owns the real definition. Forward-declared HERE, above the first
+ * prototype that names it, rather than beside the sink struct further down: a
+ * struct first named inside a parameter list gets a type scoped to that
+ * declaration, and the definition then "conflicts" with its own prototype. */
+struct radiant_binding;
+
 /* Reserved source for the bus's own diagnostics (drop counter, section
  * 3.3) - never a real binding's index. */
 #define RADIANT_BRIDGE_DIAG_SOURCE  UINT32_MAX
@@ -129,6 +135,20 @@ struct radiant_bridge_stats {
 
 const struct radiant_bridge_stats *radiant_bridge_stats_get(void);
 
+/*
+ * Announce a binding change to every sink that registered a binding_changed
+ * callback. Thread context only, same rule as drain(): a sink may answer this
+ * with a retained MQTT discovery message (section 9.2), which is a socket
+ * write.
+ *
+ * The sink struct has carried this callback since P5 and nothing has ever
+ * invoked it - the binding table simply had no way to tell anyone. `b` may be
+ * NULL, which is how an unbind is announced; a sink must handle that rather
+ * than assume a binding is always present.
+ */
+void radiant_bridge_binding_changed(uint32_t source,
+				    const struct radiant_binding *b);
+
 /* Test/reset hook. Not for production use. */
 void radiant_bridge_reset(void);
 
@@ -141,7 +161,8 @@ void radiant_bridge_reset(void);
  * ---------------------------------------------------------------------------
  */
 
-struct radiant_binding; /* forward-declared; P6 (S5) owns the real definition */
+/* (struct radiant_binding is forward-declared above, before the first
+ * prototype that names it.) */
 
 struct radiant_sink {
 	const char *name;

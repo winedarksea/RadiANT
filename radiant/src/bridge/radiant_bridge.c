@@ -138,6 +138,16 @@ uint32_t radiant_bridge_drain(void)
 	return n;
 }
 
+void radiant_bridge_binding_changed(uint32_t source,
+				    const struct radiant_binding *b)
+{
+	STRUCT_SECTION_FOREACH(radiant_sink, sink) {
+		if (sink->binding_changed != NULL) {
+			sink->binding_changed(source, b);
+		}
+	}
+}
+
 const struct radiant_bridge_stats *radiant_bridge_stats_get(void)
 {
 	return &stats;

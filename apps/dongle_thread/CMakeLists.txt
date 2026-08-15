@@ -78,6 +78,67 @@ target_sources_ifdef(CONFIG_ANT_DONGLE_BLE_COEX_LOAD app PRIVATE
 target_sources_ifdef(CONFIG_ANT_DONGLE_THREAD_COEX_LOAD app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/thread_coex_load.c")
 
+# ── The RadiANT bridge: the sample bus and everything on it ─────────────────
+#
+# docs/radiant-bridge.md sections 3-6 and 9. Five files from the module's
+# src/bridge/ directory plus this application's own half under src/.
+#
+# The shape is copied from radiant/tests/CMakeLists.txt, which is the only
+# working precedent in the tree for consuming this directory, and the
+# zephyr_linker_sources() line below is the part of it that is NOT optional.
+#
+# RADIANT_SINK_DEFINE() (radiant_bridge.h) uses STRUCT_SECTION_ITERABLE, which
+# emits each sink into a section named after the struct type. Emitting into a
+# section and having that section PLACED - with the _radiant_sink_list_start /
+# _end symbols STRUCT_SECTION_FOREACH() walks between - are two different
+# things, and radiant_sink has no in-tree linker fragment of its own the way
+# shell commands and bt_conn_cb do. Omit the line and the best case is an
+# undefined reference at the final link; the worse case is that it links and
+# STRUCT_SECTION_FOREACH() silently iterates ZERO sinks, which is not a
+# compile error, not a link error, and looks from the console exactly like
+# "no sensors in range". src/bridge_pump.c logs the count at boot for that
+# reason: "bridge: 0 sinks" is the failure announcing itself.
+#
+# radiant_matter.c and radiant_rd_adapter.c are deliberately NOT here. Both
+# compile and are tested (radiant/tests builds them), but Matter needs
+# connectedhomeip - which is a flash-budget spike this application has not run
+# - and the running-dynamics adapter has no bench evidence behind it yet.
+# Linking either would make an untested path look like a shipped one.
+if(CONFIG_RADIANT_BRIDGE)
+  target_sources(app PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_bridge.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_binding.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_hr_adapter.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_rules.c"
+    # Liveness lands with the bus, not after a sink. RADIANT_SAMPLE_STALE has
+    # been defined and honoured since P6 with nothing producing it, and a sink
+    # written against a bus that never marks anything stale grows that
+    # assumption into itself.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_liveness.c"
+    # The application half: the drain pump and the 1 Hz liveness clock.
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/bridge_pump.c"
+  )
+  target_include_directories(app PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  zephyr_linker_sources(SECTIONS
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_bridge_sections.ld")
+endif()
+
+target_sources_ifdef(CONFIG_ANT_DONGLE_RX_TAP app PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/rx_tap.c")
+
+# CONFIG_ANT_DONGLE_SELF_CHANNELS is an int, so target_sources_ifdef() (which
+# tests for truthiness) would fire on 0 as well - Kconfig writes
+# CONFIG_ANT_DONGLE_SELF_CHANNELS=0 rather than leaving it unset for an int
+# symbol. Compare explicitly.
+if(CONFIG_ANT_DONGLE_SELF_CHANNELS GREATER 0)
+  target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/self_channels.c")
+endif()
+
+target_sources_ifdef(CONFIG_ANT_DONGLE_MQTT_SINK app PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/mqtt_sink.c")
+
 # ── The hostless node's identity (compat-C6) ────────────────────────────────
 #
 # Same wiring as apps/dongle's own CMakeLists.txt - see that file's comment
