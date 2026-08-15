@@ -216,12 +216,16 @@ is the single change that extends the claim to the profiles people actually
 own, and it costs one adapter per profile — not one per profile per sink.
 
 **Environmental fields ride the same mechanism and are the shortest adapters in
-the set.** An ANT+ Environment `0x19` page 1 is one `0x10` temperature record;
-common page 84 — legal in any profile, which is what makes it the interesting
-one — would be one `0x10` and one `0x11`. Neither is implemented, and neither is
-verified against this project's code: `device-profiles.md` §3.7 and §3.4 are the
-honest status of each. Section 8.1a is where that status is set against what the
-Matter side already does with the types.
+the set.** An ANT+ Environment `0x19` page 1 is one `0x10` temperature record
+plus a `0x36` event count (`radiant_env_adapter.c`); common page 84 — legal in
+any profile, which is what makes it the interesting one — is up to two records
+per message, drawn from `0x10` temperature, `0x11` humidity, `0x12` pressure,
+`0x16` speed, `0x18` angle and `0x36` event count
+(`radiant_common_adapter.c`). Both are now implemented and both are derived from
+their primary documents; `device-profiles.md` §3.7 and §3.4 carry the layouts
+and the one limitation that remains, which is that no environmental sensor is on
+the bench and both are vector-tested rather than hardware-verified. Section 8.1a
+is where that status is set against what the Matter side does with the types.
 
 An ANT+ heart rate page 0 becomes three bus records, not one:
 
@@ -1300,20 +1304,34 @@ endpoint for every type that has a row. A type with no row is not an error — i
 is a field the Matter plane declines and the MQTT plane carries.
 
 ```c
-struct matter_type_map {
+struct radiant_matter_attr_conv {
+	uint32_t attribute;
+	int32_t  mul;                 /* 0 = CONSTANT: write `offset` once, at creation */
+	int32_t  div, offset;
+};
+
+struct radiant_matter_type_map {
 	uint8_t  field_type;          /* the §7 vocabulary */
 	uint16_t device_type;         /* Matter Device Library, 0 = cluster only */
 	uint32_t cluster, attribute;
 	int32_t  mul, div, offset;    /* SI -> the cluster's unit */
+
+	uint8_t  n_extra;             /* further attributes in the same cluster */
+	struct radiant_matter_attr_conv extra[RADIANT_MATTER_MAX_EXTRA];
 };
 ```
+
+**A row is a list of attributes, not one attribute**, and §8.1a is where the two
+things that forced that are set out.
 
 | Field type | Matter device type | Cluster / attribute | SI -> cluster unit |
 |---|---|---|---|
 | `0x02` occupancy | Occupancy Sensor `0x0107` | Occupancy Sensing `0x0406` / `Occupancy` | boolean |
 | `0x10` temperature | Temperature Sensor `0x0302` | Temperature Measurement `0x0402` / `MeasuredValue` | int16, 0.01 °C: `K x 100 - 27315` |
 | `0x11` relative humidity | Humidity Sensor `0x0307` | Relative Humidity Measurement `0x0405` / `MeasuredValue` | u16, 0.01 %: `% x 100` |
-| `0x25` battery state of charge | — cluster only, on the binding's own endpoint | Power Source `0x002F` / `BatPercentRemaining` | 0.5 %: `% x 2` |
+| `0x12` barometric pressure | Pressure Sensor `0x0305` | Pressure Measurement `0x0403` / `MeasuredValue`, **plus `ScaledValue` and `Scale`** | int16, whole kPa: `Pa / 1000`; scaled: `Pa / 10` at `Scale = 2` (§8.1a) |
+| `0x25` battery state of charge | — cluster only, on the source's **existing primary** endpoint | Power Source `0x002F` / `BatPercentRemaining` | 0.5 %: `% x 2` |
+| `0x16` speed, `0x18` angle | **none, and it is section 1's rule for the second time** | — | MQTT plane only (§8.1a). Wind is what forced the decision; `0x16` also carries FE-C's trainer speed, and it has no cluster either |
 | `0x26` heart rate | **none, and section 1 is the whole reason** | — | — |
 
 The four derived booleans of section 6 are all type `0x02`, so they are four
@@ -1345,20 +1363,25 @@ profile, which is the exact cost section 3's sample bus exists to abolish, and
 one layer up from where the bus already solved it. The tell was that adding
 temperature to it needed a design discussion rather than a table row.
 
-### 8.1a Temperature and humidity are the clean case, and it is worth saying out loud
+### 8.1a The environmental quantities are the clean case, and it is worth saying out loud
 
 Every other quantity in this document reaches Matter by a compromise: occupancy
 is a stretch (§8.2), the MEI cluster is invisible until someone else's code
 learns it (§8.3), the passenger cluster is deliberately mislabelled (§8.3b).
-**Temperature and humidity are the case where none of that applies.** Matter has
-a device type, a cluster and an attribute for each, with the right units and the
-right semantics, and `radiant-telemetry.md` section 7 already allocated `0x10`
-and `0x11` against them. Nothing is stretched, nothing is hidden, and nothing is
-mislabelled.
+**Temperature, humidity and pressure are the case where none of that applies.**
+Matter has a device type, a cluster and an attribute for each, with the right
+units and the right semantics, and `radiant-telemetry.md` section 7 already
+allocated `0x10`, `0x11` and `0x12` against them. Nothing is stretched, nothing
+is hidden, and nothing is mislabelled.
 
 They are therefore **tier 1**: they appear on the QR scan with nothing
 installed, correctly named, in every controller — the same tier as the derived
 booleans and by a much shorter argument.
+
+Two quantities page 84 also carries do **not** get that treatment, and the two
+refusals are different in kind: **wind** has no Matter cluster at all and takes
+the MQTT plane, while **pressure** has one whose mandatory attribute is too
+coarse to be useful. Both are below.
 
 **The one trap is that temperature is the only row with an offset.** The
 vocabulary's canonical unit is kelvin and Matter wants 0.01 °C, so the
@@ -1369,25 +1392,145 @@ would look complete and ship a 273.15 K error on exactly one row.
 `radiant-telemetry.md` section 7's worked example already states the arithmetic;
 the map has to be able to express it.
 
-**Where the values come from, and the three sources are not equally solid:**
+**Where the values come from, and the three sources are no longer unequal:**
 
 | Source | Status |
 |---|---|
-| A RadiANT `0x60` node whose descriptor announces `0x10` or `0x11` | **Free by construction**, and it needs nothing phase 4 was not already building. The descriptor names the type, the bus carries it, the table maps it. No adapter, no per-profile code |
-| ANT+ Environment `0x19` | One adapter per §3.1. Not implemented; reference-only in `device-profiles.md` §3.7, on four converging open-source sources rather than a primary spec |
-| ANT+ common page 84 | The "any device type" path, and **the weakest of the three.** A common page is legal in any profile, and page 84 is documented as carrying barometric pressure, humidity, wind speed and direction — but `device-profiles.md` §3.4 records it as unimplemented on third-party evidence with no number verified against this project's code |
+| A RadiANT `0x60` node whose descriptor announces `0x10`, `0x11` or `0x12` | **Free by construction.** The descriptor names the type, the bus carries it, the table maps it. No adapter, no per-profile code |
+| ANT+ Environment `0x19` | **Implemented** — `profile_env.c` + `radiant_env_adapter.c`, temperature and event count. Derived from the primary D00001502 Rev 1.0; `device-profiles.md` §3.7 |
+| ANT+ common page 84 | **Implemented** — `profile_common_decode_84()` + `radiant_common_adapter.c`. Derived from the primary D00001198 Rev 3.1 and pinned by that document's own §6.13.1 golden vector; `device-profiles.md` §3.4. This is the "any device type" path and it is now the *widest* of the three, not the weakest |
 
-The distinction matters because "temperature and humidity are free" is true of
-the first row and an ambition in the other two. The Matter side is free in all
-three cases; what is unverified is the ANT decode, and that is a conformance
-question rather than an architecture one. **Nothing in this section should be
-read as a claim that page 84 works.**
+The three rows used to differ in evidence, and they no longer do: all three are
+primary-derived. **What they still differ in is bench exposure.** No ANT+
+environmental sensor is on this bench, so the two ANT rows are verified against
+the spec vector, `tools/ant_sim.py` and ztest, and not against a real sensor.
+That is a conformance question rather than an architecture one, and it is a
+materially better position than the one this section used to record — but
+"vector-tested" is not "verified", and this section should not be read as either
+more or less than that.
+
+#### The keying rule is the reason page 84 is the widest row
+
+`ANT+ Common Data Pages` Rev 3.1 Table 4-1 puts pages `0x40`–`0x5D` in a range
+whose "use is defined by the transmission type of the ANT channel parameter" —
+not by the device type. So weather data is legal on a heart-rate strap, a power
+meter or a bike light, and the common decoder therefore runs on **every** bound
+channel alongside whichever profile adapter owns that channel's device type.
+Two producers write one source, which is the case `radiant_bridge.h`'s `field_id`
+block exists to make safe: `0x00`–`0x1F` for the bound profile's adapter,
+`0x20`–`0x3F` for the common pages, one id per page-84 subpage. Without the
+split, a sink keying stored history on `(source, field_id)` would silently merge
+two different series. `device-profiles.md` §3.4 carries the rule, the layout and
+the heart-rate toggle trap that nearly made it fail on the most common sensor
+there is.
+
+#### Wind has no cluster, so it takes the MQTT plane — §1's rule, for the second time
+
+Page 84's subpages 4 and 5 carry wind speed and wind direction. **The Matter
+data model has flow, pressure, relative-humidity, temperature, occupancy and
+air-quality clusters and no wind anything.** So `radiant_matter.c` gets no row
+for `0x16` speed or `0x18` angle, and `mqtt_sink.c`'s `ha_table[]` carries them
+instead.
+
+That is the **second** instance of §1's rule, after heart rate (§8.3), and it is
+the same rule for the same reason: mapping a quantity onto a cluster that means
+something else is worse than not mapping it. It is worth stating as a rule
+rather than as two coincidences, because the temptation is different each time —
+for heart rate it was Flow Measurement (§8.3b), for wind it would be Flow
+Measurement again, and "flow" is close enough to "wind" to look reasonable on a
+whiteboard and wrong on every card in Home Assistant.
+
+Direction goes out with a unit and no `device_class`: it is an angle in radians,
+and Home Assistant's canonical list has no wind-direction class that is not
+degrees-only, so per `ha_table[]`'s own "a guess costs the entity" rule it gets
+none. Speed already had a row — it is a bicycle speed as much as a wind speed.
+
+#### Pressure: the mandatory attribute is useless and the useful one is optional
+
+Barometric pressure arrives from page 84 subpage 2 and has a real Matter device
+type — Pressure Sensor `0x0305`, Pressure Measurement `0x0403`. The trap is
+resolution, not semantics.
+
+**`MeasuredValue` is an `int16s` in whole kPa** (`pressure-measurement-cluster.xml:39`).
+Sea-level pressure runs about 98–105 kPa, so a barometer reported that way has
+roughly seven distinguishable states, and every weather trend a user might care
+about — a 0.3 kPa front passing through — is quantised out of existence.
+
+The cluster's own answer is `ScaledValue` (`0x0010`) with `Scale` (`0x0014`),
+where `ScaledValue = 10^Scale x kPa`. **`Scale = 2` gives 10 Pa per step** and
+tops out at 327.67 kPa, which covers every terrestrial pressure with room to
+spare — and it is exactly the wire resolution page 84 carries (0.01 kPa), so
+nothing is invented and nothing is thrown away.
+
+But `ScaledValue`/`Scale` are **optional** and `MeasuredValue` is **not**. An
+endpoint serving only the useful pair is non-conformant; an endpoint serving
+only the mandatory one is a useless entity. **The decision is to write all
+three** — `MeasuredValue` at `Pa / 1000`, `ScaledValue` at `Pa / 10`, and
+`Scale` as the constant 2. A refused extra is skipped and does *not* suppress
+the primary: the primary's narrower range is the one that fits, so an extra that
+overflows is the more-precise attribute declining rather than the reading
+failing.
+
+#### The `extra[]` mechanism, and the second bug it fixes
+
+Pressure is what turned a row from one attribute into a list, and the mechanism
+is deliberately small: `struct radiant_matter_type_map` grows an `extra[]` array
+of `struct radiant_matter_attr_conv`, each an `(attribute, mul, div, offset)`,
+written into the **same cluster** as the primary. The arithmetic is shared with
+the primary rather than copied, because a primary and an extra that rounded
+differently would drift.
+
+**`mul == 0` means CONSTANT**: `offset` is written verbatim, exactly once, when
+the endpoint is created, and no sample is consulted. That is not a convenience —
+it is the only moment such a value could be written. On a dynamic endpoint
+**every attribute is external storage by construction**
+(`attribute-storage.h:73-77` ORs `ZAP_ATTRIBUTE_MASK(EXTERNAL_STORAGE)` into
+`DECLARE_DYNAMIC_ATTRIBUTE` unconditionally), so the application owns every
+value and the stack stores nothing on its behalf. A constant nobody writes reads
+back as zero.
+
+Which is the second bug. **`OccupancySensorType` must not be left at 0**,
+because 0 is PIR, and [home-assistant/core#164839](https://github.com/home-assistant/core/issues/164839)
+proposes remapping PIR endpoints from `device_class: occupancy` to
+`device_class: motion`. The four derived booleans of §6 come from a chest strap
+and a crank; a controller release could relabel every one of them as a motion
+sensor with nothing in this repository changing. The occupancy row therefore
+carries two constants — `OccupancySensorType = 3` (physical contact) and
+`OccupancySensorTypeBitmap = 0x04`, which must agree because a controller may
+read either — and "physical contact" is the honest one of the four the enum
+offers: the signal is that a thing is in contact with a person or being driven
+by one.
+
+#### The battery row now does what it always said it did
+
+`device_type = 0` means "cluster only, on the binding's own endpoint", and until
+this change the endpoint allocator called through unconditionally, so a battery
+field allocated its **own** endpoint with `device_type = 0`. In Matter that is a
+bridged node with no device type and a single Power Source cluster — a phantom
+entity in every controller, sitting beside the real sensor and reporting its
+battery as though it were a separate thing in the house. Harmless in a table
+nobody rendered; not harmless once a CHIP stack is behind the seam.
+
+A `device_type == 0` row now resolves to the source's **existing primary
+endpoint** — the first one instantiated for that source that carries a device
+type of its own. If there is no primary yet, the row is **deferred, not
+dropped**, and at `LOG_DBG` rather than `LOG_WRN`: a battery page arriving
+before any measurement is ordinary for a sensor whose common page 82 leads its
+first data page, and the next battery sample after the primary exists lands on
+it.
 
 **Endpoint budget.** Section 5 sizes the binding table against the Matter
 endpoint count and the coexistence budget together, and this is the change most
 likely to push on it. It pushes gently: an environment binding is one or two
 endpoints, against three for a heart-rate binding, so the worst case per binding
-does not move.
+does not move. Battery no longer costs an endpoint at all. **The worst case
+still does not close**, and that is accepted rather than unnoticed:
+`RADIANT_BINDING_MAX` is 8 and one heart-rate binding alone announces four
+derived booleans, against `RADIANT_MATTER_MAX_ENDPOINTS` 16 — a number that is
+not this table's to pick unilaterally, since it must equal the CHIP side's
+`BRIDGE_MAX_DYNAMIC_ENDPOINTS_NUMBER` and
+`CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT`. Overrunning it logs a warning and
+the field does not appear; it is never a silent drop.
 
 ### 8.2 Occupancy is a stretch, not a lie, and that is why it was chosen
 
@@ -1750,13 +1893,26 @@ Putting Matter first also front-loads the flash ceiling, which is the second of
 the two risks this ordering exists to retire early, and it means the first
 demo is the zero-install one.
 
-**Temperature and humidity add no phase, and that is the test of §8.1.** They
-are two rows in a table phase 4 has to build anyway, reachable from any `0x60`
-node whose descriptor announces them, so the Matter half costs a table edit.
-What is *not* in phase 4 is the ANT+ side of §8.1a — an Environment `0x19`
-adapter or a common page 84 decoder — because each of those is a conformance
-job against evidence this project has not verified, and neither blocks the
-other rows from working.
+**Temperature, humidity and pressure add no phase, and that is the test of
+§8.1.** They are three rows in a table phase 4 has to build anyway, reachable
+from any `0x60` node whose descriptor announces them, so the Matter half costs a
+table edit. The prediction held: the ANT+ side of §8.1a — the Environment `0x19`
+adapter and the common page 84 decoder — was built afterwards, from the primary
+documents, and needed **no** change to the type map beyond adding the pressure
+row. What did change the map was a Matter conformance detail (pressure's kPa
+resolution) and a Matter storage detail (constants on external-storage
+attributes), not anything about the ANT decode.
+
+**What remains outstanding in the Matter plane is the CHIP integration itself.**
+`apps/dongle_thread/matter.conf` exists and builds `CONFIG_CHIP=y` beside
+RadiANT, which is where the flash, RAM, `CONFIG_BT` and timeslot risks get
+retired as a build — but there is **no Matter source in that image**:
+no `.zap`/`.matter` in this repository, `radiant_matter.c` still excluded by
+`apps/dongle_thread/CMakeLists.txt:102-106`, and
+`radiant_matter_attr_write()` still a `__weak` no-op that has never written an
+attribute. Everything §8.1 and §8.1a describe is the data model behind that
+seam, driven directly by ztest. The nRF5340 as a second target is separately
+outstanding — see §11 and `docs/backends.md`.
 
 **BLE is deliberately last.** Most heart-rate straps are already ANT+/BLE dual,
 so re-broadcasting HR over BLE is the *least* valuable sink for the headline
@@ -1781,13 +1937,6 @@ should be specified as such when its turn comes.
 - **`0x27` time interval** or any other vocabulary addition, until the type is
   allocated in `radiant-telemetry.md` and `tools/ant_pages.py` in the same
   change. Section 3.2.
-- **ANT+ Environment `0x19` and common page 84 decoders.** The Matter endpoints
-  for `0x10` and `0x11` are in v1 (§8.1a) and a `0x60` node reaches them today;
-  what is deferred is decoding the two ANT+ carriers, and the reason is evidence
-  rather than effort. `device-profiles.md` §3.7 and §3.4 record both as
-  unverified against this project's code, and page 84 — the one that would make
-  temperature and humidity arrive from any device type — is the weaker of the
-  two. Neither ships on secondary evidence alone.
 - **Cohort aggregation.** Section 10.2.
 - **A generic ANT-command-to-Matter-actuator relay**, and the two fan paths of
   §8.4a are not it. Relaying an arbitrary ANT+ command to an arbitrary Matter

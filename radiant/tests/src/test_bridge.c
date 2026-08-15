@@ -22,6 +22,8 @@
 
 #include "radiant_bridge.h"
 #include "radiant_hr_adapter.h"
+#include "radiant_matter.h"
+#include "radiant_rules.h"
 
 /* Registered for the life of the test binary (STRUCT_SECTION_ITERABLE is a
  * link-time array, so a sink cannot be created/destroyed per test);
@@ -62,6 +64,32 @@ static void test_reset(void *unused)
 {
 	ARG_UNUSED(unused);
 	radiant_bridge_reset();
+
+	/*
+	 * THE OTHER SINKS' STATE TOO, and this is not belt-and-braces.
+	 *
+	 * RADIANT_SINK_DEFINE() is a link-time array, so every sink in the test
+	 * binary - radiant_rules.c and radiant_matter.c included - is live for
+	 * every drain this file performs, whether or not this file is about
+	 * them. Resetting only the bus left their state carrying over from one
+	 * ZTEST to the next, so a test's result depended on which tests had run
+	 * before it and in what order.
+	 *
+	 * That was latent for as long as the rule evaluator only ever asserted
+	 * on an accumulator advancing since the previous sample. It stopped
+	 * being latent when the activity rule grew a clock: the drop-counter
+	 * test above posts 33 EVENT_COUNT samples on source 1, which leaves an
+	 * advancing run in flight, and the HR adapter tests below then post
+	 * more accumulators on source 1 at a later timestamp and get a derived
+	 * occupancy sample they never asked for - captured by cap_publish()
+	 * like any other, and counted in cap_n.
+	 *
+	 * Resetting here makes each ZTEST hermetic, which is what the isolation
+	 * was always supposed to be.
+	 */
+	radiant_rules_reset();
+	radiant_matter_reset();
+
 	memset(cap_buf, 0, sizeof(cap_buf));
 	cap_n = 0u;
 	cap_want_reject = false;

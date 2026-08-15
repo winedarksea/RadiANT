@@ -941,8 +941,46 @@ Nothing in `radiant` waits on it.
 |---|---|
 | **nRF24L01+** | Not selected — though the frame mapping onto ShockBurst is what validates the whole design (the nRF24AP2 was an ANT MCU bonded to an nRF24L01+ core), and the HAL would not preclude one |
 | **SX1280** (2.4 GHz LoRa) | It *can* do ANT's PHY, but its CRC engine covers payload only while ANT's CRC includes the network address, so it needs software CRC — and it lands near −93 dBm, worse than the nRF52840 already in hand, while the CSS long-range mode that makes LoRa interesting is unusable for ANT. A two-radio gateway (ANT on 2.4 GHz, LoRa sub-GHz backhaul) is an *application* of the telemetry envelope, not a backend |
-| **nRF5340** | Dropped from v1. Its RADIO is on the network core, so sdk-ant needs a whole RPC subsystem for it — which is why `apps/common/ant_serial_bridge.c` already branches on `CONFIG_ANT_NP_HOST`. A separate project of comparable size that buys nothing the nRF52840 dongle does not have. It stays valuable as a *debug* board; see [`testing.md`](testing.md) |
+| **nRF5340** | Dropped from v1 **for `sdk-ant`**, and this row is **under revision for `radiant`** — see the note below. Its RADIO is on the network core, so sdk-ant needs a whole RPC subsystem for it — which is why `apps/common/ant_serial_bridge.c` already branches on `CONFIG_ANT_NP_HOST`. A separate project of comparable size that buys nothing the nRF52840 dongle does not have. It stays valuable as a *debug* board; see [`testing.md`](testing.md) |
 | **A 2 Mbps mode** | Saves ~2 µA and costs ~3 dB of sensitivity. Wrong trade for every stated goal |
+
+### The nRF5340 row is under revision, and the traceable part is where it came from
+
+**The row is a statement about `sdk-ant` that has been read as a statement about
+`radiant`.** It entered this file in its first commit, on 2026-08-09, before
+`radiant` had an nRF radio backend at all, and `docs/spike-b-results.md`
+inherited its wording verbatim ("the shipping firmware's radio backend does not
+run on it — that is the `CONFIG_ANT_NP_HOST` dual-core path"). For `sdk-ant` it
+is correct and unchanged: that stack's protocol library needs the RPC subsystem
+`CONFIG_ANT_NP_HOST` names. **No measurement of `radiant` on an nRF5340 lies
+behind either sentence** — this is a documentary inheritance, not a bench result,
+and no bench failure that would explain it could be found in this repository or
+in its history. (There *is* a transient bench failure in the same spike — part
+1's "the nRF5340 network core cannot print", overturned in part 2 by two
+register writes — but that one is about the console, and offering it as the
+origin of this row would be tidier than it is true.)
+
+**What is known in `radiant`'s favour.** `radiant/spike/promisc` ran on this
+part's **network core** and captured live ANT+ frames off the air
+(`docs/spike-b-part2-results.md`), with the RF configuration this project
+derived for the nRF52840 and confirmed on nRF54L15, unmodified. That is a
+bare-RADIO capture app rather than `radiant_radio_nrf.c`, so it does not show
+the backend builds — it shows the PHY is not what stops it. NCS also runs Matter
+on this part today by splitting `ipc_radio` across the two cores, so the
+arrangement `radiant` would need is established rather than novel.
+
+**What still refuses the part, unchanged, today:**
+
+| Where | What |
+|---|---|
+| `radiant/Kconfig:76` | `RADIANT_BACKEND_NRF` carries `depends on SOC_COMPATIBLE_NRF52X \|\| SOC_COMPATIBLE_NRF54LX`, so the backend cannot be selected on nRF53 at all |
+| `radiant/src/radiant_radio_nrf.c` | the address-arithmetic `#if` chain has an `NRF54LX` branch and an `NRF52X` branch and no third one, so the file would not compile for nRF53 even if Kconfig admitted it |
+
+Correcting those two, placing the backend on `cpunet` beside 802.15.4 and MPSL,
+and carrying `struct radiant_sample` across IPC is a scoped work package that
+**has not been done**. Until it is, the outcome in the table stands and only its
+stated reason is in question. Nothing here should be read as a claim that
+`radiant` runs on an nRF5340.
 
 ---
 

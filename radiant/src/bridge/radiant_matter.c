@@ -28,6 +28,25 @@ static const struct radiant_matter_type_map type_map[] = {
 		.cluster = MATTER_CLUSTER_OCCUPANCY_SENSING,
 		.attribute = MATTER_ATTR_OCCUPANCY,
 		.mul = 1, .div = 1, .offset = 0,
+		/*
+		 * NOT PIR. Zero-initialised, OccupancySensorType means PIR, and
+		 * home-assistant/core#164839 proposes remapping PIR endpoints
+		 * from `device_class: occupancy` to `motion`. "Strap is worn"
+		 * and "bike in use" are not motion; a controller release could
+		 * relabel all four booleans without anything here changing.
+		 * Physical contact is the honest one of the four the enum
+		 * offers - the signal is that a thing is in contact with a
+		 * person or being driven by one.
+		 */
+		.n_extra = 2u,
+		.extra = {
+			{ .attribute = MATTER_ATTR_OCCUPANCY_SENSOR_TYPE,
+			  .mul = 0, .div = 1,
+			  .offset = MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT },
+			{ .attribute = MATTER_ATTR_OCCUPANCY_SENSOR_BITMAP,
+			  .mul = 0, .div = 1,
+			  .offset = MATTER_OCCUPANCY_BITMAP_PHYSICAL_CONTACT },
+		},
 	},
 	{
 		/* The only row with an offset (section 8.1a): canonical unit
@@ -48,9 +67,47 @@ static const struct radiant_matter_type_map type_map[] = {
 		.mul = 100, .div = 1, .offset = 0,
 	},
 	{
+		/*
+		 * Barometric pressure, from common page 84 subpage 2 (package
+		 * C). THREE ATTRIBUTES, and the reason is a resolution trap
+		 * rather than thoroughness:
+		 *
+		 * Pressure Measurement's mandatory `MeasuredValue` is an int16s
+		 * in WHOLE kPa (pressure-measurement-cluster.xml:39). Sea-level
+		 * pressure runs about 98-105 kPa, so a barometer reported that
+		 * way has roughly seven distinguishable states and every
+		 * weather trend a user might care about - a 0.3 kPa front
+		 * passing through - is quantised out of existence.
+		 *
+		 * `ScaledValue` with `Scale` is the cluster's own answer, at
+		 * 10^Scale x kPa. Scale 2 gives 10 Pa per step and tops out at
+		 * 327.67 kPa, which covers every terrestrial pressure with room
+		 * to spare. But it is OPTIONAL and `MeasuredValue` is not, so
+		 * serving only the useful one is a non-conformant endpoint and
+		 * serving only the mandatory one is a useless entity. Both, and
+		 * the constant that makes the second readable.
+		 *
+		 * Pa -> kPa is /1000; Pa -> 0.01 kPa is /10.
+		 */
+		.field_type = RADIANT_FIELD_PRESSURE,
+		.device_type = MATTER_DEVTYPE_PRESSURE_SENSOR,
+		.cluster = MATTER_CLUSTER_PRESSURE_MEASUREMENT,
+		.attribute = MATTER_ATTR_MEASURED_VALUE,
+		.mul = 1, .div = 1000, .offset = 0,
+		.n_extra = 2u,
+		.extra = {
+			{ .attribute = MATTER_ATTR_SCALED_VALUE,
+			  .mul = 1, .div = 10, .offset = 0 },
+			{ .attribute = MATTER_ATTR_SCALE,
+			  .mul = 0, .div = 1,
+			  .offset = MATTER_PRESSURE_SCALE },
+		},
+	},
+	{
 		/* device_type 0: cluster only, on the binding's own endpoint.
 		 * A battery is a property, not a device - its own endpoint
-		 * would be a phantom entity. */
+		 * would be a phantom entity. endpoint_get_or_add() enforces
+		 * that; it used to only say it. */
 		.field_type = RADIANT_FIELD_BATTERY_SOC,
 		.device_type = 0u,
 		.cluster = MATTER_CLUSTER_POWER_SOURCE,
@@ -102,19 +159,21 @@ static bool mul_ok(int64_t a, int64_t b)
 	return (b > 0) ? (a >= INT64_MIN / b) : (a >= INT64_MAX / b);
 }
 
-bool radiant_matter_convert(const struct radiant_sample *s, int64_t *out)
+/*
+ * The arithmetic, against an explicit (mul, div, offset) rather than against
+ * a row. Split out when the pressure row grew a second scaled attribute: the
+ * primary and the extras must round identically, and two copies of a
+ * round-half-away-from-zero would not stay identical.
+ */
+static bool convert_scaled(const struct radiant_sample *s, int32_t mul,
+			   int32_t div, int32_t offset, int64_t *out)
 {
-	const struct radiant_matter_type_map *row;
 	int64_t num;
 	int64_t den;
 	int64_t v;
 	int e;
 
-	if (s == NULL || out == NULL) {
-		return false;
-	}
-	row = radiant_matter_row(s->field_type);
-	if (row == NULL || row->div == 0) {
+	if (s == NULL || out == NULL || div == 0) {
 		return false;
 	}
 
@@ -125,7 +184,7 @@ bool radiant_matter_convert(const struct radiant_sample *s, int64_t *out)
 	 * folded into the denominator instead, and division happens once.
 	 */
 	num = s->raw;
-	den = row->div;
+	den = div;
 
 	e = (int)s->exp;
 	if (e >= 0) {
@@ -146,10 +205,10 @@ bool radiant_matter_convert(const struct radiant_sample *s, int64_t *out)
 		den *= pow10_tab[-e];
 	}
 
-	if (!mul_ok(num, row->mul)) {
+	if (!mul_ok(num, mul)) {
 		return false;
 	}
-	num *= row->mul;
+	num *= mul;
 
 	/* Round half away from zero, not truncate: C's toward-zero integer
 	 * division would bias asymmetrically around 0 (e.g. the freezing
@@ -164,17 +223,43 @@ bool radiant_matter_convert(const struct radiant_sample *s, int64_t *out)
 	 * valid bounds check for offset > 0 - for temperature's -27315,
 	 * INT64_MAX - (-27315) overflows before the comparison runs. Each
 	 * bound is tested only in the branch where it's the reachable one. */
-	if (row->offset > 0) {
-		if (v > INT64_MAX - row->offset) {
+	if (offset > 0) {
+		if (v > INT64_MAX - offset) {
 			return false;
 		}
-	} else if (row->offset < 0) {
-		if (v < INT64_MIN - row->offset) {
+	} else if (offset < 0) {
+		if (v < INT64_MIN - offset) {
 			return false;
 		}
 	}
-	*out = v + row->offset;
+	*out = v + offset;
 	return true;
+}
+
+bool radiant_matter_convert(const struct radiant_sample *s, int64_t *out)
+{
+	const struct radiant_matter_type_map *row;
+
+	if (s == NULL) {
+		return false;
+	}
+	row = radiant_matter_row(s->field_type);
+	if (row == NULL) {
+		return false;
+	}
+	return convert_scaled(s, row->mul, row->div, row->offset, out);
+}
+
+bool radiant_matter_convert_with(const struct radiant_sample *s,
+				 const struct radiant_matter_attr_conv *c,
+				 int64_t *out)
+{
+	if (c == NULL || c->mul == 0) {
+		/* A constant is not a conversion of anything - answering with
+		 * its value here would make `convert_with` mean two things. */
+		return false;
+	}
+	return convert_scaled(s, c->mul, c->div, c->offset, out);
 }
 
 /* ---------------------------------------------------------------------------
@@ -182,7 +267,16 @@ bool radiant_matter_convert(const struct radiant_sample *s, int64_t *out)
  * ---------------------------------------------------------------------------
  */
 
-/* Endpoint 0 is the Matter root node, so assignment starts at 1. */
+/*
+ * Endpoint 0 is the Matter root node, so assignment starts at 1.
+ *
+ * On a real bridge CHIP endpoint 1 is the Aggregator, so this 1 and that 1
+ * are not the same 1 (trap 6). Resolved in the glue by mapping onto the first
+ * dynamic endpoint above the fixed ones, deliberately NOT by renumbering
+ * here - see the note on struct radiant_matter_endpoint in the header for
+ * why a data model that knows one stack's fixed-endpoint layout has stopped
+ * being a data model.
+ */
 #define MATTER_ENDPOINT_FIRST 1u
 
 static struct radiant_matter_endpoint endpoints[RADIANT_MATTER_MAX_ENDPOINTS];
@@ -222,6 +316,24 @@ const struct radiant_matter_endpoint *radiant_matter_endpoint_for(uint32_t sourc
 }
 
 /*
+ * The source's PRIMARY endpoint: the first one instantiated for it that
+ * carries a device type of its own. What a `device_type == 0` row attaches
+ * its cluster to. NULL if the source has no device-typed endpoint yet.
+ */
+static const struct radiant_matter_endpoint *endpoint_primary_for(uint32_t source)
+{
+	uint16_t i;
+
+	for (i = 0u; i < endpoint_used; i++) {
+		if (endpoints[i].in_use && endpoints[i].source == source &&
+		    endpoints[i].device_type != 0u) {
+			return &endpoints[i];
+		}
+	}
+	return NULL;
+}
+
+/*
  * Instantiates on first sight of a (source, field_id) whose type has a row.
  * Keyed on field_id, not field_type (section 8.1): the four derived booleans
  * of section 6 are all type 0x02, and keying on type would collapse them
@@ -232,11 +344,43 @@ static const struct radiant_matter_endpoint *endpoint_get_or_add(
 {
 	const struct radiant_matter_endpoint *found;
 	struct radiant_matter_endpoint *e;
+	uint8_t i;
 
 	found = radiant_matter_endpoint_for(s->source, s->field_id);
 	if (found != NULL) {
 		return found;
 	}
+
+	/*
+	 * A CLUSTER-ONLY ROW GETS NO ENDPOINT OF ITS OWN, which is what the
+	 * battery row's comment and radiant_matter.h have claimed since P7 and
+	 * what this function did not do: it called through unconditionally, so
+	 * a battery field allocated its own endpoint with device_type 0. In
+	 * Matter that is a bridged node with no device type and a single Power
+	 * Source cluster - a phantom entity in every controller, sitting next
+	 * to the real sensor and reporting its battery as though it were a
+	 * separate thing in the house. Harmless in a table nobody rendered;
+	 * not harmless once a CHIP stack is behind the seam.
+	 *
+	 * Declining when there is no primary yet is deliberate and is not a
+	 * drop worth warning about at WRN: it means the battery page arrived
+	 * before any measurement did, which is ordinary for a sensor whose
+	 * common page 82 leads its first data page. The next battery sample
+	 * after the primary exists lands on it.
+	 */
+	if (row->device_type == 0u) {
+		const struct radiant_matter_endpoint *primary =
+			endpoint_primary_for(s->source);
+
+		if (primary == NULL) {
+			LOG_DBG("source %u field %u: cluster-only row with no "
+				"primary endpoint yet - deferred, not dropped",
+				(unsigned int)s->source,
+				(unsigned int)s->field_id);
+		}
+		return primary;
+	}
+
 	if (endpoint_used >= ARRAY_SIZE(endpoints)) {
 		/* Counted as a log line rather than silently dropped: a
 		 * household that outgrows the table shows FEWER entities than
@@ -261,6 +405,24 @@ static const struct radiant_matter_endpoint *endpoint_get_or_add(
 		"cluster 0x%04x", e->endpoint_id, (unsigned int)e->source,
 		(unsigned int)e->field_id, e->field_type, e->device_type,
 		(unsigned int)row->cluster);
+
+	/*
+	 * The row's CONSTANT attributes, written exactly once, here, at
+	 * creation. There is no other moment they could be written: on a
+	 * dynamic endpoint every attribute is external storage
+	 * (attribute-storage.h:73-77 ORs EXTERNAL_STORAGE into
+	 * DECLARE_DYNAMIC_ATTRIBUTE unconditionally), so the application owns
+	 * every value and a constant nobody writes reads back as zero - which
+	 * for OccupancySensorType means PIR, which is trap 16.
+	 */
+	for (i = 0u; i < row->n_extra; i++) {
+		if (row->extra[i].mul != 0) {
+			continue; /* a conversion; written per sample below */
+		}
+		radiant_matter_attr_write(e->endpoint_id, row->cluster,
+					  row->extra[i].attribute,
+					  (int64_t)row->extra[i].offset);
+	}
 	return e;
 }
 
@@ -291,6 +453,7 @@ static void matter_publish(const struct radiant_sample *s)
 	const struct radiant_matter_type_map *row;
 	const struct radiant_matter_endpoint *e;
 	int64_t value;
+	uint8_t i;
 
 	row = radiant_matter_row(s->field_type);
 	if (row == NULL) {
@@ -313,6 +476,27 @@ static void matter_publish(const struct radiant_sample *s)
 	 * concern, not this table's. */
 	radiant_matter_attr_write(e->endpoint_id, row->cluster, row->attribute,
 				  value);
+
+	/*
+	 * The row's non-constant extras, from the same sample. Only pressure
+	 * has one today (ScaledValue beside the mandatory whole-kPa
+	 * MeasuredValue). A refused extra is skipped and does NOT suppress the
+	 * primary: the primary's narrower range is the one that fits, so an
+	 * extra that overflows is the more-precise attribute declining, not
+	 * the reading failing.
+	 */
+	for (i = 0u; i < row->n_extra; i++) {
+		int64_t xv;
+
+		if (row->extra[i].mul == 0) {
+			continue; /* constant; written once at creation */
+		}
+		if (!radiant_matter_convert_with(s, &row->extra[i], &xv)) {
+			continue;
+		}
+		radiant_matter_attr_write(e->endpoint_id, row->cluster,
+					  row->extra[i].attribute, xv);
+	}
 }
 
 RADIANT_SINK_DEFINE(radiant_matter_sink, matter_want, matter_publish, NULL);

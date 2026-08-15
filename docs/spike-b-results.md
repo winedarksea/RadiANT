@@ -305,6 +305,53 @@ of them can be an ANT endpoint.
   firmware's radio backend does not run on it (that is the `CONFIG_ANT_NP_HOST`
   dual-core path the plan drops from v1).
 
+> **UNDER REVISION - the parenthesis is about `sdk-ant`, and it was read as
+> though it were about `radiant`.** The bullet is left as written because this
+> is a primary record; what follows is what is actually known.
+>
+> **`CONFIG_ANT_NP_HOST` is Nordic's dual-core split for the `sdk-ant` stack**,
+> and for that stack the sentence is correct: its ANT protocol library talks to
+> a RADIO that lives on the network core, so a `cpuapp` image needs an RPC
+> subsystem. `docs/backends.md`'s rejected-backend table says the same thing in
+> the same words and predates this file's paragraph; both entered the tree on
+> 2026-08-09, before `radiant` had an nRF backend at all. **Nothing was measured
+> about `radiant` on an nRF5340 to produce either sentence.**
+>
+> **What was measured, later, points the other way.** Part 2 put
+> `radiant/spike/promisc` on this DK's **network core** and captured live ANT+
+> frames off the air with it - the RF configuration, address arithmetic and CRC
+> settings this project derived for the nRF52840 and confirmed on nRF54L15,
+> running unmodified on nRF53 silicon. That is a bare-RADIO capture app rather
+> than `radiant_radio_nrf.c`, so it does **not** establish that the backend
+> builds; it does establish that the PHY is not the obstacle.
+>
+> **What is still true, and is why this is "under revision" and not "wrong".**
+> Two concrete things in the tree refuse the part today, and neither has been
+> changed:
+>
+> - `radiant/Kconfig:76` - `RADIANT_BACKEND_NRF` carries
+>   `depends on SOC_COMPATIBLE_NRF52X || SOC_COMPATIBLE_NRF54LX`, so the backend
+>   cannot be *selected* on an nRF5340 at all.
+> - `radiant/src/radiant_radio_nrf.c` - the address-arithmetic `#if` chain has
+>   an `NRF54LX` branch and an `NRF52X` branch and no third one, so the file
+>   would not compile for nRF53 even if Kconfig admitted it.
+>
+> Correcting those two, placing the backend on `cpunet` beside 802.15.4 and
+> MPSL, and carrying `struct radiant_sample` across IPC is a scoped work package
+> that **has not landed**. Until it does, this DK is still not an ANT endpoint -
+> the *reason* is what is under revision, not the outcome.
+>
+> **The nearest thing to a transient bench failure in this record is a different
+> claim.** Part 1 also concluded that this board's network core "cannot print",
+> from a real and correctly-diagnosed observation about GPIO ownership; part 2
+> overturned it with two register writes. That one *is* a transient bench
+> failure recorded as a permanent fact, and it shaped the same paragraph's
+> board-role table - but it is about the console, not about the radio backend,
+> and it should not be offered as the origin of the sentence above. **No
+> bench failure behind the backend claim could be found in this repository or in
+> its history**; it reads as an inherited documentary claim about a different
+> stack.
+
 So the nRF5340 had to be the sniffer. The plan's objection to the nRF5340 does
 not apply to a bare capture app - it needs no RPC subsystem - and that part was
 right: **`radiant/spike/promisc` builds and programs cleanly for

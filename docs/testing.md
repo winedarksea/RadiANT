@@ -535,6 +535,96 @@ moved out of `README.md` unchanged.
 
 ---
 
+## Multi-channel scheduling runs, and the two controls that lie
+
+Everything above is written for a **single-channel** run, and single-channel is
+where this project spent years: 0.139 % / 0.150 % on nRF, 0.257 % for sdk-ant,
+all three P4 coexistence arms. A whole class of defect is invisible there —
+[ADR 0016](decisions/0016-merge-reach-is-the-arm-lead.md) is one that cost
+roughly 1 % of slots per channel at eight sensors and exactly 0 % at one. If you
+are measuring a **scheduler** change, none of the three rules above will show it
+to you. Read this section instead.
+
+**Gate on `sched_missed`, not on loss.** `api_stats.sched_missed`
+(`tools/ant_health.py`, needs `CONFIG_ANT_DONGLE_HEALTH_COUNTERS=y` in the
+receiver image) counts receive windows the scheduler declared `DONE_MISSED`
+because it could not arm them — *before* the radio ever listened. It is the one
+loss-shaped number a noisy room cannot move, and that is demonstrated rather than
+assumed: across two runs of the **same** image the room went 28.5 % → 13.1 %
+aggregate loss while `sched_missed` went *up*, 145 → 172. Absolute per-channel
+loss moved 15 points between identical images. Record loss, gate on the counter.
+`tools/ant_ab.py` has a `sched_missed` gate (`max = 0`, `required = false` so an
+older baseline SKIPs rather than failing by construction).
+
+Two caveats, both honest limits rather than reasons not to use it.
+`RADIANT_RADIO_ETIME` funnels through `arm_rejected` → `DONE_MISSED` →
+`sched_missed`, so the counter cannot separate an arm refusal from a scheduling
+miss. And **`RX_FAIL_GO_TO_SEARCH` does not discriminate** at this bench's
+ambient loss: eight consecutive *RF* misses swamp eight consecutive *scheduling*
+misses, so it gave 79 / 48 pre-fix against 106 fixed — no ordering at all. That
+half needs a quiet room.
+
+### The control that is not a control
+
+**Build the "before" arm from the pre-fix revision.** `git archive HEAD` into a
+short path and build there — **not** a scratchpad path, which blows Windows
+`MAX_PATH` mid-build. Then verify in *that* source that it really is pre-fix
+before trusting it, because a control that silently contains the fix reads as
+"no defect found".
+
+The tempting shortcut is to reach for a Kconfig knob that moves the same
+quantity. For ADR 0016 that was `CONFIG_RADIANT_PHY_LR_CODED=y`, which raises
+`min_arm_lead_us` from 168 back to 456 µs. **It cannot reopen the band, and the
+reason is the fix itself:** merge rule 3's reach *is* `arm_lead()`, so turning
+the knob raises the exclusion radius and the merge reach together and the band
+stays `max(0, L − L) = 0` for every `L`. Measured 15 where ~177 was predicted.
+The general lesson is worth more than the instance: **a knob that moves the
+quantity a fix is defined against is not a control for that fix.**
+
+### One board cannot be several sensors, for this class of defect
+
+A single board running N master channels is the obvious way to synthesise a
+multi-channel load, and for scheduler work it is a **false negative generator**.
+That board's own scheduler refuses to place two of its beacons within its own
+`min_arm_lead_us`, so its channels can never land in the receiver's bad band.
+A 7-channel single-board run gave `sched_missed = 0` on the fixed *and* the
+pre-fix image.
+
+Only **cross-board** pairs count. With M masters on one board and N on another
+there are `M×N` useful pairs and the same-board ones contribute nothing. The
+reproduction that worked used an nRF52840 dongle (6 masters) and a CC26x2
+LaunchPad (6 masters, remember 57600 baud) against an nRF54L15 DK receiver — 36
+cross pairs, 12 tracked channels, 600 s per arm. Deliberately **mix the channel
+periods** (8182 / 8070 / 8086 counts) so pairs beat through the whole 250 ms
+separation space every 18–128 s; left to crystal drift alone a pair sits in a
+~256 µs band only ~0.2 % of the time and the signal is lumpy and slow.
+
+### Traps that produce a clean-looking run with no coverage
+
+- **`tools/ant_sim.py --profile asset-tag` saturates the band.** In a 7-channel
+  run that channel sent 8 messages against 661 expected with 321 wall-clock
+  fallbacks, driving **75 % loss on all seven channels** (ED scan `busy = −47`
+  against `busy = −90` healthy). It reads exactly like a firmware defect. Do not
+  use it in a multi-master run.
+- **Killing `ant_sim` wedges the TI board.** Its master channels stay open, the
+  `EVENT_TX` flood buries the startup message, and `ant_probe` then fails every
+  retry. This silently produces a run with **zero cross-board pairs** — the exact
+  failure mode above, wearing a passing result. Hold COM14 open, pulse
+  `xds110reset.exe -a toggle -d 50`, then probe. **Always assert the master
+  channel count before trusting a run.**
+- **A VCOM that drops mid-run reports a small `sched_missed` that looks like a
+  pass.** The nRF54L15 DK's COM8 dropped twice (`PermissionError(13)`). Check
+  elapsed time against the requested duration on every arm.
+- **`derived.loss_exact_pct` is usually absent on a healthy multi-channel run.**
+  It is gated on the transmitter's event counter never once standing still
+  (`std_event_still == 0`), which is what proves the counter steps per message
+  rather than per pedal stroke. One stall anywhere kills the figure, so it was
+  `None` on every healthy live run and present in a broken 75 %-loss shakedown —
+  available when the link is catastrophic and absent when it is fine. That is
+  correct for a real power meter that coasts; do not loosen it to get a number.
+
+---
+
 ## Testing the radio
 
 `ant_probe.py` only proves the dongle answers questions about itself. To

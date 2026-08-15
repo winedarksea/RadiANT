@@ -65,10 +65,19 @@ uint32_t radiant_hr_adapter_decode(struct radiant_hr_adapter *a, uint32_t source
 	/* Difference in the field's own wire width first (section 3.2/5):
 	 * unsigned subtraction at that width wraps correctly by construction,
 	 * so 8/16-bit wraparound needs no special case. Converting before
-	 * differencing is the trap; neither line here does that. */
+	 * differencing is the trap; neither line here does that.
+	 *
+	 * What is PUBLISHED is the running total, not that delta - the same
+	 * construction as acc_1024 below, and now the same as
+	 * radiant_power_adapter.c's acc_events. This line used to post the
+	 * per-message delta, which meant a sink obeying radiant_bridge.h's
+	 * RADIANT_SAMPLE_ACCUMULATING contract ("raw is a monotone counter, not
+	 * an instant") was differencing an already-differenced value: at a
+	 * steady heart rate consecutive deltas are equal, so the second
+	 * difference is zero and the series read as never advancing. */
+	a->acc_beats += (uint64_t)(uint8_t)(beat_count - a->prev_beat_count);
 	post(source, RADIANT_HR_FIELD_BEAT_COUNT, RADIANT_FIELD_EVENT_COUNT,
-	     RADIANT_SAMPLE_ACCUMULATING, 0,
-	     (int64_t)(uint8_t)(beat_count - a->prev_beat_count), t_us);
+	     RADIANT_SAMPLE_ACCUMULATING, 0, (int64_t)a->acc_beats, t_us);
 	n++;
 
 	/* The 1/1024s trap (section 3.2): acc_1024 accumulates the exact raw

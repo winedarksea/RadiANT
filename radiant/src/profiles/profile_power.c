@@ -86,6 +86,16 @@ int profile_power_encode_torque_freq(uint8_t event_count,
 	return 0;
 }
 
+/*
+ * profile_power_decode_std() USED TO BE HERE and now lives in
+ * profile_power_decode.c. It is not a tidying: this file is the master and
+ * calls into profile_sched.c and profile_compat.c (which reaches
+ * radiant_sec), so a receiver that linked it to get one decoder would drag
+ * the entire transmit-side chain into an image whose job is to listen. See
+ * that file's header. If a torque-page decoder is ever added, it goes there
+ * too - do not bring one back here.
+ */
+
 /* ── The master ─────────────────────────────────────────────────────────── */
 
 static int power_data_page(uint8_t page, uint8_t counter, uint8_t *body,

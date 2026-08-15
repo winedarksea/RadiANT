@@ -625,6 +625,132 @@ jobs:
             assert_symbol: CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
             assert_core: "true"
             assert_sinks: "true"
+          # ── THE MATTER ARM (plan package E8) ─────────────────────────────
+          #
+          # In one sentence: this catches an image that asked for CONFIG_CHIP=y,
+          # built clean, exited 0, and contains no Matter and/or no ANT radio.
+          # Three separate silent failures live here, and a green build sees
+          # none of them.
+          #
+          # 1. SYSBUILD SILENTLY FORCES CONFIG_CHIP=n.
+          #    nrf/sysbuild/CMakeLists.txt writes CONFIG_CHIP into every image
+          #    from SB_CONFIG_MATTER, and it does so AFTER the application's own
+          #    fragments have been read - so matter.conf's CONFIG_CHIP=y does
+          #    not CONFLICT with an unset SB_CONFIG_MATTER, it is discarded by
+          #    it. Clean build, exit 0, old image. That override is live for
+          #    this repository specifically because connectedhomeip is in the
+          #    workspace: nrf/west.yml puts the `matter` project in no group at
+          #    all, so `west update` fetches it for every job in this file
+          #    whether or not the job wants it. sysbuild_conf below is the
+          #    prevention; assert_config is the proof, and it is a read-back of
+          #    the GENERATED .config rather than of the build log, because the
+          #    log says nothing either way.
+          #
+          # 2. THE BACKEND FALLS TO NULL - the coex.conf row's interlock,
+          #    arriving through a different door and therefore not covered by
+          #    it. Nothing in matter.conf, thread.conf or prj.conf writes
+          #    CONFIG_BT=y; it arrives as `config BT / default y` inside
+          #    `if CHIP` in connectedhomeip's Kconfig.defaults. radiant/Kconfig's
+          #    nrf arm is `depends on !BT || RADIANT_BACKEND_NRF_GATE_MPSL`, so
+          #    that default alone is enough to unmeet the dependency and drop
+          #    the image to the inert radio. assert_symbol, assert_core and the
+          #    CONFIG_RADIANT_BACKEND_NULL check below are the same three checks
+          #    the coex row uses; CONFIG_BT=y is asserted in assert_config as
+          #    well, because if BT ever STOPPED arriving by default those three
+          #    would still pass while testing nothing.
+          #
+          # 3. THE WHOLE RADIANT MODULE IS GARBAGE-COLLECTED, and this is the
+          #    one that has already happened. docs/matter-flash-spike.md's
+          #    headline "+596 bytes for radiant" was not a small module: it was
+          #    the ENTIRE radiant archive being discarded by --gc-sections
+          #    because nothing in that image called it. A Matter image with no
+          #    ANT radio in it compiles, links, boots and enumerates. Nothing in
+          #    a .config can see a linker decision, so assert_elf_symbols is an
+          #    nm check on the final ELF. radiant_radio_init is the plan's named
+          #    canary; the rest are there because a regression in any one of
+          #    them is equally invisible and the marginal cost of an extra line
+          #    is nil (docs/matter-e3-vendoring.md verified the same set by
+          #    hand, once, which is exactly the kind of check that decays).
+          #
+          # assert_sinks and assert_sink_names are the fourth thing, and see the
+          # step itself for why the count alone would not have caught it.
+          - name: "dongle_thread: Matter (CHIP + bridge core)"
+            app: apps/dongle_thread
+            board: nrf54l15dk/nrf54l15/cpuapp
+            radiant_backend: nrf
+            extra_conf: thread.conf;matter.conf
+            sysbuild_conf: matter_sysbuild.conf
+            assert_symbol: CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
+            assert_core: "true"
+            assert_sinks: "true"
+            # Deliberately short. Every line here is a symbol whose WRONG value
+            # still produces a working build - CONFIG_CHIP is trap 1, CONFIG_BT
+            # is trap 3's arrival, and the two ANT_DONGLE_MATTER symbols are
+            # what decide whether radiant_matter.c is compiled at all. The
+            # mandatory-but-noisy lines (STD_CPP17, EVENTFD,
+            # CHIP_FACTORY_DATA_NONE, MPSL_TIMESLOT_SESSION_COUNT) are NOT here:
+            # each of those fails the build or a BUILD_ASSERT when wrong, so
+            # asserting them would only couple this file to matter.conf's exact
+            # contents without catching anything the build does not already.
+            assert_config: |
+              CONFIG_CHIP=y
+              CONFIG_BT=y
+              CONFIG_ANT_DONGLE_MATTER=y
+              CONFIG_ANT_DONGLE_MATTER_MAP=y
+            assert_elf_symbols: |
+              radiant_radio_init
+              radiant_sched_tick
+              radiant_matter_row
+              radiant_matter_convert
+              radiant_matter_endpoint_for
+              radiant_matter_sink
+            assert_sink_names: |
+              radiant_liveness_sink
+              radiant_rules_sink
+              radiant_matter_sink
+          # ── THE nRF5340 MATTER ROW IS DELIBERATELY ABSENT ────────────────
+          #
+          # The plan asks for "one build-new-apps row per DK". There is no
+          # nRF5340 row here, and the reason is not that it fails to build - it
+          # is that the only nRF5340 build that CAN exist today would be green
+          # and would prove the opposite of what it appears to prove.
+          #
+          # apps/dongle_thread cannot be CONFIGURED for nrf5340/cpuapp at all
+          # while any of its fragments names the MPSL gate. Measured, in
+          # docs/matter-e1-readback.md: RADIANT_BACKEND_NRF_GATE_MPSL
+          # (radiant/Kconfig) does an unconditional `select MPSL`, and MPSL's
+          # own `depends on` list has no SOC_NRF5340_CPUAPP in it - the
+          # nRF5340's radio and its arbiter are both on cpunet. Kconfig stops
+          # with "MPSL has direct dependencies ... with value n, but is
+          # currently being y-selected". That is fatal for thread.conf,
+          # gate.conf, coex.conf, bridge.conf and matter.conf alike, i.e. for
+          # every arm this application has.
+          #
+          # The build that would go green is the one E1 had to use to get its
+          # nRF5340 numbers: -DRADIANT_BACKEND=null, with every MPSL and backend
+          # line stripped out. A row like that would sit in this matrix under a
+          # name containing "Matter" and "nRF5340" and would assert nothing
+          # about RadiANT on that part, while the NULL-backend check three
+          # steps below - the check this whole job exists for - would have to be
+          # switched OFF for it to pass. A row that has to disable the interlock
+          # to stay green is worse than no row.
+          #
+          # PACKAGE F IS THE PREREQUISITE, and specifically these three things,
+          # after which this row can be written and this comment deleted:
+          #   - radiant/Kconfig's nrf arm admits the nRF5340 (F1), and
+          #     radiant_radio_nrf.c gains its NRF53 address-arithmetic branch;
+          #   - the MPSL gate MOVES to cpunet with the backend (F2), so that
+          #     `select MPSL` is made from an image where MPSL exists - this is
+          #     the half the plan does not mention and it is the blocking one;
+          #   - apps/dongle_thread's own nRF5340 board hygiene is fixed: E1
+          #     found boards/nrf5340dk_nrf5340_cpuapp.conf turns RTT off without
+          #     unsetting prj.conf's SEGGER_RTT_MODE_NO_BLOCK_SKIP and
+          #     LOG_BACKEND_RTT_MODE_DROP, leaving two orphaned choice
+          #     selections, which are Kconfig-warning-level and therefore fatal.
+          #     This application has never been configured for that board.
+          # The row will also need its own SB_CONFIG_NETCORE_IPC_RADIO* flags,
+          # which cannot live in matter_sysbuild.conf because those symbols do
+          # not exist on the nRF54L15 (SUPPORT_NETCORE is nRF53/nRF54H only).
           - name: "dongle_ti: cc26xx"
             app: apps/dongle_ti
             board: cc26x2r1_launchxl
@@ -687,17 +813,80 @@ jobs:
           test -f "${dest}/zephyr/module.yml"
           echo "HAL_TI_DIR=${dest}" >> "$GITHUB_ENV"
 
+      # THE TWO HOST TOOLS NORDIC SHIPS IN THE TOOLCHAIN BUNDLE AND A RUNNER
+      # DOES NOT HAVE. action-zephyr-setup installs the Zephyr SDK, which is
+      # compilers; a CHIP build needs two more things and neither degrades
+      # gracefully.
+      #
+      # gn: modules/lib/matter/config/common/cmake/chip_gn.cmake does
+      # `find_program(GN_EXECUTABLE gn REQUIRED)` - connectedhomeip is a GN
+      # project that NCS drives from CMake, so this is a hard configure-time
+      # stop, not a fallback to something slower.
+      #
+      # The Python packages: BYPASS_IDL stops `chip_zapgen` from running, which
+      # is why the committed zap-generated/ is the build-critical artefact
+      # (docs/matter-e3-vendoring.md) - but it does NOT stop `chip_codegen`,
+      # which runs modules/lib/matter/scripts/codegen.py over the committed
+      # bridge.matter on every build. That is read off a real build's generated
+      # build.ninja, not assumed. codegen.py imports click and python_path, and
+      # reaches py_matter_idl straight out of the source tree, which parses with
+      # lark and renders with jinja2.
+      #
+      # nrf/scripts/requirements-extra.txt names jinja2, python-path and
+      # matter_idl for exactly this reason and is deliberately NOT what is
+      # installed here: its first line is an `--index-url` pointing at Nordic's
+      # artifactory mirror, which REPLACES PyPI for the whole install rather
+      # than adding to it, and it drags in pygit2, Pillow, PyGithub and
+      # nrfcloud-utils on the way past.
+      #
+      # Gated on sysbuild_conf because matter_sysbuild.conf is the only sysbuild
+      # fragment this application has and turning CHIP on is the only thing it
+      # does. If a second one ever appears, this needs a key of its own.
+      - name: Install gn and the Matter code generator's Python dependencies
+        if: matrix.sysbuild_conf != ''
+        run: |
+          set -euxo pipefail
+          pip install jinja2 lark click python-path coloredlogs
+          # The upstream distribution channel for a gn binary; there is no
+          # apt package and connectedhomeip's own bootstrap pulls it from the
+          # same place, along with a whole pigweed environment this build does
+          # not need.
+          curl -fsSL -o /tmp/gn.zip \
+            "https://chrome-infra-packages.appspot.com/dl/gn/gn/linux-amd64/+/latest"
+          mkdir -p "${HOME}/.local/bin"
+          unzip -o /tmp/gn.zip gn -d "${HOME}/.local/bin"
+          chmod +x "${HOME}/.local/bin/gn"
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+          "${HOME}/.local/bin/gn" --version
+
       - name: Build
         env:
           APP: ${{ matrix.app }}
           BOARD: ${{ matrix.board }}
           RADIANT_BACKEND: ${{ matrix.radiant_backend }}
           EXTRA_CONF: ${{ matrix.extra_conf }}
+          SYSBUILD_CONF: ${{ matrix.sysbuild_conf }}
         run: |
           set -euxo pipefail
           extra=("-DANT_RADIO=core" "-DRADIANT_BACKEND=${RADIANT_BACKEND}")
           if [[ -n "${EXTRA_CONF}" ]]; then
             extra+=("-DEXTRA_CONF_FILE=${EXTRA_CONF}")
+          fi
+          # SYSBUILD-SCOPED, and that is the whole point of it: SB_EXTRA_CONF_FILE
+          # is read by sysbuild itself, before it decides what to write into the
+          # image's CONFIG_CHIP. An image-scoped fragment cannot prevent trap 1
+          # no matter what it contains.
+          #
+          # Quoted like everything else here. On bash the quoting is
+          # redundant; it is kept because the local reproduce path is
+          # PowerShell 5.1, which splits an unquoted
+          # -DSB_EXTRA_CONF_FILE=matter_sysbuild.conf at the DOT and passes
+          # CMake `-DSB_EXTRA_CONF_FILE=matter_sysbuild` plus a stray `.conf`,
+          # failing with "File not found" on a name nobody wrote
+          # (docs/matter-e3-vendoring.md measured this). Two commands that
+          # differ in quoting are two commands.
+          if [[ -n "${SYSBUILD_CONF}" ]]; then
+            extra+=("-DSB_EXTRA_CONF_FILE=${SYSBUILD_CONF}")
           fi
           if [[ -n "${HAL_TI_DIR:-}" ]]; then
             extra+=("-DEXTRA_ZEPHYR_MODULES=${HAL_TI_DIR}")
@@ -718,9 +907,22 @@ jobs:
         env:
           WANT: ${{ matrix.assert_symbol }}
           ASSERT_CORE: ${{ matrix.assert_core }}
+          APP: ${{ matrix.app }}
         run: |
           set -euo pipefail
-          cfg="$(find build -name .config -print -quit)"
+          # A SYSBUILD BUILD HAS TWO .config FILES and only one of them holds
+          # CONFIG_*. build/<image>/zephyr/.config is the image; build/zephyr/.config
+          # is sysbuild's own and contains SB_CONFIG_* exclusively, so every
+          # assertion below would fail against it - with an error message about
+          # the backend rather than about the file. Prefer the image directory,
+          # which is named for the application directory, and fall back to the
+          # first .config found for a board where sysbuild is not in play. Same
+          # prefer-then-fall-back shape as the build-node job's step, and the
+          # same reason build-core path-qualifies with '*/dongle/*'.
+          cfg="$(find build -name .config -path "*/$(basename "${APP}")/*" -print -quit)"
+          if [[ -z "${cfg}" ]]; then
+            cfg="$(find build -name .config -print -quit)"
+          fi
           echo "expecting ${WANT} in ${cfg}"
           grep -qx "${WANT}" "${cfg}"
 
@@ -743,6 +945,97 @@ jobs:
             grep -qx 'CONFIG_RADIANT_BACKEND_NRF=y' "${cfg}"
           fi
 
+      # TRAP 1, AS A READ-BACK. Separate from the backend step above because it
+      # is a different kind of claim: that one asks whether a -D took effect,
+      # this one asks whether something ELSE overwrote a symbol the application
+      # set for itself. nrf/sysbuild/CMakeLists.txt writes CONFIG_CHIP into the
+      # image from SB_CONFIG_MATTER after the application's fragments have been
+      # merged, so an unset SB_CONFIG_MATTER does not conflict with
+      # matter.conf's CONFIG_CHIP=y - it silently replaces it, and the build
+      # log is identical either way. Reading the GENERATED .config is the only
+      # thing that can tell the two apart, which is why the plan says so twice.
+      #
+      # `absent:CONFIG_X` is supported for the same reason the build-node job
+      # supports it: Kconfig omits a symbol entirely when its `depends on` is
+      # unmet and only writes the "# ... is not set" form for a symbol that is
+      # visible and merely off, so the two cases need different assertions.
+      - name: Verify the configuration survived sysbuild
+        if: matrix.assert_config != ''
+        env:
+          WANT: ${{ matrix.assert_config }}
+          APP: ${{ matrix.app }}
+        run: |
+          set -euo pipefail
+          cfg="$(find build -name .config -path "*/$(basename "${APP}")/*" -print -quit)"
+          if [[ -z "${cfg}" ]]; then
+            cfg="$(find build -name .config -print -quit)"
+          fi
+          echo "reading ${cfg}"
+          rc=0
+          while IFS= read -r want; do
+            [[ -z "${want}" ]] && continue
+            if [[ "${want}" == absent:* ]]; then
+              sym="${want#absent:}"
+              if grep -qE "^(# )?${sym}[= ]" "${cfg}"; then
+                echo "::error::expected ${sym} to be absent from ${cfg}"
+                echo "  actual: $(grep -E "^(# )?${sym}[= ]" "${cfg}")"
+                rc=1
+              else
+                echo "ok: ${sym} absent"
+              fi
+            elif grep -qxF "${want}" "${cfg}"; then
+              echo "ok: ${want}"
+            else
+              echo "::error::expected '${want}' in ${cfg}"
+              echo "  actual: $(grep -E "^(# )?${want%%[= ]*}[= ]" "${cfg}" || echo '(symbol absent entirely)')"
+              rc=1
+            fi
+          done <<< "${WANT}"
+          exit "${rc}"
+
+      # THE --gc-sections CHECK, AND IT IS NOT A REPEAT OF THE .config CHECKS
+      # ABOVE. Kconfig decides what is COMPILED; the linker decides what is
+      # KEPT. Zephyr builds with -ffunction-sections -fdata-sections and links
+      # with --gc-sections, so a translation unit that nothing calls is
+      # discarded after a completely successful compile, and no symbol in any
+      # .config changes when that happens.
+      #
+      # This has already cost this project once. docs/matter-flash-spike.md
+      # reported radiant costing 596 bytes on top of a Matter template, which
+      # was read as a headline "Matter and RadiANT fit" result; the 596 bytes
+      # were what was left after --gc-sections threw the entire radiant archive
+      # away, because that spike's application called none of it. E1 hit the
+      # same thing pointed at CHIP (zero chip:: symbols in the ELF) and E3 hit
+      # it pointed at the vendored bridge core (zero Nrf::Bridge* symbols). The
+      # failure mode is consistent and it always looks like a success: a Matter
+      # image with no ANT radio in it links, boots, enumerates and answers.
+      #
+      # Whole-symbol matching, not a substring: `radiant_matter_convert` must
+      # not be satisfied by `radiant_matter_convert_with`, and a check that can
+      # be satisfied by a near-miss is not a check.
+      - name: Verify the linker kept the symbols that matter
+        if: matrix.assert_elf_symbols != ''
+        env:
+          WANT: ${{ matrix.assert_elf_symbols }}
+        run: |
+          set -euo pipefail
+          elf="$(find build -name zephyr.elf -print -quit)"
+          echo "reading ${elf}"
+          # --defined-only, so an UNDEFINED reference to a discarded function
+          # cannot be mistaken for the function surviving.
+          arm-zephyr-eabi-nm --defined-only "${elf}" | awk '{print $NF}' | sort -u > elf.syms
+          rc=0
+          while IFS= read -r sym; do
+            [[ -z "${sym}" ]] && continue
+            if grep -qxF "${sym}" elf.syms; then
+              echo "ok: ${sym}"
+            else
+              echo "::error::${sym} is not in ${elf} - --gc-sections discarded it, or it was never compiled in"
+              rc=1
+            fi
+          done <<< "${WANT}"
+          exit "${rc}"
+
       # RADIANT_SINK_DEFINE() uses STRUCT_SECTION_ITERABLE, and the section it
       # emits into is placed only by radiant_bridge_sections.ld, which the
       # application has to add with zephyr_linker_sources(). Forget it and the
@@ -754,8 +1047,37 @@ jobs:
       # A silent failure is worth two lines of CI. The firmware also logs
       # "bridge: N sinks" at boot and errors on zero, but that needs a console
       # and a board; this needs neither.
+      #
+      # WHICH sinks, not just how many, and the Matter arm is why. The plan
+      # says to watch for the boot line "bridge: 2 sinks" and treat "1 sink" as
+      # radiant_matter.c having been left out. Both numbers are wrong, and the
+      # count is the wrong instrument regardless. Measured with nm on real
+      # ELFs of both arms:
+      #
+      #   thread.conf;bridge.conf  ->  radiant_liveness_sink, radiant_mqtt_sink,
+      #                                radiant_rules_sink            = 3 sinks
+      #   thread.conf;matter.conf  ->  radiant_liveness_sink, radiant_matter_sink,
+      #                                radiant_rules_sink            = 3 sinks
+      #
+      # radiant_liveness.c registers an ordinary RADIANT_SINK_DEFINE() sink of
+      # its own and is compiled unconditionally under CONFIG_RADIANT_BRIDGE,
+      # which is what the plan's arithmetic misses. So the boot line reads
+      # "bridge: 3 sinks" in BOTH arms, and a Matter image that silently
+      # dropped radiant_matter.c and kept the MQTT sink would show the expected
+      # count while bridging nothing to Matter. The names are the check;
+      # the span below stays because it is the one that catches the missing
+      # linker fragment, which is a different fault.
+      #
+      # Entries are enumerated by ADDRESS RANGE rather than by dividing the
+      # span by sizeof(struct radiant_sink): the size of that struct is not
+      # visible from here, and a check that hardcodes it would start lying the
+      # day a field is added. Address filtering gives exactly the set
+      # STRUCT_SECTION_FOREACH() will walk, i.e. exactly the number
+      # bridge_pump.c will print.
       - name: Verify the bridge sink section was placed
         if: matrix.assert_sinks == 'true'
+        env:
+          WANT: ${{ matrix.assert_sink_names }}
         run: |
           set -euo pipefail
           elf="$(find build -name zephyr.elf -print -quit)"
@@ -773,6 +1095,33 @@ jobs:
           if [[ "${span}" -le 0 ]]; then
             echo "::error::sink list is empty - STRUCT_SECTION_FOREACH would iterate zero sinks"
             exit 1
+          fi
+
+          # The list boundary symbols sit at the same addresses as the first
+          # entry and one-past-the-last, so they are filtered out by name
+          # rather than by address.
+          : > sinks.txt
+          while read -r addr _type name; do
+            case "${name}" in
+              _radiant_sink_list_start|_radiant_sink_list_end) continue ;;
+            esac
+            if (( 0x${addr} >= 0x${start} && 0x${addr} < 0x${end} )); then
+              echo "${name}" >> sinks.txt
+            fi
+          done < <(arm-zephyr-eabi-nm --defined-only "${elf}")
+          sort -o sinks.txt sinks.txt
+          echo "bridge sinks linked into this image ($(wc -l < sinks.txt)):"
+          sed 's/^/  /' sinks.txt
+
+          if [[ -n "${WANT}" ]]; then
+            printf '%s\n' "${WANT}" | sed '/^$/d' | sort > want.txt
+            # EXACT SET, not a subset. A subset check would pass an image that
+            # still carried the MQTT sink beside the Matter one, which is a
+            # different product from the one this row claims to build.
+            if ! diff -u want.txt sinks.txt; then
+              echo "::error::the set of linked bridge sinks is not the one this row expects"
+              exit 1
+            fi
           fi
 
   # apps/hrm_ble - the heart-rate node, and the manufacturer reference design.

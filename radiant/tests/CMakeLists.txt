@@ -113,6 +113,25 @@ target_sources(app PRIVATE
   # for a while: the RD phase added the decoder, the adapter in src/bridge and
   # the test, and the adapter's own CMake entry below, but never this line.
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_rd.c"
+  # The Matter plan's packages A and B: the two page codecs that give the
+  # derived booleans a source. profile_fec.c is Fitness Equipment (0x11), the
+  # indoor-trainer path, whose page 16 carries an explicit equipment STATE -
+  # a more direct "bike in use" than inferring from an accumulator.
+  # profile_env.c is Environment (0x19), which is a thermometer and nothing
+  # else; everything else environmental arrives on common page 84 instead,
+  # which is why package C exists.
+  #
+  # Both are pure page codecs reaching no radiant header, the same claim
+  # profile_hr.c and profile_power.c make about themselves. Listed here for
+  # the reason the profile_rd.c line above records: the suites are globbed and
+  # the implementations are not, so a missing line here is a link error rather
+  # than a missing test, and this file has already been that once.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_fec.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_env.c"
+  # Bicycle Power's page 0x10 decoder, deliberately NOT in profile_power.c -
+  # see that file's own note. This application links both halves; a receiver
+  # links only this one.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_power_decode.c"
   # Layer D (compat-C7): the over-air enrolment window. The FOURTH file here
   # that includes a radiant header, and the second that has to - adding a
   # keyholder is a key operation. It names no page number and no frame index,
@@ -174,6 +193,22 @@ target_sources(app PRIVATE
   # P7: the Matter plane's type map and endpoint model (section 8.1). Another
   # ordinary sink, and deliberately NOT the Matter stack - see the header.
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_matter.c"
+  # The Matter plan's packages A, B and C: three more profile adapters on the
+  # radiant_hr_adapter.c contract. Each includes its page codec's header from
+  # src/profiles rather than re-deriving the bit splits, which is why the
+  # src/profiles include directory above is not optional for them either.
+  #
+  # radiant_common_adapter.c is the odd one and worth the sentence: it is not
+  # a device-type adapter at all. ANT+ Common Data Pages Rev 3.1 Table 4-1
+  # keys pages 0x40-0x5D on the channel's TRANSMISSION TYPE rather than on the
+  # device type, so page 84's weather data is legal on a heart-rate strap or a
+  # bike light, and this decoder therefore runs on every bound channel
+  # alongside whichever profile adapter owns it. That is the one case in the
+  # tree where two producers write one source, and it is why radiant_bridge.h
+  # carries a field_id allocation block.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_power_adapter.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_env_adapter.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_common_adapter.c"
 )
 target_include_directories(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge")

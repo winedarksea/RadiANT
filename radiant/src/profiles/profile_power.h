@@ -22,6 +22,34 @@
  *   - PAGES 0x11 AND 0x12 ARE INDEPENDENT ACCUMULATOR SERIES sharing a
  *     channel, so this module keeps one struct per series, not per node.
  *   - EVERY ACCUMULATOR IS MEANT TO WRAP.
+ *
+ * ---------------------------------------------------------------------------
+ * The page 0x10 DECODER (added later than the encoders above)
+ * ---------------------------------------------------------------------------
+ * profile_power_decode_std() below is transcribed from the PRIMARY document -
+ * D00001086, "ANT+ Device Profile - Bicycle Power", Rev 5.1, section 8
+ * ("Standard Power-Only Main Data Page (0x10)") and its Table 8-1
+ * "Power-Only Message Format", with the byte-2 bit split from sections
+ * 8.2/8.2.1/8.2.2 and the cadence sentinel from section 8.3. It agrees
+ * byte-for-byte with profile_power_encode_std() above and with
+ * tools/ant_pages.py's decode_power_std(), which is the three-copy rule this
+ * repository applies to every page layout.
+ *
+ * What the decoder is NOT:
+ *   - It is not a power *calculator*. Table 8-1's accumulated-power field is
+ *     "the running sum of the instantaneous power data" (section 8.4) - a sum
+ *     of WATT SAMPLES, not joules and not watt-seconds. Section 8.5's
+ *     Equation 1 divides that delta by the event-count delta to get AVERAGE
+ *     WATTS. Anything that wants energy has to integrate over real time
+ *     itself; see radiant_power_adapter.h, which does exactly that and says
+ *     so at length.
+ *   - It does not widen or unwrap anything. Both 16-bit fields roll over
+ *     (65.535 kW of accumulated power per Table 8-1) and byte 1 rolls at 256.
+ *     Differencing across the wrap is the caller's job, at the wire width.
+ *   - It does not reject a page whose byte [0] is another power page. It
+ *     returns -EINVAL for anything that is not 0x10, so a caller that hands
+ *     it a whole rotation gets a clean decline rather than a torque page
+ *     silently read as power.
  */
 
 #ifndef RADIANT_PROFILE_POWER_H_
@@ -51,6 +79,22 @@ extern "C" {
 
 /* Up to four data pages in the rotation - every page this profile defines. */
 #define PROFILE_POWER_MAX_PAGES 4u
+
+/*
+ * Page 0x10's two optional-field sentinels and byte 2's bit split (Table 8-1,
+ * sections 8.2.1 and 8.3). Both sentinels are 0xFF, which is also
+ * PROFILE_COMMON_INVALID_U8 - spelled out here anyway, because "the pedal
+ * power byte is invalid" and "the cadence byte is invalid" are two independent
+ * facts and a reader should not have to infer that they share a value.
+ *
+ * ZERO IS NOT A SENTINEL FOR EITHER. 0 rpm is a real reading (rider stopped)
+ * and 0 % is a real pedal balance; profile_power_init() sets both to 0xFF for
+ * this reason and a decoder must apply the same rule in reverse.
+ */
+#define PROFILE_POWER_INVALID_PEDAL_POWER 0xFFu
+#define PROFILE_POWER_INVALID_CADENCE     0xFFu
+#define PROFILE_POWER_PEDAL_RIGHT_BIT     0x80u /* section 8.2.1, bit 7 */
+#define PROFILE_POWER_PEDAL_PERCENT_MASK  0x7Fu /* section 8.2.2, bits 0-6 */
 
 /* The torque series, one per page. `ticks` counts wheel or crank ticks; the
  * other three are the accumulators the two power formulae difference. */
@@ -117,6 +161,45 @@ int profile_power_encode_torque_freq(uint8_t event_count,
 				     uint16_t slope_tenth_nm_hz,
 				     uint16_t time_stamp, uint16_t torque_ticks,
 				     uint8_t *out);
+
+/* ---------------------------------------------------------------------------
+ * The page 0x10 decoder. Pure: no state, no radiant header, out-param only.
+ * ---------------------------------------------------------------------------
+ */
+
+/*
+ * One decoded page 0x10 (Rev 5.1 Table 8-1), every value still in its wire
+ * scale. The two power fields are 1-watt resolution already, so there is no
+ * conversion to get wrong; the two optional bytes carry an explicit valid flag
+ * rather than a magic value, so a caller cannot forget which sentinel this
+ * page uses.
+ */
+struct profile_power_std {
+	uint8_t  event_count;   /* byte 1, rolls at 256 (Table 8-1) */
+	uint16_t acc_power_w;   /* bytes 4-5 LE, running sum of watts, rolls at 65536 */
+	uint16_t inst_power_w;  /* bytes 6-7 LE, watts */
+
+	uint8_t  cadence_rpm;   /* byte 3; meaningless unless cadence_valid */
+	bool     cadence_valid; /* byte 3 != 0xFF (section 8.3) */
+
+	/* Byte 2, both as read and split. `pedal_percent` is the RIGHT pedal's
+	 * share when pedal_right_known, and an undifferentiated single-pedal
+	 * share when not (section 8.2.1) - the bit does not merely label the
+	 * number, it changes what the number means. */
+	uint8_t  pedal_percent;
+	bool     pedal_right_known;
+	bool     pedal_valid;   /* byte 2 != 0xFF */
+};
+
+/*
+ * Decodes an 8-byte page 0x10 body into *out. Returns 0, or -EINVAL for a NULL
+ * argument or a byte [0] that is not PROFILE_POWER_PAGE_STANDARD.
+ *
+ * *out is fully written on success (no field is left at whatever the caller
+ * had there), so a caller may reuse one struct across a stream without
+ * clearing it between messages.
+ */
+int profile_power_decode_std(const uint8_t *body, struct profile_power_std *out);
 
 /* ---------------------------------------------------------------------------
  * The master

@@ -55,4 +55,12 @@ min_scenarios: 8
 # these were written, so it had stopped being able to notice a whole scenario
 # disappearing. Recount with the same rule when raising it again - grep for
 # ZTEST( at the start of a line under radiant/tests, and add the four.
-min_testcases: 701
+#
+# Raised again for the Matter plan's packages A-D: the ANT+ trainer input
+# (test_power_adapter.c, test_profile_fec.c), Environment 0x19
+# (test_profile_env.c), common page 84 on every channel
+# (test_common_adapter.c), the Matter map's pressure row and its two endpoint
+# fixes (test_matter.c), and the activity rule's realistic-cadence regression
+# cases (test_rules.c). Counted by the rule above: 773 under radiant/tests plus
+# the four in apps/hrm_ble/tests/sim_sched/src/main.c.
+min_testcases: 777

@@ -134,7 +134,25 @@ static const struct ha_row ha_table[] = {
 	{ RADIANT_FIELD_HUMIDITY,           "%",      "humidity" },
 	{ RADIANT_FIELD_PRESSURE,           "Pa",     "pressure" },
 	{ RADIANT_FIELD_ILLUMINANCE,        "lx",     "illuminance" },
+	/*
+	 * WIND TAKES THIS PLANE AND ONLY THIS PLANE (package D, finding 7).
+	 * Common page 84 subpages 4 and 5 carry wind speed and direction, and
+	 * the Matter data model has flow, pressure, humidity, temperature,
+	 * occupancy and air-quality clusters and no wind anything - so
+	 * radiant_matter.c gets no row for either and they surface here
+	 * instead. That is the SECOND instance of section 1's rule, after heart
+	 * rate below, and it is the same rule for the same reason: mapping a
+	 * quantity onto a cluster that means something else is worse than not
+	 * mapping it.
+	 *
+	 * Speed already had a row (it is a bicycle speed as much as a wind
+	 * speed). Direction is an angle in radians, and HA has no
+	 * wind-direction device_class in the canonical list - the schema's
+	 * `wind_direction` is degrees-only - so it goes out with a unit and no
+	 * class, per this table's own "a guess costs the entity" rule.
+	 */
 	{ RADIANT_FIELD_SPEED,              "m/s",    "speed" },
+	{ RADIANT_FIELD_ANGLE,              "rad",    NULL },
 	{ RADIANT_FIELD_ACTIVE_POWER,       "W",      "power" },
 	{ RADIANT_FIELD_VOLTAGE,            "V",      "voltage" },
 	{ RADIANT_FIELD_CURRENT,            "A",      "current" },

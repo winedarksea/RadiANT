@@ -87,6 +87,10 @@ RadiANT builds against, and optionally links, software owned by others -
 including Zephyr and the nRF Connect SDK (Apache-2.0) and, when the sdk-ant
 backend is selected, Nordic Semiconductor's proprietary ANT module and the
 prebuilt libant.a binary, which carry their own licence terms and a per-unit
-royalty. None of that software is redistributed by this repository. The full
-inventory, each component's licence, and this project's posture toward it are
-in docs/third-party.md.
+royalty. With one exception, none of that software is redistributed by this
+repository: apps/dongle_thread/src/matter/ vendors the Matter bridge core and
+its committed ZAP data model from the nRF Connect SDK's matter_bridge sample
+(NCS v3.4.0), whose core/ sources carry Nordic's LicenseRef-Nordic-5-Clause
+licence and whose committed ZAP-generated data model carries Project CHIP's
+Apache-2.0 licence. The full inventory, each component's licence, and this
+project's posture toward it are in docs/third-party.md.

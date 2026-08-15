@@ -77,6 +77,14 @@ struct radiant_rd_adapter {
 	 * differencing is the bug). */
 	bool    have_prev_steps;
 	uint8_t prev_step_count;
+
+	/* The exact running total, which is what gets published.
+	 * RADIANT_SAMPLE_ACCUMULATING means "raw is a monotone counter, not an
+	 * instant" (radiant_bridge.h), and radiant_rules.c differences what it
+	 * receives - a published delta would be differenced twice, and a
+	 * steady cadence has equal consecutive deltas, so a runner would read
+	 * as motionless. Same discipline as radiant_hr_adapter.h's acc_1024. */
+	uint64_t acc_steps;
 };
 
 void radiant_rd_adapter_init(struct radiant_rd_adapter *a);

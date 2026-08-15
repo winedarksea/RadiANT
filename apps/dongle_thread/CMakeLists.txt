@@ -99,11 +99,22 @@ target_sources_ifdef(CONFIG_ANT_DONGLE_THREAD_COEX_LOAD app PRIVATE
 # "no sensors in range". src/bridge_pump.c logs the count at boot for that
 # reason: "bridge: 0 sinks" is the failure announcing itself.
 #
-# radiant_matter.c and radiant_rd_adapter.c are deliberately NOT here. Both
-# compile and are tested (radiant/tests builds them), but Matter needs
-# connectedhomeip - which is a flash-budget spike this application has not run
-# - and the running-dynamics adapter has no bench evidence behind it yet.
-# Linking either would make an untested path look like a shipped one.
+# radiant_rd_adapter.c is deliberately NOT here. It compiles and is tested
+# (radiant/tests builds it), but the running-dynamics adapter has no bench
+# evidence behind it yet, and linking it would make an untested path look like
+# a shipped one.
+#
+# radiant_matter.c USED TO BE EXCLUDED BESIDE IT, FOR A REASON THAT HAS EXPIRED.
+# The old comment here said Matter needs connectedhomeip, "which is a
+# flash-budget spike this application has not run". Package E1 ran it
+# (docs/matter-e1-readback.md) and package E3 vendored the bridge core, so the
+# file is now compiled - but on ITS OWN Kconfig symbol
+# (CONFIG_ANT_DONGLE_MATTER_MAP), not on CONFIG_CHIP. radiant_matter.c contains
+# no CHIP call at all: it is the section 8.1 field-type -> cluster map plus a
+# __weak radiant_matter_attr_write(), and it compiles identically with or
+# without connectedhomeip in the workspace. Tying it to CONFIG_CHIP would have
+# made a pure-C lookup table unbuildable on the nRF52840 Matterless escape
+# hatch (docs/radiant-bridge.md section 11) for no reason.
 if(CONFIG_RADIANT_BRIDGE)
   target_sources(app PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_bridge.c"
@@ -115,14 +126,150 @@ if(CONFIG_RADIANT_BRIDGE)
     # written against a bus that never marks anything stale grows that
     # assumption into itself.
     "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_liveness.c"
+    # ── The Matter plan's packages A, B and C ────────────────────────────
+    #
+    # Three more adapters and the page codecs behind them. Two things about
+    # this list are load-bearing:
+    #
+    # 1. THE COMMON-PAGE PAIR IS NOT OPTIONAL AND IS NOT PER-PROFILE.
+    #    ANT+ Common Data Pages Rev 3.1 Table 4-1 keys pages 0x40-0x5D on the
+    #    channel's TRANSMISSION TYPE, not on the device type, so the common
+    #    decoder runs on every bound channel alongside whichever profile
+    #    adapter owns it - see src/rx_tap.c. Omitting it does not disable a
+    #    feature, it makes every weather-reporting sensor silent.
+    #
+    # 2. profile_power_decode.c, NOT profile_power.c. The latter is the
+    #    MASTER - page rotation, the ANT+ compat layer, RadiANT beacon
+    #    insertion - so it calls profile_sched.c and profile_compat.c, and
+    #    profile_compat.c reaches radiant_sec. Linking it here to obtain one
+    #    decoder would pull the entire transmit-side chain into an image
+    #    whose whole job is to listen, and would let a linker decision nobody
+    #    reviewed make a receive-only dongle capable of transmitting. See
+    #    that file's header; the split exists for this line.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_power_adapter.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_env_adapter.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_common_adapter.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/profiles/profile_common.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/profiles/profile_power_decode.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/profiles/profile_fec.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/profiles/profile_env.c"
     # The application half: the drain pump and the 1 Hz liveness clock.
     "${CMAKE_CURRENT_SOURCE_DIR}/src/bridge_pump.c"
   )
   target_include_directories(app PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge"
+    # New with the packages above: the adapters include their page codec's
+    # header rather than re-deriving the bit splits, exactly as
+    # radiant_rd_adapter.c already did in radiant/tests. This application
+    # listed no profile source and no profile include path before now.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/profiles"
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
   zephyr_linker_sources(SECTIONS
     "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_bridge_sections.ld")
+
+  # The Matter sink's data half: the section 8.1 map, the SI -> cluster unit
+  # conversion and the endpoint allocation. See the note above the `if` for why
+  # this is a symbol of its own rather than CONFIG_CHIP, and Kconfig for why the
+  # symbol defaults to n even here - the five existing coexistence arms have to
+  # stay byte-identical, and bridge.conf is one of them.
+  target_sources_ifdef(CONFIG_ANT_DONGLE_MATTER_MAP app PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_matter.c")
+endif()
+
+# ── The CHIP stack and the vendored Matter bridge core (package E3/E7) ──────
+#
+# EVERYTHING MATTER IS INSIDE THIS ONE `if`, and that is a requirement rather
+# than tidiness. gate.conf, thread.conf, thread_sed.conf, coex.conf and
+# bridge.conf carry the P3/P4 coexistence baselines in
+# docs/radiant-bridge.md section 7.4, and those numbers describe the images
+# they were taken on. CONFIG_CHIP is n in all five (matter_sysbuild.conf is
+# named on the command line, never picked up automatically - see that file's
+# header), so not one line below runs for them and their images are unchanged
+# by construction rather than by care.
+#
+# WHY IT IS HERE AND NOT BEFORE find_package(Zephyr). The preamble at the top
+# of this file - radiant_backend.cmake and ant_radio_backend.cmake - only
+# generates .conf fragments and appends module paths; it creates no target and
+# reads no Kconfig. Everything below needs both `app` to exist and
+# CONFIG_* to be readable, so it belongs after project(). The two NCS
+# applications that do this - nrf/applications/matter_bridge/CMakeLists.txt
+# and nrf/samples/matter/template/CMakeLists.txt - are laid out exactly this
+# way and this block follows them line for line.
+#
+# THE APPLICATION DOES NOT BECOME C++. Only the .cpp files listed below are,
+# and enable-gnu-std.cmake only appends C++ flags. src/main.c and everything
+# under apps/common stay C, and CONFIG_STD_CPP17 (matter.conf, with a long
+# note on why it is not optional) applies to the C++ half alone.
+if(CONFIG_CHIP)
+  # -std=gnu++17 rather than -std=c++17 for the CHIP sources. Without it,
+  # connectedhomeip does not compile - see matter.conf's CONFIG_STD_CPP17 note
+  # for the 40-line error that looks like a broken toolchain and is not.
+  include(${ZEPHYR_CONNECTEDHOMEIP_MODULE_DIR}/config/nrfconnect/app/enable-gnu-std.cmake)
+
+  # NCS's Matter sample-common sources: board/led_widget, the task executor,
+  # matter_init, the event handler and the code-driven cluster registry (plus
+  # its cluster_init.ld linker fragment, which this file therefore does NOT
+  # repeat). Every Matter sample and application in NCS includes this and the
+  # bridge core expects the persistent-storage and binding pieces of it to be
+  # present.
+  #
+  # board.cpp IS COMPILED AND DOES NOT DRIVE ANY LED HERE. Both its LED paths
+  # are inside `#ifdef CONFIG_DK_LIBRARY` and this arm does not enable
+  # DK_LIBRARY, so the collision matter.conf's CONFIG_NCS_SAMPLE_MATTER_LEDS=n
+  # was written to prevent (NCS driving DK LEDs 0-3 against
+  # apps/common/ant_dongle_main.c's led0) cannot happen twice over. The =n line
+  # stays because it states the decision; this comment states the measurement.
+  include(${ZEPHYR_NRF_MODULE_DIR}/samples/matter/common/cmake/source_common.cmake)
+
+  # ncs_configure_data_model() and ncs_get_zap_parent_dir(), both of which read
+  # CONFIG_NCS_SAMPLE_MATTER_ZAP_FILE_PATH - set in matter.conf to this
+  # application's own src/matter/default_zap/bridge.zap.
+  include(${ZEPHYR_NRF_MODULE_DIR}/samples/matter/common/cmake/data_model.cmake)
+  include(${ZEPHYR_NRF_MODULE_DIR}/samples/matter/common/cmake/zap_helpers.cmake)
+  ncs_get_zap_parent_dir(ZAP_PARENT_DIR)
+
+  target_include_directories(app PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/matter"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/matter/core"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/matter/core/util"
+    # zap-generated/ lands on the include path through its PARENT directory,
+    # because the generated sources include it as <zap-generated/...>. This is
+    # the line that makes the committed ZAP output the thing the build reads;
+    # ncs_configure_data_model() adds the same directory to the separate
+    # matter-data-model target.
+    ${ZAP_PARENT_DIR}
+  )
+
+  target_sources(app PRIVATE
+    # The vendored bridge core. src/matter/README.md records the source path,
+    # the NCS version and everything that was left behind - the whole BLE
+    # central provider first among it.
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/matter/core/bridge_manager.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/matter/core/matter_bridged_device.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/matter/core/bridge_storage_manager.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/matter/core/bridged_device_data_provider.cpp"
+    # NOT vendored, referenced in place, exactly as matter_bridge does:
+    # BridgeManager::Init() calls Nrf::Matter::BindingHandler::Init() and
+    # BridgeManager::HandleCommand() builds its BindingData. It is NCS's file
+    # and there is no reason for this repository to own a copy.
+    "${ZEPHYR_NRF_MODULE_DIR}/samples/matter/common/src/binding/binding_handler.cpp"
+  )
+
+  # Trap 15's static_assert. It needs radiant_matter.h, therefore the include
+  # path that only the CONFIG_RADIANT_BRIDGE block above adds - hence the
+  # guard, not because the assertion is optional. matter.conf sets
+  # CONFIG_RADIANT_BRIDGE=y, so on the Matter arm this always compiles.
+  if(CONFIG_RADIANT_BRIDGE)
+    target_sources(app PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/matter/bridge_core_asserts.cpp")
+  endif()
+
+  # Compiles src/matter/default_zap/zap-generated/ into the matter-data-model
+  # target, with BYPASS_IDL - so chip_zapgen never runs and the COMMITTED
+  # directory is what the image contains. See src/matter/README.md; this is
+  # trap 13 and it is the reason .zap, .matter and zap-generated/ were copied
+  # across together and unmodified.
+  ncs_configure_data_model()
 endif()
 
 target_sources_ifdef(CONFIG_ANT_DONGLE_RX_TAP app PRIVATE

@@ -65,12 +65,53 @@ SKIP_DIR_PREFIXES = ("build", "twister-out")
 
 # Files exempt from the SPDX rule, each with the reason. An entry here is a
 # claim that needs to survive review - "it was awkward" is not one.
+#
+# The rule these entries share: VENDORED THIRD-PARTY CODE KEEPS ITS UPSTREAM
+# HEADER, VERBATIM. Retagging somebody else's file with our own SPDX line to
+# make a checker happy would be a false licence claim - the exact failure mode
+# this script was written for, pointed the other way. So the file keeps its
+# header and the exemption is recorded here, by name, with the licence it
+# actually carries.
+#
+# Note what is NOT on this list: every vendored .cpp. This checker's
+# SOURCE_SUFFIXES covers .c and not .cpp, so the C++ half of the same vendored
+# directory is never examined. That is a gap in the checker rather than a
+# decision about those files, and it is left alone here because widening
+# SOURCE_SUFFIXES is a change to what the whole tree is asserted about and
+# belongs in its own commit with its own reasoning.
+#
+# radiant/coex154_ti/ieee802154_cc13xx_cc26xx.c, a fork of Zephyr's TI 802.15.4
+# driver, is the other vendored file in the tree and needs no entry: it is
+# itself Apache-2.0 and satisfies the rule as it stands.
 ALLOWLIST: dict[str, str] = {
-    # Nothing at present. Vendored third-party code keeps its upstream header,
-    # and the one file in that category
-    # (radiant/coex154_ti/ieee802154_cc13xx_cc26xx.c, a fork of Zephyr's TI
-    # 802.15.4 driver) is itself Apache-2.0, so it satisfies the rule without
-    # an exemption.
+    # ── NCS's Matter bridge core (package E3) ──────────────────────────────
+    #
+    # Copied byte-for-byte from
+    # C:\ncs\v3.4.0\nrf\applications\matter_bridge\src\core\ - see
+    # apps/dongle_thread/src/matter/README.md for the provenance table and the
+    # list of what was deliberately left behind. These carry Nordic's
+    # LicenseRef-Nordic-5-Clause, which permits redistribution in source and
+    # binary form for use with Nordic silicon; docs/third-party.md is where
+    # that obligation is tracked.
+    "apps/dongle_thread/src/matter/core/bridge_manager.h": "NCS matter_bridge, LicenseRef-Nordic-5-Clause, vendored verbatim",
+    "apps/dongle_thread/src/matter/core/bridge_storage_manager.h": "NCS matter_bridge, LicenseRef-Nordic-5-Clause, vendored verbatim",
+    "apps/dongle_thread/src/matter/core/bridged_device_data_provider.h": "NCS matter_bridge, LicenseRef-Nordic-5-Clause, vendored verbatim",
+    "apps/dongle_thread/src/matter/core/matter_bridged_device.h": "NCS matter_bridge, LicenseRef-Nordic-5-Clause, vendored verbatim",
+    "apps/dongle_thread/src/matter/core/util/bridge_util.h": "NCS matter_bridge, LicenseRef-Nordic-5-Clause, vendored verbatim",
+    # ── ZAP output, committed (package E3) ─────────────────────────────────
+    #
+    # These ARE Apache-2.0 - "Copyright (c) 2022 Project CHIP Authors" and the
+    # full licence text in the banner - but ZAP's templates emit the long form
+    # and no SPDX identifier, so the checker's first-15-lines test cannot see
+    # it. They are generated output committed on purpose: the build runs with
+    # BYPASS_IDL, so this directory IS the data model rather than a cache of
+    # it, and it must not be edited to add a tag any more than it may be
+    # edited for anything else. See src/matter/README.md, trap 13.
+    "apps/dongle_thread/src/matter/default_zap/zap-generated/access.h": "ZAP output, Apache-2.0 in long form without an SPDX line",
+    "apps/dongle_thread/src/matter/default_zap/zap-generated/CodeDrivenCallback.h": "ZAP output, Apache-2.0 in long form without an SPDX line",
+    "apps/dongle_thread/src/matter/default_zap/zap-generated/endpoint_config.h": "ZAP output, Apache-2.0 in long form without an SPDX line",
+    "apps/dongle_thread/src/matter/default_zap/zap-generated/gen_config.h": "ZAP output, Apache-2.0 in long form without an SPDX line",
+    "apps/dongle_thread/src/matter/default_zap/zap-generated/PluginApplicationCallbacks.h": "ZAP output, Apache-2.0 in long form without an SPDX line",
 }
 
 APACHE_MARKERS = ("Apache License", "Version 2.0, January 2004")

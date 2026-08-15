@@ -32,6 +32,30 @@
     exists to make. A default (-Backend sdk_ant) run therefore does not build
     it; use -Backend core.
 
+    TWO ROWS CANNOT COMPLETE UNDER -Backend core -RadiantBackend nrf, AND NEVER
+    COULD. This is not a regression and it is worth knowing before a long run:
+
+      promicro / promicro_synth   apps\dongle\boards\promicro_nrf52840_
+                                  nrf52840_uf2.overlay sets no
+                                  `chosen { radiant,radio-timer }`.
+      lm20                        nrf54lm20dk has a .conf and no .overlay at all.
+
+    Both die in radiant\src\radiant_radio_nrf.c at its `#error "radiant_radio_nrf
+    needs a timer..."` guard. READ THE FIRST ERROR, NOT THE CASCADE: what follows
+    is a wall of DT_CHOSEN_radiant_radio_timer_..._undeclared plus unrelated
+    log_msg.h / cbprintf_internal.h errors that read like a broken toolchain or a
+    logging fault, and are neither. The Feather overlay HAS the node and its own
+    comment records why it was added ("every core build for the Feather so far
+    used the null backend, where no TIMER is wanted") - so this is the same
+    omission, fixed for one board only. -RadiantBackend null builds every row,
+    which is why nothing noticed.
+
+    Until those overlays gain the node, verify a core/nrf change by running the
+    rows individually and skipping those two (-Only takes one pattern per call).
+    The TI rows additionally need -NcsVersion v3.4.0: hal_ti lives at
+    C:\ncs\v3.4.0\modules\hal\ti and is ABSENT under v3.2.4, where the row is
+    skipped with a message rather than failing.
+
     ASCII only, deliberately: Windows PowerShell 5.1 reads .ps1 files as ANSI
     unless they carry a BOM, so non-ASCII characters here become parse errors.
 

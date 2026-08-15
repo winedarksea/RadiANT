@@ -76,6 +76,39 @@ extern "C" {
 #define RADIANT_FIELD_HVAC_MODE           0x41u
 #define RADIANT_FIELD_FAN_MODE            0x42u
 
+/* ---------------------------------------------------------------------------
+ * field_id allocation, ACROSS adapters - the one namespace this header owns
+ * that isn't the vocabulary
+ * ---------------------------------------------------------------------------
+ *
+ * `field_id` is stable within a source and a sink keys its stored history on
+ * (source, field_id), so two producers writing the same id onto one source
+ * silently merge two different series. Each profile adapter picks its own ids
+ * from the low block and never sees another profile's, because a binding has
+ * exactly one device type.
+ *
+ * THE COMMON-PAGE ADAPTER IS THE EXCEPTION AND THE REASON THIS BLOCK EXISTS.
+ * ANT+ Common Data Pages Rev 3.1 Table 4-1 puts pages 0x40-0x5D in a range
+ * whose "use is defined by the transmission type of the ANT channel", not by
+ * the device type - so page 84's weather data is legal on a heart-rate strap,
+ * a power meter or a bike light, and the common decoder therefore runs on
+ * EVERY bound channel alongside whichever profile adapter owns it. Two
+ * producers, one source. So the common adapter takes a reserved high block
+ * and the profile adapters must stay out of it.
+ *
+ *   0x00-0x1F  the bound profile's own adapter (HR 0..2, power, FE-C, env...)
+ *   0x20-0x3F  common pages, one id per page-84 subpage
+ *   0x40-0xFF  unallocated
+ *
+ * Kept here rather than in radiant_common_adapter.h because the constraint is
+ * on the OTHER adapters, and a rule stated only in the file it doesn't
+ * constrain is a rule the next profile author never reads.
+ */
+#define RADIANT_FIELD_ID_PROFILE_BASE 0x00u
+#define RADIANT_FIELD_ID_PROFILE_MAX  0x1Fu
+#define RADIANT_FIELD_ID_COMMON_BASE  0x20u
+#define RADIANT_FIELD_ID_COMMON_MAX   0x3Fu
+
 /* struct radiant_sample::flags */
 #define RADIANT_SAMPLE_ACCUMULATING (1u << 0) /* raw is a monotone counter, not an instant */
 #define RADIANT_SAMPLE_DERIVED      (1u << 1) /* produced by a rule (section 6), not decoded */

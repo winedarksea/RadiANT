@@ -154,6 +154,40 @@
 
 LOG_MODULE_REGISTER(radiant_gate_mpsl, CONFIG_RADIANT_LOG_LEVEL);
 
+/*
+ * E1 of the Matter plan: the default-0 trap in this file's own header comment
+ * (line 80), converted from a runtime rc into a compile error.
+ *
+ * CONFIG_MPSL_TIMESLOT_SESSION_COUNT carries `default 0`, which sizes MPSL's
+ * session context array to nothing. With it, this file configures, compiles,
+ * links and boots - gate_init() logs a failed mpsl_timeslot_session_open() and
+ * the gate then never gets air. build/m_link/template/zephyr/.config from the
+ * Matter flash spike is exactly that image: GATE_MPSL=y with COUNT=0. A
+ * .config read-back cannot see it (both symbols are present and both look
+ * right), so the check has to be here, where the two are related.
+ *
+ * Wrapped in `#ifdef CONFIG_MPSL` and not applied unconditionally, because
+ * radiant/tests/gate builds THIS FILE with no MPSL at all - the fakes under
+ * tests/gate/fakes/ shadow <mpsl_timeslot.h> precisely so the signal
+ * sequences are the suite's rather than an arbiter's, and that image has no
+ * session to size. Every real build reaches here through
+ * CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL, which `select MPSL`, so the guard
+ * excludes the fake and nothing else. An undefined symbol expands to nothing
+ * rather than to 0, which inside BUILD_ASSERT is a syntax error rather than
+ * the readable message below - hence the #ifndef as well.
+ */
+#ifdef CONFIG_MPSL
+#ifndef CONFIG_MPSL_TIMESLOT_SESSION_COUNT
+#error "CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y needs CONFIG_MPSL_TIMESLOT_SESSION_COUNT >= 1 (it is not defined at all here)"
+#endif
+BUILD_ASSERT(CONFIG_MPSL_TIMESLOT_SESSION_COUNT >= 1,
+	     "CONFIG_MPSL_TIMESLOT_SESSION_COUNT defaults to 0, which sizes "
+	     "MPSL's session array to nothing: the gate links and boots and "
+	     "then never gets air. Set it to 2 (as apps/dongle_thread/"
+	     "thread.conf does) - the SoftDevice Controller takes no public "
+	     "session but the RRAM flash-sync driver adds one invisibly.");
+#endif
+
 /* ---------------------------------------------------------------------------
  * Margins
  * ---------------------------------------------------------------------------

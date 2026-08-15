@@ -51,6 +51,7 @@ BSC_COMBINED_PERIOD = 0x1F96   # 8086, ~4.05 Hz
 PAGE_COMMON_MANUFACTURER = 0x50   # page 80
 PAGE_COMMON_PRODUCT = 0x51        # page 81
 PAGE_COMMON_BATTERY = 0x52        # page 82
+PAGE_COMMON_SUBFIELD = 0x54       # page 84, decode-only - see decode_common_84
 # Data pages between common-page pairs. 120 rather than the 64 this used to
 # use, because 64 is not what a real sensor does: sdk-ant's certified bicycle
 # power profile interleaves page 80 at 119 and page 81 at 120, commented
@@ -1218,6 +1219,104 @@ def decode_common_82(payload: bytes) -> dict:
         "status": (payload[7] >> 4) & 0x07,
         "time_resolution_16s": not (payload[7] & 0x80),
         "voltage": (payload[7] & 0x0F) + payload[6] / 256.0,
+    }
+
+
+# Page 84's subpage catalogue, Table 6-17. Names, not descriptions: the table
+# transposes the descriptions of 7 and 8 (7 is NAMED the minimum and DESCRIBED
+# as "the maximum recorded temperature", 8 the mirror image) and the names are
+# the self-consistent half. Same call, and same register, as
+# radiant/src/profiles/profile_common.h's defect note and
+# docs/device-profiles.md section 3.14's note on Controls page 0x49.
+SUBPAGE_TEMPERATURE = 1
+SUBPAGE_PRESSURE = 2
+SUBPAGE_HUMIDITY = 3
+SUBPAGE_WIND_SPEED = 4
+SUBPAGE_WIND_DIRECTION = 5
+SUBPAGE_CHARGE_CYCLES = 6
+SUBPAGE_TEMP_MIN = 7
+SUBPAGE_TEMP_MAX = 8
+SUBPAGE_INVALID = 0xFF
+
+_SUBPAGE_NAMES = {
+    SUBPAGE_TEMPERATURE: "temperature",
+    SUBPAGE_PRESSURE: "pressure",
+    SUBPAGE_HUMIDITY: "humidity",
+    SUBPAGE_WIND_SPEED: "wind_speed",
+    SUBPAGE_WIND_DIRECTION: "wind_direction",
+    SUBPAGE_CHARGE_CYCLES: "charge_cycles",
+    SUBPAGE_TEMP_MIN: "temp_min",
+    SUBPAGE_TEMP_MAX: "temp_max",
+}
+
+# The subpages whose wire field is two's complement. Everything else in
+# Table 6-17 is unsigned, and getting this backwards turns -5.00 degC into
+# +650.31 degC without any value looking obviously wrong.
+_SUBPAGE_SIGNED = frozenset(
+    (SUBPAGE_TEMPERATURE, SUBPAGE_TEMP_MIN, SUBPAGE_TEMP_MAX))
+
+
+def decode_common_84(payload: bytes) -> dict:
+    """Page 84, Subfield Data. Decode only - nothing here transmits it.
+
+        [0]    page 0x54
+        [1]    reserved, 0xFF
+        [2]    subpage 1 - the page value for bytes 4 & 5; 1-254, 0xFF invalid
+        [3]    subpage 2 - the page value for bytes 6 & 7; 1-254, 0xFF invalid
+        [4..5] data field 1 (LE, 16-bit), per subpage 1
+        [6..7] data field 2 (LE, 16-bit), per subpage 2
+
+    The C mirror is radiant/src/profiles/profile_common.c's
+    profile_common_decode_84(); the vocabulary-side conversions are
+    radiant/src/bridge/radiant_common_adapter.c. Provenance for this page,
+    unlike its 80/81/82 neighbours above, is the primary document `ANT+ Common
+    Data Pages` D00001198 Rev 3.1, section 6.13 (Tables 6-16 and 6-17) with the
+    worked example in section 6.13.1.
+
+    Returns a two-element `slots` list, in wire order. Each slot is a dict of
+    `subpage`, `name` (None for a reserved or invalid subpage), `raw` (the
+    little-endian u16 as it arrived) and `value` - the raw scaled into the
+    subpage's own stated unit, or None when the subpage is one this decoder
+    does not know.
+
+    A reserved subpage (9-254) or the 0xFF invalid sentinel is a NORMAL answer,
+    not an error: the specification reserves that range for exactly this, and
+    the other slot may still carry something useful. So the slot comes back
+    with `name` and `value` of None rather than raising.
+
+    Note there is no `encode_common_84`. Nothing in this project is a weather
+    station, and an encoder with no transmitter is an untested page that looks
+    shipped.
+    """
+    slots = []
+    for subpage, offset in ((payload[2], 4), (payload[3], 6)):
+        raw = _rd_le16(payload, offset)
+        name = _SUBPAGE_NAMES.get(subpage)
+        if subpage in _SUBPAGE_SIGNED:
+            signed = raw - 0x10000 if raw & 0x8000 else raw
+            value = signed / 100.0          # 0.01 degC
+        elif subpage == SUBPAGE_PRESSURE:
+            value = raw / 100.0             # 0.01 kPa
+        elif subpage == SUBPAGE_HUMIDITY:
+            value = raw / 100.0             # 0.01 %
+        elif subpage == SUBPAGE_WIND_SPEED:
+            value = raw / 100.0             # 0.01 km/h
+        elif subpage == SUBPAGE_WIND_DIRECTION:
+            value = raw * 0.05              # 0.05 deg
+        elif subpage == SUBPAGE_CHARGE_CYCLES:
+            value = raw                     # cycles, a cumulative count
+        else:
+            value = None
+        slots.append({
+            "subpage": subpage,
+            "name": name,
+            "raw": raw,
+            "value": value,
+        })
+
+    return {
+        "page": payload[0],
+        "slots": slots,
     }
 
 
@@ -3456,6 +3555,7 @@ _PAGE_DECODERS = {
     PAGE_COMMON_MANUFACTURER: decode_common_80,
     PAGE_COMMON_PRODUCT: decode_common_81,
     PAGE_COMMON_BATTERY: decode_common_82,
+    PAGE_COMMON_SUBFIELD: decode_common_84,
 }
 
 

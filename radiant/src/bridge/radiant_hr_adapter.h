@@ -27,7 +27,7 @@ extern "C" {
 /* field_id assignments within one HR source. Stable: a sink keys history on
  * (source, field_id), so renumbering these breaks every sink's stored series. */
 #define RADIANT_HR_FIELD_COMPUTED_BPM 0u /* 0x26 heart rate, instantaneous */
-#define RADIANT_HR_FIELD_BEAT_COUNT   1u /* 0x36 event count, accumulating, u8 wire width */
+#define RADIANT_HR_FIELD_BEAT_COUNT   1u /* 0x36 event count, accumulating running total, differenced at u8 wire width */
 #define RADIANT_HR_FIELD_BEAT_TIME_MS 2u /* 0x37 duration, accumulating, converted from 1/1024 s */
 
 struct radiant_hr_adapter {
@@ -38,6 +38,25 @@ struct radiant_hr_adapter {
 	/* Exact accumulator in 1/1024s units (section 3.2): difference at the
 	 * field's own width, accumulate exactly, convert only at publication. */
 	uint64_t acc_1024;
+
+	/*
+	 * Exact beat accumulator, same discipline as acc_1024 one line above:
+	 * difference at the field's own u8 wire width, accumulate exactly here,
+	 * and publish the running total. RADIANT_HR_FIELD_BEAT_COUNT used to
+	 * publish the per-message DELTA instead, which contradicted
+	 * radiant_bridge.h's definition of RADIANT_SAMPLE_ACCUMULATING ("raw is
+	 * a monotone counter, not an instant") and disagreed with
+	 * RADIANT_HR_FIELD_BEAT_TIME_MS, the other accumulator posted by the
+	 * same function, which always published a running total correctly.
+	 * radiant_rules.c differences consecutive raws to decide "is this
+	 * accumulator advancing", so a delta made it difference a delta - and
+	 * two equal consecutive deltas (the steady state of any real strap)
+	 * then read as "not advancing". uint64_t rather than uint32_t so the
+	 * total cannot wrap in any session length: 2^32 beats is ~136 years at
+	 * 60 bpm, but a counter that can never wrap needs no reader to think
+	 * about whether it can.
+	 */
+	uint64_t acc_beats;
 };
 
 void radiant_hr_adapter_init(struct radiant_hr_adapter *a);

@@ -682,6 +682,66 @@ config ANT_DONGLE_MQTT_BRIDGE_ID
 	  is 16 bits, re-rollable by design, and collides across two straps in
 	  one room.
 
+config ANT_DONGLE_MATTER
+	bool "Publish samples as Matter attributes over Thread"
+	depends on CHIP
+	help
+	  Section 8.1 and package E of the Matter plan.
+	  radiant/src/bridge/radiant_matter.c: the field-type -> cluster map,
+	  the SI -> cluster unit conversion and the endpoint allocation, plus
+	  the glue that turns radiant_matter_attr_write() from a __weak no-op
+	  into a real attribute write.
+
+	  DEPENDS ON CHIP RATHER THAN SELECTING IT, and the direction matters.
+	  CONFIG_CHIP is set by nrf/sysbuild/CMakeLists.txt from
+	  SB_CONFIG_MATTER, which is a SYSBUILD decision made outside this
+	  Kconfig tree entirely and applied to the image afterwards. A `select`
+	  here would claim an authority this symbol does not have, and would
+	  produce the one thing worse than an image without Matter in it: a
+	  .config that says Matter is present in an image where sysbuild
+	  removed it. See apps/dongle_thread/matter_sysbuild.conf.
+
+	  As of E3 this symbol turns on ANT_DONGLE_MATTER_MAP below, which
+	  compiles radiant/src/bridge/radiant_matter.c, and CMakeLists.txt
+	  compiles the vendored bridge core beside it. What it still does NOT do
+	  is call a CHIP API from RadiANT: radiant_matter_attr_write() is a
+	  __weak no-op until package E4 provides the data provider and E6 starts
+	  the CHIP event loop. So this symbol being y does not yet mean anything
+	  reaches a Matter controller.
+
+	  The sink counter is how a running board answers the same question:
+	  src/bridge_pump.c logs "bridge: N sinks" at boot, and N of 1 in a
+	  Matter arm means only the MQTT sink linked and this one did not.
+
+config ANT_DONGLE_MATTER_MAP
+	bool "Compile radiant_matter.c, the field-type -> cluster map"
+	default y if ANT_DONGLE_MATTER
+	help
+	  radiant/src/bridge/radiant_matter.c on its own, separately from
+	  CONFIG_CHIP.
+
+	  A SYMBOL OF ITS OWN RATHER THAN `depends on CHIP`, and the direction is
+	  the point. That file contains no CHIP call and no CHIP include: it is
+	  the section 8.1 vocabulary-type -> cluster table, the SI -> cluster unit
+	  conversion, the endpoint allocation, and a __weak
+	  radiant_matter_attr_write() that a real stack overrides. It compiles
+	  identically in a workspace with no connectedhomeip in it. Gating it on
+	  CONFIG_CHIP would make a pure-C lookup table unbuildable on the
+	  Matterless nRF52840 escape hatch (docs/radiant-bridge.md section 11) for
+	  no reason, and would tie a data decision to a build decision.
+
+	  DEFAULT n EXCEPT ON THE MATTER ARM, and that is not caution either.
+	  bridge.conf sets RADIANT_BRIDGE=y and carries one of the five
+	  coexistence baselines in docs/radiant-bridge.md section 7.4. Defaulting
+	  this on wherever the bus is present would put a second sink in that
+	  image and move a number that is supposed to stay comparable. So it
+	  follows ANT_DONGLE_MATTER, and the other four arms - where RADIANT_BRIDGE
+	  itself is n - never see the symbol at all.
+
+	  Note the consequence for the E2 regression diff: bridge.conf's generated
+	  .config gains one `# CONFIG_ANT_DONGLE_MATTER_MAP is not set` COMMENT
+	  line. Its image is unchanged.
+
 endif # RADIANT_BRIDGE
 
 # Turn the MQTT library on for a build that asked for the sink.
@@ -706,5 +766,61 @@ endmenu
 # epoch authority is still the PC behind it, not this Thread network.
 rsource "../../radiant/src/node/Kconfig"
 rsource "../../radiant/src/profiles/Kconfig"
+
+# ── connectedhomeip's own Kconfig, for the Matter arm ───────────────────────
+#
+# CONFIG_CHIP itself needs none of this: connectedhomeip is a Zephyr module
+# with `kconfig: config/nrfconnect/chip-module/Kconfig` in its module.yml, so
+# the symbol is defined in every build of every application in this tree
+# already, whether or not anyone wants Matter. What these three files carry is
+# the DEFAULTS - and one of them is the trap.
+#
+# Kconfig.defaults is where `config BT / default y` lives. Not a line anybody
+# writes: CONFIG_BT arrives in a Matter image as a Kconfig default, and it
+# breaks the `!BT` half of radiant/Kconfig's `depends on !BT ||
+# RADIANT_BACKEND_NRF_GATE_MPSL`, dropping the radio backend to NULL unless the
+# Matter fragment names the gate. matter.conf names it, and says why at length.
+# The point of sourcing this file rather than transcribing the dozen settings
+# this arm happens to need is that the trap comes WITH the defaults; a
+# hand-picked subset would omit it and the omission would look like safety.
+#
+# osource RATHER THAN source, on all three. These paths resolve through
+# $(ZEPHYR_CONNECTEDHOMEIP_MODULE_DIR), which is empty in a workspace where
+# connectedhomeip was never fetched - and this application must still configure
+# there, because the Matterless MQTT build (docs/radiant-bridge.md section 11,
+# the nRF52840 escape hatch) is a real target. `source` on a path that does not
+# exist is a hard Kconfig error; `osource` is a no-op.
+#
+# WRAPPED IN `if CHIP`, and this is a decision rather than tidiness. Both
+# connectedhomeip files are already `if CHIP` internally and are therefore
+# inert on the other five arms whichever way this is written. NCS's
+# samples/matter/common/src/Kconfig is NOT: it declares
+# NCS_SAMPLE_MATTER_TEST_EVENT_TRIGGERS `default y` with no dependency at all,
+# so sourced unconditionally it would appear as `=y` in gate.conf's,
+# thread.conf's, thread_sed.conf's, coex.conf's and bridge.conf's generated
+# .config - five coexistence baselines gaining a line each, for a symbol whose
+# sources this application does not compile (NCS's source_common.cmake is
+# inside `if(CONFIG_CHIP)`). Inert or not, a baseline that moves is a baseline
+# that has to be re-argued. Inside `if CHIP` the symbols are still DEFINED
+# everywhere - Kconfig's `if` adds a dependency, it does not hide a definition -
+# so matter.conf can assign NCS_SAMPLE_MATTER_LEDS without the assignment
+# becoming an undefined-symbol error, and the five other arms see only
+# "# CONFIG_... is not set" comment lines.
+if CHIP
+
+osource "$(ZEPHYR_CONNECTEDHOMEIP_MODULE_DIR)/config/nrfconnect/chip-module/Kconfig.features"
+osource "$(ZEPHYR_CONNECTEDHOMEIP_MODULE_DIR)/config/nrfconnect/chip-module/Kconfig.defaults"
+osource "$(ZEPHYR_NRF_MODULE_DIR)/samples/matter/common/src/Kconfig"
+
+# The vendored Matter bridge core's own symbols - BRIDGE_MAX_DYNAMIC_ENDPOINTS_
+# NUMBER and its three companions, read BY NAME from bridge_manager.h and
+# bridge_storage_manager.cpp. `rsource` rather than `osource` because unlike the
+# three files above this one is in THIS repository and its absence would be a
+# bug rather than a workspace without Matter fetched. It is inside `if CHIP`
+# with them so that a non-Matter arm gains no symbols; see the block comment
+# above, which applies unchanged.
+rsource "src/matter/Kconfig"
+
+endif # CHIP
 
 source "Kconfig.zephyr"

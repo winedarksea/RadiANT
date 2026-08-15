@@ -1,12 +1,17 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * profile_common.c - ANT+ common pages 80, 81 and 82.
+ * profile_common.c - ANT+ common pages 80, 81 and 82 (encode) and 84 (decode).
  *
  * Provenance: docs/device-profiles.md section "Common pages" (formerly
  * docs/ant-plus-profiles.md, absorbed into it) and its mirror
  * in tools/ant_pages.py (encode_common_80/81/82), which are this project's own
  * prior derivation. See the header for the full note and for why the serial
  * number's sentinel is a privacy rule rather than a convenience.
+ *
+ * profile_common_decode_84() has a DIFFERENT provenance - the primary
+ * document, D00001198 Rev 3.1 section 6.13 - and its mirror is
+ * tools/ant_pages.py's decode_common_84(). The header states the split; it is
+ * restated here because this is the file a clean-room audit greps.
  */
 
 #include <errno.h>
@@ -75,5 +80,34 @@ int profile_common_82(const struct profile_common_battery *b, uint8_t *body)
 	body[5] = (uint8_t)((b->operating_time >> 16) & 0xFFu);
 	body[6] = b->fractional_voltage;
 	body[7] = descriptor;
+	return 0;
+}
+
+int profile_common_decode_84(const uint8_t *body, struct profile_common_84 *out)
+{
+	if (body == NULL || out == NULL) {
+		return -EINVAL;
+	}
+
+	/* Table 6-16 byte [0]. Checked rather than assumed: this decoder is
+	 * reached from a path that dispatches on the whole 0x40-0x5D range
+	 * (radiant_common_adapter.c), so "some other common page" is a routine
+	 * caller here, not a bug - but it is the ADAPTER's job to filter, and a
+	 * decoder that silently decoded page 0x50's manufacturer id as a
+	 * temperature would make that filter's absence invisible. */
+	if (body[0] != PROFILE_COMMON_PAGE_84) {
+		return -EINVAL;
+	}
+
+	/* Byte [1] is reserved 0xFF and is deliberately NOT validated. A master
+	 * that puts something else there is out of spec in a way that says
+	 * nothing about bytes [2..7], and rejecting the page over it would
+	 * discard good weather data to enforce a byte nobody reads. */
+
+	out->slot[0].subpage = body[2];
+	out->slot[0].raw = (uint16_t)body[4] | ((uint16_t)body[5] << 8);
+	out->slot[1].subpage = body[3];
+	out->slot[1].raw = (uint16_t)body[6] | ((uint16_t)body[7] << 8);
+
 	return 0;
 }

@@ -37,6 +37,45 @@ extern "C" {
  * (kelvin to 0.01degC, `K*100-27315`) is the only row needing a shift as
  * well as a scale (section 8.1a); every other row is a pure decimal scale.
  */
+
+/*
+ * One attribute write. `mul == 0` means CONSTANT: `offset` is written
+ * verbatim, once, when the endpoint is created, and no sample is consulted.
+ * Otherwise it is an ordinary conversion of the same sample the primary row
+ * converts, into a different attribute's units.
+ *
+ * Two things forced this from "one attribute per row" into a list, and both
+ * are bugs that only appear once a real CHIP stack is behind the seam:
+ *
+ *  - PRESSURE. Pressure Measurement's mandatory `MeasuredValue` is an int16s
+ *    in whole kPa (pressure-measurement-cluster.xml:39), so 101325 Pa becomes
+ *    101 and every barometer in the world reports six distinguishable values.
+ *    `ScaledValue`/`Scale` is the cluster's own answer, but it is optional and
+ *    `MeasuredValue` is not - a bridged endpoint that serves only the useful
+ *    one is non-conformant, and one that serves only the mandatory one is
+ *    useless. So the row writes all three.
+ *
+ *  - OCCUPANCY SENSOR TYPE (trap 16). `OccupancySensorType` left at its
+ *    zero-initialised value means PIR, and home-assistant/core#164839 proposes
+ *    remapping PIR endpoints from `device_class: occupancy` to `motion`. These
+ *    booleans are derived from a chest strap and a crank, not from motion; a
+ *    future controller release would silently relabel every one of them. There
+ *    is nowhere else to state a constant attribute, because on a dynamic
+ *    endpoint EVERY attribute is external storage and the stack stores
+ *    nothing on our behalf.
+ */
+struct radiant_matter_attr_conv {
+	uint32_t attribute;
+	int32_t  mul;    /* 0 = constant; write `offset`, once, at creation */
+	int32_t  div;
+	int32_t  offset;
+};
+
+/* Two is what the pressure row needs (ScaledValue + Scale) and what occupancy
+ * needs (type + bitmap). Raising it is free; it is fixed so a row is a
+ * literal in a table rather than a thing with a lifetime. */
+#define RADIANT_MATTER_MAX_EXTRA 2u
+
 struct radiant_matter_type_map {
 	uint8_t  field_type;   /* the section 7 vocabulary */
 	uint16_t device_type;  /* Matter Device Library, 0 = cluster only */
@@ -45,6 +84,11 @@ struct radiant_matter_type_map {
 	int32_t  mul;
 	int32_t  div;
 	int32_t  offset;
+
+	/* Written in addition to the primary attribute above, into the same
+	 * cluster. See struct radiant_matter_attr_conv. */
+	uint8_t  n_extra;
+	struct radiant_matter_attr_conv extra[RADIANT_MATTER_MAX_EXTRA];
 };
 
 /* Matter cluster and device-type identifiers, named rather than left as bare
@@ -53,8 +97,10 @@ struct radiant_matter_type_map {
 #define MATTER_DEVTYPE_OCCUPANCY_SENSOR   0x0107u
 #define MATTER_DEVTYPE_TEMPERATURE_SENSOR 0x0302u
 #define MATTER_DEVTYPE_HUMIDITY_SENSOR    0x0307u
+#define MATTER_DEVTYPE_PRESSURE_SENSOR    0x0305u
 
 #define MATTER_CLUSTER_TEMP_MEASUREMENT     0x0402u
+#define MATTER_CLUSTER_PRESSURE_MEASUREMENT 0x0403u
 #define MATTER_CLUSTER_REL_HUMIDITY         0x0405u
 #define MATTER_CLUSTER_OCCUPANCY_SENSING    0x0406u
 #define MATTER_CLUSTER_POWER_SOURCE         0x002Fu
@@ -62,6 +108,20 @@ struct radiant_matter_type_map {
 #define MATTER_ATTR_MEASURED_VALUE          0x0000u
 #define MATTER_ATTR_OCCUPANCY               0x0000u
 #define MATTER_ATTR_BAT_PERCENT_REMAINING   0x000Cu
+
+/* Occupancy Sensing. `OccupancySensorType` is an enum and
+ * `OccupancySensorTypeBitmap` a bitmap over the same four kinds, so the two
+ * constants below must agree - a controller may read either. */
+#define MATTER_ATTR_OCCUPANCY_SENSOR_TYPE   0x0001u
+#define MATTER_ATTR_OCCUPANCY_SENSOR_BITMAP 0x0002u
+#define MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT     3    /* enum: 0 PIR, 1 ultrasonic, 2 both, 3 contact */
+#define MATTER_OCCUPANCY_BITMAP_PHYSICAL_CONTACT   0x04 /* bit 0 PIR, bit 1 ultrasonic, bit 2 contact */
+
+/* Pressure Measurement's optional high-resolution pair.
+ * ScaledValue = 10^Scale x pressure in kPa. */
+#define MATTER_ATTR_SCALED_VALUE            0x0010u
+#define MATTER_ATTR_SCALE                   0x0014u
+#define MATTER_PRESSURE_SCALE               2 /* 0.01 kPa = 10 Pa per step */
 
 /* The row for a vocabulary type, or NULL if the Matter plane declines it
  * (a normal answer - see header comment). */
@@ -72,18 +132,67 @@ const struct radiant_matter_type_map *radiant_matter_row(uint8_t field_type);
  * cast would put a plausible wrong number in front of a user. */
 bool radiant_matter_convert(const struct radiant_sample *s, int64_t *out);
 
+/* The same arithmetic against an arbitrary conversion rather than the row's
+ * primary one - what a row's `extra[]` entries are converted with. Exposed
+ * because the extras are as easy to get wrong as the primaries and a test
+ * that cannot reach them does not cover them. `c->mul == 0` (a constant) is
+ * refused here: a constant is not a conversion of anything. */
+bool radiant_matter_convert_with(const struct radiant_sample *s,
+				 const struct radiant_matter_attr_conv *c,
+				 int64_t *out);
+
 /*
  * How many endpoints are currently instantiated, and what is on each. An
  * endpoint is instantiated per announced field, not per binding kind
  * (section 8.1): the four derived booleans of section 6 (all type 0x02)
  * are four instances of one row, distinguished by field_id.
  */
-/* 16: room for section 8.1's worked example plus temperature/humidity/
- * battery rows. Compile-time constant, not Kconfig, like the rest of
+/*
+ * 16: room for section 8.1's worked example plus temperature/humidity/
+ * pressure/battery rows. Compile-time constant, not Kconfig, like the rest of
  * src/bridge. Overrunning it logs a warning; the sensor just doesn't
- * appear (see endpoint_get_or_add()) - never a silent drop. */
+ * appear (see endpoint_get_or_add()) - never a silent drop.
+ *
+ * THE BUDGET DOES NOT CLOSE IN THE WORST CASE, AND THAT IS ACCEPTED RATHER
+ * THAN UNNOTICED. radiant_binding.h's RADIANT_BINDING_MAX is 8, and one
+ * heart-rate binding alone announces four derived booleans; eight full
+ * bindings cannot fit in sixteen endpoints and the ninth-onwards field logs
+ * the warning and does not appear. Three reasons not to "fix" it by raising
+ * this number:
+ *
+ *  - 16 is not ours to pick unilaterally. It must equal the CHIP side's
+ *    BRIDGE_MAX_DYNAMIC_ENDPOINTS_NUMBER and
+ *    CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT (trap 15: the latter sizes the
+ *    Descriptor cluster's real server array, and too small means the Nth
+ *    bridged endpoint enumerates with no cluster list at all - not a warning,
+ *    not an error, just a broken entity). The glue static_asserts the three
+ *    together; changing one alone is the failure this comment exists to stop.
+ *  - Each slot is not free: a Descriptor instance, a DataVersion[] array and
+ *    a shadow row per endpoint.
+ *  - A household running eight simultaneous ANT+ sensors through one dongle
+ *    is outside the radio budget of docs/radiant-bridge.md section 7 well
+ *    before it is outside this table.
+ *
+ * So the ceiling is real, documented, and announced by the warning rather
+ * than discovered as a missing entity.
+ */
 #define RADIANT_MATTER_MAX_ENDPOINTS 16u
 
+/*
+ * `endpoint_id` IS AN OPAQUE KEY, NOT A CHIP ENDPOINT NUMBER (trap 6).
+ *
+ * Assignment starts at 1 here, and on a real bridge CHIP endpoint 1 is the
+ * Aggregator (nrf/applications/matter_bridge's
+ * BRIDGE_AGGREGATOR_ENDPOINT_ID). The collision is resolved in the glue, by
+ * mapping this id onto the first dynamic endpoint above the fixed ones - NOT
+ * by renumbering here, because this numbering is what every test in
+ * radiant/tests/src/test_matter.c asserts and because a data model that
+ * knows a specific stack's fixed-endpoint layout has stopped being a data
+ * model. Treat the value as "the Nth endpoint radiant asked for", and note
+ * that trap 8 requires the glue to persist its own uuid -> CHIP id mapping
+ * anyway, since Matter forbids reusing an id for a different device and this
+ * table is RAM-backed and assigned in bind order.
+ */
 struct radiant_matter_endpoint {
 	uint16_t endpoint_id;
 	uint32_t source;      /* binding index */

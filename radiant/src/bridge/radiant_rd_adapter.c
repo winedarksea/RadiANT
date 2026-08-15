@@ -82,9 +82,23 @@ static uint32_t decode_a(struct radiant_rd_adapter *a, uint32_t source,
 	steps = (uint8_t)((a->m.step_count - a->prev_step_count) & 0x7Fu);
 	a->prev_step_count = a->m.step_count;
 	if (steps != 0u) {
+		/*
+		 * Accumulated, and the ACCUMULATION is published.
+		 * RADIANT_SAMPLE_ACCUMULATING is defined in radiant_bridge.h
+		 * as "raw is a monotone counter, not an instant", and
+		 * radiant_rules.c differences what it is handed - so posting
+		 * `steps` would be handing it an already-differenced value to
+		 * difference again. A runner at a steady cadence produces
+		 * equal consecutive deltas, whose second difference is zero,
+		 * so the source would read as motionless precisely while
+		 * running steadily. Same discipline as radiant_hr_adapter.h's
+		 * acc_1024: difference at the field's own width (7 bits here),
+		 * accumulate exactly, publish the accumulation.
+		 */
+		a->acc_steps += (uint64_t)steps;
 		post(source, RADIANT_RD_FIELD_STEP_COUNT,
 		     RADIANT_FIELD_EVENT_COUNT, RADIANT_SAMPLE_ACCUMULATING, 0,
-		     (int64_t)steps, t_us);
+		     (int64_t)a->acc_steps, t_us);
 		n++;
 	}
 	return n;

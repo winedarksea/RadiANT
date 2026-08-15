@@ -1,0 +1,99 @@
+# The vendored Matter bridge core's own Kconfig.
+#
+# Derived from C:\ncs\v3.4.0\nrf\applications\matter_bridge\src\core\Kconfig
+# (NCS v3.4.0, LicenseRef-Nordic-5-Clause). The four BRIDGE_* symbols and the
+# migration menu below are upstream's, name for name and default for default -
+# bridge_manager.h and bridge_storage_manager.cpp read them by name, so the
+# values are not ours to invent.
+#
+# WHAT WAS REMOVED, AND WHY IT IS REMOVED RATHER THAN SET TO n. Upstream ends
+# with `if BRIDGED_DEVICE_BT` and a "Bluetooth bridge configuration" menu of
+# eleven BRIDGE_BT_* symbols - scan windows, connection intervals, recovery
+# timeouts. Every one of them configures the BLE-CENTRAL provider that
+# src/matter/README.md says was deliberately left behind, and the sources that
+# would read them are not in this repository. Sourcing the menu and setting the
+# choice to n would leave eleven dead symbols in every Matter .config and one
+# `if` on a symbol (BRIDGED_DEVICE_BT) that nothing in this tree defines.
+#
+# THIS IS NOT THE SAME BLUETOOTH AS CONFIG_BT. Matter commissions over BLE and
+# CONFIG_BT arrives as a Kconfig default from connectedhomeip's Kconfig.defaults
+# whatever this file says - see matter.conf's long note on the subject, and
+# radiant/Kconfig's `depends on !BT || RADIANT_BACKEND_NRF_GATE_MPSL`.
+#
+# Sourced from apps/dongle_thread/Kconfig INSIDE `if CHIP`, for the same reason
+# connectedhomeip's own files are: this application must still configure in a
+# workspace with no Matter in it, and the five existing coexistence arms must
+# not gain symbols.
+
+menu "Matter bridge core (vendored from NCS matter_bridge)"
+
+config BRIDGE_MAX_DYNAMIC_ENDPOINTS_NUMBER
+	int "Maximum dynamic endpoints"
+	default 16
+	help
+	  Maximum number of endpoints supported by the bridge.
+
+	  THIS NUMBER IS ONE OF THREE THAT MUST AGREE, and the other two are
+	  CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT (src/matter/chip_project_config.h)
+	  and RADIANT_MATTER_MAX_ENDPOINTS (radiant/src/bridge/radiant_matter.h).
+	  src/matter/bridge_core_asserts.cpp static_asserts the pair that C++ can
+	  see. Trap 15: too small does not fail, it produces an Nth bridged
+	  endpoint with no Descriptor cluster.
+
+config BRIDGE_MAX_BRIDGED_DEVICES_NUMBER
+	int "Maximum bridged devices"
+	default 16
+	help
+	  Maximum number of physical non-Matter devices supported by the bridge.
+
+	  One ANT+ sensor is one of these; the endpoints it announces are the
+	  symbol above. radiant_binding.h's RADIANT_BINDING_MAX is 8, so this
+	  ceiling is not the binding one.
+
+config BRIDGE_MAX_BRIDGED_DEVICES_NUMBER_PER_PROVIDER
+	int "Maximum endpoints per provider"
+	default 2
+	help
+	  Maximum number of endpoints paired to one non-Matter provider device.
+
+	  UPSTREAM'S 2 IS ALMOST CERTAINLY TOO SMALL FOR THIS PRODUCT and is left
+	  at the upstream value here on purpose: one heart-rate binding announces
+	  four derived booleans plus battery, which is five endpoints on one
+	  provider. Raising it is package E4's call to make with the provider in
+	  front of it, not E3's to make blind. Nothing in this repository
+	  constructs a provider yet, so nothing hits the limit yet.
+
+config BRIDGE_AGGREGATOR_ENDPOINT_ID
+	int "Aggregator endpoint ID"
+	default 1
+	help
+	  ID of the endpoint implementing Aggregator device type functionality.
+
+	  1, because that is what default_zap/bridge.zap describes. Changing this
+	  without regenerating the ZAP produces an aggregator id that no endpoint
+	  in the data model has.
+
+menu "Migration options"
+
+config BRIDGE_MIGRATE_PRE_2_7_0
+	bool "Migrate pre-2.7.0 data"
+	help
+	  Enable migration of bridged device data stored in the old scheme (pre-nRF SDK 2.7.0).
+
+	  Off, and it stays off: this application has never stored a bridged
+	  device in any scheme, so there is nothing to migrate from.
+
+config BRIDGE_MIGRATE_VERSION_1
+	bool "Migrate version 1 data"
+	default y
+	help
+	  Enable migration of bridged device data stored in version 1 of the new scheme.
+
+	  Left at upstream's default rather than turned off. It is read by
+	  bridge_storage_manager.cpp, which is vendored verbatim, and a
+	  first-boot device has no version-1 data to find - so the cost is code
+	  size in a path that runs once and finds nothing.
+
+endmenu
+
+endmenu

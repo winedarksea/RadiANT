@@ -28,6 +28,21 @@ static struct {
 	uint32_t writes;
 } last;
 
+/*
+ * Every write, not just the last one. A row may now write more than one
+ * attribute per sample (the pressure row's ScaledValue beside its mandatory
+ * MeasuredValue) and more than once per endpoint lifetime (occupancy's
+ * constant OccupancySensorType at creation), and "the last write" cannot see
+ * either. 32 is more than any test here produces.
+ */
+static struct {
+	uint16_t endpoint_id;
+	uint32_t cluster;
+	uint32_t attribute;
+	int64_t  value;
+} writes[32];
+static uint32_t n_writes;
+
 void radiant_matter_attr_write(uint16_t endpoint_id, uint32_t cluster,
 			       uint32_t attribute, int64_t value)
 {
@@ -36,12 +51,45 @@ void radiant_matter_attr_write(uint16_t endpoint_id, uint32_t cluster,
 	last.attribute = attribute;
 	last.value = value;
 	last.writes++;
+
+	if (n_writes < ARRAY_SIZE(writes)) {
+		writes[n_writes].endpoint_id = endpoint_id;
+		writes[n_writes].cluster = cluster;
+		writes[n_writes].attribute = attribute;
+		writes[n_writes].value = value;
+		n_writes++;
+	}
+}
+
+/* The one write of `attribute` on `cluster`, or NULL. Fails the caller's
+ * assertion rather than this one if there are two. */
+static int find_write(uint32_t cluster, uint32_t attribute, int64_t *value_out,
+		      uint16_t *endpoint_out)
+{
+	uint32_t i;
+	int found = 0;
+
+	for (i = 0u; i < n_writes; i++) {
+		if (writes[i].cluster == cluster &&
+		    writes[i].attribute == attribute) {
+			if (value_out != NULL) {
+				*value_out = writes[i].value;
+			}
+			if (endpoint_out != NULL) {
+				*endpoint_out = writes[i].endpoint_id;
+			}
+			found++;
+		}
+	}
+	return found;
 }
 
 static void matter_before(void *f)
 {
 	ARG_UNUSED(f);
 	memset(&last, 0, sizeof(last));
+	memset(writes, 0, sizeof(writes));
+	n_writes = 0u;
 	radiant_matter_reset();
 }
 
@@ -371,5 +419,226 @@ ZTEST(radiant_matter, test_a_stale_sample_is_still_written)
 
 	zassert_equal(last.writes, 1u, "a stale sample still writes");
 	zassert_equal(last.value, 4000, NULL);
+}
+
+/* ---------------------------------------------------------------------------
+ * Package D - the pressure row, and the two bugs fixed before CHIP amplifies
+ * them
+ * ---------------------------------------------------------------------------
+ */
+
+ZTEST(radiant_matter, test_pressure_serves_both_the_mandatory_and_the_useful_attribute)
+{
+	struct radiant_sample s;
+	int64_t v = 0;
+	uint16_t ep_measured = 0;
+	uint16_t ep_scaled = 0;
+
+	/*
+	 * Standard atmosphere, 101325 Pa.
+	 *
+	 * MeasuredValue is an int16s in WHOLE kPa, so it can only say 101 -
+	 * that is the cluster's definition, not a rounding bug, and it is why
+	 * this row does not stop there. ScaledValue at Scale 2 says 10132.5 ->
+	 * 10133, which is 10 Pa of resolution. Both are written, from one
+	 * sample, onto one endpoint.
+	 */
+	s = mk(9u, 0u, RADIANT_FIELD_PRESSURE, 101325, 0);
+	radiant_bridge_post(&s);
+	radiant_bridge_drain();
+
+	zassert_equal(radiant_matter_endpoint_count(), 1u,
+		      "one pressure field, one endpoint");
+
+	zassert_equal(find_write(MATTER_CLUSTER_PRESSURE_MEASUREMENT,
+				 MATTER_ATTR_MEASURED_VALUE, &v, &ep_measured),
+		      1, "MeasuredValue is mandatory and must be written");
+	zassert_equal(v, 101, "101325 Pa is 101 whole kPa, got %lld",
+		      (long long)v);
+
+	zassert_equal(find_write(MATTER_CLUSTER_PRESSURE_MEASUREMENT,
+				 MATTER_ATTR_SCALED_VALUE, &v, &ep_scaled),
+		      1, "ScaledValue carries the resolution MeasuredValue "
+			 "cannot");
+	zassert_equal(v, 10133,
+		      "101325 Pa at Scale 2 is 10132.5 -> 10133 (round half "
+		      "away from zero), got %lld", (long long)v);
+
+	/* Scale is a constant and must be written, exactly once, or
+	 * ScaledValue is unreadable - it reads back as 0, i.e. whole kPa,
+	 * i.e. a barometer reporting 10133 kPa. */
+	zassert_equal(find_write(MATTER_CLUSTER_PRESSURE_MEASUREMENT,
+				 MATTER_ATTR_SCALE, &v, NULL),
+		      1, "Scale is written exactly once");
+	zassert_equal(v, MATTER_PRESSURE_SCALE, NULL);
+
+	zassert_equal(ep_measured, ep_scaled,
+		      "all three are attributes of ONE endpoint");
+}
+
+ZTEST(radiant_matter, test_the_pressure_constant_is_written_once_not_per_sample)
+{
+	struct radiant_sample s;
+	int i;
+
+	for (i = 0; i < 5; i++) {
+		s = mk(9u, 0u, RADIANT_FIELD_PRESSURE, 101325 + i, 0);
+		radiant_bridge_post(&s);
+		radiant_bridge_drain();
+	}
+
+	/* Five samples: five MeasuredValue, five ScaledValue, ONE Scale. A
+	 * constant re-written per sample would dirty a subscription path 4 Hz
+	 * for a value that never changes - the exact waste finding 7's
+	 * deadband argument is about. */
+	zassert_equal(find_write(MATTER_CLUSTER_PRESSURE_MEASUREMENT,
+				 MATTER_ATTR_SCALE, NULL, NULL),
+		      1, "Scale is a creation-time constant");
+	zassert_equal(find_write(MATTER_CLUSTER_PRESSURE_MEASUREMENT,
+				 MATTER_ATTR_SCALED_VALUE, NULL, NULL),
+		      5, NULL);
+}
+
+ZTEST(radiant_matter, test_occupancy_declares_itself_as_not_a_pir)
+{
+	struct radiant_sample s;
+	int64_t v = 99;
+
+	/*
+	 * Trap 16. Zero-initialised, OccupancySensorType means PIR, and
+	 * home-assistant/core#164839 proposes remapping PIR occupancy
+	 * endpoints to `device_class: motion`. "Strap is worn" is not motion.
+	 * On a dynamic endpoint every attribute is external storage, so a
+	 * constant nobody writes reads back as zero - there is no default to
+	 * fall back on and this write is the only thing standing between these
+	 * four booleans and a future controller relabelling all of them.
+	 */
+	s = mk(6u, 0u, RADIANT_FIELD_OCCUPANCY, 1, 0);
+	s.flags = RADIANT_SAMPLE_DERIVED;
+	radiant_bridge_post(&s);
+	radiant_bridge_drain();
+
+	zassert_equal(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING,
+				 MATTER_ATTR_OCCUPANCY_SENSOR_TYPE, &v, NULL),
+		      1, NULL);
+	zassert_equal(v, MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT,
+		      "OccupancySensorType must NOT be left at 0 (PIR)");
+	zassert_not_equal(v, 0, "0 is PIR - see trap 16");
+
+	zassert_equal(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING,
+				 MATTER_ATTR_OCCUPANCY_SENSOR_BITMAP, &v, NULL),
+		      1, NULL);
+	zassert_equal(v, MATTER_OCCUPANCY_BITMAP_PHYSICAL_CONTACT,
+		      "the bitmap must agree with the enum - a controller may "
+		      "read either");
+}
+
+ZTEST(radiant_matter, test_a_battery_does_not_become_its_own_phantom_entity)
+{
+	struct radiant_sample s;
+	const struct radiant_matter_endpoint *primary;
+	int64_t v = 0;
+	uint16_t ep = 0xFFFFu;
+
+	/*
+	 * radiant_matter.h has documented `device_type 0` as "cluster only, on
+	 * the binding's own endpoint" since P7, and matter_publish() called
+	 * endpoint_get_or_add() unconditionally, so a battery field allocated
+	 * an endpoint of its own with no device type. In Matter that is a
+	 * bridged node with no device type and one Power Source cluster: a
+	 * phantom entity sitting beside the real sensor in every controller.
+	 */
+	s = mk(2u, 0u, RADIANT_FIELD_OCCUPANCY, 1, 0);
+	s.flags = RADIANT_SAMPLE_DERIVED;
+	radiant_bridge_post(&s);
+	radiant_bridge_drain();
+	zassert_equal(radiant_matter_endpoint_count(), 1u, NULL);
+	primary = radiant_matter_endpoint_for(2u, 0u);
+	zassert_not_null(primary, NULL);
+
+	s = mk(2u, 1u, RADIANT_FIELD_BATTERY_SOC, 80, 0);
+	radiant_bridge_post(&s);
+	radiant_bridge_drain();
+
+	zassert_equal(radiant_matter_endpoint_count(), 1u,
+		      "a battery adds NO endpoint - got %u",
+		      (unsigned int)radiant_matter_endpoint_count());
+	zassert_equal(find_write(MATTER_CLUSTER_POWER_SOURCE,
+				 MATTER_ATTR_BAT_PERCENT_REMAINING, &v, &ep),
+		      1, "but it is still published");
+	zassert_equal(v, 160, "80 %% at 0.5 %% per step is 160", NULL);
+	zassert_equal(ep, primary->endpoint_id,
+		      "onto the source's OWN endpoint, not a new one");
+}
+
+ZTEST(radiant_matter, test_a_battery_with_no_primary_yet_is_deferred_not_dropped)
+{
+	struct radiant_sample s;
+
+	/* Common page 82 can lead a sensor's first data page. Deferring is the
+	 * right answer, and the next battery sample after a primary exists
+	 * must land - "deferred" must not mean "declined for good". */
+	s = mk(3u, 1u, RADIANT_FIELD_BATTERY_SOC, 80, 0);
+	radiant_bridge_post(&s);
+	radiant_bridge_drain();
+	zassert_equal(radiant_matter_endpoint_count(), 0u,
+		      "no endpoint, and in particular no phantom one");
+	zassert_equal(last.writes, 0u, NULL);
+
+	s = mk(3u, 0u, RADIANT_FIELD_TEMPERATURE, 29815, -2);
+	radiant_bridge_post(&s);
+	s = mk(3u, 1u, RADIANT_FIELD_BATTERY_SOC, 80, 0);
+	radiant_bridge_post(&s);
+	radiant_bridge_drain();
+
+	zassert_equal(radiant_matter_endpoint_count(), 1u, NULL);
+	zassert_equal(find_write(MATTER_CLUSTER_POWER_SOURCE,
+				 MATTER_ATTR_BAT_PERCENT_REMAINING, NULL, NULL),
+		      1, "the battery lands once the primary exists");
+}
+
+ZTEST(radiant_matter, test_wind_has_no_row_and_that_is_the_design)
+{
+	/*
+	 * Finding 7: the chip/ data model has flow, pressure, humidity,
+	 * temperature, occupancy and air-quality clusters and NO wind
+	 * anything. Wind speed and direction take the MQTT plane only - the
+	 * same rule as heart rate, for the same reason, and the second
+	 * instance of it. If either of these starts passing a row, somebody has
+	 * mapped wind onto a cluster that means something else.
+	 */
+	zassert_is_null(radiant_matter_row(RADIANT_FIELD_SPEED),
+			"there is no wind speed cluster in Matter");
+	zassert_is_null(radiant_matter_row(RADIANT_FIELD_ANGLE),
+			"there is no wind direction cluster in Matter");
+}
+
+ZTEST(radiant_matter, test_the_endpoint_ceiling_announces_itself)
+{
+	struct radiant_sample s;
+	uint8_t f;
+
+	/*
+	 * The budget does not close in the worst case (see
+	 * RADIANT_MATTER_MAX_ENDPOINTS' comment). What must hold is that
+	 * overrunning it is bounded and loud rather than corrupting: the table
+	 * stops at its size, the endpoints already assigned keep their ids,
+	 * and nothing writes past the array.
+	 */
+	for (f = 0u; f < RADIANT_MATTER_MAX_ENDPOINTS + 4u; f++) {
+		s = mk(1u, f, RADIANT_FIELD_OCCUPANCY, 1, 0);
+		s.flags = RADIANT_SAMPLE_DERIVED;
+		radiant_bridge_post(&s);
+		radiant_bridge_drain();
+	}
+
+	zassert_equal(radiant_matter_endpoint_count(),
+		      RADIANT_MATTER_MAX_ENDPOINTS,
+		      "the table stops at its size");
+	zassert_not_null(radiant_matter_endpoint_for(1u, 0u),
+			 "and the first endpoint is undisturbed");
+	zassert_is_null(radiant_matter_endpoint_for(
+				1u, (uint8_t)RADIANT_MATTER_MAX_ENDPOINTS),
+			"the one past the ceiling simply does not appear");
 }
 

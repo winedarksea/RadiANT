@@ -126,9 +126,9 @@ invites the same proposal again in a year.
 |---|---|---|---|
 | `0x0B` | Bicycle Power | 8182 | pages `0x10`, `0x11`, `0x12`, `0x20` |
 | `0x10` | Controls | 8192 | pages `0x10`, `0x49` (command surface only) |
-| `0x11` | Fitness Equipment (FE-C) | — | no |
+| `0x11` | Fitness Equipment (FE-C) | 8192 | no — decoded in C only, `src/profiles/profile_fec.c` |
 | `0x14` | Light Electric Vehicle (LEV) | — | no |
-| `0x19` | Environment | — | no |
+| `0x19` | Environment | 65535 | no — decoded in C only, `src/profiles/profile_env.c` |
 | `0x1E` | Running Dynamics | 4096 | pages `0x00`, `0x01`, `0x10`, `0x20`, `0x4A` |
 | `0x29` | Tracker (Asset Tracker) | 2048 | pages `0x01`, `0x02`, `0x03`, `0x10`, `0x11`, `0x20` |
 | `0x78` | Heart Rate | 8070 | pages `0x00`, `0x01`, `0x02`, `0x03`, `0x04` |
@@ -141,19 +141,32 @@ Period is in counts of 1/32768 s: 8182 is ~4.0049 Hz, 8086 is ~4.05 Hz, 8070 is
 ~4.06 Hz. A `—` means this project has not implemented the type and does not
 record a number it has not verified against its own code.
 
-**`0x14`, `0x19` and `0x7F` carry `—` even though their periods are known**, and
-that is the rule working rather than an oversight. All three numbers come from
-documents, not from this project's code — LEV's is 8192, Environment's default
-is 65535, Core Temperature's is 8192 — and they are stated in sections 3.6, 3.7
-and 3.8 with their sources. The column means "verified here", and widening it to
-mean "read somewhere" would make every other cell in it worth less.
+**`0x14` and `0x7F` carry `—` even though their periods are known**, and that is
+the rule working rather than an oversight. Both numbers come from documents, not
+from this project's code — LEV's is 8192, Core Temperature's is 8192 — and they
+are stated in sections 3.6 and 3.8 with their sources. The column means
+"verified here", and widening it to mean "read somewhere" would make every other
+cell in it worth less.
+
+**`0x11` and `0x19` used to carry `—` and no longer do.** Both are now
+transcribed from their primary documents into named constants in
+`src/profiles/` (`PROFILE_FEC_PERIOD`, `PROFILE_ENV_PERIOD_4_HZ`,
+`PROFILE_ENV_PERIOD_0P5_HZ`) and both reach the acquisition table in
+`apps/dongle_thread/src/self_channels.c`, so the numbers are this project's own
+rather than something read somewhere. The last column is still `no` for both:
+the Python mirror has neither profile, so `tools/ant_pages.py` is not a second
+opinion about these bytes and the three-copy vocabulary rule does not yet apply
+to them. **`0x19`'s cell is its default and not its whole story** — see the
+permitted-periods table immediately below, and §3.7.
 
 ### Permitted channel periods
 
-The table above records each type's **default**. Two of them permit more than
-one rate, and the full sets live in `tools/ant_pages.py` as `HRM_PERIODS` and
-`BPWR_PERIODS`, cross-checked against `docs/profile-registry.md` by
-`scripts/check_profile_registry.py`.
+The table above records each type's **default**. Three of them permit more than
+one rate. The heart-rate and bicycle-power sets live in `tools/ant_pages.py` as
+`HRM_PERIODS` and `BPWR_PERIODS`, cross-checked against
+`docs/profile-registry.md` by `scripts/check_profile_registry.py`; Environment's
+pair lives in `src/profiles/profile_env.h` and has no Python mirror to be
+checked against.
 
 | Type | Rate | Period | Approx. |
 |---|---|---|---|
@@ -161,6 +174,19 @@ one rate, and the full sets live in `tools/ant_pages.py` as `HRM_PERIODS` and
 | `0x78` | half | 16140 | ~2.03 Hz |
 | `0x78` | quarter | 32280 | ~1.02 Hz |
 | `0x0B` | standard (default) | 8182 | ~4.005 Hz |
+| `0x19` | low power (profile default) | 65535 | ~0.5 Hz |
+| `0x19` | full rate | 8192 | 4 Hz |
+
+**`0x19` is the only type here where the two rates are not a display's choice**,
+and it is the one that forced `apps/dongle_thread/src/self_channels.c` to search
+a *table* of `{device type, period}` rows instead of one hard-wired pair. Both
+rates are legal for a master, page 0's transmission-info field is where a sensor
+declares which it uses — and page 0 arrives on the channel, which does not exist
+until the period already matches. A slave fixed at 8192 never hears a 0.5 Hz
+sensor say it is one, so the only way to acquire an unknown-rate Environment
+sensor is to try both. Both `0x19` rows also carry §5.1's recommended **45 s**
+search timeout rather than ANT's default 25 s, because at one transmission every
+two seconds a 25 s window is a thin sample of a slow master.
 
 **The period is not like the other settings.** A receiver skips a page number it
 does not know; a receiver whose period does not match the sensor's cannot open
@@ -201,6 +227,26 @@ network key.
 The accumulated/instantaneous pairing on one page is the canonical example of
 ANT+'s loss tolerance: the instantaneous value is a convenience, the
 accumulator is what survives a lost packet.
+
+**Page `0x10` is now decoded in C as well as encoded**, from the primary
+document (D00001086 Rev 5.1 Table 8-1, plus §8.2.1 pedal differentiation,
+§8.2.2 pedal percent, §8.3 cadence `0xFF` and §8.4's statement that accumulated
+power is "the running sum of the instantaneous power data"). The decoder lives
+in `src/profiles/profile_power_decode.c` and **not** in `profile_power.c`, which
+is a link-dependency decision rather than a filing one: `profile_power.c` is the
+master — page rotation, the ANT+ compatibility layer and RadiANT beacon
+insertion — so it reaches `profile_sched.c`, `profile_compat.c` and through it
+`radiant_sec`. Linking that into a receive-only dongle to get one decoder would
+put a power-meter *transmitter* into an image whose whole job is to listen, by a
+linker decision nobody reviewed. The header is shared; only `.c` files create
+link dependencies. Written from the primary independently of the encoder next
+door, so that `test_power_adapter.c`'s round-trip case is a check rather than a
+tautology.
+
+**Accumulated power is watt-samples, not joules**, and that distinction is what
+`radiant/src/bridge/radiant_power_adapter.c` exists to handle honestly: it
+integrates instantaneous watts against the bridge's own `t_us` to produce
+`0x30` energy, rather than relabelling a running sum of watt samples as joules.
 
 #### Pages `0x11` and `0x12` — Wheel Torque and Crank Torque
 
@@ -405,17 +451,184 @@ Voltage is `coarse + fractional/256`.
 this document spends a payload byte on battery state of charge**, because a page
 every ANT+ receiver already understands carries it.
 
-#### Common page 84 — the one this project does not implement and should know about
+#### Page `0x54` (84) — Subfield Data
 
-ANT+ common page 84 carries **barometric pressure, humidity, wind speed and wind
-direction** as a sub-paged environmental block, and a common page is legal in any
-profile. This project does not implement it and does not specify it here; it is
-recorded because two of the `0x60` recipes below (wind, air quality) publish
-quantities it also carries, and a sensor that wants to be visible to a stock ANT+
-receiver has that option in addition to its RadiANT channel. Evidence is
-third-party — an ANT+ forum thread and one open-source implementation — and no
-number in it has been verified against this project's code, so nothing here
-depends on it.
+Decoded. `profile_common_decode_84()` in `src/profiles/profile_common.c`,
+surfaced onto the sample bus by `radiant/src/bridge/radiant_common_adapter.c`.
+Derived from the **primary** document — `ANT+ Common Data Pages`, D00001198
+Rev 3.1, §4 Table 4-1, §6.13 Tables 6-16 and 6-17, and the §6.13.1 worked
+example — which is a different provenance from pages 80/81/82 above, and the
+two are kept separate on purpose so a clean-room audit does not have to guess
+which claim covers which function.
+
+##### The keying rule, which is the architectural point
+
+**Common pages are keyed on the channel's transmission type, not on the device
+type.** Table 4-1 splits the page-number byte into ranges, and says of
+`0x40`–`0x5D` verbatim:
+
+> Common Data Pages
+> The common data pages have their formats defined. Use of these pages is
+> defined by the transmission type of the ANT channel parameter. All unused
+> pages in this section are undefined and are not to be used.
+
+| Page number | Row | Keyed on |
+|---|---|---|
+| `0x00`–`0x3F` (0–63) | ANT+ Alliance Device Type Specific | device type |
+| `0x40`–`0x5D` (64–93) | **Common Data Pages** | **transmission type** |
+| `0x5E`–`0x6F` (94–111) | Reserved for future use | — |
+| `0x70`–`0x7F` (112–127) | Manufacturer specific, toggle-bit profiles | device type |
+| `0x80`–`0xDF` (128–223) | Reserved for future use | — |
+| `0xE0`–`0xFF` (224–255) | Manufacturer specific | device type |
+
+So page 84 is legal on a heart-rate strap, a power meter or a bike light, and a
+decoder chosen from the binding's device type would never see it. That single
+sentence decides the shape of the receive path:
+`apps/dongle_thread/src/rx_tap.c` tests the common range **before** it
+dispatches on device type, hands the payload to the common adapter and
+*returns* — it does not fall through, because
+`radiant_hr_adapter_decode()` reads bytes 4..7 of any page it is given and
+would publish page 84's humidity as a heart rate. It is the one exception to
+that file's "never dispatch on the payload" rule, and it is an exception
+because the specification says the payload is what carries the keying here.
+The range test is the whole range and not `== 0x54`: what Table 4-1 removes
+from device-type keying is `0x40`–`0x5D`, so a profile adapter must not see any
+of it. `PROFILE_COMMON_PAGE_RANGE_LAST` is `0x5D` and not `0x5E` — the table's
+own decimal column says 64–93.
+
+The consequence is that **every bound channel now feeds a second decoder on
+every broadcast**, so one source has two producers. That is why
+`radiant/src/bridge/radiant_bridge.h` reserves a `field_id` block: `0x00`–`0x1F`
+for the bound profile's own adapter, `0x20`–`0x3F` for common pages (one id per
+subpage, at `RADIANT_FIELD_ID_COMMON_BASE + subpage`), `0x40`–`0xFF`
+unallocated. A sink keys stored history on `(source, field_id)`, so without the
+split the two producers would silently merge two different series.
+
+##### The heart-rate toggle, which breaks the rule on the most common sensor there is
+
+Found during implementation, not in any of the documents above, and it is the
+trap in this page. **Device type `0x78` sets bit 7 of the page byte as a
+page-change toggle on *every* page it sends, including the common ones**
+(§3.2 above, and `ant_pages.decode_hr()` masks the same bit for the same
+reason). So on a strap, page 84 arrives as `0x54` or `0xD4` depending on where
+the toggle happens to be — and `0xD4` is inside Table 4-1's `0x80`–`0xDF`
+"reserved, do not use" row, i.e. in no range that means anything.
+
+Without masking, the common path works on every device type **except** the
+single most common ANT+ sensor there is, and then only on roughly half the
+broadcasts — the worst failure shape there is to find on a bench. `rx_tap.c`
+therefore masks `page &= 0x7F` when `b->devtype == 0x78`, before the range
+test, and hands the adapter a body whose byte 0 is already de-toggled. That is
+masking a bit the *profile* defines, not choosing a decoder from the payload:
+the page number underneath is still the common page number, still keyed on
+transmission type, and still handled by the device-type-independent path.
+
+##### Table 6-16 — the byte layout
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | page number | `0x54` |
+| 1 | reserved | `0xFF` |
+| 2 | subpage 1 — the page value for bytes 4..5 | 1–254, `0xFF` = invalid |
+| 3 | subpage 2 — the page value for bytes 6..7 | 1–254, `0xFF` = invalid |
+| 4..5 | data field 1 | u16 LE, meaning per subpage 1 |
+| 6..7 | data field 2 | u16 LE, meaning per subpage 2 |
+
+Byte 1 is deliberately **not** validated by the decoder: a master that puts
+something else there is out of spec in a way that says nothing about bytes
+2..7, and rejecting the page over it would discard good weather data to enforce
+a byte nobody reads.
+
+##### Table 6-17 — the subpage catalogue, and what this project does with each
+
+Sign is the subpage's business: 1, 7 and 8 are two's complement and the rest are
+unsigned, which is why the decoder hands back an uninterpreted `uint16_t` and
+the adapter casts.
+
+| Sub | Field | Wire unit | Spec valid range | Vocabulary type | Conversion | `field_id` |
+|---|---|---|---|---|---|---|
+| 1 | temperature | 0.01 °C signed | −326.67 … +326.67 | `0x10` temperature, K | `raw = centi_C + 27315`, `exp = -2` — **exact** | `0x21` |
+| 2 | barometric pressure | 0.01 kPa | 0 … 655.35 kPa | `0x12` pressure, Pa | `raw = wire`, `exp = +1` — **exact** | `0x22` |
+| 3 | humidity | 0.01 % | max 100 % | `0x11` humidity, % | `raw = wire`, `exp = -2` — **exact** | `0x23` |
+| 4 | wind speed | 0.01 km/h | max 655.35 km/h | `0x16` speed, m/s | `raw = (v x 1000000 + 180) / 360`, `exp = -6` — **lossy** | `0x24` |
+| 5 | wind direction | 0.05 ° | max 7199 (359.95°) | `0x18` angle, rad | `raw = (v x 872665 + 500000) / 1000000`, `exp = -6` — **lossy** | `0x25` |
+| 6 | charging cycles | count | 0 … 65535 | `0x36` event count, accumulating | delta at u16 wire width, `exp = 0` | `0x26` |
+| 7 | minimum operating temperature | 0.01 °C signed | −326.67 … +326.67 | `0x10` | as subpage 1 | `0x27` |
+| 8 | maximum operating temperature | 0.01 °C signed | −326.67 … +326.67 | `0x10` | as subpage 1 | `0x28` |
+| 9–254 | reserved for future use | — | — | — | declined and counted | — |
+
+**Declining a subpage is a normal answer, not an error**, and the same is true
+of the other common pages: 80/81/82 are identity and battery, 83 is time, 85–87
+are memory, pairing and errors — none of them a measurement — so
+`radiant_common_adapter_decode()` returning 0 for page `0x50` is the answer
+rather than a gap. Subpage 6 is the only accumulating quantity on the page and
+obeys `radiant-bridge.md` §3.2's differencing rule in full: differenced at its
+own u16 width, first sighting establishes `prev` and posts nothing.
+
+**The two lossy conversions are a first for this codebase, and §3.2 is the
+wrong lens for them.** Nothing accumulates — wind speed and direction are
+instantaneous, each sample independent of the last — so the rounding error is
+bounded by half a unit in the last place on that sample alone and does not
+compound. What is lossy is the *scale*: 0.01 km/h is exactly 1/360 m/s and
+`10^k / 360` is never an integer, because 360 has a factor of 3 and `10^k` has
+none; 0.05° is 872.66462… µrad, irrational, so no `(raw, exp)` pair is exact at
+any scale. Both are integer round-half-up, and both errors are orders of
+magnitude below the sensor's own quantisation.
+
+##### The golden vector, §6.13.1
+
+```
+ANT message payload = 54 FF 01 03 6B 0A EA 19
+```
+
+Subpage 1 = temperature, `0x0A6B` = 2667 → **26.67 °C**; subpage 3 = humidity,
+`0x19EA` = 6634 → **66.34 % RH**. A conformance vector from the primary
+document, which is exactly what this section previously said the page lacked.
+It is the acceptance test for the decoder and is transcribed as
+`PROFILE_COMMON_84_GOLDEN_TEMP_CENTI` / `_HUMID_CENTI` in
+`profile_common.h`, so the C test, the Python test and the header cannot drift
+apart.
+
+##### Three defects in Table 6-17, recorded rather than silently fixed
+
+Same register as §3.14's note on Controls page `0x49`'s length column: the
+source table is internally inconsistent, the self-consistent half is treated as
+authoritative, and the other half is written down so nobody "discovers" it
+again and flips the code.
+
+1. **Subpages 7 and 8 have their descriptions transposed.** Subpage 7 is
+   *named* "Minimum Operating Temperature LSB/MSB" and *described* as "A signed
+   value using two's complement of the maximum recorded temperature in °C";
+   subpage 8 is the mirror image. The names are self-consistent with each other
+   and with the row order, and the two description cells are plainly swapped.
+   **Trust the names**: 7 is the minimum, 8 is the maximum. Both decode
+   identically, so this costs nothing at the wire and everything at the label.
+2. **Table 6-17 prints "Wind Direction LSB" twice** for subpage 5, where the
+   second row is plainly the MSB — every other two-byte subpage in the table
+   pairs LSB with MSB and the field is stated as 2 bytes. Read as LSB then MSB,
+   i.e. the same u16 little-endian as every other subpage.
+3. **The temperature valid range is narrower than the field at both ends, with
+   no sentinel in the gap.** The table states −326.67 … +326.67 °C for subpages
+   1, 7 and 8, while a signed 0.01 °C count in a u16 expresses
+   −327.68 … +327.67. Contrast Environment `0x19` (§3.7), where the range stops
+   one count short *on the negative side only*, precisely so the `0x8000`
+   sentinel is not also a legal reading. Here the gap is symmetric and no
+   sentinel is defined inside it, so the decoder does not invent one: it hands
+   back the raw two's-complement value and lets the caller decide. Inventing an
+   invalid value the specification does not state is how a real −327.00 °C
+   reading becomes a silent drop.
+
+##### What "decoded" does and does not claim here
+
+**No ANT+ environmental sensor is on this bench.** Page 84 is verified against
+the §6.13.1 golden vector, against `tools/ant_sim.py` replay, and in ztest —
+not against a real weather-reporting sensor. A primary-spec-derived,
+vector-tested decoder is materially better than the third-party-evidence
+position this section used to record, and it is **not** the same thing as
+verified on hardware. The same limitation applies to §3.7.
+
+There is deliberately **no encoder**. Nothing in this tree is a weather station,
+and an encoder with no transmitter is an untested page that looks shipped.
 
 ---
 
@@ -778,38 +991,80 @@ section 7.1 is why the gap does not justify a profile of its own.
 
 ---
 
-### 3.7 Environment, device type `0x19` — reference only
+### 3.7 Environment, device type `0x19`
 
-**Not implemented by this project. Recorded because it is the reason the
-physiological temperature profile of section 6.3 is a `0x60` recipe** rather
-than an additive page here.
+Decoded. `src/profiles/profile_env.c` (page codec, decode only) and
+`radiant/src/bridge/radiant_env_adapter.c` (the sample-bus mapping);
+`apps/dongle_thread/src/self_channels.c` carries two acquisition rows for it.
 
-Evidence is four independent open-source implementations plus thisisant.com, not
-the profile document — so this section is the one place in this file whose
-layouts are **not** derived from this project's own code or from a primary spec,
-and nothing depends on it. All four (the two originally consulted, plus a Nordic
-SDK ANT+ Environment profile and `openant`'s independent decoder) agree
-byte-for-byte and none of the four has a placement field, which is convergent
-secondary evidence rather than a primary source — the honest position stays "not
-derived from a primary spec," strengthened rather than settled. Device type 25,
-RF 57. The profile permits two channel
-periods, **65535 (0.5 Hz, what the Garmin tempe uses) and 8192 (4 Hz)**; page 0
-declares which is the default.
+**The "not derived from a primary spec" caveat this section used to carry is
+lifted.** The layouts below are now transcribed from the primary document —
+"ANT+ Managed Network Document – Environment Device Profile", **D00001502
+Rev 1.0** (marked DEPRECATED by the ANT team, which is a support statement and
+not a correctness one; the sensors are on the market and this is the layout
+they transmit) — §5.1 channel configuration, §6.3 data page 0, §6.3.1
+transmission info, §6.3.2 supported pages, §6.4 data page 1, §6.5 the reserved
+range. The four converging open-source implementations previously cited here
+agreed with Table 6-4 **byte for byte**, and none of them had a placement
+field, so the earlier position was right and is now sourced rather than merely
+corroborated.
+
+Device type 25, RF 57. §5.1 permits **two** channel periods — 65535 counts
+(0.5 Hz, what the Garmin tempe uses and the profile's low-power default) and
+8192 counts (4 Hz) — and page 0's transmission-info field declares which one a
+sensor defaults to. §5.1 also **recommends a 45 second receiver search
+timeout**, in as many words, "to allow sufficient time for a 0.5 Hz master to
+be found"; that is where `PROFILE_ENV_SEARCH_TIMEOUT_S` comes from, against
+ANT's own 25 s default.
 
 | Page | Byte | Field |
 |---|---|---|
-| 0 | 1..2 | reserved `0xFF` |
-| 0 | 3 | transmission info: bits 1..0 default rate, bits 3..2 UTC time support, bits 5..4 local time support |
-| 0 | 4..7 | supported pages, u32 LE bitmap |
+| 0 | 1 | reserved `0xFF` |
+| 0 | 2 | reserved `0xFF` |
+| 0 | 3 | transmission info: bits 1..0 default rate (`00` = 0.5 Hz, `01` = 4 Hz, `10`/`11` reserved), bits 3..2 UTC time support, bits 5..4 local time support, bits 7..6 reserved |
+| 0 | 4..7 | supported pages, u32 LE bitmap — bit position *is* the page number; bit 0 always set, a temperature sensor also sets bit 1, bits 2..31 shall be 0 |
 | 1 | 1 | reserved `0xFF` |
 | 1 | 2 | event count, u8 accumulator |
 | 1 | 3 + 4 bits 7..4 | 24-hour low, 12-bit signed, 0.1 °C, `0x800` invalid |
 | 1 | 4 bits 3..0 + 5 | 24-hour high, 12-bit signed, 0.1 °C, `0x800` invalid |
 | 1 | 6..7 | current temperature, int16 LE, 0.01 °C, `0x8000` invalid |
 
-**Pages 0 and 1 are the whole profile, and there is no sensor placement, sensor
-location or sensor kind field anywhere in it.** That single fact is what decides
-section 6.3.
+**Page 0 reserves both bytes 1 and 2; page 1 reserves only byte 1** and puts
+the event count in byte 2. Two pages, two shapes, one byte apart — an encoder
+or a test vector that reuses one shape for the other is wrong in a way that
+still parses.
+
+**§6.4's stated ranges stop one count short of the field minimum**, and that is
+not sloppiness: −204.7 °C (not −204.8) for the two 12-bit fields and
+−327.67 °C (not −327.68) for the 16-bit current reading, which is precisely
+what keeps the `0x800` and `0x8000` sentinels from also being legal readings.
+Contrast common page 84 (§3.4), whose temperature range is narrowed at *both*
+ends with no sentinel in the gap at all.
+
+The two 24-hour fields are packed in **opposite directions** and share byte 4,
+they are twelve-bit signed and need explicit sign extension from bit 11, and
+they use a different scale *and* a different sentinel from the current reading
+in the same page. `profile_env.c` keeps all of that in two helpers so there is
+exactly one place to be wrong about the packing.
+
+**It is a thermometer, and that is the fact the rest of the design turns on.**
+Pages 0 and 1 are the whole profile and pages 2–63 are reserved (§6.5): there
+is **no humidity, no barometric pressure, no wind and no air quality anywhere
+in device type `0x19`**, however much the name "Environment" suggests
+otherwise. That is what forces common page 84 (§3.4) to exist as a separate
+path — everything environmental other than temperature reaches this project
+through a page keyed on transmission type, arriving on any profile's channel,
+rather than through a device type of its own.
+
+**There is also no sensor placement, sensor location or sensor kind field
+anywhere in it.** That single fact is what decides section 6.3, and ANT+ itself
+reached the same conclusion: when it needed physiological temperature it minted
+Core Temperature `0x7F` (§3.8) rather than extending this.
+
+**No ANT+ environmental sensor is on this bench.** Like page 84, this decoder is
+verified against the specification, against `tools/ant_sim.py` and in ztest, and
+not against a real sensor. Primary-spec-derived and vector-tested is not the
+same as verified on hardware.
 
 ---
 
@@ -1178,6 +1433,101 @@ text exchange the sibling Controls profile's page 20 can trigger is out of
 scope for the same reason page 20 itself is out of scope in §3.14 — it belongs
 to Controls, not to Tracker, and neither document's temporary-channel mechanism
 is implemented here.
+
+### 3.16 Fitness Equipment (FE-C), device type `0x11`
+
+Decoded, receive only. `src/profiles/profile_fec.c`, surfaced by
+`radiant/src/bridge/radiant_power_adapter.c`. Transcribed from the primary
+document, D000001231 "ANT+ Device Profile – Fitness Equipment" Rev 5.0, read
+from the PDF rather than from a mirror; every layout below cites the table it
+came from. `tools/ant_pages.py` has no FE-C pages, so this is currently the only
+copy and the three-copy vocabulary rule does not yet apply to it.
+
+**Channel.** Device type `0x11` (17 decimal), RF 57, period **8192** counts —
+exactly 4 Hz, the one rate the profile defines. Note §3's warning about `0x11`
+being both this device type and Bicycle Power's Wheel Torque *page* number.
+
+**Why it is here at all.** A smart trainer speaks FE-C, not just Bicycle Power,
+and page 16 carries an explicit **equipment state** — a more direct "bike in
+use" signal than inferring one from an accumulator.
+
+#### Page `0x10` (16) — General FE Data, Table 8-7
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | page number | `0x10` |
+| 1 | equipment type bit field | bits 0..4 type (Table 8-8), bits 5..7 "do not interpret" |
+| 2 | elapsed time | u8 accumulator, 0.25 s, rolls at 64 s |
+| 3 | distance traveled | u8 accumulator, 1 m, rolls at 256 m — **no invalid value** |
+| 4..5 | instantaneous speed | u16 LE, 0.001 m/s, `0xFFFF` invalid |
+| 6 | instantaneous heart rate | bpm, `0xFF` invalid |
+| 7 | bits 0..3 capabilities (Table 8-9), bits 4..7 FE state (Table 8-10) |
+
+Every FE type must send this page (§8.5.2), so a treadmill or rower still yields
+elapsed time, distance, speed, heart rate and state through it. Pages 19–24, the
+per-equipment-type pages, are not decoded.
+
+#### Page `0x19` (25) — Specific Trainer Data, Table 8-25
+
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | page number | `0x19` |
+| 1 | update event count | u8 accumulator |
+| 2 | instantaneous cadence | rpm, `0xFF` invalid |
+| 3..4 | accumulated power | u16 LE accumulator, 1 W, wraps at 65536 |
+| 5 + 6 bits 0..3 | instantaneous power | 12 bits LE, 1 W, `0xFFF` invalid |
+| 6 bits 4..7 | trainer status bit field | Table 8-27 |
+| 7 bits 0..3 | flags bit field | Table 8-28 |
+| 7 bits 4..7 | FE state bit field | Table 8-10 |
+
+**The accumulated-power field starts at byte 3, one earlier than Bicycle Power
+page `0x10`'s, which puts it at bytes 4..5.** Two profiles, two offsets, the
+same quantity in the same units.
+
+Page 26 (`0x1A`) Specific Trainer *Torque* Data is deliberately absent: power
+must be computed from it, every trainer that sends it also sends `0x19`, and a
+second differently-scaled route to the same watts is a second thing to get
+wrong.
+
+#### Four traps in these two pages
+
+1. **The FE state field is a nibble inside a nibble.** Both tables give byte 7
+   as "FE State Bit Field, 4 Bits (4:7)", and Table 8-10 then numbers the bits
+   *within* that nibble: bits 0–2 are the state, bit 3 is the lap toggle. So the
+   state is `(byte7 >> 4) & 0x07` and the lap toggle is bit 7 of byte 7.
+   `(byte7 >> 4) & 0x0F` folds the toggle into the state and turns `IN_USE` (3)
+   into 11 on every other lap. States: 1 asleep, 2 ready, 3 in use, 4 finished;
+   0 and 5–7 are reserved and are passed through rather than remapped, because
+   "reserved" here means a future state and not an error.
+2. **`0xFFF` instantaneous power invalidates the accumulator too.** Table 8-25
+   says so in as many words. This is the only sentinel in this project where one
+   field's invalid value condemns a *different* field, and a receiver honouring
+   only the instantaneous half keeps integrating a frozen accumulator.
+3. **Distance has no invalid value — it has an enable bit.** §8.5.2.3 states
+   this outright: all 256 values of byte 3 are legal distances, and whether byte
+   3 means anything is capabilities bit 2. The general rule (§8.5.2.6.1) is that
+   *accumulating* optional fields are gated by capabilities bits while
+   *instantaneous* ones carry an all-ones sentinel. Reaching for a sentinel on
+   distance reads 255 m as "absent". This is the opposite convention from
+   §3.11's, and it is the profile's, not an error.
+4. **Speed may be a lie, on purpose.** Capabilities bit 3 (§8.5.2.6.2, §6.4.2)
+   says bytes 4..5 are *virtual* speed — what the rider would have been doing
+   had the trainer been able to apply negative resistance. Not an error, not
+   invalid, simply not a measurement of anything physical, so it is reported as
+   a flag and the consumer decides.
+
+**Elapsed time is session time, not wall time.** §8.5.2.2: the accumulator
+"shall only increment when the fitness equipment is in the `IN_USE` state", so
+differencing it across a pause understates the interval by the pause. Correct
+for a workout timer, wrong as a basis for integrating power over time — which is
+why `radiant_power_adapter.c` integrates against the bridge's own `t_us`
+instead.
+
+**What is out of scope: the whole "C" of FE-C.** Control pages 48–51, the
+command-status page 71, calibration pages `0x01`/`0x02` and the capabilities
+page 54 are not implemented. This project is a receiver; it reads a trainer's
+workout data and never tells the trainer what resistance to apply. There is no
+encoder either — nothing in this tree emulates fitness equipment.
 
 ---
 
@@ -1719,8 +2069,11 @@ is not recycled.
 | File | What it is |
 |---|---|
 | `src/profiles/profile_hr.c` | ANT+ heart rate `0x78` |
-| `src/profiles/profile_power.c` | ANT+ bicycle power `0x0B` |
-| `src/profiles/profile_common.c` | Common pages 80, 81, 82 |
+| `src/profiles/profile_power.c` | ANT+ bicycle power `0x0B`, transmit side |
+| `src/profiles/profile_power_decode.c` | ANT+ bicycle power page `0x10`, receive side — its own translation unit so a receiver does not link a transmitter (§3.1) |
+| `src/profiles/profile_fec.c` | ANT+ fitness equipment `0x11`, pages 16 and 25, decode only (§3.16) |
+| `src/profiles/profile_env.c` | ANT+ Environment `0x19`, pages 0 and 1, decode only (§3.7) |
+| `src/profiles/profile_common.c` | Common pages 80, 81, 82 (encode) and 84 (decode) — two provenances, kept separate (§3.4) |
 | `src/profiles/profile_telemetry.c` | The `0x60` envelope, and therefore every profile in sections 5 and 6 |
 | `src/profiles/profile_bits.c` | The MSB-first packer whose vectors are the shared contract |
 | `tools/ant_pages.py` | All of the above, mirrored, plus the field-type vocabulary |
@@ -1750,20 +2103,23 @@ verify independently against `thisisant.com/developer/ant-plus/device-profiles`
 and the registry's own claim process — a number below is "what research turned
 up," not "what is safe to build on."
 
-Six of the profiles this project actually has depth on — implemented, or with
+The profiles this project actually has depth on — implemented, decoded, or with
 their own reference-only section because a design decision depends on them —
 are in the table for completeness of the picture, cross-referenced rather than
-repeated.
+repeated. Two rows moved out of "not implemented" in the package that added the
+Environment, FE-C and common-page-84 decoders; **the confidence column moved
+with them**, from converging open-source evidence to the primary document, which
+is the change that matters more than the depth column did.
 
 | Device type | Name | Depth here | Confidence |
 |---|---|---|---|
-| `0x0B` | Bicycle Power | Implemented, §3.1 | — |
+| `0x0B` | Bicycle Power | Implemented (encode), and page `0x10` now decoded from the primary D00001086 Rev 5.1, §3.1 | — |
 | `0x10` | Controls | Implemented (command surface only), §3.14 | — |
-| `0x11` | Fitness Equipment (FE-C) | Not implemented, referenced §7.2 | community + open-source |
+| `0x11` | Fitness Equipment (FE-C) | Decoded (pages 16 and 25), §3.16 | primary spec (D000001231 Rev 5.0) |
 | `0x12` | Blood Pressure | Not implemented; forward-noted §5.1 as the next profile that would inherit CGM's mandatory-`X_AUTH` rule | community + open-source, type only — no page layout found anywhere |
 | `0x13` | Geocache | Not implemented | community |
 | `0x14` | Light Electric Vehicle | Not implemented, reference-only §3.6 | primary spec |
-| `0x19` | Environment | Not implemented, reference-only §3.7 | four converging open-source sources |
+| `0x19` | Environment | Decoded (pages 0 and 1), §3.7 | primary spec (D00001502 Rev 1.0) |
 | `0x1E` | Running Dynamics | Implemented, §3.13 | — |
 | `0x29` | Tracker (Asset Tracker) | Implemented, §3.15 | — |
 | `0x1F` | Muscle Oxygen | Not implemented | **vendor code** (BSX's own published source), high confidence, full page layout known but not transcribed here |

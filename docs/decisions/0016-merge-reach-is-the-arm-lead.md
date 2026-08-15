@@ -1,8 +1,10 @@
 # 0016 — The merge reach is the arm lead, because the arm lead is an exclusion radius
 
-- **Status:** accepted, and **deterministically verified rather than measured on
-  air** — the bench is at 5–8 % loss and unstable, which would swamp the ~1 %
-  effect this record is about. See *Verification status*.
+- **Status:** accepted, **verified deterministically in ztest and reproduced on
+  air** — 12 tracked channels across two independent master boards, `sched_missed`
+  145/172 pre-fix → 5. The `RX_FAIL_GO_TO_SEARCH` half is still owed a quiet room.
+  See *Verification status*, including why the control must be built from the
+  pre-fix revision and not from `CONFIG_RADIANT_PHY_LR_CODED`.
 - **Date:** 2026-08-15
 - **Builds:** [0005](0005-extension-inside-ant-plus.md) — its "32 tracked sensors
   do not cost 32 windows" claim rests entirely on the merge rules this record
@@ -196,10 +198,44 @@ preset, so no new harness was needed):
 - a three-way pile-up still drops one, asserted, so the `max_addr_groups == 2`
   residual is recorded by the suite rather than rediscovered.
 
-**Not claimed, and owed a quiet room.** The on-air multi-master run is specified
-and is not the basis of this record: the bench is currently at 5–8 % loss and
-unstable, which would swamp a ~1 % effect entirely. When it is run, **the claim
-rests on `api_stats.sched_missed` and `RX_FAIL` going to zero**, not on an
-absolute loss number — a scheduling artefact is the one counter that can be
-gated in a noisy room. Per-channel loss figures should be recorded from that
-sitting and not gated on until the room is quiet.
+**On air, and the defect reproduced.** 2026-08-15, nRF54L15 DK receiver, 12
+tracked channels, 600 s per arm under identical load. Two independent master
+boards — an nRF52840 dongle (6 masters) and a CC26x2 LaunchPad (6 masters) —
+giving **36 cross-board pairs**, with deliberately mixed channel periods (8182 /
+8070 / 8086 counts) so that 18 of those pairs beat through the whole 250 ms
+separation space every 18–128 s rather than waiting on crystal drift:
+
+| arm | `min_arm_lead_us` (read from the ELF) | merge reach | `sched_missed` | failed | denied |
+|---|---|---|---|---|---|
+| pre-fix, run 1 | 456 | 200 (literal overlap) | **145** | 0 | 0 |
+| pre-fix, run 2 | 456 | 200 | **172** | 0 | 0 |
+| this record | 168 | 168 (`arm_lead()`) | **5** | 0 | 0 |
+
+A ~30× reduction. **The control repeat is the load-bearing evidence**, not the
+ratio: between the two pre-fix runs the room got much quieter (28.5 % → 13.1 %
+aggregate loss) while `sched_missed` went *up*, 145 → 172. The counter is
+decoupled from the air, which is exactly the property that lets it be gated in a
+room at 5–8 %. Absolute per-channel loss moved by 15 points between two runs of
+the *same* image and is recorded but not gated.
+
+**THE CONTROL MUST BE BUILT FROM THE PRE-FIX REVISION, NOT FROM
+`CONFIG_RADIANT_PHY_LR_CODED=y`.** The first attempt at this sitting used the
+Kconfig knob to raise the lead back to 456 µs and got `sched_missed = 15` — a
+near-null result that reads as "no defect". The knob cannot reopen the band, and
+the reason is this record's own decision: the reach *is* `arm_lead()`, so raising
+the lead raises the exclusion radius and the merge reach together and the band
+stays `max(0, L − L) = 0` for every `L`. Only a build whose rule 3 is literal
+overlap has a band at all. (The 15 is not noise either — it is the
+`max_addr_groups` residual below, which does scale with the lead.)
+
+**Still owed a quiet room:** the `RX_FAIL_GO_TO_SEARCH` half. It did not
+discriminate here (79 / 48 pre-fix vs 106 for this record, no ordering) because
+at 13–29 % ambient loss eight consecutive *RF* misses swamp eight consecutive
+*scheduling* misses; the arms differed by 12 dB of RSSI. The ~2 s artefact
+dropout is therefore **neither supported nor refuted on air**, and the fixed
+arm's 106 must not be read as a regression.
+
+One honest limitation of the counter: `RADIANT_RADIO_ETIME` funnels through
+`arm_rejected` → `DONE_MISSED` → `sched_missed`, so it is not separable from
+bad-band misses by this counter alone. The fixed arm's 5 misses over ~29,000
+tracked windows (0.017 %) bounds any ETIME contribution to negligible.

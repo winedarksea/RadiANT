@@ -61,6 +61,48 @@
  * there is the re-entrancy the backend's own comments (ant_radio_radiant.c
  * around the api_lock) exist to prevent. Polling from this thread costs one
  * status read per channel per second and needs no such favour.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THERE IS A TABLE OF SEARCH PROFILES AND WHY IT ROTATES
+ * ---------------------------------------------------------------------------
+ *
+ * An ANT slave's channel period must MATCH its master's, and its device type
+ * must match or be the wildcard 0. Those two facts together mean a slave
+ * cannot search for two profiles at once: 8070 counts finds heart-rate straps
+ * and finds nothing else, because a power meter's slot is 8182 counts away and
+ * the receive window is simply never open when it transmits. This file used to
+ * hard-wire 8070/0x78, so every decoder rx_tap.c ever grows is unreachable on
+ * hardware no matter how well it is tested in ztest - the acquisition layer
+ * would never hand it a packet.
+ *
+ * The fully-wildcard alternative (device type 0) does NOT solve this. It
+ * widens the ID match and leaves the period fixed, so it acquires whichever
+ * sensors happen to share the one period that was compiled in, and does it
+ * indiscriminately. That is worse on both axes at once.
+ *
+ * So: a table, one row per {device type, period} pair this bridge can decode,
+ * and a channel searches one row at a time. Two things spread the cost:
+ *
+ *   ACROSS CHANNELS. Channel i starts on row (i mod N), so a two-channel
+ *   build searches two different profiles simultaneously rather than running
+ *   two identical searches beside each other.
+ *
+ *   ACROSS TIME. When a channel's high-priority search times out, it advances
+ *   one row before reopening. N channels therefore sweep the whole table,
+ *   and a console shows HR -> power -> FE-C -> env cycling by name.
+ *
+ * THE LOG LINE NAMING THE PROFILE IS THE POINT, not decoration. Without it,
+ * "no sensors in range" and "searching for the wrong thing" produce the
+ * identical console - a silent, permanently-idle bridge - and that exact
+ * ambiguity is what the ANTW_STATUS_ASSIGNED_CHANNEL case below already
+ * exists to avoid for a different cause.
+ *
+ * NONE OF THIS TOUCHES THE OPT-IN RULE. docs/radiant-bridge.md section 10.1
+ * rule 1 governs what may BIND, not what a channel may search for; rotating
+ * the search profile changes which sensors can be acquired and changes
+ * nothing at all about which may be bound. try_bind()'s window_open() test is
+ * deliberately untouched by this, and a rotation that ever grew a bind path
+ * of its own would be the promiscuous ingest the rule forbids.
  */
 
 #include <errno.h>
@@ -105,21 +147,111 @@ static const uint8_t ant_plus_key[8] = {
 #define SELF_RF_FREQ 57u
 
 /*
- * 8070 counts of 32768 Hz is 4.06 Hz - the ANT+ heart rate profile's period,
- * not a choice. A slave told anything else will not find a strap. This is also
- * the number that reaches struct radiant_binding::period and therefore
- * radiant_liveness.c's 3x expiry, which is why it is read back off the channel
- * with antr_channel_period_get() at bind time rather than written down twice.
+ * ANT's high-priority search timeout is expressed in 2.5 s ticks, and its
+ * default is 10 ticks = 25 s (radiant/include/radiant/radiant_channel.h's
+ * RADIANT_CHANNEL_SEARCH_TIMEOUT_DEFAULT, and the same figure ant_radio.h
+ * documents for the antr_* contract). This file never used to set it at all,
+ * so every row inherited that default - which is correct for a 4 Hz profile
+ * and NOT long enough for the 0.5 Hz Environment master; see the table.
  */
-#define SELF_PERIOD_COUNTS 8070u
+#define SELF_SEARCH_TICKS_25_S 10u
+#define SELF_SEARCH_TICKS_45_S 18u
 
 /*
- * The device type the wildcard is narrowed to. Fully wildcard (0) would
- * acquire any ANT+ sensor in range, and rx_tap.c has one adapter, so the extra
- * acquisitions would consume channels and bindings to produce nothing. 0x78 is
- * what this bridge can actually decode.
+ * One row per {device type, channel period} pair this bridge can acquire.
+ *
+ * A PERIOD IS NOT A CHOICE AND MUST NOT BE ROUNDED. It is the profile's own
+ * number, in counts of 1/32768 s, and a slave told anything else does not
+ * merely acquire more slowly - it never acquires at all. Each row's period is
+ * transcribed from the named constant in the comment beside it, which is the
+ * primary-source-derived definition in radiant/src/profiles/. Those headers
+ * CANNOT BE INCLUDED FROM HERE: apps/dongle_thread/CMakeLists.txt puts only
+ * radiant/src/bridge and this application's own src/ on the include path
+ * (radiant/CMakeLists.txt exports radiant/include and nothing under src/), and
+ * adding a directory to that list is a build-plumbing change this file is not
+ * the place for. So the numbers are written out, each naming the constant it
+ * must agree with, and the agreement is a review obligation rather than a
+ * compiler-enforced one. If radiant/src/profiles ever reaches this app's
+ * include path, replace the literals with the constants and delete this note.
+ *
+ * The period also reaches struct radiant_binding::period and therefore
+ * radiant_liveness.c's 3x expiry - but NOT from here. try_bind() reads it back
+ * off the channel with antr_channel_period_get(), which is what makes it a
+ * fact about the channel rather than a constant that was true when it was
+ * typed, and is why the 0.5 Hz row below is purely an ACQUISITION problem and
+ * not also a liveness one.
+ *
+ * `name` exists so the search log line can be read by a human. See the header.
  */
-#define SELF_DEVICE_TYPE 0x78u
+struct self_profile {
+	uint8_t     device_type;
+	uint16_t    period_counts;
+	uint8_t     search_ticks;
+	const char *name;
+};
+
+static const struct self_profile self_profiles[] = {
+	/* PROFILE_HR_PERIOD, radiant/src/profiles/profile_hr.h: 8070 counts is
+	 * ~4.06 Hz, the ANT+ heart rate profile's standard rate. (The profile
+	 * also defines 16140 and 32280 half/quarter rates; no strap on this
+	 * bench transmits at either, and every extra row costs the whole table
+	 * a search timeout per sweep, so they are deliberately absent.) */
+	{ 0x78u, 8070u, SELF_SEARCH_TICKS_25_S, "heart rate" },
+
+	/* PROFILE_POWER_PERIOD, radiant/src/profiles/profile_power.h: 8182
+	 * counts, ~4.005 Hz. Note it is NOT 8192 - the Bicycle Power profile is
+	 * one of the few that is not exactly 4 Hz, and a reader "tidying" this
+	 * to match its neighbours would silently delete power-meter support. */
+	{ 0x0Bu, 8182u, SELF_SEARCH_TICKS_25_S, "bicycle power" },
+
+	/* PROFILE_FEC_PERIOD, radiant/src/profiles/profile_fec.h: 8192 counts,
+	 * exactly 4 Hz, the one rate the Fitness Equipment profile defines.
+	 * This is the indoor-trainer path - the device type Zwift's own trainer
+	 * control speaks - and therefore the one that feeds "bike in use". */
+	{ 0x11u, 8192u, SELF_SEARCH_TICKS_25_S, "fitness equipment" },
+
+	/*
+	 * Environment, device type 0x19. TWO ROWS, NOT ONE, AND THAT IS THE
+	 * WHOLE POINT.
+	 *
+	 * PROFILE_ENV_PERIOD_4_HZ (8192) and PROFILE_ENV_PERIOD_0P5_HZ (65535),
+	 * radiant/src/profiles/profile_env.h. The profile's section 5.1 permits
+	 * BOTH, and page 0's transmission-info field is where a sensor declares
+	 * which one it defaults to. The Garmin tempe - the ANT+ thermometer
+	 * anyone actually owns - is the 0.5 Hz one.
+	 *
+	 * Reading page 0 to learn the rate and then retuning is the obvious
+	 * design and it does not work: page 0 arrives on the channel, and there
+	 * is no channel until the period already matches. A slave fixed at 8192
+	 * never hears a tempe say it is a tempe. The only way to acquire an
+	 * unknown-rate Environment sensor is to try both rates, which is
+	 * exactly what a rotation over a table already does - so the 0.5 Hz
+	 * variant is a row, and costs one more step of the sweep rather than
+	 * any new mechanism.
+	 *
+	 * The 0.5 Hz row gets 45 s of search (PROFILE_ENV_SEARCH_TIMEOUT_S),
+	 * not the ANT default 25 s, and section 5.1 recommends that figure for
+	 * precisely this reason: at one transmission every two seconds a 25 s
+	 * window is a thin sample of a slow master. Both 0x19 rows carry it,
+	 * because the recommendation is stated for the profile rather than for
+	 * one of its rates.
+	 *
+	 * Liveness is NOT a second problem here even though the two rows differ
+	 * eightfold in expiry - see the note above about antr_channel_period_get().
+	 */
+	{ 0x19u, 8192u,  SELF_SEARCH_TICKS_45_S, "environment (4 Hz)" },
+	{ 0x19u, 65535u, SELF_SEARCH_TICKS_45_S, "environment (0.5 Hz)" },
+};
+
+#define SELF_PROFILE_N ARRAY_SIZE(self_profiles)
+
+/*
+ * Which row each self channel is currently searching. Written only by the
+ * polling thread below, which is also the only reader, so it needs no
+ * synchronisation - and saying so here is cheaper than someone later adding a
+ * mutex to be safe.
+ */
+static uint8_t self_row[SELF_N];
 
 /*
  * Channels are claimed from the TOP of the allocation downward, and this is
@@ -218,50 +350,154 @@ static void button_init(void)
 
 /* ── The channels ──────────────────────────────────────────────────────────── */
 
-static int open_one(uint8_t ch)
+/*
+ * Point an ASSIGNED, CLOSED channel at one table row and put it on air.
+ *
+ * All four configuration calls are legal in exactly this state and in no
+ * other: ant_radio.h says antr_channel_id_set(), antr_channel_period_set() and
+ * antr_channel_radio_freq_set() answer ANTW_CHANNEL_IN_WRONG_STATE when the
+ * channel is "unassigned or open", and the radiant backend implements that as
+ * require_assigned_closed() (radiant/src/radiant_channel.c). A channel whose
+ * search has just timed out is precisely assigned-and-closed - the backend
+ * raises RX_SEARCH_TIMEOUT and then closes itself, in that order - so this
+ * needs NO unassign/reassign to retune, and the ANT default of "reconfigure
+ * only what changed" is honoured.
+ *
+ * The search timeout is set per row, not once: it is the only per-profile
+ * parameter that is a policy rather than a fact about the master, and the 0.5
+ * Hz Environment row genuinely needs a different one.
+ */
+static int configure_and_open(uint8_t ch, const struct self_profile *p)
 {
 	antr_err_t rc;
 
-	rc = antr_channel_assign(ch, ANTW_CHANNEL_TYPE_SLAVE, SELF_NETWORK, 0u);
+	/* All three ID fields wildcard except the device type. Fully wildcard
+	 * (0) is not the more general option it looks like - see the header:
+	 * it widens the ID match while leaving the period fixed, so it acquires
+	 * indiscriminately AND still only within one profile's rate. */
+	rc = antr_channel_id_set(ch, 0u, p->device_type, 0u);
 	if (rc != 0u) {
-		LOG_ERR("channel %u assign: %u", ch, rc);
+		LOG_WRN("channel %u id: %u", ch, rc);
 		return -EIO;
 	}
 
-	/* All three wildcards except the device type - see SELF_DEVICE_TYPE. */
-	rc = antr_channel_id_set(ch, 0u, SELF_DEVICE_TYPE, 0u);
+	rc = antr_channel_period_set(ch, p->period_counts);
 	if (rc != 0u) {
-		LOG_ERR("channel %u id: %u", ch, rc);
-		return -EIO;
-	}
-
-	rc = antr_channel_period_set(ch, SELF_PERIOD_COUNTS);
-	if (rc != 0u) {
-		LOG_ERR("channel %u period: %u", ch, rc);
+		LOG_WRN("channel %u period: %u", ch, rc);
 		return -EIO;
 	}
 
 	rc = antr_channel_radio_freq_set(ch, SELF_RF_FREQ);
 	if (rc != 0u) {
-		LOG_ERR("channel %u freq: %u", ch, rc);
+		LOG_WRN("channel %u freq: %u", ch, rc);
 		return -EIO;
+	}
+
+	/* Deliberately not fatal. A backend that refuses this leaves the ANT
+	 * default 25 s in place, which is right for three rows of four and
+	 * merely thin for the 0.5 Hz one - a worse search, not a broken
+	 * channel, so it must not cost us the whole rotation. */
+	rc = antr_channel_search_timeout_set(ch, p->search_ticks);
+	if (rc != 0u) {
+		LOG_WRN("channel %u search timeout: %u (leaving the default)",
+			ch, rc);
 	}
 
 	rc = antr_channel_open(ch);
 	if (rc != 0u) {
-		LOG_ERR("channel %u open: %u", ch, rc);
+		LOG_WRN("channel %u open: %u", ch, rc);
 		return -EIO;
 	}
 
-	LOG_INF("self channel %u searching (devtype 0x%02x, wildcard device "
-		"number)", ch, SELF_DEVICE_TYPE);
+	/*
+	 * NAMED, not just numbered. A console reading "searching for bicycle
+	 * power" then "searching for fitness equipment" is the only thing that
+	 * separates "no sensors in range" from "searching for the wrong
+	 * thing"; the two look identical otherwise, and this file's other
+	 * comments are careful about exactly that class of ambiguity.
+	 */
+	LOG_INF("self channel %u searching for %s (devtype 0x%02x, period %u, "
+		"wildcard device number)", ch, p->name, p->device_type,
+		p->period_counts);
 	return 0;
+}
+
+/* Create the channel and point it at a row. Used at boot, and again as the
+ * recovery path in rotate_and_reopen() below. */
+static int open_one(uint8_t ch, const struct self_profile *p)
+{
+	antr_err_t rc;
+
+	rc = antr_channel_assign(ch, ANTW_CHANNEL_TYPE_SLAVE, SELF_NETWORK, 0u);
+	if (rc != 0u) {
+		LOG_ERR("channel %u assign: %u - NOTHING CAN EVER BIND on this "
+			"channel", ch, rc);
+		return -EIO;
+	}
+
+	if (configure_and_open(ch, p) != 0) {
+		LOG_ERR("channel %u could not be configured for %s - NOTHING "
+			"CAN EVER BIND on this channel", ch, p->name);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+/*
+ * A search timed out. Advance this channel one row and reopen, so that N
+ * channels sweep the whole table over time instead of one channel retrying one
+ * profile forever - which is what the old code did, and which is
+ * indistinguishable on the console from a room with no sensors in it.
+ *
+ * The fallback is the reason for the extra calls. configure_and_open() is
+ * correct for the assigned-and-closed state and that is the state a timed-out
+ * search leaves behind - but the state was observed a moment ago through
+ * antr_channel_status_get() and the backend runs on its own thread, so a
+ * refusal here means the channel is not where we thought it was. Rather than
+ * open it with a half-applied configuration (a channel searching for the new
+ * device type at the old period would find nothing, forever, silently), tear
+ * it down and rebuild: close it if it is open at all, unassign - which
+ * ant_radio.h requires a closed channel for, hence the order - and reassign
+ * from scratch. Both leading calls are allowed to fail; each is a no-op when
+ * the channel is already past that state.
+ */
+static void rotate_and_reopen(uint8_t i)
+{
+	uint8_t ch = self_channel_index(i);
+	const struct self_profile *p;
+
+	self_row[i] = (uint8_t)((self_row[i] + 1u) % SELF_PROFILE_N);
+	p = &self_profiles[self_row[i]];
+
+	if (configure_and_open(ch, p) == 0) {
+		return;
+	}
+
+	LOG_WRN("self channel %u would not retune in place - reassigning", ch);
+	(void)antr_channel_close(ch);
+	(void)antr_channel_unassign(ch);
+	(void)open_one(ch, p);
 }
 
 /*
  * A tracking channel with no binding. Called once per second per channel.
  * Everything that makes this legal happens here: the window test, the identity
  * read, the bind, the period read-back, and the map entry the tap consults.
+ *
+ * UNCHANGED BY THE SEARCH-PROFILE ROTATION, and both halves of that are
+ * load-bearing:
+ *
+ *   The window test below is the whole of docs/radiant-bridge.md section 10.1
+ *   rule 1 in code. Rotation decides what a channel may ACQUIRE; this decides
+ *   what may BIND, and the two must not be allowed to grow into each other.
+ *
+ *   The identity comes from antr_channel_id_get(), never from the table row
+ *   the channel was searching on. A wildcard search resolves to a real device
+ *   type, and it is the resolved one that reaches radiant_binding_bind() and
+ *   therefore rx_tap.c's devtype dispatch - so a binding records what the
+ *   sensor IS, not what was being looked for. That was already true and stays
+ *   true; with a table it merely stops being trivially true.
  */
 static void try_bind(uint8_t ch)
 {
@@ -299,8 +535,11 @@ static void try_bind(uint8_t ch)
 	}
 
 	/*
-	 * The period comes off the channel, not from SELF_PERIOD_COUNTS above,
-	 * and the difference matters: this is the number radiant_liveness.c
+	 * The period comes off the channel, not from the table row this channel
+	 * happens to be searching on, and the difference matters: with a
+	 * rotating search profile there is no single compile-time period any
+	 * more, and the row is a statement of what was ASKED FOR rather than of
+	 * what the channel settled on. This is the number radiant_liveness.c
 	 * multiplies by 3 to decide the sensor has gone away, and reading it
 	 * back is what makes that number a fact about the channel rather than
 	 * a constant that was true when it was typed. A read that fails leaves
@@ -367,8 +606,17 @@ static void self_thread_fn(void *a, void *b, void *c)
 		return;
 	}
 
+	/*
+	 * Channel i starts on row (i mod N of the table), so a two-channel
+	 * build searches TWO profiles at once rather than running two identical
+	 * heart-rate searches beside each other. With one channel this is just
+	 * row 0 and the rotation does all the work; with as many channels as
+	 * rows, every profile is covered continuously and nothing ever rotates.
+	 */
 	for (i = 0u; i < SELF_N; i++) {
-		(void)open_one(self_channel_index(i));
+		self_row[i] = (uint8_t)(i % SELF_PROFILE_N);
+		(void)open_one(self_channel_index(i),
+			       &self_profiles[self_row[i]]);
 	}
 
 	for (;;) {
@@ -395,14 +643,19 @@ static void self_thread_fn(void *a, void *b, void *c)
 				 * configured-but-idle channel: a bridge whose
 				 * self channels quietly stop searching after
 				 * the first timeout looks identical to one
-				 * with no sensors in range. */
+				 * with no sensors in range.
+				 *
+				 * And reopen on the NEXT profile, not the same
+				 * one. Retrying one row forever is the same
+				 * indistinguishable-from-empty-room failure one
+				 * level up: the channel is visibly busy and
+				 * still cannot reach three of the four device
+				 * types this bridge decodes. */
 				ant_bridge_channel_unbind(ch);
-				LOG_INF("self channel %u closed - reopening",
-					ch);
-				if (antr_channel_open(ch) != 0u) {
-					LOG_WRN("self channel %u reopen failed",
-						ch);
-				}
+				LOG_INF("self channel %u search timed out on %s "
+					"- rotating", ch,
+					self_profiles[self_row[i]].name);
+				rotate_and_reopen(i);
 				break;
 			default:
 				break;

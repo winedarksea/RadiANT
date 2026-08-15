@@ -26,16 +26,100 @@
 #define REST_THRESHOLD_BPM  82u
 #define ZONE2_THRESHOLD_BPM 134u
 
+/*
+ * ---------------------------------------------------------------------------
+ * TWO ACTIVITY SLOTS PER SOURCE, KEYED ON field_type. Read this before adding
+ * a third accumulating producer.
+ * ---------------------------------------------------------------------------
+ * This used to be ONE struct per source with one `prev_raw` and a `field_type`
+ * member recording which accumulator last wrote it. That was correct for
+ * exactly as long as one adapter posted one accumulating field per source,
+ * which was true while radiant_hr_adapter.c (0x36 beat count) was the only
+ * producer in the tree.
+ *
+ * radiant_power_adapter.c posts TWO accumulating fields on ONE source: 0x36
+ * event count and 0x30 energy. With a single slot the two interleave, and the
+ * failure is not a lost sample - it is worse:
+ *
+ *   - `field_type` alternates, so the field_id at the bottom of
+ *     eval_activity() alternates between WORN and ACTIVE, and one dwell state
+ *     machine publishes both booleans in turn;
+ *   - `prev_raw` alternates too, so each field is differenced against the
+ *     OTHER field's previous value. Energy in microjoules minus an event
+ *     count is a large positive number and an event count minus energy is a
+ *     large negative one, so `raw_now` flaps every message regardless of
+ *     whether the rider is pedalling;
+ *   - eval_zone()'s "worn" gate reads that same shared `debounced`, so a
+ *     power meter would drive heart-rate zone outputs.
+ *
+ * The fix is structural rather than a guard: each source gets its own slot for
+ * RADIANT_FIELD_EVENT_COUNT (which drives RADIANT_RULE_FIELD_WORN) and one for
+ * every other accumulating type (which drives RADIANT_RULE_FIELD_ACTIVE), each
+ * with its own prev_raw, dwell edge and debounced output. The slot index IS
+ * the discriminator, so the `field_type` member is gone - it existed only to
+ * answer "which output does this drive", which the slot now answers by
+ * construction and cannot get out of step with the state it labels.
+ *
+ * THE ACTIVE SLOT IS STILL SINGLE-OCCUPANCY. Two different non-event-count
+ * accumulating types on one source (0x30 energy and 0x34 distance, say) would
+ * reproduce the same defect between themselves. That is why
+ * radiant_power_adapter.h reserves its FE-C elapsed-time and distance
+ * field_ids instead of publishing them. A general fix is a per-field-type slot
+ * map; it is not needed until a second such producer exists, and it would cost
+ * RADIANT_BINDING_MAX x N of this struct in bss.
+ */
+#define ACTIVITY_SLOT_WORN   0u /* RADIANT_FIELD_EVENT_COUNT */
+#define ACTIVITY_SLOT_ACTIVE 1u /* every other accumulating field_type */
+#define ACTIVITY_SLOTS       2u
+
+/*
+ * ---------------------------------------------------------------------------
+ * "ADVANCING" IS A STATE WITH A MEMORY, NOT A TEST AGAINST THE PREVIOUS SAMPLE.
+ * Read this before simplifying eval_activity() back to `s->raw > prev_raw`.
+ * ---------------------------------------------------------------------------
+ * The obvious implementation of 6.1's "the accumulating field is advancing" is
+ * "did it advance since the previous sample", fed to the same dwell helper the
+ * zone path uses. That is what this file did, it passed every test it had, and
+ * it could not work on any real sensor. The arithmetic:
+ *
+ *   An ANT+ heart-rate strap broadcasts at 8070/32768 s = 4.06 Hz. At 60 bpm a
+ *   beat arrives once a second, so the beat-count accumulator advances on
+ *   roughly ONE MESSAGE IN FOUR. "Advanced since the previous sample" is
+ *   therefore true, false, false, false, true, false, false, false...
+ *
+ *   A dwell keyed on "when did that boolean last flip" restarts its edge on
+ *   every one of those flips, so the time since the edge never exceeds one
+ *   message period (~246 ms) and the 2 s ACTIVITY_ASSERT_US dwell is never
+ *   satisfied. RADIANT_RULE_FIELD_WORN could not assert for ANY heart rate
+ *   below the message rate - i.e. for any human being. The old tests passed
+ *   only because their helper advanced the accumulator on every single sample,
+ *   which no sensor does.
+ *
+ * The fix is to stop asking "did it move since last time" and start tracking
+ * WHEN IT LAST MOVED, which is what 6.1's two numbers actually describe:
+ *
+ *   assert  = it has been advancing for ACTIVITY_ASSERT_US   (2 s)
+ *   clear   = it last advanced ACTIVITY_CLEAR_US ago         (20 s)
+ *
+ * A gap of three quiet messages is then simply 0.74 s of a 20 s clear budget,
+ * and the same property is what 6.1 demands of "bike in use": a rider coasting
+ * emits messages that carry no new energy, and the output must not drop out at
+ * every descent and every traffic light.
+ *
+ * dwell_update() is deliberately NOT used here any more. It is still exactly
+ * right for the zone path, where the input is an instantaneous heart-rate
+ * reading and "has the threshold test held since it last flipped" is the
+ * correct question. Two different questions, two mechanisms.
+ */
 struct activity_state {
-	bool     tracked;    /* an accumulator sample has been seen for this source */
-	uint8_t  field_type; /* which one: RADIANT_FIELD_EVENT_COUNT or _ENERGY */
+	bool     tracked;    /* an accumulator sample has been seen for this slot */
 	bool     have_prev;
 	int64_t  prev_raw;   /* the accumulator's own previous raw value, for the delta */
 
-	bool     edge_track; /* dwell_update()'s last raw test result ("was it
-			      * advancing"), distinct from prev_raw's accumulator value */
-	uint64_t raw_edge_us;
-	bool     debounced;  /* the published, dwelled output */
+	bool     advancing;         /* the accumulator has moved within ACTIVITY_CLEAR_US */
+	uint64_t last_advance_us;   /* t_us of the last sample with a positive delta */
+	uint64_t advance_since_us;  /* t_us at which the current advancing run began */
+	bool     debounced;         /* the published, dwelled output */
 };
 
 struct zone_state {
@@ -52,7 +136,7 @@ struct zone_state {
 };
 
 struct rule_state {
-	struct activity_state activity;
+	struct activity_state activity[ACTIVITY_SLOTS];
 	struct zone_state      zone;
 };
 
@@ -117,40 +201,77 @@ static bool dwell_update(bool raw, uint64_t *edge_us, bool *raw_prev,
 
 static void eval_activity(uint32_t source, const struct radiant_sample *s)
 {
-	struct activity_state *a = &states[source].activity;
-	bool                changed;
-	bool                stale = (s->flags & RADIANT_SAMPLE_STALE) != 0u;
-	bool                raw_now;
+	/* The slot, not a member of the slot: see the block comment on
+	 * struct activity_state. 0x36 is the only type that drives WORN. */
+	uint32_t slot = (s->field_type == RADIANT_FIELD_EVENT_COUNT)
+				? ACTIVITY_SLOT_WORN
+				: ACTIVITY_SLOT_ACTIVE;
+	struct activity_state *a = &states[source].activity[slot];
+	uint8_t  field_id = (slot == ACTIVITY_SLOT_WORN)
+				    ? RADIANT_RULE_FIELD_WORN
+				    : RADIANT_RULE_FIELD_ACTIVE;
+	bool     stale = (s->flags & RADIANT_SAMPLE_STALE) != 0u;
+	uint64_t t = s->t_us;
+	bool     desired;
 
 	a->tracked = true;
-	a->field_type = s->field_type;
 
-	if (stale) {
-		/* Liveness overrides the ordinary dwell entirely (see header's
-		 * scope note - this module reacts to STALE but doesn't produce it). */
-		raw_now = false;
-	} else if (a->have_prev) {
-		raw_now = (s->raw - a->prev_raw) > 0;
-	} else {
-		a->have_prev = true;
+	if (!stale) {
+		int64_t delta;
+
+		if (!a->have_prev) {
+			a->have_prev = true;
+			a->prev_raw = s->raw;
+			return; /* nothing to difference against yet */
+		}
+
+		delta = s->raw - a->prev_raw;
 		a->prev_raw = s->raw;
-		return; /* nothing to difference against yet */
-	}
-	a->prev_raw = s->raw;
 
-	changed = dwell_update(raw_now, &a->raw_edge_us, &a->edge_track,
-			       &a->debounced, s->t_us, ACTIVITY_ASSERT_US,
-			       ACTIVITY_CLEAR_US, stale);
-	if (changed) {
-		uint8_t field_id = (s->field_type == RADIANT_FIELD_EVENT_COUNT)
-					   ? RADIANT_RULE_FIELD_WORN
-					   : RADIANT_RULE_FIELD_ACTIVE;
-		post_occupancy(source, field_id, a->debounced, s->t_us);
+		if (delta > 0) {
+			/* A run of advancing starts at the FIRST positive
+			 * delta, not at every one of them: re-stamping
+			 * advance_since_us on each beat is precisely the bug
+			 * this replaced, and would push the assert out
+			 * forever. */
+			if (!a->advancing) {
+				a->advance_since_us = t;
+			}
+			a->advancing = true;
+			a->last_advance_us = t;
+		} else if (a->advancing &&
+			   (t - a->last_advance_us) >= ACTIVITY_CLEAR_US) {
+			a->advancing = false;
+		}
+
+		/* Both of 6.1's numbers, in one line: advancing now, and long
+		 * enough that the 2 s assert dwell is satisfied. The clear side
+		 * is not a second dwell - it is the moment `advancing` above
+		 * goes false, 20 s after the accumulator last moved. */
+		desired = a->advancing &&
+			  (t - a->advance_since_us) >= ACTIVITY_ASSERT_US;
+	} else {
+		/* Liveness overrides the dwell entirely (see header's scope
+		 * note - this module reacts to STALE but doesn't produce it).
+		 * The advancing run is abandoned too, so a source that comes
+		 * back on air must earn its 2 s again rather than resuming a
+		 * run that started before the outage. */
+		a->advancing = false;
+		a->prev_raw = s->raw;
+		desired = false;
+	}
+
+	if (desired != a->debounced) {
+		a->debounced = desired;
+		post_occupancy(source, field_id, a->debounced, t);
 	}
 
 	if (stale) {
 		/* Zones are gated on "worn"; losing liveness must drop them
-		 * too, immediately (section 6.2). */
+		 * too, immediately (section 6.2). Deliberately NOT gated on
+		 * the slot: STALE is a property of the source's liveness
+		 * (radiant_liveness.c stamps it per binding), so whichever
+		 * accumulator carries the flag, the strap is off the air. */
 		struct zone_state *z = &states[source].zone;
 
 		if (z->rest_debounced) {
@@ -169,7 +290,8 @@ static void eval_activity(uint32_t source, const struct radiant_sample *s)
 static void eval_zone(uint32_t source, const struct radiant_sample *s)
 {
 	struct zone_state    *z = &states[source].zone;
-	const struct activity_state *a = &states[source].activity;
+	const struct activity_state *a =
+		&states[source].activity[ACTIVITY_SLOT_WORN];
 	bool               worn;
 	bool               changed;
 
@@ -177,10 +299,11 @@ static void eval_zone(uint32_t source, const struct radiant_sample *s)
 	z->hr_bpm = (uint8_t)s->raw;
 
 	/* "Both require the monitor to be worn" (section 6.2) - gated on the
-	 * same binding's WORN output (0x36-derived), not ACTIVE: field_type
-	 * is the discriminator rather than an extra flag. */
-	worn = a->tracked && a->debounced &&
-	       a->field_type == RADIANT_FIELD_EVENT_COUNT;
+	 * same binding's WORN output (0x36-derived), not ACTIVE. Reading the
+	 * EVENT_COUNT slot specifically is what enforces that now; it used to
+	 * be a field_type test against shared state, which a second producer
+	 * could overwrite between the two calls. */
+	worn = a->tracked && a->debounced;
 
 	changed = dwell_update(worn && z->hr_bpm < REST_THRESHOLD_BPM,
 			       &z->rest_edge_us, &z->rest_raw, &z->rest_debounced,

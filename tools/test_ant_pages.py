@@ -679,6 +679,119 @@ class TestCommonPages(unittest.TestCase):
         self.assertAlmostEqual(got["voltage"], 3.5)
 
 
+class TestCommonPage84(unittest.TestCase):
+    """Page 84, Subfield Data - decode only, so no round trip to lean on.
+
+    Every other page in this file is tested by encoding and decoding it back,
+    which proves the two halves agree and nothing else. There is no
+    encode_common_84, so what stands in for it is the primary document's own
+    worked example: D00001198 Rev 3.1 section 6.13.1, Figure 6-8. That is a
+    stronger test than a round trip, not a weaker one - a round trip through
+    two wrong halves passes.
+    """
+
+    # ANT Message Payload = [54][FF][01][03][6B][0A][EA][19]
+    GOLDEN = bytes.fromhex("54FF01036B0AEA19")
+
+    def test_the_spec_worked_example(self):
+        got = ap.decode_common_84(self.GOLDEN)
+        self.assertEqual(got["page"], ap.PAGE_COMMON_SUBFIELD)
+
+        first, second = got["slots"]
+
+        # "The first subfield of this data page communicates temperature and
+        # the value given in this message is 26.67 C."
+        self.assertEqual(first["subpage"], ap.SUBPAGE_TEMPERATURE)
+        self.assertEqual(first["name"], "temperature")
+        self.assertEqual(first["raw"], 0x0A6B)   # 2667 centi-degC
+        self.assertAlmostEqual(first["value"], 26.67)
+
+        # "The second subfield ... communicates percent humidity. The value of
+        # the humidity field is 66.34%."
+        self.assertEqual(second["subpage"], ap.SUBPAGE_HUMIDITY)
+        self.assertEqual(second["name"], "humidity")
+        self.assertEqual(second["raw"], 0x19EA)  # 6634 centi-percent
+        self.assertAlmostEqual(second["value"], 66.34)
+
+    def test_data_fields_are_little_endian(self):
+        # The whole page hangs off this: 6B 0A read big-endian is 27402
+        # centi-degC, i.e. 274 C, which is a plausible-looking number for an
+        # oven and not for weather.
+        got = ap.decode_common_84(self.GOLDEN)
+        self.assertEqual(got["slots"][0]["raw"], 0x0A6B)
+        self.assertNotEqual(got["slots"][0]["raw"], 0x6B0A)
+
+    def test_invalid_sentinel_on_either_slot(self):
+        # Table 6-16: a subpage byte of 0xFF means the slot carries nothing.
+        # Declining it is a normal answer, so the OTHER slot still decodes.
+        payload = bytes([0x54, 0xFF, 0xFF, 0x03, 0x00, 0x00, 0xEA, 0x19])
+        first, second = ap.decode_common_84(payload)["slots"]
+        self.assertEqual(first["subpage"], ap.SUBPAGE_INVALID)
+        self.assertIsNone(first["name"])
+        self.assertIsNone(first["value"])
+        self.assertAlmostEqual(second["value"], 66.34)
+
+        payload = bytes([0x54, 0xFF, 0x01, 0xFF, 0x6B, 0x0A, 0x00, 0x00])
+        first, second = ap.decode_common_84(payload)["slots"]
+        self.assertAlmostEqual(first["value"], 26.67)
+        self.assertEqual(second["subpage"], ap.SUBPAGE_INVALID)
+        self.assertIsNone(second["value"])
+
+    def test_reserved_subpage_is_declined_not_an_error(self):
+        # 9-254 are "Reserved for future use" (Table 6-17). A sensor sending
+        # one is behaving; the decoder hands the number back untouched.
+        payload = bytes([0x54, 0xFF, 0x09, 0x03, 0x34, 0x12, 0xEA, 0x19])
+        first, second = ap.decode_common_84(payload)["slots"]
+        self.assertEqual(first["subpage"], 9)
+        self.assertIsNone(first["name"])
+        self.assertIsNone(first["value"])
+        self.assertEqual(first["raw"], 0x1234)
+        self.assertAlmostEqual(second["value"], 66.34)
+
+    def test_temperature_subpages_are_twos_complement(self):
+        # Subpages 1, 7 and 8 are signed; everything else in Table 6-17 is
+        # not. Unsigned here would publish -5.00 C as +650.31 C.
+        for subpage in (ap.SUBPAGE_TEMPERATURE, ap.SUBPAGE_TEMP_MIN,
+                        ap.SUBPAGE_TEMP_MAX):
+            with self.subTest(subpage=subpage):
+                payload = bytes([0x54, 0xFF, subpage, 0xFF,
+                                 0x0C, 0xFE, 0x00, 0x00])
+                got = ap.decode_common_84(payload)["slots"][0]
+                self.assertEqual(got["raw"], 0xFE0C)
+                self.assertAlmostEqual(got["value"], -5.00)
+
+    def test_subpage_7_and_8_are_named_not_described(self):
+        # Table 6-17 transposes the two descriptions: 7 is NAMED "Minimum
+        # Operating Temperature" and DESCRIBED as the maximum recorded
+        # temperature, 8 the mirror image. The names are self-consistent and
+        # are what this decoder follows. Pinned so a future reader who finds
+        # the descriptions first cannot quietly swap them back.
+        self.assertEqual(ap._SUBPAGE_NAMES[ap.SUBPAGE_TEMP_MIN], "temp_min")
+        self.assertEqual(ap._SUBPAGE_NAMES[ap.SUBPAGE_TEMP_MAX], "temp_max")
+
+    def test_unsigned_subpages_use_the_full_u16_range(self):
+        # Table 6-17's stated maxima: 655.35 kPa, 655.35 km/h, 65535 cycles.
+        for subpage, expect in ((ap.SUBPAGE_PRESSURE, 655.35),
+                                (ap.SUBPAGE_WIND_SPEED, 655.35),
+                                (ap.SUBPAGE_CHARGE_CYCLES, 65535)):
+            with self.subTest(subpage=subpage):
+                payload = bytes([0x54, 0xFF, subpage, 0xFF,
+                                 0xFF, 0xFF, 0x00, 0x00])
+                got = ap.decode_common_84(payload)["slots"][0]
+                self.assertAlmostEqual(got["value"], expect)
+
+    def test_wind_direction_scale_is_0_05_degrees(self):
+        # Table 6-17's own maximum: 7199 steps = 359.95 degrees. The row that
+        # prints "Wind Direction LSB" twice, where the second is plainly the
+        # MSB - read as an ordinary little-endian u16, like every other
+        # subpage in the table.
+        payload = bytes([0x54, 0xFF, ap.SUBPAGE_WIND_DIRECTION, 0xFF,
+                         0x1F, 0x1C, 0x00, 0x00])
+        got = ap.decode_common_84(payload)["slots"][0]
+        self.assertEqual(got["raw"], 7199)
+        self.assertAlmostEqual(got["value"], 359.95)
+
+
 class TestDispatch(unittest.TestCase):
     def test_every_page_decodes_through_the_dispatcher(self):
         cases = [
@@ -692,6 +805,12 @@ class TestDispatch(unittest.TestCase):
             (ap.encode_common_80(1, 2, 3), ap.PAGE_COMMON_MANUFACTURER),
             (ap.encode_common_81(1, 2), ap.PAGE_COMMON_PRODUCT),
             (ap.encode_common_82(0, 3, 3), ap.PAGE_COMMON_BATTERY),
+            # Page 84 has no encoder (see decode_common_84), so it enters the
+            # dispatcher as the section 6.13.1 payload itself. It is here on a
+            # BICYCLE POWER device type on purpose: Table 4-1 keys the common
+            # range on transmission type, not device type, so a power meter
+            # carrying weather data is the specified case, not an oddity.
+            (TestCommonPage84.GOLDEN, ap.PAGE_COMMON_SUBFIELD),
         ]
         for raw, page in cases:
             with self.subTest(page=page):
