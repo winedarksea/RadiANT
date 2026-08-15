@@ -1112,6 +1112,34 @@ static uint32_t dbg_pump_window, dbg_pump_ok;
  * reader would conclude the second.
  */
 static uint32_t dbg_pump_none_searching, dbg_pump_busy;
+
+/*
+ * THE IN-FLIGHT CHUNK, AND WHY unacct WAS NOT ACTUALLY ZERO.
+ *
+ * dbg_scan_us credits a chunk's WHOLE armed length at arm time, because that is
+ * where the granted bounds are known. The 1 s report then samples at an
+ * arbitrary instant, which is usually part-way through a 260 ms chunk - so
+ * `accounted` includes airtime that has not elapsed yet, and unacct comes out
+ * NEGATIVE by however much of the chunk is still in the future. One sample
+ * later the chunk has completed and the same arithmetic reads POSITIVE.
+ *
+ * That is exactly what the first run showed: unacct alternating between about
+ * -625 000 and +526 000 us against a 125 s elapsed, sign flipping with the
+ * sample phase. It looked like +-0.5 % of unexplained time and was not - it was
+ * one chunk of double-counting, appearing and disappearing.
+ *
+ * The exit criterion for this investigation is unacct reaching ZERO, not
+ * reaching small, so this is worth removing rather than describing. Recording
+ * the in-flight chunk's scheduled close lets the report subtract the part of it
+ * that has not happened yet, which makes the identity exact at ANY sampling
+ * instant instead of only at a chunk boundary.
+ *
+ * Tracked windows have the same shape and are ignored on purpose: one is 640 us
+ * against a 260 ms scan chunk, so the correction would be a four-hundredth of
+ * the one that matters and would cost a second pair of variables to carry.
+ */
+static bool           dbg_inflight;
+static radiant_time_t dbg_inflight_close;
 #endif
 
 /*
@@ -2035,6 +2063,14 @@ static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_
 		}
 		dbg_last_close = t_close;
 
+		/* The chunk just credited to dbg_scan_us has not been listened
+		 * to yet. Remember when it is due to finish so the report can
+		 * take back whatever part of it is still in the future. */
+		if (t_close != RADIANT_TIME_NEVER && t_close > t_open) {
+			dbg_inflight = true;
+			dbg_inflight_close = t_close;
+		}
+
 		if (dbg_kept && dbg_last_done_now != 0u &&
 		    t_open > dbg_last_done_now) {
 			dbg_gap_arm_us += (uint32_t)(t_open - dbg_last_done_now);
@@ -2088,6 +2124,9 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 	 * stamped would charge that time to the wrong interval. */
 	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_SEARCH) {
 		dbg_last_done_now = now;
+		/* The chunk is over, however it ended: nothing of it is still
+		 * in the future, so the report's correction stops applying. */
+		dbg_inflight = false;
 		if (dbg_last_close != 0u && dbg_last_close != RADIANT_TIME_NEVER) {
 			dbg_overrun_us += (int64_t)now - (int64_t)dbg_last_close;
 			dbg_overrun_n++;
@@ -2574,13 +2613,66 @@ static void api_housekeep(void)
 			int64_t elapsed = (dbg_epoch != 0u)
 						  ? (int64_t)(now - dbg_epoch)
 						  : 0;
+			/*
+			 * track_us IS DELIBERATELY NOT IN THIS SUM, and that is
+			 * a measurement rather than a preference.
+			 *
+			 * A tracked window PREEMPTS a running scan chunk - that
+			 * is the whole reason the sweep is posted as a
+			 * continuous background scan rather than a bounded
+			 * window. So a tracked window is armed INSIDE the span
+			 * a scan chunk has already been credited for, and
+			 * adding it counts the same microseconds twice.
+			 *
+			 * Measured: with it in the sum, unacct settled at a
+			 * smooth -3200 us per second of elapsed - always
+			 * negative, which is the signature of double counting
+			 * rather than of missing time. 3200 us/s against a
+			 * tracked window of ~640 us arriving at 4 Hz (2560
+			 * us/s) is the same quantity. Taking it out is what
+			 * makes the residual zero.
+			 *
+			 * The counter itself stays on the SWEEP line: knowing
+			 * tracked windows cost 640 us each is what ruled them
+			 * out as the cause of a starved sweep in the first
+			 * place. It is not part of the identity, that is all.
+			 */
 			int64_t accounted = (int64_t)dbg_scan_us +
-					    (int64_t)dbg_track_us +
 					    (int64_t)dbg_gap_arm_us +
 					    (int64_t)dbg_gap_pump_us +
 					    (int64_t)dbg_gap_post_us +
 					    dbg_overrun_us;
-			int64_t unacct = elapsed - accounted;
+			int64_t unacct;
+
+			/* Take back the part of the in-flight chunk that has
+			 * not elapsed yet - see dbg_inflight. Without this the
+			 * residual alternates sign with the sample phase and
+			 * never settles at zero, which is the one thing this
+			 * whole line exists to show. */
+			if (dbg_inflight && dbg_inflight_close > now) {
+				accounted -= (int64_t)(dbg_inflight_close - now);
+			}
+
+			/*
+			 * And add the pump gap that is STILL RUNNING. gap_pump
+			 * is credited in one lump when the pump finally posts,
+			 * so between the slot being dropped and that post -
+			 * which measured 1.7 s, longer than the report interval
+			 * - elapsed runs ahead of everything claiming it, and
+			 * unacct saws up to a full second and back.
+			 *
+			 * That sawtooth is the mirror image of the in-flight
+			 * chunk above: one is time credited before it happened,
+			 * the other is time that happened before it was
+			 * credited. Both have to be corrected or the residual
+			 * is dominated by which side of a boundary the 1 s
+			 * report landed on, and the real remainder cannot be
+			 * seen at all.
+			 */
+			if (dbg_slot_dropped_at != 0u && now > dbg_slot_dropped_at) {
+				accounted += (int64_t)(now - dbg_slot_dropped_at);
+			}
+			unacct = elapsed - accounted;
 
 			dbg_last = now;
 			LOG_INF("SWEEP set=%u steer=%u dwell=%u/%u adv=%u sweeps=%u "
