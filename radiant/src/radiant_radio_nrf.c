@@ -1450,7 +1450,34 @@ static int8_t rssi_sample_dbm(void)
  * definitions while leaving the uses exposed broke every non-gate nRF
  * build. Compiling it unconditionally costs 25 bytes of .bss and a
  * six-register loop that finds nothing when there's no second stack.
+ *
+ * IT IS STILL GATED ON THE SILICON, AND MUST BE. Un-gating it from the
+ * arbiter left it gated on nothing at all, and RADIO's PUBLISH_/SUBSCRIBE_
+ * registers do not exist on a part with the old PPI: on nRF52840 the six
+ * lines of radio_ep_reg() are six hard compile errors ('NRF_RADIO_Type' has
+ * no member named 'PUBLISH_ADDRESS'), so apps/dongle could not be built at
+ * -DANT_RADIO=core -DRADIANT_BACKEND=nrf for the Feather at all - the
+ * headline product's own release-candidate image, and the B leg of the
+ * ADR 0001 A/B. It went unnoticed because every build that exercises this
+ * file's arbitration is on an nRF54L or nRF53, which have DPPIC.
+ *
+ * DPPIC_PRESENT is the MDK's own discriminator, from
+ * <part>_peripherals.h, and it is the hardware fact rather than a Zephyr
+ * SoC symbol on purpose: this project has been bitten three times by a
+ * Zephyr Kconfig rename silently flipping a default (see
+ * CONFIG_SOC_SERIES_NRF52X -> _NRF52 and libant.a). Note it is defined as
+ * empty on nRF53 and as 1 on nRF54L, so it must be tested with defined()
+ * and never with #if.
+ *
+ * On a PPI part the RADIO has no endpoint register for another stack to
+ * have taken, so there is nothing to borrow, nothing can be contended, and
+ * the whole layer is inert by construction rather than by measurement.
  */
+#if defined(DPPIC_PRESENT)
+#define RADIANT_NRF_RADIO_EP 1
+#else
+#define RADIANT_NRF_RADIO_EP 0
+#endif
 
 /* Defined beside the other gate callbacks, where the RADIO-ownership
  * reasoning lives; declared here because the allocation they capture
@@ -1502,7 +1529,7 @@ static void radio_endpoints_attach_off_at_init(void);
  */
 #define RADIANT_NRF_GRANT_EP_SWAP 1
 
-static uint32_t radio_ep_foreign[RADIO_EP_COUNT];
+__maybe_unused static uint32_t radio_ep_foreign[RADIO_EP_COUNT];
 static uint8_t  radio_ep_contended;
 
 /*
@@ -1511,11 +1538,11 @@ static uint8_t  radio_ep_contended;
  * happened to hold at init; see radio_endpoints_attach() (bug 20) for why the
  * difference between those two is a boot-order race.
  */
-static uint8_t  radio_ep_mine_mask;
+__maybe_unused static uint8_t  radio_ep_mine_mask;
 
 /* Whether RADIO_0_IRQn was already NVIC-enabled when this grant started, so it
  * can be put back that way. See bug 21 in radiant_nrf_gate_on_grant(). */
-static bool     radio_irq_was_enabled;
+__maybe_unused static bool     radio_irq_was_enabled;
 
 /*
  * OUR half of the swap: what the six registers hold when the connections this
@@ -1523,7 +1550,7 @@ static bool     radio_irq_was_enabled;
  * radio_endpoints_attach() so the grant hooks above it can read it for the
  * bench probe; the reasoning about who owns what lives with that function.
  */
-static struct {
+__maybe_unused static struct {
 	uint32_t pub_address;
 	uint32_t pub_rxready;
 	uint32_t sub_rssistart;
@@ -1533,6 +1560,7 @@ static struct {
 	bool     saved;
 } radio_ep;
 
+#if RADIANT_NRF_RADIO_EP
 static volatile uint32_t *radio_ep_reg(size_t i)
 {
 	switch (i) {
@@ -1544,20 +1572,27 @@ static volatile uint32_t *radio_ep_reg(size_t i)
 	default: return &NRF_RADIO->SUBSCRIBE_DISABLE;
 	}
 }
+#endif /* RADIANT_NRF_RADIO_EP */
 
 /* Named rather than counted: WHICH registers are shared decides the shape of
  * the fix, since a taken publication and a taken task subscription fail
  * differently. */
 static void radio_endpoints_attach_off_at_init(void)
 {
+#if RADIANT_NRF_RADIO_EP
 	for (size_t r = 0U; r < RADIO_EP_COUNT; r++) {
 		if ((radio_ep_contended & (1U << r)) != 0U) {
 			*radio_ep_reg(r) = radio_ep_foreign[r];
 		}
 	}
+#endif
+	/* On a PPI part radio_ep_contended is unconditionally zero (nothing
+	 * can be borrowed from registers that do not exist), so the loop above
+	 * would be a no-op even if it compiled. Its only caller already tests
+	 * `shared != 0U`, so this function is never even reached there. */
 }
 
-static const char *radio_ep_name(size_t i)
+__maybe_unused static const char *radio_ep_name(size_t i)
 {
 	static const char *const names[RADIO_EP_COUNT] = {
 		"PUBLISH_ADDRESS", "PUBLISH_RXREADY", "SUBSCRIBE_RSSISTART",
@@ -1763,7 +1798,15 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	 * connection is inert until radio_endpoints_attach() re-attaches our
 	 * values inside a grant - a known gap, announced below rather than
 	 * discovered as silent "ANT+ hears nothing".
+	 *
+	 * On a PPI part (nRF52) none of this applies and none of it compiles:
+	 * RADIO has no PUBLISH_/SUBSCRIBE_ registers, a PPI connection's
+	 * peripheral half does not exist, and nrfx_gppi_conn_alloc() cannot
+	 * fail the way described above because there is no endpoint to be
+	 * already attached. `shared` is therefore zero by construction, not by
+	 * measurement - see RADIANT_NRF_RADIO_EP.
 	 */
+#if RADIANT_NRF_RADIO_EP
 	for (size_t r = 0U; r < RADIO_EP_COUNT; r++) {
 		radio_ep_foreign[r] = *radio_ep_reg(r);
 		if (radio_ep_foreign[r] != 0U) {
@@ -1776,6 +1819,7 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 			*radio_ep_reg(r) = 0U;
 		}
 	}
+#endif
 	unsigned int shared = (unsigned int)POPCOUNT(radio_ep_contended);
 
 	for (size_t i = 0U; i < ARRAY_SIZE(conns); i++) {
