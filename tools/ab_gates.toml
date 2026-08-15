@@ -100,20 +100,47 @@
 # restores the link immediately and reproducibly (A3 and A4 above were taken
 # that way), so neither board is broken and the flash path is fine.
 #
-# Two candidate explanations, neither tested: sdk-ant's ANT+ profile library may
-# set the channel frequency itself from the ANT+ profile constant, overriding
-# the `patched.rf_freq` in apps/sim/src/main.c's sim_channel_config() - the
-# device-number patch in the same function demonstrably works, so the mechanism
-# is not simply "the patch is ignored"; or the ANT+ network key constrains the
-# usable frequency in a way one of the two stacks enforces and the other does
-# not. Resolving it would make the room-vs-boards question answerable without
-# touching anything physical, which is worth someone's afternoon.
+# NARROWED, 2026-08-15. Two candidates were proposed and the first is REFUTED:
 #
-# BENCH TRAP FOUND DOING THIS: scripts/flash_sim_jlink.ps1 reports "Flashed" and
-# the board's uptime does NOT reset - the console kept counting from 00:14:06 to
-# 00:14:36 across a reflash. The image does change (the RF-57 build stopped being
-# audible), but anything that depends on a fresh boot cannot be assumed. Check
-# the boot banner, not the script's own success message.
+#   NOT the profile library overriding the patch. sdk-ant's
+#   BPWR_SENS_CHANNEL_CONFIG_DEF sets `.rf_freq = BPWR_ANTPLUS_RF_FREQ` in the
+#   struct, and ant_channel_config.c then calls
+#   `ant_channel_radio_freq_set(p_config->channel_number, p_config->rf_freq)` -
+#   the patched field, not the constant. The patch reaches the call.
+#
+#   NOT a failed init on the sim. Capturing COM7 across a flash of the RF-78
+#   build shows a clean boot with no error at all: "ANT B-PWR channel 0 init",
+#   "tx power level 3", "bicycle power (0x0B) open: device #33333, trans type 5,
+#   torque mode 1, 100 W at 80 rpm". The sim believes it is open.
+#
+#   NOT a failed set on the DUT, as far as the serial layer can tell: the dongle
+#   answers "OK: ch0 radio frequency".
+#
+# And with the RF-78 image running, the DUT was swept across 66 (ANT's own
+# default), 78 and 57 and heard NOTHING on any of them.
+#
+# So both ends report success and no link exists, which leaves the remaining
+# candidate: one of the two stacks silently ignores or clamps a non-ANT+
+# frequency while the ANT+ NETWORK KEY is installed, and answers OK anyway. That
+# would also explain why the console's page counter keeps advancing - the
+# profile's page handler runs on a timer and is not evidence of radiation, which
+# is its own trap worth knowing.
+#
+# Resolving it is worth someone's afternoon: it would make the room-versus-boards
+# question answerable without anyone physically switching a trainer off, which is
+# currently the only thing standing between this bench and Phases 1.7 and 2.7.
+# The obvious next probe is a non-ANT+ network key on a private network number,
+# which decouples the two variables the hypothesis ties together.
+#
+# BENCH NOTE, CORRECTED: an earlier version of this comment said
+# scripts/flash_sim_jlink.ps1 does not reset the board, on the evidence that the
+# console's uptime kept climbing across a reflash (00:14:06 -> 00:14:36). THAT
+# INFERENCE WAS WRONG. Capturing COM7 across a flash shows the full boot banner
+# - "ANT+ sensor simulator starting", the identity line, the channel open - so
+# the board does reset and the new image does run. What survives is the LOG
+# TIMESTAMP: on nRF54L the clock behind it free-runs across a soft reset, so
+# uptime is not a reset indicator on this part. Read the boot banner, not the
+# timestamp, and not the script's own success message either.
 #
 # WHAT HAS TO HAPPEN BEFORE PHASE 1.7: power down the other ANT+ transmitters in
 # the room, repeat A1 and A2, and confirm the delta is inside 0.35 pp. If it is,
