@@ -138,7 +138,35 @@ static void pump_thread_fn(void *a, void *b, void *c)
 				next_tick_ms = k_uptime_get() + LIVENESS_TICK_MS;
 			}
 
-			if (radiant_liveness_tick(ant_bridge_now_us()) != 0u) {
+			uint32_t staled = radiant_liveness_tick(ant_bridge_now_us());
+
+			if (staled != 0u) {
+				/*
+				 * SAY SO. A working STALE producer and one that
+				 * was never linked in are indistinguishable from
+				 * outside - both leave the last value sitting on
+				 * the bus, and neither says anything - which is
+				 * exactly the observation the bench procedure
+				 * for this needs to make. radiant/src/bridge/ is
+				 * deliberately log-free (it is an embeddable
+				 * library and reaches no path outside itself),
+				 * so the line belongs here, on the application
+				 * side, beside the "bridge: N sinks" line that
+				 * exists for the same reason.
+				 *
+				 * Edge-triggered by radiant_liveness.c itself -
+				 * it posts once per binding per quiet period -
+				 * so this cannot become a 1 Hz drip.
+				 */
+				const struct radiant_liveness_stats *ls =
+					radiant_liveness_stats_get();
+
+				LOG_INF("liveness: %u binding(s) went STALE "
+					"(total %u, no_period %u)",
+					(unsigned int)staled,
+					(unsigned int)(ls != NULL ? ls->stale_posted : 0u),
+					(unsigned int)(ls != NULL ? ls->no_period : 0u));
+
 				/* Drain again immediately: the STALE records
 				 * were posted inside the tick above, and a
 				 * heart-rate expiry that waited a further pump

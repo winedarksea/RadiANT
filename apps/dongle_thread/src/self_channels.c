@@ -335,6 +335,32 @@ static void self_thread_fn(void *a, void *b, void *c)
 
 	button_init();
 
+#if defined(CONFIG_ANT_DONGLE_PAIRING_WINDOW_AT_BOOT)
+	/*
+	 * A BENCH INSTRUMENT, NOT A FEATURE, and the same shape as
+	 * ANT_DONGLE_THREAD_COEX_LOAD: off by default, selected by no shipping
+	 * image, and it says on the console exactly what it did so a log can
+	 * never be mistaken for one from a normal build.
+	 *
+	 * It exists because the liveness STALE path is the one thing in the
+	 * bridge that cannot be verified without a binding, a binding needs the
+	 * pairing window, and the window needs a finger on sw0. That is correct
+	 * for the product - section 10.1 rule 1 makes binding explicit opt-in
+	 * and says so cannot be retrofitted - and it makes the single most
+	 * important bridge test unreachable from an automated bench.
+	 *
+	 * This does NOT weaken the rule it works around. The window still
+	 * opens once, still expires after CONFIG_ANT_DONGLE_PAIRING_WINDOW_S,
+	 * and still binds only devices acquired inside it; what changes is who
+	 * opened it. Promiscuous binding - the thing section 10.1 forbids -
+	 * would be a window that never closes, and this is not that.
+	 */
+	LOG_WRN("BENCH BUILD: opening the pairing window at boot without a "
+		"button press. No shipping image does this - see "
+		"CONFIG_ANT_DONGLE_PAIRING_WINDOW_AT_BOOT.");
+	self_channels_open_pairing_window();
+#endif
+
 	if (antr_network_address_set(SELF_NETWORK, ant_plus_key) != 0u) {
 		LOG_ERR("ANT+ network key rejected - self channels will hear "
 			"nothing");

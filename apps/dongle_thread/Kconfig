@@ -596,6 +596,32 @@ config ANT_DONGLE_PAIRING_WINDOW_S
 	  the promiscuous ingest the rule forbids, arrived at through a board
 	  file.
 
+config ANT_DONGLE_PAIRING_WINDOW_AT_BOOT
+	bool "BENCH ONLY: open the pairing window at boot, with no button press"
+	depends on ANT_DONGLE_SELF_CHANNELS > 0
+	help
+	  A bench instrument, not a feature - the same shape and the same
+	  posture as ANT_DONGLE_THREAD_COEX_LOAD. Off by default, selected by
+	  no shipping image, and it logs a warning naming this symbol so a
+	  console capture can never be mistaken for one from a normal build.
+
+	  It exists because of a real gap in what can be tested. The liveness
+	  STALE path is the one thing in the bridge that cannot be verified
+	  without a binding; a binding needs the pairing window; and the window
+	  needs a finger on sw0. That is correct for the product and is what
+	  section 10.1 rule 1 requires - but it puts the single most important
+	  bridge test out of reach of an automated bench, and an untested STALE
+	  producer is indistinguishable from an absent one.
+
+	  IT DOES NOT WEAKEN THE RULE IT WORKS AROUND. The window still opens
+	  exactly once, still expires after ANT_DONGLE_PAIRING_WINDOW_S, and
+	  still binds only devices acquired while it is open. What changes is
+	  who opened it. The promiscuous ingest section 10.1 forbids is a
+	  window that never closes, and this is not that.
+
+	  If you are reading this in a build you did not make, the image was
+	  built for a bench test and should not be shipped.
+
 config ANT_DONGLE_MQTT_SINK
 	bool "Publish samples to an MQTT broker over Thread"
 	# NET_SOCKETS is deliberately NOT named here even though this sink
