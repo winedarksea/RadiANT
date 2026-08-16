@@ -72,6 +72,24 @@ static const struct bt_data ad[] = {
 		sizeof(CONFIG_BT_DEVICE_NAME) - 1u),
 };
 
+/*
+ * ONE definition of what "advertising" means for this node, used both at
+ * start-up and when restarting after a disconnect. Kept as a single function
+ * on purpose: two copies of the parameter setup would let the post-disconnect
+ * advertiser drift to a different interval from the boot-time one, and the
+ * interval here is not cosmetic - it IS this application's share of the MPSL
+ * arbitration against the ANT+ master, per the header comment above.
+ */
+static int adv_start(void)
+{
+	struct bt_le_adv_param param = *BT_LE_ADV_CONN_FAST_1;
+
+	param.interval_min = ADV_UNITS(CONFIG_HRM_BLE_ADV_INTERVAL_MS);
+	param.interval_max = ADV_UNITS(CONFIG_HRM_BLE_ADV_INTERVAL_MS) + 16u;
+
+	return bt_le_adv_start(&param, ad, ARRAY_SIZE(ad), NULL, 0);
+}
+
 static void on_connected(struct bt_conn *conn, uint8_t err)
 {
 	if (err != 0u) {
@@ -86,10 +104,52 @@ static void on_connected(struct bt_conn *conn, uint8_t err)
 	 * the gate seam exists to avoid. */
 }
 
+/*
+ * ADVERTISING DOES NOT COME BACK BY ITSELF, and this is the whole reason this
+ * work item exists. Zephyr stops a connectable advertiser when a connection is
+ * established and does NOT resume it on disconnect: the old auto-resume
+ * behaviour behind BT_LE_ADV_OPT_CONNECTABLE is gone, so restarting is the
+ * application's job.
+ *
+ * Observed on real hardware, 2026-08-16, and it is exactly as bad as it
+ * sounds: a phone found "RadiANT HR", connected, read a heart rate, and after
+ * disconnecting the node was invisible to every scanner until it was power
+ * cycled. A heart-rate strap that can be paired once per boot is not a strap.
+ * There is no log evidence either, because the node goes on transmitting ANT+
+ * perfectly - which is precisely the silent-failure shape the BUILD_ASSERT on
+ * the name length above was written to prevent, arrived at from a different
+ * direction.
+ *
+ * Restarted from a work item rather than inline: this callback runs in the
+ * Bluetooth RX thread's context, and bt_le_adv_start() there re-enters the
+ * host from its own callback. The system work queue is the ordinary Zephyr
+ * idiom for handing work out of a BT callback, and it costs nothing here.
+ */
+static void adv_restart_fn(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	int err = adv_start();
+
+	if (err == -EALREADY) {
+		/* Something already restarted it; not an error. */
+		return;
+	}
+	if (err != 0) {
+		LOG_ERR("bt_le_adv_start after disconnect: %d", err);
+		return;
+	}
+	LOG_INF("BLE: advertising again after disconnect");
+}
+
+static K_WORK_DEFINE(adv_restart_work, adv_restart_fn);
+
 static void on_disconnected(struct bt_conn *conn, uint8_t reason)
 {
+	ARG_UNUSED(conn);
 	atomic_set(&connected, 0);
 	LOG_INF("BLE disconnected (0x%02x)", reason);
+	k_work_submit(&adv_restart_work);
 }
 
 /*
@@ -208,7 +268,6 @@ void hrm_ble_notify_hr(uint8_t bpm)
 
 int hrm_ble_start(void)
 {
-	struct bt_le_adv_param param = *BT_LE_ADV_CONN_FAST_1;
 	int err;
 
 	err = bt_enable(NULL);
@@ -217,10 +276,7 @@ int hrm_ble_start(void)
 		return err;
 	}
 
-	param.interval_min = ADV_UNITS(CONFIG_HRM_BLE_ADV_INTERVAL_MS);
-	param.interval_max = ADV_UNITS(CONFIG_HRM_BLE_ADV_INTERVAL_MS) + 16u;
-
-	err = bt_le_adv_start(&param, ad, ARRAY_SIZE(ad), NULL, 0);
+	err = adv_start();
 	if (err != 0) {
 		LOG_ERR("bt_le_adv_start: %d", err);
 		return err;

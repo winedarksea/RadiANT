@@ -940,6 +940,10 @@ static void on_connected(struct bt_conn *conn, uint8_t err)
 	LOG_INF("BLE connected");
 }
 
+/* Defined further down, beside the advertising parameters it restarts - the
+ * AD and scan-response arrays it needs are declared after this callback. */
+static void adv_restart_submit(void);
+
 static void on_disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	atomic_dec(&connections);
@@ -948,6 +952,7 @@ static void on_disconnected(struct bt_conn *conn, uint8_t reason)
 		controller = NULL;
 	}
 	LOG_INF("BLE disconnected (0x%02x)", reason);
+	adv_restart_submit();
 }
 
 /*
@@ -1072,6 +1077,67 @@ static const struct bt_data sd[] = {
 		sizeof(CONFIG_BT_DEVICE_NAME) - 1u),
 };
 
+/*
+ * ONE definition of what "advertising" means here, shared by start-up and by
+ * the post-disconnect restart below - see the restart work item for why that
+ * restart has to exist at all. Two copies would let the two advertisers drift
+ * apart, and on this application family the interval is the MPSL arbitration
+ * policy against the ANT+ masters, not a power tweak.
+ */
+static int adv_start(void)
+{
+	struct bt_le_adv_param param = *BT_LE_ADV_CONN_FAST_1;
+
+	param.interval_min = ADV_UNITS(CONFIG_TREADMILL_BLE_ADV_INTERVAL_MS);
+	param.interval_max = ADV_UNITS(CONFIG_TREADMILL_BLE_ADV_INTERVAL_MS) +
+			     16u;
+
+	/* A NON-NULL `sd` IS THE WHOLE CHANGE that makes this advertiser
+	 * scannable - see trap 7 and ADR 0017 for what it costs. */
+	return bt_le_adv_start(&param, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+}
+
+/*
+ * ADVERTISING DOES NOT COME BACK BY ITSELF. Zephyr stops a connectable
+ * advertiser on connection and does not resume it on disconnect - the old
+ * auto-resume behind BT_LE_ADV_OPT_CONNECTABLE is gone, so restarting is the
+ * application's job.
+ *
+ * Found on apps/hrm_ble on real hardware, 2026-08-16: a phone discovered the
+ * node, connected, read it, and after disconnecting the node was invisible to
+ * every scanner until power cycled. This file had the identical omission. It
+ * is worth stating why it hid for so long - the node keeps transmitting ANT+
+ * flawlessly throughout, so every ANT-side check stays green and the only
+ * symptom is on a radio nobody was watching. Same silent-failure shape the
+ * BUILD_ASSERTs above guard from the other direction.
+ *
+ * Out of the BT RX thread via the system work queue rather than inline,
+ * because this callback runs in that thread and bt_le_adv_start() there
+ * re-enters the host from its own callback.
+ */
+static void adv_restart_fn(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	int err = adv_start();
+
+	if (err == -EALREADY) {
+		return;
+	}
+	if (err != 0) {
+		LOG_ERR("bt_le_adv_start after disconnect: %d", err);
+		return;
+	}
+	LOG_INF("BLE: advertising again after disconnect");
+}
+
+static K_WORK_DEFINE(adv_restart_work, adv_restart_fn);
+
+static void adv_restart_submit(void)
+{
+	k_work_submit(&adv_restart_work);
+}
+
 bool treadmill_ble_connected(void)
 {
 	return atomic_get(&connections) != 0;
@@ -1099,7 +1165,6 @@ static const struct bt_rscs_cp_cb rscs_cp_cb = {
 
 int treadmill_ble_start(void)
 {
-	struct bt_le_adv_param param = *BT_LE_ADV_CONN_FAST_1;
 	struct bt_rscs_init_params rscs_params;
 	int                        err;
 
@@ -1144,13 +1209,7 @@ int treadmill_ble_start(void)
 		return err;
 	}
 
-	param.interval_min = ADV_UNITS(CONFIG_TREADMILL_BLE_ADV_INTERVAL_MS);
-	param.interval_max = ADV_UNITS(CONFIG_TREADMILL_BLE_ADV_INTERVAL_MS) +
-			     16u;
-
-	/* A NON-NULL `sd` IS THE WHOLE CHANGE that makes this advertiser
-	 * scannable - see trap 7 and ADR 0017 for what it costs. */
-	err = bt_le_adv_start(&param, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+	err = adv_start();
 	if (err != 0) {
 		LOG_ERR("bt_le_adv_start: %d", err);
 		return err;
