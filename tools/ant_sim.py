@@ -861,6 +861,220 @@ class AssetTagSensor(Sensor):
         return body
 
 
+class TreadmillSensor(Sensor):
+    """Fitness Equipment Control, device type 0x11, as a TREADMILL.
+
+    The receiving-side counterpart of apps/treadmill's FE-C master, and the
+    instrument for two things a bench needs and cannot otherwise get: a second
+    FE-C source to test a dongle against without a second DK, and N synthetic
+    treadmills for the binding-table scaling measurement that
+    docs/treadmill-reference-design.md 8 says has to happen before anybody
+    promises a gym anything.
+
+    IT IGNORES --watts AND --cadence, AND THAT IS DELIBERATE. Every profile in
+    this file takes the same five positional arguments and the base class's own
+    comment says a sixth must not be added, so a treadmill's belt speed has
+    nowhere to arrive from. It runs its own workout instead - the same 150 s
+    profile apps/treadmill's simulator runs, so a capture from this and a
+    capture from the firmware are the same shape of stream.
+
+    THE INTERLEAVE HERE IS THE BASE CLASS'S, NOT SS10.1's. Sensor._choose_payload()
+    sends the common pages every 121 messages; FE-C wants them every 66, as two
+    consecutive background pages. That difference is real and it is left alone:
+    this is a stimulus generator for a receiver, and a receiver does not care.
+    The firmware's own interleave is the one that has to be right, and
+    radiant/tests/src/test_profile_fec_tx.c is what measures it.
+    """
+
+    device_type = ap.FEC_DEVICE_TYPE
+    period = ap.FEC_PERIOD
+    label = "fitness equipment (treadmill), device type 0x11"
+
+    # The same five-message group apps/treadmill uses: two page 16, two page
+    # 19, one page 17. The 80/81 pair rides the base class's own cadence.
+    ROTATION = (ap.PAGE_FEC_GENERAL, ap.PAGE_FEC_GENERAL,
+                ap.PAGE_FEC_TREADMILL, ap.PAGE_FEC_TREADMILL,
+                ap.PAGE_FEC_SETTINGS)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.speed_mm_s = 0.0
+        self.incline_centi = 0
+        self.distance_mm = 0.0
+        self.elapsed_ms = 0.0
+        self.strides = 0.0
+        self.pos_vertical_mm = 0.0
+        self.neg_vertical_mm = 0.0
+        self.state = ap.FEC_STATE_READY
+        self.slot = 0
+
+    def advance(self, dt: float) -> None:
+        cycle = self.t % 150.0
+        if cycle < 10.0:
+            want, state = 0.0, ap.FEC_STATE_READY
+        elif cycle < 40.0:
+            want, state = 1400.0, ap.FEC_STATE_IN_USE
+        elif cycle < 100.0:
+            want, state = 3000.0, ap.FEC_STATE_IN_USE
+        elif cycle < 130.0:
+            want, state = 1200.0, ap.FEC_STATE_IN_USE
+        else:
+            want, state = 0.0, ap.FEC_STATE_FINISHED
+
+        # Ramp at 300 mm/s per second, as a real belt does. A treadmill that
+        # jumped from 0 to 3 m/s would throw its rider off, and a receiver
+        # tested only against step changes has never seen an intermediate
+        # value.
+        step = 300.0 * dt
+        self.speed_mm_s += max(-step, min(step, want - self.speed_mm_s))
+        self.state = state
+
+        if state == ap.FEC_STATE_IN_USE:
+            self.elapsed_ms += dt * 1000.0
+        tick_mm = self.speed_mm_s * dt
+        self.distance_mm += tick_mm
+        # Grade is a percent in HUNDREDTHS, so the divisor is 10000 and not
+        # 100 - the same trap treadmill_state.c carries the comment for.
+        vertical = tick_mm * self.incline_centi / 10000.0
+        if vertical >= 0:
+            self.pos_vertical_mm += vertical
+        else:
+            self.neg_vertical_mm -= vertical
+        # Strides, not steps. Roughly 62.6 + 6.1 * v strides/min.
+        if self.speed_mm_s >= 500.0:
+            self.strides += (62.6 + 6.1 * self.speed_mm_s / 1000.0) * dt / 60.0
+
+    def data_page(self) -> bytes:
+        page = self.ROTATION[self.slot % len(self.ROTATION)]
+        self.slot += 1
+
+        if page == ap.PAGE_FEC_GENERAL:
+            return ap.encode_fec_general(
+                ap.FEC_TYPE_TREADMILL,
+                elapsed_time_qs=int(self.elapsed_ms / 250.0) & 0xFF,
+                distance_m=int(self.distance_mm / 1000.0) & 0xFF,
+                speed_mm_s=int(self.speed_mm_s),
+                heart_rate=None,
+                state=self.state)
+        if page == ap.PAGE_FEC_TREADMILL:
+            cadence = None
+            if self.speed_mm_s >= 500.0:
+                cadence = int(round(62.6 + 6.1 * self.speed_mm_s / 1000.0))
+            return ap.encode_fec_treadmill(
+                cadence,
+                neg_vertical_dm=int(self.neg_vertical_mm / 100.0) & 0xFF,
+                pos_vertical_dm=int(self.pos_vertical_mm / 100.0) & 0xFF,
+                state=self.state,
+                capabilities=(ap.FEC_TREADMILL_CAP_NEG_VERTICAL |
+                              ap.FEC_TREADMILL_CAP_POS_VERTICAL))
+        stride_cm = 0
+        if self.strides >= 1.0:
+            stride_cm = min(255, int(self.distance_mm / self.strides / 10.0))
+        return ap.encode_fec_settings(stride_cm or None, self.incline_centi,
+                                      None, self.state)
+
+
+class StrideSensor(Sensor):
+    """Stride Based Speed and Distance, device type 0x7C.
+
+    The other half of apps/treadmill's ANT+ surface, and the one a watch or
+    Zwift Run pairs with. Same workout as TreadmillSensor above and the same
+    reason for ignoring --watts and --cadence.
+
+    THE PERIOD IS 8134 AND IT IS NOT A TYPO. It is close enough to heart
+    rate's 8070 and FE-C's 8192 to read as one in a diff, and a receiver told
+    either of those never opens the channel at all - with nothing on either
+    side naming the period as the reason.
+
+    AND THERE IS NO 0xFF SENTINEL ANYWHERE ON THIS PROFILE. An unused field is
+    zero and validity is out of band in page 22, which is the reverse of every
+    other profile in this file.
+    """
+
+    device_type = ap.SDM_DEVICE_TYPE
+    period = ap.SDM_PERIOD
+    label = "stride-based speed and distance, device type 0x7C"
+
+    # 1, 1, X, X - the profile's own interleave, with X alternating between
+    # page 2 and page 3 group by group.
+    GROUP = 4
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.speed_mm_s = 0.0
+        self.distance_mm = 0.0
+        self.elapsed_ms = 0.0
+        self.strides = 0.0
+        self.calories = 0.0
+        self.slot = 0
+        self.group = 0
+
+    def advance(self, dt: float) -> None:
+        cycle = self.t % 150.0
+        if cycle < 10.0:
+            want = 0.0
+        elif cycle < 40.0:
+            want = 1400.0
+        elif cycle < 100.0:
+            want = 3000.0
+        elif cycle < 130.0:
+            want = 1200.0
+        else:
+            want = 0.0
+
+        step = 300.0 * dt
+        self.speed_mm_s += max(-step, min(step, want - self.speed_mm_s))
+        self.elapsed_ms += dt * 1000.0
+        self.distance_mm += self.speed_mm_s * dt
+        if self.speed_mm_s >= 500.0:
+            self.strides += (62.6 + 6.1 * self.speed_mm_s / 1000.0) * dt / 60.0
+        # ~13 kcal/min while running, the same order the firmware's ACSM
+        # estimate produces. A stimulus generator does not need the equation.
+        if self.speed_mm_s > 0:
+            self.calories += 13.0 * dt / 60.0
+
+    def _cadence_16(self) -> int:
+        if self.speed_mm_s < 500.0:
+            return 0
+        return int(round((62.6 + 6.1 * self.speed_mm_s / 1000.0) * 16))
+
+    def data_page(self) -> bytes:
+        position = self.slot % self.GROUP
+        self.slot += 1
+        if position == self.GROUP - 1:
+            self.group += 1
+
+        speed_int, speed_frac = ap.sdm_speed_split(
+            min(int(self.speed_mm_s), ap.SDM_SPEED_MAX_MM_S))
+
+        if position < 2:
+            return ap.encode_sdm_default(
+                time_frac_200=int((self.elapsed_ms % 1000.0) *
+                                  ap.SDM_TIME_FRAC_DEN / 1000.0),
+                time_s=int(self.elapsed_ms / 1000.0) & 0xFF,
+                distance_m=int(self.distance_mm / 1000.0) & 0xFF,
+                distance_frac_16=int((self.distance_mm % 1000.0) *
+                                     ap.SDM_DIST_FRAC_DEN / 1000.0),
+                speed_int_mps=speed_int, speed_frac_256=speed_frac,
+                strides=int(self.strides) & 0xFF,
+                # 1/32 s of staleness, which is the firmware's node tick.
+                latency_32=3)
+
+        cadence_16 = self._cadence_16()
+        page = (ap.PAGE_SDM_CALORIES if (self.group % 2)
+                else ap.PAGE_SDM_BASE)
+        return ap.encode_sdm_supplementary(
+            page,
+            cadence_strides_min=cadence_16 // 16,
+            cadence_frac_16=cadence_16 % 16,
+            speed_int_mps=speed_int, speed_frac_256=speed_frac,
+            status=ap.sdm_status(ap.SDM_LOC_OTHER, ap.SDM_BATTERY_NEW,
+                                 ap.SDM_HEALTH_OK,
+                                 ap.SDM_USE_ACTIVE if self.speed_mm_s > 0
+                                 else ap.SDM_USE_INACTIVE),
+            calories=int(self.calories) & 0xFF)
+
+
 SENSORS = {
     "power": StandardPowerSensor,
     "power-torque": TorquePowerSensor,
@@ -869,6 +1083,12 @@ SENSORS = {
     "heart-rate": HeartRateSensor,
     "telemetry": TelemetrySensor,
     "asset-tag": AssetTagSensor,
+    # apps/treadmill's two masters, as stimulus for a receiver. Two --profile
+    # arguments run both at once, which is the mix nothing in this project has
+    # measured - 8192 and 8134 counts beat against each other with a period of
+    # about 32 s.
+    "fec-treadmill": TreadmillSensor,
+    "sdm": StrideSensor,
 }
 
 # Which profiles --attest can be applied to. Device type 0x79 is absent

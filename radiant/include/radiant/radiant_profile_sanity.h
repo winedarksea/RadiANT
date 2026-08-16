@@ -60,6 +60,31 @@ extern "C" {
  * mis-repair. See the header comment for the figure's origin. */
 #define RADIANT_PROFILE_SANITY_HR_MAX_BPM 240u
 
+/* Fitness Equipment Control, added with apps/treadmill. */
+#define RADIANT_PROFILE_SANITY_DEVTYPE_FEC 0x11u /* fitness equipment */
+
+/* General FE Data, the one page every FE type must send (section 8.5.2) and
+ * the only broadcast page on this device type carrying an instantaneous
+ * quantity with a physical ceiling. Matches PROFILE_FEC_PAGE_GENERAL and
+ * tools/ant_pages.py's PAGE_FEC_GENERAL. */
+#define RADIANT_PROFILE_SANITY_PAGE_FEC_GENERAL 0x10u
+
+/*
+ * Instantaneous speed, bytes 4-5 of page 16, in 0.001 m/s. 30000 is 30 m/s -
+ * 108 km/h, comfortably above any treadmill, rower or trainer and comfortably
+ * below the field's own 65.534 m/s ceiling, so a repaired frame that landed a
+ * bit flip in the high byte is caught while every real reading passes.
+ *
+ * GRADE IS DELIBERATELY NOT REPRESENTED HERE, and the reason is structural
+ * rather than an omission. The only grade on the air is FE-C page 51, which is
+ * an ACKNOWLEDGED command from a controller and never a repaired broadcast, so
+ * this gate never sees one. Page 17's incline is a report and IS a broadcast,
+ * but its plausible range and its encodable range are the same +-100.00 % -
+ * there is no headroom to test against, and a check with no rejectable input
+ * is a check that only looks like one.
+ */
+#define RADIANT_PROFILE_SANITY_FEC_MAX_MM_S 30000u
+
 /*
  * True if this payload is a value this module judges and that value is out
  * of range for the claimed device type. False for everything else

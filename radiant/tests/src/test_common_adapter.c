@@ -1,38 +1,5 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
- *
- * Provenance: the primary document, `ANT+ Common Data Pages` D00001198
- * Rev 3.1 - section 4 Table 4-1 (the page-range rule), section 6.13
- * Tables 6-16/6-17 (page 84's layout and subpage catalogue) and section 6.13.1
- * Figure 6-8 (the worked example, which is this suite's acceptance test).
- * Nothing here derives from sdk-ant.
- *
- * Tests for radiant/src/profiles/profile_common.c's page-84 decoder and
- * radiant/src/bridge/radiant_common_adapter.c.
- *
- * ---------------------------------------------------------------------------
- * WHAT THIS SUITE CAN AND CANNOT REACH
- * ---------------------------------------------------------------------------
- * The architectural claim of this package is that page 84 decodes on EVERY
- * bound channel regardless of device type, because Table 4-1 keys the common
- * range on transmission type. The code that makes that true is the dispatch in
- * apps/dongle_thread/src/rx_tap.c, and this test application does not build
- * apps/dongle_thread - ant_dongle_rx_tap() is not a symbol here and cannot be.
- *
- * So the claim is asserted one level down, at the adapter plus a real binding
- * carrying devtype 0x0B: a power meter's binding, a page-84 broadcast, a
- * humidity sample on that source. That pins everything the dispatch hands over
- * and everything downstream of it. The dispatch ITSELF - the range test running
- * before the devtype switch, and returning rather than falling through - is
- * covered by the build (rx_tap.c does not compile without it) and by hardware
- * step G5, which replays page 84 onto a power-meter channel from
- * tools/ant_sim.py and looks for the entity. Written down because a reader who
- * greps for "rx_tap" here and finds nothing should learn why, not conclude the
- * path is untested.
- *
- * The golden vector is duplicated in tools/test_ant_pages.py against the Python
- * mirror, deliberately: two independent transcriptions of one figure disagree
- * loudly, one transcription is just a number.
  */
 
 #include <errno.h>

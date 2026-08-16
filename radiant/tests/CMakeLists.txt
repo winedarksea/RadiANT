@@ -128,6 +128,19 @@ target_sources(app PRIVATE
   # than a missing test, and this file has already been that once.
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_fec.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_env.c"
+  # The treadmill's two masters. profile_fec_tx.c is the TRANSMIT half of
+  # 0x11, deliberately a separate translation unit from profile_fec.c above
+  # (the same split profile_power_decode.c makes) so that a receiver links a
+  # decoder and a treadmill links an encoder and neither drags in the other.
+  # profile_sdm.c is Stride Based Speed and Distance, 0x7C, which had no
+  # implementation anywhere in this tree before apps/treadmill.
+  #
+  # Both are pure page codecs plus a profile_sched client, reaching no radiant
+  # header - the same claim the four files above make. Listed here for the
+  # reason the profile_rd.c line records: the suites are globbed and the
+  # implementations are not.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_fec_tx.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_sdm.c"
   # Bicycle Power's page 0x10 decoder, deliberately NOT in profile_power.c -
   # see that file's own note. This application links both halves; a receiver
   # links only this one.

@@ -161,8 +161,8 @@ config RADIANT_BACKEND_CC26XX
 
 endchoice
 
-# â”€â”€ CC26xx PHY bench-sweep overrides, outside the choice for the same reason
-#    the coex symbols below are â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# -------- CC26xx PHY bench-sweep overrides, outside the choice for the same reason
+#    the coex symbols below are --------
 #
 # Phase C of the CC26xx plan (docs/decisions/0014, "still owed": closing loss
 # below ~3.7% needs a paced-transmitter rxBw/AGC re-sweep). Every one of these
@@ -215,8 +215,8 @@ config RADIANT_CC26XX_RX_END_SLOP_US
 	  bounds it from above but says nothing below 500; sweepable at
 	  250/500/750 is Phase C's own instruction.
 
-# â”€â”€ 802.15.4 coexistence on the TI arm, and it has to live OUTSIDE the choice,
-#    same reason RADIANT_BACKEND_NRF_GATE_MPSL does below â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# -------- 802.15.4 coexistence on the TI arm, and it has to live OUTSIDE the choice,
+#    same reason RADIANT_BACKEND_NRF_GATE_MPSL does below --------
 #
 # NOT `depends on RADIANT_BACKEND_CC26XX`, same Kconfig-dependency-loop
 # reason as the MPSL gate: the relationship is enforced in CMakeLists.txt,
@@ -299,7 +299,7 @@ config RADIANT_COEX154_CC26XX_FORK
 	  frame has ever been received through this file after a preemption. Do
 	  not read a coexistence number off arm 4 without one.
 
-# â”€â”€ A setting of the nrf arm, and it has to live OUTSIDE the choice â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# -------- A setting of the nrf arm, and it has to live OUTSIDE the choice --------
 #
 # It used to be inside it, between the nrf arm and `endchoice`, and that was a
 # latent Kconfig dependency loop that only became fatal when a third arm was
@@ -324,7 +324,7 @@ config RADIANT_BACKEND_NRF_IRQ_PRIO
 	  the only path that meets a 1.55 ms acknowledged-data turnaround.
 	  Lower this only with a measurement in hand.
 
-# â”€â”€ Who owns the RADIO â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# -------- Who owns the RADIO --------
 #
 # THIS USED TO BE A THIRD ARM OF THE CHOICE ABOVE, and moving it here is a
 # decision rather than a tidy-up. "mpsl" was written as a separate BACKEND -
@@ -386,7 +386,53 @@ config RADIANT_BACKEND_NRF_GATE_MPSL
 	  moment an empty window closes - which the backend does, and which is a
 	  required line of the design rather than an optimisation.
 
-# ── The placement lead, which turned out to be the load-bearing number ───────
+# -------- The software-interrupt trampoline (bug 27) --------
+#
+# MPSL's timeslot signal callback runs in an IRQ_ZERO_LATENCY vector, above
+# every irq_lock() and spinlock, so no kernel API may be called from it. The
+# trampoline turns "call the kernel" into "pend an ordinary interrupt", which a
+# zero-latency context can do with one register write. See
+# radiant/include/radiant/radiant_swi.h and docs/p4-zli-kernel-calls.md.
+config RADIANT_SWI
+	bool
+	default y if RADIANT_BACKEND_NRF_GATE_MPSL
+	help
+	  Not user-selectable. The trampoline is a property of being arbitrated
+	  by MPSL, not a choice: without it the ANT completion path calls
+	  k_sem_give() from a zero-latency interrupt and corrupts the kernel
+	  timeout list. Consumers test this symbol so that a non-MPSL build keeps
+	  calling the kernel directly, which is correct there.
+
+config RADIANT_SWI_IRQN
+	int "interrupt line for radiant's software trampoline"
+	depends on RADIANT_SWI
+	# SWI01. SWI00 (28) is MPSL's on this family - radiant_swi.c BUILD_ASSERTs
+	# against CONFIG_MPSL_LOW_PRIO_IRQN rather than trusting that - and
+	# nrf_802154 is on EGU10 (135), not an SWI at all. SWI02/SWI03 (30/31)
+	# are the spares if this one is ever claimed.
+	default 29 if SOC_COMPATIBLE_NRF54LX
+	# SWI4 on nRF52, one below MPSL's SWI5 (25).
+	default 24 if SOC_COMPATIBLE_NRF52X
+	default 29
+	help
+	  A line with no peripheral behind it, pended purely by software. It must
+	  not be a line any other stack claims: anything using Zephyr's
+	  IRQ_CONNECT() collides at build time in the generated ISR table, and
+	  MPSL - which connects dynamically and so would not - is checked by a
+	  BUILD_ASSERT in radiant_swi.c.
+
+config RADIANT_SWI_IRQ_PRIO
+	int "priority of radiant's software trampoline"
+	depends on RADIANT_SWI
+	default 1
+	help
+	  AN ORDINARY ZEPHYR PRIORITY, and that is the entire point: irq_lock()
+	  and every k_spin_lock() mask this line, so the kernel calls made from
+	  its handler are legal. Moving it into the zero-latency band (priority 0
+	  with CONFIG_ZERO_LATENCY_IRQS) would reintroduce exactly the fault the
+	  trampoline exists to remove. 1 matches nrf_802154's own SWI priority.
+
+# ------ The placement lead, which turned out to be the load-bearing number --------
 #
 # BUG 26. How far ahead of the requested start MPSL is TOLD about a NORMAL
 # reservation, and it is a different quantity from grant latency, which is what
@@ -546,7 +592,7 @@ config RADIANT_GATE_MPSL_NO_SESSION
 	  Never in a shipping image. A dongle built this way is a dongle that
 	  cannot receive.
 
-# â”€â”€ The ISR stack, and it is a REQUIREMENT rather than a tuning knob â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# -------- The ISR stack, and it is a REQUIREMENT rather than a tuning knob --------
 #
 # MPSL delivers SIGNAL_START on the INTERRUPT STACK, and that is where the
 # arbitrated backend programmes the peripheral - it cannot be done earlier,
@@ -567,7 +613,7 @@ config RADIANT_GATE_MPSL_NO_SESSION
 config ISR_STACK_SIZE
 	default 4096 if RADIANT_BACKEND_NRF_GATE_MPSL
 
-# â”€â”€ And the two THREAD stacks this gate runs the core from â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# -------- And the two THREAD stacks this gate runs the core from --------
 #
 # The gate defers every call into the core to a work item, because arming
 # reaches it from the RADIO interrupt inside a timeslot where the MPSL API is

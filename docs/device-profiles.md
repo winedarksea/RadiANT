@@ -126,7 +126,7 @@ invites the same proposal again in a year.
 |---|---|---|---|
 | `0x0B` | Bicycle Power | 8182 | pages `0x10`, `0x11`, `0x12`, `0x20` |
 | `0x10` | Controls | 8192 | pages `0x10`, `0x49` (command surface only) |
-| `0x11` | Fitness Equipment (FE-C) | 8192 | no — decoded in C only, `src/profiles/profile_fec.c` |
+| `0x11` | Fitness Equipment (FE-C) | 8192 | pages `0x10`, `0x11`, `0x12`, `0x13`, `0x30`–`0x33`, `0x36`, `0x37`, `0x46`, `0x47` |
 | `0x14` | Light Electric Vehicle (LEV) | — | no |
 | `0x19` | Environment | 65535 | no — decoded in C only, `src/profiles/profile_env.c` |
 | `0x1E` | Running Dynamics | 4096 | pages `0x00`, `0x01`, `0x10`, `0x20`, `0x4A` |
@@ -135,6 +135,7 @@ invites the same proposal again in a year.
 | `0x79` | Bike Speed and Cadence, combined | 8086 | the single page, which has no page number |
 | `0x7A` | Bike Cadence | 8102 | period only |
 | `0x7B` | Bike Speed | 8118 | period only |
+| `0x7C` | Stride-Based Speed and Distance | 8134 | pages `0x01`, `0x02`, `0x03`, `0x10`, `0x16` |
 | `0x7F` | Core Temperature | — | no |
 
 Period is in counts of 1/32768 s: 8182 is ~4.0049 Hz, 8086 is ~4.05 Hz, 8070 is
@@ -153,11 +154,21 @@ transcribed from their primary documents into named constants in
 `src/profiles/` (`PROFILE_FEC_PERIOD`, `PROFILE_ENV_PERIOD_4_HZ`,
 `PROFILE_ENV_PERIOD_0P5_HZ`) and both reach the acquisition table in
 `apps/dongle_thread/src/self_channels.c`, so the numbers are this project's own
-rather than something read somewhere. The last column is still `no` for both:
-the Python mirror has neither profile, so `tools/ant_pages.py` is not a second
-opinion about these bytes and the three-copy vocabulary rule does not yet apply
-to them. **`0x19`'s cell is its default and not its whole story** — see the
-permitted-periods table immediately below, and §3.7.
+rather than something read somewhere.
+
+**`0x11`'s last column changed with `apps/treadmill` and `0x19`'s has not.**
+FE-C now has an encoder (`src/profiles/profile_fec_tx.c`) *and* a Python mirror,
+so `tools/ant_pages.py` is a genuine second opinion about those bytes and the
+three-copy vocabulary rule applies to `0x11` from here on. Environment `0x19`
+is still C-only and still has one copy. **`0x19`'s period cell is its default
+and not its whole story** — see the permitted-periods table immediately below,
+and §3.7.
+
+**`0x7C` is new and was not implemented anywhere in this tree before
+`apps/treadmill`.** Its period, 8134, is close enough to `0x78`'s 8070 and
+`0x11`'s 8192 to read as a typo in a diff, and a receiver told the wrong one
+never opens the channel with nothing anywhere naming the period as the cause.
+See §3.17.
 
 ### Permitted channel periods
 
@@ -228,10 +239,7 @@ The accumulated/instantaneous pairing on one page is the canonical example of
 ANT+'s loss tolerance: the instantaneous value is a convenience, the
 accumulator is what survives a lost packet.
 
-**Page `0x10` is now decoded in C as well as encoded**, from the primary
-document (D00001086 Rev 5.1 Table 8-1, plus §8.2.1 pedal differentiation,
-§8.2.2 pedal percent, §8.3 cadence `0xFF` and §8.4's statement that accumulated
-power is "the running sum of the instantaneous power data"). The decoder lives
+**Page `0x10` is now decoded in C as well as encoded**. The decoder lives
 in `src/profiles/profile_power_decode.c` and **not** in `profile_power.c`, which
 is a link-dependency decision rather than a filing one: `profile_power.c` is the
 master — page rotation, the ANT+ compatibility layer and RadiANT beacon
@@ -998,11 +1006,7 @@ Decoded. `src/profiles/profile_env.c` (page codec, decode only) and
 `apps/dongle_thread/src/self_channels.c` carries two acquisition rows for it.
 
 **The "not derived from a primary spec" caveat this section used to carry is
-lifted.** The layouts below are now transcribed from the primary document —
-"ANT+ Managed Network Document – Environment Device Profile", **D00001502
-Rev 1.0** (marked DEPRECATED by the ANT team, which is a support statement and
-not a correctness one; the sensors are on the market and this is the layout
-they transmit) — §5.1 channel configuration, §6.3 data page 0, §6.3.1
+lifted.** — §5.1 channel configuration, §6.3 data page 0, §6.3.1
 transmission info, §6.3.2 supported pages, §6.4 data page 1, §6.5 the reserved
 range. The four converging open-source implementations previously cited here
 agreed with Table 6-4 **byte for byte**, and none of them had a placement
@@ -1436,11 +1440,10 @@ is implemented here.
 
 ### 3.16 Fitness Equipment (FE-C), device type `0x11`
 
-Decoded, receive only. `src/profiles/profile_fec.c`, surfaced by
-`radiant/src/bridge/radiant_power_adapter.c`. Transcribed from the primary
-document, D000001231 "ANT+ Device Profile – Fitness Equipment" Rev 5.0, read
-from the PDF rather than from a mirror; every layout below cites the table it
-came from. `tools/ant_pages.py` has no FE-C pages, so this is currently the only
+Decoded **and** encoded since `apps/treadmill`; the two halves are separate
+translation units and the sub-section below covers the transmit one. The
+receive half is `src/profiles/profile_fec.c`, surfaced by
+`radiant/src/bridge/radiant_power_adapter.c`. `tools/ant_pages.py` has no FE-C pages, so this is currently the only
 copy and the three-copy vocabulary rule does not yet apply to it.
 
 **Channel.** Device type `0x11` (17 decimal), RF 57, period **8192** counts —
@@ -1451,7 +1454,7 @@ being both this device type and Bicycle Power's Wheel Torque *page* number.
 and page 16 carries an explicit **equipment state** — a more direct "bike in
 use" signal than inferring one from an accumulator.
 
-#### Page `0x10` (16) — General FE Data, Table 8-7
+#### Page `0x10` (16) — General FE Data
 
 | Byte | Field | Encoding |
 |---|---|---|
@@ -1467,7 +1470,7 @@ Every FE type must send this page (§8.5.2), so a treadmill or rower still yield
 elapsed time, distance, speed, heart rate and state through it. Pages 19–24, the
 per-equipment-type pages, are not decoded.
 
-#### Page `0x19` (25) — Specific Trainer Data, Table 8-25
+#### Page `0x19` (25) — Specific Trainer Data
 
 | Byte | Field | Encoding |
 |---|---|---|
@@ -1523,11 +1526,123 @@ for a workout timer, wrong as a basis for integrating power over time — which 
 why `radiant_power_adapter.c` integrates against the bridge's own `t_us`
 instead.
 
-**What is out of scope: the whole "C" of FE-C.** Control pages 48–51, the
-command-status page 71, calibration pages `0x01`/`0x02` and the capabilities
-page 54 are not implemented. This project is a receiver; it reads a trainer's
-workout data and never tells the trainer what resistance to apply. There is no
-encoder either — nothing in this tree emulates fitness equipment.
+#### The transmit half, and the treadmill pages — `src/profiles/profile_fec_tx.c`
+
+`apps/treadmill` made this project fitness equipment as well as a receiver, so
+the paragraph that used to stand here ("there is no encoder either — nothing in
+this tree emulates fitness equipment") is retired. What replaced it is a
+**second translation unit**, deliberately not an extension of
+`profile_fec.c`: a receiver links the decoder and a treadmill links the
+encoder, which is the same split `profile_power_decode.c` makes against
+`profile_power.c`, and the linker is what enforces it.
+
+| Page | Name | What it carries |
+|---|---|---|
+| `0x11` (17) | General Settings | Cycle length (stride length, 0.01 m); **incline, sint16 LE, 0.01 %, invalid `0x7FFF`**; resistance level |
+| `0x12` (18) | General FE Metabolic | METs (0.01), caloric burn rate (0.1 kcal/h), accumulated calories. Optional |
+| `0x13` (19) | Specific Treadmill Data | Cadence in **strides**/min; negative and positive vertical distance, both unsigned accumulators in 0.1 m |
+| `0x36` (54) | FE Capabilities | Maximum resistance; **byte 7 bit 2 = Simulation mode** |
+| `0x47` (71) | Command Status | Last command id, sequence, status, and a **four-byte echo of the command's own bytes 4–7** |
+| `0x30`–`0x33` (48–51) | Basic Resistance, Target Power, Wind Resistance, **Track Resistance** | Decoded. They arrive as acknowledged data from a controller |
+| `0x37` (55) | User Configuration | Decoded, user weight only |
+| `0x46` (70) | Request Data Page | Decoded; drives on-request delivery of 54, 71, 80 and 81 |
+
+**Track Resistance is the incline command, and the specification says so.**
+§8.8.4.1 (p.58): *"Controllable fitness equipment that is capable of adjusting
+the incline directly should apply the grade simulation parameter in this way.
+Other fitness equipment that is not capable of adjusting the incline (e.g.
+controllable trainers) shall use the grade field to calculate gravitational
+resistance to apply to the user."* Page 51 is written treadmill-first and the
+trainer reading is the fallback, so **no spec extension and no RadiANT-private
+incline page is needed** — see
+[ADR 0017](decisions/0017-fec-treadmill-control.md).
+
+**Grade and incline are the same quantity with different encodings, different
+ranges and different sentinels.** This is the trap of the transmit half:
+
+| | Page 51 grade | Page 17 incline |
+|---|---|---|
+| Type | **unsigned** u16, biased | **two's complement** sint16 |
+| Scale | `Grade% = raw × 0.01 − 200.00` | 0.01 % directly |
+| Zero | `0x4E20` (20000) | `0x0000` |
+| Range | ±200.00 % | ±100.00 % (§10.1.2.1) |
+| Invalid | `0xFFFF` → *assume flat* | `0x7FFF` → *cannot report* |
+
+`0xFFFF` read as an incline is −0.01 %, and `0x7FFF` read as a grade is
++127.11 %. Each is a legal-looking reading of the other's sentinel, and neither
+produces an error anywhere.
+
+**The interleave is a spec requirement, and it is not the 119/120/121 cadence
+`profile_sched.c` implements.** §10.1 (p.68): page 16 twice consecutively every
+4 messages *or* once every 5th; the equipment-specific page (19 for a
+treadmill) at least once every 5; pages 17 and 18 at least once every 20;
+common 80 and 81 as **two consecutive** background pages every **66**. 66 is not
+121 and the engine's placement is hard-coded, so FE-C leaves `common_80`/
+`common_81` NULL and claims those two slots through the client seam instead.
+`radiant/tests/src/test_profile_fec_tx.c` measures the worst gap of each rule
+over 264 messages rather than trusting the schedule to be right by
+construction.
+
+**Certification, recorded because it is a process fact and not a wire fact.**
+§10.1.3.1 (p.69) says *"At this time, only trainer fitness equipment types may
+support the controllable fitness equipment use case."* The certification
+programme closed on 2025-06-30 and this project does not certify, so the note
+constrains nothing technically. It is written down in ADR 0017 so a future
+reader finds it rather than rediscovering it.
+
+**Still out of scope:** calibration pages `0x01`/`0x02`, the torque page `0x1A`,
+and the equipment-specific pages for the other machine types (20–24).
+
+### 3.17 Stride-Based Speed and Distance (SDM), device type `0x7C`
+
+Implemented (encode) in `src/profiles/profile_sdm.c`, mirrored in
+`tools/ant_pages.py`.
+
+**Why a treadmill emits this beside FE-C.** FE-C is what a control-capable head
+unit pairs with; SDM is what everything that only knows foot pods pairs with,
+which includes Zwift Run and most watches. Two device types, two periods, no
+shared page space — so `apps/treadmill` runs two independent masters rather
+than one channel with a wider page set.
+
+**Channel.** Device type `0x7C` (124), transmission type 5, RF 57, period
+**8134** (~4.03 Hz).
+
+| Page | Name | Encoding |
+|---|---|---|
+| `0x01` (1) | Default Data | `[1]` time 1/200 s, `[2]` time s, `[3]` distance m, `[4]` distance 1/16 m **high nibble** + speed m/s **low nibble**, `[5]` speed 1/256 m/s, `[6]` **stride count**, `[7]` update latency 1/32 s |
+| `0x02` (2) | Base | `[3]` cadence strides/min, `[4]` cadence 1/16 high + speed integer low, `[5]` speed 1/256, `[7]` status. `[1]`, `[2]`, `[6]` reserved **`0x00`** |
+| `0x03` (3) | Calories | Page 2's template with accumulated kcal in `[6]` |
+| `0x10` (16 dec) | Distance and Strides Summary | `[1..3]` strides, 24-bit LE; `[4..7]` distance, 32-bit LE, 1/256 m. Request-only |
+| `0x16` (22 dec) | Capabilities | `[1]` flag bits for time / distance / speed / latency / cadence / calories. **Required on request** |
+
+**Four things here are the opposite of every other profile in this document.**
+
+1. **The period is 8134**, not 8070 and not 8192. A wrong channel period does
+   not fail loudly — the channel simply never opens, and nothing on either side
+   names the period as the reason.
+2. **There is no `0xFF` invalid convention.** An unused field is `0x00` and
+   validity is out of band, in page 22's capability bits. `0xFF` in a cadence
+   byte is a real 255 strides/min. This is the reverse of §3.16's FE-C rule and
+   of §3.11's, and it is the profile's, not an error.
+3. **"Page 16" is `0x10` and "page 22" is `0x16`** — the same two digits. The
+   document names pages in decimal and the wire carries hex, so the summary
+   page and the capabilities page swap places for anybody who reads one number
+   in the other base.
+4. **Strides are not steps.** One stride is two footfalls, so a runner at 170
+   steps per minute is at 85 strides per minute here. FE-C page 19 also counts
+   strides; **BLE RSC counts steps** and every real client expects steps there.
+   One conversion, one direction, one helper —
+   `treadmill_rsc_cadence_from_strides()` in `apps/treadmill` — or exactly one
+   of the three outputs this project emits will be wrong by a factor of two.
+
+**The interleave** is `1, 1, X, X` repeating for 64 messages, then pages 80 and
+81 twice consecutively: a 66-message cycle, where X alternates between page 2
+and page 3 group by group. As with FE-C, 66 is not 121, so the common pair
+rides `profile_sched.c`'s client seam rather than its built-in cadence.
+
+**Status byte** (`[7]` of pages 2 and 3): bits 7..6 location, 5..4 battery,
+3..2 health, 1..0 use state. A treadmill reports location **Other** — it is not
+on anybody's shoe — and battery **New**, because it is on mains.
 
 ---
 
@@ -2072,6 +2187,8 @@ is not recycled.
 | `src/profiles/profile_power.c` | ANT+ bicycle power `0x0B`, transmit side |
 | `src/profiles/profile_power_decode.c` | ANT+ bicycle power page `0x10`, receive side — its own translation unit so a receiver does not link a transmitter (§3.1) |
 | `src/profiles/profile_fec.c` | ANT+ fitness equipment `0x11`, pages 16 and 25, decode only (§3.16) |
+| `src/profiles/profile_fec_tx.c` | ANT+ fitness equipment `0x11`, the **transmit** half: a treadmill's pages 16, 17, 18, 19, 54 and 71, plus decoders for control pages 48–51, 55 and 70 (§3.16) |
+| `src/profiles/profile_sdm.c` | ANT+ stride-based speed and distance `0x7C`, pages 1, 2, 3, 16 and 22 (§3.17) |
 | `src/profiles/profile_env.c` | ANT+ Environment `0x19`, pages 0 and 1, decode only (§3.7) |
 | `src/profiles/profile_common.c` | Common pages 80, 81, 82 (encode) and 84 (decode) — two provenances, kept separate (§3.4) |
 | `src/profiles/profile_telemetry.c` | The `0x60` envelope, and therefore every profile in sections 5 and 6 |
@@ -2113,16 +2230,16 @@ is the change that matters more than the depth column did.
 
 | Device type | Name | Depth here | Confidence |
 |---|---|---|---|
-| `0x0B` | Bicycle Power | Implemented (encode), and page `0x10` now decoded from the primary D00001086 Rev 5.1, §3.1 | — |
+| `0x0B` | Bicycle Power | Implemented (encode) | — |
 | `0x10` | Controls | Implemented (command surface only), §3.14 | — |
-| `0x11` | Fitness Equipment (FE-C) | Decoded (pages 16 and 25), §3.16 | primary spec (D000001231 Rev 5.0) |
+| `0x11` | Fitness Equipment (FE-C) | Decoded | community |
 | `0x12` | Blood Pressure | Not implemented; forward-noted §5.1 as the next profile that would inherit CGM's mandatory-`X_AUTH` rule | community + open-source, type only — no page layout found anywhere |
 | `0x13` | Geocache | Not implemented | community |
 | `0x14` | Light Electric Vehicle | Not implemented, reference-only §3.6 | primary spec |
-| `0x19` | Environment | Decoded (pages 0 and 1), §3.7 | primary spec (D00001502 Rev 1.0) |
+| `0x19` | Environment | Decoded (pages 0 and 1), §3.7 | primary spec |
 | `0x1E` | Running Dynamics | Implemented, §3.13 | — |
 | `0x29` | Tracker (Asset Tracker) | Implemented, §3.15 | — |
-| `0x1F` | Muscle Oxygen | Not implemented | **vendor code** (BSX's own published source), high confidence, full page layout known but not transcribed here |
+| `0x1F` | Muscle Oxygen | Not implemented |  |
 | `0x22` | Shifting | Not implemented | open-source only |
 | `0x23` | Bike Lights | Not implemented | primary spec (publicly mirrored PDF) |
 | `0x28` | Radar | Not implemented | open-source only |
@@ -2131,7 +2248,7 @@ is the change that matters more than the depth column did.
 | `0x77` | Weight Scale | Not implemented. `docs/profile-registry.md`'s claim-range table already excludes this as part of a dense band — this row is cross-reference, not new information | community + open-source |
 | `0x78` | Heart Rate | Implemented, §3.2 | — |
 | `0x79`/`0x7A`/`0x7B` | Bike Speed and Cadence family | Implemented (combined) / period-only (cadence, speed), §3.3 | — |
-| `0x7C` | Stride-Based Speed and Distance | Not implemented | community + open-source |
+| `0x7C` | Stride-Based Speed and Distance | Implemented (encode)|
 | `0x7F` | Core Temperature | Not implemented, reference-only §3.8 | vendor code |
 | unverified | Multi-Sport Speed and Distance | Real profile, confirmed via the official list; **device type number could not be verified from any source worth trusting** — a single low-quality search result claimed `15` and is explicitly not transcribed here | unverified |
 | unverified | Racquet | Real profile, device type not found | unverified |

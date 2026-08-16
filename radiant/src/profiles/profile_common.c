@@ -7,11 +7,7 @@
  * in tools/ant_pages.py (encode_common_80/81/82), which are this project's own
  * prior derivation. See the header for the full note and for why the serial
  * number's sentinel is a privacy rule rather than a convenience.
- *
- * profile_common_decode_84() has a DIFFERENT provenance - the primary
- * document, D00001198 Rev 3.1 section 6.13 - and its mirror is
- * tools/ant_pages.py's decode_common_84(). The header states the split; it is
- * restated here because this is the file a clean-room audit greps.
+
  */
 
 #include <errno.h>

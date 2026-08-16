@@ -3,13 +3,6 @@
  * radiant_common_adapter.h - ANT+ Common Data Pages (0x40-0x5D) onto the
  * sample bus.
  *
- * Provenance: `ANT+ Common Data Pages`, D00001198 Rev 3.1 - section 4
- * Table 4-1 for the page range, section 6.13 Tables 6-16/6-17 for page 84's
- * layout and subpage catalogue, section 6.13.1 for the golden vector. The byte
- * splitting itself lives in src/profiles/profile_common.c, which this file
- * includes rather than re-deriving, for the same reason radiant_rd_adapter.c
- * includes profile_rd.h: two copies of a bit split is two chances to get the
- * endianness wrong in one of them.
  *
  * No radiant header, direct or transitive - one adapter per profile, not one
  * per profile per sink. Safe from a radio ISR: no allocation, no logging, no

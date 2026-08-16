@@ -41,6 +41,18 @@ void gate_release(void)
 	/* Nothing was held. */
 }
 
+bool gate_in_signal(void)
+{
+	/*
+	 * There is no MPSL signal callback on this build and therefore no
+	 * zero-latency context: the RADIO interrupt is an ordinary Zephyr one,
+	 * where calling the core inline is correct and is what this backend has
+	 * always done. Constant false keeps the deferral out of the direct
+	 * build entirely rather than making it a runtime branch nobody takes.
+	 */
+	return false;
+}
+
 bool gate_extend(uint32_t us)
 {
 	(void)us;

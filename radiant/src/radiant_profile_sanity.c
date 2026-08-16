@@ -56,6 +56,28 @@ static bool hr_implausible(const uint8_t *payload, uint8_t payload_len)
 	return computed_hr > RADIANT_PROFILE_SANITY_HR_MAX_BPM;
 }
 
+static bool fec_implausible(const uint8_t *payload, uint8_t payload_len)
+{
+	uint16_t speed_mm_s;
+
+	if (payload_len < 8u ||
+	    payload[0] != RADIANT_PROFILE_SANITY_PAGE_FEC_GENERAL) {
+		/* Every other FE-C broadcast page is either an accumulator pair
+		 * (19's vertical distances, 25's power) or a setting whose
+		 * plausible range is its whole encodable range (17's incline).
+		 * No opinion - see the header for why grade in particular is
+		 * absent rather than forgotten. */
+		return false;
+	}
+
+	speed_mm_s = (uint16_t)(payload[4] | ((uint16_t)payload[5] << 8));
+	if (speed_mm_s == SANITY_INVALID_U16) {
+		return false;
+	}
+
+	return speed_mm_s > RADIANT_PROFILE_SANITY_FEC_MAX_MM_S;
+}
+
 bool radiant_profile_sanity_implausible(uint8_t device_type,
 					const uint8_t *payload,
 					uint8_t payload_len)
@@ -73,6 +95,8 @@ bool radiant_profile_sanity_implausible(uint8_t device_type,
 		return bpwr_implausible(payload, payload_len);
 	case RADIANT_PROFILE_SANITY_DEVTYPE_HR:
 		return hr_implausible(payload, payload_len);
+	case RADIANT_PROFILE_SANITY_DEVTYPE_FEC:
+		return fec_implausible(payload, payload_len);
 	default:
 		return false;
 	}

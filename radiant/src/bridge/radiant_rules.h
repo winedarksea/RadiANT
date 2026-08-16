@@ -12,6 +12,9 @@
  *   6.2 Zones - Karvonen (HRR) thresholds against the section's "never
  *       personalised" population prior: rest < 82 bpm, zone2+ >= 134 bpm,
  *       both gated on the same binding's worn state.
+ *   Equipment occupancy - FE-C's own state enum, which is the one input in
+ *       this module that is a report rather than an inference. See
+ *       RADIANT_RULE_FIELD_EQUIPMENT_IN_USE below.
  *
  * Not implemented:
  *   - 6.3-6.5, the personalisation histogram/NVM/eviction. What's here is
@@ -45,6 +48,34 @@ extern "C" {
 #define RADIANT_RULE_FIELD_ACTIVE       1u /* section 6.1: 0x30 energy advancing ("bike in use") */
 #define RADIANT_RULE_FIELD_AT_REST      2u /* section 6.2 */
 #define RADIANT_RULE_FIELD_ZONE2        3u /* section 6.2, "training, zone 2 or above" */
+
+/*
+ * THE FIFTH OUTPUT, AND THE ONLY ONE THAT IS NOT AN INFERENCE.
+ *
+ * section 8.2 admits the four booleans above stretch Matter's Occupancy Sensor
+ * ("a rider is occupying the trainer"). Fitness equipment is the case where
+ * that stretch disappears: FE-C page 16 byte 7 carries an explicit FE STATE -
+ * READY (2), IN_USE (3), FINISHED (4) - which is the machine's own report
+ * rather than an answer to section 6.1's "is an accumulator advancing?"
+ * heuristic. radiant_power_adapter.c has been posting it as
+ * RADIANT_FIELD_ENUM_GENERIC since the FE-C decoder landed, and its own
+ * comment says exactly why it stops there: "turning IN_USE into 'bike in use'
+ * here would put a rule in an adapter; radiant_rules.c owns derived booleans."
+ * This is that rule.
+ *
+ * WHY THIS MATTERS MORE FOR A TREADMILL THAN FOR A TRAINER. The ACTIVE output
+ * above is driven by the 0x30 energy accumulator, which the FE-C adapter posts
+ * only from page 25 (Specific Trainer Data). A treadmill sends page 19 instead,
+ * which nothing in this tree decodes - so before this rule a bound treadmill
+ * published a speed and a state enum and asserted no activity at all.
+ *
+ * NO VOCABULARY ADDITION IS NEEDED and that matters: section 13 forbids adding
+ * a RADIANT_FIELD_* until it is allocated in docs/radiant-telemetry.md and
+ * tools/ant_pages.py in the same change. This output is
+ * RADIANT_FIELD_OCCUPANCY, which is already in all three copies, on a new
+ * field_id beside the four above.
+ */
+#define RADIANT_RULE_FIELD_EQUIPMENT_IN_USE 4u /* FE-C state == IN_USE */
 
 /* Reset every binding's rule state. Test hook. */
 void radiant_rules_reset(void);

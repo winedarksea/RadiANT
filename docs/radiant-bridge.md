@@ -333,7 +333,19 @@ and an MQTT topic or a Matter endpoint has to survive a battery change and a
 re-pair. Worse, a device number collision across two straps in the same room is
 a one-in-65535 event that will happen at a trade show.
 
-The binding table is the pivot, and it is persisted:
+The binding table is the pivot, and it **is specified to be persisted and is
+not yet**:
+
+> **Corrected 2026-08-15.** This sentence read "and it is persisted", and the
+> code has never done that. `radiant/src/bridge/radiant_binding.h` says so in as
+> many words — "RAM-backed for now" — and the code is the truth. The consequence
+> is concrete and it is the reason this correction is a paragraph rather than a
+> word: **every reboot loses all bindings, and re-pairing mints a new `uuid`**,
+> hence new MQTT topics and a fresh set of Home Assistant entities. A dashboard
+> accumulates orphans on every power cut. For a bench that is a nuisance; for
+> the gym deployment of `docs/treadmill-reference-design.md` §8 it is a
+> prerequisite rather than a nicety, because the whole point of the `uuid` is
+> that it survives exactly this.
 
 ```
 binding[i] = {
@@ -1334,8 +1346,8 @@ things that forced that are set out.
 | `0x16` speed, `0x18` angle | **none, and it is section 1's rule for the second time** | — | MQTT plane only (§8.1a). Wind is what forced the decision; `0x16` also carries FE-C's trainer speed, and it has no cluster either |
 | `0x26` heart rate | **none, and section 1 is the whole reason** | — | — |
 
-The four derived booleans of section 6 are all type `0x02`, so they are four
-instances of the first row rather than four cases in a switch:
+The derived booleans of section 6 are all type `0x02`, so they are instances of
+the first row rather than cases in a switch:
 
 | Name | Occupied when | From |
 |---|---|---|
@@ -1343,6 +1355,42 @@ instances of the first row rather than four cases in a switch:
 | **Bike in use** | the energy accumulator is advancing | §6.1 |
 | **At rest** | worn, and HR below `HR_rest + 0.15 x HRR` | §6.2 |
 | **Training, zone 2 or above** | worn, and HR at or above `HR_rest + 0.60 x HRR` | §6.2 |
+| **Equipment in use** | FE-C page 16 byte 7 reports `IN_USE` | added 2026-08-15 |
+
+**The fifth one is the only one that is not an inference, and it is worth the
+sentence.** §8.2 below admits the first four stretch the Occupancy Sensor
+definition. Fitness equipment is where the stretch disappears: FE-C page 16
+carries an explicit FE state — `READY` (2), `IN_USE` (3), `FINISHED` (4) —
+which is the machine's own report rather than an answer to §6.1's "is an
+accumulator advancing?" heuristic.
+
+It also closes a gap that was invisible until a treadmill existed. **"Bike in
+use" is driven by the `0x30` energy accumulator, which the FE-C adapter posts
+only from page 25 (Specific Trainer Data).** A treadmill sends page 19 instead,
+which nothing in this tree decodes — so before this rule a bound treadmill
+published a speed and a state enum and asserted no activity at all. The state
+enum had been on the sample bus since the FE-C decoder landed and
+`rules_want()` accepted only `ACCUMULATING` samples and
+`RADIANT_FIELD_HEART_RATE`, so nothing read it.
+
+**No vocabulary addition was needed**, which matters because §13 forbids adding
+a `RADIANT_FIELD_*` until it is allocated in `docs/radiant-telemetry.md` and
+`tools/ant_pages.py` in the same change: occupancy `0x02` was already in all
+three copies, and this is a new `field_id` beside the existing four.
+
+**The dwell is asymmetric the other way from §6.1's.** There is no assert dwell
+— waiting two seconds to believe a direct report only adds latency to a fact
+already established — and there is a short (5 s) clear dwell, so that a runner
+stepping off for a drink does not flicker a gym display. `STALE` still
+overrides both, immediately, which is what stops an unplugged machine reading
+"in use" forever.
+
+**Do not casually also enable the FE-C adapter's reserved distance and
+elapsed-time field ids.** They are reserved deliberately
+(`radiant_power_adapter.h`): §6.1's ACTIVE slot is *single-occupancy*, and a
+source posting `0x30`, `0x37` and `0x34` would have all three fight over one
+`prev_raw` and one dwell. Per-machine utilisation needs a per-field-type slot
+map first — a real change, not a free one.
 
 Two additions carry raw bpm and neither is part of tier 1:
 
@@ -1397,8 +1445,8 @@ the map has to be able to express it.
 | Source | Status |
 |---|---|
 | A RadiANT `0x60` node whose descriptor announces `0x10`, `0x11` or `0x12` | **Free by construction.** The descriptor names the type, the bus carries it, the table maps it. No adapter, no per-profile code |
-| ANT+ Environment `0x19` | **Implemented** — `profile_env.c` + `radiant_env_adapter.c`, temperature and event count. Derived from the primary D00001502 Rev 1.0; `device-profiles.md` §3.7 |
-| ANT+ common page 84 | **Implemented** — `profile_common_decode_84()` + `radiant_common_adapter.c`. Derived from the primary D00001198 Rev 3.1 and pinned by that document's own §6.13.1 golden vector; `device-profiles.md` §3.4. This is the "any device type" path and it is now the *widest* of the three, not the weakest |
+| ANT+ Environment `0x19` | **Implemented** — `profile_env.c` + `radiant_env_adapter.c`, temperature ; `device-profiles.md` §3.7 |
+| ANT+ common page 84 | **Implemented** — `profile_common_decode_84()` + `radiant_common_adapter.c`. `device-profiles.md` §3.4. This is the "any device type" path and it is now the *widest* of the three, not the weakest |
 
 The three rows used to differ in evidence, and they no longer do: all three are
 primary-derived. **What they still differ in is bench exposure.** No ANT+
@@ -1408,98 +1456,6 @@ That is a conformance question rather than an architecture one, and it is a
 materially better position than the one this section used to record — but
 "vector-tested" is not "verified", and this section should not be read as either
 more or less than that.
-
-#### The keying rule is the reason page 84 is the widest row
-
-`ANT+ Common Data Pages` Rev 3.1 Table 4-1 puts pages `0x40`–`0x5D` in a range
-whose "use is defined by the transmission type of the ANT channel parameter" —
-not by the device type. So weather data is legal on a heart-rate strap, a power
-meter or a bike light, and the common decoder therefore runs on **every** bound
-channel alongside whichever profile adapter owns that channel's device type.
-Two producers write one source, which is the case `radiant_bridge.h`'s `field_id`
-block exists to make safe: `0x00`–`0x1F` for the bound profile's adapter,
-`0x20`–`0x3F` for the common pages, one id per page-84 subpage. Without the
-split, a sink keying stored history on `(source, field_id)` would silently merge
-two different series. `device-profiles.md` §3.4 carries the rule, the layout and
-the heart-rate toggle trap that nearly made it fail on the most common sensor
-there is.
-
-#### Wind has no cluster, so it takes the MQTT plane — §1's rule, for the second time
-
-Page 84's subpages 4 and 5 carry wind speed and wind direction. **The Matter
-data model has flow, pressure, relative-humidity, temperature, occupancy and
-air-quality clusters and no wind anything.** So `radiant_matter.c` gets no row
-for `0x16` speed or `0x18` angle, and `mqtt_sink.c`'s `ha_table[]` carries them
-instead.
-
-That is the **second** instance of §1's rule, after heart rate (§8.3), and it is
-the same rule for the same reason: mapping a quantity onto a cluster that means
-something else is worse than not mapping it. It is worth stating as a rule
-rather than as two coincidences, because the temptation is different each time —
-for heart rate it was Flow Measurement (§8.3b), for wind it would be Flow
-Measurement again, and "flow" is close enough to "wind" to look reasonable on a
-whiteboard and wrong on every card in Home Assistant.
-
-Direction goes out with a unit and no `device_class`: it is an angle in radians,
-and Home Assistant's canonical list has no wind-direction class that is not
-degrees-only, so per `ha_table[]`'s own "a guess costs the entity" rule it gets
-none. Speed already had a row — it is a bicycle speed as much as a wind speed.
-
-#### Pressure: the mandatory attribute is useless and the useful one is optional
-
-Barometric pressure arrives from page 84 subpage 2 and has a real Matter device
-type — Pressure Sensor `0x0305`, Pressure Measurement `0x0403`. The trap is
-resolution, not semantics.
-
-**`MeasuredValue` is an `int16s` in whole kPa** (`pressure-measurement-cluster.xml:39`).
-Sea-level pressure runs about 98–105 kPa, so a barometer reported that way has
-roughly seven distinguishable states, and every weather trend a user might care
-about — a 0.3 kPa front passing through — is quantised out of existence.
-
-The cluster's own answer is `ScaledValue` (`0x0010`) with `Scale` (`0x0014`),
-where `ScaledValue = 10^Scale x kPa`. **`Scale = 2` gives 10 Pa per step** and
-tops out at 327.67 kPa, which covers every terrestrial pressure with room to
-spare — and it is exactly the wire resolution page 84 carries (0.01 kPa), so
-nothing is invented and nothing is thrown away.
-
-But `ScaledValue`/`Scale` are **optional** and `MeasuredValue` is **not**. An
-endpoint serving only the useful pair is non-conformant; an endpoint serving
-only the mandatory one is a useless entity. **The decision is to write all
-three** — `MeasuredValue` at `Pa / 1000`, `ScaledValue` at `Pa / 10`, and
-`Scale` as the constant 2. A refused extra is skipped and does *not* suppress
-the primary: the primary's narrower range is the one that fits, so an extra that
-overflows is the more-precise attribute declining rather than the reading
-failing.
-
-#### The `extra[]` mechanism, and the second bug it fixes
-
-Pressure is what turned a row from one attribute into a list, and the mechanism
-is deliberately small: `struct radiant_matter_type_map` grows an `extra[]` array
-of `struct radiant_matter_attr_conv`, each an `(attribute, mul, div, offset)`,
-written into the **same cluster** as the primary. The arithmetic is shared with
-the primary rather than copied, because a primary and an extra that rounded
-differently would drift.
-
-**`mul == 0` means CONSTANT**: `offset` is written verbatim, exactly once, when
-the endpoint is created, and no sample is consulted. That is not a convenience —
-it is the only moment such a value could be written. On a dynamic endpoint
-**every attribute is external storage by construction**
-(`attribute-storage.h:73-77` ORs `ZAP_ATTRIBUTE_MASK(EXTERNAL_STORAGE)` into
-`DECLARE_DYNAMIC_ATTRIBUTE` unconditionally), so the application owns every
-value and the stack stores nothing on its behalf. A constant nobody writes reads
-back as zero.
-
-Which is the second bug. **`OccupancySensorType` must not be left at 0**,
-because 0 is PIR, and [home-assistant/core#164839](https://github.com/home-assistant/core/issues/164839)
-proposes remapping PIR endpoints from `device_class: occupancy` to
-`device_class: motion`. The four derived booleans of §6 come from a chest strap
-and a crank; a controller release could relabel every one of them as a motion
-sensor with nothing in this repository changing. The occupancy row therefore
-carries two constants — `OccupancySensorType = 3` (physical contact) and
-`OccupancySensorTypeBitmap = 0x04`, which must agree because a controller may
-read either — and "physical contact" is the honest one of the four the enum
-offers: the signal is that a thing is in contact with a person or being driven
-by one.
 
 #### The battery row now does what it always said it did
 
@@ -1906,13 +1862,37 @@ attributes), not anything about the ANT decode.
 **What remains outstanding in the Matter plane is the CHIP integration itself.**
 `apps/dongle_thread/matter.conf` exists and builds `CONFIG_CHIP=y` beside
 RadiANT, which is where the flash, RAM, `CONFIG_BT` and timeslot risks get
-retired as a build — but there is **no Matter source in that image**:
-no `.zap`/`.matter` in this repository, `radiant_matter.c` still excluded by
-`apps/dongle_thread/CMakeLists.txt:102-106`, and
-`radiant_matter_attr_write()` still a `__weak` no-op that has never written an
-attribute. Everything §8.1 and §8.1a describe is the data model behind that
-seam, driven directly by ztest. The nRF5340 as a second target is separately
-outstanding — see §11 and `docs/backends.md`.
+retired as a build.
+
+> **Corrected 2026-08-15.** This paragraph used to say there was "no Matter
+> source in that image", and listed three things as not built. **Two of the
+> three are now false**: `bridge.zap` and `bridge.matter` **are** vendored at
+> `apps/dongle_thread/src/matter/default_zap/`, and `radiant_matter.c` **is**
+> compiled under `CONFIG_ANT_DONGLE_MATTER_MAP`. What genuinely remains is
+> `radiant_matter_attr_write()` still being a `__weak` no-op that has never
+> written an attribute, plus packages E4 (an ANT `BridgedDeviceDataProvider`),
+> E5 (an occupancy `MatterBridgedDevice` type) and E6 (the CHIP event-loop
+> handoff).
+
+Everything §8.1 and §8.1a describe is the data model behind that seam, driven
+directly by ztest. The nRF5340 as a second target is separately outstanding —
+see §11 and `docs/backends.md`.
+
+**For the gym-occupancy use case the data model is already right**, which is
+worth stating because it is the part that usually is not: `radiant_matter.c`
+maps `RADIANT_FIELD_OCCUPANCY` to the Occupancy Sensor type, and endpoints are
+allocated per `(source, field_id)`, so N treadmills naturally become N occupancy
+endpoints — capped at `RADIANT_MATTER_MAX_ENDPOINTS` = **16**, which must stay
+equal to `CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT` and
+`CONFIG_BRIDGE_MAX_DYNAMIC_ENDPOINTS_NUMBER` (static-asserted). **For "a number
+on the gym's website", though, MQTT is the path**: `mqtt_sink.c` works today,
+emits HA MQTT Discovery, and implements §9.3's three availability levels
+including `expire_after` — which is what stops an unplugged treadmill reading
+"in use" forever and is the single most important correctness property there.
+Its hard limits are real and none is a one-liner: no username, no password, no
+TLS, and `CONFIG_ANT_DONGLE_MQTT_BROKER` must be a **numeric IPv6 literal**,
+because there is no resolver and the code states that a hostname is "not a
+supported input, not merely an unimplemented one".
 
 **BLE is deliberately last.** Most heart-rate straps are already ANT+/BLE dual,
 so re-broadcasting HR over BLE is the *least* valuable sink for the headline

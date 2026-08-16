@@ -2,21 +2,6 @@
 /*
  * profile_env.h - ANT+ Environment, device type 0x19.
  *
- * ---------------------------------------------------------------------------
- * Provenance
- * ---------------------------------------------------------------------------
- * Transcribed from the PRIMARY document: "ANT+ Managed Network Document -
- * Environment Device Profile", D00001502 Rev 1.0 (marked DEPRECATED by the ANT
- * team, which is a support statement, not a correctness one - the sensors are
- * on the market and this is the layout they transmit). Sections cited below
- * are that document's: §5.1 channel configuration, §6.3 data page 0, §6.3.1
- * transmission info, §6.3.2 supported pages, §6.4 data page 1, §6.5 the
- * reserved range.
- *
- * This supersedes docs/device-profiles.md §3.7, which recorded the same layout
- * from four converging open-source implementations and carried a "not derived
- * from a primary spec" caveat. The caveat can be lifted: the four agreed with
- * Table 6-4 byte for byte.
  *
  * ---------------------------------------------------------------------------
  * What this profile is NOT

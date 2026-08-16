@@ -42,6 +42,7 @@
 
 #include "../../fake_radio.h"
 #include "../fake_mpsl.h"
+#include "../fake_swi.h"
 #include "../gate_probe.h"
 
 /* How long to let the work queue run. Every MPSL call here is deferred
@@ -90,6 +91,7 @@ static void before(void *fixture)
 	fake_radio_bring_up();
 	fake_mpsl_reset();
 	fake_backend_reset();
+	fake_swi_reset();
 
 	zassert_equal(RADIANT_RADIO_OK_RC, gate_init(), "gate_init failed");
 	zassert_true(fake_mpsl_is_open(), "no session was opened");
@@ -120,6 +122,7 @@ static void after(void *fixture)
 	gate_shutdown();
 	k_msleep(WORK_MS);
 }
+
 
 ZTEST_SUITE(radiant_gate, NULL, NULL, before, after, NULL);
 
@@ -965,5 +968,55 @@ ZTEST(radiant_gate, test_an_unplaced_request_leaves_nothing_owed)
 	zassert_false(p.mpsl_owes,
 		      "a request MPSL never took is being waited on");
 	zassert_true(p.pending, "the -EAGAIN request was not kept");
+	assert_invariant();
+}
+
+/* ---------------------------------------------------------------------------
+ * BUG 27 - the deferral must leave the signal callback through the trampoline
+ *
+ * MPSL delivers SIGNAL_START/RADIO/TIMER0 from an IRQ_ZERO_LATENCY vector,
+ * which runs above every irq_lock() and every kernel spinlock, so a kernel call
+ * made from there can land inside another context's critical section. Measured
+ * consequences: `ASSERTION FAIL @ spinlock.h:132` out of
+ * z_work_submit_to_queue(), sys_dlist bus faults, and a silent
+ * RESET_CPU_LOCKUP reboot loop on the Matter arm.
+ *
+ * There is no way to assert "no kernel call happened" from inside the image, so
+ * this asserts the routing instead: every deferral the gate asks for is asked
+ * for through radiant_swi_pend(). The fake counts them; the link itself carries
+ * the other half of the check, since the gate no longer references
+ * k_work_submit() at all and reaching for it again would be a visible edit.
+ * ---------------------------------------------------------------------------
+ */
+ZTEST(radiant_gate, test_signal_callback_defers_through_the_trampoline)
+{
+	radiant_time_t now = radiant_radio_now();
+	radiant_time_t t_from = now + WIN_LEAD_US;
+	uint32_t       deny_before;
+
+	/* An arm places a reservation and arms the backstop: both are kernel
+	 * calls, and gate_acquire() is reachable from the RADIO interrupt
+	 * inside a timeslot, so both must be pended rather than made. */
+	fake_swi_reset();
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(GATE_OP_RX, t_from, t_from + WIN_LEN_US, 0u,
+				   RADIANT_GATE_PRIO_HIGH), NULL);
+	zassert_true(fake_swi()->request >= 1u,
+		     "the reservation was not routed through the trampoline");
+	zassert_true(fake_swi()->deadline >= 1u,
+		     "the backstop deadline was armed without the trampoline");
+	k_msleep(WORK_MS);
+
+	/* And the end of a grant, which is the hottest of the three: SIGNAL_START
+	 * runs in the zero-latency vector and this is where a denial is raised. */
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_START), NULL);
+	deny_before = fake_swi()->deny;
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_TIMER0), NULL);
+	zassert_true(fake_swi()->deny > deny_before,
+		     "the end-of-grant denial did not go through the trampoline");
+
+	k_msleep(WORK_MS);
 	assert_invariant();
 }

@@ -135,9 +135,35 @@ struct zone_state {
 	bool     zone2_debounced;
 };
 
+/*
+ * The equipment-state rule. Structurally simpler than either of the two above
+ * and the difference is the input, not the code: FE-C page 16 byte 7 is the
+ * machine SAYING it is in use, where every other rule here is inferring
+ * something from a number that moves.
+ *
+ * SO THERE IS NO ASSERT DWELL. Waiting two seconds to believe a direct report
+ * would only add latency to a fact already established. There IS a short clear
+ * dwell, because a treadmill drops to READY the moment a runner steps off the
+ * belt for a drink and a display that flickered on every walk break is worse
+ * than one that lags by a few seconds.
+ *
+ * STALE is honoured the same way the activity rule honours it: a source off
+ * the air is not occupied, immediately and without the clear dwell, which is
+ * what stops an unplugged treadmill reading "in use" forever on a dashboard.
+ */
+#define EQUIPMENT_CLEAR_US ((uint64_t)5 * 1000000u)
+
+struct equipment_state {
+	bool     tracked;
+	bool     raw;          /* the last decoded state was IN_USE */
+	uint64_t raw_edge_us;  /* when `raw` last changed */
+	bool     debounced;    /* the published output */
+};
+
 struct rule_state {
-	struct activity_state activity[ACTIVITY_SLOTS];
+	struct activity_state  activity[ACTIVITY_SLOTS];
 	struct zone_state      zone;
+	struct equipment_state equipment;
 };
 
 static struct rule_state states[RADIANT_BINDING_MAX];
@@ -322,6 +348,58 @@ static void eval_zone(uint32_t source, const struct radiant_sample *s)
 	}
 }
 
+/*
+ * One FE state sample.
+ *
+ * The value is PROFILE_FEC_STATE_*, which this file deliberately does not
+ * include a profile header to learn: radiant_bridge.h's rule is that the
+ * bridge sits strictly above the profile decoders and touches no ANT frame.
+ * The one number it needs is the IN_USE code, spelled here with the citation
+ * rather than by including src/profiles/profile_fec.h and dragging the whole
+ * page codec into the sample bus.
+ *
+ * 0 and 5..7 are reserved in Table 8-10 and are passed through by the decoder
+ * rather than remapped - so anything that is not exactly IN_USE is "not
+ * occupied", which is the safe direction: a reserved future state read as
+ * occupied would leave a gym counting machines nobody is on.
+ */
+#define FEC_STATE_IN_USE 3
+
+static void eval_equipment(uint32_t source, const struct radiant_sample *s)
+{
+	struct equipment_state *e = &states[source].equipment;
+	bool     stale = (s->flags & RADIANT_SAMPLE_STALE) != 0u;
+	uint64_t t = s->t_us;
+	bool     raw = (!stale && s->raw == FEC_STATE_IN_USE);
+	bool     desired;
+
+	e->tracked = true;
+
+	if (raw != e->raw) {
+		e->raw = raw;
+		e->raw_edge_us = t;
+	}
+
+	if (stale) {
+		/* Liveness overrides the dwell entirely, exactly as it does in
+		 * eval_activity(). An unplugged treadmill must go unoccupied
+		 * rather than stick. */
+		desired = false;
+	} else if (raw) {
+		/* No assert dwell: the machine said so. */
+		desired = true;
+	} else {
+		desired = e->debounced &&
+			  ((t - e->raw_edge_us) < EQUIPMENT_CLEAR_US);
+	}
+
+	if (desired != e->debounced) {
+		e->debounced = desired;
+		post_occupancy(source, RADIANT_RULE_FIELD_EQUIPMENT_IN_USE,
+			       e->debounced, t);
+	}
+}
+
 static bool rules_want(const struct radiant_sample *s)
 {
 	if ((s->flags & RADIANT_SAMPLE_DERIVED) != 0u) {
@@ -337,8 +415,14 @@ static bool rules_want(const struct radiant_sample *s)
 		 * range. Declining rather than asserting. */
 		return false;
 	}
+	/* RADIANT_FIELD_ENUM_GENERIC is the third accepted type and it was
+	 * missing until apps/treadmill needed it: the FE state was on the bus
+	 * from the day the FE-C decoder landed and nothing read it, so a bound
+	 * treadmill published a speed and a state enum and asserted no
+	 * occupancy at all. See RADIANT_RULE_FIELD_EQUIPMENT_IN_USE. */
 	return (s->flags & RADIANT_SAMPLE_ACCUMULATING) != 0u ||
-	       s->field_type == RADIANT_FIELD_HEART_RATE;
+	       s->field_type == RADIANT_FIELD_HEART_RATE ||
+	       s->field_type == RADIANT_FIELD_ENUM_GENERIC;
 }
 
 static void rules_publish(const struct radiant_sample *s)
@@ -347,6 +431,8 @@ static void rules_publish(const struct radiant_sample *s)
 		eval_activity(s->source, s);
 	} else if (s->field_type == RADIANT_FIELD_HEART_RATE) {
 		eval_zone(s->source, s);
+	} else if (s->field_type == RADIANT_FIELD_ENUM_GENERIC) {
+		eval_equipment(s->source, s);
 	}
 }
 

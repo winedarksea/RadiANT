@@ -289,6 +289,11 @@ elseif(CONFIG_RADIANT_BACKEND_NRF)
     # for the fourteen bugs between those two states - so the refusal is gone
     # and the file is simply compiled.
     zephyr_library_sources(src/radiant_radio_nrf_gate_mpsl.c)
+    # The software-interrupt trampoline (bug 27). Compiled with the MPSL gate
+    # and only with it: it exists because MPSL's timeslot signal callback runs
+    # in a zero-latency interrupt, which is a condition the direct backend does
+    # not have. See include/radiant/radiant_swi.h.
+    zephyr_library_sources(src/radiant_swi.c)
   else()
     zephyr_library_sources(src/radiant_radio_nrf_gate_direct.c)
   endif()

@@ -420,7 +420,12 @@ class TestTheBoundary(unittest.TestCase):
     """
 
     PROFILE_FILES = ("profile_hr.c", "profile_hr.h", "profile_power.c",
-                     "profile_power.h", "profile_common.c", "profile_common.h")
+                     "profile_power.h", "profile_common.c", "profile_common.h",
+                     # apps/treadmill's two masters make the same claim about
+                     # themselves, and the claim is only worth making if it is
+                     # checked from outside the file that makes it.
+                     "profile_fec_tx.c", "profile_fec_tx.h",
+                     "profile_sdm.c", "profile_sdm.h")
 
     def test_no_profile_module_names_radiant_sec_in_code(self):
         for name in self.PROFILE_FILES:
@@ -461,6 +466,161 @@ class TestTheBoundary(unittest.TestCase):
                 self.assertNotIn("radiant/", line,
                                  "profile_compat.h must not export a "
                                  "radiant header to its includers")
+
+
+TREADMILL_CAPTURE = os.path.join(VECTORS, "treadmill-pages.antcap")
+
+
+class TestTreadmillGoldenPages(unittest.TestCase):
+    """The ten hand-computed FE-C and SDM payloads, from both directions.
+
+    Every other case in this file proves the C and the Python agree with each
+    other, which is a strong claim about two implementations and a weak one
+    about either of them being RIGHT - both were written by the same project
+    from the same reading. `tools/vectors/treadmill-pages.antcap` is hand
+    computed from the scalings the headers state, and this suite asserts it
+    against the Python codecs while radiant/tests/src/test_profile_fec_tx.c and
+    test_profile_sdm.c assert the same byte values against the C ones.
+
+    The re-encode is the load-bearing half, as it is for the compat captures: a
+    decode that merely succeeds proves the page number was recognised, whereas
+    a decode whose fields re-encode to the same eight bytes proves the
+    implementation agrees about every field, width, byte order and sentinel.
+    """
+
+    def setUp(self):
+        self.records = ap.read_capture(TREADMILL_CAPTURE)
+        self.by_page = {}
+        for _t, device_type, _dev, payload in self.records:
+            self.by_page[(device_type, payload[0])] = payload
+
+    def test_the_capture_covers_both_device_types(self):
+        self.assertEqual(len(self.records), 11)
+        types = {device_type for _t, device_type, _d, _p in self.records}
+        self.assertEqual(types, {ap.FEC_DEVICE_TYPE, ap.SDM_DEVICE_TYPE})
+
+    def test_every_payload_decodes_on_its_own_device_type(self):
+        # AND ON ITS OWN DEVICE TYPE SPECIFICALLY. FE-C's 0x10, 0x11 and 0x12
+        # collide with bicycle power's Standard Power, Wheel Torque and Crank
+        # Torque, and SDM's 0x10 collides with both - nothing in any payload
+        # says which, so decode() dispatches on the channel's device type
+        # first. Decoding these on the wrong type is how a treadmill's speed
+        # becomes a power accumulator with no error anywhere.
+        for _t, device_type, _dev, payload in self.records:
+            got = ap.decode(payload, device_type)
+            self.assertEqual(got["page"], payload[0])
+
+    def test_general_fe_data_round_trips(self):
+        payload = self.by_page[(ap.FEC_DEVICE_TYPE, ap.PAGE_FEC_GENERAL)]
+        got = ap.decode_fec_general(payload)
+        self.assertEqual(got["equipment_type"], ap.FEC_TYPE_TREADMILL)
+        self.assertEqual(got["elapsed_time_qs"], 40)
+        self.assertEqual(got["distance_m"], 100)
+        self.assertEqual(got["speed_mm_s"], 3000)
+        self.assertEqual(got["heart_rate"], 150)
+        self.assertEqual(got["hr_source"], ap.FEC_HR_SRC_ANTPLUS)
+        self.assertEqual(got["state"], ap.FEC_STATE_IN_USE)
+        self.assertFalse(got["lap_toggle"])
+
+        again = ap.encode_fec_general(
+            got["equipment_type"], got["elapsed_time_qs"], got["distance_m"],
+            got["speed_mm_s"], got["heart_rate"], got["state"],
+            hr_source=got["hr_source"],
+            distance_enabled=got["distance_valid"],
+            virtual_speed=got["speed_virtual"], lap_toggle=got["lap_toggle"])
+        self.assertEqual(again, payload)
+
+    def test_settings_incline_is_the_grade_the_command_asked_for(self):
+        settings = self.by_page[(ap.FEC_DEVICE_TYPE, ap.PAGE_FEC_SETTINGS)]
+        command = self.by_page[(ap.FEC_DEVICE_TYPE,
+                                ap.PAGE_FEC_TRACK_RESISTANCE)]
+
+        # THE LOOP SECTION 8.8.4 ASKS FOR: "the incline reported should match
+        # the grade received in this command page". Two different encodings of
+        # one physical quantity, and this is the only place in the tree where
+        # they are asserted equal from the wire bytes rather than from a
+        # variable that happens to hold both.
+        grade = ap.decode_fec_track_resistance(command)["grade_centi_pct"]
+        incline = ap.decode_fec_settings(settings)["incline_centi_pct"]
+        self.assertEqual(grade, 300)
+        self.assertEqual(incline, 300)
+        # ... and the wire bytes are NOT the same, which is the trap.
+        self.assertNotEqual(command[5:7], settings[4:6])
+
+        self.assertEqual(
+            ap.encode_fec_settings(120, 300, None, ap.FEC_STATE_IN_USE),
+            settings)
+        self.assertEqual(ap.encode_fec_track_resistance(300), command)
+
+    def test_command_status_echoes_the_command_in_place(self):
+        command = self.by_page[(ap.FEC_DEVICE_TYPE,
+                                ap.PAGE_FEC_TRACK_RESISTANCE)]
+        status = self.by_page[(ap.FEC_DEVICE_TYPE, ap.PAGE_FEC_CMD_STATUS)]
+
+        got = ap.decode_fec_cmd_status(status)
+        self.assertEqual(got["last_command"], ap.PAGE_FEC_TRACK_RESISTANCE)
+        self.assertEqual(got["status"], ap.FEC_CMD_STATUS_PASS)
+        # Bytes 4..7 of the command, position for position - so the grade is
+        # back at bytes 5..6 of the status, where the controller wrote it.
+        self.assertEqual(got["data"], command[4:8])
+        self.assertEqual(status[5:7], command[5:7])
+
+    def test_treadmill_and_capabilities_pages(self):
+        page19 = self.by_page[(ap.FEC_DEVICE_TYPE, ap.PAGE_FEC_TREADMILL)]
+        got = ap.decode_fec_treadmill(page19)
+        self.assertEqual(got["cadence_strides_min"], 85)
+        self.assertEqual(got["neg_vertical_dm"], 12)
+        self.assertEqual(got["pos_vertical_dm"], 47)
+        self.assertEqual(ap.encode_fec_treadmill(
+            85, 12, 47, ap.FEC_STATE_IN_USE,
+            capabilities=(ap.FEC_TREADMILL_CAP_NEG_VERTICAL |
+                          ap.FEC_TREADMILL_CAP_POS_VERTICAL)), page19)
+
+        page54 = self.by_page[(ap.FEC_DEVICE_TYPE, ap.PAGE_FEC_CAPABILITIES)]
+        caps = ap.decode_fec_capabilities(page54)
+        self.assertEqual(caps["capabilities"], ap.FEC_CAP_SIMULATION)
+        self.assertIsNone(caps["max_resistance_n"])
+        self.assertEqual(ap.encode_fec_capabilities(None,
+                                                    ap.FEC_CAP_SIMULATION),
+                         page54)
+
+    def test_sdm_pages_round_trip(self):
+        page1 = self.by_page[(ap.SDM_DEVICE_TYPE, ap.PAGE_SDM_DEFAULT)]
+        got = ap.decode_sdm_default(page1)
+        self.assertEqual(got["time_s"], 42)
+        self.assertEqual(got["time_frac_200"], 100)
+        self.assertEqual(got["distance_frac_16"], 8)
+        self.assertEqual(got["speed_int_mps"], 3)
+        self.assertEqual(got["speed_frac_256"], 128)
+        self.assertEqual(got["strides"], 77)
+        self.assertEqual(ap.encode_sdm_default(100, 42, 200, 8, 3, 128, 77, 4),
+                         page1)
+
+        base = self.by_page[(ap.SDM_DEVICE_TYPE, ap.PAGE_SDM_BASE)]
+        cal = self.by_page[(ap.SDM_DEVICE_TYPE, ap.PAGE_SDM_CALORIES)]
+        # The only byte that differs between the two pages.
+        self.assertEqual(base[1:6], cal[1:6])
+        self.assertEqual(base[7], cal[7])
+        self.assertEqual(base[6], 0)
+        self.assertEqual(cal[6], 123)
+        # And the reserved bytes really are zero: there is no 0xFF sentinel
+        # anywhere on this profile, which is the reverse of every other one.
+        self.assertEqual(base[1], 0)
+        self.assertEqual(base[2], 0)
+
+        status = ap.sdm_status_split(base[7])
+        self.assertEqual(status["location"], ap.SDM_LOC_OTHER)
+        self.assertEqual(status["use_state"], ap.SDM_USE_ACTIVE)
+
+        summary = self.by_page[(ap.SDM_DEVICE_TYPE, ap.PAGE_SDM_SUMMARY)]
+        got = ap.decode_sdm_summary(summary)
+        self.assertEqual(got["strides"], 0x123456)
+        self.assertEqual(got["distance_256"], 0x89ABCDEF)
+        self.assertEqual(ap.encode_sdm_summary(0x123456, 0x89ABCDEF), summary)
+
+        caps = self.by_page[(ap.SDM_DEVICE_TYPE, ap.PAGE_SDM_CAPABILITIES)]
+        self.assertEqual(ap.decode_sdm_capabilities(caps)["flags"], 0x17)
+        self.assertEqual(ap.encode_sdm_capabilities(0x17), caps)
 
 
 if __name__ == "__main__":

@@ -26,30 +26,6 @@
  * ---------------------------------------------------------------------------
  * The page 0x10 DECODER (added later than the encoders above)
  * ---------------------------------------------------------------------------
- * profile_power_decode_std() below is transcribed from the PRIMARY document -
- * D00001086, "ANT+ Device Profile - Bicycle Power", Rev 5.1, section 8
- * ("Standard Power-Only Main Data Page (0x10)") and its Table 8-1
- * "Power-Only Message Format", with the byte-2 bit split from sections
- * 8.2/8.2.1/8.2.2 and the cadence sentinel from section 8.3. It agrees
- * byte-for-byte with profile_power_encode_std() above and with
- * tools/ant_pages.py's decode_power_std(), which is the three-copy rule this
- * repository applies to every page layout.
- *
- * What the decoder is NOT:
- *   - It is not a power *calculator*. Table 8-1's accumulated-power field is
- *     "the running sum of the instantaneous power data" (section 8.4) - a sum
- *     of WATT SAMPLES, not joules and not watt-seconds. Section 8.5's
- *     Equation 1 divides that delta by the event-count delta to get AVERAGE
- *     WATTS. Anything that wants energy has to integrate over real time
- *     itself; see radiant_power_adapter.h, which does exactly that and says
- *     so at length.
- *   - It does not widen or unwrap anything. Both 16-bit fields roll over
- *     (65.535 kW of accumulated power per Table 8-1) and byte 1 rolls at 256.
- *     Differencing across the wrap is the caller's job, at the wire width.
- *   - It does not reject a page whose byte [0] is another power page. It
- *     returns -EINVAL for anything that is not 0x10, so a caller that hands
- *     it a whole rotation gets a clean decline rather than a torque page
- *     silently read as power.
  */
 
 #ifndef RADIANT_PROFILE_POWER_H_

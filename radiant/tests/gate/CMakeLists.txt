@@ -53,6 +53,13 @@ target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/gate_under_test.c")
 # The arbiter and the backend, both fake. See fake_mpsl.h.
 target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fake_mpsl.c")
 
+# The software-interrupt trampoline, also fake. The gate defers through it
+# instead of calling k_work_submit()/k_timer_start() itself (bug 27), so without
+# this the image does not link - which is the point: a future edit that reaches
+# for the kernel directly from the signal callback has to delete a fake to do
+# it. src/radiant_swi.c is not compiled here; it claims a real NVIC line.
+target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fake_swi.c")
+
 # The mock radio, shared with the other two applications rather than copied. It
 # is the HAL implementation for this image, and here it serves one further
 # purpose: radiant_radio_now() is the gate's timebase and radiant_radio_abort()

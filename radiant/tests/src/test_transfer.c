@@ -978,18 +978,6 @@ ZTEST(transfer, test_a_burst_aborted_midflight_and_its_late_terminal_event)
 	end_of_test();
 }
 
-/* ---------------------------------------------------------------------------
- * Defensive invariants, cross-checked against sdk-ant's own burst handler
- *
- * sdk-ant resets its handler on every unexpected state rather than continuing
- * (docs/sdk-ant-comparison.md item 5). None of the three below copies
- * sdk-ant's code or wire behaviour - the source is D00000652's sequencing
- * rules, restated as a property of this engine - but the fault shape is the
- * same, and the engine's answer is written out so a future change has
- * something to break loudly against.
- * ---------------------------------------------------------------------------
- */
-
 /* Out-of-order sequencing: a SEG_START where a CONTINUE was expected. sdk-ant
  * resets and answers TRANSFER_SEQUENCE_NUMBER_ERROR; this engine needs no
  * reset since radiant_transfer_submit() refuses the bad request before

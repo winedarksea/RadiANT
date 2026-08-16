@@ -3,28 +3,6 @@
  * test_profile_env.c - ANT+ Environment 0x19: the two page tables and the
  * sample-bus adapter.
  *
- * Provenance: the vectors below are HAND-PLACED BIT PATTERNS built from Tables
- * 6-2, 6-3 and 6-4 of D00001502 Rev 1.0, not encoder output fed back through
- * the decoder. There is no encoder for this profile (see profile_env.c), so a
- * round-trip suite was never an option here - which is fortunate, because a
- * round-trip suite passes even with a split field read backwards on both
- * sides, and this page has TWO nibble-split fields packed in opposite
- * directions sharing one byte.
- *
- * What each group of tests is defending against:
- *
- *   - The two 24-hour fields swapped, or one packed with the other's shape.
- *     Both are temperatures in the same range, so the wrong answer is still a
- *     plausible one. The vector uses a NEGATIVE low and a POSITIVE high with
- *     no shared nibbles, so any mix-up changes the number.
- *   - Missing sign extension from bit 11. Correct in every warm room; wrong
- *     below freezing. Tested at both 12-bit extremes.
- *   - The two sentinels, which are different widths (0x800 and 0x8000) and
- *     which sign-extend to legal-looking large negatives if mistaken for data.
- *   - The degC -> K offset. It is exact, and 27315 at exp -2 is the assertion
- *     that says so.
- *   - u8 event-count wraparound, differenced at the wire width.
- *   - A page this profile does not define being declined rather than decoded.
  */
 
 #include <errno.h>

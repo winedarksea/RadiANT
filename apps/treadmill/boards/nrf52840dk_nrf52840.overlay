@@ -1,0 +1,52 @@
+/*
+ * nRF52840 DK, as a RadiANT treadmill.
+ *
+ * THE POINT OF THIS BOARD IS THAT IT IS NOT AN nRF54L. radiant's nrf backend
+ * has `depends on SOC_COMPATIBLE_NRF52X || SOC_COMPATIBLE_NRF54LX`, and this
+ * row is what keeps the nRF52 half of that compiled - on the family most
+ * existing ANT+ silicon actually is.
+ *
+ * BUILD-VERIFIED ONLY, AND ANT+ ONLY. Nothing here has been on a bench, and
+ * this application's BLE arm is deliberately NOT built on this part: it would
+ * be the first time SDC, MPSL, the gate, two hand-written GATT services and
+ * SMP were compiled together on the nRF52 family, which makes it valuable and
+ * also makes it the configuration most likely to fail for a reason nobody here
+ * can reproduce - there is no nRF52 bench slot for this application.
+ * docs/radiant-bridge.md section 11 already rates the part "very tight" for a
+ * full build, and this application is heavier than that one. It lands with the
+ * first nRF52 bench session, not before it.
+ *
+ * radiant/Kconfig's own help records that this part's on-air behaviour is
+ * predicted from the nRF54L15 measurements rather than confirmed. Do not read a
+ * green build here as a working machine.
+ */
+
+/ {
+	chosen {
+		/*
+		 * The TIMER radiant's nrf backend owns outright. It runs at
+		 * 1 MHz forever and is what t_sync is hardware-captured into
+		 * from RADIO's ADDRESS event, so it cannot be shared: naming it
+		 * here rather than in the source is what makes a second user a
+		 * devicetree conflict instead of two drivers reprogramming
+		 * each other's prescaler.
+		 *
+		 * TIMER4, and the choice is constrained from both ends. The
+		 * backend needs FIVE compare/capture channels - t_sync capture,
+		 * RX start, window close, software now-capture, TX start - and
+		 * on nRF52 only TIMER3 and TIMER4 have more than four, which is
+		 * a compile-time #error in radiant_radio_nrf.c rather than
+		 * something to discover on the air.
+		 *
+		 * TIMER4 rather than TIMER3 to match apps/dongle's and
+		 * apps/hrm_ble's overlays, so that the nRF52 answer is one
+		 * number across this repository rather than three. MPSL on
+		 * nRF52 reserves TIMER0 (mpsl_hwres.h), not these.
+		 */
+		radiant,radio-timer = &timer4;
+	};
+};
+
+&timer4 {
+	status = "okay";
+};

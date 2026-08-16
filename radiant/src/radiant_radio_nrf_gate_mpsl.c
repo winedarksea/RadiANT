@@ -144,11 +144,17 @@
 #include <zephyr/sys/util.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/logging/log_ctrl.h>
+#if defined(CONFIG_RADIANT_SWEEP_DEBUG) && defined(CONFIG_INIT_STACKS)
+/* For the stack high-water probe in gate_dump_fn(). See stacks_report(). */
+#include <zephyr/debug/stack.h>
+#endif
 
 #include <mpsl_timeslot.h>
 #include <mpsl_hwres.h>
 #include <nrf_errno.h>
 #include <hal/nrf_timer.h>
+
+#include <radiant/radiant_swi.h>
 
 #include "radiant_radio_nrf_gate.h"
 
@@ -342,6 +348,9 @@ static mpsl_timeslot_request_t             req;
 
 static mpsl_timeslot_session_id_t session_id;
 static bool                       session_open;
+/* The trampoline subscription is taken once per boot and never given back; see
+ * gate_init(). Separate from session_open, which comes and goes. */
+static bool                       swi_registered;
 
 static struct {
 	/* A reservation is outstanding: placed and not yet resolved. */
@@ -605,6 +614,51 @@ static inline void trace_put(uint32_t signal, uint32_t action)
 static void deadline_expired(struct k_timer *t);
 static K_TIMER_DEFINE(deadline, deadline_expired, NULL);
 
+/*
+ * Arming and disarming reach this file from the signal callback, i.e. from a
+ * zero-latency interrupt, where k_timer_start()/k_timer_stop() are illegal
+ * (bug 27). So the callback records WHAT it wants here and pends the
+ * trampoline; deadline_apply() below does it from ordinary interrupt context.
+ *
+ * Last writer wins, deliberately. The two requests are start and stop, they are
+ * only ever issued about the same single outstanding reservation, and the
+ * backstop is a backstop: `dead=0` over every bench run so far, so losing a
+ * race between an arm and a disarm costs at worst one spurious denial of an
+ * operation that had already been resolved - which denied_work_fn()'s own
+ * g.pending re-test then suppresses (bug 13).
+ */
+#define DEADLINE_REQ_NONE 0u
+#define DEADLINE_REQ_ARM  1u
+#define DEADLINE_REQ_STOP 2u
+static atomic_t deadline_req;
+static atomic_t deadline_req_us;
+
+static inline void deadline_arm(uint32_t us)
+{
+	atomic_set(&deadline_req_us, (atomic_val_t)us);
+	atomic_set(&deadline_req, (atomic_val_t)DEADLINE_REQ_ARM);
+	radiant_swi_pend(RADIANT_SWI_GATE_DEADLINE);
+}
+
+static inline void deadline_stop(void)
+{
+	atomic_set(&deadline_req, (atomic_val_t)DEADLINE_REQ_STOP);
+	radiant_swi_pend(RADIANT_SWI_GATE_DEADLINE);
+}
+
+static void deadline_apply(void)
+{
+	atomic_val_t req = atomic_and(&deadline_req, 0);
+
+	if (req == (atomic_val_t)DEADLINE_REQ_ARM) {
+		k_timer_start(&deadline,
+			      K_USEC((uint32_t)atomic_get(&deadline_req_us)),
+			      K_NO_WAIT);
+	} else if (req == (atomic_val_t)DEADLINE_REQ_STOP) {
+		k_timer_stop(&deadline);
+	}
+}
+
 /* ---------------------------------------------------------------------------
  * The split: only programming the peripheral happens inside the grant's own
  * signal callback (the whole reason the grant exists, and it can't be done
@@ -620,18 +674,104 @@ static K_TIMER_DEFINE(deadline, deadline_expired, NULL);
  * with no fault and no further housekeeping - the housekeeping thread had
  * stopped because the above was running at priority 0.
  *
- * A dedicated queue rather than the system one, since a radio schedule that
- * must place a reservation within a couple of ms cannot queue behind
- * something like a filesystem flush.
+ * A dedicated thread rather than the system work queue, and BUG 27 is why the
+ * comment here used to say "queue" while the code said k_work_submit().
+ *
+ * ─── BUG 27: NO KERNEL CALL MAY BE MADE FROM THIS FILE'S SIGNAL CALLBACK ────
+ *
+ * MPSL's TIMER0/RADIO/RTC0 vectors are connected with IRQ_ZERO_LATENCY
+ * (nrf/subsys/mpsl/init/mpsl_init.c:187) whenever CONFIG_ZERO_LATENCY_IRQS is
+ * on. A zero-latency interrupt is, by definition, ABOVE the priority that
+ * irq_lock() and every Zephyr spinlock mask - that is the entire point of it.
+ * So the kernel's own data structures are NOT protected against it, and any
+ * kernel API called from on_signal() can land in the middle of another
+ * context's critical section.
+ *
+ * on_signal() used to call k_work_submit() (three sites) and k_timer_stop() /
+ * k_timer_start() (five sites). MEASURED failure, nRF54L15 DK, Matter arm
+ * (bench-logs/m_wqstack.log):
+ *
+ *     ASSERTION FAIL @ spinlock.h:132
+ *     ***** HARD FAULT ***** Fault escalation
+ *     >>> ZEPHYR FATAL ERROR 4: Kernel panic on CPU 0
+ *     Fault during interrupt handling
+ *     lr=0x00036213 -> z_work_submit_to_queue  zephyr/kernel/work.c:382
+ *
+ * spinlock.h:132 is `__ASSERT(z_spin_lock_valid(l), "Invalid spinlock %p")` -
+ * the work queue's own lock, taken recursively because a ZLI fired while a
+ * thread was already inside k_work_submit() holding it. Without
+ * CONFIG_SPIN_VALIDATE to catch it, the same race instead corrupts the list it
+ * was editing: that is the sys_dlist_remove/z_abort_timeout bus fault seen once
+ * on the bridge arm, and the silent RESET_CPU_LOCKUP reboot loop on the Matter
+ * arm - a wild pointer faulting during exception entry never gets far enough to
+ * print anything.
+ *
+ * Nordic's own timeslot sample makes no kernel call from its callback either
+ * (nrf/samples/mpsl/timeslot/src/main.c: the callback only writes a static
+ * return parameter; every k_msgq_put() is in a thread-context wrapper).
+ *
+ * AN ATTEMPT THAT WAS MEASURED WORSE AND THROWN AWAY, because it is the reason
+ * the fix has the shape it does. Deferring the gate's calls to a thread this
+ * file owned, polled at 1 kHz:
+ *
+ *   arm     change                                       result
+ *   ------  -------------------------------------------  ----------------------
+ *   bridge  k_work_submit/k_timer straight from the ZLI   fault at 199-660 s
+ *   bridge  gate defers via a flag + 1 kHz poll thread    BUS FAULT at 25 s
+ *   Matter  k_work_submit/k_timer straight from the ZLI   13 boots / 210 s
+ *   Matter  gate defers via a flag + 1 kHz poll thread    29 boots / 240 s
+ *
+ * Two lessons, both now built into the fix. First, removing the gate's OWN
+ * kernel calls does not remove the decisive one: the ANT completion path runs
+ * in this same callback and ends in a k_sem_give() on a semaphore whose waiter
+ * has a timeout, so it edits the kernel timeout list -
+ *
+ *   SIGNAL_RADIO (ZLI) -> radiant_nrf_gate_on_radio_irq() -> deliver_terminal()
+ *     -> radiant_event_post_rx() -> radiant_event_wakeup()   [radiant_event.c:404]
+ *     -> k_sem_give(&api_event_sem)                 [apps/common/ant_radio_radiant.c]
+ *
+ * and that fires once per received packet, where the gate's calls fire once per
+ * reservation. Second, a POLL THREAD is the wrong deferral: k_msleep() puts an
+ * entry on that same timeout list a thousand times a second, so it multiplies
+ * traffic on the very structure being corrupted.
+ *
+ * So the deferral is a software interrupt, not a thread, and it covers
+ * radiant_event_wakeup() first. See radiant/include/radiant/radiant_swi.h for
+ * the mechanism and docs/p4-zli-kernel-calls.md for the measurements. What is
+ * left in this file is the three work submissions and the deadline timer, all
+ * routed through radiant_swi_pend() so the kernel call happens one interrupt
+ * priority down, where irq_lock() reaches it.
  * ---------------------------------------------------------------------------
  */
-
 
 static void request_work_fn(struct k_work *w);
 static void denied_work_fn(struct k_work *w);
 
 static K_WORK_DEFINE(request_work, request_work_fn);
 static K_WORK_DEFINE(denied_work, denied_work_fn);
+
+/*
+ * The gate's end of the trampoline. Runs at CONFIG_RADIANT_SWI_IRQ_PRIO - an
+ * ordinary interrupt priority - so k_work_submit() and the k_timer calls in
+ * deadline_apply() are legal here and were not where they came from.
+ *
+ * Still submitted to a work queue rather than run inline: what these end in is
+ * deliver_terminal() and a whole scheduler pass, which is unbounded work and
+ * has no business in any interrupt handler. The trampoline changes WHICH
+ * interrupt asks for the deferral, not that it is deferred.
+ */
+static void gate_swi_handler(uint32_t bits)
+{
+	if ((bits & RADIANT_SWI_GATE_DEADLINE) != 0u) {
+		deadline_apply();
+	}
+	if ((bits & RADIANT_SWI_GATE_REQUEST) != 0u) {
+		k_work_submit(&request_work);
+	}
+	if ((bits & RADIANT_SWI_GATE_DENY) != 0u) {
+		k_work_submit(&denied_work);
+	}
+}
 
 /*
  * What the next grant will be read with, held apart from the current one.
@@ -837,7 +977,7 @@ static void request_work_fn(struct k_work *w)
 	 * and it is reported the same way rather than through a second path.
 	 */
 	g.pending = false;
-	k_timer_stop(&deadline);
+	deadline_stop();
 	if (g.bootstrapping) {
 		/* No operation is behind the bootstrap. Leaving anchor_valid
 		 * false is the whole recovery: the next real request falls back
@@ -889,7 +1029,7 @@ static void bootstrap_anchor(void)
 	next_grant.grant_end = 0u;
 	g.bootstrapping = true;
 	g.pending = true;
-	k_work_submit(&request_work);
+	radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
 }
 
 /*
@@ -949,6 +1089,92 @@ static void denied_work_fn(struct k_work *w)
 static void gate_dump_fn(struct k_work *w);
 static K_WORK_DELAYABLE_DEFINE(gate_dump, gate_dump_fn);
 
+#if defined(CONFIG_INIT_STACKS)
+/*
+ * HOW MUCH OF EACH STACK THIS BACKEND ACTUALLY USES, measured rather than
+ * argued about.
+ *
+ * Two stacks decide whether this gate can live in an image, and both fail the
+ * same way from the outside - a board that reboots with nothing printed:
+ *
+ *   ISR    every MPSL timeslot signal (START/RADIO/TIMER0) is delivered from
+ *          an IRQ_ZERO_LATENCY vector at priority 0, which can preempt any
+ *          other ISR, so this backend's grant path lands on top of whatever
+ *          interrupt was already running. Overflow here is the one that
+ *          produces a SILENT reset: MSP is already past the guard, so the
+ *          fault handler's own stacking faults, escalates, and the core
+ *          LOCKS UP (reset reason 0x100) before anything can be printed.
+ *
+ *   sysWQ  everything this file defers - request_work_fn(), denied_work_fn()
+ *          and, through them, deliver_terminal() and a whole scheduler pass.
+ *          radiant/Kconfig asks for 4096 and says why; on a Thread build it
+ *          does not get it (nrf/subsys/net/openthread/Kconfig.defconfig
+ *          pins 1120), which is exactly the arm where this file is compiled.
+ *          Overflow here hits a guarded thread stack, so it PRINTS an MPU
+ *          fault - a different signature from the ISR case, and that
+ *          difference is how the two are told apart.
+ *
+ * Free to compute: CONFIG_INIT_STACKS fills both with 0xAA at boot, so the
+ * high-water mark is just the length of the run of fill still standing. Costs
+ * one scan a second, off the grant path, on the dump work item.
+ */
+K_KERNEL_STACK_ARRAY_DECLARE(z_interrupt_stacks, CONFIG_MP_MAX_NUM_CPUS,
+			     CONFIG_ISR_STACK_SIZE);
+
+/*
+ * The run of untouched 0xAA still standing at the bottom of a stack.
+ * Open-coded rather than calling z_stack_space_get(), which lives in
+ * <kernel_internal.h> - a private kernel header that is not on a module's
+ * include path (thread_analyzer.c can include it; this file cannot).
+ */
+static size_t fill_run(const uint8_t *buf, size_t size)
+{
+	size_t i;
+
+	for (i = 0u; i < size; i++) {
+		if (buf[i] != 0xAAu) {
+			break;
+		}
+	}
+	return i;
+}
+
+static void stacks_report(void)
+{
+	size_t isr_size = K_KERNEL_STACK_SIZEOF(z_interrupt_stacks[0]);
+	size_t isr_unused;
+	size_t wq_size = 0;
+	size_t wq_unused = 0;
+
+	isr_unused = fill_run(K_KERNEL_STACK_BUFFER(z_interrupt_stacks[0]),
+			      isr_size);
+	/*
+	 * The system work queue's own thread. k_work_queue_thread_get() is the
+	 * supported way to name it; k_thread_stack_space_get() then reads the
+	 * same 0xAA fill.
+	 */
+	{
+		k_tid_t wq = k_work_queue_thread_get(&k_sys_work_q);
+
+		if (wq != NULL &&
+		    k_thread_stack_space_get(wq, &wq_unused) == 0) {
+			wq_size = CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE;
+		}
+	}
+	/*
+	 * Printed as USED/SIZE, not unused: the number that matters is how
+	 * close the peak came to the ceiling, and a reader should not have to
+	 * subtract. `isr` at or near its size is the silent-lockup fault.
+	 */
+	LOG_INF("stacks: isr=%u/%u syswq=%u/%u",
+		(unsigned int)(isr_size - isr_unused), (unsigned int)isr_size,
+		(unsigned int)(wq_size > wq_unused ? wq_size - wq_unused : 0u),
+		(unsigned int)wq_size);
+}
+#else
+static inline void stacks_report(void) { }
+#endif /* CONFIG_INIT_STACKS */
+
 static void gate_dump_fn(struct k_work *w)
 {
 	ARG_UNUSED(w);
@@ -974,6 +1200,7 @@ static void gate_dump_fn(struct k_work *w)
 	struct radiant_nrf_win_diag wd;
 
 	radiant_nrf_win_diag_get(&wd);
+	stacks_report();
 	/* Everything a tracked window's request can do, in one line. den is the
 	 * remainder: acquires that never reached a reservation at all. */
 	LOG_INF("hi: acq=%u den=%u resv=%u pend=%u blk=%u grant=%u",
@@ -990,10 +1217,11 @@ static void gate_dump_fn(struct k_work *w)
 	 * and MPSL routed it to us (sigrad/isr), and the core got its terminal
 	 * (term). The first zero going left to right is where the window dies.
 	 */
-	LOG_INF("seam: grant=%u nostage=%u prog=%u/%u | sigrad=%u sigt0=%u "
+	LOG_INF("seam: grant=%u nostage=%u prog=%u/%u cbdrop=%u/%u | sigrad=%u sigt0=%u "
 		"isr=%u end=%u dis=%u term=%u | ramp=%u/%u state=%u ev=0x%02x "
 		"rxen saved=0x%08x cont=0x%03x a=0x%08x p=0x%08x e=0x%08x inten=0x%08x",
 		wd.grants, wd.nostage, wd.prog_ok, wd.prog_fail,
+		wd.cb_dropped, wd.cb_depth_max,
 		stats.sig_radio, stats.sig_timer0,
 		wd.isr, wd.ev_end, wd.ev_disabled, wd.term,
 		wd.ramped, wd.never_ramped, wd.last_state,
@@ -1099,7 +1327,7 @@ static void deadline_expired(struct k_timer *t)
 	 * is orphaned and must be told. */
 	g.deny_src = DENY_SRC_DEADLINE;
 	g.deny_wanted = true;
-	k_work_submit(&denied_work);
+	radiant_swi_pend(RADIANT_SWI_GATE_DENY);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1199,7 +1427,7 @@ static inline void end_housekeeping(void)
 {
 	g.deny_src = DENY_SRC_AFTER_GRANT;
 	g.deny_wanted = true;
-	k_work_submit(&denied_work);
+	radiant_swi_pend(RADIANT_SWI_GATE_DENY);
 }
 
 /* A denial with nothing ambiguous about it: no grant is coming for the staged
@@ -1208,13 +1436,26 @@ static inline void submit_denial(void)
 {
 	g.deny_src = DENY_SRC_BLOCKED;
 	g.deny_wanted = true;
-	k_work_submit(&denied_work);
+	radiant_swi_pend(RADIANT_SWI_GATE_DENY);
+}
+
+/* See gate_in_signal() in radiant_radio_nrf_gate.h. Set for the whole of the
+ * callback so the backend can tell a zero-latency completion from an ordinary
+ * one; a plain bool because MPSL delivers every signal this file answers from
+ * one interrupt priority, so the callback cannot preempt itself. */
+static volatile bool in_signal;
+
+bool gate_in_signal(void)
+{
+	return in_signal;
 }
 
 static mpsl_timeslot_signal_return_param_t *on_signal(
 	mpsl_timeslot_session_id_t id, uint32_t signal)
 {
 	ARG_UNUSED(id);
+
+	in_signal = true;
 
 	/* The trace records sequence for a debugging halt: START then TIMER0
 	 * repeating means the compare is re-firing; START then silence means
@@ -1254,7 +1495,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		g.release_wanted = false;
 		/* A fresh timeslot, so ACTION_END is legal again. */
 		g.ended = false;
-		k_timer_stop(&deadline);
+		deadline_stop();
 
 		if (g.bootstrapping) {
 			/* The anchor set above is the whole point of this
@@ -1579,7 +1820,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 			blocked_run = 0u;
 			g.anchor_valid = false;
 		}
-		k_timer_stop(&deadline);
+		deadline_stop();
 		if (g.pending && g.bootstrapping) {
 			/* Nothing is behind it and nothing needs telling; the
 			 * next real request bootstraps again. */
@@ -1652,7 +1893,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * point, which is the normal case, not the exception. See
 		 * request_work_fn. */
 		if (g.pending) {
-			k_work_submit(&request_work);
+			radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
 		}
 		break;
 
@@ -1677,7 +1918,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		}
 		END_SITE(END_SITE_SESSION);
 		timer0_disarm();
-		k_timer_stop(&deadline);
+		deadline_stop();
 		if (g.pending) {
 			g.pending = false;
 			if (g.bootstrapping) {
@@ -1723,6 +1964,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 	}
 
 	trace_put(signal, rv.callback_action);
+	in_signal = false;
 	return &rv;
 }
 
@@ -1745,6 +1987,30 @@ int gate_init(void)
 		/* Bisection aid, off by default. See the Kconfig help. */
 		LOG_WRN("gate: session NOT opened (diagnostic build)");
 		return RADIANT_RADIO_OK_RC;
+	}
+	/*
+	 * The trampoline before the session: once a session is open a grant can
+	 * arrive, and every deferral from inside one goes through this line.
+	 *
+	 * ONCE PER BOOT, not once per gate_init(). The subscription outlives the
+	 * session on purpose - a subscriber list has no way to unregister and no
+	 * need to, since the handler is a file static that is always valid.
+	 * Without this guard a suspend/resume cycle (gate_shutdown() then
+	 * gate_init(), which is also how every test in radiant/tests/gate
+	 * starts) adds an entry each time and the table is full on the fourth:
+	 * measured as `gate: radiant_swi_register: -12` and a gate that then
+	 * refuses to initialise at all.
+	 */
+	if (!swi_registered) {
+		rc = (int32_t)radiant_swi_register(RADIANT_SWI_GATE_REQUEST |
+						   RADIANT_SWI_GATE_DENY |
+						   RADIANT_SWI_GATE_DEADLINE,
+						   gate_swi_handler);
+		if (rc != 0) {
+			LOG_ERR("gate: radiant_swi_register: %d", (int)rc);
+			return RADIANT_RADIO_EIO;
+		}
+		swi_registered = true;
 	}
 	rc = mpsl_timeslot_session_open(on_signal, &session_id);
 	LOG_INF("gate: session_open rc=%d, max_window=%u us, place_lead=%u us",
@@ -1770,7 +2036,7 @@ void gate_shutdown(void)
 	if (!session_open) {
 		return;
 	}
-	k_timer_stop(&deadline);
+	deadline_stop();
 	/* g.hw_held, not g.granted: the session must not be closed with the
 	 * 802.15.4 driver's SUBSCRIBE_RXEN still swapped out, and gate_release()
 	 * clears g.granted a good deal earlier than the radio comes back. */
@@ -2119,13 +2385,11 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	if (prio == RADIANT_GATE_PRIO_HIGH) {
 		stats.hi_pending++;
 	}
-	k_work_submit(&request_work);
+	radiant_swi_pend(RADIANT_SWI_GATE_REQUEST);
 
 	/* The backstop: the operation's own start plus DEADLINE_SLACK_US
 	 * (see its comment for why not zero). */
-	k_timer_start(&deadline,
-		      K_USEC((uint32_t)(t_from - now) + DEADLINE_SLACK_US),
-		      K_NO_WAIT);
+	deadline_arm((uint32_t)(t_from - now) + DEADLINE_SLACK_US);
 
 	return GATE_PENDING;
 }
@@ -2137,7 +2401,7 @@ void gate_release(void)
 		 * and a pending request is cancelled by the core's own
 		 * terminal rather than here. */
 		g.pending = false;
-		k_timer_stop(&deadline);
+		deadline_stop();
 		/*
 		 * This branch is reached with the radio still ours in the
 		 * window between a previous gate_release() and its compare

@@ -153,6 +153,33 @@ static void post_energy(uint32_t source, int64_t raw_uj, uint64_t t_us)
 	radiant_bridge_drain();
 }
 
+/*
+ * The FE state, exactly as radiant_power_adapter.c publishes it: field_id 0x08,
+ * type 0x40 ENUM_GENERIC, instantaneous, raw = PROFILE_FEC_STATE_*. Posting it
+ * with the real field_id rather than 0 matters here, because the whole defect
+ * this rule fixes was that nothing read this field at all.
+ */
+#define FEC_STATE_READY    2
+#define FEC_STATE_IN_USE   3
+#define FEC_STATE_FINISHED 4
+
+static void post_fe_state(uint32_t source, int64_t state, uint64_t t_us,
+			  uint8_t extra_flags)
+{
+	struct radiant_sample s = {
+		.source = source,
+		.field_id = 0x08u,
+		.field_type = RADIANT_FIELD_ENUM_GENERIC,
+		.flags = extra_flags,
+		.exp = 0,
+		.raw = state,
+		.t_us = t_us,
+	};
+
+	radiant_bridge_post(&s);
+	radiant_bridge_drain();
+}
+
 #define US_PER_S ((uint64_t)1000000u)
 
 ZTEST(radiant_rules, test_activity_needs_a_second_sample)
@@ -632,6 +659,151 @@ ZTEST(radiant_rules, test_stale_clears_the_zones_too_on_a_real_stream)
 	at_rest = last_with(RADIANT_RULE_FIELD_AT_REST);
 	zassert_not_null(at_rest, "the zones are gated on worn and must follow");
 	zassert_equal(at_rest->raw, 0, NULL);
+}
+
+/* ---------------------------------------------------------------------------
+ * The equipment-state rule: the eighth group, and the first input to this
+ * module that is a REPORT rather than an inference.
+ * ---------------------------------------------------------------------------
+ */
+
+ZTEST(radiant_rules, test_fe_state_reaches_the_rule_engine_at_all)
+{
+	const struct radiant_sample *out;
+
+	/* THE REGRESSION FOR THE WHOLE DEFECT. rules_want() accepted only
+	 * ACCUMULATING samples and RADIANT_FIELD_HEART_RATE, so the FE state
+	 * was on the bus from the day the FE-C decoder landed and nothing read
+	 * it: a bound treadmill published a speed and a state enum and
+	 * asserted no occupancy at all. A single sample is enough, which is
+	 * the other half of the point - unlike every accumulator rule here,
+	 * this one needs no second sample to difference against. */
+	post_fe_state(0u, FEC_STATE_IN_USE, 1u * US_PER_S, 0u);
+
+	out = last_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE);
+	zassert_not_null(out, "the FE state must reach the rule engine");
+	zassert_equal(out->raw, 1, NULL);
+	zassert_equal(out->field_type, RADIANT_FIELD_OCCUPANCY,
+		      "no vocabulary addition is needed: 0x02 is already in "
+		      "all three copies");
+	zassert_true((out->flags & RADIANT_SAMPLE_DERIVED) != 0u, NULL);
+}
+
+ZTEST(radiant_rules, test_in_use_asserts_immediately_with_no_dwell)
+{
+	/* The activity rule waits 2 s before believing an accumulator is
+	 * advancing, because "advancing" is an inference. This is not: the
+	 * machine said IN_USE, and adding a dwell would only add latency to a
+	 * fact already established. */
+	post_fe_state(0u, FEC_STATE_READY, 1u * US_PER_S, 0u);
+	zassert_is_null(last_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE),
+			"READY must publish nothing: the output starts false "
+			"and the rules are change-only");
+
+	post_fe_state(0u, FEC_STATE_IN_USE, 1u * US_PER_S + 250000u, 0u);
+	zassert_equal(last_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE)->raw, 1,
+		      NULL);
+	zassert_equal(count_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE), 1u,
+		      NULL);
+}
+
+ZTEST(radiant_rules, test_a_walk_break_does_not_flap_the_output)
+{
+	uint64_t t = 10u * US_PER_S;
+
+	post_fe_state(0u, FEC_STATE_IN_USE, t, 0u);
+	zassert_equal(last_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE)->raw, 1,
+		      NULL);
+
+	/* Two seconds of READY - somebody stepping off for a drink - inside
+	 * the 5 s clear dwell. The output must hold. */
+	for (uint32_t i = 0; i < 8u; i++) {
+		t += 250000u; /* 4 Hz, the FE-C rate */
+		post_fe_state(0u, FEC_STATE_READY, t, 0u);
+	}
+	zassert_equal(count_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE), 1u,
+		      "a walk break must not flap a gym display");
+
+	/* Back on the belt, still one record: nothing changed. */
+	t += 250000u;
+	post_fe_state(0u, FEC_STATE_IN_USE, t, 0u);
+	zassert_equal(count_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE), 1u,
+		      NULL);
+
+	/* Now genuinely finished, and held past the dwell. */
+	for (uint32_t i = 0; i < 40u; i++) {
+		t += 250000u;
+		post_fe_state(0u, FEC_STATE_FINISHED, t, 0u);
+	}
+	zassert_equal(last_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE)->raw, 0,
+		      NULL);
+	zassert_equal(count_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE), 2u,
+		      NULL);
+}
+
+ZTEST(radiant_rules, test_reserved_states_are_not_occupied)
+{
+	/* Table 8-10 reserves 0 and 5..7, and profile_fec.c passes them
+	 * through rather than remapping them - "reserved" there means a future
+	 * state, not an error. Anything that is not exactly IN_USE must read
+	 * as unoccupied, which is the safe direction: a future state read as
+	 * occupied would leave a gym counting machines nobody is on. */
+	post_fe_state(0u, FEC_STATE_IN_USE, 1u * US_PER_S, 0u);
+	zassert_equal(last_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE)->raw, 1,
+		      NULL);
+
+	for (uint32_t i = 0; i < 40u; i++) {
+		post_fe_state(0u, 7, (2u + i) * US_PER_S, 0u);
+	}
+	zassert_equal(last_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE)->raw, 0,
+		      NULL);
+}
+
+ZTEST(radiant_rules, test_stale_drops_equipment_occupancy_immediately)
+{
+	post_fe_state(0u, FEC_STATE_IN_USE, 1u * US_PER_S, 0u);
+	zassert_equal(last_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE)->raw, 1,
+		      NULL);
+
+	/* THE PROPERTY A GYM DASHBOARD DEPENDS ON. An unplugged treadmill must
+	 * go unoccupied rather than stick at "in use" forever, and it must do
+	 * so without waiting out the clear dwell - liveness is not a walk
+	 * break. Note the sample still carries IN_USE: it is the STALE flag
+	 * that decides, not the value. */
+	post_fe_state(0u, FEC_STATE_IN_USE, 2u * US_PER_S,
+		      RADIANT_SAMPLE_STALE);
+	zassert_equal(last_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE)->raw, 0,
+		      NULL);
+}
+
+ZTEST(radiant_rules, test_equipment_occupancy_is_per_source)
+{
+	post_fe_state(0u, FEC_STATE_IN_USE, 1u * US_PER_S, 0u);
+	post_fe_state(1u, FEC_STATE_READY, 1u * US_PER_S, 0u);
+
+	/* Two treadmills, two bindings, two answers - which is what makes N
+	 * machines N occupancy endpoints rather than one shared verdict. */
+	zassert_equal(cap_n, 1u, NULL);
+	zassert_equal(cap_buf[0].source, 0u, NULL);
+	zassert_equal(cap_buf[0].raw, 1, NULL);
+}
+
+ZTEST(radiant_rules, test_the_derived_output_does_not_re_enter_the_rule)
+{
+	/* rules_want() declines DERIVED samples, and widening it to accept
+	 * ENUM_GENERIC must not have opened a loop: the occupancy output this
+	 * rule posts is OCCUPANCY (0x02) rather than ENUM_GENERIC, but the
+	 * loop guard is what makes that not merely a coincidence. */
+	post_fe_state(0u, FEC_STATE_IN_USE, 1u * US_PER_S, 0u);
+	zassert_equal(count_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE), 1u,
+		      NULL);
+
+	/* And an already-derived ENUM_GENERIC (nothing produces one today) is
+	 * still declined rather than evaluated. */
+	post_fe_state(0u, FEC_STATE_READY, 2u * US_PER_S,
+		      RADIANT_SAMPLE_DERIVED);
+	zassert_equal(count_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE), 1u,
+		      NULL);
 }
 
 static void *rules_setup(void)

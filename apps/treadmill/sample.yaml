@@ -1,0 +1,121 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Twister coverage for the treadmill node.
+#
+# build_only on every entry. These are compile-and-configure assertions, not
+# tests - the node's actual behaviour needs a radio, a head unit, a phone and a
+# stopwatch, and docs/treadmill-reference-design.md's bench procedure is where
+# that lives. The properties that ARE testable without hardware have their own
+# ztest applications: radiant/tests (the two page codecs and the interleave) and
+# tests/pages/ here (the state module and every unit conversion).
+#
+# THE VALUE IS NOT IN THE COMPILE. It is in the .config read-back that the
+# build-treadmill CI job does afterwards. apps/hrm_ble learned this the
+# expensive way: `-Dstrap_EXTRA_CONF_FILE=` turned out to be a silent no-op
+# after a directory rename, because sysbuild derives the image name from the
+# basename of APP_DIR. The flag named an image that no longer existed, CMake
+# emitted only its end-of-run "manually-specified variables were not used"
+# warning, and the BLE image built green with no BLE in it. A build-only entry
+# would have passed that too. Asserting the resulting .config is the only thing
+# that would not have.
+#
+# WHO ACTUALLY RUNS THIS FILE. Not CI, today: the ztest job's twister
+# invocation walks the test directories, and this file sits beside them rather
+# than under one. The configurations below are built and asserted by the
+# build-treadmill job in .github/workflows/build.yml and by
+# scripts/build_all.ps1's $treadmillTargets loop; this file is for
+# `twister -T apps/treadmill -p nrf54l15dk/nrf54l15/cpuapp` by hand, and for
+# stating the matrix in one place the two of them can be read against.
+#
+# sysbuild: true, and it is load-bearing rather than boilerplate. Every
+# `treadmill_`-prefixed argument below is an IMAGE-SCOPED sysbuild setting; run
+# without sysbuild, twister would pass them to a build that has no image scoping
+# at all and they would be silently ignored.
+common:
+  build_only: true
+  sysbuild: true
+  tags:
+    - radiant
+    - treadmill
+
+tests:
+  # Both ANT+ masters, no BLE, no arbiter. The baseline the others are read
+  # against, and the configuration a manufacturer starts from.
+  treadmill.ant:
+    platform_allow:
+      - nrf54l15dk/nrf54l15/cpuapp
+    extra_args:
+      - RADIANT_BACKEND=nrf
+
+  # THE OTHER HALF OF THE BACKEND'S `depends on`.
+  #
+  # radiant/Kconfig's nrf arm is `SOC_COMPATIBLE_NRF52X || SOC_COMPATIBLE_NRF54LX`,
+  # and this row is what keeps the nRF52 half compiled. ANT+ only on purpose -
+  # see boards/nrf52840dk_nrf52840.overlay for why the BLE arm is not built
+  # here.
+  treadmill.ant_nrf52840:
+    platform_allow:
+      - nrf52840dk/nrf52840
+    extra_args:
+      - RADIANT_BACKEND=nrf
+
+  # THE COEXISTENCE FALLBACK, BUILT SO IT CANNOT ROT.
+  #
+  # One ANT+ master instead of two. It is not a shipping configuration - FE-C
+  # alone is invisible to anything that only knows foot pods - and it is the
+  # first thing a bench operator reaches for when two masters plus BLE
+  # misbehave. A fallback that has never been compiled is not a fallback.
+  treadmill.fec_only:
+    platform_allow:
+      - nrf54l15dk/nrf54l15/cpuapp
+    extra_args:
+      - RADIANT_BACKEND=nrf
+      - treadmill_EXTRA_CONF_FILE=fec_only.conf
+
+  # The BLE half, image-scoped through the CORRECT image name. `treadmill_`
+  # here is the basename of this directory; anything else addresses nothing.
+  treadmill.ble:
+    platform_allow:
+      - nrf54l15dk/nrf54l15/cpuapp
+    extra_args:
+      - RADIANT_BACKEND=nrf
+      - treadmill_EXTRA_CONF_FILE=ble.conf
+
+  # THE HEAVIEST CONFIGURATION THIS APPLICATION HAS: two ANT+ masters, one
+  # ANT+ slave, and BLE with SMP and a bonding store. It is the one that
+  # decides whether the RAM budget holds, which is the constraint the Matter
+  # spike already established matters more than flash on this part.
+  treadmill.ble_hr:
+    platform_allow:
+      - nrf54l15dk/nrf54l15/cpuapp
+    extra_args:
+      - RADIANT_BACKEND=nrf
+      - treadmill_EXTRA_CONF_FILE="ble.conf;hr_rx.conf"
+
+  # THE ARM WITH NO SOURCE IN IT, and it is here to prove a negative.
+  #
+  # CONFIG_TREADMILL_SOURCE_CUSTOM compiles no implementation of the seam. The
+  # image must still LINK - if it does not, an integrator's first build fails
+  # for a reason that has nothing to do with their driver - and it must still
+  # run, warning at boot and reporting a stopped belt rather than falling back
+  # to the simulator. Only the link half is checkable here.
+  treadmill.custom:
+    platform_allow:
+      - nrf54l15dk/nrf54l15/cpuapp
+    extra_args:
+      - RADIANT_BACKEND=nrf
+      - treadmill_EXTRA_CONF_FILE=source_custom.conf
+
+# Deliberately not here, so the absence is a recorded decision rather than an
+# oversight:
+#
+#   * nrf54lm20dk/nrf54lm20a/cpuapp. The overlay exists and
+#     scripts/build_all.ps1's rows build it, but it adds nothing to THIS file:
+#     it is the same SOC_COMPATIBLE_NRF54LX arm as the L15 with the same TIMER
+#     answer, so an entry would cost a full build per run to re-prove what the
+#     L15 rows already prove. The nRF52840 row is the one covering a different
+#     arm.
+#   * A BLE row on nRF52840. See boards/nrf52840dk_nrf52840.overlay.
+#   * CONFIG_TREADMILL_FEC_METABOLIC. It is one optional page behind one
+#     `#if`, and the code it guards is exercised by tests/pages/ rather than by
+#     a whole extra image.

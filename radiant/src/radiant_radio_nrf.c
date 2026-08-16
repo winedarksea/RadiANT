@@ -105,7 +105,22 @@
  * include/radiant/ on purpose: nothing above the backend may know that
  * this question exists, let alone how it is answered.
  */
+#include <radiant/radiant_swi.h>
+
 #include "radiant_radio_nrf_gate.h"
+
+/* Whether a completion raised inside an MPSL timeslot signal callback has to be
+ * queued for the trampoline instead of run there. See the long note above
+ * core_cb_rx(). Only the arbitrated build has such a context. */
+#if defined(CONFIG_RADIANT_SWI)
+#define CORE_CB_DEFERRED 1
+/* THE ONE THAT MUST STAY ZERO - completions the queue had no room for - and the
+ * queue's high-water mark beside it, so zero reads as margin and not as luck.
+ * Declared here rather than with the queue because radiant_nrf_win_diag_get()
+ * is above it and publishes both. */
+static uint32_t core_cb_dropped;
+static uint32_t core_cb_depth_max;
+#endif
 
 LOG_MODULE_REGISTER(radiant_radio_nrf, CONFIG_RADIANT_LOG_LEVEL);
 
@@ -908,6 +923,12 @@ void radiant_nrf_win_diag_get(struct radiant_nrf_win_diag *out)
 		return;
 	}
 	*out = *(const struct radiant_nrf_win_diag *)&radiant_win_diag;
+#if defined(CORE_CB_DEFERRED)
+	/* Kept outside radiant_win_diag because the queue exists whether or not
+	 * the sweep-debug counters are compiled in. */
+	out->cb_dropped = core_cb_dropped;
+	out->cb_depth_max = core_cb_depth_max;
+#endif
 }
 #else
 #define WIN_DIAG(field) ((void)0)
@@ -1724,6 +1745,208 @@ static void radio_isr(const void *arg);
 static void radio_disable_now(void);
 static void deliver_terminal(enum radiant_radio_status st);
 
+/* ---------------------------------------------------------------------------
+ * THE CORE CALLBACK, AND WHY IT DOES NOT RUN WHERE IT IS RAISED
+ *
+ * The (a) split of docs/p4-zli-kernel-calls.md. Under the MPSL gate the RADIO
+ * interrupt is delivered as an MPSL timeslot signal from an IRQ_ZERO_LATENCY
+ * vector, which runs above every irq_lock() and every kernel spinlock. Bug 27
+ * removed the kernel CALLS from that context; this removes the CORE from it.
+ *
+ * Why that was necessary and a lock-free event ring would not have been:
+ * radiant_op.cbs->rx() does not merely queue a packet. It runs
+ * api_sched_done() and with it radiant_channel_on_slot(), the scheduler
+ * re-arm, api_ch[], api_xfer[], api_stats - all of which the thread-context
+ * ANT API touches under k_mutex_lock(&api_lock), and A MUTEX CANNOT EXCLUDE A
+ * ZERO-LATENCY INTERRUPT any more than irq_lock() can. Fixing only the event
+ * ring would have fixed the visible symptom and left the scheduler and channel
+ * state exactly as exposed.
+ *
+ * Measured, with the timeslot session simply never opened so that none of this
+ * ran in the zero-latency context: 9 min 52 s with zero lockups, against 13
+ * lockups in 620 s with it open. That bisection is what says the cost is worth
+ * paying.
+ *
+ * WHAT STAYS BEHIND. Everything that touches the peripheral or the grant: the
+ * (D)PPI disables, RADIO->SHORTS, the interrupt mask, radio_disable_now(), and
+ * gate_release() - which must happen promptly or a tracked window holds its
+ * follow-on reservation for a reply that is not coming. Only the callback into
+ * the core is deferred, and the event is fully built before it is queued, so
+ * every register read (rssi_sample_dbm(), RXCRC, the captured t_sync) still
+ * happens inside the window it describes.
+ *
+ * SINGLE PRODUCER, SINGLE CONSUMER, and that is a property of gate_in_signal()
+ * rather than a hope: the only producer is the MPSL signal callback, which
+ * cannot preempt itself; the only consumer is the trampoline's handler, which
+ * runs strictly below it. Every other context - the gate's work queue
+ * delivering a denial, the trampoline dispatching - has gate_in_signal() false
+ * and calls the core directly, which is legal there and is what makes
+ * api_lock mean something again.
+ * ---------------------------------------------------------------------------
+ */
+
+#if defined(CORE_CB_DEFERRED)
+
+/* The longest body the backend ever hands up, copied because the pointer in
+ * struct radiant_rx_event is "valid only for the duration of this callback"
+ * and the callback now happens later. ANT frames are 8 payload bytes plus
+ * headers; 32 covers every PHY this backend offers with room to spare, and a
+ * body longer than this is refused at the queue rather than truncated. */
+#define CORE_CB_BODY_MAX 32u
+
+enum core_cb_kind { CORE_CB_RX = 0, CORE_CB_TX, CORE_CB_ED };
+
+struct core_cb_entry {
+	uint8_t kind;
+	union {
+		struct radiant_rx_event rx;
+		struct radiant_tx_event tx;
+#if defined(CONFIG_RADIANT_ED_SCAN)
+		struct radiant_ed_event ed;
+#endif
+	} ev;
+	uint8_t body[CORE_CB_BODY_MAX];
+	uint8_t body_len;
+};
+
+/*
+ * Eight, not one. Two completions can land before the trampoline gets the CPU -
+ * a frame and the window's own terminal are the ordinary pair, and a merged
+ * window can raise several - and a dropped completion is the expensive kind of
+ * bug: it presents as a channel that quietly stops rather than as a crash.
+ * Power of two so the mask is free.
+ */
+#define CORE_CB_RING 8u
+static struct core_cb_entry core_cb_q[CORE_CB_RING];
+/* head is written only by the producer, tail only by the consumer; each reads
+ * the other's. Both 32-bit and free-running, so a torn read is impossible on
+ * this core and wrap is a non-event. */
+static volatile uint32_t core_cb_head;
+static volatile uint32_t core_cb_tail;
+/* THE NUMBER THAT MUST STAY ZERO. Non-zero means a completion was thrown away
+ * because the queue was full, which the core sees as a window that never
+ * finished. Reported through radiant_nrf_win_diag so a bench run can read it;
+ * see the `cbdrop=` field. */
+
+static void core_cb_dispatch(void)
+{
+	while (core_cb_tail != core_cb_head) {
+		struct core_cb_entry *e = &core_cb_q[core_cb_tail % CORE_CB_RING];
+
+		switch ((enum core_cb_kind)e->kind) {
+		case CORE_CB_RX:
+			/* Repoint at our copy: the backend buffer the original
+			 * pointed into has very likely been reused by now. */
+			e->ev.rx.body = (e->body_len != 0u) ? e->body : NULL;
+			radiant_op.cbs->rx(&e->ev.rx, radiant_op.user);
+			break;
+		case CORE_CB_TX:
+			radiant_op.cbs->tx(&e->ev.tx, radiant_op.user);
+			break;
+#if defined(CONFIG_RADIANT_ED_SCAN)
+		case CORE_CB_ED:
+			radiant_op.cbs->ed(&e->ev.ed, radiant_op.user);
+			break;
+#endif
+		default:
+			break;
+		}
+		/* Advanced AFTER the callback, so the slot cannot be reused
+		 * under a callback that is still reading it. */
+		core_cb_tail++;
+	}
+}
+
+static void core_cb_swi(uint32_t bits)
+{
+	ARG_UNUSED(bits);
+	core_cb_dispatch();
+}
+
+static bool core_cb_enqueue(const struct core_cb_entry *src)
+{
+	uint32_t head = core_cb_head;
+
+	uint32_t depth = head - core_cb_tail;
+
+	if (depth >= CORE_CB_RING) {
+		core_cb_dropped++;
+		return false;
+	}
+	if ((depth + 1u) > core_cb_depth_max) {
+		core_cb_depth_max = depth + 1u;
+	}
+	core_cb_q[head % CORE_CB_RING] = *src;
+	/* The slot is complete before the consumer is told it exists. A
+	 * compiler barrier is enough: producer and consumer are the same CPU,
+	 * so there is no store buffer between them to order. */
+	__asm__ volatile("" ::: "memory");
+	core_cb_head = head + 1u;
+	radiant_swi_pend(RADIANT_SWI_CORE_CB);
+	return true;
+}
+#endif /* CORE_CB_DEFERRED */
+
+/*
+ * The three seams. Inline when we are not in a zero-latency context - which is
+ * every context on the direct backend, and the gate's work queue and the
+ * trampoline itself on the arbitrated one - and queued when we are.
+ */
+static void core_cb_rx(struct radiant_rx_event *evt)
+{
+#if defined(CORE_CB_DEFERRED)
+	if (gate_in_signal()) {
+		struct core_cb_entry e;
+
+		memset(&e, 0, sizeof(e));
+		e.kind = (uint8_t)CORE_CB_RX;
+		e.ev.rx = *evt;
+		if (evt->body != NULL && evt->body_len != 0u &&
+		    evt->body_len <= CORE_CB_BODY_MAX) {
+			memcpy(e.body, evt->body, evt->body_len);
+			e.body_len = evt->body_len;
+		}
+		(void)core_cb_enqueue(&e);
+		return;
+	}
+#endif
+	radiant_op.cbs->rx(evt, radiant_op.user);
+}
+
+static void core_cb_tx(struct radiant_tx_event *evt)
+{
+#if defined(CORE_CB_DEFERRED)
+	if (gate_in_signal()) {
+		struct core_cb_entry e;
+
+		memset(&e, 0, sizeof(e));
+		e.kind = (uint8_t)CORE_CB_TX;
+		e.ev.tx = *evt;
+		(void)core_cb_enqueue(&e);
+		return;
+	}
+#endif
+	radiant_op.cbs->tx(evt, radiant_op.user);
+}
+
+#if defined(CONFIG_RADIANT_ED_SCAN)
+static void core_cb_ed(struct radiant_ed_event *evt)
+{
+#if defined(CORE_CB_DEFERRED)
+	if (gate_in_signal()) {
+		struct core_cb_entry e;
+
+		memset(&e, 0, sizeof(e));
+		e.kind = (uint8_t)CORE_CB_ED;
+		e.ev.ed = *evt;
+		(void)core_cb_enqueue(&e);
+		return;
+	}
+#endif
+	radiant_op.cbs->ed(evt, radiant_op.user);
+}
+#endif
+
 
 int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 {
@@ -1750,6 +1973,21 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 		LOG_ERR("radio gate did not initialise (%d)", err);
 		return err;
 	}
+
+#if defined(CORE_CB_DEFERRED)
+	/*
+	 * After gate_init() - which claims the trampoline line - and before the
+	 * RADIO can raise anything. A failure here is fatal rather than
+	 * cosmetic: with no consumer registered, every completion raised from a
+	 * timeslot signal would queue and never be dispatched, and the dongle
+	 * would open channels and hear nothing with no counter moving.
+	 */
+	err = radiant_swi_register(RADIANT_SWI_CORE_CB, core_cb_swi);
+	if (err != 0) {
+		LOG_ERR("core completion trampoline did not register (%d)", err);
+		return RADIANT_RADIO_EIO;
+	}
+#endif
 
 	clk = DEVICE_DT_GET_ONE(nordic_nrf_clock);
 	if (!device_is_ready(clk)) {
@@ -2915,7 +3153,7 @@ static void ed_dwell(void)
 	 * frequency from this. */
 	evt.mean_dbm = (int8_t)(sum / (int32_t)n);
 	evt.samples = n;
-	radiant_op.cbs->ed(&evt, radiant_op.user);
+	core_cb_ed(&evt);
 
 	/* The callback is entitled to abort or replace this operation, and the
 	 * scheduler does exactly that when a tracked window falls due. */
@@ -4154,7 +4392,7 @@ static void deliver_terminal(enum radiant_radio_status st)
 		/* No measurement on a terminal event, on the same terms as
 		 * radiant_rx_event's frame fields on a TIMEOUT. The indices
 		 * that were measured were reported as they happened. */
-		radiant_op.cbs->ed(&evt, radiant_op.user);
+		core_cb_ed(&evt);
 		return;
 	}
 #endif
@@ -4170,7 +4408,7 @@ static void deliver_terminal(enum radiant_radio_status st)
 		 * so rather than reporting a stale capture as exact. */
 		evt.t_sync = radiant_radio_now();
 		evt.t_sync_exact = false;
-		radiant_op.cbs->tx(&evt, radiant_op.user);
+		core_cb_tx(&evt);
 	} else {
 		struct radiant_rx_event evt;
 
@@ -4196,7 +4434,7 @@ static void deliver_terminal(enum radiant_radio_status st)
 			evt.has_noise = true;
 		}
 
-		radiant_op.cbs->rx(&evt, radiant_op.user);
+		core_cb_rx(&evt);
 	}
 }
 
@@ -4270,7 +4508,7 @@ static void radio_isr(const void *arg)
 						   radiant_op.t_sync_req);
 
 			radiant_op.kind = OP_NONE;
-			radiant_op.cbs->tx(&evt, radiant_op.user);
+			core_cb_tx(&evt);
 		}
 
 		if (radiant_op.kind == OP_RX && !radiant_op.terminal_sent) {
@@ -4365,7 +4603,7 @@ static void radio_isr(const void *arg)
 					radio_disable_now();
 					radiant_op.kind = OP_NONE;
 				}
-				radiant_op.cbs->rx(&evt, radiant_op.user);
+				core_cb_rx(&evt);
 			}
 		}
 	}

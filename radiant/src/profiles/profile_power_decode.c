@@ -2,14 +2,6 @@
 /*
  * profile_power_decode.c - ANT+ Bicycle Power page 0x10, receive side.
  *
- * Provenance: D00001086 Rev 5.1 Table 8-1 "Power-Only Message Format", plus
- * section 8.2.1 (pedal differentiation, bit 7), 8.2.2 (pedal percent, bits
- * 0-6), 8.3 (cadence 0xFF = not reported) and 8.4 (accumulated power is "the
- * running sum of the instantaneous power data"). Read directly from the
- * primary rather than inferred from profile_power_encode_std() next door - the
- * two are checked against each other by test_power_adapter.c's round-trip
- * case, and that is only a check if they were written from the same source
- * independently.
  *
  * ---------------------------------------------------------------------------
  * WHY THIS IS ITS OWN TRANSLATION UNIT AND NOT THREE MORE LINES IN

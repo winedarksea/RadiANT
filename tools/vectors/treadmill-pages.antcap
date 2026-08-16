@@ -1,0 +1,86 @@
+# ant capture v1: <seconds> <device_type> <device_number> <8 payload bytes>
+# HAND-COMPUTED, NOT CAPTURED. Every other file in this directory is a
+# recording - of a DK running the C encoders, or of ant_sim.py. This one is
+# neither, and the difference is the whole point of it.
+#
+# tools/test_compat_capture.py's other cases prove that the C and the Python
+# agree with each other. They cannot prove that either agrees with the
+# DOCUMENT, because both were written by the same project from the same
+# reading. So these ten payloads were computed by hand from the scalings stated
+# in radiant/src/profiles/profile_fec_tx.h and profile_sdm.h, and are asserted
+# from BOTH sides:
+#
+#   Python  tools/test_compat_capture.py::TestTreadmillGoldenPages
+#   C       radiant/tests/src/test_profile_fec_tx.c and test_profile_sdm.c,
+#           which assert the same byte values inline
+#
+# A change that breaks one and not the other is a disagreement between the two
+# implementations; a change that breaks both is a deliberate re-reading of the
+# specification and should say so in the commit message.
+#
+# The device numbers are apps/treadmill's Kconfig fallback, 4243 = 0x1093, on
+# both channels - which is what a real node does, since FE-C and SDM are
+# different device types and a receiver distinguishes them on that.
+#
+# ── FE-C, device type 0x11 ─────────────────────────────────────────────────
+#
+# Page 16 (0x10) General FE Data: equipment type 19 (treadmill), elapsed time
+# 40 quarter-seconds = 10.0 s, distance 100 m, speed 0x0BB8 = 3000 x 0.001 m/s,
+# heart rate 150 bpm, byte 7 = caps 0x5 (HR source 1 = ANT+, distance enabled)
+# with state nibble 3 = IN_USE and the lap toggle clear.
+0.000000 11 1093 10132864b80b9635
+# Page 17 (0x11) General Settings: bytes 1-2 reserved, cycle length 120 x
+# 0.01 m = 1.20 m stride, incline 0x012C = +300 x 0.01 % = +3.00 % LITTLE
+# ENDIAN AND SIGNED, resistance not supported (0xFF), state IN_USE.
+#
+# THE INCLINE IS THE VALUE A PAGE 51 COMMAND OF GRADE 0x4F4C ASKS FOR, and the
+# two encodings are different: grade is unsigned and biased by -200.00 %,
+# incline is plain two's complement. See profile_fec_tx.h.
+0.250000 11 1093 11ffff782c01ff30
+# Page 19 (0x13) Specific Treadmill Data: bytes 1-3 reserved, cadence 85
+# STRIDES per minute (170 steps - one stride is two footfalls), negative
+# vertical distance 12 x 0.1 m, positive 47 x 0.1 m, byte 7 = caps 0x3 (both
+# vertical distances enabled) with state nibble 3.
+0.500000 11 1093 13ffffff550c2f33
+# Page 54 (0x36) FE Capabilities: bytes 1-4 reserved, maximum resistance not
+# supported (0xFFFF), byte 7 = 0x04 = SIMULATION MODE AND NOTHING ELSE. Bit 2
+# is what unlocks page 51; a controller that reads this byte with the bit clear
+# never sends a track-resistance command at all.
+0.750000 11 1093 36ffffffffffff04
+# Page 51 (0x33) Track Resistance, CONTROLLER -> EQUIPMENT: bytes 1-4
+# reserved, grade 0x4F4C = 20300, and 20300 x 0.01 - 200.00 = +3.00 %. Byte 7
+# is rolling resistance, "use default", and a treadmill must ignore it
+# (section 8.8.4.2).
+1.000000 11 1093 33ffffffff4c4fff
+# Page 71 (0x47) Command Status, the answer to that page 51: last command 0x33,
+# sequence 7, status 0 = PASS, and bytes 4-7 ARE THE COMMAND'S OWN BYTES 4-7,
+# POSITION FOR POSITION - so the grade comes back at bytes 5-6, exactly where
+# the controller wrote it.
+1.250000 11 1093 47330700ff4c4fff
+#
+# ── SDM, device type 0x7C ──────────────────────────────────────────────────
+#
+# Page 1 (0x01) Default Data: time 42 s + 100 x 1/200 s = 42.5 s, distance
+# 200 m + 8 x 1/16 m = 200.5 m, byte 4 = 0x83 = distance fraction 8 in the HIGH
+# nibble and speed integer 3 m/s in the LOW nibble, speed fraction 128 x
+# 1/256 m/s = 3.5 m/s, 77 strides, update latency 4 x 1/32 s.
+2.000000 7C 1093 01642ac883804d04
+# Page 2 (0x02) Base: bytes 1, 2 and 6 reserved AND ZERO - this profile has no
+# 0xFF sentinel anywhere, which is the reverse of every other profile in this
+# tree. Cadence 85 strides/min + 8 x 1/16, speed as above, status 0x81 =
+# location Other (a treadmill is not on anybody's shoe) with use state Active.
+# Byte 4 is two nibbles again, cadence fraction high and speed integer low.
+2.250000 7C 1093 0200005583800081
+# Page 3 (0x03) Calories: the page 2 template with accumulated 123 kcal in byte
+# 6 - the ONLY byte that differs between the two.
+2.500000 7C 1093 0300005583807b81
+# Page 16 DECIMAL (0x10) Distance and Strides Summary: strides 0x123456 as a
+# 24-bit little-endian, distance 0x89ABCDEF as a 32-bit little-endian in
+# 1/256 m. Session totals for displaying, unlike page 1's rolling accumulators
+# for differencing.
+2.750000 7C 1093 10563412efcdab89
+# Page 22 DECIMAL (0x16) Capabilities: flags 0x17 = time, distance, speed and
+# cadence supported; latency and calories not. ON THIS PROFILE THIS PAGE IS THE
+# VALIDITY CONVENTION - there are no sentinels, so a sensor that never answers
+# it is a sensor whose zeros a receiver cannot tell from readings.
+3.000000 7C 1093 1617000000000000

@@ -20,17 +20,20 @@
 # needs a reason in the commit message.
 
 # Twister scenarios across radiant/tests, radiant/tests/api,
-# radiant/tests/gate and apps/hrm_ble/tests/sim_sched. Counted from the four
-# testcase.yaml files: radiant.unit, radiant.unit.sec_modes,
-# radiant.unit.pairing, radiant.api, radiant.api.sec, radiant.api.sec_host,
-# radiant.gate, hrm_ble.sim_sched.
+# radiant/tests/gate, apps/hrm_ble/tests/sim_sched and
+# apps/treadmill/tests/pages. Counted from the five testcase.yaml files:
+# radiant.unit, radiant.unit.sec_modes, radiant.unit.pairing, radiant.api,
+# radiant.api.sec, radiant.api.sec_host, radiant.gate, hrm_ble.sim_sched,
+# treadmill.pages.
 #
-# The eighth is the heart-rate node's beat scheduler and it is reached because
-# the ztest job passes a second `-T app/apps/hrm_ble/tests`. If that argument is
-# ever dropped, THIS number is what says so - which is the point, since the
-# suite it covers is the one check that would have caught a bug that escaped the
-# other 682.
-min_scenarios: 8
+# The eighth is the heart-rate node's beat scheduler and the ninth is the
+# treadmill's state module and unit conversions. Both are reached only because
+# the ztest job passes additional `-T app/apps/.../tests` arguments. If either
+# is ever dropped, THIS number is what says so - which is the point, since the
+# suites they cover are the ones that would have caught bugs that escaped
+# everything else (a strap notifying 67 times a minute while claiming 72; a
+# cadence reported in strides where a client expects steps).
+min_scenarios: 9
 
 # Total ztest cases twister executes, summed over every scenario.
 #
@@ -63,4 +66,12 @@ min_scenarios: 8
 # fixes (test_matter.c), and the activity rule's realistic-cadence regression
 # cases (test_rules.c). Counted by the rule above: 773 under radiant/tests plus
 # the four in apps/hrm_ble/tests/sim_sched/src/main.c.
-min_testcases: 777
+#
+# Raised again for apps/treadmill: the FE-C transmit half and its SS10.1
+# interleave (test_profile_fec_tx.c), ANT+ SDM 0x7C (test_profile_sdm.c), the
+# equipment-occupancy rule that finally reads the FE state off the sample bus
+# (test_rules.c), and the FE-C speed ceiling in the repaired-frame gate
+# (test_profile_sanity.c) - 827 under radiant/tests by the same static count -
+# plus the four in apps/hrm_ble/tests/sim_sched/src/main.c and the twelve in
+# apps/treadmill/tests/pages/src/main.c. 827 + 4 + 12 = 843.
+min_testcases: 843

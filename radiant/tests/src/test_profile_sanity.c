@@ -219,6 +219,72 @@ ZTEST(radiant_profile_sanity, test_a_short_payload_is_never_judged)
 		      "same, for heart rate's byte 7");
 }
 
+/* ---------------------------------------------------------------------------
+ * Fitness Equipment Control, added with apps/treadmill
+ * ---------------------------------------------------------------------------
+ */
+
+#define FEC RADIANT_PROFILE_SANITY_DEVTYPE_FEC
+
+/* Page 16: [0] 0x10 [1] equipment type [2] elapsed [3] distance
+ * [4..5] instantaneous speed LE, 0.001 m/s [6] HR [7] caps + state. */
+static void fec_general_body(uint8_t *body, uint16_t speed_mm_s)
+{
+	memset(body, 0, 8u);
+	body[0] = RADIANT_PROFILE_SANITY_PAGE_FEC_GENERAL;
+	body[1] = 19u; /* treadmill */
+	body[4] = (uint8_t)(speed_mm_s & 0xFFu);
+	body[5] = (uint8_t)(speed_mm_s >> 8);
+}
+
+ZTEST(radiant_profile_sanity, test_fec_speed_ceiling)
+{
+	uint8_t body[8];
+
+	/* A brisk run, and the fastest treadmill anybody sells. */
+	fec_general_body(body, 3000u);
+	zassert_false(radiant_profile_sanity_implausible(FEC, body, 8u), NULL);
+	fec_general_body(body, RADIANT_PROFILE_SANITY_FEC_MAX_MM_S);
+	zassert_false(radiant_profile_sanity_implausible(FEC, body, 8u),
+		      "the ceiling itself is plausible; only above it is not");
+
+	fec_general_body(body, RADIANT_PROFILE_SANITY_FEC_MAX_MM_S + 1u);
+	zassert_true(radiant_profile_sanity_implausible(FEC, body, 8u),
+		     "30 m/s is 108 km/h - a bit flip in the high byte, not a "
+		     "belt speed");
+}
+
+ZTEST(radiant_profile_sanity, test_fec_speed_sentinel_is_not_an_overrun)
+{
+	uint8_t body[8];
+
+	/* 0xFFFF is "cannot measure speed" and reads as 65.534 m/s. Judging it
+	 * on its numeric value would reject every FE that does not report
+	 * speed - which is the whole reason the sentinel is excluded before
+	 * the range test rather than after. */
+	fec_general_body(body, 0xFFFFu);
+	zassert_false(radiant_profile_sanity_implausible(FEC, body, 8u), NULL);
+}
+
+ZTEST(radiant_profile_sanity, test_fec_pages_other_than_16_get_no_opinion)
+{
+	uint8_t body[8];
+
+	/* Page 19's bytes 4-5 are a stride cadence and a vertical-distance
+	 * accumulator, not a speed. Reading them as one would reject a
+	 * perfectly good treadmill page whenever the accumulators happened to
+	 * land above the ceiling - which they will, every 256 units. */
+	fec_general_body(body, 0xF000u);
+	body[0] = 0x13u; /* Specific Treadmill Data */
+	zassert_false(radiant_profile_sanity_implausible(FEC, body, 8u),
+		      "only page 16 carries a speed at bytes 4-5");
+
+	body[0] = 0x11u; /* General Settings: bytes 4-5 are the incline */
+	zassert_false(radiant_profile_sanity_implausible(FEC, body, 8u),
+		      "an incline is signed and spans its whole encodable "
+		      "range, so there is nothing to reject");
+}
+
 ZTEST(radiant_profile_sanity, test_a_null_payload_is_never_judged)
 {
 	zassert_false(radiant_profile_sanity_implausible(BPWR, NULL, 8u),

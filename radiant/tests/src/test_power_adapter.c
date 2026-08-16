@@ -1,12 +1,6 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * Provenance: original clean-room work against
- * src/profiles/profile_power.c's page-0x10 decoder and
- * src/bridge/radiant_power_adapter.c. The page vectors are hand-computed from
- * D00001086 "ANT+ Device Profile - Bicycle Power" Rev 5.1 Table 8-1 and
- * D000001231 "ANT+ Device Profile - Fitness Equipment" Rev 5.0 Table 8-25.
- *
  * Six things earn their place, and five of them are places where a plausible
  * implementation is wrong rather than absent:
  *

@@ -645,6 +645,283 @@ class TestControlsPages(unittest.TestCase):
         self.assertEqual(ap.CTRL_PERIOD, 8192)
 
 
+class TestFitnessEquipmentPages(unittest.TestCase):
+    """FE-C 0x11, the treadmill half.
+
+    The cases here are the ones with a wrong reading that produces a legal
+    number: the -200.00 % grade bias, grade's 0xFFFF against incline's 0x7FFF,
+    the state nibble inside a nibble, and page 71's echo keeping the command's
+    own byte offsets.
+    """
+
+    def test_grade_bias_at_all_three_landmarks(self):
+        self.assertEqual(ap.fec_grade_centi_pct(0x0000), -20000)
+        self.assertEqual(ap.fec_grade_centi_pct(0x4E20), 0)
+        self.assertEqual(ap.fec_grade_centi_pct(0x9C40), 20000)
+        self.assertEqual(ap.fec_grade_centi_pct(0x4F4C), 300)
+
+    def test_grade_sentinel_is_distinguishable_from_flat(self):
+        # None, not 0: "the controller said flat" and "the controller said
+        # nothing" are the same instruction to the machine and different facts
+        # about the link.
+        self.assertIsNone(ap.fec_grade_centi_pct(ap.FEC_GRADE_INVALID))
+        self.assertEqual(ap.fec_grade_centi_pct(ap.FEC_GRADE_ZERO_RAW), 0)
+
+    def test_grade_raw_clamps_rather_than_wraps(self):
+        self.assertEqual(ap.fec_grade_raw(0), 20000)
+        self.assertEqual(ap.fec_grade_raw(25000), 40000)
+        self.assertEqual(ap.fec_grade_raw(-25000), 0)
+
+    def test_general_page_round_trip(self):
+        raw = ap.encode_fec_general(ap.FEC_TYPE_TREADMILL, elapsed_time_qs=40,
+                                    distance_m=100, speed_mm_s=3000,
+                                    heart_rate=150,
+                                    state=ap.FEC_STATE_IN_USE,
+                                    hr_source=ap.FEC_HR_SRC_ANTPLUS)
+        self.assertEqual(len(raw), 8)
+        self.assertEqual(raw[4:6], b"\xb8\x0b")
+        self.assertEqual(raw[7], 0x35)
+        got = ap.decode_fec_general(raw)
+        self.assertEqual(got["equipment_type"], ap.FEC_TYPE_TREADMILL)
+        self.assertEqual(got["speed_mm_s"], 3000)
+        self.assertEqual(got["state"], ap.FEC_STATE_IN_USE)
+        self.assertTrue(got["distance_valid"])
+        self.assertEqual(got["hr_source"], ap.FEC_HR_SRC_ANTPLUS)
+
+    def test_distance_has_an_enable_bit_and_not_a_sentinel(self):
+        raw = ap.encode_fec_general(ap.FEC_TYPE_TREADMILL, 0, distance_m=255,
+                                    speed_mm_s=None, heart_rate=None,
+                                    state=ap.FEC_STATE_READY,
+                                    distance_enabled=False)
+        # Byte 3 goes out unchanged: 255 m is a real distance (section
+        # 8.5.2.3), and zeroing it would be inventing a sentinel.
+        self.assertEqual(raw[3], 255)
+        got = ap.decode_fec_general(raw)
+        self.assertFalse(got["distance_valid"])
+        self.assertEqual(got["distance_m"], 255)
+        self.assertFalse(got["speed_valid"])
+        self.assertFalse(got["heart_rate_valid"])
+
+    def test_lap_toggle_does_not_leak_into_the_state(self):
+        raw = ap.encode_fec_general(ap.FEC_TYPE_TREADMILL, 0, 0, None, None,
+                                    state=ap.FEC_STATE_IN_USE,
+                                    lap_toggle=True)
+        self.assertEqual((raw[7] >> 4) & 0x0F, 0x0B)
+        got = ap.decode_fec_general(raw)
+        self.assertEqual(got["state"], ap.FEC_STATE_IN_USE)
+        self.assertTrue(got["lap_toggle"])
+
+    def test_incline_sentinel_is_not_grades(self):
+        raw = ap.encode_fec_settings(None, None, None, ap.FEC_STATE_READY)
+        self.assertEqual(raw[4:6], b"\xff\x7f")
+        self.assertIsNone(ap.decode_fec_settings(raw)["incline_centi_pct"])
+
+        # 0xFFFF in the incline field is a real -0.01 %, not "absent" - which
+        # is the reading a grade habit gets wrong.
+        raw = bytearray(raw)
+        raw[4] = 0xFF
+        raw[5] = 0xFF
+        self.assertEqual(ap.decode_fec_settings(bytes(raw))["incline_centi_pct"],
+                         -1)
+
+    def test_incline_round_trips_both_signs(self):
+        for centi in (0, 300, -250, 10000, -10000):
+            raw = ap.encode_fec_settings(120, centi, None,
+                                         ap.FEC_STATE_IN_USE)
+            got = ap.decode_fec_settings(raw)
+            self.assertEqual(got["incline_centi_pct"], centi)
+            self.assertEqual(got["cycle_length_cm"], 120)
+        with self.assertRaises(ValueError):
+            ap.encode_fec_settings(None, 10001, None, ap.FEC_STATE_IN_USE)
+
+    def test_treadmill_page_round_trip(self):
+        raw = ap.encode_fec_treadmill(85, neg_vertical_dm=12,
+                                      pos_vertical_dm=47,
+                                      state=ap.FEC_STATE_IN_USE,
+                                      capabilities=ap.FEC_TREADMILL_CAP_POS_VERTICAL)
+        self.assertEqual(raw[1:4], b"\xff\xff\xff")
+        got = ap.decode_fec_treadmill(raw)
+        self.assertEqual(got["cadence_strides_min"], 85)
+        self.assertEqual(got["pos_vertical_dm"], 47)
+        self.assertEqual(got["capabilities"],
+                         ap.FEC_TREADMILL_CAP_POS_VERTICAL)
+
+        # 0xFF is the sentinel and 0 is a standing runner.
+        raw = ap.encode_fec_treadmill(None, 0, 0, ap.FEC_STATE_READY)
+        self.assertIsNone(ap.decode_fec_treadmill(raw)["cadence_strides_min"])
+        raw = ap.encode_fec_treadmill(0, 0, 0, ap.FEC_STATE_READY)
+        self.assertEqual(ap.decode_fec_treadmill(raw)["cadence_strides_min"], 0)
+
+    def test_capabilities_bit_2_is_simulation_mode(self):
+        raw = ap.encode_fec_capabilities(None, ap.FEC_CAP_SIMULATION)
+        self.assertEqual(raw[5:7], b"\xff\xff")
+        self.assertEqual(raw[7], 0x04)
+        got = ap.decode_fec_capabilities(raw)
+        self.assertIsNone(got["max_resistance_n"])
+        self.assertTrue(got["capabilities"] & ap.FEC_CAP_SIMULATION)
+
+    def test_command_status_echo_keeps_the_commands_byte_positions(self):
+        command = ap.encode_fec_track_resistance(300)
+        raw = ap.encode_fec_cmd_status(ap.PAGE_FEC_TRACK_RESISTANCE, 7,
+                                       ap.FEC_CMD_STATUS_PASS, command[4:8])
+        # The grade sat at bytes 5..6 of the command and comes back at bytes
+        # 5..6 of the status. Re-packing it to 4..5 is the mistake.
+        self.assertEqual(raw[5:7], command[5:7])
+        got = ap.decode_fec_cmd_status(raw)
+        self.assertEqual(got["sequence"], 7)
+        self.assertEqual(got["status"], ap.FEC_CMD_STATUS_PASS)
+        with self.assertRaises(ValueError):
+            ap.encode_fec_cmd_status(0, 0, 0, b"\x00")
+
+    def test_track_resistance_round_trip_and_byte_7(self):
+        raw = ap.encode_fec_track_resistance(300, rolling_resistance=0x41)
+        self.assertEqual(raw[5:7], b"\x4c\x4f")
+        got = ap.decode_fec_track_resistance(raw)
+        self.assertEqual(got["grade_centi_pct"], 300)
+        # Decoded, and a treadmill must simply not act on it (section 8.8.4.2).
+        self.assertEqual(got["rolling_resistance"], 0x41)
+
+        raw = ap.encode_fec_track_resistance(None)
+        self.assertEqual(raw[5:7], b"\xff\xff")
+        self.assertIsNone(ap.decode_fec_track_resistance(raw)["grade_centi_pct"])
+
+    def test_wind_speed_is_biased_by_127(self):
+        raw = ap.encode_fec_wind_resistance(0x33, 0, 0x64)
+        self.assertEqual(raw[6], 127, "127 on the wire is a still day")
+        got = ap.decode_fec_wind_resistance(raw)
+        self.assertEqual(got["wind_speed_kph"], 0)
+        raw = ap.encode_fec_wind_resistance(None, -127, None)
+        self.assertEqual(raw[6], 0)
+        self.assertEqual(ap.decode_fec_wind_resistance(raw)["wind_speed_kph"],
+                         -127)
+        with self.assertRaises(ValueError):
+            ap.encode_fec_wind_resistance(None, 128, None)
+
+    def test_the_remaining_control_pages(self):
+        raw = ap.encode_fec_basic_resistance(40)
+        self.assertEqual(
+            ap.decode_fec_basic_resistance(raw)["resistance_half_pct"], 40)
+
+        raw = ap.encode_fec_target_power(800)
+        self.assertEqual(raw[6:8], b"\x20\x03")
+        self.assertEqual(ap.decode_fec_target_power(raw)["power_quarter_w"],
+                         800)
+
+        raw = ap.encode_fec_user_config(7500)
+        got = ap.decode_fec_user_config(raw)
+        self.assertEqual(got["user_weight_10g"], 7500)
+        self.assertIsNone(
+            ap.decode_fec_user_config(ap.encode_fec_user_config(None))
+            ["user_weight_10g"])
+
+        raw = ap.encode_fec_request(ap.PAGE_FEC_CAPABILITIES, tx_count=2)
+        got = ap.decode_fec_request(raw)
+        self.assertEqual(got["requested_page"], ap.PAGE_FEC_CAPABILITIES)
+        self.assertEqual(got["tx_count"], 2)
+        self.assertFalse(got["acknowledged"])
+        raw = ap.encode_fec_request(ap.PAGE_FEC_CMD_STATUS, tx_count=0,
+                                    acknowledged=True)
+        self.assertTrue(ap.decode_fec_request(raw)["acknowledged"])
+        with self.assertRaises(ValueError):
+            ap.encode_fec_request(0x10, tx_count=0x80)
+
+    def test_period_and_device_type(self):
+        self.assertEqual(ap.FEC_DEVICE_TYPE, 0x11)
+        self.assertEqual(ap.FEC_PERIOD, 8192)
+        self.assertEqual(ap.FEC_PERIODS, (8192,))
+
+
+class TestStrideBasedSpeedAndDistancePages(unittest.TestCase):
+    """SDM 0x7C. Four things here are the reverse of every other profile."""
+
+    def test_the_period_is_8134_and_not_a_neighbours(self):
+        # Trap 1: 8070 is heart rate and 8192 is FE-C. A channel told either
+        # never opens, and nothing names the period as the reason.
+        self.assertEqual(ap.SDM_PERIOD, 8134)
+        self.assertNotEqual(ap.SDM_PERIOD, ap.HRM_PERIOD)
+        self.assertNotEqual(ap.SDM_PERIOD, ap.FEC_PERIOD)
+        self.assertEqual(ap.SDM_DEVICE_TYPE, 0x7C)
+
+    def test_page_16_decimal_and_page_22_decimal_do_not_swap(self):
+        # Trap 3: the same two digits in the other base.
+        self.assertEqual(ap.PAGE_SDM_SUMMARY, 0x10)
+        self.assertEqual(ap.PAGE_SDM_CAPABILITIES, 0x16)
+
+    def test_status_byte_is_four_masked_two_bit_fields(self):
+        status = ap.sdm_status(ap.SDM_LOC_OTHER, ap.SDM_BATTERY_NEW,
+                               ap.SDM_HEALTH_OK, ap.SDM_USE_ACTIVE)
+        self.assertEqual(status, 0x81)
+        got = ap.sdm_status_split(status)
+        self.assertEqual(got["location"], ap.SDM_LOC_OTHER)
+        self.assertEqual(got["use_state"], ap.SDM_USE_ACTIVE)
+        # An out-of-range field must not bleed into its neighbour.
+        self.assertEqual(ap.sdm_status(0xFF, 0, 0, 0), 0xC0)
+
+    def test_speed_splits_into_a_nibble_and_a_256th(self):
+        self.assertEqual(ap.sdm_speed_split(3000), (3, 0))
+        self.assertEqual(ap.sdm_speed_split(3500), (3, 128))
+        with self.assertRaises(ValueError):
+            ap.sdm_speed_split(ap.SDM_SPEED_MAX_MM_S + 1)
+        for mm in range(0, 6000, 137):
+            back = ap.sdm_speed_mm_s(*ap.sdm_speed_split(mm))
+            self.assertLessEqual(back, mm)
+            self.assertLessEqual(mm - back, 4)
+
+    def test_default_page_byte_4_is_two_nibbles(self):
+        raw = ap.encode_sdm_default(time_frac_200=100, time_s=42,
+                                    distance_m=200, distance_frac_16=8,
+                                    speed_int_mps=3, speed_frac_256=128,
+                                    strides=77, latency_32=4)
+        # 8 << 4 | 3 = 0x83. Swapping the nibbles reads 0.1875 m and 8 m/s.
+        self.assertEqual(raw[4], 0x83)
+        got = ap.decode_sdm_default(raw)
+        self.assertEqual(got["distance_frac_16"], 8)
+        self.assertEqual(got["speed_int_mps"], 3)
+        self.assertEqual(got["strides"], 77)
+        with self.assertRaises(ValueError):
+            ap.encode_sdm_default(0, 0, 0, 16, 3, 0, 0, 0)
+        with self.assertRaises(ValueError):
+            ap.encode_sdm_default(0, 0, 0, 8, 16, 0, 0, 0)
+
+    def test_reserved_bytes_are_zero_not_all_ones(self):
+        # Trap 2, and it is the opposite of every other profile in this file.
+        raw = ap.encode_sdm_supplementary(ap.PAGE_SDM_BASE, 85, 0, 3, 0, 0x81)
+        self.assertEqual(raw[1], 0x00)
+        self.assertEqual(raw[2], 0x00)
+        self.assertEqual(raw[6], 0x00)
+
+    def test_pages_2_and_3_differ_in_exactly_one_byte(self):
+        base = ap.encode_sdm_supplementary(ap.PAGE_SDM_BASE, 85, 8, 3, 64,
+                                           0x81, calories=123)
+        cal = ap.encode_sdm_supplementary(ap.PAGE_SDM_CALORIES, 85, 8, 3, 64,
+                                          0x81, calories=123)
+        self.assertEqual(base[1:6], cal[1:6])
+        self.assertEqual(base[7], cal[7])
+        self.assertEqual(base[6], 0)
+        self.assertEqual(cal[6], 123)
+        self.assertEqual(ap.decode_sdm_supplementary(cal)["calories"], 123)
+        self.assertEqual(ap.decode_sdm_supplementary(base)["calories"], 0)
+        with self.assertRaises(ValueError):
+            ap.encode_sdm_supplementary(ap.PAGE_SDM_DEFAULT, 0, 0, 0, 0, 0)
+
+    def test_summary_page_is_wider_than_page_1s_accumulators(self):
+        raw = ap.encode_sdm_summary(0x123456, 0x89ABCDEF)
+        self.assertEqual(raw[1:4], b"\x56\x34\x12")
+        self.assertEqual(raw[4:8], b"\xef\xcd\xab\x89")
+        got = ap.decode_sdm_summary(raw)
+        self.assertEqual(got["strides"], 0x123456)
+        self.assertEqual(got["distance_256"], 0x89ABCDEF)
+        with self.assertRaises(ValueError):
+            ap.encode_sdm_summary(0x1000000, 0)
+
+    def test_capabilities_page_is_the_validity_convention(self):
+        raw = ap.encode_sdm_capabilities(ap.SDM_CAP_TIME | ap.SDM_CAP_DISTANCE |
+                                         ap.SDM_CAP_SPEED | ap.SDM_CAP_CADENCE)
+        self.assertEqual(raw[1], 0x17)
+        self.assertEqual(raw[2:8], b"\x00" * 6)
+        self.assertEqual(ap.decode_sdm_capabilities(raw)["flags"], 0x17)
+
+
 class TestCommonPages(unittest.TestCase):
     def test_page_80_round_trip(self):
         raw = ap.encode_common_80(hw_revision=1, manufacturer_id=255,
@@ -683,9 +960,7 @@ class TestCommonPage84(unittest.TestCase):
     """Page 84, Subfield Data - decode only, so no round trip to lean on.
 
     Every other page in this file is tested by encoding and decoding it back,
-    which proves the two halves agree and nothing else. There is no
-    encode_common_84, so what stands in for it is the primary document's own
-    worked example: D00001198 Rev 3.1 section 6.13.1, Figure 6-8. That is a
+    which proves the two halves agree and nothing else. That is a
     stronger test than a round trip, not a weaker one - a round trip through
     two wrong halves passes.
     """

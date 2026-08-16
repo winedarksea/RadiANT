@@ -18,19 +18,27 @@
     Kconfig runs, so a typo in -DANT_RADIO would fall back to a default and
     ship the wrong backend green.
 
-    TWO MATRICES, NOT ONE. $targets is the dongle (apps/dongle, apps/dongle_ti):
-    a release artifact with a bootloader offset, a transport and a package
-    format. $nodeTargets is apps/hrm_ble, the heart-rate node - no bootloader,
-    no transport symbol and no artifact - so it has its own loop and its own,
-    different assertions. See the comment above $nodeTargets for why folding
-    them together would have made three of the five checks vacuous rather than
-    shared.
+    THREE MATRICES, NOT ONE. $targets is the dongle (apps/dongle,
+    apps/dongle_ti): a release artifact with a bootloader offset, a transport
+    and a package format. $nodeTargets is apps/hrm_ble, the heart-rate node -
+    no bootloader, no transport symbol and no artifact. $treadmillTargets is
+    apps/treadmill, the fitness-equipment node, which shares the node shape and
+    NONE of the node's assertions: it has no HRM_SENSOR choice, it has a
+    TREADMILL_SOURCE choice instead, and its BLE row asserts a different set of
+    symbols.
 
-    The node rows build only under -Backend core, because that application has
-    no ANT_RADIO axis at all: it is built out of radiant and
-    radiant/src/profiles/ with no sdk-ant path, which is the demonstration it
-    exists to make. A default (-Backend sdk_ant) run therefore does not build
-    it; use -Backend core.
+    A THIRD LIST RATHER THAN OPTIONAL FIELDS ON $nodeTargets, and it is the
+    same argument the comment above $nodeTargets already makes about folding
+    into $targets: `if ($t.sensor)` silently skips an assertion a row meant to
+    have, and every assertion in this file exists because the failure it
+    catches is silent. A separate list with its own smaller set of assertions
+    cannot skip anything by accident.
+
+    The node and treadmill rows build only under -Backend core, because neither
+    application has an ANT_RADIO axis at all: both are built out of radiant and
+    radiant/src/profiles/ with no sdk-ant path, which is the demonstration they
+    exist to make. A default (-Backend sdk_ant) run therefore does not build
+    them; use -Backend core.
 
     TWO ROWS CANNOT COMPLETE UNDER -Backend core -RadiantBackend nrf, AND NEVER
     COULD. This is not a regression and it is worth knowing before a long run:
@@ -336,6 +344,67 @@ $nodeTargets = @(
     # seam an integrator's first build fails on for the wrong reason.
     @{ dir='node_example';    board='nrf54l15dk/nrf54l15/cpuapp';    sensor='EXAMPLE';   conf='sensor_example.conf' }
     @{ dir='node_custom';     board='nrf54l15dk/nrf54l15/cpuapp';    sensor='CUSTOM';    conf='sensor_custom.conf' }
+)
+
+# ── The treadmill ───────────────────────────────────────────────────────────
+#
+# apps/treadmill, the fitness-equipment node and this tree's second
+# manufacturer reference design. A THIRD list rather than more $nodeTargets
+# rows, for the same reason $nodeTargets is not part of $targets: the fields
+# are not the same fields.
+#
+#   sensor  there is no HRM_SENSOR choice here. The equivalent is
+#           TREADMILL_SOURCE, whose arms are SIMULATED and CUSTOM and not
+#           SIMULATED/EXAMPLE/CUSTOM, so assertion 2 of the node loop would
+#           either pass vacuously or fail on a symbol that is correctly absent.
+#   ble     the symbols to assert are different ones. TREADMILL_BLE `select`s
+#           BT_RSCS and BT_SMP as well as the MPSL gate, and the SMP half is
+#           the one that is genuinely new in this tree - apps/hrm_ble has no
+#           pairing at all.
+#
+# WHAT IS ASSERTED, and each is a failure that has actually happened here:
+#
+#   the HAL backend  as on the node rows. RADIANT_BACKEND is a CMake cache
+#                    variable resolved before Kconfig runs, so an unmet
+#                    `depends on` falls back to the null backend and the image
+#                    boots, logs "transmitting" and puts nothing on the air.
+#                    This has bitten twice.
+#   the source arm   exactly one arm of the TREADMILL_SOURCE choice, by name.
+#                    What makes "I forgot to unhook the simulator" a red build
+#                    rather than a shipped treadmill reporting a synthetic
+#                    runner while somebody stands on it.
+#   the second ANT+  CONFIG_TREADMILL_ANT_SDM, asserted BOTH ways. The fec_only
+#   master           row exists so the coexistence fallback cannot rot, and a
+#                    fallback nobody compiles is not a fallback.
+#   the BLE symbols  on the BLE rows: TREADMILL_BLE plus the four symbols it
+#                    `select`s or `default`s rather than sets by hand. A
+#                    Kconfig `default` written after the symbol's own
+#                    definition is silently dead, and only a .config read-back
+#                    tells the difference.
+$treadmillTargets = @(
+    @{ dir='tread_l15';      board='nrf54l15dk/nrf54l15/cpuapp'; source='SIMULATED'; conf=$null;                  sdm=$true }
+    # The other half of radiant/Kconfig's `SOC_COMPATIBLE_NRF52X ||
+    # SOC_COMPATIBLE_NRF54LX`. ANT+ only: the BLE arm on nRF52 would be the
+    # first time SDC, MPSL, the gate, two hand-written GATT services and SMP
+    # were compiled together on that family, and there is no nRF52 bench slot
+    # for this application. See apps/treadmill/boards/nrf52840dk_nrf52840.overlay.
+    @{ dir='tread_52840dk';  board='nrf52840dk/nrf52840';        source='SIMULATED'; conf=$null;                  sdm=$true }
+    # ONE ANT+ MASTER INSTEAD OF TWO - the coexistence fallback, compiled so it
+    # cannot rot. Two masters at 8192 and 8134 counts beat against each other
+    # with a period of about 32 s, and nothing in this project has measured
+    # that mix beside BLE.
+    @{ dir='tread_fec_only'; board='nrf54l15dk/nrf54l15/cpuapp'; source='SIMULATED'; conf='fec_only.conf';        sdm=$false }
+    @{ dir='tread_ble';      board='nrf54l15dk/nrf54l15/cpuapp'; source='SIMULATED'; conf='ble.conf';             sdm=$true; ble=$true }
+    # The heaviest configuration this application has: two masters, one slave
+    # and BLE with SMP and a bonding store. It is the row that decides whether
+    # the RAM budget holds, which the Matter spike already established matters
+    # more than flash on this part.
+    @{ dir='tread_ble_hr';   board='nrf54l15dk/nrf54l15/cpuapp'; source='SIMULATED'; conf='ble.conf;hr_rx.conf';  sdm=$true; ble=$true; hr=$true }
+    # The arm with no source in it. It must LINK - an integrator's first build
+    # failing for a reason unrelated to their driver is an expensive way to
+    # start - and then report a stopped belt rather than falling back to the
+    # simulator.
+    @{ dir='tread_custom';   board='nrf54l15dk/nrf54l15/cpuapp'; source='CUSTOM';    conf='source_custom.conf';   sdm=$true }
 )
 
 if (-not (Get-Command west -ErrorAction SilentlyContinue)) {
@@ -661,6 +730,117 @@ try {
 
             $bleNote = if ($t.ble) { ', BLE HRS + MPSL gate' } else { '' }
             Write-Host ("  ok: {0} HAL, {1} sensor{2}" -f $RadiantBackend, $t.sensor, $bleNote)
+        }
+    }
+
+    # ── The treadmill ───────────────────────────────────────────────────────
+    #
+    # See $treadmillTargets above for why this is a THIRD loop rather than
+    # optional fields on the node rows.
+    #
+    # NO -DANT_RADIO HERE either, for the same reason: apps/treadmill has no
+    # ANT_RADIO axis and no sdk-ant path at all.
+    if ($Backend -eq 'core') {
+        $treadmillApp = Join-Path $repo 'apps\treadmill'
+
+        foreach ($t in $treadmillTargets) {
+            if ($t.dir -notlike $Only) { continue }
+
+            $out = Join-Path $repo "build\$($t.dir)"
+            Write-Host "`n=== treadmill $($t.dir)  [$($t.board)]" -ForegroundColor Cyan
+
+            $extra = @('--', "-DRADIANT_BACKEND=$RadiantBackend")
+            # IMAGE-SCOPED, and the prefix is the basename of the application
+            # directory because that is how sysbuild names an image. A wrong
+            # prefix names an image that does not exist and is accepted in
+            # silence - apps/hrm_ble shipped exactly that no-op for a while and
+            # measured it: two builds, with the flag and without, produced
+            # byte-identical .config files.
+            if ($t.conf) { $extra += "-Dtreadmill_EXTRA_CONF_FILE=$($t.conf)" }
+
+            $log = Join-Path $env:TEMP "build_$($t.dir).log"
+            $rc = Invoke-West @('-z', $zephyr, 'build', '-s', $treadmillApp,
+                                '-d', $out, '-b', $t.board, '-p', 'always') $extra $log
+            if ($rc -ne 0) {
+                Get-Content $log -Tail 30
+                throw "build failed for treadmill $($t.dir); full log at $log"
+            }
+
+            # 'treadmill', the basename of the application directory - the same
+            # rule that decides the -D prefix above.
+            $cfg = Get-Content (Join-Path $out 'treadmill\zephyr\.config')
+
+            # 1. radiant's radio HAL. A null-radio node boots, logs
+            # "transmitting" and puts nothing on the air, and every other check
+            # still passes.
+            $want = "CONFIG_RADIANT_BACKEND_$($RadiantBackend.ToUpper())=y"
+            if (-not ($cfg | Where-Object { $_ -eq $want })) {
+                $got = ($cfg | Where-Object { $_ -match '^CONFIG_RADIANT_BACKEND_\w+=y' })
+                throw "treadmill $($t.dir): expected $want in .config, found '$got'"
+            }
+
+            # 2. The treadmill source. The TREADMILL_SOURCE choice is what makes
+            # "I forgot to unhook the simulator" unrepresentable.
+            $wantSource = "CONFIG_TREADMILL_SOURCE_$($t.source)=y"
+            if (-not ($cfg | Where-Object { $_ -eq $wantSource })) {
+                $got = ($cfg | Where-Object { $_ -match '^CONFIG_TREADMILL_SOURCE_(SIMULATED|CUSTOM)=y' })
+                throw "treadmill $($t.dir): expected $wantSource in .config, found '$got'"
+            }
+
+            # 3. The second ANT+ master, asserted in BOTH directions.
+            #
+            # A `y` row proves the SDM channel is compiled; the fec_only row
+            # proves the fallback still configures. Kconfig writes an absent
+            # bool as `# CONFIG_X is not set`, which is a different claim from
+            # the symbol being omitted entirely, so the negative case is
+            # matched on that exact line rather than on the absence of `=y`.
+            if ($t.sdm) {
+                if (-not ($cfg | Where-Object { $_ -eq 'CONFIG_TREADMILL_ANT_SDM=y' })) {
+                    throw "treadmill $($t.dir): expected CONFIG_TREADMILL_ANT_SDM=y in .config"
+                }
+            } else {
+                if (-not ($cfg | Where-Object { $_ -eq '# CONFIG_TREADMILL_ANT_SDM is not set' })) {
+                    throw "treadmill $($t.dir): expected '# CONFIG_TREADMILL_ANT_SDM is not set' in .config - " +
+                          "the coexistence fallback must actually turn the second master off"
+                }
+            }
+
+            # 4. The BLE interlock, on the rows that ask for BLE.
+            #
+            # TREADMILL_BLE is set by the fragment; the other four are NOT, and
+            # that is the point of asserting them. Without the MPSL gate,
+            # radiant/Kconfig's `depends on !BT || ..._GATE_MPSL` drops the nrf
+            # backend to null; with the gate but a session count of 0, every
+            # timeslot session_open() fails while the image still runs.
+            #
+            # BT_SMP is the one that is new in this tree. FTMS Table 4.1 gives
+            # the control point security permission "Encryption", so a build
+            # without SMP would advertise a control point no client can ever
+            # write - which looks exactly like a machine that ignores commands.
+            if ($t.ble) {
+                foreach ($sym in @('CONFIG_TREADMILL_BLE=y',
+                                   'CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y',
+                                   'CONFIG_MPSL_TIMESLOT_SESSION_COUNT=1',
+                                   'CONFIG_BT_RSCS=y',
+                                   'CONFIG_BT_SMP=y')) {
+                    if (-not ($cfg | Where-Object { $_ -eq $sym })) {
+                        throw "treadmill $($t.dir): expected $sym in .config"
+                    }
+                }
+            }
+
+            # 5. The heart-rate slave, on the row that asks for it.
+            if ($t.hr) {
+                if (-not ($cfg | Where-Object { $_ -eq 'CONFIG_TREADMILL_HR_RX=y' })) {
+                    throw "treadmill $($t.dir): expected CONFIG_TREADMILL_HR_RX=y in .config"
+                }
+            }
+
+            $notes = @()
+            if ($t.sdm) { $notes += 'FE-C + SDM' } else { $notes += 'FE-C only' }
+            if ($t.ble) { $notes += 'FTMS + RSC + SMP + MPSL gate' }
+            if ($t.hr)  { $notes += 'ANT+ HR slave' }
+            Write-Host ("  ok: {0} HAL, {1} source, {2}" -f $RadiantBackend, $t.source, ($notes -join ', '))
         }
     }
 } finally {

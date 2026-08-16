@@ -7,7 +7,7 @@ Pure functions over 8-byte payloads: no USB, no serial port, no hardware, so a
 byte-order mistake is a unittest away (tools/test_ant_pages.py) instead of a
 flash cycle. The constants mirror zephyr_aerosense/src/ant/ant_pages.h.
 
-Three traps, because all three produce plausible-looking garbage rather than
+Four traps, because all four produce plausible-looking garbage rather than
 an error:
 
 - The combined speed-and-cadence page (device type 0x79) has **no page-number
@@ -17,6 +17,12 @@ an error:
 - On heart rate (device type 0x78) **byte 0's high bit is the page-change
   toggle, not part of the page number** - pages there are 7-bit, which is also
   why the RadiANT compat pages below are all <= 0x7F.
+- **Page numbers 0x10, 0x11 and 0x12 mean three different things on three
+  different device types.** On bicycle power they are Standard Power, Wheel
+  Torque and Crank Torque; on FE-C they are General FE Data, General Settings
+  and Metabolic; 0x10 on SDM is the Distance and Strides Summary. Nothing in
+  any of those payloads says which, so decode() dispatches on the device type
+  first and each family keeps its own decoder table.
 """
 
 from __future__ import annotations
@@ -1104,6 +1110,708 @@ _CTRL_DECODERS = {
 
 
 # ---------------------------------------------------------------------------
+# Fitness Equipment Control (FE-C), device type 0x11
+# ---------------------------------------------------------------------------
+#
+# The mirror of radiant/src/profiles/profile_fec.c (decode) and
+# profile_fec_tx.c (encode). Until
+# apps/treadmill this type had ONE copy - the C decoder - and
+# docs/device-profiles.md 3.16 said so; these functions are the second, so the
+# three-copy vocabulary rule now applies to 0x11 and the C and Python sides are
+# asserted byte-identical by tools/test_compat_capture.py.
+#
+# THE PAGE NUMBERS COLLIDE WITH BICYCLE POWER'S AND THE COLLISION IS SILENT.
+# FE-C's General FE Data is page 0x10 and bicycle power's Standard Power is
+# also 0x10; FE-C's General Settings is 0x11 and power's Wheel Torque is also
+# 0x11; FE-C's Metabolic is 0x12 and power's Crank Torque is also 0x12. Nothing
+# in the payload distinguishes them - only the channel's device type does,
+# which is why decode() dispatches on device_type BEFORE it looks at
+# payload[0], and why _FEC_DECODERS is not merged into _PAGE_DECODERS.
+#
+# The grade/incline trap is in profile_fec_tx.h at length and is not repeated
+# here: grade is an unsigned u16 biased by -200.00 %, incline is a plain
+# sint16, both are 0.01 %, and their invalid values are 0xFFFF and 0x7FFF
+# respectively - each a legal-looking reading of the other.
+
+FEC_DEVICE_TYPE = 0x11
+FEC_PERIOD = 8192           # 4 Hz, the profile's one permitted rate
+FEC_PERIODS = (FEC_PERIOD,)
+FEC_RF_FREQ = 57
+FEC_TRANS_TYPE = 5
+
+PAGE_FEC_GENERAL = 0x10           # page 16
+PAGE_FEC_SETTINGS = 0x11          # page 17
+PAGE_FEC_METABOLIC = 0x12         # page 18
+PAGE_FEC_TREADMILL = 0x13         # page 19
+PAGE_FEC_TRAINER = 0x19           # page 25
+PAGE_FEC_BASIC_RESISTANCE = 0x30  # page 48
+PAGE_FEC_TARGET_POWER = 0x31      # page 49
+PAGE_FEC_WIND_RESISTANCE = 0x32   # page 50
+PAGE_FEC_TRACK_RESISTANCE = 0x33  # page 51
+PAGE_FEC_CAPABILITIES = 0x36      # page 54
+PAGE_FEC_USER_CONFIG = 0x37       # page 55
+PAGE_FEC_REQUEST = 0x46           # page 70
+PAGE_FEC_CMD_STATUS = 0x47        # page 71
+
+# Table 8-8, byte 1 bits 0..4.
+FEC_TYPE_MASK = 0x1F
+FEC_TYPE_TREADMILL = 19
+FEC_TYPE_ELLIPTICAL = 20
+FEC_TYPE_ROWER = 22
+FEC_TYPE_CLIMBER = 23
+FEC_TYPE_NORDIC_SKIER = 24
+FEC_TYPE_TRAINER = 25
+
+# Table 8-10, bits 0..2 of byte 7's HIGH nibble. Bit 3 of that nibble is the
+# lap toggle, which is why the state is masked to three bits and not four.
+FEC_STATE_ASLEEP = 1
+FEC_STATE_READY = 2
+FEC_STATE_IN_USE = 3
+FEC_STATE_FINISHED = 4
+
+# Table 8-9, the capabilities nibble of page 16.
+FEC_HR_SRC_INVALID = 0
+FEC_HR_SRC_ANTPLUS = 1
+FEC_HR_SRC_EM_5KHZ = 2
+FEC_HR_SRC_CONTACT = 3
+FEC_CAP_DISTANCE_ENABLED = 1 << 2
+FEC_CAP_VIRTUAL_SPEED = 1 << 3
+
+# Page 54 byte 7. Bit 2 is what unlocks page 51.
+FEC_CAP_BASIC_RESISTANCE = 1 << 0
+FEC_CAP_TARGET_POWER = 1 << 1
+FEC_CAP_SIMULATION = 1 << 2
+
+# Page 51 bytes 5..6: Grade% = raw * 0.01 - 200.00.
+FEC_GRADE_ZERO_RAW = 20000
+FEC_GRADE_INVALID = 0xFFFF
+FEC_GRADE_MIN_CENTI_PCT = -20000
+FEC_GRADE_MAX_CENTI_PCT = 20000
+
+# Page 17 bytes 4..5: a plain sint16 with a DIFFERENT sentinel.
+FEC_INCLINE_INVALID = 0x7FFF
+FEC_INCLINE_MIN_CENTI_PCT = -10000
+FEC_INCLINE_MAX_CENTI_PCT = 10000
+
+# Page 50 byte 6 is biased so that 127 on the wire is a still day.
+FEC_WIND_SPEED_BIAS = 127
+
+# Page 71 byte 3.
+FEC_CMD_STATUS_PASS = 0
+FEC_CMD_STATUS_FAIL = 1
+FEC_CMD_STATUS_NOT_SUPPORTED = 2
+FEC_CMD_STATUS_REJECTED = 3
+FEC_CMD_STATUS_PENDING = 4
+FEC_CMD_STATUS_UNINITIALISED = 0xFF
+
+# Page 19 byte 7, bits 0..1.
+FEC_TREADMILL_CAP_NEG_VERTICAL = 1 << 0
+FEC_TREADMILL_CAP_POS_VERTICAL = 1 << 1
+
+# Page 70 byte 7.
+FEC_REQUEST_CMD_DATA_PAGE = 1
+FEC_REQUEST_CMD_ANTFS_SESSION = 2
+FEC_REQUEST_CMD_DATA_PAGE_SLAVE = 3
+FEC_REQUEST_CMD_DATA_PAGE_SET = 4
+
+
+def fec_grade_centi_pct(raw: int) -> int | None:
+    """Page 51's raw grade in 0.01 %, or None for the flat-ground sentinel.
+
+    None rather than 0 so a caller can tell "the controller said flat" from
+    "the controller said nothing"; the FE's own behaviour for both is the same
+    (assume flat, section 8.8.4.1), which is why the C side folds them together
+    behind a `valid` flag instead.
+    """
+    if raw == FEC_GRADE_INVALID:
+        return None
+    return raw - FEC_GRADE_ZERO_RAW
+
+
+def fec_grade_raw(centi_pct: int) -> int:
+    """The inverse, clamped into the representable span rather than wrapped."""
+    centi_pct = max(FEC_GRADE_MIN_CENTI_PCT,
+                    min(FEC_GRADE_MAX_CENTI_PCT, centi_pct))
+    return centi_pct + FEC_GRADE_ZERO_RAW
+
+
+def _fec_state_byte(capabilities: int, state: int, lap_toggle: bool) -> int:
+    """Byte 7: capabilities in the low nibble, state and lap toggle above.
+
+    The state is masked to THREE bits, not four. Table 8-10 numbers the bits
+    inside the high nibble and bit 3 of it is the lap toggle, so a four-bit
+    state would set the toggle on every value >= 8.
+    """
+    byte7 = capabilities & 0x0F
+    byte7 |= (state & 0x07) << 4
+    if lap_toggle:
+        byte7 |= 0x80
+    return byte7
+
+
+def encode_fec_general(equipment_type: int, elapsed_time_qs: int,
+                       distance_m: int, speed_mm_s: int | None,
+                       heart_rate: int | None, state: int,
+                       hr_source: int = FEC_HR_SRC_INVALID,
+                       distance_enabled: bool = True,
+                       virtual_speed: bool = False,
+                       lap_toggle: bool = False) -> bytes:
+    """Page 16 (0x10), General FE Data - Table 8-7.
+
+    `speed_mm_s` and `heart_rate` take None for "cannot measure" and get the
+    all-ones sentinel. `distance_m` does NOT: distance has no invalid value
+    (section 8.5.2.3), only the enable bit, so 255 is a real 255 metres.
+    """
+    caps = hr_source & 0x03
+    if distance_enabled:
+        caps |= FEC_CAP_DISTANCE_ENABLED
+    if virtual_speed:
+        caps |= FEC_CAP_VIRTUAL_SPEED
+    speed = INVALID_U16 if speed_mm_s is None else _u16(speed_mm_s)
+    return bytes([
+        PAGE_FEC_GENERAL,
+        equipment_type & FEC_TYPE_MASK,
+        _u8(elapsed_time_qs),
+        _u8(distance_m),
+    ]) + _le16(speed) + bytes([
+        INVALID_U8 if heart_rate is None else _u8(heart_rate),
+        _fec_state_byte(caps, state, lap_toggle),
+    ])
+
+
+def decode_fec_general(payload: bytes) -> dict:
+    caps = payload[7] & 0x0F
+    speed = _rd_le16(payload, 4)
+    return {
+        "page": payload[0],
+        "equipment_type": payload[1] & FEC_TYPE_MASK,
+        "elapsed_time_qs": payload[2],
+        "distance_m": payload[3],
+        "distance_valid": bool(caps & FEC_CAP_DISTANCE_ENABLED),
+        "speed_mm_s": speed,
+        "speed_valid": speed != INVALID_U16,
+        "speed_virtual": bool(caps & FEC_CAP_VIRTUAL_SPEED),
+        "heart_rate": payload[6],
+        "heart_rate_valid": payload[6] != INVALID_U8,
+        "hr_source": caps & 0x03,
+        "state": (payload[7] >> 4) & 0x07,
+        "lap_toggle": bool(payload[7] & 0x80),
+    }
+
+
+def encode_fec_settings(cycle_length_cm: int | None,
+                        incline_centi_pct: int | None,
+                        resistance_half_pct: int | None, state: int,
+                        capabilities: int = 0,
+                        lap_toggle: bool = False) -> bytes:
+    """Page 17 (0x11), General Settings - the incline REPORT.
+
+    `incline_centi_pct` is a plain signed value in 0.01 %, None for the 0x7FFF
+    "cannot report an incline" sentinel. Note the sentinel is NOT page 51's
+    0xFFFF; see the section header.
+    """
+    if incline_centi_pct is None:
+        incline = FEC_INCLINE_INVALID
+    else:
+        if not (FEC_INCLINE_MIN_CENTI_PCT <= incline_centi_pct
+                <= FEC_INCLINE_MAX_CENTI_PCT):
+            raise ValueError("incline is +-100.00 % on page 17 (section "
+                             "10.1.2.1); truncating it would produce a number "
+                             "a head unit displays without complaint")
+        incline = incline_centi_pct & 0xFFFF
+    return bytes([
+        PAGE_FEC_SETTINGS,
+        INVALID_U8, INVALID_U8,
+        INVALID_U8 if cycle_length_cm is None else _u8(cycle_length_cm),
+    ]) + _le16(incline) + bytes([
+        INVALID_U8 if resistance_half_pct is None else _u8(resistance_half_pct),
+        _fec_state_byte(capabilities, state, lap_toggle),
+    ])
+
+
+def decode_fec_settings(payload: bytes) -> dict:
+    raw = _rd_le16(payload, 4)
+    signed = raw - 0x10000 if raw & 0x8000 else raw
+    return {
+        "page": payload[0],
+        "cycle_length_cm": None if payload[3] == INVALID_U8 else payload[3],
+        "incline_centi_pct": None if raw == FEC_INCLINE_INVALID else signed,
+        "resistance_half_pct": (None if payload[6] == INVALID_U8
+                                else payload[6]),
+        "capabilities": payload[7] & 0x0F,
+        "state": (payload[7] >> 4) & 0x07,
+        "lap_toggle": bool(payload[7] & 0x80),
+    }
+
+
+def encode_fec_treadmill(cadence_strides_min: int | None, neg_vertical_dm: int,
+                         pos_vertical_dm: int, state: int,
+                         capabilities: int = 0,
+                         lap_toggle: bool = False) -> bytes:
+    """Page 19 (0x13), Specific Treadmill Data.
+
+    Cadence is STRIDES per minute - one stride is two footfalls. BLE RSC counts
+    steps, so the two differ by a factor of two and exactly one conversion
+    exists for it.
+    """
+    return bytes([
+        PAGE_FEC_TREADMILL,
+        INVALID_U8, INVALID_U8, INVALID_U8,
+        INVALID_U8 if cadence_strides_min is None else _u8(cadence_strides_min),
+        _u8(neg_vertical_dm),
+        _u8(pos_vertical_dm),
+        _fec_state_byte(capabilities & 0x03, state, lap_toggle),
+    ])
+
+
+def decode_fec_treadmill(payload: bytes) -> dict:
+    return {
+        "page": payload[0],
+        "cadence_strides_min": (None if payload[4] == INVALID_U8
+                                else payload[4]),
+        "neg_vertical_dm": payload[5],
+        "pos_vertical_dm": payload[6],
+        "capabilities": payload[7] & 0x03,
+        "state": (payload[7] >> 4) & 0x07,
+        "lap_toggle": bool(payload[7] & 0x80),
+    }
+
+
+def encode_fec_metabolic(mets_centi: int | None, burn_rate_deci: int | None,
+                         calories: int, state: int, capabilities: int = 0,
+                         lap_toggle: bool = False) -> bytes:
+    """Page 18 (0x12), General FE Metabolic."""
+    return bytes([PAGE_FEC_METABOLIC, INVALID_U8]) + \
+        _le16(INVALID_U16 if mets_centi is None else _u16(mets_centi)) + \
+        _le16(INVALID_U16 if burn_rate_deci is None
+              else _u16(burn_rate_deci)) + \
+        bytes([_u8(calories),
+               _fec_state_byte(capabilities, state, lap_toggle)])
+
+
+def decode_fec_metabolic(payload: bytes) -> dict:
+    mets = _rd_le16(payload, 2)
+    burn = _rd_le16(payload, 4)
+    return {
+        "page": payload[0],
+        "mets_centi": None if mets == INVALID_U16 else mets,
+        "burn_rate_deci": None if burn == INVALID_U16 else burn,
+        "calories": payload[6],
+        "capabilities": payload[7] & 0x0F,
+        "state": (payload[7] >> 4) & 0x07,
+        "lap_toggle": bool(payload[7] & 0x80),
+    }
+
+
+def encode_fec_capabilities(max_resistance_n: int | None,
+                            capabilities: int) -> bytes:
+    """Page 54 (0x36), FE Capabilities. Bit 2 of `capabilities` is Simulation
+    mode, which is what tells a controller page 51 will be honoured."""
+    return bytes([PAGE_FEC_CAPABILITIES,
+                  INVALID_U8, INVALID_U8, INVALID_U8, INVALID_U8]) + \
+        _le16(INVALID_U16 if max_resistance_n is None
+              else _u16(max_resistance_n)) + \
+        bytes([capabilities & 0x0F])
+
+
+def decode_fec_capabilities(payload: bytes) -> dict:
+    maximum = _rd_le16(payload, 5)
+    return {
+        "page": payload[0],
+        "max_resistance_n": None if maximum == INVALID_U16 else maximum,
+        "capabilities": payload[7] & 0x0F,
+    }
+
+
+def encode_fec_cmd_status(last_command: int, sequence: int, status: int,
+                          data4: bytes = b"\xff\xff\xff\xff") -> bytes:
+    """Page 71 (0x47), Command Status.
+
+    `data4` is the COMMAND PAGE'S OWN bytes [4..7], position for position -
+    so page 51's grade comes back at bytes 5..6, exactly where the controller
+    wrote it. Re-packing it here is the mistake this docstring exists to stop.
+    """
+    if len(data4) != 4:
+        raise ValueError("the echo is four bytes: the command's own [4..7]")
+    return bytes([PAGE_FEC_CMD_STATUS, _u8(last_command), _u8(sequence),
+                  _u8(status)]) + bytes(data4)
+
+
+def decode_fec_cmd_status(payload: bytes) -> dict:
+    return {
+        "page": payload[0],
+        "last_command": payload[1],
+        "sequence": payload[2],
+        "status": payload[3],
+        "data": bytes(payload[4:8]),
+    }
+
+
+def encode_fec_track_resistance(grade_centi_pct: int | None,
+                                rolling_resistance: int = INVALID_U8) -> bytes:
+    """Page 51 (0x33), Track Resistance - the incline COMMAND.
+
+    None sends 0xFFFF, which section 8.8.4.1 defines as "assume flat ground".
+    `rolling_resistance` is byte 7 and a treadmill must ignore it
+    (section 8.8.4.2); it is here so a bench controller can send a realistic
+    command rather than a stripped one.
+    """
+    raw = FEC_GRADE_INVALID if grade_centi_pct is None \
+        else fec_grade_raw(grade_centi_pct)
+    return bytes([PAGE_FEC_TRACK_RESISTANCE,
+                  INVALID_U8, INVALID_U8, INVALID_U8, INVALID_U8]) + \
+        _le16(raw) + bytes([_u8(rolling_resistance)])
+
+
+def decode_fec_track_resistance(payload: bytes) -> dict:
+    return {
+        "page": payload[0],
+        "grade_centi_pct": fec_grade_centi_pct(_rd_le16(payload, 5)),
+        "rolling_resistance": (None if payload[7] == INVALID_U8
+                               else payload[7]),
+    }
+
+
+def encode_fec_basic_resistance(resistance_half_pct: int) -> bytes:
+    """Page 48 (0x30), Basic Resistance: byte 7, 0.5 % units."""
+    return bytes([PAGE_FEC_BASIC_RESISTANCE,
+                  INVALID_U8, INVALID_U8, INVALID_U8, INVALID_U8, INVALID_U8,
+                  INVALID_U8, _u8(resistance_half_pct)])
+
+
+def decode_fec_basic_resistance(payload: bytes) -> dict:
+    return {"page": payload[0], "resistance_half_pct": payload[7]}
+
+
+def encode_fec_target_power(power_quarter_w: int) -> bytes:
+    """Page 49 (0x31), Target Power: bytes 6..7, 0.25 W."""
+    return bytes([PAGE_FEC_TARGET_POWER,
+                  INVALID_U8, INVALID_U8, INVALID_U8, INVALID_U8,
+                  INVALID_U8]) + _le16(_u16(power_quarter_w))
+
+
+def decode_fec_target_power(payload: bytes) -> dict:
+    return {"page": payload[0], "power_quarter_w": _rd_le16(payload, 6)}
+
+
+def encode_fec_wind_resistance(coefficient_centi: int | None,
+                               wind_speed_kph: int | None,
+                               drafting_centi: int | None) -> bytes:
+    """Page 50 (0x32), Wind Resistance. Byte 6 is BIASED by +127."""
+    if wind_speed_kph is None:
+        wind = INVALID_U8
+    else:
+        if not -127 <= wind_speed_kph <= 127:
+            raise ValueError("wind speed is +-127 km/h after the +127 bias")
+        wind = wind_speed_kph + FEC_WIND_SPEED_BIAS
+    return bytes([
+        PAGE_FEC_WIND_RESISTANCE,
+        INVALID_U8, INVALID_U8, INVALID_U8, INVALID_U8,
+        INVALID_U8 if coefficient_centi is None else _u8(coefficient_centi),
+        _u8(wind),
+        INVALID_U8 if drafting_centi is None else _u8(drafting_centi),
+    ])
+
+
+def decode_fec_wind_resistance(payload: bytes) -> dict:
+    return {
+        "page": payload[0],
+        "coefficient_centi": (None if payload[5] == INVALID_U8
+                              else payload[5]),
+        "wind_speed_kph": (None if payload[6] == INVALID_U8
+                           else payload[6] - FEC_WIND_SPEED_BIAS),
+        "drafting_centi": None if payload[7] == INVALID_U8 else payload[7],
+    }
+
+
+def encode_fec_user_config(user_weight_10g: int | None) -> bytes:
+    """Page 55 (0x37), User Configuration - the user's mass only.
+
+    Bytes [3..7] are bicycle wheel diameter, bicycle weight and gear ratio in a
+    sub-byte packing this project has not transcribed and has no use for; they
+    go out as the not-supplied sentinel. radiant/src/profiles/profile_fec_tx.h
+    records the same decision on the C side.
+    """
+    weight = INVALID_U16 if user_weight_10g is None else _u16(user_weight_10g)
+    return bytes([PAGE_FEC_USER_CONFIG]) + _le16(weight) + \
+        bytes([INVALID_U8, INVALID_U8, INVALID_U8, INVALID_U8, INVALID_U8])
+
+
+def decode_fec_user_config(payload: bytes) -> dict:
+    weight = _rd_le16(payload, 1)
+    return {
+        "page": payload[0],
+        "user_weight_10g": None if weight == INVALID_U16 else weight,
+    }
+
+
+def encode_fec_request(page: int, tx_count: int = 1,
+                       acknowledged: bool = False,
+                       command_type: int = FEC_REQUEST_CMD_DATA_PAGE) -> bytes:
+    """Page 70 (0x46), Request Data Page."""
+    if not 0 <= tx_count <= 0x7F:
+        raise ValueError("bit 7 of byte [5] is the acknowledged flag, so the "
+                         "transmit count is 7 bits")
+    return bytes([
+        PAGE_FEC_REQUEST,
+        INVALID_U8, INVALID_U8, INVALID_U8, INVALID_U8,
+        (tx_count & 0x7F) | (0x80 if acknowledged else 0),
+        _u8(page),
+        _u8(command_type),
+    ])
+
+
+def decode_fec_request(payload: bytes) -> dict:
+    return {
+        "page": payload[0],
+        "requested_page": payload[6],
+        "tx_count": payload[5] & 0x7F,
+        "acknowledged": bool(payload[5] & 0x80),
+        "command_type": payload[7],
+    }
+
+
+_FEC_DECODERS = {
+    PAGE_FEC_GENERAL: decode_fec_general,
+    PAGE_FEC_SETTINGS: decode_fec_settings,
+    PAGE_FEC_METABOLIC: decode_fec_metabolic,
+    PAGE_FEC_TREADMILL: decode_fec_treadmill,
+    PAGE_FEC_BASIC_RESISTANCE: decode_fec_basic_resistance,
+    PAGE_FEC_TARGET_POWER: decode_fec_target_power,
+    PAGE_FEC_WIND_RESISTANCE: decode_fec_wind_resistance,
+    PAGE_FEC_TRACK_RESISTANCE: decode_fec_track_resistance,
+    PAGE_FEC_CAPABILITIES: decode_fec_capabilities,
+    PAGE_FEC_USER_CONFIG: decode_fec_user_config,
+    PAGE_FEC_REQUEST: decode_fec_request,
+    PAGE_FEC_CMD_STATUS: decode_fec_cmd_status,
+}
+
+
+# ---------------------------------------------------------------------------
+# Stride Based Speed and Distance Monitor (SDM), device type 0x7C
+# ---------------------------------------------------------------------------
+#
+# The mirror of radiant/src/profiles/profile_sdm.c. Four things here are the
+# opposite of every other profile in this file, and each produces a plausible
+# number rather than an error when got wrong:
+#
+#   1. THE PERIOD IS 8134. Not 8070 (heart rate), not 8192 (FE-C). A receiver
+#      told the wrong period never opens the channel and nothing anywhere names
+#      the period as the reason.
+#   2. THERE IS NO 0xFF SENTINEL. An unused field is ZERO here and validity is
+#      out of band, in page 22's capability bits. 0xFF in a cadence byte is a
+#      real 255 strides/min. Nothing below writes INVALID_U8 and that is not an
+#      oversight.
+#   3. "PAGE 16" IS 0x10 AND "PAGE 22" IS 0x16 - the same two digits, and they
+#      swap for anybody reading one in the other base. Both spellings are on
+#      every constant.
+#   4. STRIDES ARE NOT STEPS. One stride is two footfalls.
+
+SDM_DEVICE_TYPE = 0x7C
+SDM_PERIOD = 8134           # ~4.03 Hz - see trap 1
+SDM_PERIODS = (SDM_PERIOD,)
+SDM_RF_FREQ = 57
+SDM_TRANS_TYPE = 5
+
+PAGE_SDM_DEFAULT = 0x01       # page 1
+PAGE_SDM_BASE = 0x02          # page 2
+PAGE_SDM_CALORIES = 0x03      # page 3
+PAGE_SDM_SUMMARY = 0x10       # page 16 DECIMAL - see trap 3
+PAGE_SDM_CAPABILITIES = 0x16  # page 22 DECIMAL - see trap 3
+
+SDM_LOC_LACES = 0
+SDM_LOC_MIDSOLE = 1
+SDM_LOC_OTHER = 2             # a treadmill is not on anybody's shoe
+SDM_LOC_ANKLE = 3
+
+SDM_BATTERY_NEW = 0
+SDM_BATTERY_GOOD = 1
+SDM_BATTERY_OK = 2
+SDM_BATTERY_LOW = 3
+
+SDM_HEALTH_OK = 0
+SDM_HEALTH_ERROR = 1
+SDM_HEALTH_WARNING = 2
+
+SDM_USE_INACTIVE = 0
+SDM_USE_ACTIVE = 1
+
+SDM_CAP_TIME = 1 << 0
+SDM_CAP_DISTANCE = 1 << 1
+SDM_CAP_SPEED = 1 << 2
+SDM_CAP_LATENCY = 1 << 3
+SDM_CAP_CADENCE = 1 << 4
+SDM_CAP_CALORIES = 1 << 5
+
+# Three fractional denominators on one profile, which is the other way this
+# one goes wrong by a small ratio rather than obviously.
+SDM_TIME_FRAC_DEN = 200
+SDM_SPEED_FRAC_DEN = 256
+SDM_DIST_FRAC_DEN = 16
+SDM_CAD_FRAC_DEN = 16
+SDM_LATENCY_DEN = 32
+SDM_SPEED_MAX_MM_S = 15996    # the integer part is a NIBBLE
+
+# The interleave: 1, 1, X, X for 64 messages, then the common pair
+# consecutively - a 66-message cycle, which is not the 121 of
+# COMMON_PAGE_INTERVAL and not the 66 of FE-C by coincidence either.
+SDM_GROUP_SLOTS = 4
+SDM_DATA_MESSAGES = 64
+SDM_CYCLE = SDM_DATA_MESSAGES + 2
+
+
+def sdm_status(location: int, battery: int, health: int,
+               use_state: int) -> int:
+    """Byte [7] of pages 2 and 3: four two-bit fields, each masked."""
+    return (((location & 0x03) << 6) | ((battery & 0x03) << 4) |
+            ((health & 0x03) << 2) | (use_state & 0x03))
+
+
+def sdm_status_split(status: int) -> dict:
+    return {
+        "location": (status >> 6) & 0x03,
+        "battery": (status >> 4) & 0x03,
+        "health": (status >> 2) & 0x03,
+        "use_state": status & 0x03,
+    }
+
+
+def sdm_speed_split(mm_s: int) -> tuple:
+    """(integer m/s, 1/256 m/s) for a speed in mm/s.
+
+    Raises above 15.996 m/s: the integer part lives in a nibble, and a wrapped
+    16 m/s reads as a stopped treadmill on a receiver's screen.
+    """
+    if not 0 <= mm_s <= SDM_SPEED_MAX_MM_S:
+        raise ValueError(f"speed {mm_s} mm/s does not fit a nibble plus a "
+                         f"1/256 byte (max {SDM_SPEED_MAX_MM_S})")
+    return mm_s // 1000, ((mm_s % 1000) * SDM_SPEED_FRAC_DEN) // 1000
+
+
+def sdm_speed_mm_s(int_mps: int, frac_256: int) -> int:
+    return (int_mps & 0x0F) * 1000 + (frac_256 * 1000) // SDM_SPEED_FRAC_DEN
+
+
+def encode_sdm_default(time_frac_200: int, time_s: int, distance_m: int,
+                       distance_frac_16: int, speed_int_mps: int,
+                       speed_frac_256: int, strides: int,
+                       latency_32: int) -> bytes:
+    """Page 1 (0x01), Default Data.
+
+    Byte [4] is TWO nibbles: distance fraction high, speed integer low. The
+    stride count in byte [6] is required, not optional - it is the field that
+    survives a lost packet, the way the beat count is on heart rate.
+    """
+    if not 0 <= distance_frac_16 <= 0x0F or not 0 <= speed_int_mps <= 0x0F:
+        raise ValueError("byte [4] is two nibbles; a value that does not fit "
+                         "corrupts the other field rather than itself")
+    return bytes([
+        PAGE_SDM_DEFAULT,
+        _u8(time_frac_200), _u8(time_s), _u8(distance_m),
+        (distance_frac_16 << 4) | speed_int_mps,
+        _u8(speed_frac_256), _u8(strides), _u8(latency_32),
+    ])
+
+
+def decode_sdm_default(payload: bytes) -> dict:
+    return {
+        "page": payload[0],
+        "time_frac_200": payload[1],
+        "time_s": payload[2],
+        "distance_m": payload[3],
+        "distance_frac_16": (payload[4] >> 4) & 0x0F,
+        "speed_int_mps": payload[4] & 0x0F,
+        "speed_frac_256": payload[5],
+        "strides": payload[6],
+        "latency_32": payload[7],
+    }
+
+
+def encode_sdm_supplementary(page: int, cadence_strides_min: int,
+                             cadence_frac_16: int, speed_int_mps: int,
+                             speed_frac_256: int, status: int,
+                             calories: int = 0) -> bytes:
+    """Pages 2 (0x02) Base and 3 (0x03) Calories - one template.
+
+    The only difference is byte [6], which carries accumulated calories on page
+    3 and is reserved on page 2. Reserved is 0x00 here, not 0xFF - trap 2.
+    """
+    if page not in (PAGE_SDM_BASE, PAGE_SDM_CALORIES):
+        raise ValueError("the supplementary template is pages 2 and 3 only")
+    if not 0 <= cadence_frac_16 <= 0x0F or not 0 <= speed_int_mps <= 0x0F:
+        raise ValueError("byte [4] is two nibbles")
+    return bytes([
+        page, 0x00, 0x00, _u8(cadence_strides_min),
+        (cadence_frac_16 << 4) | speed_int_mps,
+        _u8(speed_frac_256),
+        _u8(calories) if page == PAGE_SDM_CALORIES else 0x00,
+        _u8(status),
+    ])
+
+
+def decode_sdm_supplementary(payload: bytes) -> dict:
+    return {
+        "page": payload[0],
+        "cadence_strides_min": payload[3],
+        "cadence_frac_16": (payload[4] >> 4) & 0x0F,
+        "speed_int_mps": payload[4] & 0x0F,
+        "speed_frac_256": payload[5],
+        "calories": payload[6] if payload[0] == PAGE_SDM_CALORIES else 0,
+        "status": payload[7],
+    }
+
+
+def encode_sdm_summary(strides: int, distance_256: int) -> bytes:
+    """Page 16 DECIMAL (0x10), Distance and Strides Summary.
+
+    Wider than page 1's accumulators and answering a different question: these
+    are session totals for displaying, page 1's are rolling counters for
+    differencing.
+    """
+    if not 0 <= strides <= 0xFFFFFF:
+        raise ValueError("the stride total is 24 bits; truncating it restarts "
+                         "a session total mid-run")
+    return bytes([
+        PAGE_SDM_SUMMARY,
+        strides & 0xFF, (strides >> 8) & 0xFF, (strides >> 16) & 0xFF,
+        distance_256 & 0xFF, (distance_256 >> 8) & 0xFF,
+        (distance_256 >> 16) & 0xFF, (distance_256 >> 24) & 0xFF,
+    ])
+
+
+def decode_sdm_summary(payload: bytes) -> dict:
+    return {
+        "page": payload[0],
+        "strides": payload[1] | (payload[2] << 8) | (payload[3] << 16),
+        "distance_256": (payload[4] | (payload[5] << 8) |
+                         (payload[6] << 16) | (payload[7] << 24)),
+    }
+
+
+def encode_sdm_capabilities(flags: int) -> bytes:
+    """Page 22 DECIMAL (0x16), Capabilities.
+
+    Required on request in Rev 1.6, and it IS this profile's validity
+    convention: a sensor that never answers it is a sensor whose zeros a
+    receiver cannot tell from readings.
+    """
+    return bytes([PAGE_SDM_CAPABILITIES, _u8(flags), 0, 0, 0, 0, 0, 0])
+
+
+def decode_sdm_capabilities(payload: bytes) -> dict:
+    return {"page": payload[0], "flags": payload[1]}
+
+
+_SDM_DECODERS = {
+    PAGE_SDM_DEFAULT: decode_sdm_default,
+    PAGE_SDM_BASE: decode_sdm_supplementary,
+    PAGE_SDM_CALORIES: decode_sdm_supplementary,
+    PAGE_SDM_SUMMARY: decode_sdm_summary,
+    PAGE_SDM_CAPABILITIES: decode_sdm_capabilities,
+}
+
+
+# ---------------------------------------------------------------------------
 # Common pages
 # ---------------------------------------------------------------------------
 
@@ -1268,11 +1976,7 @@ def decode_common_84(payload: bytes) -> dict:
 
     The C mirror is radiant/src/profiles/profile_common.c's
     profile_common_decode_84(); the vocabulary-side conversions are
-    radiant/src/bridge/radiant_common_adapter.c. Provenance for this page,
-    unlike its 80/81/82 neighbours above, is the primary document `ANT+ Common
-    Data Pages` D00001198 Rev 3.1, section 6.13 (Tables 6-16 and 6-17) with the
-    worked example in section 6.13.1.
-
+    radiant/src/bridge/radiant_common_adapter.c.
     Returns a two-element `slots` list, in wire order. Each slot is a dict of
     `subpage`, `name` (None for a reserved or invalid subpage), `raw` (the
     little-endian u16 as it arrived) and `value` - the raw scaled into the
@@ -3613,6 +4317,22 @@ def decode(payload: bytes, device_type: int) -> dict:
     if device_type == HRM_DEVICE_TYPE:
         return decode_hr(payload)
 
+    # FE-C and SDM are dispatched on the DEVICE TYPE before payload[0] is
+    # looked at, and that ordering is load-bearing rather than tidy. FE-C's
+    # pages 0x10, 0x11 and 0x12 are General FE Data, General Settings and
+    # Metabolic; bicycle power's 0x10, 0x11 and 0x12 are Standard Power, Wheel
+    # Torque and Crank Torque. Nothing in either payload distinguishes them, so
+    # a shared page-number table would decode a treadmill's speed as a power
+    # accumulator with no error anywhere. SDM's 0x10 collides with both.
+    if device_type == FEC_DEVICE_TYPE:
+        decoder = _FEC_DECODERS.get(payload[0])
+        if decoder is not None:
+            return decoder(payload)
+    elif device_type == SDM_DEVICE_TYPE:
+        decoder = _SDM_DECODERS.get(payload[0])
+        if decoder is not None:
+            return decoder(payload)
+
     decoder = _PAGE_DECODERS.get(payload[0])
     if decoder is None:
         return {"page": payload[0], "raw": payload}
@@ -3722,6 +4442,27 @@ PROFILES = {
                   PAGE_HR_MANUFACTURER, PAGE_HR_PRODUCT,
                   PAGE_HR_PREVIOUS_BEAT),
         "label": "heart rate, device type 0x78",
+    },
+    # The treadmill's two masters, which apps/treadmill runs side by side on
+    # one radio. They are listed separately here because they are separate
+    # channels with separate periods: a receiver pairs with one or the other,
+    # and a bench run that wants both needs two --profile arguments.
+    #
+    # 8192 and 8134 are ~4.00 Hz and ~4.03 Hz, which BEAT against each other
+    # with a period of about 32 s. That is the contention case
+    # docs/treadmill-reference-design.md's bench procedure exists to measure
+    # and the reason CONFIG_TREADMILL_ANT_BOTH can be turned off.
+    "fec-treadmill": {
+        "device_type": FEC_DEVICE_TYPE,
+        "period": FEC_PERIOD,
+        "pages": (PAGE_FEC_GENERAL, PAGE_FEC_SETTINGS, PAGE_FEC_TREADMILL),
+        "label": "fitness equipment (treadmill), device type 0x11",
+    },
+    "sdm": {
+        "device_type": SDM_DEVICE_TYPE,
+        "period": SDM_PERIOD,
+        "pages": (PAGE_SDM_DEFAULT, PAGE_SDM_BASE, PAGE_SDM_CALORIES),
+        "label": "stride-based speed and distance, device type 0x7C",
     },
     # Device type 0x60 is per-node by design - the period is announced in
     # descriptor frame 0, not fixed by the type - so docs/profile-registry.md

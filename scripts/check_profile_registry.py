@@ -132,6 +132,14 @@ ANT_PAGES_TYPES = [
     ("RD_DEVICE_TYPE", "RD_PERIOD"),
     ("TRK_DEVICE_TYPE", "TRK_PERIOD"),
     ("CTRL_DEVICE_TYPE", "CTRL_PERIOD"),
+    # The treadmill's two masters. 0x11 had no Python copy at all until
+    # apps/treadmill, so its registry row used to be the only statement of
+    # 8192 anywhere the checker could see; 0x7C had no implementation of any
+    # kind. Both periods are now cross-checked, which matters more here than
+    # elsewhere because 8134 and 8192 are one digit apart and a channel told
+    # the wrong one simply never opens.
+    ("FEC_DEVICE_TYPE", "FEC_PERIOD"),
+    ("SDM_DEVICE_TYPE", "SDM_PERIOD"),
     # The profile device types. 0x60 is absent from this list on purpose - its
     # period is per-node and announced in the descriptor, so there is no number
     # to agree on. A profile type FIXES a period, which is most of what a
@@ -153,6 +161,8 @@ ANT_PAGES_PERIOD_SETS = [
     ("RD_DEVICE_TYPE", "RD_PERIOD", "RD_PERIODS"),
     ("TRK_DEVICE_TYPE", "TRK_PERIOD", "TRK_PERIODS"),
     ("CTRL_DEVICE_TYPE", "CTRL_PERIOD", "CTRL_PERIODS"),
+    ("FEC_DEVICE_TYPE", "FEC_PERIOD", "FEC_PERIODS"),
+    ("SDM_DEVICE_TYPE", "SDM_PERIOD", "SDM_PERIODS"),
 ]
 
 

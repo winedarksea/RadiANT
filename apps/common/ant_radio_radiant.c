@@ -71,6 +71,9 @@
 #include <radiant/radiant_profile_sanity.h>
 #include <radiant/radiant_radio_hal.h>
 #include <radiant/radiant_sched.h>
+#if defined(CONFIG_RADIANT_SWI)
+#include <radiant/radiant_swi.h>
+#endif
 #include <radiant/radiant_search.h>
 #include <radiant/radiant_sec.h>
 #include <radiant/radiant_transfer.h>
@@ -453,12 +456,53 @@ void radiant_event_crit_exit(unsigned int key)
 	irq_unlock(key);
 }
 
+#if defined(CONFIG_RADIANT_SWI)
+/* Runs from the trampoline's handler at an ordinary interrupt priority, which
+ * is the whole point - see the wakeup below. */
+static void event_wakeup_swi(uint32_t bits)
+{
+	ARG_UNUSED(bits);
+	k_sem_give(&api_event_sem);
+}
+#endif
+
 void radiant_event_wakeup(void)
 {
 	/* O(1), ISR-safe, never calls back into radiant_event. Semaphore limit
 	 * of 1 collapses a burst of arrivals into one wake, which is fine since
 	 * the drain empties the whole queue anyway. */
+#if defined(CONFIG_RADIANT_SWI)
+	/*
+	 * BUG 27, AND THIS IS THE CALL THAT MATTERED.
+	 *
+	 * "ISR-safe" above is true of an ordinary ISR and false of a
+	 * zero-latency one. Under the MPSL gate this function is reached from
+	 * MPSL's timeslot signal callback -
+	 *
+	 *   SIGNAL_RADIO -> radiant_nrf_gate_on_radio_irq() -> deliver_terminal()
+	 *     -> radiant_event_post_rx() -> here
+	 *
+	 * - and MPSL connects that vector with IRQ_ZERO_LATENCY, which runs
+	 * above every irq_lock() and every kernel spinlock. The event thread
+	 * below waits on this semaphore WITH A TIMEOUT (see api_event_thread's
+	 * k_sem_take(&api_event_sem, K_MSEC(RADIANT_API_HOUSEKEEP_MS))), so
+	 * giving it wakes a thread that has a timeout pending, and that runs
+	 * z_abort_timeout() on the kernel's timeout list from a context which
+	 * cannot hold its lock. Measured: sys_dlist_remove/sys_dlist_insert bus
+	 * faults with BFAR 0, "Fault during interrupt handling", and on a build
+	 * with the SoftDevice Controller a RESET_CPU_LOCKUP reboot loop.
+	 *
+	 * Fixing the gate's own kernel calls and not this one was measured to
+	 * make the fault rate WORSE, because this is the frequent caller - one
+	 * per received packet - and the gate's are not. So the pend goes here
+	 * first. See docs/p4-zli-kernel-calls.md.
+	 */
+	radiant_swi_pend(RADIANT_SWI_EVENT_WAKEUP);
+#else
+	/* No MPSL gate, no zero-latency vector in the path: the direct backend's
+	 * radio interrupt is an ordinary one, where this is legal and cheaper. */
 	k_sem_give(&api_event_sem);
+#endif
 }
 
 /*
@@ -2924,6 +2968,24 @@ antr_err_t antr_init(void)
 	}
 
 	api_inited = true;
+#if defined(CONFIG_RADIANT_SWI)
+	/*
+	 * Claim the trampoline before the event thread exists, and so before
+	 * anything can post: radiant_swi_pend() drops silently until the line is
+	 * claimed, and that window must not overlap a live receiver. Failure is
+	 * fatal to arbitrated operation rather than cosmetic - every wakeup on
+	 * the completion path goes through it - so it is reported, not ignored.
+	 */
+	{
+		int swi_rc = radiant_swi_register(RADIANT_SWI_EVENT_WAKEUP,
+						  event_wakeup_swi);
+
+		if (swi_rc != 0) {
+			LOG_ERR("radiant_swi_register: %d", swi_rc);
+			return (antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED;
+		}
+	}
+#endif
 	(void)k_thread_create(&api_event_thread_data, api_event_stack,
 			      K_THREAD_STACK_SIZEOF(api_event_stack),
 			      api_event_thread, NULL, NULL, NULL,

@@ -181,17 +181,21 @@ jobs:
           # --inline-logs because a failure here is read by whoever opened the
           # pull request, and twister otherwise leaves the actual assertion
           # text in a file inside twister-out/ that nobody downloads.
-          # Two -T roots. app/radiant/tests is the module's own suites;
-          # app/apps/hrm_ble/tests is the heart-rate node's beat scheduler,
-          # which lives with the application because it tests the application
-          # and radiant/tests/CMakeLists.txt's glob deliberately does not reach
-          # out of the module. scripts/check_test_counts.py's floors are floors,
-          # so adding a root raises the observed counts without needing an edit
-          # there - but raise them in the same commit that adds coverage, or the
-          # floor stops describing the tree.
+          # THREE -T roots. app/radiant/tests is the module's own suites;
+          # app/apps/hrm_ble/tests is the heart-rate node's beat scheduler and
+          # app/apps/treadmill/tests is the treadmill's state module and unit
+          # conversions. Both application roots live with their applications
+          # because they test applications, and radiant/tests/CMakeLists.txt's
+          # glob deliberately does not reach out of the module.
+          # scripts/check_test_counts.py's floors are floors, so adding a root
+          # raises the observed counts without needing an edit there - but
+          # raise them in the same commit that adds coverage, or the floor
+          # stops describing the tree. min_scenarios is what notices if one of
+          # these arguments is ever dropped.
           "${zephyr_base}/scripts/twister" \
             -T app/radiant/tests \
             -T app/apps/hrm_ble/tests \
+            -T app/apps/treadmill/tests \
             -p native_sim \
             --inline-logs \
             -v
@@ -1330,6 +1334,224 @@ jobs:
             # `absent:CONFIG_X` asserts the symbol does not appear at all,
             # which is what an unmet `depends on` produces. Anything else is
             # matched as a whole literal line.
+            if [[ "${want}" == absent:* ]]; then
+              sym="${want#absent:}"
+              if grep -qE "^(# )?${sym}[= ]" "${cfg}"; then
+                echo "::error::expected ${sym} to be absent from ${cfg}"
+                echo "  actual: $(grep -E "^(# )?${sym}[= ]" "${cfg}")"
+                rc=1
+              else
+                echo "ok: ${sym} absent"
+              fi
+            elif grep -qxF "${want}" "${cfg}"; then
+              echo "ok: ${want}"
+            else
+              echo "::error::expected '${want}' in ${cfg}"
+              echo "  actual: $(grep -E "^(# )?${want%%[= ]*}[= ]" "${cfg}" || echo '(symbol absent entirely)')"
+              rc=1
+            fi
+          done <<< "${WANT}"
+          exit "${rc}"
+
+  # apps/treadmill - the fitness-equipment node, and this tree's second
+  # manufacturer reference design.
+  #
+  # A CLONE OF build-node RATHER THAN A PARAMETERISATION OF IT, and the choice
+  # is recorded because the alternative was considered. Parameterising would
+  # mean an `app` and a `conf_prefix` input on one job, which works right up
+  # until the two applications' assertion sets diverge - and they already have:
+  # this one has no HRM_SENSOR choice, has a TREADMILL_SOURCE choice instead,
+  # and asserts CONFIG_BT_SMP, which apps/hrm_ble has no equivalent of at all.
+  # A shared job whose matrix rows assert disjoint symbol sets is a shared job
+  # in name only.
+  #
+  # NOT build-new-apps EITHER, and this is the trap that job would have walked
+  # into: its conf flag is the plain non-image-scoped `-DEXTRA_CONF_FILE=`,
+  # which for a sysbuild application lands in the sysbuild cache and never
+  # reaches the image. Every BLE row here would have built green with no BLE
+  # in it - which is exactly the failure apps/hrm_ble already shipped once and
+  # measured.
+  #
+  # NO dist\ ARTIFACT is involved: node-class applications produce none.
+  #
+  # No secret and no sdk-ant, so it runs on forks and on every pull request.
+  build-treadmill:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: "treadmill: ANT+ FE-C + SDM"
+            # The baseline: both ANT+ masters, no BLE, no arbiter.
+            #
+            # TREADMILL_BLE is asserted ABSENT, not "is not set", and the
+            # difference is the same one the build-node job measured on a real
+            # .config: Kconfig omits a symbol entirely when its `depends on` is
+            # unmet - here `depends on BT && BT_PERIPHERAL` - and only writes
+            # the "# ... is not set" form for a symbol whose dependencies are
+            # met and which is merely off. CONFIG_BT is the second kind, so the
+            # two lines below are deliberately different forms.
+            board: nrf54l15dk/nrf54l15/cpuapp
+            assert_symbols: |
+              CONFIG_RADIANT_BACKEND_NRF=y
+              CONFIG_TREADMILL_SOURCE_SIMULATED=y
+              CONFIG_TREADMILL_ANT_SDM=y
+              # CONFIG_BT is not set
+              absent:CONFIG_TREADMILL_BLE
+          # THE OTHER HALF OF THE nrf BACKEND'S `depends on`, exactly as in
+          # build-node. ANT+ only: the BLE arm on nRF52 would be the first time
+          # SDC, MPSL, the gate, two hand-written GATT services and SMP were
+          # compiled together on that family, and there is no nRF52 bench slot
+          # for this application.
+          - name: "treadmill: ANT+ node (nRF52840)"
+            board: nrf52840dk/nrf52840
+            assert_symbols: |
+              CONFIG_RADIANT_BACKEND_NRF=y
+              CONFIG_TREADMILL_SOURCE_SIMULATED=y
+              # CONFIG_BT is not set
+          # THE COEXISTENCE FALLBACK, COMPILED SO IT CANNOT ROT. Two ANT+
+          # masters at 8192 and 8134 counts beat against each other with a
+          # period of about 32 s, and this project has measured one master
+          # beside BLE and eight masters beside 802.15.4 but never this mix.
+          # A fallback nobody compiles is not a fallback.
+          - name: "treadmill: FE-C only (coexistence fallback)"
+            board: nrf54l15dk/nrf54l15/cpuapp
+            image_conf: fec_only.conf
+            assert_symbols: |
+              CONFIG_RADIANT_BACKEND_NRF=y
+              # CONFIG_TREADMILL_ANT_SDM is not set
+          - name: "treadmill: FTMS + RSC"
+            # CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL,
+            # CONFIG_MPSL_TIMESLOT_SESSION_COUNT, CONFIG_BT_RSCS and
+            # CONFIG_BT_SMP are asserted here even though ble.conf sets none of
+            # them. That is exactly why: they come from `select`s and a
+            # `default` on TREADMILL_BLE in apps/treadmill/Kconfig, and a
+            # Kconfig `default` placed after the symbol's own definition is
+            # silently dead.
+            #
+            # BT_SMP IS THE NEW ONE IN THIS TREE. FTMS v1.0 Table 4.1 gives the
+            # Fitness Machine Control Point security permission "Encryption",
+            # so a build without SMP would advertise a control point no client
+            # can ever write - which looks exactly like a machine that ignores
+            # commands rather than like a misconfiguration.
+            board: nrf54l15dk/nrf54l15/cpuapp
+            image_conf: ble.conf
+            assert_symbols: |
+              CONFIG_RADIANT_BACKEND_NRF=y
+              CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
+              CONFIG_MPSL_TIMESLOT_SESSION_COUNT=1
+              CONFIG_TREADMILL_BLE=y
+              CONFIG_BT=y
+              CONFIG_BT_RSCS=y
+              CONFIG_BT_SMP=y
+              CONFIG_BT_SETTINGS=y
+              # CONFIG_RADIANT_BACKEND_NULL is not set
+          # THE HEAVIEST CONFIGURATION THIS APPLICATION HAS: two ANT+ masters,
+          # one ANT+ slave and BLE with SMP and a bonding store. The row that
+          # decides whether the RAM budget holds - which the Matter flash spike
+          # already established matters more than flash on this part.
+          - name: "treadmill: FTMS + RSC + ANT+ HR slave"
+            board: nrf54l15dk/nrf54l15/cpuapp
+            image_conf: "ble.conf;hr_rx.conf"
+            assert_symbols: |
+              CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
+              CONFIG_TREADMILL_BLE=y
+              CONFIG_TREADMILL_HR_RX=y
+              CONFIG_TREADMILL_ANT_SDM=y
+          # THE ARM WITH NO SOURCE IN IT. CONFIG_TREADMILL_SOURCE_CUSTOM
+          # compiles no implementation of the seam, deliberately - there is no
+          # fallback to the simulator. The image must still LINK, because an
+          # integrator's first build failing for a reason unrelated to their
+          # driver is an expensive way to start.
+          - name: "treadmill: custom source (nothing registered)"
+            board: nrf54l15dk/nrf54l15/cpuapp
+            image_conf: source_custom.conf
+            assert_symbols: |
+              CONFIG_TREADMILL_SOURCE_CUSTOM=y
+              # CONFIG_TREADMILL_SOURCE_SIMULATED is not set
+
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Zephyr workspace and toolchain
+        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: app
+          toolchains: arm-zephyr-eabi
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-treadmill-${{ strategy.job-index }}-${{ github.sha }}
+          restore-keys: |
+            ccache-treadmill-${{ strategy.job-index }}-
+
+      - name: Build
+        env:
+          BOARD: ${{ matrix.board }}
+          IMAGE_CONF: ${{ matrix.image_conf }}
+        run: |
+          set -euxo pipefail
+          extra=("-DRADIANT_BACKEND=nrf")
+          # IMAGE-SCOPED, and the prefix is the basename of the application
+          # directory because that is how sysbuild names an image. A wrong
+          # prefix names an image that does not exist and is accepted in
+          # silence: CMake says nothing beyond its end-of-run
+          # "manually-specified variables were not used" warning, and the BLE
+          # image builds green with no BLE in it. apps/hrm_ble shipped exactly
+          # that and measured it - two builds, with the flag and without,
+          # produced byte-identical .config files.
+          if [[ -n "${IMAGE_CONF}" ]]; then
+            extra+=("-Dtreadmill_EXTRA_CONF_FILE=${IMAGE_CONF}")
+          fi
+          west build app/apps/treadmill \
+            -b "${BOARD}" \
+            -d build \
+            -p always \
+            -- "${extra[@]}"
+
+      # THE STEP THAT EARNS THE JOB. A build-only check passes the silent-no-op
+      # above without noticing; asserting the resulting .config is the only
+      # thing that would not have.
+      #
+      # THE THREE ASSERTION FORMS ARE NOT INTERCHANGEABLE:
+      #   CONFIG_X=y                 the symbol is on
+      #   "# CONFIG_X is not set"    dependencies met, symbol off. WRITTEN WITH
+      #                              THE LEADING '# ' because that is the
+      #                              literal line Kconfig emits, and the matcher
+      #                              below is `grep -qxF` - a whole-line,
+      #                              fixed-string compare that will not match a
+      #                              bare "CONFIG_X is not set" against it.
+      #   absent:CONFIG_X            Kconfig omitted the symbol entirely because
+      #                              a `depends on` was unmet
+      # Using the second where the third is correct passes on a tree where the
+      # symbol has been renamed out of existence.
+      - name: Verify the configuration that was asked for took effect
+        env:
+          WANT: ${{ matrix.assert_symbols }}
+        run: |
+          set -euo pipefail
+          cfg="$(find build -name .config -path '*treadmill*' -print -quit)"
+          if [[ -z "${cfg}" ]]; then
+            cfg="$(find build -name .config -print -quit)"
+          fi
+          echo "reading ${cfg}"
+          rc=0
+          while IFS= read -r want; do
+            [[ -z "${want}" ]] && continue
             if [[ "${want}" == absent:* ]]; then
               sym="${want#absent:}"
               if grep -qE "^(# )?${sym}[= ]" "${cfg}"; then

@@ -1,0 +1,307 @@
+#
+# RadiANT treadmill - the fitness-equipment reference design.
+#
+# One prefix for the whole application, TREADMILL_*, the same way the dongle
+# uses ANT_DONGLE_*, the heart-rate node uses HRM_* and the simulator uses
+# ANT_SIM_*. They never build together, but a shared prefix would make "which
+# application does this symbol belong to" ambiguous, and the answer to that
+# question is how the CI assertions stay honest.
+#
+
+rsource "../../radiant/src/node/Kconfig"
+rsource "../../radiant/src/profiles/Kconfig"
+rsource "../common/Kconfig.antr_api"
+
+# ── Defaults this application imposes on symbols it does not own ────────────
+#
+# BEFORE `source "Kconfig.zephyr"`, and that placement is the whole mechanism.
+# Kconfig collects every `default` of a symbol in the order the definitions are
+# parsed and takes the FIRST whose condition holds. nrfxlib's own definition of
+# MPSL_TIMESLOT_SESSION_COUNT carries `default 0`; if this block were parsed
+# after it, ours would be dead and the .config would read 0 with no error
+# anywhere.
+#
+# WHY THE SYMBOL MATTERS. Every timeslot session_open() fails when the count is
+# 0, while the image still runs - so the arbitrated build's failure mode is a
+# node that refuses every arm rather than a build error, and on a bench that is
+# indistinguishable from a dead antenna. radiant/Kconfig's help for
+# RADIANT_BACKEND_NRF_GATE_MPSL says so at length. apps/hrm_ble learned this
+# the expensive way; this application inherits the answer rather than the
+# lesson.
+config MPSL_TIMESLOT_SESSION_COUNT
+	default 1 if TREADMILL_BLE
+
+source "Kconfig.zephyr"
+
+menuconfig TREADMILL
+	bool "RadiANT treadmill node"
+	default y
+	help
+	  A RadiANT NODE that is fitness equipment: radiant driving TWO ANT+
+	  master channels - FE-C (0x11) and Stride Based Speed and Distance
+	  (0x7C) - with FTMS and RSC over BLE beside them on one radio.
+
+	  It is the second reference design in this tree, after
+	  apps/hrm_ble, and it exists to answer a question that one could not:
+	  what a node looks like when it is TOLD things as well as measuring
+	  them. A chest strap has no control surface; a treadmill has two
+	  (FE-C page 51 and the FTMS control point) and they have to agree.
+
+	  See docs/treadmill-reference-design.md.
+
+if TREADMILL
+
+config TREADMILL_DEVICE_NUMBER
+	int "ANT device number when the node is not provisioned"
+	range 1 65535
+	default 4243
+	help
+	  Used only when radiant/src/node/ has no identity record. A
+	  provisioned node takes its device number from that record instead,
+	  which is what ADR 0009 requires.
+
+	  A SHIPPED PRODUCT MUST NOT USE THE FALLBACK, and today it has no
+	  choice: nothing in apps/ calls node_ident_provision(), so no board in
+	  this tree can be provisioned and every treadmill flashed from one
+	  build shares one identity. For a single demo that is fine. FOR A GYM
+	  IT IS FATAL - twenty machines answering to one device number is
+	  twenty machines a receiver cannot tell apart - and it is item 1 of
+	  this application's production checklist for that reason.
+
+	  4243 rather than apps/hrm_ble's 4242, so the two reference designs on
+	  one bench are two devices.
+
+config TREADMILL_MANUFACTURER_ID
+	int "manufacturer id for the common pages"
+	range 0 65535
+	default 255
+	help
+	  255 is the ANT+ development id. A shipped machine needs a real one
+	  from the alliance; using it here would be claiming somebody else's.
+
+# ── The ANT+ side ───────────────────────────────────────────────────────────
+
+config TREADMILL_ANT_SDM
+	bool "also transmit ANT+ Stride Based Speed and Distance (0x7C)"
+	default y
+	help
+	  A SECOND master channel beside FE-C. FE-C is what a control-capable
+	  head unit pairs with; SDM is what anything that only knows foot pods
+	  pairs with, which includes Zwift Run and most watches. Emitting both
+	  costs two transmit slots per ~250 ms and buys the whole
+	  compatibility surface.
+
+	  TURNING IT OFF IS A COEXISTENCE FALLBACK AND IT EXISTS BEFORE IT IS
+	  NEEDED, on purpose. Two ANT+ masters plus BLE on one radio is more
+	  contention than anything this project has measured: the arbiter has
+	  been characterised with one master beside BLE (P8b) and with eight
+	  masters beside 802.15.4 (P3.5), but not this mix. The two periods -
+	  8192 and 8134 counts - beat against each other with a period of
+	  about 32 seconds, so if they interact badly the symptom is a slow
+	  cycle of loss on both channels rather than a steady figure. This
+	  symbol is what a bench operator turns off to find out.
+
+config TREADMILL_FEC_METABOLIC
+	bool "emit FE-C page 18 (METs, calories)"
+	help
+	  Optional in the profile and off by default here. The number behind
+	  it is an ACSM population-average estimate computed in
+	  src/treadmill_state.c from belt speed, grade and a user mass that a
+	  controller may never have sent - see that file for the equation and
+	  its assumptions. Nothing anywhere depends on it, which is the only
+	  reason a population average is acceptable at all.
+
+	  METs are deliberately NOT reported even when this is on: a METs
+	  field reads as a physiological statement about the person on the
+	  belt in a way a calorie counter on a console does not.
+
+# ── The source seam ─────────────────────────────────────────────────────────
+#
+# A CHOICE AND NOT A BOOL, AND THAT IS THE SAFETY PROPERTY. With a bool
+# ("enable the simulator") a manufacturer who forgets to turn it off ships a
+# treadmill that reports a synthetic runner while somebody stands on it, and
+# nothing in the build says so. A choice makes "I forgot to unhook the
+# simulator" impossible to express: exactly one arm is compiled, exactly one
+# treadmill_source_register() call is linked, and the boot log names which.
+#
+# There is deliberately NO fallback from TREADMILL_SOURCE_CUSTOM to the
+# simulator. See that symbol's help.
+choice TREADMILL_SOURCE
+	prompt "treadmill source"
+	default TREADMILL_SOURCE_SIMULATED
+	help
+	  Which implementation of src/treadmill_source.h's seam is compiled in.
+	  The seam is push (source-driven) for measurements and pull
+	  (application-driven) for commands, and both directions are described
+	  in that header. Read it before writing one.
+
+config TREADMILL_SOURCE_SIMULATED
+	bool "simulated - a synthetic runner, no hardware"
+	help
+	  src/treadmill_sim.c. A DK has no belt and no deck. It runs a 150 s
+	  workout on repeat so that every accumulator on every page actually
+	  moves on a bench - a node reporting a fixed speed makes a stuck
+	  encoder and a working one look the same - and it honours both
+	  control paths with a ramp, so the reporting loop is exercised rather
+	  than short-circuited.
+
+config TREADMILL_SOURCE_CUSTOM
+	bool "custom - your driver, registered at boot"
+	help
+	  NOTHING IN THIS TREE IMPLEMENTS THE SEAM UNDER THIS OPTION. Your
+	  code calls treadmill_source_register() before main()'s
+	  treadmill_source_start(), from a SYS_INIT() or from a driver's own
+	  init hook. src/treadmill_source_custom.c is compiled instead and
+	  contains the porting instructions and a boot-time warning.
+
+	  If your driver does not register, the node reports a stopped belt at
+	  zero grade in the READY state, forever, and logs an error at boot.
+	  That is the CORRECT failure and it is deliberately NOT a fallback to
+	  the simulator: a machine quietly reporting a synthetic runner while
+	  somebody stands on it is invisible from the receiving end, and one
+	  reporting a stopped belt is not - and on a gym dashboard it reads as
+	  "unoccupied", which is the safe direction to be wrong in.
+
+endchoice
+
+# ── The BLE side ────────────────────────────────────────────────────────────
+
+config TREADMILL_BLE
+	bool "also advertise FTMS and RSC over BLE"
+	depends on BT && BT_PERIPHERAL
+	select BT_RSCS
+	select BT_SMP
+	#
+	# SELECT, NOT DEPENDS, AND THE SYMBOL WAS CHECKED FIRST - the same
+	# reasoning apps/hrm_ble/Kconfig records for HRM_BLE_HRS.
+	# RADIANT_BACKEND_NRF_GATE_MPSL has NO `depends on` at all, so there is
+	# nothing here for `select` to bypass.
+	#
+	# WHAT IT RETIRES. CONFIG_BT=y breaks the `!BT` half of the nrf
+	# backend's `depends on !BT || RADIANT_BACKEND_NRF_GATE_MPSL`. Without
+	# the gate the choice silently falls back to RADIANT_BACKEND_NULL - a
+	# node that boots, logs "transmitting", and puts nothing on the air.
+	# CMakeLists.txt carries a FATAL_ERROR backstop for the same interlock
+	# approached from the other side.
+	select RADIANT_BACKEND_NRF_GATE_MPSL
+	help
+	  FTMS (0x1826, hand-written - neither Zephyr nor NCS ships it) and RSC
+	  (0x1814, NCS's bt_rscs_*), beside two ANT+ masters on one radio.
+
+	  BT_SMP IS SELECTED AND IT IS NOT OPTIONAL DRESSING. FTMS Table 4.1
+	  gives the Fitness Machine Control Point security permission
+	  "Encryption", so the attribute carries BT_GATT_PERM_WRITE_ENCRYPT and
+	  an unpaired client's write must fail. That means pairing, bonding and
+	  key storage - an axis apps/hrm_ble does not have at all, since it
+	  advertises an unencrypted HRS and never pairs.
+
+	  THERE IS NO SUPPRESSION RULE HERE, and its absence is deliberate.
+	  apps/hrm_ble stops ANT+ while a phone is connected, on the argument
+	  that the phone already has the heart rate. That argument does not
+	  transfer: a treadmill is expected to serve a head unit and a fitness
+	  app at the same time, so the contended case is the NORMAL case here.
+
+config TREADMILL_BLE_ADV_INTERVAL_MS
+	int "BLE advertising interval, milliseconds"
+	depends on TREADMILL_BLE
+	range 100 10000
+	default 1000
+	help
+	  Carried over from apps/hrm_ble unchanged, and it is policy rather
+	  than power tuning: MPSL ranks the Bluetooth controller above anything
+	  an application can request, so RadiANT's share of the radio is
+	  delivered by SHAPING BLE's demand. Shortening this is a decision to
+	  take air away from two ANT+ masters.
+
+	  The cost of the long interval is discovery latency, and it is
+	  measured rather than estimated: at 1009 ms a scanner saw 18
+	  advertisements in 120 s. Budget >= 90 s before calling a node
+	  missing. See docs/hrm-reference-design.md section 7.
+
+config TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS
+	int "shortest connection interval to accept, 1.25 ms units"
+	depends on TREADMILL_BLE
+	range 6 3200
+	default 800
+	help
+	  800 units is 1 s, which is what nrf/samples/esb/esb_ptx_ble uses to
+	  run BLE beside a timeslot user. A phone will ask for far less - iOS
+	  asks for tens of milliseconds - and accepting hands the controller a
+	  recurring high-priority event every few milliseconds for the life of
+	  the connection.
+
+config TREADMILL_BLE_NOTIFY_INTERVAL_MS
+	int "Treadmill Data notification interval, milliseconds"
+	depends on TREADMILL_BLE
+	range 200 5000
+	default 1000
+	help
+	  FTMS says the server notifies Treadmill Data "at a regular interval,
+	  typically once per second" and that the interval is NOT
+	  client-configurable, so it is a build setting rather than a GATT one.
+
+	  Every notification is radio time contending with two ANT+ masters
+	  through the MPSL gate. 1000 ms is the spec's own typical value and
+	  the one the coexistence gate should be run at.
+
+config TREADMILL_BLE_MAX_SPEED_CENTI_KPH
+	int "maximum belt speed advertised over FTMS, 0.01 km/h"
+	depends on TREADMILL_BLE
+	range 100 65535
+	default 2000
+	help
+	  The Maximum field of FTMS's Supported Speed Range characteristic,
+	  which is what a client reads to learn the legal span before
+	  commanding a speed. 2000 is 20.00 km/h.
+
+	  IT MUST AGREE WITH WHAT treadmill_source WILL ACTUALLY ACCEPT. A
+	  machine that advertises a range wider than its belt can do will be
+	  commanded into it and then have to answer Operation Failed, which a
+	  client reports as a fault rather than as a limit.
+
+config TREADMILL_BLE_MIN_INCLINE_DECI
+	int "minimum grade advertised over FTMS, 0.1 %"
+	depends on TREADMILL_BLE
+	range -1000 0
+	default -30
+	help
+	  The Minimum field of Supported Inclination Range. -30 is -3.0 %, a
+	  typical commercial decline. Same agreement rule as the speed range
+	  above.
+
+config TREADMILL_BLE_MAX_INCLINE_DECI
+	int "maximum grade advertised over FTMS, 0.1 %"
+	depends on TREADMILL_BLE
+	range 0 1000
+	default 150
+	help
+	  The Maximum field of Supported Inclination Range. 150 is 15.0 %.
+
+# ── Phase 5 ─────────────────────────────────────────────────────────────────
+
+config TREADMILL_HR_RX
+	bool "receive ANT+ heart rate from a chest strap"
+	help
+	  A THIRD ANT+ channel, this one a slave: device type 0x78, wildcard
+	  device number. The bpm reaches FE-C page 16 byte 6 (with the
+	  capabilities nibble's HR-source bits set to ANT+), the FTMS Treadmill
+	  Data heart-rate field, and - when a console display exists - the
+	  display. There is no display code in this tree and none is proposed.
+
+	  IT ACQUIRES ONCE AND THEN STOPS SEARCHING. A tracking slave beside
+	  two masters is the benign case; an acquisition SWEEP beside them is
+	  what starves the arbiter, which is this project's own measurement and
+	  the subject of ADR 0013. "Strongest wins" is implemented as a
+	  proximity search floor that relaxes on timeout rather than as a
+	  sweep - see src/treadmill_hr_rx.h for what that does and does not
+	  guarantee.
+
+	  Off by default: it is the third channel on a radio that is already
+	  running two masters and possibly BLE, and it should be turned on
+	  deliberately.
+
+module = TREADMILL
+module-str = treadmill
+source "subsys/logging/Kconfig.template.log_config"
+
+endif # TREADMILL

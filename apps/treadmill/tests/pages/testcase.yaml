@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The treadmill's state module: the accumulators, the integrator and every unit
+# conversion between the five outputs this node has.
+#
+# It contains no hardware access, no kernel objects and no timing at all - the
+# unit under test is told how much time passed - so native_sim is the right
+# platform and the run is bounded by nothing but the loop.
+#
+# On Windows there is no native_sim (no host C compiler):
+#
+#   .\scripts\run_ztest_hw.ps1 -App apps\treadmill\tests\pages -NcsVersion v3.4.0
+tests:
+  treadmill.pages:
+    tags:
+      - radiant
+      - treadmill
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim

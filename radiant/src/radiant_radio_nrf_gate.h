@@ -196,6 +196,33 @@ uint32_t gate_min_arm_lead_us(void);
  */
 
 /* The air arrived. Programme the staged operation and let the hardware run. */
+/*
+ * TRUE WHILE THIS THREAD OF CONTROL IS INSIDE AN MPSL TIMESLOT SIGNAL CALLBACK.
+ *
+ * Which is to say: true while running in a ZERO-LATENCY interrupt, where no
+ * kernel API may be called and no Zephyr lock excludes anything (bug 27, and
+ * the (a) split that followed it - docs/p4-zli-kernel-calls.md).
+ *
+ * The backend uses it to decide whether a completion may be handed to the core
+ * inline or has to go on the trampoline's queue. It is deliberately not
+ * `k_is_in_isr()`: the trampoline's own handler is an ISR too, and so is any
+ * other ordinary interrupt, and both of those are contexts where calling the
+ * core directly is correct. The only context that is not is this one.
+ *
+ * Reads as a plain bool because the flag is only ever written by the signal
+ * callback itself, which cannot preempt itself - MPSL delivers all of
+ * START/RADIO/TIMER0 from one priority.
+ *
+ * Always false on the direct backend, where there is no such context.
+ *
+ * DECLARED OUTSIDE THE DIAGNOSTIC BLOCK BELOW, and that is not tidiness: it
+ * used to sit inside it, so the backend saw it only on a CONFIG_RADIANT_SWEEP_
+ * DEBUG build. The bridge arm has that on and compiled; the Matter arm does not
+ * and failed on an implicit declaration - which, had -Werror not been in the
+ * way, would have meant an int-returning guess and a completion queue that was
+ * bypassed exactly where it was needed most.
+ */
+bool gate_in_signal(void);
 void radiant_nrf_gate_on_grant(void);
 
 /* The air did not arrive and will not. Deliver the staged operation's terminal
@@ -253,6 +280,18 @@ void radiant_nrf_gate_on_grant_end(void);
  * These are the six numbers between the two.
  */
 struct radiant_nrf_win_diag {
+	/*
+	 * THE ONE THAT MUST STAY ZERO. Completions raised in a timeslot signal
+	 * callback are queued for the trampoline rather than run there (the (a)
+	 * split, docs/p4-zli-kernel-calls.md); this counts the ones the queue
+	 * had no room for. A dropped completion is a window the core never sees
+	 * finish - a channel that quietly stops rather than a crash - so it is
+	 * carried here rather than left to a comment.
+	 */
+	uint32_t cb_dropped;
+	/* The high-water mark of that queue, so `cb_dropped` staying zero can be
+	 * read as margin rather than luck. */
+	uint32_t cb_depth_max;
 	uint32_t grants;      /* on_grant() entered */
 	uint32_t nostage;     /* ...and found nothing staged to programme */
 	uint32_t prog_ok;     /* ...and the programming succeeded */
@@ -313,6 +352,7 @@ struct radiant_nrf_win_diag {
 };
 
 void radiant_nrf_win_diag_get(struct radiant_nrf_win_diag *out);
+
 #endif
 
 #ifdef __cplusplus
