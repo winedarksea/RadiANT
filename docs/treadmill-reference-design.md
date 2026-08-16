@@ -336,17 +336,93 @@ getting this wrong silently builds the **null radio backend** and the board
 transmits nothing. **This trap has bitten this project twice. Assert, do not
 eyeball** — which is what the script's own loop does.
 
-### 7.4 On air, ANT+
+### 7.4 On air, ANT+ — PARTLY RUN, 2026-08-16
 
-With a second board or a dongle running `tools/ant_sim.py`:
+Rig: `tread_l15` on an nRF54L15 DK (J-Link `1057737173`), received by the
+nRF52840 Dongle running RadiANT `0.01B00` as an ANT+ stick. RSSI −34 dBm.
 
-- FE-C `0x11` and SDM `0x7C` both discoverable, at 8192 and **8134** counts.
-- Page 16's speed and distance advance; page 19's cadence and vertical distance
-  advance on an incline.
-- Page 54 reports Simulation mode (byte 7 bit 2).
-- **The control loop**: send page 51 with grade = +3.00 % (raw `0x4F4C`) and
-  confirm a page 71 `PASS` echoing the grade at bytes 5–6 **and** a page 17
-  incline of `+300` once the simulated actuator has ramped.
+**The broadcast half passes.** A receiver pinned to `#4243` heard, over 90 s
+on two simultaneous channels:
+
+| | device type | packets | loss |
+|---|---|---|---|
+| ch 0, FE-C | **17** (`0x11`) at 8192 | 356 | 0.84 % |
+| ch 1, SDM | **124** (`0x7C`) at 8134 | 351 | 3.57 % |
+
+Both masters run from one node at once. Page 16 carries `equipment_type 19`,
+a live speed (1230–1400 mm/s) and an advancing distance; page 19 carries a
+cadence of 70–71 strides/min; page 17 carries the incline; common pages 80/81
+carry serial 4243. The rotation matches §10.1.
+
+**USE A PINNED CHANNEL, NOT `ant_scan.py`, TO LOOK FOR THIS NODE.** A wildcard
+slave latches onto the first sensor it hears and then reports only that one. On
+this bench it locked to a Wahoo trainer (`#52233`) and reported the treadmill as
+absent, twice, on a board that was transmitting perfectly the whole time. That
+is a false negative that reads exactly like a dead radio.
+
+**Page 54 is not in the broadcast rotation** — it is answered on request
+(page 70), so its absence from a passive capture is correct rather than a gap.
+
+**The control loop is UNTESTED, and not for want of trying.** Page 51 was sent
+as acknowledged data 13 times across the ~32 s beat, on both the two-master and
+the `fec_only.conf` builds: `TRANSFER_TX_FAILED` every time, no page 71, incline
+stayed 0. **This does not implicate the treadmill.** The control run: the same
+dongle, sending a read-only acknowledged page 70 to the *commercial* trainer
+`#52233`, also failed 0/4. The dongle cannot originate an acknowledged transfer,
+so the rig cannot ask the question. **A controller with a known-good originator
+is needed before anything is concluded about FE-C's "C" on this node** — the
+sdk-ant Feather image at `build/release/dongle/zephyr/zephyr.uf2` is the
+cheapest one, since the Feather sits in its UF2 bootloader and needs no
+double-tap.
+
+### 7.4a Two defects found on the bench, 2026-08-16
+
+Both are treadmill-specific and both were isolated against `apps/hrm_ble` on the
+**same board, same probe, same port, same NCS** — which is what makes them
+findings rather than bench noise.
+
+**1. The BLE arm never advertises.** `tread_ble` boots, keeps both ANT+ masters
+running (78 packets, device type 17, over 25 s), and puts nothing on the air over
+BLE: an active scan of 100 devices found no `RadiANT Treadmill` and no `0x1826`
+from this board. `node_ble` — `apps/hrm_ble`'s BLE arm — flashed to the same
+board minutes later, advertised as `RadiANT HR` with `0x180D` immediately. So the
+radiant + SoftDevice-Controller + MPSL-gate integration is *not* the problem.
+`treadmill_ble_start()` is called (`main.c:765`) and its result is discarded by
+the `(void)` cast, which is exactly the failure mode its own comment at
+`treadmill_ble.c:1016` predicts — so the return value of `bt_enable()`,
+`bt_rscs_init()` or `bt_le_adv_start()` is the thing to capture first.
+
+**2. No treadmill build produces any console output at all.** Not one byte on
+either VCOM, with DTR asserted, on any treadmill image — **not even the Zephyr
+boot banner**, which is printed before any application code. `apps/hrm_ble` on
+the same board and port prints its banner every time. The console Kconfig of the
+two applications is *byte-identical* (diffed across every `CONFIG_LOG*`,
+`CONSOLE`, `UART*`, `SERIAL`, `PRINTK`, `BOOT_BANNER` symbol; the only
+difference in the whole set is `MULTITHREADING_LOCK`, which BLE brings in), and
+the two board overlays are identical including `radiant,radio-timer = &timer20`.
+So this is runtime, not configuration.
+
+**Do not "fix" it by switching to `CONFIG_LOG_MODE_IMMEDIATE`.** That was tried:
+the image then stops transmitting entirely — no ANT+ at all — while the console
+*still* prints nothing. Synchronous logging from this application's contexts is
+not survivable, which is consistent with `docs/decisions`' ZLI findings, and it
+turns a diagnostic problem into a dead board.
+
+These two are plausibly one root cause: in every treadmill build the things that
+happen *after* the ANT+ masters open — the deferred log flush, and BLE — are the
+things that do not happen, while the masters themselves run indefinitely. That
+is a hypothesis, not a measurement; it was not confirmed this pass.
+
+### 7.5 On air, BLE — BLOCKED, 2026-08-16
+
+Not runnable until §7.4a defect 1 is fixed: there is nothing to connect to.
+
+The host is a working central and needs no phone — `scripts/ble_central.ps1`
+drives the PC's own adapter and was used for the scans above, so only the
+control-point and notify checks below still want a second opinion from a real
+app.
+
+`scripts/ble_central.ps1` / `tools/ble_central.cs`, or nRF Connect on a phone:
 
 ### 7.5 On air, BLE
 
@@ -370,6 +446,15 @@ Numbers and prints no 16-bit UUID values at all; a scale factor remembered
 rather than read is a silent wrong-by-ten.
 
 ### 7.6 Both at once, and the number that decides the design
+
+**BLOCKED on §7.4a defect 1** — a connection is half the experiment.
+
+One number is in, and it is the reassuring half: with **both ANT+ masters
+running and the BLE stack linked in and initialised** (`tread_ble`), the FE-C
+channel still delivered 78 packets over 25 s at 3.7 % loss. That is BLE
+*present*, not BLE *connected*, so it bounds nothing about the connected case —
+but the two masters plus an initialised second stack do not by themselves break
+the ANT+ side.
 
 A head unit tracking FE-C while a phone is connected over FTMS, for ≥10
 minutes, against `tools/ab_gates.toml`'s `[gates.coexistence]`.

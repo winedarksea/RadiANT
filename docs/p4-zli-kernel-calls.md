@@ -11,15 +11,14 @@ attempt was measured worse and reverted.
 * **Bridge arm: fixed as far as 560 s of running can say.** Was faulting at
   199 s and at ~660 s; now 560 s with no fault, and the placement-lead result
   intact (`blocked=0`, `grant=13079`, `prog=13079/0`).
-* **Matter arm: improved about threefold and STILL BROKEN.** 13 lockups in
-  620 s against 13 in 210 s shipped, longest clean life 4 min 28 s against
-  ~15 s. That is not the bar.
-* **The remaining cause is located but not fixed.** A bisection with the
-  timeslot session never opened runs 9 min 52 s clean, so it is radiant's
-  arbitrated path running in the zero-latency context - not the SoftDevice
-  Controller, not RAM, not CHIP. The next step is a design decision, written up
-  at the end: the completion has to leave that context, which is broader than
-  the event ring and is not the SPSC problem it first looked like.
+* **Matter arm: fixed as far as 12 min 40 s of running can say.** Was 13 lockups
+  in 210 s; with the trampoline alone still 13 in 620 s; with the (a) split, one
+  boot and zero lockups across 12 min 40 s of continuous uptime.
+
+Three fixes, landed in this order because each one's measurement decided the
+next: the trampoline (necessary, not sufficient), the work-queue stack
+(a separate margin problem), and the (a) split - moving the core state machine
+out of the zero-latency context, which is what actually stopped it.
 
 ## The symptom, and the one number that says what it is not
 
@@ -240,14 +239,98 @@ interrupt any more than `irq_lock()` can**. `radiant_event_crit_enter()` being
 A lock-free ring would therefore fix the ring and leave the scheduler and
 channel state exactly as exposed as they are now.
 
-### The decision this leaves
+### Fix 3: the (a) split - the core leaves the zero-latency context
 
-The honest fix is the (a) shape, not the (b) shape: **the completion must leave
-the zero-latency context**, so that the signal callback does only what has to
-happen inside the grant - programming the peripheral - and the core sees the
-packet from an ordinary priority via the trampoline. That is a change to the
-HAL's low-jitter callback contract and to when the core sees a packet relative
-to the air, so it is a design decision rather than an implementation.
+Decided on the evidence above and built. `core_cb_rx()` / `_tx()` / `_ed()` in
+`radiant_radio_nrf.c` are the new seam, and all six `radiant_op.cbs->` sites go
+through them.
+
+**What stays in the signal callback:** everything that touches the peripheral or
+the grant - the (D)PPI disables, `RADIO->SHORTS`, the interrupt mask,
+`radio_disable_now()`, and `gate_release()`, which must be prompt or a tracked
+window holds its follow-on reservation for a reply that is not coming. The event
+is also fully *built* there, so every register read (`rssi_sample_dbm()`,
+`RXCRC`, the captured `t_sync`) still happens inside the window it describes.
+
+**What moves:** the callback into the core, and with it `api_sched_done()`,
+`radiant_channel_on_slot()`, the scheduler re-arm, the ring post and the wakeup.
+
+**What makes the existing locking correct again:** the queue is used *only* when
+`gate_in_signal()` is true. Every other context - the gate's work queue
+delivering a denial, the trampoline dispatching - calls the core directly, which
+is legal there. So `api_sched_done()` is now only ever entered at ordinary
+priority, and `k_mutex_lock(&api_lock)` means something instead of being
+decorative. That is the larger prize, and it is why `gate_in_signal()` is not
+`k_is_in_isr()`: the trampoline's own handler is an ISR too.
+
+That also collapses the multi-producer problem. The queue has exactly one
+producer (the MPSL signal callback, which cannot preempt itself - MPSL delivers
+START/RADIO/TIMER0 from one priority) and one consumer (the trampoline handler,
+strictly below it). Genuinely SPSC, so a plain ring with a producer-owned head
+and a consumer-owned tail is correct.
+
+**The body is copied.** `struct radiant_rx_event::body` is documented
+"valid only for the duration of this callback", and the callback now happens
+later, so the entry carries its own 32-byte copy and the pointer is repointed at
+dispatch.
+
+**Overflow is counted, not hoped about.** Eight entries; a completion that finds
+no room increments `cb_dropped`, which is published through
+`radiant_nrf_win_diag` and printed as `cbdrop=dropped/high-water`. A dropped
+completion is a window the core never sees finish - a channel that quietly stops
+rather than a crash - so it needed a number rather than a comment.
+
+**A trap this found in the header:** `gate_in_signal()` was first declared inside
+the `CONFIG_RADIANT_SWEEP_DEBUG` block. The bridge arm has that on and compiled;
+the Matter arm does not and failed on an implicit declaration. Had `-Werror` not
+caught it, it would have been an int-returning guess and a completion queue
+bypassed exactly where it was needed most. The declaration is now outside.
+
+### Results of the (a) split
+
+**Matter arm** (`bench-logs/m_asplit.log`, the `matter_final` recipe unchanged):
+
+```
+alive 00:52:03 -> 01:04:43 continuously = 12 min 40 s
+boots: 1 (the flash)     lockups (reset cause 0x100): 0
+self-channels rotating normally throughout
+```
+
+Against 13 lockups in 620 s with the trampoline alone, and 13 in 210 s shipped.
+
+**Bridge arm** (`bench-logs/ts_asplit.log` 600 s, `ts_cbdrop.log` a further
+420 s): 0 boots, 0 faults in either.
+
+```
+seam: grant=17709 nostage=0 prog=17709/0 | sigrad=660 isr=660 | ramp=17709
+gate: placed=17711 granted=17710 blocked=0 near=0 long=0 dead=0 | bad over=0 inval=0
+seam: grant=12778 nostage=0 prog=12778/0 cbdrop=0/1 | ramp=12778
+```
+
+**The latency it cost, measured.** The counters that would show a completion
+arriving too late for the core to re-arm in time, before (trampoline only,
+`ts_swi.log`) and after (`ts_asplit.log` / `ts_cbdrop.log`):
+
+| counter | meaning of non-zero | before | after |
+|---|---|---|---|
+| `near` | an arm refused for being too near to place | 0 | 0 |
+| `prog_fail` | the window was programmed late (ETIME) | 0 | 0 |
+| `nostage` | a grant arrived with nothing staged | 0 | 0 |
+| `late` (`sw_open_late`) | window opened >1 ms into its grant | 0 | 0 |
+| `dead` | the backstop deadline beat the grant | 0 | 0 |
+| `open lead` / max | grant start to window open, us | 203 / 234 | 218 / 260 |
+| `cbdrop` | completions the queue had no room for | - | 0, high-water 1 of 8 |
+
+So: no arm was refused, no window was programmed late, no completion was
+dropped, and the queue never held more than **one** entry. The only number that
+moved is the window's open lead, by ~15-26 us against a ~246 ms channel period.
+
+**Frames.** Like for like, and stated as a count rather than a rate: `sw rx=2`
+in 560 s before the split, `rx=3` in 600 s after, `rx=2` in the further 420 s.
+All three are low for the same reason - the ANT+ master that was in the room for
+the earlier `rx=266` run is no longer transmitting - and the immediately
+preceding build measured the same, so this is the room and not the split.
+Frames still arrive in tracked windows; that is the whole claim.
 
 ### On the degeneration shape
 
