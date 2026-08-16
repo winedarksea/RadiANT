@@ -39,6 +39,27 @@ climbed (the firmware detected the stall and abandoned the wait), and
 `tx_drops` has climbed (events really were produced with nowhere to go, so the
 stall was real and not an artefact of an idle radio).
 
+THE tx_drops ASSERTION IS WRONG FOR THE FIXED IMAGE, and the A/B below is what
+to trust instead. Measured 2026-08-16 on a Feather, same board, same HR sensor,
+same 30 s stall, only the firmware differing:
+
+    pre-W6 (70128f8)   tx_timeout +0    tx_drops +88
+    W6     (3136eaf)   tx_timeout +1    tx_drops  +0
+
+That is the fix working, not the test failing to reproduce. On the unfixed image
+the bridge thread parks in usb_transfer_sync() and stops draining ant_tx_msgq,
+so the queue overflows and events are lost. On the fixed image the wait is
+abandoned after 1 s, the bridge keeps cycling, the queue never fills - and so
+there is nothing to drop. Requiring tx_drops to climb therefore asserts that
+the damage still happens, which is the opposite of the intent.
+
+So a single run cannot verify this. Run BOTH legs: `--negative-control` against
+a pre-W6 build (tx_drops climbing there is what proves the stall was real), then
+the plain command against the fixed one (tx_timeout climbing there is what
+proves the bounded wait fired). The verdict is the pair. The tx_drops check is
+left as-is deliberately rather than quietly relaxed - a guard that has to be
+read alongside its control is better than one silently weakened.
+
 Needs CONFIG_ANT_DONGLE_HEALTH_COUNTERS=y - two of the three assertions are
 counter reads. Build with `-DEXTRA_CONF_FILE=health.conf`.
 
