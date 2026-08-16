@@ -88,13 +88,32 @@ endfunction()
 # only the caller knows whether it has other backend axes (sdk_ant/core/stub) of
 # its own.
 #
-# `default_backend` is a per-app default, and the asymmetry between apps is
-# deliberate: `null` is right for the dongle's compile-check posture (see
-# apps/hrm_ble/CMakeLists.txt's original note, now here), `nrf` is right for a
-# node whose whole job is producing images somebody flashes. A null-radio node
-# boots, logs "transmitting", and puts nothing on the air - indistinguishable
-# from a dead antenna, and it has cost this project a Feather flash and a
-# whole session once already.
+# `default_backend` is a per-app default, and NO APPLICATION DEFAULTS TO `null`
+# any more. Each one defaults to the backend its own silicon can actually use:
+# `nrf` for apps/dongle, apps/dongle_thread, apps/hrm_ble and apps/treadmill,
+# `cc26xx` for apps/dongle_ti.
+#
+# The apps used to split between `null` (a cheap compile-check posture) and
+# `nrf`. That split is gone because the cheap check was not cheap. A null-radio
+# image boots, enumerates, logs "transmitting", answers every host command with
+# OK and puts nothing on the air - indistinguishable from a dead antenna. It
+# has cost this project a rationed Feather flash and a whole Zwift session, and
+# the flag has been left off three separate times, twice with this very trap
+# already written down.
+#
+# So the default is now always a real radio, and the failure mode is inverted:
+# a board that cannot support its app's backend fails loudly at configure time
+# in radiant_assert_backend() instead of producing a green build and a silent
+# image. `null` remains available - pass -DRADIANT_BACKEND=null explicitly when
+# a link-only check is genuinely what is wanted, as docs/matter-e1-readback.md
+# and scripts/flash_ti.ps1's size-comparison recipe both do.
+#
+# One thing deliberately NOT changed: the Kconfig choice default in
+# radiant/Kconfig is still RADIANT_BACKEND_NULL. tests/import_smoke depends on
+# it - it builds radiant standalone on native_sim, never calls this function,
+# and has no radio, no nRF SoC symbols and no `radiant,radio-timer` node. That
+# is the one build in the tree that genuinely needs null, and a CMake-side
+# default cannot reach it anyway.
 #
 # RADIANT_BACKEND is forwarded from sysbuild the same way ANT_RADIO is, and
 # for the same reason: `west build -- -DRADIANT_BACKEND=nrf` sets it on the

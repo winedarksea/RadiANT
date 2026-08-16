@@ -22,12 +22,16 @@ cmake_minimum_required(VERSION 3.20.0)
 # deliberate and matches apps/sim's note: `west build apps/hrm_ble` must not
 # depend on the dongle's build files existing or being current.
 #
-# THE DEFAULT IS nrf AND NOT null, and the asymmetry with radiant's own
-# CMake default is the same one scripts/build_all.ps1 documents: null is right
-# for a compile check and wrong for a script whose job is producing images
-# somebody flashes. A null-radio strap boots, logs "transmitting", and puts
-# nothing on the air - indistinguishable from a dead antenna, and it has cost
-# this project a Feather flash and a whole session once already.
+# THE DEFAULT IS nrf AND NOT null. Every application in this repository now
+# defaults to a backend its silicon can really use, so this is no longer the
+# odd one out - see cmake/radiant_backend.cmake for why the old `null` default
+# was withdrawn everywhere. A null-radio strap boots, logs "transmitting", and
+# puts nothing on the air - indistinguishable from a dead antenna, and it has
+# cost this project a Feather flash and a whole session once already.
+#
+# radiant's own KCONFIG default is still RADIANT_BACKEND_NULL, and that
+# asymmetry is deliberate and permanent: it is what tests/import_smoke builds
+# against on native_sim, where no real backend could resolve.
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/radiant_backend.cmake")
 radiant_select_backend("${CMAKE_CURRENT_SOURCE_DIR}/../../radiant" "nrf" RADIANT_BACKEND_CONF)
 

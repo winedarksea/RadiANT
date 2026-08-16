@@ -9,10 +9,10 @@
 # radiant_select_backend() alone gives every other node application.
 #
 # Lives in apps/common/, not in the top-level cmake/ directory beside
-# radiant_backend.cmake, on purpose: radiant_backend.cmake is shipped a second
-# time inside the module itself (radiant/cmake/radiant_backend.cmake) for an
-# out-of-tree consumer to use, because RADIANT_BACKEND is a property of the
-# module. ANT_RADIO is not - it is which of three antr_* IMPLEMENTATIONS this
+# radiant_backend.cmake, on purpose: RADIANT_BACKEND is a property of the
+# radiant module, and radiant_backend.cmake is written so an out-of-tree
+# consumer can copy it wholesale. ANT_RADIO is not - it is which of three
+# antr_* IMPLEMENTATIONS this
 # application links, and sdk-ant, being private and non-redistributable, must
 # never be reachable from anything the module's own directory points at. So
 # this file stays application-side, permanently.

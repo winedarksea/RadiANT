@@ -20,17 +20,26 @@ cmake_minimum_required(VERSION 3.20.0)
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/radiant_backend.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/../common/ant_radio_backend.cmake")
 
-# THE DEFAULT IS "null", NOT "cc26xx", even though cc26xx is the only backend
-# that means anything on this silicon (RADIANT_BACKEND_NRF names a TIMER this
-# part does not have, and would fail to configure). null is still the right
-# *default*: it needs no -DEXTRA_ZEPHYR_MODULES and no hal_ti checkout, so a
-# bare `west build apps/dongle_ti` with no flags at all still configures and
-# links - the same cheap-compile-check posture apps/dongle's default gives.
-# Every real build of this application passes -DRADIANT_BACKEND=cc26xx
+# THE DEFAULT IS "cc26xx" - the only backend that means anything on this
+# silicon. RADIANT_BACKEND_NRF names a TIMER this part does not have and could
+# never configure here, so cc26xx is not merely the useful default, it is the
+# only real one.
+#
+# It used to be "null", to keep a bare `west build apps/dongle_ti` configuring
+# and linking with no -DEXTRA_ZEPHYR_MODULES and no hal_ti checkout. That
+# property is exactly what is being given up, and deliberately: what it bought
+# was a build that succeeds while producing an image whose radio refuses every
+# arm. A bare build that now fails for want of hal_ti says so immediately;
+# a bare build that used to succeed said nothing, and the resulting image is
+# indistinguishable from a dead antenna until somebody spends a bench session
+# on it.
+#
+# Every real build of this application already passes -DRADIANT_BACKEND=cc26xx
 # explicitly (see scripts/build_all.ps1's TI rows and scripts/flash_ti.ps1),
-# and the .config read-back after the build is what actually proves which
-# backend was compiled - see radiant_assert_backend() below.
-radiant_select_backend("${CMAKE_CURRENT_SOURCE_DIR}/../../radiant" "null" RADIANT_BACKEND_CONF)
+# so this changes no build anybody runs - and the .config read-back after the
+# build is still what actually proves which backend was compiled, see
+# radiant_assert_backend() below.
+radiant_select_backend("${CMAKE_CURRENT_SOURCE_DIR}/../../radiant" "cc26xx" RADIANT_BACKEND_CONF)
 ant_select_radio("${CMAKE_CURRENT_SOURCE_DIR}" "" "${RADIANT_BACKEND_CONF}" ANT_RADIO_CONF)
 
 # Write only on a change - see apps/dongle/CMakeLists.txt for the full

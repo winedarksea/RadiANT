@@ -12,11 +12,13 @@
         p4med   thread.conf               OpenThread MED - always on, worst case
         p4sed   thread.conf;thread_sed.conf   the intended role
 
-    BOTH -DANT_RADIO=core AND -DRADIANT_BACKEND=nrf ARE REQUIRED ON THE COMMAND
-    LINE. Neither is the default, and this project has been bitten three times by
-    the difference: RADIANT_BACKEND defaults to the inert radio, and once a
-    Zephyr SoC symbol rename made `-DRADIANT_BACKEND=nrf` itself build the null
-    backend on v3.4.0 while the command line looked perfectly correct. A null
+    BOTH -DANT_RADIO=core AND -DRADIANT_BACKEND=nrf ARE PASSED EXPLICITLY, and
+    that stays true even though nrf is now the CMake default for every
+    application. This project has been bitten three times here: RADIANT_BACKEND
+    used to default to the inert radio, and - the reason an explicit flag still
+    is not enough on its own - once a Zephyr SoC symbol rename made
+    `-DRADIANT_BACKEND=nrf` itself build the null backend on v3.4.0 while the
+    command line looked perfectly correct. A null
     backend does not fail - it answers every serial command, opens its channel,
     and reports zero packets, which is indistinguishable at the console from
     every real failure this phase is chasing.

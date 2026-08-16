@@ -1,0 +1,52 @@
+/*
+ * nRF54LM20A DK - the TIMER radiant's nrf backend needs.
+ *
+ * This file exists only for that one chosen node. Everything else about this
+ * board's dongle build is Kconfig, and lives in the .conf beside this file;
+ * the console stays on uart20 as the board's own dts has it, and the ANT byte
+ * stream leaves over USB (DWC2), not a second VCOM, so there is no ant-uart
+ * alias here as there is on the nRF54L15 DK.
+ *
+ * BUILD-VERIFIED ONLY - there is no LM20 on this bench. See the .conf for what
+ * else about this part is untested.
+ */
+
+/ {
+	chosen {
+		/*
+		 * The TIMER radiant's nrf backend owns outright, for
+		 * -DRADIANT_BACKEND=nrf. It runs at 1 MHz forever and is what
+		 * t_sync is hardware-captured into from RADIO's ADDRESS event,
+		 * so it cannot be shared: naming it here rather than in the
+		 * source is what makes a second user a devicetree conflict
+		 * instead of two drivers reprogramming each other's prescaler.
+		 *
+		 * Without it the backend does not COMPILE - radiant_radio_nrf.c
+		 * #errors on a missing radiant,radio-timer, on one that is
+		 * `status = "disabled"`, and on one with fewer than five CC
+		 * channels. That #error is why this board had never built with
+		 * -Backend core -RadiantBackend nrf: the overlay did not exist
+		 * at all. Do not delete this as unused.
+		 *
+		 * timer20, the same choice as the nRF54L15 DK: same family,
+		 * same peripheral map, cc-num = 6 here as there (every nRF54L
+		 * TIMER has at least six), and free on this board. Like every
+		 * TIMER on this SoC it is `status = "disabled"` by default, and
+		 * an unclocked peripheral is not addressable - hence the enable
+		 * below.
+		 *
+		 * The one caveat, carried over from the treadmill overlay for
+		 * this board: mpsl.rst lists MPSL as owning TIMER10 and TIMER20
+		 * on nRF54L while mpsl_hwres.h reserves only TIMER10. TIMER20
+		 * was measured not to collide ON THE L15; that measurement has
+		 * not been repeated on this part. If a timeslot build here
+		 * misbehaves, suspect this line first - TIMER22 behaved
+		 * identically on the L15.
+		 */
+		radiant,radio-timer = &timer20;
+	};
+};
+
+&timer20 {
+	status = "okay";
+};

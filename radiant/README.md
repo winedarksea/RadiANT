@@ -44,15 +44,23 @@ policy, the security scope).
 - Zephyr, via `ZEPHYR_EXTRA_MODULES` (or a west manifest project entry - see
   below). No other module and nothing from sdk-ant, on any backend.
 - A radio, if you want the module to receive or transmit anything -
-  `CONFIG_RADIANT_BACKEND_NULL` (the default) has a real lifecycle and clock
-  and refuses every arm, which is the right choice for a compile check or an
-  application that only needs the module to *link*.
+  `CONFIG_RADIANT_BACKEND_NULL` has a real lifecycle and clock and refuses
+  every arm, which is the right choice for a compile check or an application
+  that only needs the module to *link*. It is this module's **Kconfig** choice
+  default, which is what `tests/import_smoke` builds against on `native_sim`.
+  Note that no *application* in this repository defaults to it any more - each
+  defaults to a backend its silicon can really use, because a null-radio image
+  is indistinguishable from a dead antenna. See
+  [`cmake/radiant_backend.cmake`](../cmake/radiant_backend.cmake) for that
+  reasoning.
 - `-DRADIANT_BACKEND=nrf` or `=cc26xx` for a real radio, chosen the same way
   every application in this repository chooses it - see
-  [`cmake/radiant_backend.cmake`](../cmake/radiant_backend.cmake), a copy of the
-  one at the repository root kept here for exactly this reason: an
-  out-of-tree consumer gets the same `radiant_select_backend()` helper
-  without reaching outside this directory for it.
+  [`cmake/radiant_backend.cmake`](../cmake/radiant_backend.cmake). That helper
+  lives at the repository root, **not** inside this directory: it is a
+  convenience for the applications here, and an out-of-tree consumer either
+  copies it or does the two lines by hand as shown below. Nothing in the
+  module's own build depends on it, which is what keeps `radiant/` importable
+  standalone - the property the `radiant/ imports standalone` CI job proves.
 
 ## Adding it to a project
 
@@ -60,7 +68,9 @@ Point `ZEPHYR_EXTRA_MODULES` at a checkout of this directory, before
 `find_package(Zephyr)`:
 
 ```cmake
-include(path/to/radiant/cmake/radiant_backend.cmake)
+# radiant_backend.cmake lives at this repository's root, beside radiant/ -
+# copy it into your own tree if you want the helper.
+include(path/to/radiant_backend.cmake)
 radiant_select_backend(path/to/radiant nrf RADIANT_BACKEND_CONF)
 # ... merge RADIANT_BACKEND_CONF into your build's Kconfig fragments ...
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})

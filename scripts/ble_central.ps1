@@ -33,7 +33,9 @@
 
 .PARAMETER Name
     Substring of the advertised name to connect to. Default "RadiANT HR", which
-    is what strap_ble.conf sets CONFIG_BT_DEVICE_NAME to.
+    is what apps\hrm_ble\ble.conf sets CONFIG_BT_DEVICE_NAME to. (That fragment
+    was strap_ble.conf before the strap/ -> hrm_ble/ rename; no file of that
+    name exists in the repo any more.)
 
 .PARAMETER Seconds
     Scan duration, or how long to hold the connection.

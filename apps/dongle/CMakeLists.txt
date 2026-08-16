@@ -31,8 +31,25 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../common/ant_radio_backend.cmake")
 # The HAL backend is resolved unconditionally too, even though it is only
 # used when ANT_RADIO=core: resolving it once is simpler than threading it
 # through every ANT_RADIO branch, and a stray RADIANT_BACKEND cache entry on
-# an sdk_ant/stub build is harmless since nothing reads it.
-radiant_select_backend("${CMAKE_CURRENT_SOURCE_DIR}/../../radiant" "null" RADIANT_BACKEND_CONF)
+# an sdk_ant/stub build is harmless since nothing reads it - ant_select_radio()
+# discards this text outside the core branch, so no CONFIG_RADIANT_BACKEND_*
+# line reaches an sdk_ant or stub .config and radiant_assert_backend() is not
+# called there either.
+#
+# THE DEFAULT IS "nrf". It was "null" for a long time on the argument that a
+# bare `west build` should always configure; that argument is withdrawn. The
+# null backend refuses every arm, and an image built with it enumerates,
+# answers every host command with OK, runs every state machine and finds no
+# sensors - which reads as a dead antenna, not a build mistake. It has cost
+# this project a rationed Feather flash and a whole Zwift session at least
+# once, and the flag has been omitted three separate times.
+#
+# A default that is wrong-but-buildable trades a loud failure for a silent
+# one. `nrf` is the backend every real build of this application asks for, so
+# the default now agrees with the intent, and a board that cannot support it
+# fails at configure time with radiant_assert_backend()'s message rather than
+# at a bench an hour later.
+radiant_select_backend("${CMAKE_CURRENT_SOURCE_DIR}/../../radiant" "nrf" RADIANT_BACKEND_CONF)
 ant_select_radio("${CMAKE_CURRENT_SOURCE_DIR}" "" "${RADIANT_BACKEND_CONF}" ANT_RADIO_CONF)
 
 # Write only on a change. Zephyr adds every merged fragment to

@@ -40,27 +40,31 @@
     exist to make. A default (-Backend sdk_ant) run therefore does not build
     them; use -Backend core.
 
-    TWO ROWS CANNOT COMPLETE UNDER -Backend core -RadiantBackend nrf, AND NEVER
-    COULD. This is not a regression and it is worth knowing before a long run:
+    EVERY ROW NOW COMPLETES UNDER -Backend core -RadiantBackend nrf. Two of them
+    never could until the overlays below were added, and the history is worth
+    keeping because the failure was so misleading:
 
       promicro / promicro_synth   apps\dongle\boards\promicro_nrf52840_
-                                  nrf52840_uf2.overlay sets no
-                                  `chosen { radiant,radio-timer }`.
-      lm20                        nrf54lm20dk has a .conf and no .overlay at all.
+                                  nrf52840_uf2.overlay set no
+                                  `chosen { radiant,radio-timer }`. It now
+                                  names timer4, as the Feather overlay does.
+      lm20                        nrf54lm20dk had a .conf and no .overlay at
+                                  all. It now has one naming timer20, as the
+                                  nRF54L15 DK overlay does.
 
-    Both die in radiant\src\radiant_radio_nrf.c at its `#error "radiant_radio_nrf
-    needs a timer..."` guard. READ THE FIRST ERROR, NOT THE CASCADE: what follows
-    is a wall of DT_CHOSEN_radiant_radio_timer_..._undeclared plus unrelated
-    log_msg.h / cbprintf_internal.h errors that read like a broken toolchain or a
-    logging fault, and are neither. The Feather overlay HAS the node and its own
-    comment records why it was added ("every core build for the Feather so far
-    used the null backend, where no TIMER is wanted") - so this is the same
-    omission, fixed for one board only. -RadiantBackend null builds every row,
-    which is why nothing noticed.
+    Both died in radiant\src\radiant_radio_nrf.c at its `#error
+    "radiant_radio_nrf needs a timer..."` guard. READ THE FIRST ERROR, NOT THE
+    CASCADE, if this ever recurs on a new board: what follows is a wall of
+    DT_CHOSEN_radiant_radio_timer_..._undeclared plus unrelated log_msg.h /
+    cbprintf_internal.h errors that read like a broken toolchain or a logging
+    fault, and are neither.
 
-    Until those overlays gain the node, verify a core/nrf change by running the
-    rows individually and skipping those two (-Only takes one pattern per call).
-    The TI rows additionally need -NcsVersion v3.4.0: hal_ti lives at
+    Why it went unnoticed for so long: -RadiantBackend null built every row, and
+    null wants no TIMER. That default is now gone from every application (see
+    cmake\radiant_backend.cmake), so a board missing the node fails loudly on the
+    first build instead of silently producing an image with no radio.
+
+    The TI rows need -NcsVersion v3.4.0: hal_ti lives at
     C:\ncs\v3.4.0\modules\hal\ti and is ABSENT under v3.2.4, where the row is
     skipped with a message rather than failing.
 
@@ -92,14 +96,14 @@
     Which radiant radio HAL to compile, for -Backend core: nrf (the real
     radio) or null (an inert stub that transmits and receives nothing).
 
-    It defaults to nrf here even though CMakeLists.txt defaults it to null,
-    and the difference is deliberate. CMake's default is right for a compile
-    check; it is wrong for a script whose whole job is producing images
-    somebody flashes. A null-radio image enumerates, answers every host
-    command with OK and finds no sensors - indistinguishable from a dead
-    antenna - and it cost a Feather flash and a whole Zwift session to
-    identify once already, because none of the three checks below looked at
-    it. Now one does.
+    It defaults to nrf here, and CMakeLists.txt now defaults to nrf too, so
+    the two finally agree. They used to disagree - CMake defaulted to null on
+    a compile-check argument - and that disagreement was worth removing: a
+    null-radio image enumerates, answers every host command with OK and finds
+    no sensors, which is indistinguishable from a dead antenna and cost a
+    Feather flash and a whole Zwift session to identify once already, because
+    none of the three checks below looked at it. Now one does, and the default
+    cannot produce that image in the first place.
 
 .PARAMETER HalTiDir
     Where the hal_ti Zephyr module is, for the CC26x2 target. Defaults to
@@ -528,14 +532,17 @@ try {
             throw "$($t.artifact): expected $backendSymbol in .config, found '$gotRadio'"
         }
 
-        # 4. radiant's radio HAL. RADIANT_BACKEND defaults to null in
-        # CMakeLists.txt, so a -Backend core build that simply never mentions
-        # it compiles a radio that transmits and receives nothing - and checks
-        # 1 to 3 all pass, because the link address, the transport and the
-        # ANT_DONGLE_RADIO choice are all still exactly right. The resulting
-        # image enumerates and answers every host command with OK. The only
-        # symptom is that no sensor is ever found, which reads as a hardware
-        # fault and is why this check is worth its lines.
+        # 4. radiant's radio HAL. This check long predates the default being
+        # fixed, and it stays: RADIANT_BACKEND is still a value that can be
+        # passed explicitly, still a value Kconfig can decline to honour when a
+        # `depends on` is unmet, and the consequence is still an image that
+        # transmits and receives nothing while checks 1 to 3 all pass - the
+        # link address, the transport and the ANT_DONGLE_RADIO choice are all
+        # still exactly right on a null-radio build. Such an image enumerates
+        # and answers every host command with OK; the only symptom is that no
+        # sensor is ever found, which reads as a hardware fault. That is why
+        # this check is worth its lines even now that no application defaults
+        # to null.
         if ($Backend -eq 'core') {
             $rowRadiantSymbol = "CONFIG_RADIANT_BACKEND_$($rowRadiant.ToUpper())=y"
             if (-not ($cfg | Where-Object { $_ -eq $rowRadiantSymbol })) {

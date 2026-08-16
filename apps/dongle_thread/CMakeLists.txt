@@ -21,14 +21,25 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../common/ant_radio_backend.cmake")
 # CMakeLists.txt: it is in this repository and always is, so CONFIG_RADIANT
 # gates it rather than the module's presence gating anything.
 #
-# THE P4 GATE NEEDS -DRADIANT_BACKEND=nrf ON THE COMMAND LINE, and the default
-# here is still "null" - the same cheap-compile-check posture as apps/dongle,
-# not "nrf" - because a script whose job is producing a bench image
-# (scripts/build_p4.ps1) already passes -DRADIANT_BACKEND=nrf explicitly and
-# reads the .config back to prove it landed; a default that silently disagreed
-# with what a plain `west build` produced would be one more place for the
-# arbitrated build to quietly become the null one.
-radiant_select_backend("${CMAKE_CURRENT_SOURCE_DIR}/../../radiant" "null" RADIANT_BACKEND_CONF)
+# The default is "nrf", matching every other application in this repository.
+# It used to be "null" on a cheap-compile-check argument; that argument is
+# withdrawn, because the thing it protected - a bare `west build` that always
+# configures - is worth less than never silently producing an inert radio.
+#
+# Note that "nrf" is the whole of the backend axis here. The P4 gate is NOT a
+# RADIANT_BACKEND value: it is a separate Kconfig symbol,
+# CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL, which every fragment that turns on a
+# second stack sets for itself (thread.conf, gate.conf, coex.conf, matter.conf).
+# That is what satisfies RADIANT_BACKEND_NRF's `depends on !BT ||
+# RADIANT_BACKEND_NRF_GATE_MPSL`, so this default is safe in the bare
+# configuration - prj.conf alone enables neither BT nor OpenThread - and in
+# every fragment combination the app actually ships.
+#
+# scripts/build_p4.ps1 still passes -DRADIANT_BACKEND=nrf explicitly and still
+# reads .config back to prove it landed. Both remain right: an explicit flag
+# and a read-back do not stop being worthwhile because the default now agrees
+# with them.
+radiant_select_backend("${CMAKE_CURRENT_SOURCE_DIR}/../../radiant" "nrf" RADIANT_BACKEND_CONF)
 ant_select_radio("${CMAKE_CURRENT_SOURCE_DIR}" "" "${RADIANT_BACKEND_CONF}" ANT_RADIO_CONF)
 
 # Write only on a change - see apps/dongle/CMakeLists.txt for the full

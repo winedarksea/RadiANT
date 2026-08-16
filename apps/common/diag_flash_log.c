@@ -238,10 +238,15 @@ int diag_flash_log_flush(void)
 /*
  * Overrides the weak default, which halts the CPU without a trace -
  * indistinguishable from a hang from the outside. Committing the log here
- * is what makes an early fault visible. Also takes over
- * CONFIG_RESET_ON_FATAL_ERROR, honoured explicitly after the flush so a diag
- * build still reboots like a release build; the log survives since it's
- * already in flash by then.
+ * is what makes an early fault visible.
+ *
+ * CONFIG_RESET_ON_FATAL_ERROR is honoured explicitly below, but note that
+ * diag.conf sets it to n and must: NCS guards its own competing definition of
+ * this function on that symbol (nrf/lib/fatal_error/CMakeLists.txt), so with
+ * it y this file does not link at all. See diag.conf for the full note. The
+ * reboot arm is therefore dead in a diag build and kept only so this file
+ * stays correct if some other configuration ever compiles it with the symbol
+ * set.
  */
 void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf)
 {
