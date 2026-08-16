@@ -358,6 +358,83 @@ class DerivedBlock(unittest.TestCase):
 
 
 @unittest.skipIf(ant_verify is None, "pyusb is not installed")
+class ReacquireFromIntervals(unittest.TestCase):
+    """T2: reacquire_s = max(gap) - D, on synthetic interval lists only - no
+    hardware and no capture needed to exercise this arithmetic."""
+
+    def test_the_worst_gap_minus_the_dropout_is_the_reacquire_time(self):
+        # A 4 Hz stream (0.25 s period) with a 10 s staged dropout: the
+        # dropout itself plus 0.6 s before the receiver saw the next packet.
+        intervals = [0.25, 0.26, 0.24, 10.6, 0.25, 0.25]
+        self.assertAlmostEqual(
+            ant_verify.reacquire_from_intervals(intervals, 10.0), 0.6)
+
+    def test_no_intervals_is_none_not_a_negative_number(self):
+        # A channel that heard at most one packet has no gap to measure.
+        self.assertIsNone(ant_verify.reacquire_from_intervals([], 10.0))
+
+    def test_it_is_the_max_gap_not_the_first_or_last(self):
+        # No search for "the" dropout gap by position - the widest gap in the
+        # whole run is taken to be the staged one, wherever it lands.
+        intervals = [0.25, 12.0, 0.25, 0.25, 0.25]
+        self.assertAlmostEqual(
+            ant_verify.reacquire_from_intervals(intervals, 10.0), 2.0)
+
+    def test_a_negative_result_is_not_clamped(self):
+        # If the worst gap is smaller than the staged dropout - a wrong -D
+        # given on the command line, or a channel that never actually
+        # dropped - the arithmetic says so rather than hiding it behind a
+        # floor of zero, which would silently mask the mismatch.
+        intervals = [0.25, 0.26, 0.24]
+        self.assertAlmostEqual(
+            ant_verify.reacquire_from_intervals(intervals, 10.0), -9.74)
+
+
+@unittest.skipIf(ant_verify is None, "pyusb is not installed")
+class DropoutMode(unittest.TestCase):
+    """--expect-dropout SECONDS, exercised through ChannelAnalyzer directly:
+    expected_packets is reduced by the dropout, TTFP is never set by the
+    analyser itself, and a reopen retransmit is excluded from the exact-loss
+    disqualifier."""
+
+    def make(self, dropout_s=10.0):
+        spec = ap.PROFILES["power"]
+        return ant_verify.ChannelAnalyzer(
+            "power", spec["device_type"], spec["period"], None, None, 2.105,
+            dropout_s=dropout_s)
+
+    def test_dropout_seconds_reduces_expected_packets(self):
+        analyzer = self.make(dropout_s=10.0)
+        period_s = analyzer.period_s
+        # 41 packets one period apart, i.e. ~10 s of real elapsed time with
+        # nothing missing, plus the dropout is charged separately below via
+        # first_t/last_t bookkeeping - simplest is to feed evenly spaced
+        # packets and confirm expected_packets is smaller than the naive
+        # elapsed/period+1 would give.
+        t = 0.0
+        payload = bytes([0x10, 0, 0, 0, 0, 0, 0, 0])
+        for _ in range(41):
+            analyzer.feed(t, payload)
+            t += period_s
+        summary = analyzer.summary(100.0, 10.0, None)
+        elapsed = summary["elapsed_s"]
+        naive_expected = (elapsed / period_s) + 1.0
+        self.assertLess(summary["expected_packets"], naive_expected)
+        self.assertAlmostEqual(
+            naive_expected - summary["expected_packets"],
+            10.0 / period_s, places=6)
+
+    def test_time_to_first_packet_defaults_to_none(self):
+        # Only main() sets this, from t_open/t_listen it alone has. An
+        # analyser built directly - as every test here and ant_sens.py's
+        # measure_rung() do - never sets it, dropout mode or not.
+        analyzer = self.make(dropout_s=10.0)
+        self.assertIsNone(analyzer.time_to_first_packet_s)
+        summary = analyzer.summary(100.0, 10.0, None)
+        self.assertIsNone(summary["time_to_first_packet_s"])
+
+
+@unittest.skipIf(ant_verify is None, "pyusb is not installed")
 class TheDerivedBlockFitsTheBaselineSchema(unittest.TestCase):
     """What this tool emits is what archive/benchmarks/ has to accept.
 

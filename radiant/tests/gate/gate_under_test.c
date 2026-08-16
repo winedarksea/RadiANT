@@ -54,4 +54,6 @@ void gate_probe_read(struct gate_probe *out)
 	out->mpsl_owes      = g.mpsl_owes;
 	out->granted_len_us = g.granted_len_us;
 	out->want_len_us    = g.want_len_us;
+	out->extendable     = g.extendable;
+	out->end_margin_us  = g.end_margin_us;
 }

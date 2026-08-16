@@ -173,6 +173,14 @@ BUILD_ASSERT(RADIANT_CHANNEL_GUARD_MIN_US >= RADIANT_CHANNEL_DRIFT_WORST_US,
  * mean something, short enough to watch live while testing a USB port. */
 #define API_NOISE_REPORT_US 60000000u
 
+#if defined(CONFIG_RADIANT_CRC_REPAIR)
+/* CRC-repair counter log interval. 10 s rather than the noise line's 60 s: the
+ * S3 sensitivity ladder holds each rung for well under a minute, and a counter
+ * that reports once per 60 s can produce a whole rung with no line in it - which
+ * reads identically to a rung where repair never engaged. */
+#define API_CRC_REPORT_US 10000000u
+#endif
+
 /*
  * The event thread. 1280 B covers radiant_event_drain()'s frame plus pump()'s
  * slot-table arithmetic.
@@ -333,7 +341,10 @@ struct api_chan {
 	/* A tracked RX window is armed, so this channel owes the scheduler its
 	 * next one the moment it completes. Set at arm, cleared before the post,
 	 * bounding the re-post to depth one against a backend that refuses every
-	 * arm (see api_sched_done()). */
+	 * arm (see api_sched_done()). Named for its first use; it now also
+	 * carries a master's next TRANSMIT slot after a MISSED/DENIED
+	 * MASTER_TX, which is the same fact about the same slot in the other
+	 * direction. */
 	bool           track_repost;
 	radiant_time_t turn_t_sync;
 
@@ -1055,6 +1066,23 @@ static void api_search_begin(uint8_t ch, radiant_time_t now)
  */
 
 #ifdef CONFIG_RADIANT_SWEEP_DEBUG
+/*
+ * The bounded-denial escape's counter, on the SWEEP line and nowhere else.
+ * `struct radiant_search_stats` only carries the field where the escape is
+ * compiled in (single-protocol images cannot be denied the air at all), so the
+ * two symbols are independent and this reads 0 rather than failing to build.
+ *
+ * NOT in the 0xF6 health reply, deliberately: a nonzero esc= says the sweep
+ * was refused long enough to have frozen AND DID NOT. That is the recovery,
+ * not the loss - the loss is already visible to the host as slow discovery,
+ * and a host acting on the recovery counter would act on good news.
+ */
+#if defined(CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE)
+#define API_DBG_DENIAL_ESCAPES(ss) ((unsigned int)(ss)->denial_escapes)
+#else
+#define API_DBG_DENIAL_ESCAPES(ss) ((void)(ss), 0u)
+#endif
+
 /*
  * ---------------------------------------------------------------------------
  * THE SWEEP ACCOUNTING IDENTITY
@@ -1899,7 +1927,11 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	default:
 		/* An acknowledgement with no transfer of ours behind it, or a
 		 * flag combination nothing has measured. The frame layer names
-		 * it and declines to interpret it, and so does this. */
+		 * it and declines to interpret it, and so does this.
+		 *
+		 * DELIBERATELY NO 0xF6 COUNTER HERE. This is not host-bound
+		 * loss - nothing the host was waiting for went missing - so
+		 * it is outside 0xF6's charter (see ant_health.h). */
 		break;
 	}
 
@@ -1935,6 +1967,11 @@ static void api_sched_rx(uint8_t ch, uint8_t filter_index,
 			return;
 		}
 		if (radiant_channel_op_owner(api_ch[ch].op) != (int)ch) {
+			/* The CRC-repair path's silent twin of the ownership
+			 * check further down - same condition, no LOG_DBG
+			 * here since this runs on a CRC_FAIL event rather
+			 * than a good one. */
+			ant_health_note(ANT_HEALTH_RX_NOT_OWNER);
 			return;
 		}
 		if (!radiant_transfer_is_idle(&api_xfer[ch])) {
@@ -1963,6 +2000,7 @@ static void api_sched_rx(uint8_t ch, uint8_t filter_index,
 		LOG_DBG("rx drop ch=%u not-owner op=%d owner=%d", (unsigned)ch,
 			(int)api_ch[ch].op,
 			radiant_channel_op_owner(api_ch[ch].op));
+		ant_health_note(ANT_HEALTH_RX_NOT_OWNER);
 		return;
 	}
 
@@ -2371,6 +2409,37 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 			api_stats.slots_missed++;
 			(void)radiant_channel_on_slot_missed(ch, now);
 		}
+		/*
+		 * AND THE MASTER OWES ITSELF THE NEXT SLOT, immediately - the
+		 * transmit-side twin of the tracked re-post below.
+		 *
+		 * Same hole, other direction: a MASTER_TX that never went out
+		 * left nothing posted, so the next slot came from the
+		 * RADIANT_API_HOUSEKEEP_MS pump (50 ms) rather than from here.
+		 * At the ANT+ period that is a fifth of a period of pure
+		 * scheduling latency added to a slot that was already lost, on
+		 * the leg this dongle exists to keep short - and once the pump
+		 * is late enough that arm_next() has committed the radio
+		 * elsewhere, the slot the clock advance just computed is missed
+		 * in its turn.
+		 *
+		 * BOUNDEDNESS, confirmed rather than assumed, and it transfers
+		 * verbatim from the tracked case: this branch is reached only
+		 * after one of the two clock advances immediately above, each
+		 * of which moves the master's t_next a FULL PERIOD past the
+		 * slot that died - and both advance from the missed slot, not
+		 * from `now`, so the advance cannot be swallowed by scheduler
+		 * latency. The re-posted slot is therefore strictly later in
+		 * time than the one it replaces, cannot produce another
+		 * immediate terminal, and the sequence advances rather than
+		 * spinning. api_arming still guards the other shape (a refused
+		 * arm completing inline), which is the one that can loop.
+		 *
+		 * The flag, not a direct api_post_master_tx() call, so this
+		 * goes through the single re-post block below with its
+		 * TRACKING / !pending / transfer-idle guards.
+		 */
+		api_ch[ch].track_repost = true;
 	} else if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_TRACK_RX &&
 		   !api_ch[ch].slot_heard) {
 		/*
@@ -2424,9 +2493,12 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		 *
 		 * The flag rather than a direct api_post_track_rx() call so this
 		 * goes through the single repost block below with its
-		 * TRACKING / !master / !pending / transfer-idle guards - a
-		 * channel that this same callback is about to close or hand to
-		 * the transfer engine must not acquire a window behind it.
+		 * TRACKING / !pending / transfer-idle guards - a channel that
+		 * this same callback is about to close or hand to the transfer
+		 * engine must not acquire a window behind it. (That block used
+		 * to carry a !master guard too; it now makes the same
+		 * master/slave split api_pump_locked() does, since the missed
+		 * MASTER_TX branch above sets this flag as well.)
 		 */
 		api_ch[ch].track_repost = true;
 	}
@@ -2494,15 +2566,29 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 	 * a missing fact, not an over-long chunk.
 	 *
 	 * Bounded the same way as turn_pending: set only by api_sched_armed() on
-	 * a window that really armed, cleared before the post.
+	 * a window that really armed, or by a MISSED/DENIED terminal that has
+	 * just advanced the slot clock a full period; cleared before the post.
+	 *
+	 * BOTH DIRECTIONS NOW. The flag started life as the tracked slave's
+	 * re-post and the guard read !master, which silently made the transmit
+	 * side wait on the 50 ms pump. The two-way split below is
+	 * api_pump_locked()'s, spelled the same way and in the same order
+	 * (master -> api_post_master_tx(), slave -> api_post_track_rx()), so a
+	 * terminal's re-post and the pump's post can never disagree about what
+	 * a channel should be doing next. Nothing else changed: track_repost is
+	 * still only ever set on an API_SLOT_TRACK_RX or API_SLOT_MASTER_TX
+	 * slot, and those two kinds are exactly the two arms of this if.
 	 */
 	if (api_ch[ch].track_repost) {
 		api_ch[ch].track_repost = false;
 		if (radiant_channel_state_get(ch) == RADIANT_CH_STATE_TRACKING &&
-		    !radiant_channel_is_master(ch) &&
 		    !radiant_sched_pending(ch) &&
 		    radiant_transfer_is_idle(&api_xfer[ch])) {
-			api_post_track_rx(ch);
+			if (radiant_channel_is_master(ch)) {
+				api_post_master_tx(ch);
+			} else {
+				api_post_track_rx(ch);
+			}
 		}
 	}
 
@@ -2671,6 +2757,41 @@ static void api_housekeep(void)
 		}
 	}
 
+#if defined(CONFIG_RADIANT_CRC_REPAIR)
+	/*
+	 * W5/F2: the CRC-repair counters, on a UART a person can read.
+	 *
+	 * This is a hard prerequisite of the S3 sensitivity A/B rather than a
+	 * convenience. That sitting compares the knee of a dB ladder with
+	 * repair on against the knee with it off, and its stated decision rule
+	 * demands `crc_repaired` be climbing AT the knee before a difference in
+	 * knees may be attributed to repair. Without a read path the honest
+	 * outcome of a null result is unreadable: "repair did nothing" and
+	 * "repair never engaged, so the run measured nothing" produce the same
+	 * two numbers, and only the first of those is a result.
+	 *
+	 * Cumulative, not per-interval - unlike the noise line above, which
+	 * clears. A rate is what matters here, and the sitting takes it as a
+	 * delta across a run, so clearing would fight the tool that reads it.
+	 *
+	 * Compiled out entirely with the feature, so the default image carries
+	 * neither the timestamp nor the call.
+	 */
+	{
+		static radiant_time_t crc_last;
+
+		if ((radiant_time_t)(now - crc_last) >= API_CRC_REPORT_US) {
+			crc_last = now;
+			LOG_INF("crc repaired=%u unrepairable=%u refuted=%u "
+				"implausible=%u",
+				(unsigned int)api_stats.crc_repaired,
+				(unsigned int)api_stats.crc_unrepairable,
+				(unsigned int)api_stats.crc_repair_refuted,
+				(unsigned int)api_stats.crc_repair_implausible);
+		}
+	}
+#endif /* CONFIG_RADIANT_CRC_REPAIR */
+
 #ifdef CONFIG_RADIANT_SWEEP_DEBUG
 	/* Sweep rate is invisible from the host; both discovery defects fixed
 	 * in this file were found with these counters. */
@@ -2798,14 +2919,15 @@ static void api_housekeep(void)
 			 * identity is worse than none - it reads as a number.
 			 */
 			LOG_INF("SWEEP why arm=%u slot=%u nochan=%u"
-				"(idle=%u busy=%u) win=%u ok=%u",
+				"(idle=%u busy=%u) win=%u ok=%u esc=%u",
 				(unsigned int)dbg_pump_arming,
 				(unsigned int)dbg_pump_slot,
 				(unsigned int)dbg_pump_nochan,
 				(unsigned int)dbg_pump_none_searching,
 				(unsigned int)dbg_pump_busy,
 				(unsigned int)dbg_pump_window,
-				(unsigned int)dbg_pump_ok);
+				(unsigned int)dbg_pump_ok,
+				API_DBG_DENIAL_ESCAPES(ss));
 			LOG_INF("SWEEP gap arm=%u/%u pump=%u/%u post=%u/%u "
 				"over=%lld/%u | elapsed=%lld acct=%lld "
 				"unacct=%lld",
@@ -3172,6 +3294,24 @@ antr_err_t antr_channel_close(uint8_t channel)
 					      radiant_radio_now());
 
 		api_pump_locked();
+
+#if defined(CONFIG_RADIANT_CRC_REPAIR)
+		/*
+		 * W5/F2's on-close half. The periodic line in api_housekeep()
+		 * can miss the end of a short rung by up to its interval, and
+		 * the last few seconds before a close are exactly the ones an
+		 * A/B rung is made of. Cumulative across all channels - the
+		 * stats struct has no per-channel breakdown - so read it as a
+		 * delta against the previous line, not as this channel's total.
+		 */
+		LOG_INF("crc at close ch=%u repaired=%u unrepairable=%u "
+			"refuted=%u implausible=%u",
+			(unsigned int)channel,
+			(unsigned int)api_stats.crc_repaired,
+			(unsigned int)api_stats.crc_unrepairable,
+			(unsigned int)api_stats.crc_repair_refuted,
+			(unsigned int)api_stats.crc_repair_implausible);
+#endif /* CONFIG_RADIANT_CRC_REPAIR */
 	}
 	k_mutex_unlock(&api_lock);
 

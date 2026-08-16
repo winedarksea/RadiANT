@@ -60,39 +60,70 @@ from ant_wire import (  # noqa: E402
 # table rather than as inline slicing so that adding a field is one row and so
 # that the names here are greppable against the YAML that defines them.
 #
-# (name, offset, width, description)
+# (name, offset, width, description, min_version)
+#
+# min_version is the structure version (payload[0]) that first carries this
+# field. [22..23] were reserved-as-zero under version 1 and were given to
+# host_desync under version 2 - a version-1 body still decodes cleanly
+# because decode() below stops reading fields once the body runs out, rather
+# than assuming every field it knows about is present.
 FIELDS = (
-    ("tx_drops", 2, 2, "ANT events dropped: USB TX queue full"),
-    ("tx_high_water", 4, 1, "deepest the USB TX queue has been (of 32)"),
-    ("event_high_water", 5, 1, "deepest the radio event queue has been"),
-    ("event_overflows", 6, 2, "event-queue overflow marks"),
-    ("rx_backpressure", 8, 2, "times bulk-OUT was left unarmed"),
-    ("key_rejects", 10, 2, "frames refused for an unusable network key"),
-    ("sched_missed", 12, 2, "scheduler windows missed"),
-    ("sched_failed", 14, 2, "scheduler windows failed"),
-    ("sched_denied", 16, 2, "scheduler windows denied by the arbiter"),
-    ("burst_stalls", 18, 2, "burst transfers that hit the 1000 ms stall"),
-    ("sweep_busy", 20, 2, "search posts declined: searching channel busy"),
+    ("tx_drops", 2, 2, "ANT events dropped: USB TX queue full", 1),
+    ("tx_high_water", 4, 1, "deepest the USB TX queue has been (of 32)", 1),
+    ("event_high_water", 5, 1, "deepest the radio event queue has been", 1),
+    ("event_overflows", 6, 2, "event-queue overflow marks", 1),
+    ("rx_backpressure", 8, 2, "times bulk-OUT was left unarmed", 1),
+    ("key_rejects", 10, 2, "frames refused for an unusable network key", 1),
+    ("sched_missed", 12, 2, "scheduler windows missed", 1),
+    ("sched_failed", 14, 2, "scheduler windows failed", 1),
+    ("sched_denied", 16, 2, "scheduler windows denied by the arbiter", 1),
+    ("burst_stalls", 18, 2, "burst transfers that hit the 1000 ms stall", 1),
+    ("sweep_busy", 20, 2, "search posts declined: searching channel busy", 1),
+    ("host_desync", 22, 2,
+     "bytes discarded by the host parser hunting for SYNC", 2),
+    ("host_csum", 24, 2,
+     "framed messages that failed the trailing XOR checksum", 2),
+    ("rx_not_owner", 26, 2,
+     "radio RX events that arrived after their channel op moved on", 2),
+    ("tx_timeout", 28, 2,
+     "USB bulk-IN transfers that timed out waiting on the host", 2),
 )
 
-PAYLOAD_LEN = 24
+# The version-1 body length. Kept as its own name (rather than a bare 24)
+# because it is a floor, not a fixed size: PAYLOAD_LEN below is what a
+# current build sends, and this is the oldest shape this tool still accepts.
+PAYLOAD_LEN_V1 = 24
+
+# What ant_health_fill() writes today - apps/common/ant_health.h's
+# ANT_HEALTH_PAYLOAD_LEN, which is the definition this mirrors.
+PAYLOAD_LEN = 30
 
 
 def decode(payload: bytes) -> dict:
-    """Turn a 0xF6 body into a dict. Raises ValueError on a short body."""
-    if len(payload) < PAYLOAD_LEN:
+    """Turn a 0xF6 body into a dict. Raises ValueError on a short body.
+
+    Version-aware: a v1 (24-byte) body from an older stick decodes with only
+    the fields v1 carries. A v2+ body decodes every field its length covers,
+    even against a future version this tool has not been taught the new
+    fields of - it just won't report them.
+    """
+    if len(payload) < PAYLOAD_LEN_V1:
         raise ValueError(
-            "0xF6 body is %d bytes, expected %d" % (len(payload), PAYLOAD_LEN)
+            "0xF6 body is %d bytes, expected at least %d"
+            % (len(payload), PAYLOAD_LEN_V1)
         )
 
+    version = payload[0]
     out = {
-        "version": payload[0],
+        "version": version,
         # Bit 0: at least one counter has saturated, so EVERY number below is a
         # floor rather than a total. Reported as its own key because a reader
         # that ignores it can silently treat 65535 as an exact count.
         "saturated": bool(payload[1] & 0x01),
     }
-    for name, off, width, _desc in FIELDS:
+    for name, off, width, _desc, min_version in FIELDS:
+        if version < min_version or off + width > len(payload):
+            continue
         out[name] = int.from_bytes(payload[off:off + width], "little")
     return out
 
@@ -145,7 +176,8 @@ def main() -> int:
         print(
             "no 0xF6 reply.\n"
             "  Most likely the firmware was built without\n"
-            "  CONFIG_ANT_DONGLE_HEALTH_COUNTERS=y, which is the default.\n"
+            "  CONFIG_ANT_DONGLE_HEALTH_COUNTERS=y - which is OFF by\n"
+            "  default, so this is the common case, not a misconfiguration.\n"
             "  That is NOT the same as 'nothing was dropped' - it means the\n"
             "  question could not be asked.",
             file=sys.stderr,
@@ -167,8 +199,12 @@ def main() -> int:
         print("  SATURATED: at least one counter has pinned at its maximum.")
         print("  Every number below is a FLOOR, not a total.")
     print()
-    width = max(len(name) for name, _o, _w, _d in FIELDS)
-    for name, _off, _w, desc in FIELDS:
+    width = max(len(name) for name, _o, _w, _d, _mv in FIELDS)
+    for name, _off, _w, desc, min_version in FIELDS:
+        if name not in got:
+            print("  %-*s %8s   %s (needs v%d+)"
+                  % (width, name, "-", desc, min_version))
+            continue
         print("  %-*s %8d   %s" % (width, name, got[name], desc))
     print()
     if got["tx_drops"]:

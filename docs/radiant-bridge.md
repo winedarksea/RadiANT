@@ -878,6 +878,42 @@ Three caveats that bound this result:
   not been re-derived from a saved artefact. Re-take before quoting them
   anywhere load-bearing.
 
+#### What was changed in response: the end margin is now split by grant class
+
+The 16.9 pp is the cost of this stack's **demand** for air, so the lever is the
+size of the reservation rather than anything about arbitration. The gate charged
+every reservation a single 2000 µs hand-back margin (`END_MARGIN_US`), sized for
+the *extendable* class — an elastic grant asks MPSL to grow itself from that
+compare, so its margin must contain `MPSL_TIMESLOT_EXTENSION_MARGIN_MIN_US` as
+well as the signal path.
+
+A tracked receive window and a transmit can never reach `ACTION_EXTEND` (the
+`SIGNAL_TIMER0` case is gated on `g.extendable`), so MPSL's extension minimum
+never bound them and they were paying for it anyway. They are now charged
+`END_MARGIN_FIXED_US` = 750 µs, which covers the signal path alone: Nordic's own
+timeslot sample measures that at ~166 µs, 250 µs was measured *asserting* during
+this gate's bring-up, and 750 is 3× the value that actually failed.
+`END_MARGIN_EXTEND_US` stays at 2000 µs for the elastic class, and
+`GRANT_OVERHEAD_US`/`MAX_WINDOW_US` — the ceiling handed to the scheduler — stay
+computed from it, since that ceiling must hold for the longest overhead any
+class carries.
+
+Effect: **1250 µs off every tracked-window and every transmit reservation**,
+about 38 % of a ~7500 µs tracked slot's footprint. The compare that ends the
+grant does not move — it marks the end of the *air*, which is the same instant
+either way — so this is reserved-and-unused air handed back, not a retiming.
+
+**It is not measured yet, and the failure mode is not a lost packet.** An end
+margin that is too small is an MPSL **overstay assert**, which halts the board.
+Before §7.3c's arms are re-taken, the change owes a **60 min 8-master soak with
+zero MPSL asserts and `overstayed == 0`** in the gate dump. Read `over=` in the
+`gate:` line and the new `em=` field beside `len=` (which prints the margin the
+current grant was reserved with — 750 while tracked windows are running, 2000
+while the sweep holds an elastic grant). `late_disarm` must stay 0 and
+`grant_end_calls` must keep matching `granted`. Only then is the arm-1/arm-2
+re-take (PSDU 127, 150 s/arm, `SWEEP_DEBUG` **off**, captures retained in
+`bench-logs/` this time) worth the bench slot.
+
 **Why P3.5 was blocked for so long: channel 26 is empty.** The blocker was
 `foreign=0` on the receiver — not one ambient 802.15.4 frame — read as evidence
 of a deaf receiver. It was nothing of the kind. `coex154/Kconfig` picks channel
@@ -1218,11 +1254,21 @@ had nothing to fix on the path that mattered.
   and is unmeasured as a rate. Whether the handover ordering is Nordic's to fix
   is arguable, but it is not costing packets on the tracked path, so there is no
   case for raising it yet.
-- **`DONE_DENIED` credits zero dwell, which is a livelock rather than a slow
-  path.** A chunk that is always denied leaves `dwell_remaining` unchanged, so
-  `radiant_sched_rechunk()` re-arms the identical chunk forever and the sweep
-  never leaves the set — observed frozen on set 3 re-arming ~110×/s. It needs a
-  bounded-denial escape regardless of what caused the denials.
+- ~~**`DONE_DENIED` credits zero dwell, which is a livelock rather than a slow
+  path.**~~ **Fixed** — `CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE`. A chunk that is
+  always denied left `dwell_remaining` unchanged, so `radiant_sched_rechunk()`
+  re-armed the identical chunk forever and the sweep never left the set —
+  observed frozen on set 3 re-arming ~110×/s. `DONE_DENIED` still credits zero
+  dwell (it never opened); after eight consecutive zero-credit denials
+  `radiant_search_note_denied()` credits one eighth of the dwell budget
+  instead, so a fully-denied set completes in ≤64 denials (~0.6 s at that
+  re-arm rate) and a fully-denied sweep in ~19 s against a healthy 8.3 s. It is
+  a **quantum credit, not a pointer advance**: the set finishes through the
+  existing `set_complete` → slot drop → pump path, so the seen cache still
+  steers re-acquisition. Compiled out where no arbiter exists, counted as
+  `denial_escapes` on the SWEEP debug line (recovery, not loss — deliberately
+  not in the `0xF6` reply). See [`backends.md`](backends.md) for the full
+  argument.
 - **`radiant/tests/CMakeLists.txt` never listed `src/profiles/profile_rd.c`.**
   The RD phase added the decoder, the adapter, the test and the adapter's own
   CMake entry, but not the implementation's — so the core ztest application

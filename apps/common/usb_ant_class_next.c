@@ -40,6 +40,7 @@
 #include <zephyr/drivers/usb/udc.h>
 #include <zephyr/logging/log.h>
 
+#include "ant_health.h"
 #include "ant_transport.h"
 
 LOG_MODULE_REGISTER(usb_ant, LOG_LEVEL_INF);
@@ -226,6 +227,7 @@ static void arm_rx(void)
 	 */
 	if (ring_buf_space_get(&ant_rx_ring_buf) < ant_ep_mps(ant_c_data)) {
 		rx_backpressured = true;
+		ant_health_note(ANT_HEALTH_RX_BACKPRESSURE);
 		return;
 	}
 
@@ -234,6 +236,7 @@ static void arm_rx(void)
 	if (buf == NULL) {
 		LOG_WRN("No UDC buffer for RX");
 		rx_backpressured = true;
+		ant_health_note(ANT_HEALTH_RX_BACKPRESSURE);
 		return;
 	}
 
@@ -261,6 +264,7 @@ static int ant_request(struct usbd_class_data *const c_data,
 		if (err == 0 && buf->len > 0) {
 			if (ring_buf_space_get(&ant_rx_ring_buf) < buf->len) {
 				rx_backpressured = true;
+				ant_health_note(ANT_HEALTH_RX_BACKPRESSURE);
 				LOG_WRN("RX buffer full, delaying re-arm");
 			} else {
 				ring_buf_put(&ant_rx_ring_buf, buf->data,
@@ -462,6 +466,7 @@ static int usb_ant_write(const uint8_t *buf, size_t len)
 		 * UDC pool, which is shared and small.
 		 */
 		LOG_WRN("USB TX timeout");
+		ant_health_note(ANT_HEALTH_TX_TIMEOUT);
 		(void)usbd_ep_dequeue(usbd_class_get_ctx(ant_c_data),
 				      ant_ep_in(ant_c_data));
 		k_mutex_unlock(&tx_mutex);
@@ -641,7 +646,19 @@ int usb_ant_send_async(const uint8_t *buf, size_t len)
 	frame.len = (uint16_t)len;
 	memcpy(frame.data, buf, len);
 
-	return k_msgq_put(&ant_tx_msgq, &frame, K_NO_WAIT);
+	int rc = k_msgq_put(&ant_tx_msgq, &frame, K_NO_WAIT);
+
+	if (rc != 0) {
+		/* Mirrors the legacy stack's usb_ant_send_async(): the whole
+		 * reason 0xF6 exists is silent, dongle-side loss with no
+		 * RX_FAIL anywhere to account for it. */
+		ant_health_note(ANT_HEALTH_TX_DROP);
+	} else {
+		ant_health_depth(ANT_HEALTH_DEPTH_TX,
+				 k_msgq_num_used_get(&ant_tx_msgq));
+	}
+
+	return rc;
 }
 
 void usb_ant_resume_rx(void)

@@ -1211,40 +1211,48 @@ MESG_RADIANT_PAIRING_ID = 0xF5
 
 # What the dongle threw away, requested with MESG_REQUEST (0x4D). Request-only:
 # nothing is ever emitted unsolicited, so a host that never asks sees a byte
-# stream identical to a build without it. [0] structure version, 1; [1] flags,
-# bit 0 = at least one counter has saturated, so the whole set is a floor
-# rather than a total; [2..3] ANT events dropped because the USB TX queue was
-# full; [4] deepest that queue has been, in frames, out of ANT_TX_QUEUE_DEPTH;
-# [5] deepest the radio event queue has been, out of its own depth; [6..7]
-# event-queue overflow marks; [8..9] times bulk-OUT was left unarmed for host
-# backpressure; [10..11] frames refused for an unusable network key; [12..13]
-# scheduler windows missed; [14..15] failed; [16..17] denied by the arbiter;
-# [18..19] burst transfers that hit the 1000 ms back-pressure stall; [20..21]
-# search windows the pump declined to post WHILE a channel was still searching
-# and its slot was held for something else, which is discovery work outstanding
-# that could not get on the air; [22..23] reserved, sent as zero. All are u16
-# LE and all saturate rather than wrap, which is what the flag in [1] is for:
-# it distinguishes 65535 from 65535-and-counting. THE OTHER HALF OF [20..21] IS
-# DELIBERATELY ABSENT. A decline because NO channel was searching is discovery
-# having succeeded, not failed, and it is not loss - and the pump runs about 31
-# times a second regardless, so such a field would climb forever on an idle
-# dongle and saturate in about 35 minutes. Measured on the first hardware read
-# of this reply: 231 within nine seconds of boot with no channel ever opened.
-# Since saturation sets the flag in [1], that one field would have made every
-# OTHER field on the board read as a floor. It lives in the SWEEP log line
-# under CONFIG_RADIANT_SWEEP_DEBUG instead. WHY THIS EXISTS.
-# tools/ab_gates.toml's unexplained_loss.max = 0 is a SITTING INVALIDATOR
-# rather than a gate: a hole with no RX_FAIL means the loss happened on the
-# host or inside the dongle, and loss_accounting() cannot tell those two apart.
-# A firmware-side witness splits that bucket. That check has already caught 0.4
-# pp of imaginary loss once; a second source makes it sharper. And on a Feather
-# - no debugger, the board most people flash - the LOG_WRN that is the only
-# record of a drop today does not exist at all. DEPTHS 32 AND 64 ARE NOT THE
-# ANSWER TO A NON-ZERO [2..3]. At 3103 msg/s a 64-byte frame arrives every ~322
-# us, so depth 32 is about 10 ms of buffer. If the host stops reading for
-# longer than that, a deeper queue converts a drop into LATENCY - the wrong
-# trade for a protocol whose whole value is a 0.345 ms p50. [Phase 1.4;
-# tools/ab_gates.toml unexplained_loss]
+# stream identical to a build without it. [0] structure version, 2 (was 1: a
+# version-1, 24-byte reader still decodes correctly - everything it reads kept
+# its meaning); [1] flags, bit 0 = at least one counter has saturated, so the
+# whole set is a floor rather than a total; [2..3] ANT events dropped because
+# the USB TX queue was full; [4] deepest that queue has been, in frames, out of
+# ANT_TX_QUEUE_DEPTH; [5] deepest the radio event queue has been, out of its
+# own depth; [6..7] event-queue overflow marks; [8..9] times bulk-OUT was left
+# unarmed for host backpressure; [10..11] frames refused for an unusable
+# network key; [12..13] scheduler windows missed; [14..15] failed; [16..17]
+# denied by the arbiter; [18..19] burst transfers that hit the 1000 ms back-
+# pressure stall; [20..21] search windows the pump declined to post WHILE a
+# channel was still searching and its slot was held for something else, which
+# is discovery work outstanding that could not get on the air; [22..23] bytes
+# discarded by the host-frame parser while hunting for SYNC (0xA4), i.e.
+# framing lost outright, before version 2 this was reserved and sent as zero;
+# [24..25] frames that reached a full, in-range XOR checksum and failed it -
+# framed but corrupt, kept apart from [22..23] on purpose (one points at a host
+# out of step, the other at a noisy link); [26..27] radio RX events whose
+# channel op was no longer the one that channel owned by the time they were
+# processed; [28..29] USB bulk-IN transfers that never completed within their
+# timeout, i.e. the host stopped polling. All are u16 LE and all saturate
+# rather than wrap, which is what the flag in [1] is for: it distinguishes
+# 65535 from 65535-and-counting. THE OTHER HALF OF [20..21] IS DELIBERATELY
+# ABSENT. A decline because NO channel was searching is discovery having
+# succeeded, not failed, and it is not loss - and the pump runs about 31 times
+# a second regardless, so such a field would climb forever on an idle dongle
+# and saturate in about 35 minutes. Measured on the first hardware read of this
+# reply: 231 within nine seconds of boot with no channel ever opened. Since
+# saturation sets the flag in [1], that one field would have made every OTHER
+# field on the board read as a floor. It lives in the SWEEP log line under
+# CONFIG_RADIANT_SWEEP_DEBUG instead. WHY THIS EXISTS. tools/ab_gates.toml's
+# unexplained_loss.max = 0 is a SITTING INVALIDATOR rather than a gate: a hole
+# with no RX_FAIL means the loss happened on the host or inside the dongle, and
+# loss_accounting() cannot tell those two apart. A firmware-side witness splits
+# that bucket. That check has already caught 0.4 pp of imaginary loss once; a
+# second source makes it sharper. And on a Feather - no debugger, the board
+# most people flash - the LOG_WRN that is the only record of a drop today does
+# not exist at all. DEPTHS 32 AND 64 ARE NOT THE ANSWER TO A NON-ZERO [2..3].
+# At 3103 msg/s a 64-byte frame arrives every ~322 us, so depth 32 is about 10
+# ms of buffer. If the host stops reading for longer than that, a deeper queue
+# converts a drop into LATENCY - the wrong trade for a protocol whose whole
+# value is a 0.345 ms p50. [Phase 1.4; tools/ab_gates.toml unexplained_loss]
 MESG_RADIANT_HEALTH_ID = 0xF6
 
 # ---------------------------------------------------------------------------
@@ -1765,8 +1773,8 @@ RADIANT_MESSAGES = {
     0xF6: {
         "name": 'MESG_RADIANT_HEALTH_ID',
         "direction": 'd2h',
-        "payload_len": 24,
-        "desc": "What the dongle threw away, requested with MESG_REQUEST (0x4D). Request-only: nothing is ever emitted unsolicited, so a host that never asks sees a byte stream identical to a build without it. [0] structure version, 1; [1] flags, bit 0 = at least one counter has saturated, so the whole set is a floor rather than a total; [2..3] ANT events dropped because the USB TX queue was full; [4] deepest that queue has been, in frames, out of ANT_TX_QUEUE_DEPTH; [5] deepest the radio event queue has been, out of its own depth; [6..7] event-queue overflow marks; [8..9] times bulk-OUT was left unarmed for host backpressure; [10..11] frames refused for an unusable network key; [12..13] scheduler windows missed; [14..15] failed; [16..17] denied by the arbiter; [18..19] burst transfers that hit the 1000 ms back-pressure stall; [20..21] search windows the pump declined to post WHILE a channel was still searching and its slot was held for something else, which is discovery work outstanding that could not get on the air; [22..23] reserved, sent as zero. All are u16 LE and all saturate rather than wrap, which is what the flag in [1] is for: it distinguishes 65535 from 65535-and-counting. THE OTHER HALF OF [20..21] IS DELIBERATELY ABSENT. A decline because NO channel was searching is discovery having succeeded, not failed, and it is not loss - and the pump runs about 31 times a second regardless, so such a field would climb forever on an idle dongle and saturate in about 35 minutes. Measured on the first hardware read of this reply: 231 within nine seconds of boot with no channel ever opened. Since saturation sets the flag in [1], that one field would have made every OTHER field on the board read as a floor. It lives in the SWEEP log line under CONFIG_RADIANT_SWEEP_DEBUG instead. WHY THIS EXISTS. tools/ab_gates.toml's unexplained_loss.max = 0 is a SITTING INVALIDATOR rather than a gate: a hole with no RX_FAIL means the loss happened on the host or inside the dongle, and loss_accounting() cannot tell those two apart. A firmware-side witness splits that bucket. That check has already caught 0.4 pp of imaginary loss once; a second source makes it sharper. And on a Feather - no debugger, the board most people flash - the LOG_WRN that is the only record of a drop today does not exist at all. DEPTHS 32 AND 64 ARE NOT THE ANSWER TO A NON-ZERO [2..3]. At 3103 msg/s a 64-byte frame arrives every ~322 us, so depth 32 is about 10 ms of buffer. If the host stops reading for longer than that, a deeper queue converts a drop into LATENCY - the wrong trade for a protocol whose whole value is a 0.345 ms p50.",
+        "payload_len": 30,
+        "desc": "What the dongle threw away, requested with MESG_REQUEST (0x4D). Request-only: nothing is ever emitted unsolicited, so a host that never asks sees a byte stream identical to a build without it. [0] structure version, 2 (was 1: a version-1, 24-byte reader still decodes correctly - everything it reads kept its meaning); [1] flags, bit 0 = at least one counter has saturated, so the whole set is a floor rather than a total; [2..3] ANT events dropped because the USB TX queue was full; [4] deepest that queue has been, in frames, out of ANT_TX_QUEUE_DEPTH; [5] deepest the radio event queue has been, out of its own depth; [6..7] event-queue overflow marks; [8..9] times bulk-OUT was left unarmed for host backpressure; [10..11] frames refused for an unusable network key; [12..13] scheduler windows missed; [14..15] failed; [16..17] denied by the arbiter; [18..19] burst transfers that hit the 1000 ms back-pressure stall; [20..21] search windows the pump declined to post WHILE a channel was still searching and its slot was held for something else, which is discovery work outstanding that could not get on the air; [22..23] bytes discarded by the host-frame parser while hunting for SYNC (0xA4), i.e. framing lost outright, before version 2 this was reserved and sent as zero; [24..25] frames that reached a full, in-range XOR checksum and failed it - framed but corrupt, kept apart from [22..23] on purpose (one points at a host out of step, the other at a noisy link); [26..27] radio RX events whose channel op was no longer the one that channel owned by the time they were processed; [28..29] USB bulk-IN transfers that never completed within their timeout, i.e. the host stopped polling. All are u16 LE and all saturate rather than wrap, which is what the flag in [1] is for: it distinguishes 65535 from 65535-and-counting. THE OTHER HALF OF [20..21] IS DELIBERATELY ABSENT. A decline because NO channel was searching is discovery having succeeded, not failed, and it is not loss - and the pump runs about 31 times a second regardless, so such a field would climb forever on an idle dongle and saturate in about 35 minutes. Measured on the first hardware read of this reply: 231 within nine seconds of boot with no channel ever opened. Since saturation sets the flag in [1], that one field would have made every OTHER field on the board read as a floor. It lives in the SWEEP log line under CONFIG_RADIANT_SWEEP_DEBUG instead. WHY THIS EXISTS. tools/ab_gates.toml's unexplained_loss.max = 0 is a SITTING INVALIDATOR rather than a gate: a hole with no RX_FAIL means the loss happened on the host or inside the dongle, and loss_accounting() cannot tell those two apart. A firmware-side witness splits that bucket. That check has already caught 0.4 pp of imaginary loss once; a second source makes it sharper. And on a Feather - no debugger, the board most people flash - the LOG_WRN that is the only record of a drop today does not exist at all. DEPTHS 32 AND 64 ARE NOT THE ANSWER TO A NON-ZERO [2..3]. At 3103 msg/s a 64-byte frame arrives every ~322 us, so depth 32 is about 10 ms of buffer. If the host stops reading for longer than that, a deeper queue converts a drop into LATENCY - the wrong trade for a protocol whose whole value is a 0.345 ms p50.",
     },
 }
 RADIANT_RESERVED_RANGE = '0xF7-0xFA'

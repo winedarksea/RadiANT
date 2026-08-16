@@ -60,15 +60,39 @@
 /*
  * What the gate should ask MPSL for, and where the ending compare goes.
  * Pinned rather than derived (deriving from the same constants the file
- * uses would make the assertion a tautology):
+ * uses would make the assertion a tautology).
+ *
+ * THE END MARGIN IS SPLIT BY GRANT CLASS (W8), so there are two lengths for
+ * one window and these numbers moved:
  *
  *   length = (t_to + follow_on + TAIL_MARGIN) - (t_from - HEAD_MARGIN)
- *            + END_MARGIN
+ *            + END_MARGIN_<class>
+ *
+ *   tracked/TX (non-extendable, END_MARGIN_FIXED_US = 750):
+ *          = (5000 + 0 + 250) + 250 + 750 = 6250      (was 7500)
+ *   elastic (END_MARGIN_EXTEND_US = 2000, unchanged):
  *          = (5000 + 0 + 250) + 250 + 2000 = 7500
- *   compare = length - END_MARGIN = 5500
+ *
+ *   compare = length - END_MARGIN_<class>
+ *           = 5500 for BOTH - the compare marks the end of the AIR, which is
+ *             the same instant either way. That is the property that makes
+ *             this a footprint change and not a retiming: what moved is only
+ *             how much dead air is reserved after the window closes.
  */
-#define WIN_REQ_LEN_US 7500u
-#define WIN_CC_US      5500u
+#define WIN_REQ_LEN_US         6250u
+#define WIN_ELASTIC_REQ_LEN_US 7500u
+#define WIN_CC_US              5500u
+
+/* The two margins themselves, pinned. A test may say which one it expects; it
+ * may not compute a compare from the gate's own copy. */
+#define END_MARGIN_FIXED_EXPECT_US  750u
+#define END_MARGIN_EXTEND_EXPECT_US 2000u
+
+/* The elastic first bite (ELASTIC_INITIAL_US) and the compare inside it, for a
+ * window long enough to be clamped: 10000 asked for, compare at 10000 - 2000. */
+#define ELASTIC_CHUNK_US    40000u
+#define ELASTIC_GRANT_US    10000u
+#define ELASTIC_GRANT_CC_US 8000u
 
 /* ---------------------------------------------------------------------------
  * The fixture
@@ -793,9 +817,10 @@ ZTEST(radiant_gate, test_an_extension_does_not_hand_the_radio_back)
 		 * TAIL_MARGIN_US on only one path, leaving 250 us to get
 		 * ACTION_END back the moment a window stopped extending - the
 		 * overstay the margin exists to prevent. */
-		zassert_equal(p.granted_len_us - 2000u, fake_mpsl_timer0.cc[0],
+		zassert_equal(p.granted_len_us - END_MARGIN_EXTEND_EXPECT_US,
+			      fake_mpsl_timer0.cc[0],
 			      "the extended grant's compare is not "
-			      "END_MARGIN_US before its end");
+			      "END_MARGIN_EXTEND_US before its end");
 		zassert_equal(1u, p.grant_end_calls, NULL);
 	}
 
@@ -1017,6 +1042,224 @@ ZTEST(radiant_gate, test_signal_callback_defers_through_the_trampoline)
 	zassert_true(fake_swi()->deny > deny_before,
 		     "the end-of-grant denial did not go through the trampoline");
 
+	k_msleep(WORK_MS);
+	assert_invariant();
+}
+
+/* ---------------------------------------------------------------------------
+ * W8 - THE END MARGIN IS SPLIT BY GRANT CLASS
+ *
+ * One margin was charged to every reservation: 2000 us, sized for the
+ * EXTENDABLE class, which has to fit MPSL_TIMESLOT_EXTENSION_MARGIN_MIN_US
+ * inside it because it asks for its own extension from that compare. A tracked
+ * window and a transmit can never reach ACTION_EXTEND (the SIGNAL_TIMER0 case is
+ * gated on g.extendable), so that minimum never bound them and they were paying
+ * for it anyway - 1250 us of reserved-and-unused air on every slot, against a
+ * measured 16.9 pp of 802.15.4 loss that is the cost of this stack's DEMAND for
+ * air (docs/radiant-bridge.md §7.3c).
+ *
+ * EVERY ASSERTION BELOW IS MADE AGAINST fake_mpsl_last_request() OR
+ * fake_mpsl_timer0.cc[0], NOT AGAINST THE GATE'S OWN BOOKKEEPING. That is bug
+ * 25's lesson: the elastic backoff moved a number that was never in the request
+ * for a whole bench programme, and the test that should have caught it asserted
+ * on granted_len_us vs want_len_us - both of which were right. What MPSL was
+ * asked for, and where the compare that ends the grant was actually written, are
+ * the only two things here that can be wrong in a way that matters.
+ *
+ * The probe's end_margin_us/extendable are read only to NAME the class in a
+ * failure message; no compare is derived from them.
+ * ---------------------------------------------------------------------------
+ */
+
+/* Place one window and return the length MPSL was asked for. */
+static uint32_t place_window(enum gate_op op, uint8_t prio, uint32_t win_len_us)
+{
+	radiant_time_t now = radiant_radio_now();
+	radiant_time_t t_from = now + WIN_LEAD_US;
+
+	zassert_equal(GATE_PENDING,
+		      gate_acquire(op, t_from, t_from + win_len_us, 0u, prio),
+		      "the window was refused before it was ever placed");
+	k_msleep(WORK_MS);
+	zassert_equal(MPSL_TIMESLOT_REQ_TYPE_NORMAL,
+		      fake_mpsl_last_request()->request_type, NULL);
+	return fake_mpsl_last_request()->params.normal.length_us;
+}
+
+ZTEST(radiant_gate, test_a_tracked_window_asks_for_only_the_fixed_end_margin)
+{
+	zassert_equal(WIN_REQ_LEN_US,
+		      place_window(GATE_OP_RX, RADIANT_GATE_PRIO_HIGH,
+				   WIN_LEN_US),
+		      "a tracked window reserved a margin it can never use: the "
+		      "request is what costs the other stack air, so a split "
+		      "that does not reach it buys nothing");
+
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_START), NULL);
+
+	gate_probe_read(&p);
+	zassert_false(p.extendable,
+		      "a tracked window must not be extendable - the whole "
+		      "justification for the short margin is that this grant "
+		      "can never reach ACTION_EXTEND");
+	zassert_equal(END_MARGIN_FIXED_EXPECT_US, p.end_margin_us, NULL);
+	zassert_equal(WIN_REQ_LEN_US, p.granted_len_us,
+		      "the gate measured the grant against a length it did not "
+		      "ask for (bug 25)");
+	zassert_equal(WIN_CC_US, fake_mpsl_timer0.cc[0],
+		      "the ending compare is not END_MARGIN_FIXED_US before the "
+		      "end of the grant");
+
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_TIMER0), NULL);
+	assert_invariant();
+}
+
+/*
+ * A transmit is the other non-extendable class, and it is non-extendable by OP
+ * rather than by priority - `(op != GATE_OP_TX) && (prio == NORMAL)`. So both
+ * halves are checked: a transmit at HIGH (the real class) and a transmit at
+ * NORMAL, which the priority test alone would have called elastic.
+ */
+ZTEST(radiant_gate, test_a_transmit_asks_for_only_the_fixed_end_margin)
+{
+	zassert_equal(WIN_REQ_LEN_US,
+		      place_window(GATE_OP_TX, RADIANT_GATE_PRIO_HIGH,
+				   WIN_LEN_US),
+		      "a transmit reserved the extendable class's margin");
+
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_START), NULL);
+	gate_probe_read(&p);
+	zassert_false(p.extendable, NULL);
+	zassert_equal(END_MARGIN_FIXED_EXPECT_US, p.end_margin_us, NULL);
+	zassert_equal(WIN_CC_US, fake_mpsl_timer0.cc[0], NULL);
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_TIMER0), NULL);
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_SESSION_IDLE), NULL);
+
+	/* The op half of the test, with no grant taken - the request is the
+	 * whole assertion. */
+	zassert_equal(WIN_REQ_LEN_US,
+		      place_window(GATE_OP_TX, RADIANT_GATE_PRIO_NORMAL,
+				   WIN_LEN_US),
+		      "a transmit at NORMAL priority was classed as elastic: "
+		      "ALL transmits are non-extendable, priority is only the "
+		      "second half of the test");
+	gate_probe_read(&p);
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_BLOCKED), NULL);
+	k_msleep(WORK_MS);
+	assert_invariant();
+}
+
+/*
+ * The half of the split that must NOT move. The extendable class asks MPSL to
+ * grow the grant from this compare, and an extension has to be requested at
+ * least MPSL_TIMESLOT_EXTENSION_MARGIN_MIN_US before the end - shortening this
+ * one would break the chain rather than save air, and the plan forbids it.
+ *
+ * The same window as the two tests above, so the only difference in the number
+ * is the margin: 7500 against 6250, and the compare in the same place.
+ */
+ZTEST(radiant_gate, test_the_elastic_class_keeps_the_full_extension_margin)
+{
+	zassert_equal(WIN_ELASTIC_REQ_LEN_US,
+		      place_window(GATE_OP_RX, RADIANT_GATE_PRIO_NORMAL,
+				   WIN_LEN_US),
+		      "the elastic class lost the margin its extension chain is "
+		      "asked for inside");
+
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_START), NULL);
+	gate_probe_read(&p);
+	zassert_true(p.extendable, NULL);
+	zassert_equal(END_MARGIN_EXTEND_EXPECT_US, p.end_margin_us, NULL);
+	zassert_equal(WIN_CC_US, fake_mpsl_timer0.cc[0],
+		      "the compare marks the end of the AIR and that instant is "
+		      "the same for both classes: only the reservation behind "
+		      "it is shorter");
+
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_TIMER0), NULL);
+	assert_invariant();
+}
+
+/*
+ * The release backstop, per class. gate_release() re-places CC0 just ahead of
+ * the counter and, if that write loses the race, restores a BACKSTOP compare -
+ * which has to be the same one SIGNAL_START armed, i.e. this grant's own
+ * margin. Naming a constant here would either overstay a fixed grant (backstop
+ * 1250 us late) or end an elastic one 1250 us early, and neither is visible in
+ * any counter.
+ *
+ * Both classes, one test, because the point is that the two differ: an elastic
+ * grant clamped to the first bite (10000) backstops at 8000 and a tracked window
+ * (6250) at 5500. A single-margin implementation gets exactly one of them right.
+ */
+ZTEST(radiant_gate, test_the_release_backstop_is_the_grants_own_class_margin)
+{
+	/*
+	 * Elastic: a chunk long enough to be clamped to the first bite, which is
+	 * the only way to get two grants of DIFFERENT lengths out of the two
+	 * classes (the compare is at window+head+tail either way, so an unclamped
+	 * elastic window backstops at the same place a tracked one does).
+	 *
+	 * The literal 10000 assumes elastic_initial_us is still at
+	 * ELASTIC_INITIAL_US. It is a file static that survives gate_init(), and
+	 * it halves only when a BLOCKED arrives for an EXTENDABLE grant - which
+	 * no test in this suite produces. If that ever changes, this is the
+	 * assertion that will say so, and loudly.
+	 */
+	zassert_equal(ELASTIC_GRANT_US,
+		      place_window(GATE_OP_RX, RADIANT_GATE_PRIO_NORMAL,
+				   ELASTIC_CHUNK_US),
+		      "the elastic first bite is not what MPSL was asked for");
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_START), NULL);
+	zassert_equal(ELASTIC_GRANT_CC_US, fake_mpsl_timer0.cc[0], NULL);
+
+	/* Past where a fresh compare could go, so gate_release() takes the
+	 * else-branch and the armed compare must be left exactly where it is. */
+	fake_mpsl_timer0.counter = ELASTIC_GRANT_CC_US;
+	fake_mpsl_timer0.counter_step = 0u;
+	gate_release();
+	zassert_equal(ELASTIC_GRANT_CC_US, fake_mpsl_timer0.cc[0],
+		      "the elastic grant's backstop was moved to the fixed "
+		      "class's margin");
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_TIMER0), NULL);
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_SESSION_IDLE), NULL);
+
+	/* And a tracked window, whose backstop is 1250 us later in the grant. */
+	fake_mpsl_timer0.counter = 0u;
+	fake_mpsl_timer0.counter_step = 0u;
+	zassert_equal(WIN_REQ_LEN_US,
+		      place_window(GATE_OP_RX, RADIANT_GATE_PRIO_HIGH,
+				   WIN_LEN_US), NULL);
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_START), NULL);
+	zassert_equal(WIN_CC_US, fake_mpsl_timer0.cc[0], NULL);
+
+	/* Bug 9's race, so the re-read has to restore the backstop: the value
+	 * it restores is the assertion. */
+	fake_mpsl_timer0.counter = 100u;
+	fake_mpsl_timer0.counter_step = 100u;
+	/* `captures` is cumulative over the test and the elastic half above
+	 * already spent one. */
+	fake_mpsl_timer0.captures = 0u;
+	gate_release();
+	zassert_equal(2u, fake_mpsl_timer0.captures,
+		      "the compare was not re-read after being written");
+	zassert_equal(WIN_CC_US, fake_mpsl_timer0.cc[0],
+		      "the tracked window's restored backstop is not its own "
+		      "margin before the end of its own grant");
+
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_TIMER0), NULL);
 	k_msleep(WORK_MS);
 	assert_invariant();
 }

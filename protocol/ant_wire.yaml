@@ -1879,11 +1879,13 @@ radiant_messages:
     - name: MESG_RADIANT_HEALTH_ID
       id: 0xF6
       direction: d2h
-      payload_len: 24
+      payload_len: 30
       desc: "What the dongle threw away, requested with MESG_REQUEST (0x4D).
              Request-only: nothing is ever emitted unsolicited, so a host that
              never asks sees a byte stream identical to a build without it.
-             [0] structure version, 1; [1] flags, bit 0 = at least one counter
+             [0] structure version, 2 (was 1: a version-1, 24-byte reader
+             still decodes correctly - everything it reads kept its meaning);
+             [1] flags, bit 0 = at least one counter
              has saturated, so the whole set is a floor rather than a total;
              [2..3] ANT events dropped because the USB TX queue was full;
              [4] deepest that queue has been, in frames, out of
@@ -1896,7 +1898,16 @@ radiant_messages:
              the 1000 ms back-pressure stall; [20..21] search windows the pump
              declined to post WHILE a channel was still searching and its slot
              was held for something else, which is discovery work outstanding
-             that could not get on the air; [22..23] reserved, sent as zero.
+             that could not get on the air; [22..23] bytes discarded by the
+             host-frame parser while hunting for SYNC (0xA4), i.e. framing
+             lost outright, before version 2 this was reserved and sent as
+             zero; [24..25] frames that reached a full, in-range XOR checksum
+             and failed it - framed but corrupt, kept apart from [22..23] on
+             purpose (one points at a host out of step, the other at a noisy
+             link); [26..27] radio RX events whose channel op was no longer
+             the one that channel owned by the time they were processed;
+             [28..29] USB bulk-IN transfers that never completed within their
+             timeout, i.e. the host stopped polling.
              All are u16 LE and all saturate rather than wrap, which is what
              the flag in [1] is for: it distinguishes 65535 from
              65535-and-counting.

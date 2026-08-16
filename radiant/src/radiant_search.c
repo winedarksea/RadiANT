@@ -769,6 +769,15 @@ void radiant_search_on_done(struct radiant_search *s, bool ran_to_close,
 			s->set_dwell_us = (total > (uint64_t)UINT32_MAX)
 						  ? UINT32_MAX
 						  : (uint32_t)total;
+#if defined(CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE)
+			/* THE ONLY PLACE REAL LISTENING IS CREDITED, so the
+			 * only place the denial run can honestly be reset. A
+			 * sweep that is merely slow - denied often but still
+			 * getting air in between - therefore never escapes,
+			 * which is the point: the escape is for the set that
+			 * gets nothing, not for the set that gets less. */
+			s->denied_run = 0u;
+#endif
 		}
 	}
 
@@ -804,11 +813,88 @@ void radiant_search_tick(struct radiant_search *s, radiant_time_t now)
 	}
 }
 
+#if defined(CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE)
+/*
+ * THE BOUNDED-DENIAL ESCAPE. Called once per refused window, from
+ * radiant_search_note_denied() and nowhere else.
+ *
+ * WHY IT CANNOT SPIN, in full, because "bounded" is the entire claim:
+ *
+ *  1. Nothing here arms, re-arms or requests anything. It is a pure state
+ *     update on a report of something that has already happened. The rate of
+ *     denials is set by the arbiter and the arming authority, not by this
+ *     function, so it cannot feed itself.
+ *  2. denied_run only reaches RUN once per RUN calls (it is zeroed on every
+ *     escape), so at most one quantum is credited per RUN denials.
+ *  3. Every escape adds a STRICTLY POSITIVE quantum to set_dwell_us - the
+ *     floor of 1 below is what makes that true for every legal dwell_us, not
+ *     just the sane ones - and nothing but build_set() ever lowers
+ *     set_dwell_us. So the sequence of set_dwell_us values across escapes on
+ *     one set is strictly increasing.
+ *  4. dwell_owed() returns 0 once set_dwell_us > cfg.dwell_us - EPSILON, and
+ *     by (3) that threshold is reached in at most
+ *     ceil(cfg.dwell_us / quantum) escapes: 8 at the shift of 3, hence 8*RUN
+ *     = 64 denials at the default run length. (For cfg.dwell_us below
+ *     EPSILON, dwell_owed() is already 0 at zero credit and no escape is ever
+ *     needed - see dwell_owed().)
+ *  5. At that point radiant_search_set_complete() is true, so the arming
+ *     authority drops the slot and the pump calls radiant_search_window(),
+ *     which calls select_next_set() -> build_set(), which zeroes
+ *     set_dwell_us. A DIFFERENT set is now selected, and the argument starts
+ *     over on it. There is no state in which the same set can be escaped
+ *     from twice without the sweep having moved.
+ *
+ * Note (5) is why this credits a quantum instead of advancing the cursor: the
+ * advance is done by the code that already knows about the steer queue and
+ * the seen cache. Doing it here would work and would silently cost fast
+ * re-acquisition exactly when the arbiter is busy, which is when it matters.
+ */
+static void denial_escape(struct radiant_search *s)
+{
+	uint32_t quantum;
+	uint64_t total;
+
+	/* No set selected: radiant_search_window() has not run, there is
+	 * nothing to credit, and the run is not advanced either - a denial
+	 * with no set selected cost the sweep no coverage. */
+	if (!s->set_valid) {
+		return;
+	}
+
+	if (s->denied_run < UINT8_MAX) {
+		s->denied_run++;
+	}
+	if (s->denied_run < RADIANT_SEARCH_DENIAL_ESCAPE_RUN) {
+		return;
+	}
+
+	quantum = s->cfg.dwell_us >> RADIANT_SEARCH_DENIAL_ESCAPE_SHIFT;
+	if (quantum == 0u) {
+		/* Only reachable for a dwell under eight microseconds, which
+		 * dwell_owed() already calls finished. Kept anyway: point (3)
+		 * of the argument above is "strictly positive", and a
+		 * zero-quantum escape would be an infinite loop that no test
+		 * with a realistic dwell could ever reach. */
+		quantum = 1u;
+	}
+
+	total = (uint64_t)s->set_dwell_us + (uint64_t)quantum;
+	s->set_dwell_us = (total > (uint64_t)UINT32_MAX) ? UINT32_MAX
+							 : (uint32_t)total;
+	s->denied_run = 0u;
+	s->stats.denial_escapes++;
+}
+#endif /* CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE */
+
 void radiant_search_note_denied(struct radiant_search *s, uint32_t window_us)
 {
 	if (!inst_ok(s) || window_us == 0u) {
 		return;
 	}
+
+#if defined(CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE)
+	denial_escape(s);
+#endif
 
 	for (uint8_t c = 0u; c < (uint8_t)RADIANT_SEARCH_MAX_CHANNELS; c++) {
 		struct radiant_search_chan *ch = &s->chans[c];

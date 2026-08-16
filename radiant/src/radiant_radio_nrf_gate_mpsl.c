@@ -258,15 +258,22 @@ BUILD_ASSERT(CONFIG_MPSL_TIMESLOT_SESSION_COUNT >= 1,
 #define FOLLOW_ON_MAX_US 3000u
 
 /*
- * END_MARGIN_US (defined below) is included here because gate_acquire() adds
- * it to every request length so the timeslot outlives the air it covers by
- * the hand-back time - same class of mistake as bug 3 if omitted. The
- * BUILD_ASSERT on MAX_WINDOW_US further down is what makes the forward
+ * END_MARGIN_EXTEND_US (defined below) is included here because gate_acquire()
+ * adds an end margin to every request length so the timeslot outlives the air
+ * it covers by the hand-back time - same class of mistake as bug 3 if omitted.
+ * The BUILD_ASSERT on MAX_WINDOW_US further down is what makes the forward
  * reference safe.
+ *
+ * The EXTEND margin specifically, and deliberately, even though the
+ * non-extendable classes are now charged the smaller END_MARGIN_FIXED_US: this
+ * feeds MAX_WINDOW_US, which is what the scheduler is told a window may be, and
+ * that ceiling has to hold for the LONGEST overhead any class can carry.
+ * Computing it from the smaller margin would hand the scheduler a ceiling an
+ * elastic request then exceeds - bug 3 again, one indirection along.
  */
 #define GRANT_OVERHEAD_US                                                     \
-	(HEAD_MARGIN_US + TAIL_MARGIN_US + END_MARGIN_US + FRAME_TAIL_US +    \
-	 FOLLOW_ON_MAX_US)
+	(HEAD_MARGIN_US + TAIL_MARGIN_US + END_MARGIN_EXTEND_US +             \
+	 FRAME_TAIL_US + FOLLOW_ON_MAX_US)
 
 #define MAX_WINDOW_US (MPSL_TIMESLOT_LENGTH_MAX_US - GRANT_OVERHEAD_US)
 
@@ -299,8 +306,41 @@ BUILD_ASSERT(CONFIG_MPSL_TIMESLOT_SESSION_COUNT >= 1,
  * whole debugging session. TAIL_MARGIN_US covers the RADIO (ramp-down, clock
  * disagreement); this covers the SIGNAL PATH (MPSL interrupt dispatch plus
  * callback work, all of which must finish before the grant expires).
+ *
+ * TWO OF THEM, split by grant class, because it is not the same question for
+ * both and one number was being charged to both.
+ *
+ * END_MARGIN_EXTEND_US (2000) is the EXTENDABLE class's, unchanged. That class
+ * asks MPSL to grow the grant from this very compare, and an extension has to
+ * be requested at least MPSL_TIMESLOT_EXTENSION_MARGIN_MIN_US before the end of
+ * the grant - so for an elastic slot the margin must contain the signal path
+ * AND that minimum. The three BUILD_ASSERTs that follow bind to this one.
+ *
+ * END_MARGIN_FIXED_US (750) is the NON-EXTENDABLE class's: every transmit, and
+ * every tracked receive window (under 10 ms, and its end is the core's choice,
+ * not ours to grow). A non-extendable slot CAN NEVER REACH ACTION_EXTEND - the
+ * SIGNAL_TIMER0 case is gated on g.extendable - so
+ * MPSL_TIMESLOT_EXTENSION_MARGIN_MIN_US does not bind it at all, and the margin
+ * only has to cover the SIGNAL PATH: MPSL's dispatch plus this callback's work
+ * between the compare firing and ACTION_END returning. Nordic's own timeslot
+ * sample measures that path at ~166 us (SIGNAL_START to TIMER0); 250 us is the
+ * value MEASURED ASSERTING here during bring-up (the board asserted on the first
+ * or second timeslot at len-250). 750 is 3x the figure that actually failed
+ * rather than a fresh guess.
+ *
+ * What it buys: an end margin is charged to the RESERVATION, so it is air held
+ * and not used. 1250 us comes off every tracked-window and every transmit
+ * reservation - about 38 % of a ~7500 us tracked slot's footprint - and that is
+ * the lever available against the 16.9 pp of 802.15.4 loss measured in
+ * docs/radiant-bridge.md §7.3c, where the attributable cost is this stack's
+ * DEMAND for air rather than arbitration itself.
+ *
+ * What it risks: an end margin that is too small is an MPSL OVERSTAY assert
+ * (stats.overstayed, and the board halts), not a dropped packet. §7.3c carries
+ * the soak gate this split has to clear before its numbers are re-taken.
  */
-#define END_MARGIN_US 2000u
+#define END_MARGIN_EXTEND_US 2000u
+#define END_MARGIN_FIXED_US  750u
 
 /*
  * How far ahead of the counter gate_release() places the compare that
@@ -327,12 +367,27 @@ BUILD_ASSERT(PLACE_MIN_US < PLACE_LEAD_US,
 BUILD_ASSERT(EXTEND_STEP_US >= MPSL_TIMESLOT_EXTENSION_TIME_MIN_US,
 	     "an extension smaller than MPSL's own minimum is refused, and the "
 	     "refusal would read as the arbiter yielding");
-BUILD_ASSERT(END_MARGIN_US > MPSL_TIMESLOT_EXTENSION_MARGIN_MIN_US,
-	     "an extension is asked for END_MARGIN_US before the end of the "
-	     "grant, so that is the margin MPSL's own minimum has to fit in");
-BUILD_ASSERT(ELASTIC_INITIAL_US > END_MARGIN_US + EXTEND_STEP_US,
+BUILD_ASSERT(END_MARGIN_EXTEND_US > MPSL_TIMESLOT_EXTENSION_MARGIN_MIN_US,
+	     "an extension is asked for END_MARGIN_EXTEND_US before the end of "
+	     "the grant, so that is the margin MPSL's own minimum has to fit "
+	     "in. Only the extendable class is bound by it: a fixed-margin "
+	     "grant never reaches ACTION_EXTEND (the TIMER0 case is gated on "
+	     "g.extendable), which is why END_MARGIN_FIXED_US may be smaller "
+	     "than MPSL's extension minimum");
+BUILD_ASSERT(ELASTIC_INITIAL_US > END_MARGIN_EXTEND_US + EXTEND_STEP_US,
 	     "the first grant must be long enough to contain the compare that "
 	     "grows it, or the chain cannot start");
+BUILD_ASSERT(END_MARGIN_FIXED_US > TAIL_MARGIN_US,
+	     "the end margin must outlast the tail it contains: the compare "
+	     "fires END_MARGIN before expiry and the RADIO's own ramp-down and "
+	     "clock disagreement (TAIL_MARGIN_US) still have to fit inside what "
+	     "is left, or the timeslot is overstayed");
+BUILD_ASSERT(END_MARGIN_FIXED_US <= END_MARGIN_EXTEND_US,
+	     "the fixed margin is the SHORT one by construction - it drops the "
+	     "extension minimum the extendable class has to carry. A FIXED "
+	     "larger than EXTEND means the split has been inverted, and "
+	     "GRANT_OVERHEAD_US/MAX_WINDOW_US (computed from EXTEND) would then "
+	     "under-reserve the class with the bigger overhead");
 BUILD_ASSERT(MAX_WINDOW_US > 0u && MAX_WINDOW_US < MPSL_TIMESLOT_LENGTH_MAX_US,
 	     "the head and tail margins have eaten the whole grant");
 
@@ -377,6 +432,18 @@ static struct {
 	volatile bool release_wanted;
 	/* This operation is allowed to grow itself - the elastic classes. */
 	volatile bool extendable;
+	/*
+	 * The hand-back margin THIS grant was reserved with, and the only
+	 * figure any compare for it may be placed against. Split by class:
+	 * END_MARGIN_EXTEND_US when g.extendable, END_MARGIN_FIXED_US
+	 * otherwise. Carried in state rather than re-derived at each site
+	 * because the reservation MPSL was given was already sized with it -
+	 * a compare placed against the other constant would be arithmetic
+	 * about a timeslot that was never requested (bug 8's shape, and bug
+	 * 25's lesson about the file's own numbers disagreeing with the
+	 * arbiter's).
+	 */
+	uint32_t end_margin_us;
 
 	/*
 	 * The anchor. distance_us is measured from the PREVIOUS timeslot's
@@ -390,7 +457,7 @@ static struct {
 
 	/*
 	 * The last instant the radio may still be busy under the grant we hold
-	 * - NOT the timeslot expiry, which is END_MARGIN_US later. Set from
+	 * - NOT the timeslot expiry, which is g.end_margin_us later. Set from
 	 * the GRANT, not the request: an elastic request asks for
 	 * ELASTIC_INITIAL_US but wants more, so a follow-on measured against
 	 * the request would be admitted against air not yet granted.
@@ -674,8 +741,44 @@ static void deadline_apply(void)
  * with no fault and no further housekeeping - the housekeeping thread had
  * stopped because the above was running at priority 0.
  *
- * A dedicated thread rather than the system work queue, and BUG 27 is why the
- * comment here used to say "queue" while the code said k_work_submit().
+ * A DEDICATED WORK QUEUE (gate_wq below), not the system one, and this comment
+ * used to claim that before it was true. What the code actually did was
+ * k_work_submit(), i.e. k_sys_work_q - shared with every driver, every net
+ * stack timer callback and every logging backend in the image.
+ *
+ * Two reasons it is its own queue now, in order of how much they cost:
+ *
+ *   STACK. radiant/Kconfig asks for CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=4096
+ *   and explains why (a terminal delivery here ends in a whole scheduler
+ *   pass). It did not get it on the arms that matter:
+ *   nrf/subsys/net/openthread/Kconfig.defconfig pins
+ *   CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=1120 - and an OpenThread image is
+ *   EXACTLY the image that compiles this file. Kconfig takes the first
+ *   definition whose condition holds in parse order and OpenThread's is parsed
+ *   first, so the request was silently overridden precisely where the deep
+ *   stack was needed, and the symptom is the silent reboot loop the Kconfig
+ *   comment describes. apps/dongle_thread/thread.conf works around it with a
+ *   hand-written assignment (measured there at 1016 bytes of 1120), which is a
+ *   per-application thing to remember; a stack this file owns is not.
+ *
+ *   CONTENTION. This queue's items are on the critical path of a timeslot
+ *   that has already been reserved: request_work_fn() must reach
+ *   mpsl_timeslot_request() inside the placement lead, and denied_work_fn()
+ *   resolves the core's single operation slot. Behind k_sys_work_q they queue
+ *   behind unrelated work of unbounded length.
+ *
+ * The priority is CONFIG_RADIANT_GATE_WQ_PRIO, whose default (-1) is the same
+ * priority CONFIG_SYSTEM_WORKQUEUE_PRIORITY defaults to in these images - so
+ * this change is contention isolation ONLY. Raising it above the system queue
+ * is a separate decision that needs its own measurement.
+ *
+ * CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=4096 stays in radiant/Kconfig for now:
+ * the BLE-side builds still route work through the system queue, and dropping
+ * the request is a follow-up once there is high-water data from `gatewq=` in
+ * stacks_report().
+ *
+ * BUG 27 (below) is a separate matter and is why nothing here may be submitted
+ * straight from the signal callback, whichever queue it lands on.
  *
  * ─── BUG 27: NO KERNEL CALL MAY BE MADE FROM THIS FILE'S SIGNAL CALLBACK ────
  *
@@ -751,9 +854,25 @@ static K_WORK_DEFINE(request_work, request_work_fn);
 static K_WORK_DEFINE(denied_work, denied_work_fn);
 
 /*
+ * The queue itself. Started once per boot by gate_init() and never stopped -
+ * see gate_wq_started there, guarded in the same style as swi_registered and
+ * for a harder reason: k_work_queue_start() asserts on an already-started
+ * queue, and gate_shutdown()/gate_init() is an ordinary suspend/resume cycle
+ * here (and how every test in radiant/tests/gate starts).
+ *
+ * Cost is CONFIG_RADIANT_GATE_WQ_STACK_SIZE (4096 by default) of RAM in any
+ * image that compiles this file, and that budget includes gate_dump_fn(),
+ * which runs here too - a stall diagnostic must not depend on the queue it is
+ * diagnosing.
+ */
+static struct k_work_q gate_wq;
+static K_THREAD_STACK_DEFINE(gate_wq_stack, CONFIG_RADIANT_GATE_WQ_STACK_SIZE);
+static bool gate_wq_started;
+
+/*
  * The gate's end of the trampoline. Runs at CONFIG_RADIANT_SWI_IRQ_PRIO - an
- * ordinary interrupt priority - so k_work_submit() and the k_timer calls in
- * deadline_apply() are legal here and were not where they came from.
+ * ordinary interrupt priority - so k_work_submit_to_queue() and the k_timer
+ * calls in deadline_apply() are legal here and were not where they came from.
  *
  * Still submitted to a work queue rather than run inline: what these end in is
  * deliver_terminal() and a whole scheduler pass, which is unbounded work and
@@ -766,10 +885,10 @@ static void gate_swi_handler(uint32_t bits)
 		deadline_apply();
 	}
 	if ((bits & RADIANT_SWI_GATE_REQUEST) != 0u) {
-		k_work_submit(&request_work);
+		k_work_submit_to_queue(&gate_wq, &request_work);
 	}
 	if ((bits & RADIANT_SWI_GATE_DENY) != 0u) {
-		k_work_submit(&denied_work);
+		k_work_submit_to_queue(&gate_wq, &denied_work);
 	}
 }
 
@@ -788,6 +907,9 @@ static struct {
 	uint32_t       granted_len_us;
 	radiant_time_t grant_end;
 	bool           extendable;
+	/* The margin this request's length was built with. See g.end_margin_us
+	 * - it has to travel with the request, not be re-derived later. */
+	uint32_t       end_margin_us;
 	/* Bench probe only: which class this request belongs to, so a BLOCKED
 	 * or a START can be attributed to it. */
 	bool           high_prio;
@@ -800,6 +922,12 @@ static bool grant_high_prio;
  * together are the whole question "was there ever enough air after the grant
  * started for this window to open in". */
 static uint32_t hi_grant_len_us;
+/* And the margin that grant was reserved with, so the dump's `cc0=` is derived
+ * from the same number the compare was, rather than from a constant that is now
+ * only one of two. A HIGH-priority grant is never extendable, so this reads
+ * END_MARGIN_FIXED_US on every real window - but recording it is what keeps the
+ * instrument honest if that ever stops being true (bug 25's lesson). */
+static uint32_t hi_end_margin_us = END_MARGIN_EXTEND_US;
 /* How long the last HIGH-priority grant actually lasted, and the worst case. */
 static uint32_t hi_end_us;
 static uint32_t hi_end_us_max;
@@ -893,7 +1021,7 @@ static uint32_t min_req_lead_us = UINT32_MAX;
 
 BUILD_ASSERT(ELASTIC_FLOOR_US >= MPSL_TIMESLOT_LENGTH_MIN_US,
 	     "the elastic floor must still be a timeslot MPSL will grant");
-BUILD_ASSERT(ELASTIC_FLOOR_US > END_MARGIN_US,
+BUILD_ASSERT(ELASTIC_FLOOR_US > END_MARGIN_EXTEND_US,
 	     "an elastic grant must outlive its own hand-back margin");
 
 static void commit_next_grant(void)
@@ -902,6 +1030,7 @@ static void commit_next_grant(void)
 	g.granted_len_us = next_grant.granted_len_us;
 	g.grant_end      = next_grant.grant_end;
 	g.extendable     = next_grant.extendable;
+	g.end_margin_us  = next_grant.end_margin_us;
 	grant_high_prio  = next_grant.high_prio;
 }
 
@@ -1024,6 +1153,12 @@ static void bootstrap_anchor(void)
 	 * timeslot there is. */
 	next_grant.extendable = false;
 	next_grant.high_prio = false;
+	/* The conservative one, not the class-derived one. The bootstrap slot is
+	 * handed straight back from SIGNAL_START and so never places a compare
+	 * against this margin at all; if a future path ever does, the wider
+	 * figure is the safe default (both are longer than this 100 us slot, so
+	 * every compare site falls to its own short-grant fallback either way). */
+	next_grant.end_margin_us = END_MARGIN_EXTEND_US;
 	next_grant.want_len_us = MPSL_TIMESLOT_LENGTH_MIN_US;
 	next_grant.granted_len_us = MPSL_TIMESLOT_LENGTH_MIN_US;
 	next_grant.grant_end = 0u;
@@ -1082,9 +1217,15 @@ static void denied_work_fn(struct k_work *w)
 /*
  * A once-a-second dump - the only instrument that shows a stall. Every other
  * diagnostic here is emitted BY an event, so a gate that stopped producing
- * events produces no diagnostics either. Fixed period on its own thread, so
- * it reports absence of activity as clearly as presence; deferred logging
- * keeps the cost off the grant path.
+ * events produces no diagnostics either. Fixed period, so it reports absence
+ * of activity as clearly as presence; deferred logging keeps the cost off the
+ * grant path.
+ *
+ * On gate_wq rather than the system queue, like everything else here: a stall
+ * diagnostic that queues behind unrelated system work goes quiet for the same
+ * reasons the gate does, and would then be evidence of nothing. Its stack
+ * demand (a handful of LOG_INF argument frames and the 96-byte `sites` buffer)
+ * is part of the CONFIG_RADIANT_GATE_WQ_STACK_SIZE budget.
  */
 static void gate_dump_fn(struct k_work *w);
 static K_WORK_DELAYABLE_DEFINE(gate_dump, gate_dump_fn);
@@ -1145,6 +1286,8 @@ static void stacks_report(void)
 	size_t isr_unused;
 	size_t wq_size = 0;
 	size_t wq_unused = 0;
+	size_t gwq_size = 0;
+	size_t gwq_unused = 0;
 
 	isr_unused = fill_run(K_KERNEL_STACK_BUFFER(z_interrupt_stacks[0]),
 			      isr_size);
@@ -1152,6 +1295,11 @@ static void stacks_report(void)
 	 * The system work queue's own thread. k_work_queue_thread_get() is the
 	 * supported way to name it; k_thread_stack_space_get() then reads the
 	 * same 0xAA fill.
+	 *
+	 * Kept even though this file no longer submits anything there: the rest
+	 * of the image still does, radiant/Kconfig still asks for 4096, and
+	 * whether that request can be dropped is exactly what this number
+	 * answers.
 	 */
 	{
 		k_tid_t wq = k_work_queue_thread_get(&k_sys_work_q);
@@ -1162,14 +1310,33 @@ static void stacks_report(void)
 		}
 	}
 	/*
+	 * And the gate's own queue - the one that now carries request_work_fn(),
+	 * denied_work_fn() and this dump, i.e. every deep call this file makes.
+	 * `gatewq` approaching its size is the MPU fault that used to be blamed
+	 * on `syswq`; well under it is the evidence that would justify sizing
+	 * CONFIG_RADIANT_GATE_WQ_STACK_SIZE down. Reads 0/0 before gate_init()
+	 * has started the queue.
+	 */
+	if (gate_wq_started) {
+		k_tid_t gwq = k_work_queue_thread_get(&gate_wq);
+
+		if (gwq != NULL &&
+		    k_thread_stack_space_get(gwq, &gwq_unused) == 0) {
+			gwq_size = CONFIG_RADIANT_GATE_WQ_STACK_SIZE;
+		}
+	}
+	/*
 	 * Printed as USED/SIZE, not unused: the number that matters is how
 	 * close the peak came to the ceiling, and a reader should not have to
 	 * subtract. `isr` at or near its size is the silent-lockup fault.
 	 */
-	LOG_INF("stacks: isr=%u/%u syswq=%u/%u",
+	LOG_INF("stacks: isr=%u/%u syswq=%u/%u gatewq=%u/%u",
 		(unsigned int)(isr_size - isr_unused), (unsigned int)isr_size,
 		(unsigned int)(wq_size > wq_unused ? wq_size - wq_unused : 0u),
-		(unsigned int)wq_size);
+		(unsigned int)wq_size,
+		(unsigned int)(gwq_size > gwq_unused ? gwq_size - gwq_unused
+						     : 0u),
+		(unsigned int)gwq_size);
 }
 #else
 static inline void stacks_report(void) { }
@@ -1247,8 +1414,9 @@ static void gate_dump_fn(struct k_work *w)
 		wd.sw_wipe_rx, wd.sw_started, wd.sw_early, wd.sw_early_us_max,
 		wd.sw_last_delta_us, wd.sw_open_lead_us, wd.sw_open_lead_max,
 		wd.sw_open_late, hi_grant_len_us,
-		(hi_grant_len_us > END_MARGIN_US) ? (hi_grant_len_us - END_MARGIN_US)
-						  : 0u);
+		(hi_grant_len_us > hi_end_margin_us)
+			? (hi_grant_len_us - hi_end_margin_us)
+			: 0u);
 
 	/*
 	 * How every tracked window's grant actually ended, by call site, and how
@@ -1284,7 +1452,7 @@ static void gate_dump_fn(struct k_work *w)
 		"sent grant=%u dead=%u blk=%u supp=%u | "
 		"end=%u (norm=%u rel=%u idle=%u late=%u) | "
 		"bad over=%u inval=%u unk=%u inl=%u | "
-		"req=%u/+%u lead=%u/%u len=%u/%u el=%u skew=%u brun=%u sig=%u "
+		"req=%u/+%u lead=%u/%u len=%u/%u em=%u el=%u skew=%u brun=%u sig=%u "
 		"g=%d hw=%d p=%d rel=%d end=%d boot=%d anchor=%d owes=%d",
 		stats.acquires, stats.acq_in_grant, stats.acq_in_grant_denied,
 		stats.placed, stats.granted, stats.blocked, stats.cancelled,
@@ -1302,13 +1470,13 @@ static void gate_dump_fn(struct k_work *w)
 		last_req_len_us, last_req_dist_us,
 		last_req_lead_us,
 		(min_req_lead_us == UINT32_MAX) ? 0u : min_req_lead_us,
-		g.granted_len_us, g.want_len_us,
+		g.granted_len_us, g.want_len_us, g.end_margin_us,
 		elastic_initial_us, elastic_skew_us, blocked_run,
 		stats.last_signal, (int)g.granted, (int)g.hw_held, (int)g.pending,
 		(int)g.release_wanted, (int)g.ended, (int)g.bootstrapping,
 		(int)g.anchor_valid, (int)g.mpsl_owes);
 	if (session_open) {
-		k_work_schedule(&gate_dump, K_SECONDS(1));
+		k_work_schedule_for_queue(&gate_wq, &gate_dump, K_SECONDS(1));
 	}
 }
 #endif /* CONFIG_RADIANT_SWEEP_DEBUG */
@@ -1470,6 +1638,7 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		if (grant_high_prio) {
 			stats.hi_granted++;
 			hi_grant_len_us = g.granted_len_us;
+			hi_end_margin_us = g.end_margin_us;
 		}
 		/* Answered. The session is ours again as far as placing the
 		 * next request goes. See g.mpsl_owes. */
@@ -1511,11 +1680,14 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		}
 		/*
 		 * What we actually hold, which for an elastic request is a
-		 * fraction of what was asked for. END_MARGIN_US of it is spoken
-		 * for by the handing back, so it is not air the radio may use.
+		 * fraction of what was asked for. g.end_margin_us of it is
+		 * spoken for by the handing back, so it is not air the radio
+		 * may use. The margin is this grant's own (EXTEND for the
+		 * elastic class, FIXED for tracked/TX) - the same figure
+		 * gate_acquire() sized the request with.
 		 */
 		g.grant_end = g.anchor + (radiant_time_t)g.granted_len_us -
-			      (radiant_time_t)END_MARGIN_US;
+			      (radiant_time_t)g.end_margin_us;
 
 		/*
 		 * Programme the peripheral now, inside the grant - the call
@@ -1544,19 +1716,23 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 		 * interrupt never comes would hold the grant to its full
 		 * length and overstay (asserts).
 		 *
-		 * END_MARGIN_US (2 ms), not TAIL_MARGIN_US (250 us) - the
-		 * latter only covers what the RADIO needs and is not enough
-		 * time for the MPSL interrupt/dispatch/callback between the
-		 * compare firing and ACTION_END returning. Measured: at
-		 * len-250 the board asserted on the first or second timeslot;
-		 * with a margin well inside the grant it ran 1007 timeslots
-		 * clean. 2 ms is an order of magnitude above Nordic's own
-		 * sample's ~166 us SIGNAL_START-to-TIMER0, small against a
-		 * 96 ms grant.
+		 * g.end_margin_us, not TAIL_MARGIN_US (250 us) - the latter
+		 * only covers what the RADIO needs and is not enough time for
+		 * the MPSL interrupt/dispatch/callback between the compare
+		 * firing and ACTION_END returning. Measured: at len-250 the
+		 * board asserted on the first or second timeslot; with a margin
+		 * well inside the grant it ran 1007 timeslots clean.
+		 *
+		 * Which margin depends on the class and is decided once, at
+		 * gate_acquire(), because the REQUEST was already sized with
+		 * it: END_MARGIN_EXTEND_US (2 ms, room for MPSL's extension
+		 * minimum as well as the signal path) for the elastic class,
+		 * END_MARGIN_FIXED_US (750 us, signal path only) for a tracked
+		 * window or a transmit, which can never extend.
 		 */
 		nrf_timer_cc_set(MPSL_TIMER0, NRF_TIMER_CC_CHANNEL0,
-				 (g.granted_len_us > END_MARGIN_US)
-					 ? (g.granted_len_us - END_MARGIN_US)
+				 (g.granted_len_us > g.end_margin_us)
+					 ? (g.granted_len_us - g.end_margin_us)
 					 : (g.granted_len_us / 2u));
 #if defined(CONFIG_RADIANT_SWEEP_DEBUG)
 		nrf_timer_task_trigger(MPSL_TIMER0, NRF_TIMER_TASK_CAPTURE1);
@@ -1695,21 +1871,26 @@ static mpsl_timeslot_signal_return_param_t *on_signal(
 	case MPSL_TIMESLOT_SIGNAL_EXTEND_SUCCEEDED:
 		/*
 		 * Bug 8, the one that survived every other fix: this line
-		 * used TAIL_MARGIN_US instead of END_MARGIN_US, so an
+		 * used TAIL_MARGIN_US instead of the end margin, so an
 		 * extended grant's compare sat only 250 us before the new
-		 * end (vs END_MARGIN_US on the initial grant) - the two
+		 * end (vs the full margin on the initial grant) - the two
 		 * quantities the file elsewhere warns must not be conflated,
 		 * conflated here. Symptom was ext=1204/0 asserting at
 		 * placed=14: the extension chain was fine, the END that
 		 * followed it wasn't. Compare now advances by exactly one
-		 * step per extension, keeping END_MARGIN_US of runway ahead
+		 * step per extension, keeping g.end_margin_us of runway ahead
 		 * of it always.
+		 *
+		 * g.end_margin_us is necessarily END_MARGIN_EXTEND_US on this
+		 * path - only an extendable grant can be extended - and it is
+		 * read from state rather than named directly so this line
+		 * cannot drift from the one that armed the first compare.
 		 */
 		stats.extends_ok++;
 		g.granted_len_us += g.ext_step_us;
 		g.grant_end += (radiant_time_t)g.ext_step_us;
 		nrf_timer_cc_set(MPSL_TIMER0, 0,
-				 g.granted_len_us - END_MARGIN_US);
+				 g.granted_len_us - g.end_margin_us);
 		break;
 
 	case MPSL_TIMESLOT_SIGNAL_EXTEND_FAILED:
@@ -1982,6 +2163,14 @@ int gate_init(void)
 	}
 	memset(&g, 0, sizeof(g));
 	memset(&stats, 0, sizeof(stats));
+	/*
+	 * The memset above would leave the hand-back margin at zero, and a zero
+	 * margin means a compare placed at the very end of a grant - an overstay
+	 * by construction. Opened at the WIDER of the two: every grant commits
+	 * its own class's margin (commit_next_grant()), so this only covers the
+	 * window before the first commit, and covering it conservatively is free.
+	 */
+	g.end_margin_us = END_MARGIN_EXTEND_US;
 
 	if (IS_ENABLED(CONFIG_RADIANT_GATE_MPSL_NO_SESSION)) {
 		/* Bisection aid, off by default. See the Kconfig help. */
@@ -2001,6 +2190,29 @@ int gate_init(void)
 	 * measured as `gate: radiant_swi_register: -12` and a gate that then
 	 * refuses to initialise at all.
 	 */
+	/*
+	 * The queue before the trampoline, and the trampoline before the
+	 * session: the moment a session is open a grant can arrive, and the
+	 * trampoline's only job is to submit to this queue.
+	 *
+	 * ONCE PER BOOT and never stopped, for the same reason the subscription
+	 * above is - but enforced harder: k_work_queue_start() asserts on a
+	 * queue that already carries K_WORK_QUEUE_STARTED, so a suspend/resume
+	 * (gate_shutdown() then gate_init()) without this guard is a kernel
+	 * assert rather than a leak. Nothing needs stopping either; an idle
+	 * queue thread costs only its stack, and draining it at shutdown would
+	 * mean blocking here on work that calls back into the core.
+	 */
+	if (!gate_wq_started) {
+		static const struct k_work_queue_config gate_wq_cfg = {
+			.name = "radiant_gate",
+		};
+
+		k_work_queue_start(&gate_wq, gate_wq_stack,
+				   K_THREAD_STACK_SIZEOF(gate_wq_stack),
+				   CONFIG_RADIANT_GATE_WQ_PRIO, &gate_wq_cfg);
+		gate_wq_started = true;
+	}
 	if (!swi_registered) {
 		rc = (int32_t)radiant_swi_register(RADIANT_SWI_GATE_REQUEST |
 						   RADIANT_SWI_GATE_DENY |
@@ -2026,7 +2238,7 @@ int gate_init(void)
 	 * lands where it was asked for. */
 	bootstrap_anchor();
 #if defined(CONFIG_RADIANT_SWEEP_DEBUG)
-	k_work_schedule(&gate_dump, K_SECONDS(1));
+	k_work_schedule_for_queue(&gate_wq, &gate_dump, K_SECONDS(1));
 #endif
 	return RADIANT_RADIO_OK_RC;
 }
@@ -2080,6 +2292,25 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	radiant_time_t start;
 	radiant_time_t end;
 	uint64_t       len;
+	/*
+	 * THE CLASSIFICATION, DECIDED BEFORE THE LENGTH RATHER THAN AFTER IT.
+	 *
+	 * Only the gap-filling classes (scan chunk, energy-detect sweep) grow
+	 * themselves; a tracked window or a transmit has an end the core chose
+	 * and must not be held past it. That has always been the test - it used
+	 * to be written straight into next_grant.extendable fifty lines below,
+	 * after `len` was already computed. It cannot stay there: `len` is the
+	 * request MPSL is handed and it now depends on the class, since a
+	 * non-extendable grant is charged the shorter END_MARGIN_FIXED_US.
+	 *
+	 * Locals, and staged into next_grant at the old site, so that the early
+	 * refusals between here and there still leave next_grant untouched -
+	 * it describes the NEXT grant and is committed only when MPSL accepts.
+	 */
+	const bool     extendable = (op != GATE_OP_TX) &&
+				(prio == RADIANT_GATE_PRIO_NORMAL);
+	const uint32_t end_margin_us =
+		extendable ? END_MARGIN_EXTEND_US : END_MARGIN_FIXED_US;
 
 	if (!session_open) {
 		stats.den_no_session++;
@@ -2220,12 +2451,18 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	(void)elastic_skew_us;
 	/*
 	 * The reservation is longer than the air it covers, by exactly the
-	 * hand-back time: the timeslot must outlive `end` by END_MARGIN_US
-	 * since the compare returning ACTION_END is placed that far before
-	 * expiry. Without it the receiver would be taken away mid-window,
-	 * which reads at the core as a sensor gone quiet.
+	 * hand-back time: the timeslot must outlive `end` by this class's end
+	 * margin, since the compare returning ACTION_END is placed that far
+	 * before expiry. Without it the receiver would be taken away
+	 * mid-window, which reads at the core as a sensor gone quiet.
+	 *
+	 * This is the site the split is FOR. A tracked window or a transmit
+	 * pays END_MARGIN_FIXED_US here instead of END_MARGIN_EXTEND_US, so
+	 * every such reservation is 1250 us shorter than it used to be - air
+	 * that was reserved and never used, and that the other stack could not
+	 * have while it was reserved.
 	 */
-	len = (uint64_t)(end - start) + (uint64_t)END_MARGIN_US;
+	len = (uint64_t)(end - start) + (uint64_t)end_margin_us;
 	if (len < MPSL_TIMESLOT_LENGTH_MIN_US) {
 		len = MPSL_TIMESLOT_LENGTH_MIN_US;
 	}
@@ -2312,11 +2549,13 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	 * commit_next_grant(). */
 	next_grant.want_len_us = (uint32_t)len;
 	next_grant.grant_end = end;
-	/* Only the gap-filling classes (scan chunk, energy-detect sweep) grow
-	 * themselves - a tracked window/transmit has an end the core chose
-	 * and must not be held past it. */
-	next_grant.extendable = (op != GATE_OP_TX) &&
-				(prio == RADIANT_GATE_PRIO_NORMAL);
+	/* Decided at the top of the function, because `len` above depends on
+	 * it. See the declarations there. */
+	next_grant.extendable = extendable;
+	/* And the margin travels with the request that was built from it: every
+	 * compare for this grant is placed against g.end_margin_us, which is
+	 * this value once commit_next_grant() runs. */
+	next_grant.end_margin_us = end_margin_us;
 	next_grant.high_prio = (prio == RADIANT_GATE_PRIO_HIGH);
 
 	/*
@@ -2325,7 +2564,7 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	 * 94200 us, 1596 extensions, zero refusals, growing 1 ms at a time
 	 * from 10 ms.
 	 */
-	if (next_grant.extendable && len > (uint64_t)elastic_initial_us) {
+	if (extendable && len > (uint64_t)elastic_initial_us) {
 		len = elastic_initial_us;
 	}
 	next_grant.granted_len_us = (uint32_t)len;
@@ -2451,8 +2690,15 @@ void gate_release(void)
 	 * is survivable; absent is not.
 	 */
 	{
-		uint32_t cc_backstop = (g.granted_len_us > END_MARGIN_US)
-					       ? (g.granted_len_us - END_MARGIN_US)
+		/* The backstop compare is the one SIGNAL_START armed, so it is
+		 * placed against the SAME margin that armed it - this grant's
+		 * class margin, not a constant. Naming END_MARGIN_EXTEND_US
+		 * here would put the backstop 1250 us early on every tracked
+		 * window and every transmit: not an overstay, but it would end
+		 * those grants before the air they were reserved for, which at
+		 * the core reads as a sensor gone quiet. */
+		uint32_t cc_backstop = (g.granted_len_us > g.end_margin_us)
+					       ? (g.granted_len_us - g.end_margin_us)
 					       : (g.granted_len_us / 2u);
 		uint32_t want;
 

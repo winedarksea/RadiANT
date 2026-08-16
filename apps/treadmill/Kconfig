@@ -31,6 +31,33 @@ rsource "../common/Kconfig.antr_api"
 config MPSL_TIMESLOT_SESSION_COUNT
 	default 1 if TREADMILL_BLE
 
+# BT_PERIPHERAL_PREF_* redeclaration, carried over from apps/hrm_ble/Kconfig -
+# see that file's block on these same four symbols for the full reasoning
+# (Zephyr's own 24/40/0/42 defaults, the placement-before-Kconfig.zephyr
+# mechanism, and the timeout*4 > (1+latency)*interval_max derivation). Keyed
+# on this application's own symbols rather than hrm_ble's, and TIMEOUT is the
+# same 400 for the same bound: interval_max=800, latency=0 still requires
+# timeout>200, and 400 is 2x that floor.
+#
+# ONE DIFFERENCE FROM hrm_ble: there is no TREADMILL_SUPPRESS_ANT_WHEN_CONNECTED
+# to protect - "THERE IS NO SUPPRESSION RULE HERE" above, the contended case is
+# normal - so the 400 timeout is doing less work here than on the strap. It is
+# kept anyway, for the same reason the strap does not go larger: a shorter
+# timeout would let a normal signal hiccup flip connection state, and a longer
+# one buys nothing when there is no suppression state to protect from a stale
+# "connected" read.
+config BT_PERIPHERAL_PREF_MIN_INT
+	default TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS if TREADMILL_BLE
+
+config BT_PERIPHERAL_PREF_MAX_INT
+	default TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS if TREADMILL_BLE
+
+config BT_PERIPHERAL_PREF_LATENCY
+	default 0 if TREADMILL_BLE
+
+config BT_PERIPHERAL_PREF_TIMEOUT
+	default 400 if TREADMILL_BLE
+
 source "Kconfig.zephyr"
 
 menuconfig TREADMILL

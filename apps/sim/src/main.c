@@ -28,6 +28,17 @@
 #include <zephyr/random/random.h>
 #endif
 
+/*
+ * ant_interface.h, and it is load-bearing rather than tidy-up: ant_channel_open
+ * is a MACRO there (ant_channel_open_with_offset(ch, CHANNEL_START_OFFSET_NONE)),
+ * not a function. Without this include the dropout timer's call compiles as an
+ * implicit declaration and the image fails at link with `undefined reference to
+ * ant_channel_open` - while ant_channel_close() beside it links fine, because
+ * that one really is a function. The file previously relied on implicit
+ * declarations for the two ANT calls it made; that worked only by luck of both
+ * being real symbols.
+ */
+#include <ant_interface.h>
 #include <ant_key_manager.h>
 #include <ant_parameters.h>
 #include <ant_state_indicator.h>
@@ -143,6 +154,68 @@ static void sim_tx_power_set(uint8_t channel)
 		LOG_INF("tx power level %d", CONFIG_ANT_SIM_TX_POWER);
 	}
 }
+
+/*
+ * F1: deliberate, timer'd dropouts for tools/ant_verify.py's --expect-dropout
+ * SECONDS mode (T2). A power-cycle or a bench operator's stopwatch cannot
+ * give a receiver an exact duration to subtract; a k_work_delayable pair can.
+ * Compiled out entirely at the default ANT_SIM_DROPOUT_EVERY_S=0, which is
+ * also the zero-cost proof - every existing sitting never sees this code.
+ */
+#if CONFIG_ANT_SIM_DROPOUT_EVERY_S > 0
+static struct k_work_delayable dropout_close_work;
+static struct k_work_delayable dropout_reopen_work;
+static uint8_t dropout_channel;
+
+static void dropout_reopen_fn(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	int err = ant_channel_open(dropout_channel);
+
+	if (err) {
+		LOG_ERR("dropout: channel %u reopen failed (%d)",
+			dropout_channel, err);
+	} else {
+		LOG_INF("dropout: channel %u reopened", dropout_channel);
+	}
+	k_work_schedule(&dropout_close_work,
+			 K_SECONDS(CONFIG_ANT_SIM_DROPOUT_EVERY_S));
+}
+
+static void dropout_close_fn(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	int err = ant_channel_close(dropout_channel);
+
+	if (err) {
+		LOG_ERR("dropout: channel %u close failed (%d)",
+			dropout_channel, err);
+	} else {
+		LOG_INF("dropout: channel %u closed for %u s",
+			dropout_channel, CONFIG_ANT_SIM_DROPOUT_S);
+	}
+	k_work_schedule(&dropout_reopen_work,
+			 K_SECONDS(CONFIG_ANT_SIM_DROPOUT_S));
+}
+
+static void dropout_init(uint8_t channel)
+{
+	dropout_channel = channel;
+	k_work_init_delayable(&dropout_close_work, dropout_close_fn);
+	k_work_init_delayable(&dropout_reopen_work, dropout_reopen_fn);
+	k_work_schedule(&dropout_close_work,
+			 K_SECONDS(CONFIG_ANT_SIM_DROPOUT_EVERY_S));
+	LOG_INF("dropout: channel %u will close for %u s every %u s", channel,
+		CONFIG_ANT_SIM_DROPOUT_S, CONFIG_ANT_SIM_DROPOUT_EVERY_S);
+}
+#else
+static void dropout_init(uint8_t channel)
+{
+	ARG_UNUSED(channel);
+}
+#endif
 
 static void signals_init(void)
 {
@@ -266,6 +339,7 @@ static int profile_setup(void)
 		"trans type %d, %d rpm crank, %d rpm wheel",
 		sim_devnum, CONFIG_ANT_SIM_TRANS_TYPE,
 		target_rpm, CONFIG_ANT_SIM_WHEEL_RPM);
+	dropout_init(bsc.channel_number);
 	return 0;
 }
 
@@ -443,6 +517,7 @@ static int profile_setup(void)
 		"torque mode %d, %d W at %d rpm",
 		sim_devnum, CONFIG_ANT_SIM_TRANS_TYPE,
 		(int)SIM_TORQUE_USE, target_watts, target_rpm);
+	dropout_init(bpwr.channel_number);
 	return 0;
 }
 

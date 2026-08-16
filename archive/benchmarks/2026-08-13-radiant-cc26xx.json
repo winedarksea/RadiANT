@@ -1,237 +1,210 @@
-﻿{
-    "schema_version":  1,
-    "meta":  {
-                 "recorded":  "2026-08-13",
-                 "operator":  "agent, on Colin\u0027s bench",
-                 "backend":  "radiant-cc26xx",
-                 "git_describe":  "uncommitted working tree (TI port, P0-P3)",
-                 "board":  "cc26x2r1_launchxl/cc2652r",
-                 "serial_suffix":  null,
-                 "sdk_ant_revision":  null,
-                 "ncs_version":  "v3.4.0",
-                 "toolchain_bundle":  "dcbdc366a1",
-                 "extra_conf":  null
-             },
-    "rig":  {
-                "transmitter":  {
-                                    "kind":  "ant_sim_host",
-                                    "board":  "RadiANT ANT+ compatible USB stick (nRF52840), serial 3D55F77818BE772A",
-                                    "profile":  "power",
-                                    "seed":  1,
-                                    "tx_power_level":  null,
-                                    "description":  "tools/ant_sim.py drove the stick as an ANT+ power master: device 14871, type 0x0B, transmission type 5, 8182 ticks (4.0049 Hz), 120 W, 80 rpm, RF 57. NOT sim/ on an nRF54L15 DK, which is what archive/benchmarks/2026-08-09-sdk-ant.json used - see notes.transmitter_differs."
-                                },
-                "receiver":  {
-                                 "board":  "cc26x2r1_launchxl/cc2652r",
-                                 "antenna":  "onboard 2.4 GHz PCB antenna, board flat on the desk"
-                             },
-                "link":  {
-                             "kind":  "fixed_open_air",
-                             "attenuator_model":  null,
-                             "attenuation_db":  null,
-                             "distance_m":  null,
-                             "rf_channel":  57,
-                             "interference":  "Mean RSSI -48.1 dBm (min -53, max -47) against a tracking threshold near -90, so about 40 dB of margin. A short bench path, not a sensitivity measurement."
-                         }
+{
+  "schema_version": 1,
+  "meta": {
+    "recorded": "2026-08-13",
+    "operator": "agent, on Colin's bench",
+    "backend": "core",
+    "git_describe": "uncommitted working tree (TI port, P0-P3)",
+    "board": "cc26x2r1_launchxl/cc2652r",
+    "sdk_ant_revision": null,
+    "ncs_version": "v3.4.0",
+    "toolchain_bundle": "dcbdc366a1"
+  },
+  "rig": {
+    "transmitter": {
+      "kind": "ant_sim_py",
+      "board": "RadiANT ANT+ compatible USB stick (nRF52840), serial 3D55F77818BE772A",
+      "profile": "power",
+      "seed": 1,
+      "tx_power_level": null,
+      "description": "tools/ant_sim.py drove the stick as an ANT+ power master: device 14871, type 0x0B, transmission type 5, 8182 ticks (4.0049 Hz), 120 W, 80 rpm, RF 57. NOT sim/ on an nRF54L15 DK, which is what archive/benchmarks/2026-08-09-sdk-ant.json used - see notes.transmitter_differs."
+    },
+    "receiver": {
+      "board": "cc26x2r1_launchxl/cc2652r",
+      "antenna": "onboard 2.4 GHz PCB antenna, board flat on the desk"
+    },
+    "link": {
+      "kind": "fixed_open_air",
+      "attenuator_model": null,
+      "attenuation_db": null,
+      "distance_m": null,
+      "rf_channel": 57,
+      "interference": "Mean RSSI -48.1 dBm (min -53, max -47) against a tracking threshold near -90, so about 40 dB of margin. A short bench path, not a sensitivity measurement."
+    }
+  },
+  "radio_runs": [
+    {
+      "profile": "power",
+      "seconds": 300,
+      "channels": 1,
+      "verify": {
+        "channels": [
+          {
+            "profile": "power",
+            "device_type": 11,
+            "period_ticks": 8182,
+            "packets": 1154,
+            "elapsed_s": 299.625,
+            "expected_packets": 1200.9648007822047,
+            "loss_pct": 3.9105892821851174,
+            "jitter": {
+              "n": 1153,
+              "mean_s": 0.25986556808326106,
+              "stdev_s": 0.05154406970222338,
+              "max_s": 0.75,
+              "period_s": 0.24969482421875,
+              "radio_n": 1153,
+              "offgrid_host_s": 0.0030697105510141902,
+              "offgrid_radio_s": 9.353050765067431e-06
             },
-    "radio_runs":  [
-                       {
-                           "profile":  "power",
-                           "seconds":  300,
-                           "channels":  1,
-                           "verify":  {
-                                          "channels":  [
-                                                           {
-                                                               "profile":  "power",
-                                                               "device_type":  11,
-                                                               "period_ticks":  8182,
-                                                               "packets":  1154,
-                                                               "elapsed_s":  299.625,
-                                                               "expected_packets":  1200.9648007822047,
-                                                               "loss_pct":  3.9105892821851174,
-                                                               "jitter":  {
-                                                                              "n":  1153,
-                                                                              "mean_s":  0.25986556808326106,
-                                                                              "stdev_s":  0.05154406970222338,
-                                                                              "max_s":  0.75,
-                                                                              "period_s":  0.24969482421875,
-                                                                              "radio_n":  1153,
-                                                                              "offgrid_host_s":  0.0030697105510141902,
-                                                                              "offgrid_radio_s":  9.3530507650674309E-06
-                                                                          },
-                                                               "signal":  {
-                                                                              "n":  1154,
-                                                                              "mean_dbm":  -48.13258232235702,
-                                                                              "min_dbm":  -53,
-                                                                              "max_dbm":  -47
-                                                                          },
-                                                               "pages":  {
-                                                                             "0x10":  1136,
-                                                                             "0x50":  10,
-                                                                             "0x51":  8
-                                                                         },
-                                                               "common_page_gaps":  {
-                                                                                        "count":  17,
-                                                                                        "max":  117
-                                                                                    },
-                                                               "power":  {
-                                                                             "n":  1136,
-                                                                             "mean":  119.9894366197183,
-                                                                             "min":  117.0,
-                                                                             "max":  123.0
-                                                                         },
-                                                               "cadence":  {
-                                                                               "n":  1136,
-                                                                               "mean":  80.00176056338029,
-                                                                               "min":  77.0,
-                                                                               "max":  83.0
-                                                                           },
-                                                               "speed_mps":  null,
-                                                               "heart_rate_bpm":  null,
-                                                               "attestation":  {
-                                                                                   "verdict":  "clear"
-                                                                               },
-                                                               "accumulator_wraps":  {
-                                                                                         "event_count":  4,
-                                                                                         "acc_power":  2
-                                                                                     },
-                                                               "telemetry":  null,
-                                                               "event_advances":  1126,
-                                                               "event_comparisons":  1135,
-                                                               "exact_loss":  null,
-                                                               "violations":  {
-                                                                                  "count":  0,
-                                                                                  "first":  [
-
-                                                                                            ]
-                                                                              },
-                                                               "checks":  [
-                                                                              {
-                                                                                  "name":  "packets",
-                                                                                  "pass":  true,
-                                                                                  "detail":  "1154 received, 1201 expected over 299.6 s"
-                                                                              },
-                                                                              {
-                                                                                  "name":  "loss",
-                                                                                  "pass":  false,
-                                                                                  "detail":  "3.91 % (limit 1.50 %, one packet = 0.08 %)"
-                                                                              },
-                                                                              {
-                                                                                  "name":  "jitter",
-                                                                                  "pass":  true,
-                                                                                  "detail":  "stddev 51.5 ms, max 750.0 ms (limit 124.8 ms, period 249.7 ms)"
-                                                                              },
-                                                                              {
-                                                                                  "name":  "accumulator continuity",
-                                                                                  "pass":  true,
-                                                                                  "detail":  "0 violation(s)"
-                                                                              },
-                                                                              {
-                                                                                  "name":  "sensor liveness",
-                                                                                  "pass":  true,
-                                                                                  "detail":  "the event counter advanced on 1126 of 1135 packet pairs"
-                                                                              },
-                                                                              {
-                                                                                  "name":  "common pages",
-                                                                                  "pass":  true,
-                                                                                  "detail":  "80 x10, 81 x8, worst gap 117 (limit 121)"
-                                                                              }
-                                                                          ],
-                                                               "pass":  false
-                                                           }
-                                                       ],
-                                          "events":  {
-                                                         "EVENT_RX_FAIL":  47
-                                                     },
-                                          "identities":  {
-                                                             "0":  {
-                                                                       "device_number":  14871,
-                                                                       "device_type":  11
-                                                                   }
-                                                         },
-                                          "accounting":  {
-                                                             "missing":  47,
-                                                             "radio_fails":  47,
-                                                             "unaccounted":  0,
-                                                             "allowed_unaccounted":  12,
-                                                             "verdict":  "all of it reported by the radio as RX_FAIL, so it happened on the air",
-                                                             "pass":  true
-                                                         },
-                                          "pass":  false
-                                      },
-                           "capture":  null,
-                           "derived":  {
-                                           "loss_pct":  3.9105892821851174,
-                                           "loss_exact_pct":  null,
-                                           "unexplained_loss":  null,
-                                           "accumulator_violations":  0,
-                                           "timing_offgrid_host_ms":  3.0697105510141904,
-                                           "timing_offgrid_radio_ms":  0.009353050765067431,
-                                           "time_to_first_packet_s":  null,
-                                           "reacquire_s":  null,
-                                           "rssi_dbm_mean":  -48.13258232235702
-                                       }
-                       }
-                   ],
-    "usb_runs":  [
-                     {
-                         "label":  "cc26xx-uart-57600",
-                         "bench":  {
-                                       "label":  "cc26xx",
-                                       "count":  300,
-                                       "depth":  8,
-                                       "latency_ms":  {
-                                                          "n":  300,
-                                                          "timeouts":  0,
-                                                          "mean":  6.0996809995170524,
-                                                          "p50":  6.628100003581494,
-                                                          "p90":  6.825200005550869,
-                                                          "p99":  7.231299998238683,
-                                                          "max":  10.622799993143417
-                                                      },
-                                       "throughput":  {
-                                                          "delivered":  300,
-                                                          "timeouts":  0,
-                                                          "elapsed_s":  0.680268399999477,
-                                                          "msgs_per_s":  441.00240434544753
-                                                      }
-                                   },
-                         "derived":  {
-                                         "latency_p50_ms":  6.628100003581494,
-                                         "latency_p90_ms":  6.825200005550869,
-                                         "latency_p99_ms":  7.231299998238683,
-                                         "msgs_per_s":  441.00240434544753,
-                                         "timeouts":  0
-                                     }
-                     }
-                 ],
-    "conformance":  {
-                        "tool":  "ant_conformance.py",
-                        "compared_against":  "archive/captures/serial/conformance-sdk-ant.antser",
-                        "antser_path":  "archive/captures/serial/conformance-cc26xx.antser",
-                        "this_run_antser_sha256":  "a82ca4fb8ca8cd7c78e573ca131d4081fedb6a11874cd3b57b4954ed1b01cdd6",
-                        "cases":  284,
-                        "records":  1273,
-                        "differing_records":  171,
-                        "differing_cases":  73,
-                        "pass":  false,
-                        "gate":  "[gates.conformance] require_byte_identical=true, allowed_differing_cases=[] - NOT widened; see notes.conformance below",
-                        "cross_checked_against_nrf":  {
-                                                          "nrf_antser_path":  "archive/captures/serial/conformance-nrf-radiant.antser",
-                                                          "nrf_antser_sha256":  "a82ca4fb8ca8cd7c78e573ca131d4081fedb6a11874cd3b57b4954ed1b01cdd6",
-                                                          "result":  "BYTE-IDENTICAL to the cc26xx transcript (same sha256). Confirms the 73 differing cases are radiant_core-vs-sdk-ant, not cc26xx-specific."
-                                                      }
-                    },
-    "notes":  {
-                  "what_this_is":  "The B leg of the TI port\u0027s A/B, recorded on its own. It is a record of what the cc26xx backend measured, not a comparison.",
-                  "no_a_leg":  "As recorded at the time this run was first drafted. SUPERSEDED LATER IN THE SAME SITTING: the nRF54L15 DK\u0027s J-Link recovered (see notes.probe) and was used successfully both for the conformance cross-check above and for the Phase A power-table ladder in notes.phase_a_ladder below.",
-                  "probe":  "The nRF54L15 DK\u0027s onboard J-Link (SN 001057737173) went into DFU mode earlier in this project\u0027s history (bare JLink.exe -CommanderScript without \u0027exec DisableAutoUpdateFW\u0027 - see [[jlink-manual-commands-trap]]) and was recovered by then. THIS SITTING\u0027S OWN NEW FINDING: the TI LaunchXL\u0027s XDS110 backchannel (COM14) wedges after every dslite flash and needs a physical USB replug before it answers - see the \u0027ti-launchxl-flash-wedges-backchannel\u0027 memory note. Not a J-Link issue and not this board, but the same class of \u0027looks exactly like a firmware hang\u0027 bench trap.",
-                  "transmitter_differs":  "The 2026-08-09 sdk-ant baseline was transmitted by sim/ on an nRF54L15 DK at RSSI -21 dBm. This run was transmitted by tools/ant_sim.py driving a USB stick at RSSI -48 dBm. Those are different transmitters, different sittings and 27 dB apart, so the two files must NOT be diffed as an A/B. They are recorded side by side only so a future sitting knows what to reproduce.",
-                  "conformance":  "RUN, and it FAILS byte-identical against sdk-ant: 73 of 284 cases differ from archive/captures/serial/conformance-sdk-ant.antser (171 of 1273 records). Per tools/ab_gates.toml\u0027s own instruction, the allowlist was NOT widened to make this pass. Every differing case is an error-code or reply-content mismatch, not a missing/extra reply or a malformed frame - e.g. an out-of-range channel index (0xFF) returns INVALID_MESSAGE here against sdk-ant\u0027s INVALID_PARAMETER_PROVIDED, and several \u0027valid\u0027-labelled cases that assign a channel then immediately exercise it (open, broadcast, acknowledged data, burst, id-list, CRC mode) get CHANNEL_ID_NOT_SET/CHANNEL_NOT_OPENED here where sdk-ant\u0027s case sequence leaves state that answers RESPONSE_NO_ERROR. CONFIRMED, not just suspected: the same 284-case suite was also run this sitting against a plain radiant_core/nrf build (nRF54L15 DK, build\\rf8_nrf54l15, flashed via `nrfutil device program` after `west flash` hung and was abandoned) and its transcript is BYTE-IDENTICAL to the cc26xx one (same sha256, `--compare` reports PASS). So all 73 differing cases are radiant_core-vs-sdk-ant behaviour - shared by every radiant_core backend, not introduced by this port - and the HAL boundary this port exists to test is not implicated. This is still a real gap worth its own follow-up (radiant_channel.c/radiant_api.c\u0027s parameter validation and channel-state error codes diverge from sdk-ant\u0027s), but it is not a cc26xx finding and does not block this port.",
-                  "phase_a_ladder":  "tools/ant_sens.py --tx-port COM14 --tx-baud 57600 --rx-port COM8 --rx-baud 115200, LaunchXL transmitting into the nRF54L15 DK, run twice. BOTH the RSSI-slope check and the 5%-loss-knee check FAIL, but neither failure indicts the power table: (1) RSSI stayed flat within ~1 dB across every acknowledged rung (-66.1 to -67.6 dBm) regardless of commanded power - this is the SAME nRF54L15 receiver whose RSSI report ADR 0014 already found suspiciously constant (exactly -59.0 dBm on all 14 fine rungs in that sitting), now reproduced on a second backend\u0027s transmitter, so it reads as the already-documented instrument limitation rather than a new defect; (2) loss stayed near 0% at every rung (58-89 packets, 0-3.3% loss) because this is a strong near-field link ~40 dB above sensitivity at every commanded power the ladder can reach - the tool\u0027s own message says so (\u0027move the boards apart and run it again\u0027), which was not possible this sitting. The loss-based fallback ant_sens.py\u0027s own header proposes cannot discriminate the dial either, for the same reason. UNVERIFIED, NOT DISPROVEN: whether apply_power()/RF_setTxPower() is actually moving the RF core\u0027s register. The LOG_INF instrumentation added alongside the table (radiant_radio_cc26xx.c, at the RF_setTxPower() call site) would settle this in the boundary-instrumentation style ADR 0014 itself argues for, but it is on uart1 (the log console), which has no adapter clipped to it on this bench and was not observable this sitting. SEPARATELY, ~40% of MESG_CHANNEL_RADIO_TX_POWER commands went unacknowledged across both runs (different specific levels failed each run, not the same ones), which reads as a race in tools/ant_sens.py\u0027s threaded master pump competing with command()\u0027s synchronous reply wait on the same serial reader (the same class of bug ADR 0014 already found and fixed once in MasterDriver\u0027s threading) rather than a firmware rejection - every level that WAS acknowledged transmitted and was received cleanly.",
-                  "ack_data_attempt":  "Multiple rounds this sitting, converging on a real (if incomplete) finding rather than a tooling artifact:\n\n1. First round (sim/ on the Feather, freshly flashed): tools/ant_session.py\u0027s 8-channel wildcard session locked its \u0027power\u0027 channel onto a real ambient sensor in the room (#52233) instead of sim/\u0027s device (#14871), because that channel searches by device TYPE only (wildcard device number) and the ambient sensor won the race. A background investigation (see notes below) proved sim/ WAS transmitting correctly the whole time (heard at -31 dBm, correct power/cadence, via a device-number-pinned tools/ant_verify.py channel) - the miss was tools/ant_session.py\u0027s wildcard search, not the firmware.\n2. Fix landed: tools/ant_session.py gained --pin-device N, which pins the \u0027power\u0027 channel\u0027s device number instead of wildcard-searching device type 11 alone - exactly for this case (a real sensor of the same type already in the room). Confirmed working: a re-flashed Feather subsequently went quiet again (likely disturbed by the physical handling the double-tap-RESET reflash requires - antenna or placement, never diagnosed further, needs hands on the board), so the live ack test was instead run against the already-connected RadiANT USB stick (nRF52840, VID_0FCF:PID_1009, serial ...772A) driven as an ANT+ master via tools/ant_sim.py --device-number 14871 - and --pin-device 14871 correctly locked onto it (\u0027found: #14871 - power meter\u0027).\n3. THE REAL RESULT: 0/100 acknowledged, all EVENT_TRANSFER_TX_FAILED - but IDENTICAL on both backends (TI cc26xx AND nRF radiant_core) against the same master. Two backends failing identically against the same responder is the signature of a responder/tooling limitation, not a per-backend radio bug: tools/ant_sim.py is a HOST-driven simulator (Python sending ANT serial commands over USB to the stick\u0027s own firmware, not a full on-device ANT+ profile implementation), and does not appear to actually RF-acknowledge a slave\u0027s acknowledged-data transmission - which is exactly why the plan called for sim/ (a real on-device profile with its own EVENT_RX handling) as the responder rather than ant_sim.py. This is consistent with, not contradicted by, sim/\u0027s own confirmed-correct broadcast behaviour.\n\nNET: ack_data remains unmeasured for this port, but the reason is now understood and narrowed to \u0027need sim/ audible and stable, not ant_sim.py\u0027 rather than an open question about either radiant_core backend. tools/ant_session.py\u0027s --pin-device and --attempts modes are both confirmed working correctly against real hardware.",
-                  "phase_c_rx_end_slop_sweep":  "RX_END_SLOP_US swept at 250/500/750 (the plan\u0027s own instruction), each built via the new CONFIG_RADIANT_CORE_CC26XX_RX_END_SLOP_US Kconfig override, flashed, and measured for 80 s against the SAME paced transmitter (the RadiANT USB stick, tools/ant_sim.py --serial 772A --device-number 14871, driven fresh for each rung) - a denominator the receiver does not choose, per ADR 0014\u0027s own measurement discipline. Single-pass per rung (not --repeat 2), so treat the differences as indicative rather than final:\n\n  250 us: 313/321 packets, 2.48% loss, mean RSSI -44.6 dBm\n  500 us: 315/321 packets, 1.85% loss, mean RSSI -40.0 dBm  (current default)\n  750 us: 311/320 packets, 2.82% loss, mean RSSI -45.4 dBm\n\n500 us - the existing default - measured BEST of the three, not merely adequate. The original comment in radiant_radio_cc26xx.c said \u0027500 and 2000 measure the same\u0027 from an earlier, smaller dataset; this sweep adds a real three-point comparison against a paced transmitter and the conclusion is the same: keep 500. Mean RSSI varied 5 dB across the three runs (likely bench handling between flashes/replugs, not the slop setting - it has no mechanism to affect transmit-side RSSI), so a repeat run holding position fixed would sharpen this, but the direction (500 as good or better than both neighbours) is not in question from one pass.",
-                  "phase_c_rxbw_agc_resweep":  "RUN 2026-08-14, and the answer is that there is nothing here to win. Five rungs plus a repeatability control, each built through the CONFIG_RADIANT_CORE_CC26XX_RX_BW_CODE / ..._AGC_REF Kconfig overrides (no source edit per rung), flashed, and measured for 80 s against the same paced transmitter as the RX_END_SLOP_US sweep (tools/ant_sim.py on the RadiANT USB stick, --serial 772A --device-number 14871, restarted fresh for each rung):\n\n  rxBw 98 / AGC 0x34 (the defaults):  1.57 %  (315/320)   and, repeated at the end of the sweep,  2.19 %  (314/321)\n  AGC 0x3A:                           1.56 %  (316/321)\n  AGC 0x40:                           1.25 %  (317/321)\n  rxBw 97:                            3.10 %  (311/321)\n  AGC 0x2E:                           4.67 %  (305/320)\n  rxBw 99:                            5.59 %  (303/321)\n\nTHE CONTROL IS THE POINT. The two unchanged-rig baseline runs differ by 0.62 pp (two packets), which is this instrument\u0027s run-to-run noise at 80 s and ~320 packets. So AGC 0x3A and 0x40 are TIES with the default, not improvements - reading 1.25 % as a win over 1.57 % would be reading one packet of noise as a result, and the earlier RX_END_SLOP_US sweep (single-pass, no control) is worth re-reading with that number in mind. The three that moved - rxBw 97, rxBw 99 and AGC 0x2E - are two to nine times the noise and are genuinely worse.\n\nDEFAULTS UNCHANGED as a result: RX_BW_CODE stays 98, AGC_REF stays 0x0034. Both neighbours on the rxBw axis are worse, so 98 is a local optimum rather than an untested guess, which is the thing this sweep was actually for. The AGC axis is flat from 0x34 upward and falls off below it.\n\nWHAT THIS CLOSES AND WHAT IT DOES NOT. It closes \"the ~1.85 % loss might be an rxBw or AGC mis-set\" - it is not; the parameters are at the top of their curve and the remaining loss has another cause. It does not identify that cause. Mean RSSI held at -42.1 to -43.0 dBm across all six runs (against 5 dB of drift in the earlier sweep, when the board was being replugged by hand between rungs), so the rig was stable this time and the numbers are comparable to each other in a way that sweep\u0027s were not - the difference is scripts/flash_ti.ps1\u0027s backchannel reset, which made the whole sweep unattended and stopped anyone touching the bench between rungs.",
-                  "gaps":  "sensitivity (needs an attenuator and a second receiver), acquisition (the sweep is 128 sets on this backend against 32 on the nRF - the regression is expected by construction and is to be recorded, not tuned), ack_data (tooling now proven correct against real hardware; still needs sim/ reliably on the air - see ack_data_attempt), coexistence (arms 1-4 all build and arm 4 has a real second RF client, but no 802.15.4 peer exists on this bench, so the neighbour\u0027s own survival across a preemption - the whole point of the forked driver - has never been observed; see docs/decisions/0015). The rxBw/AGC re-sweep is no longer a gap: it ran, and it found the defaults already optimal - see phase_c_rxbw_agc_resweep."
+            "signal": {
+              "n": 1154,
+              "mean_dbm": -48.13258232235702,
+              "min_dbm": -53,
+              "max_dbm": -47
+            },
+            "pages": {
+              "0x10": 1136,
+              "0x50": 10,
+              "0x51": 8
+            },
+            "common_page_gaps": {
+              "count": 17,
+              "max": 117
+            },
+            "power": {
+              "n": 1136,
+              "mean": 119.9894366197183,
+              "min": 117.0,
+              "max": 123.0
+            },
+            "cadence": {
+              "n": 1136,
+              "mean": 80.00176056338029,
+              "min": 77.0,
+              "max": 83.0
+            },
+            "speed_mps": null,
+            "heart_rate_bpm": null,
+            "attestation": {
+              "verdict": "clear"
+            },
+            "accumulator_wraps": {
+              "event_count": 4,
+              "acc_power": 2
+            },
+            "telemetry": null,
+            "event_advances": 1126,
+            "event_comparisons": 1135,
+            "exact_loss": null,
+            "violations": {
+              "count": 0,
+              "first": []
+            },
+            "checks": [
+              {
+                "name": "packets",
+                "pass": true,
+                "detail": "1154 received, 1201 expected over 299.6 s"
+              },
+              {
+                "name": "loss",
+                "pass": false,
+                "detail": "3.91 % (limit 1.50 %, one packet = 0.08 %)"
+              },
+              {
+                "name": "jitter",
+                "pass": true,
+                "detail": "stddev 51.5 ms, max 750.0 ms (limit 124.8 ms, period 249.7 ms)"
+              },
+              {
+                "name": "accumulator continuity",
+                "pass": true,
+                "detail": "0 violation(s)"
+              },
+              {
+                "name": "sensor liveness",
+                "pass": true,
+                "detail": "the event counter advanced on 1126 of 1135 packet pairs"
+              },
+              {
+                "name": "common pages",
+                "pass": true,
+                "detail": "80 x10, 81 x8, worst gap 117 (limit 121)"
               }
+            ],
+            "pass": false
+          }
+        ],
+        "events": {
+          "EVENT_RX_FAIL": 47
+        },
+        "identities": {
+          "0": {
+            "device_number": 14871,
+            "device_type": 11
+          }
+        },
+        "accounting": {
+          "missing": 47,
+          "radio_fails": 47,
+          "unaccounted": 0,
+          "allowed_unaccounted": 12,
+          "verdict": "all of it reported by the radio as RX_FAIL, so it happened on the air",
+          "pass": true
+        },
+        "pass": false
+      },
+      "capture": null,
+      "derived": {
+        "loss_pct": 3.9105892821851174,
+        "loss_exact_pct": null,
+        "unexplained_loss": 0,
+        "accumulator_violations": 0,
+        "timing_offgrid_host_ms": 3.0697105510141904,
+        "timing_offgrid_radio_ms": 0.009353050765067431,
+        "time_to_first_packet_s": null,
+        "reacquire_s": null,
+        "rssi_dbm_mean": -48.13258232235702
+      }
+    }
+  ],
+  "usb_runs": [
+    {
+      "label": "cc26xx-uart-57600",
+      "bench": {
+        "label": "cc26xx",
+        "count": 300,
+        "depth": 8,
+        "latency_ms": {
+          "n": 300,
+          "timeouts": 0,
+          "mean": 6.0996809995170524,
+          "p50": 6.628100003581494,
+          "p90": 6.825200005550869,
+          "p99": 7.231299998238683,
+          "max": 10.622799993143417
+        },
+        "throughput": {
+          "delivered": 300,
+          "timeouts": 0,
+          "elapsed_s": 0.680268399999477,
+          "msgs_per_s": 441.00240434544753
+        }
+      },
+      "derived": {
+        "latency_p50_ms": 6.628100003581494,
+        "latency_p90_ms": 6.825200005550869,
+        "latency_p99_ms": 7.231299998238683,
+        "msgs_per_s": 441.00240434544753,
+        "timeouts": 0
+      }
+    }
+  ],
+  "conformance": {
+    "antser_path": "archive/captures/serial/conformance-cc26xx.antser",
+    "sha256": "a82ca4fb8ca8cd7c78e573ca131d4081fedb6a11874cd3b57b4954ed1b01cdd6",
+    "messages_exercised": 1273
+  },
+  "notes": "[what_this_is]\nThe B leg of the TI port's A/B, recorded on its own. It is a record of what the cc26xx backend measured, not a comparison.\n\n[no_a_leg]\nAs recorded at the time this run was first drafted. SUPERSEDED LATER IN THE SAME SITTING: the nRF54L15 DK's J-Link recovered (see notes.probe) and was used successfully both for the conformance cross-check above and for the Phase A power-table ladder in notes.phase_a_ladder below.\n\n[probe]\nThe nRF54L15 DK's onboard J-Link (SN 001057737173) went into DFU mode earlier in this project's history (bare JLink.exe -CommanderScript without 'exec DisableAutoUpdateFW' - see [[jlink-manual-commands-trap]]) and was recovered by then. THIS SITTING'S OWN NEW FINDING: the TI LaunchXL's XDS110 backchannel (COM14) wedges after every dslite flash and needs a physical USB replug before it answers - see the 'ti-launchxl-flash-wedges-backchannel' memory note. Not a J-Link issue and not this board, but the same class of 'looks exactly like a firmware hang' bench trap.\n\n[transmitter_differs]\nThe 2026-08-09 sdk-ant baseline was transmitted by sim/ on an nRF54L15 DK at RSSI -21 dBm. This run was transmitted by tools/ant_sim.py driving a USB stick at RSSI -48 dBm. Those are different transmitters, different sittings and 27 dB apart, so the two files must NOT be diffed as an A/B. They are recorded side by side only so a future sitting knows what to reproduce.\n\n[conformance]\nRUN, and it FAILS byte-identical against sdk-ant: 73 of 284 cases differ from archive/captures/serial/conformance-sdk-ant.antser (171 of 1273 records). Per tools/ab_gates.toml's own instruction, the allowlist was NOT widened to make this pass. Every differing case is an error-code or reply-content mismatch, not a missing/extra reply or a malformed frame - e.g. an out-of-range channel index (0xFF) returns INVALID_MESSAGE here against sdk-ant's INVALID_PARAMETER_PROVIDED, and several 'valid'-labelled cases that assign a channel then immediately exercise it (open, broadcast, acknowledged data, burst, id-list, CRC mode) get CHANNEL_ID_NOT_SET/CHANNEL_NOT_OPENED here where sdk-ant's case sequence leaves state that answers RESPONSE_NO_ERROR. CONFIRMED, not just suspected: the same 284-case suite was also run this sitting against a plain radiant_core/nrf build (nRF54L15 DK, build\\rf8_nrf54l15, flashed via `nrfutil device program` after `west flash` hung and was abandoned) and its transcript is BYTE-IDENTICAL to the cc26xx one (same sha256, `--compare` reports PASS). So all 73 differing cases are radiant_core-vs-sdk-ant behaviour - shared by every radiant_core backend, not introduced by this port - and the HAL boundary this port exists to test is not implicated. This is still a real gap worth its own follow-up (radiant_channel.c/radiant_api.c's parameter validation and channel-state error codes diverge from sdk-ant's), but it is not a cc26xx finding and does not block this port.\n\n[phase_a_ladder]\ntools/ant_sens.py --tx-port COM14 --tx-baud 57600 --rx-port COM8 --rx-baud 115200, LaunchXL transmitting into the nRF54L15 DK, run twice. BOTH the RSSI-slope check and the 5%-loss-knee check FAIL, but neither failure indicts the power table: (1) RSSI stayed flat within ~1 dB across every acknowledged rung (-66.1 to -67.6 dBm) regardless of commanded power - this is the SAME nRF54L15 receiver whose RSSI report ADR 0014 already found suspiciously constant (exactly -59.0 dBm on all 14 fine rungs in that sitting), now reproduced on a second backend's transmitter, so it reads as the already-documented instrument limitation rather than a new defect; (2) loss stayed near 0% at every rung (58-89 packets, 0-3.3% loss) because this is a strong near-field link ~40 dB above sensitivity at every commanded power the ladder can reach - the tool's own message says so ('move the boards apart and run it again'), which was not possible this sitting. The loss-based fallback ant_sens.py's own header proposes cannot discriminate the dial either, for the same reason. UNVERIFIED, NOT DISPROVEN: whether apply_power()/RF_setTxPower() is actually moving the RF core's register. The LOG_INF instrumentation added alongside the table (radiant_radio_cc26xx.c, at the RF_setTxPower() call site) would settle this in the boundary-instrumentation style ADR 0014 itself argues for, but it is on uart1 (the log console), which has no adapter clipped to it on this bench and was not observable this sitting. SEPARATELY, ~40% of MESG_CHANNEL_RADIO_TX_POWER commands went unacknowledged across both runs (different specific levels failed each run, not the same ones), which reads as a race in tools/ant_sens.py's threaded master pump competing with command()'s synchronous reply wait on the same serial reader (the same class of bug ADR 0014 already found and fixed once in MasterDriver's threading) rather than a firmware rejection - every level that WAS acknowledged transmitted and was received cleanly.\n\n[ack_data_attempt]\nMultiple rounds this sitting, converging on a real (if incomplete) finding rather than a tooling artifact:\n\n1. First round (sim/ on the Feather, freshly flashed): tools/ant_session.py's 8-channel wildcard session locked its 'power' channel onto a real ambient sensor in the room (#52233) instead of sim/'s device (#14871), because that channel searches by device TYPE only (wildcard device number) and the ambient sensor won the race. A background investigation (see notes below) proved sim/ WAS transmitting correctly the whole time (heard at -31 dBm, correct power/cadence, via a device-number-pinned tools/ant_verify.py channel) - the miss was tools/ant_session.py's wildcard search, not the firmware.\n2. Fix landed: tools/ant_session.py gained --pin-device N, which pins the 'power' channel's device number instead of wildcard-searching device type 11 alone - exactly for this case (a real sensor of the same type already in the room). Confirmed working: a re-flashed Feather subsequently went quiet again (likely disturbed by the physical handling the double-tap-RESET reflash requires - antenna or placement, never diagnosed further, needs hands on the board), so the live ack test was instead run against the already-connected RadiANT USB stick (nRF52840, VID_0FCF:PID_1009, serial ...772A) driven as an ANT+ master via tools/ant_sim.py --device-number 14871 - and --pin-device 14871 correctly locked onto it ('found: #14871 - power meter').\n3. THE REAL RESULT: 0/100 acknowledged, all EVENT_TRANSFER_TX_FAILED - but IDENTICAL on both backends (TI cc26xx AND nRF radiant_core) against the same master. Two backends failing identically against the same responder is the signature of a responder/tooling limitation, not a per-backend radio bug: tools/ant_sim.py is a HOST-driven simulator (Python sending ANT serial commands over USB to the stick's own firmware, not a full on-device ANT+ profile implementation), and does not appear to actually RF-acknowledge a slave's acknowledged-data transmission - which is exactly why the plan called for sim/ (a real on-device profile with its own EVENT_RX handling) as the responder rather than ant_sim.py. This is consistent with, not contradicted by, sim/'s own confirmed-correct broadcast behaviour.\n\nNET: ack_data remains unmeasured for this port, but the reason is now understood and narrowed to 'need sim/ audible and stable, not ant_sim.py' rather than an open question about either radiant_core backend. tools/ant_session.py's --pin-device and --attempts modes are both confirmed working correctly against real hardware.\n\n[phase_c_rx_end_slop_sweep]\nRX_END_SLOP_US swept at 250/500/750 (the plan's own instruction), each built via the new CONFIG_RADIANT_CORE_CC26XX_RX_END_SLOP_US Kconfig override, flashed, and measured for 80 s against the SAME paced transmitter (the RadiANT USB stick, tools/ant_sim.py --serial 772A --device-number 14871, driven fresh for each rung) - a denominator the receiver does not choose, per ADR 0014's own measurement discipline. Single-pass per rung (not --repeat 2), so treat the differences as indicative rather than final:\n\n  250 us: 313/321 packets, 2.48% loss, mean RSSI -44.6 dBm\n  500 us: 315/321 packets, 1.85% loss, mean RSSI -40.0 dBm  (current default)\n  750 us: 311/320 packets, 2.82% loss, mean RSSI -45.4 dBm\n\n500 us - the existing default - measured BEST of the three, not merely adequate. The original comment in radiant_radio_cc26xx.c said '500 and 2000 measure the same' from an earlier, smaller dataset; this sweep adds a real three-point comparison against a paced transmitter and the conclusion is the same: keep 500. Mean RSSI varied 5 dB across the three runs (likely bench handling between flashes/replugs, not the slop setting - it has no mechanism to affect transmit-side RSSI), so a repeat run holding position fixed would sharpen this, but the direction (500 as good or better than both neighbours) is not in question from one pass.\n\n[phase_c_rxbw_agc_resweep]\nRUN 2026-08-14, and the answer is that there is nothing here to win. Five rungs plus a repeatability control, each built through the CONFIG_RADIANT_CORE_CC26XX_RX_BW_CODE / ..._AGC_REF Kconfig overrides (no source edit per rung), flashed, and measured for 80 s against the same paced transmitter as the RX_END_SLOP_US sweep (tools/ant_sim.py on the RadiANT USB stick, --serial 772A --device-number 14871, restarted fresh for each rung):\n\n  rxBw 98 / AGC 0x34 (the defaults):  1.57 %  (315/320)   and, repeated at the end of the sweep,  2.19 %  (314/321)\n  AGC 0x3A:                           1.56 %  (316/321)\n  AGC 0x40:                           1.25 %  (317/321)\n  rxBw 97:                            3.10 %  (311/321)\n  AGC 0x2E:                           4.67 %  (305/320)\n  rxBw 99:                            5.59 %  (303/321)\n\nTHE CONTROL IS THE POINT. The two unchanged-rig baseline runs differ by 0.62 pp (two packets), which is this instrument's run-to-run noise at 80 s and ~320 packets. So AGC 0x3A and 0x40 are TIES with the default, not improvements - reading 1.25 % as a win over 1.57 % would be reading one packet of noise as a result, and the earlier RX_END_SLOP_US sweep (single-pass, no control) is worth re-reading with that number in mind. The three that moved - rxBw 97, rxBw 99 and AGC 0x2E - are two to nine times the noise and are genuinely worse.\n\nDEFAULTS UNCHANGED as a result: RX_BW_CODE stays 98, AGC_REF stays 0x0034. Both neighbours on the rxBw axis are worse, so 98 is a local optimum rather than an untested guess, which is the thing this sweep was actually for. The AGC axis is flat from 0x34 upward and falls off below it.\n\nWHAT THIS CLOSES AND WHAT IT DOES NOT. It closes \"the ~1.85 % loss might be an rxBw or AGC mis-set\" - it is not; the parameters are at the top of their curve and the remaining loss has another cause. It does not identify that cause. Mean RSSI held at -42.1 to -43.0 dBm across all six runs (against 5 dB of drift in the earlier sweep, when the board was being replugged by hand between rungs), so the rig was stable this time and the numbers are comparable to each other in a way that sweep's were not - the difference is scripts/flash_ti.ps1's backchannel reset, which made the whole sweep unattended and stopped anyone touching the bench between rungs.\n\n[gaps]\nsensitivity (needs an attenuator and a second receiver), acquisition (the sweep is 128 sets on this backend against 32 on the nRF - the regression is expected by construction and is to be recorded, not tuned), ack_data (tooling now proven correct against real hardware; still needs sim/ reliably on the air - see ack_data_attempt), coexistence (arms 1-4 all build and arm 4 has a real second RF client, but no 802.15.4 peer exists on this bench, so the neighbour's own survival across a preemption - the whole point of the forked driver - has never been observed; see docs/decisions/0015). The rxBw/AGC re-sweep is no longer a gap: it ran, and it found the defaults already optimal - see phase_c_rxbw_agc_resweep.\n\n[conformance_raw_fields] Preserved verbatim from the pre-repair conformance block, which the schema's conformance def (antser_path/sha256/byte_identical_to/messages_exercised only, additionalProperties false) has no room for:\n{\n  \"tool\": \"ant_conformance.py\",\n  \"compared_against\": \"archive/captures/serial/conformance-sdk-ant.antser\",\n  \"cases\": 284,\n  \"records\": 1273,\n  \"differing_records\": 171,\n  \"differing_cases\": 73,\n  \"pass\": false,\n  \"gate\": \"[gates.conformance] require_byte_identical=true, allowed_differing_cases=[] - NOT widened; see notes.conformance below\",\n  \"cross_checked_against_nrf\": {\n    \"nrf_antser_path\": \"archive/captures/serial/conformance-nrf-radiant.antser\",\n    \"nrf_antser_sha256\": \"a82ca4fb8ca8cd7c78e573ca131d4081fedb6a11874cd3b57b4954ed1b01cdd6\",\n    \"result\": \"BYTE-IDENTICAL to the cc26xx transcript (same sha256). Confirms the 73 differing cases are radiant_core-vs-sdk-ant, not cc26xx-specific.\"\n  }\n}"
 }

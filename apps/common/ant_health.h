@@ -88,6 +88,31 @@ enum ant_health_counter {
 	 * CONFIG_RADIANT_SWEEP_DEBUG.
 	 */
 	ANT_HEALTH_SWEEP_BUSY,
+	/* Bytes the host-frame parser discarded while it was NOT synced on
+	 * SYNC (0xA4) - the S_SYNC state's else-branch in
+	 * ant_serial_bridge.c. Distinct from HOST_CSUM: this is bytes lost
+	 * hunting for the start of a frame at all, before a length or id was
+	 * ever seen. */
+	ANT_HEALTH_HOST_DESYNC,
+	/* A frame that DID find SYNC, LEN and ID, ran to its declared length,
+	 * and then failed the trailing XOR checksum. Kept separate from
+	 * HOST_DESYNC on purpose: that one is framing lost outright, this one
+	 * is a frame that arrived but was corrupt, which points at a
+	 * different fault (a noisy UART link vs. a host that fell out of
+	 * step). The existing LOG_WRN stays - this counter is the copy that
+	 * survives on a board with no debugger. */
+	ANT_HEALTH_HOST_CSUM,
+	/* A radio RX event whose channel op is no longer the one this
+	 * channel owns by the time it is processed - api_sched_rx()'s
+	 * ownership check. Counted at both sites that can hit it: the normal
+	 * OK-status path (which also LOG_DBGs) and the CRC-repair path's
+	 * silent twin, which has no log at all today. Without this the two
+	 * looked identical to "no event happened". */
+	ANT_HEALTH_RX_NOT_OWNER,
+	/* A USB bulk-IN transfer that never completed within its timeout -
+	 * the host stopped polling. Counted where the timeout is detected;
+	 * W1 wires the USB_NEXT site, W6 adds the legacy stack's. */
+	ANT_HEALTH_TX_TIMEOUT,
 
 	ANT_HEALTH_COUNT
 };
@@ -97,8 +122,11 @@ enum ant_health_counter {
 #define ANT_HEALTH_DEPTH_EVENT 1u
 
 /* Bytes ant_health_fill() writes - the 0xF6 payload_len in
- * protocol/ant_wire.yaml, which is the definition. */
-#define ANT_HEALTH_PAYLOAD_LEN 24u
+ * protocol/ant_wire.yaml, which is the definition. Version 2: the four
+ * counters above reuse what were the [22..23] reserved bytes plus six new
+ * bytes appended after them. A host that only knows version 1 (24 bytes)
+ * still gets a valid, if shorter, reply - see the version byte at out[0]. */
+#define ANT_HEALTH_PAYLOAD_LEN 30u
 
 #if defined(CONFIG_ANT_DONGLE_HEALTH_COUNTERS)
 

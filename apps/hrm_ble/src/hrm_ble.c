@@ -93,29 +93,104 @@ static void on_disconnected(struct bt_conn *conn, uint8_t reason)
 }
 
 /*
- * Refuse a short connection interval rather than accept it quietly: a phone
- * (iOS especially) will ask for tens of ms, handing the controller a
- * recurring high-priority event MPSL can't make ANT+ outrank. Reject and
- * hold at the advertised preference, logging it so a degraded strap is
- * traceable to a phone connection.
+ * Rewrite a non-compliant connection-interval request to policy rather than
+ * reject it: this function has its textual twin in
+ * apps/treadmill/src/treadmill_ble.c's on_param_req() - keep the two
+ * parallel and edit both together.
+ *
+ * WHY REWRITE AND NOT REJECT. A reject (returning false) leaves the link at
+ * whatever short interval it connected at - Zephyr does not fall back to the
+ * PPCP preference on a rejected request, it just leaves the current
+ * parameters alone. A phone that asks for 30-50 ms and gets rejected stays
+ * at 30-50 ms indefinitely, with a controller event every few ms, which is
+ * the exact air-time loss this policy exists to prevent. Rewriting the
+ * request in place and returning true is the only branch that actually
+ * moves the link to policy.
+ *
+ * THE BUG THIS REPLACES. The previous version rewrote interval_min/max only
+ * and left latency and timeout as the peer asked - a peer that requested a
+ * short interval paired with a short timeout (tuned for that short
+ * interval) produced, after the interval was widened to 800 units (1 s), a
+ * combination that fails Zephyr's own validity check
+ * (bt_le_conn_params_valid(), hci_core.c: timeout*4 > (1+latency)*
+ * interval_max, both sides raw units). An invalid rewrite is silently
+ * neg-replied by the controller (BT_HCI_ERR_INVALID_LL_PARAM) and the link
+ * stays at the peer's original fast interval while this function's own log
+ * line claims it was held to policy. Forcing latency to 0 and raising (never
+ * lowering) timeout to at least CONFIG_BT_PERIPHERAL_PREF_TIMEOUT keeps the
+ * rewritten triple inside the bound for every latency<=0 case reachable
+ * here, since CONFIG_BT_PERIPHERAL_PREF_TIMEOUT was itself chosen to clear
+ * that bound at interval_max=800, latency=0 (see apps/hrm_ble/Kconfig's
+ * block on BT_PERIPHERAL_PREF_TIMEOUT).
  */
 static bool on_param_req(struct bt_conn *conn, struct bt_le_conn_param *param)
 {
-	if (param->interval_max < CONFIG_HRM_BLE_MIN_CONN_INTERVAL_UNITS) {
-		LOG_INF("refusing %u-unit connection interval, holding at %u "
-			"- see finding 1: this is the arbitration policy",
-			param->interval_max,
-			(unsigned)CONFIG_HRM_BLE_MIN_CONN_INTERVAL_UNITS);
-		param->interval_min = CONFIG_HRM_BLE_MIN_CONN_INTERVAL_UNITS;
-		param->interval_max = CONFIG_HRM_BLE_MIN_CONN_INTERVAL_UNITS;
+	ARG_UNUSED(conn);
+
+	/*
+	 * The accept-untouched branch must ALSO clear the same validity bound
+	 * the rewrite is careful about, or it reintroduces the bug one step
+	 * further out: a peer asking for an interval_max of 1600 units (2 s)
+	 * with latency 0 and timeout 400 satisfies every policy test above and
+	 * still fails bt_le_conn_params_valid() (4*400 = 1600, not > 1600), so
+	 * accepting it verbatim produces the same silent neg-reply while the
+	 * log claims the ask was honoured. Checking the bound here means every
+	 * `return true` out of this function is a triple the controller can
+	 * actually apply.
+	 */
+	bool valid = (uint32_t)param->timeout * 4u >
+		     ((uint32_t)param->latency + 1u) * (uint32_t)param->interval_max;
+
+	bool compliant = param->interval_min >= CONFIG_HRM_BLE_MIN_CONN_INTERVAL_UNITS &&
+			  param->interval_max >= CONFIG_HRM_BLE_MIN_CONN_INTERVAL_UNITS &&
+			  param->latency == 0 &&
+			  param->timeout >= CONFIG_BT_PERIPHERAL_PREF_TIMEOUT;
+
+	if (compliant && valid) {
+		return true;
 	}
+
+	LOG_INF("rewriting non-compliant request (interval %u-%u latency %u "
+		"timeout %u) to policy %u/%u/0/%u - see finding 1: this is "
+		"the arbitration policy",
+		param->interval_min, param->interval_max, param->latency,
+		param->timeout,
+		(unsigned)CONFIG_HRM_BLE_MIN_CONN_INTERVAL_UNITS,
+		(unsigned)CONFIG_HRM_BLE_MIN_CONN_INTERVAL_UNITS,
+		(unsigned)CONFIG_BT_PERIPHERAL_PREF_TIMEOUT);
+
+	param->interval_min = CONFIG_HRM_BLE_MIN_CONN_INTERVAL_UNITS;
+	param->interval_max = CONFIG_HRM_BLE_MIN_CONN_INTERVAL_UNITS;
+	param->latency = 0;
+	if (param->timeout < CONFIG_BT_PERIPHERAL_PREF_TIMEOUT) {
+		param->timeout = CONFIG_BT_PERIPHERAL_PREF_TIMEOUT;
+	}
+
 	return true;
+}
+
+/*
+ * The observability that would have caught the previous silent failure: the
+ * rewrite above only edits what a peer PROPOSES, and the controller can
+ * still negotiate something else. This logs what parameters actually landed,
+ * so a degraded link (short interval, short timeout) is visible in the log
+ * rather than inferred from an absence of complaints.
+ */
+static void on_param_updated(struct bt_conn *conn, uint16_t interval,
+			      uint16_t latency, uint16_t timeout)
+{
+	ARG_UNUSED(conn);
+
+	LOG_INF("connection params updated: interval=%u (%u ms) latency=%u "
+		"timeout=%u (%u ms)",
+		interval, (interval * 5u) / 4u, latency, timeout, timeout * 10u);
 }
 
 BT_CONN_CB_DEFINE(hrm_ble_conn_cb) = {
 	.connected = on_connected,
 	.disconnected = on_disconnected,
 	.le_param_req = on_param_req,
+	.le_param_updated = on_param_updated,
 };
 
 bool hrm_ble_connected(void)

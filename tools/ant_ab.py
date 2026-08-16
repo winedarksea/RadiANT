@@ -200,11 +200,23 @@ class Baseline:
         return runs
 
     def worst(self, field_name: str, *, min_seconds: float = 0.0,
-              single_channel: bool = True) -> tuple[float, dict]:
+              single_channel: bool = True,
+              allow_partial: bool = False) -> tuple[float, dict]:
         """The worst (largest) value of a derived field, and the run it came from.
 
         Worst rather than mean: averaging away one bad run is how a
         regression ships.
+
+        `allow_partial` is for `gate_acquisition()` ONLY: `reacquire_s` exists
+        only on the runs that staged a dropout (tools/ant_verify.py
+        --expect-dropout), so a sitting with both a plain 300 s loss leg and a
+        dropout leg has some radio_runs entries that carry the field and some
+        that never could. A strict worst() would fail forever - every sitting
+        has at least one run this field cannot exist on. With it set, a run
+        missing the field is skipped rather than raising, and only a sitting
+        where NOT ONE run carries the field still raises: an operator who
+        forgot the dropout leg entirely gets a real failure, not a silent
+        pass over zero runs.
         """
         runs = self.radio_runs(min_seconds=min_seconds,
                                single_channel=single_channel)
@@ -216,10 +228,17 @@ class Baseline:
         for run in runs:
             value = run.get("derived", {}).get(field_name)
             if value is None:
+                if allow_partial:
+                    continue
                 raise MissingField(
                     f"{self.path}: radio_runs[profile={run.get('profile')!r}]"
                     f".derived.{field_name} is missing")
             values.append((float(value), run))
+        if not values:
+            raise MissingField(
+                f"{self.path}: no radio_runs entry carries derived."
+                f"{field_name}" + (" (every run lacked it)" if allow_partial
+                                   else ""))
         return max(values, key=lambda pair: pair[0])
 
     def usb_worst(self, field_name: str) -> float:
@@ -438,8 +457,12 @@ def gate_acquisition(cfg: dict, a: Baseline, b: Baseline) -> list[GateResult]:
     for field_name, label in (("time_to_first_packet_s", "time to first packet"),
                               ("reacquire_s", "re-acquisition")):
         try:
-            value_a, _ = a.worst(field_name)
-            value_b, _ = b.worst(field_name)
+            # allow_partial=True: reacquire_s exists only on dropout runs and
+            # time_to_first_packet_s is None on those same runs (T1/T2), so a
+            # strict worst() would fail every sitting - see worst()'s own
+            # docstring. This is the one and only caller allowed to pass it.
+            value_a, _ = a.worst(field_name, allow_partial=True)
+            value_b, _ = b.worst(field_name, allow_partial=True)
         except MissingField as exc:
             results.append(GateResult(label, "-", "-", threshold,
                                       FAIL if cfg.get("required", True)

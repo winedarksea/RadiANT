@@ -202,8 +202,8 @@
               "type": ["number", "null"]
             },
             "loss_exact_pct": {
-              "description": "Loss counted from the transmitter's own event counter, with no clock involved. THIS is the gate. The bench floor is characterised at 0.26-0.60%.",
-              "type": "number",
+              "description": "Loss counted from the transmitter's own event counter, with no clock involved. THIS is the gate. The bench floor is characterised at 0.26-0.60%. Null is a documented, healthy case (widened 2026-08-16 for the multi-channel runs T6 adds): a channel whose event counter never proved itself stepped-per-message (std_event_still nonzero outside a staged dropout, or fewer than 30 pairs) leaves tools/ant_verify.py's derive() with nothing to pool, even on an otherwise clean run - see 2026-08-15-radiant-nrf-multichannel.json. This does NOT weaken the gate: ant_ab.py's worst() still raises MissingField on a null value exactly as it did on an absent one, so a null here fails the gate rather than passing it as a zero would.",
+              "type": ["number", "null"],
               "minimum": 0
             },
             "unexplained_loss": {
@@ -223,9 +223,12 @@
               "description": "The same measured on the radio's clock via lib config 0xE0's RX timestamp. Expect ~0.009 ms. This is the number that shows the host clock is the instrument, not the link.",
               "type": ["number", "null"]
             },
-            "time_to_first_packet_s": { "type": ["number", "null"] },
+            "time_to_first_packet_s": {
+              "description": "Time from channel open to the first decoded packet: tools/ant_verify.py's (t_listen - t_open[channel]) + the channel analyser's own first_t. Resolved to about one channel period (the time between open and the first receive attempt is not sub-slot), the same 'one packet is one unit' reasoning as the loss gate's own resolution note. Worst (slowest) channel on a multi-channel run. Null on --replay (a capture carries no channel-open timestamp) and null on any run made under --expect-dropout (that mode measures re-acquisition, not initial acquisition - see reacquire_s). Gate is <= sdk-ant x 1.5 and <= 5 s absolute.",
+              "type": ["number", "null"]
+            },
             "reacquire_s": {
-              "description": "Time to re-acquire after a deliberate dropout. Gate is <= sdk-ant x 1.5 and <= 5 s absolute.",
+              "description": "Time to re-acquire after a deliberate dropout: tools/ant_verify.py's --expect-dropout SECONDS mode, max(gap in ChannelAnalyzer.intervals) - SECONDS. Resolved to about one channel period, the same as time_to_first_packet_s. Null on every run that did not stage a dropout - which is every baseline recorded before T2, and every leg of a sitting other than its dropout leg. Gate is <= sdk-ant x 1.5 and <= 5 s absolute.",
               "type": ["number", "null"]
             },
             "rssi_dbm_mean": { "type": ["number", "null"] },

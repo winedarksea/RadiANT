@@ -1606,6 +1606,107 @@ ZTEST(api, test_nine_scheduling_misses_never_reach_rx_fail_go_to_search)
 }
 
 /*
+ * AND THE TRANSMIT SIDE OWED ITSELF EXACTLY THE SAME THING.
+ *
+ * The two tests above are the receive half. A master's slot that never went out
+ * reaches the same terminal by the same route - pass_step() clears the slot and
+ * reports DONE_MISSED (radiant_sched.c's `expired` branch), so after the clock
+ * advance the channel holds NO scheduler request at all - and until this fix
+ * nothing re-posted one. The next transmit came from api_housekeep(), i.e. up to
+ * RADIANT_API_HOUSEKEEP_MS (50 ms) later: a fifth of an ANT+ period of pure
+ * scheduling latency bolted onto a slot that was already lost, on the leg this
+ * dongle exists to keep sub-millisecond. Worse, once the pump is late enough
+ * that arm_next() has committed the radio elsewhere, the slot the clock advance
+ * computed is missed in its turn, and a master can stutter for as long as the
+ * contention lasts.
+ *
+ * WHY THIS FAILS WITHOUT THE FIX, precisely: `slot_clear()` runs before
+ * `notify_done()` on that path, so at the instant api_sched_done() is entered
+ * the channel has no pending request. The ONLY thing that can make
+ * radiant_sched_pending(CH) true again before a pump is a post from inside that
+ * same callback. The pump counter is asserted unchanged, so "no pump" is a fact
+ * about what ran rather than about how the test is written - the same
+ * discriminator test_a_missed_tracked_window_reposts_with_no_pump_at_all uses,
+ * and the reason neither test sleeps.
+ *
+ * api_kill_the_pending_window() is shared with the tracked twin on purpose: it
+ * knows nothing about slot kind, so the two tests differ only in the channel
+ * type, which is what makes them a matched pair rather than two stories.
+ */
+ZTEST(api, test_a_missed_master_slot_reposts_with_no_pump_at_all)
+{
+	radiant_time_t t_tx;
+	uint32_t       pumps_before;
+	uint32_t       missed_before;
+	radiant_time_t due_before;
+
+	open_channel((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+
+	/* One good slot, so the master is anchored and its clock is a real
+	 * measurement rather than an opening guess. */
+	host_writes_broadcast();
+	t_tx = run_one_master_slot();
+
+	/* Let the turnaround close. api_pump_locked() skips a channel whose
+	 * scheduler slot is still pending, and between a transmit and its
+	 * turnaround's close the turnaround IS that slot - so the next thing
+	 * posted on this channel is the master's own next transmit. */
+	fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 10u);
+	drain();
+
+	/* Every arm from here is refused, so the slot the pump posts next sits
+	 * in the scheduler and is never offered to the air: a MASTER_TX
+	 * reported MISSED having never been armed - the shape hardware produces
+	 * when arm_next() has already committed the radio elsewhere.
+	 * RADIANT_RADIO_EBUSY is the right refusal because pass_step() returns
+	 * STEP_DONE on it WITHOUT clearing the slot, so the request is still
+	 * there to die where it stands. */
+	fake_radio_force_arm_repeat(RADIANT_RADIO_EBUSY, 64u);
+	run_housekeeping();
+
+	zassert_true(radiant_sched_pending(CH),
+		     "setup: the pump never posted the master's next slot, so "
+		     "there was nothing for this test to miss");
+	due_before = radiant_channel_next_slot(CH);
+	zassert_not_equal(RADIANT_TIME_NEVER, due_before,
+			  "setup: the master was already off the air");
+
+	pumps_before = radiant_api_stats_get()->pumps;
+	missed_before = radiant_api_stats_get()->slots_missed;
+
+	api_kill_the_pending_window();
+
+	zassert_equal(missed_before + 1u, radiant_api_stats_get()->slots_missed,
+		      "the master's slot did not die as a missed slot, so this "
+		      "test exercised nothing");
+	zassert_true(radiant_sched_pending(CH),
+		     "a master's transmit slot was reported MISSED and the "
+		     "channel posted nothing to replace it. The next broadcast "
+		     "now waits on the 50 ms housekeeping pump - a fifth of a "
+		     "period of scheduling latency on the transmit leg, and "
+		     "long enough for the radio to be committed elsewhere by "
+		     "the time it arrives");
+	zassert_equal(pumps_before, radiant_api_stats_get()->pumps,
+		      "a housekeeping pump ran during the test, so the re-post "
+		      "asserted above may have come from the pump rather than "
+		      "from the terminal");
+
+	/* Boundedness, asserted rather than argued: the re-posted slot is
+	 * strictly later than the one that died, so it cannot produce another
+	 * immediate terminal and the sequence advances in time. */
+	zassert_true(radiant_channel_next_slot(CH) > due_before,
+		     "the re-posted slot is not later than the one it replaces "
+		     "- the terminal could re-post the same dead instant "
+		     "forever");
+
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "one missed slot dropped the master out of tracking");
+
+	end_of_test();
+}
+
+/*
  * MASTER_TX_ONLY does not listen, and that is the one master shape ANT
  * documents as not doing so. Bit 4 of the channel type is the master bit and
  * 0x50 is the exception; api_master_listens() is the only place in radiant_api.c
@@ -1822,6 +1923,165 @@ ZTEST(api, test_a_denied_tracked_window_is_not_reported_as_an_rx_failure)
 		     "the denials were not charged to the channel's guard at all");
 
 	end_of_test();
+}
+
+/* ---------------------------------------------------------------------------
+ * The bounded-denial escape
+ *
+ * The two tests above are ADR 0013's contract for a TRACKED channel: a denial
+ * is not a miss, and a denied slot must not wedge a master. They stay exactly
+ * as they are. What follows is the SWEEP's half of the same problem, which
+ * ADR 0013 leaves open: the sweep is the elastic consumer, a denied window
+ * credits zero dwell (correct - it never listened), and therefore the set's
+ * owed dwell never falls and the arming authority re-arms the identical chunk
+ * forever. MEASURED beside OpenThread: frozen on set 3, ~110 re-arms/s, 22 796
+ * chunks placed in 257 s and none completed.
+ *
+ * These drive radiant_search.c directly rather than through antr_*, for one
+ * reason: api_search is static in ant_radio_radiant.c, so its counters -
+ * sets_advanced and denial_escapes, which are the whole assertion - cannot be
+ * read from here. The loop below is the arbitrated path this file's
+ * api_sched_done() runs, written out: ask for a window, be told it was armed,
+ * be told it never opened, report the denial. Everything the escape depends on
+ * is in that sequence.
+ *
+ * NOT #if-guarded on CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE, deliberately.
+ * prj.conf here sets the symbol; a configuration that lost it must fail to
+ * BUILD rather than quietly drop the two tests that defend the fix.
+ * ---------------------------------------------------------------------------
+ */
+
+static struct radiant_search denial_search;
+
+static void denial_search_start(void)
+{
+	struct radiant_search_cfg       cfg;
+	struct radiant_search_id_filter want;
+
+	memset(&denial_search, 0, sizeof(denial_search));
+	radiant_search_cfg_default(&cfg);
+	zassert_equal(RADIANT_SEARCH_OK,
+		      radiant_search_init(&denial_search, &cfg, NULL, NULL));
+
+	/* A pure wildcard ACQUIRE with no deadline: the escape is about
+	 * coverage, and a finite timeout would end the run for the unrelated
+	 * reason radiant_search_note_denied()'s first job already handles. */
+	memset(&want, 0, sizeof(want));
+	zassert_equal(RADIANT_SEARCH_OK,
+		      radiant_search_begin(&denial_search, CH,
+					   RADIANT_SEARCH_MODE_ACQUIRE, &want,
+					   0u, RADIANT_SEARCH_TIMEOUT_NONE));
+}
+
+/* One turn of the loop. denied = the arbiter refused the chunk (never opened,
+ * credits nothing); otherwise the chunk ran to its close and credits the whole
+ * remaining dwell. Returns false if no window was wanted. */
+static bool denial_search_turn(radiant_time_t now, bool denied)
+{
+	struct radiant_search_window w;
+
+	if (radiant_search_window(&denial_search, now, &w) != RADIANT_SEARCH_OK) {
+		return false;
+	}
+	radiant_search_armed(&denial_search, RADIANT_SEARCH_OP_EXTERNAL,
+			     w.t_open, w.t_close);
+	if (denied) {
+		radiant_search_on_done(&denial_search, false, false, 0u);
+		radiant_search_note_denied(&denial_search,
+					   RADIANT_API_HOUSEKEEP_MS * 1000u);
+	} else {
+		radiant_search_on_done(&denial_search, true, true, w.t_close);
+	}
+	return true;
+}
+
+/*
+ * THE LIVELOCK ITSELF. Every window denied, forever. Pre-fix this run leaves
+ * sets_advanced at 1 no matter how many turns it takes - the sweep is pinned
+ * to the set it started on and every device outside it is undiscoverable.
+ *
+ * 256 turns is four times the 64-denial bound one set costs, so a pass here
+ * means the sweep left at least two sets while getting no air at all.
+ */
+ZTEST(api, test_a_totally_denied_sweep_still_leaves_its_set)
+{
+	const struct radiant_search_stats *ss;
+	uint32_t                           i;
+
+	denial_search_start();
+
+	for (i = 0u; i < 256u; i++) {
+		zassert_true(denial_search_turn((radiant_time_t)i * 1000u, true),
+			     "the sweep stopped asking for windows at turn %u",
+			     i);
+	}
+
+	ss = radiant_search_get_stats(&denial_search);
+
+	/* sets_advanced counts the first selection too, so ">= 3" is "two real
+	 * advances". Frozen is exactly 1. */
+	zassert_true(ss->sets_advanced >= 3u,
+		     "sets_advanced=%u after 256 denied windows: the sweep is "
+		     "still pinned to the set it started on - a chunk that is "
+		     "always denied credits zero dwell, so dwell_remaining "
+		     "never falls and the identical chunk is re-armed forever",
+		     (unsigned int)ss->sets_advanced);
+
+	zassert_true(ss->denial_escapes > 0u,
+		     "the sets advanced without a single denial escape, so "
+		     "something other than the fix moved the sweep and this "
+		     "test is proving the wrong thing");
+
+	/* And nothing pretended to hear anything on the way out. */
+	zassert_equal(0u, ss->frames_ok);
+}
+
+/*
+ * THE CONTROL, and it is the half that keeps the escape honest. A sweep that
+ * is denied often but still gets air must escape ZERO times: the credited
+ * quantum is dwell that was never listened to, so paying it for a merely slow
+ * sweep would quietly shrink real coverage on every contended run.
+ *
+ * Seven denials between credited windows - one short of the run length - is
+ * the tightest interleaving that must still produce nothing.
+ */
+ZTEST(api, test_a_sweep_that_still_gets_air_never_escapes)
+{
+	const struct radiant_search_stats *ss;
+	uint32_t                           turn = 0u;
+	uint32_t                           set;
+	uint32_t                           d;
+
+	denial_search_start();
+
+	for (set = 0u; set < 6u; set++) {
+		for (d = 0u; d < (uint32_t)RADIANT_SEARCH_DENIAL_ESCAPE_RUN - 1u;
+		     d++) {
+			zassert_true(denial_search_turn(
+					     (radiant_time_t)turn * 1000u, true));
+			turn++;
+		}
+		zassert_true(denial_search_turn((radiant_time_t)turn * 1000u,
+						false));
+		turn++;
+	}
+
+	ss = radiant_search_get_stats(&denial_search);
+
+	zassert_equal(0u, ss->denial_escapes,
+		      "%u escapes from a sweep that was never denied %u times "
+		      "in a row: a real credit must reset the run, or every "
+		      "contended session pays coverage for a sweep that was "
+		      "not stuck",
+		      (unsigned int)ss->denial_escapes,
+		      (unsigned int)RADIANT_SEARCH_DENIAL_ESCAPE_RUN);
+
+	/* Not vacuous: the credited windows really did move the sweep, so the
+	 * zero above is a decision and not a sweep that never ran. */
+	zassert_true(ss->sets_advanced >= 6u,
+		     "sets_advanced=%u - the credited windows did not advance "
+		     "the sweep, so this control asserted nothing",
+		     (unsigned int)ss->sets_advanced);
 }
 
 /*

@@ -1176,6 +1176,11 @@ static void process_byte(uint8_t b)
 			/* Seed with SYNC, not 0: it is part of the checksum. */
 			running_xor = b;
 			state = S_LEN;
+		} else {
+			/* A byte that was not SYNC while hunting for a frame
+			 * start - noise, or the tail of a frame this parser
+			 * lost sync on. */
+			ant_health_note(ANT_HEALTH_HOST_DESYNC);
 		}
 		break;
 
@@ -1239,6 +1244,7 @@ static void process_byte(uint8_t b)
 		} else {
 			LOG_WRN("Checksum err: got 0x%02X exp 0x%02X", b,
 				running_xor);
+			ant_health_note(ANT_HEALTH_HOST_CSUM);
 		}
 		state = S_SYNC;
 		break;

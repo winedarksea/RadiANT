@@ -372,20 +372,40 @@ class MasterDriver(threading.Thread):
         self._lock = threading.Lock()
         self._pending: tuple[int, int] | None = None
         self._applied = threading.Event()
+        # What _apply_pending() actually got back from command(), read by
+        # set_power() after _applied fires. THIS is the fix: _applied used to
+        # be set unconditionally at the end of _apply_pending(), so a rejected
+        # or unacknowledged power command still made set_power() return True -
+        # the ~40% of unacknowledged TX_POWER commands in the cc26xx sitting
+        # went unnoticed by the caller for exactly this reason, and the ladder
+        # went on to measure the rung at the OLD power while believing it was
+        # at the new one, which falsifies the ladder's x-axis.
+        self._last_applied_ok = False
 
     # -- the dial, called from the measuring thread --------------------------
 
     def set_power(self, level: int, custom: int, timeout: float = 5.0) -> bool:
         """Ask for a transmit power and block until the master has applied it.
 
-        The command has to be sent from the thread that owns the reader, or its
-        acknowledgement is consumed by whichever loop reads next and the
-        confirmation is lost.
+        The command has to be sent from the thread that owns the reader (see
+        _apply_pending(), which runs on this object's own single reader loop -
+        run()'s thread never has two callers reading `self.reader` at once),
+        or its acknowledgement would be consumed by whichever loop reads next
+        and the confirmation would be lost.
+
+        Returns False on EITHER a timeout waiting for run()'s thread to get to
+        it, OR a real command() failure (rejected, or no acknowledgement at
+        all) - the caller must not be able to tell "definitely not applied"
+        from "we don't know", because both mean the same thing to a rung: do
+        not trust the power it was measured at.
         """
         with self._lock:
             self._pending = (level, custom)
             self._applied.clear()
-        return self._applied.wait(timeout)
+        if not self._applied.wait(timeout):
+            return False
+        with self._lock:
+            return self._last_applied_ok
 
     def stop(self) -> None:
         self._stop_evt.set()
@@ -410,11 +430,14 @@ class MasterDriver(threading.Thread):
         # named levels and exactly wrong for a custom one - which is what the
         # RSSI slope check is there to notice.
         payload = bytes([self.sensor.channel, level, custom])
-        if not command(self.dev, self.reader, MESG_CHANNEL_RADIO_TX_POWER_ID,
-                       payload, f"tx power level 0x{level:02X} "
-                                f"custom 0x{custom:02X}"):
+        ok = command(self.dev, self.reader, MESG_CHANNEL_RADIO_TX_POWER_ID,
+                     payload, f"tx power level 0x{level:02X} "
+                              f"custom 0x{custom:02X}")
+        if not ok:
             self.failures.append(
                 f"the transmitter refused level 0x{level:02X}")
+        with self._lock:
+            self._last_applied_ok = ok
         self._applied.set()
 
     def run(self) -> None:
@@ -511,7 +534,16 @@ def run_ladder(rx_dev, rx_reader, channel: int, profile: str, rungs: list[int],
     for dbm in rungs:
         level, custom = encode_power(dbm, part)
         if not master.set_power(level, custom):
-            print(f"  ! the transmitter did not confirm {dbm} dBm within 5 s")
+            # An unacknowledged power-set aborts the rung rather than being
+            # measured anyway: measuring proceeds at whatever power the
+            # transmitter was ALREADY at, and a rung recorded under the wrong
+            # commanded dBm falsifies the ladder's x-axis - exactly the defect
+            # that hid ~40% of the time in the cc26xx sitting before
+            # set_power() could tell a real failure from a timeout.
+            print(f"  ! {dbm} dBm was not acknowledged by the transmitter - "
+                  f"skipping this rung rather than measuring it at the wrong "
+                  f"power")
+            continue
         # Give the master a slot or two at the new power before anything is
         # counted. A rung that includes the change includes a partial rung.
         time.sleep(settle)

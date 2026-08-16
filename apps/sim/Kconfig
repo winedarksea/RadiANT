@@ -272,6 +272,39 @@ config ANT_SIM_TX_POWER
 
 endmenu
 
+menu "Bench"
+
+config ANT_SIM_DROPOUT_EVERY_S
+	int "Seconds between deliberate dropouts, 0 disables"
+	default 0
+	help
+	  Every this many seconds, close the channel for ANT_SIM_DROPOUT_S
+	  seconds and reopen it - an exact, timer'd gap unlike a power-cycle
+	  or a bench operator's stopwatch, for tools/ant_verify.py's
+	  --expect-dropout SECONDS mode (T2) to measure reacquire_s against.
+
+	  0 (the default) never drops the channel; every existing sitting is
+	  unaffected.
+
+config ANT_SIM_DROPOUT_S
+	int "Dropout duration, seconds"
+	default 10
+	range 1 60
+	help
+	  How long the channel stays closed each time ANT_SIM_DROPOUT_EVERY_S
+	  fires. Ignored when ANT_SIM_DROPOUT_EVERY_S is 0.
+
+	  Must match tools/ant_verify.py's --expect-dropout argument exactly,
+	  or reacquire_s is computed against the wrong duration and reads
+	  wrong in a way that looks like a real number.
+
+	  The sitting default this project uses is EVERY=90, D=10 over a
+	  240 s run (two dropouts, deliberately under ab_gates.toml's
+	  min_seconds=300 for the loss gate, so a dropout run can never leak
+	  into it).
+
+endmenu
+
 menu "Product information"
 
 config ANT_SIM_HW_VERSION

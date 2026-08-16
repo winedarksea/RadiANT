@@ -115,8 +115,10 @@ size_t ant_health_fill(uint8_t *out, size_t cap)
 
 	/* [0] structure version. Bump it if any field below changes meaning,
 	 * never reuse a byte silently: a host that pattern-matches this reply
-	 * has no other way to know. */
-	out[0] = 1u;
+	 * has no other way to know. Version 2 reused [22..23] (previously
+	 * reserved, sent as zero) and appended [24..29]; a version-1 reader
+	 * that only looks at the first 24 bytes still decodes correctly. */
+	out[0] = 2u;
 	/* [1] flags, bit 0 = something saturated, so the whole set is a floor
 	 * rather than a total. */
 	out[1] = (atomic_get(&saturated) != 0) ? 0x01u : 0x00u;
@@ -139,11 +141,18 @@ size_t ant_health_fill(uint8_t *out, size_t cap)
 		(uint32_t)atomic_get(&counters[ANT_HEALTH_BURST_STALL]));
 	put_u16(&out[20],
 		(uint32_t)atomic_get(&counters[ANT_HEALTH_SWEEP_BUSY]));
-	/* [22..23] reserved, sent as zero. It briefly carried the idle half of
-	 * the sweep decline; see ANT_HEALTH_SWEEP_BUSY for why that field could
-	 * not exist. The two bytes stay so the structure keeps its declared
-	 * length and a future field does not have to renumber everything above
-	 * it. */
+	/* [22..23] used to be reserved-as-zero; it briefly carried the idle
+	 * half of the sweep decline, see ANT_HEALTH_SWEEP_BUSY for why that
+	 * field could not exist. Version 2 gives it to HOST_DESYNC instead -
+	 * covered by the version bump at out[0], not a silent reuse. */
+	put_u16(&out[22],
+		(uint32_t)atomic_get(&counters[ANT_HEALTH_HOST_DESYNC]));
+	put_u16(&out[24],
+		(uint32_t)atomic_get(&counters[ANT_HEALTH_HOST_CSUM]));
+	put_u16(&out[26],
+		(uint32_t)atomic_get(&counters[ANT_HEALTH_RX_NOT_OWNER]));
+	put_u16(&out[28],
+		(uint32_t)atomic_get(&counters[ANT_HEALTH_TX_TIMEOUT]));
 
 	/*
 	 * The event queue's own high water goes in [5] from radiant_event.c

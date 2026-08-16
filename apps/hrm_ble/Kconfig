@@ -39,6 +39,59 @@ rsource "../common/Kconfig.antr_api"
 config MPSL_TIMESLOT_SESSION_COUNT
 	default 1 if HRM_BLE_HRS
 
+# BT_PERIPHERAL_PREF_* is the PPCP characteristic
+# (BT_GAP_PERIPHERAL_PREF_PARAMS, default y - GAP publishes it whether this
+# file says anything or not) AND, via BT_GAP_AUTO_UPDATE_CONN_PARAMS (kept
+# =y - see ble.conf/prj.conf), the parameters this node itself REQUESTS 5 s
+# into every connection. Zephyr's own defaults are 24/40/0/42 - a 30-50 ms
+# interval with almost no supervision margin - which is exactly the fast,
+# high-priority-to-the-controller event rate finding 1 says ANT+ can never
+# outrank. Before this block nothing tied that number to
+# HRM_BLE_MIN_CONN_INTERVAL_UNITS, the number `on_param_req()` in
+# src/hrm_ble.c actually enforces on an incoming request: the advertised
+# policy and the enforced policy were two different numbers, and
+# BT_GAP_AUTO_UPDATE_CONN_PARAMS was self-requesting the wrong one.
+#
+# SAME PLACEMENT RULE AS MPSL_TIMESLOT_SESSION_COUNT ABOVE, and it matters
+# here too: Kconfig takes the FIRST `default` whose condition holds, in
+# parse order, and Kconfig.zephyr pulls in subsys/bluetooth's Kconfig.gatt
+# with its own `default 24`/`40`/`0`/`42`. Parsed after that, these would be
+# dead and .config would read Zephyr's numbers with no error anywhere - the
+# same silent-zero failure mode the comment above describes for the MPSL
+# symbol.
+#
+# MIN == MAX == HRM_BLE_MIN_CONN_INTERVAL_UNITS (800, i.e. 1 s - see that
+# symbol's help for why): there is no range to negotiate within, only the
+# one interval finding 1 shapes BLE's demand to.
+#
+# LATENCY 0: any peripheral latency scales the timeout bound below by
+# (1+latency), and buys nothing here - the 1 s interval is already what
+# suppresses the controller's event rate; skipping connection events on top
+# of that would only slow this node's own detection of a dropped link.
+#
+# TIMEOUT 400 (4 s, 10 ms units - PPCP's own units). Zephyr's connection
+# parameter validity check (bt_le_conn_params_valid(), hci_core.c) is
+# `timeout*4 > (1+latency)*interval_max`, both sides in their native raw
+# units (10 ms, 1.25 ms). At interval_max=800, latency=0 that bound is
+# timeout > 200 (> 2 s). 400 is 2x that floor: it tolerates roughly 3
+# back-to-back missed 1 s connection events before the controller itself
+# declares the link lost, which keeps a phone's brief walk out of range from
+# flipping HRM_SUPPRESS_ANT_WHEN_CONNECTED off and on. NOT LARGER THAN
+# THAT: a longer timeout is exactly what pins a stale "connected" state (and
+# the ANT+ suppression it drives) after the phone is actually gone, which is
+# the failure this knob exists to bound in the first place.
+config BT_PERIPHERAL_PREF_MIN_INT
+	default HRM_BLE_MIN_CONN_INTERVAL_UNITS if HRM_BLE_HRS
+
+config BT_PERIPHERAL_PREF_MAX_INT
+	default HRM_BLE_MIN_CONN_INTERVAL_UNITS if HRM_BLE_HRS
+
+config BT_PERIPHERAL_PREF_LATENCY
+	default 0 if HRM_BLE_HRS
+
+config BT_PERIPHERAL_PREF_TIMEOUT
+	default 400 if HRM_BLE_HRS
+
 source "Kconfig.zephyr"
 
 menuconfig HRM
@@ -189,6 +242,16 @@ config HRM_BLE_HRS
 	# CMakeLists.txt carries a FATAL_ERROR backstop for the same interlock
 	# approached from the other side (CONFIG_BT without this symbol).
 	select RADIANT_BACKEND_NRF_GATE_MPSL
+	#
+	# PIN THE SOFTDEVICE CONTROLLER HERE, NOT ONLY IN A .conf FRAGMENT.
+	# coex.conf (apps/dongle_thread) already sets CONFIG_BT_LL_SOFTDEVICE=y
+	# for the bridge's BLE arm, but hrm_ble had no equivalent - it relied on
+	# whatever the default link layer happens to be for CONFIG_BT=y on the
+	# target board, which is a controller choice this design cannot leave to
+	# chance: S4-A's tombstone (BLE connected arm, docs/testing.md) and the
+	# gate/MPSL arbitration this whole file exists for both assume the SDC,
+	# not the open-source LL, is what is beside radiant on the radio.
+	select BT_LL_SOFTDEVICE
 	help
 	  P8b: the SoftDevice Controller beside the ANT+ master, advertising
 	  the standard SIG Heart Rate Service, so that one strap serves both a

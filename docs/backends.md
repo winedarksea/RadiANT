@@ -344,11 +344,38 @@ both contended arms now pass the gate. Full numbers and the five defects:
 [`radiant-bridge.md` §7.4.1](radiant-bridge.md#741-first-measurement-2026-08-13--the-gate-fails)
 and [§7.4.2](radiant-bridge.md#742-five-defects-in-series--and-the-gate-now-passes).
 
-**The denial livelock named above is still real and still unfixed.**
-`DONE_DENIED` credits zero dwell, so a chunk that is always denied leaves
-`dwell_remaining` unchanged and `radiant_sched_rechunk()` re-arms the identical
-chunk forever — the sweep never leaves the set. That needs a bounded-denial
-escape whatever the denials turn out to be caused by.
+**The denial livelock named above is now fixed** (`CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE`).
+`DONE_DENIED` still credits zero dwell — a window that never opened listened
+for no microseconds, and crediting it would advance the address set on coverage
+the sweep never got — so on its own a chunk that is always denied left
+`dwell_remaining` unchanged and `radiant_sched_rechunk()` re-armed the identical
+chunk forever. The escape lives in `radiant_search_note_denied()`, which is
+already called from the arming authority's completion path, so it needs no new
+call site and stays in-slot: after eight consecutive denials that credited
+nothing, one eighth of the set's dwell budget is credited and the run resets.
+
+**Quantum-credit, not pointer-advance.** The escape never touches the
+round-robin cursor or the steer queue; it only makes `dwell_owed()` fall, so
+the set finishes through the existing `radiant_search_set_complete()` → slot
+drop → pump path and the seen cache steers re-acquisition exactly as it does
+when nothing is contending. Advancing the pointer from the denial path would
+work and would silently cost fast re-acquisition in precisely the contended
+case the cache exists for.
+
+Bounded, and that is the claim the code carries an argument for: each escape
+adds a strictly positive quantum and nothing but a new set lowers the credit,
+so a fully-denied set completes in at most eight escapes — 64 denials, about
+0.6 s at the observed ~110/s re-arm rate — and a fully-denied 32-set sweep in
+about 19 s against a healthy 8.3 s. The price is honest and named: the credited
+time was never listened to, so a set refused its whole budget gets less real air
+than a healthy one. A sweep that is merely slow never escapes at all, because
+any window that credits real dwell resets the run.
+
+It compiles out of a single-protocol image (`default y if
+RADIANT_BACKEND_NRF_GATE_MPSL`, else `n`) — nothing there can refuse a window,
+so the livelock is unreachable and the escape costs nothing. Counted as
+`denial_escapes` on the SWEEP debug line and deliberately not in the `0xF6`
+health reply: it is the recovery, not the loss.
 
 Tracking is unaffected by all of this: a channel that is already locked keeps its
 packets beside a live advertiser. Acquisition is the whole of the problem.

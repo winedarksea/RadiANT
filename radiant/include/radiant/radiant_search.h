@@ -178,6 +178,36 @@ extern "C" {
  * guarantee and fail if the cap comes back.
  */
 
+/*
+ * THE BOUNDED-DENIAL ESCAPE. Compiled in only where an arbiter exists
+ * (CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE, defaulted from the MPSL gate).
+ *
+ * A denied window credits zero dwell - exact, not conservative, since it never
+ * listened. Correct and, on its own, a LIVELOCK: the set's owed dwell never
+ * falls, the arming authority re-arms the identical chunk forever, and the
+ * sweep never leaves the set. MEASURED beside OpenThread on the nRF54L15:
+ * frozen on set 3, re-arming ~110x/s, 22 796 chunks placed in 257 s and none
+ * completed - every device outside that one set undiscoverable.
+ *
+ * The escape: after RUN consecutive denials that credited nothing, credit
+ * dwell_us >> SHIFT to the set. That is the ONLY thing it does - it does not
+ * advance the cursor, touch the steer queue, or re-arm anything. See
+ * radiant_search_note_denied().
+ */
+#if defined(CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE)
+/* No #ifndef fallback for the run length, deliberately: the Kconfig symbol
+ * `depends on` the one guarding this block, so it is always defined here and
+ * always visible in .config. A fallback would be the silent-wrong-value trap
+ * scripts/build_all.ps1 documents for -DRADIANT_BACKEND. */
+#define RADIANT_SEARCH_DENIAL_ESCAPE_RUN \
+	((uint8_t)CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE_RUN)
+
+/* One eighth of the budget per escape: eight escapes fill a whole dwell, so
+ * the run length above multiplies out to the 64-denial bound rather than to
+ * some number that depends on the dwell. */
+#define RADIANT_SEARCH_DENIAL_ESCAPE_SHIFT 3u
+#endif
+
 /* ANT's default search timeout: 10 counts of 2.5 s [rev5.1]. */
 #define RADIANT_SEARCH_TIMEOUT_DEFAULT_US 25000000u
 
@@ -375,6 +405,13 @@ struct radiant_search_stats {
 	 * they are counted together. */
 	uint32_t cache_steers;
 	uint32_t cache_acquires;  /* acquisitions on one of those windows */
+#if defined(CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE)
+	/* Times a run of denials credited a quantum so the set could finish.
+	 * Nonzero means the sweep was refused the air long enough to have
+	 * frozen, and did not. RECOVERY, NOT LOSS - which is why it belongs on
+	 * a debug line and not in the health reply a host acts on. */
+	uint32_t denial_escapes;
+#endif
 };
 
 /* ---------------------------------------------------------------------------
@@ -423,6 +460,13 @@ struct radiant_search {
 	bool                 cur_from_cache;
 	bool                 set_valid;
 	uint32_t             set_dwell_us; /* listening credited to cur_set */
+#if defined(CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE)
+	/* Consecutive denials since the last time any REAL listening was
+	 * credited. Saturates rather than wrapping - a wrap would restart the
+	 * count and defer the escape, which is the failure this exists to
+	 * prevent. */
+	uint8_t              denied_run;
+#endif
 
 	/* The window in flight, if any. */
 	uint32_t   op;
@@ -683,6 +727,17 @@ void radiant_search_tick(struct radiant_search *s, radiant_time_t now);
  * sizes window_us to what the refused attempt cost in wall clock
  * (radiant_api.c uses the housekeeping interval driving the retry).
  * RADIANT_TIME_NEVER is untouched - no ceiling to protect.
+ *
+ * SECOND JOB, under CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE: this is also where
+ * the bounded-denial escape lives, because this is already the one place that
+ * hears "an arbiter refused a window" and it is called from the arming
+ * authority's completion path - in the slot, ADR 0013-safe, and needing NO new
+ * call site in any default image. See RADIANT_SEARCH_DENIAL_ESCAPE_RUN above.
+ *
+ * The escape credits dwell that was never listened to. That is the price and
+ * it is worth naming: a set refused its whole budget gets less real coverage
+ * than a healthy one. The alternative is not more coverage, it is a sweep
+ * pinned to one set for as long as the other stack is busy.
  */
 void radiant_search_note_denied(struct radiant_search *s, uint32_t window_us);
 

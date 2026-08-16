@@ -60,6 +60,14 @@ struct gate_probe {
 	bool mpsl_owes;
 	uint32_t granted_len_us;
 	uint32_t want_len_us;
+	bool     extendable;
+	/* The hand-back margin this grant was reserved with: END_MARGIN_EXTEND_US
+	 * for the elastic class, END_MARGIN_FIXED_US for a tracked window or a
+	 * transmit. Read here so a test can say which class a grant is in
+	 * WITHOUT re-deriving the arithmetic the gate uses - the compare
+	 * assertions are made against fake_mpsl_timer0.cc[0] and pinned
+	 * literals, not against this. */
+	uint32_t end_margin_us;
 };
 
 void gate_probe_read(struct gate_probe *out);

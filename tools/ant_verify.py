@@ -393,6 +393,27 @@ class CompatVerifier:
         }
 
 
+def reacquire_from_intervals(intervals: list[float],
+                             dropout_s: float) -> float | None:
+    """Time to re-acquire after a staged dropout: the worst gap, minus the
+    dropout itself.
+
+    `intervals` is `ChannelAnalyzer.intervals` - the gaps between consecutive
+    delivered packets. A staged --expect-dropout SECONDS closes the channel
+    for exactly `dropout_s`, so the widest gap in the run is that dropout plus
+    however long the receiver took to notice the channel was open again; every
+    other gap is ordinary jitter around one period and is far smaller. Taking
+    the max rather than searching for "the" dropout gap is what keeps this
+    correct with no knowledge of when the dropout happened - only that it did.
+
+    None with no intervals to look at (a channel that heard at most one
+    packet has no gap at all).
+    """
+    if not intervals:
+        return None
+    return max(intervals) - dropout_s
+
+
 class ChannelAnalyzer:
     """Decodes one channel's stream and accumulates evidence about it.
 
@@ -405,7 +426,7 @@ class ChannelAnalyzer:
                  expect_watts: float | None, expect_rpm: float | None,
                  wheel_circ_m: float, compat: CompatVerifier | None = None,
                  expect_bpm: float | None = None, channel: int | None = None,
-                 device_number: int = 0):
+                 device_number: int = 0, dropout_s: float | None = None):
         self.name = name
         self.device_type = device_type
         self.period = period
@@ -428,6 +449,23 @@ class ChannelAnalyzer:
         self.expect_rpm = expect_rpm
         self.expect_bpm = expect_bpm
         self.wheel_circ_m = wheel_circ_m
+
+        # --expect-dropout SECONDS: a deliberate, timer'd channel close/reopen
+        # was staged during the run (see apps/sim's ANT_SIM_DROPOUT_EVERY_S/_S
+        # knobs). None on every ordinary run. Set, it does three things: it is
+        # subtracted from the naive expected-packet count in summary() so a
+        # dropout is not double-counted as loss, it excludes the reopen's
+        # still-counter retransmit from the std_event_still disqualifier in
+        # _feed_power_std(), and it is the D in reacquire_from_intervals().
+        self.dropout_s = dropout_s
+
+        # Set from outside, by main(), after listen() returns: this analyser
+        # has no idea when its channel was opened or when listen() started, so
+        # it cannot compute this itself. None on --replay (a capture has no
+        # channel-open timestamp) and forced None under --expect-dropout (a
+        # staged dropout measures re-acquisition, not initial acquisition -
+        # see reacquire_s below).
+        self.time_to_first_packet_s: float | None = None
 
         # None means no key, which is the state that must keep reporting CLEAR.
         self.compat = compat
@@ -854,7 +892,18 @@ class ChannelAnalyzer:
         self.std_common_seen += c
         self._common_since_std = 0
         if d_event == 0:
-            self.std_event_still += 1
+            # A reopen after a staged dropout retransmits the held state - the
+            # counter genuinely did not step, but for a reason this run staged
+            # on purpose rather than a stuck sensor. The gap immediately
+            # before this pair is the tell: an ordinary still packet arrives a
+            # period apart, and a reopen's does not arrive until the dropout
+            # has elapsed. Excluding it here keeps one staged dropout from
+            # disqualifying "loss (exact)" for the whole run.
+            gap = self.intervals[-1] if self.intervals else 0.0
+            reopen_retransmit = (self.dropout_s is not None
+                                 and gap >= 0.5 * self.dropout_s)
+            if not reopen_retransmit:
+                self.std_event_still += 1
 
         if d_event == 0:
             if d_acc != 0:
@@ -1043,8 +1092,17 @@ class ChannelAnalyzer:
         # a number - saying so beats inventing a denominator.
         expected = ((elapsed / self.period_s) + 1.0
                     if elapsed > 0 and self.period_s > 0 else 0.0)
+        if self.dropout_s is not None and expected > 0 and self.period_s > 0:
+            # A staged dropout could never have delivered a packet, so its
+            # slots do not belong in the denominator - counting them as
+            # expected-but-missing is exactly the inflation loss_accounting()
+            # exists to catch, applied to a hole this run dug on purpose.
+            expected = max(0.0, expected - self.dropout_s / self.period_s)
         loss_pct = (100.0 * (1.0 - self.packets / expected)
                     if expected > 0 else float("nan"))
+
+        reacquire_s = (reacquire_from_intervals(self.intervals, self.dropout_s)
+                       if self.dropout_s is not None else None)
 
         jitter = {
             "n": len(self.intervals),
@@ -1248,6 +1306,13 @@ class ChannelAnalyzer:
             "elapsed_s": elapsed,
             "expected_packets": expected,
             "loss_pct": loss_pct,
+            # T1: stamped by main() after listen() returns, from t_open/
+            # t_listen and this analyser's own first_t - None on --replay
+            # (no channel-open timestamp exists) and forced None under
+            # --expect-dropout (see reacquire_s just below instead).
+            "time_to_first_packet_s": self.time_to_first_packet_s,
+            # T2: only under --expect-dropout SECONDS, else None.
+            "reacquire_s": reacquire_s,
             "jitter": jitter,
             "signal": signal,
             "pages": {f"0x{page:02X}": count
@@ -1632,6 +1697,8 @@ def derive(result: dict) -> dict:
     offgrid_radio: list[float] = []
     rssi_weighted = 0.0
     rssi_n = 0
+    ttfp_values: list[float] = []
+    reacquire_values: list[float] = []
 
     for index, channel in enumerate(channels):
         exact = channel.get("exact_loss")
@@ -1662,6 +1729,11 @@ def derive(result: dict) -> dict:
             "timing_offgrid_host_ms": _ms(jitter.get("offgrid_host_s")),
             "timing_offgrid_radio_ms": _ms(jitter.get("offgrid_radio_s")),
             "rssi_dbm_mean": signal["mean_dbm"] if signal else None,
+            # T1/T2. Both None on most runs - see ChannelAnalyzer's own
+            # docstrings for time_to_first_packet_s and reacquire_s.
+            "time_to_first_packet_s": _number(
+                channel.get("time_to_first_packet_s")),
+            "reacquire_s": _number(channel.get("reacquire_s")),
         }
 
         # A wildcard channel was configured with no device number, so the only
@@ -1695,6 +1767,10 @@ def derive(result: dict) -> dict:
         if signal:
             rssi_weighted += signal["mean_dbm"] * signal["n"]
             rssi_n += signal["n"]
+        if entry["time_to_first_packet_s"] is not None:
+            ttfp_values.append(entry["time_to_first_packet_s"])
+        if entry["reacquire_s"] is not None:
+            reacquire_values.append(entry["reacquire_s"])
 
     accounting = result.get("accounting")
 
@@ -1720,6 +1796,12 @@ def derive(result: dict) -> dict:
         "timing_offgrid_radio_ms": (max(offgrid_radio) if offgrid_radio
                                     else None),
         "rssi_dbm_mean": rssi_weighted / rssi_n if rssi_n else None,
+        # T1/T2. Run-level is the worst (slowest) channel, the same reasoning
+        # as timing_offgrid_*_ms above. None whenever no channel produced a
+        # figure - every run on --replay, and every ordinary run for
+        # reacquire_s.
+        "time_to_first_packet_s": max(ttfp_values) if ttfp_values else None,
+        "reacquire_s": max(reacquire_values) if reacquire_values else None,
         "per_channel": per_channel,
     }
 
@@ -1945,6 +2027,19 @@ def main() -> int:
     parser.add_argument("--wheel-circ", type=float, default=2.105,
                         help="wheel circumference in metres, for speed "
                              "(default: 2.105)")
+    parser.add_argument("--expect-dropout", type=float, metavar="SECONDS",
+                        help="a deliberate dropout of this many seconds was "
+                             "staged during the run - e.g. apps/sim's "
+                             "ANT_SIM_DROPOUT_EVERY_S/ANT_SIM_DROPOUT_S knobs. "
+                             "Produces reacquire_s per channel (the worst gap "
+                             "minus this duration), subtracts the dropout "
+                             "from expected_packets so loss_accounting() "
+                             "stays honest, excludes the reopen's "
+                             "still-counter retransmit from the exact-loss "
+                             "disqualifier, and forces "
+                             "time_to_first_packet_s to None - acquisition "
+                             "timing and a staged dropout are not the same "
+                             "measurement")
     # ── The four per-channel arguments ──────────────────────────────────────
     #
     # All four repeat, and repeating any of them switches this tool from "one
@@ -2081,7 +2176,8 @@ def main() -> int:
                                args.wheel_circ,
                                compat=make_verifier(device_number),
                                expect_bpm=args.expect_bpm,
-                               channel=channel, device_number=device_number)
+                               channel=channel, device_number=device_number,
+                               dropout_s=args.expect_dropout)
 
     extra: dict = {}
     records: list = []
@@ -2170,6 +2266,10 @@ def main() -> int:
             return 1
 
         analyzers = {}
+        # T1: when each channel's OPEN command completed - the moment a real
+        # receiver would start expecting packets. Only meaningful relative to
+        # t_listen just below, since the two are read off the same clock.
+        t_open: dict[int, float] = {}
         for name, channel, device_number, trans_type, rf_freq in zip(
                 profiles, channels, device_numbers, trans_types, rf_freqs,
                 strict=True):
@@ -2179,12 +2279,14 @@ def main() -> int:
                               rf_freq):
                 print(f"  FAIL: channel {channel} ({name}) did not open")
                 return 1
+            t_open[channel] = time.monotonic()
             pinned = (f", pinned to #{device_number}" if device_number
                       else ", wildcard")
             print(f"  OK: channel {channel} - {spec['label']}{pinned}")
             analyzers[channel] = make_analyzer(name, channel, device_number)
 
         print(f"\nListening for {args.seconds:.0f} s")
+        t_listen = time.monotonic()
         extra = listen(dev, reader, analyzers, args.seconds, verbose, records)
 
         print("\nClosing")
@@ -2197,6 +2299,19 @@ def main() -> int:
                     f"unassign ch{channel}")
         close_device(dev)
         ordered = list(analyzers.values())
+
+        # T1: (t_listen - t_open[ch]) + the analyser's own first_t, which is
+        # relative to t_listen (listen() timestamps from its own start). Left
+        # at the __init__ default of None under --expect-dropout: that mode
+        # measures re-acquisition after a staged dropout, not the initial
+        # acquisition this figure is about.
+        if args.expect_dropout is None:
+            for analyzer in ordered:
+                if (analyzer.first_t is not None
+                        and analyzer.channel in t_open):
+                    analyzer.time_to_first_packet_s = (
+                        (t_listen - t_open[analyzer.channel])
+                        + analyzer.first_t)
 
     if args.record and not args.replay:
         # The device number is what splits a capture back into per-sensor

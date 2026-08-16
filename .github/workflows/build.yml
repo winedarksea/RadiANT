@@ -422,6 +422,44 @@ jobs:
             radio: core
             extra_conf: encryption.conf
             transport: USB_LEGACY
+          # The health counters had exactly the hole encryption.conf had: the
+          # comment above says this matrix is where an ENABLED fragment is
+          # proved to compile, and CONFIG_ANT_DONGLE_HEALTH_COUNTERS=y had
+          # never been compiled by any CI arm at all. Both transports get a
+          # row because the counters are transport-specific - tx_drops,
+          # tx_high_water and rx_backpressure are counted in the transport
+          # file, so a legacy-only arm would leave the USB_NEXT half of them
+          # unbuilt, which is how they came to be missing there in the first
+          # place.
+          # C2. crc_repair.conf is the B leg of the S3 sensitivity A/B, and
+          # until this row it was a fragment with no build behind it - the
+          # exact hole the comment above records for encryption.conf.
+          - name: "core: feather, crc repair"
+            board: adafruit_feather_nrf52840/nrf52840/uf2
+            radio: core
+            extra_conf: crc_repair.conf
+            transport: USB_LEGACY
+            assert_config: |
+              CONFIG_RADIANT_CRC_REPAIR=y
+              # PROFILE_SANITY is the third refutation for a repaired frame;
+              # an A/B with repair on and sanity off cannot tell a caught
+              # mis-repair from an uncaught one, so the fragment sets both
+              # and this row is what keeps them together.
+              CONFIG_RADIANT_PROFILE_SANITY=y
+          - name: "core: feather, health counters"
+            board: adafruit_feather_nrf52840/nrf52840/uf2
+            radio: core
+            extra_conf: health.conf
+            transport: USB_LEGACY
+            assert_config: |
+              CONFIG_ANT_DONGLE_HEALTH_COUNTERS=y
+          - name: "core: feather, new USB stack, health counters"
+            board: adafruit_feather_nrf52840/nrf52840/uf2
+            radio: core
+            extra_conf: next.conf;health.conf
+            transport: USB_NEXT
+            assert_config: |
+              CONFIG_ANT_DONGLE_HEALTH_COUNTERS=y
           # The stub is the cheapest proof the backend seam holds - it builds
           # in seconds and is the one configuration that exercises the seam
           # without exercising any radio.
@@ -529,6 +567,32 @@ jobs:
           got="$(grep -oP '^CONFIG_ANT_DONGLE_TRANSPORT_\K\w+(?==y)' "${cfg}")"
           echo "transport: ${got}   expected: ${EXPECTED}"
           test "${got}" = "${EXPECTED}"
+
+      # A fragment row that only proves "it still compiles" does not prove the
+      # fragment did anything: a renamed symbol, a dropped file or a
+      # ;-separated list the plumbing quietly ate all build green and set
+      # nothing. Read the symbol back out of the .config that was actually
+      # produced. This is the same read-back shape the node job uses, and it
+      # is what makes `next.conf;health.conf` above a real test of the
+      # separator rather than an assumption about it.
+      - name: Verify fragment symbols
+        if: matrix.assert_config != ''
+        env:
+          WANT: ${{ matrix.assert_config }}
+        run: |
+          set -euo pipefail
+          cfg="$(find build -name .config -path '*/dongle/*' -print -quit)"
+          while read -r want; do
+            [[ -z "${want}" ]] && continue
+            # `#` lines are rationale, matching the two node jobs' parsers -
+            # except Kconfig's own `# CONFIG_X is not set` negative form.
+            if [[ "${want}" =~ ^[[:space:]]*# ]] &&
+               ! [[ "${want}" =~ ^[[:space:]]*#[[:space:]]+CONFIG_ ]]; then
+              continue
+            fi
+            echo "expecting ${want} in ${cfg}"
+            grep -q "^${want}\$" "${cfg}"
+          done <<< "${WANT}"
 
       # No artifact upload and no release attachment on purpose. Release
       # images stay on build-sdk-ant until the Tier 3 Zwift acceptance passes
@@ -987,6 +1051,20 @@ jobs:
           rc=0
           while IFS= read -r want; do
             [[ -z "${want}" ]] && continue
+            # A `#` line is rationale, not an assertion - without this the
+            # block scalar's contents are matched literally and a comment
+            # fails the row, which is enough of a deterrent that assertions
+            # end up with no explanation attached to them.
+            #
+            # EXCEPT `# CONFIG_X is not set`, which is Kconfig's own negative
+            # form and a real assertion. Skipping that by accident would be
+            # the worst outcome available here: the row stays green and the
+            # check is gone, which is precisely the failure mode this file's
+            # assertions exist to prevent.
+            if [[ "${want}" =~ ^[[:space:]]*# ]] &&
+               ! [[ "${want}" =~ ^[[:space:]]*#[[:space:]]+CONFIG_ ]]; then
+              continue
+            fi
             if [[ "${want}" == absent:* ]]; then
               sym="${want#absent:}"
               if grep -qE "^(# )?${sym}[= ]" "${cfg}"; then
@@ -1216,7 +1294,30 @@ jobs:
               CONFIG_MPSL_TIMESLOT_SESSION_COUNT=1
               CONFIG_HRM_BLE_HRS=y
               CONFIG_BT=y
-              CONFIG_RADIANT_BACKEND_NULL is not set
+              # Kconfig's negative form carries the leading "# ", and this
+              # line did not until it was checked against a real .config: it
+              # read `CONFIG_RADIANT_BACKEND_NULL is not set`, which
+              # `grep -qxF` can never match, so the assertion was
+              # unsatisfiable rather than merely weak. The treadmill job's
+              # equivalent row already had the right form.
+              # CONFIG_RADIANT_BACKEND_NULL is not set
+              # The 1 s connection policy, and it is asserted for the same
+              # reason the two GATE_MPSL lines above are: these four come from
+              # `default`s redeclared in apps/hrm_ble/Kconfig, and a Kconfig
+              # default that lands after the symbol's own definition is
+              # silently dead. Until they were set, Zephyr's own defaults
+              # published a 30-50 ms PPCP *and* self-requested 30-50 ms five
+              # seconds into every connection, bypassing le_param_req
+              # entirely - so the policy the application believed it was
+              # enforcing was never on the air. BT_LL_SOFTDEVICE is here
+              # because the arbitrated backend has no meaning under the
+              # open-source controller.
+              CONFIG_BT_PERIPHERAL_PREF_MIN_INT=800
+              CONFIG_BT_PERIPHERAL_PREF_MAX_INT=800
+              CONFIG_BT_PERIPHERAL_PREF_LATENCY=0
+              CONFIG_BT_PERIPHERAL_PREF_TIMEOUT=400
+              CONFIG_BT_GAP_AUTO_UPDATE_CONN_PARAMS=y
+              CONFIG_BT_LL_SOFTDEVICE=y
           - name: "hrm_ble: BLE HRS, no ANT suppression"
             # The row that actually stresses the arbiter: with suppression on
             # (the default) the two stacks never genuinely contend. A layered
@@ -1331,6 +1432,20 @@ jobs:
           rc=0
           while IFS= read -r want; do
             [[ -z "${want}" ]] && continue
+            # A `#` line is rationale, not an assertion - without this the
+            # block scalar's contents are matched literally and a comment
+            # fails the row, which is enough of a deterrent that assertions
+            # end up with no explanation attached to them.
+            #
+            # EXCEPT `# CONFIG_X is not set`, which is Kconfig's own negative
+            # form and a real assertion. Skipping that by accident would be
+            # the worst outcome available here: the row stays green and the
+            # check is gone, which is precisely the failure mode this file's
+            # assertions exist to prevent.
+            if [[ "${want}" =~ ^[[:space:]]*# ]] &&
+               ! [[ "${want}" =~ ^[[:space:]]*#[[:space:]]+CONFIG_ ]]; then
+              continue
+            fi
             # `absent:CONFIG_X` asserts the symbol does not appear at all,
             # which is what an unmet `depends on` produces. Anything else is
             # matched as a whole literal line.
@@ -1451,6 +1566,18 @@ jobs:
               CONFIG_BT_SMP=y
               CONFIG_BT_SETTINGS=y
               # CONFIG_RADIANT_BACKEND_NULL is not set
+              # The same 1 s connection policy the hrm_ble job asserts, for
+              # the same reason: both applications redeclare these defaults
+              # in their own Kconfig, and a redeclared default that lands
+              # after the symbol's definition is silently dead. Keeping the
+              # two rows' expectations identical is what makes the two
+              # le_param_req() implementations' textual parallelism checkable
+              # rather than aspirational.
+              CONFIG_BT_PERIPHERAL_PREF_MIN_INT=800
+              CONFIG_BT_PERIPHERAL_PREF_MAX_INT=800
+              CONFIG_BT_PERIPHERAL_PREF_LATENCY=0
+              CONFIG_BT_PERIPHERAL_PREF_TIMEOUT=400
+              CONFIG_BT_GAP_AUTO_UPDATE_CONN_PARAMS=y
           # THE HEAVIEST CONFIGURATION THIS APPLICATION HAS: two ANT+ masters,
           # one ANT+ slave and BLE with SMP and a bonding store. The row that
           # decides whether the RAM budget holds - which the Matter flash spike
@@ -1552,6 +1679,20 @@ jobs:
           rc=0
           while IFS= read -r want; do
             [[ -z "${want}" ]] && continue
+            # A `#` line is rationale, not an assertion - without this the
+            # block scalar's contents are matched literally and a comment
+            # fails the row, which is enough of a deterrent that assertions
+            # end up with no explanation attached to them.
+            #
+            # EXCEPT `# CONFIG_X is not set`, which is Kconfig's own negative
+            # form and a real assertion. Skipping that by accident would be
+            # the worst outcome available here: the row stays green and the
+            # check is gone, which is precisely the failure mode this file's
+            # assertions exist to prevent.
+            if [[ "${want}" =~ ^[[:space:]]*# ]] &&
+               ! [[ "${want}" =~ ^[[:space:]]*#[[:space:]]+CONFIG_ ]]; then
+              continue
+            fi
             if [[ "${want}" == absent:* ]]; then
               sym="${want#absent:}"
               if grep -qE "^(# )?${sym}[= ]" "${cfg}"; then
@@ -2347,6 +2488,36 @@ jobs:
             grep -q "^CONFIG_ANT_SIM_PROFILE_${profile}=y$" \
               "build-sim-${profile}/sim/zephyr/.config"
           done
+
+      # C3: the deliberate-dropout knobs, which produce the D that
+      # tools/ant_verify.py --expect-dropout subtracts. They compile out
+      # entirely at the default ANT_SIM_DROPOUT_EVERY_S=0, so the four profile
+      # builds above never touch this code and a break in it would surface for
+      # the first time on a bench, mid-sitting.
+      #
+      # It has already happened once: the first version of dropout_reopen_fn()
+      # called ant_channel_open(), which is a MACRO in sdk-ant's
+      # ant_interface.h rather than a function. Without that header the call
+      # became an implicit declaration and the image failed at link, while
+      # ant_channel_close() beside it linked cleanly. Nothing but an enabled
+      # build catches that.
+      - name: Build ANT+ sensor simulator with dropout knobs
+        if: steps.ant-ready.outputs.enabled == 'true' && matrix.artifact == 'radiant_dongle.uf2'
+        run: |
+          set -euxo pipefail
+          west build app/apps/sim \
+            -b nrf54l15dk/nrf54l15/cpuapp \
+            -d build-sim-dropout \
+            -p always \
+            --sysbuild \
+            -- \
+            -DANT_MODULE_DIR="${GITHUB_WORKSPACE}/ant" \
+            "-Dsim_CONFIG_ANT_SIM_DROPOUT_EVERY_S=90" \
+            "-Dsim_CONFIG_ANT_SIM_DROPOUT_S=10"
+          grep -q '^CONFIG_ANT_SIM_DROPOUT_EVERY_S=90$' \
+            build-sim-dropout/sim/zephyr/.config
+          grep -q '^CONFIG_ANT_SIM_DROPOUT_S=10$' \
+            build-sim-dropout/sim/zephyr/.config
 
       # Emitted once, not once per board - the cause and the fix are the same
       # for every entry in the matrix.

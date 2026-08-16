@@ -638,6 +638,74 @@ config SYSTEM_WORKQUEUE_STACK_SIZE
 config MPSL_WORK_STACK_SIZE
 	default 2048 if RADIANT_BACKEND_NRF_GATE_MPSL
 
+# ==== W4: the gate's own work queue ==========================================
+#
+# WHY THE SYSTEM WORK QUEUE STOPPED BEING GOOD ENOUGH, and it is not a taste
+# argument - it is that the request just above this one was silently overruled.
+#
+# SYSTEM_WORKQUEUE_STACK_SIZE (below) asks for 4096 because a terminal delivery
+# from the gate ends in a whole scheduler pass. On a Thread image it does not
+# get it: nrf/subsys/net/openthread/Kconfig.defconfig pins
+# SYSTEM_WORKQUEUE_STACK_SIZE=1120, and Kconfig takes the FIRST definition whose
+# condition holds in parse order - OpenThread's is parsed first, so radiant's
+# default can never apply on an OpenThread image, which is EXACTLY the image
+# that compiles radiant_radio_nrf_gate_mpsl.c. So the 4096 landed on the builds
+# that did not need it and was overridden on the ones that did, and the failure
+# mode is the silent reboot loop described above. The only reason the Thread
+# arm survives today is a hand-written assignment in
+# apps/dongle_thread/thread.conf (an assignment is not a default and does not
+# lose that race) - i.e. a per-application workaround that every future gate
+# image has to remember to copy. This stack does not need remembering.
+#
+# A stack this module owns cannot be overridden by another subsystem's opinion,
+# and it also takes the gate's placement path out of a queue shared with every
+# driver and logging backend in the image. The system-queue default above is
+# LEFT IN PLACE: the BLE-side builds still route work through k_sys_work_q, and
+# dropping it is a follow-up once there is `gatewq=` high-water data from
+# stacks_report().
+#
+# Both symbols are unconditional for the same reason PLACE_LEAD_US is:
+# radiant/tests/gate compiles that file against fakes with BACKEND_NONE, so a
+# `depends on` here would leave them undefined in that image.
+config RADIANT_GATE_WQ_STACK_SIZE
+	int "stack for the MPSL gate's own work queue (bytes)"
+	default 4096
+	range 1024 16384
+	help
+	  What request_work_fn(), denied_work_fn() and (under SWEEP_DEBUG)
+	  gate_dump_fn() run on. The deep one is denied_work_fn(): it delivers a
+	  terminal event, which runs the completion callback, which runs a whole
+	  scheduler pass that may build and arm the next operation. 4096 is the
+	  same figure radiant asks of the system work queue and for the same
+	  reason - it is a measurement of that call chain, not a round number.
+
+	  COSTS 4 KB OF RAM in every image that compiles the MPSL gate, on top
+	  of the system work queue that still exists. That is the price of the
+	  stack being un-overridable; see the note above this symbol.
+
+	  Do not size it down without reading `gatewq=used/size` off a soak:
+	  the dump prints the 0xAA high-water mark once a second under
+	  CONFIG_INIT_STACKS, which is what this number should eventually be
+	  derived from.
+
+config RADIANT_GATE_WQ_PRIO
+	int "priority of the MPSL gate's work queue thread"
+	default -1
+	range -16 15
+	help
+	  -1 IS NOT A TUNING CHOICE - it is the priority this work already runs
+	  at today, because SYSTEM_WORKQUEUE_PRIORITY defaults to -1 (the lowest
+	  cooperative priority) in these images. Keeping it identical makes the
+	  dedicated queue a contention-isolation change and nothing else, so a
+	  before/after denial rate measures one variable.
+
+	  Raising it above the system queue is a separate, measured decision:
+	  these work items call into the core and run a scheduler pass, and
+	  giving that unbounded work a higher cooperative priority than
+	  everything else in the image is exactly the kind of change that shows
+	  up somewhere unrelated.
+# ==== end W4 =================================================================
+
 config RADIANT_BACKEND_MPSL
 	bool
 	depends on RADIANT_BACKEND_NRF_GATE_MPSL
@@ -1003,6 +1071,70 @@ config RADIANT_SEC_BACKEND_MODES
 	  symbol is shaped for. None ships in v1.
 
 endif # RADIANT_SEC
+
+# -------- The bounded-denial escape (ADR 0013's other half) --------
+#
+# DONE_DENIED credits ZERO dwell, and that is correct: a window an arbiter
+# refused did not listen for a microsecond, so crediting it would advance the
+# address set on coverage the sweep never got. See radiant_search_on_done()'s
+# contract and ant_radio_radiant.c's "DENIED CREDITS ZERO ON PURPOSE".
+#
+# Correct, and by itself a LIVELOCK. A chunk that is always denied leaves
+# dwell_remaining() unchanged, so radiant_sched_rechunk() re-arms the identical
+# chunk forever and the sweep never leaves the set - MEASURED on the nRF54L15
+# beside OpenThread as frozen on set 3, re-arming ~110x/s, 22 796 scan chunks
+# placed across 257 s and not one of them completed. Every device outside that
+# one set is undiscoverable for as long as the other stack is busy.
+#
+# There is no such state without an arbiter: nothing else on the chip can
+# refuse a window, so a single-protocol image cannot livelock this way and
+# pays nothing for the escape. That is why this defaults from the gate symbol
+# rather than being on everywhere - the compiled-out single-protocol image is
+# the zero-cost proof, readable in .config.
+config RADIANT_SEARCH_DENIAL_ESCAPE
+	bool "let the sweep leave a set that is only ever denied the air"
+	default y if RADIANT_BACKEND_NRF_GATE_MPSL
+	default n
+	help
+	  After RADIANT_SEARCH_DENIAL_ESCAPE_RUN consecutive denials that
+	  credited no dwell at all, radiant_search_note_denied() credits one
+	  eighth of the set's dwell budget so the set can eventually finish and
+	  the sweep can move on.
+
+	  QUANTUM-CREDIT, NOT POINTER-ADVANCE, and the distinction is the whole
+	  design. The escape never touches the round-robin cursor or the steer
+	  queue: it only makes dwell_owed() fall, which lets the existing
+	  radiant_search_set_complete() -> slot drop -> pump path pick the next
+	  set exactly as it always does. Advancing the pointer from the denial
+	  path would bypass the seen cache's steering and silently make
+	  re-acquisition slow in precisely the contended case it exists for.
+
+	  It is bounded, not a retry loop: each escape adds a strictly positive
+	  quantum, so a fully-denied set completes in at most eight escapes -
+	  64 denials, about 0.6 s at the observed ~110 denials/s re-arm rate.
+	  Nothing here re-arms anything; the counter only moves when the caller
+	  reports a denial that already happened.
+
+	  The credited time was NOT listened to, which is the honest cost: a
+	  set that spent its whole budget being refused gets less real air than
+	  a healthy one. Coverage the sweep never had is preferable to a set it
+	  never leaves, and the round robin comes back to it.
+
+	  Denials are counted separately as `denial_escapes` and appear on the
+	  SWEEP debug line. Deliberately NOT on the 0xF6 health reply: an
+	  escape is the recovery, not the loss.
+
+config RADIANT_SEARCH_DENIAL_ESCAPE_RUN
+	int "consecutive zero-credit denials before the sweep credits a quantum"
+	default 8
+	range 1 255
+	depends on RADIANT_SEARCH_DENIAL_ESCAPE
+	help
+	  8 is a run long enough that ordinary weather - the other stack taking
+	  a handful of windows in a row - never reaches it, and short enough
+	  that a set which is genuinely unreachable costs 64 denials rather
+	  than forever. A denial that credits any real dwell resets the run, so
+	  a sweep that is merely slow never escapes at all.
 
 config RADIANT_SWEEP_DEBUG
 	bool "log the search sweep's position once a second"

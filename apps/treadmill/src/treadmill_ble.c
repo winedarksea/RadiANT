@@ -951,33 +951,68 @@ static void on_disconnected(struct bt_conn *conn, uint8_t reason)
 }
 
 /*
- * Refuse a short connection interval rather than accept it quietly. Carried
- * over from apps/hrm_ble unchanged, and it is policy rather than power tuning:
- * MPSL ranks the Bluetooth controller above anything an application can
- * request, so RadiANT's share of the radio is delivered by SHAPING BLE's
- * demand, and this is where that decision is made. A phone will ask for tens
- * of milliseconds.
+ * Rewrite a non-compliant connection-interval request to policy rather than
+ * reject it: textual twin of apps/hrm_ble/src/hrm_ble.c's on_param_req() -
+ * keep the two parallel and edit both together. That file's comment carries
+ * the full reasoning (why rewrite beats reject, and the invalid-timeout bug
+ * this replaces); it is not repeated here.
  */
 static bool on_param_req(struct bt_conn *conn, struct bt_le_conn_param *param)
 {
 	ARG_UNUSED(conn);
 
-	if (param->interval_max < CONFIG_TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS) {
-		LOG_INF("refusing %u-unit connection interval, holding at %u",
-			param->interval_max,
-			(unsigned)CONFIG_TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS);
-		param->interval_min =
-			CONFIG_TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS;
-		param->interval_max =
-			CONFIG_TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS;
+	/* Same validity guard on the accept branch as hrm_ble.c's twin; see the
+	 * comment there for why a policy-compliant ask can still be an invalid
+	 * triple the controller silently neg-replies. */
+	bool valid = (uint32_t)param->timeout * 4u >
+		     ((uint32_t)param->latency + 1u) * (uint32_t)param->interval_max;
+
+	bool compliant = param->interval_min >= CONFIG_TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS &&
+			  param->interval_max >= CONFIG_TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS &&
+			  param->latency == 0 &&
+			  param->timeout >= CONFIG_BT_PERIPHERAL_PREF_TIMEOUT;
+
+	if (compliant && valid) {
+		return true;
 	}
+
+	LOG_INF("rewriting non-compliant request (interval %u-%u latency %u "
+		"timeout %u) to policy %u/%u/0/%u",
+		param->interval_min, param->interval_max, param->latency,
+		param->timeout,
+		(unsigned)CONFIG_TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS,
+		(unsigned)CONFIG_TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS,
+		(unsigned)CONFIG_BT_PERIPHERAL_PREF_TIMEOUT);
+
+	param->interval_min = CONFIG_TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS;
+	param->interval_max = CONFIG_TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS;
+	param->latency = 0;
+	if (param->timeout < CONFIG_BT_PERIPHERAL_PREF_TIMEOUT) {
+		param->timeout = CONFIG_BT_PERIPHERAL_PREF_TIMEOUT;
+	}
+
 	return true;
+}
+
+/*
+ * Textual twin of apps/hrm_ble/src/hrm_ble.c's on_param_updated() - the
+ * observability that would have caught the previous silent failure.
+ */
+static void on_param_updated(struct bt_conn *conn, uint16_t interval,
+			      uint16_t latency, uint16_t timeout)
+{
+	ARG_UNUSED(conn);
+
+	LOG_INF("connection params updated: interval=%u (%u ms) latency=%u "
+		"timeout=%u (%u ms)",
+		interval, (interval * 5u) / 4u, latency, timeout, timeout * 10u);
 }
 
 BT_CONN_CB_DEFINE(treadmill_ble_conn_cb) = {
 	.connected = on_connected,
 	.disconnected = on_disconnected,
 	.le_param_req = on_param_req,
+	.le_param_updated = on_param_updated,
 };
 
 /*
