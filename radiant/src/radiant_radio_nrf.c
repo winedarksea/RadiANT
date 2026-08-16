@@ -1535,6 +1535,64 @@ static int8_t rssi_sample_dbm(void)
 #define RADIANT_NRF_RADIO_EP 0
 #endif
 
+/*
+ * ---------------------------------------------------------------------------
+ * DO WE HOLD THE RADIO AT THIS INSTANT?  (bug 24)
+ * ---------------------------------------------------------------------------
+ *
+ * Under the MPSL gate the RADIO is ours only between SIGNAL_START and the
+ * ACTION_END that closes the timeslot. Outside that window it belongs to
+ * whoever MPSL gave it to - beside OpenThread that is the nRF 802.15.4 driver,
+ * which is receiving on it continuously.
+ *
+ * Three functions in this file wrote SHARED RADIO registers with no regard for
+ * that, from ordinary thread/work-queue context:
+ *
+ *   deliver_terminal()     nrf_radio_shorts_set(NRF_RADIO, 0)
+ *   radiant_radio_abort()  the same, plus TASKS_STOP and a forced TASKS_DISABLE
+ *   ..._gate_on_grant_end() the same, plus TASKS_DISABLE and the endpoint swap
+ *
+ * A terminal is delivered for every operation INCLUDING a denied one, and a
+ * denial is delivered from the gate's work queue with no timeslot held at all.
+ * Measured on this board (nRF54L15 DK, thread.conf;bridge.conf, 2026-08-15):
+ * every real reservation was refused by the arbiter, so the core ran a denial
+ * loop at ~80 terminals a second, each one clearing RADIO->SHORTS underneath a
+ * driver that was mid-frame on the same peripheral.
+ *
+ * SHORTS is what makes that fatal rather than merely rude. nrf_802154 receives
+ * with SHORTS_RX = ADDRESS_RSSISTART | PHYEND_DISABLE | ADDRESS_BCSTART, and
+ * PHYEND_DISABLE is the ONLY thing that takes its radio down at the end of a
+ * frame. Clear SHORTS between ADDRESS and PHYEND and the frame still completes,
+ * CRCOK still fires, and its handler (irq_handler_crcok -> rxframe_finish ->
+ * wait_until_radio_is_disabled, nrf_802154_trx.c:1715) then spins
+ * MAX_RAMPDOWN_CYCLES waiting for a DISABLED that cannot come and trips
+ * NRF_802154_ASSERT(radio_is_disabled) at nrf_802154_trx.c:380. That reaches
+ * nrf_802154_assert_handler() -> k_panic(). Observed exactly:
+ *
+ *   <err> os: ***** HARD FAULT *****   ARCH_EXCEPT with reason 4
+ *   pc 0x00036594 = nrf_802154_assert_handler (assert_handler.c:24)
+ *   lr 0x000179cf = rxframe_finish       (nrf_802154_trx.c:1718)
+ *
+ * 4-45 s after the ANT self-channels open, which is simply how long it takes
+ * for one of those ~80 writes a second to land inside a Thread frame.
+ *
+ * So every shared-RADIO write is gated on this. It is a compile-time `true` on
+ * the direct backend, where the RADIO is ours forever and nothing changes.
+ *
+ * NOT the same question as g.hw_held in radiant_radio_nrf_gate_mpsl.c. That
+ * one is "has on_grant_end() still to run", and it is deliberately TRUE for a
+ * bootstrap timeslot - which never calls radiant_nrf_gate_on_grant() and so
+ * never takes the peripheral at all. This flag is set where the peripheral is
+ * actually taken, which is why the bootstrap path (one timeslot a second in
+ * the measurement above) stops writing registers it never borrowed.
+ */
+#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
+static volatile bool radio_on_loan;
+#define RADIO_IS_OURS() (radio_on_loan)
+#else
+#define RADIO_IS_OURS() true
+#endif
+
 /* Defined beside the other gate callbacks, where the RADIO-ownership
  * reasoning lives; declared here because the allocation they capture
  * happens at init, above them. */
@@ -3264,7 +3322,17 @@ void radiant_nrf_gate_on_grant(void)
 	 * connections. See radiant_radio_enable() and radio_endpoints_attach()
 	 * for what leaving either of them set does to the stack that has the
 	 * radio the rest of the time.
+	 *
+	 * THE LOAN STARTS HERE, on the first line that writes a shared RADIO
+	 * register, and not at SIGNAL_START: the two early returns above
+	 * (nostage, and the freed-slot `default:` below) leave without ever
+	 * touching the peripheral, and a flag set before them would licence
+	 * on_grant_end() to hand back a radio that was never borrowed. See
+	 * RADIO_IS_OURS().
 	 */
+#if defined(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL)
+	radio_on_loan = true;
+#endif
 	nrf_radio_int_enable(NRF_RADIO, NRF_RADIO_INT_END_MASK |
 					NRF_RADIO_INT_DISABLED_MASK);
 
@@ -3471,6 +3539,28 @@ void radiant_nrf_gate_finish_failed(void)
  */
 static void radio_endpoints_save(void)
 {
+#if !RADIANT_NRF_RADIO_EP
+	/*
+	 * A PPI part has no endpoint register to save. The comment at
+	 * RADIANT_NRF_RADIO_EP explains why the whole layer is inert here; this
+	 * stub is the other half of that, and it was missing.
+	 *
+	 * The gate is buildable on an nRF52840 - MPSL supports the part - so
+	 * `#if CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL` alone left the six
+	 * NRF_RADIO->PUBLISH_/SUBSCRIBE_ dereferences below exposed on a part
+	 * whose NRF_RADIO_Type has no such members. The guard was applied to
+	 * radio_ep_reg() and to radio_endpoints_attach_off_at_init() but not
+	 * here or in radio_endpoints_attach(), so any arbitrated nRF52840 build
+	 * failed with six hard compile errors - Matter and non-Matter alike.
+	 *
+	 * `saved` stays false, which is already radio_endpoints_attach()'s own
+	 * early-out condition, so the swap is inert by the route it was always
+	 * going to be inert by.
+	 */
+	radio_ep.saved     = false;
+	radio_ep_mine_mask = 0U;
+	return;
+#else
 	radio_ep.pub_address   = NRF_RADIO->PUBLISH_ADDRESS;
 	radio_ep.pub_rxready   = NRF_RADIO->PUBLISH_RXREADY;
 	radio_ep.sub_rssistart = NRF_RADIO->SUBSCRIBE_RSSISTART;
@@ -3511,6 +3601,7 @@ static void radio_endpoints_save(void)
 			"per-grant swap is empty and ANT+ cannot drive the "
 			"radio at all");
 	}
+#endif /* !RADIANT_NRF_RADIO_EP */
 }
 
 /*
@@ -3563,6 +3654,15 @@ static void radio_endpoints_attach(bool on)
 	    radio_ep_mine_mask == 0U) {
 		return;
 	}
+#if !RADIANT_NRF_RADIO_EP
+	/*
+	 * Unreachable on a PPI part - radio_endpoints_save() leaves `saved`
+	 * false and the mask zero, so the early-out above has already fired.
+	 * The guard is here anyway because the compiler does not know that, and
+	 * radio_ep_reg() below simply does not exist on this silicon.
+	 */
+	ARG_UNUSED(on);
+#else
 
 	/* Our values, in radio_ep_reg() order, so the mask indexes both. */
 	const uint32_t mine[RADIO_EP_COUNT] = {
@@ -3584,6 +3684,7 @@ static void radio_endpoints_attach(bool on)
 			*radio_ep_reg(r) = radio_ep_foreign[r];
 		}
 	}
+#endif /* !RADIANT_NRF_RADIO_EP */
 }
 #endif /* CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL */
 
@@ -3644,6 +3745,27 @@ void radiant_nrf_gate_on_grant_end(void)
 		grant_short_rx = false;
 	}
 #endif
+	/*
+	 * BUG 24: NOTHING BELOW MAY RUN FOR A TIMESLOT THAT NEVER TOOK THE
+	 * PERIPHERAL. This function is reached from gate_hand_back(), which is
+	 * driven by g.hw_held - and hw_held is set at SIGNAL_START for EVERY
+	 * granted timeslot, including the anchor-establishing bootstrap, which
+	 * returns ACTION_END without calling radiant_nrf_gate_on_grant() and so
+	 * without enabling an interrupt, attaching an endpoint or programming a
+	 * single register. Handing back a radio that was never borrowed means
+	 * clearing RADIO->SHORTS and forcing TASKS_DISABLE on a peripheral the
+	 * 802.15.4 driver is receiving on. See RADIO_IS_OURS() for the assert
+	 * that produces.
+	 *
+	 * The bookkeeping above (and stats.grant_end_calls in the gate) is
+	 * deliberately left alone: the "exactly one on_grant_end() per granted
+	 * timeslot" invariant the soak is scored on stays exactly as it was, and
+	 * only the register writes become conditional.
+	 */
+	if (!RADIO_IS_OURS()) {
+		return;
+	}
+
 	/*
 	 * Hand the peripheral back in the state it was lent in. The interrupt
 	 * mask is the part that matters: two bits left set in RADIO->INTENSET
@@ -3748,6 +3870,11 @@ void radiant_nrf_gate_on_grant_end(void)
 	if (!radio_irq_was_enabled) {
 		NVIC_DisableIRQ(RADIANT_RADIO_IRQn);
 	}
+	/* The loan ends on the last line that touches the peripheral, so
+	 * anything reached after this - a terminal delivered from the work
+	 * queue, an abort from thread context - finds the radio not ours and
+	 * leaves its registers alone. See RADIO_IS_OURS(). */
+	radio_on_loan = false;
 #endif
 }
 
@@ -3818,8 +3945,15 @@ int radiant_radio_abort(void)
 	nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
 	nrfx_gppi_conn_disable(radiant_op.conn_close);
 	nrfx_gppi_conn_disable(radiant_op.conn_rssi);
-	nrf_radio_shorts_set(NRF_RADIO, 0);
-	nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_STOP);
+	/* BUG 24: SHORTS and TASKS_STOP are the peripheral's, not ours, unless
+	 * a grant is live. An abort commonly arrives from thread context for an
+	 * operation that was only ever STAGED - no grant, nothing programmed -
+	 * and stopping another stack's receiver mid-frame is how that presented.
+	 * See RADIO_IS_OURS(). */
+	if (RADIO_IS_OURS()) {
+		nrf_radio_shorts_set(NRF_RADIO, 0);
+		nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_STOP);
+	}
 	/* An operation that was still waiting for a grant is aborted too, and it
 	 * is the easy case: nothing was programmed, so there is nothing to tear
 	 * down. Clearing the flag under the same lock is what stops a grant that
@@ -3851,7 +3985,14 @@ int radiant_radio_abort(void)
 	 * handler. This also keeps the HAL's promise that an aborted
 	 * operation still produces exactly one terminal event.
 	 */
-	radio_disable_now();
+	/* BUG 24: only if the radio is ours. Forcing TASKS_DISABLE on another
+	 * stack's live receiver is the same mistake as the SHORTS write above,
+	 * and the spin that follows it would then be waiting on an event that
+	 * driver is entitled to consume. With no grant held there is nothing to
+	 * take down anyway - the operation being aborted was never programmed. */
+	if (RADIO_IS_OURS()) {
+		radio_disable_now();
+	}
 	deliver_terminal(RADIANT_RADIO_STATUS_ABORTED);
 
 	return RADIANT_RADIO_OK_RC;
@@ -3958,7 +4099,23 @@ static void deliver_terminal(enum radiant_radio_status st)
 	nrfx_gppi_conn_disable(radiant_op.conn_start_tx);
 	nrfx_gppi_conn_disable(radiant_op.conn_close);
 	nrfx_gppi_conn_disable(radiant_op.conn_rssi);
-	nrf_radio_shorts_set(NRF_RADIO, 0);
+	/*
+	 * BUG 24. The four disables above are our own DPPIC channels and are
+	 * safe from any context; RADIO->SHORTS is not ours between grants.
+	 *
+	 * This is the write that crashed the contended build: a DENIED terminal
+	 * runs from the gate's work queue with no timeslot held, and under a
+	 * refusing arbiter that is ~80 times a second. Every one of them cleared
+	 * the 802.15.4 driver's PHYEND->DISABLE short mid-frame. See
+	 * RADIO_IS_OURS().
+	 *
+	 * Nothing is lost by skipping it: our shorts only exist inside a grant,
+	 * and radiant_nrf_gate_on_grant_end() already cleared them on the way
+	 * out of the one that programmed them.
+	 */
+	if (RADIO_IS_OURS()) {
+		nrf_radio_shorts_set(NRF_RADIO, 0);
+	}
 
 	radiant_op.kind = OP_NONE;
 	/*
@@ -3982,8 +4139,14 @@ static void deliver_terminal(enum radiant_radio_status st)
 		 * the enable in radiant_radio_ed(): an ordinary receive window
 		 * must cost exactly what it cost before this operation existed,
 		 * and the way to be sure of that is for it to run against the
-		 * same interrupt mask. */
-		nrf_radio_int_disable(NRF_RADIO, NRF_RADIO_INT_RXREADY_MASK);
+		 * same interrupt mask. Guarded like every other shared-register
+		 * write here (bug 24): INTENCLR00 is the arbiter's register
+		 * between grants, and on_grant_end() has already cleared this
+		 * bit on the way out of the grant that set it. */
+		if (RADIO_IS_OURS()) {
+			nrf_radio_int_disable(NRF_RADIO,
+					      NRF_RADIO_INT_RXREADY_MASK);
+		}
 
 		memset(&evt, 0, sizeof(evt));
 		evt.op = radiant_op.id;

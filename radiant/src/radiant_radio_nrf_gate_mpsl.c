@@ -219,7 +219,7 @@ BUILD_ASSERT(CONFIG_MPSL_TIMESLOT_SESSION_COUNT >= 1,
  * 2760 us tail sample. Nearer than this the arbiter cannot physically grant,
  * so counting its refusal as contention would be measuring ourselves.
  */
-#define PLACE_LEAD_US 2500u
+#define PLACE_LEAD_US CONFIG_RADIANT_GATE_MPSL_PLACE_LEAD_US
 
 /*
  * The same number as a floor rather than a budget - and it must NOT equal
@@ -232,7 +232,7 @@ BUILD_ASSERT(CONFIG_MPSL_TIMESLOT_SESSION_COUNT >= 1,
  * bare hardware minimum: measured grant latency rounded up toward the 2760 us
  * tail.
  */
-#define PLACE_MIN_US 1900u
+#define PLACE_MIN_US CONFIG_RADIANT_GATE_MPSL_PLACE_MIN_US
 
 /*
  * The longest single operation, reported as caps.max_window_us.
@@ -313,6 +313,11 @@ BUILD_ASSERT(CONFIG_MPSL_TIMESLOT_SESSION_COUNT >= 1,
  */
 #define BOOTSTRAP_TIMEOUT_US 1000000u
 
+BUILD_ASSERT(PLACE_MIN_US < PLACE_LEAD_US,
+	     "the too-near floor must be strictly below the advertised lead: "
+	     "the core plans against the advertised figure using its own `now` "
+	     "and the test below runs against a sample taken later, so equal "
+	     "values refuse every arm (measured: chunks=0, deny=517013/19s)");
 BUILD_ASSERT(EXTEND_STEP_US >= MPSL_TIMESLOT_EXTENSION_TIME_MIN_US,
 	     "an extension smaller than MPSL's own minimum is refused, and the "
 	     "refusal would read as the arbiter yielding");
@@ -726,6 +731,26 @@ static uint32_t elastic_skew_us;
 #define BLOCKED_RUN_REANCHOR 4u
 static uint32_t blocked_run;
 
+#if defined(CONFIG_RADIANT_SWEEP_DEBUG)
+/*
+ * WHAT MPSL WAS ACTUALLY ASKED FOR, as opposed to what this file believes it
+ * asked for. Bug 25 was exactly a disagreement between those two, and no
+ * counter here could see it: `len=%u/%u` in the dump prints g.granted_len_us
+ * and g.want_len_us, both of which were right. These are read straight out of
+ * `req` at the moment it is finished, so they cannot drift from it.
+ */
+static uint32_t last_req_len_us;
+static uint32_t last_req_dist_us;
+/*
+ * HOW FAR AHEAD OF `now` THE REQUESTED START ACTUALLY IS - the quantity bug 26
+ * turned out to be about, and the one number the dump never carried. `dist` is
+ * measured from the anchor, which ages, so a distance of 42 ms says nothing
+ * about whether MPSL was given any notice.
+ */
+static uint32_t last_req_lead_us;
+static uint32_t min_req_lead_us = UINT32_MAX;
+#endif
+
 BUILD_ASSERT(ELASTIC_FLOOR_US >= MPSL_TIMESLOT_LENGTH_MIN_US,
 	     "the elastic floor must still be a timeslot MPSL will grant");
 BUILD_ASSERT(ELASTIC_FLOOR_US > END_MARGIN_US,
@@ -1031,7 +1056,7 @@ static void gate_dump_fn(struct k_work *w)
 		"sent grant=%u dead=%u blk=%u supp=%u | "
 		"end=%u (norm=%u rel=%u idle=%u late=%u) | "
 		"bad over=%u inval=%u unk=%u inl=%u | "
-		"len=%u/%u el=%u skew=%u brun=%u sig=%u "
+		"req=%u/+%u lead=%u/%u len=%u/%u el=%u skew=%u brun=%u sig=%u "
 		"g=%d hw=%d p=%d rel=%d end=%d boot=%d anchor=%d owes=%d",
 		stats.acquires, stats.acq_in_grant, stats.acq_in_grant_denied,
 		stats.placed, stats.granted, stats.blocked, stats.cancelled,
@@ -1046,6 +1071,9 @@ static void gate_dump_fn(struct k_work *w)
 		stats.idle_disarm, stats.late_disarm,
 		stats.overstayed, stats.invalid_return, stats.unknown_signal,
 		stats.answered_inline,
+		last_req_len_us, last_req_dist_us,
+		last_req_lead_us,
+		(min_req_lead_us == UINT32_MAX) ? 0u : min_req_lead_us,
 		g.granted_len_us, g.want_len_us,
 		elastic_initial_us, elastic_skew_us, blocked_run,
 		stats.last_signal, (int)g.granted, (int)g.hw_held, (int)g.pending,
@@ -2011,7 +2039,7 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 			? MPSL_TIMESLOT_PRIORITY_HIGH
 			: MPSL_TIMESLOT_PRIORITY_NORMAL;
 	req.params.normal.distance_us = (uint32_t)(start - g.anchor);
-	req.params.normal.length_us = (uint32_t)len;
+	/* length_us is written BELOW, after the elastic clamp - see bug 25. */
 
 	/* Staged, not written through `g` - this function can run during a
 	 * live grant, and these describe the NEXT one. See next_grant and
@@ -2035,6 +2063,50 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 		len = elastic_initial_us;
 	}
 	next_grant.granted_len_us = (uint32_t)len;
+
+	/*
+	 * BUG 25: THE ELASTIC BACKOFF NEVER REACHED THE ARBITER. THIS ASSIGNMENT
+	 * USED TO SIT TWENTY LINES ABOVE, BEFORE THE CLAMP.
+	 *
+	 * `len` above the clamp is the whole window plus margins - for a scan
+	 * chunk, MAX_WINDOW_US + 2500 = 96700 us. The clamp then shortened only
+	 * next_grant.granted_len_us, this file's own bookkeeping for the grant it
+	 * expected to receive; the request MPSL was handed still asked for the
+	 * whole 96.7 ms. So every mechanism written to make the elastic class give
+	 * way - elastic_initial_us halving on BLOCKED down to ELASTIC_FLOOR_US,
+	 * growing back one EXTEND_STEP_US per grant - moved a number that was
+	 * never in the request, and the whole extension chain (ADR 0013's "ask
+	 * small and grow") was dead code beside any contending stack: a grant that
+	 * large is never given, so SIGNAL_START never arrives to grow it.
+	 *
+	 * The gate's own header (ELASTIC_INITIAL_US) records exactly this shape as
+	 * a measurement from bring-up - "a standing demand for ~96% of the radio
+	 * that MPSL simply refuses (one EARLIEST grant, then every NORMAL request
+	 * BLOCKED forever, chunks=0)" - and that is what the P4 MED bench showed
+	 * 600 s of: placed=57481 granted=11517 blocked=45984, every block answered
+	 * inline from inside mpsl_timeslot_request() (inl=45984), all 11517 grants
+	 * being 100 us bootstrap anchors (len=100/100), and
+	 * radiant_nrf_gate_on_grant() entered zero times.
+	 *
+	 * It was invisible to the ztest suite because the elastic test asserts on
+	 * granted_len_us < want_len_us - the two internal numbers, both correct -
+	 * and never on what fake_mpsl_last_request() was actually given. A test for
+	 * that is added alongside this fix.
+	 *
+	 * So: one assignment, and it must be the LAST word on the length, below
+	 * every clamp. next_grant.granted_len_us is used rather than `len` so the
+	 * two can never disagree again - what we ask for IS what SIGNAL_START will
+	 * measure the grant against.
+	 */
+	req.params.normal.length_us = next_grant.granted_len_us;
+#if defined(CONFIG_RADIANT_SWEEP_DEBUG)
+	last_req_len_us = next_grant.granted_len_us;
+	last_req_dist_us = req.params.normal.distance_us;
+	last_req_lead_us = (uint32_t)(start - now);
+	if (last_req_lead_us < min_req_lead_us) {
+		min_req_lead_us = last_req_lead_us;
+	}
+#endif
 
 	/*
 	 * Handed to a thread, not called from here: radiant_sched.c arms from

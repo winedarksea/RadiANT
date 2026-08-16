@@ -753,6 +753,19 @@ ZTEST(radiant_gate, test_an_extension_does_not_hand_the_radio_back)
 	gate_probe_read(&p);
 	zassert_true(p.granted_len_us < p.want_len_us,
 		     "the elastic class asked for the whole thing up front");
+	/*
+	 * BUG 25. The line above asserts on the gate's OWN bookkeeping, and that
+	 * was right the whole time the gate was asking MPSL for the full 96.7 ms
+	 * of a scan chunk - the clamp reached next_grant.granted_len_us but not
+	 * req.params.normal.length_us. Beside an OpenThread MED that is refused
+	 * 100% of the time, so no grant ever arrives and none of the chain below
+	 * this line executes on real hardware. The assertion that catches it can
+	 * only be made against the arbiter's own copy.
+	 */
+	zassert_equal(p.granted_len_us,
+		      fake_mpsl_last_request()->params.normal.length_us,
+		      "the gate asked MPSL for a different length than the one "
+		      "it then measured the grant against");
 
 	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_EXTEND,
 		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_TIMER0),

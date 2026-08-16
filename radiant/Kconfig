@@ -386,6 +386,87 @@ config RADIANT_BACKEND_NRF_GATE_MPSL
 	  moment an empty window closes - which the backend does, and which is a
 	  required line of the design rather than an optimisation.
 
+# ── The placement lead, which turned out to be the load-bearing number ───────
+#
+# BUG 26. How far ahead of the requested start MPSL is TOLD about a NORMAL
+# reservation, and it is a different quantity from grant latency, which is what
+# the original 2500 was derived from.
+#
+# Grant latency (~1695 us, measured in radiant/spike/mpsl_arb) is how long MPSL
+# takes to START a timeslot it has already decided to give. The placement lead
+# is how much notice the SCHEDULER needs to fit a fixed-instant slot in beside
+# another client that is already using the radio - beside an 802.15.4 driver in
+# continuous receive, that means enough notice to refuse the 802.15.4 arbiter
+# its next extension. With 2500 us of lead, beside an attached OpenThread MED,
+# EVERY NORMAL request is refused, inline, 100% of the time (measured, 180 s:
+# placed=17456 granted=3492 blocked=13964 inl=13964, all 3492 grants being
+# 100 us bootstrap anchors and radiant_nrf_gate_on_grant() entered zero times).
+#
+# It is a Kconfig symbol rather than a constant because it is a property of the
+# OTHER stack's schedule, not of this one: a BLE-only image and an OpenThread
+# image need different answers, and the right value can only be found by
+# sweeping it on hardware against the stack in question.
+#
+# Cost of raising it: the core plans every window this far ahead
+# (gate_min_arm_lead_us() = this + HEAD_MARGIN_US), so it is added latency on
+# every search chunk and every tracked slot, not wasted air. An ANT+ tracked
+# window at 4 Hz has 250 ms of period to place it in; the acknowledged-data
+# reply that arms 1.56 ms out is served from air already held (follow_on_us)
+# and is unaffected.
+config RADIANT_GATE_MPSL_PLACE_LEAD_US
+	int "how far ahead of its start a timeslot reservation is placed (us)"
+	# NO `depends on RADIANT_BACKEND_NRF_GATE_MPSL`, deliberately.
+	# radiant/tests/gate compiles radiant_radio_nrf_gate_mpsl.c against fakes
+	# with BACKEND_NONE, so a dependency here would leave the symbol
+	# undefined in that image. The alternative - an #ifndef fallback in the C
+	# file - is the silent-wrong-value trap this tree documents elsewhere
+	# (build_all.ps1's -DRADIANT_BACKEND note): a real build that lost the
+	# symbol would compile and run with a number nobody chose. Always
+	# defined, always the same number, and the .config always shows it.
+	# 24000 IS A MEASUREMENT, not a round number. Swept on the nRF54L15 DK
+	# beside a DETACHED OpenThread MED (the worst case - a detached MTD keeps
+	# its receiver up continuously trying to attach), same board, same image,
+	# only this symbol changed:
+	#
+	#   lead    placed  granted  blocked  real grants  window
+	#    2500   17456     3492    13964            0   180 s   (all anchors)
+	#   12000   10397     3465     6931         1734   120 s
+	#   24000    8565     8564        0         8563   300 s
+	#
+	# At 24 ms MPSL refuses nothing at all, and the run that produced the
+	# last row acquired and held a real ANT+ heart-rate master for five
+	# minutes. Below ~12 ms the arbiter cannot fit the slot in and the
+	# refusal is inline - it is not contention, it is not enough notice.
+	default 24000
+	range 1000 100000
+	help
+	  Advertised to the core as part of caps.min_arm_lead_us, so raising it
+	  moves the RESERVATION AND THE OPERATION TOGETHER. That is the whole
+	  difference between this and the elastic phase skew that used to sit in
+	  gate_acquire() (bug 22): the skew moved the reservation only, bought
+	  the same lead by accident, and put the grant off the window it was
+	  supposed to cover.
+
+config RADIANT_GATE_MPSL_PLACE_MIN_US
+	int "the bare minimum lead a reservation is still placed with (us)"
+	# Unconditional for the same reason as PLACE_LEAD_US above.
+	# Three quarters of PLACE_LEAD_US: enough slack for the work queue to run
+	# between gate_acquire()'s `now` and request_work_fn()'s call, not so
+	# much that a request MPSL would still honour is refused here instead.
+	default 18000
+	range 500 100000
+	help
+	  The floor for the too-near test, and it must be strictly less than
+	  PLACE_LEAD_US - the core plans against the advertised lead using its
+	  own `now`, and this test runs against a sample taken a few hundred
+	  microseconds later, so equal values refuse everything (measured once as
+	  chunks=0, deny=517013/19s).
+
+	  Below this a request is refused synchronously (counted as `near`)
+	  rather than placed and blocked. Refusing early is the honest answer:
+	  a request MPSL will certainly refuse still costs a placement, a
+	  BLOCKED, and a turn of the re-anchor cycle.
+
 config RADIANT_NRF_NO_RADIO0_IRQ
 	bool "DIAGNOSTIC: leave the RADIO_0 NVIC line entirely to MPSL"
 	depends on RADIANT_BACKEND_NRF_GATE_MPSL
