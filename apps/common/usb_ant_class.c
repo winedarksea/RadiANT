@@ -7,7 +7,8 @@
  * Architecture:
  *   EP_OUT (0x01)  host → device: Zephyr USB stack calls ep_out_cb, data goes into
  *                  ant_rx_ring_buf and ant_rx_sem is signalled for the bridge thread.
- *   EP_IN  (0x81)  device → host: usb_ant_send() does a synchronous transfer.
+ *   EP_IN  (0x81)  device → host: usb_ant_send() does a synchronous transfer
+ *                  with a bounded wait - see usb_ant_write().
  */
 
 #include <zephyr/kernel.h>
@@ -294,6 +295,59 @@ static int ant_vendor_handle_req(struct usb_setup_packet *setup,
 
 #endif /* CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS */
 
+/* How long a bulk-IN transfer may take before we stop waiting for it. A host
+ * that has stopped polling IN while still configured is indistinguishable
+ * from one that is merely slow, so this has to be finite: the wait happens
+ * under tx_mutex, and the thread that holds it is the bridge thread answering
+ * host commands, with the TX thread queued behind it.
+ */
+#define ANT_TX_TIMEOUT K_MSEC(1000)
+
+/* How long we then wait for the cancellation to actually complete. The cancel
+ * does not finish inline - usb_cancel_transfer() only marks the transfer
+ * -ECANCELED and submits its work to USB_WORK_Q - so the completion callback
+ * fires some time after we return from it. See the drain in usb_ant_write().
+ */
+#define ANT_TX_CANCEL_DRAIN K_MSEC(100)
+
+/*
+ * WHY THESE ARE FILE-STATIC, which is the whole substance of this change.
+ *
+ * Zephyr's usb_transfer_sync() keeps its equivalents of these two - a
+ * semaphore and an int for the result - in a struct usb_transfer_sync_priv on
+ * the CALLEE'S STACK, and hands the transfer machinery a pointer to it
+ * (subsys/usb/device/usb_transfer.c). That is precisely why its wait cannot be
+ * given a timeout: if it returned on a timeout, that stack frame would vanish
+ * while the USB stack still held a pointer into it, and the completion
+ * callback would later write through it. So it waits K_FOREVER, and a host
+ * that stops polling IN while still configured parks the caller - and, because
+ * the wait is under tx_mutex, every other writer - permanently.
+ *
+ * Hoisting the pair to file scope removes that constraint: the callback's
+ * target outlives any caller, so the wait CAN be bounded and abandoned. The
+ * price is that the pair is now shared, which is why every access below is
+ * inside tx_mutex, and why the timeout path drains the cancellation before it
+ * releases the mutex.
+ *
+ * There is no honest ztest for any of this. The failure it fixes needs a real
+ * USB host that stays configured and stops polling IN - not something a
+ * native_sim or on-target unit test can produce, and a fake that just refuses
+ * to give the semaphore would only be testing k_sem_take(). The verification
+ * is tools/bench_usb_stall.py against a real host, plus the tx_timeout counter
+ * in the 0xF6 reply.
+ */
+static K_SEM_DEFINE(tx_done_sem, 0, 1);
+static volatile int tx_done_size;
+
+static void tx_done_cb(uint8_t ep, int size, void *priv)
+{
+	ARG_UNUSED(ep);
+	ARG_UNUSED(priv);
+
+	tx_done_size = size;
+	k_sem_give(&tx_done_sem);
+}
+
 static int usb_ant_write(const uint8_t *buf, size_t len)
 {
 	if (!configured) {
@@ -301,11 +355,71 @@ static int usb_ant_write(const uint8_t *buf, size_t len)
 	}
 
 	k_mutex_lock(&tx_mutex, K_FOREVER);
-	int ret = usb_transfer_sync(ant_ep_data[ANT_EP_IN_IDX].ep_addr,
-				    (uint8_t *)buf, len,
-				    USB_TRANS_WRITE);
+
+	/* Drop any completion left over from a previous timeout's cancellation
+	 * or from a suspend, so the wait below cannot be satisfied by a stale
+	 * give. The result is pre-set to the value the suspend/disconnect arms
+	 * publish, so that a give from those paths is never read as a size.
+	 */
+	k_sem_reset(&tx_done_sem);
+	tx_done_size = -ESHUTDOWN;
+
+	int ret = usb_transfer(ant_ep_data[ANT_EP_IN_IDX].ep_addr,
+			       (uint8_t *)buf, len,
+			       USB_TRANS_WRITE, tx_done_cb, NULL);
+	if (ret) {
+		k_mutex_unlock(&tx_mutex);
+		return ret;
+	}
+
+	if (k_sem_take(&tx_done_sem, ANT_TX_TIMEOUT) != 0) {
+		LOG_WRN("USB TX timeout");
+		ant_health_note(ANT_HEALTH_TX_TIMEOUT);
+
+		/* Per-endpoint, NOT usb_cancel_transfers(): the plural form
+		 * walks every transfer slot and would kill the armed bulk-OUT
+		 * as well, leaving the host unable to send us anything and
+		 * arm_rx() with no completion to re-arm from.
+		 */
+		usb_cancel_transfer(ant_ep_data[ANT_EP_IN_IDX].ep_addr);
+
+		/* Drain the cancellation, still holding tx_mutex.
+		 *
+		 * The cancel completes later on USB_WORK_Q, so its callback's
+		 * k_sem_give() is still to come. Two things need it consumed
+		 * here. First, `buf` belongs to our caller - a frame on the TX
+		 * thread's stack, or the bridge's - and it is not safe to
+		 * return until the transfer is provably finished with it.
+		 * Second, an un-consumed give left behind for the NEXT writer
+		 * would satisfy its wait instantly with a stale tx_done_size,
+		 * i.e. report a transfer that never happened as done. Doing it
+		 * under the mutex is what makes both true: no other writer can
+		 * be between its reset and its own wait while we are here.
+		 *
+		 * If the callback already fired in the window between our
+		 * timeout expiring and the cancel, usb_cancel_transfer() finds
+		 * the transfer no longer -EBUSY and does nothing at all - and
+		 * this take consumes that one give and returns immediately.
+		 * That is the intended outcome, not a special case.
+		 */
+		if (k_sem_take(&tx_done_sem, ANT_TX_CANCEL_DRAIN) != 0) {
+			/* USB_WORK_Q starved for 100 ms on top of a host that
+			 * stopped polling for a second. The next writer's
+			 * k_sem_reset() is the backstop.
+			 */
+			LOG_WRN("USB TX cancel did not complete");
+		}
+
+		k_mutex_unlock(&tx_mutex);
+		return -ETIMEDOUT;
+	}
+
+	ret = tx_done_size;
 	k_mutex_unlock(&tx_mutex);
 
+	/* The transferred size, exactly as usb_transfer_sync() returned it -
+	 * this is a shape-preserving replacement, not a new contract.
+	 */
 	return ret;
 }
 
@@ -421,18 +535,33 @@ static void ant_status_cb(struct usb_cfg_data *cfg,
 		rx_armed = false;
 		rx_backpressured = false;
 		k_msgq_purge(&ant_tx_msgq);
+		/* Release anyone blocked in usb_ant_write(): the completion that
+		 * would have woken them is not coming from an unplugged host.
+		 * Without this they wait out the full ANT_TX_TIMEOUT for an
+		 * answer that is already known to be impossible.
+		 */
+		tx_done_size = -ESHUTDOWN;
+		k_sem_give(&tx_done_sem);
 		break;
 	case USB_DC_SUSPEND:
 		configured = false;
 		rx_armed = false;
 		rx_backpressured = false;
 		k_msgq_purge(&ant_tx_msgq);
-		/* usb_ant_write() holds tx_mutex across a usb_transfer_sync() that
-		 * waits K_FOREVER. A suspend landing mid-transfer would otherwise
-		 * park the bridge thread - and the TX thread behind it - for the
-		 * whole duration of the host's sleep, with the mutex held.
+		/* usb_ant_write() holds tx_mutex across its wait for the bulk-IN
+		 * completion. That wait is now bounded (ANT_TX_TIMEOUT), but a
+		 * suspend can last for the whole duration of a laptop's sleep,
+		 * and there is no reason to spend a second of it - or to charge
+		 * a tx_timeout against a host that told us it was going away.
+		 *
+		 * This plural call is the pre-existing one and stays: on suspend
+		 * the bulk-OUT is going down anyway (arm_rx() re-arms it from
+		 * USB_DC_RESUME), which is exactly not true of the timeout path
+		 * in usb_ant_write(), which must use the singular form.
 		 */
 		usb_cancel_transfers();
+		tx_done_size = -ESHUTDOWN;
+		k_sem_give(&tx_done_sem);
 		break;
 	default:
 		break;
