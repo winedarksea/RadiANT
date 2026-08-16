@@ -552,6 +552,15 @@ void FlushHandler(intptr_t)
 			}
 			int64_t value = cell.value;
 
+			/* TEMPORARY, package G items 3/4: nothing on this path
+			 * logged an individual attribute write, so "the pipeline
+			 * runs end to end" was not a measurement. One line per
+			 * write, at the 1 Hz flush pace (post-deadband/heartbeat),
+			 * not per sample - see docs/g-hardware-bringup.md. */
+			LOG_INF("matter: chip endpoint %u cluster 0x%04x attr 0x%04x <- %lld",
+				row.chipEndpoint, static_cast<unsigned int>(cell.cluster),
+				static_cast<unsigned int>(cell.attribute), static_cast<long long>(value));
+
 			/* int64_t and sizeof(int64_t), always. The device
 			 * narrows and refuses what does not fit - see
 			 * bridged_device_types/radiant_bridged_device.h. */
