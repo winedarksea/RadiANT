@@ -429,19 +429,6 @@ The full index, and the four rules that keep those files from rotting, are in
 
 ## Licensing and identity
 
-Two constraints to settle before distributing builds of this publicly, both
-recorded in [`docs/decisions/`](docs/decisions/):
-
-1. **`CONFIG_ANT_EVALUATION_KEY` is a non-commercial development key.**
-   sdk-ant's `init/Kconfig` is explicit that a commercial licence is required
-   before shipping a product. Removing `libant.a` also removes the $0.08/unit
-   royalty that comes with it.
-2. **`VID 0x0FCF` belongs to Garmin/Dynastream.** Presenting their vendor ID to
-   third parties is a different question from using it privately — and it is
-   exactly why Windows driver matching works at all, so it is an open risk
-   rather than a solved one. The descriptor *strings* are the project's own:
-   every host matches on the numbers, so the strings never had to be theirs.
-
 RadiANT is an open-source, clean-room implementation compatible with the
 published ANT+ specifications. It is not an ANT+ certified product, and is not
 licensed by, endorsed by or affiliated with Garmin or Dynastream. "ANT" and
