@@ -55,9 +55,9 @@ ZTEST(rgb_led_curve, test_period_is_clamped_at_both_ends)
 	/* Far beyond the last breakpoint, including a value that would
 	 * overflow a 32-bit intermediate if the interpolation ever ran here.
 	 */
-	zassert_equal(ant_rgb_led_period_ms(40000u), 1500u, "floor moved");
-	zassert_equal(ant_rgb_led_period_ms(1000000u), 1500u, "no high clamp");
-	zassert_equal(ant_rgb_led_period_ms(UINT32_MAX), 1500u,
+	zassert_equal(ant_rgb_led_period_ms(40000u), 750u, "floor moved");
+	zassert_equal(ant_rgb_led_period_ms(1000000u), 750u, "no high clamp");
+	zassert_equal(ant_rgb_led_period_ms(UINT32_MAX), 750u,
 		      "UINT32_MAX rate escaped the clamp");
 }
 
@@ -71,7 +71,7 @@ ZTEST(rgb_led_curve, test_period_interpolates_between_breakpoints)
 	/* Strictly inside a segment, the value must differ from both ends. */
 	uint32_t mid = ant_rgb_led_period_ms(8000u);
 
-	zassert_true(mid < 8000u && mid > 3000u,
+	zassert_true(mid < 8000u && mid > 2000u,
 		     "second segment not interpolated: got %u", mid);
 }
 

@@ -28,8 +28,8 @@ struct rate_point {
 static const struct rate_point curve[] = {
 	{     0u, 20000u },
 	{  4000u,  8000u },
-	{ 16000u,  3000u },
-	{ 40000u,  1500u },
+	{ 16000u,  2000u },
+	{ 40000u,   750u },
 };
 
 #define CURVE_LAST (sizeof(curve) / sizeof(curve[0]) - 1u)

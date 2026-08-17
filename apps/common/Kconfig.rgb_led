@@ -21,8 +21,8 @@ config ANT_DONGLE_RGB_LED
 	  Feather nRF52840, or any equivalent on another board) as a continuously
 	  rotating hue whose SPEED encodes how much sensor traffic the dongle is
 	  receiving - roughly 20 s per rotation with nothing on the air, down to
-	  1.5 s with ten or so sensors active. Colour itself carries no meaning,
-	  so there is nothing to memorise.
+	  0.75 s with ten or so sensors active. Colour itself carries no
+	  meaning, so there is nothing to memorise.
 
 	  WHAT IT IS FOR. The Feather has no debugger and this image has no
 	  console, so the single led0 heartbeat in ant_dongle_main.c is the whole
@@ -62,14 +62,15 @@ if ANT_DONGLE_RGB_LED
 
 config ANT_DONGLE_RGB_LED_BRIGHTNESS
 	int "Peak channel brightness, 0-255"
-	default 24
+	default 17
 	range 1 255
 	help
 	  The value the brightest channel is held at; one channel sits here, one
-	  ramps between 0 and here, the third is off. 24 is about 10 %, which is
-	  comfortable to look at on a desk rather than dazzling, and keeps a
-	  bus-powered dongle's LED well clear of the current budget. Raise it if
-	  the dongle lives inside a case or across a room.
+	  ramps between 0 and here, the third is off. 17 is about 7 %, set from
+	  looking at the first build on a Feather at 24 (about 10 %) and finding
+	  it brighter than a desk needs; it also keeps a bus-powered dongle's LED
+	  well clear of the current budget. Raise it if the dongle lives inside a
+	  case or across a room.
 
 config ANT_DONGLE_RGB_LED_TICK_MS
 	int "Render period in milliseconds"
