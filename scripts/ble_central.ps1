@@ -27,13 +27,26 @@
     BOM and has no pipeline chain operators.
 
 .PARAMETER Mode
-    scan    - active scan, one line per device seen.
+    scan    - active scan, one line per device seen. NOTE: -Name is IGNORED in
+              this mode; every device is listed. A scan that "found nothing" is
+              therefore only ever evidence about the DURATION.
     connect - find a peripheral by advertised name, connect, subscribe to Heart
               Rate Measurement notifications, and HOLD the connection.
+              HEART-RATE SPECIFIC: it throws "no Heart Rate service (0x180D)"
+              and drops the link against anything that is not a strap. Use
+              `hold` for a treadmill.
+    hold    - connect by name, subscribe to FTMS Treadmill Data (0x2ACD) if the
+              peripheral has it, and hold, reporting connection status every
+              30 s. This is the apps/treadmill coexistence instrument: the
+              measurement that section 7.6 of the treadmill reference design
+              asks for is FE-C loss while a client is CONNECTED, and `connect`
+              could not hold one against an FTMS machine.
 
 .PARAMETER Name
-    Substring of the advertised name to connect to. Default "RadiANT HR", which
-    is what apps\hrm_ble\ble.conf sets CONFIG_BT_DEVICE_NAME to. (That fragment
+    Substring of the advertised name to connect to (connect/hold only; see the
+    note on scan above). Default "RadiANT HR", which is what
+    apps\hrm_ble\ble.conf sets CONFIG_BT_DEVICE_NAME to - apps/treadmill
+    advertises "RadiANT Treadmill" and needs -Name to say so. (That fragment
     was strap_ble.conf before the strap/ -> hrm_ble/ rename; no file of that
     name exists in the repo any more.)
 
@@ -52,7 +65,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('scan', 'connect')]
+    [ValidateSet('scan', 'connect', 'hold')]
     [string]$Mode = 'scan',
     [string]$Name = 'RadiANT HR',
     [int]$Seconds = 10,
@@ -146,6 +159,8 @@ if ($needBuild) {
 
 if ($Mode -eq 'scan') {
     & $exe scan $Seconds
+} elseif ($Mode -eq 'hold') {
+    & $exe hold $Name $Seconds
 } else {
     & $exe connect $Name $Seconds
 }

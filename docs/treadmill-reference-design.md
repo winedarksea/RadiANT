@@ -408,10 +408,19 @@ python scripts/check_test_counts.py twister-out/twister.json
 
 (Use the NCS toolchain's Python; there is no system Python in this project.)
 
-### 7.2 C unit tests — RUN, 2026-08-15
+### 7.2 C unit tests — RUN, 2026-08-15; re-run 2026-08-17
 
 `scripts/run_ztest_hw.ps1` on a DK, or `twister -p native_sim` on Linux, are
 the supported routes and the ones CI takes.
+
+**2026-08-17, on an nRF5340 DK:**
+`run_ztest_hw.ps1 -App apps\treadmill\tests\pages -NcsVersion v3.4.0` →
+`SUITE PASS - 100.00% [treadmill_pages]: pass = 18, fail = 0`. Twelve of those
+are the conversions and accumulators; the six new ones are §4a's control-owner
+token — BLE preempting ANT, ANT never preempting BLE, the idle ANT timeout
+expiring and being refreshed, release handing the machine back, the timeout
+surviving a `k_uptime_get_32()` wrap, and the read pages staying ungated.
+`tests/expected_counts.yaml`'s `min_testcases` moved 843 → 849 with them.
 
 **They were also run on the host, and that is worth writing down because it is
 not obvious that it is possible.** `radiant/tests/src/test_profile_fec_tx.c`,
@@ -495,31 +504,21 @@ dongle, sending a read-only acknowledged page 70 to the *commercial* trainer
 `#52233`, also failed 0/4. The dongle cannot originate an acknowledged transfer,
 so the rig cannot ask the question.
 
-> **The cause was found, 2026-08-17, and it is a real capability gap in
-> `apps/common` rather than a rig problem.** "The dongle cannot originate an
-> acknowledged transfer" was true, and the reason is that the transfer was
-> never **slot-aligned**. `radiant_transfer.h` states the contract at
-> `radiant_transfer_submit()` — *"a slave answering its master passes
-> `master_t_sync + RADIANT_TRANSFER_SLOT_REPLY_US`"* — and the sole production
-> caller, `antr_acknowledge_message_tx()`, passed `RADIANT_TIME_NEVER`.
-> `radiant_burst.c` resolves that to `radiant_radio_now() + min_lead_us +
-> ARM_SLACK_US`, an arbitrary phase. The peer master only listens for ±250 µs
-> around `t_sync + 2190 µs` (`api_post_master_rx()`), so the packet landed where
-> nothing was listening, the reply window closed empty, and the engine failed it
-> once with `FAIL_NO_ACK` — which it deliberately does not retry.
->
-> **The 0/4 against the commercial Wahoo is the proof, not the confounder.** No
-> bug in any node in this tree could make a read-only page 70 to somebody else's
-> trainer fail. The control that this section treats as inconclusive is in fact
-> the thing that identifies the transmit instant as the only possible cause.
-> Fixed in `apps/common/ant_radio_radiant.c` (`api_slave_reply_t_sync()`); the
-> instant now comes from `radiant_channel_next_slot()`, which is the same
-> prediction `api_post_track_rx()` already arms tracked windows around.
+> **Narrowed by measurement, 2026-08-17 — and the obvious explanation is
+> wrong.** "The dongle cannot originate an acknowledged transfer" is true, and
+> the failure is now localised to the **return acknowledgement**, not to the
+> transmit. See §7.7 for the A/B that establishes it. In short: the originated
+> packet *arrives at the master at the full channel rate*, in every build
+> tried, and the sender is still told `TRANSFER_TX_FAILED` because it never
+> hears the ack come back. Anyone about to look at the transmit instant should
+> read §7.7 first — that hypothesis has already been built, flashed and refuted.
 
-If the fix ever needs decoupling from treadmill verification, the sdk-ant
-Feather image at `build/release/dongle/zephyr/zephyr.uf2` is a known-good
-originator and the Feather sits in its UF2 bootloader, needing no double-tap.
-That is a rig workaround and not a substitute for the fix.
+A known-good originator would still be useful for decoupling treadmill
+verification from this defect. The Feather is the candidate, but note it is
+only an unattended flash while the nRF5340 DK's debug-out SWD cable is
+connected to it — checked on 2026-08-17 and it was **not**: a `connect` with
+`-Device nRF52840_xxAA` found a Cortex-M**33**, which is the DK's own SoC.
+Confirm a Cortex-M4 in the J-Link output before assuming that route is live.
 
 ### 7.4a Two defects found on the bench, 2026-08-16 — BOTH RETIRED, 2026-08-17
 
@@ -631,14 +630,38 @@ enough at boot to overflow 1024 bytes.
   processing thread without making every `LOG_*` in a radio callback
   synchronous. It was not needed this time.
 
-### 7.5 On air, BLE
+### 7.5 On air, BLE — PARTLY RUN, 2026-08-17
 
-`scripts/ble_central.ps1` / `tools/ble_central.cs`, or nRF Connect on a phone:
+**USE `-Mode hold`, NOT `-Mode connect`.** `connect` is the P9 heart-rate
+instrument: it demands service `0x180D`, throws `no Heart Rate service` against
+a treadmill and drops the link within seconds. That is what left §7.6 without a
+number — the connection it was meant to hold did not survive the service check.
+`hold` was added for this and subscribes to FTMS Treadmill Data instead:
+
+    scripts\ble_central.ps1 -Mode hold -Name "RadiANT Treadmill" -Seconds 660
+
+**What that verified on real hardware** (nRF54L15 DK, `tread_ble`):
+
+| check | result |
+|---|---|
+| discoverable by name | `FD:D3:C2:A3:0C:4B`, 42 adverts in 120 s at 1000 ms |
+| advertised services | `0x1826` (FTMS) **and** `0x1814` (RSC) |
+| GATT on connect | 4 services: `1800`, `1801`, `1826`, `1814` |
+| Treadmill Data (`0x2ACD`) notify | subscribed; **60 notifications in 60 s** |
+| connection held | `Connected` throughout, no drop |
+
+The notify rate is the one worth calling out: exactly 1 Hz, which is
+`CONFIG_TREADMILL_BLE_NOTIFY_INTERVAL_MS` taking effect rather than the
+100 ms node tick leaking through — the pacing in
+`treadmill_ble_state_changed()` is doing its job.
+
+Still unverified, and all of them need the acknowledged originator §7.7 shows
+this tree does not have, or a phone:
 
 - The FTMS Service Data AD element is present (flags bit 0 set, machine-type
   bit 0 set). Omitting it is the most common reason a machine is invisible to an
-  app that otherwise works.
-- Treadmill Data notifies at ~1 Hz.
+  app that otherwise works. (The UUID list was confirmed; the Service Data
+  element itself was not read out.)
 - A control-point write **without** Request Control is rejected with
   `0x05` Control Not Permitted.
 - An **unpaired** write fails outright — Table 4.1 gives the control point the
@@ -654,19 +677,56 @@ rather than read is a silent wrong-by-ten.
 
 ### 7.6 Both at once, and the number that decides the design
 
-**UNBLOCKED, 2026-08-17** — §7.4a defect 1 was a measurement artefact (§7.4b);
-the node advertises and a connection can be made. The measurement below is what
-is still owed.
+**RUN, 2026-08-17 — and the connected case costs nothing measurable.**
 
-One number is in, and it is the reassuring half: with **both ANT+ masters
+`tread_ble` on the nRF54L15 DK, FE-C received on a pinned channel
+(`ant_verify.py --profile fec-treadmill --device-number 4243`) through a
+RadiANT USB stick, while `ble_central.ps1 -Mode hold` held a real connection
+and consumed Treadmill Data notifications at 1 Hz:
+
+| condition | duration | packets | FE-C loss |
+|---|---|---|---|
+| BLE **connected**, notifying at 1 Hz | **600 s** | 2172 / 2401 | **9.54 %** |
+| BLE advertising only, no central | 300 s | 1086 / 1201 | **9.58 %** |
+
+**The question §7.6 was written to ask is answered: connecting a phone over
+FTMS is not what costs the ANT+ side anything.** Both arms sit within 0.04 pp
+of each other — far below the room's own instability — so a live FTMS client
+notifying once a second beside two ANT+ masters is not detectably worse than
+the same node merely advertising.
+
+**It FAILS `[gates.coexistence]` all the same, and the failure is the room.**
+`absolute_ceiling_pct` is 1.5 % and both arms are near 9.5 %, every missing
+packet reported by the radio as `RX_FAIL` — i.e. it happened on the air, not in
+the host or the scheduler. The same rig read **0.84 %** on 2026-08-16 (§7.4) at
+−34 dBm, so this is the 5–8 %-and-unstable floor this bench has been carrying,
+drifted higher. **Do not read the pass/fail as a verdict on the design, and do
+not read the 0.04 pp as a tight bound either** — a spread taken in a room with
+a 9.5 % floor bounds the coexistence cost only to "not large". The gate wants
+re-running in a quiet room before anything is concluded in either direction.
+
+**One anomaly, unresolved and NOT chased:** every run reports
+`sensor liveness: the event counter advanced on 0 of N packet pairs`. FE-C
+data pages 16/17/19 carry no event counter, so this is most likely
+`ant_verify.py`'s generic counter rule being applied to a profile that has no
+such field — but it has not been confirmed, and it should not be read as a
+pass. The accompanying "accumulator continuity" violations scale with the lost
+packets (142 against 229 missing, 66 against 115) and are consistent with loss
+rather than with a defect.
+
+Two bench items remain owed, blocked on a *different* defect from the one that
+blocked them before: the FE-C **control loop** (an acknowledged page 51
+answered by a page 71) and the **arbitration** check (§4a's token refusing an
+ANT+ command while a phone holds control) both need a working acknowledged
+originator, and §7.7 shows the tree does not have one. The arbitration policy
+itself is covered by six ztest cases; what is unverified is the on-air half.
+
+The older, weaker number, kept because it is what this section used to rest on: with **both ANT+ masters
 running and the BLE stack linked in and initialised** (`tread_ble`), the FE-C
 channel still delivered 78 packets over 25 s at 3.7 % loss. That is BLE
 *present*, not BLE *connected*, so it bounds nothing about the connected case —
 but the two masters plus an initialised second stack do not by themselves break
-the ANT+ side.
-
-A head unit tracking FE-C while a phone is connected over FTMS, for ≥10
-minutes, against `tools/ab_gates.toml`'s `[gates.coexistence]`.
+the ANT+ side. The 600 s run above supersedes it.
 
 **Two ANT+ masters plus BLE on one radio is more contention than anything this
 project has measured.** The arbiter has been characterised with one master
@@ -683,6 +743,65 @@ Two bench traps that have faked results here before:
 - **Do not attempt an A/B/A sitting in the current RF environment.** The room's
   loss floor is 5–8 % and unstable, which voids the spread. Take absolute
   pass/fail on `[gates.coexistence]` only.
+
+### 7.7 The acknowledged-originator A/B, 2026-08-17 — hypothesis REFUTED
+
+The single most useful result of this pass, and it is a negative one.
+
+**Rig.** One nRF54L15 DK (J-Link `1057737173`) flashed with `apps/dongle`
+(`-DANT_RADIO=core -DRADIANT_BACKEND=nrf`, `CONFIG_RADIANT_BACKEND_NRF=y` read
+back from `.config`) and driven over **COM8** as the slave **originator**. A
+RadiANT USB stick held open as a **bidirectional master** (`0x10`, #4321, type
+17, period 8192) — not `0x50` `MASTER_TX_ONLY`, which is the one master
+documented not to listen and would have armed no reply turnaround at all.
+`tools/ant_fec_control.py` sends the acknowledged page 51; a host script counts
+what the master actually receives.
+
+Two builds differing in exactly one expression — the `t_sync_at` passed to
+`radiant_transfer_ack_data()` — flashed minutes apart in the same room:
+
+| arm | `t_sync_at` | sender result | packets the MASTER received |
+|---|---|---|---|
+| A | `RADIANT_TIME_NEVER` (as shipped) | `TRANSFER_TX_FAILED` ×4 | **219** in 55 s |
+| B | `next_slot + RADIANT_TRANSFER_SLOT_REPLY_US` | `TRANSFER_TX_FAILED` ×4 | **218** in 55 s |
+
+**The packet was never the problem.** It arrives, at ~4 Hz, essentially 1:1 with
+the master's own `EVENT_TX` — so it is landing squarely inside the master's
+slot, in *both* arms. The proposed root cause — that `RADIANT_TIME_NEVER`
+resolves to an arbitrary phase and the packet "lands where nobody is listening"
+— is false on this backend, and the slot-aligned build bought nothing while
+adding up to one channel period of latency to every acknowledged transfer in
+the tree. **Arm B was therefore reverted.** `apps/common/ant_radio_radiant.c`
+carries the tombstone so the idea is not re-had.
+
+**What is actually broken is the return acknowledgement.** The receiver has the
+data and the sender is told the transfer failed. That points at
+`radiant_burst.c`'s `arm_ack_window()` and the `t_data_sync` it is handed —
+the *other* side of the exchange from where the search started. It also fits
+the one piece of evidence §7.4 could not place: a read-only page 70 to a
+commercial Wahoo trainer failing 0/4 is exactly what a broken ack-reception
+path looks like, and is *not* something a transmit-phase bug could cause
+selectively.
+
+**A second defect is visible in the same data and is not yet explained.** The
+sender gave up after 4 attempts, and the packet kept going out **once per
+channel period for the remaining ~50 s** (219 and 218 packets against 221 and
+220 `EVENT_TX`). The host was told `TRANSFER_TX_FAILED` promptly, so a
+transfer that is finished from the caller's point of view is still occupying a
+slot on every period. That is air time spent indefinitely on a dead transfer
+and it contradicts `radiant_burst.c`'s "fails once and does not retry" rule as
+observed from the air.
+
+**Two instrument bugs found here, both of which faked firmware faults:**
+
+- **`body[1]` is `MESG_EVENT_ID` (`0x01`) for an event, not `0`.** Written as
+  `== 0`, every terminal event is silently discarded and the tool reports "no
+  terminal event" — which reads as a radio or scheduling fault. It cost a whole
+  A/B arm before a raw frame dump showed `resp msg=0x01 code=6` going past
+  unread. `tools/ant_verify.py` has always had this right; copy from there.
+- The same bug in the master-side script reported **0 `EVENT_TX`** while the
+  master was transmitting perfectly and a second stick could see it. "The
+  master never transmitted" was wrong twice before the dump settled it.
 
 ---
 
@@ -738,6 +857,12 @@ biometric data about a person.
 
 - **The simulator is the only hardware.** Nothing is validated against a motor
   controller or an incline actuator.
+- **No acknowledged originator exists in this tree.** §7.7 localises it to the
+  return acknowledgement rather than the transmit, which is progress, but until
+  it is fixed the FE-C control loop cannot be exercised on air by anything here
+  — and neither can §4a's arbitration, whose refusal path is a page 71 that
+  needs a command to answer. This is the single biggest hole in the
+  application's verification and it is not a treadmill defect.
 - **Nothing tests `src/treadmill_ble.c`.** There is no ztest for the FTMS GATT
   service, for `write_cp()` or for the advertising payload; they are covered
   only by `BUILD_ASSERT`s and §7's bench procedure. That is why the arbitration

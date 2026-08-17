@@ -72,6 +72,7 @@ from ant_wire import (  # noqa: E402
     MESG_CHANNEL_RADIO_FREQ_ID,
     MESG_CHANNEL_SEARCH_TIMEOUT_ID,
     MESG_CLOSE_CHANNEL_ID,
+    MESG_EVENT_ID,
     MESG_NETWORK_KEY_ID,
     MESG_OPEN_CHANNEL_ID,
     MESG_RESPONSE_EVENT_ID,
@@ -272,23 +273,46 @@ def main() -> int:
                                 bytes([CHANNEL]) + payload))
         # One period is 250 ms; two of them is a generous bound on when the
         # stack must have reported a terminal event for this transfer.
-        end = time.monotonic() + 1.0
+        end = time.monotonic() + 2.0
         outcome = None
         while time.monotonic() < end:
             result = reader.next_frame(min(end, time.monotonic() + 0.25))
             if result is None:
                 continue
             msg_id, body = result
-            if msg_id == MESG_RESPONSE_EVENT_ID and len(body) >= 3 and body[1] == 0:
-                code = body[2]
-                if code == EVENT_TRANSFER_TX_COMPLETED:
-                    outcome = "TRANSFER_TX_COMPLETED"
+            if msg_id != MESG_RESPONSE_EVENT_ID or len(body) < 3:
+                continue
+            # body[1] IS MESG_EVENT_ID (0x01) FOR AN EVENT, NOT 0. This is the
+            # single most expensive line in the file to get wrong, and it was
+            # wrong once: with `== 0` every terminal event is discarded, the
+            # tool reports "no terminal event", and that reads as a radio or
+            # scheduling fault rather than as a parsing bug. It cost a whole
+            # A/B arm before the raw frame dump showed `resp msg=0x01 code=6`
+            # going past unread. tools/ant_verify.py has always had it right;
+            # copy from there, not from memory.
+            #
+            # Anything else in body[1] is a RESPONSE to a specific message. A
+            # stack that refuses the acknowledged message outright answers 0x4F
+            # with a code and then raises no terminal event at all, because
+            # there is no transfer - which is a third outcome worth telling
+            # apart from both success and failure.
+            if body[1] == MESG_ACKNOWLEDGED_DATA_ID:
+                if body[2] != 0:
+                    outcome = (f"REFUSED by the stack, code {body[2]} "
+                               f"- no transfer was ever started")
                     break
-                if code == EVENT_TRANSFER_TX_FAILED:
-                    outcome = "TRANSFER_TX_FAILED"
-                    break
-                if code in (EVENT_RX_FAIL, EVENT_RX_SEARCH_TIMEOUT):
-                    continue
+                continue
+            if body[1] != MESG_EVENT_ID:
+                continue
+            code = body[2]
+            if code == EVENT_TRANSFER_TX_COMPLETED:
+                outcome = "TRANSFER_TX_COMPLETED"
+                break
+            if code == EVENT_TRANSFER_TX_FAILED:
+                outcome = "TRANSFER_TX_FAILED"
+                break
+            if code in (EVENT_RX_FAIL, EVENT_RX_SEARCH_TIMEOUT):
+                continue
         print(f"  attempt {attempt}/{args.attempts}: {outcome or 'no terminal event'}")
         if outcome == "TRANSFER_TX_COMPLETED":
             delivered = True

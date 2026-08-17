@@ -65,6 +65,7 @@ static class BleCentral
         {
             Console.Error.WriteLine("usage: ble_central scan <seconds>");
             Console.Error.WriteLine("       ble_central connect <name-substring> <seconds>");
+            Console.Error.WriteLine("       ble_central hold <name-substring> <seconds>");
             return 2;
         }
 
@@ -81,6 +82,13 @@ static class BleCentral
                         return 2;
                     }
                     return Connect(args[1], args.Length > 2 ? int.Parse(args[2]) : 30).Result;
+                case "hold":
+                    if (args.Length < 2)
+                    {
+                        Console.Error.WriteLine("hold needs a name substring");
+                        return 2;
+                    }
+                    return Hold(args[1], args.Length > 2 ? int.Parse(args[2]) : 60).Result;
                 default:
                     Console.Error.WriteLine("unknown mode '{0}'", args[0]);
                     return 2;
@@ -295,6 +303,115 @@ static class BleCentral
         // A held connection that produced no notifications is a real result,
         // not a tool failure - it is what a strap that has stopped publishing
         // looks like - so it is reported and not turned into a nonzero exit.
+        return 0;
+    }
+
+    // A 16-bit SIG UUID in its 128-bit form. The base is fixed by the Bluetooth
+    // core spec; writing it out is what lets this file name FTMS UUIDs that
+    // GattServiceUuids/GattCharacteristicUuids have no members for.
+    static Guid Sig16(ushort id)
+    {
+        return new Guid(string.Format("0000{0:X4}-0000-1000-8000-00805F9B34FB", id));
+    }
+
+    const ushort UUID_FTMS = 0x1826;
+    const ushort UUID_TREADMILL_DATA = 0x2ACD;
+
+    // ── hold ────────────────────────────────────────────────────────────────
+    //
+    // WHY THIS EXISTS SEPARATELY FROM connect. `connect` is the P9 instrument
+    // and it is HEART-RATE SPECIFIC: it throws "no Heart Rate service (0x180D)"
+    // and drops the link within seconds against anything that is not a strap.
+    // That made it useless for the one measurement apps/treadmill most needs -
+    // FE-C loss while a client is CONNECTED over FTMS - because the connection
+    // it was supposed to hold did not survive the service check. Found on the
+    // bench 2026-08-17 against `RadiANT Treadmill`, and it is why
+    // docs/treadmill-reference-design.md SS7.6 had no number.
+    //
+    // So: connect, force GATT discovery, subscribe to FTMS Treadmill Data if it
+    // is there, and HOLD. Subscribing rather than sitting idle is deliberate -
+    // an idle connection and a notifying one are different radio loads, and
+    // SS7.6 is about the notifying one.
+    static async Task<int> Hold(string needle, int seconds)
+    {
+        ulong addr = await FindByName(needle, Math.Max(90, seconds));
+
+        var dev = await BluetoothLEDevice.FromBluetoothAddressAsync(addr);
+        if (dev == null)
+        {
+            throw new Exception("FromBluetoothAddressAsync returned null for " + Addr(addr));
+        }
+        dev.ConnectionStatusChanged += (d, o) => Say("connection status: {0}", d.ConnectionStatus);
+
+        // Uncached, and this is what actually establishes the link: a
+        // BluetoothLEDevice on its own does not connect, the first GATT
+        // operation does.
+        var all = await dev.GetGattServicesAsync(BluetoothCacheMode.Uncached);
+        if (all.Status != GattCommunicationStatus.Success)
+        {
+            throw new Exception("service discovery failed: " + all.Status);
+        }
+        Say("GATT up: {0} service(s)", all.Services.Count);
+        foreach (var s in all.Services)
+        {
+            Say("  service {0}", s.Uuid);
+        }
+
+        int notifications = 0;
+        GattCharacteristic td = null;
+        var ftms = await dev.GetGattServicesForUuidAsync(Sig16(UUID_FTMS),
+                                                        BluetoothCacheMode.Uncached);
+        if (ftms.Status == GattCommunicationStatus.Success && ftms.Services.Count > 0)
+        {
+            var chr = await ftms.Services[0].GetCharacteristicsForUuidAsync(
+                Sig16(UUID_TREADMILL_DATA), BluetoothCacheMode.Uncached);
+            if (chr.Status == GattCommunicationStatus.Success && chr.Characteristics.Count > 0)
+            {
+                td = chr.Characteristics[0];
+                td.ValueChanged += (ch, e) =>
+                {
+                    Interlocked.Increment(ref notifications);
+                };
+                var cccd = await td.WriteClientCharacteristicConfigurationDescriptorAsync(
+                    GattClientCharacteristicConfigurationDescriptorValue.Notify);
+                if (cccd != GattCommunicationStatus.Success)
+                {
+                    Say("WARNING: subscribing to Treadmill Data failed: {0} - holding an "
+                        + "IDLE connection instead, which is a different radio load", cccd);
+                    td = null;
+                }
+                else
+                {
+                    Say("subscribed to FTMS Treadmill Data (0x2ACD)");
+                }
+            }
+        }
+        if (td == null)
+        {
+            Say("no FTMS Treadmill Data to subscribe to; holding an idle connection");
+        }
+
+        Say("holding the connection for {0} s", seconds);
+        // Report progress so a ten-minute run is distinguishable from a hang,
+        // and so a DROPPED connection is visible in the transcript rather than
+        // only in the final count.
+        for (int elapsed = 0; elapsed < seconds; elapsed += 30)
+        {
+            await Task.Delay(Math.Min(30, seconds - elapsed) * 1000);
+            Say("t+{0}s  status={1}  notifications={2}",
+                Math.Min(elapsed + 30, seconds), dev.ConnectionStatus, notifications);
+        }
+
+        Say("{0} notification(s) in {1} s; disconnecting", notifications, seconds);
+        if (td != null)
+        {
+            td.Service.Dispose();
+        }
+        foreach (var s in all.Services)
+        {
+            s.Dispose();
+        }
+        dev.Dispose();
         return 0;
     }
 }
