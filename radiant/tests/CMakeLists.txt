@@ -141,6 +141,10 @@ target_sources(app PRIVATE
   # implementations are not.
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_fec_tx.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_sdm.c"
+  # Light Electric Vehicle (0x14): page codecs plus a master, no suite yet.
+  # Listed so the file is compiled at all - the suites are globbed and the
+  # implementations are not.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/profile_lev.c"
   # Bicycle Power's page 0x10 decoder, deliberately NOT in profile_power.c -
   # see that file's own note. This application links both halves; a receiver
   # links only this one.

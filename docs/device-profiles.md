@@ -127,7 +127,7 @@ invites the same proposal again in a year.
 | `0x0B` | Bicycle Power | 8182 | pages `0x10`, `0x11`, `0x12`, `0x20` |
 | `0x10` | Controls | 8192 | pages `0x10`, `0x49` (command surface only) |
 | `0x11` | Fitness Equipment (FE-C) | 8192 | pages `0x10`, `0x11`, `0x12`, `0x13`, `0x30`–`0x33`, `0x36`, `0x37`, `0x46`, `0x47` |
-| `0x14` | Light Electric Vehicle (LEV) | — | no |
+| `0x14` | Light Electric Vehicle (LEV) | 8192 | no — encoded and decoded in C only, `src/profiles/profile_lev.c` |
 | `0x19` | Environment | 65535 | no — decoded in C only, `src/profiles/profile_env.c` |
 | `0x1E` | Running Dynamics | 4096 | pages `0x00`, `0x01`, `0x10`, `0x20`, `0x4A` |
 | `0x29` | Tracker (Asset Tracker) | 2048 | pages `0x01`, `0x02`, `0x03`, `0x10`, `0x11`, `0x20` |
@@ -142,12 +142,13 @@ Period is in counts of 1/32768 s: 8182 is ~4.0049 Hz, 8086 is ~4.05 Hz, 8070 is
 ~4.06 Hz. A `—` means this project has not implemented the type and does not
 record a number it has not verified against its own code.
 
-**`0x14` and `0x7F` carry `—` even though their periods are known**, and that is
-the rule working rather than an oversight. Both numbers come from documents, not
-from this project's code — LEV's is 8192, Core Temperature's is 8192 — and they
-are stated in sections 3.6 and 3.8 with their sources. The column means
-"verified here", and widening it to mean "read somewhere" would make every other
-cell in it worth less.
+**`0x7F` carries `—` even though its period is known**, and that is the rule
+working rather than an oversight. The number comes from a document, not from
+this project's code — Core Temperature's is 8192 — and it is stated in section
+3.8 with its source. The column means "verified here", and widening it to mean
+"read somewhere" would make every other cell in it worth less. `0x14` used to
+sit here for the same reason and no longer does: `PROFILE_LEV_PERIOD` in
+`src/profiles/profile_lev.h` is now that verified constant.
 
 **`0x11` and `0x19` used to carry `—` and no longer do.** Both are now
 transcribed from their primary documents into named constants in
@@ -664,12 +665,14 @@ cadence below.
 
 ---
 
-### 3.6 Light Electric Vehicle, device type `0x14` — reference only
+### 3.6 Light Electric Vehicle, device type `0x14`
 
-**Not implemented by this project. Recorded in full because it is the reason
-the e-bike profile of section 7.1 was not pursued**, and because a claimant
-needs the whole interoperability contract — both channels, every page, the
-travel-mode mapping rule — not just a field list to check against.
+Implemented in `src/profiles/profile_lev.c` — every page below, both
+directions, plus the travel-mode mapping of Table 6-1 and a master driving the
+4-page rotation. **Recorded in full because it is also the reason the e-bike
+profile of section 7.1 was not pursued**, and because a claimant needs the
+whole interoperability contract — both channels, every page, the travel-mode
+mapping rule — not just a field list to check against.
 
 #### Channel configuration
 
@@ -2235,7 +2238,7 @@ is the change that matters more than the depth column did.
 | `0x11` | Fitness Equipment (FE-C) | Decoded | community |
 | `0x12` | Blood Pressure | Not implemented; forward-noted §5.1 as the next profile that would inherit CGM's mandatory-`X_AUTH` rule | community + open-source, type only — no page layout found anywhere |
 | `0x13` | Geocache | Not implemented | community |
-| `0x14` | Light Electric Vehicle | Not implemented, reference-only §3.6 | primary spec |
+| `0x14` | Light Electric Vehicle | Implemented (encode and decode), §3.6 | primary spec |
 | `0x19` | Environment | Decoded (pages 0 and 1), §3.7 | primary spec |
 | `0x1E` | Running Dynamics | Implemented, §3.13 | — |
 | `0x29` | Tracker (Asset Tracker) | Implemented, §3.15 | — |
