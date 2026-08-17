@@ -195,6 +195,11 @@ $targets = @(
     @{ dir='promicro';       board='promicro_nrf52840/nrf52840/uf2';         artifact='radiant_dongle_promicro.uf2';          pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf=$null;         release=$true  }
     @{ dir='promicro_synth'; board='promicro_nrf52840/nrf52840/uf2';         artifact='radiant_dongle_promicro_synth.uf2';    pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='synth.conf';  release=$true  }
     @{ dir='feather_next';   board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle_feather_usbd.uf2';      pkg='uf2'; offset=0x26000; transport='USB_NEXT';   conf='next.conf';   release=$false }
+    # The activity-rate NeoPixel. The only dongle row carrying BOTH a conf and
+    # an overlay, and it needs both: the overlay declares the LED node and the
+    # `rgb-led0` alias the module looks up, and the conf turns the module on.
+    # Either one alone fails loudly by design - see apps/dongle/rgb.conf.
+    @{ dir='feather_rgb';    board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle_feather_rgb.uf2';       pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='rgb.conf';    release=$false; overlay='rgb_feather.overlay' }
     @{ dir='l15';            board='nrf54l15dk/nrf54l15/cpuapp';             artifact='radiant_dongle_nrf54l15dk.hex';        pkg='hex'; offset=0x0;     transport='UART';       conf=$null;         release=$false }
     @{ dir='lm20';           board='nrf54lm20dk/nrf54lm20a/cpuapp';          artifact='radiant_dongle_nrf54lm20dk.hex';       pkg='hex'; offset=0x0;     transport='USB_NEXT';   conf=$null;         release=$false }
 )

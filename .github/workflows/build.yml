@@ -460,6 +460,26 @@ jobs:
             transport: USB_NEXT
             assert_config: |
               CONFIG_ANT_DONGLE_HEALTH_COUNTERS=y
+          # The activity-rate NeoPixel indicator. The assertions are the point
+          # of the row: CONFIG_WS2812_STRIP_SPI is `default y` gated purely on
+          # a devicetree compatible, so it is exactly the kind of symbol that
+          # can silently stop being selected when an overlay or a board file
+          # moves - and the module would then fail to link rather than fail to
+          # work, which is only obvious if something builds it.
+          - name: "core: feather, rgb activity led"
+            board: adafruit_feather_nrf52840/nrf52840/uf2
+            radio: core
+            extra_conf: rgb.conf
+            extra_overlay: rgb_feather.overlay
+            transport: USB_LEGACY
+            assert_config: |
+              CONFIG_ANT_DONGLE_RGB_LED=y
+              # The driver the no-cost-to-the-radio argument depends on. If
+              # this is absent the LED is being driven some other way - the
+              # GPIO bit-bang holds irq_lock() for ~30 us per pixel against a
+              # maskable priority-0 radio ISR - and the row must fail.
+              CONFIG_WS2812_STRIP_SPI=y
+              CONFIG_LED_STRIP=y
           # The stub is the cheapest proof the backend seam holds - it builds
           # in seconds and is the one configuration that exercises the seam
           # without exercising any radio.
@@ -521,12 +541,20 @@ jobs:
           BOARD: ${{ matrix.board }}
           RADIO: ${{ matrix.radio }}
           EXTRA_CONF: ${{ matrix.extra_conf }}
+          EXTRA_OVERLAY: ${{ matrix.extra_overlay }}
           MODULE_DIR: ${{ matrix.module_dir }}
         run: |
           set -euxo pipefail
           extra=()
           if [[ -n "${EXTRA_CONF}" ]]; then
             extra+=("-DEXTRA_CONF_FILE=${EXTRA_CONF}")
+          fi
+          # A devicetree overlay applied on top of the board's own, for
+          # fragments whose feature needs hardware named that the shipping
+          # image must NOT have - see apps/dongle/rgb_feather.overlay for why
+          # the node cannot simply live in boards/.
+          if [[ -n "${EXTRA_OVERLAY}" ]]; then
+            extra+=("-DEXTRA_DTC_OVERLAY_FILE=${EXTRA_OVERLAY}")
           fi
           # Left unset for the ordinary core and stub entries so the build
           # exercises the default resolution path - no SDK_ANT_DIR in the

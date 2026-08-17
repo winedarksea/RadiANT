@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The activity-rate RGB indicator's own symbols, rsourced only by apps/dongle -
+# the same arrangement as Kconfig.health and Kconfig.dongle_main beside it.
+#
+# apps/dongle_thread does not source it, and that is a scope decision rather
+# than an oversight. The no-cost-to-the-radio argument in ant_rgb_led.c rests on
+# the nRF52840 radio ISR being an ordinary maskable interrupt at priority 0;
+# under MPSL the timeslot signal handler is a ZERO-LATENCY IRQ and the whole
+# analysis has to be redone from scratch. apps/dongle_thread also does not build
+# for the Feather at all, so there is nothing to indicate on yet.
+#
+# apps/hrm_ble and apps/treadmill do not source it either: neither is a receiver,
+# so "how much traffic is being heard" is not a question they can answer.
+
+config ANT_DONGLE_RGB_LED
+	bool "Rotate a smart LED's hue at a speed set by ANT+ receive activity"
+	select LED_STRIP
+	help
+	  Drives a WS2812-style RGB LED (the on-board NeoPixel on an Adafruit
+	  Feather nRF52840, or any equivalent on another board) as a continuously
+	  rotating hue whose SPEED encodes how much sensor traffic the dongle is
+	  receiving - roughly 20 s per rotation with nothing on the air, down to
+	  1.5 s with ten or so sensors active. Colour itself carries no meaning,
+	  so there is nothing to memorise.
+
+	  WHAT IT IS FOR. The Feather has no debugger and this image has no
+	  console, so the single led0 heartbeat in ant_dongle_main.c is the whole
+	  local diagnostic surface: it answers "did the firmware boot" and
+	  nothing else. This answers "is it hearing anything", across the room,
+	  with no host attached.
+
+	  IT COSTS THE RADIO NOTHING, AND THAT IS A DESIGN CONSTRAINT RATHER THAN
+	  A HOPE. The transport is ws2812_spi: one 24-byte SPIM EasyDMA transfer
+	  per update with the calling thread asleep on a semaphore, no irq_lock()
+	  anywhere in the path, a completion interrupt at priority 1 where the
+	  radio at priority 0 preempts it, and no share of the TIMER or (D)PPI
+	  channels the radiant backend owns. The counting hook is one atomic
+	  increment on the event thread, never in a radio callback.
+
+	  Do NOT switch this to ws2812_gpio to save a pin. That driver holds
+	  irq_lock() across the entire frame - about 30 us per pixel - and the
+	  nRF52840 radio ISR is maskable, so every LED update would be a 30 us
+	  blackout imposed on the radio.
+
+	  OFF BY DEFAULT, mechanically rather than cautiously. The `zero-cost` CI
+	  job asserts identical section sizes and symbol sets against the merge
+	  base, and with this symbol off ant_rgb_led_note_msg() is a macro
+	  expanding to nothing - no call, no argument evaluated - so the shipping
+	  image is byte-identical.
+
+	  ENABLING IT ON ANOTHER BOARD IS AN OVERLAY, NOT A CODE CHANGE. The
+	  module finds its LED through the `rgb-led0` devicetree alias. Any board
+	  with a smart LED needs apps/dongle/rgb_<board>.overlay declaring the
+	  node and that alias, plus one build row; nothing in C or Kconfig moves.
+	  The node must NOT go in a boards/<board>.overlay file - those apply to
+	  every build for that board, and merely enabling a ws2812 compatible
+	  flips CONFIG_WS2812_STRIP_SPI to y and pulls the driver into the stock
+	  image, which is what `zero-cost` would then fail on.
+
+if ANT_DONGLE_RGB_LED
+
+config ANT_DONGLE_RGB_LED_BRIGHTNESS
+	int "Peak channel brightness, 0-255"
+	default 24
+	range 1 255
+	help
+	  The value the brightest channel is held at; one channel sits here, one
+	  ramps between 0 and here, the third is off. 24 is about 10 %, which is
+	  comfortable to look at on a desk rather than dazzling, and keeps a
+	  bus-powered dongle's LED well clear of the current budget. Raise it if
+	  the dongle lives inside a case or across a room.
+
+config ANT_DONGLE_RGB_LED_TICK_MS
+	int "Render period in milliseconds"
+	default 25
+	range 5 200
+	help
+	  How often the hue advances and the LED is rewritten. 25 ms (40 Hz) is
+	  smooth to the eye and amounts to about 0.1 % DMA duty for a single
+	  pixel. This is also the window instantaneous packet rate is measured
+	  over before smoothing, so shortening it makes the raw signal spikier
+	  rather than more responsive.
+
+config ANT_DONGLE_RGB_LED_PRIO
+	int "Render thread priority"
+	default 10
+	range 7 15
+	help
+	  Must stay numerically ABOVE both the serial bridge thread
+	  (ANTR_HOST_THREAD_PRIORITY, 5) and the radiant API event thread (6), so
+	  a preemptible LED update can never delay ANT work. The range starts at
+	  7 to make that structural rather than a comment.
+
+config ANT_DONGLE_RGB_LED_STACK_SIZE
+	int "Render thread stack size"
+	default 1024
+	range 512 4096
+	help
+	  The loop itself is integer arithmetic over a handful of locals; the
+	  stack is sized for the SPI driver call underneath it.
+
+endif # ANT_DONGLE_RGB_LED

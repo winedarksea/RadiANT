@@ -294,6 +294,12 @@ rsource "../common/Kconfig.dongle_main"
 # rather than caution about the feature.
 rsource "../common/Kconfig.health"
 
+# CONFIG_ANT_DONGLE_RGB_LED: the activity-rate NeoPixel indicator. Off by
+# default, and sourced only here - see that file for why apps/dongle_thread
+# deliberately does not get it (the no-cost-to-the-radio argument does not
+# survive MPSL's zero-latency timeslot handler).
+rsource "../common/Kconfig.rgb_led"
+
 choice ANT_DONGLE_RADIO
 	prompt "ANT radio backend"
 	default ANT_DONGLE_RADIO_SDK_ANT

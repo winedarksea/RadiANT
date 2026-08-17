@@ -38,6 +38,7 @@
 
 #include "ant_health.h"
 #include "ant_radio.h"
+#include "ant_rgb_led.h"
 #include "ant_wire.h"
 
 LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
@@ -1310,6 +1311,17 @@ void antr_on_message(const struct antr_msg *msg)
 #if defined(CONFIG_ANT_DONGLE_RX_TAP)
 	ant_dongle_rx_tap(msg);
 #endif
+
+	/*
+	 * The RGB activity indicator's whole ingest: one atomic increment, and
+	 * only for the data-bearing message IDs. A macro expanding to nothing
+	 * when the symbol is off, so the stock image is unchanged.
+	 *
+	 * Not folded into ant_dongle_rx_tap() above because that hook is
+	 * resolved at link time with one definition per image, already owned by
+	 * apps/dongle_thread/src/rx_tap.c - two features cannot share it.
+	 */
+	ant_rgb_led_note_msg(msg->id);
 
 	/*
 	 * Wire format: [0xA4][LEN][ID][channel+payload...][XOR checksum]

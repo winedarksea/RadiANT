@@ -1,0 +1,96 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * The Adafruit Feather nRF52840 Express's on-board NeoPixel (P0.16), wired up
+ * for CONFIG_ANT_DONGLE_RGB_LED. Applied ONLY by the `feather_rgb` build row,
+ * via -DEXTRA_DTC_OVERLAY_FILE=rgb_feather.overlay.
+ *
+ * WHY THIS IS NOT IN boards/adafruit_feather_nrf52840_nrf52840_uf2.overlay.
+ * That file applies to every Feather build. CONFIG_WS2812_STRIP_SPI is
+ * `default y` gated purely on a ws2812 compatible being enabled in devicetree,
+ * so merely declaring the node there would pull the LED driver and the SPI
+ * subsystem into the stock shipping image - which the `zero-cost` CI job
+ * compares byte-for-byte against the merge base. Keeping the node in a
+ * separately-applied overlay is what keeps that check meaningful.
+ *
+ * PORTING THIS TO ANOTHER BOARD: copy this file to rgb_<board>.overlay, point
+ * the psels at that board's LED pin, and keep the `rgb-led0` alias. The C code
+ * looks up nothing else. Add a build row alongside `feather_rgb` in
+ * scripts/build_all.ps1.
+ */
+
+#include <zephyr/dt-bindings/led/led.h>
+
+&pinctrl {
+	/*
+	 * MOSI is the only signal that goes anywhere. SCK and MISO are parked on
+	 * P1.06/P1.07, which appear in no node and on no header pin of this
+	 * board (checked against feather_connector.dtsi and
+	 * adafruit_feather_nrf52840_common.dtsi), so they drive nothing.
+	 *
+	 * They are parked rather than omitted because nrfx carries a reference-
+	 * manual note that SPIM's SCK should always be connected. Omitting the
+	 * psels does in fact work - Zephyr sets skip_gpio_cfg/skip_psel_cfg, so
+	 * nrfx's pin validation is bypassed and init_sck_pin() tolerates
+	 * PIN_NOT_CONNECTED - but parking costs nothing and stays inside what
+	 * the hardware documentation asks for.
+	 *
+	 * DO NOT copy the in-tree Actinius precedent's choice of P0.00 for this.
+	 * On this board P0.00/P0.01 are XL1/XL2 and carry the 32.768 kHz crystal
+	 * that ANT's channel timing depends on.
+	 */
+	spi2_neopixel: spi2_neopixel {
+		group1 {
+			psels = <NRF_PSEL(SPIM_MOSI, 0, 16)>,
+				<NRF_PSEL(SPIM_SCK, 1, 6)>,
+				<NRF_PSEL(SPIM_MISO, 1, 7)>;
+		};
+	};
+};
+
+/*
+ * SPIM2, and the instance choice is constrained from three sides. SPIM0 shares
+ * its address and IRQ with i2c0, which this board enables. SPIM1 is the board's
+ * header SPI on P0.13/14/15. SPIM3 would work but drags in nrfx's nRF52840
+ * anomaly-198 workaround, which rewrites the chip-wide AHB slave arbitration
+ * register around every transfer - a global bus-arbitration change wrapped
+ * around each LED update is the last thing to put near a radio ISR. SPIM2 has
+ * no such workaround.
+ */
+&spi2 {
+	compatible = "nordic,nrf-spim";
+	status = "okay";
+	pinctrl-0 = <&spi2_neopixel>;
+	pinctrl-names = "default";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	rgb_led0: ws2812@0 {
+		compatible = "worldsemi,ws2812-spi";
+		reg = <0>;
+
+		/*
+		 * 4 MHz with these frame patterns is the in-tree nRF precedent
+		 * (8 SPI bits per WS2812 bit, so 2 us per bit against the 1.25 us
+		 * nominal period). It is slightly long and normally works. If the
+		 * pixel shows wrong colours or flickers, raise to 8000000 - the
+		 * SPIM2 ceiling - with spi-one-frame 0x7c and spi-zero-frame 0x60.
+		 */
+		spi-max-frequency = <4000000>;
+		spi-one-frame = <0x70>;
+		spi-zero-frame = <0x40>;
+
+		chain-length = <1>;
+		color-mapping = <LED_COLOR_ID_GREEN
+				 LED_COLOR_ID_RED
+				 LED_COLOR_ID_BLUE>;
+		reset-delay = <280>;
+	};
+};
+
+/ {
+	aliases {
+		/* The only name apps/common/ant_rgb_led.c knows. */
+		rgb-led0 = &rgb_led0;
+	};
+};
