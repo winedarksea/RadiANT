@@ -23,13 +23,22 @@
  *      is 10000 and not 100; two missing zeroes make a 1 % incline climb like a
  *      100 % one, and the field is an accumulator with no plausible range for
  *      anything downstream to question.
+ *   5. WHO IS ALLOWED TO COMMAND. The control-owner token, which is policy
+ *      rather than arithmetic but belongs here for the same reason: it is
+ *      invisible from any single receiver, and it is the only part of the
+ *      arbitration that anything can test at all. NOTHING tests
+ *      src/treadmill_ble.c - no ztest exists for the GATT service, write_cp()
+ *      or the advertising payload - so the policy was put in a kernel-free
+ *      module precisely so these cases could reach it.
  */
 
+#include <errno.h>
 #include <stdint.h>
 #include <string.h>
 
 #include <zephyr/ztest.h>
 
+#include "treadmill_control.h"
 #include "treadmill_state.h"
 
 /* ── The conversions ────────────────────────────────────────────────────── */
@@ -334,6 +343,200 @@ ZTEST(treadmill_pages, test_heart_rate_source_does_not_flap)
 	/* Losing the reading altogether does clear it. */
 	treadmill_state_set_heart_rate(&s, TREADMILL_HR_NONE, false);
 	zassert_false(s.hr_from_ant, NULL);
+}
+
+/* ── The control-owner token ────────────────────────────────────────────────
+ *
+ * WHY THESE ARE HERE AND NOT IN A BLE TEST: there is no ztest for
+ * src/treadmill_ble.c at all. The GATT service, write_cp() and the advertising
+ * payload are covered only by BUILD_ASSERTs and a bench procedure, so
+ * arbitration living inside that file would be arbitration nothing can reach.
+ * treadmill_control.c is kernel-free for exactly this reason - no Zephyr
+ * header, no lock, no clock, TOLD what time it is - and these cases drive the
+ * whole policy with no radio and no stack.
+ *
+ * WHAT THEY DO NOT COVER, stated so a pass is not over-read: they prove the
+ * POLICY, not the plumbing. That both paths marshal onto the system workqueue
+ * before they reach the token (main.c's fec_cmd item, treadmill_ble.c's
+ * cp_work item) is what makes the lock-freedom sound, and it is not visible
+ * from here - the same limit test_both_control_paths_land_on_one_target has,
+ * which drives both paths sequentially on one thread and therefore proves the
+ * conversions rather than the concurrency.
+ */
+
+#define CTRL_TIMEOUT_MS 30000u
+
+ZTEST(treadmill_pages, test_an_explicit_ble_claim_preempts_an_ant_owner)
+{
+	treadmill_control_init(CTRL_TIMEOUT_MS);
+	zassert_equal(treadmill_control_owner(), TREADMILL_CTRL_NONE, NULL);
+
+	/* An FE-C page 51 arrives first and claims implicitly - there is no
+	 * FE-C acquire handshake, so commanding IS the claim. */
+	zassert_equal(treadmill_control_claim(TREADMILL_CTRL_ANT, false, 1000u),
+		      0, NULL);
+	zassert_equal(treadmill_control_owner(), TREADMILL_CTRL_ANT, NULL);
+
+	/* Then a phone runs FTMS Request Control, which IS an explicit
+	 * acquire, and takes the machine. This asymmetry is the whole policy
+	 * and it is spec-native: FTMS 4.16.2 has the handshake, FE-C has
+	 * none. */
+	zassert_equal(treadmill_control_claim(TREADMILL_CTRL_BLE, true, 2000u),
+		      0, NULL);
+	zassert_equal(treadmill_control_owner(), TREADMILL_CTRL_BLE, NULL);
+}
+
+ZTEST(treadmill_pages, test_ant_never_preempts_a_ble_owner)
+{
+	treadmill_control_init(CTRL_TIMEOUT_MS);
+
+	zassert_equal(treadmill_control_claim(TREADMILL_CTRL_BLE, true, 1000u),
+		      0, NULL);
+
+	/* The direction that must NOT work. An FE-C page 51 now gets -EACCES,
+	 * which main.c turns into page 71 status
+	 * PROFILE_FEC_CMD_STATUS_REJECTED (3) - the profile's own constant for
+	 * this, and the only signal ANT+ has, since there is no connection to
+	 * drop and no status characteristic to notify. */
+	zassert_equal(treadmill_control_claim(TREADMILL_CTRL_ANT, false, 2000u),
+		      -EACCES, NULL);
+	zassert_equal(treadmill_control_owner(), TREADMILL_CTRL_BLE,
+		      "a refused claim must not disturb the owner");
+
+	/* Refusal is not a one-off sulk: it holds for as long as the BLE
+	 * client has it, including past the ANT idle timeout, which does not
+	 * apply to a BLE owner at all. */
+	treadmill_control_tick(1000u + CTRL_TIMEOUT_MS * 3u);
+	zassert_equal(treadmill_control_owner(), TREADMILL_CTRL_BLE,
+		      "the idle timeout is for ANT+ only - a phone that has "
+		      "taken control is still there whether or not it has "
+		      "commanded anything this minute");
+	zassert_equal(treadmill_control_claim(TREADMILL_CTRL_ANT, false,
+					      1000u + CTRL_TIMEOUT_MS * 3u),
+		      -EACCES, NULL);
+}
+
+ZTEST(treadmill_pages, test_an_idle_ant_claim_expires_and_a_command_refreshes_it)
+{
+	treadmill_control_init(CTRL_TIMEOUT_MS);
+
+	zassert_equal(treadmill_control_claim(TREADMILL_CTRL_ANT, false, 1000u),
+		      0, NULL);
+
+	/* Just short of the timeout: still owned. */
+	treadmill_control_tick(1000u + CTRL_TIMEOUT_MS - 1u);
+	zassert_equal(treadmill_control_owner(), TREADMILL_CTRL_ANT, NULL);
+
+	/* Every command pushes the deadline out, so a controller that keeps
+	 * commanding keeps the machine. */
+	zassert_equal(treadmill_control_claim(TREADMILL_CTRL_ANT, false,
+					      1000u + CTRL_TIMEOUT_MS - 1u),
+		      0, NULL);
+	treadmill_control_tick(1000u + CTRL_TIMEOUT_MS + 1u);
+	zassert_equal(treadmill_control_owner(), TREADMILL_CTRL_ANT,
+		      "a refresh must move the deadline, not just succeed");
+
+	/* Stop commanding and it lapses. THIS IS THE ONLY RELEASE AN ANT
+	 * CLAIM HAS: ANT+ is connectionless, so a head unit that walks away
+	 * generates no event whatsoever. Without this, one page 51 early in a
+	 * session would lock a phone out until power cycle. */
+	treadmill_control_tick(1000u + CTRL_TIMEOUT_MS * 2u + 1u);
+	zassert_equal(treadmill_control_owner(), TREADMILL_CTRL_NONE, NULL);
+
+	/* And a phone can now take it with no explicit acquire needed,
+	 * because nobody holds it. */
+	zassert_equal(treadmill_control_claim(TREADMILL_CTRL_BLE, false,
+					      1000u + CTRL_TIMEOUT_MS * 2u + 2u),
+		      0, NULL);
+}
+
+ZTEST(treadmill_pages, test_release_hands_the_machine_back_to_ant)
+{
+	treadmill_control_init(CTRL_TIMEOUT_MS);
+
+	zassert_equal(treadmill_control_claim(TREADMILL_CTRL_BLE, true, 1000u),
+		      0, NULL);
+	zassert_equal(treadmill_control_claim(TREADMILL_CTRL_ANT, false, 1100u),
+		      -EACCES, NULL);
+
+	/* An FTMS Reset (0x01) or a disconnect. Both reach here. */
+	treadmill_control_release(TREADMILL_CTRL_BLE);
+	zassert_equal(treadmill_control_owner(), TREADMILL_CTRL_NONE, NULL);
+
+	/* The head unit's very next page 51 is applied rather than REJECTED,
+	 * with no handshake of its own - which is the point, since FE-C has
+	 * none to offer. */
+	zassert_equal(treadmill_control_claim(TREADMILL_CTRL_ANT, false, 1200u),
+		      0, NULL);
+	zassert_equal(treadmill_control_owner(), TREADMILL_CTRL_ANT, NULL);
+
+	/* A release by somebody who does not hold it is a no-op and not an
+	 * error - a disconnect callback should not have to ask first. */
+	treadmill_control_release(TREADMILL_CTRL_BLE);
+	zassert_equal(treadmill_control_owner(), TREADMILL_CTRL_ANT, NULL);
+}
+
+ZTEST(treadmill_pages, test_the_ant_timeout_survives_an_uptime_wrap)
+{
+	/* k_uptime_get_32() wraps every 49.7 days and a treadmill in a gym is
+	 * powered for months. Signed arithmetic here would make the claim
+	 * expire instantly at the wrap; unsigned subtraction yields the true
+	 * interval across it. */
+	const uint32_t before_wrap = 0xFFFFF000u;
+
+	treadmill_control_init(CTRL_TIMEOUT_MS);
+	zassert_equal(treadmill_control_claim(TREADMILL_CTRL_ANT, false,
+					      before_wrap),
+		      0, NULL);
+
+	/* 0x2000 counts past the claim, having wrapped through zero. That is
+	 * 8192 ms, well inside the 30 s timeout, so the claim must stand. */
+	treadmill_control_tick(before_wrap + 0x2000u);
+	zassert_equal(treadmill_control_owner(), TREADMILL_CTRL_ANT,
+		      "an uptime wrap is not an idle timeout");
+
+	/* And past the real deadline it still expires. */
+	treadmill_control_tick(before_wrap + CTRL_TIMEOUT_MS + 1u);
+	zassert_equal(treadmill_control_owner(), TREADMILL_CTRL_NONE, NULL);
+}
+
+ZTEST(treadmill_pages, test_reads_are_never_gated_by_ownership)
+{
+	/* The deck-moving pages, and the reason the token exists. */
+	zassert_true(treadmill_control_page_is_gated(0x33u),
+		     "page 51, Track Resistance - the grade command");
+	zassert_true(treadmill_control_page_is_gated(0x32u),
+		     "page 50, Wind Resistance - the other half of the "
+		     "simulation parameter set, gated with page 51 because "
+		     "honouring one and refusing the other is how a controller "
+		     "decides simulation mode is broken");
+
+	/*
+	 * AND THE ONES THAT MUST NOT BE. Refusing a read would make the
+	 * machine look broken to a head unit that is merely observing it,
+	 * which is the opposite of what the token is for: nothing here is
+	 * allowed to degrade what a listener sees.
+	 */
+	zassert_false(treadmill_control_page_is_gated(0x46u),
+		      "page 70, Request Data Page - a READ, and refusing it "
+		      "would make an observing head unit report the machine as "
+		      "faulty");
+	zassert_false(treadmill_control_page_is_gated(0x37u),
+		      "page 55, User Configuration");
+
+	/* 48 and 49 answer NOT_SUPPORTED to everybody. Gating them would
+	 * report a missing capability as a missing permission, which tells a
+	 * controller to retry something that will never work. */
+	zassert_false(treadmill_control_page_is_gated(0x30u), "page 48");
+	zassert_false(treadmill_control_page_is_gated(0x31u), "page 49");
+
+	/* The data pages this machine transmits are not commands at all and
+	 * must never appear in the gated set. */
+	zassert_false(treadmill_control_page_is_gated(16u), NULL);
+	zassert_false(treadmill_control_page_is_gated(17u), NULL);
+	zassert_false(treadmill_control_page_is_gated(19u), NULL);
+	zassert_false(treadmill_control_page_is_gated(0x50u), NULL);
+	zassert_false(treadmill_control_page_is_gated(0x51u), NULL);
 }
 
 ZTEST_SUITE(treadmill_pages, NULL, NULL, NULL, NULL, NULL);

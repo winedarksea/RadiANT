@@ -829,15 +829,42 @@ try {
             # the control point security permission "Encryption", so a build
             # without SMP would advertise a control point no client can ever
             # write - which looks exactly like a machine that ignores commands.
+            #
+            # BT_LL_SOFTDEVICE is the one that was MISSING. apps/hrm_ble's row
+            # has asserted it since that application pinned the controller;
+            # TREADMILL_BLE did not `select` it and no row checked, so this
+            # application relied on the SDC merely being the default link layer
+            # for CONFIG_BT=y on nRF54L15. It is - verified from the real
+            # .config, so the gap was latent and never live - and that is
+            # exactly the sort of thing worth an assertion: the MPSL gate this
+            # whole application arbitrates through assumes the SDC, and a board
+            # or Kconfig change that quietly moved to the open-source LL would
+            # break the arbitration with a perfectly green build.
             if ($t.ble) {
                 foreach ($sym in @('CONFIG_TREADMILL_BLE=y',
                                    'CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y',
                                    'CONFIG_MPSL_TIMESLOT_SESSION_COUNT=1',
                                    'CONFIG_BT_RSCS=y',
-                                   'CONFIG_BT_SMP=y')) {
+                                   'CONFIG_BT_SMP=y',
+                                   'CONFIG_BT_LL_SOFTDEVICE=y')) {
                     if (-not ($cfg | Where-Object { $_ -eq $sym })) {
                         throw "treadmill $($t.dir): expected $sym in .config"
                     }
+                }
+
+                # 4b. The arbitration policy, which is a `choice` and therefore
+                # has an arm set whether or not anybody meant to set one. The
+                # EXCLUSIVE arm is the default and the one every bench and CI
+                # result below is taken against; TREADMILL_CTRL_POLICY_NONE
+                # restores last-writer-wins, which is a legitimate integrator
+                # choice and NOT a thing to ship from this tree by accident.
+                # Asserted rather than assumed for the same reason the source
+                # arm above is.
+                if (-not ($cfg | Where-Object { $_ -eq 'CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE=y' })) {
+                    throw "treadmill $($t.dir): expected " +
+                          "CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE=y in .config - " +
+                          "without it two controllers write the same setpoint " +
+                          "with no signal to either"
                 }
             }
 

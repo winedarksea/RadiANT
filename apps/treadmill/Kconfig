@@ -211,6 +211,22 @@ config TREADMILL_BLE
 	# CMakeLists.txt carries a FATAL_ERROR backstop for the same interlock
 	# approached from the other side.
 	select RADIANT_BACKEND_NRF_GATE_MPSL
+	#
+	# PIN THE SOFTDEVICE CONTROLLER HERE, NOT ONLY IN A .conf FRAGMENT -
+	# the same `select` apps/hrm_ble/Kconfig carries under HRM_BLE_HRS, and
+	# it was simply missing here. Without it this application relies on
+	# whatever the default link layer happens to be for CONFIG_BT=y on the
+	# target board, which is a controller choice this design cannot leave to
+	# chance: the MPSL gate this whole file exists to arbitrate assumes the
+	# SDC, not the open-source LL, is what is beside radiant on the radio.
+	#
+	# LATENT RATHER THAN LIVE when it was added: the resolved .config for
+	# tread_ble on nRF54L15 already read CONFIG_BT_LL_SOFTDEVICE=y, because
+	# that is the default for this part. Which is exactly why it is worth
+	# pinning - a default that happens to be right is not an interlock, and
+	# the failure it would produce (radiant arbitrating against a controller
+	# MPSL does not schedule) is the silent kind.
+	select BT_LL_SOFTDEVICE
 	help
 	  FTMS (0x1826, hand-written - neither Zephyr nor NCS ships it) and RSC
 	  (0x1814, NCS's bt_rscs_*), beside two ANT+ masters on one radio.
@@ -227,6 +243,17 @@ config TREADMILL_BLE
 	  that the phone already has the heart rate. That argument does not
 	  transfer: a treadmill is expected to serve a head unit and a fitness
 	  app at the same time, so the contended case is the NORMAL case here.
+
+	  THAT RULING IS ABOUT THE TRANSMITTER AND STILL STANDS. It is not
+	  about command ownership, which is a separate question and IS now
+	  arbitrated - see TREADMILL_CTRL_POLICY below and
+	  src/treadmill_control.h. Nothing is ever suppressed: FE-C pages
+	  16/17/19/80/81, SDM 0x7C and the FTMS Treadmill Data notification all
+	  keep running for every listener no matter who holds control. What the
+	  token decides is only whose commanded grade the deck actually moves
+	  to, which would need deciding even if the two transports were on
+	  separate chips. Reading the token as a reversal of the paragraph
+	  above is the mistake it is worth one sentence to prevent.
 
 config TREADMILL_BLE_ADV_INTERVAL_MS
 	int "BLE advertising interval, milliseconds"
@@ -303,6 +330,77 @@ config TREADMILL_BLE_MAX_INCLINE_DECI
 	default 150
 	help
 	  The Maximum field of Supported Inclination Range. 150 is 15.0 %.
+
+# ── Command ownership ───────────────────────────────────────────────────────
+#
+# ONLY REACHABLE WITH BLE, because only then are there two controllers to
+# arbitrate between. An FE-C-only build has exactly one command surface and a
+# token would be ceremony; the gating code is compiled out entirely there
+# rather than being present and always answering yes.
+#
+# NOT A SUPPRESSION RULE. See TREADMILL_BLE's help and src/treadmill_control.h:
+# every page and every notification keeps going out to every listener whoever
+# holds the token. This decides only whose commanded grade the deck moves to.
+
+choice TREADMILL_CTRL_POLICY
+	prompt "command arbitration between FE-C and FTMS"
+	depends on TREADMILL_BLE
+	default TREADMILL_CTRL_POLICY_EXCLUSIVE
+	help
+	  What happens when a head unit on ANT+ and a phone on BLE both try to
+	  command the machine. See src/treadmill_control.h.
+
+config TREADMILL_CTRL_POLICY_EXCLUSIVE
+	bool "exclusive ownership - explicit beats implicit"
+	help
+	  One controller at a time, and the asymmetry is spec-native rather
+	  than invented: FTMS §4.16.2 already requires an explicit Request
+	  Control (0x00) handshake and FE-C has no equivalent, so an explicit
+	  claim preempts an implicit one and not the other way round.
+
+	  A refused command is REFUSED ON THE WIRE, with a code that already
+	  means this in each specification - page 71 status
+	  PROFILE_FEC_CMD_STATUS_REJECTED (3) to an FE-C controller, result
+	  code CONTROL_NOT_PERMITTED (0x05) to an FTMS client. Neither is
+	  invented here, and silence would be worse than either: a controller
+	  reports a machine that ignores commands as broken.
+
+	  Pages that are not actuation stay ungated. Page 70 (Request Data
+	  Page) and page 55 (User Configuration) are answered whoever holds the
+	  token, because refusing a READ would make a machine look broken to a
+	  head unit that is merely observing it.
+
+config TREADMILL_CTRL_POLICY_NONE
+	bool "none - last writer wins"
+	help
+	  The behaviour before the token existed, kept for an integrator who
+	  wants it: both control paths apply their command unconditionally and
+	  neither is ever told about the other.
+
+	  IT IS NOT A SAFE DEFAULT AND IT IS NOT MEANT TO BE. Two controllers
+	  writing the same setpoint with no signal to either produces a deck
+	  oscillating between two grades while both ends report success, which
+	  is invisible from either receiver. Choose it only when something
+	  outside this node already guarantees a single commander.
+
+endchoice
+
+config TREADMILL_CTRL_ANT_TIMEOUT_MS
+	int "release an idle ANT+ control claim after, milliseconds"
+	depends on TREADMILL_CTRL_POLICY_EXCLUSIVE
+	range 1000 600000
+	default 30000
+	help
+	  ANT+ IS CONNECTIONLESS, so this is not a tuning knob - it is the only
+	  release an implicit ANT claim has. A BLE client that walks away
+	  generates a disconnect; an FE-C controller that walks away generates
+	  nothing at all, it simply stops sending page 51. Without a timeout,
+	  one page 51 early in a session would lock a phone out of the machine
+	  until power cycle.
+
+	  30 s is about 120 FE-C slots: long enough that a controller pausing
+	  between commands keeps its claim, short enough that a user who
+	  switches from a watch to a phone is not left waiting.
 
 # ── Phase 5 ─────────────────────────────────────────────────────────────────
 

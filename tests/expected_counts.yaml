@@ -74,4 +74,19 @@ min_scenarios: 9
 # (test_profile_sanity.c) - 827 under radiant/tests by the same static count -
 # plus the four in apps/hrm_ble/tests/sim_sched/src/main.c and the twelve in
 # apps/treadmill/tests/pages/src/main.c. 827 + 4 + 12 = 843.
-min_testcases: 843
+#
+# Raised again for the treadmill's control-owner token: six cases in
+# apps/treadmill/tests/pages/src/main.c covering the arbitration policy - an
+# explicit FTMS claim preempting an implicit FE-C one, ANT+ never preempting
+# BLE, the idle ANT timeout expiring and being refreshed, release handing the
+# machine back, the timeout surviving a k_uptime_get_32() wrap, and the read
+# pages staying ungated.
+#
+# WORTH KNOWING WHY THEY ARE IN THIS FILE'S SCOPE AT ALL: nothing anywhere
+# tests apps/treadmill/src/treadmill_ble.c - there is no ztest for the GATT
+# service, write_cp() or the advertising payload - so the token was
+# deliberately put in a kernel-free module (src/treadmill_control.c) that this
+# suite compiles directly. Had it gone inside treadmill_ble.c where it first
+# seemed to belong, this number would not have moved and the policy would have
+# had no coverage at all. 827 + 4 + 18 = 849.
+min_testcases: 849

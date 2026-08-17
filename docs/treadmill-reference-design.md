@@ -24,6 +24,24 @@ covers what is different, and what is different is one thing:
 
 That symmetry is the whole architecture. Everything else falls out of it.
 
+**Including the problem it creates.** Both control paths landing on one
+function is the design working as intended, and it is also exactly what makes
+two simultaneous controllers *last-writer-wins with no signal to either*: a head
+unit running a simulated climb and a phone running an interval workout are both
+told their command succeeded while the deck oscillates between two setpoints,
+and neither end can see it. So there is a **control-owner token**
+(`src/treadmill_control.h`), and the policy is
+[§4a](#4a-who-is-allowed-to-command).
+
+**It is not a suppression rule, and the distinction is load-bearing.** Nothing
+in this application ever stops a transmitter — FE-C pages 16/17/19/80/81, SDM
+`0x7C` and the FTMS Treadmill Data notification all keep running for every
+listener regardless of who holds control. *Sharing the air* is a radio question,
+answered by the MPSL gate and measured in §7.6. *Whose grade the deck moves to*
+is a semantic question with no radio content, which would need answering even if
+the two transports were on separate chips. Conflating them is the mistake this
+paragraph exists to prevent.
+
 **What it is.** A node with:
 
 - **Two ANT+ masters.** FE-C (`0x11`, period 8192) is what a control-capable
@@ -204,6 +222,112 @@ calibration problem rather than as a bug.
 
 ---
 
+## 4a. Who is allowed to command
+
+`src/treadmill_control.{h,c}`, `CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE`
+(default), `CONFIG_TREADMILL_CTRL_ANT_TIMEOUT_MS` (default 30000).
+
+### The policy: explicit beats implicit
+
+The asymmetry is the whole design and it is **spec-native rather than
+invented**. FTMS §4.16.2 already requires an explicit `Request Control` (`0x00`)
+handshake before any procedure — it *has* an acquire. FE-C has no equivalent: a
+controller simply sends page 51 and reads the page 71 answer. So an explicit
+claim outranks an implicit one, and each side already carries the wire signal
+needed to say no.
+
+| Event | Result |
+|---|---|
+| FTMS `Request Control` (`0x00`) | Claims. **Preempts an ANT owner** — explicit beats implicit. |
+| FTMS `Reset` (`0x01`), or a disconnect | Releases. |
+| FE-C page 50/51, owner `NONE` or `ANT` | Claims or refreshes implicitly, and applies. |
+| FE-C page 50/51, owner `BLE` | **Refused: page 71 status `PROFILE_FEC_CMD_STATUS_REJECTED` (3).** |
+| FTMS command with no `Request Control` | `CONTROL_NOT_PERMITTED` (`0x05`), which this file already did. |
+| ANT owner idle > `TREADMILL_CTRL_ANT_TIMEOUT_MS` | Released. |
+
+Neither refusal code is new: `PROFILE_FEC_CMD_STATUS_REJECTED` is
+`profile_fec_tx.h:103` and `0x05` is FTMS Table 4.24. Both already mean exactly
+this. **Silence would be worse than either** — §8.8 is explicit that a
+controller reports a machine that does not answer as broken, which is why every
+branch of the FE-C handler still ends in a page 71.
+
+**Why ANT+ needs a timeout and BLE does not.** ANT+ is connectionless. A BLE
+client that walks away generates a disconnect; an FE-C controller that walks
+away generates *nothing at all* — it simply stops sending page 51. An idle
+timeout is therefore the only release an implicit ANT claim can ever have, and
+without one a single page 51 early in a session would lock a phone out of the
+machine until power cycle. The reverse does not apply: a phone that has taken
+control is still there whether or not it has commanded anything this minute, so
+a BLE claim is released by an event and never by a timer.
+
+**Reads are never gated.** Page 70 (Request Data Page) and page 55 (User
+Configuration) are answered whoever holds the token. Refusing a *read* would
+make the machine look broken to a head unit that is merely observing it, which
+is the opposite of what the token is for. Pages 48 and 49 keep answering
+`NOT_SUPPORTED` to everybody, because this machine genuinely does not implement
+them — answering `REJECTED` there would report a missing capability as a missing
+permission and tell a controller to retry something that can never work.
+
+**Pages 50 and 51 are gated together.** They are the simulation-mode command
+set, and honouring half of a parameter set while refusing the other half is how
+a controller decides simulation mode is broken and stops sending page 51 too.
+
+### Why it lives in its own kernel-free module
+
+`treadmill_control.c` includes no Zephyr header, takes no lock and reads no
+clock — it is *told* what time it is, exactly like `treadmill_state.c`. That is
+not a stylistic echo. **Nothing anywhere tests `src/treadmill_ble.c`:** there is
+no ztest for the GATT service, for `write_cp()` or for the advertising payload,
+which are covered only by `BUILD_ASSERT`s and the bench procedure in §7. Putting
+the policy where it first seemed to belong — inside `treadmill_ble.c` — would
+have put it somewhere nothing could reach. In its own module,
+`apps/treadmill/tests/pages` compiles it directly and drives the whole policy
+with no radio and no stack.
+
+### The lock that is not there
+
+The module is lock-free, and that is only sound because of a change made
+alongside it: **both control paths now marshal onto the system workqueue before
+they reach it.**
+
+`treadmill_state.h` states the invariant — *"everything that touches this struct
+runs on the system workqueue"* — and both paths violated it as wired. An FE-C
+page arrives on the `radiant_event` thread; an FTMS write arrives on the BT RX
+thread; the physics tick and source reports are on the workqueue. Three writers,
+no lock, and `treadmill_ble.h` even admitted it in a comment. A `grep` for
+`k_mutex|k_sem|spinlock|irq_lock` across `apps/treadmill/` returned nothing.
+
+The fix restores the invariant rather than adding a second, weaker one beside
+it:
+
+- **FE-C** — `antr_on_message()` copies the eight-byte body into a four-deep
+  ring and submits a `k_work`; `apply_control_page()` runs on the workqueue and
+  stages page 71 there. Invisible on air: page 71 goes out on the next data slot
+  up to 250 ms later either way, against a workqueue turnaround of microseconds.
+- **FTMS** — `write_cp()` keeps only the ATT-level validation (§4.16.3 wants
+  those two failures as ATT errors) and defers the whole op-code switch to
+  `cp_work`. Answering late is free because `cp_respond()` was always a GATT
+  *indication*. The connection is `bt_conn_ref()`'d across the hop, and so is
+  the one in the disconnect handler — that one does a pointer comparison, and a
+  freed `bt_conn` can be reallocated at the same address, which would revoke the
+  permission of a client that had just been granted it.
+
+Once both are on one thread, the token needs no lock either — which is the main
+reason to prefer this over a mutex.
+
+### Turning it off
+
+`CONFIG_TREADMILL_CTRL_POLICY_NONE` restores last-writer-wins and compiles
+`treadmill_control.c` out entirely, so the "none" build really is the old
+behaviour rather than a token that always says yes. It is a legitimate choice
+when something outside this node already guarantees a single commander, and it
+is not a safe default. The `choice` arm is asserted from the generated
+`.config` by both `build_all.ps1` and the `build-treadmill` CI job, because a
+`choice` always has *some* arm set and silently shipping the wrong one is the
+failure this project keeps paying for.
+
+---
+
 ## 5. Porting to your board
 
 1. **Copy an overlay.** `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` is three
@@ -369,13 +493,39 @@ the `fec_only.conf` builds: `TRANSFER_TX_FAILED` every time, no page 71, incline
 stayed 0. **This does not implicate the treadmill.** The control run: the same
 dongle, sending a read-only acknowledged page 70 to the *commercial* trainer
 `#52233`, also failed 0/4. The dongle cannot originate an acknowledged transfer,
-so the rig cannot ask the question. **A controller with a known-good originator
-is needed before anything is concluded about FE-C's "C" on this node** — the
-sdk-ant Feather image at `build/release/dongle/zephyr/zephyr.uf2` is the
-cheapest one, since the Feather sits in its UF2 bootloader and needs no
-double-tap.
+so the rig cannot ask the question.
 
-### 7.4a Two defects found on the bench, 2026-08-16
+> **The cause was found, 2026-08-17, and it is a real capability gap in
+> `apps/common` rather than a rig problem.** "The dongle cannot originate an
+> acknowledged transfer" was true, and the reason is that the transfer was
+> never **slot-aligned**. `radiant_transfer.h` states the contract at
+> `radiant_transfer_submit()` — *"a slave answering its master passes
+> `master_t_sync + RADIANT_TRANSFER_SLOT_REPLY_US`"* — and the sole production
+> caller, `antr_acknowledge_message_tx()`, passed `RADIANT_TIME_NEVER`.
+> `radiant_burst.c` resolves that to `radiant_radio_now() + min_lead_us +
+> ARM_SLACK_US`, an arbitrary phase. The peer master only listens for ±250 µs
+> around `t_sync + 2190 µs` (`api_post_master_rx()`), so the packet landed where
+> nothing was listening, the reply window closed empty, and the engine failed it
+> once with `FAIL_NO_ACK` — which it deliberately does not retry.
+>
+> **The 0/4 against the commercial Wahoo is the proof, not the confounder.** No
+> bug in any node in this tree could make a read-only page 70 to somebody else's
+> trainer fail. The control that this section treats as inconclusive is in fact
+> the thing that identifies the transmit instant as the only possible cause.
+> Fixed in `apps/common/ant_radio_radiant.c` (`api_slave_reply_t_sync()`); the
+> instant now comes from `radiant_channel_next_slot()`, which is the same
+> prediction `api_post_track_rx()` already arms tracked windows around.
+
+If the fix ever needs decoupling from treadmill verification, the sdk-ant
+Feather image at `build/release/dongle/zephyr/zephyr.uf2` is a known-good
+originator and the Feather sits in its UF2 bootloader, needing no double-tap.
+That is a rig workaround and not a substitute for the fix.
+
+### 7.4a Two defects found on the bench, 2026-08-16 — BOTH RETIRED, 2026-08-17
+
+> **Read §7.4b first. Neither defect below reproduced, and one of them never
+> existed.** The original observations are kept in full rather than deleted,
+> because what they were actually measuring is the useful part.
 
 Both are treadmill-specific and both were isolated against `apps/hrm_ble` on the
 **same board, same probe, same port, same NCS** — which is what makes them
@@ -413,16 +563,73 @@ happen *after* the ANT+ masters open — the deferred log flush, and BLE — are
 things that do not happen, while the masters themselves run indefinitely. That
 is a hypothesis, not a measurement; it was not confirmed this pass.
 
-### 7.5 On air, BLE — BLOCKED, 2026-08-16
+### 7.4b What §7.4a was actually measuring, 2026-08-17
 
-Not runnable until §7.4a defect 1 is fixed: there is nothing to connect to.
+Rig: the **unmodified** `build/tread_ble` image from 2026-08-16 — the same
+binary §7.4a was written against — reflashed to the same nRF54L15 DK (J-Link
+`1057737173`), console read with `scripts/capture_log.ps1 -Port COM7` across a
+J-Link reset, and a 120 s active scan from `scripts/ble_central.ps1`.
 
-The host is a working central and needs no phone — `scripts/ble_central.ps1`
-drives the PC's own adapter and was used for the scans above, so only the
-control-point and notify checks below still want a second opinion from a real
-app.
+**Defect 1 was a measurement artefact. The node advertises and always did.**
 
-`scripts/ble_central.ps1` / `tools/ble_central.cs`, or nRF Connect on a phone:
+```
+FD:D3:C2:A3:0C:4B  rssi -47  adv 42  name 'RadiANT Treadmill'  services [0x1826, 0x1814]
+```
+
+42 advertisements in 120 s at the 1000 ms interval, both service UUIDs present,
+and the address matches the identity in the boot log. The original scan used
+`ble_central.ps1`'s **defaults**, which are `-Name "RadiANT HR"` and
+`-Seconds 10` — the strap's name, and a tenth of the ≥ 90 s this application's
+own Kconfig tells you to budget at a 1 s advertising interval.
+`CONFIG_TREADMILL_BLE_ADV_INTERVAL_MS`'s help says so in as many words, and
+`docs/hrm-reference-design.md` §7 records the same trap being paid for once
+already. **State the scan duration and the `-Name` in any future report;** a
+scan that finds nothing is only evidence if both are known.
+
+**Defect 2 was real but was not what it looked like. The console was never
+dead.** The boot capture is complete from radiant's init through to
+`BLE: FTMS + RSC advertising every 1000 ms as 'RadiANT Treadmill'`. What is
+missing is only the first few lines, and the log says exactly why:
+
+```
+[00:37:07.391,971] <inf> radiant_swi: swi: trampoline on IRQ 29 at priority 1
+--- 3 messages dropped ---
+```
+
+The mechanism is `LOG_MODE_DEFERRED` + `LOG_MODE_OVERFLOW` + a **1024-byte**
+`CONFIG_LOG_BUFFER_SIZE`. Every console byte here, `printk` included
+(`CONFIG_LOG_PRINTK=y`), goes into that ring and comes out only when the log
+processing thread runs — and that thread sleeps 1000 ms and wakes at 10 queued
+messages. radiant's init emits far more than 10 lines faster than the first
+drain, so the ring discards its **oldest** entries: the banner and the first
+application lines. Fixed by raising `CONFIG_LOG_BUFFER_SIZE` to 4096 in
+`prj.conf`.
+
+"Not even the boot banner" was the right observation and the wrong inference.
+With `LOG_PRINTK=y` the banner is not a direct-to-UART write; it is a ring-buffer
+entry like any other, so its absence says nothing about the UART. The
+byte-identical `CONFIG_LOG*` diff in §7.4a is consistent with this and always
+was — `apps/hrm_ble` has the same log configuration and simply does not emit
+enough at boot to overflow 1024 bytes.
+
+**Three corrections of record follow from this pass:**
+
+- §7.4a's unifying hypothesis — "the things that happen *after* the ANT+ masters
+  open are the ones that do not happen" — **is refuted, and by §7.4's own
+  evidence.** `node_tick_fn` runs on the system workqueue and is what drives
+  `treadmill_state_tick()` and `publish()`; §7.4 records live, *advancing* speed
+  and distance over 90 s. The workqueue was running the whole time. Nothing was
+  ever wrong after the masters opened.
+- The `(void)` cast at `main.c:765` was **not** the cause of defect 1, and
+  capturing it would not have found anything: `treadmill_ble_start()` already
+  `LOG_ERR`s every step it can fail at, and it was returning 0. It is captured
+  now anyway, because "this node is ANT+ only" deserves to be one greppable
+  line.
+- `CONFIG_LOG_MODE_IMMEDIATE` remains the wrong tool and §7.4a's warning stands
+  — it stops ANT+ transmission outright. The right probe for a genuinely silent
+  console is `CONFIG_LOG_PRINTK=n` plus a bare `printk()`, which bypasses the
+  processing thread without making every `LOG_*` in a radio callback
+  synchronous. It was not needed this time.
 
 ### 7.5 On air, BLE
 
@@ -447,7 +654,9 @@ rather than read is a silent wrong-by-ten.
 
 ### 7.6 Both at once, and the number that decides the design
 
-**BLOCKED on §7.4a defect 1** — a connection is half the experiment.
+**UNBLOCKED, 2026-08-17** — §7.4a defect 1 was a measurement artefact (§7.4b);
+the node advertises and a connection can be made. The measurement below is what
+is still owed.
 
 One number is in, and it is the reassuring half: with **both ANT+ masters
 running and the BLE stack linked in and initialised** (`tread_ble`), the FE-C
@@ -529,6 +738,17 @@ biometric data about a person.
 
 - **The simulator is the only hardware.** Nothing is validated against a motor
   controller or an incline actuator.
+- **Nothing tests `src/treadmill_ble.c`.** There is no ztest for the FTMS GATT
+  service, for `write_cp()` or for the advertising payload; they are covered
+  only by `BUILD_ASSERT`s and §7's bench procedure. That is why the arbitration
+  policy was put in a kernel-free module of its own (§4a) instead of inside
+  that file, and it is the largest remaining coverage gap in this application.
+- **The workqueue conversion is not covered by a test either.** §4a's marshalling
+  is what makes the lock-free state and the lock-free token sound, and no ztest
+  can see it — `test_both_control_paths_land_on_one_target` drives both paths
+  sequentially on one thread, so a pass there proves the *conversions* and says
+  nothing about the concurrency. It is verified by inspection and by §7.7's
+  bench run, and a pass on that suite must not be read as covering it.
 - **Memory: measured, and it is fine.** §7.3 has the table. The heaviest
   configuration is 247 kB flash and 68.5 kB RAM on an nRF54L15 — 17 % and 36 %.
   The concern was real (`radiant/spike/mpsl_arb/README.md` measured the BLE

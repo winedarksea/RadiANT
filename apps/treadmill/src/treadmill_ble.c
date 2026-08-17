@@ -116,6 +116,9 @@
 
 #include "treadmill_ble.h"
 #include "treadmill_state.h"
+#if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
+#include "treadmill_control.h"
+#endif
 
 LOG_MODULE_DECLARE(treadmill, CONFIG_TREADMILL_LOG_LEVEL);
 
@@ -291,6 +294,17 @@ static atomic_t connections;
  * One controller at a time, tracked by connection pointer rather than by a
  * bool, because "who has it" is the question §4.17.1's notify-direction rule
  * asks and a bool cannot answer it.
+ *
+ * THIS IS FTMS-INTERNAL AND IS NOT THE CROSS-TRANSPORT TOKEN. It answers
+ * "which BLE client may write the control point", which is a question FTMS
+ * already specifies and this file already got right. Whether the BLE side owns
+ * the deck AT ALL, against an FE-C controller that has no such handshake, is
+ * treadmill_control.h's question and is tracked there. The two are kept
+ * separate because they have different lifetimes: `controller` is per
+ * connection, the token is per machine.
+ *
+ * WORKQUEUE-OWNED, like everything else below. Written only from cp_work_fn()
+ * and from the deferred disconnect handler, never from the BT RX thread.
  */
 static struct bt_conn *controller;
 
@@ -566,44 +580,90 @@ static uint8_t handle_reset(struct bt_conn *conn)
 
 	/* Reset also revokes control (§4.16.2). */
 	controller = NULL;
+#if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
+	/* And hands the machine back, so an FE-C controller's next page 51 is
+	 * applied instead of REJECTED. A BLE client that has explicitly reset
+	 * has said it is finished; keeping the deck locked to it after that
+	 * would be the token outliving the intent behind it. */
+	treadmill_control_release(TREADMILL_CTRL_BLE);
+#endif
 
 	msg[0] = FTMS_STATUS_RESET;
 	notify_status(conn, msg, sizeof(msg));
 	return FTMS_RESULT_SUCCESS;
 }
 
-static ssize_t write_cp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-			const void *buf, uint16_t len, uint16_t offset,
-			uint8_t flags)
+/* ---------------------------------------------------------------------------
+ * The thread hop
+ * ---------------------------------------------------------------------------
+ *
+ * write_cp() runs on the BT RX thread. Every handler above it writes `state`
+ * through treadmill_node_set_*(), and treadmill_state.h's lock-free design is
+ * only safe because "everything that touches this struct runs on the system
+ * workqueue". This path did not, and neither did the FE-C one - see main.c's
+ * fec_cmd work item, which is this same fix on the other radio.
+ *
+ * WHAT MOVES IS THE WHOLE PROCEDURE, not just the state write. Marshalling
+ * only treadmill_node_set_incline_deci() would leave `controller`,
+ * `training_status` and the ownership token still being read and written from
+ * two threads - so `op` and its parameters are copied here and EVERYTHING from
+ * the op-code switch onward happens on the workqueue. What is left on the BT
+ * thread is the ATT-level validation, which touches no application state at
+ * all and has to stay here anyway because §4.16.3 wants those two failures
+ * expressed as ATT errors rather than as Response Codes.
+ *
+ * ANSWERING LATE IS FREE, which is what makes this possible: cp_respond() is a
+ * GATT *indication*, so the answer was never the return value of this function.
+ * The write is acknowledged at the ATT layer either way and the Response Code
+ * follows when it follows.
+ *
+ * THE CONNECTION IS REFERENCED. A client can disconnect between the write and
+ * the work item running, and cp_respond()/notify_status() would then be handed
+ * a freed object. bt_conn_ref() here, bt_conn_unref() at the end of the work
+ * item - and the work item re-checks that the connection is still up before it
+ * answers.
+ */
+static struct {
+	struct bt_conn *conn; /* referenced while pending */
+	uint8_t         data[8];
+	uint16_t        len;
+} cp_pending;
+
+/* Producer: the BT RX thread. Consumer: the system workqueue. Only ever one
+ * request in flight - write_cp() refuses a second with the ATT error §4.16.3
+ * asks for - so the flag is the whole of the handshake. */
+static atomic_t cp_pending_valid;
+
+static void cp_work_fn(struct k_work *w)
 {
-	const uint8_t *data = buf;
-	uint8_t        op;
-	uint8_t        result;
+	struct bt_conn      *conn = cp_pending.conn;
+	const uint8_t       *data = cp_pending.data;
+	uint16_t             len = cp_pending.len;
+	uint8_t              op = data[0];
+	uint8_t              result;
+	struct bt_conn_info  info;
 
-	ARG_UNUSED(attr);
-	ARG_UNUSED(flags);
+	ARG_UNUSED(w);
 
-	if (offset != 0u) {
-		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
-	}
-	if (len < 1u) {
-		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
-	}
-
-	/* §4.16.3 maps two failures to ATT errors rather than to a Response
-	 * Code, and returning the wrong one of the two is invisible to a
-	 * client that only checks for success. */
-	if (cp_indicating) {
-		return BT_GATT_ERR(BT_ATT_ERR_PROCEDURE_IN_PROGRESS);
-	}
-	if (!bt_gatt_is_subscribed(conn, cp_attr(), BT_GATT_CCC_INDICATE)) {
-		/* The CCC must be configured for INDICATION, not notification.
-		 * A client that subscribed the wrong way gets this rather than
-		 * an answer it will never receive. */
-		return BT_GATT_ERR(BT_ATT_ERR_CCC_IMPROPER_CONF);
+	if (conn == NULL) {
+		atomic_set(&cp_pending_valid, 0);
+		return;
 	}
 
-	op = data[0];
+	/*
+	 * The client may have gone between the write and this running. The
+	 * reference above keeps the object alive, so nothing here would fault
+	 * - but applying a command from a client that is no longer there is
+	 * still wrong, and it is the one thing the hop makes possible that the
+	 * synchronous version could not do. Dropped rather than applied, and
+	 * no answer is attempted because there is nobody to answer.
+	 */
+	if (bt_conn_get_info(conn, &info) != 0 ||
+	    info.state != BT_CONN_STATE_CONNECTED) {
+		LOG_WRN("FTMS: op 0x%02x dropped - the client disconnected "
+			"before its procedure ran", op);
+		goto done;
+	}
 
 	if (op == FTMS_OP_REQUEST_CONTROL) {
 		if (controller != NULL && controller != conn) {
@@ -613,17 +673,33 @@ static ssize_t write_cp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 			 * here because raising CONFIG_BT_MAX_CONN is what makes
 			 * it reachable. */
 			cp_respond(conn, op, FTMS_RESULT_CONTROL_NOT_PERMITTED);
-			return len;
+			goto done;
 		}
+#if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
+		/*
+		 * AND THE CROSS-TRANSPORT TOKEN, which this may PREEMPT.
+		 *
+		 * An FTMS Request Control is an explicit acquire and an FE-C
+		 * page 51 is not, so this outranks an ANT+ controller that
+		 * merely started commanding. The claim cannot fail for a BLE
+		 * source - explicit beats implicit and beats free - so the
+		 * return is not branched on; what matters is telling the side
+		 * that just lost. The ANT+ controller learns through the
+		 * REJECTED on its next command, since ANT+ has no connection
+		 * to notify over.
+		 */
+		(void)treadmill_control_claim(TREADMILL_CTRL_BLE, true,
+					      (uint32_t)k_uptime_get_32());
+#endif
 		controller = conn;
 		cp_respond(conn, op, FTMS_RESULT_SUCCESS);
-		return len;
+		goto done;
 	}
 
 	/* EVERY other procedure requires control permission (§4.16.2). */
 	if (controller != conn) {
 		cp_respond(conn, op, FTMS_RESULT_CONTROL_NOT_PERMITTED);
-		return len;
+		goto done;
 	}
 
 	switch (op) {
@@ -674,6 +750,63 @@ static ssize_t write_cp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 	}
 
 	cp_respond(conn, op, result);
+
+done:
+	bt_conn_unref(conn);
+	cp_pending.conn = NULL;
+	/* Cleared LAST. write_cp() will not overwrite the buffer above until
+	 * it sees this, so the ordering is what keeps the copy stable for the
+	 * whole of this function. */
+	atomic_set(&cp_pending_valid, 0);
+}
+
+static K_WORK_DEFINE(cp_work, cp_work_fn);
+
+static ssize_t write_cp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+			const void *buf, uint16_t len, uint16_t offset,
+			uint8_t flags)
+{
+	const uint8_t *data = buf;
+
+	ARG_UNUSED(attr);
+	ARG_UNUSED(flags);
+
+	if (offset != 0u) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+	}
+	if (len < 1u || len > sizeof(cp_pending.data)) {
+		/* The upper bound is new and is the buffer's, not the spec's:
+		 * the longest procedure this machine implements is three
+		 * octets. A longer write is malformed for every op code in
+		 * Table 4.15, and refusing it here is what keeps the copy
+		 * below unable to overrun. */
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+	}
+
+	/* §4.16.3 maps two failures to ATT errors rather than to a Response
+	 * Code, and returning the wrong one of the two is invisible to a
+	 * client that only checks for success.
+	 *
+	 * `cp_pending_valid` joins `cp_indicating` here because the procedure
+	 * is now in progress from the moment it is queued, not only from the
+	 * moment its indication goes out. Without it a client could get two
+	 * procedures into the one-deep slot inside a single round trip. */
+	if (cp_indicating || atomic_get(&cp_pending_valid) != 0) {
+		return BT_GATT_ERR(BT_ATT_ERR_PROCEDURE_IN_PROGRESS);
+	}
+	if (!bt_gatt_is_subscribed(conn, cp_attr(), BT_GATT_CCC_INDICATE)) {
+		/* The CCC must be configured for INDICATION, not notification.
+		 * A client that subscribed the wrong way gets this rather than
+		 * an answer it will never receive. */
+		return BT_GATT_ERR(BT_ATT_ERR_CCC_IMPROPER_CONF);
+	}
+
+	memcpy(cp_pending.data, data, len);
+	cp_pending.len = len;
+	cp_pending.conn = bt_conn_ref(conn);
+	atomic_set(&cp_pending_valid, 1);
+	(void)k_work_submit(&cp_work);
+
 	return len;
 }
 
@@ -944,13 +1077,65 @@ static void on_connected(struct bt_conn *conn, uint8_t err)
  * AD and scan-response arrays it needs are declared after this callback. */
 static void adv_restart_submit(void);
 
+/*
+ * Losing the control permission on disconnect is §4.16.2, and it has to happen
+ * on the workqueue like every other write to `controller` and to the ownership
+ * token - this callback runs on the BT RX thread.
+ *
+ * THE CONNECTION IS REFERENCED ACROSS THE HOP, and the reason is subtler than
+ * "it might be freed": what this work item does is a POINTER COMPARISON, and a
+ * bt_conn object that is freed and then reallocated for the next connection can
+ * land at the same address. Comparing against a recycled pointer would revoke
+ * the permission of a client that had just been granted it. Holding a reference
+ * makes the address unreusable until the comparison is done.
+ */
+static struct bt_conn *disc_conn;
+
+static void disc_work_fn(struct k_work *w)
+{
+	struct bt_conn *conn = disc_conn;
+
+	ARG_UNUSED(w);
+
+	if (conn == NULL) {
+		return;
+	}
+	disc_conn = NULL;
+
+	if (controller == conn) {
+		controller = NULL;
+#if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
+		/* The machine goes back to whoever asks next, which on a gym
+		 * floor is usually the head unit that was tracking it all
+		 * along. There is no equivalent event on the ANT+ side, which
+		 * is exactly why that side needs a timeout instead. */
+		treadmill_control_release(TREADMILL_CTRL_BLE);
+#endif
+	}
+
+	bt_conn_unref(conn);
+}
+
+static K_WORK_DEFINE(disc_work, disc_work_fn);
+
 static void on_disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	atomic_dec(&connections);
-	if (controller == conn) {
-		/* §4.16.2: control permission lasts until disconnect. */
-		controller = NULL;
+
+	/* One slot, and with CONFIG_BT_MAX_CONN=1 there cannot be a second
+	 * disconnect in flight. If that ever rises, this becomes a list - and
+	 * the unref below is what says so rather than leaking quietly. */
+	if (disc_conn == NULL) {
+		disc_conn = bt_conn_ref(conn);
+		(void)k_work_submit(&disc_work);
+	} else {
+		LOG_WRN("BLE: a disconnect is already being processed; control "
+			"permission for this connection is dropped immediately");
+		if (controller == conn) {
+			controller = NULL;
+		}
 	}
+
 	LOG_INF("BLE disconnected (0x%02x)", reason);
 	adv_restart_submit();
 }
@@ -1175,11 +1360,44 @@ int treadmill_ble_start(void)
 	}
 
 	if (IS_ENABLED(CONFIG_SETTINGS)) {
-		/* Bonds live in settings. Without this call a pairing survives
+		/*
+		 * Bonds live in settings. Without this call a pairing survives
 		 * only until reboot, which on a machine whose control point
 		 * requires encryption means every power cycle costs the user a
-		 * re-pair. */
-		settings_load();
+		 * re-pair.
+		 *
+		 * IT ALSO FINISHES bt_enable(). With CONFIG_BT_SETTINGS=y -
+		 * which only this application in the tree sets - Zephyr defers
+		 * part of bt_id_init() out of bt_enable() into the settings
+		 * commit, and says so at boot: "No ID address. App must call
+		 * settings_load()". Skip it and the stack has no identity and
+		 * bt_le_adv_start() fails. So this return is not only about
+		 * bonds; it is the difference between advertising and not.
+		 *
+		 * THE RETURN IS CHECKED AND THE FAILURE IS NOT FATAL, which is
+		 * the deliberate half. A machine that cannot store a bond is
+		 * still far more useful than one that is invisible: it
+		 * advertises, a phone can connect, and the pairing simply has
+		 * to be redone next boot. Returning here instead would turn a
+		 * corrupt settings partition into a node with no BLE at all.
+		 * If the identity really did not come up, bt_le_adv_start()
+		 * below fails and says so with its own error.
+		 *
+		 * THIS APPLICATION LOADS SETTINGS TWICE, in an order unique to
+		 * it: node_ident_boot() has already run settings_subsys_init()
+		 * + settings_load_subtree() from main() BEFORE bt_enable(),
+		 * and this is a second, whole-tree load after it. Both are
+		 * correct and neither is redundant - the first predates the
+		 * Bluetooth handlers existing, and the `bt/` subtree this one
+		 * commits is registered by bt_enable().
+		 */
+		err = settings_load();
+		if (err != 0) {
+			LOG_ERR("settings_load: %d - bonds will not persist "
+				"across a reboot, and if the Bluetooth identity "
+				"failed to commit with it, bt_le_adv_start() "
+				"below is what will say so", err);
+		}
 	}
 
 	memset(&rscs_params, 0, sizeof(rscs_params));

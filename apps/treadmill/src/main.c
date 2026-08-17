@@ -26,7 +26,7 @@
  *   AND EVERY COMMAND OWES AN ANSWER. FE-C §8.8 makes a page 71 command status
  *   the obligation, not a courtesy: getting it wrong is the difference between
  *   a machine that ignores you and a machine a controller reports as broken.
- *   That is why every branch of handle_control_page() ends in a
+ *   That is why every branch of apply_control_page() ends in a
  *   profile_fec_tx_command_answered() call, including the branches that refuse.
  *
  *   NO SUPPRESSION RULE. apps/hrm_ble stops ANT+ while a phone is connected,
@@ -35,6 +35,23 @@
  *   fitness app at the same time, so the contended case is the NORMAL case
  *   here rather than the stress case, and there is deliberately no
  *   TREADMILL_SUPPRESS_ANT_WHEN_CONNECTED.
+ *
+ *   ...BUT THERE IS A COMMAND OWNER, AND IT IS NOT THE SAME THING. The
+ *   paragraph above is about the TRANSMITTER and it stands: every page and
+ *   every notification keeps going out to every listener, always. What is
+ *   arbitrated is only whose commanded grade the deck actually moves to,
+ *   because "both land on one function" (see above) is precisely what makes
+ *   two controllers last-writer-wins with no signal to either. The token is in
+ *   src/treadmill_control.h; reading it as a reversal of the previous
+ *   paragraph is the mistake worth this sentence to prevent.
+ *
+ *   AND THE COMMANDS HOP TO THE WORKQUEUE FIRST. treadmill_state.h's whole
+ *   lock-free design rests on "everything that touches this struct runs on the
+ *   system workqueue", and both control paths used to violate it as wired: an
+ *   FE-C page arrives on the radiant_event thread and an FTMS write arrives on
+ *   the BT RX thread. Rather than adding a lock, each path stores its request
+ *   and submits a k_work, which restores the invariant the code already claims
+ *   - and is what lets the ownership token above need no lock either.
  *
  * See docs/treadmill-reference-design.md for the porting guide, the production
  * checklist and the bench procedure; src/treadmill_source.h for the one seam a
@@ -58,6 +75,9 @@
 #include "treadmill_source.h"
 #include "treadmill_state.h"
 
+#if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
+#include "treadmill_control.h"
+#endif
 #if defined(CONFIG_TREADMILL_BLE)
 #include "treadmill_ble.h"
 #endif
@@ -281,26 +301,70 @@ static uint8_t fec_status_for(int rc)
 }
 
 /*
- * One acknowledged control page.
+ * THERE IS NO SEQUENCE NUMBER IN AN FE-C CONTROL PAGE. Unlike ANT+ Controls
+ * (0x10), whose pages carry one, the FE-C command pages do not - so page 71's
+ * sequence field is the FE's own count of commands received, which is what
+ * lets a controller tell "you answered my command" from "you re-sent the
+ * answer to the previous one".
+ *
+ * File scope rather than a function static because the drop path below also
+ * owes an answer and that answer is a command received too.
+ */
+static uint8_t fec_sequence;
+
+#if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
+/*
+ * treadmill_control.h spells these two page numbers itself so the ztest that
+ * drives the policy does not have to pull profile_fec_tx.h in. This is the
+ * cross-check that keeps the two spellings from drifting - the same guard
+ * treadmill_state.c puts on its copy of the FE state values.
+ */
+_Static_assert(TREADMILL_CTRL_PAGE_TRACK_RESISTANCE ==
+		       PROFILE_FEC_PAGE_TRACK_RESISTANCE,
+	       "treadmill_control.h's copy of FE-C page 51 has drifted from "
+	       "profile_fec_tx.h's");
+_Static_assert(TREADMILL_CTRL_PAGE_WIND_RESISTANCE ==
+		       PROFILE_FEC_PAGE_WIND_RESISTANCE,
+	       "treadmill_control.h's copy of FE-C page 50 has drifted from "
+	       "profile_fec_tx.h's");
+#endif
+
+/*
+ * One acknowledged control page, ON THE SYSTEM WORKQUEUE.
  *
  * `body` is the eight-byte payload. EVERY path through this function ends in
  * profile_fec_tx_command_answered() - including the unrecognised-page path,
  * because §8.8 wants a page 71 saying NOT_SUPPORTED rather than a silence, and
  * silence is what a controller reports as a broken machine.
  *
- * THERE IS NO SEQUENCE NUMBER IN AN FE-C CONTROL PAGE. Unlike ANT+ Controls
- * (0x10), whose pages carry one, the FE-C command pages do not - so page 71's
- * sequence field is the FE's own count of commands received, which is what
- * lets a controller tell "you answered my command" from "you re-sent the
- * answer to the previous one".
+ * It is reached from fec_cmd_work_fn() and never directly from the radio
+ * callback; see queue_control_page() for why.
  */
-static void handle_control_page(const uint8_t *body)
+static void apply_control_page(const uint8_t *body)
 {
-	static uint8_t sequence;
-	uint8_t        status = PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED;
-	uint8_t        page = body[0];
+	uint8_t status = PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED;
+	uint8_t page = body[0];
 
-	sequence++;
+	fec_sequence++;
+
+#if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
+	/*
+	 * The claim is IMPLICIT - there is no FE-C acquire handshake to
+	 * perform - so it loses to a BLE client that ran an explicit FTMS
+	 * Request Control. REJECTED (3) is the profile's own constant for
+	 * exactly this and is how the controller learns it lost the deck;
+	 * there is no other signal, because ANT+ has no connection to drop.
+	 */
+	if (treadmill_control_page_is_gated(page) &&
+	    treadmill_control_claim(TREADMILL_CTRL_ANT, false,
+				    (uint32_t)k_uptime_get_32()) != 0) {
+		LOG_INF("FE-C page %u refused: a BLE client holds control", page);
+		profile_fec_tx_command_answered(&fec, page, fec_sequence,
+						PROFILE_FEC_CMD_STATUS_REJECTED,
+						&body[4]);
+		return;
+	}
+#endif
 
 	switch (page) {
 	case PROFILE_FEC_PAGE_TRACK_RESISTANCE: {
@@ -376,7 +440,132 @@ static void handle_control_page(const uint8_t *body)
 
 	/* Bytes [4..7] of the command, echoed position for position, so a
 	 * controller reads page 51's grade back at the offsets it wrote it. */
-	profile_fec_tx_command_answered(&fec, page, sequence, status, &body[4]);
+	profile_fec_tx_command_answered(&fec, page, fec_sequence, status,
+					&body[4]);
+}
+
+/* ---------------------------------------------------------------------------
+ * The thread hop, and why it is a queue rather than a call
+ * ---------------------------------------------------------------------------
+ *
+ * antr_on_message() runs on radiant's event thread. apply_control_page() writes
+ * `state`, and treadmill_state.h's lock-free design is only safe because
+ * "everything that touches this struct runs on the system workqueue" - which
+ * this path did not. Nor did the FTMS one; see treadmill_ble.c's cp_work.
+ *
+ * A WORKQUEUE HOP AND NOT A MUTEX, for two reasons. It restores the invariant
+ * the code already documents rather than adding a second, weaker one beside
+ * it; and once both control paths are on one thread, the ownership token in
+ * treadmill_control.c needs no lock either, which is most of why that module
+ * can be kernel-free and therefore testable.
+ *
+ * THE HOP IS INVISIBLE ON AIR. Page 71 is not sent from here - it is staged
+ * into profile_fec_tx and goes out on the next data slot, up to 250 ms later
+ * either way. A workqueue turnaround is microseconds against that.
+ *
+ * IT ALSO DOES NOT CHANGE profile_fec_tx's CONTEXT RULES, which is worth
+ * checking rather than assuming, because it moves a caller across a thread.
+ * profile_fec_tx.h states them: "all plain stores: no locks, and reached only
+ * from the system workqueue and the radio callback". Before this, the answer
+ * and the request were made from the radio callback and the page setters from
+ * the workqueue; now every setter is on the workqueue and only
+ * profile_fec_tx_next() is on the callback. That is the same two contexts the
+ * header allows, with the writers consolidated onto one of them rather than
+ * split across both - strictly the tidier half of what was already sanctioned.
+ *
+ * A RING AND NOT ONE SLOT. Commands arrive at most once per 250 ms slot and the
+ * consumer runs in microseconds, so the depth is never reached in practice -
+ * but the single-slot version has to answer FAIL by overwriting an answer it
+ * has already staged, losing the first command's page 71 to make room for the
+ * second's. Four entries costs 32 bytes and removes that whole class. The drop
+ * path below is kept anyway, and still answers, because a command that is
+ * dropped in silence is exactly the "machine that ignores you" §8.8 is about.
+ */
+#define FEC_CMD_QUEUE_DEPTH 4u
+
+static struct {
+	uint8_t body[8];
+} fec_cmd_q[FEC_CMD_QUEUE_DEPTH];
+
+static uint8_t fec_cmd_head; /* producer: the radiant_event thread */
+static uint8_t fec_cmd_tail; /* consumer: the system workqueue */
+static uint8_t fec_cmd_drop_page;
+static bool    fec_cmd_dropped;
+
+/* The handoff needs a lock even though the state does not: two threads, and
+ * the producer may in principle be an interrupt. It covers the indices only,
+ * never any application state, and is held for a memcpy of eight bytes. */
+static struct k_spinlock fec_cmd_lock;
+
+static void fec_cmd_work_fn(struct k_work *w)
+{
+	ARG_UNUSED(w);
+
+	for (;;) {
+		k_spinlock_key_t key;
+		uint8_t          body[8];
+		uint8_t          drop_page = 0u;
+		bool             have = false;
+		bool             dropped = false;
+
+		key = k_spin_lock(&fec_cmd_lock);
+		if (fec_cmd_tail != fec_cmd_head) {
+			memcpy(body, fec_cmd_q[fec_cmd_tail].body, sizeof(body));
+			fec_cmd_tail = (uint8_t)((fec_cmd_tail + 1u) %
+						 FEC_CMD_QUEUE_DEPTH);
+			have = true;
+		} else if (fec_cmd_dropped) {
+			/* Only once the ring is empty, so the answers stay in
+			 * the order the commands arrived. */
+			drop_page = fec_cmd_drop_page;
+			fec_cmd_dropped = false;
+			dropped = true;
+		}
+		k_spin_unlock(&fec_cmd_lock, key);
+
+		if (have) {
+			apply_control_page(body);
+			continue;
+		}
+		if (dropped) {
+			static const uint8_t no_echo[4] = { 0u, 0u, 0u, 0u };
+
+			fec_sequence++;
+			LOG_WRN("FE-C page %u dropped: the command queue was "
+				"full", drop_page);
+			profile_fec_tx_command_answered(
+				&fec, drop_page, fec_sequence,
+				PROFILE_FEC_CMD_STATUS_FAIL, no_echo);
+			continue;
+		}
+		break;
+	}
+}
+
+static K_WORK_DEFINE(fec_cmd_work, fec_cmd_work_fn);
+
+/* Called from antr_on_message(), i.e. the radiant_event thread. Does no more
+ * than it has to: copy eight bytes and wake the workqueue. */
+static void queue_control_page(const uint8_t *body)
+{
+	k_spinlock_key_t key;
+	uint8_t          next;
+
+	key = k_spin_lock(&fec_cmd_lock);
+	next = (uint8_t)((fec_cmd_head + 1u) % FEC_CMD_QUEUE_DEPTH);
+	if (next == fec_cmd_tail) {
+		/* Keep the LAST page number rather than the first: a
+		 * controller that swamped the queue is most likely to be
+		 * waiting on its newest command. */
+		fec_cmd_dropped = true;
+		fec_cmd_drop_page = body[0];
+	} else {
+		memcpy(fec_cmd_q[fec_cmd_head].body, body, 8u);
+		fec_cmd_head = next;
+	}
+	k_spin_unlock(&fec_cmd_lock, key);
+
+	(void)k_work_submit(&fec_cmd_work);
 }
 
 #if defined(CONFIG_TREADMILL_BLE)
@@ -511,7 +700,7 @@ void antr_on_message(const struct antr_msg *msg)
 	if ((msg->id == ANTW_MESG_ACKNOWLEDGED_DATA_ID ||
 	     msg->id == ANTW_MESG_EXT_ACKNOWLEDGED_DATA_ID) &&
 	    msg->len >= 9u && msg->data[0] == FEC_CHANNEL) {
-		handle_control_page(&msg->data[1]);
+		queue_control_page(&msg->data[1]);
 	}
 }
 
@@ -576,6 +765,16 @@ static void node_tick_fn(struct k_work *w)
 	/* The slow, level-valued things a source may want a thread context
 	 * for. Never stride events; see the seam. */
 	treadmill_source_poll();
+
+#if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
+	/*
+	 * Expire an idle ANT+ claim. THE ONLY RELEASE IT HAS: ANT+ is
+	 * connectionless, so a head unit that has walked away generates no
+	 * event at all - it simply stops sending page 51. A BLE owner is not
+	 * touched here; that one is released by Reset or by a disconnect.
+	 */
+	treadmill_control_tick((uint32_t)k_uptime_get_32());
+#endif
 
 	publish();
 
@@ -655,6 +854,10 @@ int main(void)
 	}
 
 	treadmill_state_init(&state);
+
+#if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
+	treadmill_control_init(CONFIG_TREADMILL_CTRL_ANT_TIMEOUT_MS);
+#endif
 
 	memset(&fec_cfg, 0, sizeof(fec_cfg));
 	fill_common_id(&fec_cfg.id, devnum);
@@ -743,9 +946,27 @@ int main(void)
 		return 0;
 	}
 #if defined(CONFIG_TREADMILL_ANT_SDM)
+	/*
+	 * FALLS THROUGH ON FAILURE, and it used to `return 0`.
+	 *
+	 * That early return was a second, independent path to "BLE never
+	 * starts" - and to "the heart-rate slave never starts" - triggered by
+	 * something with no connection to either: a failure to open the
+	 * SECOND ANT+ master. It reported nothing beyond the ch%u log line
+	 * already emitted inside ant_master_start(), so the symptom was a node
+	 * transmitting FE-C perfectly with no BLE and no explanation.
+	 *
+	 * Falling through is also the right product behaviour on its own
+	 * terms: SDM is the compatibility channel, and losing it should cost
+	 * the watches that only speak foot pod, not the head unit and the
+	 * phone as well. The FE-C master above still returns, because without
+	 * it there is no treadmill on the air at all.
+	 */
 	if (ant_master_start(SDM_CHANNEL, devnum, PROFILE_SDM_DEVICE_TYPE,
 			     PROFILE_SDM_PERIOD, load_sdm_page) != 0) {
-		return 0;
+		LOG_ERR("the SDM master did not start; continuing with FE-C "
+			"only. Anything that pairs with a foot pod - Zwift Run, "
+			"most watches - will not see this machine.");
 	}
 #endif
 
@@ -755,14 +976,34 @@ int main(void)
 #if defined(CONFIG_TREADMILL_HR_RX)
 	/* Phase 5, after the masters: a slave that fails to acquire must not
 	 * look like a master that failed to transmit. */
-	(void)treadmill_hr_rx_start(HR_RX_CHANNEL);
+	err = treadmill_hr_rx_start(HR_RX_CHANNEL);
+	if (err != 0) {
+		LOG_ERR("the heart-rate slave did not start: %d. The machine "
+			"still runs; page 16's heart-rate field stays invalid.",
+			err);
+	}
 #endif
 
 #if defined(CONFIG_TREADMILL_BLE)
-	/* Last, for the same reason apps/hrm_ble starts its controller last:
+	/*
+	 * Last, for the same reason apps/hrm_ble starts its controller last:
 	 * bringing BLE up after the ANT+ channels means a failure to advertise
-	 * cannot be mistaken for a failure to transmit. */
-	(void)treadmill_ble_start();
+	 * cannot be mistaken for a failure to transmit.
+	 *
+	 * THE RETURN IS CAPTURED, and it used to be cast to (void).
+	 * treadmill_ble_start() LOG_ERRs every step it can fail at, so this
+	 * line adds little on its own - but "little" is not "nothing": it is
+	 * the one place that says the node is now ANT+-only, in one line, at
+	 * the level a reader greps for, rather than leaving that conclusion to
+	 * be assembled from an error further up and the absence of the
+	 * advertising line further down.
+	 */
+	err = treadmill_ble_start();
+	if (err != 0) {
+		LOG_ERR("BLE did not start: %d. The ANT+ masters above are "
+			"unaffected and this node is now ANT+ only - no FTMS, "
+			"no RSC, and nothing to find in a BLE scan.", err);
+	}
 #endif
 
 	return 0;

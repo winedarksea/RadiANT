@@ -38,5 +38,11 @@ project(treadmill_pages_test)
 target_sources(app PRIVATE
   src/main.c
   ../../src/treadmill_state.c
+  # The control-owner token. Kernel-free for the same reason treadmill_state.c
+  # is, and that is not a stylistic echo - it is what makes the policy testable
+  # at all. There is no ztest anywhere for src/treadmill_ble.c, so arbitration
+  # implemented inside that file would have been arbitration nothing could
+  # reach; it lives in its own module so this image can drive it.
+  ../../src/treadmill_control.c
 )
 target_include_directories(app PRIVATE ../../src)

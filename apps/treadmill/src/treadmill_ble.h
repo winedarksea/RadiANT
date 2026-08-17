@@ -24,7 +24,14 @@ int treadmill_ble_start(void);
 
 /* True while at least one central is connected. Exposed for the log and for a
  * future policy; NOTHING in this application suppresses ANT+ on it, and that
- * is a decision rather than an omission - see main.c's header. */
+ * is a decision rather than an omission - see main.c's header.
+ *
+ * IT IS ALSO NOT THE ARBITRATION INPUT, and using it as one would be the
+ * natural mistake. Whether a phone is CONNECTED and whether it OWNS THE DECK
+ * are different facts: a phone can be connected for a whole session reading
+ * Treadmill Data and never once run Request Control, and gating an FE-C
+ * controller on this would lock it out for exactly that phone.
+ * treadmill_control_owner() is the question the control paths ask. */
 bool treadmill_ble_connected(void);
 
 /*
@@ -62,9 +69,16 @@ int treadmill_ble_grade_provider_register(treadmill_ble_grade_provider_t fn,
 					  void *user);
 
 /* ---------------------------------------------------------------------------
- * Implemented by main.c, called from this module on the workqueue or from a
- * GATT write callback.
+ * Implemented by main.c, called from this module ON THE SYSTEM WORKQUEUE.
  * ---------------------------------------------------------------------------
+ *
+ * ONLY the workqueue, now. This used to read "or from a GATT write callback",
+ * which was an accurate description of a bug: these functions write `state`,
+ * and treadmill_state.h's lock-free design rests on every writer being on the
+ * one thread. A GATT write callback is the BT RX thread. treadmill_ble.c's
+ * cp_work item is what closes that, and main.c's fec_cmd item does the same for
+ * the FE-C path; between them there is exactly one writer thread again. Do not
+ * call these from a callback without going through a work item.
  *
  * These are the reason the FTMS control point and FE-C page 51 cannot
  * disagree: both end up in treadmill_state_request_incline() and then in
