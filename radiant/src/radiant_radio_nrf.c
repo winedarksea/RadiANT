@@ -909,6 +909,11 @@ static volatile uint32_t radiant_dbg_isr;
 static volatile uint32_t radiant_dbg_rx_ev;
 static volatile uint32_t radiant_dbg_term;
 static volatile uint32_t radiant_dbg_ok;
+/* ENDs on a receive window with no address match behind them - replays of the
+ * previous frame, suppressed in radio_isr(). Must stay small: a few per window
+ * teardown is the shape it has; one per channel period forever is the defect it
+ * was added for. */
+static volatile uint32_t radiant_dbg_rx_no_addr;
 /* Achieved t_sync minus requested t_sync on the last transmit, microseconds. */
 static volatile int32_t  radiant_dbg_tx_err;
 
@@ -2886,12 +2891,12 @@ static int program_rx(const struct radiant_rx_req *req)
 	 * has one answer rather than an exception. */
 	nrfx_gppi_conn_enable(radiant_op.conn_rssi);
 
-	LOG_DBG("rx op=%u n=%u alen=%u cov=%u open=+%d close=+%d isr=%u ev=%u ok=%u term=%u",
+	LOG_DBG("rx op=%u n=%u alen=%u cov=%u open=+%d close=+%d isr=%u ev=%u ok=%u term=%u noaddr=%u",
 		(unsigned)radiant_op.id, req->n_filters,
 		(unsigned)req->fmt->addr_len, (unsigned)req->fmt->crc.cover_addr,
 		(int)(int64_t)(req->t_open - now), (int)(int64_t)(req->t_close - now),
 		(unsigned)radiant_dbg_isr, (unsigned)radiant_dbg_rx_ev, (unsigned)radiant_dbg_ok,
-		(unsigned)radiant_dbg_term);
+		(unsigned)radiant_dbg_term, (unsigned)radiant_dbg_rx_no_addr);
 	return RADIANT_RADIO_OK_RC;
 }
 
@@ -4511,11 +4516,53 @@ static void radio_isr(const void *arg)
 			core_cb_tx(&evt);
 		}
 
-		if (radiant_op.kind == OP_RX && !radiant_op.terminal_sent) {
+		if (radiant_op.kind == OP_RX && !radiant_op.terminal_sent &&
+		    !nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS)) {
+			/*
+			 * AN END WITHOUT AN ADDRESS MATCH IN THIS WINDOW IS NOT A
+			 * RECEPTION, AND DELIVERING IT REPLAYS THE PREVIOUS FRAME.
+			 *
+			 * Everything the branch below reports is left over from
+			 * the last real frame when no new one arrived: the body is
+			 * radiant_rx_buf, which nothing clears between windows;
+			 * crc_ok reads CRCSTATUS, which holds its value until the
+			 * next packet; and t_sync reads the CC_SYNC capture, which
+			 * only EVENTS_ADDRESS ever writes. So an END arriving with
+			 * no address match hands the core a byte-perfect copy of
+			 * the previous frame carrying a stale timestamp.
+			 *
+			 * Measured on an nRF54L15 DK, 2026-08-17: a master with NO
+			 * PEER ANYWHERE ON THE AIR delivered one of these per
+			 * channel period, indefinitely - 79 acknowledged-data
+			 * messages to the host in 20 s, 4.0/s, all of them replays
+			 * of one acknowledged packet received minutes earlier. It
+			 * is the receive-path amplification behind
+			 * docs/treadmill-reference-design.md section 7.8: nothing
+			 * above this multiplies anything, which is why every
+			 * counter from api_sched_rx() down reads the same number.
+			 *
+			 * ADDRESS is the right gate rather than a heuristic: it is
+			 * cleared when the window is armed (see program_rx), it is
+			 * raised by hardware on a sync-word match, and the frame's
+			 * own t_sync is already read from the capture it drives -
+			 * so a delivery this test rejects had no honest timestamp
+			 * to report either.
+			 */
+			radiant_dbg_rx_no_addr++;
+		} else if (radiant_op.kind == OP_RX && !radiant_op.terminal_sent) {
 			struct radiant_rx_event evt;
 			bool crc_ok = nrf_radio_crc_status_check(NRF_RADIO);
 			uint8_t logical = (uint8_t)(NRF_RADIO->RXMATCH &
 						    RADIO_RXMATCH_RXMATCH_Msk);
+
+			/*
+			 * Consumed here so the NEXT packet in this window is
+			 * judged on its own address match: END->START keeps the
+			 * receiver armed across frames, so one window may carry
+			 * several and a flag left set would pass the test above
+			 * for a frame that never arrived.
+			 */
+			nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS);
 
 			radiant_dbg_rx_ev++;
 			if (crc_ok) {

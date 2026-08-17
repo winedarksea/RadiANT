@@ -1544,7 +1544,7 @@ ZTEST(api, test_a_tracked_channel_reposts_its_next_window_without_a_pump)
 /* The setup every test below shares: a wildcard slave that finds one sensor and
  * settles into TRACKING. Written out once here rather than folded into
  * open_channel(), which configures a known device ID and never searches. */
-static void open_and_acquire_slave(uint16_t *out_dev)
+static void open_and_acquire_slave_of_type(uint8_t type, uint16_t *out_dev)
 {
 	const struct fake_radio_arm *w;
 
@@ -1553,9 +1553,7 @@ static void open_and_acquire_slave(uint16_t *out_dev)
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_lib_config_set((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
-		      antr_channel_assign(CH,
-					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
-					  0u, 0u));
+		      antr_channel_assign(CH, type, 0u, 0u));
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_channel_id_set(CH, 0u, 0u, 0u));
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
@@ -1572,6 +1570,33 @@ static void open_and_acquire_slave(uint16_t *out_dev)
 		      "setup: the channel did not acquire");
 }
 
+static void open_and_acquire_slave(uint16_t *out_dev)
+{
+	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+				       out_dev);
+}
+
+/*
+ * The peer's frame for an ARBITRARY device number and control byte - the
+ * acquired number is whatever the armed sweep set matched, so it cannot be the
+ * file-scope DEVNUM that build_peer_frame() hardcodes. Hand-assembled for the
+ * same reason as build_peer_frame(): running it through the encoder under test
+ * would only assert the module agrees with itself.
+ */
+static uint8_t build_peer_frame_for(uint8_t *out, uint16_t devnum, uint8_t ctrl,
+				    const uint8_t *payload8)
+{
+	out[0] = RADIANT_NET_ADDR_ANT_PLUS_0;
+	out[1] = RADIANT_NET_ADDR_ANT_PLUS_1;
+	out[2] = (uint8_t)(devnum & 0xFFu);
+	out[3] = (uint8_t)(devnum >> 8);
+	out[4] = 0x0Bu;              /* dev_type, as air_device() aired it */
+	out[5] = 5u;                 /* trans_type, likewise */
+	out[6] = ctrl;
+	memcpy(&out[7], payload8, 8u);
+	return AIR_LEN;
+}
+
 /* The acquired sensor transmitting in the middle of a window it is tracked in. */
 static void air_tracked_frame(const struct fake_radio_arm *w, uint16_t number)
 {
@@ -1584,6 +1609,68 @@ static void air_tracked_frame(const struct fake_radio_arm *w, uint16_t number)
 					   ((w->t_close - w->t_open) / 2u),
 					   frame, len),
 		      "could not put the tracked sensor on the air");
+}
+
+/*
+ * THE RECEIVE SIDE, WHICH NOTHING COVERED: a tracking SLAVE handed one
+ * acknowledged packet must tell its host about it exactly once.
+ *
+ * Everything above tests the MASTER as the acknowledger, because a tracking
+ * slave needs a peer to acquire from first and that setup did not exist here
+ * until open_and_acquire_slave_of_type(). The gap mattered: measured on
+ * hardware 2026-08-17, a dongle RECEIVING acknowledged data posted it to the
+ * host ~600 times a second - 21,234 messages for 16 exchanges - while its
+ * broadcast delivery collapsed from ~150 to 4. The originator's own log
+ * accounts for only 169 transmits in 34 s, so the amplification is in software
+ * on this path, not on the air.
+ *
+ * One packet and a whole further period, rather than a long run: anything that
+ * repeats per slot has room to repeat here, and a single exchange keeps the
+ * expected count at exactly 1 with no arithmetic to get wrong.
+ */
+ZTEST(api, test_a_tracking_slave_reports_one_message_per_acknowledged_packet)
+{
+	uint16_t                     dev;
+	const struct fake_radio_arm *w;
+	uint8_t                      frame[AIR_LEN];
+	radiant_time_t               t_data;
+
+	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev);
+
+	/* The first tracked window legitimately comes from the pump - nothing
+	 * has completed yet. */
+	run_housekeeping();
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(w, "setup: no tracked window was armed after acquiring");
+	zassert_false(w->terminated,
+		      "setup: the tracked window had already ended");
+
+	t_data = w->t_open + ((w->t_close - w->t_open) / 2u);
+	(void)build_peer_frame_for(frame, dev, RADIANT_CTRL_BURST_LAST_SEQ0,
+				   peer_payload);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(t_data, frame, AIR_LEN),
+		      "could not put the acknowledged packet on the air");
+
+	fake_radio_advance_to(t_data + RADIANT_TRANSFER_REPLY_US + PERIOD_US);
+	drain();
+
+	/*
+	 * Asserted on the uncapped total FIRST, because count_msgs() only scans
+	 * the first MSGLOG_MAX records - under the flood it would report 64 and
+	 * hide the size of what it found. n_msg counts every attempt.
+	 */
+	zassert_true(n_msg < 16u,
+		     "one acknowledged packet produced %u host messages in a "
+		     "single period; the receive path is amplifying",
+		     (unsigned)n_msg);
+	zassert_equal(1u, count_msgs((uint8_t)ANTW_MESG_ACKNOWLEDGED_DATA_ID),
+		      "one acknowledged packet became %u acknowledged-data "
+		      "messages",
+		      (unsigned)count_msgs(
+			      (uint8_t)ANTW_MESG_ACKNOWLEDGED_DATA_ID));
+
+	end_of_test();
 }
 
 /*

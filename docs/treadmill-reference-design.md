@@ -924,24 +924,95 @@ honest if something can still make progress; when both ends of the link are
 yours, "we never measured the reply" and "the transfer can never complete" are
 the same sentence.** Five tests were added, one inverted.
 
-**Still open, and found by fixing the others.** Once acknowledged data started
-arriving, the receiving dongle posted it to its host **~600 times a second** —
-21,234 host messages for 16 exchanges — and its broadcast count collapsed from
-~150 to 4 in the same run. It is not on-air duplication: the originator's own
-log shows **169** programmed transmits in 34 s while the receiver's host saw
-12,625 messages, so the amplification is in software on the receive path,
-somewhere between the scheduler's RX notification and `api_tracked_frame()`.
-Related, and visible in the same log: the originator programs a second transmit
-at `+1092 µs` on **every** period, which is the once-per-period retransmission
-§7.7 noticed and could not explain. Neither is fixed. **Neither affects the
-broadcast path** — see below — but both must be fixed before the FE-C control
-loop can be called usable, because a host cannot drink from that hose.
+**The fifth defect, found by fixing the others — RESOLVED, see §7.9.** Once
+acknowledged data started arriving, the receiving dongle posted it to its host
+**~600 times a second** — 21,234 host messages for 16 exchanges — and its
+broadcast count collapsed from ~150 to 4 in the same run. It is not on-air
+duplication: the originator's own log shows **169** programmed transmits in 34 s
+while the receiver's host saw 12,625 messages. The localisation recorded here —
+"somewhere between the scheduler's RX notification and `api_tracked_frame()`" —
+was one layer too high; it is in the nRF backend, below both. §7.9 has the
+measurement and the fix.
 
 **Regression: the plain "relay sensor data to Zwift" path is unaffected.**
 Broadcast-only, same two boards, 62 s: **248 slots transmitted, 244 received —
 1.6 % loss**, better than the room's recent 5–8 %. Discovery still opens a
 wildcard channel cleanly. The flood above is reachable only by *receiving*
 acknowledged data, which no sensor sends to a dongle.
+
+---
+
+### 7.9 RESOLVED, 2026-08-17 — the flood was the radio replaying its last frame
+
+**One defect in `radiant_radio_nrf.c`, and it explains every symptom in §7.8's
+"still open" paragraph, including the `+1092 µs` transmit §7.7 could not
+account for.** `radio_isr()` turned every `EVENTS_END` on a receive window into
+a delivered frame without ever checking that a frame had arrived. Nothing that
+the delivery reads is cleared between windows:
+
+| what the callback reports | where it comes from | what it holds when no frame arrived |
+|---|---|---|
+| `evt.body` | `radiant_rx_buf` | the previous frame, byte for byte |
+| `crc_ok` | `RADIO->CRCSTATUS` | the previous frame's verdict — OK |
+| `evt.t_sync` | the `CC_SYNC` capture | a timestamp only `EVENTS_ADDRESS` writes |
+
+So an `END` with no address behind it handed the core a **byte-perfect replay of
+the last frame received, carrying a stale timestamp**, and the core had no way
+to know: it decoded, acknowledged and reported it exactly as it would a real one.
+
+**The measurement that settled it, and why the earlier localisation missed.**
+Counters were added at every stage of the receive path — `api_sched_rx()`,
+`api_tracked_frame()`, `radiant_transfer_on_data()`, `api_xfer_rx_data()`,
+`radiant_event_post_rx()` — and they all read **the same number**. Nothing above
+the HAL multiplies anything; the copies were already there when the scheduler
+first saw them. That is what put the search below `api_sched_rx()` instead of
+between it and `api_tracked_frame()`.
+
+Then the control that admits no other reading: **one board, opened as a master,
+with no originator existing anywhere.**
+
+| | before | after |
+|---|---|---|
+| acknowledged-data messages, 20 s, no peer on the air | **79 (4.0/s)** | **0** |
+| acknowledged received per packet sent (8 sends) | **4.0x**, rising to **28.7x** over 20 s | **1.0x** |
+| the originator was told | 8x `TRANSFER_TX_FAILED` | 8x `TRANSFER_TX_COMPLETED` |
+
+4.0/s is exactly the channel period, and §7.8's own lesson says to assume any
+number near `4 x seconds` is a slot count rather than a delivery count — which
+is precisely why the lone-master arm was necessary. With no second radio in the
+room, "the originator is still transmitting" is not available as an explanation.
+
+**The fix is one condition.** An `END` on a receive window is a reception only
+if `EVENTS_ADDRESS` fired in that window. The flag is already cleared when the
+window is armed, it is raised by hardware on a sync-word match, and the frame's
+own `t_sync` is read from the capture it drives — so a delivery this test
+rejects had no honest timestamp to report either. It is consumed on each
+delivery, because `END->START` keeps the receiver armed across frames and one
+window may legitimately carry several.
+
+**It also fixed the acknowledged transfers themselves, which was not the goal.**
+The same replays were being routed into the *originator's* ack window
+(`radiant_transfer_on_rx_event()`), where they corrupted ack matching. Before:
+8 of 8 `TRANSFER_TX_FAILED`. After: 8 of 8 `TRANSFER_TX_COMPLETED`. The
+`+1092 µs` second transmit on every period was the same defect seen from the
+transmit side — a transfer that never completes keeps retrying.
+
+**Verified, both boards carrying the fix** (nRF54L15 DK and the Feather, the
+latter flashed over the nRF5340 DK's debug-out — confirm **Cortex-M4**):
+
+- lone master, no peer, 20 s: **0** data messages, on both boards;
+- 8 acknowledged sends: **8** received, **8** `TRANSFER_TX_COMPLETED`;
+- 20 s settle with the originator's channel *closed*: **0** received;
+- broadcast relay, a real 4 Hz power sensor for 60 s: **238 of 238 packets,
+  loss (exact) 0.00 %** against a 1.5 % gate — the Zwift path is unharmed;
+- `radiant/tests` and `radiant/tests/api` on hardware: **43 suites, 0 failures**.
+
+**The regression check is `tools/ant_ack_pair.py --lone-master`**, and it needs
+one board and no originator: open a master, transmit, and require that nothing
+is reported as received. A receive path that replays its last frame fails it in
+an empty room. `radiant/tests/api` gained
+`test_a_tracking_slave_reports_one_message_per_acknowledged_packet` for the
+layer above, which passed throughout and is what proved the fault was not there.
 
 ---
 
@@ -997,12 +1068,12 @@ biometric data about a person.
 
 - **The simulator is the only hardware.** Nothing is validated against a motor
   controller or an incline actuator.
-- **No acknowledged originator exists in this tree.** §7.7 localises it to the
-  return acknowledgement rather than the transmit, which is progress, but until
-  it is fixed the FE-C control loop cannot be exercised on air by anything here
-  — and neither can §4a's arbitration, whose refusal path is a page 71 that
-  needs a command to answer. This is the single biggest hole in the
-  application's verification and it is not a treadmill defect.
+- ~~**No acknowledged originator exists in this tree.**~~ **Resolved** — this
+  bullet carried §7.7's superseded conclusion and was not updated when §7.8
+  landed. Acknowledged transfers complete on air in both directions as of
+  2026-08-17 (§7.8, §7.9), so the FE-C control loop and §4a's arbitration
+  refusal path can both be exercised. What remains untested here is the loop
+  against a real machine rather than against our own second board.
 - **Nothing tests `src/treadmill_ble.c`.** There is no ztest for the FTMS GATT
   service, for `write_cp()` or for the advertising payload; they are covered
   only by `BUILD_ASSERT`s and §7's bench procedure. That is why the arbitration

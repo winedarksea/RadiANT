@@ -75,6 +75,25 @@ struct radiant_api_stats {
 	uint32_t rx_posted;       /* received data messages queued for the host */
 	uint32_t rx_dropped;      /* received frames the event queue refused */
 	/*
+	 * THE RECEIVE PATH, STAGE BY STAGE. A dongle receiving acknowledged data
+	 * posts it to the host ~600 times a second (measured 2026-08-17: 21,234
+	 * host messages for 16 exchanges) while the originator's own log accounts
+	 * for 169 transmits in 34 s - so the amplification is in software on this
+	 * path, and these are the four places it can be. Each counts entries to
+	 * one stage, so consecutive ratios say which hop multiplies:
+	 *
+	 *   rx_sched_events -> rx_tracked_frames -> rx_on_data -> rx_data_up
+	 *                                                      -> rx_posted
+	 *
+	 * A jump at the first means the backend is delivering one frame more than
+	 * once; at the last, the engine is re-reporting one delivery.
+	 */
+	uint32_t rx_sched_events;   /* api_sched_rx() entries, any slot kind */
+	uint32_t rx_to_xfer;        /* routed to a non-idle transfer engine */
+	uint32_t rx_tracked_frames; /* api_tracked_frame() entries */
+	uint32_t rx_on_data;        /* radiant_transfer_on_data() calls */
+	uint32_t rx_data_up;        /* api_xfer_rx_data() entries */
+	/*
 	 * Scheduler completions of every kind. Separates "the window ran" from
 	 * "it ran and its completion was swallowed" - posting a master's
 	 * turnaround from inside its own TX callback once reused a slot the

@@ -173,6 +173,17 @@ BUILD_ASSERT(RADIANT_CHANNEL_GUARD_MIN_US >= RADIANT_CHANNEL_DRIFT_WORST_US,
  * mean something, short enough to watch live while testing a USB port. */
 #define API_NOISE_REPORT_US 60000000u
 
+/*
+ * Receive-path log interval. Shorter than the noise line's sixty seconds
+ * because this one exists to give a RATE across a bench run that lasts tens of
+ * seconds, and at 60 s a whole run produces a single line. Not shorter than
+ * this: apps with a console run LOG_MODE_DEFERRED over a small buffer, and a
+ * chatty periodic line there discards other messages rather than its own (see
+ * the dropped boot banner in docs/treadmill-reference-design.md). Lower it to
+ * ~2 s by hand when actually chasing something on a bench board.
+ */
+#define API_RXPATH_REPORT_US 30000000u
+
 #if defined(CONFIG_RADIANT_CRC_REPAIR)
 /* CRC-repair counter log interval. 10 s rather than the noise line's 60 s: the
  * S3 sensitivity ladder holds each rung for well under a minute, and a counter
@@ -851,6 +862,9 @@ static void api_xfer_rx_data(void *ctx, const uint8_t *payload, uint8_t len,
 	if (!api_ch_valid(ch) || payload == NULL) {
 		return;
 	}
+
+	api_stats.rx_data_up++;
+
 	if (radiant_channel_id_get(ch, &id) != RADIANT_CH_OK) {
 		return;
 	}
@@ -1815,6 +1829,8 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	int                   n;
 	int                   rc;
 
+	api_stats.rx_tracked_frames++;
+
 	if (radiant_channel_id_get(ch, &id) != RADIANT_CH_OK) {
 		return false;
 	}
@@ -1973,6 +1989,7 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 		 * is posted from api_xfer_rx_data() instead of here. */
 		/* Not inside the LOG_DBG argument list: an expression that only
 		 * runs when logging is on would be dead in a release build. */
+		api_stats.rx_on_data++;
 		rc = radiant_transfer_on_data(&api_xfer[ch], &f, evt->t_sync);
 		LOG_DBG("on_data rc=%d", rc);
 		break;
@@ -2001,6 +2018,8 @@ static void api_sched_rx(uint8_t ch, uint8_t filter_index,
 	if (!api_ch_valid(ch) || evt == NULL) {
 		return;
 	}
+
+	api_stats.rx_sched_events++;
 
 	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_SEARCH) {
 		/* radiant_search_on_rx_indexed(), never the plain form: a merged
@@ -2067,6 +2086,7 @@ static void api_sched_rx(uint8_t ch, uint8_t filter_index,
 		 * from up here too. */
 		LOG_DBG("rx to xfer ch=%u xfer=%d", (unsigned)ch,
 			(int)radiant_transfer_state(&api_xfer[ch]));
+		api_stats.rx_to_xfer++;
 		radiant_transfer_on_rx_event(&api_xfer[ch], evt);
 		return;
 	}
@@ -2809,6 +2829,44 @@ static void api_housekeep(void)
 					(unsigned int)radiant_noise_unslotted());
 				radiant_noise_clear(slot);
 			}
+		}
+	}
+
+	/*
+	 * THE RECEIVE PATH, one line per interval, and only when it moved - a
+	 * quiet dongle must not fill the console with zeros. Reports the four
+	 * stage counters plus what reached the host, so the hop that multiplies
+	 * is the one whose successor is larger than it. See the comment on
+	 * struct radiant_api_stats::rx_sched_events.
+	 */
+	{
+		static radiant_time_t rxpath_last;
+		static uint32_t       rxpath_seen;
+
+		if (now - rxpath_last >= API_RXPATH_REPORT_US &&
+		    api_stats.rx_sched_events != rxpath_seen) {
+			/*
+			 * Reported as a DELTA over a measured interval, not as a
+			 * running total: the counters are cumulative since boot,
+			 * and a total spanning several bench runs reads as one
+			 * enormous flood no matter how quiet the current run is.
+			 * That very confusion cost a reading here already.
+			 */
+			uint32_t dt_ms = (uint32_t)((now - rxpath_last) / 1000u);
+
+			LOG_INF("rxpath/%ums sched=%u tracked=%u on_data=%u "
+				"up=%u posted=%u | xfer=%u dropped=%u tot=%u",
+				(unsigned int)dt_ms,
+				(unsigned int)(api_stats.rx_sched_events - rxpath_seen),
+				(unsigned int)api_stats.rx_tracked_frames,
+				(unsigned int)api_stats.rx_on_data,
+				(unsigned int)api_stats.rx_data_up,
+				(unsigned int)api_stats.rx_posted,
+				(unsigned int)api_stats.rx_to_xfer,
+				(unsigned int)api_stats.rx_dropped,
+				(unsigned int)api_stats.rx_sched_events);
+			rxpath_last = now;
+			rxpath_seen = api_stats.rx_sched_events;
 		}
 	}
 
