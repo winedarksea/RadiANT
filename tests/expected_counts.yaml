@@ -89,4 +89,32 @@ min_scenarios: 9
 # suite compiles directly. Had it gone inside treadmill_ble.c where it first
 # seemed to belong, this number would not have moved and the policy would have
 # had no coverage at all. 827 + 4 + 18 = 849.
-min_testcases: 849
+#
+# Raised again for the acknowledged-transfer closed loop, 2026-08-17: three net
+# new cases in radiant/tests/src/test_transfer.c.
+#
+#   - a sweep of every control byte the originator can emit, requiring the
+#     acknowledger to have a reply for each. That invariant was silently false
+#     for 0x8A/0xAA, so every master-originated acknowledged transfer reported
+#     FAIL_NO_ACK on hardware while all 849 tests passed;
+#   - the inferred bit-3 reading (0x8A -> 0xD2, 0xAA -> 0xF2) pinned on its own,
+#     so a capture that ever settles bit 3 the other way fails exactly the one
+#     test holding the claim;
+#   - the 0x8A half of the acknowledger path, split from the 0xAA half that
+#     replaced test_a_slot_opening_packet_has_no_measured_acknowledgement (an
+#     inversion, not an addition - it used to assert the refusal).
+#
+# And two in radiant/tests/api/src/test_api.c:
+#
+#   - a master originating acknowledged data must place it on its own next slot
+#     rather than "as soon as possible". NO SUITE CALLED
+#     antr_acknowledge_message_tx() AT ALL before this, so the transmit instant
+#     of an originated transfer had never once been asserted - which is how it
+#     stayed wrong through a hardware A/B that was mis-read and a correction
+#     that was reverted;
+#   - an acknowledgement must go out even when the host has never written a
+#     broadcast page. Refusing in that state made a SLAVE unable to acknowledge
+#     anything ever, and swallowed the packet on the way to the host too.
+#
+# 832 + 4 + 18 = 854.
+min_testcases: 854

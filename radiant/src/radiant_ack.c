@@ -228,9 +228,10 @@ int radiant_transfer_on_data(struct radiant_transfer *t, const struct radiant_fr
 
 	reply = radiant_transfer_reply_ctrl(f->ctrl_byte);
 	if (reply == 0u) {
-		/* A slot-opening data packet (0x8A/0xAA): no acknowledgement of
-		 * one has ever been captured, so there's nothing honest to send.
-		 * See gap 2 in radiant_transfer.h. */
+		/* A data byte with no reply mapping at all. The slot openers
+		 * 0x8A/0xAA used to land here and no longer do (gap 2 in
+		 * radiant_transfer.h), which is what unblocked master-originated
+		 * acknowledged data; the counter stays for whatever is left. */
 		t->stats.unackable_openers++;
 		return RADIANT_TRANSFER_ENOTSUP;
 	}

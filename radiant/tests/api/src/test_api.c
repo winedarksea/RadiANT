@@ -471,6 +471,29 @@ ZTEST(api, test_a_master_answers_every_slave_exchange_not_only_the_first)
 				      RADIANT_TRANSFER_ACK_GUARD_US,
 			      turn->t_close, "period %u: wrong close edge",
 			      period);
+		/*
+		 * AND IT MUST RESERVE THE AIR FOR THE REPLY IT IS ABOUT TO
+		 * SEND. Everything else in this test passes on a mock that owns
+		 * the radio outright, which is why the missing reserve survived
+		 * here for so long: on an arbitrated (MPSL) build the
+		 * acknowledgement below is asked for after the granted timeslot
+		 * has ended, so it never leaves, and the slave reports
+		 * FAIL_NO_ACK while this suite stays green.
+		 *
+		 * The requirement is REPLY_US - ACK_GUARD_US + one frame's
+		 * airtime measured from t_close (1560 - 250 + 150 = 1460); the
+		 * assertion is >= that rather than == the constant so that
+		 * retuning the tracked reserve does not fail this test for the
+		 * wrong reason.
+		 */
+		zassert_true(turn->follow_on_us >=
+				     (RADIANT_TRANSFER_REPLY_US -
+				      RADIANT_TRANSFER_ACK_GUARD_US + 150u),
+			     "period %u: the turnaround reserved %u us of "
+			     "follow-on air, too little for the acknowledgement "
+			     "it may have to transmit 1560 us after a frame "
+			     "arriving at its late edge",
+			     period, (unsigned)turn->follow_on_us);
 		zassert_true(turn->from_callback,
 			     "period %u: the turnaround was not armed from "
 			     "inside a callback - a pump running in thread "
@@ -519,6 +542,148 @@ ZTEST(api, test_a_master_answers_every_slave_exchange_not_only_the_first)
 	drain();
 	zassert_equal(8u, count_msgs((uint8_t)ANTW_MESG_ACKNOWLEDGED_DATA_ID),
 		      "the host was not told about every exchange");
+
+	end_of_test();
+}
+
+/*
+ * THE OTHER DIRECTION, AND THE ONE NOTHING TESTED: what a master PUTS ON THE
+ * AIR when the host originates an acknowledged transfer.
+ *
+ * antr_acknowledge_message_tx() passed RADIANT_TIME_NEVER for as long as it
+ * existed, which radiant_burst.c resolves to "about now" - the instant the host
+ * happened to write, bearing no relation to the channel's slot grid. A peer
+ * listens in a window a few hundred microseconds wide once per period, so a
+ * packet at an arbitrary phase of 250 ms is heard essentially never. Measured
+ * on hardware 2026-08-17: a master originated 20 acknowledged packets and a
+ * healthy slave 150 of whose broadcasts arrived heard exactly 0 of them.
+ *
+ * Nothing failed anywhere. No suite called antr_acknowledge_message_tx() at
+ * all, so the transmit instant of an originated transfer was never once
+ * asserted - which is why an A/B on hardware got mis-read twice and reverted
+ * once before this test existed. It is cheap and it is exact: ask mid-period,
+ * on purpose, and require the packet on the next slot boundary.
+ */
+ZTEST(api, test_a_master_originates_acknowledged_data_on_its_own_slot)
+{
+	static const uint8_t ack_payload[8] = {
+		0x33u, 0xA5u, 0x5Au, 0x01u, 0x02u, 0x03u, 0x04u, 0x05u
+	};
+	const struct fake_radio_arm *ack;
+	radiant_time_t               t_tx;
+	radiant_time_t               asked_at;
+
+	open_channel((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+
+	/* Two quiet periods so the slot grid is established rather than being
+	 * whatever the first transmit invented. */
+	(void)run_one_quiet_period();
+	t_tx = run_one_quiet_period();
+
+	/*
+	 * Ask at the WORST phase - half a period after the last slot. A real
+	 * host is not much better: it writes on EVENT_TX plus its own USB
+	 * latency, so it is never on the boundary either.
+	 */
+	fake_radio_advance_to(t_tx + (PERIOD_US / 2u));
+	drain();
+	asked_at = radiant_radio_now();
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_acknowledge_message_tx(CH, 8u, ack_payload),
+		      "the host's acknowledged write was refused");
+
+	/* 0xAA: packet 0 of a one-packet transfer from a slot-opening role. */
+	ack = last_tx_with_ctrl(RADIANT_CTRL_ACK_DATA_OPEN);
+	zassert_not_null(ack,
+			 "no acknowledged-data packet was armed at all "
+			 "(a 0xAA transmit is what this call must produce)");
+
+	zassert_equal(t_tx + PERIOD_US, ack->t_sync_at,
+		      "acknowledged data must go out on the master's own next "
+		      "slot (%u), not at %u - the peer is only listening on the "
+		      "slot",
+		      (unsigned)(t_tx + PERIOD_US), (unsigned)ack->t_sync_at);
+
+	/*
+	 * And stated as the property rather than the arithmetic, because that
+	 * is what actually broke: it must NOT be "roughly now". Half a period
+	 * of separation is far outside any arm lead, so this cannot pass by
+	 * accident on a backend with a large one.
+	 */
+	zassert_true(ack->t_sync_at > asked_at + (PERIOD_US / 4u),
+		     "the packet was placed %u us after the host asked, which "
+		     "is the 'as soon as possible' behaviour, not a slot",
+		     (unsigned)(ack->t_sync_at - asked_at));
+
+	zassert_mem_equal(&ack->body[BODY_D0], ack_payload, 8u,
+			  "the acknowledged packet did not carry the host's "
+			  "payload");
+
+	/* Let it transmit, miss its acknowledgement (nothing is answering) and
+	 * fail, so the channel is idle for end_of_test(). */
+	fake_radio_advance_to(ack->t_sync_at + RADIANT_TRANSFER_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 100u);
+	drain();
+
+	end_of_test();
+}
+
+/*
+ * AND IT MUST ANSWER BEFORE THE HOST HAS EVER WRITTEN A PAGE.
+ *
+ * api_xfer_broadcast() used to refuse whenever the channel's broadcast buffer
+ * had not been written, on the reading that "every captured acknowledgement
+ * carried the acknowledger's own broadcast buffer" was a precondition rather
+ * than a statement about content. The refusal returns before ops->rx_data, so
+ * the packet was neither acknowledged NOR passed to the host - it vanished.
+ *
+ * On a master that is a startup window. ON A SLAVE IT IS FOREVER: nothing ever
+ * writes broadcast data to a channel opened to listen on, so a slave could not
+ * acknowledge anything for the whole life of the channel. Measured on hardware
+ * 2026-08-17 - a slave receiving 150 of the master's broadcasts perfectly
+ * reported zero of its acknowledged packets, and staging one broadcast by hand
+ * fixed it outright.
+ *
+ * The master is the testable half here (a tracking slave needs a peer to
+ * acquire from first), and it exercises the same branch: no
+ * host_writes_broadcast() anywhere below.
+ */
+ZTEST(api, test_a_master_answers_before_the_host_has_written_a_broadcast)
+{
+	uint8_t                      frame[AIR_LEN];
+	const struct fake_radio_arm *reply;
+	radiant_time_t               t_tx;
+
+	open_channel((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+
+	/* Deliberately no host_writes_broadcast(): the master transmits its
+	 * zeroed buffer, which is what api_post_master_tx() already does. */
+	t_tx = run_one_master_slot();
+
+	(void)build_peer_frame(frame, RADIANT_CTRL_BURST_LAST_SEQ0, peer_payload);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US,
+					   frame, AIR_LEN));
+	fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_REPLY_US + 10u);
+
+	reply = last_tx_with_ctrl(RADIANT_CTRL_ACK_LAST_SEQ1);
+	zassert_not_null(reply,
+			 "an acknowledged packet arriving before the host has "
+			 "written a page was not answered - a slave is in this "
+			 "state permanently");
+
+	/* Counted, so "acknowledged with zeros" stays visible rather than
+	 * becoming an invisible default. */
+	zassert_true(radiant_api_stats_get()->acks_from_unwritten_buffer > 0u,
+		     "the unwritten-buffer acknowledgement was not counted");
+
+	/* And the host must be told about the packet, which the refusal also
+	 * used to swallow. */
+	drain();
+	zassert_equal(1u, count_msgs((uint8_t)ANTW_MESG_ACKNOWLEDGED_DATA_ID),
+		      "the host was not told about the acknowledged packet");
 
 	end_of_test();
 }

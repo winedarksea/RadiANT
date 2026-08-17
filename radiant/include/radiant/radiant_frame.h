@@ -480,13 +480,18 @@ uint32_t radiant_frame_airtime_us(enum radiant_frame_cfg cfg, uint8_t payload_le
  *     clear). Falsifiable by a scriptable ANT master, which sim/ is not.
  *   - BIT 4 IN AN ACKNOWLEDGEMENT as "the sequence bit I expect next" -
  *     arithmetic measured on 165 pairs, the reading is not.
+ *   - BIT 3 OF AN ACKNOWLEDGEMENT TO A SLOT OPENER, taken as clear, so
+ *     0x8A -> 0xD2 and 0xAA -> 0xF2. Added 2026-08-17; until then
+ *     radiant_ctrl_reply_for() returned 0 for both, which did not leave a
+ *     gap open, it closed the path: no RadiANT acknowledger would answer a
+ *     master-originated acknowledged transfer at all. See the table note in
+ *     radiant_frame.c for the three lines of evidence and how to falsify it.
  *
  * NEVER OBSERVED, so nothing here encodes it: any payload other than 8
- * bytes; bit 5 set on a broadcast (or any b7=0 value except 0x0A); an
- * acknowledgement of a slot-opening data packet (radiant_ctrl_reply_for()
- * refuses to invent one); what a data sender does when its ack goes
- * missing (the receiver retransmits 21 times at 3143us and gives up, but
- * no ack was ever actually lost in a completed transfer).
+ * bytes; bit 5 set on a broadcast (or any b7=0 value except 0x0A); what a
+ * data sender does when its ack goes missing (the receiver retransmits 21
+ * times at 3143us and gives up, but no ack was ever actually lost in a
+ * completed transfer).
  *
  * RADIANT_FRAME_LEN_ADV_BURST used to predict 0x1A (then 0x9A) for a
  * 24-byte advanced-burst frame; both premises assumed bits 4:0 were a
@@ -584,9 +589,15 @@ bool radiant_ctrl_observed(uint8_t ctrl);
  * no exceptions - 82->D2, 92->C2, A2->F2, B2->E2. (165, not 168: three
  * pairs had a CRC-failed ack and don't count as CRC-valid.)
  *
- * Returns 0 - never a legal control byte - for anything else, INCLUDING
- * the slot openers 0x8A and 0xAA: no ack of a slot-opening data packet has
- * ever been captured, so this function does not guess bit 3 for one.
+ * The slot openers 0x8A and 0xAA answer 0xD2 and 0xF2 - the same replies as
+ * their in-slot twins 0x82 and 0xA2, i.e. bit 3 clear. `[inferred]`: no ack
+ * of a slot-opening data packet was ever captured, so this is the reading
+ * that fits (no ack with bit 3 set exists in any capture, and an ack is sent
+ * inside the slot the data opened, so it cannot be an opener). It is the
+ * difference between a master-originated acknowledged transfer working and
+ * never completing; radiant_frame.c holds the full argument.
+ *
+ * Returns 0 - never a legal control byte - for anything else.
  */
 uint8_t radiant_ctrl_reply_for(uint8_t data_ctrl);
 

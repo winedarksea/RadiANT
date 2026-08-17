@@ -1227,21 +1227,37 @@ ZTEST(radiant_frame, test_reply_frame_relationship)
 	}
 
 	/*
-	 * And what was NOT measured. Every one of the 165 pairs is an in-slot
-	 * frame answered by an in-slot frame; no acknowledgement of a
-	 * slot-opening data packet was ever captured, so there is no measured
-	 * answer for what bit 3 of one would be. Returning 0 - never a legal
-	 * control byte - is how that stays visible.
+	 * And what was NOT measured, but now has an answer anyway. Every one of
+	 * the 165 pairs is an in-slot frame answered by an in-slot frame; no
+	 * acknowledgement of a slot-opening data packet was ever captured.
+	 *
+	 * This used to assert 0 for both openers, on the principle that
+	 * refusing keeps the gap visible. On hardware it did the opposite: it
+	 * made the gap INVISIBLE and permanent, because a master originates
+	 * 0xAA and a RadiANT acknowledger would then never reply, so
+	 * master-originated acknowledged data failed 100% of the time with all
+	 * of these tests green. The reply is now inferred as bit 3 clear -
+	 * radiant_frame.c holds the argument, and
+	 * test_a_slot_openers_acknowledgement_clears_bit_3 in test_transfer.c
+	 * is the single place that fails if a capture ever settles it the other
+	 * way.
 	 */
-	zassert_equal(radiant_ctrl_reply_for(0x8Au), 0u,
-		      "there is no measured acknowledgement of a slot-opening "
-		      "burst packet, and inventing one is how bit 3 gets fixed "
-		      "by guess");
-	zassert_equal(radiant_ctrl_reply_for(0xAAu), 0u, NULL);
+	zassert_equal(radiant_ctrl_reply_for(0x8Au), 0xD2u,
+		      "a slot-opening burst packet is acknowledged like its "
+		      "in-slot twin, with bit 3 clear");
+	zassert_equal(radiant_ctrl_reply_for(0xAAu), 0xF2u, NULL);
+	zassert_false(radiant_ctrl_is_slot_opener(radiant_ctrl_reply_for(0x8Au)),
+		      "no acknowledgement in any capture carries bit 3");
+	zassert_false(radiant_ctrl_is_slot_opener(radiant_ctrl_reply_for(0xAAu)), NULL);
+
+	/* The inference is exactly two bytes wide. Everything else still
+	 * refuses, which is what keeps it from becoming "clear bit 3 and hope". */
 	zassert_equal(radiant_ctrl_reply_for(RADIANT_CTRL_BROADCAST), 0u,
 		      "a broadcast is not acknowledged");
 	zassert_equal(radiant_ctrl_reply_for(0xC2u), 0u,
 		      "an acknowledgement is not itself acknowledged");
+	zassert_equal(radiant_ctrl_reply_for(0x1Au), 0u,
+		      "0x1A was only ever a CRC-failed 0x0A");
 }
 
 /*

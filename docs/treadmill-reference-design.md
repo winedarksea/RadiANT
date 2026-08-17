@@ -746,6 +746,16 @@ Two bench traps that have faked results here before:
 
 ### 7.7 The acknowledged-originator A/B, 2026-08-17 — hypothesis REFUTED
 
+> **THIS SECTION'S CONCLUSION IS WRONG, and §7.8 records why and what
+> replaced it.** The "refutation" below rests on a counter that was reading the
+> receiving master's OWN slots, not packets delivered to it. ~219 in 55 s is 4 Hz
+> — the channel period. Corrected instrumentation shows the packet was never
+> arriving at all, the hypothesis this section rejected was right, and the
+> revert it justified had to be undone. Left in place because the mis-reading is
+> the instructive part: an originator cannot tell "never arrived" from "arrived,
+> never acknowledged" — both are `FAIL_NO_ACK` — so the far end has to be
+> counted, and counted with the two things kept apart.
+
 The single most useful result of this pass, and it is a negative one.
 
 **Rig.** One nRF54L15 DK (J-Link `1057737173`) flashed with `apps/dongle`
@@ -792,6 +802,56 @@ slot on every period. That is air time spent indefinitely on a dead transfer
 and it contradicts `radiant_burst.c`'s "fails once and does not retry" rule as
 observed from the air.
 
+### 7.7a Narrowing it further, 2026-08-17 — there are TWO defects, not one
+
+> **Superseded by §7.8.** "Defect 1 — the USB sticks never put the packet on the
+> air" was right about the symptom and wrong about the cause: it is not the
+> sticks, it is every originator, and the reason is the transmit instant this
+> section's predecessor had just finished dismissing. The delivery counts in the
+> table below carry the same counter error as §7.7. The board-identity caveat at
+> the end is now resolved: stick `755972D7…6183` is the Feather.
+
+With the Feather's SWD cable attached (so a second board became
+unattended-flashable), the exchange was run in every available direction. The
+originator is `tools/ant_fec_control.py`; "delivered" is counted at the
+receiving end by a host script holding a bidirectional master open, so it is
+independent of what the sender believes.
+
+| originator | master | delivered to the master | sender result |
+|---|---|---|---|
+| **L15 DK**, freshly built HEAD | USB stick A | **219**, then 122 | `TX_FAILED` |
+| **L15 DK**, freshly built HEAD | USB stick B | **122** | `TX_FAILED` |
+| USB stick A | USB stick B | **0** | `TX_FAILED` |
+| USB stick A | L15 DK as master | **0** | `TX_FAILED` |
+| USB stick A and B | L15 running the **treadmill** | **0**, no page 71 | `TX_FAILED` |
+
+**Defect 1 — the USB sticks never put the packet on the air at all.** Zero
+delivered in every combination they originate, including stick-to-stick with no
+nRF54L15 anywhere in the path. This is why every previous attempt failed and why
+the treadmill's control loop has never once been exercised: **the shipping
+dongle is the broken half**, and the treadmill was never implicated.
+
+**Defect 2 — no master ever returns an acknowledgement.** When the L15
+originates, the packet reaches the master 122–219 times and the sender is
+*still* told `TX_FAILED`. So even with a working transmitter the exchange does
+not complete, and this is the defect §7.7 identified.
+
+**A caveat that bounds the first conclusion, and it matters.** Both USB sticks
+report `RADIANT0.01B00`; the L15 image was built from HEAD today. The Feather
+was reflashed with a current-HEAD image over SWD through the nRF5340 DK's
+debug-out header — J-Link found a **Cortex-M4** and programmed it O.K. — but
+**neither USB device's behaviour changed afterwards, and both kept their
+serials**, so it could not be confirmed that the board just programmed is one of
+the two enumerating sticks. Defect 1 is therefore "the two USB sticks, whatever
+they are running, do not originate" — **firmware age and SoC are not separated
+by this data.** Separating them is the first thing the next session should do,
+and it needs a positively identified board (unplug one stick and re-enumerate).
+
+**Also confirmed again here:** the delivered packet repeats at ~4 Hz for the
+whole run — 122 packets against 160 of the master's own `EVENT_TX` — long after
+the sender reported three failed attempts. Whatever ends the transfer from the
+host's point of view does not stop the radio re-sending it.
+
 **Two instrument bugs found here, both of which faked firmware faults:**
 
 - **`body[1]` is `MESG_EVENT_ID` (`0x01`) for an event, not `0`.** Written as
@@ -802,6 +862,86 @@ observed from the air.
 - The same bug in the master-side script reported **0 `EVENT_TX`** while the
   master was transmitting perfectly and a second stick could see it. "The
   master never transmitted" was wrong twice before the dump settled it.
+- **Page 17's incline and page 51's grade are encoded differently**, and
+  `ant_fec_control.py` initially decoded the first with the second's equation.
+  Page 51's *commanded* grade is an unsigned uint16 with a −200.00 % offset
+  (flat is `0x4E20`); page 17's *reported* incline is a plain signed int16 with
+  no offset. The wrong equation reported a treadmill sitting at **−198.8 %**,
+  which is **+1.20 %** read through the offset — absurd enough to catch here,
+  and it would not have been had the machine been near +200 %. Fixed; the same
+  board now reads `+1.79 %` rising, matching the simulator's ramp.
+
+---
+
+### 7.8 RESOLVED, 2026-08-17 — acknowledged transfers work, and it was four defects in the dongle
+
+An acknowledged transfer now completes on air, end to end, for the first time:
+**16 of 18** `TRANSFER_TX_COMPLETED` against 0 of 13 before. Everything in
+§7.4a–§7.7a was chasing a receiver that was never the problem — all four faults
+are in the dongle stack (`apps/common/ant_radio_radiant.c` and `radiant/`), and
+both ends of every failing test were ours.
+
+**The rig that finally separated the failure modes.** Two boards, both running
+the same freshly built `apps/dongle`, both host-controlled, and **both ends
+counted**:
+
+- **nRF54L15 DK** (`1057737173`), driven over **COM8**, log on COM7;
+- **Adafruit Feather nRF52840**, flashed over SWD through the nRF5340 DK's
+  debug-out (`1050006310`, confirm **Cortex-M4** in the J-Link output), driven
+  over USB as `0FCF:1009` serial **`755972D7183A6183`**.
+
+The second stick, `3D55F77818BE772A`, is a different board still on old
+firmware, and it served as a free control arm all afternoon. **That also settles
+the board-identity question §7.7a left open.**
+
+`scratchpad/ant_ack_pair.py` runs either end in one of four roles and — this is
+the part that mattered — reports *slots transmitted*, *broadcasts received* and
+*acknowledged packets received* as three separate numbers. Conflating the first
+and third is what produced §7.7's wrong conclusion.
+
+| # | Defect | Where | Evidence it was real |
+|---|---|---|---|
+| 1 | An originated acknowledged transfer went out at an arbitrary phase, not on the channel's slot | `antr_acknowledge_message_tx()`, `antr_burst_tx()` | master sent 20, slave heard **0** while receiving 150 of its broadcasts; sender failed 0–16 ms after queueing |
+| 2 | A master-originated packet (`0xAA`) had no reply mapping, so no RadiANT peer could ever answer it | `radiant_ctrl_reply_for()` | `reply=0x00` in the receiver's own log; `unackable_openers` |
+| 3 | A channel with an unwritten broadcast buffer refused to acknowledge — which for a **slave** is permanent | `api_xfer_broadcast()` | staging one broadcast by hand turned 0 received into thousands, with no firmware change |
+| 4 | The master's turnaround window reserved no follow-on air for the reply it may have to send | `api_post_master_rx()` | the tracked window sets 1960 µs for the identical reason; matters on MPSL |
+
+**Why all four hid behind each other.** Each one alone is fatal to the exchange,
+so fixing any one changed nothing observable, and the surviving symptom
+(`FAIL_NO_ACK`) is identical for all of them. Defect 1 in particular made
+defects 2 and 3 untestable, because the packet never reached a receiver to be
+refused by them.
+
+**Why the test suite did not catch any of it.** 849 tests passed throughout.
+`antr_acknowledge_message_tx()` **had no caller in any suite**, so the transmit
+instant of an originated transfer had never once been asserted. Defect 2 was
+worse than untested — it was *pinned*, by
+`test_a_slot_opening_packet_has_no_measured_acknowledgement`, which asserted the
+refusal on the principle that refusing keeps an unmeasured gap honest. On
+hardware it did the opposite: it made the gap permanent and invisible. That test
+is now inverted, and the general lesson is written into it — **a refusal is only
+honest if something can still make progress; when both ends of the link are
+yours, "we never measured the reply" and "the transfer can never complete" are
+the same sentence.** Five tests were added, one inverted.
+
+**Still open, and found by fixing the others.** Once acknowledged data started
+arriving, the receiving dongle posted it to its host **~600 times a second** —
+21,234 host messages for 16 exchanges — and its broadcast count collapsed from
+~150 to 4 in the same run. It is not on-air duplication: the originator's own
+log shows **169** programmed transmits in 34 s while the receiver's host saw
+12,625 messages, so the amplification is in software on the receive path,
+somewhere between the scheduler's RX notification and `api_tracked_frame()`.
+Related, and visible in the same log: the originator programs a second transmit
+at `+1092 µs` on **every** period, which is the once-per-period retransmission
+§7.7 noticed and could not explain. Neither is fixed. **Neither affects the
+broadcast path** — see below — but both must be fixed before the FE-C control
+loop can be called usable, because a host cannot drink from that hose.
+
+**Regression: the plain "relay sensor data to Zwift" path is unaffected.**
+Broadcast-only, same two boards, 62 s: **248 slots transmitted, 244 received —
+1.6 % loss**, better than the room's recent 5–8 %. Discovery still opens a
+wildcard channel cleanly. The flood above is reachable only by *receiving*
+acknowledged data, which no sensor sends to a dongle.
 
 ---
 

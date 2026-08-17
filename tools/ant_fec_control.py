@@ -149,11 +149,23 @@ def page70(requested: int, count: int = 4) -> bytes:
 
 
 def decode_grade(body: bytes) -> float | None:
-    """Page 17's incline, 0.01 % with a -200.00 % offset; 0x7FFF is 'invalid'."""
+    """Page 17's incline: a SIGNED int16 in 0.01 %, sentinel 0x7FFF.
+
+    NOT the same encoding as page 51's grade, and getting them the same way
+    round is the trap. Page 51's *command* grade is an UNSIGNED uint16 with a
+    -200.00 % offset (zero grade is 0x4E20); page 17's *reported* incline is
+    plain two's complement with no offset. Decoding page 17 with page 51's
+    offset was tried on the bench 2026-08-17 and reported a treadmill sitting
+    at -198.8 %, which is +1.20 % read through the wrong equation - a number
+    absurd enough to catch, and it would not have been if the machine had
+    happened to be near +200 %.
+    """
     raw = body[3] | (body[4] << 8)
     if raw == 0x7FFF:
         return None
-    return (raw - 20000) / 100.0
+    if raw >= 0x8000:
+        raw -= 0x10000
+    return raw / 100.0
 
 
 def main() -> int:

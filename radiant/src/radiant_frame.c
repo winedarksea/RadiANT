@@ -146,9 +146,9 @@ _Static_assert((RADIANT_CTRL_BROADCAST & RADIANT_CTRL_LOW_MASK) == RADIANT_CTRL_
 
 /* The four measured data -> acknowledgement pairs, and no fifth: every one
  * of the 168 adjacent CRC-valid pairs in runs 0, A and B is one of these
- * (bit 6 set, bit 5 echoed, bit 4 complemented, bits 7/3 unchanged). A slot
- * opener is deliberately absent - what bit 3 of an ack to 0x8A/0xAA would be
- * is not measured, and this table does not invent it. */
+ * (bit 6 set, bit 5 echoed, bit 4 complemented, bits 7/3 unchanged). Slot
+ * openers are absent because no ack of one was ever CAPTURED; they are handled
+ * separately below, as an inference and labelled as one. */
 static const struct {
 	uint8_t data;
 	uint8_t reply;
@@ -157,6 +157,50 @@ static const struct {
 	{ RADIANT_CTRL_BURST_SEQ1,      RADIANT_CTRL_ACK_SEQ0 },      /* 92 -> C2 */
 	{ RADIANT_CTRL_BURST_LAST_SEQ0, RADIANT_CTRL_ACK_LAST_SEQ1 }, /* A2 -> F2 */
 	{ RADIANT_CTRL_BURST_LAST_SEQ1, RADIANT_CTRL_ACK_LAST_SEQ0 }, /* B2 -> E2 */
+};
+
+/*
+ * THE SLOT OPENERS, `[inferred]` - bit 3 of their acknowledgement is the one
+ * thing about the exchange that was never captured. Returning 0 here (what this
+ * did until 2026-08-17) is not the neutral choice it looks like: it makes
+ * radiant_transfer_on_data() refuse with ENOTSUP, so a RadiANT acknowledger
+ * NEVER answers a master-originated acknowledged transfer, and the originator
+ * always reports FAIL_NO_ACK. That is not a gap in coverage, it is a
+ * guaranteed failure on the exact path an ANT+ trainer uses to accept a
+ * resistance command - and both ends of it are ours.
+ *
+ * WHY THESE TWO VALUES, and why this is an inference with evidence rather than
+ * a guess:
+ *
+ *   1. Bit 3 is clear on every acknowledgement ever captured. The ack alphabet
+ *      across all runs is exactly {C2, D2, E2, F2}; 0xDA and 0xFA appear
+ *      nowhere in 5,268 CRC-valid frames. If a slot opener's ack set bit 3, the
+ *      byte would have to be one of those two, and neither exists.
+ *   2. Bit 3 reads as "this packet OPENS the slot" (radiant_frame.h). An
+ *      acknowledgement is transmitted 1.56 ms INTO the slot the data packet
+ *      just opened, so it cannot itself be an opener. The one directly
+ *      measured instance of this agrees: a master's broadcast carries bit 3
+ *      set and its own ack 1.6 ms later carries it clear.
+ *   3. radiant_transfer_ack_matches() already declines to compare bit 3, with
+ *      a comment saying so. The originator therefore accepts D2/F2 and DA/FA
+ *      alike, so being wrong here costs interoperability with a stack that
+ *      does set bit 3, not correctness against one that does not.
+ *
+ * Strictly narrower than "clear bit 3 and reuse the in-slot reply": only the
+ * two openers that can actually be originated are listed, so an unmeasured
+ * eighth data byte still returns 0 rather than being handed a plausible reply.
+ *
+ * Falsifiable, and the way to falsify it is cheap: sniff a commercial master
+ * sending acknowledged data to a slave that answers, and read bit 3 of the
+ * reply. Until then this is the reading that lets the two RadiANT ends of a
+ * link talk to each other at all.
+ */
+static const struct {
+	uint8_t data;
+	uint8_t reply;
+} ctrl_replies_opener[] = {
+	{ RADIANT_CTRL_BURST_OPEN_SEQ0, RADIANT_CTRL_ACK_SEQ1 },      /* 8A -> D2 */
+	{ RADIANT_CTRL_ACK_DATA_OPEN,   RADIANT_CTRL_ACK_LAST_SEQ1 }, /* AA -> F2 */
 };
 
 uint8_t radiant_ctrl_encode(const struct radiant_ctrl_fields *f)
@@ -220,9 +264,20 @@ bool radiant_ctrl_observed(uint8_t ctrl)
 
 uint8_t radiant_ctrl_reply_for(uint8_t data_ctrl)
 {
+	/* Measured first, always: a byte in both tables must take the measured
+	 * answer, and searching this one first makes that true by construction
+	 * rather than by the two tables happening not to overlap. */
 	for (size_t i = 0; i < sizeof(ctrl_replies) / sizeof(ctrl_replies[0]); i++) {
 		if (ctrl_replies[i].data == data_ctrl) {
 			return ctrl_replies[i].reply;
+		}
+	}
+
+	/* Then the two slot openers - inferred, see the table's note. */
+	for (size_t i = 0;
+	     i < sizeof(ctrl_replies_opener) / sizeof(ctrl_replies_opener[0]); i++) {
+		if (ctrl_replies_opener[i].data == data_ctrl) {
+			return ctrl_replies_opener[i].reply;
 		}
 	}
 

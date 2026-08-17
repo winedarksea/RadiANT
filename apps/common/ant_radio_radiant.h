@@ -126,6 +126,16 @@ struct radiant_api_stats {
 	 * different evidence (frame structure vs. payload meaning).
 	 */
 	uint32_t crc_repair_implausible;
+	/*
+	 * Acknowledgements sent from a broadcast buffer the host never wrote,
+	 * i.e. carrying zeros. Normal and expected on a SLAVE, which has no
+	 * reason to own a broadcast buffer at all; on a master it means the
+	 * host acknowledged something before it ever sent a page. Counted
+	 * because the alternative - refusing to acknowledge - is what this
+	 * used to do, and it made a slave unable to acknowledge anything,
+	 * permanently and silently. See api_xfer_broadcast().
+	 */
+	uint32_t acks_from_unwritten_buffer;
 };
 
 const struct radiant_api_stats *radiant_api_stats_get(void);

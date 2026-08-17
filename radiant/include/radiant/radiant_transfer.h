@@ -94,9 +94,14 @@
  * Marked again at the code that would have used each:
  *   1. SENDER-SIDE RETRY. Never captured, so an empty reply window fails the
  *      transfer with RADIANT_TRANSFER_FAIL_NO_ACK and does not retransmit.
- *   2. ACKNOWLEDGING A SLOT OPENER. No such acknowledgement has ever been
- *      captured, so radiant_transfer_on_data() refuses (ENOTSUP), counted in
- *      stats.unackable_openers, rather than guessing bit 3's value.
+ *   2. ACKNOWLEDGING A SLOT OPENER - CLOSED 2026-08-17, as an inference.
+ *      radiant_ctrl_reply_for() now answers 0x8A/0xAA with 0xD2/0xF2 (bit 3
+ *      clear), so radiant_transfer_on_data() acknowledges them like any other
+ *      data packet. It refused with ENOTSUP until then, which meant a
+ *      master-originated acknowledged transfer could never complete against a
+ *      RadiANT peer - a closed path, not an open question, and the reason
+ *      apps/treadmill's control loop never worked. stats.unackable_openers
+ *      survives for anything still unmapped. See radiant_frame.c.
  *   3. AN ACKNOWLEDGEMENT CARRYING ANYTHING BUT THE BROADCAST BUFFER. Every
  *      one observed carried it, so ops->broadcast_payload is required.
  *   4. BIT 3 AS "SLOT OPENER" IS `[inferred]` - measured only that it isn't

@@ -890,11 +890,44 @@ static bool api_xfer_broadcast(void *ctx, uint8_t out[RADIANT_TRANSFER_PKT_BYTES
 {
 	uint8_t ch = (uint8_t)(uintptr_t)ctx;
 
-	if (!api_ch_valid(ch) || !api_ch[ch].bcast_valid) {
-		/* Every acknowledgement ever captured carried the acknowledger's
-		 * own broadcast buffer; nothing else is measured, so refuse
-		 * rather than send something unsupported. */
+	if (!api_ch_valid(ch)) {
 		return false;
+	}
+
+	/*
+	 * AN UNWRITTEN BUFFER IS NOT A REASON TO REFUSE, and treating it as one
+	 * meant A SLAVE COULD NEVER ACKNOWLEDGE ANYTHING.
+	 *
+	 * The rule this enforced - "every acknowledgement ever captured carried
+	 * the acknowledger's own broadcast buffer" - is a statement about
+	 * CONTENT, and it is still obeyed below: the buffer is what goes out.
+	 * What was wrong was reading it as a precondition. api_ch[].bcast is
+	 * zeroed at init and at unassign, so an unwritten buffer is a valid
+	 * eight zero bytes, not an absence.
+	 *
+	 * The consequence of refusing was total and silent, and it is the
+	 * second half of why apps/treadmill's control loop never worked:
+	 *
+	 *   - a SLAVE has no reason to ever hold a broadcast buffer. No host
+	 *     writes broadcast data to a channel it opened to listen on, so
+	 *     bcast_valid was false for the whole life of the channel, so
+	 *     radiant_transfer_on_data() got ESTATE, so the slave never
+	 *     acknowledged, AND never passed the data up either (the refusal
+	 *     returns before ops->rx_data). The host saw nothing at all.
+	 *   - a MASTER was refused until its host had written a page, so an
+	 *     acknowledged command arriving before the first broadcast was
+	 *     dropped the same way.
+	 *
+	 * Measured 2026-08-17: a slave with a broadcast staged by hand
+	 * acknowledged normally and reported every packet; the identical slave
+	 * without one reported zero, with the master 150 of whose broadcasts it
+	 * was receiving perfectly. api_post_master_tx() already transmits an
+	 * unwritten buffer as zeros for the mirror-image reason (a master that
+	 * will not transmit until written deadlocks every host library), so
+	 * refusing here was also the odd one out.
+	 */
+	if (!api_ch[ch].bcast_valid) {
+		api_stats.acks_from_unwritten_buffer++;
 	}
 
 #if defined(CONFIG_RADIANT_SEC)
@@ -1524,6 +1557,28 @@ static void api_post_master_rx(uint8_t ch, radiant_time_t t_sync)
 	req.t_close = t_sync + (radiant_time_t)RADIANT_TRANSFER_SLOT_REPLY_US +
 		      (radiant_time_t)RADIANT_TRANSFER_ACK_GUARD_US;
 	req.stop_on_first = false;
+	/*
+	 * THE SAME RESERVE THE TRACKED WINDOW TAKES, and for the identical
+	 * reason - this was missing until 2026-08-17 and it is the master half
+	 * of the acknowledged-data path.
+	 *
+	 * A slave's acknowledged-data packet arrives in THIS window and becomes
+	 * a transmit RADIANT_TRANSFER_REPLY_US later (api_sched_rx() ->
+	 * api_tracked_frame() -> radiant_transfer_on_data(), which arms the ack
+	 * before returning). Without follow_on_us the arbiter is told the air is
+	 * wanted only until t_close, so on an MPSL build the reply is asked for
+	 * outside the granted timeslot and never leaves: the slave has the
+	 * packet delivered, the master has the data, and the originator still
+	 * reports FAIL_NO_ACK. On a backend that owns the radio outright the
+	 * field is ignored by contract, so this costs nothing there.
+	 *
+	 * API_FOLLOW_ON_TRACK_US (2000 us) rather than a tighter number derived
+	 * from t_close: the reply is due REPLY_US after the DATA packet's t_sync,
+	 * which can be anywhere in this window, so the reserve has to cover the
+	 * late edge. 1560 - 250 + 150 = 1460 us is the requirement; reusing the
+	 * tracked constant covers it and keeps one number for one meaning.
+	 */
+	req.follow_on_us = API_FOLLOW_ON_TRACK_US;
 
 	if (radiant_sched_request_rx(ch, &req) != RADIANT_RADIO_OK_RC) {
 		api_bind_rejected(ch);
@@ -3645,42 +3700,112 @@ antr_err_t antr_broadcast_message_tx(uint8_t channel, uint8_t size,
 }
 
 /*
- * A NOTE ON THE TRANSMIT INSTANT, AND A HYPOTHESIS THAT WAS MEASURED AND IS
- * WRONG. Kept because the measurement cost a bench session and the next reader
- * will otherwise have the same idea.
+ * THE TRANSMIT INSTANT OF AN ORIGINATED TRANSFER, and the two-session story of
+ * getting it wrong. Written out because the first correction was reverted on a
+ * bad measurement and the next reader needs to know why it is back.
  *
- * radiant_transfer.h states a contract at radiant_transfer_submit():
+ * radiant_transfer.h states the contract at radiant_transfer_submit():
  *
  *   "A slave answering its master passes master_t_sync +
  *    RADIANT_TRANSFER_SLOT_REPLY_US; a master passes its own slot instant."
  *
- * The call below passes RADIANT_TIME_NEVER, which radiant_burst.c resolves to
- * `radiant_radio_now() + min_lead_us + ARM_SLACK_US`. That reads like a phase
- * with no relationship to any slot, and it was proposed as the reason a
- * slave-originated acknowledged transfer always fails (13/13 against this
- * tree's own treadmill, 0/4 against a commercial Wahoo trainer -
- * docs/treadmill-reference-design.md SS7.4).
+ * Both call sites below passed RADIANT_TIME_NEVER, which radiant_burst.c
+ * resolves to `radiant_radio_now() + min_lead_us + ARM_SLACK_US`: whenever the
+ * host happened to ask, bearing no relation to the channel's grid. An ANT peer
+ * only listens in a window a few hundred microseconds wide, so a packet placed
+ * at an arbitrary phase of a 250 ms period is heard essentially never.
  *
- * IT IS NOT THE REASON. A/B on real hardware, 2026-08-17, one nRF54L15 DK as
- * the originator against a RadiANT dongle held open as a bidirectional master,
- * two builds minutes apart differing only in this instant:
+ * THE FIRST ATTEMPT WAS REVERTED ON A MISREAD MEASUREMENT (2026-08-17,
+ * docs/treadmill-reference-design.md SS7.7). An A/B of exactly this change
+ * appeared to show the packet "arriving at the full channel rate in both
+ * arms", concluding the transmit instant was irrelevant and the fault lay in
+ * the return acknowledgement. The instrument was counting the receiving
+ * master's OWN slots alongside inbound data, and ~219 in 55 s is 4 Hz - the
+ * channel period, not a delivery rate. Re-run with the two counters separated:
  *
- *   arm A, RADIANT_TIME_NEVER (this code)  TX_FAILED x4, master received 219
- *   arm B, next_slot + SLOT_REPLY_US       TX_FAILED x4, master received 218
+ *   master originates 20 acknowledged packets over 40 s, 160 of its own slots
+ *   the slave hears 150 broadcasts from it  -> the link is fine
+ *   the slave hears 0 acknowledged packets  -> it is not a lost ACK
+ *   the sender fails 0-16 ms after queueing -> it transmitted, then heard
+ *                                              nothing in its reply window
  *
- * The packet ARRIVES, at the full channel rate, in both arms - so it was never
- * landing where nobody was listening, and aligning the transmit changes
- * nothing. Whatever fails is the RETURN acknowledgement: the originator never
- * sees one, radiant_burst.c reports FAIL_NO_ACK, and the caller is told the
- * transfer failed while the receiver has the data. Look at arm_ack_window()
- * and the t_data_sync it is given, not at the transmit instant. See SS7.7 of
- * docs/treadmill-reference-design.md for the full run.
+ * A lost acknowledgement and an unheard data packet look identical from the
+ * originator (both are FAIL_NO_ACK). They are only distinguishable from the
+ * far end, which is why every earlier session went round this loop.
  *
- * So this stays RADIANT_TIME_NEVER: the slot-aligned version was written,
- * built, flashed and measured, and it bought nothing while adding up to one
- * channel period of latency to every acknowledged transfer on every dongle
- * build in the tree.
+ * So the instant is resolved from the channel's own grid. The cost the revert
+ * was worried about - "up to one channel period of latency" - is real and is
+ * the correct price: an acknowledged transfer is a slotted exchange, and there
+ * is no such thing as sending one early.
  */
+static radiant_time_t api_xfer_t_sync_for(uint8_t ch)
+{
+	const struct radiant_radio_caps *caps = radiant_radio_caps_get();
+	radiant_time_t                   slot = radiant_channel_next_slot(ch);
+	radiant_time_t                   earliest;
+	uint16_t                         period_counts = 0u;
+	uint32_t                         lead;
+
+	/*
+	 * No grid to sit on - a channel that is not on air, or a master that
+	 * has not transmitted yet. RADIANT_TIME_NEVER keeps the old
+	 * "as soon as the backend can" behaviour, which is the honest answer
+	 * when there is no slot to align to rather than a silent failure.
+	 */
+	if (slot == RADIANT_TIME_NEVER) {
+		return RADIANT_TIME_NEVER;
+	}
+
+	/*
+	 * A slave transmits in the reply window its master opens, not on the
+	 * master's slot itself. radiant_channel_next_slot() gives a slave the
+	 * opening edge of its next receive window, i.e. the master's expected
+	 * t_sync, so the reply is that plus the measured 2190 us turnaround.
+	 */
+	if (!radiant_channel_is_master(ch)) {
+		slot += (radiant_time_t)RADIANT_TRANSFER_SLOT_REPLY_US;
+	}
+
+	/*
+	 * And it has to be far enough out to arm. The next slot can be
+	 * microseconds away when the host writes just after one, and
+	 * radiant_transfer_submit() does NOT clamp an explicitly requested
+	 * instant for a starting transfer - the scheduler would refuse it with
+	 * ETIME, which reaches the host as TRANSFER_IN_ERROR on a channel that
+	 * is working perfectly. One period later is the same phase, so slipping
+	 * costs a period and changes nothing else.
+	 */
+	lead = (caps != NULL) ? (uint32_t)caps->min_arm_lead_us : 0u;
+	earliest = radiant_radio_now() + (radiant_time_t)lead +
+		   (radiant_time_t)RADIANT_TRANSFER_ARM_SLACK_US;
+
+	if (slot < earliest &&
+	    radiant_channel_period_get(ch, &period_counts) == RADIANT_CH_OK &&
+	    period_counts != 0u) {
+		radiant_time_t period = radiant_channel_counts_to_us(period_counts);
+		unsigned int   guard;
+
+		/*
+		 * A loop, not one addition: at a short period (4 Hz is the slow
+		 * case, some profiles run at 32 Hz) one period may still not
+		 * clear the arm lead.
+		 *
+		 * Explicitly bounded, because radiant_time_t is a wrapping
+		 * microsecond counter and `slot < earliest` is therefore not a
+		 * true ordering across the wrap - near it, the comparison can
+		 * stay true for thousands of additions. Sixteen periods is far
+		 * more than the two or three this can legitimately need, and
+		 * falling out of the loop leaves an instant the scheduler will
+		 * refuse honestly rather than one this function span for.
+		 */
+		for (guard = 0u; guard < 16u && slot < earliest; guard++) {
+			slot += period;
+		}
+	}
+
+	return slot;
+}
+
 antr_err_t antr_acknowledge_message_tx(uint8_t channel, uint8_t size,
 				       const uint8_t *data)
 {
@@ -3696,10 +3821,8 @@ antr_err_t antr_acknowledge_message_tx(uint8_t channel, uint8_t size,
 	}
 
 	k_mutex_lock(&api_lock, K_FOREVER);
-	/* RADIANT_TIME_NEVER: "as soon as the backend can" - a literal "now"
-	 * could already be past and get refused with ETIME. */
 	rc = radiant_transfer_ack_data(&api_xfer[channel], data, size,
-				   RADIANT_TIME_NEVER);
+				   api_xfer_t_sync_for(channel));
 	err = api_xfer_err(rc);
 	if (rc == RADIANT_TRANSFER_OK) {
 		api_pump_locked();
@@ -3740,12 +3863,20 @@ antr_err_t antr_burst_tx(uint8_t channel, uint16_t size, uint8_t *data,
 	 * doing it again here would let the next host packet overwrite a
 	 * buffer the radio is still transmitting from (B5).
 	 *
-	 * RADIANT_TIME_NEVER here for the same measured reason as
-	 * antr_acknowledge_message_tx() above - slot-aligning a slave's START
-	 * block was tried on hardware and bought nothing.
+	 * The START block is slot-aligned for the same reason as
+	 * antr_acknowledge_message_tx() above; see the note there. Only the
+	 * START block - once a burst is running, every later packet is placed
+	 * by radiant_burst.c from the acknowledgement that preceded it
+	 * (ack t_sync + NEXT_PACKET_US), which is a tighter grid than this one
+	 * and must not be overridden. radiant_transfer_submit() ignores the
+	 * instant for a continuation anyway, but passing a slot here would be
+	 * misleading to read.
 	 */
 	rc = radiant_transfer_burst_block(&api_xfer[channel], data, (uint8_t)size,
-				      segment, RADIANT_TIME_NEVER);
+				      segment,
+				      (segment & ANTR_BURST_SEGMENT_START) != 0u
+					      ? api_xfer_t_sync_for(channel)
+					      : RADIANT_TIME_NEVER);
 	err = api_xfer_err(rc);
 	if (rc == RADIANT_TRANSFER_OK) {
 		api_pump_locked();
