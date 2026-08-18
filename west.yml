@@ -11,7 +11,7 @@
 # repository rather than in someone's shell history.
 #
 # Note what this manifest is *not*: it is not how CI builds today. The workflow
-# in .github/workflows/build.yml checks out sdk-ant separately and runs
+# in .github/workflows/release.yml checks out sdk-ant separately and runs
 # `west init -l` against *sdk-ant's* manifest, because sdk-ant declares
 # `self: path: ant` and is itself a manifest repository - so in that layout
 # sdk-ant, not this file, chooses the SDK version. That arrangement is
@@ -89,7 +89,7 @@ manifest:
     # the clean-room stack is measured against, and the only build that can
     # BUILD_ASSERT our protocol constants against Garmin's own headers.
     #
-    # Pinned at v2.1.0, matching SDK_ANT_REVISION in .github/workflows/build.yml.
+    # Pinned at v2.1.0, matching SDK_ANT_REVISION in .github/workflows/release.yml.
     # Do not float this to a branch: the whole point of the pin is that an A/B
     # comparison run months apart is against the same reference.
     #

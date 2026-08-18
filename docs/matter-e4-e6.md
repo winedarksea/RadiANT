@@ -15,7 +15,7 @@ E4-E6 are what call it.
 
 ## Measured, on the CI row's own recipe
 
-Built as `.github/workflows/build.yml`'s "dongle_thread: Matter (CHIP + bridge
+Built as `.github/workflows/release.yml`'s "dongle_thread: Matter (CHIP + bridge
 core)" row builds it - `nrf54l15dk/nrf54l15/cpuapp`, `-DANT_RADIO=core
 -DRADIANT_BACKEND=nrf`, `EXTRA_CONF_FILE=thread.conf;matter.conf`,
 `SB_EXTRA_CONF_FILE=matter_sysbuild.conf`.

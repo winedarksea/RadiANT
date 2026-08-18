@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Drive both ends of an acknowledged ANT+ exchange and count at BOTH ends.
 
 WHY THIS EXISTS. An originator physically cannot tell "my packet never arrived"

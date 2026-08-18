@@ -128,7 +128,7 @@ foreach ($arm in $arms) {
     # lands under <build>\dongle_thread\zephyr (the image name is APP_DIR's own
     # basename, not project()), without it directly under <build>\zephyr. Both
     # are tried rather than one assumed, for the reason apps/dongle's own CI
-    # already learned at .github/workflows/build.yml - a hard-coded path that
+    # already learned at .github/workflows/release.yml - a hard-coded path that
     # stops existing turns this check into "file not found", and a check that
     # cannot run is not a check that passed.
     $cfg = $null

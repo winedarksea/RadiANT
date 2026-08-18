@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Resolve the Zephyr SDK's arm-zephyr-eabi binutils, once, for every step that
+# needs to read an ELF.
+#
+# THIS EXISTS BECAUSE BOTH WAYS OF NOT DOING IT HAVE ALREADY FAILED IN THIS
+# REPOSITORY, in the same CI run:
+#
+#   * build-new-apps called a bare `arm-zephyr-eabi-nm`. The Zephyr SDK is not
+#     on PATH - zephyrproject-rtos/action-zephyr-setup installs it and hands its
+#     location to CMake, not to the shell - so the step died with
+#     `arm-zephyr-eabi-nm: command not found` and reported it as a MISSING
+#     LINKER FRAGMENT.
+#   * zero-cost dereferenced ${ZEPHYR_SDK_INSTALL_DIR} under `set -u` when
+#     nothing had exported it, and died with `unbound variable`.
+#
+# So the resolution is written once, defensively, and every caller takes the
+# answer as an output. There is deliberately no host-binutils fallback: host
+# `size` and `nm` will read an ARM ELF and print plausible numbers for the wrong
+# thing, which is worse than stopping.
+
+name: Resolve arm-zephyr-eabi binutils
+description: >
+  Locate the Zephyr SDK's arm-zephyr-eabi nm and size, however the SDK was
+  installed, and fail loudly if they are not there.
+
+outputs:
+  nm:
+    description: Absolute path to arm-zephyr-eabi-nm
+    value: ${{ steps.resolve.outputs.nm }}
+  size:
+    description: Absolute path to arm-zephyr-eabi-size
+    value: ${{ steps.resolve.outputs.size }}
+  sdk:
+    description: The SDK directory the tools were found under, for diagnostics
+    value: ${{ steps.resolve.outputs.sdk }}
+
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # `:-` and not a bare expansion. `set -u` is on in every caller that
+        # matters, and an unset ZEPHYR_SDK_INSTALL_DIR must fall through to the
+        # searches below rather than abort the step before they run.
+        sdk="${ZEPHYR_SDK_INSTALL_DIR:-}"
+
+        # ~/.cmake/packages/Zephyr-sdk is how Zephyr's own CMake locates the
+        # SDK, so it is the right source of truth when the setup action does
+        # not export the variable - which is the case that broke CI.
+        if [[ -z "${sdk}" ]]; then
+          sdk="$(cat "${HOME}"/.cmake/packages/Zephyr-sdk/* 2>/dev/null | head -n1 || true)"
+        fi
+        if [[ -z "${sdk}" ]]; then
+          sdk="$(ls -d "${HOME}"/zephyr-sdk-* /opt/zephyr-sdk-* 2>/dev/null | head -n1 || true)"
+        fi
+
+        find_tool() {   # $1 = tool basename
+          local tool="$1" p=""
+          if [[ -n "${sdk}" ]]; then
+            p="${sdk}/arm-zephyr-eabi/bin/${tool}"
+            [[ -x "${p}" ]] && { printf '%s\n' "${p}"; return 0; }
+          fi
+          p="$(command -v "${tool}" 2>/dev/null || true)"
+          [[ -n "${p}" && -x "${p}" ]] && { printf '%s\n' "${p}"; return 0; }
+          if [[ -n "${sdk}" ]]; then
+            p="$(find "${sdk}" -name "${tool}" -type f -print -quit 2>/dev/null || true)"
+            [[ -n "${p}" && -x "${p}" ]] && { printf '%s\n' "${p}"; return 0; }
+          fi
+          return 1
+        }
+
+        rc=0
+        nm="$(find_tool arm-zephyr-eabi-nm || true)"
+        size="$(find_tool arm-zephyr-eabi-size || true)"
+        if [[ -z "${nm}" ]]; then
+          echo "::error::arm-zephyr-eabi-nm not found (ZEPHYR_SDK_INSTALL_DIR='${sdk}')"
+          rc=1
+        fi
+        if [[ -z "${size}" ]]; then
+          echo "::error::arm-zephyr-eabi-size not found (ZEPHYR_SDK_INSTALL_DIR='${sdk}')"
+          rc=1
+        fi
+        [[ "${rc}" -eq 0 ]] || exit 1
+
+        echo "nm:   ${nm}"
+        echo "size: ${size}"
+        {
+          echo "nm=${nm}"
+          echo "size=${size}"
+          echo "sdk=${sdk}"
+        } >> "${GITHUB_OUTPUT}"

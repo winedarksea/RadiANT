@@ -13,6 +13,17 @@ which holds floors rather than exact counts: tests get added far more often
 than removed, and an exact count would fail on every honest addition until
 somebody relaxed it permanently.
 
+It reads twister.json at BOTH levels, and that is not incidental. A scenario
+that failed to compile has a suite-level status of `error` with the compiler
+output in `reason`, and all of its statically-discovered cases come back
+`blocked` - never run, nothing asserted. Reading only the case level turned one
+compiler error into "2464 test case(s) failed" and printed twenty `[blocked]`
+names instead of the error. So: a build failure is reported as a build failure,
+above everything else; `blocked` is counted apart from `failed`; and the
+testcase floor is compared against cases that EXECUTED, since discovery happens
+before the build and a wholly-broken run otherwise cleared the floor it exists
+to hold.
+
 It also prints a table for $GITHUB_STEP_SUMMARY, so the numbers are visible on
 the run page rather than buried in twister-out/.
 
@@ -49,33 +60,74 @@ def read_expected() -> dict[str, int]:
     return out
 
 
-def summarise(report: Path) -> tuple[int, int, int, int, list[str]]:
+class Summary:
+    """What one twister.json says, at both levels it says it at.
+
+    The two levels are the whole point. A suite that failed to COMPILE has a
+    suite-level status of `error` with the compiler output in `reason`, and its
+    statically-discovered cases all come back `blocked` - never run, nothing
+    asserted. Reading only the case level turned one compiler error into "2464
+    test case(s) failed", which is a different problem with a different fix.
+    """
+
+    def __init__(self) -> None:
+        self.scenarios: set[str] = set()
+        self.executed = 0        # passed + failed: cases that actually ran
+        self.passed = 0
+        self.failed = 0
+        self.blocked = 0
+        self.failing: list[str] = []
+        self.blocked_names: list[str] = []
+        self.build_failures: list[tuple[str, str]] = []
+
+
+# Suite-level statuses that mean "this scenario never got as far as running".
+# `error` is twister's build failure; `blocked` appears when a dependency of
+# the build failed.
+SUITE_BROKEN = ("error", "blocked")
+
+
+def summarise(report: Path) -> Summary:
     # utf-8-sig, not utf-8: a BOM is invalid JSON to json.loads, and anything
     # that rewrites this file on Windows is liable to add one.
     data = json.loads(report.read_text(encoding="utf-8-sig"))
     suites = data.get("testsuites", [])
 
-    scenarios: set[str] = set()
-    total = passed = failed = 0
-    failing: list[str] = []
+    s = Summary()
 
     for suite in suites:
         name = suite.get("name", "?")
-        scenarios.add(name)
+        s.scenarios.add(name)
+
+        suite_status = (suite.get("status") or "").lower()
+        if suite_status in SUITE_BROKEN:
+            reason = (suite.get("reason") or "no reason given").strip()
+            s.build_failures.append((name, reason))
+
         for case in suite.get("testcases", []):
             status = (case.get("status") or "").lower()
             # Twister reports skipped/filtered cases too; they are not failures
             # and not evidence of coverage, so they count toward neither.
             if status in ("skipped", "filtered", "none", ""):
                 continue
-            total += 1
             if status == "passed":
-                passed += 1
+                s.executed += 1
+                s.passed += 1
+            elif status == "blocked":
+                # Blocked is "never ran", not "ran and disagreed". Counting it
+                # as failed is what made a build break read as a mass
+                # regression, and counting it as executed is what let the
+                # coverage floor pass on a run where nothing executed.
+                s.blocked += 1
+                s.blocked_names.append(
+                    f"{name}: {case.get('identifier', '?')}")
             else:
-                failed += 1
-                failing.append(f"{name}: {case.get('identifier', '?')} [{status}]")
+                s.executed += 1
+                s.failed += 1
+                s.failing.append(
+                    f"{name}: {case.get('identifier', '?')} [{status}]")
 
-    return len(scenarios), total, passed, failed, failing
+    return s
 
 
 def main() -> int:
@@ -92,17 +144,33 @@ def main() -> int:
         return 1
 
     expected = read_expected()
-    n_scen, total, passed, failed, failing = summarise(report)
+    s = summarise(report)
+    n_scen = len(s.scenarios)
 
-    lines = [
+    # The build verdict goes FIRST, above the table, in both the terminal and
+    # the step summary. A compiler error buried under twenty [blocked] case
+    # names is a compiler error nobody reads.
+    head: list[str] = []
+    if s.build_failures:
+        head.append("### BUILD FAILURE")
+        head.append("")
+        head.append(f"{len(s.build_failures)} scenario(s) never ran because "
+                    f"the build did not complete:")
+        head.append("")
+        for name, reason in s.build_failures:
+            head.append(f"- **{name}**: {reason}")
+        head.append("")
+
+    lines = head + [
         "### ztest counts",
         "",
         "| | observed | floor |",
         "|---|---|---|",
         f"| scenarios | {n_scen} | {expected['min_scenarios']} |",
-        f"| test cases | {total} | {expected['min_testcases']} |",
-        f"| passed | {passed} | |",
-        f"| failed | {failed} | 0 |",
+        f"| test cases executed | {s.executed} | {expected['min_testcases']} |",
+        f"| passed | {s.passed} | |",
+        f"| failed | {s.failed} | 0 |",
+        f"| blocked (never ran) | {s.blocked} | 0 |",
     ]
     table = "\n".join(lines)
     print(table)
@@ -113,6 +181,8 @@ def main() -> int:
             handle.write(table + "\n")
 
     problems: list[str] = []
+    for name, reason in s.build_failures:
+        problems.append(f"BUILD FAILURE in {name}: {reason}")
     if n_scen < expected["min_scenarios"]:
         problems.append(
             f"only {n_scen} scenarios ran, expected at least "
@@ -120,16 +190,22 @@ def main() -> int:
             f"probably stopped being discovered - check that every "
             f"testcase.yaml under radiant/tests is still valid."
         )
-    if total < expected["min_testcases"]:
+    # Against EXECUTED, not against every case twister discovered. Discovery
+    # happens before the build, so a run where nothing compiled still lists
+    # thousands of cases - and the floor reported green on exactly that.
+    if s.executed < expected["min_testcases"]:
         problems.append(
-            f"only {total} test cases ran, expected at least "
-            f"{expected['min_testcases']}. Coverage went down; if that is "
-            f"deliberate, lower the floor in tests/expected_counts.yaml in the "
-            f"same commit and say why."
+            f"only {s.executed} test cases actually executed, expected at "
+            f"least {expected['min_testcases']}. Coverage went down; if that "
+            f"is deliberate, lower the floor in tests/expected_counts.yaml in "
+            f"the same commit and say why."
         )
-    if failed:
-        problems.append(f"{failed} test case(s) failed")
-        problems.extend(f"  {f}" for f in failing[:20])
+    if s.failed:
+        problems.append(f"{s.failed} test case(s) failed")
+        problems.extend(f"  {f}" for f in s.failing[:20])
+    if s.blocked:
+        problems.append(f"{s.blocked} test case(s) were blocked and never ran")
+        problems.extend(f"  {b}" for b in s.blocked_names[:20])
 
     if problems:
         print("\ncheck_test_counts: FAILED", file=sys.stderr)
@@ -137,11 +213,11 @@ def main() -> int:
             print(f"  {p}", file=sys.stderr)
         return 1
 
-    print(f"\ncheck_test_counts: OK - {total} cases in {n_scen} scenarios, "
-          f"all passed")
-    if total > expected["min_testcases"]:
+    print(f"\ncheck_test_counts: OK - {s.executed} cases in {n_scen} "
+          f"scenarios, all passed")
+    if s.executed > expected["min_testcases"]:
         print(f"  (floor is {expected['min_testcases']}; it can be raised to "
-              f"{total} on this evidence)")
+              f"{s.executed} on this evidence)")
     return 0
 
 

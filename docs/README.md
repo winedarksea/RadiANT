@@ -1,7 +1,7 @@
 # Documentation index
 
 Checked by: `.github/workflows/linkcheck.yml` for the external URLs, and the
-README line-cap step in `.github/workflows/build.yml` for rule 4 below. Both
+README line-cap step in `.github/workflows/ci.yml` for rule 4 below. Both
 land in Wave 0; until they do, this index is narrative and a moved file will
 break a link silently.
 

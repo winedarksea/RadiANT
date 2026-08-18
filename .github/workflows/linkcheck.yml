@@ -28,6 +28,8 @@ jobs:
   links:
     name: external URLs in archive/ and docs/
     runs-on: ubuntu-24.04
+    # This one reaches the network, so it is the job most able to hang.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -102,6 +104,7 @@ jobs:
   budget:
     name: archive/ stays under 10 MB
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 

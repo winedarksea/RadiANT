@@ -17,7 +17,7 @@
  *
  * CONFIG_ANT_DONGLE_NAMING_DEBUG defaults n, so this file is not compiled into
  * bridge.conf, matter.conf or any of the five section 7.4 coexistence arms, and
- * it adds nothing to .github/workflows/build.yml's exact-set assert_sink_names
+ * it adds nothing to .github/workflows/release.yml's exact-set assert_sink_names
  * diff on those builds. Turn it on with -DCONFIG_ANT_DONGLE_NAMING_DEBUG=y for
  * a bench sitting and read the console.
  */

@@ -8,7 +8,7 @@
  * indistinguishable from a direct call with extra prototypes - it compiles, it
  * looks like an abstraction, and the first person to actually use it discovers
  * which parts of it were never exercised. This is the same argument
- * .github/workflows/build.yml already makes about encryption.conf, applied to
+ * .github/workflows/release.yml already makes about encryption.conf, applied to
  * an API instead of a Kconfig fragment. The hrm_ble.custom / hrm_ble.example
  * rows in sample.yaml are what keep it honest.
  *

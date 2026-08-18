@@ -18,8 +18,8 @@
 
 #include <zephyr/kernel.h>
 
-/* The whole file is behind the symbol because CMakeLists.txt globs src/*.c
- * into every scenario and two of three don't link the adapter; the
+/* The whole file is behind the symbol because CMakeLists.txt globs every
+ * `.c` under `src/` into every scenario and two of three don't link the adapter; the
  * antr_sec_* declarations are behind the same #ifdef in src/ant_radio.h so
  * the two halves appear and disappear together. */
 #if defined(CONFIG_RADIANT_SEC_HOST_MESSAGES)

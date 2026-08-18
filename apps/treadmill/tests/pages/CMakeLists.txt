@@ -23,7 +23,7 @@
 #   * the vertical-distance divisor, where dropping two zeroes makes a 1 %
 #     incline climb like a 100 % one and nothing downstream would question it.
 #
-# CI discovers it because .github/workflows/build.yml's ztest job passes
+# CI discovers it because .github/workflows/ci.yml's ztest job passes
 # `-T app/apps/treadmill/tests` alongside `-T app/radiant/tests` and
 # `-T app/apps/hrm_ble/tests`.
 #

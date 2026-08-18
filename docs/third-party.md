@@ -3,7 +3,7 @@
 Checked by: nothing — treat as narrative. Nothing here is machine-verified.
 Two facts in the table below *are* duplicated elsewhere and will rot if they
 drift: the sdk-ant repository and revision appear in `west.yml` and as
-`SDK_ANT_REVISION` in `.github/workflows/build.yml`, and the URLs are only as
+`SDK_ANT_REVISION` in `.github/workflows/release.yml`, and the URLs are only as
 live as the weekly link check makes them. Everything else is a legal and
 policy position, which no test can assert.
 
@@ -48,7 +48,7 @@ Pinned at `v2.1.0`.
 
 **Licence.** Proprietary. Access to the repository is granted per GitHub
 account under Garmin's terms for the SDK — which is why
-`.github/workflows/build.yml` needs a personal access token rather than the
+`.github/workflows/release.yml` needs a personal access token rather than the
 automatic `GITHUB_TOKEN`, and why `west.yml` puts it in a disabled group. The
 licence text (`LICENSE.txt` in that repository) explicitly forbids
 reverse-engineering the binary.

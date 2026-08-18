@@ -1,6 +1,6 @@
 # The treadmill node: a fitness-equipment reference design
 
-Checked by: `.github/workflows/build.yml`'s `build-treadmill` job (every
+Checked by: `.github/workflows/release.yml`'s `build-treadmill` job (every
 configuration below is a matrix row whose resulting `.config` is asserted),
 `scripts/build_all.ps1`'s `$treadmillTargets` loop, and three ztest suites —
 `radiant/tests/src/test_profile_fec_tx.c`, `radiant/tests/src/test_profile_sdm.c`

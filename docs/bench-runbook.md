@@ -115,7 +115,7 @@ nevertheless a release artifact, so before shipping a `core` release somebody
 must at minimum confirm its DFU image enumerates and pairs.
 
 **On pass:** edit ADR 0001 (status, date, the run that did it) *then* the
-release attachment in `build.yml` and `build-core`'s comment. The ADR says the
+release attachment in `release.yml` and `build-core`'s comment. The ADR says the
 edit is the mechanism, not the paperwork.
 
 ---

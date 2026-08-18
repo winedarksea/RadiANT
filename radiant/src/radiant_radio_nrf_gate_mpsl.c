@@ -928,12 +928,20 @@ static uint32_t hi_grant_len_us;
  * END_MARGIN_FIXED_US on every real window - but recording it is what keeps the
  * instrument honest if that ever stops being true (bug 25's lesson). */
 static uint32_t hi_end_margin_us = END_MARGIN_EXTEND_US;
+#if defined(CONFIG_RADIANT_SWEEP_DEBUG)
+/* Written and read only by the debug dump, so they live under its condition
+ * rather than behind __maybe_unused: both of the sites that maintain them are
+ * already inside CONFIG_RADIANT_SWEEP_DEBUG, and without the guard here they
+ * are entirely unreferenced in an ordinary build. Their two neighbours above
+ * are NOT guarded - those are written unconditionally on every grant. */
+
 /* How long the last HIGH-priority grant actually lasted, and the worst case. */
 static uint32_t hi_end_us;
 static uint32_t hi_end_us_max;
 /* MPSL_TIMER0's count when SIGNAL_START armed the end compare - how much of the
  * timeslot the callback itself consumed before the grant had an end at all. */
 static uint32_t t0_at_arm_us;
+#endif /* CONFIG_RADIANT_SWEEP_DEBUG */
 /*
  * Which call site last ended a grant. Set immediately before every
  * gate_hand_back()/timer0_disarm(), so the hand-back can attribute itself.

@@ -10,7 +10,7 @@ build:
 # Self-describes its test root so `west twister` (any version that supports
 # the command) and other module-scanning tools find radiant/tests
 # without being told the path. CI still passes an explicit -T
-# (see .github/workflows/build.yml) because it invokes scripts/twister
+# (see .github/workflows/ci.yml) because it invokes scripts/twister
 # directly for SDK-version compatibility rather than via `west twister`,
 # so this list is for external consumers, not a change to CI's behavior.
 tests:

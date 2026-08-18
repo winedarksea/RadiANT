@@ -15,7 +15,7 @@
 # one that runs on every CI push, and the one that DID NOT EXIST when this
 # application shipped a strap notifying 67 times a minute while claiming 72.
 #
-# CI discovers it because .github/workflows/build.yml's ztest job passes
+# CI discovers it because .github/workflows/ci.yml's ztest job passes
 # `-T app/apps/hrm_ble/tests` alongside `-T app/radiant/tests`. It is not under
 # radiant/tests because it tests an application, not the module, and
 # radiant/tests/CMakeLists.txt's glob deliberately does not reach out of the

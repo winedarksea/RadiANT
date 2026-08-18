@@ -664,7 +664,7 @@ config ANT_DONGLE_NAMING_DEBUG
 	  Defaults n, so it is absent from bridge.conf, matter.conf and all
 	  five of docs/radiant-bridge.md section 7.4's coexistence arms - it
 	  adds a sink, and those images' sink sets are asserted exactly in
-	  .github/workflows/build.yml.
+	  .github/workflows/release.yml.
 
 config ANT_DONGLE_MQTT_BROKER
 	string "Broker address, as a numeric IPv6 literal"

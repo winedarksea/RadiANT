@@ -370,7 +370,14 @@ ZTEST(sec_aes, test_every_derived_key_differs)
 
 	import_or_fail(&root, root_raw);
 	for (i = 0; i < 4; i++) {
-		uint32_t epoch = (labels[i] == RADIANT_SEC_LABEL_ID) ? 0u : 99u;
+		/* strcmp, not ==: the operands are two pointers, and whether a
+		 * compiler folds two identical literals into one object is
+		 * unspecified. It happened to hold here, which is worse than it
+		 * failing - the test would have quietly derived "id" under
+		 * epoch 99 the first time it did not. */
+		uint32_t epoch = (strcmp(labels[i], RADIANT_SEC_LABEL_ID) == 0)
+					 ? 0u
+					 : 99u;
 
 		zassert_equal(radiant_sec_kdf(&root, labels[i], epoch, 0x0101u,
 					      &derived[i]),

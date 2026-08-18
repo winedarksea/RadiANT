@@ -22,7 +22,7 @@
 # WHO ACTUALLY RUNS THIS FILE. Not CI, today: the ztest job's twister
 # invocation walks the test directories, and this file sits beside them rather
 # than under one. The configurations below are built and asserted by the
-# build-treadmill job in .github/workflows/build.yml and by
+# build-treadmill job in .github/workflows/release.yml and by
 # scripts/build_all.ps1's $treadmillTargets loop; this file is for
 # `twister -T apps/treadmill -p nrf54l15dk/nrf54l15/cpuapp` by hand, and for
 # stating the matrix in one place the two of them can be read against.

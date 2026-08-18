@@ -510,7 +510,6 @@ int profile_private_host_set_policy(struct profile_private *pp, uint8_t policy)
 {
 	uint8_t was;
 	bool    was_nvm;
-	int     rc;
 
 	if (pp == NULL || !pp->armed) {
 		return -EINVAL;

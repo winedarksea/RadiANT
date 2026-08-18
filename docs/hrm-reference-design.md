@@ -1,6 +1,6 @@
 # The heart-rate node: a manufacturer reference design
 
-Checked by: `.github/workflows/build.yml`'s `build-node` job (every configuration
+Checked by: `.github/workflows/release.yml`'s `build-node` job (every configuration
 named in §2 and §4 is built there and its `.config` asserted symbol by symbol),
 `apps/hrm_ble/tests/sim_sched` (§6's first drift check), `apps/hrm_ble/sample.yaml`
 and `scripts/build_all.ps1`'s node rows. **§7's bench procedures are narrative** —

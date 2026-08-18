@@ -3,7 +3,7 @@
 # Twister coverage for the heart-rate node.
 #
 # THIS FILE PREDATES THE STRAP_* -> HRM_* RENAME, DELIBERATELY. Until it and
-# .github/workflows/build.yml's build-node job existed, apps/hrm_ble appeared in
+# .github/workflows/release.yml's build-node job existed, apps/hrm_ble appeared in
 # neither the workflow nor scripts/build_all.ps1, so nothing anywhere compiled
 # it: a rename that broke the build would have stayed invisible until somebody
 # next needed the board, turning a mechanical edit into a bench session.
@@ -29,7 +29,7 @@
 # WHO ACTUALLY RUNS THIS FILE. Not CI, today: the ztest job's twister
 # invocation walks `app/radiant/tests` and `app/apps/hrm_ble/tests`, and this
 # file sits beside them rather than under either. The configurations below are
-# built and asserted by the build-node job in .github/workflows/build.yml and by
+# built and asserted by the build-node job in .github/workflows/release.yml and by
 # scripts/build_all.ps1's node rows; this file is for
 # `twister -T apps/hrm_ble -p nrf54l15dk/nrf54l15/cpuapp` by hand, and for
 # stating the matrix in one place that the two of them can be read against.

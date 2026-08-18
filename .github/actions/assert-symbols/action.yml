@@ -1,0 +1,169 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Read an ELF back and assert what the LINKER kept.
+#
+# NOT A REPEAT OF THE .config CHECKS. Kconfig decides what is COMPILED; the
+# linker decides what is KEPT. Zephyr builds with -ffunction-sections
+# -fdata-sections and links with --gc-sections, so a translation unit that
+# nothing calls is discarded after a completely successful compile, and no
+# symbol in any .config changes when that happens.
+#
+# This has already cost this project once. docs/matter-flash-spike.md reported
+# radiant costing 596 bytes on top of a Matter template, which was read as a
+# headline "Matter and RadiANT fit" result; the 596 bytes were what was left
+# after --gc-sections threw the entire radiant archive away, because that
+# spike's application called none of it. The failure mode is consistent and it
+# always looks like a success.
+#
+# THE nm PATH IS AN INPUT, NOT A LOOKUP. The predecessor of this action called
+# a bare `arm-zephyr-eabi-nm`, which is not on PATH under
+# action-zephyr-setup, and reported the resulting `command not found` as
+# `_radiant_sink_list_start absent - the linker fragment was not added`. A
+# missing tool and a missing symbol are different faults with different fixes
+# and they now produce different errors. Resolve the tool with
+# ./.github/actions/arm-binutils and pass its `nm` output in.
+
+name: Assert ELF symbols
+description: >
+  Assert that named symbols survived --gc-sections, and optionally that the
+  bridge sink section was placed and holds exactly the expected set of sinks.
+
+inputs:
+  nm:
+    description: Path to arm-zephyr-eabi-nm (from the arm-binutils action).
+    required: true
+  build-dir:
+    description: Directory to search for zephyr.elf
+    required: false
+    default: build
+  elf:
+    description: Explicit path to the ELF. Overrides the search under build-dir.
+    required: false
+    default: ""
+  defined:
+    description: >
+      One symbol per line that must be DEFINED in the ELF. Whole-symbol
+      matching, not substring: `radiant_matter_convert` must not be satisfied by
+      `radiant_matter_convert_with`, and a check that can be satisfied by a
+      near-miss is not a check.
+    required: false
+    default: ""
+  sink-section:
+    description: >
+      'true' to assert that _radiant_sink_list_start/_end exist and span a
+      non-empty range. RADIANT_SINK_DEFINE() uses STRUCT_SECTION_ITERABLE, and
+      the section it emits into is placed only by radiant_bridge_sections.ld -
+      STRUCT_SECTION_FOREACH() over an unplaced section is not a compile error,
+      it silently iterates zero sinks.
+    required: false
+    default: "false"
+  sink-names:
+    description: >
+      One sink symbol per line. Asserted as an EXACT SET, not a subset: a subset
+      check would pass an image that still carried the MQTT sink beside the
+      Matter one, which is a different product from the one the caller claims to
+      build. Empty means "list them, assert nothing about which".
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        NM: ${{ inputs.nm }}
+        BUILD_DIR: ${{ inputs.build-dir }}
+        ELF_IN: ${{ inputs.elf }}
+        WANT_DEFINED: ${{ inputs.defined }}
+        SINK_SECTION: ${{ inputs.sink-section }}
+        WANT_SINKS: ${{ inputs.sink-names }}
+      run: |
+        set -euo pipefail
+
+        # Tool first, and as its own error. See the header.
+        if [[ -z "${NM}" || ! -x "${NM}" ]]; then
+          echo "::error::arm-zephyr-eabi-nm is not executable at '${NM}' - resolve it with the arm-binutils action before this step. This is a TOOLCHAIN fault, not a missing symbol."
+          exit 1
+        fi
+
+        elf="${ELF_IN}"
+        if [[ -z "${elf}" ]]; then
+          elf="$(find "${BUILD_DIR}" -name zephyr.elf -print -quit)"
+        fi
+        if [[ -z "${elf}" || ! -f "${elf}" ]]; then
+          echo "::error::no zephyr.elf under ${BUILD_DIR} - the build did not produce an image"
+          exit 1
+        fi
+        echo "reading ${elf}"
+
+        rc=0
+
+        if [[ -n "${WANT_DEFINED//[[:space:]]/}" ]]; then
+          # --defined-only, so an UNDEFINED reference to a discarded function
+          # cannot be mistaken for the function surviving.
+          "${NM}" --defined-only "${elf}" | awk '{print $NF}' | sort -u > elf.syms
+          while IFS= read -r sym; do
+            [[ -z "${sym}" ]] && continue
+            if grep -qxF "${sym}" elf.syms; then
+              echo "ok: ${sym}"
+            else
+              echo "::error::${sym} is not in ${elf} - --gc-sections discarded it, or it was never compiled in"
+              rc=1
+            fi
+          done <<< "${WANT_DEFINED}"
+        fi
+
+        if [[ "${SINK_SECTION}" == "true" ]]; then
+          echo "checking sink section symbols in ${elf}"
+          missing=0
+          for sym in _radiant_sink_list_start _radiant_sink_list_end; do
+            if ! "${NM}" "${elf}" | grep -q " ${sym}\$"; then
+              echo "::error::${sym} absent from ${elf} - the linker fragment (radiant_bridge_sections.ld) was not added"
+              missing=1
+            fi
+          done
+          if [[ "${missing}" -ne 0 ]]; then
+            exit 1
+          fi
+
+          start="$("${NM}" "${elf}" | awk '/ _radiant_sink_list_start$/ {print $1}')"
+          end="$("${NM}" "${elf}" | awk '/ _radiant_sink_list_end$/ {print $1}')"
+          span=$(( 0x${end} - 0x${start} ))
+          echo "sink list spans ${span} bytes"
+          if [[ "${span}" -le 0 ]]; then
+            echo "::error::sink list is empty - STRUCT_SECTION_FOREACH would iterate zero sinks"
+            exit 1
+          fi
+
+          # Entries are enumerated by ADDRESS RANGE rather than by dividing the
+          # span by sizeof(struct radiant_sink): that size is not visible from
+          # here, and a check that hardcoded it would start lying the day a
+          # field is added. Address filtering gives exactly the set
+          # STRUCT_SECTION_FOREACH() will walk.
+          #
+          # The list boundary symbols sit at the same addresses as the first
+          # entry and one-past-the-last, so they are filtered out by name
+          # rather than by address.
+          : > sinks.txt
+          while read -r addr _type name; do
+            case "${name}" in
+              _radiant_sink_list_start|_radiant_sink_list_end) continue ;;
+            esac
+            if (( 0x${addr} >= 0x${start} && 0x${addr} < 0x${end} )); then
+              echo "${name}" >> sinks.txt
+            fi
+          done < <("${NM}" --defined-only "${elf}")
+          sort -o sinks.txt sinks.txt
+          echo "bridge sinks linked into this image ($(wc -l < sinks.txt)):"
+          sed 's/^/  /' sinks.txt
+
+          if [[ -n "${WANT_SINKS//[[:space:]]/}" ]]; then
+            printf '%s\n' "${WANT_SINKS}" | sed '/^$/d' | sort > want.txt
+            if ! diff -u want.txt sinks.txt; then
+              echo "::error::the set of linked bridge sinks is not the one this row expects"
+              rc=1
+            fi
+          fi
+        fi
+
+        exit "${rc}"

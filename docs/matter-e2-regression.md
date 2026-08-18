@@ -35,7 +35,7 @@ and the difference is worth stating rather than resolving silently.
   `-DCONFIG_RADIANT_SWEEP_DEBUG=y` on the command line, which is a property of
   that bench sitting rather than of the images (the script's own header says
   so), so it is deliberately absent below.
-- **`.github/workflows/build.yml`'s `build-new-apps` job builds six.** The five
+- **`.github/workflows/release.yml`'s `build-new-apps` job builds six.** The five
   "coexistence arms" that `apps/dongle_thread/Kconfig:800` names by name —
   `gate.conf`, `thread.conf`, `thread_sed.conf`, `coex.conf`, `bridge.conf` —
   plus a sixth `plain` row with no `EXTRA_CONF_FILE` at all and

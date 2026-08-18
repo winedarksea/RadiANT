@@ -134,7 +134,7 @@ if(CONFIG_RADIANT_BRIDGE)
     "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_rules.c"
     # The endpoint-name formatter (radiant_naming.h). NOT a sink - it is a pure
     # function both sinks call - so it adds nothing to the "bridge: N sinks"
-    # count at boot and nothing to .github/workflows/build.yml's exact-set
+    # count at boot and nothing to .github/workflows/release.yml's exact-set
     # assert_sink_names diff. It is here rather than beside a sink because both
     # mqtt_sink.c and src/matter/ant/ant_bridge.cpp need it and each is behind
     # its own Kconfig symbol.

@@ -1,0 +1,369 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# THE FAST LANE: everything that is cheap, and nothing that builds firmware.
+#
+# This and release.yml were one 2,591-line `build.yml` that ran a 40-row
+# firmware matrix on every pull request and every push to master. Splitting it
+# is a deliberate trade, and the cost side is stated plainly in release.yml's
+# header: a board-specific build break is now invisible until a tag or a manual
+# run.
+#
+# What stays here is the correctness gate - the C unit tests, the Python host
+# tests, the generated-file and documentation checks. Every job in this file
+# runs WITHOUT ANY SECRET, and that property is load-bearing rather than
+# incidental: it is the documented reason the `ztest` job exists in the shape it
+# does. A fork, or a pull request from one, gets the whole of this lane.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+# Narrowed from build.yml's `contents: write`. This lane publishes nothing -
+# no artifacts, no releases - so it has no business being able to write.
+permissions:
+  contents: read
+
+# Supersede in-flight runs on the same ref. A pull request that gets three
+# pushes in a minute should not hold three copies of this lane; the only result
+# anyone reads is the last one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # tools/ant_pages.py, the sensor models in ant_sim.py and the analysis in
+  # ant_verify.py are all plain Python with no radio in them, and a byte-order
+  # or accumulator-wrap mistake in any of them otherwise costs two boards and a
+  # flash cycle to find.
+  #
+  # tools/test_check_test_counts.py is here too, and it is the regression test
+  # for the check that read a compiler error as 2,464 failed assertions. See its
+  # header.
+  host-tests:
+    name: host tests
+    runs-on: ubuntu-24.04
+    # Sub-minute in practice. The timeout is here because a hung job with no
+    # ceiling burns a runner for six hours and reports nothing.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # pyusb is pure Python and imports fine with no libusb present; nothing
+      # in these tests opens a device.
+      - run: pip install pyusb
+
+      # The pattern already covers what is coming: tools/test_ant_wire.py
+      # (golden frame vectors from Garmin's own Device0.txt) and
+      # tools/test_ant_golden.py (the .antser capture replays) match test_*.py,
+      # so both land in this job without touching this line. Those two are the
+      # third implementation that catches rule-level drift - the kind of bug a
+      # constant-for-constant cross-check would have passed straight through.
+      - run: python -m unittest discover -s tools -p "test_*.py" -v
+
+      # docs/profile-registry.md is a coordination point - the place third
+      # parties claim a device type by PR - and an unvalidated coordination
+      # point decays into a list of near-misses that all still pass CRC on the
+      # air. This catches a duplicate or out-of-range device type, overlapping
+      # page ranges, a gap in the RadiANT page partition, a dropped 0x20-0x2F
+      # security reservation, and a period that has drifted from
+      # tools/ant_pages.py. Standard library only and sub-second, so it lands
+      # in the job that already runs without a secret rather than earning one
+      # of its own.
+      - run: python scripts/check_profile_registry.py
+
+      # The licence the tree claims must be the licence the tree ships. This
+      # is not hypothetical: until 2026-08-14 LICENSE was the Mozilla Public
+      # License 2.0 - which ADR 0004 rejects *by name* - while NOTICE, that
+      # ADR, docs/third-party.md and every SPDX header said Apache-2.0.
+      # Nothing caught it for the life of the repository, because nothing was
+      # looking. ADR 0004's own `Checked by:` line asks for exactly this and
+      # notes it "should become a CI check when there is a job to hang it on";
+      # host-tests is that job. Standard library only, sub-second, same
+      # reasoning as the check above it.
+      - run: python scripts/check_license.py
+
+      # A document that points at a file which does not exist is worse than one
+      # that says nothing: it reads as verified. The apps/ reorganisation broke
+      # 17 markdown links at once and nothing noticed, because nothing was
+      # checking. Only the markdown-link check is fatal here - it is mechanical
+      # and has no false positives. The backtick-path heuristic runs in the
+      # same pass and prints warnings; promoting it with --strict-backticks
+      # needs its allowlist worked through first, and a red check that cannot
+      # be turned green teaches people to ignore red checks.
+      - run: python scripts/check_links.py
+
+      # The version the tree ships must be the version the tree claims. See
+      # scripts/version_int.py: both DFU packaging paths used to pass a
+      # hardcoded 1, which made the bootloader's downgrade check compare 1
+      # against 1 forever.
+      - run: python scripts/version_int.py
+
+  # Every C unit test in this project runs here and nowhere else. native_sim
+  # does not build on the development machine - Windows, no host C compiler,
+  # no QEMU - so `west twister` cannot run locally at all and local C
+  # verification is compile-check only. That makes this job the entire
+  # verification path for radiant, which is why it takes no secret: it has to
+  # run on forks and on every pull request, or a parallel core rewrite has no
+  # way to know whether it works.
+  ztest:
+    name: ztest (native_sim)
+    runs-on: ubuntu-24.04
+    # The long pole in this lane: radiant/tests alone has a 300 s scenario
+    # timeout, because test_sec_compat_attest.c asserts the epoch-recovery cost
+    # table by PERFORMING 65,536 CMAC operations rather than by describing it.
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      # Checked out to app/ rather than to the workspace root because
+      # `west init -l` needs the manifest repository to sit in a subdirectory of
+      # the topdir. Here the manifest repository is this one, since with no
+      # sdk-ant in the picture west.yml here is what selects Zephyr.
+      - name: Checkout application
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # native_sim is a 32-bit build and links against the host libc, so the
+      # multilib runtime is required even though nothing is cross-compiled.
+      # Staying 32-bit is deliberate: the firmware target is 32-bit ARM, and a
+      # 64-bit host build hides exactly the pointer-size and struct-layout
+      # assumptions these tests exist to catch.
+      - name: Install 32-bit host runtime
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib g++-multilib
+
+      # Same action, same shape as release.yml's gated build - app-path is the
+      # manifest repository and sdk-version is left unset so the fetched Zephyr
+      # tree chooses. No sdk-ant checkout and no token: radiant/tests is a
+      # standalone Zephyr application that never includes the dongle's
+      # CMakeLists.txt, so nothing on this path can reach an ANT header.
+      #
+      # The SDK version is not pinned here. app-path: app makes this
+      # repository's own west.yml the manifest, so the version is whatever that
+      # file's sdk-nrf revision imports - currently v3.4.0. That is
+      # deliberately *not* the same pin release.yml's build-sdk-ant resolves,
+      # and the two must stay decoupled: sdk-ant v2.1.0 cannot build on v3.4.0,
+      # while radiant has no sdk-ant in it and should track the current SDK.
+      # Pinning both to one version would couple the clean-room half of the
+      # project to the licensing constraints of the proprietary half, which is
+      # the coupling this whole plan exists to remove.
+      #
+      # KNOWN COST OF LEAVING IT UNPINNED, and it is not hypothetical: an
+      # upstream Zephyr or GCC bump can turn this job red on a change that did
+      # not cause it. It did, in August 2026 - a -Werror hygiene sweep that had
+      # nothing to do with the commit under test. The rationale for tracking the
+      # current SDK still holds; this note is here so the next person reads the
+      # trade rather than rediscovering it.
+      - name: Set up Zephyr workspace and toolchain
+        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: app
+          toolchains: arm-zephyr-eabi
+
+      # The Zephyr SDK is already cached by action-zephyr-setup itself and the
+      # west clone is network-bound rather than disk-bound, so compilation is
+      # the only thing left worth caching. Zephyr picks ccache up from PATH on
+      # its own and the runner image ships it, so this needs no build flag.
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-ztest-${{ github.sha }}
+          restore-keys: |
+            ccache-ztest-
+
+      - name: Run twister
+        env:
+          # native_sim builds with the host compiler, not with a Zephyr SDK
+          # cross toolchain. The setup action exports ZEPHYR_SDK_INSTALL_DIR,
+          # which would otherwise make `zephyr` the default variant, so say
+          # what is meant rather than relying on the board override.
+          ZEPHYR_TOOLCHAIN_VARIANT: host
+        run: |
+          set -euxo pipefail
+          # `west twister` is not a west command in every SDK version, so
+          # resolve the script through the manifest rather than assuming it.
+          zephyr_base="$(west list -f '{abspath}' zephyr)"
+          # twister's own dependencies are not in every version's base
+          # requirements set; installing them is cheap and removes a failure
+          # mode that depends on which Zephyr the manifest happened to pull.
+          if [[ -f "${zephyr_base}/scripts/requirements-run-test.txt" ]]; then
+            pip install -r "${zephyr_base}/scripts/requirements-run-test.txt"
+          fi
+          # --inline-logs because a failure here is read by whoever opened the
+          # pull request, and twister otherwise leaves the actual assertion
+          # text in a file inside twister-out/ that nobody downloads.
+          # THREE -T roots. app/radiant/tests is the module's own suites;
+          # app/apps/hrm_ble/tests is the heart-rate node's beat scheduler and
+          # app/apps/treadmill/tests is the treadmill's state module and unit
+          # conversions. Both application roots live with their applications
+          # because they test applications, and radiant/tests/CMakeLists.txt's
+          # glob deliberately does not reach out of the module.
+          # scripts/check_test_counts.py's floors are floors, so adding a root
+          # raises the observed counts without needing an edit there - but
+          # raise them in the same commit that adds coverage, or the floor
+          # stops describing the tree. min_scenarios is what notices if one of
+          # these arguments is ever dropped.
+          "${zephyr_base}/scripts/twister" \
+            -T app/radiant/tests \
+            -T app/apps/hrm_ble/tests \
+            -T app/apps/treadmill/tests \
+            -p native_sim \
+            --inline-logs \
+            -v
+
+      # twister exits 0 when it discovers fewer applications than it should -
+      # from its point of view there was simply less to do - so a broken or
+      # renamed testcase.yaml silently deletes a scenario and the job stays
+      # green. This turns the counts into an assertion and puts them on the run
+      # page. Runs even if twister failed, so the summary is there either way.
+      # Paths are relative to the workspace root, not to app/: this repository
+      # is checked out into app/ (see the checkout step), but twister runs from
+      # the root and writes twister-out/ beside it.
+      - name: Assert ztest counts
+        if: always()
+        run: python app/scripts/check_test_counts.py twister-out/twister.json
+
+      - name: Upload twister report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twister-report
+          if-no-files-found: ignore
+          path: |
+            twister-out/twister.json
+            twister-out/twister.xml
+
+  # src/ant_wire.h and tools/ant_wire.py are generated from
+  # protocol/ant_wire.yaml and committed, so that a clone builds without
+  # running the generator and the Python tools stay standalone-copyable.
+  # Committed generated files rot silently the first time someone edits the
+  # output instead of the input; --check regenerates and diffs, which is the
+  # only thing that makes "generated" true rather than aspirational.
+  generated-drift:
+    name: generated files up to date
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install pyyaml
+
+      - run: python scripts/gen_ant_wire.py --check
+
+  # Crude on purpose, and the crudeness is the feature. README.md reached 1168
+  # lines with its highest-value prose - the Gotchas - buried at line 521,
+  # because nothing but discipline was holding it back, and discipline is
+  # exactly what produced 1168 lines. A hard cap sends the next 200-line
+  # addition to docs/ by construction. The number is not sacred; raising it is
+  # then a deliberate, reviewable edit to this file rather than a drift nobody
+  # notices.
+  readme-cap:
+    name: README line cap
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check README.md is under the line cap
+        run: |
+          set -euo pipefail
+          lines="$(wc -l < README.md)"
+          echo "README.md: ${lines} lines (cap 450)"
+          test "${lines}" -lt 450
+
+  # The real proof radiant/ is importable, not merely designed to be: this
+  # extracts radiant/ ALONE via `git archive` into a temp directory - nothing
+  # else from this repository comes along - and builds tests/import_smoke
+  # against that isolated copy. A `../` reach-through re-introduced into the
+  # module (or into that test app) fails THIS job even on a machine where the
+  # full checkout sitting right there would have hidden it, which is exactly
+  # the failure mode a plain in-repo build cannot catch.
+  #
+  # native_sim rather than a real board: it needs no arm-zephyr-eabi
+  # toolchain, and the point here is source self-containment, not a radio -
+  # CONFIG_RADIANT_BACKEND_NULL, this application's only backend, needs
+  # neither. Same host-gcc override the ztest job uses, for the same reason
+  # (action-zephyr-setup makes zephyr the default toolchain variant, which
+  # native_sim is not).
+  import-smoke:
+    name: radiant/ imports standalone
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install 32-bit host runtime
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib g++-multilib
+
+      - name: Set up Zephyr workspace and toolchain
+        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: app
+          toolchains: arm-zephyr-eabi
+
+      # Extracted OUTSIDE the workspace's app/ checkout, on purpose - a path
+      # under app/ would still be "this repository", just with extra steps,
+      # and would not catch a reach-through into, say, app/apps/common.
+      - name: Extract radiant/ alone via git archive
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/radiant-isolated
+          git -C app archive --format=tar HEAD -- radiant |
+            tar -x -C /tmp/radiant-isolated --strip-components=1
+          test -f /tmp/radiant-isolated/zephyr/module.yml
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-import-smoke-${{ github.sha }}
+          restore-keys: |
+            ccache-import-smoke-
+
+      - name: Build tests/import_smoke against the isolated copy
+        env:
+          ZEPHYR_TOOLCHAIN_VARIANT: host
+        run: |
+          set -euxo pipefail
+          west build app/tests/import_smoke \
+            -b native_sim \
+            -d build \
+            -p always \
+            -- "-DRADIANT_MODULE_DIR=/tmp/radiant-isolated"
+

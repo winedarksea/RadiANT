@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.20.0)
 # RADIANT_MODULE_DIR pointing at a radiant/ checkout and NOTHING else from
 # this repository on any include path. CI proves it for real by extracting
 # radiant/ alone via `git archive` into a temp directory and pointing this
-# variable there - see .github/workflows/build.yml's import-smoke job. A
+# variable there - see .github/workflows/ci.yml's import-smoke job. A
 # reach-through this application or the module itself made past radiant/'s
 # own boundary would fail to configure or fail to link in that mode, where a
 # normal in-repo build (this file's own default below) would still succeed

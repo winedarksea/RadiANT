@@ -5,7 +5,7 @@
     Build every target and collect the release artifacts into dist\.
 
 .DESCRIPTION
-    Mirrors the matrix in .github\workflows\build.yml, including the checks it
+    Mirrors the matrix in .github\workflows\release.yml, including the checks it
     makes after each build, so a local dist\ matches what CI would publish
     rather than approximately resembling it.
 
@@ -292,7 +292,7 @@ if ($Backend -eq 'core') {
 #
 # apps/hrm_ble, the heart-rate node and manufacturer reference design. It is not
 # a dongle and it never was; until this list existed it appeared in neither this
-# script nor .github/workflows/build.yml, so NOTHING in the repository compiled
+# script nor .github/workflows/release.yml, so NOTHING in the repository compiled
 # it and a rename could break it invisibly.
 #
 # A SEPARATE LIST RATHER THAN MORE $targets ROWS, and the reason is that three

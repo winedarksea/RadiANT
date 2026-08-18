@@ -1,7 +1,7 @@
 # Testing
 
 Checked by: `python -m unittest discover -s tools -p "test_*.py"`, which is the
-`host-tests` job in [`.github/workflows/build.yml`](../.github/workflows/build.yml)
+`host-tests` job in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
 and covers the host-side claims below. Everything from Tier 2 down needs
 hardware and is run by hand; once `tools/ant_ab.py` and `tools/ab_gates.toml`
 exist, the Tier 2 thresholds live in that TOML and this table becomes its
@@ -119,8 +119,17 @@ Set repository variable `SDK_ANT_REPO` to build against a fork; it defaults to
 `ant-nrfconnect/sdk-ant`.
 
 No network-key secret is required: a dongle receives its ANT+ network key from
-the host over `MESG_NETWORK_KEY_ID`. `host-tests`, `ztest` and `build-core`
-need no secret at all, which is what makes the build green on a fork.
+the host over `MESG_NETWORK_KEY_ID`.
+
+**Which jobs run without a secret: every job in
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)** — `host-tests`,
+`ztest`, `generated-drift`, `readme-cap` and `import-smoke` — which is the
+whole fast lane, and is what makes a fork's pull request green. In
+[`release.yml`](../.github/workflows/release.yml), `build-core`,
+`build-new-apps`, `build-node`, `build-treadmill` and `zero-cost` also need
+none; only `build-sdk-ant` does, and it skips rather than failing red. But that
+lane runs only on a `v*` tag or a manual dispatch, so a fork sees none of it
+either way.
 
 ---
 

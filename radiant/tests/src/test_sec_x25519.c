@@ -5,7 +5,7 @@
  * under test would only prove self-consistency.
  *
  * Behind CONFIG_RADIANT_SEC_PAIRING_X25519 because the parent application
- * globs src/*.c and the symbol is default n.
+ * globs every `.c` under `src/` and the symbol is default n.
  */
 
 #include <zephyr/kernel.h>

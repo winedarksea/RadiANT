@@ -257,7 +257,7 @@ files in `boards/` are one `.conf` and one `.overlay` each.
 | `docs/` | Everything this file links to. Start at [`docs/README.md`](docs/README.md) |
 | `archive/` | Preserved artefacts, because they are perishable and the facts are what you need: driver provenance and our own `.inf`, spec pointers with hashes, the `ANT_DLL` export tables, golden wire captures, benchmark baselines, and the two bootloader `.uf2` readbacks in `archive/firmware/`. 10 MB budget, stated in [`docs/preservation.md`](docs/preservation.md) |
 | `dist/` | Build outputs. Gitignored — rebuild rather than trusting what is sitting there |
-| `.github/workflows/` | CI: the build matrix, the host tests, and the weekly link check |
+| `.github/` | CI in two lanes — `workflows/ci.yml` on every PR, `workflows/release.yml` on `v*` tags — plus the composite `actions/` they share |
 | `CMakeLists.txt` | Module wiring and the `ANT_RADIO` backend choice (`sdk_ant` \| `core` \| `stub`) |
 | `Kconfig` | `CONFIG_ANT_DONGLE_*` — transport choice, descriptors, optional features |
 | `prj.conf` | Base configuration. The USB work-queue stack sizes here are load-bearing; the header comment says why |
@@ -336,6 +336,11 @@ are in [Build targets](docs/backends.md#build-targets):
 
 ### Release checklist
 
+**Cutting the `v*` tag is what runs the firmware matrix and publishes the
+artifacts** — nothing on `master` builds them. Dispatch
+[`release.yml`](.github/workflows/release.yml) by hand and confirm it is green
+*before* tagging.
+
 Everything up to "UF2 loads" is done in one step by
 [`scripts/build_all.ps1`](scripts/build_all.ps1), which walks the same matrix
 as CI, makes the same two assertions after each build, and leaves the artifacts
@@ -366,9 +371,22 @@ artifact is older than the source it was built from.
 
 ### CI
 
-[`.github/workflows/build.yml`](.github/workflows/build.yml) runs the host
-tests — `tools/test_*.py` on `ubuntu-24.04`, the only job that runs on a fork —
-and a build matrix of seven. The first four are attached to `v*` tag releases:
+**Two lanes.** PRs and pushes to `master` run the cheap correctness gate; the
+firmware matrix and every published artifact run on `v*` tags and manual
+dispatch only — so **a board-specific build break is invisible until a tag or a
+manual run.** That is the trade taken.
+
+| Lane | File | Runs on | Jobs |
+|---|---|---|---|
+| Fast | [`ci.yml`](.github/workflows/ci.yml) | PR, push to `master`, dispatch | `host-tests`, `ztest`, `generated-drift`, `readme-cap`, `import-smoke` |
+| Release | [`release.yml`](.github/workflows/release.yml) | `v*` tags, dispatch | `build-core`, `build-new-apps`, `build-node`, `build-treadmill`, `zero-cost`, `build-sdk-ant` |
+| Links | [`linkcheck.yml`](.github/workflows/linkcheck.yml) | weekly, dispatch | external URLs, `archive/` budget |
+
+**No fast-lane job needs a secret**, so it runs in full on a fork — that is what
+`ztest` exists for, and it is the entire C verification path for `radiant/`
+(`native_sim` does not build on Windows).
+
+The release lane attaches four artifacts to a `v*` release:
 
 | Artifact | Board |
 |---|---|
@@ -377,26 +395,22 @@ and a build matrix of seven. The first four are attached to `v*` tag releases:
 | `ant_dongle_promicro.uf2` | Pro Micro nRF52840, with a 32.768 kHz crystal |
 | `ant_dongle_promicro_synth.uf2` | Pro Micro nRF52840, clock synthesized for boards without one |
 
-The other three are built to keep them compiling and are downloadable from the
-run, but not released — none of them is an image to hand anyone:
-`ant_dongle_feather_usbd.uf2` (the new USB stack, on hardware that can be
-tested against a real host), `ant_dongle_nrf54l15dk.hex` (ANT on nRF54L
-silicon, over a UART — the part has no USB) and `ant_dongle_nrf54lm20dk.hex`
-(the first nRF54 target that can be a dongle).
+Three more are built and downloadable from the run but not released:
+`ant_dongle_feather_usbd.uf2` (new USB stack), `ant_dongle_nrf54l15dk.hex`
+(nRF54L, UART — the part has no USB) and `ant_dongle_nrf54lm20dk.hex`. Each
+entry asserts, before packaging, that `CONFIG_FLASH_LOAD_OFFSET` and Partition
+Manager's `app` address agree — disagreement is silent at build time and
+produces an image that installs cleanly and then boots into nothing — and that
+the transport compiled is the one that entry expects.
 
-Each entry asserts two things before packaging. First, that
-`CONFIG_FLASH_LOAD_OFFSET` and Partition Manager's `app` address agree — that
-disagreement is silent at build time and produces an image that installs
-cleanly and then boots into nothing. Second, that the transport that got
-compiled is the one that entry expects, since the choice is defaulted from
-devicetree and a moved or renamed USB node would otherwise fall through to a
-different one and still build green.
-
+Those read-back assertions live in composite actions under
+[`.github/actions/`](.github/actions/) rather than copy-pasted into each job:
+they were copy-pasted, and a fix applied to one copy left five other assertions
+unsatisfiable for months. `assert-kconfig` now rejects that shape by name.
 sdk-ant is private, so `build-sdk-ant` needs one repository secret,
-`SDK_ANT_CHECKOUT_TOKEN`, and skips rather than failing red without it.
-`host-tests`, `ztest` and `build-core` need no secret at all, which is what
-makes the build green on a fork. Why it has to be a classic PAT, and why every
-cheaper option fails, is in [`docs/testing.md`](docs/testing.md#host-tests-in-ci).
+`SDK_ANT_CHECKOUT_TOKEN`, and skips rather than failing red without it — why it
+has to be a classic PAT is in
+[`docs/testing.md`](docs/testing.md#host-tests-in-ci).
 
 ---
 

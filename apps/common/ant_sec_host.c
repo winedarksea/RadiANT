@@ -88,16 +88,9 @@ static void put_u32(uint8_t *out, uint32_t v)
 	out[3] = (uint8_t)(v >> 24);
 }
 
-static uint32_t get_u32(const uint8_t *in)
-{
-	return (uint32_t)in[0] | ((uint32_t)in[1] << 8) |
-	       ((uint32_t)in[2] << 16) | ((uint32_t)in[3] << 24);
-}
-
-static uint64_t get_u64(const uint8_t *in)
-{
-	return (uint64_t)get_u32(in) | ((uint64_t)get_u32(&in[4]) << 32);
-}
+/* No get_u32()/get_u64() here on purpose: this file only ever encodes for the
+ * wire. Decoding 0xF3's epoch and us_into_epoch happens in
+ * ant_serial_bridge.c, where the frame still exists. */
 
 antr_err_t antr_sec_config(uint8_t channel, uint8_t switches, uint8_t w,
 			   uint8_t page_lo, uint8_t page_hi)

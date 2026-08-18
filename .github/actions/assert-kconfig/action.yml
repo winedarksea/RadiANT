@@ -1,0 +1,134 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Read a generated .config back and assert what is in it.
+#
+# WHY THIS IS AN ACTION AND NOT FOUR COPIES OF A SHELL LOOP. It was four copies
+# (five counting the PowerShell mirror in scripts/build_all.ps1), and the copies
+# drifted in exactly the way copies do: build.yml carried a comment recording
+# that a missing leading `# ` had been found and fixed on ONE assertion line
+# while five others kept the same defect, and the weakest copy - build-core's -
+# used an anchored regex instead of a fixed-string whole-line compare and had no
+# `absent:` support at all. One implementation is the only way that stops
+# recurring.
+#
+# ── THE THREE ASSERTION FORMS, WHICH ARE NOT INTERCHANGEABLE ─────────────────
+#
+#   CONFIG_X=y                 the symbol is on.
+#   # CONFIG_X is not set      dependencies met, symbol visible and off. This is
+#                              the LITERAL line Kconfig writes, leading '# ' and
+#                              all, and the matcher below is `grep -qxF` - a
+#                              whole-line fixed-string compare. A bare
+#                              `CONFIG_X is not set` can therefore never match.
+#   absent:CONFIG_X            Kconfig omitted the symbol entirely, which is
+#                              what an unmet `depends on` produces.
+#
+# Using the second where the third is correct passes on a tree where the symbol
+# has been renamed out of existence. Writing the second without its `# ` is
+# unsatisfiable, and that is now a distinct, named error rather than a confusing
+# mismatch report - see the guard below.
+#
+# A `#` line that is not a Kconfig negative is rationale and is skipped, so
+# assertions can carry their reasons. Getting that skip wrong in the other
+# direction would be the worst outcome available here: the row stays green and
+# the check is silently gone.
+
+name: Assert Kconfig symbols
+description: >
+  Assert a set of expectations against the .config a build actually produced.
+
+inputs:
+  build-dir:
+    description: Directory to search for the generated .config
+    required: false
+    default: build
+  path-filter:
+    description: >
+      `find -path` glob narrowing which .config to read (e.g. '*/hrm_ble/*').
+      If it matches nothing, the first .config under build-dir is used instead -
+      a sysbuild layout moves the file around and a hard failure here would be a
+      false negative about the symbols.
+    required: false
+    default: ""
+  app:
+    description: >
+      Application path (e.g. 'apps/dongle_thread'). Its BASENAME becomes the
+      path-filter when none is given, which is what separates the application's
+      own image from the mcuboot image sitting beside it under sysbuild. Taken
+      as an input rather than computed by the caller because `basename` is not
+      available in a GitHub expression, and inlining the full path would not
+      match a build directory.
+    required: false
+    default: ""
+  expect:
+    description: One expectation per line, in the three forms documented above.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        BUILD_DIR: ${{ inputs.build-dir }}
+        PATH_FILTER: ${{ inputs.path-filter }}
+        APP: ${{ inputs.app }}
+        WANT: ${{ inputs.expect }}
+      run: |
+        set -euo pipefail
+
+        if [[ -z "${PATH_FILTER}" && -n "${APP}" ]]; then
+          PATH_FILTER="*/$(basename "${APP}")/*"
+        fi
+
+        cfg=""
+        if [[ -n "${PATH_FILTER}" ]]; then
+          cfg="$(find "${BUILD_DIR}" -name .config -path "${PATH_FILTER}" -print -quit)"
+        fi
+        if [[ -z "${cfg}" ]]; then
+          cfg="$(find "${BUILD_DIR}" -name .config -print -quit)"
+        fi
+        if [[ -z "${cfg}" ]]; then
+          echo "::error::no .config under ${BUILD_DIR} - the build did not run, or it wrote somewhere else"
+          exit 1
+        fi
+        echo "reading ${cfg}"
+
+        rc=0
+        while IFS= read -r want; do
+          [[ -z "${want}" ]] && continue
+
+          # Rationale, not an assertion - EXCEPT Kconfig's own negative form.
+          if [[ "${want}" =~ ^[[:space:]]*# ]] &&
+             ! [[ "${want}" =~ ^[[:space:]]*#[[:space:]]+CONFIG_ ]]; then
+            continue
+          fi
+
+          # THE GUARD THAT KILLS THE BUG CLASS. An expectation of the shape
+          # `CONFIG_X is not set` with no leading '# ' cannot match any line
+          # Kconfig ever writes, so it is not a weak assertion - it is an
+          # assertion that can only ever fail. Five of them were live in
+          # build.yml at once. Name it for what it is rather than reporting a
+          # mismatch that reads like a real configuration problem.
+          if [[ "${want}" =~ ^[[:space:]]*CONFIG_[A-Za-z0-9_]+[[:space:]]+is[[:space:]]+not[[:space:]]+set[[:space:]]*$ ]]; then
+            echo "::error::malformed expectation: Kconfig writes '# ${want}', with a leading '# '. As written this assertion can never match."
+            rc=1
+            continue
+          fi
+
+          if [[ "${want}" == absent:* ]]; then
+            sym="${want#absent:}"
+            if grep -qE "^(# )?${sym}[= ]" "${cfg}"; then
+              echo "::error::expected ${sym} to be absent from ${cfg}"
+              echo "  actual: $(grep -E "^(# )?${sym}[= ]" "${cfg}")"
+              rc=1
+            else
+              echo "ok: ${sym} absent"
+            fi
+          elif grep -qxF "${want}" "${cfg}"; then
+            echo "ok: ${want}"
+          else
+            echo "::error::expected '${want}' in ${cfg}"
+            echo "  actual: $(grep -E "^(# )?${want%%[= ]*}[= ]" "${cfg}" || echo '(symbol absent entirely)')"
+            rc=1
+          fi
+        done <<< "${WANT}"
+        exit "${rc}"
