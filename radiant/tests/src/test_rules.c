@@ -180,6 +180,37 @@ static void post_fe_state(uint32_t source, int64_t state, uint64_t t_us,
 	radiant_bridge_drain();
 }
 
+/*
+ * THE SECOND ENUM_GENERIC SERIES ON THE SAME SOURCE, and the reason
+ * radiant_rules.c gates on field_id and not only on field_type.
+ *
+ * radiant_power_adapter.c posts the FE-C EQUIPMENT TYPE (Table 8-8: treadmill
+ * 19, rower 22, indoor bike 25) on field_id 0x0D, as ENUM_GENERIC, from the
+ * same page 16 as the state above - it is what radiant_naming.c turns into
+ * "Treadmill 51234 In Use". Every one of those codes is != FEC_STATE_IN_USE,
+ * so a rule engine that routes on the TYPE alone reads each one as "not in
+ * use" and fights the real state sample over one shared slot, four times a
+ * second.
+ */
+static void post_fe_type(uint32_t source, int64_t type, uint64_t t_us)
+{
+	struct radiant_sample s = {
+		.source = source,
+		.field_id = 0x0Du,
+		.field_type = RADIANT_FIELD_ENUM_GENERIC,
+		.flags = 0u,
+		.exp = 0,
+		.raw = type,
+		.t_us = t_us,
+	};
+
+	radiant_bridge_post(&s);
+	radiant_bridge_drain();
+}
+
+#define FEC_TYPE_TREADMILL 19
+#define FEC_TYPE_ROWER     22
+
 #define US_PER_S ((uint64_t)1000000u)
 
 ZTEST(radiant_rules, test_activity_needs_a_second_sample)
@@ -804,6 +835,63 @@ ZTEST(radiant_rules, test_the_derived_output_does_not_re_enter_the_rule)
 		      RADIANT_SAMPLE_DERIVED);
 	zassert_equal(count_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE), 1u,
 		      NULL);
+}
+
+ZTEST(radiant_rules, test_the_equipment_type_is_not_an_equipment_state)
+{
+	uint64_t t = 1u * US_PER_S;
+
+	/* Page 16 as it actually arrives: the type first, then the state, in
+	 * that order, exactly as radiant_power_adapter.c's
+	 * decode_fec_general() posts them. */
+	post_fe_type(0u, FEC_TYPE_TREADMILL, t);
+	post_fe_state(0u, FEC_STATE_IN_USE, t, 0u);
+
+	zassert_equal(last_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE)->raw, 1, NULL);
+
+	/*
+	 * NOW THE TYPE ALONE, PAST THE CLEAR DWELL. Nothing here says anything
+	 * about the state, so nothing here may change the verdict: the rules
+	 * are sample-driven and have no clock of their own, so with the
+	 * field_id gate the occupancy output simply holds at 1 until the next
+	 * FE-state sample or a STALE flag says otherwise. Liveness is what
+	 * clears a machine that has gone off the air; another field is not.
+	 *
+	 * WITHOUT THE GATE THIS FAILS AND IT IS THE FAILURE THAT MATTERS: every
+	 * type code (19 treadmill, 22 rower, 25 indoor bike) is != IN_USE, so
+	 * each one drives eval_equipment() as "not in use", the 5 s clear dwell
+	 * expires on them, and the endpoint reports the machine free while
+	 * someone is still on it. Confirmed by reverting the gate and
+	 * re-running: this case drops to 0 with a second record.
+	 *
+	 * The interleaved arrangement is deliberately NOT the assertion here.
+	 * Alternating type and state at one timestamp hides the defect - each
+	 * type sample re-arms the clear edge and the state sample immediately
+	 * re-asserts - so a test written that way passes either way and proves
+	 * nothing.
+	 */
+	for (uint32_t i = 0; i < 40u; i++) { /* 10 s, twice EQUIPMENT_CLEAR_US */
+		t += 250000u;
+		post_fe_type(0u, FEC_TYPE_TREADMILL, t);
+	}
+
+	zassert_equal(count_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE), 1u,
+		      "the equipment type must not reach the occupancy rule");
+	zassert_equal(last_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE)->raw, 1,
+		      "a machine in use must stay in use until its own state says otherwise");
+}
+
+ZTEST(radiant_rules, test_an_equipment_type_alone_asserts_nothing)
+{
+	/* A type sample must not be able to CREATE an occupancy verdict either.
+	 * 22 (rower) is not 3 (IN_USE) but nothing here should be comparing
+	 * them at all - and a rule that never runs publishes nothing, which is
+	 * what distinguishes "ignored" from "evaluated and happened to say
+	 * false". */
+	post_fe_type(0u, FEC_TYPE_ROWER, 1u * US_PER_S);
+	post_fe_type(0u, FEC_TYPE_TREADMILL, 2u * US_PER_S);
+
+	zassert_equal(cap_n, 0u, "no rule output at all from a type sample");
 }
 
 static void *rules_setup(void)

@@ -352,7 +352,7 @@ void self_channels_open_pairing_window(void)
 		CONFIG_ANT_DONGLE_PAIRING_WINDOW_S);
 }
 
-/* ── The button ────────────────────────────────────────────────────────────── */
+/* ?????? The button ?????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????? */
 
 #if DT_NODE_HAS_STATUS(DT_ALIAS(sw0), okay)
 #include <zephyr/drivers/gpio.h>
@@ -415,7 +415,7 @@ static void button_init(void)
 }
 #endif
 
-/* ── The channels ──────────────────────────────────────────────────────────── */
+/* ?????? The channels ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????? */
 
 #ifdef CONFIG_ANT_DONGLE_PROFILES_EXTRA
 
@@ -617,21 +617,72 @@ static int open_one(uint8_t ch)
  *   sensor IS, not what was being looked for. That was already true and stays
  *   true; with a table it merely stops being trivially true.
  */
-static void try_bind(uint8_t ch)
+/* Returns false if the channel is holding a device another channel already
+ * receives, and must be rotated away by the caller; true in every other case
+ * (bound, or nothing to do yet). */
+static bool try_bind(uint8_t ch)
 {
 	uint16_t devnum = 0u;
 	uint8_t  devtype = 0u;
 	uint8_t  trans = 0u;
 	uint16_t period = 0u;
 	uint32_t source = RADIANT_BINDING_NONE;
+	uint32_t existing;
 	int      rc;
 
 	if (antr_channel_id_get(ch, &devnum, &devtype, &trans) != 0u) {
-		return;
+		return true;
 	}
 	if (devnum == 0u) {
 		/* Tracking but the wildcard has not resolved yet. */
-		return;
+		return true;
+	}
+
+	/*
+	 * ONE DEVICE, ONE CHANNEL. Measured on this bench: the Wahoo #52233 was
+	 * acquired on channel 6, and 47 s later a rotating channel 7 acquired
+	 * THE SAME DEVICE and bound it again as the same source 0.
+	 *
+	 * radiant_binding_bind() de-duplicates - it returns the existing source
+	 * rather than a second row - so the binding table stayed correct and the
+	 * damage was entirely on this side of it:
+	 *
+	 *   - a self channel is a scarce resource (CONFIG_ANT_DONGLE_SELF_CHANNELS
+	 *     of them), and one spent on a device already being received is one
+	 *     that never searches again. Directly observed: a real FE-C master on
+	 *     air throughout was never acquired, because the channel that would
+	 *     have found it was holding a second copy of the trainer;
+	 *   - ant_bridge_channel_bind() RESETS EVERY ADAPTER for the source, by
+	 *     design, so the re-bind silently zeroed the trainer's energy integral
+	 *     and event-count accumulators mid-session;
+	 *   - radiant_bridge_binding_changed() fires again, which re-arms every
+	 *     sink's per-binding state (mqtt_sink.c's announce bitmaps among them).
+	 *
+	 * DECLINING IS NOT ENOUGH ON ITS OWN, and the first version of this
+	 * guard proved it on the bench: a channel that declines is still
+	 * TRACKING that master, and a tracking channel never reaches the search
+	 * timeout that drives rotation - so it sat on the duplicate for the
+	 * whole run, logging this line once a second and searching for nothing.
+	 * The caller therefore rotates it away; false is that signal.
+	 */
+	existing = radiant_binding_find(devnum, devtype, trans);
+	if (existing != RADIANT_BINDING_NONE) {
+		uint8_t i;
+
+		for (i = 0u; i < SELF_N; i++) {
+			uint8_t other = self_channel_index(i);
+
+			if (other == ch) {
+				continue;
+			}
+			if (ant_bridge_channel_source(other) == existing) {
+				LOG_INF("channel %u is tracking device %u, which "
+					"channel %u is already receiving - not "
+					"binding it twice, rotating instead",
+					ch, devnum, other);
+				return false;
+			}
+		}
 	}
 
 	if (!window_open()) {
@@ -642,14 +693,14 @@ static void try_bind(uint8_t ch)
 		 * on the air. */
 		LOG_DBG("channel %u tracking device %u but no pairing window is "
 			"open: not binding", ch, devnum);
-		return;
+		return true;
 	}
 
 	rc = radiant_binding_bind(devnum, devtype, trans, NULL, &source);
 	if (rc != 0) {
 		LOG_ERR("binding table full: device %u not bound (%d)", devnum,
 			rc);
-		return;
+		return true;
 	}
 
 	/*
@@ -758,8 +809,25 @@ static void self_thread_fn(void *a, void *b, void *c)
 			switch (status & ANTW_STATUS_CHANNEL_STATE_MASK) {
 			case ANTW_STATUS_TRACKING_CHANNEL:
 				if (ant_bridge_channel_source(ch) ==
-				    RADIANT_BINDING_NONE) {
-					try_bind(ch);
+				    RADIANT_BINDING_NONE && !try_bind(ch)) {
+					/*
+					 * Holding a master another channel is
+					 * already receiving. A TRACKING channel
+					 * never reaches the search timeout that
+					 * drives the rotation below, so it would
+					 * sit here forever; push it on by hand.
+					 */
+#ifdef CONFIG_ANT_DONGLE_PROFILES_EXTRA
+					rotate_and_reopen(i);
+#else
+					/* One device type to search for, so
+					 * there is no next row - but the latch
+					 * still has to be broken, and reopening
+					 * on the same profile does that. */
+					(void)antr_channel_close(ch);
+					(void)antr_channel_unassign(ch);
+					(void)open_one(ch);
+#endif
 				}
 				break;
 			case ANTW_STATUS_ASSIGNED_CHANNEL:

@@ -113,6 +113,26 @@ extern "C" {
 #define RADIANT_SAMPLE_ACCUMULATING (1u << 0) /* raw is a monotone counter, not an instant */
 #define RADIANT_SAMPLE_DERIVED      (1u << 1) /* produced by a rule (section 6), not decoded */
 #define RADIANT_SAMPLE_STALE        (1u << 2) /* liveness heartbeat missed 3x its interval */
+/*
+ * ROTATED: this field is not on every message of its channel - it rides a page
+ * the master interleaves, so its own repeat interval is the page rotation's,
+ * not the channel period's, and NOTHING may compute an expiry for it from the
+ * period alone.
+ *
+ * Set by the decoder, which is the only layer that knows which page a value
+ * came off; it is a static property of the profile, not something learned from
+ * arrivals (radiant_liveness.h explains at length why learning it is refused).
+ * A heart-rate strap's bpm is on every main page and is NOT rotated; an FE-C
+ * trainer's speed (page 16), energy (26) and equipment type (54) all are, and
+ * so is every common page, which ANT+ interleaves as rarely as one message in
+ * 121 (docs/device-profiles.md).
+ *
+ * The consumer is a sink publishing a per-entity timeout: mqtt_sink.c omits
+ * expire_after on these for the same reason it omits it on DERIVED. Liveness
+ * itself does not read the flag - it asks whether the SOURCE is quiet, which
+ * a rotation cannot fake.
+ */
+#define RADIANT_SAMPLE_ROTATED      (1u << 3)
 
 /*
  * The record (docs/radiant-bridge.md section 3). t_us is the decode-time

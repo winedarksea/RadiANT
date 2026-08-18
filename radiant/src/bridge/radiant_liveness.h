@@ -20,8 +20,37 @@
  * WHAT IT IS. An ordinary sink - the precedent is radiant_rules.c, which
  * registers with RADIANT_SINK_DEFINE() and re-enters the bus with its own
  * records. This one remembers the last sample per (source, field_id), and a
- * 1 Hz caller re-posts that sample with STALE set, once, when it has gone
- * quiet for longer than 3x the binding's channel period.
+ * 1 Hz caller re-posts those samples with STALE set, once, when the SOURCE has
+ * gone quiet for longer than 3x the binding's channel period.
+ *
+ * THE QUIET IS MEASURED PER SOURCE, NOT PER FIELD, and that is a correction
+ * made against a measurement rather than an original choice.
+ *
+ * Per field, the rule reads "3x the channel period" as if every field were
+ * carried by every message. That is true of radiant_hr_adapter.c - bytes 4..7
+ * are on every HR main page - and it is false of every profile that rotates
+ * pages. An FE-C trainer carries speed and FE state on page 16, power and
+ * event count on page 25, accumulated energy on 26 and equipment type on 54,
+ * so each individual field arrives roughly once a second on a 4 Hz channel
+ * while the threshold is 0.74 s. Measured on a real Wahoo #52233: 165 STALE
+ * records in 150 s, every one of them from the trainer's two sources and not
+ * one from the heart-rate strap on the same bench, each field expiring and
+ * being re-armed by its own next page forever. Downstream that is not noise:
+ * mqtt_sink.c drives the per-binding availability topic from STALE, so a
+ * healthy trainer flapped its whole device offline and back once a second.
+ *
+ * A source is quiet when NOTHING from it has arrived for 3x its period. That
+ * is the question the module exists to answer ("has this sensor gone away"),
+ * it is unchanged for a strap whose fields all ride every message, and it
+ * cannot be confused by a page rotation because a rotation is still traffic.
+ * When the source does go quiet EVERY tracked field of it is posted stale, so
+ * a sink still learns per field and nothing downstream had to change.
+ *
+ * What this gives up, deliberately: a device that keeps transmitting but drops
+ * one page out of its rotation is no longer reported. That is not the failure
+ * the header's opening paragraph is about - the reading is still being
+ * refreshed by a live device - and detecting it needs a per-field expected
+ * cadence, which is exactly the estimator the next paragraph rules out.
  *
  * THE INTERVAL DOES NOT COME FROM OBSERVED ARRIVALS, and that is a decision
  * rather than an omission. An estimator fed by arrivals learns from an
@@ -51,15 +80,24 @@ extern "C" {
 #endif
 
 /*
- * Fields tracked per source. Four, sized on the widest adapter in the tree:
- * radiant_hr_adapter.c publishes three field_ids (computed bpm, beat count,
- * beat time) and radiant_rd_adapter.c publishes fewer. Four is that worst
- * case plus one, not a round number - and a fifth distinct field_id on one
- * source is refused and counted (radiant_liveness_stats::no_slot) rather than
- * evicting a tracked one, because evicting is how a field silently stops
- * being watched.
+ * Fields tracked per source. Sized on the widest adapter in the tree, which is
+ * NOT the one this constant was originally sized on.
+ *
+ * It said four, "radiant_hr_adapter.c publishes three field_ids and
+ * radiant_rd_adapter.c publishes fewer". radiant_power_adapter.c publishes
+ * SIX on one FE-C source - instantaneous power, event count, accumulated
+ * energy, equipment type, FE state and speed - and has done since it landed.
+ * Measured on a real Wahoo trainer: no_slot reached 64 in 150 s while tracked
+ * sat at 7, so two of that trainer's six fields were not being watched at all
+ * and would not have been marked stale if the trainer had been unplugged.
+ *
+ * Eight is that real worst case plus two. A ninth distinct field_id on one
+ * source is still refused and counted (radiant_liveness_stats::no_slot) rather
+ * than evicting a tracked one, because evicting is how a field silently stops
+ * being watched - and no_slot is now printed by the caller every sweep, which
+ * is what would have caught this the first time.
  */
-#define RADIANT_LIVENESS_FIELDS_PER_SOURCE 4u
+#define RADIANT_LIVENESS_FIELDS_PER_SOURCE 8u
 
 struct radiant_liveness_stats {
 	uint32_t tracked;      /* entries currently holding a last sample */

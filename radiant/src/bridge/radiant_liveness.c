@@ -28,7 +28,6 @@ static uint64_t stale_after_us(uint16_t period_32k)
 
 struct entry {
 	bool     used;
-	bool     stale;   /* STALE already posted for this quiet period */
 	uint8_t  field_id;
 	uint64_t last_us; /* t_us of the last fresh sample seen */
 
@@ -38,13 +37,27 @@ struct entry {
 	struct radiant_sample last;
 };
 
+/*
+ * The quiet is a property of the SOURCE (see the header). `last_us` is the
+ * most recent arrival from ANY field of it, and `stale` latches the one STALE
+ * burst per quiet period - the same edge the per-field flag used to hold, one
+ * level up, which is where the rotation stops confusing it.
+ */
+struct source_state {
+	bool     stale;
+	bool     seen;    /* at least one arrival, so last_us means something */
+	uint64_t last_us;
+};
+
 static struct entry table[RADIANT_BINDING_MAX][RADIANT_LIVENESS_FIELDS_PER_SOURCE];
+static struct source_state sources[RADIANT_BINDING_MAX];
 
 static struct radiant_liveness_stats stats;
 
 void radiant_liveness_reset(void)
 {
 	memset(table, 0, sizeof(table));
+	memset(sources, 0, sizeof(sources));
 	memset(&stats, 0, sizeof(stats));
 }
 
@@ -111,7 +124,12 @@ static void liveness_publish(const struct radiant_sample *s)
 
 	slot->last = *s;
 	slot->last_us = s->t_us;
-	slot->stale = false;
+
+	/* Any arrival re-arms the whole source, including fields that were not
+	 * on this page. That is the point: the device is demonstrably there. */
+	sources[s->source].last_us = s->t_us;
+	sources[s->source].seen = true;
+	sources[s->source].stale = false;
 }
 
 uint32_t radiant_liveness_tick(uint64_t now_us)
@@ -134,6 +152,7 @@ uint32_t radiant_liveness_tick(uint64_t now_us)
 				}
 			}
 			memset(table[src], 0, sizeof(table[src]));
+			memset(&sources[src], 0, sizeof(sources[src]));
 			continue;
 		}
 
@@ -150,20 +169,28 @@ uint32_t radiant_liveness_tick(uint64_t now_us)
 
 		threshold_us = stale_after_us(b->period);
 
+		if (!sources[src].seen || sources[src].stale) {
+			continue;
+		}
+		/* `now_us <= last_us` is not an error: a tick can land in the
+		 * same microsecond as an arrival, and a caller whose clock has
+		 * not advanced is simply early. Treat it as "not yet", never as
+		 * an enormous elapsed time from an unsigned wrap. */
+		if (now_us <= sources[src].last_us ||
+		    (now_us - sources[src].last_us) <= threshold_us) {
+			continue;
+		}
+
+		/* Latched before the loop, not inside it: the burst below is one
+		 * event about one source, and a source with no tracked fields
+		 * left must still not be re-examined every sweep. */
+		sources[src].stale = true;
+
 		for (i = 0u; i < RADIANT_LIVENESS_FIELDS_PER_SOURCE; i++) {
 			struct entry *e = &table[src][i];
 			struct radiant_sample out;
 
-			if (!e->used || e->stale) {
-				continue;
-			}
-			/* `now_us <= last_us` is not an error: a tick can land
-			 * in the same microsecond as an arrival, and a caller
-			 * whose clock has not advanced is simply early. Treat
-			 * it as "not yet", never as an enormous elapsed time
-			 * from an unsigned wrap. */
-			if (now_us <= e->last_us ||
-			    (now_us - e->last_us) <= threshold_us) {
+			if (!e->used) {
 				continue;
 			}
 
@@ -177,7 +204,6 @@ uint32_t radiant_liveness_tick(uint64_t now_us)
 			 * believed. */
 			out.t_us = now_us;
 
-			e->stale = true;
 			stats.stale_posted++;
 			posted++;
 			radiant_bridge_post(&out);

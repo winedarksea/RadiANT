@@ -162,7 +162,38 @@ extern "C" {
 #define RADIANT_POWER_FIELD_FEC_SPEED 0x09u /* 0x16 speed, instantaneous, exp -3 */
 
 /*
- * RESERVED, 0x0A-0x0F. FE-C page 16 carries three more quantities that this
+ * THE EQUIPMENT TYPE, AND IT IS AN IDENTITY RATHER THAN A MEASUREMENT.
+ *
+ * Table 8-8 byte 1: treadmill / elliptical / rower / climber / ski erg /
+ * indoor bike. profile_fec.c has masked it into
+ * struct profile_fec_general::equipment_type since the decoder landed and
+ * nothing read it, so every FE-C endpoint a sink created was named for the
+ * generic profile - or, in the Matter bridge, for its hex UniqueID.
+ *
+ * It is posted on the bus rather than kept anywhere else because it is LEARNED
+ * FROM TRAFFIC: there is no such thing as reading it off the channel at bind
+ * time, which is the distinction radiant_binding.h draws for `set_period`, so
+ * it cannot be a struct radiant_binding member. radiant_naming.c is the
+ * consumer; each sink caches the one byte itself.
+ *
+ * IT IS POSTED FIRST, ahead of the state and the speed in the same page, so
+ * that a sink creating an endpoint on the first page 16 already has the
+ * subtype and names it correctly the first time. The late-rename path in
+ * ant_bridge.cpp is then a fallback for the boot that adopts a stored
+ * endpoint, rather than the normal path.
+ *
+ * THE RULE ENGINE MUST NOT SEE IT AS AN FE STATE. Both samples are
+ * RADIANT_FIELD_ENUM_GENERIC on one source, and radiant_rules.c used to route
+ * every ENUM_GENERIC sample into eval_equipment() - so codes 19/22/25 would
+ * have read as "not IN_USE" and fought the real state sample over one slot,
+ * the same class of defect the ACTIVITY_SLOT_WORN/ACTIVE split exists to
+ * prevent. That file now discriminates on field_id as well as field_type; see
+ * its rules_want().
+ */
+#define RADIANT_POWER_FIELD_FEC_TYPE 0x0Du /* 0x40 enum, instantaneous, PROFILE_FEC_TYPE_* */
+
+/*
+ * RESERVED, 0x0A-0x0C and 0x0E-0x0F. FE-C page 16 carries three more quantities that this
  * adapter decodes and does not post. The first two are held back by a
  * CONSUMER-side constraint, which is worth stating precisely because it is not
  * obvious from this file:
@@ -182,7 +213,7 @@ extern "C" {
  *        radiant_rules.c's zone rules, and a trainer relaying a strap's bpm
  *        would produce a second, duplicate pair of at-rest/zone-2 entities on
  *        the trainer's binding. The strap's own binding already publishes it.
- *   0x0D-0x0F unallocated.
+ *   0x0E-0x0F unallocated. (0x0D is the equipment type, posted - just above.)
  */
 #define RADIANT_POWER_FIELD_FEC_ELAPSED  0x0Au /* RESERVED */
 #define RADIANT_POWER_FIELD_FEC_DISTANCE 0x0Bu /* RESERVED */
@@ -227,7 +258,8 @@ uint32_t radiant_power_adapter_decode(struct radiant_power_adapter *a,
  * The dispatcher owns getting this right, which is why the two entry points
  * are named after the device type rather than the page.
  *
- * Returns samples posted: up to 2 for page 0x10 (state, speed), 1 or 3 for
+ * Returns samples posted: up to 3 for page 0x10 (equipment type, state,
+ * speed - the speed is absent when the equipment marks it invalid), 1 or 3 for
  * page 0x19 on the same first-call rule as above, and 0 when page 0x19 marks
  * its power fields invalid.
  */

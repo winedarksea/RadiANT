@@ -61,7 +61,8 @@ static void matter_glue_publish(const struct radiant_sample *s)
 		 * binding, no endpoint and no reachability. */
 		return;
 	}
-	ant_matter_note_sample(s->source, s->flags);
+	ant_matter_note_sample(s->source, s->flags, s->field_type, s->field_id,
+			       s->raw);
 }
 
 static void matter_glue_binding_changed(uint32_t source, const struct radiant_binding *b)

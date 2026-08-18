@@ -202,6 +202,10 @@ target_sources(app PRIVATE
   # every sink in this application, this one included.
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_binding.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_rules.c"
+  # The endpoint-name formatter. A pure function over three static tables and
+  # NOT a sink, which is why it needs no registration anywhere: both sinks that
+  # want a name call it directly. src/test_naming.c is its suite.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_naming.c"
   # The liveness table: the only producer of RADIANT_SAMPLE_STALE, which
   # radiant_rules.c has honoured since P6 with nothing in the tree setting it.
   # Another ordinary RADIANT_SINK_DEFINE() sink, so like radiant_rules.c it

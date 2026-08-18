@@ -113,6 +113,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/atomic.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 
@@ -123,6 +124,7 @@
 #include "radiant_binding.h"
 #include "radiant_bridge.h"
 #include "radiant_matter.h"
+#include "radiant_naming.h"
 
 LOG_MODULE_DECLARE(app, CONFIG_CHIP_APP_LOG_LEVEL);
 
@@ -173,6 +175,10 @@ struct Row {
 	uint16_t radiantEndpoint; /* radiant_matter.c's opaque key */
 	uint32_t source;
 	uint8_t fieldId;
+	/* The section 7 vocabulary type, carried straight from
+	 * struct radiant_matter_endpoint. It used to be re-derived from
+	 * deviceType inside ComposeLabel(); see that function. */
+	uint8_t fieldType;
 	uint16_t deviceType;
 
 	/* Filled in on the CHIP thread when the device is created or adopted
@@ -182,6 +188,13 @@ struct Row {
 
 	bool needCreate;
 	bool needRemove;
+
+	/* Which BridgeStorageManager slot this endpoint was stored in, so a
+	 * renamed endpoint can be re-persisted rather than reverting to its
+	 * boot-time name at the next power cycle. Only meaningful once the
+	 * endpoint has been created or adopted. */
+	bool storageIndexValid;
+	uint8_t storageIndex;
 
 	AttrCell attrs[kMaxAttrsPerEndpoint];
 };
@@ -194,6 +207,16 @@ struct SourceState {
 	char label[16];
 	bool reachable;
 	bool reachableDirty;
+
+	/* The three naming inputs. devtype/devnum come from the binding;
+	 * `subtype` is the FE-C equipment type and is LEARNED FROM TRAFFIC -
+	 * see radiant_naming.h - so it is 0 until a page 16 arrives and may
+	 * change afterwards, which is what labelDirty is for. One byte per
+	 * source; no string is cached anywhere. */
+	uint8_t devtype;
+	uint16_t devnum;
+	uint8_t subtype;
+	bool labelDirty;
 };
 
 SourceState sSources[RADIANT_BINDING_MAX];
@@ -260,6 +283,61 @@ void FormatUniqueID(char *out, size_t len, uint64_t key, uint8_t fieldId)
 		 static_cast<unsigned int>(key & 0xFFFFFFFFu), fieldId);
 }
 
+/*
+ * THE NODE LABEL, and NodeLabel is the only carrier there is.
+ *
+ * MatterBridgedDevice serves exactly Reachable, UniqueID, NodeLabel,
+ * ClusterRevision and FeatureMap - VendorName, ProductName, ProductLabel and
+ * SerialNumber are not in its attribute list, and adding them means editing
+ * vendored code that src/matter/README.md promises is byte-identical to
+ * upstream. So the whole of an endpoint's user-visible identity is one string
+ * of at most kNodeLabelSize bytes.
+ *
+ * radiant_naming.c composes it; this function is only the snapshot. It takes
+ * the shadow lock, copies the six scalars out and releases it BEFORE
+ * formatting, so no lock is held across snprintf - and it is callable from
+ * either thread for the same reason.
+ *
+ * `out` must be RADIANT_NAMING_MAX bytes. That is not advice: SetNodeLabel()
+ * memcpy()s the length it is given into a kNodeLabelSize buffer with no check
+ * of its own, and it is vendored, so the bound has to come from here.
+ */
+void ComposeLabel(char out[RADIANT_NAMING_MAX], const Row &row)
+{
+	uint8_t devtype;
+	uint16_t devnum;
+	uint8_t subtype;
+	char label[sizeof(SourceState::label)];
+	uint8_t fieldId;
+	uint8_t fieldType;
+
+	k_mutex_lock(&sShadowLock, K_FOREVER);
+	devtype = sSources[row.source].devtype;
+	devnum = sSources[row.source].devnum;
+	subtype = sSources[row.source].subtype;
+	memcpy(label, sSources[row.source].label, sizeof(label));
+	fieldId = row.fieldId;
+	fieldType = row.fieldType;
+	k_mutex_unlock(&sShadowLock);
+
+	label[sizeof(label) - 1] = '\0';
+
+	/*
+	 * THE REAL VOCABULARY TYPE, not one re-derived from the Matter device
+	 * type. This used to pass RADIANT_FIELD_OCCUPANCY when the device type
+	 * was Occupancy Sensor and 0 otherwise, justified by "every other device
+	 * type has no suffix anyway".
+	 *
+	 * That justification expired when radiant_naming.c gained a row for
+	 * every series a source can carry. A 0 here would now miss "Temp",
+	 * "Temp Min" and "Temp Max" and fall through to the "#<id>" backstop
+	 * instead - three temperature endpoints reading "#33", "#39" and "#40".
+	 * struct radiant_matter_endpoint has carried field_type all along, so
+	 * Row simply keeps it and nothing is re-derived from anything.
+	 */
+	(void)radiant_naming_format(out, RADIANT_NAMING_MAX, devtype, devnum, subtype, label, fieldType, fieldId);
+}
+
 /* ------------------------------------------------------------------------ */
 /* The shadow - pump thread side                                             */
 /* ------------------------------------------------------------------------ */
@@ -311,6 +389,7 @@ Row *AllocRow(uint16_t radiantEndpoint)
 		r.radiantEndpoint = radiantEndpoint;
 		r.source = e->source;
 		r.fieldId = e->field_id;
+		r.fieldType = e->field_type;
 		r.deviceType = e->device_type;
 		r.chipEndpoint = kInvalidEndpointId;
 		r.needCreate = true;
@@ -376,16 +455,17 @@ void PersistIndexes()
 void CreateEndpointForRow(Row &row)
 {
 	char uniqueID[Nrf::MatterBridgedDevice::kUniqueIDSize + 1];
-	char label[sizeof(SourceState::label)];
+	char nodeLabel[RADIANT_NAMING_MAX];
 	uint16_t deviceType;
 	uint64_t key;
 
 	k_mutex_lock(&sShadowLock, K_FOREVER);
 	deviceType = row.deviceType;
 	key = sSources[row.source].key;
-	memcpy(label, sSources[row.source].label, sizeof(label));
 	FormatUniqueID(uniqueID, sizeof(uniqueID), key, row.fieldId);
 	k_mutex_unlock(&sShadowLock);
+
+	ComposeLabel(nodeLabel, row);
 
 	/* Adopt, if a previous boot stored this exact (sensor, field). This is
 	 * the whole of trap 8's answer: the endpoint id comes back from
@@ -407,6 +487,19 @@ void CreateEndpointForRow(Row &row)
 		k_mutex_lock(&sShadowLock, K_FOREVER);
 		row.chipEndpoint = rd.endpointId;
 		row.provider = rd.provider;
+		row.storageIndex = rd.index;
+		row.storageIndexValid = true;
+		/*
+		 * THE ADOPTION BRANCH RETURNS HERE, WHICH IS WHY THIS FLAG IS
+		 * SET. The restored device was constructed from the NodeLabel
+		 * that was in storage - which, for any bridge that ever booted
+		 * the old scheme, is the 18-character hex UniqueID - and this
+		 * early return discards the name just composed. Without the
+		 * flag those endpoints would keep hex names for the life of the
+		 * device, since nothing else ever revisits a name. The flush
+		 * pushes and re-persists the composed one instead.
+		 */
+		sSources[row.source].labelDirty = true;
 		k_mutex_unlock(&sShadowLock);
 		LOG_INF("matter: adopted stored endpoint %u for %s", rd.endpointId, uniqueID);
 		return;
@@ -420,7 +513,11 @@ void CreateEndpointForRow(Row &row)
 		return;
 	}
 
-	Nrf::MatterBridgedDevice *device = MakeDevice(deviceType, uniqueID, label[0] != '\0' ? label : uniqueID);
+	/* The composed name, never the UniqueID. A controller used to show
+	 * "3f2a91c40e77b21205" for every endpoint of every sensor, because the
+	 * only production bind site passes NULL for the label and this line
+	 * fell back to the hex id. */
+	Nrf::MatterBridgedDevice *device = MakeDevice(deviceType, uniqueID, nodeLabel);
 	if (device == nullptr) {
 		chip::Platform::Delete(provider);
 		sCreateFailures++;
@@ -446,6 +543,8 @@ void CreateEndpointForRow(Row &row)
 	k_mutex_lock(&sShadowLock, K_FOREVER);
 	row.chipEndpoint = assigned;
 	row.provider = provider;
+	row.storageIndex = indexes[0];
+	row.storageIndexValid = true;
 	k_mutex_unlock(&sShadowLock);
 
 	Nrf::BridgeStorageManager::BridgedDevice stored;
@@ -466,8 +565,54 @@ void CreateEndpointForRow(Row &row)
 		PersistIndexes();
 	}
 
-	LOG_INF("matter: endpoint %u = radiant endpoint %u (source %u field %u, device type 0x%04x)", assigned,
-		row.radiantEndpoint, static_cast<unsigned int>(row.source), row.fieldId, deviceType);
+	/* The NodeLabel is in this line because it is the ONLY carrier a
+	 * controller shows for a bridged device, and without a commissioned
+	 * controller on the bench this log is the only place it can be read. */
+	LOG_INF("matter: endpoint %u = radiant endpoint %u (source %u field %u, device type 0x%04x) \"%s\"",
+		assigned, row.radiantEndpoint, static_cast<unsigned int>(row.source), row.fieldId, deviceType,
+		nodeLabel);
+}
+
+/*
+ * Rewrites one stored endpoint record with a new NodeLabel. Runs on the CHIP
+ * thread, from the flush.
+ *
+ * StoreBridgedDevice() used to run exactly once per endpoint, at creation. A
+ * name that improves later - the FE-C subtype arriving after the endpoint
+ * exists, or an adopted endpoint carrying a name from an older scheme - would
+ * therefore be correct until the next power cycle and then revert, which is a
+ * worse experience than never having improved.
+ */
+void PersistRowLabel(const Row &row, const char *nodeLabel)
+{
+	Nrf::BridgeStorageManager::BridgedDevice stored;
+	char uniqueID[Nrf::MatterBridgedDevice::kUniqueIDSize + 1];
+	uint64_t key;
+
+	if (!row.storageIndexValid) {
+		return;
+	}
+
+	k_mutex_lock(&sShadowLock, K_FOREVER);
+	key = sSources[row.source].key;
+	k_mutex_unlock(&sShadowLock);
+
+	FormatUniqueID(uniqueID, sizeof(uniqueID), key, row.fieldId);
+
+	stored.mEndpointId = row.chipEndpoint;
+	stored.mDeviceType = row.deviceType;
+	stored.mUniqueIDLength = strlen(uniqueID);
+	memcpy(stored.mUniqueID, uniqueID, stored.mUniqueIDLength);
+	stored.mNodeLabelLength = strlen(nodeLabel);
+	memcpy(stored.mNodeLabel, nodeLabel, stored.mNodeLabelLength);
+	stored.mUserData = nullptr;
+	stored.mUserDataSize = 0;
+
+	if (!Nrf::BridgeStorageManager::Instance().StoreBridgedDevice(stored, row.storageIndex)) {
+		/* The live name is already correct; only the next boot loses
+		 * it. Worth a line, not worth unwinding. */
+		LOG_ERR("matter: endpoint %u renamed but not re-persisted", row.chipEndpoint);
+	}
 }
 
 void RemoveEndpointForRow(Row &row)
@@ -534,6 +679,7 @@ void FlushHandler(intptr_t)
 		RadiantMatter::AntDataProvider *provider = row.provider;
 		bool reachable = sSources[source].reachable;
 		bool reachableDirty = sSources[source].reachableDirty;
+		bool labelDirty = sSources[source].labelDirty;
 		k_mutex_unlock(&sShadowLock);
 
 		if (provider == nullptr) {
@@ -567,6 +713,40 @@ void FlushHandler(intptr_t)
 			provider->NotifyUpdateState(cell.cluster, cell.attribute, &value, sizeof(value));
 		}
 
+		if (labelDirty) {
+			/*
+			 * THE LATE RENAME. Two things make it necessary: the
+			 * FE-C equipment type is learned from traffic and may
+			 * arrive after the endpoint exists, and an adopted
+			 * endpoint comes back from storage with whatever name
+			 * the boot that created it chose.
+			 *
+			 * The same batched path Reachable uses, one line above,
+			 * and for the same reasons - no CHIP heap allocation
+			 * and no second hop onto this thread.
+			 *
+			 * NOT the AttrCell shadow: that is int64_t only, and a
+			 * string does not fit in it. NOT emberAfWriteAttribute()
+			 * either: that path is gated on the endpoint being
+			 * reachable and expects Pascal-string framing, whereas
+			 * this one lands in HandleWriteDeviceBasicInformation()
+			 * -> SetNodeLabel(), which takes a plain pointer and a
+			 * length. The length excludes the NUL deliberately:
+			 * SetNodeLabel() memsets its 32-byte buffer first, so a
+			 * 31-character name is still terminated, and passing
+			 * the NUL would make a full-length name one byte too
+			 * long for a memcpy that does not check.
+			 */
+			char nodeLabel[RADIANT_NAMING_MAX];
+
+			ComposeLabel(nodeLabel, row);
+			provider->NotifyUpdateState(Clusters::BridgedDeviceBasicInformation::Id,
+						    Clusters::BridgedDeviceBasicInformation::Attributes::NodeLabel::Id,
+						    nodeLabel, strlen(nodeLabel));
+			PersistRowLabel(row, nodeLabel);
+			LOG_INF("matter: endpoint %u renamed to \"%s\"", row.chipEndpoint, nodeLabel);
+		}
+
 		if (reachableDirty) {
 			bool r = reachable;
 
@@ -579,10 +759,13 @@ void FlushHandler(intptr_t)
 		}
 	}
 
-	/* One clear per pass, after every row has seen it. */
+	/* One clear per pass, after every row has seen it. Both flags are per
+	 * SOURCE and every row of that source has to act on them, which is why
+	 * they cannot be cleared inside the loop above. */
 	k_mutex_lock(&sShadowLock, K_FOREVER);
 	for (SourceState &s : sSources) {
 		s.reachableDirty = false;
+		s.labelDirty = false;
 	}
 	k_mutex_unlock(&sShadowLock);
 }
@@ -612,7 +795,7 @@ bool AnythingDirty()
 	}
 	if (!dirty) {
 		for (const SourceState &s : sSources) {
-			if (s.reachableDirty) {
+			if (s.reachableDirty || s.labelDirty) {
 				dirty = true;
 				break;
 			}
@@ -834,7 +1017,20 @@ extern "C" void radiant_matter_attr_write(uint16_t endpoint_id, uint32_t cluster
 	k_mutex_unlock(&sShadowLock);
 }
 
-extern "C" void ant_matter_note_sample(uint32_t source, uint8_t flags)
+/*
+ * The FE-C equipment type's field_id, hardcoded with the citation rather than
+ * by including radiant_power_adapter.h - the same way radiant_rules.c spells
+ * FEC_STATE_IN_USE, and for the same reason: this file is above the profile
+ * decoders and has no business pulling a page codec's header in.
+ *
+ * radiant_power_adapter.h: RADIANT_POWER_FIELD_FEC_TYPE = 0x0D, posted as
+ * RADIANT_FIELD_ENUM_GENERIC from FE-C page 16 byte 1 (Table 8-8).
+ */
+constexpr uint8_t kFecTypeFieldId = 0x0Du;
+constexpr uint8_t kFecDeviceType = 0x11u;
+
+extern "C" void ant_matter_note_sample(uint32_t source, uint8_t flags, uint8_t field_type, uint8_t field_id,
+				       int64_t raw)
 {
 	bool stale = (flags & RADIANT_SAMPLE_STALE) != 0u;
 
@@ -843,6 +1039,28 @@ extern "C" void ant_matter_note_sample(uint32_t source, uint8_t flags)
 	}
 
 	k_mutex_lock(&sShadowLock, K_FOREVER);
+
+	/*
+	 * THE SUBTYPE, AND IT IS GATED ON THE BINDING'S DEVICE TYPE TOO. Field
+	 * ids 0x00-0x1F belong to whichever profile adapter owns the source
+	 * (radiant_bridge.h's allocation block), so 0x0D means "equipment type"
+	 * only on an FE-C binding; on any other device type it is some other
+	 * adapter's series and must not be read as one.
+	 */
+	if (field_type == RADIANT_FIELD_ENUM_GENERIC && field_id == kFecTypeFieldId &&
+	    sSources[source].devtype == kFecDeviceType && raw >= 0 && raw <= UINT8_MAX) {
+		uint8_t subtype = static_cast<uint8_t>(raw);
+
+		if (sSources[source].subtype != subtype) {
+			sSources[source].subtype = subtype;
+			/* Only when it CHANGES - a treadmill repeats this
+			 * value four times a second, and a rename per message
+			 * would be a report storm on every controller
+			 * subscribed to NodeLabel. */
+			sSources[source].labelDirty = true;
+		}
+	}
+
 	/*
 	 * REACHABILITY IS PER SENSOR, NOT PER FIELD, and the flag is per
 	 * sample. So any STALE sample marks the sensor unreachable and any
@@ -872,6 +1090,8 @@ extern "C" void ant_matter_binding_changed(uint32_t source, const struct radiant
 		sSources[source].bound = false;
 		sSources[source].reachable = false;
 		sSources[source].reachableDirty = false;
+		sSources[source].labelDirty = false;
+		sSources[source].subtype = 0u;
 		for (Row &r : sRows) {
 			if (r.used && r.source == source) {
 				r.needRemove = true;
@@ -884,6 +1104,20 @@ extern "C" void ant_matter_binding_changed(uint32_t source, const struct radiant
 		strncpy(sSources[source].label, b->label, sizeof(sSources[source].label) - 1);
 		sSources[source].reachable = true;
 		sSources[source].reachableDirty = true;
+
+		/* The naming inputs the BINDING carries. The subtype does not
+		 * come from here - it is learned from page 16 - and is cleared
+		 * because this may be a different physical machine on a slot a
+		 * treadmill used to hold. */
+		sSources[source].devtype = b->devtype;
+		sSources[source].devnum = b->devnum;
+		sSources[source].subtype = 0u;
+		/* A re-bind can change the device number or the human label of
+		 * a source whose endpoints already exist, so the name has to be
+		 * pushed rather than only used at creation. Harmless on a fresh
+		 * bind: the rows do not exist yet, and the flag is per source
+		 * and cleared once per pass. */
+		sSources[source].labelDirty = true;
 	}
 
 	k_mutex_unlock(&sShadowLock);

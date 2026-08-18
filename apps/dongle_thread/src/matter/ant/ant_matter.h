@@ -60,9 +60,25 @@ int ant_matter_start(void);
  */
 void ant_matter_binding_changed(uint32_t source, const struct radiant_binding *b);
 
-/* Every drained sample, for its RADIANT_SAMPLE_* flags only - the value has
- * already gone to radiant_matter.c. This is what drives Reachable. */
-void ant_matter_note_sample(uint32_t source, uint8_t flags);
+/*
+ * Every drained sample. The VALUE has already gone to radiant_matter.c through
+ * its own seam; what this call is for is the two things that are not
+ * measurements:
+ *
+ *   flags       RADIANT_SAMPLE_STALE, which drives Reachable.
+ *   the rest    the FE-C equipment type (RADIANT_POWER_FIELD_FEC_TYPE), which
+ *               is what names an endpoint "Treadmill 51234 In Use" instead of
+ *               "Fitness Equip 51234 In Use". It is a decoded fact that
+ *               arrives on the bus like any other - see radiant_naming.h for
+ *               why it is not a binding field - so the glue has to see the
+ *               field_type/field_id/raw triple to pick it out.
+ *
+ * It used to take (source, flags) alone. Widening it rather than adding a
+ * second entry point keeps ant_matter_sink.c's publish() a single call, and
+ * the sink already accepts every sample.
+ */
+void ant_matter_note_sample(uint32_t source, uint8_t flags, uint8_t field_type,
+			    uint8_t field_id, int64_t raw);
 
 #ifdef __cplusplus
 }

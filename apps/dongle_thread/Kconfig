@@ -646,6 +646,26 @@ config ANT_DONGLE_MQTT_SINK
 	  - that is a 31.04 s pre-main() stall on an unattached MTD, measured
 	  on this bench, and it looks exactly like a hung board.
 
+config ANT_DONGLE_NAMING_DEBUG
+	bool "Log the composed endpoint name for every field (bench instrument)"
+	depends on RADIANT_BRIDGE
+	help
+	  A bench instrument, not a feature. Registers one extra sink that
+	  logs what radiant_naming.c would call every distinct field it sees,
+	  and shouts DUPLICATE NAME when two fields on one source compose to
+	  the same string.
+
+	  It exists because neither real consumer of that name is readable on
+	  a bench: the Matter NodeLabel needs a commissioned controller and
+	  the MQTT discovery payload needs a broker on a Thread network. With
+	  this on, a plain bridge build and a real sensor answer the question
+	  directly.
+
+	  Defaults n, so it is absent from bridge.conf, matter.conf and all
+	  five of docs/radiant-bridge.md section 7.4's coexistence arms - it
+	  adds a sink, and those images' sink sets are asserted exactly in
+	  .github/workflows/build.yml.
+
 config ANT_DONGLE_MQTT_BROKER
 	string "Broker address, as a numeric IPv6 literal"
 	default "fd11:22::1"

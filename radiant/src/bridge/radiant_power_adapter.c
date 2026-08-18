@@ -44,7 +44,8 @@ static void post(uint32_t source, uint8_t field_id, uint8_t field_type,
  * afterwards.
  */
 static uint32_t post_power(struct radiant_power_adapter *a, uint32_t source,
-			   uint16_t inst_w, uint8_t event_count, uint64_t t_us)
+			   uint16_t inst_w, uint8_t event_count, uint64_t t_us,
+			   uint8_t page_flags)
 {
 	uint32_t n = 0u;
 
@@ -53,7 +54,7 @@ static uint32_t post_power(struct radiant_power_adapter *a, uint32_t source,
 	 * instead - docs/radiant-bridge.md section 6.1's rule, the same one
 	 * radiant_hr_adapter.c states for a computed bpm of 0. */
 	post(source, RADIANT_POWER_FIELD_INST_POWER, RADIANT_FIELD_ACTIVE_POWER,
-	     0u, 0, (int64_t)inst_w, t_us);
+	     page_flags, 0, (int64_t)inst_w, t_us);
 	n++;
 
 	if (!a->have_prev) {
@@ -70,7 +71,8 @@ static uint32_t post_power(struct radiant_power_adapter *a, uint32_t source,
 	a->acc_events += (uint64_t)(uint8_t)(event_count - a->prev_event_count);
 	a->prev_event_count = event_count;
 	post(source, RADIANT_POWER_FIELD_EVENT_COUNT, RADIANT_FIELD_EVENT_COUNT,
-	     RADIANT_SAMPLE_ACCUMULATING, 0, (int64_t)a->acc_events, t_us);
+	     (uint8_t)(RADIANT_SAMPLE_ACCUMULATING | page_flags), 0,
+	     (int64_t)a->acc_events, t_us);
 	n++;
 
 	/*
@@ -88,7 +90,8 @@ static uint32_t post_power(struct radiant_power_adapter *a, uint32_t source,
 	}
 	a->prev_t_us = t_us;
 	post(source, RADIANT_POWER_FIELD_ENERGY, RADIANT_FIELD_ENERGY,
-	     RADIANT_SAMPLE_ACCUMULATING, -6, (int64_t)a->acc_uj, t_us);
+	     (uint8_t)(RADIANT_SAMPLE_ACCUMULATING | page_flags), -6,
+	     (int64_t)a->acc_uj, t_us);
 	n++;
 
 	return n;
@@ -113,7 +116,10 @@ uint32_t radiant_power_adapter_decode(struct radiant_power_adapter *a,
 
 	/* Page 0x10 has no validity flag on either power field - Table 8-1
 	 * gives them no invalid value, unlike FE-C's 0xFFF. */
-	return post_power(a, source, p.inst_power_w, p.event_count, t_us);
+	/* Page 0x10 IS the bicycle-power profile's every-message page, so these
+	 * three series repeat at the channel period and an expiry computed from
+	 * that period is right for them. No RADIANT_SAMPLE_ROTATED. */
+	return post_power(a, source, p.inst_power_w, p.event_count, t_us, 0u);
 }
 
 static uint32_t decode_fec_general(uint32_t source,
@@ -122,12 +128,21 @@ static uint32_t decode_fec_general(uint32_t source,
 {
 	uint32_t n = 0u;
 
+	/* THE EQUIPMENT TYPE FIRST, and the order is the point: a sink that
+	 * creates its endpoint on this page has the subtype in hand before the
+	 * state sample gets there, so the endpoint is named "Treadmill 51234 In
+	 * Use" the first time rather than being renamed a second later. See
+	 * radiant_power_adapter.h's RADIANT_POWER_FIELD_FEC_TYPE block. */
+	post(source, RADIANT_POWER_FIELD_FEC_TYPE, RADIANT_FIELD_ENUM_GENERIC,
+	     RADIANT_SAMPLE_ROTATED, 0, (int64_t)g->equipment_type, t_us);
+	n++;
+
 	/* The equipment state, as an enum rather than a boolean. Turning
 	 * IN_USE into "bike in use" here would put a rule in an adapter;
 	 * radiant_rules.c owns derived booleans and marks them DERIVED, and
 	 * this sample is a decoded measurement, so it carries no such flag. */
 	post(source, RADIANT_POWER_FIELD_FEC_STATE, RADIANT_FIELD_ENUM_GENERIC,
-	     0u, 0, (int64_t)g->state, t_us);
+	     RADIANT_SAMPLE_ROTATED, 0, (int64_t)g->state, t_us);
 	n++;
 
 	/* 0.001 m/s is exactly 10^-3 m/s, so the wire value IS the raw at
@@ -137,7 +152,7 @@ static uint32_t decode_fec_general(uint32_t source,
 	 * silent hole rather than a caveat. */
 	if (g->speed_valid) {
 		post(source, RADIANT_POWER_FIELD_FEC_SPEED, RADIANT_FIELD_SPEED,
-		     0u, -3, (int64_t)g->speed_mm_s, t_us);
+		     RADIANT_SAMPLE_ROTATED, -3, (int64_t)g->speed_mm_s, t_us);
 		n++;
 	}
 
@@ -190,8 +205,10 @@ uint32_t radiant_power_adapter_decode_fec(struct radiant_power_adapter *a,
 			a->prev_t_us = t_us;
 			return 0u;
 		}
+		/* FE-C page 25, one page of an interleaved rotation - unlike
+		 * page 0x10 above, which is why the flag is a parameter. */
 		return post_power(a, source, tr.inst_power_w, tr.event_count,
-				  t_us);
+				  t_us, RADIANT_SAMPLE_ROTATED);
 	}
 
 	return 0u;

@@ -170,7 +170,11 @@ ZTEST(radiant_common_adapter, test_golden_vector_end_to_end_on_the_bus)
 	zassert_equal(s->raw, 29982, "26.67 degC = 299.82 K, exactly");
 	zassert_equal(s->source, 3u, NULL);
 	zassert_equal(s->t_us, 1234u, NULL);
-	zassert_equal(s->flags, 0u, "instantaneous, not an accumulator");
+	zassert_equal(s->flags, RADIANT_SAMPLE_ROTATED,
+		      "instantaneous, not an accumulator - but ROTATED, because "
+		      "ANT+ interleaves a common page as rarely as one message "
+		      "in 121 and no expiry may be computed from the channel "
+		      "period for it");
 
 	/* Humidity: EXACT. 0.01 % is exp -2 on the wire value itself. */
 	CCAP_REQUIRE(s, RADIANT_COMMON_FIELD_HUMIDITY,
@@ -178,7 +182,8 @@ ZTEST(radiant_common_adapter, test_golden_vector_end_to_end_on_the_bus)
 	zassert_equal(s->field_type, RADIANT_FIELD_HUMIDITY, NULL);
 	zassert_equal(s->exp, -2, NULL);
 	zassert_equal(s->raw, 6634, "66.34 %%, exactly");
-	zassert_equal(s->flags, 0u, NULL);
+	zassert_equal(s->flags, RADIANT_SAMPLE_ROTATED,
+		      "not an accumulator, but off a common page");
 }
 
 /* ---------------------------------------------------------------------------
@@ -477,9 +482,10 @@ static void wind_check(uint8_t subpage, uint8_t field_id, uint8_t field_type,
 	}
 	zassert_equal(s->field_type, field_type, NULL);
 	zassert_equal(s->exp, -6, NULL);
-	zassert_equal(s->flags, 0u,
+	zassert_equal(s->flags, RADIANT_SAMPLE_ROTATED,
 		      "instantaneous - the error does not compound, so section "
-		      "3.2's accumulator rule does not apply here");
+		      "3.2's accumulator rule does not apply here - and ROTATED, "
+		      "which every field off a common page carries");
 	zassert_equal(s->raw, expect, "wire %u expected raw %lld, got %lld",
 		      wire, (long long)expect, (long long)s->raw);
 }
@@ -587,7 +593,9 @@ ZTEST(radiant_common_adapter, test_charging_cycles_difference_at_u16_wire_width)
 	radiant_bridge_drain();
 	CCAP_REQUIRE(s, RADIANT_COMMON_FIELD_CHARGE_CYCLES, NULL);
 	zassert_equal(s->field_type, RADIANT_FIELD_EVENT_COUNT, NULL);
-	zassert_equal(s->flags, RADIANT_SAMPLE_ACCUMULATING, NULL);
+	zassert_equal(s->flags,
+		      RADIANT_SAMPLE_ACCUMULATING | RADIANT_SAMPLE_ROTATED,
+		      "an accumulator, and - like every common page - ROTATED");
 	zassert_equal(s->exp, 0, NULL);
 	zassert_equal(s->raw, 3, NULL);
 

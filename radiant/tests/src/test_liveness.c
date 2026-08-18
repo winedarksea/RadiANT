@@ -5,7 +5,7 @@
  * is itself a transcription of docs/radiant-bridge.md section 9.2's expiry
  * rule.
  *
- * Seven things earn their place here, and each of them is a way the module
+ * Eight things earn their place here, and each of them is a way the module
  * could be wrong while looking right:
  *
  *   - It must not fire early. 3x the period, not 1x - a strap that misses two
@@ -21,8 +21,12 @@
  *     9.2's expiry is "this reading is old", and a sink renders the reading.
  *   - Unbinding must free the row, or the next device into that table slot
  *     inherits a stranger's last reading.
- *   - A fifth field_id on one source must be refused and counted, not allowed
+ *   - A field_id past the last slot must be refused and counted, not allowed
  *     to evict a tracked field.
+ *   - A PAGE ROTATION MUST NOT READ AS A SENSOR GOING AWAY. This one is here
+ *     because the module got it wrong on real hardware and no test noticed:
+ *     the quiet that matters belongs to the source, and a field that only
+ *     rides every fourth page is not evidence of anything.
  *
  * radiant_liveness_tick() takes its clock as an argument, so all of this runs
  * in a few microseconds of wall time and none of it needs a real timer.
@@ -238,7 +242,7 @@ ZTEST(radiant_liveness, test_unbinding_frees_the_row)
 	zassert_equal(cap_n, 0u, NULL);
 }
 
-ZTEST(radiant_liveness, test_a_fifth_field_is_refused_not_evicted)
+ZTEST(radiant_liveness, test_an_extra_field_is_refused_not_evicted)
 {
 	uint32_t src = bound_source(1u, PERIOD_4HZ);
 	const struct radiant_liveness_stats *st;
@@ -251,13 +255,52 @@ ZTEST(radiant_liveness, test_a_fifth_field_is_refused_not_evicted)
 
 	st = radiant_liveness_stats_get();
 	zassert_equal(st->tracked, RADIANT_LIVENESS_FIELDS_PER_SOURCE, NULL);
-	zassert_equal(st->no_slot, 1u, "the fifth field is refused and counted");
+	zassert_equal(st->no_slot, 1u, "the field past the last slot is refused and counted");
 
 	/* The four that were accepted are all still watched - the refusal must
 	 * not have cost one of them its slot. */
 	zassert_equal(tick(EXPIRY_US + 1u), RADIANT_LIVENESS_FIELDS_PER_SOURCE,
 		      NULL);
 	zassert_equal(cap_n, RADIANT_LIVENESS_FIELDS_PER_SOURCE, NULL);
+}
+
+ZTEST(radiant_liveness, test_a_page_rotation_is_not_a_sensor_going_away)
+{
+	/*
+	 * THE REGRESSION. An FE-C trainer carries speed and FE state on page 16,
+	 * power and event count on page 25, energy on 26 and equipment type on
+	 * 54, so on a 4 Hz channel any ONE field arrives roughly once a second
+	 * while the expiry is 750 ms. Measured on a real Wahoo #52233 before the
+	 * fix: 165 STALE records in 150 s from a trainer sitting on the bench
+	 * transmitting perfectly, each field re-armed by its own next page and
+	 * expiring again before the one after it - and because mqtt_sink.c
+	 * drives the per-binding availability topic from STALE, the whole device
+	 * flapped offline and back once a second in Home Assistant.
+	 *
+	 * Two fields, strictly alternating at 1 s, for 10 s. Every individual
+	 * field is silent for 2 s at a stretch, far past the 750 ms threshold.
+	 * Nothing may expire: the source is demonstrably on air the whole time.
+	 */
+	uint32_t src = bound_source(1u, PERIOD_4HZ);
+	uint64_t t;
+
+	for (t = 0u; t <= 10u * US_PER_S; t += US_PER_S) {
+		post_hr(src, (uint8_t)((t / US_PER_S) % 2u), 70, t);
+		zassert_equal(tick(t + (US_PER_S / 2u)), 0u,
+			      "a rotating page is still traffic: the sensor has "
+			      "not gone anywhere");
+	}
+	zassert_equal(cap_n, 0u, "not one STALE record while it is transmitting");
+
+	/*
+	 * And the guarantee the module exists for is unchanged: when the whole
+	 * source really does stop, BOTH fields are reported, on the same 3x
+	 * period the header promises - not just the one that happened to be
+	 * carried by the last page received.
+	 */
+	zassert_equal(tick(10u * US_PER_S + EXPIRY_US + 1u), 2u,
+		      "every tracked field of a source that went quiet");
+	zassert_equal(cap_n, 2u, NULL);
 }
 
 ZTEST(radiant_liveness, test_its_own_output_does_not_rearm_it)
@@ -284,3 +327,4 @@ static void *liveness_setup(void)
 }
 
 ZTEST_SUITE(radiant_liveness, NULL, liveness_setup, liveness_test_reset, NULL, NULL);
+

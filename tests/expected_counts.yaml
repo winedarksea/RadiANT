@@ -117,4 +117,47 @@ min_scenarios: 9
 #     anything ever, and swallowed the packet on the way to the host too.
 #
 # 832 + 4 + 18 = 854.
-min_testcases: 854
+#
+# Raised again for the endpoint-naming work, 2026-08-17: thirteen new cases in
+# radiant/tests/src/test_naming.c (both base-name tables and both of their
+# defaults, the five occupancy suffixes, the label override, and the worst-case
+# length - the one that fails if a future base name grows long enough to
+# truncate the suffix, which is the half that tells four identically-typed
+# occupancy endpoints apart) and two in radiant/tests/src/test_rules.c.
+#
+# Those two are the regression for the collision the naming change would
+# otherwise have created: the FE-C EQUIPMENT TYPE now travels on the bus as a
+# second RADIANT_FIELD_ENUM_GENERIC series on the same source as the FE STATE,
+# and radiant_rules.c used to route every ENUM_GENERIC sample into the
+# occupancy rule - where "treadmill" (19) reads as "not in use" and clears the
+# output from under a runner still on the belt. Confirmed to fail before the
+# field_id gate was added.
+#
+# Raised by exactly the fifteen this change adds: 854 + 15 = 869.
+#
+# Raised again by three, same day, for the defect the first version of that
+# work SHIPPED. radiant_naming.c originally suffixed only the five occupancy
+# booleans, on the argument that every other field's type already says what it
+# is. A bench run with a real heart-rate strap (#8265) and a real FE-C trainer
+# (#52233) on air measured four collisions from that argument - a strap's beat
+# count and beat time both read "Heart Rate 8265", a trainer's equipment type,
+# event count and FE state all read "Indoor Bike 52233" - where the names it
+# replaced ("RadiANT 1", "RadiANT 2") had been ugly but UNIQUE.
+#
+# The three cases are the pairwise-uniqueness sweep over every series each
+# profile can actually carry (the one that fails on the defect, and the only
+# shape that can: a suite checking names one at a time cannot see a collision),
+# the "#<id>" backstop for a series the table has no row for, and the label
+# path's own worst-case length, which had never been asserted at all.
+#
+# 854 + 18 = 872.
+#
+# NOTE THAT THE FLOOR HAS DRIFTED BELOW WHAT THE RULE ABOVE WOULD GIVE, the
+# same way it had before the arm-lead work. Counting `^ZTEST(` under
+# radiant/tests today gives 861, so the rule's figure is 861 + 4 + 18 = 883 and
+# this file is 14 under it. It is left conservative rather than jumped, because
+# 883 has not been observed on a green run and a floor set from a static count
+# that turns out to include a suite twister does not reach fails for a reason
+# that has nothing to do with coverage. Raise it to the printed total when a
+# run reports one.
+min_testcases: 874

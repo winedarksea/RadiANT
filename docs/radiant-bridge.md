@@ -1574,6 +1574,103 @@ Three practical reasons the choice is also the cheap one:
 If the Device Library ever grows a vitals type, moving to it is a
 recommissioning rather than a format break.
 
+### 8.2a The name is the only thing telling those endpoints apart
+
+§8.2's own argument creates a problem it does not answer. **All five derived
+booleans are Matter device type `0x0107` Occupancy Sensor** — *worn*, *active*,
+*at rest*, *zone 2*, and FE-C's *in use* — so a controller shows one sensor as
+four or five entities whose type, clusters and attributes are identical. The
+**NodeLabel is the entire difference between them**, and it was
+`3f2a91c40e77b21205`: `MatterBridgedDevice` serves only Reachable, UniqueID,
+NodeLabel, ClusterRevision and FeatureMap (VendorName and ProductName are not in
+its attribute list and it is vendored), the only production bind site passes
+`NULL` for a label, and the bridge fell back to the UniqueID. The MQTT plane had
+the same defect from the same cause, as `RadiANT 4`.
+
+`radiant/src/bridge/radiant_naming.c` composes **`<base> <devnum> <suffix>`** —
+`Treadmill 51234 In Use`, `Heart Rate 8842 Zone 2` — and both sinks call it, so
+the two planes cannot name one endpoint two different things. Four properties
+are worth stating because each is a decision rather than a detail:
+
+1. **It is a pure function over scalars**, not a lookup on a `source`. It is
+   called from the CHIP thread and from the bridge pump thread; taking
+   `(devtype, devnum, subtype, label, field_type, field_id)` leaves it with no
+   state, no lock discipline and a ztest suite that needs no binding table.
+2. **The equipment subtype travels on the sample bus, not in the binding.**
+   FE-C page 16 byte 1 (treadmill / elliptical / rower / climber / ski erg /
+   indoor bike) is *learned from traffic*, which is precisely the distinction
+   `radiant_binding.h` draws for `set_period`, so it is posted as
+   `RADIANT_POWER_FIELD_FEC_TYPE` (`0x0D`) and each sink caches the one byte.
+   It is posted **before** the state and speed in the same page, so an endpoint
+   created on the first page 16 is named correctly the first time.
+3. **A name may improve after the endpoint exists.** The Matter bridge carries
+   a `labelDirty` flag beside `reachableDirty` and pushes NodeLabel through the
+   same batched path Reachable uses, then re-persists — which also repairs an
+   endpoint *adopted* from a boot that used the old scheme, the case that would
+   otherwise keep hex names forever.
+4. **`struct radiant_binding::label` keeps its meaning** — "what a human calls
+   it". A non-empty label replaces the base name and the device number; the
+   suffix still goes on, because a labelled strap is still five endpoints. A
+   derived name is never written back into it.
+
+The suffix is the half that disambiguates and `snprintf` truncates from the
+end, so the worst case (`Fitness Equip 65535 Vert Ratio`, 30 bytes against
+`kNodeLabelSize` 32) is a `BUILD_ASSERT` rather than a hope. The label path has
+a second `BUILD_ASSERT` of its own — a 15-character label plus the longest
+suffix — which the first version did not have.
+
+**Correction: suffixing only the occupancy five was wrong, and the bench
+measured it.** The first version of this section argued that no other field
+needed a suffix, because a temperature endpoint is already a Matter Temperature
+Sensor and an HA entity with `device_class: temperature`, so a tail would only
+repeat what the type says. Running the composer against a real heart-rate strap
+(`#8265`) and a real FE-C trainer (`#52233`) produced **four collisions**:
+
+| composed name | the two series that shared it |
+|---|---|
+| `Power 52233` | event count (`0x36`/`0x01`) and energy (`0x30`/`0x02`) |
+| `Indoor Bike 52233` | equipment type (`0x40`/`0x0D`) and event count (`0x36`/`0x01`) |
+| `Indoor Bike 52233` | equipment type (`0x40`/`0x0D`) and FE state (`0x40`/`0x08`) |
+| `Heart Rate 8265` | beat count (`0x36`/`0x01`) and beat time (`0x37`/`0x02`) |
+
+The argument fails twice. **The type often does not disambiguate** — a strap
+posts a beat count and a beat time beside its bpm, and all three composed to the
+bare base name. **And sometimes the type is the same type**: common pages
+`0x21`, `0x27` and `0x28` are *all* `RADIANT_FIELD_TEMPERATURE` on one source,
+so those three Matter endpoints shared a name *and* a device type — precisely
+the case §8.2a exists to prevent. The names this replaced (`RadiANT 1`,
+`RadiANT 2`) were ugly but **unique**, so shipping that version would have
+traded a readability bug for a correctness one.
+
+So `suffix_names[]` now carries a row for **every series a source can carry**,
+one row per `(field_type, field_id)` shared across all producers of it, with
+field id `0` left unsuffixed as the profile's primary reading. And because a
+table is only correct until the next adapter, an unmatched non-zero id falls
+back to `#<id>` (`Heart Rate 8265 #10`) — deliberately ugly, so it reads as a
+legible name *and* a visible request to add a row, and it cannot collide with
+the primary. `test_naming.c` asserts the pairwise property over every profile's
+real field set rather than checking names one at a time, which is the only shape
+in which a duplicate is visible at all.
+
+`CONFIG_ANT_DONGLE_NAMING_DEBUG` (default `n`) registers a sink that logs what
+the composer would call every field it sees and shouts `DUPLICATE NAME` when two
+on one source agree. It exists because neither real consumer of the name is
+readable on a bench — Matter's NodeLabel needs a commissioned controller and the
+MQTT payload needs a broker — so "what does this bridge call things" was
+inferred from the tables until it wasn't.
+
+**One rule-engine consequence, and it was a real defect in waiting.** The
+equipment type is a second `RADIANT_FIELD_ENUM_GENERIC` series on the same
+source as the FE state, and `radiant_rules.c` routed *every* `ENUM_GENERIC`
+sample into the occupancy rule — where code 19 is "not IN_USE" and would clear
+the output from under a runner still on the belt, four times a second. That
+file now discriminates on `field_id` as well as `field_type`. It is the same
+class of defect the `ACTIVITY_SLOT_WORN`/`ACTIVE` split exists to prevent: two
+producers, one slot, no discriminator.
+
+Base names are generic equipment nouns with no vendor word and no `ANT+`
+prefix, per [ADR 0003](decisions/0003-naming-trademark-and-usb-identity.md).
+
 ### 8.3 The MEI cluster carries the number, and is honestly second
 
 A manufacturer-extension cluster under our own MEI carries raw bpm. It is
@@ -1738,13 +1835,39 @@ never sees this page at all.
 ### 9.1 Topics
 
 ```
-radiant/<bridge_id>/status                        retained, LWT
-radiant/<bridge_id>/<binding_uuid>/status         retained, per-sensor liveness
-radiant/<bridge_id>/<binding_uuid>/<field_id>     the value
-radiant/<bridge_id>/<binding_uuid>/cmd/<field_id> inbound; becomes page 0x10
+radiant/<bridge_id>/status                         retained, LWT
+radiant/<bridge_id>/<binding_uuid>/status          retained, per-sensor liveness
+radiant/<bridge_id>/<binding_uuid>/<field_key>     the value
+radiant/<bridge_id>/<binding_uuid>/cmd/<field_id>  inbound; becomes page 0x10
 ```
 
 `binding_uuid`, not a device number — section 5.
+
+**`<field_key>` is the field id, prefixed with `d` when the sample is derived**,
+and that prefix is load-bearing rather than decorative. A field id is unique per
+source only *within one producer*: §3 gives `0x00`–`0x1F` to the profile adapter
+and `0x20`–`0x3F` to the common-page adapter, but `radiant_rules.c` posts its
+derived booleans **onto the same source starting at id 0**, straight over the
+profile block. Measured on real hardware, nine collisions in one 210 s capture:
+
+```
+strap #8265   id 0x00 = computed bpm  AND "worn"
+              id 0x01 = beat count    AND "active"
+              id 0x02 = beat time     AND "at rest"
+trainer #52233 id 0x00 = active power AND "worn"
+```
+
+Keyed on the bare id, each pair shared one state topic, one `unique_id` and one
+bit of `announced` — so a strap published its heart rate and its worn boolean to
+the same topic, alternating a bpm with a 0/1, and only whichever field arrived
+first was ever announced to Home Assistant. The derived samples are the ones
+that do not own the id space, so they are the ones that move; every other topic
+is unchanged.
+
+**The Matter plane needs no equivalent and does not get one.** `radiant_matter.c`
+maps only OCCUPANCY, TEMPERATURE, HUMIDITY, PRESSURE and BATTERY_SOC, so no
+endpoint is ever created for a profile-block id and `(source, field_id)` really
+is unique there — which is why persisted endpoint identities are untouched.
 
 ### 9.2 Discovery is the descriptor, transcribed
 
@@ -1760,6 +1883,18 @@ field in it comes from somewhere the envelope already defines:
 | `expire_after` | the sparse heartbeat interval, or the channel period x 3 |
 | `availability_topic` | the per-binding status topic |
 | `unique_id` | `binding_uuid` + field id |
+| `name` | `radiant_naming_format()`, the same composer the Matter plane uses — §8.2a. It was the binding label (or the literal `RadiANT`) plus the raw field id, i.e. `RadiANT 4`, five times over for one strap. **`unique_id` is unchanged and still keys on `binding_uuid`**: the name carries a device number because a human reads it off the sensor, while the topic and the id are what automations and history are keyed on |
+
+**A discovery message is sent once per `(source, field_id)`, and the bookkeeping
+for that was narrower than the thing it indexed.** `announced[]` was a
+`uint32_t` guarded by `field_id < 32`, while §3's allocation runs to `0x3F` —
+so **the entire common-page block (`0x20`–`0x3F`) was never announced at all**.
+Page 84's temperature, humidity and pressure published their values to topics
+Home Assistant had never been told about, no entity was ever created for them,
+and the broker discarded the lot. Nothing failed and nothing logged: the guard
+simply skipped. It is now a `uint64_t` with a `BUILD_ASSERT` tying its width to
+`RADIANT_FIELD_ID_COMMON_MAX`, because a bitmap narrower than its index should
+be a build error rather than merely correct on the day it was written.
 
 `expire_after` is the one to get right. It is the MQTT expression of the
 envelope's rule that **"no data" must never be produced silently**
@@ -1778,6 +1913,95 @@ Bridge (LWT), sensor (per-binding status), and value (`expire_after`). All
 three are needed and none substitutes for another: the bridge can be up while a
 strap is gone, and a strap can be present while one field has stopped
 advancing.
+
+### 9.3a `expire_after` belongs to the PAGE, not to the channel
+
+Measured on a real Wahoo #52233 and a real strap #8265, by logging the composed
+discovery JSON on the bench (there is no broker here, so until that log existed
+this payload had never once been read on hardware):
+
+```
+{"name":"Indoor Bike 52233 Speed", ... "expire_after":1}
+{"name":"Heart Rate 8265 At Rest", ... "expire_after":1}
+```
+
+Both are wrong, for the **same** reason in two disguises: `expire_after` was
+computed from the channel period for *every* field, as if every field repeated
+on every message. Two classes of field do not.
+
+| class | how it actually repeats | what period × 3 gave it |
+| --- | --- | --- |
+| derived (`RADIANT_SAMPLE_DERIVED`) | on debounced state **change** — minutes, or never | 1 s |
+| rotated (`RADIANT_SAMPLE_ROTATED`) | once per **page rotation** — ~1 s on FE-C, one message in 121 for a common page | 1 s |
+| everything else | every message | 1 s, correctly |
+
+A heart-rate strap's bpm is on every main page, so its expiry is right. An FE-C
+trainer carries speed and FE state on page 16, power and event count on 25,
+energy on 26 and equipment type on 54 — so Home Assistant would have greyed out
+the trainer's **entire entity set between the trainer's own pages**, forever,
+and the occupancy booleans one second after each change.
+
+Both now omit the key. That is the honest answer rather than a guessed longer
+one, because §9.3's *second* level already covers "this sensor is gone" through
+the per-binding availability topic — which is driven by `RADIANT_SAMPLE_STALE`
+and does not depend on any field's update rate.
+
+`ROTATED` is set **by the decoder**, the only layer that knows which page a
+value came off. It is a static property of the profile, not something learned
+from arrivals — `radiant_liveness.h` explains at length why learning it is
+refused.
+
+### 9.3b The same assumption, one layer down: liveness
+
+`radiant_liveness.c` made the identical mistake and it was louder. Its expiry
+was **per field**, at 3× the channel period, so on a 4 Hz FE-C channel every
+one of the trainer's fields expired between its own pages and was re-armed by
+the next one. Measured: **165 STALE records in 150 s**, every one from the
+trainer's two sources and *not one* from the strap on the same bench. Because
+§9.3's per-binding availability topic is driven from STALE, a perfectly healthy
+trainer flapped its whole device offline and back **once a second**.
+
+The quiet that matters belongs to the **source**: nothing from it at all for 3×
+its period. A page rotation is still traffic, so it cannot fake that, and the
+out-of-range guarantee for a strap is unchanged. When a source does go quiet
+every tracked field of it is posted stale, so sinks still learn per field.
+
+Two other things fell out of the same sitting:
+
+- `RADIANT_LIVENESS_FIELDS_PER_SOURCE` was **4**, sized in its own comment on
+  the HR adapter's three fields. `radiant_power_adapter.c` publishes **six** on
+  one FE-C source. Measured `no_slot 64, tracked 7`: two of the trainer's six
+  fields were not being watched at all and would not have been reported if it
+  had been unplugged. Now 8.
+- That `no_slot` counter existed but **nothing printed it**, which is why the
+  gap survived. `bridge_pump.c` now logs it every sweep alongside `tracked`.
+
+### 9.4 An unreachable broker must not stall the bus
+
+The lazy connect of §9.0 runs on the **shared drain thread**, and sinks are
+drained serially — so anything slow in this sink is slow for *every* sink.
+
+The CONNACK wait was bounded for exactly that reason, and its comment says so.
+The guard was in the wrong place: **`mqtt_connect()` itself blocks**, doing the
+TCP handshake synchronously, and against an unreachable broker it returns
+`-ETIMEDOUT` only when the stack gives up. Measured on this bench with no Thread
+parent and the placeholder address: **one attempt per sample, 3.0 s each,
+indefinitely**, against sensors producing roughly eight samples a second. The
+bus drained at about a thirtieth of its input and the ring dropped the rest —
+the precise outcome the bounded wait was written to prevent, reached one line
+above it.
+
+The collateral is the part worth remembering: in a 240 s capture with a real
+strap on air, **not one derived occupancy boolean was ever posted**, because
+`radiant_rules.c` never saw a coherent accumulating series. A defect in the MQTT
+sink silently disabled §6's rule engine, and would equally have starved the
+Matter sink in a build carrying both.
+
+So a failed attempt is now spaced by a **doubling backoff, 5 s to 5 min**, and
+costs one comparison per sample rather than a TCP timeout. A broker that is not
+there yet — the normal state throughout Thread attach — cannot hold the bus
+down. An unparseable broker address goes straight to the cap, since it cannot
+start working.
 
 ---
 
@@ -1830,6 +2054,39 @@ in some jurisdictions and some employment contexts it is a regulated category.
 That is a legal question this document does not answer and should not pretend
 to; what it does is make the aggregate-only build the one a deployment can
 choose without asking us for a feature.
+
+### 10.1a One device, one channel
+
+Rule 1 governs what may **bind**. It says nothing about a device binding
+*twice*, and until this was measured, nothing stopped it.
+
+Observed on the bench with the real Wahoo #52233: it was acquired on channel 6,
+and 47 s later a rotating channel 7 acquired **the same device** and bound it
+again. `radiant_binding_bind()` de-duplicates — it returned the existing source
+rather than a second row — so the binding table stayed correct and all of the
+damage was above it:
+
+- **a self channel is scarce** (`CONFIG_ANT_DONGLE_SELF_CHANNELS`), and one
+  spent on a device already being received never searches again. Directly
+  measured: a second real FE-C master, transmitting at 4 Hz throughout, was
+  **never acquired** — the channel that would have found it was holding a
+  duplicate of the trainer;
+- `ant_bridge_channel_bind()` **resets every adapter** for the source, by
+  design, so the re-bind silently zeroed the trainer's energy integral and
+  event-count accumulators mid-session;
+- `radiant_bridge_binding_changed()` fires again, re-arming every sink's
+  per-binding state.
+
+A channel now declines a device another channel already receives. **Declining
+alone is not enough**, and the first version of the fix proved it: a channel
+that declines is still `TRACKING` that master, and a tracking channel never
+reaches the search timeout that drives rotation — so it sat on the duplicate
+for the whole run, logging once a second and searching for nothing. The caller
+therefore rotates it away explicitly.
+
+After the fix, with the same two trainers on air: the second master **binds**,
+and the declines fall from a continuous 1 Hz drip to four, each followed by a
+rotation.
 
 ### 10.2 Deferred to a later version
 

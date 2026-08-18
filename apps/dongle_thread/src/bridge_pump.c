@@ -156,16 +156,32 @@ static void pump_thread_fn(void *a, void *b, void *c)
 				 *
 				 * Edge-triggered by radiant_liveness.c itself -
 				 * it posts once per binding per quiet period -
-				 * so this cannot become a 1 Hz drip.
+				 * so this was expected never to become a 1 Hz
+				 * drip. On a bench with a real FE-C trainer it
+				 * did exactly that, every sweep, for as long as
+				 * the trainer was on air: a field carried on a
+				 * rotated page is re-armed by its next arrival
+				 * and expires again before the one after it, so
+				 * the edge is real every time and the count is
+				 * honest. The assumption that was wrong is the
+				 * one in radiant_liveness.h, not this line.
+				 *
+				 * no_slot is printed for the same reason it was
+				 * added to the stats: it is the only evidence
+				 * that a field is not being watched at all, and
+				 * a counter nothing prints is a counter nobody
+				 * reads.
 				 */
 				const struct radiant_liveness_stats *ls =
 					radiant_liveness_stats_get();
 
-				LOG_INF("liveness: %u binding(s) went STALE "
-					"(total %u, no_period %u)",
+				LOG_INF("liveness: %u field(s) went STALE "
+					"(total %u, no_period %u, no_slot %u, tracked %u)",
 					(unsigned int)staled,
 					(unsigned int)(ls != NULL ? ls->stale_posted : 0u),
-					(unsigned int)(ls != NULL ? ls->no_period : 0u));
+					(unsigned int)(ls != NULL ? ls->no_period : 0u),
+					(unsigned int)(ls != NULL ? ls->no_slot : 0u),
+					(unsigned int)(ls != NULL ? ls->tracked : 0u));
 
 				/* Drain again immediately: the STALE records
 				 * were posted inside the tick above, and a

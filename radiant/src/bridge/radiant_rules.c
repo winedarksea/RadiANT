@@ -365,6 +365,27 @@ static void eval_zone(uint32_t source, const struct radiant_sample *s)
  */
 #define FEC_STATE_IN_USE 3
 
+/*
+ * AND THE FIELD ID IT ARRIVES ON, for the same reason and spelled the same way
+ * (radiant_power_adapter.h's RADIANT_POWER_FIELD_FEC_STATE, hardcoded here
+ * rather than included, so the bridge stays above the profile decoders).
+ *
+ * WHY THE TYPE TEST IS NOT ENOUGH. RADIANT_FIELD_ENUM_GENERIC is a vocabulary
+ * type, not a series: the FE-C adapter now posts the EQUIPMENT TYPE (0x0D,
+ * treadmill = 19, rower = 22, indoor bike = 25) on that same type and the same
+ * source, for radiant_naming.c. Accepting every ENUM_GENERIC sample would feed
+ * those codes into eval_equipment(), where each one is "not IN_USE" and would
+ * fight the real state sample over one shared equipment_state slot - four
+ * times a second, so "in use" would clear on the machine's own model number.
+ * That is the ACTIVITY_SLOT_WORN/ACTIVE defect at the top of this file, in a
+ * different disguise: two producers, one slot, no discriminator.
+ *
+ * Gating on the id is the discriminator. A future third ENUM_GENERIC series on
+ * one source is then ignored by this module until someone adds a rule and an
+ * id for it, which is the safe default.
+ */
+#define FEC_STATE_FIELD_ID 0x08u
+
 static void eval_equipment(uint32_t source, const struct radiant_sample *s)
 {
 	struct equipment_state *e = &states[source].equipment;
@@ -422,7 +443,8 @@ static bool rules_want(const struct radiant_sample *s)
 	 * occupancy at all. See RADIANT_RULE_FIELD_EQUIPMENT_IN_USE. */
 	return (s->flags & RADIANT_SAMPLE_ACCUMULATING) != 0u ||
 	       s->field_type == RADIANT_FIELD_HEART_RATE ||
-	       s->field_type == RADIANT_FIELD_ENUM_GENERIC;
+	       (s->field_type == RADIANT_FIELD_ENUM_GENERIC &&
+		s->field_id == FEC_STATE_FIELD_ID);
 }
 
 static void rules_publish(const struct radiant_sample *s)
@@ -431,7 +453,13 @@ static void rules_publish(const struct radiant_sample *s)
 		eval_activity(s->source, s);
 	} else if (s->field_type == RADIANT_FIELD_HEART_RATE) {
 		eval_zone(s->source, s);
-	} else if (s->field_type == RADIANT_FIELD_ENUM_GENERIC) {
+	} else if (s->field_type == RADIANT_FIELD_ENUM_GENERIC &&
+		   s->field_id == FEC_STATE_FIELD_ID) {
+		/* The id test is repeated rather than left to rules_want():
+		 * publish() is reachable from a caller that did not consult
+		 * want() (radiant_bridge_drain() does, but this module's own
+		 * tests post directly), and "the filter upstream already
+		 * checked" is how a routing bug survives its own test. */
 		eval_equipment(s->source, s);
 	}
 }

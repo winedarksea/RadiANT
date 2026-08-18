@@ -53,7 +53,16 @@ static void post(uint32_t source, uint8_t field_id, uint8_t field_type,
 		.source = source,
 		.field_id = field_id,
 		.field_type = field_type,
-		.flags = flags,
+		/*
+		 * EVERY field this adapter posts is RADIANT_SAMPLE_ROTATED, and
+		 * it is set here rather than at each call site because there is
+		 * no exception to make: a common page is by definition one the
+		 * master interleaves into a stream of main pages. ANT+ states
+		 * the minimum as one message in 121 - about 30 s on a 4 Hz
+		 * channel - so an expiry computed from the channel period would
+		 * be wrong for these by two orders of magnitude.
+		 */
+		.flags = (uint8_t)(flags | RADIANT_SAMPLE_ROTATED),
 		.exp = exp,
 		.raw = raw,
 		.t_us = t_us,

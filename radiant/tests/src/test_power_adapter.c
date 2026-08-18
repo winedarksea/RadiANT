@@ -121,7 +121,7 @@ static void fec_trainer_body(uint8_t *out, uint8_t event_count, uint16_t inst_w)
 	out[7] = 0x30u;
 }
 
-/* ── The page 0x10 decoder ──────────────────────────────────────────────── */
+/* ?????? The page 0x10 decoder ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????? */
 
 ZTEST(radiant_power_adapter, test_power_page_fields)
 {
@@ -214,7 +214,7 @@ ZTEST(radiant_power_adapter, test_power_encode_decode_round_trip)
 	zassert_equal(p.pedal_percent, 52u, NULL); /* 0xB4 & 0x7F */
 }
 
-/* ── The adapter: bicycle power ─────────────────────────────────────────── */
+/* ?????? The adapter: bicycle power ????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????? */
 
 ZTEST(radiant_power_adapter, test_first_call_posts_watts_only)
 {
@@ -401,9 +401,9 @@ ZTEST(radiant_power_adapter, test_null_arguments_post_nothing)
 	zassert_equal(pwr_cap_n, 0u, NULL);
 }
 
-/* ── The adapter: FE-C ──────────────────────────────────────────────────── */
+/* ?????? The adapter: FE-C ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????? */
 
-ZTEST(radiant_power_adapter, test_fec_general_page_posts_state_and_speed)
+ZTEST(radiant_power_adapter, test_fec_general_page_posts_type_state_and_speed)
 {
 	/* Table 8-7: trainer, 10 s elapsed, 100 m, 5.000 m/s, 80 bpm, caps
 	 * 0x5 (ANT+ HR source, distance enabled), state IN_USE. */
@@ -415,14 +415,27 @@ ZTEST(radiant_power_adapter, test_fec_general_page_posts_state_and_speed)
 
 	n = radiant_power_adapter_decode_fec(&adapter, PWR_SOURCE, body, 0u);
 	radiant_bridge_drain();
-	zassert_equal(n, 2u, "equipment state and speed");
+	zassert_equal(n, 3u, "equipment type, state and speed");
+
+	/* Byte 1 is 0x19 = 25, PROFILE_FEC_TYPE_TREADMILL's neighbour
+	 * "trainer". Decoded since the codec landed and posted since
+	 * radiant_naming.c needed it: it is what names the endpoint
+	 * "Indoor Bike 51234 In Use" instead of a hex string. */
+	s = cap_field(RADIANT_POWER_FIELD_FEC_TYPE);
+	zassert_not_null(s, NULL);
+	zassert_equal(s->field_type, RADIANT_FIELD_ENUM_GENERIC, NULL);
+	zassert_equal(s->raw, 25, NULL);
+	zassert_equal(s->flags, RADIANT_SAMPLE_ROTATED,
+		      "an identity, but still a decoded fact - and it rides "
+		      "FE-C page 16, so it is ROTATED");
 
 	s = cap_field(RADIANT_POWER_FIELD_FEC_STATE);
 	zassert_not_null(s, NULL);
 	zassert_equal(s->field_type, RADIANT_FIELD_ENUM_GENERIC, NULL);
 	zassert_equal(s->raw, (int64_t)PROFILE_FEC_STATE_IN_USE, NULL);
-	zassert_equal(s->flags, 0u,
-		      "a decoded measurement, not a rule's derived boolean");
+	zassert_equal(s->flags, RADIANT_SAMPLE_ROTATED,
+		      "a decoded measurement, not a rule's derived boolean - and "
+		      "ROTATED, because page 16 is one page of a rotation");
 
 	s = cap_field(RADIANT_POWER_FIELD_FEC_SPEED);
 	zassert_not_null(s, NULL);
@@ -462,6 +475,61 @@ ZTEST(radiant_power_adapter, test_fec_trainer_page_integrates_the_same_way)
 	s = cap_field(RADIANT_POWER_FIELD_EVENT_COUNT);
 	zassert_not_null(s, NULL);
 	zassert_equal(s->raw, INT64_C(1), NULL);
+}
+
+ZTEST(radiant_power_adapter, test_only_the_interleaved_pages_are_marked_rotated)
+{
+	/*
+	 * The discriminator, and the whole reason RADIANT_SAMPLE_ROTATED is a
+	 * parameter of post_power() rather than a property of the file.
+	 *
+	 * The SAME three series - watts, event count, energy - are ROTATED off
+	 * FE-C page 25 and are NOT off bicycle-power page 0x10, because page
+	 * 0x10 is that profile's every-message page while 25 is one page of an
+	 * interleaved rotation. A consumer computing a per-entity timeout from
+	 * the channel period is right in the second case and wrong by about two
+	 * orders of magnitude in the first; on a real Wahoo #52233 every FE-C
+	 * entity was published with "expire_after":1 and would have been greyed
+	 * out in Home Assistant between the trainer's own pages.
+	 */
+	uint8_t body[8];
+	const struct radiant_sample *s;
+
+	fec_trainer_body(body, 7u, 200u);
+	(void)radiant_power_adapter_decode_fec(&adapter, PWR_SOURCE, body, 0u);
+	fec_trainer_body(body, 8u, 200u);
+	(void)radiant_power_adapter_decode_fec(&adapter, PWR_SOURCE, body,
+					       1u * US_PER_S);
+	radiant_bridge_drain();
+
+	s = cap_field(RADIANT_POWER_FIELD_INST_POWER);
+	zassert_not_null(s, NULL);
+	zassert_true((s->flags & RADIANT_SAMPLE_ROTATED) != 0u,
+		     "FE-C page 25 is one page of a rotation");
+	s = cap_field(RADIANT_POWER_FIELD_ENERGY);
+	zassert_not_null(s, NULL);
+	zassert_equal(s->flags,
+		      RADIANT_SAMPLE_ACCUMULATING | RADIANT_SAMPLE_ROTATED,
+		      "an accumulator AND rotated - the two are independent");
+
+	/* Now the bicycle-power profile, same adapter, same three field ids. */
+	pwr_test_reset(NULL);
+	power_body(body, 7u, 200u);
+	(void)radiant_power_adapter_decode(&adapter, PWR_SOURCE, body, 0u);
+	power_body(body, 8u, 200u);
+	(void)radiant_power_adapter_decode(&adapter, PWR_SOURCE, body,
+					   1u * US_PER_S);
+	radiant_bridge_drain();
+
+	s = cap_field(RADIANT_POWER_FIELD_INST_POWER);
+	zassert_not_null(s, NULL);
+	zassert_equal(s->flags, 0u,
+		      "page 0x10 is on every message: NOT rotated, and its "
+		      "expiry from the channel period is correct");
+	s = cap_field(RADIANT_POWER_FIELD_ENERGY);
+	zassert_not_null(s, NULL);
+	zassert_equal(s->flags, RADIANT_SAMPLE_ACCUMULATING,
+		      "accumulating, and nothing else");
 }
 
 ZTEST(radiant_power_adapter, test_fec_invalid_power_posts_nothing_but_keeps_time)

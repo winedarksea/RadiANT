@@ -132,6 +132,13 @@ if(CONFIG_RADIANT_BRIDGE)
     "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_binding.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_hr_adapter.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_rules.c"
+    # The endpoint-name formatter (radiant_naming.h). NOT a sink - it is a pure
+    # function both sinks call - so it adds nothing to the "bridge: N sinks"
+    # count at boot and nothing to .github/workflows/build.yml's exact-set
+    # assert_sink_names diff. It is here rather than beside a sink because both
+    # mqtt_sink.c and src/matter/ant/ant_bridge.cpp need it and each is behind
+    # its own Kconfig symbol.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_naming.c"
     # Liveness lands with the bus, not after a sink. RADIANT_SAMPLE_STALE has
     # been defined and honoured since P6 with nothing producing it, and a sink
     # written against a bus that never marks anything stale grows that
@@ -354,6 +361,12 @@ endif()
 
 target_sources_ifdef(CONFIG_ANT_DONGLE_MQTT_SINK app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/src/mqtt_sink.c")
+
+# A bench instrument, default n - see its own header and Kconfig help. It
+# registers a sink, so it deliberately does not compile into the images whose
+# sink sets build.yml asserts exactly.
+target_sources_ifdef(CONFIG_ANT_DONGLE_NAMING_DEBUG app PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/naming_debug_sink.c")
 
 # ── The hostless node's identity (compat-C6) ────────────────────────────────
 #

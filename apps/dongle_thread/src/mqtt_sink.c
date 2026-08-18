@@ -71,6 +71,7 @@
 
 #include "radiant_binding.h"
 #include "radiant_bridge.h"
+#include "radiant_naming.h"
 
 #include "bridge_app.h"
 
@@ -81,7 +82,9 @@ LOG_MODULE_REGISTER(mqtt_sink, LOG_LEVEL_INF);
 /*
  * radiant/<bridge_id>/status                     retained, LWT
  * radiant/<bridge_id>/<binding_uuid>/status      retained, per-sensor liveness
- * radiant/<bridge_id>/<binding_uuid>/<field_id>  the value
+ * radiant/<bridge_id>/<binding_uuid>/<field_key> the value ("d"-prefixed when
+ *                                                the sample is derived - see
+ *                                                field_key() below)
  *
  * binding_uuid, NEVER a device number. Section 5 is unambiguous about this and
  * gives three reasons: a device number is 16 bits, it is re-rollable by
@@ -89,6 +92,12 @@ LOG_MODULE_REGISTER(mqtt_sink, LOG_LEVEL_INF);
  * event that will happen at a trade show. An MQTT topic has to survive a
  * battery change. There is no path in this file from a struct radiant_binding
  * to a topic that reads ::devnum, and that is the property to preserve.
+ *
+ * THE DISCOVERY *NAME* DOES CARRY THE DEVICE NUMBER, and that is not a
+ * loosening of the rule above: a name is what a human reads on a card in Home
+ * Assistant and the number is printed on the strap, while a topic is an
+ * identity that automations and history are keyed on. A re-rolled device
+ * number changes the displayed name and nothing else. See radiant_naming.h.
  */
 #define TOPIC_MAX 96
 
@@ -98,6 +107,41 @@ static void uuid_str(uint64_t uuid, char *out, size_t out_len)
 {
 	(void)snprintf(out, out_len, "%08x%08x", (unsigned int)(uuid >> 32),
 		       (unsigned int)(uuid & 0xFFFFFFFFu));
+}
+
+/*
+ * ── The field key, and why it is not just the field id ──────────────────────
+ *
+ * A field id is unique per source ONLY within one producer. radiant_bridge.h
+ * allocates 0x00-0x1F to whichever profile adapter owns the source and
+ * 0x20-0x3F to the common-page adapter - but radiant_rules.c posts its derived
+ * booleans onto THE SAME SOURCE starting from id 0 (RADIANT_RULE_FIELD_WORN),
+ * straight over the top of the profile block.
+ *
+ * MEASURED ON REAL HARDWARE, nine collisions in one 210 s capture:
+ *
+ *   heart-rate strap #8265, id 0x00 = computed bpm AND "worn"
+ *                           id 0x01 = beat count  AND "active"
+ *                           id 0x02 = beat time   AND "at rest"
+ *   FE-C trainer #52233,    id 0x00 = active power AND "worn"
+ *
+ * Keyed on the id alone, each of those pairs shared one state topic, one
+ * unique_id and one bit of `announced` - so a strap published its bpm and its
+ * worn boolean to the same topic, alternating a heart rate with a 0/1, and only
+ * whichever arrived first was ever announced to Home Assistant.
+ *
+ * The derived samples are the ones that do not own the id space, so they are
+ * the ones that move: they get a "d" prefix and everything else keeps the topic
+ * it already had. THE MATTER PLANE NEEDS NO EQUIVALENT - radiant_matter.c maps
+ * only OCCUPANCY, TEMPERATURE, HUMIDITY, PRESSURE and BATTERY_SOC, so no
+ * endpoint is ever created for a profile-block id and (source, field_id) is
+ * genuinely unique there.
+ */
+static void field_key(const struct radiant_sample *s, char *out, size_t out_len)
+{
+	(void)snprintf(out, out_len, "%s%u",
+		       ((s->flags & RADIANT_SAMPLE_DERIVED) != 0u) ? "d" : "",
+		       s->field_id);
 }
 
 /* ── The Home Assistant discovery table (section 9.2) ──────────────────────── */
@@ -225,7 +269,55 @@ static struct {
  * availability topic, which it does know) and the first sample of each field
  * emits it.
  */
-static uint32_t announced[RADIANT_BINDING_MAX];
+/*
+ * 64 BITS, NOT 32, AND THE WIDTH IS THE WHOLE POINT. radiant_bridge.h allocates
+ * field ids 0x00-0x1F to the profile adapter and 0x20-0x3F to the common-page
+ * adapter, so the id space is exactly 64 wide. This was a uint32_t guarded by
+ * `field_id < 32`, which silently announced nothing at all for the entire
+ * common-page block: page 84's temperature, humidity and pressure published
+ * their values to topics Home Assistant had never been told about, so no entity
+ * ever appeared for them and the values were discarded at the broker. Nothing
+ * failed and nothing logged - the guard just skipped, which is why a bitmap
+ * narrower than its index needs to be impossible rather than merely correct
+ * today. The BUILD_ASSERT below is what makes it impossible.
+ */
+static uint64_t announced[RADIANT_BINDING_MAX];
+
+/* The derived booleans re-use the profile block's ids (see field_key()), so
+ * they need their own plane or one would mask the other. */
+static uint64_t announced_derived[RADIANT_BINDING_MAX];
+
+#ifdef CONFIG_ANT_DONGLE_NAMING_DEBUG
+/* The same two planes again, for the bench log rather than the broker - so a
+ * payload is printed once per key instead of at the sample rate. */
+static uint64_t logged[RADIANT_BINDING_MAX];
+static uint64_t logged_derived[RADIANT_BINDING_MAX];
+#endif
+
+BUILD_ASSERT((RADIANT_FIELD_ID_COMMON_MAX + 1u) <= (sizeof(announced[0]) * 8u),
+	     "the announce bitmap is narrower than the field id space it indexes");
+
+/*
+ * The FE-C equipment type per source, for radiant_naming_format(). One byte,
+ * fed from the bus by publish() below rather than read out of the binding
+ * table: it is a fact learned from traffic, not one read off the channel at
+ * bind time - see radiant_naming.h.
+ *
+ * A RE-ANNOUNCE IS WHAT MAKES A LATE ARRIVAL VISIBLE HERE. Discovery is
+ * retained and sent once per (source, field), so an entity announced before
+ * the first page 16 keeps the "Fitness Equip" name until something re-arms
+ * `announced`. That is what the subtype-changed branch in publish() does, and
+ * it is the MQTT analogue of ant_bridge.cpp's labelDirty.
+ *
+ * Field id 0x0D is RADIANT_POWER_FIELD_FEC_TYPE, hardcoded with the citation
+ * rather than by including radiant_power_adapter.h - the same line
+ * radiant_rules.c draws for the FE state code, and this file is a sink, which
+ * is even further from the page codecs.
+ */
+static uint8_t subtype[RADIANT_BINDING_MAX];
+
+#define FEC_TYPE_FIELD_ID 0x0Du
+#define FEC_DEVICE_TYPE   0x11u
 
 /* ── Connection ────────────────────────────────────────────────────────────── */
 
@@ -273,6 +365,59 @@ static int publish_raw(const char *topic, const char *payload, bool retain)
 	return mqtt_publish(&client, &p);
 }
 
+/*
+ * ── The reconnect backoff, and the bug it exists for ────────────────────────
+ *
+ * The CONNACK wait below is bounded, and its comment says why: this runs on the
+ * bridge's drain thread, so "an unbounded wait here would stop the bus being
+ * drained for as long as a broker is unreachable, and the ring would fill and
+ * start dropping". That reasoning was right and the guard was in the wrong
+ * place - mqtt_connect() ITSELF blocks, doing the TCP handshake synchronously,
+ * and against an unreachable broker it returns -ETIMEDOUT only when the stack
+ * gives up.
+ *
+ * MEASURED ON THIS BENCH with no Thread parent and the placeholder broker
+ * address: one attempt per sample, each taking 3.0 s, forever. Sensors were
+ * producing roughly eight samples a second, so the bus drained at about a
+ * thirtieth of its input and the ring dropped the rest - precisely the outcome
+ * the bounded wait was written to prevent, reached one line above it.
+ *
+ * IT IS NOT AN MQTT-ONLY FAULT, WHICH IS WHY IT MATTERS. Sinks are drained
+ * serially on one thread, so a stalled MQTT sink also starves the Matter sink
+ * and radiant_rules.c. In a 240 s capture with a real strap on air, not one
+ * derived occupancy boolean was ever posted: the rule never saw a coherent
+ * accumulating series because most of them had been dropped.
+ *
+ * So a failed attempt now costs one comparison per sample instead of a TCP
+ * timeout, and attempts are spaced out to a cap. A broker that is simply not
+ * there yet - the normal state during Thread attach - must not be able to hold
+ * the whole bus down.
+ */
+#define MQTT_BACKOFF_MIN_MS 5000
+#define MQTT_BACKOFF_MAX_MS 300000
+
+static int64_t mqtt_next_attempt_ms;
+static uint32_t mqtt_backoff_ms = MQTT_BACKOFF_MIN_MS;
+
+/* Caller holds `lock`. Doubling rather than fixed, so a broker that is down for
+ * an hour costs a handful of stalls rather than 720 of them. */
+static void arm_backoff(void)
+{
+	mqtt_next_attempt_ms = k_uptime_get() + (int64_t)mqtt_backoff_ms;
+	if (mqtt_backoff_ms < MQTT_BACKOFF_MAX_MS) {
+		mqtt_backoff_ms *= 2u;
+		if (mqtt_backoff_ms > MQTT_BACKOFF_MAX_MS) {
+			mqtt_backoff_ms = MQTT_BACKOFF_MAX_MS;
+		}
+	}
+}
+
+static void clear_backoff(void)
+{
+	mqtt_next_attempt_ms = 0;
+	mqtt_backoff_ms = MQTT_BACKOFF_MIN_MS;
+}
+
 /* Caller holds `lock`. Returns true if the client is usable afterwards. */
 static bool ensure_connected(void)
 {
@@ -280,9 +425,16 @@ static bool ensure_connected(void)
 	static struct mqtt_topic will_topic;
 	int rc;
 	int waited_ms;
+	int64_t now;
 
 	if (connected) {
 		return true;
+	}
+
+	/* Cheap refusal on the drain thread. Never blocks. */
+	now = k_uptime_get();
+	if (mqtt_next_attempt_ms != 0 && now < mqtt_next_attempt_ms) {
+		return false;
 	}
 
 	if (bridge_status_topic[0] == '\0') {
@@ -308,6 +460,10 @@ static bool ensure_connected(void)
 			"IPv6 address - this sink will publish nothing",
 			CONFIG_ANT_DONGLE_MQTT_BROKER);
 		mqtt_stats.connect_failed++;
+		/* Straight to the cap: a misconfigured address cannot start
+		 * working, so retrying it on a short interval buys nothing. */
+		mqtt_backoff_ms = MQTT_BACKOFF_MAX_MS;
+		arm_backoff();
 		return false;
 	}
 
@@ -346,8 +502,10 @@ static bool ensure_connected(void)
 
 	rc = mqtt_connect(&client);
 	if (rc != 0) {
-		LOG_WRN("mqtt_connect: %d (will retry on the next sample)", rc);
 		mqtt_stats.connect_failed++;
+		arm_backoff();
+		LOG_WRN("mqtt_connect: %d (next attempt in %u ms)", rc,
+			mqtt_backoff_ms);
 		return false;
 	}
 
@@ -368,11 +526,15 @@ static bool ensure_connected(void)
 	}
 
 	if (!connected) {
-		LOG_WRN("no CONNACK within 5 s");
 		(void)mqtt_abort(&client);
 		mqtt_stats.connect_failed++;
+		arm_backoff();
+		LOG_WRN("no CONNACK within 5 s (next attempt in %u ms)",
+			mqtt_backoff_ms);
 		return false;
 	}
+
+	clear_backoff();
 
 	if (!online_published) {
 		(void)publish_raw(bridge_status_topic, "online", true);
@@ -410,35 +572,93 @@ static uint32_t expire_after_s(uint16_t period_32k)
 	return (uint32_t)((us + 999999u) / 1000000u);
 }
 
-static void publish_discovery(uint32_t source, const struct radiant_sample *s)
+/*
+ * Fills work_topic and work_payload with the retained discovery message, and
+ * publishes nothing. Split out from publish_discovery() so that a bench build
+ * can SEE the payload: this sink cannot reach a broker without a Thread network
+ * and a border router, so until now the only evidence for the JSON's content
+ * was that the code appeared to build it correctly. Caller holds `lock`.
+ */
+static bool compose_discovery(uint32_t source, const struct radiant_sample *s)
 {
 	const struct radiant_binding *b = radiant_binding_get(source);
 	const struct ha_row *row;
+	char name[RADIANT_NAMING_MAX];
 	char uuid[17];
+	char key[8];
 	char avail[TOPIC_MAX];
 	char state[TOPIC_MAX];
 	uint32_t expire;
 	int n;
 
 	if (b == NULL) {
-		return;
+		return false;
 	}
 
 	uuid_str(b->uuid, uuid, sizeof(uuid));
+	field_key(s, key, sizeof(key));
 	row = ha_row_for(s->field_type);
-	expire = expire_after_s(b->period);
+
+	/*
+	 * NO expire_after ON A DERIVED OR ROTATED FIELD, and both halves are
+	 * corrections made against a measurement.
+	 *
+	 * expire_after_s() is the channel period x 3 - "three consecutive misses
+	 * and the reading is stale" - which is right for a series that
+	 * republishes at the channel rate. radiant_rules.c publishes its
+	 * booleans ONLY WHEN THE DEBOUNCED STATE CHANGES, which on a worn strap
+	 * is minutes apart and on a resting one is never.
+	 *
+	 * Observed in the composed payload on this bench: every derived entity
+	 * carried "expire_after":1, so Home Assistant would have marked "Worn",
+	 * "Active" and "At Rest" unavailable one second after each change and
+	 * left them there - the four endpoints the whole naming change exists to
+	 * make usable, permanently greyed out.
+	 *
+	 * Omitting the key is the honest answer rather than guessing a longer
+	 * one: section 9.3's SECOND level already covers "this sensor is gone"
+	 * through the per-binding availability topic, which is published from
+	 * RADIANT_SAMPLE_STALE and does not depend on a field's update rate.
+	 *
+	 * ROTATED is the same mistake in a second disguise, and it took a real
+	 * FE-C trainer to see it. A field carried on an interleaved page repeats
+	 * at the ROTATION's rate, not the channel's: the Wahoo's speed, FE state
+	 * and equipment type each arrive about once a second on a 4 Hz channel,
+	 * and a common page as rarely as one message in 121. Every one of them
+	 * was published with "expire_after":1, so Home Assistant would have
+	 * greyed out the trainer's entire entity set between its own pages,
+	 * forever. The channel period says nothing about these fields and the
+	 * decoder is the only layer that knows which page a value came off,
+	 * which is why the flag is set there (radiant_bridge.h).
+	 */
+	expire = ((s->flags & (RADIANT_SAMPLE_DERIVED | RADIANT_SAMPLE_ROTATED))
+		  != 0u)
+			 ? 0u
+			 : expire_after_s(b->period);
 
 	(void)snprintf(avail, sizeof(avail), "radiant/%s/%s/status",
 		       CONFIG_ANT_DONGLE_MQTT_BRIDGE_ID, uuid);
-	(void)snprintf(state, sizeof(state), "radiant/%s/%s/%u",
-		       CONFIG_ANT_DONGLE_MQTT_BRIDGE_ID, uuid, s->field_id);
+	(void)snprintf(state, sizeof(state), "radiant/%s/%s/%s",
+		       CONFIG_ANT_DONGLE_MQTT_BRIDGE_ID, uuid, key);
 
 	(void)snprintf(work_topic, sizeof(work_topic),
-		       "homeassistant/sensor/%s_%u/config", uuid, s->field_id);
+		       "homeassistant/sensor/%s_%s/config", uuid, key);
+
+	/*
+	 * The entity name. This used to be `label` or the literal "RadiANT",
+	 * followed by the raw field id - so a Home Assistant user saw
+	 * "RadiANT 4" and had five of them for one heart-rate strap, all
+	 * indistinguishable. The composition lives in radiant_naming.c, shared
+	 * with the Matter bridge, so the two planes cannot drift into naming
+	 * the same endpoint two different things.
+	 */
+	(void)radiant_naming_format(name, sizeof(name), b->devtype, b->devnum,
+				    subtype[source], b->label, s->field_type,
+				    s->field_id);
 
 	n = snprintf(work_payload, sizeof(work_payload),
-		     "{\"name\":\"%s %u\","
-		     "\"unique_id\":\"%s_%u\","
+		     "{\"name\":\"%s\","
+		     "\"unique_id\":\"%s_%s\","
 		     "\"state_topic\":\"%s\","
 		     "\"availability_topic\":\"%s\","
 		     "\"payload_available\":\"online\","
@@ -448,8 +668,7 @@ static void publish_discovery(uint32_t source, const struct radiant_sample *s)
 		      * The bit is the vocabulary's, so this needs no per-field
 		      * knowledge. */
 		     "\"state_class\":\"%s\"",
-		     (b->label[0] != '\0') ? b->label : "RadiANT",
-		     s->field_id, uuid, s->field_id, state, avail,
+		     name, uuid, key, state, avail,
 		     ((s->flags & RADIANT_SAMPLE_ACCUMULATING) != 0u)
 			     ? "total_increasing"
 			     : "measurement");
@@ -479,13 +698,22 @@ static void publish_discovery(uint32_t source, const struct radiant_sample *s)
 	if (n > 0 && n < (int)sizeof(work_payload) - 2) {
 		work_payload[n++] = '}';
 		work_payload[n] = '\0';
+		return true;
+	}
+
+	/* Truncated rather than malformed: publishing a half-written JSON
+	 * object would leave a broken retained message on the broker that
+	 * survives a reboot of this device. */
+	LOG_ERR("discovery message for source %u field %u did not fit", source,
+		s->field_id);
+	return false;
+}
+
+/* Caller holds `lock`. */
+static void publish_discovery(uint32_t source, const struct radiant_sample *s)
+{
+	if (compose_discovery(source, s)) {
 		(void)publish_raw(work_topic, work_payload, true);
-	} else {
-		/* Truncated rather than malformed: publishing a half-written
-		 * JSON object would leave a broken retained message on the
-		 * broker that survives a reboot of this device. */
-		LOG_ERR("discovery message for source %u field %u did not fit",
-			source, s->field_id);
 	}
 }
 
@@ -506,6 +734,31 @@ static void mqtt_publish_sample(const struct radiant_sample *s)
 
 	k_mutex_lock(&lock, K_FOREVER);
 
+#ifdef CONFIG_ANT_DONGLE_NAMING_DEBUG
+	/*
+	 * BEFORE the connection gate, deliberately. This sink needs a Thread
+	 * network and a border router to reach a broker, neither of which exists
+	 * on a bench, so everything below ensure_connected() is unreachable here
+	 * and the discovery JSON had never once been looked at on real hardware.
+	 * Logging it costs one compose per (source, field key) and is compiled
+	 * out of every shipping image.
+	 */
+	if (s->field_id <= RADIANT_FIELD_ID_COMMON_MAX) {
+		uint64_t *shown = ((s->flags & RADIANT_SAMPLE_DERIVED) != 0u)
+					  ? &logged_derived[s->source]
+					  : &logged[s->source];
+
+		if ((*shown & BIT64(s->field_id)) == 0u &&
+		    radiant_binding_get(s->source) != NULL) {
+			if (compose_discovery(s->source, s)) {
+				*shown |= BIT64(s->field_id);
+				LOG_INF("discovery %s", work_topic);
+				LOG_INF("  %s", work_payload);
+			}
+		}
+	}
+#endif
+
 	if (!ensure_connected()) {
 		k_mutex_unlock(&lock);
 		return;
@@ -517,10 +770,49 @@ static void mqtt_publish_sample(const struct radiant_sample *s)
 		return;
 	}
 
-	if (s->field_id < 32u &&
-	    (announced[s->source] & BIT(s->field_id)) == 0u) {
-		publish_discovery(s->source, s);
-		announced[s->source] |= BIT(s->field_id);
+	/*
+	 * The equipment type, cached for the discovery name. Gated on the
+	 * binding's device type as well as the field id, because ids 0x00-0x1F
+	 * belong to whichever profile adapter owns the source
+	 * (radiant_bridge.h's allocation block) - 0x0D is only "equipment type"
+	 * on an FE-C binding.
+	 *
+	 * A CHANGE RE-ARMS DISCOVERY for this source, which is the whole point:
+	 * the retained config message is sent once, so an entity announced
+	 * before the first page 16 would otherwise carry the generic name
+	 * forever. Only on a change - the value repeats at 4 Hz, and
+	 * re-publishing a retained config four times a second would be a
+	 * broker-side storm.
+	 */
+	if (s->field_type == RADIANT_FIELD_ENUM_GENERIC &&
+	    s->field_id == FEC_TYPE_FIELD_ID && b->devtype == FEC_DEVICE_TYPE &&
+	    s->raw >= 0 && s->raw <= (int64_t)UINT8_MAX &&
+	    subtype[s->source] != (uint8_t)s->raw) {
+		subtype[s->source] = (uint8_t)s->raw;
+		announced[s->source] = 0u;
+		announced_derived[s->source] = 0u;
+#ifdef CONFIG_ANT_DONGLE_NAMING_DEBUG
+		/* Re-arm the bench log too, or it shows only the pre-page-16
+		 * "Fitness Equip" payload and never the corrected one - which
+		 * would hide the very mechanism being demonstrated. */
+		logged[s->source] = 0u;
+		logged_derived[s->source] = 0u;
+#endif
+	}
+
+	/* Two planes, for the same reason field_key() has a "d" prefix: a
+	 * derived boolean and a profile field can carry the same id, and one
+	 * bitmap would announce whichever arrived first and silently skip the
+	 * other for the life of the binding. */
+	if (s->field_id <= RADIANT_FIELD_ID_COMMON_MAX) {
+		uint64_t *bits = ((s->flags & RADIANT_SAMPLE_DERIVED) != 0u)
+					 ? &announced_derived[s->source]
+					 : &announced[s->source];
+
+		if ((*bits & BIT64(s->field_id)) == 0u) {
+			publish_discovery(s->source, s);
+			*bits |= BIT64(s->field_id);
+		}
 	}
 
 	uuid_str(b->uuid, uuid, sizeof(uuid));
@@ -546,8 +838,13 @@ static void mqtt_publish_sample(const struct radiant_sample *s)
 		return;
 	}
 
-	(void)snprintf(work_topic, sizeof(work_topic), "radiant/%s/%s/%u",
-		       CONFIG_ANT_DONGLE_MQTT_BRIDGE_ID, uuid, s->field_id);
+	{
+		char key[8];
+
+		field_key(s, key, sizeof(key));
+		(void)snprintf(work_topic, sizeof(work_topic), "radiant/%s/%s/%s",
+			       CONFIG_ANT_DONGLE_MQTT_BRIDGE_ID, uuid, key);
+	}
 
 	/*
 	 * value_SI = raw * 10^exp (radiant_bridge.h). Emitted as an integer
@@ -613,6 +910,15 @@ static void mqtt_binding_changed(uint32_t source, const struct radiant_binding *
 	 * new uuid (radiant_binding.h says so explicitly), so its retained
 	 * discovery messages are new topics and must be sent again. */
 	announced[source] = 0u;
+	announced_derived[source] = 0u;
+#ifdef CONFIG_ANT_DONGLE_NAMING_DEBUG
+	logged[source] = 0u;
+	logged_derived[source] = 0u;
+#endif
+	/* And the slot may now hold a different physical machine, so the
+	 * learned equipment type goes with it rather than naming a rower
+	 * "Treadmill". */
+	subtype[source] = 0u;
 
 	if (b != NULL && connected) {
 		uuid_str(b->uuid, uuid, sizeof(uuid));
