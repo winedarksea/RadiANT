@@ -281,7 +281,7 @@ with no USB device attached.
 
 `radiant/src/ext/radiant_x25519.c` sits in an `ext/` directory, which
 normally means vendored code. It is not: it is clean-room, written from
-[RFC 7748](https://www.rfc-editor.org/rfc/rfc7748) and verified against that
+[RFC 7748](https://www.rfc-editor.org/info/rfc7748/) and verified against that
 RFC's own published test vectors. The directory name marks it as a *standard
 algorithm rather than RadiANT protocol logic* — the thing a hardware PKA
 backend replaces wholesale — and not as somebody else's source.

@@ -29,10 +29,26 @@ static const struct radiant_sec_caps modes_caps = {
 	.name          = "test-modes",
 	.has_ctr       = true,
 	.has_cmac      = true,
+	/* These two are NOT this backend's to answer for, and hard-coding them
+	 * false is how this file broke the pairing suites: a mode-level backend
+	 * replaces the AES-CTR/CMAC layer only, while X25519 comes from
+	 * src/ext/radiant_x25519.c and the RNG from its own backend - both still
+	 * linked here, both keyed off their own symbols. radiant_sec_caps() is
+	 * the single answer for the whole build, so it has to track those
+	 * symbols exactly as src/radiant_sec_aes.c's sw_caps does. Saying false
+	 * while the code is present makes every caller that checks the cap
+	 * first - node_ident_pair_begin(), radiant_sec_pair_set_scalar() and
+	 * all of Layer D underneath them - refuse work the build can do. */
+#if defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
+	.has_x25519    = true,
+#else
 	.has_x25519    = false,
-	/* Stated rather than left to the zero-initialiser, so the next person
-	 * to copy this struct sees the field. */
+#endif
+#if defined(CONFIG_RADIANT_SEC_HAS_RNG)
+	.has_rng       = true,
+#else
 	.has_rng       = false,
+#endif
 	.key_is_opaque = false,
 	.key_bits_mask = RADIANT_SEC_KEY_BITS_128,
 	.block_us      = 0,

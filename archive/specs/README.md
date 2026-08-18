@@ -180,7 +180,7 @@ interoperable, and this project uses them — under the graded policy in
 **nowhere in `radiant_core/**`**.
 
 Obtain them the intended way: register for a copy at
-<https://www.thisisant.com/developer/ant-plus/>. It is free and takes minutes.
+<https://www.thisisant.com/developer/ant-plus/ant-antplus-defined/>. It is free and takes minutes.
 
 ### Unofficial mirrors: references only, deliberately not committed
 
