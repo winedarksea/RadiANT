@@ -3285,34 +3285,57 @@ antr_err_t antr_channel_assign(uint8_t channel, uint8_t type, uint8_t network,
 	k_mutex_lock(&api_lock, K_FOREVER);
 
 	/*
-	 * Refuse a NON-ZERO network whose address was never installed. See
-	 * api_net_valid for the bug this closes.
+	 * An in-range network whose address was never installed is WARNED
+	 * ABOUT AND ACCEPTED. It used to be refused with
+	 * ANTW_INVALID_NETWORK_NUMBER, and that refusal - correct on its face -
+	 * was a worse bug than the silence it replaced.
 	 *
-	 * NETWORK 0 IS DELIBERATELY EXEMPT, and the exemption is load-bearing
-	 * rather than cautious. Network 0 with an all-zero address is ANT's
-	 * public network - a legitimate default that a real dongle honours - so
-	 * an assign to it before any MESG_NETWORK_KEY must still succeed. Two
-	 * things in this tree depend on that and would have caught it late:
-	 * tools/ant_conformance.py's ASSIGN_PREAMBLE assigns channel 0 to
-	 * network 0 with no key set at all, and tools/ab_gates.toml requires
-	 * that transcript to stay byte-identical, so refusing here would have
-	 * failed conformance on every case that needs an assigned channel *and*
-	 * diverged from the sdk_ant backend it is compared against.
+	 * Measured on real hardware against real Zwift, 2026-08-18
+	 * (captures/zwift-20260818-144612.pcap, decoded with
+	 * tools/decode_pcap.py). Zwift installs three network keys at startup,
+	 * only the ANT+ one is accepted here, and it then cycles its wildcard
+	 * scan channel across networks 0, 1 and 2 every ~4-5 s:
 	 *
-	 * Networks 1..N have no such default. A zero address there means only
-	 * that no key was installed, or that one was installed and rejected -
-	 * which is exactly the Zwift case.
+	 *     t=21.0  ch0 background-scan assigned on network 0, opens, works
+	 *     t=24.7  power meter #20329 found and tracked on ch1
+	 *     t=26.0  Zwift closes and unassigns ch0 cleanly
+	 *     t=26.05 assign ch0 on NETWORK 1 -> ANTW_INVALID_NETWORK_NUMBER
+	 *     t=30+   CLOSE_CHANNEL 00 x5385 at ~40/s for the remaining 127 s,
+	 *             each answered CHANNEL_IN_WRONG_STATE, and no further
+	 *             ASSIGN or OPEN for the rest of the session
+	 *
+	 * Zwift has no recovery path for a failed assign: it spins on close
+	 * forever and never rebuilds the scan channel, so the session ends with
+	 * exactly one ANT+ device ever discovered and every other sensor
+	 * invisible. That is the "it only finds one device / the strap only
+	 * shows up over Bluetooth" report.
+	 *
+	 * Accepting is also the honest answer, not merely the tolerable one.
+	 * The sweep in radiant_search.c matches on api_net_addr[0]
+	 * unconditionally, so a background scan assigned to a keyless network
+	 * still reports ANT+ devices normally - Zwift's network 1 and 2 cycles
+	 * are productive, not wasted. Only a channel that leaves scan mode and
+	 * TRACKS pays for the zero address, by hearing nothing; Zwift assigns
+	 * its tracking channels to network 0, so it never does.
+	 *
+	 * The diagnostic that motivated the refusal is kept - LOG_WRN here plus
+	 * api_stats.key_rejects / ANT_HEALTH_KEY_REJECT at the point the key is
+	 * turned away. Both are visible to us without being fatal to the host,
+	 * which is the property the refusal lacked.
+	 *
+	 * RULE, learned the expensive way: returning a correct error to a host
+	 * that has no recovery path for it is a regression. Prefer a warning we
+	 * can read over an error the host cannot act on.
 	 *
 	 * The bounds test stays with radiant_channel_assign(), which already
-	 * answers it: an out-of-range number is a different mistake from an
-	 * unconfigured one. This adds only the in-range-but-unset case.
+	 * answers it: an out-of-range network number is a different mistake and
+	 * is still refused there.
 	 */
 	if (network > 0u && network < API_NETWORKS && !api_net_valid[network]) {
-		k_mutex_unlock(&api_lock);
-		LOG_WRN("assign ch%u refused: network %u has no address installed "
-			"(set a key with MESG_NETWORK_KEY first)",
+		LOG_WRN("ch%u assigned to network %u, which has no address "
+			"installed - a background scan still works (the sweep "
+			"uses network 0), but tracking on it will hear nothing",
 			channel, network);
-		return (antr_err_t)ANTW_INVALID_NETWORK_NUMBER;
 	}
 
 	rc = radiant_channel_assign(channel, type, network, ext_assign);
@@ -3986,9 +4009,34 @@ antr_err_t antr_capabilities_get(uint8_t *capabilities)
 	capabilities[ANTW_CAPABILITIES_OFFSET_MAX_NETWORKS] = API_NETWORKS;
 	capabilities[ANTW_CAPABILITIES_OFFSET_STANDARD_OPTIONS] = 0x00u;
 
+	/*
+	 * ANTW_CAPABILITIES_SERIAL_NUMBER_ENABLED is DELIBERATELY NOT SET, and
+	 * removing it is a bug fix rather than a reduction.
+	 *
+	 * The bit means "the device has a readable serial number", and
+	 * MESG_GET_SERIAL_NUM (0x61) is not bridged - it is answered
+	 * ANTW_INVALID_MESSAGE, pinned that way for every backend in
+	 * archive/captures/serial/*.antser (case 61-get-serial-num/valid, reply
+	 * a40340006128ae). Advertising a capability that answers INVALID_MESSAGE
+	 * is the exact trap docs/gotchas.md names, and it is not hypothetical
+	 * here: a live capture of real Zwift shows it requesting 0x61 during
+	 * startup and being refused (captures/zwift-20260818-144612.pcap,
+	 * `a4024d00618a` at t=0, answered `a40340004d2882`).
+	 *
+	 * The sdk_ant backend - the reference this one is A/B'd against - does
+	 * NOT set this bit either: its recorded capabilities advanced-options
+	 * byte is 0xb2 against radiant's 0xba, and 0x08 is the whole difference.
+	 * So this was radiant claiming something the stack it emulates never
+	 * claimed.
+	 *
+	 * Setting it back requires implementing 0x61 first, and that needs the
+	 * reply's LEN byte, which is recorded NOWHERE in this tree (K1: the
+	 * yaml's payload_len 0 describes the request). Guessing a length for a
+	 * message the dongle originates is the thing ant_serial_bridge.c's
+	 * advanced-burst arm already refuses to do.
+	 */
 	capabilities[ANTW_CAPABILITIES_OFFSET_ADVANCED_OPTIONS] =
 		(uint8_t)(ANTW_CAPABILITIES_NETWORK_ENABLED |
-			  ANTW_CAPABILITIES_SERIAL_NUMBER_ENABLED |
 			  ANTW_CAPABILITIES_PER_CHANNEL_TX_POWER_ENABLED |
 			  ANTW_CAPABILITIES_LOW_PRIORITY_SEARCH_ENABLED |
 			  /* The device ID list really is honoured - consulted

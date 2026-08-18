@@ -117,6 +117,13 @@ static struct {
 	bool       repost;
 	radiant_time_t next_open[RADIANT_SCHED_MAX_CHANNELS];
 
+	/* Which channels repost, when only some of them are tracked. Zero means
+	 * all of them, so every test predating this field is unaffected. A
+	 * mixed test needs it: a standing scan gets DONE_ABORTED every time a
+	 * tracked window displaces it, and reposting THAT as a tracked window
+	 * would quietly convert the scan into a bounded receive mid-test. */
+	uint32_t   repost_mask;
+
 	/* Turnaround driver: post a reply this far after a received frame's
 	 * t_sync, from inside the receive callback. 0 disables it. */
 	uint32_t reply_after_us;
@@ -224,7 +231,9 @@ static void on_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		break;
 	}
 
-	if (log.repost) {
+	if (log.repost &&
+	    (log.repost_mask == 0u ||
+	     (log.repost_mask & ((uint32_t)1u << ch)) != 0u)) {
 		log.next_open[ch] += (radiant_time_t)TEST_PERIOD_US;
 		post_track(ch, log.next_open[ch],
 			   log.next_open[ch] + (radiant_time_t)TEST_WINDOW_US);
@@ -322,6 +331,7 @@ static void finish(void)
 	uint8_t                        ch;
 
 	log.repost = false;
+	log.repost_mask = 0u;
 	log.reply_after_us = 0u;
 	for (ch = 0u; ch < (uint8_t)RADIANT_SCHED_MAX_CHANNELS; ch++) {
 		zassert_ok(radiant_sched_cancel(ch));
@@ -1823,6 +1833,94 @@ ZTEST(radiant_sched, test_a_displaced_scan_chunk_is_reported_and_stays_live)
 	fake_radio_advance_to(tracked_at + TEST_WINDOW_US + 1u);
 	zassert_equal(1u, log.ok_count[0], "the tracked window lost to the scan");
 	zassert_true(radiant_sched_pending(31u), "the scan did not resume");
+
+	assert_every_window_bounded();
+	finish();
+}
+
+/*
+ * A SENSOR TRACKED ALONGSIDE A SEARCH KEEPS EVERY SLOT, OVER MANY PERIODS.
+ *
+ * test_a_displaced_scan_chunk_is_reported_and_stays_live proves ONE tracked
+ * window displaces a running chunk. That is not the same claim as this one,
+ * and the difference is what a real session lives in: the scan re-arms from
+ * its own terminal callback, so displacement happens again every period, and
+ * "the scan yields" has to hold for the whole ride rather than once.
+ *
+ * Measured on real hardware first, which is why the numbers here are not round
+ * ones. In captures/zwift-20260818-160751.pcap a power meter on channel 1 was
+ * tracking cleanly at 8182/32768 s when the heart-rate strap on channel 2 was
+ * switched off. Eight missed slots later channel 2 went to search
+ * (EVENT_RX_FAIL_GO_TO_SEARCH, t=159.259) and channel 1 - which was still on
+ * the air, still at full signal - immediately began losing EVERY OTHER SLOT:
+ *
+ *     157.798 .. 159.546   8 consecutive slots, no loss     (ch2 already
+ *                                                            silent since
+ *                                                            157.289)
+ *     159.796 .. 163.541   OK FAIL OK FAIL OK FAIL ...      (ch2 searching)
+ *
+ * 10.6% loss before, 44.4% after, and the transition tracks ch2's change of
+ * STATE rather than its going off the air 2.3 s earlier. So this is not RF.
+ *
+ * The suspected mechanism is the chunk ceiling: the sweep asks for the dwell
+ * still owed to the current address set, up to RADIANT_SEARCH_DWELL_DEFAULT_US
+ * (260 ms), which is LONGER than the 249.696 ms slot period. If a chunk is
+ * ever armed without being truncated in front of the next tracked window it
+ * swallows that window whole; the window is reported MISSED, re-posted, and
+ * wins the next pass - which is exactly the alternation above.
+ *
+ * chunk_us is therefore deliberately 260000 here and the period is the
+ * measured one. Asserting on ok_count is the point: a scheduler that armed the
+ * window late, or not at all, reports MISSED, which is the RX_FAIL the host
+ * sees.
+ */
+ZTEST(radiant_sched, test_a_tracked_channel_keeps_every_slot_under_a_search)
+{
+	struct radiant_sched_rx r;
+	radiant_time_t          base;
+	uint8_t                 frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t                 n;
+	const uint32_t          cycles = 20u;
+
+	bring_up();
+
+	base = radiant_radio_now() + 100000u;
+
+	/* The master keeps transmitting throughout - every loss below is the
+	 * dongle's, not the air's. */
+	n = fake_radio_build_ant_frame(frame, TEST_DEVNUM_BASE, TEST_DEV_TYPE,
+				       TEST_TRANS_TYPE, test_payload);
+	zassert_equal(cycles + 1u,
+		      fake_radio_air_master(base + (radiant_time_t)TEST_WINDOW_US / 2u,
+					    TEST_PERIOD_US, cycles + 1u, frame, n),
+		      "the master stream was not queued");
+
+	/* Channel 0 tracks it, re-posting from done() like radiant_channel.c. */
+	log.repost = true;
+	log.repost_mask = 1u; /* channel 0 only - channel 31 is the search */
+	log.next_open[0] = base;
+	post_track(0u, base, base + (radiant_time_t)TEST_WINDOW_US);
+
+	/* Channel 31 searches: a standing continuous request, one dwell per
+	 * chunk, exactly as api_pump_locked() posts it. */
+	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_SEARCH),
+		    search_filter, 8u, base, RADIANT_TIME_NEVER);
+	r.chunk_us = 260000u; /* RADIANT_SEARCH_DWELL_DEFAULT_US */
+	zassert_ok(radiant_sched_request_rx(31u, &r));
+
+	zassert_ok(radiant_sched_tick());
+	fake_radio_advance_to(base + (radiant_time_t)cycles * TEST_PERIOD_US +
+			      TEST_PERIOD_US / 2u);
+
+	zassert_true(radiant_sched_pending(31u), "the search stopped searching");
+	zassert_equal(0u, log.missed_count[0],
+		      "the search cost the tracked channel %u of %u slots "
+		      "(%u served) - a searching channel must yield the radio "
+		      "to a tracked one every period, not every other one",
+		      log.missed_count[0], cycles, log.ok_count[0]);
+	zassert_true(log.ok_count[0] >= cycles,
+		     "tracked channel served %u of %u slots", log.ok_count[0],
+		     cycles);
 
 	assert_every_window_bounded();
 	finish();

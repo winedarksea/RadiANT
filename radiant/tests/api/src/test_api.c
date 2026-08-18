@@ -280,21 +280,21 @@ static uint8_t build_peer_frame(uint8_t *out, uint8_t ctrl, const uint8_t *paylo
 
 /*
  * Zwift sets three network keys at startup and cycles channel 0 across
- * networks 0, 1 and 2 every ~4-5 s
- * (archive/host-api/2026-08-10-zwift-session-decoded.txt). Only the ANT+ key
- * is accepted, so networks 1 and 2 never get an address - and before the fix
- * this test pins, an assign to one of them SUCCEEDED, joined the sweep,
- * acquired, then tracked on an all-zero address and heard nothing. Silent, and
- * it cost roughly two thirds of the host's discovery attempts.
+ * networks 0, 1 and 2 every ~4-5 s. Only the ANT+ key is accepted, so networks
+ * 1 and 2 never get an address.
  *
- * Both halves are asserted here because the exemption is the half that will
- * look like a bug to the next reader: network 0 with an all-zero address is
- * ANT's public network, tools/ant_conformance.py assigns to it with no key
- * set, and ab_gates.toml pins that transcript byte-for-byte. Deleting the
- * `network > 0` term would fail conformance on every case that needs an
- * assigned channel, which is a slow and confusing way to discover it.
+ * This test used to pin the OPPOSITE contract - that such an assign is refused
+ * with ANTW_INVALID_NETWORK_NUMBER - and a live capture of real Zwift proved
+ * that refusal to be the more serious bug
+ * (captures/zwift-20260818-144612.pcap): Zwift has no recovery path for a
+ * failed assign, so it spun on CLOSE_CHANNEL 5385 times over the remaining 127
+ * seconds, never rebuilt its scan channel, and discovered exactly one ANT+
+ * device for the whole session. See the long comment in antr_channel_assign().
+ *
+ * So the contract is now: WARN, and accept. The refusal must not come back
+ * without a host that can survive it, which is what this test exists to stop.
  */
-ZTEST(api, test_an_assign_to_a_network_with_no_key_is_refused)
+ZTEST(api, test_an_assign_to_a_network_with_no_key_is_accepted)
 {
 	/* Any key that is not the published ANT+ one. The table is closed by
 	 * policy (see antr_network_address_set), so this stands in for every
@@ -303,22 +303,27 @@ ZTEST(api, test_an_assign_to_a_network_with_no_key_is_refused)
 		0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88
 	};
 
-	/* Network 1: no key ever installed. Refused. */
-	zassert_equal((antr_err_t)ANTW_INVALID_NETWORK_NUMBER,
+	/* Network 1: no key ever installed. Accepted anyway - a background
+	 * scan assigned here still works, because the sweep matches on
+	 * network 0's address regardless of the channel's network number. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_channel_assign(CH, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,1u, 0u),
-		      "an assign to a network with no address must be refused, "
-		      "not silently accepted onto a zero address");
+		      "refusing this assign stops Zwift rebuilding its scan "
+		      "channel and costs every sensor after the first");
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_unassign(CH));
 
-	/* Network 2: a key was offered and rejected - this is the Zwift case,
-	 * and it must not leave the network looking configured. */
+	/* Network 2: a key was offered and REJECTED. Still refuse the key -
+	 * that half was never in doubt - but the assign that follows must not
+	 * inherit the refusal. */
 	zassert_equal((antr_err_t)ANTW_INVALID_PARAMETER_PROVIDED,
 		      antr_network_address_set(2u, bogus_key));
-	zassert_equal((antr_err_t)ANTW_INVALID_NETWORK_NUMBER,
-		      antr_channel_assign(CH, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,2u, 0u),
-		      "a REJECTED key must leave the network unusable, not "
-		      "half-configured");
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(CH, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,2u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_unassign(CH));
 
-	/* Network 1 again, this time with the real key: now it works. */
+	/* Network 1 again, this time with the real key. */
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
 		      antr_network_address_set(1u, ant_plus_key));
 	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
@@ -331,6 +336,15 @@ ZTEST(api, test_an_assign_to_a_network_with_no_key_is_refused)
 		      antr_channel_assign(CH, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,0u, 0u),
 		      "network 0 is ANT's public network and has a legitimate "
 		      "all-zero default - refusing it breaks conformance");
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_unassign(CH));
+
+	/* An OUT-OF-RANGE network number is a different mistake and is still
+	 * refused - by radiant_channel_assign(), not by the removed check. */
+	zassert_not_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(CH, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  (uint8_t)RADIANT_CHANNEL_NETWORK_COUNT, 0u),
+		      "an out-of-range network number must still be refused");
 }
 
 /* Open one channel of `type`, configured as the bench's own sensor. */
@@ -830,6 +844,12 @@ ZTEST(api, test_a_constant_transmit_offset_moves_the_period_by_exactly_that)
 	const int32_t  offset_us = -9;   /* mirrors T_SYNC_CAL_US in the nrf backend */
 	radiant_time_t prev = 0u;
 	uint32_t       i;
+	/* api_stats survives antr_stack_reset() - only antr_init() zeroes it, and
+	 * that runs once for the suite - so these counters are cumulative across
+	 * every test that ran before this one. Baseline them, or this asserts
+	 * "no test has ever missed a slot", which is a fact about test ORDER. */
+	const uint32_t missed0 = radiant_api_stats_get()->slots_missed;
+	const uint32_t failed0 = radiant_api_stats_get()->sched_failed;
 
 	fake_radio_set_tx_offset_us(offset_us);
 	open_channel((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
@@ -850,8 +870,8 @@ ZTEST(api, test_a_constant_transmit_offset_moves_the_period_by_exactly_that)
 
 	/* And nothing about it is visible from the outside: no missed slots, no
 	 * failures, no host event. That is the point. */
-	zassert_equal(0u, radiant_api_stats_get()->slots_missed);
-	zassert_equal(0u, radiant_api_stats_get()->sched_failed);
+	zassert_equal(missed0, radiant_api_stats_get()->slots_missed);
+	zassert_equal(failed0, radiant_api_stats_get()->sched_failed);
 
 	end_of_test();
 }
@@ -1612,6 +1632,128 @@ static void air_tracked_frame(const struct fake_radio_arm *w, uint16_t number)
 }
 
 /*
+ * ONE SENSOR GOING AWAY MUST NOT COST THE OTHER ITS SLOTS.
+ *
+ * The sibling test above guards the SWEEP against starvation. Its only
+ * assertion about the tracked channel is `count_bcast_on(1u) > 0u`, which is
+ * there to prove the test is measuring what it claims - it cannot detect a
+ * tracked channel losing half its packets, and on real hardware that is
+ * exactly what happened.
+ *
+ * captures/zwift-20260818-160751.pcap, a Zwift session on the fixed firmware.
+ * A power meter on channel 1 and a heart-rate strap on channel 2, both
+ * tracking. The strap was switched off at t=157.289. Channel 1 carried on
+ * perfectly for another eight slots. Then channel 2 exhausted its eight misses
+ * and went to search (EVENT_RX_FAIL_GO_TO_SEARCH, t=159.259), and from
+ * t=159.796 channel 1 - still at full signal, still on the air - returned
+ * OK FAIL OK FAIL OK FAIL for the rest of the session:
+ *
+ *     loss on channel 1 before channel 2 searched:  10.6%  (452 slots)
+ *     loss on channel 1 after:                      44.4%  ( 18 slots)
+ *
+ * The step tracks channel 2's change of STATE, not its going off the air 2.3 s
+ * earlier, so it is not an RF effect. A background scan does NOT do this
+ * (channel 2 measured 8.3% loss while a scan ran against 8.0% while none did),
+ * which is what makes this a separate test rather than a tightening of that
+ * one: the two search modes reach the scheduler by different paths.
+ *
+ * The loss floor in the room that day was 8-12%, so this asserts a bound well
+ * clear of it rather than perfection - a scheduler that yields correctly loses
+ * nothing here, since the mock drops no frames at all.
+ */
+ZTEST(api, test_a_channel_that_drops_to_search_does_not_starve_one_still_tracking)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev_a;
+	uint16_t                     dev_b;
+	radiant_time_t               t_acq;
+	uint32_t                     served;
+	uint32_t                     rx_fail;
+	/* 5 s at the ANT+ period. Kept short so the counts below stay inside
+	 * MSGLOG_MAX after the log is reset. */
+	const uint32_t               slots = 20u;
+
+	/* Channel 0 acquires device A. */
+	open_and_acquire_slave(&dev_a);
+	t_acq = radiant_radio_now();
+
+	/* Channel 1, an ordinary wildcard slave, acquires device B. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(1u,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(1u, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(1u, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(1u, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(1u));
+
+	w = armed_search_window();
+	air_device(w, 1u, 0x0600u, 0x0Bu, 1000u, &dev_b);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u),
+		      "setup: channel 1 did not acquire the second device");
+
+	/*
+	 * Device A transmits for the whole test. Device B never transmits
+	 * again - it has been switched off, exactly as the strap was - so
+	 * channel 1 runs out its eight misses and falls back to search.
+	 */
+	air_repeating(dev_a, 0x0Bu, t_acq + PERIOD_US, 40u + slots);
+
+	run_virtual_us(4000000u);
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(1u),
+		      "setup: channel 1 never fell back to search, so this test "
+		      "is not measuring what it claims to measure");
+
+	/* Measure only from here: the misses that put channel 1 into search
+	 * are not what is under test. */
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+
+	run_virtual_us((uint64_t)slots * PERIOD_US);
+
+	served = count_bcast_on(CH);
+	rx_fail = count_channel_events(CH, (uint8_t)ANTW_EVENT_RX_FAIL);
+
+	zassert_true(n_msg <= MSGLOG_MAX,
+		     "the message log overflowed, so the counts below are not "
+		     "trustworthy (%u messages)", n_msg);
+	zassert_true(served * 4u >= slots * 3u,
+		     "channel 1 dropped to search and channel 0 lost its slots: "
+		     "%u of %u served, %u RX_FAIL. A searching channel must "
+		     "yield the radio to a tracking one every period, not every "
+		     "other one",
+		     served, slots, rx_fail);
+
+	(void)antr_channel_close(1u);
+	(void)antr_channel_close(CH);
+	fake_radio_advance(1000u);
+	drain();
+
+	/* end_of_test()'s ending, minus the one violation a run this long
+	 * always provokes - see the same exception in
+	 * test_the_scan_keeps_finding_devices_while_another_channel_tracks:
+	 * seconds of tracked channel plus a sweep is hundreds of arm calls
+	 * against a 64-entry mock log, so FAKE_RADIO_VIOL_LOG_FULL here is the
+	 * harness running out of room, not a firmware contract violation. */
+	zassert_true(fake_radio_is_idle(), "radio not idle: %s",
+		     fake_radio_busy_reason());
+	for (uint32_t i = 0u; i < fake_radio_viol_count() &&
+			      i < (uint32_t)FAKE_RADIO_VIOL_MAX; i++) {
+		enum fake_radio_viol code = fake_radio_viol(i)->code;
+
+		zassert_true(code == FAKE_RADIO_VIOL_LOG_FULL ||
+				     code == FAKE_RADIO_VIOL_NONE,
+			     "contract violation: %s",
+			     fake_radio_viol_name(code));
+	}
+}
+
+/*
  * THE RECEIVE SIDE, WHICH NOTHING COVERED: a tracking SLAVE handed one
  * acknowledged packet must tell its host about it exactly once.
  *
@@ -2006,6 +2148,9 @@ ZTEST(api, test_a_denied_master_transmit_does_not_wedge)
 	radiant_time_t later;
 	uint32_t       arms_at_denial;
 	uint32_t       tx_ok_before;
+	/* Cumulative across the suite - see the same baseline in
+	 * test_a_constant_transmit_offset_moves_the_period_by_exactly_that. */
+	uint32_t       missed0;
 
 	open_channel((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
 
@@ -2019,6 +2164,7 @@ ZTEST(api, test_a_denied_master_transmit_does_not_wedge)
 	 * covers the synchronous refusal - the harder case, completing inside
 	 * the very pass that posted the request. */
 	arms_at_denial = fake_radio_arm_count();
+	missed0 = radiant_api_stats_get()->slots_missed;
 	fake_radio_force_arm_repeat(RADIANT_RADIO_EDENIED, 3u);
 	host_writes_broadcast();
 	run_virtual_us(4u * (uint64_t)PERIOD_US);
@@ -2034,7 +2180,7 @@ ZTEST(api, test_a_denied_master_transmit_does_not_wedge)
 
 	zassert_true(radiant_api_stats_get()->slots_denied > 0u,
 		     "the denied transmits were not counted as denials");
-	zassert_equal(0u, radiant_api_stats_get()->slots_missed,
+	zassert_equal(missed0, radiant_api_stats_get()->slots_missed,
 		     "a denied master transmit was charged to the miss counter");
 
 	/* The channel is still due to transmit in the future, not pinned to a

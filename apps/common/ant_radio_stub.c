@@ -110,8 +110,12 @@ antr_err_t antr_capabilities_get(uint8_t *capabilities)
 	capabilities[0] = STUB_MAX_CHANNELS;  /* max ANT channels */
 	capabilities[1] = STUB_MAX_NETWORKS;  /* max networks */
 	capabilities[2] = 0x00;               /* standard options */
+	/* No ANTW_CAPABILITIES_SERIAL_NUMBER_ENABLED: MESG_GET_SERIAL_NUM
+	 * (0x61) is unbridged in every backend and answers INVALID_MESSAGE, so
+	 * claiming a readable serial number is a false advertisement. Dropped
+	 * from ant_radio_radiant.c for the same reason - see the long comment
+	 * there; a real host (Zwift) does ask for it. */
 	capabilities[3] = ANTW_CAPABILITIES_NETWORK_ENABLED |
-			  ANTW_CAPABILITIES_SERIAL_NUMBER_ENABLED |
 			  ANTW_CAPABILITIES_PER_CHANNEL_TX_POWER_ENABLED |
 			  ANTW_CAPABILITIES_LOW_PRIORITY_SEARCH_ENABLED;
 	capabilities[4] = ANTW_CAPABILITIES_EXT_MESSAGE_ENABLED |

@@ -11,7 +11,77 @@ reads.
 
 ## [Unreleased]
 
+### Added
+
+- **Two tests for a defect the suite could not see: a channel dropping to
+  search starving one still tracking.** Measured in
+  `captures/zwift-20260818-160751.pcap` — a power meter on channel 1 held 10.6%
+  loss while a heart-rate strap tracked on channel 2, and 44.4% (perfect
+  `OK FAIL OK FAIL` alternation) from the instant channel 2 went to search,
+  though the meter was on air at full signal throughout. The step follows
+  channel 2's change of STATE, not its going quiet 2.3 s earlier, so it is not
+  RF. The nearest existing test,
+  `test_the_scan_keeps_finding_devices_while_another_channel_tracks`, guards
+  the *sweep* against starvation and asserts only `count_bcast_on(1u) > 0u`
+  about the tracked channel — a channel losing half its packets passes it.
+  `radiant_sched.test_a_tracked_channel_keeps_every_slot_under_a_search` and
+  `api.test_a_channel_that_drops_to_search_does_not_starve_one_still_tracking`
+  now assert the loss rate. **Both pass**, and are proven sensitive rather than
+  vacuous (the second reports 20 of 20 slots served, 0 RX_FAIL), including with
+  the scan's `chunk_us` at the 260 ms dwell that exceeds the 249.7 ms slot
+  period. So the arbitration logic is correct and the fault is in what
+  `fake_radio` replaces — arming latency, the SEARCH→TRACKING reconfiguration,
+  or timeslot arbitration in `radiant_radio_nrf.c`. The tests stay as the
+  regression guard for whatever the fix turns out to be.
+- A background scan does **not** cause this: measured 8.3% loss on a tracked
+  channel while the scan ran against 8.0% while it did not. The acquire-search
+  and background-scan paths differ, so a test of one does not cover the other.
+
 ### Fixed
+
+- **Two API tests asserted a fact about test ORDER.** `api_stats` is zeroed in
+  `antr_init()`, which runs once per suite, and not in `antr_stack_reset()`,
+  which runs between tests — so `zassert_equal(0u, ...->slots_missed)` in
+  `test_a_constant_transmit_offset_moves_the_period_by_exactly_that` and
+  `test_a_denied_master_transmit_does_not_wedge` really asserted "no
+  earlier-ordered test has ever missed a slot". Adding any test that misses
+  slots broke both. Both now baseline the counter at test start.
+
+- **An assign to a keyless network stopped Zwift discovering anything after the
+  first sensor.** `antr_channel_assign()` refused an in-range network with no
+  address installed (`ANTW_INVALID_NETWORK_NUMBER`), which was added to turn a
+  silent hole into a diagnosable error and instead turned a survivable
+  degradation into a dead session. Zwift installs three network keys, only the
+  ANT+ one is accepted, and it then cycles its wildcard scan channel across
+  networks 0/1/2 — so the refusal hit every few seconds. Measured against real
+  Zwift: assign refused at t=26.05 s, then `CLOSE_CHANNEL` **5385 times** over
+  the remaining 127 s with no further `ASSIGN`/`OPEN`, and exactly one ANT+
+  device discovered for the whole session. Zwift has no recovery path for a
+  failed assign. It is now warned about and accepted; the sweep matches on
+  network 0's address regardless, so a background scan on a keyless network
+  works normally. `ANTW_INVALID_NETWORK_NUMBER` goes back to meaning what
+  `docs/ant-serial-protocol.md` says it means — a number above the advertised
+  maximum — which `radiant_channel_assign()` still enforces.
+- **Capabilities no longer advertise a readable serial number the dongle cannot
+  produce.** `ANTW_CAPABILITIES_SERIAL_NUMBER_ENABLED` was set while
+  `MESG_GET_SERIAL_NUM` (`0x61`) is unbridged and answers `INVALID_MESSAGE` —
+  the advertised-and-unimplemented trap `docs/gotchas.md` names, and a real host
+  does ask: Zwift requests `0x61` during startup. The `sdk_ant` backend this one
+  is A/B'd against never claimed the bit (advanced-options `0xb2` vs radiant's
+  `0xba`). Dropped from the `radiant` and `stub` backends. **Two conformance
+  transcripts need regenerating on hardware**, both carrying the same frame:
+  `conformance-nrf-radiant.antser` and `conformance-cc26xx.antser` (the TI
+  dongle runs the same radiant backend). The capabilities reply changes
+  `a40954200300ba2600d5000192` → `a40954200300b22600d500019a` — byte 3
+  `0xba` → `0xb2`, checksum `0x92` → `0x9a`. `conformance-sdk-ant.antser` is
+  unaffected; it never set the bit. Until they are regenerated, `ab_gates`
+  will flag both as a diff, and that diff is expected.
+- **`tools/decode_pcap.py` spliced together the bulk streams of different USB
+  devices.** Reassembly buffers were keyed by direction alone, so a capture
+  holding more than one device (any `-All` capture) concatenated unrelated bytes
+  into one stream and the reframer resynchronised through the wreckage, emitting
+  messages nobody sent. Now keyed by `(device, direction)`, with a `--device`
+  filter to restrict decoding to one address.
 
 - **Two tracked channels landing within one arm lead of each other lost the
   later one, every period.** `min_arm_lead_us` is the scheduler's exclusion
