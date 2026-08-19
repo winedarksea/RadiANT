@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 <#
 .SYNOPSIS
     Capture the USB traffic between a host application (Zwift) and this dongle.

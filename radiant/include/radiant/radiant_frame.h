@@ -391,6 +391,28 @@ int radiant_frame_lr_parse(const uint8_t *body, uint8_t body_len,
  */
 uint32_t radiant_frame_airtime_us(enum radiant_frame_cfg cfg, uint8_t payload_len);
 
+/*
+ * How long a receive window in this format keeps the radio AFTER its own
+ * t_close, in microseconds. Zero for a NULL format (an energy-detect chunk
+ * receives no frame and has no tail).
+ *
+ * This is not a detail of any backend, it is what radiant_radio_hal.h's
+ * definition of t_close means: t_close bounds a frame's t_SYNC, and t_sync is
+ * the end of the ADDRESS, so a frame arriving at the very last legal instant
+ * still has its whole body and CRC to deliver afterwards. The receiver must
+ * stay on for that, and until it comes off nothing else can be armed.
+ *
+ * radiant_sched.c is the caller that needs it: when it truncates a background
+ * scan chunk to fit in front of a committed window, the gap it leaves has to
+ * cover this as well as caps.min_arm_lead_us. Leaving only the lead was worth
+ * exactly every other tracked packet - see the "gap in front of a committed
+ * operation" comment in arm_next().
+ *
+ * Sized from max_body_len, not body_len: the window accepts anything up to
+ * that bound, so that is the frame it may still be receiving.
+ */
+uint32_t radiant_frame_tail_us(const struct radiant_pkt_format *fmt);
+
 /* ---------------------------------------------------------------------------
  * The control byte - byte 3 of the body, and what Spike B is about
  *

@@ -33,11 +33,30 @@ reads.
   `fake_radio` replaces — arming latency, the SEARCH→TRACKING reconfiguration,
   or timeslot arbitration in `radiant_radio_nrf.c`. The tests stay as the
   regression guard for whatever the fix turns out to be.
-- A background scan does **not** cause this: measured 8.3% loss on a tracked
-  channel while the scan ran against 8.0% while it did not. The acquire-search
-  and background-scan paths differ, so a test of one does not cover the other.
+- **`tools/ant_search_contention.py`, and the correction it forced.** The entry
+  above used to end "a background scan does **not** cause this: 8.3% against
+  8.0%". That was one weak measurement and it is wrong. A third Zwift capture,
+  `captures/zwift-20260818-225148.pcap`, has the step twice: 49.5% loss on the
+  tracked power meter while Zwift's own ch0 wildcard discovery channel cycled,
+  10.8% for the same channel with two sensors tracking and nothing searching,
+  and 49.2% (perfect alternation) after the heart-rate strap was switched off
+  and its channel fell back to search. The boundary is exact — ch0's search
+  closes at t=143.840 and the meter returns seven consecutive good slots from
+  144.044. It is mutual, not a priority inversion: ch0's 5 s search windows
+  yielded 4, 3 and 10 broadcasts before the tracked channel opened and 0, 0, 2,
+  3, 0 after. The new tool measures it as an A/B/A with no Zwift in the loop and
+  reproduces it first try — 36.6% / **63.0%** / 35.5%, controls agreeing to 1.1
+  points, with the tracked channel raising `RX_FAIL_GO_TO_SEARCH` during the
+  arm. It reports an alternation percentage beside the loss because losing
+  exactly every other slot is the one signature interference cannot fake.
+  Still not reproduced in ztest, so the search for the fault stays in
+  `radiant_radio_nrf.c`.
 
 ### Fixed
+
+- **`scripts/cap_zwift.ps1` and `tools/decode_pcap.py` had no SPDX header**, so
+  the `host-tests` CI job's `check_license.py` was failing on both from the day
+  they were added.
 
 - **Two API tests asserted a fact about test ORDER.** `api_stats` is zeroed in
   `antr_init()`, which runs once per suite, and not in `antr_stack_reset()`,

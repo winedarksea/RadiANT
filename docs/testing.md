@@ -39,6 +39,7 @@ build takes `--port COM8` instead, and every tool accepts it.
 | [`tools/ant_bench.py`](../tools/ant_bench.py) | USB round-trip latency and throughput. `request capabilities` — cheapest message with a guaranteed reply and no side effects — so it measures the USB path and the bridge, never the radio | 1 |
 | [`tools/ant_sim.py`](../tools/ant_sim.py) | Drives a spare board as an ANT+ sensor, so the radio can be tested without owning one. `--dry-run` needs no board at all | 1 (transmitter) |
 | [`tools/ant_verify.py`](../tools/ant_verify.py) | The measuring instrument: loss, timing, decoded accuracy, accumulator continuity, liveness, loss accounting. `--replay` needs no board | 1 (receiver) |
+| [`tools/ant_search_contention.py`](../tools/ant_search_contention.py) | What a SEARCHING channel costs one already TRACKING, as an A/B/A. Prints an alternation percentage beside the loss, because losing exactly every other slot is the one signature interference cannot fake | 1 + a real sensor |
 | [`tools/ant_pages.py`](../tools/ant_pages.py) | Pure ANT+ page encode/decode. No hardware, host-testable, shared with `zephyr_aerosense` | none |
 | [`tools/test_*.py`](../tools/) | The only tests here that run in CI | none |
 

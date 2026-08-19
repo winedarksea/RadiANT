@@ -627,6 +627,29 @@ uint32_t radiant_frame_airtime_us(enum radiant_frame_cfg cfg, uint8_t payload_le
 	       AIR_1M_US_PER_BYTE;
 }
 
+uint32_t radiant_frame_tail_us(const struct radiant_pkt_format *fmt)
+{
+	uint32_t bytes;
+
+	if (fmt == NULL) {
+		return 0u;
+	}
+	/* Everything after t_sync, which is the end of the address: body then
+	 * CRC. The preamble and address are deliberately absent - they are
+	 * already over by t_sync, which is the whole reason t_sync is defined
+	 * there rather than at packet start. */
+	bytes = (uint32_t)fmt->max_body_len + RADIANT_FRAME_CRC_BYTES;
+
+	if (fmt->phy == RADIANT_PHY_LR_CODED) {
+		/* FEC block 2 carries body + CRC, then TERM2. Block 1 is
+		 * before t_sync (it IS the coded PHY's access address) and so
+		 * is not part of the tail, the mirror of the note in
+		 * radiant_frame_airtime_us(). */
+		return bytes * AIR_LR_US_PER_BYTE + AIR_LR_TERM2_US;
+	}
+	return bytes * AIR_1M_US_PER_BYTE;
+}
+
 /* ---------------------------------------------------------------------------
  * The long-range body
  * ---------------------------------------------------------------------------

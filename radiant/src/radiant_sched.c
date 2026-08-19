@@ -77,6 +77,7 @@
 #include <string.h>
 
 #include <radiant/radiant_chanmap.h>
+#include <radiant/radiant_frame.h>
 #include <radiant/radiant_noise.h>
 #include <radiant/radiant_radio_hal.h>
 #include <radiant/radiant_sched.h>
@@ -426,6 +427,21 @@ static radiant_time_t phy_gap(const struct radiant_pkt_format *after,
 			       : (radiant_time_t)s.caps->phy_switch_us;
 	}
 	return phy_lead(next);
+}
+
+/*
+ * How long a receive window in this format holds the radio PAST ITS OWN
+ * t_close. See radiant_frame_tail_us(): t_close bounds a frame's t_sync, and
+ * t_sync is the end of the address, so the body and CRC of a frame arriving at
+ * the last legal instant are still to come.
+ *
+ * Charged to whatever fills a gap in front of a committed operation, on top of
+ * arm_lead(). Leaving only the lead is a defect that costs the committed
+ * window entirely, and it is invisible at one channel - see arm_next().
+ */
+static radiant_time_t rx_tail(const struct radiant_pkt_format *fmt)
+{
+	return (radiant_time_t)radiant_frame_tail_us(fmt);
 }
 
 /* Record what the radio is now configured for. Called only from a successful
@@ -1473,9 +1489,38 @@ static enum step arm_next(radiant_time_t earliest)
 			chunk = RADIANT_SCHED_SCAN_CHUNK_US;
 		}
 		if (committed != RADIANT_TIME_NEVER) {
+			/*
+			 * THE GAP IN FRONT OF A COMMITTED OPERATION IS THREE
+			 * THINGS, NOT TWO. The lead the committed window needs
+			 * to be armed, the reconfiguration between the two
+			 * PHYs - and the tail of the chunk being truncated,
+			 * which is what this line used to be missing.
+			 *
+			 * A scan chunk does not end at its t_close. t_close is
+			 * the latest t_sync it will accept, and t_sync is the
+			 * end of the ADDRESS, so the receiver stays on for the
+			 * body and CRC of a frame that arrives right at the
+			 * bell. Truncating to `committed - lead` therefore
+			 * hands the whole lead to that tail and leaves nothing
+			 * to arm with.
+			 *
+			 * Measured on an nRF54L15 DK against a simulated power
+			 * meter, one tracked channel plus Zwift's background
+			 * scanning channel: the chunk's terminal arrived 149 us
+			 * after its t_close (112 us of search-format tail plus
+			 * the DISABLED->ISR path) against a min_arm_lead_us of
+			 * exactly 149. The tracked window was then armed with
+			 * 23 us of its 254 us span left, heard nothing, and the
+			 * next one - the one the short remainder chunk did not
+			 * reach - was fine. That is a clean OK/FAIL/OK/FAIL at
+			 * 50.0 % loss, which is what both Zwift captures show
+			 * and what tools/ant_search_contention.py reproduces.
+			 */
 			s_limit = t_back(committed,
-					 lead + phy_gap(s.ch[scan_ch].fmt,
-							committed_fmt));
+					 lead +
+						 phy_gap(s.ch[scan_ch].fmt,
+							 committed_fmt) +
+						 rx_tail(s.ch[scan_ch].fmt));
 		}
 		if (s_limit == RADIANT_TIME_NEVER ||
 		    s_limit >= s_open + (radiant_time_t)RADIANT_SCHED_SCAN_MIN_US) {
@@ -1509,7 +1554,13 @@ static enum step arm_next(radiant_time_t earliest)
 		if (committed != RADIANT_TIME_NEVER) {
 			/* NULL: an energy-detect chunk leaves the packet
 			 * configuration alone, so the switch the committed
-			 * operation needs is the one it needs from here. */
+			 * operation needs is the one it needs from here.
+			 *
+			 * And no rx_tail(): an ED chunk measures a band, it
+			 * does not receive a frame, so there is no body still
+			 * arriving when its dwell is up. That is why the tail
+			 * is charged per gap filler rather than added to
+			 * arm_lead(), which every operation would pay. */
 			e_limit = t_back(committed,
 					 lead + phy_gap(NULL, committed_fmt));
 		}
@@ -1538,10 +1589,20 @@ static enum step arm_next(radiant_time_t earliest)
 			/* Truncated so the transmit can still be armed, and, on
 			 * a different PHY, so the radio can still switch between
 			 * them. Truncating costs the window's tail; overrunning
-			 * costs the frame. */
+			 * costs the frame.
+			 *
+			 * rx_tail() for the same reason as the scan branch
+			 * above: this window's own t_close bounds a t_sync, so
+			 * the receiver is still on for a body and CRC after it.
+			 * A transmit's t_sync is exact and cannot slip, so
+			 * without this the frame that gets lost is the master's
+			 * own - the same defect, on the side of the scheduler
+			 * a slave-only dongle never exercises. */
 			limit = t_back(tx_at,
-				       lead + phy_gap(s.ch[rx_ch].fmt,
-						      s.ch[tx_ch].fmt));
+				       lead +
+					       phy_gap(s.ch[rx_ch].fmt,
+						       s.ch[tx_ch].fmt) +
+					       rx_tail(s.ch[rx_ch].fmt));
 		}
 		if (limit == RADIANT_TIME_NEVER || limit >= rx_at) {
 			st = arm_rx_window((uint8_t)rx_ch, earliest, limit);

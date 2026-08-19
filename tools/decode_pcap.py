@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Decode a USBPcap capture of the dongle into one line per ANT serial message.
 
 Companion to ``scripts/cap_zwift.ps1``. The original pair of scratch tools was
