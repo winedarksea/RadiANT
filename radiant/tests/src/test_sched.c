@@ -1468,7 +1468,7 @@ ZTEST(radiant_sched, test_an_unreachable_deadline_is_refused_rather_than_run_lat
 /* A window still open when a transmit must be armed is truncated, not
  * abandoned and not allowed to overrun. One radio: the receive tail is worth
  * less than an exact-instant transmit, so the scheduler gives up exactly
- * caps.min_arm_lead_us of it. */
+ * caps.min_arm_lead_us plus the window's own frame tail. */
 ZTEST(radiant_sched, test_a_window_is_truncated_to_clear_a_transmit_deadline)
 {
 	struct radiant_sched_tx t;
@@ -1495,7 +1495,16 @@ ZTEST(radiant_sched, test_a_window_is_truncated_to_clear_a_transmit_deadline)
 	zassert_equal(FAKE_RADIO_ARM_RX, fake_radio_arm(0u)->kind,
 		      "the receive that starts first must run first");
 	zassert_equal(open, fake_radio_arm(0u)->t_open);
-	zassert_equal(tx_at - (radiant_time_t)lead, fake_radio_arm(0u)->t_close,
+	/* lead AND this window's own tail: a frame whose t_sync lands at
+	 * t_close still has its body to deliver, and a transmit's t_sync cannot
+	 * slip to wait for it. */
+	zassert_equal(tx_at - (radiant_time_t)lead -
+			      (radiant_time_t)radiant_frame_tail_us(
+				      radiant_frame_format(
+					      RADIANT_FRAME_CFG_TRACKING)) -
+			      (radiant_time_t)
+				      radiant_radio_caps_get()->rx_close_hold_us,
+		      fake_radio_arm(0u)->t_close,
 		      "the window was not truncated to clear the transmit");
 
 	fake_radio_advance_to(tx_at + 10u);
@@ -1779,7 +1788,16 @@ ZTEST(radiant_sched, test_a_scan_chunk_is_reported_with_the_bounds_it_got)
 	zassert_equal(1u, log.n_armed, "%u arms reported", log.n_armed);
 	zassert_equal(31u, log.armed[0].ch);
 	zassert_equal(t0 + (radiant_time_t)lead, log.armed[0].t_open);
-	zassert_equal(tracked_at - (radiant_time_t)lead, log.armed[0].t_close,
+	/* lead AND the chunk's own tail: t_close bounds a t_sync, so the
+	 * receiver is still on for a body and CRC after it - see
+	 * test_a_truncated_scan_leaves_room_for_the_chunks_own_tail. */
+	zassert_equal(tracked_at - (radiant_time_t)lead -
+			      (radiant_time_t)radiant_frame_tail_us(
+				      radiant_frame_format(
+					      RADIANT_FRAME_CFG_SEARCH)) -
+			      (radiant_time_t)
+				      radiant_radio_caps_get()->rx_close_hold_us,
+		      log.armed[0].t_close,
 		      "the scan was told it had the whole chunk it asked for");
 
 	/* A bounded window is reported too, on the same terms. */
@@ -1921,6 +1939,106 @@ ZTEST(radiant_sched, test_a_tracked_channel_keeps_every_slot_under_a_search)
 	zassert_true(log.ok_count[0] >= cycles,
 		     "tracked channel served %u of %u slots", log.ok_count[0],
 		     cycles);
+
+	assert_every_window_bounded();
+	finish();
+}
+
+/*
+ * THE GAP A TRUNCATED SCAN CHUNK LEAVES IN FRONT OF A TRACKED WINDOW MUST
+ * COVER THE CHUNK'S OWN TAIL, not just the arm lead.
+ *
+ * This is the test the one above should have been. It passed throughout, on
+ * hardware, while the dongle lost exactly every other packet - because
+ * fake_radio.c ends an operation at its t_close, and real silicon does not.
+ * radiant_radio_hal.h defines t_close as the latest acceptable t_SYNC, and
+ * t_sync is the end of the address, so a frame arriving at the last legal
+ * instant still has its body and CRC to deliver: the receiver is on for
+ * radiant_frame_tail_us() longer than the scheduler's arithmetic assumed.
+ *
+ * Measured on an nRF54L15 DK, one tracked channel plus a background-scanning
+ * channel (the extended-assign byte Zwift sends, which is what makes the sweep
+ * run chunks back to back): the chunk's terminal landed 149 us past its
+ * t_close - 112 us of search-format tail plus the DISABLED->ISR path - against
+ * a min_arm_lead_us of exactly 149. The tracked window was then armed with
+ * 23 us of its 254 us span left and heard nothing, and the following window,
+ * which only the short remainder chunk preceded, was fine. 50.0 % loss in a
+ * perfect OK/FAIL alternation, matching both Zwift captures.
+ *
+ * So this asserts the SCHEDULE rather than the outcome. A mock that ends
+ * operations punctually cannot show the outcome, which is the whole reason the
+ * defect survived two tests and a bench session.
+ */
+ZTEST(radiant_sched, test_a_truncated_scan_leaves_room_for_the_chunks_own_tail)
+{
+	struct radiant_sched_rx r;
+	radiant_time_t          base;
+	const struct radiant_pkt_format *scan_fmt =
+		radiant_frame_format(RADIANT_FRAME_CFG_SEARCH);
+	radiant_time_t          need;
+	uint32_t                i;
+	uint32_t                checked = 0u;
+
+	bring_up();
+
+	/*
+	 * A backend that holds the receiver past t_close by more than the frame
+	 * - the CC26x2's rx_start() ends its window at t_close + BYTE_US +
+	 * RX_END_SLOP_US, 508 us, because its end trigger stops sync SEARCH
+	 * rather than reception. Set here so this test covers caps.
+	 * rx_close_hold_us as well as the airtime tail; the nRF preset leaves it
+	 * zero, so without this line half the arithmetic is unexercised.
+	 */
+	fake_radio_caps_mut()->rx_close_hold_us = 508u;
+
+	need = (radiant_time_t)radiant_radio_caps_get()->min_arm_lead_us +
+	       (radiant_time_t)radiant_frame_tail_us(scan_fmt) +
+	       (radiant_time_t)radiant_radio_caps_get()->rx_close_hold_us;
+	zassert_true(radiant_frame_tail_us(scan_fmt) > 0u,
+		     "a search frame with no tail would make this test vacuous");
+
+	base = radiant_radio_now() + 100000u;
+
+	log.repost = true;
+	log.repost_mask = 1u;
+	log.next_open[0] = base;
+	post_track(0u, base, base + (radiant_time_t)TEST_WINDOW_US);
+
+	rx_req_init(&r, scan_fmt, search_filter, 8u, base, RADIANT_TIME_NEVER);
+	r.chunk_us = 260000u; /* RADIANT_SEARCH_DWELL_DEFAULT_US */
+	zassert_ok(radiant_sched_request_rx(31u, &r));
+
+	zassert_ok(radiant_sched_tick());
+	fake_radio_advance_to(base + 20u * (radiant_time_t)TEST_PERIOD_US);
+
+	/*
+	 * Every scan chunk immediately followed by a tracked window is one the
+	 * scheduler truncated to fit; those are the ones the gap rule is about.
+	 * A chunk followed by another chunk was not truncated against anything.
+	 */
+	for (i = 0u; i + 1u < log.n_armed; i++) {
+		radiant_time_t gap;
+
+		if (log.armed[i].ch != 31u || log.armed[i + 1u].ch != 0u) {
+			continue;
+		}
+		zassert_true(log.armed[i + 1u].t_open >= log.armed[i].t_close,
+			     "scan chunk %u closes after the tracked window opens",
+			     i);
+		gap = log.armed[i + 1u].t_open - log.armed[i].t_close;
+		zassert_true(gap >= need,
+			     "scan chunk %u left %u us before the tracked window, "
+			     "needs %u (lead %u + tail %u): the chunk is still "
+			     "receiving a body when the window has to be armed",
+			     i, (uint32_t)gap, (uint32_t)need,
+			     (uint32_t)radiant_radio_caps_get()->min_arm_lead_us,
+			     radiant_frame_tail_us(scan_fmt));
+		checked++;
+	}
+	zassert_true(checked > 0u,
+		     "no scan chunk was followed by a tracked window in %u arms - "
+		     "the test measured nothing",
+		     log.n_armed);
 
 	assert_every_window_bounded();
 	finish();

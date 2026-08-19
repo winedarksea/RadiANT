@@ -441,7 +441,14 @@ static radiant_time_t phy_gap(const struct radiant_pkt_format *after,
  */
 static radiant_time_t rx_tail(const struct radiant_pkt_format *fmt)
 {
-	return (radiant_time_t)radiant_frame_tail_us(fmt);
+	if (fmt == NULL) {
+		/* An energy-detect chunk receives no frame, so it has neither
+		 * the airtime tail nor the backend's receiver hold. */
+		return 0u;
+	}
+	return (radiant_time_t)radiant_frame_tail_us(fmt) +
+	       ((s.caps == NULL) ? 0u
+				 : (radiant_time_t)s.caps->rx_close_hold_us);
 }
 
 /* Record what the radio is now configured for. Called only from a successful

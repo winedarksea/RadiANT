@@ -738,6 +738,32 @@ struct radiant_radio_caps {
 	 */
 	uint16_t min_arm_lead_in_grant_us;
 
+	/*
+	 * How much longer than the FRAME ITSELF this backend keeps the receiver
+	 * on after a window's t_close, in microseconds. Zero on a backend whose
+	 * window really does end with the last frame it could still be hearing.
+	 *
+	 * Why any of this exists: t_close bounds a frame's t_SYNC, and t_sync is
+	 * the end of the address, so every receive window occupies the radio
+	 * past t_close by at least the body and CRC still to arrive. That part
+	 * is airtime and radiant_sched.c computes it itself from the format
+	 * (radiant_frame_tail_us()). THIS field is only the surplus a particular
+	 * backend adds on top - e.g. a receiver whose end trigger stops sync
+	 * SEARCH rather than reception needs run-up at the late edge or it
+	 * misses exactly the frames the window was placed for.
+	 *
+	 * radiant_sched.c charges both to whatever fills a gap in front of a
+	 * committed operation. Leaving the surplus unaccounted does not cost the
+	 * gap filler, it costs the COMMITTED window - it is armed inside its own
+	 * lead and hears nothing - which is worth every other packet on the
+	 * tracked channel and is invisible until something else is searching.
+	 *
+	 * Not folded into min_arm_lead_us: that is what every operation pays to
+	 * be armed, this is what ONE operation costs the one after it, and an
+	 * energy-detect chunk pays neither.
+	 */
+	uint16_t rx_close_hold_us;
+
 	/* Granularity of the underlying timebase, in nanoseconds. 1000 on a
 	 * 1 MHz timer and on RAIL. Timestamps are still microseconds; this says
 	 * how much of the last digit to believe. */

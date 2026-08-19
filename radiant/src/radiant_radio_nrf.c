@@ -549,6 +549,19 @@ static struct radiant_radio_caps radiant_nrf_caps = {
 	 * one. See the field's comment - the two coming apart is what keeps
 	 * acknowledged data working under an arbiter. */
 	.min_arm_lead_in_grant_us = ARM_LEAD_US,
+	/*
+	 * Zero: program_rx() sets the close compare at exactly t_close plus the
+	 * longest legal frame's body and CRC, which is the tail radiant_sched.c
+	 * already derives from the format itself. There is no surplus to
+	 * declare.
+	 *
+	 * Measured on an nRF54L15 DK, search format: the terminal arrived 149 us
+	 * after t_close, of which 112 us is that tail and the remaining ~37 us
+	 * is the DISABLED->ISR->callback path. That residual is real but it is
+	 * not receiver hold time, and declaring it here would charge the sweep
+	 * for it on every backend that shares this number.
+	 */
+	.rx_close_hold_us    = 0,
 
 	.time_resolution_ns  = 1000,   /* the 1 MHz TIMER */
 

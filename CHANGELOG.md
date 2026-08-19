@@ -54,6 +54,53 @@ reads.
 
 ### Fixed
 
+- **A searching channel cost a tracking one every other packet, and the missing
+  term was one line of arithmetic.** `arm_next()` truncates a background scan
+  chunk to end `min_arm_lead_us` before the next committed tracked window. But a
+  receive window does not end at its `t_close`: `t_close` is the latest
+  acceptable `t_sync`, and `t_sync` is the end of the *address*, so a frame
+  arriving at the last legal instant still has its body and CRC to deliver and
+  the receiver stays on for them. The truncation therefore handed the whole lead
+  to that tail.
+
+  Traced on an nRF54L15 DK with per-arm logging, one tracked channel plus a
+  background-scanning channel: the chunk's terminal arrived **149 µs** after its
+  `t_close` (112 µs of search-format tail plus the `DISABLED`→ISR path) against a
+  `min_arm_lead_us` of exactly 149. The tracked window was then armed with **23 µs
+  of its 254 µs span left**, heard nothing, and the next one — which only the
+  short remainder chunk preceded — was fine. That is the `OK FAIL OK FAIL` both
+  Zwift captures show. A/B/A against a simulated power meter, 40 s arms:
+
+      before   0.0 % / 50.0 % (100 % alternating) / 0.0 %
+      after    0.0 % /  0.0 %                     / 0.0 %
+
+  The gap is now `lead + phy_gap + rx_tail()`, where the airtime half comes from
+  the new `radiant_frame_tail_us()` and anything a backend holds beyond the frame
+  comes from the new `caps.rx_close_hold_us`. **The CC26x2 declares 508 µs of the
+  latter** (`BYTE_US + RX_END_SLOP_US`, whose own header records 79 % loss without
+  it), so that backend was carrying a larger version of the same defect. The same
+  correction applies to a receive truncated in front of a *transmit*, which is
+  the master-side twin a slave-only dongle never exercises.
+
+- **Neither ztest could see it, and the new one asserts the schedule instead.**
+  `fake_radio.c` ends an operation at its `t_close`; real silicon does not, which
+  is why `test_a_tracked_channel_keeps_every_slot_under_a_search` and
+  `api.test_a_channel_that_drops_to_search_does_not_starve_one_still_tracking`
+  both passed throughout.
+  `radiant_sched.test_a_truncated_scan_leaves_room_for_the_chunks_own_tail`
+  asserts the gap between a truncated chunk's close and the next tracked
+  window's open, and sets `fake_radio_caps_mut()->rx_close_hold_us = 508` so the
+  backend-surplus half is exercised rather than defaulted to zero. The two tests
+  that encoded the old `- lead` arithmetic were updated with it.
+
+- **`tools/ant_search_contention.py` needed the extended-assign byte to
+  reproduce at all.** A plain wildcard search channel does not do this; Zwift
+  assigns its discovery channel with extended-assign `0x01` (background
+  scanning), which is what makes the sweep run chunks back to back against the
+  tracked window's edge. Without `--ext 0x01` the tool measured 1.9 % against a
+  0.0 % control and called it clean. An earlier "REPRODUCED" reading taken
+  against a distant trainer at a 36 % loss floor was noise, not the defect.
+
 - **`scripts/cap_zwift.ps1` and `tools/decode_pcap.py` had no SPDX header**, so
   the `host-tests` CI job's `check_license.py` was failing on both from the day
   they were added.
@@ -154,7 +201,6 @@ reads.
   `NOTICE`, ADR 0004 and every SPDX header said Apache-2.0 — and ADR 0004
   rejects MPL-2.0 *by name*, because per-file copyleft on firmware that gets
   statically linked into a customer image creates ongoing compliance questions.
-- **17 broken documentation links**, all fallout from the `apps/` reorganisation.
 
 ### Added
 
@@ -162,11 +208,7 @@ reads.
   `scripts/version_int.py`, all wired into the no-secret `host-tests` CI job so
   they run on forks and on every pull request. Each exists because the thing it
   checks had already gone wrong once with nothing watching.
-- Release artifacts are published with `.sha256` sidecars, and a tagged release
-  now fails if the tag disagrees with `VERSION`.
 - `SECURITY.md`, stating the signing posture rather than leaving it implied.
-- `scripts/clean.ps1`, which refuses to delete anything under `bench-logs/` or
-  `archive/`.
 
 ### Changed
 

@@ -2200,16 +2200,6 @@ static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_
 		return;
 	}
 #ifdef CONFIG_RADIANT_SWEEP_DEBUG
-	/* TEMPORARY, for the search-vs-track contention hunt: one line per armed
-	 * receive, so the interleave can be read directly instead of inferred
-	 * from per-second totals. */
-	LOG_INF("ARM k=%u ch=%u open=%d len=%d",
-		(unsigned int)api_ch[ch].slot_kind, (unsigned int)ch,
-		(int)(int64_t)(t_open - radiant_radio_now()),
-		(t_close == RADIANT_TIME_NEVER)
-			? -1
-			: (int)(int64_t)(t_close - t_open));
-
 	if (t_close != RADIANT_TIME_NEVER && t_close > t_open) {
 		uint32_t len = (uint32_t)(t_close - t_open);
 
@@ -2291,13 +2281,6 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 
 	now = radiant_radio_now();
 	st = api_done_to_status(why);
-
-#ifdef CONFIG_RADIANT_SWEEP_DEBUG
-	/* TEMPORARY, pairs with the ARM line above. */
-	LOG_INF("END k=%u ch=%u why=%u heard=%u",
-		(unsigned int)api_ch[ch].slot_kind, (unsigned int)ch,
-		(unsigned int)why, (unsigned int)api_ch[ch].slot_heard);
-#endif
 
 #ifdef CONFIG_RADIANT_SWEEP_DEBUG
 	/* Taken at the top, before any of the work below can move the clock:

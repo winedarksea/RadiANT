@@ -688,6 +688,7 @@ the radio's own clock against 0.0120 ms). See
 | `phys[]`, `n_phys`, `phy_switch_us` | PHYs this build supports, most-preferred first, and what switching between two of them costs the scheduler | one PHY (1 M) by default, and `phy_switch_us` is then 0 — there is nothing to switch to. `CONFIG_RADIANT_PHY_LR_CODED=y` adds the coded PHY and sets the switch cost to 20 µs, bounded not measured; the switch itself is a handful of register writes `apply_format()` already performs, so it is nearly free either way | one PHY; a switch would be a fresh `RF_open` | reloads a generated configuration |
 | `ramp_up_us`, `rx_to_tx_us`, `tx_to_rx_us`, `min_arm_lead_us` | The four timing budgets: transmitter ramp-up, both turnarounds, and the minimum lead an arm call needs before it fails `RADIANT_RADIO_ETIME` rather than running late. **`min_arm_lead_us` is not slack — it is the scheduler's exclusion radius**; read "the merge reach" below before changing it | measured, antenna-referenced. `min_arm_lead_us` = **168 µs** on nRF54L15 (80 setup + 40 ramp + 48 air) and **328 µs** on nRF52840 (240 + 40 + 48). With `CONFIG_RADIANT_PHY_LR_CODED=y` both grow by 288 µs — the coded PHY's 336 µs preamble+access address against 1 M's 48 µs — to 456 / 616 µs, on **every** window of **every** PHY. That symbol is `default n`; it used to be no symbol at all, and the 456 / 616 figures were what every nRF build advertised. See [ADR 0007's amendment](decisions/0007-long-range-phy.md) | **seeded, not measured** — a P4 bench item; `min_arm_lead_us` is 600 with a separate 150 µs hard floor, split after a scheduler that subtracts the advertised figure and calls immediately produced `ETIME` on every window. Under `CONFIG_RADIANT_BACKEND_CC26XX_COEX`, `min_arm_lead_us` grows to ~1414 µs (a phy-switch lead) — see "TI coexistence" below | measured, antenna-referenced |
 | `min_arm_lead_in_grant_us`, `max_window_us` | The arbitrated pair: lead once a grant is already held, and a fairness bound on window length | 0 / measured under the MPSL gate | **0 / 0 outside coex** ("this backend OWNS the radio" — the two lead figures coincide, nothing bounds a window). Under coex: **600 / ~20 ms** — see "TI coexistence" below | — |
+| `rx_close_hold_us` | How much longer than the **frame itself** the receiver stays on after a window's `t_close`. `t_close` bounds a frame's `t_sync` and `t_sync` is the end of the address, so every window occupies the radio past it by the body and CRC still to arrive — the scheduler computes that part itself from the format (`radiant_frame_tail_us()`). This field is only the surplus a backend adds on top, and the scheduler charges both to whatever fills a gap in front of a committed operation. Leaving a surplus undeclared does not cost the gap filler, it costs the **committed** window: armed inside its own lead, hearing nothing. See "the tail nobody was charged for" below | **0** — `program_rx()` closes at exactly `t_close` plus the longest legal frame, which is the tail the scheduler already derives | **508 µs** (`BYTE_US + RX_END_SLOP_US`) — `endTrigger` stops sync *search* rather than reception, so the late edge needs run-up; removing that slop measured 79 % loss. Four times the frame tail, and undeclared it would land inside the next tracked window's arm lead | 0 |
 | `time_resolution_ns` | How much of the last digit of a timestamp to believe | 1000 | **250** — the RAT is 4 MHz, measured at 4 000 244 ticks/s | 1000 |
 | `has_sync_timestamp` | Is `t_sync` a hardware capture of the address event, or an inference? | true | true — `bAppendTimestamp`, and it is good: consecutive captures came out as exact multiples of the transmitter's period with 1–18 µs of residual | — |
 | `has_rssi` | Is `rssi_dbm` populated? | true | true | — |
@@ -803,6 +804,41 @@ third. See [ADR 0016](decisions/0016-merge-reach-is-the-arm-lead.md).
 `radiant/tests/fake_radio.c`'s `min_arm_lead_us` is mutable for exactly this
 reason: a preset with an unrealistic lead certifies the wrong geometry, which is
 the trap `max_addr_groups` fell into above.
+
+#### The tail nobody was charged for
+
+The other half of the same arithmetic, and it cost more. When `arm_next()`
+truncates a background scan chunk to fit in front of a committed tracked
+window, the gap it leaves is **three** things, not two: the lead the tracked
+window needs to be armed, the PHY reconfiguration between them, and **the tail
+of the chunk being truncated**.
+
+That third term was missing. A receive window does not end at its `t_close` —
+`t_close` is the latest acceptable `t_sync`, and `t_sync` is the end of the
+*address*, so a frame arriving at the last legal instant still has its body and
+CRC to deliver and the receiver stays on for them. Truncating to
+`committed - lead` therefore hands the entire lead to that tail.
+
+Measured on an nRF54L15 DK with one tracked channel and a background-scanning
+channel (the extended-assign byte a fitness app sends, which is what makes the
+sweep run chunks back to back): the chunk's terminal arrived **149 µs** after
+its `t_close` — 112 µs of search-format tail plus the `DISABLED`→ISR path —
+against a `min_arm_lead_us` of exactly 149. The tracked window was then armed
+with **23 µs of its 254 µs span left**, heard nothing, and the following window
+was fine. A clean `OK FAIL OK FAIL` at 50.0 % loss, matching two Zwift captures
+and reproducible with `tools/ant_search_contention.py`. Charging the tail took
+it to **0.0 %**.
+
+Neither the scheduler nor the API ztest could see it: `fake_radio.c` ends an
+operation at its `t_close`, and real silicon does not. So the guard is
+`radiant_sched.test_a_truncated_scan_leaves_room_for_the_chunks_own_tail`,
+which asserts the **schedule** — the gap between a truncated chunk's close and
+the next tracked window's open — rather than the outcome a punctual mock cannot
+produce.
+
+The airtime half is derivable from the format and the scheduler computes it
+(`radiant_frame_tail_us()`). Anything a backend holds *beyond* the frame is
+`caps.rx_close_hold_us`, and the CC26x2 declares 508 µs of it.
 
 ### TI coexistence
 

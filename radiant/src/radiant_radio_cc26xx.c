@@ -835,6 +835,26 @@ static const struct radiant_radio_caps caps = {
 	 * radiant_radio_enable() for the coex value and why 600 is honest
 	 * there. */
 	.min_arm_lead_in_grant_us = 0,
+	/*
+	 * The surplus this backend really does hold: rx_start() ends the window
+	 * at t_close + BYTE_US + RX_END_SLOP_US, and that slop is not optional
+	 * padding - see RX_END_SLOP_US, where removing it measured 79 % loss
+	 * because endTrigger stops sync SEARCH rather than reception.
+	 *
+	 * So the receiver here is still on 508 us after t_close, four times the
+	 * frame tail radiant_sched.c derives from the format. Undeclared, the
+	 * scheduler truncates a background scan chunk to end 508 us INSIDE the
+	 * next tracked window's arm lead, and that window is armed too late to
+	 * hear anything - the defect measured on the nRF backend, where the
+	 * surplus is zero and the frame tail alone was enough to cause it.
+	 *
+	 * Slightly conservative on purpose: the scheduler adds this to the frame
+	 * tail rather than taking the larger of the two, so a gap here reserves
+	 * ~112 us more than the hardware needs. That is 0.05 % of an ANT+ period
+	 * and it is spent by the sweep, which ADR 0013 makes the elastic
+	 * consumer.
+	 */
+	.rx_close_hold_us = (uint16_t)(BYTE_US + RX_END_SLOP_US),
 
 	.time_resolution_ns = 250,   /* RAT is 4 MHz - measured 4 000 244 ticks/s */
 
