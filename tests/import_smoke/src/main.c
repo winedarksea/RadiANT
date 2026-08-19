@@ -3,7 +3,7 @@
 /*
  * The proof that ANT+ HR reception in radiant is a downstream integration,
  * not an internal implementation detail: everything below is written against
- * <radiant/...> headers and radiant/src/bridge/*.h, exactly as a third party
+ * <radiant/...> headers and the radiant/src/bridge headers, exactly as a third party
  * dropping this module into their own project would write it. See this
  * directory's own CMakeLists.txt for how radiant/ gets here, and
  * radiant/docs/integration.md for the same walkthrough with the reasoning

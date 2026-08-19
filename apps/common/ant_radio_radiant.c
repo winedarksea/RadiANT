@@ -4016,7 +4016,7 @@ antr_err_t antr_capabilities_get(uint8_t *capabilities)
 	 * The bit means "the device has a readable serial number", and
 	 * MESG_GET_SERIAL_NUM (0x61) is not bridged - it is answered
 	 * ANTW_INVALID_MESSAGE, pinned that way for every backend in
-	 * archive/captures/serial/*.antser (case 61-get-serial-num/valid, reply
+	 * the archive/captures/serial .antser files (case 61-get-serial-num/valid, reply
 	 * a40340006128ae). Advertising a capability that answers INVALID_MESSAGE
 	 * is the exact trap docs/gotchas.md names, and it is not hypothetical
 	 * here: a live capture of real Zwift shows it requesting 0x61 during
