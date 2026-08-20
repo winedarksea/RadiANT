@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+  Target configuration for the CC2652P + CP2102N USB dongle, driven through the
+  LAUNCHXL-CC26X2R1's XDS110 as an EXTERNAL target.
+
+  NO TWO CONSECUTIVE HYPHENS ANYWHERE IN THIS COMMENT. That is an XML rule,
+  not a style choice, and it is why cc2538-bsl's option names below are spelled
+  out in prose instead of copied. Break it and dslite says
+
+      Failed: Cannot read System Setup data from XML file <path>
+
+  which reads as a missing or unreadable file and sends you looking at paths
+  and permissions rather than at the comment you just wrote. Measured here,
+  2026-08-19, on the first run of this file.
+
+  WHY AN EXTERNAL PROBE AT ALL. This dongle's own CC2652P cannot be reached any
+  other way on this bench, and that is measured rather than assumed:
+
+    * The ROM serial bootloader does not answer. cc2538-bsl was run with all
+      four of its auto-BSL wirings (its default, plus the invert-lines,
+      active-high and sonoff-usb options), and scripts/ti/bsl_probe.py
+      swept both modem lines at both polarities, plus 75 s of sync-spam while a
+      human worked all three buttons. Every one: "Timeout waiting for ACK/NACK
+      after 'Synch (0x55 0x55)'". E72-class CC2652P modules ship with the CCFG
+      backdoor disabled - their own documentation says the first flash must go
+      over JTAG - so this is the module behaving as designed, not a fault.
+    * The nRF5340 DK's J-Link OB cannot substitute. It sees the target
+      (VTref=3.300V) and then refuses the only protocol the part speaks:
+      "cJTAG is not supported by connected J-Link". CC26x2 has no SWD DP at
+      all; see scripts/flash_ti.ps1's header for the four dead ends measured on
+      the LaunchXL.
+
+  So the XDS110 on the LaunchXL is the one probe on this bench that can do it,
+  driving the dongle through the isolation block with all five shunts removed.
+
+  WHAT DIFFERS FROM cc26x2r1_launchxl.ccxml - exactly one thing, the device:
+  CC2652P1F rather than CC2652R1F. The P part is the same die family with an
+  integrated PA. Everything else in that file's header applies unchanged and is
+  not repeated here; in particular "SWD Mode Settings" = 4 (cJTAG 2-pin) is
+  still stated explicitly on the CONNECTION, because DebugServer takes it from
+  there and connections/TIXDS110_Connection.xml defaults it to plain 4-pin
+  JTAG. Omitting it produces "IcePick_C: Error connecting to the target:
+  (Error -242 @ 0x0)", which reads like a wrong device.
+
+  POWER SELECTION IS DELIBERATELY LEFT ALONE. The dongle powers itself from its
+  own USB port, so the XDS110 must NOT supply 3V3 - two sources fighting on one
+  rail. The device file's default is "Target supplied power"; do not add a
+  Power Selection property here to override it.
+-->
+<configurations XML_version="1.2" id="configurations_0">
+    <configuration XML_version="1.2" id="configuration_0">
+        <instance XML_version="1.2" desc="Texas Instruments XDS110 USB Debug Probe" href="connections/TIXDS110_Connection.xml" id="Texas Instruments XDS110 USB Debug Probe" xml="TIXDS110_Connection.xml" xmlpath="connections"/>
+        <connection XML_version="1.2" desc="Texas Instruments XDS110 USB Debug Probe" id="Texas Instruments XDS110 USB Debug Probe">
+            <!--
+              The three driver bindings for this device's debug topology, in
+              the order the scan chain presents them: the ICEPick-C router, the
+              CoreSight DAP behind it, and the Cortex-M core behind that.
+              Without these three lines DebugServer reports "An invalid
+              processor ID has been found", which reads like a wrong device
+              rather than a missing binding.
+            -->
+            <instance XML_version="1.2" href="drivers/tixds510icepick_c.xml" id="drivers" xml="tixds510icepick_c.xml" xmlpath="drivers"/>
+            <instance XML_version="1.2" href="drivers/tixds510cs_dap.xml" id="drivers" xml="tixds510cs_dap.xml" xmlpath="drivers"/>
+            <instance XML_version="1.2" href="drivers/tixds510cortexM.xml" id="drivers" xml="tixds510cortexM.xml" xmlpath="drivers"/>
+            <property Type="choicelist" Value="4" id="SWD Mode Settings">
+                <choice Name="cJTAG (1149.7) 2-pin advanced modes" value="enable">
+                    <property Type="choicelist" Value="1" id="XDS110 Aux Port"/>
+                </choice>
+            </property>
+            <platform XML_version="1.2" id="platform_0">
+                <instance XML_version="1.2" desc="CC2652P1F" href="devices/cc2652p1f.xml" id="CC2652P1F" xml="cc2652p1f.xml" xmlpath="devices"/>
+                <device HW_revision="1" XML_version="1.2" desc="CC2652P1F" description="SimpleLink(TM) multi-protocol CC2652P wireless MCU with integrated PA" id="CC2652P1F" partnum="CC2652P1F" simulation="no"/>
+            </platform>
+        </connection>
+    </configuration>
+</configurations>

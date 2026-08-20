@@ -189,7 +189,56 @@ static uint32_t phy_overrides[] = {
 	(uint32_t)0xFFFFFFFF
 };
 
-static volatile rfc_CMD_PROP_RADIO_DIV_SETUP_t setup_cmd = {
+/*
+ * THE "_PA" STRUCT, ON EVERY PART, INCLUDING THE ONES WITHOUT A PA.
+ *
+ * This is not a CC2652P-only concession and it must not be made conditional.
+ * TI's RF driver decides which layout to read AT RUNTIME, from the silicon:
+ *
+ *   RFCC26X2_multiMode.c, RF_decodeOverridePointers()
+ *     bool tx20FeatureAvailable = (ChipInfo_GetChipType() == CHIP_TYPE_CC1352P)
+ *                              || (ChipInfo_GetChipType() == CHIP_TYPE_CC1352P7)
+ *                              || (ChipInfo_GetChipType() == CHIP_TYPE_CC2652P);
+ *
+ * and when that is true it reads pRegOverrideTxStd and pRegOverrideTx20 out of
+ * the setup command - fields that exist only in the _PA layout. Hand it the
+ * plain rfc_CMD_PROP_RADIO_DIV_SETUP_t and it reads eight bytes off the end of
+ * the object and dereferences whatever it finds.
+ *
+ * WHICH IS EXACTLY WHAT HAPPENED, and the shape of the bug is the point:
+ *
+ *   <inf> ant_dongle_ti: ANT+ Dongle (TI CC26x2) starting
+ *   <err> os: ***** BUS FAULT *****
+ *   <err> os:   Precise data bus error
+ *   <err> os:   BFAR Address: 0xf388d3
+ *   <err> os: Faulting instruction address (r15/pc): 0x0000f262
+ *              -> NOROM_RFCOverrideSearch +0xc
+ *              <- RF_decodeOverridePointers +0xdd
+ *
+ * The IDENTICAL BINARY is correct on a CC2652R and faults inside RF_open() on
+ * a CC2652P, about five milliseconds into main(). Nothing in the build, the
+ * devicetree or Kconfig distinguishes the two - so every LaunchXL run this
+ * backend has ever had was correct by accident, and no amount of building or
+ * testing on CC2652R silicon could have surfaced it.
+ *
+ * SAFE ON THE NON-PA PARTS, for two independent reasons. CMD_PROP_RADIO_DIV_-
+ * SETUP_PA is #defined to CMD_PROP_RADIO_DIV_SETUP - the same command number,
+ * 0x3807 - so the radio CPE parses the same fields and simply never looks at
+ * the tail on a part that has no high-gain PA. And the driver only reads that
+ * tail under the runtime check above.
+ *
+ * BOTH TAIL POINTERS STAY NULL, deliberately. They describe the two extra
+ * override lists TI's PA-capable PHYs switch between, and this backend has no
+ * high-PA path at all: every entry in radiant_cc26xx_txp below is
+ * RF_TxPowerTable_DEFAULT_PA_ENTRY and .txPower is never RF_TX20_ENABLED, so
+ * the driver's TX20 branches are unreachable. Every place it touches these two
+ * pointers is explicitly NULL-guarded (RF_attachOverrides/RF_detachOverrides
+ * document "does nothing if the extra overrides are NULL"), so NULL is a
+ * supported value and not a gap. Populating them would mean measuring a
+ * 20 dBm PHY on hardware whose antenna switch is not yet identified - see
+ * boards/ti/cc2652p_dongle/cc2652p_dongle.dts.
+ */
+static volatile rfc_CMD_PROP_RADIO_DIV_SETUP_PA_t setup_cmd = {
 	.commandNo = CMD_PROP_RADIO_DIV_SETUP,
 	.condition.rule = COND_NEVER,
 	.modulation = {
@@ -255,6 +304,14 @@ static volatile rfc_CMD_PROP_RADIO_DIV_SETUP_t setup_cmd = {
 	.centerFreq = 2400u + ANT_RF_INDEX_DEFAULT,
 	.intFreq = 0x0800,
 	.loDivider = 0,                /* 0 = 2.4 GHz band; "DIV" is not a divider here */
+	/*
+	 * Stated rather than left to the initialiser's implicit zeroing. These
+	 * two are the whole reason for the _PA layout above, and a reader who
+	 * finds the struct changed but no mention of them here would reasonably
+	 * wonder whether they had simply been forgotten.
+	 */
+	.pRegOverrideTxStd = NULL,
+	.pRegOverrideTx20 = NULL,
 };
 
 /*

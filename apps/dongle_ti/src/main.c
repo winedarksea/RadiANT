@@ -49,6 +49,27 @@ int main(void)
 	}
 	LOG_INF("antr_init ok");
 
+	/* Allocate the transport's buffers and start its writer thread, BEFORE
+	 * the bridge exists to use them and before the UART is opened.
+	 *
+	 * Omitting this call was this port's longest-standing bug and it is
+	 * worth being explicit about why it was invisible: the two ring buffers
+	 * live in BSS, so a missing ring_buf_init() leaves them valid-looking
+	 * objects of size ZERO rather than null pointers. Nothing crashes.
+	 * ring_buf_put() simply accepts no bytes, so every byte the host sends
+	 * is counted as dropped, and every byte the firmware sends waits a
+	 * second for space that can never appear and is abandoned. The board
+	 * boots, logs "transport up", blinks its LED, and is deaf and mute.
+	 *
+	 * apps/common/ant_dongle_main.c has always called this; this file is a
+	 * hand-written main() for a board that file does not fit, and it is
+	 * exactly the kind of thing a hand-written copy loses. ant_transport_
+	 * enable() now refuses to open a UART whose buffers are unallocated, so
+	 * this cannot fail silently again.
+	 */
+	usb_ant_class_init();
+	LOG_INF("usb_ant_class_init ok");
+
 	/* The bridge owns ANT event forwarding: it defines antr_on_message(),
 	 * which the radio backend calls. Nothing is registered.
 	 */

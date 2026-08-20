@@ -99,6 +99,23 @@
     Skip that. Only useful to reproduce the silent-COM14 symptom deliberately;
     a board flashed this way needs a physical USB replug.
 
+    ON THE CC2652P DONGLE THIS DOES MORE THAN ITS NAME SUGGESTS, and it cost
+    two rounds of investigation on 2026-08-20. xds110reset pulses the probe's
+    nRESET line, and on the dongle that line is wired to the TARGET - so this
+    switch does not merely leave COM14 quiet, it skips the dongle's own reset.
+    dslite's -u resumes the core after programming but that is not a clean
+    boot, and a dongle flashed with -NoBackchannelReset comes up SILENT on its
+    ANT UART: ant_probe.py reports "no startup message" for all three checks,
+    which is indistinguishable from a broken image or a wrong baud. Measured,
+    twice, and fixed by simply not passing this flag:
+
+      flash -NoBackchannelReset, then probe   -> FAILED, all three checks
+      the same image after any DSS reset      -> PASS
+      flash WITH the reset, then probe        -> PASS
+
+    Use it only when the dongle's USB is unplugged and the ANT UART is not
+    going to be spoken to before the next reset anyway.
+
 .EXAMPLE
     .\scripts\flash_ti.ps1 -CheckOnly
     .\scripts\flash_ti.ps1

@@ -1,0 +1,13 @@
+identifier: cc2652p_dongle
+name: CC2652P + CP2102N USB dongle
+type: mcu
+arch: arm
+toolchain:
+  - zephyr
+  - gnuarmemb
+ram: 80
+flash: 352
+supported:
+  - gpio
+  - uart
+  - watchdog

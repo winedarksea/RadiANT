@@ -1,0 +1,47 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * CC2652P + CP2102N USB dongle - pin control.
+ *
+ * ONLY UART0 IS DECLARED HERE, and only because it was MEASURED. There is no
+ * schematic for this module and no usable silkscreen, so every other
+ * peripheral this SoC has is deliberately absent rather than copied from a
+ * LaunchXL and hoped for.
+ *
+ * DIO12 (RX) / DIO13 (TX) is not a guess and not the LaunchXL's answer.
+ * scripts/ti/dss_pinmap.js halted the factory Zigbee image after letting it
+ * run its own init and read all 32 IOCFG registers back; DIO12 reported
+ * PORT_ID = MCU_UART0_RX and DIO13 = MCU_UART0_TX. Those are the two pins the
+ * CP2102N bridge is soldered to.
+ *
+ * IT HAPPENS TO MATCH boards/ti/common/launchxl-pinctrl.dtsi's DEFAULT, which
+ * is a coincidence worth naming so nobody "simplifies" this file away by
+ * including that one. cc26x2r1_launchxl OVERRIDES that default to DIO2/DIO3,
+ * so a reader who checks the LaunchXL this project already builds for will
+ * find DIO2/DIO3 and conclude this file is wrong. It is not; the two boards
+ * genuinely differ.
+ *
+ * AND THAT DIFFERENCE IS THE WHOLE REASON THIS DONGLE CANNOT BE FLASHED OVER
+ * USB. The CC13x2/CC26x2 ROM serial bootloader listens on DIO2/DIO3, fixed in
+ * ROM (SWCU185 Table 10-2) and not movable by CCFG. On the LaunchXL that is
+ * the backchannel UART, so its ROM bootloader is reachable; here the bridge is
+ * on DIO12/DIO13 and the ROM will never hear it, however the CCFG backdoor is
+ * set. Reflashing this board means the XDS110 rig - see
+ * scripts/ti/cc2652p_dongle.ccxml.
+ */
+
+#include <zephyr/dt-bindings/pinctrl/cc13xx_cc26xx-pinctrl.h>
+
+&pinctrl {
+	/* UART0 - the CP2102N bridge, and on this board the ANT wire protocol. */
+	uart0_tx_default: uart0_tx_default {
+		pinmux = <13 IOC_PORT_MCU_UART0_TX>;
+		bias-disable;
+	};
+
+	uart0_rx_default: uart0_rx_default {
+		pinmux = <12 IOC_PORT_MCU_UART0_RX>;
+		bias-disable;
+		input-enable;
+	};
+};

@@ -1,0 +1,54 @@
+/*
+ * CC2652P + CP2102N USB dongle - which port carries ANT, and at what rate.
+ *
+ * ONE UART, AND IT IS SPOKEN FOR. Unlike the LaunchXL (see
+ * cc26x2r1_launchxl.overlay), this board has exactly one wired serial port:
+ * uart0 on DIO12/DIO13, into the CP2102N, out of the USB plug. That is the ANT
+ * wire protocol and nothing else may appear in it - a host tool reading the
+ * ANT stream would parse a log line as a frame and the resulting checksum
+ * failures look like a radio problem.
+ *
+ * So the log does NOT go to a UART on this board. It goes to RTT, which the
+ * board's .conf explains; uart1's pins are not brought out of the shell.
+ *
+ * 57600, NOT 115200, and this is the board the rule was written for. A real
+ * Dynastream ANT2USB is a 57600 device, and the whole point of this dongle is
+ * to be a drop-in for one - so tools/ant_probe.py and everything else here
+ * needs `--baud 57600` explicitly, because SerialDevice defaults to 115200 and
+ * forgetting it produces framing garbage that reads as "no response to reset",
+ * indistinguishable from a hung image.
+ *
+ * CONFIG_ANT_DONGLE_UART_BAUD records the same number and
+ * apps/common/ant_uart_transport.c BUILD_ASSERTs that the two agree, so this
+ * property and that symbol cannot drift apart silently.
+ *
+ * NO radiant,radio-timer NODE, same as the LaunchXL and for the same reason:
+ * TI's RF core carries its own timebase (the RAT) and takes absolute start
+ * times directly, so there is no peripheral to name.
+ */
+
+/ {
+	aliases {
+		ant-uart = &uart0;
+	};
+
+	chosen {
+		/*
+		 * Deliberately NOT &uart0. The board's own devicetree points
+		 * the console there because that is the only sane default for
+		 * a board with one port; this application takes that port for
+		 * ANT and moves the console off UARTs entirely (see the .conf
+		 * beside this file). Leaving zephyr,console on uart0 while
+		 * CONFIG_UART_CONSOLE=n would be harmless today and a trap the
+		 * first time somebody turns UART_CONSOLE back on to debug
+		 * something.
+		 */
+		/delete-property/ zephyr,console;
+		/delete-property/ zephyr,shell-uart;
+	};
+};
+
+&uart0 {
+	status = "okay";
+	current-speed = <57600>;
+};

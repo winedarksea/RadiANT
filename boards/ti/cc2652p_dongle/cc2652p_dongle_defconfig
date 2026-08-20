@@ -1,0 +1,46 @@
+#
+# CC2652P + CP2102N USB dongle
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+CONFIG_BUILD_OUTPUT_HEX=y
+
+# ── The ROM bootloader backdoor: keep it exactly as the factory left it ─────
+#
+# The factory CCFG read back as BL_CONFIG = 0xC5FE0FC5 - BOOTLOADER_ENABLE
+# 0xC5, BL_ENABLE 0xC5, BL_PIN_NUMBER 15, BL_LEVEL 0 (active low). These three
+# symbols plus CC13X2_CC26X2_BOOTLOADER_BACKDOOR_LEVEL's default of 0
+# reproduce that word.
+#
+# THIS DOES NOT BUY USB FLASHING and it is important not to believe that it
+# does. The ROM bootloader's UART is fixed in silicon at DIO2/DIO3 and this
+# module's bridge is on DIO12/DIO13, so the ROM will never hear the host
+# whatever the CCFG says - that was measured the long way, with cc2538-bsl on
+# four wirings and scripts/ti/bsl_probe.py sweeping both modem lines at both
+# polarities and then spamming sync for 75 s while a human worked all three
+# buttons. Every one silent.
+#
+# What it buys is that we do not make the part HARDER to recover than we found
+# it. If the DIO2/DIO3 pads are ever located on the PCB, a wire and this CCFG
+# are a flash route that needs no XDS110. Every image that boots writes this
+# 88-byte page, so an image built without these three lines quietly takes that
+# option away for nothing.
+CONFIG_CC13X2_CC26X2_BOOTLOADER_ENABLE=y
+CONFIG_CC13X2_CC26X2_BOOTLOADER_BACKDOOR_ENABLE=y
+CONFIG_CC13X2_CC26X2_BOOTLOADER_BACKDOOR_PIN=15
+
+# NOT set: CONFIG_CC13X2_CC26X2_HAS_CUSTOM_RF_HWATTRS. That symbol exists for
+# boards with an antenna switch that needs a callback, and which DIOs drive
+# this module's switch is not settled - see the devicetree header. Turning it
+# on without the matching hwAttrs structure is a link error; turning it on with
+# a guessed one is worse, because it is silent.
+
+CONFIG_ARM_MPU=y
+CONFIG_HW_STACK_PROTECTION=y
+
+CONFIG_GPIO=y
+CONFIG_SERIAL=y
+
+CONFIG_CONSOLE=y
+CONFIG_UART_CONSOLE=y

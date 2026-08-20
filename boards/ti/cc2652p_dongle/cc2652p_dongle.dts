@@ -1,0 +1,266 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * CC2652P + CP2102N USB dongle - an unbranded E72-2G4M20S1E-class stick
+ * (AliExpress 3256805969376407), which is the deployment target
+ * apps/dongle_ti was written for all along. See that application's README and
+ * boards/cc2652p_dongle.conf.
+ *
+ * ── WHAT IS MEASURED AND WHAT IS NOT ───────────────────────────────────────
+ *
+ * There is no schematic for this module. Everything below is either read out
+ * of the silicon or read out of the factory firmware's own pin configuration
+ * (scripts/ti/dss_identify.js and scripts/ti/dss_pinmap.js, 2026-08-19), and
+ * anything that is neither is ABSENT from this file rather than guessed:
+ *
+ *   MEASURED, trust it:
+ *     CC2652P1F die. FLASH.FCFG_B0_SSIZE0 = 0x002C0008 -> 44 sectors x 8 KB
+ *     = 352 KB, which is the P1F/R1F die and NOT the CC2652P7's 704 KB. That
+ *     is why this includes ti/cc2652r.dtsi (352 KB flash, 80 KB SRAM, soc
+ *     series cc13x2_cc26x2) and selects SOC_CC2652P in Kconfig - exactly the
+ *     split upstream's cc1352p1_launchxl uses, which includes ti/cc1352r.dtsi
+ *     and selects SOC_CC1352P. There is no cc2652p.dtsi in Zephyr and there
+ *     does not need to be.
+ *
+ *     UART0 on DIO12/DIO13, the CP2102N bridge. See the pinctrl file.
+ *
+ *     DIO14 and DIO15 configured as pulled inputs by the factory image, which
+ *     is what the two non-reset buttons look like, and DIO15 is independently
+ *     corroborated: the factory CCFG's BL_CONFIG = 0xC5FE0FC5 names DIO15 as
+ *     the ROM bootloader backdoor pin, active low. A CCFG field and an IOCFG
+ *     register agreeing is as close to a schematic as this board gets.
+ *
+ *   INFERRED, and flagged as such at the node - see the leds block.
+ *
+ *     THE RF ANTENNA SWITCH, settled on air on 2026-08-20 and no longer a
+ *     hypothesis: DIO28 selects the 2.4 GHz path and is worth 8 dB of receive
+ *     sensitivity. DIO29 and DIO30 do not select it - DIO29 high is actively
+ *     harmful. See the hog nodes under &gpio0 for the measurement.
+ *
+ *     THE ANSWER CAME FROM THE AIR, NOT FROM THE DATASHEET, and it had to.
+ *     DIO28/29/30 are driven outputs in the factory image, which is the
+ *     CC1352P LaunchPad's SKY13317 arrangement (boards/ti/common/
+ *     launchxl_sky13317.dtsi); DIO6/DIO7/DIO9/DIO10 are ALSO driven outputs,
+ *     and DIO6/DIO7 is closer to the E72's documented P06/P05. Reading either
+ *     document would have produced a confident wrong answer.
+ *
+ *     AND THE FAILURE IT CAUSED WAS NOT SILENCE, which is why this was worth
+ *     chasing rather than leaving. With the switch floating the board still
+ *     enumerated, still opened channels, still heard the nearest sensor and
+ *     still decoded it correctly - it was merely 8 dB deaf, which presents as
+ *     a sensor being out of range, or a flaky strap, or a noisy room. The
+ *     first scan on this hardware heard a trainer two metres away at -85 dBm
+ *     and missed a heart rate strap entirely, and every one of those readings
+ *     looked like an ordinary bad bench rather than a board defect.
+ *
+ * ── NO MCUBOOT PARTITION LAYOUT ────────────────────────────────────────────
+ *
+ * boards/ti/common/launchxl-flash.dtsi is deliberately NOT included. It puts
+ * slot0 at 0xa000 and makes it zephyr,code-partition, which is right for a
+ * board that boots MCUboot and wrong here: this dongle has no bootloader and
+ * no way to load one over USB (see the pinctrl file's note on DIO2/DIO3), so
+ * an image linked at 0xa000 with nothing at 0x0 is a brick that needs the JTAG
+ * rig to undo. The application links at 0. The CCFG partition it does need is
+ * already declared by ti/cc1352r.dtsi.
+ */
+
+/dts-v1/;
+
+#include <ti/cc2652r.dtsi>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include "cc2652p_dongle-pinctrl.dtsi"
+
+/ {
+	model = "CC2652P + CP2102N USB dongle";
+	compatible = "radiant,cc2652p-dongle";
+
+	aliases {
+		led0 = &led0;
+		sw0 = &btn_bsl;
+		sw1 = &btn_user;
+		watchdog0 = &wdt0;
+	};
+
+	chosen {
+		zephyr,sram = &sram0;
+		zephyr,flash = &flash0;
+		zephyr,console = &uart0;
+		zephyr,shell-uart = &uart0;
+		/*
+		 * NO zephyr,code-partition - see the header. And no
+		 * zephyr,ieee802154: the RF core is driven by radiant's own
+		 * backend through TI's RF driver, not by Zephyr's 802.15.4
+		 * driver, and leaving that chosen in place makes the net stack
+		 * claim the radio out from under it.
+		 */
+	};
+
+	/*
+	 * DIO6 IS CONFIRMED, by eye, 2026-08-20: apps/dongle_ti blinks led0 at
+	 * 1 Hz and the stick blinks. It was an inference before that - the
+	 * factory image leaves DIO6 and DIO7 as driven outputs at logic low,
+	 * which is what an active-high LED that is currently off looks like,
+	 * and DIO6/DIO7 are the red and green LEDs on every LaunchPad in this
+	 * family (boards/ti/common/launchxl.dtsi), a reference design this
+	 * module is visibly derived from.
+	 *
+	 * DIO7 IS STILL AN INFERENCE - it has never been lit, only reasoned
+	 * about from the same evidence. Nothing in this repository uses led1.
+	 *
+	 * DIO20 is ALSO a driven output, at logic HIGH, and the stick has an
+	 * LED lit whenever it is powered; that is most likely a power
+	 * indicator and it is deliberately NOT given an alias, because an
+	 * alias for a light that cannot be turned off is a trap.
+	 *
+	 * If led1 turns out to be wrong, DELETE the node - do not leave a
+	 * plausible-looking LED alias that silently drives nothing, because
+	 * every future bring-up on this board will reach for blinky first.
+	 */
+	leds {
+		compatible = "gpio-leds";
+
+		led0: led_0 {
+			gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
+			label = "LED (DIO6, confirmed)";
+		};
+
+		led1: led_1 {
+			gpios = <&gpio0 7 GPIO_ACTIVE_HIGH>;
+			label = "LED (unverified: DIO7)";
+		};
+	};
+
+	keys {
+		compatible = "gpio-keys";
+
+		/*
+		 * DIO15 is the ROM bootloader backdoor pin per the factory
+		 * CCFG, so it is the button a user would hold at reset. It is
+		 * kept as the backdoor pin in the defconfig for the same
+		 * reason.
+		 */
+		btn_bsl: btn_bsl {
+			gpios = <&gpio0 15 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+			label = "Button (DIO15, CCFG backdoor pin)";
+			zephyr,code = <INPUT_KEY_0>;
+		};
+
+		btn_user: btn_user {
+			gpios = <&gpio0 14 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+			label = "Button (DIO14)";
+			zephyr,code = <INPUT_KEY_1>;
+		};
+	};
+};
+
+&cpu0 {
+	clock-frequency = <48000000>;
+};
+
+&gpio0 {
+	status = "okay";
+
+	/*
+	 * ── THE RF ANTENNA SWITCH, MEASURED ON AIR 2026-08-20 ──────────────
+	 *
+	 * These three pins were an open question in this file's header until
+	 * they were swept against a real ANT+ sensor. They are hogs rather
+	 * than driver-managed pins because the selection here is STATIC: this
+	 * board only ever uses the CC2652P's default RF port (every entry in
+	 * radiant_cc26xx_txp is RF_TxPowerTable_DEFAULT_PA_ENTRY and .txPower
+	 * is never RF_TX20_ENABLED), so the switch is set once at boot and
+	 * never changes. A board that engaged the 20 dBm PA would need the
+	 * switch driven per-transmission from an RF driver callback instead,
+	 * and these hogs would then be wrong rather than merely unnecessary.
+	 *
+	 * HOW THE LEVELS WERE ESTABLISHED. scripts/ti/dss_setpins.js drives
+	 * chosen DIOs on the running image without a rebuild - radiant never
+	 * touches these pins, so a debugger-written level persists - and each
+	 * combination was measured against a STATIONARY trainer on a channel
+	 * bound to its device number, alternating arms so a drift in the room
+	 * could not be read as the effect. Median RSSI over 30 s windows:
+	 *
+	 *     DIO28/29/30 floating   -80, -80, -80 dBm
+	 *     DIO28 high             -72, -72      dBm
+	 *
+	 * Eight dB, with no overlap between the arms. DIO29 high is actively
+	 * harmful (one combination with it set heard NOTHING in 40 s), and
+	 * DIO30 was measured separately and does nothing: 28-only gave -72,
+	 * -72, -73 against 28-and-30's -73, -73.
+	 *
+	 * A packet COUNT will not show any of this and was misleading
+	 * throughout - the link is well above threshold either way, so loss
+	 * barely moves while RSSI moves 8 dB. Worse, a wildcard scan locks
+	 * onto whichever sensor it acquires first, so its counts measure
+	 * acquisition order. Measure RSSI on a bound channel.
+	 *
+	 * 29 and 30 are driven LOW rather than left floating even though low
+	 * is their measured-neutral state: an undriven switch control input
+	 * is undefined, and "it worked when we left it floating" is not a
+	 * property that survives a different unit or a colder room.
+	 */
+	rf_sw_2g4: rf-switch-2g4 {
+		gpio-hog;
+		gpios = <28 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "rf-switch-select-2g4";
+	};
+
+	rf_sw_pa20: rf-switch-pa20 {
+		gpio-hog;
+		gpios = <29 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "rf-switch-select-pa20";
+	};
+
+	rf_sw_aux: rf-switch-aux {
+		gpio-hog;
+		gpios = <30 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "rf-switch-select-aux";
+	};
+};
+
+&trng {
+	status = "okay";
+};
+
+&wdt0 {
+	status = "okay";
+};
+
+&uart0 {
+	status = "okay";
+	current-speed = <115200>;
+	pinctrl-0 = <&uart0_rx_default &uart0_tx_default>;
+	pinctrl-names = "default";
+};
+
+/*
+ * uart1's pins (DIO22/DIO24 on a LaunchPad) go nowhere on a sealed USB stick,
+ * so it is left disabled and given no pinctrl at all. An application that
+ * wants a second port has to say which pads it found first.
+ */
+&uart1 {
+	status = "disabled";
+};
+
+/*
+ * The RF core is opened by radiant/src/radiant_radio_cc26xx.c through TI's own
+ * RF driver. Zephyr's radio/802.15.4 nodes describe a DIFFERENT driver for the
+ * same hardware, and enabling them means two drivers owning one RF core. This
+ * mirrors what boards/ti/cc26x2r1_launchxl/cc26x2r1_launchxl.dts does, for the
+ * same reason.
+ */
+&radio {
+	status = "disabled";
+};
+
+&ieee802154 {
+	status = "disabled";
+};
+
+&ieee802154g {
+	status = "disabled";
+};

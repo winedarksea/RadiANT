@@ -1,0 +1,6 @@
+board:
+  name: cc2652p_dongle
+  full_name: CC2652P + CP2102N USB dongle
+  vendor: ti
+  socs:
+  - name: cc2652p

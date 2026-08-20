@@ -1,0 +1,10 @@
+# CC2652P + CP2102N USB dongle
+# SPDX-License-Identifier: Apache-2.0
+
+# SOC_CC2652P, not SOC_CC2652R, even though the devicetree includes
+# ti/cc2652r.dtsi. The die was read off the part (352 KB, CC2652P1F class) and
+# the two differ in the integrated PA, which is a Kconfig-visible difference
+# and not a devicetree one - upstream's cc1352p1_launchxl makes exactly this
+# split. Getting it wrong here would be silent: the memory map is identical.
+config BOARD_CC2652P_DONGLE
+	select SOC_CC2652P

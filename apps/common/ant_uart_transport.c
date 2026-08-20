@@ -222,6 +222,31 @@ int ant_transport_enable(void)
 		return -ENODEV;
 	}
 
+	/* Refuse to open a UART whose buffers were never allocated.
+	 *
+	 * This is not defensive padding - it is the check for a failure that
+	 * has actually happened here, and that cost a bench session precisely
+	 * because nothing detected it. Both ring buffers are file-scope, so
+	 * they start as zeroed BSS: skipping usb_ant_class_init() leaves them
+	 * as perfectly well-formed ring buffers of size ZERO rather than as
+	 * anything that would fault. ring_buf_put() then accepts nothing, so
+	 * received bytes are dropped and transmitted bytes time out - and the
+	 * transport reports itself up, because from in here it IS up.
+	 *
+	 * A silent dead UART is the single most expensive symptom this
+	 * codebase can produce, because it is what a wrong pin map, a wrong
+	 * baud, wrong wiring, a crashed thread and a missing init call all
+	 * look like from the host. Naming this one here removes it from that
+	 * list for good.
+	 */
+	if (ant_rx_ring_buf.size == 0 || ant_uart_tx_ring.size == 0) {
+		LOG_ERR("ANT UART buffers not allocated - usb_ant_class_init() "
+			"was not called before ant_transport_enable(). The port "
+			"would open and then silently drop every byte in both "
+			"directions.");
+		return -EINVAL;
+	}
+
 	ret = uart_irq_callback_user_data_set(ant_uart_dev, ant_uart_isr, NULL);
 	if (ret) {
 		LOG_ERR("Failed to set UART callback: %d", ret);
