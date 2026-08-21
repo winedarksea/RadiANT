@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The receive-activity counter, shared by the two indicators that encode "how
+# much is this dongle hearing" - the mono led0 heartbeat (Kconfig.heartbeat_led)
+# and the NeoPixel hue wheel (Kconfig.rgb_led). Both `select` the symbol below;
+# neither owns it.
+#
+# IT USED TO LIVE IN Kconfig.rgb_led, and moving it is the whole reason this
+# file exists. The count is one atomic increment in antr_on_message(), and a
+# second indicator that wanted it had a choice between adding a THIRD hook to
+# the bridge's hot path or generalising the second. ant_activity.h carries the
+# argument, unchanged from where it was written, for why the second hook could
+# not reuse CONFIG_ANT_DONGLE_RX_TAP (link-time
+# resolution, one definition per image, already owned by
+# apps/dongle_thread/src/rx_tap.c); a third would have had no such argument.
+#
+# rsourced by apps/dongle/Kconfig, apps/dongle_thread/Kconfig and
+# apps/dongle_ti/Kconfig - every application that compiles the serial bridge.
+# `select` on a symbol that is not visible in the tree is a Kconfig error, so it
+# has to be in scope wherever either indicator is.
+
+config ANT_DONGLE_ACTIVITY_CLAIMED
+	bool
+	help
+	  Set by the indicator that has taken the counter, so a second one can
+	  depend on it being clear. Not user-selectable.
+
+	  ONE READER PER IMAGE IS A HARD RULE, not a preference:
+	  ant_activity.h's consumers drain with atomic_clear(), so two of them
+	  would each get about half the traffic and both would show a quiet
+	  room - an indicator that is confidently wrong, which is worse than one
+	  that is absent. Today CONFIG_ANT_DONGLE_RGB_LED claims it and
+	  CONFIG_ANT_DONGLE_HEARTBEAT_LED_ACTIVITY yields, which is what the
+	  shipping Feather row builds: NeoPixel showing the rate, mono led0 on
+	  its fixed flash.
+
+	  IT EXISTS RATHER THAN A PLAIN `depends on !ANT_DONGLE_RGB_LED` because
+	  that symbol is defined only where Kconfig.rgb_led is rsourced - one
+	  application out of three - and a dependency naming a symbol that does
+	  not exist in two of the trees is a dependency that reads as deliberate
+	  and evaluates to nothing. This symbol is defined wherever the counter
+	  is, which is wherever either indicator can be.
+
+config ANT_DONGLE_ACTIVITY_COUNT
+	bool
+	help
+	  Compile apps/common/ant_activity.c and make ant_activity_note_msg()
+	  real. Not user-selectable: it is turned on by whichever indicator
+	  needs it, and turning it on by hand buys a counter nothing reads.
+
+	  WHERE THE COUNT HAPPENS, because this is the only thing about it that
+	  could ever cost the radio anything: antr_on_message() runs on the
+	  radiant API event thread - ordinary thread context, never a radio
+	  callback - so the increment is free relative to the framing work
+	  already being done per message. With the symbol off,
+	  ant_activity_note_msg() is a macro expanding to nothing, so there is
+	  no call and no argument evaluated.

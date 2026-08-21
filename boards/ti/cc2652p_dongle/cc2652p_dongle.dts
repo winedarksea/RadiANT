@@ -98,7 +98,11 @@
 
 	/*
 	 * DIO6 IS CONFIRMED, by eye, 2026-08-20: apps/dongle_ti blinks led0 at
-	 * 1 Hz and the stick blinks. It was an inference before that - the
+	 * 1 Hz and the stick blinks. THAT IS NO LONGER THE STOCK PATTERN - the
+	 * shipping flash is 30 ms every 4 s and its gap moves with receive
+	 * activity, which is not something to hunt an unknown pin with. Build
+	 * with ti_bringup.conf, which puts the 1 Hz square wave back, before
+	 * repeating this on DIO7. It was an inference before that - the
 	 * factory image leaves DIO6 and DIO7 as driven outputs at logic low,
 	 * which is what an active-high LED that is currently off looks like,
 	 * and DIO6/DIO7 are the red and green LEDs on every LaunchPad in this

@@ -991,6 +991,11 @@ with its PC/LR rather than silently halting the CPU — from the outside a halt
 is indistinguishable from a hang, since it kills USB, the LED heartbeat and the
 periodic flush all at once.
 
+Watch that heartbeat for four seconds before concluding anything from it: it is
+a 30 ms flash every 4 s now, not the 1 Hz square wave it used to be, and with
+`CONFIG_ANT_DONGLE_HEARTBEAT_LED_ACTIVITY` on (the default) the gap also varies
+with what is on the air. A dark LED for two seconds is the normal state.
+
 Two things pin down `CONFIG_ANT_DONGLE_FLASH_LOG_OFFSET`: it must sit above the
 image, and inside the window the bootloader actually dumps. Bootloader 0.8.0
 dumps `0x1000`–`0xEA000`, which stops short of the `0xEC000` end of the code

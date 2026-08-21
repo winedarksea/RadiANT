@@ -69,6 +69,20 @@ config ANT_DONGLE_UART_BAUD
 # application. See apps/common/Kconfig.antr_api's own header.
 rsource "../common/Kconfig.antr_api"
 
+# CONFIG_ANT_DONGLE_ACTIVITY_COUNT and _CLAIMED: the shared receive-activity
+# counter and its one-reader interlock. See that file's own header.
+rsource "../common/Kconfig.activity"
+
+# CONFIG_ANT_DONGLE_HEARTBEAT_LED and friends: the mono led0 flash and its
+# off-switch. This application does NOT rsource Kconfig.dongle_main - it has
+# its own hand-written main() - but it ends that main() with the same
+# ant_heartbeat_led_run() call, so it needs these symbols and not those.
+#
+# boards/ti/cc2652p_dongle defines led0 on DIO6. No LaunchXL variant in this
+# tree defines one, and there the shared file compiles down to a thread that
+# sleeps.
+rsource "../common/Kconfig.heartbeat_led"
+
 choice ANT_DONGLE_RADIO
 	prompt "ANT radio backend"
 	default ANT_DONGLE_RADIO_CORE

@@ -36,9 +36,9 @@
 
 #include "ant_transport.h"
 
+#include "ant_activity.h"
 #include "ant_health.h"
 #include "ant_radio.h"
-#include "ant_rgb_led.h"
 #include "ant_wire.h"
 
 LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
@@ -91,14 +91,50 @@ static void send_response(uint8_t ch, uint8_t msg_id, uint8_t code)
 	usb_ant_send(buf, sizeof(buf));
 }
 
-/* Startup message sent after antr_stack_reset(). */
+/* Startup message sent after antr_stack_reset().
+ *
+ * The reason byte is ANTW_STARTUP_COMMAND_RESET (0x20), not zero. This is the
+ * only place the startup message is ever sent and the only caller is the
+ * ANTW_MESG_SYSTEM_RESET_ID arm of dispatch(), so every startup frame this
+ * firmware emits *is* a commanded reset - there is no power-on path to be
+ * confused with. Sending 0x00 (ANTW_STARTUP_POWER_ON_RESET) told every host
+ * the stick had just cold-booted, which is exactly what a host watches this
+ * byte to rule out: it is how an unexpected brown-out or watchdog reset is
+ * told apart from the reset the host itself asked for.
+ *
+ * On the evidence, stated exactly, because it is weaker than it first looks.
+ * There is NO observed retail-stick capture of this frame in this repository,
+ * and the 0x20 vectors are not one: tools/test_ant_wire.py tags "startup
+ * message, command reset" (a4016f20ea) `hand:`, not `observed:`. What does
+ * support 0x20:
+ *
+ *   - Garmin's own header. ant_radio_sdk_ant.c asserts
+ *     ANTW_EQ(STARTUP_COMMAND_RESET, RESET_CMD) and
+ *     ANTW_EQ(STARTUP_POWER_ON_RESET, RESET_POR), so the vendor's own SDK
+ *     names 0x20 the commanded reset and 0x00 the power-on one. That is the
+ *     field's meaning from the source that defines it.
+ *   - Every host-side fixture here independently encodes 0x20 as the answer to
+ *     0x4A: tools/test_ant_wire.py, tools/test_ant_trace.py,
+ *     tools/test_ant_conformance.py, tools/vectors/handmade-session.antser,
+ *     and the worked example in archive/captures/serial/README.md.
+ *
+ * The three transcripts in archive/captures/serial/ all show a4016f00ca and
+ * are NOT evidence against this: the reason byte is hardcoded here, in the
+ * shared bridge, so all three recorded this one line rather than anything
+ * their backends decided - conformance-sdk-ant.antser included.
+ *
+ * Nothing ever compared those fixtures against the firmware, which is how 745
+ * host tests passed while every Zwift capture in captures/ shows a4016f00ca.
+ * Re-record the transcripts after this change: they now differ by this frame,
+ * and only by this frame.
+ */
 static void send_startup(void)
 {
 	uint8_t buf[5];
 	buf[0] = ANTW_SYNC_TX;
 	buf[1] = ANTW_MESG_STARTUP_MESG_SIZE;  /* 1 */
 	buf[2] = ANTW_MESG_STARTUP_MESG_ID;    /* 0x6F */
-	buf[3] = 0x00;                          /* reset by command */
+	buf[3] = ANTW_STARTUP_COMMAND_RESET;   /* 0x20 */
 	buf[4] = buf[0] ^ buf[1] ^ buf[2] ^ buf[3];
 	usb_ant_send(buf, sizeof(buf));
 }
@@ -1313,15 +1349,16 @@ void antr_on_message(const struct antr_msg *msg)
 #endif
 
 	/*
-	 * The RGB activity indicator's whole ingest: one atomic increment, and
-	 * only for the data-bearing message IDs. A macro expanding to nothing
-	 * when the symbol is off, so the stock image is unchanged.
+	 * The activity indicators' whole ingest: one atomic increment, and only
+	 * for the data-bearing message IDs. Whichever indicator is compiled in -
+	 * the mono led0 blink, the NeoPixel hue wheel - reads that one counter;
+	 * with neither, this is a macro expanding to nothing.
 	 *
 	 * Not folded into ant_dongle_rx_tap() above because that hook is
 	 * resolved at link time with one definition per image, already owned by
 	 * apps/dongle_thread/src/rx_tap.c - two features cannot share it.
 	 */
-	ant_rgb_led_note_msg(msg->id);
+	ant_activity_note_msg(msg->id);
 
 	/*
 	 * Wire format: [0xA4][LEN][ID][channel+payload...][XOR checksum]

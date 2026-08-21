@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 /*
- * The activity-rate RGB indicator. See ant_rgb_led.h for why the hook lives
- * where it does; this file is the render side.
+ * The activity-rate RGB indicator: the render side. The counting hook it reads
+ * is shared with the mono led0 heartbeat and lives in ant_activity.h - see that
+ * file for why it is a hook of its own rather than CONFIG_ANT_DONGLE_RX_TAP,
+ * and for why the counter has exactly one reader per image.
  *
  * THE CONSTRAINT THIS FILE IS SHAPED BY. On nRF52840 the radiant backend's
  * radio_isr is a plain maskable IRQ_CONNECT at priority 0 - radiant_radio_nrf.c
@@ -30,7 +32,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/atomic.h>
 
-#include "ant_rgb_led.h"
+#include "ant_activity.h"
 #include "ant_rgb_led_curve.h"
 
 /*
@@ -48,8 +50,6 @@ Add an overlay declaring the LED node and aliasing it - see apps/dongle/rgb_feat
 LOG_MODULE_REGISTER(ant_rgb_led, LOG_LEVEL_INF);
 
 static const struct device *const strip = DEVICE_DT_GET(DT_ALIAS(rgb_led0));
-
-atomic_t ant_rgb_led_pkts;
 
 #define TICK_MS        CONFIG_ANT_DONGLE_RGB_LED_TICK_MS
 
@@ -108,7 +108,7 @@ static void ant_rgb_led_thread(void *a, void *b, void *c)
 	LOG_INF("rgb indicator up on %s", strip->name);
 
 	while (1) {
-		uint32_t n = (uint32_t)atomic_clear(&ant_rgb_led_pkts);
+		uint32_t n = (uint32_t)atomic_clear(&ant_activity_pkts);
 		uint32_t inst_mpps = n * (1000u * 1000u / TICK_MS);
 
 		/*

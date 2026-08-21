@@ -262,6 +262,7 @@ files in `boards/` are one `.conf` and one `.overlay` each.
 | `apps/dongle/Kconfig` | `CONFIG_ANT_DONGLE_*` — transport choice, descriptors, optional features |
 | `apps/dongle/prj.conf` | Base configuration. The USB work-queue stack sizes here are load-bearing; the header comment says why |
 | `rgb.conf` + `rgb_feather.overlay` | The activity RGB indicator, applied together by the shipping Feather row. Either alone fails the build |
+| `apps/common/ant_heartbeat_led.c` | The mono `led0` flash — 30 ms every 4 s, gap scaled by receive activity, and `CONFIG_ANT_DONGLE_HEARTBEAT_LED=n` to have no LED at all. Shared by all three dongle applications |
 | `next.conf`, `stub.conf`, `synth.conf`, `diag.conf`, `encryption.conf` | Extra conf fragments: new USB stack, no radio, synthesized 32.768 kHz clock, flash-backed logging, encryption writes. Each explains itself at the top of the file |
 | `sysbuild.cmake`, `pm_static_*.yml` | Pin the application where each board's bootloader expects it — `0x26000` on the Feather and Pro Micro, `0x1000` on the dongle. See [the gotchas](docs/gotchas.md) |
 | `sample.yaml` | Twister metadata |
@@ -291,6 +292,31 @@ flash:
 The shipping Feather image carries the activity-rate RGB indicator: its build
 row applies `rgb.conf` and `rgb_feather.overlay` together, and either one
 without the other fails the build on purpose.
+
+#### The LED
+
+Every board with a `led0` alias flashes it for **30 ms every 4 seconds** — a
+liveness heartbeat rather than a lamp, and dark 99 % of the time. By default the
+gap then *shortens* with how much sensor traffic the dongle is hearing: about
+4 s idle, 1.6 s with one sensor, 400 ms with four, down to a 150 ms floor. So
+one LED answers both "did it boot" and "is it hearing anything".
+
+It is one `gpio_pin_set_dt()` from the main thread twice per cycle, with no
+`irq_lock()`, no DMA and nothing in interrupt context, so it costs the radio
+nothing — and at a quarter of a hertz it is a *quarter* the wakeups of the 1 Hz
+blink it replaced.
+
+| To get | Set |
+|---|---|
+| No LED activity at all | `CONFIG_ANT_DONGLE_HEARTBEAT_LED=n` — the file is not compiled, no pin is ever driven |
+| A flat blink, no activity scaling | `CONFIG_ANT_DONGLE_HEARTBEAT_LED_ACTIVITY=n` |
+| A different pattern | `CONFIG_ANT_DONGLE_HEARTBEAT_LED_ON_MS` / `_OFF_MS` (`_OFF_MS` is also the idle gap the activity curve is anchored to) |
+
+On the Feather the NeoPixel is the richer indicator and takes the activity
+signal, so there the mono LED stays on its flat flash — `CONFIG_ANT_DONGLE_
+HEARTBEAT_LED_ACTIVITY` depends on the RGB indicator being off, because the two
+drain one counter and both would read a busy room as quiet.
+
 <details>
 <summary><b>Comparison builds against sdk-ant</b> — not needed to build or ship</summary>
 

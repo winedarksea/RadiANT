@@ -16,6 +16,8 @@
 config ANT_DONGLE_RGB_LED
 	bool "Rotate a smart LED's hue at a speed set by ANT+ receive activity"
 	select LED_STRIP
+	select ANT_DONGLE_ACTIVITY_COUNT
+	select ANT_DONGLE_ACTIVITY_CLAIMED
 	help
 	  Drives a WS2812-style RGB LED (the on-board NeoPixel on an Adafruit
 	  Feather nRF52840, or any equivalent on another board) as a continuously
@@ -25,10 +27,24 @@ config ANT_DONGLE_RGB_LED
 	  meaning, so there is nothing to memorise.
 
 	  WHAT IT IS FOR. The Feather has no debugger and this image has no
-	  console, so the single led0 heartbeat in ant_dongle_main.c is the whole
-	  local diagnostic surface: it answers "did the firmware boot" and
-	  nothing else. This answers "is it hearing anything", across the room,
-	  with no host attached.
+	  console, so the led0 heartbeat in apps/common/ant_heartbeat_led.c is
+	  the whole local diagnostic surface. This says the same thing in colour
+	  and at a glance: full hue, across the room, with no host attached.
+
+	  IT IS NO LONGER THE ONLY WAY TO SEE ACTIVITY. The heartbeat has its own
+	  activity mode now (CONFIG_ANT_DONGLE_HEARTBEAT_LED_ACTIVITY, on by
+	  default), reading the same counter and the same curve, and encoding the
+	  rate as how often the mono LED flashes. That answers "is it hearing
+	  anything" on every board rather than only the ones with a smart LED.
+	  This remains the richer signal and the one that reads at distance.
+
+	  THE TWO CANNOT BOTH READ THE COUNTER, and on this board this one wins:
+	  ANT_DONGLE_HEARTBEAT_LED_ACTIVITY depends on this symbol being off, so
+	  enabling the NeoPixel drops the mono LED back to its fixed flash. The
+	  counter is drained with atomic_clear(), so two readers would each see
+	  about half the traffic and both would report a quiet room - which is
+	  a Kconfig dependency rather than a warning precisely because it is the
+	  shipping Feather row, not a hypothetical.
 
 	  IT COSTS THE RADIO NOTHING, AND THAT IS A DESIGN CONSTRAINT RATHER THAN
 	  A HOPE. The transport is ws2812_spi: one 24-byte SPIM EasyDMA transfer
@@ -45,9 +61,15 @@ config ANT_DONGLE_RGB_LED
 
 	  OFF BY DEFAULT, mechanically rather than cautiously. The `zero-cost` CI
 	  job asserts identical section sizes and symbol sets against the merge
-	  base, and with this symbol off ant_rgb_led_note_msg() is a macro
-	  expanding to nothing - no call, no argument evaluated - so the shipping
-	  image is byte-identical.
+	  base, and with this symbol off the render thread and the strip driver
+	  are absent entirely.
+
+	  What that job used to also prove - that the counting HOOK costs nothing
+	  when the feature is off - is now a claim about
+	  CONFIG_ANT_DONGLE_ACTIVITY_COUNT rather than about this symbol, and it
+	  still holds: ant_activity_note_msg() is a macro expanding to nothing
+	  with the counter off. It is on in the default image, because the mono
+	  heartbeat's activity mode is.
 
 	  ENABLING IT ON ANOTHER BOARD IS AN OVERLAY, NOT A CODE CHANGE. The
 	  module finds its LED through the `rgb-led0` devicetree alias. Any board

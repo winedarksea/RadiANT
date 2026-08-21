@@ -18,8 +18,14 @@ config ANT_DONGLE_MAIN
 	help
 	  apps/common/ant_dongle_main.c: settle-after-UF2, antr_init(), the weak
 	  post-radio hook, usb_ant_class_init(), the serial bridge, the
-	  transport, and the heartbeat loop - in that order, which is
-	  load-bearing in three places.
+	  transport, and then the main thread handed to
+	  ant_heartbeat_led_run() - in that order, which is load-bearing in
+	  three places.
+
+	  The heartbeat itself is CONFIG_ANT_DONGLE_HEARTBEAT_LED, a separate
+	  symbol in apps/common/Kconfig.heartbeat_led, because apps/dongle_ti
+	  ends its own hand-written main() with the same call and needs the
+	  flash without the boot sequence.
 
 	  An application that turns this off is undertaking to provide its own
 	  main(); nothing else in apps/common/ depends on this symbol.

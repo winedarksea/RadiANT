@@ -14,6 +14,7 @@
 #include <zephyr/logging/log.h>
 
 #include "ant_dongle_main.h"
+#include "ant_heartbeat_led.h"
 #include "ant_transport.h"
 #include "diag_flash_log.h"
 
@@ -39,13 +40,6 @@ BUILD_ASSERT(!(IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_K32SRC_SYNTH) &&
 	     "A synthesized low-frequency clock does not keep ANT's timing on "
 	     "nRF54L. The build boots and hears nothing. This part needs a real "
 	     "32.768 kHz crystal; see synth.conf.");
-
-#if DT_NODE_HAS_STATUS(DT_ALIAS(led0), okay)
-#include <zephyr/drivers/gpio.h>
-static const struct gpio_dt_spec led =
-	GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
-static bool led_ok;
-#endif
 
 /* Registered here rather than in either application's main.c, and deliberately
  * still called `ant_dongle`: this is the name apps/dongle's boot log has always
@@ -170,20 +164,12 @@ int ant_dongle_main_run(void)
 	LOG_INF("transport up");
 	(void)diag_flash_log_flush();
 
-#if DT_NODE_HAS_STATUS(DT_ALIAS(led0), okay)
-	led_ok = (gpio_is_ready_dt(&led) == true) &&
-		 (gpio_pin_configure_dt(&led, GPIO_OUTPUT_ACTIVE) == 0);
-#endif
-
-	/* Blink LED at 1 Hz as a heartbeat; nothing else to do here */
-	while (1) {
-#if DT_NODE_HAS_STATUS(DT_ALIAS(led0), okay)
-		if (led_ok) {
-			gpio_pin_toggle_dt(&led);
-		}
-#endif
-		k_sleep(K_MSEC(500));
-	}
+	/* The heartbeat owns the main thread from here; it never returns. See
+	 * apps/common/ant_heartbeat_led.h - the pattern, the activity mode and
+	 * the off-switch all live behind that one call, and a board with no
+	 * led0 alias gets a thread that sleeps.
+	 */
+	ant_heartbeat_led_run();
 
 	return 0;
 }

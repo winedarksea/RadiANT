@@ -100,6 +100,31 @@ target_sources_ifdef(CONFIG_ANT_DONGLE_FLASH_LOG app PRIVATE
 target_sources_ifdef(CONFIG_ANT_DONGLE_MAIN app PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}/ant_dongle_main.c")
 
+# ── The mono led0 heartbeat ──────────────────────────────────────────────
+#
+# NOT gated on CONFIG_ANT_DONGLE_MAIN: apps/dongle_ti has its own hand-written
+# main() and ends it with the same call, so this is the one shared file all
+# three applications reach whether or not they share the boot sequence.
+#
+# On by default, unlike the two features below it - the heartbeat is existing
+# shipping behaviour and only its pattern changed. CONFIG_ANT_DONGLE_HEARTBEAT_
+# LED=n is the whole off-switch: the file is not compiled, and
+# ant_heartbeat_led.h's else-branch gives the caller an inline that sleeps, so
+# no GPIO is configured and no pin is driven.
+target_sources_ifdef(CONFIG_ANT_DONGLE_HEARTBEAT_LED app PRIVATE
+  "${CMAKE_CURRENT_LIST_DIR}/ant_heartbeat_led.c")
+
+# ── The shared receive-activity counter ──────────────────────────────────
+#
+# Selected by whichever indicator wants it - the heartbeat's activity mode, the
+# RGB indicator, or both - and user-selectable by neither; see
+# apps/common/Kconfig.activity. With it off, ant_activity_note_msg() at its one
+# call site in ant_serial_bridge.c is a macro expanding to nothing, so no
+# argument is evaluated either.
+target_sources_ifdef(CONFIG_ANT_DONGLE_ACTIVITY_COUNT app PRIVATE
+  "${CMAKE_CURRENT_LIST_DIR}/ant_activity.c"
+  "${CMAKE_CURRENT_LIST_DIR}/ant_rgb_led_curve.c")
+
 # ── The 0xF6 health counters ─────────────────────────────────────────────
 #
 # Off by default so the `zero-cost` CI job stays a real check - see
@@ -112,16 +137,14 @@ target_sources_ifdef(CONFIG_ANT_DONGLE_HEALTH_COUNTERS app PRIVATE
 # ── The activity-rate RGB indicator ──────────────────────────────────────
 #
 # Off by default for the same mechanical reason as the counters above - see
-# apps/common/Kconfig.rgb_led. With the symbol off this file is not compiled
-# and ant_rgb_led_note_msg() at its one call site in ant_serial_bridge.c is a
-# macro expanding to nothing, so no argument is evaluated either.
+# apps/common/Kconfig.rgb_led. Only apps/dongle rsources the symbol, so this
+# line is inert everywhere else exactly the way the CONFIG_ANT_DONGLE_MAIN line
+# above is.
 #
-# Only apps/dongle rsources the symbol, so this line is inert everywhere else
-# exactly the way the CONFIG_ANT_DONGLE_MAIN line above is.
-# ant_rgb_led_curve.c is the pure arithmetic, in its own translation unit so
-# radiant/tests can link it without a fake LED driver - see its header. Both
-# files are gated on the same symbol; the split is for testability, not for
-# configurability.
+# The render side only. ant_rgb_led_curve.c is the pure arithmetic, in its own
+# translation unit so radiant/tests can link it without a fake LED driver - see
+# its header - and it is gated on CONFIG_ANT_DONGLE_ACTIVITY_COUNT above rather
+# than here, because the mono heartbeat's activity mode reads the same curve.
+# The split is for testability, not for configurability.
 target_sources_ifdef(CONFIG_ANT_DONGLE_RGB_LED app PRIVATE
-  "${CMAKE_CURRENT_LIST_DIR}/ant_rgb_led.c"
-  "${CMAKE_CURRENT_LIST_DIR}/ant_rgb_led_curve.c")
+  "${CMAKE_CURRENT_LIST_DIR}/ant_rgb_led.c")

@@ -19,12 +19,16 @@
  * It now ships, so that argument is spent. The one that replaces it: the
  * `zero-cost` CI job builds a plain Feather from HEAD and from the merge base
  * and compares them section by section and symbol by symbol. What it is
- * measuring is what the RGB feature costs when it is OFF - which is the
- * property apps/dongle_thread depends on, since Kconfig.rgb_led is not sourced
- * there at all and ant_rgb_led.h compiles ant_rgb_led_note_msg() down to
- * ((void)0) on the serial bridge's hot path. Put the node in boards/ and there
- * is no longer any build of this board with the feature off, so that job would
- * compare two enabled images and measure nothing.
+ * measuring is what the RGB feature costs when it is OFF - the render thread,
+ * the ws2812 driver and the SPI subsystem, none of which apps/dongle_thread
+ * has, since Kconfig.rgb_led is not sourced there at all. Put the node in
+ * boards/ and there is no longer any build of this board with the feature off,
+ * so that job would compare two enabled images and measure nothing.
+ *
+ * The counting hook is no longer part of what that job measures here: it moved
+ * to ant_activity.h and CONFIG_ANT_DONGLE_ACTIVITY_COUNT, which the mono led0
+ * heartbeat's activity mode turns on in the default image anyway. Its own
+ * ((void)0) else-branch is intact and is what an _ACTIVITY=n build gets.
  *
  * PORTING THIS TO ANOTHER BOARD: copy this file to rgb_<board>.overlay, point
  * the psels at that board's LED pin, and keep the `rgb-led0` alias. The C code

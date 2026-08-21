@@ -671,10 +671,12 @@ RSSI_MEASUREMENT_TYPE_DBM = 0x20
 # ---------------------------------------------------------------------------
 # Startup message reasons
 # The single payload byte of MESG_STARTUP_MESG. Zero is not a bit: it means a
-# power-on or a command reset with no other flag set.
+# power-on reset with no other flag set.
 # ---------------------------------------------------------------------------
 
-# Power-on, or a reset by command. [tools (ant_probe)]
+# Power-on. This firmware never sends it: the startup message is emitted only
+# in answer to MESG_SYSTEM_RESET, which reports STARTUP_COMMAND_RESET. [tools
+# (ant_probe)]
 STARTUP_POWER_ON_RESET = 0x00
 
 # Hardware reset line. [tools (ant_probe)]
@@ -683,9 +685,15 @@ STARTUP_HARDWARE_RESET_LINE = 0x01
 # Watchdog. [tools (ant_probe)]
 STARTUP_WATCH_DOG_RESET = 0x02
 
-# Reset by MESG_SYSTEM_RESET. What this firmware reports - it sends 0x00,
-# because the stack reset is indistinguishable from a cold start from the
-# host's side. [tools (ant_probe)]
+# Reset by MESG_SYSTEM_RESET. What this firmware reports, and the only reason
+# it ever reports: send_startup() in apps/common/ant_serial_bridge.c has one
+# caller, the reset arm of dispatch(). It sent 0x00 until 2026-08-20, which
+# told hosts the stick had cold-booted and defeated the one thing this byte is
+# watched for - telling an unexpected reset apart from the host's own. The
+# basis for 0x20 is sdk-ant's own header, which ant_radio_sdk_ant.c pins with
+# ANTW_EQ(STARTUP_COMMAND_RESET, RESET_CMD); no observed retail-stick capture
+# of this frame exists here, and the 0x20 frame vectors are tagged hand, not
+# observed. [tools (ant_probe)]
 STARTUP_COMMAND_RESET = 0x20
 
 # Synchronous serial reset. [tools (ant_probe)]

@@ -63,3 +63,25 @@ uint32_t ant_rgb_led_hue_step(uint32_t rate_mpps, uint32_t tick_ms)
 
 	return (uint32_t)(((uint64_t)ANT_RGB_LED_HUE_Q_MAX * tick_ms) / period_ms);
 }
+
+uint32_t ant_activity_gap_ms(uint32_t rate_mpps, uint32_t gap_idle_ms)
+{
+	uint32_t idle_period_ms = ant_rgb_led_period_ms(0u);
+	uint32_t period_ms = ant_rgb_led_period_ms(rate_mpps);
+	uint32_t gap_ms;
+
+	/* Read from the curve rather than written as 20000, so that retuning
+	 * the breakpoints for the NeoPixel cannot silently rescale the mono
+	 * LED. The identity gap_ms(0, x) == x is what makes the Kconfig knob
+	 * mean one thing in both modes, and it has to hold by construction, not
+	 * because two numbers currently agree.
+	 */
+	gap_ms = (uint32_t)(((uint64_t)period_ms * gap_idle_ms) /
+			    idle_period_ms);
+
+	/* The caller sleeps for this. Zero is a spin, not a fast blink - and it
+	 * is reachable honestly, at the busy end of the curve with a small
+	 * gap_idle_ms.
+	 */
+	return (gap_ms == 0u) ? 1u : gap_ms;
+}

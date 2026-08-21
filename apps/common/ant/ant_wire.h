@@ -367,7 +367,7 @@
 /* ------------------------------------------------------------------------
  * Startup message reasons
  * The single payload byte of MESG_STARTUP_MESG. Zero is not a bit: it
- * means a power-on or a command reset with no other flag set.
+ * means a power-on reset with no other flag set.
  * ------------------------------------------------------------------------ */
 
 #define ANTW_STARTUP_POWER_ON_RESET                          RADIANT_WIRE_STARTUP_POWER_ON_RESET

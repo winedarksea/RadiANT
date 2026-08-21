@@ -79,7 +79,15 @@ or a dead image.
 
 `ant_transport_enable()` now refuses to open a UART whose buffers are
 unallocated, so that particular omission fails loudly. **Anything else added to
-the shared boot sequence still has to be mirrored here by hand.**
+the shared boot sequence still has to be mirrored here by hand** — which is why
+the LED loop stopped being one of them: it is `ant_heartbeat_led_run()` in
+`apps/common/ant_heartbeat_led.c`, called from both `main()`s, rather than the
+two copies that used to have to agree.
+
+Note the pattern changed with it: 30 ms every 4 s, shortening with receive
+activity, rather than the 1 Hz square wave DIO6 was identified by eye from.
+`ti_bringup.conf` puts that square wave back, which is what to build when
+hunting for a pin.
 
 ## Building
 

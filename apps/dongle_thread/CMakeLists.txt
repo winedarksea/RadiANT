@@ -258,7 +258,7 @@ if(CONFIG_CHIP)
   # are inside `#ifdef CONFIG_DK_LIBRARY` and this arm does not enable
   # DK_LIBRARY, so the collision matter.conf's CONFIG_NCS_SAMPLE_MATTER_LEDS=n
   # was written to prevent (NCS driving DK LEDs 0-3 against
-  # apps/common/ant_dongle_main.c's led0) cannot happen twice over. The =n line
+  # apps/common/ant_heartbeat_led.c's led0) cannot happen twice over. The =n line
   # stays because it states the decision; this comment states the measurement.
   include(${ZEPHYR_NRF_MODULE_DIR}/samples/matter/common/cmake/source_common.cmake)
 

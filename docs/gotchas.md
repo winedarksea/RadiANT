@@ -73,6 +73,13 @@ from the outside.
   default it overflows the moment the host configures the device; the fatal
   error halts everything at once, so the board goes dark on the bus, the LED
   stops and nothing more is logged. See the stack sizes in `prj.conf`.
+- **"The LED stopped" now takes longer to establish than it used to.** The
+  heartbeat is a 30 ms flash every 4 s, and with the activity mode on (the
+  default) the gap moves with the traffic. Watch for at least five seconds
+  before calling a board dead — a two-second dark stretch is the healthy idle
+  state, not a symptom. See `apps/common/Kconfig.heartbeat_led`; the previous
+  1 Hz square wave is `_ON_MS=500` / `_OFF_MS=500` / `_ACTIVITY=n`, which is
+  what `apps/dongle_ti/ti_bringup.conf` sets and why.
 - **`MESG_SYSTEM_RESET` resets the ANT stack, not the MCU.** Every host library
   opens the device, resets it, then keeps using the same handle. Rebooting
   makes that handle stale and the next transfer fails with a pipe error — at

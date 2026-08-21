@@ -209,6 +209,20 @@ rsource "../common/Kconfig.antr_api"
 # everything else about booting is the same file.
 rsource "../common/Kconfig.dongle_main"
 
+# CONFIG_ANT_DONGLE_ACTIVITY_COUNT and _CLAIMED: the shared receive-activity
+# counter and its one-reader interlock. See that file's own header.
+rsource "../common/Kconfig.activity"
+
+# CONFIG_ANT_DONGLE_HEARTBEAT_LED and friends: the mono led0 flash and its
+# off-switch, shared with apps/dongle and apps/dongle_ti.
+#
+# THIS APPLICATION DOES GET IT, unlike Kconfig.rgb_led which it deliberately
+# does not source. The RGB exclusion is about the ws2812 transport under MPSL's
+# zero-latency timeslot handler; this is one gpio_pin_set_dt() from a
+# preemptible thread, with no irq_lock(), no DMA and nothing in interrupt
+# context, so there is nothing for that argument to apply to.
+rsource "../common/Kconfig.heartbeat_led"
+
 # CONFIG_ANT_DONGLE_HEALTH_COUNTERS: the 0xF6 reply, shared with apps/dongle.
 rsource "../common/Kconfig.health"
 

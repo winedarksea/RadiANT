@@ -1,0 +1,101 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The mono led0 heartbeat's own symbols, rsourced by apps/dongle,
+# apps/dongle_thread and apps/dongle_ti - every application that ends its boot
+# sequence by handing the main thread to the blink loop.
+#
+# Unlike Kconfig.rgb_led beside it, this one IS sourced by all three. The RGB
+# indicator is excluded from apps/dongle_thread because its no-cost-to-the-radio
+# argument is about the ws2812 TRANSPORT - a 24-byte SPIM EasyDMA transfer, and
+# the ws2812_gpio alternative that would bit-bang with interrupts masked - and
+# that argument has to be redone from scratch under MPSL's zero-latency timeslot
+# handler. A mono LED has no transport: it is one gpio_pin_set_dt() register
+# write from a preemptible thread, with no irq_lock(), no DMA, no shared TIMER
+# and no (D)PPI. There is nothing here for the timeslot handler to be exposed
+# to, so the exclusion does not transfer.
+
+config ANT_DONGLE_HEARTBEAT_LED
+	bool "Flash led0 as a boot/liveness heartbeat"
+	depends on GPIO
+	default y
+	help
+	  Compile apps/common/ant_heartbeat_led.c and hand the main thread to it
+	  once the transport is up. The LED is found through the `led0`
+	  devicetree alias; a board that does not define one gets a main thread
+	  that sleeps forever, exactly as before this symbol existed.
+
+	  TURN THIS OFF FOR A BUILD WITH NO LED ACTIVITY AT ALL. With the symbol
+	  off the file is not compiled, no GPIO is configured and no pin is ever
+	  driven - the board simply boots dark. That is the whole of the
+	  off-switch; there is no second knob to find and no overlay to edit.
+
+	  WHAT IT COSTS, since this is the thread that shares a chip with the
+	  radio. Two k_sleep() wakeups per cycle - at the defaults below, per
+	  4.03 SECONDS - on the main thread, each one a single register write.
+	  Nothing here masks interrupts, touches the radio's TIMER or (D)PPI, or
+	  runs in interrupt context. The 1 Hz 50 %-duty blink this replaced was
+	  eight times as many wakeups.
+
+if ANT_DONGLE_HEARTBEAT_LED
+
+config ANT_DONGLE_HEARTBEAT_LED_ON_MS
+	int "Flash length in milliseconds"
+	default 30
+	range 1 60000
+	help
+	  30 ms against the 4 s gap below is about 0.74 % duty - a visible blink
+	  rather than a lamp, and a bus-powered dongle that is dark 99 % of the
+	  time.
+
+	  RAISE THIS, NOT THE DUTY CYCLE, if the flash is too dim to catch on a
+	  particular board: shortening _OFF_MS instead would move the anchor the
+	  activity curve is scaled against (see _ACTIVITY below) and change what
+	  every rate above idle looks like too.
+
+config ANT_DONGLE_HEARTBEAT_LED_OFF_MS
+	int "Gap between flashes in milliseconds, when nothing is on the air"
+	default 4000
+	range 1 60000
+	help
+	  The gap with _ACTIVITY off, and the IDLE gap with it on - the curve is
+	  anchored so that a receive rate of zero produces exactly this value,
+	  whatever the curve's own breakpoints say. So the two modes look
+	  identical on a quiet bench and cannot drift apart.
+
+config ANT_DONGLE_HEARTBEAT_LED_ACTIVITY
+	bool "Shorten the gap as more ANT+ traffic is heard"
+	depends on !ANT_DONGLE_ACTIVITY_CLAIMED
+	select ANT_DONGLE_ACTIVITY_COUNT
+	default y
+	help
+	  Keeps the flash at _ON_MS and scales the gap from _OFF_MS down towards
+	  a floor as sensor traffic rises - roughly 4 s idle, 1.6 s with one
+	  sensor, 400 ms with four, 150 ms with ten or so at the default
+	  _OFF_MS. It answers "is it hearing anything" on a board whose only
+	  output is one LED, which the fixed blink cannot: that only ever
+	  answered "did it boot".
+
+	  It reuses the same rate curve as the NeoPixel indicator
+	  (apps/common/ant_rgb_led_curve.c, and its ztest suite), so the two
+	  read the same air the same way.
+
+	  WHICH IS ALSO WHY IT DEPENDS ON THE NEOPIXEL BEING OFF. They read one
+	  counter and ant_activity.h drains it with atomic_clear(), so both at
+	  once would each see about half the traffic and both would report a
+	  quiet room. A board with a smart LED has the better indicator already;
+	  its mono LED falls back to the fixed flash below, which is exactly what
+	  the shipping Feather row builds. See ant_activity.h if a board ever
+	  genuinely needs both - it needs a second counter, not a second reader.
+
+	  ON BY DEFAULT, AND THAT COMMITS THE HOOK TO EVERY IMAGE. It selects
+	  CONFIG_ANT_DONGLE_ACTIVITY_COUNT, so antr_on_message() gains a switch
+	  on the message id and one atomic increment per data-bearing message -
+	  on the radiant API event thread, never in a radio callback. That is
+	  the same code the shipping Feather has run since the NeoPixel landed;
+	  what is new is that every board has it. Set this to n to get the flat
+	  _ON_MS/_OFF_MS pattern back and the hot path with nothing on it.
+
+	  It costs nothing FURTHER at the LED: the gap is one integer expression
+	  evaluated once per flash, on a thread that was going to sleep anyway.
+
+endif # ANT_DONGLE_HEARTBEAT_LED

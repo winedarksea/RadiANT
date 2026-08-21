@@ -270,15 +270,18 @@ target_include_directories(app PRIVATE
 # here has ever needed the application's src/ at all.
 target_include_directories(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
-# ── apps/common: the RGB indicator's arithmetic ─────────────────────────────
+# ── apps/common: the activity indicators' arithmetic ────────────────────────
 #
 # The one file from apps/common this application links, and the split in
 # apps/common/ant_rgb_led_curve.h exists to make exactly this possible: it
 # reaches no Zephyr header and no Kconfig symbol, so it compiles here with no
-# fake LED driver and no CONFIG_ANT_DONGLE_RGB_LED. Its sibling
-# ant_rgb_led.c deliberately is NOT listed - it resolves a real led_strip
-# device from a `rgb-led0` devicetree alias no test image has, and adding it
-# here would be a build error rather than more coverage.
+# fake LED driver and no CONFIG_ANT_DONGLE_RGB_LED.
+#
+# BOTH its consumers are unlistable here for the same reason, which is why the
+# split earns its keep twice over: ant_rgb_led.c resolves a real led_strip
+# device from a `rgb-led0` alias, and ant_heartbeat_led.c a real GPIO from
+# `led0`. No test image has either, and adding them here would be a build error
+# rather than more coverage.
 #
 # Listed explicitly, like every implementation above: src/ is globbed and
 # implementations are not, so a missing line here is a link error rather than a

@@ -13,6 +13,33 @@ reads.
 
 ### Changed
 
+- **The `led0` heartbeat is a 30 ms flash every 4 s, it scales with receive
+  activity, and it has an off-switch.** The 1 Hz 50 %-duty blink was a lamp on
+  a bus-powered stick, and the only ways to stop it were deleting the board's
+  `led0` alias or `CONFIG_ANT_DONGLE_MAIN=n`, which throws out the boot
+  sequence with it. Now: `CONFIG_ANT_DONGLE_HEARTBEAT_LED=n` compiles the whole
+  thing away — no GPIO configured, no pin driven — and `_ON_MS`/`_OFF_MS` set
+  the pattern. By default the gap also shortens with sensor traffic (4 s idle →
+  150 ms with ten sensors), reusing the NeoPixel's own rate curve
+  (`ant_rgb_led_curve.c`) anchored so a silent room returns `_OFF_MS` exactly.
+  It costs the radio nothing and is a *quarter* the wakeups of what it replaced:
+  one `gpio_pin_set_dt()` twice per cycle from the main thread, no `irq_lock()`,
+  no DMA, nothing in interrupt context — the ws2812-transport argument that
+  keeps the NeoPixel out of `apps/dongle_thread` does not reach a bare GPIO
+  write, so the MPSL arm gets it too. `gpio_pin_set_dt()` rather than
+  `toggle`, which also fixes an active-low `led0` inverting the duty cycle.
+- **The blink loop is one file instead of two, and the activity counter is its
+  own.** `apps/common/ant_heartbeat_led.c` replaces the copy in
+  `ant_dongle_main.c` and the hand-written duplicate in `apps/dongle_ti`; the
+  counting hook moved from `ant_rgb_led.h` to `ant_activity.h`
+  (`ant_activity_note_msg()`, `CONFIG_ANT_DONGLE_ACTIVITY_COUNT`) so two
+  indicators can read it without a third hook on the bridge's hot path. Exactly
+  one may read it per image — `atomic_clear()` takes the count away, so two
+  readers would each see half the traffic and both report a quiet room — and
+  `CONFIG_ANT_DONGLE_ACTIVITY_CLAIMED` makes that a Kconfig dependency rather
+  than a comment. On the shipping Feather the NeoPixel claims it and the mono
+  LED keeps its flat flash. `ti_bringup.conf` restores the 1 Hz square wave,
+  because DIO6 was identified by eye from it and DIO7 still has not been.
 - **Release artifacts are cut from the clean-room backend, and sdk-ant is gone
   from CI.** The Tier 3 Zwift acceptance passed — a 30-minute ride with
   resistance changes taking effect throughout — so the release-default clause in

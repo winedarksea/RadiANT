@@ -1192,6 +1192,15 @@ lines it surrounds. Every one of these is built by
 > either without the other fails the build by design. There is no longer a
 > separate `feather_rgb` image — there were two Feather builds of shipping shape
 > and one of them was never handed to anyone.
+>
+> **Every other target shows the same signal on its mono `led0`.** A 30 ms flash
+> whose gap shortens from 4 s to 150 ms as sensor traffic rises, off the same
+> counter and the same curve — see `apps/common/Kconfig.heartbeat_led`, and
+> `CONFIG_ANT_DONGLE_HEARTBEAT_LED=n` for a build with no LED activity at all.
+> On the Feather the NeoPixel takes that signal and the mono LED keeps a flat
+> flash: the counter is drained by whoever reads it, so it has exactly one
+> reader per image and `CONFIG_ANT_DONGLE_ACTIVITY_CLAIMED` enforces that in
+> Kconfig rather than in a comment.
 
 ### nRF52840 Dongle build
 

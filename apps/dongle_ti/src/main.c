@@ -3,12 +3,17 @@
 /*
  * ANT+ Dongle, TI CC26x2 port — main entry point.
  *
- * Same shape as apps/dongle/src/main.c, minus the UF2-bootloader settle and
- * the LED heartbeat's board-specific alias assumptions (both still guarded
- * to be harmless if the board happens to define them - no LaunchXL variant
- * in this tree does). All protocol work happens in the ANT bridge thread
- * (apps/common/ant_serial_bridge.c) and in antr_on_message(), which the
- * bridge implements and the radio backend calls.
+ * Same shape as apps/dongle/src/main.c, minus the UF2-bootloader settle. All
+ * protocol work happens in the ANT bridge thread (apps/common/
+ * ant_serial_bridge.c) and in antr_on_message(), which the bridge implements
+ * and the radio backend calls.
+ *
+ * The LED heartbeat used to be a second copy of the loop in
+ * apps/common/ant_dongle_main.c and is now the same shared call that file
+ * makes - see apps/common/ant_heartbeat_led.h for why. The board-specific
+ * alias assumption it used to carry is unchanged in substance: the shared file
+ * is still guarded on `led0`, which boards/ti/cc2652p_dongle defines (DIO6) and
+ * no LaunchXL variant in this tree does.
  *
  * UNVERIFIED PENDING HARDWARE beyond a single bring-up bench - see this
  * application's own CMakeLists.txt header and README.md.
@@ -17,14 +22,8 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
+#include "ant_heartbeat_led.h"
 #include "ant_transport.h"
-
-#if DT_NODE_HAS_STATUS(DT_ALIAS(led0), okay)
-#include <zephyr/drivers/gpio.h>
-static const struct gpio_dt_spec led =
-	GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
-static bool led_ok;
-#endif
 
 /* The radio contract - whichever backend is compiled in behind it. Bringing
  * the stack up is the only thing main() needs from it.
@@ -91,22 +90,11 @@ int main(void)
 	}
 	LOG_INF("transport up");
 
-#if DT_NODE_HAS_STATUS(DT_ALIAS(led0), okay)
-	led_ok = (gpio_is_ready_dt(&led) == true) &&
-		 (gpio_pin_configure_dt(&led, GPIO_OUTPUT_ACTIVE) == 0);
-#endif
-
-	/* Blink LED at 1 Hz as a heartbeat, if this board has one; nothing
-	 * else to do here.
+	/* The heartbeat owns the main thread from here; it never returns, and
+	 * on a board with no led0 alias it sleeps. Bring-up wants a louder
+	 * pattern than the shipping 30 ms / 4 s one - see ti_bringup.conf.
 	 */
-	while (1) {
-#if DT_NODE_HAS_STATUS(DT_ALIAS(led0), okay)
-		if (led_ok) {
-			gpio_pin_toggle_dt(&led);
-		}
-#endif
-		k_sleep(K_MSEC(500));
-	}
+	ant_heartbeat_led_run();
 
 	return 0;
 }

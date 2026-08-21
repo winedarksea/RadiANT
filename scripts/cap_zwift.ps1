@@ -34,7 +34,22 @@
 
 .PARAMETER DeviceMatch
     Regex matched against the device descriptions USBPcap reports.
-    Default 'ANT USB-m', which is what this firmware enumerates as.
+
+    The default matches BOTH shapes of this project's dongles, because they do
+    not enumerate alike:
+
+      * 'ANT USB-m'  - the nRF52840 builds (apps/dongle), which are native USB
+                       ANT devices at 0FCF:1009.
+      * 'CP210x'     - the CC2652P stick (apps/dongle_ti), whose ANT serial
+                       stream reaches the host over a Silicon Labs CP2102N
+                       UART bridge at 10C4:EA60. It is a COM port, not a USB
+                       ANT device, so the old 'ANT USB-m' default could never
+                       match it - it failed with "No device matching /ANT
+                       USB-m/", which reads exactly like an unplugged or
+                       unflashed dongle and is neither.
+
+    The bridge carries the same 0xA4-framed bytes, so tools/decode_pcap.py
+    decodes a CP210x capture unchanged.
 
 .PARAMETER All
     Capture every device on the selected filter device, not just the match.
@@ -68,7 +83,7 @@ param(
     [string]$Out,
     [int]$Seconds = 300,
     [string]$Interface,
-    [string]$DeviceMatch = 'ANT USB-m',
+    [string]$DeviceMatch = 'ANT USB-m|CP210x',
     [switch]$All,
     [switch]$Elevate,
     [switch]$Kill
@@ -222,7 +237,26 @@ if (-not $Interface) {
                    "described above resurfacing - check Invoke-UsbPcap is " +
                    "still redirecting stdout to a file.")
         }
-        throw "No device matching /$DeviceMatch/ found. Plug the dongle in, or pass -Interface and -All."
+        $hint = @(
+            "No device matching /$DeviceMatch/ found.",
+            "",
+            "Before concluding the dongle is unplugged or unflashed, check which",
+            "kind you have - they do not enumerate alike:",
+            "  * nRF52840 (apps/dongle)     -> 'ANT USB-m', USB 0FCF:1009.",
+            "  * CC2652P  (apps/dongle_ti)  -> 'Silicon Labs CP210x ... (COMn)',",
+            "    USB 10C4:EA60. It is a UART bridge, not a USB ANT device.",
+            "    Confirm the firmware separately with:",
+            "        python tools\ant_probe.py --port COMn --baud 57600",
+            "    A pass there means the board is fine and only this match failed.",
+            "",
+            "USBPcap's device tree is also not reliable: on 2026-08-20 a CP2102N",
+            "that was present, bound, and passing ant_probe on COM15 did not",
+            "appear in this listing at all, while the ANT USB-m beside it on the",
+            "same hub did. If the device is demonstrably there, capture its whole",
+            "root hub instead and filter afterwards:",
+            "    .\scripts\cap_zwift.ps1 -Interface '\\.\USBPcapN' -All"
+        ) -join [Environment]::NewLine
+        throw $hint
     }
 } else {
     $hit = Get-UsbPcapTree -Iface $Interface |

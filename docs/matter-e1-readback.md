@@ -380,7 +380,11 @@ about RadiANT on that part.**
   `NCS_SAMPLE_MATTER_LEDS depends on DK_LIBRARY` and this arm does not enable
   `DK_LIBRARY`. The line stays: E2 brings NCS's sample-common sources in, and
   the collision it prevents (NCS's `board.cpp` driving DK LEDs 0-3 against
-  `ant_dongle_main.c:173-183`'s `led0`) has to be decided before that, not after.
+  `apps/common/ant_heartbeat_led.c`'s `led0`) has to be decided before that, not
+  after. That file is also where a second owner would now be noticed: the
+  heartbeat configures `led0` once and drives it from the main thread, so a
+  competing writer shows up as a flash pattern that does not match
+  `CONFIG_ANT_DONGLE_HEARTBEAT_LED_ON_MS`/`_OFF_MS` rather than as nothing.
 - **E2's expected diff is smaller than the plan predicts.** The plan says
   rebuilding the five existing arms will show `NCS_SAMPLE_MATTER_LEDS` /
   `NCS_SAMPLE_MATTER_TEST_EVENT_TRIGGERS` appearing as `=y` everywhere, because

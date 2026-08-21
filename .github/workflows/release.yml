@@ -1532,10 +1532,15 @@ jobs:
   # about what the feature costs when OFF.
   #
   # The invariant it protects is still live: apps/dongle_thread has no RGB
-  # (Kconfig.rgb_led is not sourced there at all), and the whole no-cost
-  # argument rests on ant_rgb_led.h's else-branch compiling
-  # ant_rgb_led_note_msg() down to ((void)0) on the bridge's hot path. This is
-  # what would notice if that stopped being true.
+  # (Kconfig.rgb_led is not sourced there at all), so what a disabled build must
+  # not gain is the render thread, the ws2812 driver and the SPI subsystem.
+  #
+  # THE HOOK IS NO LONGER PART OF WHAT THIS MEASURES, and that is deliberate
+  # rather than a gap. It moved to ant_activity.h and
+  # CONFIG_ANT_DONGLE_ACTIVITY_COUNT, which the mono led0 heartbeat's activity
+  # mode turns on in every default image - so it is present in BOTH trees this
+  # job compares and cancels out. Its ((void)0) else-branch is intact and is
+  # what a _ACTIVITY=n build gets; nothing here proves that any more.
   zero-cost:
     name: zero cost when disabled
     runs-on: ubuntu-24.04
