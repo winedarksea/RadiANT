@@ -11,6 +11,55 @@ reads.
 
 ## [Unreleased]
 
+### Changed
+
+- **Release artifacts are cut from the clean-room backend, and sdk-ant is gone
+  from CI.** The Tier 3 Zwift acceptance passed — a 30-minute ride with
+  resistance changes taking effect throughout — so the release-default clause in
+  [ADR 0001](docs/decisions/0001-backend-selection-and-release-default.md) is
+  resolved and the switchover is recorded there, as that ADR requires. The
+  `build-sdk-ant` job is deleted outright; `build-core` now packages, sums and
+  attaches the four shipping images. **No job in either lane needs a secret any
+  more, including the one that publishes**, so a fork gets the whole release
+  matrix with artifacts rather than a skipped-build notice. Further bench
+  testing is planned; the acceptance closed a clause, not the measurement.
+- **`ANT_RADIO` no longer picks a backend from what is on disk.**
+  `ant_select_radio()` defaulted to `sdk_ant` whenever a checkout resolved,
+  which made the radio a property of the *machine*: on any bench able to build
+  sdk-ant at all, a bare `west build` produced a proprietary image and the only
+  evidence was one `STATUS` line. The two images enumerate identically. The
+  default is now `core` unconditionally and `-DANT_RADIO=sdk_ant` must be typed;
+  the Kconfig choice defaults in `apps/dongle` and `apps/dongle_thread` follow.
+  `scripts/build_all.ps1` defaults to `-Backend core` and NCS v3.4.0, and only
+  `core` writes `dist\` — a bench A/B can no longer overwrite a release image.
+- **One Feather image, and it carries the RGB activity indicator.** There were
+  two builds of shipping shape — a plain `radiant_dongle.uf2` and a
+  `feather_rgb` row that was built and thrown away. They are merged: the
+  shipping image keeps the name `radiant_dongle.uf2` and applies `rgb.conf` +
+  `rgb_feather.overlay`, with the `CONFIG_WS2812_STRIP_SPI` / `CONFIG_LED_STRIP`
+  read-backs that justified the RGB row moving with it. `feather_next`
+  (`next.conf`, USB_NEXT) is unaffected — it produces no release artifact and is
+  the only board the new USB device stack can be tested against a real host on.
+- `apps/dongle/sample.yaml`'s twister scenarios passed `CONFIG_ANT_EVALUATION_KEY=y`,
+  a symbol that exists only when sdk-ant's Kconfig has been sourced, so none of
+  them could configure without a private checkout. They now pass `ANT_RADIO=core`.
+  Nothing runs twister in CI, so this is correctness-of-record, not coverage.
+- `encryption.conf` was gated on `-Backend sdk_ant` in `build_all.ps1` while CI
+  built it under `core`. It moves to the `core` block; left where it was, it
+  would have stopped being built by anything the moment the default changed.
+
+**sdk-ant is not removed.** `apps/common/ant_radio_sdk_ant.c`, `apps/sim`,
+`west.yml`'s opt-in `ant` group, `tools/ab_gates.toml` and the reference
+captures in `archive/` are all untouched. It remains the A/B comparison
+reference and the only build whose `BUILD_ASSERT`s check our protocol constants
+against Garmin's — built by hand with
+`build_all.ps1 -Backend sdk_ant -NcsVersion v3.2.4`.
+
+**One accepted cost:** `apps/sim`, the reference transmitter, cannot build
+without sdk-ant, and the deleted job was the only thing that ever compiled it.
+It is now built by hand before a bench sitting, and nothing warns you if it has
+stopped compiling.
+
 ### Added
 
 - **Two tests for a defect the suite could not see: a channel dropping to

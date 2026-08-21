@@ -10,21 +10,27 @@
 # version this application is developed and tested against is recorded in the
 # repository rather than in someone's shell history.
 #
-# Note what this manifest is *not*: it is not how CI builds today. The workflow
-# in .github/workflows/release.yml checks out sdk-ant separately and runs
-# `west init -l` against *sdk-ant's* manifest, because sdk-ant declares
+# THIS MANIFEST IS NOW HOW CI BUILDS. Every job in
+# .github/workflows/release.yml checks this repository out and runs
+# `west init -l` against this file. That is new: until 2026-08-20 the job that
+# produced release artifacts checked out sdk-ant separately and initialised
+# against *sdk-ant's* manifest instead, because sdk-ant declares
 # `self: path: ant` and is itself a manifest repository - so in that layout
-# sdk-ant, not this file, chooses the SDK version. That arrangement is
-# deliberate (it is the only way a private repository's own pinning stays
-# authoritative for the gated build) and this manifest does not replace it.
-# The two are alternative entry points into the same source tree:
+# sdk-ant, not this file, chose the SDK version. Release artifacts have since
+# moved to the clean-room backend and that job is deleted
+# (docs/decisions/0001-backend-selection-and-release-default.md).
 #
-#   this manifest      -> public workspace, no sdk-ant, builds the open backends
-#   sdk-ant's manifest -> full workspace, sdk-ant present, builds everything
+# The two entry points still exist, and the second is now a bench-only route:
 #
-# If the two ever disagree about the SDK version, sdk-ant's pin wins for the
-# full build and this one wins for the public build; the difference is
-# visible in .config and is exactly what the CI assertions exist to catch.
+#   this manifest      -> the workspace CI and everyone else uses. No sdk-ant,
+#                         builds every shipping image, needs no credentials.
+#   sdk-ant's manifest -> full workspace, sdk-ant present. Used by hand when an
+#                         A/B comparison against libant.a is being run.
+#
+# They deliberately resolve DIFFERENT SDK versions and must stay decoupled:
+# sdk-ant v2.1.0 cannot build on the v3.4.0 this file imports at all. If the
+# two ever disagree, sdk-ant's pin wins for the comparison build and this one
+# wins for everything else; the difference is visible in .config.
 
 manifest:
   version: "0.13"
@@ -84,14 +90,18 @@ manifest:
     # libant.a. Optional by construction - see the group-filter note above.
     #
     # This is the `sdk_ant` backend of the three described in
-    # docs/decisions/0001-backend-selection-and-release-default.md. It remains
-    # a first-class selectable backend, not a legacy path: it is the reference
-    # the clean-room stack is measured against, and the only build that can
+    # docs/decisions/0001-backend-selection-and-release-default.md. It is the
+    # A/B COMPARISON REFERENCE and is in no shipping image: release artifacts
+    # moved to the clean-room backend on 2026-08-20. It stays selectable
+    # (-DANT_RADIO=sdk_ant, which must now be passed explicitly) because it is
+    # the thing radiant is measured against, and the only build that can
     # BUILD_ASSERT our protocol constants against Garmin's own headers.
     #
-    # Pinned at v2.1.0, matching SDK_ANT_REVISION in .github/workflows/release.yml.
-    # Do not float this to a branch: the whole point of the pin is that an A/B
-    # comparison run months apart is against the same reference.
+    # Pinned at v2.1.0. Do not float this to a branch: the whole point of the
+    # pin is that an A/B comparison run months apart is against the same
+    # reference. Nothing in .github/ names this revision any more - the
+    # workflow variable that used to mirror it went with the deleted job - so
+    # this line is the only pin, which is simpler rather than weaker.
     #
     # Not imported. sdk-ant's own west.yml declares `self: path: ant` and
     # imports sdk-nrf itself; importing it here would produce two conflicting

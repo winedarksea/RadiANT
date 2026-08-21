@@ -150,21 +150,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-multilib g++-multilib
 
-      # Same action, same shape as release.yml's gated build - app-path is the
+      # Same action, same shape as every job in release.yml - app-path is the
       # manifest repository and sdk-version is left unset so the fetched Zephyr
       # tree chooses. No sdk-ant checkout and no token: radiant/tests is a
       # standalone Zephyr application that never includes the dongle's
-      # CMakeLists.txt, so nothing on this path can reach an ANT header.
+      # CMakeLists.txt, so nothing on this path can reach an ANT header. As of
+      # 2026-08-20 that is true of every job in both lanes, publishing included.
       #
       # The SDK version is not pinned here. app-path: app makes this
       # repository's own west.yml the manifest, so the version is whatever that
-      # file's sdk-nrf revision imports - currently v3.4.0. That is
-      # deliberately *not* the same pin release.yml's build-sdk-ant resolves,
-      # and the two must stay decoupled: sdk-ant v2.1.0 cannot build on v3.4.0,
-      # while radiant has no sdk-ant in it and should track the current SDK.
-      # Pinning both to one version would couple the clean-room half of the
-      # project to the licensing constraints of the proprietary half, which is
-      # the coupling this whole plan exists to remove.
+      # file's sdk-nrf revision imports - currently v3.4.0. It is deliberately
+      # *not* the v3.2.4 an sdk-ant comparison build needs, and the two must
+      # stay decoupled: sdk-ant v2.1.0 cannot build on v3.4.0, while radiant has
+      # no sdk-ant in it and should track the current SDK. Pinning both to one
+      # version would couple the clean-room half of the project to the licensing
+      # constraints of the proprietary half, which is the coupling this whole
+      # plan exists to remove. Nothing in CI resolves the sdk-ant pin any more;
+      # west.yml is its only home.
       #
       # KNOWN COST OF LEAVING IT UNPINNED, and it is not hypothetical: an
       # upstream Zephyr or GCC bump can turn this job red on a change that did

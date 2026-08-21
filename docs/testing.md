@@ -96,15 +96,23 @@ eleventh was real and in the test rather than the module: an assertion named
 modes that file exists to catch — is what the engine had correctly emitted all
 along.
 
-### The one secret, and why it cannot be avoided
+### No CI job needs a secret any more
 
-`build-sdk-ant` is the only job needing a repository secret:
-`SDK_ANT_CHECKOUT_TOKEN`, a **classic** PAT with `repo` scope, from an account
-that has been granted access to `ant-nrfconnect/sdk-ant`. Without it the job
-reports a skip rather than failing red.
+**As of 2026-08-20 there is no secret anywhere in either lane, including the job
+that publishes.** Release artifacts are cut from the clean-room backend
+([ADR 0001](decisions/0001-backend-selection-and-release-default.md)) and the
+token-gated `build-sdk-ant` job has been deleted, so a fork gets the entire
+release matrix — artifacts included — rather than a skipped-build notice.
 
-Every cheaper option has been tried and none of them work, which is worth
-recording so nobody re-litigates it:
+An sdk-ant build is still possible; it is just done by hand, on a bench, when an
+A/B comparison is being run (`scripts/build_all.ps1 -Backend sdk_ant
+-NcsVersion v3.2.4`). Nothing automated needs access to that repository.
+
+The rest of this section is kept because it is the record of *why* delegating
+that access was hard, and it becomes live again the moment anyone proposes
+putting an sdk-ant build back into CI. `SDK_ANT_CHECKOUT_TOKEN` was a
+**classic** PAT with `repo` scope, from an account granted access to
+`ant-nrfconnect/sdk-ant`. Every cheaper option was tried and none worked:
 
 - The automatic `GITHUB_TOKEN` is scoped to this repository alone, so it can
   never reach another organisation's private repo. A maintainer's *personal*
@@ -116,21 +124,16 @@ recording so nobody re-litigates it:
   checkout fails **as though the repository does not exist** — a misleading
   error that reads like a bad revision rather than a permissions problem.
 
-Set repository variable `SDK_ANT_REPO` to build against a fork; it defaults to
-`ant-nrfconnect/sdk-ant`.
+No network-key secret is required either, and never was: a dongle receives its
+ANT+ network key from the host over `MESG_NETWORK_KEY_ID`.
 
-No network-key secret is required: a dongle receives its ANT+ network key from
-the host over `MESG_NETWORK_KEY_ID`.
-
-**Which jobs run without a secret: every job in
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)** — `host-tests`,
+**Which jobs run without a secret: all of them.** Every job in
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) — `host-tests`,
 `ztest`, `generated-drift`, `readme-cap` and `import-smoke` — which is the
-whole fast lane, and is what makes a fork's pull request green. In
-[`release.yml`](../.github/workflows/release.yml), `build-core`,
-`build-new-apps`, `build-node`, `build-treadmill` and `zero-cost` also need
-none; only `build-sdk-ant` does, and it skips rather than failing red. But that
-lane runs only on a `v*` tag or a manual dispatch, so a fork sees none of it
-either way.
+whole fast lane, and is what makes a fork's pull request green. And every job
+in [`release.yml`](../.github/workflows/release.yml): `build-core` (which
+publishes), `build-new-apps`, `build-node`, `build-treadmill` and `zero-cost`.
+That lane runs only on a `v*` tag or a manual dispatch.
 
 ---
 

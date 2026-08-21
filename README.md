@@ -258,9 +258,10 @@ files in `boards/` are one `.conf` and one `.overlay` each.
 | `archive/` | Preserved artefacts, because they are perishable and the facts are what you need: driver provenance and our own `.inf`, spec pointers with hashes, the `ANT_DLL` export tables, golden wire captures, benchmark baselines, and the two bootloader `.uf2` readbacks in `archive/firmware/`. 10 MB budget, stated in [`docs/preservation.md`](docs/preservation.md) |
 | `dist/` | Build outputs. Gitignored — rebuild rather than trusting what is sitting there |
 | `.github/` | CI in two lanes — `workflows/ci.yml` on every PR, `workflows/release.yml` on `v*` tags — plus the composite `actions/` they share |
-| `CMakeLists.txt` | Module wiring and the `ANT_RADIO` backend choice (`sdk_ant` \| `core` \| `stub`) |
-| `Kconfig` | `CONFIG_ANT_DONGLE_*` — transport choice, descriptors, optional features |
-| `prj.conf` | Base configuration. The USB work-queue stack sizes here are load-bearing; the header comment says why |
+| `apps/dongle/CMakeLists.txt` | Module wiring and the `ANT_RADIO` backend choice — `core` (ships) \| `sdk_ant` (A/B reference only) \| `stub` |
+| `apps/dongle/Kconfig` | `CONFIG_ANT_DONGLE_*` — transport choice, descriptors, optional features |
+| `apps/dongle/prj.conf` | Base configuration. The USB work-queue stack sizes here are load-bearing; the header comment says why |
+| `rgb.conf` + `rgb_feather.overlay` | The activity RGB indicator, applied together by the shipping Feather row. Either alone fails the build |
 | `next.conf`, `stub.conf`, `synth.conf`, `diag.conf`, `encryption.conf` | Extra conf fragments: new USB stack, no radio, synthesized 32.768 kHz clock, flash-backed logging, encryption writes. Each explains itself at the top of the file |
 | `sysbuild.cmake`, `pm_static_*.yml` | Pin the application where each board's bootloader expects it — `0x26000` on the Feather and Pro Micro, `0x1000` on the dongle. See [the gotchas](docs/gotchas.md) |
 | `sample.yaml` | Twister metadata |
@@ -276,47 +277,43 @@ files in `boards/` are one `.conf` and one `.overlay` each.
 
 ### Building from source
 
-sdk-ant **v2.1.0** pairs with sdk-nrf **v3.2.4** — both its `west.yml` and
-`doc/compatibility.rst` say so, and that is the pairing to build releases with.
-Its prebuilt `libant.a` is compiled for that ABI, so mixing toolchains tends to
-produce silently wrong radio behaviour rather than a clean link failure.
-
-**Tell the build where sdk-ant is.** There is no hardcoded path: set
-`SDK_ANT_DIR` once in your shell profile and every build in the tree picks it
-up (including `sim/`), or clone sdk-ant as a **sibling of this repo** — the
-default is `../sdk-ant` — or pass `-DANT_MODULE_DIR=<path>` for a single build.
-Each must point at the directory holding `zephyr/module.yml`.
-
-If you installed NCS the usual way (nRF Connect extension or
-`nrfutil toolchain-manager install --ncs-version v3.2.4`) it is already a
-complete west workspace, and sdk-ant is consumed as an extra module:
+**Nothing private is needed.** The shipping radio is `radiant`, the clean-room
+stack in this repository, so a fresh clone builds every released image with no
+token, no secret and no access to anything. Build against NCS **v3.4.0**, then
+flash:
 
 ```powershell
-. .\scripts\env.ps1 -NcsVersion v3.2.4
-Push-Location C:\ncs\v3.2.4
-west -z C:\ncs\v3.2.4\zephyr build -s C:\Users\Colin\ant_dongle `
-  -d C:\Users\Colin\ant_dongle\build\release `
-  -b adafruit_feather_nrf52840/nrf52840/uf2 -p always
-Pop-Location
-```
-
-Then flash:
-
-```powershell
+. .\scripts\env.ps1 -NcsVersion v3.4.0
+.\scripts\build_all.ps1                      # -Backend core default; writes dist\
 .\scripts\flash_uf2.ps1 -TimeoutSeconds 30   # double-tap RESET when prompted
 ```
 
-*Alternative*, if you would rather let sdk-ant's own manifest pull the SDK: its
-`west.yml` declares `self: path: ant`, so the checkout must sit at
-`<topdir>/ant`. Put the clone at `C:\ant-ws\ant`, then `west init -l
-C:\ant-ws\ant; west update` — that fetches sdk-nrf v3.2.4 and Zephyr beneath
-it. Build with `-DANT_MODULE_DIR=C:/ant-ws/ant`. This is what CI does.
+The shipping Feather image carries the activity-rate RGB indicator: its build
+row applies `rgb.conf` and `rgb_feather.overlay` together, and either one
+without the other fails the build on purpose.
+<details>
+<summary><b>Comparison builds against sdk-ant</b> — not needed to build or ship</summary>
 
-**Don't build against NCS v3.4.0.** sdk-ant v2.1.0 fails outright there: its
-`Kconfig` selects the library directory with
-`default "nrf52" if SOC_SERIES_NRF52X`, but v3.4.0's Zephyr renamed that symbol
-to `SOC_SERIES_NRF52`. `CONFIG_ANT_LIB_DIR` comes out empty and the link goes
-looking for `lib/soft-float/libant.a` instead of `lib/nrf52/soft-float/libant.a`.
+Nordic's prebuilt `libant.a` is the A/B reference every gate in
+`tools/ab_gates.toml` is phrased against, and the only build whose
+`BUILD_ASSERT`s check our protocol constants against Garmin's. It is **not**
+built by CI and is in no released image — see
+[ADR 0001](docs/decisions/0001-backend-selection-and-release-default.md).
+
+```powershell
+.\scripts\build_all.ps1 -Backend sdk_ant -NcsVersion v3.2.4   # writes nothing to dist\
+```
+
+The **v3.2.4** pin is a hard constraint: sdk-ant v2.1.0's `Kconfig` selects its
+library directory with `default "nrf52" if SOC_SERIES_NRF52X`, and v3.4.0's
+Zephyr renamed that symbol, so `CONFIG_ANT_LIB_DIR` comes out empty and the link
+looks for `lib/soft-float/libant.a`. Point the build at your checkout with
+`SDK_ANT_DIR`, a sibling clone at `../sdk-ant`, or `-DANT_MODULE_DIR=<path>` —
+each naming the directory holding `zephyr/module.yml`. `-DANT_RADIO=sdk_ant` is
+required explicitly: the build no longer picks this backend just because a
+checkout is on disk, which made the radio a property of the machine.
+
+</details>
 
 Every other target differs only in the board argument and an extra conf file.
 The commands, and the board-specific reasoning worth more than the commands,
@@ -357,7 +354,7 @@ artifact is older than the source it was built from.
 
 | Check | How |
 |---|---|
-| Builds clean | `scripts\build_all.ps1` exits 0 — seven targets, all three transports |
+| Builds clean | `scripts\build_all.ps1` exits 0 — every dongle target, all three transports |
 | Linked where it is written | Asserted per target by `build_all.ps1`: `0x26000` Feather and Pro Micro, `0x1000` dongle, `0x0` nRF54 DKs |
 | Right transport compiled | Asserted per target by `build_all.ps1`; the choice is defaulted from devicetree, so it can drift silently |
 | UF2 loads | Copies to `FTHR840BOOT`; drive auto-ejects, board re-enumerates |
@@ -379,7 +376,7 @@ manual run.** That is the trade taken.
 | Lane | File | Runs on | Jobs |
 |---|---|---|---|
 | Fast | [`ci.yml`](.github/workflows/ci.yml) | PR, push to `master`, dispatch | `host-tests`, `ztest`, `generated-drift`, `readme-cap`, `import-smoke` |
-| Release | [`release.yml`](.github/workflows/release.yml) | `v*` tags, dispatch | `build-core`, `build-new-apps`, `build-node`, `build-treadmill`, `zero-cost`, `build-sdk-ant` |
+| Release | [`release.yml`](.github/workflows/release.yml) | `v*` tags, dispatch | `build-core` (publishes), `build-new-apps`, `build-node`, `build-treadmill`, `zero-cost` |
 | Links | [`linkcheck.yml`](.github/workflows/linkcheck.yml) | weekly, dispatch | external URLs, `archive/` budget |
 
 **No fast-lane job needs a secret**, so it runs in full on a fork — that is what
@@ -407,10 +404,10 @@ Those read-back assertions live in composite actions under
 [`.github/actions/`](.github/actions/) rather than copy-pasted into each job:
 they were copy-pasted, and a fix applied to one copy left five other assertions
 unsatisfiable for months. `assert-kconfig` now rejects that shape by name.
-sdk-ant is private, so `build-sdk-ant` needs one repository secret,
-`SDK_ANT_CHECKOUT_TOKEN`, and skips rather than failing red without it — why it
-has to be a classic PAT is in
-[`docs/testing.md`](docs/testing.md#host-tests-in-ci).
+**No job in either lane needs a secret**, including the one that publishes.
+That became true when release artifacts moved to the clean-room backend and the
+token-gated `build-sdk-ant` job was deleted — so a fork now gets the whole
+release matrix, artifacts included, rather than a skipped-build notice.
 
 ---
 

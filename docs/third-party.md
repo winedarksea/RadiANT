@@ -1,11 +1,12 @@
 # Third-party components
 
 Checked by: nothing — treat as narrative. Nothing here is machine-verified.
-Two facts in the table below *are* duplicated elsewhere and will rot if they
-drift: the sdk-ant repository and revision appear in `west.yml` and as
-`SDK_ANT_REVISION` in `.github/workflows/release.yml`, and the URLs are only as
-live as the weekly link check makes them. Everything else is a legal and
-policy position, which no test can assert.
+The sdk-ant repository and revision below are duplicated in `west.yml`, which is
+now their **only** other home: the `SDK_ANT_REVISION` variable in
+`.github/workflows/release.yml` went with the `build-sdk-ant` job when release
+artifacts moved to the clean-room backend on 2026-08-20, so there is one fewer
+copy to drift. The URLs are only as live as the weekly link check makes them.
+Everything else is a legal and policy position, which no test can assert.
 
 Every component this project touches, what its licence is, and what this
 project's posture toward it is. "Posture" is the load-bearing column: several

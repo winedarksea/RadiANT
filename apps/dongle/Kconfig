@@ -302,7 +302,7 @@ rsource "../common/Kconfig.rgb_led"
 
 choice ANT_DONGLE_RADIO
 	prompt "ANT radio backend"
-	default ANT_DONGLE_RADIO_SDK_ANT
+	default ANT_DONGLE_RADIO_CORE
 	help
 	  Which implementation of apps/common/ant/ant_radio.h is compiled. All three
 	  present the same antr_* contract, so the serial bridge and main() do
@@ -321,8 +321,12 @@ choice ANT_DONGLE_RADIO
 	  assert on.
 
 	  The default below is therefore almost never the value that is used.
-	  It is sdk_ant because that is what a menuconfig-only reader should
-	  see as the shipping configuration, not because it is a real fallback.
+	  It is core because that is what a menuconfig-only reader should see
+	  as the shipping configuration - release artifacts are cut from
+	  -DANT_RADIO=core - not because it is a real fallback. It agrees with
+	  ant_select_radio()'s CMake-side default in apps/common/, and the two
+	  are kept in step deliberately: a reader who never passes the flag
+	  should see the same backend in menuconfig that they would get.
 
 config ANT_DONGLE_RADIO_SDK_ANT
 	bool "Nordic's prebuilt ANT stack (sdk-ant)"
@@ -332,13 +336,19 @@ config ANT_DONGLE_RADIO_SDK_ANT
 	  BUILD_ASSERT block comparing every ANTW_* constant against its
 	  sdk-ant counterpart.
 
-	  The proven path: this is the build Zwift has been verified against
-	  and the one release artifacts are cut from. It is also the only
-	  configuration in which those asserts can run at all, which is why
-	  keeping this backend is worth more than a fallback - it is the thing
-	  that notices when a constant or a signature drifts.
+	  THE COMPARISON REFERENCE, AND NOT A SHIPPING CONFIGURATION. Release
+	  artifacts are cut from ANT_DONGLE_RADIO_CORE as of the 2026-08-20
+	  switchover in
+	  docs/decisions/0001-backend-selection-and-release-default.md, and no
+	  CI job builds this backend at all any more. It is kept because it is
+	  the other half of every A/B measurement in tools/ab_gates.toml, and
+	  because it is the only configuration in which those BUILD_ASSERTs can
+	  run - it is the thing that notices when a constant or a signature
+	  drifts from Garmin's.
 
-	  Needs an sdk-ant checkout; see ANT_MODULE_DIR in CMakeLists.txt.
+	  Needs an sdk-ant checkout AND an explicit -DANT_RADIO=sdk_ant; see
+	  ANT_MODULE_DIR in apps/common/ant_radio_backend.cmake. Nothing selects
+	  it by accident and nothing selects it from the presence of a checkout.
 
 config ANT_DONGLE_RADIO_CORE
 	bool "radiant, the clean-room stack"

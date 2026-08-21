@@ -1,28 +1,49 @@
+# Twister metadata for the dongle application.
+#
+# NOT WIRED INTO EITHER CI LANE. .github/workflows/ci.yml and release.yml both
+# drive `west build` directly against the matrices they carry themselves, and
+# nothing in this repository runs twister. This file is a correctness-of-record
+# description of the buildable configurations, not coverage - do not read a
+# scenario here as something that is being checked.
+#
+# EVERY SCENARIO PASSES ANT_RADIO=core EXPLICITLY. Until the 2026-08-20
+# switchover they instead passed CONFIG_ANT_EVALUATION_KEY=y, which is a symbol
+# that exists ONLY when sdk-ant's Kconfig has been sourced - so every scenario
+# here silently required a private checkout, and none of them could configure
+# without one. core is what ships; sdk_ant is the A/B comparison reference and
+# is built by hand (see scripts/build_all.ps1 -Backend sdk_ant).
 sample:
   description: ANT+ USB Dongle (Zwift-compatible, VID 0x0FCF / PID 0x1009)
   name: ANT+ USB Dongle
 tests:
+  # The shipping Feather image, and it carries the activity NeoPixel: rgb.conf
+  # turns the module on and rgb_feather.overlay declares the LED node plus the
+  # `rgb-led0` alias it looks up. Either one alone fails the build on purpose.
+  # This pairing is what scripts/build_all.ps1's `release` row builds.
   sample.radiant_dongle.feather_uf2:
     platform_allow: adafruit_feather_nrf52840/nrf52840/uf2
     integration_platforms:
       - adafruit_feather_nrf52840/nrf52840/uf2
-    tags: ant usb dongle
+    tags: ant usb dongle rgb
     build_only: true
-    extra_args: CONFIG_ANT_EVALUATION_KEY=y
+    extra_args:
+      - ANT_RADIO=core
+      - EXTRA_CONF_FILE=rgb.conf
+      - EXTRA_DTC_OVERLAY_FILE=rgb_feather.overlay
   sample.radiant_dongle.nrf52840dongle:
     platform_allow: nrf52840dongle/nrf52840
     integration_platforms:
       - nrf52840dongle/nrf52840
     tags: ant usb dongle
     build_only: true
-    extra_args: CONFIG_ANT_EVALUATION_KEY=y
+    extra_args: ANT_RADIO=core
   sample.radiant_dongle.promicro_uf2:
     platform_allow: promicro_nrf52840/nrf52840/uf2
     integration_platforms:
       - promicro_nrf52840/nrf52840/uf2
     tags: ant usb dongle
     build_only: true
-    extra_args: CONFIG_ANT_EVALUATION_KEY=y
+    extra_args: ANT_RADIO=core
   # Fallback image for boards with no 32.768 kHz crystal; see synth.conf.
   sample.radiant_dongle.promicro_uf2_synth:
     platform_allow: promicro_nrf52840/nrf52840/uf2
@@ -31,11 +52,13 @@ tests:
     tags: ant usb dongle
     build_only: true
     extra_args:
-      - CONFIG_ANT_EVALUATION_KEY=y
+      - ANT_RADIO=core
       - EXTRA_CONF_FILE=synth.conf
   # The new USB device stack on a board that can actually be tested against a
   # host. The nRF54 targets have no legacy stack available, so this is what
-  # keeps apps/common/usb_ant_class_next.c honest on hardware that exists.
+  # keeps apps/common/usb_ant_class_next.c honest on hardware that exists. Not
+  # a shipping image, and not a second Feather product - the Feather ships one
+  # image, the row above.
   sample.radiant_dongle.feather_uf2_usbd:
     platform_allow: adafruit_feather_nrf52840/nrf52840/uf2
     integration_platforms:
@@ -43,18 +66,17 @@ tests:
     tags: ant usb dongle usbd
     build_only: true
     extra_args:
-      - CONFIG_ANT_EVALUATION_KEY=y
+      - ANT_RADIO=core
       - EXTRA_CONF_FILE=next.conf
   # nRF54L15 has no USB device peripheral at all, so this build carries the ANT
-  # serial protocol over a UART. It is the only target that exercises
-  # lib/nrf54l/libant.a on real nRF54L silicon.
+  # serial protocol over a UART.
   sample.radiant_dongle.nrf54l15dk:
     platform_allow: nrf54l15dk/nrf54l15/cpuapp
     integration_platforms:
       - nrf54l15dk/nrf54l15/cpuapp
     tags: ant uart nrf54
     build_only: true
-    extra_args: CONFIG_ANT_EVALUATION_KEY=y
+    extra_args: ANT_RADIO=core
   # nRF54LM20A: the one nRF54L part with a USB controller, and it is a DWC2,
   # so this is the new stack by necessity rather than by preference.
   sample.radiant_dongle.nrf54lm20dk:
@@ -63,4 +85,4 @@ tests:
       - nrf54lm20dk/nrf54lm20a/cpuapp
     tags: ant usb dongle nrf54 usbd
     build_only: true
-    extra_args: CONFIG_ANT_EVALUATION_KEY=y
+    extra_args: ANT_RADIO=core

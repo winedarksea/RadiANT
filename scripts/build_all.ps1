@@ -37,8 +37,7 @@
     The node and treadmill rows build only under -Backend core, because neither
     application has an ANT_RADIO axis at all: both are built out of radiant and
     radiant/src/profiles/ with no sdk-ant path, which is the demonstration they
-    exist to make. A default (-Backend sdk_ant) run therefore does not build
-    them; use -Backend core.
+    exist to make. core is now the default, so a plain run builds them.
 
     EVERY ROW NOW COMPLETES UNDER -Backend core -RadiantBackend nrf. Two of them
     never could until the overlays below were added, and the history is worth
@@ -72,25 +71,37 @@
     unless they carry a BOM, so non-ASCII characters here become parse errors.
 
 .PARAMETER NcsVersion
-    NCS version to build against. Must be the one sdk-ant pairs with. v3.2.4
-    is a hard constraint of sdk-ant v2.1.0, not a stale pin: v2.1.0 keys
+    NCS version to build against. Defaults to v3.4.0, which is what the
+    shipping backend tracks and what the TI rows require.
+
+    -Backend sdk_ant NEEDS -NcsVersion v3.2.4 PASSED EXPLICITLY. v3.2.4 is a
+    hard constraint of sdk-ant v2.1.0, not a stale pin: v2.1.0 keys
     ANT_LIB_DIR off CONFIG_SOC_SERIES_NRF52X, and the Zephyr in v3.4.0 renamed
     that symbol to CONFIG_SOC_SERIES_NRF52, so libant.a is never located and
-    ninja reports it missing with no rule to make it.
+    ninja reports it missing with no rule to make it. That pairing used to be
+    the default here because sdk_ant used to be the default backend; both
+    moved together.
 
 .PARAMETER Backend
-    Which implementation of src/ant_radio.h to build against: sdk_ant (the
-    proven path and the only one release artifacts come from), core (the
-    clean-room radiant stack) or stub. Passed through as -DANT_RADIO and
-    asserted afterwards against .config.
+    Which implementation of apps/common/ant/ant_radio.h to build against:
+    core (the clean-room radiant stack, the default, and the one release
+    artifacts are cut from), sdk_ant (Nordic's prebuilt libant.a) or stub.
+    Passed through as -DANT_RADIO and asserted afterwards against .config.
+
+    sdk_ant IS THE A/B COMPARISON REFERENCE AND NOTHING ELSE. It is not built
+    by CI at all any more and it writes nothing to dist\. It is kept because
+    it is the other half of every gate in tools\ab_gates.toml and the only
+    configuration in which ant_radio_sdk_ant.c's BUILD_ASSERTs against
+    Garmin's own headers can run. See
+    docs\decisions\0001-backend-selection-and-release-default.md.
 
 .PARAMETER SdkAntDir
     Path to the sdk-ant checkout, for -Backend sdk_ant. Defaults to
     $env:SDK_ANT_DIR, then to a sibling checkout beside this repository - the
-    same order CMakeLists.txt resolves in. It is passed explicitly on the
-    command line rather than left to that resolution so the value is visible
-    in the build log and in a failure message, instead of being whatever the
-    machine happened to have configured.
+    same order apps\common\ant_radio_backend.cmake resolves in. It is passed
+    explicitly on the command line rather than left to that resolution so the
+    value is visible in the build log and in a failure message, instead of
+    being whatever the machine happened to have configured.
 
 .PARAMETER RadiantBackend
     Which radiant radio HAL to compile, for -Backend core: nrf (the real
@@ -124,13 +135,14 @@
 .EXAMPLE
     .\scripts\build_all.ps1
     .\scripts\build_all.ps1 -Only "*promicro*"
-    .\scripts\build_all.ps1 -Backend core
+    # The A/B comparison reference. Note the SDK pin, which is not the default.
+    .\scripts\build_all.ps1 -Backend sdk_ant -NcsVersion v3.2.4
 #>
 [CmdletBinding()]
 param(
-    [string]$NcsVersion = 'v3.2.4',
+    [string]$NcsVersion = 'v3.4.0',
     [ValidateSet('sdk_ant', 'core', 'stub')]
-    [string]$Backend = 'sdk_ant',
+    [string]$Backend = 'core',
     [ValidateSet('null', 'nrf')]
     [string]$RadiantBackend = 'nrf',
     [string]$SdkAntDir = '',
@@ -189,17 +201,19 @@ $backendSymbol = "CONFIG_ANT_DONGLE_RADIO_$($Backend.ToUpper())=y"
 # Same fields as the CI matrix. 'offset' is where the application must link and
 # 'transport' is which of the three src/ transports must end up compiled; both
 # are asserted after the build.
+#
+# THE FEATHER SHIPS THE RGB INDICATOR. The `release` row carries the conf and
+# the overlay that used to belong to a separate `feather_rgb` row, which is
+# gone: two Feather images of shipping shape, one of which nobody was ever
+# handed, was one image too many. The overlay declares the LED node and the
+# `rgb-led0` alias the module looks up; the conf turns the module on. Either
+# one alone fails loudly by design - see apps\dongle\rgb.conf.
 $targets = @(
-    @{ dir='release';        board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle.uf2';                   pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf=$null;         release=$true  }
+    @{ dir='release';        board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle.uf2';                   pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='rgb.conf';    release=$true; overlay='rgb_feather.overlay' }
     @{ dir='dongle';         board='nrf52840dongle/nrf52840';                artifact='radiant_dongle_nrf52840dongle.zip';    pkg='dfu'; offset=0x1000;  transport='USB_LEGACY'; conf=$null;         release=$true  }
     @{ dir='promicro';       board='promicro_nrf52840/nrf52840/uf2';         artifact='radiant_dongle_promicro.uf2';          pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf=$null;         release=$true  }
     @{ dir='promicro_synth'; board='promicro_nrf52840/nrf52840/uf2';         artifact='radiant_dongle_promicro_synth.uf2';    pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='synth.conf';  release=$true  }
     @{ dir='feather_next';   board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle_feather_usbd.uf2';      pkg='uf2'; offset=0x26000; transport='USB_NEXT';   conf='next.conf';   release=$false }
-    # The activity-rate NeoPixel. The only dongle row carrying BOTH a conf and
-    # an overlay, and it needs both: the overlay declares the LED node and the
-    # `rgb-led0` alias the module looks up, and the conf turns the module on.
-    # Either one alone fails loudly by design - see apps/dongle/rgb.conf.
-    @{ dir='feather_rgb';    board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle_feather_rgb.uf2';       pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='rgb.conf';    release=$false; overlay='rgb_feather.overlay' }
     @{ dir='l15';            board='nrf54l15dk/nrf54l15/cpuapp';             artifact='radiant_dongle_nrf54l15dk.hex';        pkg='hex'; offset=0x0;     transport='UART';       conf=$null;         release=$false }
     @{ dir='lm20';           board='nrf54lm20dk/nrf54lm20a/cpuapp';          artifact='radiant_dongle_nrf54lm20dk.hex';       pkg='hex'; offset=0x0;     transport='USB_NEXT';   conf=$null;         release=$false }
 )
@@ -216,10 +230,15 @@ $targets = @(
 # -Backend sdk_ant would compile nothing and pass, which is worse than not
 # building it: it would look like coverage. Hence the gate on $Backend rather
 # than an unconditional row.
+#
+# encryption.conf JOINED THE core BLOCK RATHER THAN KEEPING AN sdk_ant ONE OF
+# ITS OWN. It was gated on -Backend sdk_ant, which contradicted the CI matrix -
+# release.yml builds encryption.conf under `radio: core` - and the fragment
+# itself sets one CONFIG_ANT_DONGLE_* symbol that has nothing to do with which
+# radio is underneath. Left where it was, it would have stopped being built by
+# anything the moment sdk_ant stopped being the default backend.
 if ($Backend -eq 'core') {
-    $targets += @{ dir='feather_security'; board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle_feather_security.uf2'; pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='security.conf'; release=$false }
-}
-if ($Backend -eq 'sdk_ant') {
+    $targets += @{ dir='feather_security';   board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle_feather_security.uf2';   pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='security.conf';   release=$false }
     $targets += @{ dir='feather_encryption'; board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle_feather_encryption.uf2'; pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='encryption.conf'; release=$false }
 }
 
@@ -259,9 +278,10 @@ if ($Backend -eq 'sdk_ant') {
 #   ti_launchxl_coex   arm 4  a real second RF client (the forked 802.15.4
 #                             driver), arbiter and patch held constant
 #
-# Arm 4 is the only row in this file that needs a devicetree overlay as well as
-# a conf fragment: Zephyr's own cc26x2r1_launchxl.dts disables the 802.15.4
-# node. `overlay` exists for it and is $null everywhere else.
+# Arm 4 needs a devicetree overlay as well as a conf fragment: Zephyr's own
+# cc26x2r1_launchxl.dts disables the 802.15.4 node. It is one of the two rows
+# in this file that use `overlay` - the Feather release row is the other, for
+# the NeoPixel node - and it is $null everywhere else.
 #
 # ARM 4 BUILDS BUT HAS NEVER RUN AGAINST AN 802.15.4 PEER - this bench has
 # none. It belongs in the matrix because it is a build that must not rot, not
@@ -306,10 +326,10 @@ if ($Backend -eq 'core') {
 #              tree. Assertion 2 reads `-ne $t.transport` against an empty
 #              string, so a node row folded into $targets would fail on a symbol
 #              that is correctly absent.
-#   pkg        nothing here is a release artifact. Only -Backend sdk_ant writes
-#              dist\, and this application has no sdk_ant build at all - it is
-#              built out of radiant and radiant/src/profiles/, which is the
-#              entire point of it.
+#   pkg        nothing here is a release artifact. dist\ holds the dongle
+#              images only, and this application has no ANT_RADIO axis at all -
+#              it is built out of radiant and radiant/src/profiles/, which is
+#              the entire point of it.
 #
 # The alternative considered was making those fields optional and skipping the
 # assertions when absent. Rejected: `if ($t.offset)` silently skips assertion 1
@@ -578,12 +598,13 @@ try {
         $halNote = if ($Backend -eq 'core') { ", $rowRadiant HAL" } else { '' }
         Write-Host ("  ok: links at 0x{0:x}, {1} transport, {2} radio{3}" -f $offset, $got, $Backend, $halNote)
 
-        # Only the sdk_ant backend produces artifacts anyone is handed. Release
-        # images stay on that backend until the Tier 3 Zwift acceptance passes
-        # for radiant; moving them is a recorded decision in
-        # docs/decisions/0001, not a side effect of running this script with a
-        # different flag.
-        if ($Backend -ne 'sdk_ant') {
+        # Only the core backend produces artifacts anyone is handed. That
+        # moved from sdk_ant when the Tier 3 Zwift acceptance passed - a
+        # recorded decision in docs/decisions/0001, not a side effect of
+        # running this script with a different flag. An sdk_ant run is a
+        # comparison build and deliberately leaves dist\ alone, so a bench A/B
+        # cannot overwrite the images that are about to ship.
+        if ($Backend -ne 'core') {
             $built += $t
             continue
         }
@@ -886,10 +907,10 @@ try {
     Pop-Location
 }
 
-if ($Backend -ne 'sdk_ant') {
+if ($Backend -ne 'core') {
     Write-Host "`n=== $Backend backend built; no artifacts collected ===" -ForegroundColor Cyan
-    Write-Host "Only -Backend sdk_ant writes dist\, so a core or stub run cannot"
-    Write-Host "overwrite a release image with something that has never been ridden."
+    Write-Host "Only -Backend core writes dist\. sdk_ant is the A/B comparison"
+    Write-Host "reference, so a bench run of it cannot overwrite a release image."
     return
 }
 

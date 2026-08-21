@@ -21,17 +21,24 @@ on:
       - "v*"
   workflow_dispatch:
 
-# Needed by softprops/action-gh-release in build-sdk-ant. ci.yml is narrowed to
+# Needed by softprops/action-gh-release in build-core. ci.yml is narrowed to
 # read for exactly this reason: only the lane that publishes gets to write.
 permissions:
   contents: write
 
-env:
-  SDK_ANT_REVISION: v2.1.0
-  # Upstream sdk-ant. Override with repository variable SDK_ANT_REPO to build
-  # against a fork. Access is granted per GitHub account by Nordic's terms,
-  # which is why the token below is needed at all.
-  SDK_ANT_REPO: ant-nrfconnect/sdk-ant
+# NO SECRET IS USED ANYWHERE IN THIS FILE, and that is new. Until the
+# 2026-08-20 switchover in
+# docs/decisions/0001-backend-selection-and-release-default.md, every release
+# artifact was cut by a `build-sdk-ant` job gated on SDK_ANT_CHECKOUT_TOKEN,
+# because the shipping radio was Nordic's proprietary libant.a. It is now the
+# clean-room radiant stack, so this whole lane - including the jobs that
+# publish - runs to completion on a fork with nothing configured.
+#
+# sdk-ant is NOT gone from the project: it is still a selectable backend
+# (-DANT_RADIO=sdk_ant) and still the other half of every A/B in
+# tools/ab_gates.toml. It is gone from CI, deliberately, and is built by hand
+# on a bench when a comparison is being run. apps/sim, which cannot build
+# without it at all, goes the same way.
 
 # NOT cancel-in-progress. A tag run produces release artifacts, and cancelling
 # one half way through leaves a release with some of its images attached - the
@@ -42,17 +49,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # The job that finally makes CI green on a fork: no secret of any kind, and
-  # no sdk-ant checkout. With -DANT_RADIO=core or =stub the module is never
-  # appended to ZEPHYR_EXTRA_MODULES, CONFIG_ANT never exists, and nothing in
-  # the tree includes an sdk-ant header - so there is nothing for a token to
-  # unlock.
+  # THE JOB THAT SHIPS. No secret of any kind and no sdk-ant checkout: with
+  # -DANT_RADIO=core or =stub the module is never appended to
+  # ZEPHYR_EXTRA_MODULES, CONFIG_ANT never exists, and nothing in the tree
+  # includes an sdk-ant header - so there is nothing for a token to unlock.
+  #
+  # This job used to build the same boards and deliberately upload NOTHING,
+  # because release images stayed on the proprietary backend until the Tier 3
+  # Zwift acceptance passed for radiant. It passed (a 30-minute ride, recorded
+  # in docs/decisions/0001-backend-selection-and-release-default.md), so the
+  # four shipping images are cut here now, and the `build-sdk-ant` job that
+  # used to cut them is gone from this file entirely.
+  #
+  # WHAT THAT MOVED IN WITH IT: the rows carrying `artifact` also carry
+  # `offset`, and the link-address assertion that used to live only on the
+  # publishing job came along with them. It is not decoration. Partition
+  # Manager decides where the application links and does NOT fail when that
+  # disagrees with CONFIG_FLASH_LOAD_OFFSET - the image installs cleanly and
+  # boots into nothing.
   #
   # The ANT_RADIO cache variable and the CONFIG_ANT_DONGLE_RADIO_* choice this
   # job asserts on are the CMake/Kconfig backend seam, and it IS in the tree -
-  # see CMakeLists.txt, which turns -DANT_RADIO into a Kconfig fragment merged
-  # last so that the backend compiled and the backend recorded cannot disagree.
-  # This job is therefore expected to pass; a FATAL_ERROR here is a real fault.
+  # see apps/dongle/CMakeLists.txt, which turns -DANT_RADIO into a Kconfig
+  # fragment merged last so that the backend compiled and the backend recorded
+  # cannot disagree. This job is therefore expected to pass; a FATAL_ERROR here
+  # is a real fault.
   build-core:
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
@@ -61,35 +82,89 @@ jobs:
       run:
         shell: bash
 
-    # The same boards as the gated matrix below, because "the whole project
-    # builds with zero sdk-ant present" is a claim about all of them, not about
-    # a representative one. transport is asserted here for the same reason it
-    # is there: the choice is defaulted from devicetree, so a board whose USB
-    # node moved would silently compile a different transport and still build
-    # green. The link-address assertion deliberately stays on the gated job -
-    # it protects release artifacts, and those do not move here until the Tier
-    # 3 Zwift acceptance passes.
+    # Every board, because "the whole project builds with zero sdk-ant present"
+    # is a claim about all of them, not about a representative one. transport
+    # is asserted on all of them: the choice is defaulted from devicetree, so a
+    # board whose USB node moved would silently compile a different transport
+    # and still build green.
+    #
+    # FOUR ROWS CARRY `release: true` and they are the shipping images. A row
+    # with `artifact` is packaged and uploaded from the run; a row that ALSO
+    # has `release: true` is attached to a `v*` tag with its SHA-256. Every
+    # other row exists to keep something compiling and is downloadable from the
+    # run at most.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: "core: feather"
+          # ── THE FOUR SHIPPING IMAGES ─────────────────────────────────────
+          #
+          # THE FEATHER IMAGE CARRIES THE RGB INDICATOR, and this row is the
+          # merge of what used to be two: a plain "core: feather" that shipped,
+          # and a separate "core: feather, rgb activity led" that was built and
+          # thrown away. Two Feather images of shipping shape, one of which
+          # nobody was ever handed, is one image too many - so the activity
+          # NeoPixel is now simply part of the product and the extra row is
+          # gone.
+          #
+          # The assertions are the reason that row existed and they are kept
+          # verbatim. CONFIG_WS2812_STRIP_SPI is `default y` gated purely on a
+          # devicetree compatible, so it is exactly the kind of symbol that can
+          # silently stop being selected when an overlay or a board file moves -
+          # and the module would then fail to LINK rather than fail to work,
+          # which is only obvious if something builds it. They matter more now
+          # that this is the image users get, not less.
+          - name: "core: feather, rgb activity led"
             board: adafruit_feather_nrf52840/nrf52840/uf2
             radio: core
+            extra_conf: rgb.conf
+            extra_overlay: rgb_feather.overlay
             transport: USB_LEGACY
+            artifact: radiant_dongle.uf2
+            package: uf2
+            offset: "0x26000"
+            release: true
+            assert_config: |
+              CONFIG_ANT_DONGLE_RGB_LED=y
+              # The driver the no-cost-to-the-radio argument depends on. If
+              # this is absent the LED is being driven some other way - the
+              # GPIO bit-bang holds irq_lock() for ~30 us per pixel against a
+              # maskable priority-0 radio ISR - and the row must fail.
+              CONFIG_WS2812_STRIP_SPI=y
+              CONFIG_LED_STRIP=y
           - name: "core: nrf52840dongle"
             board: nrf52840dongle/nrf52840
             radio: core
             transport: USB_LEGACY
+            artifact: radiant_dongle_nrf52840dongle.zip
+            package: dfu
+            offset: "0x1000"
+            release: true
           - name: "core: promicro"
             board: promicro_nrf52840/nrf52840/uf2
             radio: core
             transport: USB_LEGACY
+            artifact: radiant_dongle_promicro.uf2
+            package: uf2
+            offset: "0x26000"
+            release: true
+          # The Pro Micro sold without the 32.768 kHz crystal. Same image, a
+          # synthesized low-frequency clock.
           - name: "core: promicro, synth clock"
             board: promicro_nrf52840/nrf52840/uf2
             radio: core
             extra_conf: synth.conf
             transport: USB_LEGACY
+            artifact: radiant_dongle_promicro_synth.uf2
+            package: uf2
+            offset: "0x26000"
+            release: true
+          # ── Everything below is built to keep it compiling ────────────────
+          #
+          # Not a shipping image. The nRF54 targets can only use the new USB
+          # device stack, and the Feather is the one board that stack can be
+          # tested against a real host on - so it is built here, and it is NOT
+          # one of the two Feather images that were consolidated above.
           - name: "core: feather, new USB stack"
             board: adafruit_feather_nrf52840/nrf52840/uf2
             radio: core
@@ -169,26 +244,11 @@ jobs:
             transport: USB_NEXT
             assert_config: |
               CONFIG_ANT_DONGLE_HEALTH_COUNTERS=y
-          # The activity-rate NeoPixel indicator. The assertions are the point
-          # of the row: CONFIG_WS2812_STRIP_SPI is `default y` gated purely on
-          # a devicetree compatible, so it is exactly the kind of symbol that
-          # can silently stop being selected when an overlay or a board file
-          # moves - and the module would then fail to link rather than fail to
-          # work, which is only obvious if something builds it.
-          - name: "core: feather, rgb activity led"
-            board: adafruit_feather_nrf52840/nrf52840/uf2
-            radio: core
-            extra_conf: rgb.conf
-            extra_overlay: rgb_feather.overlay
-            transport: USB_LEGACY
-            assert_config: |
-              CONFIG_ANT_DONGLE_RGB_LED=y
-              # The driver the no-cost-to-the-radio argument depends on. If
-              # this is absent the LED is being driven some other way - the
-              # GPIO bit-bang holds irq_lock() for ~30 us per pixel against a
-              # maskable priority-0 radio ISR - and the row must fail.
-              CONFIG_WS2812_STRIP_SPI=y
-              CONFIG_LED_STRIP=y
+          # The activity-rate NeoPixel indicator does NOT have a row of its own
+          # here any more. It is not that it stopped being built - it is that it
+          # became the shipping Feather image, so its build is the first entry
+          # in this matrix and its assertions went with it.
+          #
           # The stub is the cheapest proof the backend seam holds - it builds
           # in seconds and is the one configuration that exercises the seam
           # without exercising any radio.
@@ -220,12 +280,12 @@ jobs:
 
       # As in the ztest job: app-path: app means this repository's west.yml is
       # the manifest, so the SDK version is that file's sdk-nrf revision
-      # (currently v3.4.0) and nothing here pins it. This is a different
-      # version from the one the gated sdk-ant build resolves, on purpose - the
-      # backends this job builds contain no sdk-ant, so they are not held back
-      # by sdk-ant v2.1.0's inability to build on v3.4.0. If a core build ever
-      # fails in a way the gated build does not, check this difference first:
-      # it is the one axis on which the two jobs are not comparable.
+      # (currently v3.4.0) and nothing here pins it. That freedom is the point:
+      # sdk-ant v2.1.0 cannot build on v3.4.0 at all (its Kconfig keys
+      # ANT_LIB_DIR off a SoC symbol Zephyr renamed), and this lane no longer
+      # contains a single sdk-ant build to be held back by it. A local
+      # comparison build still needs NCS v3.2.4 - see scripts/build_all.ps1's
+      # -NcsVersion - and nothing in CI has to care.
       - name: Set up Zephyr workspace and toolchain
         uses: zephyrproject-rtos/action-zephyr-setup@v1
         with:
@@ -258,10 +318,11 @@ jobs:
           if [[ -n "${EXTRA_CONF}" ]]; then
             extra+=("-DEXTRA_CONF_FILE=${EXTRA_CONF}")
           fi
-          # A devicetree overlay applied on top of the board's own, for
-          # fragments whose feature needs hardware named that the shipping
-          # image must NOT have - see apps/dongle/rgb_feather.overlay for why
-          # the node cannot simply live in boards/.
+          # A devicetree overlay applied on top of the board's own, for a
+          # fragment whose feature needs hardware named that not every build of
+          # the board has. The shipping Feather image now applies one - see
+          # apps/dongle/rgb_feather.overlay for why the node still cannot
+          # simply live in boards/ even though it does ship.
           if [[ -n "${EXTRA_OVERLAY}" ]]; then
             extra+=("-DEXTRA_DTC_OVERLAY_FILE=${EXTRA_OVERLAY}")
           fi
@@ -329,11 +390,144 @@ jobs:
           path-filter: "*/dongle/*"
           expect: ${{ matrix.assert_config }}
 
-      # No artifact upload and no release attachment on purpose. Release
-      # images stay on build-sdk-ant until the Tier 3 Zwift acceptance passes
-      # for radiant; moving them is a recorded decision in
-      # docs/decisions/0001, not something that happens by a job quietly
-      # gaining an upload step.
+      # ── PACKAGING AND PUBLISHING ─────────────────────────────────────────
+      #
+      # These steps moved here from the deleted `build-sdk-ant` job when the
+      # release default switched to the clean-room backend
+      # (docs/decisions/0001, 2026-08-20). They are unchanged from that job
+      # apart from being gated on `matrix.artifact` instead of on a secret.
+      #
+      # Partition Manager decides where the application links, and it does not
+      # fail loudly when that disagrees with the offset the output file carries
+      # - the image just boots into nothing. Assert the two agree rather than
+      # shipping a package that installs cleanly and does nothing.
+      - name: Verify link address
+        if: matrix.offset != ''
+        env:
+          EXPECTED: ${{ matrix.offset }}
+        run: |
+          set -euo pipefail
+          offset="$(grep -h '^CONFIG_FLASH_LOAD_OFFSET=' \
+            "$(find build -name .config -path '*/dongle/*' -print -quit)" | cut -d= -f2)"
+          pm_app="$(python3 -c \
+            "import yaml,sys; print(hex(yaml.safe_load(open('build/partitions.yml'))['app']['address']))")"
+          echo "load offset: ${offset}   partition manager app: ${pm_app}   expected: ${EXPECTED}"
+          test "$((offset))" -eq "$((EXPECTED))"
+          test "$((pm_app))" -eq "$((EXPECTED))"
+
+      - name: Collect UF2
+        if: matrix.package == 'uf2'
+        run: |
+          set -euxo pipefail
+          # sysbuild nests the image under <build>/dongle/zephyr/ (the sysbuild
+          # image name, taken from apps/dongle's own directory basename); a
+          # plain application build puts it at <build>/zephyr/. Accept either.
+          uf2="$(find build -name zephyr.uf2 -print -quit)"
+          test -n "${uf2}"
+          mkdir -p dist
+          cp "${uf2}" "dist/${{ matrix.artifact }}"
+          ls -l dist/
+
+      # The nRF54 DKs have neither a mass-storage bootloader nor a DFU one -
+      # they are flashed at 0 through the onboard debugger - so the artifact is
+      # just the image.
+      - name: Collect hex
+        if: matrix.package == 'hex'
+        run: |
+          set -euxo pipefail
+          hex="$(find build -name zephyr.hex -path '*/dongle/*' -print -quit)"
+          test -n "${hex}"
+          mkdir -p dist
+          cp "${hex}" "dist/${{ matrix.artifact }}"
+          ls -l dist/
+
+      # The dongle has no mass-storage bootloader; its onboard USB bootloader
+      # takes a Nordic DFU package. `pkg` lives in nrfutil's nrf5sdk-tools
+      # command, which is a separate install on top of the nrfutil binary.
+      - name: Collect DFU package
+        if: matrix.package == 'dfu'
+        run: |
+          set -euxo pipefail
+          curl -fsSL -o nrfutil \
+            https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/executables/x86_64-unknown-linux-gnu/nrfutil
+          chmod +x nrfutil
+          ./nrfutil install nrf5sdk-tools
+          hex="$(find build -name zephyr.hex -path '*/dongle/*' -print -quit)"
+          test -n "${hex}"
+          mkdir -p dist
+          # The application version comes from the root VERSION file, and this
+          # step FAILS if it cannot be read. It used to be the literal 1, which
+          # meant every published package declared the same version and the
+          # bootloader's downgrade check compared 1 against 1 forever - inert,
+          # and silently so. scripts/package_dfu.ps1 derives it identically
+          # (0.1.0 -> 100); the two encodings must not drift apart.
+          #
+          # `app/scripts/...`, not `scripts/...`. Every job in this file checks
+          # this repository out into app/, and the cwd is the workspace root -
+          # so the bare path names nothing. It read `scripts/version_int.py`
+          # while it lived on the gated job, where the only way to reach it was
+          # a tag build with the secret configured; here it runs on every tag.
+          # The script resolves VERSION from its own __file__, so only the path
+          # to the script itself matters.
+          appver="$(python app/scripts/version_int.py)"
+          test -n "${appver}"
+          echo "DFU application version: ${appver}"
+          # --sd-req 0x00: the application needs no SoftDevice present. That was
+          # true when the ANT stack linked into the image and is true now that
+          # the radio is radiant - there has never been a SoftDevice here.
+          ./nrfutil nrf5sdk-tools pkg generate \
+            --hw-version 52 \
+            --sd-req 0x00 \
+            --application "${hex}" \
+            --application-version "${appver}" \
+            "dist/${{ matrix.artifact }}"
+          ls -l dist/
+
+      - name: Upload artifact
+        if: matrix.artifact != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          path: dist/${{ matrix.artifact }}
+
+      # A tag that disagrees with VERSION produces a DFU package whose declared
+      # version does not match the release it hangs off. Checked here rather
+      # than in host-tests because only here is there a tag to check.
+      - name: Tag agrees with VERSION
+        if: matrix.release && startsWith(github.ref, 'refs/tags/v')
+        run: python app/scripts/version_int.py --check-tag "${GITHUB_REF_NAME}"
+
+      # UF2 targets cannot be signed at all - the bootloader takes any image on
+      # the drive - and the nRF52840 Dongle's DFU cannot USEFULLY be signed
+      # either, because the stock Nordic bootloader validates against a key
+      # compiled into itself. Replacing that bootloader would cost the
+      # works-out-of-the-box property, so the posture is published sums rather
+      # than a signature that would not be checked. SECURITY.md states this
+      # plainly rather than leaving it implied; these are the sums it promises.
+      - name: Publish SHA-256 of the artifact
+        if: matrix.release && startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          sha256sum "dist/${{ matrix.artifact }}" | tee "dist/${{ matrix.artifact }}.sha256"
+          {
+            echo "### ${{ matrix.artifact }}"
+            echo ''
+            echo '```'
+            cat "dist/${{ matrix.artifact }}.sha256"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # Only the four shipping images. Every other row in this matrix is built
+      # to keep it compiling and is downloadable from the run, not handed to
+      # anyone as a release.
+      - name: Attach to release
+        if: matrix.release && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/${{ matrix.artifact }}
+            dist/${{ matrix.artifact }}.sha256
 
   # apps/dongle_thread and apps/dongle_ti - the two products Stage 6 of the
   # reorg plan adds. Neither needs sdk-ant (both build -DANT_RADIO=core), so
@@ -1330,6 +1524,18 @@ jobs:
   # the recorded fake_radio TX bodies and RX filter addresses in
   # radiant/tests/api, because a shell script cannot see the air and CI
   # has no radio.
+  # THIS JOB DELIBERATELY DOES NOT BUILD THE SHIPPING IMAGE, and that is worth
+  # stating now that the two have parted company. It builds a plain
+  # `-DANT_RADIO=core` Feather with no rgb.conf and no overlay, while the
+  # Feather image build-core ships carries both. That is not an oversight - a
+  # comparison of two builds that both have the feature ON measures nothing
+  # about what the feature costs when OFF.
+  #
+  # The invariant it protects is still live: apps/dongle_thread has no RGB
+  # (Kconfig.rgb_led is not sourced there at all), and the whole no-cost
+  # argument rests on ant_rgb_led.h's else-branch compiling
+  # ant_rgb_led_note_msg() down to ((void)0) on the bridge's hot path. This is
+  # what would notice if that stopped being true.
   zero-cost:
     name: zero cost when disabled
     runs-on: ubuntu-24.04
@@ -1744,9 +1950,10 @@ jobs:
 
           exit "${fail}"
 
-      # CONFIG_RADIANT_SEC depends on CONFIG_RADIANT, so it can never
-      # reach the sdk-ant build. Asserted rather than assumed, in the job that
-      # already has both trees to hand.
+      # CONFIG_RADIANT_SEC depends on CONFIG_RADIANT, so it can never reach a
+      # build with no radiant in it - the stub here, and equally the sdk_ant
+      # backend, which this lane no longer builds. Asserted rather than
+      # assumed, in the job that already has both trees to hand.
       - name: The stub build carries none of it
         run: |
           set -euo pipefail
@@ -1761,396 +1968,3 @@ jobs:
             exit 1
           fi
 
-  # The sdk-ant half of the split. Unchanged apart from its name: it is still
-  # gated on SDK_ANT_CHECKOUT_TOKEN and still skips cleanly rather than failing
-  # when the secret is absent, and it is still the only job that publishes
-  # release artifacts.
-  #
-  # It now passes -DANT_RADIO=sdk_ant explicitly and asserts
-  # CONFIG_ANT_DONGLE_RADIO_SDK_ANT=y, rather than relying on the default. The
-  # seam exists; leaning on a default is how the job that publishes the release
-  # artifacts ends up publishing a different backend than it says it does.
-  build-sdk-ant:
-    name: ${{ matrix.artifact }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    defaults:
-      run:
-        shell: bash
-
-    # Same firmware, several boards. They differ in where the image is linked,
-    # how it is delivered, which transport carries the ANT serial protocol, and
-    # - for the Pro Micro - which low-frequency clock source it is built for,
-    # since the 32.768 kHz crystal is present on some of those boards and
-    # absent on others sold under the same name.
-    #
-    # offset is where the application is expected to link, and transport is
-    # which of the three src/ transports should end up compiled. Both are
-    # asserted after the build: the transport is defaulted from devicetree, so
-    # a board whose USB node moved or was renamed would silently fall through
-    # to a different one and still build green.
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - board: adafruit_feather_nrf52840/nrf52840/uf2
-            artifact: radiant_dongle.uf2
-            package: uf2
-            offset: "0x26000"
-            transport: USB_LEGACY
-            release: true
-          - board: nrf52840dongle/nrf52840
-            artifact: radiant_dongle_nrf52840dongle.zip
-            package: dfu
-            offset: "0x1000"
-            transport: USB_LEGACY
-            release: true
-          - board: promicro_nrf52840/nrf52840/uf2
-            artifact: radiant_dongle_promicro.uf2
-            package: uf2
-            offset: "0x26000"
-            transport: USB_LEGACY
-            release: true
-          - board: promicro_nrf52840/nrf52840/uf2
-            artifact: radiant_dongle_promicro_synth.uf2
-            package: uf2
-            extra_conf: synth.conf
-            offset: "0x26000"
-            transport: USB_LEGACY
-            release: true
-          # Not a shipping image. The nRF54 targets can only use the new USB
-          # device stack, and this is the one board that stack can be tested
-          # against a real host on, so it is built here to keep it compiling.
-          - board: adafruit_feather_nrf52840/nrf52840/uf2
-            artifact: radiant_dongle_feather_usbd.uf2
-            package: uf2
-            extra_conf: next.conf
-            offset: "0x26000"
-            transport: USB_NEXT
-          # nRF54L15: no USB peripheral in silicon, ANT serial goes out a UART.
-          - board: nrf54l15dk/nrf54l15/cpuapp
-            artifact: radiant_dongle_nrf54l15dk.hex
-            package: hex
-            offset: "0x0"
-            transport: UART
-          # nRF54LM20A: DWC2 USB controller, new stack by necessity.
-          - board: nrf54lm20dk/nrf54lm20a/cpuapp
-            artifact: radiant_dongle_nrf54lm20dk.hex
-            package: hex
-            offset: "0x0"
-            transport: USB_NEXT
-
-    steps:
-      # sdk-ant is a private repository, so the build can only run where a token
-      # with access to it is configured. The automatic GITHUB_TOKEN cannot be
-      # used: it is scoped to this repository alone and carries no access to
-      # any other, so a PAT is the only way to delegate an account's access.
-      # On forks and unconfigured clones this reports a skip instead of
-      # failing red.
-      - name: Check sdk-ant credentials
-        id: ant-ready
-        env:
-          SDK_ANT_CHECKOUT_TOKEN: ${{ secrets.SDK_ANT_CHECKOUT_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ -n "${SDK_ANT_CHECKOUT_TOKEN}" ]]; then
-            echo "enabled=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "enabled=false" >> "${GITHUB_OUTPUT}"
-          fi
-
-      - name: Checkout application
-        if: steps.ant-ready.outputs.enabled == 'true'
-        uses: actions/checkout@v4
-        with:
-          path: app
-
-      # sdk-ant's manifest declares `self: path: ant`, so the checkout must sit
-      # at <topdir>/ant. Its west.yml imports sdk-nrf v3.2.4, which in turn
-      # pulls Zephyr - so this one clone determines the whole SDK version set.
-      #
-      # v3.2.4 is a hard constraint of sdk-ant v2.1.0, not a stale pin, and it
-      # is why nothing in this job passes a version to the setup action: the
-      # pin has to come from sdk-ant's own manifest and stay there. sdk-ant
-      # v2.1.0's Kconfig defaults ANT_LIB_DIR from CONFIG_SOC_SERIES_NRF52X,
-      # and the Zephyr in v3.4.0 renamed that symbol to CONFIG_SOC_SERIES_NRF52
-      # - so on v3.4.0 CONFIG_ANT_LIB_DIR comes out empty, libant.a is never
-      # located, and the link fails with "missing and no known rule to make
-      # it". Moving this job to a newer SDK means patching sdk-ant, which is
-      # not ours to patch. The no-secret jobs above deliberately do not share
-      # this pin.
-      - name: Checkout sdk-ant
-        if: steps.ant-ready.outputs.enabled == 'true'
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ vars.SDK_ANT_REPO || env.SDK_ANT_REPO }}
-          ref: ${{ env.SDK_ANT_REVISION }}
-          token: ${{ secrets.SDK_ANT_CHECKOUT_TOKEN }}
-          path: ant
-
-      - name: Set up Python
-        if: steps.ant-ready.outputs.enabled == 'true'
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      # app-path points at sdk-ant, not at this repo: the action runs
-      # `west init -l` on it, and sdk-ant is the manifest repository.
-      # sdk-version is left unset so the action uses the Zephyr SDK version
-      # that the fetched Zephyr tree asks for.
-      - name: Set up Zephyr workspace and toolchain
-        if: steps.ant-ready.outputs.enabled == 'true'
-        uses: zephyrproject-rtos/action-zephyr-setup@v1
-        with:
-          app-path: ant
-          toolchains: arm-zephyr-eabi
-
-      - name: Build
-        if: steps.ant-ready.outputs.enabled == 'true'
-        env:
-          BOARD: ${{ matrix.board }}
-          EXTRA_CONF: ${{ matrix.extra_conf }}
-        run: |
-          set -euxo pipefail
-          extra=()
-          if [[ -n "${EXTRA_CONF}" ]]; then
-            extra+=("-DEXTRA_CONF_FILE=${EXTRA_CONF}")
-          fi
-          west build app/apps/dongle \
-            -b "${BOARD}" \
-            -d build \
-            -p always \
-            -- \
-            -DANT_RADIO=sdk_ant \
-            -DANT_MODULE_DIR="${GITHUB_WORKSPACE}/ant" \
-            "${extra[@]}"
-
-      # The same assertion build-core makes, for the same reason: ANT_RADIO is
-      # a CMake cache variable chosen before Kconfig runs, so a typo would fall
-      # back to a default and build green with the wrong backend. This job
-      # publishes the release artifacts, which makes it the one where that
-      # matters most.
-      - name: Verify radio backend
-        if: steps.ant-ready.outputs.enabled == 'true'
-        run: |
-          set -euo pipefail
-          cfg="$(find build -name .config -path '*/dongle/*' -print -quit)"
-          got="$(grep -oP '^CONFIG_ANT_DONGLE_RADIO_\K\w+(?==y)' "${cfg}")"
-          echo "radio: ${got}   expected: SDK_ANT"
-          test "${got}" = "SDK_ANT"
-
-      # Partition Manager decides where the application links, and it does not
-      # fail loudly when that disagrees with the offset the output file carries
-      # - the image just boots into nothing. Assert the two agree rather than
-      # shipping a package that installs cleanly and does nothing.
-      - name: Verify link address
-        if: steps.ant-ready.outputs.enabled == 'true'
-        env:
-          EXPECTED: ${{ matrix.offset }}
-        run: |
-          set -euo pipefail
-          offset="$(grep -h '^CONFIG_FLASH_LOAD_OFFSET=' \
-            "$(find build -name .config -path '*/dongle/*' -print -quit)" | cut -d= -f2)"
-          pm_app="$(python3 -c \
-            "import yaml,sys; print(hex(yaml.safe_load(open('build/partitions.yml'))['app']['address']))")"
-          echo "load offset: ${offset}   partition manager app: ${pm_app}   expected: ${EXPECTED}"
-          test "$((offset))" -eq "$((EXPECTED))"
-          test "$((pm_app))" -eq "$((EXPECTED))"
-
-      # Assert each target compiled the transport it is supposed to. The choice
-      # is defaulted from devicetree, so a board whose USB node moved or was
-      # renamed would silently fall through to a different one and still build.
-      - name: Verify transport
-        if: steps.ant-ready.outputs.enabled == 'true'
-        env:
-          EXPECTED: ${{ matrix.transport }}
-        run: |
-          set -euo pipefail
-          cfg="$(find build -name .config -path '*/dongle/*' -print -quit)"
-          got="$(grep -oP '^CONFIG_ANT_DONGLE_TRANSPORT_\K\w+(?==y)' "${cfg}")"
-          echo "transport: ${got}   expected: ${EXPECTED}"
-          test "${got}" = "${EXPECTED}"
-
-      - name: Collect UF2
-        if: steps.ant-ready.outputs.enabled == 'true' && matrix.package == 'uf2'
-        run: |
-          set -euxo pipefail
-          # sysbuild nests the image under <build>/dongle/zephyr/ (the sysbuild
-          # image name, taken from apps/dongle's own directory basename); a
-          # plain application build puts it at <build>/zephyr/. Accept either.
-          uf2="$(find build -name zephyr.uf2 -print -quit)"
-          test -n "${uf2}"
-          mkdir -p dist
-          cp "${uf2}" "dist/${{ matrix.artifact }}"
-          ls -l dist/
-
-      # The nRF54 DKs have neither a mass-storage bootloader nor a DFU one -
-      # they are flashed at 0 through the onboard debugger - so the artifact is
-      # just the image.
-      - name: Collect hex
-        if: steps.ant-ready.outputs.enabled == 'true' && matrix.package == 'hex'
-        run: |
-          set -euxo pipefail
-          hex="$(find build -name zephyr.hex -path '*/dongle/*' -print -quit)"
-          test -n "${hex}"
-          mkdir -p dist
-          cp "${hex}" "dist/${{ matrix.artifact }}"
-          ls -l dist/
-
-      # The dongle has no mass-storage bootloader; its onboard USB bootloader
-      # takes a Nordic DFU package. `pkg` lives in nrfutil's nrf5sdk-tools
-      # command, which is a separate install on top of the nrfutil binary.
-      - name: Collect DFU package
-        if: steps.ant-ready.outputs.enabled == 'true' && matrix.package == 'dfu'
-        run: |
-          set -euxo pipefail
-          curl -fsSL -o nrfutil \
-            https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/executables/x86_64-unknown-linux-gnu/nrfutil
-          chmod +x nrfutil
-          ./nrfutil install nrf5sdk-tools
-          hex="$(find build -name zephyr.hex -path '*/dongle/*' -print -quit)"
-          test -n "${hex}"
-          mkdir -p dist
-          # The application version comes from the root VERSION file, and this
-          # step FAILS if it cannot be read. It used to be the literal 1, which
-          # meant every published package declared the same version and the
-          # bootloader's downgrade check compared 1 against 1 forever - inert,
-          # and silently so. scripts/package_dfu.ps1 derives it identically
-          # (0.1.0 -> 100); the two encodings must not drift apart.
-          appver="$(python scripts/version_int.py)"
-          test -n "${appver}"
-          echo "DFU application version: ${appver}"
-          # --sd-req 0x00: the application needs no SoftDevice present, which is
-          # true - the ANT stack links into the image.
-          ./nrfutil nrf5sdk-tools pkg generate \
-            --hw-version 52 \
-            --sd-req 0x00 \
-            --application "${hex}" \
-            --application-version "${appver}" \
-            "dist/${{ matrix.artifact }}"
-          ls -l dist/
-
-      - name: Upload artifact
-        if: steps.ant-ready.outputs.enabled == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          if-no-files-found: error
-          path: dist/${{ matrix.artifact }}
-
-      # A tag that disagrees with VERSION produces a DFU package whose declared
-      # version does not match the release it hangs off. Checked here rather
-      # than in host-tests because only here is there a tag to check.
-      - name: Tag agrees with VERSION
-        if: steps.ant-ready.outputs.enabled == 'true' && matrix.release && startsWith(github.ref, 'refs/tags/v')
-        run: python scripts/version_int.py --check-tag "${GITHUB_REF_NAME}"
-
-      # UF2 targets cannot be signed at all - the bootloader takes any image on
-      # the drive - and the nRF52840 Dongle's DFU cannot USEFULLY be signed
-      # either, because the stock Nordic bootloader validates against a key
-      # compiled into itself. Replacing that bootloader would cost the
-      # works-out-of-the-box property, so the posture is published sums rather
-      # than a signature that would not be checked. SECURITY.md states this
-      # plainly rather than leaving it implied; these are the sums it promises.
-      - name: Publish SHA-256 of the artifact
-        if: steps.ant-ready.outputs.enabled == 'true' && matrix.release && startsWith(github.ref, 'refs/tags/v')
-        run: |
-          set -euo pipefail
-          sha256sum "dist/${{ matrix.artifact }}" | tee "dist/${{ matrix.artifact }}.sha256"
-          {
-            echo "### ${{ matrix.artifact }}"
-            echo ''
-            echo '```'
-            cat "dist/${{ matrix.artifact }}.sha256"
-            echo '```'
-          } >> "${GITHUB_STEP_SUMMARY}"
-
-      # Only the four shipping images. The Feather new-stack build and the two
-      # nRF54 DK images are built to keep them compiling and to be downloadable
-      # from the run, not to be handed to anyone as a release.
-      - name: Attach to release
-        if: steps.ant-ready.outputs.enabled == 'true' && matrix.release && startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/${{ matrix.artifact }}
-            dist/${{ matrix.artifact }}.sha256
-
-      # sim/ is a second application in this repository, not a dongle image, so
-      # it is built here rather than added to the matrix above: none of that
-      # job's link-address or transport assertions mean anything for it. All
-      # four profiles are built because they differ only by a Kconfig choice,
-      # and three of them would otherwise never be compiled - including the
-      # combined speed-and-cadence page, which is the hardest to get right and
-      # is not the default.
-      - name: Build ANT+ sensor simulator
-        if: steps.ant-ready.outputs.enabled == 'true' && matrix.artifact == 'radiant_dongle.uf2'
-        run: |
-          set -euxo pipefail
-          for profile in BPWR_STANDARD BPWR_CRANK_TORQUE BPWR_WHEEL_TORQUE BSC_COMBINED; do
-            west build app/apps/sim \
-              -b nrf54l15dk/nrf54l15/cpuapp \
-              -d "build-sim-${profile}" \
-              -p always \
-              --sysbuild \
-              -- \
-              -DANT_MODULE_DIR="${GITHUB_WORKSPACE}/ant" \
-              "-Dsim_CONFIG_ANT_SIM_PROFILE_${profile}=y"
-            grep -q "^CONFIG_ANT_SIM_PROFILE_${profile}=y$" \
-              "build-sim-${profile}/sim/zephyr/.config"
-          done
-
-      # C3: the deliberate-dropout knobs, which produce the D that
-      # tools/ant_verify.py --expect-dropout subtracts. They compile out
-      # entirely at the default ANT_SIM_DROPOUT_EVERY_S=0, so the four profile
-      # builds above never touch this code and a break in it would surface for
-      # the first time on a bench, mid-sitting.
-      #
-      # It has already happened once: the first version of dropout_reopen_fn()
-      # called ant_channel_open(), which is a MACRO in sdk-ant's
-      # ant_interface.h rather than a function. Without that header the call
-      # became an implicit declaration and the image failed at link, while
-      # ant_channel_close() beside it linked cleanly. Nothing but an enabled
-      # build catches that.
-      - name: Build ANT+ sensor simulator with dropout knobs
-        if: steps.ant-ready.outputs.enabled == 'true' && matrix.artifact == 'radiant_dongle.uf2'
-        run: |
-          set -euxo pipefail
-          west build app/apps/sim \
-            -b nrf54l15dk/nrf54l15/cpuapp \
-            -d build-sim-dropout \
-            -p always \
-            --sysbuild \
-            -- \
-            -DANT_MODULE_DIR="${GITHUB_WORKSPACE}/ant" \
-            "-Dsim_CONFIG_ANT_SIM_DROPOUT_EVERY_S=90" \
-            "-Dsim_CONFIG_ANT_SIM_DROPOUT_S=10"
-          grep -q '^CONFIG_ANT_SIM_DROPOUT_EVERY_S=90$' \
-            build-sim-dropout/sim/zephyr/.config
-          grep -q '^CONFIG_ANT_SIM_DROPOUT_S=10$' \
-            build-sim-dropout/sim/zephyr/.config
-
-      # Emitted once, not once per board - the cause and the fix are the same
-      # for every entry in the matrix.
-      - name: Note skipped build
-        if: steps.ant-ready.outputs.enabled != 'true' && matrix.artifact == 'radiant_dongle.uf2'
-        run: |
-          {
-            echo "### ANT build skipped"
-            echo
-            echo "sdk-ant is a private repository. To enable this workflow, add one"
-            echo "repository **secret**:"
-            echo
-            echo "- \`SDK_ANT_CHECKOUT_TOKEN\` - a classic PAT with \`repo\` scope, from an"
-            echo "  account that has been granted access to \`${SDK_ANT_REPO}\`."
-            echo
-            echo "The automatic \`GITHUB_TOKEN\` cannot be used: it is scoped to this"
-            echo "repository only. To build against a fork instead, set repository"
-            echo "variable \`SDK_ANT_REPO\` to \`owner/name\`."
-            echo
-            echo "No ANT network key secret is needed - a dongle receives its network key from the host."
-            echo
-            echo "Only these images are skipped. The \`build-core\` job builds the same"
-            echo "boards against the clean-room backend and the \`ztest\` job runs the C"
-            echo "unit tests, both without any secret, so a fork still gets real coverage."
-          } >> "${GITHUB_STEP_SUMMARY}"

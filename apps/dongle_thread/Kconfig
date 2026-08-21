@@ -214,7 +214,7 @@ rsource "../common/Kconfig.health"
 
 choice ANT_DONGLE_RADIO
 	prompt "ANT radio backend"
-	default ANT_DONGLE_RADIO_SDK_ANT
+	default ANT_DONGLE_RADIO_CORE
 	help
 	  Which implementation of apps/common/ant/ant_radio.h is compiled. All three
 	  present the same antr_* contract, so the serial bridge and main() do
@@ -237,9 +237,11 @@ choice ANT_DONGLE_RADIO
 config ANT_DONGLE_RADIO_SDK_ANT
 	bool "Nordic's prebuilt ANT stack (sdk-ant)"
 	help
-	  Compile apps/common/ant_radio_sdk_ant.c. Needs an sdk-ant checkout;
-	  see ANT_MODULE_DIR in apps/common/ant_radio_backend.cmake. Not what
-	  the P4 gate builds against - see the choice's own help.
+	  Compile apps/common/ant_radio_sdk_ant.c. Needs an sdk-ant checkout
+	  AND an explicit -DANT_RADIO=sdk_ant; see ANT_MODULE_DIR in
+	  apps/common/ant_radio_backend.cmake. The A/B comparison reference
+	  only: no CI job builds it, and it is not what the P4 gate builds
+	  against - see the choice's own help.
 
 config ANT_DONGLE_RADIO_CORE
 	bool "radiant, the clean-room stack"

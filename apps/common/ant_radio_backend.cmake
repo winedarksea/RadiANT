@@ -81,25 +81,33 @@ function(ant_select_radio app_dir default_radio radiant_backend_conf conf_out)
   # out as CONFIG_ANT_DONGLE_RADIO_* below, so that .config records which
   # backend was compiled and CI can assert on it.
   #
-  # The default follows what is on disk, so that neither of the two normal
-  # situations needs a flag: with an sdk-ant checkout resolved, `sdk_ant` is
-  # the proven build and the one release artifacts come from; with no
-  # checkout - a fork, a fresh clone, a CI job with no secret - `core` is the
-  # only honest answer, and it fails at the link rather than at a path that
-  # was never the user's fault. `default_radio` lets a caller override this
-  # (dongle_thread's coex arms may want a different default than the plain
-  # dongle's).
+  # THE DEFAULT IS `core`, UNCONDITIONALLY, AND IT NO LONGER READS THE DISK.
+  #
+  # It used to follow what was on disk: an sdk-ant checkout resolved, so
+  # `sdk_ant` was chosen, on the argument that it was the proven build and the
+  # one release artifacts came from. Both halves of that argument have expired.
+  # Release artifacts are cut from `core` as of
+  # docs/decisions/0001-backend-selection-and-release-default.md's 2026-08-20
+  # switchover, and sdk-ant is no longer built by CI at all - it is the A/B
+  # comparison reference and nothing else.
+  #
+  # What made the old default actively wrong is that it was a property of the
+  # MACHINE rather than of the build. On any bench with the private checkout in
+  # place - which is every machine that can build sdk_ant at all - a bare `west
+  # build` produced a proprietary image, and the only evidence was one STATUS
+  # line in a log nobody reads. The two images enumerate identically.
+  #
+  # So the proprietary backend now requires someone to type
+  # -DANT_RADIO=sdk_ant, and a build that does not ask for it cannot get it.
+  # `default_radio` still lets a caller override this (dongle_thread's coex
+  # arms may want a different default than the plain dongle's).
   radiant_sysbuild_value(ANT_RADIO ANT_RADIO_SYSBUILD)
   if(ANT_RADIO_SYSBUILD)
     set(ANT_RADIO "${ANT_RADIO_SYSBUILD}" CACHE STRING
         "ANT radio backend: sdk_ant, core or stub" FORCE)
   else()
     if(NOT default_radio)
-      if(ANT_MODULE_PRESENT)
-        set(default_radio "sdk_ant")
-      else()
-        set(default_radio "core")
-      endif()
+      set(default_radio "core")
     endif()
     set(ANT_RADIO "${default_radio}" CACHE STRING
         "ANT radio backend: sdk_ant, core or stub")

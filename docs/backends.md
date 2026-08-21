@@ -398,10 +398,22 @@ blocks.
 
 ## Radio backends: `sdk_ant` | `core` | `stub`
 
-Today the radio is Nordic's prebuilt `libant.a`, from a private,
-non-redistributable repository, and `CMakeLists.txt` hard-fails without its headers — so losing
-access to that repository means nothing builds, not even the radio-stub build.
-The seam below is what removes that, and it mirrors the transport pattern in
+The shipping radio is `core` — the clean-room stack in `radiant/`. It has been
+since 2026-08-20, when the Tier 3 Zwift acceptance passed and release artifacts
+moved off the proprietary backend
+([ADR 0001](decisions/0001-backend-selection-and-release-default.md)). No secret
+and no private checkout is needed to build or publish any image in this
+repository.
+
+That is the end of a specific failure mode this section used to describe: the
+radio *was* Nordic's prebuilt `libant.a`, from a private, non-redistributable
+repository, and the root `CMakeLists.txt` hard-failed without its headers — so
+losing access to that repository meant nothing built, not even the radio-stub
+build. `sdk_ant` survives as the A/B comparison reference and is selected only
+by an explicit `-DANT_RADIO=sdk_ant`; it is built by hand on a bench, never by
+CI, and it writes nothing to `dist\`.
+
+The seam below is what removed that, and it mirrors the transport pattern in
 [`apps/common/ant_transport.h`](../apps/common/ant_transport.h) exactly, because that pattern
 already works and is already asserted in CI.
 
@@ -423,8 +435,8 @@ ant_radio_sdk_ant.c   ant_radio_stub.c    radiant/   (clean-room stack)
 
 | Backend | What it is | Why it exists |
 |---|---|---|
-| `sdk_ant` | ~50 one-line forwarders onto `libant.a`, plus a `BUILD_ASSERT` block comparing every `ANTW_*` constant against its `MESG_*` counterpart | The reference half of every A/B, and the shipping radio until Tier 3 passes. See [`sdk-ant-contract.md`](sdk-ant-contract.md) |
-| `core` | The clean-room rebuild in `radiant/` | The point of the exercise: builds with zero sdk-ant present, and is a superset — 32 channels, background scan, the RadiANT extensions |
+| `sdk_ant` | ~50 one-line forwarders onto `libant.a`, plus a `BUILD_ASSERT` block comparing every `ANTW_*` constant against its `MESG_*` counterpart | **The A/B comparison reference, and nothing else** — not shipped, not built by CI, and reached only by an explicit `-DANT_RADIO=sdk_ant`. See [`sdk-ant-contract.md`](sdk-ant-contract.md) |
+| `core` | The clean-room rebuild in `radiant/` | **The shipping radio**, since the 2026-08-20 switchover in [ADR 0001](decisions/0001-backend-selection-and-release-default.md). Builds with zero sdk-ant present, and is a superset — 32 channels, background scan, the RadiANT extensions |
 | `stub` | A no-op radio, [`apps/common/ant_radio_stub.c`](../apps/common/ant_radio_stub.c) — the rename of the old `src/ant_stub.c` | The cheapest proof the seam holds. Builds in seconds, and is the only configuration today that runs with no sdk-ant at all |
 
 **The prefixes are load-bearing, not cosmetic.** sdk-ant's error macros are
@@ -438,7 +450,11 @@ of Garmin's API names, which matters for the clean-room narrative.
 **The shim is self-checking, for free.** If sdk-ant changes a signature the
 file stops compiling; if a constant drifts the assert fires. Both checks exist
 only where sdk-ant is present — exactly where they can be checked. That is why
-keeping the sdk-ant backend is worth more than a fallback would be.
+keeping the sdk-ant backend is worth more than a fallback would be, and it is
+the reason the backend survived the 2026-08-20 switchover that took it out of
+CI and out of every released image. **Nothing runs those asserts automatically
+any more**: they fire when somebody builds `-Backend sdk_ant` on a bench, which
+is the cost of having no private repository in CI.
 
 ### CMake decides, Kconfig mirrors
 
@@ -446,9 +462,14 @@ keeping the sdk-ant backend is worth more than a fallback would be.
 therefore before Kconfig — so a Kconfig symbol cannot decide whether sdk-ant's
 Kconfig gets sourced. The choice has to be made one level up:
 
-- an `ANT_RADIO` cache variable (`sdk_ant` | `core` | `stub`), defaulting to
-  `sdk_ant` when `ANT_MODULE_DIR` resolves and `core` otherwise, with
-  `ANT_MODULE_DIR` defaulting to `$ENV{SDK_ANT_DIR}`;
+- an `ANT_RADIO` cache variable (`sdk_ant` | `core` | `stub`), **defaulting to
+  `core` unconditionally**, with `ANT_MODULE_DIR` defaulting to
+  `$ENV{SDK_ANT_DIR}`. It used to default to `sdk_ant` whenever
+  `ANT_MODULE_DIR` resolved, which made the radio a property of the *machine*
+  rather than of the build: on any bench with the private checkout in place, a
+  bare `west build` produced a proprietary image and the only evidence was one
+  `STATUS` line. The two images enumerate identically. `sdk_ant` now has to be
+  asked for by name;
 - CMake writes a generated `.conf` fragment setting `CONFIG_ANT_DONGLE_RADIO_*`,
   so `.config` records the backend and CI can assert it;
 - with `core` or `stub` the module is never added and `CONFIG_ANT` never
@@ -1159,6 +1180,19 @@ detail — the board-specific reasoning that is worth more than the command
 lines it surrounds. Every one of these is built by
 [`scripts/build_all.ps1`](../scripts/build_all.ps1) in one pass.
 
+> **READ THE SDK VERSION IN THESE COMMANDS AS v3.4.0.** Many of the invocations
+> below still spell `C:\ncs\v3.2.4\zephyr`, from when every dongle target was an
+> sdk-ant build and v3.2.4 was that library's hard constraint. Shipping images
+> are cut from the clean-room backend as of 2026-08-20 and track the current
+> SDK; `build_all.ps1` defaults to v3.4.0. Only `-Backend sdk_ant` still needs
+> `-NcsVersion v3.2.4`, and it needs it explicitly.
+>
+> **The Feather target carries the RGB activity indicator.** Its release row
+> applies `rgb.conf` together with `-DEXTRA_DTC_OVERLAY_FILE=rgb_feather.overlay`;
+> either without the other fails the build by design. There is no longer a
+> separate `feather_rgb` image — there were two Feather builds of shipping shape
+> and one of them was never handed to anyone.
+
 ### nRF52840 Dongle build
 
 Same source, different board target, and a DFU package instead of a UF2:
@@ -1300,12 +1334,13 @@ west -z C:\ncs\v3.4.0\zephyr build -s C:\Users\Colin\ant_dongle\apps\dongle `
 Pop-Location
 ```
 
-**v3.4.0 is deliberate here and only here.** The stub links no `libant.a`, so it
-is the one build that does not care which NCS it gets. Every target above it is
-an sdk-ant build and must use **NCS v3.2.4, toolchain bundle `fd21892d0f`** —
-which is what `build/release`'s `CMakeCache.txt` records the shipping images
-being built with — because sdk-ant v2.1.0's Kconfig keys `ANT_LIB_DIR` off
-`CONFIG_SOC_SERIES_NRF52X`, and Zephyr 4.4 in v3.4.0 renamed that symbol to
+**v3.4.0 is no longer special here** — see the SDK note at the top of this
+section. It used to be, and the reason is worth keeping: the stub links no
+`libant.a`, so it was once the only target that did not care which NCS it got,
+while every other one was an sdk-ant build pinned to **NCS v3.2.4, toolchain
+bundle `fd21892d0f`**. That pin is now a property of the *comparison* build
+alone, because sdk-ant v2.1.0's Kconfig keys `ANT_LIB_DIR` off
+`CONFIG_SOC_SERIES_NRF52X` and Zephyr 4.4 in v3.4.0 renamed that symbol to
 `CONFIG_SOC_SERIES_NRF52`, so the link goes looking for a `libant.a` that is not
 there.
 

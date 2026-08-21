@@ -4,14 +4,57 @@ Checked by: `scripts/build_all.ps1` — its backend axis builds every backend
 this ADR names, and its assertion that `CONFIG_ANT_DONGLE_RADIO_<X>=y` appears
 in `.config` is what stops a build silently selecting a different one. The
 release-default clause is checked by nothing: it is a human decision recorded
-here so that changing it requires editing this file.
+here so that changing it requires editing this file. It was changed on
+2026-08-20, by editing this file.
 
-- **Status:** Accepted. The release-default clause is *pending* the Tier 3
-  acceptance described below, and stays pending until this file says otherwise.
-- **Date:** 2026-08-08
+- **Status:** Accepted. The release-default clause is **resolved** — see
+  [Switchover](#switchover-2026-08-20) below.
+- **Date:** 2026-08-08, amended 2026-08-20
 - **Supersedes:** nothing
 - **Related:** [0002 clean-room policy](0002-clean-room-policy.md),
   [0005 extension inside ANT+](0005-extension-inside-ant-plus.md)
+
+## Switchover (2026-08-20)
+
+**The Tier 3 acceptance passed, and release artifacts now come from
+`-DANT_RADIO=core`.** This section is the recorded edit the clause below
+demands; nothing about the switchover happened by changing a default in a
+workflow file.
+
+What was run: Zwift paired against a `radiant` build and held a 30-minute ride
+with resistance changes taking effect throughout — the condition stated
+verbatim below. Further bench testing is planned and this section will be
+extended rather than rewritten; the acceptance is not being treated as the end
+of measurement, only as the end of *this* clause.
+
+What changed in the tree, all of it consequences of that one decision:
+
+- `build-core` in `.github/workflows/release.yml` packages, sums and attaches
+  the four shipping images. The `build-sdk-ant` job is **deleted** — not
+  demoted, not left publishing nothing. No job in this repository needs a
+  secret any more, so the release lane runs to completion on a fork.
+- `scripts/build_all.ps1` defaults to `-Backend core`, and only `core` writes
+  `dist\`. It defaults to NCS v3.4.0; `-Backend sdk_ant` needs
+  `-NcsVersion v3.2.4` passed explicitly.
+- **`ant_select_radio()` no longer picks a backend from what is on disk.** It
+  used to default to `sdk_ant` whenever a checkout resolved, which made the
+  backend a property of the *machine* rather than of the build: on any bench
+  able to build sdk-ant at all, a bare `west build` produced a proprietary
+  image and the only evidence was one `STATUS` line. The two images enumerate
+  identically. `sdk_ant` now requires someone to type `-DANT_RADIO=sdk_ant`.
+- The Kconfig choice defaults in `apps/dongle` and `apps/dongle_thread` follow,
+  so a menuconfig-only reader sees the shipping configuration.
+
+**What did NOT change, and must not be read as deprecation:** sdk-ant remains a
+fully selectable backend. `apps/common/ant_radio_sdk_ant.c`, `apps/sim`,
+`west.yml`'s opt-in `ant` group, `tools/ab_gates.toml` and the reference
+captures in `archive/` all stay exactly as they are. The reasons below survive
+intact — see the amendment under them.
+
+**One accepted cost, stated rather than discovered:** `apps/sim`, the reference
+transmitter, cannot build without sdk-ant at all, and the deleted job was the
+only thing that ever compiled it. It is now built by hand before a bench
+sitting. Nothing warns you if it has stopped compiling.
 
 ## Context
 
@@ -90,6 +133,9 @@ CMake. So:
 
 - An `ANT_RADIO` cache variable (`sdk_ant` | `core` | `stub`), defaulting to
   `sdk_ant` when `ANT_MODULE_DIR` resolves and `core` when it does not.
+  *(2026-08-20: the disk-following default is gone. It is `core`
+  unconditionally — see the Switchover section for why a backend chosen from
+  what happens to be checked out is the wrong kind of default.)*
 - CMake writes a generated `.conf` fragment setting
   `CONFIG_ANT_DONGLE_RADIO_*`, so `.config` records the backend and CI can
   assert it rather than trust it.
@@ -106,13 +152,21 @@ the `core` and `stub` targets with `-DANT_MODULE_DIR=` pointing at a path that
 does not exist. If that succeeds, the tree does not depend on sdk-ant. This
 costs one line and converts a claim into a test.
 
-### sdk-ant stays a first-class selectable backend
+### sdk-ant stays a selectable backend
+
+> **Amended 2026-08-20.** As originally written this section said sdk-ant was
+> "built in CI whenever a token is present". It no longer is: the CI job is
+> gone. Everything else here stands, and the four reasons below are why the
+> backend itself stays. The distinction that matters is between *retiring a
+> product* and *retiring a measurement instrument* — this is the first, not the
+> second.
 
 It is not a deprecated path, not a compatibility shim awaiting deletion, and
-not something to be quietly removed once `radiant` works. It is one of three
-supported backends, built in CI whenever a token is present, kept in `west.yml`
-as a group-gated optional project, and pinned at `v2.1.0` so that A/B runs
-months apart compare against the same reference.
+not something to be quietly removed once `radiant` works. It is a supported
+backend selected by `-DANT_RADIO=sdk_ant`, kept in `west.yml` as a group-gated
+optional project, and pinned at `v2.1.0` so that A/B runs months apart compare
+against the same reference. It is built by hand, on a bench, when a comparison
+is being run.
 
 The four reasons, in order of durability:
 
@@ -130,16 +184,26 @@ The four reasons, in order of durability:
    own history is a case study in.
 4. **Fallback.** If `radiant` develops a field problem, the ability to ship
    the known-good stack the same afternoon is worth more than the tidiness of
-   having deleted it.
+   having deleted it. *(2026-08-20: this is now a local build rather than a CI
+   artifact — the tree still builds it, but nothing produces an installable
+   image of it without someone running `build_all.ps1 -Backend sdk_ant
+   -NcsVersion v3.2.4`. "The same afternoon" is still true; "by downloading it
+   from a run" is not.)*
 
 ### Release artifacts stay on `build-sdk-ant` until Tier 3 passes
+
+> **RESOLVED 2026-08-20 — see [Switchover](#switchover-2026-08-20).** The
+> acceptance below passed and release artifacts moved to `build-core`. The
+> clause is kept, unedited, because the record of what the bar *was* is the
+> only thing that makes "it was met" a claim rather than an assertion.
 
 This is the clause that exists to prevent drift.
 
 CI splits into `build-core` (no secret required, therefore green on forks) and
 `build-sdk-ant` (gated on `SDK_ANT_CHECKOUT_TOKEN`). Both build. Only one
 produces what gets attached to a release tag, and until further notice that is
-**`build-sdk-ant`**.
+**`build-sdk-ant`**. *(As of 2026-08-20 that split no longer exists:
+`build-core` publishes and `build-sdk-ant` has been deleted.)*
 
 The condition for switching is the Tier 3 acceptance, stated exactly:
 
@@ -191,4 +255,5 @@ this project's documentation rules exist to prevent.
   first deletes the hardest coupling in the bridge.
 - Someone has to remember to edit this file when Tier 3 passes. That is the
   point: making the switchover cost a documented edit is the mechanism, not an
-  oversight.
+  oversight. *(2026-08-20: they did. That edit is the Switchover section at the
+  top of this file.)*
