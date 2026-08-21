@@ -156,8 +156,32 @@ if (-not $isAdmin) {
 
 # --- locate the dongle -----------------------------------------------------
 # USBPcap's extcap config lists, per filter device, the tree of attached
-# devices as `value {arg=99}{value=<n>}{display=<name>}`. Top-level devices
-# have no {parent=...}; only those carry an address usable with --devices.
+# devices as `value {arg=99}{value=<n>}{display=<name>}`.
+#
+# WHAT THE {value=} FIELD ACTUALLY MEANS, because getting this wrong hid the TI
+# dongle for two sessions. There are two shapes:
+#
+#   value=6      a real USB device, and 6 IS its USB address - pass it to
+#                --devices.
+#   value=4_2    an INTERFACE of a composite device. Not an address, and
+#                --devices will not take it.
+#
+# {parent=...} is a separate axis: it says what the thing hangs off, which for
+# a device is the hub it is plugged into. A dongle in a root-hub port has no
+# parent; the same dongle moved to an external hub has {parent=<hub>} and is
+# every bit as addressable.
+#
+# This used to filter on "has no {parent=}", which conflates the two and throws
+# away every device behind an external hub. That is why the CC2652P stick was
+# reported missing while USBPcap was listing it perfectly well:
+#
+#   value {arg=99}{value=6}{display=[6] Silicon Labs CP210x USB to UART
+#   Bridge}{enabled=true}{parent=2}
+#
+# It was on a Generic USB Hub, so it had a parent, so it was dropped - and the
+# error said "no device matching", which reads as unplugged or unflashed. The
+# nRF52840 sticks were never affected only because they happened to be in root
+# ports. The test is therefore "is the value an address", not "is it top level".
 # Every enumerating call goes through here, and every one of them redirects
 # stdout to a file. USBPcapCMD writes its extcap output straight to the console:
 # capture it through a PowerShell pipe (`$lines = & $usbpcap ...`) and you get
@@ -187,9 +211,17 @@ function Get-UsbPcapTree {
     $lines = Invoke-UsbPcap -Arguments @('--extcap-interface', $Iface, '--extcap-config')
     foreach ($line in $lines) {
         if ($line -match '^value \{arg=99\}\{value=([^}]+)\}\{display=([^}]*)\}') {
+            # Read both captures out of $Matches BEFORE evaluating anything
+            # else that does a regex test: -match and -notmatch both overwrite
+            # $Matches, and '\{parent=' has no capture groups, so a test done
+            # first would blank Address and Display. Hashtable values are
+            # evaluated in written order, so this order is the fix.
+            $addr = $Matches[1]
+            $disp = $Matches[2]
             [pscustomobject]@{
-                Address  = $Matches[1]
-                Display  = $Matches[2]
+                Address    = $addr
+                Display    = $disp
+                IsDevice   = ($addr -match '^\d+$')
                 IsTopLevel = ($line -notmatch '\{parent=')
             }
         }
@@ -211,7 +243,7 @@ if (-not $Interface) {
 
     foreach ($iface in $ifaces) {
         $hit = Get-UsbPcapTree -Iface $iface |
-               Where-Object { $_.IsTopLevel -and $_.Display -match $DeviceMatch } |
+               Where-Object { $_.IsDevice -and $_.Display -match $DeviceMatch } |
                Select-Object -First 1
         if ($hit) {
             $Interface = $iface
@@ -225,10 +257,11 @@ if (-not $Interface) {
         $anyDevice = $false
         foreach ($iface in $ifaces) {
             Get-UsbPcapTree -Iface $iface |
-                Where-Object IsTopLevel |
+                Where-Object IsDevice |
                 ForEach-Object {
                     $anyDevice = $true
-                    Write-Host ("  {0}  [{1}] {2}" -f $iface, $_.Address, $_.Display)
+                    $where = if ($_.IsTopLevel) { '' } else { ' (behind a hub)' }
+                    Write-Host ("  {0}  [{1}] {2}{3}" -f $iface, $_.Address, $_.Display, $where)
                 }
         }
         if (-not $anyDevice) {
@@ -249,11 +282,12 @@ if (-not $Interface) {
             "        python tools\ant_probe.py --port COMn --baud 57600",
             "    A pass there means the board is fine and only this match failed.",
             "",
-            "USBPcap's device tree is also not reliable: on 2026-08-20 a CP2102N",
-            "that was present, bound, and passing ant_probe on COM15 did not",
-            "appear in this listing at all, while the ANT USB-m beside it on the",
-            "same hub did. If the device is demonstrably there, capture its whole",
-            "root hub instead and filter afterwards:",
+            "The listing above is every addressable device USBPcap reports. If",
+            "the dongle is plainly in it and was still not matched, the regex is",
+            "wrong for its name - pass -DeviceMatch with something that matches.",
+            "",
+            "If it is genuinely absent from the listing, capture its whole root",
+            "hub and filter afterwards:",
             "    .\scripts\cap_zwift.ps1 -Interface '\\.\USBPcapN' -All"
         ) -join [Environment]::NewLine
         throw $hint
