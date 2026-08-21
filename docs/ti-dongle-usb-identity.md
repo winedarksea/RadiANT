@@ -123,8 +123,28 @@ Rather than assemble the whole USBXpress stack on a hypothesis, do the one
 experiment that settles the raw-bulk question outright, because it needs a
 single free download and **no driver work at all**.
 
-1. **Install Silicon Labs' CP21xx Device Customization Software** (AN721), or
-   use Xpress Configurator in Simplicity Studio. Nothing else yet.
+1. **Get write access to the configuration block.** Two ways, and the second
+   needs no download:
+
+   **(a) Silicon Labs' CP21xx Device Customization Software** (AN721), or
+   Xpress Configurator in Simplicity Studio. Works over the VCP driver, so
+   nothing else changes.
+
+   **(b) Bind `libusb0` to the chip and use `tools/cp2102n_ids.py`.** Every
+   piece of this is already on the machine: `libusb0.sys` is installed and
+   signed (Dynastream, 2012, `oem79.inf`), and pyusb's libusb0 backend
+   already works. In Device Manager, on *Silicon Labs CP210x USB to UART
+   Bridge (COM15)*: **Update driver -> Browse -> Let me pick from a list ->
+   untick "Show compatible hardware" -> "ANT LibUSB Drivers" / "ANT USB-m"**.
+
+   Forcing a driver whose INF does not list the hardware ID is only possible
+   through that dialog - `pnputil` will not do it and `devcon` is not
+   installed here - which is why this step is manual.
+
+   **It is trivially reversible, and that is the point:** the hardware ID
+   stays `10C4:EA60` throughout, and `silabser.inf` still matches it. Device
+   Manager -> uninstall the device -> Scan for hardware changes puts COM15
+   straight back.
 2. **Set the chip to VID `0x0FCF`, PID `0x1008`.** The PID choice is
    deliberate: `oem79.inf` is already installed and already binds
    `libusb0.sys` to `0FCF:1008` with a 2012 Dynastream signature, so the
