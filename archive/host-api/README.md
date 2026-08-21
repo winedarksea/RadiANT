@@ -93,7 +93,7 @@ out of the PE headers and the `.rdata` section.
 
 | Binary | Path | Notes |
 |---|---|---|
-| `ANT_DLL.dll` | `C:\Program Files (x86)\Zwift\ANT_DLL.dll` | 247,416 bytes, SHA-256 `db4d99c5400085b1fce1988cd116c2250d7953238b31bd196419e0c6253d62f9`. 32-bit. Carries no `VERSIONINFO` resource, so there is no file version to record |
+| `ANT_DLL.dll` | `C:\Program Files (x86)\Zwift\ANT_DLL.dll` | 247,416 bytes, SHA-256 `db4d99c5400085b1fce1988cd116c2250d7953238b31bd196419e0c6253d62f9`. **x86-64** (`IMAGE_FILE_MACHINE_AMD64`, PE32+) — this row said "32-bit" until 2026-08-21; the file is byte-identical to the one recorded then, so that was a transcription error, not a different build. Carries no `VERSIONINFO` resource, so there is no file version to record |
 | `ZwiftApp.exe` | `C:\Program Files (x86)\Zwift\ZwiftApp.exe` | 47,353,464 bytes |
 
 **Export names and ordinals** came from parsing the PE export directory
@@ -148,6 +148,30 @@ defeat the point of having one.
 `ANT_ConfigUserNVM` or any `ANT_NVM_*`. The three features this dongle bridges
 were chosen because a host *could* reach them and the stack can do them, not
 because anything asks.
+
+**All three USB backends are loaded dynamically, and only one of them exists
+here.** `ANT_DLL.dll`'s import directory names exactly two DLLs — `KERNEL32.dll`
+and `USER32.dll`. `libusb0.dll`, `DSI_SiUSBXp_3_1.DLL` and
+`DSI_CP210xManufacturing_3_1.dll` appear in the image only as strings, so each
+is reached through `LoadLibrary` and a missing one fails softly instead of
+stopping the DLL from loading at all.
+
+That matters for the CC2652P stick, which reaches the host over a CP2102N
+bridge and so is a candidate to impersonate a Dynastream ID. **The two Silicon
+Labs DLLs are absent from this machine** — not in the Zwift directory, not in
+`System32`, not in `SysWOW64` (checked 2026-08-21). They are *user-mode*
+libraries that ship with the ANT SDK, not drivers Windows supplies: Windows
+Update provides `silabser.sys`, the kernel VCP driver, and nothing that
+`LoadLibrary` here would find. Only `libusb0.dll` is present, in
+`Windows ANT Dongle Driver\amd64\`.
+
+So on this machine the libusb0 raw-bulk path is the only live one, which argues
+for impersonating **`0FCF:1009` (ANT USB-m)** rather than `0FCF:1008`
+(ANTUSB2): 1009 is the ID whose driver binding and endpoint use are already
+proven here by our own nRF52840 dongle, while 1008 is the older UART-based
+stick whose host path may be one of the two DLLs that are missing.
+
+Reproduce with `python -c` over the import directory, or `dumpbin /imports`.
 
 **There is no encryption call in the export table at all.** `ANT_DLL.dll`
 exports 154 functions and not one of them keys a channel or enables AES-CTR.

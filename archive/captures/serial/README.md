@@ -1,11 +1,55 @@
 # `archive/captures/serial/` — `.antser` host&harr;dongle byte traces
 
-Checked by: nothing yet — the directory holds no captures, and
-`tools/ant_trace.py` does not exist yet either. Once both do,
-`tools/test_ant_golden.py` replays these in the CI `host-tests` job.
+Checked by: `tools/test_ant_golden.py`, which replays every `.antser` here in
+the CI `host-tests` job and re-hashes it against the summary of the same
+basename in `archive/benchmarks/`.
 
-**Status: empty. Needs `tools/ant_trace.py` (Wave 1, `tools-new`) and a
-session with a real host.**
+**Status (2026-08-21): three conformance transcripts, one integrity gap, one
+stale file.**
+
+| File | Recorded from | Summary in `archive/benchmarks/`? |
+|---|---|---|
+| `conformance-cc26xx.antser` | CC2652P dongle over COM15, re-recorded 2026-08-21 | **yes** — `conformance-cc26xx.json`, added the same day |
+| `conformance-nrf-radiant.antser` | nRF52840 | **no** — unhashed, and now **stale** |
+| `conformance-sdk-ant.antser` | the sdk-ant build (the Tier 1 reference) | yes |
+
+**The hash check silently skips a transcript that has no summary.**
+`test_the_transcript_is_still_the_one_that_was_recorded` does `continue` when
+it cannot find one, and then only asserts that it checked *at least one* file.
+So for as long as `conformance-sdk-ant.json` was the only summary, the other
+two transcripts could have been edited to anything and the suite stayed green.
+Adding `conformance-cc26xx.json` closes half of that; `conformance-nrf-radiant`
+still has no integrity record.
+
+**Why cc26xx was re-recorded, and what it says about the other two.** The
+2026-08-20 fix to `send_startup()` (reason byte `0x00` -> `0x20`, see
+`apps/common/ant_serial_bridge.c`) changes one frame that every case repeats.
+Diffing the re-record against the committed file found **289 differing records
+of exactly two kinds**:
+
+    288x  - < a4016f00ca            ->  - < a4016f20ea
+      1x  - < a40954200300ba2600d5000192 -> - < a40954200300b22600d500019a
+
+The first is that fix. **The second is not, and predates it**: advanced-options
+`0xba` -> `0xb2` is bit `0x08`, `CAPABILITIES_SERIAL_NUMBER_ENABLED`, which
+`antr_capabilities_get()` stopped advertising when that claim was found to be
+unbacked. So the committed cc26xx baseline had *already* been stale for one
+landed fix before anyone diffed it — which is what an unhashed, never-re-run
+reference decays into.
+
+The transcript is byte-reproducible: two independent recordings of the same
+board minutes apart both hash to
+`15705b5a0827ee54b9c17232b53351911ce244bbfd3631dc4c83980b89b78bf6`.
+
+**Still to do:** re-record `conformance-nrf-radiant.antser` (needs the dongle
+flashed with the current build, which means the side-button DFU press) and
+commit its summary JSON. Until then it is one landed fix and one bug fix behind
+`conformance-cc26xx.antser`, and a `--compare` between the two reports both.
+`conformance-sdk-ant.antser` is deliberately left alone: it can only be
+recorded while a working sdk-ant build exists, so it is a frozen record of what
+the bridge did on 2026-08-09, not a statement about today's firmware. Read a
+diff against it accordingly — the startup frame and the capabilities byte above
+are expected differences, not regressions.
 
 Where [`../radio/`](../radio/) records what went over the air, this records
 what went over USB: the `0xA4`-framed serial protocol, byte for byte, in both
