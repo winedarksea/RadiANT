@@ -117,6 +117,47 @@ driver for the new ID as part of the same operation, so
 `CP210xManufacturing` can still see the chip. If nothing binds, a WinUSB or
 libusb binding plus a vendor-request tool is the way back.
 
+## The agreed next step: one cheap decisive test
+
+Rather than assemble the whole USBXpress stack on a hypothesis, do the one
+experiment that settles the raw-bulk question outright, because it needs a
+single free download and **no driver work at all**.
+
+1. **Install Silicon Labs' CP21xx Device Customization Software** (AN721), or
+   use Xpress Configurator in Simplicity Studio. Nothing else yet.
+2. **Set the chip to VID `0x0FCF`, PID `0x1008`.** The PID choice is
+   deliberate: `oem79.inf` is already installed and already binds
+   `libusb0.sys` to `0FCF:1008` with a 2012 Dynastream signature, so the
+   device gets a working driver with no INF editing and no signing. And it
+   leaves `0x1009` free, so this board can never be confused with the real
+   nRF52840 sticks.
+3. **Run `python tools/ant_zwift_visible.py`.** It drives Zwift's own DLL, so
+   its verdict is Zwift's verdict.
+   * *PASS* — ANT_DLL discovers endpoints from the descriptor after all, and
+     we are done.
+   * *enumerated but `ANT_Init` fails* — the `0x02`/`0x82` and `IFC_ENABLE`
+     blockers are confirmed fatal, and the USBXpress route is the remaining
+     one. Expected.
+4. **Either way, `tools/cp2102n_ids.py` becomes usable at that point**, because
+   `libusb0` gives raw control-transfer access to the configuration block. Run
+   it with no arguments first: it cross-checks the stored IDs against what the
+   device enumerated as, and reproduces the stored Fletcher checksum. Only when
+   both hold will it write.
+
+**Do not skip step 4's dry run.** Changing the IDs removes COM15 and with it
+the Silicon Labs utility's view of the chip, so `cp2102n_ids.py` is the way
+back. It refuses to write until it has proved it understands the block, which
+is what makes it safe to rely on. If it is ever wrong, a Linux host can reach
+the same chip by VID/PID with `cp210x-cfg`, and JTAG always reaches the
+CC2652P, so the board itself is never lost.
+
+If the USBXpress route does become necessary, note that **the ANT SDK's own
+`DSI_SiUSBXp_3_1.dll` and `DSI_CP210xManufacturing_3_1.dll` are 32-bit and
+therefore useless here** — Zwift's `ANT_DLL.dll` is x86-64. The x64 builds have
+to come from Silicon Labs' current SDKs and be renamed. They can go in
+`System32`, which is on ANT_DLL's search path, rather than into Zwift's own
+directory.
+
 ## `cap_zwift.ps1` — fixed, and the bug was ours
 
 The TI stick failed capture with "No device matching /ANT USB-m/", which reads
