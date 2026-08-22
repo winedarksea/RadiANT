@@ -232,8 +232,20 @@ def main() -> int:
     except usb.core.USBError as exc:
         print("WRITE FAILED: %r" % exc)
         return 1
-    print("wrote %d bytes. Replug the dongle for the new identity to appear."
-          % sent)
+    print("wrote %d bytes." % sent)
+
+    # A stored identity only takes effect at the next enumeration, and this
+    # dongle is usually not somewhere convenient to unplug. A USB port reset
+    # re-enumerates it in place. It legitimately throws afterwards, because the
+    # handle refers to a device that has just gone away and come back as a
+    # different one - so that is success, not failure.
+    try:
+        dev.reset()
+        print("issued a USB reset; the dongle should re-enumerate as %04X:%04X"
+              % (new_vid, new_pid))
+    except usb.core.USBError:
+        print("issued a USB reset (the handle went away, which is expected)")
+    print("If it does not appear with the new identity, replug it.")
     return 0
 
 
