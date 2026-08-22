@@ -1,7 +1,26 @@
 # Making the CC2652P stick visible to Zwift
 
-**Status (2026-08-21): `cap_zwift.ps1` — done and verified. Zwift — blocked on
-three third-party pieces, with the route now measured rather than guessed.**
+**Status (2026-08-21): SOLVED, both halves. `cap_zwift.ps1` captures the stick,
+and Zwift's own ANT_DLL opens it and talks ANT to it — with no change to the
+dongle, no driver change, no reprogramming and no elevation.**
+
+The fix is two small DLLs supplying ANT_DLL's USBXpress backend, backed by the
+COM port the dongle is already on: `scripts/zwift_ant_shim.ps1` builds and
+installs them, `-Uninstall` removes them. Verified end to end:
+
+    ANT_Init(0, 57600, port_type=0, framer=0) -> True
+    ANT_ResetSystem -> True          (7-byte 0xA4 frame out, replies read back)
+    ant_probe.py --port COM15        -> still PASS, unaffected
+
+**THE ONE MISTAKE THAT COST THE MOST, AND IT WAS MINE: `ANT_Init` takes FOUR
+arguments, not two.** Its prologue reads `cl`, `edx`, `r8b`, `r9b` — the export
+named `ANT_Init` is really `ANT_InitExt(deviceNum, baud, ucPortType,
+ucFramerType)`. Called with two arguments it fails **without performing a
+single I/O operation**, which reads exactly like "no dongle present" and is
+nothing of the sort. Every negative conclusion recorded below came from that,
+including the flat statement that ANT_DLL never tries its USBXpress backend —
+**it does, immediately, once called correctly.** Read the disassembly before
+concluding a library does not do something.
 
 This file exists because "the nRF dongle works, so copy that" is the obvious
 plan and it cannot work. The reason is hardware, and everything below was
@@ -134,6 +153,12 @@ extra DLL at all - it is already a COM port.
 
 What is not yet known is how to select it, because `ANT_InitExt` (whose
 `ucPortType` chooses) is not exported.
+
+**EVERYTHING IN THE REST OF THIS SECTION IS WRONG — kept because the way it was
+wrong is the lesson.** All of it followed from calling `ANT_Init` with two
+arguments instead of four. Once the port-type and framer arguments are passed,
+ANT_DLL loads `DSI_SiUSBXp_3_1.DLL` on its very first attempt, queries it for a
+vendor id, accepts `0FCF`, opens the COM port and exchanges ANT frames.
 
 **And a harness result that must not be over-read.** A purpose-built host EXE
 (so ANT_DLL's bare-name `LoadLibrary` searches a scratch directory rather than

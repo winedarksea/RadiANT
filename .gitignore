@@ -31,3 +31,7 @@ __pycache__/
 # GitHub release asset referenced by SHA-256 from the relevant archive/README.
 # Ignored here so the decision is made deliberately rather than by a commit.
 bench-logs/
+tools/zwift_shim/out/
+tools/zwift_shim/obj_a/
+tools/zwift_shim/obj_b/
+tools/zwift_shim/build.bat

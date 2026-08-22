@@ -69,6 +69,7 @@ import glob
 import os
 import pathlib
 import sys
+import time
 
 DEFAULT_DLL = r"C:\Program Files (x86)\Zwift\ANT_DLL.dll"
 
@@ -150,7 +151,14 @@ def main() -> int:
     ap.add_argument("--device", type=int, default=0,
                     help="device number to pass to ANT_Init (default 0)")
     ap.add_argument("--baud", type=int, default=57600)
+    ap.add_argument("--port-type", type=int, default=0, choices=(0, 1),
+                    help="0 = USB (what Zwift uses), 1 = COM port. On the COM "
+                         "path the device number IS the COM port number.")
     ap.add_argument("--logdir", help="collect ANT_DLL's own debug log here")
+    ap.add_argument("--enumerate-usb", action="store_true",
+                    help="also call ANT_GetDeviceUSB* after opening. Off by "
+                         "default: it faults on the USBXpress/COM transport, "
+                         "which has no USB descriptor behind it.")
     args = ap.parse_args()
 
     if os.name != "nt":
@@ -184,31 +192,61 @@ def main() -> int:
         ok = lib.ANT_SetDebugLogDirectory(str(logdir).encode("latin1"))
         print("ANT_SetDebugLogDirectory -> %s" % ok)
 
-    print("\n--- devices ANT_DLL can enumerate ---")
-    found = enumerate_devices(lib)
-    for d in found:
-        vid = d["vid"]
-        note = ""
-        if vid is not None:
-            note = "  <- %s, accepted" % ACCEPTED_VIDS[vid] \
-                if vid in ACCEPTED_VIDS else "  <- VID not accepted by ANT_DLL"
-        print("  device %d: VID=%s PID=%s product=%r serial=%r%s"
-              % (d["num"],
-                 "%04X" % vid if vid is not None else "-",
-                 "%04X" % d["pid"] if d["pid"] is not None else "-",
-                 d["product"], d["serial"], note))
-    if not found:
-        print("  (none - ANT_DLL sees no ANT dongle, so neither would Zwift)")
-
-    print("\n--- ANT_Init(%d, %d) : the call Zwift makes ---"
-          % (args.device, args.baud))
+    print("\n--- ANT_Init(%d, %d, port_type=%d, framer=0) ---"
+          % (args.device, args.baud, args.port_type))
+    # FOUR arguments, not two. The export named ANT_Init is really ANT_InitExt:
+    # its prologue reads cl, edx, r8b and r9b -
+    #     movzx ebp, cl    ; device number
+    #     mov   esi, edx   ; baud rate
+    #     movzx ebx, r8b   ; port type   0 = USB, 1 = COM
+    #     movzx edi, r9b   ; framer type 0 = basic
+    # Calling it with two arguments leaves r8/r9 holding whatever happened to
+    # be there, and it then fails without performing a single I/O operation -
+    # which reads exactly like "no dongle" and is nothing of the sort. That
+    # mistake made this tool report FAIL for a dongle ANT_DLL opens happily.
     lib.ANT_Init.restype = C.c_bool
-    lib.ANT_Init.argtypes = [C.c_ubyte, C.c_ulong]
+    lib.ANT_Init.argtypes = [C.c_ubyte, C.c_ulong, C.c_ubyte, C.c_ubyte]
     init = False
+    found = []
     try:
-        init = bool(lib.ANT_Init(args.device, args.baud))
+        init = bool(lib.ANT_Init(args.device, args.baud, args.port_type, 0))
         print("  ANT_Init -> %s" % init)
         if init:
+            reset = getattr(lib, "ANT_ResetSystem", None)
+            if reset is not None:
+                reset.restype = C.c_bool
+                print("  ANT_ResetSystem -> %s" % bool(reset()))
+                time.sleep(1.0)
+
+            # AFTER the open, never before: ANT_GetDeviceUSB* report on a
+            # device that is already open, so enumerating first always returns
+            # nothing and says nothing about visibility.
+            #
+            # Off by default because it FAULTS on a device reached over the
+            # USBXpress/COM transport - that device has no USB descriptor
+            # behind it and ANT_DLL dereferences a null writing the result
+            # ("access violation writing 0x0"). It is informational either way,
+            # and a crash here would skip ANT_Close and leave the port open.
+            if args.enumerate_usb:
+                print("\n--- what ANT_DLL says it opened ---")
+                try:
+                    found = enumerate_devices(lib)
+                except OSError as exc:
+                    print("  faulted: %s" % exc)
+                    print("  (expected on the USBXpress/COM transport)")
+                for d in found:
+                    vid = d["vid"]
+                    note = ""
+                    if vid is not None:
+                        note = ("  <- %s, accepted" % ACCEPTED_VIDS[vid]
+                                if vid in ACCEPTED_VIDS
+                                else "  <- VID not accepted by ANT_DLL")
+                    print("  device %d: VID=%s PID=%s product=%r serial=%r%s"
+                          % (d["num"],
+                             "%04X" % vid if vid is not None else "-",
+                             "%04X" % d["pid"] if d["pid"] is not None else "-",
+                             d["product"], d["serial"], note))
+
             lib.ANT_Close.restype = None
             lib.ANT_Close()
             print("  ANT_Close -> done")
@@ -230,19 +268,20 @@ def main() -> int:
                 print("     unreadable: %r" % exc)
 
     print()
-    if found and init:
+    # Opening is the whole test. A device reached over the USBXpress/COM
+    # transport has no USB identity to report, so requiring enumeration as well
+    # would fail a dongle that demonstrably works.
+    if init:
         print("PASS: Zwift would find and open this dongle.")
         return 0
-    if found and not init:
-        print("PARTIAL: ANT_DLL enumerated a device but could not open it.")
-        print("A CP210x reached through the raw-bulk backend fails exactly")
-        print("here: the chip's endpoints are 0x02/0x82 and that path drives")
-        print("0x01/0x81. Check which backend bound the device.")
-        return 1
     print("FAIL: no dongle visible to Zwift.")
-    print("If a dongle is plugged in and ant_probe.py passes on it, then it is")
-    print("enumerating with a vendor ID ANT_DLL does not accept - it takes")
-    print("0FCF (Dynastream) or 1915 (Nordic) and ignores the product ID.")
+    print("Checks worth making, in order:")
+    print("  * is the dongle on its COM port, and does ant_probe.py pass?")
+    print("  * is something else holding that port open (ant_scan, a capture)?")
+    print("  * for a USB stick, does it enumerate with vendor 0FCF or 1915?")
+    print("    ANT_DLL accepts only those two and ignores the product ID.")
+    print("  * for the CC2652P stick, are the USBXpress shims installed?")
+    print("    scripts\\zwift_ant_shim.ps1")
     return 1
 
 
