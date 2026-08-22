@@ -117,7 +117,50 @@ driver for the new ID as part of the same operation, so
 `CP210xManufacturing` can still see the chip. If nothing binds, a WinUSB or
 libusb binding plus a vendor-request tool is the way back.
 
-## The agreed next step: one cheap decisive test
+## 2026-08-21 later: ANT_DLL has a COM-port transport compiled in
+
+Reading its import table properly - the individual functions, not just the DLL
+names - changes the picture. ANT_DLL statically imports the whole Win32 serial
+API:
+
+    CreateFileA/W  GetCommState  SetCommState  GetCommTimeouts
+    SetCommTimeouts  PurgeComm  SetCommMask  WaitCommEvent
+    EscapeCommFunction
+
+That is `DSISerialVCP`, and together with the `\\.\COM%u` format string it means
+**the COM-port transport is compiled in and reachable, not dead code**. If it
+can be selected, the TI dongle needs no reprogramming, no driver change and no
+extra DLL at all - it is already a COM port.
+
+What is not yet known is how to select it, because `ANT_InitExt` (whose
+`ucPortType` chooses) is not exported.
+
+**And a harness result that must not be over-read.** A purpose-built host EXE
+(so ANT_DLL's bare-name `LoadLibrary` searches a scratch directory rather than
+Zwift's) established that during `ANT_Init`, ANT_DLL:
+
+* loads **no** backend - not `libusb0.dll`, not the USBXpress pair, not
+  SETUPAPI - even with each sitting next to it;
+* makes **no** `LoadLibrary` and **no** `CreateFile` calls at all, with its
+  imports hooked to prove it;
+* returns FALSE for every device number 0..31, with no exception raised.
+
+Two shim DLLs were written and do work standalone (`SI_GetNumDevices` -> 1,
+`SI_Open` opens the port, `CP210x_GetDeviceVid` -> `0FCF`). ANT_DLL never asks
+for them, so **supplying the USBXpress pair does not help in this build**, and
+neither would shadowing `libusb0.dll`.
+
+**THE HONEST LIMIT, AND IT MATTERS MORE THAN THE ABOVE: this harness has never
+produced a PASS, so it has no positive control.** Zwift certainly does use this
+library - `ZwiftApp.exe` contains `ANT_DLL.dll`, `ANT_Init`, and the string
+"ANT_Init threw an exception, disabling the use of ANT." - but until
+`ANT_Init` is seen returning TRUE with a KNOWN-GOOD nRF52840 stick attached,
+"ANT_Init -> FALSE" cannot be read as "Zwift cannot see this dongle". It may
+equally mean the harness does not set something up the way Zwift does. Plug in
+a working ANT USB-m and re-run `tools/ant_zwift_visible.py` before trusting any
+negative result from it, including the ones recorded above.
+
+## The earlier plan: one cheap decisive test
 
 Rather than assemble the whole USBXpress stack on a hypothesis, do the one
 experiment that settles the raw-bulk question outright, because it needs a

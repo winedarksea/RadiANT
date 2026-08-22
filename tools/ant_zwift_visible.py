@@ -19,6 +19,19 @@ by eye - is inference, and inference is what cost this project two sessions.
 Exit status is 0 only if ANT_DLL enumerated at least one device AND ANT_Init
 succeeded, i.e. only if Zwift would work.
 
+CALIBRATE THIS BEFORE BELIEVING A NEGATIVE RESULT
+-------------------------------------------------
+As of 2026-08-21 this tool has never returned PASS, so it has no positive
+control. A FALSE from `ANT_Init` therefore has two readings that cannot yet be
+told apart: "Zwift could not see the dongle", or "this harness does not set
+something up the way Zwift does". Zwift does use this library - `ZwiftApp.exe`
+contains `ANT_DLL.dll`, `ANT_Init` and the string "ANT_Init threw an exception,
+disabling the use of ANT." - but that does not make the harness equivalent.
+
+**Run it once with a known-good nRF52840 stick attached and confirm it PASSes.**
+Until then, treat every FAIL here as unproven. Investigation notes, including
+what ANT_DLL was observed NOT to do, are in docs/ti-dongle-usb-identity.md.
+
 WHAT THIS TOOL MEASURED, so the next person need not re-derive it
 -----------------------------------------------------------------
 ANT_DLL (ALU3.200) carries three transports, visible in its RTTI:
