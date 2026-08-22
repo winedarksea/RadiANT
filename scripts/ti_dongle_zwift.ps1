@@ -37,11 +37,15 @@
 .PARAMETER Revert
     Restore 10C4:EA60 and hand the device back to the Silicon Labs VCP driver.
 
-.PARAMETER Vid
+.PARAMETER VendorId
     Vendor ID to store. Default 0x0FCF. ANT_DLL accepts only 0x0FCF or 0x1915.
 
-.PARAMETER Pid
+.PARAMETER ProductId
     Product ID to store. Default 0x1008. ANT_DLL ignores the PID entirely.
+
+    Not named -Pid: $Pid is a read-only PowerShell automatic variable (this
+    process's own id), so a parameter of that name fails at invocation with
+    "Cannot overwrite variable Pid because it is read-only or constant."
 
 .PARAMETER WhatIf
     Do everything except the write - binds, reads, verifies and reports.
@@ -56,8 +60,8 @@
 [CmdletBinding()]
 param(
     [switch]$Revert,
-    [int]$Vid = 0x0FCF,
-    [int]$Pid = 0x1008,
+    [int]$VendorId = 0x0FCF,
+    [int]$ProductId = 0x1008,
     [switch]$WhatIf
 )
 
@@ -87,7 +91,7 @@ if (-not $isAdmin) {
     $argList = @('-NoProfile','-ExecutionPolicy','Bypass','-NoExit','-File',"`"$PSCommandPath`"")
     if ($Revert) { $argList += '-Revert' }
     if ($WhatIf) { $argList += '-WhatIf' }
-    $argList += @('-Vid', $Vid, '-Pid', $Pid)
+    $argList += @('-VendorId', $VendorId, '-ProductId', $ProductId)
     try {
         Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $argList -ErrorAction Stop
         Write-Host "Elevated window launched. Watch it for the result." -ForegroundColor Green
@@ -172,8 +176,8 @@ if ($svc -eq 'libusb0') {
 # --- step 2: rewrite the stored identity ------------------------------------
 Write-Host ""
 Write-Host "--- step 2: read, verify, and rewrite the stored VID/PID ---" -ForegroundColor Cyan
-$vidArg = '0x{0:X4}' -f $Vid
-$pidArg = '0x{0:X4}' -f $Pid
+$vidArg = '0x{0:X4}' -f $VendorId
+$pidArg = '0x{0:X4}' -f $ProductId
 if ($WhatIf) {
     & $py $idsTool --set-vid $vidArg --set-pid $pidArg      # dry run: no --commit
     Write-Host "(-WhatIf: nothing written)" -ForegroundColor Yellow
