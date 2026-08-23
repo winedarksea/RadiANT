@@ -27,7 +27,7 @@
  * "bridge: N sinks" AT BOOT (src/bridge_pump.c) IS THEREFORE 4 IN A MATTER
  * ARM, not 2 and not 3. The rules evaluator, the liveness table,
  * radiant_matter.c and this file are all sinks; the count in that log line is
- * whatever linked. docs/matter-e3-vendoring.md predicted 2 from the symbol
+ * whatever linked. docs/matter-bringup.md predicted 2 from the symbol
  * table before this file existed, and the Matter CI row asserted the
  * non-Matter arm's 3 - both are superseded by this file, and the row's
  * assert_sink_names has been corrected to the exact set of four. That check is

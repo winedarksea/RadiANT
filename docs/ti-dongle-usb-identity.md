@@ -1,8 +1,7 @@
 # Making the CC2652P stick visible to Zwift
 
-**Status (2026-08-21): SOLVED, both halves. `cap_zwift.ps1` captures the stick,
-and Zwift's own ANT_DLL opens it and talks ANT to it — with no change to the
-dongle, no driver change, no reprogramming and no elevation.**
+Zwift's own ANT_DLL opens the CC2652P stick and talks ANT to it — with no
+change to the dongle, no driver change, no reprogramming and no elevation.
 
 The fix is two small DLLs supplying ANT_DLL's USBXpress backend, backed by the
 COM port the dongle is already on: `scripts/zwift_ant_shim.ps1` builds and
@@ -12,15 +11,13 @@ installs them, `-Uninstall` removes them. Verified end to end:
     ANT_ResetSystem -> True          (7-byte 0xA4 frame out, replies read back)
     ant_probe.py --port COM15        -> still PASS, unaffected
 
-**THE ONE MISTAKE THAT COST THE MOST, AND IT WAS MINE: `ANT_Init` takes FOUR
-arguments, not two.** Its prologue reads `cl`, `edx`, `r8b`, `r9b` — the export
-named `ANT_Init` is really `ANT_InitExt(deviceNum, baud, ucPortType,
-ucFramerType)`. Called with two arguments it fails **without performing a
-single I/O operation**, which reads exactly like "no dongle present" and is
-nothing of the sort. Every negative conclusion recorded below came from that,
-including the flat statement that ANT_DLL never tries its USBXpress backend —
-**it does, immediately, once called correctly.** Read the disassembly before
-concluding a library does not do something.
+**`ANT_Init` takes FOUR arguments, not two.** Its prologue reads `cl`, `edx`,
+`r8b`, `r9b` — the export named `ANT_Init` is really `ANT_InitExt(deviceNum,
+baud, ucPortType, ucFramerType)`, and `ANT_InitExt` itself is **not exported**
+(the export table has 154 names and nothing that takes a port type). Called
+with two arguments it fails **without performing a single I/O operation**,
+which reads exactly like "no dongle present" and is nothing of the sort. Read
+the disassembly before concluding a library does not do something.
 
 This file exists because "the nRF dongle works, so copy that" is the obvious
 plan and it cannot work. The reason is hardware, and everything below was
@@ -37,9 +34,8 @@ measured on the bench rather than reasoned from datasheets.
 
 The endpoint addresses are the first hard fact. They were read off the live
 device from its hub with `IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX`, no
-driver change required (see `tools/` and the scratch `usb_desc.py` this came
-from). **A CP210x's endpoint addresses are fixed in silicon.** No amount of
-reprogramming moves them off `0x02`/`0x82`.
+driver change required. **A CP210x's endpoint addresses are fixed in silicon.**
+No amount of reprogramming moves them off `0x02`/`0x82`.
 
 The part is a **CP2102N**, not a classic CP2102 — confirmed from its product
 string, `'CP2102N USB to UART Bridge Controller'`. That matters for safety, not
@@ -59,11 +55,13 @@ Measured against Zwift's own `ANT_DLL.dll` (ALU3.200, x86-64, SHA-256
     USBDeviceSI     + SiLabsLibrary   Silicon Labs USBXpress (SI_Open/SI_Read/…)
     DSISerialVCP                      a COM port, opened as "\\.\COM%u"
 
-**Only two of them are reachable.** Choosing the VCP transport requires
-`ANT_InitExt`'s `ucPortType` argument, and `ANT_InitExt` **is not exported** —
-the export table has 154 names, `ANT_Init` among them, and nothing that takes a
-port type. So "it is already on COM15, just point Zwift at the COM port" is not
-an option, however inviting it looks.
+All three are compiled in and reachable. ANT_DLL statically imports the whole
+Win32 serial API (`CreateFileA/W`, `GetCommState`, `SetCommState`,
+`GetCommTimeouts`, `SetCommTimeouts`, `PurgeComm`, `SetCommMask`,
+`WaitCommEvent`, `EscapeCommFunction`), which together with the `\\.\COM%u`
+format string is `DSISerialVCP` — not dead code. Which transport you get is
+`ucPortType`'s to decide, and that is the argument the unexported `ANT_InitExt`
+signature hides.
 
 **The acceptance test is on the vendor ID alone.** Two helpers do it, at
 `0x00ACDE` and `0x00ACFC`:
@@ -85,9 +83,9 @@ binding the nRF sticks depend on.
 
 ## Why the cheap impersonation cannot work — and this is proven, not suspected
 
-The tempting plan, and the one recorded in earlier notes, is: reprogram the
-CP2102N to `0FCF:1009`, let the already-installed `ant_libusb.inf` bind
-`libusb0.sys` to it, done. It fails twice over.
+The tempting plan is: reprogram the CP2102N to `0FCF:1009`, let the
+already-installed `ant_libusb.inf` bind `libusb0.sys` to it, done. It fails
+twice over.
 
 1. **Endpoints.** That path drives `0x01`/`0x81`; the chip offers `0x02`/`0x82`.
 2. **The decisive one: `usb_control_msg` is ABSENT from the binary.** ANT_DLL
@@ -101,157 +99,31 @@ So the raw-bulk backend can never drive a CP210x, and by the same token
 `0FCF:1008` "ANT USB Stick 2" cannot be a CP210x design either. **Do not spend
 another session on the libusb route.**
 
-## The route that remains
+## The route that works: USBXpress, shimmed
 
 `USBDeviceSI` — Silicon Labs USBXpress. On that path the endpoints are
-irrelevant, because `SiUSBXp.sys` drives the chip natively, and the UART
+irrelevant, because the driver drives the chip natively and the UART
 configuration is done through `SI_SetBaudRate` / `SI_SetFlowControl` /
 `SI_SetLineControl` rather than by the caller. ANT_DLL uses
 `CP210x_GetDeviceVid` / `CP210x_GetDevicePid` to identify what USBXpress
-enumerated. This is how the CP210x-based Dynastream sticks worked.
+enumerated, and accepts on the VID alone. `scripts/zwift_ant_shim.ps1` supplies
+`DSI_SiUSBXp_3_1.DLL` and `DSI_CP210xManufacturing_3_1.dll` as shims over the
+existing COM port, reporting VID `0FCF`; the ANT SDK's own copies of those two
+names are 32-bit and therefore useless against an x86-64 `ANT_DLL.dll`.
 
-Three pieces are needed, and **all four candidate files were confirmed absent
-from the entire drive**:
+Nothing about the dongle's own USB identity has to change for this. If a VID/PID
+rewrite is ever wanted anyway, `tools/cp2102n_ids.py` is the tool: run it with
+no arguments first, where it cross-checks the stored IDs against what the
+device enumerated as and reproduces the stored Fletcher checksum, and it
+refuses to write until both hold. Note that changing the IDs **removes COM15**,
+the only host path every tool in `tools/` uses, so install a driver for the new
+ID as part of the same operation. JTAG always reaches the CC2652P, so the board
+itself is never lost.
 
-| Piece | Goes where | From |
-|---|---|---|
-| `DSI_SiUSBXp_3_1.DLL` | beside `ANT_DLL.dll` | ANT SDK / ANT PC libraries |
-| `DSI_CP210xManufacturing_3_1.dll` | beside `ANT_DLL.dll` | same |
-| CP210x **USBXpress** driver, signed INF listing the chosen VID/PID | installed | Silicon Labs, or the ANT driver package |
-| a CP2102N configuration tool | to write the VID/PID | Simplicity Studio Xpress Configurator, or AN721 |
-
-**Pick a PID that `ant_libusb.inf` does not claim.** That INF (Dynastream,
-2012, `oem79.inf`) binds `libusb0.sys` to `0FCF:1008` and `0FCF:1009` only. Use
-something else — `0FCF:1004` (ANT2USB) is the natural choice — so the nRF
-sticks keep working untouched and `libusb0` does not race USBXpress for the
-device. Since ANT_DLL ignores the PID entirely, the choice is free.
-
-### Recovery, to be written down before anything is programmed
-
-Changing the VID/PID **removes COM15**, which is the only host path to this
-board and the one every tool in `tools/` uses. JTAG still reaches the CC2652P,
-so the board is never unreachable — but its USB identity can only be changed
-back through whatever driver is bound to it afterwards. Install the USBXpress
-driver for the new ID as part of the same operation, so
-`CP210xManufacturing` can still see the chip. If nothing binds, a WinUSB or
-libusb binding plus a vendor-request tool is the way back.
-
-## 2026-08-21 later: ANT_DLL has a COM-port transport compiled in
-
-Reading its import table properly - the individual functions, not just the DLL
-names - changes the picture. ANT_DLL statically imports the whole Win32 serial
-API:
-
-    CreateFileA/W  GetCommState  SetCommState  GetCommTimeouts
-    SetCommTimeouts  PurgeComm  SetCommMask  WaitCommEvent
-    EscapeCommFunction
-
-That is `DSISerialVCP`, and together with the `\\.\COM%u` format string it means
-**the COM-port transport is compiled in and reachable, not dead code**. If it
-can be selected, the TI dongle needs no reprogramming, no driver change and no
-extra DLL at all - it is already a COM port.
-
-What is not yet known is how to select it, because `ANT_InitExt` (whose
-`ucPortType` chooses) is not exported.
-
-**EVERYTHING IN THE REST OF THIS SECTION IS WRONG — kept because the way it was
-wrong is the lesson.** All of it followed from calling `ANT_Init` with two
-arguments instead of four. Once the port-type and framer arguments are passed,
-ANT_DLL loads `DSI_SiUSBXp_3_1.DLL` on its very first attempt, queries it for a
-vendor id, accepts `0FCF`, opens the COM port and exchanges ANT frames.
-
-**And a harness result that must not be over-read.** A purpose-built host EXE
-(so ANT_DLL's bare-name `LoadLibrary` searches a scratch directory rather than
-Zwift's) established that during `ANT_Init`, ANT_DLL:
-
-* loads **no** backend - not `libusb0.dll`, not the USBXpress pair, not
-  SETUPAPI - even with each sitting next to it;
-* makes **no** `LoadLibrary` and **no** `CreateFile` calls at all, with its
-  imports hooked to prove it;
-* returns FALSE for every device number 0..31, with no exception raised.
-
-Two shim DLLs were written and do work standalone (`SI_GetNumDevices` -> 1,
-`SI_Open` opens the port, `CP210x_GetDeviceVid` -> `0FCF`). ANT_DLL never asks
-for them, so **supplying the USBXpress pair does not help in this build**, and
-neither would shadowing `libusb0.dll`.
-
-**THE HONEST LIMIT, AND IT MATTERS MORE THAN THE ABOVE: this harness has never
-produced a PASS, so it has no positive control.** Zwift certainly does use this
-library - `ZwiftApp.exe` contains `ANT_DLL.dll`, `ANT_Init`, and the string
-"ANT_Init threw an exception, disabling the use of ANT." - but until
-`ANT_Init` is seen returning TRUE with a KNOWN-GOOD nRF52840 stick attached,
-"ANT_Init -> FALSE" cannot be read as "Zwift cannot see this dongle". It may
-equally mean the harness does not set something up the way Zwift does. Plug in
-a working ANT USB-m and re-run `tools/ant_zwift_visible.py` before trusting any
-negative result from it, including the ones recorded above.
-
-## The earlier plan: one cheap decisive test
-
-Rather than assemble the whole USBXpress stack on a hypothesis, do the one
-experiment that settles the raw-bulk question outright, because it needs a
-single free download and **no driver work at all**.
-
-1. **Get write access to the configuration block.** Two ways, and the second
-   needs no download:
-
-   **(a) Silicon Labs' CP21xx Device Customization Software** (AN721), or
-   Xpress Configurator in Simplicity Studio. Works over the VCP driver, so
-   nothing else changes.
-
-   **(b) Bind `libusb0` to the chip and use `tools/cp2102n_ids.py`.** Every
-   piece of this is already on the machine: `libusb0.sys` is installed and
-   signed (Dynastream, 2012, `oem79.inf`), and pyusb's libusb0 backend
-   already works. In Device Manager, on *Silicon Labs CP210x USB to UART
-   Bridge (COM15)*: **Update driver -> Browse -> Let me pick from a list ->
-   untick "Show compatible hardware" -> "ANT LibUSB Drivers" / "ANT USB-m"**.
-
-   Forcing a driver whose INF does not list the hardware ID is only possible
-   through that dialog - `pnputil` will not do it and `devcon` is not
-   installed here - which is why this step is manual.
-
-   **It is trivially reversible, and that is the point:** the hardware ID
-   stays `10C4:EA60` throughout, and `silabser.inf` still matches it. Device
-   Manager -> uninstall the device -> Scan for hardware changes puts COM15
-   straight back.
-2. **Set the chip to VID `0x0FCF`, PID `0x1008`.** The PID choice is
-   deliberate: `oem79.inf` is already installed and already binds
-   `libusb0.sys` to `0FCF:1008` with a 2012 Dynastream signature, so the
-   device gets a working driver with no INF editing and no signing. And it
-   leaves `0x1009` free, so this board can never be confused with the real
-   nRF52840 sticks.
-3. **Run `python tools/ant_zwift_visible.py`.** It drives Zwift's own DLL, so
-   its verdict is Zwift's verdict.
-   * *PASS* — ANT_DLL discovers endpoints from the descriptor after all, and
-     we are done.
-   * *enumerated but `ANT_Init` fails* — the `0x02`/`0x82` and `IFC_ENABLE`
-     blockers are confirmed fatal, and the USBXpress route is the remaining
-     one. Expected.
-4. **Either way, `tools/cp2102n_ids.py` becomes usable at that point**, because
-   `libusb0` gives raw control-transfer access to the configuration block. Run
-   it with no arguments first: it cross-checks the stored IDs against what the
-   device enumerated as, and reproduces the stored Fletcher checksum. Only when
-   both hold will it write.
-
-**Do not skip step 4's dry run.** Changing the IDs removes COM15 and with it
-the Silicon Labs utility's view of the chip, so `cp2102n_ids.py` is the way
-back. It refuses to write until it has proved it understands the block, which
-is what makes it safe to rely on. If it is ever wrong, a Linux host can reach
-the same chip by VID/PID with `cp210x-cfg`, and JTAG always reaches the
-CC2652P, so the board itself is never lost.
-
-If the USBXpress route does become necessary, note that **the ANT SDK's own
-`DSI_SiUSBXp_3_1.dll` and `DSI_CP210xManufacturing_3_1.dll` are 32-bit and
-therefore useless here** — Zwift's `ANT_DLL.dll` is x86-64. The x64 builds have
-to come from Silicon Labs' current SDKs and be renamed. They can go in
-`System32`, which is on ANT_DLL's search path, rather than into Zwift's own
-directory.
-
-## `cap_zwift.ps1` — fixed, and the bug was ours
+## `cap_zwift.ps1` — the "no device" failure was ours
 
 The TI stick failed capture with "No device matching /ANT USB-m/", which reads
-exactly like an unplugged or unflashed board. Both readings were wrong, and so
-was the note in this repo claiming USBPcap omits the device. USBPcap lists it
-perfectly well:
+exactly like an unplugged or unflashed board. USBPcap lists it perfectly well:
 
     value {arg=99}{value=6}{display=[6] Silicon Labs CP210x USB to UART
     Bridge}{enabled=true}{parent=2}

@@ -145,80 +145,10 @@ Bind libusb-win32 by whichever route suits you:
 
 After installing, **replug the dongle**.
 
-<details>
-<summary><b>Why not WinUSB?</b></summary>
-
-Zwift's `ANT_DLL.dll` reaches USB only through `libusb0.dll`,
-`DSI_SiUSBXp_3_1.DLL` and `DSI_CP210xManufacturing_3_1.dll`. There is no WinUSB
-path in it at all, so a WinUSB-bound device is invisible to Zwift no matter how
-correct the ANT protocol behaviour is. Worse, advertising a WinUSB compatible ID
-makes Windows match `USB\MS_COMP_WINUSB`, consider the device driven, and stop
-looking for anything better.
-
-If you would rather have WinUSB and only use the Python tools in `tools/`,
-build with `CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS=y`. Zwift will not see it.
-
-</details>
-
-<details>
-<summary><b>Windows won't offer the driver, and Device Manager can't find it</b></summary>
-
-That is expected and says nothing about the device. The driver is an *optional*
-update (`AutoSelectOnWebSites = False`), so it is never installed
-automatically; and Device Manager's *Update driver* wizard on Windows 11 does
-not query Windows Update at all, searching only the local driver store. It logs
-this to `%windir%\INF\setupapi.dev.log` as
-
-```
-!    ndv:      Searching Windows Update has been disabled for the Update Wizard.
-!    ndv:      Policy has been set to prevent searching Windows Update for drivers.
-!    dvi:      Error 0xe0000228: There are no compatible drivers for this device.
-```
-
-despite no such policy being set. Use the Settings → Optional updates path
-above instead.
-
-</details>
-
-<details>
-<summary><b>"There are no optional updates available at this time"</b></summary>
-
-Check whether Windows Update is paused. A pause empties that page completely —
-every pending driver, not just this one — so it looks identical to the driver
-not existing. Settings → Windows Update shows a *Resume updates* button when
-paused; the underlying dates are at
-`HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings` in `PauseUpdatesStartTime`
-/ `PauseUpdatesExpiryTime`.
-
-To see what is really on offer regardless of the pause, ask the update agent
-directly:
-
-```powershell
-$s = New-Object -ComObject Microsoft.Update.Session
-($s.CreateUpdateSearcher().Search("IsInstalled=0 and Type='Driver'")).Updates |
-  ForEach-Object { $_.Title }
-```
-
-</details>
-
-<details>
-<summary><b>Driver installed, still not working</b></summary>
-
-A device node that already failed a driver search carries `ConfigFlags = 64`
-(`CONFIGFLAG_FAILEDINSTALL`) and reuses that cached verdict. Check with:
-
-```powershell
-Get-PnpDeviceProperty -InstanceId <id> -KeyName DEVPKEY_Device_ConfigFlags
-```
-
-Replugging usually clears it. Note also that Zwift's own installer
-(`DriverPackagePreinstallW`) can fail with `0xE000024B` — check
-`%windir%\DPINST.LOG`, and fall back to `pnputil` or Windows Update. The
-package's 2012 catalog is signed by *Microsoft Windows Hardware Compatibility
-Publisher* and still verifies as `Valid` on Windows 11, inside the
-pre-2015-07-29 grandfather window for driver signing, so `pnputil` accepts it.
-
-</details>
+Why not WinUSB, Windows not offering the driver, no optional updates showing,
+and a driver that's installed but still not working — all four traps, with the
+exact log lines and registry keys, are in
+[`archive/drivers/install-notes.md`](archive/drivers/install-notes.md).
 
 ---
 
@@ -246,11 +176,12 @@ files in `boards/` are one `.conf` and one `.overlay` each.
 
 | Path | Purpose |
 |---|---|
-| `src/` | The dongle firmware — the bridge, the transports, the USB class |
+| `apps/dongle/` | The dongle application: build config (`CMakeLists.txt`, `Kconfig`, `prj.conf`, conf fragments) and `src/main.c` |
+| `apps/common/` | The firmware shared by all three dongle applications — the bridge, the transports, the USB class |
 | `radiant/` | The clean-room ANT-compatible link layer, as a Zephyr module: `include/radiant/` is its public surface, `Kconfig` selects its HAL backend, and `tests/` runs under ztest in CI as a standalone application that consumes the module the way any third party would |
-| `protocol/` | `ant_wire.yaml`, the single source of truth for protocol constants. `scripts/gen_ant_wire.py` generates `src/ant_wire.h`, `tools/ant_wire.py` and a marked region of the protocol doc from it |
+| `protocol/` | `ant_wire.yaml`, the single source of truth for protocol constants. `scripts/gen_ant_wire.py` generates `apps/common/ant/ant_wire.h`, `tools/ant_wire.py` and a marked region of the protocol doc from it |
 | `tools/` | Host-side Python: probe, scan, session, bench, features, sim, verify, and the `test_*.py` that run in CI |
-| `sim/` | Standalone ANT+ sensor firmware for the nRF54L15 DK. Not a dongle build — it is the reference transmitter every bench measurement is made against |
+| `apps/sim/` | Standalone ANT+ sensor firmware for the nRF54L15 DK. Not a dongle build — it is the reference transmitter every bench measurement is made against |
 | `boards/` | Per-board `.conf`/`.overlay`: output format, code partition, and prising the console off the USB device we need |
 | `scripts/` | Windows helpers: environment, flashing, DFU packaging, USB cache reset, and `build_all.ps1` |
 | `host/` | Linux udev rule, Android device filter |
@@ -266,15 +197,15 @@ files in `boards/` are one `.conf` and one `.overlay` each.
 | `next.conf`, `stub.conf`, `synth.conf`, `diag.conf`, `encryption.conf` | Extra conf fragments: new USB stack, no radio, synthesized 32.768 kHz clock, flash-backed logging, encryption writes. Each explains itself at the top of the file |
 | `sysbuild.cmake`, `pm_static_*.yml` | Pin the application where each board's bootloader expects it — `0x26000` on the Feather and Pro Micro, `0x1000` on the dongle. See [the gotchas](docs/gotchas.md) |
 | `sample.yaml` | Twister metadata |
-| `src/main.c` | Init ordering: `ant_init()` before the transport comes up, so ANT/MPSL owns HFXO startup |
-| `src/ant_transport.h` | The three-function contract the bridge talks to. One of the three transports below implements it |
-| `src/usb_ant_class.c` | Bulk vendor USB class on the **legacy** stack, plus the optional MS OS 1.0/2.0 descriptors. The proven one |
-| `src/usb_ant_class_next.c` | The same class on the **new** USBD/UDC stack. Required on nRF54; see [Transports](docs/backends.md#transports) |
-| `src/ant_uart_transport.c` | ANT serial over a plain UART, for parts with no USB peripheral |
-| `src/ant_serial_bridge.c` | ANT serial protocol (`0xA4` framing) ↔ the radio backend |
-| `src/ant_radio_stub.c` | No-op radio, compiled only when the stub backend is selected |
-| `src/diag_flash_log.c` | Log backend that commits to flash, readable back over UF2 |
-| `src/ant_radio.h`, `src/ant_wire.h` | Our ~50-function radio contract and our protocol constants — the seam that lets the bridge speak to any backend. See [Backends](docs/backends.md) |
+| `apps/dongle/src/main.c` | Init ordering: `ant_init()` before the transport comes up, so ANT/MPSL owns HFXO startup |
+| `apps/common/ant_transport.h` | The three-function contract the bridge talks to. One of the three transports below implements it |
+| `apps/common/usb_ant_class.c` | Bulk vendor USB class on the **legacy** stack, plus the optional MS OS 1.0/2.0 descriptors. The proven one |
+| `apps/common/usb_ant_class_next.c` | The same class on the **new** USBD/UDC stack. Required on nRF54; see [Transports](docs/backends.md#transports) |
+| `apps/common/ant_uart_transport.c` | ANT serial over a plain UART, for parts with no USB peripheral |
+| `apps/common/ant_serial_bridge.c` | ANT serial protocol (`0xA4` framing) ↔ the radio backend |
+| `apps/common/ant_radio_stub.c` | No-op radio, compiled only when the stub backend is selected |
+| `apps/common/diag_flash_log.c` | Log backend that commits to flash, readable back over UF2 |
+| `apps/common/ant/ant_radio.h`, `apps/common/ant/ant_wire.h` | Our ~50-function radio contract and our protocol constants — the seam that lets the bridge speak to any backend. See [Backends](docs/backends.md) |
 
 ### Building from source
 

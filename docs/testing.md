@@ -3,9 +3,8 @@
 Checked by: `python -m unittest discover -s tools -p "test_*.py"`, which is the
 `host-tests` job in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
 and covers the host-side claims below. Everything from Tier 2 down needs
-hardware and is run by hand; once `tools/ant_ab.py` and `tools/ab_gates.toml`
-exist, the Tier 2 thresholds live in that TOML and this table becomes its
-mirror rather than its source.
+hardware and is run by hand; the Tier 2 thresholds live in `tools/ab_gates.toml`,
+read by `tools/ant_ab.py`, and this table is its mirror rather than its source.
 
 Nothing in this document should be believed about the radio without a bench
 run. The one thing it does assert without hardware is *how to read a result*,

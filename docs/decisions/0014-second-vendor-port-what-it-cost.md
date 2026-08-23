@@ -189,227 +189,80 @@ agree. If cross-vendor comparison is to be gated, the same-rig rule needs a
 deliberate rule for which rig fields may differ, and that is a change to the
 harness's contract rather than to a baseline file.
 
-### Sensitivity: NO VERDICT, and the tool is the reason it is honest about that
+### Sensitivity: NO VERDICT
 
-`tools/ant_sens.py` removes the attenuator problem — it walks the *transmitter's*
-power down until the receiver misses 5 %, which is the same attenuation applied
-at the other end of the link. So this should have been measurable, and the
-attempt was made properly. It produced no figure, for two separate reasons,
-**both caught by the tool's own checks rather than by inspection**:
+`tools/ant_sens.py` walks the *transmitter's* power down until the receiver
+misses 5 %, which should have made this measurable. It produced no figure, for
+two reasons, both caught by the tool's own checks:
 
-**One — with the USB stick as the transmitter, the dial is not connected.**
-Across the full commanded ladder the received signal did not move:
+**The USB stick's dial did not move.** Across a 28 dB commanded ladder the
+RSSI at the nRF receiver held flat (−59.0 dBm ±0.1), and flat on the TI
+receiver too (−74/−75 throughout) — `FAIL dial: RSSI moved 0.00 dB per
+commanded dB, not ~1.` Instrumenting `apply_power()` on an nRF54L15 with a
+temporary `LOG_INF` confirmed the transmit path is correct end to end
+(`RADIO.TXPOWER` moves through five distinct register values across the
+ladder); the flat readings there are explained by both links being marginal
+(25–57 % loss at every rung), which pins mean-RSSI-over-received-packets near
+the detection threshold regardless of commanded power. That leaves the stick's
+flat readings unexplained by link margin — see next.
 
-| commanded | +8 | +4 | 0 | −4 | −12 | −20 |
-|---|---|---|---|---|---|---|
-| RSSI at the nRF receiver | −59.0 | −59.1 | −59.0 | −59.0 | −59.0 | −59.0 |
+**The CC26x2 port has no working transmit-power control.** `caps` advertised
+`tx_power_min_dbm = -20 … tx_power_max_dbm = +5`, but `radiant_radio_tx()`
+never read `req->power`: `setup_cmd.txPower` was the fixed `0x7217` `RF_open()`
+consumed, so the backend has exactly one operating point and silently ignored
+every commanded value. Fixed: `caps` now reports `min == max == 5`, and the arm
+site documents why it ignores the field. A real range needs `RF_setTxPower()`
+(available in `RFCC26X2.h`) plus a per-part `RF_TxPowerTable_Entry` table from
+SmartRF Studio — not derivable from this tree, named future work rather than
+guessed.
 
-Flat to a tenth of a dB over 28 dB, and flat on the TI receiver too (−74/−75
-throughout). Two independent receivers cannot be wrong in the same direction.
-The rungs are *accepted* — `OK: tx power level 0x05 custom 0x00` — so the
-message goes out and is answered. The tool's verdict:
+A fine ladder into the CC26x2 receiver — the only receiver on this bench whose
+RSSI is known to move (−47.9 dBm in the A/B vs −74.5 dBm under the ladder, same
+transmitter, same distance, because `ant_sim.py` never sets a transmit power
+and `ant_sens.py` does) — held constant to ±0.15 dB across the full 48 dB
+commanded span, confirming the stick's output is pinned regardless of what is
+asked for. The stick cannot be reflashed from this bench (needs its DFU
+button), and the nRF54L15 (which can be) does not have a strong enough link to
+either receiver to carry a ladder. So `[gates.sensitivity]` has **no verdict
+for either backend** — the instrument ran to completion and correctly refused
+to interpolate a dB figure out of readings it could not justify.
 
-> `FAIL dial: RSSI moved 0.00 dB per commanded dB, not ~1. The transmitter is
-> not transmitting at the powers it was told to.`
+One tooling defect fixed along the way: `MasterDriver` bound
+`self._stop = threading.Event()` over `Thread._stop()`, a private *method*
+`join()` calls — every ladder ended in `TypeError` inside `threading.py`'s
+`finally` block, after results printed but before the JSON was written.
+Renamed to `_stop_evt`; `tools/test_ant_sens.py` is 30/30.
 
-That is the RSSI slope check this file's own header calls "not decoration",
-doing exactly its job.
+**Still owed:** whether the CC26x2's `RF_setTxPower()` register write actually
+moves (needs a logic probe on the RF core, or a receiver with more headroom);
+an equal-power A/B, or a harness rule for which rig fields may legitimately
+differ across vendors; sensitivity itself, blocked on both of the above;
+`ack_data` (`tools/ant_session.py --attempts N` is confirmed working, but the
+intended responder never transmitted a detectable signal on this bench, so the
+100-attempt run measured an unrelated ambient sensor at 0/100 instead); and the
+seeded timing constants (`T_SYNC_CAL_US`, `TX_RAMP_UP_US`, `RX_RAMP_UP_US`,
+`RX_TO_TX_US`, `TX_TO_RX_US`), which want the wired two-board trigger the HAL's
+`t_sync` section describes.
 
-**Two — the dial is NOT broken, and an earlier draft of this ADR said it was.**
-The obvious hypothesis was the third bullet in that header — *"the transmitter's
-firmware predates the custom byte"* — and when a fine ladder (the `LVL_CUSTOM`
-raw-register escape, +8 down to −40 dBm, fourteen rungs) and a second
-transmitter built from this tree were *both* flat, the conclusion drawn was that
-the shipping nRF transmit-power path was defective.
-
-**That was wrong, and instrumenting the transmitter is what showed it.** A
-temporary `LOG_INF` in `apply_power()` on an nRF54L15 driving a ladder recorded
-five distinct register writes:
-
-| commanded | +8 | +4 / 0 | −4 | −12 | −20 |
-|---|---|---|---|---|---|
-| `RADIO.TXPOWER` | `0x3F` | `0x28` | `0x0F` | `0x06` | `0x02` |
-
-Those are the nRF54L15 encodings, reached through the part's own MDK symbols
-exactly as `radiant_txp_table[]` intends. The value leaves the host, survives
-the bridge, the channel store, `api_power_of()`, the scheduler and the arm, and
-lands in the register. **The transmit path is correct end to end.** (The `+4`
-and `0` rungs share a value because `CONFIG_ANT_DONGLE_TX_POWER_BOOST` folds
-those two levels, which the tool's header already warns about.)
-
-So the nRF54L15's dial is provably fine, and the flat readings on *that*
-transmitter are explained by its links being marginal into either receiver
-(25–57 % loss at every rung, non-monotonic): mean-RSSI-over-*received*-packets
-pins near the detection threshold whatever the transmitter does, because those
-are the only packets it can average.
-
-That does not explain the stick, which is where the strong links are — see
-below.
-
-Two smaller things fell out and are worth keeping:
-
-* **The nRF54L15's reported RSSI looks constant.** Exactly −59.0 dBm on all
-  fourteen fine rungs, and exactly −35.0 dBm as the mean of both 700-packet A/B
-  legs. The CC26x2's moves (−47.9 mean, −53 min, −47 max, and 13 dB between
-  sittings), so this is not the transmitter. Not chased further, and not a
-  conclusion — but a receiver that always reports the same number would defeat
-  `ant_sens.py`'s dial check on every future ladder, so it is the first thing to
-  check when this is picked up.
-* **A stale comment.** `radiant_channel.c` says "radiant_sched.c clamps against
-  caps.tx_power_max_dbm when it arms". No such clamp exists; `radiant_sched.c`
-  carries `power` verbatim.
-
-**One real defect fixed here.** `MasterDriver` subclasses `threading.Thread` and
-bound `self._stop = threading.Event()` over `Thread._stop()`, which is a private
-*method* that `join()` calls from `_wait_for_tstate_lock()`. Every ladder
-therefore ended in `TypeError: 'Event' object is not callable` raised from
-inside `threading.py` — in the `finally` block, after the measurements printed
-but before the JSON was written, so the one artefact the run existed to produce
-was always lost. Renamed to `_stop_evt`; `tools/test_ant_sens.py` is 30/30.
-
-**And chasing the dial found a defect in this port.** `caps` advertised
-`tx_power_min_dbm = -20 … tx_power_max_dbm = +5`, and `radiant_radio_tx()` never
-read `req->power` at all: `setup_cmd.txPower` is the fixed `0x7217` that
-`RF_open()` consumed, so the backend has exactly one operating point. A host
-setting a transmit power was answered cheerfully and ignored, and the capability
-query was the only thing claiming otherwise — the same shape of silent lie the
-HAL's own comments keep warning about, in a field nobody had reason to exercise
-until a tool tried to use this radio as an instrument.
-
-`caps` now reports `min == max == 5`, so the core clamps to the one value that
-exists, and the arm site says why it ignores the field rather than leaving it
-looking forgotten. Making the range real needs `RF_setTxPower()` — which
-`RFCC26X2.h` does provide — plus an `RF_TxPowerTable_Entry` table of raw
-register values for this part, band and front end. Those come out of SmartRF
-Studio and are not derivable from anything in this tree, so the table is named
-future work rather than guessed.
-
-**Three — the one measurement that isolates it.** The CC26x2 receiver's RSSI is
-the only one on this bench known to move: it read −47.9 dBm in the A/B and
-−74.5 dBm under the ladder, on **the same transmitter at the same distance**.
-The difference between those two sittings is not the boards and not the room. It
-is that `tools/ant_sim.py` never sets a transmit power and `tools/ant_sens.py`
-does.
-
-A fine ladder into that receiver then held **−74.4 to −74.7 dBm — constant to
-±0.15 dB — across the full 48 dB commanded span**, +8 dBm down to −40 dBm, with
-loss 29–58 % and non-monotonic.
-
-So on the USB stick, *setting* a transmit power at all costs about 27 dB and
-then pins the output regardless of what is asked for. The equivalent path on an
-nRF54L15 built from this tree was instrumented at the register and is correct,
-so this is specific to the image the stick is running — which is the hypothesis
-this ADR started with, now resting on a measured 27 dB step rather than on a
-plausible story about firmware age.
-
-**And that is where it stops, because the stick cannot be reflashed from here.**
-It is the only transmitter on the bench with a strong link to both receivers;
-instrumenting or fixing it needs its DFU button. The nRF54L15, which can be
-reflashed freely, does not have a strong enough link to either receiver to carry
-a ladder.
-
-So `[gates.sensitivity]` has **no verdict for any backend, and I could not
-obtain one.** The instrument now runs to completion and writes its JSON, and it
-refused to interpolate a dB figure out of readings it could not justify — which
-is the outcome its own header argues for, and which is why the wrong diagnosis
-above got caught rather than shipped.
-
-**The lesson is the one this whole port keeps repeating.** "Two transmitters,
-two code paths, three pairings, all flat" felt like overwhelming evidence for a
-defect in the shipping transmit path, and an earlier draft of this ADR said so.
-One `LOG_INF` at the register disproved it in ninety seconds and showed that one
-of those two transmitters was simply on a link too marginal to measure anything.
-Four ladders of black-box evidence pointed confidently at the wrong component;
-a single white-box observation at the boundary settled it. When a measurement
-disagrees with the code, instrument the boundary before rewriting the diagnosis.
-
-**The CC26x2 cannot be the transmitter in that measurement either**, until the
-power table exists; that is now recorded in `caps` rather than discovered again.
-
-**Still owed, updated 2026-08-14 (a second sitting struck the coexistence arm
-and the PHY re-sweep; the remaining four all now hinge on hardware this bench
-does not have, not on work not done):**
-
-* ~~The transmit-power table~~ **DONE.** `apply_power()` +
-  `radiant_cc26xx_txp[]`; `caps.tx_power_min_dbm/_max_dbm` now read −20…+5.
-  The bench ladder that should have confirmed the dial moves the RF core's
-  register **could not discriminate it**, though — see
-  `archive/benchmarks/2026-08-13-radiant-cc26xx.json`'s `notes.phase_a_ladder`:
-  the nRF54L15 receiver's RSSI report is flat regardless of commanded power
-  (the same instrument limitation this ADR already found on the fine ladder
-  above, now reproduced on a second transmitter), and the link was too strong
-  for the loss-based fallback to discriminate the dial either. **Still
-  genuinely unconfirmed:** whether the register actually moves. The `LOG_INF`
-  instrumented at the `RF_setTxPower()` call site would settle it, but it is
-  on uart1 (the log console), unobserved on this bench without a 3V3
-  USB-serial adapter clipped to the BoosterPack pins - see
-  `boards/cc26x2r1_launchxl.overlay`.
-* ~~`conformance`~~ **DONE AND CLEAN.** Run against `sdk-ant`'s baseline
-  transcript (73/284 cases differ) and cross-checked against a plain
-  `radiant/nrf` build run the same sitting: the two backends' transcripts
-  are byte-identical to each other. So every difference from `sdk-ant` is
-  `radiant`-level (shared by both backends, not this port), and the HAL
-  boundary this port exists to test is not implicated. See
-  `archive/benchmarks/2026-08-13-radiant-cc26xx.json`'s `conformance` block.
-* ~~Coexistence design~~ **DONE, TO THE LEVEL THIS BENCH CAN REACH.**
-  [ADR 0015](0015-cc26xx-coexistence-design.md) records the design and all four
-  build arms now exist and compile: `RFCC26XX_schedulerPolicy`, `post_op()`,
-  `EDENIED`/`Preempted` handling, the caps patch, and - since 2026-08-14 - the
-  forked 802.15.4 driver in `radiant/coex154_ti/` plus
-  `ti_coex.conf`/`ti_coex.overlay`. Arm 1's image is still byte-for-byte the
-  same size (68248 B), so the non-coex path really did not move. **What is
-  still missing is a peer, not code:** nothing has run against a real 802.15.4
-  device, so the fork's re-post branch - the whole reason it exists - has never
-  executed. See that ADR's "Status" section for the exact shape of that gap.
-* ~~The rxBw/AGC re-sweep~~ **DONE, AND IT FOUND NOTHING TO WIN.** Six 80 s
-  runs against a paced transmitter, unattended (see the bench note below):
-  `RX_BW_CODE` 98 is a local optimum - both neighbours are several times worse
-  (97 → 3.10 %, 99 → 5.59 % against the default's 1.57 %) - and the AGC axis is
-  flat from `0x34` upward while TI's own `0x2E` costs 4.67 %. Defaults
-  unchanged. The useful half is the control: two runs of the *unchanged* image
-  differ by 0.62 pp, so anything inside that band is a tie, and the earlier
-  single-pass `RX_END_SLOP_US` sweep should be re-read with that in mind. This
-  closes "the residual loss might be a PHY mis-set" without identifying what
-  the residual loss actually is.
-* **An equal-power A/B**, or a harness rule for which rig fields may legitimately
-  differ across vendors. Still owed.
-* **Sensitivity.** Still no verdict for either backend - the transmit-power
-  path exists now, but the bench could not confirm it moves the register (see
-  above), so a sensitivity ladder built on it would inherit the same doubt.
-* **`ack_data`.** Tooling now exists (`tools/ant_session.py --attempts N`,
-  extending `ack_probe()`) and was exercised against the TI board - but the
-  intended responder (`sim/`, freshly flashed to the Feather) never
-  transmitted a detectable ANT+ signal to either receiver on this bench, so
-  the 100-attempt run measured an unrelated ambient sensor instead (0/100,
-  correctly, since that sensor was never paired for it). `sim/` has no
-  USB/console by design, so there is no way to introspect the failure
-  without a debugger on that board. Tool itself is confirmed working; the
-  responder is the open item.
-* **The seeded timing constants.** `T_SYNC_CAL_US`, `TX_RAMP_UP_US`,
-  `RX_RAMP_UP_US`, `RX_TO_TX_US`, `TX_TO_RX_US` are seeded, marked as seeded in
-  the source, and want the wired two-board trigger the HAL's `t_sync` section
-  describes.
+**Closed since the first sitting:** the transmit-power table
+(`apply_power()` + `radiant_cc26xx_txp[]`); conformance against `sdk-ant`'s
+baseline (byte-identical to a plain `radiant/nrf` build, so every difference
+from `sdk-ant` is shared rather than port-specific —
+`archive/benchmarks/2026-08-13-radiant-cc26xx.json`); coexistence design
+([ADR 0015](0015-cc26xx-coexistence-design.md) — all four build arms compile,
+still missing a live 802.15.4 peer to exercise the re-post branch); and the
+rxBw/AGC re-sweep (`RX_BW_CODE` 98 confirmed a local optimum, both neighbours
+several times worse; defaults unchanged).
 
 ## A note on the bench
 
-**The LaunchXL is an unattended board now, and it was not before.** Every
-`dslite` flash leaves the XDS110's ANT backchannel (COM14) completely silent -
-zero bytes, on every image, with the LED blinking and JTAG healthy, which looks
-exactly like a firmware hang and was diagnosed as one for a while. It is not:
-`xds110reset.exe` clears it, and `scripts/flash_ti.ps1` now runs that itself.
-The order is the part that hid the fix - a bare reset into a *closed* port does
-nothing at all, which is why an earlier attempt at it concluded the reset did
-not work and that a physical USB replug was the only route.
+Every `dslite` flash of the LaunchXL leaves the XDS110's ANT backchannel
+(COM14) silent — zero bytes, LED blinking, JTAG healthy, which reads as a
+firmware hang. It is not: `xds110reset.exe` clears it, and `scripts/flash_ti.ps1`
+now runs that itself. A bare reset into an already-closed port does nothing,
+which is why an earlier attempt concluded a physical replug was required.
 
-That is not just convenience. The whole rxBw/AGC sweep above ran flash-to-result
-with nobody touching the bench, and it shows in the data: mean RSSI held within
-0.9 dB across six runs, against 5 dB of drift in the earlier hand-replugged
-sweep. A measurement rig a human has to touch between rungs is a measurement rig
-that moves between rungs.
-
-The nRF54L15 DK's onboard J-Link was put into its bootloader during this
-sitting by running a bare `JLink.exe -CommanderScript` without
-`exec DisableAutoUpdateFW`. `scripts/flash_sim_jlink.ps1` exists for exactly
-this reason, documents exactly this failure, and was not used. Recovery is a
-physical replug. Recorded here because the note already existed and was not
-enough on its own.
+A bare `JLink.exe -CommanderScript` without `exec DisableAutoUpdateFW` put the
+nRF54L15 DK's onboard J-Link into its bootloader during this sitting.
+`scripts/flash_sim_jlink.ps1` exists for exactly this and was not used;
+recovery is a physical replug.

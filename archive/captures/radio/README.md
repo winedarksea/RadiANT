@@ -15,9 +15,8 @@ C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe radiant_core\spike\promisc\spike
 ```
 
 which exits non-zero if any of them is incomplete. The rest are raw bench
-recordings and are not meant to be checked — `docs/spike-a-results.md`,
-`docs/spike-b-results.md` and `docs/spike-b-part2-results.md` are what read
-them.
+recordings and are not meant to be checked — `docs/spike-a-results.md`
+and `docs/spike-b-results.md` are what read them.
 
 **A note on `ant_core/` in the prose below.** On 2026-08-09 the module was
 renamed `ant_core` → `radiant_core` and moved to Zephyr module shape; the
@@ -107,7 +106,7 @@ The four `2026-08-09-spike-b2-*.log` files are the output of the same
 `ant_core/spike/promisc` capture program, this time on the **nRF5340 DK's
 network core**, with three radios on the air at once: an nRF54L15 DK running
 `sim/` as the master, the same never-reflashed Feather as the slave, and the
-nRF5340 sniffing. They are the evidence behind `docs/spike-b-part2-results.md`.
+nRF5340 sniffing. They are the evidence behind `docs/spike-b-results.md`.
 **If that document and these logs disagree, the logs are right** — and they do
 disagree in one small place, noted below.
 

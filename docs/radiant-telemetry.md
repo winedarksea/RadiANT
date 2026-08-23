@@ -1223,7 +1223,7 @@ that project gets a second consumer for free.
   byte already expresses them. **There is no length byte** — Spike B part 2
   measured byte 3 as a control byte whose low bits are not a length either
   (`0x0A` reads 10 there and `0xA2` reads 2, both carrying eight payload bytes),
-  across 3,104 CRC-valid frames. See `docs/spike-b-part2-results.md` and
+  across 3,104 CRC-valid frames. See `docs/spike-b-results.md` and
   `docs/ant-radio-link.md`.
 
   So the honest position is: **how a longer payload would be expressed on air is

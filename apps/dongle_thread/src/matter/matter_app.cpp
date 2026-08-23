@@ -90,7 +90,7 @@
  * Every vendored file in src/matter/core/ and every NCS sample-common source
  * does LOG_MODULE_DECLARE(app, CONFIG_CHIP_APP_LOG_LEVEL), and upstream
  * registers it in matter_bridge's own main.cpp - a file
- * docs/matter-e3-vendoring.md deliberately did not vendor, because main() is
+ * docs/matter-bringup.md deliberately did not vendor, because main() is
  * this package's business. This is the replacement for that one line. If a
  * second registration ever appears the link fails loudly, which is the good
  * case.

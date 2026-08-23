@@ -1,7 +1,7 @@
 /*
  * nRF52840 DK - the "does Matter fit on an nRF52840" arm.
  *
- * Written for docs/matter-nrf52840.md. BUILD-ONLY: there is no nRF52840 DK on
+ * Written for docs/matter-bringup.md. BUILD-ONLY: there is no nRF52840 DK on
  * this bench (the attached nRF52840 devices are a dongle and a Feather), so
  * nothing here has been exercised on hardware. The pin choices below are
  * whatever the board's own DTS already routes.

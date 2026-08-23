@@ -9,8 +9,8 @@ C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe radiant\spike\promisc\spike_b_an
     archive\captures\radio\2026-08-09-spike-b2-run{A,B,C}*.log --strict
 ```
 
-with the results in `docs/spike-b-results.md` (part 1) and
-`docs/spike-b-part2-results.md` (part 2). If the prose and the captures
+with the results in `docs/spike-b-results.md`, which covers both part 1 and
+part 2. If the prose and the captures
 disagree, the captures are right.
 
 Provenance: clean-room. Written from `docs/ant-radio-link.md`,
@@ -43,10 +43,9 @@ This spike settles it. It is four programs:
 opens the channel slot", bits 2:0 constant `010`. There is **no three-bit burst
 sequence number** and acknowledged data is byte-for-byte a one-packet burst.
 
-`docs/spike-b-results.md` is part 1 - the broadcast/acknowledged half, from two
-radios. `docs/spike-b-part2-results.md` is part 2 - the burst half, the reply
-frame and the turnaround, from three - and it corrects two of part 1's
-inferences.
+`docs/spike-b-results.md` covers part 1 - the broadcast/acknowledged half, from
+two radios - and part 2 - the burst half, the reply frame and the turnaround,
+from three. Part 2 corrects two of part 1's inferences.
 
 ## Why it does not reuse Spike A's tracking configuration
 

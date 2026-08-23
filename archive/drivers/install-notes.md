@@ -160,6 +160,59 @@ the *same* `bcdDevice` would write a new verdict into the cache of every
 already-deployed dongle. So the experiment bumps `bcdDevice`, and that is a
 release requirement rather than a nicety.
 
+## 3. Why Windows might not offer the driver at all
+
+### Device Manager can't find it
+
+That is expected and says nothing about the device. The driver is an *optional*
+update (`AutoSelectOnWebSites = False`), so it is never installed
+automatically; and Device Manager's *Update driver* wizard on Windows 11 does
+not query Windows Update at all, searching only the local driver store. It logs
+this to `%windir%\INF\setupapi.dev.log` as
+
+```
+!    ndv:      Searching Windows Update has been disabled for the Update Wizard.
+!    ndv:      Policy has been set to prevent searching Windows Update for drivers.
+!    dvi:      Error 0xe0000228: There are no compatible drivers for this device.
+```
+
+despite no such policy being set. Use the Settings > Windows Update > Advanced
+options > Optional updates path instead.
+
+### "There are no optional updates available at this time"
+
+Check whether Windows Update is paused. A pause empties that page completely —
+every pending driver, not just this one — so it looks identical to the driver
+not existing. Settings > Windows Update shows a *Resume updates* button when
+paused; the underlying dates are at
+`HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings` in `PauseUpdatesStartTime`
+/ `PauseUpdatesExpiryTime`.
+
+To see what is really on offer regardless of the pause, ask the update agent
+directly:
+
+```powershell
+$s = New-Object -ComObject Microsoft.Update.Session
+($s.CreateUpdateSearcher().Search("IsInstalled=0 and Type='Driver'")).Updates |
+  ForEach-Object { $_.Title }
+```
+
+### Driver installed, still not working
+
+A device node that already failed a driver search carries `ConfigFlags = 64`
+(`CONFIGFLAG_FAILEDINSTALL`) and reuses that cached verdict. Check with:
+
+```powershell
+Get-PnpDeviceProperty -InstanceId <id> -KeyName DEVPKEY_Device_ConfigFlags
+```
+
+Replugging usually clears it. Note also that Zwift's own installer
+(`DriverPackagePreinstallW`) can fail with `0xE000024B` — check
+`%windir%\DPINST.LOG`, and fall back to `pnputil` or Windows Update. The
+package's 2012 catalog is signed by *Microsoft Windows Hardware Compatibility
+Publisher* and still verifies as `Valid` on Windows 11, inside the
+pre-2015-07-29 grandfather window for driver signing, so `pnputil` accepts it.
+
 ## Using our own INF
 
 [`ant_libusb_win32.inf`](ant_libusb_win32.inf) is complete and correct, and by

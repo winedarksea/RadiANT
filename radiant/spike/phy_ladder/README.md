@@ -416,6 +416,6 @@ Any one of these and the numbers are not a result:
   a shipped image by accident.
 - **A spike directory is a place work passes through.** When this is run, the
   raw console logs from both boards belong in `archive/captures/`, on the same
-  terms as `docs/spike-a-results.md` and `docs/spike-b-part2-results.md`, and
+  terms as `docs/spike-a-results.md` and `docs/spike-b-results.md`, and
   the result belongs in `docs/decisions/0007-long-range-phy.md`'s
   *Verification status* table — not here.

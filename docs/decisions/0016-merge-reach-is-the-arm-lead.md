@@ -50,7 +50,7 @@ channels could **neither merge nor be armed in sequence**, and the scheduler
 dropped the later one deterministically, every period, until the two masters'
 crystals drifted apart. With the coded PHY's lead advertised on every nRF build
 (456 µs on nRF54L15, 616 µs on nRF52840 — see
-[ADR 0007's amendment](0007-long-range-phy.md#amendment-2026-08-15--the-lead-this-adr-accepted-was-measured-wrong-and-the-phy-is-now-kconfig-gated))
+[ADR 0007's amendment](0007-long-range-phy.md#amendment-2026-08-15--min_arm_lead_us-is-the-schedulers-exclusion-radius-not-slack))
 that band was **`max(0, L − 2G)`** wide, where `L` is the advertised lead and
 `G` the 100 µs locked guard: **256 µs on nRF54L15** (456 − 200) and **416 µs on
 nRF52840** (616 − 200). At eight tracked sensors that is worth roughly **1 % of

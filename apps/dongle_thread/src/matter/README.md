@@ -164,7 +164,7 @@ and because the failure it catches is invisible.
 
 Nothing in this repository *calls* any of this. There is no data provider
 (package E4), no occupancy device type (E5) and no `main()` handoff (E6). The
-consequence is measurable and is stated plainly in `docs/matter-e3-vendoring.md`:
+consequence is measurable and is stated plainly in `docs/matter-bringup.md`:
 these objects link, and then `--gc-sections` discards almost all of them, exactly
 as E1 found for `libCHIP.a`. A flash delta is therefore **not** evidence that
 this vendoring worked, and the readback document does not use one as such.

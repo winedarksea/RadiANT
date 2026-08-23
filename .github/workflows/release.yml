@@ -669,7 +669,7 @@ jobs:
           #    nm check on the final ELF. radiant_radio_init is the plan's named
           #    canary; the rest are there because a regression in any one of
           #    them is equally invisible and the marginal cost of an extra line
-          #    is nil (docs/matter-e3-vendoring.md verified the same set by
+          #    is nil (docs/matter-bringup.md verified the same set by
           #    hand, once, which is exactly the kind of check that decays).
           #
           # assert_sinks and assert_sink_names are the fourth thing, and see the
@@ -726,7 +726,7 @@ jobs:
           #
           # apps/dongle_thread cannot be CONFIGURED for nrf5340/cpuapp at all
           # while any of its fragments names the MPSL gate. Measured, in
-          # docs/matter-e1-readback.md: RADIANT_BACKEND_NRF_GATE_MPSL
+          # docs/matter-bringup.md: RADIANT_BACKEND_NRF_GATE_MPSL
           # (radiant/Kconfig) does an unconditional `select MPSL`, and MPSL's
           # own `depends on` list has no SOC_NRF5340_CPUAPP in it - the
           # nRF5340's radio and its arbiter are both on cpunet. Kconfig stops
@@ -834,7 +834,7 @@ jobs:
       #
       # The Python packages: BYPASS_IDL stops `chip_zapgen` from running, which
       # is why the committed zap-generated/ is the build-critical artefact
-      # (docs/matter-e3-vendoring.md) - but it does NOT stop `chip_codegen`,
+      # (docs/matter-bringup.md) - but it does NOT stop `chip_codegen`,
       # which runs modules/lib/matter/scripts/codegen.py over the committed
       # bridge.matter on every build. That is read off a real build's generated
       # build.ninja, not assumed. codegen.py imports click and python_path, and

@@ -869,7 +869,7 @@ one.** Stated here rather than implied.
 The section 11 layer is measured the same way, and the two tiers land in
 different places on purpose. Slot figures are at a 4 Hz profile with Tier I at
 its default `T` = 20 s; the unverified fraction is against the characterised
-~0.4% loss floor of `docs/spike-b-part2-results.md`.
+~0.4% loss floor of `docs/spike-b-results.md`.
 
 | Tier | slots left to legacy | unverified | latency at 4 Hz | forgery bound |
 |---|---|---|---|---|

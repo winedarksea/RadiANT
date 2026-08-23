@@ -26,7 +26,7 @@
  *  2. NOTHING MAY BE ALLOCATED PER SAMPLE. At 4 Hz per field with up to
  *     sixteen endpoints, a per-sample chip::Platform::New() would run at 64 Hz
  *     against CONFIG_CHIP_MALLOC_SYS_HEAP_SIZE - 10 240 bytes shared with
- *     apps/common, the ANT stack and (docs/matter-ram-budget.md) OpenThread.
+ *     apps/common, the ANT stack and (docs/matter-bringup.md) OpenThread.
  *     Note that Nrf::BridgedDeviceDataProvider::NotifyReachableStatusChange()
  *     does exactly that, which is why this file does not call it and posts the
  *     Reachable update through the same batched path as everything else.

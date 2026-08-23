@@ -1,398 +1,39 @@
 # Backends, transports and build targets
 
 Checked by: [`scripts/build_all.ps1`](../scripts/build_all.ps1), which asserts
-the link address and the compiled transport for every target in the matrix, and
-gains a third assertion (`CONFIG_ANT_DONGLE_RADIO_<X>=y` in `.config`) and a
-fourth (a build with `ANT_MODULE_DIR` pointing at a path that does not exist)
-when the backend seam lands. Until then, everything under *Radio backends* and
-*HAL contract* is design, not shipped code — the transport, build-target and
-optional-feature material below is the shipping behaviour and is asserted.
+the link address and the compiled transport for every target in the matrix,
+plus `CONFIG_ANT_DONGLE_RADIO_<X>=y` in `.config` and a build with
+`ANT_MODULE_DIR` pointing at a path that does not exist. The backend seam has
+shipped — *Radio backends* and *HAL contract* below are the shipping
+behaviour, asserted like everything else on this page, per
+[ADR 0001](decisions/0001-backend-selection-and-release-default.md),
+Resolved 2026-08-20.
 
-**The MPSL gate exists, receives, and coexists with a running SoftDevice
-Controller — and it fails its own cost gate by a factor of thirty.** Those are
-three separate claims and only the first two are good news; see *`loss (exact)`,
-measured at last* immediately below before quoting anything from this page.
+## Status
 
-**And it now coexists with Thread too, measured.** Beside an attached,
-transmitting OpenThread node the ANT channel first would not acquire at all
-(0 of 961 packets in both the MED and SED roles); five defects later it measures
-**0.09 % loss in MED and 0.30 % in SED against 0.30 % for the same build with no
-second stack** — a delta of −0.21 pp and 0.00 pp against a +0.5 pp bar, and
-`[gates.coexistence]` PASSES in both roles. See
-[`radiant-bridge.md` §7.4.1](radiant-bridge.md#741-first-measurement-2026-08-13--the-gate-fails)
-and [§7.4.2](radiant-bridge.md#742-five-defects-in-series--and-the-gate-now-passes).
-[`radiant/src/radiant_radio_nrf_gate.h`](../radiant/src/radiant_radio_nrf_gate.h)
-and its direct implementation are compiled into every `-DRADIANT_BACKEND=nrf`
-build; [`radiant_radio_nrf_gate_mpsl.c`](../radiant/src/radiant_radio_nrf_gate_mpsl.c)
-is selected by `CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL`, off by default.
+The shipping radio is `core`; `sdk_ant` survives only as an explicit
+`-DANT_RADIO=sdk_ant` A/B reference, built by hand and never by CI.
 
-### `loss (exact)`, measured at last — and the arbiter fails its own gate
+The MPSL arbitration gate
+([`radiant_radio_nrf_gate_mpsl.c`](../radiant/src/radiant_radio_nrf_gate_mpsl.c),
+`CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL`, off by default) receives beside a
+running SoftDevice Controller and beside an attached, transmitting OpenThread
+node. It shipped with a defect that made it fail its own cost gate by a
+**factor of thirty** (arbiter-only loss against the plan's 1.5 pp exit
+criterion); that defect is fixed and the gate now measures near-zero arbiter
+cost on its own.
 
-There is now a driven master on this bench, so the A/B the gate below specifies
-can actually be run. It does not need the `sim/` application and it does not need
-a second DK: flash a **Feather nRF52840 with the ordinary dongle image** and
-drive it with [`tools/ant_sim.py`](../tools/ant_sim.py). The firmware is a
-transparent bridge and will be an ANT+ master when a host asks it to be, which is
-what that tool exists for. Receiver is the nRF54L15 DK; both ends 45–60 s at
-4 Hz, −16 dBm:
-
-| build | `loss (exact)` |
-|---|---|
-| direct | **0.00 %** — 0 of 179 messages missing |
-| MPSL gate, no second stack, *before* the fix below | **50.6 %** — 121 of 239 missing |
-| MPSL gate, no second stack, **after** | **0.00 %** — 600 of 600 received over 149.5 s |
-
-The plan's stated exit criterion is *abandon the combined build if the arbiter
-alone costs more than 1.5 pp*. It was **+50 pp**; it is now **~0 pp**, and P3
-passes its own gate. Arrival jitter came down with it, from 22.9 ms stddev to
-3.7 ms, which is the direct build's figure. The direct column also establishes
-that this bench has essentially no floor of its own, which is what makes the
-others trustworthy.
-
-**It is diagnosed, and the arbiter is not the one refusing.** MPSL grants every
-single window it is asked for: `placed=94 granted=94 blocked=0`. The loss is
-self-inflicted, and it took a new counter to see it, because with only `placed`
-to read *a gate that is never called* and *a gate that is working perfectly* are
-the same four numbers. Counting calls **in** as well as requests **out**:
-
-```
-gate: acq=184 in_grant=91/91 placed=94 granted=94 blocked=0 ...
-```
-
-184 acquires in 45 s is 4.1/s — exactly the master's rate, so the core is asking
-for every slot. Of those, **91 arrive while a grant is still held and all 91 are
-refused by us**, at the `return GATE_DENIED` in `gate_acquire()`'s
-already-granted branch. Perfect alternation, hence exactly half.
-
-The sequence is the arm/air seam again. A tracked window's packet arrives
-mid-window; the receive callback immediately arms the next tracked slot 250 ms
-out — that is the low-jitter path the HAL contract exists to permit. But the
-current timeslot is still live (`gate_release()` runs from `deliver_terminal()`,
-which has not happened yet), so `gate_acquire()` takes the "a grant is already
-held" branch, asks whether a window a quarter of a second away fits inside a
-5.5 ms grant, and refuses it. The core loses that slot; the next scheduler pump
-re-posts and lands on the *following* one.
-
-That branch exists for the acknowledged-data reply, which really does have to be
-served out of the reserve it was granted with, and for that it is correct. What
-is wrong is the else: a request that starts *after* the current grant ends is not
-a reply that failed to fit, it is an ordinary future reservation, and it must be
-**placed** rather than denied.
-
-**Fixed.** The request is now staged in `next_grant` and committed by
-`request_work_fn()` once `mpsl_timeslot_request()` has accepted it, because the
-placement path writes `g.grant_end`, `g.granted_len_us` and `g.extendable` — all
-of which describe the *next* grant and would retune the live one's end and
-extension arithmetic if written straight through `g`. The acknowledged-data reply
-keeps its synchronous refusal: at ~1.56 ms out it is inside `PLACE_MIN_US`, so it
-is still turned away by the too-near test, which is the same answer by the road
-that describes it. The counter stays, now reading "arms that had to be placed
-rather than served from the reserve" — a real property of the traffic, and the
-thing to watch if the reserve is ever resized.
-
-**An earlier reading of this page said the cause was MPSL placement jitter
-against an 800 µs window. That was wrong** and is corrected here: P0 measured the
-anchor rule at 0–17 µs over 640 chained requests, and the radio's own timestamps
-on received packets are 0.013 ms off the slot grid. Nothing about MPSL's
-placement is loose. The 800 µs window is simply the direct build's 238 µs plus
-`HEAD_MARGIN_US` and `TAIL_MARGIN_US`, and it is not implicated.
-
-**The previous result on this page read "direct 30 / MPSL gate 30 / MPSL+BT 30
-packets in 60 s" and is withdrawn as a yield comparison.** Thirty packets in
-sixty seconds is 0.5/s against a 4 Hz power meter: it was a sensor of
-opportunity, heard at whatever rate the room offered, and an equal number on both
-sides of it means only that both builds heard the same weak thing. It concealed a
-50 pp defect completely. The lesson is the one the gate config already encodes —
-`loss (exact)`, counted against the transmitter's own event counter, is the only
-number that means anything here.
-
-The arbitration counters from that sitting are still worth keeping: 273
-reservations placed, 272 granted, **0 blocked**, 2868 extensions, zero refusals,
-scheduler `end ok=36 abrt=0 miss=0 fail=0 deny=0`. The arbiter does what it says;
-what it costs is the table above.
-
-One structural cost IS visible and is by design: a scan chunk is 94 200 µs under
-the gate against 260 000 µs direct, because `caps.max_window_us` bounds a window
-to what MPSL can grant, so the sweep needs about three times the chunks for the
-same dwell.
-
-**The sweep-rate cost has now been measured, and the number that matters is duty
-rather than chunk count.** Sixty seconds searching for a device number that is
-not on the air — a wildcard channel finds the sensor in the room within a second
-or two and stops sweeping, so a wildcard run measures acquisition and not the
-sweep:
-
-| build | chunks/s | air time |
-|---|---|---|
-| direct | 3.78 | 97.7 % |
-| MPSL gate, no second stack | 10.94 | 94.8 % |
-
-The chunk rate nearly triples and means nothing on its own — the chunks are a
-third the length. **The sweep spends 94.8 % of wall-clock on air against the
-direct build's 97.7 %, a ratio of 0.970** against the 0.5 floor in
-`[gates.coexistence] min_sweep_rate_ratio`. Arbitration costs the sweep about
-3 % of its air with nothing else on the radio.
-
-That is the arbiter's own cost. **The ratio with a second stack actually running
-is not yet measurable, and the reason is an open bug rather than a missing
-run.**
-
-### The coexistence bug, found and fixed
-
-**Both coexistence loads belong to [`apps/dongle_thread`](../apps/dongle_thread/),
-not to `apps/dongle`.** `apps/dongle` does not declare either Kconfig symbol, so
-setting one on a plain dongle build is silently ignored — it is not an error, it
-simply has no effect, which is the worse of the two failures. The sources are
-[`ble_coex_load.c`](../apps/dongle_thread/ble_coex_load.c) and
-[`thread_coex_load.c`](../apps/dongle_thread/thread_coex_load.c), and
-`apps/dongle/Kconfig` carries a comment at the point of the split saying so.
-
-`CONFIG_ANT_DONGLE_BLE_COEX_LOAD=y` starts a BLE advertiser beside ANT+ so that
-the gate has a second stack that wants the radio. Built that way, the
-SoftDevice Controller used to assert:
-
-```
-<err> bt_sdc_hci_driver: SoftDevice Controller ASSERT: 48, 1792
-```
-
-within about 4–18 ms of the first advertising event, **with no ANT+ channel ever
-opened**, and reboot into doing it again. **The cause was a single line in
-`radiant_radio_init()` and it is fixed**; see *What it actually was* below. The
-elimination table is kept because every entry in it is a plausible half-day that
-nobody should spend again, and because the shape of the mistake is worth having
-written down: ten correct experiments, each one individually sound, all of them
-looking at run time when the fault was at boot.
-
-- **It is ours, not the platform's.** Zephyr's stock
-  `samples/bluetooth/peripheral` advertises perfectly on this exact board and
-  SDK. The reference build is the first move on any "does the controller work
-  here" question, exactly as `nrf/samples/mpsl/timeslot` was for the timeslot
-  API.
-- **It is not starvation.** With the ANT+ channel never opened — one 100 µs
-  bootstrap timeslot and nothing since — it still asserts. The elastic sweep
-  giving way is not the missing piece.
-- **It is not an ordering problem at init.** With the load deferred eight
-  seconds (`CONFIG_ANT_DONGLE_BLE_COEX_LOAD_DELAY_S`), ANT+ sweeps normally for
-  those eight seconds and the controller asserts 114 ms after it starts.
-- **It is not the application.** `-DRADIANT_BACKEND=null` — same image, same
-  MPSL, same controller, same advertiser, no radiant radio — runs clean. **This
-  is the one clean configuration and every other difference is measured against
-  it.**
-- **It is not arbitration.** `CONFIG_RADIANT_GATE_MPSL_NO_SESSION=y` builds
-  the arbitrated backend and never opens a timeslot session. It still asserts.
-
-Beyond that, each of the following was removed individually from an asserting
-build and **the assert survived every one**, so none of them is the cause. They
-are listed because each is a plausible half-day, and because the switches that
-tested them are kept:
-
-| removed | switch |
-|---|---|
-| the permanent HFXO request | `RADIANT_NRF_NO_HFXO_HOLD` |
-| all five (D)PPI allocations | `RADIANT_NRF_NO_GPPI` |
-| enabling MPSL's own RADIO_0 NVIC line | `RADIANT_NRF_NO_RADIO0_IRQ` |
-| radiant's TIMER moved off TIMER20 onto TIMER22 | devicetree overlay |
-| the RADIO `PUBLISH`/`SUBSCRIBE` endpoints, detached at init | (reverted) |
-| the RADIO interrupt mask left set between grants | fixed and kept |
-| enabling RADIO line 1, which is not ours | fixed and kept |
-
-**P0's "TIMER20 does not collide" is a statement about MPSL, not about the
-SoftDevice Controller** — MPSL's `BUILD_ASSERT`s reserve TIMER10 on this part
-and nothing else, and the controller ships as a binary that asserts nothing at
-build time. That gap was real and worth closing; TIMER22 behaves identically, so
-the choice of timer is not the problem either.
-
-#### What it actually was
-
-Two things broke the deadlock, and neither was another peripheral.
-
-**The experiment that pointed the right way** was setting *all four* diagnostic
-switches at once rather than one at a time. That build has no HFXO request, no
-(D)PPI, no RADIO_0 `irq_enable()` and no timeslot session — and it still
-asserted, twelve milliseconds into `bt_enable()`, before a single advertising
-packet. Re-reading the failing captures with that in hand, 54 of the 55 asserts
-in a 3000-line log had `chunks=0 end ok=0`: **no timeslot had ever been granted
-and no radio operation had ever been programmed.** Everything the gate does at
-run time was therefore already excluded by the evidence on hand, and had been
-for some time. The single-variable cuts were each sound and all of them were
-aimed at the wrong half of the program.
-
-**The cause** is one line, and it is not what it looks like:
-
-```c
-IRQ_CONNECT(RADIANT_RADIO_IRQn, CONFIG_RADIANT_BACKEND_NRF_IRQ_PRIO,
-            radio_isr, NULL, 0);
-```
-
-`IRQ_CONNECT()` is not only an ISR-table entry. On ARM it also expands to a
-`z_arm_irq_priority_set()` call that runs *where it is written* — here, inside
-`radiant_radio_init()`, well after MPSL's `SYS_INIT`. And `RADIANT_RADIO_IRQn`
-is `RADIO_0_IRQn`, which is MPSL's: `mpsl_init.c` registers it with
-`IRQ_DIRECT_CONNECT` under `IRQ_ZERO_LATENCY`, at a priority `BASEPRI` cannot
-mask. Connecting the same line afterwards put it quietly back to an ordinary,
-maskable one.
-
-From that moment every `irq_lock()` in the system — ours, the kernel's,
-anybody's — could hold off the SoftDevice Controller's radio interrupt. Nordic's
-own account of this assert is that MPSL was *"prevented from doing a task on
-time … by other same or higher priority threads or interrupts"*, and demoting
-its interrupt out of zero-latency is the most thorough way there is to arrange
-exactly that.
-
-This is also why `RADIANT_NRF_NO_RADIO0_IRQ` did not find it: that switch
-skips `irq_enable()`, and the damage was done by `IRQ_CONNECT()` — a different
-line, doing a different thing, one screenful away. The elimination was
-incomplete rather than wrong, which is the most expensive kind.
-
-Under the gate this file now connects **neither** RADIO line. Nothing is lost:
-inside a grant MPSL owns the vector and hands us RADIO events as
-`MPSL_TIMESLOT_SIGNAL_RADIO`, which the gate forwards to the same handler;
-outside a grant the radio is not ours and an interrupt from it is not ours to
-take. The NVIC line itself is still *enabled* — `irq_enable()` is
-`NVIC_EnableIRQ()` and touches no priority — because with
-`CONFIG_MPSL_DYNAMIC_INTERRUPTS` off MPSL uses the static `IRQ_DIRECT_CONNECT`
-path, which never enables anything, and `mpsl.rst` makes the timeslot user
-responsible for precisely that. Dropping line 1's connection closes a second
-hole for free: the controller's own RADIO_1 interrupts now reach the spurious
-handler instead of reaching `radio_isr()` and having the events it was waiting
-for consumed out from under it.
-
-Measured after the fix: **35 s with the advertiser running, 0 asserts, 0
-reboots**, where every previous attempt rebooted about every 9 s. A gate-only
-control built from the same tree still receives at the direct build's rate
-(`DATA=20` in 40 s), so neither this nor the teardown below cost anything.
-
-#### What the reference implementations changed
-
-Reviewing against two published ESB-beside-BLE timeslot samples —
-[`too1/ncs-esb-ble-mpsl-demo`](https://github.com/too1/ncs-esb-ble-mpsl-demo) and
-[`inductivekickback/ncs_ble_esb_demo`](https://github.com/inductivekickback/ncs_ble_esb_demo)
-— found one contract this file was not keeping. Both end **every** timeslot by
-putting the peripheral all the way back to `DISABLED`, not merely by masking its
-interrupt:
-
-```c
-irq_disable(RADIO_IRQn);
-NRF_RADIO->SHORTS = 0;
-NRF_RADIO->EVENTS_DISABLED = 0;
-NRF_RADIO->TASKS_DISABLE = 1;
-while (NRF_RADIO->EVENTS_DISABLED == 0);
-```
-
-`radiant_nrf_gate_on_grant_end()` now does the same. `SHORTS` is the part that
-mattered: `deliver_terminal()` clears it, but that function runs on every path
-that ends a grant *including the ones where no terminal was owed* — a grant that
-ran out under an armed receive, an `EXTEND_FAILED`, a session closing. On those
-paths a short is a hardware edge from an event to a task that does not care whose
-packet raised the event, so our `END`→`DISABLE` short left set is the
-controller's next advertising packet disabling the controller's own radio. It
-was not what produced assert 48/1792 — that had already been fixed — but it is a
-real leak on a real path and it is closed. Neither register is shared, which is
-what makes this different from the `INTENCLR00` trap above.
-
-Nordic's own
-[`nrf_802154` multiprotocol note](https://github.com/nrfconnect/sdk-nrfxlib/blob/main/nrf_802154/doc/multiprotocol_support.rst)
-adds only the priority rule — *"Bluetooth Low Energy has always priority over
-802.15.4"* — and says nothing about peripheral hand-back, which is worth knowing
-so nobody goes looking there for it.
-
-#### What is still open: the search phase gets blocked
-
-With the assert gone, the arbitration that was underneath it is finally visible,
-and it splits cleanly in two.
-
-**Tracking works.** ANT+ tracking a real sensor beside a 100 ms advertiser:
-`placed=36 granted=35 blocked=0`, windows about 5.5 ms. Zero refusals.
-
-**Searching does not.** The sweep's chunks are ~94 ms — see the structural cost
-above — and a 94 ms window cannot be fitted around a 100 ms advertising interval.
-Measured: `placed=744 granted=2 blocked=742`, after which the sweep gives up
-(`abrt=1`) and stops placing at all.
-
-Three things were tried. All three are kept, because two of them are right for
-the contended case even though neither was the cause, and the elimination is
-worth more than the code:
-
-| tried | effect, from `placed=570 granted=2 blocked=568` |
-|---|---|
-| back the elastic first bite off on refusal, 10 ms → 3.5 ms, grow back on grant | none — `granted=2 blocked=408` |
-| skew a refused elastic request's phase, so a ~94 ms chunk cadence cannot lock onto a 100 ms advertiser | none — `granted=2 blocked=93` |
-| **abandon the anchor after 4 consecutive refusals and re-bootstrap with EARLIEST** | **`granted=4 blocked=8`** |
-
-The third is the one that mattered, and the reason is the anchor rule.
-`distance_us` is measured from the *previous timeslot's start*, and the anchor
-deliberately does not move when a request is refused — which is correct, it is
-what stops a run of denials walking the schedule, and it has an end. If nothing
-is ever granted the anchor ages without bound, so every later request asks MPSL
-to place a slot further into the future; by the end of a two-minute run the
-distance was over a minute. A fresh anchor costs one minimum-length timeslot, and
-EARLIEST is the one request type a busy neighbour cannot starve.
-
-**It is still not enough, and what remains is in the core rather than the gate.**
-After re-anchoring the sweep gets about a third of what it asks for — and then
-stops asking: `acq=13` frozen, `deny=12`, `abrt=1`. The scheduler abandons the
-search after a dozen denials. Under an arbiter a denial during acquisition is
-ordinary weather rather than a reason to give up, so what needs changing is the
-search's response to `RADIANT_RADIO_EDENIED`: persist and keep re-posting.
-
-**The persistence half of that is now done**, and the OpenThread sitting of
-2026-08-13 shows it working: the search no longer gives up, placing 22 796 scan
-chunks across a 257 s contended run instead of freezing at a dozen. It did not
-help on its own — not one of those chunks completed, and the channel delivered
-0 of 961 packets in both roles. Five defects were behind that and are all fixed;
-both contended arms now pass the gate. Full numbers and the five defects:
-[`radiant-bridge.md` §7.4.1](radiant-bridge.md#741-first-measurement-2026-08-13--the-gate-fails)
+With Thread attached and transmitting, coexistence measures **0.09 % loss in
+the MED role and 0.30 % in SED, against 0.30 % for the same build with no
+second stack** — `[gates.coexistence]` PASSES in both roles. Gate design, the
+defect history and the final PASS table are in
+[`radiant-bridge.md` §7.4](radiant-bridge.md#74-the-coexistence-gate),
+specifically [§7.4.1](radiant-bridge.md#741-first-measurement-2026-08-13--the-gate-fails)
 and [§7.4.2](radiant-bridge.md#742-five-defects-in-series--and-the-gate-now-passes).
 
-**The denial livelock named above is now fixed** (`CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE`).
-`DONE_DENIED` still credits zero dwell — a window that never opened listened
-for no microseconds, and crediting it would advance the address set on coverage
-the sweep never got — so on its own a chunk that is always denied left
-`dwell_remaining` unchanged and `radiant_sched_rechunk()` re-armed the identical
-chunk forever. The escape lives in `radiant_search_note_denied()`, which is
-already called from the arming authority's completion path, so it needs no new
-call site and stays in-slot: after eight consecutive denials that credited
-nothing, one eighth of the set's dwell budget is credited and the run resets.
-
-**Quantum-credit, not pointer-advance.** The escape never touches the
-round-robin cursor or the steer queue; it only makes `dwell_owed()` fall, so
-the set finishes through the existing `radiant_search_set_complete()` → slot
-drop → pump path and the seen cache steers re-acquisition exactly as it does
-when nothing is contending. Advancing the pointer from the denial path would
-work and would silently cost fast re-acquisition in precisely the contended
-case the cache exists for.
-
-Bounded, and that is the claim the code carries an argument for: each escape
-adds a strictly positive quantum and nothing but a new set lowers the credit,
-so a fully-denied set completes in at most eight escapes — 64 denials, about
-0.6 s at the observed ~110/s re-arm rate — and a fully-denied 32-set sweep in
-about 19 s against a healthy 8.3 s. The price is honest and named: the credited
-time was never listened to, so a set refused its whole budget gets less real air
-than a healthy one. A sweep that is merely slow never escapes at all, because
-any window that credits real dwell resets the run.
-
-It compiles out of a single-protocol image (`default y if
-RADIANT_BACKEND_NRF_GATE_MPSL`, else `n`) — nothing there can refuse a window,
-so the livelock is unreachable and the escape costs nothing. Counted as
-`denial_escapes` on the SWEEP debug line and deliberately not in the `0xF6`
-health reply: it is the recovery, not the loss.
-
-Tracking is unaffected by all of this: a channel that is already locked keeps its
-packets beside a live advertiser. Acquisition is the whole of the problem.
-
-So the +0.5 pp coexistence bar below and the arbiter's own cost are **now
-results, and the result is a pass in both Thread roles**; the sweep-rate ratio
-remains a threshold
-with no run behind it, because no arm of that sitting completed a whole sweep
-set — the control arm found its sensor and went to tracking before finishing
-one, and the contended arms completed no chunk at all. The quantity is not
-measurable on a one-sensor rig, so `min_sweep_rate_ratio` has nothing to read.
-They live in [`tools/ab_gates.toml`](../tools/ab_gates.toml) as
-`[gates.coexistence]`, which is written and evaluated by `ant_ab.py` and is now
-`enabled = true` — measured on the nRF54L15 DK, which is the line that moves
-this page's coexistence claims from *treat as narrative* to a named gate. It is
-`required = false` while the root cause is open, so it reports rather than
-blocks.
+The sweep-rate cost under the gate with no second stack is measured at 0.970
+against a 0.5 floor. The same ratio with a second stack actually transmitting
+is not yet measurable — see `radiant-bridge.md` §7.4.3.
 
 ---
 
@@ -678,7 +319,7 @@ has been designed out.
    is true of the nRF and it is not the reason, because **there is no length
    field**. Byte 3 is a control byte of six independent flags whose low bits
    read 10 on a broadcast and 2 on an in-slot frame, both carrying eight payload
-   bytes (`docs/spike-b-part2-results.md`). Both ANT configurations are
+   bytes (`docs/spike-b-results.md`). Both ANT configurations are
    static-length; they differ in address length and body length, and that is the
    whole of it. A backend that derives its length handling from the
    `LFLEN=8 / CRCINC=1` form inherits a **broadcast-only receiver** — see the
@@ -1028,43 +669,23 @@ Nothing in `radiant` waits on it.
 | **nRF5340** | Dropped from v1 **for `sdk-ant`**, and this row is **under revision for `radiant`** — see the note below. Its RADIO is on the network core, so sdk-ant needs a whole RPC subsystem for it — which is why `apps/common/ant_serial_bridge.c` already branches on `CONFIG_ANT_NP_HOST`. A separate project of comparable size that buys nothing the nRF52840 dongle does not have. It stays valuable as a *debug* board; see [`testing.md`](testing.md) |
 | **A 2 Mbps mode** | Saves ~2 µA and costs ~3 dB of sensitivity. Wrong trade for every stated goal |
 
-### The nRF5340 row is under revision, and the traceable part is where it came from
+### The nRF5340 row states `sdk-ant`'s constraint, not `radiant`'s
 
-**The row is a statement about `sdk-ant` that has been read as a statement about
-`radiant`.** It entered this file in its first commit, on 2026-08-09, before
-`radiant` had an nRF radio backend at all, and `docs/spike-b-results.md`
-inherited its wording verbatim ("the shipping firmware's radio backend does not
-run on it — that is the `CONFIG_ANT_NP_HOST` dual-core path"). For `sdk-ant` it
-is correct and unchanged: that stack's protocol library needs the RPC subsystem
-`CONFIG_ANT_NP_HOST` names. **No measurement of `radiant` on an nRF5340 lies
-behind either sentence** — this is a documentary inheritance, not a bench result,
-and no bench failure that would explain it could be found in this repository or
-in its history. (There *is* a transient bench failure in the same spike — part
-1's "the nRF5340 network core cannot print", overturned in part 2 by two
-register writes — but that one is about the console, and offering it as the
-origin of this row would be tidier than it is true.)
-
-**What is known in `radiant`'s favour.** `radiant/spike/promisc` ran on this
-part's **network core** and captured live ANT+ frames off the air
-(`docs/spike-b-part2-results.md`), with the RF configuration this project
-derived for the nRF52840 and confirmed on nRF54L15, unmodified. That is a
-bare-RADIO capture app rather than `radiant_radio_nrf.c`, so it does not show
-the backend builds — it shows the PHY is not what stops it. NCS also runs Matter
-on this part today by splitting `ipc_radio` across the two cores, so the
-arrangement `radiant` would need is established rather than novel.
-
-**What still refuses the part, unchanged, today:**
-
-| Where | What |
-|---|---|
-| `radiant/Kconfig:76` | `RADIANT_BACKEND_NRF` carries `depends on SOC_COMPATIBLE_NRF52X \|\| SOC_COMPATIBLE_NRF54LX`, so the backend cannot be selected on nRF53 at all |
-| `radiant/src/radiant_radio_nrf.c` | the address-arithmetic `#if` chain has an `NRF54LX` branch and an `NRF52X` branch and no third one, so the file would not compile for nRF53 even if Kconfig admitted it |
-
-Correcting those two, placing the backend on `cpunet` beside 802.15.4 and MPSL,
-and carrying `struct radiant_sample` across IPC is a scoped work package that
-**has not been done**. Until it is, the outcome in the table stands and only its
-stated reason is in question. Nothing here should be read as a claim that
-`radiant` runs on an nRF5340.
+`CONFIG_ANT_NP_HOST` is correct and unchanged for `sdk-ant`, whose protocol
+library needs the RPC subsystem that name refers to. No measurement of
+`radiant` on an nRF5340 lies behind the table row above. What is known in
+`radiant`'s favour: `radiant/spike/promisc` ran on this part's **network
+core** and captured live ANT+ frames off the air
+(`docs/spike-b-results.md`), with the RF configuration this project derived
+for the nRF52840 and confirmed on nRF54L15, unmodified — so the PHY is not
+what stops it. What still refuses the part, unchanged: `radiant/Kconfig:76`'s
+`RADIANT_BACKEND_NRF` carries `depends on SOC_COMPATIBLE_NRF52X ||
+SOC_COMPATIBLE_NRF54LX`, so the backend cannot be selected on nRF53 at all,
+and `radiant/src/radiant_radio_nrf.c`'s address-arithmetic `#if` chain has no
+nRF53 branch, so the file would not compile there even if Kconfig admitted
+it. Porting the backend to `cpunet` beside 802.15.4 and MPSL, and carrying
+`struct radiant_sample` across IPC, is a scoped work package that has not
+been done.
 
 ---
 

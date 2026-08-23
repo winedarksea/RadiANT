@@ -5,7 +5,7 @@
  * against. docs/radiant-bridge.md section 11 rates the nRF52840 as "very
  * tight" for a full build; this application adds two hand-written GATT
  * services, SMP and a bonding store on top of the BLE second stack that
- * radiant/spike/mpsl_arb/README.md measured at +78.7 kB flash / +16.0 kB RAM,
+ * the radiant/spike/mpsl_arb spike measured at +78.7 kB flash / +16.0 kB RAM,
  * and phase 5 adds a third ANT+ channel. Watch RAM specifically - the Matter
  * flash spike already established for this project that flash is not the wall,
  * RAM is.

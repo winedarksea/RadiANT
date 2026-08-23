@@ -138,3 +138,9 @@ from the outside.
   The comparison is the measurement, not the absolute value: note the floor in
   one port, move the dongle, wait a minute, note it again. A quiet bench sits
   near the part's stated floor; a bad port moves it visibly and immediately.
+- **Under `-Backend core -RadiantBackend nrf`, read the first build error, not
+  the cascade.** A board with no `chosen { radiant,radio-timer }` overlay dies
+  in `radiant_radio_nrf.c`'s `#error "radiant_radio_nrf needs a timer..."`
+  guard; what follows is a wall of `DT_CHOSEN_..._undeclared` plus unrelated
+  `log_msg.h`/`cbprintf_internal.h` errors that look like a broken toolchain
+  and are neither.

@@ -67,14 +67,14 @@ Current usage:
 | Directory | Contents | Size |
 |---|---|---|
 | `archive/firmware/` | two `.uf2` flash readbacks | ~1.9 MB |
-| `archive/drivers/` | our INF, install notes, provenance | < 20 KB |
-| `archive/specs/` | pointers, hashes, snapshot URLs | < 20 KB |
-| `archive/host-api/` | `ANT_DLL` export list, Zwift subset, JSON | < 30 KB |
-| `archive/captures/` | format notes; **no captures recorded yet** | < 10 KB |
-| `archive/benchmarks/` | schema and README; **no baselines yet** | < 20 KB |
+| `archive/drivers/` | our INF, install notes, provenance | ~24 KB |
+| `archive/specs/` | pointers, hashes, snapshot URLs | ~11 KB |
+| `archive/host-api/` | `ANT_DLL` export list, Zwift subset, JSON | ~82 KB |
+| `archive/captures/` | `.antcap` radio captures and `.antser` serial traces, 31 files | ~1.64 MB |
+| `archive/benchmarks/` | sdk-ant A/B baselines, including the sensitivity curve, 13 files | ~280 KB |
 
-The two directories with nothing in them are the two that matter most. See
-*What is missing* at the end.
+`archive/` totals ~3.90 MB against the 10 MB cap. See *What is here* at the
+end for what each directory holds.
 
 ---
 
@@ -114,20 +114,12 @@ known exception rather than left to be discovered:
 
 ---
 
-## What is missing, and who must produce it
+## What is here
 
-Two directories are empty of data and that is the single largest gap in the
-preservation effort. Both need a human at the bench; neither can be produced by
-reading this repository.
+`archive/captures/` (31 files, across `radio/`, `serial/` and `coex/`) and
+`archive/benchmarks/` (13 JSON baselines) are both populated from real bench
+sessions. `archive/captures/radio/README.md` and `archive/benchmarks/README.md`
+specify exactly what each directory holds and how a future session extends it.
 
-1. **`archive/captures/radio/*.antcap`** — one capture per ANT+ profile,
-   roughly 150 KB each, recorded from real hardware with
-   `tools/ant_verify.py --record`. These replay with no board at all and are
-   what every future decoder change is regression-tested against.
-   `archive/captures/radio/README.md` specifies the exact set.
-2. **`archive/benchmarks/*.json`** — the Phase 4 sdk-ant baselines, including
-   the attenuated-link sensitivity curve. `archive/benchmarks/README.md` and
-   the schema beside it define precisely what a bench session must write, so
-   that session spends its time measuring rather than inventing a format.
-
-Everything else in `archive/` was obtainable from a desk and has been obtained.
+Everything in `archive/` was obtainable from a desk or a bench session, and
+both have been done.

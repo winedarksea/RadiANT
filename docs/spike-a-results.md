@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Spike A results - the premise holds
 
-> ## Superseded in part by `docs/spike-b-part2-results.md`
+> ## Superseded in part by `docs/spike-b-results.md`
 >
 > **This is a primary record and is not rewritten. Everything it observed is
 > confirmed.** What is superseded is one *inference* Spike A could not have
@@ -10,7 +10,7 @@
 > **Byte 3 is a control byte, and there is no length field in an ANT frame.**
 > Its low bits are not a length either: `0x0A` reads 10 there and `0xA2` reads
 > 2, and both carry an eight-byte payload. Measured across 3,104 CRC-valid
-> frames in ten Spike B runs. See `docs/spike-b-part2-results.md`, and
+> frames in ten Spike B runs. See `docs/spike-b-results.md`, and
 > `docs/ant-radio-link.md` for the whole six-field structure.
 >
 > Spike A did not get this wrong so much as get it *narrowly right*. On a bench
@@ -327,7 +327,7 @@ Rows marked **confirmed** may have their `[inferred]` tag upgraded to
 | `CRCPOLY = 0x11021`, `CRCINIT = 0xFFFF` | **confirmed** | |
 | Packet buffer `[trans_type][0x0A][d0..d7]` | **confirmed** | exactly the 10 bytes that appear in RAM |
 
-> **SUPERSEDED - `docs/spike-b-part2-results.md`, the `PCNF0.LFLEN = 8` row.**
+> **SUPERSEDED - `docs/spike-b-results.md`, the `PCNF0.LFLEN = 8` row.**
 > The observation is exactly right and is not withdrawn: the radio was told to
 > read byte 3 as a length, it did, and 100 % of the transmitter's frames were
 > received. What does not follow is that byte 3 *is* a length. **Every frame in
@@ -350,7 +350,7 @@ Rows marked **confirmed** may have their `[inferred]` tag upgraded to
 | On-air order is lowest used base byte first, prefix last | **confirmed** | all four prefix-first permutations heard nothing |
 | `BASE0 = (rev8(dh)<<24)\|(rev8(dl)<<16)\|0x0000A365`, `PREFIX0 = rev8(dtype)` | **confirmed** | `0x5CE8A365` / `0xD0` |
 
-> **SUPERSEDED - `docs/spike-b-part2-results.md`, the *Fact one* row.** Read the
+> **SUPERSEDED - `docs/spike-b-results.md`, the *Fact one* row.** Read the
 > row as three claims, because they did not survive together.
 >
 > - *`CRCINC` is the right mechanism* - **stands** for a broadcast-only

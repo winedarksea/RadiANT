@@ -1,10 +1,8 @@
 # apps/dongle_thread
 
-The same ANT+ USB dongle as [apps/dongle](../dongle), plus the P3/P4
-multiprotocol coexistence bench instruments: a BLE advertiser
-(`ble_coex_load.c`) and a Thread node (`thread_coex_load.c`) that each
-contend for the radio with radiant's arbitrated backend
-(`CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL`).
+The same ANT+ USB dongle as [apps/dongle](../dongle), plus a second wireless
+stack (Thread/BLE) that contends for the radio with radiant's arbitrated
+backend (`CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL`).
 
 This is a separate application, not a Kconfig variant of `apps/dongle`, on
 purpose: `apps/dongle` is ANT+-only by design and carries none of this - not

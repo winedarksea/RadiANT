@@ -4,7 +4,7 @@
 Provenance: clean-room. Written from `docs/decisions/0007-long-range-phy.md`,
 from `radiant/include/radiant/radiant_radio_hal.h` and
 `radiant_frame.h`, from `docs/ant-radio-link.md` and
-`docs/spike-b-part2-results.md`, and from this repository's own earlier spikes.
+`docs/spike-b-results.md`, and from this repository's own earlier spikes.
 Nothing here derives from `sdk-ant`, from `libant.a`, or from an
 ANT+ device profile document. See `docs/decisions/0002-clean-room-policy.md`.
 
@@ -291,5 +291,5 @@ coded PHY enjoys. The guard in `apply_format()` pairing `RADIANT_LEN_FROM_BODY`
 with the coded PHY should not be loosened on the strength of this result alone.
 
 Still owed: raw console and scan logs into `archive/captures/`, on the same
-terms as `docs/spike-a-results.md` and `docs/spike-b-part2-results.md`. A spike
+terms as `docs/spike-a-results.md` and `docs/spike-b-results.md`. A spike
 directory is a place work passes through, not a place evidence lives.

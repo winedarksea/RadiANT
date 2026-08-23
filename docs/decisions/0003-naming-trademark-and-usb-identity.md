@@ -40,9 +40,8 @@ but removes none of the marks.
 
 RadiANT is the public name for the whole effort and for the extension family —
 the optional security switches, the generic telemetry profile, the new device
-types. ~~`ant_core` remains the C module name.~~ **Amended 2026-08-09 — see
-[Amendment: the C module is `radiant`](#amendment-2026-08-09--the-c-module-is-radiant)
-below.**
+types. The C module name matches it too — see *The C module is `radiant`*
+below.
 
 The name contains the mark, so it carries the same posture as the descriptor
 strings: **always described as compatible, never as endorsed.** On first use in
@@ -63,32 +62,21 @@ carving out "reasonable and customary use in describing the origin of the
 Work". The qualifier is what keeps the use inside that carve-out. `NOTICE`
 carries the full statement and is the authoritative text.
 
-### Amendment 2026-08-09 — the C module is `radiant`
+### The C module is `radiant`
 
-The sentence above originally read "`ant_core` remains the C module name." That
-is no longer true, and the change is recorded here rather than edited into the
-paragraph, because an ADR whose text quietly matches today's tree is a record of
-nothing.
+**Changed 2026-08-09:** `ant_core` → `radiant` — the directory, the Kconfig
+prefix (`RADIANT_*`), the include path (`#include <radiant/radiant_frame.h>`)
+and every C identifier below the backend seam, landed in the same commit that
+converted the module to Zephyr module shape. The directory, include path and
+Kconfig prefix are the surface a reviewer — or a lawyer — reads as an identity
+claim, and they are more durable than prose: an `#include` line is in every
+file that consumes the module and in every downstream fork of it. `ant_core`
+read as a claim to be ANT; `radiant` reads as what it is.
 
-**What changed:** `ant_core` → `radiant`. The directory, the Kconfig prefix
-(`RADIANT_*`), the include path (`#include <radiant/radiant_frame.h>`)
-and every C identifier below the backend seam. Landed in the same commit that
-converted the module to Zephyr module shape.
-
-**Why the original decision was wrong.** It treated the C module name as an
-internal detail, on the reasoning that only the public name is user-facing. But
-the directory, the include path and the Kconfig prefix are precisely the surface
-a reviewer — or a lawyer — reads as an identity claim, and they are more durable
-than any prose: a README can be rewritten, an `#include` line is in every file
-that consumes the module and in every downstream fork of it. `ant_core` reads as
-a claim to be ANT. `radiant` reads as what it is, and this ADR had already
-committed the project to "always described as compatible, never as endorsed."
-
-**What did not change, and why the rename does not reach it.** The naming rule
-is *the prefix names the author; the suffix may name the target.* So
-`ANT_NET_ADDR_ANT_PLUS_0` became `RADIANT_NET_ADDR_ANT_PLUS_0` — the prefix is
-ours, and `ANT_PLUS` still names the network, accurately. Three things keep
-their names outright:
+**The naming rule: the prefix names the author, the suffix may name the
+target.** So `ANT_NET_ADDR_ANT_PLUS_0` became `RADIANT_NET_ADDR_ANT_PLUS_0` —
+the prefix is ours, and `ANT_PLUS` still names the network, accurately. Three
+things keep their names outright:
 
 - `antr_*` and `src/ant_radio.h` — the *application's* contract to a radio
   backend, which sdk-ant's shim implements too. Renaming it would rename
@@ -108,15 +96,13 @@ waiting for the first translation unit needing both trees (Phase 6's
 `src/profiles/` is the obvious candidate). `RADIANT_*` cannot collide with
 `ANT_*` by construction.
 
-### `0FCF:1009` ~~and the Dynastream descriptor strings are~~ is kept
+### `0FCF:1009` is kept
 
 Firmware from this repository enumerates as USB vendor `0x0FCF`, product
-`0x1009` — the Garmin/Dynastream ANT USB-m stick — ~~and reports Dynastream's
-descriptor strings.~~ **Amended 2026-08-11 — the descriptor strings are no
-longer Dynastream's; see
-[Amendment: the strings are ours, the numbers are not](#amendment-2026-08-11--the-strings-are-ours-the-numbers-are-not)
-below. Everything in this subsection applies to the numeric identifiers, which
-are unchanged.**
+`0x1009` — the Garmin/Dynastream ANT USB-m stick. (The descriptor *strings* are
+no longer Dynastream's — see *The descriptor strings are ours; the numbers are
+not*, below. This subsection is about the numeric identifiers, which are
+unchanged.)
 
 **This stays, and the reason is that driver matching is the only thing making
 any of it work.**
@@ -138,18 +124,16 @@ that does not require every application vendor to ship a change. The
 identifiers exist here for host driver-matching compatibility and for no other
 purpose.
 
-### Amendment 2026-08-11 — the strings are ours, the numbers are not
+### The descriptor strings are ours; the numbers are not
 
-`ANT_DONGLE_USB_MANUFACTURER` changed from `"Dynastream Innovations"` to
-`"RadiANT Project"`, and `ANT_DONGLE_USB_PRODUCT` from `"ANT USB-m Stick"` to
-`"RadiANT ANT+ compatible USB stick"`. Both defaults live in `Kconfig` and feed
-both USB stacks, so this is two lines and reaches every build.
+**Changed 2026-08-11:** `ANT_DONGLE_USB_MANUFACTURER` from `"Dynastream
+Innovations"` to `"RadiANT Project"`, and `ANT_DONGLE_USB_PRODUCT` from
+`"ANT USB-m Stick"` to `"RadiANT ANT+ compatible USB stick"`. Both defaults
+live in `Kconfig` and feed both USB stacks.
 
-**Why the original decision was wrong.** It bundled two things under one
-justification. "Driver matching is the only thing making any of it work" is
-true of `idVendor` and `idProduct` and false of `iManufacturer` and `iProduct`,
-and the paragraph asserted it of all four. Host matching is numeric everywhere
-it happens:
+"Driver matching is the only thing making any of it work" is true of
+`idVendor`/`idProduct` and false of `iManufacturer`/`iProduct` — host matching
+is numeric everywhere it happens:
 
 - Windows composes hardware IDs from the device descriptor's numeric fields
   (`USB\VID_0FCF&PID_1009&REV_xxxx`, `USB\VID_0FCF&PID_1009`) and compatible
@@ -162,8 +146,7 @@ it happens:
 - libusb callers — `openant`, Zwift's `libusb0` path, everything in `tools/` —
   compare integers.
 
-So the strings were carrying no compatibility load. They were carrying only the
-claim, which is the half this ADR spends the rest of its length worrying about.
+So the strings carry no compatibility load — only the claim.
 
 **What this does and does not buy.** It removes the device's own assertion of
 Dynastream's *name*. It does not touch the numeric identifiers, so the open

@@ -12,7 +12,7 @@ refuted the replacement reading as well**:
   `archive/captures/radio/2026-08-09-spike-b-nrf54l15-run{1,2,6}.log`, `...-run3-bursts.log`,
   `...-run4-burst-lengths.log`, `...-run5-timed.log` and `...-config.log`.
 - **Part 2**, three radios, which **supersedes part 1 wherever they differ**:
-  `docs/spike-b-part2-results.md`, from the four logs
+  `docs/spike-b-results.md`, from the four logs
   `archive/captures/radio/2026-08-09-spike-b2-run{0-pacing-bug,A-burst-seq,B-burst-seq-advburst,C-master-control}.log`.
   Those four are checked by `radiant/spike/promisc/spike_b_analyse.py --strict`, which refuses a
   capture it cannot show to be complete.
@@ -49,7 +49,7 @@ Every fact carries one. A fact with no tag does not belong in this file.
 | `[rtl_433]` | A **fact** learned by reading rtl_433's decoder. See *The rtl_433 boundary* at the end — facts yes, expression never. |
 | `[patent US8855246B2]` | Public patent text. Patents are published teaching documents; reading one is not reverse-engineering. |
 | `[nRF datasheet]` | Public Nordic product specifications — nRF52840, nRF54L15, nRF24L01+. |
-| `[measured]` | Measured on this bench, naming the run. Unqualified, it means **Spike A or Spike B, 2026-08-09** — `docs/spike-a-results.md`, `docs/spike-b-results.md`, `docs/spike-b-part2-results.md`. A tag is only upgraded to `[measured]` by a run that could have failed and did not; a claim the run did not exercise keeps `[inferred]`, however confident the reasoning behind it. **Spike B is why that rule is written down, and it earned the point twice.** Part 1 upgraded two rows for free and demoted one this document had called settled. Part 2 then demoted the *replacement* — the length reading of bits 4:0 and the three-bit type field — which had survived 750 frames only because every one of them was a slot-opening frame from a master. A tag that survives a run is not the same as a tag the run could have falsified. |
+| `[measured]` | Measured on this bench, naming the run. Unqualified, it means **Spike A or Spike B, 2026-08-09** — `docs/spike-a-results.md`, `docs/spike-b-results.md`. A tag is only upgraded to `[measured]` by a run that could have failed and did not; a claim the run did not exercise keeps `[inferred]`, however confident the reasoning behind it. **Spike B is why that rule is written down, and it earned the point twice.** Part 1 upgraded two rows for free and demoted one this document had called settled. Part 2 then demoted the *replacement* — the length reading of bits 4:0 and the three-bit type field — which had survived 750 frames only because every one of them was a slot-opening frame from a master. A tag that survives a run is not the same as a tag the run could have falsified. |
 | `[inferred]` | Reasoning, not a source. Every one of these states how it can be falsified. |
 
 Absent by construction: anything derived from `libant.a`, from sdk-ant's headers, or from a
@@ -707,8 +707,7 @@ one:
 ## The Spike B gap — closed
 
 **This section used to say "an open question, not an answer", and it was the single most important
-unknown in the public record. It has run twice.** `docs/spike-b-results.md`,
-`docs/spike-b-part2-results.md`.
+unknown in the public record. It has run twice.** `docs/spike-b-results.md`.
 
 The question was where ANT signals *broadcast* vs *acknowledged* vs *burst sequence 3* vs
 *burst-last*, given that the frame has no spare byte: preamble 1, network address 2, device number 2,

@@ -39,7 +39,7 @@
  * is driven by the EmberAfAttributeMetadata in this file. The same is true of
  * TemperatureMeasurement and RelativeHumidityMeasurement, which ARE in the ZAP
  * (they ride on endpoint 2's bridged-device cluster template - see
- * docs/matter-ram-budget.md) and which have no server sources in the tree
+ * docs/matter-bringup.md) and which have no server sources in the tree
  * either way.
  *
  * ---------------------------------------------------------------------------

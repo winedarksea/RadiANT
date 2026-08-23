@@ -92,15 +92,15 @@ here touches it.
 > page carrying the same value is theatre. So confidentiality is a **switch**,
 > not an addition.
 
-The theatre argument is worth stating as a mechanism rather than a slogan,
-because "encrypted ANT+ heart rate" is what somebody will propose next. A compat
-channel exists to be read by a Garmin head unit. Its data pages are therefore in
-the clear. Adding an encrypted copy of the same value on another page protects
-nothing — the plaintext is still on the air, one page number away, and the
-"protected" reading is recoverable by reading the unprotected one. The only way
-confidentiality means anything is if the clear stream **stops**, and a node whose
-clear stream has stopped is no longer an ANT+ sensor. That is Layer C, done
-deliberately and announced, rather than an encryption flag that lies.
+Stated as a mechanism rather than a slogan, because "encrypted ANT+ heart rate"
+is what somebody will propose next: a compat channel exists to be read by a
+Garmin head unit, so its data pages are in the clear by definition. An
+encrypted copy of the same value on another page protects nothing — the
+plaintext is still on the air one page number away, and the "protected"
+reading is recoverable by reading the unprotected one. The only way
+confidentiality means anything is if the clear stream **stops**, and a node
+whose clear stream has stopped is no longer an ANT+ sensor. That is Layer C,
+done deliberately and announced, rather than an encryption flag that lies.
 
 ## The two-tier split is the centrepiece
 
@@ -134,21 +134,21 @@ The threat model decides which is which:
 
 Three consequences worth writing down so nobody re-fuses them:
 
-- **Decoupling `T` from the data rate is what removes the compatibility
-  objection.** At 1.2% of slots, **the backwards-compatibility cost of
-  authentication is smaller than a mechanism ANT+ itself ships** — 2 common pages
-  in 121 is 1.65%, and every deployed receiver demonstrably tolerates it. That
-  sentence is the whole argument for the tier.
+- **Decoupling `T` from the data rate removes the compatibility objection.**
+  At 1.2% of slots, the backwards-compatibility cost of authentication is
+  smaller than a mechanism ANT+ itself ships — 2 common pages in 121 is 1.65%,
+  and every deployed receiver demonstrably tolerates it. That is the whole
+  argument for the tier.
 - **Decoupling is also what forced the construction.** A window CMAC at a 20 s
-  interval would be unverifiable roughly 28% of the time at the characterised
-  ~0.4% loss floor, because the window would span ~81 messages. So the tag had to
-  cover *no payload* — and that turned out to be exactly the mechanism the threat
-  model needed. The cheap answer and the correct answer coincided; that is luck
-  worth recording, not a design principle.
+  interval would be unverifiable ~28% of the time at the characterised ~0.4%
+  loss floor (the window would span ~81 messages), so the tag had to cover *no
+  payload* — which turned out to be exactly what the threat model needed. The
+  cheap answer and the correct answer coincided; luck worth recording, not a
+  design principle.
 - **40 bits, not 48, for Tier I.** The counter needs two in-page bytes now that
-  no window index is implied. 2^-40 per attempt, against a mechanism
-  rate-limited to one attempt per `T` by construction, is not the weak link in
-  this system, and ADR 0006's D16 reasoning survives the reduction.
+  no window index is implied. 2^-40 per attempt, rate-limited to one attempt
+  per `T` by construction, is not the weak link here, and ADR 0006's D16
+  reasoning survives the reduction.
 
 **Naming, pinned here to prevent a collision that has already nearly happened:
 attestation tiers are roman (Tier I, Tier II); ADR 0006's identity and
@@ -204,26 +204,20 @@ creates, in one list, are:
 
 ### The epoch is not broadcast
 
-The epoch was in the beacon as a joining receiver's freshness anchor. It comes
-out, and this is a hard constraint rather than a simplification: for a hostless
-strap **the epoch is the boot counter** (ADR 0009), so a slowly incrementing
-32-bit number broadcast every 30 s is a device fingerprint that survives every
-other privacy measure here — and it sat directly beside a key-group hint that was
-made epoch-derived specifically to avoid that class of leak. It would also defeat
-per-boot device-number rotation on its own. The same rule already governs the
-sync-handoff page.
+The epoch was in the beacon as a joining receiver's freshness anchor; it comes
+out, as a hard constraint rather than a simplification: for a hostless strap
+**the epoch is the boot counter** (ADR 0009), so a slowly incrementing 32-bit
+number broadcast every 30 s is a device fingerprint that survives every other
+privacy measure here — beside a key-group hint made epoch-derived specifically
+to avoid that class of leak — and would defeat per-boot device-number rotation
+on its own. The same rule already governs the sync-handoff page.
 
-The requirement it must keep satisfying is occasional contact, 1:N — receiver A
-this week, receiver B next month, each many boots out of date and neither able to
-ask the sensor anything. It survives as a forward search: 50 boots is 50 CMAC
-operations, 1 000 is ~3 ms on a Cortex-M4 with AES hardware, 65 536 is ~200 ms
-once. **This is cheaper than the field it replaces**, and it is a one-off cost at
-re-acquisition rather than a per-message one.
-
-The consequence to build for is the `advertise = off` path: with no hint to
-search against, the receiver trial-verifies candidate epochs against the
-attestation tag directly. That path is the one that will otherwise be written and
-never exercised, so both are asserted.
+It survives as a forward search instead: 50 boots is 50 CMAC operations,
+1 000 is ~3 ms on a Cortex-M4 with AES hardware, 65 536 is ~200 ms once —
+cheaper than the field it replaces, and a one-off cost at re-acquisition rather
+than per-message. The `advertise = off` path (no hint to search against) trial-
+verifies candidate epochs against the attestation tag directly; both paths are
+asserted, since this is the one that would otherwise go unexercised.
 
 ## The threat model this serves
 
@@ -234,113 +228,106 @@ never exercised, so both are asserted.
 > gym, a race paddock or a hotel lobby reading a rider's data because it happened
 > to be in the air.
 
-- **The trusted setup moment is the design's foundation, and it is a realistic
-  one.** Nothing here needs a PKI, a CA or a server, because there is a moment
-  when the sensor and the receiver are in the same room and nobody hostile is.
-  That is why `closed` and `physical` enrolment are the recommended paths and
-  `open-window` is the reluctant third.
-- **The accidental case is solved outright, and cheaply.** It is an identity
-  problem, so Tier I answers it at 1.2% of slots with no confidentiality cost. A
-  keyed receiver rejects a colliding stranger's sensor cryptographically instead
-  of by device number. This is the most valuable thing here and it works in the
-  default configuration, on an otherwise perfectly ordinary ANT+ strap.
+- **The trusted setup moment is the design's foundation.** Nothing here needs a
+  PKI, a CA or a server, because there is a moment when the sensor and the
+  receiver are in the same room and nobody hostile is — why `closed` and
+  `physical` enrolment are the recommended paths and `open-window` the
+  reluctant third.
+- **The accidental case is solved outright, cheaply.** Tier I answers it at
+  1.2% of slots with no confidentiality cost: a keyed receiver rejects a
+  colliding stranger's sensor cryptographically instead of by device number,
+  in the default configuration, on an otherwise ordinary ANT+ strap.
 - **The deliberate case is solved only where the user controls the receiver.**
-  **RadiANT gives integrity everywhere and confidentiality wherever you own the
-  other end.** That belongs in the README, not buried in an appendix, because it
-  is the first question a buyer will ask.
+  RadiANT gives integrity everywhere and confidentiality wherever you own the
+  other end.
 
-Three costs go in this section rather than being discovered later:
+Three costs recorded rather than discovered later:
 
 - **Switch-time linkage.** A passive observer present at a switch learns that
-  compat device number X and private device number Y are the same node. It would
-  learn the same from the timing of one disappearing as the other appears, so the
-  announcement does not create the linkage; it makes it cheap. Stated as a
-  consequence: **ADR 0006's identity Tier 2 unlinkability does not survive a
-  switch that an observer watches.** `announce = silent` narrows it to timing
-  correlation; it does not remove the fact that the node was visibly an ANT+
-  sensor beforehand.
+  compat device number X and private device number Y are the same node — the
+  announcement doesn't create that linkage, it just makes it cheap.
+  **ADR 0006's identity Tier 2 unlinkability does not survive a switch an
+  observer watches.** `announce = silent` narrows it to timing correlation
+  only.
 - **The `broadcast`/`silent` availability trade.** `broadcast` costs
-  unlinkability at the switch and buys a gap bounded by retune time for every
-  keyed receiver, including the ones that did not ask. `silent` buys
-  unlinkability and pays a gap bounded by search time, for every listener
-  including the one that asked. **Neither is "more secure"**, and the docs quote
-  the measured gap rather than "a short search".
+  unlinkability at the switch and buys every keyed receiver a gap bounded by
+  retune time; `silent` buys unlinkability and pays a gap bounded by search
+  time. Neither is "more secure" — quote the measured gap, not "a short
+  search".
 - **Add is cheap, remove is not.** Layer D adds a receiver in sixty seconds
-  because every keyholder holds the same root; removing one means re-provisioning
-  every remaining receiver with a new root. Per-receiver revocation stays out of
-  scope for the reasons in `../radiant-security.md` section 7.3, and Layer D
-  makes that gap *more* visible rather than less. Anyone shipping a product
-  should read the sentence before choosing `open-window`.
+  because every keyholder holds the same root; removing one means
+  re-provisioning every remaining receiver. Per-receiver revocation stays out
+  of scope (`../radiant-security.md` §7.3), and Layer D makes that gap more
+  visible, not less.
 
-And one thing not solvable at this layer: **jamming and channel flooding remain
-unfixable.** Attestation lets a receiver ignore a forged sensor; it cannot stop a
-hostile transmitter from occupying the RF channel.
+**Jamming and channel flooding remain unfixable** at this layer. Attestation
+lets a receiver ignore a forged sensor; it cannot stop a hostile transmitter
+from occupying the RF channel.
 
 ## Rejected alternatives
 
 - **A third page number, for Tier II.** Rejected on the 7-bit namespace alone —
-  heart rate's byte 0 carries a page-change toggle in bit 7, so its page space is
-  0x00..0x7F and is shared with every vendor's private pages. The subtype nibble
-  in byte `[0]` separates the tiers within one contiguous attestation claim.
-  Nothing else about the design would change; the number is the whole objection.
-- **Keeping the epoch in the beacon.** Rejected above; a fingerprint that
-  survives every other measure, replaced by a search nobody will notice.
+  heart rate's byte 0 carries a page-change toggle in bit 7, so its page space
+  is `0x00..0x7F` and shared with every vendor's private pages. The subtype
+  nibble in byte `[0]` separates the tiers within one attestation claim
+  instead.
+- **Keeping the epoch in the beacon.** A fingerprint that survives every other
+  measure; replaced by the forward search above.
 - **One fused attestation mechanism.** The original single window CMAC at N=8
-  costs 12.5% of a legacy receiver's data pages — 30x the bench loss floor the RF
-  plan worked three phases to reach — to defend against a threat the model does
-  not contain. Split, not tuned.
-- **Encrypting a compat page.** There is no such thing; see the theatre argument.
-- **An over-air policy-change command.** Not deferred, *refused*. A policy a
-  remote party can rewrite is not a policy, and downgrading `command` -> `never`
+  costs 12.5% of a legacy receiver's data pages — 30× the bench loss floor the
+  RF plan worked three phases to reach — to defend against a threat the model
+  doesn't contain. Split, not tuned.
+- **Encrypting a compat page.** There is no such thing; see the theatre
+  argument above.
+- **An over-air policy-change command.** Not deferred, *refused* — a policy a
+  remote party can rewrite is not a policy, and downgrading `command` → `never`
   over the air would be a mute attack wearing a safety hat.
 - **Per-receiver switching** ("go private for just this receiver"). The sensor
-  has one stream and N listeners; it cannot exist, and the SWITCH announcement is
-  the answer rather than a workaround for it.
+  has one stream and N listeners; it cannot exist. The SWITCH announcement is
+  the answer, not a workaround for it.
 - **A mode flip on the same channel** instead of a close. Keeping device type
   `0x0B` alive while emitting only unknown page numbers leaves a head unit
-  showing a connected sensor with no data — a failure mode users report as a bug.
-  A close looks like walking out of range, which users understand.
+  showing a connected sensor with no data — users report that as a bug. A close
+  looks like walking out of range, which they understand.
 
 ## Consequences
 
 **Good.**
 
 - The mainstream failure — a colliding stranger's sensor — is solved
-  cryptographically in the default configuration, at a compatibility cost smaller
-  than one ANT+ already ships.
-- Attestation is profile-agnostic. `radiant_sec_compat.c` authenticates bytes and
-  contains **no page number and no field name**, which is what makes it testable
-  against synthetic payloads with no profile in the loop and usable unchanged by
-  a profile nobody has written yet. Same discipline as "`radiant_sec.c` contains
-  no call to `radiant_sec_aes_ecb()`", and worth a grep in CI.
-- The private-mode switch is not pure loss. Switching to device type `0x60` *is*
-  the act of becoming RadiANT-native, which under ADR 0005 is the population
-  eligible for the coded PHY, frequency agility, length extension and response
-  slots of the RF plan. The honest pitch for Layer C is **"leave the
-  compatibility constraint and gain range, reliability, battery life, latency and
-  privacy — all five of which exist only because you left it"**. The switch
-  itself lands on 1 M GFSK / RF 57 and moves afterwards through the ordinary
-  descriptor mechanism: one change at a time.
+  cryptographically in the default configuration, at a compatibility cost
+  smaller than one ANT+ already ships.
+- Attestation is profile-agnostic: `radiant_sec_compat.c` authenticates bytes
+  and contains no page number and no field name, so it is testable against
+  synthetic payloads with no profile in the loop and usable unchanged by a
+  profile nobody has written yet — same discipline as "`radiant_sec.c`
+  contains no call to `radiant_sec_aes_ecb()`", worth a grep in CI.
+- The private-mode switch is not pure loss: switching to device type `0x60`
+  *is* the act of becoming RadiANT-native, which under ADR 0005 is the
+  population eligible for the coded PHY, frequency agility, length extension
+  and response slots of the RF plan — "leave the compatibility constraint and
+  gain range, reliability, battery life, latency and privacy, all five of
+  which exist only because you left it." The switch lands on 1 M GFSK / RF 57
+  and moves afterwards through the ordinary descriptor mechanism.
 
 **Costs, accepted.**
 
-- **While private, a Garmin head unit and Zwift see nothing at all.** That is the
-  price of confidentiality and there is no version of it that is cheaper. It is
-  in the Kconfig help text, not only here.
-- Two page numbers are consumed in every targeted profile's 7-bit namespace, and
-  a manufacturer-specific page number is only unique per manufacturer id, so a
-  collision with a vendor's private page on `0x0B` is possible. Mitigated by the
-  beacon's version field and by the attestation MAC failing closed.
-- **The heart-rate toggle-bit sequence must not be disturbed by inserted pages,
-  and that is a bench question against a real head unit, not a documentation
-  question.** It is answered in the interop phase or it is not answered.
+- **While private, a Garmin head unit and Zwift see nothing at all.** The
+  price of confidentiality, with no cheaper version — in the Kconfig help text
+  too, not only here.
+- Two page numbers are consumed in every targeted profile's 7-bit namespace,
+  and a manufacturer-specific page number is only unique per manufacturer id,
+  so a collision with a vendor's private page on `0x0B` is possible. Mitigated
+  by the beacon's version field and the attestation MAC failing closed.
+- **The heart-rate toggle-bit sequence must not be disturbed by inserted
+  pages** — a bench question against a real head unit, answered in the
+  interop phase or not at all.
 - Tier II, when enabled, keeps the amplification property the spread MAC has:
   `N` is simultaneously the airtime cost, the verification latency and the DoS
-  amplification factor. Deliver-as-unverified covers it; off-by-default is the
-  real answer.
-- One more surface for a policy value to disagree with itself. The precedence
-  rule exists because three sources with an unstated precedence is a bug report
-  waiting six months.
+  amplification factor. Off-by-default is the real answer.
+- One more surface for a policy value to disagree with itself — the precedence
+  rule exists because three sources with an unstated precedence is a bug
+  report waiting six months.
 
 ## Deliberately not in v1
 

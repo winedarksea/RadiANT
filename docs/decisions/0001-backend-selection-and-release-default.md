@@ -154,12 +154,11 @@ costs one line and converts a claim into a test.
 
 ### sdk-ant stays a selectable backend
 
-> **Amended 2026-08-20.** As originally written this section said sdk-ant was
-> "built in CI whenever a token is present". It no longer is: the CI job is
-> gone. Everything else here stands, and the four reasons below are why the
-> backend itself stays. The distinction that matters is between *retiring a
-> product* and *retiring a measurement instrument* — this is the first, not the
-> second.
+> **Amended 2026-08-20.** This section originally said sdk-ant was "built in CI
+> whenever a token is present" — no longer true, the CI job is gone. The four
+> reasons below are why the backend itself stays: the distinction that matters
+> is between *retiring a product* and *retiring a measurement instrument* —
+> this is the first, not the second.
 
 It is not a deprecated path, not a compatibility shim awaiting deletion, and
 not something to be quietly removed once `radiant` works. It is a supported

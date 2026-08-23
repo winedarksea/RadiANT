@@ -124,7 +124,7 @@ BLE-central provider (`src/ble/`), the simulated providers, all five bridged
 device types, `app_task.cpp`/`main.cpp`/`bridge_shell.cpp`/
 `zcl_callbacks.cpp`, and the `onoff_plug_zap/` alternative data model — are
 recorded in `apps/dongle_thread/src/matter/README.md` and
-`docs/matter-e3-vendoring.md`; this entry only tracks the licence
+`docs/matter-bringup.md`; this entry only tracks the licence
 obligation.
 
 **Licence — two, by file group, and one group unmarked.**

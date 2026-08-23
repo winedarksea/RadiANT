@@ -2070,7 +2070,7 @@ Three normative rules, and they are the whole profile:
    not** change state on the loss of a receiver, a beacon, or any other presence
    signal. The drafted design auto-locked when an ANT signal went away, and this
    project has *measured* its own link rather than assuming it: a **~0.4 % loss
-   floor** characterised in `docs/spike-b-part2-results.md`, plus the drop and
+   floor** characterised in `docs/spike-b-results.md`, plus the drop and
    re-acquire behaviour of a tracking receiver in `docs/radiant-telemetry.md`
    section 8. An immobilizer built on "the signal stopped" engages on a normal
    dropout, and the dropouts are not rare.

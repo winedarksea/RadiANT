@@ -105,7 +105,7 @@ endfunction()
 # a board that cannot support its app's backend fails loudly at configure time
 # in radiant_assert_backend() instead of producing a green build and a silent
 # image. `null` remains available - pass -DRADIANT_BACKEND=null explicitly when
-# a link-only check is genuinely what is wanted, as docs/matter-e1-readback.md
+# a link-only check is genuinely what is wanted, as docs/matter-bringup.md
 # and scripts/flash_ti.ps1's size-comparison recipe both do.
 #
 # One thing deliberately NOT changed: the Kconfig choice default in

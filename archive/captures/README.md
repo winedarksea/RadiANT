@@ -11,6 +11,7 @@ Two capture formats, two layers, one purpose.
 |---|---|---|---|---|
 | [`radio/`](radio/) | ANT+ packets off the air | `.antcap` | `tools/ant_verify.py --record` | `tools/ant_verify.py --replay` |
 | [`serial/`](serial/) | Host&harr;dongle bytes over USB | `.antser` | `tools/ant_trace.py`, `tools/ant_conformance.py` | `tools/test_ant_golden.py` |
+| [`coex/`](coex/) | ANT+/OpenThread coexistence arms: DUT console, driven master, and `ant_verify.py` reports | `.log` / `.txt` | `scripts/p4_arm.ps1` | read directly; not a replay format |
 
 **These are the highest-value and least complicated artifacts in the whole
 archive.** They are recordings of our own hardware, made with our own tools, on

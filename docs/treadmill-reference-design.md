@@ -1087,7 +1087,7 @@ biometric data about a person.
   bench run, and a pass on that suite must not be read as covering it.
 - **Memory: measured, and it is fine.** §7.3 has the table. The heaviest
   configuration is 247 kB flash and 68.5 kB RAM on an nRF54L15 — 17 % and 36 %.
-  The concern was real (`radiant/spike/mpsl_arb/README.md` measured the BLE
+  The concern was real (the `radiant/spike/mpsl_arb` spike measured the BLE
   second stack at +78.7 kB flash / +16.0 kB RAM before two hand-written GATT
   services, SMP and a bonding store were added on top) and the answer came out
   comfortable. `docs/radiant-bridge.md` §11 still rates nRF52840 as "very
