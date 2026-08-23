@@ -1930,8 +1930,9 @@ radiant_messages:
              first hardware read of this reply: 231 within nine seconds of
              boot with no channel ever opened. Since saturation sets the flag
              in [1], that one field would have made every OTHER field on the
-             board read as a floor. It lives in the SWEEP log line under
-             CONFIG_RADIANT_SWEEP_DEBUG instead.
+             board read as a floor. It was carried by the SWEEP debug log
+             line, which was retired with that instrument; the reason this
+             field is absent from the reply stands on its own.
              WHY THIS EXISTS. tools/ab_gates.toml's unexplained_loss.max = 0 is
              a SITTING INVALIDATOR rather than a gate: a hole with no RX_FAIL
              means the loss happened on the host or inside the dongle, and
