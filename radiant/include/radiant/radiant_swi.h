@@ -2,7 +2,7 @@
 /*
  * radiant_swi.h - the one legal way out of a zero-latency interrupt.
  *
- * WHY THIS EXISTS (bug 27, docs/p4-zli-kernel-calls.md).
+ * WHY THIS EXISTS (bug 27, docs/p4-coexistence-bugs.md).
  *
  * With the MPSL gate, radiant's radio work runs in MPSL's timeslot signal
  * callback, and MPSL connects its TIMER0/RADIO/RTC0 vectors with

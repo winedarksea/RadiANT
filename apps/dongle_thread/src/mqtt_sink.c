@@ -26,8 +26,7 @@
  * ---------------------------------------------------------------------------
  *
  * Nothing here runs at boot. The first publish() that finds no connection is
- * what opens the socket - the same shape thread_coex_load.c's socket uses, and
- * for a sharper reason.
+ * what opens the socket.
  *
  * The obvious alternative is CONFIG_NET_CONFIG_NEED_IPV6, so that the stack is
  * addressable before the application starts. That makes net_config_init()
@@ -286,13 +285,6 @@ static uint64_t announced[RADIANT_BINDING_MAX];
 /* The derived booleans re-use the profile block's ids (see field_key()), so
  * they need their own plane or one would mask the other. */
 static uint64_t announced_derived[RADIANT_BINDING_MAX];
-
-#ifdef CONFIG_ANT_DONGLE_NAMING_DEBUG
-/* The same two planes again, for the bench log rather than the broker - so a
- * payload is printed once per key instead of at the sample rate. */
-static uint64_t logged[RADIANT_BINDING_MAX];
-static uint64_t logged_derived[RADIANT_BINDING_MAX];
-#endif
 
 BUILD_ASSERT((RADIANT_FIELD_ID_COMMON_MAX + 1u) <= (sizeof(announced[0]) * 8u),
 	     "the announce bitmap is narrower than the field id space it indexes");
@@ -734,31 +726,6 @@ static void mqtt_publish_sample(const struct radiant_sample *s)
 
 	k_mutex_lock(&lock, K_FOREVER);
 
-#ifdef CONFIG_ANT_DONGLE_NAMING_DEBUG
-	/*
-	 * BEFORE the connection gate, deliberately. This sink needs a Thread
-	 * network and a border router to reach a broker, neither of which exists
-	 * on a bench, so everything below ensure_connected() is unreachable here
-	 * and the discovery JSON had never once been looked at on real hardware.
-	 * Logging it costs one compose per (source, field key) and is compiled
-	 * out of every shipping image.
-	 */
-	if (s->field_id <= RADIANT_FIELD_ID_COMMON_MAX) {
-		uint64_t *shown = ((s->flags & RADIANT_SAMPLE_DERIVED) != 0u)
-					  ? &logged_derived[s->source]
-					  : &logged[s->source];
-
-		if ((*shown & BIT64(s->field_id)) == 0u &&
-		    radiant_binding_get(s->source) != NULL) {
-			if (compose_discovery(s->source, s)) {
-				*shown |= BIT64(s->field_id);
-				LOG_INF("discovery %s", work_topic);
-				LOG_INF("  %s", work_payload);
-			}
-		}
-	}
-#endif
-
 	if (!ensure_connected()) {
 		k_mutex_unlock(&lock);
 		return;
@@ -791,13 +758,6 @@ static void mqtt_publish_sample(const struct radiant_sample *s)
 		subtype[s->source] = (uint8_t)s->raw;
 		announced[s->source] = 0u;
 		announced_derived[s->source] = 0u;
-#ifdef CONFIG_ANT_DONGLE_NAMING_DEBUG
-		/* Re-arm the bench log too, or it shows only the pre-page-16
-		 * "Fitness Equip" payload and never the corrected one - which
-		 * would hide the very mechanism being demonstrated. */
-		logged[s->source] = 0u;
-		logged_derived[s->source] = 0u;
-#endif
 	}
 
 	/* Two planes, for the same reason field_key() has a "d" prefix: a
@@ -911,10 +871,6 @@ static void mqtt_binding_changed(uint32_t source, const struct radiant_binding *
 	 * discovery messages are new topics and must be sent again. */
 	announced[source] = 0u;
 	announced_derived[source] = 0u;
-#ifdef CONFIG_ANT_DONGLE_NAMING_DEBUG
-	logged[source] = 0u;
-	logged_derived[source] = 0u;
-#endif
 	/* And the slot may now hold a different physical machine, so the
 	 * learned equipment type goes with it rather than naming a rower
 	 * "Treadmill". */

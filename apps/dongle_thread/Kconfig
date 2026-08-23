@@ -340,173 +340,6 @@ config ANT_DONGLE_FLASH_LOG_OFFSET_ALT
 
 endif # ANT_DONGLE_FLASH_LOG
 
-# ── The P3/P4 coexistence bench instruments ─────────────────────────────────
-#
-# apps/dongle carries neither: it is ANT+-only, by design, and stripping
-# every byte of a second wireless stack out of it entirely is the reason that
-# application exists as a separate product rather than a Kconfig variant of
-# this one. These two exist BECAUSE this application links a second stack -
-# see thread_coex_load.c and ble_coex_load.c, both at this application's own
-# root rather than under src/.
-
-config ANT_DONGLE_BLE_COEX_LOAD
-	bool "Start a BLE advertiser that competes with ANT+ for the radio"
-	depends on BT && BT_BROADCASTER
-	# Legal with the arbitrated backend, and legal with no real radio at all
-	# (RADIANT_BACKEND=null), which is the configuration that isolates "is
-	# this fault in the radio backend or in the application" - a question
-	# that took a whole round to answer the slow way. It is ONLY forbidden
-	# beside the DIRECT nrf backend, where two stacks would drive the RADIO
-	# with no arbiter between them: not a coexistence measurement, a
-	# collision.
-	depends on !RADIANT_BACKEND_NRF || RADIANT_BACKEND_NRF_GATE_MPSL
-	help
-	  A bench instrument, not a feature. Brings the controller up and
-	  advertises, so that the multiprotocol plan's P3 coexistence gate has a
-	  second stack that actually WANTS the radio.
-
-	  This exists because the obvious configuration does not test anything.
-	  CONFIG_BT=y on its own links the SoftDevice Controller in and leaves it
-	  asleep, asking MPSL for no air at all - measured, and it produced a
-	  sweep-rate ratio of exactly 1.000 between "BLE off" and "BLE on"
-	  builds, which is a gate that cannot fail.
-
-	  It depends on the MPSL gate rather than merely coexisting with it: with
-	  the direct gate the two stacks would both drive the RADIO with no
-	  arbiter between them, which is not a coexistence measurement but a
-	  collision.
-
-	  Not apps/hrm_ble. That is a separate workstream with its own state
-	  machine (SIG HRS beside ANT+ 0x78, ANT+ suppressed once a connection
-	  is live); this advertises and nothing else, so that a loss figure
-	  taken against it measures arbitration and not profile logic.
-
-	  Off by default, and no shipping image selects it.
-
-config ANT_DONGLE_BLE_COEX_LOAD_INTERVAL_MS
-	int "BLE advertising interval for the coexistence load, ms"
-	depends on ANT_DONGLE_BLE_COEX_LOAD
-	range 20 10000
-	default 100
-	help
-	  How often the advertiser asks for the air, and therefore how much of it
-	  the second stack demands. An advertising event is three channels of
-	  about 400 us plus ramp, so roughly 1.3 ms per interval: about 4 % of
-	  the air at 30 ms and 0.4 % at 300 ms.
-
-	  Configurable rather than fixed because the question the gate exists to
-	  answer is not whether ANT+ survives one setting - it is where it stops
-	  surviving, and a hard-coded number answers that once and then hides it.
-
-	  100 ms is a common real-world connectable-advertising rate and sits in
-	  the middle of that range.
-
-config ANT_DONGLE_BLE_COEX_LOAD_DELAY_S
-	int "Seconds after boot before the coexistence load starts"
-	depends on ANT_DONGLE_BLE_COEX_LOAD
-	range 0 600
-	default 8
-	help
-	  The delay is an instrument rather than caution. Starting the controller
-	  inside main() makes "ANT+ never worked" and "ANT+ stopped when BLE
-	  started" the same observation, because both are true from the first
-	  millisecond; with the load arriving seconds later the console shows the
-	  sweep running, then the controller starting, and then whatever happens
-	  next.
-
-	  8 s is comfortably past enumeration and the host's channel setup. 0
-	  starts it as early as the work queue runs.
-
-config ANT_DONGLE_THREAD_COEX_LOAD
-	bool "Attach to a Thread network and keep traffic on it"
-	depends on NET_L2_OPENTHREAD && NET_SOCKETS
-	# Identical reasoning to ANT_DONGLE_BLE_COEX_LOAD's second depends, and
-	# for once it is not merely analogous: with the DIRECT nrf backend, the
-	# 802.15.4 driver and radiant_radio_nrf.c would both drive the RADIO with
-	# no arbiter between them. On nRF54L that is not even avoidable by
-	# omission - enabling the 802.15.4 driver force-selects MPSL and
-	# NRF_802154_MULTIPROTOCOL_SUPPORT through the nrfxlib Service Layer - so
-	# the 15.4 side is arbitrated whatever this application does, and only
-	# the ANT side's backend is still ours to get wrong.
-	depends on !RADIANT_BACKEND_NRF || RADIANT_BACKEND_NRF_GATE_MPSL
-	help
-	  A bench instrument, not a feature. It is the P4 counterpart of
-	  ANT_DONGLE_BLE_COEX_LOAD, and it exists for a sharper version of the
-	  same reason.
-
-	  CONFIG_NET_L2_OPENTHREAD=y on its own attaches a node and then, if it
-	  is the sleepy role docs/radiant-bridge.md section 7.3b selects, goes
-	  almost completely quiet - by design, because being quiet is what that
-	  role is for. `ot state` says `child`, the node has an address, and it
-	  has put four MLE frames on the air in the last minute. A gate measured
-	  against that is the sweep-rate-ratio-of-1.000 failure again, except
-	  harder to spot, because this time the second stack really is running.
-
-	  So this sends datagrams on a timer and counts them, and the count is
-	  part of the result: a P4 loss figure quoted without `sent` beside it is
-	  not a measurement.
-
-	  Off by default, and no shipping image selects it.
-	  docs/decisions/0011-never-a-border-router.md is why none ever will.
-
-config ANT_DONGLE_THREAD_COEX_LOAD_INTERVAL_MS
-	int "Interval between coexistence datagrams, ms"
-	depends on ANT_DONGLE_THREAD_COEX_LOAD
-	range 10 10000
-	default 100
-	help
-	  How often the Thread side asks for the air. 100 ms matches the BLE
-	  load's default so the two gates are read at comparable demand.
-
-	  Configurable for the reason the BLE interval is: the question is not
-	  whether ANT+ survives one setting, it is where it stops surviving.
-
-config ANT_DONGLE_THREAD_COEX_LOAD_PAYLOAD
-	int "Coexistence datagram payload, bytes"
-	depends on ANT_DONGLE_THREAD_COEX_LOAD
-	range 1 800
-	default 64
-	help
-	  Air time is roughly linear in this, and section 7.3a's two predictions
-	  are quoted for full-size frames, so a run at the default is NOT
-	  comparable to that number. Raise it toward a full 127-byte PSDU when
-	  reproducing section 7.3a; leave it at 64 for a realistic sensor-chatter
-	  load.
-
-config ANT_DONGLE_THREAD_COEX_LOAD_DEST
-	string "Coexistence datagram destination"
-	depends on ANT_DONGLE_THREAD_COEX_LOAD
-	default "ff03::1"
-	help
-	  Mesh-local all-nodes by default, and multicast rather than a unicast
-	  peer on purpose: a unicast destination whose peer has rebooted or never
-	  commissioned turns every send into an address-resolution failure, and
-	  the board still puts a quite different amount of energy on the air than
-	  the operator believes.
-
-config ANT_DONGLE_THREAD_COEX_LOAD_PORT
-	int "Coexistence datagram UDP port"
-	depends on ANT_DONGLE_THREAD_COEX_LOAD
-	range 1 65535
-	default 4711
-
-config ANT_DONGLE_THREAD_COEX_LOAD_DELAY_S
-	int "Seconds after boot before the Thread coexistence load starts"
-	depends on ANT_DONGLE_THREAD_COEX_LOAD
-	range 0 600
-	default 12
-	help
-	  Same instrument as the BLE load's delay, but longer: the BLE
-	  advertiser is on the air the moment bt_enable() returns, while a
-	  Thread node has to discover and attach first, and 8 s is not reliably
-	  enough for that.
-
-config ANT_DONGLE_THREAD_COEX_LOAD_REPORT_EVERY
-	int "Log a load summary every N datagrams"
-	depends on ANT_DONGLE_THREAD_COEX_LOAD
-	range 1 100000
-	default 100
-
 # ── The RadiANT bridge: ANT+ in, Thread/MQTT/Matter out ─────────────────────
 #
 # docs/radiant-bridge.md. Everything here is off by default and none of it is
@@ -616,8 +449,7 @@ config ANT_DONGLE_PAIRING_WINDOW_AT_BOOT
 	bool "BENCH ONLY: open the pairing window at boot, with no button press"
 	depends on ANT_DONGLE_SELF_CHANNELS > 0
 	help
-	  A bench instrument, not a feature - the same shape and the same
-	  posture as ANT_DONGLE_THREAD_COEX_LOAD. Off by default, selected by
+	  A bench instrument, not a feature. Off by default, selected by
 	  no shipping image, and it logs a warning naming this symbol so a
 	  console capture can never be mistaken for one from a normal build.
 
@@ -661,26 +493,6 @@ config ANT_DONGLE_MQTT_SINK
 	  and never at boot. Do not "fix" that with CONFIG_NET_CONFIG_NEED_IPV6
 	  - that is a 31.04 s pre-main() stall on an unattached MTD, measured
 	  on this bench, and it looks exactly like a hung board.
-
-config ANT_DONGLE_NAMING_DEBUG
-	bool "Log the composed endpoint name for every field (bench instrument)"
-	depends on RADIANT_BRIDGE
-	help
-	  A bench instrument, not a feature. Registers one extra sink that
-	  logs what radiant_naming.c would call every distinct field it sees,
-	  and shouts DUPLICATE NAME when two fields on one source compose to
-	  the same string.
-
-	  It exists because neither real consumer of that name is readable on
-	  a bench: the Matter NodeLabel needs a commissioned controller and
-	  the MQTT discovery payload needs a broker on a Thread network. With
-	  this on, a plain bridge build and a real sensor answer the question
-	  directly.
-
-	  Defaults n, so it is absent from bridge.conf, matter.conf and all
-	  five of docs/radiant-bridge.md section 7.4's coexistence arms - it
-	  adds a sink, and those images' sink sets are asserted exactly in
-	  .github/workflows/release.yml.
 
 config ANT_DONGLE_MQTT_BROKER
 	string "Broker address, as a numeric IPv6 literal"
@@ -816,7 +628,7 @@ config ANT_DONGLE_PROFILES_EXTRA
 
 	  Hanging these sources off RADIANT_BRIDGE directly broke that rule
 	  twice over, and it was measured rather than argued
-	  (docs/matter-e2-regression.md): +2 564 B of flash, +1 472 B of RAM and
+	  (docs/matter-bringup.md): +2 564 B of flash, +1 472 B of RAM and
 	  22 new defined symbols on nrf54l15dk/nrf54l15/cpuapp. Worse than the
 	  size, the rewritten self_channels.c changed WHAT THE RADIO DOES on
 	  that arm - a rotating search over five device types at four different

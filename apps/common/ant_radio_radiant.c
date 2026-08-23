@@ -517,7 +517,7 @@ void radiant_event_wakeup(void)
 	 * Fixing the gate's own kernel calls and not this one was measured to
 	 * make the fault rate WORSE, because this is the frequent caller - one
 	 * per received packet - and the gate's are not. So the pend goes here
-	 * first. See docs/p4-zli-kernel-calls.md.
+	 * first. See docs/p4-coexistence-bugs.md.
 	 */
 	radiant_swi_pend(RADIANT_SWI_EVENT_WAKEUP);
 #else
@@ -1112,155 +1112,6 @@ static void api_search_begin(uint8_t ch, radiant_time_t now)
  * ---------------------------------------------------------------------------
  */
 
-#ifdef CONFIG_RADIANT_SWEEP_DEBUG
-/*
- * The bounded-denial escape's counter, on the SWEEP line and nowhere else.
- * `struct radiant_search_stats` only carries the field where the escape is
- * compiled in (single-protocol images cannot be denied the air at all), so the
- * two symbols are independent and this reads 0 rather than failing to build.
- *
- * NOT in the 0xF6 health reply, deliberately: a nonzero esc= says the sweep
- * was refused long enough to have frozen AND DID NOT. That is the recovery,
- * not the loss - the loss is already visible to the host as slow discovery,
- * and a host acting on the recovery counter would act on good news.
- */
-#if defined(CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE)
-#define API_DBG_DENIAL_ESCAPES(ss) ((unsigned int)(ss)->denial_escapes)
-#else
-#define API_DBG_DENIAL_ESCAPES(ss) ((void)(ss), 0u)
-#endif
-
-/*
- * ---------------------------------------------------------------------------
- * THE SWEEP ACCOUNTING IDENTITY
- * ---------------------------------------------------------------------------
- *
- * The SWEEP counters (declared with api_sched_armed(), further down) rule
- * things out. Four of them have now ruled out preemption, tracked channels
- * taking the radio, arm failures and crediting, and roughly 35 % of the
- * sweep's wall clock is still unexplained - because a fifth counter of the
- * same kind rules out a fifth thing and leaves the remainder unexplained
- * again.
- *
- * These are different: they are an IDENTITY. Every microsecond between one
- * search chunk's terminal and the next one opening falls into exactly one of
- * four intervals, and
- *
- *     unacct = elapsed - (scan_armed + overrun + gap_arm + gap_pump +
- *                         gap_post + track_armed)
- *
- * must come out at zero. `unacct` reaching zero IS the exit criterion for the
- * investigation - not a number getting smaller, a number reaching zero. Until
- * it does, the model of where the time goes is incomplete, and this line says
- * so rather than letting a plausible story stand.
- *
- * The two paths out of a chunk are distinguished because they are different
- * mechanisms, not different amounts:
- *
- *   KEPT (rechunk). The scheduler re-arms inside the terminal event. The gap
- *   is arm lead + ramp + commit ordering, and should be about
- *   caps.min_arm_lead_us. -> gap_arm
- *
- *   DROPPED. api_sched_done() cleared the slot, so only
- *   api_post_search_window() can re-post, and it is reachable only from
- *   api_housekeep() via api_event_thread()'s k_sem_take(..., K_MSEC(50)). On
- *   quiet air there is no RX event to wake it, so the wait is the timeout:
- *   uniform 0-50 ms. PREDICTION: mean gap_pump ~= 25 000 us, once per SET. If
- *   it is not, the mechanism above is wrong and one run says so - which is the
- *   point of predicting it in the source rather than after the fact.
- *   -> gap_pump, then gap_post for the posting-to-opening remainder.
- *
- * overrun is signed on purpose: large and positive means the HAL holds past
- * t_close, so the dwell credit is honest while the clock is not, and that is a
- * different bug from a gap.
- *
- * Declared here, above api_post_search_window(), because that function is the
- * one that closes gap_pump and it is defined before the rest of the SWEEP
- * counters are.
- */
-static radiant_time_t dbg_last_close;      /* t_close actually granted */
-static radiant_time_t dbg_last_done_now;   /* now at a search terminal */
-static radiant_time_t dbg_slot_dropped_at; /* when api_search_slot was cleared */
-static radiant_time_t dbg_pump_post_at;    /* when the pump posted */
-static radiant_time_t dbg_epoch;           /* first search arm, for elapsed */
-
-/* Which of the two paths the last terminal took, so the next arm knows which
- * interval it closes. Not derivable at arm time - the scheduler does not tell
- * this layer whether it kept the request. */
-static bool dbg_kept;
-static bool dbg_awaiting_post;
-
-static uint32_t dbg_gap_arm_us, dbg_gap_arm_n;
-static uint32_t dbg_gap_pump_us, dbg_gap_pump_n;
-static uint32_t dbg_gap_post_us, dbg_gap_post_n;
-static int64_t  dbg_overrun_us;
-static uint32_t dbg_overrun_n;
-
-/*
- * WHY THE PUMP DID NOT POST, one counter per early return.
- *
- * The first run of the identity above measured gap_pump at 1.716 s per set -
- * 86 % of the sweep's whole wall clock, and 69x the 25 ms the housekeeping
- * tick can explain. Housekeeping itself ran 31 times a second throughout, so
- * the pump was called about 54 times inside each of those gaps and declined to
- * post on every one of them. Which of its four early returns fired is the
- * whole remaining question, and it is not answerable from any counter that
- * existed.
- *
- * `arming` is the recursion guard, `slot` is a sweep already in flight,
- * `nochan` is no searching channel free to carry one, `window` is
- * radiant_search.c refusing. `ok` is a post.
- */
-static uint32_t dbg_pump_arming, dbg_pump_slot, dbg_pump_nochan;
-static uint32_t dbg_pump_window, dbg_pump_ok;
-
-/*
- * `nochan` split, because the two halves mean opposite things.
- *
- * NONE SEARCHING is the sweep having nothing to do: every channel has acquired
- * a device and stopped looking. That is correct - a dongle with all eight
- * channels tracking is not failing to discover, it has discovered - and the
- * time is not a defect, however large it is.
- *
- * BUSY is a channel that IS still searching and whose slot the scheduler is
- * holding for something else. That time is a real stall: there is discovery
- * work outstanding and the sweep cannot get on the air to do it.
- *
- * Without the split, `nochan` cannot tell "working as designed" from "the
- * defect" - and on a one-channel rig the first dominates so completely that a
- * reader would conclude the second.
- */
-static uint32_t dbg_pump_none_searching, dbg_pump_busy;
-
-/*
- * THE IN-FLIGHT CHUNK, AND WHY unacct WAS NOT ACTUALLY ZERO.
- *
- * dbg_scan_us credits a chunk's WHOLE armed length at arm time, because that is
- * where the granted bounds are known. The 1 s report then samples at an
- * arbitrary instant, which is usually part-way through a 260 ms chunk - so
- * `accounted` includes airtime that has not elapsed yet, and unacct comes out
- * NEGATIVE by however much of the chunk is still in the future. One sample
- * later the chunk has completed and the same arithmetic reads POSITIVE.
- *
- * That is exactly what the first run showed: unacct alternating between about
- * -625 000 and +526 000 us against a 125 s elapsed, sign flipping with the
- * sample phase. It looked like +-0.5 % of unexplained time and was not - it was
- * one chunk of double-counting, appearing and disappearing.
- *
- * The exit criterion for this investigation is unacct reaching ZERO, not
- * reaching small, so this is worth removing rather than describing. Recording
- * the in-flight chunk's scheduled close lets the report subtract the part of it
- * that has not happened yet, which makes the identity exact at ANY sampling
- * instant instead of only at a chunk boundary.
- *
- * Tracked windows have the same shape and are ignored on purpose: one is 640 us
- * against a 260 ms scan chunk, so the correction would be a four-hundredth of
- * the one that matters and would cost a second pair of variables to carry.
- */
-static bool           dbg_inflight;
-static radiant_time_t dbg_inflight_close;
-#endif
-
 /*
  * True while a radiant_sched_*() call that may invoke done() synchronously is
  * in progress. A refused arm completes inline, and posting the next request
@@ -1284,9 +1135,6 @@ static void api_post_search_window(radiant_time_t now)
 
 	/* Not from inside an arm - see api_arming above. */
 	if (api_arming) {
-#ifdef CONFIG_RADIANT_SWEEP_DEBUG
-		dbg_pump_arming++;
-#endif
 		return;
 	}
 
@@ -1294,9 +1142,6 @@ static void api_post_search_window(radiant_time_t now)
 	 * flight, which is what makes its filters[] pointer safe to hand
 	 * straight to the HAL. */
 	if (api_search_slot != RADIANT_SCHED_CH_NONE) {
-#ifdef CONFIG_RADIANT_SWEEP_DEBUG
-		dbg_pump_slot++;
-#endif
 		return;
 	}
 
@@ -1308,10 +1153,8 @@ static void api_post_search_window(radiant_time_t now)
 	 * slot was merely pending (busy for reasons unrelated to the sweep)
 	 * used to stall the whole sweep - skip a busy one and keep looking.
 	 */
-	/* Unconditional, not under SWEEP_DEBUG: both that log line and the
-	 * 0xF6 health reply need it, and the two symbols are independent. With
-	 * neither compiled in it is a set-but-unused bool the optimiser
-	 * deletes. */
+	/* Read below by the 0xF6 health reply's SWEEP_BUSY note, which has to
+	 * tell "no channel is searching" from "one is and its slot is busy". */
 	bool any_searching = false;
 
 	for (ch = 0u; ch < API_CHANNELS; ch++) {
@@ -1324,19 +1167,7 @@ static void api_post_search_window(radiant_time_t now)
 		}
 	}
 	if (ch >= API_CHANNELS) {
-#ifdef CONFIG_RADIANT_SWEEP_DEBUG
-		dbg_pump_nochan++;
-		if (any_searching) {
-			dbg_pump_busy++;
-		} else {
-			dbg_pump_none_searching++;
-		}
-#endif
-		/* Independent of SWEEP_DEBUG: a shipping image has no business
-		 * carrying the once-a-second SWEEP log line, and this is the
-		 * half of that line a host still needs.
-		 *
-		 * Only the BUSY half. The idle half climbs forever on a dongle
+		/* Only the BUSY half. The idle half climbs forever on a dongle
 		 * with nothing open and would saturate the reply in about half
 		 * an hour - see ANT_HEALTH_SWEEP_BUSY. */
 		if (any_searching) {
@@ -1348,9 +1179,6 @@ static void api_post_search_window(radiant_time_t now)
 	if (radiant_search_window(&api_search,
 			      now + (radiant_time_t)caps->min_arm_lead_us,
 			      &w) != RADIANT_SEARCH_OK) {
-#ifdef CONFIG_RADIANT_SWEEP_DEBUG
-		dbg_pump_window++;
-#endif
 		return;
 	}
 
@@ -1406,20 +1234,6 @@ static void api_post_search_window(radiant_time_t now)
 
 	api_search_slot = ch;
 	api_bind_accepted(ch, API_SLOT_SEARCH);
-#ifdef CONFIG_RADIANT_SWEEP_DEBUG
-	/* The posting pass closes gap_pump and opens gap_post. Stamped after
-	 * the request is accepted, not before: a refused post returned above
-	 * and left the slot dropped, so charging it here would credit the pump
-	 * with work it did not do. */
-	dbg_pump_post_at = now;
-	dbg_pump_ok++;
-	if (dbg_slot_dropped_at != 0u && now > dbg_slot_dropped_at) {
-		dbg_gap_pump_us += (uint32_t)(now - dbg_slot_dropped_at);
-		dbg_gap_pump_n++;
-		dbg_slot_dropped_at = 0u;
-	}
-	dbg_awaiting_post = true;
-#endif
 	/* radiant_search_armed() is NOT called here: a scan's chunk bounds are
 	 * decided by the scheduler from work this layer can't see, so crediting
 	 * dwell here would be a guess. api_sched_armed() does it instead, once
@@ -2180,18 +1994,6 @@ static void api_feed_xfer_terminal(uint8_t ch, enum radiant_radio_status st)
  * this layer can't see, so crediting the bounds api_post_search_window()
  * merely proposed would overcount.
  */
-#ifdef CONFIG_RADIANT_SWEEP_DEBUG
-/* Armed length by slot kind - showed tracked windows cost 640 us each
- * (2.6 ms/s), ruling them out as the cause of a starved sweep. */
-static uint32_t dbg_scan_us, dbg_scan_n, dbg_track_us, dbg_track_n;
-/* How scan chunks end, which decides how much dwell they credit. */
-static uint32_t dbg_end_ok, dbg_end_abort, dbg_end_missed, dbg_end_failed;
-/* Chunks the arbiter refused - separate from `failed` since this is the
- * number the "sweep is the elastic consumer" claim (ADR 0013) is read against. */
-static uint32_t dbg_end_denied;
-
-#endif
-
 static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_close,
 			void *user)
 {
@@ -2199,48 +2001,6 @@ static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_
 	if (!api_ch_valid(ch)) {
 		return;
 	}
-#ifdef CONFIG_RADIANT_SWEEP_DEBUG
-	if (t_close != RADIANT_TIME_NEVER && t_close > t_open) {
-		uint32_t len = (uint32_t)(t_close - t_open);
-
-		if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_SEARCH) {
-			dbg_scan_us += len;
-			dbg_scan_n++;
-		} else if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_TRACK_RX) {
-			dbg_track_us += len;
-			dbg_track_n++;
-		}
-	}
-
-	/* The identity's arm side. Only the search slot participates: the
-	 * question is where the SWEEP's wall clock goes. */
-	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_SEARCH) {
-		if (dbg_epoch == 0u) {
-			dbg_epoch = t_open;
-		}
-		dbg_last_close = t_close;
-
-		/* The chunk just credited to dbg_scan_us has not been listened
-		 * to yet. Remember when it is due to finish so the report can
-		 * take back whatever part of it is still in the future. */
-		if (t_close != RADIANT_TIME_NEVER && t_close > t_open) {
-			dbg_inflight = true;
-			dbg_inflight_close = t_close;
-		}
-
-		if (dbg_kept && dbg_last_done_now != 0u &&
-		    t_open > dbg_last_done_now) {
-			dbg_gap_arm_us += (uint32_t)(t_open - dbg_last_done_now);
-			dbg_gap_arm_n++;
-		} else if (dbg_awaiting_post && dbg_pump_post_at != 0u &&
-			   t_open > dbg_pump_post_at) {
-			dbg_gap_post_us += (uint32_t)(t_open - dbg_pump_post_at);
-			dbg_gap_post_n++;
-		}
-		dbg_kept = false;
-		dbg_awaiting_post = false;
-	}
-#endif
 	/*
 	 * A tracked window that really got armed owes its successor. Recorded
 	 * here rather than at post time so a refused arm - which never reaches
@@ -2281,23 +2041,6 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 
 	now = radiant_radio_now();
 	st = api_done_to_status(why);
-
-#ifdef CONFIG_RADIANT_SWEEP_DEBUG
-	/* Taken at the top, before any of the work below can move the clock:
-	 * this instant is one end of both the arm gap and the overrun, and a
-	 * terminal that spent time in radiant_search_on_done() before being
-	 * stamped would charge that time to the wrong interval. */
-	if (api_ch[ch].slot_kind == (uint8_t)API_SLOT_SEARCH) {
-		dbg_last_done_now = now;
-		/* The chunk is over, however it ended: nothing of it is still
-		 * in the future, so the report's correction stops applying. */
-		dbg_inflight = false;
-		if (dbg_last_close != 0u && dbg_last_close != RADIANT_TIME_NEVER) {
-			dbg_overrun_us += (int64_t)now - (int64_t)dbg_last_close;
-			dbg_overrun_n++;
-		}
-	}
-#endif
 
 	api_stats.sched_dones++;
 	if (why == RADIANT_SCHED_DONE_MISSED) {
@@ -2342,26 +2085,6 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 			radiant_search_note_denied(&api_search,
 						RADIANT_API_HOUSEKEEP_MS * 1000u);
 		}
-#ifdef CONFIG_RADIANT_SWEEP_DEBUG
-		switch (why) {
-		case RADIANT_SCHED_DONE_OK:
-			dbg_end_ok++;
-			break;
-		case RADIANT_SCHED_DONE_ABORTED:
-			dbg_end_abort++;
-			break;
-		case RADIANT_SCHED_DONE_MISSED:
-			dbg_end_missed++;
-			break;
-		case RADIANT_SCHED_DONE_DENIED:
-			dbg_end_denied++;
-			break;
-		default:
-			dbg_end_failed++;
-			break;
-		}
-#endif
-
 		/*
 		 * A continuous request outlives its chunks (lets a displaced
 		 * scan resume), so the slot is still here - whether to keep it
@@ -2408,12 +2131,6 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 				 * wouldn't reach radiant_search_armed() and the
 				 * sweep would stop advancing. */
 				keep_search = true;
-#ifdef CONFIG_RADIANT_SWEEP_DEBUG
-				/* The kept path: the scheduler re-arms from
-				 * inside this event, so the next arm closes
-				 * gap_arm rather than gap_post. */
-				dbg_kept = true;
-#endif
 
 				/*
 				 * Ceiling comes down with the budget: leaving
@@ -2432,14 +2149,6 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 				 * whatever the sweep should hear next. */
 				(void)radiant_sched_cancel(ch);
 				api_search_slot = RADIANT_SCHED_CH_NONE;
-#ifdef CONFIG_RADIANT_SWEEP_DEBUG
-				/* The dropped path. From here only
-				 * api_post_search_window() can re-post, and it
-				 * is reachable only from api_housekeep(). This
-				 * is the start of gap_pump - the interval the
-				 * 50 ms tick paces. */
-				dbg_slot_dropped_at = now;
-#endif
 			}
 		}
 	} else if (!radiant_transfer_is_idle(&api_xfer[ch]) &&
@@ -2904,159 +2613,6 @@ static void api_housekeep(void)
 		}
 	}
 #endif /* CONFIG_RADIANT_CRC_REPAIR */
-
-#ifdef CONFIG_RADIANT_SWEEP_DEBUG
-	/* Sweep rate is invisible from the host; both discovery defects fixed
-	 * in this file were found with these counters. */
-	{
-		static radiant_time_t dbg_last;
-
-		if ((radiant_time_t)(now - dbg_last) > 1000000u) {
-			const struct radiant_search_stats *ss =
-				radiant_search_get_stats(&api_search);
-			const struct radiant_sched_stats *ds =
-				radiant_sched_stats_get();
-
-			/*
-			 * The identity. Everything on the right is a measured
-			 * interval; unacct is what none of them claimed, and it
-			 * is the only number on this line that is supposed to
-			 * be zero. A negative unacct means double-counting -
-			 * most likely a tracked window armed inside a scan
-			 * chunk, which is legal and would mean track_us must
-			 * come out of the sum rather than into it.
-			 */
-			int64_t elapsed = (dbg_epoch != 0u)
-						  ? (int64_t)(now - dbg_epoch)
-						  : 0;
-			/*
-			 * track_us IS DELIBERATELY NOT IN THIS SUM, and that is
-			 * a measurement rather than a preference.
-			 *
-			 * A tracked window PREEMPTS a running scan chunk - that
-			 * is the whole reason the sweep is posted as a
-			 * continuous background scan rather than a bounded
-			 * window. So a tracked window is armed INSIDE the span
-			 * a scan chunk has already been credited for, and
-			 * adding it counts the same microseconds twice.
-			 *
-			 * Measured: with it in the sum, unacct settled at a
-			 * smooth -3200 us per second of elapsed - always
-			 * negative, which is the signature of double counting
-			 * rather than of missing time. 3200 us/s against a
-			 * tracked window of ~640 us arriving at 4 Hz (2560
-			 * us/s) is the same quantity. Taking it out is what
-			 * makes the residual zero.
-			 *
-			 * The counter itself stays on the SWEEP line: knowing
-			 * tracked windows cost 640 us each is what ruled them
-			 * out as the cause of a starved sweep in the first
-			 * place. It is not part of the identity, that is all.
-			 */
-			int64_t accounted = (int64_t)dbg_scan_us +
-					    (int64_t)dbg_gap_arm_us +
-					    (int64_t)dbg_gap_pump_us +
-					    (int64_t)dbg_gap_post_us +
-					    dbg_overrun_us;
-			int64_t unacct;
-
-			/* Take back the part of the in-flight chunk that has
-			 * not elapsed yet - see dbg_inflight. Without this the
-			 * residual alternates sign with the sample phase and
-			 * never settles at zero, which is the one thing this
-			 * whole line exists to show. */
-			if (dbg_inflight && dbg_inflight_close > now) {
-				accounted -= (int64_t)(dbg_inflight_close - now);
-			}
-
-			/*
-			 * And add the pump gap that is STILL RUNNING. gap_pump
-			 * is credited in one lump when the pump finally posts,
-			 * so between the slot being dropped and that post -
-			 * which measured 1.7 s, longer than the report interval
-			 * - elapsed runs ahead of everything claiming it, and
-			 * unacct saws up to a full second and back.
-			 *
-			 * That sawtooth is the mirror image of the in-flight
-			 * chunk above: one is time credited before it happened,
-			 * the other is time that happened before it was
-			 * credited. Both have to be corrected or the residual
-			 * is dominated by which side of a boundary the 1 s
-			 * report landed on, and the real remainder cannot be
-			 * seen at all.
-			 */
-			if (dbg_slot_dropped_at != 0u && now > dbg_slot_dropped_at) {
-				accounted += (int64_t)(now - dbg_slot_dropped_at);
-			}
-			unacct = elapsed - accounted;
-
-			dbg_last = now;
-			LOG_INF("SWEEP set=%u steer=%u dwell=%u/%u adv=%u sweeps=%u "
-				"win=%u ok=%u searching=%u carrier=%d | chunks=%u "
-				"preempt=%u missed=%u ebusy=%u rej=%u | pumps=%u "
-				"hk=%u | scan_us=%u/%u track_us=%u/%u | "
-				"end ok=%u abrt=%u miss=%u fail=%u deny=%u "
-				"replan=%u",
-				(unsigned int)api_search.cur_set,
-				(unsigned int)api_search.n_steer,
-				(unsigned int)api_search.set_dwell_us,
-				(unsigned int)api_search.cfg.dwell_us,
-				(unsigned int)ss->sets_advanced,
-				(unsigned int)ss->sweeps,
-				(unsigned int)ss->windows,
-				(unsigned int)ss->frames_ok,
-				(unsigned int)radiant_search_n_searching(&api_search),
-				(int)api_search_slot,
-				(unsigned int)ds->scan_chunks,
-				(unsigned int)ds->preempted,
-				(unsigned int)ds->missed,
-				(unsigned int)ds->arm_ebusy,
-				(unsigned int)ds->arm_rejected,
-				(unsigned int)api_stats.pumps,
-				(unsigned int)api_stats.housekeeps,
-				(unsigned int)dbg_scan_us,
-				(unsigned int)dbg_scan_n,
-				(unsigned int)dbg_track_us,
-				(unsigned int)dbg_track_n,
-				(unsigned int)dbg_end_ok,
-				(unsigned int)dbg_end_abort,
-				(unsigned int)dbg_end_missed,
-				(unsigned int)dbg_end_failed,
-				(unsigned int)dbg_end_denied,
-				(unsigned int)ds->replans);
-
-			/*
-			 * A second line rather than a longer first one: the
-			 * SWEEP line is already at the edge of what a 128-byte
-			 * deferred log message can carry, and a truncated
-			 * identity is worse than none - it reads as a number.
-			 */
-			LOG_INF("SWEEP why arm=%u slot=%u nochan=%u"
-				"(idle=%u busy=%u) win=%u ok=%u esc=%u",
-				(unsigned int)dbg_pump_arming,
-				(unsigned int)dbg_pump_slot,
-				(unsigned int)dbg_pump_nochan,
-				(unsigned int)dbg_pump_none_searching,
-				(unsigned int)dbg_pump_busy,
-				(unsigned int)dbg_pump_window,
-				(unsigned int)dbg_pump_ok,
-				API_DBG_DENIAL_ESCAPES(ss));
-			LOG_INF("SWEEP gap arm=%u/%u pump=%u/%u post=%u/%u "
-				"over=%lld/%u | elapsed=%lld acct=%lld "
-				"unacct=%lld",
-				(unsigned int)dbg_gap_arm_us,
-				(unsigned int)dbg_gap_arm_n,
-				(unsigned int)dbg_gap_pump_us,
-				(unsigned int)dbg_gap_pump_n,
-				(unsigned int)dbg_gap_post_us,
-				(unsigned int)dbg_gap_post_n,
-				(long long)dbg_overrun_us,
-				(unsigned int)dbg_overrun_n,
-				(long long)elapsed, (long long)accounted,
-				(long long)unacct);
-		}
-	}
-#endif
 
 	k_mutex_unlock(&api_lock);
 }

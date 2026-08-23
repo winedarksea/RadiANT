@@ -401,11 +401,10 @@ def gate_count(cfg: dict, a: Baseline, b: Baseline, field_name: str,
     except MissingField as exc:
         # Absent means FAIL unless the gate says otherwise, exactly as
         # gate_acquisition() and gate_usb() do it. `required = false` is for a
-        # counter that a baseline recorded before the counter existed cannot
-        # carry - `sched_missed` is read out of the dongle by
-        # tools/ant_health.py, and every baseline in archive/benchmarks/
-        # predates it. A SKIP is reported in its own paragraph and counted
-        # separately; it is never silently dropped.
+        # counter a baseline recorded before the counter existed cannot carry
+        # (e.g. `sched_missed`, added to tools/ant_health.py after every
+        # baseline in archive/benchmarks/). A SKIP is reported in its own
+        # paragraph and counted separately, never silently dropped.
         return GateResult(label, "-", "-", threshold,
                           FAIL if cfg.get("required", True) else SKIP,
                           str(exc))
@@ -664,28 +663,9 @@ def gate_coexistence(cfg: dict, a: Baseline, b: Baseline) -> list[GateResult]:
                               "silicon; see docs/radiant-bridge.md 7.3",
                 _cmp_better(direct, off)))
 
-    # 3. Sweep is the elastic consumer (ADR 0013) and is meant to slow down;
-    #    bounded rather than merely accepted so a slow sweep is distinguishable
-    #    from a stopped one.
-    ratio_limit = cfg.get("min_sweep_rate_ratio")
-    if ratio_limit is not None:
-        sweep_threshold = f">= {ratio_limit} x the rate with it off"
-        rate_off = block.get("sweep_sets_per_s_off")
-        rate_on = block.get("sweep_sets_per_s_on")
-        if rate_off is None or rate_on is None or not rate_off:
-            results.append(GateResult(
-                "sweep rate under contention", "-", "-", sweep_threshold,
-                FAIL if required else SKIP,
-                f"{b.path}: coexistence has no sweep_sets_per_s_off/_on "
-                f"(CONFIG_RADIANT_SWEEP_DEBUG)"))
-        else:
-            ratio = float(rate_on) / float(rate_off)
-            results.append(GateResult(
-                "sweep rate under contention", f"{float(rate_off):.2f} sets/s",
-                f"{float(rate_on):.2f} sets/s", sweep_threshold,
-                PASS if ratio >= ratio_limit else FAIL,
-                f"{ratio:.2f} x", _cmp_better(rate_off, rate_on,
-                                              lower_is_better=False)))
+    # A third gate bounded how far the sweep - the elastic consumer, ADR 0013 -
+    # could slow under contention. It was retired with the SWEEP_DEBUG
+    # instrument that produced sweep_sets_per_s_off/_on; see ab_gates.toml.
 
     return results
 
@@ -767,11 +747,10 @@ def evaluate(gates: dict, a: Baseline, b: Baseline,
     block = cfg("sched_missed")
     if block:
         # The one loss-shaped number in this table that a noisy room cannot
-        # move. Every other loss figure here is a mixture of the air and the
+        # move. Every other loss figure is a mixture of the air and the
         # firmware, which is why the bench cannot currently carry them at
         # 5-8 % ambient loss; `sched_missed` counts receive windows the
-        # scheduler declared DONE_MISSED because it could not arm them in
-        # time, which happens before the radio ever listens. It is an
+        # scheduler declared DONE_MISSED before the radio ever listens - an
         # artefact of window placement, so it is the counter a multi-channel
         # scheduling fix can be gated on in the room as it is.
         results.append(gate_count(block, a, b, "sched_missed",

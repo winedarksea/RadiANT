@@ -9,13 +9,9 @@
  * registers, a TIMER compare and two (D)PPI connections. When a second
  * protocol stack is on the chip, exactly one thing changes: the radio is no
  * longer ours whenever we want it. That is this file - a seam INSIDE the
- * backend rather than a second backend beside it. Splitting into a core plus
- * two front ends was considered instead, but an A/B run can't prove it safe:
- * radiant_radio_hal.h notes a t_sync calibration error changes RX yield by a
- * few tenths of a percent, about the size of the bench's characterised ~0.4%
- * collision floor - too easy to mistake for noise. So instead the direct path
- * compiles to the same machine code as before (see radiant_radio_nrf_gate_direct.c),
- * and the A/B becomes a formality rather than the only evidence.
+ * backend rather than a second backend beside it, so the direct path compiles
+ * to the same machine code as before (see radiant_radio_nrf_gate_direct.c)
+ * and an A/B run isn't the only evidence it's safe.
  *
  * THE ORDER OF EVENTS, WHICH IS THE WHOLE CONTRACT. An arm call has two
  * halves separated by this interface:
@@ -201,7 +197,7 @@ uint32_t gate_min_arm_lead_us(void);
  *
  * Which is to say: true while running in a ZERO-LATENCY interrupt, where no
  * kernel API may be called and no Zephyr lock excludes anything (bug 27, and
- * the (a) split that followed it - docs/p4-zli-kernel-calls.md).
+ * the (a) split that followed it - docs/p4-coexistence-bugs.md).
  *
  * The backend uses it to decide whether a completion may be handed to the core
  * inline or has to go on the trampoline's queue. It is deliberately not
@@ -215,12 +211,8 @@ uint32_t gate_min_arm_lead_us(void);
  *
  * Always false on the direct backend, where there is no such context.
  *
- * DECLARED OUTSIDE THE DIAGNOSTIC BLOCK BELOW, and that is not tidiness: it
- * used to sit inside it, so the backend saw it only on a CONFIG_RADIANT_SWEEP_
- * DEBUG build. The bridge arm has that on and compiled; the Matter arm does not
- * and failed on an implicit declaration - which, had -Werror not been in the
- * way, would have meant an int-returning guess and a completion queue that was
- * bypassed exactly where it was needed most.
+ * DECLARED UNCONDITIONALLY, deliberately: every arm calls it, so any build
+ * that saw this behind a config guard would see no declaration at all.
  */
 bool gate_in_signal(void);
 void radiant_nrf_gate_on_grant(void);
@@ -269,91 +261,6 @@ void radiant_nrf_gate_on_radio_irq(void);
  * No-op in the direct build, where no grant ever ends.
  */
 void radiant_nrf_gate_on_grant_end(void);
-
-#if defined(CONFIG_RADIANT_SWEEP_DEBUG)
-/*
- * A bench probe across the gate seam, and the reason it exists: every counter
- * on either side of the seam can look healthy while no window ever completes.
- * The gate can say "13001 grants delivered, all ended cleanly" and the core can
- * say "13001 chunks, all denied", and neither can tell you whether the RADIO
- * was ever programmed, ever ramped, or ever raised an event inside the grant.
- * These are the six numbers between the two.
- */
-struct radiant_nrf_win_diag {
-	/*
-	 * THE ONE THAT MUST STAY ZERO. Completions raised in a timeslot signal
-	 * callback are queued for the trampoline rather than run there (the (a)
-	 * split, docs/p4-zli-kernel-calls.md); this counts the ones the queue
-	 * had no room for. A dropped completion is a window the core never sees
-	 * finish - a channel that quietly stops rather than a crash - so it is
-	 * carried here rather than left to a comment.
-	 */
-	uint32_t cb_dropped;
-	/* The high-water mark of that queue, so `cb_dropped` staying zero can be
-	 * read as margin rather than luck. */
-	uint32_t cb_depth_max;
-	uint32_t grants;      /* on_grant() entered */
-	uint32_t nostage;     /* ...and found nothing staged to programme */
-	uint32_t prog_ok;     /* ...and the programming succeeded */
-	uint32_t prog_fail;   /* ...and it did not (ETIME) */
-	uint32_t isr;         /* radio_isr() entries, however delivered */
-	uint32_t ev_end;      /* RADIO EVENTS_END seen there */
-	uint32_t ev_disabled; /* RADIO EVENTS_DISABLED seen there */
-	uint32_t term;        /* terminals actually delivered to the core */
-
-	/*
-	 * The peripheral's own account of the last grant, sampled in
-	 * radiant_nrf_gate_on_grant_end() before anything is torn down. This is
-	 * the question no software counter can answer: did the RECEIVER ever
-	 * come up inside the grant we were given?
-	 */
-	uint32_t last_state;   /* RADIO->STATE (0 = DISABLED, 3 = RX) */
-	uint32_t last_events;  /* b0 READY b1 ADDRESS b2 END b3 DISABLED b4 RXREADY */
-	uint32_t saved_rxen;      /* what the swap believes our value is */
-	uint32_t contended;       /* radio_ep_contended, live */
-	uint32_t rxen_attach;     /* RADIO->SUBSCRIBE_RXEN just after attach(true) */
-	uint32_t rxen_prog;       /* ...and just after the operation was programmed */
-	uint32_t last_sub_rxen;   /* RADIO->SUBSCRIBE_RXEN as the grant left it */
-	uint32_t last_inten;      /* RADIO->INTENSET00 as the grant left it */
-	uint32_t ramped;       /* grants whose receiver reached READY/RX */
-	uint32_t never_ramped; /* ...and grants where it never did */
-
-	/*
-	 * THE CROSS-TAB. `ramped`/`never_ramped` above count every grant end,
-	 * including the ones that never programmed anything, so they cannot say
-	 * whether the windows that lost their routing are the same windows that
-	 * lost their packets. These do: they count only SHORT receive windows -
-	 * the tracked slots a loss figure is computed from - and cross them
-	 * against whether our routing was still in the peripheral when the grant
-	 * ended.
-	 *
-	 * "Wiped" is SUBSCRIBE_RXEN no longer holding our value at grant end,
-	 * which on this part means the 802.15.4 driver's nrf_radio_reset() ran
-	 * inside our grant. Every one of these is a count of windows, so
-	 * sw = sw_ramp + (short windows whose receiver never came up), and
-	 * sw_rx <= sw_ramp by construction.
-	 */
-	uint32_t sw;           /* short RX windows programmed inside a grant */
-	uint32_t sw_wipe;      /* ...whose routing was gone by grant end */
-	uint32_t sw_ramp;      /* ...whose receiver reached READY/RX */
-	uint32_t sw_wipe_ramp; /* ...both wiped and ramped */
-	uint32_t sw_rx;        /* ...that actually received a frame */
-	uint32_t sw_wipe_rx;   /* ...wiped AND still received a frame */
-	uint32_t sw_started;   /* ...whose open compare fired at all */
-	uint32_t sw_early;     /* ...scored BEFORE their open compare was due */
-	uint32_t sw_early_us_max; /* worst such shortfall, microseconds */
-	int32_t  sw_last_delta_us; /* scoring instant minus open compare, last one */
-	int32_t  sw_open_lead_us;  /* grant start to window open, last short window */
-	uint32_t sw_open_lead_max; /* ...worst */
-	uint32_t sw_open_late;     /* ...windows opening more than 1 ms into the grant */
-	uint32_t sw_dur_us;        /* how long the last such grant lasted */
-	uint32_t sw_dur_us_max;    /* ...the longest */
-	uint32_t sw_dur_short;     /* ...how many lasted under a millisecond */
-};
-
-void radiant_nrf_win_diag_get(struct radiant_nrf_win_diag *out);
-
-#endif
 
 #ifdef __cplusplus
 }

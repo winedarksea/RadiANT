@@ -14,14 +14,6 @@
 
 #include "ant_dongle_main.h"
 
-#if defined(CONFIG_ANT_DONGLE_BLE_COEX_LOAD)
-#include "ble_coex_load.h"
-#endif
-
-#if defined(CONFIG_ANT_DONGLE_THREAD_COEX_LOAD)
-#include "thread_coex_load.h"
-#endif
-
 #if defined(CONFIG_ANT_DONGLE_MATTER)
 /* src/matter is on this target's include path only inside CMakeLists.txt's
  * `if(CONFIG_CHIP)` block, which is exactly the condition
@@ -40,10 +32,8 @@ LOG_MODULE_REGISTER(ant_dongle_thread, LOG_LEVEL_INF);
  * load-bearing - without it the 1 MHz timebase runs 0.42 % fast on the
  * internal RC between timeslots, invisible in any counter.
  *
- * Failures here are logged, not fatal, because both loads are bench
- * instruments: ANT+ with no second stack beats refusing to boot. The two are
- * legal together - that build is the three-stack case - so this is a second
- * `if`, not an `else`.
+ * Failures here are logged, not fatal: ANT+ with no second stack beats
+ * refusing to boot.
  *
  * The LOG_INF lines are not decoration. A weak override that failed to take
  * (a signature typo is the classic way) is otherwise completely silent, since
@@ -52,16 +42,6 @@ LOG_MODULE_REGISTER(ant_dongle_thread, LOG_LEVEL_INF);
  */
 void ant_dongle_post_radio_init(void)
 {
-#if defined(CONFIG_ANT_DONGLE_BLE_COEX_LOAD)
-	LOG_INF("starting BLE coexistence load");
-	(void)ble_coex_load_start();
-#endif
-
-#if defined(CONFIG_ANT_DONGLE_THREAD_COEX_LOAD)
-	LOG_INF("starting Thread coexistence load");
-	(void)thread_coex_load_start();
-#endif
-
 #if defined(CONFIG_ANT_DONGLE_MATTER)
 	/*
 	 * Package E6. THIS RETURNS IMMEDIATELY, AND THAT IS A REQUIREMENT
@@ -82,15 +62,6 @@ void ant_dongle_post_radio_init(void)
 		LOG_ERR("Matter application task not started - this image will "
 			"bridge nothing to Thread");
 	}
-#endif
-
-#if !defined(CONFIG_ANT_DONGLE_BLE_COEX_LOAD) && \
-	!defined(CONFIG_ANT_DONGLE_THREAD_COEX_LOAD)
-	/* No load configured. Say so anyway: this application without a
-	 * coexistence load on the air is apps/dongle with extra flash, and a
-	 * gate run against it measures arbitration against nothing.
-	 */
-	LOG_INF("no coexistence load configured");
 #endif
 }
 

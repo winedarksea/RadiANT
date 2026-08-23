@@ -562,12 +562,6 @@ config ANT_DONGLE_FLASH_LOG_OFFSET_ALT
 
 endif # ANT_DONGLE_FLASH_LOG
 
-# CONFIG_ANT_DONGLE_BLE_COEX_LOAD and CONFIG_ANT_DONGLE_THREAD_COEX_LOAD used
-# to live here. Both moved to apps/dongle_thread/Kconfig: they are bench
-# instruments for a second wireless stack this application - ANT+-only, by
-# design - never links at all. See apps/dongle_thread/thread_coex_load.c and
-# ble_coex_load.c.
-
 endmenu
 
 # The hostless node's identity and epoch (compat-C6). Its own file and its own

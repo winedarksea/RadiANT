@@ -392,7 +392,7 @@ config RADIANT_BACKEND_NRF_GATE_MPSL
 # every irq_lock() and spinlock, so no kernel API may be called from it. The
 # trampoline turns "call the kernel" into "pend an ordinary interrupt", which a
 # zero-latency context can do with one register write. See
-# radiant/include/radiant/radiant_swi.h and docs/p4-zli-kernel-calls.md.
+# radiant/include/radiant/radiant_swi.h and docs/p4-coexistence-bugs.md.
 config RADIANT_SWI
 	bool
 	default y if RADIANT_BACKEND_NRF_GATE_MPSL
@@ -1135,26 +1135,6 @@ config RADIANT_SEARCH_DENIAL_ESCAPE_RUN
 	  that a set which is genuinely unreachable costs 64 denials rather
 	  than forever. A denial that credits any real dwell resets the run, so
 	  a sweep that is merely slow never escapes at all.
-
-config RADIANT_SWEEP_DEBUG
-	bool "log the search sweep's position once a second"
-	default n
-	help
-	  Bench instrumentation for the discovery path. Once a second, from
-	  api_housekeep(): the selected set, the steer queue depth, the dwell
-	  credited so far, the sweep and scheduler counters, the pump and
-	  housekeeping rates, armed length by slot kind, and how scan chunks
-	  ended.
-
-	  It exists because the sweep's RATE is invisible from the host. A sweep
-	  running at half speed and a healthy one look identical over the wire -
-	  same messages, same responses, no errors - until a device the dongle
-	  could hear takes twenty seconds to appear. Two defects were found with
-	  exactly these counters and neither showed up in any existing statistic:
-	  a chunk-per-set round trip through the event thread, and a set
-	  overspending its dwell because the chunk ceiling never came down.
-
-	  Off by default. -DCONFIG_RADIANT_SWEEP_DEBUG=y on a debug build.
 
 endif # RADIANT
 

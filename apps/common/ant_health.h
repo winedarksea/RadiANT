@@ -83,9 +83,7 @@ enum ant_health_counter {
 	 * within nine seconds of boot, with no channel ever opened. Saturating
 	 * sets the reply's `floor rather than total` flag, so an idle-counting
 	 * field would have poisoned the interpretation of every OTHER field on
-	 * any board left switched on. The number is still available, where it
-	 * belongs, in the once-a-second SWEEP line under
-	 * CONFIG_RADIANT_SWEEP_DEBUG.
+	 * any board left switched on.
 	 */
 	ANT_HEALTH_SWEEP_BUSY,
 	/* Bytes the host-frame parser discarded while it was NOT synced on

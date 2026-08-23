@@ -5,26 +5,21 @@
     Flash one P4 arm to the nRF54L15 DK and capture its log console.
 
 .DESCRIPTION
-    The six runs of the P4 sitting differ only in which image is on the board and
-    what the host is doing to it, so the flash-and-capture half is factored out
-    here rather than retyped six times. Retyping it is how a sitting ends up with
-    one arm that was reset and one that was not.
+    The six runs of the P4 sitting differ only in which image is on the board
+    and what the host is doing to it, so flash-and-capture is factored out
+    here rather than retyped six times.
 
-    THE TWO VCOMs ARE NOT INTERCHANGEABLE AND BOTH ARE USED AT ONCE. The nRF54L15
-    DK presents a pair: COM8 carries the ANT serial protocol that
-    tools/ant_verify.py speaks, and COM7 carries the Zephyr log - which is where
-    the 1 Hz gate dump and the thread-load report come out. This script captures
-    COM7 ONLY, deliberately, so that ant_verify.py can hold COM8 for the same
-    run. A capture that took COM8 would lock out the measurement it exists to
-    annotate.
+    THE TWO VCOMs ARE NOT INTERCHANGEABLE AND BOTH ARE USED AT ONCE. COM8
+    carries the ANT serial protocol that tools/ant_verify.py speaks; COM7
+    carries the Zephyr log (the 1 Hz gate dump and thread-load report). This
+    script captures COM7 ONLY, so ant_verify.py can hold COM8 for the same run.
 
-    DTR IS ASSERTED, ALWAYS. Both DK VCOMs return nothing at all without it and
-    the board then looks hung. That has cost this project a session more than
-    once, so it is not optional here and there is no switch to turn it off.
+    DTR IS ASSERTED, ALWAYS. Both DK VCOMs return nothing at all without it
+    and the board then looks hung.
 
     THE BOARD IS RESET BEFORE EVERY RUN, by the J-Link script's own `r`. The
-    counters this sitting is read from are cumulative since boot, so an arm taken
-    on a board that has been up since the previous arm is not a reading.
+    counters this sitting is read from are cumulative since boot, so an arm
+    taken on a board that has been up since the previous arm is not a reading.
 
     ASCII only: Windows PowerShell 5.1 reads .ps1 as ANSI without a BOM.
 
@@ -72,10 +67,9 @@ if (-not (Test-Path $hex)) {
 }
 if (-not (Test-Path $hex)) { throw "no image for $Arm - run scripts\build_p4.ps1" }
 
-# The backend read-back again, at the point of use. build_p4.ps1 checks it at
-# build time; this checks the thing actually about to be flashed, because the
-# silent fallback to the null backend is indistinguishable from every failure
-# this sitting is chasing and one check at the wrong moment is no check at all.
+# Re-check the backend at the point of use, not just at build time: a silent
+# fallback to the null backend is indistinguishable from every failure this
+# sitting is chasing.
 $cfg = Join-Path $repo "build\$Arm\dongle_thread\zephyr\.config"
 if (-not (Select-String -Path $cfg -Pattern '^CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y' -Quiet)) {
     throw "$Arm was not built with the MPSL gate. Do not take a reading from it."
@@ -88,11 +82,10 @@ $tmp = Join-Path ([IO.Path]::GetTempPath()) 'radiant_p4'
 New-Item -ItemType Directory -Force $tmp | Out-Null
 
 function New-JLinkScript([string]$path, [string]$tail) {
-    # DisableAutoUpdateFW first, ALWAYS. This JLink carries newer OB firmware
-    # than these probes do, its upgrade attempt fails at "Emulator did not
-    # re-enumerate" every time, and it leaves the probe in bootloader until
-    # somebody physically replugs it. Losing that first line is how a probe gets
-    # bricked, and this bench has done it once already.
+    # DisableAutoUpdateFW first, ALWAYS: this JLink carries newer OB firmware
+    # than these probes do, and its auto-upgrade attempt fails at "Emulator did
+    # not re-enumerate" and leaves the probe in bootloader until physically
+    # replugged. This bench has bricked a probe that way once already.
     @"
 exec DisableAutoUpdateFW
 si SWD
@@ -117,10 +110,9 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "JLink flash failed; see $tmp\flash.log" }
     }
 
-    # Open the console BEFORE releasing the core, for the same reason
-    # run_ztest_hw.ps1 does: the first seconds carry the gate's session_open rc
-    # and the backend banner, and a listener that opens afterwards misses
-    # exactly the lines that say whether this image has a radio.
+    # Open the console BEFORE releasing the core (same reason as
+    # run_ztest_hw.ps1): the first seconds carry the gate's session_open rc and
+    # backend banner, which a listener opened afterwards would miss.
     $port = New-Object System.IO.Ports.SerialPort $LogPort, 115200, 'None', 8, 'One'
     $port.DtrEnable = $true
     $port.RtsEnable = $true
@@ -162,22 +154,14 @@ if ($text.Length -eq 0) {
 Write-Host ""
 Write-Host "captured $($text.Length) bytes -> $out" -ForegroundColor Green
 
-# The lines that decide whether the run is usable at all, surfaced now rather
-# than left in the file. A gate that never opened a session and a thread load
-# that never attached both produce a full-looking log.
-foreach ($pat in @('session_open', 'backend', 'thread coexistence load',
-                   'thread role ->', 'MPSL', 'ASSERT', 'FATAL')) {
+# Surface the lines that decide whether the run is usable at all: a gate that
+# never opened a session produces a full-looking log.
+#
+# The per-run 'gate: acq=' summary and the 'thread load:' / 'thread lat us:'
+# lines this used to print are gone with the SWEEP_DEBUG and thread_coex_load
+# instruments, retired when P3/P4 concluded.
+foreach ($pat in @('session_open', 'backend', 'thread role ->',
+                   'MPSL', 'ASSERT', 'FATAL')) {
     $hits = $text -split "`r?`n" | Where-Object { $_ -match $pat } | Select-Object -First 2
     foreach ($h in $hits) { Write-Host "  | $($h.Trim())" }
-}
-
-Write-Host ""
-Write-Host "last gate line:" -ForegroundColor Cyan
-$gate = $text -split "`r?`n" | Where-Object { $_ -match 'gate: acq=' } | Select-Object -Last 1
-if ($gate) { Write-Host "  $($gate.Trim())" } else { Write-Host "  (none - is CONFIG_RADIANT_SWEEP_DEBUG on?)" }
-
-Write-Host "last thread lines:" -ForegroundColor Cyan
-foreach ($p in @('thread load:', 'thread lat us:', 'thread mac d:')) {
-    $l = $text -split "`r?`n" | Where-Object { $_ -match $p } | Select-Object -Last 1
-    if ($l) { Write-Host "  $($l.Trim())" }
 }

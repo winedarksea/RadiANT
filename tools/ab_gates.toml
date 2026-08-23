@@ -4,271 +4,80 @@
 #
 # This file exists separately from `archive/benchmarks/` for one reason: a
 # baseline records what was measured, and a gate records what is required.
-# Keeping them in two files is what makes it obvious when somebody moves a
-# threshold to meet a result instead of the other way round. Every number below
-# is therefore a reviewable line in a diff, with the reason it has the value it
-# has written next to it.
+# Keeping them in two files makes it obvious when somebody moves a threshold
+# to meet a result instead of the other way round. Every number below is a
+# reviewable line in a diff, with the reason for its value next to it.
 #
-# The thresholds themselves come from `docs/testing.md`, which is the authority.
-# If the two ever disagree, the document is right and this file is stale.
+# The thresholds themselves come from `docs/testing.md`, which is the
+# authority. If the two ever disagree, the document is right and this file is
+# stale.
 #
-# Two rules that are not thresholds, and that have both already gone wrong here
-# once:
+# Two rules that are not thresholds, and that have both already gone wrong
+# here once:
 #
 #   * Read `loss (exact)`, never the wall-clock line. The wall-clock figure
-#     divides elapsed time by the nominal period and assumes the transmitter's
-#     crystal is exact; `loss (exact)` counts what is missing from the
-#     transmitter's own event counter, with no clock involved.
-#   * Gate on `timing`, never on `jitter`. `jitter` is a standard deviation over
-#     raw gaps, so one lost packet turns a 250 ms gap into a 500 ms one and six
-#     losses in 1,200 packets produce its entire figure. It has always moved
-#     with the loss number and adds nothing to it. `timing` is the same packets
-#     with the whole periods subtracted out: the error without the count.
+#     divides elapsed time by the nominal period and assumes the
+#     transmitter's crystal is exact; `loss (exact)` counts what is missing
+#     from the transmitter's own event counter, with no clock involved.
+#   * Gate on `timing`, never on `jitter`. `jitter` is a standard deviation
+#     over raw gaps, so one lost packet turns a 250 ms gap into a 500 ms one
+#     and six losses in 1,200 packets produce its entire figure - it has
+#     always moved with the loss number and adds nothing to it. `timing` is
+#     the same packets with the whole periods subtracted out: the error
+#     without the count.
 #
 # `tools/ant_ab.py` enforces both by reading `derived.loss_exact_pct` and
-# `derived.timing_offgrid_host_ms` and by having no code path that reads either
-# of the other two. This comment is here so that stays deliberate.
+# `derived.timing_offgrid_host_ms` and by having no code path that reads
+# either of the other two.
 #
 # ---------------------------------------------------------------------------
-# 2026-08-15: THESE THRESHOLDS CANNOT BE RE-DERIVED ON THE CURRENT BENCH, AND
-# NO A/B/A SITTING RUN ON IT TODAY IS VALID. Read this before planning one.
+# 2026-08-15: bench floor investigation - read before recalibrating
 # ---------------------------------------------------------------------------
 #
-# The plan's Phase 1.1 asked for one recalibration run with the host's RZ616
-# Wi-Fi 6E card disabled, on the theory that every number below "describes a
-# room with a Wi-Fi 6E card in it". That run was NOT done and should not be:
-# the card is this machine's only network interface, so disabling it severs the
-# bench host, and - decisively - the room carries so much other 2.4 GHz traffic
-# that switching off one local card isolates nothing. Turning it off cannot
-# answer the question it was proposed to answer. Do not re-propose it.
+# The plan's Phase 1.1 asked for a recalibration run with the host's Wi-Fi 6E
+# card disabled. Not done, and should not be: the card is this machine's only
+# network interface, and the room carries enough other 2.4 GHz traffic that
+# switching off one local card would isolate nothing.
 #
-# What was done instead is the measurement that actually bounds these numbers:
-# three A-leg repeats, taken back to back with nothing changed between them.
+# What was measured instead: the acceptance rig (Feather DUT, sdk_ant,
+# USB_LEGACY; nRF54L15 DK master running apps/sim, RF 57) repeats at
+# 4.87-7.94 % loss (exact) across four 60-300 s runs, with an A1-A2 spread of
+# 3.07 pp - nine times `repeat_a_max_delta_pp` below. A threshold cannot be
+# re-derived from a bench whose own repeat spread is ten times the threshold
+# being derived, so no A/B/A sitting on this bench is currently valid.
 #
-#   rig  DUT   Feather nRF52840, apps/dongle, sdk_ant backend, USB_LEGACY
-#        MASTER nRF54L15 DK running apps/sim FIRMWARE (not tools/ant_sim.py
-#               driving a dongle - baseline.schema.json refuses that, and
-#               section 7.4.1 of docs/radiant-bridge.md says why), device
-#               number pinned to 33333, RF 57, 100 W / 80 rpm
+# Four candidate explanations were chased in the same afternoon - room-wide
+# contention, which rig, which stack, and finally transmit power - and each
+# was overturned by the next control rather than confirmed. Do not reuse any
+# of them as settled without re-running the control that overturned it
+# (`git log` on this file carries the full trace). The surviving lead: most
+# of the gap tracked transmit power (apps/sim at +4 dBm roughly halved the
+# loss), and an nRF54L15 master cannot reach the power level a Feather master
+# can (level 5 / +8 dBm is nRF52-only). Every historical figure in this file
+# - the 0.85-1.37 % power sweep and the 0.26-0.60 % floor below - was taken
+# with a Feather transmitting, not an nRF54L15.
 #
-#   A1   300 s   loss (exact) 7.94 %   93 of 1171 missing
-#   A2   300 s   loss (exact) 4.87 %   57 of 1171 missing
-#   A3   120 s   loss (exact) 7.04 %   33 of  469 missing
-#   A4    60 s   loss (exact) 7.23 %   17 of  235 missing
+# BEFORE PHASE 1.7: move the master off the nRF54L15 - build apps/sim for the
+# Feather (build/sim_feather/sim/zephyr/zephyr.uf2 already exists) and put
+# the DUT on the L15 - then re-take A1/A2. Only once that repeats inside
+# `repeat_a_max_delta_pp` do these thresholds mean anything; re-deriving them
+# from the current bench would bake its unexplained loss into the product's
+# acceptance criteria.
 #
-# Every packet of it was reported by the radio as RX_FAIL, so `unexplained_loss`
-# is 0 and each run is individually valid - the loss is real air, not a host or
-# dongle fault. Power and cadence decoded to within 1.7 of target throughout and
-# accumulator continuity was clean, so the link and the instrument are both
-# fine. Signal was -54 to -55 dBm, far above the ~-90 dBm ANT tracks to, so it
-# is not a range or sensitivity problem either.
+# A parallel attempt to separate room from rig with a quiet RF channel (72 or
+# 78) did not produce a result: both ends report success but nothing is
+# heard, on any channel, until the RF-57 build is reflashed. Not yet
+# root-caused; the next probe is a non-ANT+ network key on a private network
+# number.
 #
-# THE SPREAD IS THE RESULT. A1 vs A2 is 3.07 pp against
-# `repeat_a_max_delta_pp = 0.35` below - a factor of nearly nine. That gate's
-# own rule is that A1 and A2 disagreeing by more than it VOIDS THE SITTING, so
-# an A/B/A run on this bench is void before the B leg is even flashed. And a
-# threshold cannot be re-derived from a bench whose repeat spread is ten times
-# the threshold being derived.
+# One more trap already spent on this bench: on nRF54L, the log clock behind
+# the console timestamp free-runs across a soft reset, so a climbing uptime
+# across a reflash is not evidence the board didn't reset - read the boot
+# banner instead.
 #
-# The absolute numbers are an order of magnitude above `absolute_ceiling_pct`
-# (1.5) and more than an order above the 0.26-0.60 % floor recorded in
-# `archive/benchmarks/`, so this is not the old floor drifting - it is a
-# different regime.
-#
-# MECHANISM: "IT IS THE ROOM" WAS PROPOSED AND IS NOT SUPPORTED. Read this
-# before acting on the trainer.
-#
-# The obvious candidate was co-channel ANT+ contention: a real trainer is
-# powered on in the room broadcasting THREE device types at once (#52233 as
-# speed, power meter and fitness equipment), continuously, on the ANT+ frequency
-# under the ANT+ network key. That is a direct collision mechanism and has
-# nothing to do with Wi-Fi.
-#
-# It does not survive the control. A SECOND rig was measured minutes later, in
-# the same room, with that trainer still transmitting:
-#
-#   rig A   DUT Feather nRF52840, sdk_ant, USB_LEGACY
-#           MASTER nRF54L15 DK running apps/sim firmware
-#           -> 7.94 / 4.87 / 7.04 / 7.23 / 5.98 %      signal -53 to -55 dBm
-#
-#   rig B   DUT nRF54L15 DK, radiant core + nrf, UART
-#           MASTER Feather driven by tools/ant_sim.py
-#           -> 0.83 % over 60 s; 21 RX_FAIL of 1202 (1.75 %) over 300 s
-#                                                      signal -46 dBm
-#
-# Three to five times less loss, same room, same interferer, same afternoon. A
-# room-wide contention floor cannot do that. So the dominant variable is THE
-# RIG, and the configuration carrying the loss is rig A - which is the A leg of
-# the ADR 0001 acceptance and the shipping release artifact.
-#
-# AND THE SINGLE-AXIS SPLIT NARROWS IT TO THE MASTER, NOT THE DUT. Rig A and
-# rig B differ in every axis at once, so neither on its own attributes anything.
-# One further run changes only ONE thing - the same Feather DUT, unflashed and
-# unchanged (sdk_ant, USB_LEGACY), against the same nRF54L15 DK, with only what
-# that board is RUNNING swapped:
-#
-#   master = apps/sim firmware (sdk_ant)          -> 4.87-7.94 %   -53..-55 dBm
-#   master = apps/dongle core+nrf via ant_sim.py  -> 2.35 %        -49 dBm
-#                                                    (17 RX_FAIL of 722, 180 s)
-#
-# Same board, same receiver, same room, same afternoon, one variable. So a large
-# part of rig A's loss is on the TRANSMIT side and is a property of what the L15
-# was running - it is not the Feather, not the USB transport, not the sdk_ant
-# receive path, and not the room.
-#
-# NOT transmit power, which is already settled and must not be re-run:
-# ANT_SIM_TX_POWER's own help records 300 s runs at -12, 0 and +4 dBm - a 16 dB
-# spread - with loss staying between 0.85 and 1.37 %. Loss that survives 16 dB
-# is not a link-budget problem.
-#
-# IT IS NOT UNSUPPORTED SILICON, and an earlier version of this note said it
-# was. That claim - "sdk-ant is an nRF52 stack by construction, see ANT_LIB_DIR
-# keying off SOC_SERIES_NRF52X" - is WRONG and is retracted. The build's own
-# .config reads CONFIG_ANT_LIB_DIR="nrf54l", and sdk-ant ships
-# lib/nrf54l/{hard,soft,softfp}-float/libant.a at 149 KB each. apps/sim on an
-# nRF54L15 is a fully supported configuration. (The SOC_SERIES_NRF52X business
-# is a v3.4.0 Kconfig-rename BUILD failure, recorded elsewhere; it is not a
-# statement about which parts sdk-ant supports.)
-#
-# So the comparison the split actually made is sharper than "one rig is
-# broken". Same nRF54L15 board, same ANT+ power profile at 4 Hz, same unchanged
-# Feather receiver, same room, both configurations supported:
-#
-#   sdk-ant's ANT stack   (apps/sim firmware)              -> 4.87-7.94 %
-#   radiant's clean-room stack (apps/dongle core+nrf)      -> 2.35 %
-#
-# That is a TRANSMIT-side comparison between the two stacks, and radiant is the
-# better of the two on this evidence. Which, if it survives a controlled repeat,
-# is a result about the product rather than a fault in the bench.
-#
-# AND IT WAS MOSTLY TRANSMIT POWER. That test was run, and it changes the
-# conclusion again - so the "radiant transmits better" reading above is weakened
-# and must not be quoted on its own.
-#
-# apps/sim defaults to ANT_SIM_TX_POWER 3 (0 dBm) while apps/dongle carries
-# ANT_DONGLE_TX_POWER_BOOST=y. Rebuilding apps/sim at level 4 (+4 dBm) and
-# changing NOTHING else - same board, same unchanged Feather DUT, same room:
-#
-#   apps/sim @ 0 dBm    4.87 / 7.04 / 7.23 / 7.94 %   -53..-55 dBm
-#   apps/sim @ +4 dBm   3.07 / 2.22 %                 -49 dBm
-#   apps/dongle master  2.35 %                        -49 dBm
-#
-# Power more than halved the loss and brought apps/sim to within 0.7 pp of the
-# radiant-stack master at the same signal level. So most of the gap was link
-# margin, not the stack, and the stack comparison is not established.
-#
-# IT ALSO IMPROVED THE THING THE GATE ACTUALLY MEASURES, THOUGH NOT ENOUGH.
-# Five 300 s repeats at +4 dBm, nothing touched between them:
-#
-#   3.07  2.22  1.79  3.75  3.92 %
-#
-# Range 2.13 pp, against 3.07 pp at 0 dBm. Better, still 6x
-# `repeat_a_max_delta_pp`, so a sitting on this bench remains void.
-#
-# TWO WARNINGS FROM THAT SERIES, both of which nearly caught me.
-#
-# It is NOT settling. The first three readings fall monotonically - 3.07, 2.22,
-# 1.79 - and with n=3 that reads as a warm-up transient converging on a usable
-# floor. It is not: the next two go back up. Three points were enough to see a
-# trend that does not exist, and the interferer was verified still transmitting
-# throughout (#52233 on all three device types), so the decline was not the room
-# quieting either. Take five before believing a direction.
-#
-# And DO NOT CHERRY-PICK A PASSING PAIR. Consecutive deltas across that series
-# are 0.85, 0.43, 1.96 and 0.17 pp. The last pair passes the 0.35 pp gate
-# outright, by luck. Two adjacent runs agreeing is not the bench being fit; this
-# file's own header exists because moving a threshold to meet a result is the
-# failure mode, and picking the pair that meets an unmoved threshold is the same
-# act wearing a better hat. The gate wants A1 and A2 of THE SITTING, chosen
-# before they are read.
-#
-# ANT_SIM_TX_POWER's help claimed 16 dB of power moved loss not at all. That is
-# true AT ~1 % LOSS and false on a marginal link; the help has been corrected
-# rather than left to send the next person the wrong way.
-#
-# WHAT TO DO WITH IT, and it is now a quantified reason rather than a hunch:
-# LEVEL 5 (+8 dBm) IS nRF52-ONLY. An nRF54L master cannot reach the power a
-# Feather master can, and 4-6 dB has just been shown to halve both the loss and
-# the spread on this bench. Every historical figure - the 0.85-1.37 % and the
-# 0.26-0.60 % floor - was taken with a Feather transmitting. So: build apps/sim
-# for the Feather (already done, build/sim_feather/sim/zephyr/zephyr.uf2), put
-# the DUT on the L15, and re-take A1/A2. That is exactly what Phase 2.7(b) asks
-# for, and it now has a mechanism behind it. It needs one RESET double-tap on
-# the Feather, which has no software path on a bulk-ANT image.
-#
-# An attempt to separate room from rig by moving both ends to a quiet channel
-# (RF 72 and the RF 78 that ANT_SIM_RF_FREQ's help recommends) did not work -
-# see the note below - so that route to the same answer is currently closed.
-#
-# THE QUIET-CHANNEL EXPERIMENT WAS ATTEMPTED AND DID NOT PRODUCE A RESULT.
-# `apps/sim`'s own Kconfig (`ANT_SIM_RF_FREQ`) documents exactly this test and
-# exactly this purpose - "whether packet loss on the bench is the radio
-# environment or the boards ... loss that vanishes was the room; loss that
-# follows is worth chasing" - and recommends RF 2 or 78 as clear of Wi-Fi 1, 6
-# and 11. Both RF 72 and the recommended RF 78 were built, flashed and tried.
-#
-# Symptom, which is NOT a simple mistake and is worth knowing before repeating
-# it: the DUT accepts the frequency (`OK: ch0 radio frequency`), the sim's own
-# console shows it transmitting B-PWR page 16 continuously, and NOTHING is heard
-# - not on the new frequency and not on 57 either. Re-flashing the RF-57 build
-# restores the link immediately and reproducibly (A3 and A4 above were taken
-# that way), so neither board is broken and the flash path is fine.
-#
-# NARROWED, 2026-08-15. Two candidates were proposed and the first is REFUTED:
-#
-#   NOT the profile library overriding the patch. sdk-ant's
-#   BPWR_SENS_CHANNEL_CONFIG_DEF sets `.rf_freq = BPWR_ANTPLUS_RF_FREQ` in the
-#   struct, and ant_channel_config.c then calls
-#   `ant_channel_radio_freq_set(p_config->channel_number, p_config->rf_freq)` -
-#   the patched field, not the constant. The patch reaches the call.
-#
-#   NOT a failed init on the sim. Capturing COM7 across a flash of the RF-78
-#   build shows a clean boot with no error at all: "ANT B-PWR channel 0 init",
-#   "tx power level 3", "bicycle power (0x0B) open: device #33333, trans type 5,
-#   torque mode 1, 100 W at 80 rpm". The sim believes it is open.
-#
-#   NOT a failed set on the DUT, as far as the serial layer can tell: the dongle
-#   answers "OK: ch0 radio frequency".
-#
-# And with the RF-78 image running, the DUT was swept across 66 (ANT's own
-# default), 78 and 57 and heard NOTHING on any of them.
-#
-# So both ends report success and no link exists, which leaves the remaining
-# candidate: one of the two stacks silently ignores or clamps a non-ANT+
-# frequency while the ANT+ NETWORK KEY is installed, and answers OK anyway. That
-# would also explain why the console's page counter keeps advancing - the
-# profile's page handler runs on a timer and is not evidence of radiation, which
-# is its own trap worth knowing.
-#
-# Resolving it is worth someone's afternoon: it would make the room-versus-boards
-# question answerable without anyone physically switching a trainer off, which is
-# currently the only thing standing between this bench and Phases 1.7 and 2.7.
-# The obvious next probe is a non-ANT+ network key on a private network number,
-# which decouples the two variables the hypothesis ties together.
-#
-# BENCH NOTE, CORRECTED: an earlier version of this comment said
-# scripts/flash_sim_jlink.ps1 does not reset the board, on the evidence that the
-# console's uptime kept climbing across a reflash (00:14:06 -> 00:14:36). THAT
-# INFERENCE WAS WRONG. Capturing COM7 across a flash shows the full boot banner
-# - "ANT+ sensor simulator starting", the identity line, the channel open - so
-# the board does reset and the new image does run. What survives is the LOG
-# TIMESTAMP: on nRF54L the clock behind it free-runs across a soft reset, so
-# uptime is not a reset indicator on this part. Read the boot banner, not the
-# timestamp, and not the script's own success message either.
-#
-# WHAT HAS TO HAPPEN BEFORE PHASE 1.7. Not "quieten the room" - see the control
-# above - and not a bench sitting either, on current evidence. Move the master
-# off the nRF54L15: build apps/sim for the Feather and put the DUT on the L15.
-# If the 5-8 % follows the master's silicon, the acceptance RIG was wrong rather
-# than the product, and 1.7 is unblocked by a build. Only when rig A's own loss
-# is understood, and A1 vs A2 repeats inside 0.35 pp, do these thresholds mean
-# anything - and re-deriving them from a bench whose loss is unexplained would
-# bake that fault into the product's acceptance criteria, which is the one
-# outcome to avoid.
-#
-# And before fitting any threshold here to a bench number: check the number can
-# be accounted for. The previous 1.0 -> 2.5 % retune was fitted to a broken
-# measurement and encoded the tool's own bug as the spec.
+# And before fitting any threshold here to a bench number: check the number
+# can be accounted for. The previous 1.0 -> 2.5 % retune was fitted to a
+# broken measurement and encoded the tool's own bug as the spec.
 
 schema_version = 1
 
@@ -276,50 +85,39 @@ schema_version = 1
 # ---------------------------------------------------------------------------
 # The sitting
 #
-# Not a gate on the firmware - a gate on whether the two numbers are comparable
-# at all. The run-to-run spread on this bench is comparable to the effect being
-# measured, so a number recorded today against a number recorded last week
-# measures the room, the neighbours' Wi-Fi and the position of the boards on the
-# desk. `docs/testing.md` states A/B/A in one sitting as a hard rule; this is
-# where the rule is enforced rather than remembered.
+# Not a gate on the firmware - a gate on whether the two numbers are
+# comparable at all. The run-to-run spread on this bench is comparable to
+# the effect being measured, so a number recorded today against one recorded
+# last week measures the room and the desk, not the firmware. `docs/testing.md`
+# states A/B/A in one sitting as a hard rule; this is where it is enforced
+# rather than remembered.
 # ---------------------------------------------------------------------------
 [sitting]
 
-# Both baselines must carry the same `meta.recorded` date. A date-time is
-# compared by its date part: one sitting can straddle an hour, not a night.
+# Both baselines must carry the same `meta.recorded` date, compared by date
+# part only: one sitting can straddle an hour, not a night.
 require_same_recorded_date = true
 
-# `rig` must match object-for-object. Two results are only comparable if their
-# rigs are - same transmitter, same receiver board, same link, same RF channel,
-# same attenuation. A changed cable is a changed measurement.
+# `rig` must match object-for-object - same transmitter, receiver, link, RF
+# channel and attenuation. A changed cable is a changed measurement.
 require_same_rig = true
 
-# A baseline from an arbitrated build MUST carry `rig.second_stack`, naming what
-# else was on the chip's radio: "none", "ble", "thread_sed", "thread_med".
-#
-# NO SEPARATE SWITCH FOR IT, AND THAT IS THE POINT RATHER THAN AN OMISSION.
-# `require_same_rig` above compares the whole `rig` object, so a field inside it
-# is already enforced - adding `require_same_second_stack = true` here would
-# read as the rule and be inert, because `ant_ab.py` reads the two keys above
-# and no others. Recording the field in the rig is the whole of the mechanism.
-#
-# The failure it prevents is specific: comparing a BLE-on run against a
-# Thread-on run produces a coexistence figure for neither, and both runs look
-# perfectly well-formed. The sitting is refused before any gate is reached.
-#
-# Baselines recorded before the arbitrated build existed have no such field.
-# They are not wrong - those runs owned the radio outright - but they will
-# refuse to compare against a run that names one, which is the correct answer.
+# A baseline from an arbitrated build must carry `rig.second_stack` (naming
+# what else was on the chip's radio: "none", "ble", "thread_sed",
+# "thread_med"). There is no separate `require_same_second_stack` switch -
+# `require_same_rig` above already compares the whole `rig` object, so
+# recording the field there is the entire mechanism. It prevents comparing a
+# BLE-on run against a Thread-on run as if either produced a coexistence
+# figure alone. Baselines recorded before the arbitrated build existed carry
+# no such field and will correctly refuse to compare against one that does.
 
-# A/B/A: pass three baselines and the first and last must be the same backend
-# and must agree to within this many percentage points of exact loss. If they do
-# not, the sitting is void and the B number means nothing - the repeated A is
-# the only thing that separates a backend difference from an afternoon.
+# A/B/A: pass three baselines and the first and last must be the same
+# backend and agree to within this many percentage points of exact loss, or
+# the sitting is void and the B number means nothing.
 #
-# 0.35 pp is the characterised spread of this bench: four identical 300 s runs
-# landed between 0.26 % and 0.60 %, and 0.60 - 0.26 = 0.34. Rounded up rather
-# than padded, because a wider allowance would let the check pass on a sitting
-# that was genuinely unstable.
+# 0.35 pp is this bench's characterised spread: four identical 300 s runs
+# landed between 0.26 % and 0.60 %, and 0.60 - 0.26 = 0.34, rounded up rather
+# than padded.
 repeat_a_max_delta_pp = 0.35
 
 
@@ -330,21 +128,16 @@ repeat_a_max_delta_pp = 0.35
 enabled = true
 required = true
 
-# Byte-identical is the pass. `tools/ant_conformance.py` suppresses timestamps
-# precisely so this is reachable.
+# Byte-identical is the pass. `tools/ant_conformance.py` suppresses
+# timestamps precisely so this is reachable.
 require_byte_identical = true
 
-# Cases allowed to differ, each of which is a decision somebody has to make and
-# defend in review. Empty by default, and it should stay empty for as long as
-# possible.
-#
-# The one entry that will legitimately be needed is
-# "4d-request-version-0/valid": MESG_VERSION returns the backend's own name, so
-# sdk-ant and radiant cannot both answer it identically and should not try.
-# Adding it here is better than dropping 0x3E from the conformance run, because
-# the reply's *length and framing* still get checked - only its contents are
-# excused. Add it when the first real A/B runs, not before: an allowance added
-# speculatively excuses a difference nobody has looked at.
+# Cases allowed to differ, each a decision reviewed and defended individually.
+# Empty by default and should stay that way as long as possible. The one
+# entry that will legitimately be needed is "4d-request-version-0/valid":
+# MESG_VERSION returns the backend's own name, so sdk-ant and radiant cannot
+# answer it identically. Add it only when the first real A/B run needs it -
+# an allowance added speculatively excuses a difference nobody has looked at.
 allowed_differing_cases = []
 
 
@@ -360,101 +153,91 @@ required = true
 # ratio gate would either permit doubling or forbid ordinary noise.
 max_delta_pp = 0.2
 
-# Only runs at least this long count. Shorter runs do not wrap the slow
-# accumulators and their loss resolution is coarse.
+# Shorter runs do not wrap the slow accumulators and their loss resolution
+# is coarse.
 min_seconds = 300
 
-# The acceptance ceiling, applied to the candidate on its own. A backend can be
-# within 0.2 pp of an sdk-ant run that was itself having a bad afternoon.
+# The acceptance ceiling, applied to the candidate on its own - a backend can
+# be within 0.2 pp of an sdk-ant run that was itself having a bad afternoon.
 absolute_ceiling_pct = 1.5
 
-# Informational only, and deliberately not a failure. The characterised floor of
-# this bench is 0.26-0.60 %; a figure below 0.26 % is suspicious rather than
-# excellent, and the last time a number looked too good it was the measuring
-# tool that was broken. `ant_ab.py` prints a warning and does not fail.
+# Informational only, deliberately not a failure. This bench's characterised
+# floor is 0.26-0.60 %; a figure below 0.26 % is suspicious rather than
+# excellent - the last time a number looked too good, the measuring tool was
+# broken. `ant_ab.py` prints a warning and does not fail.
 suspicious_below_pct = 0.26
 
 [gates.unexplained_loss]
 enabled = true
 required = true
 
-# A hole with no RX_FAIL to account for it. The radio raises an RX_FAIL for a
-# packet lost on the air and says nothing at all about one lost after the radio
-# already had it, so a nonzero value here is a bug on the host or in the dongle
-# and not a property of the link. This is the check that caught the 250 ms
-# libusb read timeout racing a 249.7 ms channel period - about 0.4 pp of
-# entirely imaginary loss that looked exactly like the real kind.
-#
-# Zero, and it invalidates the sitting rather than failing one gate.
+# A hole with no RX_FAIL to account for it. The radio raises RX_FAIL for a
+# packet lost on the air and says nothing about one lost after the radio
+# already had it, so a nonzero value here is a host or dongle bug, not a
+# link property. This is the check that caught a 250 ms libusb read timeout
+# racing a 249.7 ms channel period - about 0.4 pp of entirely imaginary loss
+# that looked exactly like the real kind. Zero, and it invalidates the
+# sitting rather than failing one gate.
 max = 0
 
 [gates.accumulator_violations]
 enabled = true
 required = true
 
-# ANT+ profiles survive packet loss because values are cumulative sums rather
-# than instantaneous readings, so a lost packet is recovered by the next one. A
-# continuity violation means that property broke, which is a decoding or a
-# wrap-handling bug rather than a link problem.
+# ANT+ profiles survive packet loss because values are cumulative sums
+# rather than instantaneous readings, so a lost packet is recovered by the
+# next one. A continuity violation means that property broke - a decoding or
+# wrap-handling bug, not a link problem.
 max = 0
 
 [gates.sched_missed]
 enabled = true
 
-# Not required, and for one narrow reason: this counter is read out of the
-# dongle by `tools/ant_health.py` (MESG_RADIANT_HEALTH, 0xF6), which needs
-# CONFIG_ANT_DONGLE_HEALTH_COUNTERS=y, and no baseline recorded before this
-# gate existed carries it. A sitting without it reports SKIP in its own
-# paragraph rather than failing - and `libant.a` has no such counter to report
-# at all, so requiring it would fail every sdk-ant reference by construction.
+# Not required: this counter comes from `tools/ant_health.py`
+# (MESG_RADIANT_HEALTH, 0xF6, needs CONFIG_ANT_DONGLE_HEALTH_COUNTERS=y), and
+# no baseline recorded before this gate existed carries it - `libant.a` has
+# no such counter at all, so requiring it would fail every sdk-ant reference
+# by construction. A sitting without it reports SKIP rather than failing.
 required = false
 
-# Receive windows the scheduler declared DONE_MISSED: it could not arm them in
-# time, so the radio never listened in them. That makes this the one
-# loss-shaped number in the table that the room cannot move - every other loss
-# figure here mixes the air in with the firmware, which is why the bench at
-# 5-8 % ambient loss (2026-08-15, see the header) cannot currently carry them.
-# A scheduling artefact is measurable in a noisy room; on-air loss is not.
-#
-# Zero, because a missed window is not a link property. At one channel it is
-# structurally impossible - there is nothing to collide with - which is
-# precisely why it stayed at zero and unexamined for so long, and why the
-# multi-channel runs are the ones to read it on.
+# Receive windows the scheduler declared DONE_MISSED - it could not arm them
+# in time, so the radio never listened. This is the one loss-shaped number
+# the room cannot move: every other loss figure here mixes the air in with
+# the firmware, which is why the bench's 5-8 % ambient loss (see the header)
+# cannot currently carry them. Zero, because a missed window is not a link
+# property - at one channel it is structurally impossible, which is why it
+# stayed at zero and unexamined for so long, and why multi-channel runs are
+# the ones to read it on.
 max = 0
 
 [gates.timing]
 enabled = true
 required = true
 
-# <= sdk-ant x 1.25, read off the `timing` line and not the `jitter` one. See
-# the header. Expect ~2.6 ms on the host clock; the radio's own clock reads
-# ~0.009 ms, which is what says the host clock is the instrument and the link is
-# fine.
+# <= sdk-ant x 1.25, read off `timing`, never `jitter` (see the header).
+# Expect ~2.6 ms on the host clock; the radio's own clock reads ~0.009 ms,
+# which is what says the host clock is the instrument and the link is fine.
 max_ratio = 1.25
 
-# A ratio against a number that is already tiny goes unstable, so a small
-# absolute allowance underwrites it: anything within this many milliseconds
-# passes regardless of the ratio.
+# A ratio against an already-tiny number goes unstable, so a small absolute
+# allowance underwrites it: anything within this many ms passes regardless
+# of the ratio.
 floor_ms = 0.5
 
 [gates.acquisition]
 enabled = true
 
-# 2026-08-16: FLIPPED TO false. No baseline in archive/benchmarks/ carries
-# time_to_first_packet_s or reacquire_s yet - the producers
+# 2026-08-16: flipped to false. No baseline in archive/benchmarks/ yet
+# carries time_to_first_packet_s or reacquire_s - the producers
 # (tools/ant_verify.py's T1 stamping and T2 --expect-dropout mode) landed in
-# this commit, but no S2 sitting has been run against them, so with
-# required=true this gate was a GUARANTEED FAIL by construction (see the
-# reviewer table: "Measurement: acquisition gate - Guaranteed FAIL
-# (required=true, no producer exists)"). Flips back to true in the same
-# commit that archives S2's baselines - do not leave this false any longer
-# than that, and do not treat this flip as license to leave the gate
-# unenforced past that point.
+# this commit but no S2 sitting has run against them, so required=true would
+# be a guaranteed fail by construction. Flip back to true in the same commit
+# that archives S2's baselines, and no later.
 required = false
 
 # Time to first packet and time to re-acquire after a deliberate dropout.
-# <= sdk-ant x 1.5 AND <= 5 s absolute - both, not either. The absolute limit is
-# what a rider notices; the ratio is what stops a slow baseline excusing a
+# <= sdk-ant x 1.5 AND <= 5 s absolute - both, not either. The absolute
+# limit is what a rider notices; the ratio stops a slow baseline excusing a
 # slower rebuild.
 max_ratio = 1.5
 max_absolute_s = 5.0
@@ -463,158 +246,112 @@ max_absolute_s = 5.0
 enabled = true
 required = true
 
-# Attenuation (or distance, if there is no inline attenuator) at 5 % exact loss,
-# within 1 dB-equivalent of sdk-ant on the same rig. Same transmitter, same
-# link, receivers swapped - an open-air path is only comparable within one
-# sitting, which is why the sitting checks above are not optional here.
-#
-# Required, and required on purpose: sensitivity is a stated core value of this
-# project - the nRF52840's ~10 dB over an nRF24AP2 is in the first paragraph of
-# README.md - and it is the figure the EFR32 question turns on. It is also the
-# slot most likely to be skipped because it takes the longest, and the one with
-# the least chance of being recoverable after sdk-ant access lapses.
+# Attenuation (or distance) at 5 % exact loss, within 1 dB-equivalent of
+# sdk-ant on the same rig, receivers swapped. Required on purpose:
+# sensitivity is a stated core value of this project - the nRF52840's
+# ~10 dB over an nRF24AP2 is in README.md's first paragraph - and it is also
+# the slot most likely to be skipped because it takes longest.
 max_delta_db = 1.0
 
-# How the dB was applied. Every method here measures the same knee; none of them
-# is comparable to another, because each carries its own systematic offset - an
-# inline attenuator adds connector loss, a distance measurement carries whatever
-# the room reflects, and a transmit-power ladder carries the part's own power
-# accuracy. `ant_ab.py` refuses a comparison across two methods rather than
-# converting between them, and `rig.link.sensitivity_method` is recorded so that
-# `require_same_rig` refuses the whole sitting before any gate is reached.
-#
-# `tx_ladder` is `tools/ant_sens.py`: the master's transmit power is stepped
-# down until the receiver misses 5 %, which is the same attenuation applied at
-# the other end of the link. It exists because the other two are hardware this
-# bench does not have, and it is not the closed sweep of the dongle's own
-# transmit power against loss at high SNR - that one measured the transmitter,
-# this one measures the receiver. The tool's header says so at length for the
-# next person who reads the memory and reaches for the stop button.
+# Every method here measures the same knee but carries its own systematic
+# offset (connector loss, room reflections, or the part's own power
+# accuracy), so `ant_ab.py` refuses to compare across methods rather than
+# convert between them; `rig.link.sensitivity_method` is part of
+# `require_same_rig` for the same reason. `tx_ladder` (`tools/ant_sens.py`)
+# steps the master's transmit power down until the receiver misses 5 %,
+# standing in for the inline attenuator and open-air rig this bench lacks -
+# it measures the receiver, not the transmitter power sweep documented
+# elsewhere.
 methods = ["inline_attenuator", "fixed_open_air", "tx_ladder"]
 
-# Phase 0's gate on the instrument rather than on the firmware.
-#
-# `tools/ant_sens.py --repeat 2` runs the whole ladder twice without touching
-# the rig, and the two 5 %-loss points must land within this many dB. They are
-# the same measurement of the same thing, so any disagreement is the
-# instrument's own noise - and an instrument whose repeat is worse than the
-# 1 dB above cannot grade a 1 dB claim at all. When this fails, the phases that
-# rest on a dB figure have no gate; that is a reason to fix the instrument, not
-# a reason to widen this number.
-#
-# Same value as max_delta_db and not a coincidence: a gate cannot be tighter
-# than the instrument that reads it.
+# Phase 0's gate on the instrument rather than the firmware.
+# `tools/ant_sens.py --repeat 2` runs the whole ladder twice untouched, and
+# the two 5 %-loss points must land within this many dB - any disagreement
+# is the instrument's own noise, and an instrument noisier than the 1 dB
+# above cannot grade a 1 dB claim. Same value as max_delta_db, not a
+# coincidence: a gate cannot be tighter than the instrument reading it.
 repeat_max_delta_db = 1.0
 
 [gates.scale]
 enabled = true
 
-# Not required, and this is the one place where that is not a loophole:
-# `libant.a` allocates 8 channels and advertises scan mode off without
-# implementing it, so there is no sdk-ant baseline to compare against and none
-# should be invented. An sdk-ant sitting legitimately has no `scale` block at
-# all. `ant_ab.py` reports the absence as SKIP, loudly and in its own column,
-# and never as a pass.
+# Not required, and not a loophole: `libant.a` allocates 8 channels and
+# advertises scan mode off without implementing it, so no sdk-ant baseline
+# exists to compare against and none should be invented. `ant_ab.py` reports
+# the absence as SKIP, never as a pass.
 required = false
 
 # Absolute, not relative: worst per-channel exact loss no worse than the
 # single-channel figure from the same rig plus this many percentage points.
 max_delta_pp = 0.5
 
-# The channel count the gate is about. 32 is the serial protocol's natural
-# ceiling - the burst header uses the low 5 bits for the channel number.
+# 32 is the serial protocol's natural ceiling - the burst header uses the
+# low 5 bits for the channel number.
 expect_channels = 32
 
 [gates.ack_data]
 enabled = true
 
-# Not required for the same reason as `scale`: it needs a responding sensor or
-# `sim/` acting as one, which not every sitting has. Absent reads as SKIP.
+# Not required, same reason as `scale`: needs a responding sensor or `sim/`
+# acting as one, which not every sitting has. Absent reads as SKIP.
 required = false
 
-# >= 99 % AND >= sdk-ant - 1 pp. Acknowledged data is ERG mode - it is how Zwift
+# >= 99 % AND >= sdk-ant - 1 pp. Acknowledged data is ERG mode - how Zwift
 # sets trainer resistance - so this is the gate closest to the Tier 3 ride.
 min_success_pct = 99.0
 max_delta_pp = 1.0
 
 [gates.coexistence]
-# LIVE. `ant_ab.py` HAS A `coexistence` CASE AND THIS BLOCK IS WHAT IT READS.
-#
-# The header that stood here said the opposite - "the thresholds are here and
-# ant_ab.py does not yet evaluate them" - and it went on being true of the
-# comment long after it stopped being true of the code. It is recorded rather
-# than deleted because the two states it describes are worth telling apart, and
-# because a threshold that is present and unread really is worse than one that
-# is absent: a reviewer sees a number and assumes something checks it. That was
-# the risk while the case was missing; it was then the risk again, in reverse,
-# while the comment said the case was missing and it was not.
-#
-# Three other things had to change before a real baseline could reach this gate
-# at all, and all three are done: archive/benchmarks/baseline.schema.json is
-# `additionalProperties: false` at the root and in `rig`, and defined NEITHER a
-# top-level `coexistence` block NOR `rig.second_stack` - so a genuine P4
-# baseline was rejected before any gate ran. Both are now in the schema.
+# LIVE: `ant_ab.py` has a `coexistence` case and this block is what it reads.
+# The schema (`archive/benchmarks/baseline.schema.json`) now defines both a
+# top-level `coexistence` block and `rig.second_stack`; before that a genuine
+# P4 baseline was rejected before any gate ran.
 enabled = true
 
-# Not required, for the same reason as `scale` and `ack_data`: a sitting on a
-# build with no second stack legitimately has no coexistence block at all, and
-# the absence must read as SKIP rather than as a pass.
+# Not required, same reason as `scale` and `ack_data`: a build with no
+# second stack legitimately has no coexistence block, and the absence must
+# read as SKIP rather than a pass.
 required = false
 
-# THIS IS A DIFFERENT COMPARISON FROM `loss_exact` AND THE LOOSER NUMBER IS NOT
-# A LOOSER STANDARD.
-#
-# `loss_exact` compares two BACKENDS on the same rig with nothing else on the
-# radio, and 0.2 pp is what the bench's own spread allows. This compares the
-# SAME backend with the second stack on against the second stack off - so it
-# measures what coexistence costs, and 0.5 pp is the figure docs/backends.md
-# has stated for it since before the arbiter existed.
-#
-# Both gates exist and both must pass on a combined build. Reading the tighter
-# one as superseding the looser one would be a category error: a build can be
-# 0.15 pp from sdk-ant with BLE off and 2 pp worse with BLE on, and only this
-# gate can see it.
+# A different comparison from `loss_exact`, not a looser standard:
+# `loss_exact` compares two BACKENDS on the same rig with nothing else on
+# the radio, and 0.2 pp is what the bench's own spread allows. This compares
+# the SAME backend with the second stack on vs off, so it measures what
+# coexistence costs - 0.5 pp is the figure `docs/backends.md` has stated
+# since before the arbiter existed. Both gates must pass on a combined
+# build; a build can be 0.15 pp from sdk-ant with BLE off and 2 pp worse
+# with BLE on, and only this gate sees it.
 max_delta_pp = 0.5
 
-# Applied to the candidate with the second stack ON, on its own terms. Same
-# argument as loss_exact's ceiling: being within 0.5 pp of a bad afternoon is
-# not a pass.
+# Applied to the candidate with the second stack ON, on its own terms - same
+# argument as loss_exact's ceiling: being within 0.5 pp of a bad afternoon
+# is not a pass.
 absolute_ceiling_pct = 1.5
 
-# The arbiter's OWN cost, with no second stack attached - CONFIG_MPSL=y and
-# nothing else on the radio, against the direct build. It isolates what the
-# timeslot machinery costs from what the other stack costs, and they are two
-# different numbers that a single figure would conflate.
-#
-# THIS ONE IS THE EXIT CRITERION FOR THE WHOLE COMBINED BUILD, written down
-# rather than left implicit: if the arbiter alone costs more than 1.5 pp, the
-# combined USB + Thread dongle is abandoned in favour of the two-box handoff of
-# docs/radiant-bridge.md section 7.3, and no amount of tuning the second stack's
-# demand recovers it.
+# The arbiter's OWN cost - CONFIG_MPSL=y with nothing else on the radio,
+# against the direct build - isolating the timeslot machinery's cost from
+# the second stack's. This is the exit criterion for the whole combined
+# build: past this, the combined USB + Thread dongle is abandoned in favour
+# of the two-box handoff in docs/radiant-bridge.md section 7.3, and no
+# amount of tuning the second stack's demand recovers it.
 arbiter_only_max_delta_pp = 1.5
 
-# The sweep is the elastic consumer (ADR 0013), so it gets slower and that is
-# the intended cost rather than a regression. It is still bounded: sets/s from
-# CONFIG_RADIANT_SWEEP_DEBUG with the second stack on must be at least this
-# fraction of the same build with it off.
-#
-# Quantified rather than merely accepted, because "the sweep gives way" with no
-# number attached is indistinguishable from a sweep that stopped. The value is a
-# placeholder until P3 measures it on the nRF54L15 DK against a scripted host
-# replaying the Zwift capture's open/close/network-rotation cadence - a static
-# device set never reproduces the permanent scanner the whole amendment rests on.
-min_sweep_rate_ratio = 0.5
+# min_sweep_rate_ratio was RETIRED with the SWEEP_DEBUG instrument that fed
+# it. It bounded how far the sweep - the elastic consumer, ADR 0013 - could
+# slow under contention, separating "gave way" from "stopped", using sets/s
+# only that instrument emitted. P3/P4 concluded, the instrument went, and
+# nothing produces sweep_sets_per_s_off/_on now. Restoring the bound means
+# restoring the instrument first; its 0.5 ratio is in git history.
 
 [gates.usb_latency]
 enabled = true
 required = true
 
-# <= sdk-ant x 1.1, and equality is the expectation rather than a stretch: the
-# radio is not on this path at all. A regression here is a USB-stack or bridge
-# change that arrived with the backend swap, which is worth knowing precisely
-# because it has nothing to do with the radio.
+# <= sdk-ant x 1.1 - equality is the expectation, not a stretch, since the
+# radio is not on this path at all. A regression here is a USB-stack or
+# bridge change that arrived with the backend swap.
 max_ratio = 1.1
 
-# The same floor argument as `timing`: p50 is a few hundred microseconds, and a
+# Same floor argument as `timing`: p50 is a few hundred microseconds, and a
 # 10 % gate on 0.36 ms is 36 us of host scheduler noise.
 floor_ms = 0.1

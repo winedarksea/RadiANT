@@ -2,11 +2,9 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
-# The same ANT+ dongle as apps/dongle, plus Thread/Matter rebroadcast and the
-# P3/P4 coexistence bench instruments (ble_coex_load.c, thread_coex_load.c)
-# that apps/dongle deliberately carries none of - see that app's own
-# CMakeLists.txt header for why splitting the two apart, rather than a
-# Kconfig variant of one, is the point.
+# The same ANT+ dongle as apps/dongle, plus Thread/Matter rebroadcast - see
+# that app's own CMakeLists.txt header for why splitting the two apart,
+# rather than a Kconfig variant of one, is the point.
 #
 # The sysbuild-cache reader and the RADIANT_BACKEND selection/assertion
 # machinery are shared with every other RadiANT app (apps/dongle,
@@ -62,11 +60,6 @@ ant_assert_radio("radiant_dongle_thread")
 
 target_sources(app PRIVATE src/main.c)
 
-# thread_coex_load.h and ble_coex_load.h sit at this application's own root
-# (not under src/) - see the file-placement note in the reorg plan - so
-# main.c's quoted #include needs this directory on its search path.
-target_include_directories(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-
 # ── apps/common: the antr_* seam, the serial bridge and its transports ─────
 #
 # One source list, added fresh into this application's own image - see that
@@ -76,18 +69,6 @@ target_include_directories(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 # ant_select_radio() and by apps/common/Kconfig.antr_api's default) together
 # decide what actually compiles from it into this image.
 include("${CMAKE_CURRENT_SOURCE_DIR}/../common/sources.cmake")
-
-# ── The P3/P4 coexistence bench instruments ─────────────────────────────────
-#
-# The one thing that makes this application apps/dongle_thread rather than a
-# second copy of apps/dongle: a second wireless stack that actually wants the
-# radio. Off by default in every shipping image (see each Kconfig's own
-# help), so these two lines are inert everywhere except a bench build that
-# explicitly turns one on.
-target_sources_ifdef(CONFIG_ANT_DONGLE_BLE_COEX_LOAD app PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/ble_coex_load.c")
-target_sources_ifdef(CONFIG_ANT_DONGLE_THREAD_COEX_LOAD app PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/thread_coex_load.c")
 
 # ── The RadiANT bridge: the sample bus and everything on it ─────────────────
 #
@@ -118,7 +99,7 @@ target_sources_ifdef(CONFIG_ANT_DONGLE_THREAD_COEX_LOAD app PRIVATE
 # radiant_matter.c USED TO BE EXCLUDED BESIDE IT, FOR A REASON THAT HAS EXPIRED.
 # The old comment here said Matter needs connectedhomeip, "which is a
 # flash-budget spike this application has not run". Package E1 ran it
-# (docs/matter-e1-readback.md) and package E3 vendored the bridge core, so the
+# (docs/matter-bringup.md) and package E3 vendored the bridge core, so the
 # file is now compiled - but on ITS OWN Kconfig symbol
 # (CONFIG_ANT_DONGLE_MATTER_MAP), not on CONFIG_CHIP. radiant_matter.c contains
 # no CHIP call at all: it is the section 8.1 field-type -> cluster map plus a
@@ -157,7 +138,7 @@ if(CONFIG_RADIANT_BRIDGE)
   #
   # NOT UNDER CONFIG_RADIANT_BRIDGE, AND THAT IS THE WHOLE POINT OF THE
   # SYMBOL. These files were added directly to the list above once, and
-  # docs/matter-e2-regression.md measured what that cost: bridge.conf is one
+  # docs/matter-bringup.md measured what that cost: bridge.conf is one
   # of the five docs/radiant-bridge.md section 7.4 coexistence arms and it
   # gained 2 564 B of flash, 1 472 B of RAM and 22 defined symbols - plus a
   # changed radio schedule, via the rewritten src/self_channels.c, which is
@@ -361,12 +342,6 @@ endif()
 
 target_sources_ifdef(CONFIG_ANT_DONGLE_MQTT_SINK app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/src/mqtt_sink.c")
-
-# A bench instrument, default n - see its own header and Kconfig help. It
-# registers a sink, so it deliberately does not compile into the images whose
-# sink sets build.yml asserts exactly.
-target_sources_ifdef(CONFIG_ANT_DONGLE_NAMING_DEBUG app PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/naming_debug_sink.c")
 
 # ── The hostless node's identity (compat-C6) ────────────────────────────────
 #

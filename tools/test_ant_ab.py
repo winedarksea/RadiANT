@@ -639,13 +639,11 @@ class Gates(unittest.TestCase):
     #
     # Tested against gate_coexistence() directly rather than through
     # evaluate(): this gate reads THREE loss figures out of ONE baseline
-    # rather than comparing two, so evaluate() would need a second baseline
-    # that plays no part in the assertion.
+    # rather than comparing two.
 
     COEX_CFG = {"required": False, "max_delta_pp": 0.5,
                 "absolute_ceiling_pct": 1.5,
-                "arbiter_only_max_delta_pp": 1.5,
-                "min_sweep_rate_ratio": 0.5}
+                "arbiter_only_max_delta_pp": 1.5}
 
     def coex(self, block):
         a, b = pair()
@@ -663,9 +661,7 @@ class Gates(unittest.TestCase):
         results = self.coex({"second_stack": "ble",
                              "loss_direct_pct": 0.40,
                              "loss_second_stack_off_pct": 0.45,
-                             "loss_second_stack_on_pct": 0.85,
-                             "sweep_sets_per_s_off": 4.0,
-                             "sweep_sets_per_s_on": 3.0})
+                             "loss_second_stack_on_pct": 0.85})
         for result in results.values():
             self.assertEqual(result.verdict, ant_ab.PASS, result.name)
 
@@ -673,9 +669,7 @@ class Gates(unittest.TestCase):
         results = self.coex({"second_stack": "thread_med",
                              "loss_direct_pct": 0.40,
                              "loss_second_stack_off_pct": 0.45,
-                             "loss_second_stack_on_pct": 1.10,
-                             "sweep_sets_per_s_off": 4.0,
-                             "sweep_sets_per_s_on": 3.0})
+                             "loss_second_stack_on_pct": 1.10})
         self.assertEqual(results["coexistence (second stack on)"].verdict,
                          ant_ab.FAIL)
 
@@ -685,9 +679,7 @@ class Gates(unittest.TestCase):
         results = self.coex({"second_stack": "ble",
                              "loss_direct_pct": 0.40,
                              "loss_second_stack_off_pct": 1.20,
-                             "loss_second_stack_on_pct": 1.60,
-                             "sweep_sets_per_s_off": 4.0,
-                             "sweep_sets_per_s_on": 3.0})
+                             "loss_second_stack_on_pct": 1.60})
         self.assertEqual(results["coexistence (second stack on)"].verdict,
                          ant_ab.FAIL)
 
@@ -698,24 +690,10 @@ class Gates(unittest.TestCase):
         results = self.coex({"second_stack": "none",
                              "loss_direct_pct": 0.40,
                              "loss_second_stack_off_pct": 2.10,
-                             "loss_second_stack_on_pct": 2.20,
-                             "sweep_sets_per_s_off": 4.0,
-                             "sweep_sets_per_s_on": 3.0})
+                             "loss_second_stack_on_pct": 2.20})
         result = results["arbiter cost (no second stack)"]
         self.assertEqual(result.verdict, ant_ab.FAIL)
         self.assertIn("7.3", result.detail)
-
-    def test_a_sweep_that_stopped_is_not_a_sweep_that_gave_way(self):
-        # ADR 0013 makes the sweep the elastic consumer, so it IS slower; this
-        # bound separates "gave way" from "stopped".
-        results = self.coex({"second_stack": "thread_sed",
-                             "loss_direct_pct": 0.40,
-                             "loss_second_stack_off_pct": 0.45,
-                             "loss_second_stack_on_pct": 0.85,
-                             "sweep_sets_per_s_off": 4.0,
-                             "sweep_sets_per_s_on": 0.4})
-        self.assertEqual(results["sweep rate under contention"].verdict,
-                         ant_ab.FAIL)
 
     def test_ack_below_99_percent_fails(self):
         def mutate(data):

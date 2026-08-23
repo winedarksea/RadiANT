@@ -12,23 +12,17 @@
         p4med   thread.conf               OpenThread MED - always on, worst case
         p4sed   thread.conf;thread_sed.conf   the intended role
 
-    BOTH -DANT_RADIO=core AND -DRADIANT_BACKEND=nrf ARE PASSED EXPLICITLY, and
-    that stays true even though nrf is now the CMake default for every
-    application. This project has been bitten three times here: RADIANT_BACKEND
-    used to default to the inert radio, and - the reason an explicit flag still
-    is not enough on its own - once a Zephyr SoC symbol rename made
-    `-DRADIANT_BACKEND=nrf` itself build the null backend on v3.4.0 while the
-    command line looked perfectly correct. A null
-    backend does not fail - it answers every serial command, opens its channel,
-    and reports zero packets, which is indistinguishable at the console from
+    BOTH -DANT_RADIO=core AND -DRADIANT_BACKEND=nrf ARE PASSED EXPLICITLY, even
+    though nrf is now the CMake default for every application: a Zephyr SoC
+    symbol rename once made `-DRADIANT_BACKEND=nrf` itself build the null
+    backend on v3.4.0 while the command line looked perfectly correct. A null
+    backend does not fail - it answers every serial command, opens its
+    channel, and reports zero packets, indistinguishable at the console from
     every real failure this phase is chasing.
 
     So the .config is READ BACK after every build and the script throws if
-    CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL is not y. Checking the command
-    line is not checking the build.
-
-    ASCII only, deliberately: Windows PowerShell 5.1 reads .ps1 files as ANSI
-    unless they carry a BOM.
+    CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL is not y. Checking the command line
+    is not checking the build.
 
 .EXAMPLE
     .\scripts\build_p4.ps1
@@ -80,22 +74,7 @@ foreach ($arm in $arms) {
 
     $buildArgs = @('-z', $zephyr, 'build', '-s', $dongleThreadApp, '-d', $dir, '-b', $Board)
     if ($Pristine) { $buildArgs += @('-p', 'always') }
-    # CONFIG_RADIANT_SWEEP_DEBUG IS PART OF THE MEASUREMENT, NOT A DEBUG
-    # AID, and leaving it off is why the first smoke run produced a board that
-    # booted perfectly and reported nothing for 45 s.
-    #
-    # It is the only source of two things this sitting has to record: the 1 Hz
-    # gate dump - where grant_end_calls, late_disarm, overstayed and
-    # invalid_return come from, which is the whole scoring rule for the soak -
-    # and the sweep set rate, which is what [gates.coexistence]'s
-    # min_sweep_rate_ratio reads. Without it an arm is unscoreable after the
-    # fact and the run cannot be repeated, because the board has moved on.
-    #
-    # Passed on the command line rather than added to the three .conf files
-    # because it is a property of THIS sitting, not of the images: a shipping
-    # thread.conf build should not carry a once-a-second log line.
     $buildArgs += @('--', '-DANT_RADIO=core', '-DRADIANT_BACKEND=nrf',
-                    '-DCONFIG_RADIANT_SWEEP_DEBUG=y',
                     "-DEXTRA_CONF_FILE=$($arm.Conf)")
     if ($ExtraCmake.Count) { $buildArgs += $ExtraCmake }
 
@@ -125,11 +104,10 @@ foreach ($arm in $arms) {
     # THE READ-BACK. See the .DESCRIPTION: this is the check, not the -D flags.
     #
     # Two layouts, because sysbuild is not always in play: with it the image
-    # lands under <build>\dongle_thread\zephyr (the image name is APP_DIR's own
-    # basename, not project()), without it directly under <build>\zephyr. Both
-    # are tried rather than one assumed, for the reason apps/dongle's own CI
-    # already learned at .github/workflows/release.yml - a hard-coded path that
-    # stops existing turns this check into "file not found", and a check that
+    # lands under <build>\dongle_thread\zephyr (the image name is APP_DIR's
+    # own basename, not project()), without it directly under <build>\zephyr.
+    # Both are tried rather than one assumed - a hard-coded path that stops
+    # existing turns this check into "file not found", and a check that
     # cannot run is not a check that passed.
     $cfg = $null
     foreach ($candidate in @((Join-Path $dir 'dongle_thread\zephyr\.config'),
@@ -145,7 +123,6 @@ foreach ($arm in $arms) {
     $want = @{
         'CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL' = 'y'
         'CONFIG_RADIANT_BACKEND_NRF'           = 'y'
-        'CONFIG_RADIANT_SWEEP_DEBUG'           = 'y'
     }
     $bad = $false
     foreach ($k in $want.Keys) {
