@@ -6,94 +6,57 @@
  * countdown, derived locator, the two `announce` modes), section 11.6 (the
  * four policy states, the precedence rule, the key dependency and its one
  * exemption), and docs/decisions/0008-antplus-additive-pages-and-compat-security.md.
- * All this project's own documents. No ANT+ device profile
- * document was read for this file, no sdk-ant source was consulted, and
- * nothing here derives from libant.a. See docs/decisions/0002-clean-room-policy.md.
+ * All this project's own documents; no ANT+ device profile document, sdk-ant
+ * source, or libant.a was consulted. See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * What this is
- * ---------------------------------------------------------------------------
- * The node stops being an ANT+ sensor and becomes a RadiANT one, announcing so
- * first, in the clear, to everybody, on a countdown. The compat channel CLOSES
- * and a device type 0x60 channel opens - keeping 0x0B alive while emitting
- * unknown pages would leave a head unit showing a connected sensor with no
- * data, read as a bug rather than the walked-out-of-range close users
- * understand. While private, a Garmin head unit and Zwift see nothing at all;
- * that is the price of confidentiality.
+ * The node stops being an ANT+ sensor and becomes a RadiANT one, announcing
+ * so first, in the clear, on a countdown: the compat channel CLOSES and a
+ * device type 0x60 channel opens (keeping 0x0B alive while emitting unknown
+ * pages would read as a bug rather than the walked-out-of-range close users
+ * understand). While private, a Garmin head unit and Zwift see nothing - the
+ * price of confidentiality. Because the stream has N listeners and the
+ * command comes from one keyholder, the switch is a broadcast state change
+ * with a countdown, and receivers act on COUNTDOWN EXPIRY rather than
+ * receipt so every keyed receiver retunes on the same message. Per section
+ * 11.5: frame B tags frame A's full eight transmitted bytes under K_auth
+ * with Tier I's counter in the nonce (verifies on receipt, survives loss of
+ * every other packet, a replay into another interval fails), so private
+ * mode requires a key - without a tag the announcement would be an
+ * unauthenticated herding attack. The beacon rate rises to meet the
+ * countdown (profile_compat.c's existing promotion to one frame in eight),
+ * and the return from private mode is announced the same way; only a
+ * power-cycle/crash revert skips it, which is exactly the case where a
+ * receiver searches anyway and finds the compat channel.
  *
- * ---------------------------------------------------------------------------
- * The announcement is broadcast, or 1:N is broken
- * ---------------------------------------------------------------------------
- * The command comes from one keyholder; the stream has N listeners. A node
- * that acts and vanishes gives every other keyed receiver a dropout. So the
- * switch is a broadcast state change with a countdown, and receivers act on
- * COUNTDOWN EXPIRY rather than receipt, so every keyed receiver retunes on the
- * same message instead of at N independent moments.
- *
- * Five rules from section 11.5:
- *   1. Clear but self-authenticating. Tier I covers no payload and Tier II is
- *      off by default, so frame B tags frame A's full eight transmitted bytes
- *      under K_auth with Tier I's counter in the nonce: verifies on receipt,
- *      survives loss of every other packet, a replay into another interval
- *      fails. A receiver acts only after the tag verifies.
- *   2. Therefore private mode requires a key - without a tag the announcement
- *      is an unauthenticated herding attack. Dependency and exemption below.
- *   3. The beacon rate rises to meet the countdown, inheriting
- *      profile_compat.c's existing promotion to one frame in eight.
- *   4. Receivers act on expiry, reading the remaining count from the frame.
- *   5. The return is announced the same way; only power-cycle/crash reverts
- *      skip it, and those are exactly the cases where a receiver searches
- *      anyway and finds the compat channel.
- *
- * ---------------------------------------------------------------------------
- * The countdown's arithmetic
- * ---------------------------------------------------------------------------
- * Frame A byte [7] carries six bits of countdown in units of eight transmitted
- * messages (K reaches 128, and six bits of raw messages would only reach 63).
- *
- * The scheduler never offers messages 119/120 of its 121-message cycle, so
- * promoted slots are not evenly eight apart across a cycle boundary - a
- * quantised countdown can't name an exact instant by rounding alone. Instead
- * the node RE-ANCHORS: every time frame A goes out it recomputes the count it
- * can honestly name and moves its own target to match:
+ * Countdown arithmetic: frame A byte [7] carries six bits of countdown in
+ * units of eight transmitted messages (K reaches 128; six bits of raw
+ * messages would only reach 63). Because the scheduler never offers messages
+ * 119/120 of its 121-message cycle, promoted slots are not evenly eight
+ * apart across a cycle boundary, so the node RE-ANCHORS on every frame A:
  *
  *     c         = ceil( (switch_at - messages_sent_after_this_one) / 8 )
  *     switch_at = messages_sent_after_this_one + c * 8
  *
- * so every receiver that heard the latest announcement computes the same
- * message, and one that heard only an earlier copy is at most seven messages
- * early (never late). Rounded UP rather than down for the same reason: down
- * would shorten the countdown up to seven messages per off-quantum
- * announcement and retune a receiver LATE, after the node had already gone.
+ * Rounded UP rather than down, since down would retune a receiver LATE (up
+ * to seven messages late) instead of early. K = 64 is ~16 s at 4 Hz, eight
+ * promoted beacon slots (two complete announcement pairs; four at K = 128);
+ * at the characterised ~0.4% loss floor, losing both is not worth designing
+ * around, so the fallback is the derived locator, which does not depend on
+ * hearing anything.
  *
- * K = 64 is ~16 s at 4 Hz, eight promoted beacon slots; the four-frame set
- * rotates through them one at a time, so a countdown carries two complete
- * announcement pairs at K = 64, four at K = 128. At the characterised ~0.4%
- * loss floor, losing both is not worth designing around - the fallback is the
- * derived locator, which does not depend on hearing anything.
- *
- * ---------------------------------------------------------------------------
- * `silent` is a mode, not a failure
- * ---------------------------------------------------------------------------
- * With announce = silent the node emits no announcement frame, publishes no
- * locator, never sets the pending-switch bit, never promotes the beacon: the
- * channel just closes. Keyholders rederive the locator and re-acquire.
- * `silent` buys unlinkability and pays in availability; `broadcast` is the
- * reverse - neither is "more secure". radiant/tests/src/test_profile_private.c
- * measures the gap between them.
- *
- * ---------------------------------------------------------------------------
- * Policy is configuration, never over the air
- * ---------------------------------------------------------------------------
- * A `never` node a stranger or paired keyholder can talk into becoming
- * `command` has no policy, only a suggestion. There is no over-air policy
- * operation here: not deferred, refused. Inbound commands carry only "go
- * private" and "come back"; an unrecognised op is counted and dropped.
- *
- * Three surfaces, one precedence rule: NVM IF PROVISIONED, ELSE KCONFIG; THE
- * HOST MESSAGE WRITES NVM rather than shadowing it.
- * profile_private_host_set_policy() fails if the write fails and the resolved
- * policy does not move, so it can never depend on when the node last rebooted.
+ * `silent` announce mode emits no announcement frame, publishes no locator,
+ * never promotes the beacon - the channel just closes and keyholders
+ * rederive the locator and re-acquire. It buys unlinkability and pays in
+ * availability; `broadcast` is the reverse, and neither is "more secure"
+ * (radiant/tests/src/test_profile_private.c measures the gap). Policy is
+ * configuration, never over the air: a `never` node a stranger or paired
+ * keyholder can talk into becoming `command` has no policy, only a
+ * suggestion, and inbound commands carry only "go private" / "come back" -
+ * an unrecognised op is counted and dropped. Precedence across the three
+ * surfaces is NVM IF PROVISIONED, ELSE KCONFIG; THE HOST MESSAGE WRITES NVM
+ * rather than shadowing it, so profile_private_host_set_policy() fails if
+ * the write fails and the resolved policy can never depend on when the node
+ * last rebooted.
  */
 
 #ifndef RADIANT_PROFILE_PRIVATE_H_

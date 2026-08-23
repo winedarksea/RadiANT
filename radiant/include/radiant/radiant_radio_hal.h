@@ -141,9 +141,7 @@ enum radiant_phy {
 	 * ~8 dB over 1 M. A backend not built with it must reject rather than
 	 * approximate it - a 1 M receiver cannot demodulate a coded frame at
 	 * all, which is the physical invisibility ADR 0007's length extension
-	 * relies on. (Renamed from RADIANT_PHY_LR_GFSK, which mis-described the
-	 * modulation; numeric value kept unchanged since it's never been
-	 * stored or on the air.)
+	 * relies on.
 	 */
 	RADIANT_PHY_LR_CODED = 1,
 	RADIANT_PHY_COUNT

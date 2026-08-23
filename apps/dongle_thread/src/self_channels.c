@@ -3,139 +3,46 @@
  * self_channels.c - wildcard slave channels this dongle drives itself, and the
  * pairing window that decides what may bind.
  *
- * ---------------------------------------------------------------------------
- * WHY THERE IS A BUTTON AND NOT AN AUTO-BIND
- * ---------------------------------------------------------------------------
+ * Binding is explicit opt-in (docs/radiant-bridge.md section 10.1 rule 1,
+ * section 5): a self channel searches and tracks continuously, but a device
+ * it acquires may bind only while a button-press window is open. This is also
+ * the radio rule, not just a privacy one - section 7 shows continuous
+ * promiscuous ingest is the one mode that cannot coexist with Thread. A
+ * device already acquired when the button is pressed also binds (deliberate:
+ * the alternative forces power-cycling the strap in the right order).
+ * Outside the window, an acquired channel keeps tracking and its broadcasts
+ * are dropped by rx_tap.c.
  *
- * A rebroadcast bridge that only works while a PC is plugged in is not the
- * product docs/radiant-bridge.md section 1 describes ("one QR scan, nothing
- * installed"), so the dongle has to open its own channels. The obvious next
- * step - bind whatever those channels acquire - is the one thing the design
- * refuses. Section 10.1 rule 1 and section 5 both say binding is explicit
- * opt-in, and section 10.1 says why the rule is stated as architecture rather
- * than as a privacy footnote: it is ALSO the radio rule, because promiscuous
- * ingest means continuous scan and section 7 shows continuous scan is the one
- * mode that cannot coexist with Thread. Auto-binding every strap in range to
- * make a demo work would violate a rule the document says cannot be
- * retrofitted.
+ * This starts on its own delayed thread rather than in
+ * ant_dongle_post_radio_init(), because that weak hook already has one strong
+ * override (src/main.c). The CONFIG_ANT_DONGLE_SELF_CHANNELS_DELAY_S delay is
+ * a real precondition, not caution: ant_radio.h forbids any antr_* call
+ * before antr_init() returns, and the default of 5 s is comfortably past it.
+ * It polls channel status (antr_channel_id_get()/antr_channel_period_get())
+ * rather than watching the RX tap, because the tap runs on the backend's own
+ * event thread and calling back into antr_* from there is the re-entrancy
+ * ant_radio_radiant.c's api_lock exists to prevent.
  *
- * So: a button press opens a window. Inside it, a self channel that has
- * acquired a device may bind. Outside it, that channel keeps tracking and its
- * broadcasts are dropped by rx_tap.c - which is the honest behaviour, not a
- * degraded one.
+ * An ANT slave's channel period must match its master's and its device type
+ * must match or be wildcard 0, so a channel cannot search two profiles at
+ * once (8070 counts finds heart-rate straps and nothing else - a power
+ * meter's slot is 8182 counts away). CONFIG_ANT_DONGLE_PROFILES_EXTRA
+ * controls which behaviour is built: off, both self channels hard-wire
+ * device type 0x78 at period 8070 with no search timeout set, exactly as
+ * before packages A-C existed. On, a table of {device type, period} rows
+ * (spread across channels and, on search timeout, across time) lets channels
+ * rotate through HR/power/FE-C/env search profiles, logging the profile name
+ * so "no sensors in range" is distinguishable from "searching for the wrong
+ * thing".
  *
- * A DEVICE ALREADY ACQUIRED WHEN THE BUTTON IS PRESSED ALSO BINDS, and that is
- * deliberate rather than sloppy. The alternative - only devices acquired
- * strictly after the press - would mean a user has to press the button, then
- * power-cycle the strap, and get the order right; the press is the explicit
- * act either way, and the window is what bounds it.
- *
- * ---------------------------------------------------------------------------
- * WHY THIS RUNS ON A DELAYED THREAD AND NOT ON THE POST-RADIO HOOK
- * ---------------------------------------------------------------------------
- *
- * ant_dongle_post_radio_init() is the correct place - it is defined to run
- * after antr_init() has returned and before the transport - but this
- * application's single override of it already belongs to the coexistence
- * loads (src/main.c), and a weak hook has exactly one strong definition. So
- * this starts on its own thread after CONFIG_ANT_DONGLE_SELF_CHANNELS_DELAY_S
- * seconds instead, which is the same delayed-start idiom thread_coex_load.c
- * and ble_coex_load.c already use, for the same reason they use it (a stack
- * that starts at millisecond zero makes "it never worked" and "it stopped when
- * X started" the same observation).
- *
- * The delay is a real precondition, not caution: ant_radio.h forbids any
- * antr_* call before antr_init() returns, and the boot sequence reaches
- * antr_init() within the UF2 settle delay plus a few milliseconds. The default
- * of 5 s is comfortably past it. If src/main.c's hook is ever reopened, moving
- * these calls into it is strictly better and this comment is the note saying
- * so.
- *
- * ---------------------------------------------------------------------------
- * WHY IT POLLS CHANNEL STATUS RATHER THAN WATCHING THE RX TAP
- * ---------------------------------------------------------------------------
- *
- * Identity resolution needs antr_channel_id_get() and the period needs
- * antr_channel_period_get(). The RX tap runs inside antr_on_message(), on the
- * backend's own event thread, and calling back into an antr_* function from
- * there is the re-entrancy the backend's own comments (ant_radio_radiant.c
- * around the api_lock) exist to prevent. Polling from this thread costs one
- * status read per channel per second and needs no such favour.
- *
- * ---------------------------------------------------------------------------
- * WHY THERE IS A TABLE OF SEARCH PROFILES AND WHY IT ROTATES
- * ---------------------------------------------------------------------------
- *
- * An ANT slave's channel period must MATCH its master's, and its device type
- * must match or be the wildcard 0. Those two facts together mean a slave
- * cannot search for two profiles at once: 8070 counts finds heart-rate straps
- * and finds nothing else, because a power meter's slot is 8182 counts away and
- * the receive window is simply never open when it transmits. This file used to
- * hard-wire 8070/0x78, so every decoder rx_tap.c ever grows is unreachable on
- * hardware no matter how well it is tested in ztest - the acquisition layer
- * would never hand it a packet.
- *
- * The fully-wildcard alternative (device type 0) does NOT solve this. It
- * widens the ID match and leaves the period fixed, so it acquires whichever
- * sensors happen to share the one period that was compiled in, and does it
- * indiscriminately. That is worse on both axes at once.
- *
- * So: a table, one row per {device type, period} pair this bridge can decode,
- * and a channel searches one row at a time. Two things spread the cost:
- *
- *   ACROSS CHANNELS. Channel i starts on row (i mod N), so a two-channel
- *   build searches two different profiles simultaneously rather than running
- *   two identical searches beside each other.
- *
- *   ACROSS TIME. When a channel's high-priority search times out, it advances
- *   one row before reopening. N channels therefore sweep the whole table,
- *   and a console shows HR -> power -> FE-C -> env cycling by name.
- *
- * THE LOG LINE NAMING THE PROFILE IS THE POINT, not decoration. Without it,
- * "no sensors in range" and "searching for the wrong thing" produce the
- * identical console - a silent, permanently-idle bridge - and that exact
- * ambiguity is what the ANTW_STATUS_ASSIGNED_CHANNEL case below already
- * exists to avoid for a different cause.
- *
- * NONE OF THIS TOUCHES THE OPT-IN RULE. docs/radiant-bridge.md section 10.1
- * rule 1 governs what may BIND, not what a channel may search for; rotating
- * the search profile changes which sensors can be acquired and changes
- * nothing at all about which may be bound. try_bind()'s window_open() test is
- * deliberately untouched by this, and a rotation that ever grew a bind path
- * of its own would be the promiscuous ingest the rule forbids.
- *
- * ---------------------------------------------------------------------------
- * AND WHY THE TABLE IS BEHIND CONFIG_ANT_DONGLE_PROFILES_EXTRA
- * ---------------------------------------------------------------------------
- *
- * With that symbol n, this file is the file it was before packages A-C: both
- * self channels search device type 0x78 at period 8070, and NO search timeout
- * is set at all, so every channel inherits the ANT default. With it y, the
- * five-row rotation above.
- *
- * The reason is not doubt about the rotation - it is that CONFIG_RADIANT_BRIDGE
- * is also set by bridge.conf, which carries one of the five coexistence
- * baselines in docs/radiant-bridge.md section 7.4. Those numbers are
- * measurements OF THE RADIO, and this file is the file that decides what the
- * radio does: one fixed 4.06 Hz search versus a rotation across four different
- * channel periods and five device types is not the same duty cycle, not the
- * same retune rate and not the same thing to compare a Thread throughput
- * number against. docs/matter-e2-regression.md caught the rotation arriving on
- * that arm unasked, alongside +2 564 B of flash. Kconfig's help for the symbol
- * is the full argument.
- *
- * THE SHAPE OF THE GUARD IS DELIBERATE AND IS NOT "a one-row table". A single
- * row plus a rotation that happens to be modulo 1 would be tidier to read and
- * would NOT restore the old image: it still emits self_profiles[], self_row[]
- * and configure_and_open(), still carries the per-row search-timeout call that
- * the original never made, and still carries the profile-naming log strings.
- * The requirement here is byte-identity with the pre-A-C image, not
- * approximate equivalence, so the off path is the ORIGINAL code verbatim and
- * the two paths are kept adjacent and small: one #ifdef around the table and
- * the open/retune helpers, and two more inside self_thread_fn() at the exact
- * two places the old and new behaviours differ. Everything else in this file -
- * the button, the window, try_bind(), the poll loop - is shared and has one
- * copy.
+ * THE GUARD'S SHAPE IS DELIBERATE: two #ifdefs (around the table/helpers, and
+ * inside self_thread_fn() at the two places behaviour differs), not a
+ * one-row table with a trivial rotation. The requirement is byte-identity
+ * with the pre-A-C image when the symbol is off - CONFIG_RADIANT_BRIDGE's
+ * bridge.conf carries a measured coexistence baseline (docs/radiant-bridge.md
+ * section 7.4), and any change to the off-path image, however tidy, would be
+ * comparing that baseline against a different radio duty cycle. So the off
+ * path is the ORIGINAL code, unchanged, not an equivalent rewrite.
  */
 
 #include <errno.h>
@@ -745,10 +652,9 @@ static void self_thread_fn(void *a, void *b, void *c)
 
 #if defined(CONFIG_ANT_DONGLE_PAIRING_WINDOW_AT_BOOT)
 	/*
-	 * A BENCH INSTRUMENT, NOT A FEATURE, and the same shape as
-	 * ANT_DONGLE_THREAD_COEX_LOAD: off by default, selected by no shipping
-	 * image, and it says on the console exactly what it did so a log can
-	 * never be mistaken for one from a normal build.
+	 * A BENCH INSTRUMENT, NOT A FEATURE: off by default, selected by no
+	 * shipping image, and it says on the console exactly what it did so a
+	 * log can never be mistaken for one from a normal build.
 	 *
 	 * It exists because the liveness STALE path is the one thing in the
 	 * bridge that cannot be verified without a binding, a binding needs the

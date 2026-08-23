@@ -24,8 +24,7 @@
  *   - The event path is inverted: the backend calls antr_on_message() (a flat
  *     struct we define) instead of sdk-ant's callback over a nested union.
  *   - antr_channel_open() is a convenience over
- *     antr_channel_open_with_offset(), the real entry point, because sdk-ant
- *     makes the plain form a macro and a backend needs exactly one function.
+ *     antr_channel_open_with_offset(), the real entry point (why, below).
  *
  * 50 backend functions below; 49 are called directly by ant_serial_bridge.c
  * or main(), the 50th (antr_channel_open_with_offset()) via its wrapper.
@@ -188,9 +187,9 @@ void antr_on_message(const struct antr_msg *msg);
  * sequence number, so these are ours to choose. Chosen to match sdk-ant's
  * BURST_SEGMENT_CONTINUE/_START/_END (BUILD_ASSERTed in
  * ant_radio_sdk_ant.c), which is what lets that shim forward the byte
- * untouched. END was wrongly 0x04 before that assert existed - it would have
- * marked every burst's last block as a middle block, so TX_COMPLETED never
- * arrives and the burst semaphore times out at 1000 ms per transfer.
+ * untouched: if END ever diverged, every burst's last block would be
+ * mislabelled a middle block, so TX_COMPLETED never arrives and the burst
+ * semaphore times out at 1000 ms per transfer.
  */
 #define ANTR_BURST_SEGMENT_CONTINUE  0x00  /* a middle block */
 #define ANTR_BURST_SEGMENT_START     0x01  /* first block of the transfer */
@@ -582,9 +581,9 @@ antr_err_t antr_burst_tx(uint8_t channel, uint16_t size, uint8_t *data,
  * next to antr_pending_transmit_clear() and a verb-less name next to a verb is
  * how a getter gets called for its side effects. Along with antr_burst_tx()
  * this is one of only two names here that is not a straight ant_ -> antr_
- * prefix swap; the mapping table in docs/sdk-ant-contract.md records both, and
- * every other name is mechanical precisely so that an omission in Wave 2 shows
- * up as a link error rather than as a silent behaviour change.
+ * prefix swap - docs/sdk-ant-contract.md records the mapping - and every
+ * other name is mechanical, so an omitted one shows up as a link error
+ * rather than a silent behaviour change.
  *
  * Returns 0 or ANTW_INVALID_MESSAGE (channel out of range).
  */

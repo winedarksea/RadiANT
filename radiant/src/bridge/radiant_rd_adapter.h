@@ -51,10 +51,9 @@
 extern "C" {
 #endif
 
-/* field_id assignments within one RD source. Stable: a sink keys history on
- * (source, field_id), so renumbering these breaks every sink's stored series.
- * Gaps at 1 and 3 are reserved for cadence/GCT so a future vocabulary
- * allocation doesn't renumber the six that ship today. */
+/* field_id assignments within one RD source (field_id stability: see
+ * radiant_common_adapter.h). Gaps at 1 and 3 are reserved for cadence/GCT so
+ * a future vocabulary allocation doesn't renumber the six that ship today. */
 #define RADIANT_RD_FIELD_VERTICAL_OSC 0u /* 0x14 length, instantaneous */
 #define RADIANT_RD_FIELD_CADENCE      1u /* RESERVED - no vocabulary type yet */
 #define RADIANT_RD_FIELD_STANCE_TIME  2u /* 0x24 percentage, instantaneous */
@@ -73,17 +72,12 @@ struct radiant_rd_adapter {
 	bool seen_b;
 
 	/* Step count as last seen on the wire, for differencing in its own
-	 * 7-bit width (see radiant_hr_adapter.h - converting before
-	 * differencing is the bug). */
+	 * 7-bit width (accumulator discipline: see radiant_common_adapter.h). */
 	bool    have_prev_steps;
 	uint8_t prev_step_count;
 
-	/* The exact running total, which is what gets published.
-	 * RADIANT_SAMPLE_ACCUMULATING means "raw is a monotone counter, not an
-	 * instant" (radiant_bridge.h), and radiant_rules.c differences what it
-	 * receives - a published delta would be differenced twice, and a
-	 * steady cadence has equal consecutive deltas, so a runner would read
-	 * as motionless. Same discipline as radiant_hr_adapter.h's acc_1024. */
+	/* The exact running total, which is what gets published (see the
+	 * header). */
 	uint64_t acc_steps;
 };
 
@@ -97,8 +91,8 @@ void radiant_rd_adapter_init(struct radiant_rd_adapter *a);
  *
  * Returns samples posted: up to 3 for page 0x00, up to 3 for page 0x01,
  * fewer when a field is marked invalid (never published as a zero). The
- * first page 0x00 an instance sees publishes no step count - no prior
- * reading to difference against yet, same as radiant_hr_adapter_decode().
+ * first page 0x00 an instance sees publishes no step count (first-call
+ * baseline: see radiant_common_adapter.h).
  */
 uint32_t radiant_rd_adapter_decode(struct radiant_rd_adapter *a, uint32_t source,
 				   const uint8_t body8[8], uint64_t t_us);

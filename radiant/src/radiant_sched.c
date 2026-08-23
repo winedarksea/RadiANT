@@ -7,68 +7,51 @@
  * measurements in docs/ant-radio-link.md and docs/spike-b-part2-results.md.
  * See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
  * Shape: a table of 32 slots, each holding at most one intent, and pass() -
  * which looks at the table and the clock and decides what the radio does
- * next. Everything else fills the table, feeds pass() an event, or is pass()
- * split up for readability.
- *
- * pass() runs from exactly two places: the tail of a radio callback (the
- * low-jitter re-arm path the HAL's callback contract permits), and
+ * next. pass() runs from exactly two places: the tail of a radio callback
+ * (the low-jitter re-arm path the HAL's callback contract permits), and
  * radiant_sched_tick(), the commit point for anything posted from thread
- * context.
+ * context. POSTING A REQUEST DOES NOT ARM ANYTHING - that's what makes
+ * merging work: re-planning on every mutation would arm the first channel's
+ * window the instant it posted, and a second channel whose window overlaps
+ * it exactly would arrive to find the radio already committed and merge with
+ * nothing. Requests are collected and committed once; in steady state every
+ * channel posts its next window from inside the last one's terminal
+ * callback, so the tail pass sees them all together. A window that's armed
+ * but not yet open can be torn down and rebuilt for free, so a late-opening
+ * channel still joins the merge on the next tick instead of waiting a period
+ * (see want_preempt()). A pass costs one radiant_radio_now() and at most one
+ * arm call regardless of table state - fake_radio.c flags a contract
+ * violation past sixteen HAL calls per callback; the slot scans are pure
+ * arithmetic, no hardware.
  *
- * POSTING A REQUEST DOES NOT ARM ANYTHING - that's what makes merging work.
- * Re-planning on every mutation would arm the first channel's window the
- * instant it posted, and a second channel whose window overlaps it exactly
- * would arrive to find the radio already committed and merge with nothing.
- * Requests are collected and committed once; in steady state every channel
- * posts its next window from inside the last one's terminal callback, so the
- * tail pass sees them all together.
- *
- * A window that is armed but not yet open can be torn down and rebuilt for
- * free, so a late-opening channel still joins the merge on the next tick
- * instead of waiting a period. See want_preempt().
- *
- * A pass costs one radiant_radio_now() and at most one arm call regardless of
- * table state - fake_radio.c flags a contract violation past sixteen HAL
- * calls per callback. The slot scans are pure arithmetic, no hardware.
- *
- * ---------------------------------------------------------------------------
  * Abort ordering (the subtle part): an aborted operation's terminal event is
  * STILL DELIVERED (radiant_radio_hal.h), and the op id lets a late event from
  * a cancelled operation be recognised. This file always retires the live
  * operation (clears s.armed_op) BEFORE calling radiant_radio_abort(), and
  * every event handler's first act is comparing the event's op id against
- * s.armed_op and dropping mismatches.
+ * s.armed_op and dropping mismatches. Get the order wrong and the ABORTED
+ * event of the operation you just replaced is taken for the terminal event of
+ * its replacement, which is then retired while its window is still open -
+ * radio left listening for nobody. This happens on every preemption with no
+ * fault injection, so s.stats.stale_events is normally non-zero, not an error
+ * count.
  *
- * Get the order wrong and the ABORTED event of the operation you just
- * replaced is taken for the terminal event of its replacement, which is then
- * retired while its window is still open - radio left listening for nobody.
- * Happens on every preemption with no fault injection, so
- * s.stats.stale_events is normally non-zero, not an error count.
- *
- * ---------------------------------------------------------------------------
  * Thread against interrupt: `s` has exactly two writers - thread context via
  * the three request entry points and radiant_sched_tick(), and the radio ISR
  * via hal_rx()/hal_tx(). A plain bool `in_pass`, unconditionally cleared on
  * the way out of a callback, would let an ISR landing on top of a
- * thread-context pass() tell the thread, on return, that no pass was running.
- * Not rare: a master's EVENT_TX pumps a pass in thread context, and the
- * slave's reply lands 2.19 ms later - inside that window, every exchange.
- *
- * Two fixes, both needed:
- *   - in_pass is SAVED AND RESTORED in hal_rx()/hal_tx(), so a nested entry
- *     defers the commit to the pass that owns it;
- *   - every write to the slot table, and all of pass(), runs with interrupts
- *     off via radiant_event_crit_enter()/_exit() (same primitive
- *     radiant_event.c uses for its ring - the ISR side must not block). Bounded
- *     arithmetic plus at most one arm call, so the section can't grow with
- *     channel count.
- *
- * This deliberately does not take a lock the HAL has to know about - backends
- * call these callbacks from their own interrupt, and the exclusion stays
- * entirely on this side.
+ * thread-context pass() tell the thread, on return, that no pass was running
+ * - not rare: a master's EVENT_TX pumps a pass in thread context, and the
+ * slave's reply lands 2.19 ms later, inside that window, every exchange. Two
+ * fixes, both needed: in_pass is SAVED AND RESTORED in hal_rx()/hal_tx(), so
+ * a nested entry defers the commit to the pass that owns it; and every write
+ * to the slot table, and all of pass(), runs with interrupts off via
+ * radiant_event_crit_enter()/_exit() (same primitive radiant_event.c uses for
+ * its ring - the ISR side must not block). This deliberately does not take a
+ * lock the HAL has to know about - backends call these callbacks from their
+ * own interrupt, and the exclusion stays entirely on this side.
  */
 
 #include <stdbool.h>

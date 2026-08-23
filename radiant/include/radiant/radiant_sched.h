@@ -307,8 +307,7 @@ enum radiant_sched_done {
 	 * A continuous request stays live for this too (scan pauses and resumes
 	 * in the next gap), and it's reported rather than swallowed: an owner
 	 * that credited a displaced chunk as if it ran would silently break its
-	 * own listening-time accounting - this is what once froze the wildcard
-	 * sweep on a single address set.
+	 * own listening-time accounting.
 	 */
 	RADIANT_SCHED_DONE_ABORTED,
 	/*

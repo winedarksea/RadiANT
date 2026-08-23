@@ -164,18 +164,14 @@ extern "C" {
  *
  * A tracked slave demands the radio every 249.7 ms, so a 260 ms search window
  * can never reach its close and gets preempted (RADIANT_SCHED_DONE_ABORTED).
- * Until 2026-08-10 an abort credited nothing, so set_dwell_us never filled and
- * THE SWEEP FROZE on whichever set it was on - every device outside that set
- * was undiscoverable while anything was tracking, i.e. every real session.
- * MEASURED: a -25 dBm transmitter in set 2 was invisible to a 60 s wildcard
- * scan while one in set 1 was found every time (Zwift saw one sensor only).
- * Fix: credit the time actually listened to.
+ * An abort must still credit the time actually listened to - crediting
+ * nothing freezes the sweep on whichever set it was on, making every device
+ * outside that set undiscoverable while anything is tracking.
  *
- * CHUNKING THE DWELL WAS TRIED AND REJECTED: capping windows at a fraction of
- * the dwell unfreezes the sweep too, but a short window only catches a 4 Hz
- * sensor when it happens to align, silently degrading "certain within one
- * sweep" to "likely" for no gain. Seven tests in test_search.c encode that
- * guarantee and fail if the cap comes back.
+ * Chunking the dwell (capping windows at a fraction of it) was tried and
+ * rejected: a short window only catches a 4 Hz sensor when it happens to
+ * align, silently degrading "certain within one sweep" to "likely" for no
+ * gain. Seven tests in test_search.c encode that guarantee.
  */
 
 /*
@@ -686,10 +682,9 @@ void radiant_search_on_rx_indexed(struct radiant_search *s, const struct radiant
  *                      credit up to ended_at.
  *   never opened       credit NOTHING (never armed/refused).
  *
- * The middle case is the one that matters - it used to credit zero, which
- * under a tracked channel (every search window cut short) meant the dwell
- * never filled and the sweep never advanced (see the dwell-is-a-budget
- * comment above).
+ * The middle case is the one that matters (see the dwell-is-a-budget comment
+ * above) - without it the sweep never advances under a tracked channel,
+ * since every search window there is cut short.
  *
  * ended_at is ignored except in the middle case, and clamped to
  * [t_open, t_close] so a slightly-late clock read cannot over-credit.
@@ -718,26 +713,21 @@ void radiant_search_tick(struct radiant_search *s, radiant_time_t now);
  * even when nearly every window was denied, conflating "how long have we
  * been trying" with "how long were we refused". MEASURED beside a busy BLE
  * advertiser: a channel armed 13 times, denied 12, aborted once, then simply
- * stopped - not because the device was absent, but because arbiter-owned
- * wall-clock time had been charged against a listening-time budget.
+ * stopped with the device never absent.
  *
  * Fix, same shape as radiant_channel.c's guard: push every ACTIVE channel's
  * finite deadline out by window_us (one denied window is time every
- * searching channel lost, not just the one carrying the sweep). The caller
- * sizes window_us to what the refused attempt cost in wall clock
- * (radiant_api.c uses the housekeeping interval driving the retry).
- * RADIANT_TIME_NEVER is untouched - no ceiling to protect.
+ * searching channel lost). The caller sizes window_us to what the refused
+ * attempt cost in wall clock. RADIANT_TIME_NEVER is untouched.
  *
  * SECOND JOB, under CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE: this is also where
- * the bounded-denial escape lives, because this is already the one place that
- * hears "an arbiter refused a window" and it is called from the arming
- * authority's completion path - in the slot, ADR 0013-safe, and needing NO new
- * call site in any default image. See RADIANT_SEARCH_DENIAL_ESCAPE_RUN above.
+ * the bounded-denial escape lives, since this is already the one place that
+ * hears "an arbiter refused a window", called from the arming authority's
+ * completion path. See RADIANT_SEARCH_DENIAL_ESCAPE_RUN above.
  *
- * The escape credits dwell that was never listened to. That is the price and
- * it is worth naming: a set refused its whole budget gets less real coverage
- * than a healthy one. The alternative is not more coverage, it is a sweep
- * pinned to one set for as long as the other stack is busy.
+ * The escape credits dwell that was never listened to - a set refused its
+ * whole budget gets less real coverage than a healthy one, which is a better
+ * trade than a sweep pinned to one set for as long as the other stack is busy.
  */
 void radiant_search_note_denied(struct radiant_search *s, uint32_t window_us);
 

@@ -18,29 +18,20 @@
  * against a cancelled operation's terminal event arriving late.
  *
  * It calls no HAL function - arming the radio is radiant_sched.c's job, so
- * windows from different channels can be merged (the scheduler's
- * highest-value optimization; see struct radiant_rx_req in
- * radiant_radio_hal.h). This module *decides*, radiant_sched.c *acts*; the
- * seam is the radiant_channel_on_*()/radiant_channel_next_* functions at the
- * bottom of this file. Consequently it's testable with no radio at all
- * (radiant/tests/src/test_channel.c still drives fake_radio to prove the
- * scheduler accepts these decisions, but every state assertion is pure).
+ * windows from different channels can be merged (see struct radiant_rx_req
+ * in radiant_radio_hal.h). This module *decides*, radiant_sched.c *acts*;
+ * the seam is the radiant_channel_on_*()/radiant_channel_next_* functions at
+ * the bottom of this file, which is why it's testable with no radio at all.
  *
  * 32 channels because that's the serial protocol's own ceiling (burst header
- * channel field is 5 bits), baked in from the start since a channel-count
- * assumption is expensive to retrofit into a scheduler. Flat array of 32, no
- * allocation.
+ * channel field is 5 bits). Flat array of 32, no allocation.
  *
  * Every function radiant_api.c forwards returns radiant_channel_err_t, a
  * uint8_t whose value IS the wire byte (src/ant_radio.h's convention - an
  * unrecognised code hangs a host library). Values are spelled as literals
- * here rather than pulled from radiant_wire.h so this header reads standalone
- * without a reader having to cross-reference the generated one; the
- * _Static_assert block at the bottom checks the two spellings agree,
- * unconditionally - radiant_wire.h is module-owned, so unlike the src/ant_wire.h
- * this used to (indirectly) depend on, it costs this header nothing to include
- * outright rather than gate the check on some other translation unit having
- * already pulled the generated names into scope first.
+ * here rather than pulled from radiant_wire.h so this header reads
+ * standalone; the _Static_assert block at the bottom checks the two
+ * spellings agree.
  */
 
 #ifndef RADIANT_CHANNEL_H_
@@ -223,10 +214,9 @@ typedef uint8_t radiant_channel_err_t;
  * The tracked-window guard
  *
  * How wide a slave opens its receive window either side of the t_sync it
- * predicts. It used to be one constant, sized from the spec's worst case, and
- * these constants plus radiant_channel_guard_us() are what replaced it. The
- * reasoning is in the doc comment on that function; the numbers are here so a
- * build can see them and the _Static_asserts in radiant_api.c can check them.
+ * predicts. The reasoning is in the doc comment on radiant_channel_guard_us();
+ * the numbers are here so a build can see them and the _Static_asserts in
+ * radiant_api.c can check them.
  * ---------------------------------------------------------------------------
  */
 
@@ -245,8 +235,7 @@ typedef uint8_t radiant_channel_err_t;
 #define RADIANT_CHANNEL_DRIFT_WORST_US 25u
 
 /* Widest the guard ever gets, and its value whenever the estimator has
- * nothing to say: RX_FAIL_TO_SEARCH * DRIFT_WORST_US, with margin. This was
- * the whole guard before the estimator existed. */
+ * nothing to say: RX_FAIL_TO_SEARCH * DRIFT_WORST_US, with margin. */
 #define RADIANT_CHANNEL_GUARD_MAX_US 400u
 
 /*
@@ -680,11 +669,9 @@ radiant_time_t radiant_channel_next_slot(uint8_t channel);
  * reach, in microseconds. Never zero; never above RADIANT_CHANNEL_GUARD_MAX_US
  * unless the master has announced a clock needing more (see below).
  *
- * Not a constant because the spec-worst-case-over-8-misses figure is 400 us,
- * but the bench measures a 9 us residual - so tracked slots were buying 800 us
- * of receive (contention, current draw, matcher noise) to cover ~9 us of real
- * error. Instead the channel keeps an EWMA of |t_sync - predicted| over clean
- * slots, and the guard is:
+ * Not a constant: the spec-worst-case-over-8-misses figure is 400 us, but the
+ * bench measures a 9 us residual. The channel keeps an EWMA of
+ * |t_sync - predicted| over clean slots, and the guard is:
  *
  *     clamp(floor, K * average + miss_count * DRIFT_WORST, GUARD_MAX)
  *
@@ -703,30 +690,19 @@ radiant_time_t radiant_channel_next_slot(uint8_t channel);
  * period that's 600 us of disagreement against a 400 us ceiling, so the
  * channel is lost silently and the estimator never gets a clean slot to
  * lock on. radiant_channel_clock_accuracy_set() lets such a master announce
- * its own ppm, which scales both terms (per-miss charge and ceiling) in
- * proportion, and raises the floor to cover one such period.
+ * its own ppm, which scales both terms in proportion and raises the floor
+ * to cover one such period.
  *
  * AN ANNOUNCEMENT NEVER NARROWS ANYTHING - only the measured residual
- * estimator does, since a claim is not a measurement. A build with no
- * announcement is byte-for-byte the guard computed before the field existed.
+ * estimator does, since a claim is not a measurement.
  *
- * No period (rate) estimator, deliberately: radiant_channel_on_slot()
- * re-anchors on every received frame, so a period correction would only
- * affect MISSED slots, where the guard already charges the safer spec-bound
- * estimate; and acting on the slot clock instead of the window risks walking
- * off the master silently over minutes. struct chan's 72-byte/32-channel
- * budget also doesn't have room for one. If radiant_channel_residual_us()
- * ever reads tens of microseconds on a link that isn't losing slots, that's
- * the signal this needs revisiting.
+ * No period (rate) estimator: acting on the slot clock instead of the window
+ * risks walking off the master silently over minutes, and struct chan's
+ * 72-byte/32-channel budget has no room for one.
  *
- * EWMA rather than a Kalman filter: a filter's variance would let the guard
- * use mean + k*sigma instead of k*mean, but at the measured 9 us residual the
- * 100 us floor dominates the clamp regardless, so a better estimate changes
- * nothing today - and it costs multiplies/division with no float support and
- * the same tight per-channel budget. Revisit only if a sensitivity ladder
- * ever justifies dropping GUARD_MIN_US near k*avg; the next cheap step then
- * is a decaying maximum (the guard needs the worst residual, not the mean),
- * not a filter.
+ * EWMA rather than a Kalman filter: at the measured 9 us residual the 100 us
+ * floor dominates the clamp regardless, so a better estimate changes nothing
+ * today, and this backend has no float support.
  */
 uint32_t radiant_channel_guard_us(uint8_t channel);
 
@@ -915,12 +891,9 @@ static inline radiant_time_t radiant_channel_search_ticks_to_us(uint8_t ticks)
 /* ---------------------------------------------------------------------------
  * The agreement with radiant_wire.h
  *
- * Unconditional, unlike the app-side src/ant_wire.h cross-check this replaced
- * (which only fired in the one translation unit - radiant_api.c - that
- * happened to have included that header first). radiant_wire.h is
- * module-owned, so every translation unit that includes this header gets it
- * for free, and the literals above can never drift from the generated values
- * without a build failure naming exactly which one.
+ * Unconditional: every translation unit that includes this header gets the
+ * check for free, and the literals above can never drift from the generated
+ * values without a build failure naming exactly which one.
  * ---------------------------------------------------------------------------
  */
 _Static_assert(RADIANT_CH_OK == RADIANT_WIRE_RESPONSE_NO_ERROR, "wire code drift: OK");

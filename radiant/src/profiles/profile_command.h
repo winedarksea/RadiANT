@@ -13,39 +13,30 @@
  * for this file, no sdk-ant source was consulted, and nothing here derives from
  * libant.a. See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * What this is, and what it is worth
- * ---------------------------------------------------------------------------
- * A command reaches a node only when it's listening - near its own transmit
- * slot today, so latency is bounded by the channel period, or by the
- * heartbeat (up to 60 s) for a sparse node.
+ * What this is, and what it is worth: a command reaches a node only when
+ * it's listening - near its own transmit slot today, so latency is bounded
+ * by the channel period, or by the heartbeat (up to 60 s) for a sparse node.
  *
  * Not available to Zwift/FE-C: FE-C is a certified ANT+ profile and its
  * resistance command waits for the next FE-C slot regardless. This file is
  * for RadiANT-native control device types only.
  *
- * ---------------------------------------------------------------------------
- * RESPONSE SLOTS, NOT A SHORTER PERIOD
- * ---------------------------------------------------------------------------
- * Running the control channel faster would multiply duty across the 99% of
- * slots nothing is commanded in, on the shared RF 57 window. Instead the
- * period stays fixed and the node opens a downlink sub-slot at a FIXED
- * OFFSET inside it (the schedule block's phase/interval/dwell) - extra
- * receive current only, no extra airtime, worst case one interval instead of
- * one heartbeat.
+ * RESPONSE SLOTS, NOT A SHORTER PERIOD. Running the control channel faster
+ * would multiply duty across the 99% of slots nothing is commanded in, on
+ * the shared RF 57 window. Instead the period stays fixed and the node opens
+ * a downlink sub-slot at a FIXED OFFSET inside it (the schedule block's
+ * phase/interval/dwell) - extra receive current only, no extra airtime,
+ * worst case one interval instead of one heartbeat.
  *
  * The interval is not the period: a node at a 2 s heartbeat can announce a
  * 1 s (or 1/32 s) downlink interval without touching what it transmits.
  * Latency and duty become independent knobs.
  *
- * ---------------------------------------------------------------------------
- * WHY THERE IS NO NEW SCHEDULER SLOT KIND
- * ---------------------------------------------------------------------------
- * radiant_sched.c has SLOT_RX, SLOT_TX, SLOT_ED. A response slot is not a
- * fourth kind: unlike SLOT_ED (no format/filter/open/close, sweeps a range
- * of RF indices), a response slot has a format, filter, rf_index, open and
- * close - it IS an ordinary bounded RX window, describable exactly through
- * radiant_sched_request_rx().
+ * WHY THERE IS NO NEW SCHEDULER SLOT KIND. radiant_sched.c has SLOT_RX,
+ * SLOT_TX, SLOT_ED. A response slot is not a fourth kind: unlike SLOT_ED (no
+ * format/filter/open/close, sweeps a range of RF indices), a response slot
+ * has a format, filter, rf_index, open and close - it IS an ordinary bounded
+ * RX window, describable exactly through radiant_sched_request_rx().
  *
  * A dedicated kind would touch ~20 sites (enum, arm function, preemption
  * rules, leader scan, expiry sweep, HAL callback, Kconfig, tests) and, worse,
@@ -56,32 +47,26 @@
  * radiant/tests/src/test_command.c (a node with no downlink window arms
  * the identical sequence it armed before this file existed).
  *
- * ---------------------------------------------------------------------------
- * THE NODE LISTENS ONLY WHEN IT EXPECTS A COMMAND
- * ---------------------------------------------------------------------------
- * An always-open window would run the receiver at full announced duty
- * forever. So arming is explicit and consumable: profile_cmd_expect() buys
- * windows, profile_cmd_arm_listen() spends one, and a node expecting nothing
- * arms nothing. A received command silently buys PROFILE_CMD_RETRY_WINDOWS
- * more, so a lost-ack retry lands in a window that's still open.
+ * THE NODE LISTENS ONLY WHEN IT EXPECTS A COMMAND. An always-open window
+ * would run the receiver at full announced duty forever. So arming is
+ * explicit and consumable: profile_cmd_expect() buys windows,
+ * profile_cmd_arm_listen() spends one, and a node expecting nothing arms
+ * nothing. A received command silently buys PROFILE_CMD_RETRY_WINDOWS more,
+ * so a lost-ack retry lands in a window that's still open.
  *
- * ---------------------------------------------------------------------------
- * THE TAG, AND THE ONE THING THE LONG-RANGE PHY CHANGED
- * ---------------------------------------------------------------------------
- * Section 9 fixed the inline tag at 16 bits pending a measured way to put a
- * longer frame on the air; the LR PHY's RadiANT-authored length field is
- * that way, since nobody else can hear it. So width is a function of frame
- * config, not a node preference: profile_cmd_tag_bytes() returns 8 for
- * RADIANT_FRAME_CFG_LR, 2 otherwise. At 16 bits forgery succeeds with
- * probability 2^-16 and the backoff below is load-bearing; at 64 bits it's
- * 2^-64 and the backoff is belt and braces.
+ * THE TAG, AND THE ONE THING THE LONG-RANGE PHY CHANGED. Section 9 fixed the
+ * inline tag at 16 bits pending a measured way to put a longer frame on the
+ * air; the LR PHY's RadiANT-authored length field is that way, since nobody
+ * else can hear it. So width is a function of frame config, not a node
+ * preference: profile_cmd_tag_bytes() returns 8 for RADIANT_FRAME_CFG_LR, 2
+ * otherwise. At 16 bits forgery succeeds with probability 2^-16 and the
+ * backoff below is load-bearing; at 64 bits it's 2^-64 and the backoff is
+ * belt and braces.
  *
- * ---------------------------------------------------------------------------
- * A CONTROL CHANNEL IS CODED S=8, AND THAT IS A CONFIGURATION RULE
- * ---------------------------------------------------------------------------
- * Not a latency fix (an S=8 frame is ~1.23 ms against a period in hundreds
- * of ms) - it buys link budget for range and, via the length field it
- * unlocks, the 64-bit tag. The two arrive together, which is why
+ * A CONTROL CHANNEL IS CODED S=8, AND THAT IS A CONFIGURATION RULE. Not a
+ * latency fix (an S=8 frame is ~1.23 ms against a period in hundreds of ms)
+ * - it buys link budget for range and, via the length field it unlocks, the
+ * 64-bit tag. The two arrive together, which is why
  * profile_cmd_channel_check() checks them as one condition.
  */
 
@@ -105,10 +90,7 @@
 extern "C" {
 #endif
 
-/* ---------------------------------------------------------------------------
- * The control-channel convention
- * ---------------------------------------------------------------------------
- */
+/* The control-channel convention. */
 
 /* What a RadiANT-native control device type is configured with. Named rather
  * than described, so that the first such type cites a constant instead of
@@ -132,10 +114,7 @@ uint8_t profile_cmd_tag_bytes(enum radiant_frame_cfg cfg);
 int profile_cmd_channel_check(const struct profile_schedule *s,
 			      enum radiant_frame_cfg cfg);
 
-/* ---------------------------------------------------------------------------
- * The idempotency rule's constants - section 9, stated as numbers
- * ---------------------------------------------------------------------------
- */
+/* The idempotency rule's constants - section 9, stated as numbers. */
 
 /* "Accept if delta_u8(seq, last_seq) is in 1..64": wide enough to survive a
  * run of loss, narrow enough that a stale command can't walk back into range.
@@ -161,10 +140,7 @@ int profile_cmd_channel_check(const struct profile_schedule *s,
  * because the lost ack may be lost again. */
 #define PROFILE_CMD_RETRY_WINDOWS 2u
 
-/* ---------------------------------------------------------------------------
- * The node
- * ---------------------------------------------------------------------------
- */
+/* The node. */
 
 /* Counters: the "log rejections" half of section 9's mitigation - a forging
  * attacker should be a detectable flood, not a quiet success. */
@@ -258,10 +234,7 @@ int profile_cmd_set_epoch(struct profile_cmd_node *n, uint32_t epoch);
 
 const struct profile_cmd_stats *profile_cmd_stats(const struct profile_cmd_node *n);
 
-/* ---------------------------------------------------------------------------
- * The tag
- * ---------------------------------------------------------------------------
- */
+/* The tag. */
 
 /*
  * trunc(MAC(K_cmd, nonce || body[0..5])) at the configured width. `body` is
@@ -279,10 +252,7 @@ int profile_cmd_tag(const struct profile_cmd_node *n, const uint8_t *body,
 bool profile_cmd_tag_ok(const struct profile_cmd_node *n, const uint8_t *body,
 			const uint8_t *tag);
 
-/* ---------------------------------------------------------------------------
- * The state machine
- * ---------------------------------------------------------------------------
- */
+/* The state machine. */
 
 /*
  * One received page 0x10, through section 9's four rules in order.
@@ -301,10 +271,7 @@ int profile_cmd_on_command(struct profile_cmd_node *n, const uint8_t *body,
 			   uint8_t len, radiant_time_t now, uint8_t *ack,
 			   size_t ack_cap);
 
-/* ---------------------------------------------------------------------------
- * The response slot
- * ---------------------------------------------------------------------------
- */
+/* The response slot. */
 
 /*
  * Adopt a downlink window and the grid it recurs on. `anchor` is any instant

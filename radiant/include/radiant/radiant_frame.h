@@ -10,11 +10,10 @@
  * specifications behind the reasoning about why the two configurations
  * differ. See docs/decisions/0002-clean-room-policy.md.
  *
- * The layer with no radio in it. Everything here is a pure function of
- * bytes: given a channel ID and payload, what goes on the air; given what
- * came off the air, what channel ID and payload that was; and the CRC that
- * decides whether the second question was worth asking. The only module
- * fully testable in CI with no board.
+ * The layer with no radio in it: given a channel ID and payload, what goes
+ * on the air; given what came off the air, what channel ID and payload that
+ * was; and the CRC that decides whether the second question was worth
+ * asking. The only module fully testable in CI with no board.
  *
  * The frame, every byte of it measured (docs/ant-radio-link.md, confirmed by
  * Spike A on 2,164 real frames, by Spike B part 1 on 750 more and by part 2 on
@@ -32,16 +31,13 @@
  * that: an ANT master re-broadcasts its last payload, so the same eight
  * payload bytes appear one slot apart with this byte changing 0xAA -> 0x0A,
  * which a length field cannot do. Part 2 decomposed it into six independent
- * fields and killed the length reading outright - see below.
+ * fields and killed the length reading outright - see below. The preamble
+ * is a PHY property (the radio derives it from the first address bit, no
+ * software involved) and not this module's business; everything from the
+ * network address onward is.
  *
- * The preamble is a PHY property (the radio derives it from the first
- * address bit, no software involved) and not this module's business;
- * everything from the network address onward is.
- *
- * ---------------------------------------------------------------------------
- * Two configurations, not one - and the split is not where a reader expects
- * ---------------------------------------------------------------------------
- * The same 15 covered bytes are divided differently depending on how many of
+ * Two configurations, not one, and the split is not where a reader expects:
+ * the same 15 covered bytes are divided differently depending on how many of
  * them the receiver matched in hardware:
  *
  *   tracking/TX   address A6 C5 dnlo dnhi dtype     body [ttype][ctrl][d0..d7]
@@ -73,14 +69,11 @@
  * (radiant_rx_event.filter_index). A caller decoding search fills
  * wire.addr from its own filter table - this module never guesses it.
  *
- * ---------------------------------------------------------------------------
- * No register semantics
- * ---------------------------------------------------------------------------
- * Registers belong to a backend. This header speaks frames, channel IDs,
- * buffers and on-air byte order. radiant_addr_pack_leading() returns a
- * 32-bit word because every planned backend wants one, but it's named for
- * what it is - leading on-air address bytes packed in transmission order -
- * not for the register it happens to land in on one part.
+ * No register semantics: registers belong to a backend. This header speaks
+ * frames, channel IDs, buffers and on-air byte order. radiant_addr_pack_leading()
+ * returns a 32-bit word because every planned backend wants one, but it's
+ * named for what it is - leading on-air address bytes packed in transmission
+ * order - not for the register it happens to land in on one part.
  */
 
 #ifndef RADIANT_FRAME_H_

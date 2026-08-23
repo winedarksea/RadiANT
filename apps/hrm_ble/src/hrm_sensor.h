@@ -8,13 +8,12 @@
  *
  * NOT ZEPHYR'S `sensor` API. `zephyr/drivers/sensor.h` has no heart-rate
  * channel and no beat trigger, so a heart-rate driver has to invent an unnamed
- * `SENSOR_CHAN_PRIV_START + n` - which is a smell, but not the reason it was
- * rejected. The reason is that the sensor API is a POLL-A-SCALAR model and a
- * beat is an EDGE. A sensor-API strap re-derives the beat instant from whatever
- * tick happened to do the fetch, which is structurally the same mistake that
- * produced the 72-versus-66.7 bpm drift bug this application already shipped
- * once (see src/hrm_sim_sched.c). Adopting that API would have made the bug the
- * architecture.
+ * `SENSOR_CHAN_PRIV_START + n` - a smell, but not why it was rejected: the
+ * sensor API is a POLL-A-SCALAR model and a beat is an EDGE. A sensor-API
+ * strap re-derives the beat instant from whatever tick happened to do the
+ * fetch, which is structurally the same mistake that produced the
+ * 72-versus-66.7 bpm drift bug this application already shipped once (see
+ * src/hrm_sim_sched.c).
  *
  * NOT A WEAK SYMBOL. A weak default that a manufacturer overrides is one
  * signature typo away from silently keeping the default - which here means a
@@ -108,8 +107,7 @@ struct hrm_sensor {
  *
  * EXACTLY ONE WINS. A second call returns -EEXIST and logs at error level
  * rather than replacing the first: two sources reporting beats would violate
- * the single-producer rule the {seq, event_time} word depends on, and "the last
- * one to initialise" is not a rule anybody could reason about.
+ * the single-producer rule the {seq, event_time} word depends on.
  *
  * Returns 0, -EINVAL for a sensor with no api->start, or -EEXIST.
  */

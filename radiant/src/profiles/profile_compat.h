@@ -12,10 +12,8 @@
  * are this project's own documents and code. No ANT+ device
  * profile document was read for this file.
  *
- * ---------------------------------------------------------------------------
- * THIS FILE EXISTS SO profile_hr.c AND profile_power.c DO NOT HAVE TO
- * ---------------------------------------------------------------------------
- * The plan's boundary is "the profile modules themselves never call
+ * THIS FILE EXISTS SO profile_hr.c AND profile_power.c DO NOT HAVE TO. The
+ * plan's boundary is "the profile modules themselves never call
  * radiant_sec", and something has to. profile_sched.c owns the shared
  * 119/120/121 rotation and must not depend on the compatibility work;
  * profile_hr.c/profile_power.c must stay byte-exact ANT+ sensors with no key.
@@ -30,9 +28,7 @@
  * including it never transitively reaches a radiant header.
  * tools/test_compat_capture.py greps for that.
  *
- * ---------------------------------------------------------------------------
- * What goes on the air, and what it costs
- * ---------------------------------------------------------------------------
+ * What goes on the air, and what it costs:
  *   0x70  capability beacon, two frames, one per 121-message cycle. 0.8% of
  *         slots.
  *   0x71  Tier I identity attestation, one page every T seconds - decoupled
@@ -43,11 +39,9 @@
  * 2.0% of slots in the default configuration, against ANT+'s own 1.65% for
  * common pages 80/81.
  *
- * ---------------------------------------------------------------------------
- * The one interaction the seam's rule creates
- * ---------------------------------------------------------------------------
- * The seam never offers message 119, 120, or a descriptor frame. Tier I
- * doesn't care (time-derived counter, slip is invisible); the beacon doesn't
+ * The one interaction the seam's rule creates: the seam never offers message
+ * 119, 120, or a descriptor frame. Tier I doesn't care (time-derived
+ * counter, slip is invisible); the beacon doesn't
  * either (a displaced frame is owed and rides the next offered slot, keeping
  * one frame per cycle). Tier II does care: its window closes at exactly the
  * Nth transmitted message with no slack, so a window landing on 119/120
@@ -206,12 +200,10 @@ struct profile_compat_cfg {
 };
 
 /*
- * ---------------------------------------------------------------------------
- * The beacon page's own client seam
- * ---------------------------------------------------------------------------
- * Same shape as profile_sched.h's seam, one layer down: a second thing wants
- * to put frames in this page's set, and forking the set forks the framing
- * convention. Layer D's enrolment window (src/profiles/profile_enrol.c) is
+ * The beacon page's own client seam. Same shape as profile_sched.h's seam,
+ * one layer down: a second thing wants to put frames in this page's set,
+ * and forking the set forks the framing convention. Layer D's enrolment
+ * window (src/profiles/profile_enrol.c) is
  * six frames of a public key - not a new page number (ADR 0008 allocates
  * exactly two) but additional frames in the set, like Layer C's SWITCH/RETURN.
  *

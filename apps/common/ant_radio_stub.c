@@ -44,18 +44,6 @@ LOG_MODULE_REGISTER(ant_radio_stub, LOG_LEVEL_INF);
  */
 static const char stub_version[] = "STUB0.01B00";
 
-/*
- * Three constants this file needs (ANTW_SDU_MASK_ACK_CONFIG_BIT,
- * ANTW_MAX_SUPPORTED_ENCRYPTION_MODE, ANTW_MESG_CONFIG_ADV_BURST_REQ_
- * CAPABILITIES_SIZE) were once UNRESOLVED and stood in behind local STUB_*
- * placeholders rather than a conditional sdk-ant include, which would have
- * reintroduced the dependency this file exists to disprove. All three have
- * since been recovered into src/ant_wire.h and BUILD_ASSERTed against
- * sdk-ant elsewhere, so the real names are used directly now. One of the
- * three placeholder guesses was wrong (encryption mode 1 vs the real 2);
- * this stub's behaviour changed accordingly, towards what a real stack says.
- */
-
 /* ── Configuration state ───────────────────────────────────────────────────── */
 
 /* Configuration is discarded except where the protocol lets a host read it

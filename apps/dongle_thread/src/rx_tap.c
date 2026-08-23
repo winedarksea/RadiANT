@@ -56,7 +56,7 @@
  * (radiant/tests) and they are on wherever the application actually wants
  * them. It is that CONFIG_RADIANT_BRIDGE alone is ALSO set by bridge.conf,
  * one of the five coexistence arms whose images docs/radiant-bridge.md
- * section 7.4's numbers were taken on, and docs/matter-e2-regression.md
+ * section 7.4's numbers were taken on, and docs/matter-bringup.md
  * measured what happened when these sources arrived on that arm unasked.
  * CONFIG_ANT_DONGLE_PROFILES_EXTRA's help in apps/dongle_thread/Kconfig is
  * the long version and is the thing to read before removing an #ifdef here.
@@ -360,18 +360,9 @@ void ant_dongle_rx_tap(const struct antr_msg *msg)
 	 * there. Nothing new goes ABOVE the common-range test: a profile adapter
 	 * that sees a common page is the bug this restructure exists to remove.
 	 *
-	 * Bicycle power (0x0B) and fitness equipment (0x11) share ONE adapter
-	 * and one per-binding state array. That is not a shortcut - a binding
-	 * has exactly one device type, so the two entry points are never both
-	 * live on one source, and the energy integral they both feed is the
-	 * same accumulator with the same meaning. Two arrays would be two
-	 * accumulators for one quantity.
-	 *
-	 * Running dynamics (radiant_rd_adapter.c) is still NOT here, and the
-	 * reason has not changed: it exists and is tested, but it arrives on
-	 * its own channel with its own binding and has no bench evidence behind
-	 * it. Adding the case without that is how an untested path acquires the
-	 * appearance of a shipped one.
+	 * Bicycle power (0x0B) and fitness equipment (0x11) sharing one adapter
+	 * array below is the same rule as power_adapters[]'s declaration above,
+	 * not a second decision.
 	 */
 	if (b->devtype == 0x78u) {
 		(void)radiant_hr_adapter_decode(&hr_adapters[source], source,

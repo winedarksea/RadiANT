@@ -3,74 +3,64 @@
  *
  * FTMS (0x1826) and RSC (0x1814), beside two ANT+ masters on one radio.
  *
- * ===========================================================================
- * PROVENANCE, AND WHY IT IS THREE DOCUMENTS AND NOT ONE
- * ===========================================================================
- * 1. Bluetooth SIG, "Fitness Machine Service" (FTMS) v1.0 - behaviour, flag
- *    semantics, procedures, the control-point op-code table, the feature bit
- *    tables and the advertising Service Data element. Section and table
- *    numbers are cited at each field below so they can be re-checked.
- * 2. The GATT Specification Supplement / Assigned Numbers - EVERY
- *    characteristic field encoding. FTMS defines the Treadmill Data *flags*
- *    and then says the fields themselves are "as defined on the Bluetooth SIG
- *    Assigned Numbers webpage"; it never prints a data type, a unit or a
- *    resolution for any of them, and it never prints a single 16-bit UUID
- *    value either. Implementing from FTMS alone leaves every scale factor a
- *    guess. Each constant below therefore carries its GSS-derived unit
- *    explicitly, in the same voice profile_fec.h cites its tables.
- * 3. The Fitness Machine Profile (FTMP) - the *profile* spec, separate from
- *    the service spec. At FTMS service level almost everything is Optional
- *    (Table 4.1: only Fitness Machine Feature is unconditionally Mandatory,
- *    and even Treadmill Data is "O"), and FTMS never says a server must
- *    advertise the Service Data element at all. The per-machine-type
- *    obligations are FTMP's.
+ * Three source documents, not one: Bluetooth SIG "Fitness Machine Service"
+ * (FTMS) v1.0 for behaviour, flag semantics, procedures and the
+ * control-point op-code table (section/table numbers cited at each field
+ * below); the GATT Specification Supplement / Assigned Numbers for every
+ * characteristic field's data type, unit and resolution - FTMS defines the
+ * Treadmill Data *flags* but says the fields themselves are "as defined on
+ * the Bluetooth SIG Assigned Numbers webpage" and never prints a unit, so
+ * each constant below carries its GSS-derived unit explicitly; and the
+ * Fitness Machine Profile (FTMP) for the per-machine-type obligations FTMS
+ * itself leaves Optional (Table 4.1: only Fitness Machine Feature is
+ * unconditionally Mandatory, and even Treadmill Data is "O"). RSC is not
+ * hand-written: NCS ships the service (nrf/subsys/bluetooth/services/rscs.c,
+ * CONFIG_BT_RSCS=y) and this file uses bt_rscs_init() /
+ * bt_rscs_measurement_send().
  *
- * RSC is not hand-written: NCS ships the service
- * (nrf/subsys/bluetooth/services/rscs.c, CONFIG_BT_RSCS=y) and this file uses
- * bt_rscs_init() / bt_rscs_measurement_send().
+ * Things easy to get wrong here, each a silent failure:
  *
- * ===========================================================================
- * SEVEN THINGS THAT ARE EASY TO GET WRONG HERE, EACH WITH A SILENT FAILURE
- * ===========================================================================
- *
- * 1. THE UUID MACRO NAMES ARE A TRAP. The FTMS *service* 0x1826 is
- *    `BT_UUID_FMS`, while `BT_UUID_GATT_FMS` is the Fitness Machine *Status
- *    characteristic* 0x2ADA - one `GATT_` apart, both plausible in a service
- *    definition, and swapping them compiles cleanly and discovers wrong.
- *    `BT_UUID_FTMS` does not exist. Verified against
+ * 1. UUID MACRO NAMES ARE A TRAP. `BT_UUID_FMS` is the FTMS *service*
+ *    0x1826; `BT_UUID_GATT_FMS` is the Fitness Machine *Status
+ *    characteristic* 0x2ADA - one `GATT_` apart, both plausible, and
+ *    swapping them compiles cleanly and discovers wrong. `BT_UUID_FTMS`
+ *    does not exist. Verified against
  *    zephyr/include/zephyr/bluetooth/uuid.h in NCS v3.2.4, along with
  *    `BT_UUID_GATT_TRSTAT` (0x2AD3), whose name is not `..._TS`.
  *
- * 2. TREADMILL DATA'S BIT 0 IS INVERTED. Table 4.5: bit 0 is "More Data", and
- *    it set to **0** means "Instantaneous Speed field present". Every other
- *    bit is present-when-1. It also has no corresponding Feature bit.
+ * 2. TREADMILL DATA'S BIT 0 IS INVERTED. Table 4.5: bit 0 is "More Data",
+ *    and it set to **0** means "Instantaneous Speed field present". Every
+ *    other bit is present-when-1, and bit 0 has no corresponding Feature
+ *    bit.
  *
- * 3. SEVERAL FIELDS SHARE ONE FLAG BIT. Bit 3 is "Inclination AND Ramp Angle
- *    Setting Present" - inclination cannot be sent without the ramp angle.
- *    Bit 4 is the positive/negative elevation gain PAIR. Bit 7 covers total
- *    energy, energy per hour and energy per minute as one group.
+ * 3. SEVERAL FIELDS SHARE ONE FLAG BIT. Bit 3 is "Inclination AND Ramp
+ *    Angle Setting Present" - inclination cannot be sent without the ramp
+ *    angle. Bit 4 is the positive/negative elevation gain PAIR. Bit 7
+ *    covers total energy, energy per hour and energy per minute as one
+ *    group.
  *
  * 4. THE FULL RECORD DOES NOT FIT ONE NOTIFICATION and the spec says so:
  *    "all the fields of this characteristic cannot be present simultaneously
- *    if using a default ATT_MTU size". §4.19 then defines a split where every
- *    notification but the last carries More Data = 1. THIS IMPLEMENTATION
- *    AVOIDS THE SPLIT ENTIRELY by fixing a field set that fits: 18 bytes
- *    against the 20 a default 23-byte ATT_MTU leaves. BUILD_ASSERTed below,
- *    so adding a field is a build error rather than a truncated notification.
+ *    if using a default ATT_MTU size". §4.19 then defines a split where
+ *    every notification but the last carries More Data = 1. THIS
+ *    IMPLEMENTATION AVOIDS THE SPLIT ENTIRELY by fixing a field set that
+ *    fits: 18 bytes against the 20 a default 23-byte ATT_MTU leaves.
+ *    BUILD_ASSERTed below, so adding a field is a build error rather than a
+ *    truncated notification.
  *
  * 5. THE CONTROL POINT REQUIRES ENCRYPTION. Table 4.1 gives it security
  *    permission "Encryption", so the attribute carries
  *    BT_GATT_PERM_WRITE_ENCRYPT and the build needs CONFIG_BT_SMP and a
  *    bonding store. apps/hrm_ble has no equivalent of any of that - it
- *    advertises an unencrypted HRS and never pairs - so this is new surface,
- *    not a Kconfig line.
+ *    advertises an unencrypted HRS and never pairs - so this is new
+ *    surface, not a Kconfig line.
  *
- * 6. THE STATUS NOTIFY DIRECTION IS EASY TO GET BACKWARDS. §4.17.1: a status
- *    caused by the USER at the machine's own console goes to ALL connected
- *    clients; a status caused by a CLIENT's control-point write goes to the
- *    OTHER clients - the writing client is answered by the Response Code
- *    indication, not by a status notification. notify_status() takes an
- *    "except" connection for exactly this.
+ * 6. THE STATUS NOTIFY DIRECTION IS EASY TO GET BACKWARDS. §4.17.1: a
+ *    status caused by the USER at the machine's own console goes to ALL
+ *    connected clients; a status caused by a CLIENT's control-point write
+ *    goes to the OTHER clients - the writing client is answered by the
+ *    Response Code indication, not by a status notification.
+ *    notify_status() takes an "except" connection for exactly this.
  *
  * 7. THE ADVERTISING PAYLOAD DOES NOT FIT WITH A NAME IN IT.
  *      flags                    1 + 1 + 1 =  3
@@ -82,20 +72,17 @@
  *    RESPONSE. Passing a non-NULL `sd` to bt_le_adv_start() is the whole
  *    change - per zephyr/subsys/bluetooth/host/adv.c it makes a legacy
  *    advertiser scannable automatically, and BT_LE_ADV_CONN_FAST_1 works
- *    unmodified. THE COST IS NOT FREE AND IS RECORDED IN ADR 0017: a scannable
- *    advertiser answers SCAN_REQ, which is extra radio time contending with
- *    the ANT+ masters through exactly the MPSL gate this application family
- *    exists to arbitrate. CONFIG_BT_EXT_ADV is used nowhere in this repository
- *    and is the higher-risk answer; legacy adv plus a scan response is the one
- *    taken.
+ *    unmodified. THE COST IS NOT FREE AND IS RECORDED IN ADR 0017: a
+ *    scannable advertiser answers SCAN_REQ, which is extra radio time
+ *    contending with the ANT+ masters through exactly the MPSL gate this
+ *    application family exists to arbitrate. CONFIG_BT_EXT_ADV is used
+ *    nowhere in this repository and is the higher-risk answer; legacy adv
+ *    plus a scan response is the one taken.
  *
- * ===========================================================================
- * WHAT IS NOT HERE
- * ===========================================================================
- * No procedure timeout. §4.16.4 is titled "Procedure Timeout" and gives no
- * number; the commonly-assumed 30 s is not in FTMS v1.0. If one is ever
- * wanted it is local policy to document, not a spec citation, and it is not
- * invented here.
+ * WHAT IS NOT HERE: no procedure timeout. §4.16.4 is titled "Procedure
+ * Timeout" and gives no number; the commonly-assumed 30 s is not in FTMS
+ * v1.0. If one is ever wanted it is local policy to document, not a spec
+ * citation, and it is not invented here.
  */
 
 #include <errno.h>

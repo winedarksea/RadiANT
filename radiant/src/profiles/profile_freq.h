@@ -14,34 +14,33 @@
  *
  * WHAT THIS IS FOR: the characterised ~0.4% loss floor on this bench is
  * memoryless per-slot collision at 2457 MHz inside Wi-Fi channel 11. Nothing
- * in the link layer can fix that; leaving 2457 MHz can, and this file decides
- * where to go and announces the departure. THE VALUE IS LEAVING CROWDED
- * AIRSPACE, NOT DODGING WITHIN IT - a node moves once, to a quiet index, and
- * stays. Frequency-diverse repetition and fast per-event hopping are both
- * declined; the latter would break the search sweep's "certain within one
- * sweep" guarantee every other extension axis is built around.
+ * in the link layer can fix that; leaving 2457 MHz can. THE VALUE IS LEAVING
+ * CROWDED AIRSPACE, NOT DODGING WITHIN IT - a node moves once, to a quiet
+ * index, and stays. Frequency-diverse repetition and fast per-event hopping
+ * are both declined; the latter would break the search sweep's "certain
+ * within one sweep" guarantee every other extension axis is built around.
  *
- * THE CANDIDATE SET IS BLE'S: RF 2, 26, 80 (2402/2426/2480 MHz) are BLE's
+ * THE CANDIDATE SET IS BLE'S: RF 2, 26, 80 (2402/2426/2480 MHz), BLE's
  * advertising channels, sitting in the gaps between Wi-Fi 1/6/11. A node is
  * not restricted to those three - descriptor frame 0 byte [6] carries a full
  * 0..124 index - they are only the selector's default candidate list and a
  * lost receiver's first retry.
  *
- * DISCOVERY NEVER MOVES, and this file has no way to move it: radiant_search.c
- * always arms RADIANT_FRAME_CFG_SEARCH on RADIANT_RF_INDEX_ANT_PLUS (ADR
- * 0007), and nothing here touches it - a frequency axis would multiply the
- * sweep rather than lengthen it. Consequence: A NODE THAT HAS MOVED OFF RF 57
- * IS OUTSIDE THE SWEEP'S CERTAINTY, found instead by a descriptor heard
- * before the move, by the sync handoff (page 0x12), or by the bounded retry
- * list profile_freq_reacquire_order() publishes (at most five windows, not a
- * sweep) - the same shape ADR 0007 gives a long-range node one axis over.
+ * DISCOVERY NEVER MOVES: radiant_search.c always arms RADIANT_FRAME_CFG_SEARCH
+ * on RADIANT_RF_INDEX_ANT_PLUS (ADR 0007), untouched here - a frequency axis
+ * would multiply the sweep rather than lengthen it. Consequence: A NODE THAT
+ * HAS MOVED OFF RF 57 IS OUTSIDE THE SWEEP'S CERTAINTY, found instead by a
+ * descriptor heard before the move, by the sync handoff (page 0x12), or by
+ * the bounded retry list profile_freq_reacquire_order() publishes (at most
+ * five windows, not a sweep) - the same shape ADR 0007 gives a long-range
+ * node one axis over.
  *
  * WHY A PAGE, NOT A DESCRIPTOR FRAME: profile_sched.c encodes the descriptor
  * set once at init and retransmits the bytes, so it can't carry a countdown
- * that must be recomputed every time. So the announcement is page 0x13, a
- * one-frame set claimed through profile_sched.h's client seam, present only
- * while a countdown runs. The descriptor says where the node IS; this page
- * says where it's GOING.
+ * recomputed every time. The announcement is page 0x13 instead, a one-frame
+ * set claimed through profile_sched.h's client seam, present only while a
+ * countdown runs: the descriptor says where the node IS, this page where
+ * it's GOING.
  *
  * THE COUNTDOWN ARITHMETIC is Layer C's (profile_private.h), reused rather
  * than re-derived:
@@ -55,15 +54,15 @@
  *
  * NOT BORROWED FROM LAYER C, each a decision: no tag/key/policy states (a
  * forged announcement costs one re-acquisition, same as a missed one, so
- * authentication buys nothing - recorded in ADR 0012); no beacon promotion
- * (one slot in PROFILE_FREQ_ANNOUNCE_EVERY, nothing else changes cadence);
- * no bounded duration or automatic return (a node goes back the same way it
- * left, by announcing it).
+ * authentication buys nothing - ADR 0012); no beacon promotion (one slot in
+ * PROFILE_FREQ_ANNOUNCE_EVERY, nothing else changes cadence); no bounded
+ * duration or automatic return (a node goes back the same way it left, by
+ * announcing it).
  *
- * A RECEIVER COUNTS SLOTS, NOT MESSAGES. The countdown is in transmitted
- * messages; a receiver counting only what it heard would fall behind by its
- * own loss rate. A tracked channel opens a window every period whether or
- * not a frame lands, so profile_freq_rx_slot() takes one call per SLOT
+ * A RECEIVER COUNTS SLOTS, NOT MESSAGES: the countdown is in transmitted
+ * messages, and a receiver counting only what it heard would fall behind by
+ * its own loss rate. A tracked channel opens a window every period whether
+ * or not a frame lands, so profile_freq_rx_slot() takes one call per SLOT
  * (message or NULL), matching the node's message count by construction.
  * SAME FACT BOUNDS WHERE THIS WORKS: a sparse node's message count and its
  * receiver's slot count are unrelated, so profile_freq_begin() REFUSES a
@@ -85,10 +84,7 @@
 extern "C" {
 #endif
 
-/* ---------------------------------------------------------------------------
- * The candidate set
- * ---------------------------------------------------------------------------
- */
+/* The candidate set. */
 
 /* Where every ANT+ device is, and where a node is until it says otherwise.
  * Named from the HAL's constant, not spelled 57 again. */
@@ -104,10 +100,7 @@ extern "C" {
  * function that takes one; this is what it gets by passing NULL. */
 extern const uint8_t profile_freq_defaults[PROFILE_FREQ_N_DEFAULTS];
 
-/* ---------------------------------------------------------------------------
- * Selection
- * ---------------------------------------------------------------------------
- */
+/* Selection. */
 
 /*
  * One index's evidence, in the channel-quality map's own vocabulary.
@@ -171,8 +164,8 @@ int profile_freq_select(uint8_t incumbent, const struct profile_freq_evidence *e
 int profile_freq_select_from_map(uint8_t incumbent, const uint8_t *cand,
 				 uint8_t n_cand, uint8_t *out_rf);
 
-/* ---------------------------------------------------------------------------
- * The announcement page - docs/radiant-telemetry.md's page map, 0x13
+/*
+ * The announcement page - docs/radiant-telemetry.md's page map, 0x13:
  *
  *   [0]    0x13
  *   [1]    0x00 = (0 << 4) | (1 - 1): a ONE-FRAME SET, on the framing convention
@@ -185,7 +178,6 @@ int profile_freq_select_from_map(uint8_t incumbent, const uint8_t *cand,
  *   [2]    target RF index, 0..124
  *   [3]    countdown, in units of PROFILE_FREQ_UNIT transmitted messages, 1..255
  *   [4..7] reserved, must be zero
- * ---------------------------------------------------------------------------
  */
 
 #define PROFILE_FREQ_PAGE       0x13u
@@ -229,10 +221,7 @@ int profile_freq_encode(uint8_t target, uint8_t countdown, uint8_t *body);
 int profile_freq_decode(const uint8_t *body, uint8_t len, uint8_t *target,
 			uint8_t *countdown);
 
-/* ---------------------------------------------------------------------------
- * The node's half
- * ---------------------------------------------------------------------------
- */
+/* The node's half. */
 
 /*
  * How long between completed moves, in seconds. Minutes-scale is a structural
@@ -359,12 +348,11 @@ bool profile_freq_claim(uint32_t m, uint8_t *body, void *user);
  */
 int profile_freq_apply(struct profile_descriptor *d, uint8_t rf_index);
 
-/* ---------------------------------------------------------------------------
- * The receiver's half
- * ---------------------------------------------------------------------------
- * Here rather than in a test, since a rule written twice is a rule two
- * implementations will one day disagree about, silently - a node and a
- * receiver computing different move messages don't fail, they stop meeting.
+/*
+ * The receiver's half. Here rather than in a test, since a rule written
+ * twice is a rule two implementations will one day disagree about, silently
+ * - a node and a receiver computing different move messages don't fail,
+ * they stop meeting.
  */
 
 struct profile_freq_rx {

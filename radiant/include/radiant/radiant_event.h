@@ -3,8 +3,7 @@
  * radiant_event.h - the event queue, and the assembly of a received frame into the
  * flat struct radiant_msg that radiant_on_message() carries out of the module.
  *
- * Provenance: clean-room, from radiant_msg.h (this module's own copy of what
- * used to be reached as src/ant_radio.h) and docs/sdk-ant-contract.md (event
+ * Provenance: clean-room, from radiant_msg.h and docs/sdk-ant-contract.md (event
  * path, burst buffer-ownership, threading), radiant_wire.h (generated from
  * protocol/ant_wire.yaml) for wire constants, radiant_radio_hal.h for
  * the t_sync contract, radiant_frame.h for the channel ID, and

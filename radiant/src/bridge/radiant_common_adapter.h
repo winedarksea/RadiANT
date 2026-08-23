@@ -3,68 +3,58 @@
  * radiant_common_adapter.h - ANT+ Common Data Pages (0x40-0x5D) onto the
  * sample bus.
  *
- *
  * No radiant header, direct or transitive - one adapter per profile, not one
  * per profile per sink. Safe from a radio ISR: no allocation, no logging, no
  * blocking, bounded work.
  *
  * ---------------------------------------------------------------------------
- * THIS ADAPTER IS NOT LIKE THE OTHERS, AND THE DIFFERENCE IS THE WHOLE POINT
+ * Not chosen by device type, unlike the others
  * ---------------------------------------------------------------------------
- * Every other adapter in this directory is chosen by the binding's device
- * type: HR 0x78 gets radiant_hr_adapter, and a binding has exactly one device
- * type, so exactly one adapter ever writes a given source.
+ * Every other adapter here is chosen by the binding's device type, so
+ * exactly one adapter ever writes a given source. Table 4-1 says of pages
+ * 0x40-0x5D, verbatim: "Use of these pages is defined by the transmission
+ * type of the ANT channel parameter" - not the device type. So a heart-rate
+ * strap, a power meter or a bike light may all carry page 84's weather data,
+ * and this adapter runs on EVERY bound channel, alongside whichever profile
+ * adapter owns that channel's device type. Two producers, one source - the
+ * case radiant_bridge.h's field_id block exists to make safe, and the reason
+ * its 0x20-0x3F range is reserved.
  *
- * Table 4-1 says of pages 0x40-0x5D, verbatim: "Use of these pages is defined
- * by the transmission type of the ANT channel parameter." Not the device type.
- * So a heart-rate strap, a power meter or a bike light may all carry page 84's
- * weather data, and THIS adapter therefore runs on EVERY bound channel,
- * alongside whichever profile adapter owns that channel's device type. Two
- * producers, one source - the one case radiant_bridge.h's field_id block
- * exists to make safe, and the reason its 0x20-0x3F range is reserved.
- *
- * The dispatch that makes this true is in apps/dongle_thread/src/rx_tap.c:
- * the common-range test runs BEFORE the devtype switch and returns. Deleting
- * it would not break any test in radiant/tests - this adapter is reachable
- * directly - it would just quietly make weather data unreachable on every
- * channel that is not an environment sensor, which is the exact bug finding 1
- * of the plan describes.
+ * apps/dongle_thread/src/rx_tap.c runs the common-range test BEFORE the
+ * devtype switch, and returns there. This adapter is also reachable
+ * directly, so no test in radiant/tests depends on that ordering - but
+ * removing it would quietly make weather data unreachable on every channel
+ * that is not an environment sensor.
  *
  * ---------------------------------------------------------------------------
- * WHAT IT DECODES, AND WHAT IT DECLINES
+ * What it decodes, and what it declines
  * ---------------------------------------------------------------------------
  * Page 84 only. The other pages in the common range are identity (80/81),
  * battery (82), time (83), memory (85), paired devices (86), errors (87) and
  * the request/command surface (70/71/73/74/76) - none of them a MEASUREMENT,
- * and the sample bus carries measurements. radiant_common_adapter_decode()
- * returning 0 for page 0x50 is correct behaviour, not a gap.
+ * and the sample bus carries measurements.
  *
- * Declining a subpage is likewise a normal answer, not a failure - the same
- * voice radiant_matter.h uses about radiant_matter_row() returning NULL.
- * Subpages 9-254 are reserved by Table 6-17 and 255 is the stated
- * "slot carries nothing" sentinel; a sensor sending either is behaving.
+ * Declining a subpage is likewise a normal answer, not a failure. Subpages
+ * 9-254 are reserved by Table 6-17 and 255 is the stated "slot carries
+ * nothing" sentinel; a sensor sending either is behaving.
  *
  * ---------------------------------------------------------------------------
- * TWO LOSSY CONVERSIONS - A FIRST FOR THIS CODEBASE - AND WHY SECTION 3.2 DOES
- * NOT APPLY TO THEM
+ * Two lossy conversions, and why section 3.2 does not apply to them
  * ---------------------------------------------------------------------------
- * docs/radiant-bridge.md section 3.2 (the 1/1024 s trap) is the rule every
- * reader of this directory has already met: difference at the wire width,
- * accumulate exactly, convert only at publication - because converting before
- * accumulating drifts WITHOUT BOUND. radiant_hr_adapter.c's acc_1024 is that
- * rule in code.
+ * docs/radiant-bridge.md section 3.2 (the 1/1024 s trap): difference at the
+ * wire width, accumulate exactly, convert only at publication, because
+ * converting before accumulating drifts without bound. radiant_hr_adapter.c's
+ * acc_1024 is that rule in code.
  *
- * WIND SPEED AND WIND DIRECTION ARE A DIFFERENT PROBLEM AND SECTION 3.2 IS THE
- * WRONG LENS FOR THEM. Nothing accumulates: both are INSTANTANEOUS quantities,
- * posted with no accumulator and no flags, each sample independent of the one
- * before. The rounding error is bounded by half a unit in the last place, on
- * that sample alone, and IT DOES NOT COMPOUND - there is no running total for
- * it to compound into. This paragraph exists because the next reader will
- * assume section 3.2 applies, reach for a 1/1024-s-shaped fix, and find there
- * is nothing to fix.
+ * Wind speed and wind direction are a different problem: nothing
+ * accumulates. Both are INSTANTANEOUS quantities, posted with no accumulator
+ * and no flags, each sample independent of the one before. The rounding
+ * error is bounded to half a unit in the last place on that sample alone,
+ * and it does not compound - there is no running total for it to compound
+ * into.
  *
- * What IS lossy is the scale itself, and it is unavoidable in the vocabulary's
- * decimal `value_SI = raw * 10^exp` form:
+ * What IS lossy is the scale itself, unavoidable in the vocabulary's decimal
+ * `value_SI = raw * 10^exp` form:
  *
  *   Speed. 0.01 km/h = 10/3600 m/s = 1/360 m/s exactly. For the conversion to
  *   be exact we would need 10^k / 360 to be an integer for some k; 360 = 8*9*5
@@ -84,17 +74,14 @@
  *   under 3e-6 rad - a thousandth of one wire step.
  *
  * Both are integer arithmetic on purpose: this runs in an ISR on a Cortex-M
- * with no FPU guarantee, and a float here would be slower AND less predictable
- * than the exact integer round-half-up above.
+ * with no FPU guarantee, and a float here would be slower and less
+ * predictable than the exact integer round-half-up above.
  *
- * A detail worth writing down because someone will try to test it: NEITHER
- * expression has a reachable exact half-step at u16 wire width. For speed, a
- * half-step needs v*10^6 = 180 (mod 360); 10^6 = 280 (mod 360), gcd(280,360) =
- * 40, and 40 does not divide 180, so there is no solution at any v. For
- * direction the smallest solution of v*872665 = 500000 (mod 10^6) is
- * v = 100000, which does not fit in the u16 the wire carries. The tests
- * therefore pin the nearest-to-half values on each side instead, which is the
- * strongest statement the arithmetic admits.
+ * Neither expression has a reachable exact half-step at u16 wire width: for
+ * speed, v*10^6 = 180 (mod 360) has no solution since gcd(280,360) = 40 does
+ * not divide 180; for direction the smallest solution needs v = 100000,
+ * which overflows the u16 wire width. Tests pin the nearest-to-half values
+ * on each side instead.
  *
  * The other four conversions ARE exact, and are labelled as such in the code
  * so the distinction stays visible:
@@ -102,6 +89,32 @@
  *   pressure    (2)        raw = centi_kPa,          exp =  1   Pa
  *   humidity    (3)        raw = centi_pct,          exp = -2   %
  *   cycles      (6)        raw = delta,              exp =  0   count
+ *
+ * ---------------------------------------------------------------------------
+ * Shared conventions for this directory's adapters
+ * ---------------------------------------------------------------------------
+ * The power, env, hr and rd adapters each point back here for three things
+ * they would otherwise restate in full:
+ *
+ * field_id stability. Assignments within one source are stable: a sink keys
+ * its stored history on the pair (source, field_id). Renumbering an id
+ * breaks every sink's stored series, so a reserved-but-unpublished field
+ * keeps its slot rather than being reused.
+ *
+ * Accumulator discipline (docs/radiant-bridge.md section 3.2). Difference at
+ * the field's own WIRE width - unsigned subtraction there wraps correctly by
+ * construction, so a rollover needs no special case - accumulate the deltas
+ * into a uint64_t, and publish that running TOTAL, never the per-message
+ * delta. RADIANT_SAMPLE_ACCUMULATING means "raw is a monotone counter, not an
+ * instant" (radiant_bridge.h), and radiant_rules.c differences what it
+ * receives; a published delta would be differenced a second time, and two
+ * equal consecutive deltas - the steady state of any real periodic
+ * accumulator - would then read as "not advancing".
+ *
+ * First-call baseline. The first message an adapter instance sees has no
+ * previous raw value to difference against, so it publishes no accumulator
+ * delta - it only records the baseline. Any instantaneous field on that same
+ * message is published as normal.
  */
 
 #ifndef RADIANT_COMMON_ADAPTER_H_
@@ -116,24 +129,17 @@
 extern "C" {
 #endif
 
-/* ---------------------------------------------------------------------------
+/*
  * field_id allocation, from radiant_bridge.h's reserved common block
- * (RADIANT_FIELD_ID_COMMON_BASE 0x20 .. RADIANT_FIELD_ID_COMMON_MAX 0x3F)
- * ---------------------------------------------------------------------------
+ * (RADIANT_FIELD_ID_COMMON_BASE 0x20 .. RADIANT_FIELD_ID_COMMON_MAX 0x3F).
  *
  * One id per page-84 subpage, at RADIANT_FIELD_ID_COMMON_BASE + subpage, so
- * the mapping is a rule rather than a table and (source, field_id) stays
- * stable for the life of a sink's stored history. A sink keys on that pair;
- * renumbering these breaks every stored series, exactly as radiant_hr_adapter.h
- * says of its own three.
- *
+ * the mapping is a rule rather than a table (field_id stability: see above).
  * The block holds 32 ids and the base offset consumes one, so subpages 1..31
- * are expressible and 32..254 are not. That is not a problem to solve today -
- * Table 6-17 defines 8 - but it IS the constraint a future subpage runs into,
- * and the answer then is a second block, not a re-base of this one.
- *
- * 0x20 itself (subpage 0) is unallocated and unreachable: Table 6-16 states the
- * subpage value range as 1-254, so 0 never arrives.
+ * are expressible and 32..254 are not - not a problem today (Table 6-17
+ * defines 8), but the answer for a future subpage is a second block, not a
+ * re-base of this one. 0x20 itself (subpage 0) is unreachable: Table 6-16
+ * states the subpage range as 1-254.
  */
 #define RADIANT_COMMON_FIELD_TEMPERATURE    (RADIANT_FIELD_ID_COMMON_BASE + 1u) /* 0x21 - 0x10 K */
 #define RADIANT_COMMON_FIELD_PRESSURE       (RADIANT_FIELD_ID_COMMON_BASE + 2u) /* 0x22 - 0x12 Pa */
@@ -152,50 +158,40 @@ struct radiant_common_adapter {
 	/*
 	 * Subpage 6, charging cycles, is the ONLY accumulating quantity page 84
 	 * carries: "The number of times the device has been fully charged",
-	 * 0-65535, a running total on the wire rather than a delta. Section
-	 * 3.2's differencing rule (not its conversion rule - see the header)
-	 * applies to it in full: difference at the field's own u16 wire width,
-	 * where unsigned subtraction wraps correctly by construction, so a
-	 * sensor that reaches 65535 and rolls over reports 1 more cycle rather
-	 * than 65535 fewer.
+	 * 0-65535, a running total on the wire rather than a delta.
+	 * Accumulator discipline: see the header above - a sensor that reaches
+	 * 65535 and rolls over reports 1 more cycle rather than 65535 fewer.
 	 *
-	 * The first sighting only establishes prev - there is nothing to
-	 * difference against yet, and posting the absolute total once would put
-	 * one enormous fake delta at the head of every sink's series.
+	 * The first sighting only establishes prev (first-call baseline, see
+	 * above); posting the absolute total once would put one enormous fake
+	 * delta at the head of every sink's series.
 	 */
 	bool     have_prev_cycles;
 	uint16_t prev_cycles;
 
 	/* The exact running total from those deltas, and what is actually
-	 * published. RADIANT_SAMPLE_ACCUMULATING means "raw is a monotone
-	 * counter, not an instant" (radiant_bridge.h) and radiant_rules.c
-	 * differences what it receives, so a published delta gets differenced
-	 * twice. Counted from this adapter's first sighting, not from the
-	 * sensor's lifetime total - which is why the first sighting still only
-	 * establishes prev_cycles rather than seeding this with the wire
-	 * value. */
+	 * published (see above). Counted from this adapter's first sighting,
+	 * not from the sensor's lifetime total. */
 	uint64_t acc_cycles;
 
 	/*
-	 * Last-seen raw wire value per known subpage, indexed by subpage
-	 * (slot 0 unused, so the array reads as last_raw[SUBPAGE_x]).
+	 * Last-seen raw wire value per known subpage (slot 0 unused).
 	 *
-	 * THE ADAPTER DOES NOT DEADBAND ON THESE, deliberately. Suppressing an
+	 * THE ADAPTER DOES NOT DEADBAND ON THESE, deliberately: suppressing an
 	 * unchanged sample here would suppress the arrival itself, and
 	 * radiant_liveness.c decides a source has gone quiet from arrivals - a
 	 * thermometer in a stable room would be declared STALE for being
 	 * accurate. The deadband belongs beside the conversion table in
-	 * radiant_matter.c, where it can be per-cluster and paired with a
-	 * heartbeat. What lives here is the state that decision needs, and the
-	 * tests read it directly.
+	 * radiant_matter.c instead, where it can be per-cluster and paired
+	 * with a heartbeat.
 	 */
 	bool     have_last[RADIANT_COMMON_SUBPAGE_MAX + 1u];
 	uint16_t last_raw[RADIANT_COMMON_SUBPAGE_MAX + 1u];
 
-	/* Reserved and invalid subpages seen, per source. Not a failure count -
-	 * a reserved subpage is a normal answer (see the header) - but a
-	 * non-zero value here on a real sensor is the first sign that Table 6-17
-	 * has grown a row this decoder predates. */
+	/* Reserved and invalid subpages seen, per source. Not a failure count
+	 * - a reserved subpage is a normal answer - but a non-zero value here
+	 * on a real sensor is the first sign Table 6-17 has grown a row this
+	 * decoder predates. */
 	uint32_t declined;
 };
 
@@ -206,10 +202,9 @@ void radiant_common_adapter_init(struct radiant_common_adapter *a);
  *
  * The caller uses this to decide WHETHER to consult the common path at all,
  * before it dispatches on the binding's device type - see rx_tap.c. It is
- * deliberately the whole range and not "== 0x54": the range is what Table 4-1
- * says is keyed on transmission type, and a device-type decoder must not see
- * ANY of it. Whether the page inside the range is one this adapter posts
- * anything for is decode()'s business.
+ * deliberately the whole range and not "== 0x54": a device-type decoder must
+ * not see ANY of it. Whether the page inside the range is one this adapter
+ * posts anything for is decode()'s business.
  */
 bool radiant_common_adapter_is_common_page(uint8_t page);
 

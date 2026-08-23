@@ -12,11 +12,8 @@
  * consulted, and nothing here derives from libant.a. See
  * docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * What this is
- * ---------------------------------------------------------------------------
- * A node already transmits a retained descriptor, so extending it costs
- * nothing extra. Three things go in it, only one a feature:
+ * What this is: a node already transmits a retained descriptor, so extending
+ * it costs nothing extra. Three things go in it, only one a feature:
  *
  *   1. CLOCK ACCURACY, a bug fix. radiant_channel_guard_us() sizes a receive
  *      window from ANT's +/-50 ppm bound; a coin-cell RC oscillator is at
@@ -33,17 +30,14 @@
  *      phase needs and must not choose twice. Defined now, one rate
  *      implemented and one reserved, so that phase isn't a format break.
  *
- * ---------------------------------------------------------------------------
- * The clock-accuracy ladder is the sync-handoff page's, deliberately
- * ---------------------------------------------------------------------------
- * enum profile_handoff_clk, unchanged, including code 0 - one ladder in this
+ * The clock-accuracy ladder is the sync-handoff page's, deliberately:
+ * enum profile_handoff_clk, unchanged including code 0 - one ladder in this
  * project, no synonym here.
  *
- * The one distinction this block adds that the handoff page didn't need: a
- * handoff is only ever sent by a receiver that already knows something, so
- * its code 0 unambiguously means "worst case, 500 ppm". A descriptor is sent
- * by every node, including ones built before this block existed and which
- * transmit these bits as zero. So the fourth bit of the nibble -
+ * The one distinction this block adds: a handoff is only ever sent by a
+ * receiver that already knows something, so its code 0 unambiguously means
+ * "worst case, 500 ppm". A descriptor is sent by every node, including old
+ * ones that transmit these bits as zero. So the fourth bit of the nibble -
  * PROFILE_SCHED_CLK_STATED - says whether the three below it are a ladder
  * code at all:
  *
@@ -52,37 +46,29 @@
  *   stated = 1: the three bits are enum profile_handoff_clk, code 0 meaning
  *               the RC node's honest 500 ppm rather than silence.
  *
- * ---------------------------------------------------------------------------
- * Why the block is a frame and the clock is not
- * ---------------------------------------------------------------------------
- * The clock nibble lives in frame 1, which every node already sends, so a
- * sparse asset tag announces its RC oscillator without adding a frame. The
- * other two items need 42 bits frame 1 doesn't have, so they get a frame of
- * their own, emitted only if there's something to say. A node announcing
- * neither is byte-for-byte the node it was before this phase.
+ * Why the block is a frame and the clock is not: the clock nibble lives in
+ * frame 1, which every node already sends, so a sparse asset tag announces
+ * its RC oscillator without adding a frame. The other two items need 42 bits
+ * frame 1 doesn't have, so they get a frame of their own, sent only when
+ * there's something to say. A node announcing neither is byte-for-byte the
+ * node it was before this phase.
  *
- * ---------------------------------------------------------------------------
- * The phase is RELATIVE, for the same reason it is in the handoff page
- * ---------------------------------------------------------------------------
- * The downlink phase is measured from the t_sync of the carrying frame, never
- * an absolute instant, since two clocks share no time base. It's in counts of
- * 1/32768 s rather than a fraction of the interval: a fraction of a 2 s
- * interval quantises at 244 us, half the 500 us dwell it's supposed to land
- * inside.
+ * The phase is RELATIVE, for the same reason it is in the handoff page: the
+ * downlink phase is measured from the t_sync of the carrying frame, never an
+ * absolute instant, since two clocks share no time base. It's in counts of
+ * 1/32768 s rather than a fraction of the interval, which would quantise a
+ * 2 s interval at 244 us - half the 500 us dwell it's supposed to land inside.
  *
- * Because the phase is relative to the carrying frame, a node must recompute
- * it for each transmission of that frame - but profile_sched.c encodes the
- * descriptor set once at init and retransmits the bytes, so it couldn't
- * announce a live downlink window and had to leave the interval at zero.
- *
- * The response-slot phase closes that with two functions at the end of this
- * header and one hook in profile_sched.h. The descriptor set is still encoded
- * once; what changes is that the six bytes of the schedule frame are
- * RE-PHASED in place on their way out - profile_sched_phase_for() computes
- * the count, profile_sched_rephase() writes that one field and touches no
- * other - so a live window costs a 16-bit store per set, not a re-encode.
- * Every other field, including the interval and dwell the phase must agree
- * with, is still the one the encoder validated at init.
+ * A node must recompute the phase for every transmission - but profile_sched.c
+ * encodes the descriptor set once at init and retransmits the bytes, so it
+ * couldn't announce a live window and had to leave the interval at zero. The
+ * response-slot phase closes that gap: the set is still encoded once, but the
+ * schedule frame's six bytes are RE-PHASED in place on their way out -
+ * profile_sched_phase_for() computes the count, profile_sched_rephase()
+ * writes that one field and touches no other, so a live window costs a
+ * 16-bit store per set, not a re-encode. Every other field, including the
+ * interval and dwell the phase must agree with, is the one the encoder
+ * validated at init.
  */
 
 #ifndef RADIANT_PROFILE_SCHEDULE_H_
@@ -99,16 +85,13 @@
 extern "C" {
 #endif
 
-/* ---------------------------------------------------------------------------
- * Frame 1 byte [3] bits 3..0 - the informational-flag extension space
- * ---------------------------------------------------------------------------
- */
+/* Frame 1 byte [3] bits 3..0 - the informational-flag extension space. */
 
 #define PROFILE_SCHED_CLK_STATED  0x08u /* bit 3: the three below are a code */
 #define PROFILE_SCHED_CLK_MASK    0x07u /* bits 2..0: enum profile_handoff_clk */
 
-/* ---------------------------------------------------------------------------
- * The schedule frame's 48-bit body, MSB-first per profile_bits.h
+/*
+ * The schedule frame's 48-bit body, MSB-first per profile_bits.h:
  *
  *   bits  0..2   downlink dwell code
  *   bits  3..14  downlink interval, units of 1/32 s; 0 = no downlink window
@@ -116,7 +99,6 @@ extern "C" {
  *   bits 31..33  coding rate
  *   bits 34..41  announced TX power, int8 dBm EIRP
  *   bits 42..47  reserved, must be zero
- * ---------------------------------------------------------------------------
  */
 
 #define PROFILE_SCHED_AREA_BITS 48u
@@ -189,8 +171,8 @@ uint16_t profile_sched_coding_kbps(uint8_t coding);
  * every reserved code; a receiver that gets false must not open the channel. */
 bool profile_sched_coding_implemented(uint8_t coding);
 
-/* ---------------------------------------------------------------------------
- * The duty bound - ADR 0007
+/*
+ * The duty bound - ADR 0007.
  *
  * The long-range PHY makes frames longer AND slower at once. At S=8 every
  * body byte is 64 us; a 40-byte body is ~3.2 ms of radio-on time against
@@ -211,7 +193,6 @@ bool profile_sched_coding_implemented(uint8_t coding);
  * Refused at the encoder, following the dwell-versus-clock-drift rule above -
  * a runtime check or warning would be a rule enforced only where somebody
  * remembered to look.
- * ---------------------------------------------------------------------------
  */
 
 /* The 25 %, as a ratio rather than a percentage, so the arithmetic below stays
@@ -309,10 +290,7 @@ int profile_sched_pack(const struct profile_schedule *s, bool lr_phy,
 int profile_sched_unpack(const uint8_t *body, bool lr_phy, uint16_t clk_ppm,
 			 struct profile_schedule *out);
 
-/* ---------------------------------------------------------------------------
- * The consumers
- * ---------------------------------------------------------------------------
- */
+/* The consumers. */
 
 /*
  * Push an announced clock accuracy into a channel's window estimator.
@@ -346,10 +324,7 @@ uint8_t profile_sched_clk_nibble(uint8_t code, bool stated);
 radiant_time_t profile_sched_listen_at(const struct profile_schedule *s,
 				       radiant_time_t t_carrier, uint32_t k);
 
-/* ---------------------------------------------------------------------------
- * The node side of the same arithmetic - the response-slot phase
- * ---------------------------------------------------------------------------
- */
+/* The node side of the same arithmetic - the response-slot phase. */
 
 /*
  * The inverse of profile_sched_listen_at(), and the reason the interval-0

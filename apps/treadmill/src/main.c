@@ -3,60 +3,45 @@
  *
  * RadiANT treadmill: one node, two ANT+ masters, two BLE services, one radio.
  *
- * It is apps/hrm_ble's shape with the parts a treadmill needs that a chest
- * strap does not, and the differences are the interesting part:
+ * It is apps/hrm_ble's shape with what a treadmill needs added:
  *
  *   TWO ANT+ MASTERS, NOT ONE. FE-C (0x11, 8192 counts) is what a
  *   control-capable head unit pairs with; SDM (0x7C, 8134 counts) is what
- *   anything that only knows foot pods pairs with, Zwift Run included. They
- *   are different device types with different periods and no shared page
- *   space, so they are two channels and two profile_sched instances - not one
- *   channel with a wider page set. CONFIG_TREADMILL_ANT_SDM turns the second
- *   one off, because two masters beating against each other at 4.00 and
- *   4.03 Hz beside BLE is more contention than anything this project has
- *   measured, and the fallback has to exist before it is needed.
+ *   anything that only knows foot pods pairs with, Zwift Run included -
+ *   different device types, different periods, no shared page space, so two
+ *   channels and two profile_sched instances. CONFIG_TREADMILL_ANT_SDM turns
+ *   the second off, since two masters beating at 4.00 and 4.03 Hz beside BLE
+ *   is more contention than anything this project has measured.
  *
- *   BIDIRECTIONAL. A strap is told nothing. Here, acknowledged control pages
- *   arrive from a head unit and the FTMS control point arrives from a phone,
- *   and BOTH land on treadmill_source_set_incline() - one function, one state,
- *   so a grade set over ANT+ is immediately visible over BLE and the other way
- *   round. That symmetry is the main thing worth getting right in this
- *   application and the main thing worth testing.
+ *   BIDIRECTIONAL AND SYMMETRIC. Acknowledged control pages from a head unit
+ *   and FTMS control-point writes from a phone both land on
+ *   treadmill_source_set_incline() - one function, one state, so a grade set
+ *   over either transport is immediately visible on the other. FE-C §8.8
+ *   makes the page 71 command status an obligation, not a courtesy, which is
+ *   why every branch of apply_control_page() - including refusals - ends in
+ *   profile_fec_tx_command_answered().
  *
- *   AND EVERY COMMAND OWES AN ANSWER. FE-C §8.8 makes a page 71 command status
- *   the obligation, not a courtesy: getting it wrong is the difference between
- *   a machine that ignores you and a machine a controller reports as broken.
- *   That is why every branch of apply_control_page() ends in a
- *   profile_fec_tx_command_answered() call, including the branches that refuse.
+ *   NO SUPPRESSION RULE, BUT A COMMAND OWNER. Unlike apps/hrm_ble (which
+ *   stops ANT+ while a phone is connected), a treadmill is expected to serve
+ *   a head unit and a fitness app at once, so every page and notification
+ *   keeps going out to every listener always - there is deliberately no
+ *   TREADMILL_SUPPRESS_ANT_WHEN_CONNECTED. What IS arbitrated is whose
+ *   commanded grade the deck actually moves to, since two controllers
+ *   writing the same function is last-writer-wins with no signal to either.
+ *   The ownership token lives in src/treadmill_control.h - it governs who
+ *   the deck obeys, not who gets told; the transmit side above is unaffected.
  *
- *   NO SUPPRESSION RULE. apps/hrm_ble stops ANT+ while a phone is connected,
- *   on the argument that the phone already has the heart rate. That argument
- *   does not transfer: a treadmill is expected to serve a head unit and a
- *   fitness app at the same time, so the contended case is the NORMAL case
- *   here rather than the stress case, and there is deliberately no
- *   TREADMILL_SUPPRESS_ANT_WHEN_CONNECTED.
+ *   COMMANDS HOP TO THE WORKQUEUE FIRST. treadmill_state.h's lock-free
+ *   design requires everything touching that struct to run on the system
+ *   workqueue, but an FE-C page arrives on the radiant_event thread and an
+ *   FTMS write arrives on the BT RX thread. Rather than add a lock, each
+ *   path stores its request and submits a k_work, restoring the invariant -
+ *   which is also what lets the ownership token above need no lock.
  *
- *   ...BUT THERE IS A COMMAND OWNER, AND IT IS NOT THE SAME THING. The
- *   paragraph above is about the TRANSMITTER and it stands: every page and
- *   every notification keeps going out to every listener, always. What is
- *   arbitrated is only whose commanded grade the deck actually moves to,
- *   because "both land on one function" (see above) is precisely what makes
- *   two controllers last-writer-wins with no signal to either. The token is in
- *   src/treadmill_control.h; reading it as a reversal of the previous
- *   paragraph is the mistake worth this sentence to prevent.
- *
- *   AND THE COMMANDS HOP TO THE WORKQUEUE FIRST. treadmill_state.h's whole
- *   lock-free design rests on "everything that touches this struct runs on the
- *   system workqueue", and both control paths used to violate it as wired: an
- *   FE-C page arrives on the radiant_event thread and an FTMS write arrives on
- *   the BT RX thread. Rather than adding a lock, each path stores its request
- *   and submits a k_work, which restores the invariant the code already claims
- *   - and is what lets the ownership token above need no lock either.
- *
- * See docs/treadmill-reference-design.md for the porting guide, the production
- * checklist and the bench procedure; src/treadmill_source.h for the one seam a
- * manufacturer implements; and src/treadmill_state.h for why there is exactly
- * one copy of the physics.
+ * See docs/treadmill-reference-design.md for the porting guide, the
+ * production checklist and the bench procedure; src/treadmill_source.h for
+ * the one seam a manufacturer implements; and src/treadmill_state.h for why
+ * there is exactly one copy of the physics.
  */
 
 #include <errno.h>

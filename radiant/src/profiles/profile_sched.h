@@ -9,9 +9,7 @@
  * this file, no sdk-ant source was consulted, and nothing here derives from
  * libant.a. See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * This is a PAGE scheduler, not a radio scheduler
- * ---------------------------------------------------------------------------
+ * This is a PAGE scheduler, not a radio scheduler.
  * radiant/src/radiant_sched.c decides which operation the radio performs
  * next and at which absolute microsecond; this file decides which eight bytes
  * go out for a master's transmit slot. Nothing here knows a microsecond and
@@ -20,12 +18,10 @@
  * radiant_sched_request_tx(), a plain function call needing no new scheduler
  * API.
  *
- * ---------------------------------------------------------------------------
- * The cadence, and why 121 rather than 65
- * ---------------------------------------------------------------------------
- * Page 80 at message 119, page 81 at message 120, cycle length 121 (a real
- * certified sensor's cadence; the generic ANT+ guidance says 65, and a node
- * that follows that is spending radio energy it doesn't need to).
+ * The cadence, and why 121 rather than 65: page 80 at message 119, page 81 at
+ * message 120, cycle length 121 (a real certified sensor's cadence; the
+ * generic ANT+ guidance says 65, and a node that follows that is spending
+ * radio energy it doesn't need to).
  *
  * The descriptor set is sent CONSECUTIVELY, at messages 0..D. A node with 8
  * fields has D = 9; spreading those frames one per cycle would make a
@@ -33,14 +29,12 @@
  * could decode anything. Consecutive costs 10 slots out of 121 and makes a
  * mid-stream join take one cycle.
  *
- * ---------------------------------------------------------------------------
- * The slot-insertion seam
- * ---------------------------------------------------------------------------
- * Two plans need this engine: this one runs it for device type 0x60, and the
- * ANT+ compatibility work needs the same 119/120/121 interleave for device
- * types 0x78 and 0x0B while inserting its own beacon and attestation pages.
- * Rather than a second implementation of the cadence rule, the other plan is
- * a CLIENT: it registers a claim callback and takes the slots it wants.
+ * The slot-insertion seam: two plans need this engine, this one for device
+ * type 0x60, and the ANT+ compatibility work needing the same 119/120/121
+ * interleave for device types 0x78 and 0x0B while inserting its own beacon
+ * and attestation pages. Rather than a second implementation of the cadence
+ * rule, the other plan is a CLIENT: it registers a claim callback and takes
+ * the slots it wants.
  *
  * The seam is one function pointer. A client gets first refusal on any slot
  * the default rotation would fill with a data page (and, on a sparse node,
@@ -51,14 +45,12 @@
  * configures cfg.desc = NULL and gets the interleave with the descriptor
  * slots simply absent.
  *
- * ---------------------------------------------------------------------------
- * What this needed from radiant_sched.c: nothing
- * ---------------------------------------------------------------------------
- * A page-rotation client claims a radio slot by posting a transmit and
- * posting the next one from inside the completion callback - the intended
- * low-jitter path radiant_sched.h already documents. Sparse mode (the node
- * keeps a channel period configured but declines to transmit in most slots)
- * is expressed by not posting, needing no scheduler concept at all.
+ * What this needed from radiant_sched.c: nothing. A page-rotation client
+ * claims a radio slot by posting a transmit and posting the next one from
+ * inside the completion callback - the intended low-jitter path
+ * radiant_sched.h already documents. Sparse mode (the node keeps a channel
+ * period configured but declines to transmit in most slots) is expressed by
+ * not posting, needing no scheduler concept at all.
  * radiant/tests/src/test_profiles.c drives a real 0x60 master through
  * radiant_sched.c against the mock radio to keep that claim tested rather
  * than merely asserted.

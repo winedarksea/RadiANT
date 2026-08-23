@@ -76,10 +76,7 @@
 extern "C" {
 #endif
 
-/* ---------------------------------------------------------------------------
- * Geometry
- * ---------------------------------------------------------------------------
- */
+/* Geometry. */
 
 /* X25519, so 32. RADIANT_SEC_X25519_BYTES is the same number and is not
  * referenced here, because this header must not name a radiant type. */
@@ -111,10 +108,7 @@ extern "C" {
  * build that can pair.
  */
 
-/* ---------------------------------------------------------------------------
- * The `enrol` setting - docs/radiant-security.md section 11.6
- * ---------------------------------------------------------------------------
- */
+/* The `enrol` setting - docs/radiant-security.md section 11.6. */
 enum profile_enrol_mode {
 	/* No over-air enrolment, ever. Keys arrive only out of band. The
 	 * posture radiant_sec.h recommends for anything that matters. */
@@ -159,10 +153,7 @@ enum profile_enrol_mode {
  * A rate limit, not a defence - the defence is command authentication. */
 #define PROFILE_ENROL_OPEN_WINDOW_MIN_S 300u
 
-/* ---------------------------------------------------------------------------
- * Configuration
- * ---------------------------------------------------------------------------
- */
+/* Configuration. */
 struct profile_enrol_cfg {
 	/* The radiant_sec channel the pairing runs on, and the channel whose
 	 * stats the completed enrolment is counted against. */
@@ -239,10 +230,7 @@ struct profile_enrol {
 	struct profile_compat *compat;
 };
 
-/* ---------------------------------------------------------------------------
- * Lifecycle
- * ---------------------------------------------------------------------------
- */
+/* Lifecycle. */
 
 /*
  * Latch the configuration. Opens nothing - a node that entered a pairing
@@ -267,10 +255,7 @@ int profile_enrol_init(struct profile_enrol *pe,
  */
 int profile_enrol_attach(struct profile_enrol *pe, struct profile_compat *pc);
 
-/* ---------------------------------------------------------------------------
- * Opening the window
- * ---------------------------------------------------------------------------
- */
+/* Opening the window. */
 
 /*
  * THE PHYSICAL ACTION: a button handler, magnet detector, or strap-contact
@@ -322,10 +307,7 @@ bool profile_enrol_is_open(const struct profile_enrol *pe);
  */
 bool profile_enrol_tick(struct profile_enrol *pe, uint64_t now_us);
 
-/* ---------------------------------------------------------------------------
- * The frames
- * ---------------------------------------------------------------------------
- */
+/* The frames. */
 
 /* PROFILE_ENROL_FRAMES while a window is open, 0 otherwise. Expires the window
  * first, so the frame count and the open state can never disagree. Signature
@@ -337,10 +319,7 @@ uint8_t profile_enrol_frame_count(void *user, uint64_t now_us);
  * struct profile_compat_client. */
 bool profile_enrol_frame(void *user, uint8_t i, uint8_t *payload);
 
-/* ---------------------------------------------------------------------------
- * The peer's key, over acknowledged data
- * ---------------------------------------------------------------------------
- */
+/* The peer's key, over acknowledged data. */
 
 /*
  * One inbound eight-byte payload of the peer's own six-frame set.

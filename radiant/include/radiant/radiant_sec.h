@@ -58,11 +58,7 @@
 extern "C" {
 #endif
 
-/*
- * ═══════════════════════════════════════════════════════════════════════════
- * The crypto seam
- * ═══════════════════════════════════════════════════════════════════════════
- */
+/* The crypto seam. */
 
 #define RADIANT_SEC_BLOCK_BYTES   16
 
@@ -416,11 +412,7 @@ int radiant_sec_kdf(const struct radiant_sec_key *root, const char *label,
 		    uint32_t epoch, uint16_t base_devnum,
 		    struct radiant_sec_key *out);
 
-/*
- * ═══════════════════════════════════════════════════════════════════════════
- * Policy: the per-channel transforms
- * ═══════════════════════════════════════════════════════════════════════════
- */
+/* Policy: the per-channel transforms. */
 
 /* Switch bits, as they appear in the 0xF1 host message. */
 #define RADIANT_SEC_SW_CONF        0x01  /* X_CONF - confidentiality */

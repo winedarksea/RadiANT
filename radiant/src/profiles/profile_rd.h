@@ -8,9 +8,7 @@
  * (profile_compat.h) and this device type's page space is a different one -
  * see "The page numbers do not collide" below.
  *
- * ---------------------------------------------------------------------------
- * Three rules of this profile that are easy to get subtly wrong
- * ---------------------------------------------------------------------------
+ * Three rules of this profile that are easy to get subtly wrong:
  *   NO PAGE-CHANGE TOGGLE. Byte [0] is the whole page number, all eight bits.
  *   Heart rate 0x78 reserves bit 7 as a toggle; this profile does not, and a
  *   decoder that masked byte [0] with 0x7F out of habit would work by
@@ -32,11 +30,8 @@
  *   five do the same (byte [1] bit 7, byte [2] bits 0..3). Each is a place
  *   where a plausible reading is wrong by a factor of two only sometimes.
  *
- * ---------------------------------------------------------------------------
- * The two channel configurations
- * ---------------------------------------------------------------------------
- * A standalone RD pod is one channel: device type 0x1E, RF 57 (2457 MHz),
- * period 4096 (8 Hz), transmission type 5.
+ * The two channel configurations: a standalone RD pod is one channel, device
+ * type 0x1E, RF 57 (2457 MHz), period 4096 (8 Hz), transmission type 5.
  *
  * An HR-RD strap is TWO channels. The heart-rate channel (device type 0x78,
  * period 8070) carries no running dynamics. Running dynamics ride a second
@@ -51,9 +46,7 @@
  * means "not an RD strap, do not interpret" - profile_rd_rf_enum_index()
  * returns 0 for that and for every value outside the enumeration alike.
  *
- * ---------------------------------------------------------------------------
- * The page numbers do not collide with the RadiANT compat pages
- * ---------------------------------------------------------------------------
+ * The page numbers do not collide with the RadiANT compat pages:
  * profile_compat.h allocates 0x70..0x72 in the HEART RATE page space; this
  * profile uses 0x00, 0x01, 0x10, 0x20 and 0x4A in the RUNNING DYNAMICS page
  * space (reserved ranges 2-15, 17-31, 33-63). Disjoint twice over - different
@@ -228,11 +221,10 @@ struct profile_rd {
 	uint8_t rotation[2];
 };
 
-/* ---------------------------------------------------------------------------
+/*
  * The page encoders. Pure and public: tools/test_ant_pages.py compares per
  * page, so a failure names the page and field, not a stream offset. Each
  * writes eight bytes and returns 0, or -EINVAL.
- * ---------------------------------------------------------------------------
  */
 
 /* Page 0x00. Values above their field width are REJECTED with -EINVAL rather
@@ -267,10 +259,9 @@ int profile_rd_encode_leader_request(uint16_t leader_id, uint8_t *out);
 int profile_rd_encode_open_channel(uint32_t leader_id_24, uint8_t rf_freq,
 				   uint16_t period, uint8_t *out);
 
-/* ---------------------------------------------------------------------------
+/*
  * The page decoders. One decoder used by both the bridge adapter and the
  * tests is one implementation of each split; two would be two.
- * ---------------------------------------------------------------------------
  */
 
 /* Fills `m` from a page 0x00 body and, if `bidirectional` is non-NULL, reports
@@ -297,10 +288,7 @@ int profile_rd_decode_leader_request(const uint8_t *body, uint16_t *leader_id);
 int profile_rd_decode_open_channel(const uint8_t *body, uint32_t *leader_id_24,
 				   uint8_t *rf_freq, uint16_t *period);
 
-/* ---------------------------------------------------------------------------
- * The HR-RD linkage
- * ---------------------------------------------------------------------------
- */
+/* The HR-RD linkage. */
 
 /*
  * The RF index an HRM page 0x04 byte [1] enumeration names, or 0 for "this is
@@ -315,10 +303,7 @@ uint8_t profile_rd_rf_enum_index(uint8_t rf_enum);
  * four permitted ones. */
 uint8_t profile_rd_rf_index_enum(uint8_t rf_freq);
 
-/* ---------------------------------------------------------------------------
- * The master
- * ---------------------------------------------------------------------------
- */
+/* The master. */
 
 int profile_rd_init(struct profile_rd *rd, const struct profile_rd_cfg *cfg);
 

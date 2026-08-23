@@ -7,101 +7,68 @@
  * docs/spike-b-results.md, docs/ant-radio-link.md, radiant_frame.h,
  * radiant_radio_hal.h, and the buffer-ownership obligations B1-B5 in
  * src/ant_radio.h. Nothing here derives from sdk-ant, libant.a, or any
- * ANT+ device profile document. See
- * docs/decisions/0002-clean-room-policy.md.
+ * ANT+ device profile document. See docs/decisions/0002-clean-room-policy.md.
  *
- * ---------------------------------------------------------------------------
- * Why one module, not two
- * ---------------------------------------------------------------------------
- * Acknowledged data is a one-packet burst byte for byte: 0xAA decomposes as
- * exchange + not-ack + LAST + sequence 0 + slot-opener, exactly what "last
- * packet, sequence 0" means. A receiver dispatching on the control byte
- * cannot and must not tell the two apart - the distinction is serial-layer
- * only. So radiant_ack.c and radiant_burst.c share one encoder and one state
- * machine; radiant_transfer_ack_data() is radiant_transfer_submit() with a
- * copied eight-byte block carrying START|END.
+ * Why one module, not two: acknowledged data is a one-packet burst byte for
+ * byte - 0xAA decomposes as exchange + not-ack + LAST + sequence 0 +
+ * slot-opener, exactly what "last packet, sequence 0" means. A receiver
+ * dispatching on the control byte cannot and must not tell the two apart, so
+ * radiant_ack.c and radiant_burst.c share one encoder and one state machine;
+ * radiant_transfer_ack_data() is radiant_transfer_submit() with a copied
+ * eight-byte block carrying START|END.
  *
- * ---------------------------------------------------------------------------
- * The sequence is ONE BIT, so this is stop-and-wait
- * ---------------------------------------------------------------------------
- * No three-bit burst sequence exists in an ANT frame. Bit 4 alternates per
- * on-air packet and nothing else moves until the final packet sets bit 5
- * (docs/spike-b-part2-results.md: 19 bursts, sequence bit never disagreed
- * with packet index). A one-bit sequence cannot express a window, so the
- * protocol is stop-and-wait; a future design assuming a sliding window
- * (including the serial protocol's own two-bit burst-header sequence) is a
- * serial-side concept to translate here, not forward.
+ * The sequence is ONE BIT, so this is stop-and-wait: no three-bit burst
+ * sequence exists in an ANT frame. Bit 4 alternates per on-air packet and
+ * nothing else moves until the final packet sets bit 5 (docs/spike-b-part2-
+ * results.md: 19 bursts, sequence bit never disagreed with packet index). A
+ * one-bit sequence cannot express a window; a future design assuming a
+ * sliding window (including the serial protocol's own two-bit burst-header
+ * sequence) is a serial-side concept to translate here, not forward. THE BIT
+ * ALTERNATES PER ON-AIR PACKET, NOT PER HOST BLOCK: a 24-byte advanced-burst
+ * block fragments into three 8-byte packets, each flipping the bit.
  *
- * THE SEQUENCE BIT ALTERNATES PER ON-AIR PACKET, NOT PER HOST BLOCK: a
- * 24-byte advanced-burst block fragments into three 8-byte packets, each
- * flipping the bit. A block of 8/16/24 bytes is 1/2/3 packets for the same
- * reason.
+ * The acknowledgement is a full frame, not a short ack: same channel ID and
+ * eight payload bytes, carrying whatever is in the acknowledger's broadcast
+ * buffer at that moment. Relative to the packet it answers: bit 6 set, bit 5
+ * echoed, bit 4 COMPLEMENTED (165 adjacent CRC-valid pairs, no
+ * counterexamples: 82->D2, 92->C2, A2->F2, B2->E2) - read as "the sequence
+ * bit I expect next" this is exactly right for stop-and-wait; read as "an
+ * echo of what I just received" it is exactly wrong.
  *
- * ---------------------------------------------------------------------------
- * The acknowledgement is a full frame, and its bit 4 is a COMPLEMENT
- * ---------------------------------------------------------------------------
- * Not a short ack: same channel ID and eight payload bytes, carrying whatever
- * is in the acknowledger's broadcast buffer at that moment.
- *
- * Relative to the packet it answers: bit 6 set, bit 5 echoed, bit 4
- * COMPLEMENTED (165 adjacent CRC-valid pairs, no counterexamples:
- * 82->D2, 92->C2, A2->F2, B2->E2). Read as "the sequence bit I expect next"
- * this is exactly right for stop-and-wait; read as "an echo of what I just
- * received" it is exactly wrong.
- *
- * ---------------------------------------------------------------------------
- * The receive path must TRANSMIT - the tightest deadline in the link
- * ---------------------------------------------------------------------------
- * A channel that hears acknowledged data or a burst packet has ~1.55 ms
+ * The receive path must TRANSMIT - the tightest deadline in the link: a
+ * channel that hears acknowledged data or a burst packet has ~1.55 ms
  * (RADIANT_TRANSFER_REPLY_US) to reply, which is why
  * radiant_transfer_on_data() arms the transmit BEFORE handing the payload to
- * its caller.
+ * its caller. EVERY MICROSECOND FIGURE BELOW IS A SOFTWARE TIMESTAMP
+ * (ADDRESS-interrupt to ADDRESS-interrupt; hardware (D)PPI timestamps are
+ * unmeasured) - treat these as accurate to tens of microseconds and no
+ * better, and the guard band below is sized on that basis, not on sample
+ * standard deviations.
  *
- * EVERY MICROSECOND FIGURE BELOW IS A SOFTWARE TIMESTAMP (ADDRESS-interrupt
- * to ADDRESS-interrupt; the constant offset cancels but jitter doesn't).
- * Hardware ((D)PPI) timestamps are unmeasured - treat these as accurate to
- * tens of microseconds and no better; the guard band below is sized on that
- * basis, not on the sample standard deviations.
- *
- * ---------------------------------------------------------------------------
- * Buffer ownership - the expensive part
- * ---------------------------------------------------------------------------
- * src/ant_radio.h states obligations B1-B5. Short form: the bridge holds ONE
- * 24-byte block behind a binary semaphore, released only on
+ * Buffer ownership - the expensive part. src/ant_radio.h states obligations
+ * B1-B5; short form: the bridge holds ONE 24-byte block behind a binary
+ * semaphore, released only on
  * EVENT_TRANSFER_NEXT_DATA_BLOCK/_TX_COMPLETED/_TX_FAILED. Miss the first
  * once and a host burst stalls 1000 ms per packet before a plausible-looking
- * error.
- *
- * This module expresses those three events as radiant_transfer_event and
- * guarantees: EXACTLY ONE radiant_transfer_ops::done() CALL CARRIES ANY GIVEN
- * BLOCK POINTER, AND EXACTLY ONE TERMINAL EVENT ENDS ANY TRANSFER.
- *
- * A block is released with RADIANT_TRANSFER_EV_NEXT_BLOCK when its final
+ * error. This module expresses those three events as radiant_transfer_event
+ * and guarantees: EXACTLY ONE radiant_transfer_ops::done() CALL CARRIES ANY
+ * GIVEN BLOCK POINTER, AND EXACTLY ONE TERMINAL EVENT ENDS ANY TRANSFER. A
+ * block is released with RADIANT_TRANSFER_EV_NEXT_BLOCK when its final
  * packet's acknowledgement arrives - the last moment the old block could
- * still be needed. Releasing earlier (at copy-into-frame-buffer time) would
+ * still be needed; releasing earlier (at copy-into-frame-buffer time) would
  * buy one turnaround of pipelining but let the engine hold two blocks at
- * once; deliberately not taken, since B1 forbids re-reading a released
- * buffer for any reason and a single block in flight mirrors the bridge's
- * own single buffer.
+ * once, which B1 forbids. A failed submit call releases nothing and raises
+ * no event (B2) - why radiant_transfer_submit() arms the radio before
+ * recording the block as accepted, not after.
  *
- * A failed submit call releases nothing and raises no event (B2) - why
- * radiant_transfer_submit() arms the radio before recording the block as
- * accepted, not after.
- *
- * ---------------------------------------------------------------------------
- * What is NOT here, because it was not measured
- * ---------------------------------------------------------------------------
- * Marked again at the code that would have used each:
+ * What is NOT here, because it was not measured (marked again at the code
+ * that would have used each):
  *   1. SENDER-SIDE RETRY. Never captured, so an empty reply window fails the
  *      transfer with RADIANT_TRANSFER_FAIL_NO_ACK and does not retransmit.
- *   2. ACKNOWLEDGING A SLOT OPENER - CLOSED 2026-08-17, as an inference.
- *      radiant_ctrl_reply_for() now answers 0x8A/0xAA with 0xD2/0xF2 (bit 3
- *      clear), so radiant_transfer_on_data() acknowledges them like any other
- *      data packet. It refused with ENOTSUP until then, which meant a
- *      master-originated acknowledged transfer could never complete against a
- *      RadiANT peer - a closed path, not an open question, and the reason
- *      apps/treadmill's control loop never worked. stats.unackable_openers
- *      survives for anything still unmapped. See radiant_frame.c.
+ *   2. ACKNOWLEDGING A SLOT OPENER. radiant_ctrl_reply_for() answers
+ *      0x8A/0xAA with 0xD2/0xF2 (bit 3 clear), so radiant_transfer_on_data()
+ *      acknowledges them like any other data packet. stats.unackable_openers
+ *      counts anything still unmapped. See radiant_frame.c.
  *   3. AN ACKNOWLEDGEMENT CARRYING ANYTHING BUT THE BROADCAST BUFFER. Every
  *      one observed carried it, so ops->broadcast_payload is required.
  *   4. BIT 3 AS "SLOT OPENER" IS `[inferred]` - measured only that it isn't

@@ -157,10 +157,9 @@ void treadmill_source_poll(void);
 int treadmill_source_set_incline(int32_t centi_pct);
 int treadmill_source_set_speed(uint32_t mm_s);
 
-/* ---------------------------------------------------------------------------
+/*
  * The report path: ISR-safe by construction. One atomic store and one
  * k_work_submit() each; none of them touches a profile or treadmill_state.
- * ---------------------------------------------------------------------------
  */
 
 /* The belt is doing this now, in mm/s. */

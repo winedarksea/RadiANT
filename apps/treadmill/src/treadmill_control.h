@@ -41,8 +41,8 @@
  *   to an FE-C controller   page 71 status PROFILE_FEC_CMD_STATUS_REJECTED (3)
  *   to an FTMS client       result code CONTROL_NOT_PERMITTED (0x05)
  *
- * Neither is invented for this: both are pre-existing constants in the two
- * specifications, meaning precisely this.
+ * Neither is invented for this - both are pre-existing constants in the two
+ * specifications.
  *
  * ANT+ IS CONNECTIONLESS, WHICH IS WHY THERE IS A TIMEOUT. A BLE client that
  * walks away generates a disconnect and its claim is released by an event. An
@@ -59,7 +59,7 @@
  * than anywhere else in this application - NOTHING tests treadmill_ble.c. There
  * is no ztest for the GATT service, write_cp() or the advertising payload at
  * all, so arbitration living inside that file would be arbitration nothing can
- * reach. It lives here for that reason.
+ * reach - which is why it lives here instead.
  *
  * The lock-freedom is safe for the same reason treadmill_state's is, and only
  * for that reason: EVERYTHING THAT TOUCHES THIS MODULE RUNS ON THE SYSTEM

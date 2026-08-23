@@ -467,8 +467,8 @@ ANTW_EQ(ANT_MAX_PAYLOAD_SIZE, ANT_STANDARD_DATA_PAYLOAD_SIZE);
 /* The four size constants deciding whether a 24-byte burst packet survives
  * the parser: sdk-ant computes 38 as 8 payload + 1 extended bitfield + 28
  * extended data + 1 channel byte, matching src/usb_ant_class.c:30's figure
- * independently (an earlier 20/24, derived from the longest host-sent
- * message rather than the ceiling, was wrong).
+ * independently. Must be derived from this ceiling, not from the longest
+ * host-sent message (20 or 24) - that undercounts it.
  */
 ANTW_EQ(MAX_SIZE_VALUE, MESG_MAX_SIZE_VALUE);
 ANTW_EQ(MAX_DATA_SIZE, MESG_MAX_DATA_SIZE);

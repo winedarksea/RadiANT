@@ -21,41 +21,34 @@
  *     raw = centi_C + 27315,  exp = -2
  *
  * is EXACT: no rounding, no accumulated drift, no scale that only nearly
- * divides. That is not the usual case in this codebase (see
- * radiant_hr_adapter.c's 1/1024 s trap, and package C's wind conversions where
+ * divides - not the usual case in this codebase (see radiant_hr_adapter.c's
+ * 1/1024 s trap, and radiant_common_adapter.h's wind conversions, where
  * 0.01 km/h = 1/360 m/s can never be exact in the vocabulary's decimal
- * raw x 10^exp form), so it is worth saying plainly rather than leaving the
- * next reader to check.
+ * raw x 10^exp form).
  *
- * The event count is published as RADIANT_FIELD_EVENT_COUNT, accumulating, and
- * differenced at its own u8 wire width before anything else happens to it -
- * radiant_hr_adapter.c's section 3.2 rule, which unsigned subtraction at that
- * width satisfies by construction with no wraparound special case.
+ * The event count is published as RADIANT_FIELD_EVENT_COUNT, accumulating, u8
+ * wire width. Accumulator discipline: see radiant_common_adapter.h.
  *
  * ---------------------------------------------------------------------------
  * WHY THE 24-HOUR LOW AND HIGH ARE DECIDEDLY NOT PUBLISHED
  * ---------------------------------------------------------------------------
  * They are decoded - a caller can read them straight out of the struct
- * profile_env_temperature this adapter keeps, so nothing is silently dropped -
- * and they are deliberately never posted to the bus.
+ * profile_env_temperature this adapter keeps - but deliberately never posted.
  *
- * They are STATISTICS OVER A 24-HOUR WINDOW, not measurements of the present.
- * Every consumer downstream of the bus treats a RADIANT_FIELD_TEMPERATURE
- * record as a live reading: radiant_matter.c maps it to a Matter Temperature
- * Measurement cluster and allocates an endpoint per (source, field_id), so
- * posting these two would mint TWO EXTRA Matter Temperature Sensor endpoints
- * per environment sensor - three thermometers where the user has one, two of
- * which read like live values, never move for hours, and would drive
- * automations from yesterday's weather. radiant_liveness.c would also expire
- * them on the live channel's period, marking a perfectly current 24-hour
- * statistic STALE.
+ * They are STATISTICS OVER A 24-HOUR WINDOW, not measurements of the
+ * present, and every consumer downstream treats a RADIANT_FIELD_TEMPERATURE
+ * record as a live reading: radiant_matter.c allocates a Matter Temperature
+ * Measurement endpoint per (source, field_id), so posting these two would
+ * mint TWO EXTRA endpoints per sensor - two of which never move for hours
+ * and would drive automations from yesterday's weather. radiant_liveness.c
+ * would also expire them on the live channel's period, marking a perfectly
+ * current 24-hour statistic STALE.
  *
- * This is the same judgement radiant_rd_adapter.h records for cadence and
- * ground contact time, reached for a different reason: there the vocabulary
- * has no type, here the type would be actively misleading. Their field_ids are
- * reserved below so that a later decision to publish them - as a distinct
- * field type, or with a "statistic" flag the vocabulary does not yet have -
- * does not renumber the two fields that ship today.
+ * Same judgement radiant_rd_adapter.h records for cadence and ground contact
+ * time, reached for a different reason (there the vocabulary has no type;
+ * here the type would be actively misleading). Their field_ids are reserved
+ * below so a later decision to publish them does not renumber the two
+ * fields that ship today.
  *
  * ---------------------------------------------------------------------------
  * Page 0 is stored, not posted
@@ -80,9 +73,8 @@ extern "C" {
 #endif
 
 /*
- * field_id assignments within one Environment source. Stable: a sink keys
- * history on (source, field_id), so renumbering these breaks every sink's
- * stored series.
+ * field_id assignments within one Environment source (field_id stability:
+ * see radiant_common_adapter.h).
  *
  * All four are inside RADIANT_FIELD_ID_PROFILE_BASE..RADIANT_FIELD_ID_PROFILE_MAX
  * (0x00-0x1F). The block above that, 0x20-0x3F, belongs to the common-page
@@ -110,21 +102,15 @@ struct radiant_env_adapter {
 	struct profile_env_capabilities caps;
 	bool have_caps;
 
-	/* Event count as last seen on the wire, for differencing in its own u8
-	 * width (radiant_hr_adapter.h - converting before differencing is the
-	 * bug, and here there is nothing to convert, which is why the raw byte
-	 * is what gets stored). */
+	/* Event count as last seen on the wire, for differencing at its own u8
+	 * width - nothing to convert, which is why the raw byte is what gets
+	 * stored (accumulator discipline: see radiant_common_adapter.h). */
 	bool    have_prev;
 	uint8_t prev_event_count;
 
-	/* The exact running total, which is what is actually published:
-	 * RADIANT_SAMPLE_ACCUMULATING means "raw is a monotone counter, not an
-	 * instant" (radiant_bridge.h), and radiant_rules.c differences what it
-	 * receives. A published delta would be differenced a second time, and
-	 * this counter's delta is the constant 1 - so the source would read as
-	 * permanently idle. Same discipline as radiant_hr_adapter.h's
-	 * acc_1024: difference at the wire width, accumulate exactly, publish
-	 * the accumulation. */
+	/* The exact running total, which is what is actually published (see
+	 * the header) - this counter's delta is the constant 1, so publishing
+	 * the delta instead would read as permanently idle. */
 	uint64_t acc_events;
 };
 
@@ -138,8 +124,7 @@ void radiant_env_adapter_init(struct radiant_env_adapter *a);
  * Page 0x01 posts up to two records: the current temperature (omitted when the
  * sensor marked it invalid - never published as a zero, which would read as
  * 273.15 K), and the event-count delta (omitted on the first page 0x01 an
- * instance sees, since there is no prior reading to difference against - the
- * same first-call behaviour as radiant_hr_adapter_decode()).
+ * instance sees - first-call baseline, see radiant_common_adapter.h).
  *
  * Page 0x00 is absorbed into the adapter's state and posts nothing, returning
  * 0. Every other page - including reserved 0x02..0x3F and the common data
