@@ -13,11 +13,9 @@
     Double-tap RESET so FTHR840BOOT mounts, then run this. It reassembles the
     UF2 readback, finds the log header and prints the text.
 
-    Note that CURRENT.UF2 only spans flash up to the last page the bootloader
-    considers programmed. The firmware writes two copies for that reason; this
-    reports which slots were inside the readback and which were not.
-
-    ASCII only: Windows PowerShell 5.1 reads .ps1 as ANSI without a BOM.
+    CURRENT.UF2 only spans flash up to the last page the bootloader considers
+    programmed. The firmware writes two copies for that reason; this reports
+    which slots were inside the readback and which were not.
 
 .PARAMETER Uf2Path
     Read a saved UF2 instead of the live bootloader volume.

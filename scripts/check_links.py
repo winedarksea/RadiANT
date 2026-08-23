@@ -28,6 +28,9 @@ fail the build:
       both stabler and more useful to the reader. Checking them would only
       make the rot loud; removing them fixes it.
 
+Exit status: 1 if any markdown link is broken, or if `--strict-backticks` is
+given and any suspect backtick reference exists; 0 otherwise.
+
 Standard library only and sub-second, matching check_profile_registry.py and
 check_license.py, which are its neighbours in the host-tests job.
 """

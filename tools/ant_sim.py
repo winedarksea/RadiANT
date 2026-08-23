@@ -147,14 +147,12 @@ class Sensor:
     # a sixth to all of them for one flag would be a worse trade.
     serial_number: int | None = SERIAL_NUMBER
 
-    # The RF index this master transmits on, as an offset from 2400 MHz -
-    # the ANT+ default (57, 2457 MHz) unless a caller moves it.
-    #
-    # Exists for RF-7's gate (is the ~0.4 % loss floor really Wi-Fi collision
-    # on 2457 MHz): both ends must move together, since ant_verify.py's
-    # --rf-freq on the receiving side alone would just move the receiver away
-    # from the transmitter and read as spectacular loss rather than a
-    # misconfiguration.
+    # The RF index this master transmits on, as an offset from 2400 MHz - the
+    # ANT+ default (57, 2457 MHz) unless a caller moves it. Exists for RF-7's
+    # gate (is the ~0.4 % loss floor really Wi-Fi collision on 2457 MHz): both
+    # ends must move together, since ant_verify.py's --rf-freq on the
+    # receiving side alone would just move the receiver away from the
+    # transmitter and read as spectacular loss rather than a misconfiguration.
     rf_freq: int = ap.ANT_PLUS_RF_FREQ
 
     def __init__(self, channel: int, device_number: int, trans_type: int,
@@ -170,9 +168,8 @@ class Sensor:
         self.pending_common: list[bytes] = []
         # The RadiANT compat layer, or None for a plain ANT+ sensor - which is
         # what a shipped strap is by default and what every profile here still
-        # is unless --attest is given. Set after construction for the same
-        # reason serial_number is: every profile takes the same five positional
-        # arguments and this must not become a sixth.
+        # is unless --attest is given. Set after construction, same reason as
+        # serial_number above.
         self.compat: CompatAttestation | None = None
 
     # A clock that is not the one it advertises, in ppm. `period` is the
@@ -180,12 +177,9 @@ class Sensor:
     # RC-oscillator node (250-500 ppm) against the +/-50 ppm every receive
     # window here was sized from - at a 2 s heartbeat, 300 ppm is 600 us of
     # error against a 400 us window, a lost node with no error code unless it
-    # announces its accuracy.
-    #
-    # Only bites in --dry-run: on the live path the dongle's own stack times
-    # the slots and this script only refills on EVENT_TX, so nothing here can
-    # skew them. The ztest against the mock radio covers the deterministic
-    # case; this needs a master with a genuinely bad oscillator.
+    # announces its accuracy. Only bites in --dry-run: on the live path the
+    # dongle's own stack times the slots and this script only refills on
+    # EVENT_TX, so nothing here can skew them.
     period_ppm: int = 0
 
     @property
@@ -257,12 +251,11 @@ class Sensor:
 
         if self.data_pages_since_common >= ap.COMMON_PAGE_INTERVAL:
             # The profiles require both common pages at least once per 65
-            # messages. Sending 80 and 81 back to back keeps the spacing well
-            # inside that even when a data page is dropped.
-            #
-            # The beacon joins the back of that burst rather than getting a
-            # cadence of its own: one frame per cycle, ~0.8 % of slots, the same
-            # rotation every deployed receiver already absorbs for 80 and 81.
+            # messages; sending 80 and 81 back to back keeps the spacing well
+            # inside that even when a data page is dropped. The beacon joins
+            # the back of that burst rather than getting a cadence of its
+            # own: one frame per cycle, ~0.8 % of slots, the same rotation
+            # every deployed receiver already absorbs for 80 and 81.
             self.data_pages_since_common = 0
             self.pending_common = [
                 ap.encode_common_81(SW_REVISION, self.serial_number),
@@ -1127,10 +1120,9 @@ def run(dev, reader, sensors: list[Sensor], seconds: float,
         if payload is None:
             # A sparse node declining this slot. Nothing is written, so the
             # stack retransmits whatever is already in its buffer - which is
-            # what a sparse node running on a stock ANT master ACTUALLY does,
-            # and is worth knowing rather than papering over: skipping a slot
-            # for real needs a master that can be told not to transmit.
-            # --dry-run has no such constraint and is exact.
+            # what a sparse node running on a stock ANT master ACTUALLY does;
+            # skipping a slot for real needs a master that can be told not to
+            # transmit. --dry-run has no such constraint and is exact.
             stats[sensor.channel]["skipped"] += 1
             return
         dev.write(EP_OUT, frame(MESG_BROADCAST_DATA_ID,

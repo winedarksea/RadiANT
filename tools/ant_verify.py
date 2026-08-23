@@ -10,9 +10,9 @@ hears, and reports numbers rather than adjectives:
     python tools/ant_verify.py --profile power --expect-watts 100 \
         --expect-rpm 80 --seconds 60 --json
 
-Several channels at once, each pinned to its own sensor - which is the shape a
-fitness app runs and the only shape in which a multi-channel scheduling fault
-is visible at all:
+Several channels at once, each pinned to its own sensor - the shape a fitness
+app runs, and the only shape in which a multi-channel scheduling fault is
+visible at all:
 
     python tools/ant_verify.py --seconds 300 \
         --channel 0 --device-number 4660 \
@@ -20,16 +20,14 @@ is visible at all:
         --channel 2 --device-number 4662
 
 `derived.per_channel` then carries a `loss_exact_pct` per channel beside the
-pooled `derived.loss_exact_pct`, because a scheduler that drops the later of
-two nearby receive windows costs one channel of a pair and leaves the other
-alone: the pooled figure halves it, and the per-channel spread shows it.
+pooled figure: a scheduler dropping the later of two nearby windows costs one
+channel of a pair, which pooling only halves and the spread shows outright.
 
-It is told nothing about the transmitter. Every expectation is reconstructed
-from the stream itself - the channel period gives the packet count to expect,
-the accumulators give the power to expect, the page numbers give the rotation
-to expect - because in Phase 2 the transmitter is sdk-ant firmware that this
+It is told nothing about the transmitter - every expectation is reconstructed
+from the stream itself (period gives packet count, accumulators give power,
+page numbers give rotation), because the transmitter is sdk-ant firmware this
 script has no inside knowledge of. An identical pass against tools/ant_sim.py
-and against sim/ is the evidence that the two agree.
+and sim/ is the evidence the two agree.
 
 Three ways to use it:
 
@@ -75,14 +73,10 @@ from ant_scan import (  # noqa: E402
 )
 from ant_session import wait_for_close  # noqa: E402
 
-# Protocol constants come from the generated module, never from a second copy
-# here. See tools/ant_wire.py and protocol/ant_wire.yaml.
-#
-# The extended-field flags used to be bare 0x80/0x40/0x20 literals inside
-# extended_fields(), which is the one function here where an unnamed bit is
-# genuinely dangerous: the fields are positional, so mistaking one flag for
-# another does not fail, it silently reports a device number as a signal
-# strength.
+# Protocol constants come from the generated module, never a second copy here
+# (tools/ant_wire.py, protocol/ant_wire.yaml) - including the extended-field
+# flags below, once bare 0x80/0x40/0x20 literals inside extended_fields()
+# (see its docstring for why that was dangerous).
 from ant_wire import (  # noqa: E402
     CHANNEL_TYPE_SLAVE,
     EVENT_CODES_BY_VALUE,
@@ -112,25 +106,20 @@ from ant_wire import (  # noqa: E402
 ANT_TICKS_PER_S = 32768.0
 TICK_WRAP_S = 65536 / ANT_TICKS_PER_S   # the receive timestamp is 16 bits
 
-# How many messages a sensor may go between common pages.
-#
-# 121, not the generic ANT+ guidance of 65: sdk-ant's own bicycle power
-# profile (lib/ant_profiles/ant_bpwr/ant_bpwr.c) interleaves pages 80/81 every
-# 121 messages, and that is Garmin's certified implementation. At 65 this
-# check failed a worst gap of 118 against it.
+# How many messages a sensor may go between common pages. 121, not the
+# generic ANT+ guidance of 65: sdk-ant's own bicycle power profile
+# (lib/ant_profiles/ant_bpwr/ant_bpwr.c) interleaves pages 80/81 every 121
+# messages (Garmin's certified implementation); at 65 this check failed a
+# worst gap of 118 against it.
 COMMON_PAGE_LIMIT = 121
 
 # Default acceptance thresholds, exposed as arguments since the right numbers
-# depend on the transmitter's noise band.
-#
-# 1.5 was set after a FrameReader read-timeout bug (250 ms against a 249.7 ms
-# channel period, cancelling and losing whatever packet it was waiting for)
-# was fixed: with that gone, four 300 s bench runs measure 0.26-0.60 % loss,
-# every packet of it RX_FAIL-accounted, so 1.5 is about 3x the worst of those
-# - room for a busier day, not for a fault (a wrong-sensor pairing reads ~25 %).
-# loss_accounting() is the real check now: a threshold alone can't tell air
-# loss from a bug, which is why it fails independently when RX_FAIL doesn't
-# account for the gap.
+# depend on the transmitter's noise band. 1.5 was set after fixing a
+# FrameReader read-timeout bug (250 ms against a 249.7 ms channel period,
+# losing whatever packet it was waiting for): with that gone, four 300 s
+# bench runs measure 0.26-0.60 % loss, all RX_FAIL-accounted, so 1.5 is ~3x
+# the worst of those (a wrong-sensor pairing reads ~25 %). loss_accounting()
+# is the real check now - a threshold alone can't tell air loss from a bug.
 DEFAULT_MAX_LOSS_PCT = 1.5
 DEFAULT_JITTER_FACTOR = 0.5      # of one channel period, on the stddev
 
@@ -156,15 +145,14 @@ ATTEST_LOST = "lost"
 class CompatVerifier:
     """The receiver half of docs/radiant-security.md section 11.4.
 
-    Holds a key and answers "is this stream from the holder of it, now". It is
-    fed every payload the channel delivers, because Tier II's window is N
-    consecutive TRANSMITTED messages rather than N data ones - the common pages,
-    the beacon and the Tier I page are all inside it.
+    Holds a key and answers "is this stream from the holder of it, now". Fed
+    every payload the channel delivers, because Tier II's window is N
+    consecutive TRANSMITTED messages rather than N data ones - the common
+    pages, the beacon and the Tier I page are all inside it.
 
     Tier I's loss independence is the claim worth reading the counters for:
-    because its tag covers no payload, its verification rate equals its page
-    delivery rate no matter what else is lost. Tier II's does not, and the
-    numbers below are where that shows up.
+    its tag covers no payload, so its verification rate equals its page
+    delivery rate no matter what else is lost. Tier II's does not.
     """
 
     def __init__(self, root: bytes, epoch: int, devnum: int,
@@ -204,9 +192,8 @@ class CompatVerifier:
             # of the next one.
             return self._feed_tier2(payload)
 
-        # EVERYTHING ELSE IS COVERED BY WHATEVER TIER II WINDOW IS OPEN - the
-        # window is N consecutive transmitted messages and not N data ones, so
-        # the common pages, the beacon and the Tier I page are all inside it.
+        # Everything else is covered by whatever Tier II window is open (see
+        # the class docstring).
         self.pending.append(bytes(payload))
         if page == ap.COMPAT_PAGE_ATTEST_TIER_I:
             return self._feed_tier1(payload)
@@ -230,10 +217,9 @@ class CompatVerifier:
             return self._feed_announce_b(got["tag"])
 
         self._frames[index] = bytes(payload)
-        # The hint is not a security claim - 24 bits, resolved by the 40- or
-        # 48-bit attestation tag - but it is what a receiver with several
-        # roots uses to skip the ones that cannot match, and what a receiver
-        # with a stale epoch searches forward against.
+        # The hint (24 bits, resolved by the 40- or 48-bit tag) is not a
+        # security claim - it lets a receiver with several roots skip ones
+        # that can't match, and one with a stale epoch search forward.
         if (index == ap.COMPAT_FRAME_BEACON_0
                 and got["key_group_hint"] == self.expected_hint):
             self.hint_matches += 1
@@ -244,9 +230,8 @@ class CompatVerifier:
                     [self._frames[ap.COMPAT_FRAME_BEACON_0],
                      self._frames[ap.COMPAT_FRAME_BEACON_1]])
             except ValueError:
-                # private-available disagreeing with the policy, a reserved bit
-                # set, a locator on a `never` node: all malformed, and a
-                # receiver says so rather than believing half of it.
+                # private-available disagreeing with the policy, a reserved
+                # bit set, a `never`-node locator: all malformed - say so.
                 self.beacon_malformed += 1
                 return ATTEST_UNVERIFIED
         return None
@@ -294,11 +279,11 @@ class CompatVerifier:
         got = ap.decode_compat_attest_tier2(payload)
         covered, self.pending = self.pending, []
 
-        # The page carries the window index's LOW 8 BITS and the nonce takes 16,
+        # The page carries the window index's LOW 8 BITS; the nonce takes 16,
         # so the high half is reconstructed from the receiver's own count of
-        # windows rather than read off the air. Skip this and the tags agree for
-        # 256 windows - about nine minutes at 4 Hz with N = 8 - and then every
-        # one of them fails, which looks exactly like an attack.
+        # windows, not read off the air. Skip this and the tags agree for 256
+        # windows - about nine minutes at 4 Hz with N = 8 - then every one of
+        # them fails, which looks exactly like an attack.
         index, _ = rc.resolve_counter(self.windows_seen, got["window_index"])
         if self.last_window_index is not None:
             missing = index - self.last_window_index - 1
@@ -311,9 +296,9 @@ class CompatVerifier:
             self.tier2["unconfigured"] += 1
             return ATTEST_UNVERIFIED
         if len(covered) != self.window - 1:
-            # NOT a failed tag. The window's own messages did not all arrive, so
-            # there is nothing to check it against - which is the honest
-            # regression a window CMAC has and Tier I does not.
+            # NOT a failed tag - the window's messages didn't all arrive, so
+            # there's nothing to check against: the honest regression a
+            # window CMAC has and Tier I does not.
             self.tier2[ATTEST_LOST] += 1
             return ATTEST_LOST
 
@@ -371,9 +356,8 @@ class CompatVerifier:
                 "unverified": self.tier1[ATTEST_UNVERIFIED],
                 "lost": self.tier1[ATTEST_LOST],
                 "replays": self.tier1["replay"],
-                # The claim the tier exists for, as a number: of the pages that
-                # were DELIVERED, how many verified. Loss belongs in the other
-                # column and must not be allowed to move this one.
+                # The claim the tier exists for, as a number: of pages
+                # DELIVERED, how many verified. Loss must not move this one.
                 "verified_of_delivered": (
                     self.tier1[ATTEST_VERIFIED] / delivered
                     if delivered else None),
@@ -398,16 +382,15 @@ def reacquire_from_intervals(intervals: list[float],
     """Time to re-acquire after a staged dropout: the worst gap, minus the
     dropout itself.
 
-    `intervals` is `ChannelAnalyzer.intervals` - the gaps between consecutive
-    delivered packets. A staged --expect-dropout SECONDS closes the channel
-    for exactly `dropout_s`, so the widest gap in the run is that dropout plus
-    however long the receiver took to notice the channel was open again; every
-    other gap is ordinary jitter around one period and is far smaller. Taking
-    the max rather than searching for "the" dropout gap is what keeps this
-    correct with no knowledge of when the dropout happened - only that it did.
+    `intervals` is `ChannelAnalyzer.intervals`. A staged --expect-dropout
+    SECONDS closes the channel for exactly `dropout_s`, so the widest gap in
+    the run is that dropout plus however long the receiver took to notice the
+    channel reopened; every other gap is ordinary jitter and far smaller.
+    Taking the max rather than searching for "the" dropout gap keeps this
+    correct with no knowledge of when the dropout happened, only that it did.
 
-    None with no intervals to look at (a channel that heard at most one
-    packet has no gap at all).
+    None with no intervals (a channel that heard at most one packet has no
+    gap at all).
     """
     if not intervals:
         return None
@@ -418,8 +401,7 @@ class ChannelAnalyzer:
     """Decodes one channel's stream and accumulates evidence about it.
 
     Live capture and replay both go through here, so a bug found on the bench
-    can be reproduced from a saved file and vice versa - which is the whole
-    point of --record.
+    can be reproduced from a saved file and vice versa - the point of --record.
     """
 
     def __init__(self, name: str, device_type: int, period: int,
@@ -431,17 +413,9 @@ class ChannelAnalyzer:
         self.device_type = device_type
         self.period = period
 
-        # Which receive channel this stream was heard on, and which sensor it
-        # came from. Neither is used by the analysis - the whole point of
-        # profile_for() is that a stream is judged on its own contents - but
-        # both are needed to LABEL the per-channel figures derive() emits, and
-        # a multi-channel run whose numbers cannot be attributed to a channel
-        # is exactly as useless as no per-channel numbers at all.
-        #
-        # channel is None on --replay unless the caller pairs a --channel with
-        # a --device-number: a capture records the sensor, not the receiver
-        # channel (see profile_for()'s docstring), so the only honest source
-        # for it there is the operator, not the file.
+        # Receive channel and sensor this stream came from - unused by the
+        # analysis, needed only to LABEL derive()'s per-channel figures. None
+        # on --replay unless paired via --channel/--device-number.
         self.channel = channel
         self.device_number = device_number
         self.period_s = period / ANT_TICKS_PER_S
@@ -450,30 +424,22 @@ class ChannelAnalyzer:
         self.expect_bpm = expect_bpm
         self.wheel_circ_m = wheel_circ_m
 
-        # --expect-dropout SECONDS: a deliberate, timer'd channel close/reopen
-        # was staged during the run (see apps/sim's ANT_SIM_DROPOUT_EVERY_S/_S
-        # knobs). None on every ordinary run. Set, it does three things: it is
-        # subtracted from the naive expected-packet count in summary() so a
-        # dropout is not double-counted as loss, it excludes the reopen's
-        # still-counter retransmit from the std_event_still disqualifier in
-        # _feed_power_std(), and it is the D in reacquire_from_intervals().
+        # --expect-dropout SECONDS: a staged close/reopen (apps/sim's
+        # ANT_SIM_DROPOUT_EVERY_S/_S). None normally; set, it's subtracted from
+        # summary()'s expected-packet count, excludes the reopen's retransmit
+        # from _feed_power_std()'s disqualifier, and is the D below.
         self.dropout_s = dropout_s
 
-        # Set from outside, by main(), after listen() returns: this analyser
-        # has no idea when its channel was opened or when listen() started, so
-        # it cannot compute this itself. None on --replay (a capture has no
-        # channel-open timestamp) and forced None under --expect-dropout (a
-        # staged dropout measures re-acquisition, not initial acquisition -
-        # see reacquire_s below).
+        # Set by main() after listen() returns. None on --replay and under
+        # --expect-dropout (which measures re-acquisition, not this).
         self.time_to_first_packet_s: float | None = None
 
         # None means no key, which is the state that must keep reporting CLEAR.
         self.compat = compat
         self.attest_outcomes = Counter()
 
-        # On device type 0x78 byte 0's high bit is the page-change toggle and
-        # not part of the page number, so every page would otherwise be
-        # histogrammed under two numbers and matched under neither.
+        # Device type 0x78 byte 0's high bit is the page-change toggle, not
+        # part of the page number, or every page histograms under two.
         self.page_mask = (ap.HR_PAGE_NUMBER_MASK
                           if device_type == ap.HRM_DEVICE_TYPE else 0xFF)
         self.hr_baseline: dict | None = None
@@ -484,9 +450,8 @@ class ChannelAnalyzer:
         self.last_t: float | None = None
         self.intervals: list[float] = []
 
-        # The same two quantities as measured by the radio rather than by the
-        # host, when the dongle is willing to report them. Empty on --replay
-        # and on any dongle that refuses ENABLE_RSSI / ENABLE_RX_TIMESTAMP.
+        # Same two quantities, measured by the radio not the host. Empty on
+        # --replay and on any dongle refusing ENABLE_RSSI/ENABLE_RX_TIMESTAMP.
         self.rssi_samples: list[int] = []
         self.radio_intervals: list[float] = []
         self._last_rx_ticks: int | None = None
@@ -500,30 +465,18 @@ class ChannelAnalyzer:
         self.violation_count = 0
         self.wraps = Counter()
 
-        # A transmitter can be perfectly alive on the air and dead as a sensor:
-        # every packet identical, event counter frozen. Loss is zero, jitter is
-        # zero and the decoded power is whatever the stuck packet says, so every
-        # other check here passes. Counting how often the event counter actually
-        # moves is the only thing that notices.
+        # A transmitter can be alive on the air and dead as a sensor: every
+        # packet identical, counter frozen. Only this notices.
         self.event_comparisons = 0
         self.event_advances = 0
 
-        # Loss measured against the transmitter's own counter instead of a
-        # wall clock, since the headline loss figure's elapsed/period
-        # denominator is only an estimate (assumes nominal crystal rate, and
-        # rounds - noise-level error at typical packet counts).
-        #
-        # Only valid where the counter steps once per message rather than per
-        # pedal stroke: summary() requires the stream to prove the counter
-        # never stood still, since a real crank meter's counter stops when the
-        # rider coasts.
-        #
-        # Even two per-message transmitters disagree about what "a message"
-        # means: sdk-ant steps the counter only on page 0x10 and leaves it
-        # alone for an interleaved common page, while ant_sim.py steps it on
-        # every transmission regardless of page. Which convention is in play
-        # has to be inferred from the stream - by counting common pages
-        # between page 0x10 packets - rather than assumed.
+        # Loss measured against the transmitter's own counter, not the wall
+        # clock (only an estimate). Valid only where the counter steps once
+        # per message, not per pedal stroke - summary() requires proof it
+        # never stood still. Even two per-message transmitters disagree what
+        # "a message" means (sdk-ant: only page 0x10; ant_sim.py: every
+        # transmission), so the convention is inferred, not assumed, by
+        # counting common pages between page 0x10 packets.
         self.std_event_pairs = 0
         self.std_event_span = 0
         self.std_event_still = 0
@@ -536,34 +489,21 @@ class ChannelAnalyzer:
         self.cadence_samples: list[float] = []
         self.speed_samples: list[float] = []
 
-        # One baseline per page number, not one for the whole channel. Pages
-        # 0x11 and 0x12 are independent accumulator series that happen to share
-        # a channel; differencing one against the other is write-back item 1
-        # and produces plausible-looking garbage rather than an error.
+        # One baseline per page, not per channel: 0x11/0x12 are independent
+        # series sharing a channel; differencing them is plausible garbage.
         self.torque_baseline: dict[int, dict] = {}
         self.std_baseline: dict | None = None
         self.tq_freq_baseline: dict | None = None
         self.csc_baseline: dict | None = None
 
-        # Device type 0x60, the RadiANT telemetry envelope.
-        #
-        # This is the one profile here whose SCHEMA IS NOT KNOWN IN ADVANCE.
-        # Everything above decodes a layout compiled into ant_pages.py; this
-        # one has to learn the layout from the node's own page 0x00 before it
-        # can decode a single field, which is the envelope's whole claim and
-        # therefore the thing worth verifying rather than assuming. Until the
-        # descriptor set completes, data pages are counted and not decoded -
-        # deliberately, because guessing a layout is how a receiver reports
-        # confident nonsense.
+        # Device type 0x60: schema not known in advance - learned from the
+        # node's page 0x00. Until complete, data pages are counted, not decoded.
         self.tlm_rx = ap.TlmDescriptorRx()
         self.tlm_desc: ap.TlmDescriptor | None = None
         self.tlm_schema_changes = 0
         self.tlm_data_before_schema = 0
         self.tlm_data_decoded = 0
-        # One baseline per data page, for the same reason torque_baseline is:
-        # two data pages of one schema are two independent series and
-        # differencing one against the other produces plausible garbage.
-        self.tlm_baseline: dict[int, dict] = {}
+        self.tlm_baseline: dict[int, dict] = {}   # per data page; see above
 
     # -- helpers ---------------------------------------------------------
 
@@ -586,17 +526,15 @@ class ChannelAnalyzer:
     def _offgrid(self, intervals: list[float]) -> float | None:
         """How far packets land from the slot grid, ignoring how many slots.
 
-        The plain stddev of the intervals is not a timing measurement, because
-        one lost packet turns a 250 ms interval into a 500 ms one and that
-        single outlier dwarfs everything the clock is actually doing: six
-        losses in 1200 packets put the stddev at 17 ms all by themselves, which
-        is why the jitter figure has always moved in lockstep with the loss
-        figure and told nobody anything the loss figure had not.
+        The plain stddev of the intervals is not a timing measurement: one
+        lost packet turns a 250 ms interval into a 500 ms one, and that single
+        outlier dwarfs everything the clock is doing - six losses in 1200
+        packets put the stddev at 17 ms by themselves, which is why the
+        jitter figure has always moved in lockstep with the loss figure.
 
         Subtracting the nearest whole number of periods removes the count and
-        leaves the error. The point of measuring it on both clocks is that the
-        difference between them is entirely this host: the radio's own answer
-        here is under a tick.
+        leaves the error. Measuring it on both clocks shows the difference is
+        entirely this host: the radio's own answer here is under a tick.
         """
         if len(intervals) < 2 or self.period_s <= 0:
             return None
@@ -669,25 +607,19 @@ class ChannelAnalyzer:
             return
 
         if page in ap.COMPAT_PAGES:
-            # Interleaved rather than data. It lands between two data pages
-            # exactly as a common page does, and the exact-loss heuristic below
-            # has to be told so: a transmitter whose event counter steps once
-            # per MESSAGE steps it here too, and a receiver that did not count
-            # this message would read the step as a lost data page. That is a
-            # 1.2 % phantom loss on an otherwise perfect stream - the compat
-            # layer's own airtime cost, reported as a fault.
-            #
-            # It does not reset the common-page cycle, because it is not a
-            # common page and the profile's 121-message requirement is
-            # unaffected by it.
+            # Interleaved rather than data, landing between two data pages
+            # like a common page. The exact-loss heuristic must count it: a
+            # transmitter whose counter steps once per MESSAGE steps it here
+            # too, and not counting it reads the step as a lost data page -
+            # a 1.2 % phantom loss, the compat layer's own airtime cost
+            # reported as a fault. Does not reset the common-page cycle.
             self._common_since_std += 1
 
         if self.messages_since_common is not None:
             self.messages_since_common += 1
         elif self.packets > COMMON_PAGE_LIMIT:
-            # Nothing common has arrived yet and the limit has already gone
-            # past. Start counting from here so the gap is reported once the
-            # first one does show up.
+            # Nothing common has arrived yet and the limit is already past.
+            # Start counting so the gap is reported once one does show up.
             self.messages_since_common = 0
 
         if self.device_type == ap.HRM_DEVICE_TYPE:
@@ -706,10 +638,10 @@ class ChannelAnalyzer:
     def _feed_telemetry(self, t: float, payload: bytes) -> None:
         """Learn the schema from the node, then check its accumulators.
 
-        Nothing about this node is known in advance - not its fields, not its
-        widths, not which pages it uses. Everything below is decoded against a
-        descriptor that arrived on the air, which is why the first thing this
-        does is assemble one and the second is decline to decode until it has.
+        Nothing about this node is known in advance - not its fields, widths,
+        or pages used. Everything below decodes against a descriptor that
+        arrived on the air, so this assembles one first and declines to
+        decode until it has one.
         """
         page = payload[0]
 
@@ -728,23 +660,21 @@ class ChannelAnalyzer:
                 return
             if (self.tlm_desc is not None
                     and schema.schema_id != self.tlm_desc.schema_id):
-                # A new schema renumbers every field offset, so every baseline
-                # held against the old one is now a comparison between two
-                # different layouts. Dropping them is the only correct move.
+                # A new schema renumbers every field offset, so baselines held
+                # against the old one now compare two layouts - drop them.
                 self.tlm_schema_changes += 1
                 self.tlm_baseline = {}
             self.tlm_desc = schema
             return
 
         if not ap.PAGE_TLM_DATA_FIRST <= page <= ap.PAGE_TLM_DATA_LAST:
-            # A command page, a reserved page, or a vendor-private one. A
-            # receiver ignores what it does not recognise; it does not guess.
+            # A command, reserved, or vendor-private page - ignored, not guessed.
             return
 
         if self.tlm_desc is None:
-            # Counted rather than decoded. A receiver that joined mid-stream
-            # is entitled to see data before it sees a schema, and inventing
-            # one is the failure this whole envelope exists to prevent.
+            # Counted, not decoded: a receiver joining mid-stream may see
+            # data before a schema; inventing one is the failure this
+            # envelope exists to prevent.
             self.tlm_data_before_schema += 1
             return
 
@@ -774,10 +704,9 @@ class ChannelAnalyzer:
         self._note_event(d_counter != 0)
 
         if d_counter == 0:
-            # The event counter counts TRANSMISSIONS, so two packets carrying
-            # the same counter are the same transmission - a sparse node's
-            # repeat, which the counter exists to let a receiver deduplicate.
-            # The bodies must therefore be identical.
+            # The counter counts TRANSMISSIONS, so two packets sharing one are
+            # the same transmission - a sparse node's repeat, meant for
+            # dedup - and their bodies must be identical.
             if got["values"] != before["values"]:
                 self._violation(
                     f"page 0x{page:02X}: two packets share counter "
@@ -795,12 +724,11 @@ class ChannelAnalyzer:
             self._note_wrap(name, now, was)
 
             # An accumulator differenced IN ITS OWN WIDTH can never be
-            # negative, so the only thing a single delta can be wrong about is
-            # its size - and a delta past half the field's range is what a
-            # reset, a restart, or a subtraction done after widening to int
-            # looks like. That last one is the failure section 5 warns about:
-            # correct for hours, then one absurd sample per wrap, easy to
-            # dismiss as radio noise.
+            # negative, so the only thing a delta can be wrong about is size -
+            # and a delta past half the field's range is what a reset, a
+            # restart, or a subtraction done after widening to int looks like.
+            # That last one is the failure section 5 warns about: correct for
+            # hours, then one absurd sample per wrap, easy to dismiss as noise.
             if delta > span // 2:
                 self._violation(
                     f"page 0x{page:02X} {name}: accumulator advanced by "
@@ -813,18 +741,17 @@ class ChannelAnalyzer:
                             d_counter: int) -> None:
         """Check an accumulator against its instantaneous partner.
 
-        Section 5's rule - "anything integrable is published as an accumulating
-        field ... the accumulator is authoritative" - is what makes this
-        possible without knowing anything about the node: section 7 fixes which
-        accumulating type is which instantaneous type's integral, so a receiver
-        can look the pair up in the vocabulary and check one against the other.
-        That is the generic form of what _feed_power_std does for ANT+ page
-        0x10's acc_power against inst_power.
+        Section 5's rule - "anything integrable is published as an
+        accumulating field ... the accumulator is authoritative" - makes this
+        possible without knowing anything about the node: section 7 fixes
+        which accumulating type is which instantaneous type's integral, so a
+        receiver looks the pair up in the vocabulary. This is the generic form
+        of what _feed_power_std does for page 0x10's acc_power/inst_power.
 
-        Only pairs on the SAME page are checked, because only those share a
-        timestamp; and only the pairs where the accumulator is literally the
-        time integral in canonical SI units, because the rest need a constant
-        this receiver would have to invent.
+        Only pairs on the SAME page are checked (only those share a
+        timestamp), and only where the accumulator is literally the time
+        integral in canonical SI units - the rest would need a constant this
+        receiver would have to invent.
         """
         dt = t - before["t"]
         if dt <= 0.0:
@@ -872,14 +799,13 @@ class ChannelAnalyzer:
         self._note_wrap("acc_power", got["acc_power"], before["acc_power"])
         self._note_event(d_event != 0)
 
-        # Which convention the transmitter follows is voted pair by pair: a
-        # clean pair (nothing lost) with c common pages between its two page
-        # 0x10 packets shows d_event == 1 if the counter ignores common pages,
-        # or 1 + c if it counts every message; a pair with loss shows neither
-        # and abstains. Comparing run totals instead is wrong - the excess of
-        # counter over packets received conflates common pages with lost ones,
-        # and at a few hundred packets they're the same size (a 300 s run here
-        # flipped its verdict once loss crossed 20 packets).
+        # The transmitter's convention is voted pair by pair: a clean pair
+        # with c common pages between its two page 0x10 packets shows
+        # d_event == 1 if the counter ignores common pages, or 1 + c if it
+        # counts every message; a pair with loss abstains. Run totals instead
+        # would be wrong - counter-over-packets conflates common pages with
+        # lost ones, and at a few hundred packets they're the same size (a
+        # 300 s run here flipped its verdict once loss crossed 20 packets).
         c = self._common_since_std
         if c > 0:
             if d_event == 1:
@@ -892,13 +818,11 @@ class ChannelAnalyzer:
         self.std_common_seen += c
         self._common_since_std = 0
         if d_event == 0:
-            # A reopen after a staged dropout retransmits the held state - the
-            # counter genuinely did not step, but for a reason this run staged
-            # on purpose rather than a stuck sensor. The gap immediately
-            # before this pair is the tell: an ordinary still packet arrives a
-            # period apart, and a reopen's does not arrive until the dropout
-            # has elapsed. Excluding it here keeps one staged dropout from
-            # disqualifying "loss (exact)" for the whole run.
+            # A reopen after a staged dropout retransmits the held state on
+            # purpose, not from a stuck sensor. The tell is the gap before
+            # this pair: an ordinary still packet arrives a period apart, a
+            # reopen's not until the dropout has elapsed. Excluding it keeps
+            # one staged dropout from disqualifying "loss (exact)".
             gap = self.intervals[-1] if self.intervals else 0.0
             reopen_retransmit = (self.dropout_s is not None
                                  and gap >= 0.5 * self.dropout_s)
@@ -912,10 +836,8 @@ class ChannelAnalyzer:
                     "new event")
             return
 
-        # The accumulator is the sum of the instantaneous values, so its delta
-        # divided by the number of events is the average power over them. That
-        # has to agree with the instantaneous figure or one of the two fields
-        # is being built from something the other is not.
+        # The accumulator sums the instantaneous values, so its delta over the
+        # event count is average power - it must agree or a field is wrong.
         implied = d_acc / d_event
         inst = got["inst_power"]
         tolerance = max(15.0, 0.35 * max(inst, 1))
@@ -1006,11 +928,11 @@ class ChannelAnalyzer:
         """Heart rate, device type 0x78.
 
         Bytes [4..7] are the same on every page, so the accumulator pair is
-        checked without caring which page arrived - which is the property that
-        lets a background rotation and an inserted RadiANT page cost a receiver
-        nothing. A page number this decoder does not know is skipped here
-        exactly as a legacy receiver skips one, which is the whole additive-page
-        mechanism observed from the receiving end.
+        checked without caring which page arrived - the property that lets a
+        background rotation and an inserted RadiANT page cost a receiver
+        nothing. An unknown page number is skipped here exactly as a legacy
+        receiver skips one - the additive-page mechanism, seen from the
+        receiving end.
         """
         page = payload[0] & ap.HR_PAGE_NUMBER_MASK
         if page not in ap._HR_DECODERS:
@@ -1085,18 +1007,15 @@ class ChannelAnalyzer:
         elapsed = ((self.last_t - self.first_t)
                    if self.first_t is not None and self.last_t is not None
                    else 0.0)
-        # Expected count is elapsed/period + 1, not elapsed/period: the window
-        # is measured between the first and last packet received, so both ends
-        # are packets. A period of zero means the device type is not one this
-        # tool knows, in which case there is no count to expect and loss is not
-        # a number - saying so beats inventing a denominator.
+        # elapsed/period + 1, not elapsed/period: both the first and last
+        # packet received are inside the window. A period of zero means an
+        # unknown device type - no count to expect, so say so.
         expected = ((elapsed / self.period_s) + 1.0
                     if elapsed > 0 and self.period_s > 0 else 0.0)
         if self.dropout_s is not None and expected > 0 and self.period_s > 0:
-            # A staged dropout could never have delivered a packet, so its
-            # slots do not belong in the denominator - counting them as
-            # expected-but-missing is exactly the inflation loss_accounting()
-            # exists to catch, applied to a hole this run dug on purpose.
+            # A staged dropout's slots don't belong in the denominator - that
+            # would be exactly the inflation loss_accounting() exists to
+            # catch, applied to a hole this run dug on purpose.
             expected = max(0.0, expected - self.dropout_s / self.period_s)
         loss_pct = (100.0 * (1.0 - self.packets / expected)
                     if expected > 0 else float("nan"))
@@ -1155,14 +1074,11 @@ class ChannelAnalyzer:
         def check(name: str, ok: bool, detail: str) -> None:
             checks.append({"name": name, "pass": bool(ok), "detail": detail})
 
-        # A SPARSE NODE HAS NO PACKET RATE, and measuring one against a period
-        # is the exact mistake docs/radiant-telemetry.md section 8 warns about:
-        # "the receiver will report it as terrible link quality rather than as
-        # a configuration mismatch". A node that transmits forty messages a day
-        # while keeping a 4 Hz period configured scores 99.9 % loss and
-        # enormous jitter while working perfectly. The flag is in the
-        # descriptor precisely so this is a decision made from data, and this
-        # is the receiver making it.
+        # A SPARSE NODE HAS NO PACKET RATE, so measuring one against a period
+        # is the mistake docs/radiant-telemetry.md section 8 warns about: a
+        # node sending forty messages a day at a 4 Hz configured period would
+        # score 99.9 % loss while working perfectly. The sparse flag is in the
+        # descriptor so this is a decision made from data.
         sparse_node = (self.tlm_desc is not None
                        and bool(self.tlm_desc.flags & ap.TLM_FLAG_SPARSE))
 
@@ -1177,22 +1093,17 @@ class ChannelAnalyzer:
                   "are not measured against a period this node never claimed "
                   "to fill")
         elif self.packets and expected > 0:
-            # The resolution matters more than the number on a short run. At
-            # ~4 Hz a minute is only 240 packets, so a single dropped one is
-            # 0.4 % and two put an otherwise perfect link over a 1 % limit.
-            # Reporting it stops a short run from being read as a regression.
-            # Judged on the rounded figure, which is the one printed. Deciding
-            # on more precision than is shown produces a line that reads
-            # "2.50 % (limit 2.50 %)" next to the word FAIL, and a report that
-            # appears to contradict itself gets treated as a broken tool.
+            # Resolution matters more than the number on a short run: at ~4 Hz
+            # a minute is only 240 packets, so one dropped packet is 0.4 % and
+            # two put an otherwise perfect link over a 1 % limit. Judged on the
+            # rounded figure that's printed - more precision produces a line
+            # reading "2.50 % (limit 2.50 %)" next to FAIL, a broken-looking tool.
             check("loss", round(loss_pct, 2) <= max_loss_pct,
                   f"{loss_pct:.2f} % (limit {max_loss_pct:.2f} %, "
                   f"one packet = {100.0 / expected:.2f} %)")
         if jitter["stdev_s"] is not None and self.period_s > 0 and not sparse_node:
-            # Left exactly as it was, on the host clock, because the USB path
-            # is part of what a dongle is and this check has always covered it.
-            # What it is not is a measurement of the link's timing - see
-            # _offgrid, and the "timing" line the report prints underneath.
+            # On the host clock, deliberately (the USB path is part of what a
+            # dongle is) - not a measurement of the link's timing; see _offgrid.
             limit = jitter_factor * self.period_s
             check("jitter", jitter["stdev_s"] <= limit,
                   f"stddev {jitter['stdev_s'] * 1000:.1f} ms, max "
@@ -1203,16 +1114,15 @@ class ChannelAnalyzer:
         check("accumulator continuity", self.violation_count == 0,
               f"{self.violation_count} violation(s)")
 
-        # Exact loss, where the transmitter's counter allows it. Requiring the
-        # counter to have never once stood still is what proves it is stepped
-        # per message rather than per pedal stroke; a real power meter fails
-        # that on its first coast and is reported on the wall clock alone.
+        # Exact loss, where the counter allows it. Requiring it to have never
+        # stood still proves it steps per message, not per pedal stroke; a
+        # real power meter fails that on its first coast and is reported on
+        # the wall clock alone.
         exact = None
         if self.std_event_pairs >= 30 and self.std_event_still == 0:
-            # The counter stepped std_event_span times over the run, and every
-            # step that did not arrive as a packet was lost. What "a packet"
-            # means is the vote above; with no votes either way there were no
-            # common pages to judge by, and the two readings coincide.
+            # The counter stepped std_event_span times; every step that
+            # didn't arrive as a packet was lost. What "a packet" means is
+            # the vote above; with no votes either way, the readings coincide.
             per_message = self.std_votes_per_message > self.std_votes_per_page
             received = (self.std_event_pairs + self.std_common_seen
                         if per_message else self.std_event_pairs)
@@ -1231,10 +1141,8 @@ class ChannelAnalyzer:
                   f"transmitter's own event counter rather than a clock")
 
         if self.event_comparisons:
-            # Not a rate threshold: a real sensor at a very low cadence can go
-            # many messages between events quite legitimately. Never advancing
-            # at all across the whole run is the thing that cannot happen to a
-            # working sensor.
+            # Not a rate threshold - a real sensor at low cadence can go many
+            # messages between events; never advancing at all cannot happen.
             check("sensor liveness", self.event_advances > 0,
                   f"the event counter advanced on {self.event_advances} of "
                   f"{self.event_comparisons} packet pairs")
@@ -1251,9 +1159,9 @@ class ChannelAnalyzer:
                   f"{expected_value:.0f} (limit {limit:.2f})")
 
         if self.device_type == ap.RADIANT_TLM_DEVICE_TYPE:
-            # The envelope's own check, and the one that says whether this
-            # node is decodable at all: a receiver that never assembled a
-            # descriptor set has learned nothing, however clean the stream.
+            # Whether this node is decodable at all: a receiver that never
+            # assembled a descriptor set has learned nothing, however clean
+            # the stream.
             check("descriptor decoded", self.tlm_desc is not None,
                   "no descriptor set assembled" if self.tlm_desc is None else
                   f"schema 0x{self.tlm_desc.schema_id:02X}, "
@@ -1275,10 +1183,8 @@ class ChannelAnalyzer:
                   f"{attestation['beacon_frames']} frame(s), "
                   f"{attestation['key_group_hint_matches']} hint match(es)")
 
-        # A sparse node has no 121-message cycle to hang a common page on
-        # (section 8 replaces the interleave outright), so the common-page
-        # cadence is checked only where the profile actually requires it. 0x79
-        # has no common pages defined for it either.
+        # Sparse nodes: see the packets check above. 0x79 (BSC combined) has
+        # no common pages defined for it either.
         if self.device_type != ap.BSC_COMBINED_DEVICE_TYPE and not sparse_node:
             worst_gap = max(self.common_gaps) if self.common_gaps else None
             saw_both = (self.common_pages_seen[ap.PAGE_COMMON_MANUFACTURER] > 0
@@ -1293,11 +1199,8 @@ class ChannelAnalyzer:
 
         return {
             "profile": self.name,
-            # Where this stream came from, for derive()'s per-channel block.
-            # Both may be absent from the sensor's point of view - a wildcard
-            # pairing has no device number until one is heard, and a replayed
-            # capture has no channel at all - so both are nullable and neither
-            # is ever invented.
+            # For derive()'s per-channel block. Both nullable, never invented:
+            # a wildcard has no device number until heard, a replay no channel.
             "channel": self.channel,
             "device_number": self.device_number or None,
             "device_type": self.device_type,
@@ -1306,10 +1209,8 @@ class ChannelAnalyzer:
             "elapsed_s": elapsed,
             "expected_packets": expected,
             "loss_pct": loss_pct,
-            # T1: stamped by main() after listen() returns, from t_open/
-            # t_listen and this analyser's own first_t - None on --replay
-            # (no channel-open timestamp exists) and forced None under
-            # --expect-dropout (see reacquire_s just below instead).
+            # T1: from t_open/t_listen and first_t - None on --replay and
+            # under --expect-dropout (see reacquire_s below).
             "time_to_first_packet_s": self.time_to_first_packet_s,
             # T2: only under --expect-dropout SECONDS, else None.
             "reacquire_s": reacquire_s,
@@ -1372,22 +1273,18 @@ def profile_for(device_type: int, pages: Counter) -> str:
     """Name the profile a stream belongs to, from the stream alone.
 
     A capture carries no channel numbers and no --profile flag: the channel a
-    packet arrived on is a fact about the receiver, not about the sensor. What
-    it does carry is the device type and the pages, and between them those name
-    the profile - which keeps the analysis transmitter-agnostic, the property
-    that lets the same run judge ant_sim.py and sim/ firmware alike.
+    packet arrived on is a fact about the receiver, not the sensor. Device
+    type and pages name the profile instead, keeping the analysis
+    transmitter-agnostic - what lets one run judge ant_sim.py and sim/ alike.
     """
     if device_type == ap.BSC_COMBINED_DEVICE_TYPE:
         return "csc"
     if device_type == ap.HRM_DEVICE_TYPE:
         return "heart-rate"
     if device_type == ap.RADIANT_TLM_DEVICE_TYPE:
-        # Both 0x60 profiles are the same envelope with the same decoder, and
-        # the difference between them is announced in the descriptor rather
-        # than guessable from the page histogram - a telemetry node in a short
-        # capture and an asset tag in a long one look alike from outside. A
-        # node with data pages is publishing something; one with nothing but
-        # page 0x00 is a tag.
+        # Both 0x60 profiles share a decoder; the difference is announced in
+        # the descriptor, not guessable from the page histogram. A node with
+        # data pages is publishing something; one with only page 0x00 is a tag.
         data = sum(count for page, count in pages.items()
                    if ap.PAGE_TLM_DATA_FIRST <= page <= ap.PAGE_TLM_DATA_LAST)
         return "telemetry" if data else "asset-tag"
@@ -1462,9 +1359,8 @@ def extended_fields(body: bytes) -> dict:
     if flags & EXT_FLAG_RSSI:
         if len(body) < at + 3:
             return fields
-        # The one RSSI measurement type that carries dBm. Anything else is a
-        # proprietary scale, and a number on an unknown scale is worse than no
-        # number.
+        # The one RSSI measurement type that carries dBm - anything else is a
+        # proprietary scale, worse than no number at all.
         if body[at] == RSSI_MEASUREMENT_TYPE_DBM:
             fields["rssi_dbm"] = body[at + 1] - 256 if body[at + 1] > 127 \
                 else body[at + 1]
@@ -1485,8 +1381,8 @@ def listen(dev, reader, analyzers: dict, seconds: float, verbose: bool,
     Arrival time is the host's, so the jitter figure includes the USB path -
     honest, since that path is part of what's validated, but not the whole
     story: with ENABLE_RX_TIMESTAMP the radio also stamps each packet on its
-    own 32 kHz clock. On this bench host-clock jitter is 3.3 ms vs. 0.01 ms on
-    the radio clock, i.e. most of what this tool used to print was Windows'
+    own 32 kHz clock. On this bench, host-clock jitter is 3.3 ms vs. 0.01 ms
+    on the radio clock - most of what this tool used to print was Windows'
     USB scheduling, not the link. Both are measured now.
     """
     events = Counter()
@@ -1512,14 +1408,12 @@ def listen(dev, reader, analyzers: dict, seconds: float, verbose: bool,
             payload = body[1:9]
             fields = extended_fields(body)
             analyzer.feed(now, payload, fields)
-            # The device number is filled in afterwards from the identity the
-            # extended messages carry - it is not known when the first packets
-            # arrive, and a capture with the sensor left anonymous cannot be
-            # split back into per-sensor streams on replay.
+            # Device number filled in from the identity extended messages
+            # carry - unknown at first arrival, and an anonymous capture
+            # can't be split back into per-sensor streams on replay.
             records.append([now, analyzer.device_type, channel, payload])
-            # Extended messages carry the channel id after the payload, which
-            # is the only way to know which sensor was actually heard rather
-            # than which one was asked for.
+            # The channel id after the payload is the only way to know which
+            # sensor was actually heard, versus which one was asked for.
             if "device_number" in fields:
                 identities[channel] = (fields["device_number"],
                                        fields["device_type"])
@@ -1561,19 +1455,17 @@ def loss_accounting(result: dict) -> dict | None:
     reporting that a message was expected in a timeslot and did not arrive
     intact, so loss it accounts for happened on the air and is the room's
     business. Loss it does not account for happened *after* the radio had the
-    packet - on the USB path, in the bridge, or in this tool - and is somebody's
-    bug. That is the difference between "move the boards apart" and "we are
-    dropping packets we already received".
+    packet - USB path, bridge, or this tool - and is somebody's bug: the
+    difference between "move the boards apart" and "we are dropping packets
+    we already received".
 
-    It is worth failing on rather than only printing, because that is exactly
-    how a 250 ms libusb read timeout against a 249.7 ms channel period hid here
-    for as long as it did: it invented packet loss that looked identical to the
-    on-air kind, and the only thing that gave it away was the radio's silence
-    about it.
+    Worth failing on rather than only printing: a 250 ms libusb read timeout
+    against a 249.7 ms channel period hid here for as long as it did,
+    inventing packet loss identical to the on-air kind, until the radio's
+    silence about it gave it away.
 
-    Returns None on --replay: a capture file records payloads, not channel
-    events, so there are no RX_FAILs to find and this would blame the host for
-    every packet the radio itself dropped.
+    Returns None on --replay: a capture records payloads, not channel events,
+    so there are no RX_FAILs to find, and blaming the host would be wrong.
     """
     events = result.get("events")
     if events is None:
@@ -1588,11 +1480,10 @@ def loss_accounting(result: dict) -> dict | None:
 
     unaccounted = max(0, missing - radio_fails)
 
-    # Not zero tolerance. `missing` is the wall-clock estimate, so it carries a
-    # packet of rounding either way, and an event landing after the listening
-    # window closes is counted in one column and not the other. A quarter of the
-    # loss, or two packets, is slack for that and nothing like the half that the
-    # read-timeout bug produced.
+    # Not zero tolerance: `missing` carries a packet of rounding either way,
+    # and a boundary event can land in one column and not the other. A
+    # quarter of the loss, or two packets, covers that - nothing like the
+    # half the read-timeout bug produced.
     allowed = max(2, round(0.25 * missing))
 
     if unaccounted == 0:
@@ -1619,10 +1510,10 @@ def _number(value) -> float | None:
     """A JSON number, or None where the tool has no answer.
 
     `loss_pct` is a genuine NaN when there is no denominator to divide by (an
-    unknown device type has no period, so there is no packet count to expect).
-    NaN is not JSON, and a reader that gets one has to guess whether it means
-    zero or unknown - so the derived block says None, which the schema's
-    ["number", "null"] already allows and every consumer already handles.
+    unknown device type has no period, so no packet count to expect). NaN is
+    not JSON, and a reader that gets one has to guess whether it means zero or
+    unknown - so the derived block says None instead, which the schema's
+    ["number", "null"] already allows.
     """
     if value is None:
         return None
@@ -1646,19 +1537,15 @@ def derive(result: dict) -> dict:
     """Lift out the handful of numbers `tools/ab_gates.toml`'s gates read.
 
     archive/benchmarks/README.md keeps a `derived` block beside every recorded
-    run so that "a gate runner does not need to know the tool's object shape".
-    Until now that block was typed by hand out of the report, which is a
-    transcription step between the measurement and the gate - and the one
-    number a transcription step is most likely to pick up is `loss_pct`, the
-    wall-clock figure the gates specifically must not read. Emitting the block
-    from the tool that made the measurement removes the step.
+    run so "a gate runner does not need to know the tool's object shape" -
+    emitted here rather than typed by hand, since the likeliest transcription
+    slip is `loss_pct`, the wall-clock figure the gates must not read.
 
     THE AGGREGATE FIELDS KEEP THEIR SINGLE-CHANNEL MEANING EXACTLY. Every
-    baseline in archive/benchmarks/ is a one-channel run, and
-    `ant_ab.py`'s gate_loss() reads `derived.loss_exact_pct` from those files;
-    with one channel each expression below reduces, term for term, to the
-    single channel's own figure. Multi-channel is where they have to choose,
-    and they choose the way the underlying quantity composes:
+    baseline in archive/benchmarks/ is a one-channel run, and `ant_ab.py`'s
+    gate_loss() reads `derived.loss_exact_pct` from those files; with one
+    channel each expression below reduces, term for term, to that channel's
+    own figure. Multi-channel is where they choose how the quantity composes:
 
       * loss_exact_pct - one ratio over the pooled counters
         (sum missed / sum sent), not a mean of ratios. A mean of ratios gives
@@ -1672,18 +1559,15 @@ def derive(result: dict) -> dict:
         Baseline.worst() gives: averaging away one bad run is how a regression
         ships.
 
-    per_channel is the block this exists for. The defect it was written to
-    measure - a scheduler exclusion radius that drops the later of two windows
-    that land too close together - is invisible in any aggregate: it costs
-    whole slots on one channel of a pair while the other is untouched, so the
-    pooled figure moves by half of an already small number. Per channel it is
-    a step.
+    per_channel is the block this exists for: a scheduler exclusion radius
+    dropping the later of two nearby windows costs whole slots on one channel
+    of a pair while leaving the other untouched - invisible pooled (half a
+    small number), a step per channel.
 
-    Not emitted here, deliberately: `sched_missed`. That counter lives in the
-    dongle (MESG_RADIANT_HEALTH, tools/ant_health.py) and is not on this
-    tool's wire at all. It belongs in the same `derived` block - ant_ab.py
-    gates on it - but a run has to read it out of the firmware before and
-    after, and inventing a zero here would be worse than leaving it absent.
+    Not emitted here: `sched_missed`. It lives in the dongle
+    (MESG_RADIANT_HEALTH, tools/ant_health.py), not on this tool's wire.
+    ant_ab.py gates on it, but a run reads it from the firmware separately;
+    a zero here would be worse than absent.
     """
     channels = result.get("channels", [])
 
@@ -1705,11 +1589,9 @@ def derive(result: dict) -> dict:
         jitter = channel.get("jitter", {})
         signal = channel.get("signal")
 
-        # The key is the receive channel where one is known, and the stream's
-        # own name where it is not - a replayed capture carries no channel
-        # number, and a key invented from the list position would read like a
-        # channel and not be one. `channel` inside the entry is the machine-
-        # readable form of the same fact, and is null in that case.
+        # The key is the receive channel where known, else the stream's own
+        # name (a replay carries no channel number). `channel` inside the
+        # entry is the machine-readable form, null in that case.
         number = channel.get("channel")
         key = str(number) if number is not None else channel.get(
             "profile", f"stream {index}")
@@ -1729,17 +1611,14 @@ def derive(result: dict) -> dict:
             "timing_offgrid_host_ms": _ms(jitter.get("offgrid_host_s")),
             "timing_offgrid_radio_ms": _ms(jitter.get("offgrid_radio_s")),
             "rssi_dbm_mean": signal["mean_dbm"] if signal else None,
-            # T1/T2. Both None on most runs - see ChannelAnalyzer's own
-            # docstrings for time_to_first_packet_s and reacquire_s.
+            # T1/T2, both None on most runs - see ChannelAnalyzer's docstrings.
             "time_to_first_packet_s": _number(
                 channel.get("time_to_first_packet_s")),
             "reacquire_s": _number(channel.get("reacquire_s")),
         }
 
-        # A wildcard channel was configured with no device number, so the only
-        # device number it has is the one it actually heard - which is the
-        # answer to "which sensor is this figure about" anyway, and is the
-        # reason lib config 0xE0 asks for the channel id at all.
+        # A wildcard channel's only device number is the one actually heard -
+        # the reason lib config 0xE0 asks for the channel id at all.
         if entry["device_number"] is None and number is not None:
             heard = result.get("identities", {}).get(str(number))
             if heard:
@@ -1775,20 +1654,18 @@ def derive(result: dict) -> dict:
     accounting = result.get("accounting")
 
     return {
-        # The wall-clock figure. Recorded because the baselines record it, and
-        # never the one to gate on - it assumes the transmitter's crystal is
-        # exact and rounds its denominator.
+        # The wall-clock figure, recorded because the baselines record it -
+        # never the one to gate on, since it assumes an exact crystal and
+        # rounds its denominator.
         "loss_pct": (100.0 * (1.0 - packets_total / expected_total)
                      if expected_total > 0 else None),
-        # THE gate. None rather than 0.0 when no channel could produce one:
-        # "the counter could not be trusted" and "nothing was lost" are
-        # different answers, and ant_ab.py already fails a gate whose field is
-        # missing. A zero here would pass it instead.
+        # THE gate. None, not 0.0, when no channel could produce one - "the
+        # counter couldn't be trusted" differs from "nothing was lost", and
+        # ant_ab.py fails a gate whose field is missing, where 0.0 would pass.
         "loss_exact_pct": (100.0 * missed_total / sent_total
                            if sent_total else None),
-        # None on --replay, where loss_accounting() correctly declines to
-        # judge: a capture records payloads and not channel events, so there
-        # are no RX_FAILs to account with.
+        # None on --replay: a capture records payloads, not channel events,
+        # so there are no RX_FAILs to account with.
         "unexplained_loss": (accounting["unaccounted"]
                              if accounting is not None else None),
         "accumulator_violations": violations_total,
@@ -1796,10 +1673,7 @@ def derive(result: dict) -> dict:
         "timing_offgrid_radio_ms": (max(offgrid_radio) if offgrid_radio
                                     else None),
         "rssi_dbm_mean": rssi_weighted / rssi_n if rssi_n else None,
-        # T1/T2. Run-level is the worst (slowest) channel, the same reasoning
-        # as timing_offgrid_*_ms above. None whenever no channel produced a
-        # figure - every run on --replay, and every ordinary run for
-        # reacquire_s.
+        # T1/T2: run-level is the worst channel, as with timing_offgrid above.
         "time_to_first_packet_s": max(ttfp_values) if ttfp_values else None,
         "reacquire_s": max(reacquire_values) if reacquire_values else None,
         "per_channel": per_channel,
@@ -1820,9 +1694,8 @@ def report(result: dict) -> None:
                 f"{page} x{count}" for page, count in channel["pages"].items()))
         jitter = channel["jitter"]
         if jitter.get("offgrid_host_s") is not None:
-            # The jitter check above is dominated by the gap each lost packet
-            # leaves. This is the same packets with the slot count taken out,
-            # so it moves when the timing moves and not when the loss does.
+            # The jitter check is dominated by each lost packet's gap; this
+            # is the same packets with the slot count taken out.
             line = (f"  timing: {jitter['offgrid_host_s'] * 1000:.2f} ms off "
                     f"the {jitter['period_s'] * 1000:.1f} ms slot grid by the "
                     f"host clock")
@@ -1833,17 +1706,15 @@ def report(result: dict) -> None:
 
         signal = channel.get("signal")
         if signal:
-            # Printed rather than judged. It answers a question no threshold
-            # can: an ANT slave tracks down to about -90 dBm, so a desk pair
-            # sitting near -30 has some 60 dB in hand, and loss at 60 dB of
-            # margin is not the link running out of signal. What a limit here
-            # would actually encode is how far apart the boards happen to be.
+            # Printed rather than judged: an ANT slave tracks down to about
+            # -90 dBm, so a desk pair near -30 has 60 dB in hand, and loss at
+            # 60 dB of margin isn't the link running out of signal. A limit
+            # here would just encode how far apart the boards happen to be.
             print(f"  signal: mean {signal['mean_dbm']:.1f} dBm "
                   f"(min {signal['min_dbm']}, max {signal['max_dbm']}, "
                   f"n={signal['n']}) - ANT tracks to about -90")
         if channel["accumulator_wraps"]:
-            # A run that never wrapped has not tested the wrap. Say so, rather
-            # than letting a clean pass imply coverage it does not have.
+            # A run that never wrapped hasn't tested the wrap - say so.
             print("  wraps observed: " + ", ".join(
                 f"{field} x{count}"
                 for field, count in sorted(channel["accumulator_wraps"].items())))
@@ -1855,10 +1726,8 @@ def report(result: dict) -> None:
         if attestation and attestation["verdict"] != ATTEST_CLEAR:
             tier1 = attestation["tier_i"]
             rate = tier1["verified_of_delivered"]
-            # Printed as "of delivered" rather than "of expected" on purpose:
-            # Tier I's claim is that its verification rate equals its page
-            # DELIVERY rate, independently of the interval. Mixing loss into
-            # this number would hide exactly the property being asserted.
+            # "of delivered", not "of expected": Tier I's rate equals its page
+            # DELIVERY rate, independent of loss - mixing loss in would hide it.
             print(f"  attestation: {attestation['verdict']}"
                   + (f" - Tier I {rate * 100:.1f}% of delivered pages verified"
                      if rate is not None else " - no Tier I page delivered")
@@ -1906,10 +1775,8 @@ def report(result: dict) -> None:
         print(f"heard on channel {channel}: device #{ident['device_number']}, "
               f"type 0x{ident['device_type']:02X}")
 
-    # The per-channel exact-loss table, printed only when there is more than
-    # one channel to compare. On one channel it would restate the `loss
-    # (exact)` check line above it, and a report that says the same number
-    # twice invites the reader to wonder which one is authoritative.
+    # Printed only for more than one channel - on one it would just restate
+    # the `loss (exact)` check line above.
     per_channel = result.get("derived", {}).get("per_channel", {})
     if len(per_channel) > 1:
         print("\nper channel (exact loss, from the transmitters' own "
@@ -1924,10 +1791,8 @@ def report(result: dict) -> None:
                       f"message(s) missing)")
             label = f"channel {key}" if entry["channel"] is not None else key
             print(f"  {label:12} {entry['profile']:24} {figure}")
-        # Spread, not mean: the whole reason for measuring per channel is that
-        # a scheduler that drops the later of two nearby windows costs one
-        # channel of a pair and leaves the other alone. That is a difference
-        # between channels, and no aggregate can show it.
+        # Spread, not mean: a scheduler dropping the later of two nearby
+        # windows costs one channel of a pair, a difference no aggregate shows.
         values = [entry["loss_exact_pct"] for entry in per_channel.values()
                   if entry["loss_exact_pct"] is not None]
         if len(values) > 1:
@@ -1941,27 +1806,22 @@ def per_channel_args(values: list[int] | None, count: int, name: str, *,
                      wildcard: int | None = None) -> list[int]:
     """Expand one repeatable per-channel argument to one value per channel.
 
-    Three forms, and the first two are the ones that already existed:
+    Three forms:
 
       * absent      - the default, on every channel.
-      * given once  - one value for every channel, except that `ramp` ones
-                      count up from it (channel N, N+1, ... and device #N,
-                      #N+1, ...). That ramp is not new and is not decoration:
-                      several bench scripts pass a single --channel with
-                      several --profile flags and rely on the channels not
-                      colliding.
-      * repeated    - one value per channel, positionally. This is the form
-                      that exists to place two receive windows deliberately
-                      close together, which is how a scheduler's exclusion
-                      radius is measured.
+      * given once  - one value for every channel, except `ramp` ones count
+                      up from it (channel N, N+1, ... device #N, #N+1, ...) -
+                      several bench scripts rely on this to keep channels
+                      from colliding.
+      * repeated    - one value per channel, positionally - how two receive
+                      windows are placed close together to measure a
+                      scheduler's exclusion radius.
 
-    `wildcard` is the value that means "any", and is never ramped: 0 pairs
-    with any device, and ramping it to 1 would silently pin channel 1 to a
-    real device number that nobody asked for.
+    `wildcard` is never ramped: 0 pairs with any device, and ramping it to 1
+    would silently pin channel 1 to a real device number nobody asked for.
 
-    A wrong count is refused rather than zipped short. Positional pairing that
-    silently truncates would apply channel 2's frequency to channel 3 and
-    report the result as a measurement.
+    A wrong count is refused rather than zipped short - silent truncation
+    would attribute one channel's setting to another as a measurement.
     """
     if not values:
         return [default] * count
@@ -2041,16 +1901,10 @@ def main() -> int:
                              "timing and a staged dropout are not the same "
                              "measurement")
     # ── The four per-channel arguments ──────────────────────────────────────
-    #
-    # All four repeat, and repeating any of them switches this tool from "one
-    # sensor, measured well" to "several sensors, measured separately". That
-    # is the measurement the multi-channel scheduling defect needs: it is
-    # invisible at one channel by construction, so a tool that can only be
-    # pointed at one channel can never see it.
-    #
-    # Given once, each keeps exactly the meaning it had - including the two
-    # ramps below, which several bench scripts depend on - so every existing
-    # invocation and every recorded baseline still means what it meant.
+    # All four repeat, switching this tool from "one sensor, measured well"
+    # to "several sensors, measured separately" - the shape the multi-channel
+    # scheduling defect needs, invisible at one channel by construction.
+    # Given once, each keeps its old meaning, including the two ramps below.
     parser.add_argument("--device-number", type=int, action="append",
                         metavar="N",
                         help="device number to pair with; 0 is a wildcard, "
@@ -2099,13 +1953,11 @@ def main() -> int:
     parser.add_argument("-q", "--quiet", action="store_true")
     args = parser.parse_args()
 
-    # How many channels this run has: as many as the most-repeated of the two
-    # arguments that can name one. --profile alone (several sensors of
-    # different kinds, the Zwift shape) and --channel alone (several sensors
-    # of the SAME kind on channels of the operator's choosing, the shape the
-    # scheduling defect needs) both work, and one profile is spread across
-    # every channel because that is the multi-master bench: eight identical
-    # power masters, deliberately phased.
+    # How many channels: the most-repeated of the two arguments that can name
+    # one. --profile alone (several sensor kinds, the Zwift shape) and
+    # --channel alone (several of the SAME kind, the shape the scheduling
+    # defect needs) both work; one profile spread across every channel is the
+    # multi-master bench - eight identical power masters, deliberately phased.
     profiles = args.profile or ["power"]
     count = max(len(profiles), len(args.channel or []), 1)
     if len(profiles) not in (1, count):
@@ -2134,10 +1986,9 @@ def main() -> int:
     json_to_stdout = args.json == "-"
     verbose = not args.quiet and not json_to_stdout
 
-    # Everything up to the result is narration, and with --json - the caller
-    # wants a parseable document on stdout and nothing else. Redirecting rather
-    # than guarding each print catches the bring-up chatter from ant_scan's
-    # command() too, which this file does not own.
+    # Everything up to the result is narration; with --json the caller wants
+    # a parseable document on stdout, nothing else. Redirecting also catches
+    # ant_scan's command() bring-up chatter, which this file does not own.
     stack = contextlib.ExitStack()
     if json_to_stdout:
         stack.enter_context(contextlib.redirect_stdout(sys.stderr))
@@ -2145,9 +1996,8 @@ def main() -> int:
     def make_verifier(device_number: int) -> CompatVerifier | None:
         """A verifier per stream, or None - which is what CLEAR means.
 
-        The device number is inside the nonce, so a wildcard cannot be used to
-        check a tag: 0 pairs with anything, and a tag is computed against
-        exactly one sensor.
+        The device number is inside the nonce, so a wildcard can't check a
+        tag: 0 pairs with anything, and a tag is computed against one sensor.
         """
         if not args.compat_key:
             return None
@@ -2160,16 +2010,10 @@ def main() -> int:
 
     def make_analyzer(name: str, channel: int,
                       device_number: int) -> ChannelAnalyzer:
-        """One analyser per channel.
-
-        Every piece of per-stream state this tool keeps - the accumulator
-        baselines, the event-counter pairs the exact-loss figure is counted
-        from, the Tier II window - is already an attribute of the analyser
-        rather than a global, so several channels need no new bookkeeping:
-        one object each, and listen() dispatches on the channel byte the
-        broadcast arrives with. What was missing was only the ability to say
-        which channel and which device each one is.
-        """
+        """One analyser per channel: every piece of per-stream state (baselines,
+        the exact-loss event-counter pairs, the Tier II window) is already an
+        attribute rather than a global, so several channels need no new
+        bookkeeping - one object each, dispatched on the channel byte."""
         spec = ap.PROFILES[name]
         return ChannelAnalyzer(name, spec["device_type"], spec["period"],
                                args.expect_watts, args.expect_rpm,
@@ -2183,35 +2027,21 @@ def main() -> int:
     records: list = []
 
     if args.replay:
-        # WHICH CHANNEL A REPLAYED STREAM WAS HEARD ON IS NOT IN THE FILE.
-        # A capture records the sensor - time, device type, device number,
-        # payload - because the channel a packet arrived on is a fact about
-        # the receiver and not about the sensor (profile_for()'s docstring
-        # says so, and the .antcap line format has no column for it). So the
-        # only honest way to label a replayed stream with a channel is for the
-        # operator to say which device was on which channel, which is exactly
-        # what the paired --channel/--device-number arguments already express:
-        #
-        #     --replay f.antcap --channel 0 --device-number 4660 \
-        #                       --channel 1 --device-number 4661
-        #
-        # A single ramped --device-number reproduces the same pairing a live
-        # multi-channel run used, so a capture recorded by one replays with
-        # its channel labels intact. Unpaired streams keep a null channel and
-        # are keyed by name; nothing is guessed from the order of the file.
-        # strict=True on both zips in this file: per_channel_args() has
-        # already refused a mismatched count, so a short zip here could only
-        # mean that guarantee was broken, and silently dropping a channel is
-        # how a run reports three sensors' loss as two.
+        # WHICH CHANNEL A REPLAYED STREAM WAS HEARD ON IS NOT IN THE FILE - the
+        # channel is a fact about the receiver, not the sensor, and .antcap
+        # has no column for it. So the paired --channel/--device-number
+        # arguments label it instead; unpaired streams keep a null channel.
+        # strict=True on both zips: per_channel_args() already refused a
+        # mismatched count, so dropping a channel silently would report three
+        # sensors' loss as two.
         channel_of_device = {number: channel
                              for number, channel in zip(device_numbers,
                                                         channels, strict=True)
                              if number}
 
-        # One analyser per sensor, discovered from the capture. Grouping by
-        # device type alone would merge a standard-page power meter and a
-        # torque-page one into a single stream and then report the merge as
-        # loss, so the device number is part of the key.
+        # One analyser per sensor. Grouping by device type alone would merge
+        # a standard-page power meter and a torque-page one into one stream
+        # and report the merge as loss, so device number is part of the key.
         streams: dict = {}
         for t, device_type, device_number, payload in ap.read_capture(args.replay):
             streams.setdefault((device_type, device_number), []).append(
@@ -2248,16 +2078,11 @@ def main() -> int:
             return 1
 
         # 0x80 ENABLE_CHANNEL_ID, 0x40 ENABLE_RSSI, 0x20 ENABLE_RX_TIMESTAMP.
-        #
-        # Without the channel id the broadcasts arrive anonymous, so a run
-        # cannot say which sensor it measured. The other two were free for the
-        # asking and were not being asked for, which cost this project a lot:
-        # RSSI is the difference between a packet lost to a collision and one
-        # lost to a fade, and the receive timestamp is the radio's own 32 kHz
-        # clock, which is the only clock here that is not Windows.
-        #
-        # Worth having, not worth aborting over - every measurement that
-        # existed before these has a host-clock fallback.
+        # Without the channel id, broadcasts arrive anonymous. The other two
+        # cost this project a lot by not being asked for: RSSI tells a
+        # collision from a fade, and the receive timestamp is the radio's own
+        # 32 kHz clock, the only one here that isn't Windows'. Not worth
+        # aborting over - every measurement has a host-clock fallback.
         command(dev, reader, MESG_ANTLIB_CONFIG_ID,
                 bytes([0x00, LIB_CONFIG_ALL_EXT_FIELDS]), "extended messages")
         if not command(dev, reader, MESG_NETWORK_KEY_ID,
@@ -2266,9 +2091,8 @@ def main() -> int:
             return 1
 
         analyzers = {}
-        # T1: when each channel's OPEN command completed - the moment a real
-        # receiver would start expecting packets. Only meaningful relative to
-        # t_listen just below, since the two are read off the same clock.
+        # T1: when each channel's OPEN completed - the moment a real receiver
+        # would start expecting packets, relative to t_listen below.
         t_open: dict[int, float] = {}
         for name, channel, device_number, trans_type, rf_freq in zip(
                 profiles, channels, device_numbers, trans_types, rf_freqs,
@@ -2300,11 +2124,9 @@ def main() -> int:
         close_device(dev)
         ordered = list(analyzers.values())
 
-        # T1: (t_listen - t_open[ch]) + the analyser's own first_t, which is
-        # relative to t_listen (listen() timestamps from its own start). Left
-        # at the __init__ default of None under --expect-dropout: that mode
-        # measures re-acquisition after a staged dropout, not the initial
-        # acquisition this figure is about.
+        # T1: (t_listen - t_open[ch]) + the analyser's own first_t. Left at
+        # None under --expect-dropout, which measures re-acquisition, not
+        # initial acquisition.
         if args.expect_dropout is None:
             for analyzer in ordered:
                 if (analyzer.first_t is not None
@@ -2314,14 +2136,10 @@ def main() -> int:
                         + analyzer.first_t)
 
     if args.record and not args.replay:
-        # The device number is what splits a capture back into per-sensor
-        # streams on replay, and a capture whose sensors are all #0 cannot be
-        # split at all - two channels would merge into one analysis and the
-        # merge would be reported as loss. So: the identity actually heard
-        # first, and the device number the channel was PINNED to as the
-        # fallback, which is a fact about the run rather than a guess. Zero
-        # only survives where the channel was a wildcard and nothing
-        # identified itself.
+        # The device number splits a capture back into per-sensor streams on
+        # replay; sensors all #0 can't be split, and the merge reports as
+        # loss. So: the identity actually heard first, then the PINNED
+        # device number. Zero only survives a wildcard that heard nothing.
         identities = extra.get("identities", {})
         pinned = dict(zip(channels, device_numbers, strict=True))
         resolved = [
@@ -2349,9 +2167,8 @@ def main() -> int:
     accounting = loss_accounting(result)
     if accounting is not None:
         result["accounting"] = accounting
-    # After the accounting, because unexplained_loss is one of the numbers it
-    # lifts out, and before the report, which prints the per-channel table
-    # from it.
+    # After accounting (unexplained_loss comes from it), before report()
+    # (which prints derive()'s per-channel table).
     result["derived"] = derive(result)
     result["pass"] = (all(c["pass"] for c in result["channels"])
                       and (accounting is None or accounting["pass"]))

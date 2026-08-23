@@ -61,8 +61,7 @@ PAGE_COMMON_SUBFIELD = 0x54       # page 84, decode-only - see decode_common_84
 # Data pages between common-page pairs. 120 rather than the 64 this used to
 # use, because 64 is not what a real sensor does: sdk-ant's certified bicycle
 # power profile interleaves page 80 at 119 and page 81 at 120, commented
-# "Minimum: Interleave every 121 messages". A simulator that sends them twice
-# as often as the profile requires is not simulating anything.
+# "Minimum: Interleave every 121 messages".
 COMMON_PAGE_INTERVAL = 120
 
 # Marker for "this field is not being reported". The profiles spell it 0xFF in
@@ -164,10 +163,8 @@ def encode_power_torque(page: int, event_count: int, ticks: int,
         [4..5] accumulated period in 1/2048 s (LE), wraps at 65536
         [6..7] accumulated torque in 1/32 Nm (LE), wraps at 65536
 
-    All four accumulators wrap independently. Emitting a run long enough to
-    take each of them through its wrap is the point of these pages: a receiver
-    that widens before subtracting is correct for hours and then reports a
-    single absurd sample, which is easy to dismiss as radio noise.
+    All four accumulators wrap independently - see the module note on wrap
+    semantics.
     """
     if page not in (PAGE_POWER_WHEEL_TORQUE, PAGE_POWER_CRANK_TORQUE):
         raise ValueError(f"page 0x{page:02X} is not a torque page")
@@ -227,9 +224,9 @@ def power_from_torque(delta_torque: int, delta_period: int) -> float:
         avg_omega_rads = 2*pi * delta_event * 2048 / delta_period
         power_w        = avg_torque_Nm * avg_omega_rads
 
-    delta_event cancels, which is worth writing down: the event count is not
-    needed for the power figure, only to tell "no new event" from "a new event
-    with zero torque". Both show up as delta_period == 0 otherwise.
+    delta_event cancels: the event count is not needed for the power figure,
+    only to tell "no new event" from "a new event with zero torque" - both
+    show up as delta_period == 0 otherwise.
     """
     if delta_period == 0:
         raise ZeroDivisionError("no elapsed accumulated period")
@@ -275,11 +272,10 @@ def encode_bsc_combined(cad_event_time: int, cad_revs: int,
         [4..5] speed event time in 1/1024 s (LE), wraps at 65536
         [6..7] cumulative wheel revolutions (LE), wraps at 65536
 
-    There is no page number. This page is identified by the channel's device
-    type and nothing else, so a receiver has to know what it asked for. That is
-    also why the cadence half is so easy to lose: bytes [4..7] alone are a
-    valid-looking speed-only page, and reading only those is exactly what
-    aerosense does today (write-back item 2).
+    No page number (see the module docstring's first trap). That is also why
+    the cadence half is so easy to lose: bytes [4..7] alone are a valid-looking
+    speed-only page, and reading only those is exactly what aerosense does
+    today (write-back item 2).
     """
     return (_le16(cad_event_time) + _le16(cad_revs)
             + _le16(spd_event_time) + _le16(spd_revs))
@@ -480,9 +476,8 @@ def encode_hr_previous_beat(previous_event_time: int, event_time: int,
         [1]    manufacturer-specific, 0xFF when unused
         [2..3] previous heartbeat event time (LE), 1/1024 s
 
-    Two consecutive event times on one page is what lets a receiver compute an
-    R-R interval from a single packet instead of differencing two, which is the
-    reason a modern strap sends this as a main page rather than page 0x00.
+    Two consecutive event times on one page let a receiver compute an R-R
+    interval from a single packet instead of differencing two.
     """
     return _hr_page(PAGE_HR_PREVIOUS_BEAT,
                     bytes([INVALID_U8 if manufacturer_specific is None
@@ -507,8 +502,7 @@ def heart_rate_bpm_from(delta_beats: int, delta_event_time: int) -> float:
 
     The computed-heart-rate byte is the sensor's own answer and is a
     convenience; this is the accumulator pair, which is what survives a lost
-    packet - the same division of labour as accumulated versus instantaneous
-    power.
+    packet.
     """
     if delta_event_time == 0:
         raise ZeroDivisionError("no elapsed event time")
@@ -787,10 +781,9 @@ def decode_rd_open_channel(payload: bytes) -> dict:
 def rd_rf_from_hr_page4(manufacturer_byte: int) -> int | None:
     """The RF index an HR-RD strap advertises in heart-rate page 0x04 byte [1].
 
-    None for the "not open" code AND for every value outside the enumeration,
-    which are two different facts a receiver must act on identically: on a
-    strap without running dynamics that byte is manufacturer-specific data and
-    the document forbids interpreting it.
+    None for the "not open" code AND for every value outside the enumeration -
+    two different facts a receiver must act on identically: on a strap without
+    running dynamics that byte is manufacturer-specific and off-limits.
     """
     return RD_RF_ENUM.get(manufacturer_byte)
 
@@ -1114,19 +1107,16 @@ _CTRL_DECODERS = {
 # ---------------------------------------------------------------------------
 #
 # The mirror of radiant/src/profiles/profile_fec.c (decode) and
-# profile_fec_tx.c (encode). Until
-# apps/treadmill this type had ONE copy - the C decoder - and
-# docs/device-profiles.md 3.16 said so; these functions are the second, so the
-# three-copy vocabulary rule now applies to 0x11 and the C and Python sides are
-# asserted byte-identical by tools/test_compat_capture.py.
+# profile_fec_tx.c (encode). Until apps/treadmill this type had ONE copy (the
+# C decoder, per docs/device-profiles.md 3.16); these functions are the
+# second, so the three-copy vocabulary rule now applies to 0x11, asserted
+# byte-identical by tools/test_compat_capture.py.
 #
-# THE PAGE NUMBERS COLLIDE WITH BICYCLE POWER'S AND THE COLLISION IS SILENT.
-# FE-C's General FE Data is page 0x10 and bicycle power's Standard Power is
-# also 0x10; FE-C's General Settings is 0x11 and power's Wheel Torque is also
-# 0x11; FE-C's Metabolic is 0x12 and power's Crank Torque is also 0x12. Nothing
-# in the payload distinguishes them - only the channel's device type does,
-# which is why decode() dispatches on device_type BEFORE it looks at
-# payload[0], and why _FEC_DECODERS is not merged into _PAGE_DECODERS.
+# THE PAGE NUMBERS COLLIDE WITH BICYCLE POWER'S AND THE COLLISION IS SILENT -
+# module docstring trap 4 (0x10/0x11/0x12 mean different things on different
+# device types). That is why decode() dispatches on device_type BEFORE it
+# looks at payload[0], and why _FEC_DECODERS is not merged into
+# _PAGE_DECODERS.
 #
 # The grade/incline trap is in profile_fec_tx.h at length and is not repeated
 # here: grade is an unsigned u16 biased by -200.00 %, incline is a plain
@@ -1350,9 +1340,8 @@ def encode_fec_treadmill(cadence_strides_min: int | None, neg_vertical_dm: int,
                          lap_toggle: bool = False) -> bytes:
     """Page 19 (0x13), Specific Treadmill Data.
 
-    Cadence is STRIDES per minute - one stride is two footfalls. BLE RSC counts
-    steps, so the two differ by a factor of two and exactly one conversion
-    exists for it.
+    Cadence is STRIDES per minute - one stride is two footfalls. BLE RSC
+    counts steps, so the two differ by a factor of two.
     """
     return bytes([
         PAGE_FEC_TREADMILL,
@@ -1429,7 +1418,7 @@ def encode_fec_cmd_status(last_command: int, sequence: int, status: int,
 
     `data4` is the COMMAND PAGE'S OWN bytes [4..7], position for position -
     so page 51's grade comes back at bytes 5..6, exactly where the controller
-    wrote it. Re-packing it here is the mistake this docstring exists to stop.
+    wrote it, not re-packed.
     """
     if len(data4) != 4:
         raise ValueError("the echo is four bytes: the command's own [4..7]")
@@ -1872,10 +1861,8 @@ def encode_common_81(sw_revision_main: int, serial_number: int | None,
 
 
 def decode_common_81(payload: bytes) -> dict:
-    """The mirror of encode_common_81.
-
-    `serial_number` is None when the node sent the not-supplied sentinel
-    (0xFFFFFFFF) - returning that raw value instead would look like a real,
+    """The mirror of encode_common_81. Returns None, not the raw 0xFFFFFFFF,
+    for the not-supplied sentinel - the raw value would look like a real,
     shared serial number to every caller.
     """
     serial = int.from_bytes(payload[4:8], "little")
@@ -1984,13 +1971,11 @@ def decode_common_84(payload: bytes) -> dict:
     does not know.
 
     A reserved subpage (9-254) or the 0xFF invalid sentinel is a NORMAL answer,
-    not an error: the specification reserves that range for exactly this, and
-    the other slot may still carry something useful. So the slot comes back
-    with `name` and `value` of None rather than raising.
+    not an error - the other slot may still carry something useful - so the
+    slot comes back with `name` and `value` of None rather than raising.
 
-    Note there is no `encode_common_84`. Nothing in this project is a weather
-    station, and an encoder with no transmitter is an untested page that looks
-    shipped.
+    Note there is no `encode_common_84`: nothing in this project is a weather
+    station, so an encoder here would be untested code that looks shipped.
     """
     slots = []
     for subpage, offset in ((payload[2], 4), (payload[3], 6)):
@@ -2048,13 +2033,11 @@ COMPAT_VERSION = 1
 # 0x70 IS THE BEACON AND ALSO THE NIBBLE BASE OF THE ATTESTATION CLAIM. Byte
 # [0] of an attestation page is `COMPAT_PAGE_BASE | subtype`, which is the same
 # nibble that goes into the MAC'd nonce at position 9 - so the page byte is
-# DERIVED from the subtype rather than being a second, independent statement of
-# it. That is what "the subtype nibble in byte [0]" means in bytes.
+# DERIVED from the subtype rather than being a second, independent statement.
 #
-# Subtype 0x03, the SWITCH/RETURN announcement, would be page 0x73 by that rule
-# and deliberately never appears on air: the announcement rides frames 2 and 3
-# of the beacon page's own frame set. Spending a third page number on it was
-# rejected on the 7-bit namespace alone.
+# Subtype 0x03, the SWITCH/RETURN announcement, would be page 0x73 by that
+# rule and deliberately never appears on air: it rides frames 2 and 3 of the
+# beacon page's own frame set instead, rejected on the 7-bit namespace alone.
 COMPAT_PAGE_BASE = 0x70
 COMPAT_PAGE_BEACON = 0x70
 COMPAT_PAGE_ATTEST_TIER_I = 0x71
@@ -2062,9 +2045,8 @@ COMPAT_PAGE_ATTEST_TIER_II = 0x72
 COMPAT_PAGE_MAX = 0x7F
 
 # Every page number the compat layer puts on the air. A receiver interleaves
-# them the way it interleaves common pages 80 and 81 - they are not data pages
-# and they displace one, which is a distinction any per-message counter has to
-# be told about.
+# them the way it interleaves common pages 80 and 81 - not data pages, and
+# each displaces one, a distinction any per-message counter must be told.
 COMPAT_PAGES = (COMPAT_PAGE_BEACON, COMPAT_PAGE_ATTEST_TIER_I,
                 COMPAT_PAGE_ATTEST_TIER_II)
 
@@ -2072,10 +2054,9 @@ COMPAT_PAGES = (COMPAT_PAGE_BEACON, COMPAT_PAGE_ATTEST_TIER_I,
 # absent by construction rather than by omission.
 COMPAT_DEVICE_TYPES = (BPWR_DEVICE_TYPE, HRM_DEVICE_TYPE)
 
-# Mirrors of tools/radiant_crypto.py, which mirrors radiant_sec_compat.h. The
-# values are checked against all three by scripts/check_profile_registry.py,
-# because a subtype that disagreed between the page and the nonce would produce
-# a tag that verifies nowhere and an error message about nothing.
+# Mirrors of tools/radiant_crypto.py, which mirrors radiant_sec_compat.h.
+# scripts/check_profile_registry.py checks all three agree - a page/nonce
+# subtype mismatch would produce a tag that verifies nowhere.
 COMPAT_DOM = 0x04
 COMPAT_SUBTYPE_TIER_I = 0x01
 COMPAT_SUBTYPE_TIER_II = 0x02
@@ -2123,9 +2104,8 @@ COMPAT_REASON_RESERVED = 3
 # Frame indices in the beacon page's set. The set is two frames in the steady
 # state and four during a countdown, and byte [1] carries
 # (index << 4) | (count - 1) - so frames 0 and 1 are 0x01/0x11 normally and
-# 0x03/0x13 while the announcement is running. The count is in every frame
-# precisely so a receiver that hears only frame 2 still knows how many to wait
-# for.
+# 0x03/0x13 while the announcement is running. The count is in every frame so
+# a receiver hearing only frame 2 still knows how many to wait for.
 COMPAT_FRAME_BEACON_0 = 0
 COMPAT_FRAME_BEACON_1 = 1
 COMPAT_FRAME_ANNOUNCE_A = 2
@@ -2184,9 +2164,8 @@ class CompatBeacon:
     """Layer A, the capability beacon. Two frames under page 0x70.
 
     No epoch field, deliberately: for a hostless node the epoch is the boot
-    counter, and broadcasting it would fingerprint the device across every
-    other privacy measure here. A receiver recovers the epoch by searching
-    forward against the key-group hint instead.
+    counter, and broadcasting it would fingerprint the device. A receiver
+    recovers it by searching forward against the key-group hint instead.
     """
 
     version: int = COMPAT_VERSION
@@ -2215,10 +2194,9 @@ def _compat_beacon_validate(b: CompatBeacon) -> None:
     if len(b.key_group_hint) != COMPAT_HINT_BYTES:
         raise ValueError(f"the key-group hint is {COMPAT_HINT_BYTES} bytes, "
                          f"got {len(b.key_group_hint)}")
-    # The two must agree or the beacon is malformed. A node advertising
-    # "private-available" with policy `never` is telling a receiver it will do
-    # something it has already decided never to do, and a receiver cannot tell
-    # which half to believe.
+    # A node advertising "private-available" with policy `never` says it will
+    # do something it decided never to do - a receiver can't tell which half
+    # to trust.
     if b.private_available != (b.policy != COMPAT_POLICY_NEVER):
         raise ValueError("private-available and private policy disagree: "
                          f"available={b.private_available}, policy={b.policy}")
@@ -2439,7 +2417,7 @@ def encode_compat_announce_b(
     and Tier II is off by default, so without this frame the announcement would
     be an unauthenticated "everybody follow me to channel X" - a one-packet
     herding attack strictly worse than the mute attack this design refuses. A
-    receiver acts on a SWITCH frame only after this tag verifies.
+    receiver acts on SWITCH only once this tag verifies.
     """
     if len(tag) != COMPAT_TIER_II_TAG_BYTES:
         raise ValueError(f"the announcement tag is {COMPAT_TIER_II_TAG_BYTES} "
@@ -2463,8 +2441,8 @@ def encode_compat_attest_tier1(att_counter: int, tag: bytes,
     IT COVERS NO PAYLOAD, AND THAT IS THE POINT. Because nothing outside this
     page is in the tag, it is verifiable on receipt and a packet lost anywhere
     else costs nothing: verification rate equals page delivery rate,
-    independently of how often the page is sent. A window CMAC cannot have that
-    property at any length.
+    independently of how often the page is sent - a property no window CMAC
+    can have at any length.
     """
     if len(tag) != COMPAT_TIER_I_TAG_BYTES:
         raise ValueError(f"a Tier I tag is {COMPAT_TIER_I_TAG_BYTES} bytes, "
@@ -2531,10 +2509,9 @@ _COMPAT_DECODERS = {
 # split (native_sim doesn't build on Windows, so this is the only layer a
 # developer can iterate against locally; the same vectors feed the C decoders).
 #
-# This is the envelope, not a sensor: a node publishes a schema and a receiver
-# decodes typed values against it having never heard of the node before.
-# Section 6 of that doc is normative; the code here should match it line by
-# line.
+# The envelope, not a sensor: a node publishes a schema and a receiver decodes
+# typed values against it having never heard of the node before. Section 6 of
+# that doc is normative.
 # ---------------------------------------------------------------------------
 
 RADIANT_TLM_DEVICE_TYPE = 0x60
@@ -2544,20 +2521,18 @@ RADIANT_TLM_VERSION = 1
 RADIANT_TLM_RF_INDEX_DEFAULT = 57
 RADIANT_TLM_RF_INDEX_MAX = 124
 # The period this project's simulated 0x60 nodes choose. NOT a property of the
-# device type: 0x60's period is per-node and is announced in descriptor frame
-# 0, which is why docs/profile-registry.md records "per-node" for it and the
-# registry checker cross-checks no number here.
+# device type: 0x60's period is per-node, announced in descriptor frame 0, so
+# docs/profile-registry.md records "per-node" and the checker skips it here.
 RADIANT_TLM_PERIOD_DEFAULT = 8182
 
-# The profile device types: the SAME envelope with a pinned schema, which is why
-# they live beside 0x60 rather than in a section of their own. A profile adds a
-# device type number and a required field set; it adds no codec, no page layout
-# and no parser. See docs/device-profiles.md sections 1 and 5.
+# The profile device types: the SAME envelope with a pinned schema. A profile
+# adds a device type number and a required field set - no codec, no page
+# layout, no parser of its own. See docs/device-profiles.md sections 1 and 5.
 #
-# Unlike 0x60 these DO fix a period, and that is the point - the period is a
-# property of the profile rather than of the node, so a receiver can budget a
-# window from the device type alone. scripts/check_profile_registry.py
-# cross-checks both numbers against docs/profile-registry.md.
+# Unlike 0x60 these DO fix a period: it's a property of the profile rather than
+# the node, so a receiver can budget a window from the device type alone.
+# scripts/check_profile_registry.py cross-checks both against
+# docs/profile-registry.md.
 CGM_DEVICE_TYPE = 0x61
 # 65535 counts is the slowest strictly-periodic ANT master there is (~0.5 Hz).
 # A CGM produces a new value every ~5 MINUTES, so anything faster is spent
@@ -2580,30 +2555,26 @@ PAGE_TLM_DATA_LAST = 0x0F
 PAGE_TLM_COMMAND = 0x10
 PAGE_TLM_COMMAND_ACK = 0x11
 
-# 119 / 120, cycle length 121 - the same numbers as COMMON_PAGE_INTERVAL above
-# and for the same reason. Named separately because the envelope states the
-# cycle length explicitly and a reader should not have to add one.
+# 119 / 120, cycle length 121 - same numbers as COMMON_PAGE_INTERVAL above, for
+# the same reason; named separately since the envelope states it explicitly.
 RADIANT_TLM_CYCLE = 121
 RADIANT_TLM_SLOT_PAGE_80 = 119
 RADIANT_TLM_SLOT_PAGE_81 = 120
 
 # Frame 0 flags, byte [7].
 #
-# THE FORWARD-COMPATIBILITY RULE: bits 7..4 are TRANSFORM flags and change how
-# the bytes must be interpreted, so a receiver that sees one it does not
-# implement must not decode the node's data pages - fail closed. Bits 3..0 are
-# INFORMATIONAL and describe the node rather than the layout, so an unknown one
-# is ignored - fail open.
+# THE FORWARD-COMPATIBILITY RULE: bits 7..4 are TRANSFORM flags - an
+# unimplemented one means a receiver must not decode the node's data pages
+# (fail closed). Bits 3..0 are INFORMATIONAL, describing the node rather than
+# the layout, so an unknown one is ignored (fail open).
 TLM_FLAG_X_CONF = 0x80
 TLM_FLAG_X_AUTH = 0x40
 TLM_FLAG_RSVD_5 = 0x20
 TLM_FLAG_RSVD_4 = 0x10
-# Bit 3 was X_PRIV. ADR 0006 rejected CONTINUOUS per-128-second rotation, whose
-# cost cliff is mid-session rotation; per-boot re-roll (identity Tier 2) is an
-# approved opt-in and needs no bit here, because a node that re-rolls at
-# power-up is indistinguishable on air from one provisioned with that number.
-# The bit stays reserved rather than reused: announcing a privacy posture in
-# the clear is itself a leak.
+# Bit 3 was X_PRIV (ADR 0006 rejected CONTINUOUS per-128-second rotation).
+# Per-boot re-roll (identity Tier 2) needs no bit: a re-rolled node is
+# indistinguishable on air from a provisioned one. Reserved rather than
+# reused - a privacy posture announced in the clear is itself a leak.
 TLM_FLAG_RSVD_3 = 0x08
 TLM_FLAG_SPARSE = 0x04
 TLM_FLAG_OFF_RF57 = 0x02
@@ -2629,10 +2600,9 @@ TLM_WIDTHS = (1, 2, 4, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48)
 
 # The field-type vocabulary, section 7: code -> (name, canonical unit).
 #
-# Kept here rather than in a bridge because the whole point of fixing the
-# quantity namespace is that a host has a TABLE LOOKUP rather than a per-node
-# adapter. Adding a field to a node adds zero lines anywhere else. Where a
-# quantity has no Matter cluster the entry is still first class - Matter has no
+# Kept here, not in a bridge: a host gets a TABLE LOOKUP instead of a per-node
+# adapter, so adding a field to a node adds zero lines anywhere else. A
+# quantity with no Matter cluster is still first class - Matter has no
 # heart-rate quantity, and heart rate is this envelope's headline example.
 TLM_TYPES = {
     0x01: ("boolean state", "0/1"),
@@ -2663,17 +2633,15 @@ TLM_TYPES = {
     0x24: ("percentage", "%"),
     0x25: ("battery state of charge", "%"),
     0x26: ("heart rate", "bpm"),          # non-SI, one of the two exceptions
-    # An INSTANTANEOUS duration, and the reason it cannot be 0x37: class
-    # 0x30-0x3F requires the accumulate bit, so "duration" can only express a
-    # running total. An RR interval and a CGM's reading age are both a single
-    # measured span, not a total. docs/radiant-telemetry.md section 7 named this
-    # gap and left it open deliberately; two unrelated users closed it.
+    # An INSTANTANEOUS duration, not 0x37: class 0x30-0x3F requires the
+    # accumulate bit, so "duration" there can only express a running total. An
+    # RR interval and a CGM's reading age are single measured spans, not
+    # totals. docs/radiant-telemetry.md section 7 named this gap deliberately.
     0x27: ("time interval", "s"),
-    # Molar concentration. Blood glucose is the first user, but the type is the
-    # quantity and not the application - naming it "blood glucose" is how a
-    # vocabulary ends up with three concentration types that differ only in what
-    # measured them. 1 mmol/L is EXACTLY 1 mol/m^3, so the canonical SI unit is
-    # already the clinical one and no conversion constant exists to get wrong.
+    # Molar concentration. Blood glucose is the first user, but the type names
+    # the quantity, not the application - "blood glucose" would fragment the
+    # vocabulary into near-duplicate types. 1 mmol/L is EXACTLY 1 mol/m^3, so
+    # the canonical SI unit is already the clinical one.
     0x28: ("substance concentration", "mol/m^3"),
     0x30: ("energy", "J"),
     0x31: ("charge", "C"),
@@ -2712,8 +2680,7 @@ TLM_INTEGRAL_PARTNER = {
 # The exclusions are the point of having two tables. Angular rate is rad/s and
 # revolutions is a count, so that pair needs a 2*pi; torque needs an angular
 # rate it does not have; mass to cumulative mass is not a time integral at all.
-# A verifier that used the full table would be inventing physics, which is
-# exactly the kind of confident wrongness this envelope is built to avoid.
+# A verifier using the full table would be inventing physics.
 TLM_TIME_INTEGRAL_PARTNER = {
     0x16: 0x34,   # m/s     -> m
     0x1C: 0x30,   # W       -> J
@@ -2727,9 +2694,9 @@ def tlm_type_is_accumulating(type_code: int) -> bool:
     """Class 0x30-0x3F.
 
     Everything in that class MUST carry the accumulate bit - that is what the
-    class is for, and a descriptor that clears it on one of these types is
-    malformed. Cheaper to reject at the encoder than to have every receiver
-    discover the same malformed node separately.
+    class is for, and a descriptor that clears it is malformed. Cheaper to
+    reject at the encoder than to have every receiver discover the same
+    malformed node separately.
     """
     return TLM_CLASS_ACC_FIRST <= type_code <= TLM_CLASS_ACC_LAST
 
@@ -2808,10 +2775,9 @@ def tlm_sign_extend(raw: int, width: int) -> int:
     """Sign-extend a raw value of `width` bits.
 
     Separate from the unpack because `signed` is a property of the field, not
-    of the packing - and because a receiver that differences two ACCUMULATING
-    readings must do so in the field's own width. Sign-extending before
-    subtracting is exactly the "one absurd sample per wrap" bug section 5
-    warns about.
+    of the packing - and a receiver differencing two ACCUMULATING readings
+    must do so in the field's own width, or hit the "one absurd sample per
+    wrap" bug section 5 warns about.
     """
     if width <= 0 or width >= 64:
         return raw
@@ -2828,10 +2794,9 @@ def tlm_sign_extend(raw: int, width: int) -> int:
 class TlmField:
     """One field descriptor - one of frames 2..N.
 
-    `page` and `bit_offset` together are what make this a SCHEMA rather than a
-    format: turning X_AUTH on shrinks the field area from 48 bits to 40 and
-    moves nothing, because the node republishes a descriptor with a new schema
-    id and every receiver picks it up within one interleave cycle.
+    `page` and `bit_offset` make this a SCHEMA, not a fixed format: turning
+    X_AUTH on shrinks the field area from 48 to 40 bits and moves nothing - a
+    republished descriptor with a new schema id, picked up within one cycle.
     """
 
     id: int
@@ -2853,15 +2818,14 @@ class TlmField:
 #
 # Mirror of src/profiles/profile_schedule.h. Three things live in the
 # descriptor because it's a standing pointer a node already transmits: a
-# clock-accuracy ceiling (an RC-clocked node is outside every window a
-# +/-50 ppm receiver opens), a published downlink window, and the coding rate
-# / TX power that the long-range PHY phase must not get to name a second time.
+# clock-accuracy ceiling, a published downlink window, and the coding
+# rate / TX power that the long-range PHY phase must not get to name twice.
 #
 # The clock ladder is the sync-handoff page's (TLM_CLK_* below), reused not
-# restated. It adds a "stated" bit: a handoff's code 0 can mean 500 ppm
-# because it's only ever sent by a receiver that already knows something, but
-# a descriptor's zeros are what every pre-block node transmits, so those must
-# not be read as a claim.
+# restated, plus a "stated" bit: a handoff's code 0 can mean 500 ppm because
+# it's only ever sent by a receiver that already knows something, but a
+# descriptor's zeros are what every pre-block node transmits and must not be
+# read as a claim.
 # ---------------------------------------------------------------------------
 
 TLM_SCHED_CLK_STATED = 0x08      # frame 1 byte [3] bit 3
@@ -2878,9 +2842,8 @@ TLM_SCHED_RSVD_OFF, TLM_SCHED_RSVD_W = 42, 6
 # The interval is in units of 1/32 s: 12 bits reach 128 s, past the 60 s
 # heartbeat that motivates the field. Not the 1/32768 s counts the period uses,
 # because 16 bits of those stop at 2 s and 2 s is the example duty, not the
-# ceiling. The phase IS in those counts, because a fraction of a 2 s interval
-# quantises at 244 us - half the 500 us dwell it points at, and a pointer whose
-# error is comparable to the thing it points at is not a pointer.
+# ceiling. The phase IS in those counts: a fraction of a 2 s interval quantises
+# at 244 us, half the 500 us dwell it points at.
 TLM_TICKS_PER_S = 32768          # the protocol's clock, everywhere
 TLM_SCHED_INTERVAL_HZ = 32
 TLM_SCHED_INTERVAL_COUNTS = TLM_TICKS_PER_S // TLM_SCHED_INTERVAL_HZ
@@ -2894,9 +2857,9 @@ TLM_SCHED_DWELL_CODE_MAX = len(TLM_SCHED_DWELL_US) - 1
 # registry's LR PHY column does not let a consumer budget a window - at eight
 # bytes an S=8 frame is ~1.23 ms against ~150 us at 1 M - so the rate is named
 # on the wire from the first block that can carry it. S=2 is DEFINED and NOT
-# IMPLEMENTED on purpose: defining it makes a later second rate a value rather
-# than a format break, and refusing to announce it keeps anything from claiming
-# a rate no code transmits.
+# IMPLEMENTED on purpose: a later second rate becomes a value rather than a
+# format break, and refusing to announce it stops anything claiming a rate no
+# code transmits.
 TLM_CODING_NONE = 0
 TLM_CODING_S8 = 1
 TLM_CODING_S2 = 2
@@ -2911,10 +2874,8 @@ TLM_TX_POWER_MIN = -40
 TLM_TX_POWER_MAX = 20
 TLM_TX_POWER_BIAS = 100
 
-# What the receiver's own end of the clock budget is worth, in ppm. The 25 us
-# per-period drift constant in radiant_channel.h is this figure at each end over
-# one ANT+ period; naming it makes the announced-ceiling arithmetic explicit on
-# both sides of the mirror.
+# What the receiver's own end of the clock budget is worth, in ppm; matches the
+# 25 us per-period drift constant in radiant_channel.h on both sides.
 TLM_CLK_PPM_RECEIVER = 50
 
 
@@ -2952,8 +2913,7 @@ class TlmSchedule:
     """The schedule frame's 48 bits.
 
     Every default is the value that announces nothing, so `TlmSchedule()` is
-    48 zero bits on the wire - which is what makes the idle-cost A/B a
-    statement about bytes rather than about intentions.
+    48 zero bits on the wire.
     """
 
     dl_interval: int = 0        # units of 1/32 s; 0 = no downlink window
@@ -2968,8 +2928,7 @@ class TlmSchedule:
 
     def listen_at(self, t_carrier_us: int, k: int = 0):
         """The k-th listen window after the frame that announced it, on the
-        RECIPIENT's clock. None when there is no window - the case a caller has
-        to handle before it handles any other."""
+        RECIPIENT's clock. None when there is no window."""
         if not self.dl_interval:
             return None
         counts = self.dl_phase + k * self.interval_counts
@@ -3011,8 +2970,7 @@ def _tlm_sched_validate(s: TlmSchedule, lr_phy: bool, clk_ppm: int) -> None:
     # The dwell must cover the clock error accumulated between the frame that
     # announces the window and the window itself, in both directions - so twice
     # the drift. A 500 ppm node pointing 2 s ahead has drifted a millisecond by
-    # the time it opens, and a downlink that silently never works is worse than
-    # one refused at the encoder.
+    # the time it opens.
     if clk_ppm:
         phase_us = s.dl_phase * 1000000 // TLM_TICKS_PER_S
         drift_us = phase_us * (clk_ppm + TLM_CLK_PPM_RECEIVER) // 1000000
@@ -3051,10 +3009,9 @@ def decode_tlm_schedule(body, lr_phy: bool = False,
                         clk_ppm: int = 0) -> TlmSchedule:
     """The inverse.
 
-    A coding rate this build cannot use is NOT an error here, and the asymmetry
-    with the encoder is the forward-compatibility rule applied to a vocabulary
-    field: the rate describes the node, not the layout of these bytes, so a
-    receiver decodes it and then declines the channel.
+    A coding rate this build cannot use is NOT an error here: the rate
+    describes the node, not the layout of these bytes, so a receiver decodes
+    it and then declines the channel.
     """
     body = bytes(body)
     if len(body) != TLM_SCHED_AREA_BITS // 8:
@@ -3101,15 +3058,12 @@ class TlmDescriptor:
     w_code: int = 0
     k_code: int = 0
     epoch: int = 0
-    # The schedule block. Both halves default to silence, and that is the
-    # compatibility argument rather than a convenience: a node that announces
-    # neither encodes to exactly the frames this encoder emitted before the
-    # block existed, so it is not merely compatible with a pre-block node, it
-    # is indistinguishable from one.
+    # The schedule block. Both halves default to silence: a node that
+    # announces neither is not merely compatible with a pre-block node, it is
+    # indistinguishable from one.
     clock_stated: bool = False
-    # The literal 0 rather than TLM_CLK_UNKNOWN, which the handoff section
-    # below defines: a dataclass default is evaluated at import time, and the
-    # ladder is deliberately declared beside the page that first carried it.
+    # Literal 0, not TLM_CLK_UNKNOWN (defined below in the handoff section):
+    # a dataclass default is evaluated at import time.
     clock_accuracy: int = 0
     schedule: object = None      # a TlmSchedule, or None for no schedule frame
 
@@ -3133,16 +3087,15 @@ class TlmDescriptor:
     @property
     def frame_count(self) -> int:
         # Two header frames, the schedule frame if the node sends one, then one
-        # per field. There is no descriptor authentication frame in v1 because
-        # there is no transform in v1; when there is one it takes the last slot,
-        # which is why the schedule frame takes index 2 rather than the end.
+        # per field. No descriptor authentication frame in v1 (no transform in
+        # v1); when there is one it takes the last slot, so the schedule frame
+        # takes index 2 rather than the end.
         return 2 + (1 if self.schedule is not None else 0) + len(self.fields)
 
     @property
     def clock_ppm(self) -> int:
         """The ceiling this descriptor announces, or 0 for a node that
-        announces nothing - which is the value that leaves a receiver's window
-        exactly as it was."""
+        announces nothing."""
         return tlm_sched_clk_ppm(tlm_sched_clk_nibble(self.clock_accuracy,
                                                       self.clock_stated))
 
@@ -3163,9 +3116,8 @@ class TlmDescriptor:
 def _tlm_validate(d: TlmDescriptor) -> None:
     """Every check here exists because the failure it prevents is silent on air.
 
-    See src/profiles/profile_telemetry.c, which carries the same list; the two
-    must refuse the same descriptors or the C node and the Python simulator are
-    not the same node.
+    See src/profiles/profile_telemetry.c, which carries the same list - the C
+    node and the Python simulator must refuse identical descriptors.
     """
     if d.version != RADIANT_TLM_VERSION:
         raise ValueError(f"envelope version {d.version} is not implemented")
@@ -3186,8 +3138,7 @@ def _tlm_validate(d: TlmDescriptor) -> None:
     sparse = bool(d.flags & TLM_FLAG_SPARSE)
     if sparse:
         # Zero is invalid for a sparse node: without a heartbeat a receiver
-        # cannot tell a quiet node from a dead one, and "no data" is the one
-        # reading a telemetry system must never produce silently.
+        # cannot tell a quiet node from a dead one.
         if not 1 <= d.heartbeat_s <= 255:
             raise ValueError("a sparse node needs a heartbeat interval")
         if d.k_code not in TLM_REPEATS:
@@ -3264,10 +3215,8 @@ def encode_tlm_descriptor(d: TlmDescriptor) -> list:
     A transform bit is REFUSED rather than emitted: section 6 makes the
     descriptor authentication frame mandatory alongside one, this build cannot
     produce that frame, and a transform announced without it gets an attacker
-    wrong readings out of correctly authenticated packets. Checked before the
-    field validation, because X_AUTH shrinks the field area and would otherwise
-    produce a true statement about the fields that is a misleading answer to
-    what was asked.
+    wrong readings out of correctly authenticated packets. Checked before field
+    validation, since X_AUTH shrinks the field area.
     """
     if d.flags & TLM_FLAG_TRANSFORM_MASK:
         raise ValueError("v1 announces no transform: there is no descriptor "
@@ -3292,12 +3241,11 @@ def encode_tlm_descriptor(d: TlmDescriptor) -> list:
             d.flags,
         ]),
         # Frame 1 - mode and the reserved security space. Four bytes of epoch
-        # from the first shipped node, because a receiver with no real-time
-        # clock has to get it from a page the node already sends, and adding it
-        # later is a format break for every deployed node. Bits 3..0 of byte
-        # [3] are the informational-flag extension space, and the schedule
-        # block's clock-accuracy nibble is what fills them; a node that states
-        # nothing writes the zeros every pre-block node writes.
+        # from the first shipped node: a receiver with no real-time clock gets
+        # it from a page the node already sends. Bits 3..0 of byte [3] are the
+        # informational-flag extension space, filled by the schedule block's
+        # clock-accuracy nibble; a node stating nothing writes the same zeros a
+        # pre-block node does.
         head(1) + bytes([
             d.heartbeat_s,
             (d.w_code << 6) | (d.k_code << 4)
@@ -3319,8 +3267,7 @@ def encode_tlm_descriptor(d: TlmDescriptor) -> list:
         frames.append(head(base + index) + bytes([
             f.id,
             f.type,
-            # bits 1..0 reserved, must be 0 - and this expression never sets
-            # them.
+            # bits 1..0 reserved, must be 0; never set here.
             (0x80 if f.accumulate else 0) | (0x40 if f.signed else 0)
             | (f.width_code << 2),
             f.exponent & 0xFF,
@@ -3334,9 +3281,8 @@ def encode_tlm_descriptor(d: TlmDescriptor) -> list:
 def decode_tlm_descriptor(frames) -> TlmDescriptor:
     """Turn a complete, in-order frame set back into a schema.
 
-    This is the function the Phase E gate turns on: given nothing but eight
-    bytes at a time off the air, produce the schema, with no registry lookup
-    and no out-of-band knowledge.
+    The Phase E gate: given nothing but eight bytes at a time off the air,
+    produce the schema, with no registry lookup and no out-of-band knowledge.
     """
     frames = [bytes(f[:RADIANT_TLM_FRAME_LEN]) for f in frames]
     n = len(frames)
@@ -3365,10 +3311,9 @@ def decode_tlm_descriptor(frames) -> TlmDescriptor:
                          "descriptor - a different frame set, not 15 fields")
     # THE SHAPE OF THE SET, DERIVED RATHER THAN ANNOUNCED. Two header frames
     # plus one per field is the set as it was; one extra frame is the schedule
-    # frame at index 2. No presence bit was spent on this, because the count
-    # byte and the field count already say it - and a bit that could disagree
-    # with the arithmetic would be a way for a node to describe a set it did not
-    # send.
+    # frame at index 2. No presence bit was spent on this: the count byte and
+    # field count already say it, and a bit that could disagree with the
+    # arithmetic would let a node describe a set it did not send.
     if n == 2 + n_fields:
         base = 2
     elif n == 3 + n_fields:
@@ -3377,11 +3322,9 @@ def decode_tlm_descriptor(frames) -> TlmDescriptor:
         raise ValueError("the field count and the frame count disagree")
 
     # Bits 3..0 of frame 1 byte [3] are the informational-flag extension space,
-    # and the clock-accuracy nibble is what fills them. INFORMATIONAL: they
-    # describe the node, not the layout of these bytes, so a receiver that does
-    # not care about the clock ignores them. A pre-block decoder refused any
-    # nonzero value here, which is exactly the retrofit this space was reserved
-    # to avoid.
+    # filled by the clock-accuracy nibble. INFORMATIONAL: they describe the
+    # node, not the layout, so a receiver that doesn't care about the clock
+    # ignores them - the retrofit this space was reserved to allow.
     clock_stated = bool(frames[1][3] & TLM_SCHED_CLK_STATED)
     clock_accuracy = frames[1][3] & TLM_SCHED_CLK_MASK if clock_stated else 0
 
@@ -3427,12 +3370,10 @@ def decode_tlm_descriptor(frames) -> TlmDescriptor:
 
 
 class TlmDescriptorRx:
-    """Assemble a descriptor set out of frames arriving one per slot.
-
-    A receiver does not get a frame set; it gets frames, starting wherever it
-    happened to join, in whatever order the air delivered them, with holes.
-    Byte [1] carries (index << 4) | (count - 1), which is enough to assemble
-    the set with no ordering assumption and no timer.
+    """Assemble a descriptor set out of frames arriving one per slot, starting
+    wherever the receiver joined, in whatever order the air delivered them,
+    with holes. Byte [1] carries (index << 4) | (count - 1), enough to
+    assemble the set with no ordering assumption and no timer.
     """
 
     def __init__(self):
@@ -3446,10 +3387,9 @@ class TlmDescriptorRx:
         """Feed one 8-byte payload; anything that is not page 0x00 is ignored.
 
         Returns True once the set is complete. Restarts when the frame count
-        changes or when frame 0 arrives carrying a different schema id - which
-        is exactly what the schema id is for: a receiver notices a change after
-        reading a SINGLE frame instead of the whole set, and anything already
-        assembled describes the previous schema.
+        changes or when frame 0 arrives carrying a different schema id: a
+        receiver notices a change after reading a SINGLE frame instead of the
+        whole set.
         """
         body = bytes(body[:RADIANT_TLM_FRAME_LEN])
         if body[0] != PAGE_TLM_DESCRIPTOR:
@@ -3506,12 +3446,11 @@ def encode_tlm_data(d: TlmDescriptor, page: int, counter: int,
     `values` is keyed by field id; entries for other pages are ignored and a
     missing one packs as zero. The event counter counts TRANSMISSIONS, not
     application writes: a master retransmits its current body whether or not
-    the application supplied a new one, and a counter that advanced per write
-    would repeat across retransmissions - which under a secured channel is
-    keystream reuse.
+    the app supplied a new one; a counter advancing per write would repeat
+    across retransmissions - keystream reuse under a secured channel.
 
-    Bytes the schema does not claim come out zero, because a later schema may
-    claim them and a receiver mid-change would read a stale value as a number.
+    Bytes the schema does not claim come out zero: a later schema may claim
+    them, and a receiver mid-change would otherwise read a stale value as real.
     """
     if not PAGE_TLM_DATA_FIRST <= page <= PAGE_TLM_DATA_LAST:
         raise ValueError(f"0x{page:02X} is not a data page")
@@ -3528,9 +3467,8 @@ def decode_tlm_data(d: TlmDescriptor, body: bytes) -> dict:
     """The inverse. Returns {"page", "counter", "values": {id: value}}.
 
     Signed fields are sign-extended in their own width; unsigned ones are not.
-    Raises if a transform bit forbids decoding - loudly rather than silently,
-    because a receiver that returned zeros would be reporting
-    plaintext-looking numbers off a ciphertext page.
+    Raises if a transform bit forbids decoding, loudly: a receiver returning
+    zeros would report plaintext-looking numbers off a ciphertext page.
     """
     body = bytes(body[:RADIANT_TLM_FRAME_LEN])
     if not d.may_decode_data:
@@ -3633,15 +3571,14 @@ def decode_tlm_command_ack(body: bytes) -> dict:
 # broadcasts it so a second receiver (or the same one after reboot) can
 # configure a channel and skip the wildcard sweep.
 #
-# Two frames under one page number: page/counter bytes are fixed by the
-# section 4 positional invariants, byte [7] is tag space, and identity plus
-# period alone leaves only one spare bit - no room for a phase field in one
-# frame, which is the whole reason for the second.
+# Two frames under one page number: page/counter bytes are fixed by section
+# 4's positional invariants, byte [7] is tag space, and identity plus period
+# alone leaves only one spare bit - the reason for the second frame.
 #
 # NO EPOCH FIELD, deliberately: for a hostless node the epoch is the boot
 # counter, and broadcasting it in the clear would fingerprint the device and
-# defeat per-boot device-number rotation. Every one of the 64 bits is
-# assigned, so there's no space for one to sneak in later.
+# defeat per-boot device-number rotation. All 64 bits are assigned, with no
+# space for one to sneak in later.
 # ---------------------------------------------------------------------------
 
 PAGE_TLM_SYNC_HANDOFF = 0x12
@@ -3653,19 +3590,17 @@ TLM_HANDOFF_AREA_BITS = 32       # bytes [3..6]; [7] is tag space
 # rather than a count of 1/32768 s. That is self-scaling: round-trip error is at
 # most period/16384 counts - 15 us at the 4 Hz ANT+ period, 122 us at the
 # longest period the field can express - so it is inside the guard window at
-# both ends of the range. A fixed-resolution count would have had to choose
-# between covering a 2 s period and being useful at 4 Hz.
+# both ends of the range.
 TLM_HANDOFF_PHASE_DEN = 8192
 TLM_HANDOFF_PHASE_MAX = TLM_HANDOFF_PHASE_DEN - 1
 
 # Clock accuracy: the ceiling on the node's clock error in ppm. BLE's ladder,
-# adopted rather than invented - it already spans exactly the range that
-# matters, from an RC-oscillator coin-cell node at the top to a crystal at the
-# bottom, and a second ladder meaning the same thing differently would be a pure
-# interoperability cost.
+# adopted rather than invented, spans the range that matters, RC-oscillator
+# coin-cell to crystal - a second ladder meaning the same thing would be a
+# pure interoperability cost.
 #
-# Code 0 is the worst case AND the value to send when the accuracy is not known,
-# because on no evidence the worst case is the only safe answer.
+# Code 0 is both the worst case and the value to send when accuracy is
+# unknown: on no evidence, the worst case is the only safe answer.
 TLM_CLK_UNKNOWN = 0
 TLM_CLK_250PPM = 1
 TLM_CLK_150PPM = 2
@@ -3864,9 +3799,7 @@ def tlm_handoff_next_slot(h: TlmHandoff, t_carrier_counts: int) -> int:
 
     `t_carrier_counts` is the t_sync at which the recipient heard frame 1, in
     its own 32768 Hz counts. Nothing absolute crosses the air: the phase is
-    relative to that frame and to nothing else, because two receivers share no
-    time base and an absolute slot instant would be a number from somebody
-    else's clock.
+    relative to that frame alone, because two receivers share no time base.
     """
     return t_carrier_counts + tlm_handoff_phase_counts(h.phase, h.period)
 
@@ -3914,9 +3847,8 @@ TLM_FREQ_K_MAX = TLM_FREQ_COUNTDOWN_MAX * TLM_FREQ_UNIT
 # would be hopping slowly rather than adapting.
 TLM_FREQ_MARGIN_DB = 6
 
-# Minutes-scale, as a structural refusal rather than as advice: rechoosing
-# faster than a receiver can follow is fast per-event hopping arrived at by
-# accident, which is declined with arithmetic elsewhere.
+# Minutes-scale, as a structural refusal, not advice: rechoosing faster than a
+# receiver can follow is declined with arithmetic elsewhere.
 TLM_FREQ_MIN_MOVE_S = 300
 
 
@@ -3939,10 +3871,9 @@ def encode_tlm_freq_move(target: int, countdown: int) -> bytes:
 def decode_tlm_freq_move(payload: bytes) -> dict:
     """The inverse.
 
-    FAILS CLOSED on a reserved byte, which is the opposite of what a descriptor
-    information flag does and is right here: these bytes tell a receiver where
-    to point its radio, so a field this build does not understand is not
-    something to ignore.
+    FAILS CLOSED on a reserved byte - the opposite of a descriptor information
+    flag, and right here: these bytes tell a receiver where to point its
+    radio, so an unrecognised field is not something to ignore.
     """
     if len(payload) != 8:
         raise ValueError("a frequency-move page is eight bytes")
@@ -3971,8 +3902,8 @@ def tlm_freq_countdown(move_at: int, msgs_after_this: int) -> tuple:
     anything, so every receiver that heard the latest copy computes the
     identical message and one holding an older copy is at most TLM_FREQ_UNIT - 1
     messages early - losing the tail of the old channel rather than the head of
-    the new one. Rounded up for that reason and because rounding down would
-    shorten the countdown a little on every announcement.
+    the new one. Rounded up, since rounding down would shorten the countdown
+    each time.
 
     Returns (countdown, move_at). Mirrors countdown_now() in profile_freq.c.
     """
@@ -3989,11 +3920,11 @@ def tlm_freq_select(incumbent: int, evidence: dict) -> int | None:
     map's maximum over per-dwell MEANS - a whole dwell that averaged loud is a
     transmitter that lives there, where one loud sample is a burst a 250 ms
     period usually steps around. An index absent from the dict is NOT MEASURED,
-    which is a different fact from measured and loud.
+    a different fact from measured-and-loud.
 
-    Returns the chosen index, or None for "stay where you are" - which includes
-    having no measurement of the incumbent, because a quiet candidate is not
-    evidence that here is loud.
+    Returns the chosen index, or None for "stay where you are", including when
+    the incumbent has no measurement - a quiet candidate isn't evidence that
+    here is loud.
 
     The tie-breaks are part of the contract, not an implementation detail: two
     receivers given the same evidence must recommend the same index or a node
@@ -4037,11 +3968,11 @@ def tlm_freq_reacquire_order(last_target: int | None = None) -> list:
 #
 # The slot-insertion seam: this engine runs for device type 0x60, and the
 # ANT+ compatibility work needs the same interleave for 0x78/0x0B with its own
-# beacon/attestation pages inserted, so that work is a CLIENT of this engine
-# rather than a second implementation. A client gets first refusal on any slot
-# the rotation would fill with a data page (or, on a sparse node, any silent
-# slot) - never message 119, 120, or a descriptor frame, since those ARE the
-# cadence rule.
+# beacon/attestation pages inserted - so that work is a CLIENT of this engine,
+# not a second implementation. A client gets first refusal on any slot the
+# rotation would fill with a data page (or, on a sparse node, any silent slot)
+# - never message 119, 120, or a descriptor frame, since those ARE the cadence
+# rule.
 # ---------------------------------------------------------------------------
 
 SLOT_IDLE = "idle"
@@ -4061,8 +3992,8 @@ class TlmPageScheduler:
         common_80() / common_81() / common_82() -> 8 bytes or None
     A missing or None builder means the node does not emit that page.
     Suppressing page 82 outright is not an omission: it is the privacy rule of
-    section 6, and it is the mitigation that matters most for a node whose
-    whole payload is a stable identity.
+    section 6, and the mitigation that matters most for a node whose whole
+    payload is a stable identity.
     """
 
     def __init__(self, descriptor: TlmDescriptor | None, builders: dict,
@@ -4093,9 +4024,8 @@ class TlmPageScheduler:
                 1, (descriptor.heartbeat_s * 32768) // descriptor.period)
         self.since_hb = 0
         # A sparse node expresses "send the schema first" as a pending
-        # heartbeat rather than as a burst: the heartbeat is what resets the
-        # interval, so starting the burst directly would fire a second
-        # heartbeat two slots later.
+        # heartbeat, not a burst - starting the burst directly would fire a
+        # second heartbeat two slots later.
         self.hb_pending = self.sparse
         self.want_82 = False
         self.event_page = None
@@ -4289,11 +4219,10 @@ def decode_hr(payload: bytes) -> dict:
 def decode(payload: bytes, device_type: int) -> dict:
     """Decode one 8-byte payload heard on a channel of `device_type`.
 
-    `device_type` is not decoration. The combined sensor's page has no page
+    `device_type` is not decoration: the combined sensor's page has no page
     number, so byte 0 cannot be trusted to name a page unless the channel says
-    it is not 0x79 - which is the entire reason this function takes an argument
-    that looks redundant. Heart rate needs it for the second reason: its byte 0
-    carries a toggle bit that is not part of the page number.
+    it is not 0x79. Heart rate needs it for a second reason: its byte 0 carries
+    a toggle bit that is not part of the page number.
     """
     if len(payload) < 8:
         raise ValueError(f"payload is {len(payload)} bytes, need 8")
@@ -4305,10 +4234,9 @@ def decode(payload: bytes, device_type: int) -> dict:
         return result
 
     # Compat pages are decoded only on a device type this project actually puts
-    # them on. The same numbers mean something else elsewhere - 0x70 is inside
-    # 0x60's reserved range - and a decoder that claimed them everywhere would
-    # be making exactly the "device type is a proof rather than a hint" mistake
-    # docs/profile-registry.md warns about.
+    # them on: the same numbers mean something else elsewhere (0x70 is inside
+    # 0x60's reserved range), and claiming them everywhere would be the "device
+    # type is a proof, not a hint" mistake docs/profile-registry.md warns about.
     if device_type in COMPAT_DEVICE_TYPES:
         decoder = _COMPAT_DECODERS.get(payload[0] & HR_PAGE_NUMBER_MASK)
         if decoder is not None:
@@ -4318,12 +4246,9 @@ def decode(payload: bytes, device_type: int) -> dict:
         return decode_hr(payload)
 
     # FE-C and SDM are dispatched on the DEVICE TYPE before payload[0] is
-    # looked at, and that ordering is load-bearing rather than tidy. FE-C's
-    # pages 0x10, 0x11 and 0x12 are General FE Data, General Settings and
-    # Metabolic; bicycle power's 0x10, 0x11 and 0x12 are Standard Power, Wheel
-    # Torque and Crank Torque. Nothing in either payload distinguishes them, so
-    # a shared page-number table would decode a treadmill's speed as a power
-    # accumulator with no error anywhere. SDM's 0x10 collides with both.
+    # looked at, and that ordering is load-bearing rather than tidy: module
+    # docstring trap 4 covers the 0x10/0x11/0x12 collision with bicycle power,
+    # and SDM's 0x10 collides with both.
     if device_type == FEC_DEVICE_TYPE:
         decoder = _FEC_DECODERS.get(payload[0])
         if decoder is not None:
@@ -4360,8 +4285,8 @@ def format_capture_line(t: float, device_type: int, device_number: int,
     The device number is not decoration either: two sensors can share a device
     type - a power meter emitting standard pages and one emitting torque pages
     are both 0x0B - and merging their streams produces one analysis of two
-    unrelated series. That is the same mistake as write-back item 1, made in
-    the analysis tool instead of the firmware.
+    unrelated series, the same mistake as write-back item 1 made in the
+    analysis tool instead of the firmware.
     """
     return (f"{t:.6f} {device_type:02X} {device_number & 0xFFFF:04X} "
             f"{bytes(payload[:8]).hex()}")
@@ -4431,10 +4356,8 @@ PROFILES = {
         "pages": (),
         "label": "combined speed and cadence, device type 0x79",
     },
-    # The other compat target. Its period is the profile's standard rate, and
-    # the half- and quarter-rate variants are HRM_PERIODS - a receiver whose
-    # period does not match the sensor's cannot open the channel at all, which
-    # is a harder failure than any page number can produce.
+    # The other compat target. Half- and quarter-rate variants are HRM_PERIODS
+    # - a period mismatch means the channel never opens at all.
     "heart-rate": {
         "device_type": HRM_DEVICE_TYPE,
         "period": HRM_PERIOD,
@@ -4443,15 +4366,12 @@ PROFILES = {
                   PAGE_HR_PREVIOUS_BEAT),
         "label": "heart rate, device type 0x78",
     },
-    # The treadmill's two masters, which apps/treadmill runs side by side on
-    # one radio. They are listed separately here because they are separate
-    # channels with separate periods: a receiver pairs with one or the other,
-    # and a bench run that wants both needs two --profile arguments.
-    #
-    # 8192 and 8134 are ~4.00 Hz and ~4.03 Hz, which BEAT against each other
-    # with a period of about 32 s. That is the contention case
-    # docs/treadmill-reference-design.md's bench procedure exists to measure
-    # and the reason CONFIG_TREADMILL_ANT_BOTH can be turned off.
+    # The treadmill's two masters, run side by side on one radio by
+    # apps/treadmill. Separate channels, separate periods - a bench run that
+    # wants both needs two --profile arguments. 8192 and 8134 (~4.00 Hz and
+    # ~4.03 Hz) BEAT against each other with a ~32 s period: the contention
+    # case docs/treadmill-reference-design.md's bench procedure measures, and
+    # the reason CONFIG_TREADMILL_ANT_BOTH can be turned off.
     "fec-treadmill": {
         "device_type": FEC_DEVICE_TYPE,
         "period": FEC_PERIOD,
@@ -4466,10 +4386,8 @@ PROFILES = {
     },
     # Device type 0x60 is per-node by design - the period is announced in
     # descriptor frame 0, not fixed by the type - so docs/profile-registry.md
-    # records "per-node" rather than a number and the registry checker does not
-    # cross-check these against it. The value below is what the simulator
-    # chooses, and it is the ANT+ 4 Hz period only because a familiar number
-    # makes a capture easier to read.
+    # records "per-node" and the registry checker skips it. The value below is
+    # just what the simulator picks, for a familiar-looking capture.
     "telemetry": {
         "device_type": RADIANT_TLM_DEVICE_TYPE,
         "period": RADIANT_TLM_PERIOD_DEFAULT,

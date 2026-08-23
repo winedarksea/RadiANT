@@ -20,6 +20,9 @@ repeatable distance this bench does not have.
     python tools/ant_sens.py --tx-serial 1234 --rx-serial 5678 --repeat 2 \
         --json sens.json
 
+Exit status: 0 if the run (or, under `--repeat`, the agreement between runs)
+passes the gate; 1 otherwise, including any rig setup failure.
+
 **Two boards are required, and this script drives both of them.** One is opened
 as an ANT+ master and paced from EVENT_TX exactly as tools/ant_sim.py does it
 (on a thread, because the receive loop is the other half of the measurement);
@@ -373,13 +376,11 @@ class MasterDriver(threading.Thread):
         self._pending: tuple[int, int] | None = None
         self._applied = threading.Event()
         # What _apply_pending() actually got back from command(), read by
-        # set_power() after _applied fires. THIS is the fix: _applied used to
-        # be set unconditionally at the end of _apply_pending(), so a rejected
-        # or unacknowledged power command still made set_power() return True -
-        # the ~40% of unacknowledged TX_POWER commands in the cc26xx sitting
-        # went unnoticed by the caller for exactly this reason, and the ladder
-        # went on to measure the rung at the OLD power while believing it was
-        # at the new one, which falsifies the ladder's x-axis.
+        # set_power() after _applied fires - a rejected or unacknowledged power
+        # command must not make set_power() return True, or the ladder measures
+        # a rung at the OLD power while believing it is at the new one, which
+        # falsifies the x-axis (this is how ~40% of unacknowledged TX_POWER
+        # commands went unnoticed in the cc26xx sitting).
         self._last_applied_ok = False
 
     # -- the dial, called from the measuring thread --------------------------
@@ -535,11 +536,9 @@ def run_ladder(rx_dev, rx_reader, channel: int, profile: str, rungs: list[int],
         level, custom = encode_power(dbm, part)
         if not master.set_power(level, custom):
             # An unacknowledged power-set aborts the rung rather than being
-            # measured anyway: measuring proceeds at whatever power the
-            # transmitter was ALREADY at, and a rung recorded under the wrong
-            # commanded dBm falsifies the ladder's x-axis - exactly the defect
-            # that hid ~40% of the time in the cc26xx sitting before
-            # set_power() could tell a real failure from a timeout.
+            # measured anyway (see _last_applied_ok above): measuring would
+            # proceed at whatever power the transmitter was ALREADY at, which
+            # falsifies the ladder's x-axis.
             print(f"  ! {dbm} dBm was not acknowledged by the transmitter - "
                   f"skipping this rung rather than measuring it at the wrong "
                   f"power")

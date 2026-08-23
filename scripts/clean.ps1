@@ -16,14 +16,12 @@
     list rather than just removing build*/:
 
       bench-logs/   Console captures and decoded traces pulled off boards.
-                    These are PRIMARY RECORDS - bench-logs/p4/ holds the 149
-                    files behind docs/radiant-bridge.md section 7.4.2, and
+                    These are PRIMARY RECORDS, not reproducible by re-running
+                    a bench sitting - bench-logs/p4/ holds the 149 files
+                    behind docs/radiant-bridge.md section 7.4.2, and
                     bench-logs/captures/zwift1_decoded.txt is the decoded USB
                     capture that established how Zwift actually discovers
-                    sensors. They lived under build/ until 2026-08-14 and were
-                    one careless `Remove-Item build -Recurse` from being gone.
-                    They are perishable: re-running a bench sitting does not
-                    reproduce them, it produces different ones.
+                    sensors.
 
       archive/      Preserved artefacts, budgeted and CI-enforced at 10 MB.
                     See docs/preservation.md.

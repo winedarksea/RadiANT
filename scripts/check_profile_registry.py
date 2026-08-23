@@ -101,20 +101,18 @@ STATUS_VALUES = {"radiant", "third-party", "ant-plus-reserved"}
 # not, or its nodes each say. There is nothing to budget from the answer.
 OPT_IN_VALUES = {"no", "yes", "per-node"}
 
-# `LR PHY` does NOT, and the split is ADR 0007's.
+# `LR PHY` does NOT, and the split is ADR 0007's. A consumer cannot size a
+# receive window from "yes": at eight bytes an S=8 frame is ~1.3 ms against
+# ~150 us at 1 M, which is the difference between a slot that fits and one
+# that does not. So the column carries a CODING RATE, in the vocabulary RF-5a
+# defined ahead of time - the same names as `enum profile_sched_coding` in
+# src/profiles/profile_schedule.h and `TLM_CODING_*` in tools/ant_pages.py.
 #
-# A consumer cannot size a receive window from "yes": at eight bytes an S=8
-# frame is ~1.3 ms against ~150 us at 1 M, which is the difference between a
-# slot that fits and one that does not. So the column carries a CODING RATE, in
-# the vocabulary RF-5a defined ahead of time for exactly this moment - the same
-# names as `enum profile_sched_coding` in src/profiles/profile_schedule.h and
-# `TLM_CODING_*` in tools/ant_pages.py, which are one vocabulary and not three.
-#
-# `yes` IS DELIBERATELY GONE rather than accepted as a synonym. It is the value
-# that cannot be budgeted from, so keeping it would preserve exactly the defect
-# the split exists to remove - and no row has ever used it, so nothing breaks.
-# `s2` is listed because the vocabulary defines it; no build implements it, and
-# a row claiming it would be a type nothing can talk to.
+# `yes` IS DELIBERATELY GONE rather than accepted as a synonym: it is the
+# value that cannot be budgeted from, so keeping it would preserve the defect
+# the split exists to remove. `s2` is listed because the vocabulary defines
+# it; no build implements it, and a row claiming it would be a type nothing
+# can talk to.
 LR_PHY_VALUES = {"no", "s8", "s2", "per-node"}
 
 # The page range docs/radiant-security.md depends on staying free. Reserving it
@@ -132,12 +130,8 @@ ANT_PAGES_TYPES = [
     ("RD_DEVICE_TYPE", "RD_PERIOD"),
     ("TRK_DEVICE_TYPE", "TRK_PERIOD"),
     ("CTRL_DEVICE_TYPE", "CTRL_PERIOD"),
-    # The treadmill's two masters. 0x11 had no Python copy at all until
-    # apps/treadmill, so its registry row used to be the only statement of
-    # 8192 anywhere the checker could see; 0x7C had no implementation of any
-    # kind. Both periods are now cross-checked, which matters more here than
-    # elsewhere because 8134 and 8192 are one digit apart and a channel told
-    # the wrong one simply never opens.
+    # The treadmill's two masters, cross-checked like the rest: 8134 and 8192
+    # are one digit apart, and a channel told the wrong one simply never opens.
     ("FEC_DEVICE_TYPE", "FEC_PERIOD"),
     ("SDM_DEVICE_TYPE", "SDM_PERIOD"),
     # The profile device types. 0x60 is absent from this list on purpose - its
@@ -150,10 +144,9 @@ ANT_PAGES_TYPES = [
 
 # Device types whose registry Period column records a DEFAULT out of a permitted
 # set, and the tuple in tools/ant_pages.py that holds the set. `period` is a
-# manufacturer setting under docs/decisions/0008, and it is the one setting in
-# that design a receiver cannot skip past: get it wrong and the channel does not
-# open at all, which is a harder failure than an unknown page number can
-# produce. So the alternates are enumerated in the code and the registry's
+# manufacturer setting under docs/decisions/0008, and the one setting in that
+# design a receiver cannot skip past: get it wrong and the channel does not
+# open at all. So the alternates are enumerated in the code and the registry's
 # number has to be one of them.
 ANT_PAGES_PERIOD_SETS = [
     ("BPWR_DEVICE_TYPE", "BPWR_PERIOD", "BPWR_PERIODS"),
@@ -451,9 +444,7 @@ def check_pages(path, header, rows, types, problems) -> dict:
 
 
 # Every device type with status `radiant` owes a page map, and this says where
-# each one's lives. It used to be an assertion that there was exactly ONE such
-# type, with a message telling the next person to extend this function; the
-# profile device types of docs/device-profiles.md are that moment arriving.
+# each one's lives.
 #
 # The page map is not in one file because the two documents own different
 # things: 0x60 IS the envelope and its map belongs with it, while a profile type
@@ -592,9 +583,9 @@ def load_module(path, problems):
     # Registered BEFORE exec_module, which is the documented recipe and not
     # tidiness. A module executed outside sys.modules cannot use anything that
     # looks itself up by __module__ during class creation - @dataclass is the
-    # one that bites, since it resolves its own module's globals and gets None.
-    # The symptom is "'NoneType' object has no attribute '__dict__'" reported
-    # against ant_pages.py, which points at the wrong file entirely.
+    # one that bites, resolving its own module's globals and getting None
+    # ("'NoneType' object has no attribute '__dict__'", reported against
+    # ant_pages.py, pointing at the wrong file entirely).
     sys.modules[spec.name] = module
     try:
         spec.loader.exec_module(module)
@@ -811,26 +802,23 @@ def check_reserved_space(problems) -> None:
 # ── The compat layer ────────────────────────────────────────────────────────
 #
 # docs/decisions/0008 puts RadiANT pages on ANT+ device types and
-# docs/decisions/0009 gives a hostless node an epoch. Three kinds of thing are
-# checked, and the order matters because only the first two bite today.
+# docs/decisions/0009 gives a hostless node an epoch. Three checks:
 #
 # COMPAT_PINS is check_reserved_space()'s mechanism, unchanged: prose that two
-# implementations would otherwise differ on invisibly, in the document that has
-# to keep stating it.
+# implementations would otherwise differ on invisibly.
 #
-# check_compat_allocation() is a REGISTRY rule and is exercised now: whatever
-# C3 eventually registers, the allocation is two page numbers rather than
-# three, it is the same numbers in every compat profile, no compat page is
-# 7-bit-illegal, and none of it ever lands on 0x79.
+# check_compat_allocation() is a REGISTRY rule: whatever C3 eventually
+# registers, the allocation is two page numbers rather than three, the same
+# numbers in every compat profile, no compat page is 7-bit-illegal, and none
+# of it ever lands on 0x79.
 #
-# check_compat_constants() was the forward one and is now half live. C2 landed
-# the domain byte, the subtypes, the two tag lengths and the Python mirror, so
-# those are REQUIRED here rather than skipped-while-absent - a check that can
-# pass by not being reached is a check that passes on the day the file is
-# deleted. C3 still owns tools/ant_pages.py's copies, which land with the page
-# codecs, so that module is checked only for what it already has. The names are
-# not guesses: ADR 0008 pins them as a naming convention precisely so that this
-# check has something to look up.
+# check_compat_constants() checks what C2 has already landed (the domain
+# byte, the subtypes, the two tag lengths, the Python mirror) as REQUIRED
+# rather than skipped-while-absent - a check that can pass by not being
+# reached is a check that passes on the day the file is deleted. C3's copies
+# in tools/ant_pages.py land with the page codecs, so that module is checked
+# only for what it already has; the names are ADR 0008's own naming
+# convention, not guesses.
 
 COMPAT_DOM_BYTE = 0x04
 COMPAT_SUBTYPES = {"COMPAT_SUBTYPE_TIER_I": 0x01,

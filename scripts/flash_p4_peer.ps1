@@ -92,14 +92,10 @@ if (-not $CheckOnly) {
     Invoke-JLink 'nRF5340_xxAA_APP' 'g' 'go'
 }
 
-# POLLED, NOT SLEPT AT, AND THE DIFFERENCE IS A FALSE FAILURE.
-# This used to be a flat Start-Sleep of 25 s followed by one reading. Forming
-# the network is not a fixed-cost operation - measured on this board, 25 s read
-# `detached` and the SAME board read `leader` at 60 s - so a fixed wait fails a
-# peer that is merely still working, and the script then reports a broken board
-# to someone about to start an overnight run. Polling costs nothing when the
-# peer is quick and is correct when it is not; SettleSeconds is now the CEILING
-# rather than the wait.
+# POLLED, NOT SLEPT AT: forming the network is not a fixed-cost operation -
+# measured on this board, 25 s read `detached` and the SAME board read
+# `leader` at 60 s - so a fixed wait fails a peer that is merely still
+# working. SettleSeconds is a CEILING, not the wait.
 Write-Host "waiting up to $SettleSeconds s for the peer to form a network..." -ForegroundColor Cyan
 
 # $com, and deliberately NOT $port. The parameter above is [string]$Port and
@@ -160,6 +156,6 @@ $state = $state.Trim()
 Write-Host ""
 Write-Host "peer state: $state" -ForegroundColor $(if ($state -in @('leader','router')) { 'Green' } else { 'Red' })
 if ($state -notin @('leader', 'router')) {
-    throw "the peer is '$state'. A DUT cannot attach to it, thread_coex_load " +
-          "will report sent=0, and a P4 loss figure taken against sent=0 is void."
+    throw "the peer is '$state'. A DUT cannot attach to it, and a P4 loss " +
+          "figure taken against an unattached DUT is void."
 }

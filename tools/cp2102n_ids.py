@@ -3,28 +3,28 @@
 
 """Read - and, carefully, rewrite - the CP2102N's stored USB VID/PID.
 
-WHY THIS EXISTS. The CC2652P stick reaches the host through a CP2102N, and
-Zwift's ANT_DLL only accepts vendor IDs 0x0FCF and 0x1915 (see
-`docs/ti-dongle-usb-identity.md`). Changing the stored VID is therefore the
-first move in making the stick visible to Zwift - and it is a move that takes
-away the way back: once the IDs change, `silabser.sys` no longer binds, COM15
-disappears, and the Silicon Labs customisation utility can no longer see the
-chip to put it right. This tool is the escape hatch, because whatever binds the
-device afterwards, if it is `libusb0` or WinUSB then raw control transfers still
-reach the configuration block.
+The CC2652P stick reaches the host through a CP2102N, and Zwift's ANT_DLL only
+accepts vendor IDs 0x0FCF and 0x1915 (see `docs/ti-dongle-usb-identity.md`).
+Changing the stored VID takes away the way back: once the IDs change,
+`silabser.sys` no longer binds, COM15 disappears, and the Silicon Labs
+customisation utility can no longer see the chip to put it right. This tool is
+the escape hatch - whatever binds the device afterwards, if it is `libusb0` or
+WinUSB then raw control transfers still reach the configuration block.
 
     python tools/cp2102n_ids.py                      # find it, dump the IDs
     python tools/cp2102n_ids.py --dump               # whole block + checks
     python tools/cp2102n_ids.py --set-vid 0x0FCF --set-pid 0x1008 --commit
 
-THE SAFETY RULE, AND IT IS NOT OPTIONAL. The configuration block ends in a
-Fletcher checksum. Write a block whose checksum is wrong and the part can stop
-enumerating, which on this board means no USB path at all - only the JTAG rig
-still reaches the CC2652P. So `--commit` refuses to run until the checksum
+Exit status: 0 (including a `--commit`-less dry run); 1 if the write itself
+fails.
+
+The trap, and it is not optional: the configuration block ends in a Fletcher
+checksum. Write a block whose checksum is wrong and the part can stop
+enumerating - on this board that means no USB path at all, only the JTAG rig
+still reaches the CC2652P. `--commit` refuses to run until the checksum
 routine here has REPRODUCED the checksum already stored in the block it just
-read. That is a real test: if this file's idea of the algorithm, the field
-offsets or the block length is wrong in any way, the recomputation misses and
-nothing is written. Without `--commit` the tool never writes at all.
+read, so a wrong idea of the algorithm, field offsets, or block length simply
+writes nothing. Without `--commit` the tool never writes at all.
 
 Protocol (CP2102N; the classic CP2102 is different and is NOT handled here):
 
@@ -234,11 +234,10 @@ def main() -> int:
         return 1
     print("wrote %d bytes." % sent)
 
-    # A stored identity only takes effect at the next enumeration, and this
-    # dongle is usually not somewhere convenient to unplug. A USB port reset
-    # re-enumerates it in place. It legitimately throws afterwards, because the
-    # handle refers to a device that has just gone away and come back as a
-    # different one - so that is success, not failure.
+    # A stored identity only takes effect at the next enumeration; a USB port
+    # reset re-enumerates it in place and then legitimately throws, since the
+    # handle now refers to a device that came back as a different one - that
+    # is success, not failure.
     try:
         dev.reset()
         print("issued a USB reset; the dongle should re-enumerate as %04X:%04X"

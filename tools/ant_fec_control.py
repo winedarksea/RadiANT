@@ -11,6 +11,9 @@ answer with.
     python tools/ant_fec_control.py --device 4243 --grade 3.0
     python tools/ant_fec_control.py --device 52233 --request-page 54
 
+Exit status: 0 only if the command was both delivered (acknowledged) and
+answered with a page 71 Command Status; 1 otherwise.
+
 WHY IT IS PINNED AND NOT A WILDCARD, and this is not a preference. A wildcard
 slave latches onto the FIRST sensor it hears and then reports only that one; on
 this bench it locked to a commercial trainer and reported the treadmill under
@@ -294,20 +297,17 @@ def main() -> int:
             msg_id, body = result
             if msg_id != MESG_RESPONSE_EVENT_ID or len(body) < 3:
                 continue
-            # body[1] IS MESG_EVENT_ID (0x01) FOR AN EVENT, NOT 0. This is the
-            # single most expensive line in the file to get wrong, and it was
-            # wrong once: with `== 0` every terminal event is discarded, the
-            # tool reports "no terminal event", and that reads as a radio or
-            # scheduling fault rather than as a parsing bug. It cost a whole
-            # A/B arm before the raw frame dump showed `resp msg=0x01 code=6`
-            # going past unread. tools/ant_verify.py has always had it right;
-            # copy from there, not from memory.
+            # body[1] IS MESG_EVENT_ID (0x01) FOR AN EVENT, NOT 0. With `== 0`
+            # every terminal event is discarded and the tool reports "no
+            # terminal event", which reads as a radio or scheduling fault
+            # rather than as a parsing bug. tools/ant_verify.py has always had
+            # it right; copy from there, not from memory.
             #
-            # Anything else in body[1] is a RESPONSE to a specific message. A
+            # Anything else in body[1] is a RESPONSE to a specific message: a
             # stack that refuses the acknowledged message outright answers 0x4F
-            # with a code and then raises no terminal event at all, because
-            # there is no transfer - which is a third outcome worth telling
-            # apart from both success and failure.
+            # with a code and raises no terminal event at all, because there is
+            # no transfer - a third outcome worth telling apart from success
+            # and failure.
             if body[1] == MESG_ACKNOWLEDGED_DATA_ID:
                 if body[2] != 0:
                     outcome = (f"REFUSED by the stack, code {body[2]} "

@@ -12,19 +12,15 @@
     Nordic tooling already pulled in.
 
     THE REFERENCE SET IS THE ENTIRE DIFFICULTY. A .NET Framework build cannot
-    see WinRT types without three things at once:
-      - Windows.winmd, from the Windows Kits UnionMetadata directory, which is
-        where the projected Windows.Devices.Bluetooth.* types live;
-      - System.Runtime.WindowsRuntime.dll, which supplies the AsTask()/awaiter
-        glue that makes IAsyncOperation<T> awaitable - without it every `await`
-        on a WinRT call is a compile error about a missing GetAwaiter;
-      - the Facade assemblies, because the winmd's type references are to the
-        contract assemblies rather than to mscorlib.
-    Miss any one and the errors point at the source file rather than at the
-    command line, which is why they are listed here with names attached.
-
-    ASCII only, and no `&&`: Windows PowerShell 5.1 reads .ps1 as ANSI without a
-    BOM and has no pipeline chain operators.
+    see WinRT types without three things at once: Windows.winmd (from the
+    Windows Kits UnionMetadata directory - the projected
+    Windows.Devices.Bluetooth.* types); System.Runtime.WindowsRuntime.dll
+    (the AsTask()/awaiter glue that makes IAsyncOperation<T> awaitable -
+    without it every `await` on a WinRT call is a compile error about a
+    missing GetAwaiter); and the Facade assemblies, because the winmd's type
+    references are to the contract assemblies rather than to mscorlib. Miss
+    any one and the errors point at the source file rather than the command
+    line.
 
 .PARAMETER Mode
     scan    - active scan, one line per device seen. NOTE: -Name is IGNORED in
@@ -110,15 +106,13 @@ if ($needBuild) {
         throw "No Windows.winmd under $unionRoot. Install the Windows 10/11 SDK."
     }
 
-    # Resolve each support assembly by name. Reference Assemblies\...\Facades is
-    # the textbook location and is what every write-up of this assumes, but a
-    # machine with only the runtime installed (no Visual Studio, no targeting
-    # pack - i.e. this bench) does not have that directory AT ALL, and the
-    # failure is not "file not found": csc reports CS0012 pointing at
-    # Windows.winmd, claiming the winmd itself needs a reference to
-    # System.Runtime. The GAC copies are the same assemblies and are what the
-    # runtime binds to anyway, so they are searched as an equal alternative
-    # rather than a degraded fallback.
+    # Reference Assemblies\...\Facades is the textbook location, but a machine
+    # with only the runtime installed (no Visual Studio, no targeting pack -
+    # this bench) does not have it at all, and the failure is not "file not
+    # found": csc reports CS0012 pointing at Windows.winmd, claiming the winmd
+    # itself needs a reference to System.Runtime. The GAC copies are the same
+    # assemblies and are what the runtime binds to anyway, so they are
+    # searched as an equal alternative, not a degraded fallback.
     $gacRoot = 'C:\Windows\Microsoft.NET\assembly\GAC_MSIL'
     $facadeDir = 'C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.5\Facades'
 

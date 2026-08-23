@@ -10,8 +10,9 @@
  *
  * There is no schematic for this module. Everything below is either read out
  * of the silicon or read out of the factory firmware's own pin configuration
- * (scripts/ti/dss_identify.js and scripts/ti/dss_pinmap.js, 2026-08-19), and
- * anything that is neither is ABSENT from this file rather than guessed:
+ * (the dss_identify and dss_pinmap DSS probes, 2026-08-19; both retired since,
+ * recoverable from git history), and anything that is neither is ABSENT from
+ * this file rather than guessed:
  *
  *   MEASURED, trust it:
  *     CC2652P1F die. FLASH.FCFG_B0_SSIZE0 = 0x002C0008 -> 44 sectors x 8 KB
@@ -178,7 +179,7 @@
 	 * switch driven per-transmission from an RF driver callback instead,
 	 * and these hogs would then be wrong rather than merely unnecessary.
 	 *
-	 * HOW THE LEVELS WERE ESTABLISHED. scripts/ti/dss_setpins.js drives
+	 * HOW THE LEVELS WERE ESTABLISHED. The dss_setpins probe (retired) drove
 	 * chosen DIOs on the running image without a rebuild - radiant never
 	 * touches these pins, so a debugger-written level persists - and each
 	 * combination was measured against a STATIONARY trainer on a channel

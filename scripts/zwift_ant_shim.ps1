@@ -11,24 +11,23 @@
     0x02/0x82, and it has no usb_control_msg at all, so it can never send the
     IFC_ENABLE a CP210x needs.
 
-    Its THIRD backend has neither problem. ANT_DLL loads Silicon Labs'
-    USBXpress pair by name and drives them as a byte pipe - open, set baud,
-    read, write. Those two DLLs are simply absent here, so we supply them,
-    backed by the COM port the dongle is already on.
+    Its THIRD backend has neither problem: ANT_DLL loads Silicon Labs'
+    USBXpress pair by name and drives them as a byte pipe (open, set baud,
+    read, write). Those two DLLs are absent here, so we supply them, backed
+    by the COM port the dongle is already on:
 
       DSI_SiUSBXp_3_1.DLL              the transport   (SI_Open/SI_Read/...)
       DSI_CP210xManufacturing_3_1.dll  the identity    (CP210x_GetDeviceVid)
 
-    ANT_DLL accepts a device on its VENDOR ID ALONE - 0x0FCF or 0x1915, with no
-    product-id test anywhere in its binary - so the identity DLL answering
+    ANT_DLL accepts a device on its VENDOR ID ALONE - 0x0FCF or 0x1915, with
+    no product-id test anywhere in its binary - so the identity DLL answering
     0x0FCF is sufficient. THE DONGLE ITSELF IS NEVER TOUCHED: no VID/PID
     reprogramming, no driver change, no elevation, and COM15 keeps working for
     every tool in tools/.
 
-    PURELY ADDITIVE. Both filenames are absent from a stock Zwift install, so
-    nothing of Zwift's is replaced or shadowed - ANT_DLL simply gains a
-    transport it did not have. -Uninstall deletes the two files and the install
-    is completely undone.
+    PURELY ADDITIVE: both filenames are absent from a stock Zwift install, so
+    nothing of Zwift's is replaced or shadowed. -Uninstall deletes the two
+    files and the install is completely undone.
 
     Verified end to end: ANT_Init(0, 57600, 0, 0) -> TRUE, ANT_ResetSystem ->
     TRUE with a 7-byte 0xA4 frame on the wire and the dongle's replies read

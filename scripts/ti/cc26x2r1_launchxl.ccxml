@@ -39,8 +39,7 @@
   one carrying the ANT byte stream at 57600, and the spike's console - is the
   application port, not the auxiliary one.
 
-  See scripts/flash_ti.ps1 for the routes tried and the three that are dead,
-  and scripts/update_xds110_firmware.ps1 for the probe firmware this needs.
+  See scripts/flash_ti.ps1 for the routes tried and the three that are dead.
 -->
 <configurations XML_version="1.2" id="configurations_0">
     <configuration XML_version="1.2" id="configuration_0">

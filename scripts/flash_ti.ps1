@@ -5,109 +5,76 @@
     Flash a CC13x2/CC26x2 board through the onboard XDS110, using OpenOCD.
 
 .DESCRIPTION
-    The counterpart of flash_sim_jlink.ps1 for the other vendor's probe, and it
-    exists for the same reason that one does: [[jlink-manual-commands-trap]]
-    says never to hand-compose a probe script for this bench, and a NEW probe
-    vendor is a stronger case for that rule rather than a weaker one. Every
-    OpenOCD invocation this project makes goes through here.
+    The counterpart of flash_sim_jlink.ps1 for the other vendor's probe -
+    [[jlink-manual-commands-trap]] says never to hand-compose a probe script
+    for this bench. Every OpenOCD invocation this project makes goes through
+    here.
 
-    WHAT WAS MEASURED, so that nobody repeats the afternoon. Four routes were
-    tried on a LAUNCHXL-CC26X2R1 and three of them are dead ends:
+    MEASURED ON A LAUNCHXL-CC26X2R1: three of four routes in are dead ends.
+    SWD fails with `Error connecting DP: cannot read IDR` - the CC26x2 debug
+    port does not speak SWD at all. 4-pin JTAG through the XDS110's CMSIS-DAP
+    personality, and through OpenOCD's native `xds110` driver (what
+    board.cmake's runner uses), both scan as all zeroes with TDO stuck low at
+    every clock from 100 kHz to 5.5 MHz. TI's own `dbgjtag -f @xds110 -S
+    integrity` agrees: SC_ERR_PATH_BROKEN. Two independent implementations
+    reaching the same verdict makes this a property of the board: this
+    LaunchXL's XDS110-to-target link is 2-pin cJTAG, and OpenOCD has no cJTAG
+    path for this adapter.
 
-    * SWD: DEAD. `Error connecting DP: cannot read IDR`. That is not a wiring
-      fault and not an adapter limitation - the CC26x2 debug port does not
-      speak SWD at all.
-    * 4-pin JTAG through the XDS110's CMSIS-DAP personality (which needs no
-      driver install, because Windows binds the HID interface itself): DEAD.
-      The adapter reports "SWD supported, JTAG supported" and initialises, and
-      then the scan chain interrogates as all zeroes with TDO stuck low.
-    * 4-pin JTAG through OpenOCD's native `xds110` driver, which is what
-      boards/ti/cc26x2r1_launchxl/board.cmake's runner uses and what
-      board/ti_cc26x2_launchpad.cfg is written for: ALSO DEAD, identically -
-      `JTAG scan chain interrogation failed: all zeroes`, at every clock from
-      100 kHz to 5.5 MHz, with and without nRESET asserted, and with
-      target/ti_cc26x0.cfg's cJTAG-to-4-pin conversion sequence invoked by
-      hand as well as through its post-reset event.
-    * TI'S OWN TOOL AGREES, WHICH IS THE PART THAT SETTLES IT.
-      `dbgjtag -f @xds110 -S integrity` reports SC_ERR_PATH_BROKEN, "the
-      target's JTAG scan-path appears to be broken with a stuck-at-ones or
-      stuck-at-zero fault". Two independent implementations reaching the same
-      verdict is what makes this a property of the board rather than of
-      OpenOCD: this LaunchXL's XDS110-to-target link is 2-pin cJTAG, and
-      OpenOCD has no cJTAG path for this adapter.
+    So the route in is TI's own debug stack in cJTAG mode (UniFlash's
+    `dslite` CLI). OpenOCD stays as the -UseOpenOcd escape hatch, because a
+    board in this family with the JTAG isolation block populated differently
+    may scan, and because it is the runner `west flash` would use.
 
-    So the route in is TI's own debug stack in cJTAG mode, which in practice
-    means UniFlash's `dslite` CLI. OpenOCD is kept in this script only as the
-    -UseOpenOcd escape hatch, because a different board in this family (or a
-    LaunchXL with its JTAG isolation block populated differently) may well
-    scan, and because it is the runner `west flash` would use.
+    ONE PREREQUISITE EITHER WAY: the XDS110's debug interface,
+    USB\VID_0451&PID_BEF3&MI_02, ships with NO driver bound - Device Manager
+    shows status Error and a blank class. See the DRIVER section printed on
+    failure.
 
-    ONE PREREQUISITE EITHER WAY, and it is elevated and machine-wide: the
-    XDS110's debug interface, USB\VID_0451&PID_BEF3&MI_02, ships with NO
-    driver bound at all - Device Manager shows status Error and a blank class.
-    See the DRIVER section printed on failure.
-
-    AND ONE WARNING ABOUT dbgjtag ITSELF. Running it printed "Updating the
-    XDS110 firmware ... complete." without being asked. The probe survived and
-    still reports 3.0.0.13, but that is precisely the class of unrequested
-    side effect that bricked a J-Link on this bench once already - see
-    [[jlink-manual-commands-trap]]. Do not run TI's uscif utilities casually;
+    dbgjtag updated the probe's firmware unasked when run directly - the same
+    class of side effect that bricked a J-Link on this bench once (see
+    [[jlink-manual-commands-trap]]). Do not run TI's uscif utilities casually;
     use this script.
 
 .PARAMETER HexPath
     Image to flash. Defaults to the newest zephyr.hex under build\ti*.
 
 .PARAMETER DsLite
-    Path to UniFlash's dslite.bat. This is the working path on this bench -
-    TI's own debug stack, which speaks the cJTAG the board actually uses.
+    Path to UniFlash's dslite.bat - the working path on this bench.
 
 .PARAMETER Ccxml
     The target configuration dslite programs against. UniFlash generates one
     per board; see the message this script prints if it cannot find it.
 
 .PARAMETER UseOpenOcd
-    Use OpenOCD instead. Kept as an escape hatch rather than as an
-    alternative: on THIS board it cannot scan the chain at all (see the four
-    measured dead ends above), but it is what `west flash` would run, and a
-    board in this family whose JTAG isolation block is populated differently
-    may well work with it.
+    Use OpenOCD instead. An escape hatch, not an alternative: on this board
+    it cannot scan the chain at all (see the measured dead ends above).
 
 .PARAMETER OpenOcd
     Path to openocd.exe, for -UseOpenOcd. The xPack distribution is what this
-    was tried against; it carries the board and target scripts
-    boards/ti/cc26x2r1_launchxl/board.cmake already names.
+    was tried against.
 
 .PARAMETER Serial
-    XDS110 serial number, for when more than one TI probe is attached. Shows
-    up as the tail of the VID_0451 composite device's InstanceId, and OpenOCD
-    prints it as `Serial# =` on every connect.
+    XDS110 serial number, for when more than one TI probe is attached.
 
 .PARAMETER Speed
     JTAG clock in kHz. 5500 is what board/ti_cc26x2_launchpad.cfg asks for.
 
 .PARAMETER CheckOnly
-    Connect, report the target, and do not write anything. The first thing to
-    run on a new board, and the cheapest way to separate a probe problem from
-    an image problem.
+    Connect, report the target, and do not write anything.
 
 .PARAMETER Xds110Reset
     Path to xds110reset.exe, found automatically under C:\ti otherwise. Run
-    after every flash to bring the ANT backchannel back - see Reset-Backchannel
-    below for what happens without it and why the ORDER matters.
+    after every flash to bring the ANT backchannel back - see
+    Reset-Backchannel below for why the order matters.
 
 .PARAMETER NoBackchannelReset
-    Skip that. Only useful to reproduce the silent-COM14 symptom deliberately;
-    a board flashed this way needs a physical USB replug.
+    Skip that reset. A board flashed this way needs a physical USB replug.
 
-    ON THE CC2652P DONGLE THIS DOES MORE THAN ITS NAME SUGGESTS, and it cost
-    two rounds of investigation on 2026-08-20. xds110reset pulses the probe's
-    nRESET line, and on the dongle that line is wired to the TARGET - so this
-    switch does not merely leave COM14 quiet, it skips the dongle's own reset.
-    dslite's -u resumes the core after programming but that is not a clean
-    boot, and a dongle flashed with -NoBackchannelReset comes up SILENT on its
-    ANT UART: ant_probe.py reports "no startup message" for all three checks,
-    which is indistinguishable from a broken image or a wrong baud. Measured,
-    twice, and fixed by simply not passing this flag:
+    ON THE CC2652P DONGLE THIS DOES MORE THAN ITS NAME SUGGESTS: the probe's
+    nRESET line is wired to the TARGET on this board, so skipping the reset
+    also skips the dongle's own boot. dslite's -u resumes the core after
+    programming but that is not a clean boot. Measured, twice:
 
       flash -NoBackchannelReset, then probe   -> FAILED, all three checks
       the same image after any DSS reset      -> PASS
@@ -145,25 +112,20 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# ── The backchannel, after a flash ──────────────────────────────────────────
+# ---- The backchannel, after a flash -----------------------------------------
 #
 # THE ONE THING THAT MAKES THIS BOARD USABLE UNATTENDED, so it lives in the
 # script rather than in a habit.
 #
 # Every dslite session leaves COM14 - the XDS110's "Application/User UART",
-# which carries the ANT wire protocol - completely silent. Not garbage: zero
-# bytes, to ant_probe.py and to a raw ANT RESET frame over pyserial alike. It
-# reproduces on EVERY image including the null backend and a bare blink app,
-# with the LED blinking and JTAG perfectly healthy, so it looks exactly like a
-# firmware hang and once cost a whole investigation to a boot-hang theory that
-# was never true.
+# which carries the ANT wire protocol - completely silent (zero bytes, not
+# garbage). It reproduces on EVERY image including the null backend and a
+# bare blink app, with JTAG perfectly healthy, so it looks exactly like a
+# firmware hang.
 #
-# The fix is a probe-side reset pulse, NOT a physical replug. Replugging does
-# work and was believed for a while to be the only thing that did; it is not,
-# and believing that makes every measurement on this board need a human.
-#
-# ORDER IS LOAD-BEARING, and getting it wrong is what made the reset look
-# unreliable. Measured, three ways, on the same board in one sitting:
+# The fix is a probe-side reset pulse, NOT a physical replug (replugging does
+# work, but needs a human every time). ORDER IS LOAD-BEARING - measured three
+# ways on the same board in one sitting:
 #
 #   flash, sleep, probe (no reset)          -> FAILED, 0 bytes
 #   reset with NO port open, then open      -> FAILED, 0 bytes
@@ -171,9 +133,9 @@ $ErrorActionPreference = 'Stop'
 #   open the port (DTR+RTS high) FIRST,
 #     then reset, then read                 -> PASS, full boot banner
 #
-# So a bare reset into a closed port is not a weaker fix, it is no fix. What
-# this function does is the third form; the fourth is what to reach for by hand
-# if a port is already dead and reflashing is not wanted (see docs/testing.md).
+# What this function does is the third form; the fourth is what to reach for
+# by hand if a port is already dead and reflashing is not wanted (see
+# docs/testing.md).
 function Reset-Backchannel {
     if ($NoBackchannelReset) {
         Write-Host 'Skipping the backchannel reset (-NoBackchannelReset).'
@@ -251,7 +213,7 @@ Afterwards, confirm with:
 It must report status OK. Then re-run this script.
 '@
 
-# ── Which tool ──────────────────────────────────────────────────────────────
+# ---- Which tool --------------------------------------------------------------
 #
 # dslite unless told otherwise, because on this board it is the only one that
 # can reach the target at all. See the four measured dead ends in the header.
@@ -340,7 +302,7 @@ No zephyr.hex found under $buildRoot for a TI build. Build first:
 }
 
 if (-not $UseOpenOcd) {
-    # ── dslite ──────────────────────────────────────────────────────────────
+    # ---- dslite ------------------------------------------------------------
     #
     # UniFlash's CLI. It programs against a target configuration (.ccxml) that
     # names the probe, the connection type and the device; the connection type

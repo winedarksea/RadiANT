@@ -7,15 +7,11 @@
 .DESCRIPTION
     Windows queries a device's MS OS descriptors exactly once and caches the
     outcome under
-
-        HKLM\SYSTEM\CurrentControlSet\Control\usbflags\<vid><pid><bcdDevice>
-
-    in the OSVC value. Per Microsoft's documentation, if that first query fails
+    `HKLM\SYSTEM\CurrentControlSet\Control\usbflags\<vid><pid><bcdDevice>` (the
+    OSVC value). Per Microsoft's documentation, if that first query fails
     Windows records "no MS OS descriptors" and never asks again - so a single
-    bad firmware build poisons the VID/PID and every later, correct build looks
-    equally broken. SkipBOSDescriptorQuery, if some earlier experiment set it,
-    suppresses the USB 2.1 BOS query that carries the MS OS 2.0 platform
-    capability, with the same effect.
+    bad firmware build poisons the VID/PID and every later, correct build
+    looks equally broken.
 
     This removes those cached verdicts and un-enrolls any currently attached
     instance of the device so the next plug-in re-enumerates from scratch. The
@@ -23,8 +19,6 @@
     CONFIG_ANT_DONGLE_BCD_DEVICE in Kconfig.
 
     Requires an elevated PowerShell. Supports -WhatIf.
-
-    ASCII only: Windows PowerShell 5.1 reads .ps1 as ANSI without a BOM.
 
 .PARAMETER Vid
     Vendor ID, hex, no prefix. 0FCF = Dynastream.

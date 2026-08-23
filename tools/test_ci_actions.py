@@ -2,11 +2,11 @@
 
 """Run the composite actions' shell bodies against fixtures.
 
-WHY THIS EXISTS. Four copies of a .config read-back loop lived in build.yml,
-they drifted, and the drift was invisible: a fix landed on one assertion line
-while five others kept a form that `grep -qxF` can NEVER match, so those five
-were not weak checks - they could only ever fail. They did, for months. The loop
-is now one composite action, and this is what keeps the guard honest.
+Guards against silent drift between copies of a check: a form that
+`grep -qxF` can NEVER match is not a weak check, it can only ever fail - and
+four independent copies of one `.config` read-back loop drifted apart
+invisibly before this existed. The loop is now one composite action, and this
+is what keeps the guard honest.
 
 The bodies are extracted from the YAML and run under bash directly, so what is
 tested is the same text the runner executes. There is no yaml dependency: the

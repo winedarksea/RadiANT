@@ -6,6 +6,9 @@
     C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe tools\\ant_identity.py provision --tier 0
     C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe tools\\ant_identity.py reroll
 
+Exit status: 0 on success; 1 if `show` or `reroll` is run with no identity
+file yet provisioned.
+
 An ANT+ sensor broadcasts a fixed 16-bit device number forever, and that number
 is typically a factory serial - so it ties the node to a purchase record, a
 warranty, and a previous owner, and anyone in range can follow it across

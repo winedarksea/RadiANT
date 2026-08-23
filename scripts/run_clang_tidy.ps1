@@ -31,18 +31,13 @@ if (-not (Test-Path $clangTidy)) {
 
 # WHICH BUILD DIRECTORIES, AND WHY A MISSING ONE IS FATAL.
 #
-# `p15_gate` was named here and is not an arm scripts\build_p4.ps1 has ever
-# produced - build_p4.ps1 writes p4ctrl, p4med and p4sed. So the gate database
-# was always absent, the Write-Warning below scrolled past, and the run
-# degraded to "fewer files checked" while still printing a clean bill. The file
-# it silently dropped is radiant_radio_nrf_gate_mpsl.c, which is compiled ONLY
-# in a gate build and which holds bugs 22 and 23. A linter that quietly stops
-# looking at the most dangerous file in the tree is worse than no linter.
+# A missing group here must be a hard failure with the command that produces
+# one, never a warning: silently checking fewer files is how this linter stops
+# looking at radiant_radio_nrf_gate_mpsl.c, which is compiled ONLY in a gate
+# build and is the most dangerous file in the tree.
 #
 # Each entry is a list of candidate paths, tried in order, so a build made by
-# either build_p4.ps1 or a hand-run west lands. A group where none of the
-# candidates exists is a hard failure with the command that produces one -
-# never a warning.
+# either build_p4.ps1 or a hand-run west lands.
 $dbGroups = @(
     @{
         What = 'ztest (host-testable sources)'
@@ -112,12 +107,11 @@ $uncovered = Get-ChildItem (Join-Path $repoRoot 'radiant\src') -Recurse -Filter 
 
 Write-Host "Running clang-tidy on $($targets.Count) file(s) via $($mergedDbDir)"
 
-# ErrorActionPreference is dropped to Continue across this call and nowhere
-# else. clang-tidy writes its "[n/N] Processing file ..." progress to stderr,
-# and Windows PowerShell 5.1 wraps a native command's stderr in ErrorRecords -
-# so with 'Stop' in force the FIRST progress line aborts the script and reads
-# exactly like a clang-tidy failure on file 1 of 44. Same trap, same fix, as
-# the west calls in scripts\build_all.ps1 and scripts\build_p4.ps1.
+# ErrorActionPreference drops to Continue for this call only: clang-tidy
+# writes its "[n/N] Processing file ..." progress to stderr, and PowerShell
+# 5.1 wraps a native command's stderr in ErrorRecords, so with 'Stop' the
+# FIRST progress line aborts the script and reads like a clang-tidy failure.
+# Same trap as the west calls in build_all.ps1 and build_p4.ps1.
 $prev = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 try {
@@ -131,11 +125,9 @@ if ($uncovered) {
     Write-Warning "Not covered by any of the three reference builds (skipped):"
     $uncovered | ForEach-Object { Write-Warning "  $($_.FullName.Substring($repoRoot.Length + 1))" }
 
-    # Named explicitly rather than left in the list. This is the file the
-    # stale p15_gate path used to drop in silence, and it is the one file in
-    # radiant/src worth failing over: the DPPI/NVIC borrow it implements is the
-    # most expensive thing in this tree to regress, and bugs 22 and 23 both
-    # lived in it.
+    # Named explicitly: this is the one file in radiant/src worth failing
+    # over. The DPPI/NVIC borrow it implements is the most expensive thing in
+    # this tree to regress.
     $gateFile = $uncovered | Where-Object { $_.Name -eq 'radiant_radio_nrf_gate_mpsl.c' }
     if ($gateFile) {
         throw ("radiant_radio_nrf_gate_mpsl.c was not analysed. It compiles only in " +

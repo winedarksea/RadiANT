@@ -6,81 +6,40 @@
 
 .DESCRIPTION
     Mirrors the matrix in .github\workflows\release.yml, including the checks it
-    makes after each build, so a local dist\ matches what CI would publish
-    rather than approximately resembling it.
+    makes after each build, so a local dist\ matches what CI would publish. The
+    checks exist because the failures are silent: Partition Manager does not
+    complain when the app's link address disagrees with CONFIG_FLASH_LOAD_OFFSET,
+    the transport is defaulted from devicetree so a moved USB node silently
+    compiles a different one, and the radio backend is a CMake cache variable
+    decided before Kconfig runs, so a typo in -DANT_RADIO falls back to a
+    default and ships the wrong backend green.
 
-    Those checks exist because the failures are silent. Partition Manager
-    decides where the application links and does not complain when that
-    disagrees with CONFIG_FLASH_LOAD_OFFSET - the image just installs cleanly
-    and boots into nothing. The transport is defaulted from devicetree, so a
-    board whose USB node moved would quietly compile a different one and still
-    succeed. And the radio backend is a CMake cache variable, decided before
-    Kconfig runs, so a typo in -DANT_RADIO would fall back to a default and
-    ship the wrong backend green.
+    THREE MATRICES, NOT ONE: $targets (the dongle, apps/dongle and
+    apps/dongle_ti - a release artifact with a bootloader offset, a transport
+    and a package format), $nodeTargets (apps/hrm_ble - no bootloader, no
+    transport, no artifact) and $treadmillTargets (apps/treadmill - shares the
+    node shape but not its Kconfig choices). Kept separate rather than folded
+    into $targets with optional fields, because `if ($t.field)` would silently
+    skip an assertion a row meant to have.
 
-    THREE MATRICES, NOT ONE. $targets is the dongle (apps/dongle,
-    apps/dongle_ti): a release artifact with a bootloader offset, a transport
-    and a package format. $nodeTargets is apps/hrm_ble, the heart-rate node -
-    no bootloader, no transport symbol and no artifact. $treadmillTargets is
-    apps/treadmill, the fitness-equipment node, which shares the node shape and
-    NONE of the node's assertions: it has no HRM_SENSOR choice, it has a
-    TREADMILL_SOURCE choice instead, and its BLE row asserts a different set of
-    symbols.
+    The node and treadmill rows build only under -Backend core, since neither
+    application has an ANT_RADIO axis - both are built out of radiant with no
+    sdk-ant path, which is the demonstration they exist to make.
 
-    A THIRD LIST RATHER THAN OPTIONAL FIELDS ON $nodeTargets, and it is the
-    same argument the comment above $nodeTargets already makes about folding
-    into $targets: `if ($t.sensor)` silently skips an assertion a row meant to
-    have, and every assertion in this file exists because the failure it
-    catches is silent. A separate list with its own smaller set of assertions
-    cannot skip anything by accident.
-
-    The node and treadmill rows build only under -Backend core, because neither
-    application has an ANT_RADIO axis at all: both are built out of radiant and
-    radiant/src/profiles/ with no sdk-ant path, which is the demonstration they
-    exist to make. core is now the default, so a plain run builds them.
-
-    EVERY ROW NOW COMPLETES UNDER -Backend core -RadiantBackend nrf. Two of them
-    never could until the overlays below were added, and the history is worth
-    keeping because the failure was so misleading:
-
-      promicro / promicro_synth   apps\dongle\boards\promicro_nrf52840_
-                                  nrf52840_uf2.overlay set no
-                                  `chosen { radiant,radio-timer }`. It now
-                                  names timer4, as the Feather overlay does.
-      lm20                        nrf54lm20dk had a .conf and no .overlay at
-                                  all. It now has one naming timer20, as the
-                                  nRF54L15 DK overlay does.
-
-    Both died in radiant\src\radiant_radio_nrf.c at its `#error
-    "radiant_radio_nrf needs a timer..."` guard. READ THE FIRST ERROR, NOT THE
-    CASCADE, if this ever recurs on a new board: what follows is a wall of
-    DT_CHOSEN_radiant_radio_timer_..._undeclared plus unrelated log_msg.h /
-    cbprintf_internal.h errors that read like a broken toolchain or a logging
-    fault, and are neither.
-
-    Why it went unnoticed for so long: -RadiantBackend null built every row, and
-    null wants no TIMER. That default is now gone from every application (see
-    cmake\radiant_backend.cmake), so a board missing the node fails loudly on the
-    first build instead of silently producing an image with no radio.
+    See docs\gotchas.md for the promicro/lm20 `radiant,radio-timer` build
+    failure this matrix caught.
 
     The TI rows need -NcsVersion v3.4.0: hal_ti lives at
     C:\ncs\v3.4.0\modules\hal\ti and is ABSENT under v3.2.4, where the row is
     skipped with a message rather than failing.
 
-    ASCII only, deliberately: Windows PowerShell 5.1 reads .ps1 files as ANSI
-    unless they carry a BOM, so non-ASCII characters here become parse errors.
-
 .PARAMETER NcsVersion
     NCS version to build against. Defaults to v3.4.0, which is what the
     shipping backend tracks and what the TI rows require.
 
-    -Backend sdk_ant NEEDS -NcsVersion v3.2.4 PASSED EXPLICITLY. v3.2.4 is a
-    hard constraint of sdk-ant v2.1.0, not a stale pin: v2.1.0 keys
-    ANT_LIB_DIR off CONFIG_SOC_SERIES_NRF52X, and the Zephyr in v3.4.0 renamed
-    that symbol to CONFIG_SOC_SERIES_NRF52, so libant.a is never located and
-    ninja reports it missing with no rule to make it. That pairing used to be
-    the default here because sdk_ant used to be the default backend; both
-    moved together.
+    -Backend sdk_ant NEEDS -NcsVersion v3.2.4 PASSED EXPLICITLY: sdk-ant v2.1.0
+    keys ANT_LIB_DIR off CONFIG_SOC_SERIES_NRF52X, which v3.4.0's Zephyr
+    renamed to CONFIG_SOC_SERIES_NRF52, so libant.a is never located.
 
 .PARAMETER Backend
     Which implementation of apps/common/ant/ant_radio.h to build against:
@@ -88,46 +47,34 @@
     artifacts are cut from), sdk_ant (Nordic's prebuilt libant.a) or stub.
     Passed through as -DANT_RADIO and asserted afterwards against .config.
 
-    sdk_ant IS THE A/B COMPARISON REFERENCE AND NOTHING ELSE. It is not built
-    by CI at all any more and it writes nothing to dist\. It is kept because
-    it is the other half of every gate in tools\ab_gates.toml and the only
-    configuration in which ant_radio_sdk_ant.c's BUILD_ASSERTs against
-    Garmin's own headers can run. See
+    sdk_ant is the A/B comparison reference and nothing else: not built by CI,
+    writes nothing to dist\, kept only because it is the other half of every
+    gate in tools\ab_gates.toml. See
     docs\decisions\0001-backend-selection-and-release-default.md.
 
 .PARAMETER SdkAntDir
     Path to the sdk-ant checkout, for -Backend sdk_ant. Defaults to
-    $env:SDK_ANT_DIR, then to a sibling checkout beside this repository - the
-    same order apps\common\ant_radio_backend.cmake resolves in. It is passed
-    explicitly on the command line rather than left to that resolution so the
-    value is visible in the build log and in a failure message, instead of
-    being whatever the machine happened to have configured.
+    $env:SDK_ANT_DIR, then to a sibling checkout beside this repository -
+    passed explicitly here so the value is visible in the build log rather
+    than being whatever the machine happened to have configured.
 
 .PARAMETER RadiantBackend
     Which radiant radio HAL to compile, for -Backend core: nrf (the real
     radio) or null (an inert stub that transmits and receives nothing).
-
-    It defaults to nrf here, and CMakeLists.txt now defaults to nrf too, so
-    the two finally agree. They used to disagree - CMake defaulted to null on
-    a compile-check argument - and that disagreement was worth removing: a
-    null-radio image enumerates, answers every host command with OK and finds
-    no sensors, which is indistinguishable from a dead antenna and cost a
-    Feather flash and a whole Zwift session to identify once already, because
-    none of the three checks below looked at it. Now one does, and the default
-    cannot produce that image in the first place.
+    Defaults to nrf, matching CMakeLists.txt's default. A null-radio image
+    enumerates, answers every host command with OK and finds no sensors,
+    which is indistinguishable from a dead antenna.
 
 .PARAMETER HalTiDir
     Where the hal_ti Zephyr module is, for the CC26x2 target. Defaults to
     where scripts\fetch_hal_ti.ps1 puts it. NCS's west manifest filters this
-    module out of its import, so it is never present unless that script has
-    been run; the TI row is skipped with a message rather than failing the
-    whole matrix when it is missing, because every other target builds fine
-    without it.
+    module out of its import, so the TI row is skipped with a message rather
+    than failing the whole matrix when it is missing.
 
 .PARAMETER Only
     Build just the targets whose artifact name matches this wildcard. The node
-    rows (apps/hrm_ble) have no artifact - nothing there is a release image - so
-    they match on their build-directory name instead: -Only "node_*".
+    rows (apps/hrm_ble) have no artifact, so they match on their
+    build-directory name instead: -Only "node_*".
 
 .PARAMETER SkipDfu
     Do not package the dongle DFU zip (which needs nrfutil).
@@ -153,22 +100,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# WEST MUST NOT BE CALLED DIRECTLY FROM A SCRIPT WITH 'Stop' IN FORCE.
-#
-# west writes its ordinary progress to stderr - "Loading Zephyr module(s)
-# (Zephyr base): sysbuild_default" and so on - and Windows PowerShell 5.1 wraps
-# a native command's stderr in ErrorRecords. With $ErrorActionPreference =
-# 'Stop' the FIRST progress line therefore aborts the script, and it aborts it
+# WEST MUST NOT BE CALLED DIRECTLY WITH $ErrorActionPreference = 'Stop': west
+# writes ordinary progress to stderr, PowerShell 5.1 wraps a native command's
+# stderr in ErrorRecords, and 'Stop' then aborts on the first progress line
 # with a NativeCommandError that reads exactly like a build failure while the
-# build was in fact fine. `> $log` does not help: it redirects stdout, and
-# stderr is the stream causing it.
-#
-# So the preference is dropped to 'Continue' across the west call and nowhere
-# else, and $LASTEXITCODE is the only verdict tested. scripts/build_p4.ps1 does
-# the same thing for the same reason and its comment says so at length; this
-# wrapper exists so the two loops below cannot get it right in one place and
-# wrong in the other, which is exactly what had happened - the node loop threw
-# on its first row while the target loop above it did not.
+# build was fine. `> $log` does not help - it only redirects stdout. So the
+# preference drops to 'Continue' across the west call only, and $LASTEXITCODE
+# is the sole verdict tested. scripts/build_p4.ps1 does the same for the same
+# reason.
 function Invoke-West([string[]]$BaseArgs, [string[]]$ExtraArgs, [string]$LogPath) {
     $all = @($BaseArgs)
     if ($ExtraArgs) { $all += $ExtraArgs }
@@ -192,22 +131,17 @@ $dist = Join-Path $repo 'dist'
 # generates the symbol from ANT_RADIO the same way.
 $backendSymbol = "CONFIG_ANT_DONGLE_RADIO_$($Backend.ToUpper())=y"
 
-# The same trick one level down - for radiant's own HAL choice - is now
-# computed per target rather than once here, because a row may pin its own
-# backend regardless of -RadiantBackend. See the cc26x2r1_launchxl row. Only
-# the core backend has such a choice at all; sdk_ant and stub never look at
+# The same trick one level down, for radiant's own HAL choice, is computed per
+# target rather than once here because a row may pin its own backend
+# regardless of -RadiantBackend (see the cc26x2r1_launchxl row). Only the core
+# backend has such a choice at all; sdk_ant and stub never look at
 # RADIANT_BACKEND.
 
-# Same fields as the CI matrix. 'offset' is where the application must link and
-# 'transport' is which of the three src/ transports must end up compiled; both
-# are asserted after the build.
-#
-# THE FEATHER SHIPS THE RGB INDICATOR. The `release` row carries the conf and
-# the overlay that used to belong to a separate `feather_rgb` row, which is
-# gone: two Feather images of shipping shape, one of which nobody was ever
-# handed, was one image too many. The overlay declares the LED node and the
-# `rgb-led0` alias the module looks up; the conf turns the module on. Either
-# one alone fails loudly by design - see apps\dongle\rgb.conf.
+# Same fields as the CI matrix: 'offset' is where the app must link and
+# 'transport' is which of the three src/ transports must be compiled; both are
+# asserted after the build. The `release` row's overlay declares the LED node
+# and `rgb-led0` alias; its conf turns the module on. Either alone fails
+# loudly by design - see apps\dongle\rgb.conf.
 $targets = @(
     @{ dir='release';        board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle.uf2';                   pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='rgb.conf';    release=$true; overlay='rgb_feather.overlay' }
     @{ dir='dongle';         board='nrf52840dongle/nrf52840';                artifact='radiant_dongle_nrf52840dongle.zip';    pkg='dfu'; offset=0x1000;  transport='USB_LEGACY'; conf=$null;         release=$true  }
@@ -218,85 +152,57 @@ $targets = @(
     @{ dir='lm20';           board='nrf54lm20dk/nrf54lm20a/cpuapp';          artifact='radiant_dongle_nrf54lm20dk.hex';       pkg='hex'; offset=0x0;     transport='USB_NEXT';   conf=$null;         release=$false }
 )
 
-# The default-off configuration fragments, which only build under a backend
-# that can reach them.
-#
-# encryption.conf's own comment says it exists "so a default-off path does not
-# quietly stop compiling", and it had never appeared in this list or in either
-# CI matrix - so the thing it was written to prevent was never prevented for
-# it. security.conf gets its entry in the same change that creates it.
-#
-# CONFIG_RADIANT_SEC depends on CONFIG_RADIANT, so a security build under
-# -Backend sdk_ant would compile nothing and pass, which is worse than not
-# building it: it would look like coverage. Hence the gate on $Backend rather
-# than an unconditional row.
-#
-# encryption.conf JOINED THE core BLOCK RATHER THAN KEEPING AN sdk_ant ONE OF
-# ITS OWN. It was gated on -Backend sdk_ant, which contradicted the CI matrix -
-# release.yml builds encryption.conf under `radio: core` - and the fragment
-# itself sets one CONFIG_ANT_DONGLE_* symbol that has nothing to do with which
-# radio is underneath. Left where it was, it would have stopped being built by
-# anything the moment sdk_ant stopped being the default backend.
+# Default-off fragments, gated on core only: CONFIG_RADIANT_SEC depends on
+# CONFIG_RADIANT, so a security build under -Backend sdk_ant would compile
+# nothing and pass - which looks like coverage but is not.
 if ($Backend -eq 'core') {
     $targets += @{ dir='feather_security';   board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle_feather_security.uf2';   pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='security.conf';   release=$false }
     $targets += @{ dir='feather_encryption'; board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle_feather_encryption.uf2'; pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='encryption.conf'; release=$false }
 }
 
-# ── The second vendor ───────────────────────────────────────────────────────
+# ---- The second vendor ------------------------------------------------------
 #
-# A LAUNCHXL-CC26X2R1, and the row is here so that the four assertions below
-# cover a non-Nordic target too. Three things about it differ from every other
-# row and each one is a thing the assertions are for:
+# A LAUNCHXL-CC26X2R1. Three things differ from every other row:
 #
-#   `radiant` overrides -RadiantBackend. nrf is not merely wrong on this part,
-#   it is unbuildable - cc26xx is what belongs here now that the port exists
-#   (P2 onward; see docs/decisions/0014 and 0015), and assertion 4 then checks
-#   that cc26xx is what Kconfig landed on rather than what CMake was asked
-#   for. Only the base row still needs this override; the coex arms below
-#   inherit it from the base row's own $t.radiant.
+#   `radiant` overrides -RadiantBackend to cc26xx - nrf names a peripheral
+#   this part does not have. Only the base row sets it; the coex arms below
+#   inherit it from the base row's $t.radiant.
 #
-#   `baud` is asserted at all. Every other target runs its ANT stream at
-#   115200 and tools/ant_probe.py defaults to it; this one runs at 57600
-#   because the CC2652P + CP2102N module it stands in for impersonates a
-#   Dynastream ANT2USB, which is a 57600 device. A mismatch is invisible
-#   except as "no response to reset", which is what a hung image looks like.
+#   `baud` is asserted at 57600, not the usual 115200: the CC2652P + CP2102N
+#   module impersonates a Dynastream ANT2USB. A mismatch looks like "no
+#   response to reset", indistinguishable from a hung image.
 #
-#   `modules` names hal_ti. NCS's west manifest filters that module out of its
-#   import - see scripts/fetch_hal_ti.ps1 - so it is absent until someone
-#   fetches it, and the row is skipped rather than failing the matrix.
+#   `modules` names hal_ti, which NCS's west manifest filters out of its
+#   import (scripts/fetch_hal_ti.ps1 fetches it); the row is skipped rather
+#   than failing the matrix when it is absent.
 #
-# Only under -Backend core: sdk_ant is Nordic-only silicon by construction and
-# a stub build here would assert nothing about the port.
+# Only under -Backend core: sdk_ant is Nordic-only silicon and a stub build
+# asserts nothing about the port.
 #
-# FOUR ROWS, NOT ONE, and they are an A/B/C/D that only means anything read in
-# order - see docs/decisions/0015-cc26xx-coexistence-design.md and
-# docs/testing.md for the table:
+# Four rows, an A/B/C/D read in order - see
+# docs/decisions/0015-cc26xx-coexistence-design.md and docs/testing.md:
 #
 #   ti_launchxl        arm 1  the floor
 #   ti_launchxl_patch  arm 2  the CPE multi-protocol patch's PHY cost alone
 #   ti_launchxl_gate   arm 3  the scheduler hooks, patch held constant
-#   ti_launchxl_coex   arm 4  a real second RF client (the forked 802.15.4
+#   ti_launchxl_coex   arm 4  a real second RF client (forked 802.15.4
 #                             driver), arbiter and patch held constant
 #
-# Arm 4 needs a devicetree overlay as well as a conf fragment: Zephyr's own
-# cc26x2r1_launchxl.dts disables the 802.15.4 node. It is one of the two rows
-# in this file that use `overlay` - the Feather release row is the other, for
-# the NeoPixel node - and it is $null everywhere else.
+# Arm 4 needs a devicetree overlay too: Zephyr's own cc26x2r1_launchxl.dts
+# disables the 802.15.4 node.
 #
 # ARM 4 BUILDS BUT HAS NEVER RUN AGAINST AN 802.15.4 PEER - this bench has
-# none. It belongs in the matrix because it is a build that must not rot, not
-# because a green matrix says coexistence works. Read ti_coex.conf's header
-# before recording any number off it.
+# none. It stays in the matrix so the build cannot rot, not because a green
+# matrix proves coexistence works. Read ti_coex.conf's header before recording
+# any number off it.
 if ($Backend -eq 'core') {
     if (-not $HalTiDir) { $HalTiDir = "C:\ncs\$NcsVersion\modules\hal\ti" }
     if (Test-Path (Join-Path $HalTiDir 'zephyr\module.yml')) {
         $halTiModule = ($HalTiDir -replace '\\', '/')
-        # app: apps/dongle_ti, not apps/dongle - the only rows in this matrix
-        # that build from a different application, since this is the only
-        # board with no USB device peripheral to make an ANT_DONGLE-shaped
-        # image on and the only silicon radiant's cc26xx backend targets. See
-        # apps/dongle_ti's own README for the "unverified pending hardware"
-        # scope of the coexistence arm (the fourth row).
+        # app: apps/dongle_ti, not apps/dongle - the only board with no USB
+        # device peripheral to make an ANT_DONGLE-shaped image on, and the
+        # only silicon radiant's cc26xx backend targets. See apps/dongle_ti's
+        # own README for the "unverified pending hardware" scope of arm 4.
         $dongleTiApp = Join-Path $repo 'apps\dongle_ti'
         $targets += @{ dir='ti_launchxl';       board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl.hex';       pkg='hex'; offset=0x0; transport='UART'; conf=$null;           release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule; app=$dongleTiApp }
         $targets += @{ dir='ti_launchxl_patch'; board='cc26x2r1_launchxl'; artifact='radiant_dongle_cc26x2r1_launchxl_patch.hex'; pkg='hex'; offset=0x0; transport='UART'; conf='ti_patch.conf'; release=$false; radiant='cc26xx'; baud=57600; modules=$halTiModule; app=$dongleTiApp }
@@ -308,131 +214,71 @@ if ($Backend -eq 'core') {
     }
 }
 
-# ── The node ────────────────────────────────────────────────────────────────
+# ---- The node ----------------------------------------------------------------
 #
-# apps/hrm_ble, the heart-rate node and manufacturer reference design. It is not
-# a dongle and it never was; until this list existed it appeared in neither this
-# script nor .github/workflows/release.yml, so NOTHING in the repository compiled
-# it and a rename could break it invisibly.
+# apps/hrm_ble, the heart-rate node reference design. A separate list rather
+# than more $targets rows: offset, transport and pkg have no meaning here (no
+# bootloader, no ANT_DONGLE_TRANSPORT symbol, no release artifact), and
+# `if ($t.field)` would silently skip an assertion a row meant to have.
 #
-# A SEPARATE LIST RATHER THAN MORE $targets ROWS, and the reason is that three
-# of $targets' fields have no meaning here and the five assertions below are
-# built out of them:
+# Asserted below: the HAL backend (RADIANT_BACKEND falls back to null on an
+# unmet `depends on`, and a null-radio node boots and logs "transmitting"
+# while putting nothing on the air), the HRM_SENSOR arm by name (so a
+# simulator left wired in fails the build instead of shipping), and on BLE
+# rows, HRM_BLE_HRS plus the symbols it `select`s/`default`s rather than sets
+# directly - those defaults are silently dead if Kconfig parses them after
+# the symbol's own definition, and only a .config read-back catches it.
 #
-#   offset     there is no bootloader and no Partition Manager on this
-#              application, so `app` links wherever the board's dts says. A row
-#              claiming an offset would be asserting a number nothing decides.
-#   transport  CONFIG_ANT_DONGLE_TRANSPORT_* does not EXIST in a node's Kconfig
-#              tree. Assertion 2 reads `-ne $t.transport` against an empty
-#              string, so a node row folded into $targets would fail on a symbol
-#              that is correctly absent.
-#   pkg        nothing here is a release artifact. dist\ holds the dongle
-#              images only, and this application has no ANT_RADIO axis at all -
-#              it is built out of radiant and radiant/src/profiles/, which is
-#              the entire point of it.
-#
-# The alternative considered was making those fields optional and skipping the
-# assertions when absent. Rejected: `if ($t.offset)` silently skips assertion 1
-# for a row that meant to have one, and the five assertions in this file exist
-# precisely because the failures they catch are silent. A second list with its
-# own, smaller set of assertions cannot skip anything by accident.
-#
-# WHAT IS ASSERTED HERE INSTEAD, and each one is a failure that has actually
-# happened in this tree:
-#
-#   the HAL backend    RADIANT_BACKEND is a CMake cache variable resolved before
-#                      Kconfig runs, so an unmet `depends on` falls back to the
-#                      null backend and the image boots, logs "transmitting" and
-#                      puts nothing on the air.
-#   the sensor source  exactly one arm of the HRM_SENSOR choice, asserted by
-#                      name. This is what makes "I forgot to unhook the
-#                      simulator" a red build rather than a shipped strap
-#                      reporting 72 bpm from a simulator on a real chest.
-#   the BLE symbols    on the BLE row only: HRM_BLE_HRS plus the two symbols it
-#                      `select`s/`default`s rather than sets by hand. A Kconfig
-#                      `default` written after the symbol's own definition is
-#                      silently dead, and only a .config read-back tells the
-#                      difference.
-#
-# Only under -Backend core: this application has no ANT_RADIO axis at all, so
-# building it under -Backend sdk_ant or stub would compile the same image and
-# assert nothing extra.
+# Only under -Backend core: this application has no ANT_RADIO axis at all.
 $nodeTargets = @(
     @{ dir='node_l15';        board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf=$null }
     # The other half of radiant/Kconfig's `SOC_COMPATIBLE_NRF52X ||
-    # SOC_COMPATIBLE_NRF54LX`. Build-verified only - there is no nRF52 bench slot
-    # for this application, and the part's on-air behaviour is predicted from the
-    # nRF54L15 measurements rather than confirmed.
+    # SOC_COMPATIBLE_NRF54LX`. Build-verified only - no nRF52 bench slot for
+    # this application; on-air behaviour is predicted from nRF54L15 measurements.
     @{ dir='node_52840dk';    board='nrf52840dk/nrf52840';           sensor='SIMULATED'; conf=$null }
     @{ dir='node_lm20';       board='nrf54lm20dk/nrf54lm20a/cpuapp'; sensor='SIMULATED'; conf=$null }
     @{ dir='node_ble';        board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf='ble.conf';                     ble=$true }
     @{ dir='node_ble_nosup';  board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf='ble.conf;ble_nosuppress.conf'; ble=$true }
-    # The seam's second implementation, and the arm with no implementation at
-    # all. A seam with one implementation is indistinguishable from a direct
-    # call with extra prototypes; a seam whose empty case does not link is a
-    # seam an integrator's first build fails on for the wrong reason.
+    # The seam's second implementation, and the arm with no implementation:
+    # a seam with only one implementation is indistinguishable from a direct
+    # call, and if the empty case doesn't link, an integrator's first build
+    # fails for the wrong reason.
     @{ dir='node_example';    board='nrf54l15dk/nrf54l15/cpuapp';    sensor='EXAMPLE';   conf='sensor_example.conf' }
     @{ dir='node_custom';     board='nrf54l15dk/nrf54l15/cpuapp';    sensor='CUSTOM';    conf='sensor_custom.conf' }
 )
 
-# ── The treadmill ───────────────────────────────────────────────────────────
+# ---- The treadmill -----------------------------------------------------------
 #
-# apps/treadmill, the fitness-equipment node and this tree's second
-# manufacturer reference design. A THIRD list rather than more $nodeTargets
-# rows, for the same reason $nodeTargets is not part of $targets: the fields
-# are not the same fields.
+# apps/treadmill, the fitness-equipment reference design. A third list for the
+# same reason $nodeTargets isn't part of $targets, with its own fields:
+# TREADMILL_SOURCE (SIMULATED/CUSTOM, not HRM_SENSOR's three arms) and its own
+# BLE symbol set (TREADMILL_BLE selects BT_RSCS and BT_SMP, not HRM's set).
 #
-#   sensor  there is no HRM_SENSOR choice here. The equivalent is
-#           TREADMILL_SOURCE, whose arms are SIMULATED and CUSTOM and not
-#           SIMULATED/EXAMPLE/CUSTOM, so assertion 2 of the node loop would
-#           either pass vacuously or fail on a symbol that is correctly absent.
-#   ble     the symbols to assert are different ones. TREADMILL_BLE `select`s
-#           BT_RSCS and BT_SMP as well as the MPSL gate, and the SMP half is
-#           the one that is genuinely new in this tree - apps/hrm_ble has no
-#           pairing at all.
-#
-# WHAT IS ASSERTED, and each is a failure that has actually happened here:
-#
-#   the HAL backend  as on the node rows. RADIANT_BACKEND is a CMake cache
-#                    variable resolved before Kconfig runs, so an unmet
-#                    `depends on` falls back to the null backend and the image
-#                    boots, logs "transmitting" and puts nothing on the air.
-#                    This has bitten twice.
-#   the source arm   exactly one arm of the TREADMILL_SOURCE choice, by name.
-#                    What makes "I forgot to unhook the simulator" a red build
-#                    rather than a shipped treadmill reporting a synthetic
-#                    runner while somebody stands on it.
-#   the second ANT+  CONFIG_TREADMILL_ANT_SDM, asserted BOTH ways. The fec_only
-#   master           row exists so the coexistence fallback cannot rot, and a
-#                    fallback nobody compiles is not a fallback.
-#   the BLE symbols  on the BLE rows: TREADMILL_BLE plus the four symbols it
-#                    `select`s or `default`s rather than sets by hand. A
-#                    Kconfig `default` written after the symbol's own
-#                    definition is silently dead, and only a .config read-back
-#                    tells the difference.
+# Asserted below: the HAL backend and source arm (same rationale as the node
+# rows), CONFIG_TREADMILL_ANT_SDM in BOTH directions (fec_only proves the
+# coexistence fallback still configures - a fallback nobody compiles is not a
+# fallback), and on BLE rows, TREADMILL_BLE plus the four symbols it
+# select/default rather than sets directly.
 $treadmillTargets = @(
     @{ dir='tread_l15';      board='nrf54l15dk/nrf54l15/cpuapp'; source='SIMULATED'; conf=$null;                  sdm=$true }
     # The other half of radiant/Kconfig's `SOC_COMPATIBLE_NRF52X ||
-    # SOC_COMPATIBLE_NRF54LX`. ANT+ only: the BLE arm on nRF52 would be the
-    # first time SDC, MPSL, the gate, two hand-written GATT services and SMP
-    # were compiled together on that family, and there is no nRF52 bench slot
-    # for this application. See apps/treadmill/boards/nrf52840dk_nrf52840.overlay.
+    # SOC_COMPATIBLE_NRF54LX`. ANT+ only - no nRF52 bench slot for the BLE arm
+    # (SDC + MPSL + gate + two GATT services + SMP, untested on that family).
+    # See apps/treadmill/boards/nrf52840dk_nrf52840.overlay.
     @{ dir='tread_52840dk';  board='nrf52840dk/nrf52840';        source='SIMULATED'; conf=$null;                  sdm=$true }
-    # ONE ANT+ MASTER INSTEAD OF TWO - the coexistence fallback, compiled so it
-    # cannot rot. Two masters at 8192 and 8134 counts beat against each other
-    # with a period of about 32 s, and nothing in this project has measured
-    # that mix beside BLE.
+    # One ANT+ master instead of two - the coexistence fallback, compiled so
+    # it cannot rot. Two masters at 8192 and 8134 counts beat against each
+    # other with a period of about 32 s; that mix has never been measured
+    # alongside BLE.
     @{ dir='tread_fec_only'; board='nrf54l15dk/nrf54l15/cpuapp'; source='SIMULATED'; conf='fec_only.conf';        sdm=$false }
     @{ dir='tread_ble';      board='nrf54l15dk/nrf54l15/cpuapp'; source='SIMULATED'; conf='ble.conf';             sdm=$true; ble=$true }
-    # The heaviest configuration this application has: two masters, one slave
-    # and BLE with SMP and a bonding store. It is the row that decides whether
-    # the RAM budget holds, which the Matter spike already established matters
-    # more than flash on this part.
+    # The heaviest configuration here: two masters, one slave, BLE with SMP
+    # and a bonding store - the row that decides whether the RAM budget holds
+    # (RAM, not flash, is the constraint on this part; see the Matter spike).
     @{ dir='tread_ble_hr';   board='nrf54l15dk/nrf54l15/cpuapp'; source='SIMULATED'; conf='ble.conf;hr_rx.conf';  sdm=$true; ble=$true; hr=$true }
-    # The arm with no source in it. It must LINK - an integrator's first build
-    # failing for a reason unrelated to their driver is an expensive way to
-    # start - and then report a stopped belt rather than falling back to the
-    # simulator.
+    # The arm with no source: must LINK (an integrator's first build failing
+    # for an unrelated reason is expensive) and report a stopped belt rather
+    # than falling back to the simulator.
     @{ dir='tread_custom';   board='nrf54l15dk/nrf54l15/cpuapp'; source='CUSTOM';    conf='source_custom.conf';   sdm=$true }
 )
 
@@ -442,9 +288,8 @@ if (-not (Get-Command west -ErrorAction SilentlyContinue)) {
 }
 
 # Resolve sdk-ant here rather than letting CMake do it silently. Only the
-# sdk_ant backend needs it at all; core and stub never look at it, which is
-# the entire point of the seam and is what the independence build below
-# proves rather than asserts.
+# sdk_ant backend needs it; core and stub never look at it - the independence
+# build below proves that rather than asserting it.
 $antModuleDir = $null
 if ($Backend -eq 'sdk_ant') {
     if ($SdkAntDir) {
@@ -465,16 +310,13 @@ if ($Backend -eq 'sdk_ant') {
 
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
-# `west build` is an extension command discovered through the workspace
-# manifest, so west must run with its cwd inside the workspace even though
-# -s/-d/-z all point elsewhere.
+# `west build` is discovered through the workspace manifest, so west must run
+# with cwd inside the workspace even though -s/-d/-z point elsewhere.
 #
-# Every row builds from apps/dongle except the cc26x2r1_launchxl ones, which
-# name their own $t.app (apps/dongle_ti) - see that row's own comment. The
-# sysbuild image folder under each row's own -d is therefore the built app's
-# directory basename ('dongle' or 'dongle_ti'), not a fixed name - sysbuild
-# takes the default image name from APP_DIR's own basename, not from
-# project().
+# Every row builds from apps/dongle except cc26x2r1_launchxl, which names its
+# own $t.app (apps/dongle_ti). The sysbuild image folder under each row's -d
+# is therefore the app directory's basename ('dongle' or 'dongle_ti') -
+# sysbuild takes the image name from APP_DIR's basename, not from project().
 Push-Location "C:\ncs\$NcsVersion"
 try {
     $built = @()
@@ -488,9 +330,8 @@ try {
         $imageName = Split-Path $rowApp -Leaf
         Write-Host "`n=== $($t.artifact)  [$($t.board)]  [$Backend]" -ForegroundColor Cyan
 
-        # A row may pin its own HAL backend. Only the TI one does, and it does
-        # because -RadiantBackend's default (nrf) names a peripheral that part
-        # does not have - see the row's own note.
+        # A row may pin its own HAL backend (only TI does - see its row note,
+        # -RadiantBackend's default names a peripheral that part lacks).
         $rowRadiant = if ($t.radiant) { $t.radiant } else { $RadiantBackend }
 
         $extra = @('--', "-DANT_RADIO=$Backend")
@@ -498,11 +339,9 @@ try {
         if ($antModuleDir) { $extra += "-DANT_MODULE_DIR=$antModuleDir" }
         if ($t.modules) { $extra += "-DEXTRA_ZEPHYR_MODULES=$($t.modules)" }
         if ($t.conf) { $extra += "-DEXTRA_CONF_FILE=$($t.conf)" }
-        # Only ti_launchxl_coex sets this today. Not folded into `conf`: a
-        # fragment and an overlay are read by different tools at different
-        # stages, and a row that silently dropped its overlay would still
-        # configure, still build, and still be the wrong image (see
-        # ti_coex.overlay's header for what that failure looks like).
+        # Only ti_launchxl_coex sets this. Not folded into `conf`: a fragment
+        # and an overlay are read by different tools/stages, and a row that
+        # silently dropped its overlay would still build - the wrong image.
         if ($t.overlay) { $extra += "-DEXTRA_DTC_OVERLAY_FILE=$($t.overlay)" }
 
         # Do not redirect stderr: PowerShell 5.1 wraps a native command's
@@ -547,27 +386,20 @@ try {
             throw "$($t.artifact): compiled the $got transport, expected $($t.transport)"
         }
 
-        # 3. Radio backend. ANT_RADIO is a CMake cache variable, chosen before
-        # Kconfig exists, so nothing in .config would record which backend was
-        # compiled unless CMake wrote the symbol on purpose - which it does,
-        # precisely so this line can exist. Without it a -DANT_RADIO typo
-        # falls back to a default and ships the wrong backend green.
+        # 3. Radio backend. ANT_RADIO is a CMake cache variable chosen before
+        # Kconfig runs, so nothing in .config records it unless CMake writes
+        # the symbol on purpose. Without this check a -DANT_RADIO typo falls
+        # back to a default and ships the wrong backend green.
         if (-not ($cfg | Where-Object { $_ -eq $backendSymbol })) {
             $gotRadio = ($cfg | Where-Object { $_ -match '^CONFIG_ANT_DONGLE_RADIO_\w+=y' })
             throw "$($t.artifact): expected $backendSymbol in .config, found '$gotRadio'"
         }
 
-        # 4. radiant's radio HAL. This check long predates the default being
-        # fixed, and it stays: RADIANT_BACKEND is still a value that can be
-        # passed explicitly, still a value Kconfig can decline to honour when a
-        # `depends on` is unmet, and the consequence is still an image that
-        # transmits and receives nothing while checks 1 to 3 all pass - the
-        # link address, the transport and the ANT_DONGLE_RADIO choice are all
-        # still exactly right on a null-radio build. Such an image enumerates
-        # and answers every host command with OK; the only symptom is that no
-        # sensor is ever found, which reads as a hardware fault. That is why
-        # this check is worth its lines even now that no application defaults
-        # to null.
+        # 4. radiant's radio HAL. RADIANT_BACKEND can be passed explicitly and
+        # Kconfig can decline to honour it when a `depends on` is unmet; the
+        # result is an image that transmits and receives nothing while checks
+        # 1-3 all still pass. Such an image enumerates and answers OK to every
+        # host command, and reads as a dead antenna, not a build defect.
         if ($Backend -eq 'core') {
             $rowRadiantSymbol = "CONFIG_RADIANT_BACKEND_$($rowRadiant.ToUpper())=y"
             if (-not ($cfg | Where-Object { $_ -eq $rowRadiantSymbol })) {
@@ -576,18 +408,11 @@ try {
             }
         }
 
-        # 5. The ANT UART's baud, where a row states one.
-        #
-        # New with the TI target and only asserted there, because it is the
-        # only board that does not run at 115200. The rate lives in two places
-        # by design - the devicetree configures the UART, this symbol records
-        # it, and src/ant_uart_transport.c BUILD_ASSERTs they agree - so this
-        # check is not about them disagreeing. It is about the number reaching
-        # .config at all: CONFIG_ANT_DONGLE_UART_BAUD's 57600 comes from a
-        # `default ... if SOC_SERIES_CC13X2_CC26X2`, and that is precisely the
-        # kind of symbol whose rename this project has been bitten by three
-        # times. If it is renamed, the default silently reverts to 115200 -
-        # and this line, not a bench session, is what says so.
+        # 5. The ANT UART's baud, only asserted for TI (the one board not at
+        # 115200). CONFIG_ANT_DONGLE_UART_BAUD's 57600 comes from a `default
+        # ... if SOC_SERIES_CC13X2_CC26X2` - exactly the kind of symbol this
+        # project has had renamed out from under it before. If it is renamed,
+        # the default silently reverts to 115200 and only this check notices.
         if ($t.baud) {
             $gotBaud = ($cfg | Where-Object { $_ -match '^CONFIG_ANT_DONGLE_UART_BAUD=' }) -replace '.*=', ''
             if ([int]$gotBaud -ne [int]$t.baud) {
@@ -598,12 +423,10 @@ try {
         $halNote = if ($Backend -eq 'core') { ", $rowRadiant HAL" } else { '' }
         Write-Host ("  ok: links at 0x{0:x}, {1} transport, {2} radio{3}" -f $offset, $got, $Backend, $halNote)
 
-        # Only the core backend produces artifacts anyone is handed. That
-        # moved from sdk_ant when the Tier 3 Zwift acceptance passed - a
-        # recorded decision in docs/decisions/0001, not a side effect of
-        # running this script with a different flag. An sdk_ant run is a
-        # comparison build and deliberately leaves dist\ alone, so a bench A/B
-        # cannot overwrite the images that are about to ship.
+        # Only the core backend produces artifacts anyone is handed (see
+        # docs/decisions/0001). An sdk_ant run is a comparison build and
+        # deliberately leaves dist\ alone, so a bench A/B cannot overwrite
+        # images about to ship.
         if ($Backend -ne 'core') {
             $built += $t
             continue
@@ -627,24 +450,16 @@ try {
         $built += $t
     }
 
-    # 4. Build independence, for the backends that claim it.
+    # Build independence, for backends that claim it. ANT_MODULE_DIR points at
+    # a directory that cannot exist, so any surviving sdk-ant reference
+    # resolves through it and the build stops - success *proves* core/stub are
+    # free of sdk-ant rather than asserting it in a comment that decays.
     #
-    # This one is not an assertion about the tree; it is a build that either
-    # happens or does not. ANT_MODULE_DIR points at a directory that cannot
-    # exist, so any surviving reference to an sdk-ant header, module or
-    # library resolves through it and the build stops. Success therefore
-    # *proves* the core and stub backends are free of sdk-ant, rather than
-    # asserting it in a comment that decays the first time someone adds an
-    # include. It costs one extra build of one board.
-    #
-    # It only means anything because the override actually reaches the
-    # application image: under sysbuild, -DANT_MODULE_DIR lands in the
-    # sysbuild cache, and CMakeLists.txt reads it back out of the sysbuild
-    # cache file explicitly. Without that it would silently resolve
-    # $env:SDK_ANT_DIR, build green against the real checkout, and prove
-    # nothing at all - which is worse than not running it. If this ever needs
-    # debugging, check build\independence\dongle\CMakeCache.txt: it
-    # must record ANT_MODULE_DIR as the nonexistent path, not as a real one.
+    # Only means anything if the override reaches the image: under sysbuild,
+    # -DANT_MODULE_DIR lands in the sysbuild cache and CMakeLists.txt reads it
+    # back explicitly. Without that it silently resolves $env:SDK_ANT_DIR and
+    # proves nothing. Debugging: build\independence\dongle\CMakeCache.txt must
+    # record ANT_MODULE_DIR as the nonexistent path.
     if ($Backend -ne 'sdk_ant' -and $Only -eq '*') {
         $board = 'adafruit_feather_nrf52840/nrf52840/uf2'
         $out = Join-Path $repo 'build\independence'
@@ -674,16 +489,11 @@ try {
         Write-Host "  ok: $Backend builds with no sdk-ant reachable"
     }
 
-    # ── The node ────────────────────────────────────────────────────────────
+    # ---- The node ------------------------------------------------------------
     #
-    # See $nodeTargets above for why this is a second loop with its own
-    # assertions rather than more rows in the first one.
-    #
-    # NO -DANT_RADIO HERE. apps/hrm_ble has no ANT_RADIO axis: it is built out
-    # of radiant and radiant/src/profiles/ and has no sdk-ant path at all, which
-    # is the demonstration the application exists to make. Passing the flag
-    # would be accepted and unused, and an unused flag in a script whose job is
-    # asserting that flags took effect is the wrong habit to teach.
+    # NO -DANT_RADIO HERE: apps/hrm_ble has no ANT_RADIO axis. The flag would
+    # be accepted and silently unused, which is the wrong habit for a script
+    # whose job is asserting that flags took effect.
     if ($Backend -eq 'core') {
         $nodeApp = Join-Path $repo 'apps\hrm_ble'
 
@@ -694,20 +504,16 @@ try {
             Write-Host "`n=== hrm_ble $($t.dir)  [$($t.board)]" -ForegroundColor Cyan
 
             $extra = @('--', "-DRADIANT_BACKEND=$RadiantBackend")
-            # IMAGE-SCOPED, and the prefix is the basename of the application
-            # directory because that is how sysbuild names an image. While this
-            # directory was strap/, `-Dstrap_EXTRA_CONF_FILE=` was correct;
-            # after the rename the same flag named an image that does not exist
-            # and was accepted in silence - CMake says nothing beyond its
-            # end-of-run "manually-specified variables were not used" warning,
-            # and the BLE image builds green with no BLE in it. Measured: two
-            # builds, with the flag and without, produced byte-identical
-            # .config files.
-            #
-            # A plain -DEXTRA_CONF_FILE= is no better - it lands in the sysbuild
-            # cache and never reaches the image - and neither is a bare
-            # -DCONFIG_x for the same reason, which is why even the sensor
-            # choice travels as a fragment.
+            # IMAGE-SCOPED: the prefix is the app directory's basename, which
+            # is how sysbuild names an image. A wrong prefix names an image
+            # that doesn't exist and is accepted in silence - CMake's only
+            # complaint is an end-of-run "manually-specified variables were
+            # not used" warning, and the image builds green with no BLE in it.
+            # Measured: two builds, with the flag and without, produced
+            # byte-identical .config files. A plain -DEXTRA_CONF_FILE= is no
+            # better (lands in the sysbuild cache, never reaches the image),
+            # nor is a bare -DCONFIG_x - which is why even the sensor choice
+            # travels as a fragment.
             if ($t.conf) { $extra += "-Dhrm_ble_EXTRA_CONF_FILE=$($t.conf)" }
 
             $log = Join-Path $env:TEMP "build_$($t.dir).log"
@@ -722,35 +528,30 @@ try {
             # rule that decides the -D prefix above.
             $cfg = Get-Content (Join-Path $out 'hrm_ble\zephyr\.config')
 
-            # 1. radiant's radio HAL, for the reason assertion 4 above gives:
-            # a null-radio node boots, logs "transmitting" and puts nothing on
-            # the air, and every other check still passes.
+            # 1. radiant's radio HAL: a null-radio node boots, logs
+            # "transmitting" and puts nothing on the air, while every other
+            # check still passes.
             $want = "CONFIG_RADIANT_BACKEND_$($RadiantBackend.ToUpper())=y"
             if (-not ($cfg | Where-Object { $_ -eq $want })) {
                 $got = ($cfg | Where-Object { $_ -match '^CONFIG_RADIANT_BACKEND_\w+=y' })
                 throw "hrm_ble $($t.dir): expected $want in .config, found '$got'"
             }
 
-            # 2. The heart-rate source. The HRM_SENSOR choice is what makes "I
-            # forgot to unhook the simulator" unrepresentable, and this is what
-            # makes the choice checkable from outside the build.
+            # 2. The heart-rate source, so a simulator left wired in fails the
+            # build instead of shipping.
             $wantSensor = "CONFIG_HRM_SENSOR_$($t.sensor)=y"
             if (-not ($cfg | Where-Object { $_ -eq $wantSensor })) {
                 $got = ($cfg | Where-Object { $_ -match '^CONFIG_HRM_SENSOR_(SIMULATED|EXAMPLE|CUSTOM)=y' })
                 throw "hrm_ble $($t.dir): expected $wantSensor in .config, found '$got'"
             }
 
-            # 3. The BLE interlock, on the rows that ask for BLE.
-            #
-            # HRM_BLE_HRS is set by the fragment; the other two are NOT, and
-            # that is the point of asserting them. They come from a `select` and
-            # a `default` on HRM_BLE_HRS in apps/hrm_ble/Kconfig, and a Kconfig
-            # `default` parsed after the symbol's own definition is silently
-            # dead. Without the gate, radiant/Kconfig's `depends on !BT ||
-            # ..._GATE_MPSL` drops the nrf backend to null; with the gate but a
-            # session count of 0, every timeslot session_open() fails while the
-            # image still runs - a node that refuses every arm rather than a
-            # build error.
+            # 3. The BLE interlock. HRM_BLE_HRS is set by the fragment; the
+            # other two come from a `select`/`default` on it in
+            # apps/hrm_ble/Kconfig - a `default` parsed after the symbol's own
+            # definition is silently dead. Without the gate, radiant/Kconfig's
+            # `depends on !BT || ..._GATE_MPSL` drops the nrf backend to null;
+            # with the gate but session count 0, every timeslot session_open()
+            # fails while the image still runs.
             if ($t.ble) {
                 foreach ($sym in @('CONFIG_HRM_BLE_HRS=y',
                                    'CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y',
@@ -766,13 +567,9 @@ try {
         }
     }
 
-    # ── The treadmill ───────────────────────────────────────────────────────
+    # ---- The treadmill --------------------------------------------------------
     #
-    # See $treadmillTargets above for why this is a THIRD loop rather than
-    # optional fields on the node rows.
-    #
-    # NO -DANT_RADIO HERE either, for the same reason: apps/treadmill has no
-    # ANT_RADIO axis and no sdk-ant path at all.
+    # NO -DANT_RADIO HERE either: apps/treadmill has no ANT_RADIO axis.
     if ($Backend -eq 'core') {
         $treadmillApp = Join-Path $repo 'apps\treadmill'
 
@@ -783,12 +580,8 @@ try {
             Write-Host "`n=== treadmill $($t.dir)  [$($t.board)]" -ForegroundColor Cyan
 
             $extra = @('--', "-DRADIANT_BACKEND=$RadiantBackend")
-            # IMAGE-SCOPED, and the prefix is the basename of the application
-            # directory because that is how sysbuild names an image. A wrong
-            # prefix names an image that does not exist and is accepted in
-            # silence - apps/hrm_ble shipped exactly that no-op for a while and
-            # measured it: two builds, with the flag and without, produced
-            # byte-identical .config files.
+            # IMAGE-SCOPED, same rule as apps/hrm_ble above: a wrong prefix
+            # names an image that doesn't exist and is accepted in silence.
             if ($t.conf) { $extra += "-Dtreadmill_EXTRA_CONF_FILE=$($t.conf)" }
 
             $log = Join-Path $env:TEMP "build_$($t.dir).log"
@@ -799,34 +592,30 @@ try {
                 throw "build failed for treadmill $($t.dir); full log at $log"
             }
 
-            # 'treadmill', the basename of the application directory - the same
-            # rule that decides the -D prefix above.
+            # 'treadmill', the basename of the application directory - the
+            # same rule that decides the -D prefix above.
             $cfg = Get-Content (Join-Path $out 'treadmill\zephyr\.config')
 
-            # 1. radiant's radio HAL. A null-radio node boots, logs
-            # "transmitting" and puts nothing on the air, and every other check
-            # still passes.
+            # 1. radiant's radio HAL, same failure mode as the node loop above.
             $want = "CONFIG_RADIANT_BACKEND_$($RadiantBackend.ToUpper())=y"
             if (-not ($cfg | Where-Object { $_ -eq $want })) {
                 $got = ($cfg | Where-Object { $_ -match '^CONFIG_RADIANT_BACKEND_\w+=y' })
                 throw "treadmill $($t.dir): expected $want in .config, found '$got'"
             }
 
-            # 2. The treadmill source. The TREADMILL_SOURCE choice is what makes
-            # "I forgot to unhook the simulator" unrepresentable.
+            # 2. The treadmill source, so a simulator left wired in fails the
+            # build instead of shipping.
             $wantSource = "CONFIG_TREADMILL_SOURCE_$($t.source)=y"
             if (-not ($cfg | Where-Object { $_ -eq $wantSource })) {
                 $got = ($cfg | Where-Object { $_ -match '^CONFIG_TREADMILL_SOURCE_(SIMULATED|CUSTOM)=y' })
                 throw "treadmill $($t.dir): expected $wantSource in .config, found '$got'"
             }
 
-            # 3. The second ANT+ master, asserted in BOTH directions.
-            #
-            # A `y` row proves the SDM channel is compiled; the fec_only row
-            # proves the fallback still configures. Kconfig writes an absent
-            # bool as `# CONFIG_X is not set`, which is a different claim from
-            # the symbol being omitted entirely, so the negative case is
-            # matched on that exact line rather than on the absence of `=y`.
+            # 3. The second ANT+ master, asserted in BOTH directions: a `y`
+            # row proves the SDM channel compiles, fec_only proves the
+            # fallback still configures. Kconfig writes an absent bool as
+            # `# CONFIG_X is not set`, so the negative case matches that exact
+            # line rather than the absence of `=y`.
             if ($t.sdm) {
                 if (-not ($cfg | Where-Object { $_ -eq 'CONFIG_TREADMILL_ANT_SDM=y' })) {
                     throw "treadmill $($t.dir): expected CONFIG_TREADMILL_ANT_SDM=y in .config"
@@ -838,29 +627,23 @@ try {
                 }
             }
 
-            # 4. The BLE interlock, on the rows that ask for BLE.
+            # 4. The BLE interlock. TREADMILL_BLE is set by the fragment; the
+            # other four are not, and that is the point of asserting them.
+            # Without the MPSL gate, radiant/Kconfig's `depends on !BT ||
+            # ..._GATE_MPSL` drops the nrf backend to null; with the gate but
+            # session count 0, every timeslot session_open() fails while the
+            # image still runs.
             #
-            # TREADMILL_BLE is set by the fragment; the other four are NOT, and
-            # that is the point of asserting them. Without the MPSL gate,
-            # radiant/Kconfig's `depends on !BT || ..._GATE_MPSL` drops the nrf
-            # backend to null; with the gate but a session count of 0, every
-            # timeslot session_open() fails while the image still runs.
+            # BT_SMP: FTMS Table 4.1 gives the control point security
+            # permission "Encryption", so a build without SMP would advertise
+            # a control point no client can ever write.
             #
-            # BT_SMP is the one that is new in this tree. FTMS Table 4.1 gives
-            # the control point security permission "Encryption", so a build
-            # without SMP would advertise a control point no client can ever
-            # write - which looks exactly like a machine that ignores commands.
-            #
-            # BT_LL_SOFTDEVICE is the one that was MISSING. apps/hrm_ble's row
-            # has asserted it since that application pinned the controller;
-            # TREADMILL_BLE did not `select` it and no row checked, so this
-            # application relied on the SDC merely being the default link layer
-            # for CONFIG_BT=y on nRF54L15. It is - verified from the real
-            # .config, so the gap was latent and never live - and that is
-            # exactly the sort of thing worth an assertion: the MPSL gate this
-            # whole application arbitrates through assumes the SDC, and a board
-            # or Kconfig change that quietly moved to the open-source LL would
-            # break the arbitration with a perfectly green build.
+            # BT_LL_SOFTDEVICE: TREADMILL_BLE does not `select` it, so this
+            # application relies on the SDC being the default link layer for
+            # CONFIG_BT=y on nRF54L15 (verified true from .config, but latent).
+            # The MPSL gate this application arbitrates through assumes the
+            # SDC; a board or Kconfig change that moved to the open-source LL
+            # would break arbitration with a perfectly green build.
             if ($t.ble) {
                 foreach ($sym in @('CONFIG_TREADMILL_BLE=y',
                                    'CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y',
@@ -873,14 +656,11 @@ try {
                     }
                 }
 
-                # 4b. The arbitration policy, which is a `choice` and therefore
-                # has an arm set whether or not anybody meant to set one. The
-                # EXCLUSIVE arm is the default and the one every bench and CI
-                # result below is taken against; TREADMILL_CTRL_POLICY_NONE
-                # restores last-writer-wins, which is a legitimate integrator
-                # choice and NOT a thing to ship from this tree by accident.
-                # Asserted rather than assumed for the same reason the source
-                # arm above is.
+                # 4b. The arbitration policy is a `choice`, so it has an arm
+                # set whether or not anyone meant to. EXCLUSIVE is the default
+                # every bench/CI result is taken against; NONE restores
+                # last-writer-wins, a legitimate integrator choice but not one
+                # to ship by accident.
                 if (-not ($cfg | Where-Object { $_ -eq 'CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE=y' })) {
                     throw "treadmill $($t.dir): expected " +
                           "CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE=y in .config - " +

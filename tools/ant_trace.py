@@ -9,31 +9,27 @@ Two directions; the reverse one is the one that works today.
 called before `ANT_Init`, the DLL writes `Device0.txt`, Garmin's own account of
 its own `Tx`/`Rx` bytes. That is a transcript from a stack neither
 `src/ant_serial_bridge.c` nor `tools/ant_probe.py` wrote, which is what catches
-a wrong *rule* rather than a constant-for-constant self-agreement (the two
-made the same checksum mistake and passed a full green suite against each
-other).
+a wrong *rule* rather than a constant-for-constant self-agreement.
 
     python tools/ant_trace.py <logdir>/Device0.txt --out zwift-pairing.antser
 
 **THE FORWARD PARSER IS UNVALIDATED AGAINST A REAL SAMPLE.** `Device0.txt`'s
 line format is documented nowhere and no sample was available when this was
 written. What follows is a set of *strict candidate dialects* guessed at
-plausible shapes, not written against a specimen - so it refuses to guess: an
-unrecognised line is a hard error naming the line and its text, never silently
-skipped, since a parser that skips what it doesn't understand turns a golden
-transcript into an incomplete one that still looks fine.
+plausible shapes - so it refuses to guess: an unrecognised line is a hard
+error naming the line and its text, never silently skipped, since a parser
+that skips what it doesn't understand turns a golden transcript into an
+incomplete one that still looks fine.
 
 To validate: produce a real `Device0.txt` (any Windows host with the ANT
-driver + `ANT_DLL.dll`; Zwift pairing a sensor is the case worth having, see
-`archive/captures/serial/README.md`), run with `--dump-unparsed`, and if lines
-fail add a `Dialect` below (name, note, regex, timestamp kind) rather than
-loosening an existing one. Then write the real format into
-`archive/captures/serial/README.md`, which currently says it's unknown.
-
-Two assumptions are most likely wrong and cheap to check against a sample:
-that `Tx` means host-to-dongle (the DLL's own point of view), and that logged
-bytes are the complete frame including SYNC and checksum - if frames turn out
-logged without SYNC, `frames_from_bytes()` is where that gets absorbed.
+driver + `ANT_DLL.dll`; Zwift pairing a sensor is the case worth having), run
+with `--dump-unparsed`, and if lines fail add a `Dialect` below (name, note,
+regex, timestamp kind) rather than loosening an existing one - then record the
+real format in `archive/captures/serial/README.md`, which currently says it's
+unknown. The two assumptions most likely wrong and cheapest to check against a
+sample: that `Tx` means host-to-dongle, and that logged bytes are the complete
+frame including SYNC and checksum (if not, `frames_from_bytes()` is where
+that gets absorbed).
 
 **Reverse.** `.antser` back to annotated text, decoding message ids and
 payloads through `tools/ant_wire.py`. Needs no sample and is what makes a byte
@@ -131,11 +127,11 @@ class Record:
 
 # ---------------------------------------------------------------------------
 # Frame splitting
-# A log line, or a USB packet, may carry more than one frame, and a Device0.txt
-# line plausibly carries a whole write buffer. Splitting on the length byte and
-# checking the checksum is the only way to tell where one ends - and it is also
-# the cheapest evidence that the byte extraction guessed right, because a wrong
-# guess almost never produces a run of frames that all check out.
+# A log line, or a USB packet, may carry more than one frame. Splitting on the
+# length byte and checking the checksum is the only way to tell where one
+# ends - and it is also the cheapest evidence the byte extraction guessed
+# right, since a wrong guess almost never produces a run of frames that all
+# check out.
 # ---------------------------------------------------------------------------
 
 
@@ -445,8 +441,8 @@ def annotate(records: Sequence[Record]) -> str:
 # Every dialect is a strict regex plus a timestamp kind. Strictness is the whole
 # design: a permissive pattern that matches "something that looks like hex after
 # something that looks like a direction" will happily read a summary line, a
-# byte count or a truncated buffer as a frame, and the resulting fixture is
-# wrong in a way nothing downstream can detect. Better to refuse and be told.
+# byte count or a truncated buffer as a frame, wrong in a way nothing
+# downstream can detect. Better to refuse and be told.
 #
 # ADDING A DIALECT: write one `Dialect(...)` entry. Nothing else changes.
 # ---------------------------------------------------------------------------

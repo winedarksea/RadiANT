@@ -9,7 +9,7 @@
  * LaunchXL and hoped for.
  *
  * DIO12 (RX) / DIO13 (TX) is not a guess and not the LaunchXL's answer.
- * scripts/ti/dss_pinmap.js halted the factory Zigbee image after letting it
+ * The dss_pinmap probe (retired) halted the factory Zigbee image after letting it
  * run its own init and read all 32 IOCFG registers back; DIO12 reported
  * PORT_ID = MCU_UART0_RX and DIO13 = MCU_UART0_TX. Those are the two pins the
  * CP2102N bridge is soldered to.

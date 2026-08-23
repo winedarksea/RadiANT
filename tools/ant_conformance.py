@@ -8,56 +8,32 @@ One board, no radio, no sensors, no statistics. Sends every message
 malformed - and writes the whole conversation to a `.antser` transcript. **The
 A/B is a byte diff of two transcripts; byte-identical is the pass.**
 
-    python tools/ant_conformance.py --serial <suffix> --out sdk-ant.antser
-    # reflash the other backend, then
-    python tools/ant_conformance.py --serial <suffix> --out core.antser
-    python tools/ant_conformance.py --compare sdk-ant.antser core.antser
-
-Catches response codes, reply framing/sizes, error mapping, and the
-leading-index-byte shapes in `handle_request()` (mask number vs. encryption
-info type vs. channel in the same slot) - without a sensor, a second board, or
-a single statistic.
-
-Determinism rules, all load-bearing:
-
-* Timestamp column is always `-` (real timestamps never repeat;
-  `archive/captures/serial/README.md`).
-* Every case starts from a stack reset, so a case's meaning can't depend on
-  what the previous one left behind.
-* Nothing here transmits: `MESG_RADIO_CW_MODE`, `MESG_RADIO_CW_INIT`,
-  `MESG_OPEN_RX_SCAN_MODE` are excluded outright (see `EXCLUDED`), and
-  `MESG_OPEN_CHANNEL` only runs on a channel with no id set, refused before
-  the radio is touched - an open channel hearing the room would break
-  byte-identical repeatability.
-* Cases run in a fixed order; replies recorded in arrival order.
-
-Cases are generated from `tools/ant_wire.py`'s `MESSAGES`/`BRIDGED_MESSAGE_IDS`,
-so a message added to `protocol/ant_wire.yaml` enters the run by itself.
-`CANONICAL` gives a *sensible* payload where it has an opinion; anything else
-gets a case built from its declared `payload_len`.
-
-A bench sitting: one board, no sensors, nothing on the air, ~260 cases at
-roughly a second each (~5 min per backend plus reflash):
-
-    python tools\ant_conformance.py --serial <suffix> --out conformance-sdk-ant.antser --json conformance-sdk-ant.json
+    python tools/ant_conformance.py --serial <suffix> --out sdk-ant.antser --json sdk-ant.json
     # reflash the other backend on the same board, same session
-    python tools\ant_conformance.py --serial <suffix> --out conformance-core.antser --json conformance-core.json
-    python tools\ant_conformance.py --compare conformance-sdk-ant.antser conformance-core.antser
+    python tools/ant_conformance.py --serial <suffix> --out core.antser --json core.json
+    python tools/ant_conformance.py --compare sdk-ant.antser core.antser
 
 `--serial` is not optional in practice: two boards enumerate as the same
 `0FCF:1009`. The sdk-ant transcript is the Tier 1 reference, belongs in
 `archive/captures/serial/` with its hash in the sitting's baseline JSON
-(`conformance.antser_path`, `conformance.sha256`), and can only be recorded
-while a working sdk-ant build exists.
+(`conformance.antser_path`, `conformance.sha256`).
 
+Exit status: 0 (`--list`/`--replay`, or `--compare` where the transcripts
+match); 1 if `--compare` finds a difference.
+
+The trap: determinism here is deliberate, not incidental, and every rule below
+is load-bearing. Timestamp column is always `-` (real timestamps never
+repeat). Every case starts from a stack reset, so a case's meaning can't
+depend on what the previous one left behind. `MESG_RADIO_CW_MODE`,
+`MESG_RADIO_CW_INIT`, `MESG_OPEN_RX_SCAN_MODE` are excluded outright (see
+`EXCLUDED`), and `MESG_OPEN_CHANNEL` only runs on a channel with no id set -
+an open channel hearing the room would break byte-identical repeatability.
 The settle floor is `ant_probe.READ_TIMEOUT_MS`, deliberately a full second: a
 read timeout racing a reply loses the answer - the bug that once manufactured
-0.4pp of imaginary packet loss.
-
-`--compare` reports differences by case name, not byte offset. One expected
-difference: `MESG_VERSION` returns the backend's own name, so sdk-ant and
-`radiant` can't and shouldn't match. Use `--allow-differing-case` for it,
-recorded in `tools/ab_gates.toml` for review.
+0.4pp of imaginary packet loss. `--compare` reports differences by case name,
+not byte offset; one expected difference is `MESG_VERSION` (each backend
+reports its own name) - use `--allow-differing-case` for it, recorded in
+`tools/ab_gates.toml` for review.
 """
 
 from __future__ import annotations
@@ -548,8 +524,9 @@ def _collect(reader, case_name: str, seconds: float, state: RunState,
 def run_cases(dev, reader, cases, *, settle: float, reset_each: bool,
               verbose: bool, reset_timeout: float = 3.0) -> RunState:
     """Drive every case against an open device and record the conversation."""
-    # Imported here, not at top, so --list/--replay/--compare and the unit
-    # tests never need a device import.
+    # Imported here, not at module scope: ant_probe sys.exit()s on import when
+    # pyusb is missing, and --list/--replay/--compare (and the unit tests) need
+    # no USB at all.
     from ant_probe import EP_OUT
 
     state = RunState()

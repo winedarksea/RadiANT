@@ -10,8 +10,7 @@ passes over COM15 while Zwift sees nothing at all.
 
 The only trustworthy way to ask is to ask the binary Zwift asks. This loads
 that exact DLL, drives the same enumeration entry points, and calls the same
-`ANT_Init` Zwift calls. Anything else - reading INF files, comparing VID/PIDs
-by eye - is inference, and inference is what cost this project two sessions.
+`ANT_Init` Zwift calls.
 
     python tools/ant_zwift_visible.py
     python tools/ant_zwift_visible.py --dll "D:/Games/Zwift/ANT_DLL.dll"
@@ -19,46 +18,18 @@ by eye - is inference, and inference is what cost this project two sessions.
 Exit status is 0 only if ANT_DLL enumerated at least one device AND ANT_Init
 succeeded, i.e. only if Zwift would work.
 
-CALIBRATE THIS BEFORE BELIEVING A NEGATIVE RESULT
--------------------------------------------------
-As of 2026-08-21 this tool has never returned PASS, so it has no positive
-control. A FALSE from `ANT_Init` therefore has two readings that cannot yet be
+The trap: as of 2026-08-21 this tool has never returned PASS, so it has no
+positive control. A FALSE from `ANT_Init` has two readings that cannot yet be
 told apart: "Zwift could not see the dongle", or "this harness does not set
-something up the way Zwift does". Zwift does use this library - `ZwiftApp.exe`
-contains `ANT_DLL.dll`, `ANT_Init` and the string "ANT_Init threw an exception,
-disabling the use of ANT." - but that does not make the harness equivalent.
+something up the way Zwift does". **Run it once with a known-good nRF52840
+stick attached and confirm it PASSes; until then, treat every FAIL here as
+unproven.**
 
-**Run it once with a known-good nRF52840 stick attached and confirm it PASSes.**
-Until then, treat every FAIL here as unproven. Investigation notes, including
-what ANT_DLL was observed NOT to do, are in docs/ti-dongle-usb-identity.md.
-
-WHAT THIS TOOL MEASURED, so the next person need not re-derive it
------------------------------------------------------------------
-ANT_DLL (ALU3.200) carries three transports, visible in its RTTI:
-
-  USBDeviceLibusb + LibusbLibrary   raw bulk through libusb0.dll
-  USBDeviceSI     + SiLabsLibrary   Silicon Labs USBXpress (SI_Open/SI_Read/..)
-  DSISerialVCP                      a COM port, opened as "\\\\.\\COM%u"
-
-Only the first two are reachable from an application. Selecting the VCP
-transport needs `ANT_InitExt`'s ucPortType argument, and **`ANT_InitExt` is not
-exported** - the export table has `ANT_Init` and nothing else that takes a port
-type. So "just put it on a COM port" cannot work however the dongle enumerates.
-
-And the acceptance test is on the VENDOR ID ONLY. Two helpers do it:
-
-    call [rax]          ; GetVid()
-    mov  ecx, 0FCFh     ; Dynastream
-    cmp  ax, cx
-    je   accept
-    mov  ecx, 1915h     ; Nordic Semiconductor
-    cmp  ax, cx
-    je   accept
-    xor  eax, eax       ; reject
-
-There is no product-ID comparison anywhere in the binary. That is what makes
-the CP2102N impersonation tractable: the PID is free, so it can be chosen to
-avoid colliding with the libusb0 binding that the nRF52840 sticks rely on.
+ANT_DLL's acceptance test is on the VENDOR ID ONLY - `0x0FCF` or `0x1915`,
+with no product-ID comparison anywhere in the binary (full disassembly
+findings in `docs/ti-dongle-usb-identity.md`). That is what makes the CP2102N
+impersonation tractable: the PID is free, so it can be chosen to avoid
+colliding with the libusb0 binding the nRF52840 sticks rely on.
 """
 
 from __future__ import annotations
@@ -73,11 +44,10 @@ import time
 
 DEFAULT_DLL = r"C:\Program Files (x86)\Zwift\ANT_DLL.dll"
 
-# The three backends, and where each is loaded from. ANT_DLL statically imports
-# only KERNEL32 and USER32 - every one of these is reached through LoadLibrary,
-# so a missing one fails SOFTLY and simply removes that transport. That is why
-# Zwift runs happily with two of the three absent, and why "it found nothing"
-# never points at the cause on its own.
+# Every backend is reached through LoadLibrary (ANT_DLL statically imports
+# only KERNEL32/USER32), so a missing one fails SOFTLY and simply removes
+# that transport - which is why "it found nothing" never points at the cause
+# on its own.
 BACKENDS = (
     ("libusb0.dll", "raw bulk (nRF52840 sticks, 0FCF:1008/1009)"),
     ("DSI_SiUSBXp_3_1.DLL", "Silicon Labs USBXpress (CP210x-based sticks)"),
@@ -200,10 +170,8 @@ def main() -> int:
     #     mov   esi, edx   ; baud rate
     #     movzx ebx, r8b   ; port type   0 = USB, 1 = COM
     #     movzx edi, r9b   ; framer type 0 = basic
-    # Calling it with two arguments leaves r8/r9 holding whatever happened to
-    # be there, and it then fails without performing a single I/O operation -
-    # which reads exactly like "no dongle" and is nothing of the sort. That
-    # mistake made this tool report FAIL for a dongle ANT_DLL opens happily.
+    # Calling it with two arguments leaves r8/r9 holding garbage and it fails
+    # without a single I/O operation - reads exactly like "no dongle" and isn't.
     lib.ANT_Init.restype = C.c_bool
     lib.ANT_Init.argtypes = [C.c_ubyte, C.c_ulong, C.c_ubyte, C.c_ubyte]
     init = False
@@ -219,14 +187,13 @@ def main() -> int:
                 time.sleep(1.0)
 
             # AFTER the open, never before: ANT_GetDeviceUSB* report on a
-            # device that is already open, so enumerating first always returns
-            # nothing and says nothing about visibility.
+            # device that is already open, so enumerating first returns
+            # nothing.
             #
-            # Off by default because it FAULTS on a device reached over the
-            # USBXpress/COM transport - that device has no USB descriptor
-            # behind it and ANT_DLL dereferences a null writing the result
-            # ("access violation writing 0x0"). It is informational either way,
-            # and a crash here would skip ANT_Close and leave the port open.
+            # Off by default: it FAULTS on the USBXpress/COM transport (no
+            # USB descriptor behind it, so ANT_DLL null-derefs writing the
+            # result - "access violation writing 0x0"), and a crash here
+            # would skip ANT_Close and leave the port open.
             if args.enumerate_usb:
                 print("\n--- what ANT_DLL says it opened ---")
                 try:

@@ -6,26 +6,21 @@
 
 .DESCRIPTION
     The console for boards that have none. On the CC2652P + CP2102N dongle the
-    single wired UART carries the ANT wire protocol and nothing else may appear
-    in it, and the second UART's pads are inside a sealed shell - so the log
-    goes to an RTT ring buffer in RAM and this reads it back through the same
-    JTAG rig that flashed the image.
+    single wired UART carries the ANT wire protocol only, and the second
+    UART's pads are inside a sealed shell - so the log goes to an RTT ring
+    buffer in RAM, read back through the same JTAG rig that flashed the image.
+    NO USB CONNECTION TO THE DONGLE IS NEEDED.
 
-    NO USB CONNECTION TO THE DONGLE IS NEEDED. That is the property that makes
-    bring-up on this board possible at all: flash, read the boot banner, decide
-    what is wrong, all over four wires.
-
-    Two lookups happen here rather than in the DSS script, because both are
-    exact and free from the host side and both have a failure mode that is
-    silent from inside the target:
+    Two things are resolved here rather than in the DSS script, both with a
+    failure mode silent from inside the target:
 
       * The RTT control block address, read out of the ELF that was flashed.
-        Searching RAM for the "SEGGER RTT" signature also works, and is what
-        SEGGER's tools do, but it can find a STALE block from a previous image
-        and report an old boot as a new one.
+        Searching RAM for the "SEGGER RTT" signature (what SEGGER's tools do)
+        can instead find a STALE block from a previous image and report an
+        old boot as a new one.
       * java.exe, which dss.bat needs on PATH and which UniFlash ships its own
-        copy of. Without it dss.bat fails with a bare "java is not recognized",
-        which reads like a broken install rather than a PATH.
+        copy of. Without it dss.bat fails with a bare "java is not
+        recognized", which reads like a broken install rather than a PATH.
 
 .PARAMETER Elf
     The zephyr.elf that was flashed. Defaults to the newest one under build\ti*.
@@ -129,9 +124,8 @@ Pass -Dss <path> for one somewhere else.
 "@
 }
 
-# UniFlash carries its own JRE at <install>\jre\bin and dss.bat does not put it
-# on PATH itself; without it dss.bat dies with a bare "java is not recognized",
-# which reads like a broken install rather than a missing PATH entry.
+# UniFlash carries its own JRE at <install>\jre\bin; dss.bat does not put it
+# on PATH itself.
 $jre = @(Get-ChildItem 'C:\ti' -Filter 'java.exe' -Recurse -ErrorAction SilentlyContinue |
          Select-Object -First 1)
 if ($jre.Count -gt 0) { $env:PATH = "$(Split-Path $jre[0].FullName -Parent);$env:PATH" }

@@ -15,12 +15,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 
-# The image name under a sysbuild build directory is APP_DIR's own basename, so
-# it is 'dongle_thread' for the P4 arms and 'dongle' for an apps/dongle build -
-# and a plain non-sysbuild build has neither level. All three are tried rather
-# than one assumed: this script used to hard-code 'dongle_thread', which meant
-# it could not flash the apps/dongle sweep-debug image Phase 1.2 is measured on,
-# and failed with "no image at <a path nobody asked for>".
+# The image name under a sysbuild build directory is APP_DIR's own basename,
+# so it is 'dongle_thread' for the P4 arms and 'dongle' for an apps/dongle
+# build - and a plain non-sysbuild build has neither level. All three are
+# tried rather than one assumed.
 $candidates = @(
     (Join-Path $repo "build\$Dir\dongle_thread\zephyr\zephyr.hex"),
     (Join-Path $repo "build\$Dir\dongle\zephyr\zephyr.hex"),

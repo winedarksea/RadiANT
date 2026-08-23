@@ -6,6 +6,11 @@
     python tools/ant_health.py --port COM8
     python tools/ant_health.py --json
 
+Exit status: 0 on a valid reply; 1 if the reply is malformed; 2 if the
+firmware lacks CONFIG_ANT_DONGLE_HEALTH_COUNTERS=y and answers INVALID_MESSAGE
+(distinct from 0, because "the feature is absent" and "nothing has been
+dropped" must never be printed the same way).
+
 Every number here is loss or near-loss that happened INSIDE the dongle or on
 the host link, and therefore produced no RX_FAIL for tools/ant_verify.py to
 account for. That is the whole point of it: tools/ab_gates.toml's
@@ -20,11 +25,6 @@ radio never lost, and a zero delta says the loss was real air.
 
 The reply is request-only - the dongle never sends 0xF6 unsolicited - so
 running this alongside another tool cannot perturb that tool's stream.
-
-Needs a build with CONFIG_ANT_DONGLE_HEALTH_COUNTERS=y. Without it the dongle
-answers INVALID_MESSAGE, which this reports as such rather than as a zero
-reading: "the feature is absent" and "nothing has been dropped" are completely
-different answers and must never be printed the same way.
 
 ON A UART BUILD, tx_drops, tx_high_water and rx_backpressure are structurally
 zero and mean nothing. All three are counted in apps/common/usb_ant_class.c,

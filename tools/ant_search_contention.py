@@ -29,6 +29,9 @@ interference does not lose exactly every second one.
 
     python tools/ant_search_contention.py --seconds 30
 
+Exit status: 0 once all three legs complete and print; 1 on any rig or setup
+failure (no sensor acquired, a channel that won't open, etc).
+
 Needs a sensor on air, as ant_scan.py does. It picks the one it hears most in
 an opening sweep, so spin the cranks or wear the strap while it starts.
 """

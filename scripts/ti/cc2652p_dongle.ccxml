@@ -18,7 +18,7 @@
 
     * The ROM serial bootloader does not answer. cc2538-bsl was run with all
       four of its auto-BSL wirings (its default, plus the invert-lines,
-      active-high and sonoff-usb options), and scripts/ti/bsl_probe.py
+      active-high and sonoff-usb options), and a bsl_probe sweep (retired)
       swept both modem lines at both polarities, plus 75 s of sync-spam while a
       human worked all three buttons. Every one: "Timeout waiting for ACK/NACK
       after 'Synch (0x55 0x55)'". E72-class CC2652P modules ship with the CCFG

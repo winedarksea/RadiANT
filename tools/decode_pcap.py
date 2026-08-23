@@ -178,8 +178,8 @@ def decode(path: Path, raw: bool = False, only_device: int | None = None):
     # -All carries every device behind the filter device, and concatenating two
     # devices' bulk bytes into one buffer splices unrelated streams together:
     # the reframer then resynchronises through the wreckage and emits messages
-    # that were never sent. Real risk, not theoretical - a 2026-08-18 capture
-    # had the ANT stream under address 255 and a second address alongside it.
+    # that were never sent - a real risk, not a theoretical one (see the module
+    # docstring's `{7: 74, 255: 22162}` capture).
     streams: dict[tuple[int, bool], bytearray] = {}
     lines: list[str] = []
     t0 = None

@@ -2,23 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Drive both ends of an acknowledged ANT+ exchange and count at BOTH ends.
 
-WHY THIS EXISTS. An originator physically cannot tell "my packet never arrived"
-from "it arrived and the reply was lost" - every failure mode of an
-acknowledged transfer surfaces at the sender as the same FAIL_NO_ACK. Two whole
-bench sessions were spent inside that ambiguity, and one of them produced a
-confident, wrong "hypothesis REFUTED" that got a correct fix reverted. So this
-tool holds BOTH boards and reports what each one actually saw.
-
-AND IT KEEPS THREE NUMBERS APART, which is the other half of that mistake:
-
-    slots transmitted        the receiver's own channel period, 4 Hz
-    broadcasts received      the peer's ordinary data
-    acknowledged received    the thing under test
-
-Conflating the first and third is what produced the wrong conclusion: ~219
-events in 55 s is 4 Hz - the receiver's own slots - not a delivery count. Any
-number near `4 x seconds` should be assumed to be a slot count until proven
-otherwise.
+An originator physically cannot tell "my packet never arrived" from "it
+arrived and the reply was lost" - every failure mode of an acknowledged
+transfer surfaces at the sender as the same FAIL_NO_ACK. This tool holds BOTH
+boards and reports what each one actually saw.
 
 THE RIG. Two boards, both running apps/dongle, both host-controlled here:
 
@@ -31,10 +18,23 @@ THE RIG. Two boards, both running apps/dongle, both host-controlled here:
     --log-port      optional console of the master, captured concurrently so
                     firmware counters line up with what the hosts saw
 
-Example:
-
     python tools/ant_ack_pair.py --master-port COM8 \
         --slave-serial 755972D7183A6183 --log-port COM7 --sends 8
+
+Exit status: 1 if either board fails to open/configure, or (`--lone-master`)
+if data arrives with no peer transmitting; 0 otherwise - outside
+`--lone-master` this is a diagnostic printout, not an automated gate.
+
+The trap: keep three numbers apart.
+
+    slots transmitted        the receiver's own channel period, 4 Hz
+    broadcasts received      the peer's ordinary data
+    acknowledged received    the thing under test
+
+Conflating the first and third once produced a wrong conclusion: ~219 events
+in 55 s is 4 Hz - the receiver's own slots - not a delivery count. Any number
+near `4 x seconds` should be assumed to be a slot count until proven
+otherwise.
 """
 from __future__ import annotations
 
@@ -399,17 +399,13 @@ def main() -> int:
         outcomes[got] = outcomes.get(got, 0) + 1
         print(f"  {i + 1}/{args.sends}: {got}")
 
-    # THE MEASUREMENT THAT SEPARATES THE TWO CANDIDATE DEFECTS. Everything the
-    # master hears from here on arrives after the originator's host has been
-    # told the transfer ended and has sent nothing further. A receive-path
-    # amplifier would be quiet in this window; an originator that never stops
-    # transmitting would not.
-    # THE CONTROL ARM, and it is the one that matters. 4 messages a second is
-    # also exactly the channel period, so "the master's host saw 4/s" is
-    # equally consistent with the originator still transmitting and with the
-    # receiver manufacturing one report per slot out of nothing. Closing the
-    # originator's channel removes it from the air entirely: anything still
-    # arriving afterwards cannot have come from it.
+    # THE MEASUREMENT THAT SEPARATES THE TWO CANDIDATE DEFECTS. After the
+    # originator's host is told the transfer ended, a receive-path amplifier
+    # would go quiet while a still-transmitting originator would not. But 4
+    # messages/s also equals the channel period, so "saw 4/s" alone doesn't
+    # distinguish them - closing the originator's channel is the control arm:
+    # it removes it from the air, so anything still arriving afterwards
+    # cannot have come from it.
     if args.close_originator:
         print("\nCLOSING the originator's channel - it is now off the air")
         slave.write(EP_OUT, frame(MESG_CLOSE_CHANNEL_ID, bytes([CHANNEL])))

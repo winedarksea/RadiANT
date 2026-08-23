@@ -6,74 +6,42 @@
     discipline built in rather than remembered.
 
 .DESCRIPTION
-    Six runs make up the sitting and the difference between them is two switches:
-    which image is on the DUT, and whether the host is holding an ANT channel.
-    Everything else must be identical across all six or the arms are not
-    comparable - which is why it is a script and not a checklist.
+    Six runs make up the sitting and the difference between them is two
+    switches: which image is on the DUT, and whether the host is holding an
+    ANT channel. Everything else must be identical across all six or the
+    arms are not comparable - which is why it is a script and not a
+    checklist.
 
-    WHAT IT DOES IN ORDER, AND WHY EACH STEP IS NOT OPTIONAL:
+    - `ot state` on the peer before AND after the run: a dead peer and a
+      broken DUT both present as `detached` then silence, and only the pair
+      of readings can tell them apart.
+    - Flash and RESET the DUT every arm, even if the image is already
+      loaded: the gate counters are cumulative since boot, so a board left
+      running from the previous arm gives a false "0 packets" reading.
+    - The DUT log VCOM (COM7) and the ANT VCOM (COM8) are captured for the
+      same window on two separate instruments, so the scheduler cost and
+      the air cost come from the same run.
+    - ANT-loaded arms run ant_sim.py as master and ant_verify.py as
+      measurer; ANT-idle arms open no channel at all, as the reference for
+      what the second stack costs while placing no windows.
 
-    1. `ot state` on the peer BEFORE the run. A dead peer and a broken DUT both
-       present as `detached` then silence, and after the fact they are
-       indistinguishable. Asked again at the end for the same reason: a peer that
-       died halfway invalidates the arm, and only the pair of readings can say
-       so.
+    The profile is power, not heart-rate: `loss (exact)` is only computed
+    when the transmitter's event counter steps once per message
+    (`std_event_still == 0`). A heart-rate master's counter steps per BEAT -
+    at 145 bpm on a 4 Hz channel it advances on only ~107 of 180 packet
+    pairs, so no exact figure is produced. Power's page 0x10 counter steps
+    per message and gives `loss (exact) 0.00 %` on a short run, but not over
+    this gate's 240 s: measured 40 s clean vs. 9 repeats in 944 pairs at
+    240 s, because ant_sim.py re-broadcasts its last payload until the host
+    loads the next one, and a receiver catching the same payload twice
+    double-counts the event.
 
-    2. Flash and RESET the DUT. The gate counters are cumulative since boot, so
-       an arm taken on a board that has been up since the previous arm is not a
-       reading. This is also the step whose absence produced two "0 packets"
-       results earlier in this sitting that looked exactly like a dead radio and
-       were nothing of the kind.
-
-    3. Capture the DUT log VCOM (COM7) for the whole arm, while ant_verify.py
-       holds the ANT VCOM (COM8). Two ports, two instruments, one run - the gate
-       dump and the loss figure have to come from the same 240 seconds or the
-       scheduler cost cannot be read against the air cost.
-
-    4. In an ANT-LOADED arm, ant_sim.py drives the master and ant_verify.py
-       measures. In an ANT-IDLE arm the host opens NO channel at all - that is
-       the whole point of it: it is the reference that says what the second stack
-       costs when we are placing no windows. An arm whose other stack is idle is
-       not a coexistence arm, and this project has paid for that once already.
-
-    THE PROFILE IS POWER, NOT HEART-RATE, AND THAT IS A CORRECTION.
-    `loss (exact)` is the figure this whole gate is read against, and
-    ant_verify.py only computes it when the transmitter's event counter never
-    once stands still (`std_event_still == 0`) - which proves the counter steps
-    per message rather than per pedal stroke. A heart-rate master's counter steps
-    per BEAT: at 145 bpm against a 4 Hz channel it advances on about 107 of 180
-    packet pairs, so no exact loss is produced at all and the run can only be
-    read on the wall clock. Measured on this bench, both ways round. Power's
-    page 0x10 counter steps per message and yields `loss (exact) 0.00 %` on the
-    same rig - over a SHORT run.
-
-    AND OVER A 240 s RUN IT DOES NOT, WHICH IS A LIMITATION OF THIS SITTING AND
-    HAS TO BE STATED RATHER THAN WORKED AROUND.
-
-    `loss (exact)` needs std_event_still == 0: the transmitter's counter must
-    never once repeat between two page 0x10 packets. With ant_sim.py driving a
-    dongle as the master, it eventually does - an ANT master re-broadcasts its
-    current payload until the host loads the next one, and any window in which
-    the receiver catches the same payload twice delivers the same event count
-    twice. Measured here: 40 s clean, 240 s with 9 repeats in 944 pairs. So the
-    exact figure is simply absent on the long runs this gate requires.
-
-    THE ARMS ARE STILL COMPARABLE, and that is what the gate reads. Every arm
-    uses the identical transmitter, receiver, reader and rig, so a systematic
-    bias in the transmitter cancels in the arm-to-arm delta - which is the
-    quantity [gates.coexistence] compares. What is lost is the ability to
-    compare this sitting's ABSOLUTE loss against the characterised ~0.4 % floor,
-    and the write-up must say so.
-
-    THE PROPER FIX IS A DIFFERENT TRANSMITTER, not a different reading:
+    The arms are still comparable against each other - same
+    transmitter/receiver/rig on every arm, so a systematic bias cancels in
+    the arm-to-arm delta - but this sitting's ABSOLUTE loss is not
+    comparable to the characterised ~0.4 % floor.
     archive/benchmarks/baseline.schema.json already refuses ant_sim_py as a
-    baseline transmitter for this reason and wants sim_firmware or a real
-    sensor. The Feather that normally carries it would not enumerate after two
-    flashes in this session, and the nRF52840 Dongle it was replaced with is the
-    only master left on the bench. Re-take these numbers against sim_firmware
-    when the Feather is back.
-
-    ASCII only: Windows PowerShell 5.1 reads .ps1 as ANSI without a BOM.
+    baseline transmitter for this reason; use sim_firmware when available.
 
 .EXAMPLE
     .\scripts\p4_arm.ps1 -Arm p4ctrl -Label control
@@ -194,12 +162,11 @@ if ($AntIdle) {
     [IO.File]::WriteAllText("$base-sim.txt", $simText)
 }
 
-# WAITED FOR, NOT SLEPT AT. The capture job returns its whole transcript as a
-# single string from the END of its script block, so Receive-Job on a job that
-# is still running hands back nothing at all - and "nothing at all" from the log
-# VCOM is the exact signature of the DTR mistake this bench keeps making, so it
-# gets misread rather than noticed. The first arm of this sitting reported
-# "gate: (none)" for precisely this reason and the gate was working perfectly.
+# WAITED FOR, NOT SLEPT AT: the capture job returns its whole transcript as a
+# single string from the END of its script block, so Receive-Job on a job
+# still running hands back nothing - which is the same signature as the DTR
+# mistake this bench keeps making, so a premature read gets misread as a dead
+# gate rather than noticed as a race.
 Wait-Job -Job $capJob -Timeout ($Seconds + 60) | Out-Null
 $logText = (Receive-Job -Job $capJob | Out-String)
 [IO.File]::WriteAllText("$base-console.log", $logText)

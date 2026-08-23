@@ -14,6 +14,9 @@ it rather than assuming.
     python tools/ant_rf6_capture.py --seconds 120 \
         --expect-seen 0x60A0 --expect-unseen 0x60B0
 
+Exit status: 0 on VERDICT PASS (or an inconclusive survey run with no
+`--expect-seen`); 1 on VERDICT FAIL or a rig/setup failure.
+
 ## The experiment this grades
 
 A separate board transmits two frames, both device type 0x60:
@@ -79,10 +82,9 @@ from ant_probe import (  # noqa: E402
 )
 
 # ant_scan.py owns the ANT+ network key, the frequency, the device-type names
-# and the command/acknowledge wrapper. Importing them is the pattern the other
-# tools already follow (ant_verify.py imports the same three from it), and it
-# is what keeps this tool speaking the same opening sequence as the one whose
-# behaviour it is deliberately departing from in exactly one byte.
+# and the command/acknowledge wrapper (ant_verify.py imports the same three) -
+# what keeps this tool speaking the same opening sequence as the one whose
+# behaviour it deliberately departs from in exactly one byte.
 from ant_scan import (  # noqa: E402
     ANT_PLUS_FREQ,
     ANT_PLUS_KEY,
@@ -127,11 +129,10 @@ CHANNEL = 0
 
 # The assignments to try, best first. #1 is what this tool needs. #2 is the
 # Zwift capture in test_api.c (`ASSIGN_CHANNEL 00 40 00 01`) - rx-only rather
-# than bidirectional, same search behaviour, tried in case a stock dongle is
-# fussier about the pair. #3 is ant_scan.py's plain 3-byte assign - a
-# **failure mode, not a fallback**: it locks onto the first device heard, so
-# it disqualifies the run (see grade()) but at least yields a diagnosis
-# instead of a traceback on a dongle with no extended assignment.
+# than bidirectional, tried in case a stock dongle is fussier about the pair.
+# #3 is ant_scan.py's plain 3-byte assign - a **failure mode, not a
+# fallback**: it locks onto the first device heard and disqualifies the run
+# (see grade()), but at least yields a diagnosis instead of a traceback.
 ASSIGNMENTS = (
     (bytes([CHANNEL, CHANNEL_TYPE_SLAVE, 0x00, EXT_PARAM_ALWAYS_SEARCH]),
      "assign channel (slave + background scan)", True),
@@ -341,9 +342,6 @@ def main() -> int:
     # 0xE0 is all three extended fields: channel id, RSSI, receive timestamp.
     # The channel id is not optional here - it IS the measurement, and without
     # it every broadcast arrives anonymous and no device number can be graded.
-    # The other two are free for the asking and keep this tool on the same lib
-    # config as every other one, so its RSSI figures are read on the same scale
-    # as ant_verify.py's.
     if not command(dev, reader, MESG_ANTLIB_CONFIG_ID,
                    bytes([0x00, LIB_CONFIG_ALL_EXT_FIELDS]),
                    "extended messages"):

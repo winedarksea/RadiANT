@@ -8,12 +8,10 @@
     Replaces the macOS scripts/flash_uf2.sh. `west flash` is not usable here:
     the uf2 runner dies with "ValueError: uf2 doesn't support --dev-id option".
 
-    Double-tap RESET on the Feather first so FTHR840BOOT mounts. The bootloader
-    reboots into the new application as soon as the copy completes, which makes
-    the volume vanish mid-write - Copy-Item reporting a disconnect at the very
-    end is normal and is treated as success.
-
-    ASCII only: Windows PowerShell 5.1 reads .ps1 as ANSI without a BOM.
+    Double-tap RESET on the Feather first so FTHR840BOOT mounts. The
+    bootloader reboots into the new application as soon as the copy
+    completes, which makes the volume vanish mid-write - Copy-Item reporting
+    a disconnect at the very end is normal and is treated as success.
 
 .PARAMETER Uf2Path
     UF2 image to flash. Defaults to the newest zephyr.uf2 under build\.

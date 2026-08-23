@@ -6,28 +6,24 @@
     workspace's own Zephyr already pins.
 
 .DESCRIPTION
-    NCS cannot fetch this module and `west update` will never produce it, which
-    is why a script exists rather than a line in the README.
+    NCS cannot fetch this module and `west update` will never produce it.
 
     The mechanism: nrf/west.yml imports zephyr's manifest through a
-    `name-allowlist`, and hal_ti is not on that list, so the project is dropped
-    from the *resolved* manifest. It is therefore not "a project west chose not
-    to clone" - it is a project west has never heard of, and
-    `manifest.project-filter` cannot re-add one the resolved manifest does not
-    define. The revision below is nonetheless authoritative: it is read from
-    <ncs>\zephyr\west.yml, which still carries the pin, so this script never
-    invents a version.
+    `name-allowlist`, and hal_ti is not on that list, so it is dropped from
+    the *resolved* manifest - not "a project west chose not to clone" but one
+    west has never heard of, which `manifest.project-filter` cannot re-add.
+    The revision below is still authoritative: it is read from
+    <ncs>\zephyr\west.yml, which carries the pin, so this script never invents
+    a version.
 
-    The result is dropped at <ncs>\<version>\modules\hal\ti - beside the other
-    HALs the workspace already carries, exactly where west would
-    have put it, so that -DEXTRA_ZEPHYR_MODULES=<that path> is the only build
-    flag ever needed and nothing has to move if NCS starts shipping it.
+    The result is dropped at <ncs>\<version>\modules\hal\ti, beside the other
+    HALs the workspace already carries, so -DEXTRA_ZEPHYR_MODULES=<that path>
+    is the only build flag ever needed.
 
     A single-revision fetch rather than a clone: hal_ti carries the SimpleLink
     SDK sources and its full history is a multi-GB download for one commit.
 
-    ASCII only, deliberately: Windows PowerShell 5.1 reads .ps1 files as ANSI
-    unless they carry a BOM, so non-ASCII characters here become parse errors.
+    ASCII only: Windows PowerShell 5.1 reads .ps1 files as ANSI without a BOM.
 
 .PARAMETER NcsVersion
     Which NCS install to place the module in. Its zephyr\west.yml supplies the
@@ -118,9 +114,8 @@ if (-not (Test-Path (Join-Path $dest '.git'))) {
     if ($LASTEXITCODE -ne 0) { throw "git remote add failed in $dest" }
 }
 
-# --depth 1 of the exact SHA. GitHub allows fetching an unadvertised but
-# reachable commit, so this pulls one revision of a repository whose full
-# history is several GB of vendored SimpleLink sources.
+# --depth 1 of the exact SHA: GitHub allows fetching an unadvertised but
+# reachable commit.
 Write-Host "Fetching $Revision from $url ..."
 & git -C $dest fetch --depth 1 origin $Revision
 if ($LASTEXITCODE -ne 0) {

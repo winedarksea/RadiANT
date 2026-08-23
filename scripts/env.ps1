@@ -5,17 +5,17 @@
     Put an nRF Connect SDK toolchain on PATH for the current PowerShell session.
 
 .DESCRIPTION
-    The Nordic toolchain bundles carry their own git.exe, west.exe, cmake, ninja
-    and the Zephyr SDK compilers. None of them are on the system PATH, so a bare
-    `west build` fails until this runs. The bundle ships an environment.json
-    describing exactly what to set; this script applies it, session-scoped only.
+    The Nordic toolchain bundles carry their own git.exe, west.exe, cmake,
+    ninja and the Zephyr SDK compilers, none of them on the system PATH, so a
+    bare `west build` fails until this runs. The bundle ships an
+    environment.json describing exactly what to set; this script applies it,
+    session-scoped only, and writes nothing to the registry.
 
-    Nothing is written to the registry and ZEPHYR_BASE is deliberately left
-    alone - always pass `west -z <ncs>\zephyr` so a stray ZEPHYR_BASE cannot
-    silently target the wrong SDK.
+    ZEPHYR_BASE is deliberately left alone - always pass `west -z
+    <ncs>\zephyr` so a stray ZEPHYR_BASE cannot silently target the wrong SDK.
 
-    ASCII only, deliberately: Windows PowerShell 5.1 reads .ps1 files as ANSI
-    unless they carry a BOM, so non-ASCII characters here become parse errors.
+    ASCII only, deliberately: PowerShell 5.1 reads .ps1 files as ANSI unless
+    they carry a BOM, so non-ASCII characters here become parse errors.
 
 .PARAMETER NcsVersion
     NCS version to select the toolchain for, e.g. v3.4.0 or v3.2.4.

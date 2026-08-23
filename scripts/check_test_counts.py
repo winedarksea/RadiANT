@@ -16,16 +16,15 @@ somebody relaxed it permanently.
 It reads twister.json at BOTH levels, and that is not incidental. A scenario
 that failed to compile has a suite-level status of `error` with the compiler
 output in `reason`, and all of its statically-discovered cases come back
-`blocked` - never run, nothing asserted. Reading only the case level turned one
-compiler error into "2464 test case(s) failed" and printed twenty `[blocked]`
-names instead of the error. So: a build failure is reported as a build failure,
-above everything else; `blocked` is counted apart from `failed`; and the
-testcase floor is compared against cases that EXECUTED, since discovery happens
-before the build and a wholly-broken run otherwise cleared the floor it exists
-to hold.
+`blocked` - never run, nothing asserted. Reading only the case level once
+turned one compiler error into "2464 test case(s) failed" with the error
+itself nowhere in the output. So: a build failure is reported as a build
+failure, above everything else; `blocked` is counted apart from `failed`; and
+the testcase floor is compared against cases that EXECUTED, since a
+wholly-broken run would otherwise clear the floor it exists to hold.
 
-It also prints a table for $GITHUB_STEP_SUMMARY, so the numbers are visible on
-the run page rather than buried in twister-out/.
+Exit status: 0 if every floor is met and no scenario errored; 1 otherwise.
+Also prints a table for $GITHUB_STEP_SUMMARY.
 
 Standard library only - no PyYAML. The expectations file is flat `key: value`
 and parsing it directly avoids depending on a package that is present only

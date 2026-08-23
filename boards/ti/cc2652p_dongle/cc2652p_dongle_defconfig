@@ -17,7 +17,7 @@ CONFIG_BUILD_OUTPUT_HEX=y
 # does. The ROM bootloader's UART is fixed in silicon at DIO2/DIO3 and this
 # module's bridge is on DIO12/DIO13, so the ROM will never hear the host
 # whatever the CCFG says - that was measured the long way, with cc2538-bsl on
-# four wirings and scripts/ti/bsl_probe.py sweeping both modem lines at both
+# four wirings and a bsl_probe sweep (retired) of both modem lines at both
 # polarities and then spamming sync for 75 s while a human worked all three
 # buttons. Every one silent.
 #

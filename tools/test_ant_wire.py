@@ -36,15 +36,15 @@ Every vector carries a `source`:
 ## What is missing
 
 No `Device0.txt` (Garmin's own debug log, the one transcript here produced by
-software nobody here wrote) exists in this repository. Everything below is
-therefore an observation already in the repo or a hand-derivation; there is
-no acknowledged data, no burst run, no extended receive message with the flag
-byte and appended fields, and nothing from a genuine ANTUSB-m. Completing the
-set needs a human, a Windows box with the libusb-win32 driver, and a real
-session logged via `ANT_SetDebugLogDirectory` before `ANT_Init`, normalised
-with `tools/ant_trace.py` into `archive/captures/serial/`. It also needs a
-genuine ANTUSB-m's capabilities reply recorded alongside ours
-(`080800b23200fd8d0f`) to settle any future argument about a capability bit.
+software nobody here wrote) exists in this repository, so everything below is
+an observation already in the repo or a hand-derivation - no acknowledged
+data, no burst run, no extended receive message with the flag byte and
+appended fields, nothing from a genuine ANTUSB-m. Completing the set needs a
+human, a Windows box with the libusb-win32 driver, and a real session logged
+via `ANT_SetDebugLogDirectory` before `ANT_Init`, normalised with
+`tools/ant_trace.py` into `archive/captures/serial/`, plus a genuine
+ANTUSB-m's capabilities reply (`080800b23200fd8d0f`) to settle any future
+argument about a capability bit.
 """
 
 from __future__ import annotations

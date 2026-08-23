@@ -78,7 +78,7 @@ session.target.connect();
 // So a script that connects and immediately reads the RTT buffer reads 80 KB
 // of zeroes every single time, no matter how healthy the firmware is, and
 // reports "the image has not executed a single RTT write". That was measured
-// here with scripts/ti/dss_probe.js: SRAM nonzero bytes, 0 of 81920, on an
+// here with the dss_probe probe (retired): SRAM nonzero bytes, 0 of 81920, on an
 // image that was in fact fine. It is the most convincing false negative this
 // bench has produced.
 //

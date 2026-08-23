@@ -11,9 +11,9 @@
     DtrEnable AND RtsEnable, before Open(). System.IO.Ports.SerialPort
     defaults DtrEnable to $false, and J-Link's CDC then hands over one
     128-byte chunk and goes silent - which looks precisely like a board that
-    hung immediately after boot, and has been debugged as one more than once.
-    On the nRF54L15 DK the log is COM7 and the ANT byte stream is COM8; on the
-    nRF5340 DK the log is COM9. Both need this.
+    hung immediately after boot. On the nRF54L15 DK the log is COM7 and the
+    ANT byte stream is COM8; on the nRF5340 DK the log is COM9. Both need
+    this.
 
     ReadExisting() in a poll loop, not ReadLine(): ReadLine() blocks until a
     terminator arrives, so a board that stops logging hangs the capture past

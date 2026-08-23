@@ -24,10 +24,10 @@ the raw bytes, the id is known, the length declared for the record's
 *direction* admits the payload, the declared direction matches the column,
 and a response event names a real message id or the event marker.
 
-This only matters because the transcript is foreign: a vector built by
-`frame()` and frozen agrees with `frame()` by construction, but a transcript
-recorded by `ANT_DLL.dll` or typed by hand does not, so only a foreign
-transcript checks the *rules* rather than round-tripping them.
+This only matters against a *foreign* transcript: a vector built by `frame()`
+and frozen agrees with `frame()` by construction, so only a transcript
+recorded by `ANT_DLL.dll` or typed by hand checks the rules rather than
+round-tripping them.
 
 ## Two sources, and why one can be missing
 
@@ -70,13 +70,12 @@ there (case `frame/sync-in-payload` legitimately uses channel `0xA4`). See
 
 ## Integrity: hashes catch what shape-checks can't
 
-Every rule above is about a record's *shape*; none has an opinion on whether
-the dongle's answer was actually correct, since the answer is the
-measurement. `tools/ant_conformance.py` records sha256s (whole-file and
-per-case) alongside each transcript in `archive/benchmarks/`; this file
-checks the bytes back against them so a single flipped data byte in an
-otherwise well-formed reply is caught and localised. See
-`integrity_problems()`. This exists specifically so the reference transcript
+Shape rules say nothing about whether the dongle's answer was actually
+correct, since the answer is the measurement. `tools/ant_conformance.py`
+records sha256s (whole-file and per-case) alongside each transcript in
+`archive/benchmarks/`; this file checks the bytes back against them so a
+single flipped data byte in an otherwise well-formed reply is caught and
+localised (`integrity_problems()`) - specifically so the reference transcript
 can't be quietly edited to make a red suite pass.
 
 ## The `malformed` case convention
@@ -98,10 +97,8 @@ Two consequences:
   were chosen to be visible at this level and are asserted.
 
 Known hole: the waiver is granted per record, so a preamble frame that went
-bad *inside* a malformed case would be waived along with it (though it would
-still be caught in a `valid` case, since the preamble is identical everywhere).
-Closing it means `ant_conformance.py` emitting its preamble under its own
-case name - filed as a change request, not assumed here.
+bad *inside* a malformed case would be waived along with it (a `valid` case
+would still catch it, since the preamble is identical everywhere).
 
 ## Deliberately not importing tools/ant_trace.py
 

@@ -56,18 +56,12 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # Derive the DFU application version from the repository-root VERSION file.
-#
-# THIS IS A BUG FIX, NOT HYGIENE. Until 2026-08-14 this parameter defaulted to
-# the literal 1 and the release workflow passed a literal 1 as well, so every
-# DFU package this project has ever published declared itself version 1. The
-# nRF52840 Dongle's bootloader compares that number against the installed one
-# to refuse a downgrade; a constant defeats the check outright, and it does so
-# silently - the package installs, the board runs, and nothing anywhere reports
-# that the protection is inert.
-#
-# It THROWS rather than falling back. A fallback here would restore exactly the
-# failure it replaces: a package that looks versioned and is not. A missing or
-# malformed VERSION file is a broken build, and it should read as one.
+# The nRF52840 Dongle's bootloader compares this number against the installed
+# one to refuse a downgrade; a constant here defeats the check silently - the
+# package installs, the board runs, and nothing reports the protection as
+# inert. THROWS rather than falling back for the same reason: a fallback
+# would restore exactly the failure it replaces. A missing or malformed
+# VERSION file is a broken build and should read as one.
 function Get-RadiantAppVersion {
     $versionFile = Join-Path (Split-Path -Parent $PSScriptRoot) 'VERSION'
     if (-not (Test-Path $versionFile)) {
@@ -126,16 +120,12 @@ if (-not $NrfutilPath) {
     throw "nrfutil.exe not found. It ships in the NCS toolchain bundles under <bundle>\nrfutil\bin, or pass -NrfutilPath."
 }
 
-# `pkg` lives in the nrf5sdk-tools command, which is a separate install.
-#
-# Do not inherit NRFUTIL_HOME from the build environment. scripts\env.ps1
-# applies the toolchain bundle's environment.json, which points NRFUTIL_HOME at
-# <bundle>\nrfutil\home - a home that carries the commands west needs, does not
-# carry nrf5sdk-tools, and is deliberately locked against installing anything.
-# Packaging a DFU zip has nothing to do with the Zephyr toolchain, so clear the
-# variable and let nrfutil use the user's own home, where nrf5sdk-tools lives.
-# Inheriting it made this script try to install into a locked directory and
-# fail, on a machine that already had the command.
+# `pkg` lives in the nrf5sdk-tools command, a separate install. Do not inherit
+# NRFUTIL_HOME from the build environment: scripts\env.ps1 applies the
+# toolchain bundle's environment.json, which points NRFUTIL_HOME at
+# <bundle>\nrfutil\home - a home that carries the commands west needs, does
+# not carry nrf5sdk-tools, and is deliberately locked against installing
+# anything. Clear the variable so nrfutil uses the user's own home instead.
 $savedHome = $env:NRFUTIL_HOME
 $env:NRFUTIL_HOME = $null
 

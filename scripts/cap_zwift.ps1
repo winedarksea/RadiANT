@@ -5,10 +5,7 @@
 
 .DESCRIPTION
     Wraps USBPcapCMD so that a capture of a real Zwift pairing session is one
-    command rather than a set of hand-copied device numbers. The original
-    scratch version of this script was lost; `archive/host-api/README.md`
-    records the decode it produced as unregenerable, which is why this one
-    lives in the repository.
+    command rather than a set of hand-copied device numbers.
 
     The script finds the USBPcap filter device that the ANT dongle sits behind
     (by asking USBPcap for each root hub's device tree and matching the device
@@ -35,18 +32,13 @@
 .PARAMETER DeviceMatch
     Regex matched against the device descriptions USBPcap reports.
 
-    The default matches BOTH shapes of this project's dongles, because they do
-    not enumerate alike:
-
-      * 'ANT USB-m'  - the nRF52840 builds (apps/dongle), which are native USB
-                       ANT devices at 0FCF:1009.
-      * 'CP210x'     - the CC2652P stick (apps/dongle_ti), whose ANT serial
-                       stream reaches the host over a Silicon Labs CP2102N
-                       UART bridge at 10C4:EA60. It is a COM port, not a USB
-                       ANT device, so the old 'ANT USB-m' default could never
-                       match it - it failed with "No device matching /ANT
-                       USB-m/", which reads exactly like an unplugged or
-                       unflashed dongle and is neither.
+    The default matches BOTH shapes of this project's dongles, which do not
+    enumerate alike: 'ANT USB-m' is the nRF52840 builds (apps/dongle), native
+    USB ANT devices at 0FCF:1009; 'CP210x' is the CC2652P stick
+    (apps/dongle_ti), whose ANT serial stream reaches the host over a Silicon
+    Labs CP2102N UART bridge at 10C4:EA60 - a COM port, not a USB ANT device,
+    so the old 'ANT USB-m'-only default failed with "No device matching" on
+    it, reading exactly like an unplugged dongle.
 
     The bridge carries the same 0xA4-framed bytes, so tools/decode_pcap.py
     decodes a CP210x capture unchanged.
@@ -158,39 +150,21 @@ if (-not $isAdmin) {
 # USBPcap's extcap config lists, per filter device, the tree of attached
 # devices as `value {arg=99}{value=<n>}{display=<name>}`.
 #
-# WHAT THE {value=} FIELD ACTUALLY MEANS, because getting this wrong hid the TI
-# dongle for two sessions. There are two shapes:
+# WHAT THE {value=} FIELD MEANS: value=6 is a real USB device (6 IS its
+# address - pass it to --devices); value=4_2 is an INTERFACE of a composite
+# device, not an address, and --devices will not take it. {parent=...} is a
+# separate axis (what hub the thing hangs off) - a device behind an external
+# hub has one and is every bit as addressable as a root-port device. Filtering
+# on "has no {parent=}" conflates the two axes and drops every device behind a
+# hub, which is why the CC2652P stick (on a Generic USB Hub) read as "no
+# device matching" while USBPcap was listing it fine. The test is therefore
+# "is the value an address", not "is it top level".
 #
-#   value=6      a real USB device, and 6 IS its USB address - pass it to
-#                --devices.
-#   value=4_2    an INTERFACE of a composite device. Not an address, and
-#                --devices will not take it.
-#
-# {parent=...} is a separate axis: it says what the thing hangs off, which for
-# a device is the hub it is plugged into. A dongle in a root-hub port has no
-# parent; the same dongle moved to an external hub has {parent=<hub>} and is
-# every bit as addressable.
-#
-# This used to filter on "has no {parent=}", which conflates the two and throws
-# away every device behind an external hub. That is why the CC2652P stick was
-# reported missing while USBPcap was listing it perfectly well:
-#
-#   value {arg=99}{value=6}{display=[6] Silicon Labs CP210x USB to UART
-#   Bridge}{enabled=true}{parent=2}
-#
-# It was on a Generic USB Hub, so it had a parent, so it was dropped - and the
-# error said "no device matching", which reads as unplugged or unflashed. The
-# nRF52840 sticks were never affected only because they happened to be in root
-# ports. The test is therefore "is the value an address", not "is it top level".
-# Every enumerating call goes through here, and every one of them redirects
-# stdout to a file. USBPcapCMD writes its extcap output straight to the console:
-# capture it through a PowerShell pipe (`$lines = & $usbpcap ...`) and you get
-# *zero lines and no error*, while running it bare looks fine because the text
-# you see came from USBPcapCMD's own console write, not from PowerShell. That
-# silence is what "USBPcap listed no filter devices" really meant all session,
-# and guessing an interface around it is how a capture ended up recording a
-# flash drive. Redirected to a file it works, unelevated, every time.
-# Also note: no `2>$null` anywhere. PowerShell 5.1 wraps a native command's
+# Every enumerating call goes through here and redirects stdout to a file:
+# USBPcapCMD writes its extcap output straight to the console, so capturing it
+# through a PowerShell pipe yields *zero lines and no error* while running it
+# bare looks fine (the text came from USBPcapCMD's own console write, not
+# PowerShell). No `2>$null` either - PowerShell 5.1 wraps a native command's
 # redirected stderr in NativeCommandError records, which under
 # $ErrorActionPreference='Stop' discards the stdout being parsed.
 function Invoke-UsbPcap {
@@ -318,14 +292,12 @@ else { Write-Host "Press Ctrl-C when the Zwift session is done." }
 Write-Host "Start Zwift and pair now."
 Write-Host ""
 
-# USBPcapCMD does not stay in the foreground. When it is not already running
+# USBPcapCMD does not stay in the foreground: when it is not already running
 # elevated it relaunches itself, and the process started here exits within
 # milliseconds while the capture continues in the detached child. Waiting on
-# the process we launched therefore returns instantly and the output file does
-# not exist yet - which reads as "the capture never ran" while it is in fact
-# running and filling the file, and leaves the child behind looking like a
-# stray. So follow whichever USBPcapCMD processes are new, not the launcher.
-# (Diagnosed 2026-08-18 from a "failed" run whose file was still growing.)
+# the launched process returns instantly with the output file not yet there -
+# reads as "capture never ran" while it is in fact running. Follow whichever
+# USBPcapCMD processes are new, not the launcher.
 $before = @(Get-Process USBPcapCMD -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty Id)
 $null = Start-Process -FilePath $usbpcap -ArgumentList $capArgs -PassThru -NoNewWindow

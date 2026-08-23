@@ -23,19 +23,17 @@ what is on disk, prints a unified diff of any drift and exits 1. CI calls it.
 Why generation, and not a test that cross-checks the header against the module
 --------------------------------------------------------------------------
 
-A cross-check test is the obvious alternative and it is worse in four ways. It
-costs about the same to write. It leaves two files to hand-edit, so the work is
-still duplicated and only the *disagreement* is caught. It is structurally
-blind to a constant that exists on one side only, which is the commonest way
-the two drift. And decisively: **it would have passed during the checksum
-bug.** Both the firmware and the Python tools had ``SYNC = 0xA4`` and agreed
-with each other perfectly, while every frame either of them produced was
-rejected by every real ANT host - because the bug was in a *rule* (does the XOR
-include the SYNC byte) and not in a constant. A generator cannot catch that
-either, but it does not pretend to: what catches rule-level drift is a third
-implementation, which is what the golden frame vectors in tools/test_ant_wire.py
-are for. Generation is for making one number appear in three places without
-anyone typing it three times, and that is all it claims.
+A cross-check test is the obvious alternative and is worse: it still leaves
+two files to hand-edit (only the *disagreement* is caught), and it is
+structurally blind to a constant that exists on one side only. Decisively,
+**it would have passed during the checksum bug** - firmware and Python both
+had ``SYNC = 0xA4`` and agreed with each other while every frame either
+produced was rejected by every real ANT host, because the bug was in a *rule*
+(does the XOR include the SYNC byte), not a constant. A generator cannot
+catch that either; what catches rule-level drift is a third implementation,
+the golden frame vectors in tools/test_ant_wire.py. Generation is for making
+one number appear in three places without anyone typing it three times, and
+that is all it claims.
 
 Determinism
 -----------
@@ -66,17 +64,12 @@ except ImportError:  # pragma: no cover - user-facing guidance
 
 ROOT = Path(__file__).resolve().parent.parent
 SPEC_PATH = ROOT / "protocol" / "ant_wire.yaml"
-# apps/common/ant/, NOT src/. This said `ROOT / "src" / "ant_wire.h"` until
-# 2026-08-14, months after the apps/ reorg moved the header. The consequence was
-# worse than a broken path: the generator CREATED a stray src/ant_wire.h at the
-# repository root on every run, --check compared against that file, found it in
-# sync with itself, and passed - while the header the firmware actually compiles
-# drifted freely. The `generated-drift` CI job was green the entire time.
-#
-# That is the exact failure mode the plan's cross-cutting section warns about
-# for the tolerant CI greps: a rename does not break a check, it silently
-# disarms one. Anything added here must fail loudly when its target is missing
-# rather than quietly write a new file beside it - see check_outputs() below.
+# apps/common/ant/, NOT src/. A stale path here is worse than a broken one:
+# the generator would CREATE a stray file at the wrong location, --check would
+# compare against that stray and find it "in sync", and the real header could
+# drift freely with CI green throughout. Anything added here must fail loudly
+# when its target is missing rather than quietly write a new file beside it -
+# see check_outputs() below.
 HEADER_PATH = ROOT / "apps" / "common" / "ant" / "ant_wire.h"
 RADIANT_WIRE_HEADER_PATH = ROOT / "radiant" / "include" / "radiant" / "radiant_wire.h"
 PYTHON_PATH = ROOT / "tools" / "ant_wire.py"
@@ -208,13 +201,9 @@ def provenance(entry: dict) -> str:
 # A message id is not a message. MESG_REQUEST (0x4D) names an id and what comes
 # back is a frame carrying that same id with a payload no host ever sends, so a
 # single payload_len per id describes the command and silently mis-describes
-# the reply. `reply_len` is the second half; see the schema note in the YAML.
-#
-# The lengths are named, not written: every one of them already exists in
-# `message_sizes` as the LEN byte the bridge composes, with the prose that
-# explains it. Resolving the name here keeps one number in one place, and turns
-# those constants from things nothing machine-checks into things a transcript
-# replay checks on every run.
+# the reply; `reply_len` is the second half (see the schema note in the YAML).
+# The lengths are named, not written - each already exists in `message_sizes`
+# as the LEN byte the bridge composes - which keeps one number in one place.
 
 REPLY_SELECTORS = {
     "reply_byte_0": "the info type the reply echoes at byte 0",
@@ -1393,12 +1382,9 @@ def main() -> int:
     # EVERY OUTPUT MUST ALREADY EXIST, and this refuses rather than creating
     # one. All four are committed files with committed readers; a path that no
     # longer resolves means the tree moved under this script, not that a new
-    # file is wanted there. Writing one anyway is what let HEADER_PATH point at
-    # a stale src/ for months while --check compared the stray against itself
-    # and reported "in sync" - see the note on HEADER_PATH.
-    #
-    # This runs before both arms deliberately: --check has to fail on a missing
-    # output too, or CI is exactly where the silence would survive.
+    # file is wanted there (see the note on HEADER_PATH). This runs before both
+    # arms deliberately: --check has to fail on a missing output too, or CI is
+    # exactly where the silence would survive.
     missing = [p.relative_to(ROOT).as_posix() for p in wanted if not p.exists()]
     if missing:
         print(

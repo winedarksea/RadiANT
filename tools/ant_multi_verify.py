@@ -29,6 +29,8 @@ accounting logic is not reimplemented here, only launched concurrently and
 summarised. A child's stdout/stderr is captured to a per-target log next to
 its --json output so a failure can be read in full; this script only prints
 the numbers that matter for a side-by-side read.
+
+Exit status: 0 only if every target's ant_verify.py run passed; 1 otherwise.
 """
 
 from __future__ import annotations

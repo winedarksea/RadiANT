@@ -2,17 +2,14 @@
 
 """Assert the licence the tree claims is the licence the tree ships.
 
-This exists because it already went wrong. Until 2026-08-14 the LICENSE file at
-the repository root was the **Mozilla Public License 2.0**, complete with
-Exhibit B's "Incompatible With Secondary Licenses" notice, while NOTICE,
-docs/decisions/0004-license-apache-2-0.md, docs/third-party.md and every one of
-the 231 source files carrying an SPDX tag said Apache-2.0 - and ADR 0004
-*rejects MPL-2.0 by name*, on the grounds that per-file copyleft on firmware
-that gets statically linked into a customer image creates ongoing compliance
-questions. Nothing caught it, because nothing was looking.
+This exists because it already went wrong once: the LICENSE file at the
+repository root was Mozilla Public License 2.0 while NOTICE,
+docs/decisions/0004-license-apache-2-0.md and every SPDX-tagged source file
+said Apache-2.0 - and ADR 0004 *rejects MPL-2.0 by name*, on the grounds that
+per-file copyleft on firmware statically linked into a customer image creates
+ongoing compliance questions. Nothing caught it, because nothing was looking.
 
-ADR 0004's own `Checked by:` line asks for exactly this check and notes it
-"should become a CI check when there is a job to hang it on". host-tests is
+ADR 0004's own `Checked by:` line asks for exactly this check; host-tests is
 that job: no secret, so it runs on forks and on every pull request.
 
 Three assertions:

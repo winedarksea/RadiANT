@@ -6,13 +6,12 @@ The root VERSION file is the single source of truth. This exists so that the
 release workflow and scripts/package_dfu.ps1 cannot disagree about what the
 version is, and so that a git tag cannot disagree with either.
 
-Why it matters that the DFU number is derived rather than written down: until
-2026-08-14 both the workflow and the packaging script passed the literal `1`,
-so every DFU package ever published declared itself version 1. The nRF52840
-Dongle's bootloader uses that number to refuse a downgrade, and comparing 1
-against 1 makes the protection inert - without any symptom. Deriving it is the
-fix; the tag check below is what stops the source of truth drifting from the
-thing people actually read.
+Why it matters that the DFU number is derived rather than written down: the
+workflow and the packaging script once both passed the literal `1`, so every
+DFU package declared itself version 1. The nRF52840 Dongle's bootloader uses
+that number to refuse a downgrade, and comparing 1 against 1 makes the
+protection inert - without any symptom. The tag check below is what stops the
+source of truth drifting from the thing people actually read.
 
 Usage:
     python scripts/version_int.py              -> 100

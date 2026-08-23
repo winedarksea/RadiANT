@@ -1,23 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Floors for the ztest job. A number in a file that only moves by a deliberate,
-# reviewable edit - the same pattern as README.md's line cap, archive/'s 10 MB
-# budget and the measured text/bss ceilings.
+# Floors for the ztest job. A number in a file that only moves by a
+# deliberate, reviewable edit - the same pattern as README.md's line cap,
+# archive/'s 10 MB budget and the measured text/bss ceilings.
 #
-# WHY A FLOOR AND NOT AN EXACT COUNT: tests are added far more often than they
-# are removed, so an exact count would fail on every honest addition and would
-# be relaxed reflexively until it meant nothing. A floor only fails when
-# coverage goes DOWN, which is the event actually worth a red check.
+# WHY A FLOOR AND NOT AN EXACT COUNT: tests are added far more often than
+# removed, so an exact count would fail on every honest addition and get
+# relaxed reflexively until it meant nothing. A floor only fails when
+# coverage goes DOWN - the event actually worth a red check. What it catches
+# is not hypothetical: `twister -T app/radiant/tests` walks subdirectories,
+# so a renamed or broken testcase.yaml drops a whole scenario and twister
+# still exits 0, just quietly running fewer tests.
 #
-# What this catches, and it is not hypothetical: a test application that stops
-# being discovered. `twister -T app/radiant/tests` walks subdirectories, so a
-# renamed or broken testcase.yaml removes a whole scenario and twister still
-# exits 0 - it simply runs fewer tests and says so in output nobody reads. That
-# is indistinguishable from success without a floor.
-#
-# HOW TO CHANGE THESE: raise them when coverage genuinely grows, in the same
-# commit that grows it. Lowering one is a claim that coverage should shrink and
-# needs a reason in the commit message.
+# HOW TO CHANGE THESE: raise a floor when coverage genuinely grows, in the
+# same commit that grows it. Lowering one is a claim that coverage should
+# shrink and needs a reason in the commit message.
 
 # Twister scenarios across radiant/tests, radiant/tests/api,
 # radiant/tests/gate, apps/hrm_ble/tests/sim_sched and
@@ -35,122 +32,13 @@
 # cadence reported in strides where a client expects steps).
 min_scenarios: 9
 
-# Total ztest cases twister executes, summed over every scenario.
-#
-# 697 is a deliberately SAFE floor rather than the observed total: it is the
-# number of ZTEST() definitions in radiant/tests, counted statically, and the
-# real total is higher because several scenarios re-run the same suites under
-# different Kconfig. Set this way because it is a bound that can be justified
-# from the source rather than copied from one CI run.
-#
-# Tighten it to the observed total once a green run has reported one - the
-# check prints that number every time it passes, precisely so this can be
-# raised on evidence instead of on a guess.
-# 701 = 697 + the four ZTEST() definitions in
-# apps/hrm_ble/tests/sim_sched/src/main.c, counted the same way.
-#
-# Last raised for the arm-lead exclusion radius work: five cases in
-# radiant/tests/src/test_sched.c (the merge reach, the bad-band sweep, the
-# max_addr_groups residual and the two want_preempt cases) and two in
-# radiant/tests/api/src/test_api.c (a MISSED window re-posting with no pump,
-# and nine scheduling misses not reaching RX_FAIL_GO_TO_SEARCH). The previous
-# floor of 686 had also drifted: the static count was already 690 before any of
-# these were written, so it had stopped being able to notice a whole scenario
-# disappearing. Recount with the same rule when raising it again - grep for
-# ZTEST( at the start of a line under radiant/tests, and add the four.
-#
-# Raised again for the Matter plan's packages A-D: the ANT+ trainer input
-# (test_power_adapter.c, test_profile_fec.c), Environment 0x19
-# (test_profile_env.c), common page 84 on every channel
-# (test_common_adapter.c), the Matter map's pressure row and its two endpoint
-# fixes (test_matter.c), and the activity rule's realistic-cadence regression
-# cases (test_rules.c). Counted by the rule above: 773 under radiant/tests plus
-# the four in apps/hrm_ble/tests/sim_sched/src/main.c.
-#
-# Raised again for apps/treadmill: the FE-C transmit half and its SS10.1
-# interleave (test_profile_fec_tx.c), ANT+ SDM 0x7C (test_profile_sdm.c), the
-# equipment-occupancy rule that finally reads the FE state off the sample bus
-# (test_rules.c), and the FE-C speed ceiling in the repaired-frame gate
-# (test_profile_sanity.c) - 827 under radiant/tests by the same static count -
-# plus the four in apps/hrm_ble/tests/sim_sched/src/main.c and the twelve in
-# apps/treadmill/tests/pages/src/main.c. 827 + 4 + 12 = 843.
-#
-# Raised again for the treadmill's control-owner token: six cases in
-# apps/treadmill/tests/pages/src/main.c covering the arbitration policy - an
-# explicit FTMS claim preempting an implicit FE-C one, ANT+ never preempting
-# BLE, the idle ANT timeout expiring and being refreshed, release handing the
-# machine back, the timeout surviving a k_uptime_get_32() wrap, and the read
-# pages staying ungated.
-#
-# WORTH KNOWING WHY THEY ARE IN THIS FILE'S SCOPE AT ALL: nothing anywhere
-# tests apps/treadmill/src/treadmill_ble.c - there is no ztest for the GATT
-# service, write_cp() or the advertising payload - so the token was
-# deliberately put in a kernel-free module (src/treadmill_control.c) that this
-# suite compiles directly. Had it gone inside treadmill_ble.c where it first
-# seemed to belong, this number would not have moved and the policy would have
-# had no coverage at all. 827 + 4 + 18 = 849.
-#
-# Raised again for the acknowledged-transfer closed loop, 2026-08-17: three net
-# new cases in radiant/tests/src/test_transfer.c.
-#
-#   - a sweep of every control byte the originator can emit, requiring the
-#     acknowledger to have a reply for each. That invariant was silently false
-#     for 0x8A/0xAA, so every master-originated acknowledged transfer reported
-#     FAIL_NO_ACK on hardware while all 849 tests passed;
-#   - the inferred bit-3 reading (0x8A -> 0xD2, 0xAA -> 0xF2) pinned on its own,
-#     so a capture that ever settles bit 3 the other way fails exactly the one
-#     test holding the claim;
-#   - the 0x8A half of the acknowledger path, split from the 0xAA half that
-#     replaced test_a_slot_opening_packet_has_no_measured_acknowledgement (an
-#     inversion, not an addition - it used to assert the refusal).
-#
-# And two in radiant/tests/api/src/test_api.c:
-#
-#   - a master originating acknowledged data must place it on its own next slot
-#     rather than "as soon as possible". NO SUITE CALLED
-#     antr_acknowledge_message_tx() AT ALL before this, so the transmit instant
-#     of an originated transfer had never once been asserted - which is how it
-#     stayed wrong through a hardware A/B that was mis-read and a correction
-#     that was reverted;
-#   - an acknowledgement must go out even when the host has never written a
-#     broadcast page. Refusing in that state made a SLAVE unable to acknowledge
-#     anything ever, and swallowed the packet on the way to the host too.
-#
-# 832 + 4 + 18 = 854.
-#
-# Raised again for the endpoint-naming work, 2026-08-17: thirteen new cases in
-# radiant/tests/src/test_naming.c (both base-name tables and both of their
-# defaults, the five occupancy suffixes, the label override, and the worst-case
-# length - the one that fails if a future base name grows long enough to
-# truncate the suffix, which is the half that tells four identically-typed
-# occupancy endpoints apart) and two in radiant/tests/src/test_rules.c.
-#
-# Those two are the regression for the collision the naming change would
-# otherwise have created: the FE-C EQUIPMENT TYPE now travels on the bus as a
-# second RADIANT_FIELD_ENUM_GENERIC series on the same source as the FE STATE,
-# and radiant_rules.c used to route every ENUM_GENERIC sample into the
-# occupancy rule - where "treadmill" (19) reads as "not in use" and clears the
-# output from under a runner still on the belt. Confirmed to fail before the
-# field_id gate was added.
-#
-# Raised by exactly the fifteen this change adds: 854 + 15 = 869.
-#
-# Raised again by three, same day, for the defect the first version of that
-# work SHIPPED. radiant_naming.c originally suffixed only the five occupancy
-# booleans, on the argument that every other field's type already says what it
-# is. A bench run with a real heart-rate strap (#8265) and a real FE-C trainer
-# (#52233) on air measured four collisions from that argument - a strap's beat
-# count and beat time both read "Heart Rate 8265", a trainer's equipment type,
-# event count and FE state all read "Indoor Bike 52233" - where the names it
-# replaced ("RadiANT 1", "RadiANT 2") had been ugly but UNIQUE.
-#
-# The three cases are the pairwise-uniqueness sweep over every series each
-# profile can actually carry (the one that fails on the defect, and the only
-# shape that can: a suite checking names one at a time cannot see a collision),
-# the "#<id>" backstop for a series the table has no row for, and the label
-# path's own worst-case length, which had never been asserted at all.
-#
-# 854 + 18 = 872.
+# Total ztest cases twister executes, summed over every scenario. This is a
+# SAFE floor rather than the observed total: it is the static count of
+# `^ZTEST(` under radiant/tests, plus the four cases in
+# apps/hrm_ble/tests/sim_sched/src/main.c and the eighteen in
+# apps/treadmill/tests/pages/src/main.c. Raise it the same way, in the same
+# commit that adds coverage; the reasoning behind each past raise is in
+# `git log` on this file.
 #
 # NOTE THAT THE FLOOR HAS DRIFTED BELOW WHAT THE RULE ABOVE WOULD GIVE, the
 # same way it had before the arm-lead work. Counting `^ZTEST(` under
