@@ -191,10 +191,21 @@ USB_DEVICE_BOS_DESC_DEFINE_CAP struct usb_bos_ant_msosv2_desc {
 
 /* ── USB descriptor ────────────────────────────────────────────────────────── */
 
+/* Bulk-IN is declared BEFORE bulk-OUT, and the order is load-bearing rather
+ * than stylistic: host libraries index the endpoint array positionally instead
+ * of reading bEndpointAddress. node ant-plus - the library most third-party
+ * hosts are built on - does `inEp = iface.endpoints[0]; outEp =
+ * iface.endpoints[1]`, and Android's UsbInterface.getEndpoint(0) idiom is the
+ * same shape. Such a host on an OUT-first device writes commands into the IN
+ * pipe and polls the OUT pipe, so it enumerates, claims the interface, and then
+ * reads nothing forever. Every tool in tools/ addresses 0x01/0x81 explicitly
+ * and openant matches on direction, which is exactly why this stayed invisible
+ * on Windows.
+ */
 struct usb_ant_descriptor {
 	struct usb_if_descriptor if0;
-	struct usb_ep_descriptor ep_out;
 	struct usb_ep_descriptor ep_in;
+	struct usb_ep_descriptor ep_out;
 } __packed;
 
 USBD_CLASS_DESCR_DEFINE(primary, 0) struct usb_ant_descriptor ant_desc = {
@@ -214,19 +225,26 @@ USBD_CLASS_DESCR_DEFINE(primary, 0) struct usb_ant_descriptor ant_desc = {
 	 * matching addresses, then rewrites both - a descriptor already
 	 * carrying the final address matches nothing and usb_enable() fails
 	 * silently. Allocation still lands on 0x01/0x81 in practice.
+	 *
+	 * That pairing is by VALUE, not by position (usb_validate_ep_cfg_data()
+	 * in zephyr/subsys/usb/device/usb_descriptor.c compares
+	 * bEndpointAddress against ep_addr across the whole array), and the two
+	 * directions draw from separate address pools. So declaring IN first
+	 * changes the order the descriptors are reported in and nothing else -
+	 * ant_ep_data[] below keeps its OUT, IN order and its index defines.
 	 */
-	.ep_out = {
-		.bLength          = sizeof(struct usb_ep_descriptor),
-		.bDescriptorType  = USB_DESC_ENDPOINT,
-		.bEndpointAddress = AUTO_EP_OUT,
-		.bmAttributes     = USB_DC_EP_BULK,
-		.wMaxPacketSize   = sys_cpu_to_le16(ANT_EP_MPS),
-		.bInterval        = 0,
-	},
 	.ep_in = {
 		.bLength          = sizeof(struct usb_ep_descriptor),
 		.bDescriptorType  = USB_DESC_ENDPOINT,
 		.bEndpointAddress = AUTO_EP_IN,
+		.bmAttributes     = USB_DC_EP_BULK,
+		.wMaxPacketSize   = sys_cpu_to_le16(ANT_EP_MPS),
+		.bInterval        = 0,
+	},
+	.ep_out = {
+		.bLength          = sizeof(struct usb_ep_descriptor),
+		.bDescriptorType  = USB_DESC_ENDPOINT,
+		.bEndpointAddress = AUTO_EP_OUT,
 		.bmAttributes     = USB_DC_EP_BULK,
 		.wMaxPacketSize   = sys_cpu_to_le16(ANT_EP_MPS),
 		.bInterval        = 0,

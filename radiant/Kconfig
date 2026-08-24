@@ -73,7 +73,15 @@ config RADIANT_BACKEND_NRF
 	# - rather than "this part is in that Kconfig directory". The C file
 	# tests the same pair.
 	#
-	depends on SOC_COMPATIBLE_NRF52X || SOC_COMPATIBLE_NRF54LX
+	# NRF53X admits the nRF5340 NETWORK core only in practice. The
+	# application core has no `radio` devicetree node, so it fails in
+	# radiant_radio_nrf.c's own DT checks (RADIANT_TIMER_NODE / NRF_RADIO)
+	# rather than silently building a radio that is not there - a loud
+	# failure, which is the whole point of the note above. Both symbols
+	# exist in v3.2.4 and v3.4.0, checked, so this term cannot go stale the
+	# way SOC_SERIES_* did.
+	depends on SOC_COMPATIBLE_NRF52X || SOC_COMPATIBLE_NRF54LX || \
+		   SOC_COMPATIBLE_NRF53X
 	# `!BT` used to be here unconditionally, because this backend owned the
 	# RADIO and a Bluetooth controller would have reprogrammed it underneath
 	# us. Whether it owns the RADIO is now the gate's answer (see

@@ -666,26 +666,62 @@ Nothing in `radiant` waits on it.
 |---|---|
 | **nRF24L01+** | Not selected — though the frame mapping onto ShockBurst is what validates the whole design (the nRF24AP2 was an ANT MCU bonded to an nRF24L01+ core), and the HAL would not preclude one |
 | **SX1280** (2.4 GHz LoRa) | It *can* do ANT's PHY, but its CRC engine covers payload only while ANT's CRC includes the network address, so it needs software CRC — and it lands near −93 dBm, worse than the nRF52840 already in hand, while the CSS long-range mode that makes LoRa interesting is unusable for ANT. A two-radio gateway (ANT on 2.4 GHz, LoRa sub-GHz backhaul) is an *application* of the telemetry envelope, not a backend |
-| **nRF5340** | Dropped from v1 **for `sdk-ant`**, and this row is **under revision for `radiant`** — see the note below. Its RADIO is on the network core, so sdk-ant needs a whole RPC subsystem for it — which is why `apps/common/ant_serial_bridge.c` already branches on `CONFIG_ANT_NP_HOST`. A separate project of comparable size that buys nothing the nRF52840 dongle does not have. It stays valuable as a *debug* board; see [`testing.md`](testing.md) |
+| **nRF5340** | Dropped from v1 **for `sdk-ant`**, and that is now the *only* sense in which it is rejected — `radiant` **runs on it**, on the network core, verified on air. See the note below. sdk-ant needs a whole RPC subsystem for the cross-core RADIO, which is why `apps/common/ant_serial_bridge.c` branches on `CONFIG_ANT_NP_HOST` |
 | **A 2 Mbps mode** | Saves ~2 µA and costs ~3 dB of sensitivity. Wrong trade for every stated goal |
 
 ### The nRF5340 row states `sdk-ant`'s constraint, not `radiant`'s
 
 `CONFIG_ANT_NP_HOST` is correct and unchanged for `sdk-ant`, whose protocol
-library needs the RPC subsystem that name refers to. No measurement of
-`radiant` on an nRF5340 lies behind the table row above. What is known in
-`radiant`'s favour: `radiant/spike/promisc` ran on this part's **network
-core** and captured live ANT+ frames off the air
-(`docs/spike-b-results.md`), with the RF configuration this project derived
-for the nRF52840 and confirmed on nRF54L15, unmodified — so the PHY is not
-what stops it. What still refuses the part, unchanged: `radiant/Kconfig:76`'s
-`RADIANT_BACKEND_NRF` carries `depends on SOC_COMPATIBLE_NRF52X ||
-SOC_COMPATIBLE_NRF54LX`, so the backend cannot be selected on nRF53 at all,
-and `radiant/src/radiant_radio_nrf.c`'s address-arithmetic `#if` chain has no
-nRF53 branch, so the file would not compile there even if Kconfig admitted
-it. Porting the backend to `cpunet` beside 802.15.4 and MPSL, and carrying
-`struct radiant_sample` across IPC, is a scoped work package that has not
-been done.
+library needs the RPC subsystem that name refers to.
+
+**`radiant` no longer has that constraint. The nRF5340 DK is a working ANT+
+endpoint as of 2026-08-23**, on the **network core**, built as
+`apps/dongle -b nrf5340dk/nrf5340/cpunet -- -DANT_RADIO=core
+-DRADIANT_BACKEND=nrf`. Measured against an nRF54L15 DK transmitting a
+bicycle-power profile: channel opened, searched, acquired and **tracked
+device #14871 for 60 s at 240/240 packets, −0.01 % loss**, power and cadence
+decoded within 1.6 and 1.5 of nominal. That is ANT channel tracking, not the
+promiscuous capture of Spike B.
+
+The port was three things, and the reason it was small is that almost
+everything in `radiant_radio_nrf.c` was already feature-detected against MDK
+symbols rather than against Zephyr SoC symbols — `DPPIC_PRESENT` (the
+`PUBLISH_`/`SUBSCRIBE_` endpoint layer), `RADIO_MODECNF0_RU_Msk` (fast
+ramp-up), `RADIO_MODE_MODE_Nrf_1Mbit` (the ANT PHY). All three are satisfied
+on this core, so none of that code needed touching:
+
+1. **Timing constants**, the one genuinely per-series `#if` chain: a
+   `SOC_COMPATIBLE_NRF53X` branch with `ARM_SETUP_US = 280`, bracketed from
+   Nordic's own `nrf_802154_delayed_trx.c` figures, which rate NRF53 *slower*
+   to set up a delayed operation (360/290 µs) than NRF52 (270/270) despite the
+   same 64 MHz clock.
+2. **`depends on … || SOC_COMPATIBLE_NRF53X`** in `radiant/Kconfig`.
+3. **Transmit power**, the only genuine hardware *gap* found. This core's
+   RADIO has **no positive TXPOWER setting at all** — `0dBm` and then only
+   negative, where nRF52840 and nRF54L15 both carry the full +2…+8 dBm
+   ladder. `RADIANT_NRF_TXP_MAX_DBM` now feeds both the table and
+   `caps.tx_power_max_dbm`, because the core clamps requested power against
+   caps and a caps value of 8 on a part whose ceiling is 0 would report
+   success at a power never transmitted.
+
+**That 8 dB matters when comparing loss figures.** An nRF5340 endpoint
+transmits up to 8 dB weaker than a Feather at the same requested power, so a
+number measured on one is not comparable with the other without accounting
+for it.
+
+**What is still not done is USB.** The USB device peripheral is a `cpuapp`
+peripheral and the RADIO is a `cpunet` peripheral, so no single image holds
+both, and the two board files split the board accordingly:
+`nrf5340dk_nrf5340_cpuapp.conf` is USB with no radio (descriptor and
+enumeration work), `nrf5340dk_nrf5340_cpunet.conf` is radio with ANT serial
+out a UART. Joining them needs an IPC byte transport plus an app-core USB
+bridge — the `ant_transport.h` seam is the right shape for it, but it is two
+images, sysbuild wiring and a bench cycle, and it has not been attempted.
+
+The cpunet image also needs `radiant/spike/promisc/appcore` programmed
+alongside it: `RESET.NETWORK.FORCEOFF` and the `PIN_CNF[n].MCUSEL` grant for
+uart0's pins are both application-core-only jobs. Without it the image runs
+perfectly and talks to nothing.
 
 ---
 

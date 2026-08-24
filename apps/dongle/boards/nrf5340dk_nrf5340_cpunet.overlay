@@ -1,0 +1,46 @@
+/*
+ * nRF5340 DK network core - ANT serial on uart0, and the TIMER the backend owns.
+ *
+ * uart0 is the only UART on this core (nrf5340_cpunet.dtsi declares one), so
+ * unlike the nRF54L15 DK there is no second port to give the console. The
+ * board DTS already lists uart0 as zephyr,console; that chosen is left in
+ * place and simply not honoured, because the .conf keeps prj.conf's
+ * CONSOLE=n/UART_CONSOLE=n. Overriding the chosen would change nothing and
+ * would make this file disagree with the board for no reason.
+ *
+ * The pins (P1.00/P1.01 -> the DK's second VCOM) are already in the board's
+ * pinctrl. They belong to the APPLICATION core until it grants them, which is
+ * radiant/spike/promisc/appcore's job - see the .conf. A build that skips the
+ * companion gets a perfectly working ANT stack whose bytes leave on pins that
+ * are still owned by the other core.
+ */
+
+/ {
+	aliases {
+		ant-uart = &uart0;
+	};
+
+	chosen {
+		/*
+		 * The TIMER radiant's nrf backend owns outright. It runs at
+		 * 1 MHz forever and is what t_sync is hardware-captured into
+		 * from RADIO's ADDRESS event, so it cannot be shared - naming
+		 * it here rather than in the source makes a second user a
+		 * devicetree conflict instead of two drivers reprogramming
+		 * each other's prescaler.
+		 *
+		 * timer1, not timer0. All three network-core TIMERs carry
+		 * cc-num = <8>, well past the five the backend requires, so
+		 * the choice is about who else wants one: timer0 is the
+		 * conventional Bluetooth-controller timer on this core. BT is
+		 * off in this image, so timer0 would work today and would
+		 * collide the day anyone builds this beside a controller.
+		 * timer2 is left spare.
+		 */
+		radiant,radio-timer = &timer1;
+	};
+};
+
+&timer1 {
+	status = "okay";
+};

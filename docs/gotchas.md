@@ -144,3 +144,66 @@ from the outside.
   guard; what follows is a wall of `DT_CHOSEN_..._undeclared` plus unrelated
   `log_msg.h`/`cbprintf_internal.h` errors that look like a broken toolchain
   and are neither.
+- **The ORDER endpoints are declared in is protocol, and the whole bench was
+  blind to it.** A host has two ways to pick the pipes out of an interface: by
+  address (test bit 7 of `bEndpointAddress`) or by position (`endpoints[0]` is
+  IN, `endpoints[1]` is OUT). Everything in `tools/` takes the first route -
+  `ant_probe.py` hardcodes `EP_OUT = 0x01` / `EP_IN = 0x81` and every other tool
+  imports those - and so does `openant`, which matches on
+  `usb.util.endpoint_direction`. So no tool here could see the descriptor order
+  at all. node `ant-plus`, which most third-party ANT applications are built on,
+  takes the second (`inEp = iface.endpoints[0]; outEp = iface.endpoints[1]`), as
+  does Android's `UsbInterface.getEndpoint(0)` idiom. That library works against
+  retail sticks, which is the evidence that a real ANT USB-m declares IN first.
+  This firmware declared OUT first until 2026-08-22, so a positional host wrote
+  its commands into the IN pipe and polled the OUT pipe: it enumerated, claimed
+  the interface, and then read nothing, forever. **That is indistinguishable
+  from a dead dongle from the outside**, and it is what an ANT stick looks like
+  on Android when the ANT+ USB service grants permission and then surfaces no
+  sensors. The order is now IN, then OUT, in both transports -
+  `usb_ant_class.c`'s `struct usb_ant_descriptor` (the legacy stack walks the
+  struct in memory order) and `usb_ant_class_next.c`'s `ant_fs_desc[]` /
+  `ant_hs_desc[]` (USBD walks the pointer arrays; its struct order is only
+  storage). Addresses are unaffected: `usb_validate_ep_cfg_data()` pairs
+  descriptor to `usb_ep_cfg_data` by value, not position, and the two directions
+  draw from separate pools, so `AUTO_EP_*` still lands on 0x01/0x81.
+  `tools/ant_ep_order.py` runs both idioms against one device and reports a
+  split verdict, which reproduces the Android symptom on the Windows bench with
+  no phone involved.
+
+- **An ELF hash is the wrong instrument for "did this change any shipping
+  board", and it will accuse you of a regression you did not commit.** Adding
+  the nRF5340 network-core branch to `radiant/src/radiant_radio_nrf.c` was
+  meant to be unreachable on nRF52840 and nRF54L15. Hashing `zephyr.elf`
+  before and after said **DIFFERS on both**. It was not a regression: the edit
+  added ~60 lines of comment near the top of the file, every `__LINE__` below
+  it moved, and the DWARF line tables moved with them. The machine code was
+  untouched - `arm-zephyr-eabi-size` reported identical text/data/bss
+  (83344/1098/54565) and a full `objdump -d` diff came back with **zero**
+  differing instructions, the only differing lines being the filename header
+  objdump prints itself. **Hash `zephyr.hex` or `zephyr.bin` instead**: those
+  are the loadable image with no debug metadata in them, they were byte-identical
+  on both families, and they are what actually reaches the board. Check
+  reproducibility first, though - rebuild one arm into the *same* build
+  directory and confirm the hash repeats, because the build directory path
+  itself lands in the image on some configurations, so an A/B across two
+  different `-d` paths can differ for that reason alone.
+
+- **The nRF5340 DK is a full ANT+ endpoint now, on the network core, and the
+  older "it cannot be one" notes are stale.** Three reasons used to be given
+  and only one of them survives. `RADIANT_BACKEND_NRF`'s `depends on` now
+  admits `SOC_COMPATIBLE_NRF53X`, and the "address-arithmetic `#if` chain has
+  no nRF53 branch" claim was mostly wrong to begin with: the endpoint layer is
+  gated on `DPPIC_PRESENT`, fast ramp-up on `RADIO_MODECNF0_RU_Msk` and the PHY
+  on `RADIO_MODE_MODE_Nrf_1Mbit`, all MDK feature tests, all satisfied on this
+  core, so only the per-series timing constants actually needed a branch. What
+  does survive is the split: **RADIO is a `cpunet` peripheral and USB device is
+  a `cpuapp` peripheral**, so one image cannot hold both, and the two board
+  files say which half you are getting - `nrf5340dk_nrf5340_cpuapp.conf` is USB
+  with no radio, `nrf5340dk_nrf5340_cpunet.conf` is radio with ANT serial on a
+  UART. The cpunet image needs `radiant/spike/promisc/appcore` programmed
+  beside it or it runs perfectly and prints nowhere: clearing
+  `RESET.NETWORK.FORCEOFF` and granting uart0's pins via `PIN_CNF[n].MCUSEL`
+  are both application-core-only jobs. **And it transmits up to 8 dB weaker**
+  than an nRF52840 - this core's RADIO has no positive TXPOWER setting at all -
+  so a loss figure from it is not comparable with a Feather's.

@@ -373,6 +373,50 @@ static const enum radiant_phy radiant_nrf_phys[] = {
  * events (ADDRESS, END, DISABLED) this backend uses. */
 #define RADIANT_RADIO_IRQn     RADIO_0_IRQn
 #define RADIANT_RADIO_IRQn_2   RADIO_1_IRQn
+#elif defined(CONFIG_SOC_COMPATIBLE_NRF53X)
+/*
+ * nRF5340 NETWORK core. There is no application-core branch and there cannot
+ * be one: nrf5340_cpuapp has no `radio` node at all, so a build that reached
+ * here on cpuapp would fail at RADIANT_TIMER_NODE/NRF_RADIO long before these
+ * constants mattered.
+ *
+ * Fast ramp-up is the same story as nRF52: MODECNF0.RU exists on this part
+ * (RADIO_MODECNF0_RU_Msk is defined in nrf5340_network_bitfields.h) and resets
+ * to Default, so the 40 us below is only true because radiant_radio_init()
+ * calls nrf_radio_fast_ramp_up_enable_set(). That call is already
+ * feature-detected on the register mask rather than the SoC, so it needs no
+ * change here - but the dependency is why 40 is written and not 140.
+ */
+#define RAMP_UP_US             40u   /* fast ramp-up, enabled at init */
+#define RX_TO_TX_US            40u
+#define TX_TO_RX_US            40u
+/*
+ * BRACKETED THE SAME WAY THE OTHER TWO WERE, AND DELIBERATELY THE LARGEST OF
+ * THE THREE. This core is a 64 MHz Cortex-M33 - the same clock as nRF52840
+ * with a slightly better core - so a naive reading says "240, same as nRF52".
+ * Nordic's own figures say otherwise: nrf_802154_delayed_trx.c budgets
+ * TX/RX_SETUP_TIME_MAX 360/290 us for NRF53_SERIES against 270/270 for
+ * NRF52_SERIES, i.e. it rates this part *slower* to set up a delayed
+ * operation than the nRF52, not faster.
+ *
+ * 280 us takes Nordic at their word: above the nRF52840's 240 (same clock,
+ * rated slower) and below their 290 RX figure for this series. It is an upper
+ * bound to be tightened by measurement, and the way to tighten it is to watch
+ * RADIANT_RADIO_ETIME refusals stay at zero while lowering it - the same
+ * procedure the nRF52 number documents.
+ *
+ * Erring large is the cheap direction and this file says why: 280 costs 40 us
+ * of scheduling slack per window against a 249.7 ms channel period, and widens
+ * the scheduler's multi-channel exclusion radius by the same 40 us. Erring
+ * small wedges the board with every arm refused and no error visible to the
+ * host. ARM_LEAD_US lands at 368 us (280+40+48), which radiant_transfer.h's
+ * 1310 us reply-window check clears with 3.5x room.
+ */
+#define ARM_SETUP_US           280u
+#define CAPS_NAME              "nrf53 net RADIO (direct)"
+/* One RADIO interrupt line on this core (nrf5340_network.h: RADIO_IRQn = 8);
+ * only nRF54L splits the packet events across two. */
+#define RADIANT_RADIO_IRQn     RADIO_IRQn
 #elif defined(CONFIG_SOC_COMPATIBLE_NRF52X)
 #define RAMP_UP_US             40u   /* fast ramp-up, enabled at init */
 #define RX_TO_TX_US            40u
@@ -394,6 +438,35 @@ static const enum radiant_phy radiant_nrf_phys[] = {
 #else
 #error "radiant_radio_nrf: no measured constants for this SoC series. Add them \
 with the bench measurement that produced them, or select a different backend."
+#endif
+
+/*
+ * HOW HARD THIS PART CAN TRANSMIT, and it is not the same answer everywhere.
+ *
+ * nRF52840 and nRF54L15 both carry the full +2..+8 dBm ladder. The nRF5340
+ * NETWORK core carries none of it: nrf5340_network_bitfields.h defines
+ * RADIO_TXPOWER_TXPOWER_0dBm and then only negative settings (down to
+ * Neg40dBm, with a finer -1..-8 ladder than the nRF52 has). 0 dBm is the
+ * ceiling in silicon.
+ *
+ * Feature-detected on the MDK symbol rather than the SoC, for the reason
+ * DPPIC_PRESENT is a few hundred lines below: a Zephyr Kconfig rename has
+ * silently flipped a default in this project three times, and a missing
+ * register symbol is the hardware fact itself.
+ *
+ * This is a REAL BENCH CONSEQUENCE, not bookkeeping. An nRF5340 endpoint
+ * transmits up to 8 dB weaker than an nRF52840 one at the same requested
+ * power, so a loss figure measured against it is not comparable with a
+ * Feather's without accounting for that. It is also why this feeds
+ * caps.tx_power_max_dbm rather than being handled only in the table: the core
+ * clamps a requested power against caps (radiant_channel.c), and a caps value
+ * of 8 on a part whose ceiling is 0 would have the core report success at a
+ * power it never transmitted at.
+ */
+#if defined(RADIO_TXPOWER_TXPOWER_Pos8dBm)
+#define RADIANT_NRF_TXP_MAX_DBM 8
+#else
+#define RADIANT_NRF_TXP_MAX_DBM 0
 #endif
 
 /*
@@ -539,7 +612,9 @@ static struct radiant_radio_caps radiant_nrf_caps = {
 	.has_rx_crc          = true,
 
 	.tx_power_min_dbm    = -40,
-	.tx_power_max_dbm    = 8,
+	/* Per-part; see RADIANT_NRF_TXP_MAX_DBM. 8 on nRF52840/nRF54L15, 0 on
+	 * the nRF5340 network core, whose RADIO has no positive setting. */
+	.tx_power_max_dbm    = RADIANT_NRF_TXP_MAX_DBM,
 };
 
 const struct radiant_radio_caps *radiant_radio_caps_get(void)
@@ -1100,9 +1175,26 @@ static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index,
  * like it is (+8 dBm = 0x08, 0 dBm = 0x00 - `TXPOWER = (int8_t)dbm` would
  * pass review). nRF54L15 encodes +8 dBm as 0x3F, 0 dBm as 0x18; the same
  * expression there transmits at an unrelated power with no error. So the
- * mapping goes through the part's own MDK symbols, never the raw number -
- * every entry below is defined on both parts, so a part missing one fails
- * to compile rather than transmitting at a guess.
+ * mapping goes through the part's own MDK symbols, never the raw number - so a
+ * part that names a power differently fails to compile rather than
+ * transmitting at a guess.
+ *
+ * THE POSITIVE HALF IS GUARDED, AND THE ORIGINAL INVARIANT SURVIVES IT. This
+ * comment used to say "every entry below is defined on both parts". That
+ * stopped being true when the nRF5340 network core arrived, whose RADIO has no
+ * positive setting at all (RADIANT_NRF_TXP_MAX_DBM). The guard is a threshold
+ * rather than seven independent defined() tests on purpose: a part that has
+ * Pos8dBm but is missing, say, Pos5dBm still reaches that row and still fails
+ * to compile, which is exactly the protection the old wording bought. What is
+ * given up is only the case of a part with a genuinely gapped ladder, and no
+ * such part exists in this family.
+ *
+ * A SHORTER TABLE IS SAFE HERE and does not need a matching change in
+ * apply_power(): its nearest-match loop is over ARRAY_SIZE, and
+ * radiant_radio_hal.h states the contract outright - "a backend rounds to the
+ * nearest setting it has and does not fail for an unreachable value". The
+ * failure mode this guard cannot have is the dangerous one: a missing symbol
+ * removes a row, it never produces a wrong register value.
  */
 struct radiant_txp {
 	int8_t              dbm;
@@ -1110,6 +1202,7 @@ struct radiant_txp {
 };
 
 static const struct radiant_txp radiant_txp_table[] = {
+#if RADIANT_NRF_TXP_MAX_DBM >= 8
 	{   8, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Pos8dBm  },
 	{   7, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Pos7dBm  },
 	{   6, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Pos6dBm  },
@@ -1117,6 +1210,7 @@ static const struct radiant_txp radiant_txp_table[] = {
 	{   4, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Pos4dBm  },
 	{   3, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Pos3dBm  },
 	{   2, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Pos2dBm  },
+#endif
 	{   0, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_0dBm     },
 	{  -4, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Neg4dBm  },
 	{  -8, (nrf_radio_txpower_t)RADIO_TXPOWER_TXPOWER_Neg8dBm  },

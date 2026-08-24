@@ -156,17 +156,26 @@ static struct ant_desc ant_desc = {
 	},
 };
 
+/* These arrays, not the struct above, are the order the descriptors are
+ * reported in, and bulk-IN must come first. Host libraries index the endpoint
+ * array positionally rather than reading bEndpointAddress - node ant-plus does
+ * `inEp = iface.endpoints[0]; outEp = iface.endpoints[1]`, and Android's
+ * UsbInterface.getEndpoint(0) idiom matches. An OUT-first device makes such a
+ * host write commands into the IN pipe and poll the OUT pipe: it claims the
+ * interface and then reads nothing forever. Keep this matching the legacy
+ * transport's declaration order in usb_ant_class.c.
+ */
 static const struct usb_desc_header *ant_fs_desc[] = {
 	(struct usb_desc_header *)&ant_desc.if0,
-	(struct usb_desc_header *)&ant_desc.if0_out_ep,
 	(struct usb_desc_header *)&ant_desc.if0_in_ep,
+	(struct usb_desc_header *)&ant_desc.if0_out_ep,
 	(struct usb_desc_header *)&ant_desc.nil_desc,
 };
 
 static const struct usb_desc_header *ant_hs_desc[] = {
 	(struct usb_desc_header *)&ant_desc.if0,
-	(struct usb_desc_header *)&ant_desc.if0_hs_out_ep,
 	(struct usb_desc_header *)&ant_desc.if0_hs_in_ep,
+	(struct usb_desc_header *)&ant_desc.if0_hs_out_ep,
 	(struct usb_desc_header *)&ant_desc.nil_desc,
 };
 
