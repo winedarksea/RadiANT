@@ -1507,10 +1507,13 @@ static enum step arm_next(radiant_time_t earliest)
 			 * and what tools/ant_search_contention.py reproduces.
 			 */
 			s_limit = t_back(committed,
-					 lead +
+					 lead + RADIANT_SCHED_DISPATCH_SLACK_US +
 						 phy_gap(s.ch[scan_ch].fmt,
 							 committed_fmt) +
 						 rx_tail(s.ch[scan_ch].fmt));
+			/* DISPATCH_SLACK is software time, separate from receiver
+			 * hold: the terminal interrupt and this pass execute after
+			 * the hardware tail. Exact TX deadlines cannot absorb it. */
 		}
 		if (s_limit == RADIANT_TIME_NEVER ||
 		    s_limit >= s_open + (radiant_time_t)RADIANT_SCHED_SCAN_MIN_US) {
@@ -1552,7 +1555,8 @@ static enum step arm_next(radiant_time_t earliest)
 			 * is charged per gap filler rather than added to
 			 * arm_lead(), which every operation would pay. */
 			e_limit = t_back(committed,
-					 lead + phy_gap(NULL, committed_fmt));
+					 lead + RADIANT_SCHED_DISPATCH_SLACK_US +
+					 phy_gap(NULL, committed_fmt));
 		}
 		/* An unbounded gap is still bounded at the chunk ceiling here:
 		 * an overrunning scan costs listening time it wanted anyway,
@@ -1589,7 +1593,7 @@ static enum step arm_next(radiant_time_t earliest)
 			 * own - the same defect, on the side of the scheduler
 			 * a slave-only dongle never exercises. */
 			limit = t_back(tx_at,
-				       lead +
+				       lead + RADIANT_SCHED_DISPATCH_SLACK_US +
 					       phy_gap(s.ch[rx_ch].fmt,
 						       s.ch[tx_ch].fmt) +
 					       rx_tail(s.ch[rx_ch].fmt));

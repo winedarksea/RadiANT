@@ -53,7 +53,6 @@ from ant_probe import (  # noqa: E402
     open_device,
     reset_stack,
 )
-
 from ant_wire import (  # noqa: E402
     EVENT_TRANSFER_TX_COMPLETED,
     EVENT_TRANSFER_TX_FAILED,
@@ -112,15 +111,15 @@ def note(counters: Counters, msg_id: int, body: bytes) -> None:
         counters.acked += 1
     elif msg_id == MESG_BURST_DATA_ID:
         counters.burst += 1
-    elif msg_id == MESG_RESPONSE_EVENT_ID and len(body) >= 3:
+    elif (msg_id == MESG_RESPONSE_EVENT_ID and len(body) >= 3
+          and body[1] == MESG_EVENT_ID):
         # body[1] IS MESG_EVENT_ID (0x01) for an event, not 0. Written as
         # `== 0` every terminal event is discarded and the tool reports "no
         # terminal event", which reads as a radio or scheduling fault.
-        if body[1] == MESG_EVENT_ID:
-            code = body[2]
-            counters.events[code] = counters.events.get(code, 0) + 1
-            if code == EVENT_TX:
-                counters.slots += 1
+        code = body[2]
+        counters.events[code] = counters.events.get(code, 0) + 1
+        if code == EVENT_TX:
+            counters.slots += 1
 
 
 def command(dev, reader, msg_id: int, payload: bytes, name: str,
@@ -254,12 +253,33 @@ def main() -> int:
                     help="close the originator's channel before settling - the "
                          "control arm that tells 'still transmitting' apart "
                          "from 'the receiver invents one report per slot'")
+    ap.add_argument('--slave-trans-type', type=int, default=5,
+                    help='0 exercises acquisition of a wildcard transmission type')
+    ap.add_argument('--zwift-load', action='store_true',
+                    help='FE-C on ch1, power/HR on ch2/3, background scan on ch0')
+    ap.add_argument('--seconds', type=float, default=300.0)
+    ap.add_argument('--interval', type=float, default=1.0,
+                    help='minimum seconds between commands in the gated runner')
+    ap.add_argument('--tx-power', type=int, choices=range(6), default=4,
+                    help='ANT power level for both gated endpoints (default 4: +4 dBm)')
+    ap.add_argument('--json', dest='json_out', help='write a machine-readable bench report')
+    ap.add_argument('--gate', action='store_true',
+                    help='require >=300s, >=300 commands, >=99%% success and receive-loss gates')
     args = ap.parse_args()
 
     if bool(args.master_port) == bool(args.master_serial):
         ap.error("pass exactly one of --master-port / --master-serial")
     if not args.lone_master and bool(args.slave_port) == bool(args.slave_serial):
         ap.error("pass exactly one of --slave-port / --slave-serial")
+    if args.gate or args.json_out or args.zwift_load or args.slave_trans_type != 5:
+        if args.lone_master:
+            ap.error('the gated runner needs both endpoints')
+        if args.seconds <= 0 or args.sends <= 0 or args.interval <= 0:
+            ap.error('seconds, sends and interval must be positive')
+        if not 0 <= args.slave_trans_type <= 255:
+            ap.error('slave transmission type must fit in one byte')
+        from ant_ack_gate import run
+        return run(args)
 
     def open_end(port, serial, label):
         print(f"\nOpening the {label}")

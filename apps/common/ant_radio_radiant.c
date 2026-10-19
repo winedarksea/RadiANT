@@ -310,6 +310,12 @@ struct api_chan {
 	uint8_t bcast[ANTW_ANT_MAX_PAYLOAD_SIZE];
 	bool    bcast_valid;
 	bool    bcast_pending;
+	/* A slave keeps receiving until a real master slot opens the exchange. */
+	bool ack_pending;
+	bool ack_slot_ready;
+	uint8_t ack_data[RADIANT_TRANSFER_PKT_BYTES];
+	radiant_time_t ack_deadline;
+	radiant_time_t ack_slot_sync;
 
 #if defined(CONFIG_RADIANT_SEC)
 	/*
@@ -828,6 +834,19 @@ static void api_xfer_done(void *ctx, const struct radiant_transfer_result *r)
 	if (!api_ch_valid(ch) || r == NULL) {
 		return;
 	}
+	if (r->ev == RADIANT_TRANSFER_EV_TX_FAILED) {
+		switch (r->fail) {
+		case RADIANT_TRANSFER_FAIL_NO_ACK: api_stats.xfer_no_ack++; break;
+		case RADIANT_TRANSFER_FAIL_BAD_ACK: api_stats.xfer_bad_ack++; break;
+		case RADIANT_TRANSFER_FAIL_RADIO: api_stats.xfer_radio_failed++; break;
+		default: break;
+		}
+		LOG_DBG("ch=%u transfer failed reason=%u", ch, (unsigned)r->fail);
+	}
+	/* Completion of a transfer owes the channel its next tracking window. */
+	if (r->ev != RADIANT_TRANSFER_EV_NEXT_BLOCK) {
+		api_ch[ch].track_repost = true;
+	}
 
 	/*
 	 * The buffer-ownership contract, B1-B5: the bridge holds one 24-byte
@@ -996,6 +1015,28 @@ static int api_xfer_setup(uint8_t ch)
 	return radiant_transfer_init(&api_xfer[ch], &cfg);
 }
 
+/* Acquisition resolves wildcards after open() copied the configured ID.
+ * Update only an idle engine; never discard an owned burst block. */
+static void api_xfer_refresh_id(uint8_t ch)
+{
+	struct radiant_channel_id id;
+	struct radiant_transfer *t = &api_xfer[ch];
+	uint8_t addr[RADIANT_RADIO_ADDR_MAX];
+	int n;
+
+	if (!radiant_transfer_is_idle(t) || !t->ready ||
+	    radiant_channel_id_get(ch, &id) != RADIANT_CH_OK) {
+		return;
+	}
+	n = radiant_frame_addr(RADIANT_FRAME_CFG_TRACKING, t->cfg.net_addr,
+			       &id, addr, sizeof(addr));
+	if (n > 0) {
+		t->cfg.id = id;
+		memcpy(t->filter.addr, addr, (size_t)n);
+		t->filter.addr_len = (uint8_t)n;
+	}
+}
+
 /* ---------------------------------------------------------------------------
  * The search
  * ---------------------------------------------------------------------------
@@ -1038,6 +1079,7 @@ static void api_search_acquired(uint8_t channel,
 
 	if (!is_scan) {
 		radiant_channel_on_acquired(channel, &r->id, r->t_sync);
+		api_xfer_refresh_id(channel);
 		api_stats.acquired++;
 	}
 
@@ -1261,19 +1303,12 @@ static void api_post_search_window(radiant_time_t now)
 #define API_FRAME_AIRTIME_US 150u
 
 /*
- * A tracked window's reserve: ack turnaround + window guard + reply airtime,
- * ~1960 us - within 2% of RADIANT_SCHED_MERGE_SPAN_MAX_US (2000), not a
- * coincidence: both bound how far apart two tracked channels can be and still
- * share a window, so the merge span is reused rather than risking drift.
+ * A command can arrive after this RX is armed. Reserve the entire possible
+ * slave data/ACK exchange even before one is queued; an empty window gives
+ * the unused air back. This is a grant budget, not a wider receive window.
  */
-#define API_FOLLOW_ON_TRACK_US ((uint16_t)RADIANT_SCHED_MERGE_SPAN_MAX_US)
-
-_Static_assert(RADIANT_TRANSFER_REPLY_US + RADIANT_TRANSFER_ACK_GUARD_US +
-			       API_FRAME_AIRTIME_US <=
-		       RADIANT_SCHED_MERGE_SPAN_MAX_US,
-	       "the tracked follow-on reserve no longer fits inside the merge "
-	       "span, so the two have stopped being the same quantity and the "
-	       "reserve needs its own constant");
+#define API_FOLLOW_ON_TRACK_US ((uint16_t)(RADIANT_TRANSFER_SLOT_REPLY_US + \
+	RADIANT_TRANSFER_REPLY_US + RADIANT_TRANSFER_ACK_GUARD_US + API_FRAME_AIRTIME_US))
 
 /*
  * A listening master's reserve: its slave's reply lands
@@ -1757,6 +1792,11 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 		(unsigned)api_ch[ch].bcast_valid);
 	switch (mt) {
 	case RADIANT_MSG_BROADCAST:
+		if (!crc_failed && api_ch[ch].ack_pending &&
+		    !radiant_channel_is_master(ch)) {
+			api_ch[ch].ack_slot_ready = true;
+			api_ch[ch].ack_slot_sync = evt->t_sync;
+		}
 #if defined(CONFIG_RADIANT_SEC)
 		/*
 		 * The RX policy guard: ISR context, classification only, zero
@@ -1882,6 +1922,14 @@ static void api_sched_rx(uint8_t ch, uint8_t filter_index,
 	 * evt->op is the HAL's id; radiant_channel.c holds the surrogate this
 	 * file minted, since radiant_sched.c sits between the HAL and it.
 	 */
+	/* The transfer engine posts its own scheduler requests. The preceding
+	 * TX's completion retired the tracking token; scheduler routing, not
+	 * that obsolete token, establishes ownership of the ACK window. */
+	if (radiant_transfer_state(&api_xfer[ch]) == RADIANT_TRANSFER_STATE_WAIT_ACK) {
+		api_stats.rx_to_xfer++;
+		radiant_transfer_on_rx_event(&api_xfer[ch], evt);
+		return;
+	}
 	if (radiant_channel_op_owner(api_ch[ch].op) != (int)ch) {
 		/* Without this, a channel that heard its peer but is dropped
 		 * here looks identical to a window never armed. */
@@ -1917,6 +1965,13 @@ static void api_sched_tx(uint8_t ch, const struct radiant_tx_event *evt, void *u
 	}
 
 	if (!radiant_transfer_is_idle(&api_xfer[ch])) {
+		if (radiant_channel_is_master(ch) &&
+		    radiant_transfer_state(&api_xfer[ch]) == RADIANT_TRANSFER_STATE_TX_DATA &&
+		    evt->status == RADIANT_RADIO_STATUS_OK) {
+			/* Originating data occupies this master's slot just as a
+			 * broadcast does; resuming must not repost the expired slot. */
+			radiant_channel_on_slot(ch, evt->t_sync);
+		}
 		radiant_transfer_on_tx_event(&api_xfer[ch], evt);
 		return;
 	}
@@ -2310,6 +2365,26 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		api_bind_accepted(ch, API_SLOT_SEARCH);
 	}
 
+	/* Retire the RX operation before reusing its scheduler slot. The frame
+	 * callback merely saved the achieved sync; no predicted-slot transmit. */
+	if (api_ch[ch].ack_pending && api_ch[ch].ack_slot_ready) {
+		struct api_chan *c = &api_ch[ch];
+		radiant_time_t at = c->ack_slot_sync + RADIANT_TRANSFER_SLOT_REPLY_US;
+
+		c->ack_slot_ready = false;
+		if (radiant_channel_state_get(ch) == RADIANT_CH_STATE_TRACKING &&
+		    radiant_transfer_is_idle(&api_xfer[ch]) &&
+		    at > now && now < c->ack_deadline) {
+			api_xfer_refresh_id(ch);
+			c->ack_pending = false;
+			if (radiant_transfer_ack_data(&api_xfer[ch], c->ack_data,
+					RADIANT_TRANSFER_PKT_BYTES, at) != RADIANT_TRANSFER_OK) {
+				api_stats.xfer_radio_failed++;
+				(void)radiant_event_post_transfer_tx_failed(ch);
+			}
+		}
+	}
+
 	/*
 	 * Exception #1, bounded by construction: a listening master's
 	 * turnaround needs the t_sync its own transmit achieved (only
@@ -2452,6 +2527,15 @@ static void api_watchdogs_locked(radiant_time_t now)
 
 	for (ch = 0u; ch < API_CHANNELS; ch++) {
 		struct api_chan *c = &api_ch[ch];
+		unsigned int key = radiant_event_crit_enter();
+
+		if (c->ack_pending && now >= c->ack_deadline) {
+			c->ack_pending = false;
+			c->ack_slot_ready = false;
+			api_stats.xfer_no_opener++;
+			(void)radiant_event_post_transfer_tx_failed(ch);
+		}
+		radiant_event_crit_exit(key);
 
 		/* H2. Non-idle with nothing armed means no done() is coming -
 		 * api_feed_xfer_terminal() is only reachable from api_sched_done(). */
@@ -2574,6 +2658,11 @@ static void api_housekeep(void)
 				(unsigned int)api_stats.rx_to_xfer,
 				(unsigned int)api_stats.rx_dropped,
 				(unsigned int)api_stats.rx_sched_events);
+			LOG_INF("xfer failures: no_opener=%u no_ack=%u bad_ack=%u radio=%u",
+				(unsigned int)api_stats.xfer_no_opener,
+				(unsigned int)api_stats.xfer_no_ack,
+				(unsigned int)api_stats.xfer_bad_ack,
+				(unsigned int)api_stats.xfer_radio_failed);
 			rxpath_last = now;
 			rxpath_seen = api_stats.rx_sched_events;
 		}
@@ -2960,6 +3049,11 @@ antr_err_t antr_channel_close(uint8_t channel)
 		uint32_t op = api_ch[channel].op;
 
 		(void)radiant_transfer_abort(&api_xfer[channel]);
+		if (api_ch[channel].ack_pending) {
+			api_ch[channel].ack_pending = false;
+			api_ch[channel].ack_slot_ready = false;
+			(void)radiant_event_post_transfer_tx_failed(channel);
+		}
 		(void)radiant_search_end(&api_search, channel);
 		if (api_search_slot == channel) {
 			/* This channel carried the sweep and its request is
@@ -3456,10 +3550,40 @@ antr_err_t antr_acknowledge_message_tx(uint8_t channel, uint8_t size,
 	if (!radiant_channel_is_open(channel)) {
 		return (antr_err_t)ANTW_CHANNEL_NOT_OPENED;
 	}
+	if (radiant_channel_type_get(channel) == ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY ||
+	    radiant_channel_type_get(channel) == ANTW_CHANNEL_TYPE_MASTER_TX_ONLY) {
+		return (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE;
+	}
 
 	k_mutex_lock(&api_lock, K_FOREVER);
+	unsigned int key = radiant_event_crit_enter();
+	if (api_ch[channel].ack_pending ||
+	    !radiant_transfer_is_idle(&api_xfer[channel])) {
+		radiant_event_crit_exit(key);
+		k_mutex_unlock(&api_lock);
+		return (antr_err_t)ANTW_TRANSFER_IN_PROGRESS;
+	}
+	api_xfer_refresh_id(channel);
+	if (!radiant_channel_is_master(channel) && api_xfer[channel].ready) {
+		uint16_t counts = 0u;
+		radiant_time_t wait = RADIANT_API_XFER_WATCHDOG_MS * 1000u;
+
+		(void)radiant_channel_period_get(channel, &counts);
+		radiant_time_t periods = 2u * radiant_channel_counts_to_us(counts);
+		if (periods > wait) {
+			wait = periods;
+		}
+		memcpy(api_ch[channel].ack_data, data, size);
+		api_ch[channel].ack_deadline = radiant_radio_now() + wait;
+		api_ch[channel].ack_slot_ready = false;
+		api_ch[channel].ack_pending = true;
+		radiant_event_crit_exit(key);
+		k_mutex_unlock(&api_lock);
+		return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+	}
 	rc = radiant_transfer_ack_data(&api_xfer[channel], data, size,
 				   api_xfer_t_sync_for(channel));
+	radiant_event_crit_exit(key);
 	err = api_xfer_err(rc);
 	if (rc == RADIANT_TRANSFER_OK) {
 		api_pump_locked();
@@ -3509,11 +3633,19 @@ antr_err_t antr_burst_tx(uint8_t channel, uint16_t size, uint8_t *data,
 	 * instant for a continuation anyway, but passing a slot here would be
 	 * misleading to read.
 	 */
+	unsigned int key = radiant_event_crit_enter();
+	if (api_ch[channel].ack_pending) {
+		radiant_event_crit_exit(key);
+		k_mutex_unlock(&api_lock);
+		return (antr_err_t)ANTW_TRANSFER_IN_PROGRESS;
+	}
+	api_xfer_refresh_id(channel);
 	rc = radiant_transfer_burst_block(&api_xfer[channel], data, (uint8_t)size,
 				      segment,
 				      (segment & ANTR_BURST_SEGMENT_START) != 0u
 					      ? api_xfer_t_sync_for(channel)
 					      : RADIANT_TIME_NEVER);
+	radiant_event_crit_exit(key);
 	err = api_xfer_err(rc);
 	if (rc == RADIANT_TRANSFER_OK) {
 		api_pump_locked();

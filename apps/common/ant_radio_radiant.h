@@ -121,6 +121,10 @@ struct radiant_api_stats {
 	/* Transfers the watchdog terminated (non-idle, nothing armed, no
 	 * completion coming). Must never be the normal case. */
 	uint32_t xfer_watchdogs;
+	uint32_t xfer_no_opener;    /* pending slave command expired before a slot */
+	uint32_t xfer_no_ack;
+	uint32_t xfer_bad_ack;
+	uint32_t xfer_radio_failed;
 	/*
 	 * CRC failures on a tracked window recovered by flipping one bit back
 	 * (CONFIG_RADIANT_CRC_REPAIR). Kept apart from a clean receive:

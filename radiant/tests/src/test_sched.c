@@ -1498,7 +1498,7 @@ ZTEST(radiant_sched, test_a_window_is_truncated_to_clear_a_transmit_deadline)
 	/* lead AND this window's own tail: a frame whose t_sync lands at
 	 * t_close still has its body to deliver, and a transmit's t_sync cannot
 	 * slip to wait for it. */
-	zassert_equal(tx_at - (radiant_time_t)lead -
+	zassert_equal(tx_at - (radiant_time_t)lead - RADIANT_SCHED_DISPATCH_SLACK_US -
 			      (radiant_time_t)radiant_frame_tail_us(
 				      radiant_frame_format(
 					      RADIANT_FRAME_CFG_TRACKING)) -
@@ -1791,7 +1791,7 @@ ZTEST(radiant_sched, test_a_scan_chunk_is_reported_with_the_bounds_it_got)
 	/* lead AND the chunk's own tail: t_close bounds a t_sync, so the
 	 * receiver is still on for a body and CRC after it - see
 	 * test_a_truncated_scan_leaves_room_for_the_chunks_own_tail. */
-	zassert_equal(tracked_at - (radiant_time_t)lead -
+	zassert_equal(tracked_at - (radiant_time_t)lead - RADIANT_SCHED_DISPATCH_SLACK_US -
 			      (radiant_time_t)radiant_frame_tail_us(
 				      radiant_frame_format(
 					      RADIANT_FRAME_CFG_SEARCH)) -
@@ -1992,6 +1992,7 @@ ZTEST(radiant_sched, test_a_truncated_scan_leaves_room_for_the_chunks_own_tail)
 	fake_radio_caps_mut()->rx_close_hold_us = 508u;
 
 	need = (radiant_time_t)radiant_radio_caps_get()->min_arm_lead_us +
+	       RADIANT_SCHED_DISPATCH_SLACK_US +
 	       (radiant_time_t)radiant_frame_tail_us(scan_fmt) +
 	       (radiant_time_t)radiant_radio_caps_get()->rx_close_hold_us;
 	zassert_true(radiant_frame_tail_us(scan_fmt) > 0u,

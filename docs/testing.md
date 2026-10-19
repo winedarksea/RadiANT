@@ -1,5 +1,66 @@
 # Testing
 
+## FE-C control regression bench
+
+`tools/ant_ack_pair.py` can gate a slave-originated exchange against an
+independently implemented master. Use an SDK ANT UART endpoint on the nRF54L
+DK as the master and a RadiANT nRF52840 USB dongle as the slave. Discover COM
+ports and USB serials each sitting; the examples' identifiers are placeholders.
+
+```powershell
+python tools/ant_ack_pair.py --master-port COM4 --slave-serial <serial> `
+  --slave-trans-type 0 --seconds 300 --sends 300 --gate --json build/fec-alone.json
+python tools/ant_ack_pair.py --master-port COM4 --slave-serial <serial> `
+  --slave-trans-type 0 --zwift-load --seconds 300 --sends 300 --gate `
+  --json build/fec-loaded.json
+```
+
+The wildcard transmission type reproduces Zwift's configuration: the master
+advertises type 5, while the slave initially names type 0. The loaded run tracks
+FE-C, power and heart rate on channels 1, 2 and 3, with background scanning on
+channel 0. Both ends count commands separately; success requires at least 99%
+completion, one terminal event per accepted command, no duplicate peer delivery,
+and no USB/serial framing errors. The receive check matches actual master TX
+events to individual channel broadcasts, with guarded measurement boundaries
+and a 100 ms allowance for host notification latency (less than half a bench
+channel period). Each RX matches at most one TX; a neighbouring slot cannot
+replace a missing broadcast. Staged payload gaps are a separate producer
+diagnostic: a host update can be overwritten before it reaches the air. The
+receive check uses the existing 1.5% absolute ceiling. A comparative
+SDK-receiver loss gate still requires a
+separate, comparable SDK receiver baseline; this two-ended test alone does not
+provide one. Synthetic sensor pages exercise delivery and scheduling, not trainer
+mechanics or commercial FE-C command-status behavior.
+
+Build RadiANT with NCS v3.4.0 and the SDK ANT peer with NCS v3.2.4. The nRF53
+DK runs the fake-radio ztests on its application core. Its real radio endpoint
+is a separate network-core UART build with the existing app-core companion;
+native USB on the application core does not bridge to that radio.
+
+### Interpreting Zwift USB captures
+
+`scripts/cap_zwift.ps1` supports startup and already-running sessions. Decode
+with `tools/decode_pcap.py --summary`; a nonempty pcap alone does not establish
+valid ANT traffic. The summary includes checksum candidates, discarded bytes,
+incomplete stream tails, capture truncation, USB statuses, named channel events,
+and accepted/completed/failed/pending acknowledged transfers. Unmatched terminal
+events can belong to commands sent before capture began. A missing channel in a
+mid-session capture does not establish when or why it disappeared.
+
+Bad-checksum *candidates* are reported during byte-by-byte resynchronization;
+they are not all necessarily corrupt frames. Discarded bytes can include USB
+padding: the October 18 captures contain two zero bytes after many host commands.
+Incomplete tails are distinct from bad checksums and may simply be a stopped
+capture or a partial first/last transfer.
+
+Zwift sometimes reassigns its still-assigned scan channel before unassigning it.
+`CHANNEL_IN_WRONG_STATE` (0x15), followed by successful unassign/reassign, is a
+recoverable protocol exchange. The serial-number request remains unsupported
+(0x28), and the corresponding capability remains unadvertised. Neither response
+should be changed to a false success to make an error counter disappear.
+
+---
+
 Checked by: `python -m unittest discover -s tools -p "test_*.py"`, which is the
 `host-tests` job in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
 and covers the host-side claims below. Everything from Tier 2 down needs

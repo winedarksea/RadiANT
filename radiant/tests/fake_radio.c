@@ -147,6 +147,7 @@ struct fake_state {
 	 * would be re-arming it from inside the very callback under test. */
 	uint32_t force_arm_n;
 	int32_t  tx_offset_us;
+	uint32_t rx_terminal_delay_us;
 	int8_t   default_rssi;
 
 	/* The noise floor this mock reports on a window that heard nothing.
@@ -1349,7 +1350,8 @@ static bool next_due(radiant_time_t *t_out, enum due_kind *kind_out,
 		*air_out = best_i;
 		return true;
 	}
-	*t_out = g.cur.t_close;
+	*t_out = (RADIANT_TIME_NEVER - g.cur.t_close < g.rx_terminal_delay_us)
+		 ? RADIANT_TIME_NEVER : g.cur.t_close + g.rx_terminal_delay_us;
 	*kind_out = DUE_CLOSE;
 	return true;
 }
@@ -2235,6 +2237,11 @@ void fake_radio_force_arm_repeat(int rc, uint32_t count)
 {
 	g.force_arm_rc = rc;
 	g.force_arm_n = (rc == RADIANT_RADIO_OK_RC) ? 0u : count;
+}
+
+void fake_radio_set_rx_terminal_delay_us(uint32_t delay)
+{
+	g.rx_terminal_delay_us = delay;
 }
 
 void fake_radio_force_terminal_repeat(enum radiant_radio_status status,

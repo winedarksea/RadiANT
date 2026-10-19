@@ -84,6 +84,8 @@ class FrameReader:
         self.dev = dev
         self.timeout_ms = timeout_ms
         self.buf = bytearray()
+        self.checksum_errors = 0
+        self.discarded_bytes = 0
 
     def _fill(self) -> bool:
         try:
@@ -114,6 +116,7 @@ class FrameReader:
             # start of a frame in a stream is this buffer's job and not its.
             while self.buf and self.buf[0] != SYNC_TX:
                 del self.buf[0]
+                self.discarded_bytes += 1
 
             if len(self.buf) >= 2:
                 length = self.buf[1]
@@ -126,6 +129,7 @@ class FrameReader:
                     # ant_wire.unframe() and nowhere else here.
                     parsed = unframe(candidate)
                     if parsed is None:
+                        self.checksum_errors += 1
                         print(f"  ! checksum mismatch on {candidate.hex()}, dropping")
                         continue
                     return parsed

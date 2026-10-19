@@ -2554,3 +2554,239 @@ ZTEST(api, test_the_second_acknowledged_data_is_reported_as_acknowledged_data)
 
 	end_of_test();
 }
+
+/* Zwift opens a bidirectional slave with a wildcard transmission type. */
+static uint16_t fec_acquire_with_period(uint8_t trans_type, bool wildcard, uint16_t period)
+{
+	const struct fake_radio_arm *w;
+	uint16_t number;
+
+	zassert_ok(antr_network_address_set(0u, ant_plus_key));
+	zassert_ok(antr_channel_assign(CH, ANTW_CHANNEL_TYPE_SLAVE, 0u, 0u));
+	zassert_ok(antr_channel_id_set(CH, wildcard ? 0u : 0xCC00u,
+				     wildcard ? 0u : 0x11u, trans_type));
+	zassert_ok(antr_channel_period_set(CH, period));
+	zassert_ok(antr_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_ok(antr_channel_open(CH));
+	w = armed_search_window();
+	air_device(w, 0u, 0xCC00u, 0x11u, 1000u, &number);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH));
+	run_housekeeping();
+	return number;
+}
+
+static uint16_t fec_acquire(uint8_t trans_type, bool wildcard)
+{
+	return fec_acquire_with_period(trans_type, wildcard, 8192u);
+}
+
+static void fec_exchange(uint16_t number, uint8_t reply_ctrl, bool reply)
+{
+	const struct fake_radio_arm *w = last_arm_of(FAKE_RADIO_ARM_RX);
+	const struct fake_radio_arm *tx;
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	radiant_time_t sync = w->t_open + (w->t_close - w->t_open) / 2u;
+	uint8_t n = fake_radio_build_ant_frame(frame, number, 0x11u, 5u, peer_payload);
+
+	zassert_ok(fake_radio_air_frame(sync, frame, n));
+	fake_radio_advance_to(sync + 1000u);
+	tx = last_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0);
+	zassert_not_null(tx, "slave did not transmit in the received slot");
+	zassert_equal(sync + RADIANT_TRANSFER_SLOT_REPLY_US, tx->t_sync_at);
+	zassert_equal(5u, tx->body[0], "transfer retained wildcard transmission type");
+	zassert_equal((uint8_t)number, tx->addr[2]);
+	zassert_equal((uint8_t)(number >> 8), tx->addr[3]);
+	zassert_equal(0x11u, tx->addr[4]);
+	zassert_mem_equal(peer_payload, &tx->body[2], 8u);
+	if (reply) {
+		frame[6] = reply_ctrl;
+		zassert_ok(fake_radio_air_frame(tx->t_sync_at + RADIANT_TRANSFER_REPLY_US,
+					       frame, n));
+	}
+	fake_radio_advance_to(tx->t_sync_at + RADIANT_TRANSFER_REPLY_US +
+			      RADIANT_TRANSFER_ACK_GUARD_US + 1000u);
+	drain();
+}
+
+static void fec_success_case(uint8_t trans_type, bool wildcard)
+{
+	uint16_t number = fec_acquire(trans_type, wildcard);
+	uint32_t before = count_msgs(ANTW_MESG_BROADCAST_DATA_ID);
+	uint32_t misses = count_channel_events(CH, ANTW_EVENT_RX_FAIL);
+
+	for (unsigned int i = 0u; i < 3u; i++) {
+		uint32_t arms = count_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0);
+		const struct fake_radio_arm *w = last_arm_of(FAKE_RADIO_ARM_RX);
+		if (i == 1u) {
+			fake_radio_advance_to(w->t_open - 10u);
+		} else if (i == 2u) {
+			fake_radio_advance_to(w->t_open + 10u);
+		}
+		zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+		zassert_equal(arms, count_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0),
+			      "queueing cancelled tracking to transmit early");
+		zassert_equal(ANTW_TRANSFER_IN_PROGRESS,
+			      antr_acknowledge_message_tx(CH, 8u, bcast_payload));
+		fec_exchange(number, RADIANT_CTRL_ACK_LAST_SEQ1, true);
+		zassert_equal(i + 1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_COMPLETED));
+		zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+		zassert_true(radiant_sched_pending(CH), "tracking was not resumed");
+	}
+	zassert_equal(before + 3u, count_msgs(ANTW_MESG_BROADCAST_DATA_ID));
+	zassert_equal(misses, count_channel_events(CH, ANTW_EVENT_RX_FAIL));
+	end_of_test();
+}
+
+ZTEST(api, test_fec_slave_resolves_wildcard_transmission_type)
+{
+	fec_success_case(0u, false);
+}
+
+ZTEST(api, test_fec_slave_resolves_fully_wildcard_identity)
+{
+	fec_success_case(0u, true);
+}
+
+ZTEST(api, test_fec_slave_with_pinned_identity_completes)
+{
+	fec_success_case(5u, false);
+}
+
+ZTEST(api, test_fec_slave_no_ack_and_wrong_ack_recover_once)
+{
+	uint16_t number = fec_acquire(0u, false);
+	uint32_t no_ack = radiant_api_stats_get()->xfer_no_ack;
+	uint32_t bad_ack = radiant_api_stats_get()->xfer_bad_ack;
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+	fec_exchange(number, 0u, false);
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+	zassert_equal(no_ack + 1u, radiant_api_stats_get()->xfer_no_ack);
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+	fec_exchange(number, RADIANT_CTRL_ACK_LAST_SEQ0, true);
+	zassert_equal(2u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+	zassert_equal(bad_ack + 1u, radiant_api_stats_get()->xfer_bad_ack);
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+	fec_exchange(number, RADIANT_CTRL_ACK_LAST_SEQ1, true);
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_COMPLETED));
+	end_of_test();
+}
+
+ZTEST(api, test_fec_pending_close_fails_once_and_reset_discards_pending)
+{
+	(void)fec_acquire(0u, false);
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+	end_of_test();
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+	zassert_ok(antr_channel_unassign(CH));
+	(void)fec_acquire(0u, true);
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+	zassert_ok(antr_stack_reset());
+	fake_radio_advance(1000000u);
+	drain();
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+	zassert_true(fake_radio_is_idle());
+}
+
+ZTEST(api, test_fec_pending_without_an_opener_expires_once)
+{
+	(void)fec_acquire(0u, false);
+	uint32_t expired = radiant_api_stats_get()->xfer_no_opener;
+	const struct fake_radio_arm *w = last_arm_of(FAKE_RADIO_ARM_RX);
+
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+	/* Let one genuinely empty window end, then prevent further arms so
+	 * housekeeping, rather than a fabricated peer, expires the command. */
+	fake_radio_force_arm_repeat(RADIANT_RADIO_EBUSY, 100u);
+	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance(600000u);
+	run_housekeeping();
+	drain();
+	zassert_equal(expired + 1u, radiant_api_stats_get()->xfer_no_opener);
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+	zassert_equal(0u, count_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0));
+	end_of_test();
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+}
+
+ZTEST(api, test_fec_pending_watchdog_allows_two_slow_channel_periods)
+{
+	(void)fec_acquire_with_period(0u, false, 32768u);
+	const struct fake_radio_arm *w = last_arm_of(FAKE_RADIO_ARM_RX);
+
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+	fake_radio_force_arm_repeat(RADIANT_RADIO_EBUSY, 100u);
+	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance(600000u);
+	run_housekeeping();
+	drain();
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED),
+		      "the 500 ms floor truncated the two-period pending allowance");
+	zassert_equal(ANTW_TRANSFER_IN_PROGRESS,
+		      antr_acknowledge_message_tx(CH, 8u, bcast_payload));
+	fake_radio_advance(1500000u);
+	run_housekeeping();
+	drain();
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+	end_of_test();
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+}
+
+ZTEST(api, test_fec_reacquisition_uses_new_peer_without_narrowing_wildcards)
+{
+	uint16_t first = fec_acquire(0u, true);
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+	fec_exchange(first, RADIANT_CTRL_ACK_LAST_SEQ1, true);
+	/* A real loss returns the still-open wildcard channel to SEARCHING. */
+	(void)radiant_sched_cancel(CH);
+	for (unsigned int i = 0u; i < RADIANT_CHANNEL_RX_FAIL_TO_SEARCH; i++) {
+		(void)radiant_channel_on_slot_missed(CH, radiant_radio_now());
+	}
+	run_housekeeping();
+	const struct fake_radio_arm *w = armed_search_window();
+	uint16_t second;
+	air_device(w, 0u, 0xDD00u, 0x11u, 1000u, &second);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+	zassert_not_equal(first, second);
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH));
+	if (fake_radio_is_idle()) {
+		run_housekeeping();
+	}
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+	fec_exchange(second, RADIANT_CTRL_ACK_LAST_SEQ1, true);
+	zassert_equal(2u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_COMPLETED));
+	end_of_test();
+}
+
+ZTEST(api, test_fec_turnaround_survives_a_scan_terminal_delivered_after_its_airtime_tail)
+{
+	uint16_t number = fec_acquire(0u, false);
+	radiant_time_t sync = radiant_channel_next_slot(CH);
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t len = fake_radio_build_ant_frame(frame, number, 0x11u, 5u, peer_payload);
+
+	/* Search tail = 112 us. Inject another 138 us of dispatch load: a
+	 * four-channel hardware run still missed once with a 100 us budget.
+	 * This changes callback delivery, not the accepted on-air window. */
+	fake_radio_set_rx_terminal_delay_us(250u);
+	zassert_ok(antr_channel_assign(1u, ANTW_CHANNEL_TYPE_SLAVE, 0u, 1u));
+	zassert_ok(antr_channel_id_set(1u, 0u, 0u, 0u));
+	zassert_ok(antr_channel_period_set(1u, 8192u));
+	zassert_ok(antr_channel_radio_freq_set(1u, RF_INDEX));
+	zassert_ok(antr_channel_open(1u));
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+	zassert_ok(fake_radio_air_frame(sync, frame, len));
+	frame[6] = RADIANT_CTRL_ACK_LAST_SEQ1;
+	zassert_ok(fake_radio_air_frame(sync + RADIANT_TRANSFER_SLOT_REPLY_US +
+				       RADIANT_TRANSFER_REPLY_US, frame, len));
+	fake_radio_advance_to(sync + RADIANT_TRANSFER_SLOT_REPLY_US +
+		RADIANT_TRANSFER_REPLY_US + RADIANT_TRANSFER_ACK_GUARD_US + 1000u);
+	drain();
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_COMPLETED),
+		      "a short gap scan consumed the transmit's arming lead");
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+	zassert_ok(antr_channel_close(1u));
+	end_of_test();
+}

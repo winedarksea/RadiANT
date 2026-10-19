@@ -184,6 +184,10 @@ int radiant_transfer_arm_tx(struct radiant_transfer *t, uint8_t ctrl,
 	req.body = t->tx_body;
 	req.body_len = t->tx_body_len;
 	req.t_sync_at = t_sync_at;
+	/* An originated data packet must retain air for its ACK receive window.
+	 * The reserve also permits in-grant arming on arbitrated backends. */
+	req.follow_on_us = RADIANT_TRANSFER_REPLY_US +
+		RADIANT_TRANSFER_ACK_GUARD_US + radiant_frame_tail_us(t->fmt);
 
 	/* The scheduler, not the radio: this posts an intent against the
 	 * engine's channel slot; the commit happens on the way out of the

@@ -12,7 +12,7 @@ this reproduces that format:
          1.209  host->dev  NETWORK_KEY 00b9a521fbbd72c345
 
 Only bulk transfers carry the ANT serial stream. USB does not preserve message
-boundaries, so payloads are concatenated per (device, direction) and re-framed
+boundaries, so payloads are concatenated per (bus, device, endpoint, direction) and re-framed
 on the 0xA4 sync byte with the trailing XOR checksum verified - a message split
 across two URBs decodes correctly, and a bad checksum is reported rather than
 skipped silently.
@@ -35,6 +35,7 @@ import argparse
 import struct
 import sys
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -85,7 +86,8 @@ MESSAGE_NAMES = _message_names()
 class PcapReader:
     """Minimal classic-pcap reader. USBPcapCMD writes classic pcap, not pcapng."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, diagnostics=None):
+        self.diagnostics = diagnostics if diagnostics is not None else Counter()
         self.data = path.read_bytes()
         if len(self.data) < 24:
             raise ValueError(f"{path} is too short to be a pcap file")
@@ -116,13 +118,30 @@ class PcapReader:
             )
             off += 16
             if off + incl > end:
-                break  # truncated final record: a Ctrl-C'd capture ends this way
+                self.diagnostics['truncated_pcap_records'] += 1
+                return
+            if incl < _orig:
+                self.diagnostics['snaplen_truncated_records'] += 1
             yield ts_sec + ts_frac * self.tick, self.data[off : off + incl]
             off += incl
+        if off != end:
+            self.diagnostics['truncated_pcap_records'] += 1
+
+
+@dataclass(frozen=True)
+class UsbRecord:
+    device: int
+    transfer: int
+    from_device: bool
+    payload: bytes
+    bus: int
+    endpoint: int
+    status: int
+    truncated: bool
 
 
 def parse_usbpcap(buf: bytes):
-    """Return (device, transfer, is_from_device, payload) or None."""
+    """Parse one USBPcap record, retaining stream identity and USB errors."""
     if len(buf) < 27:
         return None
     header_len = struct.unpack("<H", buf[:2])[0]
@@ -136,20 +155,24 @@ def parse_usbpcap(buf: bytes):
     # info bit 0 set = PDO -> FDO, i.e. the completion coming back from the
     # device. For bulk the endpoint direction bit is the reliable signal.
     from_device = bool(endpoint & 0x80) if transfer == TRANSFER_BULK else bool(info & 0x01)
-    return device, transfer, from_device, payload
+    return UsbRecord(device, transfer, from_device, payload, _bus, endpoint,
+                     _status, header_len + data_len > len(buf))
 
 
-def reframe(stream: bytearray):
-    """Yield (msg_id, payload, checksum_ok) for every complete ANT message.
+def reframe(stream: bytearray, diagnostics=None):
+    """Yield (msg_id, payload, checksum_ok) for complete frame candidates.
 
     Consumes what it decodes; leftovers stay in ``stream`` for the next URB.
     """
+    diagnostics = diagnostics if diagnostics is not None else Counter()
     while True:
         start = stream.find(SYNC)
         if start < 0:
+            diagnostics['discarded_bytes'] += len(stream)
             stream.clear()
             return
         if start:
+            diagnostics['discarded_bytes'] += start
             del stream[:start]
         if len(stream) < 4:
             return
@@ -166,13 +189,17 @@ def reframe(stream: bytearray):
             # Not a real frame - the 0xA4 was data. Drop just that byte and
             # resynchronise rather than swallowing the whole candidate.
             del stream[:1]
+            diagnostics['discarded_bytes'] += 1
+            diagnostics['bad_checksum_candidates'] += 1
+            yield msg[2], msg[3:-1], False
             continue
         del stream[:total]
         yield msg[2], msg[3:-1], True
 
 
 def decode(path: Path, raw: bool = False, only_device: int | None = None):
-    reader = PcapReader(path)
+    diagnostics: Counter[str] = Counter()
+    reader = PcapReader(path, diagnostics)
     devices: Counter[int] = Counter()
     # Keyed by (device, direction), NOT direction alone. A capture taken with
     # -All carries every device behind the filter device, and concatenating two
@@ -180,20 +207,46 @@ def decode(path: Path, raw: bool = False, only_device: int | None = None):
     # the reframer then resynchronises through the wreckage and emits messages
     # that were never sent - a real risk, not a theoretical one (see the module
     # docstring's `{7: 74, 255: 22162}` capture).
-    streams: dict[tuple[int, bool], bytearray] = {}
+    streams: dict[tuple[int, int, int, bool], bytearray] = {}
     lines: list[str] = []
+    warnings: list[str] = []
+    channel_counts: Counter[tuple] = Counter()
+    transfers: dict[tuple, Counter] = {}
+    events: Counter[tuple] = Counter()
+    responses: Counter[tuple] = Counter()
+    event_names = {getattr(ant_wire, name): name for name in dir(ant_wire)
+                   if name.startswith('EVENT_') and isinstance(getattr(ant_wire, name), int)}
+    response_names = {getattr(ant_wire, name): name for name in (
+        'RESPONSE_NO_ERROR', 'CHANNEL_IN_WRONG_STATE', 'INVALID_MESSAGE',
+        'CHANNEL_NOT_OPENED', 'TRANSFER_IN_PROGRESS', 'INVALID_PARAMETER_PROVIDED')}
     t0 = None
     bulk_payloads = 0
 
     for ts, buf in reader.packets():
         parsed = parse_usbpcap(buf)
         if parsed is None:
+            diagnostics['malformed_usb_records'] += 1
             continue
-        device, transfer, from_device, payload = parsed
+        device, transfer = parsed.device, parsed.transfer
+        from_device, payload = parsed.from_device, parsed.payload
         devices[device] += 1
         if only_device is not None and device != only_device:
             continue
-        if transfer != TRANSFER_BULK or not payload:
+        if parsed.status:
+            diagnostics['nonzero_usb_statuses'] += 1
+        if parsed.truncated:
+            diagnostics['truncated_usb_payloads'] += 1
+        if transfer != TRANSFER_BULK:
+            continue
+        stream = streams.setdefault((parsed.bus, device, parsed.endpoint, from_device),
+                                    bytearray())
+        if parsed.status or parsed.truncated:
+            # A failed zero-length completion also breaks an existing stream.
+            diagnostics['discarded_bytes'] += len(stream) + len(payload)
+            stream.clear()
+            bulk_payloads += bool(payload)
+            continue
+        if not payload:
             continue
         bulk_payloads += 1
         if t0 is None:
@@ -202,16 +255,73 @@ def decode(path: Path, raw: bool = False, only_device: int | None = None):
         direction = "dev->host" if from_device else "host->dev"
         if raw:
             lines.append(f"{rel:10.3f}  {direction}  raw {payload.hex()}")
-        stream = streams.setdefault((device, from_device), bytearray())
         stream.extend(payload)
-        for msg_id, body, _ok in reframe(stream):
+        for msg_id, body, ok in reframe(stream, diagnostics):
+            if not ok:
+                warnings.append(f"warning: {rel:.3f}s bus={parsed.bus} device={device} "
+                                f"endpoint=0x{parsed.endpoint:02x}: bad checksum candidate")
+                continue
             name = MESSAGE_NAMES.get(msg_id, f"MSG_{msg_id:02X}")
             lines.append(f"{rel:10.3f}  {direction}  {name} {body.hex()}")
+            if not body:
+                continue
+            ch = body[0] & 0x1F
+            key = (parsed.bus, device, ch)
+            if from_device and msg_id == ant_wire.MESG_BROADCAST_DATA_ID:
+                channel_counts[key] += 1
+            if from_device and msg_id == ant_wire.MESG_RESPONSE_EVENT_ID and len(body) >= 3:
+                ref, code = body[1:3]
+                ledger = transfers.setdefault(key, Counter())
+                if ref == ant_wire.MESG_EVENT_ID:
+                    events[(*key, code)] += 1
+                    if code in (ant_wire.EVENT_TRANSFER_TX_COMPLETED,
+                                ant_wire.EVENT_TRANSFER_TX_FAILED):
+                        outcome = ('completed' if code == ant_wire.EVENT_TRANSFER_TX_COMPLETED
+                                   else 'failed')
+                        if ledger['pending']:
+                            ledger['pending'] -= 1
+                            ledger[outcome] += 1
+                        else:
+                            ledger['unmatched_terminal_events'] += 1
+                else:
+                    responses[(*key, ref, code)] += 1
+                    if ref == ant_wire.MESG_ACKNOWLEDGED_DATA_ID:
+                        if code == 0:
+                            ledger['accepted'] += 1
+                            ledger['pending'] += 1
+                        else:
+                            ledger['refused'] += 1
+
+    for stream in streams.values():
+        if stream:
+            diagnostics['incomplete_ant_streams'] += 1
+            diagnostics['incomplete_ant_bytes'] += len(stream)
 
     header = [
         f"devices seen (addr: packets): {dict(devices)}",
         f"bulk payloads: {bulk_payloads}",
     ]
+    diagnostic_names = ('bad_checksum_candidates', 'discarded_bytes',
+                        'incomplete_ant_streams', 'incomplete_ant_bytes',
+                        'truncated_pcap_records', 'snaplen_truncated_records',
+                        'malformed_usb_records', 'truncated_usb_payloads',
+                        'nonzero_usb_statuses')
+    header.append('diagnostics: ' + ' '.join(f'{k}={diagnostics[k]}' for k in diagnostic_names))
+    for (bus, device, ch), count in sorted(channel_counts.items()):
+        header.append(f'bus={bus} device={device} ch={ch}: broadcasts={count}')
+    for (bus, device, ch), ledger in sorted(transfers.items()):
+        if ledger:
+            header.append(f'bus={bus} device={device} ch={ch}: transfers ' + ' '.join(
+                f'{k}={ledger[k]}' for k in ('accepted', 'completed', 'failed', 'pending',
+                                           'refused', 'unmatched_terminal_events')))
+    for (bus, device, ch, code), count in sorted(events.items()):
+        header.append(f'bus={bus} device={device} ch={ch}: '
+                      f'{event_names.get(code, f"EVENT_0x{code:02X}")}={count}')
+    for (bus, device, ch, ref, code), count in sorted(responses.items()):
+        header.append(f'bus={bus} device={device} ch={ch}: response '
+                      f'{MESSAGE_NAMES.get(ref, f"0x{ref:02X}")} '
+                      f'{response_names.get(code, f"0x{code:02X}")}={count}')
+    header.extend(warnings)
     return header, lines
 
 

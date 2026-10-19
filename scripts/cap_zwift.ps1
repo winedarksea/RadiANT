@@ -289,7 +289,8 @@ Write-Host ""
 Write-Host "Capturing to $Out" -ForegroundColor Cyan
 if ($Seconds -gt 0) { Write-Host "Runs for $Seconds s. Ctrl-C stops early and still leaves a usable file." }
 else { Write-Host "Press Ctrl-C when the Zwift session is done." }
-Write-Host "Start Zwift and pair now."
+Write-Host "Start Zwift and pair, or continue the session that is already running."
+Write-Host "A mid-session capture omits earlier channel setup and connection events." -ForegroundColor DarkGray
 Write-Host ""
 
 # USBPcapCMD does not stay in the foreground: when it is not already running
@@ -364,8 +365,8 @@ if ($size -gt 24) {
     Write-Host ("Wrote {0} ({1:N0} bytes)" -f $Out, $size) -ForegroundColor Green
     Write-Host "Decode with:"
     Write-Host "  C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe tools\decode_pcap.py `"$Out`" --summary"
-    Write-Host "A real capture names ANT messages there. Two header lines and nothing else means" -ForegroundColor DarkGray
-    Write-Host "the bytes are not ANT - check --raw; ANT frames start a4." -ForegroundColor DarkGray
+    Write-Host "File size alone does not establish valid ANT traffic. Check decoded message counts" -ForegroundColor DarkGray
+    Write-Host "and diagnostics; use --raw for unframed bytes (ANT frames start a4)." -ForegroundColor DarkGray
 } elseif ($size -ge 0) {
     Write-Warning ("Capture ran but saw no traffic ({0} bytes - a bare pcap header)." -f $size)
     Write-Host "The capture itself worked; nothing was talking to the dongle. Usually that means" -ForegroundColor Yellow

@@ -445,6 +445,10 @@ void fake_radio_caps_preset_rail(void);
 /* phys must have static storage duration: caps holds the pointer. */
 void fake_radio_set_phys(const enum radiant_phy *phys, uint8_t n_phys);
 
+/* Deliver an empty window's terminal this far after nominal t_close, without
+ * widening its acceptance interval. Models airtime tail and ISR delivery. */
+void fake_radio_set_rx_terminal_delay_us(uint32_t delay);
+
 /* A ready-made two-PHY list: 1 M first (required of any ANT+-compatible
  * backend), then the coded PHY. Both presets still default to 1 M alone;
  * combine with fake_radio_caps_preset_rail() to get two PHYs AND a non-zero
