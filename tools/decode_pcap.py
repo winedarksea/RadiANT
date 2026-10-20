@@ -159,10 +159,13 @@ def parse_usbpcap(buf: bytes):
                      _status, header_len + data_len > len(buf))
 
 
-def reframe(stream: bytearray, diagnostics=None):
+def reframe(stream: bytearray, diagnostics=None, *, final=False):
     """Yield (msg_id, payload, checksum_ok) for complete frame candidates.
 
     Consumes what it decodes; leftovers stay in ``stream`` for the next URB.
+    At EOF only, an incomplete candidate may be abandoned for a later complete,
+    checksum-valid frame. Never do this while more URBs could complete it:
+    a legitimate payload can itself contain an entire ANT frame.
     """
     diagnostics = diagnostics if diagnostics is not None else Counter()
     while True:
@@ -179,6 +182,24 @@ def reframe(stream: bytearray, diagnostics=None):
         length = stream[1]
         total = length + 4  # sync + len + id + payload + checksum
         if len(stream) < total:
+            if final:
+                for offset in range(1, len(stream) - 3):
+                    if stream[offset] != SYNC:
+                        continue
+                    end = offset + stream[offset + 1] + 4
+                    if end > len(stream):
+                        continue
+                    checksum = 0
+                    for byte in stream[offset:end]:
+                        checksum ^= byte
+                    if checksum == 0:
+                        diagnostics['incomplete_candidates_resynchronized'] += 1
+                        diagnostics['discarded_bytes'] += offset
+                        del stream[:offset]
+                        break
+                else:
+                    return
+                continue
             return
         msg = bytes(stream[:total])
         chk = 0
@@ -201,7 +222,7 @@ def decode(path: Path, raw: bool = False, only_device: int | None = None):
     diagnostics: Counter[str] = Counter()
     reader = PcapReader(path, diagnostics)
     devices: Counter[int] = Counter()
-    # Keyed by (device, direction), NOT direction alone. A capture taken with
+    # Keyed by (bus, device, endpoint, direction), NOT direction alone. A capture taken with
     # -All carries every device behind the filter device, and concatenating two
     # devices' bulk bytes into one buffer splices unrelated streams together:
     # the reframer then resynchronises through the wreckage and emits messages
@@ -221,6 +242,48 @@ def decode(path: Path, raw: bool = False, only_device: int | None = None):
         'CHANNEL_NOT_OPENED', 'TRANSFER_IN_PROGRESS', 'INVALID_PARAMETER_PROVIDED')}
     t0 = None
     bulk_payloads = 0
+
+    stream_times = {}
+
+    def consume(stream_key, rel, *, final=False):
+        bus, device, endpoint, from_device = stream_key
+        stream = streams[stream_key]
+        direction = "dev->host" if from_device else "host->dev"
+        for msg_id, body, ok in reframe(stream, diagnostics, final=final):
+            if not ok:
+                warnings.append(f"warning: {rel:.3f}s bus={bus} device={device} "
+                                f"endpoint=0x{endpoint:02x}: bad checksum candidate")
+                continue
+            name = MESSAGE_NAMES.get(msg_id, f"MSG_{msg_id:02X}")
+            lines.append(f"{rel:10.3f}  {direction}  {name} {body.hex()}")
+            if not body:
+                continue
+            ch = body[0] & 0x1F
+            key = (bus, device, ch)
+            if from_device and msg_id == ant_wire.MESG_BROADCAST_DATA_ID:
+                channel_counts[key] += 1
+            if from_device and msg_id == ant_wire.MESG_RESPONSE_EVENT_ID and len(body) >= 3:
+                ref, code = body[1:3]
+                ledger = transfers.setdefault(key, Counter())
+                if ref == ant_wire.MESG_EVENT_ID:
+                    events[(*key, code)] += 1
+                    if code in (ant_wire.EVENT_TRANSFER_TX_COMPLETED,
+                                ant_wire.EVENT_TRANSFER_TX_FAILED):
+                        outcome = ('completed' if code == ant_wire.EVENT_TRANSFER_TX_COMPLETED
+                                   else 'failed')
+                        if ledger['pending']:
+                            ledger['pending'] -= 1
+                            ledger[outcome] += 1
+                        else:
+                            ledger['unmatched_terminal_events'] += 1
+                else:
+                    responses[(*key, ref, code)] += 1
+                    if ref == ant_wire.MESG_ACKNOWLEDGED_DATA_ID:
+                        if code == 0:
+                            ledger['accepted'] += 1
+                            ledger['pending'] += 1
+                        else:
+                            ledger['refused'] += 1
 
     for ts, buf in reader.packets():
         parsed = parse_usbpcap(buf)
@@ -256,41 +319,15 @@ def decode(path: Path, raw: bool = False, only_device: int | None = None):
         if raw:
             lines.append(f"{rel:10.3f}  {direction}  raw {payload.hex()}")
         stream.extend(payload)
-        for msg_id, body, ok in reframe(stream, diagnostics):
-            if not ok:
-                warnings.append(f"warning: {rel:.3f}s bus={parsed.bus} device={device} "
-                                f"endpoint=0x{parsed.endpoint:02x}: bad checksum candidate")
-                continue
-            name = MESSAGE_NAMES.get(msg_id, f"MSG_{msg_id:02X}")
-            lines.append(f"{rel:10.3f}  {direction}  {name} {body.hex()}")
-            if not body:
-                continue
-            ch = body[0] & 0x1F
-            key = (parsed.bus, device, ch)
-            if from_device and msg_id == ant_wire.MESG_BROADCAST_DATA_ID:
-                channel_counts[key] += 1
-            if from_device and msg_id == ant_wire.MESG_RESPONSE_EVENT_ID and len(body) >= 3:
-                ref, code = body[1:3]
-                ledger = transfers.setdefault(key, Counter())
-                if ref == ant_wire.MESG_EVENT_ID:
-                    events[(*key, code)] += 1
-                    if code in (ant_wire.EVENT_TRANSFER_TX_COMPLETED,
-                                ant_wire.EVENT_TRANSFER_TX_FAILED):
-                        outcome = ('completed' if code == ant_wire.EVENT_TRANSFER_TX_COMPLETED
-                                   else 'failed')
-                        if ledger['pending']:
-                            ledger['pending'] -= 1
-                            ledger[outcome] += 1
-                        else:
-                            ledger['unmatched_terminal_events'] += 1
-                else:
-                    responses[(*key, ref, code)] += 1
-                    if ref == ant_wire.MESG_ACKNOWLEDGED_DATA_ID:
-                        if code == 0:
-                            ledger['accepted'] += 1
-                            ledger['pending'] += 1
-                        else:
-                            ledger['refused'] += 1
+        stream_key = (parsed.bus, device, parsed.endpoint, from_device)
+        stream_times[stream_key] = rel
+        consume(stream_key, rel)
+
+    # EOF can prove that a leading length byte will never be satisfied.
+    # Recover complete frames behind it, with the last URB timestamp for
+    # that stream (the same timestamp used for normal split-frame completion).
+    for stream_key, rel in stream_times.items():
+        consume(stream_key, rel, final=True)
 
     for stream in streams.values():
         if stream:
@@ -303,6 +340,7 @@ def decode(path: Path, raw: bool = False, only_device: int | None = None):
     ]
     diagnostic_names = ('bad_checksum_candidates', 'discarded_bytes',
                         'incomplete_ant_streams', 'incomplete_ant_bytes',
+                        'incomplete_candidates_resynchronized',
                         'truncated_pcap_records', 'snaplen_truncated_records',
                         'malformed_usb_records', 'truncated_usb_payloads',
                         'nonzero_usb_statuses')

@@ -1116,6 +1116,30 @@ ZTEST(radiant_gate, test_a_tracked_window_asks_for_only_the_fixed_end_margin)
 	assert_invariant();
 }
 
+/* A maximum merged RX span plus the full slave data/ACK reserve is bounded
+ * independently of merge width. Check the actual request sent to MPSL and
+ * early hand-back: an empty window must not hold the whole 4.15 ms reserve. */
+ZTEST(radiant_gate, test_full_slave_exchange_reserve_is_bounded_and_released_early)
+{
+	radiant_time_t from = radiant_radio_now() + WIN_LEAD_US;
+	zassert_equal(GATE_PENDING, gate_acquire(GATE_OP_RX, from, from + 2000u,
+					       4150u, RADIANT_GATE_PRIO_HIGH));
+	k_msleep(WORK_MS);
+	/* 2000 RX + 4150 follow-on + 250 head + 250 tail + 750 fixed end. */
+	zassert_equal(7400u, fake_mpsl_last_request()->params.normal.length_us);
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_START));
+	zassert_equal(6650u, fake_mpsl_timer0.cc[0]);
+	fake_mpsl_timer0.counter = 2250u; /* RX closed; no reply queued. */
+	fake_mpsl_timer0.counter_step = 0u;
+	gate_release();
+	zassert_true(fake_mpsl_timer0.cc[0] < 2400u,
+		     "empty RX retained its full follow-on reservation");
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_TIMER0));
+	assert_invariant();
+}
+
 /*
  * A transmit is the other non-extendable class, and it is non-extendable by OP
  * rather than by priority - `(op != GATE_OP_TX) && (prio == NORMAL)`. So both

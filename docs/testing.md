@@ -19,8 +19,10 @@ The wildcard transmission type reproduces Zwift's configuration: the master
 advertises type 5, while the slave initially names type 0. The loaded run tracks
 FE-C, power and heart rate on channels 1, 2 and 3, with background scanning on
 channel 0. Both ends count commands separately; success requires at least 99%
-completion, one terminal event per accepted command, no duplicate peer delivery,
-and no USB/serial framing errors. The receive check matches actual master TX
+completion, one terminal event per accepted command within an active stack
+session, no duplicate peer delivery, and no USB/serial framing errors. Stack
+reset discards pending commands and queued events; callers must retire their
+pre-reset ledger. The receive check matches actual master TX
 events to individual channel broadcasts, with guarded measurement boundaries
 and a 100 ms allowance for host notification latency (less than half a bench
 channel period). Each RX matches at most one TX; a neighbouring slot cannot

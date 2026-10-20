@@ -1307,8 +1307,20 @@ static void api_post_search_window(radiant_time_t now)
  * slave data/ACK exchange even before one is queued; an empty window gives
  * the unused air back. This is a grant budget, not a wider receive window.
  */
-#define API_FOLLOW_ON_TRACK_US ((uint16_t)(RADIANT_TRANSFER_SLOT_REPLY_US + \
-	RADIANT_TRANSFER_REPLY_US + RADIANT_TRANSFER_ACK_GUARD_US + API_FRAME_AIRTIME_US))
+#define API_FOLLOW_ON_TRACK_US (RADIANT_TRANSFER_SLOT_REPLY_US + \
+	RADIANT_TRANSFER_REPLY_US + RADIANT_TRANSFER_ACK_GUARD_US + API_FRAME_AIRTIME_US)
+
+/* Separate budgets: MERGE_SPAN caps the receive union, not the grant's
+ * follow-on exchange. The slave-originated data + ACK needs 4150 us past
+ * the latest receive sync. Keep an explicit 4200 us policy ceiling so a
+ * timing change cannot silently expand every arbitrated receive grant.
+ * Do not cast before checking: uint16_t truncation would hide overflow.
+ * The direct backend ignores this field; no receive window is extended.
+ * Merged requests take MAX, never SUM, of members' follow-on reserves. */
+BUILD_ASSERT(API_FOLLOW_ON_TRACK_US <= 4200u,
+	     "tracked follow-on exceeds the reviewed 4.2 ms grant budget");
+BUILD_ASSERT(API_FOLLOW_ON_TRACK_US <= UINT16_MAX,
+	     "tracked follow-on does not fit the HAL field");
 
 /*
  * A listening master's reserve: its slave's reply lands
@@ -1435,11 +1447,12 @@ static void api_post_master_rx(uint8_t ch, radiant_time_t t_sync)
 	 * reports FAIL_NO_ACK. On a backend that owns the radio outright the
 	 * field is ignored by contract, so this costs nothing there.
 	 *
-	 * API_FOLLOW_ON_TRACK_US (2000 us) rather than a tighter number derived
+	 * API_FOLLOW_ON_TRACK_US (4150 us) rather than a tighter number derived
 	 * from t_close: the reply is due REPLY_US after the DATA packet's t_sync,
 	 * which can be anywhere in this window, so the reserve has to cover the
 	 * late edge. 1560 - 250 + 150 = 1460 us is the requirement; reusing the
-	 * tracked constant covers it and keeps one number for one meaning.
+	 * tracked constant covers it. This deliberately over-reserves the master
+	 * path; empty windows release the grant before their terminal callback.
 	 */
 	req.follow_on_us = API_FOLLOW_ON_TRACK_US;
 
@@ -1629,7 +1642,9 @@ static void api_pump_locked(void)
 }
 
 /* ---------------------------------------------------------------------------
- * The scheduler's calls back into us. Radio interrupt context.
+ * The scheduler's calls back into us. Usually radio interrupt context;
+ * synchronous arm failures/cancellation can also complete in thread context
+ * under the scheduler critical section (see api_sched_done).
  * ---------------------------------------------------------------------------
  */
 
@@ -2082,6 +2097,14 @@ static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_
 	radiant_search_armed(&api_search, RADIANT_SEARCH_OP_EXTERNAL, t_open, t_close);
 }
 
+/* Context is not exclusively ISR: pass() may synchronously report a missed
+ * arm from a thread, with radiant_event_crit_enter() held for the whole pass.
+ * Cancel/request replacement also notify under that critical section. Radio
+ * terminals run serially with RX for the owning operation; the HAL retires it
+ * before calling done, and its successor is not armed until this callback
+ * returns to the scheduler. Thus a fresh frame cannot interrupt the pending
+ * ACK read below. Host pending-command writers use the same critical section.
+ * Keep this invariant when adding a backend or moving completion dispatch. */
 static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 {
 	enum radiant_radio_status st;
@@ -2903,7 +2926,9 @@ antr_err_t antr_stack_reset(void)
 	/* Discard the queue rather than draining it: draining here would call
 	 * antr_on_message() recursively from inside an antr_* call, which
 	 * docs/sdk-ant-contract.md forbids. The bridge's own discard window
-	 * absorbs any channel-closed events the reset raised. */
+	 * absorbs any channel-closed events the reset raised. Reset also ends
+	 * pending ACK commands without a terminal event: the single-outcome
+	 * guarantee is scoped to an active stack session, never across reset. */
 	radiant_event_flush();
 
 	api_reset_state();

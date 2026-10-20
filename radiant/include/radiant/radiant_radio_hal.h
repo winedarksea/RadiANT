@@ -397,9 +397,10 @@ struct radiant_rx_req {
 	 * Unconditional on a tracked window, not conservatism: any tracked
 	 * frame can become a transmit 1.56 ms later depending on a payload byte
 	 * that doesn't exist yet when this request is built, so there's nothing
-	 * to condition on. Zero on a search window, an ED sweep, or a master's
-	 * turnaround - none of those can be followed by a transmit at a fixed
-	 * instant.
+	 * to condition on. Zero on a search window or an ED sweep, which cannot
+	 * be followed by a transmit at a fixed instant.
+	 * A listening master's turnaround also reserves its ACK reply;
+	 * slave-originated data followed by ACK may need a longer exchange reserve.
 	 */
 	uint16_t                     follow_on_us;
 };

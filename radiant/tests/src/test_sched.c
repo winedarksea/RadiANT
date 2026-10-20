@@ -128,6 +128,10 @@ static struct {
 	 * t_sync, from inside the receive callback. 0 disables it. */
 	uint32_t reply_after_us;
 	uint8_t  reply_ch;
+
+	uint64_t scan_listen_us;
+	radiant_time_t scan_measure_end;
+	uint16_t follow_on_us[RADIANT_SCHED_MAX_CHANNELS];
 } log;
 
 static void rx_req_init(struct radiant_sched_rx *r, const struct radiant_pkt_format *fmt,
@@ -167,6 +171,7 @@ static void post_track(uint8_t ch, radiant_time_t t_open, radiant_time_t t_close
 
 	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_TRACKING),
 		    &track_filter[ch], 1u, t_open, t_close);
+	r.follow_on_us = log.follow_on_us[ch];
 	zassert_ok(radiant_sched_request_rx(ch, &r), "channel %u refused", ch);
 }
 
@@ -244,6 +249,13 @@ static void on_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_close,
 		     void *user)
 {
 	ARG_UNUSED(user);
+	if (ch == 31u) {
+		radiant_time_t end = log.scan_measure_end != 0u &&
+			log.scan_measure_end < t_close ? log.scan_measure_end : t_close;
+		if (end > t_open) {
+			log.scan_listen_us += end - t_open;
+		}
+	}
 
 	if (log.n_armed < TEST_LOG_MAX) {
 		log.armed[log.n_armed].ch = ch;
@@ -1468,7 +1480,7 @@ ZTEST(radiant_sched, test_an_unreachable_deadline_is_refused_rather_than_run_lat
 /* A window still open when a transmit must be armed is truncated, not
  * abandoned and not allowed to overrun. One radio: the receive tail is worth
  * less than an exact-instant transmit, so the scheduler gives up exactly
- * caps.min_arm_lead_us plus the window's own frame tail. */
+ * caps.min_arm_lead_us, dispatch slack, and the window's own frame tail. */
 ZTEST(radiant_sched, test_a_window_is_truncated_to_clear_a_transmit_deadline)
 {
 	struct radiant_sched_tx t;
@@ -1506,6 +1518,12 @@ ZTEST(radiant_sched, test_a_window_is_truncated_to_clear_a_transmit_deadline)
 				      radiant_radio_caps_get()->rx_close_hold_us,
 		      fake_radio_arm(0u)->t_close,
 		      "the window was not truncated to clear the transmit");
+	/* Measure the reception cost, including an actual frame in the newly
+	 * sacrificed 200 us. The earlier frame survives; the later one does not.
+	 * Keep them a full frame apart so this is not a simulated collision. */
+	radiant_time_t cut = fake_radio_arm(0u)->t_close;
+	air_frame_for(0u, cut - 1u);
+	air_frame_for(0u, cut + 150u);
 
 	fake_radio_advance_to(tx_at + 10u);
 	zassert_equal(2u, fake_radio_arm_count());
@@ -1513,6 +1531,9 @@ ZTEST(radiant_sched, test_a_window_is_truncated_to_clear_a_transmit_deadline)
 	zassert_equal(tx_at, fake_radio_arm(1u)->t_sync_at);
 	zassert_equal(1u, log.n_tx);
 	zassert_equal(tx_at, log.tx[0].t_sync);
+	zassert_equal(1u, log.n_rx, "truncated RX accepted a frame beyond its bound");
+	printk("timing-cost: tracked RX gives up %u us before TX; deadline unchanged\n",
+	       RADIANT_SCHED_DISPATCH_SLACK_US);
 
 	assert_every_window_bounded();
 	finish();
@@ -2503,14 +2524,14 @@ ZTEST(radiant_sched, test_the_follow_on_reserve_reaches_the_backend)
 
 	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_TRACKING),
 		    &track_filter[1], 1u, open, open + TEST_WINDOW_US);
-	r.follow_on_us = 1960u;
+	r.follow_on_us = 4150u;
 	zassert_ok(radiant_sched_request_rx(1u, &r));
 
 	zassert_ok(radiant_sched_tick());
 
 	zassert_equal(1u, fake_radio_arm_count(), "the two windows did not merge");
 	zassert_equal(2u, fake_radio_arm(0u)->n_filters, NULL);
-	zassert_equal(1960u, fake_radio_arm(0u)->follow_on_us,
+	zassert_equal(4150u, fake_radio_arm(0u)->follow_on_us,
 		      "a merged window reserved the leader's follow-on rather "
 		      "than the largest its members asked for");
 
@@ -2518,6 +2539,71 @@ ZTEST(radiant_sched, test_the_follow_on_reserve_reaches_the_backend)
 
 	assert_every_window_bounded();
 	finish();
+}
+
+/* Eight sensors plus a continuous search, with the first pair swept across
+ * the merge/serial-arm boundary. Compare the former 1960 us grant metadata
+ * with the full 4150 us exchange: on a direct backend neither extends RX or
+ * takes scan time. This deliberately does not claim MPSL coexistence or RF
+ * loss performance. Print actual granted listening time for timing A/B runs. */
+ZTEST(radiant_sched, test_eight_sensors_and_scan_bound_the_reserve_and_dispatch_cost)
+{
+	uint64_t min_listen = UINT64_MAX;
+	uint64_t max_listen = 0u;
+	uint64_t reference = 0u;
+	const uint16_t reserves[] = {1960u, 4150u};
+
+	for (uint32_t delta = 0u; delta <= 1000u; delta += 25u) {
+		for (uint8_t variant = 0u; variant < 2u; variant++) {
+			struct radiant_sched_rx r;
+			sched_before(NULL);
+			bring_up();
+			fake_radio_caps_mut()->min_arm_lead_us = TEST_NRF52840_ARM_LEAD_US;
+			radiant_time_t base = radiant_radio_now() + 100000u;
+			log.repost = true;
+			log.repost_mask = 0xffu;
+			log.scan_measure_end = base + 2u * (radiant_time_t)TEST_PERIOD_US - 50000u;
+			for (uint8_t ch = 0u; ch < 8u; ch++) {
+				log.follow_on_us[ch] = reserves[variant];
+				radiant_time_t open = base + (ch == 1u ? delta : ch * 20000u);
+				log.next_open[ch] = open;
+				rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_TRACKING),
+					    &track_filter[ch], 1u, open, open + TEST_WINDOW_US);
+				r.follow_on_us = reserves[variant];
+				zassert_ok(radiant_sched_request_rx(ch, &r));
+				for (uint8_t cycle = 0u; cycle < 2u; cycle++) {
+					air_frame_for(ch, open + TEST_WINDOW_US / 2u +
+						      cycle * (radiant_time_t)TEST_PERIOD_US);
+				}
+			}
+			rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_SEARCH),
+				    search_filter, 8u, base - 50000u, RADIANT_TIME_NEVER);
+			r.chunk_us = 260000u;
+			zassert_ok(radiant_sched_request_rx(31u, &r));
+			zassert_ok(radiant_sched_tick());
+			fake_radio_advance_to(base + 2u * (radiant_time_t)TEST_PERIOD_US - 50000u);
+			zassert_equal(16u, log.n_rx, "delta=%u reserve=%u", delta, reserves[variant]);
+			zassert_equal(0u, radiant_sched_stats_get()->missed);
+			if (variant == 0u) {
+				reference = log.scan_listen_us;
+			} else {
+				zassert_equal(reference, log.scan_listen_us,
+					      "grant metadata consumed direct-backend scan time");
+			}
+			if (log.scan_listen_us < min_listen) {
+				min_listen = log.scan_listen_us;
+			}
+			if (log.scan_listen_us > max_listen) {
+				max_listen = log.scan_listen_us;
+			}
+			assert_every_window_bounded();
+			finish();
+		}
+	}
+	printk("timing-cost: 8 sensors + scan, 41 phases x 2 reserves, slack=%u us, "
+	       "scan-listening=%u..%u us per %u us; zero RX loss/missed slots\n",
+	       RADIANT_SCHED_DISPATCH_SLACK_US, (uint32_t)min_listen,
+	       (uint32_t)max_listen, 2u * TEST_PERIOD_US);
 }
 
 /* CRC failures reach only the channel that asked for them, per-channel even

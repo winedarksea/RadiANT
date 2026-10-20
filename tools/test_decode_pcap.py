@@ -50,6 +50,38 @@ class DecodeTests(unittest.TestCase):
         self.assertIn('discarded_bytes=9', header)
         self.assertIn('bad checksum candidate', header)
 
+    def test_eof_recovers_frames_behind_incomplete_false_sync(self):
+        good = aw.frame(aw.MESG_STARTUP_MESG_ID, b'\x01')
+        prefix = b'\xa4\xff\x00\xa4\xfe\x00'
+        header, lines = self.decode(pcap(usb(prefix + good + good + b'\xa4\x09')))
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(all(line.endswith('STARTUP_MESG 01') for line in lines))
+        self.assertIn('incomplete_candidates_resynchronized=1', header)
+        self.assertIn('discarded_bytes=6', header)
+        self.assertIn('incomplete_ant_bytes=2', header)
+
+    def test_embedded_complete_frame_waits_for_outer_frame_until_eof(self):
+        inner = aw.frame(aw.MESG_STARTUP_MESG_ID, b'\x01')
+        outer = aw.frame(aw.MESG_BROADCAST_DATA_ID, b'\x01' + inner + b'\x00')
+        header, lines = self.decode(pcap(usb(outer[:-1]), usb(outer[-1:])))
+        self.assertEqual(len(lines), 1)
+        self.assertIn('BROADCAST_DATA', lines[0])
+        self.assertIn('incomplete_candidates_resynchronized=0', header)
+
+    def test_eof_recovered_frames_contribute_to_transfer_summary(self):
+        response = aw.frame(aw.MESG_RESPONSE_EVENT_ID,
+                            bytes([1, aw.MESG_ACKNOWLEDGED_DATA_ID, 0]))
+        header, lines = self.decode(pcap(usb(b'\xa4\xff\x00' + response)))
+        self.assertEqual(len(lines), 1)
+        self.assertIn('accepted=1 completed=0 failed=0 pending=1', header)
+
+    def test_eof_recovery_does_not_join_streams(self):
+        good = aw.frame(aw.MESG_STARTUP_MESG_ID, b'\x01')
+        header, lines = self.decode(pcap(usb(b'\xa4\xff\x00' + good[:3]),
+                                        usb(good[3:], endpoint=0x82)))
+        self.assertFalse(lines)
+        self.assertIn('incomplete_candidates_resynchronized=0', header)
+
     def test_bus_device_endpoint_and_direction_do_not_splice(self):
         f = aw.frame(aw.MESG_STARTUP_MESG_ID, b'\x00')
         for other in ({'bus': 2}, {'device': 8}, {'endpoint': 0x82}, {'endpoint': 1}):

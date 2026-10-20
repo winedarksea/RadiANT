@@ -4,6 +4,8 @@
 # rename the rule rather than the directory if that ever comes up.
 build*/
 dist/
+# Local FE-C test artifacts and firmware package.
+archive/benchmarks/2026-10-19-fec/
 twister-out*/
 
 # Tool caches. Each of these regenerates on demand; none is an input to

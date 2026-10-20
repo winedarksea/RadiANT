@@ -134,12 +134,15 @@ extern "C" {
  */
 #define RADIANT_SCHED_SCAN_MIN_US 1000u
 
-/* Software time between a gap filler's hardware completion and arming the
- * committed operation. The nRF search terminal was measured ~37 us after its
+/* Software time between a receive/ED completion and arming the committed
+ * operation. Applied to scan/ED gap fillers AND a tracked RX truncated before
+ * a TX. Untruncated tracked windows retain their requested bounds.
+ * The nRF search terminal was measured ~37 us after its
  * 112 us airtime tail. A four-channel hardware diagnostic still missed a
  * transfer with a 100 us budget; reserve 200 us for loaded dispatch, with a
- * regression injecting 138 us beyond the tail. This shortens gap fillers,
- * never shifts an on-air deadline. */
+ * regression injecting 138 us beyond the tail. Costs up to 200 us of listening
+ * per truncated window (and can exclude a marginally useful scan chunk),
+ * without shifting the committed operation's on-air deadline. */
 #define RADIANT_SCHED_DISPATCH_SLACK_US 200u
 
 /*
