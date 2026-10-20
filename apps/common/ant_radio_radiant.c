@@ -1041,12 +1041,19 @@ static void api_xfer_refresh_id(uint8_t ch)
  * an arm lead before sync + SLOT_REPLY_US. Posting replaces the channel's
  * in-flight request, so the scheduler aborts the window here, exactly as the
  * transfer engine's own ACK reply does from this callback; the transmit's
- * completion then retires the receive's op token. Radio interrupt context. */
+ * completion then retires the receive's op token. Radio interrupt context.
+ *
+ * Never on a secured channel: its MAC verdict lags the frame by a window, so
+ * no opener is authenticated in time, and a clear page there carries no
+ * authenticity at all. antr_acknowledge_message_tx() keeps a secured channel
+ * off this path; the check here covers a channel secured after acceptance,
+ * whose command the watchdog then fails. */
 static void api_ack_pending_send(uint8_t ch, radiant_time_t t_sync)
 {
 	struct api_chan *c = &api_ch[ch];
 
-	if (radiant_channel_state_get(ch) != RADIANT_CH_STATE_TRACKING ||
+	if (radiant_sec_channel_is_secured(ch) ||
+	    radiant_channel_state_get(ch) != RADIANT_CH_STATE_TRACKING ||
 	    !radiant_transfer_is_idle(&api_xfer[ch]) ||
 	    radiant_radio_now() >= c->ack_deadline) {
 		return; /* the watchdog owns an expired command's failure */
@@ -1846,10 +1853,6 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 		(unsigned)api_ch[ch].bcast_valid);
 	switch (mt) {
 	case RADIANT_MSG_BROADCAST:
-		if (!crc_failed && api_ch[ch].ack_pending &&
-		    !radiant_channel_is_master(ch)) {
-			api_ack_pending_send(ch, evt->t_sync);
-		}
 #if defined(CONFIG_RADIANT_SEC)
 		/*
 		 * The RX policy guard: ISR context, classification only, zero
@@ -1868,6 +1871,12 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 			}
 		}
 #endif
+		/* After the policy guard, so a frame it defers or drops never
+		 * opens a pending command's slot. */
+		if (!crc_failed && api_ch[ch].ack_pending &&
+		    !radiant_channel_is_master(ch)) {
+			api_ack_pending_send(ch, evt->t_sync);
+		}
 		api_post_rx(ch, (uint8_t)ANTW_MESG_BROADCAST_DATA_ID, &id, evt,
 			    f.payload, f.payload_len, 0u, false);
 		break;
@@ -3615,7 +3624,10 @@ antr_err_t antr_acknowledge_message_tx(uint8_t channel, uint8_t size,
 		return (antr_err_t)ANTW_TRANSFER_IN_PROGRESS;
 	}
 	api_xfer_refresh_id(channel);
-	if (!radiant_channel_is_master(channel) && api_xfer[channel].ready) {
+	/* A secured channel takes the projected slot below instead: see
+	 * api_ack_pending_send() for why no received frame may open it. */
+	if (!radiant_channel_is_master(channel) && api_xfer[channel].ready &&
+	    !radiant_sec_channel_is_secured(channel)) {
 		uint16_t counts = 0u;
 		radiant_time_t wait = RADIANT_API_XFER_WATCHDOG_MS * 1000u;
 

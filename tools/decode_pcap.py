@@ -44,6 +44,9 @@ import ant_wire  # noqa: E402
 
 SYNC = 0xA4
 
+# Suffix on a frame recovered at EOF from inside an abandoned candidate.
+HEURISTIC_MARK = "[heuristic: recovered at EOF]"
+
 # USBPcap transfer types (USBPCAP_TRANSFER_* in USBPcap's driver headers).
 TRANSFER_ISOCHRONOUS = 0
 TRANSFER_INTERRUPT = 1
@@ -160,14 +163,20 @@ def parse_usbpcap(buf: bytes):
 
 
 def reframe(stream: bytearray, diagnostics=None, *, final=False):
-    """Yield (msg_id, payload, checksum_ok) for complete frame candidates.
+    """Yield (msg_id, payload, checksum_ok, recovered) for frame candidates.
 
     Consumes what it decodes; leftovers stay in ``stream`` for the next URB.
     At EOF only, an incomplete candidate may be abandoned for a later complete,
     checksum-valid frame. Never do this while more URBs could complete it:
     a legitimate payload can itself contain an entire ANT frame.
+
+    Every frame after such an abandonment is ``recovered``: it lies inside the
+    abandoned candidate's claimed length, so it may be payload of a real but
+    truncated message. A checksum cannot tell the two apart, so the caller
+    must keep recovered frames out of anything it reports as a count.
     """
     diagnostics = diagnostics if diagnostics is not None else Counter()
+    recovered = False
     while True:
         start = stream.find(SYNC)
         if start < 0:
@@ -196,6 +205,7 @@ def reframe(stream: bytearray, diagnostics=None, *, final=False):
                         diagnostics['incomplete_candidates_resynchronized'] += 1
                         diagnostics['discarded_bytes'] += offset
                         del stream[:offset]
+                        recovered = True
                         break
                 else:
                     return
@@ -212,10 +222,10 @@ def reframe(stream: bytearray, diagnostics=None, *, final=False):
             del stream[:1]
             diagnostics['discarded_bytes'] += 1
             diagnostics['bad_checksum_candidates'] += 1
-            yield msg[2], msg[3:-1], False
+            yield msg[2], msg[3:-1], False, recovered
             continue
         del stream[:total]
-        yield msg[2], msg[3:-1], True
+        yield msg[2], msg[3:-1], True, recovered
 
 
 def decode(path: Path, raw: bool = False, only_device: int | None = None):
@@ -249,12 +259,19 @@ def decode(path: Path, raw: bool = False, only_device: int | None = None):
         bus, device, endpoint, from_device = stream_key
         stream = streams[stream_key]
         direction = "dev->host" if from_device else "host->dev"
-        for msg_id, body, ok in reframe(stream, diagnostics, final=final):
+        for msg_id, body, ok, recovered in reframe(stream, diagnostics, final=final):
             if not ok:
                 warnings.append(f"warning: {rel:.3f}s bus={bus} device={device} "
                                 f"endpoint=0x{endpoint:02x}: bad checksum candidate")
                 continue
             name = MESSAGE_NAMES.get(msg_id, f"MSG_{msg_id:02X}")
+            if recovered:
+                # Possibly bytes of a truncated real message: shown, never
+                # counted.
+                diagnostics['heuristic_messages'] += 1
+                lines.append(f"{rel:10.3f}  {direction}  {name} {body.hex()}"
+                             f"  {HEURISTIC_MARK}")
+                continue
             lines.append(f"{rel:10.3f}  {direction}  {name} {body.hex()}")
             if not body:
                 continue
@@ -341,6 +358,7 @@ def decode(path: Path, raw: bool = False, only_device: int | None = None):
     diagnostic_names = ('bad_checksum_candidates', 'discarded_bytes',
                         'incomplete_ant_streams', 'incomplete_ant_bytes',
                         'incomplete_candidates_resynchronized',
+                        'heuristic_messages',
                         'truncated_pcap_records', 'snaplen_truncated_records',
                         'malformed_usb_records', 'truncated_usb_payloads',
                         'nonzero_usb_statuses')
@@ -384,7 +402,8 @@ def main(argv=None) -> int:
         for line in lines:
             parts = line.split()
             if len(parts) >= 3:
-                counts[f"{parts[1]} {parts[2]}"] += 1
+                suffix = " (heuristic)" if line.endswith(HEURISTIC_MARK) else ""
+                counts[f"{parts[1]} {parts[2]}{suffix}"] += 1
         out = header + [f"{n:6d}  {k}" for k, n in counts.most_common()]
     else:
         out = header + lines

@@ -98,6 +98,9 @@ param(
     # The loop stops on ztest's own completion line, so this is a ceiling on
     # a hang, not a delay anybody waits out.
     [int]$Seconds       = 240,
+    # Kconfig overrides, as twister's extra_configs give them, e.g.
+    # 'CONFIG_RADIANT_SEC=y'. Use a separate -BuildDir per combination.
+    [string[]]$ExtraConfig = @(),
     [switch]$SkipBuild,
     # Assert DTR and RTS before releasing the core. Not the default: some
     # USB-CDC consoles treat the DTR edge as a reset request, landing mid-run.
@@ -148,10 +151,14 @@ if (-not $SkipBuild) {
     Push-Location "C:\ncs\$NcsVersion"
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
+    $cmakeArgs = @()
+    if ($ExtraConfig.Count -gt 0) {
+        $cmakeArgs = @('--') + ($ExtraConfig | ForEach-Object { "-D$_" })
+    }
     try {
         west -z "C:\ncs\$NcsVersion\zephyr" build `
             -s $appPath -b $Board -d $out -p always --no-sysbuild `
-            > $buildLog 2>&1
+            @cmakeArgs > $buildLog 2>&1
         if ($LASTEXITCODE -ne 0) { throw "build failed; log at $buildLog" }
     } finally {
         $ErrorActionPreference = $prevEap

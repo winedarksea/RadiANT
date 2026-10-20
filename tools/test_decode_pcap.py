@@ -55,8 +55,10 @@ class DecodeTests(unittest.TestCase):
         prefix = b'\xa4\xff\x00\xa4\xfe\x00'
         header, lines = self.decode(pcap(usb(prefix + good + good + b'\xa4\x09')))
         self.assertEqual(len(lines), 2)
-        self.assertTrue(all(line.endswith('STARTUP_MESG 01') for line in lines))
+        self.assertTrue(all(line.endswith('STARTUP_MESG 01  ' + dp.HEURISTIC_MARK)
+                            for line in lines))
         self.assertIn('incomplete_candidates_resynchronized=1', header)
+        self.assertIn('heuristic_messages=2', header)
         self.assertIn('discarded_bytes=6', header)
         self.assertIn('incomplete_ant_bytes=2', header)
 
@@ -68,12 +70,37 @@ class DecodeTests(unittest.TestCase):
         self.assertIn('BROADCAST_DATA', lines[0])
         self.assertIn('incomplete_candidates_resynchronized=0', header)
 
-    def test_eof_recovered_frames_contribute_to_transfer_summary(self):
+    def test_eof_recovered_frames_stay_out_of_transfer_summary(self):
         response = aw.frame(aw.MESG_RESPONSE_EVENT_ID,
                             bytes([1, aw.MESG_ACKNOWLEDGED_DATA_ID, 0]))
         header, lines = self.decode(pcap(usb(b'\xa4\xff\x00' + response)))
         self.assertEqual(len(lines), 1)
-        self.assertIn('accepted=1 completed=0 failed=0 pending=1', header)
+        self.assertTrue(lines[0].endswith(dp.HEURISTIC_MARK))
+        self.assertNotIn('accepted=', header)
+
+    def test_frame_inside_a_truncated_message_is_not_counted(self):
+        # A real broadcast whose payload happens to hold a complete,
+        # checksum-valid broadcast frame, cut off by the end of the capture.
+        inner = aw.frame(aw.MESG_BROADCAST_DATA_ID, bytes([2]) + bytes(8))
+        outer = aw.frame(aw.MESG_EXT_BROADCAST_DATA_ID,
+                         b'\x01' + inner + bytes(20 - len(inner)))
+        header, lines = self.decode(pcap(usb(outer[:-3])))
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].endswith(dp.HEURISTIC_MARK))
+        self.assertNotIn('broadcasts=', header)
+        self.assertIn('heuristic_messages=1', header)
+
+    def test_summary_keeps_heuristic_frames_apart(self):
+        good = aw.frame(aw.MESG_STARTUP_MESG_ID, b'\x01')
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'sample.pcap'
+            path.write_bytes(pcap(usb(good + b'\xa4\xff\x00' + good)))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(dp.main([str(path), '--summary']), 0)
+            text = out.getvalue()
+        self.assertIn('1  dev->host STARTUP_MESG\n', text)
+        self.assertIn('1  dev->host STARTUP_MESG (heuristic)', text)
 
     def test_eof_recovery_does_not_join_streams(self):
         good = aw.frame(aw.MESG_STARTUP_MESG_ID, b'\x01')

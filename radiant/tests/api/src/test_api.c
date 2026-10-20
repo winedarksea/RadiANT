@@ -28,6 +28,7 @@
 #include <radiant/radiant_frame.h>
 #include <radiant/radiant_sched.h>
 #include <radiant/radiant_search.h>
+#include <radiant/radiant_sec.h>
 #include <radiant/radiant_transfer.h>
 
 #include "ant_radio.h"
@@ -2935,3 +2936,79 @@ ZTEST(api, test_fec_pending_command_fails_when_search_timeout_closes_the_channel
 	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
 	zassert_true(fake_radio_is_idle());
 }
+
+#if defined(CONFIG_RADIANT_SEC)
+/* X_AUTH with unverified windows dropped: the strictest receive policy. */
+static void fec_secure(uint16_t number)
+{
+	static const uint8_t root[16] = {
+		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+		0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+	};
+
+	zassert_equal(RADIANT_SEC_OK, radiant_sec_set_key(CH, root, 128, number));
+	zassert_equal(RADIANT_SEC_OK, radiant_sec_set_devnum(CH, number));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_configure(CH, RADIANT_SEC_SW_AUTH |
+						    RADIANT_SEC_SW_DROP_UNVER, 2u,
+					    RADIANT_SEC_PAGE_LO_DEFAULT,
+					    RADIANT_SEC_PAGE_HI_DEFAULT));
+	zassert_equal(RADIANT_SEC_OK, radiant_sec_set_epoch(CH, 1u, 0u, 8192u));
+	zassert_true(radiant_sec_channel_is_secured(CH),
+		     "setup: the channel did not arm");
+}
+
+/*
+ * A CRC-valid secured-range page with a forged MAC is deferred by the policy
+ * guard, and its verdict lags by a window. It must not open the slot of a
+ * command queued before the channel was secured; the watchdog fails it.
+ */
+ZTEST(api, test_fec_unverified_frame_never_opens_a_pending_command_slot)
+{
+	static const uint8_t forged[8] = {
+		0x05u, 0x01u, 0x5Au, 0xA5u, 0x00u, 0x11u, 0x22u, 0x33u
+	};
+	uint16_t number = fec_acquire(0u, false);
+	uint32_t expired = radiant_api_stats_get()->xfer_no_opener;
+	const struct fake_radio_arm *w = last_arm_of(FAKE_RADIO_ARM_RX);
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t n = fake_radio_build_ant_frame(frame, number, 0x11u, 5u, forged);
+	radiant_time_t sync = w->t_open + (w->t_close - w->t_open) / 2u;
+
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+	fec_secure(number);
+	zassert_ok(fake_radio_air_frame(sync, frame, n));
+	fake_radio_advance_to(sync + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_REPLY_US + 1000u);
+	zassert_equal(0u, count_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0),
+		      "an unverified frame opened the pending command's slot");
+
+	fake_radio_force_arm_repeat(RADIANT_RADIO_EBUSY, 100u);
+	fake_radio_advance(600000u);
+	run_housekeeping();
+	drain();
+	zassert_equal(expired + 1u, radiant_api_stats_get()->xfer_no_opener);
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+	zassert_equal(0u, count_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0));
+	end_of_test();
+}
+
+/* Already secured at acceptance: the command takes the projected slot, as
+ * before frame-driven handoff, and transmits with no frame received. */
+ZTEST(api, test_fec_secured_channel_command_takes_the_projected_slot)
+{
+	uint16_t number = fec_acquire(0u, false);
+	const struct fake_radio_arm *tx;
+	radiant_time_t slot;
+
+	fec_secure(number);
+	slot = radiant_channel_next_slot(CH);
+	zassert_not_equal(RADIANT_TIME_NEVER, slot);
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+	fake_radio_advance_to(slot + RADIANT_TRANSFER_SLOT_REPLY_US + 1000u);
+	tx = last_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0);
+	zassert_not_null(tx, "a secured channel's command waited for an opener");
+	zassert_equal(slot + RADIANT_TRANSFER_SLOT_REPLY_US, tx->t_sync_at);
+	end_of_test();
+}
+#endif

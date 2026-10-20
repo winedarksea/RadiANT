@@ -124,6 +124,20 @@ an early frame in a ~1.8 ms union, and the command failed without transmitting
 from the frame replaces the channel's in-flight request, so the scheduler aborts
 the window then, exactly as the engine's own ACK reply does from that callback.
 The cost is the rest of that window for any merged neighbour, once per command.
+
+The handoff runs after the security policy guard and never on a secured
+channel. A secured-range broadcast is only queued for verification, and its MAC
+verdict lags by a window, so no opener can be authenticated in time; before
+this, a CRC-valid frame with a forged MAC could send the queued command. A
+command accepted on a secured channel takes the projected slot, as before
+`6bc59fe`; one accepted before the channel was secured is never sent from a
+frame and the watchdog fails it
+(`test_fec_unverified_frame_never_opens_a_pending_command_slot`,
+`test_fec_secured_channel_command_takes_the_projected_slot`, in the
+CONFIG_RADIANT_SEC scenarios). The projected slot is still anchored by the
+received frames, as every ANT slave reply is; the command's own tag, not its
+timing, is what authenticates it.
+
 Host pending-command mutations hold the event critical section, which excludes
 the radio callbacks. Fake-radio tests exercise logic and ordering, not actual
 interrupt preemption.
@@ -147,9 +161,13 @@ by bus/device/endpoint/direction. At EOF it now searches beyond an incomplete
 false-sync candidate for complete checksum-valid frames and reports
 `incomplete_candidates_resynchronized`. During normal reassembly it waits for
 later URBs, preserving split frames whose payload contains a valid-looking frame.
-Recovered frames contribute to broadcast and transfer summaries; unresolved
-accepted commands remain pending. EOF recovery is heuristic when corruption
-contains a coincidental valid checksum, as is ordinary byte resynchronization.
+A recovered frame lies inside the abandoned candidate's claimed length, so it
+may be payload of a real, truncated message; a checksum cannot tell the two
+apart. Recovered frames are therefore printed with
+`[heuristic: recovered at EOF]`, counted only as `heuristic_messages`, listed
+separately by `--summary`, and kept out of broadcast and transfer summaries.
+Ordinary byte resynchronization after a bad checksum remains heuristic when
+corruption contains a coincidental valid checksum.
 
 Both original captures remain in the local captures directory, including the
 second capture. Their hashes and valid counts remain unchanged:
