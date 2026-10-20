@@ -1286,6 +1286,9 @@ ZTEST(transfer, test_received_acknowledged_data_is_answered_with_transfer_ack)
 		      "flipped - got 0x%02X", arm->body[BODY_CTRL]);
 	zassert_true(rx_last, "bit 5 is what tells the layer above the transfer "
 			      "is complete");
+	zassert_equal(0u, arm->follow_on_us,
+		      "an acknowledgement opens no reply window, so it must not "
+		      "hold an arbiter's air past its own frame");
 
 	fake_radio_advance_to(arm->t_sync_at + 1u);
 	end_of_test();
@@ -1449,6 +1452,8 @@ ZTEST(transfer, test_the_acknowledgement_retransmission_limit)
 		zassert_not_null(arm);
 		zassert_equal(RADIANT_CTRL_ACK_SEQ1, arm->body[BODY_CTRL],
 			      "a repeat must be the identical frame");
+		zassert_equal(0u, arm->follow_on_us,
+			      "a repeated acknowledgement reserved follow-on air");
 		fake_radio_advance_to(arm->t_sync_at + 1u);
 	}
 
@@ -1548,6 +1553,12 @@ ZTEST(transfer, test_the_first_packet_lands_where_the_scheduler_asked)
 	/* In-slot acknowledged data is 0xA2 - one packet, sequence 0, last. */
 	zassert_equal(RADIANT_CTRL_BURST_LAST_SEQ0, arm->body[BODY_CTRL]);
 	zassert_mem_equal(&arm->body[BODY_D0], payload, RADIANT_TRANSFER_PKT_BYTES);
+	/* Data expects an acknowledgement, so it carries the air for the
+	 * window that hears it. */
+	zassert_true(arm->follow_on_us >= RADIANT_TRANSFER_REPLY_US +
+					  RADIANT_TRANSFER_ACK_GUARD_US,
+		     "originated data reserved %u us, too little for its ACK "
+		     "window", (unsigned)arm->follow_on_us);
 
 	/* Copied, not owned: no block pointer ever comes back for acknowledged
 	 * data, because antr_acknowledge_message_tx() copies its payload. */

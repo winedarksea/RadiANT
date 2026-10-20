@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Check that the dongle reports bulk-IN before bulk-OUT, and prove why it matters.
 
     C:\\ncs\\toolchains\\dcbdc366a1\\opt\\bin\\python.exe tools\\ant_ep_order.py

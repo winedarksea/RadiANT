@@ -185,9 +185,16 @@ int radiant_transfer_arm_tx(struct radiant_transfer *t, uint8_t ctrl,
 	req.body_len = t->tx_body_len;
 	req.t_sync_at = t_sync_at;
 	/* An originated data packet must retain air for its ACK receive window.
-	 * The reserve also permits in-grant arming on arbitrated backends. */
-	req.follow_on_us = RADIANT_TRANSFER_REPLY_US +
-		RADIANT_TRANSFER_ACK_GUARD_US + radiant_frame_tail_us(t->fmt);
+	 * The reserve also permits in-grant arming on arbitrated backends. An
+	 * acknowledgement (ours, or a retransmission of it) ends the exchange
+	 * and completes to idle, so it reserves nothing: an arbiter would
+	 * otherwise hold ~2 ms of the other stack's air per reply for a window
+	 * that is never opened. The control byte decides, since it is what
+	 * says on the air whether anything answers. */
+	if (!radiant_ctrl_is_ack(ctrl)) {
+		req.follow_on_us = RADIANT_TRANSFER_REPLY_US +
+			RADIANT_TRANSFER_ACK_GUARD_US + radiant_frame_tail_us(t->fmt);
+	}
 
 	/* The scheduler, not the radio: this posts an intent against the
 	 * engine's channel slot; the commit happens on the way out of the
