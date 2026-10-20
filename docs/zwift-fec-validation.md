@@ -114,19 +114,27 @@ regression rather than claimed to be eliminated.
 
 ## Pending command concurrency and reset
 
-`api_sched_done` can run in thread or interrupt context. Thread-context
-`pass()` and cancel/replacement notifications hold the event critical section.
-For radio completions, the owning operation ends before the terminal callback,
-and its next operation is not armed until completion processing returns. A
-fresh frame cannot preempt that callback and replace its pending-slot timestamp.
-Host pending-command mutations also hold the event critical section. This
-ordering is now documented beside the read; a backend changing callback
-serialization must preserve it. Fake-radio tests exercise logic and ordering,
-not actual interrupt preemption.
+A pending slave command is handed to the transfer engine from the master
+frame's receive callback (`api_ack_pending_send`), not from the window's
+terminal. A merged window does not stop on the first frame, so its terminal
+arrives at the union's close plus delivery delay; handing off there left
+`2190 - (close - sync) - delay` for the arm, under the nRF52840's 328 us lead for
+an early frame in a ~1.8 ms union, and the command failed without transmitting
+(`test_fec_pending_command_survives_an_early_frame_in_a_merged_window`). Posting
+from the frame replaces the channel's in-flight request, so the scheduler aborts
+the window then, exactly as the engine's own ACK reply does from that callback.
+The cost is the rest of that window for any merged neighbour, once per command.
+Host pending-command mutations hold the event critical section, which excludes
+the radio callbacks. Fake-radio tests exercise logic and ordering, not actual
+interrupt preemption.
 
 The single-terminal-outcome guarantee applies to accepted commands **within an
-active stack session**. Close/unassign cancel a pending command with the existing
-failure semantics. `antr_stack_reset` deliberately discards pending commands and
+active stack session**. Close cancels a pending command with the existing
+failure semantics. A search timeout fails it before RX_SEARCH_TIMEOUT and
+CHANNEL_CLOSED, in the order an explicit close gives; previously unassign wiped
+it with no event
+(`test_fec_pending_command_fails_when_search_timeout_closes_the_channel`).
+Unassign and a not-open channel in housekeeping are backstops that also fail it. `antr_stack_reset` deliberately discards pending commands and
 flushes queued events while tearing down host/channel state. It can therefore
 end a session without a transfer terminal event; callers must retire their
 pre-reset ledger. The existing reset regression explicitly pins this exception.

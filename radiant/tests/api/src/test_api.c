@@ -2790,3 +2790,148 @@ ZTEST(api, test_fec_turnaround_survives_a_scan_terminal_delivered_after_its_airt
 	zassert_ok(antr_channel_close(1u));
 	end_of_test();
 }
+
+/* Log position of a channel event's first occurrence, or UINT32_MAX. */
+static uint32_t first_channel_event_at(uint8_t ch, uint8_t code)
+{
+	for (uint32_t i = 0u; i < n_msg && i < MSGLOG_MAX; i++) {
+		if (msglog[i].id == (uint8_t)ANTW_MESG_RESPONSE_EVENT_ID &&
+		    msglog[i].len >= 3u && msglog[i].data[0] == ch &&
+		    msglog[i].data[1] == (uint8_t)ANTW_MESG_EVENT_ID &&
+		    msglog[i].data[2] == code) {
+			return i;
+		}
+	}
+	return UINT32_MAX;
+}
+
+/*
+ * A merged window does not stop on the first frame, so its terminal comes at
+ * the union's close plus delivery delay. Handing the pending command off from
+ * that terminal left 2190 - (close - sync) - delay for the arm: at the
+ * nRF52840's 328 us lead, a frame early in a ~1.8 ms union never transmitted.
+ */
+ZTEST(api, test_fec_pending_command_survives_an_early_frame_in_a_merged_window)
+{
+	const radiant_time_t d = 1000u; /* second slave's slot after the first's */
+	const struct fake_radio_arm *w = NULL;
+	const struct fake_radio_arm *tx;
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t len;
+	uint16_t number = fec_acquire(0u, false);
+	uint16_t second;
+	radiant_time_t s0 = radiant_channel_next_slot(CH);
+	radiant_time_t sync;
+
+	fake_radio_caps_mut()->min_arm_lead_us = 328u;
+
+	zassert_ok(antr_channel_assign(1u, ANTW_CHANNEL_TYPE_SLAVE, 0u, 0u));
+	zassert_ok(antr_channel_id_set(1u, 0u, 0x11u, 0u));
+	zassert_ok(antr_channel_period_set(1u, 8192u));
+	zassert_ok(antr_channel_radio_freq_set(1u, RF_INDEX));
+	zassert_ok(antr_channel_open(1u));
+
+	/* Keep the first slave heard, then acquire the second d after it, in
+	 * the scan chunk that fills the gap behind the first's window. */
+	len = fake_radio_build_ant_frame(frame, number, 0x11u, 5u, peer_payload);
+	zassert_ok(fake_radio_air_frame(s0, frame, len));
+	fake_radio_advance_to(s0 + 600u);
+	for (uint32_t n = fake_radio_arm_count(); n > 0u; n--) {
+		const struct fake_radio_arm *a = fake_radio_arm(n - 1u);
+
+		if (a != NULL && a->kind == FAKE_RADIO_ARM_RX &&
+		    a->rc == RADIANT_RADIO_OK_RC && a->n_filters >= 2u &&
+		    a->t_open <= s0 + d && a->t_close > s0 + d + 1000u) {
+			w = a;
+			break;
+		}
+	}
+	zassert_not_null(w, "no scan chunk covered s0 + %u", (unsigned)d);
+	air_device(w, 0u, 0xDD00u, 0x11u, (uint32_t)(s0 + d - w->t_open), &second);
+	fake_radio_advance_to(s0 + d + 1000u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u));
+
+	s0 = radiant_channel_next_slot(CH);
+	zassert_equal(s0 + d, radiant_channel_next_slot(1u));
+	/* The acquiring scan chunk runs on to just before the first slave's next
+	 * window; after it, let the pump post the second slave's window. Virtual
+	 * time is frozen across the sleep, so nothing armed runs behind it. */
+	fake_radio_advance_to(s0 - 1000u);
+	k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(w);
+	zassert_equal(2u, w->n_filters, "the two slaves' windows did not merge");
+	zassert_true(w->t_close - w->t_open >= 1700u, "union only %u us",
+		     (unsigned)(w->t_close - w->t_open));
+	/* The terminal of a window that ran to its close, as delivered late. */
+	fake_radio_set_rx_terminal_delay_us(250u);
+
+	/* The first slave's master, 300 us early - inside its 400 us guard. */
+	sync = s0 - 300u;
+	zassert_ok(fake_radio_air_frame(sync, frame, len));
+	frame[6] = RADIANT_CTRL_ACK_LAST_SEQ1;
+	zassert_ok(fake_radio_air_frame(sync + RADIANT_TRANSFER_SLOT_REPLY_US +
+				       RADIANT_TRANSFER_REPLY_US, frame, len));
+	fake_radio_advance_to(sync + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_REPLY_US + RADIANT_TRANSFER_ACK_GUARD_US +
+			      1000u);
+	drain();
+
+	tx = last_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0);
+	zassert_not_null(tx, "the pending command never transmitted");
+	zassert_equal(sync + RADIANT_TRANSFER_SLOT_REPLY_US, tx->t_sync_at);
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_COMPLETED));
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+	zassert_ok(antr_channel_close(1u));
+	end_of_test();
+}
+
+/*
+ * At period 65535 the pending allowance is two periods, ~4 s; a 2.5 s search
+ * timeout closes the channel first. The command must fail once, before the
+ * close, and not be wiped silently by the unassign that CHANNEL_CLOSED invites.
+ */
+ZTEST(api, test_fec_pending_command_fails_when_search_timeout_closes_the_channel)
+{
+	const struct fake_radio_arm *w;
+	uint32_t failed_at;
+	uint32_t closed_at;
+
+	zassert_ok(antr_network_address_set(0u, ant_plus_key));
+	zassert_ok(antr_channel_assign(CH, ANTW_CHANNEL_TYPE_SLAVE, 0u, 0u));
+	zassert_ok(antr_channel_id_set(CH, 0xCC00u, 0x11u, 0u));
+	zassert_ok(antr_channel_period_set(CH, 65535u));
+	zassert_ok(antr_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_ok(antr_channel_search_timeout_set(CH, 1u)); /* 2.5 s */
+	zassert_ok(antr_channel_open(CH));
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+
+	/* Nobody answers: let the first window end, then refuse further arms
+	 * so housekeeping can run with the radio idle. */
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(w);
+	fake_radio_force_arm_repeat(RADIANT_RADIO_EBUSY, 1000u);
+	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance(3000000u);
+	run_housekeeping();
+	drain();
+
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_RX_SEARCH_TIMEOUT));
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_CHANNEL_CLOSED));
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED),
+		      "the search timeout left the accepted command pending");
+	failed_at = first_channel_event_at(CH, ANTW_EVENT_TRANSFER_TX_FAILED);
+	closed_at = first_channel_event_at(CH, ANTW_EVENT_CHANNEL_CLOSED);
+	zassert_true(failed_at < closed_at,
+		     "TX_FAILED (%u) arrived after CHANNEL_CLOSED (%u)",
+		     (unsigned)failed_at, (unsigned)closed_at);
+
+	zassert_ok(antr_channel_unassign(CH));
+	fake_radio_advance(2000000u);
+	run_housekeeping();
+	drain();
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+	zassert_true(fake_radio_is_idle());
+}

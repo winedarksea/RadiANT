@@ -312,10 +312,8 @@ struct api_chan {
 	bool    bcast_pending;
 	/* A slave keeps receiving until a real master slot opens the exchange. */
 	bool ack_pending;
-	bool ack_slot_ready;
 	uint8_t ack_data[RADIANT_TRANSFER_PKT_BYTES];
 	radiant_time_t ack_deadline;
-	radiant_time_t ack_slot_sync;
 
 #if defined(CONFIG_RADIANT_SEC)
 	/*
@@ -1035,6 +1033,47 @@ static void api_xfer_refresh_id(uint8_t ch)
 		memcpy(t->filter.addr, addr, (size_t)n);
 		t->filter.addr_len = (uint8_t)n;
 	}
+}
+
+/* The master's frame has opened this slave's reply slot: send the pending
+ * command now, from the frame, not from the window's terminal. A merged window
+ * runs on to the union's close plus delivery delay, which can leave less than
+ * an arm lead before sync + SLOT_REPLY_US. Posting replaces the channel's
+ * in-flight request, so the scheduler aborts the window here, exactly as the
+ * transfer engine's own ACK reply does from this callback; the transmit's
+ * completion then retires the receive's op token. Radio interrupt context. */
+static void api_ack_pending_send(uint8_t ch, radiant_time_t t_sync)
+{
+	struct api_chan *c = &api_ch[ch];
+
+	if (radiant_channel_state_get(ch) != RADIANT_CH_STATE_TRACKING ||
+	    !radiant_transfer_is_idle(&api_xfer[ch]) ||
+	    radiant_radio_now() >= c->ack_deadline) {
+		return; /* the watchdog owns an expired command's failure */
+	}
+	api_xfer_refresh_id(ch);
+	c->ack_pending = false;
+	if (radiant_transfer_ack_data(&api_xfer[ch], c->ack_data,
+				      RADIANT_TRANSFER_PKT_BYTES,
+				      t_sync + RADIANT_TRANSFER_SLOT_REPLY_US) !=
+	    RADIANT_TRANSFER_OK) {
+		api_stats.xfer_radio_failed++;
+		(void)radiant_event_post_transfer_tx_failed(ch);
+	}
+}
+
+/* End an accepted, never-sent slave command with its one terminal event.
+ * Every path that takes the channel off the air must come through here before
+ * CHANNEL_CLOSED, or unassign wipes the command without an outcome. */
+static void api_ack_pending_fail(uint8_t ch)
+{
+	unsigned int key = radiant_event_crit_enter();
+
+	if (api_ch[ch].ack_pending) {
+		api_ch[ch].ack_pending = false;
+		(void)radiant_event_post_transfer_tx_failed(ch);
+	}
+	radiant_event_crit_exit(key);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1809,8 +1848,7 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	case RADIANT_MSG_BROADCAST:
 		if (!crc_failed && api_ch[ch].ack_pending &&
 		    !radiant_channel_is_master(ch)) {
-			api_ch[ch].ack_slot_ready = true;
-			api_ch[ch].ack_slot_sync = evt->t_sync;
+			api_ack_pending_send(ch, evt->t_sync);
 		}
 #if defined(CONFIG_RADIANT_SEC)
 		/*
@@ -2099,12 +2137,10 @@ static void api_sched_armed(uint8_t ch, radiant_time_t t_open, radiant_time_t t_
 
 /* Context is not exclusively ISR: pass() may synchronously report a missed
  * arm from a thread, with radiant_event_crit_enter() held for the whole pass.
- * Cancel/request replacement also notify under that critical section. Radio
- * terminals run serially with RX for the owning operation; the HAL retires it
- * before calling done, and its successor is not armed until this callback
- * returns to the scheduler. Thus a fresh frame cannot interrupt the pending
- * ACK read below. Host pending-command writers use the same critical section.
- * Keep this invariant when adding a backend or moving completion dispatch. */
+ * Cancel/request replacement also notify under that critical section. A
+ * pending slave command is sent from the frame (api_ack_pending_send()), not
+ * from here; host writers of ack_pending hold the same critical section that
+ * excludes the radio callbacks. */
 static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 {
 	enum radiant_radio_status st;
@@ -2388,26 +2424,6 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		api_bind_accepted(ch, API_SLOT_SEARCH);
 	}
 
-	/* Retire the RX operation before reusing its scheduler slot. The frame
-	 * callback merely saved the achieved sync; no predicted-slot transmit. */
-	if (api_ch[ch].ack_pending && api_ch[ch].ack_slot_ready) {
-		struct api_chan *c = &api_ch[ch];
-		radiant_time_t at = c->ack_slot_sync + RADIANT_TRANSFER_SLOT_REPLY_US;
-
-		c->ack_slot_ready = false;
-		if (radiant_channel_state_get(ch) == RADIANT_CH_STATE_TRACKING &&
-		    radiant_transfer_is_idle(&api_xfer[ch]) &&
-		    at > now && now < c->ack_deadline) {
-			api_xfer_refresh_id(ch);
-			c->ack_pending = false;
-			if (radiant_transfer_ack_data(&api_xfer[ch], c->ack_data,
-					RADIANT_TRANSFER_PKT_BYTES, at) != RADIANT_TRANSFER_OK) {
-				api_stats.xfer_radio_failed++;
-				(void)radiant_event_post_transfer_tx_failed(ch);
-			}
-		}
-	}
-
 	/*
 	 * Exception #1, bounded by construction: a listening master's
 	 * turnaround needs the t_sync its own transmit achieved (only
@@ -2553,12 +2569,15 @@ static void api_watchdogs_locked(radiant_time_t now)
 		unsigned int key = radiant_event_crit_enter();
 
 		if (c->ack_pending && now >= c->ack_deadline) {
-			c->ack_pending = false;
-			c->ack_slot_ready = false;
 			api_stats.xfer_no_opener++;
-			(void)radiant_event_post_transfer_tx_failed(ch);
+			api_ack_pending_fail(ch);
 		}
 		radiant_event_crit_exit(key);
+		/* Backstop: every close path fails the command before closing;
+		 * one that does not must still not leave it for unassign. */
+		if (!radiant_channel_is_open(ch)) {
+			api_ack_pending_fail(ch);
+		}
 
 		/* H2. Non-idle with nothing armed means no done() is coming -
 		 * api_feed_xfer_terminal() is only reachable from api_sched_done(). */
@@ -2598,6 +2617,15 @@ static void api_housekeep(void)
 
 	k_mutex_lock(&api_lock, K_FOREVER);
 	now = radiant_radio_now();
+
+	/* A search about to time out closes its channel. A pending slave
+	 * command fails first - the order antr_channel_close() gives - or the
+	 * unassign CHANNEL_CLOSED invites would wipe it with no outcome. */
+	for (uint8_t ch = 0u; ch < API_CHANNELS; ch++) {
+		if (radiant_channel_search_deadline(ch) <= now) {
+			api_ack_pending_fail(ch);
+		}
+	}
 
 	/* Search deadlines. A SEARCHING channel past its deadline raises
 	 * RX_SEARCH_TIMEOUT and then closes, both, in that order. */
@@ -3028,6 +3056,8 @@ antr_err_t antr_channel_unassign(uint8_t channel)
 	if (rc == RADIANT_CH_OK) {
 		(void)radiant_search_end(&api_search, channel);
 		(void)radiant_sched_cancel(channel);
+		/* Backstop: the wipe below must not be a command's silent end. */
+		api_ack_pending_fail(channel);
 		/* Keys and derived values go with the channel, or they'd stay
 		 * installed on a number the host is free to reassign. */
 		radiant_sec_channel_release(channel);
@@ -3074,11 +3104,7 @@ antr_err_t antr_channel_close(uint8_t channel)
 		uint32_t op = api_ch[channel].op;
 
 		(void)radiant_transfer_abort(&api_xfer[channel]);
-		if (api_ch[channel].ack_pending) {
-			api_ch[channel].ack_pending = false;
-			api_ch[channel].ack_slot_ready = false;
-			(void)radiant_event_post_transfer_tx_failed(channel);
-		}
+		api_ack_pending_fail(channel);
 		(void)radiant_search_end(&api_search, channel);
 		if (api_search_slot == channel) {
 			/* This channel carried the sweep and its request is
@@ -3600,7 +3626,6 @@ antr_err_t antr_acknowledge_message_tx(uint8_t channel, uint8_t size,
 		}
 		memcpy(api_ch[channel].ack_data, data, size);
 		api_ch[channel].ack_deadline = radiant_radio_now() + wait;
-		api_ch[channel].ack_slot_ready = false;
 		api_ch[channel].ack_pending = true;
 		radiant_event_crit_exit(key);
 		k_mutex_unlock(&api_lock);
