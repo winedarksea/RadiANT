@@ -36,6 +36,7 @@
 
 #include <radiant/radiant_frame.h>
 #include <radiant/radiant_sched.h>
+#include <radiant/radiant_transfer.h>
 
 #include "../fake_radio.h"
 
@@ -128,6 +129,12 @@ static struct {
 	 * t_sync, from inside the receive callback. 0 disables it. */
 	uint32_t reply_after_us;
 	uint8_t  reply_ch;
+	/* The reply's own follow_on_us, and - from inside its transmit callback -
+	 * an acknowledgement window this far after its t_sync, +/- 250 us. 0
+	 * disables each. The data/ACK chain an arbitrated backend serves from
+	 * one grant. */
+	uint16_t reply_follow_on_us;
+	uint32_t ack_window_after_us;
 
 	uint64_t scan_listen_us;
 	radiant_time_t scan_measure_end;
@@ -193,6 +200,7 @@ static void on_rx(uint8_t ch, uint8_t filter_index,
 
 		tx_req_init(&t, log.reply_ch,
 			    evt->t_sync + (radiant_time_t)log.reply_after_us);
+		t.follow_on_us = log.reply_follow_on_us;
 		(void)radiant_sched_request_tx(log.reply_ch, &t);
 		log.reply_after_us = 0u; /* one reply per test */
 	}
@@ -207,6 +215,18 @@ static void on_tx(uint8_t ch, const struct radiant_tx_event *evt, void *user)
 		log.tx[log.n_tx].t_sync = evt->t_sync;
 	}
 	log.n_tx++;
+
+	if (log.ack_window_after_us != 0u &&
+	    evt->status == RADIANT_RADIO_STATUS_OK) {
+		struct radiant_sched_rx r;
+		radiant_time_t          mid = evt->t_sync +
+				     (radiant_time_t)log.ack_window_after_us;
+
+		rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_TRACKING),
+			    &track_filter[ch], 1u, mid - 250u, mid + 250u);
+		(void)radiant_sched_request_rx(ch, &r);
+		log.ack_window_after_us = 0u;
+	}
 }
 
 static void on_done(uint8_t ch, enum radiant_sched_done why, void *user)
@@ -345,6 +365,8 @@ static void finish(void)
 	log.repost = false;
 	log.repost_mask = 0u;
 	log.reply_after_us = 0u;
+	log.reply_follow_on_us = 0u;
+	log.ack_window_after_us = 0u;
 	for (ch = 0u; ch < (uint8_t)RADIANT_SCHED_MAX_CHANNELS; ch++) {
 		zassert_ok(radiant_sched_cancel(ch));
 	}
@@ -2538,6 +2560,100 @@ ZTEST(radiant_sched, test_the_follow_on_reserve_reaches_the_backend)
 	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
 
 	assert_every_window_bounded();
+	finish();
+}
+
+/* An arbitrated backend's two leads: a fresh reservation needs 24 ms of notice
+ * (the MPSL gate's PLACE_LEAD_US), arming inside air already held needs only
+ * the peripheral's own lead. */
+static void arbitrated_leads(void)
+{
+	fake_radio_caps_mut()->min_arm_lead_us = 24000u;
+	fake_radio_caps_mut()->min_arm_lead_in_grant_us = 200u;
+}
+
+/* The exchange a slave's queued command makes from inside one grant: the
+ * master's frame is heard in a tracked window carrying the full exchange
+ * reserve, the command goes out SLOT_REPLY_US later, and its completion opens
+ * the acknowledgement window REPLY_US after that. Both follow-ons are far
+ * inside a fresh reservation's lead and must still be armed, at their exact
+ * instants, from their callbacks - on MPSL this chain was refused at the first
+ * link on every exchange (60 of 60 commands failed on the bench). */
+ZTEST(radiant_sched, test_follow_ons_inside_the_reserve_use_the_in_grant_lead)
+{
+	radiant_time_t open;
+	radiant_time_t heard_at;
+	radiant_time_t tx_at;
+
+	arbitrated_leads();
+	bring_up();
+	open = radiant_radio_now() + 100000u;
+	heard_at = open + 200u;
+	tx_at = heard_at + (radiant_time_t)RADIANT_TRANSFER_SLOT_REPLY_US;
+
+	log.follow_on_us[1] = 4150u;
+	post_track(1u, open, open + 400u);
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(1u, fake_radio_arm_count());
+
+	log.reply_after_us = RADIANT_TRANSFER_SLOT_REPLY_US;
+	log.reply_ch = 1u;
+	log.reply_follow_on_us = (uint16_t)(RADIANT_TRANSFER_REPLY_US +
+					    RADIANT_TRANSFER_ACK_GUARD_US + 150u);
+	log.ack_window_after_us = RADIANT_TRANSFER_REPLY_US;
+	air_frame_for(1u, heard_at);
+
+	fake_radio_advance_to(tx_at + RADIANT_TRANSFER_REPLY_US + 1000u);
+
+	zassert_equal(0u, log.missed_count[1],
+		      "a follow-on inside the held reserve was reported MISSED "
+		      "against the fresh-reservation lead");
+	zassert_equal(3u, fake_radio_arm_count(),
+		      "expected window, command, acknowledgement window");
+	zassert_equal(FAKE_RADIO_ARM_TX, fake_radio_arm(1u)->kind);
+	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_arm(1u)->rc);
+	zassert_equal(tx_at, fake_radio_arm(1u)->t_sync_at);
+	zassert_true(fake_radio_arm(1u)->from_callback);
+	zassert_equal(FAKE_RADIO_ARM_RX, fake_radio_arm(2u)->kind);
+	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_arm(2u)->rc);
+	zassert_equal(tx_at + RADIANT_TRANSFER_REPLY_US - 250u,
+		      fake_radio_arm(2u)->t_open,
+		      "the acknowledgement window was opened late, at the "
+		      "fresh-reservation lead");
+	zassert_true(fake_radio_arm(2u)->from_callback);
+
+	finish();
+}
+
+/* The control: the same exchange with no reserve. Nothing is held for the
+ * command, so a backend this far inside its placement lead cannot serve it,
+ * and the scheduler must say so (MISSED) rather than ask and be refused. */
+ZTEST(radiant_sched, test_a_near_transmit_with_no_reserve_is_still_missed)
+{
+	radiant_time_t open;
+	radiant_time_t heard_at;
+
+	arbitrated_leads();
+	bring_up();
+	open = radiant_radio_now() + 100000u;
+	heard_at = open + 200u;
+
+	log.follow_on_us[1] = 0u;
+	post_track(1u, open, open + 400u);
+	zassert_ok(radiant_sched_tick());
+
+	log.reply_after_us = RADIANT_TRANSFER_SLOT_REPLY_US;
+	log.reply_ch = 1u;
+	air_frame_for(1u, heard_at);
+
+	fake_radio_advance_to(heard_at + RADIANT_TRANSFER_SLOT_REPLY_US + 1000u);
+
+	zassert_equal(1u, log.missed_count[1],
+		      "with no reserve the command must be reported MISSED");
+	zassert_equal(0u, log.n_tx);
+	zassert_equal(1u, fake_radio_arm_count(),
+		      "the scheduler asked a backend for air it could not have");
+
 	finish();
 }
 

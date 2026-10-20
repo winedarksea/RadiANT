@@ -41,6 +41,13 @@ void gate_release(void)
 	/* Nothing was held. */
 }
 
+bool gate_held(void)
+{
+	/* Never: so the backend's handoff always releases at once, which is the
+	 * no-op above, and the direct build keeps its ordering exactly. */
+	return false;
+}
+
 bool gate_in_signal(void)
 {
 	/*

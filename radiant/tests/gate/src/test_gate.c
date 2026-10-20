@@ -1141,6 +1141,55 @@ ZTEST(radiant_gate, test_full_slave_exchange_reserve_is_bounded_and_released_ear
 }
 
 /*
+ * The contract the backend's grant handoff exists for (radiant_radio_nrf.c,
+ * "THE GRANT HANDOFF"): a follow-on 2.19 ms after the frame is served from the
+ * held reserve, and the SAME request once the grant is released is too near
+ * to place at all. The second half is why the backend must not release before
+ * the core has armed; gate_held() is how it knows there is something to hand.
+ */
+ZTEST(radiant_gate, test_a_follow_on_is_served_only_while_the_grant_is_held)
+{
+	radiant_time_t from = radiant_radio_now() + WIN_LEAD_US;
+	radiant_time_t tx_from = from + 2090u;
+	radiant_time_t tx_to = from + 2286u;
+	uint32_t placed;
+
+	zassert_equal(GATE_PENDING, gate_acquire(GATE_OP_RX, from, from + 2000u,
+					       4150u, RADIANT_GATE_PRIO_HIGH));
+	k_msleep(WORK_MS);
+	placed = fake_mpsl_requests();
+	/* START where the grant begins (from - HEAD), so grant_end lands on
+	 * the RX close plus the reserve plus the tail. */
+	fake_radio_advance_to(from - 250u);
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_NONE,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_START));
+	zassert_true(gate_held(), "a live grant was not reported held");
+
+	/* Mid-window, the frame has just been heard. */
+	fake_radio_advance_to(from + 1000u);
+	zassert_equal(GATE_GRANTED,
+		      gate_acquire(GATE_OP_TX, tx_from, tx_to, 1800u,
+				   RADIANT_GATE_PRIO_HIGH),
+		      "a follow-on inside the held reserve was not served from it");
+	zassert_equal(placed, fake_mpsl_requests(),
+		      "an in-grant follow-on placed a reservation");
+
+	fake_mpsl_timer0.counter = 1250u;
+	fake_mpsl_timer0.counter_step = 0u;
+	gate_release();
+	zassert_false(gate_held(), "a released grant still reported held");
+	zassert_equal(GATE_DENIED,
+		      gate_acquire(GATE_OP_TX, tx_from, tx_to, 1800u,
+				   RADIANT_GATE_PRIO_HIGH),
+		      "released first, the follow-on must be refused too-near - "
+		      "if this passes, the handoff is no longer what serves it");
+
+	zassert_equal(MPSL_TIMESLOT_SIGNAL_ACTION_END,
+		      fake_mpsl_signal(MPSL_TIMESLOT_SIGNAL_TIMER0));
+	assert_invariant();
+}
+
+/*
  * A transmit is the other non-extendable class, and it is non-extendable by OP
  * rather than by priority - `(op != GATE_OP_TX) && (prio == NORMAL)`. So both
  * halves are checked: a transmit at HIGH (the real class) and a transmit at

@@ -147,6 +147,10 @@ struct fake_state {
 	 * would be re-arming it from inside the very callback under test. */
 	uint32_t force_arm_n;
 	int32_t  tx_offset_us;
+	/* The last accepted arm's follow_on_us reserve, as an absolute end (0 =
+	 * none): an arbitrated backend serves an operation ending inside it at
+	 * caps.min_arm_lead_in_grant_us. See too_late(). */
+	radiant_time_t reserve_end;
 	uint32_t rx_terminal_delay_us;
 	int8_t   default_rssi;
 
@@ -1672,9 +1676,24 @@ static int8_t clamp_dbm(int8_t dbm)
 	return dbm;
 }
 
-static bool too_late(radiant_time_t t)
+/* `end` is the operation's last instant: inside the previous arm's reserve, the
+ * in-grant lead applies instead, as on an arbitrated backend holding that air.
+ * Unchanged wherever min_arm_lead_in_grant_us is 0 (every preset). */
+static bool too_late(radiant_time_t t, radiant_time_t end)
 {
-	return t < g.now + (radiant_time_t)g.caps.min_arm_lead_us;
+	uint32_t lead = g.caps.min_arm_lead_us;
+
+	if (g.caps.min_arm_lead_in_grant_us != 0u && g.reserve_end != 0u &&
+	    end <= g.reserve_end) {
+		lead = g.caps.min_arm_lead_in_grant_us;
+	}
+	return t < g.now + (radiant_time_t)lead;
+}
+
+static void set_reserve(radiant_time_t end, uint16_t follow_on_us)
+{
+	g.reserve_end = (follow_on_us != 0u) ? end + (radiant_time_t)follow_on_us
+					     : 0u;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1880,7 +1899,7 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	if (rc == RADIANT_RADIO_OK_RC) {
 		if (req->t_sync_at == RADIANT_TIME_NEVER) {
 			rc = RADIANT_RADIO_EINVAL;
-		} else if (too_late(req->t_sync_at)) {
+		} else if (too_late(req->t_sync_at, req->t_sync_at)) {
 			/* A backend never silently transmits late: a late
 			 * master frame lands in the next slot and is worse
 			 * than no frame at all. */
@@ -1918,6 +1937,7 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 
 	take_pending_force();
 
+	set_reserve(req->t_sync_at, req->follow_on_us);
 	rec->op = g.cur.op;
 	*op = g.cur.op;
 	g.stats.arms_tx++;
@@ -2062,7 +2082,7 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 			rc = RADIANT_RADIO_EINVAL;
 		} else if (req->t_close < req->t_open) {
 			rc = RADIANT_RADIO_EINVAL;
-		} else if (too_late(req->t_open)) {
+		} else if (too_late(req->t_open, req->t_close)) {
 			rc = RADIANT_RADIO_ETIME;
 		} else if (window_over_cap(req->t_open, req->t_close)) {
 			/* Longer than caps.max_window_us, an API ceiling on an
@@ -2103,6 +2123,7 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 
 	take_pending_force();
 
+	set_reserve(req->t_close, req->follow_on_us);
 	rec->op = g.cur.op;
 	*op = g.cur.op;
 	g.stats.arms_rx++;
@@ -2156,7 +2177,7 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 		rc = RADIANT_RADIO_EINVAL;
 		goto refuse;
 	}
-	if (too_late(req->t_start)) {
+	if (too_late(req->t_start, RADIANT_TIME_NEVER)) {
 		rc = RADIANT_RADIO_ETIME;
 		goto refuse;
 	}
@@ -2185,6 +2206,7 @@ int radiant_radio_ed(const struct radiant_ed_req *req, uint32_t *op)
 	rec->op = g.cur.op;
 	rec->rc = RADIANT_RADIO_OK_RC;
 	*op = g.cur.op;
+	g.reserve_end = 0u;
 	g.stats.arms_ed++;
 	return RADIANT_RADIO_OK_RC;
 

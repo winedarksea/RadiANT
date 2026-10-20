@@ -2001,6 +2001,14 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 	return GATE_PENDING;
 }
 
+bool gate_held(void)
+{
+	/* g.granted, not g.hw_held: the core's permission is what an in-grant
+	 * arm needs, and gate_release() clears it the moment the air is handed
+	 * back even while the compare that ends the timeslot is still due. */
+	return g.granted;
+}
+
 void gate_release(void)
 {
 	if (!g.granted) {

@@ -509,6 +509,26 @@ ZTEST(api, test_a_master_answers_every_slave_exchange_not_only_the_first)
 			     "it may have to transmit 1560 us after a frame "
 			     "arriving at its late edge",
 			     period, (unsigned)turn->follow_on_us);
+		/*
+		 * AND THE TRANSMIT'S RESERVE MUST COVER ALL OF IT: the
+		 * turnaround is served from the transmit's grant, which an
+		 * arbitrated backend allows only if the turnaround's close
+		 * PLUS its own reserve fit inside it. Covering just the
+		 * window lost every turnaround on MPSL, this suite green.
+		 */
+		{
+			const struct fake_radio_arm *tx = last_arm_of(FAKE_RADIO_ARM_TX);
+
+			zassert_not_null(tx);
+			zassert_true((radiant_time_t)tx->follow_on_us >=
+					     (turn->t_close - tx->t_sync_at) +
+						     (radiant_time_t)turn->follow_on_us,
+				     "period %u: the slot's reserve (%u us) ends before "
+				     "the turnaround's (%u us past the slot)", period,
+				     (unsigned)tx->follow_on_us,
+				     (unsigned)((turn->t_close - tx->t_sync_at) +
+						turn->follow_on_us));
+		}
 		zassert_true(turn->from_callback,
 			     "period %u: the turnaround was not armed from "
 			     "inside a callback - a pump running in thread "

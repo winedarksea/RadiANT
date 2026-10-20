@@ -1831,8 +1831,71 @@ static struct core_cb_entry core_cb_q[CORE_CB_RING];
 static volatile uint32_t core_cb_head;
 static volatile uint32_t core_cb_tail;
 
+/*
+ * THE GRANT HANDOFF.
+ *
+ * follow_on_us reserves air so the core can arm one more operation inside the
+ * grant it already holds - the acknowledged-data reply, the ACK window after a
+ * data packet, a listening master's turnaround, a queued slave command - each
+ * 1.5-2.2 ms out, far nearer than any NEW reservation can be placed
+ * (PLACE_MIN_US). But every one of those is armed from the completion of the
+ * operation before it, and that completion's terminal (or the abort that
+ * replaces a still-open window) used to give the grant back FIRST. The arm then
+ * found nothing held, took the placement path, and was refused too-near: the
+ * reserve was paid for on every window and could never be used.
+ *
+ * So a release is OWED, not done, while the core still has a completion to
+ * run: inside the trampoline's dispatch, or from the signal context whose
+ * completion was just queued for it. When the dispatch drains, the debt is
+ * settled - kept if a follow-on was programmed into the held air (its own
+ * terminal owes the next release), paid otherwise. The early hand-back that
+ * matters (an empty window's ~2 ms reserve) slips only by the trampoline's
+ * latency, and a dispatch that never comes is still bounded by the grant's own
+ * ending compare.
+ *
+ * Only while a grant is HELD. With nothing held, gate_release()'s other branch
+ * (forget a pending request, stop its backstop) must run now, before the
+ * callback can place a fresh one - deferring it would clear the new request's
+ * state instead. gate_held() is constant false on the direct gate, so a
+ * shipping dongle releases exactly when it always did.
+ */
+static volatile bool grant_release_owed;
+static uint32_t      core_cb_depth;
+
+static void grant_release_after_core(void)
+{
+	if (gate_held() && (core_cb_depth != 0u || gate_in_signal())) {
+		grant_release_owed = true;
+		if (gate_in_signal()) {
+			/* Pended even if the completion failed to queue, so the
+			 * debt is always settled by a dispatch. */
+			radiant_swi_pend(RADIANT_SWI_CORE_CB);
+		}
+		return;
+	}
+	gate_release();
+}
+
+static void grant_release_settle(void)
+{
+	/* A completion still queued may yet arm the follow-on; its dispatch
+	 * settles instead (the enqueue pended it). */
+	if (!grant_release_owed || core_cb_tail != core_cb_head) {
+		return;
+	}
+	grant_release_owed = false;
+	if (radiant_op.kind != OP_NONE && !radiant_staged.pending) {
+		/* Programmed into the held air: the follow-on owns the grant. */
+		return;
+	}
+	if (gate_held()) {
+		gate_release();
+	}
+}
+
 static void core_cb_dispatch(void)
 {
+	core_cb_depth++;
 	while (core_cb_tail != core_cb_head) {
 		struct core_cb_entry *e = &core_cb_q[core_cb_tail % CORE_CB_RING];
 
@@ -1858,6 +1921,8 @@ static void core_cb_dispatch(void)
 		 * under a callback that is still reading it. */
 		core_cb_tail++;
 	}
+	core_cb_depth--;
+	grant_release_settle();
 }
 
 static void core_cb_swi(uint32_t bits)
@@ -1883,6 +1948,13 @@ static bool core_cb_enqueue(const struct core_cb_entry *src)
 	core_cb_head = head + 1u;
 	radiant_swi_pend(RADIANT_SWI_CORE_CB);
 	return true;
+}
+#else
+/* No zero-latency context and no trampoline: every completion runs inline,
+ * so nothing can be owed. */
+static inline void grant_release_after_core(void)
+{
+	gate_release();
 }
 #endif /* CORE_CB_DEFERRED */
 
@@ -3814,7 +3886,9 @@ int radiant_radio_abort(void)
 	 * owner has gone. */
 	radiant_staged.pending = false;
 	irq_unlock(key);
-	gate_release();
+	/* Owed rather than paid when the core aborted from its own completion
+	 * to arm a follow-on into the same air - see THE GRANT HANDOFF. */
+	grant_release_after_core();
 
 	/*
 	 * The operation slot must be released synchronously here. Triggering
@@ -3966,16 +4040,17 @@ static void deliver_terminal(enum radiant_radio_status st)
 
 	radiant_op.kind = OP_NONE;
 	/*
-	 * Give the air back before the callback, not after: a tracked window that
-	 * closed empty would otherwise hold ~2 ms of follow_on reservation for a
-	 * reply now known not to be coming (four times a second per sensor), and
-	 * released here the blackout stays the ~1.3 ms actually used. Before the
-	 * callback because the callback is entitled to arm the next operation,
-	 * and an arm finding the previous reservation still held would be asking
-	 * for air it already has.
+	 * Give the air back promptly: a tracked window that closed empty would
+	 * otherwise hold ~2 ms of follow_on reservation for a reply now known not
+	 * to be coming (four times a second per sensor). But not before the
+	 * callback has had its chance to arm a follow-on INTO that reservation,
+	 * which is what it was for: an arbitrated grant is handed over while the
+	 * completion runs and released once it has, so an empty window still
+	 * gives its reserve back within the trampoline's latency. See THE GRANT
+	 * HANDOFF.
 	 */
 	radiant_staged.pending = false;
-	gate_release();
+	grant_release_after_core();
 
 #if defined(CONFIG_RADIANT_ED_SCAN)
 	if (kind == OP_ED) {

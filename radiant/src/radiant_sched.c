@@ -207,6 +207,11 @@ static struct {
 	uint8_t                      members[RADIANT_SCHED_MAX_FILTERS];
 	uint8_t                      n_members;
 
+	/* The last instant the most recently armed operation's follow_on_us
+	 * reserve covers, or 0 for none. Outlives that operation on purpose: the
+	 * reserve is FOR whatever its completion arms. See in_reserve(). */
+	radiant_time_t               reserve_end;
+
 	/* The filter array handed to radiant_radio_rx(). The HAL requires it to
 	 * stay valid until the terminal event, hence it lives here rather than
 	 * on a stack frame. owner[]/local[] turn an rx_event.filter_index into
@@ -364,6 +369,61 @@ static uint8_t addr_groups_with(const struct radiant_rx_filter *add,
 static radiant_time_t arm_lead(void)
 {
 	return (s.caps == NULL) ? 0u : (radiant_time_t)s.caps->min_arm_lead_us;
+}
+
+/* The lead inside air a previous operation already holds. 0 in the caps means
+ * "same as min_arm_lead_us", the value every backend reported before the
+ * field existed. */
+static radiant_time_t in_grant_lead(void)
+{
+	if (s.caps == NULL) {
+		return 0u;
+	}
+	return (radiant_time_t)((s.caps->min_arm_lead_in_grant_us != 0u)
+					? s.caps->min_arm_lead_in_grant_us
+					: s.caps->min_arm_lead_us);
+}
+
+/*
+ * Does this request fall inside the follow-on reserve the last armed operation
+ * asked the backend to hold? Then it is the follow-on that reserve exists for -
+ * an ACK reply, the ACK window after a data packet, a slave's queued command -
+ * and needs only the in-grant lead, not a fresh reservation's.
+ *
+ * Without this, an arbitrated backend's follow-ons never reached it: every one
+ * is 1.5-2.2 ms out against a min_arm_lead_us of 24 ms+, so pass_step()
+ * reported it MISSED and the air it had reserved went unused on every exchange
+ * (measured: 60 of 60 acknowledged commands failed on an MPSL build that
+ * completed 60 of 60 on the direct one).
+ *
+ * Only the END is tested, as the backend's own check does; the backend
+ * refuses honestly (EDENIED) if the air turns out not to be held. Never true
+ * on a backend whose two leads coincide, so the schedule there is unchanged.
+ */
+static bool in_reserve(const struct sched_slot *sl)
+{
+	radiant_time_t last;
+
+	if (s.reserve_end == 0u || in_grant_lead() >= arm_lead()) {
+		return false;
+	}
+	if (sl->kind == (uint8_t)SLOT_TX) {
+		last = sl->t_start;
+	} else if (sl->kind == (uint8_t)SLOT_RX && !sl->continuous) {
+		last = sl->t_end;
+	} else {
+		return false;
+	}
+	return last <= s.reserve_end;
+}
+
+/* The earliest this slot can be armed, given the pass's ordinary floor
+ * (now + arm_lead()): nearer for a follow-on inside the held reserve. */
+static radiant_time_t slot_earliest(const struct sched_slot *sl,
+				    radiant_time_t earliest)
+{
+	return in_reserve(sl) ? (earliest - arm_lead() + in_grant_lead())
+			      : earliest;
 }
 
 /*
@@ -1036,6 +1096,7 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 	s.armed_rf = lead->rf_index;
 	s.armed_stop_on_first = (flags & RADIANT_RX_STOP_ON_FIRST) != 0u;
 	s.armed_continuous = lead->continuous;
+	s.reserve_end = (follow_on != 0u) ? close + (radiant_time_t)follow_on : 0u;
 	phy_armed(lead->fmt);
 	s.replan = false;
 	for (i = 0u; i < s.n_members; i++) {
@@ -1061,6 +1122,22 @@ static enum step arm_rx_window(uint8_t leader, radiant_time_t earliest,
 		notify_armed(s.members[i], open, close);
 	}
 	return STEP_DONE;
+}
+
+/* arm_rx_window() for a bounded leader, at the floor in_reserve() allows. A
+ * follow-on inside the held reserve opens at the in-grant lead, and no member
+ * may carry the union past the reserve: the backend would refuse the whole
+ * window, the follow-on with it. */
+static enum step arm_rx_leader(uint8_t leader, radiant_time_t earliest,
+			       radiant_time_t limit)
+{
+	const struct sched_slot *sl = &s.ch[leader];
+
+	if (in_reserve(sl)) {
+		return arm_rx_window(leader, slot_earliest(sl, earliest),
+				     t_min(limit, s.reserve_end));
+	}
+	return arm_rx_window(leader, earliest, limit);
 }
 
 static enum step arm_tx_op(uint8_t ch)
@@ -1094,6 +1171,9 @@ static enum step arm_tx_op(uint8_t ch)
 	s.armed_rf = sl->rf_index;
 	s.armed_stop_on_first = false;
 	s.armed_continuous = false;
+	s.reserve_end = (sl->follow_on_us != 0u)
+				? sl->t_start + (radiant_time_t)sl->follow_on_us
+				: 0u;
 	phy_armed(sl->fmt);
 	s.replan = false;
 	s.n_merged = 0u;
@@ -1197,6 +1277,7 @@ static enum step arm_ed_chunk(uint8_t ch, radiant_time_t earliest,
 	s.armed_rf = req.rf_index_lo;
 	s.armed_stop_on_first = false;
 	s.armed_continuous = false;
+	s.reserve_end = 0u;
 	s.n_merged = 0u;
 	s.members[0] = ch;
 	s.n_members = 1u;
@@ -1431,7 +1512,7 @@ static enum step arm_next(radiant_time_t earliest)
 			}
 			continue;
 		}
-		at = t_max(sl->t_start, earliest);
+		at = t_max(sl->t_start, slot_earliest(sl, earliest));
 		if (sl->kind == (uint8_t)SLOT_ED) {
 			/* Tested BEFORE sl->continuous, which an ED slot leaves
 			 * unset - falling into the bounded-receive bucket here
@@ -1599,7 +1680,7 @@ static enum step arm_next(radiant_time_t earliest)
 					       rx_tail(s.ch[rx_ch].fmt));
 		}
 		if (limit == RADIANT_TIME_NEVER || limit >= rx_at) {
-			st = arm_rx_window((uint8_t)rx_ch, earliest, limit);
+			st = arm_rx_leader((uint8_t)rx_ch, earliest, limit);
 			if (st != STEP_SKIP) {
 				return st;
 			}
@@ -1611,7 +1692,7 @@ static enum step arm_next(radiant_time_t earliest)
 	}
 
 	if (rx_ch >= 0) {
-		enum step st = arm_rx_window((uint8_t)rx_ch, earliest,
+		enum step st = arm_rx_leader((uint8_t)rx_ch, earliest,
 					     RADIANT_TIME_NEVER);
 
 		if (st != STEP_SKIP) {
@@ -1664,12 +1745,14 @@ static enum step pass_step(radiant_time_t now)
 			 * arm_failed()'s "backend stricter than advertised" path -
 			 * true about the wrong thing. MISSED here is what
 			 * actually happened. */
-			expired = sl->t_start < earliest + phy_lead(sl->fmt);
+			expired = sl->t_start <
+				  slot_earliest(sl, earliest) + phy_lead(sl->fmt);
 		} else {
 			/* A receive window whose open has passed is still worth
 			 * arming for the rest of its span, so only the close
 			 * expires it. */
-			expired = !sl->continuous && sl->t_end < earliest;
+			expired = !sl->continuous &&
+				  sl->t_end < slot_earliest(sl, earliest);
 		}
 		if (expired) {
 			slot_clear((uint8_t)i);

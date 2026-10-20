@@ -140,6 +140,17 @@ enum gate_rc gate_acquire(enum gate_op op, radiant_time_t t_from,
 void gate_release(void);
 
 /*
+ * True while a grant is held that the core may still arm into: the air
+ * follow_on_us reserved has not been given back. What lets the backend hand a
+ * held grant from an operation that just ended to the follow-on its completion
+ * arms (radiant_radio_nrf.c, "THE GRANT HANDOFF"), instead of releasing it
+ * first and then asking 1.56 ms ahead for air no arbiter can place that late.
+ *
+ * Always false on the direct gate: nothing is ever held, so nothing is handed.
+ */
+bool gate_held(void);
+
+/*
  * Try to grow the current grant by us microseconds. False if the arbiter
  * refused - an extension is granted only when nothing else is scheduled in
  * the extended region, which is the arbiter enforcing "the sweep is the

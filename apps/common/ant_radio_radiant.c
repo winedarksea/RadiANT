@@ -1369,13 +1369,33 @@ BUILD_ASSERT(API_FOLLOW_ON_TRACK_US <= UINT16_MAX,
 	     "tracked follow-on does not fit the HAL field");
 
 /*
+ * The turnaround's own reserve, from its t_close: a slave's acknowledged data
+ * at the window's late edge is answered REPLY_US later, plus that reply's air.
+ */
+#define API_FOLLOW_ON_MASTER_RX_US                                       \
+	((uint16_t)(RADIANT_TRANSFER_REPLY_US +                          \
+		    RADIANT_TRANSFER_ACK_GUARD_US + API_FRAME_AIRTIME_US))
+
+/*
  * A listening master's reserve: its slave's reply lands
  * RADIANT_TRANSFER_SLOT_REPLY_US after its own t_sync, and api_post_master_rx()
- * arms that turnaround from inside this transmit's completion.
+ * arms that turnaround from inside this transmit's completion - AND the
+ * turnaround's own reserve, since an arbitrated backend serves the turnaround
+ * from this transmit's grant only if everything the turnaround reserves fits
+ * in it too. Covering just the turnaround (as this once did) lost every
+ * turnaround on MPSL: the gate found its follow-on past the grant, fell back
+ * to placing a fresh reservation 2 ms out, and refused it as too near.
  */
 #define API_FOLLOW_ON_MASTER_TX_US                                       \
 	((uint16_t)(RADIANT_TRANSFER_SLOT_REPLY_US +                     \
-		    RADIANT_TRANSFER_ACK_GUARD_US + API_FRAME_AIRTIME_US))
+		    RADIANT_TRANSFER_ACK_GUARD_US + API_FRAME_AIRTIME_US + \
+		    API_FOLLOW_ON_MASTER_RX_US))
+
+BUILD_ASSERT(RADIANT_TRANSFER_SLOT_REPLY_US + RADIANT_TRANSFER_ACK_GUARD_US +
+		     API_FRAME_AIRTIME_US + RADIANT_TRANSFER_REPLY_US +
+		     RADIANT_TRANSFER_ACK_GUARD_US + API_FRAME_AIRTIME_US <=
+		     UINT16_MAX,
+	     "the master follow-on does not fit the HAL field");
 
 static void api_post_track_rx(uint8_t ch)
 {
@@ -1493,14 +1513,14 @@ static void api_post_master_rx(uint8_t ch, radiant_time_t t_sync)
 	 * reports FAIL_NO_ACK. On a backend that owns the radio outright the
 	 * field is ignored by contract, so this costs nothing there.
 	 *
-	 * API_FOLLOW_ON_TRACK_US (4150 us) rather than a tighter number derived
-	 * from t_close: the reply is due REPLY_US after the DATA packet's t_sync,
-	 * which can be anywhere in this window, so the reserve has to cover the
-	 * late edge. 1560 - 250 + 150 = 1460 us is the requirement; reusing the
-	 * tracked constant covers it. This deliberately over-reserves the master
-	 * path; empty windows release the grant before their terminal callback.
+	 * Its own constant, not API_FOLLOW_ON_TRACK_US (4150 us), which this
+	 * once reused: the reply is due REPLY_US after the DATA packet's t_sync,
+	 * anywhere up to this window's late edge, so REPLY_US + guard + one
+	 * frame from t_close covers it. The surplus was not free - the
+	 * transmit's reserve (API_FOLLOW_ON_MASTER_TX_US) must cover this one
+	 * for the turnaround to be served from the transmit's grant at all.
 	 */
-	req.follow_on_us = API_FOLLOW_ON_TRACK_US;
+	req.follow_on_us = API_FOLLOW_ON_MASTER_RX_US;
 
 	if (radiant_sched_request_rx(ch, &req) != RADIANT_RADIO_OK_RC) {
 		api_bind_rejected(ch);
