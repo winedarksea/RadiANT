@@ -173,6 +173,10 @@ static struct {
 	 * clearing on the way out would tell the suspended thread "no pass is
 	 * running" right before it arms. See "Thread against interrupt" above. */
 	bool in_pass;
+	/* A backend callback (hal_rx/hal_tx/hal_ed) is running, including the
+	 * pass it ends with. The only context a follow-on reserve can be used
+	 * from - see in_reserve(). Saved and restored like in_pass. */
+	bool in_radio_cb;
 	/* Something in the table changed. Lets a non-terminal receive event
 	 * cost nothing at all unless a callback actually posted something. */
 	bool dirty;
@@ -209,7 +213,9 @@ static struct {
 
 	/* The last instant the most recently armed operation's follow_on_us
 	 * reserve covers, or 0 for none. Outlives that operation on purpose: the
-	 * reserve is FOR whatever its completion arms. See in_reserve(). */
+	 * reserve is FOR whatever its completion arms. But only a completion:
+	 * a non-OK terminal, an abort outside a callback or a reset clears it,
+	 * since the grant it describes is gone. See in_reserve(). */
 	radiant_time_t               reserve_end;
 
 	/* The filter array handed to radiant_radio_rx(). The HAL requires it to
@@ -399,12 +405,21 @@ static radiant_time_t in_grant_lead(void)
  * Only the END is tested, as the backend's own check does; the backend
  * refuses honestly (EDENIED) if the air turns out not to be held. Never true
  * on a backend whose two leads coincide, so the schedule there is unchanged.
+ *
+ * Only from inside a backend callback. The nRF backend holds a grant past its
+ * operation only while the core's completion is still running (THE GRANT
+ * HANDOFF in radiant_radio_nrf.c) and gives it back when that dispatch
+ * drains, so from thread context there is never held air to arm into: a
+ * request there inside an old reserve would be armed at the in-grant lead
+ * only to be refused, EDENIED where the truth is MISSED, and a bounded window
+ * that could still have opened at the ordinary floor lost outright.
  */
 static bool in_reserve(const struct sched_slot *sl)
 {
 	radiant_time_t last;
 
-	if (s.reserve_end == 0u || in_grant_lead() >= arm_lead()) {
+	if (!s.in_radio_cb || s.reserve_end == 0u ||
+	    in_grant_lead() >= arm_lead()) {
 		return false;
 	}
 	if (sl->kind == (uint8_t)SLOT_TX) {
@@ -617,6 +632,12 @@ static void end_armed(enum radiant_sched_done why)
 	}
 	memcpy(list, s.members, sizeof(list));
 	clear_armed();
+	/* The reserve outlives only an operation that completed: one denied,
+	 * aborted or failed holds no grant (see in_reserve()). Cleared before
+	 * the owners are told, since their done() may post the next. */
+	if (why != RADIANT_SCHED_DONE_OK) {
+		s.reserve_end = 0u;
+	}
 
 	for (i = 0u; i < n; i++) {
 		uint8_t            c = list[i];
@@ -686,6 +707,13 @@ static bool abort_armed(uint8_t skip_ch)
 
 	memcpy(list, s.members, sizeof(list));
 	clear_armed();
+	/* Outside a callback the abort gives the grant straight back, so the
+	 * reserve goes with it. Inside one it is the handoff: the backend owes
+	 * the release until the dispatch drains, and the follow-on this abort
+	 * makes room for is exactly what the reserve is for. */
+	if (!s.in_radio_cb) {
+		s.reserve_end = 0u;
+	}
 
 	(void)radiant_radio_abort();
 
@@ -1849,6 +1877,7 @@ static void hal_rx(const struct radiant_rx_event *evt, void *user)
 {
 	bool terminal = false;
 	bool was_in_pass;
+	bool was_in_cb;
 
 	(void)user;
 
@@ -1865,6 +1894,8 @@ static void hal_rx(const struct radiant_rx_event *evt, void *user)
 
 	was_in_pass = s.in_pass;
 	s.in_pass = true;
+	was_in_cb = s.in_radio_cb;
+	s.in_radio_cb = true;
 
 	switch (evt->status) {
 	case RADIANT_RADIO_STATUS_OK:
@@ -1920,12 +1951,14 @@ static void hal_rx(const struct radiant_rx_event *evt, void *user)
 	if (!was_in_pass && (terminal || s.dirty)) {
 		pass();
 	}
+	s.in_radio_cb = was_in_cb;
 }
 
 static void hal_tx(const struct radiant_tx_event *evt, void *user)
 {
 	uint8_t ch;
 	bool    was_in_pass;
+	bool    was_in_cb;
 
 	(void)user;
 
@@ -1942,6 +1975,8 @@ static void hal_tx(const struct radiant_tx_event *evt, void *user)
 
 	was_in_pass = s.in_pass;
 	s.in_pass = true;
+	was_in_cb = s.in_radio_cb;
+	s.in_radio_cb = true;
 	if (evt->status == RADIANT_RADIO_STATUS_OK && ch != RADIANT_SCHED_CH_NONE &&
 	    s.cbs.tx != NULL) {
 		s.cbs.tx(ch, evt, s.user);
@@ -1967,6 +2002,7 @@ static void hal_tx(const struct radiant_tx_event *evt, void *user)
 	if (!was_in_pass) {
 		pass();
 	}
+	s.in_radio_cb = was_in_cb;
 }
 
 #if SCHED_ED_BUILT
@@ -1979,6 +2015,7 @@ static void hal_ed(const struct radiant_ed_event *evt, void *user)
 	uint8_t ch;
 	bool    terminal = false;
 	bool    was_in_pass;
+	bool    was_in_cb;
 
 	(void)user;
 
@@ -1995,6 +2032,8 @@ static void hal_ed(const struct radiant_ed_event *evt, void *user)
 
 	was_in_pass = s.in_pass;
 	s.in_pass = true;
+	was_in_cb = s.in_radio_cb;
+	s.in_radio_cb = true;
 
 	switch (evt->status) {
 	case RADIANT_RADIO_STATUS_OK: {
@@ -2050,6 +2089,7 @@ static void hal_ed(const struct radiant_ed_event *evt, void *user)
 	if (!was_in_pass && (terminal || s.dirty)) {
 		pass();
 	}
+	s.in_radio_cb = was_in_cb;
 }
 #endif /* SCHED_ED_BUILT */
 
@@ -2102,6 +2142,10 @@ void radiant_sched_reset(void)
 		clear_armed();
 		(void)radiant_radio_abort();
 	}
+	/* Unconditional: a completed operation's reserve survives it while
+	 * idle, and the abort above (or the session ending) gives back the
+	 * grant it described. */
+	s.reserve_end = 0u;
 	memset(s.ch, 0, sizeof(s.ch));
 	s.cursor = 0u;
 	s.dirty = false;

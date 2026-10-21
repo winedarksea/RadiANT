@@ -2657,6 +2657,85 @@ ZTEST(radiant_sched, test_a_near_transmit_with_no_reserve_is_still_missed)
 	finish();
 }
 
+/* A reserve describes a grant the backend holds only while the completion's
+ * callback runs, and only if the operation completed. A transmit posted from
+ * thread context inside the stale interval must be MISSED against the
+ * fresh-reservation lead, not armed at the in-grant lead for the backend to
+ * refuse. how: 0 = DENIED terminal, 1 = ABORTED terminal, 2 = cancelled
+ * (abort_armed), 3 = radiant_sched_reset(), 4 = completed normally but the
+ * callback has returned. */
+static void stale_reserve_case(int how)
+{
+	struct radiant_sched_tx t;
+	radiant_time_t          open;
+	radiant_time_t          close;
+	radiant_time_t          at;
+
+	arbitrated_leads();
+	bring_up();
+	open = radiant_radio_now() + 100000u;
+	close = open + 400u;
+
+	log.follow_on_us[1] = 4150u;
+	if (how == 0) {
+		fake_radio_force_next_terminal(RADIANT_RADIO_STATUS_DENIED);
+	} else if (how == 1) {
+		fake_radio_force_next_terminal(RADIANT_RADIO_STATUS_ABORTED);
+	}
+	post_track(1u, open, close);
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(1u, fake_radio_arm_count());
+
+	if (how <= 1 || how == 4) {
+		fake_radio_advance_to(close + 1u);
+	} else {
+		fake_radio_advance_to(open + 100u);
+		if (how == 2) {
+			zassert_ok(radiant_sched_cancel(1u));
+		} else {
+			radiant_sched_reset();
+		}
+	}
+
+	/* Well inside the 4150 us the window reserved, well outside 200 us. */
+	at = radiant_radio_now() + 1000u;
+	tx_req_init(&t, 2u, at);
+	zassert_ok(radiant_sched_request_tx(2u, &t));
+	zassert_ok(radiant_sched_tick());
+
+	zassert_equal(1u, fake_radio_arm_count(),
+		      "case %d: a transmit was armed against a reserve whose "
+		      "grant had gone", how);
+	zassert_equal(1u, log.missed_count[2], "case %d", how);
+
+	finish();
+}
+
+ZTEST(radiant_sched, test_a_reserve_does_not_outlive_a_denied_operation)
+{
+	stale_reserve_case(0);
+}
+
+ZTEST(radiant_sched, test_a_reserve_does_not_outlive_an_aborted_operation)
+{
+	stale_reserve_case(1);
+}
+
+ZTEST(radiant_sched, test_a_reserve_does_not_outlive_a_cancel)
+{
+	stale_reserve_case(2);
+}
+
+ZTEST(radiant_sched, test_a_reserve_does_not_outlive_a_reset)
+{
+	stale_reserve_case(3);
+}
+
+ZTEST(radiant_sched, test_a_reserve_does_not_outlive_its_callback)
+{
+	stale_reserve_case(4);
+}
+
 /* Eight sensors plus a continuous search, with the first pair swept across
  * the merge/serial-arm boundary. Compare the former 1960 us grant metadata
  * with the full 4150 us exchange: on a direct backend neither extends RX or
