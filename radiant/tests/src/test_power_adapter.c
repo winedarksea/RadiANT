@@ -299,6 +299,42 @@ ZTEST(radiant_power_adapter, test_energy_integral_exceeds_32_bits)
 	zassert_equal(s->raw, INT64_C(2000000000), NULL);
 }
 
+ZTEST(radiant_power_adapter, test_a_dropout_is_charged_nothing)
+{
+	uint8_t body[8];
+	const struct radiant_sample *s;
+
+	power_body(body, 0u, 250u);
+	radiant_power_adapter_decode(&adapter, PWR_SOURCE, body, 0u);
+	radiant_bridge_drain();
+
+	power_body(body, 4u, 250u);
+	radiant_power_adapter_decode(&adapter, PWR_SOURCE, body,
+				     1u * US_PER_S);
+	radiant_bridge_drain();
+
+	/* 30 s of silence, re-acquired at 180 W. Charging it would add
+	 * 180 W x 30 s = 5.4 kJ that nobody measured. */
+	power_body(body, 124u, 180u);
+	radiant_power_adapter_decode(&adapter, PWR_SOURCE, body,
+				     31u * US_PER_S);
+	radiant_bridge_drain();
+
+	s = cap_field(RADIANT_POWER_FIELD_ENERGY);
+	zassert_not_null(s, NULL);
+	zassert_equal(s->raw, INT64_C(250000000), "the gap adds nothing");
+
+	/* ...and the clock was re-based, so the next interval counts. */
+	power_body(body, 128u, 180u);
+	radiant_power_adapter_decode(&adapter, PWR_SOURCE, body,
+				     32u * US_PER_S);
+	radiant_bridge_drain();
+
+	s = cap_field(RADIANT_POWER_FIELD_ENERGY);
+	zassert_not_null(s, NULL);
+	zassert_equal(s->raw, INT64_C(430000000), "250 J + 180 J");
+}
+
 ZTEST(radiant_power_adapter, test_a_coast_does_not_advance_the_accumulator)
 {
 	uint8_t body[8];

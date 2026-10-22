@@ -659,7 +659,14 @@ static struct {
 	int64_t                   rat_uptime_ref;
 
 	bool                      delivered_terminal;
+
+	/* A STOP_ON_FIRST window rx_drain() retired early. Its cancel still
+	 * calls back, by which time st may hold the next operation, so that
+	 * callback must not be read as this one's. NO_HANDLE when none. */
+	RF_CmdHandle              retired_handle;
 } st;
+
+#define NO_HANDLE ((RF_CmdHandle)-1)
 
 static struct k_timer rat_keepalive;
 
@@ -1300,16 +1307,36 @@ static void rx_drain(void)
 			evt.status = RADIANT_RADIO_STATUS_OK;
 		}
 
-		if (st.cbs != NULL && st.cbs->rx != NULL) {
-			st.cbs->rx(&evt, st.user);
-		}
-
 		if (evt.status == RADIANT_RADIO_STATUS_OK &&
 		    (st.flags & RADIANT_RX_STOP_ON_FIRST) != 0u) {
+			uint8_t copy[RADIANT_RADIO_BODY_MAX];
+
+			/*
+			 * This event IS the terminal one, so the operation is
+			 * retired before the core sees it: the core chains the
+			 * next one (an ACK window's next data packet, 1.5 ms
+			 * out) from inside this callback, and an arm call that
+			 * still found OP_RX here was refused EBUSY with nothing
+			 * left to retry it. The entry is released and the
+			 * cancel issued first too, since that arm may reset the
+			 * receive queue and replace st.cmd_handle.
+			 */
+			memcpy(copy, body, st.fmt.body_len);
+			evt.body = copy;
 			e->status = DATA_ENTRY_PENDING;
 			rx_read = (uint8_t)((rx_read + 1u) % RX_ENTRIES);
+			st.delivered_terminal = true;
+			st.kind = OP_NONE;
+			st.retired_handle = st.cmd_handle;
 			RF_cancelCmd(st.rf_handle, st.cmd_handle, 0);
+			if (st.cbs != NULL && st.cbs->rx != NULL) {
+				st.cbs->rx(&evt, st.user);
+			}
 			return;
+		}
+
+		if (st.cbs != NULL && st.cbs->rx != NULL) {
+			st.cbs->rx(&evt, st.user);
 		}
 
 next:
@@ -1318,13 +1345,39 @@ next:
 	}
 }
 
+#define TERMINAL_EVENTS (RF_EventLastCmdDone | RF_EventCmdAborted | \
+			 RF_EventCmdStopped | RF_EventCmdCancelled |   \
+			 RF_EventCmdPreempted)
+
+/* True for a callback of the window rx_drain() retired (see retired_handle).
+ * Forgotten on the first terminal callback of any command: the driver calls
+ * back in order, so the cancelled one's has come by then, and a stale value
+ * can't outlive a handle wrap to swallow a live command's. */
+static bool retired_callback(RF_CmdHandle ch, RF_EventMask events)
+{
+	bool hit = (ch == st.retired_handle);
+
+	if ((events & TERMINAL_EVENTS) != 0) {
+		st.retired_handle = NO_HANDLE;
+	}
+	return hit;
+}
+
 static void rf_callback(RF_Handle h, RF_CmdHandle ch, RF_EventMask events)
 {
 	ARG_UNUSED(h);
-	ARG_UNUSED(ch);
+
+	if (retired_callback(ch, events)) {
+		return;
+	}
 
 	if ((events & RF_EventRxEntryDone) != 0) {
 		rx_drain();
+		/* rx_drain() may just have retired this very window, and its
+		 * callback armed the next operation into st. */
+		if (retired_callback(ch, events)) {
+			return;
+		}
 	}
 
 	/*
@@ -1348,9 +1401,7 @@ static void rf_callback(RF_Handle h, RF_CmdHandle ch, RF_EventMask events)
 			tx_cmd.status, tx_cmd.startTime);
 	}
 
-	if ((events & (RF_EventLastCmdDone | RF_EventCmdAborted |
-		       RF_EventCmdStopped | RF_EventCmdCancelled |
-		       RF_EventCmdPreempted)) == 0) {
+	if ((events & TERMINAL_EVENTS) == 0) {
 		return;
 	}
 
@@ -1370,6 +1421,9 @@ static void rf_callback(RF_Handle h, RF_CmdHandle ch, RF_EventMask events)
 		/* Anything the command processor finished but the entry-done
 		 * event did not cover. */
 		rx_drain();
+		if (retired_callback(ch, events)) {
+			return;
+		}
 		deliver_rx_terminal((events & RF_EventCmdPreempted) != 0
 					? RADIANT_RADIO_STATUS_DENIED
 				    : (events & RF_EventLastCmdDone) != 0
@@ -1399,6 +1453,7 @@ int radiant_radio_init(const struct radiant_radio_cbs *cbs, void *user)
 	st.cbs = cbs;
 	st.user = user;
 	st.next_op_id = 1;
+	st.retired_handle = NO_HANDLE;
 	st.inited = true;
 
 	rx_queue_init();
@@ -1461,6 +1516,9 @@ int radiant_radio_enable(void)
 
 	/* Re-anchor the fold on the RAT now that there is one to read. */
 	(void)now_us();
+
+	/* A fresh handle may number its commands from where the last began. */
+	st.retired_handle = NO_HANDLE;
 
 #if defined(CONFIG_RADIANT_BACKEND_CC26XX_COEX)
 	/*

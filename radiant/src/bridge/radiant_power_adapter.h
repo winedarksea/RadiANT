@@ -166,6 +166,17 @@ extern "C" {
 #define RADIANT_POWER_FIELD_FEC_DISTANCE 0x0Bu /* RESERVED */
 #define RADIANT_POWER_FIELD_FEC_HR       0x0Cu /* RESERVED */
 
+/*
+ * The longest interval the energy integral will charge at the closing
+ * message's wattage. The adapter survives a tracking dropout by design
+ * (rx_tap.c), so the first message after a re-acquire would otherwise be
+ * billed for the whole silence - the same unknown stretch FE-C's 0xFFF branch
+ * charges nothing, arriving with no message to say so. Longer than any gap
+ * ordinary packet loss leaves between power pages on a 4 Hz stream; shorter
+ * than any dropout that ends in a re-acquire.
+ */
+#define RADIANT_POWER_MAX_GAP_US (5u * 1000000u)
+
 struct radiant_power_adapter {
 	/* True once a power-bearing page has established the baseline: both
 	 * the event count and the integration clock are set on that first

@@ -1931,13 +1931,21 @@ static void core_cb_swi(uint32_t bits)
 	core_cb_dispatch();
 }
 
-static bool core_cb_enqueue(const struct core_cb_entry *src)
+/*
+ * The last slot is kept for terminal events. A full ring of frames from one
+ * merged or scan window would otherwise refuse that window's terminal, and the
+ * scheduler - still believing the operation armed - would never be called back
+ * to arm another. One slot is enough: the next operation can only be armed once
+ * the core has seen this one's terminal, so two are never queued at once. A
+ * refused frame is ordinary loss.
+ */
+static bool core_cb_enqueue(const struct core_cb_entry *src, bool terminal)
 {
 	uint32_t head = core_cb_head;
 
 	uint32_t depth = head - core_cb_tail;
 
-	if (depth >= CORE_CB_RING) {
+	if (depth >= (terminal ? CORE_CB_RING : CORE_CB_RING - 1u)) {
 		return false;
 	}
 	core_cb_q[head % CORE_CB_RING] = *src;
@@ -1977,7 +1985,12 @@ static void core_cb_rx(struct radiant_rx_event *evt)
 			memcpy(e.body, evt->body, evt->body_len);
 			e.body_len = evt->body_len;
 		}
-		(void)core_cb_enqueue(&e);
+		/* A frame is terminal only when stop_on_first has already
+		 * retired the operation. */
+		(void)core_cb_enqueue(&e,
+				      (evt->status != RADIANT_RADIO_STATUS_OK &&
+				       evt->status != RADIANT_RADIO_STATUS_CRC_FAIL) ||
+				      radiant_op.kind != OP_RX);
 		return;
 	}
 #endif
@@ -1993,7 +2006,7 @@ static void core_cb_tx(struct radiant_tx_event *evt)
 		memset(&e, 0, sizeof(e));
 		e.kind = (uint8_t)CORE_CB_TX;
 		e.ev.tx = *evt;
-		(void)core_cb_enqueue(&e);
+		(void)core_cb_enqueue(&e, true);
 		return;
 	}
 #endif
@@ -2010,7 +2023,9 @@ static void core_cb_ed(struct radiant_ed_event *evt)
 		memset(&e, 0, sizeof(e));
 		e.kind = (uint8_t)CORE_CB_ED;
 		e.ev.ed = *evt;
-		(void)core_cb_enqueue(&e);
+		/* Per-index results are OK; the sweep's terminal never is. */
+		(void)core_cb_enqueue(&e,
+				      evt->status != RADIANT_RADIO_STATUS_OK);
 		return;
 	}
 #endif

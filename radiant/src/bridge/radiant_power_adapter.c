@@ -84,8 +84,12 @@ static uint32_t post_power(struct radiant_power_adapter *a, uint32_t source,
 	 * negative or wrapped interval. The bus's t_us is a monotone t_sync, so
 	 * this should not happen - but "should not" is how an unbounded uint64
 	 * accumulator gets a garbage term it can never lose.
+	 *
+	 * Nor does one past RADIANT_POWER_MAX_GAP_US: that is a dropout, and
+	 * nobody measured the power inside it.
 	 */
-	if (t_us > a->prev_t_us) {
+	if (t_us > a->prev_t_us &&
+	    t_us - a->prev_t_us <= RADIANT_POWER_MAX_GAP_US) {
 		a->acc_uj += (uint64_t)inst_w * (t_us - a->prev_t_us);
 	}
 	a->prev_t_us = t_us;
