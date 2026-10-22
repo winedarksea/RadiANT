@@ -745,6 +745,15 @@ uint16_t radiant_channel_residual_us(uint8_t channel);
  * an infinite timeout or a channel that is not searching. */
 radiant_time_t radiant_channel_search_deadline(uint8_t channel);
 
+/*
+ * Push every searching channel's deadline back by window_us: the arbiter
+ * refused a scan chunk, so that stretch of wall clock bought no listening.
+ * Without it a finite search timeout is pure wall clock, and under contention
+ * a channel times out having barely been on the air. A channel with no
+ * deadline is left alone.
+ */
+void radiant_channel_search_note_denied(uint32_t window_us);
+
 /* The earliest next_slot across all channels, and which channel it belongs to.
  * *channel_out is untouched when the answer is RADIANT_TIME_NEVER. */
 radiant_time_t radiant_channel_earliest_slot(uint8_t *channel_out);

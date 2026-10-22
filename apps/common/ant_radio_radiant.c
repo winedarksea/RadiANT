@@ -2223,10 +2223,17 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		 * device was absent but because refusals ate its listening
 		 * budget. RADIANT_API_HOUSEKEEP_MS (the actual retry pacing,
 		 * see api_event_thread()) is the right size for the extension.
+		 *
+		 * The deadline that actually fires is the CHANNEL layer's
+		 * (radiant_channel_tick()); api_search_begin() starts the
+		 * search module with no deadline of its own, so extending only
+		 * that one was a no-op and the measurement above stood.
 		 */
 		if (why == RADIANT_SCHED_DONE_DENIED) {
 			radiant_search_note_denied(&api_search,
 						RADIANT_API_HOUSEKEEP_MS * 1000u);
+			radiant_channel_search_note_denied(
+				RADIANT_API_HOUSEKEEP_MS * 1000u);
 		}
 		/*
 		 * A continuous request outlives its chunks (lets a displaced

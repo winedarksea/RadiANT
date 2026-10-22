@@ -66,7 +66,7 @@ extern "C" {
 #define RADIANT_CRC_REPAIR_BODY      0
 
 /* The flipped bit was in the CRC field itself, so the body is untouched.
- * Counted as a repair, not a pass - same 1-in-585 gamble, and the caller
+ * Counted as a repair, not a pass - same 1-in-341 gamble, and the caller
  * must be able to tell the two apart. */
 #define RADIANT_CRC_REPAIR_IN_CRC    1
 

@@ -2504,6 +2504,53 @@ ZTEST(api, test_a_sweep_that_still_gets_air_never_escapes)
 }
 
 /*
+ * A denied chunk must also push back the search TIMEOUT, through antr_* with a
+ * finite timeout - the production shape the two tests above step around. The
+ * timeout that fires is the channel layer's; the search module is started with
+ * none, so crediting only the module's deadline left a contended channel to
+ * time out on pure wall clock.
+ */
+ZTEST(api, test_a_denied_search_chunk_pushes_back_the_search_timeout)
+{
+	radiant_time_t deadline;
+	uint32_t       denied_before;
+	uint32_t       denied;
+
+	zassert_ok(antr_network_address_set(0u, ant_plus_key));
+	zassert_ok(antr_channel_assign(CH, ANTW_CHANNEL_TYPE_SLAVE, 0u, 0u));
+	zassert_ok(antr_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_ok(antr_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_ok(antr_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_ok(antr_channel_search_timeout_set(CH, 1u)); /* 2.5 s */
+	zassert_ok(antr_channel_open(CH));
+
+	deadline = radiant_channel_search_deadline(CH);
+	zassert_not_equal(RADIANT_TIME_NEVER, deadline,
+			  "setup: the search has no deadline to extend");
+
+	denied_before = radiant_api_stats_get()->sched_denied;
+	fake_radio_force_terminal_repeat(RADIANT_RADIO_STATUS_DENIED, 16u);
+	run_virtual_us(1000000u); /* well inside the 2.5 s */
+	fake_radio_force_terminal_repeat(RADIANT_RADIO_STATUS_DENIED, 0u);
+	denied = radiant_api_stats_get()->sched_denied - denied_before;
+
+	zassert_true(denied > 0u,
+		     "no denial reached the API layer, so this test proved "
+		     "nothing");
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH));
+	zassert_equal(deadline +
+			      (radiant_time_t)denied * RADIANT_API_HOUSEKEEP_MS *
+				      1000u,
+		      radiant_channel_search_deadline(CH),
+		      "%u denied chunks did not each push the search timeout "
+		      "back by one retry interval: under contention the channel "
+		      "times out on wall clock it never got to listen in",
+		      (unsigned int)denied);
+
+	end_of_test();
+}
+
+/*
  * Acknowledged data stays reported as acknowledged data, and a truncated
  * inbound burst doesn't turn every later exchange into a burst. in_pkts is
  * only cleared on a packet carrying LAST, so a burst whose final packet is

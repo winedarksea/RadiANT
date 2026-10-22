@@ -809,7 +809,7 @@ config RADIANT_CRC_REPAIR
 	  which is why the module refuses that configuration outright rather
 	  than trusting the call site - a search window's CRC failures are the
 	  19-27 noise-triggered address matches per 15 seconds that
-	  radiant_search.c counts and discards, and one in 585 of those would
+	  radiant_search.c counts and discards, and one in 341 of those would
 	  become a device number manufactured out of thermal noise.
 
 	  Requires a backend whose caps.has_rx_crc is true; the repair path is

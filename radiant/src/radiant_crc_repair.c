@@ -46,7 +46,7 @@
 
 #include <radiant/radiant_crc_repair.h>
 
-/* One entry per correctable bit. Sorted is not worth it: 112 entries is a
+/* One entry per correctable bit. Sorted is not worth it: 240 entries is a
  * few microseconds of scan time on the rare CRC failure, and a linear scan
  * needs no ordering invariant to go wrong - same argument radiant_frame.c
  * makes for its bitwise CRC. */
@@ -156,7 +156,7 @@ int radiant_crc_repair(enum radiant_frame_cfg cfg, const uint8_t *addr,
 	uint16_t byte_from_end;
 	uint16_t bit_in_byte;
 
-	/* TRACKING ONLY, decided here and not by the caller: the 1-in-585
+	/* TRACKING ONLY, decided here and not by the caller: the 1-in-341
 	 * false-accept rate is tolerable after a full 5-byte address match but
 	 * not against noise-triggered 3-byte matches - see the header. */
 	if (cfg != RADIANT_FRAME_CFG_TRACKING) {

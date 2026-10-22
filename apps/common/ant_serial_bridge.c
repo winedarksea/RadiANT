@@ -549,6 +549,20 @@ static void handle_request(const uint8_t *body, uint8_t len)
 	}
 }
 
+/* ── Burst block ───────────────────────────────────────────────────────────── */
+
+/*
+ * antr_burst_tx() takes ownership of the buffer it is handed until the radio
+ * has sent it, but `body` points into the parser's frame buffer, overwritten
+ * by the next packet - so each block is copied somewhere that outlives the
+ * call and held there. Advanced burst carries up to ANTW_ADV_BURST_BLOCK_MAX
+ * (24) bytes per packet; plain burst carries 8. Defined ahead of the reset
+ * handler, which has to hand the block back.
+ */
+
+static uint8_t burst_block[ANTW_ADV_BURST_BLOCK_MAX];
+static K_SEM_DEFINE(burst_block_free, 1, 1);
+
 /* ── System reset ──────────────────────────────────────────────────────────── */
 
 /* ANTW_MESG_SYSTEM_RESET_ID resets the ANT protocol stack, not the MCU: every
@@ -568,6 +582,17 @@ static void handle_system_reset(void)
 	 */
 	tx_power_reset();
 
+	/* A burst in flight when the reset landed is gone, and so is the
+	 * TRANSFER_TX_* event that would have released its block: the stack
+	 * flushes it, or antr_on_message() drops it while reset_in_progress
+	 * is set. The semaphore is
+	 * ours, not the stack's, so nothing else restores it - left taken,
+	 * every later burst packet stalls 1000 ms and fails with
+	 * TRANSFER_IN_PROGRESS until the board is power-cycled. Giving an
+	 * already-free slot is a no-op (limit 1).
+	 */
+	k_sem_give(&burst_block_free);
+
 	/* Let the resulting channel-closed events land and be discarded before
 	 * the host is told the stack is up again. Real sticks are unresponsive
 	 * for rather longer than this.
@@ -577,17 +602,6 @@ static void handle_system_reset(void)
 }
 
 /* ── Burst transmit ─────────────────────────────────────────────────────────── */
-
-/*
- * antr_burst_tx() takes ownership of the buffer it is handed until the radio
- * has sent it, but `body` points into the parser's frame buffer, overwritten
- * by the next packet - so each block is copied somewhere that outlives the
- * call and held there. Advanced burst carries up to ANTW_ADV_BURST_BLOCK_MAX
- * (24) bytes per packet; plain burst carries 8.
- */
-
-static uint8_t burst_block[ANTW_ADV_BURST_BLOCK_MAX];
-static K_SEM_DEFINE(burst_block_free, 1, 1);
 
 static void handle_burst(uint8_t msg_id, const uint8_t *body, uint8_t len)
 {

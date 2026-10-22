@@ -357,10 +357,23 @@ static int ant_vendor_handle_req(struct usb_setup_packet *setup,
 static K_SEM_DEFINE(tx_done_sem, 0, 1);
 static volatile int tx_done_size;
 
+/* Which transfer tx_done_cb() is allowed to complete, handed to usb_transfer()
+ * as its priv. A cancelled transfer's callback can outlive the 100 ms drain:
+ * usb_cancel_transfer() leaves the old slot pending on USB_WORK_Q, the next
+ * usb_transfer() starts on a fresh slot, and the old callback then fires into
+ * the new writer's wait - reporting its transfer done while the host has not
+ * read it, and letting its caller reuse `buf` underneath it. A stale tag is
+ * simply ignored.
+ */
+static volatile uintptr_t tx_gen;
+
 static void tx_done_cb(uint8_t ep, int size, void *priv)
 {
 	ARG_UNUSED(ep);
-	ARG_UNUSED(priv);
+
+	if ((uintptr_t)priv != tx_gen) {
+		return;
+	}
 
 	tx_done_size = size;
 	k_sem_give(&tx_done_sem);
@@ -381,10 +394,11 @@ static int usb_ant_write(const uint8_t *buf, size_t len)
 	 */
 	k_sem_reset(&tx_done_sem);
 	tx_done_size = -ESHUTDOWN;
+	tx_gen++;
 
 	int ret = usb_transfer(ant_ep_data[ANT_EP_IN_IDX].ep_addr,
 			       (uint8_t *)buf, len,
-			       USB_TRANS_WRITE, tx_done_cb, NULL);
+			       USB_TRANS_WRITE, tx_done_cb, (void *)tx_gen);
 	if (ret) {
 		k_mutex_unlock(&tx_mutex);
 		return ret;
@@ -422,8 +436,10 @@ static int usb_ant_write(const uint8_t *buf, size_t len)
 		 */
 		if (k_sem_take(&tx_done_sem, ANT_TX_CANCEL_DRAIN) != 0) {
 			/* USB_WORK_Q starved for 100 ms on top of a host that
-			 * stopped polling for a second. The next writer's
-			 * k_sem_reset() is the backstop.
+			 * stopped polling for a second. The callback is still
+			 * coming; the next writer's tx_gen bump is what makes
+			 * it harmless (k_sem_reset() alone is not - it runs
+			 * BEFORE the late give).
 			 */
 			LOG_WRN("USB TX cancel did not complete");
 		}

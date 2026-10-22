@@ -1407,6 +1407,21 @@ radiant_time_t radiant_channel_search_deadline(uint8_t channel)
 	return search_deadline(c);
 }
 
+void radiant_channel_search_note_denied(uint32_t window_us)
+{
+	uint8_t i;
+
+	for (i = 0u; i < RADIANT_CHANNEL_COUNT; i++) {
+		struct chan *c = &channels[i];
+
+		if (c->state != RADIANT_CH_STATE_SEARCHING ||
+		    c->t_search_start == RADIANT_TIME_NEVER) {
+			continue;
+		}
+		c->t_search_start += (radiant_time_t)window_us;
+	}
+}
+
 radiant_time_t radiant_channel_earliest_slot(uint8_t *channel_out)
 {
 	radiant_time_t best = RADIANT_TIME_NEVER;
