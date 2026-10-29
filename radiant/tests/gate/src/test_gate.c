@@ -677,6 +677,32 @@ ZTEST(radiant_gate, test_release_after_a_normal_terminal_does_not_end_twice)
 	assert_invariant();
 }
 
+/*
+ * Since THE GRANT HANDOFF the usual release runs from the trampoline, below
+ * the grant's own TIMER0 signal, so it must hold off that zero-latency
+ * interrupt for its read-modify-write of MPSL_TIMER0. The host has no ZLI to
+ * race; what it can prove is that both branches take the mask and leave it
+ * balanced.
+ */
+ZTEST(radiant_gate, test_release_runs_with_zero_latency_interrupts_masked)
+{
+	uint32_t locks = fake_swi()->zli_locks;
+
+	start_grant();
+	gate_release();
+	zassert_true(fake_swi()->zli_locks > locks,
+		     "a release while granted ran with the grant's TIMER0 "
+		     "signal able to land inside it");
+	zassert_equal(0u, fake_swi()->zli_depth, "the mask was left on");
+
+	locks = fake_swi()->zli_locks;
+	gate_release();
+	zassert_true(fake_swi()->zli_locks > locks,
+		     "the nothing-held branch skipped the mask");
+	zassert_equal(0u, fake_swi()->zli_depth, "the mask was left on");
+	assert_invariant();
+}
+
 /* ---------------------------------------------------------------------------
  * 8. ACTION_END returned twice - BUG 14
  *

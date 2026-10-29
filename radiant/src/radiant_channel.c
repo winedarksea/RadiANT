@@ -97,6 +97,13 @@ struct chan {
 	/* The radio operation currently attributed to this channel, or 0. */
 	uint32_t op;
 
+	/* Total those credits have pushed the current search back. Capped at
+	 * the search's own budget, so a search that is denied every chunk still
+	 * gives up - after at most twice its timeout. 32 bits: the largest
+	 * budget is 2 x 254 x 2.5 s, 1.27e9 us, and 64 would break the 72 B
+	 * budget below. */
+	uint32_t search_credit;
+
 	uint16_t period;            /* 32768 Hz counts */
 	uint16_t waveform;
 	uint16_t device_number;     /* as configured; 0 is the slave wildcard */
@@ -415,6 +422,13 @@ static void chan_begin_close(uint8_t channel, struct chan *c)
  */
 #define CH_EXT_ASSIGN_BACKGROUND_SCAN 0x01u
 
+/* High priority plus low priority, from the bytes as they stand now. */
+static radiant_time_t search_budget_us(const struct chan *c)
+{
+	return radiant_channel_search_ticks_to_us(c->search_timeout) +
+	       radiant_channel_search_ticks_to_us(c->lp_search_timeout);
+}
+
 static radiant_time_t search_deadline(const struct chan *c)
 {
 	radiant_time_t budget;
@@ -447,8 +461,7 @@ static radiant_time_t search_deadline(const struct chan *c)
 		return RADIANT_TIME_NEVER;
 	}
 
-	budget = radiant_channel_search_ticks_to_us(c->search_timeout) +
-		 radiant_channel_search_ticks_to_us(c->lp_search_timeout);
+	budget = search_budget_us(c);
 
 	return c->t_search_start + budget;
 }
@@ -612,6 +625,7 @@ radiant_channel_err_t radiant_channel_open(uint8_t channel, uint16_t offset,
 		c->t_next = start;
 		c->state = RADIANT_CH_STATE_SEARCHING;
 		c->t_search_start = start;
+		c->search_credit = 0u;
 	}
 
 	c->miss_count = 0u;
@@ -1420,6 +1434,7 @@ void radiant_channel_search_note_denied(radiant_time_t now, uint32_t window_us)
 	for (i = 0u; i < RADIANT_CHANNEL_COUNT; i++) {
 		struct chan *c = &channels[i];
 		radiant_time_t credit = (radiant_time_t)window_us;
+		radiant_time_t budget;
 
 		if (c->state != RADIANT_CH_STATE_SEARCHING ||
 		    c->t_search_start == RADIANT_TIME_NEVER) {
@@ -1432,6 +1447,17 @@ void radiant_channel_search_note_denied(radiant_time_t now, uint32_t window_us)
 			credit = now - c->t_last_denied;
 		}
 		c->t_last_denied = now;
+		/* Capping each credit at the clock only stops the deadline
+		 * outrunning time; denials back to back still move it exactly
+		 * as fast as time does, forever. Bound the total too. */
+		budget = search_budget_us(c);
+		if (c->search_credit >= budget) {
+			continue;
+		}
+		if (budget - c->search_credit < credit) {
+			credit = budget - c->search_credit;
+		}
+		c->search_credit += (uint32_t)credit;
 		c->t_search_start += credit;
 	}
 }
@@ -1633,6 +1659,7 @@ bool radiant_channel_on_slot_missed(uint8_t channel, radiant_time_t now)
 	c->miss_count = 0u;
 	c->denied_count = 0u;
 	c->t_search_start = c->t_next;
+	c->search_credit = 0u;
 	/* An average built while the channel knew where the master was is not
 	 * evidence about wherever it turns up next. */
 	guard_reset(c);

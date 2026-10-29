@@ -93,6 +93,17 @@ int radiant_swi_register(uint32_t bits, radiant_swi_handler_t handler);
  */
 void radiant_swi_pend(uint32_t bits);
 
+/*
+ * Mask EVERY interrupt, zero-latency ones included, for a few register writes
+ * that a ZLI must not land in the middle of. irq_lock() is not enough for that,
+ * which is the premise of this whole header. Returns the previous state for
+ * radiant_swi_zli_unlock(); nests by key the way irq_lock() does. Here rather
+ * than open-coded in the caller so the host test image, which has no PRIMASK,
+ * can supply its own.
+ */
+uint32_t radiant_swi_zli_lock(void);
+void radiant_swi_zli_unlock(uint32_t key);
+
 #ifdef __cplusplus
 }
 #endif

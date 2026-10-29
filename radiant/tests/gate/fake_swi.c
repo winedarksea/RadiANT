@@ -71,6 +71,20 @@ void radiant_swi_pend(uint32_t bits)
 	}
 }
 
+/* No PRIMASK on the host, and nothing to mask: the suite drives every signal
+ * from its own thread. So this records the bracket instead - how often, and
+ * that it is balanced - which is what the suite can actually assert. */
+uint32_t radiant_swi_zli_lock(void)
+{
+	counts.zli_locks++;
+	return counts.zli_depth++;
+}
+
+void radiant_swi_zli_unlock(uint32_t key)
+{
+	counts.zli_depth = key;
+}
+
 void fake_swi_reset(void)
 {
 	memset(&counts, 0, sizeof(counts));

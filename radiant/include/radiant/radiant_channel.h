@@ -751,7 +751,9 @@ radiant_time_t radiant_channel_search_deadline(uint8_t channel);
  * Without it a finite search timeout is pure wall clock, and under contention
  * a channel times out having barely been on the air. A channel with no
  * deadline is left alone. Each credit is capped at the wall clock since the
- * channel's previous one, so the deadline can be postponed but never stopped.
+ * channel's previous one, and the total per search at the search's own
+ * timeout, so a search denied every chunk still gives up - after at most
+ * twice its timeout.
  */
 void radiant_channel_search_note_denied(radiant_time_t now, uint32_t window_us);
 

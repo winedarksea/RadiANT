@@ -73,7 +73,6 @@
 #include <zephyr/sys/util.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/logging/log_ctrl.h>
-#include <cmsis_core.h>
 
 #include <mpsl_timeslot.h>
 #include <mpsl_hwres.h>
@@ -2021,7 +2020,7 @@ void gate_forget_pending(void)
 static void gate_release_masked(void);
 
 /*
- * PRIMASK, not irq_lock(): the grant's own TIMER0 signal is a zero-latency
+ * A ZLI mask, not irq_lock(): the grant's own TIMER0 signal is a zero-latency
  * interrupt, which irq_lock() does not mask. Since THE GRANT HANDOFF
  * (radiant_radio_nrf.c) the usual release runs from the trampoline rather than
  * from inside a signal, and a TIMER0 end landing between the g.granted test
@@ -2032,11 +2031,10 @@ static void gate_release_masked(void);
  */
 void gate_release(void)
 {
-	uint32_t primask = __get_PRIMASK();
+	uint32_t key = radiant_swi_zli_lock();
 
-	__disable_irq();
 	gate_release_masked();
-	__set_PRIMASK(primask);
+	radiant_swi_zli_unlock(key);
 }
 
 static void gate_release_masked(void)

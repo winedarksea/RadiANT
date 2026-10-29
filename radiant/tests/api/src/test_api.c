@@ -2599,6 +2599,50 @@ ZTEST(api, test_rapid_denials_postpone_the_search_timeout_but_never_stop_it)
 }
 
 /*
+ * Capping each credit at the clock only stops the deadline outrunning time:
+ * denials every 10 ms still move it exactly as fast as time moves, and a 2.5 s
+ * search stayed open 60 s with 2.55 s still to go. The total is capped at the
+ * search's own budget, so a search that never gets the air still ends.
+ */
+ZTEST(api, test_a_search_denied_every_chunk_still_times_out)
+{
+	radiant_time_t deadline;
+	radiant_time_t now;
+	const uint32_t step = 10000u;
+	const uint32_t credit = RADIANT_API_HOUSEKEEP_MS * 1000u;
+	/* Low priority defaults to 0 ticks, so this is the whole budget. */
+	const radiant_time_t budget = radiant_channel_search_ticks_to_us(1u);
+
+	zassert_ok(antr_network_address_set(0u, ant_plus_key));
+	zassert_ok(antr_channel_assign(CH, ANTW_CHANNEL_TYPE_SLAVE, 0u, 0u));
+	zassert_ok(antr_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_ok(antr_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_ok(antr_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_ok(antr_channel_search_timeout_set(CH, 1u)); /* 2.5 s */
+	zassert_ok(antr_channel_open(CH));
+
+	deadline = radiant_channel_search_deadline(CH);
+	zassert_not_equal(RADIANT_TIME_NEVER, deadline);
+	now = radiant_radio_now();
+
+	/* Sixty seconds of denials, 10 ms apart. */
+	for (uint32_t i = 0u; i <= 6000u; i++) {
+		radiant_channel_search_note_denied(now + (radiant_time_t)i * step,
+						   credit);
+	}
+	zassert_equal(deadline + budget, radiant_channel_search_deadline(CH),
+		      "60 s of denials pushed a %u us search back %u us",
+		      (unsigned int)budget,
+		      (unsigned int)(radiant_channel_search_deadline(CH) -
+				     deadline));
+	zassert_true(radiant_channel_search_deadline(CH) <
+			     now + 6000u * (radiant_time_t)step,
+		     "the search would still be open after 60 s of denials");
+
+	end_of_test();
+}
+
+/*
  * Acknowledged data stays reported as acknowledged data, and a truncated
  * inbound burst doesn't turn every later exchange into a burst. in_pkts is
  * only cleared on a packet carrying LAST, so a burst whose final packet is

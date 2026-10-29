@@ -8,6 +8,7 @@
 #include <zephyr/sys/atomic.h>
 #include <zephyr/irq.h>
 #include <zephyr/logging/log.h>
+#include <cmsis_core.h>
 
 #include <radiant/radiant_swi.h>
 
@@ -142,4 +143,19 @@ void radiant_swi_pend(uint32_t bits)
 	 */
 	(void)atomic_or(&swi_pending, (atomic_val_t)bits);
 	NVIC_SetPendingIRQ((IRQn_Type)RADIANT_SWI_IRQN);
+}
+
+/* PRIMASK, not BASEPRI: BASEPRI is what irq_lock() uses, and a zero-latency
+ * interrupt sits above it by design. */
+uint32_t radiant_swi_zli_lock(void)
+{
+	uint32_t key = __get_PRIMASK();
+
+	__disable_irq();
+	return key;
+}
+
+void radiant_swi_zli_unlock(uint32_t key)
+{
+	__set_PRIMASK(key);
 }

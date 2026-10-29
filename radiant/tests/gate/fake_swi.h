@@ -21,6 +21,9 @@ struct fake_swi_counts {
 	/* The union of every bit ever pended - the cheap assertion that a new
 	 * producer has actually been routed through here. */
 	uint32_t bits_seen;
+	/* radiant_swi_zli_lock() calls, and how many are open right now. */
+	uint32_t zli_locks;
+	uint32_t zli_depth;
 };
 
 void                          fake_swi_reset(void);
