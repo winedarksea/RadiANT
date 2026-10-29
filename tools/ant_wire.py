@@ -789,9 +789,9 @@ CHANNEL_ID_NOT_SET = 0x18
 # verify:sdk-ant-shim]
 CLOSE_ALL_CHANNELS = 0x19
 
-# A burst is already running on this channel. The bridge answers with this when
-# the host outruns the single burst block. [bridge, rev5.1 sec 9.5.6 +
-# verify:sdk-ant-shim]
+# A transfer this host started (burst or acknowledged) is still running on this
+# channel. The bridge answers with this when the host outruns the single burst
+# block. [bridge, rev5.1 sec 9.5.6 + verify:sdk-ant-shim]
 TRANSFER_IN_PROGRESS = 0x1F
 
 # Burst packets arrived out of order. [rev5.1 sec 9.5.6 + verify:sdk-ant-shim]

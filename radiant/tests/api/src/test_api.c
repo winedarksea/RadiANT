@@ -443,6 +443,24 @@ static radiant_time_t run_one_quiet_period(void)
 	return t_tx;
 }
 
+/*
+ * Let the event thread post the next operation. A SEARCHING channel has
+ * nothing host-side to pump it - a sweep's next window comes only from
+ * api_housekeep(), so without this it stops dead after one window - and nor
+ * does a master whose last operation was an acknowledgement. Second of the
+ * two deliberate sleeps in this file (constraint 1): legitimate because
+ * nothing is armed when it runs, and the assertion below checks that rather
+ * than trusting it.
+ */
+static void run_housekeeping(void)
+{
+	zassert_true(fake_radio_is_idle(),
+		     "sleeping with an operation armed gives the ordering away "
+		     "to the event thread: %s",
+		     fake_radio_busy_reason());
+	k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
+}
+
 /* ---------------------------------------------------------------------------
  * The tests
  * ---------------------------------------------------------------------------
@@ -799,6 +817,73 @@ ZTEST(api, test_the_master_keeps_broadcasting_after_an_exchange)
 }
 
 /*
+ * A host's broadcast write must be accepted while the master is acknowledging
+ * a slave. It used to be refused with TRANSFER_IN_PROGRESS whenever the
+ * transfer engine was not idle, and TX_REPLY is not idle - but the host
+ * started nothing, and a real ANT stick accepts the write. On a USB master the
+ * host's write on EVENT_TX lands inside the ~3.7 ms reply about once per 280
+ * exchanges; ant_ack_gate.py logged each one as "peer command refused:
+ * 004e1f" and failed the run, and the payload never reached the air.
+ *
+ * Accepting must not change the reply already in flight: it carries the
+ * buffer as it was when the slave's frame arrived. The new payload goes out
+ * on the next slot.
+ */
+ZTEST(api, test_a_broadcast_write_during_an_ack_reply_is_accepted)
+{
+	static const uint8_t next_payload[8] = {
+		0x10u, 0xBEu, 0xFFu, 0x50u, 0xDFu, 0x12u, 0x65u, 0x01u
+	};
+	uint8_t                      frame[AIR_LEN];
+	const struct fake_radio_arm *reply;
+	const struct fake_radio_arm *tx;
+	radiant_time_t               t_tx;
+
+	open_channel((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+
+	host_writes_broadcast();
+	t_tx = run_one_master_slot();
+
+	(void)build_peer_frame(frame, RADIANT_CTRL_BURST_LAST_SEQ0, peer_payload);
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US,
+					   frame, AIR_LEN));
+	fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US + 10u);
+	reply = last_tx_with_ctrl(RADIANT_CTRL_ACK_LAST_SEQ1);
+	zassert_true(reply != NULL && !reply->terminated,
+		     "the reply was not in flight - the write below would not "
+		     "be testing anything");
+
+	/* Not host_writes_broadcast(): that writes bcast_payload, and the
+	 * assertions below need a payload the reply must NOT carry. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_broadcast_message_tx(CH, 8u, next_payload),
+		      "a broadcast write was refused while the master was "
+		      "acknowledging its slave - the host started no transfer");
+
+	fake_radio_advance_to(t_tx + RADIANT_TRANSFER_SLOT_REPLY_US +
+			      RADIANT_TRANSFER_REPLY_US + 10u);
+	reply = last_tx_with_ctrl(RADIANT_CTRL_ACK_LAST_SEQ1);
+	zassert_not_null(reply, "the exchange itself did not happen");
+	zassert_mem_equal(&reply->body[BODY_D0], bcast_payload, 8u,
+			  "the reply in flight picked up the write made during "
+			  "it - it must carry the buffer it was built from");
+
+	/* Nothing re-posts the slot from the reply's completion, so the next
+	 * one comes from the event-thread pump. Not run_one_quiet_period():
+	 * that would overwrite next_payload with bcast_payload. */
+	run_housekeeping();
+	tx = last_tx_with_ctrl(RADIANT_CTRL_BROADCAST);
+	zassert_not_null(tx);
+	zassert_false(tx->terminated, "no new slot was armed after the reply");
+	zassert_mem_equal(&tx->body[BODY_D0], next_payload, 8u,
+			  "the write accepted during the reply did not go out on "
+			  "the next slot");
+
+	end_of_test();
+}
+
+/*
  * The H2 watchdog. The wedge is synthesised with radiant_sched_cancel(),
  * which is the exact shape of the real failure: cancelling is silent, so no
  * done() arrives, the transfer engine is left mid-reply with nothing armed,
@@ -979,23 +1064,6 @@ static const struct fake_radio_arm *armed_search_window(void)
 		     "the nRF caps preset gives eight filters per window; got %u",
 		     w->n_filters);
 	return w;
-}
-
-/*
- * Let the event thread post the next window of the sweep. A SEARCHING
- * channel has nothing host-side to pump it - a sweep's next window comes
- * only from api_housekeep(), so without this it stops dead after one
- * window. Second of the two deliberate sleeps in this file (constraint 1):
- * legitimate because nothing is armed when it runs, and the assertion below
- * checks that rather than trusting it.
- */
-static void run_housekeeping(void)
-{
-	zassert_true(fake_radio_is_idle(),
-		     "sleeping with an operation armed gives the ordering away "
-		     "to the event thread: %s",
-		     fake_radio_busy_reason());
-	k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
 }
 
 static void air_device(const struct fake_radio_arm *w, uint8_t filter_index,

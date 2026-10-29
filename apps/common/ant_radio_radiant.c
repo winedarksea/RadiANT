@@ -3499,7 +3499,27 @@ antr_err_t antr_broadcast_message_tx(uint8_t channel, uint8_t size,
 	}
 
 	k_mutex_lock(&api_lock, K_FOREVER);
-	if (!radiant_transfer_is_idle(&api_xfer[channel])) {
+	/*
+	 * Refused only while a transfer THIS HOST started owns the channel.
+	 * TX_REPLY is us acknowledging a peer's packet, which the host never
+	 * asked for: a real ANT stick accepts the write, and refusing it here
+	 * lost about one host payload per 280 exchanges on a USB master (the
+	 * host's write on EVENT_TX lands inside the ~3.7 ms reply). Accepting is
+	 * safe because the reply's payload was copied out of bcast when the
+	 * frame arrived (radiant_transfer_on_data()) and its retransmits use
+	 * that copy; this write goes out on the next slot, which the pump only
+	 * posts once the engine is idle again.
+	 *
+	 * Under the event crit section, like antr_acknowledge_message_tx(): the
+	 * radio IRQ reads bcast through api_xfer_broadcast(), and a write it
+	 * preempted would hand the acknowledgement a torn payload.
+	 */
+	unsigned int key = radiant_event_crit_enter();
+	enum radiant_transfer_state st = radiant_transfer_state(&api_xfer[channel]);
+
+	if (st != RADIANT_TRANSFER_STATE_IDLE &&
+	    st != RADIANT_TRANSFER_STATE_TX_REPLY) {
+		radiant_event_crit_exit(key);
 		k_mutex_unlock(&api_lock);
 		return (antr_err_t)ANTW_TRANSFER_IN_PROGRESS;
 	}
@@ -3510,6 +3530,7 @@ antr_err_t antr_broadcast_message_tx(uint8_t channel, uint8_t size,
 	memcpy(api_ch[channel].bcast, data, ANTW_ANT_MAX_PAYLOAD_SIZE);
 	api_ch[channel].bcast_valid = true;
 	api_ch[channel].bcast_pending = true;
+	radiant_event_crit_exit(key);
 
 	api_pump_locked();
 	k_mutex_unlock(&api_lock);

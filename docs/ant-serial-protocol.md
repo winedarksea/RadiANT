@@ -518,7 +518,7 @@ Byte 2 of a RESPONSE_EVENT answering a command. Same number space as the event c
 | `ANTW_CHANNEL_NOT_OPENED` | `0x16` | Data was sent on a channel that is not open. | rev5.1 sec 9.5.6 + verify:sdk-ant-shim |
 | `ANTW_CHANNEL_ID_NOT_SET` | `0x18` | Opened before MESG_CHANNEL_ID. | rev5.1 sec 9.5.6 + verify:sdk-ant-shim |
 | `ANTW_CLOSE_ALL_CHANNELS` | `0x19` | Scan mode requires every other channel closed. | rev5.1 sec 9.5.6 + verify:sdk-ant-shim |
-| `ANTW_TRANSFER_IN_PROGRESS` | `0x1F` | A burst is already running on this channel. The bridge answers with this when the host outruns the single burst block. | bridge, rev5.1 sec 9.5.6 + verify:sdk-ant-shim |
+| `ANTW_TRANSFER_IN_PROGRESS` | `0x1F` | A transfer this host started (burst or acknowledged) is still running on this channel. The bridge answers with this when the host outruns the single burst block. | bridge, rev5.1 sec 9.5.6 + verify:sdk-ant-shim |
 | `ANTW_TRANSFER_SEQUENCE_NUMBER_ERROR` | `0x20` | Burst packets arrived out of order. | rev5.1 sec 9.5.6 + verify:sdk-ant-shim |
 | `ANTW_TRANSFER_IN_ERROR` | `0x21` | Burst aborted. | rev5.1 sec 9.5.6 + verify:sdk-ant-shim |
 | `ANTW_TRANSFER_BUSY` | `0x22` | The channel is busy with another transfer. Distinct from TRANSFER_IN_PROGRESS (0x1F), which is what this bridge answers when the host outruns its single burst block. | rev5.1 sec 9.5.6 + verify:sdk-ant-shim |

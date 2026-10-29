@@ -517,7 +517,9 @@ antr_err_t antr_enhanced_channel_spacing_enable(uint8_t enable);
  *
  * Returns 0, ANTW_INVALID_MESSAGE (channel out of range, or bad size),
  * ANTW_CHANNEL_NOT_OPENED, ANTW_CHANNEL_IN_WRONG_STATE (a receive-only
- * channel) or ANTW_TRANSFER_IN_PROGRESS (a burst owns the channel).
+ * channel) or ANTW_TRANSFER_IN_PROGRESS (a transfer this host started -
+ * burst or acknowledged - still owns the channel; acknowledging a peer's
+ * packet does not count).
  */
 antr_err_t antr_broadcast_message_tx(uint8_t channel, uint8_t size,
 				     const uint8_t *data);

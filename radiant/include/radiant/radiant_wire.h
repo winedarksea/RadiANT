@@ -1035,9 +1035,9 @@
 #define RADIANT_WIRE_CLOSE_ALL_CHANNELS                      0x19
 
 /*
- * A burst is already running on this channel. The bridge answers with this
- * when the host outruns the single burst block. [bridge, rev5.1 sec 9.5.6 +
- * verify:sdk-ant-shim]
+ * A transfer this host started (burst or acknowledged) is still running on
+ * this channel. The bridge answers with this when the host outruns the single
+ * burst block. [bridge, rev5.1 sec 9.5.6 + verify:sdk-ant-shim]
  */
 #define RADIANT_WIRE_TRANSFER_IN_PROGRESS                    0x1F
 

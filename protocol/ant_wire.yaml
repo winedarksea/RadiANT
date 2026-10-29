@@ -1325,8 +1325,9 @@ constant_groups:
          desc: "Scan mode requires every other channel closed.",
          source: "rev5.1 sec 9.5.6", verify: sdk-ant-shim}
       - {name: TRANSFER_IN_PROGRESS, value: 0x1F,
-         desc: "A burst is already running on this channel. The bridge answers
-                with this when the host outruns the single burst block.",
+         desc: "A transfer this host started (burst or acknowledged) is still
+                running on this channel. The bridge answers with this when the
+                host outruns the single burst block.",
          source: "bridge, rev5.1 sec 9.5.6", verify: sdk-ant-shim}
       - {name: TRANSFER_SEQUENCE_NUMBER_ERROR, value: 0x20,
          desc: "Burst packets arrived out of order.",
