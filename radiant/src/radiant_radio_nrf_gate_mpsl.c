@@ -73,6 +73,7 @@
 #include <zephyr/sys/util.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/logging/log_ctrl.h>
+#include <cmsis_core.h>
 
 #include <mpsl_timeslot.h>
 #include <mpsl_hwres.h>
@@ -2009,7 +2010,36 @@ bool gate_held(void)
 	return g.granted;
 }
 
+void gate_forget_pending(void)
+{
+	if (g.pending) {
+		g.pending = false;
+		deadline_stop();
+	}
+}
+
+static void gate_release_masked(void);
+
+/*
+ * PRIMASK, not irq_lock(): the grant's own TIMER0 signal is a zero-latency
+ * interrupt, which irq_lock() does not mask. Since THE GRANT HANDOFF
+ * (radiant_radio_nrf.c) the usual release runs from the trampoline rather than
+ * from inside a signal, and a TIMER0 end landing between the g.granted test
+ * and the CC0 write below would end the timeslot and then have this re-arm
+ * COMPARE0 on a timer MPSL owns again - the interrupt that re-enters forever
+ * (see timer0_disarm()). Or hand the radio back twice. A few register writes;
+ * the end margin is there to absorb this much signal latency.
+ */
 void gate_release(void)
+{
+	uint32_t primask = __get_PRIMASK();
+
+	__disable_irq();
+	gate_release_masked();
+	__set_PRIMASK(primask);
+}
+
+static void gate_release_masked(void)
 {
 	if (!g.granted) {
 		/* Nothing held. The abort path calls this without knowing,

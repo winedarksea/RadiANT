@@ -88,6 +88,12 @@ struct chan {
 	 * timeout mid-search gets the extension and not a restart. */
 	radiant_time_t t_search_start;
 
+	/* When radiant_channel_search_note_denied() last credited this channel,
+	 * 0 for never. Bounds each credit by the wall clock since the previous
+	 * one, so denials arriving faster than the credit can't run the deadline
+	 * away from the clock. */
+	radiant_time_t t_last_denied;
+
 	/* The radio operation currently attributed to this channel, or 0. */
 	uint32_t op;
 
@@ -1407,18 +1413,26 @@ radiant_time_t radiant_channel_search_deadline(uint8_t channel)
 	return search_deadline(c);
 }
 
-void radiant_channel_search_note_denied(uint32_t window_us)
+void radiant_channel_search_note_denied(radiant_time_t now, uint32_t window_us)
 {
 	uint8_t i;
 
 	for (i = 0u; i < RADIANT_CHANNEL_COUNT; i++) {
 		struct chan *c = &channels[i];
+		radiant_time_t credit = (radiant_time_t)window_us;
 
 		if (c->state != RADIANT_CH_STATE_SEARCHING ||
 		    c->t_search_start == RADIANT_TIME_NEVER) {
 			continue;
 		}
-		c->t_search_start += (radiant_time_t)window_us;
+		/* An arbiter re-places a refused chunk at its own lead, tens of
+		 * ms, and can refuse it again: a fixed credit per denial then
+		 * outruns the clock and the search never times out. */
+		if (now >= c->t_last_denied && now - c->t_last_denied < credit) {
+			credit = now - c->t_last_denied;
+		}
+		c->t_last_denied = now;
+		c->t_search_start += credit;
 	}
 }
 

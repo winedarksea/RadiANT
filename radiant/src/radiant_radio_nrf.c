@@ -3866,6 +3866,7 @@ void radiant_nrf_gate_on_denied(void)
 int radiant_radio_abort(void)
 {
 	unsigned int key;
+	bool         was_staged;
 
 	if (!radiant_op.inited) {
 		return RADIANT_RADIO_ESTATE;
@@ -3899,11 +3900,17 @@ int radiant_radio_abort(void)
 	 * down. Clearing the flag under the same lock is what stops a grant that
 	 * is already in flight from programming the radio for a window whose
 	 * owner has gone. */
+	was_staged = radiant_staged.pending;
 	radiant_staged.pending = false;
 	irq_unlock(key);
 	/* Owed rather than paid when the core aborted from its own completion
 	 * to arm a follow-on into the same air - see THE GRANT HANDOFF. */
 	grant_release_after_core();
+	/* An owed release keeps the held grant, which is right, but the
+	 * request this operation was staged on is no one's now. */
+	if (was_staged) {
+		gate_forget_pending();
+	}
 
 	/*
 	 * The operation slot must be released synchronously here. Triggering
@@ -4321,7 +4328,12 @@ static void radio_isr(const void *arg)
 				}
 				evt.rssi_dbm = rssi_sample_dbm();
 
-				if (radiant_op.stop_on_first) {
+				/* The first ACCEPTED frame (radiant_radio_hal.h): a
+				 * CRC failure reported for repair is not one, and the
+				 * scheduler - like the CC26xx backend and the fake -
+				 * keeps the window armed on it. Stopping here left it
+				 * waiting on a terminal that had already happened. */
+				if (radiant_op.stop_on_first && crc_ok) {
 					/* This event IS the terminal one. */
 					radiant_op.terminal_sent = true;
 					nrfx_gppi_conn_disable(radiant_op.conn_start);

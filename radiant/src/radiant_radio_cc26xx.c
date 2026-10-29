@@ -1924,11 +1924,15 @@ int radiant_radio_abort(void)
 	}
 
 	/*
-	 * RF_cancelCmd's callback delivers the terminal event, which is what
-	 * the HAL requires: "its terminal event is still delivered... before
-	 * this function's caller can observe the slot as free". RF_flushCmd is
-	 * synchronous, so by the time it returns the callback has run.
+	 * The terminal is delivered here, synchronously, which is what the HAL
+	 * requires: "its terminal event is still delivered... before this
+	 * function's caller can observe the slot as free". RF_flushCmd is NOT
+	 * synchronous - it rings the doorbell and returns - so the driver's own
+	 * cancel callback may come after the core has armed its next operation
+	 * from the terminal below. Retired like rx_drain()'s early stop, so that
+	 * callback is not read as the new operation's.
 	 */
+	st.retired_handle = st.cmd_handle;
 	RF_flushCmd(st.rf_handle, st.cmd_handle, 0);
 
 	if (st.kind == OP_RX) {

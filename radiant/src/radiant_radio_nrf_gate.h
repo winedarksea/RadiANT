@@ -151,6 +151,16 @@ void gate_release(void);
 bool gate_held(void);
 
 /*
+ * Forget a reservation still waiting to be granted, without touching a grant
+ * that is held. For aborting a staged operation while the release of the held
+ * grant is owed (radiant_radio_nrf.c, THE GRANT HANDOFF): gate_release() only
+ * forgets a pending request when nothing is held, so the deferred release
+ * would leave it - and its backstop - in place, and every placement after it
+ * refused until the orphan grant arrives. No-op on the direct gate.
+ */
+void gate_forget_pending(void);
+
+/*
  * Try to grow the current grant by us microseconds. False if the arbiter
  * refused - an extension is granted only when nothing else is scheduled in
  * the extended region, which is the arbiter enforcing "the sweep is the

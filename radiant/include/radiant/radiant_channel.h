@@ -750,9 +750,10 @@ radiant_time_t radiant_channel_search_deadline(uint8_t channel);
  * refused a scan chunk, so that stretch of wall clock bought no listening.
  * Without it a finite search timeout is pure wall clock, and under contention
  * a channel times out having barely been on the air. A channel with no
- * deadline is left alone.
+ * deadline is left alone. Each credit is capped at the wall clock since the
+ * channel's previous one, so the deadline can be postponed but never stopped.
  */
-void radiant_channel_search_note_denied(uint32_t window_us);
+void radiant_channel_search_note_denied(radiant_time_t now, uint32_t window_us);
 
 /* The earliest next_slot across all channels, and which channel it belongs to.
  * *channel_out is untouched when the answer is RADIANT_TIME_NEVER. */

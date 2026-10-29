@@ -41,6 +41,11 @@ void gate_release(void)
 	/* Nothing was held. */
 }
 
+void gate_forget_pending(void)
+{
+	/* Nothing is ever pending. */
+}
+
 bool gate_held(void)
 {
 	/* Never: so the backend's handoff always releases at once, which is the

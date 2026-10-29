@@ -2513,6 +2513,8 @@ ZTEST(api, test_a_sweep_that_still_gets_air_never_escapes)
 ZTEST(api, test_a_denied_search_chunk_pushes_back_the_search_timeout)
 {
 	radiant_time_t deadline;
+	radiant_time_t t0;
+	radiant_time_t pushed;
 	uint32_t       denied_before;
 	uint32_t       denied;
 
@@ -2529,23 +2531,69 @@ ZTEST(api, test_a_denied_search_chunk_pushes_back_the_search_timeout)
 			  "setup: the search has no deadline to extend");
 
 	denied_before = radiant_api_stats_get()->sched_denied;
+	t0 = radiant_radio_now();
 	fake_radio_force_terminal_repeat(RADIANT_RADIO_STATUS_DENIED, 16u);
 	run_virtual_us(1000000u); /* well inside the 2.5 s */
 	fake_radio_force_terminal_repeat(RADIANT_RADIO_STATUS_DENIED, 0u);
 	denied = radiant_api_stats_get()->sched_denied - denied_before;
+	pushed = radiant_channel_search_deadline(CH) - deadline;
 
 	zassert_true(denied > 0u,
 		     "no denial reached the API layer, so this test proved "
 		     "nothing");
 	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH));
-	zassert_equal(deadline +
-			      (radiant_time_t)denied * RADIANT_API_HOUSEKEEP_MS *
-				      1000u,
+	zassert_true(pushed > 0u,
+		     "%u denied chunks did not push the search timeout back: "
+		     "under contention the channel times out on wall clock it "
+		     "never got to listen in",
+		     (unsigned int)denied);
+	/* Never more than one retry interval each, nor more wall clock than
+	 * the denials spanned plus the first one's interval. */
+	zassert_true(pushed <= (radiant_time_t)denied *
+				       RADIANT_API_HOUSEKEEP_MS * 1000u,
+		     "pushed %u us for %u denials", (unsigned int)pushed,
+		     (unsigned int)denied);
+	zassert_true(pushed <= (radiant_radio_now() - t0) +
+				       RADIANT_API_HOUSEKEEP_MS * 1000u,
+		     "pushed %u us, more than the clock moved",
+		     (unsigned int)pushed);
+
+	end_of_test();
+}
+
+/*
+ * An arbiter re-places a refused chunk at its own lead, well inside one retry
+ * interval, and can refuse it every time. A fixed credit per denial then runs
+ * the deadline away faster than the clock and the search never times out.
+ */
+ZTEST(api, test_rapid_denials_postpone_the_search_timeout_but_never_stop_it)
+{
+	radiant_time_t deadline;
+	radiant_time_t now;
+	const uint32_t credit = RADIANT_API_HOUSEKEEP_MS * 1000u;
+
+	zassert_ok(antr_network_address_set(0u, ant_plus_key));
+	zassert_ok(antr_channel_assign(CH, ANTW_CHANNEL_TYPE_SLAVE, 0u, 0u));
+	zassert_ok(antr_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_ok(antr_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_ok(antr_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_ok(antr_channel_search_timeout_set(CH, 1u)); /* 2.5 s */
+	zassert_ok(antr_channel_open(CH));
+
+	deadline = radiant_channel_search_deadline(CH);
+	zassert_not_equal(RADIANT_TIME_NEVER, deadline);
+	now = radiant_radio_now();
+
+	/* The first denial has no predecessor and takes a whole interval;
+	 * the next ten arrive 10 ms apart and may take only those 10 ms. */
+	for (unsigned int i = 0u; i <= 10u; i++) {
+		radiant_channel_search_note_denied(now + i * 10000u, credit);
+	}
+	zassert_equal(deadline + credit + 10u * 10000u,
 		      radiant_channel_search_deadline(CH),
-		      "%u denied chunks did not each push the search timeout "
-		      "back by one retry interval: under contention the channel "
-		      "times out on wall clock it never got to listen in",
-		      (unsigned int)denied);
+		      "eleven denials over 100 ms pushed the timeout %u us",
+		      (unsigned int)(radiant_channel_search_deadline(CH) -
+				     deadline));
 
 	end_of_test();
 }

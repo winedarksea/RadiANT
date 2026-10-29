@@ -2233,7 +2233,7 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 			radiant_search_note_denied(&api_search,
 						RADIANT_API_HOUSEKEEP_MS * 1000u);
 			radiant_channel_search_note_denied(
-				RADIANT_API_HOUSEKEEP_MS * 1000u);
+				now, RADIANT_API_HOUSEKEEP_MS * 1000u);
 		}
 		/*
 		 * A continuous request outlives its chunks (lets a displaced

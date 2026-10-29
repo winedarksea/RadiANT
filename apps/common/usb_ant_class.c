@@ -391,10 +391,12 @@ static int usb_ant_write(const uint8_t *buf, size_t len)
 	 * or from a suspend, so the wait below cannot be satisfied by a stale
 	 * give. The result is pre-set to the value the suspend/disconnect arms
 	 * publish, so that a give from those paths is never read as a size.
+	 * tx_gen first: a late callback landing between the reset and the bump
+	 * would otherwise still match, and give into this writer's wait.
 	 */
+	tx_gen++;
 	k_sem_reset(&tx_done_sem);
 	tx_done_size = -ESHUTDOWN;
-	tx_gen++;
 
 	int ret = usb_transfer(ant_ep_data[ANT_EP_IN_IDX].ep_addr,
 			       (uint8_t *)buf, len,
