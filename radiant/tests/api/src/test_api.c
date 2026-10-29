@@ -2606,7 +2606,9 @@ ZTEST(api, test_rapid_denials_postpone_the_search_timeout_but_never_stop_it)
  */
 ZTEST(api, test_a_search_denied_every_chunk_still_times_out)
 {
+	const struct fake_radio_arm *w;
 	radiant_time_t deadline;
+	radiant_time_t end;
 	radiant_time_t now;
 	const uint32_t step = 10000u;
 	const uint32_t credit = RADIANT_API_HOUSEKEEP_MS * 1000u;
@@ -2638,6 +2640,38 @@ ZTEST(api, test_a_search_denied_every_chunk_still_times_out)
 	zassert_true(radiant_channel_search_deadline(CH) <
 			     now + 6000u * (radiant_time_t)step,
 		     "the search would still be open after 60 s of denials");
+
+	/* And the tick acts on that deadline: still searching just short of
+	 * it, timed out and closed exactly once just past it. The radio is
+	 * kept refusing so housekeeping runs with it idle. */
+	end = radiant_channel_search_deadline(CH);
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(w);
+	fake_radio_force_arm_repeat(RADIANT_RADIO_EBUSY, 1000u);
+	fake_radio_advance_to(w->t_close + 1u);
+	fake_radio_advance_to(end - 200000u);
+	run_housekeeping();
+	drain();
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH),
+		      "the search ended before its deadline");
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_RX_SEARCH_TIMEOUT));
+
+	fake_radio_advance(400000u);
+	run_housekeeping();
+	drain();
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_RX_SEARCH_TIMEOUT),
+		      "the deadline passed and the search never timed out");
+
+	/* The close parks in CLOSING until the operation still attributed to
+	 * the channel delivers its terminal; CHANNEL_CLOSED follows that. An
+	 * EBUSY refusal is transient by contract, so the scheduler keeps that
+	 * request queued: let the radio take it. */
+	fake_radio_force_arm_repeat(RADIANT_RADIO_OK_RC, 0u);
+	run_virtual_us(1000000u);
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_RX_SEARCH_TIMEOUT));
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_CHANNEL_CLOSED),
+		      "timed out but never closed, state %u",
+		      (unsigned int)radiant_channel_state_get(CH));
 
 	end_of_test();
 }
