@@ -709,6 +709,10 @@ int radiant_transfer_ack_data(struct radiant_transfer *t, const uint8_t *payload
  * Either way exactly one TX_FAILED with RADIANT_TRANSFER_FAIL_ABORTED ends
  * the transfer, releasing any block still held.
  *
+ * An engine only acknowledging a peer (TX_REPLY) has no transfer to end: it
+ * returns to IDLE and raises nothing, and the armed reply is the caller's to
+ * cancel (its scheduler slot).
+ *
  * Returns RADIANT_TRANSFER_OK, including when there was nothing to cancel.
  */
 int radiant_transfer_abort(struct radiant_transfer *t);

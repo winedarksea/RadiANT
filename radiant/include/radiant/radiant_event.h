@@ -140,14 +140,32 @@ extern "C" {
  * Queued messages. Must be a power of two - the ring masks rather than
  * divides, since the producer runs in a radio ISR.
  *
- * 64 slots is ~500 ms of headroom at 128 msg/s (32 channels at 4 Hz), and
- * comfortably absorbs the 51-packet burst Spike B part 2 captured. Costs
+ * 64 slots, 48 of them for data (RADIANT_EVENT_TERMINAL_RESERVE below), is
+ * ~375 ms of data headroom at 128 msg/s (32 channels at 4 Hz). NOTE: the
+ * 51-packet burst Spike B part 2 captured fitted in 64 with no drain at all
+ * and no longer does in 48; it arrives at air rate, with the drain woken per
+ * packet, so it overflows only if the drain stalls for most of it. Costs
  * ~3 KB static RAM. Override with -DANT_EVENT_QUEUE_DEPTH=<n>; 32 (one slot
  * per channel) is the lowest value that can't lose a message to one slot's
  * worth of simultaneous arrivals.
  */
 #ifndef RADIANT_EVENT_QUEUE_DEPTH
 #define RADIANT_EVENT_QUEUE_DEPTH  64u
+#endif
+
+/*
+ * Slots only the four ownership/outcome channel events may use:
+ * TRANSFER_NEXT_DATA_BLOCK, TRANSFER_TX_COMPLETED, TRANSFER_TX_FAILED and
+ * CHANNEL_CLOSED. Received data and every other event stop at
+ * DEPTH - RESERVE (48 data slots, ~375 ms at 128 msg/s). Each of those four is
+ * owed exactly once and is never re-posted, and losing one wedges a host's
+ * burst semaphore or close wait; losing a broadcast costs one period. At most
+ * two can be outstanding per channel (one transfer outcome, one close), so 16
+ * covers 8 channels outright. Same policy as core_cb_enqueue() in
+ * radiant_radio_nrf.c (review 2026-10-31, A11-1).
+ */
+#ifndef RADIANT_EVENT_TERMINAL_RESERVE
+#define RADIANT_EVENT_TERMINAL_RESERVE  16u
 #endif
 
 /* Library configuration bits this module implements. Anything outside it is

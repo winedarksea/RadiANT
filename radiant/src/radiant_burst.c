@@ -485,6 +485,23 @@ int radiant_transfer_abort(struct radiant_transfer *t)
 		return RADIANT_TRANSFER_OK;
 	case RADIANT_TRANSFER_STATE_ABORTING:
 		return RADIANT_TRANSFER_OK;
+	case RADIANT_TRANSFER_STATE_TX_REPLY:
+		/* Our acknowledgement of a peer's packet, not a transfer the
+		 * host started: no terminal event is owed (radiant_transfer.h,
+		 * "follows an accepted call"), and raising TX_FAILED here told
+		 * the host a send it never made had failed - and released the
+		 * bridge's shared burst-block semaphore with it (review
+		 * 2026-10-31, E2-5.3). The armed reply is the caller's to take
+		 * off the air: antr_channel_close() cancels the channel's
+		 * scheduler slot next, antr_stack_reset() has already reset the
+		 * scheduler. A terminal that lands anyway meets t->op == 0 and
+		 * is counted late. The saved reply goes too: re-sending an ACK
+		 * on a closed channel is never right. */
+		t->op = 0u;
+		t->state = RADIANT_TRANSFER_STATE_IDLE;
+		t->reply_ctrl = 0u;
+		t->reply_attempts = 0u;
+		return RADIANT_TRANSFER_OK;
 	default:
 		break;
 	}

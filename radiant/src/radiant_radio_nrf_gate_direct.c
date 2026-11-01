@@ -5,12 +5,15 @@
  * Provenance: clean-room. Nothing here derives from sdk-ant.
  *
  * Gate for builds where radiant owns the RADIO outright (every shipping
- * dongle image today): gate_acquire() always returns GRANTED, so the compiler
- * folds the branch and radiant_radio_nrf.c emits the same code it did before
- * this seam existed. That makes the no-op provable rather than resting only
- * on an A/B run - relevant because a t_sync regression here would move RX
- * yield by a few tenths of a percent, about the size of the bench's
- * characterised ~0.4% collision floor, i.e. easy to mistake for noise.
+ * dongle image today): gate_acquire() always returns GRANTED. It lives in a
+ * separate translation unit, so the compiler folds the branch ONLY under LTO
+ * - and no dongle image sets CONFIG_LTO (checked 2026-10-31, review A14-4).
+ * Without it the cost is one call per arm, with identical behaviour; the
+ * no-op therefore rests on that behaviour (always GRANTED, nothing staged)
+ * rather than on identical code. Worth stating because a t_sync regression
+ * here would move RX yield by a few tenths of a percent, about the size of
+ * the bench's characterised ~0.4% collision floor, i.e. easy to mistake for
+ * noise.
  *
  * radiant_nrf_gate_on_grant/_on_denied/_on_radio_irq are never called from
  * here - GATE_PENDING cannot occur and the RADIO IRQ reaches its handler via

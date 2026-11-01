@@ -1359,6 +1359,40 @@ ZTEST(transfer, test_a_slot_opening_packet_is_acknowledged)
 	end_of_test();
 }
 
+/*
+ * Closing a channel while it is only acknowledging a peer's packet must not
+ * tell the host a transfer failed: the host never started one (review
+ * 2026-10-31, E2-5.3). radiant_transfer.h: exactly one of TX_COMPLETED or
+ * TX_FAILED follows an ACCEPTED CALL - and TX_REPLY is no call of the host's.
+ * The spurious TX_FAILED also released the bridge's shared burst block.
+ */
+ZTEST(transfer, test_aborting_our_own_acknowledgement_raises_no_transfer_event)
+{
+	struct radiant_frame in;
+	struct radiant_ctrl_fields fields;
+	radiant_time_t t_data = radiant_radio_now() + 10000u;
+
+	zassert_equal(RADIANT_TRANSFER_OK,
+		      radiant_transfer_ctrl_fields(0u, false, false, &fields));
+	zassert_equal(RADIANT_FRAME_OK,
+		      radiant_frame_make(&in, &cfg_slave.id, &fields, peer_payload,
+					 RADIANT_TRANSFER_PKT_BYTES));
+	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_on_data(&xfer, &in, t_data));
+	commit();
+	zassert_not_null(last_arm_of(FAKE_RADIO_ARM_TX), "setup: reply not armed");
+	zassert_equal(RADIANT_TRANSFER_STATE_TX_REPLY, radiant_transfer_state(&xfer));
+
+	/* antr_channel_close()'s order: engine abort, then the slot cancel. */
+	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_abort(&xfer));
+	zassert_ok(radiant_sched_cancel(CH_XFER));
+	fake_radio_advance_to(t_data + RADIANT_TRANSFER_REPLY_US + 1000u);
+
+	zassert_equal(0u, n_ev, "the host was told a transfer it never started failed");
+	zassert_equal(0u, radiant_transfer_stats(&xfer)->transfers_failed, NULL);
+	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
+	end_of_test();
+}
+
 /* The non-final opener, 0x8A -> 0xD2, on the same path. Split from the 0xAA
  * case so a mapping that gets `last` wrong fails one test and not both. */
 ZTEST(transfer, test_a_non_final_slot_opening_packet_is_acknowledged)

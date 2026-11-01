@@ -163,7 +163,7 @@ static void push_steer(struct radiant_search *s, uint16_t set)
 			return;
 		}
 	}
-	if (s->n_steer >= (uint8_t)RADIANT_SEARCH_SEEN_ENTRIES) {
+	if (s->n_steer >= (uint8_t)RADIANT_SEARCH_STEER_ENTRIES) {
 		return;
 	}
 	s->steer[s->n_steer] = set;

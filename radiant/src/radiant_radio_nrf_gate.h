@@ -212,7 +212,6 @@ uint32_t gate_min_arm_lead_us(void);
  * ---------------------------------------------------------------------------
  */
 
-/* The air arrived. Programme the staged operation and let the hardware run. */
 /*
  * TRUE WHILE THIS THREAD OF CONTROL IS INSIDE AN MPSL TIMESLOT SIGNAL CALLBACK.
  *
@@ -236,6 +235,8 @@ uint32_t gate_min_arm_lead_us(void);
  * that saw this behind a config guard would see no declaration at all.
  */
 bool gate_in_signal(void);
+
+/* The air arrived. Programme the staged operation and let the hardware run. */
 void radiant_nrf_gate_on_grant(void);
 
 /* The air did not arrive and will not. Deliver the staged operation's terminal

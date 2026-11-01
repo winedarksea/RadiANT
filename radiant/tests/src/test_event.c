@@ -81,6 +81,10 @@ void radiant_event_wakeup(void)
  */
 #define REC_MAX 192
 
+/* Slots received data may use; the rest are reserved for the ownership/
+ * outcome channel events (radiant_event.h). */
+#define DATA_CAP (RADIANT_EVENT_QUEUE_DEPTH - RADIANT_EVENT_TERMINAL_RESERVE)
+
 struct rec {
 	uint8_t id;
 	uint8_t len;
@@ -711,7 +715,9 @@ ZTEST(radiant_event, test_overflow_is_reported_never_silent)
 	memcpy(payload, payload8, sizeof(payload));
 	hal = mk_hal(RADIANT_RADIO_STATUS_OK, 1000000u, true, true, -40);
 
-	for (i = 0u; i < (uint32_t)RADIANT_EVENT_QUEUE_DEPTH; i++) {
+	/* Received data stops at DEPTH - RESERVE: the top slots are kept for
+	 * the ownership/outcome channel events (see the test below). */
+	for (i = 0u; i < (uint32_t)DATA_CAP; i++) {
 		payload[0] = (uint8_t)i;
 		rx = mk_rx(&hal, (uint8_t)(i & RADIANT_EVENT_CHANNEL_MAX), payload);
 		zassert_equal(RADIANT_EVENT_OK, radiant_event_post_rx(&rx));
@@ -724,12 +730,11 @@ ZTEST(radiant_event, test_overflow_is_reported_never_silent)
 	}
 
 	zassert_equal(3u, radiant_event_stats_get()->dropped_full);
-	zassert_equal((uint32_t)RADIANT_EVENT_QUEUE_DEPTH, n_wakeups,
+	zassert_equal((uint32_t)DATA_CAP, n_wakeups,
 		      "a dropped message must not wake the drain");
 	zassert_true(radiant_event_pending());
 
-	zassert_equal((uint32_t)RADIANT_EVENT_QUEUE_DEPTH + 1u,
-		      radiant_event_drain(0u));
+	zassert_equal((uint32_t)DATA_CAP + 1u, radiant_event_drain(0u));
 
 	/* The marker comes first and is a channel event on channel 0. */
 	zassert_equal((uint8_t)RADIANT_WIRE_MESG_RESPONSE_EVENT_ID, recs[0].id);
@@ -741,12 +746,94 @@ ZTEST(radiant_event, test_overflow_is_reported_never_silent)
 
 	/* Everything that was accepted still came out in order, and the three
 	 * that were refused are not among them. */
-	for (i = 0u; i < (uint32_t)RADIANT_EVENT_QUEUE_DEPTH; i++) {
+	for (i = 0u; i < (uint32_t)DATA_CAP; i++) {
 		zassert_equal((uint8_t)i, recs[i + 1u].data[1],
 		              "queued message %u is missing or out of order", i);
 	}
 
 	zassert_false(radiant_event_pending());
+}
+
+/*
+ * A ring full of received data still carries the four channel events that
+ * are owed exactly once and never re-posted: TRANSFER_NEXT_DATA_BLOCK,
+ * TRANSFER_TX_COMPLETED/FAILED and CHANNEL_CLOSED (review 2026-10-31, A11-1 /
+ * O2 SF-2). Losing one wedges a host's burst semaphore or its close wait;
+ * losing a broadcast costs one period. RX_FAIL is NOT reserved - it is
+ * per-slot rate and would let a stall exhaust the reserve.
+ */
+ZTEST(radiant_event, test_a_full_ring_still_carries_ownership_events)
+{
+	struct radiant_rx_event hal;
+	struct radiant_event_rx rx;
+	uint8_t             payload[RADIANT_FRAME_PAYLOAD_STD];
+	uint32_t            i;
+	uint32_t            n;
+
+	memcpy(payload, payload8, sizeof(payload));
+	hal = mk_hal(RADIANT_RADIO_STATUS_OK, 1000000u, true, true, -40);
+
+	/* Data until the first refusal: exactly DEPTH - RESERVE accepted. */
+	for (i = 0u; i < (uint32_t)RADIANT_EVENT_QUEUE_DEPTH; i++) {
+		payload[0] = (uint8_t)i;
+		rx = mk_rx(&hal, (uint8_t)(i & RADIANT_EVENT_CHANNEL_MAX), payload);
+		if (radiant_event_post_rx(&rx) != RADIANT_EVENT_OK) {
+			break;
+		}
+	}
+	zassert_equal((uint32_t)DATA_CAP, i,
+		      "received data took %u slots, the cap is %u", i,
+		      (unsigned int)DATA_CAP);
+
+	zassert_equal(RADIANT_EVENT_OK, radiant_event_post_transfer_tx_failed(5u),
+		      "a TX_FAILED was dropped by data pressure");
+	zassert_equal(RADIANT_EVENT_OK,
+		      radiant_event_post_channel_event(
+			      5u, (uint8_t)RADIANT_WIRE_EVENT_CHANNEL_CLOSED),
+		      "a CHANNEL_CLOSED was dropped by data pressure");
+	zassert_equal(RADIANT_EVENT_OK, radiant_event_post_transfer_next_block(4u));
+	zassert_equal(RADIANT_EVENT_OK,
+		      radiant_event_post_transfer_tx_completed(4u));
+
+	zassert_equal(RADIANT_EVENT_ENOSPC,
+		      radiant_event_post_channel_event(
+			      5u, (uint8_t)RADIANT_WIRE_EVENT_RX_FAIL),
+		      "RX_FAIL must not use the reserve");
+	payload[0] = 0xFFu;
+	rx = mk_rx(&hal, 0u, payload);
+	zassert_equal(RADIANT_EVENT_ENOSPC, radiant_event_post_rx(&rx));
+
+	n = radiant_event_drain(0u);
+	zassert_equal((uint32_t)DATA_CAP + 4u + 1u, n);
+	zassert_equal((uint8_t)RADIANT_WIRE_EVENT_QUE_OVERFLOW, recs[0].data[2],
+		      "the overflow marker must still come first");
+	zassert_equal((uint8_t)RADIANT_WIRE_EVENT_TRANSFER_TX_FAILED,
+		      recs[n - 4u].data[2]);
+	zassert_equal((uint8_t)RADIANT_WIRE_EVENT_CHANNEL_CLOSED,
+		      recs[n - 3u].data[2]);
+	zassert_equal((uint8_t)RADIANT_WIRE_EVENT_TRANSFER_NEXT_DATA_BLOCK,
+		      recs[n - 2u].data[2]);
+	zassert_equal((uint8_t)RADIANT_WIRE_EVENT_TRANSFER_TX_COMPLETED,
+		      recs[n - 1u].data[2]);
+	zassert_equal(1u, radiant_event_stats_get()->tx_failed);
+	zassert_equal(1u, radiant_event_stats_get()->tx_completed);
+	zassert_equal(1u, radiant_event_stats_get()->next_data_block);
+
+	/* The reserve is a bound, not a promise: fill it with terminals and the
+	 * next one is refused, counted, not silently lost. */
+	for (i = 0u; i < (uint32_t)DATA_CAP; i++) {
+		payload[0] = (uint8_t)i;
+		rx = mk_rx(&hal, 0u, payload);
+		zassert_equal(RADIANT_EVENT_OK, radiant_event_post_rx(&rx));
+	}
+	for (i = 0u; i < (uint32_t)RADIANT_EVENT_TERMINAL_RESERVE; i++) {
+		zassert_equal(RADIANT_EVENT_OK,
+			      radiant_event_post_transfer_tx_failed(1u));
+	}
+	zassert_equal(RADIANT_EVENT_ENOSPC,
+		      radiant_event_post_transfer_tx_failed(1u),
+		      "the reserve is not bounded");
+	(void)radiant_event_drain(0u);
 }
 
 /* ---------------------------------------------------------------------------

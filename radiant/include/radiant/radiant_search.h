@@ -126,6 +126,13 @@ extern "C" {
 #define RADIANT_SEARCH_SEEN_ENTRIES 16
 #endif
 
+/* The steer queue (named devices to look for first). Sized like the seen ring
+ * by default, but its own constant, so retuning one no longer silently
+ * retunes the other. */
+#ifndef RADIANT_SEARCH_STEER_ENTRIES
+#define RADIANT_SEARCH_STEER_ENTRIES RADIANT_SEARCH_SEEN_ENTRIES
+#endif
+
 /* Values of devnum_lo the sweep must cover - one byte, named for clarity. */
 #define RADIANT_SEARCH_LO_VALUES 256u
 
@@ -471,7 +478,7 @@ struct radiant_search {
 
 	/* Round-robin cursor, and the cache's queue-jumpers ahead of it. */
 	uint16_t next_set;
-	uint16_t steer[RADIANT_SEARCH_SEEN_ENTRIES];
+	uint16_t steer[RADIANT_SEARCH_STEER_ENTRIES];
 	uint8_t  n_steer;
 
 	struct radiant_search_chan chans[RADIANT_SEARCH_MAX_CHANNELS];

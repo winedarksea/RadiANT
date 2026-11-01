@@ -44,9 +44,9 @@
  * ISR. Both properties are load-bearing, so both are checked. */
 _Static_assert((RADIANT_EVENT_QUEUE_DEPTH & (RADIANT_EVENT_QUEUE_DEPTH - 1u)) == 0u,
 	       "RADIANT_EVENT_QUEUE_DEPTH must be a power of two");
-_Static_assert(RADIANT_EVENT_QUEUE_DEPTH >= 32u,
-	       "fewer slots than channels can lose a message with the drain "
-	       "running normally");
+_Static_assert(RADIANT_EVENT_QUEUE_DEPTH >= 32u + RADIANT_EVENT_TERMINAL_RESERVE,
+	       "fewer data slots than channels can lose a message with the "
+	       "drain running normally");
 _Static_assert(RADIANT_EVENT_QUEUE_DEPTH <= 4096u,
 	       "RADIANT_EVENT_QUEUE_DEPTH is implausible; check the -D");
 
@@ -365,10 +365,14 @@ int radiant_event_build_ext(uint8_t config, const struct radiant_event_ext *in,
  * ---------------------------------------------------------------------------
  */
 
-static int enqueue(const struct radiant_event_slot *s)
+static int enqueue(const struct radiant_event_slot *s, bool reserved)
 {
 	unsigned int key;
 	uint32_t     used;
+	uint32_t     limit = reserved
+		? (uint32_t)RADIANT_EVENT_QUEUE_DEPTH
+		: (uint32_t)(RADIANT_EVENT_QUEUE_DEPTH -
+			     RADIANT_EVENT_TERMINAL_RESERVE);
 	int          rc = RADIANT_EVENT_OK;
 
 	if (!g.ready) {
@@ -378,11 +382,14 @@ static int enqueue(const struct radiant_event_slot *s)
 
 	key = radiant_event_crit_enter();
 	used = g.head - g.tail;
-	if (used >= (uint32_t)RADIANT_EVENT_QUEUE_DEPTH) {
+	if (used >= limit) {
 		/* Drop the newest, not the oldest: a host that loses the head
-		 * of a burst is worse off than one that loses its tail. Never
-		 * silent - overflow_pending becomes an RADIANT_WIRE_EVENT_QUE_OVERFLOW
-		 * at the head of the next drain. */
+		 * of a burst is worse off than one that loses its tail. The top
+		 * RADIANT_EVENT_TERMINAL_RESERVE slots are kept for the events
+		 * that carry buffer ownership or a channel's end, so data
+		 * pressure can never cost one. Never silent - overflow_pending
+		 * becomes an RADIANT_WIRE_EVENT_QUE_OVERFLOW at the head of the
+		 * next drain. */
 		g.overflow_pending = true;
 		g.stats.dropped_full++;
 		rc = RADIANT_EVENT_ENOSPC;
@@ -485,10 +492,11 @@ int radiant_event_post_rx(const struct radiant_event_rx *rx)
 		s.rssi_dbm = rx->hal->rssi_dbm;
 	}
 
-	return enqueue(&s);
+	return enqueue(&s, false);
 }
 
-int radiant_event_post_raw(uint8_t msg_id, const uint8_t *body, uint8_t len)
+static int post_raw_class(uint8_t msg_id, const uint8_t *body, uint8_t len,
+			  bool reserved)
 {
 	struct radiant_event_slot s;
 
@@ -504,7 +512,12 @@ int radiant_event_post_raw(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		memcpy(s.body, body, len);
 	}
 
-	return enqueue(&s);
+	return enqueue(&s, reserved);
+}
+
+int radiant_event_post_raw(uint8_t msg_id, const uint8_t *body, uint8_t len)
+{
+	return post_raw_class(msg_id, body, len, false);
 }
 
 int radiant_event_post_channel_event(uint8_t channel, uint8_t code)
@@ -524,8 +537,14 @@ int radiant_event_post_channel_event(uint8_t channel, uint8_t code)
 	body[1] = (uint8_t)RADIANT_WIRE_MESG_EVENT_ID;
 	body[2] = code;
 
-	rc = radiant_event_post_raw((uint8_t)RADIANT_WIRE_MESG_RESPONSE_EVENT_ID, body,
-				(uint8_t)sizeof(body));
+	/* The four owed-once events may use the terminal reserve; RX_FAIL and
+	 * the rest are per-slot rate or informational and stop with data. */
+	rc = post_raw_class((uint8_t)RADIANT_WIRE_MESG_RESPONSE_EVENT_ID, body,
+			    (uint8_t)sizeof(body),
+			    code == (uint8_t)RADIANT_WIRE_EVENT_TRANSFER_NEXT_DATA_BLOCK ||
+			    code == (uint8_t)RADIANT_WIRE_EVENT_TRANSFER_TX_COMPLETED ||
+			    code == (uint8_t)RADIANT_WIRE_EVENT_TRANSFER_TX_FAILED ||
+			    code == (uint8_t)RADIANT_WIRE_EVENT_CHANNEL_CLOSED);
 	if (rc != RADIANT_EVENT_OK) {
 		return rc;
 	}
