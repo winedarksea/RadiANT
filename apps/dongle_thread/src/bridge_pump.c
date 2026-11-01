@@ -49,6 +49,18 @@ BUILD_ASSERT(PUMP_PRIORITY > ANTR_HOST_THREAD_PRIORITY,
 	     "host thread: a sink doing a socket write must never be able to "
 	     "delay an ANT window.");
 
+#if defined(CONFIG_ANT_DONGLE_SELF_CHANNELS)
+/* One liveness tick posts every tracked field of every source that expired in
+ * it, before anything drains, and the latch means a record overwritten here is
+ * never re-posted. Each self channel feeds one source at a time, so the burst
+ * is at most SELF_CHANNELS x FIELDS_PER_SOURCE; leave headroom for the tap
+ * posting concurrently (review 2026-10-31, C1-1: ships at 2, Kconfig allows 8).
+ */
+BUILD_ASSERT(CONFIG_ANT_DONGLE_SELF_CHANNELS * RADIANT_LIVENESS_FIELDS_PER_SOURCE + 8 <=
+	     RADIANT_BRIDGE_RING_CAP,
+	     "A whole-table STALE burst can overflow the sample bus ring");
+#endif
+
 /* The liveness sweep's period. 1 Hz is section 9.2's granularity, not a tuning
  * knob: the expiry itself is 3x the channel period (250 ms x 3 = 750 ms for a
  * 4 Hz profile), so a 1 s sweep resolves it to within one sweep, and a faster

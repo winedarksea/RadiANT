@@ -338,6 +338,11 @@ target_sources_ifdef(CONFIG_ANT_DONGLE_RX_TAP app PRIVATE
 # symbol. Compare explicitly.
 if(CONFIG_ANT_DONGLE_SELF_CHANNELS GREATER 0)
   target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/self_channels.c")
+  # try_bind() once fell off its end and the built code returned a stale
+  # register, rotating a just-bound channel away (review 2026-10-31, C3-1).
+  # Per file, not app-wide: app-wide would reach vendored and zap C++.
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/src/self_channels.c"
+    PROPERTIES COMPILE_OPTIONS "-Werror=return-type")
 endif()
 
 target_sources_ifdef(CONFIG_ANT_DONGLE_MQTT_SINK app PRIVATE

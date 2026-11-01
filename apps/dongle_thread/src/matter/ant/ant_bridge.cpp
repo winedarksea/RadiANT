@@ -500,6 +500,12 @@ void CreateEndpointForRow(Row &row)
 		 * pushes and re-persists the composed one instead.
 		 */
 		sSources[row.source].labelDirty = true;
+		/* And Reachable: the restored device was built unreachable, and
+		 * the bind-time reachableDirty has usually been consumed by a pass
+		 * that ran before this row existed (an HR strap's derived rows
+		 * appear >= 2 s after bind). The flush reads this flag right after
+		 * CreateEndpointForRow() returns, in this same pass. */
+		sSources[row.source].reachableDirty = true;
 		k_mutex_unlock(&sShadowLock);
 		LOG_INF("matter: adopted stored endpoint %u for %s", rd.endpointId, uniqueID);
 		return;
@@ -684,9 +690,18 @@ void FlushHandler(intptr_t)
 
 		if (provider == nullptr) {
 			if (needCreate) {
-				/* Ask again next second rather than never. */
+				/* Ask again next second rather than never - and give
+				 * back the values this pass took out of the shadow, or
+				 * a change-only series (the derived occupancy outputs)
+				 * comes up empty. A write that landed since is newer
+				 * and already dirty. */
 				k_mutex_lock(&sShadowLock, K_FOREVER);
 				row.needCreate = true;
+				for (uint8_t i = 0; i < kMaxAttrsPerEndpoint; i++) {
+					if (pending[i].used && pending[i].dirty) {
+						row.attrs[i].dirty = true;
+					}
+				}
 				k_mutex_unlock(&sShadowLock);
 			}
 			continue;

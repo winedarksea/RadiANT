@@ -15,13 +15,7 @@
 
 #include "radiant_bridge.h"
 
-/*
- * 32: absorbs ~4 decode-to-drain periods for an 8-sensor deployment at
- * ~4 Hz each producing up to 3 records (HR adapter worst case) - generous,
- * and still well under a kilobyte. Not yet a Kconfig choice.
- */
-#define RADIANT_BRIDGE_RING_CAP 32u
-
+/* RADIANT_BRIDGE_RING_CAP: radiant_bridge.h. */
 static struct radiant_sample ring[RADIANT_BRIDGE_RING_CAP];
 static uint32_t              ring_head; /* next slot to write */
 static uint32_t              ring_count;

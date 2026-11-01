@@ -308,10 +308,20 @@ BUILD_ASSERT((RADIANT_FIELD_ID_COMMON_MAX + 1u) <= (sizeof(announced[0]) * 8u),
  */
 static uint8_t subtype[RADIANT_BINDING_MAX];
 
+/* Per-source availability as last PUBLISHED. Re-sent lazily on the first fresh
+ * sample after a STALE, after a bind made while disconnected (the client
+ * connects lazily from the first sample, which cannot precede the first bind),
+ * and after every (re)connect. It used to be written once, at bind, so HA kept
+ * a sensor unavailable for good after its first STALE (review 2026-10-31,
+ * C3-3). */
+static bool avail_online[RADIANT_BINDING_MAX];
+
 #define FEC_TYPE_FIELD_ID 0x0Du
 #define FEC_DEVICE_TYPE   0x11u
 
 /* ── Connection ────────────────────────────────────────────────────────────── */
+
+static void arm_backoff(void);
 
 static void mqtt_evt_handler(struct mqtt_client *c, const struct mqtt_evt *evt)
 {
@@ -333,6 +343,11 @@ static void mqtt_evt_handler(struct mqtt_client *c, const struct mqtt_evt *evt)
 		LOG_WRN("broker disconnected: %d", evt->result);
 		connected = false;
 		online_published = false;
+		/* A broker that accepts and then drops us (a duplicate client
+		 * id: two units on the default "radiant0") must not be
+		 * reconnected on every sample. Every caller of mqtt_input/
+		 * publish/abort holds `lock`, as arm_backoff() requires. */
+		arm_backoff();
 		break;
 	default:
 		break;
@@ -528,6 +543,12 @@ static bool ensure_connected(void)
 
 	clear_backoff();
 
+	/* A new session: the broker may have lost every retained message, and
+	 * nothing per-sensor is known to be on it. Re-announce lazily. */
+	memset(announced, 0, sizeof(announced));
+	memset(announced_derived, 0, sizeof(announced_derived));
+	memset(avail_online, 0, sizeof(avail_online));
+
 	if (!online_published) {
 		(void)publish_raw(bridge_status_topic, "online", true);
 		online_published = true;
@@ -701,12 +722,15 @@ static bool compose_discovery(uint32_t source, const struct radiant_sample *s)
 	return false;
 }
 
-/* Caller holds `lock`. */
-static void publish_discovery(uint32_t source, const struct radiant_sample *s)
+/* Caller holds `lock`. True when there is nothing left to do for this field:
+ * published, or it can never fit (already logged - retrying would not help).
+ * A failed publish returns false so the next sample tries again. */
+static bool publish_discovery(uint32_t source, const struct radiant_sample *s)
 {
-	if (compose_discovery(source, s)) {
-		(void)publish_raw(work_topic, work_payload, true);
+	if (!compose_discovery(source, s)) {
+		return true;
 	}
+	return publish_raw(work_topic, work_payload, true) == 0;
 }
 
 /* ── The sink ──────────────────────────────────────────────────────────────── */
@@ -769,13 +793,22 @@ static void mqtt_publish_sample(const struct radiant_sample *s)
 					 ? &announced_derived[s->source]
 					 : &announced[s->source];
 
-		if ((*bits & BIT64(s->field_id)) == 0u) {
-			publish_discovery(s->source, s);
+		if ((*bits & BIT64(s->field_id)) == 0u &&
+		    publish_discovery(s->source, s)) {
 			*bits |= BIT64(s->field_id);
 		}
 	}
 
 	uuid_str(b->uuid, uuid, sizeof(uuid));
+
+	if ((s->flags & RADIANT_SAMPLE_STALE) == 0u && !avail_online[s->source]) {
+		(void)snprintf(work_topic, sizeof(work_topic),
+			       "radiant/%s/%s/status",
+			       CONFIG_ANT_DONGLE_MQTT_BRIDGE_ID, uuid);
+		if (publish_raw(work_topic, "online", true) == 0) {
+			avail_online[s->source] = true;
+		}
+	}
 
 	/*
 	 * STALE is carried as the per-sensor availability topic going
@@ -791,6 +824,7 @@ static void mqtt_publish_sample(const struct radiant_sample *s)
 			       CONFIG_ANT_DONGLE_MQTT_BRIDGE_ID, uuid);
 		if (publish_raw(work_topic, "offline", true) == 0) {
 			mqtt_stats.published++;
+			avail_online[s->source] = false;
 		} else {
 			mqtt_stats.publish_failed++;
 		}
@@ -875,13 +909,16 @@ static void mqtt_binding_changed(uint32_t source, const struct radiant_binding *
 	 * learned equipment type goes with it rather than naming a rower
 	 * "Treadmill". */
 	subtype[source] = 0u;
+	avail_online[source] = false;
 
 	if (b != NULL && connected) {
 		uuid_str(b->uuid, uuid, sizeof(uuid));
 		(void)snprintf(work_topic, sizeof(work_topic),
 			       "radiant/%s/%s/status",
 			       CONFIG_ANT_DONGLE_MQTT_BRIDGE_ID, uuid);
-		(void)publish_raw(work_topic, "online", true);
+		if (publish_raw(work_topic, "online", true) == 0) {
+			avail_online[source] = true;
+		}
 	}
 
 	k_mutex_unlock(&lock);

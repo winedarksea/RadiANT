@@ -291,6 +291,79 @@ ZTEST(radiant_rules, test_zones_never_assert_while_not_worn)
 	zassert_is_null(last_with(RADIANT_RULE_FIELD_ZONE2), NULL);
 }
 
+/* Page 84 subpage 6's charge-cycles total, exactly as radiant_common_adapter.c
+ * posts it: EVENT_COUNT + ACCUMULATING, in the common field_id block, on the
+ * same source as the profile's own beat count. */
+static void post_cycles(uint32_t source, int64_t raw, uint64_t t_us)
+{
+	struct radiant_sample s = {
+		.source = source,
+		.field_id = 0x26u,
+		.field_type = RADIANT_FIELD_EVENT_COUNT,
+		.flags = RADIANT_SAMPLE_ACCUMULATING | RADIANT_SAMPLE_ROTATED,
+		.exp = 0,
+		.raw = raw,
+		.t_us = t_us,
+	};
+
+	radiant_bridge_post(&s);
+	radiant_bridge_drain();
+}
+
+/*
+ * A frozen strap still sending page 84 must never read as worn (review
+ * 2026-10-31, C1-2). The charge-cycles counter shared the WORN slot's
+ * prev_raw with the beat count, so every interleave (500, 3, 500) was a +497
+ * "advance" and WORN asserted after the dwell and never cleared.
+ */
+ZTEST(radiant_rules, test_a_common_page_counter_does_not_drive_worn)
+{
+	uint32_t src;
+	uint64_t t;
+	uint32_t step = 0u;
+
+	radiant_binding_bind(1u, 0x78u, 1u, NULL, &src);
+
+	for (t = 0u; t <= 10u * US_PER_S; t += 250000u) {
+		post_beats(src, 500, t);
+		if ((step++ % 4u) == 0u) {
+			post_cycles(src, 3, t);
+		}
+	}
+
+	zassert_is_null(last_with(RADIANT_RULE_FIELD_WORN),
+			"a frozen beat count must never assert worn - the page-84 "
+			"charge-cycles counter is driving the WORN slot");
+}
+
+/*
+ * HR 0 is the profile's "no reading" (profile_hr.h), posted during a skin-
+ * contact dropout for liveness's sake. It must not satisfy the < 82 bpm rest
+ * threshold (review 2026-10-31, C2-2): WORN holds for 20 s after the beats
+ * stop, so the dropout used to assert AT_REST after the 3 s zone dwell.
+ */
+ZTEST(radiant_rules, test_a_zero_heart_rate_is_not_at_rest)
+{
+	uint32_t src;
+	uint64_t t = 0u;
+
+	radiant_binding_bind(1u, 0x78u, 1u, NULL, &src);
+
+	post_beats(src, 0, t);
+	t += 1u * US_PER_S;
+	post_beats(src, 1, t);
+	t += 2u * US_PER_S;
+	post_beats(src, 2, t);
+	zassert_not_null(last_with(RADIANT_RULE_FIELD_WORN), "setup: not worn");
+
+	cap_n = 0u;
+	post_hr(src, 100, t);
+	post_hr(src, 0, t + 1u * US_PER_S);
+	post_hr(src, 0, t + 5u * US_PER_S);
+	zassert_is_null(last_with(RADIANT_RULE_FIELD_AT_REST),
+			"a strap reporting 'no reading' was declared at rest");
+}
+
 ZTEST(radiant_rules, test_zone_thresholds_are_82_and_134)
 {
 	uint32_t src;

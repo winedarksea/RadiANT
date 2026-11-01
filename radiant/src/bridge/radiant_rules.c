@@ -67,6 +67,11 @@
  * field_ids instead of publishing them. A general fix is a per-field-type slot
  * map; it is not needed until a second such producer exists, and it would cost
  * RADIANT_BINDING_MAX x N of this struct in bss.
+ *
+ * ONE SUCH PRODUCER DID EXIST, for the WORN slot: radiant_common_adapter.c's
+ * page-84 charge-cycles total (EVENT_COUNT + ACCUMULATING, field 0x26) on the
+ * same source as the beat count. The common page block is excluded from the
+ * activity rules outright - see is_common_block() - rather than given a slot.
  */
 #define ACTIVITY_SLOT_WORN   0u /* RADIANT_FIELD_EVENT_COUNT */
 #define ACTIVITY_SLOT_ACTIVE 1u /* every other accumulating field_type */
@@ -319,10 +324,16 @@ static void eval_zone(uint32_t source, const struct radiant_sample *s)
 	const struct activity_state *a =
 		&states[source].activity[ACTIVITY_SLOT_WORN];
 	bool               worn;
+	bool               reading;
 	bool               changed;
 
 	z->have_hr = true;
 	z->hr_bpm = (uint8_t)s->raw;
+	/* 0 is the profile's "no reading" (profile_hr.h), posted by the adapter
+	 * for liveness's sake. It satisfies neither threshold, so a contact
+	 * dropout clears both outputs after the dwell instead of asserting
+	 * AT_REST (review 2026-10-31, C2-2). */
+	reading = s->raw > 0 && s->raw <= (int64_t)UINT8_MAX;
 
 	/* "Both require the monitor to be worn" (section 6.2) - gated on the
 	 * same binding's WORN output (0x36-derived), not ACTIVE. Reading the
@@ -331,7 +342,7 @@ static void eval_zone(uint32_t source, const struct radiant_sample *s)
 	 * could overwrite between the two calls. */
 	worn = a->tracked && a->debounced;
 
-	changed = dwell_update(worn && z->hr_bpm < REST_THRESHOLD_BPM,
+	changed = dwell_update(worn && reading && z->hr_bpm < REST_THRESHOLD_BPM,
 			       &z->rest_edge_us, &z->rest_raw, &z->rest_debounced,
 			       s->t_us, ZONE_DWELL_US, ZONE_DWELL_US, !worn);
 	if (changed) {
@@ -339,7 +350,7 @@ static void eval_zone(uint32_t source, const struct radiant_sample *s)
 			       s->t_us);
 	}
 
-	changed = dwell_update(worn && z->hr_bpm >= ZONE2_THRESHOLD_BPM,
+	changed = dwell_update(worn && reading && z->hr_bpm >= ZONE2_THRESHOLD_BPM,
 			       &z->zone2_edge_us, &z->zone2_raw, &z->zone2_debounced,
 			       s->t_us, ZONE_DWELL_US, ZONE_DWELL_US, !worn);
 	if (changed) {
@@ -421,6 +432,19 @@ static void eval_equipment(uint32_t source, const struct radiant_sample *s)
 	}
 }
 
+/* Page-84 accumulators (radiant_common_adapter.c) live in the common field_id
+ * block and are not activity: the charge-cycles total is EVENT_COUNT +
+ * ACCUMULATING on the SAME source as the profile's beat/event count, and
+ * sharing a slot's prev_raw with it turns every interleave into a delta - a
+ * frozen strap still sending page 84 asserted WORN (review 2026-10-31, C1-2).
+ * So the "no second such producer exists" claim at the top of this file was
+ * false; this is the discriminator. */
+static bool is_common_block(uint8_t field_id)
+{
+	return field_id >= RADIANT_FIELD_ID_COMMON_BASE &&
+	       field_id <= RADIANT_FIELD_ID_COMMON_MAX;
+}
+
 static bool rules_want(const struct radiant_sample *s)
 {
 	if ((s->flags & RADIANT_SAMPLE_DERIVED) != 0u) {
@@ -441,8 +465,10 @@ static bool rules_want(const struct radiant_sample *s)
 	 * from the day the FE-C decoder landed and nothing read it, so a bound
 	 * treadmill published a speed and a state enum and asserted no
 	 * occupancy at all. See RADIANT_RULE_FIELD_EQUIPMENT_IN_USE. */
-	return (s->flags & RADIANT_SAMPLE_ACCUMULATING) != 0u ||
-	       s->field_type == RADIANT_FIELD_HEART_RATE ||
+	if ((s->flags & RADIANT_SAMPLE_ACCUMULATING) != 0u) {
+		return !is_common_block(s->field_id);
+	}
+	return s->field_type == RADIANT_FIELD_HEART_RATE ||
 	       (s->field_type == RADIANT_FIELD_ENUM_GENERIC &&
 		s->field_id == FEC_STATE_FIELD_ID);
 }
@@ -450,7 +476,11 @@ static bool rules_want(const struct radiant_sample *s)
 static void rules_publish(const struct radiant_sample *s)
 {
 	if ((s->flags & RADIANT_SAMPLE_ACCUMULATING) != 0u) {
-		eval_activity(s->source, s);
+		/* Repeated here for the reason the FE-state id test below is:
+		 * this module's own tests post without consulting want(). */
+		if (!is_common_block(s->field_id)) {
+			eval_activity(s->source, s);
+		}
 	} else if (s->field_type == RADIANT_FIELD_HEART_RATE) {
 		eval_zone(s->source, s);
 	} else if (s->field_type == RADIANT_FIELD_ENUM_GENERIC &&

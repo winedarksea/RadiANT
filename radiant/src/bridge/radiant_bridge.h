@@ -160,6 +160,15 @@ struct radiant_binding;
 #define RADIANT_BRIDGE_DIAG_SOURCE  UINT32_MAX
 #define RADIANT_BRIDGE_DIAG_FIELD_DROPPED 0u
 
+/*
+ * The bus ring's depth. 32: absorbs ~4 decode-to-drain periods for an
+ * 8-sensor deployment at ~4 Hz each producing up to 3 records (HR adapter
+ * worst case) - generous, and still well under a kilobyte. Not yet a Kconfig
+ * choice. Public so an application can assert a burst it produces fits
+ * (apps/dongle_thread's bridge_pump.c does, for the liveness STALE burst).
+ */
+#define RADIANT_BRIDGE_RING_CAP 32u
+
 /* ---------------------------------------------------------------------------
  * The bus. Ring buffer, drops oldest and counts drops (section 3.3).
  * post() is ISR-safe (bounded: lock, copy, index update, no blocking).

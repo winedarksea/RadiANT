@@ -104,6 +104,14 @@ public:
 		if (attributeId != chip::app::Clusters::BridgedDeviceBasicInformation::Attributes::NodeLabel::Id) {
 			return CHIP_ERROR_INVALID_ARGUMENT;
 		}
+		/* The vendored BridgeManager::HandleWrite() builds `size` by copying
+		 * one byte into an uninitialised size_t, and SetNodeLabel() memcpy()s
+		 * it unchecked into a kNodeLabelSize buffer. CHIP bounds the string;
+		 * nothing bounds the other bytes of that size_t, so bound it here
+		 * (bridge_manager.cpp is kept byte-identical to upstream). */
+		if (buffer == nullptr || size >= Nrf::MatterBridgedDevice::kNodeLabelSize) {
+			return CHIP_ERROR_INVALID_ARGUMENT;
+		}
 		return HandleWriteDeviceBasicInformation(clusterId, attributeId, buffer, size);
 	}
 

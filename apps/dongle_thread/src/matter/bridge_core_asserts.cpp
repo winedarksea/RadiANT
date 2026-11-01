@@ -62,6 +62,14 @@ static_assert(Nrf::BridgeManager::kMaxBridgedDevices == RADIANT_MATTER_MAX_ENDPO
 	      "This is the same trap as above seen from the core's side: BridgeManager would accept "
 	      "more (or fewer) bridged devices than radiant_matter.c will ever allocate endpoints for.");
 
+/* The fourth number. BridgeManager's kMaxDataProviders is
+ * CONFIG_BRIDGE_MAX_BRIDGED_DEVICES_NUMBER, and ant_bridge.cpp creates one data
+ * provider per endpoint, so a smaller value fails only at runtime. */
+static_assert(CONFIG_BRIDGE_MAX_BRIDGED_DEVICES_NUMBER >= RADIANT_MATTER_MAX_ENDPOINTS,
+	      "BridgeManager's kMaxDataProviders is CONFIG_BRIDGE_MAX_BRIDGED_DEVICES_NUMBER and "
+	      "ant_bridge.cpp creates one data provider per endpoint: endpoints past it fail at "
+	      "runtime with 'Maximum number of providers exceeded'.");
+
 /* Not a trap, a sanity floor. CONFIG_BRIDGE_AGGREGATOR_ENDPOINT_ID is 1
  * because default_zap/bridge.zap puts the Aggregator device type on endpoint 1;
  * the two are not connected by anything the compiler can see, and a mismatch
