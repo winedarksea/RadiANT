@@ -47,15 +47,16 @@ board, same HR sensor, same 30 s stall, only the firmware differing:
     pre-W6 (70128f8)   tx_timeout +0    tx_drops +88
     W6     (3136eaf)   tx_timeout +1    tx_drops  +0
 
-That is the fix working, not the test failing to reproduce: on the unfixed
-image the bridge thread parks and stops draining ant_tx_msgq, so the queue
-overflows and events are lost; on the fixed image the wait is abandoned after
-1 s and the queue never fills, so there is nothing to drop. Requiring
-tx_drops to climb therefore asserts the opposite of the intent unless it is
-read against its control. Run BOTH legs - `--negative-control` against a
-pre-W6 build, then the plain command against the fixed one - and read the
-pair together; the tx_drops check is left as-is deliberately rather than
-quietly relaxed.
+CORRECTED 2026-10-31: the "+0" on the W6 image was a firmware bug, not
+"nothing to drop". After the first 1 s timeout the controller still holds the
+frame the host never read, so every later write fails at once - and
+usb_transfer() reports that failure as a completion of size 0, which the
+legacy usb_ant_write() returned as success. Every event of the stall was lost
+and none was counted. usb_ant_write() now counts a short completion as
+ANT_HEALTH_TX_DROP and returns -EIO, so on a fixed image tx_drops climbs
+again, roughly by the events produced during the stall. The pre-W6 control is
+still worth running: there the drops come from the msgq overflowing behind a
+parked thread, and tx_timeout stays +0.
 
 Also load-bearing: simply not calling read() does NOT stop the host from
 draining bulk-IN, because libusb-win32 keeps its own buffer - a trickle of

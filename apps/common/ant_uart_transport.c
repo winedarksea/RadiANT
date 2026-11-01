@@ -28,6 +28,7 @@
 #include <zephyr/logging/log.h>
 
 #include "ant_transport.h"
+#include "ant_health.h"
 
 LOG_MODULE_REGISTER(ant_uart, LOG_LEVEL_INF);
 
@@ -285,7 +286,16 @@ int usb_ant_send_async(const uint8_t *buf, size_t len)
 	frame.len = (uint16_t)len;
 	memcpy(frame.data, buf, len);
 
-	return k_msgq_put(&ant_tx_msgq, &frame, K_NO_WAIT);
+	/* Same accounting as both USB transports, so 0xF6 reads alike on all. */
+	int rc = k_msgq_put(&ant_tx_msgq, &frame, K_NO_WAIT);
+
+	if (rc != 0) {
+		ant_health_note(ANT_HEALTH_TX_DROP);
+	} else {
+		ant_health_depth(ANT_HEALTH_DEPTH_TX,
+				 k_msgq_num_used_get(&ant_tx_msgq));
+	}
+	return rc;
 }
 
 void usb_ant_resume_rx(void)

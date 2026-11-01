@@ -20,8 +20,9 @@
 # radiant/tests/gate, apps/hrm_ble/tests/sim_sched and
 # apps/treadmill/tests/pages. Counted from the five testcase.yaml files:
 # radiant.unit, radiant.unit.sec_modes, radiant.unit.pairing, radiant.api,
-# radiant.api.sec, radiant.api.sec_host, radiant.gate, hrm_ble.sim_sched,
-# treadmill.pages.
+# radiant.api.sec, radiant.api.sec_host, radiant.api.crc_repair, radiant.gate,
+# hrm_ble.sim_sched, treadmill.pages. (radiant.api.crc_repair added 2026-10-31:
+# the first scenario that compiles the CRC-repair path at all.)
 #
 # The eighth is the heart-rate node's beat scheduler and the ninth is the
 # treadmill's state module and unit conversions. Both are reached only because
@@ -30,7 +31,7 @@
 # suites they cover are the ones that would have caught bugs that escaped
 # everything else (a strap notifying 67 times a minute while claiming 72; a
 # cadence reported in strides where a client expects steps).
-min_scenarios: 9
+min_scenarios: 10
 
 # Total ztest cases twister executes, summed over every scenario. This is a
 # SAFE floor rather than the observed total: it is the static count of
@@ -48,4 +49,7 @@ min_scenarios: 9
 # that turns out to include a suite twister does not reach fails for a reason
 # that has nothing to do with coverage. Raise it to the printed total when a
 # run reports one.
-min_testcases: 874
+# 2026-10-31 review batch 1: +5 cases in radiant/tests/api (four in every api
+# scenario, one only under radiant.api.crc_repair) - raised by the static +5,
+# keeping the same conservative margin.
+min_testcases: 879

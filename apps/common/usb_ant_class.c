@@ -453,10 +453,22 @@ static int usb_ant_write(const uint8_t *buf, size_t len)
 	ret = tx_done_size;
 	k_mutex_unlock(&tx_mutex);
 
-	/* The transferred size, exactly as usb_transfer_sync() returned it -
-	 * this is a shape-preserving replacement, not a new contract.
+	if (ret < 0) {
+		return ret;	/* -ESHUTDOWN from suspend/disconnect */
+	}
+	/* usb_transfer() reports a FAILED write as a completion of size 0,
+	 * not an error - e.g. usb_write() -EAGAIN because the controller still
+	 * holds a frame the host never read after an earlier timeout. Returning
+	 * that as a size made every frame of a host stall vanish uncounted
+	 * (bench_usb_stall.py: tx_drops +0), and returning a SUCCESSFUL size
+	 * made ant_tx_thread_fn() log "USB TX failed" for every frame sent.
+	 * 0 on success, like the next-stack and UART transports.
 	 */
-	return ret;
+	if (ret != (int)len) {
+		ant_health_note(ANT_HEALTH_TX_DROP);
+		return -EIO;
+	}
+	return 0;
 }
 
 static void ant_tx_thread_fn(void *p1, void *p2, void *p3)

@@ -62,3 +62,18 @@ tests:
     extra_configs:
       - CONFIG_RADIANT_SEC=y
       - CONFIG_RADIANT_SEC_HOST_MESSAGES=y
+
+  # The same application with CRC repair compiled in (default n everywhere
+  # else). The first api-level scenario that ever runs the repair path - added
+  # with the rule that a repaired frame is a broadcast only and never makes
+  # this node transmit (review 2026-10-31, A5-2).
+  radiant.api.crc_repair:
+    tags:
+      - radiant
+      - radiant_api
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_configs:
+      - CONFIG_RADIANT_CRC_REPAIR=y

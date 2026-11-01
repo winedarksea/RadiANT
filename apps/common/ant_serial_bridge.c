@@ -45,11 +45,15 @@ LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
 
 /* sdk-ant's Kconfig hangs this symbol off CONFIG_ANT, so on a radio-stub build
  * (CONFIG_ANT=n) it does not exist at all and the device-wide transmit power
- * fan-out below fails to compile. It only bounds a loop, and the stub reports
- * the same eight channels the real build allocates.
+ * fan-out below fails to compile. A core (radiant) build never defines it
+ * either, yet its 0x54 reply advertises 32 channels - so bound the per-channel
+ * tables and loops by the protocol's own ceiling, the five-bit channel field
+ * of a burst header. A backend allocating fewer answers the extra iterations
+ * with an error, which every loop below already ignores. The sdk_ant build
+ * defines the symbol (8) and is unchanged.
  */
 #ifndef CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED
-#define CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED 8
+#define CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED (ANTW_BURST_HEADER_CHANNEL_MASK + 1)
 #endif
 
 /* The transport - USB on either stack, or a bare UART - is declared in
@@ -562,6 +566,12 @@ static void handle_request(const uint8_t *body, uint8_t len)
 
 static uint8_t burst_block[ANTW_ADV_BURST_BLOCK_MAX];
 static K_SEM_DEFINE(burst_block_free, 1, 1);
+/* The channel holding burst_block, or -1: only that channel's transfer events
+ * may hand the block back. Any channel's TX_COMPLETED/FAILED used to free it,
+ * so an acked completion elsewhere let the next packet overwrite a block the
+ * engine was still sending.
+ */
+static atomic_t burst_block_owner = ATOMIC_INIT(-1);
 
 /* ── System reset ──────────────────────────────────────────────────────────── */
 
@@ -591,6 +601,7 @@ static void handle_system_reset(void)
 	 * TRANSFER_IN_PROGRESS until the board is power-cycled. Giving an
 	 * already-free slot is a no-op (limit 1).
 	 */
+	atomic_set(&burst_block_owner, -1);
 	k_sem_give(&burst_block_free);
 
 	/* Let the resulting channel-closed events land and be discarded before
@@ -644,10 +655,14 @@ static void handle_burst(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	}
 
 	memcpy(burst_block, &body[1], size);
+	/* Before antr_burst_tx() accepts, so it is in place ahead of any event
+	 * for this block. */
+	atomic_set(&burst_block_owner, ch);
 
 	antr_err_t err = antr_burst_tx(ch, size, burst_block, segment);
 
 	if (err) {
+		atomic_set(&burst_block_owner, -1);
 		k_sem_give(&burst_block_free);
 		send_response(ch, msg_id, err);
 	}
@@ -1236,6 +1251,15 @@ static void process_byte(uint8_t b)
 		break;
 
 	case S_LEN:
+		if (b == ANTW_SYNC_TX) {
+			/* 0xA4 can never be a LEN (> ANTW_MAX_SIZE_VALUE): the
+			 * SYNC just taken was a stray byte and this is the real
+			 * frame's start. Re-seed rather than swallow ~164 bytes
+			 * of the host's next commands. */
+			ant_health_note(ANT_HEALTH_HOST_DESYNC);
+			running_xor = b;
+			break;		/* stay in S_LEN */
+		}
 		msg_len = b;
 		running_xor ^= b;
 		body_idx = 0;
@@ -1394,7 +1418,10 @@ void antr_on_message(const struct antr_msg *msg)
 	    msg_data[1] == ANTW_MESG_EVENT_ID) {
 		switch (msg_data[2]) {
 		case ANTW_EVENT_TRANSFER_NEXT_DATA_BLOCK:
-			k_sem_give(&burst_block_free);
+			if (atomic_get(&burst_block_owner) ==
+			    (atomic_val_t)msg_data[0]) {
+				k_sem_give(&burst_block_free);
+			}
 			/* Internal flow control for the buffer handover above.
 			 * A real stick frames bursts itself and never puts this
 			 * on the wire, so neither do we.
@@ -1402,7 +1429,12 @@ void antr_on_message(const struct antr_msg *msg)
 			return;
 		case ANTW_EVENT_TRANSFER_TX_COMPLETED:
 		case ANTW_EVENT_TRANSFER_TX_FAILED:
-			k_sem_give(&burst_block_free);
+			/* Only the burst's own channel, and only once: an acked
+			 * completion elsewhere must not free a block in flight. */
+			if (atomic_cas(&burst_block_owner,
+				       (atomic_val_t)msg_data[0], -1)) {
+				k_sem_give(&burst_block_free);
+			}
 			break;
 		default:
 			break;

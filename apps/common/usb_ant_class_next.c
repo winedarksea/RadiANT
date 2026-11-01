@@ -90,6 +90,12 @@ static volatile bool rx_backpressured;
 static K_MUTEX_DEFINE(tx_mutex);
 static K_SEM_DEFINE(tx_done_sem, 0, 1);
 static volatile int tx_result;
+/* The IN buffer the current writer is waiting on, or NULL. Only its
+ * completion may end that wait: a buffer dequeued on a timeout, or left
+ * behind by a suspend, completes late and must not satisfy the NEXT writer
+ * (cf. tx_gen in usb_ant_class.c).
+ */
+static struct net_buf *volatile tx_inflight;
 
 /* ── Descriptors ───────────────────────────────────────────────────────────── */
 
@@ -292,9 +298,18 @@ static int ant_request(struct usbd_class_data *const c_data,
 	}
 
 	if (bi->ep == ant_ep_in(c_data)) {
+		/* Only the writer's own buffer may end its wait; a dequeued or
+		 * suspended one completing late is ignored. Compared before the
+		 * unref, so the pool cannot have handed this pointer to the next
+		 * writer yet. Safe unlocked: this runs on the cooperative USBD
+		 * thread.
+		 */
+		if (buf == tx_inflight) {
+			tx_inflight = NULL;
+			tx_result = err;
+			k_sem_give(&tx_done_sem);
+		}
 		net_buf_unref(buf);
-		tx_result = err;
-		k_sem_give(&tx_done_sem);
 		return 0;
 	}
 
@@ -413,10 +428,14 @@ static void ant_msg_cb(struct usbd_context *const ctx,
 		/* Release anyone blocked in usb_ant_send(): the completion
 		 * that would have woken them is not coming while suspended.
 		 */
+		tx_inflight = NULL;
 		tx_result = -ESHUTDOWN;
 		k_sem_give(&tx_done_sem);
 		break;
 	case USBD_MSG_RESET:
+		/* A bus reset needs a new SET_CONFIGURATION (.enable sets this
+		 * again); a RESUME before it must not re-arm a disabled ep. */
+		was_configured = false;
 		configured = false;
 		rx_armed = false;
 		rx_backpressured = false;
@@ -461,9 +480,11 @@ static int usb_ant_write(const uint8_t *buf, size_t len)
 	 */
 	k_sem_reset(&tx_done_sem);
 	tx_result = 0;
+	tx_inflight = nbuf;
 
 	ret = usbd_ep_enqueue(ant_c_data, nbuf);
 	if (ret) {
+		tx_inflight = NULL;
 		net_buf_unref(nbuf);
 		k_mutex_unlock(&tx_mutex);
 		return ret;
@@ -476,6 +497,7 @@ static int usb_ant_write(const uint8_t *buf, size_t len)
 		 */
 		LOG_WRN("USB TX timeout");
 		ant_health_note(ANT_HEALTH_TX_TIMEOUT);
+		tx_inflight = NULL;
 		(void)usbd_ep_dequeue(usbd_class_get_ctx(ant_c_data),
 				      ant_ep_in(ant_c_data));
 		k_mutex_unlock(&tx_mutex);

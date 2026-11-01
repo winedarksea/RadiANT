@@ -334,10 +334,11 @@ struct api_chan {
 
 	uint8_t crypto_mode;
 
-	/* On-air packets of the inbound transfer so far. Acknowledged data is
-	 * byte-for-byte a one-packet burst, so this is how the serial layer
-	 * tells them apart: one packet ending LAST is the former, anything
-	 * longer is the latter. */
+	/* The NEXT host-facing burst sequence number of the inbound transfer:
+	 * 0 = none in progress (the next packet is a first), 1-3 = mid-transfer.
+	 * Acknowledged data is byte-for-byte a one-packet burst, so this is how
+	 * the serial layer tells them apart: one packet ending LAST is the
+	 * former, anything longer is the latter. */
 	uint8_t in_pkts;
 
 	/*
@@ -886,7 +887,9 @@ static void api_xfer_rx_data(void *ctx, const uint8_t *payload, uint8_t len,
 		return;
 	}
 
-	seq = (uint8_t)(api_ch[ch].in_pkts & (uint8_t)ANTW_BURST_HEADER_SEQ_MASK);
+	/* 0 only on a transfer's first packet, then 1,2,3,1,2,3... - the rule
+	 * the bridge's own TX side (handle_burst) decodes. */
+	seq = api_ch[ch].in_pkts;
 
 	/* One packet ending LAST is acknowledged data; anything longer is a
 	 * burst - the air can't tell them apart (Spike B part 2), so the
@@ -897,7 +900,10 @@ static void api_xfer_rx_data(void *ctx, const uint8_t *payload, uint8_t len,
 		msg_id = (uint8_t)ANTW_MESG_BURST_DATA_ID;
 	}
 
-	api_ch[ch].in_pkts = last ? 0u : (uint8_t)(api_ch[ch].in_pkts + 1u);
+	/* Wraps 3 -> 1, never back to 0: a count would relabel packet 5 as a
+	 * new transfer, and a uint8_t count wraps to 0 at packet 257, which
+	 * labelled a LAST there as acknowledged data. */
+	api_ch[ch].in_pkts = last ? 0u : (uint8_t)((seq == 3u) ? 1u : (seq + 1u));
 	/* Abandoned-burst watchdog clock - covers the burst whose LAST never
 	 * arrives. See api_watchdogs_locked(). */
 	api_ch[ch].in_last = radiant_radio_now();
@@ -1811,6 +1817,18 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 		return false;
 	}
 
+	/* Repaired frames are broadcasts only. Acknowledged/burst data would be
+	 * ACKed on air - ending the sender's own failure report on a payload
+	 * that may be a mis-repair - and the sender learns of an un-ACKed packet
+	 * and can resend, so repair has nothing to recover there. Same rule as
+	 * the !crc_failed gate on api_ack_pending_send() below: a repaired frame
+	 * never makes this node transmit. */
+	if (crc_failed &&
+	    radiant_frame_msg_type(f.ctrl_byte) != RADIANT_MSG_BROADCAST) {
+		api_stats.crc_repair_refuted++;
+		return false;
+	}
+
 	/*
 	 * Second free refutation, one the codec can't make: byte 0 of a tracked
 	 * body is the transmission type, which the address match can't prove
@@ -2274,8 +2292,14 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 				   (why == RADIANT_SCHED_DONE_ABORTED) ||
 				   (why == RADIANT_SCHED_DONE_DENIED);
 
+			/* The channel state, not only search membership: the
+			 * pump syncs membership one pass late, and a channel the
+			 * tick has just closed must not get a search op re-bound
+			 * after on_terminal() below has raised CHANNEL_CLOSED. */
 			if (ran && !radiant_search_set_complete(&api_search) &&
-			    radiant_search_is_searching(&api_search, ch)) {
+			    radiant_search_is_searching(&api_search, ch) &&
+			    radiant_channel_state_get(ch) ==
+				    RADIANT_CH_STATE_SEARCHING) {
 				/* Re-bound below after the unconditional clear -
 				 * without slot_kind SEARCH the next armed()
 				 * wouldn't reach radiant_search_armed() and the
@@ -2639,7 +2663,7 @@ static void api_watchdogs_locked(radiant_time_t now)
 		 * acknowledged messages as burst data. */
 		if (c->in_pkts != 0u && c->in_last_valid &&
 		    (now - c->in_last) >= limit) {
-			LOG_DBG("ch=%u inbound transfer abandoned after %u pkts",
+			LOG_DBG("ch=%u inbound transfer abandoned at seq %u",
 				(unsigned)ch, (unsigned)c->in_pkts);
 			c->in_pkts = 0u;
 			c->in_last_valid = false;
@@ -3091,6 +3115,12 @@ antr_err_t antr_channel_unassign(uint8_t channel)
 	rc = radiant_channel_unassign(channel);
 	if (rc == RADIANT_CH_OK) {
 		(void)radiant_search_end(&api_search, channel);
+		if (api_search_slot == channel) {
+			/* Same carrier release as antr_channel_close(): the
+			 * cancel below is silent, so nothing else would. */
+			radiant_search_on_done(&api_search, false, false, 0u);
+			api_search_slot = RADIANT_SCHED_CH_NONE;
+		}
 		(void)radiant_sched_cancel(channel);
 		/* Backstop: the wipe below must not be a command's silent end. */
 		api_ack_pending_fail(channel);
@@ -3155,11 +3185,24 @@ antr_err_t antr_channel_close(uint8_t channel)
 		 * so no done() arrives; feeding the terminal here is what
 		 * raises ANTW_EVENT_CHANNEL_CLOSED exactly once. */
 		(void)radiant_sched_cancel(channel);
+		/* The same silence strands a transfer radiant_transfer_abort()
+		 * parked in ABORTING: its request was only queued, the global
+		 * abort above ended someone else's op (or nothing), and the
+		 * cancel just guaranteed no terminal will come. Finish it now so
+		 * its one TX_FAILED is posted inside this call - before the host
+		 * can unassign - instead of by the 500 ms watchdog. An armed
+		 * request already finished synchronously in the abort, so this
+		 * never double-reports (finish() resets to IDLE). */
+		if (radiant_transfer_state(&api_xfer[channel]) ==
+		    RADIANT_TRANSFER_STATE_ABORTING) {
+			api_feed_xfer_terminal(channel, RADIANT_RADIO_STATUS_ABORTED);
+		}
 		api_ch[channel].op = 0u;
 		api_ch[channel].slot_kind = (uint8_t)API_SLOT_NONE;
 		/* Per-channel state that must not outlive the channel: a
 		 * pending turnaround, a half-received burst, both watchdogs. */
 		api_ch[channel].turn_pending = false;
+		api_ch[channel].track_repost = false;
 		api_ch[channel].in_pkts = 0u;
 		api_ch[channel].in_last_valid = false;
 		api_ch[channel].xfer_stuck_valid = false;
@@ -3363,8 +3406,12 @@ antr_err_t antr_network_address_set(uint8_t network, const uint8_t *key)
 
 	/* The sweep's address is fixed at radiant_search_init(); re-initialising
 	 * would drop every channel already in the search. Hosts install keys
-	 * before opening channels, so this is normally free. */
-	if (network == 0u && radiant_search_n_searching(&api_search) == 0u) {
+	 * before opening channels, so this is normally free.
+	 * ...and no sweep chunk still in flight: re-initialising under a live
+	 * carrier orphans its continuous request in that channel's slot. Only
+	 * one key is ever accepted, so a deferred re-init loses nothing. */
+	if (network == 0u && radiant_search_n_searching(&api_search) == 0u &&
+	    api_search_slot == RADIANT_SCHED_CH_NONE) {
 		struct radiant_search_cfg scfg;
 
 		api_search_cfg_build(&scfg);

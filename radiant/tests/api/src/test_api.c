@@ -1572,6 +1572,193 @@ ZTEST(api, test_a_plain_wildcard_slave_still_acquires_and_tracks)
 }
 
 /*
+ * A search timeout landing between radiant_channel_tick() and the pump's
+ * radiant_search_end() must not strand the sweep carrier (review 2026-10-31,
+ * A4-1 / O1 SF-2). The tick parks the carrier in CLOSING; if its chunk ends
+ * before the pump has synced search membership, api_sched_done() used to see
+ * "still a member" and re-bind a search op on a channel on_terminal() had
+ * just closed. A host UNASSIGN then left api_search_slot naming a channel
+ * that no longer exists, and no channel was ever swept again.
+ *
+ * The race is reproduced deterministically from this thread: the tick is
+ * called directly, with no pump, then the chunk is run to its end.
+ */
+ZTEST(api, test_a_search_timeout_landing_mid_chunk_does_not_strand_the_sweep)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev_a;
+	radiant_time_t               deadline;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_lib_config_set((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(CH,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_search_timeout_set(CH, 1u));
+	/* The chunk must end MID-SET for the sweep to want to keep its slot:
+	 * a chunk that runs its whole dwell completes the set and drops it
+	 * legitimately. A denial credits no dwell and still counts as "ran",
+	 * which is the shape an arbitrated build produces hundreds of times a
+	 * sweep - and the one this test needs. */
+	fake_radio_force_terminal_repeat(RADIANT_RADIO_STATUS_DENIED, 1u);
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(CH));
+
+	w = armed_search_window();
+	zassert_true(radiant_sched_pending(CH), "setup: CH carries no scan chunk");
+
+	/* The tick's half of api_housekeep(), and nothing after it. */
+	deadline = radiant_channel_search_deadline(CH);
+	zassert_not_equal(RADIANT_TIME_NEVER, deadline,
+			  "setup: a 2.5 s search timeout produced no deadline");
+	zassert_equal(1u, radiant_channel_tick(deadline),
+		      "setup: the tick did not time the channel out");
+
+	/* The chunk ends (denied) while CH is CLOSING and still a member. */
+	fake_radio_advance_to(w->t_open + 1u);
+	zassert_true(w->terminated, "setup: the denied chunk did not end");
+	zassert_equal(RADIANT_RADIO_STATUS_DENIED, w->terminal_status,
+		      "setup: the chunk ended %d, not DENIED",
+		      (int)w->terminal_status);
+	drain();
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_CHANNEL_CLOSED),
+		      "setup: the timed-out channel did not close exactly once");
+
+	/* What Zwift does with a CHANNEL_CLOSED. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_unassign(CH));
+
+	/* A fresh wildcard slave on another channel must be swept. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(1u,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(1u, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(1u, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(1u, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(1u));
+
+	zassert_true(radiant_sched_pending(1u),
+		     "a new searching channel got no sweep window: the closed "
+		     "channel's carrier slot was stranded, so discovery has "
+		     "stopped for the rest of the session");
+
+	w = armed_search_window();
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u),
+		      "the swept channel did not acquire - state %d",
+		      (int)radiant_channel_state_get(1u));
+
+	(void)antr_channel_close(1u);
+	fake_radio_advance(1000u);
+	drain();
+	zassert_true(fake_radio_is_idle(), "radio not idle: %s",
+		     fake_radio_busy_reason());
+}
+
+/*
+ * SET_NETWORK_KEY(0) re-sent while the last carrier's chunk is still live
+ * (review 2026-10-31, A4b-1 / O1 SF-4). With no searchers left - the carrier's
+ * own channel has just acquired - the key install used to re-initialise the
+ * search and forget api_search_slot, orphaning the chunk's continuous request
+ * in the channel's scheduler slot. The pump then never posted the channel's
+ * tracked windows, and a sensor that had just acquired went silent.
+ */
+ZTEST(api, test_a_key_resent_while_the_last_carrier_chunk_runs_does_not_orphan_it)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev_a;
+	uint8_t                      frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t                      len;
+	radiant_time_t               t_frame;
+	uint32_t                     before;
+	uint32_t                     a0;
+	uint32_t                     q;
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_lib_config_set((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(CH,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(CH));
+
+	/* Acquire inside the chunk, and stop while the chunk is still live. */
+	w = armed_search_window();
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev_a);
+	t_frame = w->t_open + 1000u;
+	fake_radio_advance_to(t_frame + 1000u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "setup: the channel did not acquire inside the chunk");
+	zassert_false(w->terminated,
+		      "setup: the chunk ended with the acquisition, so no "
+		      "carrier is live for the key to orphan");
+
+	/* What a host re-sending its keys does, mid-chunk. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+
+	before = count_bcast_on(CH);
+	len = fake_radio_build_ant_frame(frame, dev_a, 0x0Bu, 5u, peer_payload);
+	(void)fake_radio_air_master(t_frame + PERIOD_US, PERIOD_US, 3u, frame,
+				    len);
+	a0 = fake_radio_arm_count();
+	run_virtual_us(3u * PERIOD_US + 10000u);
+
+	/*
+	 * THE SCHEDULE, NOT ONLY THE OUTCOME. With no searcher left nothing may
+	 * re-arm a scan chunk; before the fix the orphaned continuous request
+	 * did, from CH's own slot, at the end of the chunk. In this harness
+	 * fake_radio happens to refuse that re-arm (EINVAL), which retires the
+	 * request and lets tracking resume - so the broadcast count below
+	 * passes either way here, and only the attempted re-arm shows the
+	 * orphan. Whether real silicon refuses it too is not something this
+	 * suite can say.
+	 */
+	for (q = a0; q < fake_radio_arm_count(); q++) {
+		const struct fake_radio_arm *x = fake_radio_arm(q);
+
+		zassert_false(x != NULL && x->kind == FAKE_RADIO_ARM_RX &&
+			      x->n_filters >= 2u,
+			      "arm %u: a scan chunk (%u filters, rc %d) was "
+			      "re-armed after the key install with no channel "
+			      "searching - the carrier's continuous request was "
+			      "orphaned in CH's slot", (unsigned)q,
+			      (unsigned)x->n_filters, x->rc);
+	}
+
+	zassert_true(count_bcast_on(CH) >= before + 2u,
+		     "a channel that acquired just before a key install was "
+		     "never tracked: %u broadcasts in three periods",
+		     (unsigned int)(count_bcast_on(CH) - before));
+
+	end_of_test();
+}
+
+/*
  * A tracked channel owes its next window immediately, not one pump later -
  * the invariant a background scan lives or dies on. radiant_sched.c ends a
  * scan chunk at t_back(committed, lead), so if a tracked slave's next window
@@ -1903,6 +2090,156 @@ ZTEST(api, test_a_tracking_slave_reports_one_message_per_acknowledged_packet)
 
 	end_of_test();
 }
+
+/*
+ * An inbound burst is numbered for the host 0,1,2,3,1,2,3,... - 0 marks only
+ * the first packet (review 2026-10-31, A5-1 / O1 SF-8). The bridge's own TX
+ * side decodes seq 0 as "start of a transfer", and the code used to send the
+ * packet COUNT masked to two bits, so packet 5 read 0 again.
+ *
+ * One packet per tracked window: the host-facing sequence depends only on
+ * the order of rx_data() calls, not on the burst's on-air spacing.
+ */
+ZTEST(api, test_an_inbound_burst_numbers_packets_0_1_2_3_1_2_3)
+{
+	static const uint8_t want_seq[9] = { 0u, 1u, 2u, 3u, 1u, 2u, 3u, 1u, 2u };
+	uint16_t                     dev;
+	const struct fake_radio_arm *w;
+	uint8_t                      frame[AIR_LEN];
+	radiant_time_t               t_data;
+	uint32_t                     i;
+	uint32_t                     k = 0u;
+
+	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev);
+	run_housekeeping();
+
+	for (i = 0u; i < 9u; i++) {
+		uint8_t ctrl;
+
+		if (i == 8u) {
+			ctrl = RADIANT_CTRL_BURST_LAST_SEQ0;
+		} else {
+			ctrl = ((i & 1u) == 0u) ? RADIANT_CTRL_BURST_SEQ0
+						: RADIANT_CTRL_BURST_SEQ1;
+		}
+		if (fake_radio_is_idle()) {
+			run_housekeeping();
+		}
+		w = last_arm_of(FAKE_RADIO_ARM_RX);
+		zassert_not_null(w, "packet %u: no tracked window armed", i);
+		zassert_false(w->terminated,
+			      "packet %u: the tracked window had already ended", i);
+
+		t_data = w->t_open + ((w->t_close - w->t_open) / 2u);
+		(void)build_peer_frame_for(frame, dev, ctrl, peer_payload);
+		zassert_equal(RADIANT_RADIO_OK_RC,
+			      fake_radio_air_frame(t_data, frame, AIR_LEN));
+		fake_radio_advance_to(t_data + RADIANT_TRANSFER_REPLY_US + 1000u);
+		drain();
+	}
+
+	zassert_equal(9u, count_msgs((uint8_t)ANTW_MESG_BURST_DATA_ID),
+		      "expected nine burst-data messages, got %u",
+		      (unsigned)count_msgs((uint8_t)ANTW_MESG_BURST_DATA_ID));
+	for (i = 0u; i < n_msg && i < MSGLOG_MAX; i++) {
+		uint8_t b0;
+
+		if (msglog[i].id != (uint8_t)ANTW_MESG_BURST_DATA_ID) {
+			continue;
+		}
+		b0 = msglog[i].data[0];
+		zassert_equal(want_seq[k],
+			      (uint8_t)((b0 >> ANTW_BURST_HEADER_SEQ_SHIFT) &
+					ANTW_BURST_HEADER_SEQ_MASK),
+			      "packet %u carried seq %u, want %u", k,
+			      (unsigned)((b0 >> ANTW_BURST_HEADER_SEQ_SHIFT) &
+					 ANTW_BURST_HEADER_SEQ_MASK),
+			      (unsigned)want_seq[k]);
+		zassert_equal(k == 8u, (b0 & ANTW_BURST_HEADER_LAST) != 0u,
+			      "packet %u: LAST flag wrong", k);
+		zassert_equal(CH, b0 & ANTW_BURST_HEADER_CHANNEL_MASK);
+		k++;
+	}
+	zassert_equal(9u, k);
+
+	end_of_test();
+}
+
+#if defined(CONFIG_RADIANT_CRC_REPAIR)
+/* One tracked-window frame of `ctrl`, one payload bit off the CRC it carries,
+ * so the repair path recovers it. Returns once the window has ended. */
+static void air_one_bit_off(uint16_t dev, uint8_t ctrl)
+{
+	const struct fake_radio_arm *w;
+	struct fake_radio_air        a;
+	uint16_t                     crc;
+
+	if (fake_radio_is_idle()) {
+		run_housekeeping();
+	}
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(w, "setup: no tracked window armed");
+	zassert_false(w->terminated, "setup: the tracked window had already ended");
+
+	fake_radio_air_init(&a);
+	a.t_sync = w->t_open + ((w->t_close - w->t_open) / 2u);
+	a.len = build_peer_frame_for(a.bytes, dev, ctrl, peer_payload);
+	crc = radiant_crc16(RADIANT_CRC_INIT, a.bytes, a.len);
+	a.bytes[9] ^= 0x01u;            /* payload byte d2, bit 0 */
+	a.crc_bad = true;
+	a.crc_rx_set = true;
+	a.crc_rx = crc;
+	zassert_ok(fake_radio_air_add(&a));
+
+	fake_radio_advance_to(a.t_sync + RADIANT_TRANSFER_REPLY_US + 1000u);
+	drain();
+}
+
+/*
+ * A CRC-repaired frame is never acknowledged on air nor delivered as
+ * acknowledged data (review 2026-10-31, A5-2 / O2 SF-3). An ACK ends the
+ * sender's own failure report on a payload that may be a mis-repair; the
+ * sender of an un-ACKed packet learns of it and can resend, so repair has
+ * nothing to recover there. The broadcast control proves the repair path is
+ * live in this image at all.
+ */
+ZTEST(api, test_a_repaired_acknowledged_frame_is_neither_acked_nor_delivered)
+{
+	const struct radiant_api_stats *s = radiant_api_stats_get();
+	uint8_t  reply = radiant_transfer_reply_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0);
+	uint16_t dev;
+	uint32_t repaired;
+	uint32_t refuted;
+	uint32_t replies;
+
+	open_and_acquire_slave_of_type((uint8_t)ANTW_CHANNEL_TYPE_SLAVE, &dev);
+	run_housekeeping();
+
+	/* Control: a broadcast one bit off is repaired. */
+	repaired = s->crc_repaired;
+	air_one_bit_off(dev, RADIANT_CTRL_BROADCAST);
+	zassert_equal(repaired + 1u, s->crc_repaired,
+		      "control: the repair path is not live in this image "
+		      "(repaired %u -> %u, refuted %u, unrepairable %u)",
+		      (unsigned)repaired, (unsigned)s->crc_repaired,
+		      (unsigned)s->crc_repair_refuted,
+		      (unsigned)s->crc_unrepairable);
+
+	/* The subject: acknowledged data one bit off. */
+	refuted = s->crc_repair_refuted;
+	replies = count_tx_with_ctrl(reply);
+	air_one_bit_off(dev, RADIANT_CTRL_BURST_LAST_SEQ0);
+
+	zassert_equal(replies, count_tx_with_ctrl(reply),
+		      "a repaired acknowledged frame was ACKed on air");
+	zassert_equal(0u, count_msgs((uint8_t)ANTW_MESG_ACKNOWLEDGED_DATA_ID),
+		      "a repaired acknowledged frame reached the host");
+	zassert_equal(refuted + 1u, s->crc_repair_refuted,
+		      "the refusal was not counted");
+
+	end_of_test();
+}
+#endif /* CONFIG_RADIANT_CRC_REPAIR */
 
 /*
  * Kill the window the channel currently has pending and return with its
@@ -2949,6 +3286,60 @@ ZTEST(api, test_fec_pending_close_fails_once_and_reset_discards_pending)
 	drain();
 	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
 	zassert_true(fake_radio_is_idle());
+}
+
+/*
+ * Close with the engine's transmit only QUEUED, never armed (review
+ * 2026-10-31, A12-2/A16-3, O2 SF-1). radiant_transfer_abort() parks the
+ * engine in ABORTING and relies on the cancelled op's terminal - but nothing
+ * of ours was armed, and radiant_sched_cancel() is silent. The TX_FAILED used
+ * to come from the 500 ms watchdog, after CHANNEL_CLOSED and counted as a
+ * fault - or never, if the host unassigned first.
+ */
+ZTEST(api, test_fec_close_with_a_queued_transfer_fails_it_once_without_the_watchdog)
+{
+	uint16_t number = fec_acquire(0u, false);
+	uint32_t wd = radiant_api_stats_get()->xfer_watchdogs;
+	const struct fake_radio_arm *w = last_arm_of(FAKE_RADIO_ARM_RX);
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	radiant_time_t sync;
+	uint8_t n;
+
+	zassert_not_null(w, "setup: no tracked window armed");
+	sync = w->t_open + (w->t_close - w->t_open) / 2u;
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+
+	/* The master's frame opens the slot; the engine's transmit arm is then
+	 * refused, so its request stays queued in the scheduler. */
+	n = fake_radio_build_ant_frame(frame, number, 0x11u, 5u, peer_payload);
+	zassert_ok(fake_radio_air_frame(sync, frame, n));
+	fake_radio_force_arm_repeat(RADIANT_RADIO_EBUSY, 1000u);
+	fake_radio_advance_to(sync + 500u);
+	zassert_equal(0u, count_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0),
+		      "setup: the engine's transmit was armed after all");
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED),
+		      "setup: the transfer finished before the close");
+
+	zassert_ok(antr_channel_close(CH));
+	drain();
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED),
+		      "a close with a queued transfer gave it no outcome inside "
+		      "the close - the host can unassign before the watchdog");
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_CHANNEL_CLOSED));
+	zassert_equal(wd, radiant_api_stats_get()->xfer_watchdogs,
+		      "the transfer was finished by the watchdog, not the close");
+
+	fake_radio_force_arm_repeat(RADIANT_RADIO_OK_RC, 0u);
+	fake_radio_advance(1000000u);
+	run_housekeeping();
+	drain();
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED),
+		      "the transfer was reported twice");
+	zassert_equal(wd, radiant_api_stats_get()->xfer_watchdogs);
+
+	zassert_ok(antr_channel_unassign(CH));
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+	end_of_test();
 }
 
 ZTEST(api, test_fec_pending_without_an_opener_expires_once)
