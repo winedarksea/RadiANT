@@ -318,23 +318,25 @@ int radiant_sec_x25519(uint8_t *out, const uint8_t *scalar, const uint8_t *point
 	fe_pack(out, x2);
 
 	/* Wipe the clamped scalar and every intermediate: the ladder's working
-	 * state is as sensitive as the scalar itself. */
-	memset(k, 0, sizeof(k));
-	memset(x1, 0, sizeof(x1));
-	memset(x2, 0, sizeof(x2));
-	memset(z2, 0, sizeof(z2));
-	memset(x3, 0, sizeof(x3));
-	memset(z3, 0, sizeof(z3));
-	memset(a, 0, sizeof(a));
-	memset(aa, 0, sizeof(aa));
-	memset(b, 0, sizeof(b));
-	memset(bb, 0, sizeof(bb));
-	memset(e, 0, sizeof(e));
-	memset(c, 0, sizeof(c));
-	memset(d, 0, sizeof(d));
-	memset(da, 0, sizeof(da));
-	memset(cb, 0, sizeof(cb));
-	memset(t, 0, sizeof(t));
+	 * state is as sensitive as the scalar itself. radiant_sec_wipe(), not
+	 * memset(): these are dead locals, and a plain memset() on a dead
+	 * local is a store GCC deletes at -Os. */
+	radiant_sec_wipe(k, sizeof(k));
+	radiant_sec_wipe(x1, sizeof(x1));
+	radiant_sec_wipe(x2, sizeof(x2));
+	radiant_sec_wipe(z2, sizeof(z2));
+	radiant_sec_wipe(x3, sizeof(x3));
+	radiant_sec_wipe(z3, sizeof(z3));
+	radiant_sec_wipe(a, sizeof(a));
+	radiant_sec_wipe(aa, sizeof(aa));
+	radiant_sec_wipe(b, sizeof(b));
+	radiant_sec_wipe(bb, sizeof(bb));
+	radiant_sec_wipe(e, sizeof(e));
+	radiant_sec_wipe(c, sizeof(c));
+	radiant_sec_wipe(d, sizeof(d));
+	radiant_sec_wipe(da, sizeof(da));
+	radiant_sec_wipe(cb, sizeof(cb));
+	radiant_sec_wipe(t, sizeof(t));
 
 	return RADIANT_SEC_OK;
 }

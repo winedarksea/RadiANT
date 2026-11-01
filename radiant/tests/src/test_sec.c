@@ -589,6 +589,97 @@ static void tx_air(uint32_t index, uint8_t air[8])
 		      radiant_sec_tx_transform(TX_CH, air, 8u));
 }
 
+/*
+ * D1-6(a), review 2026-10-31: a counter wrap with no epoch headroom left must
+ * stop secured TX, not carry on reusing (epoch, devnum, counter) nonces - a
+ * two-time pad under X_CONF. A host epoch at the limit gets exactly one wrap.
+ */
+ZTEST(radiant_sec, test_a_wrap_with_no_epoch_left_stops_tx_instead_of_reusing_a_counter)
+{
+	uint8_t  pay[8];
+	uint32_t i;
+	int      rc = RADIANT_SEC_OK;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_CONF, 2u);
+	zassert_ok(radiant_sec_set_epoch(TX_CH,
+					 0xFFFFFFFFu - RADIANT_SEC_EPOCH_HEADROOM,
+					 0u, TEST_PERIOD));
+	/* Wrap 1 advances into the headroom; wrap 2 has nowhere to go. */
+	for (i = 0; i < 2u * 65536u && rc == RADIANT_SEC_OK; i++) {
+		memcpy(pay, conf_plain, 8u);
+		rc = radiant_sec_tx_transform(TX_CH, pay, 8u);
+	}
+	zassert_ok(rc, "a transform failed before the second wrap (i=%u)", i);
+	memcpy(pay, conf_plain, 8u);
+	zassert_not_equal(RADIANT_SEC_OK, radiant_sec_tx_transform(TX_CH, pay, 8u),
+			  "TX continued with counter 0 under an epoch already used");
+}
+
+/*
+ * A6-1, review 2026-10-31: ciphertext queued for the pump belongs to the
+ * context it was ingested under. Released and re-keyed for a different sensor
+ * before the event thread ran, the channel must not judge it under the new key.
+ */
+ZTEST(radiant_sec, test_release_drops_ciphertext_still_queued_for_the_pump)
+{
+	static const uint8_t other[16] = { 0xdeu, 0xadu, 0xbeu, 0xefu };
+	uint8_t pay[8] = { TEST_PAGE, 0, 1, 2, 3, 4, 5, 6 };
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, 2u);
+	epoch_both(41u);
+	zassert_equal(RADIANT_SEC_RX_DEFER,
+		      radiant_sec_rx_ingest(RX_CH, pay, 8u, true, sec_anchor));
+
+	radiant_sec_channel_release(RX_CH);
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_set_key(RX_CH, other, 128, TEST_DEVNUM));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_configure(RX_CH, RADIANT_SEC_SW_AUTH, 2u,
+					    RADIANT_SEC_PAGE_LO_DEFAULT,
+					    RADIANT_SEC_PAGE_HI_DEFAULT));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_set_epoch(RX_CH, 1u, 0u, TEST_PERIOD));
+
+	radiant_sec_pump();
+	zassert_equal(0u, log_n_pkt,
+		      "a frame queued for the released context was judged "
+		      "under the next one");
+}
+
+/* D1-4: the constant-time compare is still an equality. Constant time itself
+ * is not unit-testable; the sec suites staying green is the real guard. */
+ZTEST(radiant_sec, test_ct_equal_is_equality)
+{
+	uint8_t a[16];
+	uint8_t b[16];
+
+	memset(a, 0x5A, sizeof(a));
+	memcpy(b, a, sizeof(b));
+	zassert_true(radiant_sec_ct_equal(a, b, sizeof(a)), NULL);
+	zassert_true(radiant_sec_ct_equal(a, b, 0u), "n = 0 is equal");
+	b[0] ^= 0x01u;
+	zassert_false(radiant_sec_ct_equal(a, b, sizeof(a)), "byte 0 differs");
+	b[0] ^= 0x01u;
+	b[15] ^= 0x80u;
+	zassert_false(radiant_sec_ct_equal(a, b, sizeof(a)), "byte 15 differs");
+}
+
+/* D1-6(b): a failed key import must not leave an allocated, keyless context
+ * behind - configure on it then answered OK where ENOKEY is owed. */
+ZTEST(radiant_sec, test_a_failed_import_leaves_no_keyless_context)
+{
+	zassert_not_equal(RADIANT_SEC_OK,
+			  radiant_sec_set_key(RX_CH, test_root, 64, TEST_DEVNUM),
+			  "setup: a 64-bit key was accepted");
+	zassert_equal(RADIANT_SEC_ENOKEY,
+		      radiant_sec_configure(RX_CH, RADIANT_SEC_SW_AUTH, 2u,
+					    RADIANT_SEC_PAGE_LO_DEFAULT,
+					    RADIANT_SEC_PAGE_HI_DEFAULT),
+		      "a failed import left a context that accepts configure");
+}
+
 ZTEST(radiant_sec, test_confidentiality_hides_five_bytes_and_gives_them_back)
 {
 	uint8_t air[8];

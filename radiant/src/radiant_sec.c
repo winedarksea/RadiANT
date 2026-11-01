@@ -80,6 +80,8 @@ struct sec_ctx {
 	 * packet across the NEXT window. See the header comment on the lag. */
 	uint8_t  tx_prev_tag[RADIANT_SEC_W_MAX];
 	bool     tx_prev_valid;
+	/* Epoch exhausted at a wrap: no further secured TX until a new epoch. */
+	bool     tx_spent;
 
 	/* ── RX ── */
 	bool     rx_win_open;
@@ -299,6 +301,7 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 	struct sec_ctx *c;
 	uint8_t         i;
 	int             rc;
+	bool            fresh = false;
 
 	sec_map_init();
 	if (ch >= RADIANT_CHANNEL_COUNT || root == NULL) {
@@ -307,6 +310,7 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 
 	c = ctx_of(ch);
 	if (c == NULL) {
+		fresh = true;
 		/* Allocation is the first SET_KEY and nothing else - a build
 		 * that never keys a channel never touches this table. */
 		for (i = 0u; i < SEC_MAX_CH; i++) {
@@ -329,6 +333,14 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 
 	rc = radiant_sec_key_import(&c->k_root, root, bits);
 	if (rc != RADIANT_SEC_OK) {
+		if (fresh) {
+			/* Undo the allocation: a keyless slot left behind
+			 * accepted configure/set_epoch where ENOKEY is owed,
+			 * and held a context forever (review 2026-10-31,
+			 * D1-6(b)). */
+			memset(c, 0, sizeof(*c));
+			sec_of[ch] = 0xFFu;
+		}
 		return rc;
 	}
 	c->base_devnum = base_devnum;
@@ -433,6 +445,7 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 
 	/* Everything in flight belonged to the old epoch. */
 	c->tx_ctr = 0u;
+	c->tx_spent = false;
 	c->tx_win_open = false;
 	c->tx_prev_valid = false;
 	c->rx_win_open = false;
@@ -509,6 +522,28 @@ void radiant_sec_channel_release(uint8_t ch)
 	if (c == NULL) {
 		return;
 	}
+
+	{
+		k_spinlock_key_t key = k_spin_lock(&sec_q_lock);
+		uint16_t         i;
+		uint16_t         n = 0u;
+
+		/* Queued ciphertext belongs to the context being released; left
+		 * here it is judged under whatever key this channel number gets
+		 * next (review 2026-10-31, A6-1). */
+		for (i = 0u; i < sec_q_count; i++) {
+			struct sec_pkt *p =
+				&sec_q[(sec_q_head + i) % SEC_QUEUE_DEPTH];
+
+			if (p->ch != ch) {
+				sec_q[(sec_q_head + n) % SEC_QUEUE_DEPTH] = *p;
+				n++;
+			}
+		}
+		sec_q_count = n;
+		k_spin_unlock(&sec_q_lock, key);
+	}
+
 	radiant_sec_key_destroy(&c->k_root);
 	radiant_sec_key_destroy(&c->k_enc);
 	radiant_sec_key_destroy(&c->k_auth);
@@ -529,8 +564,14 @@ void radiant_sec_reset(void)
 	memset(sec, 0, sizeof(sec));
 	memset(sec_of, 0xFF, sizeof(sec_of));
 
-	sec_q_head = 0u;
-	sec_q_count = 0u;
+	{
+		/* The ISR end of the queue may be mid-ingest. */
+		k_spinlock_key_t key = k_spin_lock(&sec_q_lock);
+
+		sec_q_head = 0u;
+		sec_q_count = 0u;
+		k_spin_unlock(&sec_q_lock, key);
+	}
 }
 
 enum radiant_sec_verdict radiant_sec_last_verdict(uint8_t ch)
@@ -635,7 +676,7 @@ static void tx_absorb(struct sec_ctx *c, const uint8_t *pay, uint16_t counter)
 			c->tx_prev_valid = true;
 		}
 		c->tx_win_open = false;
-		memset(tag, 0, sizeof(tag));
+		radiant_sec_wipe(tag, sizeof(tag));
 	}
 }
 
@@ -653,6 +694,13 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len)
 		/* The descriptor and the common pages travel in the clear, and
 		 * the range is what makes that mechanical. */
 		return RADIANT_SEC_OK;
+	}
+	if (c->tx_spent) {
+		/* The last wrap found no epoch to advance into: every packet
+		 * from here would reuse an (epoch, devnum, counter) nonce. The
+		 * caller withholds TX on a non-OK return. A new epoch clears
+		 * this (radiant_sec_set_epoch). */
+		return RADIANT_SEC_EINVAL;
 	}
 
 	counter = c->tx_ctr;
@@ -691,8 +739,13 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len)
 	if (c->tx_ctr == 0u) {
 		/* The wrap. Advancing the epoch here stops the counter
 		 * repeating under one (epoch, devnum); the receiver derives
-		 * the same advance from time. */
-		(void)advance_epoch(c, 1u);
+		 * the same advance from time. If it cannot advance (no
+		 * headroom left), nothing secured goes out again until a new
+		 * epoch is installed - it used to carry on and reuse the
+		 * keystream (review 2026-10-31, D1-6(a)). */
+		if (advance_epoch(c, 1u) != RADIANT_SEC_OK) {
+			c->tx_spent = true;
+		}
 		c->tx_prev_valid = false;
 		c->tx_win_open = false;
 	}
@@ -789,7 +842,7 @@ static void rx_close_window(struct sec_ctx *c)
 
 	if (c->rx_prev_seen) {
 		if (c->rx_prev_valid && tag_full &&
-		    memcmp(c->rx_prev_tag, c->rx_tag, c->w) == 0) {
+		    radiant_sec_ct_equal(c->rx_prev_tag, c->rx_tag, c->w)) {
 			verdict = RADIANT_SEC_VERDICT_VERIFIED;
 			stat_bump(&c->stats.windows_verified);
 		} else {
@@ -820,7 +873,7 @@ static void rx_close_window(struct sec_ctx *c)
 	c->rx_prev_seen = true;
 	c->rx_prev_start = c->rx_win_start;
 
-	memset(own, 0, sizeof(own));
+	radiant_sec_wipe(own, sizeof(own));
 	c->rx_win_open = false;
 }
 

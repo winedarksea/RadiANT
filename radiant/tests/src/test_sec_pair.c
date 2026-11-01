@@ -337,4 +337,38 @@ ZTEST(sec_pair, test_the_fingerprint_is_readable_only_after_an_exchange)
 	zassert_equal(fp, read_back);
 }
 
+/*
+ * One scalar, one exchange (review 2026-10-31, D1-2). The scalar is wiped
+ * after a successful exchange, and an all-zero scalar clamps to the public
+ * constant 2^254 - so a host retrying EXCHANGE (a lost USB reply, say) used to
+ * install a root key anyone who saw peer_pub could compute.
+ */
+ZTEST(sec_pair, test_an_exchange_spends_the_scalar)
+{
+	uint8_t  pub_a[32];
+	uint8_t  pub_b[32];
+	uint32_t fp = 0u;
+
+	give_id(A_CH, A_DEVNUM);
+	give_id(B_CH, B_DEVNUM);
+	zassert_ok(radiant_sec_pair_enter(A_CH, 60u));
+	zassert_ok(radiant_sec_pair_enter(B_CH, 60u));
+	zassert_ok(radiant_sec_pair_set_scalar(A_CH, scalar_a));
+	zassert_ok(radiant_sec_pair_set_scalar(B_CH, scalar_b));
+	zassert_ok(radiant_sec_pair_local_pubkey(A_CH, pub_a));
+	zassert_ok(radiant_sec_pair_local_pubkey(B_CH, pub_b));
+	zassert_ok(radiant_sec_pair_peer(A_CH, pub_b, &fp));
+	zassert_ok(radiant_sec_configure(A_CH, RADIANT_SEC_SW_AUTH, 2u,
+					 RADIANT_SEC_PAGE_LO_DEFAULT,
+					 RADIANT_SEC_PAGE_HI_DEFAULT));
+	zassert_ok(radiant_sec_set_epoch(A_CH, 1u, 0u, 8182u));
+	zassert_true(radiant_sec_channel_is_secured(A_CH));
+
+	/* A host retry of EXCHANGE with the same peer key. */
+	zassert_equal(RADIANT_SEC_EINVAL, radiant_sec_pair_peer(A_CH, pub_b, &fp),
+		      "a second exchange ran on the wiped scalar");
+	zassert_true(radiant_sec_channel_is_secured(A_CH),
+		     "the paired key was replaced");
+}
+
 #endif /* CONFIG_RADIANT_SEC_PAIRING_X25519 */

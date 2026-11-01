@@ -150,6 +150,33 @@ struct radiant_sec_caps {
 
 const struct radiant_sec_caps *radiant_sec_caps(void);
 
+/* Tag comparison with no early exit: the time taken says nothing about where
+ * the first differing byte is. Every MAC check uses this, never memcmp()
+ * (review 2026-10-31, D1-4). Static inline and outside CONFIG_RADIANT_SEC, so
+ * a disabled build gains no symbol. */
+static inline bool radiant_sec_ct_equal(const uint8_t *a, const uint8_t *b,
+					size_t n)
+{
+	uint8_t acc = 0u;
+	size_t  i;
+
+	for (i = 0u; i < n; i++) {
+		acc |= (uint8_t)(a[i] ^ b[i]);
+	}
+	return acc == 0u;
+}
+
+/* A wipe the optimiser may not delete: plain memset() on a local that is never
+ * read again is a dead store GCC removes at -Os (review 2026-10-31, D1-5). */
+static inline void radiant_sec_wipe(void *p, size_t n)
+{
+	volatile uint8_t *v = (volatile uint8_t *)p;
+
+	while (n-- != 0u) {
+		*v++ = 0u;
+	}
+}
+
 /*
  * ── Entropy, optional and never assumed ────────────────────────────────────
  * `len` cryptographically strong random bytes, or RADIANT_SEC_ENOTSUP when

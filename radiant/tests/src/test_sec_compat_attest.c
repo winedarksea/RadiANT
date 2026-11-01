@@ -480,6 +480,33 @@ ZTEST(sec_compat_stream, test_an_n8_window_verifies)
 				      RADIANT_SEC_VERDICT_VERIFIED), NULL);
 }
 
+/*
+ * A Tier-II-only pinned receiver must notice the tags stopping (review
+ * 2026-10-31, D2-2). Its verdict was the last window's, with no time bound -
+ * so stripping the tag pages after one good window left the stream VERIFIED
+ * forever, which is exactly the downgrade the pin exists to catch.
+ */
+ZTEST(sec_compat_stream, test_a_tier2_only_pin_expires_when_tags_stop)
+{
+	uint32_t i;
+
+	setup_pair(RADIANT_SEC_COMPAT_SW_TIER_II,
+		   RADIANT_SEC_COMPAT_SW_TIER_II | RADIANT_SEC_COMPAT_SW_PIN,
+		   61u, 61u);
+	for (i = 0u; i < TEST_N; i++) {          /* one window, tag at slot 7 */
+		(void)slot_at(i, true);
+	}
+	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
+		      radiant_sec_compat_stream_verdict(RX_CH, t_of(TEST_N)),
+		      "setup: the one window did not verify");
+	/* Nothing more arrives: two windows' worth of silence unpins it. */
+	zassert_equal(RADIANT_SEC_VERDICT_UNVERIFIED,
+		      radiant_sec_compat_stream_verdict(
+			      RX_CH, t_of(TEST_N - 1u +
+					  RADIANT_SEC_COMPAT_STALE_INTERVALS * TEST_N)),
+		      "a Tier-II-only pin stayed VERIFIED with no tag pages");
+}
+
 ZTEST(sec_compat_stream, test_a_flipped_bit_lands_once_at_the_attestation_page)
 {
 	uint32_t before_close;

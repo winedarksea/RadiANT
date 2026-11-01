@@ -163,7 +163,7 @@ static int pair_derive(const uint8_t *shared, const uint8_t *pub_a,
 	}
 
 	rc = radiant_sec_key_import(&prk_key, prk, 128u);
-	memset(prk, 0, sizeof(prk));
+	radiant_sec_wipe(prk, sizeof(prk));
 	if (rc != RADIANT_SEC_OK) {
 		return rc;
 	}
@@ -222,7 +222,7 @@ static int pair_derive(const uint8_t *shared, const uint8_t *pub_a,
 	*fp_out = (((uint32_t)tag[0] << 24) | ((uint32_t)tag[1] << 16) |
 		   ((uint32_t)tag[2] << 8) | (uint32_t)tag[3]) % 1000000u;
 
-	memset(tag, 0, sizeof(tag));
+	radiant_sec_wipe(tag, sizeof(tag));
 	return RADIANT_SEC_OK;
 }
 
@@ -329,7 +329,12 @@ int radiant_sec_pair_peer(uint8_t ch, const uint8_t *peer_pub,
 	if (c == NULL || peer_pub == NULL) {
 		return RADIANT_SEC_EINVAL;
 	}
-	if (!c->open || !c->have_local) {
+	/* One scalar, one exchange: the scalar is wiped after a successful
+	 * exchange, and an all-zero scalar clamps to a public constant, so a
+	 * second exchange (a host retrying after a lost reply) would install
+	 * a root key any observer of peer_pub can compute (review 2026-10-31,
+	 * D1-2). */
+	if (!c->open || !c->have_local || !c->have_scalar) {
 		return RADIANT_SEC_EINVAL;
 	}
 	if (pair_expired(c, k_uptime_get_32())) {
@@ -387,8 +392,8 @@ int radiant_sec_pair_peer(uint8_t ch, const uint8_t *peer_pub,
 	c->have_scalar = false;
 
 out:
-	memset(shared, 0, sizeof(shared));
-	memset(root, 0, sizeof(root));
+	radiant_sec_wipe(shared, sizeof(shared));
+	radiant_sec_wipe(root, sizeof(root));
 	return rc;
 }
 

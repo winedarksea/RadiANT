@@ -354,7 +354,7 @@ int radiant_sec_ctr_xor(const struct radiant_sec_key *k, const uint8_t iv[16],
 		}
 	}
 
-	memset(stream, 0, sizeof(stream));
+	radiant_sec_wipe(stream, sizeof(stream));
 	return RADIANT_SEC_OK;
 }
 
@@ -480,9 +480,9 @@ int radiant_sec_cmac_final(struct radiant_sec_cmac_ctx *c, uint8_t tag[16])
 	encrypt_block(last, tag);
 
 	memset(c, 0, sizeof(*c));
-	memset(k1, 0, sizeof(k1));
-	memset(k2, 0, sizeof(k2));
-	memset(last, 0, sizeof(last));
+	radiant_sec_wipe(k1, sizeof(k1));
+	radiant_sec_wipe(k2, sizeof(k2));
+	radiant_sec_wipe(last, sizeof(last));
 	return RADIANT_SEC_OK;
 }
 
@@ -568,7 +568,7 @@ int radiant_sec_kdf(const struct radiant_sec_key *root, const char *label,
 	}
 
 	rc = radiant_sec_key_import(out, tag, 128u);
-	memset(tag, 0, sizeof(tag));
-	memset(block, 0, sizeof(block));
+	radiant_sec_wipe(tag, sizeof(tag));
+	radiant_sec_wipe(block, sizeof(block));
 	return rc;
 }

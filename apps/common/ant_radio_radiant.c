@@ -806,6 +806,11 @@ void radiant_sec_deliver(uint8_t ch, const uint8_t *pay, uint8_t len,
 	if (radiant_channel_id_get(ch, &id) != RADIANT_CH_OK) {
 		return;
 	}
+	/* Ingested before a close, pumped after it: the host has already been
+	 * told CHANNEL_CLOSED, and data after that is a protocol violation. */
+	if (!radiant_channel_is_open(ch)) {
+		return;
+	}
 
 	memset(&hal, 0, sizeof(hal));
 	hal.status = RADIANT_RADIO_STATUS_OK;
@@ -2833,11 +2838,18 @@ static void api_event_thread(void *a, void *b, void *c)
 		/*
 		 * All RX crypto, run before the drain: the pump turns queued
 		 * ciphertext into posted plaintext, so a packet is in the ring
-		 * before the drain delivers it. Outside api_lock, like the
-		 * drain - radiant_sec_deliver() posts to the event ring, which
-		 * radiant_event.c protects with its own critical section.
+		 * before the drain delivers it. UNDER api_lock, unlike the
+		 * drain: the parser thread outranks this one, and its unassign
+		 * and RESET_SYSTEM paths wipe the context the pump may be half
+		 * way through - a zeroed W is a divide-by-zero trap and a
+		 * reboot (review 2026-10-31, A6-1). Bounded crypto that posts
+		 * only to the ISR-safe ring, so no deadlock.
 		 */
+#if defined(CONFIG_RADIANT_SEC)
+		k_mutex_lock(&api_lock, K_FOREVER);
 		radiant_sec_pump();
+		k_mutex_unlock(&api_lock);
+#endif
 
 		/* Thread context only, deliberately outside api_lock: the drain
 		 * calls antr_on_message() (the bridge's), and holding a lock

@@ -79,8 +79,8 @@ int radiant_sec_compat_tier1_tag(const struct radiant_sec_key *k_auth,
 	/* The eleven bytes not sent are as secret as the key that made them:
 	 * an attacker who learns them learns the untruncated tag for a counter
 	 * value that has not been used yet. */
-	memset(tag, 0, sizeof(tag));
-	memset(block, 0, sizeof(block));
+	radiant_sec_wipe(tag, sizeof(tag));
+	radiant_sec_wipe(block, sizeof(block));
 	return rc;
 }
 
@@ -123,9 +123,9 @@ int radiant_sec_compat_tier2_tag(const struct radiant_sec_key *k_auth,
 		memcpy(out, tag, RADIANT_SEC_COMPAT_TIER_II_TAG_BYTES);
 	}
 
-	memset(&ctx, 0, sizeof(ctx));
-	memset(tag, 0, sizeof(tag));
-	memset(block, 0, sizeof(block));
+	radiant_sec_wipe(&ctx, sizeof(ctx));
+	radiant_sec_wipe(tag, sizeof(tag));
+	radiant_sec_wipe(block, sizeof(block));
 	return rc;
 }
 
@@ -185,6 +185,8 @@ struct compat_ctx {
 	bool     rx_t1_any;
 	bool     rx_t1_ok;              /* at least one Tier I page VERIFIED */
 	uint64_t rx_t1_us;              /* ...and when, for the staleness rule */
+	bool     rx_t2_ok;              /* the last Tier II window VERIFIED */
+	uint64_t rx_t2_us;              /* ...and when, for the staleness rule */
 
 	enum radiant_sec_verdict        last_verdict;
 	struct radiant_sec_compat_stats stats;
@@ -334,6 +336,7 @@ int radiant_sec_compat_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 	struct compat_ctx *c;
 	uint8_t            i;
 	int                rc;
+	bool               fresh = false;
 
 	if (root == NULL) {
 		return RADIANT_SEC_EINVAL;
@@ -341,6 +344,7 @@ int radiant_sec_compat_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 
 	c = ctx_of(ch);
 	if (c == NULL) {
+		fresh = true;
 		for (i = 0u; i < COMPAT_MAX_CH; i++) {
 			if (!compat[i].used) {
 				memset(&compat[i], 0, sizeof(compat[i]));
@@ -361,6 +365,11 @@ int radiant_sec_compat_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 
 	rc = radiant_sec_key_import(&c->k_root, root, bits);
 	if (rc != RADIANT_SEC_OK) {
+		if (fresh) {
+			/* Undo the allocation rather than leave a keyless,
+			 * used slot (review 2026-10-31, D1-6(b)/D2-7). */
+			memset(c, 0, sizeof(*c));
+		}
 		return rc;
 	}
 	c->base_devnum = base_devnum;
@@ -421,6 +430,7 @@ int radiant_sec_compat_configure(uint8_t ch, uint8_t switches, uint8_t n,
 	c->tx_closing = false;
 	c->rx_absorbed = 0u;
 	c->rx_overflow = false;
+	c->rx_t2_ok = false;
 	return RADIANT_SEC_OK;
 }
 
@@ -457,6 +467,7 @@ int radiant_sec_compat_set_epoch(uint8_t ch, uint32_t epoch, uint64_t now_us,
 	c->rx_overflow = false;
 	c->rx_t1_any = false;
 	c->rx_t1_ok = false;
+	c->rx_t2_ok = false;
 	c->last_verdict = RADIANT_SEC_VERDICT_CLEAR;
 
 	return derive_auth(c);
@@ -541,10 +552,21 @@ enum radiant_sec_verdict radiant_sec_compat_stream_verdict(uint8_t ch,
 	 * downgrade protection - stripping attestation off the air is noticed
 	 * here instead of quietly falling back to clear. */
 	if ((c->switches & RADIANT_SEC_COMPAT_SW_TIER_I) == 0u) {
-		/* Tier II only: the last window is all there is to go on. */
-		return (c->last_verdict == RADIANT_SEC_VERDICT_VERIFIED)
-			       ? RADIANT_SEC_VERDICT_VERIFIED
-			       : RADIANT_SEC_VERDICT_UNVERIFIED;
+		/* Tier II only: its own last window, and only while the next
+		 * one could still be on its way - else stripping the tag pages
+		 * leaves the stream VERIFIED forever. Not last_verdict, which a
+		 * Tier I page also sets (review 2026-10-31, D2-2). */
+		uint64_t period_us = ((uint64_t)c->period_counts *
+				      COMPAT_US_PER_S) / 32768u;
+
+		if (!c->rx_t2_ok) {
+			return RADIANT_SEC_VERDICT_UNVERIFIED;
+		}
+		horizon = (uint64_t)RADIANT_SEC_COMPAT_STALE_INTERVALS *
+			  (uint64_t)c->n * period_us;
+		return (now_us >= c->rx_t2_us + horizon)
+			       ? RADIANT_SEC_VERDICT_UNVERIFIED
+			       : RADIANT_SEC_VERDICT_VERIFIED;
 	}
 	if (!c->rx_t1_ok) {
 		return RADIANT_SEC_VERDICT_UNVERIFIED;
@@ -677,6 +699,7 @@ static int rx_tier1(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
 	uint32_t                 low;
 	uint32_t                 full;
 	int                      rc;
+	bool                     ok;
 
 	low = (uint32_t)pay[1] | ((uint32_t)pay[2] << 8);
 	full = resolve_low(interval_index(c, t_sync), low, 0x10000u);
@@ -701,7 +724,9 @@ static int rx_tier1(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
 		return rc;
 	}
 
-	if (memcmp(tag, &pay[3], sizeof(tag)) == 0) {
+	ok = radiant_sec_ct_equal(tag, &pay[3], sizeof(tag));
+	radiant_sec_wipe(tag, sizeof(tag));
+	if (ok) {
 		verdict = RADIANT_SEC_VERDICT_VERIFIED;
 		stat_bump(&c->stats.tier1_verified);
 		c->rx_t1_last = full;
@@ -747,9 +772,10 @@ static int rx_tier2(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
 						  (uint16_t)(window & 0xFFFFu),
 						  c->rx_win, c->n, tag);
 		if (rc == RADIANT_SEC_OK &&
-		    memcmp(tag, &pay[2], sizeof(tag)) == 0) {
+		    radiant_sec_ct_equal(tag, &pay[2], sizeof(tag))) {
 			verdict = RADIANT_SEC_VERDICT_VERIFIED;
 		}
+		radiant_sec_wipe(tag, sizeof(tag));
 	}
 
 	if (verdict == RADIANT_SEC_VERDICT_VERIFIED) {
@@ -763,6 +789,10 @@ static int rx_tier2(struct compat_ctx *c, const uint8_t *pay, uint64_t t_sync)
 	c->rx_absorbed = 0u;
 	c->rx_overflow = false;
 
+	c->rx_t2_ok = (verdict == RADIANT_SEC_VERDICT_VERIFIED);
+	if (c->rx_t2_ok) {
+		c->rx_t2_us = t_sync;
+	}
 	c->last_verdict = verdict;
 	radiant_sec_compat_verdict(c->ch, RADIANT_SEC_COMPAT_SUBTYPE_TIER_II,
 				   (uint16_t)(window & 0xFFFFu), verdict);
@@ -822,7 +852,7 @@ static int hint_of(const struct radiant_sec_key *k_id, uint32_t epoch,
 	if (rc == RADIANT_SEC_OK) {
 		memcpy(out, tag, RADIANT_SEC_COMPAT_HINT_BYTES);
 	}
-	memset(tag, 0, sizeof(tag));
+	radiant_sec_wipe(tag, sizeof(tag));
 	return rc;
 }
 
@@ -950,9 +980,9 @@ static int tagged(const struct radiant_sec_key *k, uint32_t epoch,
 		memcpy(out, tag, taglen);
 	}
 
-	memset(&ctx, 0, sizeof(ctx));
-	memset(tag, 0, sizeof(tag));
-	memset(block, 0, sizeof(block));
+	radiant_sec_wipe(&ctx, sizeof(ctx));
+	radiant_sec_wipe(tag, sizeof(tag));
+	radiant_sec_wipe(block, sizeof(block));
 	return rc;
 }
 
@@ -1018,8 +1048,12 @@ int radiant_sec_compat_announce_verify(uint8_t ch, uint64_t t_sync,
 	 * attestation: it says where the stream is going, not that the stream
 	 * is authentic, and folding it into the stream verdict would let a
 	 * refused announcement read as a stream that stopped verifying. */
-	return (memcmp(want, tag, sizeof(want)) == 0) ? RADIANT_SEC_OK
-						      : RADIANT_SEC_EBADMAC;
+	{
+		bool ok = radiant_sec_ct_equal(want, tag, sizeof(want));
+
+		radiant_sec_wipe(want, sizeof(want));
+		return ok ? RADIANT_SEC_OK : RADIANT_SEC_EBADMAC;
+	}
 }
 
 static int cmd_tag(struct compat_ctx *c, uint64_t when_us, const uint8_t *msg,
@@ -1087,8 +1121,12 @@ int radiant_sec_compat_cmd_verify(uint8_t ch, uint64_t t_sync,
 	if (rc != RADIANT_SEC_OK) {
 		return rc;
 	}
-	return (memcmp(want, tag, sizeof(want)) == 0) ? RADIANT_SEC_OK
-						      : RADIANT_SEC_EBADMAC;
+	{
+		bool ok = radiant_sec_ct_equal(want, tag, sizeof(want));
+
+		radiant_sec_wipe(want, sizeof(want));
+		return ok ? RADIANT_SEC_OK : RADIANT_SEC_EBADMAC;
+	}
 }
 
 /* What a candidate epoch is tested against; kept as one internal struct so
@@ -1115,7 +1153,8 @@ static bool probe_at(struct compat_ctx *c, const struct epoch_probe *p,
 		if (hint_of(&c->k_id, epoch, got) != RADIANT_SEC_OK) {
 			return false;
 		}
-		return memcmp(got, p->hint, RADIANT_SEC_COMPAT_HINT_BYTES) == 0;
+		return radiant_sec_ct_equal(got, p->hint,
+					    RADIANT_SEC_COMPAT_HINT_BYTES);
 	}
 
 	/* K_auth is epoch-bound, so a tag probe costs a derivation as well as
@@ -1133,7 +1172,7 @@ static bool probe_at(struct compat_ctx *c, const struct epoch_probe *p,
 		rc = radiant_sec_compat_tier1_tag(&k, epoch, p->devnum,
 						  p->counter, got);
 	}
-	ok = (rc == RADIANT_SEC_OK) && (memcmp(got, p->tag, p->taglen) == 0);
+	ok = (rc == RADIANT_SEC_OK) && radiant_sec_ct_equal(got, p->tag, p->taglen);
 	radiant_sec_key_destroy(&k);
 	return ok;
 }
@@ -1302,6 +1341,7 @@ int radiant_sec_compat_adopt_epoch(uint8_t ch, uint32_t epoch)
 	c->rx_overflow = false;
 	c->rx_t1_any = false;
 	c->rx_t1_ok = false;
+	c->rx_t2_ok = false;
 	c->last_verdict = RADIANT_SEC_VERDICT_CLEAR;
 
 	return derive_auth(c);
