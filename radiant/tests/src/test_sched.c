@@ -35,10 +35,20 @@
 #include <zephyr/ztest.h>
 
 #include <radiant/radiant_frame.h>
+#include <radiant/radiant_noise.h>
 #include <radiant/radiant_sched.h>
 #include <radiant/radiant_transfer.h>
 
 #include "../fake_radio.h"
+
+/* Pinned by literal (review 2026-10-31, E1-6): the tests below derive their
+ * expectations from these same macros, so without the pins an edit moves the
+ * code and its test together and nothing fails. */
+BUILD_ASSERT(RADIANT_SCHED_MERGE_SPAN_MAX_US == 2000u,
+	     "2.19 ms turnaround bound moved");
+BUILD_ASSERT(RADIANT_SCHED_DISPATCH_SLACK_US == 200u,
+	     "measured dispatch slack moved");
+BUILD_ASSERT(RADIANT_SCHED_SCAN_MIN_US == 1000u, "minimum scan chunk moved");
 
 /* ---------------------------------------------------------------------------
  * Fixtures
@@ -139,6 +149,12 @@ static struct {
 	uint64_t scan_listen_us;
 	radiant_time_t scan_measure_end;
 	uint16_t follow_on_us[RADIANT_SCHED_MAX_CHANNELS];
+
+	/* One-shot: from inside the done() of channel tx_from_done_ch ending
+	 * with tx_from_done_why, post a transmit on channel 2 1000 us out. */
+	bool                    tx_from_done;
+	uint8_t                 tx_from_done_ch;
+	enum radiant_sched_done tx_from_done_why;
 } log;
 
 static void rx_req_init(struct radiant_sched_rx *r, const struct radiant_pkt_format *fmt,
@@ -256,6 +272,15 @@ static void on_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		break;
 	}
 
+	if (log.tx_from_done && ch == log.tx_from_done_ch &&
+	    why == log.tx_from_done_why) {
+		struct radiant_sched_tx t;
+
+		log.tx_from_done = false;
+		tx_req_init(&t, 2u, radiant_radio_now() + 1000u);
+		(void)radiant_sched_request_tx(2u, &t);
+	}
+
 	if (log.repost &&
 	    (log.repost_mask == 0u ||
 	     (log.repost_mask & ((uint32_t)1u << ch)) != 0u)) {
@@ -367,6 +392,7 @@ static void finish(void)
 	log.reply_after_us = 0u;
 	log.reply_follow_on_us = 0u;
 	log.ack_window_after_us = 0u;
+	log.tx_from_done = false;
 	for (ch = 0u; ch < (uint8_t)RADIANT_SCHED_MAX_CHANNELS; ch++) {
 		zassert_ok(radiant_sched_cancel(ch));
 	}
@@ -2215,6 +2241,171 @@ ZTEST(radiant_sched, test_ebusy_leaves_the_request_for_the_next_commit)
 	finish();
 }
 
+/* finish(), for a test that forced a refusal on purpose: the same end state,
+ * with the forced refusals accounted rather than forbidden (count_rc() counts
+ * forced refusals too). Review 2026-10-31, E1-2. */
+static void finish_forced(uint32_t etime, uint32_t estate)
+{
+	const struct fake_radio_stats *st = fake_radio_stats();
+	uint8_t ch;
+
+	log.repost = false;
+	log.repost_mask = 0u;
+	for (ch = 0u; ch < (uint8_t)RADIANT_SCHED_MAX_CHANNELS; ch++) {
+		zassert_ok(radiant_sched_cancel(ch));
+	}
+	zassert_true(fake_radio_is_idle(), "%s", fake_radio_busy_reason());
+	zassert_equal(0u, fake_radio_viol_count(), NULL);
+	zassert_equal(etime, st->rc_etime, NULL);
+	zassert_equal(estate, st->rc_estate, NULL);
+	zassert_equal(0u, st->rc_einval, NULL);
+	zassert_equal(0u, st->rc_enotsup, NULL);
+}
+
+/* ETIME describes the request (the backend is stricter than advertised): it
+ * is MISSED and the SAME pass goes on to arm the next channel - stopping
+ * would leave the radio idle until the next tick with work pending. */
+ZTEST(radiant_sched, test_an_etime_refusal_is_missed_and_the_pass_moves_on)
+{
+	radiant_time_t open;
+
+	bring_up();
+	open = radiant_radio_now() + 100000u;
+	post_track(0u, open, open + TEST_WINDOW_US);
+	post_track(1u, open + 20000u, open + 20000u + TEST_WINDOW_US);
+	fake_radio_force_next_arm(RADIANT_RADIO_ETIME);
+	zassert_ok(radiant_sched_tick());
+
+	zassert_equal(2u, fake_radio_arm_count(),
+		      "the pass stopped at the refused window, radio left idle");
+	zassert_equal(RADIANT_RADIO_ETIME, fake_radio_arm(0u)->rc);
+	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_arm(1u)->rc);
+	zassert_equal(1u, log.missed_count[0]);
+	zassert_false(radiant_sched_pending(0u), "an ETIME refusal was kept to retry");
+	zassert_equal(1u, radiant_sched_stats_get()->arm_rejected);
+
+	fake_radio_advance_to(open + 20000u + TEST_WINDOW_US + 1u);
+	zassert_equal(1u, log.ok_count[1]);
+	finish_forced(1u, 0u);
+}
+
+/* ESTATE describes the radio (disabled), not the request: nothing consumed,
+ * nothing reported, the next commit arms it. */
+ZTEST(radiant_sched, test_an_estate_refusal_keeps_the_request)
+{
+	radiant_time_t open;
+
+	bring_up();
+	open = radiant_radio_now() + 100000u;
+	fake_radio_force_next_arm(RADIANT_RADIO_ESTATE);
+	post_track(0u, open, open + TEST_WINDOW_US);
+	zassert_ok(radiant_sched_tick());
+
+	zassert_equal(1u, fake_radio_arm_count());
+	zassert_equal(0u, log.n_done, "ESTATE was reported to the channel");
+	zassert_true(radiant_sched_pending(0u), "ESTATE consumed the request");
+
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(2u, fake_radio_arm_count());
+	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_arm(1u)->rc);
+	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+	zassert_equal(1u, log.ok_count[0]);
+	finish_forced(0u, 1u);
+}
+
+/* Rule 4: merging may widen the leader's window to
+ * RADIANT_SCHED_MERGE_SPAN_MAX_US and no further, however long a member's own
+ * window is - a merged window must not outlive the 2.19 ms master-to-slave
+ * turnaround. Every other merge test's union is under 2 ms, so the cap never
+ * bound in any of them (review 2026-10-31, E1-3). */
+ZTEST(radiant_sched, test_a_merged_union_is_capped_at_the_merge_span)
+{
+	radiant_time_t open;
+	const struct fake_radio_arm *a;
+
+	bring_up();
+	open = radiant_radio_now() + 100000u;
+	post_track(0u, open, open + 400u);
+	post_track(1u, open + 300u, open + 30000u);
+	zassert_ok(radiant_sched_tick());
+
+	a = fake_radio_arm(0u);
+	zassert_not_null(a);
+	zassert_equal(2u, a->n_filters, "the long window did not merge at all");
+	zassert_equal(open, a->t_open);
+	zassert_equal(open + RADIANT_SCHED_MERGE_SPAN_MAX_US, a->t_close,
+		      "merged union ran %u us", (unsigned)(a->t_close - a->t_open));
+
+	fake_radio_advance_to(a->t_close + 1u);
+	assert_every_window_bounded();
+	finish();
+}
+
+/* The one production feed of the noise histogram: an empty tracked window's
+ * terminal, attributed to the rf_index it was armed on (end_armed() clears
+ * armed_rf, so a reordering attributes to rf 0). test_noise.c registers its
+ * own callbacks and never reached this (review 2026-10-31, E1-4). */
+ZTEST(radiant_sched, test_an_empty_window_feeds_the_noise_floor_on_its_own_rf)
+{
+	struct radiant_noise_report r;
+	radiant_time_t              open;
+	uint32_t                    i;
+
+	radiant_noise_reset();
+	bring_up();
+	fake_radio_set_noise(-92);
+	open = radiant_radio_now() + 100000u;
+	for (i = 0u; i < RADIANT_NOISE_MIN_SAMPLES; i++) {
+		post_track(0u, open, open + TEST_WINDOW_US);
+		zassert_ok(radiant_sched_tick());
+		fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+		open += TEST_PERIOD_US;
+	}
+	zassert_true(radiant_noise_get(0u, &r), "no sample reached the histogram");
+	zassert_equal(RADIANT_RF_INDEX_ANT_PLUS, r.rf_index, "attributed to rf %u",
+		      (unsigned)r.rf_index);
+	zassert_equal(RADIANT_NOISE_MIN_SAMPLES, r.samples, NULL);
+	zassert_equal(-92, r.floor_dbm, NULL);
+	finish();
+}
+
+/* A CRC failure must not end a STOP_ON_FIRST window: the frame that follows a
+ * collision in the same window is the one the window exists for (review
+ * 2026-10-31, E1-8). */
+ZTEST(radiant_sched, test_a_crc_failure_does_not_end_a_stop_on_first_window)
+{
+	struct radiant_sched_rx r;
+	struct fake_radio_air   air;
+	uint8_t                 frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t                 n;
+	radiant_time_t          open;
+
+	bring_up();
+	open = radiant_radio_now() + 100000u;
+	rx_req_init(&r, radiant_frame_format(RADIANT_FRAME_CFG_TRACKING),
+		    &track_filter[0], 1u, open, open + TEST_WINDOW_US);
+	r.stop_on_first = true;
+	r.report_crc_fail = true;
+	zassert_ok(radiant_sched_request_rx(0u, &r));
+	zassert_ok(radiant_sched_tick());
+
+	n = fake_radio_build_ant_frame(frame, (uint16_t)TEST_DEVNUM_BASE,
+				       TEST_DEV_TYPE, TEST_TRANS_TYPE, test_payload);
+	fake_radio_air_init(&air);
+	air.t_sync = open + 100u;
+	memcpy(air.bytes, frame, n);
+	air.len = n;
+	air.crc_bad = true;
+	zassert_ok(fake_radio_air_add(&air));
+	air_frame_for(0u, open + 300u);
+
+	fake_radio_advance_to(open + TEST_WINDOW_US + 1u);
+	zassert_equal(2u, log.n_rx, "the collided frame ended the window");
+	zassert_equal(RADIANT_RADIO_STATUS_CRC_FAIL, log.rx[0].status);
+	zassert_equal(RADIANT_RADIO_STATUS_OK, log.rx[1].status);
+	finish();
+}
+
 /* A backend reporting it could not complete an operation ends the request
  * rather than leaving it in flight forever - a scheduler with no case for
  * RADIANT_RADIO_STATUS_FAILED would hold the channel in flight and never
@@ -2663,7 +2854,15 @@ ZTEST(radiant_sched, test_a_near_transmit_with_no_reserve_is_still_missed)
  * fresh-reservation lead, not armed at the in-grant lead for the backend to
  * refuse. how: 0 = DENIED terminal, 1 = ABORTED terminal, 2 = cancelled
  * (abort_armed), 3 = radiant_sched_reset(), 4 = completed normally but the
- * callback has returned. */
+ * callback has returned.
+ *
+ * WHAT THESE DO AND DO NOT PROVE (review 2026-10-31, E1-1/E2-1). The probe is
+ * posted from THREAD context, and in_reserve() returns false whenever
+ * !in_radio_cb - so every case here exercises that gate only. Deleting the
+ * reserve clears in end_armed() fails none of them; reserve_from_done_case()
+ * below posts from INSIDE done(), where those clears are observable. Cases 2
+ * and 3 are equivalent mutants of their clears (every arm overwrites
+ * reserve_end first) and stay as gate tests. */
 static void stale_reserve_case(int how)
 {
 	struct radiant_sched_tx t;
@@ -2734,6 +2933,71 @@ ZTEST(radiant_sched, test_a_reserve_does_not_outlive_a_reset)
 ZTEST(radiant_sched, test_a_reserve_does_not_outlive_its_callback)
 {
 	stale_reserve_case(4);
+}
+
+/* The same claim made where it can fail: the follow-on posted from INSIDE the
+ * terminal's done(), which runs with in_radio_cb true. how: 0 DENIED, 1
+ * ABORTED, 2 completed (the positive control - without it a rig that never
+ * arms would pass 0 and 1 vacuously, which is how the thread-context cases
+ * pass today). Review 2026-10-31, E1-1. */
+static void reserve_from_done_case(int how)
+{
+	radiant_time_t open;
+	radiant_time_t close;
+
+	arbitrated_leads();
+	bring_up();
+	open = radiant_radio_now() + 100000u;
+	close = open + 400u;
+	log.follow_on_us[1] = 4150u;
+	if (how == 0) {
+		fake_radio_force_next_terminal(RADIANT_RADIO_STATUS_DENIED);
+	} else if (how == 1) {
+		fake_radio_force_next_terminal(RADIANT_RADIO_STATUS_ABORTED);
+	}
+	log.tx_from_done = true;
+	log.tx_from_done_ch = 1u;
+	log.tx_from_done_why = (how == 0) ? RADIANT_SCHED_DONE_DENIED :
+			       (how == 1) ? RADIANT_SCHED_DONE_ABORTED :
+					    RADIANT_SCHED_DONE_OK;
+	post_track(1u, open, close);
+	zassert_ok(radiant_sched_tick());
+	zassert_equal(1u, fake_radio_arm_count());
+
+	fake_radio_advance_to(close + 1u);
+	zassert_false(log.tx_from_done, "case %d: the done() hook never ran", how);
+
+	if (how == 2) {
+		zassert_equal(2u, fake_radio_arm_count(),
+			      "control: a follow-on posted from a completed window's "
+			      "done() was not armed inside its reserve");
+		zassert_equal(FAKE_RADIO_ARM_TX, fake_radio_arm(1u)->kind);
+		zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_arm(1u)->rc);
+		zassert_true(fake_radio_arm(1u)->from_callback);
+		fake_radio_advance_to(fake_radio_arm(1u)->t_sync_at + 1u);
+		zassert_equal(0u, log.missed_count[2]);
+	} else {
+		zassert_equal(1u, fake_radio_arm_count(),
+			      "case %d: a follow-on was armed into a reserve whose "
+			      "grant never existed", how);
+		zassert_equal(1u, log.missed_count[2], "case %d", how);
+	}
+	finish();
+}
+
+ZTEST(radiant_sched, test_a_denied_windows_done_cannot_arm_into_its_reserve)
+{
+	reserve_from_done_case(0);
+}
+
+ZTEST(radiant_sched, test_an_aborted_windows_done_cannot_arm_into_its_reserve)
+{
+	reserve_from_done_case(1);
+}
+
+ZTEST(radiant_sched, test_a_completed_windows_done_arms_into_its_reserve)
+{
+	reserve_from_done_case(2);
 }
 
 /* Eight sensors plus a continuous search, with the first pair swept across

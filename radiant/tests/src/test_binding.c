@@ -108,6 +108,29 @@ ZTEST(radiant_binding, test_unbind_then_rebind_is_a_new_identity)
 		       "re-pairing the same key must not silently inherit the old uuid");
 }
 
+/* A heart-rate strap and a power meter can share a 16-bit device number; the
+ * key is (devnum, devtype, trans_type), or their samples share one source.
+ * Every other test here used devtype 0x78 / trans_type 1, so dropping either
+ * clause from same_key() survived (review 2026-10-31, E3-5). */
+ZTEST(radiant_binding, test_the_key_is_all_three_fields)
+{
+	uint32_t hr, pwr, tt5;
+
+	zassert_equal(radiant_binding_bind(1234u, 0x78u, 1u, NULL, &hr), 0, NULL);
+	zassert_equal(radiant_binding_bind(1234u, 0x0Bu, 1u, NULL, &pwr), 0, NULL);
+	zassert_equal(radiant_binding_bind(1234u, 0x78u, 5u, NULL, &tt5), 0, NULL);
+	zassert_not_equal(hr, pwr, "devtype ignored");
+	zassert_not_equal(hr, tt5, "trans_type ignored");
+	zassert_not_equal(pwr, tt5, NULL);
+	zassert_equal(radiant_binding_find(1234u, 0x0Bu, 1u), pwr, NULL);
+	zassert_equal(radiant_binding_find(1234u, 0x78u, 5u), tt5, NULL);
+
+	zassert_equal(-ENOENT, radiant_binding_set_period(RADIANT_BINDING_MAX, 8192u),
+		      NULL);
+	zassert_equal(0, radiant_binding_unbind(hr), NULL);
+	zassert_equal(-ENOENT, radiant_binding_set_period(hr, 8192u), NULL);
+}
+
 static void *binding_setup(void)
 {
 	return NULL;

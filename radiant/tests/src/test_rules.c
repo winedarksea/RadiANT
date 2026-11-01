@@ -364,6 +364,41 @@ ZTEST(radiant_rules, test_a_zero_heart_rate_is_not_at_rest)
 			"a strap reporting 'no reading' was declared at rest");
 }
 
+/* The thresholds at their exact boundaries: 82 is not resting, 133 is not
+ * zone 2, and a zone held for exactly the dwell asserts (>=, not >). Neither
+ * 82 nor 133 was ever posted, and dwell edges were only checked 1 s past
+ * (review 2026-10-31, E3-6). */
+ZTEST(radiant_rules, test_zone_boundaries_82_is_not_rest_and_133_is_not_zone2)
+{
+	uint32_t src;
+	uint64_t t = 0u;
+
+	radiant_binding_bind(1u, 0x78u, 1u, NULL, &src);
+	post_beats(src, 0, t);
+	t += 1u * US_PER_S;
+	post_beats(src, 1, t);
+	t += 2u * US_PER_S;
+	post_beats(src, 2, t);
+	zassert_not_null(last_with(RADIANT_RULE_FIELD_WORN), "setup: not worn");
+
+	cap_n = 0u;
+	post_hr(src, 82, t);
+	t += 4u * US_PER_S;
+	post_hr(src, 82, t);
+	zassert_is_null(last_with(RADIANT_RULE_FIELD_AT_REST), "82 bpm read as resting");
+	post_hr(src, 133, t);
+	t += 4u * US_PER_S;
+	post_hr(src, 133, t);
+	zassert_is_null(last_with(RADIANT_RULE_FIELD_ZONE2), "133 bpm read as zone 2");
+
+	/* Exactly the zone dwell asserts (>=, not >). */
+	post_hr(src, 81, t);
+	t += 3u * US_PER_S;
+	post_hr(src, 81, t);
+	zassert_not_null(last_with(RADIANT_RULE_FIELD_AT_REST),
+			 "held exactly ZONE_DWELL_US: must assert");
+}
+
 ZTEST(radiant_rules, test_zone_thresholds_are_82_and_134)
 {
 	uint32_t src;

@@ -17,12 +17,17 @@
 # shrink and needs a reason in the commit message.
 
 # Twister scenarios across radiant/tests, radiant/tests/api,
-# radiant/tests/gate, apps/hrm_ble/tests/sim_sched and
-# apps/treadmill/tests/pages. Counted from the five testcase.yaml files:
-# radiant.unit, radiant.unit.sec_modes, radiant.unit.pairing, radiant.api,
+# radiant/tests/gate, apps/hrm_ble/tests/sim_sched, apps/treadmill/tests/pages
+# and apps/treadmill/tests/hr_rx. Counted from the six testcase.yaml files:
+# radiant.unit, radiant.unit.sec_modes, radiant.unit.no_pairing, radiant.api,
 # radiant.api.sec, radiant.api.sec_host, radiant.api.crc_repair, radiant.gate,
-# hrm_ble.sim_sched, treadmill.pages. (radiant.api.crc_repair added 2026-10-31:
-# the first scenario that compiles the CRC-repair path at all.)
+# hrm_ble.sim_sched, treadmill.pages, treadmill.hr_rx. (2026-10-31 review:
+# radiant.api.crc_repair - the first scenario that compiles the CRC-repair path
+# at all; treadmill.hr_rx - the HR slave against a stub antr_*; and
+# radiant.unit.pairing renamed no_pairing, now the build of the shipped
+# default-n pairing configuration rather than a duplicate of radiant.unit.)
+# A scenario counts only if it executed at least one case (or failed to
+# build): a filtered/skipped one is not coverage.
 #
 # The eighth is the heart-rate node's beat scheduler and the ninth is the
 # treadmill's state module and unit conversions. Both are reached only because
@@ -31,7 +36,7 @@
 # suites they cover are the ones that would have caught bugs that escaped
 # everything else (a strap notifying 67 times a minute while claiming 72; a
 # cadence reported in strides where a client expects steps).
-min_scenarios: 10
+min_scenarios: 11
 
 # Total ztest cases twister executes, summed over every scenario. This is a
 # SAFE floor rather than the observed total: it is the static count of
@@ -49,7 +54,36 @@ min_scenarios: 10
 # that turns out to include a suite twister does not reach fails for a reason
 # that has nothing to do with coverage. Raise it to the printed total when a
 # run reports one.
-# 2026-10-31 review batch 1: +5 cases in radiant/tests/api (four in every api
-# scenario, one only under radiant.api.crc_repair) - raised by the static +5,
-# keeping the same conservative margin.
-min_testcases: 879
+#
+# 2026-10-31 REVIEW: RAISED TO THE SUM OF THE PER-SCENARIO FLOORS BELOW, so the
+# backstop and the floors cannot disagree. It was 874 against ~2.7k executed -
+# the ~1.7k of slack E3-1 found. The per-scenario floors are now the real
+# check; this is kept as the backstop.
+min_testcases: 2714
+
+# Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
+# because the global count above sums them - three run the whole
+# radiant/tests set each - and a whole suite, or every #if-guarded security
+# suite (E3-3), could vanish under its slack. scripts/check_test_counts.py
+# prints the executed count for each.
+#
+# Set from the nRF5340 DK runs of 2026-10-31 (scripts/run_ztest_hw.ps1, the
+# same prj.conf + extra_configs as each scenario) minus about 1%, since
+# twister on native_sim cannot run here. Observed: radiant.unit 837,
+# radiant.unit.no_pairing 798 (837 less the 39 X25519-gated cases),
+# radiant.api 52, radiant.api.sec 54, radiant.api.sec_host 63,
+# radiant.api.crc_repair 53, radiant.gate 31, hrm_ble.sim_sched 4,
+# treadmill.pages 20, treadmill.hr_rx 3. radiant.unit.sec_modes was NOT run
+# on the DK; its floor assumes the same suites as radiant.unit with extra
+# margin. Raise these to the printed counts on the first green CI run.
+min_cases.radiant.unit: 828
+min_cases.radiant.unit.sec_modes: 820
+min_cases.radiant.unit.no_pairing: 790
+min_cases.radiant.api: 51
+min_cases.radiant.api.sec: 53
+min_cases.radiant.api.sec_host: 62
+min_cases.radiant.api.crc_repair: 52
+min_cases.radiant.gate: 31
+min_cases.hrm_ble.sim_sched: 4
+min_cases.treadmill.pages: 20
+min_cases.treadmill.hr_rx: 3

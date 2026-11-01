@@ -217,6 +217,40 @@ ZTEST(radiant_crc_repair, test_every_single_bit_error_has_its_own_syndrome)
  * ---------------------------------------------------------------------------
  */
 
+/* The CRC is linear and positions count from the end, so an address bit just
+ * ahead of a 10-byte body is position 80: the table holds it, but the body
+ * does not own it. The front-of-buffer bound is all that stops a write in
+ * front of the caller's body (review 2026-10-31, E2-8). */
+ZTEST(radiant_crc_repair, test_a_syndrome_that_names_an_address_bit_writes_nothing)
+{
+	struct {
+		uint8_t before[24];
+		uint8_t body[sizeof(spike_body)];
+		uint8_t after[24];
+	} g;
+	uint8_t  sent_addr[RADIANT_FRAME_ADDR_LEN_TRACKING];
+	uint16_t crc_sent;
+	size_t   i;
+
+	memset(&g, 0xA5, sizeof(g));
+	memcpy(g.body, spike_body, sizeof(spike_body));
+	memcpy(sent_addr, spike_addr, sizeof(sent_addr));
+	sent_addr[sizeof(sent_addr) - 1u] ^= 0x01u;
+	crc_sent = radiant_crc16(radiant_crc16(RADIANT_CRC_INIT, sent_addr,
+					       sizeof(sent_addr)),
+				 g.body, BODY_LEN);
+
+	zassert_equal(RADIANT_CRC_REPAIR_ENONE,
+		      radiant_crc_repair(RADIANT_FRAME_CFG_TRACKING, spike_addr,
+					 sizeof(spike_addr), g.body, BODY_LEN,
+					 crc_sent), NULL);
+	for (i = 0u; i < sizeof(g.before); i++) {
+		zassert_equal(0xA5u, g.before[i], "wrote before the body");
+		zassert_equal(0xA5u, g.after[i], "wrote after the body");
+	}
+	zassert_mem_equal(g.body, spike_body, BODY_LEN, NULL);
+}
+
 ZTEST(radiant_crc_repair, test_no_two_bit_error_is_ever_repaired)
 {
 	unsigned int a;

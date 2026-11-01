@@ -50,7 +50,9 @@ def read_expected() -> dict[str, int]:
     out: dict[str, int] = {}
     for line in EXPECTED.read_text(encoding="utf-8").splitlines():
         line = line.split("#", 1)[0].strip()
-        m = re.match(r"^([a-z_]+)\s*:\s*(\d+)$", line)
+        # Keys may carry a scenario name (min_cases.radiant.api: 40), so dots
+        # and digits are allowed after the first character.
+        m = re.match(r"^([a-z_][a-z0-9_.]*)\s*:\s*(\d+)$", line)
         if m:
             out[m.group(1)] = int(m.group(2))
     for key in ("min_scenarios", "min_testcases"):
@@ -78,6 +80,9 @@ class Summary:
         self.failing: list[str] = []
         self.blocked_names: list[str] = []
         self.build_failures: list[tuple[str, str]] = []
+        # Cases EXECUTED per scenario, keyed by the scenario's own name
+        # (twister may prefix the application path; that part is dropped).
+        self.per_scenario: dict[str, int] = {}
 
 
 # Suite-level statuses that mean "this scenario never got as far as running".
@@ -96,7 +101,8 @@ def summarise(report: Path) -> Summary:
 
     for suite in suites:
         name = suite.get("name", "?")
-        s.scenarios.add(name)
+        scen = name.rsplit("/", 1)[-1]
+        ran_here = 0
 
         suite_status = (suite.get("status") or "").lower()
         if suite_status in SUITE_BROKEN:
@@ -112,6 +118,7 @@ def summarise(report: Path) -> Summary:
             if status == "passed":
                 s.executed += 1
                 s.passed += 1
+                ran_here += 1
             elif status == "blocked":
                 # Blocked is "never ran", not "ran and disagreed". Counting it
                 # as failed is what made a build break read as a mass
@@ -123,8 +130,17 @@ def summarise(report: Path) -> Summary:
             else:
                 s.executed += 1
                 s.failed += 1
+                ran_here += 1
                 s.failing.append(
                     f"{name}: {case.get('identifier', '?')} [{status}]")
+
+        # A filtered or skipped scenario is not coverage and does not count
+        # toward min_scenarios (it used to: the name was added before any
+        # status was read). A broken one still counts as discovered - it is
+        # reported as a build failure above everything else anyway.
+        if ran_here or suite_status in SUITE_BROKEN:
+            s.scenarios.add(name)
+        s.per_scenario[scen] = s.per_scenario.get(scen, 0) + ran_here
 
     return s
 
@@ -160,6 +176,23 @@ def main() -> int:
             head.append(f"- **{name}**: {reason}")
         head.append("")
 
+    # Per-scenario floors. The global min_testcases sums every scenario, and
+    # three of them run the whole radiant/tests set each, so a whole suite (or
+    # every #if-guarded security suite) could vanish under its slack. One floor
+    # per scenario closes that.
+    per_prefix = "min_cases."
+    scen_rows: list[str] = []
+    scen_problems: list[str] = []
+    for key in sorted(k for k in expected if k.startswith(per_prefix)):
+        scen = key[len(per_prefix):]
+        got = s.per_scenario.get(scen, 0)
+        scen_rows.append(f"| {scen} | {got} | {expected[key]} |")
+        if got < expected[key]:
+            scen_problems.append(
+                f"scenario {scen} executed {got} case(s), floor "
+                f"{expected[key]}: a suite in it stopped compiling or "
+                f"running (an #if-guarded file, a dropped prj.conf line)")
+
     lines = head + [
         "### ztest counts",
         "",
@@ -171,6 +204,9 @@ def main() -> int:
         f"| failed | {s.failed} | 0 |",
         f"| blocked (never ran) | {s.blocked} | 0 |",
     ]
+    if scen_rows:
+        lines += ["", "| scenario | executed | floor |", "|---|---|---|"]
+        lines += scen_rows
     table = "\n".join(lines)
     print(table)
 
@@ -199,6 +235,7 @@ def main() -> int:
             f"is deliberate, lower the floor in tests/expected_counts.yaml in "
             f"the same commit and say why."
         )
+    problems.extend(scen_problems)
     if s.failed:
         problems.append(f"{s.failed} test case(s) failed")
         problems.extend(f"  {f}" for f in s.failing[:20])

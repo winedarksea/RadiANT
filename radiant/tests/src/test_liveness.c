@@ -321,6 +321,34 @@ ZTEST(radiant_liveness, test_its_own_output_does_not_rearm_it)
 	zassert_equal(cap_n, 1u, NULL);
 }
 
+/* Rule outputs have no arrival interval, and the bus's own diagnostic source is
+ * outside the binding table: neither may occupy a liveness row. On a 32-bit
+ * target table[UINT32_MAX] wraps to table[-1] - silent corruption, not a
+ * crash (review 2026-10-31, E3-7). */
+ZTEST(radiant_liveness, test_derived_and_diagnostic_samples_are_never_tracked)
+{
+	uint32_t src = bound_source(1u, PERIOD_4HZ);
+	struct radiant_sample s = {
+		.source = src,
+		.field_id = 0u,
+		.field_type = RADIANT_FIELD_OCCUPANCY,
+		.flags = RADIANT_SAMPLE_DERIVED,
+		.exp = 0,
+		.raw = 1,
+		.t_us = 0u,
+	};
+
+	radiant_bridge_post(&s);
+	s.source = RADIANT_BRIDGE_DIAG_SOURCE;
+	s.flags = 0u;
+	radiant_bridge_post(&s);
+	radiant_bridge_drain();
+
+	zassert_equal(0u, radiant_liveness_stats_get()->tracked,
+		      "a derived or out-of-table sample took a liveness row");
+	zassert_equal(0u, tick(10u * EXPIRY_US), "a STALE was posted for it");
+}
+
 static void *liveness_setup(void)
 {
 	return NULL;

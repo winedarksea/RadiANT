@@ -321,18 +321,21 @@ ZTEST(radiant_bridge, test_hr_adapter_event_time_conversion_exact_across_wrap)
 	int                   i;
 
 	/*
-	 * Sixty-five one-beat steps of 1000 (1/1024 s), crossing the u16
-	 * event-time wrap (65536) partway through. Converting-then-differencing
-	 * (the wrong construction) would drift; differencing in 1/1024 s and
-	 * converting once per publish cannot drift beyond the final rounding.
-	 * Exact total: 65000/1024 s = 63476.5625 ms -> truncates to 63476.
+	 * Seventy one-beat steps of 1000 (1/1024 s): the event time passes
+	 * 65536 at step 66 (66000 -> 464), so the u16 subtraction really wraps.
+	 * (It used to be sixty-five steps, which reach 65000 and never wrap -
+	 * dropping the (uint16_t) cast in the adapter survived it; review
+	 * 2026-10-31, E3-4.) Converting-then-differencing would drift;
+	 * differencing in 1/1024 s and converting once per publish cannot drift
+	 * beyond the final rounding.
+	 * Exact total: 70000/1024 s = 68359.375 ms -> truncates to 68359.
 	 */
 	radiant_hr_adapter_init(&a);
 	body(b, 0x00u, 0u, 0u, 72u);
 	radiant_hr_adapter_decode(&a, 1u, b, 0u);
 	radiant_bridge_drain();
 
-	for (i = 1; i <= 65; i++) {
+	for (i = 1; i <= 70; i++) {
 		uint16_t et = (uint16_t)((uint32_t)(i * 1000) % 65536u);
 
 		cap_n = 0u;
@@ -343,8 +346,8 @@ ZTEST(radiant_bridge, test_hr_adapter_event_time_conversion_exact_across_wrap)
 
 	/* The LAST publish carries the exact running total. */
 	zassert_equal(cap_buf[2].field_id, RADIANT_HR_FIELD_BEAT_TIME_MS, NULL);
-	zassert_equal(cap_buf[2].raw, 63476,
-		     "65000/1024 s truncated to ms, exact after a u16 wrap");
+	zassert_equal(cap_buf[2].raw, 68359,
+		     "70000/1024 s truncated to ms, exact across a u16 wrap");
 }
 
 static void *bridge_setup(void)

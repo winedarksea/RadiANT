@@ -886,6 +886,39 @@ ZTEST(radiant_frame, test_truncated_input_is_rejected)
  * be untouched, because a caller that ignores a return code is the reason the
  * distinction exists at all.
  */
+/* body_len 27/28 is inside BODY_MAX, so the wire-shape check passes it; only
+ * the payload bound stands between it and a 25/26-byte copy into payload[24]
+ * (review 2026-10-31, E2-8). */
+ZTEST(radiant_frame, test_decode_refuses_a_body_longer_than_the_payload_can_hold)
+{
+	struct radiant_frame out, sentinel;
+	struct radiant_frame_wire w;
+	uint8_t extra;
+
+	memset(&w, 0, sizeof(w));
+	w.addr_len = RADIANT_FRAME_ADDR_LEN_TRACKING;
+	w.body[0] = 0x05u;
+	w.body[1] = RADIANT_CTRL_BROADCAST;
+
+	w.body_len = RADIANT_FRAME_HDR_LEN_TRACKING + RADIANT_FRAME_PAYLOAD_MAX;
+	zassert_equal(RADIANT_FRAME_OK,
+		      radiant_frame_decode(RADIANT_FRAME_CFG_TRACKING, &w,
+					   RADIANT_FRAME_TRUSTED_CRC, &out), NULL);
+	zassert_equal(RADIANT_FRAME_PAYLOAD_MAX, out.payload_len, NULL);
+
+	for (extra = 1u; extra <= 2u; extra++) {
+		w.body_len = (uint8_t)(RADIANT_FRAME_HDR_LEN_TRACKING +
+				       RADIANT_FRAME_PAYLOAD_MAX + extra);
+		memset(&sentinel, 0x5A, sizeof(sentinel));
+		memcpy(&out, &sentinel, sizeof(out));
+		zassert_equal(RADIANT_FRAME_EINVAL,
+			      radiant_frame_decode(RADIANT_FRAME_CFG_TRACKING, &w,
+						   RADIANT_FRAME_TRUSTED_CRC, &out),
+			      "body_len %u decoded", w.body_len);
+		zassert_mem_equal(&out, &sentinel, sizeof(out), NULL);
+	}
+}
+
 ZTEST(radiant_frame, test_crc_failure_is_reported_and_never_repaired)
 {
 	struct radiant_frame f, out, sentinel;

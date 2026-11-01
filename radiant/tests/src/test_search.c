@@ -748,6 +748,32 @@ ZTEST(radiant_search, test_a_sweep_advances_even_when_every_window_is_cut_short)
  * nothing, or "credit what was listened to" drifts into "credit anything
  * asked for", and a sweep skipping a set on every refused arm loses coverage
  * silently. */
+/* A caller reporting the end late must not over-credit: credit is clamped to
+ * the window armed, or the sweep skips a set it never listened to. The clamp
+ * was never exercised (review 2026-10-31, E1-7(c)). */
+ZTEST(radiant_search, test_a_late_reported_end_credits_no_more_than_the_window)
+{
+	struct radiant_search_window w;
+	uint32_t before;
+
+	bring_up(false);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_ok(radiant_search_window(&g_s, radiant_radio_now() +
+				 radiant_radio_caps_get()->min_arm_lead_us + 100u, &w));
+	before = radiant_search_dwell_remaining(&g_s);
+	zassert_true(before > 20000u, NULL);
+
+	radiant_search_armed(&g_s, RADIANT_SEARCH_OP_EXTERNAL, w.t_open,
+			     w.t_open + 20000u);
+	radiant_search_on_done(&g_s, false, true, w.t_open + 5000000u);
+
+	zassert_equal(before - 20000u, radiant_search_dwell_remaining(&g_s),
+		      "a late ended_at was credited past the window's close");
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	end_of_test();
+}
+
 ZTEST(radiant_search, test_a_window_that_never_opened_credits_nothing)
 {
 	struct radiant_search_window w;

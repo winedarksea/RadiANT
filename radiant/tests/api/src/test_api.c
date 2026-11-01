@@ -3664,3 +3664,34 @@ ZTEST(api, test_fec_secured_channel_command_takes_the_projected_slot)
 	end_of_test();
 }
 #endif
+
+/* The antr_burst_tx() wrapper's own refusals; the engine behind it is
+ * test_transfer.c's. It had no ztest caller at all, so removing the
+ * advanced-burst gate or the NOT_OPENED mapping survived (review 2026-10-31,
+ * E2-4). Today a SLAVE_RX_ONLY channel is not refused here, unlike
+ * antr_acknowledge_message_tx() - that is a recorded decision, not pinned. */
+ZTEST(api, test_burst_tx_refuses_what_it_cannot_send)
+{
+	uint8_t blk[24] = { 0x01u, 0x02u, 0x03u, 0x04u, 0x05u, 0x06u, 0x07u, 0x08u };
+	const uint8_t seg = ANTR_BURST_SEGMENT_START | ANTR_BURST_SEGMENT_END;
+
+	zassert_equal((antr_err_t)ANTW_CHANNEL_NOT_OPENED,
+		      antr_burst_tx(CH, 8u, blk, seg), "a closed channel took a block");
+	open_channel((uint8_t)ANTW_CHANNEL_TYPE_MASTER);
+	(void)run_one_quiet_period();
+	(void)run_one_quiet_period();
+	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE, antr_burst_tx(CH, 9u, blk, seg));
+	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE, antr_burst_tx(CH, 8u, NULL, seg));
+	zassert_equal((antr_err_t)ANTW_INVALID_MESSAGE, antr_burst_tx(CH, 16u, blk, seg),
+		      "a 16-byte block was taken with advanced burst disabled");
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_burst_tx(CH, 8u, blk, seg));
+	zassert_not_null(last_tx_with_ctrl(RADIANT_CTRL_ACK_DATA_OPEN),
+			 "the one-packet burst was not armed");
+	fake_radio_advance(PERIOD_US + RADIANT_TRANSFER_REPLY_US +
+			   RADIANT_TRANSFER_ACK_GUARD_US + 1000u);
+	drain();
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED),
+		      "an unanswered burst must end in exactly one TX_FAILED");
+	end_of_test();
+}

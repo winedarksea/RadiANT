@@ -37,6 +37,18 @@
 #include <radiant/radiant_frame.h>
 #include "../fake_radio.h"
 
+/* Pinned by literal (review 2026-10-31, E1-6): every test below derives its
+ * expectation from the same macro it checks, so without these an edit moves
+ * both. RX_FAIL_TO_SEARCH is host-visible (EVENT_RX_FAIL_GO_TO_SEARCH);
+ * radiant_channel.c's _Static_assert only catches it moving UP. */
+BUILD_ASSERT(RADIANT_CHANNEL_RX_FAIL_TO_SEARCH == 8u,
+	     "host-visible miss budget moved");
+BUILD_ASSERT(RADIANT_CHANNEL_GUARD_MIN_US == 100u, "guard floor moved");
+BUILD_ASSERT(RADIANT_CHANNEL_GUARD_MAX_US == 400u, "guard ceiling moved");
+BUILD_ASSERT(RADIANT_CHANNEL_GUARD_K == 4u, "guard multiplier moved");
+BUILD_ASSERT(RADIANT_CHANNEL_GUARD_LOCK_SLOTS == 8u, "guard lock moved");
+BUILD_ASSERT(RADIANT_CHANNEL_DRIFT_WORST_US == 25u, "drift budget moved");
+
 /* ---------------------------------------------------------------------------
  * Fixtures
  * ---------------------------------------------------------------------------

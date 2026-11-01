@@ -60,17 +60,37 @@ def _run(path):
     return rc, out.getvalue(), err.getvalue()
 
 
-def _green_report(n_scenarios, cases_each):
-    """A run that would pass: enough scenarios, enough executed cases."""
-    return _report([
+def _green_plan(floors):
+    """(scenario name, cases) for a run that clears every floor: one suite per
+    min_cases.* key, named as twister names it and holding max(per, floor)
+    cases, topped up with plain scenario.N suites until min_scenarios is met.
+    """
+    per = floors["min_testcases"] // floors["min_scenarios"] + 1
+    plan = [(k[len("min_cases."):], max(per, v))
+            for k, v in sorted(floors.items()) if k.startswith("min_cases.")]
+    i = 0
+    while len(plan) < floors["min_scenarios"]:
+        plan.append((f"scenario.{i}", per))
+        i += 1
+    return plan
+
+
+def _suites_from(plan, extra_cases=()):
+    return [
         {
-            "name": f"scenario.{i}",
+            "name": f"app/some/tests/{name}",
             "status": "passed",
-            "testcases": [_case(f"s{i}.t{j}", "passed")
-                          for j in range(cases_each)],
+            "testcases": ([_case(f"{name}.t{j}", "passed") for j in range(n)] +
+                          [_case(f"{name}.{c}", c) for c in extra_cases]),
         }
-        for i in range(n_scenarios)
-    ])
+        for name, n in plan
+    ]
+
+
+def _green_report():
+    """A run that would pass: enough scenarios, enough executed cases, every
+    per-scenario floor met."""
+    return _report(_suites_from(_green_plan(ctc.read_expected())))
 
 
 class BuildFailureIsReportedAsOne(unittest.TestCase):
@@ -147,9 +167,7 @@ class SuiteLevelStatusBlocked(unittest.TestCase):
 
 class AGenuinelyGreenRunStillPasses(unittest.TestCase):
     def test_it(self):
-        floors = ctc.read_expected()
-        per = floors["min_testcases"] // floors["min_scenarios"] + 1
-        path = _green_report(floors["min_scenarios"], per)
+        path = _green_report()
         try:
             rc, out, err = _run(path)
         finally:
@@ -163,28 +181,63 @@ class SkippedAndFilteredCountTowardNeither(unittest.TestCase):
     """Unchanged behaviour, pinned so the rewrite cannot have moved it."""
 
     def test_it(self):
+        plan = _green_plan(ctc.read_expected())
+        path = _report(_suites_from(plan, extra_cases=("skipped", "filtered")))
+        try:
+            rc, out, err = _run(path)
+        finally:
+            path.unlink(missing_ok=True)
+        self.assertEqual(rc, 0, err)
+        expected = sum(n for _, n in plan)
+        self.assertIn(f"| test cases executed | {expected} |", out)
+
+
+class APerScenarioFloorIsEnforced(unittest.TestCase):
+    """E3-1 (review 2026-10-31): the global floor had ~1.7k cases of slack,
+    so a whole suite in one scenario could vanish under it. One case short of
+    a single scenario's floor must fail, with the scenario named."""
+
+    def test_one_short_fails(self):
         floors = ctc.read_expected()
-        per = floors["min_testcases"] // floors["min_scenarios"] + 1
-        suites = [
-            {
-                "name": f"scenario.{i}",
-                "status": "passed",
-                "testcases": (
-                    [_case(f"s{i}.t{j}", "passed") for j in range(per)] +
-                    [_case(f"s{i}.skip", "skipped"),
-                     _case(f"s{i}.filt", "filtered")]
-                ),
-            }
-            for i in range(floors["min_scenarios"])
-        ]
+        plan = _green_plan(floors)
+        keyed = [i for i, (name, _) in enumerate(plan)
+                 if f"min_cases.{name}" in floors]
+        self.assertTrue(keyed, "no min_cases.* floors to test against")
+        i = keyed[0]
+        name, _ = plan[i]
+        plan[i] = (name, floors[f"min_cases.{name}"] - 1)
+        # Keep the global floor met, so only the per-scenario one can trip.
+        plan.append(("scenario.extra", floors["min_testcases"]))
+        path = _report(_suites_from(plan))
+        try:
+            rc, _, err = _run(path)
+        finally:
+            path.unlink(missing_ok=True)
+        self.assertEqual(rc, 1)
+        self.assertIn(f"scenario {name} executed", err)
+
+
+class AFilteredScenarioIsNotCoverage(unittest.TestCase):
+    """A scenario whose every case was filtered did not run; it must not count
+    toward min_scenarios (it used to: the name was counted before any
+    status was read)."""
+
+    def test_it(self):
+        floors = ctc.read_expected()
+        plan = _green_plan(floors)
+        suites = _suites_from(plan)
+        suites.append({
+            "name": "app/some/tests/only.filtered",
+            "status": "filtered",
+            "testcases": [_case("only.filtered.t0", "filtered")],
+        })
         path = _report(suites)
         try:
             rc, out, err = _run(path)
         finally:
             path.unlink(missing_ok=True)
         self.assertEqual(rc, 0, err)
-        expected = per * floors["min_scenarios"]
-        self.assertIn(f"| test cases executed | {expected} |", out)
+        self.assertIn(f"| scenarios | {len(plan)} |", out)
 
 
 class ARealFailedAssertionStillFails(unittest.TestCase):

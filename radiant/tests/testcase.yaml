@@ -59,17 +59,19 @@ tests:
     extra_configs:
       - CONFIG_RADIANT_SEC_BACKEND_MODES=y
 
-  # The same suites with X25519 and the pairing logic linked in.
+  # The same suites with X25519 and pairing COMPILED OUT.
   #
-  # A scenario of its own because CONFIG_RADIANT_SEC_PAIRING_X25519 is default n
-  # and most deployments should stay that way - pairing out of band, with a QR
-  # code or a typed key, needs no protocol and has no attack surface during
-  # pairing at all. A default-off path with no build behind it is exactly the
-  # hole encryption.conf sat in for months, so this entry lands with the code.
-  #
-  # It adds the sec_x25519 suite (RFC 7748's own vectors) and sec_pair (the
-  # exchange, including a man in the middle that the fingerprints catch).
-  radiant.unit.pairing:
+  # prj.conf turns pairing on for every other scenario (it must:
+  # scripts/run_ztest_hw.ps1 builds prj.conf only), so the scenario that used
+  # to be here - radiant.unit.pairing, adding =y on top of a prj.conf that
+  # already said =y - was a no-op duplicate, and the default-n configuration
+  # every shipping dongle uses was built by no ztest scenario at all (review
+  # 2026-10-31, E3-2). This is that build. The X25519 suites (sec_x25519,
+  # sec_pair, profile_enrol, node_ident's pairing block) compile out here by
+  # their own #if; min_cases.radiant.unit.no_pairing in
+  # tests/expected_counts.yaml says how many cases that leaves, so a suite that
+  # vanishes elsewhere is still caught.
+  radiant.unit.no_pairing:
     timeout: 300
     tags:
       - radiant
@@ -79,4 +81,4 @@ tests:
     integration_platforms:
       - native_sim
     extra_configs:
-      - CONFIG_RADIANT_SEC_PAIRING_X25519=y
+      - CONFIG_RADIANT_SEC_PAIRING_X25519=n
