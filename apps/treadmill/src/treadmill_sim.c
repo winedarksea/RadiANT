@@ -64,9 +64,15 @@ struct sim_data {
 	int32_t  incline_centi;
 	int32_t  target_incline_centi;
 
-	/* Stride phase in 1/1000 of a stride, and the cadence that drives it. */
-	uint32_t stride_phase_milli;
+	/* Stride phase in 1/960000 of a stride - the exact unit of
+	 * cadence_16 x ms, so no per-tick truncation - and the cadence that
+	 * drives it. */
+	uint32_t stride_phase_num;
 	uint32_t cadence_16;
+
+	/* A controller has commanded a speed, INCLUDING 0: target 0 used to
+	 * read as "no override" and the canned workout resumed after a Stop. */
+	bool     speed_overridden;
 
 	bool     running;
 	uint32_t elapsed_ms;
@@ -122,7 +128,6 @@ static int32_t ramp_i32(int32_t value, int32_t target, int32_t step)
 static void sim_tick_fn(struct k_work *w)
 {
 	uint32_t strides_due;
-	uint32_t phase_step;
 
 	ARG_UNUSED(w);
 
@@ -164,9 +169,10 @@ static void sim_tick_fn(struct k_work *w)
 		/* A commanded speed overrides the built-in workout: a bench run
 		 * that sends an FTMS Set Target Speed must see the belt obey,
 		 * and the profile of a canned workout is only the default. */
-		if (sim.target_speed_mm_s != 0u) {
+		if (sim.speed_overridden) {
 			want = sim.target_speed_mm_s;
-			state = TREADMILL_STATE_IN_USE;
+			state = (want != 0u) ? TREADMILL_STATE_IN_USE
+					     : TREADMILL_STATE_FINISHED;
 		}
 
 		sim.speed_mm_s = (uint32_t)ramp_i32(
@@ -191,13 +197,13 @@ static void sim_tick_fn(struct k_work *w)
 	sim.cadence_16 = sim_cadence_16(sim.speed_mm_s);
 	treadmill_source_report_cadence_16(sim.cadence_16);
 
-	/* Phase in 1/1000 of a stride. cadence(1/16 strides/min) * tick(ms) is
-	 * (strides/min / 16) * ms, so milli-strides = cadence_16 * dt_ms * 1000
-	 * / (16 * 60000) = cadence_16 * dt_ms / 960. */
-	phase_step = (sim.cadence_16 * SIM_TICK_MS) / 960u;
-	sim.stride_phase_milli += phase_step;
-	strides_due = sim.stride_phase_milli / 1000u;
-	sim.stride_phase_milli %= 1000u;
+	/* cadence(1/16 strides/min) * tick(ms) is (strides/min / 16) * ms, so
+	 * strides = cadence_16 * dt_ms / (16 * 60000) = cadence_16 * dt_ms /
+	 * 960000. Accumulated in that unit exactly; dividing per tick (as
+	 * milli-strides) truncated ~0.5 % of the cadence away. */
+	sim.stride_phase_num += sim.cadence_16 * SIM_TICK_MS;
+	strides_due = sim.stride_phase_num / 960000u;
+	sim.stride_phase_num %= 960000u;
 	while (strides_due-- > 0u) {
 		treadmill_source_report_stride();
 	}
@@ -246,6 +252,7 @@ static int sim_set_speed(const struct treadmill_source *src, uint32_t mm_s)
 	ARG_UNUSED(src);
 
 	sim.target_speed_mm_s = mm_s;
+	sim.speed_overridden = true;
 	LOG_INF("speed commanded: %u mm/s", mm_s);
 	return 0;
 }

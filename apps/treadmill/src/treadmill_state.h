@@ -98,6 +98,9 @@ struct treadmill_state {
 	 * twentieth of the energy actually burned. Whole kcal is
 	 * `energy_mkcal / 1000` at the point of use. */
 	uint64_t energy_mkcal;
+	/* The estimate's current RATE, 0.1 kcal/h (FE-C page 18), set by the
+	 * tick from the same product as energy_mkcal. */
+	uint32_t burn_rate_deci;
 
 	/* Fractional carry for the accumulators above, so that integrating a
 	 * 3000 mm/s belt on a 100 ms tick does not lose 0.4 mm per tick and
@@ -233,6 +236,12 @@ uint32_t treadmill_mm_s_from_ftms_speed(uint16_t centi_kph);
 
 /* mm/s to BLE RSC's 1/256 m/s. */
 uint16_t treadmill_rsc_speed_from_mm_s(uint32_t mm_s);
+
+/* RSC Total Distance is 0.1 m, NOT metres - rscs.h's "1 unit = 1 meter" is
+ * wrong (the RSC Measurement characteristic defines 1/10 m). FTMS Total
+ * Distance IS metres; the two fields look alike. Wraps at 32 bits, as the
+ * field does. */
+uint32_t treadmill_rsc_total_distance_dm(uint64_t distance_mm);
 
 /* Stride length in 0.01 m, from distance and stride count - FE-C page 17's
  * "cycle length" and RSC's "instantaneous stride length" are the same

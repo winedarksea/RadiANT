@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The treadmill's heart-rate slave against a stub antr_* layer. See
+# CMakeLists.txt beside this file.
+#
+# On Windows there is no native_sim (no host C compiler):
+#
+#   .\scripts\run_ztest_hw.ps1 -App apps\treadmill\tests\hr_rx
+tests:
+  treadmill.hr_rx:
+    tags:
+      - radiant
+      - treadmill
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim

@@ -50,6 +50,11 @@
  * notification together. Timestamp fidelity is preserved because the instant
  * travels in the word; the profile's context count stays at two.
  *
+ * Two contexts with no lock is safe one way round only: the workqueue is
+ * cooperative, so the event thread never interrupts a writer - but the
+ * workqueue CAN preempt the event thread mid-encode. So the reader,
+ * load_next_page(), wraps profile_hr_next() in k_sched_lock().
+ *
  * The word is single-producer by construction: exactly one sensor is
  * registered, so exactly one context calls report_beat(). Do not call it from
  * two.

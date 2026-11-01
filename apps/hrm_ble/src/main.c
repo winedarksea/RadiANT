@@ -103,10 +103,11 @@ static void ant_suppression_update(void)
 	}
 
 	if (want_open) {
-		/* Stage a payload before reopening, for the same reason the
-		 * first open does: a master transmits the instant the channel
-		 * opens. */
-		load_next_page();
+		/* No pre-open stage: antr_broadcast_message_tx() refuses a
+		 * closed channel (NOT_OPENED, by design) and the refused call
+		 * still consumed a page. open() posts the first slot from
+		 * whatever the buffer holds - the last page, after a resume -
+		 * and EVENT_TX after that slot starts the real stream. */
 		if (antr_channel_open(HR_CHANNEL) == ANTW_RESPONSE_NO_ERROR) {
 			ant_open = true;
 			LOG_INF("ANT+ resumed (BLE disconnected)");
@@ -163,12 +164,11 @@ void hrm_node_deliver_beats(uint16_t beats, uint16_t event_time, uint8_t bpm)
 
 static void node_tick_fn(struct k_work *w)
 {
-	static uint32_t elapsed_ms;
-
 	ARG_UNUSED(w);
 
-	elapsed_ms += NODE_TICK_MS;
-	profile_hr_set_operating_time(&hr, elapsed_ms / 1000u);
+	/* Uptime, not a count of wake-ups: a sum of NODE_TICK_MS drifted slow
+	 * by every late wake-up and wrapped a uint32 of ms at 49.7 days. */
+	profile_hr_set_operating_time(&hr, (uint32_t)(k_uptime_get() / 1000));
 
 	/* Contact detection, AGC, battery - the slow, level-valued things a
 	 * source may want a thread context for. Never beats; see the seam. */
@@ -192,7 +192,13 @@ static void load_next_page(void)
 	uint8_t body[8];
 	enum profile_slot_kind kind;
 
+	/* This runs on the (preemptible) event thread; the source publishes
+	 * from the cooperative system workqueue, which can preempt it mid-
+	 * encode and hand this page half old and half new fields. Lock for
+	 * the encode only - not the send, which takes a mutex. */
+	k_sched_lock();
 	kind = profile_hr_next(&hr, (uint64_t)k_uptime_get() * 1000u, body);
+	k_sched_unlock();
 	if (kind == PROFILE_SLOT_IDLE) {
 		/* A sparse node's silent slot. The radio stays off and the
 		 * channel period keeps running; nothing to stage. */
@@ -260,12 +266,14 @@ static int ant_start(uint16_t devnum)
 	}
 
 	/*
-	 * Stage the first page before opening, not after: a master transmits
-	 * the instant the channel opens, so the first slot is gone before any
-	 * EVENT_TX could stage it - otherwise the first frame goes out empty.
+	 * No pre-open stage. It was here to stop the first frame going out
+	 * empty, and it never could: antr_broadcast_message_tx() refuses a
+	 * channel that is not open yet (NOT_OPENED, by design), so the call
+	 * only consumed a page for nothing. open() posts the first slot from
+	 * whatever the buffer holds (zeros at boot - HR's computed 0 reads as
+	 * "invalid" to a receiver), and EVENT_TX after that slot starts the
+	 * real stream.
 	 */
-	load_next_page();
-
 	rc = antr_channel_open(HR_CHANNEL);
 	if (rc != ANTW_RESPONSE_NO_ERROR) {
 		LOG_ERR("open: %d", (int)rc);

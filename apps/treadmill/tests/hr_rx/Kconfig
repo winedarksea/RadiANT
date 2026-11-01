@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# treadmill_hr_rx.c declares its log module against the application's
+# CONFIG_TREADMILL_LOG_LEVEL, which lives in apps/treadmill/Kconfig behind the
+# whole application's dependencies. This image needs only the level.
+
+module = TREADMILL
+module-str = treadmill
+source "subsys/logging/Kconfig.template.log_config"
+
+source "Kconfig.zephyr"

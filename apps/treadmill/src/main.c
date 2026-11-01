@@ -105,12 +105,6 @@ static struct profile_fec_tx   fec;
 static struct profile_sdm      sdm;
 #endif
 
-#if defined(CONFIG_TREADMILL_FEC_METABOLIC)
-/* For the caloric-burn-rate field of FE-C page 18, which is a RATE and this
- * project only ever computes a total. */
-static uint64_t last_energy_mkcal;
-#endif
-
 static void node_tick_fn(struct k_work *w);
 static K_WORK_DELAYABLE_DEFINE(node_tick, node_tick_fn);
 
@@ -176,22 +170,16 @@ static void publish_fec(void)
 #if defined(CONFIG_TREADMILL_FEC_METABOLIC)
 	{
 		struct profile_fec_metabolic m;
-		uint64_t                     delta;
 
 		memset(&m, 0, sizeof(m));
-		delta = state.energy_mkcal - last_energy_mkcal;
-		last_energy_mkcal = state.energy_mkcal;
-		/* milli-kcal per tick -> 0.1 kcal/h:
-		 * delta/1000 kcal per NODE_TICK_MS ms is
-		 * delta * 3600000 / (1000 * NODE_TICK_MS) kcal/h, x10 for the
-		 * field = delta * 36000 / NODE_TICK_MS. */
-		{
-			uint64_t rate = (delta * 36000u) / NODE_TICK_MS;
-
-			m.burn_rate_deci = (rate > 0xFFFEu) ? 0xFFFEu
-							    : (uint16_t)rate;
-			m.burn_rate_valid = true;
-		}
+		/* The tick's own rate, not a delta of the total: publish() runs
+		 * from every source report as well as the tick, and each call
+		 * used to consume the delta, so page 18 read 0.0 kcal/h
+		 * whenever a report landed between ticks. */
+		m.burn_rate_deci = (state.burn_rate_deci > 0xFFFEu)
+					   ? 0xFFFEu
+					   : (uint16_t)state.burn_rate_deci;
+		m.burn_rate_valid = true;
 		/* METs are deliberately NOT reported. The estimate behind the
 		 * calorie total is a population-average equation with no
 		 * measurement in it (see treadmill_state.c), and a METs field
@@ -457,14 +445,20 @@ static void apply_control_page(const uint8_t *body)
  * profile_fec_tx_next() is on the callback. That is the same two contexts the
  * header allows, with the writers consolidated onto one of them rather than
  * split across both - strictly the tidier half of what was already sanctioned.
+ * "Plain stores" is safe for the WRITERS only because the workqueue is
+ * cooperative and the event thread cannot preempt it. The reverse is not
+ * true: the workqueue can preempt the event thread mid-encode, so the READER
+ * (load_fec_page()/load_sdm_page()) wraps its _next() in k_sched_lock().
  *
  * A RING AND NOT ONE SLOT. Commands arrive at most once per 250 ms slot and the
- * consumer runs in microseconds, so the depth is never reached in practice -
- * but the single-slot version has to answer FAIL by overwriting an answer it
- * has already staged, losing the first command's page 71 to make room for the
- * second's. Four entries costs 32 bytes and removes that whole class. The drop
- * path below is kept anyway, and still answers, because a command that is
- * dropped in silence is exactly the "machine that ignores you" §8.8 is about.
+ * consumer runs in microseconds, so the depth is never reached in practice.
+ * What the ring buys is that no COMMAND is lost or reordered on the way to
+ * apply_control_page(). It does NOT buy one page 71 per command: page 71 is a
+ * single "last received command" slot in profile_fec_tx, so two commands
+ * answered before the next slot 3 put only the second answer on the air -
+ * which is what that page means. Four entries costs 32 bytes. The drop path
+ * below is kept anyway, and still answers, because a command that is dropped
+ * in silence is exactly the "machine that ignores you" §8.8 is about.
  */
 #define FEC_CMD_QUEUE_DEPTH 4u
 
@@ -616,8 +610,16 @@ void treadmill_node_heart_rate(uint8_t bpm)
 static void load_fec_page(void)
 {
 	uint8_t body[8];
+	enum profile_slot_kind kind;
 
-	if (profile_fec_tx_next(&fec, body) == PROFILE_SLOT_IDLE) {
+	/* The event thread is preemptible and publish() runs on the
+	 * cooperative workqueue, which can therefore land mid-encode and give
+	 * this page half old, half new fields. Lock the encode only - never
+	 * the send, which takes a mutex. */
+	k_sched_lock();
+	kind = profile_fec_tx_next(&fec, body);
+	k_sched_unlock();
+	if (kind == PROFILE_SLOT_IDLE) {
 		return;
 	}
 	(void)antr_broadcast_message_tx(FEC_CHANNEL, sizeof(body), body);
@@ -627,8 +629,14 @@ static void load_fec_page(void)
 static void load_sdm_page(void)
 {
 	uint8_t body[8];
+	enum profile_slot_kind kind;
 
-	if (profile_sdm_next(&sdm, body) == PROFILE_SLOT_IDLE) {
+	/* As load_fec_page(): SDM page 1's distance_m/distance_frac pair torn
+	 * across a metre roll-over reads as a 255 m jump. */
+	k_sched_lock();
+	kind = profile_sdm_next(&sdm, body);
+	k_sched_unlock();
+	if (kind == PROFILE_SLOT_IDLE) {
 		return;
 	}
 	(void)antr_broadcast_message_tx(SDM_CHANNEL, sizeof(body), body);
@@ -690,8 +698,7 @@ void antr_on_message(const struct antr_msg *msg)
 }
 
 static int ant_master_start(uint8_t channel, uint16_t devnum,
-			    uint8_t device_type, uint16_t period,
-			    void (*stage)(void))
+			    uint8_t device_type, uint16_t period)
 {
 	antr_err_t rc;
 
@@ -725,11 +732,13 @@ static int ant_master_start(uint8_t channel, uint16_t devnum,
 		return -EIO;
 	}
 
-	/* Stage before opening, not after: a master transmits the instant the
-	 * channel opens, so the first slot is gone before any EVENT_TX could
-	 * fill it and the first frame would otherwise go out empty. */
-	stage();
-
+	/* No pre-open stage. It was here to stop the first frame going out
+	 * empty, and it never could: antr_broadcast_message_tx() refuses a
+	 * channel that is not open yet (NOT_OPENED, by design), so it only
+	 * consumed a page for nothing. open() posts the first slot from
+	 * whatever the buffer holds (zeros at boot; FE-C has no page 0x00, so
+	 * receivers ignore it) and EVENT_TX after that slot starts the real
+	 * stream, group-aligned. */
 	rc = antr_channel_open(channel);
 	if (rc != ANTW_RESPONSE_NO_ERROR) {
 		LOG_ERR("ch%u open: %d", channel, (int)rc);
@@ -927,7 +936,7 @@ int main(void)
 	}
 
 	if (ant_master_start(FEC_CHANNEL, devnum, PROFILE_FEC_DEVICE_TYPE,
-			     PROFILE_FEC_PERIOD, load_fec_page) != 0) {
+			     PROFILE_FEC_PERIOD) != 0) {
 		return 0;
 	}
 #if defined(CONFIG_TREADMILL_ANT_SDM)
@@ -948,7 +957,7 @@ int main(void)
 	 * it there is no treadmill on the air at all.
 	 */
 	if (ant_master_start(SDM_CHANNEL, devnum, PROFILE_SDM_DEVICE_TYPE,
-			     PROFILE_SDM_PERIOD, load_sdm_page) != 0) {
+			     PROFILE_SDM_PERIOD) != 0) {
 		LOG_ERR("the SDM master did not start; continuing with FE-C "
 			"only. Anything that pairs with a foot pod - Zwift Run, "
 			"most watches - will not see this machine.");

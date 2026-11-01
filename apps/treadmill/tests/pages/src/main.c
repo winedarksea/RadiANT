@@ -225,6 +225,62 @@ ZTEST(treadmill_pages, test_descent_counts_up_in_its_own_accumulator)
 	zassert_equal(s.neg_vertical_mm, 10000u, NULL);
 }
 
+/*
+ * RSC Total Distance is in 0.1 m (review 2026-10-31, B2-1). rscs.h says
+ * "1 unit = 1 meter" and rscs.c encodes the value raw, so the code sent metres
+ * and every RSC client showed a tenth of the distance run. FTMS Total
+ * Distance really is metres - the two fields look alike.
+ */
+ZTEST(treadmill_pages, test_rsc_total_distance_is_in_decimetres)
+{
+	zassert_equal(treadmill_rsc_total_distance_dm(1000000u), 10000u,
+		      "1 km must be 10000 x 0.1 m - rscs.h's '1 unit = 1 "
+		      "meter' is wrong");
+	zassert_equal(treadmill_rsc_total_distance_dm(150u), 1u, NULL);
+	zassert_equal(treadmill_rsc_total_distance_dm(99u), 0u, NULL);
+}
+
+/*
+ * FE-C page 18's burn rate is the estimate's RATE, set on the tick (review
+ * 2026-10-31, B1-1). It used to be the delta of the energy total since the
+ * last publish(), and a source report between ticks publishes too - so page
+ * 18 read 0.0 kcal/h whenever one landed between ticks.
+ */
+ZTEST(treadmill_pages, test_burn_rate_is_the_estimates_rate_and_survives_a_report)
+{
+	struct treadmill_state s;
+	uint64_t               e0;
+	uint64_t               per_hour_deci;
+
+	treadmill_state_init(&s);
+	treadmill_state_set_state(&s, TREADMILL_STATE_IN_USE);
+	treadmill_state_set_user_mass(&s, 7500u); /* 75.00 kg */
+	treadmill_state_set_speed(&s, 3000u);     /* 3 m/s */
+	treadmill_state_set_incline(&s, 0);
+	run(&s, 10u);
+
+	/* VO2 39 500 milli-ml/kg/min x 7500 x 3 / 1e5 = 8887 (888.7 kcal/h). */
+	zassert_equal(s.burn_rate_deci, 8887u, "burn rate %u, want 8887",
+		      (unsigned int)s.burn_rate_deci);
+
+	/* What a source report does between ticks: must not disturb it. */
+	treadmill_state_set_speed(&s, 3000u);
+	treadmill_state_add_strides(&s, 1u);
+	zassert_equal(s.burn_rate_deci, 8887u,
+		      "a report between ticks changed the rate to %u",
+		      (unsigned int)s.burn_rate_deci);
+
+	/* And the rate is the total's own: an hour of it within 2 %. */
+	e0 = s.energy_mkcal;
+	run(&s, 3600u);
+	per_hour_deci = (s.energy_mkcal - e0) / 100u;
+	zassert_true(per_hour_deci * 100u >= (uint64_t)s.burn_rate_deci * 98u &&
+		     per_hour_deci * 100u <= (uint64_t)s.burn_rate_deci * 102u,
+		     "an hour accumulated %u x 0.1 kcal against a rate of %u",
+		     (unsigned int)per_hour_deci,
+		     (unsigned int)s.burn_rate_deci);
+}
+
 ZTEST(treadmill_pages, test_energy_is_in_the_right_order_of_magnitude)
 {
 	struct treadmill_state s;

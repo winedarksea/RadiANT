@@ -296,6 +296,10 @@ static atomic_t connections;
 static struct bt_conn *controller;
 
 static uint8_t training_status = FTMS_TRAINING_IDLE;
+/* Paused (Stop/Pause 0x02), so Start/Resume is legal while training_status
+ * still reads MANUAL_MODE. Without it a Resume after a Pause answered
+ * Operation Failed (review 2026-10-31, B2-4). */
+static bool paused;
 
 /* The Zwift seam. Registered by nothing in this tree; see the header. */
 static treadmill_ble_grade_provider_t grade_provider;
@@ -396,6 +400,27 @@ static void cp_indicate_destroy(struct bt_gatt_indicate_params *params)
  * it by UUID rather than by index. */
 static const struct bt_gatt_attr *cp_attr(void);
 static const struct bt_gatt_attr *status_attr(void);
+static const struct bt_gatt_attr *trstat_attr(void);
+
+/*
+ * Every Training Status write goes through here. The characteristic is
+ * declared NOTIFY, and nothing used to notify it (review 2026-10-31, B2-5):
+ * a subscribed client only ever saw the value it read once.
+ */
+static void set_training_status(uint8_t ts)
+{
+	uint8_t value[2] = { 0x00u, ts }; /* Table 4.13: flags, status */
+	const struct bt_gatt_attr *attr;
+
+	if (training_status == ts) {
+		return;
+	}
+	training_status = ts;
+	attr = trstat_attr();
+	if (attr != NULL) {
+		(void)bt_gatt_notify(NULL, attr, value, sizeof(value));
+	}
+}
 
 /*
  * Table 4.23's Response Code packet: 0x80, the echoed request op code, the
@@ -563,7 +588,8 @@ static uint8_t handle_reset(struct bt_conn *conn)
 	 * recording rather than a shortcut. */
 	(void)treadmill_node_set_incline_deci(0, NULL);
 	(void)treadmill_node_set_speed_mm_s(0u, NULL);
-	training_status = FTMS_TRAINING_IDLE;
+	set_training_status(FTMS_TRAINING_IDLE);
+	paused = false;
 
 	/* Reset also revokes control (§4.16.2). */
 	controller = NULL;
@@ -701,21 +727,25 @@ static void cp_work_fn(struct k_work *w)
 					    (uint16_t)(len - 1u));
 		break;
 	case FTMS_OP_START_RESUME:
-		if (training_status == FTMS_TRAINING_MANUAL_MODE) {
+		if (training_status == FTMS_TRAINING_MANUAL_MODE && !paused) {
 			/* Table 4.24 and §4.16.2: Start when already started is
 			 * Operation Failed, NOT Success. A client uses the
-			 * difference to decide whether it started the session. */
+			 * difference to decide whether it started the session.
+			 * A RESUME after a Pause is not that case. */
 			result = FTMS_RESULT_OPERATION_FAILED;
 		} else {
 			uint8_t msg[1] = { FTMS_STATUS_STARTED_OR_RESUMED };
 
-			training_status = FTMS_TRAINING_MANUAL_MODE;
+			set_training_status(FTMS_TRAINING_MANUAL_MODE);
+			paused = false;
 			notify_status(conn, msg, sizeof(msg));
 			result = FTMS_RESULT_SUCCESS;
 		}
 		break;
 	case FTMS_OP_STOP_PAUSE:
-		if (len < 2u) {
+		/* 0x01 stop and 0x02 pause are the only parameters; anything
+		 * else used to answer Success and echo the invalid value. */
+		if (len < 2u || (data[1] != FTMS_STOP && data[1] != FTMS_PAUSE)) {
 			result = FTMS_RESULT_INVALID_PARAM;
 		} else if (training_status == FTMS_TRAINING_IDLE) {
 			result = FTMS_RESULT_OPERATION_FAILED;
@@ -724,8 +754,14 @@ static void cp_work_fn(struct k_work *w)
 					   data[1] };
 
 			if (data[1] == FTMS_STOP) {
-				training_status = FTMS_TRAINING_IDLE;
+				set_training_status(FTMS_TRAINING_IDLE);
+				paused = false;
 				(void)treadmill_node_set_speed_mm_s(0u, NULL);
+			} else {
+				/* Whether Pause should also stop the belt is
+				 * product policy, deliberately not decided
+				 * here (O5 SF-4). */
+				paused = true;
 			}
 			notify_status(conn, msg, sizeof(msg));
 			result = FTMS_RESULT_SUCCESS;
@@ -880,6 +916,17 @@ static const struct bt_gatt_attr *status_attr(void)
 	return cached;
 }
 
+static const struct bt_gatt_attr *trstat_attr(void)
+{
+	static const struct bt_gatt_attr *cached;
+
+	if (cached == NULL) {
+		cached = bt_gatt_find_by_uuid(ftms_svc.attrs, ftms_svc.attr_count,
+					      BT_UUID_GATT_TRSTAT);
+	}
+	return cached;
+}
+
 static const struct bt_gatt_attr *td_attr(void)
 {
 	static const struct bt_gatt_attr *cached;
@@ -984,7 +1031,9 @@ static void notify_rsc(const struct treadmill_state *s)
 	m.inst_stride_length =
 		treadmill_stride_length_cm(s->distance_mm, s->strides);
 	m.is_total_distance = true;
-	m.total_distance = (uint32_t)(s->distance_mm / 1000u);
+	/* 0.1 m units - see treadmill_rsc_total_distance_dm(). Metres here
+	 * reported a tenth of the distance run. */
+	m.total_distance = treadmill_rsc_total_distance_dm(s->distance_mm);
 	/* "Running" above about 2.2 m/s is the conventional split and it is a
 	 * display hint, not a measurement. */
 	m.is_running = (s->belt_speed_mm_s >= 2200u);

@@ -190,23 +190,43 @@ int treadmill_hr_rx_start(uint8_t channel)
 }
 
 /*
- * Relax the floor by one bin and search again. Called only on a search
- * TIMEOUT, never on a lost packet, which is the hold-down: nothing here reacts
- * to a strap dropping a message.
+ * Set on RX_SEARCH_TIMEOUT, consumed on the CHANNEL_CLOSED that follows it.
+ * The channel closes ITSELF after a search timeout, and while a scan window is
+ * still bound to it that close is not finished when the timeout is delivered:
+ * reopening then was WRONG_STATE, swallowed, and the slave stayed closed for
+ * the rest of the session - no strap acquired after the first 30 s timeout
+ * (review 2026-10-31, B2-3).
  */
-static void relax_and_research(void)
+static bool research_pending;
+
+/*
+ * Relax the floor by one bin. Called only on a search TIMEOUT, never on a
+ * lost packet, which is the hold-down: nothing here reacts to a strap
+ * dropping a message. The reopen waits for CHANNEL_CLOSED.
+ */
+static void relax_on_timeout(void)
 {
 	if (prox_threshold > PROX_FLOOR) {
 		prox_threshold--;
 	}
 	tracked_device = 0u;
 	publish_bpm(TREADMILL_HR_NONE);
+	research_pending = true;
+}
 
-	(void)antr_channel_close(hr_channel);
+static void research_after_close(void)
+{
+	antr_err_t rc;
+
+	research_pending = false;
 	(void)antr_prox_search_set(hr_channel, prox_threshold, 0u);
-	if (antr_channel_open(hr_channel) == ANTW_RESPONSE_NO_ERROR) {
+	rc = antr_channel_open(hr_channel);
+	if (rc == ANTW_RESPONSE_NO_ERROR) {
 		LOG_INF("heart rate: search timed out, floor now bin %u",
 			prox_threshold);
+	} else {
+		LOG_ERR("heart rate: reopen after search timeout failed: %d - "
+			"no strap will be acquired until reboot", (int)rc);
 	}
 }
 
@@ -256,8 +276,24 @@ bool treadmill_hr_rx_message(const struct antr_msg *msg)
 	if (msg->id == ANTW_MESG_RESPONSE_EVENT_ID &&
 	    msg->len >= ANTW_MESG_RESPONSE_EVENT_SIZE &&
 	    msg->data[0] == hr_channel) {
-		if (msg->data[2] == ANTW_EVENT_RX_SEARCH_TIMEOUT) {
-			relax_and_research();
+		switch (msg->data[2]) {
+		case ANTW_EVENT_RX_SEARCH_TIMEOUT:
+			relax_on_timeout();
+			break;
+		case ANTW_EVENT_CHANNEL_CLOSED:
+			if (research_pending) {
+				research_after_close();
+			}
+			break;
+		case ANTW_EVENT_RX_FAIL_GO_TO_SEARCH:
+			/* The strap has gone (about 2 s of misses), not dropped
+			 * a packet: stop reporting its last bpm for the whole
+			 * search (B2-2). The proximity floor is untouched. */
+			no_reading_run = 0u;
+			publish_bpm(TREADMILL_HR_NONE);
+			break;
+		default:
+			break;
 		}
 		return true;
 	}

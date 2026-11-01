@@ -264,6 +264,15 @@ void treadmill_state_tick(struct treadmill_state *s, uint32_t dt_ms)
 			uint64_t num = (uint64_t)vo2_mmlkgmin *
 				       (uint64_t)mass_10g * (uint64_t)dt_ms;
 
+			/* The RATE, from the same product without dt: mkcal
+			 * per tick x 36000 / dt_ms = vo2 * mass * 36000 / 1.2e9
+			 * = vo2 * mass * 3 / 1e5, in 0.1 kcal/h. Set here, on
+			 * the tick, so a publish between ticks cannot read a
+			 * zero delta (FE-C page 18 used to flicker to 0). */
+			s->burn_rate_deci = (uint32_t)(((uint64_t)vo2_mmlkgmin *
+							(uint64_t)mass_10g * 3u) /
+						       100000u);
+
 			num += s->energy_carry;
 			s->energy_mkcal += num / 1200000000ull;
 			s->energy_carry = (uint32_t)(num % 1200000000ull);
@@ -332,6 +341,11 @@ uint16_t treadmill_rsc_speed_from_mm_s(uint32_t mm_s)
 	uint32_t units = (mm_s * 256u + 500u) / 1000u;
 
 	return (units > 0xFFFFu) ? 0xFFFFu : (uint16_t)units;
+}
+
+uint32_t treadmill_rsc_total_distance_dm(uint64_t distance_mm)
+{
+	return (uint32_t)((distance_mm / 100u) & 0xFFFFFFFFu);
 }
 
 uint8_t treadmill_stride_length_cm(uint64_t distance_mm, uint32_t strides)
