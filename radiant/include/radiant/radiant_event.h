@@ -145,9 +145,11 @@ extern "C" {
  * 51-packet burst Spike B part 2 captured fitted in 64 with no drain at all
  * and no longer does in 48; it arrives at air rate, with the drain woken per
  * packet, so it overflows only if the drain stalls for most of it. Costs
- * ~3 KB static RAM. Override with -DANT_EVENT_QUEUE_DEPTH=<n>; 32 (one slot
- * per channel) is the lowest value that can't lose a message to one slot's
- * worth of simultaneous arrivals.
+ * ~3 KB static RAM. Override with -DRADIANT_EVENT_QUEUE_DEPTH=<n>; it must
+ * leave 32 data slots (one per channel, the fewest that can't lose a message
+ * to one slot's worth of simultaneous arrivals) above the reserve, so
+ * n >= 32 + RADIANT_EVENT_TERMINAL_RESERVE (48 by default), which with the
+ * power-of-two rule makes 64 the smallest depth that builds.
  */
 #ifndef RADIANT_EVENT_QUEUE_DEPTH
 #define RADIANT_EVENT_QUEUE_DEPTH  64u
@@ -160,8 +162,9 @@ extern "C" {
  * DEPTH - RESERVE (48 data slots, ~375 ms at 128 msg/s). Each of those four is
  * owed exactly once and is never re-posted, and losing one wedges a host's
  * burst semaphore or close wait; losing a broadcast costs one period. At most
- * two can be outstanding per channel (one transfer outcome, one close), so 16
- * covers 8 channels outright. Same policy as core_cb_enqueue() in
+ * three can be outstanding per channel (a burst's NEXT_DATA_BLOCK, then the
+ * transfer outcome when it is aborted in WAIT_BLOCK, then the close), so 16
+ * covers 5 channels outright. Same policy as core_cb_enqueue() in
  * radiant_radio_nrf.c (review 2026-10-31, A11-1).
  */
 #ifndef RADIANT_EVENT_TERMINAL_RESERVE
