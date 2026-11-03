@@ -407,9 +407,14 @@ static int64_t mqtt_next_attempt_ms;
 static uint32_t mqtt_backoff_ms = MQTT_BACKOFF_MIN_MS;
 
 /* Caller holds `lock`. Doubling rather than fixed, so a broker that is down for
- * an hour costs a handful of stalls rather than 720 of them. */
+ * an hour costs a handful of stalls rather than 720 of them. Once per attempt:
+ * the CONNACK timeout's mqtt_abort() raises MQTT_EVT_DISCONNECT, whose handler
+ * arms this too, and arming twice quadrupled the interval. */
 static void arm_backoff(void)
 {
+	if (mqtt_next_attempt_ms > k_uptime_get()) {
+		return;
+	}
 	mqtt_next_attempt_ms = k_uptime_get() + (int64_t)mqtt_backoff_ms;
 	if (mqtt_backoff_ms < MQTT_BACKOFF_MAX_MS) {
 		mqtt_backoff_ms *= 2u;

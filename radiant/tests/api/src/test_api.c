@@ -1759,6 +1759,98 @@ ZTEST(api, test_a_key_resent_while_the_last_carrier_chunk_runs_does_not_orphan_i
 }
 
 /*
+ * The FIRST key install landing while the last carrier's chunk runs. The
+ * deferral the test above pins is free for a re-sent key - same address - but
+ * before any key the sweep runs on the all-zero address, and a deferred
+ * install that nothing applied later left it there until the next reset: no
+ * wildcard channel acquired an ANT+ device again. A host that opens a channel
+ * before installing its key is out of sequence, but the key it then gives
+ * must still reach the sweep.
+ */
+ZTEST(api, test_a_first_key_deferred_by_a_live_chunk_still_reaches_the_sweep)
+{
+	const struct fake_radio_arm *w;
+	uint8_t                      frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t                      len;
+	uint16_t                     dev;
+
+	/* No key yet. */
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_lib_config_set((uint8_t)ANTW_LIB_CONFIG_ALL_EXT_FIELDS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(CH,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(CH));
+
+	w = armed_search_window();
+	zassert_true(w->filters[0].addr[0] == 0u && w->filters[0].addr[1] == 0u,
+		     "setup: a keyless sweep did not run on the zero address "
+		     "(%02x %02x)", w->filters[0].addr[0], w->filters[0].addr[1]);
+
+	/* Acquire inside the chunk on that zero address, so the chunk stays
+	 * live with no searcher left - the state the deferral fires in. */
+	dev = (uint16_t)(0x0500u | w->filters[0].addr[2]);
+	len = fake_radio_build_ant_frame(frame, dev, 0x0Bu, 5u, peer_payload);
+	frame[0] = w->filters[0].addr[0];
+	frame[1] = w->filters[0].addr[1];
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(w->t_open + 1000u, frame, len));
+	fake_radio_advance_to(w->t_open + 2000u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "setup: the channel did not acquire inside the chunk");
+	zassert_false(w->terminated,
+		      "setup: the chunk ended with the acquisition, so nothing "
+		      "deferred the key");
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+
+	/* The carrier goes, then a fresh wildcard slave needs the sweep. */
+	(void)antr_channel_close(CH);
+	fake_radio_advance(1000u);
+	drain();
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(1u,
+					  (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(1u, 0u, 0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(1u, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(1u, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(1u));
+
+	w = armed_search_window();
+	zassert_true(w->filters[0].addr[0] == 0xA6u &&
+		     w->filters[0].addr[1] == 0xC5u,
+		     "the sweep is still on %02x %02x after the ANT+ key was "
+		     "installed: the deferred re-init was never applied",
+		     w->filters[0].addr[0], w->filters[0].addr[1]);
+
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev);
+	fake_radio_advance_to(w->t_close + 1u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u),
+		      "a real ANT+ device was not acquired - state %d",
+		      (int)radiant_channel_state_get(1u));
+
+	(void)antr_channel_close(1u);
+	fake_radio_advance(1000u);
+	drain();
+	end_of_test();
+}
+
+/*
  * A tracked channel owes its next window immediately, not one pump later -
  * the invariant a background scan lives or dies on. radiant_sched.c ends a
  * scan chunk at t_back(committed, lead), so if a tracked slave's next window

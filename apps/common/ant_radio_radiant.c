@@ -416,6 +416,9 @@ static uint8_t api_crypto_key[API_CRYPTO_KEYS][ANTW_ENCRYPTION_KEY_SIZE];
 
 static uint32_t api_op_next = 1u;
 static uint8_t  api_search_slot = RADIANT_SCHED_CH_NONE;
+/* A network-0 key install deferred by a live sweep chunk (see
+ * antr_network_address_set()); the next pump with no carrier applies it. */
+static bool     api_search_reinit_pending;
 static bool     api_inited;
 
 /*
@@ -1667,6 +1670,20 @@ static void api_pump_locked(void)
 
 	now = radiant_radio_now();
 
+	/* A key install that found a chunk in flight. Before any key the sweep
+	 * runs on the all-zero address, so a deferral nothing applied later
+	 * kept it there until reset. With no carrier the re-init orphans
+	 * nothing, and any member it drops rejoins in the loop below. */
+	if (api_search_reinit_pending &&
+	    api_search_slot == RADIANT_SCHED_CH_NONE) {
+		struct radiant_search_cfg scfg;
+
+		api_search_cfg_build(&scfg);
+		(void)radiant_search_init(&api_search, &scfg, &api_search_cbs,
+				      NULL);
+		api_search_reinit_pending = false;
+	}
+
 	for (ch = 0u; ch < API_CHANNELS; ch++) {
 		enum radiant_channel_state st = radiant_channel_state_get(ch);
 		bool searching = radiant_search_is_searching(&api_search, ch);
@@ -2896,6 +2913,7 @@ static void api_reset_state(void)
 #endif
 
 	api_search_slot = RADIANT_SCHED_CH_NONE;
+	api_search_reinit_pending = false;
 }
 
 antr_err_t antr_init(void)
@@ -3420,16 +3438,22 @@ antr_err_t antr_network_address_set(uint8_t network, const uint8_t *key)
 	 * would drop every channel already in the search. Hosts install keys
 	 * before opening channels, so this is normally free.
 	 * ...and no sweep chunk still in flight: re-initialising under a live
-	 * carrier orphans its continuous request in that channel's slot. Only
-	 * one key is ever accepted, so a deferred re-init loses nothing. */
-	if (network == 0u && radiant_search_n_searching(&api_search) == 0u &&
-	    api_search_slot == RADIANT_SCHED_CH_NONE) {
-		struct radiant_search_cfg scfg;
+	 * carrier orphans its continuous request in that channel's slot, so
+	 * that case is deferred to the next pump with no carrier
+	 * (api_search_reinit_pending). Deferred, not dropped: a re-sent key
+	 * changes nothing, but the FIRST one moves the sweep off the all-zero
+	 * address it started on. */
+	if (network == 0u && radiant_search_n_searching(&api_search) == 0u) {
+		if (api_search_slot == RADIANT_SCHED_CH_NONE) {
+			struct radiant_search_cfg scfg;
 
-		api_search_cfg_build(&scfg);
-		(void)radiant_search_init(&api_search, &scfg, &api_search_cbs,
-				      NULL);
-		api_search_slot = RADIANT_SCHED_CH_NONE;
+			api_search_cfg_build(&scfg);
+			(void)radiant_search_init(&api_search, &scfg,
+					      &api_search_cbs, NULL);
+			api_search_reinit_pending = false;
+		} else {
+			api_search_reinit_pending = true;
+		}
 	}
 	k_mutex_unlock(&api_lock);
 
