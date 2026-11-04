@@ -106,7 +106,9 @@ enum radiant_self_action radiant_self_decide(const struct radiant_self_chan_in *
  * Picks nothing unless the window is open and no channel is unbound (IDLE or
  * DISCOVER: a new pairing already has somewhere to go). At most once per
  * window opening (evicted_this_window), so that one press of the button frees
- * one channel rather than every absent one. A channel the caller may not use
+ * one channel rather than every absent one; self_channels.c goes further and
+ * asks only on the poll that first sees a window open, so a sensor that blips
+ * later in the window keeps its channel. A channel the caller may not use
  * (the host took it) is passed as bound and tracking.
  */
 struct radiant_self_evict_in {

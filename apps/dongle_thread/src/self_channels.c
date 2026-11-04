@@ -760,8 +760,12 @@ static void self_thread_fn(void *a, void *b, void *c)
 	struct radiant_self_evict_in evict[SELF_N];
 	enum radiant_self_radio radio[SELF_N];
 	int64_t last_window = 0;
-	bool evicted_this_window = false;
+	bool opened;
 	bool booting = true;
+#if defined(CONFIG_ANT_DONGLE_PAIRING_WINDOW_BENCH_REPEAT_S) && \
+	CONFIG_ANT_DONGLE_PAIRING_WINDOW_BENCH_REPEAT_S > 0
+	int64_t last_bench_open = k_uptime_get();
+#endif
 	uint8_t i;
 
 	ARG_UNUSED(a);
@@ -826,11 +830,29 @@ static void self_thread_fn(void *a, void *b, void *c)
 			}
 		}
 
+#if defined(CONFIG_ANT_DONGLE_PAIRING_WINDOW_BENCH_REPEAT_S) && \
+	CONFIG_ANT_DONGLE_PAIRING_WINDOW_BENCH_REPEAT_S > 0
+		/* The bench instrument's second half: see the Kconfig help. */
+		if (k_uptime_get() - last_bench_open >=
+		    (int64_t)CONFIG_ANT_DONGLE_PAIRING_WINDOW_BENCH_REPEAT_S * 1000) {
+			last_bench_open = k_uptime_get();
+			LOG_WRN("BENCH BUILD: reopening the pairing window (every "
+				"%d s, CONFIG_ANT_DONGLE_PAIRING_WINDOW_BENCH_REPEAT_S)",
+				CONFIG_ANT_DONGLE_PAIRING_WINDOW_BENCH_REPEAT_S);
+			self_channels_open_pairing_window();
+		}
+#endif
+
 		now = k_uptime_get_32();
 		win = window_open();
+		/* Eviction is decided on the poll that first sees a window open,
+		 * and only then: a press of the button is a request for one free
+		 * channel now, not a licence to evict any sensor that blips while
+		 * the window happens to be open. */
+		opened = false;
 		if (window_until_ms != last_window) {
 			last_window = window_until_ms;
-			evicted_this_window = false;
+			opened = win;
 		}
 
 		for (i = 0u; i < SELF_N; i++) {
@@ -853,8 +875,22 @@ static void self_thread_fn(void *a, void *b, void *c)
 			evict[i].last_tracking_ms = self[i].last_tracking_ms;
 		}
 
-		pick = radiant_self_pick_evict(evict, SELF_N, win, evicted_this_window,
-					       now);
+		pick = opened ? radiant_self_pick_evict(evict, SELF_N, win, false, now)
+			      : RADIANT_SELF_EVICT_NONE;
+		if (opened && pick == RADIANT_SELF_EVICT_NONE) {
+			bool full = true;
+
+			for (i = 0u; i < SELF_N; i++) {
+				full = full && evict[i].bound;
+			}
+			if (full) {
+				/* The one refusal a user would otherwise read as
+				 * "the button does nothing". */
+				LOG_INF("pairing window open, but every self channel "
+					"is tracking a paired sensor - nothing to evict, "
+					"so nothing new can pair");
+			}
+		}
 		if (pick != RADIANT_SELF_EVICT_NONE) {
 			const struct radiant_binding *eb = radiant_binding_get(
 				ant_bridge_channel_source(self_channel_index(pick)));
@@ -865,7 +901,6 @@ static void self_thread_fn(void *a, void *b, void *c)
 				(now - self[pick].last_tracking_ms) / 1000u);
 			release_binding(pick);
 			close_one(pick);
-			evicted_this_window = true;
 		}
 
 		for (i = 0u; i < SELF_N; i++) {

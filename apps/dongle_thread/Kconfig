@@ -478,6 +478,20 @@ config ANT_DONGLE_PAIRING_WINDOW_AT_BOOT
 	  If you are reading this in a build you did not make, the image was
 	  built for a bench test and should not be shipped.
 
+config ANT_DONGLE_PAIRING_WINDOW_BENCH_REPEAT_S
+	int "BENCH ONLY: reopen the pairing window every this many seconds"
+	default 0
+	range 0 3600
+	depends on ANT_DONGLE_PAIRING_WINDOW_AT_BOOT
+	help
+	  0 (the default) is off. The same kind of instrument as
+	  ANT_DONGLE_PAIRING_WINDOW_AT_BOOT, for the same reason, one step
+	  further: eviction (docs/radiant-bridge.md section 10.1b) happens only
+	  when a window OPENS while every self channel is pinned, so testing it
+	  needs a second press of sw0 after the first pairings. This presses it
+	  on a timer, logging a warning naming this symbol each time. Each
+	  window still closes after ANT_DONGLE_PAIRING_WINDOW_S.
+
 config ANT_DONGLE_MQTT_SINK
 	bool "Publish samples to an MQTT broker over Thread"
 	# NET_SOCKETS is deliberately NOT named here even though this sink
