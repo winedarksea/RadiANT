@@ -80,6 +80,11 @@ def main() -> int:
                          help="where to write each target's --json/log; "
                               "defaults to a fresh temp directory")
     parser.add_argument("--baud", type=int, default=115200)
+    parser.add_argument("--record-dir", default=None,
+                         help="give each child its own --record "
+                              "<dir>/<target>.antcap. Do not pass --record "
+                              "after --: it would send every target to the "
+                              "same file")
     parser.add_argument("extra", nargs=argparse.REMAINDER,
                          help="anything after -- is forwarded to every child ant_verify.py")
     args = parser.parse_args()
@@ -88,8 +93,15 @@ def main() -> int:
     if extra and extra[0] == "--":
         extra = extra[1:]
 
+    if "--record" in extra:
+        parser.error("--record after -- sends every target to one file; "
+                     "use --record-dir")
+
     out_dir = Path(args.out_dir) if args.out_dir else Path(tempfile.mkdtemp(prefix="ant_multi_"))
     out_dir.mkdir(parents=True, exist_ok=True)
+    record_dir = Path(args.record_dir) if args.record_dir else None
+    if record_dir is not None:
+        record_dir.mkdir(parents=True, exist_ok=True)
 
     procs = []
     for t in args.target:
@@ -105,6 +117,8 @@ def main() -> int:
             cmd += ["--serial", t.value]
         else:
             cmd += ["--port", t.value, "--baud", str(args.baud)]
+        if record_dir is not None:
+            cmd += ["--record", str(record_dir / f"{slug}.antcap")]
         cmd += extra
         log_f = open(log_path, "w", encoding="utf-8")
         print(f"launching {t.name}: {' '.join(cmd)}")

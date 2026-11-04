@@ -2113,6 +2113,10 @@ def main() -> int:
 
         print(f"\nListening for {args.seconds:.0f} s")
         t_listen = time.monotonic()
+        # The capture's times are relative to here. Its wall-clock value is
+        # what lets captures from receivers in different processes be laid
+        # on one time axis (ant_multi_verify.py --record-dir).
+        t_listen_unix = time.time()
         extra = listen(dev, reader, analyzers, args.seconds, verbose, records)
 
         print("\nClosing")
@@ -2158,6 +2162,7 @@ def main() -> int:
                 for channel, number in zip(channels, device_numbers,
                                            strict=True)),
             f"expected {args.expect_watts} W, {args.expect_rpm} rpm",
+            f"listen_start_unix={t_listen_unix:.6f}",
         ])
         print(f"\nwrote {args.record} ({len(records)} packets)")
 
