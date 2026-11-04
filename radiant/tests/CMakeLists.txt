@@ -230,6 +230,9 @@ target_sources(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_power_adapter.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_env_adapter.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_common_adapter.c"
+  # The self channels' decisions (apps/dongle_thread/src/self_channels.c keeps
+  # only the antr_* calls). Pure functions; src/test_self_policy.c.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_self_policy.c"
 )
 target_include_directories(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge")

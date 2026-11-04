@@ -39,6 +39,7 @@
 #include "ant_activity.h"
 #include "ant_health.h"
 #include "ant_radio.h"
+#include "ant_serial_bridge.h"
 #include "ant_wire.h"
 
 LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
@@ -573,6 +574,55 @@ static K_SEM_DEFINE(burst_block_free, 1, 1);
  */
 static atomic_t burst_block_owner = ATOMIC_INIT(-1);
 
+/* ── What the host did to the stack ───────────────────────────────────────── */
+
+/* See ant_serial_bridge.h. Written on the bridge thread, read from whichever
+ * thread shares the stack with the host; the lock is what makes a snapshot's
+ * key[] agree with its key_written. */
+static struct k_spinlock host_state_lock;
+static uint32_t host_reset_gen;
+static uint32_t host_key_writes[ANT_BRIDGE_HOST_NETWORKS];
+static bool     host_key_written[ANT_BRIDGE_HOST_NETWORKS];
+static uint8_t  host_key[ANT_BRIDGE_HOST_NETWORKS][8];
+
+static void host_state_note_reset(void)
+{
+	k_spinlock_key_t key = k_spin_lock(&host_state_lock);
+
+	host_reset_gen++;
+	memset(host_key_written, 0, sizeof(host_key_written));
+	k_spin_unlock(&host_state_lock, key);
+}
+
+static void host_state_note_key(uint8_t net, const uint8_t *k)
+{
+	k_spinlock_key_t key;
+
+	if (net >= ANT_BRIDGE_HOST_NETWORKS) {
+		return;
+	}
+	key = k_spin_lock(&host_state_lock);
+	host_key_writes[net]++;
+	host_key_written[net] = true;
+	memcpy(host_key[net], k, sizeof(host_key[net]));
+	k_spin_unlock(&host_state_lock, key);
+}
+
+void ant_serial_bridge_host_state(uint8_t net, struct ant_bridge_host_state *out)
+{
+	k_spinlock_key_t key;
+
+	memset(out, 0, sizeof(*out));
+	key = k_spin_lock(&host_state_lock);
+	out->reset_gen = host_reset_gen;
+	if (net < ANT_BRIDGE_HOST_NETWORKS) {
+		out->key_writes = host_key_writes[net];
+		out->key_written = host_key_written[net];
+		memcpy(out->key, host_key[net], sizeof(out->key));
+	}
+	k_spin_unlock(&host_state_lock, key);
+}
+
 /* ── System reset ──────────────────────────────────────────────────────────── */
 
 /* ANTW_MESG_SYSTEM_RESET_ID resets the ANT protocol stack, not the MCU: every
@@ -584,6 +634,9 @@ static void handle_system_reset(void)
 	atomic_set(&reset_in_progress, 1);
 
 	(void)antr_stack_reset();
+	/* After the reset, not before: a reader that sees the new generation
+	 * must find the channels already gone. */
+	host_state_note_reset();
 
 	/* The stack is back to its defaults and every channel is unassigned, so
 	 * anything a previous session asked for is gone. Forget it here too,
@@ -696,6 +749,9 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		/* body: [net_num, key[8]] */
 		if (len >= 9) {
 			err = antr_network_address_set(body[0], &body[1]);
+			if (!err) {
+				host_state_note_key(body[0], &body[1]);
+			}
 		}
 		break;
 

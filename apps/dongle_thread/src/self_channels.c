@@ -54,10 +54,12 @@
 #include <zephyr/logging/log.h>
 
 #include "ant_radio.h"
+#include "ant_serial_bridge.h"
 #include "ant_wire.h"
 
 #include "radiant_binding.h"
 #include "radiant_bridge.h"
+#include "radiant_self_policy.h"
 
 #include "bridge_app.h"
 
@@ -641,6 +643,60 @@ static bool try_bind(uint8_t ch)
 	return true;
 }
 
+/*
+ * The self network's key, against what the host has done to it. Called at boot
+ * and on every poll; radiant_self_key_decide() makes it a no-op except once per
+ * host reset (or boot) and once per host key write.
+ *
+ * Why this exists: a host SYSTEM_RESET - Zwift sends one at startup - wipes
+ * every channel and every key, ours included, and the poll below used to find
+ * its channels UNASSIGNED and do nothing about it. The bridge then received
+ * nothing until the next reboot.
+ *
+ * Returns true when this call is the first to see a reset, i.e. every self
+ * channel was wiped since the last poll.
+ */
+static struct radiant_self_key_state key_state;
+
+static bool self_key_poll(void)
+{
+	struct ant_bridge_host_state hs;
+	struct radiant_self_key_in in;
+	bool new_generation = false;
+
+	ant_serial_bridge_host_state(SELF_NETWORK, &hs);
+	in.reset_gen = hs.reset_gen;
+	in.key_writes = hs.key_writes;
+	in.key_written = hs.key_written;
+	in.key_is_ours = hs.key_written &&
+			 memcmp(hs.key, ant_plus_key, sizeof(ant_plus_key)) == 0;
+
+	switch (radiant_self_key_decide(&key_state, &in, &new_generation)) {
+	case RADIANT_SELF_KEY_APPLY:
+		if (antr_network_address_set(SELF_NETWORK, ant_plus_key) != 0u) {
+			LOG_ERR("ANT+ network key rejected - self channels will "
+				"hear nothing");
+			break;
+		}
+		/* The host may have written its own key between the snapshot
+		 * and the write above. The host owns the stack, so put its key
+		 * back; the next poll reports it if it is not the ANT+ one. */
+		ant_serial_bridge_host_state(SELF_NETWORK, &hs);
+		if (hs.key_writes != in.key_writes && hs.key_written) {
+			(void)antr_network_address_set(SELF_NETWORK, hs.key);
+		}
+		break;
+	case RADIANT_SELF_KEY_HOST_FOREIGN:
+		LOG_WRN("the host set its own key on network %u: self channels "
+			"hear nothing until it sets the ANT+ key or resets",
+			SELF_NETWORK);
+		break;
+	default:
+		break;
+	}
+	return new_generation;
+}
+
 /* A bound channel that lost its master searches with the WILDCARD id again
  * (radiant_channel.c, on_acquired) and can acquire a different master of the
  * same type. The binding must not follow it. Unresolved id = no evidence. */
@@ -701,11 +757,10 @@ static void self_thread_fn(void *a, void *b, void *c)
 	self_channels_open_pairing_window();
 #endif
 
-	if (antr_network_address_set(SELF_NETWORK, ant_plus_key) != 0u) {
-		LOG_ERR("ANT+ network key rejected - self channels will hear "
-			"nothing");
-		return;
-	}
+	/* Boot is the first generation: the key is applied here unless a host
+	 * already set one in the delay before this thread started. */
+	radiant_self_key_init(&key_state);
+	(void)self_key_poll();
 
 	/*
 	 * Channel i starts on row (i mod N of the table), so a two-channel
@@ -729,6 +784,8 @@ static void self_thread_fn(void *a, void *b, void *c)
 
 	for (;;) {
 		k_sleep(K_SECONDS(1));
+
+		(void)self_key_poll();
 
 		for (i = 0u; i < SELF_N; i++) {
 			uint8_t ch = self_channel_index(i);
@@ -805,6 +862,22 @@ static void self_thread_fn(void *a, void *b, void *c)
 						ch);
 				}
 #endif
+				break;
+			case ANTW_STATUS_UNASSIGNED_CHANNEL:
+				/* A host SYSTEM_RESET wiped it (nothing here
+				 * ever unassigns without reassigning). The
+				 * binding and rx_tap.c's map entry survive the
+				 * reset, so a bound channel picks its sensor
+				 * back up through tracking_bound_device()'s
+				 * check like any other dropout. */
+#ifdef CONFIG_ANT_DONGLE_PROFILES_EXTRA
+				if (open_one(ch, &self_profiles[self_row[i]]) == 0) {
+#else
+				if (open_one(ch) == 0) {
+#endif
+					LOG_INF("self channel %u re-established "
+						"after host reset", ch);
+				}
 				break;
 			default:
 				break;

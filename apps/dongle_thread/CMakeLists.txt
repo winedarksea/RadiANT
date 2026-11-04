@@ -337,7 +337,10 @@ target_sources_ifdef(CONFIG_ANT_DONGLE_RX_TAP app PRIVATE
 # CONFIG_ANT_DONGLE_SELF_CHANNELS=0 rather than leaving it unset for an int
 # symbol. Compare explicitly.
 if(CONFIG_ANT_DONGLE_SELF_CHANNELS GREATER 0)
-  target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/self_channels.c")
+  # Its decisions, as pure functions radiant/tests can reach (this app's
+  # sources it cannot). See that header.
+  target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/self_channels.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../radiant/src/bridge/radiant_self_policy.c")
   # try_bind() once fell off its end and the built code returned a stale
   # register, rotating a just-bound channel away (review 2026-10-31, C3-1).
   # Per file, not app-wide: app-wide would reach vendored and zap C++.
