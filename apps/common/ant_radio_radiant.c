@@ -1690,8 +1690,11 @@ static void api_pump_locked(void)
 
 		/* Keep the sweep's membership in step with the state machine.
 		 * A channel that fell back to SEARCHING after eight missed
-		 * slots rejoins here; the seen cache makes re-acquisition take
-		 * about one dwell instead of half a sweep. */
+		 * slots rejoins here. Its device's set (named, or from the
+		 * seen cache) is steered at once and then revisited with
+		 * backoff, so one lost packet costs a revisit (~0.5 s) rather
+		 * than a whole sweep (8.3 s) - see
+		 * RADIANT_SEARCH_REVISIT_FIRST. */
 		if (st == RADIANT_CH_STATE_SEARCHING) {
 			if (!searching) {
 				api_search_begin(ch, now);

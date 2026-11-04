@@ -170,6 +170,46 @@ static void push_steer(struct radiant_search *s, uint16_t set)
 	s->n_steer++;
 }
 
+/*
+ * The revisit countdowns, ticked once per ROUND-ROBIN set only: a set picked
+ * from the steer queue is itself a revisit (or a fresh steer), and counting it
+ * would let one channel's revisits shorten another's gap. See
+ * RADIANT_SEARCH_REVISIT_FIRST for the why.
+ *
+ * The round robin reaching the set naturally counts as a visit and restarts
+ * the countdown without widening the gap. A due revisit is queued, not taken:
+ * push_steer() dedups against other channels wanting the same set and is
+ * bounded, and select_next_set() takes it on the next call.
+ */
+static void tick_revisits(struct radiant_search *s, uint16_t set)
+{
+	for (uint8_t c = 0; c < (uint8_t)RADIANT_SEARCH_MAX_CHANNELS; c++) {
+		struct radiant_search_chan *ch = &s->chans[c];
+
+		if (!ch->active || ch->mode != RADIANT_SEARCH_MODE_ACQUIRE ||
+		    ch->steer_set == RADIANT_SEARCH_SETS_NONE) {
+			continue;
+		}
+		if (ch->steer_set == set) {
+			ch->revisit_left = ch->revisit_gap;
+			continue;
+		}
+		if (ch->revisit_left > 0u) {
+			ch->revisit_left--;
+		}
+		if (ch->revisit_left == 0u) {
+			push_steer(s, ch->steer_set);
+			if (ch->revisit_gap < s->n_sets) {
+				ch->revisit_gap = (uint16_t)(ch->revisit_gap * 2u);
+				if (ch->revisit_gap > s->n_sets) {
+					ch->revisit_gap = s->n_sets;
+				}
+			}
+			ch->revisit_left = ch->revisit_gap;
+		}
+	}
+}
+
 static void select_next_set(struct radiant_search *s)
 {
 	uint16_t set;
@@ -190,6 +230,7 @@ static void select_next_set(struct radiant_search *s)
 			s->next_set = 0u;
 			s->stats.sweeps++;
 		}
+		tick_revisits(s, set);
 	}
 
 	build_set(s, set);
@@ -407,15 +448,29 @@ int radiant_search_begin(struct radiant_search *s, uint8_t channel,
 	 * outright) or the seen cache holds a matching device. Either way this
 	 * only reorders the sweep; a wrong guess costs one dwell, which the
 	 * round robin covers anyway. */
+	ch->steer_set = RADIANT_SEARCH_SETS_NONE;
 	if (want->device_number != 0u) {
-		push_steer(s, radiant_search_set_for_devnum(s, want->device_number));
+		ch->steer_set = radiant_search_set_for_devnum(s, want->device_number);
 	} else {
 		struct radiant_channel_id hit;
 
 		if (radiant_search_seen_lookup(s, want, now, &hit)) {
-			push_steer(s, radiant_search_set_for_devnum(s, hit.device_number));
+			ch->steer_set = radiant_search_set_for_devnum(s, hit.device_number);
 		}
 	}
+	if (ch->steer_set != RADIANT_SEARCH_SETS_NONE) {
+		push_steer(s, ch->steer_set);
+	}
+
+	/* And keep coming back, for ACQUIRE only: one steered dwell holds
+	 * about one transmission, and a lossy link loses it about as often as
+	 * not. SCAN never leaves the search, so it has nothing to come back
+	 * for - and is what a host's wildcard background scan is. */
+	if (mode != RADIANT_SEARCH_MODE_ACQUIRE) {
+		ch->steer_set = RADIANT_SEARCH_SETS_NONE;
+	}
+	ch->revisit_gap = RADIANT_SEARCH_REVISIT_FIRST;
+	ch->revisit_left = RADIANT_SEARCH_REVISIT_FIRST;
 
 	return RADIANT_SEARCH_OK;
 }

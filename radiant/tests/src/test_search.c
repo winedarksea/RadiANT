@@ -1138,6 +1138,199 @@ ZTEST(radiant_search, test_named_device_number_steers_directly)
 	end_of_test();
 }
 
+/*
+ * Revisits. A single steered dwell holds about one transmission of a 4 Hz
+ * master, so on a lossy link one lost packet used to cost a whole sweep (8.3 s)
+ * before the round robin came back to the set - measured in two Zwift captures
+ * as 5.75 / 8.0 / 8.25 / 16.25 s FE-C outages. These assert the SCHEDULE, not
+ * only the outcome: the round robin reaches every set eventually, so an
+ * outcome-only test passes on the bug.
+ */
+
+/* Run n windows on an empty air and record, for each steered visit of target
+ * after the first window, how many round-robin windows preceded it since the
+ * last visit of target (steered or natural). Returns how many gaps were
+ * recorded. seen[] marks the sets the round robin reached, if non-NULL. */
+static uint32_t revisit_gaps(uint16_t target, uint32_t n_windows, uint32_t *gaps,
+			     uint32_t max_gaps, bool *seen)
+{
+	uint32_t n_gaps = 0u;
+	uint32_t rr_since = 0u;
+
+	for (uint32_t i = 0u; i < n_windows; i++) {
+		zassert_equal(RADIANT_SEARCH_OK, win_open(), "window %u", i);
+		if (seen != NULL) {
+			seen[g_w.set_index] = true;
+		}
+		if (g_w.set_index == target) {
+			if (g_w.from_cache && i > 0u && n_gaps < max_gaps) {
+				gaps[n_gaps++] = rr_since;
+			}
+			rr_since = 0u;
+		} else if (!g_w.from_cache) {
+			rr_since++;
+		}
+		win_run();
+	}
+	return n_gaps;
+}
+
+ZTEST(radiant_search, test_a_named_search_revisits_its_set_with_backoff)
+{
+	struct radiant_search_id_filter want_one = { 0x09A1u, 0u, 0u };
+	static const uint32_t expect[] = { 1u, 2u, 4u, 8u };
+	bool seen[RADIANT_SEARCH_LO_VALUES];
+	uint32_t gaps[8];
+	uint32_t n_gaps;
+	uint16_t target;
+	uint16_t n_sets;
+
+	bring_up(false);
+	/* Derived, not hard-coded: with complement pairing the same device
+	 * lands in a different set. */
+	target = radiant_search_set_for_devnum(&g_s, 0x09A1u);
+	n_sets = radiant_search_sets(&g_s);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_one,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_equal(target, g_w.set_index, "the first window must be the steer");
+	zassert_true(g_w.from_cache);
+	win_run();
+
+	/* One sweep plus the four revisits is enough to see every set: the
+	 * revisits delay coverage, they never displace it. */
+	memset(seen, 0, sizeof(seen));
+	n_gaps = revisit_gaps(target, (uint32_t)n_sets + ARRAY_SIZE(expect), gaps,
+			      ARRAY_SIZE(gaps), seen);
+	for (uint16_t k = 0u; k < n_sets; k++) {
+		zassert_true(seen[k], "set %u not covered within one sweep plus the "
+			     "revisits", k);
+	}
+
+	zassert_true(n_gaps >= ARRAY_SIZE(expect),
+		     "%u revisits of set %u in a sweep; a named search steered "
+		     "once and then waited for the round robin", n_gaps, target);
+	for (uint32_t i = 0u; i < ARRAY_SIZE(expect); i++) {
+		zassert_equal(expect[i], gaps[i],
+			      "revisit %u came after %u round-robin sets, expected %u",
+			      i, gaps[i], expect[i]);
+	}
+
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	end_of_test();
+}
+
+ZTEST(radiant_search, test_a_named_search_that_misses_its_first_dwell_still_reacquires_fast)
+{
+	struct radiant_search_id_filter want_one = { 0x09A1u, 0u, 0u };
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t len;
+	uint32_t windows;
+
+	bring_up(false);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_one,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+
+	/* The steered window opens and the master's packet in it is lost: the
+	 * device only starts airing once that dwell is over. */
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_true(g_w.from_cache);
+	len = fake_radio_build_ant_frame(frame, 0x09A1u, 0x11u, 5u, payload8);
+	(void)fake_radio_air_master(g_w.t_close + 1000u, FAKE_RADIO_ANT_PERIOD_US, 200u,
+				    frame, len);
+	win_run();
+	zassert_equal(0u, g_cap.n_acquired);
+
+	windows = 1u;
+	while (g_cap.n_acquired == 0u && windows < 2u * radiant_search_sets(&g_s)) {
+		zassert_equal(RADIANT_SEARCH_OK, win_open());
+		win_run();
+		windows++;
+	}
+
+	zassert_equal(1u, g_cap.n_acquired);
+	zassert_true(windows <= 4u,
+		     "reacquired after %u windows; one lost packet on the steer "
+		     "should cost a revisit, not a sweep", windows);
+
+	fake_radio_air_clear();
+	end_of_test();
+}
+
+ZTEST(radiant_search, test_a_seen_cache_search_also_revisits)
+{
+	struct radiant_search_id_filter want_pwr = { 0u, 0x0Bu, 0u };
+	struct radiant_channel_id id = { 0x09A1u, 0x0Bu, 5u };
+	static const uint32_t expect[] = { 1u, 2u, 4u };
+	uint32_t gaps[8];
+	uint32_t n_gaps;
+	uint16_t target;
+
+	bring_up(false);
+	target = radiant_search_set_for_devnum(&g_s, id.device_number);
+	radiant_search_seen_note(&g_s, &id, radiant_radio_now());
+
+	/* A wildcard ACQUIRE channel: radiant re-widens a dropped wildcard
+	 * channel, so the seen hit is its only route back to the sensor. */
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_pwr,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_equal(target, g_w.set_index);
+	zassert_true(g_w.from_cache);
+	win_run();
+
+	n_gaps = revisit_gaps(target, 12u, gaps, ARRAY_SIZE(gaps), NULL);
+	zassert_true(n_gaps >= ARRAY_SIZE(expect),
+		     "%u revisits for a seen-cache search", n_gaps);
+	for (uint32_t i = 0u; i < ARRAY_SIZE(expect); i++) {
+		zassert_equal(expect[i], gaps[i], "revisit %u after %u sets", i, gaps[i]);
+	}
+
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	end_of_test();
+}
+
+/* Regression guard rather than a reproduction (HEAD had no revisits to stop):
+ * once the channel leaves, its set must go back to being an ordinary slot in
+ * the round robin, or an absent sensor would tax the sweep forever. */
+ZTEST(radiant_search, test_revisits_stop_when_the_search_ends)
+{
+	struct radiant_search_id_filter want_one = { 0x09A1u, 0u, 0u };
+	uint16_t target;
+	uint16_t n_sets;
+	uint32_t visits = 0u;
+
+	bring_up(false);
+	target = radiant_search_set_for_devnum(&g_s, 0x09A1u);
+	n_sets = radiant_search_sets(&g_s);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_one,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	/* A wildcard on another channel keeps the sweep running. */
+	zassert_ok(radiant_search_begin(&g_s, 1u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+
+	/* Steer, one round-robin set, first revisit: nothing left queued. */
+	zassert_equal(3u, pump(3u));
+	zassert_ok(radiant_search_end(&g_s, 0u));
+
+	/* One sweep: the mock's arm log holds 64 windows, not two sweeps. */
+	for (uint16_t i = 0u; i < n_sets; i++) {
+		zassert_equal(RADIANT_SEARCH_OK, win_open());
+		if (g_w.set_index == target) {
+			zassert_false(g_w.from_cache, "set %u was still steered after "
+				      "its channel left the search", target);
+			visits++;
+		}
+		win_run();
+	}
+	zassert_equal(1u, visits, "one sweep should visit set %u exactly once",
+		      target);
+
+	zassert_ok(radiant_search_end(&g_s, 1u));
+	end_of_test();
+}
+
 ZTEST(radiant_search, test_seen_cache_expires_at_sixty_seconds)
 {
 	struct radiant_search_id_filter want_pwr = { 0u, 0x0Bu, 0u };

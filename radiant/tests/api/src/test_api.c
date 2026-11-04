@@ -1402,6 +1402,106 @@ ZTEST(api, test_a_named_device_is_steered_to_rather_than_waited_for)
 }
 
 /*
+ * A pinned channel that drops to search must not wait a sweep when its first
+ * post-search packet is lost.
+ *
+ * Measured 2026-11-03 in two Zwift captures: the FE-C trainer (#52233, pinned,
+ * ~50% packet loss) went to search 11 times and came back after either
+ * 0.25-0.5 s or 5.75 / 8.0 / 8.25 / 16.25 s. radiant_search_begin() steered the
+ * set once; a lost packet in that one dwell left the channel to the round
+ * robin, 32 x 260 ms = 8.3 s away. The master here returns just after the
+ * steered dwell closes, so only a revisit can find it inside 2 s.
+ */
+ZTEST(api, test_a_pinned_channel_reacquires_fast_when_its_first_packet_back_is_lost)
+{
+	/* #52233's high byte, but a low byte in the LAST sweep set: nothing else
+	 * searches while it tracks, so the round-robin cursor is still at the
+	 * start, and #52233's own set (1) would be reached naturally in one
+	 * window - a test that passes on the bug. */
+	const uint16_t               dev = 0xCCF9u;
+	const uint32_t               fec_period_us = radiant_channel_counts_to_us(8192u);
+	const struct fake_radio_arm *w;
+	uint8_t                      frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t                      len;
+	uint32_t                     waited;
+	bool                         steered;
+
+	len = fake_radio_build_ant_frame(frame, dev, 0x11u, 5u, peer_payload);
+
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_network_address_set(0u, ant_plus_key));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_assign(1u, (uint8_t)ANTW_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_id_set(1u, dev, 0x11u, 5u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_period_set(1u, 8192u));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_search_timeout_set(1u, RADIANT_CHANNEL_SEARCH_INFINITE));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR,
+		      antr_channel_radio_freq_set(1u, RF_INDEX));
+	zassert_equal((antr_err_t)ANTW_RESPONSE_NO_ERROR, antr_channel_open(1u));
+
+	/* Acquire, then track twelve packets, then silence. */
+	w = armed_search_window();
+	(void)fake_radio_air_master(w->t_open + 1000u, fec_period_us, 12u, frame, len);
+	run_virtual_us(2000000u);
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u),
+		      "setup: the pinned channel did not acquire its device");
+
+	/* Past RADIANT_CHANNEL_RX_FAIL_TO_SEARCH misses: back to the search. */
+	waited = 0u;
+	while (radiant_channel_state_get(1u) != RADIANT_CH_STATE_SEARCHING &&
+	       waited < 20u * fec_period_us) {
+		run_virtual_us(fec_period_us / 4u);
+		waited += fec_period_us / 4u;
+	}
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(1u),
+		      "the channel never dropped to search");
+
+	/* The first window after the drop is the steer to the device's set;
+	 * the master comes back just after it closes. */
+	run_virtual_us(1000u);
+	w = armed_search_window();
+	steered = false;
+	for (uint8_t j = 0u; j < w->n_filters; j++) {
+		if (w->filters[j].addr[2] == (uint8_t)(dev & 0xFFu)) {
+			steered = true;
+		}
+	}
+	zassert_true(steered, "setup: the first search window after the drop "
+		     "was not the steered one");
+	zassert_true(w->filters[0].addr[2] >= 0x80u,
+		     "setup: the steered set should be far from the cursor");
+	(void)fake_radio_air_master(w->t_close + 1000u, fec_period_us, 40u, frame, len);
+
+	run_virtual_us(2000000u);
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u),
+		      "the pinned channel missed its one steered dwell and did not "
+		      "reacquire within 2 s with the master transmitting throughout: "
+		      "the set was left to the round robin (~8.3 s)");
+
+	(void)antr_channel_close(1u);
+	fake_radio_air_clear();
+	fake_radio_advance(1000u);
+	drain();
+
+	/* Same ending as the steered-to test above, for the same reason. */
+	zassert_true(fake_radio_is_idle(), "radio not idle: %s",
+		     fake_radio_busy_reason());
+	for (uint32_t i = 0u; i < fake_radio_viol_count() &&
+			      i < (uint32_t)FAKE_RADIO_VIOL_MAX; i++) {
+		enum fake_radio_viol code = fake_radio_viol(i)->code;
+
+		zassert_true(code == FAKE_RADIO_VIOL_LOG_FULL ||
+				     code == FAKE_RADIO_VIOL_NONE,
+			     "contract violation: %s",
+			     fake_radio_viol_name(code));
+	}
+}
+
+/*
  * A scan chunk that ends part-way through its set must keep the slot. A
  * tracked channel ends a chunk 4x/s per channel; api_sched_done() used to
  * cancel the request each time and wait for the event thread to re-post the

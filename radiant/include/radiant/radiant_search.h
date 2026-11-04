@@ -133,6 +133,28 @@ extern "C" {
 #define RADIANT_SEARCH_STEER_ENTRIES RADIANT_SEARCH_SEEN_ENTRIES
 #endif
 
+/*
+ * THE FIRST REVISIT GAP, in round-robin sets. An ACQUIRE channel that knows
+ * which set holds its device (it named the device number, or the seen cache
+ * did) is not steered once and then left to the round robin: its set is
+ * re-steered after 1, 2, 4 ... round-robin sets, the gap doubling up to
+ * n_sets.
+ *
+ * Why: a single steered dwell holds about one transmission of a 4 Hz master.
+ * If that one packet is lost, the round robin needs a whole sweep (32 x
+ * 260 ms = 8.3 s on nRF) to get back to the set. MEASURED in two Zwift
+ * captures on a trainer losing ~50% of its packets: FE-C reacquisition took
+ * 0.25-0.5 s or 5.75 / 8.0 / 8.25 / 16.25 s - a miss on the one steer, then
+ * one or two sweeps. At 50% per-dwell loss, revisits starting at 1 cut the
+ * expected reacquisition from ~4.4 s to ~1.5 s.
+ *
+ * Why the cap is n_sets and must not be lower: a pinned sensor that never
+ * comes back keeps its channel searching forever, so the revisits must settle
+ * to one extra dwell per sweep (~3% of discovery per channel), not to a fixed
+ * fraction of the radio.
+ */
+#define RADIANT_SEARCH_REVISIT_FIRST 1u
+
 /* Values of devnum_lo the sweep must cover - one byte, named for clarity. */
 #define RADIANT_SEARCH_LO_VALUES 256u
 
@@ -431,6 +453,12 @@ struct radiant_search_chan {
 	enum radiant_search_mode        mode;
 	struct radiant_search_id_filter want;
 	radiant_time_t                  deadline; /* RADIANT_TIME_NEVER = no timeout */
+	/* The set this ACQUIRE channel's device is known to be in, re-steered
+	 * with backoff; RADIANT_SEARCH_SETS_NONE when there is nothing to
+	 * revisit. See RADIANT_SEARCH_REVISIT_FIRST. */
+	uint16_t                        steer_set;
+	uint16_t                        revisit_gap;  /* round-robin sets between revisits */
+	uint16_t                        revisit_left; /* round-robin sets until the next one */
 };
 
 struct radiant_search_seen {
