@@ -34,9 +34,13 @@ loaded channels. These counts describe this runner's commands and retry policy.
 **Delivery despite failure remains a compatibility risk.** One solo command and
 two loaded commands reached the peer while the sender reported
 `EVENT_TRANSFER_TX_FAILED`. A failed transfer therefore does not establish that
-the trainer did nothing. Whether Zwift retries those commands, and whether that
-would duplicate a trainer action, has not been tested. Zero duplicate delivery
-in the runner does not answer that question. The original capture had 30 failed
+the trainer did nothing. **Zwift does not retry** (answered by
+`captures/zwift-20261103-174817.pcap`): it streams an absolute grade command
+about every 1.01 s whatever the previous one's outcome, so a failed command is
+superseded by the next rather than resent, and a delivered-but-reported-failed
+one cannot be duplicated by a retry. The cost of a failure is about one second
+of resistance lag. Zero duplicate delivery in the runner did not answer that
+question; the capture does. The original capture had 30 failed
 of 31 accepted commands and no completed transfers (one pending at capture end);
 the bench runs improved to 5 failed of 300 each, against a different peer.
 
@@ -61,8 +65,14 @@ Firmware HEX: `095b71886beacce9131e3f1abfbde7b71badf83a8ac111f5022b67456b375899`
 The transfer engine refreshes its acquired identity for ACK and burst transfers,
 while retaining configured wildcards for later acquisition. Slave commands wait
 for an actually received master slot; one copied pending command per channel
-prevents overlap. The wait expires after the greater of 500 ms and two channel
-periods. Tracking resumes after completion or failure. Existing measured
+prevents overlap. The wait expires after the greater of 500 ms and three channel
+periods (`RADIANT_API_ACK_OPENER_PERIODS`). Tracking resumes after completion or failure.
+
+It was two periods until 2026-11-03. In `captures/zwift-20261103-174817.pcap`,
+against a trainer losing ~53% of its FE-C packets, 38 of 146 grade commands
+(26%) expired with no opener: 0.53² ≈ 0.28. Three slots should bring that to
+about 15%. A fourth slot would be 1,000 ms, which is Zwift's own command
+cadence, so three is the ceiling. Existing measured
 turnaround constants and sender retry policy remain in effect. Counters separate
 scheduling/radio failure, missing ACK and invalid ACK.
 

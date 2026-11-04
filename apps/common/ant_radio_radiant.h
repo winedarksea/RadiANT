@@ -66,6 +66,21 @@ extern "C" {
  */
 #define RADIANT_API_XFER_WATCHDOG_MS 500u
 
+/*
+ * How many of the master's slots a slave's queued acknowledged command waits
+ * for an opener (a received master frame) before it fails with no-opener. The
+ * budget is max(RADIANT_API_XFER_WATCHDOG_MS, this many channel periods).
+ *
+ * Three, measured from a Zwift capture against a trainer losing ~53% of its
+ * packets (captures/zwift-20261103-174817.pcap): at two (500 ms at FE-C's
+ * 8192 counts) 38 of 146 grade commands (26%) expired unsent, which is 0.53^2.
+ * Three slots expects ~15%. Zwift streams an absolute grade every ~1.01 s and
+ * never retries, so an expired command costs ~1 s of resistance lag, not a
+ * wrong state - and a fourth slot (1000 ms) would land on top of the next
+ * command, so three (750 ms < 1010 ms) is the ceiling.
+ */
+#define RADIANT_API_ACK_OPENER_PERIODS 3u
+
 /* Counters. Each distinguishes two outcomes that look the same from outside. */
 struct radiant_api_stats {
 	uint32_t drains;          /* radiant_event_drain() calls that delivered */

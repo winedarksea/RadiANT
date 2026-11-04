@@ -3545,7 +3545,10 @@ ZTEST(api, test_fec_pending_without_an_opener_expires_once)
 	 * housekeeping, rather than a fabricated peer, expires the command. */
 	fake_radio_force_arm_repeat(RADIANT_RADIO_EBUSY, 100u);
 	fake_radio_advance_to(w->t_close + 1u);
-	fake_radio_advance(600000u);
+	/* Past the opener budget, derived rather than hard-coded: FE-C's 8192
+	 * counts times the slots it is allowed, plus a margin. */
+	fake_radio_advance((uint64_t)RADIANT_API_ACK_OPENER_PERIODS *
+			   radiant_channel_counts_to_us(8192u) + 100000u);
 	run_housekeeping();
 	drain();
 	zassert_equal(expired + 1u, radiant_api_stats_get()->xfer_no_opener);
@@ -3555,7 +3558,8 @@ ZTEST(api, test_fec_pending_without_an_opener_expires_once)
 	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
 }
 
-ZTEST(api, test_fec_pending_watchdog_allows_two_slow_channel_periods)
+/* On a slow channel the allowance is the periods, not the 500 ms floor. */
+ZTEST(api, test_fec_pending_watchdog_allows_slow_channel_periods_past_the_floor)
 {
 	(void)fec_acquire_with_period(0u, false, 32768u);
 	const struct fake_radio_arm *w = last_arm_of(FAKE_RADIO_ARM_RX);
@@ -3567,15 +3571,63 @@ ZTEST(api, test_fec_pending_watchdog_allows_two_slow_channel_periods)
 	run_housekeeping();
 	drain();
 	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED),
-		      "the 500 ms floor truncated the two-period pending allowance");
+		      "the 500 ms floor truncated the per-period pending allowance");
 	zassert_equal(ANTW_TRANSFER_IN_PROGRESS,
 		      antr_acknowledge_message_tx(CH, 8u, bcast_payload));
-	fake_radio_advance(1500000u);
+	/* Period 32768 is one second; run out the rest of the allowance. */
+	fake_radio_advance((uint64_t)RADIANT_API_ACK_OPENER_PERIODS * 1000000u);
 	run_housekeeping();
 	drain();
 	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
 	end_of_test();
 	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+}
+
+/*
+ * Zwift sends an absolute grade every ~1.01 s and never retries. With a
+ * two-slot budget at FE-C's 250 ms period, 38 of 146 commands in one capture
+ * (26%) expired with no opener - 0.53^2 at the trainer's measured loss. The
+ * third slot is the one this test airs the master in.
+ */
+ZTEST(api, test_fec_pending_command_survives_two_missed_master_slots)
+{
+	uint16_t number = fec_acquire(0u, false);
+	const struct fake_radio_arm *w;
+	radiant_time_t t_q;
+	uint32_t skipped = 0u;
+
+	zassert_ok(antr_acknowledge_message_tx(CH, 8u, peer_payload));
+	t_q = radiant_radio_now();
+
+	/* Every master slot that falls inside the old 500 ms budget is empty.
+	 * Virtual time is frozen across the sleeps, so housekeeping runs at
+	 * exactly the instant each window ended. */
+	for (;;) {
+		w = last_arm_of(FAKE_RADIO_ARM_RX);
+		zassert_not_null(w);
+		zassert_false(w->terminated, "setup: no tracked window armed");
+		if (w->t_open > t_q + (radiant_time_t)RADIANT_API_XFER_WATCHDOG_MS * 1000u) {
+			break;
+		}
+		fake_radio_advance_to(w->t_close + 1u);
+		drain();
+		k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
+		skipped++;
+	}
+	zassert_equal(2u, skipped, "setup: %u master slots were missed, not two",
+		      (unsigned)skipped);
+
+	fake_radio_advance_to(w->t_open - 10u);
+	k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
+	drain();
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED),
+		      "the command expired after two missed master slots, before "
+		      "the third could open it");
+
+	fec_exchange(number, RADIANT_CTRL_ACK_LAST_SEQ1, true);
+	zassert_equal(1u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_COMPLETED));
+	zassert_equal(0u, count_channel_events(CH, ANTW_EVENT_TRANSFER_TX_FAILED));
+	end_of_test();
 }
 
 ZTEST(api, test_fec_reacquisition_uses_new_peer_without_narrowing_wildcards)
@@ -3734,7 +3786,7 @@ ZTEST(api, test_fec_pending_command_survives_an_early_frame_in_a_merged_window)
 }
 
 /*
- * At period 65535 the pending allowance is two periods, ~4 s; a 2.5 s search
+ * At period 65535 the pending allowance is three periods, ~6 s; a 2.5 s search
  * timeout closes the channel first. The command must fail once, before the
  * close, and not be wiped silently by the unassign that CHANNEL_CLOSED invites.
  */

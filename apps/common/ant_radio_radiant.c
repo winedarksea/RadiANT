@@ -3766,7 +3766,8 @@ antr_err_t antr_acknowledge_message_tx(uint8_t channel, uint8_t size,
 		radiant_time_t wait = RADIANT_API_XFER_WATCHDOG_MS * 1000u;
 
 		(void)radiant_channel_period_get(channel, &counts);
-		radiant_time_t periods = 2u * radiant_channel_counts_to_us(counts);
+		radiant_time_t periods = RADIANT_API_ACK_OPENER_PERIODS *
+					 radiant_channel_counts_to_us(counts);
 		if (periods > wait) {
 			wait = periods;
 		}
