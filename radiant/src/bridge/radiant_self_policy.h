@@ -10,7 +10,16 @@
  * control token moved here for the same reason): a policy that can only be
  * exercised on a bench with real sensors is a policy nobody re-checks.
  *
- * Nothing here includes an ANT header.
+ * THE MODEL IS ZWIFT'S (docs/radiant-bridge.md section 10.1b, from the USB
+ * captures): discovery is a bounded pairing state, and a sensor once paired
+ * owns its channel, PINNED to its device number with an infinite search, for
+ * as long as it stays paired. A pinned channel is never unbound by a dropout,
+ * a search timeout or a stranger; the only way a paired sensor leaves is
+ * EVICTION, when a new pairing needs its channel and it is the one that has
+ * been absent longest.
+ *
+ * Nothing here includes an ANT header. Channel state arrives as the small enum
+ * below, and the caller maps the serial protocol's status byte onto it.
  */
 
 #ifndef RADIANT_SELF_POLICY_H_
@@ -22,6 +31,94 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* The radio side of a channel, as its status poll reports it. */
+enum radiant_self_radio {
+	RADIANT_SELF_RADIO_UNASSIGNED = 0,
+	RADIANT_SELF_RADIO_ASSIGNED,  /* assigned and closed */
+	RADIANT_SELF_RADIO_SEARCHING,
+	RADIANT_SELF_RADIO_TRACKING,
+};
+
+/*
+ * One channel's inputs, as of this poll.
+ *
+ * owned is the caller's own record that IT assigned this channel number since
+ * the last host reset. A host SYSTEM_RESET wipes every channel, and a host
+ * that then assigns this channel number for itself has taken it: from then on
+ * its state is the host's, and acting on it would reconfigure the host's
+ * channel under it.
+ */
+struct radiant_self_chan_in {
+	enum radiant_self_radio radio;
+	bool owned;
+	/* A binding is attached to this channel (the sensor is paired). */
+	bool bound;
+	/* The open now in progress was made pinned. False while a just-bound
+	 * channel is still open on its discovery configuration - which, on a
+	 * backend whose close is asynchronous, can outlast one poll. */
+	bool open_pinned;
+	/* The channel was last opened for discovery, so finding it closed
+	 * means its search timed out. */
+	bool open_discover;
+	/* TRACKING and bound: what it tracks is the bound device. An id that
+	 * has not resolved yet counts as a match - no evidence otherwise. */
+	bool identity_matches;
+	bool window_open;
+};
+
+enum radiant_self_action {
+	RADIANT_SELF_NONE = 0,
+	/* Unbound and tracking with the window open: try to bind. On success
+	 * the caller closes the channel so the next poll pins it; a device
+	 * another channel already holds is the caller's to rotate away. */
+	RADIANT_SELF_BIND,
+	/* Bound but not open pinned: close it if it is open, else configure
+	 * it pinned (device number, type and trans of the binding, the
+	 * binding's period, infinite search) and open it. */
+	RADIANT_SELF_PIN_REOPEN,
+	/* Unbound, closed, window open: open for discovery on its current
+	 * search profile. */
+	RADIANT_SELF_DISCOVER_OPEN,
+	/* Unbound and open with the window closed (or still open on an
+	 * evicted sensor's pinned search): close it. A closed window means
+	 * IDLE - an unpaired channel does not search. */
+	RADIANT_SELF_CLOSE_TO_IDLE,
+	/* Discovery timed out: move to the next search profile and reopen. */
+	RADIANT_SELF_ROTATE,
+	/* Wiped by a host reset (or never assigned: boot): assign it again. */
+	RADIANT_SELF_REESTABLISH,
+	/* A host reset wiped this channel and the host took the number before
+	 * the caller could reassign it. The binding can no longer be served
+	 * here: release it (the caller frees the row) and stop touching the
+	 * channel. */
+	RADIANT_SELF_RELEASE,
+};
+
+enum radiant_self_action radiant_self_decide(const struct radiant_self_chan_in *in);
+
+/*
+ * Eviction. A new pairing needs a channel and every one is pinned: pick the
+ * pinned channel that is NOT tracking and has gone longest since it last was.
+ * A tracking sensor is never evicted - a rider's live power meter does not
+ * make way for a strap found in a drawer - so this may pick nothing.
+ *
+ * Picks nothing unless the window is open and no channel is unbound (IDLE or
+ * DISCOVER: a new pairing already has somewhere to go). At most once per
+ * window opening (evicted_this_window), so that one press of the button frees
+ * one channel rather than every absent one. A channel the caller may not use
+ * (the host took it) is passed as bound and tracking.
+ */
+struct radiant_self_evict_in {
+	bool     bound;
+	bool     tracking;
+	uint32_t last_tracking_ms;
+};
+
+#define RADIANT_SELF_EVICT_NONE 0xFFu
+
+uint8_t radiant_self_pick_evict(const struct radiant_self_evict_in *chans, uint8_t n,
+				bool window_open, bool evicted_this_window, uint32_t now_ms);
 
 /*
  * The network key after a host SYSTEM_RESET.

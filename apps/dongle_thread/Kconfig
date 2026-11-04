@@ -397,14 +397,22 @@ config ANT_DONGLE_RX_TAP
 	  is deliberately no path from the tap to radiant_binding_bind().
 
 config ANT_DONGLE_SELF_CHANNELS
-	int "Wildcard slave channels this dongle drives itself"
+	int "Slave channels this dongle drives itself"
 	default 0
 	range 0 8
 	depends on ANT_DONGLE_RX_TAP
 	help
-	  Compiles src/self_channels.c and opens this many wildcard ANT+
-	  heart-rate slave channels without a host. A bridge that only works
-	  while a PC is plugged in is not the product section 1 describes.
+	  Compiles src/self_channels.c and drives this many ANT+ slave
+	  channels without a host. A bridge that only works while a PC is
+	  plugged in is not the product section 1 describes.
+
+	  The Zwift model (docs/radiant-bridge.md section 10.1b): while the
+	  pairing window is open an unpaired channel discovers with a wildcard
+	  search; a sensor that binds gets the channel PINNED to its device
+	  number with an infinite search, and keeps it through any dropout
+	  until a later pairing evicts it (the longest-absent, never a tracking
+	  one). Outside the window an unpaired channel is idle - assigned and
+	  closed.
 
 	  Channels are claimed from the top of the ANT allocation downward, so
 	  that a host library allocating from 0 upward collides last. There is
@@ -613,10 +621,10 @@ config ANT_DONGLE_PROFILES_EXTRA
 	    0x19 environment. With this symbol n it is the 0x78-only tap it has
 	    always been, byte for byte.
 
-	    src/self_channels.c searches a five-row {device type, period} table
-	    and rotates a row on every search timeout. With this symbol n both
-	    self channels search device type 0x78 at period 8070 and set no
-	    search timeout at all, which is exactly what they did before.
+	    src/self_channels.c discovers over a five-row {device type, period}
+	    table and rotates a row on every search timeout. With this symbol n
+	    the table has one row, heart rate (0x78 at 8070), because that is
+	    all rx_tap.c then decodes; it is the same code path either way.
 
 	  WHY THIS IS NOT SIMPLY IMPLIED BY RADIANT_BRIDGE, WHICH IS THE
 	  QUESTION THE NEXT READER WILL ASK. bridge.conf sets RADIANT_BRIDGE=y
@@ -647,9 +655,12 @@ config ANT_DONGLE_PROFILES_EXTRA
 	  what it is for - just do not turn it on in one of the five .conf
 	  fragments without re-taking section 7.4's row for that arm.
 
-	  Same consequence for the E2 diff as ANT_DONGLE_MATTER_MAP: bridge.conf's
-	  generated .config gains one `# CONFIG_ANT_DONGLE_PROFILES_EXTRA is not
-	  set` COMMENT line, and its image is unchanged.
+	  2026-11-03: the byte-identical rule no longer holds for bridge.conf
+	  in any case. Pinning (section 10.1b) changed what the self channels
+	  do on air in both arms, the off arm became a one-row table on the
+	  same code path, and section 7.4's bridge baselines are marked
+	  superseded until re-measured. The decoders and adapters above still
+	  follow this symbol, for the size reason.
 
 endif # RADIANT_BRIDGE
 

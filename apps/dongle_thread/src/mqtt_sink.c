@@ -316,6 +316,12 @@ static uint8_t subtype[RADIANT_BINDING_MAX];
  * C3-3). */
 static bool avail_online[RADIANT_BINDING_MAX];
 
+/* The uuid each source was last bound with, 0 for none. A release
+ * (binding_changed(source, NULL), the self channels evicting a sensor) arrives
+ * after the row is freed, so this is the only place the topic of the status
+ * that must now read "offline" can still be found. */
+static uint64_t bound_uuid[RADIANT_BINDING_MAX];
+
 #define FEC_TYPE_FIELD_ID 0x0Du
 #define FEC_DEVICE_TYPE   0x11u
 
@@ -915,6 +921,18 @@ static void mqtt_binding_changed(uint32_t source, const struct radiant_binding *
 	 * "Treadmill". */
 	subtype[source] = 0u;
 	avail_online[source] = false;
+
+	/* Released: the sensor's retained status would otherwise say "online"
+	 * on the broker for good. Best effort - a broker that is down now
+	 * keeps the stale retained value, the same as a dongle unplugged. */
+	if (b == NULL && bound_uuid[source] != 0u && connected) {
+		uuid_str(bound_uuid[source], uuid, sizeof(uuid));
+		(void)snprintf(work_topic, sizeof(work_topic),
+			       "radiant/%s/%s/status",
+			       CONFIG_ANT_DONGLE_MQTT_BRIDGE_ID, uuid);
+		(void)publish_raw(work_topic, "offline", true);
+	}
+	bound_uuid[source] = (b != NULL) ? b->uuid : 0u;
 
 	if (b != NULL && connected) {
 		uuid_str(b->uuid, uuid, sizeof(uuid));

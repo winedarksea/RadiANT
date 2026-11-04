@@ -652,6 +652,19 @@ with a hard timeout. That is the same rule as "binding is opt-in" from section
 > The rule as written still stands for the hostless bridge of this document,
 > which has no host putting a scanner in it.
 
+> **And the hostless bridge enforces it again, as of 2026-11-03** (§10.1b).
+> For a while its self channels searched whenever they were not tracking —
+> with no window open, after any dropout, after any search timeout — so
+> "scanning" had quietly become a running state there too. Now an unpaired
+> self channel does not search outside the pairing window at all. **One
+> running search remains:** a paired sensor that is absent keeps its pinned
+> channel searching, and radiant's search is one shared sweep, so that keeps
+> the whole 32-set sweep running (plus the revisit dwells) until the sensor
+> returns or is evicted. Under MPSL the sweep is the elastic consumer
+> (ADR 0013), so it yields to Thread; it is still radio-on time. A named-only
+> search has no reason to visit any set but its own, and restricting the
+> round robin to those sets is the follow-up that would make this bounded.
+
 ### 7.3 Two consequences that have to be said out loud
 
 **Sparse RadiANT nodes cannot be bridged by a combo device.**
@@ -917,6 +930,14 @@ trap it documents is the one this gate would otherwise walk into.
 
 The gate is a Tier 2 A/B and it is cheap. Run it before writing a line of the
 Matter data model.
+
+> **The recorded baselines below are SUPERSEDED for the bridge arms (2026-11-03).**
+> §10.1b changed what the self channels do on air — pinned channels, no
+> discovery outside the pairing window, and `bridge.conf` no longer the
+> byte-identical pre-packages-A-C image (its off arm is now a one-row table on
+> the same code path). The numbers stay as history; they describe images that
+> no longer exist, and the gate is to be re-measured on the new ones before
+> anything is concluded from them.
 
 #### 7.4.1 First measurement, 2026-08-13 — the gate FAILS
 
@@ -1902,6 +1923,80 @@ therefore rotates it away explicitly.
 After the fix, with the same two trainers on air: the second master **binds**,
 and the declines fall from a continuous 1 Hz drip to four, each followed by a
 rotation.
+
+### 10.1b Paired sensors are pinned (the Zwift model)
+
+Until 2026-11-03 a self channel kept its **wildcard** channel ID after binding.
+Three defects followed from that one choice:
+
+- **a dropout re-searched for any device of the type**, and a search timeout
+  *unbound* the channel and rotated it to another profile (review NEW-O6-1). A
+  paired trainer that slept through lunch came back to a channel that had
+  forgotten it, and only a new pairing window could rebind it;
+- `af3031e`'s mismatch check unbound a channel that reacquired a **stranger**
+  of the same type, and with the window closed the channel then stayed on the
+  stranger, dropping its traffic, until something else happened;
+- **binding rows were never freed** (`radiant_binding_unbind()` had no caller),
+  so the ninth distinct pairing failed with "binding table full".
+
+Zwift does not have any of these, and the USB captures say why
+(`captures/zwift-*.pcap` through `tools/decode_pcap.py`; ADR 0013 records the
+scan half): one wildcard background-scan channel for
+discovery, then one channel per paired sensor, **pinned to its device number**
+with search timeout `0xFF` (infinite). After a dropout Zwift does nothing at
+all — the pinned channel simply keeps searching for that one sensor.
+
+The self channels now work the same way. Every decision is a pure function in
+`radiant/src/bridge/radiant_self_policy.c`, tested in
+`radiant/tests/src/test_self_policy.c`; `apps/dongle_thread/src/self_channels.c`
+keeps only the `antr_*` calls.
+
+| State | Radio | Enters when | Leaves when |
+|---|---|---|---|
+| IDLE | assigned, closed | window closed, unbound | window opens → DISCOVER |
+| DISCOVER | wildcard search, rotating the profile table on each search timeout | window open, unbound | acquired and bound → closed → PINNED; window closes → closed → IDLE |
+| PINNED | channel ID = the binding's device number, type **and** transmission type; the binding's period; search timeout `0xFF` | bind | eviction |
+
+- **A pinned channel is never unbound by a dropout, a timeout or a stranger.**
+  Liveness already marks the source STALE and clears it when the sensor
+  returns. A pinned channel found closed is reopened pinned; one tracking
+  anything but its sensor (possible on sdk-ant, not on radiant) is closed and
+  re-pinned. Reacquisition after the sensor starts transmitting again takes
+  ~1–2 s, because radiant revisits a named device's set with backoff
+  (`RADIANT_SEARCH_REVISIT_FIRST`) rather than steering it once.
+- **Pin by closing.** On bind the channel is closed; the next 1 s poll sees it
+  closed and bound and reopens it pinned. That works the same whether the
+  backend's close is synchronous (radiant) or asynchronous (sdk-ant).
+- **The transmission type is pinned too**, unlike Zwift (which leaves it
+  wildcard 0). Its upper nibble extends the device number, and a wildcard
+  there would let the identity check flap.
+- **Eviction.** When the pairing window opens and every self channel is
+  pinned, the pinned sensor that is *not* tracking and has gone longest since
+  it last was is released: the tap's map entry, the binding row
+  (`radiant_binding_unbind()`) and every sink (`binding_changed(source,
+  NULL)`; the Matter plane removes its endpoints, and `radiant_matter.c`
+  releases its endpoint slots so a reused source index starts clean). Its
+  channel then discovers. At most one eviction per window opening, and **a
+  tracking sensor is never evicted**.
+- **Re-acquiring a sensor you already paired is not a new binding under rule
+  1.** The pinned channel searches for exactly the identity the user opted
+  in, so no pairing window is needed for it to come back. Rule 1 governs what
+  may *bind*; a pinned channel cannot acquire anything that was not bound.
+- **A host SYSTEM_RESET** (Zwift sends one at startup) wipes every channel and
+  key. The self channels re-assign theirs, restore pinned channels from their
+  bindings (which the reset does not touch), and re-apply the ANT+ key only if
+  the host has written none since the reset — a host's own key is never
+  overwritten, and a non-ANT+ one is reported once, since the self channels
+  then hear nothing. A channel number the host takes after its reset is the
+  host's: the binding on it is released and the channel is never touched.
+
+The cost, stated exactly. Outside the pairing window there is no discovery.
+An **absent** pinned sensor, though, keeps its channel searching, and radiant's
+search is one shared sweep: while it is absent the whole 32-set sweep runs, and
+its own set is revisited on top (settling at one extra 260 ms dwell per 8.3 s
+sweep). Under MPSL the sweep yields to the other stack (ADR 0013), so this is
+radio-on time rather than lost Thread slots, but it is not the bounded pairing
+state §7.2 asks for. See the note there for the follow-up.
 
 ### 10.2 Deferred to a later version
 

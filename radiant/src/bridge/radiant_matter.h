@@ -262,6 +262,24 @@ void radiant_matter_attr_write(uint16_t endpoint_id, uint32_t cluster,
 /* Drop every endpoint. Tests, and a factory reset. */
 void radiant_matter_reset(void);
 
+/*
+ * The binding behind `source` was released (a paired sensor evicted to make
+ * room for a new one). Its endpoints and deadband memory are freed so that the
+ * next binding to reuse the index starts clean - without this the table only
+ * grows, and a bridge that re-pairs often runs out of endpoints.
+ *
+ * Safe from any thread: it only flags the source, and the table itself is
+ * changed on the sink's own thread before the next sample is handled - the
+ * table has no lock and must not be written from two threads. Flagging comes
+ * before the index can be rebound, and the rebound sensor's samples arrive
+ * after it, so they always find the slots already freed.
+ *
+ * A freed endpoint's slot - and so its endpoint_id - is reused by the next
+ * endpoint created. Fine for the reason the endpoint_id note above gives: the
+ * glue keys its persisted identity on the sensor, never on this number.
+ */
+void radiant_matter_forget_source(uint32_t source);
+
 #ifdef __cplusplus
 }
 #endif

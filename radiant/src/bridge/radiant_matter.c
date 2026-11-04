@@ -358,11 +358,53 @@ struct publish_state {
 
 static struct publish_state published[MATTER_DEADBAND_SLOTS];
 
+/* Sources to forget, one bit each, set from any thread by
+ * radiant_matter_forget_source() and applied on the sink's thread. 32 bits
+ * covers RADIANT_BINDING_MAX (8) with room; a source past 31 cannot be
+ * forgotten and is logged. */
+static atomic_t forget_pending;
+
 void radiant_matter_reset(void)
 {
 	memset(endpoints, 0, sizeof(endpoints));
 	memset(published, 0, sizeof(published));
 	endpoint_used = 0u;
+	atomic_clear(&forget_pending);
+}
+
+void radiant_matter_forget_source(uint32_t source)
+{
+	if (source >= 32u) {
+		LOG_WRN("source %u cannot be forgotten - its endpoints stay",
+			(unsigned int)source);
+		return;
+	}
+	(void)atomic_or(&forget_pending, (atomic_val_t)BIT(source));
+}
+
+static void apply_forgets(void)
+{
+	atomic_val_t pending = atomic_clear(&forget_pending);
+	uint16_t i;
+
+	if (pending == 0) {
+		return;
+	}
+	for (i = 0u; i < endpoint_used; i++) {
+		if (endpoints[i].in_use && endpoints[i].source < 32u &&
+		    (pending & BIT(endpoints[i].source)) != 0) {
+			LOG_INF("endpoint %u: source %u released",
+				endpoints[i].endpoint_id,
+				(unsigned int)endpoints[i].source);
+			endpoints[i].in_use = false;
+		}
+	}
+	for (i = 0u; i < ARRAY_SIZE(published); i++) {
+		if (published[i].valid && published[i].source < 32u &&
+		    (pending & BIT(published[i].source)) != 0) {
+			published[i].valid = false;
+		}
+	}
 }
 
 uint16_t radiant_matter_endpoint_count(void)
@@ -458,25 +500,36 @@ static const struct radiant_matter_endpoint *endpoint_get_or_add(
 		return primary;
 	}
 
-	if (endpoint_used >= ARRAY_SIZE(endpoints)) {
-		/* Counted as a log line rather than silently dropped: a
-		 * household that outgrows the table shows FEWER entities than
-		 * it should, which looks like a decoder fault and is not one. */
-		LOG_WRN("no endpoint left for source %u field %u (max %u) - "
-			"this sensor will not appear in Matter",
-			(unsigned int)s->source, (unsigned int)s->field_id,
-			(unsigned int)ARRAY_SIZE(endpoints));
-		return NULL;
+	/* A slot a forgotten source released, first; its endpoint_id goes with
+	 * it. Only then a fresh one. */
+	e = NULL;
+	for (uint16_t k = 0u; k < endpoint_used; k++) {
+		if (!endpoints[k].in_use) {
+			e = &endpoints[k];
+			break;
+		}
 	}
-
-	e = &endpoints[endpoint_used];
-	e->endpoint_id = (uint16_t)(MATTER_ENDPOINT_FIRST + endpoint_used);
+	if (e == NULL) {
+		if (endpoint_used >= ARRAY_SIZE(endpoints)) {
+			/* Counted as a log line rather than silently dropped: a
+			 * household that outgrows the table shows FEWER entities
+			 * than it should, which looks like a decoder fault and is
+			 * not one. */
+			LOG_WRN("no endpoint left for source %u field %u (max %u) - "
+				"this sensor will not appear in Matter",
+				(unsigned int)s->source, (unsigned int)s->field_id,
+				(unsigned int)ARRAY_SIZE(endpoints));
+			return NULL;
+		}
+		e = &endpoints[endpoint_used];
+		e->endpoint_id = (uint16_t)(MATTER_ENDPOINT_FIRST + endpoint_used);
+		endpoint_used++;
+	}
 	e->source = s->source;
 	e->field_id = s->field_id;
 	e->field_type = s->field_type;
 	e->device_type = row->device_type;
 	e->in_use = true;
-	endpoint_used++;
 
 	LOG_INF("endpoint %u: source %u field %u type 0x%02x -> devtype 0x%04x "
 		"cluster 0x%04x", e->endpoint_id, (unsigned int)e->source,
@@ -615,6 +668,8 @@ static void matter_publish(const struct radiant_sample *s)
 	const struct radiant_matter_endpoint *e;
 	int64_t value;
 	uint8_t i;
+
+	apply_forgets();
 
 	row = radiant_matter_row(s->field_type);
 	if (row == NULL) {

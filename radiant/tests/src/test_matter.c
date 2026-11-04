@@ -884,3 +884,49 @@ ZTEST(radiant_matter, test_the_endpoint_ceiling_announces_itself)
 			"the one past the ceiling simply does not appear");
 }
 
+/*
+ * The self channels evict a paired sensor to pair a new one, and the binding
+ * index is then reused. Without a release, the table only grows: a bridge that
+ * re-pairs often hits the ceiling above with two sensors in the house.
+ */
+ZTEST(radiant_matter, test_a_forgotten_source_releases_its_endpoints_for_reuse)
+{
+	struct radiant_sample s;
+	uint8_t f;
+
+	for (f = 0u; f < RADIANT_MATTER_MAX_ENDPOINTS; f++) {
+		s = mk(1u, f, RADIANT_FIELD_OCCUPANCY, 1, 0);
+		s.flags = RADIANT_SAMPLE_DERIVED;
+		radiant_bridge_post(&s);
+		radiant_bridge_drain();
+	}
+	zassert_equal(radiant_matter_endpoint_count(), RADIANT_MATTER_MAX_ENDPOINTS,
+		      "setup: the table is full");
+
+	/* Source 1 evicted; a different sensor is bound under the same index
+	 * and reports a field the old one never had. */
+	radiant_matter_forget_source(1u);
+	s = mk(1u, 40u, RADIANT_FIELD_TEMPERATURE, 2150, -2);
+	radiant_bridge_post(&s);
+	radiant_bridge_drain();
+
+	zassert_not_null(radiant_matter_endpoint_for(1u, 40u),
+			 "the new sensor got no endpoint: the evicted one's were "
+			 "never released");
+	zassert_is_null(radiant_matter_endpoint_for(1u, 0u),
+			"the evicted sensor's endpoint is still in the table");
+	zassert_equal(radiant_matter_endpoint_count(), RADIANT_MATTER_MAX_ENDPOINTS,
+		      "a released slot must be reused, not appended");
+
+	/* And a rebound field starts with no deadband memory: the old sensor's
+	 * last value must not suppress the new sensor's first. */
+	n_writes = 0u;
+	s = mk(1u, 0u, RADIANT_FIELD_OCCUPANCY, 1, 0);
+	s.flags = RADIANT_SAMPLE_DERIVED;
+	radiant_bridge_post(&s);
+	radiant_bridge_drain();
+	zassert_true(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING, MATTER_ATTR_OCCUPANCY,
+				NULL, NULL) >= 1,
+		     "the old sensor's last value suppressed the new one's first");
+}
+

@@ -41,6 +41,7 @@
 
 #include "radiant_binding.h"
 #include "radiant_bridge.h"
+#include "radiant_matter.h"
 
 #include "ant_matter.h"
 
@@ -69,6 +70,12 @@ static void matter_glue_binding_changed(uint32_t source, const struct radiant_bi
 {
 	if (source >= RADIANT_BINDING_MAX) {
 		return;
+	}
+	/* Released (the self channels evicted the sensor to pair another):
+	 * free radiant_matter.c's endpoints too, or the index's next binding
+	 * finds them full. The glue's own CHIP endpoints go below. */
+	if (b == NULL) {
+		radiant_matter_forget_source(source);
 	}
 	ant_matter_binding_changed(source, b);
 }
