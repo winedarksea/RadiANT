@@ -4378,6 +4378,15 @@ PROFILES = {
         "pages": (PAGE_FEC_GENERAL, PAGE_FEC_SETTINGS, PAGE_FEC_TREADMILL),
         "label": "fitness equipment (treadmill), device type 0x11",
     },
+    # A smart trainer, as a RECEIVE profile for measuring loss on a real one
+    # (Zwift's FE-C channel). Same type and period as the treadmill above; only
+    # the type-specific page differs.
+    "fec-bike": {
+        "device_type": FEC_DEVICE_TYPE,
+        "period": FEC_PERIOD,
+        "pages": (PAGE_FEC_GENERAL, PAGE_FEC_TRAINER),
+        "label": "fitness equipment (indoor bike), device type 0x11",
+    },
     "sdm": {
         "device_type": SDM_DEVICE_TYPE,
         "period": SDM_PERIOD,

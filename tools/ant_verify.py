@@ -1281,6 +1281,8 @@ def profile_for(device_type: int, pages: Counter) -> str:
         return "csc"
     if device_type == ap.HRM_DEVICE_TYPE:
         return "heart-rate"
+    if device_type == ap.FEC_DEVICE_TYPE:
+        return "fec-treadmill" if pages[ap.PAGE_FEC_TREADMILL] else "fec-bike"
     if device_type == ap.RADIANT_TLM_DEVICE_TYPE:
         # Both 0x60 profiles share a decoder; the difference is announced in
         # the descriptor, not guessable from the page histogram. A node with

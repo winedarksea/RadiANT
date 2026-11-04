@@ -1113,6 +1113,9 @@ class TestDispatch(unittest.TestCase):
         self.assertEqual(ap.PROFILES["power-torque"]["pages"], (0x11, 0x12))
         self.assertEqual(ap.PROFILES["heart-rate"]["period"], 8070)
         self.assertEqual(ap.PROFILES["heart-rate"]["device_type"], 0x78)
+        self.assertEqual(ap.PROFILES["fec-bike"]["device_type"], 0x11)
+        self.assertEqual(ap.PROFILES["fec-bike"]["period"], 8192)
+        self.assertEqual(ap.PROFILES["fec-bike"]["pages"], (0x10, 0x19))
 
 
 # ---------------------------------------------------------------------------
