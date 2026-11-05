@@ -339,6 +339,102 @@ static void log_assign_refusal(uint8_t ch, antr_err_t rc)
 }
 
 /*
+ * The most device IDs one channel's exclusion list can hold, on either backend:
+ * the radiant backend's API_ID_LIST_MAX (apps/common/ant_radio_radiant.c,
+ * "what a retail stick accepts") and sdk-ant's ant_id_list_config() list size
+ * (0-4, include/ant_interface.h). One more is ANTW_INVALID_LIST_ID.
+ */
+#define SELF_ID_LIST_MAX 4u
+
+/*
+ * Give a discovering channel an EXCLUSION list of the devices bound to the
+ * other self channels, so its wildcard search cannot acquire them.
+ *
+ * Why it is needed, from the bench: after an eviction, the freed channel's
+ * search kept acquiring the sensor PINNED on the other self channel - a
+ * device the radio has cached and hears every period, so the search steered
+ * straight to it - and try_bind() refused it ("not binding it twice"),
+ * rotate_and_reopen() tore the channel down and rebuilt it, and the same
+ * thing happened again a second later, for as long as the window stayed open.
+ * It never reached the new sensor the button was pressed for. With the list,
+ * the search skips the pinned devices and the duplicate check in try_bind()
+ * is a backstop for a device that binds elsewhere after this search opened.
+ *
+ * Backend-agnostic by construction: the list is the ANT API's own
+ * (antr_id_list_add()/_config(), ant_radio.h), native on sdk-ant, and on
+ * radiant consulted at steer time, so the sweep does not chase an excluded
+ * device, and again at offer time, when an acquisition is handed to the
+ * channel (api_id_list_permits(), ant_radio_radiant.c).
+ *
+ * The list outlives a close and an unassign, so it is ALWAYS reconfigured
+ * here, with size 0 when nothing is bound elsewhere: an exclusion written on
+ * an earlier open would otherwise still apply. Nothing here is fatal. A
+ * refused call leaves a search that may find a pinned device again, which
+ * try_bind() catches; and a partly written list is enabled only for the
+ * entries that were actually written.
+ *
+ * The channel must be assigned and closed.
+ */
+static void exclude_pinned(uint8_t ch)
+{
+	static bool overflow_logged;
+	uint8_t n = 0u;
+	uint8_t j;
+	antr_err_t rc;
+
+	for (j = 0u; j < SELF_N; j++) {
+		uint8_t other = self_channel_index(j);
+		uint32_t source;
+		const struct radiant_binding *b;
+		uint8_t id[4];
+
+		if (other == ch) {
+			continue;
+		}
+		source = ant_bridge_channel_source(other);
+		if (source == RADIANT_BINDING_NONE) {
+			continue;
+		}
+		b = radiant_binding_get(source);
+		if (b == NULL) {
+			continue;
+		}
+		if (n >= SELF_ID_LIST_MAX) {
+			/* Only with six or more self channels (Kconfig allows
+			 * eight). The ones left out can still be found, and
+			 * try_bind() turns them away. */
+			if (!overflow_logged) {
+				overflow_logged = true;
+				LOG_WRN("more than %u devices pinned on other self "
+					"channels: the discovery exclusion list holds "
+					"%u, the rest are caught at bind time",
+					SELF_ID_LIST_MAX, SELF_ID_LIST_MAX);
+			}
+			break;
+		}
+
+		/* Wire order: [devnum_lo, devnum_hi, devtype, trans_type]. */
+		id[0] = (uint8_t)(b->devnum & 0xFFu);
+		id[1] = (uint8_t)(b->devnum >> 8);
+		id[2] = b->devtype;
+		id[3] = b->trans_type;
+		rc = antr_id_list_add(ch, id, n);
+		if (rc != 0u) {
+			LOG_WRN("channel %u exclusion list add %u: %u", ch, n,
+				rc);
+			break;
+		}
+		n++;
+	}
+
+	rc = antr_id_list_config(ch, n, 1u);
+	if (rc != 0u) {
+		LOG_WRN("channel %u exclusion list (%u entries): %u - a pinned "
+			"device may be found again and rotated away", ch, n, rc);
+	}
+}
+
+/*
  * Point an ASSIGNED, CLOSED channel at one discovery row and put it on air.
  *
  * All four configuration calls are legal in exactly this state and in no
@@ -385,6 +481,12 @@ static int configure_and_open(uint8_t ch, const struct self_profile *p)
 		LOG_WRN("channel %u search timeout: %u (leaving the default)",
 			ch, rc);
 	}
+
+	/* Reached only with the channel assigned and closed - every set above
+	 * refuses anything else, and rotate_and_reopen()'s first try on a
+	 * still-OPEN channel leaves at antr_channel_id_set() - which is the
+	 * one state the list calls accept. */
+	exclude_pinned(ch);
 
 	rc = antr_channel_open(ch);
 	if (rc != 0u) {
@@ -486,6 +588,15 @@ static int configure_pinned_and_open(uint8_t i, const struct radiant_binding *b)
 		 * back here on the next poll and is reopened pinned. */
 		LOG_WRN("channel %u infinite search refused: %u", ch, rc);
 	}
+	/* The channel names its device exactly, so it wants no list - and the
+	 * exclusion list exclude_pinned() gave it while it was discovering
+	 * outlives the close, so it is switched off here rather than left to
+	 * apply to a pinned search. Not fatal: an exclusion list only ever
+	 * names devices bound to OTHER channels, never this one's. */
+	rc = antr_id_list_config(ch, 0u, 0u);
+	if (rc != 0u) {
+		LOG_WRN("channel %u id list off: %u", ch, rc);
+	}
 	rc = antr_channel_open(ch);
 	if (rc != 0u) {
 		LOG_WRN("channel %u open: %u", ch, rc);
@@ -572,10 +683,15 @@ static bool try_bind(uint8_t ch)
 	 * mid-session; and radiant_bridge_binding_changed() re-arms every sink's
 	 * per-binding state.
 	 *
-	 * With pinning this is the common case, not a corner: a pinned sensor
-	 * that dropped out is still being searched for on its own channel, and
-	 * a discovering channel can find it first. The pinned channel gets it
-	 * back; this one moves on (false).
+	 * With pinning this would be the common case: a pinned sensor that
+	 * dropped out is still being searched for on its own channel, and a
+	 * discovering channel can find it first - and after an eviction the
+	 * freed channel found the other channel's pinned sensor every second,
+	 * forever. exclude_pinned() now keeps a discovering search off every
+	 * device bound elsewhere WHEN IT OPENS, so this is the backstop: a
+	 * device that bound on another channel after this search opened, one
+	 * past the list's four entries, or a backend that refused the list.
+	 * The pinned channel gets it back; this one moves on (false).
 	 */
 	existing = radiant_binding_find(devnum, devtype, trans);
 	if (existing != RADIANT_BINDING_NONE) {
