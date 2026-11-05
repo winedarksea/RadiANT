@@ -26,7 +26,10 @@
  * ---------------------------------------------------------------------------
  *
  * Nothing here runs at boot. The first publish() that finds no connection is
- * what opens the socket.
+ * what opens the socket - or, on a bridge with nothing left publishing, the
+ * keepalive thread, but only to deliver a released sensor's owed "offline"
+ * (see mqtt_keepalive_fn()). Either way it is a bind that comes first, never
+ * the boot.
  *
  * The obvious alternative is CONFIG_NET_CONFIG_NEED_IPV6, so that the stack is
  * addressable before the application starts. That makes net_config_init()
@@ -339,8 +342,10 @@ static bool avail_online[RADIANT_BINDING_MAX];
  *                 and the slot may now hold a different physical machine.
  *   offline_uuid  the released sensor's status still reads "online" on the
  *                 broker and must be overwritten. Kept until a publish of it
- *                 SUCCEEDS, so a release made while disconnected goes out after
- *                 the next connect; it used to be dropped.
+ *                 SUCCEEDS; it used to be dropped. A release made while
+ *                 disconnected does not wait for some other sensor's sample to
+ *                 bring the connection back: the keepalive thread connects
+ *                 for it (offline_owed()), at the reconnect backoff's pace.
  *
  * "online" is not owed at all: the lazy avail_online path in publish() sends
  * it on the new binding's first fresh sample.
@@ -451,10 +456,15 @@ static int publish_raw(const char *topic, const char *payload, bool retain)
 #define MQTT_BACKOFF_MIN_MS 5000
 #define MQTT_BACKOFF_MAX_MS 300000
 
-/* The longest any one send may block - see ensure_connected(). A second: an
- * MQTT publish here is a few hundred bytes, so a healthy link clears it in
- * milliseconds and anything longer means the peer has stopped reading. */
-#define MQTT_SEND_TIMEOUT_MS 1000
+/* The longest any one send may block - see ensure_connected(). An MQTT publish
+ * here is a few hundred bytes, but the link under it is Thread: 16 TX packets
+ * and 32 net buffers, shared with every other sender on the node. One second
+ * was too tight for that during a discovery burst - a burst of retained config
+ * messages can legitimately queue behind a slow radio for longer, and a send
+ * that times out drops the whole session and arms the backoff. Three seconds
+ * still bounds a peer that has stopped reading: one 3 s stall, then cheap
+ * refusals, against ~100 s of 10 s ones without it. */
+#define MQTT_SEND_TIMEOUT_MS 3000
 
 static int64_t mqtt_next_attempt_ms;
 static uint32_t mqtt_backoff_ms = MQTT_BACKOFF_MIN_MS;
@@ -854,7 +864,9 @@ static void drain_owed(void)
 			       CONFIG_ANT_DONGLE_MQTT_BRIDGE_ID, uuid);
 		if (publish_raw(work_topic, "offline", true) != 0) {
 			/* Still owed. A failed send has already disconnected
-			 * the client, so the retry waits for the next connect. */
+			 * the client and armed the backoff, so the retry waits
+			 * for the next connect - which the keepalive thread
+			 * makes for it if nothing else does. */
 			mqtt_stats.publish_failed++;
 			continue;
 		}
@@ -868,6 +880,29 @@ static void drain_owed(void)
 		}
 		k_spin_unlock(&owed_lock, key);
 	}
+}
+
+/*
+ * True if any source still owes an "offline". Caller holds `lock`; owed_lock
+ * is taken here and held only for the scan - the answer is acted on (a
+ * connect, a publish) after it is dropped, never under it. A release that
+ * lands just after the scan is picked up by the next one.
+ */
+static bool offline_owed(void)
+{
+	k_spinlock_key_t key = k_spin_lock(&owed_lock);
+	bool any = false;
+	uint32_t s;
+
+	for (s = 0u; s < RADIANT_BINDING_MAX; s++) {
+		if (owed[s].offline_uuid != 0u) {
+			any = true;
+			break;
+		}
+	}
+	k_spin_unlock(&owed_lock, key);
+
+	return any;
 }
 
 /* ── The sink ──────────────────────────────────────────────────────────────── */
@@ -1085,16 +1120,24 @@ RADIANT_SINK_DEFINE(radiant_mqtt_sink, mqtt_want, mqtt_publish_sample,
  * quietest case would be the one that breaks.
  *
  * Same priority as the pump, below the ANT host thread, for the same reason.
+ *
+ * 2048, THE PUMP'S SIZE, because this thread now runs ensure_connected() too
+ * (for an owed "offline") and the pump is the only other thread that does. The
+ * 1176-of-1536-unused reading this was sized against was taken with no broker
+ * reachable, so it never covered a connect - or, for that matter, a send - on
+ * this thread. Matching the stack that has carried the connect path since the
+ * sink was written is the cheap way not to find that number out by fault.
  */
-#define MQTT_KEEPALIVE_STACK 1536
+#define MQTT_KEEPALIVE_STACK 2048
 
 /*
  * Free stack on the two threads this file's network I/O can run on. The
- * keepalive thread now carries the owed "offline" publish, but it already ran
- * mqtt_live() down the same send path (CONFIG_NET_TC_TX_COUNT=0: the
- * IPv6/TCP/OpenThread transmit runs on the caller's stack), so this is a
- * baseline, not a verdict. The self thread should no longer reach the send
- * path at all. Needs the 0xAA fill (CONFIG_INIT_STACKS) to mean anything.
+ * keepalive thread carries the owed "offline" publish and, when one is owed
+ * while disconnected, the connect that delivers it; it already ran mqtt_live()
+ * down the same send path (CONFIG_NET_TC_TX_COUNT=0: the IPv6/TCP/OpenThread
+ * transmit runs on the caller's stack), so this is a baseline, not a verdict.
+ * The self thread should no longer reach the send path at all. Needs the 0xAA
+ * fill (CONFIG_INIT_STACKS) to mean anything.
  */
 #if defined(CONFIG_INIT_STACKS) && defined(CONFIG_THREAD_STACK_INFO)
 extern const k_tid_t mqtt_keepalive_tid;
@@ -1139,9 +1182,35 @@ static void mqtt_keepalive_fn(void *a, void *b, void *c)
 			(void)mqtt_live(&client);
 			(void)mqtt_input(&client);
 		}
-		/* The publish path's drain covers a busy bridge; this one
+		/*
+		 * The publish path's drain covers a busy bridge; this one
 		 * covers the quiet case, where an evicted sensor was the last
-		 * thing publishing. */
+		 * thing publishing.
+		 *
+		 * AND THE QUIET CASE HAS TO CONNECT FOR ITSELF. Connects are
+		 * otherwise made only from the sample path, so on a bridge with
+		 * nothing left publishing an "offline" owed while disconnected
+		 * would wait for a sample that never comes, and the released
+		 * sensor's retained status would read "online" on the broker
+		 * for good. So an owed "offline" is reason enough to connect.
+		 *
+		 * This does not turn the 500 ms tick into a 500 ms retry:
+		 * ensure_connected() refuses with one comparison until the
+		 * backoff deadline passes, and every way an attempt can fail
+		 * (connect error, no CONNACK, a refused CONNACK, a later
+		 * disconnect) arms that backoff. A broker that is down costs
+		 * one attempt per backoff interval, 5 s doubling to 5 min,
+		 * exactly as it does from the sample path.
+		 *
+		 * Blocking here for a connect is acceptable: this thread already
+		 * holds `lock`, which the sample path would block on for its
+		 * own connect anyway. Lock order is `lock` then owed_lock,
+		 * never the reverse, and offline_owed() drops the spinlock
+		 * before anything here touches a socket.
+		 */
+		if (!connected && offline_owed()) {
+			(void)ensure_connected();
+		}
 		drain_owed();
 
 		/*
