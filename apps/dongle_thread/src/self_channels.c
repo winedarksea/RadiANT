@@ -194,6 +194,7 @@ static const struct self_profile self_profiles[] = {
 struct self_chan {
 	uint8_t  row;           /* discovery profile, an index into self_profiles */
 	bool     owned;         /* we assigned it since the last host reset */
+	uint32_t owned_gen;     /* the host reset generation `owned` was set in */
 	bool     open_pinned;   /* the current open is configure_pinned_and_open()'s */
 	bool     open_discover; /* the current open is a discovery search */
 	uint32_t last_tracking_ms; /* the last poll that saw it TRACKING its bound sensor */
@@ -217,20 +218,37 @@ static uint8_t self_channel_index(uint8_t i)
 	return (uint8_t)(ANT_BRIDGE_SELF_CHANNEL_TOP - i);
 }
 
-/* Pairing window deadline in uptime ms; 0 means closed. */
-static volatile int64_t window_until_ms;
+/*
+ * Pairing window deadline, in k_uptime_get_32() ms; 0 means closed.
+ *
+ * 32 bits and an atomic_t, not the int64_t it used to be: it is written from
+ * the button's GPIO ISR and read on the polling thread, and a 64-bit store is
+ * two stores on a 32-bit core, so the thread could read half of an old deadline
+ * and half of a new one. A 32-bit deadline wraps every ~49.7 days, which is why
+ * every comparison is the signed difference window_open_at() takes, and why the
+ * poll clears an expired deadline back to 0 (see self_thread_fn()): a stale
+ * deadline left in place would read as open again 2^31 ms after it passed.
+ */
+static atomic_t window_until;
 
-static bool window_open(void)
+static atomic_val_t window_deadline(void)
 {
-	int64_t until = window_until_ms;
+	uint32_t until = k_uptime_get_32() +
+			 (uint32_t)CONFIG_ANT_DONGLE_PAIRING_WINDOW_S * 1000u;
 
-	return until != 0 && k_uptime_get() < until;
+	/* 0 is "closed", so a deadline that happens to land on it is moved
+	 * one millisecond rather than silently not opening the window. */
+	return (atomic_val_t)(until == 0u ? 1u : until);
+}
+
+static bool window_open_at(uint32_t until, uint32_t now)
+{
+	return until != 0u && (int32_t)(until - now) > 0;
 }
 
 void self_channels_open_pairing_window(void)
 {
-	window_until_ms = k_uptime_get() +
-			  (int64_t)CONFIG_ANT_DONGLE_PAIRING_WINDOW_S * 1000;
+	(void)atomic_set(&window_until, window_deadline());
 	LOG_INF("pairing window open for %d s",
 		CONFIG_ANT_DONGLE_PAIRING_WINDOW_S);
 }
@@ -254,8 +272,7 @@ static void pair_pressed(const struct device *dev, struct gpio_callback *cb,
 	/* ISR context. Only a timestamp is written; every decision that
 	 * follows is taken on the polling thread below, where an antr_* call
 	 * is legal. */
-	window_until_ms = k_uptime_get() +
-			  (int64_t)CONFIG_ANT_DONGLE_PAIRING_WINDOW_S * 1000;
+	(void)atomic_set(&window_until, window_deadline());
 }
 
 static void button_init(void)
@@ -300,41 +317,217 @@ static void button_init(void)
 
 /* -- The channels -------------------------------------------------- */
 
-/* Returns the stack's answer and logs nothing: what a refusal means depends on
- * why the caller was assigning - see log_assign_refusal(). */
-static antr_err_t assign_one(uint8_t i)
+/*
+ * Assign channel i as ours. Returns 0 when it is assigned AND recorded as
+ * owned; -EAGAIN when a host reset was running across the assign, which has
+ * been undone; -EIO when the stack refused, with its answer in *refusal. Logs
+ * nothing: what a refusal means depends on why the caller was assigning - see
+ * log_assign_refusal(). On anything but 0 the channel is not ours this poll and
+ * the caller must not configure or open it.
+ *
+ * THE RESET CHECK. A host SYSTEM_RESET runs on the bridge thread, not this one,
+ * and can land anywhere in a poll. The poll's new-generation check (the top of
+ * self_thread_fn()'s loop) keeps `owned` only on a channel whose owned_gen is
+ * the generation just seen, so owned_gen must be a generation the assign
+ * really happened AFTER. The snapshot taken here, after the assign returned,
+ * gives that unless the reset was still running when it was taken:
+ * reset_busy covers the whole of handle_system_reset() from before
+ * antr_stack_reset() to 50 ms after the generation bump (ant_serial_bridge.h),
+ * so an assign the wipe could have undone - or one landing between the wipe
+ * and the bump, which would be recorded against the OLD generation and cleared
+ * as the host's - is always seen busy. That case is put back to unassigned
+ * rather than guessed at; the next poll reads the channel UNASSIGNED and
+ * re-establishes it cleanly. The unassign cannot hit a host channel: while the
+ * reset is busy the bridge thread is inside it and processes no host ASSIGN.
+ *
+ * What is left is an assign that returned before the reset began, followed by
+ * the entire reset, its 50 ms tail and a host ASSIGN of this same channel, all
+ * before the snapshot below - this thread pre-empted for over 50 ms between two
+ * adjacent calls. That would be recorded as ours in the new generation. It is
+ * stated rather than fixed: nothing this side of the bridge can tell an assign
+ * the wipe undid from one made after it.
+ */
+static int assign_one(uint8_t i, antr_err_t *refusal)
 {
+	uint8_t ch = self_channel_index(i);
+	struct ant_bridge_host_state hs;
 	antr_err_t rc;
 
-	rc = antr_channel_assign(self_channel_index(i), ANTW_CHANNEL_TYPE_SLAVE,
-				 SELF_NETWORK, 0u);
+	*refusal = 0u;
+	rc = antr_channel_assign(ch, ANTW_CHANNEL_TYPE_SLAVE, SELF_NETWORK, 0u);
 	if (rc != 0u) {
-		return rc;
+		*refusal = rc;
+		return -EIO;
 	}
+
+	ant_serial_bridge_host_state(SELF_NETWORK, &hs);
+	if (hs.reset_busy) {
+		/* Ours or already wiped; either way not to be counted.
+		 * A refusal means the reset got there first. */
+		(void)antr_channel_unassign(ch);
+		self[i].owned = false;
+		self[i].open_pinned = false;
+		self[i].open_discover = false;
+		return -EAGAIN;
+	}
+
 	self[i].owned = true;
+	self[i].owned_gen = hs.reset_gen;
 	self[i].open_pinned = false;
 	self[i].open_discover = false;
-	return 0u;
+	return 0;
 }
 
+/* Why an assign was being attempted, which decides what a refusal means. */
+enum self_assign_why {
+	/* The channel read UNASSIGNED: boot, or a host reset wiped it. */
+	SELF_ASSIGN_AFTER_RESET,
+	/* rotate_and_reopen() just closed and unassigned a channel that was
+	 * ours, to rebuild it. */
+	SELF_ASSIGN_AFTER_TEARDOWN,
+};
+
 /*
- * CHANNEL_IN_WRONG_STATE on an assign is a channel somebody else already
- * assigned, and after a host reset that somebody is the host: its ASSIGN
- * landed between this poll reading the channel unassigned and assigning it.
- * That is the reset race self_key_poll()'s caller leaves as designed, and the
- * channel is the host's from then on - the next poll sees it assigned but not
- * owned and takes the RELEASE path for whatever was bound to it. Saying
- * NOTHING CAN EVER BIND there was false. Any other refusal still means exactly
- * that.
+ * -EAGAIN is a host reset that was running across the assign (assign_one()):
+ * nothing is wrong, the assign was undone, and the next poll finds the channel
+ * UNASSIGNED and re-establishes it.
+ *
+ * CHANNEL_IN_WRONG_STATE means the channel is still assigned, and who holds it
+ * depends on the path:
+ *
+ * - After a reset, it is a channel somebody else already assigned, and that
+ *   somebody is the host: its ASSIGN landed between this poll reading the
+ *   channel unassigned and assigning it. That is the reset race
+ *   self_key_poll()'s caller leaves as designed, and the channel is the host's
+ *   from then on - the next poll sees it assigned but not owned and takes the
+ *   RELEASE path for whatever was bound to it. Saying NOTHING CAN EVER BIND
+ *   there was false.
+ *
+ * - After our own teardown, the channel was ours a moment ago, and the likely
+ *   holder is still us: sdk-ant's close is asynchronous, so the unassign before
+ *   this assign was refused because the close had not landed, and the channel
+ *   is still assigned, possibly still open. Blaming the host there was false
+ *   too. `owned` and the open flags are untouched, so the next poll reads the
+ *   channel as it really is and radiant_self_decide() retries: ASSIGNED with
+ *   open_discover set is ROTATE (this path again, now on a closed channel, which
+ *   retunes in place), still TRACKING is BIND, which finds the same duplicate
+ *   and rotates again, still SEARCHING waits for the close to land, UNASSIGNED
+ *   is REESTABLISH, and with the window shut any of them goes to IDLE.
+ *
+ * Any other refusal still means exactly what it says.
  */
-static void log_assign_refusal(uint8_t ch, antr_err_t rc)
+static void log_assign_refusal(uint8_t ch, int res, antr_err_t rc,
+			       enum self_assign_why why)
 {
-	if (rc == (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE) {
+	if (res == -EAGAIN) {
+		LOG_INF("self channel %u: host reset in progress - "
+			"re-establishing on the next poll", ch);
+	} else if (rc == (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE &&
+		   why == SELF_ASSIGN_AFTER_TEARDOWN) {
+		LOG_INF("self channel %u: teardown still in progress, retrying "
+			"next poll", ch);
+	} else if (rc == (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE) {
 		LOG_INF("self channel %u: the host assigned it first; it is the "
 			"host's until its next reset", ch);
 	} else {
 		LOG_ERR("channel %u assign: %u - NOTHING CAN EVER BIND on this "
 			"channel", ch, rc);
+	}
+}
+
+/*
+ * The most device IDs one channel's exclusion list can hold, on either backend:
+ * the radiant backend's API_ID_LIST_MAX (apps/common/ant_radio_radiant.c,
+ * "what a retail stick accepts") and sdk-ant's ant_id_list_config() list size
+ * (0-4, include/ant_interface.h). One more is ANTW_INVALID_LIST_ID.
+ */
+#define SELF_ID_LIST_MAX 4u
+
+/*
+ * Give a discovering channel an EXCLUSION list of the devices bound to the
+ * other self channels, so its wildcard search cannot acquire them.
+ *
+ * Why it is needed, from the bench: after an eviction, the freed channel's
+ * search kept acquiring the sensor PINNED on the other self channel - a
+ * device the radio has cached and hears every period, so the search steered
+ * straight to it - and try_bind() refused it ("not binding it twice"),
+ * rotate_and_reopen() tore the channel down and rebuilt it, and the same
+ * thing happened again a second later, for as long as the window stayed open.
+ * It never reached the new sensor the button was pressed for. With the list,
+ * the search skips the pinned devices and the duplicate check in try_bind()
+ * is a backstop for a device that binds elsewhere after this search opened.
+ *
+ * Backend-agnostic by construction: the list is the ANT API's own
+ * (antr_id_list_add()/_config(), ant_radio.h), native on sdk-ant, and on
+ * radiant consulted at steer time, so the sweep does not chase an excluded
+ * device, and again at offer time, when an acquisition is handed to the
+ * channel (api_id_list_permits(), ant_radio_radiant.c).
+ *
+ * The list outlives a close and an unassign, so it is ALWAYS reconfigured
+ * here, with size 0 when nothing is bound elsewhere: an exclusion written on
+ * an earlier open would otherwise still apply. Nothing here is fatal. A
+ * refused call leaves a search that may find a pinned device again, which
+ * try_bind() catches; and a partly written list is enabled only for the
+ * entries that were actually written.
+ *
+ * The channel must be assigned and closed.
+ */
+static void exclude_pinned(uint8_t ch)
+{
+	static bool overflow_logged;
+	uint8_t n = 0u;
+	uint8_t j;
+	antr_err_t rc;
+
+	for (j = 0u; j < SELF_N; j++) {
+		uint8_t other = self_channel_index(j);
+		uint32_t source;
+		const struct radiant_binding *b;
+		uint8_t id[4];
+
+		if (other == ch) {
+			continue;
+		}
+		source = ant_bridge_channel_source(other);
+		if (source == RADIANT_BINDING_NONE) {
+			continue;
+		}
+		b = radiant_binding_get(source);
+		if (b == NULL) {
+			continue;
+		}
+		if (n >= SELF_ID_LIST_MAX) {
+			/* Only with six or more self channels (Kconfig allows
+			 * eight). The ones left out can still be found, and
+			 * try_bind() turns them away. */
+			if (!overflow_logged) {
+				overflow_logged = true;
+				LOG_WRN("more than %u devices pinned on other self "
+					"channels: the discovery exclusion list holds "
+					"%u, the rest are caught at bind time",
+					SELF_ID_LIST_MAX, SELF_ID_LIST_MAX);
+			}
+			break;
+		}
+
+		/* Wire order: [devnum_lo, devnum_hi, devtype, trans_type]. */
+		id[0] = (uint8_t)(b->devnum & 0xFFu);
+		id[1] = (uint8_t)(b->devnum >> 8);
+		id[2] = b->devtype;
+		id[3] = b->trans_type;
+		rc = antr_id_list_add(ch, id, n);
+		if (rc != 0u) {
+			LOG_WRN("channel %u exclusion list add %u: %u", ch, n,
+				rc);
+			break;
+		}
+		n++;
+	}
+
+	rc = antr_id_list_config(ch, n, 1u);
+	if (rc != 0u) {
+		LOG_WRN("channel %u exclusion list (%u entries): %u - a pinned "
+			"device may be found again and rotated away", ch, n, rc);
 	}
 }
 
@@ -385,6 +578,12 @@ static int configure_and_open(uint8_t ch, const struct self_profile *p)
 		LOG_WRN("channel %u search timeout: %u (leaving the default)",
 			ch, rc);
 	}
+
+	/* Reached only with the channel assigned and closed - every set above
+	 * refuses anything else, and rotate_and_reopen()'s first try on a
+	 * still-OPEN channel leaves at antr_channel_id_set() - which is the
+	 * one state the list calls accept. */
+	exclude_pinned(ch);
 
 	rc = antr_channel_open(ch);
 	if (rc != 0u) {
@@ -437,12 +636,14 @@ static void rotate_and_reopen(uint8_t i)
 	(void)antr_channel_close(ch);
 	(void)antr_channel_unassign(ch);
 	{
-		antr_err_t rc = assign_one(i);
+		antr_err_t refusal;
+		int res = assign_one(i, &refusal);
 
-		if (rc == 0u) {
+		if (res == 0) {
 			discover_open(i);
 		} else {
-			log_assign_refusal(ch, rc);
+			log_assign_refusal(ch, res, refusal,
+					   SELF_ASSIGN_AFTER_TEARDOWN);
 		}
 	}
 }
@@ -485,6 +686,15 @@ static int configure_pinned_and_open(uint8_t i, const struct radiant_binding *b)
 		/* Survivable: a pinned channel whose search times out comes
 		 * back here on the next poll and is reopened pinned. */
 		LOG_WRN("channel %u infinite search refused: %u", ch, rc);
+	}
+	/* The channel names its device exactly, so it wants no list - and the
+	 * exclusion list exclude_pinned() gave it while it was discovering
+	 * outlives the close, so it is switched off here rather than left to
+	 * apply to a pinned search. Not fatal: an exclusion list only ever
+	 * names devices bound to OTHER channels, never this one's. */
+	rc = antr_id_list_config(ch, 0u, 0u);
+	if (rc != 0u) {
+		LOG_WRN("channel %u id list off: %u", ch, rc);
 	}
 	rc = antr_channel_open(ch);
 	if (rc != 0u) {
@@ -572,10 +782,15 @@ static bool try_bind(uint8_t ch)
 	 * mid-session; and radiant_bridge_binding_changed() re-arms every sink's
 	 * per-binding state.
 	 *
-	 * With pinning this is the common case, not a corner: a pinned sensor
-	 * that dropped out is still being searched for on its own channel, and
-	 * a discovering channel can find it first. The pinned channel gets it
-	 * back; this one moves on (false).
+	 * With pinning this would be the common case: a pinned sensor that
+	 * dropped out is still being searched for on its own channel, and a
+	 * discovering channel can find it first - and after an eviction the
+	 * freed channel found the other channel's pinned sensor every second,
+	 * forever. exclude_pinned() now keeps a discovering search off every
+	 * device bound elsewhere WHEN IT OPENS, so this is the backstop: a
+	 * device that bound on another channel after this search opened, one
+	 * past the list's four entries, or a backend that refused the list.
+	 * The pinned channel gets it back; this one moves on (false).
 	 */
 	existing = radiant_binding_find(devnum, devtype, trans);
 	if (existing != RADIANT_BINDING_NONE) {
@@ -665,17 +880,21 @@ static bool tracking_bound_device(uint8_t ch)
  * nothing until the next reboot.
  *
  * Returns true when this call is the first to see a reset, i.e. every self
- * channel was wiped since the last poll.
+ * channel was wiped since the last poll. *gen is the reset generation from the
+ * same snapshot that decided it, so the caller's "which channels were assigned
+ * after this reset" test compares against exactly the generation judged new,
+ * not a second, later read that a further reset could already have moved.
  */
 static struct radiant_self_key_state key_state;
 
-static bool self_key_poll(void)
+static bool self_key_poll(uint32_t *gen)
 {
 	struct ant_bridge_host_state hs;
 	struct radiant_self_key_in in;
 	bool new_generation = false;
 
 	ant_serial_bridge_host_state(SELF_NETWORK, &hs);
+	*gen = hs.reset_gen;
 	in.reset_gen = hs.reset_gen;
 	in.key_writes = hs.key_writes;
 	in.key_written = hs.key_written;
@@ -728,10 +947,12 @@ static void act(uint8_t i, enum radiant_self_action a, bool booting)
 
 	switch (a) {
 	case RADIANT_SELF_REESTABLISH: {
-		antr_err_t rc = assign_one(i);
+		antr_err_t refusal;
+		int res = assign_one(i, &refusal);
 
-		if (rc != 0u) {
-			log_assign_refusal(ch, rc);
+		if (res != 0) {
+			log_assign_refusal(ch, res, refusal,
+					   SELF_ASSIGN_AFTER_RESET);
 		} else if (!booting) {
 			LOG_INF("self channel %u re-established after host reset",
 				ch);
@@ -789,7 +1010,7 @@ static void self_thread_fn(void *a, void *b, void *c)
 {
 	struct radiant_self_evict_in evict[SELF_N];
 	enum radiant_self_radio radio[SELF_N];
-	int64_t last_window = 0;
+	uint32_t last_window = 0u;
 	bool opened;
 	bool booting = true;
 #if defined(CONFIG_ANT_DONGLE_PAIRING_WINDOW_BENCH_REPEAT_S) && \
@@ -843,17 +1064,35 @@ static void self_thread_fn(void *a, void *b, void *c)
 	 * channels themselves are assigned by the first pass of the loop - a
 	 * boot is a reset this file has not yet re-established from. */
 	radiant_self_key_init(&key_state);
-	(void)self_key_poll();
+	{
+		uint32_t boot_gen;
+
+		(void)self_key_poll(&boot_gen);
+	}
 
 	for (;;) {
 		bool win;
 		uint32_t now;
+		uint32_t until;
+		uint32_t gen;
 		uint8_t pick;
 
-		if (self_key_poll()) {
+		if (self_key_poll(&gen)) {
 			/* A host reset wiped every channel. Whatever the host
-			 * assigns from here is its own. */
+			 * assigns from here is its own - except a channel this
+			 * file assigned in the generation just seen: that can
+			 * only be an assign (a REESTABLISH, or
+			 * rotate_and_reopen()'s rebuild) that landed after the
+			 * wipe because the reset arrived mid-poll, and clearing
+			 * it would leave it assigned, not owned, and dead until
+			 * the NEXT host reset. assign_one() refuses to record an
+			 * assign made while a reset is still running, so a
+			 * channel whose owned_gen matches really was assigned
+			 * after it. */
 			for (i = 0u; i < SELF_N; i++) {
+				if (self[i].owned_gen == gen) {
+					continue;
+				}
 				self[i].owned = false;
 				self[i].open_pinned = false;
 				self[i].open_discover = false;
@@ -873,15 +1112,28 @@ static void self_thread_fn(void *a, void *b, void *c)
 		}
 #endif
 
+		/* ONE read of the deadline per poll, and both `win` and the
+		 * `opened` edge come from it. Two reads would let a press landing
+		 * between them report a window as open without its edge, or the
+		 * edge of a window this poll judged closed. */
 		now = k_uptime_get_32();
-		win = window_open();
+		until = (uint32_t)atomic_get(&window_until);
+		win = window_open_at(until, now);
+		if (until != 0u && !win) {
+			/* Expired: put it back to 0, so the 32-bit deadline
+			 * cannot wrap round to "open" ~24.8 days from now. A
+			 * compare-and-set, so a press the ISR records in between
+			 * is kept rather than wiped; this poll then sees it on
+			 * the next pass. */
+			(void)atomic_cas(&window_until, (atomic_val_t)until, 0);
+		}
 		/* Eviction is decided on the poll that first sees a window open,
 		 * and only then: a press of the button is a request for one free
 		 * channel now, not a licence to evict any sensor that blips while
 		 * the window happens to be open. */
 		opened = false;
-		if (window_until_ms != last_window) {
-			last_window = window_until_ms;
+		if (until != last_window) {
+			last_window = until;
 			opened = win;
 		}
 

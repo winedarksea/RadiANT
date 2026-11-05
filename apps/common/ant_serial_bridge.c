@@ -638,6 +638,19 @@ void ant_serial_bridge_host_state(uint8_t net, struct ant_bridge_host_state *out
 	memset(out, 0, sizeof(*out));
 	key = k_spin_lock(&host_state_lock);
 	out->reset_gen = host_reset_gen;
+	/*
+	 * reset_in_progress is not written under this lock (handle_system_reset()
+	 * sets it before antr_stack_reset() and clears it 50 ms after
+	 * host_state_note_reset() bumps the generation), so the ORDER of these
+	 * two reads is what makes them agree: generation first, flag second.
+	 * Read that way, a flag of 0 next to an old generation means the reset
+	 * had not begun when the flag was read, and a flag of 0 next to a new
+	 * generation means the reset that bumped it had finished; the only way
+	 * to get either pair wrong is to sit between the two reads for the
+	 * whole 50 ms tail. On a single core the lock makes the pair atomic
+	 * anyway; the order is for the reader on another one.
+	 */
+	out->reset_busy = atomic_get(&reset_in_progress) != 0;
 	if (net < ANT_BRIDGE_HOST_NETWORKS) {
 		out->key_writes = host_key_writes[net];
 		out->key_written = host_key_written[net];
