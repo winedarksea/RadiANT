@@ -511,8 +511,9 @@ config ANT_DONGLE_MQTT_SINK
 	  do not transfer to one with a TCP stack and a broker connection in
 	  it. Do not fold the two fragments together.
 
-	  The sink connects LAZILY, on the first sample it is asked to publish,
-	  and never at boot. Do not "fix" that with CONFIG_NET_CONFIG_NEED_IPV6
+	  The sink connects LAZILY, on the first sample it is asked to publish
+	  (or from its keepalive, to deliver a released sensor's owed
+	  "offline"), and never at boot. Do not "fix" that with CONFIG_NET_CONFIG_NEED_IPV6
 	  - that is a 31.04 s pre-main() stall on an unattached MTD, measured
 	  on this bench, and it looks exactly like a hung board.
 
