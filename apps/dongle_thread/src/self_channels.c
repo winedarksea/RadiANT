@@ -72,13 +72,9 @@
 
 LOG_MODULE_REGISTER(self_channels, LOG_LEVEL_INF);
 
-#ifndef CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED
-#define CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED 8
-#endif
-
 #define SELF_N CONFIG_ANT_DONGLE_SELF_CHANNELS
 
-BUILD_ASSERT(SELF_N <= CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED,
+BUILD_ASSERT(SELF_N <= ANT_BRIDGE_SELF_CHANNEL_TOP + 1,
 	     "More self-driven channels were asked for than the ANT stack has "
 	     "allocated.");
 
@@ -212,11 +208,13 @@ static struct self_chan self[SELF_N];
  * this way rather than first. There is no arbitration between the two - the
  * host's MESG_ASSIGN_CHANNEL for a channel this file has assigned will simply
  * be refused CHANNEL_IN_WRONG_STATE - which is a large part of why
- * CONFIG_ANT_DONGLE_SELF_CHANNELS defaults to 0.
+ * CONFIG_ANT_DONGLE_SELF_CHANNELS defaults to 0. The CAPABILITIES reply
+ * (ant_serial_bridge.c) tells the host about the channels below these only,
+ * so a host that believes it never reaches them.
  */
 static uint8_t self_channel_index(uint8_t i)
 {
-	return (uint8_t)(CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED - 1 - i);
+	return (uint8_t)(ANT_BRIDGE_SELF_CHANNEL_TOP - i);
 }
 
 /* Pairing window deadline in uptime ms; 0 means closed. */
@@ -302,21 +300,42 @@ static void button_init(void)
 
 /* -- The channels -------------------------------------------------- */
 
-static int assign_one(uint8_t i)
+/* Returns the stack's answer and logs nothing: what a refusal means depends on
+ * why the caller was assigning - see log_assign_refusal(). */
+static antr_err_t assign_one(uint8_t i)
 {
-	uint8_t ch = self_channel_index(i);
 	antr_err_t rc;
 
-	rc = antr_channel_assign(ch, ANTW_CHANNEL_TYPE_SLAVE, SELF_NETWORK, 0u);
+	rc = antr_channel_assign(self_channel_index(i), ANTW_CHANNEL_TYPE_SLAVE,
+				 SELF_NETWORK, 0u);
 	if (rc != 0u) {
-		LOG_ERR("channel %u assign: %u - NOTHING CAN EVER BIND on this "
-			"channel", ch, rc);
-		return -EIO;
+		return rc;
 	}
 	self[i].owned = true;
 	self[i].open_pinned = false;
 	self[i].open_discover = false;
-	return 0;
+	return 0u;
+}
+
+/*
+ * CHANNEL_IN_WRONG_STATE on an assign is a channel somebody else already
+ * assigned, and after a host reset that somebody is the host: its ASSIGN
+ * landed between this poll reading the channel unassigned and assigning it.
+ * That is the reset race self_key_poll()'s caller leaves as designed, and the
+ * channel is the host's from then on - the next poll sees it assigned but not
+ * owned and takes the RELEASE path for whatever was bound to it. Saying
+ * NOTHING CAN EVER BIND there was false. Any other refusal still means exactly
+ * that.
+ */
+static void log_assign_refusal(uint8_t ch, antr_err_t rc)
+{
+	if (rc == (antr_err_t)ANTW_CHANNEL_IN_WRONG_STATE) {
+		LOG_INF("self channel %u: the host assigned it first; it is the "
+			"host's until its next reset", ch);
+	} else {
+		LOG_ERR("channel %u assign: %u - NOTHING CAN EVER BIND on this "
+			"channel", ch, rc);
+	}
 }
 
 /*
@@ -417,8 +436,14 @@ static void rotate_and_reopen(uint8_t i)
 	LOG_WRN("self channel %u would not retune in place - reassigning", ch);
 	(void)antr_channel_close(ch);
 	(void)antr_channel_unassign(ch);
-	if (assign_one(i) == 0) {
-		discover_open(i);
+	{
+		antr_err_t rc = assign_one(i);
+
+		if (rc == 0u) {
+			discover_open(i);
+		} else {
+			log_assign_refusal(ch, rc);
+		}
 	}
 }
 
@@ -702,12 +727,17 @@ static void act(uint8_t i, enum radiant_self_action a, bool booting)
 	uint8_t ch = self_channel_index(i);
 
 	switch (a) {
-	case RADIANT_SELF_REESTABLISH:
-		if (assign_one(i) == 0 && !booting) {
+	case RADIANT_SELF_REESTABLISH: {
+		antr_err_t rc = assign_one(i);
+
+		if (rc != 0u) {
+			log_assign_refusal(ch, rc);
+		} else if (!booting) {
 			LOG_INF("self channel %u re-established after host reset",
 				ch);
 		}
 		break;
+	}
 	case RADIANT_SELF_RELEASE:
 		LOG_WRN("self channel %u was taken by the host after its reset - "
 			"releasing the sensor bound to it", ch);

@@ -284,6 +284,29 @@ static void handle_request(const uint8_t *body, uint8_t len)
 
 	case ANTW_MESG_CAPABILITIES_ID: {
 		err = antr_capabilities_get(payload);
+#ifdef ANT_BRIDGE_SELF_CHANNEL_LOWEST
+		/*
+		 * Do not offer the host the channels the self channels own. A host
+		 * SYSTEM_RESET wipes them, and the bridge takes them back on its
+		 * next poll, 0-1 s later; a host that ASSIGNs one in that gap wins
+		 * it and the bridge lets the bound sensor go, and one that is later
+		 * is refused CHANNEL_IN_WRONG_STATE (review 2026-11-05 item 2).
+		 * That race is left as designed in self_channels.c. What is fixed
+		 * is that a conforming host - one that allocates from 0 below the
+		 * max it is told - is told the truth and never enters it.
+		 *
+		 * Here, not in the backend: this is the host boundary, it covers
+		 * radiant and sdk-ant alike, and the shared backend (and its
+		 * tests/api ztest) stays the same on every image.
+		 */
+		BUILD_ASSERT(ANT_BRIDGE_SELF_CHANNEL_LOWEST > 0,
+			     "the self channels would leave the host no channel");
+		if (!err) {
+			payload[ANTW_CAPABILITIES_OFFSET_MAX_CHANNELS] =
+				MIN(payload[ANTW_CAPABILITIES_OFFSET_MAX_CHANNELS],
+				    (uint8_t)ANT_BRIDGE_SELF_CHANNEL_LOWEST);
+		}
+#endif
 		if (!err) {
 			send_message(ANTW_MESG_CAPABILITIES_ID, payload,
 				     ANTW_MESG_CAPABILITIES_SIZE);

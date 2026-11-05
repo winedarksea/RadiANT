@@ -1998,6 +1998,20 @@ keeps only the `antr_*` calls.
   overwritten, and a non-ANT+ one is reported once, since the self channels
   then hear nothing. A channel number the host takes after its reset is the
   host's: the binding on it is released and the channel is never touched.
+- **The host is not offered the self channels.** They are the top
+  `CONFIG_ANT_DONGLE_SELF_CHANNELS` of an 8-channel allocation — 7 and 6 on
+  the bridge build, even on radiant, which offers 32 — and the serial bridge's
+  CAPABILITIES reply caps max channels at the lowest of them, 6, so a host that
+  allocates from 0 below the max it is told (Zwift uses 0–3) never reaches
+  them. Bench, 2026-11-05: the reply reads 6.
+  The reset race itself is left as designed: the self channels take theirs
+  back on the first 1 s poll after the reset (measured 1.4–2.0 s), and a
+  host that ignores
+  CAPABILITIES and assigns 6 or 7 in that gap wins it and the bridge releases
+  the binding ("taken by the host after its reset"; or, if the host's assign
+  lands between the poll's status read and its own assign, "the host assigned
+  it first" and the release on the next poll), while one that assigns later
+  is refused `CHANNEL_IN_WRONG_STATE`.
 
 The cost, stated exactly. Outside the pairing window there is no discovery.
 An **absent** pinned sensor, though, keeps its channel searching, and radiant's

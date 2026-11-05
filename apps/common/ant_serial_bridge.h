@@ -23,6 +23,32 @@
 extern "C" {
 #endif
 
+/*
+ * The channels a dongle-side user drives for itself: apps/dongle_thread's self
+ * channels take the TOP CONFIG_ANT_DONGLE_SELF_CHANNELS channels, from
+ * ANT_BRIDGE_SELF_CHANNEL_TOP downward. Defined once, here, because two files
+ * must agree on it - self_channels.c, which claims them, and the CAPABILITIES
+ * reply, which must not offer them to the host - and they did not: this file's
+ * own fallback for CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED is 32, self_channels.c's
+ * was 8, and a radiant build defines neither.
+ *
+ * 7 when the stack does not say, which is where self_channels.c has always put
+ * them: the top of sdk-ant's default 8-channel allocation. radiant offers 32
+ * (RADIANT_CHANNEL_COUNT), so on a radiant bridge the CAPABILITIES cap below
+ * also hides channels 8-31 from the host - a cost only to a host that wants
+ * more than six (Zwift uses 0-3).
+ */
+#if defined(CONFIG_ANT_DONGLE_SELF_CHANNELS) && CONFIG_ANT_DONGLE_SELF_CHANNELS > 0
+#ifdef CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED
+#define ANT_BRIDGE_SELF_CHANNEL_TOP (CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED - 1)
+#else
+#define ANT_BRIDGE_SELF_CHANNEL_TOP 7
+#endif
+/* The lowest self channel; every channel below it is the host's. */
+#define ANT_BRIDGE_SELF_CHANNEL_LOWEST \
+	(ANT_BRIDGE_SELF_CHANNEL_TOP + 1 - CONFIG_ANT_DONGLE_SELF_CHANNELS)
+#endif
+
 /* Networks whose host key writes are tracked. A write to a higher network
  * number is still forwarded to the stack; it is just not recorded. */
 #define ANT_BRIDGE_HOST_NETWORKS 8u
