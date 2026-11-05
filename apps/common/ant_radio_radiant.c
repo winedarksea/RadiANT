@@ -712,11 +712,20 @@ static enum radiant_radio_status api_done_to_status(enum radiant_sched_done why)
 }
 
 /*
- * The device ID list. radiant_search.c has no inclusion/exclusion list (only
- * "what this channel is looking for"), so antr_id_list_add()/_config() are
- * implemented here, and actually consulted - at acquisition - rather than
- * stored and ignored, since an accepted-but-unused list is worse than a
- * refused one.
+ * The device ID list. radiant_search.c keeps no inclusion/exclusion list of
+ * its own (only "what this channel is looking for"), so antr_id_list_add()/
+ * _config() are implemented here, and actually consulted rather than stored
+ * and ignored, since an accepted-but-unused list is worse than a refused one.
+ *
+ * radiant_search asks it through cbs.permit (api_search_permit() below) at
+ * two points: at steer time in radiant_search_begin(), so the sweep is not
+ * pointed at a cached device the list excludes, and at offer time, before the
+ * frame's one ACQUIRE claim is taken, so a refused device neither costs
+ * another wildcard channel that frame nor takes this channel out of the
+ * search. api_search_acquired() checks again as a backstop.
+ *
+ * Runs in the radio interrupt (offer time) and in thread context (steer
+ * time): read-only, bounded by the list size.
  */
 static bool api_id_list_permits(uint8_t ch, const struct radiant_channel_id *id)
 {
@@ -1190,6 +1199,12 @@ static void api_search_acquired(uint8_t channel,
 		return;
 	}
 
+	/* A BACKSTOP, not the gate: api_search_permit() already turned this
+	 * device down before radiant_search offered it, which is where a
+	 * refusal costs nothing. Reaching here with a refused device means the
+	 * permit wiring was lost; the channel has already left the search, so
+	 * this can only drop the frame. Offer-time refusals are counted in
+	 * radiant_search's stats.permit_rejected, not here. */
 	if (!api_id_list_permits(channel, &r->id)) {
 		api_stats.id_list_rejects++;
 		return;
@@ -1248,9 +1263,23 @@ static void api_search_timeout(uint8_t channel, void *user)
 	(void)user;
 }
 
+/* May this channel acquire this device? The device ID list, asked by
+ * radiant_search before it spends anything on the answer. Radio interrupt or
+ * thread; see api_id_list_permits(). */
+static bool api_search_permit(uint8_t channel, const struct radiant_channel_id *id,
+			      void *user)
+{
+	(void)user;
+	if (!api_ch_valid(channel) || id == NULL) {
+		return false;
+	}
+	return api_id_list_permits(channel, id);
+}
+
 static const struct radiant_search_cbs api_search_cbs = {
 	.acquired = api_search_acquired,
 	.timeout = api_search_timeout,
+	.permit = api_search_permit,
 };
 
 static void api_search_begin(uint8_t ch, radiant_time_t now)

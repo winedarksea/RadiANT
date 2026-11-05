@@ -314,19 +314,37 @@ struct radiant_search_result {
 };
 
 /*
- * Delivery. Both callbacks run under the radio-interrupt callback contract
- * from radiant_radio_hal.h (no blocking, no mutex, no retaining past return,
- * no proportional work) - acquired() genuinely runs there via
+ * Delivery. acquired() and timeout() run under the radio-interrupt callback
+ * contract from radiant_radio_hal.h (no blocking, no mutex, no retaining past
+ * return, no proportional work) - acquired() genuinely runs there via
  * radiant_search_on_rx(); timeout() is thread context via
  * radiant_search_tick() but follows the same rules so the two need no
  * separate reasoning.
  *
  * result is valid only for the duration of the call.
+ *
+ * permit() answers one question - may this channel acquire this device? - and
+ * nothing else. NULL permits everything, which is every caller's behaviour
+ * before it existed. It runs in TWO contexts: in the radio interrupt from the
+ * offer loop (radiant_search_on_rx()), and in thread context from
+ * radiant_search_begin(), where it filters the seen cache before steering. The
+ * same contract as acquired() covers both: no blocking, no mutex, read-only,
+ * no proportional work.
+ *
+ * Why it exists rather than refusing inside acquired(): by the time acquired()
+ * runs, the frame's one ACQUIRE claim is spent and the channel has left the
+ * search, so a refusal there costs a second wildcard channel the device it
+ * WOULD take, and the refusing channel's next radiant_search_begin() steers
+ * straight back to the device it just refused - a device pinned on another
+ * channel is the most recent match in the cache, every time. Asked here, a
+ * turned-down device consumes nothing and the channel keeps its place.
  */
 struct radiant_search_cbs {
 	void (*acquired)(uint8_t channel, const struct radiant_search_result *r,
 			 void *user);
 	void (*timeout)(uint8_t channel, void *user);
+	bool (*permit)(uint8_t channel, const struct radiant_channel_id *id,
+		       void *user);
 };
 
 /* ---------------------------------------------------------------------------
@@ -430,6 +448,10 @@ struct radiant_search_stats {
 	 * they are counted together. */
 	uint32_t cache_steers;
 	uint32_t cache_acquires;  /* acquisitions on one of those windows */
+	/* Offers withheld because cbs.permit turned the device down for that
+	 * channel. Counted per channel offered, not per frame: one frame two
+	 * channels refuse counts twice. */
+	uint32_t permit_rejected;
 #if defined(CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE)
 	/* Times a run of denials credited a quantum so the set could finish.
 	 * Nonzero means the sweep was refused the air long enough to have
@@ -523,7 +545,7 @@ struct radiant_search {
 
 /*
  * Zero the instance and compute the sweep geometry from
- * radiant_radio_caps_get(). cbs may be NULL, or either function in it, for a
+ * radiant_radio_caps_get(). cbs may be NULL, or any function in it, for a
  * caller that only reads counters.
  *
  * Caps are read ONCE (the HAL says the pointer is static for the program's
@@ -589,7 +611,9 @@ uint32_t radiant_search_dwell_remaining(const struct radiant_search *s);
  * If the seen cache holds a device matching want, the set containing its
  * devnum_lo is queued ahead of the round-robin cursor - the whole mechanism
  * of fast re-acquisition, so a channel losing a sensor should just call this
- * again.
+ * again. With a wildcard device number the device steered to is the most
+ * recent match cbs.permit accepts for this channel, not merely the most
+ * recent match; see struct radiant_search_cbs.
  *
  * RADIANT_SEARCH_EINVAL for a null filter or unknown mode;
  * RADIANT_SEARCH_ENOSPC for an out-of-range channel.

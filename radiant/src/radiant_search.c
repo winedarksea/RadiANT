@@ -74,6 +74,20 @@ static bool seen_live(const struct radiant_search *s, const struct radiant_searc
 	return now <= e->t_seen + (radiant_time_t)s->cfg.seen_lifetime_us;
 }
 
+/* May this channel acquire this device? NULL permit means yes, so a caller
+ * that never set one sees exactly the behaviour from before it existed. Called
+ * from the offer loop (radio interrupt) and from radiant_search_begin()
+ * (thread); see struct radiant_search_cbs. */
+static bool chan_permits(const struct radiant_search *s, uint8_t channel,
+			 const struct radiant_channel_id *id)
+{
+	return s->cbs.permit == NULL || s->cbs.permit(channel, id, s->user);
+}
+
+static bool seen_find(const struct radiant_search *s,
+		      const struct radiant_search_id_filter *want, radiant_time_t now,
+		      bool filtered, uint8_t channel, struct radiant_channel_id *out);
+
 /* ---------------------------------------------------------------------------
  * The sweep
  * ---------------------------------------------------------------------------
@@ -180,6 +194,13 @@ static void push_steer(struct radiant_search *s, uint16_t set)
  * the countdown without widening the gap. A due revisit is queued, not taken:
  * push_steer() dedups against other channels wanting the same set and is
  * bounded, and select_next_set() takes it on the next call.
+ *
+ * cbs.permit is not asked here. steer_set was chosen by radiant_search_begin()
+ * from a device permit had already accepted, and a set is not a device: it
+ * holds n_filters devnum_lo values, so there is nothing to ask permit about.
+ * If the answer changes after begin (the caller's list grew), a revisit costs
+ * at most one dwell per sweep once backed off, and the offer loop still
+ * withholds the device, so nothing is wrongly acquired.
  */
 static void tick_revisits(struct radiant_search *s, uint16_t set)
 {
@@ -447,14 +468,21 @@ int radiant_search_begin(struct radiant_search *s, uint8_t channel,
 	 * fast: either the channel named a device number (devnum_lo known
 	 * outright) or the seen cache holds a matching device. Either way this
 	 * only reorders the sweep; a wrong guess costs one dwell, which the
-	 * round robin covers anyway. */
+	 * round robin covers anyway.
+	 *
+	 * The cache hit must be one this channel is permitted to take. The
+	 * most recent match is very often a device another channel already
+	 * holds - it is in the cache precisely because it is being tracked -
+	 * and steering to a device the offer loop will then withhold buys a
+	 * dwell that cannot acquire, re-bought on every rebuild of the search.
+	 * A named device number is steered to as asked: the caller named it. */
 	ch->steer_set = RADIANT_SEARCH_SETS_NONE;
 	if (want->device_number != 0u) {
 		ch->steer_set = radiant_search_set_for_devnum(s, want->device_number);
 	} else {
 		struct radiant_channel_id hit;
 
-		if (radiant_search_seen_lookup(s, want, now, &hit)) {
+		if (seen_find(s, want, now, true, channel, &hit)) {
 			ch->steer_set = radiant_search_set_for_devnum(s, hit.device_number);
 		}
 	}
@@ -680,6 +708,12 @@ static void handle_ok(struct radiant_search *s, const struct radiant_rx_event *e
 	 * device off one frame. So one frame claims at most one ACQUIRE
 	 * channel (first match in channel order) and every matching SCAN
 	 * channel, as before.
+	 *
+	 * permit is asked BEFORE the claim is taken and before the channel's
+	 * record is cleared. A device a channel turns down then costs nothing:
+	 * the next wildcard ACQUIRE channel that would accept it still gets
+	 * this frame, and the refusing channel stays in the search with its
+	 * place intact. Refusing later, in acquired(), would do neither.
 	 */
 	for (uint8_t c = 0; c < (uint8_t)RADIANT_SEARCH_MAX_CHANNELS; c++) {
 		struct radiant_search_chan *ch = &s->chans[c];
@@ -687,10 +721,14 @@ static void handle_ok(struct radiant_search *s, const struct radiant_rx_event *e
 		if (!ch->active || !id_match(&ch->want, &f.id)) {
 			continue;
 		}
+		if (ch->mode == RADIANT_SEARCH_MODE_ACQUIRE && acquire_claimed) {
+			continue;
+		}
+		if (!chan_permits(s, c, &f.id)) {
+			s->stats.permit_rejected++;
+			continue;
+		}
 		if (ch->mode == RADIANT_SEARCH_MODE_ACQUIRE) {
-			if (acquire_claimed) {
-				continue;
-			}
 			acquire_claimed = true;
 		}
 		if (s->cbs.acquired != NULL) {
@@ -1009,15 +1047,21 @@ void radiant_search_seen_note(struct radiant_search *s, const struct radiant_cha
 	s->seen_next = (uint8_t)((s->seen_next + 1u) % (uint8_t)RADIANT_SEARCH_SEEN_ENTRIES);
 }
 
-bool radiant_search_seen_lookup(const struct radiant_search *s,
-			    const struct radiant_search_id_filter *want,
-			    radiant_time_t now, struct radiant_channel_id *out)
+/*
+ * The most recently seen unexpired device matching want and, when filtered, one
+ * that cbs.permit accepts for channel. Unfiltered is radiant_search_seen_lookup()
+ * exactly; filtered is what radiant_search_begin() steers by.
+ *
+ * permit is asked only of an entry that would otherwise become the new best, so
+ * it costs at most one call per ring entry and usually far fewer. Bounded by
+ * the ring size either way, which is what the no-proportional-work rule asks of
+ * this side of the callback.
+ */
+static bool seen_find(const struct radiant_search *s,
+		      const struct radiant_search_id_filter *want, radiant_time_t now,
+		      bool filtered, uint8_t channel, struct radiant_channel_id *out)
 {
 	const struct radiant_search_seen *best = NULL;
-
-	if (!inst_ok(s) || want == NULL) {
-		return false;
-	}
 
 	for (uint8_t i = 0; i < (uint8_t)RADIANT_SEARCH_SEEN_ENTRIES; i++) {
 		const struct radiant_search_seen *e = &s->seen[i];
@@ -1025,9 +1069,13 @@ bool radiant_search_seen_lookup(const struct radiant_search *s,
 		if (!seen_live(s, e, now) || !id_match(want, &e->id)) {
 			continue;
 		}
-		if (best == NULL || e->t_seen > best->t_seen) {
-			best = e;
+		if (best != NULL && e->t_seen <= best->t_seen) {
+			continue;
 		}
+		if (filtered && !chan_permits(s, channel, &e->id)) {
+			continue;
+		}
+		best = e;
 	}
 
 	if (best == NULL) {
@@ -1037,6 +1085,16 @@ bool radiant_search_seen_lookup(const struct radiant_search *s,
 		*out = best->id;
 	}
 	return true;
+}
+
+bool radiant_search_seen_lookup(const struct radiant_search *s,
+			    const struct radiant_search_id_filter *want,
+			    radiant_time_t now, struct radiant_channel_id *out)
+{
+	if (!inst_ok(s) || want == NULL) {
+		return false;
+	}
+	return seen_find(s, want, now, false, 0u, out);
 }
 
 uint8_t radiant_search_seen_count(const struct radiant_search *s, radiant_time_t now)

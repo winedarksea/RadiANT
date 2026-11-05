@@ -95,6 +95,50 @@ static const struct radiant_search_cbs search_cbs = {
 	.timeout = on_timeout,
 };
 
+/* A permit callback that turns down named (channel, device number) pairs and
+ * permits everything else - the shape of a device ID exclusion list, which is
+ * what the dongle wires it to. */
+#define DENY_MAX 4
+struct deny_rule {
+	uint8_t  channel;
+	uint16_t device_number;
+};
+struct permit_log {
+	struct deny_rule rule[DENY_MAX];
+	uint8_t  n_rules;
+	uint32_t n_calls;
+	uint32_t n_denied;
+};
+static struct permit_log g_permit;
+
+static bool on_permit(uint8_t channel, const struct radiant_channel_id *id, void *user)
+{
+	ARG_UNUSED(user);
+	g_permit.n_calls++;
+	for (uint8_t i = 0; i < g_permit.n_rules; i++) {
+		if (g_permit.rule[i].channel == channel &&
+		    g_permit.rule[i].device_number == id->device_number) {
+			g_permit.n_denied++;
+			return false;
+		}
+	}
+	return true;
+}
+
+static void deny(uint8_t channel, uint16_t device_number)
+{
+	zassert_true(g_permit.n_rules < DENY_MAX, "deny table full");
+	g_permit.rule[g_permit.n_rules].channel = channel;
+	g_permit.rule[g_permit.n_rules].device_number = device_number;
+	g_permit.n_rules++;
+}
+
+static const struct radiant_search_cbs search_cbs_permit = {
+	.acquired = on_acquired,
+	.timeout = on_timeout,
+	.permit = on_permit,
+};
+
 /* The HAL rx callback forwards straight into the module, exactly what
  * radiant_sched.c will do; nothing in this path calls the HAL, so a violation
  * here means a real contract breach, not a noisy fixture. */
@@ -113,21 +157,27 @@ static const uint8_t payload8[8] = { 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0
 
 static const struct radiant_search_id_filter want_any = { 0u, 0u, 0u };
 
-static void bring_up(bool report_crc_fail)
+static void bring_up_with(bool report_crc_fail, const struct radiant_search_cbs *cbs)
 {
 	struct radiant_search_cfg cfg;
 
 	memset(&g_s, 0, sizeof(g_s));
 	memset(&g_cap, 0, sizeof(g_cap));
+	memset(&g_permit, 0, sizeof(g_permit));
 	g_windows_run = 0u;
 
 	radiant_search_cfg_default(&cfg);
 	cfg.report_crc_fail = report_crc_fail;
 
-	zassert_ok(radiant_search_init(&g_s, &cfg, &search_cbs, NULL),
+	zassert_ok(radiant_search_init(&g_s, &cfg, cbs, NULL),
 		   "radiant_search_init failed");
 	zassert_ok(radiant_radio_init(&radio_cbs, NULL));
 	zassert_ok(radiant_radio_enable());
+}
+
+static void bring_up(bool report_crc_fail)
+{
+	bring_up_with(report_crc_fail, &search_cbs);
 }
 
 static void setup(void *f)
@@ -1389,6 +1439,234 @@ ZTEST(radiant_search, test_seen_cache_refreshes_in_place)
 	zassert_equal(2u, radiant_search_seen_count(&g_s, t + 64000u),
 		      "a chatty sensor must refresh its entry, not fill the ring");
 
+	end_of_test();
+}
+
+/* ---------------------------------------------------------------------------
+ * Turning a device down: cbs.permit
+ *
+ * Review 2026-11-05: a wildcard channel on the dongle bridge was steered, every
+ * second, to a device another channel already had pinned. The search acquired
+ * it within a dwell, the app refused it in acquired(), the channel had already
+ * left the search, and the rebuilt search steered straight back. permit is
+ * asked before anything is spent, at offer time and at steer time.
+ * ---------------------------------------------------------------------------
+ */
+
+/* A refused device must not consume the frame's one ACQUIRE claim, and must
+ * not take the refusing channel out of the search. Before permit existed the
+ * only place to refuse was acquired(), by which point both had happened. */
+ZTEST(radiant_search, test_a_refused_device_keeps_the_channel_searching_and_passes_on)
+{
+	uint8_t f_pinned[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t f_other[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t n_pinned, n_other;
+	const struct radiant_search_stats *st;
+
+	bring_up_with(false, &search_cbs_permit);
+	deny(0u, 0x0703u);
+
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_ok(radiant_search_begin(&g_s, 1u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+
+	/* 0x03 is in set 0, the first window. Channel 0 is first in order and
+	 * would claim it, but turns it down. */
+	n_pinned = fake_radio_build_ant_frame(f_pinned, 0x0703u, 0x78u, 1u, payload8);
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_equal(0u, g_w.set_index);
+	zassert_ok(fake_radio_air_frame(g_w.t_open + 1000u, f_pinned, n_pinned));
+	win_run();
+
+	zassert_equal(1u, g_cap.n_acquired,
+		      "the device must still be acquired, by the channel that wants it");
+	zassert_equal(1u, g_cap.chan[0],
+		      "a refusal spent the frame's one ACQUIRE claim, so channel 1 "
+		      "lost a device it would have taken");
+	zassert_equal(0x0703u, g_cap.res[0].id.device_number);
+	zassert_true(radiant_search_is_searching(&g_s, 0u),
+		     "the refusing channel dropped out of the search - its next "
+		     "begin() steers straight back to the device it refused");
+	zassert_false(radiant_search_is_searching(&g_s, 1u));
+	zassert_true(g_permit.n_denied >= 1u, "permit was never asked");
+
+	st = radiant_search_get_stats(&g_s);
+	zassert_equal(1u, st->permit_rejected);
+	zassert_equal(1u, st->acquired);
+
+	/* And the refusing channel is still a working search: the next device
+	 * it does permit, in the next set, is its. */
+	n_other = fake_radio_build_ant_frame(f_other, 0x0709u, 0x78u, 1u, payload8);
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_equal(1u, g_w.set_index);
+	zassert_ok(fake_radio_air_frame(g_w.t_open + 1000u, f_other, n_other));
+	win_run();
+
+	zassert_equal(2u, g_cap.n_acquired);
+	zassert_equal(0u, g_cap.chan[1]);
+	zassert_equal(0x0709u, g_cap.res[1].id.device_number);
+	zassert_equal(0u, radiant_search_n_searching(&g_s));
+
+	end_of_test();
+}
+
+/* SCAN channels are asked too: a background scan with an exclusion list must
+ * not report what the list excludes. The cache still learns the device, since
+ * another channel may want it. */
+ZTEST(radiant_search, test_a_scan_channel_is_not_offered_a_refused_device)
+{
+	uint8_t f_a[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t f_b[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t n_a, n_b;
+	const struct radiant_search_stats *st;
+
+	bring_up_with(false, &search_cbs_permit);
+	deny(0u, 0x0A01u);
+
+	n_a = fake_radio_build_ant_frame(f_a, 0x0A01u, 0x0Bu, 5u, payload8);
+	n_b = fake_radio_build_ant_frame(f_b, 0x0B05u, 0x78u, 1u, payload8);
+
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_SCAN, &want_any,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_ok(fake_radio_air_frame(g_w.t_open + 1000u, f_a, n_a));
+	zassert_ok(fake_radio_air_frame(g_w.t_open + 40000u, f_b, n_b));
+	zassert_ok(fake_radio_air_frame(g_w.t_open + 90000u, f_a, n_a));
+	win_run();
+
+	zassert_equal(1u, g_cap.n_acquired, "only the permitted device is reported");
+	zassert_equal(0x0B05u, g_cap.res[0].id.device_number);
+	zassert_true(radiant_search_is_searching(&g_s, 0u));
+
+	st = radiant_search_get_stats(&g_s);
+	zassert_equal(3u, st->frames_ok);
+	zassert_equal(1u, st->scan_reports);
+	zassert_equal(2u, st->permit_rejected);
+	zassert_equal(2u, radiant_search_seen_count(&g_s, radiant_radio_now()),
+		      "a refused device must still reach the shared seen cache");
+
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	end_of_test();
+}
+
+/* The steer half. The cached device is the most recent match, and it is the
+ * one this channel refuses - exactly the bridge's case, where the cache holds a
+ * device because another channel is tracking it. The search must not be
+ * pointed at it; a channel that does permit it still is. */
+ZTEST(radiant_search, test_begin_does_not_steer_to_a_refused_cached_device)
+{
+	struct radiant_search_id_filter want_pwr = { 0u, 0x0Bu, 0u };
+	struct radiant_channel_id pinned = { 0x09A1u, 0x0Bu, 5u };
+	struct radiant_channel_id hit;
+	uint16_t target;
+
+	bring_up_with(false, &search_cbs_permit);
+	target = radiant_search_set_for_devnum(&g_s, pinned.device_number);
+	radiant_search_seen_note(&g_s, &pinned, radiant_radio_now());
+	deny(0u, pinned.device_number);
+
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_pwr,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_true(g_permit.n_denied >= 1u, "begin() never asked permit");
+
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_false(g_w.from_cache,
+		      "the sweep was steered to set %u, which holds only a device "
+		      "this channel refuses", target);
+	zassert_equal(0u, g_w.set_index, "the round robin should simply start");
+	win_run();
+
+	/* The public lookup is unfiltered and unchanged. */
+	zassert_true(radiant_search_seen_lookup(&g_s, &want_pwr, radiant_radio_now(), &hit));
+	zassert_equal(pinned.device_number, hit.device_number);
+
+	/* permit is per channel: one that has no objection is still steered. */
+	zassert_ok(radiant_search_begin(&g_s, 1u, RADIANT_SEARCH_MODE_ACQUIRE, &want_pwr,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_true(g_w.from_cache);
+	zassert_equal(target, g_w.set_index);
+	win_run();
+
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	zassert_ok(radiant_search_end(&g_s, 1u));
+	end_of_test();
+}
+
+/* Refusing the newest match does not throw the cache away: the newest match
+ * the channel DOES permit is steered to instead. */
+ZTEST(radiant_search, test_begin_steers_to_the_newest_permitted_cached_device)
+{
+	struct radiant_search_id_filter want_pwr = { 0u, 0x0Bu, 0u };
+	struct radiant_channel_id older = { 0x0D42u, 0x0Bu, 5u };
+	struct radiant_channel_id pinned = { 0x09A1u, 0x0Bu, 5u };
+	struct radiant_channel_id hit;
+	uint16_t older_set;
+
+	bring_up_with(false, &search_cbs_permit);
+	older_set = radiant_search_set_for_devnum(&g_s, older.device_number);
+	zassert_not_equal(older_set, radiant_search_set_for_devnum(&g_s, pinned.device_number),
+			  "the two devices must be in different sets to tell them apart");
+
+	radiant_search_seen_note(&g_s, &older, radiant_radio_now());
+	fake_radio_advance(1000u);
+	radiant_search_seen_note(&g_s, &pinned, radiant_radio_now());
+	deny(0u, pinned.device_number);
+
+	/* Unfiltered, the newer one wins - the precondition for this test
+	 * meaning anything. */
+	zassert_true(radiant_search_seen_lookup(&g_s, &want_pwr, radiant_radio_now(), &hit));
+	zassert_equal(pinned.device_number, hit.device_number);
+
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_pwr,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_true(g_w.from_cache, "a permitted cached device was there to steer to");
+	zassert_equal(older_set, g_w.set_index,
+		      "steered to set %u, not the permitted device's set %u",
+		      g_w.set_index, older_set);
+	win_run();
+
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	end_of_test();
+}
+
+/* No permit at all is what every caller had before: the newest cached match
+ * steers, the first ACQUIRE channel claims, nothing is counted as refused. */
+ZTEST(radiant_search, test_a_null_permit_changes_nothing)
+{
+	struct radiant_search_id_filter want_pwr = { 0u, 0x0Bu, 0u };
+	struct radiant_channel_id id = { 0x09A1u, 0x0Bu, 5u };
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t len;
+
+	zassert_is_null(search_cbs.permit);
+	bring_up(false);
+	radiant_search_seen_note(&g_s, &id, radiant_radio_now());
+
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_pwr,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_ok(radiant_search_begin(&g_s, 1u, RADIANT_SEARCH_MODE_ACQUIRE, &want_pwr,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_true(g_w.from_cache);
+	zassert_equal(radiant_search_set_for_devnum(&g_s, id.device_number), g_w.set_index);
+	len = fake_radio_build_ant_frame(frame, id.device_number, id.device_type,
+					 id.trans_type, payload8);
+	zassert_ok(fake_radio_air_frame(g_w.t_open + 1000u, frame, len));
+	win_run();
+
+	zassert_equal(1u, g_cap.n_acquired);
+	zassert_equal(0u, g_cap.chan[0]);
+	zassert_false(radiant_search_is_searching(&g_s, 0u));
+	zassert_true(radiant_search_is_searching(&g_s, 1u));
+	zassert_equal(0u, radiant_search_get_stats(&g_s)->permit_rejected);
+	zassert_equal(0u, g_permit.n_calls);
+
+	zassert_ok(radiant_search_end(&g_s, 1u));
 	end_of_test();
 }
 
