@@ -209,6 +209,30 @@ int profile_fec_decode_treadmill(const uint8_t *body,
 				 struct profile_fec_treadmill *out);
 
 /*
+ * Page 25 (0x19) Specific Trainer/Stationary Bike Data - Table 8-25, and the
+ * exact inverse of profile_fec_decode_trainer() in profile_fec.c.
+ *
+ * It takes profile_fec.h's DECODER struct for the same reason
+ * profile_fec_encode_general() does: one struct, so a round trip is the
+ * identity and the test can say so.
+ *
+ *   cadence_valid == false -> byte 2 = 0xFF
+ *   power_valid == false   -> the 12-bit field = 0xFFF, which by Table 8-25
+ *                             condemns the accumulator in bytes 3-4 as well.
+ *                             The accumulator still goes out unchanged: the
+ *                             sentinel is the instantaneous field's, and a
+ *                             receiver that honours it ignores both.
+ *   inst_power_w >= 0xFFF  -> clamped to 0xFFE (4094 W). A valid reading that
+ *                             happened to equal the sentinel would otherwise
+ *                             invalidate itself and its accumulator.
+ *
+ * Byte 6's high nibble is the trainer status (Table 8-27) and byte 7's low
+ * nibble the flags (Table 8-28); both pass through as whole nibbles.
+ */
+int profile_fec_encode_trainer(const struct profile_fec_trainer *in,
+			       uint8_t *out);
+
+/*
  * Page 18 (0x12) General FE Metabolic - optional, offset-recorded.
  *
  *   [0]    page number, 0x12
@@ -331,6 +355,16 @@ int profile_fec_decode_wind_resistance(
 	const uint8_t *body, struct profile_fec_cmd_wind_resistance *out);
 
 /*
+ * The inverse, for page 50's ON-REQUEST echo. SS10.1.3.1: an FE that supports
+ * simulation mode shall make pages 50 and 51 available on request, carrying
+ * the settings it is currently using. A `_valid` false writes the 0xFF "use
+ * default" sentinel; a wind speed outside +-127 km/h is clamped to the edge
+ * rather than wrapped, because a wrapped +128 is a 127 km/h headwind.
+ */
+int profile_fec_encode_wind_resistance(
+	const struct profile_fec_cmd_wind_resistance *in, uint8_t *out);
+
+/*
  * Page 51 (0x33) Track Resistance - THE INCLINE COMMAND.
  *
  *   [1..4] reserved
@@ -352,24 +386,57 @@ struct profile_fec_cmd_track_resistance {
 int profile_fec_decode_track_resistance(
 	const uint8_t *body, struct profile_fec_cmd_track_resistance *out);
 
+/* The inverse, for page 51's on-request echo (see the page 50 encoder). The
+ * grade goes through profile_fec_centi_pct_to_grade(), so it is clamped into
+ * the representable span; grade_valid false writes 0xFFFF. */
+int profile_fec_encode_track_resistance(
+	const struct profile_fec_cmd_track_resistance *in, uint8_t *out);
+
 /*
- * Page 55 (0x37) User Configuration.
+ * Page 55 (0x37) User Configuration - Table 8-47.
  *
- *   [1..2] user weight, u16 LE, 0.01 kg, 0xFFFF invalid
+ *   [1..2]            user weight, u16 LE, 0.01 kg, 0xFFFF invalid
+ *   [3]               reserved, 0xFF
+ *   [4] bits 0-3      bicycle wheel diameter offset, 1 mm, 0xF invalid
+ *   [4] bits 4-7 +    bicycle weight, 12 bits, 0.05 kg: byte 4's HIGH nibble
+ *   [5]               is the low 4 bits and byte 5 the high 8. 0xFFF invalid
+ *   [6]               bicycle wheel diameter, 0.01 m, 0xFF invalid
+ *   [7]               gear ratio, 0.03 units, 0x00 invalid - THE ONE FIELD ON
+ *                     THIS PAGE WHOSE SENTINEL IS ZERO, because a gear ratio
+ *                     of zero is not a gear
  *
- * Bytes [3..7] carry bicycle wheel diameter, bicycle weight and gear ratio in
- * a sub-byte packing that was not recorded with the rest of this page. They
- * are NOT decoded - see the honesty block at the top of this header. A
- * treadmill wants the user's mass (for page 18's calorie estimate and nothing
- * else) and has no wheel.
+ * A treadmill reads only the user weight (page 18's calorie estimate) and has
+ * no wheel; a trainer reads all of it, because rider mass plus bike mass is
+ * the m in SS8.8.4's gravitational and rolling terms.
  */
+#define PROFILE_FEC_BIKE_WEIGHT_INVALID  0x0FFFu
+#define PROFILE_FEC_WHEEL_OFFSET_INVALID 0x0Fu
+#define PROFILE_FEC_WHEEL_DIAM_INVALID   0xFFu
+#define PROFILE_FEC_GEAR_RATIO_INVALID   0x00u
+
 struct profile_fec_cmd_user_config {
 	uint16_t user_weight_10g; /* 0.01 kg */
 	bool     user_weight_valid;
+
+	uint16_t bike_weight_50g; /* 0.05 kg, 12 bits */
+	bool     bike_weight_valid;
+	uint8_t  wheel_offset_mm; /* 4 bits */
+	bool     wheel_offset_valid;
+	uint8_t  wheel_diameter_cm; /* 0.01 m */
+	bool     wheel_diameter_valid;
+	uint8_t  gear_ratio; /* 0.03 units */
+	bool     gear_ratio_valid;
 };
 
 int profile_fec_decode_user_config(const uint8_t *body,
 				   struct profile_fec_cmd_user_config *out);
+
+/* The inverse - what a controller sends. Here so the packing is asserted as a
+ * round trip; a `_valid` false writes that field's own sentinel. Returns
+ * -EINVAL for a bike weight or wheel offset too wide for its field rather
+ * than silently masking it into a different number. */
+int profile_fec_encode_user_config(
+	const struct profile_fec_cmd_user_config *in, uint8_t *out);
 
 /*
  * Page 70 (0x46) Request Data Page.
@@ -420,7 +487,9 @@ int profile_fec_decode_request(const uint8_t *body,
  * THE SCHEDULE, as a five-message group. Group g, slot i in 0..4:
  *
  *   i = 0, 1   page 16                (twice consecutively, every group)
- *   i = 2, 3   page 19                (twice, so one survives a substitution)
+ *   i = 2, 3   the equipment-specific page, twice so one survives a
+ *              substitution: page 25 when cfg.equipment_type is
+ *              PROFILE_FEC_TYPE_TRAINER, page 19 for anything else
  *   i = 4      page 17, or page 18 when metabolic is enabled - alternating
  *
  *   every 13th group (65 messages, which is <= 66) slots 3 and 4 become
@@ -463,10 +532,12 @@ struct profile_fec_tx_cfg {
 	 */
 	struct profile_common_id id;
 
-	/* Table 8-8's equipment type. 19 is a treadmill; the encoder does not
-	 * insist on it, because the schedule above is the treadmill-specific
-	 * part and a rower using this master would only need a different
-	 * equipment-specific page. */
+	/* Table 8-8's equipment type. It also picks the equipment-specific
+	 * page in slots 2 and 3: PROFILE_FEC_TYPE_TRAINER sends page 25, and
+	 * every other value sends page 19, which is this master's original
+	 * (treadmill) behaviour, byte for byte. A trainer must also answer
+	 * page 17 (SS10.1.2.6 makes its resistance field mandatory), which the
+	 * settings slot already sends. */
 	uint8_t equipment_type;
 
 	/* Page 54, answered on request and never broadcast unasked. */
@@ -487,8 +558,14 @@ struct profile_fec_tx {
 	struct profile_fec_general    general;
 	struct profile_fec_settings   settings;
 	struct profile_fec_treadmill  treadmill;
+	struct profile_fec_trainer    trainer;
 	struct profile_fec_metabolic  metabolic;
 	struct profile_fec_cmd_status status;
+
+	/* The simulation settings in use, echoed by pages 50 and 51 on
+	 * request. Store-only: nothing here acts on them. */
+	struct profile_fec_cmd_wind_resistance  wind;
+	struct profile_fec_cmd_track_resistance track;
 
 	/* Transmitted messages, and the position within the five-message
 	 * group. Advanced once per emitted message by profile_fec_tx_next(),
@@ -532,6 +609,16 @@ void profile_fec_tx_set_treadmill(struct profile_fec_tx *tx,
 				  const struct profile_fec_treadmill *t);
 void profile_fec_tx_set_metabolic(struct profile_fec_tx *tx,
 				  const struct profile_fec_metabolic *m);
+void profile_fec_tx_set_trainer(struct profile_fec_tx *tx,
+				const struct profile_fec_trainer *t);
+
+/* The settings pages 50 and 51 echo on request. Store-only, like every setter
+ * here: the node decides what a command means and tells this module what to
+ * report back. */
+void profile_fec_tx_set_wind(struct profile_fec_tx *tx,
+			     const struct profile_fec_cmd_wind_resistance *w);
+void profile_fec_tx_set_track(struct profile_fec_tx *tx,
+			      const struct profile_fec_cmd_track_resistance *t);
 
 /*
  * Record the answer to a control page and arm the page 71 that owes it.
@@ -555,7 +642,10 @@ void profile_fec_tx_command_answered(struct profile_fec_tx *tx,
  * Returns 0, or -ENOTSUP for a page this master cannot produce on request -
  * which the caller should answer with a page 71 carrying
  * PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED rather than by staying silent.
- * Supported: 54, 71, 80 and 81.
+ * Supported: 17, 50, 51, 54, 71, 80 and 81. Page 17 is in the rotation too,
+ * but SS10.1.3.1 has the general settings page answer a request on any
+ * controllable FE; 50 and 51 are the simulation settings, which are
+ * available on request and never broadcast.
  */
 int profile_fec_tx_request(struct profile_fec_tx *tx, uint8_t page,
 			   uint8_t count);

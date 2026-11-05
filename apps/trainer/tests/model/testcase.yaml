@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The trainer simulator's physics (FE-C SS8.8.4) and its ACK fault model.
+# No hardware, no kernel objects, no timing - native_sim is the right place.
+#
+# On Windows there is no native_sim (no host C compiler):
+#
+#   .\scripts\run_ztest_hw.ps1 -App apps\trainer\tests\model -NcsVersion v3.4.0
+tests:
+  trainer.model:
+    tags:
+      - radiant
+      - trainer
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim

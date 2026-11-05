@@ -228,6 +228,7 @@ jobs:
             -T app/radiant/tests \
             -T app/apps/hrm_ble/tests \
             -T app/apps/treadmill/tests \
+            -T app/apps/trainer/tests \
             -p native_sim \
             --inline-logs \
             -v

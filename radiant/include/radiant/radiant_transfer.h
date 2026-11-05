@@ -442,6 +442,27 @@ struct radiant_transfer_result {
 	uint32_t packets;              /* on-air packets acknowledged */
 };
 
+#if defined(CONFIG_RADIANT_ACK_FAULTS)
+/*
+ * What the acknowledger does with one received data packet, when a reply_plan
+ * op is installed. Test instrument only - see CONFIG_RADIANT_ACK_FAULTS.
+ */
+enum radiant_reply_action {
+	/* Acknowledge at t_sync + RADIANT_TRANSFER_REPLY_US + offset_us. */
+	RADIANT_REPLY_ACK = 0,
+	/* Deliver the payload (rx_data) and arm nothing: the command was
+	 * applied and its acknowledgement was lost. */
+	RADIANT_REPLY_MUTE,
+	/* Neither: the command was never heard. */
+	RADIANT_REPLY_DEAF
+};
+
+struct radiant_reply_plan {
+	enum radiant_reply_action action;
+	int32_t                   offset_us; /* ACK only; signed */
+};
+#endif
+
 /*
  * The engine's calls back into its owner.
  *
@@ -473,6 +494,19 @@ struct radiant_transfer_ops {
 	 */
 	bool (*broadcast_payload)(void *ctx,
 				  uint8_t out[RADIANT_TRANSFER_PKT_BYTES]);
+
+#if defined(CONFIG_RADIANT_ACK_FAULTS)
+	/*
+	 * Optional, and a TEST INSTRUMENT ONLY - see CONFIG_RADIANT_ACK_FAULTS.
+	 * Asked once per received data packet, after the packet is known to be
+	 * acknowledgeable and before anything is armed or delivered. NULL is
+	 * exactly the unhooked path. Radio interrupt context, like the rest of
+	 * this struct: O(1), no blocking.
+	 */
+	void (*reply_plan)(void *ctx, const struct radiant_frame *f,
+			   radiant_time_t t_sync,
+			   struct radiant_reply_plan *out);
+#endif
 };
 
 /* ---------------------------------------------------------------------------
@@ -556,6 +590,12 @@ struct radiant_transfer_stats {
 	 * than RADIANT_TRANSFER_REPLY_VALID_US. Non-zero means somebody is
 	 * driving the retransmission off a timer that is not the measured one. */
 	uint32_t stale_replies;
+#if defined(CONFIG_RADIANT_ACK_FAULTS)
+	/* A reply_plan offset that put the acknowledgement before the radio
+	 * could arm it. No ACK went out - an early one would be a fault the
+	 * plan never asked for - and this is how the sweep sees that. */
+	uint32_t reply_plan_too_early;
+#endif
 };
 
 /*

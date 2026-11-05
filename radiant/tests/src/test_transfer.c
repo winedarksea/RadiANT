@@ -1294,6 +1294,191 @@ ZTEST(transfer, test_received_acknowledged_data_is_answered_with_transfer_ack)
 	end_of_test();
 }
 
+#if defined(CONFIG_RADIANT_ACK_FAULTS)
+/* ---------------------------------------------------------------------------
+ * The reply_plan seam (CONFIG_RADIANT_ACK_FAULTS), the trainer simulator's
+ * lever on the acknowledger. Every other case in this file still runs in the
+ * build that has it on, with no op installed, and that is the "a NULL op is
+ * the unhooked path" half of the claim.
+ * ---------------------------------------------------------------------------
+ */
+
+static struct radiant_reply_plan plan_next;
+static uint32_t                  n_plan_calls;
+static radiant_time_t            plan_t_sync_seen;
+
+static void on_reply_plan(void *ctx, const struct radiant_frame *f,
+			  radiant_time_t t_sync, struct radiant_reply_plan *out)
+{
+	ARG_UNUSED(ctx);
+	ARG_UNUSED(f);
+
+	n_plan_calls++;
+	plan_t_sync_seen = t_sync;
+	*out = plan_next;
+}
+
+static const struct radiant_transfer_ops ops_planned = {
+	.done = on_done,
+	.rx_data = on_rx_data,
+	.broadcast_payload = on_broadcast_payload,
+	.reply_plan = on_reply_plan,
+};
+
+static void use_planned_ops(enum radiant_reply_action action, int32_t offset_us)
+{
+	struct radiant_transfer_cfg c;
+
+	plan_next.action = action;
+	plan_next.offset_us = offset_us;
+	n_plan_calls = 0u;
+	plan_t_sync_seen = 0u;
+
+	make_cfg(&c, false, CH_XFER);
+	c.ops = &ops_planned;
+	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_init(&xfer, &c));
+}
+
+static void make_peer_data(struct radiant_frame *in)
+{
+	struct radiant_ctrl_fields fields;
+
+	zassert_equal(RADIANT_TRANSFER_OK,
+		      radiant_transfer_ctrl_fields(0u, true, false, &fields));
+	zassert_equal(RADIANT_FRAME_OK,
+		      radiant_frame_make(in, &cfg_slave.id, &fields, peer_payload,
+					 RADIANT_TRANSFER_PKT_BYTES));
+}
+
+static uint64_t planned_turnaround(int32_t offset_us)
+{
+	struct radiant_frame in;
+	const struct fake_radio_arm *arm;
+	radiant_time_t t_sync = radiant_radio_now() + 10000u;
+	uint64_t turnaround;
+
+	use_planned_ops(RADIANT_REPLY_ACK, offset_us);
+	make_peer_data(&in);
+
+	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_on_data(&xfer, &in, t_sync));
+	zassert_equal(1u, n_plan_calls, "the plan is asked exactly once");
+	zassert_equal(t_sync, plan_t_sync_seen, "and is told the data's t_sync");
+	commit();
+
+	arm = last_arm_of(FAKE_RADIO_ARM_TX);
+	zassert_not_null(arm, "a planned ACK must be armed");
+	turnaround = (uint64_t)(arm->t_sync_at - t_sync);
+	zassert_equal(RADIANT_CTRL_ACK_LAST_SEQ1, arm->body[BODY_CTRL],
+		      "a moved ACK is still the right ACK");
+	zassert_equal(1u, n_rx_data, "and the command still goes up");
+
+	fake_radio_advance_to(arm->t_sync_at + 1u);
+	zassert_equal(1u, radiant_transfer_stats(&xfer)->acks_sent);
+	zassert_equal(0u, radiant_transfer_stats(&xfer)->reply_plan_too_early);
+	return turnaround;
+}
+
+ZTEST(transfer, test_reply_plan_offset_moves_the_ack_by_exactly_that_much)
+{
+	zassert_equal((uint64_t)RADIANT_TRANSFER_REPLY_US + 300u,
+		      planned_turnaround(300), NULL);
+	end_of_test();
+}
+
+ZTEST(transfer, test_reply_plan_negative_offset_moves_the_ack_earlier)
+{
+	zassert_equal((uint64_t)RADIANT_TRANSFER_REPLY_US - 200u,
+		      planned_turnaround(-200), NULL);
+	end_of_test();
+}
+
+ZTEST(transfer, test_reply_plan_ack_with_no_offset_is_the_unhooked_path)
+{
+	zassert_equal((uint64_t)RADIANT_TRANSFER_REPLY_US, planned_turnaround(0),
+		      NULL);
+	end_of_test();
+}
+
+ZTEST(transfer, test_reply_plan_mute_delivers_the_command_and_arms_nothing)
+{
+	struct radiant_frame in;
+
+	use_planned_ops(RADIANT_REPLY_MUTE, 0);
+	make_peer_data(&in);
+
+	zassert_equal(RADIANT_TRANSFER_OK,
+		      radiant_transfer_on_data(&xfer, &in, radiant_radio_now() + 10000u));
+	commit();
+
+	zassert_is_null(last_arm_of(FAKE_RADIO_ARM_TX),
+			"MUTE is 'applied, ACK lost': nothing may be armed");
+	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
+	zassert_equal(1u, n_rx_data, "the command was applied");
+	zassert_true(rx_last, NULL);
+	zassert_mem_equal(rx_payload, peer_payload, RADIANT_TRANSFER_PKT_BYTES);
+	zassert_equal(0u, radiant_transfer_stats(&xfer)->acks_sent);
+	end_of_test();
+}
+
+ZTEST(transfer, test_reply_plan_deaf_delivers_nothing)
+{
+	struct radiant_frame in;
+
+	use_planned_ops(RADIANT_REPLY_DEAF, 0);
+	make_peer_data(&in);
+
+	zassert_equal(RADIANT_TRANSFER_OK,
+		      radiant_transfer_on_data(&xfer, &in, radiant_radio_now() + 10000u));
+	commit();
+
+	zassert_is_null(last_arm_of(FAKE_RADIO_ARM_TX), NULL);
+	zassert_equal(0u, n_rx_data, "DEAF is 'never heard'");
+	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
+	end_of_test();
+}
+
+ZTEST(transfer, test_reply_plan_too_early_is_counted_never_sent_early)
+{
+	struct radiant_frame in;
+	radiant_time_t t_sync;
+
+	/* A data packet whose unhooked reply instant is NOW: with any arm lead
+	 * at all, an offset of -100 us lands where the radio cannot go. */
+	fake_radio_advance_to(radiant_radio_now() + 20000u);
+	t_sync = radiant_radio_now() - (radiant_time_t)RADIANT_TRANSFER_REPLY_US;
+
+	use_planned_ops(RADIANT_REPLY_ACK, -100);
+	make_peer_data(&in);
+
+	zassert_equal(RADIANT_TRANSFER_OK, radiant_transfer_on_data(&xfer, &in, t_sync));
+	commit();
+
+	zassert_is_null(last_arm_of(FAKE_RADIO_ARM_TX),
+			"an unreachable instant must not become an early ACK");
+	zassert_equal(1u, radiant_transfer_stats(&xfer)->reply_plan_too_early);
+	zassert_equal(1u, n_rx_data,
+		      "the command was heard; only the ACK could not go out");
+	zassert_equal(RADIANT_TRANSFER_STATE_IDLE, radiant_transfer_state(&xfer));
+	end_of_test();
+}
+
+ZTEST(transfer, test_reply_plan_is_not_asked_about_a_refused_packet)
+{
+	struct radiant_frame in;
+
+	use_planned_ops(RADIANT_REPLY_MUTE, 0);
+	make_peer_data(&in);
+	bcast_available = false;
+
+	zassert_equal(RADIANT_TRANSFER_ESTATE,
+		      radiant_transfer_on_data(&xfer, &in, radiant_radio_now() + 10000u));
+	zassert_equal(0u, n_plan_calls,
+		      "a refusal must stay a refusal, not become a planned MUTE");
+	zassert_equal(0u, n_rx_data, NULL);
+	end_of_test();
+}
+#endif /* CONFIG_RADIANT_ACK_FAULTS */
+
 /*
  * A SLOT-OPENING DATA PACKET IS ACKNOWLEDGED, and this test is the inverse of
  * the one that stood here until 2026-08-17.

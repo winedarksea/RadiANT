@@ -993,10 +993,78 @@ static bool api_xfer_broadcast(void *ctx, uint8_t out[RADIANT_TRANSFER_PKT_BYTES
 	return true;
 }
 
+#if defined(CONFIG_RADIANT_ACK_FAULTS)
+/*
+ * The ACK fault instrument's forwarding (CONFIG_RADIANT_ACK_FAULTS; test
+ * images only). Kept out of api_ch[] on purpose: that is cleared at unassign
+ * and api_xfer[] at open, and a hook the application registered once must
+ * survive both. Two plain stores from thread context against a read in the
+ * radio ISR - the hook is set before the channel opens, which is the rule
+ * antr_reply_plan_hook_set() documents.
+ */
+BUILD_ASSERT((int)ANTR_REPLY_ACK == (int)RADIANT_REPLY_ACK &&
+	     (int)ANTR_REPLY_MUTE == (int)RADIANT_REPLY_MUTE &&
+	     (int)ANTR_REPLY_DEAF == (int)RADIANT_REPLY_DEAF,
+	     "antr_reply_action must mirror radiant_reply_action");
+
+static struct {
+	antr_reply_plan_fn fn;
+	void              *ctx;
+} api_reply_hook[API_CHANNELS];
+
+static void api_xfer_reply_plan(void *ctx, const struct radiant_frame *f,
+				radiant_time_t t_sync,
+				struct radiant_reply_plan *out)
+{
+	uint8_t                ch = (uint8_t)(uintptr_t)ctx;
+	antr_reply_plan_fn     fn;
+	struct antr_reply_plan plan = { .action = ANTR_REPLY_ACK, .offset_us = 0 };
+
+	if (!api_ch_valid(ch)) {
+		return;
+	}
+	fn = api_reply_hook[ch].fn;
+	if (fn == NULL) {
+		return;
+	}
+	fn(api_reply_hook[ch].ctx, ch, f->payload, (uint64_t)t_sync, &plan);
+	out->action = (enum radiant_reply_action)plan.action;
+	out->offset_us = plan.offset_us;
+}
+
+antr_err_t antr_reply_plan_hook_set(uint8_t channel, antr_reply_plan_fn fn,
+				    void *ctx)
+{
+	if (!api_ch_valid(channel)) {
+		return (antr_err_t)ANTW_INVALID_MESSAGE;
+	}
+	api_reply_hook[channel].fn = NULL;
+	api_reply_hook[channel].ctx = ctx;
+	api_reply_hook[channel].fn = fn;
+	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+}
+
+antr_err_t antr_reply_stats_get(uint8_t channel, struct antr_reply_stats *out)
+{
+	const struct radiant_transfer_stats *s;
+
+	if (!api_ch_valid(channel) || out == NULL) {
+		return (antr_err_t)ANTW_INVALID_MESSAGE;
+	}
+	s = radiant_transfer_stats(&api_xfer[channel]);
+	out->acks_sent = s->acks_sent;
+	out->too_early = s->reply_plan_too_early;
+	return (antr_err_t)ANTW_RESPONSE_NO_ERROR;
+}
+#endif /* CONFIG_RADIANT_ACK_FAULTS */
+
 static const struct radiant_transfer_ops api_xfer_ops = {
 	.done = api_xfer_done,
 	.rx_data = api_xfer_rx_data,
 	.broadcast_payload = api_xfer_broadcast,
+#if defined(CONFIG_RADIANT_ACK_FAULTS)
+	.reply_plan = api_xfer_reply_plan,
+#endif
 };
 
 /* Configure one channel's engine. Deferred to open, not assign: the engine

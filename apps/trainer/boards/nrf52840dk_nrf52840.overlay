@@ -1,0 +1,21 @@
+/*
+ * nRF52840 DK, as the RadiANT trainer simulator.
+ *
+ * Here to keep the nRF52 half of the nrf backend's `depends on` compiled for
+ * this application, as apps/treadmill's overlay does for that one. BUILD-
+ * VERIFIED ONLY: the bench target is the nRF54L15 DK.
+ *
+ * TIMER4, for the reason apps/treadmill's nRF52840 overlay gives: the backend
+ * needs five compare/capture channels, which on nRF52 only TIMER3 and TIMER4
+ * have, and TIMER4 is the one every other application here names.
+ */
+
+/ {
+	chosen {
+		radiant,radio-timer = &timer4;
+	};
+};
+
+&timer4 {
+	status = "okay";
+};

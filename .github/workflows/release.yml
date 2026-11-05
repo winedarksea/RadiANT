@@ -366,6 +366,20 @@ jobs:
           echo "transport: ${got}   expected: ${EXPECTED}"
           test "${got}" = "${EXPECTED}"
 
+      # THE ACK FAULT INSTRUMENT IS NEVER IN A DONGLE. CONFIG_RADIANT_ACK_FAULTS
+      # lets apps/trainer be told to drop or delay its acknowledgements; in a
+      # dongle it would be a receiver that can be told to ignore its host.
+      # The `# ` form, because the symbol is visible on every core build and
+      # Kconfig writes exactly that line for a visible symbol that is off -
+      # and `grep -qxF` against a bare "CONFIG_X is not set" can never match.
+      # Not on the stub rows: no radiant there, so the symbol is absent.
+      - name: The ACK fault instrument is not compiled in
+        if: matrix.radio == 'core'
+        run: |
+          set -euo pipefail
+          cfg="$(find build -name .config -path '*/dongle/*' -print -quit)"
+          grep -qxF '# CONFIG_RADIANT_ACK_FAULTS is not set' "${cfg}"
+
       # A fragment row that only proves "it still compiles" does not prove the
       # fragment did anything: a renamed symbol, a dropped file or a
       # ;-separated list the plumbing quietly ate all build green and set
@@ -934,6 +948,10 @@ jobs:
           fi
           echo "expecting ${WANT} in ${cfg}"
           grep -qx "${WANT}" "${cfg}"
+          # The ACK fault instrument (CONFIG_RADIANT_ACK_FAULTS) is a test
+          # lever for apps/trainer and is never in a dongle - see build-core's
+          # step of the same name for the `# ` form.
+          grep -qxF '# CONFIG_RADIANT_ACK_FAULTS is not set' "${cfg}"
 
           # THE NEGATIVE CHECK IS THE IMPORTANT ONE and it is not implied by
           # the positive one above. RADIANT_BACKEND is a CMake cache variable
@@ -1501,6 +1519,80 @@ jobs:
         with:
           path-filter: "*treadmill*"
           expect: ${{ matrix.assert_symbols }}
+
+  # apps/trainer: an FE-C bike trainer SIMULATOR with programmable ACK faults,
+  # for measuring a dongle's ACK window against known, injected behaviour. It
+  # is the one image in this tree that MUST carry CONFIG_RADIANT_ACK_FAULTS -
+  # the inverse of the assertion every dongle row makes - and it must NOT
+  # carry MPSL: the arbiter's follow-on reserve would move exactly the timing
+  # under test, so a trainer image with the gate in it measures the gate.
+  build-trainer:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: "trainer: FE-C sim (nRF54L15)"
+            board: nrf54l15dk/nrf54l15/cpuapp
+          - name: "trainer: FE-C sim (nRF52840)"
+            board: nrf52840dk/nrf52840
+
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Zephyr workspace and toolchain
+        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: app
+          toolchains: arm-zephyr-eabi
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-trainer-${{ strategy.job-index }}-${{ github.sha }}
+          restore-keys: |
+            ccache-trainer-${{ strategy.job-index }}-
+
+      - name: Build
+        env:
+          BOARD: ${{ matrix.board }}
+        run: |
+          set -euxo pipefail
+          west build app/apps/trainer \
+            -b "${BOARD}" \
+            -d build \
+            -p always \
+            -- -DRADIANT_BACKEND=nrf
+
+      # The gate is "# ... is not set", not absent: it has no `depends on`,
+      # so Kconfig writes it out on every nrf build. Checked against a real
+      # nRF54L15 .config, 2026-11-04 - the first draft of this step said
+      # absent: and would have failed on a correct image.
+      - name: Verify the configuration that was asked for took effect
+        uses: ./app/.github/actions/assert-kconfig
+        with:
+          path-filter: "*trainer*"
+          expect: |
+            CONFIG_RADIANT_BACKEND_NRF=y
+            CONFIG_RADIANT_ACK_FAULTS=y
+            CONFIG_SHELL=y
+            # CONFIG_BT is not set
+            # CONFIG_MPSL is not set
+            # CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL is not set
 
   # The governing constraint of the security feature, as a job rather than as a
   # claim in a comment.

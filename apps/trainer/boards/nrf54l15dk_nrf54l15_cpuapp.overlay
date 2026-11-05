@@ -1,0 +1,22 @@
+/*
+ * nRF54L15 DK, as the RadiANT trainer simulator - the bench target.
+ *
+ * The one line radiant's nrf backend cannot start without, and the same
+ * answer apps/treadmill's overlay gives: TIMER20, which the backend owns
+ * outright (t_sync is hardware-captured into it). See that overlay for the
+ * reasoning, including why it is not MPSL's TIMER10 - moot here, since this
+ * image refuses MPSL, but kept identical so the two cannot drift.
+ *
+ * Nothing else. The console and the shell are on the board's own default
+ * UART, which the DK's devicetree already provides.
+ */
+
+/ {
+	chosen {
+		radiant,radio-timer = &timer20;
+	};
+};
+
+&timer20 {
+	status = "okay";
+};

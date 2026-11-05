@@ -239,6 +239,44 @@ int profile_fec_decode_treadmill(const uint8_t *body,
 	return 0;
 }
 
+/* ── Page 25 (0x19) Specific Trainer/Stationary Bike Data ───────────────── */
+
+int profile_fec_encode_trainer(const struct profile_fec_trainer *in,
+			       uint8_t *out)
+{
+	uint16_t inst;
+
+	if (in == NULL || out == NULL) {
+		return -EINVAL;
+	}
+
+	if (!in->power_valid) {
+		inst = PROFILE_FEC_INVALID_INST_POWER;
+	} else if (in->inst_power_w >= PROFILE_FEC_INVALID_INST_POWER) {
+		/* A real 4095 W would BE the sentinel, and would take the
+		 * accumulator down with it. The edge is the honest answer. */
+		inst = (uint16_t)(PROFILE_FEC_INVALID_INST_POWER - 1u);
+	} else {
+		inst = in->inst_power_w;
+	}
+
+	out[0] = PROFILE_FEC_PAGE_TRAINER;
+	out[1] = in->event_count;
+	out[2] = in->cadence_valid ? in->cadence_rpm
+				   : PROFILE_FEC_INVALID_CADENCE;
+	/* Bytes 3-4, one earlier than Bicycle Power page 0x10's - see
+	 * profile_fec.h. */
+	put_le16(&out[3], in->acc_power_w);
+	/* 1.5 bytes: byte 5 the low 8 bits, byte 6's LOW nibble the high 4,
+	 * and byte 6's HIGH nibble the trainer status. */
+	out[5] = (uint8_t)(inst & 0xFFu);
+	out[6] = (uint8_t)(((inst >> 8) & 0x0Fu) |
+			   (uint8_t)((in->trainer_status & 0x0Fu) << 4));
+	out[7] = encode_fe_state(in->flags, in->state, in->lap_toggle);
+
+	return 0;
+}
+
 /* ── Page 18 (0x12) General FE Metabolic ────────────────────────────────── */
 
 int profile_fec_encode_metabolic(const struct profile_fec_metabolic *in,
@@ -419,6 +457,41 @@ int profile_fec_decode_wind_resistance(
 	return 0;
 }
 
+int profile_fec_encode_wind_resistance(
+	const struct profile_fec_cmd_wind_resistance *in, uint8_t *out)
+{
+	int16_t kph;
+
+	if (in == NULL || out == NULL) {
+		return -EINVAL;
+	}
+
+	out[0] = PROFILE_FEC_PAGE_WIND_RESISTANCE;
+	out[1] = PROFILE_COMMON_INVALID_U8;
+	out[2] = PROFILE_COMMON_INVALID_U8;
+	out[3] = PROFILE_COMMON_INVALID_U8;
+	out[4] = PROFILE_COMMON_INVALID_U8;
+	out[5] = in->coefficient_valid ? in->coefficient_centi
+				       : PROFILE_COMMON_INVALID_U8;
+
+	/* +-127 after the bias, so 0..254 on the wire and 255 stays the
+	 * sentinel. Clamped rather than wrapped: a wrapped +128 km/h tailwind
+	 * would go out as a 127 km/h headwind. */
+	kph = in->wind_speed_kph;
+	if (kph < -PROFILE_FEC_WIND_SPEED_BIAS) {
+		kph = -PROFILE_FEC_WIND_SPEED_BIAS;
+	} else if (kph > PROFILE_FEC_WIND_SPEED_BIAS) {
+		kph = PROFILE_FEC_WIND_SPEED_BIAS;
+	}
+	out[6] = in->wind_speed_valid
+			 ? (uint8_t)(kph + PROFILE_FEC_WIND_SPEED_BIAS)
+			 : PROFILE_COMMON_INVALID_U8;
+
+	out[7] = in->drafting_valid ? in->drafting_centi
+				    : PROFILE_COMMON_INVALID_U8;
+	return 0;
+}
+
 int profile_fec_decode_track_resistance(
 	const uint8_t *body, struct profile_fec_cmd_track_resistance *out)
 {
@@ -442,6 +515,27 @@ int profile_fec_decode_track_resistance(
 	return 0;
 }
 
+int profile_fec_encode_track_resistance(
+	const struct profile_fec_cmd_track_resistance *in, uint8_t *out)
+{
+	if (in == NULL || out == NULL) {
+		return -EINVAL;
+	}
+
+	out[0] = PROFILE_FEC_PAGE_TRACK_RESISTANCE;
+	out[1] = PROFILE_COMMON_INVALID_U8;
+	out[2] = PROFILE_COMMON_INVALID_U8;
+	out[3] = PROFILE_COMMON_INVALID_U8;
+	out[4] = PROFILE_COMMON_INVALID_U8;
+	put_le16(&out[5], in->grade_valid
+				  ? profile_fec_centi_pct_to_grade(
+					    in->grade_centi_pct)
+				  : PROFILE_FEC_GRADE_INVALID);
+	out[7] = in->rolling_resistance_valid ? in->rolling_resistance
+					      : PROFILE_COMMON_INVALID_U8;
+	return 0;
+}
+
 int profile_fec_decode_user_config(const uint8_t *body,
 				   struct profile_fec_cmd_user_config *out)
 {
@@ -456,8 +550,65 @@ int profile_fec_decode_user_config(const uint8_t *body,
 	out->user_weight_valid =
 		(out->user_weight_10g != PROFILE_COMMON_INVALID_U16);
 
-	/* Bytes [3..7] are bicycle fields in a packing this file does not
-	 * claim to know. See the header. */
+	/* Byte 4's LOW nibble is the wheel offset and its HIGH nibble the
+	 * bottom four bits of the bike weight, whose top eight are byte 5.
+	 * The weight is split across the nibble boundary, so it is assembled
+	 * here and nowhere else. */
+	out->wheel_offset_mm = (uint8_t)(body[4] & 0x0Fu);
+	out->wheel_offset_valid =
+		(out->wheel_offset_mm != PROFILE_FEC_WHEEL_OFFSET_INVALID);
+
+	out->bike_weight_50g = (uint16_t)(((uint16_t)body[4] >> 4) |
+					  ((uint16_t)body[5] << 4));
+	out->bike_weight_valid =
+		(out->bike_weight_50g != PROFILE_FEC_BIKE_WEIGHT_INVALID);
+
+	out->wheel_diameter_cm = body[6];
+	out->wheel_diameter_valid =
+		(body[6] != PROFILE_FEC_WHEEL_DIAM_INVALID);
+
+	/* Zero, not 0xFF, is this field's sentinel. */
+	out->gear_ratio = body[7];
+	out->gear_ratio_valid = (body[7] != PROFILE_FEC_GEAR_RATIO_INVALID);
+
+	return 0;
+}
+
+int profile_fec_encode_user_config(
+	const struct profile_fec_cmd_user_config *in, uint8_t *out)
+{
+	uint16_t bike;
+	uint8_t  offset;
+
+	if (in == NULL || out == NULL) {
+		return -EINVAL;
+	}
+
+	bike = in->bike_weight_valid ? in->bike_weight_50g
+				     : PROFILE_FEC_BIKE_WEIGHT_INVALID;
+	offset = in->wheel_offset_valid ? in->wheel_offset_mm
+					: PROFILE_FEC_WHEEL_OFFSET_INVALID;
+	/* Masking either into its field would send a different, plausible
+	 * number. A valid value equal to the sentinel is refused for the
+	 * same reason. */
+	if (bike > PROFILE_FEC_BIKE_WEIGHT_INVALID ||
+	    offset > PROFILE_FEC_WHEEL_OFFSET_INVALID ||
+	    (in->bike_weight_valid && bike == PROFILE_FEC_BIKE_WEIGHT_INVALID) ||
+	    (in->wheel_offset_valid &&
+	     offset == PROFILE_FEC_WHEEL_OFFSET_INVALID)) {
+		return -EINVAL;
+	}
+
+	out[0] = PROFILE_FEC_PAGE_USER_CONFIG;
+	put_le16(&out[1], in->user_weight_valid ? in->user_weight_10g
+						: PROFILE_COMMON_INVALID_U16);
+	out[3] = PROFILE_COMMON_INVALID_U8;
+	out[4] = (uint8_t)((offset & 0x0Fu) | (uint8_t)((bike & 0x0Fu) << 4));
+	out[5] = (uint8_t)((bike >> 4) & 0xFFu);
+	out[6] = in->wheel_diameter_valid ? in->wheel_diameter_cm
+					  : PROFILE_FEC_WHEEL_DIAM_INVALID;
+	out[7] = in->gear_ratio_valid ? in->gear_ratio
+				      : PROFILE_FEC_GEAR_RATIO_INVALID;
 	return 0;
 }
 
@@ -547,6 +698,12 @@ static int fec_encode_page(struct profile_fec_tx *tx, uint8_t page,
 		return profile_fec_encode_metabolic(&tx->metabolic, body);
 	case PROFILE_FEC_PAGE_TREADMILL:
 		return profile_fec_encode_treadmill(&tx->treadmill, body);
+	case PROFILE_FEC_PAGE_TRAINER:
+		return profile_fec_encode_trainer(&tx->trainer, body);
+	case PROFILE_FEC_PAGE_WIND_RESISTANCE:
+		return profile_fec_encode_wind_resistance(&tx->wind, body);
+	case PROFILE_FEC_PAGE_TRACK_RESISTANCE:
+		return profile_fec_encode_track_resistance(&tx->track, body);
 	case PROFILE_FEC_PAGE_CAPABILITIES:
 		return profile_fec_encode_capabilities(&tx->cfg.caps, body);
 	case PROFILE_FEC_PAGE_CMD_STATUS:
@@ -558,6 +715,16 @@ static int fec_encode_page(struct profile_fec_tx *tx, uint8_t page,
 	default:
 		return -EINVAL;
 	}
+}
+
+/* Slots 2 and 3. Anything that is not a trainer keeps page 19, so a treadmill
+ * built against this file is byte-identical to one built before the trainer
+ * page existed. */
+static uint8_t fec_specific_page(const struct profile_fec_tx *tx)
+{
+	return (tx->cfg.equipment_type == PROFILE_FEC_TYPE_TRAINER)
+		       ? PROFILE_FEC_PAGE_TRAINER
+		       : PROFILE_FEC_PAGE_TREADMILL;
 }
 
 /*
@@ -587,8 +754,9 @@ static int fec_data_page(uint8_t page, uint8_t counter, uint8_t *body,
 	struct profile_fec_tx *tx = (struct profile_fec_tx *)user;
 
 	(void)page;
-	/* FE-C pages carry no envelope event counter; page 25's is the
-	 * trainer's own and a treadmill does not send that page. */
+	/* FE-C pages carry no envelope event counter. Page 25's update event
+	 * count is the trainer's own, advanced by the node once per update
+	 * through profile_fec_tx_set_trainer(), not once per message. */
 	(void)counter;
 
 	if (tx == NULL) {
@@ -617,7 +785,7 @@ static int fec_data_page(uint8_t page, uint8_t counter, uint8_t *body,
 		return fec_encode_page(tx, PROFILE_FEC_PAGE_GENERAL, body);
 	case 2u:
 	case 3u:
-		return fec_encode_page(tx, PROFILE_FEC_PAGE_TREADMILL, body);
+		return fec_encode_page(tx, fec_specific_page(tx), body);
 	default:
 		break;
 	}
@@ -677,7 +845,11 @@ int profile_fec_tx_init(struct profile_fec_tx *tx,
 	tx->general.state = PROFILE_FEC_STATE_READY;
 	tx->settings.state = PROFILE_FEC_STATE_READY;
 	tx->treadmill.state = PROFILE_FEC_STATE_READY;
+	tx->trainer.state = PROFILE_FEC_STATE_READY;
 	tx->metabolic.state = PROFILE_FEC_STATE_READY;
+	/* memset left the _valid flags false, so pages 50 and 51 requested
+	 * before the node sets anything echo the "use default" sentinels
+	 * rather than a zero grade and a zero drag coefficient. */
 
 	memset(&sched_cfg, 0, sizeof(sched_cfg));
 	sched_cfg.desc = NULL; /* an ANT+ compatibility type announces no schema */
@@ -752,6 +924,30 @@ void profile_fec_tx_set_metabolic(struct profile_fec_tx *tx,
 	}
 }
 
+void profile_fec_tx_set_trainer(struct profile_fec_tx *tx,
+				const struct profile_fec_trainer *t)
+{
+	if (tx != NULL && t != NULL) {
+		tx->trainer = *t;
+	}
+}
+
+void profile_fec_tx_set_wind(struct profile_fec_tx *tx,
+			     const struct profile_fec_cmd_wind_resistance *w)
+{
+	if (tx != NULL && w != NULL) {
+		tx->wind = *w;
+	}
+}
+
+void profile_fec_tx_set_track(struct profile_fec_tx *tx,
+			      const struct profile_fec_cmd_track_resistance *t)
+{
+	if (tx != NULL && t != NULL) {
+		tx->track = *t;
+	}
+}
+
 void profile_fec_tx_command_answered(struct profile_fec_tx *tx,
 				     uint8_t command_page, uint8_t sequence,
 				     uint8_t status, const uint8_t *data4)
@@ -780,16 +976,20 @@ int profile_fec_tx_request(struct profile_fec_tx *tx, uint8_t page,
 	}
 
 	switch (page) {
+	case PROFILE_FEC_PAGE_SETTINGS:
+	case PROFILE_FEC_PAGE_WIND_RESISTANCE:
+	case PROFILE_FEC_PAGE_TRACK_RESISTANCE:
 	case PROFILE_FEC_PAGE_CAPABILITIES:
 	case PROFILE_FEC_PAGE_CMD_STATUS:
 	case PROFILE_COMMON_PAGE_80:
 	case PROFILE_COMMON_PAGE_81:
 		break;
 	default:
-		/* Everything else is already in the rotation and asking for it
-		 * is answered by waiting. Saying so is better than pretending
-		 * to schedule it: SS8.8 wants a page 71 with
-		 * NOT_SUPPORTED, and that is the caller's to send. */
+		/* Everything else is in the rotation or is not a page this
+		 * master has, and asking for it is answered by waiting. Saying
+		 * so is better than pretending to schedule it: SS8.8 wants a
+		 * page 71 with NOT_SUPPORTED, and that is the caller's to send.
+		 * Page 17 is the exception above, by SS10.1.3.1. */
 		return -ENOTSUP;
 	}
 

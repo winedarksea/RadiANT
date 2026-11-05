@@ -1202,4 +1202,58 @@ antr_err_t antr_sec_pair(uint8_t channel, uint8_t subcmd, const uint8_t *arg,
 
 #endif /* CONFIG_RADIANT_SEC_HOST_MESSAGES */
 
+/* ── ACK fault injection (test instrument only) ────────────────────────────── */
+
+#if defined(CONFIG_RADIANT_ACK_FAULTS)
+
+/*
+ * TEST INSTRUMENT ONLY; NEVER IN A DONGLE IMAGE. See radiant/Kconfig's
+ * CONFIG_RADIANT_ACK_FAULTS. Not ANT protocol, not reachable from a host, and
+ * implemented by the radiant backend alone - apps/trainer is the only caller.
+ *
+ * The values mirror radiant's enum radiant_reply_action one for one, and
+ * ant_radio_radiant.c asserts that at compile time.
+ */
+enum antr_reply_action {
+	ANTR_REPLY_ACK = 0, /* acknowledge, moved by offset_us */
+	ANTR_REPLY_MUTE,    /* deliver the command, send no ACK */
+	ANTR_REPLY_DEAF     /* deliver nothing, send nothing */
+};
+
+struct antr_reply_plan {
+	enum antr_reply_action action;
+	int32_t                offset_us; /* signed, from the normal 1560 us */
+};
+
+/*
+ * Asked once per received acknowledged-data packet on the channel it was
+ * registered for. RADIO INTERRUPT CONTEXT: O(1), no blocking, no antr_* call
+ * other than antr_reply_stats_get(). `payload` is the eight data bytes and
+ * `t_sync_us` the packet's radio-clock sync instant. `*out` arrives as
+ * {ANTR_REPLY_ACK, 0}, which is the unhooked behaviour.
+ */
+typedef void (*antr_reply_plan_fn)(void *ctx, uint8_t channel,
+				   const uint8_t *payload, uint64_t t_sync_us,
+				   struct antr_reply_plan *out);
+
+/*
+ * Register (or, with fn NULL, remove) the hook for one channel. Survives
+ * open/close; call it before antr_channel_open() so no packet is answered
+ * half-registered. Returns 0 or ANTW_INVALID_MESSAGE (channel out of range).
+ */
+antr_err_t antr_reply_plan_hook_set(uint8_t channel, antr_reply_plan_fn fn,
+				    void *ctx);
+
+/* The acknowledger's own record: acknowledgements that completed on the air,
+ * and planned instants the radio could not reach. Plain reads; safe from the
+ * hook. */
+struct antr_reply_stats {
+	uint32_t acks_sent;
+	uint32_t too_early;
+};
+
+antr_err_t antr_reply_stats_get(uint8_t channel, struct antr_reply_stats *out);
+
+#endif /* CONFIG_RADIANT_ACK_FAULTS */
+
 #endif /* ANT_RADIO_H_ */

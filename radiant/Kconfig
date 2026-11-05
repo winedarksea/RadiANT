@@ -767,6 +767,33 @@ config RADIANT_PHY_LR_CODED
 	  Default n. Turn it on only for a build that actually puts coded frames
 	  on the air, and expect to pay for it at several channels.
 
+config RADIANT_ACK_FAULTS
+	bool "programmable acknowledgement faults (test instrument only; never in a dongle image)"
+	default n
+	help
+	  TEST INSTRUMENT ONLY; NEVER IN A DONGLE IMAGE.
+
+	  Adds an optional reply_plan op to struct radiant_transfer_ops. The
+	  acknowledger asks it, once per received acknowledged-data packet and
+	  in radio interrupt context, what to do with that packet:
+
+	    ACK   arm the reply at t_sync + RADIANT_TRANSFER_REPLY_US + offset
+	    MUTE  hand the payload up but arm no reply ("applied, ACK lost")
+	    DEAF  neither ("never heard")
+
+	  A planned instant the radio cannot reach (before now + the backend's
+	  arm lead) sends no ACK and is counted in
+	  radiant_transfer_stats.reply_plan_too_early rather than going out
+	  early.
+
+	  It exists for apps/trainer, an FE-C trainer simulator whose ACK
+	  timing and loss are set from a shell so that a dongle's ACK window
+	  can be measured against a known, injected fault. A product that
+	  turned this on would be a trainer that can be told to ignore its
+	  controller. CI asserts "# CONFIG_RADIANT_ACK_FAULTS is not set" on
+	  every dongle build. With the op left NULL, or this off, behaviour is
+	  exactly the unhooked path.
+
 config RADIANT_CRC_REPAIR
 	bool "repair single-bit CRC errors on tracked windows"
 	default n

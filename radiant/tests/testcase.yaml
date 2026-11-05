@@ -82,3 +82,20 @@ tests:
       - native_sim
     extra_configs:
       - CONFIG_RADIANT_SEC_PAIRING_X25519=n
+
+  # The same suites with the ACK fault instrument COMPILED IN
+  # (CONFIG_RADIANT_ACK_FAULTS, apps/trainer's lever on the acknowledger).
+  # Two halves of one claim: test_transfer.c's reply_plan cases exist only
+  # here, and every OTHER transfer case runs here too with no op installed,
+  # which is what "a NULL op is exactly the unhooked path" means as a test.
+  # The default-off build is radiant.unit above.
+  radiant.unit.ack_faults:
+    timeout: 300
+    tags:
+      - radiant
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_configs:
+      - CONFIG_RADIANT_ACK_FAULTS=y

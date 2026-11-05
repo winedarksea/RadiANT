@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Twister coverage for the trainer simulator. build_only, as apps/treadmill's:
+# its behaviour needs a radio and a second board. The checks that matter are
+# the .config read-back in .github/workflows/release.yml's build-trainer job
+# (CONFIG_RADIANT_ACK_FAULTS=y, the nrf backend, no MPSL gate) and the host-run
+# model in tests/model.
+common:
+  build_only: true
+  sysbuild: true
+  tags:
+    - radiant
+    - trainer
+
+tests:
+  trainer.ant:
+    platform_allow:
+      - nrf54l15dk/nrf54l15/cpuapp
+    extra_args:
+      - RADIANT_BACKEND=nrf
+
+  trainer.ant_nrf52840:
+    platform_allow:
+      - nrf52840dk/nrf52840
+    extra_args:
+      - RADIANT_BACKEND=nrf

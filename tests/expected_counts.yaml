@@ -36,7 +36,12 @@
 # suites they cover are the ones that would have caught bugs that escaped
 # everything else (a strap notifying 67 times a minute while claiming 72; a
 # cadence reported in strides where a client expects steps).
-min_scenarios: 11
+#
+# 2026-11-04: 13. radiant.unit.ack_faults (the suites with
+# CONFIG_RADIANT_ACK_FAULTS compiled in - the only build where the reply_plan
+# cases exist) and trainer.model (apps/trainer's physics and fault model,
+# reached through the ztest job's `-T app/apps/trainer/tests`).
+min_scenarios: 13
 
 # Total ztest cases twister executes, summed over every scenario. This is a
 # SAFE floor rather than the observed total: it is the static count of
@@ -59,7 +64,7 @@ min_scenarios: 11
 # backstop and the floors cannot disagree. It was 874 against ~2.7k executed -
 # the ~1.7k of slack E3-1 found. The per-scenario floors are now the real
 # check; this is kept as the backstop.
-min_testcases: 2714
+min_testcases: 3595
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -87,3 +92,8 @@ min_cases.radiant.gate: 31
 min_cases.hrm_ble.sim_sched: 4
 min_cases.treadmill.pages: 20
 min_cases.treadmill.hr_rx: 3
+# 2026-11-04, nRF5340 DK runs: radiant.unit.ack_faults 876 (radiant.unit's
+# then-869 plus seven reply_plan cases), trainer.model 14. min_testcases
+# above is the sum of every floor here.
+min_cases.radiant.unit.ack_faults: 867
+min_cases.trainer.model: 14

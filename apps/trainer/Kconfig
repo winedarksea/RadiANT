@@ -1,0 +1,58 @@
+#
+# RadiANT trainer - an FE-C bike trainer simulator with programmable ACK
+# faults. One prefix, TRAINER_*, for the reason apps/treadmill/Kconfig gives.
+#
+
+rsource "../../radiant/src/node/Kconfig"
+rsource "../../radiant/src/profiles/Kconfig"
+rsource "../common/Kconfig.antr_api"
+
+source "Kconfig.zephyr"
+
+menuconfig TRAINER
+	bool "RadiANT FE-C trainer simulator"
+	default y
+	help
+	  A RadiANT node that is an ANT+ FE-C bike trainer (equipment type
+	  25): pages 16, 25 and 17, page 54 declaring basic resistance,
+	  target power and simulation, and every control page answered with
+	  a page 71. The rider is simulated and set from the shell.
+
+	  It is also a TEST INSTRUMENT: with CONFIG_RADIANT_ACK_FAULTS its
+	  acknowledgements can be delayed, jittered, dropped or suppressed
+	  from the shell, and every command's ground truth is recorded. See
+	  docs/trainer-sim.md.
+
+if TRAINER
+
+config TRAINER_DEVICE_NUMBER
+	int "ANT device number when the node is not provisioned"
+	range 1 65535
+	default 4244
+	help
+	  4244: not the treadmill's 4243, not apps/hrm_ble's 4242, and not
+	  the bench's real trainer (#52233), so a sweep pinned to this number
+	  can never be answered by the real machine in the room.
+
+config TRAINER_MANUFACTURER_ID
+	int "manufacturer id for the common pages"
+	range 0 65535
+	default 255
+	help
+	  255 is the ANT+ development id.
+
+config TRAINER_ACKFAULT_RING
+	int "ground-truth records kept"
+	range 16 4096
+	default 512
+	help
+	  One record per acknowledged packet received, oldest overwritten
+	  first (and counted, so a dump says when it is incomplete). 512 is
+	  over eight minutes of commands at 1 Hz, which is longer than any
+	  single sweep point; 28 bytes each.
+
+module = TRAINER
+module-str = trainer
+source "subsys/logging/Kconfig.template.log_config"
+
+endif # TRAINER

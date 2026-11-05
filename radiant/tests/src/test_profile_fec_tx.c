@@ -851,6 +851,371 @@ ZTEST(profile_fec_tx, test_the_reported_incline_matches_the_commanded_grade)
 	zassert_not_equal(golden_page_51[6], golden_page_17[5], NULL);
 }
 
+/* ── The trainer half: page 25, pages 50/51 on request, page 55 in full ─── */
+
+ZTEST(profile_fec_tx, test_trainer_page_round_trips_through_the_decoder)
+{
+	struct profile_fec_trainer in;
+	struct profile_fec_trainer out;
+	uint8_t                    body[8];
+
+	memset(&in, 0, sizeof(in));
+	in.event_count = 0xC3u;
+	in.cadence_rpm = 90u;
+	in.cadence_valid = true;
+	in.acc_power_w = 0xBEEFu;
+	in.inst_power_w = 0x5A7u; /* 1447 W: uses all twelve bits' high nibble */
+	in.power_valid = true;
+	in.trainer_status = PROFILE_FEC_TRAINER_STATUS_USER_CFG;
+	in.flags = PROFILE_FEC_TARGET_POWER_SPEED_LOW;
+	in.state = PROFILE_FEC_STATE_IN_USE;
+	in.lap_toggle = true;
+
+	zassert_equal(profile_fec_encode_trainer(&in, body), 0, NULL);
+	zassert_equal(body[0], PROFILE_FEC_PAGE_TRAINER, NULL);
+	zassert_equal(body[1], 0xC3u, NULL);
+	zassert_equal(body[2], 90u, NULL);
+	/* Accumulated power at bytes 3-4, NOT 4-5 as on Bicycle Power. */
+	zassert_equal(body[3], 0xEFu, NULL);
+	zassert_equal(body[4], 0xBEu, NULL);
+	zassert_equal(body[5], 0xA7u, NULL);
+	/* The power's high nibble low, the trainer status high. */
+	zassert_equal(body[6], 0x45u, NULL);
+	/* flags 1, state 3 with the lap toggle: 0xB1. */
+	zassert_equal(body[7], 0xB1u, NULL);
+
+	zassert_equal(profile_fec_decode_trainer(body, &out), 0, NULL);
+	zassert_equal(out.event_count, in.event_count, NULL);
+	zassert_equal(out.cadence_rpm, in.cadence_rpm, NULL);
+	zassert_true(out.cadence_valid, NULL);
+	zassert_equal(out.acc_power_w, in.acc_power_w, NULL);
+	zassert_equal(out.inst_power_w, in.inst_power_w, NULL);
+	zassert_true(out.power_valid, NULL);
+	zassert_equal(out.trainer_status, in.trainer_status, NULL);
+	zassert_equal(out.flags, in.flags, NULL);
+	zassert_equal(out.state, PROFILE_FEC_STATE_IN_USE, NULL);
+	zassert_true(out.lap_toggle, NULL);
+}
+
+ZTEST(profile_fec_tx, test_trainer_power_sentinel_and_its_neighbour)
+{
+	struct profile_fec_trainer in;
+	struct profile_fec_trainer out;
+	uint8_t                    body[8];
+
+	memset(&in, 0, sizeof(in));
+	in.trainer_status = 0x0Fu;
+	in.cadence_valid = false;
+	in.power_valid = false;
+	in.inst_power_w = 200u; /* must not leak out under the sentinel */
+	in.state = PROFILE_FEC_STATE_READY;
+
+	zassert_equal(profile_fec_encode_trainer(&in, body), 0, NULL);
+	zassert_equal(body[2], 0xFFu, "cadence sentinel");
+	zassert_equal(body[5], 0xFFu, NULL);
+	zassert_equal(body[6] & 0x0Fu, 0x0Fu, "0xFFF, the cross-field sentinel");
+	zassert_equal(body[6] >> 4, 0x0Fu,
+		      "the status nibble rides beside it untouched");
+	zassert_equal(profile_fec_decode_trainer(body, &out), 0, NULL);
+	zassert_false(out.power_valid, NULL);
+	zassert_false(out.cadence_valid, NULL);
+
+	/* A VALID 4095 W would be the sentinel and would condemn its own
+	 * accumulator. It goes out as 4094. */
+	in.power_valid = true;
+	in.inst_power_w = 0x0FFFu;
+	zassert_equal(profile_fec_encode_trainer(&in, body), 0, NULL);
+	zassert_equal(profile_fec_decode_trainer(body, &out), 0, NULL);
+	zassert_true(out.power_valid, NULL);
+	zassert_equal(out.inst_power_w, 0x0FFEu, NULL);
+}
+
+static void init_trainer_master(struct profile_fec_tx *tx)
+{
+	struct profile_fec_tx_cfg cfg;
+
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.id.hw_revision = 1u;
+	cfg.id.manufacturer_id = 255u;
+	cfg.id.model_number = 1u;
+	cfg.id.sw_revision_main = 1u;
+	cfg.id.sw_revision_supplemental = PROFILE_COMMON_INVALID_U8;
+	cfg.id.serial_number = PROFILE_COMMON_INVALID_U32;
+	cfg.equipment_type = PROFILE_FEC_TYPE_TRAINER;
+	cfg.caps.capabilities = PROFILE_FEC_CAP_BASIC_RESISTANCE |
+				PROFILE_FEC_CAP_TARGET_POWER |
+				PROFILE_FEC_CAP_SIMULATION;
+	cfg.caps.max_resistance_n = 2000u;
+	cfg.caps.max_resistance_valid = true;
+	cfg.metabolic = false;
+
+	zassert_equal(profile_fec_tx_init(tx, &cfg), 0, NULL);
+}
+
+ZTEST(profile_fec_tx, test_trainer_schedule_sends_page_25_in_place_of_19)
+{
+	struct profile_fec_tx tx;
+	struct run_result     r;
+	bool                  found_pair = false;
+
+	init_trainer_master(&tx);
+	run_master(&tx, &r);
+
+	/* SS10.1 with 25 where 19 was, and no 19 at all: a trainer sending a
+	 * treadmill page would be decoded as one by any head unit. */
+	zassert_equal(worst_gap(&r, PROFILE_FEC_PAGE_TREADMILL), RUN_MESSAGES,
+		      "a trainer must never send page 19");
+	zassert_true(worst_gap(&r, PROFILE_FEC_PAGE_TRAINER) <=
+			     PROFILE_FEC_TX_MAX_GAP_19,
+		     "page 25 at least once every 5 messages");
+	zassert_true(worst_gap(&r, PROFILE_FEC_PAGE_GENERAL) <=
+			     PROFILE_FEC_TX_MAX_GAP_16, NULL);
+	zassert_true(worst_gap(&r, PROFILE_FEC_PAGE_SETTINGS) <=
+			     PROFILE_FEC_TX_MAX_GAP_SETTINGS,
+		     "page 17 is mandatory on a trainer (SS10.1.2.6)");
+	zassert_equal(worst_gap(&r, PROFILE_FEC_PAGE_METABOLIC), RUN_MESSAGES,
+		      NULL);
+	zassert_equal(r.consecutive_pairs, r.n_common_81, NULL);
+	zassert_true(r.n_common_80 >= 4u, NULL);
+
+	for (uint32_t i = 1; i < RUN_MESSAGES; i++) {
+		if (r.page[i] == PROFILE_FEC_PAGE_GENERAL &&
+		    r.page[i - 1u] == PROFILE_FEC_PAGE_GENERAL) {
+			found_pair = true;
+			break;
+		}
+	}
+	zassert_true(found_pair, NULL);
+}
+
+ZTEST(profile_fec_tx, test_requests_for_17_50_51_are_served_and_others_refused)
+{
+	static const uint8_t pages[] = {
+		PROFILE_FEC_PAGE_SETTINGS,
+		PROFILE_FEC_PAGE_WIND_RESISTANCE,
+		PROFILE_FEC_PAGE_TRACK_RESISTANCE,
+	};
+	struct profile_fec_tx                   tx;
+	struct profile_fec_cmd_wind_resistance  w;
+	struct profile_fec_cmd_track_resistance t;
+	uint8_t                                 body[8];
+
+	init_trainer_master(&tx);
+
+	memset(&w, 0, sizeof(w));
+	w.coefficient_centi = 51u;
+	w.coefficient_valid = true;
+	w.wind_speed_kph = -10;
+	w.wind_speed_valid = true;
+	w.drafting_centi = 100u;
+	w.drafting_valid = true;
+	profile_fec_tx_set_wind(&tx, &w);
+
+	memset(&t, 0, sizeof(t));
+	t.grade_centi_pct = 300;
+	t.grade_valid = true;
+	t.rolling_resistance = 80u; /* 0.004 in 5e-5 units */
+	t.rolling_resistance_valid = true;
+	profile_fec_tx_set_track(&tx, &t);
+
+	for (size_t p = 0; p < ARRAY_SIZE(pages); p++) {
+		uint32_t seen = 0u;
+
+		zassert_equal(profile_fec_tx_request(&tx, pages[p], 1u), 0,
+			      "page %u must be servable on request", pages[p]);
+		for (uint32_t i = 0; i < 20u; i++) {
+			zassert_not_equal(profile_fec_tx_next(&tx, body),
+					  PROFILE_SLOT_IDLE, NULL);
+			if (body[0] != pages[p]) {
+				continue;
+			}
+			/* Page 17 also rides the rotation; only the echo
+			 * pages are counted exactly. */
+			seen++;
+			if (pages[p] == PROFILE_FEC_PAGE_WIND_RESISTANCE) {
+				zassert_equal(body[5], 51u, NULL);
+				zassert_equal(body[6], 117u,
+					      "-10 km/h is 117 after the bias");
+				zassert_equal(body[7], 100u, NULL);
+			} else if (pages[p] ==
+				   PROFILE_FEC_PAGE_TRACK_RESISTANCE) {
+				zassert_equal(body[5], 0x4Cu, NULL);
+				zassert_equal(body[6], 0x4Fu, NULL);
+				zassert_equal(body[7], 80u, NULL);
+			}
+		}
+		if (pages[p] == PROFILE_FEC_PAGE_SETTINGS) {
+			zassert_true(seen >= 1u, NULL);
+		} else {
+			zassert_equal(seen, 1u, "page %u: asked once, sent once",
+				      pages[p]);
+		}
+	}
+
+	zassert_equal(profile_fec_tx_request(&tx, PROFILE_FEC_PAGE_TRAINER, 1u),
+		      -ENOTSUP, "page 25 is in the rotation");
+	zassert_equal(profile_fec_tx_request(&tx, PROFILE_FEC_PAGE_GENERAL, 1u),
+		      -ENOTSUP, NULL);
+	zassert_equal(profile_fec_tx_request(&tx, PROFILE_FEC_PAGE_USER_CONFIG,
+					     1u),
+		      -ENOTSUP, NULL);
+	zassert_equal(profile_fec_tx_request(&tx, 0x01u, 1u), -ENOTSUP,
+		      "calibration pages are out of scope");
+}
+
+ZTEST(profile_fec_tx, test_echo_pages_default_to_their_sentinels)
+{
+	struct profile_fec_tx tx;
+	uint8_t               body[8];
+
+	init_trainer_master(&tx);
+
+	/* Nothing set yet: "use default" everywhere, never a zero grade
+	 * (which is -200 %) or a zero drag coefficient. */
+	zassert_equal(profile_fec_encode_wind_resistance(&tx.wind, body), 0, NULL);
+	zassert_equal(body[5], 0xFFu, NULL);
+	zassert_equal(body[6], 0xFFu, NULL);
+	zassert_equal(body[7], 0xFFu, NULL);
+	zassert_equal(profile_fec_encode_track_resistance(&tx.track, body), 0,
+		      NULL);
+	zassert_equal(body[5], 0xFFu, NULL);
+	zassert_equal(body[6], 0xFFu, NULL);
+	zassert_equal(body[7], 0xFFu, NULL);
+}
+
+ZTEST(profile_fec_tx, test_wind_and_track_encoders_invert_their_decoders)
+{
+	struct profile_fec_cmd_wind_resistance  w_in, w_out;
+	struct profile_fec_cmd_track_resistance t_in, t_out;
+	uint8_t                                 body[8];
+
+	memset(&w_in, 0, sizeof(w_in));
+	w_in.coefficient_centi = 40u;
+	w_in.coefficient_valid = true;
+	w_in.wind_speed_kph = 127;
+	w_in.wind_speed_valid = true;
+	w_in.drafting_valid = false;
+	zassert_equal(profile_fec_encode_wind_resistance(&w_in, body), 0, NULL);
+	zassert_equal(body[6], 254u, "the strongest tailwind, NOT the sentinel");
+	zassert_equal(profile_fec_decode_wind_resistance(body, &w_out), 0, NULL);
+	zassert_equal(w_out.wind_speed_kph, 127, NULL);
+	zassert_true(w_out.wind_speed_valid, NULL);
+	zassert_false(w_out.drafting_valid, NULL);
+
+	/* Clamped, not wrapped. */
+	w_in.wind_speed_kph = 200;
+	zassert_equal(profile_fec_encode_wind_resistance(&w_in, body), 0, NULL);
+	zassert_equal(body[6], 254u, NULL);
+	w_in.wind_speed_kph = -200;
+	zassert_equal(profile_fec_encode_wind_resistance(&w_in, body), 0, NULL);
+	zassert_equal(body[6], 0u, NULL);
+
+	memset(&t_in, 0, sizeof(t_in));
+	t_in.grade_centi_pct = -450;
+	t_in.grade_valid = true;
+	t_in.rolling_resistance_valid = false;
+	zassert_equal(profile_fec_encode_track_resistance(&t_in, body), 0, NULL);
+	zassert_equal(profile_fec_decode_track_resistance(body, &t_out), 0, NULL);
+	zassert_true(t_out.grade_valid, NULL);
+	zassert_equal(t_out.grade_centi_pct, -450, NULL);
+	zassert_false(t_out.rolling_resistance_valid, NULL);
+	t_in.grade_valid = false;
+	zassert_equal(profile_fec_encode_track_resistance(&t_in, body), 0, NULL);
+	zassert_equal(body[5], 0xFFu, NULL);
+	zassert_equal(body[6], 0xFFu, NULL);
+}
+
+ZTEST(profile_fec_tx, test_user_config_packs_the_bicycle_fields)
+{
+	struct profile_fec_cmd_user_config in;
+	struct profile_fec_cmd_user_config out;
+	uint8_t                            body[8];
+
+	memset(&in, 0, sizeof(in));
+	in.user_weight_10g = 7500u;     /* 75.00 kg */
+	in.user_weight_valid = true;
+	in.bike_weight_50g = 200u;      /* 10.00 kg = 0x0C8 */
+	in.bike_weight_valid = true;
+	in.wheel_offset_mm = 3u;
+	in.wheel_offset_valid = true;
+	in.wheel_diameter_cm = 70u;     /* 0.70 m */
+	in.wheel_diameter_valid = true;
+	in.gear_ratio = 100u;           /* 3.00 */
+	in.gear_ratio_valid = true;
+
+	zassert_equal(profile_fec_encode_user_config(&in, body), 0, NULL);
+	zassert_equal(body[0], PROFILE_FEC_PAGE_USER_CONFIG, NULL);
+	zassert_equal(body[1], 0x4Cu, NULL); /* 7500 = 0x1D4C */
+	zassert_equal(body[2], 0x1Du, NULL);
+	zassert_equal(body[3], 0xFFu, "reserved");
+	/* 0x0C8: low nibble 8 into byte 4's HIGH nibble, beside offset 3. */
+	zassert_equal(body[4], 0x83u, NULL);
+	zassert_equal(body[5], 0x0Cu, NULL);
+	zassert_equal(body[6], 70u, NULL);
+	zassert_equal(body[7], 100u, NULL);
+
+	zassert_equal(profile_fec_decode_user_config(body, &out), 0, NULL);
+	zassert_equal(out.user_weight_10g, 7500u, NULL);
+	zassert_true(out.user_weight_valid, NULL);
+	zassert_equal(out.bike_weight_50g, 200u, NULL);
+	zassert_true(out.bike_weight_valid, NULL);
+	zassert_equal(out.wheel_offset_mm, 3u, NULL);
+	zassert_true(out.wheel_offset_valid, NULL);
+	zassert_equal(out.wheel_diameter_cm, 70u, NULL);
+	zassert_true(out.wheel_diameter_valid, NULL);
+	zassert_equal(out.gear_ratio, 100u, NULL);
+	zassert_true(out.gear_ratio_valid, NULL);
+
+	/* A weight using all twelve bits: 0xABC. */
+	in.bike_weight_50g = 0xABCu;
+	zassert_equal(profile_fec_encode_user_config(&in, body), 0, NULL);
+	zassert_equal(body[4], 0xC3u, NULL);
+	zassert_equal(body[5], 0xABu, NULL);
+	zassert_equal(profile_fec_decode_user_config(body, &out), 0, NULL);
+	zassert_equal(out.bike_weight_50g, 0xABCu, NULL);
+
+	/* Too wide for the field, or equal to the sentinel while claiming to
+	 * be valid: refused, never masked into a different number. */
+	in.bike_weight_50g = 0x1000u;
+	zassert_equal(profile_fec_encode_user_config(&in, body), -EINVAL, NULL);
+	in.bike_weight_50g = 0x0FFFu;
+	zassert_equal(profile_fec_encode_user_config(&in, body), -EINVAL, NULL);
+	in.bike_weight_50g = 200u;
+	in.wheel_offset_mm = 0x0Fu;
+	zassert_equal(profile_fec_encode_user_config(&in, body), -EINVAL, NULL);
+}
+
+ZTEST(profile_fec_tx, test_user_config_sentinels_every_one)
+{
+	struct profile_fec_cmd_user_config in;
+	struct profile_fec_cmd_user_config out;
+	uint8_t                            body[8];
+
+	memset(&in, 0, sizeof(in));
+	zassert_equal(profile_fec_encode_user_config(&in, body), 0, NULL);
+	zassert_equal(body[1], 0xFFu, NULL);
+	zassert_equal(body[2], 0xFFu, NULL);
+	zassert_equal(body[4], 0xFFu, "offset 0xF and weight's low nibble 0xF");
+	zassert_equal(body[5], 0xFFu, NULL);
+	zassert_equal(body[6], 0xFFu, NULL);
+	zassert_equal(body[7], 0x00u,
+		      "the gear ratio's sentinel is ZERO, not 0xFF");
+
+	zassert_equal(profile_fec_decode_user_config(body, &out), 0, NULL);
+	zassert_false(out.user_weight_valid, NULL);
+	zassert_false(out.bike_weight_valid, NULL);
+	zassert_false(out.wheel_offset_valid, NULL);
+	zassert_false(out.wheel_diameter_valid, NULL);
+	zassert_false(out.gear_ratio_valid, NULL);
+
+	/* And the trap the zero sentinel sets: 0xFF in byte 7 is a REAL gear
+	 * ratio of 7.65. */
+	body[7] = 0xFFu;
+	zassert_equal(profile_fec_decode_user_config(body, &out), 0, NULL);
+	zassert_true(out.gear_ratio_valid, NULL);
+	zassert_equal(out.gear_ratio, 0xFFu, NULL);
+}
+
 ZTEST(profile_fec_tx, test_master_declines_null_arguments)
 {
 	struct profile_fec_tx tx;

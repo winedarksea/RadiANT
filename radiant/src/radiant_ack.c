@@ -201,6 +201,7 @@ int radiant_transfer_on_data(struct radiant_transfer *t, const struct radiant_fr
 	enum radiant_msg_type mt;
 	uint8_t reply;
 	uint8_t payload[RADIANT_TRANSFER_PKT_BYTES];
+	radiant_time_t reply_at;
 	int rc;
 
 	if (t == NULL || f == NULL) {
@@ -245,11 +246,53 @@ int radiant_transfer_on_data(struct radiant_transfer *t, const struct radiant_fr
 		return RADIANT_TRANSFER_ESTATE;
 	}
 
+	reply_at = t_sync + (radiant_time_t)RADIANT_TRANSFER_REPLY_US;
+
+#if defined(CONFIG_RADIANT_ACK_FAULTS)
+	/* The test instrument's seam (CONFIG_RADIANT_ACK_FAULTS). Asked only
+	 * once the packet is known to be acknowledgeable, so a planned MUTE or
+	 * DEAF never hides one of the refusals above. */
+	if (t->cfg.ops->reply_plan != NULL) {
+		struct radiant_reply_plan plan = {
+			.action = RADIANT_REPLY_ACK,
+			.offset_us = 0,
+		};
+
+		t->cfg.ops->reply_plan(t->cfg.ctx, f, t_sync, &plan);
+
+		if (plan.action == RADIANT_REPLY_DEAF) {
+			return RADIANT_TRANSFER_OK;
+		}
+		if (plan.action == RADIANT_REPLY_ACK) {
+			/* Signed: a negative offset pulls the reply earlier. */
+			reply_at = (radiant_time_t)((int64_t)reply_at +
+						    (int64_t)plan.offset_us);
+			/* An instant the radio cannot reach any more is a
+			 * missed ACK, counted - never an early one, which would
+			 * be a different fault from the one asked for. */
+			if (reply_at < radiant_radio_now() +
+					       (radiant_time_t)t->min_lead_us) {
+				t->stats.reply_plan_too_early++;
+				plan.action = RADIANT_REPLY_MUTE;
+			}
+		}
+		if (plan.action != RADIANT_REPLY_ACK) {
+			if (t->cfg.ops->rx_data != NULL) {
+				t->cfg.ops->rx_data(t->cfg.ctx, f->payload,
+						    f->payload_len,
+						    radiant_ctrl_is_last(
+							    f->ctrl_byte));
+			}
+			return RADIANT_TRANSFER_OK;
+		}
+	}
+#endif
+
 	/* Arm FIRST: the measured budget is 1567/1559 us, the tightest deadline
 	 * in the link layer. Missing it raises no error - the peer just
 	 * retransmits and eventually abandons the transfer. */
 	rc = radiant_transfer_arm_tx(t, reply, payload, RADIANT_TRANSFER_PKT_BYTES,
-				 t_sync + (radiant_time_t)RADIANT_TRANSFER_REPLY_US);
+				 reply_at);
 	if (rc != RADIANT_TRANSFER_OK) {
 		return rc;
 	}
