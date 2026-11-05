@@ -264,9 +264,9 @@ static struct {
  * arrives with the first sample. Announcing at binding time would mean
  * hardcoding "an 0x78 binding produces these three fields", which is exactly
  * the per-profile knowledge the adapter layer exists to keep out of the sinks.
- * So binding_changed() ARMS the announcement (and publishes the per-binding
- * availability topic, which it does know) and the first sample of each field
- * emits it.
+ * So binding_changed() ARMS the announcement - through the owed ledger below,
+ * applied by drain_owed() - and the first sample of each field emits it. The
+ * per-binding availability topic goes out lazily too (avail_online).
  */
 /*
  * 64 BITS, NOT 32, AND THE WIDTH IS THE WHOLE POINT. radiant_bridge.h allocates
@@ -316,10 +316,52 @@ static uint8_t subtype[RADIANT_BINDING_MAX];
  * C3-3). */
 static bool avail_online[RADIANT_BINDING_MAX];
 
+/*
+ * ── What binding_changed() owes, and why it is not done there ───────────────
+ *
+ * binding_changed() runs on the self-channel thread (1536 B stack), and it
+ * used to publish: "offline" for the released sensor, "online" for the new
+ * one, each under `lock` taken K_FOREVER. A broker that is connected but not
+ * reading (a wedged Wi-Fi bridge, a broker host gone to sleep) blocks a send
+ * for CONFIG_NET_SOCKET_MAX_SEND_WAIT - 10 s on this image - per publish, for
+ * the ~100 s TCP takes to give up on it. That stalled the thread which polls
+ * every self channel, AND the pump thread waiting behind it on `lock`, with
+ * the whole IPv6/TCP/OpenThread send path running on the self thread's small
+ * stack (CONFIG_NET_TC_TX_COUNT=0). Review 2026-11-05 item 3.
+ *
+ * So binding_changed() only records what is owed, under a spinlock that no
+ * I/O is ever done under, and never touches `lock`. drain_owed() - on the
+ * keepalive thread every 500 ms, and at the top of every publish - applies it:
+ *
+ *   rearm         clear the per-source announce/subtype/availability state. A
+ *                 re-pair gets a new uuid (radiant_binding.h), so its retained
+ *                 discovery messages are new topics and must be sent again,
+ *                 and the slot may now hold a different physical machine.
+ *   offline_uuid  the released sensor's status still reads "online" on the
+ *                 broker and must be overwritten. Kept until a publish of it
+ *                 SUCCEEDS, so a release made while disconnected goes out after
+ *                 the next connect; it used to be dropped.
+ *
+ * "online" is not owed at all: the lazy avail_online path in publish() sends
+ * it on the new binding's first fresh sample.
+ */
+static struct k_spinlock owed_lock;
+
+static struct {
+	bool     rearm;
+	uint64_t offline_uuid; /* 0 = nothing owed */
+} owed[RADIANT_BINDING_MAX];
+
+/* A second release on a source before the first one's "offline" went out.
+ * The newer uuid is kept; the older sensor's retained status stays "online"
+ * on the broker. Counted because it should be rare and is invisible otherwise. */
+static uint32_t offline_overwritten;
+
 /* The uuid each source was last bound with, 0 for none. A release
  * (binding_changed(source, NULL), the self channels evicting a sensor) arrives
  * after the row is freed, so this is the only place the topic of the status
- * that must now read "offline" can still be found. */
+ * that must now read "offline" can still be found. Under owed_lock:
+ * binding_changed() is its only reader and writer. */
 static uint64_t bound_uuid[RADIANT_BINDING_MAX];
 
 #define FEC_TYPE_FIELD_ID 0x0Du
@@ -408,6 +450,11 @@ static int publish_raw(const char *topic, const char *payload, bool retain)
  */
 #define MQTT_BACKOFF_MIN_MS 5000
 #define MQTT_BACKOFF_MAX_MS 300000
+
+/* The longest any one send may block - see ensure_connected(). A second: an
+ * MQTT publish here is a few hundred bytes, so a healthy link clears it in
+ * milliseconds and anything longer means the peer has stopped reading. */
+#define MQTT_SEND_TIMEOUT_MS 1000
 
 static int64_t mqtt_next_attempt_ms;
 static uint32_t mqtt_backoff_ms = MQTT_BACKOFF_MIN_MS;
@@ -553,6 +600,34 @@ static bool ensure_connected(void)
 	}
 
 	clear_backoff();
+
+	/*
+	 * Bound every send on this connection. Without this the socket's send
+	 * timeout is K_FOREVER and a full TCP window blocks a publish for
+	 * CONFIG_NET_SOCKET_MAX_SEND_WAIT (10 s here) - per publish, for the
+	 * ~100 s TCP takes to drop a silent peer. With it, the first blocked
+	 * send fails after MQTT_SEND_TIMEOUT_MS, Zephyr's client_write() calls
+	 * mqtt_client_disconnect(), MQTT_EVT_DISCONNECT clears `connected` and
+	 * arms the backoff: one short stall, then cheap refusals.
+	 *
+	 * NEEDS CONFIG_NET_CONTEXT_SNDTIMEO, which the Kconfig defaults on for
+	 * this sink; without it the option is not handled and this fails.
+	 * Loud rather than ignored: a send timeout that is silently missing
+	 * looks exactly like one that works until a broker wedges.
+	 */
+	{
+		struct zsock_timeval tv = {
+			.tv_sec = MQTT_SEND_TIMEOUT_MS / 1000,
+			.tv_usec = (MQTT_SEND_TIMEOUT_MS % 1000) * 1000,
+		};
+
+		if (zsock_setsockopt(client.transport.tcp.sock, ZSOCK_SOL_SOCKET,
+				     ZSOCK_SO_SNDTIMEO, &tv, sizeof(tv)) != 0) {
+			LOG_ERR("SO_SNDTIMEO refused (errno %d): a wedged broker "
+				"will block each publish for up to %d ms",
+				errno, CONFIG_NET_SOCKET_MAX_SEND_WAIT);
+		}
+	}
 
 	/* A new session: the broker may have lost every retained message, and
 	 * nothing per-sensor is known to be on it. Re-announce lazily. */
@@ -744,6 +819,57 @@ static bool publish_discovery(uint32_t source, const struct radiant_sample *s)
 	return publish_raw(work_topic, work_payload, true) == 0;
 }
 
+/*
+ * Apply what binding_changed() recorded (see `owed`). Caller holds `lock`.
+ * Each source's entry is snapshotted and cleared under owed_lock, and the
+ * publish happens outside it; a binding change that lands meanwhile sets the
+ * entry again and the next drain sees it.
+ */
+static void drain_owed(void)
+{
+	uint32_t s;
+
+	for (s = 0u; s < RADIANT_BINDING_MAX; s++) {
+		k_spinlock_key_t key = k_spin_lock(&owed_lock);
+		bool rearm = owed[s].rearm;
+		uint64_t off = owed[s].offline_uuid;
+		char uuid[17];
+
+		owed[s].rearm = false;
+		k_spin_unlock(&owed_lock, key);
+
+		if (rearm) {
+			announced[s] = 0u;
+			announced_derived[s] = 0u;
+			subtype[s] = 0u;
+			avail_online[s] = false;
+		}
+
+		if (off == 0u || !connected) {
+			continue;
+		}
+
+		uuid_str(off, uuid, sizeof(uuid));
+		(void)snprintf(work_topic, sizeof(work_topic), "radiant/%s/%s/status",
+			       CONFIG_ANT_DONGLE_MQTT_BRIDGE_ID, uuid);
+		if (publish_raw(work_topic, "offline", true) != 0) {
+			/* Still owed. A failed send has already disconnected
+			 * the client, so the retry waits for the next connect. */
+			mqtt_stats.publish_failed++;
+			continue;
+		}
+		mqtt_stats.published++;
+
+		/* Only the uuid that was sent: a newer release may have
+		 * replaced it while the publish was in flight. */
+		key = k_spin_lock(&owed_lock);
+		if (owed[s].offline_uuid == off) {
+			owed[s].offline_uuid = 0u;
+		}
+		k_spin_unlock(&owed_lock, key);
+	}
+}
+
 /* ── The sink ──────────────────────────────────────────────────────────────── */
 
 static bool mqtt_want(const struct radiant_sample *s)
@@ -760,6 +886,12 @@ static void mqtt_publish_sample(const struct radiant_sample *s)
 	char uuid[17];
 
 	k_mutex_lock(&lock, K_FOREVER);
+
+	/* Before anything reads the per-source state: a re-arm owed for a new
+	 * binding must be applied before that binding's first sample is looked
+	 * at, or the old binding's `announced` bits would suppress its
+	 * discovery. The offline publish inside still waits for `connected`. */
+	drain_owed();
 
 	if (!ensure_connected()) {
 		k_mutex_unlock(&lock);
@@ -901,50 +1033,42 @@ static void mqtt_publish_sample(const struct radiant_sample *s)
 	k_mutex_unlock(&lock);
 }
 
+/*
+ * Runs on the self-channel thread. Records what is owed and returns: no
+ * publish, no socket call, and never `lock` - see `owed` for why.
+ */
 static void mqtt_binding_changed(uint32_t source, const struct radiant_binding *b)
 {
-	char uuid[17];
+	k_spinlock_key_t key;
 
 	if (source >= RADIANT_BINDING_MAX) {
 		return;
 	}
 
-	k_mutex_lock(&lock, K_FOREVER);
+	key = k_spin_lock(&owed_lock);
 
-	/* Re-arm discovery for every field of this source: a re-pair gets a
-	 * new uuid (radiant_binding.h says so explicitly), so its retained
-	 * discovery messages are new topics and must be sent again. */
-	announced[source] = 0u;
-	announced_derived[source] = 0u;
-	/* And the slot may now hold a different physical machine, so the
-	 * learned equipment type goes with it rather than naming a rower
-	 * "Treadmill". */
-	subtype[source] = 0u;
-	avail_online[source] = false;
+	owed[source].rearm = true;
 
 	/* Released: the sensor's retained status would otherwise say "online"
-	 * on the broker for good. Best effort - a broker that is down now
-	 * keeps the stale retained value, the same as a dongle unplugged. */
-	if (b == NULL && bound_uuid[source] != 0u && connected) {
-		uuid_str(bound_uuid[source], uuid, sizeof(uuid));
-		(void)snprintf(work_topic, sizeof(work_topic),
-			       "radiant/%s/%s/status",
-			       CONFIG_ANT_DONGLE_MQTT_BRIDGE_ID, uuid);
-		(void)publish_raw(work_topic, "offline", true);
+	 * on the broker for good. */
+	if (b == NULL && bound_uuid[source] != 0u) {
+		if (owed[source].offline_uuid != 0u &&
+		    owed[source].offline_uuid != bound_uuid[source]) {
+			offline_overwritten++;
+		}
+		owed[source].offline_uuid = bound_uuid[source];
 	}
+
+	/* Bound again to the very sensor whose "offline" is still owed (a
+	 * release and re-pin before the drain ran): sending it now would
+	 * overwrite the "online" its next sample publishes. */
+	if (b != NULL && owed[source].offline_uuid == b->uuid) {
+		owed[source].offline_uuid = 0u;
+	}
+
 	bound_uuid[source] = (b != NULL) ? b->uuid : 0u;
 
-	if (b != NULL && connected) {
-		uuid_str(b->uuid, uuid, sizeof(uuid));
-		(void)snprintf(work_topic, sizeof(work_topic),
-			       "radiant/%s/%s/status",
-			       CONFIG_ANT_DONGLE_MQTT_BRIDGE_ID, uuid);
-		if (publish_raw(work_topic, "online", true) == 0) {
-			avail_online[source] = true;
-		}
-	}
-
-	k_mutex_unlock(&lock);
+	k_spin_unlock(&owed_lock, key);
 }
 
 RADIANT_SINK_DEFINE(radiant_mqtt_sink, mqtt_want, mqtt_publish_sample,
@@ -964,6 +1088,41 @@ RADIANT_SINK_DEFINE(radiant_mqtt_sink, mqtt_want, mqtt_publish_sample,
  */
 #define MQTT_KEEPALIVE_STACK 1536
 
+/*
+ * Free stack on the two threads this file's network I/O can run on. The
+ * keepalive thread now carries the owed "offline" publish, but it already ran
+ * mqtt_live() down the same send path (CONFIG_NET_TC_TX_COUNT=0: the
+ * IPv6/TCP/OpenThread transmit runs on the caller's stack), so this is a
+ * baseline, not a verdict. The self thread should no longer reach the send
+ * path at all. Needs the 0xAA fill (CONFIG_INIT_STACKS) to mean anything.
+ */
+#if defined(CONFIG_INIT_STACKS) && defined(CONFIG_THREAD_STACK_INFO)
+extern const k_tid_t mqtt_keepalive_tid;
+#if defined(CONFIG_ANT_DONGLE_SELF_CHANNELS) && CONFIG_ANT_DONGLE_SELF_CHANNELS > 0
+extern const k_tid_t self_channels_tid;
+#endif
+
+static void log_stack_high_water(void)
+{
+	size_t unused = 0u;
+
+	if (k_thread_stack_space_get(mqtt_keepalive_tid, &unused) == 0) {
+		LOG_INF("mqtt: keepalive stack %u of %u bytes never used",
+			(unsigned int)unused, MQTT_KEEPALIVE_STACK);
+	}
+#if defined(CONFIG_ANT_DONGLE_SELF_CHANNELS) && CONFIG_ANT_DONGLE_SELF_CHANNELS > 0
+	if (k_thread_stack_space_get(self_channels_tid, &unused) == 0) {
+		LOG_INF("mqtt: self-channel stack %u bytes never used",
+			(unsigned int)unused);
+	}
+#endif
+}
+#else
+static void log_stack_high_water(void)
+{
+}
+#endif
+
 static void mqtt_keepalive_fn(void *a, void *b, void *c)
 {
 	ARG_UNUSED(a);
@@ -980,6 +1139,10 @@ static void mqtt_keepalive_fn(void *a, void *b, void *c)
 			(void)mqtt_live(&client);
 			(void)mqtt_input(&client);
 		}
+		/* The publish path's drain covers a busy bridge; this one
+		 * covers the quiet case, where an evicted sensor was the last
+		 * thing publishing. */
+		drain_owed();
 
 		/*
 		 * Once a minute, on the same console everything else in this
@@ -997,6 +1160,8 @@ static void mqtt_keepalive_fn(void *a, void *b, void *c)
 				mqtt_stats.connect_attempts -
 					mqtt_stats.connect_failed,
 				mqtt_stats.connect_attempts);
+			LOG_INF("mqtt: offline_overwritten=%u", offline_overwritten);
+			log_stack_high_water();
 		}
 		k_mutex_unlock(&lock);
 	}

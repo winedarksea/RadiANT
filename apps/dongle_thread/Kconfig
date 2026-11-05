@@ -692,6 +692,13 @@ endif # RADIANT_BRIDGE
 config MQTT_LIB
 	default y if ANT_DONGLE_MQTT_SINK
 
+# The sink bounds every send with SO_SNDTIMEO (mqtt_sink.c, ensure_connected()),
+# and the socket layer only honours that option with this on - without it the
+# setsockopt fails and a wedged broker blocks each publish for
+# NET_SOCKET_MAX_SEND_WAIT. `default`, not `select`, for the reason above.
+config NET_CONTEXT_SNDTIMEO
+	default y if ANT_DONGLE_MQTT_SINK
+
 endmenu
 
 # The hostless node's identity and epoch (compat-C6), and the compatibility

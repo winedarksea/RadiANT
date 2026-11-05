@@ -320,8 +320,17 @@ Consequences worth naming:
   today's dongle firmware with a bus in the middle — which is why phase 1 of
   section 12 is a pure refactor with no radio risk.
 - **`binding_changed` exists so a sink can be declarative.** The MQTT sink
-  publishes its retained discovery message from it; the Matter sink adds or
+  re-arms its retained discovery message from it; the Matter sink adds or
   removes an endpoint. Neither polls.
+- **`binding_changed` runs on the caller's thread — the self-channel poll,
+  1536 B of stack — so it must not block.** No network I/O, and no lock that
+  network I/O is done under. The MQTT sink only records what it owes (a
+  re-arm, and the released sensor's `"offline"` status) under a spinlock and
+  publishes it from its keepalive thread and its publish path; the Matter sink
+  only marks its shadow and lets the CHIP thread act. Review 2026-11-05 found
+  the MQTT sink publishing from here under a `K_FOREVER` mutex, which a wedged
+  broker turned into up to 10 s per send on the thread that polls every self
+  channel.
 
 ---
 
