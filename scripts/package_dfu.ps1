@@ -88,7 +88,7 @@ function Get-RadiantAppVersion {
     [int]$patch = $fields['PATCHLEVEL']
     foreach ($pair in @(@('VERSION_MINOR', $minor), @('PATCHLEVEL', $patch))) {
         if ($pair[1] -lt 0 -or $pair[1] -gt 99) {
-            throw ("VERSION field {0} is {1}; this packaging encodes it in two decimal digits, so it must be 0-99. Widen the encoding here and in scripts\check_version.py together, or the two will disagree." -f $pair[0], $pair[1])
+            throw ("VERSION field {0} is {1}; this packaging encodes it in two decimal digits, so it must be 0-99. Widen the encoding here and in scripts\version_int.py together, or the two will disagree." -f $pair[0], $pair[1])
         }
     }
 

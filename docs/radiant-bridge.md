@@ -1848,6 +1848,31 @@ there yet — the normal state throughout Thread attach — cannot hold the bus
 down. An unparseable broker address goes straight to the cap, since it cannot
 start working.
 
+The backoff bounded how *often* the drain thread stalled, not for how long:
+each attempt still held the sink's lock for the whole 3 s, and the sample path
+waited on that lock forever. So the connect has moved to the MQTT keepalive
+thread, which **releases the lock while it blocks**. The sample path now only
+requests a connect (the keepalive picks it up within 500 ms) and declines
+rather than waiting while one is in flight. The cost is that the sample that
+asked is not published, where the in-line connect published it once it
+succeeded.
+
+A/B on this bench, 2026-11-06: nRF54L15 DK as the bridge, no Thread parent
+(so every attempt fails at the 3.0 s TCP timeout), two simulated HR straps at
+~12 samples/s. Three 60 s windows each:
+
+| | `max_pub_ms` | bus `dropped` (cumulative) | connects attempted |
+|---|---|---|---|
+| before | 3001 / 3001 / 2834 | 22 / 28 / 31 | 4 / 5 / 6 |
+| after | 1 / 1 / 1 | 0 / 0 / 0 | 4 / 5 / 6 |
+
+`max_pub_ms` is the worst wall time of one MQTT `publish()` per window,
+including its wait on the lock. It is printed on the sink's 60 s stats line
+alongside the bus's `posted`/`dropped`. Attempts kept the same backoff pace
+after the change, so connects still happen, just on another thread. With the
+straps switched off and one evicted, attempts still fired at that pace with
+the bus silent, driven by the owed "offline" alone.
+
 ---
 
 ## 10. Privacy, and the commercial cohort case
