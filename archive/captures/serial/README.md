@@ -4,13 +4,13 @@ Checked by: `tools/test_ant_golden.py`, which replays every `.antser` here in
 the CI `host-tests` job and re-hashes it against the summary of the same
 basename in `archive/benchmarks/`.
 
-**Status (2026-08-21): three conformance transcripts, one integrity gap, one
-stale file.**
+**Status (2026-11-06): three conformance transcripts, all hashed, and the two
+radiant ones are byte-identical.**
 
 | File | Recorded from | Summary in `archive/benchmarks/`? |
 |---|---|---|
 | `conformance-cc26xx.antser` | CC2652P dongle over COM15, re-recorded 2026-08-21 | **yes** — `conformance-cc26xx.json`, added the same day |
-| `conformance-nrf-radiant.antser` | nRF52840 | **no** — unhashed, and now **stale** |
+| `conformance-nrf-radiant.antser` | nRF54L15 DK, `apps/dongle` over UART, re-recorded 2026-11-06 (originally an nRF52840) | **yes** — `conformance-nrf-radiant.json`, added the same day |
 | `conformance-sdk-ant.antser` | the sdk-ant build (the Tier 1 reference) | yes |
 
 **The hash check silently skips a transcript that has no summary.**
@@ -18,8 +18,8 @@ stale file.**
 it cannot find one, and then only asserts that it checked *at least one* file.
 So for as long as `conformance-sdk-ant.json` was the only summary, the other
 two transcripts could have been edited to anything and the suite stayed green.
-Adding `conformance-cc26xx.json` closes half of that; `conformance-nrf-radiant`
-still has no integrity record.
+`conformance-cc26xx.json` and `conformance-nrf-radiant.json` close that: every
+transcript here now has a summary.
 
 **Why cc26xx was re-recorded, and what it says about the other two.** The
 2026-08-20 fix to `send_startup()` (reason byte `0x00` -> `0x20`, see
@@ -41,10 +41,13 @@ The transcript is byte-reproducible: two independent recordings of the same
 board minutes apart both hash to
 `15705b5a0827ee54b9c17232b53351911ce244bbfd3631dc4c83980b89b78bf6`.
 
-**Still to do:** re-record `conformance-nrf-radiant.antser` (needs the dongle
-flashed with the current build, which means the side-button DFU press) and
-commit its summary JSON. Until then it is one landed fix and one bug fix behind
-`conformance-cc26xx.antser`, and a `--compare` between the two reports both.
+**The nRF re-record, 2026-11-06.** `conformance-nrf-radiant.antser` was
+re-recorded from `apps/dongle` at the v1.2.0 release candidate on the nRF54L15
+DK over UART (`--port`), which flashes unattended where the nRF52840 Dongle
+needs a DFU press. Its diff against the old file is exactly the two kinds above
+(288 startup frames, 1 capabilities frame), two recordings hash identically,
+and the hash is the cc26xx one: a different chip and radio HAL produce the same
+bytes, so a `--compare` of the two radiant transcripts now passes.
 `conformance-sdk-ant.antser` is deliberately left alone: it can only be
 recorded while a working sdk-ant build exists, so it is a frozen record of what
 the bridge did on 2026-08-09, not a statement about today's firmware. Read a

@@ -55,13 +55,13 @@ those the board never appears at all.
 
 1. Plug the Feather in.
 2. **Double-tap the RESET button.** A USB drive named `FTHR840BOOT` appears.
-3. Drag `ant_dongle.uf2` onto that drive.
+3. Drag `radiant_dongle.uf2` onto that drive.
 
 The drive ejects itself and the board reboots as an ANT+ compatible dongle. That's the
 whole install — the firmware lives on the board, and there is nothing to
 configure.
 
-Grab `ant_dongle.uf2` from the
+Grab `radiant_dongle.uf2` from the
 [latest release](https://github.com/winedarksea/RadiANT/releases/latest), or [build it yourself](#building-from-source).
 
 ### 3. Set up your platform
@@ -92,7 +92,7 @@ The **[Nordic nRF52840 Dongle](https://www.nordicsemi.com/Products/Development-h
 (PCA10059, about $10) also works, and is already a USB stick if you would rather
 not have a Feather hanging off the port. It has the 32.768 kHz crystal ANT
 needs. Flashing is less convenient — there is no drag-and-drop drive, so it
-takes the Nordic DFU package `ant_dongle_nrf52840dongle.zip`:
+takes the Nordic DFU package `radiant_dongle_nrf52840dongle.zip`:
 
 1. Insert the dongle and press the small side RESET button. The red LED pulses
    slowly: that is the bootloader waiting.
@@ -101,7 +101,7 @@ takes the Nordic DFU package `ant_dongle_nrf52840dongle.zip`:
 
 The **Pro Micro nRF52840** footprint — nice!nano and the unbranded "SuperMini"
 clones, a few dollars on AliExpress — works too, and takes
-`ant_dongle_promicro.uf2` by the same double-tap-and-drag as the Feather. Its
+`radiant_dongle_promicro.uf2` by the same double-tap-and-drag as the Feather. Its
 bootloader uses the same `0x26000` layout.
 
 The catch is that these are not one board. What they have in common is a
@@ -112,7 +112,7 @@ saves money on. ANT needs that clock inside ±50 ppm.
 If the board never enumerates at all — no ANT+ device, no COM port, nothing —
 that is the missing crystal, not a bad cable. `ant_init()` gates `usb_enable()`
 in [main.c](apps/dongle/src/main.c), so a low-frequency clock that never starts stops
-the firmware before USB comes up. Flash `ant_dongle_promicro_synth.uf2`
+the firmware before USB comes up. Flash `radiant_dongle_promicro_synth.uf2`
 instead: it synthesizes the 32.768 kHz clock from the 32 MHz crystal, which
 every nRF52840 must have for its radio to work at all.
 
@@ -344,14 +344,15 @@ The release lane attaches four artifacts to a `v*` release:
 
 | Artifact | Board |
 |---|---|
-| `ant_dongle.uf2` | Adafruit Feather nRF52840 Express |
-| `ant_dongle_nrf52840dongle.zip` | Nordic nRF52840 Dongle (DFU package) |
-| `ant_dongle_promicro.uf2` | Pro Micro nRF52840, with a 32.768 kHz crystal |
-| `ant_dongle_promicro_synth.uf2` | Pro Micro nRF52840, clock synthesized for boards without one |
+| `radiant_dongle.uf2` | Adafruit Feather nRF52840 Express |
+| `radiant_dongle_nrf52840dongle.zip` | Nordic nRF52840 Dongle (DFU package) |
+| `radiant_dongle_promicro.uf2` | Pro Micro nRF52840, with a 32.768 kHz crystal |
+| `radiant_dongle_promicro_synth.uf2` | Pro Micro nRF52840, clock synthesized for boards without one |
 
-Three more are built and downloadable from the run but not released:
-`ant_dongle_feather_usbd.uf2` (new USB stack), `ant_dongle_nrf54l15dk.hex`
-(nRF54L, UART — the part has no USB) and `ant_dongle_nrf54lm20dk.hex`. Each
+Three more are built by CI to keep them compiling but not uploaded;
+`scripts\build_all.ps1` writes them to `dist\` locally:
+`radiant_dongle_feather_usbd.uf2` (new USB stack), `radiant_dongle_nrf54l15dk.hex`
+(nRF54L, UART — the part has no USB) and `radiant_dongle_nrf54lm20dk.hex`. Each
 entry asserts, before packaging, that `CONFIG_FLASH_LOAD_OFFSET` and Partition
 Manager's `app` address agree — disagreement is silent at build time and
 produces an image that installs cleanly and then boots into nothing — and that
