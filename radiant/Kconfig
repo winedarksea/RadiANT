@@ -976,10 +976,14 @@ config RADIANT_SEC_MAX_CHANNELS
 	default 8
 	range 1 32
 	help
-	  How many channels can hold security state at once. Roughly 120 bytes
-	  each, allocated on the first SET_KEY and freed on unassign and on
-	  reset - and zero when CONFIG_RADIANT_SEC is off, because the table
-	  does not exist. Eight matches the legacy ANT+ channel ceiling.
+	  How many channels can hold security state at once. About 730
+	  bytes of RAM each, statically: the 536-byte per-channel context
+	  (two drop-policy window buffers among it, review D1-1) plus its
+	  192-byte share of the receive queue, measured on the Feather
+	  security.conf build. A slot is claimed on the first SET_KEY and
+	  freed on unassign and on reset - and the cost is zero when
+	  CONFIG_RADIANT_SEC is off, because the table does not exist. Eight
+	  matches the legacy ANT+ channel ceiling.
 
 # CONFIG_RADIANT_SEC_HOST_MESSAGES used to be declared here, inside this `if
 # RADIANT_SEC` block. It moved to src/Kconfig.antr_api alongside

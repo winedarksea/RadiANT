@@ -261,8 +261,9 @@ ZTEST(radiant_sec, test_a_window_verifies)
 	configure_both(RADIANT_SEC_SW_AUTH, 4u);
 	epoch_both(7u);
 
-	/* Three windows: window 0 has no tag (it lags one window), so its
-	 * verdict never comes; windows 4 and 8 authenticate 0 and 4. */
+	/* Three windows: window 0's own tag bytes carry nothing (the tag lags
+	 * one window and there is no window -1), but window 0 itself is judged
+	 * like any other - windows 4 and 8 authenticate 0 and 4. */
 	for (i = 0; i < 12u; i++) {
 		hop(i, false, -1);
 	}
@@ -554,10 +555,16 @@ ZTEST(radiant_sec, test_the_drop_policy_holds_a_window_back)
 	}
 
 	/* Window 0 is forged, so under this policy its packets never reach a
-	 * host; window 4 verifies and is released. The default is the other way
-	 * (deliver, marked) - the choice of suspect reading vs. hole is the
-	 * application's call. The first window is also held since nothing
-	 * authenticates it, a stated cost of the one-window tag lag. */
+	 * host; window 4 verifies (by window 8's tag) and is released. Window
+	 * 8 is still held: its verdict needs a fourth window's tag, which has
+	 * not been sent - the policy's latency is the detection latency. The
+	 * default is the other way (deliver, marked) - the choice of suspect
+	 * reading vs. hole is the application's call.
+	 *
+	 * Indices 4..7, not 8..11. Before D1-1 this released 8..11, on window
+	 * 4's verdict, and dropped window 0 unjudged as "nothing authenticates
+	 * the first window" - wrong twice: window 4's tag authenticates window
+	 * 0, and window 8 had not been checked at all. */
 	zassert_equal(4u, log_n_pkt,
 		      "expected only the verified window to be released, got "
 		      "%u packets", log_n_pkt);
@@ -565,6 +572,9 @@ ZTEST(radiant_sec, test_the_drop_policy_holds_a_window_back)
 		zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
 			      log_pkt[i].verdict,
 			      "an unverified packet escaped the drop policy");
+		zassert_equal(4u + i, log_pkt[i].pay[2],
+			      "delivery %u was packet %u, expected window 4's "
+			      "packet %u", i, log_pkt[i].pay[2], 4u + i);
 	}
 }
 

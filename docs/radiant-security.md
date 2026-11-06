@@ -206,10 +206,19 @@ Consequences, stated rather than left to be discovered:
 
 - **Detection latency is W+1 to 2W packet periods**, not W. Section 7.5's table
   carries the numbers.
-- **The first window of an epoch is never verified**, because nothing
-  authenticates it, and the last window before a node goes quiet is never
-  verified either. A receiver reports both as `unverified`; neither is evidence
-  of an attack.
+- **The first window of an epoch is verified like any other**, by the tag the
+  *next* window carries. What carries nothing is the first window's own tag
+  bytes: they are zeros, because there is no window -1 for them to
+  authenticate. **The last window before a node goes quiet is never verified**,
+  because the window that would carry its tag is never sent. Its packets stay
+  `unverified` (delivered so marked by default, held and never released under
+  the drop policy), which is not evidence of an attack.
+- **Under the drop policy (`DROP_UNVER`) delivery latency equals detection
+  latency**, W+1 to 2W packet periods, because a packet cannot be released
+  before the verdict on its own window exists, and that verdict exists only
+  once the next window has completed. Releasing a window on the verdict that
+  happens to be computed when it closes - its predecessor's - delivers a
+  forgery in it as verified on the strength of a genuine window before it.
 - A window's own tag is still computed at its own boundary, so nothing about
   the self-synchronising property below changes.
 
@@ -612,6 +621,7 @@ build the CI job uses as its reference:
 | | text | bss |
 |---|---|---|
 | `X_AUTH` + `X_CONF` + the `0xF1`–`0xF4` host surface | **+5084 B** | **+5277 B** |
+| the same, after review D1-1 (2026-11-06, NCS v3.4.0) | **+5712 B** | **+6301 B** |
 | X25519 and pairing, on top of that | **+2812 B** | +705 B |
 
 The largest single contributors to text are `radiant_sec_pump` (760 B, the RX
@@ -619,6 +629,13 @@ policy engine), `encrypt_block` (344 B), `radiant_sec_tx_transform` (308 B),
 `rx_close_window` (290 B) and the AES `sbox` (256 B of rodata). Nothing else
 exceeds 200 B. The largest single contributor to bss is the ISR-to-pump queue
 at 1536 B — `RADIANT_SEC_MAX_CHANNELS` × `RADIANT_SEC_W_MAX` entries.
+
+The second row's bss is the price of a security fix, not drift. Review D1-1
+found the drop policy releasing each window on its predecessor's verdict
+(section 3.2); holding a window until its own verdict exists needs a second
+window buffer per channel - a 536 B context instead of 408 B, so +1024 B at
+eight channels. Its text was already 5508 B before the fix (growth since the
+first row that nobody recorded); the fix itself is +204 B.
 
 **This section used to claim a 4096 B ceiling, and the feature does not fit in
 it.** That number was a starting figure with no measurement behind it, asserted
@@ -630,7 +647,8 @@ exists to prevent, so the reasoning is written down rather than the number
 quietly edited: the breakdown above is a block cipher, two modes, a KDF, a
 windowing state machine and a serial surface, with no fat in it. The guess was
 low; the code is not bloated. The ceilings are now 6144 B of text and 6144 B of
-bss for the transforms, and a separate 3584 B of text for pairing — measured
+bss for the transforms (bss 7168 B since D1-1, keeping its 867 B of absolute
+headroom), and a separate 3584 B of text for pairing — measured
 figures with about 20% headroom, and the per-symbol breakdown above is what the
 next change gets compared against.
 

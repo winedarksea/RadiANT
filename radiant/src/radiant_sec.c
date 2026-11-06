@@ -102,14 +102,30 @@ struct sec_ctx {
 	uint16_t rx_prev_start;
 	uint8_t  rx_prev_tag[RADIANT_SEC_BLOCK_BYTES];
 
-	/* The drop policy's holding buffer. The default (deliver marked
-	 * unverifiable) needs no buffer; dropping means holding a window
-	 * until its verdict is known. Paid by every secured channel whether
-	 * or not it sets the bit - a static table can't be conditional. */
-	uint8_t  hold[RADIANT_SEC_W_MAX][SEC_PAGE_BYTES];
-	uint8_t  hold_len[RADIANT_SEC_W_MAX];
-	uint64_t hold_t[RADIANT_SEC_W_MAX];
-	uint8_t  n_hold;
+	/* The drop policy's holding buffers. The default (deliver marked
+	 * unverifiable) needs none; dropping means holding a window until
+	 * ITS OWN verdict is known, and that verdict exists only once the
+	 * window after it has closed (its tag rides in that window). So two:
+	 * hold[hold_cur] fills with the window now open, hold[hold_cur ^ 1]
+	 * holds the window before it, the one whose verdict the next close
+	 * computes. ONE buffer was review D1-1: it released the closing
+	 * window on its predecessor's verdict, so a forged packet in any
+	 * window went out VERIFIED behind a genuine one. Delivery latency
+	 * under the policy is therefore W+1 to 2W packet periods, the same
+	 * as detection latency (docs/radiant-security.md 7.5).
+	 *
+	 * hold_start is the window each buffer belongs to, checked against
+	 * the verdict's window before anything is released - aligned by
+	 * construction (both advance only in rx_close_window()), checked
+	 * anyway because this is the last gate before VERIFIED. No hold_len:
+	 * rx_process() refuses len < 8 and ingest clamps to 8, so every held
+	 * packet is SEC_PAGE_BYTES. Paid by every secured channel whether or
+	 * not it sets the bit - a static table can't be conditional. */
+	uint8_t  hold[2][RADIANT_SEC_W_MAX][SEC_PAGE_BYTES];
+	uint64_t hold_t[2][RADIANT_SEC_W_MAX];
+	uint16_t hold_start[2];
+	uint8_t  n_hold[2];
+	uint8_t  hold_cur;
 
 	enum radiant_sec_verdict last_verdict;
 	struct radiant_sec_stats stats;
@@ -170,6 +186,34 @@ static void stat_bump(uint32_t *counter)
 	if (*counter != UINT32_MAX) {
 		(*counter)++;
 	}
+}
+
+/* A hold_start no window can have: W is 2, 4 or 8, so every window starts on
+ * an even counter. A buffer marked with it can never match a verdict's window
+ * and is dropped whole when flushed. */
+#define HOLD_START_POISON 0xFFFFu
+
+/*
+ * Empty both drop-policy buffers, counting what they held into dropped_policy.
+ * Every site that throws the RX window state away calls this, because a held
+ * window is only releasable by a verdict computed under the same window state:
+ * left behind across a configure, an epoch change or a new try_devnum
+ * candidate, it would be judged by the next state's MAC. Counted rather than
+ * silent so a host can tell "held and discarded" from "never heard" - which
+ * makes every try_devnum trial under the policy a visible bump.
+ */
+static void hold_reset(struct sec_ctx *c)
+{
+	uint8_t b;
+	uint8_t i;
+
+	for (b = 0u; b < 2u; b++) {
+		for (i = 0u; i < c->n_hold[b]; i++) {
+			stat_bump(&c->stats.dropped_policy);
+		}
+		c->n_hold[b] = 0u;
+	}
+	c->hold_cur = 0u;
 }
 
 /* D4: expected packet index, from TIME rather than arrival history - a
@@ -410,7 +454,7 @@ int radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 	c->rx_prev_seen = false;
 	c->tx_win_open = false;
 	c->tx_prev_valid = false;
-	c->n_hold = 0u;
+	hold_reset(c);
 	return RADIANT_SEC_OK;
 }
 
@@ -451,7 +495,7 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 	c->rx_win_open = false;
 	c->rx_prev_valid = false;
 	c->rx_prev_seen = false;
-	c->n_hold = 0u;
+	hold_reset(c);
 
 	return derive_keys(c);
 }
@@ -509,7 +553,7 @@ int radiant_sec_try_devnum(uint8_t ch, uint16_t devnum)
 	c->rx_absorbed = 0u;
 	c->rx_tag_have = 0u;
 	c->rx_broken = false;
-	c->n_hold = 0u;
+	hold_reset(c);
 	c->last_verdict = RADIANT_SEC_VERDICT_CLEAR;
 
 	return RADIANT_SEC_OK;
@@ -712,9 +756,11 @@ int radiant_sec_tx_transform(uint8_t ch, uint8_t *pay, uint8_t len)
 	pay[1] = (uint8_t)counter;
 
 	if ((c->switches & RADIANT_SEC_SW_AUTH) != 0u) {
-		/* Tag of the previous window; zero until one has closed, so
-		 * the first window of an epoch is never verifiable - reported
-		 * as unverified, not as an attack. */
+		/* Tag of the previous window; zero until one has closed. So
+		 * the first window of an epoch carries nothing in byte [7] -
+		 * there is no window -1 for it to authenticate - but the
+		 * window ITSELF is verified like any other, by the tag the
+		 * second window carries. */
 		pay[7] = c->tx_prev_valid
 				 ? c->tx_prev_tag[counter % c->w]
 				 : 0x00u;
@@ -805,20 +851,35 @@ int radiant_sec_rx_ingest(uint8_t ch, const uint8_t *pay, uint8_t len,
 	return RADIANT_SEC_RX_DEFER;
 }
 
-/* Release whatever the drop policy is holding, with the verdict now known. */
-static void hold_flush(struct sec_ctx *c, enum radiant_sec_verdict verdict)
+/*
+ * Release drop-policy buffer `b` on `verdict`, which was computed for the
+ * window starting at `window`. Delivered only if the verdict is VERIFIED AND
+ * the buffer holds that window; anything else is dropped whole and counted. A
+ * window mismatch is a bug, not an attack - the buffers advance with
+ * rx_prev_start by construction - so it fails closed, into dropped_policy.
+ *
+ * No LOG_ERR for the mismatch, deliberately: this file has never logged, and
+ * the Feather security.conf image registers no `radiant` log module for the
+ * LOG_MODULE_DECLARE above to bind to - one LOG_* call here and that image
+ * fails to link on `log_const_radiant`, while the ztest images link fine.
+ */
+static void hold_flush(struct sec_ctx *c, uint8_t b,
+		       enum radiant_sec_verdict verdict, uint16_t window)
 {
+	bool    release = verdict == RADIANT_SEC_VERDICT_VERIFIED &&
+			  c->hold_start[b] == window;
 	uint8_t i;
 
-	for (i = 0u; i < c->n_hold; i++) {
-		if (verdict == RADIANT_SEC_VERDICT_VERIFIED) {
-			radiant_sec_deliver(c->ch, c->hold[i], c->hold_len[i],
-					    verdict, c->hold_t[i]);
+	for (i = 0u; i < c->n_hold[b]; i++) {
+		if (release) {
+			radiant_sec_deliver(c->ch, c->hold[b][i],
+					    SEC_PAGE_BYTES, verdict,
+					    c->hold_t[b][i]);
 		} else {
 			stat_bump(&c->stats.dropped_policy);
 		}
 	}
-	c->n_hold = 0u;
+	c->n_hold[b] = 0u;
 }
 
 /*
@@ -826,6 +887,19 @@ static void hold_flush(struct sec_ctx *c, enum radiant_sec_verdict verdict)
  * computed for the PREVIOUS window, then make this window's own tag the one
  * to compare next time. Order matters - window k's bytes authenticate window
  * k-1, so the comparison must happen before rx_prev_tag is overwritten.
+ *
+ * Under the drop policy the verdict computed here releases the PREVIOUS
+ * window's buffer, never the closing one's: window k's packets are not
+ * covered by anything until window k+1's tag bytes arrive, so they stay held
+ * through this close and are judged at the next. Releasing the closing window
+ * here - on window k-1's verdict - was review D1-1.
+ *
+ * Runs once per window HEARD, not once per window on the air: a window with
+ * no packet received never opens and so never closes. That keeps the buffers
+ * and rx_prev_* paired, since both advance here and only here - if window
+ * k+1 is lost entirely, the close of k+2 judges k (against tag bytes meant
+ * for k+1, so UNVERIFIED for a genuine sender) and flushes the buffer that
+ * holds k. hold_start is the check on that pairing, not the mechanism.
  */
 static void rx_close_window(struct sec_ctx *c)
 {
@@ -851,13 +925,19 @@ static void rx_close_window(struct sec_ctx *c)
 		c->last_verdict = verdict;
 		radiant_sec_window_verdict(c->ch, c->rx_prev_start, verdict);
 		if ((c->switches & RADIANT_SEC_SW_DROP_UNVER) != 0u) {
-			hold_flush(c, verdict);
+			hold_flush(c, c->hold_cur ^ 1u, verdict,
+				   c->rx_prev_start);
 		}
 	} else if ((c->switches & RADIANT_SEC_SW_DROP_UNVER) != 0u) {
-		/* Nothing authenticates the first window of an epoch (the tag
-		 * lags one window); under the drop policy that means dropping
-		 * it. */
-		hold_flush(c, RADIANT_SEC_VERDICT_UNVERIFIED);
+		/* The first window heard since a reset: there is no previous
+		 * window, so nothing to judge and the other buffer should be
+		 * empty - flushed UNVERIFIED anyway, so a bug that left it
+		 * full drops rather than delivers. The window closing now
+		 * stays held. Its own tag bytes are zeros (no window -1), but
+		 * the next window's bytes authenticate it like any other,
+		 * which is why it is no longer dropped here. */
+		hold_flush(c, c->hold_cur ^ 1u, RADIANT_SEC_VERDICT_UNVERIFIED,
+			   c->rx_win_start);
 	}
 
 	if (own_ok &&
@@ -872,6 +952,10 @@ static void rx_close_window(struct sec_ctx *c)
 	}
 	c->rx_prev_seen = true;
 	c->rx_prev_start = c->rx_win_start;
+	/* The closing window's buffer becomes the previous one, and the one
+	 * just flushed takes the next window. Unconditional, policy bit or
+	 * not, so the pairing never depends on which path ran. */
+	c->hold_cur ^= 1u;
 
 	radiant_sec_wipe(own, sizeof(own));
 	c->rx_win_open = false;
@@ -920,6 +1004,17 @@ static void rx_process(struct sec_pkt *pkt)
 		c->rx_win_open = false;
 		c->rx_prev_valid = false;
 		c->rx_prev_seen = false;
+		/* The fourth reset site, and the one that had no hold reset
+		 * at all while there was one buffer. Two make it load-bearing:
+		 * the old epoch's last window would sit in the previous buffer
+		 * and be judged by the new epoch's first verdict, and the open
+		 * window's buffer would take new-epoch packets on top of
+		 * old-epoch ones. Nothing dropped here could still verify: the
+		 * last old-epoch window's tag would ride in new-epoch window 0,
+		 * which carries zeros (the sender clears its tag at the wrap),
+		 * and the window before it is still held only if that last
+		 * window's tag bytes never all arrived. */
+		hold_reset(c);
 	}
 
 	/* D5's replay rejection; survives a receiver reboot in a way a
@@ -994,11 +1089,26 @@ static void rx_process(struct sec_pkt *pkt)
 	}
 
 	if ((c->switches & RADIANT_SEC_SW_DROP_UNVER) != 0u) {
-		if (c->n_hold < RADIANT_SEC_W_MAX) {
-			memcpy(c->hold[c->n_hold], pkt->pay, SEC_PAGE_BYTES);
-			c->hold_len[c->n_hold] = pkt->len;
-			c->hold_t[c->n_hold] = pkt->t_sync;
-			c->n_hold++;
+		uint8_t b = c->hold_cur;
+
+		/* Into the open window's buffer, tagged with that window. A
+		 * buffer only ever holds one window - a packet for another
+		 * closes the open one first, above - so a mismatch here is a
+		 * bug, and poisoning the tag makes its flush drop the lot. */
+		if (c->n_hold[b] == 0u) {
+			c->hold_start[b] = c->rx_win_start;
+		} else if (c->hold_start[b] != c->rx_win_start) {
+			c->hold_start[b] = HOLD_START_POISON;
+		}
+		if (c->n_hold[b] < RADIANT_SEC_W_MAX) {
+			memcpy(c->hold[b][c->n_hold[b]], pkt->pay,
+			       SEC_PAGE_BYTES);
+			c->hold_t[b][c->n_hold[b]] = pkt->t_sync;
+			c->n_hold[b]++;
+		} else {
+			/* Only a repeated counter fills a buffer past W, and
+			 * that window cannot verify; counted, not silent. */
+			stat_bump(&c->stats.dropped_policy);
 		}
 	} else {
 		/* D6: delivered, marked, not discarded - genuinely unverified

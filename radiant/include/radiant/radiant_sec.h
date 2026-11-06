@@ -446,7 +446,14 @@ int radiant_sec_kdf(const struct radiant_sec_key *root, const char *label,
 #define RADIANT_SEC_SW_AUTH        0x02  /* X_AUTH - authenticity */
 #define RADIANT_SEC_SW_DROP_UNVER  0x04  /* deliver policy: 0 = deliver an
 					  * unverified window (default),
-					  * 1 = drop it */
+					  * 1 = drop it. Dropping means
+					  * holding every window until
+					  * its OWN verdict exists, which
+					  * costs W+1 to 2W packet
+					  * periods of latency (0.75-1.0 s
+					  * at W=2, 4 Hz) - the detection
+					  * latency of
+					  * docs/radiant-security.md 7.5 */
 #define RADIANT_SEC_SW_DESC_CONF   0x08  /* descriptor encryption - REFUSED in
 					  * v1; the descriptor has no counter
 					  * and therefore no nonce */

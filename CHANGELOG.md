@@ -193,6 +193,17 @@ reads.
   `--device` filters. `scripts/cap_zwift.ps1` and `decode_pcap.py` gained SPDX
   headers; two API tests no longer depend on test order.
 
+### Security
+
+- **The drop policy delivered forgeries as verified (review D1-1).** Under
+  `DROP_UNVER` a closing window was released on the verdict judged at that
+  moment, which is its predecessor's, so a packet injected into any window
+  went out marked `VERIFIED` whenever the window before it was genuine. No
+  key was needed. Each window is now held until its own verdict exists, so
+  the drop policy's delivery latency is W+1 to 2W packet periods (0.75–1.0 s
+  at W=2, 4 Hz), and the first window of an epoch is no longer dropped. The
+  default deliver-marked policy was not affected.
+
 ### Known issues
 
 - MPSL builds' search is deaf for ~3 arm leads per tracked period, so finding a

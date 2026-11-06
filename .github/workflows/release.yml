@@ -1893,10 +1893,22 @@ jobs:
       #
       # RAM IS ASSERTED TOO, WHICH IT NEVER WAS. "Costs nothing when disabled"
       # was only ever checked in flash, and the feature turns out to cost more
-      # bss than text - 5277 B, of which 1536 is the ISR-to-pump queue
-      # (RADIANT_SEC_MAX_CHANNELS x W_MAX entries). On a part with 256 KB that
-      # is affordable and it is not nothing, and a budget nobody checks is how
-      # it stops being affordable.
+      # bss than text - 5277 B when first measured, 6301 B since review D1-1:
+      # 4288 B of per-channel contexts (8 x 536) and 1536 B of ISR-to-pump
+      # queue (RADIANT_SEC_MAX_CHANNELS x W_MAX entries). On a part with 256 KB
+      # that is affordable and it is not nothing, and a budget nobody checks is
+      # how it stops being affordable.
+      #
+      # THE BSS CEILING MOVED 6144 -> 7168 FOR A REASON, NOT BECAUSE IT WAS HIT.
+      # D1-1: the drop policy (DROP_UNVER) released a window on its
+      # PREDECESSOR'S verdict, so a forged packet rode out VERIFIED behind a
+      # genuine window. Holding each window until its own verdict exists needs
+      # a second window buffer per channel: +128 B a context (hold_len dropped,
+      # 16 B back; hold_start added, 4 B), +1024 B at eight channels - a
+      # security fix's price, not drift. The ceiling keeps the absolute
+      # headroom it had (6144 - 5277 = 867 B): 6301 + 867 = 7168, already a
+      # multiple of 512. Rounding up again (7680) would hide the next 1.4 KB
+      # of growth, which is the drift this step exists to catch.
       - name: Enabled build stays inside its measured budget
         env:
           SIZE: ${{ steps.binutils.outputs.size }}
@@ -1959,9 +1971,12 @@ jobs:
           test -n "${off_text}" && test -n "${on_text}"
           test -n "${off_bss}" && test -n "${on_bss}"
 
-          # X_AUTH + X_CONF + the 0xF1-0xF4 host surface. Measured 5084 / 5277.
+          # X_AUTH + X_CONF + the 0xF1-0xF4 host surface. Measured 5084 / 5277
+          # when the ceilings were set; 5508 / 5277 at 301c2f6 (text had grown
+          # 424 B unrecorded); 5712 / 6301 after D1-1 (2026-11-06, NCS v3.4.0),
+          # the second window buffer - see the RAM paragraph above.
           check "security text" "$(( on_text - off_text ))" 6144
-          check "security bss"  "$(( on_bss  - off_bss  ))" 6144
+          check "security bss"  "$(( on_bss  - off_bss  ))" 7168
 
           # X25519 and the pairing logic, on top of the above and under their
           # own Kconfig symbol - so they get their own budget rather than
