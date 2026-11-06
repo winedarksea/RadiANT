@@ -73,6 +73,7 @@
 #include <zephyr/sys/util.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/logging/log_ctrl.h>
+#include <zephyr/sys/reboot.h>
 
 #include <mpsl_timeslot.h>
 #include <mpsl_hwres.h>
@@ -2194,7 +2195,26 @@ void mpsl_assert_handle(const char *const file, const uint32_t line)
 		printk(" %u:%u", trace[idx] >> 4, trace[idx] & 0xFu);
 	}
 	printk("\n");
+	/*
+	 * Reboot on a shipping image, halt on a bench one - the same split
+	 * apps/common/diag_flash_log.c makes. Before this, every image halted
+	 * here forever whatever CONFIG_RESET_ON_FATAL_ERROR said, because
+	 * k_fatal_halt() never reaches the fatal hook that honours it. The dump
+	 * above is already out: LOG_PANIC() made it synchronous.
+	 *
+	 * Not k_panic(): this handler can run in MPSL's priority-0 zero-latency
+	 * signal context, where an SVC escalates to a HardFault. sys_reboot() is
+	 * irq_lock, arch_zli_lock, sys_clock_disable() and NVIC_SystemReset, with
+	 * no SVC anywhere on that path. On nRF54L sys_clock_disable() is the
+	 * GRTC's: nrfx_grtc_uninit() plus an LFCLK onoff_release(), whose only
+	 * lock is a k_spinlock - BASEPRI, not a kernel call - so it is safe from
+	 * there too.
+	 */
+#if defined(CONFIG_RESET_ON_FATAL_ERROR)
+	sys_reboot(SYS_REBOOT_COLD);
+#else
 	k_fatal_halt(K_ERR_KERNEL_PANIC);
+#endif
 }
 #endif
 

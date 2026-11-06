@@ -143,6 +143,14 @@ reads.
   session left queued still executes. On the `next` USB stack a repeated
   same-value SET_CONFIGURATION is not a new session (the stack never reports
   it); a bus reset is, on both stacks.
+- **An MPSL assert on the bridge and Matter images now reboots instead of
+  halting forever.** `mpsl_assert_handle()` called `k_fatal_halt()`, which
+  bypasses the fatal hook, so no setting could make it reboot; and
+  `bridge.conf`/`matter.conf` inherited `thread.conf`'s bench
+  `RESET_ON_FATAL_ERROR=n` anyway. The handler now reboots under that symbol
+  (after the synchronous dump), and both shipping fragments set it `y`. The
+  `gate.conf`/`coex.conf` arms already carried `y` and now reboot on an assert
+  too; `thread.conf` alone still halts.
 - **A searching channel cost a tracking one every other packet.** `arm_next()`
   truncated a scan chunk to end one arm lead before the next tracked window, but
   a receive stays open for the frame body after `t_close`, so the tracked window
