@@ -71,7 +71,7 @@ static void post(uint32_t source, uint8_t field_id, uint8_t field_type,
 	radiant_bridge_post(&s);
 }
 
-/* Temperature, subpages 1, 7 and 8. The wire field is two's complement
+/* Temperature, subpage 1. The wire field is two's complement
  * (Table 6-17), so the cast through int16_t is load-bearing: without it a
  * reading of -5.00 degC arrives as 0xFE0C = 65036 and publishes as +377 K. */
 static void post_temperature(uint32_t source, uint8_t field_id, uint16_t raw,
@@ -86,8 +86,9 @@ static void post_temperature(uint32_t source, uint8_t field_id, uint16_t raw,
 /*
  * One slot of one page-84 message. Returns 1 if it posted, 0 if it declined -
  * and declining is a normal answer for a reserved subpage (9-254), for the
- * 0xFF "slot carries nothing" sentinel, and for the first charging-cycles
- * sighting, which has nothing to difference against yet.
+ * 0xFF "slot carries nothing" sentinel, for the first charging-cycles
+ * sighting, which has nothing to difference against yet, and for the two
+ * operating-limit subpages (7, 8), which are recorded and never posted.
  */
 static uint32_t post_subfield(struct radiant_common_adapter *a, uint32_t source,
 			      const struct profile_common_subfield *f,
@@ -173,17 +174,27 @@ static uint32_t post_subfield(struct radiant_common_adapter *a, uint32_t source,
 		return 1u;
 
 	case PROFILE_COMMON_SUBPAGE_TEMP_MIN:
-		/* Table 6-17 NAMES this the minimum and DESCRIBES it as the
-		 * maximum; subpage 8 is the mirror image. The names are
-		 * authoritative - profile_common.h defect (a). */
-		post_temperature(source, RADIANT_COMMON_FIELD_TEMP_MIN, f->raw,
-				 t_us);
-		return 1u;
-
 	case PROFILE_COMMON_SUBPAGE_TEMP_MAX:
-		post_temperature(source, RADIANT_COMMON_FIELD_TEMP_MAX, f->raw,
-				 t_us);
-		return 1u;
+		/*
+		 * DECODED, DELIBERATELY NOT POSTED - see "Subpages 7 and 8 are
+		 * decoded, not posted" in radiant_common_adapter.h. Rated limits
+		 * or recorded extremes - Table 6-17 supports both readings - but
+		 * not the present temperature on either; last_raw[] above has
+		 * kept the value for anyone who wants it.
+		 *
+		 * Table 6-17 NAMES subpage 7 the minimum and DESCRIBES it as
+		 * the maximum; subpage 8 is the mirror image. The names are
+		 * authoritative - profile_common.h defect (a) - and the two
+		 * reserved field ids follow the names, so a later decision to
+		 * post them must not swap them back.
+		 *
+		 * `declined` is NOT bumped. It counts subpages this decoder
+		 * does not know (the first sign Table 6-17 has grown a row);
+		 * these two are known and refused on purpose, and counting
+		 * them would make every sensor that sends its limits look like
+		 * it was speaking a newer spec.
+		 */
+		return 0u;
 
 	default:
 		/* Unreachable: the range test above already covers 0, 9-254

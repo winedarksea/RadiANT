@@ -39,6 +39,45 @@
  * nothing" sentinel; a sensor sending either is behaving.
  *
  * ---------------------------------------------------------------------------
+ * Subpages 7 and 8 are decoded, not posted
+ * ---------------------------------------------------------------------------
+ * Minimum and maximum operating temperature are NOT THE PRESENT TEMPERATURE,
+ * on either reading of Table 6-17. The row NAMES say "Operating Temperature",
+ * i.e. the device's rated limits; the (transposed - profile_common.h defect
+ * (a)) description cells say "recorded temperature", i.e. extremes the device
+ * has seen. A rated limit is a constant and a recorded extreme is a statistic
+ * over an unstated window; neither is a measurement of the room. They are
+ * decoded (last_raw[7] and last_raw[8] below hold them, exactly as received)
+ * but deliberately never posted.
+ *
+ * Every consumer downstream treats a RADIANT_FIELD_TEMPERATURE record as a
+ * live reading, and posting these two cost three things at once:
+ *
+ *  - radiant_matter.c allocates a Matter Temperature Measurement endpoint per
+ *    (source, field_id), so a sensor that sends its limits minted TWO EXTRA
+ *    endpoints - a "temperature" of -20 degC and one of +60 degC, neither of
+ *    which tracks the room - against RADIANT_MATTER_MAX_ENDPOINTS' budget of 16,
+ *    which already does not close in the worst case.
+ *  - apps/dongle_thread's MQTT sink announced two more Home Assistant
+ *    entities with `device_class: temperature`, which an automation keyed on
+ *    "any temperature in this room" would happily read.
+ *  - radiant_liveness.c keeps a last-sample slot per (source, field_id) and
+ *    re-posts each one STALE when the source goes quiet, so two constants
+ *    held two of its table's slots and "expired" with the sensor - a limit or
+ *    a recorded extreme is no less true for the sensor being out of range,
+ *    and marking it stale says that it is.
+ *
+ * Same judgement, and very nearly the same argument, as radiant_env_adapter.h's
+ * "WHY THE 24-HOUR LOW AND HIGH ARE DECIDEDLY NOT PUBLISHED": a number with
+ * the right unit and the wrong meaning is worse on a bus of measurements than
+ * no number. The two field ids below stay reserved, so a later decision to
+ * publish them - as a description of the sensor, on some channel that is not
+ * this one - renumbers nothing.
+ *
+ * Not counted in `declined` either: that counter is for subpages this decoder
+ * does not know, and these two are known and refused on purpose.
+ *
+ * ---------------------------------------------------------------------------
  * Two lossy conversions, and why section 3.2 does not apply to them
  * ---------------------------------------------------------------------------
  * docs/radiant-bridge.md section 3.2 (the 1/1024 s trap): difference at the
@@ -85,7 +124,7 @@
  *
  * The other four conversions ARE exact, and are labelled as such in the code
  * so the distinction stays visible:
- *   temperature (1, 7, 8)  raw = centi_degC + 27315, exp = -2   K
+ *   temperature (1)        raw = centi_degC + 27315, exp = -2   K
  *   pressure    (2)        raw = centi_kPa,          exp =  1   Pa
  *   humidity    (3)        raw = centi_pct,          exp = -2   %
  *   cycles      (6)        raw = delta,              exp =  0   count
@@ -147,11 +186,13 @@ extern "C" {
 #define RADIANT_COMMON_FIELD_WIND_SPEED     (RADIANT_FIELD_ID_COMMON_BASE + 4u) /* 0x24 - 0x16 m/s, lossy */
 #define RADIANT_COMMON_FIELD_WIND_DIRECTION (RADIANT_FIELD_ID_COMMON_BASE + 5u) /* 0x25 - 0x18 rad, lossy */
 #define RADIANT_COMMON_FIELD_CHARGE_CYCLES  (RADIANT_FIELD_ID_COMMON_BASE + 6u) /* 0x26 - 0x36 count, accumulating */
-#define RADIANT_COMMON_FIELD_TEMP_MIN       (RADIANT_FIELD_ID_COMMON_BASE + 7u) /* 0x27 - 0x10 K */
-#define RADIANT_COMMON_FIELD_TEMP_MAX       (RADIANT_FIELD_ID_COMMON_BASE + 8u) /* 0x28 - 0x10 K */
+#define RADIANT_COMMON_FIELD_TEMP_MIN       (RADIANT_FIELD_ID_COMMON_BASE + 7u) /* 0x27 RESERVED - decoded, deliberately not posted */
+#define RADIANT_COMMON_FIELD_TEMP_MAX       (RADIANT_FIELD_ID_COMMON_BASE + 8u) /* 0x28 RESERVED - decoded, deliberately not posted */
 
-/* Highest subpage this adapter knows how to post. Anything above it is
- * Table 6-17's reserved range and is declined; `declined` below counts it. */
+/* Highest subpage this adapter knows. Anything above it is Table 6-17's
+ * reserved range and is declined; `declined` below counts it. Knowing a
+ * subpage is not the same as posting it: 7 and 8 are known and not posted
+ * (see the header). */
 #define RADIANT_COMMON_SUBPAGE_MAX 8u
 
 struct radiant_common_adapter {
@@ -215,8 +256,9 @@ bool radiant_common_adapter_is_common_page(uint8_t page);
  *
  * Returns the number of samples posted, which is legitimately 0 for: a page
  * outside the common range, a common page that is not 84, both slots carrying
- * reserved or invalid subpages, and the first sighting of a charging-cycles
- * slot. None of those is an error and none is logged.
+ * reserved or invalid subpages, the first sighting of a charging-cycles slot,
+ * and slots carrying subpage 7 or 8 (decoded, never posted - see the header).
+ * None of those is an error and none is logged.
  */
 uint32_t radiant_common_adapter_decode(struct radiant_common_adapter *a, uint32_t source,
 				       const uint8_t body8[8], uint64_t t_us);

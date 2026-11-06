@@ -1492,9 +1492,13 @@ repeat what the type says. Running the composer against a real heart-rate strap
 The argument fails twice. **The type often does not disambiguate** — a strap
 posts a beat count and a beat time beside its bpm, and all three composed to the
 bare base name. **And sometimes the type is the same type**: common pages
-`0x21`, `0x27` and `0x28` are *all* `RADIANT_FIELD_TEMPERATURE` on one source,
+`0x21`, `0x27` and `0x28` were *all* `RADIANT_FIELD_TEMPERATURE` on one source,
 so those three Matter endpoints shared a name *and* a device type — precisely
-the case §8.2a exists to prevent. The names this replaced (`RadiANT 1`,
+the case §8.2a exists to prevent. (Page 84 no longer produces that case: `0x27`
+and `0x28` are minimum and maximum operating temperature, not the present
+temperature, and are now decoded but never posted — `radiant_common_adapter.h`.
+Their `suffix_names[]` rows stay, because the ids are reserved rather than
+retired.) The names this replaced (`RadiANT 1`,
 `RadiANT 2`) were ugly but **unique**, so shipping that version would have
 traded a readability bug for a correctness one.
 

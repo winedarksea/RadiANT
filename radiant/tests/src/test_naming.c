@@ -141,7 +141,12 @@ ZTEST(radiant_naming, test_the_series_a_real_sensor_carries_all_get_their_own_na
 
 	/* The common-page block rides on top of whatever profile owns the
 	 * channel (radiant_common_adapter.h), so it is appended to every
-	 * profile below rather than being a device type of its own. */
+	 * profile below rather than being a device type of its own.
+	 *
+	 * 0x27/0x28 (page 84's operating-temperature limits) are no longer
+	 * posted, but their suffix_names[] rows stay and so do they here: the
+	 * ids are reserved rather than retired, and if they are ever posted
+	 * again they must still not collide with 0x21. */
 	static const struct field common[] = {
 		{ RADIANT_FIELD_TEMPERATURE, 0x21u }, { RADIANT_FIELD_PRESSURE, 0x22u },
 		{ RADIANT_FIELD_HUMIDITY, 0x23u },    { RADIANT_FIELD_SPEED, 0x24u },

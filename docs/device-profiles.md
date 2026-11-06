@@ -562,8 +562,8 @@ the adapter casts.
 | 4 | wind speed | 0.01 km/h | max 655.35 km/h | `0x16` speed, m/s | `raw = (v x 1000000 + 180) / 360`, `exp = -6` — **lossy** | `0x24` |
 | 5 | wind direction | 0.05 ° | max 7199 (359.95°) | `0x18` angle, rad | `raw = (v x 872665 + 500000) / 1000000`, `exp = -6` — **lossy** | `0x25` |
 | 6 | charging cycles | count | 0 … 65535 | `0x36` event count, accumulating | delta at u16 wire width, `exp = 0` | `0x26` |
-| 7 | minimum operating temperature | 0.01 °C signed | −326.67 … +326.67 | `0x10` | as subpage 1 | `0x27` |
-| 8 | maximum operating temperature | 0.01 °C signed | −326.67 … +326.67 | `0x10` | as subpage 1 | `0x28` |
+| 7 | minimum operating temperature | 0.01 °C signed | −326.67 … +326.67 | — | **decoded, not posted** (not the present temperature) | `0x27` reserved |
+| 8 | maximum operating temperature | 0.01 °C signed | −326.67 … +326.67 | — | **decoded, not posted** (not the present temperature) | `0x28` reserved |
 | 9–254 | reserved for future use | — | — | — | declined and counted | — |
 
 **Declining a subpage is a normal answer, not an error**, and the same is true
@@ -573,6 +573,16 @@ are memory, pairing and errors — none of them a measurement — so
 rather than a gap. Subpage 6 is the only accumulating quantity on the page and
 obeys `radiant-bridge.md` §3.2's differencing rule in full: differenced at its
 own u16 width, first sighting establishes `prev` and posts nothing.
+
+**Subpages 7 and 8 are refused on purpose, and are not counted as declined.**
+Their names say rated operating range and their (transposed, defect 1 below)
+descriptions say recorded extremes; on either reading they are not the present
+temperature. Posted as `0x10` temperature they became two Matter Temperature
+endpoints and two Home Assistant temperature entities per sensor, neither of
+which tracks the room. The
+adapter keeps the raw values in `last_raw[]` and posts nothing, the same call
+`radiant_env_adapter.h` makes for the Environment profile's 24-hour low and
+high. The field ids stay reserved so nothing is renumbered.
 
 **The two lossy conversions are a first for this codebase, and §3.2 is the
 wrong lens for them.** Nothing accumulates — wind speed and direction are

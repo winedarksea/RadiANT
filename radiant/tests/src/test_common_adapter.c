@@ -386,31 +386,65 @@ ZTEST(radiant_common_adapter, test_temperature_is_twos_complement_into_kelvin)
 	zassert_equal(s->raw, 26815, "-5.00 degC = 268.15 K");
 }
 
-ZTEST(radiant_common_adapter, test_min_and_max_operating_temperature_ids)
+ZTEST(radiant_common_adapter, test_operating_temperature_limits_are_decoded_not_posted)
 {
 	struct radiant_common_adapter a;
-	const struct radiant_sample *s;
 	uint8_t body[8];
 
 	/*
-	 * Subpages 7 and 8, on their NAMES not their descriptions - Table 6-17
-	 * transposes the two description cells (see profile_common.h defect
-	 * (a)). Pinned here so a reader who meets the descriptions first cannot
-	 * quietly swap the two field ids back, which would silently relabel
-	 * every stored series a sink already holds.
+	 * Subpages 7 and 8 are operating-temperature limits (or recorded
+	 * extremes - Table 6-17 supports both readings), not the present
+	 * temperature (radiant_common_adapter.h, "Subpages 7 and 8 are decoded,
+	 * not posted"). Posted, each became a Matter Temperature endpoint and
+	 * an HA `device_class: temperature` entity that does not track the
+	 * room - so the
+	 * property under test is that NOTHING with either id reaches the bus,
+	 * not merely that decode() says 0.
 	 */
 	radiant_common_adapter_init(&a);
 	page84(body, PROFILE_COMMON_SUBPAGE_TEMP_MIN, 0xF830u /* -20.00 degC */,
 	       PROFILE_COMMON_SUBPAGE_TEMP_MAX, 6000u /* +60.00 degC */);
-	zassert_equal(radiant_common_adapter_decode(&a, 0u, body, 1u), 2u, NULL);
+	zassert_equal(radiant_common_adapter_decode(&a, 0u, body, 1u), 0u,
+		      "a page carrying only the two limits posts nothing");
 	radiant_bridge_drain();
 
-	CCAP_REQUIRE(s, RADIANT_COMMON_FIELD_TEMP_MIN, NULL);
-	zassert_equal(s->field_type, RADIANT_FIELD_TEMPERATURE, NULL);
-	zassert_equal(s->raw, 25315, "-20.00 degC = 253.15 K");
+	zassert_is_null(ccap_find(RADIANT_COMMON_FIELD_TEMP_MIN),
+			"subpage 7 must not reach the bus");
+	zassert_is_null(ccap_find(RADIANT_COMMON_FIELD_TEMP_MAX),
+			"subpage 8 must not reach the bus");
 
-	CCAP_REQUIRE(s, RADIANT_COMMON_FIELD_TEMP_MAX, NULL);
-	zassert_equal(s->raw, 33315, "+60.00 degC = 333.15 K");
+	/* DECODED, though - the same "decoded, deliberately not posted" as
+	 * radiant_env_adapter.h's 24-hour low and high. last_raw keeps the wire
+	 * value exactly as received, two's complement and all. */
+	zassert_true(a.have_last[PROFILE_COMMON_SUBPAGE_TEMP_MIN], NULL);
+	zassert_equal(a.last_raw[PROFILE_COMMON_SUBPAGE_TEMP_MIN], 0xF830u, NULL);
+	zassert_true(a.have_last[PROFILE_COMMON_SUBPAGE_TEMP_MAX], NULL);
+	zassert_equal(a.last_raw[PROFILE_COMMON_SUBPAGE_TEMP_MAX], 6000u, NULL);
+
+	/* And not counted as declined: that counter is "Table 6-17 has grown
+	 * a row this decoder predates", and these two are known and refused on
+	 * purpose. Counting them would make every sensor that sends its limits
+	 * look like it speaks a newer spec. */
+	zassert_equal(a.declined, 0u, NULL);
+
+	/*
+	 * Refusing one slot must not cost the other. Subpage 7 beside a real
+	 * temperature: the temperature posts as normal, and the only
+	 * temperature on the bus is the live one - the case
+	 * docs/radiant-bridge.md section 8.2a used to cite as three endpoints
+	 * of one device type on one source.
+	 */
+	radiant_bridge_reset();
+	ccap_n = 0u;
+	radiant_common_adapter_init(&a);
+	page84(body, PROFILE_COMMON_SUBPAGE_TEMP_MIN, 0xF830u,
+	       PROFILE_COMMON_SUBPAGE_TEMPERATURE, 2667u);
+	zassert_equal(radiant_common_adapter_decode(&a, 0u, body, 1u), 1u,
+		      "the limit declines, the temperature still posts");
+	radiant_bridge_drain();
+	zassert_not_null(ccap_find(RADIANT_COMMON_FIELD_TEMPERATURE), NULL);
+	zassert_is_null(ccap_find(RADIANT_COMMON_FIELD_TEMP_MIN), NULL);
+	zassert_equal(a.declined, 0u, NULL);
 }
 
 ZTEST(radiant_common_adapter, test_pressure_is_exact_at_exp_plus_one)

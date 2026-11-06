@@ -124,6 +124,16 @@ reads.
   `ScaledValue` is in pascals (§2.4.5.5), not kPa; `ScaledValue` itself is
   unchanged. `Min`/`MaxScaledValue`, mandatory under the EXT feature, are now
   served. A controller that cached the old values sees a step change.
+- **Page 84's minimum/maximum operating temperature are no longer posted.**
+  Subpages 7 and 8 are operating limits, not the present temperature, but each
+  became a Matter Temperature endpoint (against the cap of 16) and an MQTT/Home
+  Assistant `device_class: temperature` entity. They are still
+  decoded; field ids `0x27`/`0x28` stay reserved. **Existing installs keep the
+  retained HA discovery for these two entities**, and nothing in the bridge
+  removes it: delete them by hand (clear the retained
+  `homeassistant/sensor/<uuid>_<key>/config` topics, or HA re-creates them on
+  restart). Likewise a Matter endpoint a previous boot persisted for them is
+  still restored at boot, unreachable, and is not reclaimed automatically.
 - **A searching channel cost a tracking one every other packet.** `arm_next()`
   truncated a scan chunk to end one arm lead before the next tracked window, but
   a receive stays open for the frame body after `t_close`, so the tracked window
