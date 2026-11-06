@@ -158,8 +158,43 @@ scheme work on the three cases an arrival-history counter cannot handle at all:
 
 Drift budget: nearest-rollover resolution needs combined clock error below
 ±128 packet periods — ±32 s at 4 Hz, against two 50 ppm crystals diverging about
-8.6 s/day — and the receiver **re-anchors its phase on every accepted packet**,
-so drift only ever accumulates across a gap in which nothing was accepted.
+8.6 s/day — and the receiver **re-anchors its phase only on a window that
+verified** (`X_AUTH`), so drift only ever accumulates across a gap in which
+nothing verified.
+
+The rule is *verified*, not *accepted*, because the anchor is what decides which
+counter every later packet resolves to and whether it is a replay. Unverified
+input must not move state that judges later input. Until 2026-11-06 the
+receiver re-anchored on every packet that passed the replay check, one or two
+windows before that packet's verdict existed, and the check lets through
+anything up to 128 periods behind. A keyless injector claiming `expected − 127`
+dragged the clock back 127 periods per forged packet, and three of them were
+enough for recorded genuine windows to deliver as VERIFIED again. Claiming
+`expected + 127` instead walked the clock into a counter wrap, and the epoch
+advance that follows is monotone: the receiver never heard its real sender
+again.
+
+How it re-anchors now:
+
+- The measurement is the last packet of each complete window, the one that
+  closes it. It is taken only when the window can produce a tag. It is applied
+  only when the next close judges that window VERIFIED, which means the bytes
+  of that packet, its counter included, are the sender's.
+- The first verified window after any reset (`0xF3`, configure, a `try_devnum`
+  trial, a wrap) is applied in full. That absorbs the host anchor's error once.
+- After that, each verified window moves the anchor by at most `period / 16`.
+  Real drift is about 0.004 period per window (500 ppm at `W = 8`), so the
+  limit never binds on genuine traffic. A test holds a sender 0.5 % off rate
+  for 30 000 packets, which is 150 periods and past the slack. What the limit
+  does bind is an attacker who jams the stream and replays it late. A
+  per-packet re-anchor caught up with any delay at once, so the delay could
+  grow 128 periods at a step. Now it grows by at most 1/16 of a period per
+  window the attacker gets verified.
+- `X_CONF` alone has no verdict and has never re-anchored.
+
+The cost is one 32-bit phase error per channel context. It sits in an
+alignment hole, so the context does not grow, and the per-packet re-anchor is
+gone, so the receive path does less work per packet than it did.
 
 ### 3.2 `X_AUTH` — authenticity, via a spread MAC
 
@@ -622,12 +657,22 @@ build the CI job uses as its reference:
 |---|---|---|
 | `X_AUTH` + `X_CONF` + the `0xF1`–`0xF4` host surface | **+5084 B** | **+5277 B** |
 | the same, after review D1-1 (2026-11-06, NCS v3.4.0) | **+5712 B** | **+6301 B** |
+| the same, after the verified-only re-anchor and replay floor (2026-11-06, NCS v3.4.0) | **+5720 B** | **+6301 B** |
 | X25519 and pairing, on top of that | **+2812 B** | +705 B |
 
-The largest single contributors to text are `radiant_sec_pump` (760 B, the RX
-policy engine), `encrypt_block` (344 B), `radiant_sec_tx_transform` (308 B),
-`rx_close_window` (290 B) and the AES `sbox` (256 B of rodata). Nothing else
-exceeds 200 B. The largest single contributor to bss is the ISR-to-pump queue
+The re-anchor row was measured against a baseline rebuilt at `645eee8`, which
+gave **+5560 B**, not the +5712 B recorded for D1-1. Nobody has looked into
+the 152 B difference; the commits since D1-1 touch both images. Measured
+against that same-day baseline, the fix's own cost is **+160 B of text and
+0 B of bss**. `rx_close_window` grew
+from 280 B to 488 B because it now does the re-anchor. `radiant_sec_pump` shrank
+from 820 B to 752 B because the per-packet re-anchor is gone. The two new
+context fields sit in alignment holes, so the context stays at 536 B.
+
+The largest single contributors to text are `radiant_sec_pump` (752 B, the RX
+policy engine), `rx_close_window` (488 B), `encrypt_block` (344 B),
+`radiant_sec_tx_transform` (350 B) and the AES `sbox` (256 B of rodata). Nothing else
+exceeds 250 B (`radiant_sec_cmac_final` is 248 B). The largest single contributor to bss is the ISR-to-pump queue
 at 1536 B — `RADIANT_SEC_MAX_CHANNELS` × `RADIANT_SEC_W_MAX` entries.
 
 The second row's bss is the price of a security fix, not drift. Review D1-1
@@ -875,6 +920,37 @@ than a small slack behind the expected index is rejected. That survives receiver
 reboot, which a volatile high-water mark cannot — and the *normal* case is a
 receiver joining mid-stream, which a high-water mark handles by accepting a full
 epoch of replay.
+
+Inside a session there is a second check alongside it, the **verified-window
+floor**. Every VERIFIED verdict raises a per-channel floor to the end of the
+window it judged, and a packet whose counter is below the floor is dropped and
+counted in `dropped_replay`. Without it, a window that had already verified
+could be replayed inside the 128-period slack, with genuine bytes and a genuine
+tag, and verify a second time. With it, each window verifies at most once per
+epoch. Only a verdict raises the floor. A floor that unverified packets could
+raise would let one forged `expected + 127` packet blind the receiver for 32 s.
+The floor is cleared wherever the window state is (`0xF3`, configure, a
+`try_devnum` trial, a wrap). It costs 2 B per context, in an alignment hole, and
+doubles as the "has a verified window re-anchored yet" flag of section 3.1.
+
+What the floor and the verified-only anchor of section 3.1 still leave open,
+stated rather than fixed:
+
+- **An early advance near the wrap.** In the last ~128 periods of an epoch (once
+  per 65 536 periods, about 4.5 h at 4 Hz), one forged packet can resolve past
+  65 535 and advance the receiver's epoch early. The real sender is then
+  UNVERIFIED (or dropped, under the policy) until its own wrap, at most about
+  32 s, and the link heals by itself: there is no permanent desync. The only way
+  to prevent it is to trial-verify under both epochs, which costs two KDFs per
+  forged packet. That is a compute DoS, which is worse.
+- **The first verified window after a reset** can still be a genuine window
+  replayed up to 128 periods late. That is the existing slack, once per reset.
+- **Forged packets can still close or break an open window.** That is
+  equivalent to jamming, which was already true and is out of scope.
+- **A jammed stream replayed late still verifies.** Its delay is limited by the
+  slack at first and grows by at most `period / 16` per verified window after
+  that (section 3.1). Any receiver that tracks drift can be dragged at the rate
+  it tracks.
 
 The limit: a joining receiver's freshness is anchored on the **host-supplied**
 epoch via `0xF3`, not on anything it hears. The descriptor that carries the

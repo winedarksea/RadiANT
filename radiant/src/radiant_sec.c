@@ -64,7 +64,18 @@ struct sec_ctx {
 	 * a reset - a reboot restarting the counter under an unchanged epoch
 	 * is a two-time pad for X_CONF and a full replay against X_AUTH. */
 	bool     epoch_set;
+	/* One past the newest VERIFIED window this epoch: a counter below it is
+	 * a replay (docs/radiant-security.md 7.6). 0 = nothing verified since
+	 * the last reset, which is also "the anchor has not locked yet" (3.1).
+	 * Raised only by a verdict - never by an unverified packet, or one
+	 * forged expected+127 would blind the receiver for 32 s. */
+	uint16_t rx_floor;
 	uint32_t epoch;
+	/* epoch_anchor error, in us, implied by rx_prev's closing packet and
+	 * applied only if rx_prev verifies. rx_floor and this sit where they do
+	 * because both fill alignment holes on a 32-bit target, so the fix that
+	 * added them cost no RAM. */
+	int32_t  rx_prev_err;
 	uint64_t epoch_anchor;  /* radiant_radio_now() at us_into_epoch == 0 */
 
 	struct radiant_sec_key k_root;
@@ -216,17 +227,19 @@ static void hold_reset(struct sec_ctx *c)
 	c->hold_cur = 0u;
 }
 
+/* The channel period in us. 0 only for period_counts 0 (no epoch yet). */
+static uint64_t period_us_of(const struct sec_ctx *c)
+{
+	return ((uint64_t)c->period_counts * 1000000u) / 32768u;
+}
+
 /* D4: expected packet index, from TIME rather than arrival history - a
  * receiver joining mid-epoch (the normal case) has none to count from. */
 static uint32_t expected_index(const struct sec_ctx *c, uint64_t now)
 {
-	uint64_t period_us;
+	uint64_t period_us = period_us_of(c);
 	uint64_t elapsed;
 
-	if (c->period_counts == 0u) {
-		return 0u;
-	}
-	period_us = ((uint64_t)c->period_counts * 1000000u) / 32768u;
 	if (period_us == 0u) {
 		return 0u;
 	}
@@ -242,8 +255,9 @@ static uint32_t expected_index(const struct sec_ctx *c, uint64_t now)
  * rollover nearest what time says. `epoch_delta` reports how many counter
  * wraps that implies (a wrap advances the epoch by 1 on both sides, D14).
  * Drift budget: nearest-rollover resolution needs combined clock error below
- * +/-128 packet periods, and the anchor re-establishes on every accepted
- * packet, so drift only accumulates across a gap with nothing accepted.
+ * +/-128 packet periods, and the anchor re-establishes on every VERIFIED
+ * window (rx_close_window()), so drift only accumulates across a gap with
+ * nothing verified.
  */
 static uint16_t resolve_counter(uint32_t expected, uint8_t low,
 				uint16_t *epoch_delta)
@@ -297,8 +311,6 @@ static int derive_keys(struct sec_ctx *c)
  * alignment survives the wrap untouched. */
 static int advance_epoch(struct sec_ctx *c, uint16_t by)
 {
-	uint64_t period_us;
-
 	if (by == 0u) {
 		return RADIANT_SEC_OK;
 	}
@@ -310,8 +322,7 @@ static int advance_epoch(struct sec_ctx *c, uint16_t by)
 
 	/* Move the anchor with it so the phase stays continuous: 65536 packets
 	 * per wrap. */
-	period_us = ((uint64_t)c->period_counts * 1000000u) / 32768u;
-	c->epoch_anchor += (uint64_t)by * 65536u * period_us;
+	c->epoch_anchor += (uint64_t)by * 65536u * period_us_of(c);
 
 	return derive_keys(c);
 }
@@ -452,6 +463,7 @@ int radiant_sec_configure(uint8_t ch, uint8_t switches, uint8_t w,
 	c->rx_win_open = false;
 	c->rx_prev_valid = false;
 	c->rx_prev_seen = false;
+	c->rx_floor = 0u;
 	c->tx_win_open = false;
 	c->tx_prev_valid = false;
 	hold_reset(c);
@@ -495,6 +507,7 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 	c->rx_win_open = false;
 	c->rx_prev_valid = false;
 	c->rx_prev_seen = false;
+	c->rx_floor = 0u;
 	hold_reset(c);
 
 	return derive_keys(c);
@@ -546,10 +559,13 @@ int radiant_sec_try_devnum(uint8_t ch, uint16_t devnum)
 	/* Clean slate: everything below belonged to the previous candidate.
 	 * last_verdict goes back to CLEAR, not UNVERIFIED, since CLEAR is
 	 * "no window judged yet" and the caller's loop is "is it VERIFIED
-	 * yet". */
+	 * yet". The floor too: the nonce binds the device number, so the
+	 * previous candidate's verified windows say nothing about this one's
+	 * counter (a Tier 2 power cycle restarts it at 0). */
 	c->rx_win_open = false;
 	c->rx_prev_valid = false;
 	c->rx_prev_seen = false;
+	c->rx_floor = 0u;
 	c->rx_absorbed = 0u;
 	c->rx_tag_have = 0u;
 	c->rx_broken = false;
@@ -900,11 +916,24 @@ static void hold_flush(struct sec_ctx *c, uint8_t b,
  * k+1 is lost entirely, the close of k+2 judges k (against tag bytes meant
  * for k+1, so UNVERIFIED for a genuine sender) and flushes the buffer that
  * holds k. hold_start is the check on that pairing, not the mechanism.
+ *
+ * This is also the only place the clock (epoch_anchor) and the replay floor
+ * move, and only on VERIFIED: unverified input must not move state that
+ * judges later input. They used to move on every packet that passed the
+ * replay check, a window or two before its verdict existed, so a keyless
+ * injector could drag the clock 127 periods per forged packet
+ * (docs/radiant-security.md 3.1). `last` is the packet that closed the window
+ * in-window - its last counter - or NULL when a packet from another window
+ * closed it. Only the former can have a tag of its own: a window that never
+ * saw its last counter is incomplete unless a counter repeated, and a repeat
+ * cannot verify either.
  */
-static void rx_close_window(struct sec_ctx *c)
+static void rx_close_window(struct sec_ctx *c, const struct sec_pkt *last,
+			    uint16_t counter)
 {
 	uint8_t                  own[RADIANT_SEC_BLOCK_BYTES];
 	enum radiant_sec_verdict verdict = RADIANT_SEC_VERDICT_UNVERIFIED;
+	uint64_t                 period_us = period_us_of(c);
 	bool                     tag_full;
 	bool                     own_ok;
 
@@ -912,11 +941,35 @@ static void rx_close_window(struct sec_ctx *c)
 	tag_full = c->rx_tag_have == (uint8_t)((1u << c->w) - 1u);
 
 	/* Could this window produce a tag of its own? Will judge the NEXT. */
-	own_ok = !c->rx_broken && c->rx_absorbed == c->w;
+	own_ok = last != NULL && !c->rx_broken && c->rx_absorbed == c->w;
 
 	if (c->rx_prev_seen) {
 		if (c->rx_prev_valid && tag_full &&
 		    radiant_sec_ct_equal(c->rx_prev_tag, c->rx_tag, c->w)) {
+			/* The previous window's closing packet is now known
+			 * to be the sender's - bytes, counter and all; only
+			 * its arrival time could be a replay's. The first
+			 * verified window after a reset is taken whole (the
+			 * host's 0xF3 anchor error, once); after that the
+			 * clock slews at most period/16 per window. Real
+			 * drift is ~0.004 period per window, so the limit
+			 * binds only on a jam-and-replay-late attacker, who
+			 * gains 1/16 period per window instead of 128. */
+			int32_t step = c->rx_prev_err;
+			int32_t lim = (int32_t)(period_us >> 4);
+
+			if (c->rx_floor != 0u) {
+				step = (step > lim) ? lim
+						    : ((step < -lim) ? -lim : step);
+			}
+			if (step < 0 &&
+			    (uint64_t)(-(int64_t)step) > c->epoch_anchor) {
+				c->epoch_anchor = 0u;
+			} else {
+				c->epoch_anchor += (uint64_t)(int64_t)step;
+			}
+			c->rx_floor = (uint16_t)(c->rx_prev_start + c->w);
+
 			verdict = RADIANT_SEC_VERDICT_VERIFIED;
 			stat_bump(&c->stats.windows_verified);
 		} else {
@@ -942,6 +995,19 @@ static void rx_close_window(struct sec_ctx *c)
 
 	if (own_ok &&
 	    radiant_sec_cmac_final(&c->rx_cmac, own) == RADIANT_SEC_OK) {
+		/* Where this window's closing packet says the epoch began,
+		 * against the anchor as it now stands. Measured per window, not
+		 * per packet, and applied only if this window verifies. Bounded
+		 * by the replay slack to ~129 periods (258 s at the longest
+		 * period); saturated only when t_sync precedes the anchor. */
+		int64_t err = (int64_t)last->t_sync -
+			      (int64_t)((uint64_t)counter * period_us) -
+			      (int64_t)c->epoch_anchor;
+
+		c->rx_prev_err = (err > INT32_MAX)
+					 ? INT32_MAX
+					 : ((err < -INT32_MAX) ? -INT32_MAX
+							       : (int32_t)err);
 		memcpy(c->rx_prev_tag, own, RADIANT_SEC_BLOCK_BYTES);
 		c->rx_prev_valid = true;
 	} else {
@@ -1004,6 +1070,7 @@ static void rx_process(struct sec_pkt *pkt)
 		c->rx_win_open = false;
 		c->rx_prev_valid = false;
 		c->rx_prev_seen = false;
+		c->rx_floor = 0u;
 		/* The fourth reset site, and the one that had no hold reset
 		 * at all while there was one buffer. Two make it load-bearing:
 		 * the old epoch's last window would sit in the previous buffer
@@ -1019,9 +1086,13 @@ static void rx_process(struct sec_pkt *pkt)
 
 	/* D5's replay rejection; survives a receiver reboot in a way a
 	 * volatile high-water mark can't. Slack is stated in packet counts
-	 * because the anchor re-establishes on every accepted packet, so
-	 * this bounds one hop's jitter, not accumulated drift. */
-	if (expected > counter && (uint32_t)(expected - counter) > 128u) {
+	 * because the anchor re-establishes on every verified window, so
+	 * this bounds drift since the last one, not across a session. And the
+	 * in-session floor beside it: below rx_floor is a window that has
+	 * already verified, which must not verify twice (radiant-security.md
+	 * 7.6). */
+	if ((expected > counter && (uint32_t)(expected - counter) > 128u) ||
+	    counter < c->rx_floor) {
 		stat_bump(&c->stats.dropped_replay);
 		return;
 	}
@@ -1034,7 +1105,7 @@ static void rx_process(struct sec_pkt *pkt)
 		start = (uint16_t)(counter - (counter % c->w));
 		if (!c->rx_win_open || c->rx_win_start != start) {
 			if (c->rx_win_open) {
-				rx_close_window(c);
+				rx_close_window(c, NULL, 0u);
 			}
 			rx_open_window(c, start, (counter % c->w) == 0u);
 		}
@@ -1073,20 +1144,8 @@ static void rx_process(struct sec_pkt *pkt)
 		return;
 	}
 
-	/* Re-anchor the phase on every accepted packet, so drift matters only
-	 * across a gap with nothing accepted. */
-	{
-		uint64_t period_us = ((uint64_t)c->period_counts * 1000000u) /
-				     32768u;
-
-		if (period_us != 0u) {
-			uint64_t ideal = (uint64_t)counter * period_us;
-
-			c->epoch_anchor = (pkt->t_sync > ideal)
-						  ? (pkt->t_sync - ideal)
-						  : 0u;
-		}
-	}
+	/* No re-anchor here: this packet is not verified yet, and the clock
+	 * moves only on a verified window (rx_close_window()). */
 
 	if ((c->switches & RADIANT_SEC_SW_DROP_UNVER) != 0u) {
 		uint8_t b = c->hold_cur;
@@ -1124,7 +1183,7 @@ static void rx_process(struct sec_pkt *pkt)
 	}
 
 	if ((uint8_t)(counter % c->w) == (uint8_t)(c->w - 1u)) {
-		rx_close_window(c);
+		rx_close_window(c, pkt, counter);
 	}
 }
 

@@ -1974,7 +1974,9 @@ jobs:
           # X_AUTH + X_CONF + the 0xF1-0xF4 host surface. Measured 5084 / 5277
           # when the ceilings were set; 5508 / 5277 at 301c2f6 (text had grown
           # 424 B unrecorded); 5712 / 6301 after D1-1 (2026-11-06, NCS v3.4.0),
-          # the second window buffer - see the RAM paragraph above.
+          # the second window buffer - see the RAM paragraph above. 5720 / 6301
+          # after the verified-only re-anchor (+160 / +0 against a 5560 / 6301
+          # same-day baseline; docs/radiant-security.md 5.6).
           check "security text" "$(( on_text - off_text ))" 6144
           check "security bss"  "$(( on_bss  - off_bss  ))" 7168
 
