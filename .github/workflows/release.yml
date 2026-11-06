@@ -411,23 +411,63 @@ jobs:
       # (docs/decisions/0001, 2026-08-20). They are unchanged from that job
       # apart from being gated on `matrix.artifact` instead of on a secret.
       #
-      # Partition Manager decides where the application links, and it does not
-      # fail loudly when that disagrees with the offset the output file carries
-      # - the image just boots into nothing. Assert the two agree rather than
-      # shipping a package that installs cleanly and does nothing.
+      # An image linked for one address and written to another installs cleanly
+      # and boots into nothing. Partition Manager, when it is on, decides the
+      # link address and does not fail when that disagrees with the load offset
+      # the output file carries (docs/gotchas.md).
+      #
+      # So the check reads the address the image was ACTUALLY linked at - the
+      # lowest data address in zephyr.hex - and requires it, the load offset and
+      # (when PM is on) PM's `app` to all equal the expected offset.
+      #
+      # partitions.yml is only checked when CONFIG_PARTITION_MANAGER_ENABLED=y.
+      # On NCS v3.4.0 these builds do not enable Partition Manager at all, so the
+      # devicetree code partition decides the link address and partitions.yml
+      # is never written; reading it unconditionally failed every offset row
+      # with FileNotFoundError. The v3.2.4 builds did enable it. If PM comes
+      # back, its check comes back with it, and the hex check catches a
+      # mislinked image either way.
       - name: Verify link address
         if: matrix.offset != ''
         env:
           EXPECTED: ${{ matrix.offset }}
         run: |
           set -euo pipefail
-          offset="$(grep -h '^CONFIG_FLASH_LOAD_OFFSET=' \
-            "$(find build -name .config -path '*/dongle/*' -print -quit)" | cut -d= -f2)"
-          pm_app="$(python3 -c \
-            "import yaml,sys; print(hex(yaml.safe_load(open('build/partitions.yml'))['app']['address']))")"
-          echo "load offset: ${offset}   partition manager app: ${pm_app}   expected: ${EXPECTED}"
+          cfg="$(find build -name .config -path '*/dongle/*' -print -quit)"
+          hex="$(find build -name zephyr.hex -path '*/dongle/*' -print -quit)"
+          test -n "${cfg}"
+          test -n "${hex}"
+          offset="$(grep -h '^CONFIG_FLASH_LOAD_OFFSET=' "${cfg}" | cut -d= -f2)"
+          linked="$(python3 - "${hex}" <<'PY'
+          import sys
+          base, low = 0, None
+          for line in open(sys.argv[1]):
+              line = line.strip()
+              if not line.startswith(':'):
+                  continue
+              addr, rtype = int(line[3:7], 16), int(line[7:9], 16)
+              if rtype == 0x02:
+                  base = int(line[9:13], 16) << 4
+              elif rtype == 0x04:
+                  base = int(line[9:13], 16) << 16
+              elif rtype == 0x00 and (low is None or base + addr < low):
+                  low = base + addr
+          if low is None:
+              sys.exit("no data records in " + sys.argv[1])
+          print(hex(low))
+          PY
+          )"
+          echo "load offset: ${offset}   linked at: ${linked}   expected: ${EXPECTED}"
           test "$((offset))" -eq "$((EXPECTED))"
-          test "$((pm_app))" -eq "$((EXPECTED))"
+          test "$((linked))" -eq "$((EXPECTED))"
+          if grep -qx 'CONFIG_PARTITION_MANAGER_ENABLED=y' "${cfg}"; then
+            pm_app="$(python3 -c \
+              "import yaml; print(hex(yaml.safe_load(open('build/partitions.yml'))['app']['address']))")"
+            echo "partition manager app: ${pm_app}"
+            test "$((pm_app))" -eq "$((EXPECTED))"
+          else
+            echo "Partition Manager is off in this build; the devicetree code partition decides the link address"
+          fi
 
       - name: Collect UF2
         if: matrix.package == 'uf2'
