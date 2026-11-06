@@ -82,9 +82,15 @@ static void matter_glue_binding_changed(uint32_t source, const struct radiant_bi
 	 * thread, which can hand a freed endpoint id to the next sensor at once;
 	 * if that ran before the glue's rows were marked, the new sensor's first
 	 * values would land in a row the next flush deletes. Both calls only set
-	 * flags, so the order costs nothing. */
+	 * flags, so the order costs nothing.
+	 *
+	 * A forget holds until the index is bound again, so a bind admits it -
+	 * also after the glue call, which has set `bound` and the source's key
+	 * by then. */
 	if (b == NULL) {
 		radiant_matter_forget_source(source);
+	} else {
+		radiant_matter_admit_source(source);
 	}
 }
 

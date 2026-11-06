@@ -277,8 +277,17 @@ void radiant_matter_reset(void);
  * A freed endpoint's slot - and so its endpoint_id - is reused by the next
  * endpoint created. Fine for the reason the endpoint_id note above gives: the
  * glue keys its persisted identity on the sensor, never on this number.
+ *
+ * THE SOURCE STAYS FORGOTTEN: its samples (a departed sensor's, still queued)
+ * create and write nothing until radiant_matter_admit_source() is called for
+ * it. A caller of this function must therefore admit the source again when
+ * the index is next bound.
  */
 void radiant_matter_forget_source(uint32_t source);
+
+/* The index `source` is bound again: its samples are handled as normal. A
+ * no-op on a source that was never forgotten. Safe from any thread. */
+void radiant_matter_admit_source(uint32_t source);
 
 #ifdef __cplusplus
 }

@@ -835,8 +835,17 @@ static bool try_bind(uint8_t ch)
 			"be marked stale", ch, source);
 	}
 
-	(void)ant_bridge_channel_bind(ch, source);
+	/*
+	 * THE SINKS ARE TOLD BEFORE THE TAP ATTRIBUTES ANYTHING. The pump thread
+	 * drains concurrently, so with these two the other way round a first
+	 * sample could reach the Matter glue before it knew the source was
+	 * bound. The glue refuses rows for an unbound source, and the sample
+	 * that creates a Matter endpoint is the one that carries its constant
+	 * attributes (OccupancySensorType, pressure's Scale) - written once,
+	 * never again - so the refusal lost them for the life of the binding.
+	 */
 	radiant_bridge_binding_changed(source, radiant_binding_get(source));
+	(void)ant_bridge_channel_bind(ch, source);
 
 	LOG_INF("bound device %u (type 0x%02x, trans %u) on channel %u as "
 		"source %u, period %u", devnum, devtype, trans, ch, source,

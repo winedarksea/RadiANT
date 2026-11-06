@@ -364,12 +364,17 @@ static struct publish_state published[MATTER_DEADBAND_SLOTS];
  * forgotten and is logged. */
 static atomic_t forget_pending;
 
+/* Sources forgotten and not yet admitted again: matter_publish() creates and
+ * writes nothing for them. See radiant_matter_admit_source(). */
+static atomic_t forgotten;
+
 void radiant_matter_reset(void)
 {
 	memset(endpoints, 0, sizeof(endpoints));
 	memset(published, 0, sizeof(published));
 	endpoint_used = 0u;
 	atomic_clear(&forget_pending);
+	atomic_clear(&forgotten);
 }
 
 void radiant_matter_forget_source(uint32_t source)
@@ -379,7 +384,16 @@ void radiant_matter_forget_source(uint32_t source)
 			(unsigned int)source);
 		return;
 	}
+	(void)atomic_or(&forgotten, (atomic_val_t)BIT(source));
 	(void)atomic_or(&forget_pending, (atomic_val_t)BIT(source));
+}
+
+void radiant_matter_admit_source(uint32_t source)
+{
+	if (source >= 32u) {
+		return;
+	}
+	(void)atomic_and(&forgotten, ~(atomic_val_t)BIT(source));
 }
 
 static void apply_forgets(void)
@@ -670,6 +684,20 @@ static void matter_publish(const struct radiant_sample *s)
 	uint8_t i;
 
 	apply_forgets();
+
+	/*
+	 * NOTHING FOR A FORGOTTEN SOURCE. A departed sensor's samples can still
+	 * be queued on the bus when it is released - the first of them is often
+	 * what applies the forget, just above. Handled, it would re-create an
+	 * endpoint for a source with no binding behind it: a leak, and one that
+	 * the next sensor bound to the index then inherits through
+	 * radiant_matter_endpoint_for() with its constant attributes never
+	 * written to the glue, which had already refused the departed source's
+	 * row. Refused until the next bind admits the source again.
+	 */
+	if (s->source < 32u && atomic_test_bit(&forgotten, s->source)) {
+		return;
+	}
 
 	row = radiant_matter_row(s->field_type);
 	if (row == NULL) {

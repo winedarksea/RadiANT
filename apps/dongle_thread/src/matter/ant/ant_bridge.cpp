@@ -676,15 +676,19 @@ void FlushHandler(intptr_t)
 	 * also frees the row before anything wants it: sRows is sized exactly
 	 * RADIANT_MATTER_MAX_ENDPOINTS. The loop below keeps its own needRemove
 	 * branch, because an unbind can land between the two passes.
+	 *
+	 * NEEDREMOVE IS NEVER CLEARED BY HAND, here or below; only the memset at
+	 * the end of RemoveEndpointForRow() clears it. Clearing it first left the
+	 * row used && !needRemove for the whole removal - RemoveBridgedDevice()
+	 * plus a settings write, milliseconds - and FindRow() would match it
+	 * again: the next sensor's first value lands in the row and the memset
+	 * wipes it, the very loss FindRow()'s skip exists to prevent.
 	 */
 	for (Row &row : sRows) {
 		bool remove;
 
 		k_mutex_lock(&sShadowLock, K_FOREVER);
 		remove = row.used && row.needRemove;
-		if (remove) {
-			row.needRemove = false;
-		}
 		k_mutex_unlock(&sShadowLock);
 
 		if (remove) {
@@ -705,7 +709,6 @@ void FlushHandler(intptr_t)
 		needCreate = row.needCreate;
 		needRemove = row.needRemove;
 		row.needCreate = false;
-		row.needRemove = false;
 		for (uint8_t i = 0; i < kMaxAttrsPerEndpoint; i++) {
 			pending[i] = row.attrs[i];
 			row.attrs[i].dirty = false;
@@ -1044,10 +1047,16 @@ extern "C" void radiant_matter_attr_write(uint16_t endpoint_id, uint32_t cluster
 		if (row == nullptr) {
 			/* Dropped, and radiant_matter.c's deadband has already
 			 * recorded it as published, so a change-only series waits for
-			 * its heartbeat. Two known ways in: sRows full while a dying
-			 * row awaits the flush (only at table capacity), and a sample
-			 * drained between ant_bridge_channel_bind() and the binding
-			 * announcement in self_channels.c, before `bound` is set. */
+			 * its heartbeat - and a constant (OccupancySensorType,
+			 * pressure's Scale), written once at endpoint creation, is
+			 * lost for the endpoint's life. Known ways in: sRows full
+			 * while a dying row awaits the flush (only at table
+			 * capacity), and a departed sensor's sample drained in the
+			 * gap between ant_matter_binding_changed() and
+			 * radiant_matter_forget_source(), which is correct to drop.
+			 * self_channels.c announces a bind BEFORE attributing traffic
+			 * and radiant_matter.c creates nothing for a forgotten source,
+			 * which is what keeps a live sensor out of this branch. */
 			k_mutex_unlock(&sShadowLock);
 			return;
 		}

@@ -906,6 +906,7 @@ ZTEST(radiant_matter, test_a_forgotten_source_releases_its_endpoints_for_reuse)
 	/* Source 1 evicted; a different sensor is bound under the same index
 	 * and reports a field the old one never had. */
 	radiant_matter_forget_source(1u);
+	radiant_matter_admit_source(1u);
 	s = mk(1u, 40u, RADIANT_FIELD_TEMPERATURE, 2150, -2);
 	radiant_bridge_post(&s);
 	radiant_bridge_drain();
@@ -928,5 +929,45 @@ ZTEST(radiant_matter, test_a_forgotten_source_releases_its_endpoints_for_reuse)
 	zassert_true(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING, MATTER_ATTR_OCCUPANCY,
 				NULL, NULL) >= 1,
 		     "the old sensor's last value suppressed the new one's first");
+}
+
+/*
+ * A departed sensor's sample still queued at its release. Handled, it re-created
+ * an endpoint for the unbound source; the glue refused that row, so the
+ * endpoint's once-only constants went nowhere, and the next sensor bound to the
+ * index inherited the endpoint and never had them written - OccupancySensorType
+ * read 0, PIR, trap 16, for the life of that binding.
+ */
+ZTEST(radiant_matter, test_a_forgotten_source_creates_nothing_until_admitted)
+{
+	struct radiant_sample s;
+	int64_t v = 99;
+
+	s = mk(3u, 0u, RADIANT_FIELD_OCCUPANCY, 1, 0);
+	s.flags = RADIANT_SAMPLE_DERIVED;
+	radiant_bridge_post(&s);
+	radiant_bridge_drain();
+	zassert_not_null(radiant_matter_endpoint_for(3u, 0u), "setup");
+
+	/* Released, and the old sensor's last sample is drained after it. */
+	radiant_matter_forget_source(3u);
+	n_writes = 0u;
+	radiant_bridge_post(&s);
+	radiant_bridge_drain();
+	zassert_is_null(radiant_matter_endpoint_for(3u, 0u),
+			"an endpoint was re-created for a source with no binding");
+	zassert_equal(n_writes, 0u, "a forgotten source reached the seam");
+
+	/* The next sensor bound to the index: a fresh endpoint, constants and
+	 * all. */
+	radiant_matter_admit_source(3u);
+	radiant_bridge_post(&s);
+	radiant_bridge_drain();
+	zassert_not_null(radiant_matter_endpoint_for(3u, 0u),
+			 "an admitted source got no endpoint");
+	zassert_equal(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING,
+				 MATTER_ATTR_OCCUPANCY_SENSOR_TYPE, &v, NULL),
+		      1, "the new sensor's endpoint never had its constant written");
+	zassert_equal(v, MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT, NULL);
 }
 
