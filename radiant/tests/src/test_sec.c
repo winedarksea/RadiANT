@@ -917,8 +917,9 @@ ZTEST(radiant_sec, test_a_keyed_receiver_re_acquires_across_a_power_cycle)
 	epoch_both(11u);
 
 	/* Before the power cycle: both sides on TEST_DEVNUM. Two windows since
-	 * the tag lags one window (window k authenticates k-1), so the first
-	 * window heard is never the one that verifies. */
+	 * the tag lags one window (window k's tag bytes authenticate k-1): the
+	 * first window heard IS the one that verifies, but its verdict exists
+	 * only once the second has closed. */
 	tier2_window(TEST_DEVNUM, 0u, w);
 	tier2_window(TEST_DEVNUM, w, w);
 	zassert_true(verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED) > 0u,
@@ -1006,6 +1007,241 @@ ZTEST(radiant_sec, test_a_trial_before_the_epoch_is_known_is_refused)
 	 * the sensor being absent. */
 	zassert_equal(RADIANT_SEC_EINVAL,
 		      radiant_sec_try_devnum(RX_CH, TIER2_NEW_DEVNUM));
+}
+
+/* ── The drop policy against a subtly wrong D1-1 fix ────────────────────── */
+
+/*
+ * The cases test_the_drop_policy_never_releases_a_window_on_its_predecessors_
+ * verdict cannot see: a window lost whole on air, and held packets outliving a
+ * reset. A fix that paired buffers with windows by counter parity rather than
+ * by close events, or that left a reset site without hold_reset(), passes
+ * every DROP_UNVER case above and fails one of these.
+ *
+ * Marked packets are the ones that must never come out: hop()'s byte [4] is
+ * 0x22, and bit 4*8 turns it into 0x23 on the air.
+ */
+#define HOLD_MARK_BIT (4 * 8)
+
+static void assert_no_marked_delivery(void)
+{
+	uint32_t i;
+
+	for (i = 0; i < log_n_pkt && i < LOG_MAX; i++) {
+		zassert_equal(0x22u, log_pkt[i].pay[4],
+			      "delivery %u (packet %u) was held before a reset "
+			      "and came out after it", i, log_pkt[i].pay[2]);
+		zassert_equal(RADIANT_SEC_VERDICT_VERIFIED, log_pkt[i].verdict,
+			      "an unverified packet escaped the drop policy");
+	}
+}
+
+static uint32_t dropped_policy_now(void)
+{
+	struct radiant_sec_stats st;
+
+	radiant_sec_get_stats(RX_CH, &st);
+	return st.dropped_policy;
+}
+
+/*
+ * Window 4 (hops 4..7) never reaches the receiver at all, so it never opens or
+ * closes. The close of window 8 therefore judges window 0, against window 8's
+ * tag bytes - which carry window 4's tag, not window 0's - so window 0 is
+ * UNVERIFIED and must be dropped whole, from the buffer that holds it. Window
+ * 8 is then judged by window 12 and released, window 12 by window 16.
+ *
+ * Pairing buffers by window parity instead ((start / W) & 1) puts windows 0
+ * and 8 in the same buffer, and this is where that shows.
+ */
+ZTEST(radiant_sec, test_the_drop_policy_drops_the_window_before_a_lost_one)
+{
+	uint32_t i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_DROP_UNVER, 4u);
+	epoch_both(43u);
+
+	for (i = 0; i < 20u; i++) {
+		hop(i, i >= 4u && i < 8u, -1);
+	}
+
+	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_UNVERIFIED),
+		      "window 0 was not judged unverified across the lost "
+		      "window");
+	zassert_equal(0u, verdicts_for(4u, RADIANT_SEC_VERDICT_VERIFIED) +
+			  verdicts_for(4u, RADIANT_SEC_VERDICT_UNVERIFIED),
+		      "a verdict was issued for a window never heard");
+	zassert_equal(1u, verdicts_for(8u, RADIANT_SEC_VERDICT_VERIFIED));
+	zassert_equal(1u, verdicts_for(12u, RADIANT_SEC_VERDICT_VERIFIED));
+
+	/* Windows 8 and 12 come out, in order; window 16 is still held. */
+	zassert_equal(8u, log_n_pkt, "expected 8..15 (8 packets), got %u",
+		      log_n_pkt);
+	for (i = 0; i < log_n_pkt && i < LOG_MAX; i++) {
+		zassert_equal(RADIANT_SEC_VERDICT_VERIFIED, log_pkt[i].verdict);
+		zassert_equal(8u + i, log_pkt[i].pay[2],
+			      "delivery %u was packet %u, expected %u", i,
+			      log_pkt[i].pay[2], 8u + i);
+	}
+	zassert_equal(4u, dropped_policy_now(),
+		      "window 0's four packets were not counted as dropped");
+}
+
+/*
+ * set_epoch mid-window. Hops 0 and 1 of epoch 45 are held in the open window's
+ * buffer; the host then installs epoch 46 and the sender restarts at counter
+ * 0. Without the reset, epoch 46's window 0 lands in the SAME buffer under the
+ * SAME window start (0), nothing about it looks wrong, its fresh MAC covers
+ * only epoch 46's packets and verifies - and the flush delivers all six,
+ * epoch 45's two among them, as VERIFIED.
+ */
+ZTEST(radiant_sec, test_held_packets_do_not_survive_set_epoch)
+{
+	uint32_t i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_DROP_UNVER, 4u);
+	epoch_both(45u);
+
+	hop(0u, false, HOLD_MARK_BIT);
+	hop(1u, false, HOLD_MARK_BIT);
+	zassert_equal(0u, dropped_policy_now(), "setup: nothing dropped yet");
+
+	epoch_both(46u);
+	zassert_equal(2u, dropped_policy_now(),
+		      "the two held packets were not dropped and counted by "
+		      "the epoch change");
+
+	for (i = 0; i < 8u; i++) {
+		hop(i, false, -1);
+	}
+
+	assert_no_marked_delivery();
+	zassert_equal(4u, log_n_pkt,
+		      "expected epoch 46's window 0 alone (4 packets), got %u",
+		      log_n_pkt);
+	zassert_equal(2u, dropped_policy_now());
+}
+
+/*
+ * try_devnum mid-window - the Tier 2 shape. Hops 0 and 1 are heard from the
+ * sensor under its old device number; it power-cycles onto a new one,
+ * restarting its counter under the same epoch, and the receiver tries the new
+ * number. Exactly the set_epoch case above with a different reset site: same
+ * buffer, same window start, a fresh MAC that verifies, six delivered without
+ * the reset.
+ */
+ZTEST(radiant_sec, test_held_packets_do_not_survive_try_devnum)
+{
+	const uint8_t w = 4u;
+	uint32_t      i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_DROP_UNVER, w);
+	epoch_both(11u);
+
+	hop(0u, false, HOLD_MARK_BIT);
+	hop(1u, false, HOLD_MARK_BIT);
+
+	radiant_sec_channel_release(TX_CH);
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_set_key(TX_CH, test_root, 128, TEST_DEVNUM));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_configure(TX_CH,
+					    RADIANT_SEC_SW_AUTH |
+						    RADIANT_SEC_SW_DROP_UNVER,
+					    w, RADIANT_SEC_PAGE_LO_DEFAULT,
+					    RADIANT_SEC_PAGE_HI_DEFAULT));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_set_epoch(TX_CH, 11u, 0u, TEST_PERIOD));
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_set_devnum(TX_CH, TIER2_NEW_DEVNUM));
+
+	zassert_equal(0u, dropped_policy_now(), "setup: nothing dropped yet");
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_try_devnum(RX_CH, TIER2_NEW_DEVNUM));
+	zassert_equal(2u, dropped_policy_now(),
+		      "the two held packets were not dropped and counted by "
+		      "the trial");
+
+	for (i = 0; i < 2u * w; i++) {
+		hop(i, false, -1);
+	}
+
+	assert_no_marked_delivery();
+	zassert_equal(4u, log_n_pkt,
+		      "expected the new identity's window 0 alone (4 "
+		      "packets), got %u", log_n_pkt);
+	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
+		      radiant_sec_last_verdict(RX_CH),
+		      "setup: the new identity did not verify");
+}
+
+/*
+ * The epoch-advance site in rx_process(): a receiver that sees time cross a
+ * counter wrap advances its own epoch, and must drop what it held from the
+ * old one there.
+ *
+ * Reached WITHOUT running the sender through 65536 packets: the two pre-wrap
+ * packets (counters 65532/65533, an open window) are ingested raw - they are
+ * only ever held, so nothing needs their MAC - and the sender is put straight
+ * into the advanced epoch, as its own wrap would have.
+ *
+ * The packet that carries the advance (counter 0 of epoch 48) is itself then
+ * refused as a replay: `expected` is computed against the pre-advance anchor
+ * (65536) while the resolved counter is 0. That is a separate, pre-existing
+ * behaviour of the wrap path and not what this asserts - which is why only
+ * the drop count right after it and the no-leak property are pinned, not the
+ * exact set released afterwards (window 0 is lost to that refusal today).
+ */
+ZTEST(radiant_sec, test_held_packets_do_not_survive_an_epoch_advance_at_the_wrap)
+{
+	uint32_t i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_DROP_UNVER, 4u);
+	epoch_both(47u);
+
+	for (i = 65532u; i < 65534u; i++) {
+		uint8_t pay[8] = {
+			TEST_PAGE, (uint8_t)i, (uint8_t)i, 0x11u,
+			0x23u, 0x33u, 0x44u, 0x00u,
+		};
+
+		zassert_equal(RADIANT_SEC_RX_DEFER,
+			      radiant_sec_rx_ingest(RX_CH, pay, sizeof(pay), true,
+						    sec_anchor +
+							    (uint64_t)i *
+								    period_us()));
+		radiant_sec_pump();
+	}
+	zassert_equal(0u, log_n_pkt, "setup: an open window was released");
+	zassert_equal(0u, dropped_policy_now(), "setup: nothing dropped yet");
+
+	/* The sender's own wrap: epoch + 1, counter back to 0. */
+	zassert_equal(RADIANT_SEC_OK,
+		      radiant_sec_set_epoch(TX_CH, 48u, 0u, TEST_PERIOD));
+
+	hop(65536u, false, -1);
+	zassert_equal(2u, dropped_policy_now(),
+		      "the receiver's epoch advance kept the old epoch's held "
+		      "packets");
+	{
+		struct radiant_sec_stats st;
+
+		radiant_sec_get_stats(RX_CH, &st);
+		zassert_equal(1u, st.epoch_advances,
+			      "setup: the receiver did not advance its epoch");
+	}
+
+	for (i = 65537u; i < 65536u + 12u; i++) {
+		hop(i, false, -1);
+	}
+	assert_no_marked_delivery();
+	zassert_true(log_n_pkt >= 4u,
+		     "nothing verified after the advance (%u delivered), so "
+		     "the no-leak check above proved nothing", log_n_pkt);
 }
 
 /* ── Lifecycle ──────────────────────────────────────────────────────────── */
