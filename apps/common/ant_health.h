@@ -90,7 +90,10 @@ enum ant_health_counter {
 	 * SYNC (0xA4) - the S_SYNC state's else-branch in
 	 * ant_serial_bridge.c. Distinct from HOST_CSUM: this is bytes lost
 	 * hunting for the start of a frame at all, before a length or id was
-	 * ever seen. */
+	 * ever seen. Also counts one per frame the parser was part way
+	 * through when a USB host session ended (bridge_thread_fn()'s
+	 * ant_transport_session() check) - framing lost the same way, at a
+	 * bus reset instead of on noise. */
 	ANT_HEALTH_HOST_DESYNC,
 	/* A frame that DID find SYNC, LEN and ID, ran to its declared length,
 	 * and then failed the trailing XOR checksum. Kept separate from

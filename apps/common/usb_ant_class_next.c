@@ -87,6 +87,15 @@ static volatile bool was_configured;
 static volatile bool rx_armed;
 static volatile bool rx_backpressured;
 
+/* ant_transport_session()'s state - see ant_transport.h and the same block in
+ * usb_ant_class.c. Here ant_request() (the put) and ant_class_enable() (the
+ * bump) both run on the cooperative USBD thread, which gives the snapshot the
+ * same exactness. rx_put_total is read nowhere else.
+ */
+static uint32_t rx_put_total;
+static atomic_t session_boundary;
+static atomic_t session;
+
 static K_MUTEX_DEFINE(tx_mutex);
 static K_SEM_DEFINE(tx_done_sem, 0, 1);
 static volatile int tx_result;
@@ -282,8 +291,9 @@ static int ant_request(struct usbd_class_data *const c_data,
 				ant_health_note(ANT_HEALTH_RX_BACKPRESSURE);
 				LOG_WRN("RX buffer full, delaying re-arm");
 			} else {
-				ring_buf_put(&ant_rx_ring_buf, buf->data,
-					     buf->len);
+				rx_put_total += ring_buf_put(&ant_rx_ring_buf,
+							     buf->data,
+							     buf->len);
 				k_sem_give(&ant_rx_sem);
 			}
 		}
@@ -325,6 +335,20 @@ static void ant_class_enable(struct usbd_class_data *const c_data)
 	was_configured = true;
 	rx_armed = false;
 	rx_backpressured = false;
+	/* A new host session - see the same lines in usb_ant_class.c. Boundary
+	 * before counter, both before arm_rx(), for the same reasons.
+	 *
+	 * Fewer bumps than the legacy stack, and that is USBD's doing, not
+	 * this file's: .enable is only called for a SET_CONFIGURATION that
+	 * changes to a non-zero configuration. usbd_ch9.c returns early on a
+	 * repeat of the current value, so a host that re-selects the
+	 * configuration it already has gets no bump here (the legacy stack
+	 * does give one). A bus reset is unaffected - USBD drops to
+	 * configuration 0 on reset, so the next SET_CONFIGURATION is a change.
+	 * Not in USBD_MSG_RESUME below, which is the old session continuing.
+	 */
+	atomic_set(&session_boundary, (atomic_val_t)rx_put_total);
+	atomic_inc(&session);
 	arm_rx();
 	LOG_INF("USB configured");
 }
@@ -697,4 +721,13 @@ void usb_ant_resume_rx(void)
 	if (configured && rx_backpressured) {
 		arm_rx();
 	}
+}
+
+uint32_t ant_transport_session(uint32_t *rx_boundary)
+{
+	/* Counter first, boundary second - the reverse of the writer. */
+	uint32_t s = (uint32_t)atomic_get(&session);
+
+	*rx_boundary = (uint32_t)atomic_get(&session_boundary);
+	return s;
 }

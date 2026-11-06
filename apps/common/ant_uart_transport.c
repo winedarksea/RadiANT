@@ -309,3 +309,14 @@ void usb_ant_resume_rx(void)
 		rx_dropped = 0;
 	}
 }
+
+uint32_t ant_transport_session(uint32_t *rx_boundary)
+{
+	/* Constant: a UART has no bus reset and no SET_CONFIGURATION, so
+	 * there is no session boundary for the bridge to see. A host that
+	 * reopens the port mid-frame is resynchronised the way it always was,
+	 * by the parser hunting for the next SYNC.
+	 */
+	*rx_boundary = 0;
+	return 0;
+}

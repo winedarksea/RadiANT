@@ -82,6 +82,21 @@ static K_MUTEX_DEFINE(tx_mutex);
 static struct usb_ep_cfg_data ant_ep_data[];
 static bool tx_thread_started;
 
+/* ant_transport_session()'s state - see ant_transport.h.
+ *
+ * rx_put_total counts every byte ep_out_cb() has put into ant_rx_ring_buf
+ * since boot; session_boundary is its value when the current session began.
+ * ep_out_cb() and ant_status_cb() both run on the nRF driver's usbd_workq
+ * (bulk-OUT completions are delivered inline from its endpoint events, and
+ * SET_CONFIGURATION is handled from the same queue's EP0 events), so the
+ * snapshot taken at the bump is exact: no put can land between reading the
+ * total and publishing it. rx_put_total is read nowhere else, so it needs no
+ * atomic; the other two are read by the bridge thread.
+ */
+static uint32_t rx_put_total;
+static atomic_t session_boundary;
+static atomic_t session;
+
 #if defined(CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS)
 
 /* Windows uses these descriptors to auto-bind WinUSB for the ANT interface.
@@ -528,8 +543,8 @@ static void ep_out_cb(uint8_t ep, int tsize, void *priv)
 			ant_health_note(ANT_HEALTH_RX_BACKPRESSURE);
 			LOG_WRN("RX buffer full, delaying re-arm");
 		} else {
-			ring_buf_put(&ant_rx_ring_buf,
-				     ep_out_buf, (uint32_t)tsize);
+			rx_put_total += ring_buf_put(&ant_rx_ring_buf,
+						     ep_out_buf, (uint32_t)tsize);
 			k_sem_give(&ant_rx_sem);
 		}
 	}
@@ -554,6 +569,23 @@ static void ant_status_cb(struct usb_cfg_data *cfg,
 		was_configured = true;
 		rx_armed = false;
 		rx_backpressured = false;
+		/* A new host session: the bridge drops whatever half-frame its
+		 * parser was holding from the old one, at exactly the stream
+		 * position published here. Boundary first, counter second, so
+		 * a bridge that sees the new counter reads a boundary at least
+		 * this new. Both BEFORE arm_rx(), which is what lets the new
+		 * session's first byte into the ring - so every new-session
+		 * byte sits at or past the boundary, and was put after the
+		 * bump was visible.
+		 *
+		 * Also fires for SET_CONFIGURATION(0) and for a repeat of the
+		 * current configuration, both of which usb_device.c reports
+		 * through this same code. A parser reset on a host that is
+		 * deconfiguring us, or re-selecting the configuration it
+		 * already has, is harmless, so neither is filtered.
+		 */
+		atomic_set(&session_boundary, (atomic_val_t)rx_put_total);
+		atomic_inc(&session);
 		arm_rx();
 		LOG_INF("USB configured");
 		break;
@@ -737,4 +769,13 @@ void usb_ant_resume_rx(void)
 	if (configured && rx_backpressured) {
 		arm_rx();
 	}
+}
+
+uint32_t ant_transport_session(uint32_t *rx_boundary)
+{
+	/* Counter first, boundary second - the reverse of the writer. */
+	uint32_t s = (uint32_t)atomic_get(&session);
+
+	*rx_boundary = (uint32_t)atomic_get(&session_boundary);
+	return s;
 }

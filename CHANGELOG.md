@@ -134,6 +134,15 @@ reads.
   `homeassistant/sensor/<uuid>_<key>/config` topics, or HA re-creates them on
   restart). Likewise a Matter endpoint a previous boot persisted for them is
   still restored at boot, unreachable, and is not reclaimed automatically.
+- **A USB bus reset mid-frame swallowed the host's next command.** The host
+  frame parser kept its state across a new USB configuration, so a host that
+  reset part way through a frame had its first `RESET_SYSTEM` eaten as the old
+  frame's tail. The parser now resets exactly at the new session's first byte
+  (a byte-count boundary published by the USB class), and a SET_KEY/pairing
+  frame that fails its checksum is now wiped too. A complete frame the old
+  session left queued still executes. On the `next` USB stack a repeated
+  same-value SET_CONFIGURATION is not a new session (the stack never reports
+  it); a bus reset is, on both stacks.
 - **A searching channel cost a tracking one every other packet.** `arm_next()`
   truncated a scan chunk to end one arm lead before the next tracked window, but
   a receive stays open for the frame body after `t_close`, so the tracked window

@@ -1313,27 +1313,50 @@ enum parser_state {
 	S_CSUM,
 };
 
-static void process_byte(uint8_t b)
-{
-	static enum parser_state state = S_SYNC;
-	static uint8_t  msg_len;
-	static uint8_t  msg_id;
+/*
+ * The parser's whole state, at file scope rather than as statics inside
+ * process_byte() so that parser_reset() can reach it. Owned by the bridge
+ * thread alone: nothing else reads or writes it, which is why the transport
+ * signals a host-session boundary through ant_transport_session() instead of
+ * resetting this itself from its own callback context.
+ */
+static struct {
+	enum parser_state state;
+	uint8_t msg_len;
+	uint8_t msg_id;
 	/* Sized from the largest value the LEN byte may carry, which counts the
 	 * leading channel byte as well as the payload. An advanced-burst data
 	 * message alone reaches 25, so a buffer sized from the longest message
 	 * a *host* sends would fail handle_burst()'s size % 8 check and reject
 	 * every 24-byte burst packet without a word.
 	 */
-	static uint8_t  msg_body[ANTW_MAX_SIZE_VALUE]; /* channel + payload */
-	static uint8_t  body_idx;
-	static uint8_t  running_xor;
+	uint8_t msg_body[ANTW_MAX_SIZE_VALUE]; /* channel + payload */
+	uint8_t body_idx;
+	uint8_t running_xor;
+} parser = { .state = S_SYNC };
 
-	switch (state) {
+/* Back to hunting for SYNC, with nothing of the abandoned frame kept.
+ *
+ * The body is wiped with the rest, not just the index: a frame abandoned half
+ * way may have been a key message (see the wipe in S_CSUM below), and the
+ * point of that wipe is that no key outlives the frame that carried it in
+ * this long-lived buffer. A reset that left the body behind would be a second
+ * way for one to.
+ */
+static void parser_reset(void)
+{
+	memset(&parser, 0, sizeof(parser));
+	parser.state = S_SYNC;
+}
+
+static void process_byte(uint8_t b)
+{
+	switch (parser.state) {
 	case S_SYNC:
 		if (b == ANTW_SYNC_TX) {
 			/* Seed with SYNC, not 0: it is part of the checksum. */
-			running_xor = b;
-			state = S_LEN;
+			parser.running_xor = b;
+			parser.state = S_LEN;
 		} else {
 			/* A byte that was not SYNC while hunting for a frame
 			 * start - noise, or the tail of a frame this parser
@@ -1349,71 +1372,81 @@ static void process_byte(uint8_t b)
 			 * frame's start. Re-seed rather than swallow ~164 bytes
 			 * of the host's next commands. */
 			ant_health_note(ANT_HEALTH_HOST_DESYNC);
-			running_xor = b;
+			parser.running_xor = b;
 			break;		/* stay in S_LEN */
 		}
-		msg_len = b;
-		running_xor ^= b;
-		body_idx = 0;
-		state = S_ID;
+		parser.msg_len = b;
+		parser.running_xor ^= b;
+		parser.body_idx = 0;
+		parser.state = S_ID;
 		break;
 
 	case S_ID:
-		msg_id = b;
-		running_xor ^= b;
-		state = (msg_len == 0) ? S_CSUM : S_BODY;
+		parser.msg_id = b;
+		parser.running_xor ^= b;
+		parser.state = (parser.msg_len == 0) ? S_CSUM : S_BODY;
 		break;
 
 	case S_BODY:
-		if (body_idx < sizeof(msg_body)) {
-			msg_body[body_idx] = b;
+		if (parser.body_idx < sizeof(parser.msg_body)) {
+			parser.msg_body[parser.body_idx] = b;
 		}
-		body_idx++;
-		running_xor ^= b;
-		if (body_idx >= msg_len) {
-			state = S_CSUM;
+		parser.body_idx++;
+		parser.running_xor ^= b;
+		if (parser.body_idx >= parser.msg_len) {
+			parser.state = S_CSUM;
 		}
 		break;
 
 	case S_CSUM:
-		if (b == running_xor) {
-			dispatch(msg_id, msg_body,
-				 MIN(msg_len, (uint8_t)sizeof(msg_body)));
-#ifdef CONFIG_RADIANT_SEC_HOST_MESSAGES
-			if (msg_id == ANTW_MESG_RADIANT_SET_KEY_ID
-#ifdef CONFIG_RADIANT_SEC_PAIRING_X25519
-			    /* 0xF5 sub-command 0x02 carries the host's private
-			     * X25519 scalar, wiped on the same grounds as a root
-			     * key. Checked by message id alone, not sub-command:
-			     * a wipe that had to parse the body first would be
-			     * one parsing bug away from keeping a private key. */
-			    || msg_id == ANTW_MESG_RADIANT_PAIRING_ID
-#endif
-			) {
-				/*
-				 * A root key just crossed this static, long-lived
-				 * buffer, which would otherwise hold it until a
-				 * later message overwrote it - indefinitely on a
-				 * quiet link.
-				 *
-				 * DOES NOT COVER: the same bytes passed through
-				 * the USB ring buffer and transport buffer beneath
-				 * it, neither reachable or wiped from here, and
-				 * were in host memory before that. This narrows
-				 * the exposure window, it does not close it.
-				 *
-				 * Unconditional: a key rejected for bad length was
-				 * still a key.
-				 */
-				memset(msg_body, 0, sizeof(msg_body));
-			}
-#endif
+		if (b == parser.running_xor) {
+			dispatch(parser.msg_id, parser.msg_body,
+				 MIN(parser.msg_len,
+				     (uint8_t)sizeof(parser.msg_body)));
 		} else {
 			LOG_WRN("Checksum err: got 0x%02X exp 0x%02X", b,
-				running_xor);
+				parser.running_xor);
 			ant_health_note(ANT_HEALTH_HOST_CSUM);
 		}
-		state = S_SYNC;
+#ifdef CONFIG_RADIANT_SEC_HOST_MESSAGES
+		if (parser.msg_id == ANTW_MESG_RADIANT_SET_KEY_ID
+#ifdef CONFIG_RADIANT_SEC_PAIRING_X25519
+		    /* 0xF5 sub-command 0x02 carries the host's private X25519
+		     * scalar, wiped on the same grounds as a root key. Checked
+		     * by message id alone, not sub-command: a wipe that had to
+		     * parse the body first would be one parsing bug away from
+		     * keeping a private key. */
+		    || parser.msg_id == ANTW_MESG_RADIANT_PAIRING_ID
+#endif
+		) {
+			/*
+			 * A root key just crossed this static, long-lived
+			 * buffer, which would otherwise hold it until a later
+			 * message overwrote it - indefinitely on a quiet link.
+			 *
+			 * After the checksum test, not inside its success arm:
+			 * a key frame that FAILED its checksum still left its
+			 * body here, and used to be kept. Unconditional for the
+			 * same reason a key rejected for bad length is wiped -
+			 * it was still a key.
+			 *
+			 * DOES NOT COVER: the same bytes passed through the USB
+			 * ring buffer and transport buffer beneath it, neither
+			 * reachable or wiped from here, and were in host memory
+			 * before that. Nor a key frame that never reaches this
+			 * state: one cut off part way stays in the buffer until
+			 * a session boundary's parser_reset() wipes it, which
+			 * happens only when the bridge gets the new session's
+			 * first byte, or until later frames happen to overwrite
+			 * it (only as far as their own lengths reach). On a
+			 * link that goes quiet after the cut, that is
+			 * indefinitely. This narrows the exposure window, it
+			 * does not close it.
+			 */
+			memset(parser.msg_body, 0, sizeof(parser.msg_body));
+		}
+#endif
+		parser.state = S_SYNC;
 		break;
 	}
 }
@@ -1428,6 +1461,68 @@ static void bridge_thread_fn(void *p1, void *p2, void *p3)
 
 	LOG_INF("ANT serial bridge thread started");
 
+	/*
+	 * Host session boundaries - see ant_transport_session().
+	 *
+	 * A USB bus reset or re-configuration ends the host's session, and a
+	 * host that reset mid-frame starts the new one with a fresh SYNC -
+	 * which a parser still holding the old half-frame would take as the
+	 * next body byte, eating the new session's first command (typically
+	 * its RESET_SYSTEM) whole. So the parser is reset at the boundary,
+	 * here on its own thread; the transport only publishes where the
+	 * boundary is and never touches the parser or the ring, which this
+	 * thread may be inside at that very moment.
+	 *
+	 * AT the boundary in the byte stream, not at the moment the bump is
+	 * noticed. The transport publishes the session's first byte as a
+	 * stream index (its running put count at the bump); this thread counts
+	 * its own gets the same way, in rx_got, and resets the parser
+	 * immediately before processing the byte whose index equals it. Reset
+	 * on noticing instead and a bridge that was blocked when the host
+	 * reset - handle_burst()'s wait for the block, up to 1000 ms, or
+	 * handle_system_reset()'s 50 ms tail - would come back to old bytes
+	 * still queued, reset on the first of them, re-parse an old
+	 * half-frame from its own SYNC, and eat the new session's SYNC
+	 * exactly as before the fix.
+	 *
+	 * The change is always seen in time. Checked after every get: a byte
+	 * at index >= the boundary was put after the boundary was published
+	 * and the counter bumped (both precede the transport's arm_rx()), and
+	 * this thread got it after it was put, so the check that follows its
+	 * get sees the new counter. The comparison is by uint32_t difference,
+	 * so the two running counts may wrap.
+	 *
+	 * What the old session's bytes still in the ring get: they run
+	 * through the OLD parser state, as if no boundary had happened. A
+	 * COMPLETE old frame among them is parsed and executed in the new
+	 * session - accepted, the host did send it, and discarding it would
+	 * mean flushing the ring from the transport's callback, racing this
+	 * thread inside ring_buf_get(). A PARTIAL old frame is still part way
+	 * through when the boundary byte arrives; the reset abandons it there,
+	 * counted once as HOST_DESYNC, and none of its bytes reach the reset
+	 * parser, so nothing more is counted for it.
+	 *
+	 * Two bumps before the first boundary is reached: the latest wins.
+	 * This thread only ever holds one pending boundary, and the transport
+	 * only publishes the latest, so if both are noticed before the
+	 * earlier one is reached, the parser is reset at the later boundary
+	 * only. The intermediate session's bytes then run through the old
+	 * parser state - its first command can be eaten by an old half-frame,
+	 * exactly the pre-fix behaviour, confined to that one short-lived
+	 * session - and the latest session still starts clean. A second bump
+	 * noticed after the first boundary was reached is simply a new
+	 * pending boundary and is handled exactly.
+	 *
+	 * Seeded from the transport rather than assumed to be 0: the host may
+	 * already have configured us before this thread first ran. Nothing
+	 * has been got yet and the parser is in S_SYNC, so that boundary
+	 * needs no reset.
+	 */
+	uint32_t rx_got = 0;
+	uint32_t boundary;
+	uint32_t seen = ant_transport_session(&boundary);
+	bool reset_pending = false;
+
 	while (1) {
 		/* Block until the USB OUT callback signals new data */
 		k_sem_take(&ant_rx_sem, K_FOREVER);
@@ -1435,6 +1530,32 @@ static void bridge_thread_fn(void *p1, void *p2, void *p3)
 		/* Drain the ring buffer completely before sleeping again */
 		uint8_t b;
 		while (ring_buf_get(&ant_rx_ring_buf, &b, 1) == 1) {
+			/* This byte's stream index; see above. */
+			uint32_t idx = rx_got++;
+			uint32_t at;
+			uint32_t now = ant_transport_session(&at);
+
+			if (now != seen) {
+				seen = now;
+				boundary = at;
+				reset_pending = true;
+			}
+
+			if (reset_pending && (int32_t)(idx - boundary) >= 0) {
+				reset_pending = false;
+				/* Captured before the reset, which puts it
+				 * back to S_SYNC: a frame abandoned part way is
+				 * framing lost, counted with the bytes the
+				 * S_SYNC hunt discards. A boundary that found
+				 * the parser idle lost nothing and counts
+				 * nothing.
+				 */
+				if (parser.state != S_SYNC) {
+					ant_health_note(ANT_HEALTH_HOST_DESYNC);
+				}
+				parser_reset();
+			}
+
 			process_byte(b);
 		}
 
