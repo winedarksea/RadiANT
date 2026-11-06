@@ -71,13 +71,21 @@ static void matter_glue_binding_changed(uint32_t source, const struct radiant_bi
 	if (source >= RADIANT_BINDING_MAX) {
 		return;
 	}
+	/* The glue first: on an unbind that marks its rows for removal. */
+	ant_matter_binding_changed(source, b);
+
 	/* Released (the self channels evicted the sensor to pair another):
 	 * free radiant_matter.c's endpoints too, or the index's next binding
-	 * finds them full. The glue's own CHIP endpoints go below. */
+	 * finds them full.
+	 *
+	 * AFTER the call above, never before. The forget is applied on the pump
+	 * thread, which can hand a freed endpoint id to the next sensor at once;
+	 * if that ran before the glue's rows were marked, the new sensor's first
+	 * values would land in a row the next flush deletes. Both calls only set
+	 * flags, so the order costs nothing. */
 	if (b == NULL) {
 		radiant_matter_forget_source(source);
 	}
-	ant_matter_binding_changed(source, b);
 }
 
 RADIANT_SINK_DEFINE(radiant_matter_glue_sink, matter_glue_want, matter_glue_publish,

@@ -342,11 +342,21 @@ void ComposeLabel(char out[RADIANT_NAMING_MAX], const Row &row)
 /* The shadow - pump thread side                                             */
 /* ------------------------------------------------------------------------ */
 
-/* Row lookup. Caller holds sShadowLock. */
+/*
+ * Row lookup. Caller holds sShadowLock.
+ *
+ * A ROW PENDING REMOVAL IS NOT A MATCH. radiant_matter.c frees an unbound
+ * sensor's endpoint ids at once and hands them to the next sensor, while the
+ * row here lives on until the next flush. Matching it would put the new
+ * sensor's first values into the dying row, the flush would delete them with
+ * it, and a change-only series (the derived occupancy outputs) would stay
+ * missing until its next heartbeat. Skipping it sends the write to AllocRow(),
+ * which reads the new owner from radiant_matter.c's table.
+ */
 Row *FindRow(uint16_t radiantEndpoint)
 {
 	for (Row &r : sRows) {
-		if (r.used && r.radiantEndpoint == radiantEndpoint) {
+		if (r.used && !r.needRemove && r.radiantEndpoint == radiantEndpoint) {
 			return &r;
 		}
 	}
@@ -377,6 +387,19 @@ Row *AllocRow(uint16_t radiantEndpoint)
 		}
 	}
 	if (e == nullptr || e->source >= RADIANT_BINDING_MAX) {
+		return nullptr;
+	}
+
+	/*
+	 * NOT FOR AN UNBOUND SOURCE. FindRow() skips a row pending removal, so
+	 * a sample of the departed sensor still queued on the bus, drained before
+	 * radiant_matter.c applies the forget, would otherwise land here and
+	 * build a fresh row for it - one with needRemove clear, which the next
+	 * sensor to inherit that endpoint id would then write into. It also keeps
+	 * a row from existing before ant_matter_binding_changed() has set the
+	 * source's key, which CreateEndpointForRow() persists the endpoint under.
+	 */
+	if (!sSources[e->source].bound) {
 		return nullptr;
 	}
 
@@ -643,6 +666,31 @@ void FlushHandler(intptr_t)
 	/* Cleared first: a write landing during this pass must arm the next
 	 * flush rather than be lost behind a flag that is still set. */
 	atomic_set(&sFlushPending, 0);
+
+	/*
+	 * REMOVALS FIRST, in a pass of their own. A sensor that inherits an
+	 * unbound one's endpoint id gets a new row (see FindRow()), and that row
+	 * can sit at a lower index than the dying one. In a single pass its CHIP
+	 * endpoint would be created first, which on a same-sensor re-bind means
+	 * two live endpoints with one UniqueID for the length of the pass. It
+	 * also frees the row before anything wants it: sRows is sized exactly
+	 * RADIANT_MATTER_MAX_ENDPOINTS. The loop below keeps its own needRemove
+	 * branch, because an unbind can land between the two passes.
+	 */
+	for (Row &row : sRows) {
+		bool remove;
+
+		k_mutex_lock(&sShadowLock, K_FOREVER);
+		remove = row.used && row.needRemove;
+		if (remove) {
+			row.needRemove = false;
+		}
+		k_mutex_unlock(&sShadowLock);
+
+		if (remove) {
+			RemoveEndpointForRow(row);
+		}
+	}
 
 	for (Row &row : sRows) {
 		AttrCell pending[kMaxAttrsPerEndpoint];
@@ -994,6 +1042,12 @@ extern "C" void radiant_matter_attr_write(uint16_t endpoint_id, uint32_t cluster
 	if (row == nullptr) {
 		row = AllocRow(endpoint_id);
 		if (row == nullptr) {
+			/* Dropped, and radiant_matter.c's deadband has already
+			 * recorded it as published, so a change-only series waits for
+			 * its heartbeat. Two known ways in: sRows full while a dying
+			 * row awaits the flush (only at table capacity), and a sample
+			 * drained between ant_bridge_channel_bind() and the binding
+			 * announcement in self_channels.c, before `bound` is set. */
 			k_mutex_unlock(&sShadowLock);
 			return;
 		}
