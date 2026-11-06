@@ -76,7 +76,18 @@ reads.
 - **The MQTT sink does no network I/O on the self thread.** Releases and binds
   are recorded in an owed-offline ledger, and the keepalive thread delivers them,
   connecting if needed (backoff 5 s to 5 min). Broker sends time out at 3 s, so a
-  wedged broker costs one stall, not ~100 s of every channel's polling.
+  wedged broker costs one stall, not ~100 s of every channel's polling. The
+  keepalive thread is also the only one that connects: the sample path used to
+  hold the sink lock across the TCP connect and CONNACK wait (up to ~8 s),
+  stalling the drain thread that also feeds the Matter sink and the rule engine
+  (A/B on an nRF54L15 with no broker: worst publish 3001 ms → 1 ms, bus drops
+  ~27 → 0 per minute). The bridge's `online` status now counts as published
+  only if its send succeeded, so a reconnect no longer skips it under a
+  retained `offline` LWT.
+- **The Feather names itself in its USB product string**
+  (`RadiANT ANT+ compatible USB stick (Feather)`), so it can be told apart from
+  an nRF52840 Dongle on the same host. VID/PID and `bcdDevice` are unchanged,
+  and no host matches on the product string.
 - **Every application defaults to a real radio.** `apps/dongle` and
   `apps/dongle_thread` default to `nrf`, `apps/dongle_ti` to `cc26xx`; the inert
   `null` backend used to enumerate, answer OK and find no sensors, which looks
@@ -212,6 +223,20 @@ reads.
 
 ### Security
 
+Both fixes apply only to builds with the opt-in `security.conf`; no release
+image includes it.
+
+- **A keyless injector could replay or desynchronise a secured channel.** The
+  receiver re-anchored its clock on every packet that passed the replay check,
+  before any MAC was checked, and that check accepts counters up to 128 periods
+  behind. Forged counters could drag the clock back, so recorded genuine
+  windows verified again, or push it forward into the epoch advance, which is
+  a permanent desync. Now only a `VERIFIED` window moves the clock (in full on
+  the first lock after a reset, then by at most `period / 16` per window), and
+  each window verifies at most once per epoch. Window 0 of every new epoch,
+  which was always refused as a replay, now verifies. See
+  [docs/radiant-security.md](docs/radiant-security.md) §3.1; the remaining
+  residuals are in §7.6.
 - **The drop policy delivered forgeries as verified (review D1-1).** Under
   `DROP_UNVER` a closing window was released on the verdict judged at that
   moment, which is its predecessor's, so a packet injected into any window
@@ -229,5 +254,8 @@ reads.
   proposed; the fix is not built).
 - The MQTT sink's connect and publish paths have never run against a real broker.
 - No image has a watchdog.
-- An MPSL assert halts the Thread, bridge and Matter images; they do not reboot.
+- On Windows, a host tool that dies mid-frame can still have the next tool's
+  first command swallowed. Reopening the device without a bus reset did not
+  reset the host-frame parser in bench testing (0 of 10); a bus reset or replug
+  does.
 - MPSL builds cannot run multi-packet bursts.
