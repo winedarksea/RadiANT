@@ -1071,6 +1071,12 @@ static void rx_process(struct sec_pkt *pkt)
 		c->rx_prev_valid = false;
 		c->rx_prev_seen = false;
 		c->rx_floor = 0u;
+		/* `expected` was computed against the old epoch's anchor (~65536)
+		 * and the counter now counts from 0 again: compared as they
+		 * stand, new-epoch packet 0 was refused as a replay, every
+		 * time, so window 0 of a new epoch could never verify.
+		 * advance_epoch() has moved the anchor; re-read it. */
+		expected = expected_index(c, pkt->t_sync);
 		/* The fourth reset site, and the one that had no hold reset
 		 * at all while there was one buffer. Two make it load-bearing:
 		 * the old epoch's last window would sit in the previous buffer
