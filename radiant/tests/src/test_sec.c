@@ -568,6 +568,62 @@ ZTEST(radiant_sec, test_the_drop_policy_holds_a_window_back)
 	}
 }
 
+/*
+ * D1-1, review 2026-11-06: under DROP_UNVER a window must be released on ITS
+ * OWN verdict, which exists only once the window after it has closed - never
+ * on the verdict of the window before it, which is the one that happens to be
+ * judged at the moment it closes. Released early, a packet injected into any
+ * window rode out as VERIFIED on the strength of a genuine predecessor, with
+ * no key needed: the forgery was detected one window later, by which time the
+ * packets it covered had already been delivered as trusted.
+ *
+ * Window 0 is genuine, window 1 carries one forged bit (byte 3 of hop 5, in
+ * the clear under X_AUTH alone, so the receiver's own MAC over window 1
+ * disagrees with the sender's tag sent in window 2), windows 2 and 3 are
+ * genuine. Window 0 verifies when window 1 closes (window 1's tag bytes are
+ * untouched and authenticate it), window 1 fails when window 2 closes, window
+ * 2 verifies when window 3 closes, and window 3 has no successor yet and stays
+ * held. So exactly windows 0 and 2 come out - indices 0..3 and 8..11 - and
+ * nothing from window 1, hop 5 above all.
+ */
+ZTEST(radiant_sec, test_the_drop_policy_never_releases_a_window_on_its_predecessors_verdict)
+{
+	static const uint8_t want[] = { 0u, 1u, 2u, 3u, 8u, 9u, 10u, 11u };
+	uint32_t i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_DROP_UNVER, 4u);
+	epoch_both(37u);
+
+	for (i = 0; i < 16u; i++) {
+		hop(i, false, (i == 5u) ? (3 * 8 + 1) : -1);
+	}
+
+	/* The detection half was never in doubt; asserted so a failure below
+	 * is read as a delivery bug and not as a MAC that missed the bit. */
+	zassert_equal(1u, verdicts_for(4u, RADIANT_SEC_VERDICT_UNVERIFIED),
+		      "setup: the forged window 1 was not judged unverified");
+
+	for (i = 0; i < log_n_pkt && i < LOG_MAX; i++) {
+		zassert_not_equal(5u, log_pkt[i].pay[2],
+				  "the forged packet (hop 5, window 1) was "
+				  "delivered, marked %d - released on window 0's "
+				  "verdict before its own window's MAC was checked",
+				  (int)log_pkt[i].verdict);
+		zassert_equal(RADIANT_SEC_VERDICT_VERIFIED, log_pkt[i].verdict,
+			      "an unverified packet escaped the drop policy");
+	}
+
+	zassert_equal(ARRAY_SIZE(want), log_n_pkt,
+		      "expected windows 0 and 2 (8 packets), got %u packets",
+		      log_n_pkt);
+	for (i = 0; i < ARRAY_SIZE(want); i++) {
+		zassert_equal(want[i], log_pkt[i].pay[2],
+			      "delivery %u was packet %u, expected %u", i,
+			      log_pkt[i].pay[2], want[i]);
+	}
+}
+
 /* ── X_CONF ─────────────────────────────────────────────────────────────── */
 
 /* Plaintext every confidentiality test sends. Byte [0] is the page and byte [1]
