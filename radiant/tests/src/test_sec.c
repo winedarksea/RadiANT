@@ -12,7 +12,10 @@
  * Coverage: happy path, flipped bit (forgery caught once), lost packet (one
  * window breaks, next recovers), injected ack (D15 - MAC not skippable by
  * message type), epoch gate (D3/D17 - no transform before epoch set), clear
- * page (descriptor/common pages untouched).
+ * page (descriptor/common pages untouched), and a keyless injector against
+ * the clock: forged counters must not move it, a verified window must not
+ * verify twice, a late replay must not grow its delay, while real drift
+ * is still followed.
  */
 
 #include <zephyr/ztest.h>
@@ -132,44 +135,52 @@ static void epoch_both(uint32_t epoch)
 	sec_anchor = (uint64_t)radiant_radio_now();
 }
 
+/* Build packet `index` as the sensor would and hand back exactly what went on
+ * the air, so a test can deliver it late, twice, or never. */
+static void tx_hop(uint32_t index, uint8_t air[8])
+{
+	memset(air, 0, 8u);
+	air[0] = TEST_PAGE;
+	air[1] = 0xAAu;                 /* the host's byte [1], which the
+					 * transform must overwrite */
+	air[2] = (uint8_t)index;
+	air[3] = 0x11u;
+	air[4] = 0x22u;
+	air[5] = 0x33u;
+	air[6] = 0x44u;
+	air[7] = 0x55u;                 /* likewise the tag byte */
+
+	zassert_equal(RADIANT_SEC_OK, radiant_sec_tx_transform(TX_CH, air, 8u));
+}
+
+/* Hand on-air bytes to the receiver as heard at `t_sync`, and run the pump. */
+static void ingest_at(const uint8_t air[8], uint64_t t_sync)
+{
+	zassert_equal(RADIANT_SEC_RX_DEFER,
+		      radiant_sec_rx_ingest(RX_CH, air, 8u, true, t_sync),
+		      "a secured-range broadcast must be taken by the "
+		      "transform, not delivered in ISR context");
+	radiant_sec_pump();
+}
+
 /* Build packet `index` as the sensor would, and hand it to the receiver unless
  * `drop`. `corrupt_bit` flips one payload bit, simulating an active injector. */
 static void hop(uint32_t index, bool drop, int corrupt_bit)
 {
-	uint8_t  pay[8];
-	uint64_t t_sync;
-	int      rc;
+	uint8_t pay[8];
 
-	memset(pay, 0, sizeof(pay));
-	pay[0] = TEST_PAGE;
-	pay[1] = 0xAAu;                 /* the host's byte [1], which the
-					 * transform must overwrite */
-	pay[2] = (uint8_t)index;
-	pay[3] = 0x11u;
-	pay[4] = 0x22u;
-	pay[5] = 0x33u;
-	pay[6] = 0x44u;
-	pay[7] = 0x55u;                 /* likewise the tag byte */
-
-	zassert_equal(RADIANT_SEC_OK,
-		      radiant_sec_tx_transform(TX_CH, pay, sizeof(pay)));
+	tx_hop(index, pay);
 
 	if (corrupt_bit >= 0) {
 		pay[corrupt_bit / 8] ^= (uint8_t)(1u << (corrupt_bit % 8));
 	}
 
-	/* Packet i is one period after i-1, measured from the epoch anchor. */
-	t_sync = sec_anchor + (uint64_t)index * period_us();
-
 	if (drop) {
 		return;
 	}
 
-	rc = radiant_sec_rx_ingest(RX_CH, pay, sizeof(pay), true, t_sync);
-	zassert_equal(RADIANT_SEC_RX_DEFER, rc,
-		      "a secured-range broadcast must be taken by the "
-		      "transform, not delivered in ISR context");
-	radiant_sec_pump();
+	/* Packet i is one period after i-1, measured from the epoch anchor. */
+	ingest_at(pay, sec_anchor + (uint64_t)index * period_us());
 }
 
 static uint32_t verdicts_for(uint16_t start, enum radiant_sec_verdict want)
@@ -1188,12 +1199,11 @@ ZTEST(radiant_sec, test_held_packets_do_not_survive_try_devnum)
  * only ever held, so nothing needs their MAC - and the sender is put straight
  * into the advanced epoch, as its own wrap would have.
  *
- * The packet that carries the advance (counter 0 of epoch 48) is itself then
- * refused as a replay: `expected` is computed against the pre-advance anchor
- * (65536) while the resolved counter is 0. That is a separate, pre-existing
- * behaviour of the wrap path and not what this asserts - which is why only
- * the drop count right after it and the no-leak property are pinned, not the
- * exact set released afterwards (window 0 is lost to that refusal today).
+ * The packet that carries the advance (counter 0 of epoch 48) must itself be
+ * accepted. It used to be refused as a replay: `expected` was computed
+ * against the pre-advance anchor (65536) while the resolved counter was 0, so
+ * window 0 of every new epoch lost its first packet and could never verify.
+ * `expected` is now rebased onto the advanced anchor, which this pins.
  */
 ZTEST(radiant_sec, test_held_packets_do_not_survive_an_epoch_advance_at_the_wrap)
 {
@@ -1233,15 +1243,342 @@ ZTEST(radiant_sec, test_held_packets_do_not_survive_an_epoch_advance_at_the_wrap
 		radiant_sec_get_stats(RX_CH, &st);
 		zassert_equal(1u, st.epoch_advances,
 			      "setup: the receiver did not advance its epoch");
+		zassert_equal(0u, st.dropped_replay,
+			      "the packet that carried the epoch advance was "
+			      "refused as a replay, so window 0 of the new "
+			      "epoch can never verify");
 	}
 
 	for (i = 65537u; i < 65536u + 12u; i++) {
 		hop(i, false, -1);
 	}
 	assert_no_marked_delivery();
-	zassert_true(log_n_pkt >= 4u,
-		     "nothing verified after the advance (%u delivered), so "
-		     "the no-leak check above proved nothing", log_n_pkt);
+	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED),
+		      "window 0 of the new epoch did not verify");
+	/* Windows 0 and 4 released; window 8 still waits for its verdict. */
+	zassert_equal(8u, log_n_pkt,
+		      "expected windows 0 and 4 of epoch 48 (8 packets), got %u",
+		      log_n_pkt);
+}
+
+/* ── The clock against a keyless injector ───────────────────────────────── */
+
+/*
+ * The receiver's clock (epoch_anchor) decides which counter a packet resolves
+ * to and whether it is a replay, so input nobody has verified must not move
+ * it. It used to re-anchor on every packet that passed the replay check -
+ * before any MAC was checked - and that check lets through anything up to 128
+ * periods behind. A forged packet claiming expected-127 pulled the clock back
+ * 127 periods; three of them and recorded genuine windows came round again as
+ * VERIFIED. Claiming expected+127 instead walked it forward into
+ * advance_epoch(), which is monotone: the real sender was never heard again.
+ *
+ * The attacker here is stronger than a real one: it reads the receiver's own
+ * expected_index before every forgery.
+ */
+
+#define REC_MAX 80u
+
+static uint8_t rec[REC_MAX][8];
+
+/* A packet built without the key: page and counter byte chosen, everything
+ * else - tag byte included - arbitrary. */
+static void forge(uint64_t t_sync, uint8_t low)
+{
+	const uint8_t air[8] = { TEST_PAGE, low,   0xF0u, 0x0Fu,
+				 0x5Au,     0xA5u, 0x3Cu, 0xC3u };
+
+	ingest_at(air, t_sync);
+}
+
+/* The receiver's expected counter at `t`. get_state reads radiant_radio_now(),
+ * so the fake clock is moved there first. */
+static uint16_t rx_expected_at(uint64_t t)
+{
+	struct radiant_sec_state s;
+
+	fake_radio_advance_to((radiant_time_t)t);
+	radiant_sec_get_state(RX_CH, &s);
+	return s.expected_index;
+}
+
+static struct radiant_sec_stats rx_stats(void)
+{
+	struct radiant_sec_stats st;
+
+	radiant_sec_get_stats(RX_CH, &st);
+	return st;
+}
+
+static uint32_t verified_count(void)
+{
+	uint32_t n = 0u;
+	uint32_t i;
+
+	for (i = 0; i < log_n_verdict && i < LOG_MAX; i++) {
+		if (log_verdict[i].verdict == RADIANT_SEC_VERDICT_VERIFIED) {
+			n++;
+		}
+	}
+	return n;
+}
+
+static void forged_drag_back(uint8_t switches)
+{
+	const uint32_t now_i = 300u;
+	uint64_t       t;
+	uint16_t       before;
+	uint16_t       e;
+	uint32_t       i;
+
+	key_both();
+	configure_both(switches, 4u);
+	epoch_both(53u);
+	t = sec_anchor + (uint64_t)now_i * period_us();
+
+	/* Windows 0..7 recorded off the air as they go by. */
+	for (i = 0u; i < now_i; i++) {
+		if (i < 32u) {
+			tx_hop(i, rec[i]);
+			ingest_at(rec[i], sec_anchor + (uint64_t)i * period_us());
+		} else {
+			hop(i, false, -1);
+		}
+	}
+	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED),
+		      "setup: window 0 never verified the first time");
+	before = rx_expected_at(t);
+	zassert_equal(now_i, before, "setup: the receiver's clock reads %u",
+		      before);
+
+	log_n_pkt = 0u;
+	log_n_verdict = 0u;
+
+	/* Drag it back: each forgery claims the oldest counter the replay check
+	 * lets through, until the clock reads 0. */
+	for (i = 0u; i < 40u; i++) {
+		e = rx_expected_at(t);
+		if (e == 0u) {
+			break;
+		}
+		forge(t, (uint8_t)((e > 127u) ? (e - 127u) : 0u));
+	}
+	e = rx_expected_at(t);
+	zassert_equal(before, e,
+		      "%u keyless forgeries moved the receiver's clock from %u "
+		      "to %u", i, before, e);
+
+	/* Then replay the recorded windows, as if they were current. */
+	for (i = 0u; i < 32u; i++) {
+		ingest_at(rec[i], t + (uint64_t)i * period_us());
+	}
+	zassert_equal(0u, verified_count(),
+		      "a recorded window was replayed and judged VERIFIED: "
+		      "replay protection is gone");
+	if ((switches & RADIANT_SEC_SW_DROP_UNVER) != 0u) {
+		zassert_equal(0u, log_n_pkt,
+			      "the drop policy released %u replayed or forged "
+			      "packets", log_n_pkt);
+	}
+}
+
+ZTEST(radiant_sec, test_a_forged_counter_cannot_drag_the_clock_back)
+{
+	forged_drag_back(RADIANT_SEC_SW_AUTH);
+}
+
+ZTEST(radiant_sec, test_a_forged_counter_cannot_drag_the_clock_back_under_the_drop_policy)
+{
+	forged_drag_back(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_DROP_UNVER);
+}
+
+ZTEST(radiant_sec, test_a_forged_walk_forward_cannot_advance_the_epoch)
+{
+	struct radiant_sec_stats st;
+	uint32_t                 verified;
+	uint64_t                 t;
+	uint32_t                 i;
+
+	/* The radio up for ~5.6 h rather than fake_radio's default ~71 min:
+	 * the walk sets the anchor to t - counter * period, so below 65536
+	 * periods of uptime it clamps at 0 short of the wrap. On master that
+	 * clamp hid the epoch advance this test exists for (the sender still
+	 * stopped verifying, for the clamp's reason instead). */
+	fake_radio_set_origin((radiant_time_t)20000000000ull);
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, 4u);
+	epoch_both(59u);
+	for (i = 0u; i < 300u; i++) {
+		hop(i, false, -1);
+	}
+	t = sec_anchor + 300ull * period_us();
+
+	/* (65536 - 300) / 127 = 514 steps to the wrap; 600 to be sure. */
+	for (i = 0u; i < 600u; i++) {
+		forge(t, (uint8_t)(rx_expected_at(t) + 127u));
+	}
+	st = rx_stats();
+	zassert_equal(0u, st.epoch_advances,
+		      "keyless forgeries walked the receiver into the next "
+		      "epoch; the epoch is monotone, so the real sender is "
+		      "never verified again");
+
+	/* The real sender, carrying on. The close of window 300 judges the last
+	 * forged window; the closes of 304 and 308 judge 300 and 304. */
+	verified = st.windows_verified;
+	for (i = 300u; i < 312u; i++) {
+		hop(i, false, -1);
+	}
+	st = rx_stats();
+	zassert_equal(verified + 2u, st.windows_verified,
+		      "the real sender no longer verifies after the forgeries");
+	zassert_equal(RADIANT_SEC_VERDICT_VERIFIED,
+		      radiant_sec_last_verdict(RX_CH));
+}
+
+/*
+ * The replay floor. Re-anchoring only on verified windows is not enough on its
+ * own: a window already verified could be replayed - genuine bytes, inside the
+ * 128-period slack - and verify again. Each window may be VERIFIED at most
+ * once per epoch.
+ */
+static void verified_once(uint8_t switches)
+{
+	uint32_t replay_before;
+	uint32_t n8 = 0u;
+	uint32_t i;
+
+	key_both();
+	configure_both(switches, 4u);
+	epoch_both(61u);
+	for (i = 0u; i < 20u; i++) {
+		tx_hop(i, rec[i]);
+		ingest_at(rec[i], sec_anchor + (uint64_t)i * period_us());
+	}
+	zassert_equal(1u, verdicts_for(8u, RADIANT_SEC_VERDICT_VERIFIED),
+		      "setup: window 8 did not verify");
+	replay_before = rx_stats().dropped_replay;
+
+	/* Window 8 and the window carrying its tag, again, 12 periods late. */
+	for (i = 8u; i < 16u; i++) {
+		ingest_at(rec[i], sec_anchor + (uint64_t)(i + 12u) * period_us());
+	}
+
+	zassert_equal(1u, verdicts_for(8u, RADIANT_SEC_VERDICT_VERIFIED),
+		      "a replay of window 8 was judged VERIFIED a second time");
+	zassert_equal(replay_before + 8u, rx_stats().dropped_replay,
+		      "the replayed packets were not refused as replays");
+	if ((switches & RADIANT_SEC_SW_DROP_UNVER) != 0u) {
+		for (i = 0u; i < log_n_pkt && i < LOG_MAX; i++) {
+			if (log_pkt[i].pay[2] == 8u) {
+				n8++;
+			}
+		}
+		zassert_equal(1u, n8, "packet 8 was released %u times", n8);
+	}
+}
+
+ZTEST(radiant_sec, test_a_verified_window_never_verifies_twice)
+{
+	verified_once(RADIANT_SEC_SW_AUTH);
+}
+
+ZTEST(radiant_sec, test_a_verified_window_never_verifies_twice_under_the_drop_policy)
+{
+	verified_once(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_DROP_UNVER);
+}
+
+/*
+ * The other side of the fix: the clock must still follow a real sender. A
+ * 0.5 % rate error (ten times a bad crystal) over 30000 packets is 150
+ * periods - past the 128-period slack, so a receiver that stopped tracking
+ * would lose the sender part-way through. Verified-window re-anchoring, with
+ * its slew limited to period/16 per window, has to keep up the whole way.
+ */
+static void drift_case(int32_t ppm)
+{
+	struct radiant_sec_stats st;
+	uint8_t                  air[8];
+	uint32_t                 i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, 4u);
+	epoch_both(67u);
+	for (i = 0u; i < 30000u; i++) {
+		int64_t at = (int64_t)i * (int64_t)period_us() *
+			     (1000000 + (int64_t)ppm) / 1000000;
+
+		tx_hop(i, air);
+		ingest_at(air, sec_anchor + (uint64_t)at);
+	}
+	st = rx_stats();
+	zassert_equal(0u, st.windows_unverified,
+		      "%d ppm: %u windows failed to verify", ppm,
+		      st.windows_unverified);
+	zassert_equal(30000u / 4u - 1u, st.windows_verified,
+		      "%d ppm: %u windows verified", ppm, st.windows_verified);
+}
+
+ZTEST(radiant_sec, test_the_clock_still_follows_a_slow_sender)
+{
+	drift_case(5000);
+}
+
+ZTEST(radiant_sec, test_the_clock_still_follows_a_fast_sender)
+{
+	drift_case(-5000);
+}
+
+/*
+ * Jam and replay late. The attacker records the real sender while jamming it
+ * and replays what it recorded later. Delivered 100 periods late it verifies
+ * (the bytes are genuine, and 100 is inside the slack), and that is the
+ * documented cost of tracking drift at all. What must not happen is for the
+ * clock to FOLLOW the replay: per-packet re-anchoring caught up with the
+ * delay at once, so the next batch could be 100 periods later again, and so
+ * on without limit. With the slew limited to period/16 per verified window,
+ * a replay 200 periods late is past the slack, resolves to the wrong counter
+ * (256 on), and fails its MAC.
+ */
+ZTEST(radiant_sec, test_a_delayed_replay_cannot_grow_its_delay)
+{
+	uint32_t verified;
+	uint32_t i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, 4u);
+	epoch_both(71u);
+	for (i = 0u; i < 40u; i++) {
+		hop(i, false, -1);
+	}
+	/* 40..119 jammed: recorded, never heard on time. */
+	for (i = 40u; i < 120u; i++) {
+		tx_hop(i, rec[i - 40u]);
+	}
+
+	verified = rx_stats().windows_verified;
+	for (i = 40u; i < 80u; i++) {
+		ingest_at(rec[i - 40u],
+			  sec_anchor + (uint64_t)(i + 100u) * period_us());
+	}
+	zassert_equal(verified + 10u, rx_stats().windows_verified,
+		      "setup: windows 36..72 did not verify 100 periods late");
+
+	log_n_verdict = 0u;
+	for (i = 80u; i < 120u; i++) {
+		ingest_at(rec[i - 40u],
+			  sec_anchor + (uint64_t)(i + 200u) * period_us());
+	}
+	/* Window 76 is the one exception, and not a hole: it was replayed in
+	 * the first batch, and its tag bytes ride in packets 80..83. */
+	for (i = 0u; i < log_n_verdict && i < LOG_MAX; i++) {
+		zassert_false(log_verdict[i].verdict ==
+					      RADIANT_SEC_VERDICT_VERIFIED &&
+				      log_verdict[i].window_start != 76u,
+			      "window %u verified 200 periods late: the clock "
+			      "followed the replay",
+			      log_verdict[i].window_start);
+	}
 }
 
 /* ── Lifecycle ──────────────────────────────────────────────────────────── */
