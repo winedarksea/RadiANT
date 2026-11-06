@@ -86,31 +86,42 @@ static const struct radiant_matter_type_map type_map[] = {
 	{
 		/*
 		 * Barometric pressure, from common page 84 subpage 2 (package
-		 * C). THREE ATTRIBUTES, and the reason is a resolution trap
-		 * rather than thoroughness:
+		 * C). THREE ATTRIBUTES, and the reason is resolution rather
+		 * than thoroughness:
 		 *
 		 * Pressure Measurement's mandatory `MeasuredValue` is an int16s
-		 * in WHOLE kPa (pressure-measurement-cluster.xml:39). Sea-level
-		 * pressure runs about 98-105 kPa, so a barometer reported that
-		 * way has roughly seven distinguishable states and every
-		 * weather trend a user might care about - a 0.3 kPa front
-		 * passing through - is quantised out of existence.
+		 * in 0.1 kPa - Matter 1.5.1 section 2.4.5.1, MeasuredValue =
+		 * 10 x P[kPa] - so it steps in 100 Pa. Sea-level pressure runs
+		 * about 98-105 kPa, so that is roughly seventy states across
+		 * the whole weather range: enough to see a 0.3 kPa front pass,
+		 * but a tenth of what the sensor sends (page 84 carries 0.01
+		 * kPa), and a slow trend reads as a staircase.
 		 *
-		 * `ScaledValue` with `Scale` is the cluster's own answer, at
-		 * 10^Scale x kPa. Scale 2 gives 10 Pa per step and tops out at
-		 * 327.67 kPa, which covers every terrestrial pressure with room
-		 * to spare. But it is OPTIONAL and `MeasuredValue` is not, so
-		 * serving only the useful one is a non-conformant endpoint and
-		 * serving only the mandatory one is a useless entity. Both, and
-		 * the constant that makes the second readable.
+		 * `ScaledValue` with `Scale` is the cluster's own answer, and
+		 * its base unit is DIFFERENT: section 2.4.5.5 defines
+		 * ScaledValue = 10^Scale x P[Pa], in pascals, not kPa. Scale -1
+		 * gives 10 Pa per step - the sensor's own resolution - and tops
+		 * out at 327.67 kPa, which covers every terrestrial pressure
+		 * with room to spare. But it is OPTIONAL (the EXT feature) and
+		 * `MeasuredValue` is not, so serving only the finer one is a
+		 * non-conformant endpoint. Both, and the constant that makes
+		 * the second readable.
 		 *
-		 * Pa -> kPa is /1000; Pa -> 0.01 kPa is /10.
+		 * Pa -> 0.1 kPa is /100; Pa -> 10^-1 Pa counts is /10.
+		 *
+		 * This row used to write Pa/1000 (whole kPa, 10x too small
+		 * against 2.4.5.1) and Scale 2 beside Pa/10 (read against
+		 * 2.4.5.5 that is 101.33 Pa for a standard atmosphere, 1000x
+		 * too small). Both came from reading MeasuredValue's unit as
+		 * whole kPa and then assuming ScaledValue shared it; the cluster
+		 * XML states no unit at all, so the spec text is the only
+		 * citation that settles either.
 		 */
 		.field_type = RADIANT_FIELD_PRESSURE,
 		.device_type = MATTER_DEVTYPE_PRESSURE_SENSOR,
 		.cluster = MATTER_CLUSTER_PRESSURE_MEASUREMENT,
 		.attribute = MATTER_ATTR_MEASURED_VALUE,
-		.mul = 1, .div = 1000, .offset = 0,
+		.mul = 1, .div = 100, .offset = 0,
 		/*
 		 * NO DEADBAND, AND THAT IS DELIBERATE RATHER THAN AN OMISSION.
 		 * The Matter plan's deadband list names occupancy, temperature,
@@ -118,13 +129,14 @@ static const struct radiant_matter_type_map type_map[] = {
 		 * states the sentinel explicitly so that the next reader does
 		 * not have to decide whether the absence was a decision.
 		 *
-		 * The reason it would be wrong here: MeasuredValue is already
-		 * quantised to whole kPa by the cluster, so ANY deadband above
-		 * zero suppresses every barometric change a user cares about,
-		 * and ScaledValue's 10 Pa step is close enough to a barometer's
-		 * own resolution that thresholding it is thresholding noise
-		 * against noise. Pressure also arrives on common page 84, which
-		 * a weather sensor sends slowly to begin with.
+		 * The reason it would be wrong here: MeasuredValue's 100 Pa
+		 * step is already as coarse as a weather trend can stand, so
+		 * any deadband of even one count on it delays a front by a
+		 * whole step, and ScaledValue's 10 Pa step IS the sensor's own
+		 * resolution, so thresholding it is thresholding noise against
+		 * noise. Pressure also arrives on common page 84, which a
+		 * weather sensor sends slowly to begin with, so there is little
+		 * traffic for a deadband to save.
 		 */
 		.deadband = RADIANT_MATTER_DEADBAND_EVERY,
 		.heartbeat_s = 0u,
@@ -742,7 +754,7 @@ static void matter_publish(const struct radiant_sample *s)
 
 	/*
 	 * The row's non-constant extras, from the same sample. Only pressure
-	 * has one today (ScaledValue beside the mandatory whole-kPa
+	 * has one today (ScaledValue beside the mandatory 0.1 kPa
 	 * MeasuredValue). A refused extra is skipped and does NOT suppress the
 	 * primary: the primary's narrower range is the one that fits, so an
 	 * extra that overflows is the more-precise attribute declining, not

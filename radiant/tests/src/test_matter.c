@@ -437,11 +437,19 @@ ZTEST(radiant_matter, test_pressure_serves_both_the_mandatory_and_the_useful_att
 	/*
 	 * Standard atmosphere, 101325 Pa.
 	 *
-	 * MeasuredValue is an int16s in WHOLE kPa, so it can only say 101 -
-	 * that is the cluster's definition, not a rounding bug, and it is why
-	 * this row does not stop there. ScaledValue at Scale 2 says 10132.5 ->
-	 * 10133, which is 10 Pa of resolution. Both are written, from one
-	 * sample, onto one endpoint.
+	 * MeasuredValue is an int16s in 0.1 kPa (Matter 1.5.1 section
+	 * 2.4.5.1, 10 x P[kPa]), so it says 1013.25 -> 1013 - a 100 Pa step,
+	 * which is the cluster's definition rather than a rounding bug, and
+	 * is why this row does not stop there. ScaledValue is in PASCALS x
+	 * 10^Scale (section 2.4.5.5), so at Scale -1 it says 10132.5 -> 10133,
+	 * which is 10 Pa of resolution. Both are written, from one sample,
+	 * onto one endpoint.
+	 *
+	 * The numbers are the regression: the row used to write 101 (whole
+	 * kPa, 10x low) and 10133 beside Scale 2, which a controller reading
+	 * the spec decodes as 101.33 Pa. 10133 is unchanged; only its Scale
+	 * was wrong, so the Scale assertion below is the half that catches
+	 * that bug.
 	 */
 	s = mk(9u, 0u, RADIANT_FIELD_PRESSURE, 101325, 0);
 	radiant_bridge_post(&s);
@@ -453,7 +461,8 @@ ZTEST(radiant_matter, test_pressure_serves_both_the_mandatory_and_the_useful_att
 	zassert_equal(find_write(MATTER_CLUSTER_PRESSURE_MEASUREMENT,
 				 MATTER_ATTR_MEASURED_VALUE, &v, &ep_measured),
 		      1, "MeasuredValue is mandatory and must be written");
-	zassert_equal(v, 101, "101325 Pa is 101 whole kPa, got %lld",
+	zassert_equal(v, 1013,
+		      "101325 Pa is 1013.25 -> 1013 in 0.1 kPa, got %lld",
 		      (long long)v);
 
 	zassert_equal(find_write(MATTER_CLUSTER_PRESSURE_MEASUREMENT,
@@ -461,16 +470,22 @@ ZTEST(radiant_matter, test_pressure_serves_both_the_mandatory_and_the_useful_att
 		      1, "ScaledValue carries the resolution MeasuredValue "
 			 "cannot");
 	zassert_equal(v, 10133,
-		      "101325 Pa at Scale 2 is 10132.5 -> 10133 (round half "
+		      "101325 Pa at Scale -1 is 10132.5 -> 10133 (round half "
 		      "away from zero), got %lld", (long long)v);
 
 	/* Scale is a constant and must be written, exactly once, or
-	 * ScaledValue is unreadable - it reads back as 0, i.e. whole kPa,
-	 * i.e. a barometer reporting 10133 kPa. */
+	 * ScaledValue is unreadable - it reads back as 0, i.e. whole Pa,
+	 * i.e. a barometer reporting 10133 Pa. And it must be -1 LITERALLY,
+	 * not merely equal to the header's constant: comparing against
+	 * MATTER_PRESSURE_SCALE alone is how Scale 2 sat beside Pa/10 with a
+	 * green test. */
 	zassert_equal(find_write(MATTER_CLUSTER_PRESSURE_MEASUREMENT,
 				 MATTER_ATTR_SCALE, &v, NULL),
 		      1, "Scale is written exactly once");
 	zassert_equal(v, MATTER_PRESSURE_SCALE, NULL);
+	zassert_equal(v, -1,
+		      "ScaledValue = 10^Scale x P[Pa], and Pa/10 is Scale -1, "
+		      "got %lld", (long long)v);
 
 	zassert_equal(ep_measured, ep_scaled,
 		      "all three are attributes of ONE endpoint");
@@ -769,9 +784,10 @@ ZTEST(radiant_matter, test_pressure_has_no_deadband_and_says_so)
 	 * Finding 7's list names occupancy, temperature, humidity and battery.
 	 * Pressure is absent from it, and the row states the sentinel
 	 * explicitly so that the absence reads as a decision rather than as an
-	 * omission - MeasuredValue is already quantised to whole kPa by the
-	 * cluster, so any threshold above zero would suppress every barometric
-	 * change a user could act on.
+	 * omission - MeasuredValue is already quantised to 100 Pa by the
+	 * cluster, so a threshold of even one count would hold back a
+	 * barometric change a user could act on, and ScaledValue's 10 Pa step
+	 * is the sensor's own resolution.
 	 *
 	 * test_the_pressure_constant_is_written_once_not_per_sample above is
 	 * the behavioural half of this: five samples, five ScaledValue writes.

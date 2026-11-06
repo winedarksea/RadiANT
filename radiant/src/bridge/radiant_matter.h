@@ -48,12 +48,13 @@ extern "C" {
  * are bugs that only appear once a real CHIP stack is behind the seam:
  *
  *  - PRESSURE. Pressure Measurement's mandatory `MeasuredValue` is an int16s
- *    in whole kPa (pressure-measurement-cluster.xml:39), so 101325 Pa becomes
- *    101 and every barometer in the world reports six distinguishable values.
- *    `ScaledValue`/`Scale` is the cluster's own answer, but it is optional and
- *    `MeasuredValue` is not - a bridged endpoint that serves only the useful
- *    one is non-conformant, and one that serves only the mandatory one is
- *    useless. So the row writes all three.
+ *    in 0.1 kPa (Matter 1.5.1 section 2.4.5.1: MeasuredValue = 10 x P[kPa]),
+ *    so 101325 Pa becomes 1013 and a barometer has a 100 Pa step - usable,
+ *    but coarse against a 10 Pa sensor. `ScaledValue`/`Scale` is the
+ *    cluster's own answer, but it is optional and `MeasuredValue` is not - a
+ *    bridged endpoint that serves only the finer one is non-conformant, and
+ *    one that serves only the mandatory one throws away a decimal place the
+ *    sensor paid for. So the row writes all three.
  *
  *  - OCCUPANCY SENSOR TYPE (trap 16). `OccupancySensorType` left at its
  *    zero-initialised value means PIR, and home-assistant/core#164839 proposes
@@ -160,11 +161,16 @@ struct radiant_matter_type_map {
 #define MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT     3    /* enum: 0 PIR, 1 ultrasonic, 2 both, 3 contact */
 #define MATTER_OCCUPANCY_BITMAP_PHYSICAL_CONTACT   0x04 /* bit 0 PIR, bit 1 ultrasonic, bit 2 contact */
 
-/* Pressure Measurement's optional high-resolution pair.
- * ScaledValue = 10^Scale x pressure in kPa. */
+/* Pressure Measurement's optional high-resolution pair (the EXT feature).
+ * ScaledValue = 10^Scale x pressure in PASCALS (Matter 1.5.1 section
+ * 2.4.5.5), NOT in kPa like MeasuredValue - the two attributes of one cluster
+ * have different base units, and reading ScaledValue as kPa is the bug this
+ * constant used to carry (Scale 2 against Pa/10 told a conformant controller
+ * 101.33 Pa for a standard atmosphere). Scale -1 makes ScaledValue
+ * P[Pa] x 10^-1 = P[Pa] / 10, which tops out at 327.67 kPa in an int16s. */
 #define MATTER_ATTR_SCALED_VALUE            0x0010u
 #define MATTER_ATTR_SCALE                   0x0014u
-#define MATTER_PRESSURE_SCALE               2 /* 0.01 kPa = 10 Pa per step */
+#define MATTER_PRESSURE_SCALE               (-1) /* 10 Pa per step */
 
 /* The row for a vocabulary type, or NULL if the Matter plane declines it
  * (a normal answer - see header comment). */

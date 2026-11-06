@@ -118,6 +118,12 @@ reads.
 
 ### Fixed
 
+- **Matter pressure was 10× and 1000× too small.** `MeasuredValue` is now
+  0.1 kPa per step (Matter 1.5.1 §2.4.5.1), so it reads 10× larger than before
+  (101325 Pa: `101` → `1013`), and `Scale` changes from `2` to `-1` because
+  `ScaledValue` is in pascals (§2.4.5.5), not kPa; `ScaledValue` itself is
+  unchanged. `Min`/`MaxScaledValue`, mandatory under the EXT feature, are now
+  served. A controller that cached the old values sees a step change.
 - **A searching channel cost a tracking one every other packet.** `arm_next()`
   truncated a scan chunk to end one arm lead before the next tracked window, but
   a receive stays open for the frame body after `t_close`, so the tracked window

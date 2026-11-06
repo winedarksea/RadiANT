@@ -1239,7 +1239,7 @@ things that forced that are set out.
 | `0x02` occupancy | Occupancy Sensor `0x0107` | Occupancy Sensing `0x0406` / `Occupancy` | boolean |
 | `0x10` temperature | Temperature Sensor `0x0302` | Temperature Measurement `0x0402` / `MeasuredValue` | int16, 0.01 °C: `K x 100 - 27315` |
 | `0x11` relative humidity | Humidity Sensor `0x0307` | Relative Humidity Measurement `0x0405` / `MeasuredValue` | u16, 0.01 %: `% x 100` |
-| `0x12` barometric pressure | Pressure Sensor `0x0305` | Pressure Measurement `0x0403` / `MeasuredValue`, **plus `ScaledValue` and `Scale`** | int16, whole kPa: `Pa / 1000`; scaled: `Pa / 10` at `Scale = 2` (§8.1a) |
+| `0x12` barometric pressure | Pressure Sensor `0x0305` | Pressure Measurement `0x0403` / `MeasuredValue`, **plus `ScaledValue` and `Scale`** | int16, 0.1 kPa: `Pa / 100`; scaled (in Pa x 10^Scale, Matter 1.5.1 §2.4.5.5): `Pa / 10` at `Scale = -1`, plus constant `Min`/`MaxScaledValue` (§8.1a) |
 | `0x25` battery state of charge | — cluster only, on the source's **existing primary** endpoint | Power Source `0x002F` / `BatPercentRemaining` | 0.5 %: `% x 2` |
 | `0x16` speed, `0x18` angle | **none, and it is section 1's rule for the second time** | — | MQTT plane only (§8.1a). Wind is what forced the decision; `0x16` also carries FE-C's trainer speed, and it has no cluster either |
 | `0x26` heart rate | **none, and section 1 is the whole reason** | — | — |
@@ -1326,8 +1326,12 @@ booleans and by a much shorter argument.
 
 Two quantities page 84 also carries do **not** get that treatment, and the two
 refusals are different in kind: **wind** has no Matter cluster at all and takes
-the MQTT plane, while **pressure** has one whose mandatory attribute is too
-coarse to be useful. Both are below.
+the MQTT plane, while **pressure** has one whose mandatory attribute is coarser
+than the sensor (`MeasuredValue` is 0.1 kPa, Matter 1.5.1 §2.4.5.1, against
+page 84's 0.01 kPa), so the row also serves the EXT feature's `ScaledValue`,
+whose unit is **pascals** x 10^`Scale` (§2.4.5.5) and not kPa — the row once
+wrote whole kPa and `Scale = 2`, which a conformant controller reads as 1/10
+and 1/1000 of the true pressure. Both are below.
 
 **The one trap is that temperature is the only row with an offset.** The
 vocabulary's canonical unit is kelvin and Matter wants 0.01 °C, so the

@@ -21,12 +21,15 @@
  * (see occupancy_sensor.h), and folding it in would bury that argument.
  *
  * PRESSURE IS THE ONE WITH THREE ATTRIBUTES. Pressure Measurement's mandatory
- * MeasuredValue is an int16s in WHOLE kPa, so a barometer reported through it
- * alone has about seven distinguishable states. ScaledValue + Scale is the
- * cluster's own answer and needs the EXT feature bit; radiant_matter.c's
- * pressure row already writes all three (Scale through the `mul == 0` constant
- * mechanism), so this file's job is only to have somewhere to put them and to
- * declare the feature bit that makes them legal.
+ * MeasuredValue is an int16s in 0.1 kPa (Matter 1.5.1 section 2.4.5.1), a
+ * 100 Pa step against a sensor that resolves 10 Pa. ScaledValue + Scale is the
+ * cluster's own answer, in PASCALS x 10^Scale (section 2.4.5.5 - a different
+ * base unit from MeasuredValue's, which is the trap), and needs the EXT
+ * feature bit; radiant_matter.c's pressure row already writes all three (Scale
+ * through the `mul == 0` constant mechanism), so this file's job is to have
+ * somewhere to put them, to declare the feature bit that makes them legal,
+ * and to serve Min/MaxScaledValue, which EXT makes mandatory and which are
+ * constants here for the same reason Min/MaxMeasuredValue are.
  *
  * See radiant_bridged_device.h for the HandleAttributeChange argument contract
  * (every measurement arrives as an int64_t and is refused, not saturated, if
@@ -85,7 +88,11 @@ private:
 
 	/* Pressure only; left at zero and unread for the other two. Scale is
 	 * an int8s and is written once, at endpoint creation, by
-	 * radiant_matter.c's `mul == 0` constant mechanism. */
+	 * radiant_matter.c's `mul == 0` constant mechanism. Min/MaxScaledValue
+	 * are set by the constructor, in ScaledValue's units (10 Pa per count
+	 * at Scale -1), and nothing writes them afterwards. */
 	int16_t mScaledValue = 0;
+	int16_t mMinScaledValue = 0;
+	int16_t mMaxScaledValue = 0;
 	int8_t mScale = 0;
 };

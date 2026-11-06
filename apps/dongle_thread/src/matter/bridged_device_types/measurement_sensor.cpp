@@ -79,6 +79,8 @@ DECLARE_DYNAMIC_ATTRIBUTE(Clusters::PressureMeasurement::Attributes::MeasuredVal
 	DECLARE_DYNAMIC_ATTRIBUTE(Clusters::PressureMeasurement::Attributes::MinMeasuredValue::Id, INT16S, 2, 0),
 	DECLARE_DYNAMIC_ATTRIBUTE(Clusters::PressureMeasurement::Attributes::MaxMeasuredValue::Id, INT16S, 2, 0),
 	DECLARE_DYNAMIC_ATTRIBUTE(Clusters::PressureMeasurement::Attributes::ScaledValue::Id, INT16S, 2, 0),
+	DECLARE_DYNAMIC_ATTRIBUTE(Clusters::PressureMeasurement::Attributes::MinScaledValue::Id, INT16S, 2, 0),
+	DECLARE_DYNAMIC_ATTRIBUTE(Clusters::PressureMeasurement::Attributes::MaxScaledValue::Id, INT16S, 2, 0),
 	DECLARE_DYNAMIC_ATTRIBUTE(Clusters::PressureMeasurement::Attributes::Scale::Id, INT8S, 1, 0),
 	DECLARE_DYNAMIC_ATTRIBUTE(Clusters::PressureMeasurement::Attributes::FeatureMap::Id, BITMAP32, 4, 0),
 	DECLARE_DYNAMIC_ATTRIBUTE_LIST_END();
@@ -133,12 +135,23 @@ MeasurementSensorDevice::MeasurementSensorDevice(uint16_t deviceType, const char
 		mDeviceTypeList = kBridgedPressureDeviceTypes;
 		mDeviceTypeListSize = ARRAY_SIZE(kBridgedPressureDeviceTypes);
 		mDataVersionSize = MATTER_ARRAY_SIZE(bridgedPressureClusters);
-		/* Whole kPa, which is MeasuredValue's unit. 30 kPa is above the
-		 * summit of Everest and 120 kPa below any recorded sea-level
-		 * pressure; wider would be dishonest and narrower would clip a
-		 * legitimate reading. */
-		mMinMeasuredValue = 30;
-		mMaxMeasuredValue = 120;
+		/* 30.0 to 120.0 kPa in MeasuredValue's 0.1 kPa units (Matter
+		 * 1.5.1 section 2.4.5.1, MeasuredValue = 10 x P[kPa]). 30 kPa is
+		 * above the summit of Everest and 120 kPa below any recorded
+		 * sea-level pressure; wider would be dishonest and narrower
+		 * would clip a legitimate reading. */
+		mMinMeasuredValue = 300;
+		mMaxMeasuredValue = 1200;
+		/* The same envelope in ScaledValue's units, which are NOT
+		 * MeasuredValue's: section 2.4.5.5 puts ScaledValue in Pa x
+		 * 10^Scale, and at radiant_matter.h's MATTER_PRESSURE_SCALE of
+		 * -1 that is 10 Pa per count, so 30 kPa is 3000. Mandatory
+		 * under the EXT feature this endpoint advertises - serving
+		 * ScaledValue without its bounds was a conformance gap, not a
+		 * choice. Constants for the reason the header gives for
+		 * Min/MaxMeasuredValue. */
+		mMinScaledValue = 3000;
+		mMaxScaledValue = 12000;
 		break;
 	default:
 		/* mEp stays null. See the header: CreateEndpoint() rejects it. */
@@ -206,6 +219,10 @@ CHIP_ERROR MeasurementSensorDevice::HandleReadPressure(AttributeId attributeId, 
 		return CopyAttribute(&mMaxMeasuredValue, sizeof(mMaxMeasuredValue), buffer, maxReadLength);
 	case Clusters::PressureMeasurement::Attributes::ScaledValue::Id:
 		return CopyAttribute(&mScaledValue, sizeof(mScaledValue), buffer, maxReadLength);
+	case Clusters::PressureMeasurement::Attributes::MinScaledValue::Id:
+		return CopyAttribute(&mMinScaledValue, sizeof(mMinScaledValue), buffer, maxReadLength);
+	case Clusters::PressureMeasurement::Attributes::MaxScaledValue::Id:
+		return CopyAttribute(&mMaxScaledValue, sizeof(mMaxScaledValue), buffer, maxReadLength);
 	case Clusters::PressureMeasurement::Attributes::Scale::Id:
 		return CopyAttribute(&mScale, sizeof(mScale), buffer, maxReadLength);
 	case Clusters::PressureMeasurement::Attributes::ClusterRevision::Id: {
