@@ -239,11 +239,20 @@ needed to say no.
 | Event | Result |
 |---|---|
 | FTMS `Request Control` (`0x00`) | Claims. **Preempts an ANT owner** — explicit beats implicit. |
-| FTMS `Reset` (`0x01`), or a disconnect | Releases. |
+| FTMS `Reset` (`0x01`), or a disconnect | Releases. A disconnect changes nothing else: belt speed **and Training Status** stay as they were (see below). |
 | FE-C page 50/51, owner `NONE` or `ANT` | Claims or refreshes implicitly, and applies. |
 | FE-C page 50/51, owner `BLE` | **Refused: page 71 status `PROFILE_FEC_CMD_STATUS_REJECTED` (3).** |
 | FTMS command with no `Request Control` | `CONTROL_NOT_PERMITTED` (`0x05`), which this file already did. |
 | ANT owner idle > `TREADMILL_CTRL_ANT_TIMEOUT_MS` | Released. |
+
+**A disconnect leaves Training Status alone, by design** (review 2026-11-06,
+O5 R-2, decided against the change). A dropped link must not stop the belt
+under a runner, and while the belt runs, Manual Mode (Quick Start, `0x0D`) is the truth about
+the machine. Resetting the status to Idle on disconnect was built and
+withdrawn: it would report an idle machine with a moving belt. The cost
+accepted instead is that the next client finds a session no client owns, and
+its `Start` answers Operation Failed (Table 4.24) until it sends `Stop` or
+`Reset` — which is an accurate answer, since the machine *is* started.
 
 Neither refusal code is new: `PROFILE_FEC_CMD_STATUS_REJECTED` is
 `profile_fec_tx.h:103` and `0x05` is FTMS Table 4.24. Both already mean exactly
