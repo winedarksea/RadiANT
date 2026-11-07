@@ -44,6 +44,20 @@
  * it cannot put on the air rather than programming something close;
  * radiant_sched.c may split the window but must not believe eight arbitrary
  * addresses were armed.
+ *
+ * And one demodulator behaviour the backend absorbs so the core never sees it
+ * (docs/decisions/0019-tracking-matches-a-short-address.md, measured on
+ * nRF52840, nRF5340 and nRF54L15):
+ *
+ *   In Nrf_1Mbit the RADIO drops exactly one bit when an alternating run of
+ *   about 9+ bits sits inside the address it is matching, or a few bits past
+ *   its end. Inside, the frame never matches (a silently missed slot); past
+ *   it, the frame arrives with one bit deleted. ~5 % of ANT+ device numbers
+ *   put such a run in [A6 C5 dnl dnh dtype]. CONFIG_RADIANT_NRF_SLIP_GUARD
+ *   gives exactly those windows a 2-byte hardware match, [A6 C5], so a slip
+ *   can only land in bytes the ISR receives, and radiant_addr_split_repair()
+ *   restores the bit when the CRC confirms it. Every other window keeps the
+ *   5-byte match, because a 2-byte one also matches noise.
  */
 
 #include <stdlib.h>
@@ -78,6 +92,7 @@
 #include <radiant/radiant_swi.h>
 
 #include "radiant_radio_nrf_gate.h"
+#include "radiant_addr_split.h"
 
 /* Whether a completion raised inside an MPSL timeslot signal callback has to be
  * queued for the trampoline instead of run there. See the long note above
@@ -801,6 +816,18 @@ static struct {
 	uint8_t      n_filters;
 	uint8_t      addr_len;
 	/*
+	 * Address bytes this window's hardware match leaves to software (ADR
+	 * 0019); zero unless a TRACKING window runs under a short
+	 * CONFIG_RADIANT_NRF_TRACK_HW_ADDR_LEN. With it non-zero the interrupt
+	 * needs the caller's filters to finish the match - the HAL keeps them
+	 * alive until the window's terminal event.
+	 */
+	uint8_t      sw_addr_len;
+	const struct radiant_rx_filter *filters;
+	/* The format's CRC seed, for radiant_addr_split_repair()'s software
+	 * check of a frame with a slipped bit (CONFIG_RADIANT_NRF_SLIP_GUARD). */
+	uint16_t     crc_init;
+	/*
 	 * On a static-length format: the length of every frame in this window.
 	 * On a length-from-body format: the format's CEILING, against which the
 	 * length byte the frame actually carried is clamped. The flag below says
@@ -905,6 +932,16 @@ static struct {
 	 * later, from thread context, so the signal callback stays short - see
 	 * radiant_nrf_gate_on_grant(). */
 	bool               gate_failed;
+
+#if defined(CONFIG_RADIANT_NRF_RX_DIAG)
+	/* Per-window evidence for CONFIG_RADIANT_NRF_RX_DIAG; see rx_diag below. */
+	bool               diag_track;
+	bool               diag_ok;
+	bool               diag_crc;
+	bool               diag_end_noaddr;
+	bool               diag_cut;
+	radiant_time_t     diag_t_open;
+#endif
 } radiant_op;
 
 /*
@@ -957,13 +994,188 @@ static uint8_t radiant_rx_buf[RADIANT_RADIO_BODY_MAX + 4] __aligned(4);
  */
 static uint8_t radiant_tx_buf[RADIANT_RADIO_BODY_MAX + 4] __aligned(4);
 
+/* A frame radiant_addr_split_repair() reconstructed (ADR 0019): its body is
+ * the received bits shifted by one, so it cannot be handed over in place in
+ * the DMA buffer. Same one-callback lifetime as that buffer. */
+static uint8_t radiant_repair_buf[RADIANT_RADIO_BODY_MAX];
+/* Frames that reached the core only because the slip repair recovered them. */
+static volatile uint32_t radiant_dbg_slip_repaired;
+
+#if defined(CONFIG_RADIANT_NRF_RX_DIAG)
+/*
+ * CONFIG_RADIANT_NRF_RX_DIAG: what a tracked receive window actually saw. See
+ * that symbol's help for the five outcomes. Written only by the radio
+ * interrupt (and the terminal path it shares with aborts), read by a 10 s
+ * work item; torn reads of a counter are acceptable for a bench readout.
+ */
+#define RX_DIAG_RING      8u
+#define RX_DIAG_BODY_MAX 16u
+
+static struct {
+	uint32_t win;            /* tracked windows that ended */
+	uint32_t win_ok;
+	uint32_t win_crc;
+	uint32_t win_cut;
+	uint32_t win_end_noaddr;
+	uint32_t win_silent;
+	uint32_t win_abort;      /* ended by an abort or a denied grant */
+	uint32_t fr_crc;         /* CRC-failed frames on tracked windows */
+	uint32_t fr_end_noaddr;  /* ENDs with no ADDRESS on tracked windows */
+	uint32_t fr_foreign;     /* short-address matches the software compare
+				  * rejected (ADR 0019): another sensor's frame,
+				  * noise, or a slip the repair could not fix */
+	uint32_t fr_repaired;    /* slipped frames recovered and delivered */
+	uint8_t  hw_last;        /* hardware-matched bytes, last tracked window */
+	int32_t  off_min;        /* OK frame t_sync - window t_open, us */
+	int32_t  off_max;
+	struct {
+		uint32_t t_ms;
+		uint32_t rxcrc;
+		uint8_t  rxmatch;
+		int8_t   rssi;
+		uint8_t  len;
+		uint8_t  body[RX_DIAG_BODY_MAX];
+	} ring[RX_DIAG_RING];
+	uint32_t ring_w;         /* total entries ever written */
+	uint32_t ring_r;         /* total entries ever printed */
+} rx_diag = { .off_min = INT32_MAX, .off_max = INT32_MIN };
+
+static struct k_work_delayable rx_diag_work;
+
+/* One outcome per tracked window, best first. Called exactly once per window:
+ * from the STOP_ON_FIRST terminal or from deliver_terminal(). */
+static void rx_diag_window_end(bool aborted)
+{
+	if (!radiant_op.diag_track) {
+		return;
+	}
+	radiant_op.diag_track = false;
+	rx_diag.win++;
+	if (radiant_op.diag_ok) {
+		rx_diag.win_ok++;
+	} else if (radiant_op.diag_crc) {
+		rx_diag.win_crc++;
+	} else if (radiant_op.diag_cut) {
+		rx_diag.win_cut++;
+	} else if (aborted) {
+		rx_diag.win_abort++;
+	} else if (radiant_op.diag_end_noaddr) {
+		rx_diag.win_end_noaddr++;
+	} else {
+		rx_diag.win_silent++;
+	}
+}
+
+static void rx_diag_crc_fail(uint8_t logical, uint32_t rxcrc, int8_t rssi)
+{
+	uint32_t slot = rx_diag.ring_w % RX_DIAG_RING;
+	/* Raw, software-matched address bytes included (ADR 0019). */
+	uint8_t n = MIN((uint8_t)(radiant_op.body_len + radiant_op.sw_addr_len),
+			(uint8_t)RX_DIAG_BODY_MAX);
+
+	rx_diag.ring[slot].t_ms = k_uptime_get_32();
+	rx_diag.ring[slot].rxcrc = rxcrc;
+	rx_diag.ring[slot].rxmatch = logical;
+	rx_diag.ring[slot].rssi = rssi;
+	rx_diag.ring[slot].len = n;
+	memcpy(rx_diag.ring[slot].body, radiant_rx_buf, n);
+	rx_diag.ring_w++;
+}
+
+static void rx_diag_work_fn(struct k_work *w)
+{
+	ARG_UNUSED(w);
+
+	LOG_INF("rxdiag hw=%u win=%u ok=%u crc=%u cut=%u noaddr=%u silent=%u "
+		"abort=%u fr_crc=%u fr_noaddr=%u fr_foreign=%u fr_repaired=%u "
+		"off=%d..%d dbg_noaddr=%u",
+		(unsigned)rx_diag.hw_last,
+		rx_diag.win, rx_diag.win_ok, rx_diag.win_crc, rx_diag.win_cut,
+		rx_diag.win_end_noaddr, rx_diag.win_silent, rx_diag.win_abort,
+		rx_diag.fr_crc, rx_diag.fr_end_noaddr, rx_diag.fr_foreign,
+		rx_diag.fr_repaired,
+		(int)rx_diag.off_min, (int)rx_diag.off_max,
+		(unsigned)radiant_dbg_rx_no_addr);
+
+	/* Anything overwritten before it was printed is reported as a count. */
+	if (rx_diag.ring_w - rx_diag.ring_r > RX_DIAG_RING) {
+		LOG_INF("rxdiag ring overrun: %u crc entries not printed",
+			rx_diag.ring_w - rx_diag.ring_r - RX_DIAG_RING);
+		rx_diag.ring_r = rx_diag.ring_w - RX_DIAG_RING;
+	}
+	while (rx_diag.ring_r != rx_diag.ring_w) {
+		char hex[RX_DIAG_BODY_MAX * 2u + 1u];
+		uint32_t slot = rx_diag.ring_r % RX_DIAG_RING;
+		unsigned int key = irq_lock();
+		uint32_t t_ms = rx_diag.ring[slot].t_ms;
+		uint32_t rxcrc = rx_diag.ring[slot].rxcrc;
+		uint8_t rxm = rx_diag.ring[slot].rxmatch;
+		int8_t rssi = rx_diag.ring[slot].rssi;
+		uint8_t n = rx_diag.ring[slot].len;
+		uint8_t body[RX_DIAG_BODY_MAX];
+
+		memcpy(body, rx_diag.ring[slot].body, n);
+		irq_unlock(key);
+		for (uint8_t i = 0; i < n; i++) {
+			snprintk(&hex[2u * i], 3, "%02x", body[i]);
+		}
+		hex[2u * n] = '\0';
+		/* Bit 31: rejected by the software address compare with a
+		 * passing CRC; bit 30: rejected with a failing one; neither: an
+		 * accepted frame whose CRC failed. */
+		LOG_INF("rxdiag %s t=%u rxmatch=%u rssi=%d rxcrc=%04x body=%s",
+			(rxcrc & 0x80000000u) ? "foreign_crcok" :
+			(rxcrc & 0x40000000u) ? "foreign_crcbad" : "crcfail",
+			t_ms, rxm, rssi, (unsigned)(rxcrc & 0xFFFFFFu), hex);
+		rx_diag.ring_r++;
+	}
+	k_work_reschedule(&rx_diag_work, K_SECONDS(10));
+}
+#endif /* CONFIG_RADIANT_NRF_RX_DIAG */
+
 /* ---------------------------------------------------------------------------
  * Register programming
  * ---------------------------------------------------------------------------
  */
 
+/*
+ * Address bytes a receive window on this format leaves to software (ADR 0019,
+ * CONFIG_RADIANT_NRF_TRACK_HW_ADDR_LEN). Zero for every format except TRACKING
+ * on 1 M, and zero for every transmit - the transmitter always emits the full
+ * address, which is what lets a receiver match any prefix of it.
+ */
+#if defined(CONFIG_RADIANT_NRF_SLIP_GUARD)
+#define RX_SLIP_GUARD_RUN CONFIG_RADIANT_NRF_SLIP_GUARD_RUN
+#else
+#define RX_SLIP_GUARD_RUN 0
+#endif
+
+/*
+ * Per window, from all of its filters: CONFIG_RADIANT_NRF_SLIP_GUARD shortens
+ * the match to the two fixed bytes when any filter's address is one the
+ * demodulator slips on, and leaves every other window at the full match.
+ */
+static uint8_t rx_sw_addr_len(const struct radiant_rx_req *req)
+{
+	const struct radiant_pkt_format *fmt = req->fmt;
+
+	return (uint8_t)(fmt->addr_len -
+			 radiant_addr_split_rx_hw_len(
+				 req->filters, req->n_filters, fmt->addr_len,
+				 fmt->phy == RADIANT_PHY_1M_GFSK,
+				 CONFIG_RADIANT_NRF_TRACK_HW_ADDR_LEN,
+				 RX_SLIP_GUARD_RUN));
+}
+
+/*
+ * sw_addr_len: how many of the format's trailing address bytes the hardware
+ * receives as payload instead of matching (always 0 on transmit; see
+ * rx_sw_addr_len()). BALEN shrinks by that many and STATLEN grows by it, so
+ * the bit stream the RADIO clocks in - and the CRC over it, with SKIPADDR
+ * Include - is unchanged; only where the matcher stops differs.
+ */
 static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index,
-			bool dry_run)
+			uint8_t sw_addr_len, bool dry_run)
 {
 	bool lr;
 
@@ -991,6 +1203,13 @@ static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index,
 #endif
 	if (fmt->addr_len < 2u || fmt->addr_len > 5u) {
 		return RADIANT_RADIO_ENOTSUP;
+	}
+	/* The hardware still needs a base byte and a prefix byte; and the coded
+	 * PHY's access address is fixed, so nothing is ever left to software
+	 * there. */
+	if (sw_addr_len != 0u &&
+	    (lr || (uint32_t)fmt->addr_len < (uint32_t)sw_addr_len + 2u)) {
+		return RADIANT_RADIO_EINVAL;
 	}
 	/*
 	 * The coded PHY's access address is a FIXED 32 bits. Four address bytes
@@ -1145,8 +1364,10 @@ static int apply_format(const struct radiant_pkt_format *fmt, uint8_t rf_index,
 		NRF_RADIO->PCNF0 = 0u;
 		NRF_RADIO->PCNF1 =
 			((uint32_t)sizeof(radiant_rx_buf) << RADIO_PCNF1_MAXLEN_Pos) |
-			((uint32_t)fmt->body_len          << RADIO_PCNF1_STATLEN_Pos) |
-			((uint32_t)(fmt->addr_len - 1u)   << RADIO_PCNF1_BALEN_Pos) |
+			((uint32_t)(fmt->body_len + sw_addr_len)
+				<< RADIO_PCNF1_STATLEN_Pos) |
+			((uint32_t)(fmt->addr_len - sw_addr_len - 1u)
+				<< RADIO_PCNF1_BALEN_Pos) |
 			(RADIO_PCNF1_ENDIAN_Big           << RADIO_PCNF1_ENDIAN_Pos) |
 			(RADIO_PCNF1_WHITEEN_Disabled     << RADIO_PCNF1_WHITEEN_Pos);
 	}
@@ -1261,8 +1482,15 @@ static void apply_power(const struct radiant_tx_power *p)
  * apply_filters() for why the inverse map has to exist. */
 static uint8_t radiant_filter_slot[8];
 
+/*
+ * hw_len: how many leading bytes of each filter the hardware matches - the
+ * format's addr_len, or fewer under CONFIG_RADIANT_NRF_TRACK_HW_ADDR_LEN. With
+ * a short match several filters can pack to one identical hardware address;
+ * each still takes its own logical address (eight filters fit either way), and
+ * radiant_addr_split_match() picks the real one by its remaining bytes.
+ */
 static int apply_filters(const struct radiant_rx_filter *filters, uint8_t n,
-			 uint8_t addr_len, bool dry_run)
+			 uint8_t addr_len, uint8_t hw_len, bool dry_run)
 {
 	uint32_t base0 = 0, base1 = 0;
 	uint8_t  prefixes[8];
@@ -1283,10 +1511,11 @@ static int apply_filters(const struct radiant_rx_filter *filters, uint8_t n,
 		uint32_t b;
 		uint8_t  p;
 
-		if (filters[i].addr_len != addr_len) {
+		if (filters[i].addr_len != addr_len || hw_len > addr_len ||
+		    hw_len < 2u) {
 			return RADIANT_RADIO_EINVAL;
 		}
-		pack_address(filters[i].addr, addr_len, &b, &p);
+		pack_address(filters[i].addr, hw_len, &b, &p);
 
 		if (!have_base1) {
 			base1 = b;
@@ -2472,6 +2701,18 @@ int radiant_radio_enable(void)
 	irq_enable(RADIANT_RADIO_IRQn_2);
 #endif
 #endif /* CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL */
+#if defined(CONFIG_RADIANT_NRF_RX_DIAG)
+	{
+		static bool rx_diag_started;
+
+		if (!rx_diag_started) {
+			rx_diag_started = true;
+			k_work_init_delayable(&rx_diag_work, rx_diag_work_fn);
+			k_work_reschedule(&rx_diag_work, K_SECONDS(10));
+			LOG_INF("rxdiag on: tracked-window outcomes every 10 s");
+		}
+	}
+#endif
 	radiant_op.enabled = true;
 	return RADIANT_RADIO_OK_RC;
 }
@@ -2572,7 +2813,7 @@ int radiant_radio_tx(const struct radiant_tx_req *req, uint32_t *op)
 	CLAIM_TERMINAL();
 	irq_unlock(key);
 
-	rc = apply_format(req->fmt, req->rf_index, true);
+	rc = apply_format(req->fmt, req->rf_index, 0u, true);
 	if (rc != RADIANT_RADIO_OK_RC) {
 		goto fail;
 	}
@@ -2671,7 +2912,7 @@ static int program_tx(const struct radiant_tx_req *req)
 	uint32_t lead;
 	int rc;
 
-	rc = apply_format(req->fmt, req->rf_index, false);
+	rc = apply_format(req->fmt, req->rf_index, 0u, false);
 	if (rc != RADIANT_RADIO_OK_RC) {
 		return rc;
 	}
@@ -2774,12 +3015,14 @@ static int program_rx(const struct radiant_rx_req *req)
 	uint32_t start_cc, close_cc;
 	int rc;
 
-	rc = apply_format(req->fmt, req->rf_index, false);
+	const uint8_t sw_addr_len = rx_sw_addr_len(req);
+
+	rc = apply_format(req->fmt, req->rf_index, sw_addr_len, false);
 	if (rc != RADIANT_RADIO_OK_RC) {
 		return rc;
 	}
 	rc = apply_filters(req->filters, req->n_filters, req->fmt->addr_len,
-			   false);
+			   (uint8_t)(req->fmt->addr_len - sw_addr_len), false);
 	if (rc != RADIANT_RADIO_OK_RC) {
 		return rc;
 	}
@@ -2806,6 +3049,9 @@ static int program_rx(const struct radiant_rx_req *req)
 
 	radiant_op.n_filters       = req->n_filters;
 	radiant_op.addr_len        = req->fmt->addr_len;
+	radiant_op.sw_addr_len     = sw_addr_len;
+	radiant_op.filters         = req->filters;
+	radiant_op.crc_init        = (uint16_t)req->fmt->crc.init;
 	/*
 	 * Static-length: every frame is this long, reported verbatim.
 	 * Length-from-body: unknown until a frame arrives, so this holds the
@@ -2822,6 +3068,18 @@ static int program_rx(const struct radiant_rx_req *req)
 	radiant_op.report_crc_fail = (req->flags & RADIANT_RX_REPORT_CRC_FAIL) != 0u;
 	radiant_op.terminal_sent   = false;
 	radiant_op.rx_any          = false;
+#if defined(CONFIG_RADIANT_NRF_RX_DIAG)
+	radiant_op.diag_track      = (req->fmt->addr_len == 5u &&
+				      req->fmt->phy == RADIANT_PHY_1M_GFSK);
+	if (radiant_op.diag_track) {
+		rx_diag.hw_last = (uint8_t)(req->fmt->addr_len - sw_addr_len);
+	}
+	radiant_op.diag_ok         = false;
+	radiant_op.diag_crc        = false;
+	radiant_op.diag_end_noaddr = false;
+	radiant_op.diag_cut        = false;
+	radiant_op.diag_t_open     = req->t_open;
+#endif
 
 	/* SHORTS keeps the receiver armed across packets with no software in
 	 * between, letting one window carry several frames (the merged-window
@@ -2942,11 +3200,14 @@ int radiant_radio_rx(const struct radiant_rx_req *req, uint32_t *op)
 	 * if checked here rather than at a grant that may be milliseconds
 	 * away or may never come.
 	 */
-	rc = apply_format(req->fmt, req->rf_index, true);
+	rc = apply_format(req->fmt, req->rf_index, rx_sw_addr_len(req),
+			  true);
 	if (rc != RADIANT_RADIO_OK_RC) {
 		goto fail;
 	}
 	rc = apply_filters(req->filters, req->n_filters, req->fmt->addr_len,
+			   (uint8_t)(req->fmt->addr_len -
+				     rx_sw_addr_len(req)),
 			   true);
 	if (rc != RADIANT_RADIO_OK_RC) {
 		goto fail;
@@ -4114,6 +4375,9 @@ static void deliver_terminal(enum radiant_radio_status st)
 	} else {
 		struct radiant_rx_event evt;
 
+#if defined(CONFIG_RADIANT_NRF_RX_DIAG)
+		rx_diag_window_end(st != RADIANT_RADIO_STATUS_TIMEOUT);
+#endif
 		memset(&evt, 0, sizeof(evt));
 		evt.op = radiant_op.id;
 		evt.status = st;
@@ -4240,6 +4504,12 @@ static void radio_isr(const void *arg)
 			 * to report either.
 			 */
 			radiant_dbg_rx_no_addr++;
+#if defined(CONFIG_RADIANT_NRF_RX_DIAG)
+			if (radiant_op.diag_track) {
+				radiant_op.diag_end_noaddr = true;
+				rx_diag.fr_end_noaddr++;
+			}
+#endif
 		} else if (radiant_op.kind == OP_RX && !radiant_op.terminal_sent) {
 			struct radiant_rx_event evt;
 			bool crc_ok = nrf_radio_crc_status_check(NRF_RADIO);
@@ -4255,17 +4525,111 @@ static void radio_isr(const void *arg)
 			 */
 			nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS);
 
+			/*
+			 * Which of the caller's filters this frame belongs to.
+			 * With the full address matched in hardware, RXMATCH
+			 * says so outright. With a short match (ADR 0019) RXMATCH
+			 * only names a filter whose LEADING bytes matched; the
+			 * rest arrived as the first payload bytes and are
+			 * compared here. A frame that fails that compare is
+			 * another sensor's on the same network - not a
+			 * reception, so no event, and END->START has already
+			 * re-armed the receiver for ours. It never ends a
+			 * STOP_ON_FIRST window: that stop is in software below
+			 * and only an accepted frame reaches it.
+			 */
+			int fidx = (logical < ARRAY_SIZE(radiant_filter_slot))
+					   ? radiant_filter_slot[logical] : 0;
+
+			const uint8_t *body = radiant_rx_buf;
+
+			if (radiant_op.sw_addr_len != 0u) {
+				const uint8_t hint = (uint8_t)fidx;
+				const uint8_t hw_len = (uint8_t)(
+					radiant_op.addr_len -
+					radiant_op.sw_addr_len);
+
+				fidx = radiant_addr_split_match(
+					radiant_op.filters, radiant_op.n_filters,
+					hw_len, radiant_op.sw_addr_len, hint,
+					radiant_rx_buf);
+				body = radiant_addr_split_body(
+					radiant_rx_buf, radiant_op.sw_addr_len);
+				/*
+				 * The demodulator slip (ADR 0019): our own frame
+				 * with one bit deleted in its software-matched
+				 * address bytes. Recovered only when that is
+				 * exactly what arrived and the CRC over the
+				 * reconstruction verifies - so it is delivered
+				 * as an OK frame. Costs nothing on a frame that
+				 * passed the compare above.
+				 */
+				if (fidx < 0 && !radiant_op.len_from_body) {
+					fidx = radiant_addr_split_repair(
+						radiant_op.filters,
+						radiant_op.n_filters, hw_len,
+						radiant_op.sw_addr_len, hint,
+						radiant_rx_buf,
+						radiant_op.body_len,
+						NRF_RADIO->RXCRC,
+						radiant_op.crc_init,
+						radiant_repair_buf);
+					if (fidx >= 0) {
+						crc_ok = true;
+						body = radiant_repair_buf;
+						radiant_dbg_slip_repaired++;
+#if defined(CONFIG_RADIANT_NRF_RX_DIAG)
+						if (radiant_op.diag_track) {
+							rx_diag.fr_repaired++;
+						}
+#endif
+					}
+				}
+			}
+
 			radiant_dbg_rx_ev++;
-			if (crc_ok) {
+			if (crc_ok && fidx >= 0) {
 				radiant_dbg_ok++;
 			}
+#if defined(CONFIG_RADIANT_NRF_RX_DIAG)
+			if (radiant_op.diag_track && fidx < 0) {
+				rx_diag.fr_foreign++;
+				/* Same ring as CRC failures, marked by RXCRC's
+				 * top bit: a short-address match whose software
+				 * bytes disagreed is either another sensor or our
+				 * own frame with its address bytes corrupted, and
+				 * only the raw bytes tell those apart. */
+				rx_diag_crc_fail(logical,
+						 (crc_ok ? 0x80000000u : 0x40000000u) |
+						 NRF_RADIO->RXCRC,
+						 rssi_sample_dbm());
+			} else if (radiant_op.diag_track) {
+				if (crc_ok) {
+					int32_t off = (int32_t)(int64_t)(
+						clock_absolute(nrf_timer_cc_get(
+							TIMER_ADDR, CC_SYNC)) +
+						radiant_addr_split_t_sync_us(
+							radiant_op.sw_addr_len) -
+						radiant_op.diag_t_open);
+
+					radiant_op.diag_ok = true;
+					rx_diag.off_min = MIN(rx_diag.off_min, off);
+					rx_diag.off_max = MAX(rx_diag.off_max, off);
+				} else {
+					radiant_op.diag_crc = true;
+					rx_diag.fr_crc++;
+					rx_diag_crc_fail(logical, NRF_RADIO->RXCRC,
+							 rssi_sample_dbm());
+				}
+			}
+#endif
 			/* Before the report_crc_fail gate, deliberately. A
 			 * window whose CRC failures are suppressed still HEARD
 			 * something, and its RSSISAMPLE is that something's
 			 * level rather than the band's - so it must not
 			 * contribute a noise sample either way. */
 			radiant_op.rx_any = true;
-			if (crc_ok || radiant_op.report_crc_fail) {
+			if (fidx >= 0 && (crc_ok || radiant_op.report_crc_fail)) {
 				memset(&evt, 0, sizeof(evt));
 				evt.op = radiant_op.id;
 				evt.status = crc_ok ? RADIANT_RADIO_STATUS_OK
@@ -4281,12 +4645,17 @@ static void radio_isr(const void *arg)
 					clock_absolute(nrf_timer_cc_get(
 						TIMER_ADDR, CC_SYNC)),
 					t_sync_cal_rx_us(radiant_op.phy));
+				/* ADDRESS fired at the end of the hardware's
+				 * short address; the HAL's t_sync is the end of
+				 * the whole on-air one. Zero when nothing was
+				 * left to software. */
+				evt.t_sync += (radiant_time_t)
+					radiant_addr_split_t_sync_us(
+						radiant_op.sw_addr_len);
 				evt.t_sync_exact = true;
 
-				evt.filter_index =
-					(logical < ARRAY_SIZE(radiant_filter_slot))
-						? radiant_filter_slot[logical] : 0u;
-				evt.body = radiant_rx_buf;
+				evt.filter_index = (uint8_t)fidx;
+				evt.body = body;
 				/*
 				 * Length comes off the wire and is clamped
 				 * before being believed. Long-range frames
@@ -4344,6 +4713,9 @@ static void radio_isr(const void *arg)
 					 * operation, and a DISABLED left in
 					 * flight would end that one instead. */
 					radio_disable_now();
+#if defined(CONFIG_RADIANT_NRF_RX_DIAG)
+					rx_diag_window_end(false);
+#endif
 					radiant_op.kind = OP_NONE;
 				}
 				core_cb_rx(&evt);
@@ -4355,6 +4727,14 @@ static void radio_isr(const void *arg)
 		nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_DISABLED);
 
 		if (radiant_op.kind == OP_RX) {
+#if defined(CONFIG_RADIANT_NRF_RX_DIAG)
+			/* An address matched whose END never came: the window
+			 * closed on top of a frame. */
+			if (nrf_radio_event_check(NRF_RADIO,
+						  NRF_RADIO_EVENT_ADDRESS)) {
+				radiant_op.diag_cut = true;
+			}
+#endif
 			/* The window closed on its own compare, or an abort
 			 * disabled it. Both are terminal; TIMEOUT is what a
 			 * window that simply ended reports. */

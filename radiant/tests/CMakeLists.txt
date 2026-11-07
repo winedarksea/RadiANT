@@ -273,6 +273,16 @@ target_include_directories(app PRIVATE
 # here has ever needed the application's src/ at all.
 target_include_directories(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
+# ── radiant/src/radiant_addr_split.c ────────────────────────────────────────
+#
+# The nRF backend's software address match (ADR 0019). The backend itself is
+# not in this image (CONFIG_RADIANT_BACKEND_NONE), so the module does not
+# compile this file here; it is pure, and src/test_addr_split.c is its suite.
+# The suite includes the private header by relative path rather than putting
+# all of radiant/src on the search path - see the note just above.
+target_sources(app PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/radiant_addr_split.c")
+
 # ── apps/common: the activity indicators' arithmetic ────────────────────────
 #
 # The one file from apps/common this application links, and the split in

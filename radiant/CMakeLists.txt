@@ -280,6 +280,9 @@ elseif(CONFIG_RADIANT_BACKEND_CC26XX)
   endif()
 elseif(CONFIG_RADIANT_BACKEND_NRF)
   zephyr_library_sources(src/radiant_radio_nrf.c)
+  # The software half of a shortened TRACKING address match (ADR 0019). Pure,
+  # so radiant/tests links it too without the backend.
+  zephyr_library_sources(src/radiant_addr_split.c)
   # Who owns the RADIO. A seam inside the backend rather than a second backend
   # beside it - see src/radiant_radio_nrf_gate.h for why the file is not split.
   # Exactly one of these is ever compiled.

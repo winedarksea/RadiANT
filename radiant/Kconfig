@@ -576,6 +576,97 @@ config RADIANT_NRF_NO_HFXO_HOLD
 
 	  Never in a shipping image.
 
+config RADIANT_NRF_TRACK_HW_ADDR_LEN
+	int "address bytes the nRF matcher compares on a TRACKING receive window"
+	depends on RADIANT_BACKEND_NRF
+	range 2 5
+	default 5
+	help
+	  A TRACKING frame's address is five bytes on the air:
+	  [A6 C5 dnl dnh dtype]. Matching all five in hardware puts the device
+	  number inside the RADIO's 40-bit sync correlator, and some device
+	  numbers then make the receiver miss frames (ADR 0019: #54100 lost
+	  ~2 % on every RadiANT receiver, 0 % on a retail stick).
+
+	  Below 5, the hardware matches only the first N bytes and receives the
+	  rest as payload; the backend compares them against the window's
+	  filters in software, strips them, and adds their airtime back to
+	  t_sync, so the core sees exactly the frame and timestamp it sees at 5.
+	  A frame that matches the short address but not a full filter (another
+	  sensor on the same network) is dropped and the window keeps
+	  listening. Transmit always emits the full five bytes, and the search
+	  format (three bytes) is not affected.
+
+	  This is a fixed length for every address, kept for measurement. The
+	  shipped fix is RADIANT_NRF_SLIP_GUARD, which shortens the match only
+	  for the addresses that need it.
+
+config RADIANT_NRF_SLIP_GUARD
+	bool "match a short address, and repair the slipped bit, only where an address needs it"
+	depends on RADIANT_BACKEND_NRF
+	default y
+	help
+	  The nRF RADIO in Nrf_1Mbit drops exactly one bit when a long
+	  alternating run (0101...) sits inside the address it is matching,
+	  or within a few bits after its end. Inside the address the frame is
+	  never seen; after it, the frame arrives intact except for that bit.
+	  About 5 % of ANT+ device numbers have such a run (#54100, #43634,
+	  #21845 measured 1-5 % loss on every nRF receiver; a retail stick
+	  0 %). ADR 0019.
+
+	  With this on, a TRACKING receive window whose filters include an
+	  address with an alternating run of at least
+	  RADIANT_NRF_SLIP_GUARD_RUN bits matches only the two fixed leading
+	  bytes in hardware. Every device-number bit is then outside the
+	  hardware match, so a slip lands in a delivered frame, and the backend
+	  repairs it: if the received address bytes are exactly the filter's
+	  with one bit deleted, and the CRC over the reconstructed frame
+	  verifies, the frame is delivered as received correctly.
+
+	  Addresses with no such run keep the full five-byte hardware match,
+	  unchanged: a two-byte match also matches noise (about once per 65536
+	  bit times) and costs a frame when that lands just before the real
+	  one, so it is only paid where it buys back more than it costs. No
+	  register, PHY or sensitivity setting changes, and the repair runs
+	  only on a frame that already failed the address compare.
+
+config RADIANT_NRF_SLIP_GUARD_RUN
+	int "alternating-run length at which an address gets the slip guard"
+	depends on RADIANT_NRF_SLIP_GUARD
+	range 4 40
+	default 9
+	help
+	  Measured on the nRF5340, nRF54L15 and nRF52840 (ADR 0019): a run of
+	  9 or more bits lost 1-5 % of frames, 8 at most 0.2 % (about what the
+	  short match itself costs), 7 or fewer nothing measurable. 9 flags
+	  about 5 % of device numbers, 8 about 10 %.
+
+config RADIANT_NRF_RX_DIAG
+	bool "DIAGNOSTIC: classify every tracked receive window's outcome"
+	depends on RADIANT_BACKEND_NRF
+	help
+	  Bench tooling for the device-number-dependent receive loss
+	  (docs/decisions/0019-tracking-matches-a-short-address.md). The
+	  host's EVENT_RX_FAIL covers any missed slot; this splits a miss into
+	  what the RADIO actually saw. For every receive window armed on the
+	  TRACKING format (5-byte address) the interrupt records one outcome,
+	  best first:
+
+	    ok      a frame with a passing CRC
+	    crc     ADDRESS matched and END came, CRC failed
+	    cut     ADDRESS matched but the window closed before END
+	    noaddr  an END with no ADDRESS behind it (and nothing better)
+	    silent  no ADDRESS and no END at all - the correlator never fired
+
+	  A CRC-failed frame's raw body, RXMATCH, RXCRC and RSSI go into a
+	  small ring. Every 10 s a work item prints the totals and drains the
+	  ring as LOG_INF, so a board with a log console (the nRF54L15 DK's
+	  VCOM, DTR asserted) narrates it. A build with no console still keeps
+	  the counters; they are just unread.
+
+	  Off by default and never in a shipping image. With it off nothing
+	  here compiles, so the non-diagnostic interrupt path is unchanged.
+
 config RADIANT_GATE_MPSL_NO_SESSION
 	bool "DIAGNOSTIC: build the MPSL gate but never open a timeslot session"
 	depends on RADIANT_BACKEND_NRF_GATE_MPSL

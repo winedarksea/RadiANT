@@ -17,6 +17,10 @@ archive/benchmarks/2026-11-07-garmin-compare/**
 !archive/benchmarks/2026-11-07-garmin-compare/**/summary.md
 !archive/benchmarks/2026-11-07-garmin-compare/devnum-ab/diag_b.ps1
 !archive/benchmarks/2026-11-07-garmin-compare/devnum-ab/*/*.json
+# Device-number RX loss (ADR 0019): ~720 per-window logs/JSONs stay local.
+# Tracked: the README, the rig and analysis scripts, and windows.txt (every
+# window's per-receiver counts plus the raw rxdiag captures).
+archive/benchmarks/2026-11-07-devnum-rx-loss/*/
 twister-out*/
 
 # Tool caches. Each of these regenerates on demand; none is an input to
