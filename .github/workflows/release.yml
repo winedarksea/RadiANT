@@ -1438,9 +1438,9 @@ jobs:
               # BT_LL_SOFTDEVICE was the one this row did not assert while the
               # hrm_ble row did. TREADMILL_BLE now `select`s it, as
               # HRM_BLE_HRS always has. Latent rather than live when it was
-              # found - the SDC is already the default link layer for
-              # CONFIG_BT=y on nRF54L15, verified from the generated .config -
-              # and that is the argument for pinning it rather than against:
+              # found - the SDC is already the default link layer when BT is
+              # on for nRF54L15, verified from the generated .config - and
+              # that is the argument for pinning it rather than against:
               # the whole MPSL arbitration this application exists to
               # demonstrate assumes the SDC is what is beside radiant on the
               # radio, and a move to the open-source LL would break it with a

@@ -127,6 +127,23 @@ class AssertKconfig(ActionHarness):
             "# why this row exists at all\nCONFIG_HRM_BLE_HRS=y")
         self.assertEqual(rc, 0, out)
 
+    def test_a_rationale_line_that_wrapped_onto_a_symbol_is_named(self):
+        """release.yml's FTMS row, 2026-11-06: a comment wrapped so that
+        `# CONFIG_BT=y on nRF54L15, ...` began a line, and was read as an
+        assertion. Fail, but say why - not as a config mismatch."""
+        rc, out = self.check(
+            "# the SDC is the default for\n"
+            "# CONFIG_BT=y on nRF54L15, verified from .config\n"
+            "CONFIG_HRM_BLE_HRS=y")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("ambiguous expectation", out)
+        self.assertNotIn("actual:", out)
+
+    def test_a_typo_in_a_real_negative_is_not_skipped(self):
+        """Skipping it as rationale would drop the check silently."""
+        rc, out = self.check("# CONFIG_BT is not  set")
+        self.assertEqual(rc, 1, out)
+
     def test_absent_passes_when_the_symbol_is_missing_entirely(self):
         rc, out = self.check("absent:CONFIG_HRM_SENSOR_SIM_BPM")
         self.assertEqual(rc, 0, out)
@@ -309,6 +326,21 @@ class TheWorkflowsThemselvesAreWellFormed(unittest.TestCase):
             "Kconfig writes '# CONFIG_X is not set'. Without the leading '# ' "
             "these can never match and the assertion only ever fails:\n  "
             + "\n  ".join(offenders))
+
+    def test_no_rationale_comment_begins_with_a_symbol(self):
+        """A '#' line starting with CONFIG_ is read as Kconfig's negative form,
+        so anything but exactly that is a wrapped comment the action rejects."""
+        hashed = re.compile(r"^\s*#\s+CONFIG_")
+        negative = re.compile(r"^\s*# CONFIG_[A-Za-z0-9_]+ is not set\s*$")
+        offenders = []
+        for wf in sorted(self.WORKFLOWS.glob("*.yml")):
+            for n, line in self.block_scalar_lines(wf):
+                if hashed.match(line) and not negative.match(line):
+                    offenders.append(f"{wf.name}:{n}: {line.strip()}")
+        self.assertEqual(
+            offenders, [],
+            "these comment lines start with a CONFIG_ symbol and will be read "
+            "as assertions; rewrap them:\n  " + "\n  ".join(offenders))
 
     def test_every_local_action_reference_resolves(self):
         """`uses: ./app/...` is a path on disk; a typo is a run-time failure."""

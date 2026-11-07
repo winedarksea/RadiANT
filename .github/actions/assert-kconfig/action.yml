@@ -102,6 +102,19 @@ runs:
             continue
           fi
 
+          # A '#' line that starts with CONFIG_ is treated as an assertion, so
+          # it must be exactly Kconfig's negative form. Anything else is almost
+          # always a rationale comment that wrapped so a CONFIG_ symbol landed
+          # first on the line (release.yml's treadmill FTMS row, 2026-11-06).
+          # Skipping it is not an option: a typo in a real negative would then
+          # pass silently. So fail, and name the actual cause.
+          if [[ "${want}" =~ ^[[:space:]]*#[[:space:]]+CONFIG_ ]] &&
+             ! [[ "${want}" =~ ^[[:space:]]*#[[:space:]]CONFIG_[A-Za-z0-9_]+[[:space:]]is[[:space:]]not[[:space:]]set[[:space:]]*$ ]]; then
+            echo "::error::ambiguous expectation '${want}': a '#' line beginning with CONFIG_ is read as a Kconfig negative, but this is not '# CONFIG_X is not set'. If it is a rationale comment, rewrap it so CONFIG_ is not the first word."
+            rc=1
+            continue
+          fi
+
           # THE GUARD THAT KILLS THE BUG CLASS. An expectation of the shape
           # `CONFIG_X is not set` with no leading '# ' cannot match any line
           # Kconfig ever writes, so it is not a weak assertion - it is an
